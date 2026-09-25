@@ -18383,11 +18383,24 @@ The plan is [hardware portability](hardware-portability.html) §3 G21c, the cont
 `tagpu_regstore.h`, and the engine's side, every call site with the keys and values it reads
 and writes, is [exe reverse engineering](exe-reverse-engineering.html) §"The registry".
 
-**Test mode is a file.** `tagpu_regstore_init` looks for `tacli-state\registry.txt` beside the
-running exe (`GetModuleFileNameW(NULL)`, never the working directory). Only tacli writes it, and
-never into a player's folder. Without it the module logs `registry: real (no
-tacli-state\registry.txt beside TotalA.exe)` and installs nothing, so a player's game carries
-no hook of this section.
+**Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, the first thing
+`DllMain` attach does (before the return for cnc-ddraw's config tool, so an inherited
+`cnc_ddraw_config_init` cannot skip it), looks for the token `-xtacli-test` on the command line
+and for a `tacli-state` folder beside the running exe (`GetModuleFileNameW(NULL)`, never the
+working directory). tacli passes the token on every remote launch; the engine skips it (`x` is
+above the `'B'..'w'` of its switch table, `ja 0x49F461`, [command-line
+options](cmdline-options.html)). **Real mode needs both absent**: no token, and the folder not
+found. A folder that cannot be looked at (a share, an access rule), without the token, is real
+mode too, so a player's folder stays inert. Real mode logs `registry: real (no -xtacli-test
+token, and no tacli-state folder beside TotalA.exe)` and installs nothing, so a player's game
+carries no hook of this section.
+
+**Test mode fails closed.** A store that is missing, a folder, unreadable or not loaded whole,
+no memory for it, an exe path that cannot be read, a registry import the hooks do not answer
+(`TotalA.exe`'s or `win32.dll`'s), or a `win32.dll` not loaded at attach (a static import of
+`TotalA.exe`, so the loader maps it before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
+log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
+first instruction never runs.
 
 **Import-table hooks, not engine addresses.** In test mode, at `DllMain` attach right after
 `tagpu_log_init` (before `cfg_load`, the byte patches and the fork's `hook_init`),
@@ -18398,9 +18411,9 @@ no hook of this section.
 | `TotalA.exe` | `RegOpenKeyExA`, `RegQueryValueExA`, `RegCreateKeyA`, `RegOpenKeyA`, `RegQueryValueA`, `RegCreateKeyExA`, `RegSetValueExA`, `RegFlushKey`, `RegCloseKey` | `0x4FC000..0x4FC020`, one each in that order; every call site is in the engine map |
 | `win32.dll` | `RegOpenKeyExA`, `RegQueryValueExA` | its own; it reads `musicvol` and `cdmode` |
 
-After patching, `rs_count` walks the exe's own import directory: every ADVAPI32 import whose
-name begins with `Reg` must now hold one of the hooks, or the process is terminated with a log
-line before the game's first instruction. The fork's `hook_init`, which runs later, hooks no
+After patching, `rs_count` walks the import directories of the exe and of `win32.dll`: every
+ADVAPI32 import whose name begins with `Reg` must now hold one of the hooks, or the process is
+terminated with a log line before the game's first instruction. The fork's `hook_init`, which runs later, hooks no
 registry function, so nothing overwrites these slots.
 
 **What the hooks do.** `HKCU\Software\Cavedog Entertainment` and every key below it are served
@@ -18427,15 +18440,24 @@ rewrites the file under that lock, on the calling thread: the game's saver write
 values in a burst, but only the ones that changed cost a rewrite (two rewrites in the logged
 run under wine).
 
+**The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
+above are the only way `TotalA.exe`'s and `win32.dll`'s code reaches the registry, and the `-r`
+switch is closed. Nothing hooks the system DLLs (DirectPlay, DirectSound), what `ShellExecuteA`
+starts, `online.dll`'s extension DLLs and the processes it starts, or the Task Scheduler's and
+Windows' own records of the task and the programs it runs ([tacli design](tacli-design.html)
+§"The registry: a file in the test folder").
+
 **Measured** (the plan's G21c gate): under wine, `9 of 9 registry imports, win32.dll 2 of 2`,
 77 distinct values written to the store and TA's section of the prefix's `user.reg` unchanged;
+each fail-closed path (the token without a store, the store as a folder, the folder without a
+store) ended at attach with its line and no registry call from `TotalA.exe` or `ddraw.dll`;
 on the Windows test setup, TA's key and the Indeo key exported byte-identical before and after
 a `scenario load`, with the counters `the real registry was asked for 1 read-only opens, 1
 reads and 1 closes, and for no write ... 1 writes were refused`.
 
-**Risky spots for a review.** The attach order and the `TerminateProcess` inside `DllMain`; the
-`PREFIX` handles and `RS_READ_SAM` (what counts as a read-only open); `RegFlushKey` on a real
-key answering success without a call; the persistence under the lock, and a store that did not
-load whole never being written back; the handle range; the `-r` jump-table patch and its
-fail-closed mismatch; `win32.dll` hooked only when it is already loaded at attach (it is a static
-import of `TotalA.exe`).
+**Risky spots for a review.** The decision ahead of the config tool's return, the token's
+parse of `GetCommandLineW` (the program name quoted or not), and the `TerminateProcess` inside
+`DllMain`; the `PREFIX` handles and `RS_READ_SAM` (what counts as a read-only open);
+`RegFlushKey` on a real key answering success without a call; the persistence under the lock;
+the handle range; the `-r` jump-table patch and its fail-closed mismatch; `win32.dll`
+required at attach (a static import of `TotalA.exe`).

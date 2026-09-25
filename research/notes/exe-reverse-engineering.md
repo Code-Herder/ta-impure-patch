@@ -8358,12 +8358,15 @@ a register once and call through it; the register is given with the load.
 6. **The `-r` switch** reaches the registry through no import of its own: the handler
    `0x49F249` loads `dsetup.dll` (`0x4FDAC0`) and calls `DirectXRegisterApplicationA`
    (`0x4FDAA0`, found with `GetProcAddress`), which writes DirectPlay's application key through
-   `dsetup.dll`'s own imports, then quits ([command-line options](cmdline-options.html)). In a
-   test folder `tagpu_patches.c` points the switch's two jump-table entries (`0x49F4B8` for `R`,
+   `dsetup.dll`'s own imports, then quits ([command-line options](cmdline-options.html)). In
+   test mode `tagpu_patches.c` points the switch's two jump-table entries (`0x49F4B8` for `R`,
    `0x49F4EC` for `r`, both `0x49F249`) at the loop tail `0x49F461`, where every unknown letter
-   goes (entry 26, `0x49F4FC`). **MEASURED**: `TotalA.exe -r` in a test-mode instance logged
-   `the -r switch (DirectPlay registration through dsetup.dll) is ignored` and stayed in its
-   front end until stopped 45 s later; stock, the switch quits.
+   goes (entry 26, `0x49F4FC`). The parser is `CmdlineArgsNormalize 0x49EE30` (called at
+   `0x49E8D2`, its token loop head `0x49EED3`); the same rule is what lets tacli's token
+   `-xtacli-test` through untouched ([command-line options](cmdline-options.html)).
+   **MEASURED**: `TotalA.exe -r` in a test-mode instance logged `the -r switch (DirectPlay
+   registration through dsetup.dll) is ignored` and stayed in its front end until stopped 45 s
+   later; stock, the switch quits.
 
 ### What the game reads and writes [MEASURED 2026-09-25]
 
@@ -8405,11 +8408,20 @@ wrote 32).
   (`0x10001259`, `0x1000127F`) from `HKCU\SOFTWARE\Cavedog Entertainment\Total Annihilation\`
   with `KEY_READ`, and imports no `RegCloseKey`, so it never closes them [DISASSEMBLED, image
   base `0x10000000`]. The store hooks its two imports as well.
-- **The Steam folder's other modules**: the DirectPlay service providers `tamplayx.dll`,
-  `takalix.dll`, `taheatx.dll` and `tawirepx.dll` import only `RegOpenKeyExA`,
-  `RegQueryValueExA` and `RegCloseKey`; `mptaext.dll` imports `RegSetValueExA`, and no string of
-  `TotalA.exe` names it, so the game does not load it itself; `audiere.dll`, `online.dll` and
-  `smackw32.dll` import no registry function.
+- **`online.dll` and what it loads and starts.** `TotalA.exe` loads `online.dll` itself: a
+  path built into `0x512DD0` from `online.dll` (`0x4FD4D0`, at `0x45B30B`), then `LoadLibraryA`
+  at `0x45B33F` (the same at `0x45B557` and `0x45B747`). `online.dll` imports no registry
+  function, but it searches the game folder for `ta*.dll` and loads each as a **Total
+  Annihilation Extension DLL**: `tamplayx.dll`, `takalix.dll`, `taheatx.dll`, `tawirepx.dll`,
+  `tadwngox.dll` and `tatenx.dll` export exactly `TotalAExtVersion`, `TotalAExtGetButtonText`
+  and `TotalAExtAction` (they are not DirectPlay service providers). The first four import
+  `RegOpenKeyExA`, `RegQueryValueExA` and `RegCloseKey`, the other two nothing of the registry.
+  `online.dll` starts each online service's client with `CreateProcessA` or `ShellExecuteA`
+  (its strings: `online.exe returned from CreateProcess`, `exec'ing command`). A client started
+  that way is another process, and that is what would load `mptaext.dll`: its exports are
+  Mplayer's offer negotiation (`MPOpenOffer`, `MPPrelaunchOffer`, …), it imports
+  `RegSetValueExA`, and no string of `TotalA.exe` or `online.dll` names it [INFERRED from the
+  exports]. `audiere.dll` and `smackw32.dll` import no registry function.
 - **Our DLL**: the fork's `debug.c` reads `HKLM` version values, in `make DEBUG=1` builds only;
   `utils.c` reads a Voobly key only when `age.dll` is loaded; `indeo.c` writes four `vidc.iv*`
   values under `HKCU\…\Drivers32` at attach and deletes them at detach, which test mode skips
@@ -8417,8 +8429,12 @@ wrote 32).
   `scrollspeed` through `SaveSetting 0x4B6A50`, so it reaches the registry through TA's own
   imports.
 - **Not examined**: the system DLLs that may touch the registry for the game (DirectPlay,
-  DirectSound), and the other names `TotalA.exe` gives `LoadLibraryA` (`DebugHelper.dll`,
-  `reporter.dll`, `IMAGEHLP.DLL`, `psapi.dll`).
+  DirectSound); what `ShellExecuteA` starts, from `0x4DA5B0` or from `online.dll`; what the
+  extension DLLs read, what `online.dll`'s child processes do, and `mptaext.dll` itself; and
+  the other names `TotalA.exe` gives `LoadLibraryA` (`DebugHelper.dll`, `reporter.dll`,
+  `IMAGEHLP.DLL`, `psapi.dll`). None of it is hooked, so none of it is covered by the test
+  mode's guarantee ([tacli design](tacli-design.html) §"The registry: a file in the test
+  folder").
 
 ## Hard-coded limits & constants
 

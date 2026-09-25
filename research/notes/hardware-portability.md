@@ -90,13 +90,19 @@ line rule for the default mode.
    - **Its own test folder**: `tacli remote add` copies the player's game folder once into a
      separate folder on the remote machine. A test never touches the folder the player plays
      from.
-   - **In test mode the game leaves no registry footprint at all. [DECIDED 2026-09-25]** A test
-     folder carries `tacli-state\registry.txt`, and the DLL answers every registry call of the
-     game's from that file: TA's own key is read and written there, every other key is read-only.
-     Nothing writes the remote machine's registry, so nothing has to be restored. This replaces
+   - **In test mode the game writes nothing into TA's settings key, and `tacli` writes no
+     registry value. [DECIDED 2026-09-25]** A test folder carries `tacli-state\registry.txt`, and
+     the DLL answers the registry imports of `TotalA.exe` and `win32.dll` from that file: TA's own
+     key is read and written there, every other key is read-only. The game's one registry write
+     outside those imports, the `-r` switch, is closed. Nothing has to be restored. This replaces
      "the registry is saved and restored": a launch killed mid-test (a reboot) left the player's
      key on test values until `tacli` ran again, and a later restore wiped whatever the player
      had changed in between, a gap no save-and-restore design closes.
+   - **Outside that guarantee**, because no hook reaches it: the Task Scheduler's records of the
+     instance's task (`TaskCache`, while the task exists), Windows' own records of the programs
+     it runs, the system DLLs the game uses (DirectPlay, DirectSound), what `ShellExecuteA`
+     starts, and the processes `online.dll` starts. The list, with where each lives, is in
+     [tacli design](tacli-design.html) §"The registry: a file in the test folder".
    - **The agent drives it fully**: launch, menus, `scenario load`, camera, captures (the DLL's
      own `.ab` PNGs, fetched back), log, stop. No desktop screenshot is needed.
    - The remote machine's address, account and key live in the instance's metadata under
@@ -182,10 +188,12 @@ worktree. The fourth follows once they are on main.
 
 **Built 2026-09-25; not landed.** The first build met the gate. The high landing review moved
 TA's registry key into a launch wrapper, and the high re-review found the gap no save-and-restore
-design closes (decision 5). **[DECIDED 2026-09-25] In test mode the game leaves no registry
-footprint:** the registry is a file in the test folder, and there is no wrapper, no export and
-no restore. What it is and how it works is in [tacli design](tacli-design.html) §"Remote
-instances" and in `tagpu_regstore.h`; this block keeps the plan's shape and what the work settled.
+design closes (decision 5). **[DECIDED 2026-09-25] In test mode TA's settings key is never
+written:** the registry is a file in the test folder, and there is no wrapper, no export and no
+restore. The third high review scoped that claim to what the hooks reach (decision 5 lists the
+rest) and made the test-mode decision fail closed. What it is and how it works is in
+[tacli design](tacli-design.html) §"Remote instances" and in `tagpu_regstore.h`; this block keeps
+the plan's shape and what the work settled.
 
 - `tacli remote add <name> --ssh <user>@<host> [--key <file>] --from <player folder>` copies the
   player's folder once into a test folder (default `<user profile>\tacli\<name>`, or `--to`) and
@@ -196,30 +204,54 @@ instances" and in `tagpu_regstore.h`; this block keeps the plan's shape and what
   $false)`, read-only handles). Every verb routes by instance type, keyed by its handler function
   (a positional of `order` is named like the subcommand). The file channels go over one
   PowerShell session per command (`tools/taremote.py`).
-- **The registry store (`tagpu_regstore.c`).** The DLL finds `tacli-state\registry.txt` beside
-  `TotalA.exe` (`GetModuleFileNameW(NULL)`, never the working directory); without it, it logs
-  `registry: real ...` and does nothing else. With it, it replaces TotalA.exe's nine ADVAPI32
-  imports and `win32.dll`'s two (`hook_patch_iat`) before the game's entry point runs:
+- **The registry store (`tagpu_regstore.c`).** **Test mode has two signals, either enough**:
+  the token `-xtacli-test` on TotalA.exe's command line, which every remote launch passes, and a
+  `tacli-state` folder beside `TotalA.exe` (`GetModuleFileNameW(NULL)`, never the working
+  directory). The engine skips the token: `CmdlineArgsNormalize 0x49EE30` dispatches a switch on
+  its second character less `'B'`, and `x` (0x36) takes `ja 0x49F461`, the loop tail of every
+  unknown switch; no debug switch of `0x4DA0E0`'s table is a prefix of it [DISASSEMBLED].
+  **Real mode needs both absent.** A folder that cannot be looked at, without the token, is real
+  mode, so a player's folder on a share or behind an access rule stays inert; a `tacli` launch
+  always carries the token. Real mode logs `registry: real (no -xtacli-test token, and ...)` and
+  does nothing else. The decision is the first thing `DllMain` does, before cnc-ddraw's
+  config-tool return, so an inherited `cnc_ddraw_config_init` cannot skip it. **Test mode fails
+  closed**: a store that is missing, a folder, unreadable or not loaded whole, no memory, or a
+  registry import of `TotalA.exe` or `win32.dll` the hooks do not answer ends the process at
+  attach, logged first (`registry: TEST MODE, entered by ..., but ...: the game is not run`).
+  Otherwise it replaces TotalA.exe's nine ADVAPI32 imports and `win32.dll`'s two
+  (`hook_patch_iat`) before the game's entry point runs:
   - every key under `HKCU\Software\Cavedog Entertainment` is served from the store, and each
     change rewrites the file whole (a temporary file, flushed, moved over it), so a kill leaves
     a whole file;
   - every other key is read-only: a writable open, a create and a value write are refused, and a
     read goes to the real registry. The hooks call no registry function that writes;
-  - a test folder whose exe has a registry import the hooks do not answer is terminated at
-    attach, and a store that did not load whole is served as read and never written back;
   - the game's one registry write outside its imports, the `-r` switch's DirectPlay
     registration through `dsetup.dll`, is closed: `tagpu_patches.c` points the switch's two
     jump-table entries at the parser's loop tail, and an exe that differs there is not run;
   - The keys and values the game reads and writes, and each call site, are in the engine map
     ([exe reverse engineering](exe-reverse-engineering.html) §"The registry").
-- **Launch** is a scheduled task of the instance's own, `\tacli\<name>`, that **runs TotalA.exe
-  itself**: an interactive principal for the console user, the test folder as working directory,
-  no time limit, and `-Priority 4` (normal: the task default, 7, is below normal and the game
-  inherits it). Nothing but the registry needed a wrapper, so there is none. Before the task,
-  `launch` puts its test values (sound off, `Interface Type`, the skirmish flags, …) into the
-  store, and refuses a test folder without one and a DLL without the store (a build that lacks
-  it, or `--keep-dll` on the player's copy), since either would run the game against the real
-  registry. A task that starts no game is reported with its `LastTaskResult`.
+- **Launch** reads and checks the store first: a test folder whose store is missing, does not
+  parse or passes one of the DLL's limits is refused with nothing written. It is a scheduled task
+  of the instance's own, `\tacli\<name>`, that **runs TotalA.exe itself** with `-xtacli-test`
+  ahead of `--arg`'s switches: an interactive principal for the console user, the test folder
+  as working directory, no time limit, and `-Priority 4` (normal: the task default, 7, is below
+  normal and the game inherits it). Nothing but the registry needed a wrapper, so there is none.
+  Before the task, `launch` puts its test values (sound off, `Interface Type`, the skirmish
+  flags, …) into the store, and refuses a DLL that does not fail closed: the build and the test
+  folder's copy must both carry the fail-closed test-mode line and the `-r` closure's line
+  (`taremote.TEST_MODE_MARKS`), which a build without the store, without the closure, or with
+  the earlier single-signal decision lacks. `--arg` refuses any switch whose second character is
+  `r` or `d`, the character the engine acts on (`-register` is `-r`), and the token itself. A
+  task that starts no game is reported with its `LastTaskResult`. `rm` removes the task, and the
+  task folder `\tacli\` when nothing else is left in it.
+- **Nothing tacli writes into the test folder is ever missing.** Each file goes under a
+  temporary name first and is put in place with `[IO.File]::Replace` or, onto a free name,
+  `[IO.File]::Move`. Windows PowerShell 5.1's `Move-Item -Force` deletes the target and then
+  moves, which left a moment with no store at every store update.
+- **`RegStore` holds to the DLL's limits**, measured against a copy of the DLL's reader (the
+  review's figures were one past each): a key path of up to 511 bytes, a value name of up to
+  1023, a value of up to 65 536 bytes, 512 values a key, 1024 keys, a file of 4 MiB. `remote
+  add` refuses a player's key that would pass one, and `launch` a store that does.
 - **The one-statement rule lives in `ps_script`**, which refuses a statement that could span
   lines. A sequence counter makes a line PowerShell skipped stop every line after it, and every
   statement must print a DONE marker. A skipped statement is an error, not an empty answer.
@@ -236,7 +268,9 @@ instances" and in `tagpu_regstore.h`; this block keeps the plan's shape and what
 
   Every other verb refuses before it sends a statement or touches a local file. An
   `instance.json` that does not read is an unusable instance that every verb refuses (read as
-  empty it would look local, and `rm` would delete it), and it is replaced whole on every save.
+  empty it would look local, and `rm` would delete it), and it is replaced whole on every save,
+  through a temporary file of the saving process's own (`tempfile.mkstemp` in the instance's
+  folder, then `os.replace`), so two commands saving one instance at once cannot tear it.
 - **The shield is the same file with the same meaning**: the DLL drops that desktop's hardware
   input, and `tacli shield <name> off` hands the game over.
 - **Gate:**
@@ -246,9 +280,11 @@ instances" and in `tagpu_regstore.h`; this block keeps the plan's shape and what
     real `Session`. Every batch is made by `ps_script`, run by a model of PowerShell (the
     sequence counter, the catch clause, a wrapped .NET exception, a skipped line), and parsed
     by the real marker reader. The model holds TA's real key and records any statement that
-    would write it; none does. The store's format is tested for every type and escape, and for
-    the lines the DLL refuses. All pass; the one failure in the file,
-    `test_over_tas_stock_cap_only_warns`, fails on main as well.
+    would write it; none does. The store's format is tested for every type and escape, for
+    the lines the DLL refuses, and for each of its limits, at the limit and one past it. Four
+    threads saving one instance 60 times each leave a whole `instance.json` and no temporary
+    file; the shared temporary name it replaced failed that test on 5 runs of 5. 288 tests; the
+    one failure, `test_over_tas_stock_cap_only_warns`, fails on main as well.
   - **Local, under wine** (a private Xvfb display, a private copy of the prefix's registry):
     - with the store: `registry: TEST MODE ... 4 keys, 103 values loaded; hooks: TotalA.exe 9 of
       9 registry imports, win32.dll 2 of 2`. The menus, then a skirmish started through `tacli
@@ -257,8 +293,19 @@ instances" and in `tagpu_regstore.h`; this block keeps the plan's shape and what
       and the rest of it was byte-identical to what Python had written (every type and escape
       of the format included). TA's section of the prefix's `user.reg` was identical before and
       after;
-    - without it: the one line `registry: real (no tacli-state\registry.txt beside TotalA.exe)`
-      and no other;
+    - **the fail-closed paths** (`WINEDEBUG=+relay`, the calls counted from `TotalA.exe` and
+      `ddraw.dll`): the token with no `tacli-state`, `tacli-state\registry.txt` as a folder, and
+      `tacli-state` with no store each ended the process with exit code 1 at attach (1.5 s),
+      after one line, `registry: TEST MODE, entered by the -xtacli-test token, but there is no
+      tacli-state\registry.txt beside TotalA.exe: the game is not run` (and its two
+      counterparts), and with no registry call from either module;
+    - **neither signal**: the one line `registry: real (no -xtacli-test token, and no tacli-state
+      folder beside TotalA.exe)`, nothing hooked, and the game calling ADVAPI32 itself as stock
+      does;
+    - the token and the store: `entered by the -xtacli-test token and the tacli-state folder`,
+      and the real registry asked for 3 read-only calls (the DirectX version check) and no
+      write. The same with `cnc_ddraw_config_init=1` in the environment: test mode, and the game
+      runs;
     - `TotalA.exe -r` by hand (tacli refuses the switch) in the test-mode instance: `the -r
       switch (DirectPlay registration through dsetup.dll) is ignored`, and the game stayed in
       its front end until stopped 45 s later, where stock quits. The live gate below ran the
@@ -282,9 +329,11 @@ instances" and in `tagpu_regstore.h`; this block keeps the plan's shape and what
       write times; `rm` left no test folder, no task and no metadata.
   - The same launch's log previews G21d on that card: `vk: depth format: D32_SFLOAT_S8_UINT
     (130)`.
-- **Not closed.** System DLLs that call the registry for the game (DirectPlay, DirectSound) are
-  not hooked, and neither is a DLL the game loads after attach; which of them write during a
-  test run is not measured.
+- **Not closed.** Nothing hooks the system DLLs that call the registry for the game
+  (DirectPlay, DirectSound), what `ShellExecuteA` starts, `online.dll`'s extension DLLs or the
+  processes it starts, or a DLL the game loads after attach; which of them write during a test
+  run is not measured. The Task Scheduler keeps its records of the instance's task under
+  `TaskCache` while the task exists, and Windows its own records of the programs it runs.
 - Review: high (a new DLL hook on TotalA.exe's imports; `tools/tacli`, `tools/taremote.py`; the
   player's registry and folder).
 

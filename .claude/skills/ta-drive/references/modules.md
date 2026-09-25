@@ -287,20 +287,28 @@ tools/tacli rm w1                                 # deletes the test folder and 
   `rm` included, until it is fixed or removed by hand.
 - **`launch` refuses beside any `TotalA.exe` it did not start** (it may be the player's game).
   It uploads this tree's `ddraw.dll` and checks its MD5 (`--keep-dll` keeps the one there), and it
-  writes the harness files a local launch writes, the shield included. It refuses a DLL without
-  the registry store, and a test folder without its store file. `--res`, `--maxfps`,
+  writes the harness files a local launch writes, the shield included. It reads the test
+  folder's store first and refuses one that is missing or that the DLL would not load, and it
+  refuses a DLL that does not fail closed. `--arg` refuses any switch whose character after the
+  dash is `r` or `d` (the engine reads `-register` as `-r`). `--res`, `--maxfps`,
   `--map`, `--player`, `--los`, `--mapping`, `--unit-limit`, `--defaults` and `--sound` work as
   locally. `--window`, `--display`, `--slot`, `--dplay`, `--intro` and `--shipped` are refused.
-- **A test folder's registry is a file; the machine's registry is never written.**
-  `tacli-state\registry.txt` holds TA's key. The DLL finds it beside `TotalA.exe` and answers the
-  game's registry calls from it; any other key is read-only. `launch` puts its values (sound off,
-  `Interface Type`, the display and skirmish values) into that file. The log's second line says
-  which mode ran: `registry: TEST MODE -- … hooks: TotalA.exe 9 of 9 registry imports, …`. A
-  player's own folder has no such file and logs `registry: real (…)`. Nothing is restored after
-  a test, and a test killed at any moment leaves the player's key as it was.
+- **A test folder's registry is a file; TA's settings key on that machine is never written.**
+  `tacli-state\registry.txt` holds TA's key. Every remote launch passes the token
+  `-xtacli-test`, which the engine skips; with it, or with a `tacli-state` folder beside
+  `TotalA.exe`, the DLL answers the registry calls of `TotalA.exe` and `win32.dll` from the file,
+  and any other key is read-only. `launch` puts its values (sound off, `Interface Type`, the
+  display and skirmish values) into that file. The log's second line says which mode ran:
+  `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder -- …
+  hooks: TotalA.exe 9 of 9 registry imports, …`. A test launch whose store is missing or does
+  not load logs `…, but <what>: the game is not run` and ends at once. A player's own folder
+  has neither signal and logs `registry: real (…)`. Nothing is restored after a test, and a
+  test killed at any moment leaves the player's key as it was. What no hook reaches (the Task
+  Scheduler's records of the task, the system DLLs) is listed in `tacli-design.md`.
 - **The game runs from the instance's scheduled task**, `\tacli\<name>`: TotalA.exe itself on
   the console user's desktop, at normal priority. `launch` reports `TotalA.exe runs at priority
-  Normal`. A task that starts no game fails the launch with the task's own result code.
+  Normal`. A task that starts no game fails the launch with the task's own result code. `rm`
+  removes the task, and the task folder `\tacli\` once no other task is in it.
 - **The shield is on**, as locally: that desktop's keyboard and mouse do not reach the game,
   and `tacli shield w1 off` hands it over. With the player's `impure.cfg` the game opens
   fullscreen on that machine's primary monitor; `--res` at the monitor's own size avoids a

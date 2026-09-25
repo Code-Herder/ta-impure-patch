@@ -54,10 +54,15 @@ Nothing else reads the INI. There are no display/movie/window INI options.
 
 ## Command-line switches [BINARY-VERIFIED + RUNTIME-VERIFIED 2026-09-01]
 
-Parser at `0x49EEC0`, token loop over `strtok(cmdline, " \t")` (`0x4E5280`). A token
-starting with `-` or `/` (`0x49EEDD`) dispatches on the *next* character,
-case-insensitive, via jump table `0x49F494` + index bytes `0x49F500` (covering
-`'B'..'w'`; every unlisted letter maps to the loop tail, i.e. is silently ignored).
+Parser `CmdlineArgsNormalize 0x49EE30` (called at `0x49E8D2`), token loop over
+`strtok(cmdline, " \t")` (`0x4E5280`) with its head at `0x49EED3`. A token starting with `-`
+or `/` (`0x49EEDD`) is first matched by `0x4DA0E0` against the debug switches of the table
+`0x50C908..0x50C954` (`-memfussy`, `-dprinton`, `-gonzo`, `-debughelper`, …, as prefixes,
+without case), and skipped if it starts with one. Otherwise it dispatches on the *next*
+character, case-insensitive, via jump table `0x49F494` + index bytes `0x49F500` (covering
+`'B'..'w'`; every unlisted letter maps to the loop tail `0x49F461`, i.e. is silently ignored,
+and so does any character above `'w'`, through `ja 0x49F461`). The handler acts on that
+character whatever follows it: `-register` and `-r12` are `-r`.
 Any other token is copied to `0x51FB50`. Each handler advances `edi` past the two
 switch characters itself, so numeric/string arguments may be glued (`-t120`) or the
 next token (`-t 120`) — **except `-b`, which forgets to, see below**.
@@ -80,6 +85,7 @@ Three globals are initialised before the loop: `main+0x37F31 = 30`,
 | `-s` | `0x49F402` | `0x51E690` | `0x47EFC0()` → NoDirectSound (same global as the INI). **Official: disable all sound.** |
 | `-t <n>` | `0x49F409` | `main+0x37F31`, clamp 30..300 | **Battleroom join timeout, seconds** (default 30) — feeds "will be rejected in %d seconds" at `0x453859`. |
 | `-w` | `0x49F45C` | `0x51E694` | `0x47EFD0()` → UseWindowsSound (same global as the INI). Official. |
+| `-xtacli-test` | `0x49F461` | — | **Not a switch of the engine: tacli's token.** `x` is above `w`, so the parser skips it. Every remote launch passes it, and it is how the DLL knows a tacli test launch ([exe reverse engineering](exe-reverse-engineering.html) §"The registry"). |
 
 The debug-runtime switches visible in strings (`-dprinton`, `-dprintfile`,
 `-memfussy`, `-gonzo`, …) belong to the CRT/debug layer, parsed elsewhere; they
