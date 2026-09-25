@@ -201,18 +201,25 @@ const TAGPU_ROPT* tagpu_rcore_opt(void)
     return &s_opt;
 }
 
-int tagpu_rcore_pick_nk(TAGPU_RSCHED* s, int maxUniformBlockBytes, int maxAttachments)
+/* THE LIMITS STAY UNSIGNED, as Vulkan reports them. A driver may report
+   UINT32_MAX for a range it does not bound -- AMD's Windows driver does for
+   `maxUniformBufferRange` (MEASURED 2026-09-25, an R9 200 series card) -- and
+   read as an int that is -1, less than one k-block, so the restorer refused
+   the device. The quotient is clamped to TAGPU_R_MAXNK before it is narrowed
+   to an int. */
+int tagpu_rcore_pick_nk(TAGPU_RSCHED* s, unsigned maxUniformBlockBytes, unsigned maxAttachments)
 {
     char b[200];
-    int kbytes, nk;
+    unsigned kbytes, fit;
+    int nk;
     if (!s_modelOk) return 0;
-    kbytes = s_w.kmax * 64;
-    nk = kbytes > 0 ? maxUniformBlockBytes / kbytes : 0;
-    if (nk > maxAttachments) nk = maxAttachments;
-    if (nk > TAGPU_R_MAXNK) nk = TAGPU_R_MAXNK;
-    nk = nk >= 8 ? 8 : nk >= 4 ? 4 : nk >= 2 ? 2 : nk >= 1 ? 1 : 0;
+    kbytes = s_w.kmax > 0 ? (unsigned)s_w.kmax * 64u : 0u;
+    fit = kbytes ? maxUniformBlockBytes / kbytes : 0u;
+    if (fit > maxAttachments) fit = maxAttachments;
+    if (fit > TAGPU_R_MAXNK) fit = TAGPU_R_MAXNK;
+    nk = fit >= 8 ? 8 : fit >= 4 ? 4 : fit >= 2 ? 2 : fit >= 1 ? 1 : 0;
     if (!nk) {
-        _snprintf(b, sizeof b, "%s: uniform block %d < one k-block (%d)",
+        _snprintf(b, sizeof b, "%s: uniform block %u < one k-block (%u)",
                   s->be->name, maxUniformBlockBytes, kbytes);
         rlog(b);
         return 0;
