@@ -1445,14 +1445,19 @@ static int vk_swapchain(int w, int h)
    every conformant device offer one of these two as a depth-stencil
    attachment. It guarantees no 24-bit format in particular.
 
-   WHAT FLOAT CHANGES. Every world pass writes a z in [0, 1] and the viewport
-   maps it onto [0.5, 1] (`minDepth 0.5 / maxDepth 1.0`, tagpu_vk_feat.c
-   item 1). A float in [0.5, 1) is spaced exactly 2^-24, the same step as
-   D24's 1/(2^24 - 1), so the two formats are equally fine and differ only in
-   where they round. They can disagree only where two DIFFERENT keys lie
-   within one step of each other: one grid ties them, the other puts them a
-   step apart. Equal keys still tie exactly, which is what the mirror's
-   partner keys rest on (tagpu_feat.c `map_key`).
+   WHY FLOAT DRAWS THE SAME PICTURE. Every world pass writes a z in [0, 1]
+   and the viewport maps it onto [0.5, 1] (`minDepth 0.5 / maxDepth 1.0`,
+   tagpu_vk_feat.c item 1). A float32 in (0.5, 1) is j * 2^-24 for an integer
+   j, and D24's conversion of it, j - j/2^24 rounded, is j - 1 whether the
+   device rounds to nearest or toward zero: one D24 value per float, in the
+   same order. (0.5 itself rounds to nearest onto the next float's value; it
+   is a clip z of 0, which no key reaches, because tagpu_native.c puts
+   `depthScale` above the highest key.) So a depth test between two float32
+   fragment depths answers the same on either attachment -- equal keys tie on
+   both, which the mirror's partner keys rest on (tagpu_feat.c `map_key`), and
+   keys a float apart are apart on both. Only a rasteriser that computes a
+   D24 target's depth other than as a float32 could draw it differently
+   [INFERRED]; the reference setup measures 0 px (gpu-status §2.91).
 
    WHY THE STENCIL PLANE DECIDES THE FALLBACK. The units' Classic hard shadow
    is stencil-masked (tagpu_vk_unit.c `build_shadow_pipelines`), so a

@@ -22,9 +22,9 @@
       Vulkan clips a z below 0, and these shaders write none --
       `clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0)` is the whole of it.
       The attachment's FORMAT is the seam's (tagpu_vk.c `vk_depth_format`):
-      D32_SFLOAT_S8_UINT, else D24_UNORM_S8_UINT. Over [0.5, 1] both step
-      2^-24, so the range above is also what makes the two formats tie the
-      same keys.
+      D32_SFLOAT_S8_UINT, else D24_UNORM_S8_UINT. Over [0.5, 1] a float32
+      and its D24 conversion are one-to-one and in the same order, so the
+      range above is also what makes the two formats draw the same picture.
 
    2. TWO DEPTH-WRITE MODES, AND SO TWO PIPELINES. Shadows are drawn with
       depth writes off and bodies with them on -- shadows are ground decals and

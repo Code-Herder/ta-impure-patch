@@ -311,7 +311,7 @@ tile taken from the reflected cell and its flip bits in spare bits of the instan
 * **The map's own features keep main's depth keys, and a mirrored one takes its source's.** A copy
   is keyed and emitted as its source is on the map, so it stacks as the map does — overlaps and
   depth-buffer ties included, which a key continuing the painter's order across the edge would not:
-  neighbouring flats of one row are closer in the key than the 24-bit buffer resolves, so the map's
+  neighbouring flats of one row are closer in the key than the depth buffer resolves, so the map's
   own tie and keep the first drawn. The lab takes one key rect for both, which the game cannot: it
   would move an on-map tree past a 3D wreck of its row.
 * **A flipped quad nudges the other way.** The nudge that breaks a tie between two texels breaks it
