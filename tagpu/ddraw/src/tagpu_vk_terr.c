@@ -69,7 +69,8 @@
       what it wrote. The range answer is §2.28's: a
       viewport with `minDepth 0.5` / `maxDepth 1.0`, which maps clip z in [0, 1]
       onto exactly GL's `(z+1)/2`, the values the OpenGL renderer this replaced
-      wrote, precision included. Never a shader edit -- tools/spirv-gen.py's
+      wrote; over [0.5, 1] the seam's float format steps 2^-24 as D24 does
+      (tagpu_vk.c `vk_depth_format`). Never a shader edit -- tools/spirv-gen.py's
       transform is mechanical and touches no line of a shader body.
       The pass refuses to arm when the seam's render pass carries no depth
       attachment.

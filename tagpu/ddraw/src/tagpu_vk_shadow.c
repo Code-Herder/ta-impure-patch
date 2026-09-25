@@ -16,22 +16,26 @@
       `prepare` -- legal precisely because `prepare` is the hook the seam calls
       OUTSIDE its own vkCmdBeginRenderPass, and render passes may not nest.
 
-   2. A [-1, 1] CLIP-SPACE Z, AND THIS IS THE PASS THAT NEEDS IT.
-      Every other world pass writes a clip z already in [0, 1], so
-      `minDepth 0.5 / maxDepth 1.0` maps it and nothing is clipped
-      (tagpu_vk_feat.c item 1, which says this extension would be the answer
-      only if a shader were ever found writing a z below 0).
-      The shadow matrix IS that shader: the consumers' taShadowAt
-      (tagpu_glsl.h) maps its output by `* 0.5 + 0.5`, so the hand-over's
+   2. THE LIGHT MATRIX WRITES A [-1, 1] Z, AND THE VERTEX STAGE REMAPS IT.
+      Every other world pass writes a clip z already in [0, 1] (tagpu_vk_feat.c
+      item 1). The shadow matrix does not: the consumers' taShadowAt
+      (tagpu_glsl.h) reads the map as `p.z * 0.5 + 0.5`, so the hand-over's
       `mat` is an orthographic projection that fills [-1, 1], and under
-      Vulkan's own convention the near half of every caster would be CLIPPED
-      AWAY -- the map wrong rather than merely offset.
-      `VK_EXT_depth_clip_control` with `negativeOneToOne` keeps [-1, 1] for
-      this pipeline; the seam queries the feature and publishes it as
-      TAGPU_VKPASS::zclipok, and this pass stands down without it. And the
-      values matter as much as the geometry: taShadowAt compares
-      `p.z * 0.5 + 0.5` against what is STORED here, so the viewport transform
-      has to store (z+1)/2, and the format is 24-bit fixed point.
+      Vulkan's [0, 1] clip volume the near half of every caster would be
+      CLIPPED AWAY -- the map wrong rather than merely offset.
+      So both caster vertex stages -- this pass's `VS_H` and the unit pass's
+      `uDepthPass == 1` path (tagpu_posedraw.c) -- end with
+      `gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5`. The volume they
+      then clip against is the matrix's own [-1, 1], and with minDepth 0 /
+      maxDepth 1 the value STORED is (z/w + 1)/2 -- for the orthographic
+      matrix, w = 1, exactly the `p.z * 0.5 + 0.5` taShadowAt compares against.
+      It needs no extension and no pipeline state.
+      THE FORMAT is `tagpu_vk_shadow_format`'s, 32-bit float first. The
+      consumer's bias is taken in these stored units -- one to three texels'
+      worth of depth, `uShScale.x / uShScale.y` (taShadowAt) -- and there is
+      no rasteriser depth bias in either caster pipeline, so nothing here
+      depends on the format's step: float's is at most 2^-24 in [0, 1], never
+      coarser than D24's.
 
    3. THERE IS NO Y FLIP HERE, AND THAT IS NOT AN OMISSION.
       This target is SAMPLED, not presented, and that alone settles it.
@@ -130,7 +134,6 @@ static int s_downOwed;                     /* a teardown the seam still owes us 
 static int s_downPaying;                   /* ...and the seam is paying it NOW  */
 static int s_saidCasters;                  /* the refusals, each said once      */
 static int s_saidUnitShort;                /* the unit pass owed casters, was short */
-static int s_saidZclip;
 static int s_saidFormat;
 static int s_saidRes;
 
@@ -346,26 +349,33 @@ static int resolve(const TAGPU_VKPASS* d)
 
 /* ---- the format ---------------------------------------------------------
    ASKED FOR BY NAME rather than discovered in a wrong picture, as the feature
-   pass's sampler check is. Two things are wanted of it at
-   once and neither is guaranteed: it must be a depth-stencil attachment AND a
-   sampled image, and the consumers' PCF taps it through a LINEAR compare
-   sampler, which is a third feature bit again.
-   24-BIT FIXED POINT OR NOTHING. The map is specified as 24-bit fixed point
-   and the consumer compares a float it computed against what is stored here,
-   so a 32-bit float attachment would quantise every tap differently. */
+   pass's sampler check is. Three things are wanted of it and none is
+   guaranteed: it must be a depth-stencil attachment AND a sampled image, and
+   the consumers' PCF taps it through a LINEAR compare sampler, which is a third
+   feature bit again.
+   32-BIT FLOAT FIRST, THEN THE 24-BIT ONES, the seam's own policy
+   (tagpu_vk.c `vk_depth_format`). The consumer compares a float it computed
+   against what is stored here, with a bias of one texel's depth or more
+   (item 2 of the file header), so the map needs a step well under that and
+   nothing finer: float's is 2^-24 or less anywhere in [0, 1], D24's is 2^-24.
+   The first pass takes a candidate that has all three bits; the second takes
+   one without LINEAR and says so through `*linearOk`, which stands the
+   consumers down rather than letting them sample it NEAREST. */
 static VkFormat s_fmtCache = VK_FORMAT_UNDEFINED;
 static int      s_fmtLinear;
 static int      s_fmtAsked;
 
 VkFormat tagpu_vk_shadow_format(const TAGPU_VKPASS* d, int* linearOk)
 {
-    static const VkFormat want[2] = {
+    static const VkFormat want[3] = {
+        VK_FORMAT_D32_SFLOAT,               /* float depth, no stencil      */
         VK_FORMAT_X8_D24_UNORM_PACK32,      /* 24-bit depth, no stencil     */
         VK_FORMAT_D24_UNORM_S8_UINT         /* the same 24 bits, plus stencil */
     };
     const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
                                       VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-    int i;
+    const VkFormatFeatureFlags lin = VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    int i, pass;
     if (!s_fmtAsked) {
         /* THE ONE ENTRY POINT THIS NEEDS, RESOLVED HERE. A consumer may ask
            before `prepare` has ever run, so `resolve` may not have. */
@@ -375,14 +385,14 @@ VkFormat tagpu_vk_shadow_format(const TAGPU_VKPASS* d, int* linearOk)
                 : (PFN_vkGetPhysicalDeviceFormatProperties)
                       d->gipa(d->inst, "vkGetPhysicalDeviceFormatProperties");
         s_fmtAsked = 1;
-        if (gp) {
-            for (i = 0; i < 2; i++) {
+        for (pass = 0; gp && pass < 2 && s_fmtCache == VK_FORMAT_UNDEFINED; pass++) {
+            const VkFormatFeatureFlags must = pass == 0 ? (need | lin) : need;
+            for (i = 0; i < 3; i++) {
                 VkFormatProperties fp;
                 memset(&fp, 0, sizeof fp);
                 gp(d->pd, want[i], &fp);
-                if ((fp.optimalTilingFeatures & need) == need) {
-                    s_fmtLinear = (fp.optimalTilingFeatures &
-                                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+                if ((fp.optimalTilingFeatures & must) == must) {
+                    s_fmtLinear = (fp.optimalTilingFeatures & lin) != 0;
                     s_fmtCache = want[i];
                     break;
                 }
@@ -465,8 +475,6 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
-    VkPipelineViewportDepthClipControlCreateInfoEXT zc =
-        { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT };
     VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
     VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
     VkPipelineDepthStencilStateCreateInfo ds;
@@ -510,10 +518,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
 
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    /* THE [-1, 1] CLIP-SPACE Z, item 2 of the file header. The caller has already
-       refused to get here without `zclipok`. */
-    zc.negativeOneToOne = VK_TRUE;
-    vp.pNext = &zc;
+    /* No clip-control state: `VS_H` remaps the light matrix's [-1, 1] z into
+       Vulkan's clip volume itself (item 2 of the file header). */
     vp.viewportCount = 1; vp.scissorCount = 1;
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
@@ -618,10 +624,9 @@ static int build(const TAGPU_VKPASS* d)
     if (!resolve(d)) { plog(d, "shadow: an entry point is missing"); return 0; }
     s_dfmt = tagpu_vk_shadow_format(d, &linearOk);
     if (s_dfmt == VK_FORMAT_UNDEFINED) {
-        plog(d, "shadow: this device has no 24-bit depth format that is both a "
-                "depth attachment and a sampled image - the map stays down (it "
-                "is specified as 24-bit fixed point and a float one would not "
-                "quantise the same way)");
+        plog(d, "shadow: this device offers none of D32_SFLOAT, X8_D24_UNORM_PACK32 "
+                "and D24_UNORM_S8_UINT as both a depth attachment and a sampled "
+                "image - the map stays down");
         return 0;
     }
     if (!linearOk && !s_saidFormat) {
@@ -793,20 +798,6 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
 
-    /* THE [-1, 1] CLIP-SPACE Z OR NOTHING (item 2 of the file header). Refused before
-       anything is built, because without it every pipeline this pass could make
-       would clip half of every caster away. */
-    if (!d->zclipok) {
-        if (!s_saidZclip) {
-            s_saidZclip = 1;
-            plog(d, "shadow: this device has no "
-                    "VK_EXT_depth_clip_control/depthClipControl, so a clip z "
-                    "below 0 would be clipped where the map keeps it - the map is "
-                    "not drawn, and the passes that sample it stand down");
-        }
-        return 0;
-    }
-
     /* THE MAP MAY BE INCOMPLETE ON THIS SIDE OF THE SEAM. `otherCasters` is
        the producer's count of everything the map holds that the hand-over
        carries no copy of: the native 3DO stream, the posed bodies -- and
@@ -974,7 +965,7 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
     vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
 
     /* NO Y FLIP: a positive height, item 3 of the file header. minDepth 0 /
-       maxDepth 1 with `negativeOneToOne` on stores (z+1)/2, the value
+       maxDepth 1 stores the vertex stage's remapped z, (z/w + 1)/2, the value
        taShadowAt compares against (item 2). */
     memset(&vp, 0, sizeof vp);
     vp.x = 0.0f; vp.y = 0.0f;

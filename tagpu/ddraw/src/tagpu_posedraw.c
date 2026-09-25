@@ -483,7 +483,13 @@ static const char* VS =
        shadow up on their own caster */
     "  vShW = vec3(vWorld.x, uCast.y + uCast.z * m.y,\n"
     "              vWorld.y + (uCast.x + m.y) * 0.5);\n"
-    "  if (uDepthPass == 1) gl_Position = uShadowMat * vec4(vShW, 1.0);\n"
+    /* the light matrix fills [-1, 1] in z and Vulkan clips to [0, w]: the
+       remap keeps the matrix's own volume and stores (z/w + 1)/2, the value
+       taShadowAt compares against (tagpu_vk_shadow.c item 2) */
+    "  if (uDepthPass == 1) {\n"
+    "    gl_Position = uShadowMat * vec4(vShW, 1.0);\n"
+    "    gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n"
+    "  }\n"
     "}\n";
 
 /* THE EFFECTS MODELS' VERTEX STAGE. Six vertices a run, two triangles over

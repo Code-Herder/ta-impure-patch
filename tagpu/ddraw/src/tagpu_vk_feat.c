@@ -18,12 +18,13 @@
       STATE, never a shader edit. The range is SHARED: the terrain, unit,
       effects and marker passes set the same one, and each depth test compares
       values the other passes wrote, so a pass that changed its range alone
-      would settle z-fights differently from the rest. It needs no extension.
-      `VK_EXT_depth_clip_control` is the answer only if a shader is ever found
-      writing a z below 0 -- Vulkan clips those. These do not:
+      would settle z-fights differently from the rest. It needs no extension:
+      Vulkan clips a z below 0, and these shaders write none --
       `clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0)` is the whole of it.
       The attachment's FORMAT is the seam's (tagpu_vk.c `vk_depth_format`):
-      24-bit fixed point, D24_UNORM_S8_UINT or X8_D24_UNORM_PACK32.
+      D32_SFLOAT_S8_UINT, else D24_UNORM_S8_UINT. Over [0.5, 1] both step
+      2^-24, so the range above is also what makes the two formats tie the
+      same keys.
 
    2. TWO DEPTH-WRITE MODES, AND SO TWO PIPELINES. Shadows are drawn with
       depth writes off and bodies with them on -- shadows are ground decals and
