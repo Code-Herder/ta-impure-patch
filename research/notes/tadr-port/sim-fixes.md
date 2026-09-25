@@ -288,11 +288,13 @@ from the plan below:
   and the three local fixes, each checked and skipped alone.
   The engine map's *The wind*, *A yardmap parsed past its string*, *The saved-game loader's order
   fallback*, *The stockpile bar's divide* and *A range circle of radius 1* have the disassembly.
-- **The host is found by its record, not through the lobby's player info.** It is the active
-  record with PlayerNum 1 and a human type (`+0x73` 1 local or 3 remote), and its DirectPlay ID must
-  not be 0, where TADR tests the ID as a signed int above 0. MEASURED: the host's record reads
-  number 1 and the same ID on both peers, the joiner's 2; in single player every record reads 0 and
-  an ID equal to its slot, so single player takes the counter path.
+- **The path and the host are the engine's own.** A network game is the engine's test,
+  `GameingState +0` = 3 (the game start's dispatch, `0x4971C7`), not "some record looks like a
+  host"; the host is the engine's host seat `0x456850`, the seat the load already waits for and
+  takes the map and the unit limit from, and the seed is its DirectPlay ID. Inside a network game
+  nothing local to a peer is read: with no host seat the seed is the map's hash alone, counted. TADR
+  instead takes the host's ID with a clock fallback. MEASURED: the host seat is 0 on the host and
+  1 on each joiner, and its ID the same on every peer, with two peers and with three.
 - **Stock's load call draws nothing.** It finds `next` = 0 (`0x4918FD`) and GameTime 0, so the seed
   at `0x491903` precedes every draw, and the first draw is the first tick's.
 - **Changed: B6 logs a line of its own** (`patch_loader_defects`), not a clause of B1's
@@ -300,16 +302,19 @@ from the plan below:
 - **Changed: a stockpile order whose slot index is above 2 draws no bar.** The extra-weapons
   module's slots past the third are not inline slots, and the engine's bar has no reader for them.
 - **Evidence.** The wind is reproduced on the previous build: two peers paused at GameTime 825
-  read speed 2525, heading `0xF5C6`, and 1498, `0xC827`. On the new build both peers read the same
-  next change, speed and heading in three games: a first one, sampled twice (at 795 and at 2003
-  or 2006); a second in the same processes; and a third after restarting the joiner, where the host
-  was on its third level load and the joiner on its first. The yardmaps' 2440 retail cells are
+  read speed 2525, heading `0xF5C6`, and 1498, `0xC827`. On the new build every peer read the same
+  next change, speed and heading in five games: a first one, sampled twice (at 795 and at 2003
+  or 2006); a second in the same processes; a third after restarting the joiner, where the host
+  was on its third level load and the joiner on its first; and, on the host-seat rule, one with two
+  peers and one with three (components and ratio equal too). A skirmish reads game mode 2 and
+  takes the counter path. The yardmaps' 2440 retail cells are
   byte-identical to the previous build's. The two scratch structures read `2f2f31313100002b2b…`
   from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
   three local fixes rest on the disassembly: none of their inputs is in stock content, and the
   `ShowRanges` cheat could not be typed under injected input.
 - **Not measured:** the side measurement this landing was to carry (a tracked unit's death leaving
-  an order armed, and our build ghost drawing) did not fit its time budget.
+  an order armed, and our build ghost drawing) did not fit its time budget; nor a network game with
+  an AI seat (the engine map's *The wind* says what the rule does with one).
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
   before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,
@@ -348,6 +353,13 @@ from the plan below:
 
 ## Corrections this plan made
 
+- **The CRT's `srand(time(0))` at `0x4971AE` does not seed the wind's schedule.** `rand` keeps its
+  state per thread; the wind draws on the game thread, whose stream WinMain seeds (`0x49E8BB`).
+  Corrected in the evidence (§6a), the engine map and `gpu-status.md`; each peer's wind still
+  differs.
+- **The wind reaches the simulation beyond the economy.** The projectile pass `0x49B720` adds it to
+  a projectile's position every tick and the fire spread `0x4239C0` reads it; the evidence had
+  these readers as smoke drift [INFERRED].
 - **The yardmap's stale bytes repeat from launch to launch** for one build on the reference
   setup (B6): the evidence expected two launches to differ. The fix does not rest on it; the bytes
   are still the stack's.

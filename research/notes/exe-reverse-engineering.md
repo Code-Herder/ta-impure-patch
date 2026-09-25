@@ -330,7 +330,7 @@ allocated, or its page cannot be made writable. Each of the twenty-three, and wh
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
 | line of sight at the map's edge `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`, `0x465DA9`, `0x408095`, `0x407F74` | simulation | what is acquired, and what the AI probe keeps |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
-| one wind for every peer `0x490C5A`, `0x491903` | simulation | a wind generator's energy follows the wind's ratio, and each peer draws its own |
+| one wind for every peer `0x490C5A`, `0x491903` | simulation | projectiles and the fire spread move by the wind and wind generators produce by it, and each peer draws its own |
 | yardmaps inside their string `0x42CF5E` | simulation | the yardmap decides where a unit can be placed, what it occupies and where others path |
 | the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
@@ -1567,22 +1567,38 @@ updater then derives the components `+0x37ECC` and `+0x37ED4` from the speed and
 
 **The writers and readers.** The only writers of `+0x37EC4`, `+0x37EDA` and `+0x37ED8` are
 `0x490C8E`, `0x490CB7`, `0x490CDC` and the load's `mov [ecx+0x37EC4],esi` at `0x4918FD`, which sets
-`next` to 0: `esi` is 0 from `0x4917E5`. The readers are the updater's own derivations and
-three more:
-- `0x40156F`, in the resource step [INFERRED]: the ratio times the def's `WindGenerator` (`+0x1D2`, a
-  float) is added to the player's energy income;
-- `0x488F68`: the same product, negated, returned to the caller;
-- `0x437910(unit)`, called from `0x48ADC4`: for a def with `WindGenerator > 0`, and only on a
-  draw where the changed flag is set, it calls the unit's script `SetDirection(heading)` and
-  `SetSpeed(speed << 4)` through `0x4B0A70` (the names at `0x50500C` and `0x505000`).
+`next` to 0: `esi` is 0 from `0x4917E5`. The components `+0x37ECC` and `+0x37ED4` are written only
+by the updater (`0x490D09`, `0x490D35`). Besides the updater's own derivations, the readers are:
 
-So the wind is simulation state. It is each wind generator's income, and the argument of two
-COB calls that run on every peer.
+| reader | what it reads | what it does with it |
+|---|---|---|
+| the projectile pass `0x49B720`, called from the tick at `0x495513` | the three dwords from `+0x37ECC` (x, y, z; nothing writes `+0x37ED0` by name) | adds them to a projectile's position after its velocity, every tick (`0x49BC58..0x49BC62` → `0x49BD10..0x49BD2D`, and `0x49BD04..0x49BD2D`), on the branches of `0x49BC0C` and `0x49BCD9` (which weapon kinds take them was not traced) |
+| the fire spread `0x4239C0` [role INFERRED], called from `0x424463` | `+0x37ECC` (`0x423AA1`) and `+0x37ED4` (`0x423AC1`) | scales each by `0x20000` (`_allmul 0x4E4400`, then `0x4E43D0` with 16) and adds it to a position |
+| four effect handlers | `+0x37ECC` at `0x474B09`, `0x474FC9`, `0x475366`, `0x475626`, and `+0x37ED4` after each (`0x474B3A`, `0x474FFA`, `0x475391`, `0x475651`) | drift [INFERRED: smoke and particles] |
+| `0x40156F`, in the resource step [INFERRED] | the ratio `+0x37EDE` | the ratio times the def's `WindGenerator` (`+0x1D2`, a float) is added to the player's energy income |
+| `0x488F68` | the ratio | returns the same product, negated |
+| `0x437910(unit)`, called from `0x48ADC4` | the changed flag, the heading, the speed | for a def with `WindGenerator > 0`, and only on a draw where the changed flag is set, calls the unit's script `SetDirection(heading)` and `SetSpeed(speed << 4)` through `0x4B0A70` (the names at `0x50500C` and `0x505000`) |
+| `0x409B90` | `+0x37EC8` (5000) and the map's maximum `+0x1425F` | zeroes a wind generator's weight when the map's maximum is below half of 5000 [INFERRED: the AI's build weighting]; the drawn wind is not read |
 
-**Each peer draws its own.** The loader `0x497180` seeds the sim RNG from
-`QueryPerformanceCounter` and the CRT's `rand` from `time(0)`. Both are local to the machine, and
-the updater runs on every peer, so each peer draws its own wind. MEASURED on the previous build,
-two peers on Two Continents (wind 0 to 3000) paused at GameTime 825:
+So the wind is simulation state: it moves projectiles, and so where they land, it moves the fire
+spread, it is each wind generator's income, and it is the argument of two COB calls that run on
+every peer. These readers are what make the fix a simulation fix.
+
+**Each peer draws its own.** The two engine RNGs are both local to a machine:
+- the sim RNG `0x4B6C30` keeps its state at `0x51FC88`, one for the process, seeded by the loader
+  `0x497180` from `QueryPerformanceCounter` (`0x49718C`, then `0x4B6CA0` at `0x49719D`);
+- the CRT's `rand 0x4E4870` keeps its state per thread, at `+0x14` of the per-thread data
+  `0x4EB0F0` returns, and `srand 0x4E4860` writes only the calling thread's (see *The C
+  runtime's `rand` is a second, separate stream*, under the tacob value ids). The loader's `srand(time(0))` at `0x4971AE` seeds the loader thread's stream. The
+  tick's draw at `0x490C60` runs on the game thread, whose stream WinMain seeds with
+  `srand(time(0))` at `0x49E8BB`.
+
+The updater runs on every peer, so each peer draws its own wind. The schedule `next` diverges on
+every map, so the changed flag, and with it `0x437910`'s `SetSpeed` and `SetDirection`, fires on
+different ticks on different peers. The heading diverges on every map whose speed is not 0: with
+a range below 2 and a minimum above 0 the speed is the minimum on every peer, but `0x490CC8`
+tests the speed, not the range, so the heading is still drawn. MEASURED on the previous build, two
+peers on Two Continents (wind 0 to 3000) paused at GameTime 825:
 
 | peer | next | speed | heading |
 |---|---|---|---|
@@ -1611,43 +1627,86 @@ Two more rows check the bytes the stubs rest on, and the fix adds four rows in a
 - `0x490CE8`, 13 bytes: the loads where the draws rejoin.
 
 **The seed.** `wind_seed` runs at every level load, so nothing crosses from one game to the next.
-In a network game it seeds from the host's DirectPlay ID in the high half and a hash of the map
-in the low half. Outside one it seeds from `QueryPerformanceCounter`, as stock seeds its own RNG.
-- **The host** is the active player record (`main+0x1B63`, stride `0x14B`) with PlayerNum 1
-  (`+0x0C`) whose type `+0x73` is a human, 1 local or 3 remote, and whose DirectPlay ID (`+0x04`)
-  is not 0. MEASURED:
-  - on both peers, the host's record reads PlayerNum 1 and the ID `0x49576F42`;
-  - the joiner's record reads 2 and `0x49576F40`;
-  - `+0x73` is 1 for the local player and 3 for the remote one;
-  - in single player every record reads PlayerNum 0 and a DirectPlay ID equal to its slot index,
-    0 to 3, so the slot-0 record has ID 0, and no record is a host.
-- **The map** is FNV-1a over the lower-cased stem of the TNT path, `GameingState +0x204` through
-  `main+0x391E9`: "Maps\Two Continents.TNT" on both peers, hashed as "two continents". The load
-  reads the same pointer, as `this` for `0x435100`, at `0x491984`.
+The engine's own network test chooses its path: `GameingState +0` (through `main+0x391E9`; `0x435100`
+is `mov eax,[ecx]`) is 1 in a campaign, 2 in a skirmish and 3 in a network game, the dispatch the
+game start makes at `0x4971C7`.
+- **In a network game** the seed is the host's DirectPlay ID in the high half and a hash of the
+  map in the low half, and nothing local to a peer is read.
+- **When the engine names no host seat** in a network game, the seed is the map's hash alone,
+  counted (`network levels seeded from the map alone`) and logged.
+- **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG.
+
+**The host** is the engine's own host seat, `0x456850()`, which takes no argument and returns a
+seat in `al`, or 10 for none. It returns the first seat, 0 to 9, that meets two tests:
+- its type `+0x73` of the record (`main+0x1B63`, stride `0x14B`) is not 0;
+- bit 0 of `+0x97` is set in its PlayerInfo, the pointer at the record's `+0x27`.
+
+Earlier in the same load the engine waits for that seat, pumping the network through `0x453D40`
+and sleeping 50 ms while it answers 10 (`0x497213..0x4972AB`). It then takes from the seat the map
+(`0x4972D6`, `0x435A20`) and the unit limit (`0x4972DB..0x4973B5`), values every peer must agree
+on; the same bit decides who damages a feature (`0x4244B0`, *Who sends a feature hit*). The seed
+takes the seat's DirectPlay ID (`+0x04`), which DirectPlay gives the whole session. MEASURED on
+`23b6b8b`:
+
+| game | the host seat on the host | on each joiner | its DirectPlay ID on every peer |
+|---|---|---|---|
+| two peers, Two Continents | 0 | 1 | `0x498AE486` |
+| three peers, Town & Country | 0 | 1 and 1 | `0x498FABE4` |
+
+The seat index differs from peer to peer, and the ID does not.
+
+**An AI seat.** `0x456850` tests the seat's type for 0 only, so an AI seat is eligible. It
+qualifies only through the host bit, and the bit's setters are three:
+- `0x45156C` sets it on the local player's PlayerInfo (`main+0x2A42`);
+- `0x45035D` and `0x452FF8` set it on the first seat whose DirectPlay ID equals the ID they search
+  for (the loops at `0x4502EE` and `0x452F89`).
+
+`0x451943` clears it, and `0x45193A` copies a session flag into it. No setter tests the type.
+Whichever seat the rule returns, the seed is that seat's ID, and every peer agrees as long as the
+peers' records carry the same bit. The engine's own map and unit limit already rest on that
+premise. An AI seat was not run.
+
+For the record, the fix does not read PlayerNum `+0x0C`, which reads 1 for the host and 2 for the
+joiner on both peers. In single player every record reads PlayerNum 0 and a DirectPlay ID equal to
+its slot index, 0 to 3.
+
+**The map** is FNV-1a over the lower-cased stem of the TNT path, `GameingState +0x204`:
+"Maps\Two Continents.TNT" on both peers, hashed as "two continents". The load reads the same
+pointer, as `this` for `0x435100`, at `0x491984`, so it is not NULL there.
 
 **The ordering.** The seed is written on the loader thread before the loader's last store, bit 1
 of `main+0x38D75` (`0x497C62`). The tick reads it only after the game thread has seen that bit
 (`0x498342`).
 
-**MEASURED on the new build, two peers:**
+**MEASURED on the new build.** The values in each row were read on every peer, and are identical
+on every peer:
 
-| game | host's DirectPlay ID | GameTime | next | speed | heading |
+| build, game | seeded from | GameTime | next | speed | heading |
 |---|---|---|---|---|---|
-| 1 | `0x4961C0AB` (map hash `0x4934CBDE`) | 795 / 796 | 930 | 1983 | `0x3E40` |
-| 1, later | | 2003 / 2006 | 2220 | 1027 | `0x2643` |
-| 2, same processes (the level counter reads 2) | `0x4962F926` | 795 | 1170 | 2632 | `0x6CAC` |
-| 3, joiner restarted (host level 3, joiner level 1) | `0x4964DA8F` | 796 | 960 | 556 | `0xABFA` |
+| `1a0c599`, game 1 | the ID `0x4961C0AB`, map hash `0x4934CBDE` | 795 / 796 | 930 | 1983 | `0x3E40` |
+| `1a0c599`, game 1, later | | 2003 / 2006 | 2220 | 1027 | `0x2643` |
+| `1a0c599`, game 2, same processes (the level counter reads 2) | `0x4962F926` | 795 | 1170 | 2632 | `0x6CAC` |
+| `1a0c599`, game 3, joiner restarted (host level 3, joiner level 1) | `0x4964DA8F` | 796 | 960 | 556 | `0xABFA` |
+| `23b6b8b`, two peers, Two Continents | host seat's `0x498AE486`, `0x4934CBDE` | 789 / 790 | 810 | 2745 | `0xB128` |
+| `23b6b8b`, three peers, Town & Country (wind 25 to 5000) | host seat's `0x498FABE4`, `0x29FE9EA5` | 797 / 795 / 795 | 870 | 1598 | `0x387C` |
 
-The values in each row were read on both peers and are identical on both. In game 1 the ratio
-`+0x37EDE` also read `0x3ECB0F28` on both peers. In single player the log reads `seeded from the
-performance counter (no network host), map "two continents"`, and the wind draws. The install
-line reads `limits: installed 168 sites`: the 161 before, plus these four rows and the
+Notes on the rows:
+- On `1a0c599` the host was found by PlayerNum 1. That build's draws are the ones `23b6b8b` makes.
+- The ratio `+0x37EDE` also agreed on every peer: `0x3ECB0F28` in game 1, `0x3F0C8B44` (0.549)
+  and `0x3EA3A29C` (0.3196) on `23b6b8b`.
+- The components agreed as well: 5122 and 1976 with two peers, −3142 and −584 with three.
+
+In a skirmish on `23b6b8b` the log reads `seeded from the performance counter (game mode 2, not a
+network game)`, and the wind draws (next 420, speed 1385 at GameTime 281). The
+install line reads `limits: installed 168 sites`: the 161 before, plus these four rows and the
 yardmaps' three.
 
 ### A yardmap parsed past its string — `0x42CF5E` [DISASSEMBLED + MEASURED 2026-09-25]
 
 **Where it is.** The unit-def parser `0x42BF40` (`sub esp,0x518`, `ret 8`) is called from
-`0x42D269` and `0x42D722`. The yardmap is read only for a def whose BMcode `[def+0x22F]` is 0
+`0x42D269` and `0x42D722`. `0x42D722` is inside `0x42D2E0`, which the level load `0x4917D0` calls
+at `0x4918CA`, on the loader thread; `0x42D269` is inside `0x42D1F0`, whose only call is at
+`0x4174BE` in the typed-command handler (the game thread [INFERRED]). The yardmap is read only for a def whose BMcode `[def+0x22F]` is 0
 (`0x42CF30..0x42CF38`):
 - **The read.** The parser reads the FBI's `YardMap` key with
   `GetString 0x4C48C0(buf, "YardMap", 0x400, "")` into a 0x400-byte stack buffer at
@@ -8600,8 +8659,10 @@ Helpers the ids reach, all read this session:
   of [the B evidence](tadr-port/sim-fixes-evidence.md), Part 4 §6a).
 - **The C runtime's `rand` is a second, separate stream** [DISASSEMBLED 2026-09-23]: `rand`
   `0x4E4870` is MSVC's LCG (`·0x343FD + 0x269EC3`, bits 16..30), its state at `+0x14` of the
-  per-thread data `0x4EB0F0` returns, and `srand` is `0x4E4860`. The match seeds it from the clock,
-  `srand(time(0))` at `0x4971AE` (`0x4E6480` is `time`), and 61 sites draw from it — the particle
+  per-thread data `0x4EB0F0` returns, and `srand` is `0x4E4860`, which writes only the calling
+  thread's state. Two calls seed it from the clock (`0x4E6480` is `time`): the match's
+  `srand(time(0))` at `0x4971AE` seeds the loader thread's stream, and WinMain's at `0x49E8BB` the
+  game thread's. 61 sites draw from it — the particle
   emitters among them. The three at `0x49C619`, `0x49C648` and `0x49C677` add `rand() % 11 − 5` to
   screen coordinates taken with the eye (`main+0x1431F`/`+0x14323`): the lightning bolt's jitter,
   a draw, not a rule.
