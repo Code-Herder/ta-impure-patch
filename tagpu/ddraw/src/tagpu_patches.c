@@ -5028,7 +5028,7 @@ int tagpu_hits_format(char* buf, unsigned int cap)
    create only in net state 6 (0x45473F with the table 0x512BC0: 0x09 has mask 4 alone), and a
    peer stays in state 5 until its game thread's 0x498445, after its load. A peer still loading
    when the others enter play drops their first creates, the commanders among them, until the
-   round robin re-creates each unit (50 s at the 1500-unit limit, 16.6 s at 500). A unit that
+   round robin re-creates each unit (50 s at the 1500-unit limit, 16.7 s at 500). A unit that
    moves first comes back sooner through a dirty 0x2C entry, whose create record
    (0x48B9B6..0x48B9FB) takes the SLOT's own stale position, (0,0,0) in a fresh array.
 
@@ -5048,11 +5048,11 @@ int tagpu_hits_format(char* buf, unsigned int cap)
      load's start (0x497F5E, the load state 0x497F40's first call, on the game thread before
      0x4982CA creates the loader thread) and drained at the in-play entry (just after the state
      6 store at 0x498445). Every record leaves exactly once, replayed or counted.
-   - An ordering, not a window. During the load two threads pump (the game thread at 0x49852E,
-     the loader at 0x49727D), so records go in under a lock. The loader's last pump comes before
-     its last store, bit 2 of main+0x38D75 at 0x497C62, and the game thread reaches 0x498445
-     only after reading that bit at 0x498342; after the drain no thread dispatches in state 5
-     for this level, so nothing can be held after it.
+   - An ordering, not a window. During the load two threads pump (the game thread at 0x49852E
+     and in the catch-up ticks at 0x4954C8, the loader at 0x49727D), so records go in under a
+     lock. The loader's last pump comes before its last store, bit 1 (value 2) of main+0x38D75
+     at 0x497C62, and the game thread reaches 0x498445 only after reading that bit at 0x498342;
+     after the state-6 store nothing is held, so the drain that follows it is the last.
    - A record is replayed only when its sender passes the dispatcher's own sender test now
      (0x4547AD..0x4547E2: present, type 3, +0x146 not 10) under the DirectPlay id it had, and
      its slot is empty or holds an older incarnation by B4's stamps -- never a local player's.
@@ -5250,8 +5250,9 @@ static void __cdecl ghost_reset(unsigned int* regs)
     }
 }
 
-/* Just after 0x498445's state-6 store, on the game thread, before the first tick: every held
-   create is replayed through B4's receiver and CreateFromNetwork, or counted. */
+/* Just after 0x498445's state-6 store, on the game thread, before the first tick in state 6
+   (the catch-up ticks of 0x49842F, up to five, run in state 5 before it): every held create is
+   replayed through B4's receiver and CreateFromNetwork, or counted. */
 static void __cdecl ghost_replay(unsigned int* regs)
 {
     const char* ta = *(const char* const*)0x00511DE8;
@@ -5489,8 +5490,8 @@ static int fix_ghost_commander(void)
     hit_site(0x0048BA00, 5, dirtyCall, 0xE8, aPos, "ghost commander: the dirty create's position");
     lim_same(0x00497F54, 10, firstCall, "ghost commander: the load state's first-call test");
     lim_same(0x00497F64, 2, loadNext, "ghost commander: the load state's continuation");
-    lim_same(0x00497C5F, 3, loaderDone, "ghost commander: the loader's last store, bit 2");
-    lim_same(0x00498348, 5, doneTest, "ghost commander: the game thread's test of bit 2");
+    lim_same(0x00497C5F, 3, loaderDone, "ghost commander: the loader's last store, bit 1");
+    lim_same(0x00498348, 5, doneTest, "ghost commander: the game thread's test of bit 1");
     lim_same(0x0049844F, 6, inPlayNext, "ghost commander: the in-play entry's continuation");
     lim_same(0x0048B9F5, 11, dirtyFrame, "ghost commander: the dirty create's record and reader");
     lim_same(0x004861D0, 3, cfnEntry, "ghost commander: CreateFromNetwork's entry");
