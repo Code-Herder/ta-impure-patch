@@ -1054,7 +1054,8 @@ Stock: 70 files, at most four entries each.
 **The fix**, `fix_download_records`: a file continues into as many records as it needs, at the end of
 the block, section `k` being entry `k % 5` of its `(k / 5)`th record. `0x42DD74` allocates through
 `dl_alloc` (zeroed, its room noted); `0x42DDF0` calls `dl_section`, which starts a record at sections
-5, 10, …, growing the block when full, and writes the record's count; stock's count write at
+5, 10, …, growing the block when full (through the engine's allocator under the block's own name,
+the string `DOWNLOADMENU` at `0x503F7C`), and writes the record's count; stock's count write at
 `0x42DE12` is NOPped; `0x42DF23` becomes `imul esi,edi,0xBD` (the next file's own record);
 `0x42DF35` hands the page count the record count; and `0x42E0B9` bounds the downloadable check by
 the file count `dl_alloc` noted (`cmp ebp,[s_dlFiles]`), so it reads the files' own records and flags
