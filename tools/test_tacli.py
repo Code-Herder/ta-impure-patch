@@ -1639,6 +1639,11 @@ class FakeWindows(taremote.Session):
         self.robocopy_fails = False
         self.task_error = None                  # the task starts no game: this LastTaskResult
         self.game_exits = False                 # the game exits at once, code 1
+        # the DLL's registry line after the run's header; None: it logs none
+        self.dll_says = ("registry: TEST MODE, entered by the -xtacli-test token and the "
+                         "tacli-state folder -- TotalA.exe's registry is tacli-state\\registry.txt: "
+                         "3 keys, 79 values loaded; hooks: TotalA.exe 9 of 9 registry imports, "
+                         "win32.dll 2 of 2")
         self.vanish_after_listing = None        # a log file deleted right after a listing
         self.vanish_during_listing = None       # a log file renamed while a listing opens it
         self.extra_listing = []                 # rows a listing adds, as the remote sends them
@@ -1768,7 +1773,8 @@ class FakeWindows(taremote.Session):
                 return []
             self.procs.append((pid, exe))
             self.put(ntpath.dirname(exe) + r"\log\tagpu.log",
-                     f"log: run R{pid} part 1 of tagpu.log, started\n".encode())
+                     f"log: run R{pid} part 1 of tagpu.log, started\n".encode()
+                     + (b"" if self.dll_says is None else self.dll_says.encode() + b"\n"))
             return []
         if st.startswith("$t = Get-ScheduledTask") and "Unregister-ScheduledTask" in st:
             self.tasks.pop(after("-TaskName "), None)
@@ -1931,6 +1937,11 @@ class FakeWindows(taremote.Session):
             return []
         if "[IO.File]::Replace(" in st:
             dst, tmp = after("[IO.File]::Exists("), after("[IO.File]::Replace(")
+            old = dst + ".tacli-old"
+            if self.get(dst) is None and self.get(old) is not None:
+                self.put(dst, bytes(self.files.pop(old.lower())))   # a half-failed replace
+            else:
+                self.files.pop(old.lower(), None)
             if self.get(dst) is not None:
                 self.replaced.append(dst)       # the name was never free
             self.put(dst, bytes(self.files.pop(tmp.lower())))
@@ -2428,9 +2439,62 @@ class RemoteRouting(unittest.TestCase):
         self.assertIsNone(self.win.get(self.FOLDER + r"\tacli-state\registry.txt.tacli-old"))
         self.assertIsNone(self.win.get(self.FOLDER + r"\tacli-state\registry.txt.tacli-tmp"))
 
+    def test_launch_fails_when_the_dll_refuses_its_run(self):
+        # the refused run wrote its header, and its dying process can still be seen
+        self.win.dll_says = ("registry: TEST MODE, entered by the -xtacli-test token, but "
+                             "tacli-state\\registry.txt did not load whole (the line above "
+                             "says why): the game is not run")
+        code, out, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("the DLL did not run the game: " + self.win.dll_says, err)
+        self.assertNotIn("pid=", out)
+
+    def test_launch_fails_when_the_run_logs_no_registry_line(self):
+        clock = self.use_fake_clock()
+        self.win.dll_says = None
+        code, _, err = self.main("launch", "r1", "--keep-dll", "--timeout", "5")
+        self.assertEqual(code, 1)
+        self.assertIn("logged no registry line in 5s", err)
+        self.assertTrue(clock.slept)
+
+    def test_launch_fails_on_a_run_that_is_not_in_test_mode(self):
+        self.win.dll_says = ("registry: real (no -xtacli-test token, and no tacli-state "
+                             "folder beside TotalA.exe)")
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("did not enter test mode", err)
+
+    def test_the_store_is_read_after_the_running_game_check(self):
+        # a game still running (or exiting) owns the store: nothing reads it before then
+        self.win.files.pop((self.FOLDER + r"\tacli-state\registry.txt").lower())
+        self.win.procs = [(77, self.PLAYER + r"\TotalA.exe")]
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("may be the player's game", err)
+        self.win.procs = [(78, self.FOLDER + r"\TotalA.exe")]
+        code, out, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 0, err)
+        self.assertFalse(any("registry.txt" in st for st in self.win.sent))
+
+    def test_a_half_failed_replace_is_named_and_healed(self):
+        # ReplaceFile's error 1177 leaves the target renamed to .tacli-old
+        store = self.FOLDER + r"\tacli-state\registry.txt"
+        self.win.put(store + ".tacli-old", bytes(self.win.files.pop(store.lower())))
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("registry.txt.tacli-old", err)
+        self.assertEqual(self.win.tasks, {})
+        # the next write through _write_stmts puts the old file back first
+        root = taremote.Remote(self.meta_now()["remote"])
+        (root.root / "tacli-state" / "registry.txt").write_bytes(b"new\r\n")
+        self.assertEqual(bytes(self.win.get(store)), b"new\r\n")
+        self.assertIn(store, self.win.replaced)
+        self.assertIsNone(self.win.get(store + ".tacli-old"))
+
     def test_launch_refuses_the_r_and_d_switches_by_their_second_character(self):
         # the engine dispatches on the character after the dash, whatever follows it
-        for a in ("-r", "/R", "-register", "-r12", "/Reg", "-d", "-df", "/Display"):
+        for a in ("-r", "/R", "-register", "-r12", "/Reg", "-d", "-df", "/Display",
+                  "-dprinton", "-DebugHelper", "-disableimagehlplines"):
             with self.subTest(a=a):
                 for argv in (["launch", "r1", "--keep-dll", "--arg=" + a],
                              ["launch", "nosuch", "--arg=" + a]):

@@ -1287,12 +1287,25 @@ def _ensure_markown_for_mark(inst) -> "str | None":
     return ("auto-armed markown.on (mark.on is set and markown must be installed at "
             "launch, not after)")
 
+# The engine's debug switches that start with -d (the table 0x4DA0E0 matches as
+# prefixes, without case, before the switch dispatch): they never act as -d.
+TA_DEBUG_D_SWITCHES = ("-dprinton", "-dprintoff", "-dprintfile", "-disableimagehlp",
+                       "-debughelper")
+
+
 def refuse_ta_switches(argv):
     """Refuse the TotalA.exe switches a launch must never pass (cmdline-options.md): -r
     registers DirectPlay and quits, -d bypasses the ddraw path our stack lives in. The
     engine acts on a token's SECOND character whatever follows it, so `-register`,
-    `-r12` and `/Reg` are -r too; refused before anything is created."""
+    `-r12` and `/Reg` are -r too. The same rule refuses the engine's debug switches that
+    start with -d (`-dprinton`, `-disableimagehlp`, `-debughelper`, ...): 0x4DA0E0 sets
+    them aside before the dispatch, so they are not -d, but a launch has no use for them
+    either. And the test token, which only a remote launch passes. All refused before
+    anything is created."""
     for a in argv:
+        if a.lower().startswith(TA_DEBUG_D_SWITCHES):
+            die(f"refusing {a!r}: one of TotalA.exe's debug switches (0x4DA0E0 takes it before "
+                f"the -d dispatch), which a launch has no use for; see cmdline-options.md")
         if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d"):
             die(f"refusing {a!r}: TotalA.exe reads it as -{a[1:2].lower()} (the character "
                 f"after the dash decides); see cmdline-options.md (-r registers DirectPlay "
@@ -4869,6 +4882,11 @@ def _remote_store_read(inst: Instance):
     try:
         data = path.read_bytes()
     except FileNotFoundError:
+        old = path.parent / (taremote.STORE + ".tacli-old")
+        if old.exists():
+            die(f"{inst.name}: its test folder has no {taremote.STATE_DIR}\\{taremote.STORE} "
+                f"but a {old.name}, which a replace that failed half-way (ReplaceFile error "
+                f"1177) leaves: the store is that file. Rename it back to {taremote.STORE}")
         die(f"{inst.name}: its test folder has no {taremote.STATE_DIR}\\{taremote.STORE}, so the "
             f"DLL would not run the game. `tacli rm {inst.name}` and `tacli remote add` again "
             f"make a test folder that has one")
@@ -4918,6 +4936,23 @@ def _remote_log_key(inst: Instance):
         return None
 
 
+def _remote_registry_line(inst: Instance, key):
+    """The first `registry: ` line of the run `key` names, from the head of the test
+    folder's `log\\tagpu.log` (the DLL logs it right after the run's header), or None
+    while there is none -- or when the file is no longer that run's."""
+    try:
+        head = (inst.gamedir / "log" / "tagpu.log").read_bytes(0, 4096)
+    except FileNotFoundError:
+        return None
+    if taremote._key(head[:taremote.HEAD_BYTES]) != key:
+        return None
+    for raw in head.split(b"\n")[1:-1]:     # the last piece has no newline yet
+        line = raw.rstrip(b"\r").decode("utf-8", "replace")
+        if line.startswith("registry: "):
+            return line
+    return None
+
+
 def _task_words(state, result) -> str:
     if state is None:
         return "its scheduled task is gone"
@@ -4938,7 +4973,12 @@ def _remote_launch(args) -> dict:
     says what lies outside that). That holds only for a DLL that fails closed in a test
     launch, so a launch whose DLL lacks it -- an old build, or `--keep-dll` on the
     player's copy -- is refused before the task starts. The store is read and checked
-    first, before anything is written."""
+    before anything is written, and after the check that no game runs: a game that was
+    still exiting has made its last writes to it by then.
+
+    The launch succeeds only on the DLL's own word: its new run's `registry: ` line must
+    say the store is served. A refused run writes its log header before it ends, and its
+    process can still be seen, so the header and a pid are not enough."""
     inst = Instance(args.name)
     rem = inst.remote
     bad = [flag for flag, attr, off in REMOTE_LOCAL_ONLY if getattr(args, attr, off) not in (off,)]
@@ -4957,7 +4997,6 @@ def _remote_launch(args) -> dict:
     if meta.get("state") == "adding":
         die(f"{args.name}: `remote add` did not finish; `tacli rm {args.name}` removes what "
             f"it made")
-    store, store_data = _remote_store_read(inst)
     procs = rem.procs()
     ours = [pid for pid, path in procs if rem.is_ours(path)]
     if ours:
@@ -4967,6 +5006,7 @@ def _remote_launch(args) -> dict:
             f"process{'es' if len(procs) > 1 else ''}, not from {args.name}'s test "
             f"folder): it may be the player's game, so tacli launches nothing beside it "
             f"and stops nothing it did not start")
+    store, store_data = _remote_store_read(inst)
     if not args.keep_dll:
         if not BUILT_DLL.exists():
             die(f"fork DLL not built: {BUILT_DLL}")
@@ -5049,6 +5089,19 @@ def _remote_launch(args) -> dict:
                                     f"{args.timeout:g}s" if seen else
                                     f"no TotalA.exe from the test folder in {args.timeout:g}s")
                 + f"; {_task_words(state, result)}")
+        time.sleep(0.5)
+    while True:
+        line = _remote_registry_line(inst, key)
+        if line is not None and line.endswith(taremote.TEST_MODE_REFUSED):
+            die(f"{args.name}: the DLL did not run the game: {line}")
+        if line is not None and line.startswith(taremote.TEST_MODE_SERVED):
+            break
+        if line is not None:
+            die(f"{args.name}: the DLL's run did not enter test mode ({line}); the game may "
+                f"be using the remote machine's registry: `tacli stop {args.name}`")
+        if time.time() >= deadline:
+            die(f"{args.name}: the DLL's run {key[0]} logged no registry line in "
+                f"{args.timeout:g}s, so nothing says the store is served")
         time.sleep(0.5)
     try:
         prio = rem.priority(pid)

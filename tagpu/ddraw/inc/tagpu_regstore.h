@@ -16,7 +16,8 @@
    (`remote add` seeds it by reading the player's key; `launch` puts its test values in it).
    A store that is missing, a folder, unreadable or not loaded whole, no memory, an exe
    path that cannot be read, a registry import these hooks do not answer, or a win32.dll not
-   loaded at attach (it is a static import of TotalA.exe) ends the process at attach, with a log line first and before the game's first instruction: a test launch
+   loaded at attach (it is a static import of TotalA.exe) ends the process at attach (the
+   line names the process: a cnc-ddraw config tool started in a test folder is refused too), with a log line first and before the game's first instruction: a test launch
    never runs against the real registry.
 
    The decision (tagpu_regstore_decide) comes before DllMain's return for cnc-ddraw's config
@@ -53,9 +54,16 @@
 
    THE GUARANTEE, AND ITS EDGE. TA's settings key is never written in test mode: the registry
    imports of TotalA.exe and win32.dll are served from the file, and `-r` is closed. Nothing
-   here reaches the registry calls of the system DLLs the game uses (DirectPlay, DirectSound),
-   of what ShellExecuteA starts, or of the processes online.dll starts; nor Windows' own
-   records of a scheduled task and of the programs it runs.
+   here reaches:
+     - the system DLLs the game uses (DirectPlay, DirectSound) and loads by name
+       (IMAGEHLP.DLL, psapi.dll);
+     - the other DLLs it loads at run time: online.dll, the extension DLLs online.dll loads
+       into the game's process (tamplayx, takalix, taheatx, tawirepx, tadwngox, tatenx; the
+       Steam install's import no registry function but RegOpenKeyExA, RegQueryValueExA and
+       RegCloseKey), and reporter.dll and DebugHelper.dll (neither is in the Steam install);
+     - the programs the game starts: what ShellExecuteA opens, and what online.dll starts;
+     - Windows' own records: the Task Scheduler's of the instance's task while it exists,
+       and those of the programs it runs.
 
    HANDLES. A store key's handle is 0x6D5A0000 + 4 * its index, one per key path for the
    life of the process: interned and never freed, so a caller that never closes (win32.dll)

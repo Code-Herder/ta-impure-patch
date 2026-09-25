@@ -67,6 +67,8 @@ enum { RS_BY_TOKEN = 1, RS_BY_FOLDER = 2 };
 static int              s_by;         /* the signals tagpu_regstore_decide found */
 static char             s_why[160];   /* what it could not establish, for the log */
 static WCHAR*           s_dir;        /* the exe's folder, with its trailing backslash */
+static char             s_exe[MAX_PATH] = "the exe";  /* its file name (UTF-8), for the log:
+                                         TotalA.exe, or whatever else loaded this DLL there */
 static int              s_active;
 static int              s_dirty;
 static CRITICAL_SECTION s_lock;
@@ -999,6 +1001,8 @@ int tagpu_regstore_decide(void)
         free(exe);
         return s_by != 0;
     }
+    if (!WideCharToMultiByte(CP_UTF8, 0, slash + 1, -1, s_exe, sizeof s_exe, NULL, NULL))
+        strcpy(s_exe, "the exe");
     slash[1] = 0;
     s_dir = exe;
     len = wcslen(s_dir);
@@ -1025,11 +1029,17 @@ int tagpu_regstore_decide(void)
     return s_by != 0;
 }
 
-/* Test mode, and something it needs is not there: the game is not run. Logged first. */
-static void rs_refuse_run(const char* by, const char* what)
+/* Test mode, and something it needs is not there: the game is not run. Logged first.
+   NEVER RETURNS, by its own construction rather than by TerminateProcess's: a caller
+   goes on as though the store were whole (nothing else keeps a partial store from being
+   served and written back), so the loop is the guarantee if the terminate should ever
+   come back. */
+static void __attribute__((noreturn)) rs_refuse_run(const char* by, const char* what)
 {
     tagpu_logf("registry: TEST MODE, entered by %s, but %s: the game is not run", by, what);
     TerminateProcess(GetCurrentProcess(), 1);
+    for (;;)
+        ExitProcess(1);
 }
 
 void tagpu_regstore_init(void)
@@ -1082,8 +1092,12 @@ void tagpu_regstore_init(void)
     rs_hook(GetModuleHandleW(NULL));
     rs_count(GetModuleHandleW(NULL), &regs, &ours);
     if (!regs || ours != regs) {
-        _snprintf(what, sizeof what, "%d of TotalA.exe's %d registry imports are not answered by "
-                  "the store", regs - ours, regs);
+        if (!regs)
+            _snprintf(what, sizeof what, "%s imports no registry function for the store to "
+                      "answer (TotalA.exe imports nine), so it is not the game", s_exe);
+        else
+            _snprintf(what, sizeof what, "%d of %s's %d registry imports are not answered by "
+                      "the store", regs - ours, s_exe, regs);
         what[sizeof what - 1] = 0;
         rs_refuse_run(by, what);
     }
@@ -1099,10 +1113,10 @@ void tagpu_regstore_init(void)
         what[sizeof what - 1] = 0;
         rs_refuse_run(by, what);
     }
-    tagpu_logf("registry: TEST MODE, entered by %s -- TotalA.exe's registry is "
-               "tacli-state\\registry.txt: %d keys, %d values loaded; hooks: TotalA.exe %d of %d "
+    tagpu_logf("registry: TEST MODE, entered by %s -- %s's registry is "
+               "tacli-state\\registry.txt: %d keys, %d values loaded; hooks: %s %d of %d "
                "registry imports, win32.dll %d of %d",
-               by, s_nkeys, nvalues, ours, regs, wours, wregs);
+               by, s_exe, s_nkeys, nvalues, s_exe, ours, regs, wours, wregs);
 }
 
 int tagpu_regstore_active(void)

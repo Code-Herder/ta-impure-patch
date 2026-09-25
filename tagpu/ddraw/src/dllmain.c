@@ -49,6 +49,9 @@ PVOID FakePrimarySurface;
 
 HMODULE g_ddraw_module;
 static BOOL g_screensaver_disabled;
+/* Attach returned at once for cnc-ddraw's config tool; detach returns at once exactly
+   then, since its steps close what the rest of attach opened. */
+static BOOL g_config_tool_only;
 
 BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 {
@@ -68,7 +71,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* cnc-ddraw's config tool loads the DLL to edit a ddraw.ini this DLL
            does not read: it gets nothing, and nothing of ours runs. */
         if (!test_launch && GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
+        {
+            g_config_tool_only = TRUE;
             return TRUE;
+        }
 
         /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
            After the config tool's return above, so opening the tool never rotates the
@@ -352,7 +358,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
     }
     case DLL_PROCESS_DETACH:
     {
-        if (GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
+        if (g_config_tool_only)
             return TRUE;
 
         TRACE("cnc-ddraw DLL_PROCESS_DETACH\n");

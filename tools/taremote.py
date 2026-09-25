@@ -976,6 +976,11 @@ TEST_TOKEN = "-xtacli-test"
 # starts no remote game with a DLL that lacks any of them.
 TEST_MODE_MARKS = (b"registry: TEST MODE, entered by",
                    b"the -r switch (DirectPlay registration through dsetup.dll) is ignored")
+# The DLL's own account of a test launch, the first `registry: ` line of its run: served
+# (`... entered by <signal> -- <exe>'s registry is ...`) or refused (`... entered by
+# <signal>, but <what>: the game is not run`), tagpu_regstore.c.
+TEST_MODE_SERVED = "registry: TEST MODE, entered by "
+TEST_MODE_REFUSED = ": the game is not run"
 # The DLL's limits (tagpu_regstore.c): a store past any of them does not load whole, and
 # the game is not run, so RegStore refuses to read or write one.
 STORE_MAX_KEY = 511             # bytes of a key path
@@ -1179,12 +1184,19 @@ def _read_stmt(p: str, pos: int, want: int) -> str:
 
 
 def _write_stmts(win: str, data: bytes) -> list:
-    """Write `data` whole to `win`: under a temporary name, then put in its place so that
-    the name never goes missing -- `[IO.File]::Replace` over a file that is there (never
-    Move-Item -Force, which in Windows PowerShell 5.1 deletes the target and then moves),
-    `[IO.File]::Move` onto a name that is free. A reader sees the old file or the new one,
-    whole. Replace keeps the old one as `.tacli-old` (with no backup name, ReplaceFile's
-    one failure after the swap began leaves the target gone) and that is deleted after."""
+    """Write `data` whole to `win`: under a temporary name, then put in its place --
+    `[IO.File]::Replace` over a file that is there (never Move-Item -Force, which in
+    Windows PowerShell 5.1 deletes the target and then moves, so every write had a moment
+    with no file), `[IO.File]::Move` onto a name that is free. A reader sees the old file
+    or the new one, whole.
+
+    Replace keeps the old file as `.tacli-old`, deleted once the swap is done. Its one
+    failure after the swap began, ReplaceFile's error 1177 (ERROR_UNABLE_TO_MOVE_REPLACEMENT_2),
+    leaves the target renamed to `.tacli-old` and the new file under the temporary name:
+    the statement fails with that error, and until the next write the name is missing
+    (the registry store then reads as missing: `launch` refuses the test folder, naming
+    the `.tacli-old`, and the DLL does not run the game). The next write through here
+    first moves a `.tacli-old` back when the name is missing, or deletes a stale one."""
     tmp = ps_str(win + ".tacli-tmp")
     old = ps_str(win + ".tacli-old")
     stmts = []
@@ -1198,8 +1210,11 @@ def _write_stmts(win: str, data: bytes) -> list:
                          f"$c = [Convert]::FromBase64String('{b64}'); "
                          f"$s.Write($c, 0, $c.Length) }} finally {{ $s.Close() }}")
     dst = ps_str(win)
-    stmts.append(f"if ([IO.File]::Exists({dst})) {{ [IO.File]::Replace({tmp}, {dst}, {old}); "
-                 f"[IO.File]::Delete({old}) }} else {{ [IO.File]::Move({tmp}, {dst}) }}")
+    stmts.append(f"if (-not [IO.File]::Exists({dst}) -and [IO.File]::Exists({old})) {{ "
+                 f"[IO.File]::Move({old}, {dst}) }} elseif ([IO.File]::Exists({old})) {{ "
+                 f"[IO.File]::Delete({old}) }}; if ([IO.File]::Exists({dst})) {{ "
+                 f"[IO.File]::Replace({tmp}, {dst}, {old}); [IO.File]::Delete({old}) }} "
+                 f"else {{ [IO.File]::Move({tmp}, {dst}) }}")
     return stmts
 
 
