@@ -726,7 +726,8 @@ static int feat_bail(void)
    lays it out (tagpu_packet.h TAGPU_PK_MAPFEAT), never the live anchors -- a
    tree burnt, reclaimed or lost before a save, or a wreck a scenario placed,
    is the game's, not the map's. The table arrives once a level; this pass
-   keeps its own copy, bucketed by row, keyed on the level it came from. */
+   keeps its own copy, bucketed by row and ordered by column inside each row,
+   keyed on the level it came from. */
 /* THE DIMENSION BOUND, the one this pass already refuses a map past
    (`mapW > 4096` in the gather): every array below is sized by it, so an index
    under the map's own dimension is under the array's. */
@@ -734,15 +735,11 @@ static int feat_bail(void)
 static TAGPU_PK_MAPFEAT s_mf[TAGPU_PK_MAX_MAPFEAT];   /* the copy, by row     */
 static int              s_mfRow[MF_DIM + 1];          /* row starts into s_mf */
 static int              s_mfCur[MF_DIM];              /* the bucketing's cursors */
+static int              s_mfLast[MF_DIM];             /* per row, the last column
+                                                         kept + 1 (the order test) */
 static int              s_mfN, s_mfW, s_mfH, s_mfTrunc;
 static int              s_mfHeld;      /* the copy is level s_mfLevel's         */
 static unsigned         s_mfLevel;
-/* one source row's anchors by column (index + 1), set and cleared per row */
-static unsigned         s_mfCell[MF_DIM];
-/* this frame's sweep column -> the map column it folds to, and its flip; the
-   sweep is at most MF_DIM columns wide (the gather's own `nCols` cap) */
-static short            s_mfCol[MF_DIM];
-static unsigned char    s_mfColFlip[MF_DIM];
 
 int tagpu_feat_mapfeat_want(void) { return (int)s_mfWant; }
 int tagpu_feat_mapfeat_holds(unsigned level_gen)
@@ -763,13 +760,25 @@ void tagpu_feat_mapfeat_ask(int mirror)
     s_mfWant = (mirror && feat_emits()) ? 1 : 0;
 }
 
+/* ONE ENTRY OF THE TABLE, KEPT OR NOT: inside the map it claims, and to the
+   right of the last entry kept on its row. The second test is what makes each
+   row's bucket STRICTLY ordered by column -- the order mirror_gather walks it
+   in -- by this side's own test and not by the publisher's. The publisher
+   emits the list row-major, one anchor a cell, so it drops nothing there.
+   Called in the same order by both passes of the bucketing, each from a
+   cleared `s_mfLast`, so the two passes keep the same entries. */
+static int mf_keep(const TAGPU_PK_MAPFEAT* e, int w, int h)
+{
+    if (e->row >= h || e->col >= w || e->col + 1 <= s_mfLast[e->row]) return 0;
+    s_mfLast[e->row] = e->col + 1;
+    return 1;
+}
+
 /* THE LEVEL'S TABLE, INTO THIS PASS'S COPY, from the packet that carries it
    whole (`mapfeat_ok`): an empty one is a map with no features, and is held
-   like any other. Bucketed by row with a counting sort, and every entry is
-   BOUNDED on the way in: a row or column outside the map it claims is
-   dropped, so the lookups below index `s_mfRow` by a row under mapH and
-   `s_mfCell` by a column under mapW, by construction and not by the
-   publisher's row order. */
+   like any other. Bucketed by row with a counting sort, every entry BOUNDED
+   on the way in (`mf_keep`), so the lookups below index `s_mfRow` by a row
+   under mapH and every kept column is under mapW. */
 static void mapfeat_take(const TAGPU_PACKET* pk)
 {
     const TAGPU_PK_MAPFEAT* src = tagpu_pk_mapfeat(pk);
@@ -779,12 +788,13 @@ static void mapfeat_take(const TAGPU_PACKET* pk)
         return;
     if (n > 0 && !src) return;
     memset(s_mfRow, 0, (size_t)(h + 1) * sizeof *s_mfRow);
-    memset(s_mfCell, 0, (size_t)w * sizeof *s_mfCell);
+    memset(s_mfLast, 0, (size_t)h * sizeof *s_mfLast);
     for (i = 0; i < n; i++)
-        if (src[i].row < h && src[i].col < w) s_mfRow[src[i].row + 1]++;
+        if (mf_keep(&src[i], w, h)) s_mfRow[src[i].row + 1]++;
     for (i = 0; i < h; i++) { s_mfRow[i + 1] += s_mfRow[i]; s_mfCur[i] = s_mfRow[i]; }
+    memset(s_mfLast, 0, (size_t)h * sizeof *s_mfLast);
     for (i = 0; i < n; i++)
-        if (src[i].row < h && src[i].col < w) { s_mf[s_mfCur[src[i].row]++] = src[i]; kept++; }
+        if (mf_keep(&src[i], w, h)) { s_mf[s_mfCur[src[i].row]++] = src[i]; kept++; }
     s_mfN = kept; s_mfW = w; s_mfH = h;
     s_mfTrunc = (pk->truncated & TAGPU_PK_TRUNC_MAPFEAT) != 0;
     s_mfLevel = pk->level_gen; s_mfHeld = 1;
@@ -946,41 +956,65 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     }
 }
 
+/* floor(a / b) for b > 0, whatever a's sign */
+static int floor_div(int a, int b)
+{
+    int q = a / b;
+    return (a % b != 0 && a < 0) ? q - 1 : q;
+}
+
 /* THE SWEEP PAST THE MAP: every cell of the unclamped rect that is off the
    map, row by row and left to right -- the painter's order the keys encode --
    takes the map's anchor at the cell it folds to. The engine's sweep never
    reaches the map's last row or column (the clamps in the gather), so an
-   anchor there is not drawn on the map and is not mirrored either. */
+   anchor there is not drawn on the map and is not mirrored either.
+   WALKED BY ANCHOR, NOT BY CELL: a sweep row splits at the folds into runs of
+   at most one map width, each a copy of the map's row either way round
+   (`tagpu_edge_reflect`: copy q = floor(col / mapW), turned over when q is
+   odd). A run the right way round meets its source row's anchors in their
+   column order, a turned one in the reverse, so each run is one pass over the
+   row's bucket (ordered by `mf_keep`) and a cell with no anchor costs nothing
+   -- at a 3840 x 2160 corner at 0.25x the sweep is 944 x 560 cells and a map
+   row has a handful of anchors. The emission order is the cell walk's
+   exactly: runs left to right, and each run left to right. Every index is
+   bounded: a row by the fold into [0, mapH), a bucket by `s_mfRow`, and every
+   column from the bucket is under mapW. */
 static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                           int shadowsOn, const KEYRECT* k)
 {
-    int mapW = s_mfW, mapH = s_mfH, row, i;
-    if (k->ucols <= 0 || k->ucols > MF_DIM || k->urows <= 0) return;
-    for (i = 0; i < k->ucols; i++) {
-        int col = k->uc0 + i, f = 0;
-        s_mfCol[i] = (short)((col < 0 || col >= mapW) ? tagpu_edge_reflect(col, mapW, &f) : col);
-        s_mfColFlip[i] = (unsigned char)f;
-    }
+    const int mapW = s_mfW, mapH = s_mfH;
+    const int c0 = k->uc0, c1 = k->uc0 + k->ucols;
+    int row;
+    if (k->ucols <= 0 || k->ucols > MF_DIM || k->urows <= 0 || mapW <= 0 || mapH <= 0) return;
     for (row = k->ur0; row < k->ur0 + k->urows; row++) {
-        int offRow = row < 0 || row >= mapH, flipY = 0, srow = row, a0, a1, j;
+        int offRow = row < 0 || row >= mapH, flipY = 0, srow = row, a0, a1, q;
         if (offRow) srow = tagpu_edge_reflect(row, mapH, &flipY);
         if (srow >= mapH - 1) continue;
         a0 = s_mfRow[srow]; a1 = s_mfRow[srow + 1];
         if (a0 == a1) continue;
-        for (j = a0; j < a1; j++) s_mfCell[s_mf[j].col] = (unsigned)j + 1u;
-        for (i = 0; i < k->ucols; i++) {
-            int col = k->uc0 + i, scol;
-            unsigned at;
-            /* the map's own cells are the anchor loop's: skip to its right */
-            if (!offRow && col >= 0 && col < mapW) { i = mapW - 1 - k->uc0; continue; }
-            scol = s_mfCol[i];
-            if (scol >= mapW - 1) continue;
-            at = s_mfCell[scol];
-            if (!at) continue;
-            mirror_feature(v, &s_mf[at - 1u], fdefs, nDefs, shadowsOn, k, row, col,
-                           s_mfColFlip[i], flipY);
+        for (q = floor_div(c0, mapW); q * mapW < c1; q++) {
+            const int base = q * mapW;
+            const int lo = base > c0 ? base : c0, hi = base + mapW < c1 ? base + mapW : c1;
+            int j;
+            /* the map's own cells are the anchor loop's */
+            if (!offRow && q == 0) continue;
+            if ((q & 1) == 0) {
+                for (j = a0; j < a1; j++) {
+                    const int scol = s_mf[j].col, col = base + scol;
+                    if (scol >= mapW - 1 || col >= hi) break;
+                    if (col < lo) continue;
+                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col, 0, flipY);
+                }
+            } else {
+                for (j = a1 - 1; j >= a0; j--) {
+                    const int scol = s_mf[j].col, col = base + mapW - 1 - scol;
+                    if (scol >= mapW - 1) continue;
+                    if (col >= hi) break;
+                    if (col < lo) continue;
+                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col, 1, flipY);
+                }
+            }
         }
-        for (j = a0; j < a1; j++) s_mfCell[s_mf[j].col] = 0;
     }
 }
 
