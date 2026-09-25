@@ -426,8 +426,10 @@ static volatile unsigned s_cMfCarried;
    waits for it -- the game thread holds it for one copy of at most 512 KB --
    and the game thread only tries it, and on a miss adopts at the next draw.
    So the list is read only after it is written, by an ordering and not by the
-   load having happened to finish, and a second load before the first list is
-   adopted replaces it rather than racing it. */
+   load having happened to finish. Every join empties the slot before it
+   builds (`mapfeat_unpark`), so a second load before the first list is
+   adopted replaces it -- with its own list, or with nothing if its build
+   fails -- rather than racing it. */
 static volatile LONG     s_mfLock;
 static TAGPU_PK_MAPFEAT* s_mfLoadE;       /* malloc'd by the loader; freed by whoever
                                              replaces or adopts it                     */
@@ -651,6 +653,27 @@ void tagpu_packet_pub_mapfeat_loaded(TAGPU_PK_MAPFEAT* e, unsigned n, int trunc)
     old = s_mfLoadE;
     s_mfLoadE = e; s_mfLoadN = n; s_mfLoadTrunc = trunc;
     s_mfLoadLevel = s_levelGen; s_mfLoadHave = 1;
+    InterlockedExchange(&s_mfLock, 0);
+    free(old);
+}
+
+/* ...and emptied at every join, before this load builds anything: the slot
+   holds the LATEST LoadMap's result or nothing. A load abandoned on the
+   loading screen tears nothing down, so the level number does not move
+   before the next load, and a list it parked would be adopted as the next
+   map's if that map's build then failed. Nothing parked is not an empty
+   list -- an empty list is a map with no features, and mirrors bare ground
+   -- so a failed build leaves the level with no list, and the edge black
+   (tagpu_feat_mapfeat_sync). The game thread's own copy cannot stand in
+   either: it is adopted only at an in-play draw, and a level that drew in
+   play bumps the generation at its end, before the next load's thread
+   starts. */
+static void mapfeat_unpark(void)
+{
+    TAGPU_PK_MAPFEAT* old;
+    while (InterlockedCompareExchange(&s_mfLock, 1, 0) != 0) SwitchToThread();
+    old = s_mfLoadE;
+    s_mfLoadE = NULL; s_mfLoadN = 0; s_mfLoadTrunc = 0; s_mfLoadHave = 0;
     InterlockedExchange(&s_mfLock, 0);
     free(old);
 }
@@ -2775,6 +2798,7 @@ static void __cdecl mapfeat_at_load(const unsigned int* regs)
     LARGE_INTEGER t0, t1;
     char b[320];
 
+    mapfeat_unpark();
     /* the mirror is a Vulkan-lane picture: under any other renderer nothing
        would take the list, so nothing is built */
     if (g_ddraw.renderer != vk_render_main || !ta) return;

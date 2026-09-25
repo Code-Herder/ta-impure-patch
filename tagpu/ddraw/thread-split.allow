@@ -33,7 +33,7 @@
 # The argument after `#` is what the reviewer checks, not what the script checks.
 
 inc/tagpu_engine.h       engine-map          # the addresses, for publisher files only
-src/tagpu_packet_pub.c   publisher           # the frame packet's fill, from DrawGameScreen's `after` at 0x4969D2; the font copy at hook 8; the level-end packet
+src/tagpu_packet_pub.c   publisher           # the frame packet's fill, from DrawGameScreen's `after` at 0x4969D2; the font copy at hook 8; the level-end packet; and LoadMap's join 0x483B53 on the LOADER thread (mapfeat_at_load): LoadMap's own frame, the FeatureDefs 0x421F20 has just counted and the grid's heights LoadMap has just written, read after those writes in LoadMap's own order on its own thread, before the level's first in-play draw; the list it builds is ours, and reaches the game thread only through the interlocked hand-over slot
 src/tagpu_markown.c      publisher           # the marker block's call-site redirects on the game thread; hook 8 latches the font through the publisher
 src/tagpu_menu.c         publisher           # the render-options screen: GUI calls on the game thread from the DrawGameScreen observer
 src/tagpu_hud.c          publisher           # HUD scale: an observer on the loading-screen flip 0x4288D0 gated on the return address 0x498242 writes the viewport rect's R/B/W/H on the game thread; the one word it publishes is its own
