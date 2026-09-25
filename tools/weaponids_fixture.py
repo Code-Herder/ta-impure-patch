@@ -23,9 +23,10 @@ Weapons, in weapons/weaponids.tdf:
                    byte, 0xFA
     WID_AMD3000    AMD_ROCKET as ID 3000, a missile stocked every three seconds for little
 
-Units: WIDAMD is an ARMAMD firing WID_AMD3000; every other is a Light Laser Tower (ARMLLT)
-named for its weapon: WIDLLT4000, WIDLLTNOID, WIDLLT5000, WIDLAS253..255, WIDLAS3581..3583,
-WIDRKT250, WIDRKT3322.
+Units: WIDAMD is an ARMAMD firing WID_AMD3000, with ARMAMD's build page, whose ARMMAKEANTI
+queues a missile to stock (an interceptor fires only from stock). Every other is a Light Laser
+Tower (ARMLLT) named for its weapon: WIDLLT4000, WIDLLTNOID, WIDLLT5000, WIDLAS253..255,
+WIDLAS3581..3583, WIDRKT250, WIDRKT3322.
 
     --low          only the weapons below 256 and their towers: the control, for a build
                    without the raise, which would write the others past its array
@@ -127,6 +128,9 @@ def main():
         hpipack.insert(tree, "units/widamd.fbi",
                        unit(arc.read("units/armamd.fbi").decode("latin-1"), "WIDAMD", "WID_AMD3000"))
         hpipack.insert(tree, "scripts/widamd.cob", arc.read("scripts/armamd.cob"))
+        # its build page, found by the unit's name: ARMMAKEANTI queues a missile to stock
+        hpipack.insert(tree, "guis/widamd1.gui", arc.read("guis/armamd1.gui"))
+        hpipack.insert(tree, "anims/widamd1.gaf", arc.read("anims/armamd1.gaf"))
 
     data = hpipack.build(tree)
     a.out.write_bytes(data)
