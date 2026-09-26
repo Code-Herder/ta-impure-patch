@@ -4,8 +4,8 @@
 
 Section C brings the weapon and unit keys that TADR taught the engine to read into our stack, as
 our own code, over four landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**,
-in a grill that followed [the evidence pass](data-keys-evidence.md). **C1 has landed**; C2, C3 and C4
-are not. The rules shared by every group are in
+in a grill that followed [the evidence pass](data-keys-evidence.md). **C1 and C2 have landed**; C3 and
+C4 are not. The rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 The keys are not a blank slate. TA: Escalation, the largest live mod, ships TADR's DLL and uses
@@ -56,7 +56,7 @@ ill-defined, and each one is written down as a finding.
   by construction, not by equal arithmetic. No retail weapon or unit carries any C key.
 - **Two stores, both bounded by construction.** Weapon keys: one byte a weapon, indexed by the
   weapon's validated ID (`tagpu_limits_weapon_index`, A′3's bound), written at A′3's loader site
-  `0x42E468` and cleared at the weapon wipe. Unit keys: one fixed-size record per type, indexed by
+  `0x42E468` and emptied at the weapon load's entry `0x42E310`. Unit keys: one fixed-size record per type, indexed by
   def and valid only when its stored def pointer matches (the `def_rec` rule `tagpu_weapons` uses),
   emptied at the start of every unit-data load (`0x42D2E0`), reset at the FBI loader's entry
   (`0x42BF40`) for every def it visits, and filled at `0x42BF97` — so it holds only what this
@@ -107,9 +107,9 @@ kept in the evidence pass.
 - **`notoverwater` / `notoverland`: the gate sits at `0x49E1FD`, after the per-tick target read.**
   The weapon keeps reloading and spends nothing, and a dead target is still dropped every tick, so
   B4's two-tick hold keeps its meaning. Off the map the weapon is not gated, as TADR.
-- **Every weapon flag also applies to slots 3..N.** `tagpu_weapons.c` runs those slots in C
-  (`my_CheckUnitWeapon`, `my_AutoAim`), and exactly one module owns `0x49ABB0`'s entry, decided at
-  attach.
+- **Every weapon flag also applies to slots 3..N.** `tagpu_weapons.c` runs those slots in C (its
+  verdict `tagpu_weapons_check_slot`, `my_AutoAim`). The weapon keys own `0x49ABB0`'s entry in
+  both builds, armed or not, and ask that verdict for a slot past 2.
 - **`nomapweaponalert`: a silence, not a deletion.** For a hit with no attacker, a weapon kind, and
   the level's meteor weapon carrying the key with default damage 0: no "Under Attack"
   (its one site `0x4071D8`, and `my_Retaliate`), no alarm, no blink of the hit unit's minimap dot,
@@ -158,12 +158,12 @@ commit can change.
 1. **C1 — the ghost's piece mask. Landed 2026-09-25.** Display only, touches nothing of section B's.
    `Create()`'s hides by default, `PreviewPieces=` as the override; the unit-key reader it needs
    for that one key. How it is built is in [C1, as built](#c1-as-built) below.
-2. **C2 — the weapon keys.** The weapon-key store; `nottoair`, `nottounderwater`, `surfacefire`,
+2. **C2 — the weapon keys. Landed 2026-09-25.** The weapon-key store; `nottoair`, `nottounderwater`, `surfacefire`,
    `notoverwater`, `notoverland`, with the extra-weapons module's C paths; `nomapweaponalert`'s
    silence. Sim sites fail closed, the silence skips and logs. The fixtures include the two
    `surfacefire` shapes real content uses: a water beam D-gun fired by a commander on land and from
    the seabed, and a `vlaunch` missile from a submerged submarine that must steer above water.
-   Reviewed at `high`.
+   Reviewed at `high`. How it is built is in [C2, as built](#c2-as-built) below.
 3. **C3 — the unit-key store and veterancy.** Every effect site and the panels, the fold site C4
    will use, the saturation for keyed types. It measures what the evidence left open: kill counts
    equal on two peers after a paused fight, and whether a loaded saved game runs `0x42D2E0` with
@@ -228,6 +228,123 @@ commit can change.
   and such a piece should cover no pixel, since no face on it has three distinct vertices
   [INFERRED, not measured].
 
+## C2, as built
+
+- **The store** (`tagpu_datakeys.c`, section 4): one byte a weapon, `s_wkey[TAGPU_LIM_WEAPONS]`,
+  indexed by the ID `tagpu_limits_weapon_index` validates from a record's own address, so a pointer
+  that is not a whole record reads 0, which is stock. Emptied at the weapon load's entry `0x42E310`
+  (its one caller is `0x4918BB`, inside the level's load) and filled at A′3's ID site `0x42E468`
+  once the loader has accepted the section, so a skipped section writes nothing and a later one
+  with the same ID replaces it. A key reads as the engine reads every flag of `+0x111`,
+  `GetInt(key, 0) & 1`. Written on the loader thread, read on the game thread in play.
+- **The targeting keys: five sites in the fail-closed table** (`tagpu_patches.c`,
+  `fix_weapon_keys`), both builds. Each runs the engine's own instructions for a weapon without a
+  key.
+  - `0x49ABB0`, the can-engage test's entry, now this module's alone: stock's body (or the
+    extra-weapons module's C verdict for a slot past 2 while it is armed), then one filter by the
+    slot's weapon. `surfacefire` turns a water weapon's refusal of a target that is not flying into
+    stock's own range test; `nottoair` refuses a flying target (`+0x110 & 3 == 2`);
+    `nottounderwater` a target whose top (`+0x70` + def `+0x170`) is at or below the sea. The
+    filter answers every caller: acquisition, retaliation, the attack cursor (`0x43E59E`, which
+    asks this test itself) and the order handlers.
+  - `0x43F1D4`, the order action's unit branch, which decides the right-click's order: stock's
+    decisions in stock's order, each key mirrored where stock tests its counterpart. The branch
+    reads weapon 0, and slot 1 in the submerged test.
+  - `0x49B9EB`: a `surfacefire` projectile above the sea steers instead of falling.
+  - `0x49E1FD`, AutoAim's fire gate, after the per-tick target read: `notoverwater` /
+    `notoverland` hold the slot by the ground under the firer (`0x485070`; off the map, not
+    gated), and a `nottoair` slot holding a flying unit drops it through `ClearTarget 0x48A0F0`.
+  - `0x42E310`: the store's clear.
+  The extra-weapons module's C paths take the same verdict and gate for slots past 2
+  ([extra weapons](../extra-weapons.html)).
+- **`nomapweaponalert`** (section 5, skip-and-log, display only). A hit is harmless weather when
+  its projectile has no attacker and its weapon carries the key with default damage 0. A hit
+  computed here is judged by that weapon: a frame around the damage function's one send of a
+  weapon hit (`0x499E37`) holds the answer, and the local apply (`0x489C89`) pins it to the record
+  it applies. A hit received from a peer names no weapon, so it is harmless only when it did no
+  damage: no attacker, a weapon kind, amount 0, and the level's meteor weapon `[0x512328]` keyed.
+  A death explosion or a burning feature, the other attacker-less weapon hits, alerts unless it
+  did no damage (received) or its own weapon carries the key with default damage 0 (local). The
+  hit is applied exactly as stock applies it. Then:
+  - no "Under Attack", at its one site `0x4071D8` and in the extra-weapons module's retaliation,
+    through a frame around `0x406F80` (`0x489DA2`) that saves and restores its answer;
+  - no blink of the hit unit's dot (`0x489D8E`, `0x466EB9`), for exactly the part of `+0xFA` that
+    harmless hits alone put there, so a real hit keeps blinking for its own 0xF0 ticks. A saved
+    game carries that part beside `+0xFA`, in a byte of the unit's record that stock writes as 0
+    and never reads (`0x48797B`, `0x4872CC`);
+  - no dot for the stones: the loader's closing call `0x49E010` gives such a meteor weapon
+    `noradar`.
+  Detail and threads: [gpu-status §2.97](../gpu-status.html).
+- **Bad values**, logged at load: `surfacefire` without `waterweapon` (no effect, as documented),
+  both `notover*` keys on one weapon (it fires only off the map), and `nomapweaponalert` on a
+  weapon that is not a meteor with default damage 0 (its stones keep their dot).
+- **Measured** on the raised build, the main scenario also on the stock-limits build with the same
+  results, and again after main's B3 and B4 were merged in. Fixture: `tools/datakeys_fixture.py`,
+  whose weapons and units are listed in its docstring. Each key is measured against its control
+  without the key:
+  - **`nottoair`** (`scenarios/c2-weapon-keys.json`, the AI's towers against the player's units on
+    hold). The keyed tower killed the construction kbot beside it and never fired at the hovering
+    transport, which kept all 150 HP; the control killed its transport. A landed transport held by
+    a keyed tower was dropped the moment it took off, and its HP froze. On `WKLLT5`, the unkeyed
+    slots 0 and 3 targeted a hovering transport and the keyed slot 4 never did.
+  - **`notoverland` / `notoverwater`**: on land the `notoverland` tower held its target and never
+    fired, and the slot dropped its target the tick the target died; the `notoverwater` tower
+    fired. On the water (floating towers) the `notoverwater` one held and the `notoverland` one
+    fired.
+  - **`nottounderwater`**: the keyed torpedo launcher sank the ship and left the submerged sub at
+    610 HP; the control killed both.
+  - **`surfacefire`**, the torpedo launcher: it killed a hovercraft on the water, which the control
+    never engaged. It also engages a kbot on the shore, but the torpedo stops in the shallows and
+    the kbot keeps its 700 HP.
+  - **`surfacefire`, Escalation's two shapes** (`scenarios/c2-surfacefire.json`): the water-beam
+    D-gun (`blast`) killed a solar collector ashore from a commander on land and from one on the
+    seabed, and the vertical-launch missile (`attack`) did so from a submerged sub, logging its
+    steering; the three controls did not.
+  - **The order action** (`scenarios/c2-order-cursor.json`, a right-click on each pair). The order
+    node at unit `+0x5C` is the evidence. A `nottoair` tower's order onto a flying unit is refused
+    (it keeps its standing order, type 22), where the control gets an attack order (type 8); the
+    same for `nottounderwater` onto a submerged target seen by sonar. The hovercraft with a
+    `surfacefire` torpedo gets an attack order onto a ground unit (type 6), which the control's
+    refuses (idle, 41).
+  - **`nomapweaponalert`** (`scenarios/c2-nomapalert.json`, the maps `WK Hail` and `WK Hail C`).
+    Under keyed hail: no "Solar Collector: Under Attack" in 30 shots over a minute, while the log
+    counted 64 alerts silenced. A hit unit's dot is present in all of a burst of 8 shots taken
+    while its `+0xFA` is above 100; the minimap changes by 0 pixels, with no stones drawn. Every
+    hit is applied: the kind 1 is stored at `+0xF5`, `+0xFA` is set, and the storages lose HP to
+    the per-type damage.
+    Under the control hail: the text repeats (up to four lines at once), the hit unit's dot is
+    missing in 3 of 8 shots, and the stones are drawn as yellow points. Under keyed hail, a real
+    attack (a Peewee on a solar collector) still alerts, and its dot is missing in 5 of 8 shots.
+    **Two peers** (`WK Hail`, each peer's own solar grid): each peer silenced 64 alerts and showed
+    no text, against "Under Attack" on both under the control. A temporary counter showed that
+    each peer's harmless hits on its own units arrive both ways, local (`0x489C89`) and received
+    as a `0x0B` (the dispatcher's case, `0x455412`). The counter was removed.
+    **What stays loud** (the same map, a `CORFUS` of the AI's at 1 % health among the collectors,
+    finished by a Peewee): its `ATOMIC_BLAST` and a collector's `SMALL_BUILDINGEX`, attacker-less
+    like the stones, were judged loud (a temporary trace of every attacker-less record, since
+    removed), and "Solar Collector: Under Attack" came up at once; the stones around them stayed
+    silent. **Two peers, the rule for received hits**: a received stone with amount 0 was silent on
+    both peers, and a received per-type hit on a storage (amounts 3 and 5) alerted, while the same
+    hit computed locally stayed silent.
+    **A save across the hail** (`WK Hail`, with a Peewee of the player's shooting one solar
+    collector): the game was saved while three collectors held harmless hits (`+0xFA` 70, 220 and
+    231, `E` 240 each) and the Peewee's target a loud one (`+0xFA` 239, `E` 0), and loaded back. A
+    temporary trace, since removed, showed the saver on the game thread (the same thread as the
+    blink) and the restore on the loader thread, giving each of those slots exactly the `+0xFA` and
+    `E` it was saved with. A loaded game starts paused; once it ran, a burst of 8 shots over
+    2.5 s found one dot missing in some frames, the loud unit's, and 0 pixels changed anywhere
+    else while the harmless ones' `+0xFA` fell from 220 and 231 to 132 and 143.
+  - **Stock content**: only the fixture's weapons log a key at load.
+- **Not covered.**
+  - The attack cursor's in-range answer for a keyed weapon was not seen: the AI flies its
+    aircraft out of range. It follows from the cursor asking `0x49ABB0`. Out of range, both
+    towers show "too far" (3).
+  - What stock does with an attack order whose target `0x49ABB0` later refuses. For a keyed weapon
+    it is moot, because the mirror refuses the order and the gate drops a flying target.
+  - Escalation's own flight numbers for its vertical-launch sub missile
+    (`weaponvelocity=-10`, `startvelocity=690`) never reach a target on the stock engine, steering
+    or not; the fixture uses the Merl's flight.
+
 ## Handed to other groups
 
 - **Group D:** building rotation with `Rotations=`, the per-facing `PreviewPiecesS/E/N/W=` and
@@ -239,7 +356,11 @@ commit can change.
 - **Section B, as B7, measured first:** a hit above 32 767 wrapping the HP word; kill-outright
   sparing a veteran above 24 000 HP (a vet-5 `CORKROG` survives its own self-destruct, INF); the
   NULL read at `0x4673B1` for an attacker-less targetable projectile out of sight; whether a meteor
-  hits once per peer in a network game. [B's plan](sim-fixes.md) does not list them yet; this is
+  hits once per peer in a network game. For that last one, C2's two-peer runs found that each peer
+  applies attacker-less meteor hits on its own units both locally (`0x489C89`) and as `0x0B`s
+  received from the other peer (`0x455412`). On 2026-09-26 the owner of two storages applied each
+  per-type amount (3 and 5) twice from its own computation and twice received, one stone's hit
+  twice over [INFERRED from the matching counts, not a per-stone trace]. [B's plan](sim-fixes.md) does not list them yet; this is
   their record until it does.
 
 ## Open questions

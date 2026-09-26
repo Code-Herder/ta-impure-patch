@@ -246,6 +246,52 @@ tools/tacli log c1 -g datakeys            # every key read at load, every mask a
   and read the line back**: a long `char:` run loses characters, and the first batch after the
   `return` that opens the bar can be lost too. Clear a wrong line with `backspace`.
 
+### The weapon keys
+
+The same fixture carries the weapon keys' clones: stock weapons under new names and IDs
+(230–244, 247–248; 245 and 246 are the burning features' weapons), the towers, subs,
+hovercraft, commanders and transport that fire or carry them, and two hail maps. Its docstring
+lists every one. Four scenarios, each pairing a keyed unit with its control:
+
+| scenario | what it shows | how it is driven |
+|---|---|---|
+| `c2-weapon-keys` | every targeting key, the AI's towers against the player's units on hold | runs by itself (`shootall` on); read the roster and the log |
+| `c2-order-cursor` | the right-click's order and the attack cursor per key | select the player's tower, park the pointer on a target, `click --right`; a sonar sees the submerged target |
+| `c2-surfacefire` | Escalation's two `surfacefire` shapes | `order --unit N --expect WKCOMSF blast unit T` for the D-guns, `attack unit` for the subs; `switches <i> radar=on` for sight |
+| `c2-nomapalert` | `nomapweaponalert` under keyed hail | `--map "WK Hail C"` gives the same hail without the key |
+
+- **`tacli log <i> -g "weapon keys"`** shows each decision's event at its 1st, 2nd, 4th, 8th…
+  occurrence, and every keyed weapon as it loads.
+- **The unit array**: `peek <i> "*0x511DE8+0x14357:4"` is its base; a unit is `base + idx·0x118`
+  with `idx` the roster's `engine_index`. Its order list heads at `+0x5C`, the node's type byte at
+  node `+4` (a laser tower stands at 22 and attacks at 8; a hovercraft idles at 41 and attacks at
+  6). `+0xFA` is the recently-hit byte, `+0xF5` the last hit's kind, `+0x108` the HP.
+- **The cursor**: byte `*0x511DE8+0x2CBE` (1 attack, 3 too far, 15 select, 19 normal); the unit
+  under the pointer is `u16 *0x511DE8+0x2CBA`. The roster's `screen=` misses a unit by some 25 px
+  at the default zoom, so walk the pointer around it until `+0x2CBA` names the unit; an aircraft is
+  picked near its shadow.
+- **A submerged enemy is neither drawn nor pickable** without the player's own sonar in range.
+- **The AI owns its units' orders**: it replaces an order given to one (type 26) and flies its
+  aircraft off. Give orders to the player's units; `attack unit` on the player's own unit
+  force-fires. An aircraft slower than `MaxVelocity=1` leaves the map (the fixture's `WKAIR` is 1).
+- **`keys <i> pause` toggles**, so send it once; `ctrl+d` starts a selected unit's self-destruct
+  and a second press cancels it.
+- **A water building spawns on the sea floor** unless the scenario gives it a `height`; a floating
+  tower at the sea level (75) is not a surface target for a water weapon.
+- **"Under Attack" is read off the screen**: its line is text of colour (195,195,155) at the top
+  left of the world view, counted over `tacli shot`s. The notification queue cannot be sampled
+  (its consumer takes an entry the frame it is queued), and the per-kind next time
+  (`0x50871C`) stays 0 while sound is off.
+- **A hit unit's blink** shows in a burst of about eight `tacli shot`s taken while its `+0xFA` is
+  above 100: under stock the dot is missing from some of them.
+- **A meteor shower centres anywhere on the map**, so a test under one needs a small map; the hail
+  maps are Show Down's terrain.
+- **Saving and loading in game**: Tab, `ui <i> click SAVEGAME`, `click GAMENAME`,
+  `fill GAMENAME <name>`, then `click LOAD` (the save screen's button is named LOAD). Loading is
+  Tab, `click LOADGAME`, `select GAMES <name>`, `click LOAD`. **A loaded game starts paused**
+  (`keys <i> pause` once), the menu pauses the game while it is open, and **the unit array's base
+  moves at a load**: re-read `*0x511DE8+0x14357` before peeking a unit.
+
 ## The render-options screen and the GPU row
 
 `tagpu_menu.c` adds our rows to **Options → Visuals**: the frame-rate readout (`VFPS`), the GPU

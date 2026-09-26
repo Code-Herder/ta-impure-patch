@@ -15,6 +15,7 @@
 #include "tagpu_log.h"
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
+#include "tagpu_datakeys.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -369,7 +370,6 @@ typedef void  (__stdcall  *PFN_UnitInt)(char* unit, int);
 typedef int   (__stdcall  *PFN_Rand)(int n);
 typedef int   (__stdcall  *PFN_Order)(char* unit, char* target, int);
 typedef u32   (__stdcall  *PFN_UnitFlags)(char* unit);
-typedef void  (__stdcall  *PFN_Unit3)(char* unit, int, int);
 typedef int   (__stdcall  *PFN_FireCB)(char* unit, WSlot* slot, char* target, int* tpos);
 typedef int   (__stdcall  *PFN_TargetPos)(char* unit, int* out, int idx);      /* 0x48A1E0, spliced   */
 typedef char* (__stdcall  *PFN_FindTarget)(char* unit, u32 idx, int);          /* 0x40B7B0, spliced   */
@@ -409,8 +409,8 @@ typedef char* (__stdcall  *PFN_FindTarget)(char* unit, u32 idx, int);          /
 #define E_Rand        ((PFN_Rand)       0x4B6C30u)
 #define E_AttackOrder ((PFN_Order)      0x43B1F0u)
 #define E_UnitFlags   ((PFN_UnitFlags)  0x438BE0u)
-#define E_Reaction    ((PFN_Unit3)      0x47F850u)
 #define E_TargetPos   ((PFN_TargetPos)  0x48A1E0u)
+#define E_CheckUnitWeapon ((PFN_Check)  0x49ABB0u)   /* through the weapon keys' detour */
 #define E_FindTarget  ((PFN_FindTarget) 0x40B7B0u)
 
 /* the replaced functions, reached through their trampolines for the stock path */
@@ -448,7 +448,6 @@ static PFN_UnitIdx      o_ClearTarget, o_ClearTargetQuiet;
 static PFN_Range        o_Range;
 static PFN_TargetUnit   o_TargetUnit;
 static PFN_Intercept    o_Intercept;
-static PFN_Check        o_Check;
 static PFN_Traj         o_Traj;
 static PFN_DefCopy      o_DefCopy;
 
@@ -666,13 +665,18 @@ static int dist2_hi(int dx, int dz)
     return (int)(((long long)dx * dx) >> 32) + (int)(((long long)dz * dz) >> 32);
 }
 
-/* 0x49ABB0 UnitAutoAim_CheckUnitWeapon(unit, target, idx): can weapon idx engage target */
-static int __stdcall my_CheckUnitWeapon(char* u, char* t, u32 idx)
+/* 0x49ABB0 UnitAutoAim_CheckUnitWeapon(unit, target, idx), for a slot past 2:
+   can weapon idx engage target. The entry of 0x49ABB0 belongs to the weapon
+   keys' detour in the fail-closed table (tagpu_patches.c, fix_weapon_keys),
+   which calls this for idx >= 3 while the module is armed and filters the
+   answer by the slot's weapon keys; every verdict of the module's own C paths
+   is asked through 0x49ABB0 itself (E_CheckUnitWeapon), so it is filtered
+   the same way. */
+int tagpu_weapons_check_slot(char* u, char* t, unsigned idx)
 {
     char* w;
     u32   wf;
     int   range, sea;
-    if ((idx & 0xFF) < 3) return o_Check(u, t, idx);
     HIT(H_HELPERS);
     w   = slot_ptr(u, (int)(idx & 0xFF))->weapon;
     wf  = *(u32*)(w + 0x111);
@@ -847,6 +851,12 @@ static void __stdcall my_AutoAim(char* u)
         if (!E_TargetPos(u, tpos, i)) { s->state &= 0xFE; continue; }
         cb = *(PFN_FireCB*)(w + 0x60);
         if (!cb) continue;
+        {
+            /* the weapon keys' fire gate, at stock's step (0x49E1FD): after the
+               target read, so a held slot still drops a dead target */
+            int g = tagpu_datakeys_fire_gate(u, i, w, s);
+            if (g) { if (g == 2) s->state &= 0xFE; continue; }
+        }
         wf = *(u32*)(w + 0x111);
 
         if (wf & (1u << 19))
@@ -971,7 +981,7 @@ static void __stdcall my_Retaliate(char* attacker, char* victim, int unused)
             && !mask_has(*(u32**)(def + 0x23D), atype)
             && !mask_has(*(u32**)(def + 0x231), atype))
         {
-            if (my_CheckUnitWeapon(victim, attacker, 0))
+            if (E_CheckUnitWeapon(victim, attacker, 0))
                 created = E_AttackOrder(victim, attacker, 0);
         }
         if (!created && (*(u32*)(victim + 0x110) & 0x300000))
@@ -982,18 +992,20 @@ static void __stdcall my_Retaliate(char* attacker, char* victim, int unused)
                 WSlot* s = slot_ptr(victim, i);
                 char*  cur;
                 if (!((s->state & 2) && (s->state & 0x10))) continue;
-                if (!my_CheckUnitWeapon(victim, attacker, (u32)i)) continue;
+                if (!E_CheckUnitWeapon(victim, attacker, (u32)i)) continue;
                 if (*(u32*)(s->weapon + 0x111) & (1u << 26)) continue;
                 cur = my_GetTargetUnit(victim, i);
-                if (cur && my_CheckUnitWeapon(victim, cur, (u32)i)
+                if (cur && E_CheckUnitWeapon(victim, cur, (u32)i)
                     && !mask_has(def_mask(def, i), *(u16*)(cur + 0xA6))) continue;
                 my_SetTarget(victim, attacker, i);
             }
         }
     }
     fl = E_UnitFlags(victim);
+    /* stock's "under attack", 0x4071D8, through the same gate: nomapweaponalert
+       silences a harmless weather hit here as it does there */
     if (!(fl & 0x80) && (*(char*)(victim + 0xF4) != *(char*)(victim + 0xFF) || *(char*)(victim + 0xF5) == 1))
-        E_Reaction(victim, 2, 0);
+        tagpu_datakeys_alert(victim, 2, 0);
 }
 
 /* -- periodic target acquisition (0x4089A0) ----------------------------------
@@ -1442,7 +1454,6 @@ static const u8 X_SETTGT[]   = { 0x8B,0x44,0x24,0x0C,0x8B,0x54,0x24,0x08 };
 static const u8 X_SETGND[]   = { 0x8B,0x44,0x24,0x0C,0x8B,0x54,0x24,0x04 };
 static const u8 X_CLRTGT[]   = { 0x56,0x8B,0x74,0x24,0x0C,0x8B,0xC6 };
 static const u8 X_IDX8[]     = { 0x8B,0x44,0x24,0x08,0x8B,0x54,0x24,0x04 }; /* 0x48A160, 0x49ADF0, 0x48A190 */
-static const u8 X_CHECK[]    = { 0x8B,0x44,0x24,0x0C,0x83,0xEC,0x0C };
 static const u8 X_TRAJ[]     = { 0x83,0xEC,0x10,0x8B,0x44,0x24,0x20 };
 static const u8 X_INTERCEPT[]= { 0x8B,0x44,0x24,0x08,0x53,0x25,0xFF,0x00,0x00,0x00 };
 static const u8 X_DEFCOPY[]  = { 0x8B,0xC1,0x53,0x8B,0x4C,0x24,0x08 };
@@ -1494,7 +1505,6 @@ static const Hook HOOKS[] = {
     { "ClearTargetQuiet",          0x48A160, 8, X_IDX8,     (void*)my_ClearTargetQuiet,   (void**)&o_ClearTargetQuiet },
     { "WeaponRange",               0x49ADF0, 8, X_IDX8,     (void*)my_WeaponRange,        (void**)&o_Range },
     { "GetTargetUnit",             0x48A190, 8, X_IDX8,     (void*)my_GetTargetUnit,      (void**)&o_TargetUnit },
-    { "CheckUnitWeapon",           0x49ABB0, 7, X_CHECK,    (void*)my_CheckUnitWeapon,    (void**)&o_Check },
     { "Trajectory3",               0x49AA80, 7, X_TRAJ,     (void*)my_Trajectory3,        (void**)&o_Traj },
     { "FindIntercept",             0x49D120, 10, X_INTERCEPT,(void*)my_FindIntercept,     (void**)&o_Intercept },
     { "DefCopy",                   0x42B370, 7, X_DEFCOPY,  (void*)my_DefCopy,            (void**)&o_DefCopy },

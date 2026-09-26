@@ -18,12 +18,65 @@ ARMTL, so their ghosts can be placed; a download TDF's MENU=n names page n-1:
     PPNONE    PreviewPieces=nosuchpiece: names no piece of the model, so it is ignored and
               the ghost takes Create()'s hides (the flare)
     PPLONG    a 64-character name, which no piece name can equal: the list is refused at load
+
+C2, the weapon keys: stock weapons under new names and IDs (230..239, free in every archive and
+below 256, so the stock-limits build loads them too), each with one key, in weapons/datakeys.tdf,
+and the units that carry them. Spawned by scenarios/c2-weapon-keys.json, not built:
+
+    WKLLTNA   ARMLLT, ARM_LIGHTLASER + nottoair              never engages a flying unit
+    WKLLTNL   ARMLLT, ARM_LIGHTLASER + notoverland           on land: never fires
+    WKLLTNW   ARMLLT, ARM_LIGHTLASER + notoverwater          on land: fires as stock
+    WKLLTWK   ARMLLT, ARM_LIGHTLASER + nottoair, damage 1    holds a landed aircraft alive, so
+                                                             it can take off under fire
+    WKTLNU    ARMTL, COAX_TORPEDO + nottounderwater          never engages a submerged unit
+    WKTLSF    ARMTL, COAX_TORPEDO + surfacefire              engages a hovercraft on the water
+    WKFHLNW   ARMFHLT, ARMFHLT_LASER + notoverwater          on the water: never fires
+    WKFHLNL   ARMFHLT, ARMFHLT_LASER + notoverland           on the water: fires as stock
+    WKLLT5    ARMLLT, Weapon1 and Weapon4 WK_LAS_1 (the laser, no key, damage 1, so a target
+              lives), Weapon5 the nottoair laser: the extra-weapons module's slots (tacli arm
+              <i> weapons.on), COB from cobclone
+    WKSUB     ARMSUB with no weapon: a submerged target that does not shoot back
+    WKSHSF    ARMSH, a hovercraft, with WK_TORP_SF: the order cursor's surfacefire mirror
+    WKSHTP    ARMSH with COAX_TORPEDO: its control
+    WKAIR     ARMATLAS at MaxVelocity 1 carrying nothing: an aircraft its AI owner flies off slowly, for the
+              order cursor's nottoair mirror (scenarios/c2-order-cursor.json)
+    WKCOMSF   ARMCOM whose D-gun (Weapon3) is WK_DGUN_SF: ARM_DISINTEGRATOR made a water beam, with
+              surfacefire and nottoair -- the shape of Escalation's DGUN_ARM
+    WKCOMW    ARMCOM with WK_DGUN_W, the same beam without surfacefire: its control
+    WKSUBVL   ARMSUB firing WK_VL_SF: ARMTRUCK_ROCKET, the Merl's vertical-launch rocket, made a water
+              weapon with surfacefire -- Escalation's VLAUNCH_SUB_ARM shape. Its flight is the Merl's:
+              Escalation's own numbers (weaponvelocity=-10, startvelocity=690) never reach a target
+              on the stock engine, steering or not. ARMSUB's script has no
+              AimPrimary, which a torpedo never starts; a vertical-launch weapon starts it and fires
+              only on its result (0x49DB70 tests the slot's +8), so the clone's COB gets one that
+              returns 1
+    WKSUBVW   ARMSUB with WK_VL_W, the same missile without surfacefire: its control
+              (these four: scenarios/c2-surfacefire.json)
+
+and two weapons no unit carries, for the load's diagnostics: WK_LAS_SF, surfacefire without
+waterweapon, and WK_LAS_NB, both notoverwater and notoverland (IDs 238, 239; WK_LAS_1 is 240,
+the D-guns 241 and 242, the missiles 243 and 244).
+
+C2's nomapweaponalert: HAILSTORM (the patch archive's meteors.tdf) as two weapons with default
+damage 0 and 5 against ARMMSTOR, and two maps that rain them -- Show Down's terrain, small and
+nearly all land, so a shower's random centre still covers most of it, under a new name each:
+
+    WK_HAIL_Q  (247)  nomapweaponalert=1   the map "WK Hail"
+    WK_HAIL_L  (248)  no key               the map "WK Hail C", its control
+
+(245 and 246 are TREEBURN and SHRUBBURN, the burning features' weapons.)
+
+Both maps set MeteorRadius=2800, MeteorDensity=400, MeteorDuration=35 (Flooded Glaciers' shower)
+and MeteorInterval=20, and drop Show Down's useonlyunits. Spawned by scenarios/c2-nomapalert.json.
 """
 
 import argparse
 import os
 import re
+import struct
+import subprocess
 import sys
+import tempfile
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -51,6 +104,138 @@ def unit(fbi, name, keys):
     return out.encode("latin-1")
 
 
+def section(text, name):
+    """a weapon's [NAME] { ... } body with its nested [DAMAGE] block"""
+    m = re.search(r"\[" + re.escape(name) + r"\]\s*\{", text, re.I)
+    if not m:
+        sys.exit(f"datakeys_fixture: no weapon {name} in the install")
+    depth, i = 1, m.end()
+    while depth:
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        i += 1
+    return text[m.end():i - 1]
+
+
+def weapon(stock, name, wid, keys, damage=None):
+    """stock's body as `name` with ID `wid`, `keys` set, and every [DAMAGE] entry `damage`"""
+    line = r"^[ \t]*{}[ \t]*=[^;\n]*;[^\n]*\n"
+    body = stock
+    if damage is not None:
+        head, block = body.split("[DAMAGE]", 1)
+        body = head + "[DAMAGE]" + re.sub(r"=\s*\d+\s*;", f"={damage};", block)
+    for k, v in dict(keys, ID=wid).items():
+        body = re.sub(line.format(k), "", body, flags=re.I | re.M)
+        body = f"\r\n\t{k}={v};" + body
+    return f"[{name}]\r\n\t{{{body}}}\r\n"
+
+
+def armed(fbi, name, weapons, keys=None):
+    """the stock FBI renamed, its WeaponN lines replaced by `weapons` ({n: name}; an empty
+    dict leaves the unit unarmed), and `keys` set in place of the stock values"""
+    out, n = re.subn(r"UnitName\s*=[^;]*;", f"UnitName={name};", fbi, count=1, flags=re.I)
+    out = re.sub(r"^[ \t]*Weapon\d+\s*=[^;]*;[^\n]*\n", "", out, flags=re.I | re.M)
+    for k in keys or {}:
+        out = re.sub(r"^[ \t]*" + k + r"\s*=[^;]*;[^\n]*\n", "", out, flags=re.I | re.M)
+    lines = "".join(f"\tWeapon{k}={v};\r\n" for k, v in sorted(weapons.items()))
+    lines += "".join(f"\t{k}={v};\r\n" for k, v in (keys or {}).items())
+    out, m = re.subn(r"\}\s*$", lines + "\t}\r\n", out.rstrip(), count=1)
+    if n != 1 or m != 1:
+        sys.exit(f"datakeys_fixture: the stock FBI for {name} has no UnitName or closing brace")
+    return out.encode("latin-1")
+
+
+def with_aim(cob):
+    """the COB with an AimPrimary that returns 1 appended (PUSH_CONSTANT 1; RETURN)"""
+    cobalias = SourceFileLoader("cobalias", str(ROOT / "tools" / "cobalias.py")).load_module()
+    c = cobalias.parse(cob)
+    words = list(struct.unpack(f"<{len(c['code']) // 4}I", c["code"]))
+    c["scripts"].append(("AimPrimary", len(words)))
+    words += [0x10021001, 1, 0x10065000]
+    c["code"] = struct.pack(f"<{len(words)}I", *words)
+    return cobalias.build(c)
+
+
+def weapon_keys(tree, gd):
+    """C2's weapons and units into `tree`"""
+    ta, cc = hpipack.Archive(gd / "totala1.hpi"), hpipack.Archive(gd / "ccdata.ccx")
+    text = "\n".join(ta.read(n).decode("latin-1") for n in ta.files if n.startswith("weapons/"))
+    las, torp = section(text, "ARM_LIGHTLASER"), section(text, "COAX_TORPEDO")
+    fhl = section(cc.read("weapons/armfhlt_weapon.tdf").decode("latin-1"), "ARMFHLT_LASER")
+    tdf = [weapon(las, "WK_LAS_NA", 230, {"nottoair": 1}),
+           weapon(las, "WK_LAS_NL", 231, {"notoverland": 1}),
+           weapon(las, "WK_LAS_NW", 232, {"notoverwater": 1}),
+           weapon(las, "WK_LAS_WK", 233, {"nottoair": 1}, damage=1),
+           weapon(torp, "WK_TORP_NU", 234, {"nottounderwater": 1}),
+           weapon(torp, "WK_TORP_SF", 235, {"surfacefire": 1}),
+           weapon(fhl, "WK_FHL_NW", 236, {"notoverwater": 1}),
+           weapon(fhl, "WK_FHL_NL", 237, {"notoverland": 1}),
+           weapon(las, "WK_LAS_SF", 238, {"surfacefire": 1}),
+           weapon(las, "WK_LAS_NB", 239, {"notoverwater": 1, "notoverland": 1}),
+           weapon(las, "WK_LAS_1", 240, {}, damage=1)]
+    dgun, rkt = section(text, "ARM_DISINTEGRATOR"), section(text, "ARMTRUCK_ROCKET")
+    beam = {"waterweapon": 1, "beamweapon": 1, "nottoair": 1}
+    flight = {"waterweapon": 1, "nottoair": 1}
+    tdf += [weapon(dgun, "WK_DGUN_SF", 241, dict(beam, surfacefire=1)),
+            weapon(dgun, "WK_DGUN_W", 242, beam),
+            weapon(rkt, "WK_VL_SF", 243, dict(flight, surfacefire=1)),
+            weapon(rkt, "WK_VL_W", 244, flight)]
+    hpipack.insert(tree, "weapons/datakeys.tdf", "\r\n".join(tdf).encode("latin-1"))
+
+    base = {"armllt": ta, "armtl": ta, "armsub": ta, "armatlas": ta, "armcom": ta, "armfhlt": cc,
+            "armsh": cc}
+    fbi = {u: arc.read(f"units/{u}.fbi").decode("latin-1") for u, arc in base.items()}
+    cob = {u: arc.read(f"scripts/{u}.cob") for u, arc in base.items()}
+    units = {"WKLLTNA": ("armllt", {1: "WK_LAS_NA"}), "WKLLTNL": ("armllt", {1: "WK_LAS_NL"}),
+             "WKLLTNW": ("armllt", {1: "WK_LAS_NW"}), "WKLLTWK": ("armllt", {1: "WK_LAS_WK"}),
+             "WKTLNU": ("armtl", {1: "WK_TORP_NU"}), "WKTLSF": ("armtl", {1: "WK_TORP_SF"}),
+             "WKFHLNW": ("armfhlt", {1: "WK_FHL_NW"}), "WKFHLNL": ("armfhlt", {1: "WK_FHL_NL"}),
+             "WKLLT5": ("armllt", {1: "WK_LAS_1", 4: "WK_LAS_1", 5: "WK_LAS_NA"}),
+             "WKSUB": ("armsub", {}),
+             "WKSHSF": ("armsh", {1: "WK_TORP_SF"}), "WKSHTP": ("armsh", {1: "COAX_TORPEDO"}),
+             "WKAIR": ("armatlas", {}, {"MaxVelocity": 1, "TransportCapacity": 0, "transportsize": 0}),
+             "WKCOMSF": ("armcom", {1: "ARMCOMLASER", 3: "WK_DGUN_SF"}),
+             "WKCOMW": ("armcom", {1: "ARMCOMLASER", 3: "WK_DGUN_W"}),
+             "WKSUBVL": ("armsub", {1: "WK_VL_SF"}), "WKSUBVW": ("armsub", {1: "WK_VL_W"})}
+    with tempfile.TemporaryDirectory() as tmp:
+        src, five = Path(tmp) / "armllt.cob", Path(tmp) / "wkllt5.cob"
+        src.write_bytes(cob["armllt"])
+        subprocess.run([sys.executable, str(ROOT / "tools" / "cobclone.py"), str(src), str(five),
+                        "--weapons", "5"], check=True, stdout=subprocess.DEVNULL)
+        extended = five.read_bytes()
+    for name, (stock, weapons, *keys) in units.items():
+        low = name.lower()
+        hpipack.insert(tree, f"units/{low}.fbi", armed(fbi[stock], name, weapons, *keys))
+        script = extended if name == "WKLLT5" else cob[stock]
+        if name in ("WKSUBVL", "WKSUBVW"):
+            script = with_aim(script)
+        hpipack.insert(tree, f"scripts/{low}.cob", script)
+    return len(tdf), len(units)
+
+
+def weather(tree, gd):
+    """nomapweaponalert's two hail weapons and the two maps that rain them"""
+    hail = section(hpipack.Archive(gd / "rev31.gp3").read("weapons/meteors.tdf").decode("latin-1"),
+                   "HAILSTORM")
+    per_type = r"\1\r\n\t\tARMMSTOR=5;"
+    tdf = [re.sub(r"(\[DAMAGE\]\s*\{)", per_type, weapon(hail, name, wid, keys, damage=0), count=1)
+           for name, wid, keys in (("WK_HAIL_Q", 247, {"nomapweaponalert": 1}),
+                                   ("WK_HAIL_L", 248, {}))]
+    hpipack.insert(tree, "weapons/datakeys_hail.tdf", "\r\n".join(tdf).encode("latin-1"))
+    cc = hpipack.Archive(gd / "ccmaps.ccx")
+    ota, tnt = cc.read("maps/show down.ota").decode("latin-1"), cc.read("maps/show down.tnt")
+    shower = {"MeteorRadius": 2800, "MeteorDensity": 400, "MeteorDuration": 35, "MeteorInterval": 20}
+    for name, w in (("WK Hail", "WK_HAIL_Q"), ("WK Hail C", "WK_HAIL_L")):
+        o = re.sub(r"missionname=[^;]*;", f"missionname={name};", ota, count=1)
+        o = re.sub(r"^[ \t]*useonlyunits=[^;]*;[^\n]*\n", "", o, flags=re.M | re.I)
+        for k, v in dict(shower, MeteorWeapon=w).items():
+            o, n = re.subn(k + r"=[^;]*;", f"{k}={v};", o, count=1)
+            if n != 1:
+                sys.exit(f"datakeys_fixture: Show Down's OTA has no {k}")
+        hpipack.insert(tree, f"maps/{name.lower()}.ota", o.encode("latin-1"))
+        hpipack.insert(tree, f"maps/{name.lower()}.tnt", tnt)
+    return len(tdf)
+
+
 def menu(builder, page, button, name):
     return (f"[MENUENTRY1]\r\n\t{{\r\n\tUNITMENU={builder};\r\n\tMENU={page};\r\n"
             f"\tBUTTON={button};\r\n\tUNITNAME={name};\r\n\t}}\r\n").encode("latin-1")
@@ -61,7 +246,8 @@ def main():
     ap.add_argument("out", type=Path)
     a = ap.parse_args()
 
-    arc = hpipack.Archive(gamedir() / "totala1.hpi")
+    gd = gamedir()
+    arc = hpipack.Archive(gd / "totala1.hpi")
     fbi = arc.read("units/armllt.fbi").decode("latin-1")
     cob, pic = arc.read("scripts/armllt.cob"), arc.read("unitpics/armllt.pcx")
     clones = {
@@ -78,9 +264,12 @@ def main():
         hpipack.insert(tree, f"unitpics/{low}.pcx", pic)
         hpipack.insert(tree, f"download/{low}.tdf", menu("ARMCOM", 5, button + 1, name))
 
+    nw, nu = weapon_keys(tree, gd)
+    nw += weather(tree, gd)
+
     data = hpipack.build(tree)
     a.out.write_bytes(data)
-    print(f"{a.out}: {len(clones)} units, {len(data)} bytes")
+    print(f"{a.out}: {len(clones) + nu} units, {nw} weapons, 2 maps, {len(data)} bytes")
 
 
 if __name__ == "__main__":

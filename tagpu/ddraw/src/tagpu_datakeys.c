@@ -1,5 +1,6 @@
-/* tagpu_datakeys.c — TADR section C's unit keys: the FBI reader and the build
-   ghost's piece mask. The plan is research/notes/tadr-port/data-keys.md; the
+/* tagpu_datakeys.c — TADR section C's keys: the FBI reader, the build
+   ghost's piece mask, the weapon keys' store and decisions, and
+   nomapweaponalert's silence. The plan is research/notes/tadr-port/data-keys.md; the
    engine facts each block rests on are in data-keys-evidence.md (Part 3 §1,
    Part 4 §2) and in exe-reverse-engineering.md. */
 #include <windows.h>
@@ -334,8 +335,11 @@ static int observe(unsigned va, const unsigned char* stolen, int n, tagpu_detour
    observer no script has a length and no Create() mask is computed. Without
    the loader's entry the reader does not land, so no record can outlive its
    load. */
+static void alert_install(void);
+
 void tagpu_datakeys_init(void)
 {
+    alert_install();
     if (!observe(VA_UNIT_LOAD, UNIT_LOAD_STOLEN, (int)sizeof UNIT_LOAD_STOLEN, unit_load_begin)) {
         dlog("NOT installed: the bytes at 0x42D2E0 are not the retail unit-data load's; "
              "no PreviewPieces= and no Create() mask, every ghost shows every piece");
@@ -697,4 +701,686 @@ int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out)
     out->root    = (uint32_t)(size_t)root;
     memcpy(out->bits, g->bits, sizeof out->bits);
     return 1;
+}
+
+/* =========================================================================
+   4. The weapon keys (C2)
+   ========================================================================= */
+
+/* ONE BYTE A WEAPON, indexed by the weapon's validated ID: the index
+   tagpu_limits_weapon_index takes from a record's own address, -1 for
+   anything that is not a whole record of this build's array (256 in the
+   stock build, 4096 raised). So no value out of engine memory reaches the
+   table unchecked, and a pointer that is not a weapon reads 0, which is
+   stock: every hook below runs the engine's own instructions for a weapon
+   whose byte is 0, and no retail weapon carries a key.
+
+   WRITTEN on the LOADER thread inside the level's load: emptied at the
+   weapon load's entry 0x42E310 (its one caller is 0x4918BB, in
+   LoadGameData_Main 0x4917D0) and assigned per section at A'3's ID site
+   0x42E468, after the ID and the name are accepted -- so a weapon the loader
+   skips writes neither its record nor its byte, and a later section with the
+   same ID replaces both. READ on the GAME thread in play, after that load:
+   the ordering every game-thread read of the weapon array itself rests on.
+   The render thread never reads it. */
+static unsigned char s_wkey[TAGPU_LIM_WEAPONS];
+static unsigned      s_wkeyed, s_wread;
+
+typedef int (__thiscall *PFN_TdfGetInt)(void* sec, const char* key, int dflt);
+#define E_TdfGetInt   ((PFN_TdfGetInt)0x004C46C0u)   /* atoi of the value, `ret 8` */
+typedef int (__stdcall *PFN_GroundHeight)(const void* pos);
+#define E_GroundHeight ((PFN_GroundHeight)0x00485070u) /* -1 off the map, `ret 4` */
+typedef void (__stdcall *PFN_ClearTarget)(char* unit, int slot);
+#define E_ClearTarget ((PFN_ClearTarget)0x0048A0F0u)
+
+#define WF_WATER    0x10000u     /* weapon +0x111 bit 16, waterweapon            */
+#define WF_TOAIR    0x20000u     /* bit 17, toairweapon                          */
+#define DF_CANHOVER 0x1000u      /* UnitDef +0x241 bit 12                        */
+
+unsigned tagpu_datakeys_wkey(const void* weapon)
+{
+    int i = tagpu_limits_weapon_index(weapon);
+    return i < 0 ? 0u : s_wkey[i];
+}
+
+static void quiet_clear(void);
+
+void __cdecl tagpu_datakeys_weapons_clear(void)
+{
+    if (s_wkeyed) dlog("weapon keys: emptied; the load before read %u weapon(s), %u with a key",
+                       s_wread, s_wkeyed);
+    memset(s_wkey, 0, sizeof s_wkey);
+    s_wkeyed = s_wread = 0;
+    quiet_clear();
+}
+
+/* The engine reads a boolean key as GetInt(key, 0) & 1 (the loader's rule for
+   every flag of +0x111), so a key reads the same way here. */
+static int tdf_flag(void* sec, const char* key)
+{
+    return E_TdfGetInt(sec, key, 0) & 1;
+}
+
+void tagpu_datakeys_weapon_read(int id, void* sec, const char* name)
+{
+    unsigned k = 0;
+    if (id < 0 || id >= TAGPU_LIM_WEAPONS || !sec) return;
+    s_wread++;
+    if (tdf_flag(sec, "nottoair"))        k |= TAGPU_WK_NOTTOAIR;
+    if (tdf_flag(sec, "nottounderwater")) k |= TAGPU_WK_NOTTOUNDERWATER;
+    if (tdf_flag(sec, "surfacefire"))     k |= TAGPU_WK_SURFACEFIRE;
+    if (tdf_flag(sec, "notoverwater"))    k |= TAGPU_WK_NOTOVERWATER;
+    if (tdf_flag(sec, "notoverland"))     k |= TAGPU_WK_NOTOVERLAND;
+    if (tdf_flag(sec, "nomapweaponalert")) k |= TAGPU_WK_NOMAPALERT;
+    s_wkey[id] = (unsigned char)k;
+    if (!k) return;
+    s_wkeyed++;
+    dlog("weapon keys: %.32s (ID %d):%s%s%s%s%s%s", name, id,
+         k & TAGPU_WK_NOTTOAIR ? " nottoair" : "",
+         k & TAGPU_WK_NOTTOUNDERWATER ? " nottounderwater" : "",
+         k & TAGPU_WK_SURFACEFIRE ? " surfacefire" : "",
+         k & TAGPU_WK_NOTOVERWATER ? " notoverwater" : "",
+         k & TAGPU_WK_NOTOVERLAND ? " notoverland" : "",
+         k & TAGPU_WK_NOMAPALERT ? " nomapweaponalert" : "");
+    if ((k & TAGPU_WK_SURFACEFIRE) && !tdf_flag(sec, "waterweapon"))
+        dlog("weapon keys: %.32s has surfacefire without waterweapon, which it needs; no effect", name);
+    if ((k & TAGPU_WK_NOTOVERWATER) && (k & TAGPU_WK_NOTOVERLAND))
+        dlog("weapon keys: %.32s has both notoverwater and notoverland; it fires only off the map", name);
+}
+
+/* first, second, fourth, eighth ... occurrence of an event, with its count:
+   a log a measurement can read without a heartbeat, and bounded */
+static void wk_event(unsigned* n, const char* what)
+{
+    unsigned c = ++*n;
+    if ((c & (c - 1)) == 0) dlog("weapon keys: %s (%u so far)", what, c);
+}
+static unsigned s_evAir, s_evUnder, s_evSurface, s_evOrder, s_evSteer, s_evSuppress, s_evDrop;
+
+static unsigned sea_level(void)
+{
+    const char* ta = *(const char* const*)TA_MAIN_PP;
+    return *(const unsigned char*)(ta + OFF_SEALEVEL);
+}
+
+static int wflags(const char* w) { return *(const int*)(w + 0x111); }
+static int flying(const char* u) { return (*(const unsigned*)(u + 0x110) & 3) == 2; }
+
+/* the top of a unit, as the engine sums it at 0x49ACEA..0x49ACF5 */
+static int unit_top(const char* u)
+{
+    const char* def = *(const char* const*)(u + U_TYPE);
+    return (int)*(const short*)(u + 0x70) + (int)*(const short*)(def + 0x170);
+}
+
+/* the water path's range test, 0x49AC47..0x49ACA2: the high words of dx*dx
+   and dz*dz (the positions are 16.16), summed, against range squared */
+static int in_range(const char* u, const char* t, const char* w)
+{
+    int dx = *(const int*)(t + U_XFIX) - *(const int*)(u + U_XFIX);
+    int dz = *(const int*)(t + U_YFIX) - *(const int*)(u + U_YFIX);
+    int r  = *(const int*)(w + 0xDC);
+    return (int)(((long long)dx * dx) >> 32) + (int)(((long long)dz * dz) >> 32) <= r * r;
+}
+
+/* THE CAN-ENGAGE VERDICT, filtered. `v` is 0x49ABB0's answer (or the
+   extra-weapons module's for a slot past 2); the caller is the one detour on
+   0x49ABB0's entry, so every acquisition, retaliation, cursor and order that
+   asks the engine asks this. surfacefire comes first and nottoair and
+   nottounderwater after it, in one function: no order between the keys can
+   loop, and a water weapon's rejection turns only into stock's own range
+   test. */
+int tagpu_datakeys_engage(char* u, char* t, const char* w, int v)
+{
+    unsigned k = tagpu_datakeys_wkey(w);
+    int air;
+    if (!k || !t) return v;
+    air = flying(t);
+    if (!v && (k & TAGPU_WK_SURFACEFIRE) && (wflags(w) & WF_WATER) && !air) {
+        v = in_range(u, t, w);
+        if (v) wk_event(&s_evSurface, "surfacefire engaged a surface target");
+    }
+    if (v && (k & TAGPU_WK_NOTTOAIR) && air) {
+        v = 0;
+        wk_event(&s_evAir, "nottoair refused a flying target");
+    }
+    if (v && (k & TAGPU_WK_NOTTOUNDERWATER) && unit_top(t) <= (int)sea_level()) {
+        v = 0;
+        wk_event(&s_evUnder, "nottounderwater refused a submerged target");
+    }
+    return v;
+}
+
+/* THE ORDER ACTION'S UNIT BRANCH, 0x43F0E0 from 0x43F1D4 to its exits: the
+   action names weapon 0 (+0x10), and slot 1 (+0x2C, present when +0x3B bit 1
+   is set) only in the submerged test. When neither carries a key this answers
+   0 and the site runs stock's own instructions. Otherwise it takes stock's
+   decisions in stock's order, with each key mirrored where stock tests its
+   counterpart: nottoair beside toairweapon, nottounderwater in the submerged
+   test, surfacefire at the hover's water refusal, for a target not flying.
+   1 = refuse (0x4401DC), 2 = on to 0x43F27A, 3 = stock's no-action exit
+   0x43F26C (a hover whose slot 1 is a water weapon). */
+int __stdcall tagpu_datakeys_order(char* s, char* t)
+{
+    const char* w0 = *(const char* const*)(s + 0x10);
+    const char* sdef = *(const char* const*)(s + U_TYPE);
+    int present1 = (*(const unsigned char*)(s + 0x3B) & 2) != 0;
+    const char* w1 = present1 ? *(const char* const*)(s + 0x2C) : NULL;
+    unsigned k0 = tagpu_datakeys_wkey(w0), k1 = w1 ? tagpu_datakeys_wkey(w1) : 0u;
+    int air, top, sea, f0;
+    if (!(k0 & (TAGPU_WK_NOTTOAIR | TAGPU_WK_NOTTOUNDERWATER | TAGPU_WK_SURFACEFIRE)) &&
+        !(k1 & TAGPU_WK_NOTTOUNDERWATER))
+        return 0;
+    wk_event(&s_evOrder, "an order onto a unit decided with a key");
+    air = flying(t);
+    f0 = wflags(w0);
+    if (!air && (f0 & WF_TOAIR)) return 1;
+    if (air && (k0 & TAGPU_WK_NOTTOAIR)) return 1;
+    top = unit_top(t);
+    sea = (int)sea_level();
+    if (top < sea) {
+        int ok0 = (f0 & WF_WATER) && !(k0 & TAGPU_WK_NOTTOUNDERWATER);
+        int ok1 = w1 && (wflags(w1) & WF_WATER) && !(k1 & TAGPU_WK_NOTTOUNDERWATER);
+        return ok0 || ok1 ? 2 : 1;
+    }
+    if (!(*(const unsigned*)(sdef + 0x241) & DF_CANHOVER)) return 2;
+    if (f0 & WF_WATER) return (k0 & TAGPU_WK_SURFACEFIRE) && !air ? 2 : 1;
+    if (w1 && (wflags(w1) & WF_WATER)) return 3;
+    return 2;
+}
+
+/* THE GUIDANCE, 0x49B9EB: in its self-propelled flight a water weapon's
+   projectile above the sea falls and does not steer; surfacefire's steers. */
+int __stdcall tagpu_datakeys_steer(const char* w)
+{
+    if (!(tagpu_datakeys_wkey(w) & TAGPU_WK_SURFACEFIRE)) return 0;
+    wk_event(&s_evSteer, "a surfacefire projectile steered above the sea");
+    return 1;
+}
+
+/* THE FIRE GATE, after a slot's per-tick target read and its fire-function
+   check (0x49E1FD in AutoAim, and the same step of the extra-weapons module's
+   C loop): 0 = on as stock, 1 = the slot neither aims nor fires this tick
+   (notoverwater / notoverland, by the ground under the firer; off the map,
+   -1, it is not gated), 2 = its held target was a flying unit under nottoair
+   and is dropped through the engine's own ClearTarget 0x48A0F0 -- what
+   0x48A1E0 does to a dead one -- so acquisition picks again through the
+   filtered verdict. THE INVARIANT: this runs after the target read, so a
+   suppressed slot still drops a dead target every tick, as stock does.
+   `slot` is the 28-byte slot; its target is a unit index while its spot is
+   0x8000, bounded here by the engine's own unit array before it is read. */
+int tagpu_datakeys_fire_gate(char* u, int idx, const char* w, const void* slot)
+{
+    unsigned k = tagpu_datakeys_wkey(w);
+    if (!k) return 0;
+    if (k & (TAGPU_WK_NOTOVERWATER | TAGPU_WK_NOTOVERLAND)) {
+        int h = E_GroundHeight(u + U_XFIX);
+        if (h != -1) {
+            int water = h <= (int)sea_level();
+            if (water ? (k & TAGPU_WK_NOTOVERWATER) : (k & TAGPU_WK_NOTOVERLAND)) {
+                wk_event(&s_evSuppress, "a slot held its fire over the terrain its key names");
+                return 1;
+            }
+        }
+    }
+    if (k & TAGPU_WK_NOTTOAIR) {
+        const unsigned short* sl = (const unsigned short*)slot;
+        const char* ta = *(const char* const*)TA_MAIN_PP;
+        const char* first = *(const char* const*)(ta + OFF_UNIT_BEGIN);
+        const char* last  = *(const char* const*)(ta + OFF_UNIT_END);
+        unsigned tgt = sl[0];
+        if (sl[1] == 0x8000 && tgt && ptr_ok(first) && last >= first &&
+            tgt <= (unsigned)(last - first) / UNIT_STRIDE &&
+            flying(first + (size_t)tgt * UNIT_STRIDE)) {
+            E_ClearTarget(u, idx);
+            wk_event(&s_evDrop, "nottoair dropped a held target that is flying");
+            return 2;
+        }
+    }
+    return 0;
+}
+
+/* =========================================================================
+   5. nomapweaponalert: the silence of harmless weather (C2)
+   =========================================================================
+   A weather hit -- a projectile with no attacker whose weapon carries the key
+   and has default damage 0 -- is applied exactly as stock applies it and
+   says nothing about it: no
+   "under attack" notification (its text and its sound), no blink of the hit
+   unit's minimap dot, and no minimap dot for the projectile. DISPLAY ONLY:
+   every sim write of the hit stays -- the recently-hit counter +0xFA, the kind
+   +0xF5, the listeners' event, the remote owner's 0x0B. Each part below is
+   skip-and-log and rests only on the sites it names.
+
+   THE DECISION, harmless_weather, is about the hit record 0x489CE0 is
+   applying (edi there: +3 the attacker's u16 id, +5 the amount, +8 the
+   kind). The record names no weapon, and a weather stone is not the only
+   attacker-less weapon hit: a unit's death explosion (0x49B000 zeroes the
+   projectile's attacker) and the fire spreading from a burning feature
+   (0x49A0C0) make them too. So the answer comes from where the weapon is
+   known:
+   - A record computed HERE: every weapon-kind hit comes from one call,
+     0x489BB0 at 0x499E37 in the damage function 0x499CD0, whose projectile
+     is in hand. weather_send frames that call with the projectile's own
+     weapon's answer; 0x489BB0 builds the record on its own stack and applies
+     it at 0x489C89, where local_apply pins the answer to that record's
+     address. A record at that address is this hit; nothing else is.
+   - A record RECEIVED as a 0x0B from a peer (the dispatcher's case,
+     0x455412) carries no weapon, so it is harmless only when nothing was
+     lost: no attacker, a weapon kind, amount 0, and the level's meteor weapon
+     [0x512328] keyed with default damage 0. A received weather hit with a
+     per-type damage alerts, and a received explosion or fire is silent only
+     when it did no damage.
+   Every weapon pointer is bounded as a record of the weapon array (the key
+   store's index) before its default damage (+0xD4, a WORD: 0x499CE3,
+   0x42EFA9, 0x42F326) is read. */
+
+#define VA_METEOR_WEAPON 0x00512328u
+#define WF_METEOR        0x20u       /* weapon +0x111 bit 5                 */
+#define WF_NORADAR       0x40u       /* bit 6: its one reader is the dot, 0x467206 */
+#define HIT_FA           0xF0u       /* what 0x467950 stores in +0xFA       */
+
+static int weather_weapon(const char* w)
+{
+    return (tagpu_datakeys_wkey(w) & TAGPU_WK_NOMAPALERT) && *(const short*)(w + 0xD4) == 0;
+}
+
+/* GAME thread only, like every hit. s_armed is weather_send's answer from its
+   set to the next local apply, which takes it; nothing else can run between
+   them (0x489BB0 reaches 0x489C89 on every path, calling only the arithmetic
+   helper 0x4E43D0 first), and weather_send zeroes it again on return. */
+static int s_armed;
+static const unsigned char* s_localRec;   /* the record 0x489C89 is applying, or NULL */
+static int s_localWeather;                /* ... and its answer */
+static int s_localOn;                     /* both local sites landed */
+
+static int harmless_weather(const unsigned char* rec)
+{
+    unsigned char kind = rec[8];
+    if (s_localOn && rec == s_localRec) return s_localWeather;
+    if (*(const unsigned short*)(rec + 3) != 0 || (kind != 1 && kind != 2)) return 0;
+    if (*(const unsigned short*)(rec + 5) != 0) return 0;
+    return weather_weapon(*(const char* const*)VA_METEOR_WEAPON);
+}
+
+typedef int (__stdcall *PFN_HitSend)(char* attacker, char* victim, int amount, int kind, int angle);
+#define E_HitSend ((PFN_HitSend)0x00489BB0u)
+typedef int (__stdcall *PFN_Apply)(const unsigned char* rec);
+#define E_Apply   ((PFN_Apply)0x00489CE0u)
+
+/* 0x499E37's call of 0x489BB0(attacker, victim, amount, kind, angle), `ret
+   0x14`, through a stub that adds the projectile the damage function holds
+   ([esp+0x30] at the call; the engine reads its weapon, [proj], at 0x499E1E). */
+static int __stdcall weather_send(const char* const* proj, char* attacker, char* victim,
+                                  int amount, int kind, int angle)
+{
+    int r;
+    s_armed = !attacker && weather_weapon(*proj);
+    r = E_HitSend(attacker, victim, amount, kind, angle);
+    s_armed = 0;
+    return r;
+}
+
+/* 0x489C89's call of 0x489CE0(rec), `ret 4`: the local apply of the record
+   0x489BB0 just built. Saving and restoring makes a nested local apply hand
+   the outer record back its own answer. */
+static int __stdcall local_apply(const unsigned char* rec)
+{
+    const unsigned char* prevRec = s_localRec;
+    int prevWeather = s_localWeather, r;
+    s_localRec = rec;
+    s_localWeather = s_armed;
+    s_armed = 0;
+    r = E_Apply(rec);
+    s_localRec = prevRec;
+    s_localWeather = prevWeather;
+    return r;
+}
+
+static unsigned s_evSilenced, s_evQuietHit, s_evBlink, s_evNoRadar;
+
+/* --- the notification ------------------------------------------------------
+   0x406F80(attacker, victim, amount), `ret 0xC`, has one caller, 0x489DA2, and
+   its one "under attack" is 0x47F850(victim, 2, 0) at 0x4071D8. The call at
+   0x489DA2 goes through hit_frame, which holds the record's answer for the
+   whole of 0x406F80's dynamic extent; saving and restoring it makes a nested
+   hit (0x4897B0's listeners, 0x48A060) hand the outer answer back by
+   construction. The flag is written and read on the GAME thread only: the
+   sim tick, and the dispatcher's 0x0B case in play. */
+typedef int (__stdcall *PFN_Hit)(char* attacker, char* victim, int amount);
+#define E_Hit    ((PFN_Hit)0x00406F80u)
+typedef int (__stdcall *PFN_Notify)(char* unit, int kind, int arg);
+#define E_Notify ((PFN_Notify)0x0047F850u)
+
+static int s_hitQuiet;
+static int s_alertOn;     /* both sites landed; set at attach, before the engine runs */
+
+static int __stdcall hit_frame(const unsigned char* rec, char* attacker, char* victim, int amount)
+{
+    int prev = s_hitQuiet, r;
+    s_hitQuiet = harmless_weather(rec);
+    r = E_Hit(attacker, victim, amount);
+    s_hitQuiet = prev;
+    return r;
+}
+
+int __stdcall tagpu_datakeys_alert(char* unit, int kind, int arg)
+{
+    if (kind == 2 && s_alertOn && s_hitQuiet) {
+        wk_event(&s_evSilenced, "nomapweaponalert silenced an under-attack notification");
+        return 0;
+    }
+    return E_Notify(unit, kind, arg);
+}
+
+/* --- the blink ---------------------------------------------------------------
+   The minimap rebuild 0x466DC0 (GAME thread, every sim tick) blinks a unit's
+   dot while +0xFA is non-zero (0x466EB9..0x466ECA). A unit's +0xFA is written
+   by the hit 0x467950 (0xF0; its one caller is 0x489D8E), the unit tick
+   (0x48ADF0, down by one to 0), the create (0x485C12, 0) and the saved game's
+   restore (0x4872CC) -- every write of a unit's +0xFA in the binary.
+
+   s_quiet[slot] is E, the part of +0xFA owed to harmless hits only: the dot
+   blinks while +0xFA > E. At each hit the loud remainder is fa - E, so a loud
+   hit sets E = 0 and a harmless one E = 0xF0 - (fa - E): a real hit followed
+   by weather keeps blinking exactly until its own 0xF0 ticks run out, because
+   +0xFA and its loud part fall together. E = 0 is stock, and E means nothing
+   while +0xFA is 0, so a slot's next unit needs no reset (the create zeroes
+   +0xFA). The table is emptied at the level's weapon load 0x42E310, which the
+   saved game's restore follows (it writes weapon fields, 0x487628), and a
+   saved game carries each unit's E beside its +0xFA (below). Indexed by the
+   unit's slot, bounded by the engine's own slot count (u16 main+0x14351) and
+   by the table. */
+#define DK_QUIET_SLOTS (10 * TAGPU_LIM_UNITS + 1)
+static unsigned char s_quiet[DK_QUIET_SLOTS];
+
+static void quiet_clear(void) { memset(s_quiet, 0, sizeof s_quiet); }
+
+static int unit_slot(const char* u)
+{
+    const char* ta = *(const char* const*)TA_MAIN_PP;
+    const char* first;
+    unsigned slots;
+    size_t d;
+    if (!ptr_ok(ta)) return -1;
+    first = *(const char* const*)(ta + OFF_UNIT_BEGIN);
+    slots = *(const unsigned short*)(ta + OFF_UNITSLOTS);
+    if (!ptr_ok(first) || u < first) return -1;
+    d = (size_t)(u - first);
+    if (d % UNIT_STRIDE) return -1;
+    d /= UNIT_STRIDE;
+    return d < slots && d < DK_QUIET_SLOTS ? (int)d : -1;
+}
+
+typedef char* (__stdcall *PFN_MarkHit)(char* unit);
+#define E_MarkHit ((PFN_MarkHit)0x00467950u)
+
+static char* __stdcall hit_mark(const unsigned char* rec, char* victim)
+{
+    int s = unit_slot(victim);
+    if (s >= 0) {
+        unsigned fa = *(const unsigned char*)(victim + 0xFA), e = s_quiet[s];
+        unsigned loud = fa > e ? fa - e : 0;
+        if (loud > HIT_FA) loud = HIT_FA;
+        if (harmless_weather(rec)) {
+            s_quiet[s] = (unsigned char)(HIT_FA - loud);
+            wk_event(&s_evQuietHit, "a harmless weather hit applied (nomapweaponalert)");
+        } else {
+            s_quiet[s] = 0;
+        }
+    }
+    return E_MarkHit(victim);
+}
+
+static int __stdcall blink_quiet(const char* u)
+{
+    int s = unit_slot(u);
+    unsigned fa;
+    if (s < 0) return 0;
+    fa = *(const unsigned char*)(u + 0xFA);
+    if (!fa || fa > s_quiet[s]) return 0;
+    wk_event(&s_evBlink, "a minimap dot held still after a harmless weather hit");
+    return 1;
+}
+
+/* --- the blink across a save ---------------------------------------------------
+   The unit saver 0x4876C0 (one caller, 0x432A01) builds each unit's 0xB8-byte
+   record at [esp+0x18] and writes it whole (0x487A9E); the restore 0x487080
+   reads a record back into its own [esp+0x18] (0x48711D) and writes +0xFA from
+   record +0xB1 (0x4872CC). Record +0xB2 is a WORD that 0x48797B stores from a
+   movzx of the byte +0x10E, and the restore reads only its low byte
+   (0x4872D2); the only other reader, 0x486FD0, reads the id word +0x21. So
+   record +0xB3 is 0 in every save stock writes and nothing reads it. E rides
+   there: the saver stores (E << 8) | +0x10E and the restore gives the unit's
+   slot the E beside its +0xFA, so a restored unit blinks exactly as it would
+   have. A save without E carries 0, which is stock. The restore runs on the
+   LOADER thread inside the level's load, after 0x42E310 emptied the table. */
+static unsigned __stdcall save_word(const char* u, unsigned v)
+{
+    int s = unit_slot(u);
+    return (s >= 0 ? (unsigned)s_quiet[s] << 8 : 0u) | (v & 0xFFu);
+}
+
+static void __stdcall restore_quiet(const char* u, unsigned e)
+{
+    int s = unit_slot(u);
+    if (s >= 0) s_quiet[s] = (unsigned char)e;
+}
+
+/* --- the projectile's dot ------------------------------------------------------
+   The loader's closing call 0x49E010(weapon) runs once a weapon's flags and
+   default damage are final (both exits, 0x42F314 and 0x42F32E, come after
+   the last writes of +0x111 and +0xD4), on the LOADER thread, after the key
+   was read at 0x42E468. A weapon with the key, meteor=1 and default damage 0
+   gets noradar there, exactly as `noradar=1` in its file would set it. */
+#define VA_AIM_CHOICE 0x0049E010u
+static const unsigned char AIM_CHOICE_STOLEN[10] = {
+    0x8B, 0x4C, 0x24, 0x04,                         /* mov ecx,[esp+4]      */
+    0x8B, 0x81, 0x11, 0x01, 0x00, 0x00 };           /* mov eax,[ecx+0x111]  */
+
+static int __cdecl weapon_closed(void* esp)
+{
+    char* w = ((char**)esp)[1];
+    unsigned f;
+    if (!(tagpu_datakeys_wkey(w) & TAGPU_WK_NOMAPALERT)) return 0;
+    f = (unsigned)wflags(w);
+    if (!(f & WF_METEOR) || *(const short*)(w + 0xD4) != 0) {
+        dlog("weapon keys: %.32s has nomapweaponalert but is not a meteor weapon with default "
+             "damage 0; its projectile keeps its dot", w);
+        return 0;
+    }
+    if (!(f & WF_NORADAR)) {
+        *(unsigned*)(w + 0x111) = f | WF_NORADAR;
+        wk_event(&s_evNoRadar, "a nomapweaponalert meteor weapon draws no minimap dot");
+    }
+    return 0;
+}
+
+/* --- install -------------------------------------------------------------------
+   Three call sites become calls of ours, byte-matched against the retail call
+   first; no branch in .text lands inside any of them (rel8/rel32 scan). The
+   0x489CE0 two go through an 8-byte stub that adds the record: `pop eax; push
+   edi; push eax; jmp fn`, so fn(rec, <the callee's own arguments>) returns
+   with the callee's `ret` plus 4. Neither 0x489D93 nor 0x489DA7 reads eax,
+   ecx or edx before writing it. The frame lands before the notification's
+   site, and s_alertOn is set only once both have, so a failed write leaves
+   stock's alert everywhere; the blink site lands only after the mark. */
+static int site_is(unsigned va, const unsigned char* b, int n)
+{
+    return memcmp((const void*)(size_t)va, b, (size_t)n) == 0;
+}
+
+static unsigned char* rec_stub(void* fn)
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char* p = s;
+    if (!s) return NULL;
+    *p++ = 0x58;                                    /* pop eax: the return  */
+    *p++ = 0x57;                                    /* push edi: the record */
+    *p++ = 0x50;                                    /* push eax             */
+    *p++ = 0xE9; tagpu_detour_rel(p, (unsigned)(size_t)fn);
+    return s;
+}
+
+/* `call target` written over the 5-byte call at va. The rel32 is taken
+   against va itself: tagpu_detour_rel would encode against this buffer. */
+static int call_to(unsigned va, const void* target)
+{
+    unsigned char c[5];
+    unsigned rel = (unsigned)(size_t)target - (va + 5);
+    c[0] = 0xE8;
+    memcpy(c + 1, &rel, 4);
+    return tagpu_detour_write(va, c, 5);
+}
+
+#define VA_HIT_MARK    0x00489D8Eu
+#define VA_HIT_CALL    0x00489DA2u
+#define VA_ALERT_CALL  0x004071D8u
+#define VA_BLINK       0x00466EB9u
+#define VA_BLINK_BACK  0x00466EBFu
+static const unsigned char HIT_MARK_WAS[5]   = { 0xE8, 0xBD, 0xDB, 0xFD, 0xFF };  /* call 0x467950 */
+static const unsigned char HIT_CALL_WAS[5]   = { 0xE8, 0xD9, 0xD1, 0xF7, 0xFF };  /* call 0x406F80 */
+static const unsigned char ALERT_CALL_WAS[5] = { 0xE8, 0x73, 0x86, 0x07, 0x00 };  /* call 0x47F850 */
+static const unsigned char BLINK_WAS[6]      = { 0x8A, 0x83, 0xFA, 0x00, 0x00, 0x00 };
+
+static int blink_install(void)
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char *p = s, *j1, *j2;
+    if (!s) return 0;
+    memcpy(p, BLINK_WAS, sizeof BLINK_WAS); p += sizeof BLINK_WAS; /* mov al,[ebx+0xFA] */
+    *p++ = 0x84; *p++ = 0xC0;                       /* test al,al           */
+    *p++ = 0x74; j1 = p++;                          /* jz back              */
+    *p++ = 0x51; *p++ = 0x52; *p++ = 0x50;          /* push ecx, edx, eax   */
+    *p++ = 0x53;                                    /* push ebx: the unit   */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)blink_quiet); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;                       /* test eax,eax         */
+    *p++ = 0x58; *p++ = 0x5A; *p++ = 0x59;          /* pop eax, edx, ecx    */
+    *p++ = 0x74; j2 = p++;                          /* jz back              */
+    *p++ = 0x32; *p++ = 0xC0;                       /* xor al,al: no blink  */
+    *j1 = (unsigned char)(p - (j1 + 1));
+    *j2 = (unsigned char)(p - (j2 + 1));
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_BLINK_BACK);
+    if (!tagpu_detour_land(VA_BLINK, s, (int)sizeof BLINK_WAS)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    return 1;
+}
+
+#define VA_SAVE_WORD       0x0048797Bu
+#define VA_SAVE_WORD_BACK  0x00487983u
+#define VA_REST_FA         0x004872CCu
+#define VA_REST_FA_BACK    0x004872D2u
+static const unsigned char SAVE_WORD_WAS[8] = { 0x66, 0x89, 0x84, 0x24, 0xCA, 0x00, 0x00, 0x00 };
+static const unsigned char REST_FA_WAS[6]   = { 0x88, 0x96, 0xFA, 0x00, 0x00, 0x00 };
+
+/* Both sites are whole instructions whose next instruction neither reads the
+   flags nor the registers the stubs clobber (eax is rewritten at 0x487983 and
+   0x4872D2). The restore lands first: a restore without the saver reads the
+   0 of every save, a saver without the restore writes a byte nothing reads. */
+static int save_install(void)
+{
+    unsigned char *r, *s, *p;
+    unsigned d = 0xCB + 12;                         /* record +0xB3, under three pushes */
+    if (!site_is(VA_SAVE_WORD, SAVE_WORD_WAS, 8) || !site_is(VA_REST_FA, REST_FA_WAS, 6)) return 0;
+    if (!(r = tagpu_detour_stub())) return 0;
+    if (!(s = tagpu_detour_stub())) { VirtualFree(r, 0, MEM_RELEASE); return 0; }
+    p = r;
+    memcpy(p, REST_FA_WAS, sizeof REST_FA_WAS); p += sizeof REST_FA_WAS; /* mov [esi+0xFA],dl */
+    *p++ = 0x50; *p++ = 0x51; *p++ = 0x52;          /* push eax, ecx, edx   */
+    *p++ = 0x0F; *p++ = 0xB6; *p++ = 0x84; *p++ = 0x24; memcpy(p, &d, 4); p += 4; /* movzx eax,byte [esp+d] */
+    *p++ = 0x50;                                    /* push eax: E as saved */
+    *p++ = 0x56;                                    /* push esi: the unit   */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)restore_quiet); p += 4;
+    *p++ = 0x5A; *p++ = 0x59; *p++ = 0x58;          /* pop edx, ecx, eax    */
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_REST_FA_BACK);
+    p = s;
+    *p++ = 0x51; *p++ = 0x52;                       /* push ecx, edx        */
+    *p++ = 0x50;                                    /* push eax: +0x10E     */
+    *p++ = 0x55;                                    /* push ebp: the unit   */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)save_word); p += 4;
+    *p++ = 0x5A; *p++ = 0x59;                       /* pop edx, ecx         */
+    memcpy(p, SAVE_WORD_WAS, sizeof SAVE_WORD_WAS); p += sizeof SAVE_WORD_WAS; /* mov [esp+0xCA],ax */
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_SAVE_WORD_BACK);
+    if (!tagpu_detour_land(VA_REST_FA, r, (int)sizeof REST_FA_WAS)) {
+        VirtualFree(r, 0, MEM_RELEASE);
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    if (!tagpu_detour_land(VA_SAVE_WORD, s, (int)sizeof SAVE_WORD_WAS)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    return 1;
+}
+
+#define VA_SEND_CALL   0x00499E37u
+#define VA_APPLY_CALL  0x00489C89u
+static const unsigned char SEND_CALL_WAS[5]  = { 0xE8, 0x74, 0xFD, 0xFE, 0xFF };  /* call 0x489BB0 */
+static const unsigned char APPLY_CALL_WAS[5] = { 0xE8, 0x52, 0x00, 0x00, 0x00 };  /* call 0x489CE0 */
+
+/* The send's frame lands first and the apply second: without the apply, the
+   send's answer is taken by nothing and every record is judged as received
+   (never silencing a loss); s_localOn is set only once both have. */
+static int local_install(void)
+{
+    unsigned char *s, *p;
+    if (!site_is(VA_SEND_CALL, SEND_CALL_WAS, 5) || !site_is(VA_APPLY_CALL, APPLY_CALL_WAS, 5)) return 0;
+    if (!(s = tagpu_detour_stub())) return 0;
+    p = s;
+    *p++ = 0x58;                                    /* pop eax: the return  */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x30; /* push [esp+0x30]: the projectile */
+    *p++ = 0x50;                                    /* push eax             */
+    *p++ = 0xE9; tagpu_detour_rel(p, (unsigned)(size_t)weather_send);
+    if (!call_to(VA_SEND_CALL, s)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    if (!call_to(VA_APPLY_CALL, (const void*)local_apply)) return 0;
+    s_localOn = 1;
+    return 1;
+}
+
+static void alert_install(void)
+{
+    unsigned char *frame, *mark;
+    if (local_install())
+        dlog("nomapweaponalert: a hit computed here is judged by its own weapon (0x499E37, 0x489C89)");
+    else
+        dlog("nomapweaponalert: a hit computed here is NOT judged by its weapon: the bytes at "
+             "0x499E37 or 0x489C89 are not the retail calls, or a write failed; every hit is "
+             "judged as a received one (harmless only when it did no damage)");
+    if (!site_is(VA_HIT_CALL, HIT_CALL_WAS, 5) || !site_is(VA_ALERT_CALL, ALERT_CALL_WAS, 5)) {
+        dlog("nomapweaponalert: the under-attack silence NOT installed: the bytes at 0x489DA2 or "
+             "0x4071D8 are not the retail calls; harmless weather alerts as stock");
+    } else if (!(frame = rec_stub((void*)hit_frame)) || !call_to(VA_HIT_CALL, frame) ||
+               !call_to(VA_ALERT_CALL, (const void*)tagpu_datakeys_alert)) {
+        dlog("nomapweaponalert: the under-attack silence NOT installed: a write failed; "
+             "harmless weather alerts as stock");
+    } else {
+        s_alertOn = 1;
+        dlog("nomapweaponalert: the under-attack silence installed at 0x489DA2 and 0x4071D8");
+    }
+    if (!site_is(VA_HIT_MARK, HIT_MARK_WAS, 5) || !site_is(VA_BLINK, BLINK_WAS, 6)) {
+        dlog("nomapweaponalert: the blink NOT held: the bytes at 0x489D8E or 0x466EB9 are not "
+             "the retail ones; a harmless hit blinks the dot as stock");
+    } else if (!(mark = rec_stub((void*)hit_mark)) || !call_to(VA_HIT_MARK, mark) ||
+               !blink_install()) {
+        dlog("nomapweaponalert: the blink NOT held: a write failed; a harmless hit blinks the dot "
+             "as stock");
+    } else {
+        dlog("nomapweaponalert: the blink held at 0x489D8E and 0x466EB9");
+        if (save_install())
+            dlog("nomapweaponalert: a saved game carries the blink's hold (0x48797B, 0x4872CC)");
+        else
+            dlog("nomapweaponalert: a saved game does NOT carry the blink's hold: the bytes at "
+                 "0x48797B or 0x4872CC are not the retail ones, or a write failed; a harmless "
+                 "hit's blink that spans a save and its restore blinks for its remainder");
+    }
+    if (observe(VA_AIM_CHOICE, AIM_CHOICE_STOLEN, (int)sizeof AIM_CHOICE_STOLEN, weapon_closed))
+        dlog("nomapweaponalert: the projectile's dot hidden through noradar at 0x49E010");
+    else
+        dlog("nomapweaponalert: the projectile's dot NOT hidden: the bytes at 0x49E010 are not "
+             "the retail ones; a harmless meteor keeps its minimap dot");
 }
