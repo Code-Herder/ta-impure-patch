@@ -1247,10 +1247,11 @@ static int vk_swapchain(int w, int h)
     /* `vsync` (the store's `vsync` key) PICKS FIFO OR IMMEDIATE. FIFO is the
        only mode the specification guarantees and is what vsync means;
        IMMEDIATE is the unlocked one, and a surface without it gets FIFO anyway.
-       NEITHER TEST MACHINE OFFERS MAILBOX OR FIFO_RELAXED: the reference
-       setup's 4070 under wine (roadmap, Phase G) and the Windows AMD card
-       (MEASURED 2026-09-25, vulkaninfo: IMMEDIATE and FIFO only), so nothing
-       here may be designed around triple buffering. FIFO IS NOT A PACE THE
+       NEITHER TEST MACHINE OFFERS MAILBOX: the reference setup's 4070 under
+       wine offers FIFO, FIFO_RELAXED, IMMEDIATE and FIFO_LATEST_READY
+       (roadmap, Phase G), the Windows AMD card IMMEDIATE and FIFO only
+       (MEASURED 2026-09-25, vulkaninfo), so nothing here may be designed
+       around triple buffering. FIFO IS NOT A PACE THE
        LIMITER CAN RELY ON: the AMD card's FIFO swapchain presented 300 fps at
        59 Hz (MEASURED 2026-09-25), so with vsync on `fps_limiter.c` keeps a
        backstop just above the refresh rate. */

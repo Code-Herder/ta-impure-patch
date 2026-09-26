@@ -170,7 +170,7 @@ from this run; `tacli ab` removes the old `.ppm` before it arms, so take capture
 
 ```bash
 tools/tacli arm <i> terr.on                                          # ONE pass; the clear is black
-tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
+tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --vsync off
 sleep 10
 tools/tacli ab <i> terr -o /tmp/terr-B.ppm          # "terr: 2048x1536 -> /tmp/terr-B.ppm"
 ```
@@ -225,9 +225,9 @@ capture time out; it never returns a stale file.
 
 ## Frame-time A/Bs
 
-- **`--maxfps 0` on both sides**, or you measure the cap. `0` is unlimited (a negative value maps
-  to the display refresh). It is a sticky launch knob; confirm it with `grep maxfps
-  <gamedir>/impure.cfg` (`uncapped`) or `tacli log <i> -g '^cfg:'` (`maxfps=0`).
+- **`--vsync off` on both sides**, or you measure the refresh rate: vsync is the only pacing, and
+  on it holds both sides at it. It is a sticky launch knob; confirm it with `grep vsync
+  <gamedir>/impure.cfg` (`vsync=off`) or `tacli log <i> -g '^frame cap'` (`none (vsync off)`).
 - **Pause the sim first** (`tab`, then peek the tick twice): on a fighting scenario units die under
   the measurement and the second half draws a smaller scene.
 - **`ftime.on`** logs `ftime: vk p50 <ms> p99 <ms> (n=…)`, the GPU frame time on the Vulkan lane
@@ -270,7 +270,7 @@ heuristics, and it answers whether two builds restore the **same bytes** for the
 ```bash
 tools/tacli arm <i> classicpp.on 'native.on=all wrecks' terr.on feat.on fx.on gui.on \
                     restoredump.on 'restoreglsl.on=log'
-tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
+tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --vsync off
 # poll tagpu.log for the dump lines, then cmp each tagpu_restore_<tag>_vk.rgba across builds
 ```
 

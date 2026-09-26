@@ -1272,15 +1272,15 @@ file with them.
 1. A **lever file** that names the setting (`tagpu_classicpp.on/.off`, a menu key inside
    `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, `tagpu_mirror.on/.off`) wins. The row
    shows the lever's value **greyed**, so a click can never silently lose to a file. Display
-   mode, Monitor and Frame cap have no lever: nothing but the store places the window.
+   mode, Monitor and Vsync have no lever: nothing but the store places the window or paces it.
 2. **`impure.cfg`.**
 3. **The compiled default** — the Classic++ table below.
 
 `tagpu_defaults.off` (every tacli control launch) **skips tier 2 as well as the play defaults**,
 so a measurement arms what it names and nothing a player once clicked in that instance — **except
-the window's placement**: `display`, `maxfps` and `window` are read under every launch
-(`tagpu_settings_placement`, `tagpu_settings_window`), because nothing else can place a window,
-and tacli writes all three before every launch (`write_placement`). A placed window also gets
+the window's placement**: `display`, `vsync` and `window` are read under every launch
+(`tagpu_settings_placement`, `tagpu_settings_window`), because nothing else can place or pace a
+window, and tacli writes all three before every launch (`write_placement`). A placed window also gets
 `center_window` never (`tagpu_cfg.c`): at cnc-ddraw's `auto`, the switch from the 640×480 shell
 to a larger game re-centres the window and throws a tile off its position. What keeps a player's
 frame in view instead is below.
@@ -1303,7 +1303,6 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `shadowres` | 2048 | greyed until the soft map has a producer; stored anyway |
 | `ss` | 2 | **every resolution** — the owner's call; an Auto-by-resolution stage was proposed and declined |
 | `fps` | 0 | a diagnostic |
-| `maxfps` | `refresh` | the target monitor's refresh rate — cnc-ddraw's own `maxfps=-1`, asked of the monitor's adapter rather than the primary's, and bounded (below) |
 | `hudscale` | `off` | the pass unarmed, which the UI scale row plates as 100 % — the stock size it draws at. **Not Auto**, as the interview first had it: `tagpu_hud.on` is off the play defaults because whether HUD scale is on by default is the owner's call, and its composite does not magnify today (`tagpu_opt.c`). Found while building landing 1 |
 | `gamma` | 12 | 0..20; the stock default, and the factor the engine's own Restore sets |
 | `resolution` | `native` | or `WxH`; resolved against the selected monitor |
@@ -1313,6 +1312,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap; the row's first stage |
 | `edge` | `mirror` | `mirror` or `black`: what the view shows past the map ([GPU status](gpu-status.html) §2.90). Not a render key, so the preset never rewrites it; `tagpu_mirror.on`/`.off` are its levers |
 | `mixingbuffers` | 32 | 8, 16, 24 or 32: the sounds the engine plays at once. No row; not a Visuals value, but the same loader reads it |
+| `vsync` | 1 | on: the present waits for the vertical blank, and the frame limiter keeps a backstop just above the monitor's rate; off: nothing holds the frame rate. The only pacing there is (§2.10c) |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
 or `classic++`, the render keys (`assets`, `light`, `shadowres`) are **rewritten from the DLL's
@@ -1321,7 +1321,7 @@ its shadow quality moves up they get it without touching anything. Only `style=c
 three. **`shadows` is not one of them**: it also switches the engine's own shadows, so it is a
 switch a Classic player needs too — the preset leaves it alone, the row never greys with the lane,
 and changing it never makes Renderer read Custom. The window and system keys default to values that follow the
-hardware (`native`, `auto`, `refresh`), so writing them out freezes nothing; `gamma` and `fps`
+hardware (`native`, `auto`), so writing them out freezes nothing; `gamma` and `fps`
 are literal and are not expected to move. A key the file lacks takes the compiled default.
 
 **The first run migrates by renaming, and imports nothing.** When `impure.cfg` does not exist
@@ -1353,7 +1353,7 @@ reachable (`dd_SetDisplayMode`); a client straddling two monitors has every corn
 **tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance
 before a launch (and never mirrors `*.migrated` or the record from the template), so the one trigger ("no `impure.cfg`") never fires there and
 the levers a measurement armed survive. Empty means every key at its compiled default; tacli then
-writes the placement (`display=window`, the tile, `maxfps`) on every launch, so a menu change to
+writes the placement (`display=window`, the tile, `vsync`) on every launch, so a menu change to
 those three lasts one session in an instance. `tacli launch --shipped` is the exception that
 writes nothing a player lacks.
 
@@ -1488,23 +1488,8 @@ a named choice plates the device actually bound. The store writes `gpu=auto` or 
 no longer present binds the Auto pick and says so in the log (`the requested GPU "…" is not among
 the devices present - Auto instead`, then `Auto: <name> (type rank N of 4, M MB device-local)`).
 
-**Refresh.** `maxfps=refresh` is stored as `-1` but is **never put in force as a negative cap**:
-cnc-ddraw's own `maxfps=-1` means "pace by `DwmFlush`, else by the D3DKMT vblank wait", which on
-Windows 8+ is the compositor's rate whatever monitor the game is on, and under wine an adapter
-open that fails every frame. Instead the store's cap is a **request** (`fpsl_request_cap`,
-`fps_limiter.h`), and `fpsl_init` resolves Refresh into a plain positive cap — the target
-monitor's rate from `util_target_refresh` (`utils.c`): the menu's chosen adapter by name, else
-`util_default_monitor`'s (the window's monitor, or for fullscreen the windowed frame's, else the
-primary); bounded to 24..1000 Hz, else 60, because Windows answers
-0 or 1 for "the hardware default". So Refresh paces on the same tick path as 60 and 120.
-**The render thread is `fpsl_init`'s one owner**: the menu's Frame cap click, the Monitor row and
-`WM_DISPLAYCHANGE` only request it, and the render thread runs it at its next `fpsl_frame_start`
-— `fpsl_init` closes the D3DKMT adapter the render thread waits on and rewrites the tick fields it
-paces by, which a click on the window thread used to do under it. Logged each time: `frame cap:
-Refresh = N fps (<adapter> reports M Hz)`. **Not covered:** a window dragged to another monitor without the Monitor row keeps the old rate until
-the next display change or relaunch; and whether a secondary monitor reports its own rate under
-wine is unknown — the reference setup's secondaries report their current mode as 0x0, which the
-bound turns into 60.
+**The Frame cap is gone** (2026-09-25): its row, the `maxfps` key and the Refresh stage. Vsync
+is the only frame pacing (§2.10c). The landing records below describe the row as it was then.
 
 **Landing 3, verified 2026-09-23** on the same Xvfb, the reference setup's RTX 4070 and llvmpipe
 listed: Auto binds the RTX (`type rank 4 of 4, 12282 MB device-local`); a stored `Imaginary GPU
@@ -1543,6 +1528,73 @@ stale wineserver left by that run, so the display's own first failure is unexpla
 proven to be the display's. What was checked is the name's handling in the store: a stored
 `\\.\DISPLAY9` logs *not attached* and survives the next write, so the choice comes back when the
 monitor does.
+
+### 2.10c Vsync, the only frame pacing  [DECIDED 2026-09-25]
+
+The owner saw tearing on the Windows test setup at the Refresh frame cap, which was a timer and
+never synchronised anything (`tagpu_vk.c` presented IMMEDIATE, because nothing had set
+`g_config.vsync` since `ddraw.ini` went). They asked for a vsync option on both screens, chose
+**on by default**, and then **removed the Frame cap**: with vsync on, every one of its stages
+gives the refresh rate on a 60 Hz screen.
+
+**The key and the rows.** `vsync` in `impure.cfg`, 1 by default, written `1`/`0` (`on`/`off`
+also read). It is answered under `tagpu_defaults.off` too, like the placement, and the render
+thread reads it every frame (`tagpu_settings_vsync`), so a click is live on the next frame. It is
+a row of the in-game panel (nine rows, `PANEL_H` 296) and of the shell's Visuals screen, where
+it sits in the Window column in the slot between the two sliders (caption 276). Restore Default
+puts it on. It is not greyed under the GDI backend, whose frames it paces too (below).
+
+**What on and off do.**
+
+| | Vulkan | GDI |
+|---|---|---|
+| on | FIFO, and the limiter's backstop at the window's monitor rate + 1 | the backstop alone |
+| off | IMMEDIATE when the surface offers it, else FIFO; no cap | no cap |
+
+**Why a backstop, and why at hz + 1.** FIFO is not a pace the limiter can rely on: the AMD
+card's FIFO swapchain presented about 300 frames a second at 59 Hz (MEASURED 2026-09-25,
+uncapped, in play; IMMEDIATE ran 401). So with vsync on, `fpsl_init` keeps one timer, at the
+window's monitor rate + 1. The timer waits only when a frame ended sooner after the last one than
+its period. A period shorter than the blank's is therefore met only by jitter, and that wait ends
+before the next blank, so a present that does wait never meets the backstop. A timer at the rate
+itself does not have that property: Windows reports 59 Hz for a 59.94 Hz mode [INFERRED], and a
+59 fps timer against it skips a blank about once a second. `hz` is a whole number and the true
+rate lies within one of it however the driver rounds, so hz + 1 is always the faster clock. A
+monitor whose rate cannot be read (wine's secondaries report 0x0) gets no backstop, and the
+present paces alone. `fpsl_frame_start` asks for vsync and the window's monitor every frame, so a
+toggle or a window dragged to another monitor re-derives it on the frame that sees the change;
+`WM_DISPLAYCHANGE` does too. Logged: `frame cap: vsync on, a N fps backstop over the monitor's M
+Hz`, or `frame cap: none (vsync off)`.
+
+**A toggle keeps the restored art.** Any swapchain rebuild used to drop every pass and the
+restorer, so a vsync click restarted the Classic++ restore: 26.6 s of terrain job on the AMD card,
+with the unrestored art on screen meanwhile. A rebuild that keeps the image count, the extent
+and the format now keeps them ([GPU status](gpu-status.html) §2.96).
+
+**What went with the Frame cap.** The `maxfps` key: a `maxfps=` line in an existing store is kept
+as an unknown key and ignored, as any key another build wrote is. Also the Refresh resolution
+(`util_target_refresh`, `fpsl_request_cap`), `g_config.maxfps` and `g_config.vsync` with
+upstream's DwmFlush and vblank-wait branches, the menu's device-name lookup that only Refresh
+used, and tacli's `--maxfps`.
+
+**tacli.** `--vsync on|off` is sticky per instance. A local instance starts on, so parallel
+instances stay light GPU clients at the refresh rate; a frame-time A/B passes `--vsync off` on
+both sides. A remote instance's store is the player's copy, so `--vsync` is written there only
+when given.
+
+**Measured 2026-09-25.**
+
+- **Windows, AMD R9 200, 59 Hz, 1920 × 1080, in play**, on the build before the Frame cap went,
+  whose vsync-on path is this one. Vsync on: 59.9–60.0 fps, `frame cap: vsync on, a 60 fps
+  backstop over the monitor's 59 Hz`, swapchain FIFO. The in-game toggle to off rebuilt the
+  swapchain in place (`2 images 1920x1080 - the passes kept`) as IMMEDIATE, with no second
+  restore job.
+- **Xvfb, 1024 × 768, Classic++.** Both screens toggle live and write the store. A window grab is
+  byte-identical before and after an off and an on toggle, and one restore job ran in all.
+
+**Open.** Whether FIFO takes the tearing away on the AMD card is for the owner's eyes: its FIFO
+does not wait for the blank, so what stops a tear there, if anything does, is the compositor. The
+latency is about one frame more with vsync on; the game cursor is drawn into the frame.
 
 ### 2.11 Two small calls made by the implementer
 - **The unit vertex stream** grows from 11 to 15 floats: the map-space normal and the

@@ -5,6 +5,10 @@ release ships none. `impure.cfg` is the one settings file. This page is the reco
 did, what replaced each part of it, the owner's decisions, what was run to verify it, and the
 gaps left open.
 
+**Since 2026-09-25 there is no frame cap**: the Frame cap row, the `maxfps` key and tacli's
+`--maxfps` are gone, and the store's `vsync` takes their place in the placement tacli writes
+([renderers](renderers.html) §2.10c). This record describes them as they were.
+
 **Why.** A key in `ddraw.ini` won over the Visuals menu and greyed its row, and tacli wrote those
 keys into every instance, so Display mode, Monitor and Frame cap could not be tested from a tacli
 launch. The file was inherited, not needed: the fork is cnc-ddraw, whose whole configuration is

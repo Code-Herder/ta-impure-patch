@@ -2659,7 +2659,7 @@ time, the rest re-read every 30 frames, so nothing new is expected).
 cnc-ddraw's own default — the value it took when the key was absent — and `tagpu_cfg_defaults()`
 then sets the ones TA needs, attaches nothing else, and logs one line:
 `cfg: max_resolutions 90, toggle_borderless, lock_surfaces, singlecpu off, maintas;
-display=… maxfps=… window=…; renderer Vulkan|GDI (tagpu_gdi.on)`. Upstream's template writer,
+display=… vsync=… window=…; renderer Vulkan|GDI (tagpu_gdi.on)`. Upstream's template writer,
 `ini.c`, the per-game section lookup and `cfg_save`'s ini half are deleted, and so are the eleven
 per-game hacks (`vhack`, `tshack`, `infantryhack`, …), none of which TA ever turned on
 ([removing ddraw.ini](ddraw-ini-removal.html)).
@@ -2672,13 +2672,13 @@ per-game hacks (`vhack`, `tshack`, `infantryhack`, …), none of which TA ever t
 | `lock_surfaces` | true | `dds_Lock`/`dds_Unlock` hold the surface's critical section, and the GDI backend the primary's while it blits, only when set |
 | `singlecpu` | false | cnc-ddraw's default pins the whole process, the render thread included, to one CPU |
 | `maintas` | true | the aspect-preserving fit |
-| `maxfps`, `window_rect` | the store's `maxfps` and `window` | read under `tagpu_defaults.off` too (`tagpu_settings_placement`): nothing else can place the window |
+| `window_rect` | the store's `window` | read under `tagpu_defaults.off` too (`tagpu_settings_window`): nothing else can place the window. The store's `vsync` is read the same way, every frame, and is no `g_config` field ([renderers](renderers.html) §2.10c) |
 | `center_window` | never, when the store placed the window | at cnc-ddraw's `auto`, the shell-to-game mode switch re-centres the window off its tile; a placed client with a corner on no monitor is moved, decoration included, into the work area of the monitor it overlaps most instead (`dd_SetDisplayMode`) |
 | `gdi` | `tagpu_gdi.on` present | forces the GDI backend; otherwise Vulkan |
 | `inject_resolution` | the desktop mode | the one list entry exempt from the `CDS_TEST` filter, so the monitor's own mode is *guaranteed* into the picker ([resolution](resolution.html) §6.5); filled lazily in `EnumDisplayModes`, because `cfg_load` runs under the loader lock and must not touch the display |
 
 **tacli writes the placement into `impure.cfg`** on every launch (`write_placement`:
-`display=window`, `window=<tile>,<client>`, `maxfps`), which is what keeps an instance on its
+`display=window`, `window=<tile>,<client>`, `vsync`), which is what keeps an instance on its
 tile, and `tacli launch --shipped` writes none of it, for the player's path.
 
 ### 2.9 The pose race, and the guard that closed it — HISTORY (removed by G16 step 8, 2026-09-09)
@@ -3071,12 +3071,12 @@ ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contr
 **The front-end screen carries fourteen rows in two columns.** `VISUALS.GUI` is re-emitted into
 the same `.ufo` with five of the stock gadgets moved (`GAMMA`, `VIDSLDR` and their three
 captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the stock `SHADING`,
-`ANTI` and `BSHADOWS` toggles removed, and twelve rows of our own:
+`ANTI` and `BSHADOWS` toggles removed, and thirteen rows of our own:
 
 | column | rows |
 |---|---|
-| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (Refresh / 60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`; Refresh is the target monitor's rate, resolved into a positive cap on the render thread — renderers §2.10b), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
-| **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter |
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Vsync (on / off: the present mode and the frame limiter's one cap; a row of the in-game panel's table shown in this column — renderers §2.10c), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
+| **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter, Map edge |
 
 Four things this rests on, each measured rather than assumed:
 
@@ -18867,3 +18867,37 @@ either.
   after is theirs to look at.
 - Other AMD cards and driver versions.
 - The validation layer on either machine.
+
+### 2.96 Vsync, and a swapchain rebuild that keeps the passes (`tagpu_vk.c` `vk_resize`, `fps_limiter.c`)
+
+The option and the frame limiter's one cap are [renderers](renderers.html) §2.10c. The lane's
+side:
+
+**The present mode follows the store every frame.** `render_vk.c` hands `tagpu_settings_vsync()`
+to `tagpu_vk_frame`, which marks the swapchain for a rebuild when the answer changes. On:
+FIFO. Off: IMMEDIATE when the surface offers it, else FIFO. The present modes on offer
+[MEASURED]: the reference setup's 4070 under wine FIFO, FIFO_RELAXED, IMMEDIATE and
+FIFO_LATEST_READY (roadmap, Phase G); the Windows AMD card IMMEDIATE and FIFO only (2026-09-25,
+the machine's own `vulkaninfo` 1.1.106, driver 2.0.91, API 1.1.108, through a 256×256 test
+window from a non-interactive session). Neither offers MAILBOX.
+
+**The AMD card's FIFO does not wait for the blank [MEASURED 2026-09-25].** At 59 Hz, uncapped, in
+play at 1920 × 1080 with two swapchain images: FIFO presented about 300 frames a second and
+IMMEDIATE about 400 (`ftime.on`'s 300-frame reports, timed on the machine itself). That is why
+the limiter keeps a backstop above the refresh rate with vsync on; with it, 59.9–60.0 fps.
+
+**A rebuild that changes nothing a pass holds keeps the passes.** `vk_resize` used to drop every
+pass and the restorer on any rebuild, because a new swapchain may come back with a different
+image count and the passes size their per-slot arrays by `s_pass.slots`. A pass holds no
+swapchain object: it is handed a slot and the extent at record time, and builds against
+`s_pass.rp`, whose format is the swapchain's. So when the image count, the extent and the format
+all come back as they were, `vk_resize` keeps the passes (`passes_down` otherwise). The device
+wait before the rebuild means none of it is in use. That covers the vsync toggle, where only the
+present mode moves, and an out-of-date surface at the same size. A resize still drops them.
+
+Measured: on the AMD card the toggle logs `swapchain rebuilt in place (2 images 1920x1080) - the
+passes kept`, and no second `restorevk: terr: job started` follows. Before, the toggle
+restarted the Classic++ restore, 26.6 s of terrain job at 50–52 fps with the unrestored art on
+screen. On Xvfb (1024 × 768, Classic++, three images), a window grab is byte-identical before
+and after an off and an on toggle.
+

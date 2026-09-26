@@ -252,12 +252,12 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
 
 - **A lever holds its row, greyed.** `tagpu_classicpp.on/.off`, a menu key inside
   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on` and `tagpu_hud.on/.off` each beat the
-  store for what they name; `tacli arm` drives them for A/Bs. **Display mode, Monitor and Frame
-  cap have no lever and are live under `--defaults`**: tacli writes the instance's placement into
+  store for what they name; `tacli arm` drives them for A/Bs. **Display mode, Monitor and Vsync
+  have no lever and are live under `--defaults`**: tacli writes the instance's placement into
   the store on every launch, so a click there lasts one session and the next launch puts the
   instance back on its tile.
 - **Under `tagpu_defaults.off` (every launch without `--defaults`) the store has no say and every
-  row but Shadows is greyed** — except that the placement (`display`, `window`, `maxfps`) is read
+  row but Shadows is greyed** — except that the placement (`display`, `window`, `vsync`) is read
   under every launch. Shadows is then the engine's own shadow switch. Test the menu with
   `--defaults`. The engine's Gamma, size and option word come from the one shared `user.reg`, which
   a `--defaults` instance saves its store's values into at every game entry — peek them before
@@ -288,9 +288,12 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   (`vk: the requested GPU "…" is a software rasteriser`), so on the reference setup the row is
   Auto alone and greyed. With llvmpipe bound the game dies on opening Options → Visuals and at a
   3840x2160 start-up; that only happens now on a machine with no GPU.
-- **The Frame cap row's first stage is Refresh** (`maxfps=refresh`, the target monitor's rate,
-  logged as `frame cap: Refresh = N fps`); a tacli instance's `--maxfps` is written over it at
-  every launch.
+- **Vsync is a row of both screens** — the in-game panel, and the shell's Window column between
+  the two sliders. On logs `frame cap: vsync on, a N fps backstop over the monitor's M Hz` (the
+  monitor's rate + 1; a present that waits for the blank never meets it), off `frame cap: none
+  (vsync off)`; a click rebuilds the swapchain on the next frame, in place (`swapchain rebuilt in
+  place … - the passes kept`), so the restored art stays. A tacli instance's `--vsync` is written
+  over it at every launch.
 - **At most eight devices are listed** (our cap; a stage button's art index is clamped by the
   engine, so a row past four stages draws the four-bar plate and still works). Names are truncated
   to 31 characters at a word boundary.
@@ -336,7 +339,7 @@ tools/tacli rm w1                                 # deletes the test folder and 
   refuses a DLL that does not fail closed. `--arg` refuses any switch whose character after the
   dash is `r` or `d` (the engine reads `-register` as `-r`). A launch succeeds only when the
   run's log says the store is served; a refused run fails it with the DLL's own line.
-  `--res`, `--maxfps`,
+  `--res`, `--vsync` (written only when given: the store is the player's copy),
   `--map`, `--player`, `--los`, `--mapping`, `--unit-limit`, `--defaults` and `--sound` work as
   locally. `--window`, `--display`, `--slot`, `--dplay`, `--intro` and `--shipped` are refused.
 - **A test folder's registry is a file; TA's settings key on that machine is never written.**
