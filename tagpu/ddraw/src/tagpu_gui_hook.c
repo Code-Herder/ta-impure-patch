@@ -463,9 +463,11 @@ static SURF* surf_of_ctx(const int* ctx)
    the square the line crosses, and replaying it would paint the whole square.
    Keeping them as two kinds means `GUI kinds:` counts them apart, so the ratio
    is read rather than guessed. */
+/* `OP_MOVIE` is not a leaf's: `before_flip` records it for the movie's own
+   flip, whose box holds a Smacker frame -- see `movie_frame`. */
 enum { OP_GAF = 1, OP_GAFA, OP_GAFB, OP_GAFD, OP_SCALE, OP_TEXT, OP_LINE, OP_BAR, OP_RECT, OP_FRAME, OP_FILL, OP_COPY,
-       OP_FLIP, OP_FOCUS, OP_DIAG, OP_NKIND };
-static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag" };
+       OP_FLIP, OP_FOCUS, OP_DIAG, OP_MOVIE, OP_NKIND };
+static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag", "movie" };
 typedef struct OP {
     unsigned base; short l, t, r, b; unsigned char kind;
     /* what the publisher needs beyond the box (gui-renderer.md 3.6) */
@@ -1263,6 +1265,14 @@ static unsigned char* s_arena;
 volatile int g_gui_draw = 0;          /* 0 until the consumer arms: see above */
 static int   s_pubOverflow = 0;
 static unsigned s_pubOps = 0, s_pubBytes = 0;
+/* THE MOVIE FRAMES THAT MAY STILL BE QUEUED, for `movie_frame`'s rule: the
+   queue index just past each of the last two PK_MOVIEs of the movie playing,
+   newest first, and how many of the two are set. Dropped when the movie ends. */
+static unsigned s_movieQ[2] = { 0, 0 };
+static int      s_movieQueued = 0;
+/* the palette the newest carried frame was decoded under, and the one the
+   frame of this op window was -- adopted only once its op is committed */
+static unsigned char s_moviePal[1024], s_moviePalRec[1024];
 
 /* sprite frames whose bytes were already published (open addressing) */
 #define SEEN_N 8192
@@ -2354,6 +2364,19 @@ static void publish(unsigned flipSurf)
             snap_free(s);
         if (op->world) { s_worldDropped++; continue; }
         if (!s->seeded && !pub_seed(s)) return;
+        /* THE MOVIE FRAME'S BYTES, READ NOW -- which is the movie's own flip,
+           because `before_flip` publishes a movie flip in the call that
+           recorded it and clears the window on every path that does not. */
+        if (op->kind == OP_MOVIE) {
+            o = pub_op(PK_MOVIE, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
+            pub_commit();
+            s_movieQ[1] = s_movieQ[0]; s_movieQ[0] = g_guiq.qHead;
+            if (s_movieQueued < 2) s_movieQueued++;
+            memcpy(s_moviePal, s_moviePalRec, sizeof s_moviePal);
+            continue;
+        }
         /* a plain keyed blit of a frame the atlas can hold is a sprite; a frame
            past the decoder's edge (TAGPU_GAF_DECMAX, the shell's 640-wide title
            art) is its box's bytes like everything else */
@@ -2900,6 +2923,119 @@ static unsigned s_builds, s_buildFlags;     /* GUI_StageUpdateDraw calls since t
    surface table have their detours. NOT s_installed, which a partial install
    leaves 0 while detours are live. */
 static int s_opsLive = 0;
+
+/* ---- THE MOVIE FRAME ------------------------------------------------------
+   A Smacker movie never passes a leaf: the frame routine `0x47C3A0` makes
+   `*(main+0x37E1B)` the back buffer (`0x4C69A0`, `0x47C413`), has
+   `SmackToBuffer` aim the decoder at that surface's pixels (`0x47C441`) and
+   `SmackDoFrame` write the frame into them (`0x47C44A`), then flips at
+   `0x47C450`. Without this the twin never holds a frame and the movie shows
+   whatever the twin held before it. [DISASSEMBLED, the pristine exe]
+
+   WHICH FLIP. `0x47C450` is the only call of the flip in `0x47C3A0`, so a
+   return address of `0x47C455` is a movie frame and nothing else.
+
+   THE BOX. `SmackToBuffer(smack, 0, (480 - H) >> 1, pitch, H, bits, 0)`: the
+   movie sits at x 0, centred in 480 rows by the engine's own unsigned
+   arithmetic (`0x47C434..0x47C43B`), `W` and `H` the Smack header's `+4` and
+   `+8` (the same two words `0x47C47A..0x47C490` compare its dirty rect with).
+
+   THE HEADER IS ALIVE, BY THE ENGINE'S ORDERING -- and it is the return
+   address that says so, not the field. The movie object is `*(main+0x38D7B)`,
+   stored at `0x426817` just before the loop's only call (`0x426829`); after it
+   returns the object is destroyed (`0x47BF20`, the only close of its Smack)
+   and freed (`0x426845`), and then either the field is cleared (`0x42685C`)
+   or, while the loop flag `main+0x39241` is set, the player goes back to
+   `0x4267E0` and stores the next object. The field therefore dangles between
+   that free and the next store, and no flip runs there. The frame routine's
+   only caller is `0x47C741` inside the loop, so a flip returning to
+   `0x47C455` is between the store and the free; the engine itself
+   dereferences the Smack again at that very instruction. The two words read
+   out of it are DATA and are bounded against the surface before they become
+   a box.
+
+   THE PALETTE. The frame routine copies a new one out of the Smack into
+   256 RGBX entries at `obj+0x10` (`0x47C3C8..0x47C3E9`) and hands those to
+   `SetEntries` (`0x47C404`) before it decodes; `obj+0x10` keeps the last one
+   until the next. The object is `operator new(0x5B8)` (`0x4267E0`), so the
+   1024 bytes read there are the engine's own allocation. */
+#define FLIP_RET_MOVIE 0x0047C455u
+#define OFF_MOVIE      0x38D7Bu       /* main+ : the playing movie object     */
+#define SMK_W          1              /* Smack header dwords: +4 Width         */
+#define SMK_H          2              /*                      +8 Height        */
+#define MOVIE_ROWS     480u           /* the engine centres the movie in these */
+#define MOVIE_PAL      4              /* object dwords: +0x10 the palette      */
+static unsigned s_movieFlips = 0;     /* flips of the movie now playing        */
+static unsigned s_movieRun = 0;       /* ...recorded as a frame                */
+static unsigned s_movieRefused = 0;   /* ...refused: no header, or it did not fit */
+static unsigned s_movieSkipped = 0;   /* ...skipped: the last one was still queued */
+static unsigned s_movieDeaf = 0;      /* ...not sent: the lane was not recording */
+
+/* 1 when the frame was recorded as an op of this window, which is what
+   obliges the flip to publish it at once */
+static int movie_frame(SURF* s)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const unsigned* obj;
+    const unsigned* smk;
+    const unsigned char* pal;
+    unsigned w, h, top;
+    int last, prev;
+    char b[200];
+    s_movieFlips++;
+    if (!ptr_ok(ta)) { s_movieRefused++; return 0; }
+    obj = *(const unsigned* const*)(ta + OFF_MOVIE);
+    if (!ptr_ok(obj)) { s_movieRefused++; return 0; }
+    smk = (const unsigned*)(size_t)obj[0];
+    if (!ptr_ok(smk)) { s_movieRefused++; return 0; }
+    w = smk[SMK_W]; h = smk[SMK_H];
+    top = (MOVIE_ROWS - h) >> 1;
+    if (w < 1 || h < 1 || w > (unsigned)s->w || h > (unsigned)s->h || top > (unsigned)s->h - h) {
+        if (!s_movieRefused++) {
+            _snprintf(b, sizeof b, "gui: movie REFUSED -- a %ux%u frame at row %u does not fit surface %08X %dx%d",
+                      w, h, top, s->base, s->w, s->h);
+            b[sizeof b - 1] = 0;
+            glog(b);
+        }
+        return 0;
+    }
+    /* NOTHING IS SENT TO A LANE THAT IS NOT RECORDING: its mirror drops a
+       PK_MOVIE's bytes, so composing one would be ~300 KB of memcpy for nobody.
+       This is `PK_ASSET`'s throttle (`mirArmed`, tagpu_gui_int.h). Read stale
+       it costs one frame either way, and every frame carries the whole picture. */
+    if (!g_guiq.mirArmed) { s_movieDeaf++; return 0; }
+    /* ONE FRAME IN FLIGHT, TWO ACROSS A PALETTE CHANGE. Every movie op carries
+       the WHOLE frame, so a frame skipped while the last one is still queued
+       costs that frame and nothing else -- the next one carried replaces the
+       box entire. Without it a movie decoding faster than the consumer drains
+       queues ~300 KB a flip until the arena overflows (MEASURED under Wine,
+       where it ran unpaced: 4 658 frames in seconds, 41 stalls and 42 reseeds).
+       A NEW PALETTE IS THE EXCEPTION. The lane resolves the twin through the
+       palette live at its present, which the engine set before this frame was
+       decoded, not through one that crossed with the bytes: skipping this frame
+       would show the last one under the new palette until the next crossed. So
+       a frame whose palette differs from the newest carried one goes with that
+       one still queued, and only a second queued frame stops it -- at most two
+       in flight. (The retail movies set a palette at frame 0, `5.zrb` at frame
+       1 as well.)
+       THE DISTANCES STAY FAR INSIDE 2^31. `qTail` is the consumer's and only
+       grows; each index is refreshed by every frame carried and dropped when
+       the movie ends, so it is never older than one movie's ops. A stale read
+       of `qTail` skips one more frame, never fewer. */
+    pal = (const unsigned char*)(obj + MOVIE_PAL);
+    last = s_movieQueued >= 1 && (int)(g_guiq.qTail - s_movieQ[0]) < 0;
+    prev = s_movieQueued >= 2 && (int)(g_guiq.qTail - s_movieQ[1]) < 0;
+    if (last && (prev || !memcmp(pal, s_moviePal, sizeof s_moviePal))) { s_movieSkipped++; return 0; }
+    memcpy(s_moviePalRec, pal, sizeof s_moviePalRec);
+    if (!s_movieRun++) {
+        _snprintf(b, sizeof b, "gui: movie %ux%u at (0,%u) on surface %08X %dx%d -- its frames cross as SmackDoFrame's decoded bytes",
+                  w, h, top, s->base, s->w, s->h);
+        b[sizeof b - 1] = 0;
+        glog(b);
+    }
+    op_add(OP_MOVIE, s, 0, (int)top, (int)w - 1, (int)(top + h) - 1);
+    return 1;
+}
 static volatile int s_inFlip = 0;      /* between the flip's entry and its return */
 static void* s_retStack[32];           /* hijacked returns, LIFO (alloc, flip)    */
 static int   s_retDepth = 0;
@@ -2910,6 +3046,8 @@ static int __cdecl before_flip(void* entry_esp)
     const int* src;
     SURF* s;
     int isGame = (ret == FLIP_RET_GAME);
+    int isMovie = (ret == FLIP_RET_MOVIE);
+    int movieRec = 0;                  /* this flip recorded a movie frame */
     unsigned changed = 0, unexpl = 0;
     char b[512];        /* holds the `gui area:` line: 288 of `ar` plus ~150 */
     static LARGE_INTEGER s_lastQpc, s_freq;
@@ -3034,6 +3172,17 @@ static int __cdecl before_flip(void* entry_esp)
 
     src = flip_source(entry_esp);
     s = surf_of_ctx(src);
+    /* the movie's frame is this flip's content, so it goes in ahead of the
+       flip marker below, like every other op of the frame */
+    if (isMovie && s && (s_census || g_gui_draw)) movieRec = movie_frame(s);
+    else if (!isMovie && s_movieFlips) {
+        _snprintf(b, sizeof b, "gui: movie ended after %u flip(s): %u frame(s) recorded, %u skipped in flight, "
+                  "%u not sent (the lane was not recording), %u refused",
+                  s_movieFlips, s_movieRun, s_movieSkipped, s_movieDeaf, s_movieRefused);
+        glog(b);
+        s_movieFlips = 0; s_movieRun = 0; s_movieSkipped = 0; s_movieDeaf = 0; s_movieRefused = 0;
+        s_movieQueued = 0;
+    }
     /* the marker: this flip's surface, and whether the frame that follows it is
        an in-play one and therefore owes the viewport its erase. Both terms are
        known on this thread and neither is a per-frame value the OTHER thread
@@ -3055,7 +3204,12 @@ static int __cdecl before_flip(void* entry_esp)
     if (!s_census && !g_gui_draw) { ops_window_reset(); return hijack; }
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&now);
-    if (s_lastQpc.QuadPart && (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
+    /* A FLIP THAT RECORDED A MOVIE FRAME PUBLISHES NOW, whatever the cadence:
+       the op's bytes are exact only at this flip (see `PK_MOVIE`). One that
+       recorded nothing keeps the cadence like any other, which matters when the
+       movie runs unpaced -- thousands of flips a second with no sound. */
+    if (!movieRec && s_lastQpc.QuadPart &&
+        (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
@@ -3170,7 +3324,7 @@ static int __cdecl before_flip(void* entry_esp)
         {
             /* THE SAME GUARD as the `gui area:` block below: `_snprintf`'s -1
                is tested rather than added to `n`, the buffer is sized past the
-               255-byte worst case, and it is always terminated. */
+               272-byte worst case, and it is always terminated. */
             char ops[288]; int k, n = 0, w; unsigned nullc = 0;
             for (k = 1; k < OP_NKIND; k++) {
                 nullc += s_nullCtx[k];
@@ -3211,8 +3365,8 @@ static int __cdecl before_flip(void* entry_esp)
                returns -1 on truncation rather than the length it wanted, so a
                bare `n += _snprintf(...)` makes `n` negative and
                `sizeof ar - (size_t)n` wrap to a size that writes BEFORE the
-               buffer. `ar` is sized past the worst case of fifteen kinds x
-               (five-char name + space + ten digits + separator) = 255, and is
+               buffer. `ar` is sized past the worst case of sixteen kinds x
+               (five-char name + space + ten digits + separator) = 272, and is
                terminated even when no kind had area and the loop never ran at
                all. `full` stops the TEXT while the totals keep accruing, so
                `sem`/`raw`/`pct` stay exact either way. */
@@ -3230,10 +3384,11 @@ static int __cdecl before_flip(void* entry_esp)
                    kind that is sometimes semantic cannot be summed as though it
                    always were. It stays in `raw`, which over-reports it -- the
                    direction an honest gap should err in. `OP_GAFB` stays out
-                   for the same reason: only its RLE arm is a sprite. */
+                   for the same reason: only its RLE arm is a sprite.
+                   `OP_MOVIE` crosses as `PK_MOVIE`, decoded bytes. */
                 if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
                     k == OP_RECT || k == OP_LINE || k == OP_COPY ||
-                    k == OP_FOCUS || k == OP_FILL) sem += s_kindArea[k];
+                    k == OP_FOCUS || k == OP_FILL || k == OP_MOVIE) sem += s_kindArea[k];
                 /* SPLIT, NOT PROMOTED. `OP_SCALE` is not a kind that can be
                    summed as though it were always semantic -- a rotated or
                    sheared stamp, a sub-frame stack, a window too large to key
@@ -3639,8 +3794,8 @@ static void repaint_service(void)
     s_repaintOps = (unsigned)(s_nops - n0);
     if (s_log) {
         /* SIZED FOR THE WORST CASE AND THE ACCUMULATOR CANNOT GO NEGATIVE.
-           `OP_NKIND - 1` kinds, each at most "scale " (6) plus ten digits plus a
-           separator, is 255 — hence 288. And mingw's `_snprintf` returns −1 on
+           `OP_NKIND - 1` kinds, sixteen, each at most "scale " (6) plus ten
+           digits plus a separator, is 272 — hence 288. And mingw's `_snprintf` returns −1 on
            truncation rather than the length it wanted, so `n += _snprintf(...)`
            would make `n` negative and `sizeof kinds - (size_t)n` wrap to a size
            that writes BEFORE the buffer. Checking the return keeps `n` a real
@@ -3689,7 +3844,12 @@ static void* __cdecl after_flip(unsigned int* regs)
        depth is unchanged across it, and a nested alloc (a 0x40 makes none)
        would push and pop above it */
     repaint_arm();
-    repaint_service();
+    /* NOT ON A MOVIE'S FLIP. The engine never redraws a GUI screen inside its
+       movie loop `0x47C6C0`, whose offscreen is the buffer `SmackDoFrame`
+       decodes into, so a forced redraw waits: the debt stays pending and is
+       paid at the first flip that is not a movie's. */
+    if (!(s_retDepth > 0 && (unsigned)(size_t)s_retStack[s_retDepth - 1] == FLIP_RET_MOVIE))
+        repaint_service();
     hud_invalidate();
     return s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
 }

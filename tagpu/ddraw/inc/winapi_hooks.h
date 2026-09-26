@@ -30,6 +30,7 @@ int WINAPI fake_MapWindowPoints(HWND hWndFrom, HWND hWndTo, LPPOINT lpPoints, UI
 BOOL WINAPI fake_ShowWindow(HWND hWnd, int nCmdShow);
 HWND WINAPI fake_GetTopWindow(HWND hWnd);
 HWND WINAPI fake_GetForegroundWindow(void);
+HWND WINAPI fake_GetFocus(void);
 BOOL WINAPI fake_SetForegroundWindow(HWND hWnd);
 HHOOK WINAPI fake_SetWindowsHookExA(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DWORD dwThreadId);
 BOOL WINAPI fake_PeekMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg);

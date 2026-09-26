@@ -9468,6 +9468,59 @@ field. The in-game `VISUALRT.GUI` is replaced by a generated one carrying `GAMMA
 changes the word in game, as the stock toggle does. Under `tagpu_defaults.off` none of this is installed: the
 Shadows row writes bits 2–4 directly, and `RESTORE`/`UNDO` reach the stock branches.
 
+## The movie player — mapped by us [DISASSEMBLED + MEASURED 2026-09-26]
+
+The movies are Smacker streams, `Data/1.ZRB` … `5.zrb`, 640×240 at 30 fps (`ffprobe` on the
+retail files: `1.zrb`, the intro, is 599 frames and opens with a fade from black; `2.zrb` is
+4 058). The decoder's own header reports **480** rows for them (`smk+8`, logged by the DLL), and
+the engine's frame shows every second row black: the 240 rows go to alternate lines of a
+640×480 box. That look is the engine's own picture, not a renderer artefact.
+
+| address | what | established |
+|---|---|---|
+| `0x430DEC` | the settings loader reads `PlayMovie` (`0x504398`) into `main+0x3923D`; an absent value stores 1 (`0x430E0E`) | DISASSEMBLED |
+| `0x426F06` | the shell's start tests `main+0x3923D`; non-zero plays `"1.zrb"` (`0x50329C`) at `0x426F13`, sets the frontend state `main+0x2BBE` to 1 (`0x426F36`), clears the field (`0x426F5F`) and calls `REGISTRY_SaveSettings 0x430F00`, which writes it back at `0x431723`. From state 1 the frontend plays the cinematic `2.zrb` next: with `PlayMovie` 1 a launch shows `1.zrb` and then `2.zrb`, once | DISASSEMBLED; the cinematic MEASURED |
+| `0x426F74` | with `PlayMovie` 0: unless the game was lobby-launched (`main+0x39245`, set by `-c`/`-n`, `cmdline-options.md`), `0x426F81` plays `"1.zrb"` alone and sets state 2 (`0x426FBD`). **So the intro plays at every plain launch that finds `1.zrb`**, and `PlayMovie` only adds the cinematic | DISASSEMBLED + MEASURED |
+| `0x4271FE..0x4272AA` | the player's other callers, `2.zrb`–`5.zrb`, reached through the frontend's jump table at `0x4285A0` (entry 0 is `0x4271FE`, `"2.zrb"`). The main menu's INTRO button plays `2.zrb` alone [MEASURED]; which screens reach `3.zrb`–`5.zrb`: not traced | DISASSEMBLED |
+| `0x426780(name)` | the player: makes the offscreen the back buffer and flips it once (`0x4267D4`, returning to `0x4267D9`) before anything is decoded, so a movie begins with an ordinary flip; builds the movie object, `operator new(0x5B8)` (`0x4267E0`) and ctor `0x47BDF0`; stores it at `main+0x38D7B` (`0x426817`) and runs the loop from `0x426829` (its only call). After it, the object is destroyed (`0x47BF20`, the only close of its Smack) and freed (`0x426845`); while the loop flag `main+0x39241` is set the player goes back to `0x4267E0` with no flip, so the field dangles between that free and the next store and no flip runs there; otherwise it clears the field (`0x42685C`) and clears and flips the offscreen once more (`0x426892`) | DISASSEMBLED |
+| `0x47C6C0` | the loop, `this` = the movie object. While `[obj+8]` is 0: `PeekMessageA` (`0x4FC2D4`) with `PM_REMOVE`; a `WM_CHAR` ends the movie (`[obj+8] = 1` and the loop flag `main+0x39241` cleared); `WM_SYSKEYDOWN` `VK_F4` ends it the same way and calls `PostQuitMessage(0)` (`0x47C762`). With no message, `SmackWait` (`0x47C731`) and, when it answers 0, the frame routine at `0x47C741` (its only call) | DISASSEMBLED |
+| `0x47C3A0(hwnd)` | the frame routine. Nothing happens unless `GetFocus()` (`0x47C3A4`) is the argument window and `[obj+8]` is 0. A new palette (`smk+0x68` set, 256 RGB at `smk+0x6C`) is copied into 256 RGBX entries at `obj+0x10` (`0x47C3C8..0x47C3E9`) and handed to the palette's `SetEntries` through `[obj+0x544]+0x10` (`0x47C404`), before the decode; `obj+0x10` keeps it until the next. `*(main+0x37E1B)` (the offscreen) becomes the back buffer (`0x4C69A0`, `0x47C413`); `SmackToBuffer(smk, 0, (480 − H) >> 1, pitch [surf+8], H, bits [surf+0xC], 0)` at `0x47C441` aims the decoder at it, with `H = smk+8` and the unsigned `0x1E0 − H` of `0x47C434..0x47C43B`; `SmackDoFrame(smk)` at `0x47C44A` writes the frame; the flip `0x4C63A0` at `0x47C450` shows it. That is the routine's only call of the flip, so **a flip returning to `0x47C455` is a movie frame and nothing else**. After it, `SmackToBufferRect(smk, 1)` (`0x47C45A`) and the dirty rect at `smk+0x380..` compared with `smk+4`, the width (`0x47C47A..0x47C490`) | DISASSEMBLED |
+
+**No drawing routine touches a movie frame.** The decoder writes the offscreen and the ordinary
+flip presents it, so an observer of the engine's leaves sees nothing but flips. The DLL records
+the frame at the flip itself (`gui-renderer.md` §25).
+
+**`smackw32.DLL` is imported by ordinal** (ordinal base 1 in its export table). The fifteen IAT
+slots from `0x4FC3E0`, with each export's `@n` checked against the pushes at its call:
+
+| slot | ord | export | | slot | ord | export |
+|---|---|---|---|---|---|---|
+| `0x4FC3E0` | 21 | `SmackNextFrame` | | `0x4FC3FC` | 15 | `SmackSimulate` |
+| `0x4FC3E4` | 19 | `SmackDoFrame` | | `0x4FC400` | 38 | `SmackSoundUseDirectSound` |
+| `0x4FC3E8` | 23 | `SmackToBuffer` | | `0x4FC404` | 14 | `SmackOpen` |
+| `0x4FC3EC` | 20 | `SmackSummary` | | `0x4FC408` | 17 | `SmackSoundOnOff` |
+| `0x4FC3F0` | 27 | `SmackGoto` | | `0x4FC40C` | 32 | `SmackWait` |
+| `0x4FC3F4` | 28 | `SmackToBufferRect` | | `0x4FC410` | 2 | `SmackBufferOpen` |
+| `0x4FC3F8` | 18 | `SmackClose` | | `0x4FC414` | 5 | `SmackBufferNewPalette` |
+| | | | | `0x4FC418` | 25 | `SmackColorRemap` |
+
+**`GetFocus` (IAT `0x4FC2E0`) has two callers, both gates**: the frame routine above
+(`0x47C3A4`), and the scroll poll's off-screen clamp (`0x41CF1C`, *The camera module*). The
+import thunk `0x49F7C4` (`jmp [0x4FC2E0]`) has no callers. An instance whose window does not
+have focus therefore sits in the movie loop without ever flipping, which is why the DLL's
+armed input shield answers `GetFocus` with the game window.
+
+**Palettes, from the files' frame-type tables** (bit 0 = the frame carries one): every retail
+movie sets its palette at frame 0 only, and `5.zrb` (640×304) at frames 0 and 1.
+
+**Pacing is `SmackWait`'s, and it follows the movie's audio clock** [MEASURED 2026-09-26, Wine,
+the reference setup]. Into a PulseAudio null sink, a clock that runs in real time, every flip
+interval of the intro was 30–37 ms (449 of 449 and 899 of 899 in two runs), the same with the
+DLL's movie code on and off. Into Wine's ALSA `null` device the intervals scatter, again with the
+movie code on or off: that device's clock is not real time. Under `NoDirectSound` nothing holds
+the loop back: the launch's `1.zrb` has flipped all 599 frames before the renderer is up, and
+`2.zrb`'s 4 058 go by in seconds.
+
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 
 Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's model object

@@ -103,7 +103,31 @@ enum {
                        to carry both the clip rect and that overlap rule;
                        four ops carry them by construction, in the engine's own
                        order, and `op_add`'s existing clip drops an edge that
-                       falls outside exactly as `0x4BEA20` does. */
+                       falls outside exactly as `0x4BEA20` does. */,
+    PK_MOVIE        /* A SMACKER FRAME: the box `l,t,r,b` of the movie's own
+                       surface, and its bytes follow in the arena. On the
+                       allowed side of the clean cut for `PK_ASSET`'s reason:
+                       the bytes are what `SmackDoFrame` DECODED, and nothing
+                       of the 1997 rasteriser's is in them.
+
+                       EXACT BY ORDERING, NOT BY TIMING. The frame routine
+                       `0x47C3A0` calls `SmackDoFrame` at `0x47C44A` and the
+                       flip at `0x47C450`, the next instruction, so at the
+                       flip's entry the box holds the decoded frame and nothing
+                       else; the engine's cursor is blitted inside the flip,
+                       after the observer has read it. The producer records the
+                       op at that entry and publishes it IN THE SAME CALL --
+                       the flip that recorded one bypasses the census cadence
+                       -- and every exit that does not publish clears the
+                       window, so the op never outlives the flip that recorded
+                       it and its bytes are never read at any other moment.
+                       The PALETTE does not cross with them: the lane resolves
+                       the box through the palette live at its present, which
+                       is why `movie_frame` never skips a frame that brings a
+                       new one.
+
+                       The drain mirrors it as `TAGPU_GUIOP_PIXELS` with its
+                       bytes, the shape the Vulkan lane already validates. */
 };
 
 typedef struct TAGPU_PUBOP {
