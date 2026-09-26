@@ -1752,8 +1752,8 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   template wine prefix carries `Gamma = 15`" is withdrawn** ([GL UI renderer](gui-renderer.html)
   §15, measured 2026-09-09): the template and all 58 instance prefixes are **one inode**, wine
   rewrites it in place at launch, it now reads **12**, and instances launched under it present
-  `paldiff=0` — no seam. The mechanism is unchanged; the *value* is shared and mutable, so read
-  `paldiff=` rather than assuming it.
+  `paldiff=0` — no seam. The mechanism is unchanged; the *value* is mutable (under tacli each
+  instance's own, in its registry store, §2.92), so read `paldiff=` rather than assuming it.
 - *Fresh starts:* the trigger reappearing, a queue or arena overflow, a sprite whose bytes never arrived, a copy
   from a source with no twin, and the consumer coming back from a stall (below) all raise
   `reseed`; the next publish sends a **reset** and seeds every surface again from the
@@ -2107,7 +2107,7 @@ The fixes for the stock engine's own defects run code of ours too, §2.6c.
 | `0x4266A7` | the `jne` that reaches TA's startup DirectX-version warning | `75` → `EB`, so the warning is always skipped |
 | `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, so it governs which sprite is chosen — but the index it returns is *also* the left button's state, which is what the row below is for. `tagpu_curs.off` opts out, read once at attach |
 | `0x499041` | the left click's own dispatch inside `0x498F70`: `cmp dl,0x11 / jl` on `main+0x2CBE`, the installed cursor index, deciding "issue the order" against "deselect everything" | 27 bytes for 27, decided on `main+0x37EFA` and the order byte instead: `cmp [eax+0x37EFA],1 / jne classic / cmp cl,1 / jne classic / jmp deselect / classic: cmp dl,0x11 / jl act / jmp done`. Armed only when the `0x43E50C` patch above took, and off with the same `tagpu_curs.off` |
-| `0x49F4B8`, `0x49F4EC` | **in a tacli test folder only** (§2.92): the command-line parser's jump-table entries for `R` and `r`, both `0x49F249`, the `-r` switch's DirectPlay registration through `dsetup.dll` | `0x49F249` → `0x49F461`, the loop tail every unknown letter takes (entry 26 at `0x49F4FC`, checked to hold it), so `-r` is ignored. Any mismatch ends the process: in test mode the switch must not reach the real registry |
+| `0x49F4B8`, `0x49F4EC` | **in a tacli test launch only** (§2.92): the command-line parser's jump-table entries for `R` and `r`, both `0x49F249`, the `-r` switch's DirectPlay registration through `dsetup.dll` | `0x49F249` → `0x49F461`, the loop tail every unknown letter takes (entry 26 at `0x49F4FC`, checked to hold it), so `-r` is ignored. Any mismatch ends the process: in test mode the switch must not reach the real registry |
 
 None writes engine state, so none appears in §2.5. The engine still draws the cursor
 itself — the composite only moves it (§1); what the patch changes is which sequence out of
@@ -2288,9 +2288,9 @@ into the sound object's `+0x2C` after every registry load (`0x42F9A0`), where th
 stored the registry's `MixingBuffers` through a setter that takes anything. 32 is the engine's
 own table: past it a sound plays untracked and a looping one escapes the stop-all (engine map,
 *The sound object*). TADR writes 128. The engine saves the value back to the registry with its
-other options, as it does the store's Gamma, into the one `user.reg` every instance shares, so a
-control launch (`tagpu_defaults.off`, or the stock DLL) reads 32 where stock's missing key gives
-8. MEASURED 2026-09-23, tier 1 with sound on a null
+other options, as it does the store's Gamma, into the registry: a tacli instance's own
+registry store (§2.92), so a later control launch of that instance (`tagpu_defaults.off`, or the
+stock DLL) reads 32 where stock's missing key gives 8. MEASURED 2026-09-23, tier 1 with sound on a null
 device: 32 in use for the whole fight, never more; the store at 8 held 8.
 
 **The composite scratch frame** is the unit bake's one shared frame a level (engine map, *The
@@ -18611,18 +18611,27 @@ the remap in both caster vertex stages and the regenerated `tagpu_posedraw.spv.h
 `tagpu_shadow.spv.h` (the body program shares `VS`, so its words moved too; its A/B above is the
 check that its picture did not); `stencilok` now 1 wherever `dfmt` is set.
 
-### 2.92 TotalA.exe's registry in a tacli test folder (`tagpu_regstore.c`, test mode only) — G21c
+### 2.92 TotalA.exe's registry in a tacli test launch (`tagpu_regstore.c`, test mode only) — G21c
 
 The plan is [hardware portability](hardware-portability.html) §3 G21c, the contract is
 `tagpu_regstore.h`, and the engine's side, every call site with the keys and values it reads
 and writes, is [exe reverse engineering](exe-reverse-engineering.html) §"The registry".
+
+**Every tacli instance runs in test mode, local ones included.** A remote instance's test folder
+holds `tacli-state\registry.txt` so the player's key is never written; a local instance's
+gamedir holds `tacli-state/registry.txt` because every local prefix's `user.reg` is one inode, so
+the store is what makes TA's key the instance's own ([tacli design](tacli-design.html) §"The
+registry: a store per instance"). Under wine `GetModuleFileNameW(NULL)` names the gamedir,
+although `TotalA.exe` there is a symlink into the Steam install: a local launch logs `entered by
+the -xtacli-test token and the tacli-state folder` [MEASURED 2026-09-26, wine 9.0].
 
 **Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, which `DllMain`
 attach runs right after the fork's `delay_imports_init` and before the return for cnc-ddraw's
 config tool (so an inherited `cnc_ddraw_config_init` cannot skip it; detach returns early
 exactly when attach did), looks for the token `-xtacli-test` on the command line
 and for a `tacli-state` folder beside the running exe (`GetModuleFileNameW(NULL)`, never the
-working directory). tacli passes the token on every remote launch; the engine skips it (`x` is
+working directory). tacli passes the token on every remote launch, and on every local launch
+whose DLL serves the store; the engine skips it (`x` is
 above the `'B'..'w'` of its switch table, `ja 0x49F461`, [command-line
 options](cmdline-options.html)). **Real mode needs both absent**: no token, and the folder not
 found. A folder that cannot be looked at (a share, an access rule), without the token, is real

@@ -1253,8 +1253,9 @@ decision record, and the rows' own mechanics stay where §2.10 puts them.
 
 **Why.** Before this, the Visual tab mixed three owners. Five stock controls (Screen Size, Gamma,
 Shading, Anti-aliasing, Engine shadows) were the engine's and persisted in the registry, which
-under tacli is one `user.reg` inode shared by every instance, so a Gamma set in one instance
-moved all of them. Display mode and Frame cap were the fork's, in `ddraw.ini`. Our own rows
+under tacli was then one `user.reg` inode shared by every instance, so a Gamma set in one
+instance moved all of them (each instance has its own registry store now: [tacli
+design](tacli-design.html) §"The registry: a store per instance"). Display mode and Frame cap were the fork's, in `ddraw.ini`. Our own rows
 were spread over five files with a default in each module. Nothing answered "what are the
 player's settings", and a fresh install started at 640×480.
 
@@ -1415,8 +1416,8 @@ What each value does:
   sounds it no longer tracks. The bound holds while the store's loader observer is in: under
   `tagpu_defaults.off`, or with the loader's bytes not as expected, the registry's value stands, as
   in stock, whatever wrote it. The engine saves the value back to the registry with its other
-  options, and under tacli that is the one `user.reg` of every instance, so a control launch reads
-  32 where stock's missing key gives 8.
+  options, and under tacli that is the instance's own registry store, so a later control launch of
+  that instance reads 32 where stock's missing key gives 8.
 - **`resolution=`** is resolved against the target monitor (`util_target_monitor`); a stored size
   larger than the monitor falls back to native — unless it is the injected desktop mode
   (`inject_resolution`), which the picker offers whatever the monitor — and the Monitor row

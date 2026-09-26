@@ -3726,13 +3726,15 @@ Country skirmish. So a per-draw counter is not a per-frame counter and not a per
 anything reported "per N draws" is a ratio, and turning it into a rate needs the draw rate
 measured in the same run.
 
-**`gamespeed` is shared machine state, exactly like `Gamma`.** It lives in `user.reg`, which
-the template prefix and every instance hold as **one inode** (`clone_prefix` is `cp -al`;
-measured 2026-09-09: 101 links). A running instance keeps its own copy and writes it back at
-exit, so a session that presses `+` leaves every later launch at that speed. It was found at
-**20** on 2026-09-09 and set back to 10; **read it before trusting any timing measurement**,
-and note that a walking-unit artifact measured at 20 is twice the size a player at normal
-speed would see.
+**`gamespeed` is registry state that outlives a launch, like `Gamma`.** The game saves it with
+its other options, so a session that presses `+` leaves every later launch that reads the same
+registry at that speed. Under tacli that registry is the instance's own store
+([tacli design](tacli-design.html) §"The registry: a store per instance"), made at 10; it used
+to be the one `user.reg` the template prefix and every instance hold as **one inode**
+(`clone_prefix` is `cp -al`; measured 2026-09-09: 101 links), where it was found at **20** on
+2026-09-09. **Read it before trusting any timing measurement** (`tacli registry <i>
+gamespeed`), and note that a walking-unit artifact measured at 20 is twice the size a player at
+normal speed would see.
 
 ## `main` is deliberately MISALIGNED, and it is redrawn at every launch — mapped by us
 
@@ -9416,8 +9418,11 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
   non-black entry differ and the twin still matches the engine's frame ([GL UI
   renderer](gui-renderer.html) §12 has the run).
-- **The Gamma this project runs at is one shared, mutable registry value — read it, never assume
-  it** [MEASURED 2026-09-09, [GL UI renderer](gui-renderer.html) §15, which corrects §14].
+- **The Gamma this project runs at is a mutable registry value — read it, never assume it**
+  [MEASURED 2026-09-09, [GL UI renderer](gui-renderer.html) §15, which corrects §14]. Under
+  tacli it is each instance's own, in its registry store (`tacli registry <i> Gamma`, seeded
+  from the template's `user.reg`); the measurements below were taken when every instance read
+  the shared file.
   `0x4301C0`'s default of 12 applies only when the registry value is absent, and it is not
   absent. But it is also **not a property of the template prefix**: `wineprefix/user.reg` and all
   58 `tagpu/instances/*/prefix/user.reg` are **one inode with 59 hard links** (`tacli`'s
@@ -10826,8 +10831,9 @@ looked like before the site's displacement was fixed.
 ## The registry — every call site, key and value — mapped by us [DISASSEMBLED + MEASURED 2026-09-25]
 
 What the game asks of the registry. It was mapped for the test-mode registry store,
-`tagpu_regstore.c`, which answers these calls from a file in a tacli test folder ([tacli
-design](tacli-design.html) §"The registry: a file in the test folder"). The disassembly is of
+`tagpu_regstore.c`, which answers these calls from a file beside `TotalA.exe` in every tacli
+test launch: a remote test folder's ([tacli design](tacli-design.html) §"The registry: a file in
+the test folder") and a local instance's gamedir (§"The registry: a store per instance"). The disassembly is of
 `pristine/TotalA.exe.pristine`. The values come from a logged run of the store under wine
 (startup, the menus, a skirmish started through `tacli ui`): the DLL logs every key and value
 the first time it is opened, read or written, with the answer.
@@ -10961,7 +10967,7 @@ loader reads it at `0x42FE4F` into the sound object through `0x4CF210`; `tagpu_m
 `eng_push_mixing` then writes `impure.cfg`'s value into the same field (`+0x2C`) after every
 load; and the saver reads that field back (`0x4CF220` at `0x4310A5`) and writes it at
 `0x4310AB`. So every launch whose saver runs writes `impure.cfg`'s mixing buffers into the
-registry: a player's into the player's key, a test folder's into its store (the logged run
+registry: a player's into the player's key, a tacli instance's into its store (the logged run
 wrote 32).
 
 ### Outside TotalA.exe's own code

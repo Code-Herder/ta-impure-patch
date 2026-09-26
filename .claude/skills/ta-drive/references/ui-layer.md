@@ -138,11 +138,11 @@ window grab shows the world after it. `tagpu.log`'s `pal: presented palette chan
 line carries the live factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'` gives the option, which
 after a `+gamma` no longer implies the factor.
 
-**`Gamma` is one shared, mutable registry value** — the `user.reg` inode every prefix shares,
-rewritten in place by wine at every launch — so it is whatever TA last stored. `paldiff=` in the
-heartbeat is whatever that makes it: 235 entries at Gamma 15 (factor 1.125), 0 at Gamma 12. **Read
-it, never assume it, and never "fix" the registry value** — that moves every measurement taken
-against the prefix. A world restored twin is restored from the engine's unscaled table at any
+**`Gamma` is a mutable value of the instance's registry** (`tacli registry <i> Gamma`), whatever
+that instance's TA last stored; a new instance takes the template's. `paldiff=` in the heartbeat
+is whatever that makes it: 235 entries at Gamma 15 (factor 1.125), 0 at Gamma 12. **Read it, never
+assume it**, and set it only as part of a measurement that says so — it moves every measurement
+taken on the instance. A world restored twin is restored from the engine's unscaled table at any
 Gamma; the UI's twin is restored through the presented palette, so an offline restore of a UI
 atlas must use that one, never the archives' `palette.pal`.
 

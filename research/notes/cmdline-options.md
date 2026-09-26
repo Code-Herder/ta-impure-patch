@@ -90,7 +90,7 @@ Three globals are initialised before the loop: `main+0x37F31 = 30`,
 | `-s` | `0x49F402` | `0x51E690` | `0x47EFC0()` → NoDirectSound (same global as the INI). **Official: disable all sound.** |
 | `-t <n>` | `0x49F409` | `main+0x37F31`, clamp 30..300 | **Battleroom join timeout, seconds** (default 30) — feeds "will be rejected in %d seconds" at `0x453859`. |
 | `-w` | `0x49F45C` | `0x51E694` | `0x47EFD0()` → UseWindowsSound (same global as the INI). Official. |
-| `-xtacli-test` | `0x49F461` | — | **Not a switch of the engine: tacli's token.** `x` is above `w`, so the parser skips it. Every remote launch passes it, and it is how the DLL knows a tacli test launch ([exe reverse engineering](exe-reverse-engineering.html) §"The registry"). |
+| `-xtacli-test` | `0x49F461` | — | **Not a switch of the engine: tacli's token.** `x` is above `w`, so the parser skips it. Every remote launch passes it, and every local launch whose DLL serves the instance's registry store; it is how the DLL knows a tacli test launch ([exe reverse engineering](exe-reverse-engineering.html) §"The registry"). |
 
 The debug-runtime switches visible in strings (`-dprinton`, `-dprintfile`,
 `-memfussy`, `-gonzo`, …) belong to the CRT/debug layer, parsed elsewhere; they
