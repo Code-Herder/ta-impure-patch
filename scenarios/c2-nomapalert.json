@@ -1,0 +1,71 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C2's nomapweaponalert. The map WK Hail rains WK_HAIL_Q, a HAILSTORM with default damage 0 (5 against ARMMSTOR) and nomapweaponalert=1, over a grid of the player's solar collectors and four metal storages; `--map \"WK Hail C\"` rains WK_HAIL_L, the same hail without the key, as its control. The camera sits on the empty west half, because the engine's under-attack notification skips a unit on screen. With the key: no \"Under Attack\" (its next time, dword 0x50871C, stays put), no blink of a hit unit's minimap dot, no minimap dot for a hailstone, and every hit applied as stock (a storage's HP falls, +0xFA is set). Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "WK Hail",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "solars",
+   "owner": 0,
+   "at": [
+    3400,
+    1090
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 8,
+    "spacing": 280,
+    "jitter": 0
+   },
+   "composition": [
+    {
+     "type": "ARMSOLAR",
+     "count": 28
+    },
+    {
+     "type": "ARMMSTOR",
+     "count": 4
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    300,
+    1900
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   700,
+   700
+  ]
+ }
+}

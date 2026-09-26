@@ -2035,6 +2035,11 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `UnitDef+0x18E` → the type's COB, and the template's node names `node+0x1C` | **the build ghost's mask** (§2.23). Read only, **on the GAME thread**, inside the in-play packet fill, once per type per level: the COB's header, its script and piece name tables, `Create()`'s entry and bytecode as `0x4B2450` left them relocated, each table and each name bounded by the block's own length (the size `0x4B6BA0` checksums it with, recorded by an observer); the template tree under `MODEL_PTRS[type]`, the type bounded by `UNITINFOCount`, with no length to bound its node pointers against (`exe-reverse-engineering.md`, *The loaded script*). Both are per-LEVEL: `0x42D2E0` loads them on the LOADER thread before the level's first in-play draw, the teardown frees them on the game thread (the COB at `0x42DC3C`, the template in `0x42DB90`), and a console `Reload` frees the type's COB and loads it anew on the game thread itself (`0x42D275` / `0x42D294`) |
 | the FBI section at `0x42BF97`, through `0x4C48C0` | **`PreviewPieces=`**, read by `tagpu_datakeys.c`'s observer inside the FBI loader `0x42BF40`, on the LOADER thread (the level's load) and on the game thread (the console `Reload`). Observers at the unit-data load's start `0x42D2E0` and the loader's entry (its `def` argument) keep each record to its own load. The records it writes are ours; nothing is written into the engine |
 | `0x4B6BA0`'s stack arguments `(buf, size)`, for the call that returns to `0x4B247C` | **each COB block's address and length**, recorded by `tagpu_datakeys.c`'s observer on the checksum's entry, on the thread that loads the script (the loader's, or the game thread's at a `Reload`); the bound on every read of that script. The other ten callers are ignored |
+| weapon `+0x111` bit 6, `noradar` | **WRITTEN at the level's load, on the LOADER thread, by `nomapweaponalert`** (§2.97): `tagpu_datakeys.c`'s observer on the loader's closing call `0x49E010` sets it for a weapon that carries the key, has `meteor=1` (bit 5) and default damage 0 (`+0xD4`, a WORD), exactly as `noradar=1` in its file would. Its one reader is the radar rebuild's projectile dot (`0x467206`). No stock weapon has the key, so none is written |
+| a weapon slot's target | **cleared through the engine's own `ClearTarget 0x48A0F0`, on the GAME thread, by the weapon keys' fire gate** (§2.97): a `nottoair` slot holding a flying unit drops it, as `0x48A1E0` drops a dead one. Nothing else of the slot is written |
+| the weapon keys' reads | weapon `+0x111` (the flags), `+0xDC` (range), `+0xD4` (default damage, a WORD); the target's `+0x110` (bits 0–1: 2 = flying), `+0x70` (y), `+0x6A`/`+0x72` (position), def `+0x170` (height), `+0x241` (bit 12 `canhover`); the order action's shooter `+0x10`/`+0x2C`/`+0x3B`; `main+0x1427F` (sea level); `0x485070` (the ground under the firer); the slot's target word and spot `(+0, +2)`, bounded by the unit array before the unit is read. **Read only, on the GAME thread**, in the decisions of §2.97 |
+| the hit record `0x489CE0` applies (`edi`: `+3` the attacker's id, `+5` the amount, `+8` the kind), the projectile's weapon at the send `0x499E37` (`[[esp+0x30]]`, as the engine reads it at `0x499E1E`) and its `+0xD4`, `[0x512328]` (the level's meteor weapon) and its `+0xD4`; unit `+0xFA` | **Read by `nomapweaponalert`, on the GAME thread** (the sim tick, and the dispatcher's `0x0B` case in play), to decide a harmless weather hit and to hold its victim's minimap dot still. Every weapon pointer is bounded as a record of the weapon array before its damage is read. Nothing of the engine's is written; the per-slot "harmless share of `+0xFA`" is ours (§2.97) |
+| a saved game's unit record `+0xB3` (the high byte of the WORD `+0xB2`, whose low byte is unit `+0x10E`) | **WRITTEN into the save file, on the GAME thread, by `nomapweaponalert`** (§2.97): the unit saver `0x4876C0` stores the unit's `E` there (`0x48797B`), and the restore `0x487080` reads it back (`0x4872CC`). Stock writes 0 there in every save and no reader in the binary reads it (the restore takes the WORD's low byte at `0x4872D2`; `0x486FD0` reads only the id word `+0x21`), so stock restores a save of ours exactly as its own (DISASSEMBLED, not run), and a stock save carries `E = 0`. Nonzero only after a harmless weather hit, so a game without the key saves stock's bytes |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (the frame packet's `level_gen`) | not an engine field — our own counter, bumped on the game thread at every level end and carried to the render thread inside the packet. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`, and the geometry bake's) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a). **[CORRECTED 2026-09-12, a landing review]** between then and landing 3 the counter read was `tagpu_reclaim_level_gen()`, which is bumped only in reclaim's teardown post hook — so under `tagpu_reclaim.off`, or any of reclaim's four other ways not to arm, it never moved and the caches were exactly as stale as before 2026-09-08. The publisher owns the counter now and advances it whichever provider publishes the level-end packet |
@@ -2399,6 +2404,7 @@ engine defects we patch".
 | `0x43A58D` | the saved-game order loader `0x43A420`'s fallback, which walks the order table one record past its end and keeps a count it did not find as the order's type | local, 4 bytes: `jbe` → `jb`, and the not-found `jmp` → `0x43A552`, "Ready" |
 | `0x439D41` | the stockpile bar `0x439D20`'s `idiv` by the slot weapon's `+0xE4`, with the slot index unbounded | local: a `jmp` to a 38-byte stub that bounds the index to 0..2, tests the weapon for NULL and `+0xE4` for 0, and takes the function's `return 0` (`0x439D6B`) on any of them |
 | `0x438EDE` | `DrawRangeCircle 0x438EA0`'s guard, which lets N = 0 segments (radius 1) through to `idiv` | local: the `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, so N = 0 takes the radius-0 epilogue |
+| **the weapon keys (TADR section C, landing C2, simulation):** `0x42E310` (the weapon load's entry), `0x49ABB0` (the can-engage test's entry), `0x43F1D4` (the order action's unit branch), `0x49B9EB` (the guidance's water test), `0x49E1FD` (AutoAim's fire gate); the store is filled at A′3's ID site `0x42E468` | not a defect: TADR's weapon keys `nottoair`, `nottounderwater`, `surfacefire`, `notoverwater` and `notoverland`, which the stock loader never reads | every row in the fail-closed table, both builds; each site runs the engine's own instructions for a weapon whose key byte is 0, so stock content runs stock's bytes. §2.97 has the whole landing |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -18971,3 +18977,75 @@ toggle restarted the Classic++ restore, 26.6 s of terrain job at 50–52 fps wit
 art on screen. On Xvfb (1024 × 768, Classic++, three images), a window grab is byte-identical before
 and after an off and an on toggle.
 
+### 2.97 The weapon keys and the weather's silence (`tagpu_datakeys.c`, `tagpu_patches.c`, `tagpu_weapons.c`) — TADR section C, landing C2, 2026-09-25
+
+**What it is.** Six weapon keys that TADR's content uses and the stock loader ignores, read into
+one byte a weapon and consulted where the engine decides. The plan and the measurements are
+[data keys, C2 as built](tadr-port/data-keys.html#c2-as-built); the disassembly is in
+[the evidence](tadr-port/data-keys-evidence.html) Parts 1 and 2 and in the
+[engine map](exe-reverse-engineering.html), *The weapon keys' sites*.
+
+**The store.** `s_wkey[TAGPU_LIM_WEAPONS]`, indexed by the weapon's ID as
+`tagpu_limits_weapon_index` validates it from a record's address, so a pointer that is not a whole
+record of this build's array reads 0. Written on the LOADER thread: emptied at the weapon load's
+entry `0x42E310`, filled per section at A′3's ID site `0x42E468` after the loader accepts the ID
+and name, so a skipped section writes nothing and a later one with the same ID replaces it. Read on
+the GAME thread in play. No retail weapon carries a key.
+
+**The targeting keys: five sites in the fail-closed table.** A site whose weapon has no key runs
+the engine's own instructions.
+
+| site | what it decides |
+|---|---|
+| `0x49ABB0`, entry, 7 bytes | The can-engage verdict, for every one of its 11 callers: acquisition, retaliation, the attack cursor (`0x43E59E`), the order handlers. `wk_check` calls stock's body (or, for a slot past 2 while the extra-weapons module is armed, that module's C verdict) and filters the answer by the slot's weapon. `surfacefire` first: a water weapon's refusal of a target that is not flying becomes stock's own range test. Then `nottoair` refuses a flying target and `nottounderwater` a target whose top is at or below the sea. One function, so no order between the keys can loop. This module is the entry's only owner. |
+| `0x43F1D4`, 6 bytes | The order action `0x43F0E0`'s unit branch, the right-click's order. Stock's decisions in stock's order, each key mirrored where stock tests its counterpart: `nottoair` beside `toairweapon`, `nottounderwater` in the submerged test (weapon 0 and slot 1), `surfacefire` at the hover's water refusal. Refuse `0x4401DC`, no action `0x43F26C`, or on `0x43F27A` with `edx` the target's def. |
+| `0x49B9EB`, 7 bytes | The self-propelled flight's water test: a `surfacefire` projectile above the sea steers (`0x49BA16`) instead of falling. |
+| `0x49E1FD`, 6 bytes | AutoAim's fire gate, after the slot's per-tick target read `0x49E1E1`. `notoverwater`/`notoverland` hold the slot for the tick by the ground under the firer (off the map, not gated), so a dead target is still dropped every tick. A `nottoair` slot holding a flying unit drops it through `ClearTarget 0x48A0F0`. |
+| `0x42E310`, 6 bytes | The store emptied before the load assigns it. |
+
+The extra-weapons module's slots past 2 take the same verdict (through `0x49ABB0`) and the same
+gate (its C loop calls `tagpu_datakeys_fire_gate`). It no longer hooks `0x49ABB0` itself (19
+hooks), and its retaliation asks the engine's entry.
+
+**`nomapweaponalert`: display only, skip-and-log.** A hit is harmless weather when its projectile
+has no attacker and its weapon carries the key with default damage 0. The hit record names no
+weapon, and a death explosion or a burning feature also makes attacker-less weapon hits, so the
+answer comes from where the weapon is known. A hit computed here is judged by its projectile's own
+weapon. A record received from a peer (`0x0B`, the dispatcher's case) is harmless only when it lost
+nothing: no attacker (`+3` = 0), a weapon kind (`+8` 1 or 2), amount 0 (`+5`), and the level's
+meteor weapon `[0x512328]` keyed with default damage 0. Every hit is applied exactly as stock
+applies it, and:
+
+| site | what it does |
+|---|---|
+| `0x499E37`, the call of `0x489BB0` | The damage function `0x499CD0`'s one send of a weapon hit (kinds 1 and 2), through a stub that adds the projectile (`[esp+0x30]` at the call): `weather_send` arms the projectile's weapon's answer (no attacker, the key, default damage 0) for the call and clears it on return. |
+| `0x489C89`, the call of `0x489CE0` | `0x489BB0`'s local apply of the record it built on its own stack: `local_apply` takes the armed answer and pins it to that record's address for the apply's extent, saving and restoring the outer one. A record at another address is a received one. The send's frame lands first; without the apply, every record is judged as received. |
+| `0x489DA2`, the call of `0x406F80` | Through an 8-byte stub that adds the record (`pop eax; push edi; push eax; jmp`), `hit_frame` holds the record's answer in `s_hitQuiet` for the whole of `0x406F80`'s extent. It saves and restores the previous answer, so a nested hit hands the outer one back. |
+| `0x4071D8`, the call of `0x47F850` | The one "Under Attack" (notification 2): `tagpu_datakeys_alert` returns without calling it inside a harmless hit. The extra-weapons module's retaliation calls the same gate. The frame lands before this site, and the gate silences only once both have. |
+| `0x489D8E`, the call of `0x467950` | `hit_mark` records, per unit slot, `E`: the part of `+0xFA` owed to harmless hits alone. A loud hit sets `E = 0`, a harmless one `E = 0xF0 − (fa − E)`. |
+| `0x466EB9`, 6 bytes | The radar rebuild's blink test: with `0 < +0xFA ≤ E` the dot is drawn as if not hit. A real hit followed by weather blinks exactly until its own 0xF0 ticks run out. `+0xFA`'s every writer is accounted for: the hit, the unit tick, the create and the saved game's restore. |
+| `0x48797B`, 8 bytes | The unit saver `0x4876C0`: the record's WORD `+0xB2` is stored with `E` in its high byte, where stock stores the zero-extended byte `+0x10E`, so `E` rides in `+0xB3`, a byte every save stock writes holds 0 and nothing reads. |
+| `0x4872CC`, 6 bytes | The restore `0x487080`, where it writes `+0xFA` from the record's `+0xB1`: the unit's slot gets back the `E` saved beside it, so a loaded game blinks exactly as the saved one did. A save stock wrote carries 0, which is stock. |
+| `0x49E010`, entry observer | The loader's closing call: a keyed `meteor=1` weapon with default damage 0 gets `noradar` (bit 6), so its projectiles draw no minimap dot. |
+
+**Threads.** The store and `noradar` are written on the LOADER thread inside the level's load.
+Everything else runs on the GAME thread: the decisions, the hit applier (the sim tick, and the
+dispatcher's `0x0B` case in play), the radar rebuild, the unit saver. `E` is emptied with the store
+at `0x42E310`, and a saved game's restore then writes it on the same LOADER thread, later in the same
+load, so program order puts the restored `E` after the clear. The render thread reads none of it.
+
+**Measured** (the full list is in the plan's *C2, as built*). Every key does what its
+documentation says against its control, on the raised and the stock-limits builds. The order
+action's three mirrors change the right-click's order and nothing else. The two `surfacefire`
+shapes of real content (a water-beam D-gun from land and from the seabed, a vertical-launch missile
+from a submerged sub) kill a target ashore that their controls refuse. Harmless hail is silent, its
+hit units' dots hold still and its stones draw no dot, with every hit applied (a per-type damage
+still hurts). The same hail without the key alerts, blinks and draws, and a real attack under keyed
+hail still alerts and blinks. On two peers, harmless hits that arrive as `0x0B` from the other peer
+are silenced when they did no damage; a received per-type hit alerts, while the same hit computed
+locally stays silent. A fusion's death explosion and a collector's among keyed hail, attacker-less
+like the stones, alert. A game saved with harmless and loud hits in flight loads with each
+unit's `E` as saved, and only the loud unit's dot blinks.
+
+**Not covered.** The attack cursor's in-range answer for a keyed weapon was not seen: the AI flies
+its aircraft away. It follows from the cursor calling `0x49ABB0` itself.

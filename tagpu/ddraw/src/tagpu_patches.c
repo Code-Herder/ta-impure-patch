@@ -14,6 +14,7 @@
 #include "tagpu_log.h"
 #include "tagpu_regstore.h"
 #include "tagpu_weapons.h"
+#include "tagpu_datakeys.h"
 #include "git.h"
 
 static void plog(const char* s)
@@ -2202,6 +2203,9 @@ static int __cdecl wpn_loader_id(unsigned int* regs)
     if (base[id * WPN_REC])
         tagpu_logf("enginefix: weapon ID %d: %.32s replaces %.32s", id, name, base + id * WPN_REC);
     regs[PR_EDX] = (unsigned int)(size_t)(base - WPN_MAIN);
+    /* the weapon keys (C2) of the section being loaded: ebx is its TDF
+       context here, from 0x42E447 until 0x42E4AF */
+    tagpu_datakeys_weapon_read(id, (void*)(size_t)regs[PR_EBX], name);
     return 1;
 }
 
@@ -5413,6 +5417,161 @@ static int fix_los_local(void)
     return fix_write(s, 27);
 }
 
+/* ===== THE WEAPON KEYS (C2) ===============================================================
+   Landing C2 of research/notes/tadr-port/data-keys.md; the disassembly is in
+   data-keys-evidence.md, Part 1, and exe-reverse-engineering.md. TADR's WeaponTags,
+   NotToAir, SurfaceFire and TerrainFireGate are the prior art; the design is ours. The keys'
+   store and every decision are in tagpu_datakeys.c; these are the five sites that ask it,
+   all in the fail-closed table, in both builds (CLASS: simulation -- a player whose build
+   lacked them would play stock rules for their own units). Each re-executes the engine's own
+   instructions when the weapon it is about carries no key, so stock content runs stock's
+   bytes.
+
+   - 0x42E310, the weapon load's entry (`sub esp,0x120`; its one caller 0x4918BB): the store
+     emptied before the load assigns it (the read is in wpn_loader_id, at 0x42E468).
+   - 0x49ABB0, the can-engage test's entry (`mov eax,[esp+0xC]; sub esp,0xC`), stdcall
+     (unit, target, idx), `ret 0xC`, 11 callers: wk_check takes its place with the same
+     signature, asks stock's body through a trampoline (or the extra-weapons module's for a
+     slot past 2 while it is armed) and filters the verdict by the slot's weapon. It is the
+     entry's one owner: the extra-weapons module does not hook it, and asks its own
+     verdicts through it.
+   - 0x43F1D4, the order action's unit branch (`mov eax,[edi+0x110]`; reached only from
+     0x43F17C, on its first byte): edi the target, ebp the shooter. The branch's decision is
+     tagpu_datakeys_order's when weapon 0 or slot 1 carries a key: refuse 0x4401DC, the
+     no-action exit 0x43F26C, or on at 0x43F27A with edx the target's def, which stock holds
+     there from 0x43F1F1 and reads at 0x43F2AA.
+   - 0x49B9EB, the guidance (`test eax,0x10000; je 0x49BA16`): esi the weapon; a
+     surfacefire weapon steers, 0x49BA16.
+   - 0x49E1FD, AutoAim's fire gate (`mov eax,[ebx+0x111]`, after the target read 0x49E1E1
+     and the fire-function test 0x49E1F2; reached from 0x49E1F7's fall-through only): ebx the
+     weapon, edi the unit, esi the slot's state byte, [esp+0x10] the slot index (0..2, the
+     loop's own counter). Held: on to the next slot 0x49E541; dropped: the aiming bit
+     cleared first, as stock clears it at 0x49E1EA for a lost target. */
+static int (__stdcall *s_wkCheckStock)(char* unit, char* target, unsigned int idx);
+
+static int __stdcall wk_check(char* u, char* t, unsigned int idx)
+{
+    unsigned int i = idx & 0xFF;
+    const char* w = NULL;
+    int v;
+    if (i >= 3 && tagpu_weapons_armed()) {
+        v = tagpu_weapons_check_slot(u, t, idx);
+        w = tagpu_weapons_slot_weapon(u, i);
+    } else {
+        v = s_wkCheckStock(u, t, idx);
+        if (i < 3) w = *(const char* const*)(u + 4 + i * 0x1C + 0x0C);
+    }
+    return tagpu_datakeys_engage(u, t, w, v);
+}
+
+static int __stdcall wk_gate(char* u, int idx, const char* w)
+{
+    return tagpu_datakeys_fire_gate(u, idx, w, u + 4 + idx * 0x1C);
+}
+
+static unsigned char* wk_jmp(unsigned char* p, unsigned char op, unsigned int target)
+{
+    *p++ = op; tagpu_detour_rel(p, target); return p + 4;
+}
+static unsigned char* wk_jcc(unsigned char* p, unsigned char cc, unsigned int target)
+{
+    *p++ = 0x0F; *p++ = cc; tagpu_detour_rel(p, target); return p + 4;
+}
+
+static int fix_weapon_keys(void)
+{
+    static const unsigned char load[6]  = { 0x81, 0xEC, 0x20, 0x01, 0x00, 0x00 };
+    static const unsigned char check[7] = { 0x8B, 0x44, 0x24, 0x0C, 0x83, 0xEC, 0x0C };
+    static const unsigned char order[6] = { 0x8B, 0x87, 0x10, 0x01, 0x00, 0x00 };
+    static const unsigned char steer[7] = { 0xA9, 0x00, 0x00, 0x01, 0x00, 0x74, 0x24 };
+    static const unsigned char gate[6]  = { 0x8B, 0x83, 0x11, 0x01, 0x00, 0x00 };
+    unsigned char* tr = fix_code(16);
+    unsigned char* cl = fix_code(24);
+    unsigned char* co = fix_code(80);
+    unsigned char* cs = fix_code(48);
+    unsigned char* cg = fix_code(64);
+    unsigned char* p;
+    unsigned char* j;
+    unsigned char now[8];
+    if (!tr || !cl || !co || !cs || !cg) { lim_no_stub(); return FIX_TABLE; }
+
+    /* 0x42E310: pushad; call clear; popad; sub esp,0x120; jmp 0x42E316 */
+    p = cl;
+    *p++ = 0x60;
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)tagpu_datakeys_weapons_clear);
+    *p++ = 0x61;
+    memcpy(p, load, 6); p += 6;
+    wk_jmp(p, 0xE9, 0x0042E316u);
+
+    /* 0x49ABB0: the stolen prologue, then on at 0x49ABB7 -- stock's body for wk_check */
+    memcpy(tr, check, 7);
+    wk_jmp(tr + 7, 0xE9, 0x0049ABB7u);
+    s_wkCheckStock = (int (__stdcall*)(char*, char*, unsigned int))(void*)tr;
+
+    /* 0x43F1D4: pushad; push edi; push ebp; call order; mov [esp+0x1C],eax; popad;
+       cmp eax,1; je 0x4401DC; cmp eax,3; je 0x43F26C; cmp eax,2; jne stock;
+       mov edx,[edi+0x92]; jmp 0x43F27A; stock: mov eax,[edi+0x110]; jmp 0x43F1DA */
+    p = co;
+    *p++ = 0x60; *p++ = 0x57; *p++ = 0x55;
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)tagpu_datakeys_order);
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
+    *p++ = 0x61;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01; p = wk_jcc(p, 0x84, 0x004401DCu);
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x03; p = wk_jcc(p, 0x84, 0x0043F26Cu);
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;
+    *p++ = 0x75; j = p++;
+    *p++ = 0x8B; *p++ = 0x97; *p++ = 0x92; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    p = wk_jmp(p, 0xE9, 0x0043F27Au);
+    *j = (unsigned char)(p - (j + 1));
+    memcpy(p, order, 6); p += 6;
+    wk_jmp(p, 0xE9, 0x0043F1DAu);
+
+    /* 0x49B9EB: push eax; push ecx; push edx; push esi; call steer; test eax,eax;
+       pop edx; pop ecx; pop eax; jnz 0x49BA16; test eax,0x10000; jz 0x49BA16;
+       jmp 0x49B9F2 (pop leaves the flags as the test set them) */
+    p = cs;
+    *p++ = 0x50; *p++ = 0x51; *p++ = 0x52; *p++ = 0x56;
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)tagpu_datakeys_steer);
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x5A; *p++ = 0x59; *p++ = 0x58;
+    p = wk_jcc(p, 0x85, 0x0049BA16u);
+    memcpy(p, steer, 5); p += 5;
+    p = wk_jcc(p, 0x84, 0x0049BA16u);
+    wk_jmp(p, 0xE9, 0x0049B9F2u);
+
+    /* 0x49E1FD: pushad; push ebx; push [esp+0x34] (the site's [esp+0x10]); push edi;
+       call wk_gate; mov [esp+0x1C],eax; popad; test eax,eax; jz go; cmp eax,2; jne hold;
+       and byte [esi],0xFE; hold: jmp 0x49E541; go: mov eax,[ebx+0x111]; jmp 0x49E203 */
+    p = cg;
+    *p++ = 0x60; *p++ = 0x53;
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x34;
+    *p++ = 0x57;
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)wk_gate);
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
+    *p++ = 0x61;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x74; j = p++;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;
+    *p++ = 0x75; *p++ = 0x03;
+    *p++ = 0x80; *p++ = 0x26; *p++ = 0xFE;
+    p = wk_jmp(p, 0xE9, 0x0049E541u);
+    *j = (unsigned char)(p - (j + 1));
+    memcpy(p, gate, 6); p += 6;
+    wk_jmp(p, 0xE9, 0x0049E203u);
+
+#define WK_SITE(va, n, stock, target, name) do { \
+        unsigned int rel_ = (unsigned int)(size_t)(target) - ((va) + 5u); \
+        memset(now, 0x90, sizeof now); now[0] = 0xE9; memcpy(now + 1, &rel_, 4); \
+        lim_add((va), (n), (stock), now, (name)); } while (0)
+    WK_SITE(0x0042E310u, 6, load,  cl, "weapon keys: the store emptied at the weapon load");
+    WK_SITE(0x0049ABB0u, 7, check, wk_check, "weapon keys: the can-engage verdict");
+    WK_SITE(0x0043F1D4u, 6, order, co, "weapon keys: the order action's unit branch");
+    WK_SITE(0x0049B9EBu, 7, steer, cs, "weapon keys: surfacefire's guidance");
+    WK_SITE(0x0049E1FDu, 6, gate,  cg, "weapon keys: the fire gate");
+#undef WK_SITE
+    return FIX_TABLE;
+}
+
 /* ===== STALE HITS: THE INCARNATION ON THE WIRE, AND THE TWO-TICK HOLD ======================
    Landing B4 of research/notes/tadr-port/sim-fixes.md ("B4 DESIGN" has the argument in full;
    the addresses are in exe-reverse-engineering.md, "Unit identity on the wire").
@@ -6901,6 +7060,7 @@ static void patch_engine_defects(void)
     int los  = fix_los_shear();
     int losl = fix_los_local();
     int pview = fix_projectile_view();
+    int wkey = fix_weapon_keys();
     int wire = fix_wire_bounds();
     int hits = fix_stale_hits();
     int ghost = fix_ghost_commander(wire);
@@ -6959,6 +7119,14 @@ static void patch_engine_defects(void)
               "0x49A415; the pool: the stamp 0x47CF98, the unit tick's call 0x4954ED) %s. "
               "Aircraft served, counted at 0x%08X",
               fix_state(air), (unsigned int)(size_t)&s_airServed);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: the weapon keys -- nottoair, nottounderwater, surfacefire, notoverwater, "
+              "notoverland (the store 0x42E310 0x42E468; the verdict 0x49ABB0; the order action "
+              "0x43F1D4; the guidance 0x49B9EB; the fire gate 0x49E1FD) %s",
+              fix_state(wkey));
     b[sizeof b - 1] = 0;
     plog(b);
 

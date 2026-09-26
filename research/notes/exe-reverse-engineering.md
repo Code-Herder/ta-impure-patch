@@ -3308,6 +3308,172 @@ fixture: 179 sites installed, all 44 patched sites read back as intended — the
 branches landing after the count — the point `0x4825D4..0x482614` and `0x48261F..0x48266A` read
 back equal to the retail exe, and the atlas again stored row 1 and lit 111 cells of rows 0–9.
 
+
+## The weapon decisions and a hit's alerts — mapped for TADR section C, landing C2 [DISASSEMBLED + MEASURED 2026-09-25]
+
+Every address the weapon keys and `nomapweaponalert` touch or read
+([data keys, C2 as built](tadr-port/data-keys.html#c2-as-built); the hooks are in
+[gpu-status §2.97](gpu-status.html)). A rel8/rel32 scan of `.text` finds no branch landing
+inside any of the fourteen sites' replaced bytes (`0x42E311`–`15`, `0x49ABB1`–`B6`, `0x43F1D5`–`D9`,
+`0x49B9EC`–`F1`, `0x49E1FE`–`E202`, `0x489D8F`–`92`, `0x489DA3`–`A6`, `0x4071D9`–`DC`,
+`0x466EBA`–`BE`, `0x49E011`–`19`, `0x48797C`–`82`, `0x4872CD`–`D1`, `0x499E38`–`3B`,
+`0x489C8A`–`8D`), and no absolute pointer in the image names one.
+
+### The can-engage test `0x49ABB0(unit, target, idx)`
+
+`stdcall`, `ret 0xC`; the weapon is `[unit + 0x10 + idx·0x1C]`; entry `8B 44 24 0C 83 EC 0C`. Eleven
+callers: acquisition `0x40B914`, retaliation `0x4070D0`/`0x407125`/`0x40714F`, the attack cursor
+`0x43E59E`, the order handlers `0x402302`, `0x4035D6`, `0x4037D7`, `0x406461`, `0x40FE07`, `0x413908`.
+
+- **Water path** (weapon `+0x111` bit 16) has exactly three exits: `0x49AC0F` returns 0 for a target
+  that is not a `floater` (def `+0x241` bit 19) with `y` (`+0x70`) above the sea; `0x49AC3B` returns
+  0 for a `canhover` target (bit 12) with `y + height/2` (def `+0x170`) above it; and the range test
+  `0x49AC47..0x49ACA2`, the high words of `dx²` and `dz²` (16.16 positions `+0x6A`, `+0x72`) summed
+  against range² (weapon `+0xDC`). "Above" is `y > sea`, so a building standing at the sea level
+  (a spawn at `height` 75 on a sea of 75) is not a surface target.
+- **Other weapons**: the shooter's top at or below the sea returns 0 (`0x49ACD4`), the target's
+  top likewise (`0x49ACFB`); `toairweapon` (bit 17) needs a flying target (`0x49AD07`,
+  `+0x110 & 3 == 2`); a ballistic weapon returns 0 when `0x49A890` answers `0x8000`.
+- So turning any 0 from the water path into the range test is exactly TADR's `surfacefire`
+  redirect of the two rejections.
+
+**Can-aim `0x49AA80(unit, &from, &to, idx)`**: the range test first, then a water weapon returns 1
+at once (`0x49AB26`); other weapons test a submerged firer and the ballistic reach. It has no air
+test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
+
+### The attack cursor `0x43E545` and the order action `0x43F0E0`
+
+- **The cursor mapper's attack case** `0x43E545`: a candidate with def `+0x245` bit 4 and a weapon
+  with bit 8 → 2; `[candidate+0] != 0` → 1, the attack cursor, without asking (INFERRED: a mobile
+  unit); otherwise `0x49ABB0(candidate, hovered, 0)` → 1, or 3 "too far". The cursor index is the
+  byte `main+0x2CBE` (1 attack, 3 too far, 15 select, 19 normal) and the unit under the pointer
+  the `u16` `main+0x2CBA`. MEASURED: over targets out of range, keyed and stock towers both show 3.
+- **The order action** `0x43F0E0` (`ScriptAction_Type2Index` in the symbol set) makes the
+  right-click's order: called from `MOUSE_EVENT_2UnitOrder 0x48CF30` at `0x48D0A0`, and at
+  `0x4804A3` in a loop over a group. It does not ask `0x49ABB0`. Its unit branch starts at
+  `0x43F1D4` (`mov eax,[edi+0x110]`, reached only from `0x43F17C`, on its first byte): `edi` the
+  target, `ebp` the shooter, weapon 0 at `+0x10`, slot 1 at `+0x2C` when `+0x3B` bit 1 is set.
+  It refuses a ground target for a `toairweapon` weapon 0, tests a submerged target against both
+  slots' water bit (`0x43F21B`) and refuses a hovercraft's water weapon 0 (`0x43F24F`). Its exits
+  are the refusal `0x4401DC`, no action `0x43F26C` (a hover whose slot 1 is a water weapon) and on
+  `0x43F27A`, where `edx` holds the target's def from `0x43F1F1` for `0x43F2AA`.
+- **Order nodes**: the list head at unit `+0x5C`, the type at node `+0x4`. MEASURED: a laser
+  tower's standing order is 22 and its attack order 8; a hovercraft idle is 41, and its attack
+  order 6.
+
+### AutoAim's slot loop `0x49E1A0`, and the fire functions
+
+- Per slot: the target read `0x48A1E0` at `0x49E1E1` (it drops a dead target and runs
+  `TargetCleared`; stock clears the aiming bit at `0x49E1EA` for a lost one), the fire-function
+  test at `0x49E1F2`, then `0x49E1FD` (`mov eax,[ebx+0x111]`, reached only from `0x49E1F7`'s fall
+  through): `ebx` the weapon, `edi` the unit, `esi` the slot's state byte, `[esp+0x10]` the slot
+  index. Bit 19 takes the turret's aim path; otherwise bit 4 (`vlaunch`) starts the aim script
+  (`0x4B0A70`) and sets the state's bit 0. At reload 0 it then asks `0x49AA80`, the stock and
+  energy (the player `[edi+0xEC]`: `+0x8C` against weapon `+0xC0`, `+0x98` against `+0xC4`),
+  `0x48A190`, and calls the fire function `[ebx+0x60]` at `0x49E43C`, its only call site. The next
+  slot is `0x49E541`.
+- `ClearTarget 0x48A0F0(unit, slot)`, `stdcall`.
+- **`0x49E010(weapon)`**, `ret 4`, entry `8B 4C 24 04 8B 81 11 01 00 00`: sets `+0x60` from the flags
+  (bit 19 → `0x49D580`; bit 4 → `0x49DB70`; bit 0 or 20 → `0x49D9C0`; bit 8 → `0x49DD60`). Its
+  only callers are the loader's two exits, `0x42F314` and `0x42F32E` (both through flak's stub).
+  At both, `+0x111` and the default damage are final. The default damage `+0xD4` is a **WORD**:
+  read at `0x499CE3` (`mov cx,[eax+0xD4]`), written at `0x42EFA9` (the `[DAMAGE]` section's
+  `default`) or `0x42F326` (0, no section).
+- **`0x49DB70`**, the vertical-launch fire, fires only when the slot's `+8`, the aim script's
+  result, is non-zero. A unit whose COB has no `AimPrimary` never fires such a weapon. MEASURED:
+  `ARMSUB`'s scripts are `Create`, `StartMoving`, `StopMoving`, `FirePrimary`, `QueryPrimary`,
+  `SweetSpot` and `Killed`, and it never launched until one was added.
+- **The guidance `0x49B9EB`** (`test eax,0x10000; je 0x49BA16`, `esi` the weapon): in
+  self-propelled flight a water weapon above the sea falls under gravity (`0x49B9C2..0x49BA11`,
+  `main+0x14263`) and does not steer.
+- **The weapon load `0x42E310`**: entry `sub esp,0x120`; its one caller is `0x4918BB` in
+  `LoadGameData_Main 0x4917D0`; the ID site `0x42E468` is A′3's.
+- `0x485070(pos)`, `ret 4`: the ground height under a position, −1 off the map.
+
+### A hit's alerts, its blink and the stones' dots
+
+- **`0x489CE0`**, the hit record's applier (`edi` the 9-byte record: `+1` victim id, `+3` attacker
+  id or 0, `+5` amount, `+8` kind). Two callers: `0x489C89` (local, in `0x489BB0`) and `0x455412`
+  (the dispatcher's `0x0B` case). It pushes `ebx`, `esi`, `edi` and nothing else before its calls.
+  For any kind but `0xA` (heal): `push esi; call 0x467950` at `0x489D8E`; kind `0xB` then skips to
+  `0x489DA7` (`0x489D93`); otherwise `push amount; push victim; push attacker; call 0x406F80` at
+  `0x489DA2`. From `0x489D93` and `0x489DA7` on, nothing reads `eax`, `ecx` or `edx` before writing
+  them. MEASURED on two peers: attacker-less meteor hits reach it by both callers.
+- **`0x489BB0(attacker, victim, amount, kind, angle)`**, `ret 0x14`, the hit's sender: it builds
+  the 9-byte record on its own stack (`[esp+0xC]`: `+0` `0x0B`, `+1` the victim's id, `+3` the
+  attacker's or 0, `+5` the amount after armour, `+7` the angle, `+8` the kind), applies it
+  locally with `push edx; call 0x489CE0` at `0x489C89`, then sends it to a remote victim's owner.
+  Before `0x489C89` it calls only the arithmetic helper `0x4E43D0` (`0x489BEC`) and has no exit.
+  Every weapon-kind hit comes from one of its twelve calls, **`0x499E37`** in the damage function
+  `0x499CD0`: attacker `[proj+0x52]` (`0x499D9D`), kind `1 + weapon bit 7` (`0x499E1E..0x499E32`,
+  where `[proj]`, the weapon, is read), the angle relative to the victim's heading; the
+  projectile is at `[esp+0x30]` at the call. After both calls nothing reads `eax`, `ecx` or `edx`
+  before writing them (`0x499E3C`, `0x489C8E`).
+- **Attacker-less weapon hits** come from three sources: a meteor's projectile (the pool's only
+  attacker-less kind), a unit's death explosion `0x49B000`, which zeroes its stack projectile's
+  `+0x52` (`0x49B03E`), and the fire spread `0x49A0C0` (a zeroed stack projectile). The record
+  cannot tell them apart. MEASURED 2026-09-26: a `CORFUS`'s `ATOMIC_BLAST` and a solar
+  collector's `SMALL_BUILDINGEX` reach `0x499E37` with attacker NULL and kind 1. In a two-peer
+  game each peer computes a stone's hit on every unit itself, and the victim's owner also
+  receives the other peer's copy.
+- **`0x467950(unit)`**: `mov byte [unit+0xFA],0xF0`, `ret 4`; its one caller is `0x489D8E`.
+- **`0x406F80(attacker, victim, amount)`**, `ret 0xC`; its one caller is `0x489DA2`. With no
+  attacker it jumps to the notification (`0x406FFC`), which runs when `0x438BE0(victim) & 0x80` is
+  clear and `+0xF4 ≠ +0xFF` or `+0xF5 == 1` (`0x4071B0..0x4071D1`). `+0xF5` still holds the previous
+  hit's kind there (stored at `0x489DAC`, after the call). `+0xF4` is written by the create
+  (`0x485C83`, 10), by a hit with an attacker (`0x489DC0`), at `0x486787`, by the saved game's
+  restore (`0x48722C`), and by the key switch `0x4956C0` (10) for the unit under the cursor
+  (`u16 main+0x2CBA`, `0x495780`, gated on `main+0x3923B` bit 1, which also sets `+0x110` bit 14
+  and zeroes `+0xF0`); a fresh unit reads 10 there, so its first hit already alerts, attacker or
+  not. The call is `0x47F850(victim, 2, 0)` at `0x4071D8`.
+- **`0x47F850(unit, index, text)`**, `ret 0xC`: requires the unit off screen (`0x48BCB0` over the
+  on-screen list `main+0x1435F`, count `+0x14367`), owned by `main+0x2A43`, `+0x110` bit 28 set and
+  bit 14 clear; then `0x47FAD0` on the queue `[0x51E68C]`. The queue: 8 entries of 17 bytes
+  (`+0` index, `+4` GameTime, `+8` unit, `+0xC` text, `+0x10` priority), count `+0x99`, an index
+  already queued refused. The consumer `0x47FCA0` hands entry 0 to `0x47FD70` and removes it in
+  the same call. The per-index next time `0x5086EC + 24·index` (`0x50871C` for "Under Attack") is
+  written at `0x47FEFD` only when the entry's sound plays. MEASURED: with sound off it stays 0
+  while the text repeats.
+- **`+0xFA`, the recently-hit byte: its every writer** — the hit (`0x467954`), the unit tick's
+  decrement (`0x48ADF0..0x48ADFC`, beside AutoAim's call `0x48ADDA`), the create (`0x485C12`, 0) and
+  the saved game's restore (`0x4872CC`, from the save; written out at `0x487975`). `0x4225EC` (a feature
+  def's `height`, in the feature loader) and `0x42E6D6` (a word of a weapon record) write the same
+  offset of other records. Its readers include the order
+  code (`0x404BFD`, `0x404D17`, `0x404ECA`, `0x405079`, `0x4149FC`) and the blink.
+- **The blink**, in the radar rebuild `0x466DC0` (the game thread, every sim tick):
+  `mov al,[ebx+0xFA]` at `0x466EB9` (6 bytes; `ebx` the unit, `esi` main); non-zero, the dot is
+  drawn only when `main+0x142F1` bit 0 is set (`0x466EC3`), else skipped (`0x466F11`). That bit is
+  flipped every 8 sim ticks by `0x466580` (a countdown at `main+0x142EF` from 7), called from the
+  sim tick at `0x4955E5`. MEASURED: a hit unit's dot is missing in 3 to 5 of 8 shots.
+- **The meteor weapon `[0x512328]`**; the shower's tick `0x437DE0` centres each shower at
+  `rand()` over the whole map (`main+0x14237`, `+0x14233`, scaled by `/0x8000`), so a test's
+  units need a small map to be under it. `+meteor` (`0x438070`) turns the shower on.
+- **The meteor's dot**: weapon `+0x111` bit 6 (`noradar`), read only at `0x467206`.
+- **A saved game's unit records.** The saver `0x4876C0(file)` has one caller, `0x432A01` in the
+  game's save routine, and walks the unit array from `main+0x14357` to `main+0x1435B` in `0x118`
+  steps, saving every unit with `+0x110` bit 28 (alive; `0x487701`): one record of `0xB8` bytes
+  built at `[esp+0x18]` and written whole by `0x4B4CF0` (`0x487A9E`), then the count. The restore
+  `0x487080(id, file)` (`ret 8`) returns at once when the unit at that id is already alive
+  (`0x4870C3`); otherwise it reads records by index into its own `[esp+0x18]` (`0x4B4C80` at
+  `0x48711D`, refusing any length but `0xB8`) until the id word `+0x21` matches, and creates the
+  unit (`0x485F50`). Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
+  (at `0x48705B`; itself at `0x432672` in the game-load routine `0x432610`, on the LOADER thread),
+  its own recursion for the ids at `+0x89` and `+0x8B` (`0x4871DD`, `0x48720D`), and the order
+  restore `0x43A420` (called at `0x487594`) with its helpers `0x44DE80` and `0x44E7D0` (`0x43A5ED`,
+  `0x44DEE8`, `0x44DEF6`, `0x44E816`). `0x486FD0` reads every record but uses only `+0x21`, and
+  accepts a record of `0xB6` bytes.
+  Offsets in the record, as the two sides use them: `+0xAB` the unit's `+0xF5`, `+0xAC` `+0xF6`,
+  `+0xAD` `+0xF7`, `+0xAE` the WORD `+0xBA`, `+0xB0` `+0xF8`, **`+0xB1` `+0xFA`** (out at `0x487996`,
+  in at `0x4872CC`), **`+0xB2` a WORD, `movzx` of the byte `+0x10E`** (`0x48797B`), of which the
+  restore reads only the low byte (`0x4872D2`), and `+0xB4` a DWORD of packed bits. So **`+0xB3`
+  is 0 in every save stock writes and read by nothing**: the one spare byte, which
+  `nomapweaponalert` uses to carry its blink hold (gpu-status §2.97). The saver's three weapon
+  slots fill `+0x41..+0x88` (`0x487A0D..0x487A7D`), clear of it. MEASURED 2026-09-25: the saver
+  runs on the game thread (the thread of the radar rebuild) and the restore on the loader thread;
+  a loaded game starts paused; the unit array's base moves at the load, so an address read before
+  it is stale; the records do not appear as plain bytes in the `.SAV` file (compressed
+  [INFERRED]).
+
 ## Built-in cheat/console command surface
 
 This is the richest extension point in the binary, and the evidence is unusually good.

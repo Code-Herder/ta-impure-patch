@@ -132,8 +132,8 @@ is remote, `+0x73 == 3` (`0x49A01D..0x49A047`, before the area-damage call `0x49
 remote projectile is a picture. Section B's evidence (Part 1 §0) has the rest: the owner's peer
 computes hits and sends `0x0B`; orders run on the owner's peer.
 
-**The can-engage test `0x49ABB0(unit, slot, target)`** (`stdcall`, `ret 0xC`; the weapon is
-`[unit + slot·0x1C + 0x10]`):
+**The can-engage test `0x49ABB0(unit, target, idx)`** (`stdcall`, `ret 0xC`; the weapon is
+`[unit + idx·0x1C + 0x10]`):
 
 - **Water path** (weapon bit 16): reject a target that is not a `floater` (def `+0x241` bit 19)
   and whose `y` (`+0x70`) is above sea (`0x49ABF9..0x49AC0F`). Reject a `canhover` target (bit 12)
@@ -283,15 +283,23 @@ identity for untagged weapons.
   air test. Re-validation (`0x4089A0`) never re-asks `0x49ABB0` (DIS, §0). So a landed aircraft
   acquired by a `nottoair` weapon is still fired at after it takes off. Stock's `toairweapon`
   has the same property the other way round.
-- The order action is not gated. A `nottoair` unit (weapon 0) offers the attack cursor on an
-  aircraft, and the attack order's own `0x49ABB0` then refuses the target. What the order does
-  next (chase, or drop it) is INF, settled by giving the order and watching it.
+- **The cursor is gated; the order is not.** The cursor mapper's attack case (`0x43E545`) asks
+  `0x49ABB0(candidate, hovered, 0)` itself (`0x43E59E`): 1 is the attack cursor, 3 "too far"; a
+  mobile candidate (`[candidate+0] != 0`, INF) gets the attack cursor without asking. So a filter
+  on the verdict already changes a tower's cursor. The right-click's order is made by the order
+  action `0x43F0E0` (called from `MOUSE_EVENT_2UnitOrder 0x48CF30` at `0x48D0A0`, and from a loop
+  over a group at `0x4804A3`), which does not ask `0x49ABB0`. Measured with a stock laser tower:
+  a right-click on a transport in flight gives it an attack order (node type 8 at unit `+0x5C`,
+  where its standing order is 22). C2 mirrors `toairweapon` there ([the plan, C2 as
+  built](data-keys.md#c2-as-built)).
 
 #### Overlap
 
 `my_CheckUnitWeapon` (slots ≥ 3) re-implements `0x49ABB0` in C, so the filter must run there too.
 When the module is armed it owns `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TADR's inner site
-`0x49AD07` would never be reached for slots ≥ 3.
+`0x49AD07` would never be reached for slots ≥ 3. **As built (C2):** the weapon keys own the entry
+in both builds, and the extra-weapons module no longer hooks it: the keys' detour asks that
+module's C verdict for a slot past 2 while it is armed.
 
 #### Proposed our-design
 
@@ -302,7 +310,7 @@ When the module is armed it owns `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TA
   armed, `my_CheckUnitWeapon` applies the filter to every slot: `o_Check` for slots 0..2 and its
   C body for 3..N. Unarmed, the key module installs its own entry detour on the same 7 bytes:
   `v = o_Check(…)`, then the filter. Both byte-match the same stock bytes, and exactly one is
-  written.
+  written. *Built otherwise:* the key module owns the entry always (Overlap, above).
 - **The order action mirrors `toairweapon`:** a splice at `0x43F1D4` (`mov eax,[edi+0x110]`, 6
   bytes; the only branch that reaches it lands on its first byte, `0x43F17C`). A flying target
   with a `nottoair` weapon 0 goes to the order action's refusal `0x4401DC`. Otherwise it
@@ -496,10 +504,12 @@ firer's position, which the firer's own peer owns.
 
 ### What this part did not establish
 
-- What an attack order does when `0x49ABB0` refuses its target (chase, or drop). Settle it by
-  ordering a flagged unit onto an aircraft.
-- Whether an above-water torpedo strikes a land unit (the terrain branch `0x49B37F..0x49B3CD`), and
-  therefore how useful `surfacefire` is against the shore. Settle it with the §4 fixture.
+- What an attack order does when `0x49ABB0` refuses its target (chase, or drop). For a keyed
+  weapon it is moot since C2: the order action refuses the order, and the fire gate drops a held
+  target that flies.
+- **Settled by C2's fixture:** an above-water torpedo does not reach a land unit. A `surfacefire`
+  torpedo launcher engages a kbot on the shore, but the torpedo stops in the shallows and the
+  kbot keeps its 700 HP.
 - The roles of the order handlers `0x4021F0`, `0x4035D0`, `0x406300`, `0x40FBE0` and `0x4138A0`
   (INF: attack-order states). Only their use of `0x49ABB0` matters here.
 - The stack offset of the section `ctx` at the `0x49E010` call sites. It was not needed, because
@@ -563,8 +573,9 @@ with the measurement that would settle it.
 
 **The three findings that matter most:**
 
-1. **Stock's "map weapon" is the meteor shower, and its projectiles are the only ones with no
-   attacker.** A map's OTA schema names a `meteor=1` weapon; the shower spawns it from the sim tick
+1. **Stock's "map weapon" is the meteor shower, and its projectiles are the only pool projectiles
+   with no attacker** (a death explosion and a fire's spread detonate attacker-less projectiles of
+   their own, §0). A map's OTA schema names a `meteor=1` weapon; the shower spawns it from the sim tick
    with CRT `rand()`. The projectile initialiser gives it attacker NULL and owner index 10, and a
    receiver of its `0x0D` does the same. No stock map weapon has zero damage, so the key changes
    nothing on stock content (rule 7 holds trivially).
@@ -602,14 +613,20 @@ raises it), initialises it with `0x49C740(proj, weapon, start, 0, GameTime, 0)` 
 `main+0x2A44` bit 0 is set, broadcasts a `0x0D` (`0x49DFF6`; its `+0x1A..+0x23` are uninitialised
 stack in stock, cleared by A′3 in the raised build).
 
-**No attacker ⇔ meteor.** `0x49C740` stores the attacker at `+0x52` and its owner byte at `+0x66`;
+**No attacker ⇔ meteor, among pool projectiles.** `0x49C740` stores the attacker at `+0x52` and its owner byte at `+0x66`;
 with attacker NULL it stores `+0x52 = 0`, `+0x66 = 10` (`0x49C853..0x49C857`). Of its eight call
 sites, six pass a unit; the two that pass 0 are the meteor spawn `0x49DF7D` and the `0x0D`
 receiver's meteor branch `0x49D307`, which is taken when the message's weapon has bit 5
 (`0x49D2A6`). Nothing later writes `+0x52` in a projectile: `0x49C880`, called when a unit dies
 (`0x4867B5`), destroys that unit's projectiles with `+0x60 ≠ 0` and leaves the others' `+0x52`
 pointing at the dead slot. (The other `+0x52` writers in the image belong to other structures,
-`0x4388FA`, `0x43A2A4`…, with vtables.)
+`0x4388FA`, `0x43A2A4`…, with vtables.) **Hits are another matter**: two detonations build a
+projectile on their own stack, outside the pool, with no attacker. A unit's death explosion
+`0x49B000` stores 0 at the projectile's `+0x52` (`0x49B03E`), and the fire spread `0x49A0C0` hands
+a zeroed one to `0x49A120`, which reaches the damage function `0x499CD0` at `0x49A3F5`. So an
+attacker-less weapon-kind hit is a meteor, a death explosion or a fire. MEASURED 2026-09-26: a
+`CORFUS`'s `ATOMIC_BLAST` and a solar collector's `SMALL_BUILDINGEX` reach `0x489BB0` through
+`0x499E37` with attacker NULL.
 
 **The detonation.** `0x499EB0(proj, unit)` plays the explosion and sound, then damages only when the
 projectile's owner record `main+0x1B63 + 331·[proj+0x66]` is empty or not a remote player
@@ -642,8 +659,15 @@ victim's owner applies it). `0x489CE0` has two callers, that one and the dispatc
 **The notification.** `0x47F850(unit, index, text)` (`ret 0xC`) requires the unit **not** in the
 on-screen list (`0x48BCB0` over `main+0x1435F`, count `+0x14367`), owned by `main+0x2A43`, alive
 (`+0x110` bit 28) and not bit 14, then calls `0x47FAD0` on the queue `[0x51E68C]` (eight 17-byte
-entries), which plays the index's sound and shows its text and is rate-limited per index by
-`GameTime` (`0x47FAF0`; the next time is written at `0x47FEFD`). The table at `0x5086E8`, 24 bytes an
+entries, count at `+0x99`; an index already queued is not queued twice). The consumer `0x47FCA0`
+hands entry 0 to `0x47FD70` and removes it in the same call. Its second argument, the sound flag,
+is 1 only when `+0xA1` ticks have passed since the stamp at `+0x9D`, which it then renews. The
+per-index rate limit (`0x47FAF0`, against the next time at `0x5086EC + 24·index`) is written at
+`0x47FEFD` only on the path where the entry's sound plays: a priority above
+`10 − main+0x37F17`, a sound for the unit's category, the sound flag, and bit `0x40` of
+`main+0x37F19`, each failing to `0x47FF03`. **So with sound off the limit never engages**:
+measured with sound off, the next time for index 2 (`0x50871C`) stayed 0 while "Under Attack"
+repeated, up to four lines at once. The table at `0x5086E8`, 24 bytes an
 index, names index 2 `underattack` / `"Under Attack"` (`0x508714`, `0x508718`) with an interval
 of 20 (×30 ticks). **Index 2 is passed at exactly one site in the image, `0x4071D8`** (a scan of
 all 83 calls of `0x47F780`/`0x47F850`; `0x47F7E0` has no caller; `0x47FAD0` is called only from
@@ -752,23 +776,26 @@ stock weapon.
 - **`silent(rec)`** is true exactly when: the attacker word `rec+3` is 0; the kind `rec+8` is 1 or
   2 (the two weapon kinds `0x499CD0` passes); the amount `rec+5` is 0; and the level's meteor weapon
   `[0x512328]`, validated as a record of the weapon array (offset from the base a multiple of
-  `0x115`, index below the count), has the key's bit. Attacker-less weapon-kind records come only
-  from meteor projectiles (§0), and a level has one meteor weapon, so the record path and the
-  local path answer alike; on a received `0x0B` the record is all a receiver has, and it is enough.
+  `0x115`, index below the count), has the key's bit. The record names no weapon, and an
+  attacker-less weapon-kind record can also be a death explosion or a fire (§0), so on a received
+  `0x0B` only the amount keeps this from silencing a loss; as built, a hit computed locally is
+  judged by its own weapon instead (below).
 - **The invariant:** the silence changes only whether notification 2 is queued; every hit is
   applied exactly as stock applies it. `g_hit` is written and read only on the game thread: the
-  local path runs inside the sim tick, and the dispatcher's `0x0B` case runs there in play (section
-  B's B5 measurement: the dispatcher's state table `0x512BC0` drops `0x0A..0x12` during loading, at
-  `0x455F50`; re-check it for `0x0B` when this lands).
+  local path runs inside the sim tick, and the dispatcher's `0x0B` case runs there in play: the
+  state table `0x512BC0` gives `0x0B` the mask 4, which passes only in net state 6, set on the game
+  thread after the load ([engine map](../exe-reverse-engineering.html), *Which thread*), and B4's
+  tagged `0x05` that now carries every `0x0B` mirrors the same gate.
 - **Install:** local, so skip-and-log, not fail-closed. Both sites byte-checked; a mismatch leaves
   stock alerts and logs the reason. A counter `silenced`/`passed` on the `enginefix:` line.
 - **The dot:** nothing to hook. Either document that `noradar=1` hides the dot (stock since 1997;
   `EARTHQUAKE` uses it), or have the weapon loader set bit 6 for a weapon carrying
   `nomapweaponalert=1` and `meteor=1`, which is exactly as if the TDF said `noradar=1` (bit 6 has
   one reader, the dot). Owner's choice (Q2).
-- **The residual:** a unit-fired `meteor=1` weapon (content only) is turned attacker-less on remote
-  peers by the `0x0D` receiver's bit-5 branch; its harmless hits there follow the level's meteor
-  weapon's key, not its own. It can only miss or keep an alert.
+- **A unit-fired `meteor=1` weapon** (content only) is turned attacker-less on remote peers by the
+  `0x0D` receiver's bit-5 branch. As built, a peer's own computation of those hits is judged by the
+  weapon itself at `0x499E37`; only a `0x0B` received from another peer falls to the level's meteor
+  weapon and the amount.
 
 #### How to test
 
@@ -807,6 +834,38 @@ By the documentation rule (the plan's [contract](data-keys.md#the-contract)):
   as TADR's documentation says.
 - **Q4: the blink is suppressed**, display only, under the "under-attack" the documentation
   promises to silence.
+
+#### As built (C2)
+
+The design above, with the decisions, and one correction. **The blink's mark is not inside the
+frame.** `0x489CE0` sets `+0xFA` (`0x467950`, called at `0x489D8E`) before it tests for kind `0xB`,
+which skips `0x406F80` (`0x489D93`). So a mark set inside the frame would miss those hits. The
+mark is its own site at `0x489D8E`, deciding from the same record. It keeps, per unit slot, the
+share of `+0xFA` that harmless hits alone put there, so a real hit followed by weather keeps
+blinking for its own 0xF0 ticks. `+0xFA`'s every writer is accounted for: the hit, the unit tick
+`0x48ADF0`, the create `0x485C12` and the saved game's restore `0x4872CC` (`0x4225EC` and
+`0x42E6D6` write other records). **The decision is not the record alone.** An attacker-less
+weapon-kind record can be a death explosion or a fire (§0), so the design's premise, that the
+record path and the local path answer alike, does not hold, and Q3's "the weapon's default
+damage" needs the weapon, which the record lacks. Decided 2026-09-26: a hit computed locally is
+judged by its own weapon, and a received one by its amount. Every weapon-kind hit is sent from one
+call, `0x489BB0` at `0x499E37` in the damage function `0x499CD0`, whose projectile is at
+`[esp+0x30]` there (its weapon `[proj]` is read at `0x499E1E`), and `0x489BB0` applies the record
+it builds on its own stack (`[esp+0xC]`) at `0x489C89`. So a frame around the send gives the answer
+of the projectile's weapon (no attacker, the key, default damage 0), and the apply pins it to that
+record's address. A record received as a `0x0B` is harmless only when its amount is 0 as well as
+attacker-less, a weapon kind, and the level's meteor weapon keyed: a weather hit sent by a peer
+with a per-type damage alerts, and a peer's explosion or fire is silent only when it did no damage
+(the edge of a blast truncates to 0, and `0x489BB0` scales a veteran's amount down at `0x489BF3`).
+Locally, an explosion or fire whose own weapon carries the key with default damage 0 is silent,
+as any keyed weapon is. The restore writes
+`+0xFA` from the saved record, so the share
+travels with it: the unit saver `0x4876C0` stores the record's `+0xB2` as a WORD zero-extended from
+the byte `+0x10E` (`0x48797B`), the restore reads only its low byte (`0x4872D2`), and `0x486FD0`
+reads only the id word `+0x21`, so `+0xB3` is 0 in every save stock writes and read by nothing; the
+share is stored there and read back at `0x4872CC`. The dot of the stones is Q2's `noradar`, set at
+the loader's closing call `0x49E010`, where the flags and the default damage are final. The plan's
+[C2, as built](data-keys.md#c2-as-built) has the rest and the measurements.
 
 ---
 
