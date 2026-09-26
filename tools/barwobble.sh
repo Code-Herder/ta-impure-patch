@@ -21,9 +21,10 @@
 # The 1x walk is 920 wu and leaves the viewport entirely at 4x, which is why the 4x leg has a
 # fixture of its own rather than an argument.
 #
-# READ gamespeed FIRST. It is shared across every prefix (one user.reg inode) and it scales
-# how far a unit moves per sim step, so it scales this artifact: the same walk measures
-# 1.68 px peak-to-peak at gamespeed 10 and 2.95 at 20. See the ta-drive skill.
+# READ gamespeed FIRST (`tacli registry <instance> gamespeed`): it outlives a launch in the
+# instance's registry and it scales how far a unit moves per sim step, so it scales this
+# artifact: the same walk measures 1.68 px peak-to-peak at gamespeed 10 and 2.95 at 20. See the
+# ta-drive skill.
 #
 # Respawns the walker at the start point with the fixture, selects it, parks the pointer
 # clear of the walk, then records the window losslessly at 60 fps while the unit walks a

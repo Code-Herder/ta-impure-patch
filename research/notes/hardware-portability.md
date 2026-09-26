@@ -350,15 +350,17 @@ the plan's shape and what the work settled.
   (a positional of `order` is named like the subcommand). The file channels go over one
   PowerShell session per command (`tools/taremote.py`).
 - **The registry store (`tagpu_regstore.c`).** **Test mode has two signals, either enough**:
-  the token `-xtacli-test` on TotalA.exe's command line, which every remote launch passes, and a
-  `tacli-state` folder beside `TotalA.exe` (`GetModuleFileNameW(NULL)`, never the working
-  directory). The engine skips the token: `CmdlineArgsNormalize 0x49EE30` dispatches a switch on
+  the token `-xtacli-test` on TotalA.exe's command line, which every remote launch passes (and
+  every local launch whose DLL serves the store, below), and a `tacli-state` folder beside
+  `TotalA.exe` (`GetModuleFileNameW(NULL)`, never the working directory). The engine skips the token: `CmdlineArgsNormalize 0x49EE30` dispatches a switch on
   its second character less `'B'`, and `x` (0x36) takes `ja 0x49F461`, the loop tail of every
   unknown switch; no debug switch of `0x4DA0E0`'s table is a prefix of it [DISASSEMBLED].
   **Real mode needs both absent.** A folder that cannot be looked at, without the token, is real
   mode, so a player's folder on a share or behind an access rule stays inert; a `tacli` launch
-  always carries the token. Real mode logs `registry: real (no -xtacli-test token, and ...)` and
-  does nothing else. The decision is the first thing `DllMain` does, before cnc-ddraw's
+  of a DLL that has the store always carries the token. **The store is served only with both**:
+  the folder alone (a launch by a tacli from before the per-instance store, or by hand) and the
+  token alone (no store) are test mode and refused. Real mode logs `registry: real
+  (no -xtacli-test token, and ...)` and does nothing else. The decision is the first thing `DllMain` does, before cnc-ddraw's
   config-tool return, so an inherited `cnc_ddraw_config_init` cannot skip it. **Test mode fails
   closed**: a store that is missing, a folder, unreadable or not loaded whole, no memory, or a
   registry import of `TotalA.exe` or `win32.dll` the hooks do not answer ends the process at
@@ -375,6 +377,17 @@ the plan's shape and what the work settled.
     jump-table entries at the parser's loop tail, and an exe that differs there is not run;
   - The keys and values the game reads and writes, and each call site, are in the engine map
     ([exe reverse engineering](exe-reverse-engineering.html) §"The registry").
+- **Local instances use the same store.** Every local prefix's `user.reg` is one inode (the
+  `cp -al` clone, which wine never breaks), so TA's key was one for every local instance; each
+  local gamedir now holds `tacli-state/registry.txt`, seeded by reading the template's
+  `user.reg`, and a local launch whose DLL serves it passes the token and checks the run's
+  served line as a remote launch does. A `--keep-dll` build without the store runs on the shared
+  file with a warning. A tacli from before the store writes its values into the shared file and
+  passes no token, and what its game runs on is the DLL's decision. It normally deploys its own
+  tree's build: one without the store ignores the folder and runs on the shared file, and one
+  with the store but not the token rule serves the folder alone, those values ignored. Only a
+  DLL with the token rule refuses the game at attach: `--keep-dll` over such a build, or a tree
+  with no build of its own, which deploys the main checkout's. [tacli design](tacli-design.html) §"The registry: a store per instance".
 - **Launch** reads and checks the store first: a test folder whose store is missing, does not
   parse or passes one of the DLL's limits is refused with nothing written. It is a scheduled task
   of the instance's own, `\tacli\<name>`, that **runs TotalA.exe itself** with `-xtacli-test`

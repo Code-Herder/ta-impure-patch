@@ -1,4 +1,4 @@
-/* tagpu_regstore -- TotalA.exe's registry, answered from a file in a tacli test folder.
+/* tagpu_regstore -- TotalA.exe's registry, answered from a file beside it in a tacli test launch.
    The contract (what is served, refused and passed, the handles, the file, the threads)
    is in tagpu_regstore.h. */
 
@@ -16,8 +16,8 @@
 #define RS_FILE        L"tacli-state\\registry.txt"
 #define RS_TMP         L"tacli-state\\registry.txt.tmp"
 
-/* The launch's token: tacli's scheduled task puts it on TotalA.exe's command line, and the
-   engine ignores it. CmdlineArgsNormalize 0x49EE30 splits its arguments at blanks (strtok,
+/* The launch's token: tacli puts it on TotalA.exe's command line (a remote instance's
+   scheduled task, a local instance's `wine TotalA.exe`), and the engine ignores it. CmdlineArgsNormalize 0x49EE30 splits its arguments at blanks (strtok,
    loop head 0x49EED3); a token starting with '-' or '/' dispatches on its SECOND character,
    less 'B', and anything above 0x35 ('w') takes `ja 0x49F461`, the loop tail every unknown
    switch goes to [DISASSEMBLED 2026-09-25]. 'x' is 0x36 there. The token starts with none of
@@ -65,7 +65,7 @@ typedef struct {
 enum { RS_BY_TOKEN = 1, RS_BY_FOLDER = 2 };
 
 static int              s_by;         /* the signals tagpu_regstore_decide found */
-static char             s_why[160];   /* what it could not establish, for the log */
+static char             s_why[400];   /* what it could not establish, for the log */
 static WCHAR*           s_dir;        /* the exe's folder, with its trailing backslash */
 static char             s_exe[MAX_PATH] = "the exe";  /* its file name (UTF-8), for the log:
                                          TotalA.exe, or whatever else loaded this DLL there */
@@ -1008,7 +1008,7 @@ int tagpu_regstore_decide(void)
     len = wcslen(s_dir);
     dir = (WCHAR*)malloc((len + wcslen(RS_STATE_DIR) + 1) * sizeof(WCHAR));
     if (!dir) {
-        _snprintf(s_why, sizeof s_why, "no memory to look for tacli-state beside TotalA.exe");
+        _snprintf(s_why, sizeof s_why, "no memory to look for tacli-state beside %s", s_exe);
         return s_by != 0;
     }
     memcpy(dir, s_dir, len * sizeof(WCHAR));
@@ -1019,12 +1019,12 @@ int tagpu_regstore_decide(void)
     if (at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY))
         s_by |= RS_BY_FOLDER;
     else if (at != INVALID_FILE_ATTRIBUTES)
-        _snprintf(s_why, sizeof s_why, "tacli-state beside TotalA.exe is a file, not a folder");
+        _snprintf(s_why, sizeof s_why, "tacli-state beside %s is a file, not a folder", s_exe);
     else if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
-        _snprintf(s_why, sizeof s_why, "no tacli-state folder beside TotalA.exe");
+        _snprintf(s_why, sizeof s_why, "no tacli-state folder beside %s", s_exe);
     else
-        _snprintf(s_why, sizeof s_why, "tacli-state beside TotalA.exe could not be looked at "
-                  "(error %lu), which is not a sign of a test folder", (unsigned long)err);
+        _snprintf(s_why, sizeof s_why, "tacli-state beside %s could not be looked at "
+                  "(error %lu), which is not a sign of a test folder", s_exe, (unsigned long)err);
     s_why[sizeof s_why - 1] = 0;
     return s_by != 0;
 }
@@ -1044,8 +1044,8 @@ static void __attribute__((noreturn)) rs_refuse_run(const char* by, const char* 
 
 void tagpu_regstore_init(void)
 {
-    const char* by;
-    char what[160];
+    static char by[400];     /* the signals, naming the module: every line below starts with it */
+    char what[400];
     DWORD at, aterr;
     size_t dir;
     HMODULE w32;
@@ -1057,12 +1057,34 @@ void tagpu_regstore_init(void)
     }
 
     /* TEST MODE from here: whatever it needs and does not find ends the process. */
-    by = s_by == (RS_BY_TOKEN | RS_BY_FOLDER) ? "the " RS_TOKEN_A " token and the tacli-state folder"
-       : s_by == RS_BY_TOKEN ? "the " RS_TOKEN_A " token"
-       : "the tacli-state folder beside TotalA.exe";
+    _snprintf(by, sizeof by,
+              s_by == (RS_BY_TOKEN | RS_BY_FOLDER) ? "the " RS_TOKEN_A " token and the tacli-state "
+                                                     "folder beside %s"
+              : s_by == RS_BY_TOKEN ? "the " RS_TOKEN_A " token on %s's command line"
+              : "the tacli-state folder beside %s", s_exe);
+    by[sizeof by - 1] = 0;
     s_active = 1;
     InitializeCriticalSection(&s_lock);
     if (!s_dir) rs_refuse_run(by, s_why);
+    /* The store is served only to a launch that asked for it. A folder without the token is
+       a launch that wrote its values somewhere else -- a tacli from before the per-instance
+       store writes them into the registry -- and serving the store would drop them without
+       a word; the registry is not what it asked for either, since the folder says this is
+       an instance's game. */
+    if (s_by == RS_BY_FOLDER && !lstrcmpiA(s_exe, "TotalA.exe"))
+        rs_refuse_run(by, "no " RS_TOKEN_A " token on the command line: a launch by a tacli from "
+                          "before the per-instance store, or by hand -- launch it with the "
+                          "current tacli");
+    if (s_by == RS_BY_FOLDER) {
+        /* Another module opened in an instance's folder (cnc-ddraw's config tool): the store
+           is TotalA.exe's registry, and no tacli launches anything else there. */
+        _snprintf(what, sizeof what, "no " RS_TOKEN_A " token on the command line, and %s is "
+                  "not TotalA.exe: this folder is a tacli instance's game, whose registry is "
+                  "served only to TotalA.exe launched by tacli -- run %s from a folder with no "
+                  "tacli-state", s_exe, s_exe);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(by, what);
+    }
     dir = wcslen(s_dir);
     s_file = (WCHAR*)malloc((dir + wcslen(RS_FILE) + 1) * sizeof(WCHAR));
     s_tmp  = (WCHAR*)malloc((dir + wcslen(RS_TMP) + 1) * sizeof(WCHAR));
@@ -1075,8 +1097,11 @@ void tagpu_regstore_init(void)
 
     at = GetFileAttributesW(s_file);
     aterr = at == INVALID_FILE_ATTRIBUTES ? GetLastError() : 0;
-    if (aterr == ERROR_FILE_NOT_FOUND || aterr == ERROR_PATH_NOT_FOUND)
-        rs_refuse_run(by, "there is no tacli-state\\registry.txt beside TotalA.exe");
+    if (aterr == ERROR_FILE_NOT_FOUND || aterr == ERROR_PATH_NOT_FOUND) {
+        _snprintf(what, sizeof what, "there is no tacli-state\\registry.txt beside %s", s_exe);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(by, what);
+    }
     if (aterr) {
         _snprintf(what, sizeof what, "tacli-state\\registry.txt could not be looked at (error %lu)",
                   (unsigned long)aterr);
@@ -1113,10 +1138,10 @@ void tagpu_regstore_init(void)
         what[sizeof what - 1] = 0;
         rs_refuse_run(by, what);
     }
-    tagpu_logf("registry: TEST MODE, entered by %s -- %s's registry is "
+    tagpu_logf("registry: TEST MODE, entered by %s -- its registry is "
                "tacli-state\\registry.txt: %d keys, %d values loaded; hooks: %s %d of %d "
                "registry imports, win32.dll %d of %d",
-               by, s_exe, s_nkeys, nvalues, s_exe, ours, regs, wours, wregs);
+               by, s_nkeys, nvalues, s_exe, ours, regs, wours, wregs);
 }
 
 int tagpu_regstore_active(void)

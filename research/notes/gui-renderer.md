@@ -1734,8 +1734,8 @@ read from the code and then from the reset reasons once they were logged:
 - **The palette.** Every palette the engine sets goes through `0x4BA200`, which keeps the
   entries in the graphics globals and hands DirectDraw `min(255, entry × gamma)` with the gamma
   from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the code default 12, and
-  whatever the one shared registry `Gamma` currently says — 1.125 and 1.0 have both been read;
-  §15) — and
+  whatever the registry's `Gamma` says, which under tacli is the instance's own store — 1.125 and
+  1.0 have both been read; §15) — and
   never scales `main+0x143A7`. The engine's own pixels beneath the twin are shown by cnc-ddraw
   through the palette its `SetEntries` received, so that is what the twin resolves through now:
   the primary's palette object in this DLL, read under the fork's lock, the engine's table the

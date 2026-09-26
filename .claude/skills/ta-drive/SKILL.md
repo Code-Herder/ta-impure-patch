@@ -65,9 +65,11 @@ instance with `tacli create <n> --display <live>` — `instance.json` is shared 
 session may own. A hand-run `wine TotalA.exe` without `WINEDLLOVERRIDES=ddraw=n,b` loads wine's
 builtin ddraw and fails with the same dialog, so it proves nothing.
 
-**Every instance prefix shares one `user.reg` inode** (the `cp -al` clone never breaks it), so
-the prefixes are isolated in everything except the registry. Never "fix" a launch by writing
-registry values.
+**TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, seeded
+from the template's `user.reg` (`gamespeed` 10); `tacli registry <i> [name[=value]]` reads it and,
+with the game stopped, sets it. The DLL serves it only to a launch carrying `-xtacli-test` (tacli
+adds it; a hand-run `wine TotalA.exe` is refused). `wine reg` reaches only the prefix's `user.reg`,
+one inode every prefix shares; a `--keep-dll` build without the store runs on it, with a warning.
 
 **The tile.** Instances are laid out in a grid so parallel windows do not stack; slots are held
 by **running** instances, `--slot 0` claims a cell explicitly. A window created off-screen is
@@ -186,13 +188,11 @@ as well. By hand: `ui t1 set Mapping 1`, `ui t1 set LineOfSight 0` before `Start
   read and your click, and a missed selection is silent: re-read right before clicking.
 - **A right-click on water is rejected for a ground unit** and draws no marker, which looks like
   a broken marker pass. Pick grass (`g > b + 30` in a shot).
-- **Game speed is `keys <i> plus`/`minus`** (up to +10), and it is **shared registry state that a
-  launch does not reset**: `gamespeed` lives in the one `user.reg` every prefix shares, so one
-  session pressing `+` leaves every later launch at that speed. It multiplies the sim tick (30/s
-  at 10, 60/s at 20) while the picture still changes 30 times a second. Read it before any
-  measurement whose answer is a rate: `wine reg query` under the instance's `WINEPREFIX` for
-  `gamespeed` in `HKCU\Software\Cavedog Entertainment\Total Annihilation` (`0xa` is normal).
-  `Gamma` lives in the same shared file and scales the presented palette (`references/ui-layer.md`).
+- **Game speed is `keys <i> plus`/`minus`** (up to +10), kept in the instance's registry and
+  not reset by a launch. It multiplies the sim tick (30/s at 10, 60/s at 20) while the picture
+  still changes 30 times a second: read `tacli registry <i> gamespeed` (10 is normal) before any
+  measurement whose answer is a rate. `Gamma` is in the same store and scales the presented
+  palette (`references/ui-layer.md`).
 
 ## Driving the UI (menus, options, build panel)
 
@@ -397,7 +397,7 @@ measurement.
 - **`<pass>.off` does nothing while `<pass>.on` exists.** Remove the arm instead
   (`classicpp.on=off`).
 - **Health bars are a registry value, not a lever**: no bars and no group digit until
-  `damagebars` is 1 under `HKCU\Software\Cavedog Entertainment\Total Annihilation`.
+  `tacli registry <i> damagebars=1` (with the game stopped).
 
 Every lever, its tokens, its verify line and the heartbeat fields that must read zero:
 `references/levers.md`.

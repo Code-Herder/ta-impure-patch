@@ -255,10 +255,12 @@ spread, p99 **1.00 px**. Both are now in `tools/barwobble_detect.py`, with
 at a zoom. Details and the full table: [gpu-status](gpu-status.html) §2.2.
 
 **The reference setup was running at double game speed.** Found while measuring the above:
-`gamespeed` was **20**, not TA's normal 10. It lives in `user.reg`, which the template prefix
-and all 58 instance prefixes share as **one inode** — the same trap already documented for
-`Gamma` — so one session pressing `+` leaves every later launch of every instance at that
-speed, and a running instance writes its own copy back at exit. Set back to 10 on 2026-09-09.
+`gamespeed` was **20**, not TA's normal 10. It lived in `user.reg`, which the template prefix
+and all 58 instance prefixes shared as **one inode** — the same trap already documented for
+`Gamma` — so one session pressing `+` left every later launch of every instance at that
+speed, and a running instance wrote its own copy back at exit. Set back to 10 on 2026-09-09.
+Each instance now keeps it in its own registry store, made at 10 ([tacli
+design](tacli-design.html) §"The registry: a store per instance"); `+` moves that instance only.
 It multiplies the tick rate (`main+0x38A47`: 30/s at 10, 60/s at 20) while the picture still
 changes 30 times a second, so the in-game clock (`tick ÷ 30`) was reading **2× real time**.
 Read it before trusting any measurement that is a rate, a duration, or a distance per second:

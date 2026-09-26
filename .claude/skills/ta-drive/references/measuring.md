@@ -137,11 +137,11 @@ scores 0 magenta and shows no game.
   `PULSE_SERVER=unix:/nonexistent/pulse` and `ALSA_CONFIG_PATH=<a file holding
   pcm.!default { type null }>` in the shell that runs `tacli`, and set `"sound": true` in the
   instance's `instance.json` (`scenario load` has no `--sound`; set it back to false after). Effect
-  sounds also need the registry's `fxvol` above 0, and every silent launch writes it to 0 in the one
-  `user.reg` all instances share: `wine reg add` it in your own prefix just before the launch and
-  back to 0 after the game stops. The sound object is `*(main+0x10)`: `+0x2C` MixingBuffers,
-  `+0x30` the sounds in use. Any launch of the store's DLL saves its `mixingbuffers` (32) into that
-  shared registry, so a control launch reads 32 there, not stock's 8; write `MixingBuffers` back
+  sounds also need the registry's `fxvol` above 0, and every silent launch writes it to 0 in the
+  instance's registry: `tacli registry <i> fxvol=<n>` before the sound launch (which leaves it
+  alone). The sound object is `*(main+0x10)`: `+0x2C` MixingBuffers, `+0x30` the sounds in use.
+  Any launch of the store's DLL saves its `mixingbuffers` (32) into the instance's registry, so a
+  control launch of that instance reads 32, not stock's 8: `tacli registry <i> MixingBuffers=8`
   before a sound A/B that needs stock's.
 - **A single-player fight does not reproduce run to run, even under one DLL**, so a COB-trace or
   roster timeline compared across two runs measures noise from the first impact on. Compare what
