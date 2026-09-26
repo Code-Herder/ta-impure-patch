@@ -836,9 +836,9 @@ def clone_prefix(inst: Instance):
     inst.prefix.parent.mkdir(parents=True, exist_ok=True)
     # cp -al: a hardlink clone, so the registry hives (user.reg, system.reg, userdef.reg)
     # are ONE inode with the template's and every other instance's, for good: wine
-    # rewrites a hive in place and never breaks the link [MEASURED 2026-09-26: 392 links
-    # to wineprefix/user.reg after hundreds of launches that wrote it]. A value written in
-    # any prefix is every prefix's. So TA's settings key is not kept here but in the
+    # rewrites a hive in place and never breaks the link [MEASURED 2026-09-26: 392 links to
+    # wineprefix/user.reg; saves that moved its mtime changed the count only by the instances
+    # made meanwhile]. A value written in any prefix is every prefix's. So TA's settings key is not kept here but in the
     # instance's registry store (seed_regstore); what stays in the prefix is Wine's own
     # state, which is the same for every instance.
     r = subprocess.run(["cp", "-al", str(TEMPLATE_PREFIX), str(inst.prefix)],
@@ -1103,8 +1103,8 @@ def hive_store(text: str, root: str = taremote.STORE_ROOT) -> "taremote.RegStore
     ValueError names the line that does not parse or the store limit it passes.
 
     WHOLE, OR HiveCut. Wine rewrites a hive with several links IN PLACE -- truncated,
-    then written front to back in its sorted key order (server/registry.c,
-    save_branch) -- so a read can see any prefix of the new file. A key that sorts
+    then written front to back in its sorted key order [INFERRED: server/registry.c,
+    save_branch] -- so a read can see any prefix of the new file. A key that sorts
     after `root` and comes after its last line in the text proves every line of it was
     written; without one the text is refused. Every wine prefix has such a key
     (`Software\\Wine`). What no lock excludes: a read that overlaps a rewrite changing a
