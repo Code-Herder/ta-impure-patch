@@ -72,8 +72,9 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
    here unless `repaint`, which is the palette-moved case that recolours in
    place instead of blanking the world for the length of the job.
    `tag` prefixes the log lines, `prio` orders it against the other jobs
-   (terrain 0, features 1, effects 2, units 3, the UI 4), `oneshot` marks a
-   fixed list whose completion is logged as the restore's "done" line.
+   (terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures
+   5), `oneshot` marks a fixed list whose completion is logged as the
+   restore's "done" line.
    NULL, with the reason in tagpu.log, when the model or the device cannot.
    Render thread only, and only between the seam's frames. */
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,

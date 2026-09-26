@@ -224,6 +224,19 @@ static unsigned s_colSettled = 0, s_colSettledSeen = 0, s_colRepaints = 0;
 /* the palette generation `s_colRepaints` was granted for: the budget below is
    per GENERATION, not per validity edge (see col_ask_repaint) */
 static unsigned s_colRepaintsGen = (unsigned)-1;
+/* THE PICTURE STORE'S HALF (tagpu_vk_gui.c): a decoded asset and a
+   transformed stamp cross as bytes rather than as atlas sprites, and the
+   consumer restores them in a store of its own.
+   `s_picArm` is Classic++'s assets being armed at all -- NOT `s_colValid`,
+   because an asset is seeded ONCE, at the flip that first copies it, and that
+   is usually before the UI atlas has restored anything: gated on validity,
+   the main menu's backdrop would never be restored. A colour plane on a twin
+   while colour is not valid is harmless -- the composite reads it only under
+   `s_colValid` (`colourTwins`).
+   `s_picSettled` is the consumer's settle count, and each new one asks the
+   engine for a repaint (`tagpu_gui_pic_settled`). */
+static int      s_picArm = 0;
+static unsigned s_picSettled = 0, s_picSettledSeen = 0;
 #define COL_REPAINT_MAX 32
 /* THE PALETTE THE RESTORED ART IS RIGHT FOR, and the settle counter of 3.4.
    `s_colPalSeen` distinguishes "never armed" from "armed against serial 0". */
@@ -924,6 +937,11 @@ void tagpu_gui_col_ready(int have, unsigned settled)
     s_colSettled = settled;
 }
 
+void tagpu_gui_pic_settled(unsigned settled)
+{
+    s_picSettled = settled;
+}
+
 /* Once per present, BEFORE the drain, because the sprite ops it replays ask
    whether colour is valid and the answer has to be one frame's answer.
 
@@ -1004,12 +1022,24 @@ static void col_valid_edge(int on)
         was = on;
         if (!on) return;
         s_colSettledSeen = s_colSettled;
+        s_picSettledSeen = s_picSettled;
         if (col_ask_repaint())
             slog("gui: Classic++ colour is valid - asking the engine for a repaint, because "
                  "art already on a surface keeps the indices it was drawn with");
         return;
     }
     if (!on) return;
+    /* THE PICTURE STORE ASKS FOR ITS OWN, OUTSIDE THE ATLAS'S BUDGET. A settle
+       there is a picture new to the store finished (tagpu_vk_gui.c `pic_step`),
+       so a repaint that draws only pictures the store holds cannot cause
+       another, and content it evicted and stores again does not count --
+       which is the bound the budget stands in for on the atlas's side. Spending
+       the atlas's 32 instead would let a walk through the map list (a new
+       preview each pick) use up the repaint an in-game sidebar needs later. */
+    if (s_picSettled != s_picSettledSeen) {
+        s_picSettledSeen = s_picSettled;
+        g_guiq.colarm++;
+    }
     /* AND AGAIN EVERY TIME THE RESTORE SETTLES HAVING PAINTED MORE. The sprites
        drawn by the last repaint may have put entries in the atlas that had no
        restored texels yet, and those draws took alpha 0; one more repaint draws
@@ -1027,12 +1057,15 @@ static void restore_step(void)
 
     /* `norestore` is the A/B lever: the UI layer with the art it would have
        had before Classic++, while the world goes on restoring. */
+    s_picArm = 0;
     if (s_norestore || !tagpu_classicpp_assets()) { s_colValid = 0; col_valid_edge(0); return; }
     /* ARMING IS POLLED, NOT LATCHED AT START-UP. `tagpu_gaf_atlas_restore_vk`
        is idempotent and answers 1 on every call after the first, so this is a
        compare once the list exists -- and `assets=0 -> 1` from the
        render-options row arms it on the next present. */
     if (!tagpu_gaf_atlas_restore_vk(&s_atlas)) { s_colValid = 0; col_valid_edge(0); return; }
+    /* the list the consumer keys its picture store on is published from here */
+    s_picArm = 1;
     /* AND THE CONSUMER HAS TO HAVE SOMETHING TO SAMPLE. Saying restored to a
        consumer with no restored image is a frame it must refuse WHOLE -- the
        op would write alpha 0 into a twin that keeps it -- so the first two
@@ -1432,6 +1465,15 @@ static void drain(void)
                     m->kind = TAGPU_GUIOP_SEED; mir_box(m, o);
                     m->w = o->w; m->h = o->h;
                     m->aoff = off; m->alen = o->alen;
+                    /* A PICTURE FOR THE CONSUMER'S STORE: the loader's bytes,
+                       which nothing has drawn over, restored and coloured
+                       there. Its colour plane makes every copy out of it carry
+                       colour (`twin_copy`). */
+                    if (s_picArm) {
+                        if (!t->col) { t->col = 1; s_colTwins++; }
+                        m->col = TAGPU_GUICOL_DST | TAGPU_GUICOL_ON;
+                        s_colOps++;
+                    }
                     /* REMEMBERED, NOT YET ACKED -- `mir_finish` publishes it
                        if and only if this record is handed over. */
                     /* ONLY A REAL OFFER'S TOKEN: a snapshot seed carries 0
@@ -1459,7 +1501,18 @@ static void drain(void)
                 mir_bytes(g_guiq.arena + o->aoff, o->alen, &off)) {
                 TAGPU_GUIOP* m = mir_op();
                 if (m) { m->kind = TAGPU_GUIOP_PIXELS; mir_box(m, o); m->aoff = off; m->alen = o->alen;
-                         if (o->kind == PK_MOVIE) s_movies++; else s_planes++; }
+                         if (o->kind == PK_MOVIE) s_movies++; else s_planes++;
+                         /* A STAMP IS A PICTURE THE CONSUMER RESTORES, under
+                            the same rule as a sprite (`twin_sprite`): only
+                            while colour is valid. One drawn before that is
+                            drawn again -- in the shell at the next flip, in
+                            game by the repaint the validity edge asks for. A
+                            movie frame is not art to restore. */
+                         if (o->kind == PK_PLANE && s_colValid) {
+                             if (!t->col) { t->col = 1; s_colTwins++; }
+                             m->col = TAGPU_GUICOL_DST | TAGPU_GUICOL_ON;
+                             s_colOps++;
+                         } }
             }
             break; }
         case PK_FREE:
