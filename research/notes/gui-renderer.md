@@ -1,14 +1,14 @@
 # GL UI renderer — the plan for Phase E
 
-> **READ THIS FIRST — PHASE E's DRAWING HALF WAS DELETED 2026-09-20.** The clean cut removed
-> `tagpu_gui_surf.c`, `tagpu_vk_gui.c`, the twins, the sharp layer, the composite and their seven
-> shader programs: the engine's replayed UI twin and our own device-resolution layer reached the
-> screen through ONE quad, so removing the engine's half meant removing both
-> ([gpu-status](gpu-status.html) §2.81). The game has no UI on screen. **What survives is the
-> capture** — `tagpu_gui_hook.c`'s observers, the op stream and the census — and it survives
-> because the op stream is the engine's UI stated SEMANTICALLY, which is what the UI will be
-> rebuilt from. **Every engine fact on this page still holds and is the reason to keep it**; every
-> claim about a twin, a mirror, a layer or a composite is history.
+> **READ THIS FIRST — THE UI IS DRAWN ON THE VULKAN LANE, AND THE ENGINE'S FRAME IS NOT.** The
+> clean cut ([gpu-status](gpu-status.html) §2.81) removed every path by which TA's composed frame
+> reached the screen, and the drawing half came back the same day without it: `tagpu_gui_surf.c`
+> drains the op queue into the twins, and `tagpu_vk_gui.c` draws them and the sharp layer (cursor,
+> minimap) over the world. The twins are the UI's only picture — `LAY_FS` declares no sampler for
+> TA's surface, `PK_SEED` crosses without its bytes and `PK_PIXELS` is dropped — so whatever the
+> publisher does not observe is not on screen (§25 is the movie). `tagpu_gui.h`'s opening block is
+> the current description of the lane. **Every engine fact on this page holds**; the GL twins, the
+> composite over the engine's frame, `strict` and the stale-mirror guard of §21.2 are history.
 
 *The engine's software frame is UI only since G13b; this page is the plan for making the UI
 ours too — the side panel, the top and bottom bars, the minimap, chat and dialogs in game, and
@@ -132,7 +132,8 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
   *This read "three vertices are origin, `+u` and `+u+v`" until the landing review disassembled the
   loop; the 2026-09-07 sighting that produced it had only looked at the first three.* That case is
   now resampled to its destination in `scale_capture` and published as an ordinary `PK_SPRITE`, so
-  **the render thread is untouched** (its sprite quad is `(sl,st)-(sl+fw,st+fh)`, the frame's size,
+  **the render thread is untouched** *[a sprite no longer: since 2026-09-26 it crosses as `PK_PLANE`, a box of
+  indices with no key and no atlas entry — §26]* (its sprite quad is `(sl,st)-(sl+fw,st+fh)`, the frame's size,
   deliberately — a clipped sprite still needs its whole quad); anything rotated, sheared or clipped
   keeps the old behaviour and publishes its box. *["partial" left this list in landing 8e: a
   partial uv window is a supported source now, and it was the whole of the shell's last residual —
@@ -481,8 +482,9 @@ put in a `PK_BAR` and no outline to put in a `PK_RECT`; it fell to `PK_PIXELS` a
 dropped every one of those since the clean cut.
 
 **What crosses is the operation.** `PK_TINT` carries a box and a row and no arena bytes;
-`PK_SHADE` carries the 32 × 256 table once. The table may cross for `PK_ASSET`'s reason and not a
-weaker one: it is a palette-derived remap the engine builds at init, and **nothing composed it** —
+`PK_SHADE` carries the table once — the lighten table's 32 × 256, with the box shader's rows
+after it (§26). The table may cross for `PK_ASSET`'s reason and not a weaker one: it is made of
+palette-derived remaps the engine fills at init, and **nothing composed it** —
 the same category as the palette itself, which has always crossed. The consumer then applies the
 remap to its own twin, and no engine pixel is involved at any point.
 
@@ -573,7 +575,7 @@ untouched. The window is bounded against the frame header at observe time **and 
 `scale_capture`** against the header that function reads, because the decode and the walk both
 index off the second read.
 
-**The one non-local consequence: a window breaks the atlas key.** The consumer keys a sprite on
+**The one non-local consequence: a window breaks the atlas key.** *[Gone since 2026-09-26 with the atlas entry itself: a transformed stamp crosses as `PK_PLANE` — §26.]* The consumer keys a sprite on
 `(frame, pix, w, h)`, which was an identity for exactly as long as a transformed draw could only be
 the whole frame. Two windows of one frame resampled to the same destination size are the same key
 with different texels — and `tagpu_gaf_atlas_find` runs **before** `atlas_put`, so the second draw
@@ -702,7 +704,8 @@ so applying one over a box the drain failed to repaint folds this frame's error 
 input — `LUT[LUT[x]]`, then `LUT³[x]`, with nothing short of a `PK_RESET` to unwind it. Since
 `PK_PIXELS` is dropped by design, the ingredient was already on the shelf. The drain now records
 the boxes it dropped a `PK_PIXELS` for and **declines any tint that intersects one**, which leaves
-the twin at its last consistent state instead of compounding.
+the twin at its last consistent state instead of compounding. *[Per pixel since 2026-09-26: the tint is cut
+around the dropped boxes and the rest applied — §26.]*
 
 **Two things the reviewers went after and did not get.** The tint adds 24 draws and 24 quads per
 focused-gadget flip where there were none, which is new pressure on `DRAW_MAX` (16 384) — but
@@ -1159,8 +1162,8 @@ they carry there; G15a adds the new ones.
 | `0x4C5E70` | `GetContext(out)`: NULL-context path, arm 1 = `*(globals+0xBC)` | VERIFIED 2026-09-07 |
 | `*(0x51FBD0)+0xBC` / `+0xDC` | the system back buffer every flip presents / its valid flag | VERIFIED 2026-09-07 |
 | `0x4C7580` | textured-**quad** stamp `(ctx, src, xy[8], uv[8])`; **FOUR** vertices (`cmp ecx,0x4` at `0x4C7676`, stride 8), origin, `+u`, `+u+v`, `+v`, and the span is HALF-OPEN in both axes — the far vertex is the edge it stops before, not a pixel. With `uv == NULL` the engine synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)` — note `w-1` | VERIFIED; args MEASURED 2026-09-07, the half-open extent MEASURED 2026-09-21, **the vertex COUNT corrected from three to four 2026-09-21 by the landing review** |
-| `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)`, `ret 0x10` | VERIFIED 2026-09-07 |
-| `0x4BF4D0` | framed box `(ctx, RECT*, colour)`, `ret 0xC` — the F4 popup's border | VERIFIED 2026-09-07 |
+| `0x4C6D20` | the rect copy `(ctx, src, srect, drect)`, `ret 0x10` — the size from `srect`, only the top-left of `drect`, no clip [DISASSEMBLED 2026-09-26] | VERIFIED 2026-09-07 |
+| `0x4BF4D0` | the box SHADER `(ctx, RECT*, level)`, `ret 0xC` — a remap of what is in the box, not a fill: the F4 popup's border, a list's selected row, the modal dim [CORRECTED 2026-09-18; its callers 2026-09-26, engine map] | VERIFIED 2026-09-07 |
 | `0x4BF7B0` | the focus rectangle, `(ctx, RECT*, **level**)` — the third argument is a shade level into `globals+0xC8`, not a colour [CORRECTED 2026-09-18; four edges, six rings, disassembled 2026-09-21] | VERIFIED 2026-09-07 |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)`, `ret 8`; flags `1` build, `2` teardown, `0x40` redraw | VERIFIED 2026-09-07 |
 | `0x466B00` | `DrawMinimap(ctx)`, `ret 4`, one caller `0x46961F` | VERIFIED 2026-09-07 |
@@ -1731,8 +1734,8 @@ read from the code and then from the reset reasons once they were logged:
 - **The palette.** Every palette the engine sets goes through `0x4BA200`, which keeps the
   entries in the graphics globals and hands DirectDraw `min(255, entry × gamma)` with the gamma
   from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the code default 12, and
-  whatever the one shared registry `Gamma` currently says — 1.125 and 1.0 have both been read;
-  §15) — and
+  whatever the registry's `Gamma` says, which under tacli is the instance's own store — 1.125 and
+  1.0 have both been read; §15) — and
   never scales `main+0x143A7`. The engine's own pixels beneath the twin are shown by cnc-ddraw
   through the palette its `SetEntries` received, so that is what the twin resolves through now:
   the primary's palette object in this DLL, read under the fork's lock, the engine's table the
@@ -3443,8 +3446,9 @@ luminance, flat, for eighteen seconds.
 
 `draw_layer` does not draw *over* the frame; it **replaces** it with a full-screen quad
 composed from the twin of the presented surface (§3.4). The twin is fed by the publisher,
-which observes the engine's drawing routines. **The intro Smacker writes the primary surface
-directly**, so no op ever reaches that queue: the twin keeps the bytes its seed left there —
+which observes the engine's drawing routines. **No drawing routine touches a movie frame**:
+`SmackDoFrame` decodes into the engine's offscreen and the ordinary flip presents it (§25), so no
+op ever reaches that queue: the twin keeps the bytes its seed left there —
 black, at coverage 255 — and the layer faithfully paints that stale black over a movie
 playing underneath.
 
@@ -4268,3 +4272,226 @@ previous build shows no cursor over the minimap, and this one draws it on top.
 
 **The rule for a future client of the layer**: record it before `sharp_cursor`. Anything
 recorded after the cursor covers it.
+
+## 25. The movie on the Vulkan lane — `PK_MOVIE`  [MEASURED 2026-09-26]
+
+**THE REPORT.** *"intro movie is a black screen, at least on windows machine."* Every movie was
+black on the Vulkan lane while the engine's own frame held the picture: the window's mean
+luminance was 3.3 against the golden source's 98.1, mid-intro.
+
+**WHY.** The twins are the UI's only picture (the banner), and a twin holds what the publisher
+observes. A movie frame passes no drawing routine: `SmackDoFrame` decodes it into the engine's
+offscreen and the ordinary flip `0x4C63A0` presents it ([exe map](exe-reverse-engineering.html),
+*The movie player*). So the twin kept what its seed left there, which is black.
+
+**WHAT CROSSES.** `PK_MOVIE` (`tagpu_gui_int.h`): the movie's box on the flipped surface, and the
+bytes in it. It is on the allowed side of the clean cut for `PK_ASSET`'s reason (§2, the
+loader's `bitmaps\` backdrops): the bytes are what the decoder wrote, and no pixel of the 1997
+rasteriser is in them. The drain bounds the box against the twin it lands in and mirrors it as
+`TAGPU_GUIOP_PIXELS` with its bytes, a shape the Vulkan lane already validates and uploads.
+
+**EXACT BY ORDERING, NOT BY TIMING.** `before_flip` knows a movie flip by its return address,
+`0x47C455`: the frame routine `0x47C3A0` has one call of the flip, the instruction after
+`SmackDoFrame`. At that entry the box holds the decoded frame and nothing else, since the engine
+blits its cursor inside the flip, after the observer has read the surface. The producer records the
+op and publishes it **in the same call**: the flip that recorded it bypasses the census cadence
+(`CENSUS_MS`), and every exit that does not publish clears the op window. So the bytes are read
+at the one moment they are exact, and never at any other.
+
+**THE BOX IS DATA.** `W` and `H` come from the Smack header (`+4`, `+8`) through the movie object
+`*(main+0x38D7B)`, which the engine stores before the loop and clears after it. The header is
+alive across the flip because the engine closes the Smack only in the object's destructor, after
+the loop, and dereferences it again at the flip's own return. Both words are bounded against the
+surface before they become a box, and a box that does not fit is refused and logged once.
+
+**NOTHING TO A LANE THAT IS NOT RECORDING.** The lane's mirror drops a `PK_MOVIE`'s bytes while
+it is not recording, so the producer sends none then: it reads `mirArmed`, the throttle `PK_ASSET`
+already reads, and a stale read costs one frame either way.
+
+**ONE FRAME IN FLIGHT, TWO ACROSS A PALETTE CHANGE.** Every `PK_MOVIE` carries the whole frame, so
+the producer skips a frame while the one before is still queued (`g_guiq.qTail` has not passed
+it). A skipped frame costs that frame and nothing else. Without the rule, a movie decoding faster
+than the drain queues about 300 KB a flip until the arena overflows: under the harness's silence
+it ran unpaced, 4 658 frames in seconds with 41 stalls and 42 reseeds. **The exception is a new
+palette.** It does not cross with the bytes: the frame routine hands it to `SetEntries` before it
+decodes (`0x47C404`), and the lane resolves the twin through the palette live at its present.
+Skipping that frame would leave the last one on screen under the new palette until the next
+crossed, so a frame whose palette (`obj+0x10`) differs from the newest carried one goes with that
+one still queued, and only a second queued frame stops it. The retail movies set a palette at
+frame 0, and `5.zrb` at frame 1 as well. The present that falls between `SetEntries` and the
+frame's own flip still shows the old frame under the new palette, as a palettized primary does
+when its palette changes before the flip [INFERRED].
+
+**THE INDICES CANNOT AGE PAST 2^31.** `qTail` is the consumer's and only grows, and each index the
+rule keeps is refreshed by every frame carried and dropped at the first flip that is not a
+movie's, so it is never older than one movie's ops. A stale read of `qTail` skips one frame more,
+never one fewer. Only a flip that recorded a frame bypasses the census cadence; the rest keep it,
+which matters when a silent movie flips thousands of times a second.
+
+**NO REDRAW INSIDE A MOVIE.** A forced screen repaint (`repaint_service`, owed by a reset) is not
+paid on a movie's flip: the engine never redraws a GUI screen inside its movie loop, whose
+offscreen is the buffer the decoder writes. The debt waits for the first flip that is not a
+movie's.
+
+**FOCUS.** The frame routine decodes nothing unless `GetFocus()` is the game window. The armed
+input shield answers `GetFocus` with the game window, as it answers every other input poll
+(`fake_GetFocus`, `winapi_hooks.c`), so a harness instance plays its movies without focus. With the
+shield off, the real answer passes through.
+
+**MEASURED** (Wine, `tacli create <i> --intro`; 1.zrb, the launch's intro, 599 frames, and the
+INTRO button's cinematic 2.zrb, 4 058; both 30 fps):
+
+| what | result |
+|---|---|
+| the picture | on the reference setup's desktop, the control DLL's window is black while the golden source has the movie (mean 3.3 against 98.1), and this build's window shows it. On a private Xvfb with the RTX presenting, the presented window and the golden source agree except on pixels that moved between the two captures (2.3 % over 32 levels, mid-cinematic) |
+| the engine's cadence | every flip interval 30–37 ms with a real-time audio clock (449 of 449, 899 of 899), identical with the movie op off; the producer's own work under 1 ms a frame |
+| the presented cadence | FIFO at 60 Hz on the Xvfb, recorded at 60 fps for 4 s mid-cinematic: 120 distinct frames, 118 of them held for exactly two captures. With vsync off on the desktop the render thread presents once per movie flip, 60–61 presents in every 2 s window |
+| what reaches the lane | the launch's intro: 588 of 599 recorded and carried, 0 skipped in flight, 11 not sent while the lane came up. Silent (unpaced): all 599 flip before the lane records; the cinematic's 4 058 flips carry 51 and skip 4 007, with no overflow, no stall and no reset |
+| the log | `gui: movie 640x480 at (0,0) on surface … -- its frames cross as SmackDoFrame's decoded bytes` at a movie's first carried frame; `gui: movie ended after N flip(s): R frame(s) recorded, S skipped in flight, U not sent (the lane was not recording), F refused` at the next flip that is not a movie's, one per movie (the player flips once before each); `movie=` in the `gui:` heartbeat counts the frames mirrored |
+
+**How it was measured, and the traps.** A movie is paced by `SmackWait` off its audio track, so a
+cadence needs `--sound` into a sink that runs in real time. Wine's ALSA `null` device does not:
+its intervals scatter with the movie op on and off alike. The cadences above were taken into a
+private PulseAudio null sink. **The reference setup's monitors were in DPMS power save**, under
+which a FIFO present is throttled to about one a second and `import -window` reads black: the
+render thread logged 2–3 presents per 2 s and the producer's skips climbed to 572 of 599. So the
+desktop runs used vsync off, and the picture and the FIFO cadence came from a private Xvfb, which
+no power saving touches (`ta-drive`, `references/measuring.md`, *Movies*).
+
+**NOT CLOSED.**
+
+- **The launch's intro loses its first eleven or twelve frames — left open by the owner's
+  decision (2026-09-26).** The engine starts `1.zrb` at the shell's first screen, before the
+  Vulkan lane is up (`vk: up in 214 ms`), and nothing is sent until the lane records. `1.zrb`
+  opens with a fade from black, luma 16 at frame 0 and 94 at frame 12, so the movie appears
+  part-way into its fade. The INTRO button's cinematic starts with the lane up and is not
+  affected. What closing it would take, as surveyed:
+  - **A plain wait on the game thread deadlocks.** The render loop (`vk_render_main`) advances
+    only when the game thread's DirectDraw calls release `render.sem`, and bring-up is started
+    by one of those iterations (`tagpu_vk_frame` in `ST_OFF` starts `up_worker`); the game's
+    first flip is the movie player's own pre-movie flip, so a game thread parked after it stops
+    the renderer from coming up at all.
+  - **A wait that keeps releasing the loop still needs a terminal state from every startup
+    path, and several have none**: the window with no extent ("trying again"), the `ST_OFF`
+    refusals, a failure before the first present (put back to `ST_OFF`, then the hand-over to
+    `gdi_render_main`), a refused GUI pass. And `mirArmed` reading 1 does not yet mean the next
+    `PK_MOVIE` composites: the pass is built at its first hand-over, and the store may still be
+    waiting on the RESET only a game-thread publish sends.
+  - So a fix by construction is a startup protocol across cnc-ddraw's render loop and the
+    Vulkan state machine; a capped wait would be a timing mitigation. Neither was judged worth
+    0.4 s of a once-per-launch fade.
+- **Not run on a Windows driver**, the platform of the report. Nothing in the path is
+  platform-specific (the engine's own routine, flip and decoder), but that is an argument, not a
+  run.
+
+## 26. A list's selected row, the modal dim and SELMAP's map preview  [MEASURED 2026-09-26]
+
+**THE REPORT.** On the skirmish map list the preview refreshed only on the first pick, and the
+selected row had no highlight. The same ask added a mouse wheel that scrolls a list as a list view
+does.
+
+**FOUR DRAWS, ONE SHAPE.** Each was an engine draw that crossed as something the lane drops, or as
+something it is not. All four are shell draws, and the multiplayer battle room's map list is the
+same screen and the same preview builder ([engine map](exe-reverse-engineering.html), *SELMAP's
+map preview*).
+
+1. **The selected row is the box shader.** `0x4BF4D0` at level +30 (`0x4A1FC4`/`0x4A1FD7`), a
+   remap of what is already under the row. It crossed as its box, `PK_PIXELS`, and was dropped.
+   It now crosses as **`PK_TINT`**, whose row is precomputed for its level: `PK_SHADE` carries 96
+   rows (`TAGPU_GUI_SHADE_ROWS`, layout in `inc/tagpu_gui.h`) — the lighten table whole for the
+   focus edges, then one row per box-shader level −32..31. The box shader reads its destination
+   SIGNED (`0x4BF5E8`), so its effect for one level is `T[r][i]` below 128 and `T[r−1][i]` above;
+   carrying that row keeps the consumer a plain lookup. A level whose row is 0 would read the heap
+   in front of the table: it publishes its box instead, and no stock caller reaches one (engine
+   map, *Who calls the box shader*). The disabled rows (−19..−22), the popup frames and the modal
+   dim ride the same path.
+2. **The tint was refused, because the list's background restore crossed as a box.** Before the
+   listbox repaints its rows it restores its rect with `0x4C6D20`, a rect copy from the screen's
+   background surface. Recorded as a box, it crossed as `PK_PIXELS`; the drop marked the rows
+   lost, and the compounding guard (§2, *The focus glow*: `tintstale`) then declined the highlight.
+   It is an **`OP_COPY` → `PK_COPY`** now, twin to twin, whenever the source window lies inside
+   the source: `0x4CBDD1` takes the size from `srect` and only the top-left of `drect`.
+3. **The modal dim was refused over SKIRMISH's side buttons.** `GUI_Load`'s `0x800` flag dims the
+   covered screen at level −24 (`0x4AA969`), and the side buttons under SELMAP are two-frame
+   STACKS: `0x4B7F90` hands each sub-frame to `0x4B8500` and writes nothing itself. The stack's own
+   op crossed as its box, `PK_PIXELS`, and the drop marked it lost — so the guard, which then
+   declined any tint touching a lost box, declined the whole 640×480 dim. Two changes. **A stack
+   is not published at all** (`publish`: an `OP_GAF`/`OP_GAFA`/`OP_GAFB` with sub-frames), because its
+   sub-frames' ops carry every pixel it puts down. And **the refusal is per pixel**: the drain cuts
+   a tint's box around every box dropped in its batch (`tint_pieces`, up to 64 disjoint pieces;
+   past that the whole box is declined, which is the old answer) and applies the rest. The hazard
+   was always per pixel — a pixel outside every dropped box holds what the engine held before its
+   tint — so this is exact rather than lenient. `tints=` gained the split count.
+4. **The preview is a transformed stamp, and it cannot be a keyed sprite.** `MAPPIC`'s frame
+   reaches the panel through `GAF_DrawTransformed 0x4C7580`, which crossed as a resampled sprite
+   (§2, *The focus glow*, the player-colour swatches) keyed in the atlas. Three facts break that. Every pick frees the frame and
+   allocates the next at the same address and size; `0x4665D0` fills it with 0 before stamping the
+   letterboxed minimap, so a hash of the plane's head is the same for every map wider than tall —
+   the first map's entry was hit for ever after, which is the report. `0x4B8DA0` never writes the
+   frame's key byte, so it is whatever the allocation held (18 and 65 measured), and texels equal
+   to it were keyed out. And keying the entry by the whole plane's content instead gave every map
+   browsed an entry of its own: **131 arrow presses through the list filled the atlas**, and the
+   full atlas's fresh start blanked the screens under the modal (SKIRMISH 92 323 px black; an A/B
+   with the stack skip off showed the skip was not the cause).
+
+   **What crosses now is `PK_PLANE`**: the stamp's box and the indices it leaves, row by row — the
+   crop of `scale_capture`'s resample to the op's box, a bound checked against the resample's own
+   extent before a byte is copied. It is a box because that is what the engine writes: the span
+   `0x4C7310` copies every texel of the rectangle, key colour included (`0x4C74C7..0x4C74CE`, no
+   compare). The drain mirrors it as `TAGPU_GUIOP_PIXELS`, the path `PK_MOVIE` takes, so there is
+   no key and no atlas entry at all. The bytes are the frame's own art resampled inside the
+   engine's call, the class a sprite's plane is, and never the composed surface. With it went the
+   window's packed atlas key (§2, *The focus glow*: "a window breaks the atlas key"): no transformed
+   stamp takes an atlas entry any more, so `tagpu_gaf.c`'s entries are whole frames again.
+
+**A CRASH THE PICKS REACHED, in the surface table's destructor.** The preview builder `0x4665D0`
+draws into two frames — SELMAP's preview and a scratch copy it frees before it returns — through
+contexts `0x4B8A80` builds, so both were tracked surfaces; but `before_memfree` retired only an
+entry whose base was `block + 0x30`, the `0x4C69F0` surface layout, and a frame's pixels sit at
+`block + 0x18` (or, for `0x4B91B0`'s two-plane frames, at the second plane). The frames' entries
+and their ops outlived the blocks: an arrow walk up the list, several picks between two flips,
+had `publish` seed a freed preview frame at the flip and ended in a read access violation at the
+end of a heap segment. The
+destructor now retires every entry whose base lies inside the freed block, by the allocator's own
+size (`surf_dies_with`; [engine map](exe-reverse-engineering.html), *`MEM_Free 0x4D85A0`*), and
+the `gui trace` shows both frames retired on every pick. The path is main's as well; this
+landing's picks are what reached it.
+
+**THE WHEEL** is the DLL's, the engine has none: a notch the zoom declines scrolls the list under
+the pointer by the system's lines-per-notch, through the engine's own scroll calls, and leaves the
+selection alone. Mechanism, gates and measurement: [GUI gadgets](gui-gadgets.html) §2.4.1. The
+zoom now also declines every notch while an in-game options screen owns input
+([gpu-status](gpu-status.html) §2.3), so a wheel over `ARMOPT.GUI` no longer zooms the world
+behind it.
+
+**MEASURED** on a private Xvfb, 1024×768, `SINGLE → Skirmish → SelectMap` and four picks by
+`ui select`, each frame the presented window (`import -window`) against the engine's golden source
+(`tacli shot`):
+
+| what | result |
+|---|---|
+| SKIRMISH, SELMAP on entry, and four picks | 0 px differing, highlight and preview on every pick — and after walks of 131 and 27 arrow presses through the list |
+| the atlas after the 131-press walk | 171 entries, no fresh start |
+| a scroll, then a click on a row | the row selected, its highlight and its preview correct, 0 px |
+| the in-game badge and a label, zoomed | 0 px |
+| after the destructor fix: SKIRMISH, SELMAP and four picks, the last the 15-press walk to Acid Pools that crashed before | 0 px each, no crash; 224 more presses down and back through the list, no crash |
+| the shell tour | 0 px except `MAINMENU.GUI`'s own animation between the two captures |
+
+**NOT CLOSED.**
+
+- **In Classic++ a `PK_PLANE` stamp shows the palette, not restored colour.** The drain mirrors
+  it as `TAGPU_GUIOP_PIXELS`, which clears the colour twin under its box, and nothing restores a
+  plane. That covers SKIRMISH's player swatches, the in-game badge and the preview. Main restored
+  the first two as atlas sprites. MEASURED 2026-09-26, Classic++ under `--defaults`: a swatch is
+  337 colours on main against 17 here, at most 22/255 per channel apart, and the Comet Catcher
+  preview is a mean of 2.7 apart. Each matches the engine's frame here. The owner's call was to
+  land and restore it next: stamps of archive frames go back to restorable atlas sprites, drawn
+  unkeyed (the span copies the key colour), and the preview keeps its plane, because every pick
+  makes a new runtime picture.
+- **The battle room's SELMAP was not run.** It is the same builder (`0x444A20`, called from
+  `0x47AADE`/`0x47AC73`), the same gadget and the same `0x800` load; that is an argument from the
+  disassembly, not a run.
+- **No in-game list was scrolled**: no in-game screen with more rows than it shows was reachable
+  (no saved games on the instance).
+- **A tint over more than 64 pieces is declined whole**, as every tint over a dropped box was
+  before. Nothing measured reached the cap.

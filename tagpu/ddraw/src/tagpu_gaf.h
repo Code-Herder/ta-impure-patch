@@ -51,15 +51,6 @@
 typedef struct TAGPU_GAFENT {
     const void*    frame;       /* keyed on the header AND its pixel ptr:    */
     const void*    pix;         /* freed sequences get their address reused  */
-    /* AND ON THE SOURCE WINDOW, because (frame, pix, w, h) is not an identity
-       once a transformed draw can take a SUB-RECTANGLE of a frame. 0 is "the
-       whole frame", which is what every 1:1 sprite, every cursor and every
-       atlas_get passes. A windowed capture packs (u0, v0, uw, uh) one byte each --
-       see `scale_capture`'s caller, which refuses to claim a window it cannot
-       key. Without this, two windows of one frame resampled to the same
-       destination size collide, `atlas_find` runs BEFORE `atlas_put`, and the
-       second draw silently reuses the first one's texels. */
-    unsigned       win;
     unsigned short w, h;
     unsigned short x, y;        /* its first texel in the atlas (inside the border) */
     float          u0, v0, u1, v1;
@@ -480,20 +471,16 @@ int tagpu_gaf_decode_cov(const unsigned char* g, int w, int h, unsigned char* ou
    draws none of it when any was deferred. */
 const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* g);
 /* The same entry from PRE-DECODED pixels (w*h bytes, colour key `ck`), keyed on
-   (frame, pix, w, h, win) but never reading either pointer: the UI renderer's
+   (frame, pix, w, h) but never reading either pointer: the UI renderer's
    sprite ops carry their bytes across the thread boundary because the shell frees
    a popped screen's art under the render thread (gui-renderer.md 3.5). `find` is
-   the lookup alone, NULL when absent.
-
-   `win` is the SOURCE WINDOW and 0 means "the whole frame" -- which is what
-   atlas_get and every 1:1 caller pass. It exists because a transformed draw can
-   take a sub-rectangle of a frame, and (frame, pix, w, h) alone cannot tell two
-   such windows apart. */
+   the lookup alone, NULL when absent. Every entry is a WHOLE frame: a transformed
+   draw's resample crosses as a box of its own (`PK_PLANE`), never as an entry. */
 const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
-                                        int w, int h, unsigned win,
+                                        int w, int h,
                                         unsigned char ck, const unsigned char* pixels);
 const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
-                                         int w, int h, unsigned win);
+                                         int w, int h);
 /* Recycle a full atlas. With `repack` set this RE-LAYS the entries it holds
    tallest-first and keeps them (moved in the mirror when painted, reserved
    and painted on demand otherwise); without

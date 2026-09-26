@@ -255,10 +255,12 @@ spread, p99 **1.00 px**. Both are now in `tools/barwobble_detect.py`, with
 at a zoom. Details and the full table: [gpu-status](gpu-status.html) §2.2.
 
 **The reference setup was running at double game speed.** Found while measuring the above:
-`gamespeed` was **20**, not TA's normal 10. It lives in `user.reg`, which the template prefix
-and all 58 instance prefixes share as **one inode** — the same trap already documented for
-`Gamma` — so one session pressing `+` leaves every later launch of every instance at that
-speed, and a running instance writes its own copy back at exit. Set back to 10 on 2026-09-09.
+`gamespeed` was **20**, not TA's normal 10. It lived in `user.reg`, which the template prefix
+and all 58 instance prefixes shared as **one inode** — the same trap already documented for
+`Gamma` — so one session pressing `+` left every later launch of every instance at that
+speed, and a running instance wrote its own copy back at exit. Set back to 10 on 2026-09-09.
+Each instance now keeps it in its own registry store, made at 10 ([tacli
+design](tacli-design.html) §"The registry: a store per instance"); `+` moves that instance only.
 It multiplies the tick rate (`main+0x38A47`: 30/s at 10, 60/s at 20) while the picture still
 changes 30 times a second, so the in-game clock (`tick ÷ 30`) was reading **2× real time**.
 Read it before trusting any measurement that is a rate, a duration, or a distance per second:
@@ -3781,6 +3783,29 @@ every eye reader. The register, which lists every one, is [binary patches](binar
 | The saved-game order loader `0x43A420` walks its order table one record past its end for an order saved without its name, and keeps a count it did not find as the order's type (`0x43A58D`) | ● done 2026-09-25 (B6) | `jbe` → `jb`, and not found goes to "Ready" (`0x43A552`). Not run: this exe's writer always stores the name, so it rests on the disassembly |
 | The stockpile bar `0x439D20` divides by the slot weapon's reload time with the slot index unbounded and the divisor untested (`0x439D41`) | ● done 2026-09-25 (B6) | a slot index above 2, a NULL weapon or a zero reload draws no bar. Not run: every stock stockpile weapon's `reloadtime` is 120 to 180, so it rests on the disassembly |
 | `DrawRangeCircle 0x438EA0` divides by zero segments for a radius of 1 (`0x438EDE`) | ● done 2026-09-25 (B6) | N = 0 draws no circle and no label. Not run: no stock unit has a range of 1 and the `ShowRanges` cheat could not be typed under injected input, so it rests on the disassembly |
+
+## Classic parity fixes (2026-09-26)
+
+Places where our Vulkan passes drew something the engine never does, found against the GDI
+backend (`tagpu_gdi.on`), which presents the engine's own frame.
+
+| Fix | Status | Result |
+|---|---|---|
+| Unit faces seen from behind were drawn: the body and hard-shadow pipelines culled nothing, while every engine rasteriser paints only faces that run clockwise on screen ([engine map](exe-reverse-engineering.html), *The rasterisers paint only faces that run clockwise on screen*) | ● landed on local main 2026-09-26 — [GPU status](gpu-status.html) §2.98 | against GDI at 1× on four ARMCVs, the closed hatches show the outside plating with the change and the inside machinery without it; 209 of 608 stock models close a panel with two faces wound apart and skinned apart. **Not covered:** the nanoframe wire still outlines faces seen from behind (the engine's wire walk drops them); build ghosts stay unculled (no engine counterpart; culling would lighten them); only ARMCV, ARMSOLAR and one nanoframe were compared; whether the engine's face-0 skip meets the selection primitive or a real face is open |
+| Textured quads bent along their diagonal: the unit pass drew each as two triangles with affine uv, so any quad that is not a parallelogram kinked its texture (the grid on an opened ARMSOLAR panel). The engine steps uv along each screen row ([engine map](exe-reverse-engineering.html), *How `0x4C8760` lays a texture on a quad*), a layout that moves as a unit turns; the owner chose the per-pixel bilinear map over that rule from a side-by-side demo | ● landed on local main 2026-09-26 — [GPU status](gpu-status.html) §2.99 | the fragment stage inverts each convex textured quad's bilinear map, in the model's own frame, so the texture spans the quad as one surface and does not swim; 27 362 of the 43 845 textured quads in the stock models change, parallelograms do not. Same-time A/B against the previous build: straight panel grids in Classic and Classic++ from 0.5× to 5×, differences on the units only, nothing broken on `crowd-static`. **Not covered:** the browser lab keeps the two triangles; wrecks not looked at; the material stream grows from 20 to 52 bytes a vertex |
+| The shell's map list: no highlight on the selected row, no modal dim over SKIRMISH under SELMAP, and a map preview that kept the first map picked. Each was an engine draw that crossed to the Vulkan lane as something it drops or as something it is not — the box shader `0x4BF4D0` and the list's background restore `0x4C6D20` as boxes, a sub-frame stack as its box, and the preview's transformed stamp as a keyed atlas sprite ([engine map](exe-reverse-engineering.html), *Who calls the box shader*, *SELMAP's map preview*) | ● landed on local main 2026-09-26 — [GUI renderer](gui-renderer.html) §26 | against the engine's golden source: SKIRMISH, SELMAP on entry and four picks at 0 px, also after walks of 131 and 27 arrow presses through the list; the atlas at 171 entries after the long walk. **Not covered:** the battle room's map list (the same builder, not run); a tint over more than 64 dropped pieces is still declined whole |
+
+**Added with the map-list fixes: a mouse wheel over a list** (● landed on local main 2026-09-26 —
+[GUI gadgets](gui-gadgets.html) §2.4.1, [GPU status](gpu-status.html) §2.3e *The engine's UI,
+observed*). The engine has no
+wheel. A notch the zoom declines scrolls the list under the pointer — or the list a slider or scroll
+arrow is bound to — by the system's lines-per-notch, through the engine's own scroll calls, and
+leaves the selection alone; the zoom now also declines every notch while an in-game options screen
+owns input. Measured on SELMAP's 99 maps: it scrolls, clamps at both ends, works over the slider and
+both arrows, does nothing over buttons or the preview, and the frame after a scroll is 0 px from the
+golden source. **Not covered:** no in-game list was scrolled (none with more rows than it shows was
+reachable). **Next:** in Classic++, transformed stamps (the swatches, the in-game badge, the preview)
+show palette colour, not restored colour ([GUI renderer](gui-renderer.html) §26, *NOT CLOSED*).
 
 ## Shipping — the build people can download (2026-09-08)
 

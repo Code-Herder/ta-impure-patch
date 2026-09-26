@@ -298,8 +298,8 @@ bring-up and a swapchain rebuild add nothing to them.
   2, 3 **and** 4 of the option word, and the menu's Shadows row (`SHADOWS`, Options → Visuals
   or the cog) is what sets them now — from the store under `--defaults`, directly without it,
   where it is the one live row. `main+0x37F06` reads `0x3E` on and `0x22` off; peek it before a
-  shot: the registry holding the word is one `user.reg` every instance shares, so a shadows-off
-  left by another run shows up in a control launch.
+  shot: the word is kept in the instance's registry, so a shadows-off an earlier run of the
+  instance left shows up in its control launch.
 - `sun=off` is exactly `light=0`. `light=0` leaves a unit **unshaded**, not Classic-shaded (the
   engine's per-face shade row is the Classic branch's). `assets=0 light=0 shadows=0` is the one
   Classic++ state that is a Classic frame.

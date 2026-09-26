@@ -1647,6 +1647,81 @@ refused) and at `0x459D1D` without it. No stock unit is near: the tallest 1× fr
 (`cordev1`, [limits-evidence §10](tadr-port/limits-evidence.md#10-composite-buffer-6002-12802-0x458195)).
 Drawing such a frame in bands of at most 800 rows at those call sites would close it.
 
+### The rasterisers paint only faces that run clockwise on screen [DISASSEMBLED 2026-09-26]
+
+There is no back-face test anywhere in the unit draw: no normal, no cross product, no flag. The
+cull falls out of how every polygon rasteriser the bakes use builds its span table. Each finds
+the first vertex at the least `y` (top) and the first at the greatest (bottom), walks the chain
+from top to bottom **stepping −1** (wrapping to `n − 1`) into each row's `+0x00`, walks it again
+**stepping +1** (wrapping to 0) into `+0x04`, and then fills a row only when `+0x04 − +0x00 > 0`.
+On a face whose vertices, in index order, run clockwise on the engine's y-down screen, the +1
+chain is the right one and every row fills; wound the other way, the chains swap sides and every
+row is empty. A face seen from behind therefore paints nothing, and the same face seen from the
+front paints normally.
+
+| rasteriser | used by | −1 chain → `+0x00` | +1 chain → `+0x04` | the fill test |
+|---|---|---|---|---|
+| `0x4C8760`, the textured quad (`n = 4`, `and 3` wrap) | the unit bake `0x459830` (`0x459B96`) | `0x4C88A0` | `0x4C8A18` | `0x4C8B6F..0x4C8B78` → span `0x4C7A20` |
+| `0x4C1000`, the flat n-gon | `0x459830` (`0x459BB1`); the shadow `0x45A610` (`0x45A750`) | `0x4C1110` | `0x4C1206` | `0x4C12E2..0x4C12EB` → span `0x4C06E0` |
+| `0x4C8BB0`, the textured quad | the structure/nanoframe bake `0x459C70` (`0x45A39C`) | `0x4C8CF7` | `0x4C8EC8` | `0x4C9078..0x4C9081` → span `0x4C8020` |
+| `0x4C0C70`, the Gouraud n-gon | `0x459C70` (`0x45A3BA`) | `0x4C0D80` | `0x4C0EAA` | `0x4C0FBC..0x4C0FC5` |
+| `0x4C0820`, the wire's edge walk | the nanoframe wire `0x458FA0` | `0x4C08BB` | `0x4C0988` | `0x4C0A53..0x4C0A5C`, and again in the row writer `0x4C0A90` (`0x4C0A9E..0x4C0AAC`) |
+
+So the build-state wire outlines only the faces that face the viewer, too: "every face" in
+[build-state](build-state.html) §`0x458FA0` is every face the walk visits, and the rasteriser then
+drops the back ones.
+
+**The unit bake's face walk, `0x459A9F..0x459BCB`** (`0x459830`, per visible piece; the node is
+`[prim+0x00]`, loaded at `0x45998B`):
+
+- From face 1 when `node+0x0C` is not −1, else from face 0 (`0x459AA2..0x459AB4`) — the rule
+  `0x45A610`, `0x46BAE0` and `0x458FA0` share. Which face the loader leaves at index 0 was not
+  read. In the files, 538 of the 3 014 pieces of the 608 stock models carry a selection
+  primitive and in 302 of them it is not primitive 0; `tagpu_posebake.c`'s body and wire ranges
+  start at face 0 and only its slant range skips it, so if the loader keeps the file's order, the
+  engine skips a real face on those pieces and we draw it. [OPEN — a live read of a node's faces
+  settles it.]
+- Each face's projected vertices are copied **in index order** (`0x459AD5..0x459B02`, 12 bytes a
+  vertex from the piece's projected array at `[esp+0x154]`), so the winding the rasteriser sees is
+  the file's.
+- Flag bit 0 (`face+0x1C`) → `0x4C1000(frame, verts, face+0x04 count, face+0x00 colour)`; else a
+  face of other than 4 vertices is skipped (`0x459B1A`); else `0x4C8760(frame, texture, verts, 0)`
+  with the texture `face+0x10`, or through `0x4B7F30` / `0x4B7EE0` when flag bit 1 is set.
+
+**What modellers did with it.** Two faces over the same vertices, wound apart, make a panel with a
+different skin on each side, and only the side facing the camera is ever painted. Of the 608 stock
+models, 255 carry such a pair and 209 give the two sides a different texture or colour (1 021 such
+pairs; a scan of every `.3do` for primitives in one piece over the same vertex set with opposite
+Newell normals). ARMCV's `door1` and `door2` are one each: `noise3a`, grey plating, facing up and
+out, and `bluenoise1`, dark machinery with lamps, facing down and in — the inside of the hatch. A renderer that draws both faces of a pair gets whichever side wins
+the depth tie (`gpu-status.md` §2.98).
+
+### How `0x4C8760` lays a texture on a quad [DISASSEMBLED 2026-09-26]
+
+`0x4C8760(frame, texture, verts, uvs)`, `ret 0x10`, called by the unit bake at `0x459B96` with
+`uvs = 0`.
+
+- **The corners.** With `uvs = 0` (`0x4C879D`) the function builds its own four on the stack
+  (`0x4C87A6..0x4C87DA`): `(0,0)`, `(w−1, 0)`, `(w−1, h−1)`, `(0, h−1)`, where `w` and `h` are
+  the texture's `u16` at `+0x00` and `+0x02`. So a face's vertex 0 takes the frame's top-left
+  texel and the corners follow the face's index order. Our bake puts them on the frame's edges,
+  `0` and `w`, rather than on the last texel's.
+- **The chains.** Each edge chain carries x (16.16, `+0xFFFF` added, so the ceiling), u, v and the
+  vertex's third coordinate, each in 16.16, into a 0x28-byte row entry: `+0x00` xl, `+0x04` xr,
+  `+0x08`/`+0x0C` u and v from the −1 chain, `+0x10`/`+0x14` from the +1 chain, and `+0x18`/`+0x1C`
+  the third coordinate at the two ends (`0x4C89AF..0x4C89C4`, `0x4C8B18..0x4C8B2E`).
+- **The row.** The span `0x4C7A20` divides each quantity's difference by `xr − xl`
+  (`0x4C7A48..0x4C7A7C`) and steps it linearly along the row. A row starting left of the frame is
+  clipped at 0, with u, v and the third coordinate advanced by as many steps
+  (`0x4C7A80..0x4C7AB9`), and xr is clamped to the frame's last column, its `u16 +0x00` less one
+  (`0x4C7ABC..0x4C7ACD`).
+
+So the texture is linear along each edge and along each screen row. That is the quad's bilinear
+map in two cases: when two opposite sides lie along rows, and for a parallelogram whichever way
+it sits (its bilinear map is affine, and linear steps reproduce an affine map exactly). For any
+other quad the layout depends on how it sits on screen and moves as the unit turns. The Vulkan unit pass maps a convex textured quad by its bilinear map in the
+model's own frame instead, not by this per-row rule (`gpu-status.md` §2.99).
+
 ### A builder's build list, `TEMP UTYPE LIST` — `0x42DA58`, `0x42DAC7`, `0x42BEAF..0x42BED3` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The list.** A builder's `canbuild%d` keys in `gamedata\sidedata.tdf`'s `[CANBUILD]` section are read
@@ -3651,13 +3726,15 @@ Country skirmish. So a per-draw counter is not a per-frame counter and not a per
 anything reported "per N draws" is a ratio, and turning it into a rate needs the draw rate
 measured in the same run.
 
-**`gamespeed` is shared machine state, exactly like `Gamma`.** It lives in `user.reg`, which
-the template prefix and every instance hold as **one inode** (`clone_prefix` is `cp -al`;
-measured 2026-09-09: 101 links). A running instance keeps its own copy and writes it back at
-exit, so a session that presses `+` leaves every later launch at that speed. It was found at
-**20** on 2026-09-09 and set back to 10; **read it before trusting any timing measurement**,
-and note that a walking-unit artifact measured at 20 is twice the size a player at normal
-speed would see.
+**`gamespeed` is registry state that outlives a launch, like `Gamma`.** The game saves it with
+its other options, so a session that presses `+` leaves every later launch that reads the same
+registry at that speed. Under tacli that registry is the instance's own store
+([tacli design](tacli-design.html) §"The registry: a store per instance"), made at 10; it used
+to be the one `user.reg` the template prefix and every instance hold as **one inode**
+(`clone_prefix` is `cp -al`; measured 2026-09-09: 101 links), where it was found at **20** on
+2026-09-09. **Read it before trusting any timing measurement** (`tacli registry <i>
+gamespeed`), and note that a walking-unit artifact measured at 20 is twice the size a player at
+normal speed would see.
 
 ## `main` is deliberately MISALIGNED, and it is redrawn at every launch — mapped by us
 
@@ -4273,13 +4350,17 @@ here** — the table at line 3421 named bits 5 and 7 and had nothing for the dar
 
 Two consequences, and landing 8d walked into both:
 
-- **The caps bit is the engine's own precondition for the buffer being a table**, and it is a
-  separate event from the allocation. `0x4BA660` allocates the LHT's 8192 bytes
-  (`push 0x2000; push 0x50A448; call 0x4D83B0`), stores the pointer at `[ecx+0xC8]` and returns
-  1 **without touching `[globals+0xF0]`**. So "the pointer is non-NULL" and "the table has been
-  built" are different facts, and only the second is the one a reader wants. `0x4BEC70` — the
-  tint's own writer — tests only the pointer (`0x4BEC7B`) and will draw through an unbuilt
-  table; `tagpu_packet_pub.c`'s `lht_snapshot` has always tested the bit.
+- **The caps bit says the table is enabled, not that it is filled.** The init writes the caps
+  word `[globals+0xF0]` at `0x4B5AC4`, before either allocation; then a set bit 6 allocates the
+  SHD's 8192 bytes (`0x4BA610` at `0x4B5ADF`) and a set bit 7 the LHT's (`0x4BA660` at
+  `0x4B5B0F`: `push 0x2000; push 0x50A448; call 0x4D83B0`, the pointer stored at `[ecx+0xC8]`,
+  the caps word not touched), and a clear bit stores NULL instead (`0x4B5AE6`, `0x4B5B16`). The
+  bytes come later, from the setters at UI init (`0x4BAB00` from `0x42E21B`, `0x4BAB30` from
+  `0x42E2AB`), which copy only when the bit is set. So a set bit and a non-NULL pointer are the
+  same fact, and neither says the bytes have been written. `0x4BEC70` — the tint's own writer —
+  tests only the pointer (`0x4BEC7B`), which is the bit's test too; `tagpu_packet_pub.c`'s
+  `lht_snapshot` tests the bit, and the GUI queue's copy re-sends the rows by content when the
+  setter fills them.
 - **The rewrite keeps the pointer.** `0x4BAB30`'s only caller is `0x42E2AB`, which loads
   PALETTE.LHT into a heap buffer through `0x4BBC40`/`0x4BBE50`, calls the setter, and frees the
   source immediately at `0x42E2B1`. The table's address is therefore a *poor identity*: a
@@ -6890,8 +6971,12 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
   (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
 - **`SurfaceAttach 0x4C6A60(OFFSCREEN* out, w, h, pitch, base)`** — `stdcall`, `ret 0x14`: the
-  same header laid over memory the object does NOT own (`+0x2C` keeps bit0 clear, so
-  `SurfaceFree` frees nothing). **One caller, `0x4B5897`**: right after `[0x4FC06C]` (the
+  same header laid over memory the object does NOT own. Its flags at `+0x2C` are the ones
+  `0x4C69F0` and the frame-context builder `0x4B8A80` write — bit 1 cleared, bit 0 SET
+  (`0x4C6A7C`, `0x4C6A84`) — so the flags do not tell an attached header from an owned one, and
+  `SurfaceFree 0x4C6AC0`, which hands the object to `MEM_Free` whenever bit 0 is set
+  (`0x4C6AC9`), does not either; whether anything ever frees an attached object that way was not
+  checked. **One caller, `0x4B5897`**: right after `[0x4FC06C]` (the
   DirectDraw `Lock`) it wraps the locked surface's bits, `w`/`h` from `globals+0xD4`/`+0xD8`
   and `pitch = (w+3) & ~3`, in the object at `that+0x50`. So the *primary* can be a drawing
   destination too — although MEASURED 2026-09-12 across a whole session, no UI blit named it:
@@ -6910,20 +6995,47 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   `0x4DBAE0(p)` (the private heap's sizer) or `0x4E8FB0(p)` (the CRT `_msize`); it returns 0 for
   a NULL block and the size in `eax` otherwise. `MEM_Alloc`'s dispatch at `0x4D83D5` tests the
   same predicate, so the two agree by construction about which heap a block came from.
-  **This was looked up to answer a question and then not used, which is the fact worth
-  recording.** The landing-5 re-review proposed a block-keyed forget on the `MEM_Free` observer
-  and said it needed a size the observer is not handed; it is handed one, right here. The reason
-  G19f-7 did not build it is that `0x4D8360` reads the heap's own structures **outside the
-  critical section** — `0x4D85B0` takes the lock at `0x4D85C2`, i.e. *after* the entry an
-  observer sits at, and `0x4D8360` takes none of its own — so calling it from a detour on a
-  genuinely multi-threaded allocator would add a cross-thread hazard in order to fix a
-  single-thread one. The fix moved the read instead ([gpu-status](gpu-status.html) §2.34
-  landing 7). Anyone reaching for this later needs an answer to the lock, not to the size. Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
+  **It takes no lock of its own, but both of its callees do**: `0x4DBAE0` enters the allocator's
+  critical section `0x528A28` first (`0x4DA780`, then `EnterCriticalSection`), and `_msize` takes
+  CRT heap lock 9 (`0x4EAC60(9)`). So it is safe to call from an observer at `MEM_Free`'s entry;
+  the G19f-7 reason for not using it — that it read the heap outside any lock — was wrong. The
+  GUI lane's destructor calls it inside the allocator's section, as `0x4D85B0` does (below).
+  Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
   `block + 0x30 == the pixel base`, and an observer at this function's entry is exactly a
   surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
   publisher reads `s->base` at the flip, and what makes that safe is that the table entry
-  cannot outlive the block. MEASURED in game: **~10 500 calls a second**, so an observer that
-  scans ≤ 24 recorded surfaces costs about 0.03 % of one core.
+  cannot outlive the block. MEASURED in game (2026-09-12): **~10 500 calls a second**.
+- **A drawing destination lies inside one block, at an offset that depends on what made it,**
+  and the context over it does not say which (every builder writes the same `+0x2C` flags):
+  - `0x4C69F0` surfaces: the pixels at `block + 0x30`.
+  - frames from `0x4B8DA0` (`w·h + 0x18`) and `0x4B8E00` (`2·w·h + 0x18`, two planes): the
+    pixel pointer `+0x10` = `block + 0x18` (`0x4B8DD0`, `0x4B8E1F`). `0x4B8A80(ctx, frame)`
+    (`ret 8`) builds the context — `w`, `h`, `pitch = w`, the base from `frame+0x10`, the clip
+    reset through `0x4C69C0` — and each of its five callers draws into a frame one of those two
+    made: `0x458C2E` the unit composite (`[obj+0x10]`, stored by `0x4581A4` from
+    `0x4B8E00("…", 600, 600)`), `0x4666B1` and `0x4666E2` SELMAP's scratch copy and preview
+    frame (*SELMAP's map preview*), `0x483918` the level's minimap picture, `0x495BCF` a frame
+    from `0x495ACD`/`0x495AEE`.
+  - two-plane frames from `0x4B91B0` (one caller, `0x42063A`, `(22, 22, 8)`): the header width
+    is `2w`, `+0x10` = `block + 0x18` and `+0x14` = `block + 0x18 + 2w·h` (`0x4B91E8..0x4B91F3`).
+    `0x4B9360` (one caller, the projectile drawer's render-type-2 arm at `0x49C1E8`, the frame at
+    `[main+0x1AB9B]`) swaps `+0x10` and `+0x14` on every call (`0x4B936D..0x4B9376`) and builds a
+    context INLINE over the first (`0x4B937F..0x4B93C8`), the destination of the rect copy
+    `0x4C6D20` at `0x4B9433`. The frame dies at leave-game: `0x491B9F` → `0x420960` →
+    `MEM_Free` at `0x420A09`. (`0x4B94C0` builds the same inline context and has no caller.)
+
+  A list of offsets is closed only until the next builder is found, so `before_memfree` retires
+  every entry whose base lies in `[block, block + MEM_Size(block))` (`surf_dies_with`; the size
+  asked inside the allocator's section, `mem_block_size`) — containment, so it neither misses an
+  entry nor retires another block's. MEASURED 2026-09-26 with the `gui trace`: every SELMAP pick
+  retires the 125×125 preview frame at the free returning to `0x444AF9` and the 252×252 scratch
+  copy at `0x466769`. With `block + 0x30` alone neither was retired, and an arrow walk through the
+  map list — several picks between two flips — crashed in the publisher's seed of a freed preview
+  frame: a read access violation at the end of its heap segment, 95 rows into a 125-pitch entry.
+  The size query costs **~85 ns a call** (MEASURED 2026-09-26, 200v200 on Two Continents, 80 144
+  calls; ~675 frees a second in that battle), so even the ~10 500 a second above is under 0.1 % of
+  one core. No fixture draws the render-type-2 effect, so `0x4B9360`'s frame was not seen
+  retired live; the test that retires it is the one measured on the SELMAP frames.
 - **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
   `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.
 - **`GetContext 0x4C5E70(OFFSCREEN* out)`** — `stdcall`, `ret 4`, prologue `83 EC 6C 56 57`
@@ -7338,7 +7450,7 @@ design and the measurements). Nothing here is patched; `fxown`'s detours on `0x4
 | `0x4B7F30` | the sequence frame by index, `stdcall (seq, idx)`, `ret 8`: `0 ≤ idx < u16 *seq`, else 0. It reads the count **before** its NULL test on `seq`. DISASSEMBLED |
 | `0x4C0310` → `0x4C0330` | **the flat fill**, `stdcall (ctx, xy[], n, colour)`, `ret 0x10`, any vertex count; fills in the colour word's LOW BYTE (`mov al,[esp+0x14080]` at `0x4C0678`). The chains and the clip are `0x4C7580`'s without the texture coordinates. `0x4C0330..0x4C06D1`, DISASSEMBLED |
 | `0x4C7580` | **`GAF_DrawTransformed`** (its vertex roles, the half-open span and the `uv == NULL` window are in *`GAF_DrawTransformed 0x4C7580`* above). The walk, `0x4C7580..0x4C7A1C`: the FIRST vertex at the strict least y is the top and the first at the strict greatest y the bottom; the left chain runs backwards (`cur − 1`, wrapping to `n − 1`), the right forwards. An edge is skipped when it ends at or above the clip's top or does not go down; x starts at `(xa << 16) + 0xFFFF`, `dx = ((xb − xa) << 16) / dy` and the texture steps by the same **truncating** `idiv`; a clipped top advances all three in ONE multiply; each covered scanline appends one 40-byte row to that side's buffer, and the fill reads the buffers BY POSITION, row `i` at `max(ymin, T) + i`. All of it wraps at 32 bits and shifts arithmetically. DISASSEMBLED; the transcription reproduces the engine's pixels, MEASURED below |
-| `0x4C7310` | the textured span, `0x4C7310..0x4C74E5`: `du = (uR − uL) / (xR − xL)` from the UNCLIPPED width, a left clip advancing u and v by one multiply, `xR` cut to the clip's right, a fill only when `xR − xL > 0`, one texel per pixel **copied whatever its value — the frame's key colour included**. The texel's address by the frame's width (`0x4C73BD`, table `0x4C7500` into `0x4C74E8`): 8 inline; 16, 32, 64 and 128 through `0x4CD962`, `0x4CD91E`, `0x4CD8DA`, `0x4CD896`, which mask `v` shifted by `log2 w` and add `u` before the shift; any other width `(v >> 16)·w + (u >> 16)`. DISASSEMBLED |
+| `0x4C7310` | the textured span, `0x4C7310..0x4C74E5`: `du = (uR − uL) / (xR − xL)` from the UNCLIPPED width, a left clip advancing u and v by one multiply, `xR` cut to the clip's right, a fill only when `xR − xL > 0`, one texel per pixel **copied whatever its value — the frame's key colour included** (`mov dl,[edi+ebx]` / `mov [esi-1],dl` at `0x4C74C7`..`0x4C74CE`, no compare between them; re-read 2026-09-26 for the GUI's quad stamps, which is why a `GAF_DrawTransformed` stamp crosses to the Vulkan lane as a box of indices and not as a keyed sprite). The texel's address by the frame's width (`0x4C73BD`, table `0x4C7500` into `0x4C74E8`): 8 inline; 16, 32, 64 and 128 through `0x4CD962`, `0x4CD91E`, `0x4CD8DA`, `0x4CD896`, which mask `v` shifted by `log2 w` and add `u` before the shift; any other width `(v >> 16)·w + (u >> 16)`. DISASSEMBLED |
 | `0x4C6AE0`, `0x4C6B10`, `0x468D85` | the clip every one of these reads is the context's `+0x1C` rect, fetched through `0x4C6AE0`; `DrawGameScreen` sets it at `0x468D85` (`0x4C6B10`) to the viewport rect `main+0x37E27` — the frame packet's `vp_addr`. L and T are the first column and row drawn, R and B the first NOT drawn. DISASSEMBLED |
 | `0x4C5E70`, `0x4C5FA0` | when a rasteriser is handed no context (`ctx == 0`) it builds one from the graphics globals through `0x4C5E70` and gives it back through `0x4C5FA0` on each exit; both effects draws always pass the frame's. DISASSEMBLED |
 | `main+0x14383`, `+0x14387`, `+0x1438B` | `0x46BAE0`'s three scratch arrays, heap blocks the level load allocates at `0x491908..0x49195C` through the named allocator `0x4D83B0(name, size)`: **"TEMP XFORM PTS"** `0x960` bytes (`0x509298`; 200 rotated vertices at 12), **"TEMP PROJECTED PTS"** `0x640` (`0x509284`; 200 projected at 8) and **"ASSEM PTS"** `0xA0` (`0x509278`; one face's 20 points at 8). `0x46BAE0` bounds none of them, so a node of more than 200 vertices or a face of more than 20 writes past its block into the heap's next, and what it then draws is whatever that leaves. No stock model reaches them. Engine state on the game thread; the fork reads none of them. DISASSEMBLED, the names read out of `.rdata` |
@@ -8085,7 +8197,7 @@ See [the GUI renderer](gui-renderer.html), "the shell was 3.71 %".
 | `id` | handler | `ret` | prologue (steal) | draws through |
 |---|---|---|---|---|
 | 1 button | `0x4A5F40` | 8 | `81 EC D8 00 00 00 53 55` (8) | `0x4B7F90(ctx, frame, x+HotX, y+HotY)` at `0x4A61BE`, `DrawText 0x4A50E0`, `0x4BE950`, `0x4B8310`; sets `TheActive_GUIMEM+0x14 = 1` at `0x4A5F5E` |
-| 2 listbox | `0x4A1B40` | 8 | `81 EC BC 00 00 00 53 55` (8) | `0x4C6D20` at `0x4A1C01`, `0x4B0230(gi, idx, 0)`, rows via `0x4A23B0..0x4A2BE0` (`0x4B7F90` ×13), clip save/restore `0x4A2068` |
+| 2 listbox | `0x4A1B40` | 8 | `81 EC BC 00 00 00 53 55` (8) | `0x4C6D20` at `0x4A1C08`, `0x4B0230(gi, idx, 0)`, rows via `0x4A23B0..0x4A2BE0` (`0x4B7F90` ×13), clip save/restore `0x4A2068` |
 | 3 textfield | `0x4A4D70` | 8 | `83 EC 18 8B 54 24 1C` (7) | `0x4BF6F0`, `0x4C6D20`, `0x4BE950`, DrawText |
 | 4 slider | `0x4A3EF0` | 8 | `8B 44 24 04 83 EC 08` (7) | nothing itself; `0x4A2580` paints |
 | 5 label | `0x4A56B0` | 8 | `81 EC AC 00 00 00` (6) | `0x4BF6F0`, `0x4C14F0` / DrawText, `0x4BE950` |
@@ -8128,11 +8240,11 @@ clip.
 
 | VA | name | convention, `ret` | arguments | destination and box | prologue stolen |
 |---|---|---|---|---|---|
-| `0x4B7F90` | `CopyGafToContext` | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` | `{x−HotX, y−HotY, +w−1, +h−1}`, hotspot **signed** (`movsx` at `0x4B802C/0x4B803F`), clipped by `0x4C6AE0`+`0x4B7E60`; sub-frames route to `0x4B8500` when `+0xB` is set; leaf `0x4CBE70` (raw), `0x4CC51D` (RLE) | `81 EC 94 00 00 00` (6) |
-| `0x4B8500` | `AlphaCompsteBuf2OFFScreen` | stdcall `0x10` | same | same, blended through `[globals+0xC0]`; 24 callers, none in the GUI | `81 EC 94 00 00 00` (6) |
+| `0x4B7F90` | `CopyGafToContext` | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` | `{x−HotX, y−HotY, +w−1, +h−1}`, hotspot **signed** (`movsx` at `0x4B802C/0x4B803F`), clipped by `0x4C6AE0`+`0x4B7E60`; leaf `0x4CBE70` (raw), `0x4CC51D` (RLE). **A frame whose `+0x0A` (the sub-frame count) is non-zero is a STACK and draws nothing itself**: the loop `0x4B7FE9..0x4B801A` hands each sub-frame of `+0x10` to `0x4B8500` when that sub-frame's `+0x0B` is non-zero and back to `0x4B7F90` otherwise, then jumps to the exit at `0x4B8128` without a write of its own [DISASSEMBLED 2026-09-26]. SKIRMISH's side buttons are two-frame stacks whose sub-frames take the `0x4B8500` arm [MEASURED 2026-09-26] | `81 EC 94 00 00 00` (6) |
+| `0x4B8500` | `AlphaCompsteBuf2OFFScreen` | stdcall `0x10` | same | same, blended through `[globals+0xC0]`; 24 callers, none in the GUI's own code — its GUI draws arrive through `0x4B7F90`'s stack loop (`0x4B7FFE`). A stack hands each sub-frame to itself (`0x4B8561..0x4B8586`) and writes nothing of its own [DISASSEMBLED 2026-09-26] | `81 EC 94 00 00 00` (6) |
 | `0x4B8310` | the blit `DrawText` takes when its sixth argument, the shade, is non-zero (`0x4A5179..0x4A517F`, and the shade becomes `a5`); also called directly by the gadget painters at `0x4A5EED` and `0x4A619C`. A **blended** GAF blit, not a copy. *[CORRECTED 2026-09-23 by the landing review: this said "the blit DrawText takes under `globals+0xF0` bit 7"; bit 7 is tested only inside this function.]* | stdcall **`0x14`** (`ret 0x14` at `0x4B84F1`) | `(ctx, GAFFrame*, x, y, a5)` — **five**, not the four the call-site inference said | **draws nothing unless `globals+0xF0` bit 7 is set** (tested at `0x4B8329`, `jne 0x4B84E7` at `0x4B832D`, before any write). Sub-frames: each to `0x4B8500` (the loop `0x4B8379..0x4B8397`, the call at `0x4B838A`). Raw frame (`+0x9 == 0`): `0x4CBF2C(ctx, desc, srcR, dstR, key = a5, table = [globals+0xC8])`, whose loop (`0x4CBF96..0x4CBFBC`) skips `src == a5` and writes **`dst = table[src·256 + dst]`** — it reads the destination. RLE frame: `0x4CC3D0(base, pitch, &dstXY, rle, &srcRect, row)` cdecl (`add esp,0x18` at `0x4B84D2`, shared with the raw arm), `row = [globals+0xC8] + a5·256` built at `0x4B84AB`..`0x4B84B7` with **`a5` shifted unmasked** (the table is 32 rows). Its decode is TA-RLE — bit 0 a skip of `b>>1`, bit 1 a run of `(b>>2)+1` copies of one byte, else `(b>>2)+1` literals — and **every texel it draws is `row[src]`** (`mov dl,[esi]` at `0x4CC4AD`, `add edx,[ebp+0x1C]`, then after an `xor eax,eax` `mov al,[edx]` and `mov [edi],al` at `0x4CC4B7`; the other run arm and both literal arms, `0x4CC4C4`/`0x4CC4E5`/`0x4CC500`, are the same load, add, load and store): a remap of the frame through one row, which **never reads the destination**; skips are left alone. [DISASSEMBLED 2026-09-23.] MEASURED 2026-09-23: the post-game screen's player names (`Player`, `Core`) are drawn through it, 18 ops per repaint, and **every one takes the RLE arm** — 6×8..6×10 font glyphs, `+0x9 == 1`, key 9, `a5 == 15`, bit 7 set (caps `0x07E6`); so the names are a remap, not a blend. The raw arm's destination read is real but was not reached on that screen | `81 EC 94 00 00 00` (6) |
-| `0x4B8150` | opaque GAF blit | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` — a **frame**, not a descriptor | leaf `0x4CBDD1`, no key; 4 callers, **all terrain** (`0x484110`, `0x48415C`, `0x484228`, `0x484274`) — not a UI leaf. `0x4CBDD1(dst, src, srcRect*, dstPoint*)` copies the inclusive source rect row by row with one element size for the whole rect, chosen from the width at `0x4CBE33..0x4CBE3C`: an odd width copies bytes (`rep movsb` at `0x4CBE61`), a width of 2 mod 4 words (`rep movsw` at `0x4CBE52`), any other dwords (`rep movsd` at `0x4CBE44`, the loop through `0x4CBE4B`); the source at `src+0xC` + y·`src+0x8` + x, with no clip of its own [DISASSEMBLED 2026-09-24]: the terrain fault in "Engine defects we patch" is its source read | |
-| `0x4C6D20` | descriptor blit | stdcall `0x10` | `(ctx, desc {w,h,stride,pixels}, RECT* src, RECT* dst)` | `*dst`; GUI callers `0x4A1C08` (listbox), `0x4A4EC0` (textfield); `0x4C6DC0` is the keyed twin with no callers | `8B 44 24 04 83 EC 30` (7) |
+| `0x4B8150` | opaque GAF blit | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` — a **frame**, not a descriptor | leaf `0x4CBDD1`, no key; 4 callers, **all terrain** (`0x484110`, `0x48415C`, `0x484228`, `0x484274`) — not a UI leaf. `0x4CBDD1(dst, src, srcRect*, dstPoint*)` (`0x4CBDD1..0x4CBE6F`, cdecl, a plain `ret`) — three call sites, `0x4B82BD` here and `0x4C6D4D`/`0x4C6DA7` in `0x4C6D20` — copies the inclusive source rect row by row with one element size for the whole rect, chosen from the width at `0x4CBE33..0x4CBE3C`: an odd width copies bytes (`rep movsb` at `0x4CBE61`), a width of 2 mod 4 words (`rep movsw` at `0x4CBE52`), any other dwords (`rep movsd` at `0x4CBE44`, the loop through `0x4CBE4B`); the source at `src+0xC` + y·`src+0x8` + x, with no clip of its own [DISASSEMBLED 2026-09-24]: the terrain fault in "Engine defects we patch" is its source read | |
+| `0x4C6D20` | descriptor blit — a RECT COPY between two contexts | stdcall `0x10` | `(ctx, src {…, pitch +0x8, pixels +0xC}, RECT* srect, RECT* drect)` | all four go to `0x4CBDD1(ctx, src, srect, drect)` (`0x4C6DA7`; a NULL `ctx` is first acquired through `0x4C5E70` and passed as the local, `0x4C6D4D`), which takes **the size from `srect` alone** (`r−l+1` by `b−t+1`, `0x4CBDE2..0x4CBDF2`) and **only the top-left of `drect`** — its right and bottom are never read — and clips nothing [DISASSEMBLED 2026-09-26]. So the box written is `drect.l,t` by `srect`'s extent. Four callers: `0x4A1C08` (listbox) and `0x4A4EC0` (textfield), each restoring its own rect (`srect == drect`, one local passed twice) from a background surface — the listbox's is `[GUIMEM+0x24]`, else `[gi+0xCD2]` (`0x4A1BCD..0x4A1BDC`), and with neither it repaints through `0x4B0230` instead — then `0x4B9433` and `0x4B9586`. `0x4C6DC0` is the keyed twin with no callers | `8B 44 24 04 83 EC 30` (7) |
 | **`0x4C7580`** | **textured-quad stamp** (`GAF_DrawTransformed` [CORPUS]) | stdcall `0x10` | `(ctx, src, int xy[8], int uv[8])` — **FOUR** screen vertices and their texture coordinates (`cmp ecx,0x4` at `0x4C7676`, stride 8; `uv == NULL` synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)`), **MEASURED** `(214,94)(233,94)(233,113)…` with uv `(1,1)(31,1)(31,31)…` — *the first three only; the count was corrected from three to four 2026-09-21* | the vertices' bounding box; **the in-game option screens' wide dark backdrop right of the 128-px panel is drawn as these** (13–37 per build), which is why that region has slanted edges | `B8 8C 7D 00 00` (5, the stack probe) |
 | `0x4CCF60` | glyph blitter | cdecl, 9 args | `(base, pitch, font, str, x, y, fg, bg, transparent)` | row `y − (s8)font[2]`, width the sum of `font[off]` per glyph, stops at `\0` **or `\n`**; 2 callers, both in `0x4C14F0` | `55 8B EC 83 C4 F0` (6) |
 | `0x4BE950` | `DrawLine` | stdcall `0x18` | `(ctx, x0, y0, x1, y1, colour)` | bbox after `0x4BEA20`; 83 callers | `83 EC 30 56 8B 74 24 38` (8) |
@@ -8214,6 +8326,37 @@ byte, so a palette index of `0x80`..`0xFF` addresses `row_base − 128`..`row_ba
 *previous* row. Whether the tables are laid out to make that deliberate is **not established**; it
 is recorded because a consumer that reimplements the remap with an unsigned index will disagree
 with the engine on exactly half the palette.
+
+##### Who calls the box shader, and at what level [DISASSEMBLED 2026-09-26]
+
+An `E8` scan of `.text` finds **22 call sites**, and the level at each is a push immediate except
+the fade's. Every fixed level is one of +20, +30, +31, −19..−22, −24 and −28, and the fade walks
+−19..−28, so **no stock caller reaches row 0 of either table** (level 0 in the lighten table,
+−32 in PALETTE.SHD) — and row 0 is the one row whose signed index reaches the 128 bytes *in
+front of* its table rather than the previous row.
+
+| call site | in | level | what it shades |
+|---|---|---|---|
+| `0x41DF70`, `0x41FAE2` | `0x41DF20`, and a function whose early return is `0x41FA8E` | `[main+0x39067] − 29` | a **ten-step fade of the whole screen** (NULL ctx, the rect `0,0`..`main+0x37E1F`,`+0x37E23`): the counter is set to 10 at `0x41DEE5`/`0x41FA3D`, decremented after each shade (`0x41DF92`, `0x41FB04`), so the level runs −19 down to −28, and at 0 `main+0x39063` is set |
+| `0x467F45`, `0x4686A3` | `UnitStateProbe 0x467E50`, `UnitBuilderProbe 0x4685A0` (`ta_symbols.txt`) | −24 | none: neither function has a call, a jump or an absolute pointer anywhere in the image — dead code |
+| `0x494A93`, `0x494C55`, `0x494C62` | `DrawPopupF4Dialog 0x4948E0` | −24, +31, +20 | the popup's frame |
+| `0x4A1F36`, `0x4A1F49`, `0x4A1F5C`, `0x4A1F6F` | the listbox handler `0x4A1B40` | −19, −20, −21, −22 | a disabled or separator row's bands |
+| **`0x4A1FC4`, `0x4A1FD7`** | the listbox handler `0x4A1B40` | **+30** | **the SELECTED ROW**: taken when `+0xBA` (selected) equals the row being drawn and `+0xC0` (count) is non-zero (`0x4A1F89..0x4A1F9E`); the two sites are the two arms of a focus test (`[TheActive_GUIMEM+0x20]` against the gadget index, `0x4A1FB3`), identical in arguments, and differ in what follows |
+| `0x4A220D`, `0x4A226B` | the listbox handler `0x4A1B40` | −20, +20 | the second at another `+0xBA` test (`0x4A2222`) |
+| `0x4A1B32` | `0x4A1AB0` (no `E8` caller) | −20 | |
+| `0x4A2BD0` | the slider painter `0x4A2580` | −20 | |
+| `0x4A5B14` | the label handler `0x4A56B0` | −20 | |
+| `0x4A5F26` | the `id 12` handler `0x4A5E50` | −28 | |
+| `0x4A69BA` | the button handler `0x4A5F40` | −20 | |
+| **`0x4AA969`, `0x4AA984`** | `GUI_Load 0x4AA8F0`, `flags & 0x800` | **−24** | **the modal dim** — the covered screen's panel, or with no screen the whole back buffer (*The screen lifecycle*, below) |
+
+**Both tables are written once, at init** — which is what lets a reader treat a table read at
+the flip as the table every draw of the session used. Each setter has one caller: `0x4BAB00`
+(SHD) from `0x42E21B` and `0x4BAB30` (LHT) from `0x42E2AB`, inside `0x42E1D0` and `0x42E260`,
+whose only callers are `UIPipelinesInit 0x491200` at `0x49139F` and `0x4913B1`; `0x491200` is
+itself called once, from WinMain at `0x49EA62`. The allocations are `0x4BA610` (SHD, `push
+0x2000; push 0x50A43C; call 0x4D83B0`, stored at `[globals+0xC4]`), one caller `0x4B5ADF`, and
+`0x4BA660` (LHT, into `[globals+0xC8]`), one caller `0x4B5B0F` — 32 rows of 256 each.
 
 [Established because the vulkan-only plan's landing 8 turns these ops from published SURFACE BYTES
 into drawn geometry, and needed to know what each one's third argument means before choosing a
@@ -8622,9 +8765,14 @@ arg 1 is dereferenced at `+0x18` (`TheActive_GUIMEM`) at `0x4AA917`, and arg 2 i
   callers pass a name that already ends `.GUI`. **A name we invent is loaded if the file
   exists** — our DLL is the call site, and no stock screen has to be sacrificed. *This closes
   the question both this page's §6 and roadmap G18e recorded as open.*
-- **`flags` bit `0x800`** — before anything else, read the current top screen's panel rect
-  (`+0x13/+0x15/+0x17/+0x19`) and call `0x4BF4D0(panel+0xBC, rect, -0x18)`; then set the top
-  screen's `+0x14` to 1. A save/dirty step, `0x4AA912..0x4AA97C`.
+- **`flags` bit `0x800` is the MODAL DIM** (`0x4AA912..0x4AA984`, re-read 2026-09-26): before
+  anything else, the screen about to be covered is darkened by the box shader at level −24
+  (row 8 of PALETTE.SHD). With a screen on top (`gi+0x18`) the box is its panel record's rect —
+  `+0x17`/`+0x19` for the size, and `+0x13`/`+0x15` for the origin unless the record's first
+  byte is 0, when the origin is `(0,0)` — shaded on the panel's own surface `[ControlsAry+0xBC]`
+  (`0x4AA969`), and the top screen's `+0x14` is set to 1 so `0x4AB0B0` blits it again. With no
+  screen on top it is `0x4BF4D0(NULL, NULL, −24)` — the whole back buffer (`0x4AA984`). So what
+  a player sees behind SELMAP is SKIRMISH, dimmed by the dialog that covers it.
 - **`flags` bit `0x200` does not suppress the push so much as replace it: the file is
   MERGED into the screen already on top** [VERIFIED 2026-09-11, and LIVE — see below].
   `0x4AAA2F` branches on it and takes `edi = gi->TheActive_GUIMEM` instead of allocating:
@@ -8848,6 +8996,118 @@ caller outside the engine uses to make this screen re-enumerate:
 
 `0x45CAE0` belongs to UNDO alone (it XORs `main+0x37F06`'s bits back from the saved copy at
 `0x512F38`); the pop-and-rebuild pair is the general part.
+
+### The pump's entry, the pointer it reads, and what a list scroll is [DISASSEMBLED 2026-09-26]
+
+*Read for `tagpu_gui_hook.c`'s list wheel, which scrolls a list from an observer at the pump's
+entry, on the game thread ([GUI gadgets](gui-gadgets.html) §2.4.1).*
+
+- **`0x4A9FD0(GUIInfo* gi)`** — stdcall `ret 4`, prologue `83 EC 34 53 55` (5 bytes; the list
+  wheel's observer steals exactly these). Seven `E8` callers: `0x41F7B7`, `0x41F9EA`,
+  `0x41FFBE`, `0x42056D`, `0x499992`, `0x49FA1B` (the shell modal loop `0x49F9C0`) and
+  `0x4AC035`. Its first read is `gi->TheActive_GUIMEM` (`mov eax,[ebp+0x18]` at `0x4A9FDB`);
+  with no screen it returns 0.
+- **At the entry, the pointer `gi+0x3C` is the previous pump's.** It is refreshed at most once a
+  pump, at `0x4AA00A`, by `0x4AB5D0(gi)` (`ret 4`, that one caller). When the engine's event ring
+  holds a record (`0x4C2DE0`, a peek) and a screen is up, it tests the record against the top
+  screen (`0x4A1680`, `0x4A1920` [INFERRED: a rect fetch and a point-in-rect test]) and pops it
+  through `0x4C2D60` into a local only when its point is inside or its third dword — the
+  message's wParam, the buttons held — is 0 (`0x4AB643..0x4AB64D`); it then copies six dwords of
+  it to `gi+0x3C` (`0x4AB667..0x4AB66C`) and its third to `gi+0x54`. Otherwise it returns at
+  `0x4AB680` with the record still at the head and `gi+0x3C` unchanged, and in the shell, where
+  the pump is the only pop, every click behind that record waits. With the ring empty it fills
+  `gi+0x3C` from `0x4C2340` instead. So an observer at the entry that needs the point a message
+  was aimed at has to carry the point itself.
+- **The engine's event ring, and how far it can move between two pump entries.** It lives in
+  the graphics globals (`*(0x51FBD0)`): capacity `+0x186`, base `+0x18A`, write index `+0x18E`,
+  read index `+0x192`, each index in `[0, cap)`. `0x4C2BD0(20)` sets it up once, at `0x4B5A67`.
+  The one push, `0x4C2E30`, is called from TA's window procedure at `0x4B5F51` for the button
+  messages only — down and up of both buttons and their double-clicks, `0x201..0x206` through
+  the table at `0x4B60F4`, a double-click with the record's flag set (`0x4B5F40`) — and drops
+  the record when the ring is full. A move (`0x200`) is never queued: `0x4C2360` copies it,
+  six dwords, into the current record at `+0x196`, which `0x4C2340` copies back out for the
+  pump when the ring is empty. The pop `0x4C2D60`
+  has two callers: `0x4AB654`, inside `0x4AB5D0` (the pump's one refresh), and `0x4999C4`, which
+  follows the in-game pump call at `0x499992` in straight-line code (`0x4999B5` is the only
+  branch in that span, and it leaves it); `0x4C2DE0` is a peek and moves nothing. So between
+  two entries of the pump the read index moves at most two slots. The one other writer of the
+  indices is the flush `0x4C2BB0` (both to 0), called once, at `0x426636`, in the in-game setup
+  `0x4263B0` (the frontend state machine's call at `0x4270A9`), which discards whatever was
+  queued. The list wheel's ordering rests on these facts ([GUI gadgets](gui-gadgets.html) §2.4.1).
+- **A gadget's rect is inclusive**: the pump's panel test (`0x4AA0F9..0x4AA128`) compares
+  against `x+w−1` and `y+h−1`.
+- **The engine's own recipe for a scroll is `List_SelectPrev 0x4A9830`'s tail.** It decrements
+  `+0xBA` (selected), and when that leaves the view decrements `+0xBC` (top) at `0x4A9947`; then
+  it calls the listbox handler `0x4A1B40(gi, idx)` at `0x4A9983`, which repaints the rows, and
+  `Gadget_PropagateAssoc 0x4A2BE0(gi, idx)` at `0x4A998A`, which moves the bound slider's knob to
+  match (`0x4A2CA8`). Both `ret 8`; `0x4A1B40` has seven `E8` callers and `0x4A2BE0` fifteen.
+- **`0x4A2BE0` from a list is a selection's consequence, not a scroll's.** For each other record
+  with the source's `assoc` it takes the arm of that record's type. A list (`0x4A2D56..0x4A2D78`)
+  gets the source's `top` and selection and its own `0x4A1B40(gi, j)`. A slider
+  (`0x4A2C7A..0x4A2CE7`), when the list has more than one row (`0x4A2C83`), gets `knobpos =
+  top · range / maxtop` (0 when `maxtop` is 0), computed on the x87 and truncated by
+  `_ftol 0x4E43A0` (its control word ORs in `0xC00`, chop), written and repainted through the
+  slider painter `0x4A2580(gi, j)` (`ret 8`) only when it changed (`0x4A2CD0`). A textfield
+  (`0x4A2CEC..0x4A2D43`), when the list's attribs has bit 3, gets the SELECTED row's text and
+  `0x4A4D70`. The engine calls it from a list only after writing the selection
+  (`List_SelectPrev`, the click at `0x4A3E8A`); its scrolls that leave the selection alone
+  propagate from the slider (`0x4A7037`, `0x4A42DA`) and never reach the textfield arm. So a
+  scroll made from outside is `+0xBC`, `0x4A1B40`, and the list and slider arms made one by one
+  — the list wheel's `lw_follow`.
+- **A slider finds its list by `assoc`, first match, active or not.** `GUI_SliderUpdate
+  0x4A3EF0(gi, idx)` scans from record 1 to `totalgadgets` (`ControlsAry+0xB6`) for the first
+  `id == 2` record whose `assoc` equals the slider's (`0x4A3F37..0x4A3F4A`), tests no active
+  flag, and returns 0 on a miss. The arrows' scan for their slider (`0x4A6FA4`) is the same
+  shape for `id == 4`, and `GUI_FindGadgetByName 0x49FE60` loops to the same count.
+- **The engine has no wheel of its own.** Its window procedure dispatches `0x200..0x206` only
+  (the table at `0x4B5E3B`, the bound at `0x4B5E41`), so `WM_MOUSEWHEEL` falls to
+  `DefWindowProcA` ([gpu-status](gpu-status.html) §2.3). Both wheels — the zoom's and the
+  list's — live in our window procedure.
+
+### SELMAP's map preview — `0x444A20` [DISASSEMBLED + MEASURED 2026-09-26]
+
+*Read because on the Vulkan lane the preview stopped changing after the first pick.*
+
+**`SELMAP.GUI` is loaded from two places**, both with the `0x800` modal dim: the skirmish path
+(`GUI_Load(gi, "SELMAP.GUI", 0x980)`, the push at `0x444F8C`, the call `0x444F92`) and the
+multiplayer battle room (`0x880`, `0x47AB3C`/`0x47AB42`). **Both reach the same preview builder,
+`0x444A20`** (no arguments, plain `ret`), which has eight `E8` callers — `0x444C11`, `0x444C9D`,
+`0x4450D6`, `0x448B6D`, `0x448E9A`, `0x44ABE1`, and the battle room's `0x47AADE` and `0x47AC73`.
+On each pick it:
+
+1. fills the `MAPNAME`, `SIZE` and `Players` text (`0x4A0BF0`);
+2. finds the `MAPPIC` gadget (`0x4A0280(ControlsAry, "MAPPIC")`, `0x444AE2`), **frees its frame**
+   `+0xC2` (`0x4D85A0` at `0x444AF4`) and zeroes the field;
+3. **allocates the next** through `0x4295B0(path, &w, &h)` (`0x444B24`, `ret 0xC`), which opens
+   the map file (`0x4BB5B0`), reads the minimap's header and makes the frame with
+   `0x4B8DA0("RADARPIC", w, h)` (`0x42960D`); the result goes back into `MAPPIC+0xC2`;
+4. calls **`0x4665D0(frame, gadget w, gadget h, w << 4, h << 4)`** (`0x444B4E`, its one caller,
+   `ret 0x14`), which copies the picture into a temporary frame (`0x4666A4`, `0x4666C0`), rewrites
+   the frame's own width and height to the gadget's (`0x4666DB`, `0x4666DE`), **fills it with
+   index 0** (`0x4C6890` at `0x4666EF`), stamps the temporary back into it scaled and letterboxed
+   through `GAF_DrawTransformed 0x4C7580` (`0x46675E`), and frees the temporary (`0x466764`).
+   Both are destinations of observed draws — `0x4B7F90` at `0x4666C0` into the temporary,
+   `0x4C6890` into the frame, each through a context `0x4B8A80` builds — so both are surfaces
+   to the GUI lane, and both die by `MEM_Free` inside the pick (*`MEM_Free 0x4D85A0`* above).
+
+**`0x4B8DA0(name, w, h)` never writes the key byte.** `ret 0xC`, six callers (`0x420D49`,
+`0x42960D`, `0x4666A4`, `0x4838F5`, `0x495ACD`, `0x495AEE`): it allocates `w·h + 0x18` through the
+named allocator `0x4D83B0` and writes `+0x00` w, `+0x02` h, `+0x04`/`+0x06` (the hotspot) 0,
+`+0x09`/`+0x0A`/`+0x0B` 0, `+0x10` the pixel pointer and `+0x14` 0 (`0x4B8DCD..0x4B8DEC`) — **never
+`+0x08`, the key colour, nor `+0x0C`**. A frame it makes carries whatever the allocation held
+there: SELMAP's preview frame measured 18 on one pick and 65 on another.
+
+**What that means for anything that captures the preview**, all MEASURED 2026-09-26:
+
+- **The address and the size repeat.** Every pick frees the frame and allocates the next at
+  once, and the allocator hands back the same block, so the frame pointer is no identity for the
+  picture.
+- **The plane's head is the letterbox.** For any map wider than tall the first rows are the fill
+  (index 0), so a hash of the plane's first bytes makes every such map the same picture.
+- **The key byte is noise**, so a consumer that drops texels equal to it drops real minimap
+  pixels. The engine drops none: the preview reaches the panel through `0x4C7580`, whose span
+  `0x4C7310` copies every texel. That is why the Vulkan lane now carries such a stamp as the
+  indices it leaves ([GUI renderer](gui-renderer.html), `PK_PLANE`).
 
 ### The GAF banks a screen can reach [VERIFIED 2026-09-09]
 
@@ -9158,8 +9418,11 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
   non-black entry differ and the twin still matches the engine's frame ([GL UI
   renderer](gui-renderer.html) §12 has the run).
-- **The Gamma this project runs at is one shared, mutable registry value — read it, never assume
-  it** [MEASURED 2026-09-09, [GL UI renderer](gui-renderer.html) §15, which corrects §14].
+- **The Gamma this project runs at is a mutable registry value — read it, never assume it**
+  [MEASURED 2026-09-09, [GL UI renderer](gui-renderer.html) §15, which corrects §14]. Under
+  tacli it is each instance's own, in its registry store (`tacli registry <i> Gamma`, seeded
+  from the template's `user.reg`); the measurements below were taken when every instance read
+  the shared file.
   `0x4301C0`'s default of 12 applies only when the registry value is absent, and it is not
   absent. But it is also **not a property of the template prefix**: `wineprefix/user.reg` and all
   58 `tagpu/instances/*/prefix/user.reg` are **one inode with 59 hard links** (`tacli`'s
@@ -9392,6 +9655,59 @@ field. The in-game `VISUALRT.GUI` is replaced by a generated one carrying `GAMMA
 `UNDO` under their stock names and rects. The re-bake `0x437C80` is called when the Shadows row
 changes the word in game, as the stock toggle does. Under `tagpu_defaults.off` none of this is installed: the
 Shadows row writes bits 2–4 directly, and `RESTORE`/`UNDO` reach the stock branches.
+
+## The movie player — mapped by us [DISASSEMBLED + MEASURED 2026-09-26]
+
+The movies are Smacker streams, `Data/1.ZRB` … `5.zrb`, 640×240 at 30 fps (`ffprobe` on the
+retail files: `1.zrb`, the intro, is 599 frames and opens with a fade from black; `2.zrb` is
+4 058). The decoder's own header reports **480** rows for them (`smk+8`, logged by the DLL), and
+the engine's frame shows every second row black: the 240 rows go to alternate lines of a
+640×480 box. That look is the engine's own picture, not a renderer artefact.
+
+| address | what | established |
+|---|---|---|
+| `0x430DEC` | the settings loader reads `PlayMovie` (`0x504398`) into `main+0x3923D`; an absent value stores 1 (`0x430E0E`) | DISASSEMBLED |
+| `0x426F06` | the shell's start tests `main+0x3923D`; non-zero plays `"1.zrb"` (`0x50329C`) at `0x426F13`, sets the frontend state `main+0x2BBE` to 1 (`0x426F36`), clears the field (`0x426F5F`) and calls `REGISTRY_SaveSettings 0x430F00`, which writes it back at `0x431723`. From state 1 the frontend plays the cinematic `2.zrb` next: with `PlayMovie` 1 a launch shows `1.zrb` and then `2.zrb`, once | DISASSEMBLED; the cinematic MEASURED |
+| `0x426F74` | with `PlayMovie` 0: unless the game was lobby-launched (`main+0x39245`, set by `-c`/`-n`, `cmdline-options.md`), `0x426F81` plays `"1.zrb"` alone and sets state 2 (`0x426FBD`). **So the intro plays at every plain launch that finds `1.zrb`**, and `PlayMovie` only adds the cinematic | DISASSEMBLED + MEASURED |
+| `0x4271FE..0x4272AA` | the player's other callers, `2.zrb`–`5.zrb`, reached through the frontend's jump table at `0x4285A0` (entry 0 is `0x4271FE`, `"2.zrb"`). The main menu's INTRO button plays `2.zrb` alone [MEASURED]; which screens reach `3.zrb`–`5.zrb`: not traced | DISASSEMBLED |
+| `0x426780(name)` | the player: makes the offscreen the back buffer and flips it once (`0x4267D4`, returning to `0x4267D9`) before anything is decoded, so a movie begins with an ordinary flip; builds the movie object, `operator new(0x5B8)` (`0x4267E0`) and ctor `0x47BDF0`; stores it at `main+0x38D7B` (`0x426817`) and runs the loop from `0x426829` (its only call). After it, the object is destroyed (`0x47BF20`, the only close of its Smack) and freed (`0x426845`); while the loop flag `main+0x39241` is set the player goes back to `0x4267E0` with no flip, so the field dangles between that free and the next store and no flip runs there; otherwise it clears the field (`0x42685C`) and clears and flips the offscreen once more (`0x426892`) | DISASSEMBLED |
+| `0x47C6C0` | the loop, `this` = the movie object. While `[obj+8]` is 0: `PeekMessageA` (`0x4FC2D4`) with `PM_REMOVE`; a `WM_CHAR` ends the movie (`[obj+8] = 1` and the loop flag `main+0x39241` cleared); `WM_SYSKEYDOWN` `VK_F4` ends it the same way and calls `PostQuitMessage(0)` (`0x47C762`). With no message, `SmackWait` (`0x47C731`) and, when it answers 0, the frame routine at `0x47C741` (its only call) | DISASSEMBLED |
+| `0x47C3A0(hwnd)` | the frame routine. Nothing happens unless `GetFocus()` (`0x47C3A4`) is the argument window and `[obj+8]` is 0. A new palette (`smk+0x68` set, 256 RGB at `smk+0x6C`) is copied into 256 RGBX entries at `obj+0x10` (`0x47C3C8..0x47C3E9`) and handed to the palette's `SetEntries` through `[obj+0x544]+0x10` (`0x47C404`), before the decode; `obj+0x10` keeps it until the next. `*(main+0x37E1B)` (the offscreen) becomes the back buffer (`0x4C69A0`, `0x47C413`); `SmackToBuffer(smk, 0, (480 − H) >> 1, pitch [surf+8], H, bits [surf+0xC], 0)` at `0x47C441` aims the decoder at it, with `H = smk+8` and the unsigned `0x1E0 − H` of `0x47C434..0x47C43B`; `SmackDoFrame(smk)` at `0x47C44A` writes the frame; the flip `0x4C63A0` at `0x47C450` shows it. That is the routine's only call of the flip, so **a flip returning to `0x47C455` is a movie frame and nothing else**. After it, `SmackToBufferRect(smk, 1)` (`0x47C45A`) and the dirty rect at `smk+0x380..` compared with `smk+4`, the width (`0x47C47A..0x47C490`) | DISASSEMBLED |
+
+**No drawing routine touches a movie frame.** The decoder writes the offscreen and the ordinary
+flip presents it, so an observer of the engine's leaves sees nothing but flips. The DLL records
+the frame at the flip itself (`gui-renderer.md` §25).
+
+**`smackw32.DLL` is imported by ordinal** (ordinal base 1 in its export table). The fifteen IAT
+slots from `0x4FC3E0`, with each export's `@n` checked against the pushes at its call:
+
+| slot | ord | export | | slot | ord | export |
+|---|---|---|---|---|---|---|
+| `0x4FC3E0` | 21 | `SmackNextFrame` | | `0x4FC3FC` | 15 | `SmackSimulate` |
+| `0x4FC3E4` | 19 | `SmackDoFrame` | | `0x4FC400` | 38 | `SmackSoundUseDirectSound` |
+| `0x4FC3E8` | 23 | `SmackToBuffer` | | `0x4FC404` | 14 | `SmackOpen` |
+| `0x4FC3EC` | 20 | `SmackSummary` | | `0x4FC408` | 17 | `SmackSoundOnOff` |
+| `0x4FC3F0` | 27 | `SmackGoto` | | `0x4FC40C` | 32 | `SmackWait` |
+| `0x4FC3F4` | 28 | `SmackToBufferRect` | | `0x4FC410` | 2 | `SmackBufferOpen` |
+| `0x4FC3F8` | 18 | `SmackClose` | | `0x4FC414` | 5 | `SmackBufferNewPalette` |
+| | | | | `0x4FC418` | 25 | `SmackColorRemap` |
+
+**`GetFocus` (IAT `0x4FC2E0`) has two callers, both gates**: the frame routine above
+(`0x47C3A4`), and the scroll poll's off-screen clamp (`0x41CF1C`, *The camera module*). The
+import thunk `0x49F7C4` (`jmp [0x4FC2E0]`) has no callers. An instance whose window does not
+have focus therefore sits in the movie loop without ever flipping, which is why the DLL's
+armed input shield answers `GetFocus` with the game window.
+
+**Palettes, from the files' frame-type tables** (bit 0 = the frame carries one): every retail
+movie sets its palette at frame 0 only, and `5.zrb` (640×304) at frames 0 and 1.
+
+**Pacing is `SmackWait`'s, and it follows the movie's audio clock** [MEASURED 2026-09-26, Wine,
+the reference setup]. Into a PulseAudio null sink, a clock that runs in real time, every flip
+interval of the intro was 30–37 ms (449 of 449 and 899 of 899 in two runs), the same with the
+DLL's movie code on and off. Into Wine's ALSA `null` device the intervals scatter, again with the
+movie code on or off: that device's clock is not real time. Under `NoDirectSound` nothing holds
+the loop back: the launch's `1.zrb` has flipped all 599 frames before the renderer is up, and
+`2.zrb`'s 4 058 go by in seconds.
 
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 
@@ -10515,8 +10831,9 @@ looked like before the site's displacement was fixed.
 ## The registry — every call site, key and value — mapped by us [DISASSEMBLED + MEASURED 2026-09-25]
 
 What the game asks of the registry. It was mapped for the test-mode registry store,
-`tagpu_regstore.c`, which answers these calls from a file in a tacli test folder ([tacli
-design](tacli-design.html) §"The registry: a file in the test folder"). The disassembly is of
+`tagpu_regstore.c`, which answers these calls from a file beside `TotalA.exe` in every tacli
+test launch: a remote test folder's ([tacli design](tacli-design.html) §"The registry: a file in
+the test folder") and a local instance's gamedir (§"The registry: a store per instance"). The disassembly is of
 `pristine/TotalA.exe.pristine`. The values come from a logged run of the store under wine
 (startup, the menus, a skirmish started through `tacli ui`): the DLL logs every key and value
 the first time it is opened, read or written, with the answer.
@@ -10612,7 +10929,8 @@ a register once and call through it; the register is given with the load.
    `0x49F249` loads `dsetup.dll` (`0x4FDAC0`) and calls `DirectXRegisterApplicationA`
    (`0x4FDAA0`, found with `GetProcAddress`), which writes DirectPlay's application key through
    `dsetup.dll`'s own imports, then quits ([command-line options](cmdline-options.html)). In
-   test mode `tagpu_patches.c` points the switch's two jump-table entries (`0x49F4B8` for `R`,
+   test mode `tagpu_patches.c` points two entries of the switch's jump table `0x49F494` (indexed
+   through the byte table `0x49F500`, `jmp [ecx*4+0x49F494]` at `0x49EF33`) (`0x49F4B8` for `R`,
    `0x49F4EC` for `r`, both `0x49F249`) at the loop tail `0x49F461`, where every unknown letter
    goes (entry 26, `0x49F4FC`). The parser is `CmdlineArgsNormalize 0x49EE30` (called at
    `0x49E8D2`, its token loop head `0x49EED3`); the same rule is what lets tacli's token
@@ -10650,7 +10968,7 @@ loader reads it at `0x42FE4F` into the sound object through `0x4CF210`; `tagpu_m
 `eng_push_mixing` then writes `impure.cfg`'s value into the same field (`+0x2C`) after every
 load; and the saver reads that field back (`0x4CF220` at `0x4310A5`) and writes it at
 `0x4310AB`. So every launch whose saver runs writes `impure.cfg`'s mixing buffers into the
-registry: a player's into the player's key, a test folder's into its store (the logged run
+registry: a player's into the player's key, a tacli instance's into its store (the logged run
 wrote 32).
 
 ### Outside TotalA.exe's own code

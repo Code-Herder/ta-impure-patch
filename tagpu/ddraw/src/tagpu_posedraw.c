@@ -337,6 +337,12 @@ static const char* VS =
     "layout(location=4) in vec2 aUV;\n"
     "layout(location=5) in vec2 aFC;\n"      /* flat idx/255, tex ck/255      */
     "layout(location=6) in float aSkip;\n"
+    /* a textured quad's per-pixel mapping (tagpu_posebake.c `quad_frame`):
+       this corner's point in the quad's frame, the fourth corner in it, and
+       the frame's atlas rect -- x < 0 where the face keeps aUV */
+    "layout(location=7) in vec2 aQH;\n"
+    "layout(location=8) in vec2 aQAB;\n"
+    "layout(location=9) in vec4 aQR;\n"
     /* The frame's poses, packed (tagpu_posebake.h). This unit's slice: 3 rows
        of a 4x3 per piece from uRowBase, and two per-piece words packed 4 to a
        vec4 from uFlagBase and uVisBase --
@@ -371,6 +377,7 @@ static const char* VS =
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     /* the line test's two inputs, which only WVS turns on (tagpu_native.c FS) */
     "flat out vec4 vLine; flat out int vLineOn;\n"
+    "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
     /* tagpu_native.c's SH_V and SH_L, the engine's shading basis */
     "const vec3 SH_V = vec3(0.0, 0.8944, -0.4472);\n"
     "const vec3 SH_L = vec3(-0.35, 0.80, -0.49);\n"
@@ -399,6 +406,7 @@ static const char* VS =
        visibility does, because such a piece still draws in the BODY range and
        needs its matrix there. */
     "  vLine = vec4(0.0); vLineOn = 0;\n"
+    "  vQH = aQH; vQAB = aQAB; vQR = aQR;\n"
     "  float pvis = uPose[clamp(uVisBase + (pi >> 2), 0, pl)][pi & 3];\n"
     "  if (aSkip > 0.5 || (uRange == 1 && pvis < 2.5)) {\n"
     "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
@@ -509,7 +517,8 @@ static const char* VS =
      vNrm, vShW the level normal and a point at the anchor: Classic++'s
                 lambert of the level normal is the constant a unit's is, and
                 no shadow is read (the record's uShadowOn is 0)
-     vLineOn    0: no line test */
+     vLineOn    0: no line test
+     vQR        -1: a run's texel is vUV itself, not a quad mapped per pixel */
 static const char* FXVS =
     "#version 330 core\n"
     "layout(std430) readonly buffer Pose {\n"
@@ -535,9 +544,11 @@ static const char* FXVS =
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
+    "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
     "void main(){\n"
     "  int r = gl_VertexID / 6, c = gl_VertexID - r * 6;\n"
     "  vLine = vec4(0.0); vLineOn = 0;\n"
+    "  vQH = vec2(0.0); vQAB = vec2(1.0); vQR = vec4(-1.0);\n"
     /* THE INDEX IS CLAMPED TO THE BOUND RANGE, as VS's are: the consumer
        refuses a record whose runs do not lie inside the copied arena
        (tagpu_vk_unit.c), so on data that reaches a draw this is a no-op */
@@ -609,6 +620,7 @@ static const char* WVS =
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
+    "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
     TAGPU_GLSL_BAND_FN
     "void main(){\n"
     "  int r = gl_VertexID / 6, c = gl_VertexID - r * 6;\n"
@@ -632,6 +644,7 @@ static const char* WVS =
     "  vEnc = enc; vVY = vy; vNrm = vec3(0.0, 1.0, 0.0);\n"
     "  vShW = vec3(vWorld.x, uCast.y + uCast.z * vy, vWorld.y + (uCast.x + vy) * 0.5);\n"
     "  vLine = r0; vLineOn = 1;\n"
+    "  vQH = vec2(0.0); vQAB = vec2(1.0); vQR = vec4(-1.0);\n"
     "}\n";
 
 /* the depth stage writes no fragment at all and discards nothing, so a

@@ -1112,7 +1112,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         if (!s_atlas.made) return 0;
     }
     /* the frame's capability bits, from the packet: bit5 the ALP alpha table
-       is built, bit7 the LHT one. Read by the publisher, on the game thread. */
+       is enabled, bit7 the LHT one. Read by the publisher, on the game thread. */
     s_caps = v->packet ? v->packet->fx_caps : 0u;
     /* THE ATLAS KEYS ON A GAF FRAME'S ADDRESS, AND THE FRAMES ARE PER-LEVEL.
        An explosion's two anim states come from `main+0x1AB8F`, a table

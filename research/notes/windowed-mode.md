@@ -173,12 +173,13 @@ file — a game launched outside tacli, an instance created before this, or `--n
 the title is untouched, which is why `Instance.window()` keeps the bare title in its
 search list alongside the exact one the launch recorded in `window_title`.
 
-## Free side effect: no intro movie in windowed mode
+## Movies in the DLL's window
 
-TA refuses to play Smacker movies unless it believes it is fullscreen (string: *"You must
-be in full-screen mode to play a movie"*), so a windowed launch goes **straight to the
-main menu**. The `Data/1.ZRB`/`2.zrb` omission from `cmdline-options.md` remains the
-belt-and-braces route for fullscreen runs.
+TA refuses to play Smacker movies when it believes it is windowed (string: *"You must be in
+full-screen mode to play a movie"*). The DLL's window does not make it believe that: the game
+is told it is fullscreen, and the intro plays in a tacli window (`tacli create <i> --intro`,
+MEASURED 2026-09-26). What would trip the refusal is TA's own `-d` switch [INFERRED: not run]. Instances skip the intro by
+leaving `Data/1.ZRB`/`2.zrb` out of the mirror (`cmdline-options.md`).
 
 ## Debug tooling left in the tree
 

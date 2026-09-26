@@ -115,9 +115,9 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
 - **A dead commander wipes its peer's army on every peer** while the registry's
   `MultiCommanderDeath` is 1, the lobby's default (the engine's gate is `ActiveCommanderDeath`,
   `main+0x37EF6`). In a fight that looks exactly like a network drop: one owner's units vanish from
-  every roster at once. For a stress fight, `wine reg add` it to 0 in your own prefix before the
-  host launches, read `*511DE8+37EF6:1` as 0 on every peer, and set it back after (the registry is
-  one file for every instance).
+  every roster at once. For a stress fight, `tacli registry <host> MultiCommanderDeath=0` before
+  the host launches and read `*511DE8+37EF6:1` as 0 on every peer; the value is the host
+  instance's own.
 - **To compare peers, pause and read both rosters.** `tacli keys h1 shift pause` sends the game's
   own `Pause` (the leading token is the one a `keys` call drops), which pauses every peer; confirm
   with `tacli peek <i> '*511DE8+38A51:1'` reading 1 on each. Then `tacli roster <i> --json` on
@@ -317,9 +317,9 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
 - **Under `tagpu_defaults.off` (every launch without `--defaults`) the store has no say and every
   row but Shadows is greyed** — except that the placement (`display`, `window`, `vsync`) is read
   under every launch. Shadows is then the engine's own shadow switch. Test the menu with
-  `--defaults`. The engine's Gamma, size and option word come from the one shared `user.reg`, which
-  a `--defaults` instance saves its store's values into at every game entry — peek them before
-  treating a control launch as stock.
+  `--defaults`. The engine's Gamma, size and option word come from the instance's registry, which
+  a `--defaults` launch saves its store's values into at every game entry — peek them before
+  treating a later control launch of that instance as stock.
 - **The store also owns the engine's Gamma, screen size and shadow bits** under `--defaults`: the
   registry is still loaded and saved, but memory is the store's after the startup load, and a
   later reload (a `scenario load`) keeps memory's (`tacli log <i> -g 'registry reload'`). tacli
@@ -402,13 +402,13 @@ tools/tacli rm w1                                 # deletes the test folder and 
   `--map`, `--player`, `--los`, `--mapping`, `--unit-limit`, `--defaults` and `--sound` work as
   locally. `--window`, `--display`, `--slot`, `--dplay`, `--intro` and `--shipped` are refused.
 - **A test folder's registry is a file; TA's settings key on that machine is never written.**
-  `tacli-state\registry.txt` holds TA's key. Every remote launch passes the token
-  `-xtacli-test`, which the engine skips; with it, or with a `tacli-state` folder beside
-  `TotalA.exe`, the DLL answers the registry calls of `TotalA.exe` and `win32.dll` from the file,
-  and any other key is read-only. `launch` puts its values (sound off, `Interface Type`, the
-  display and skirmish values) into that file. The log's second line says which mode ran:
-  `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder -- …
-  hooks: TotalA.exe 9 of 9 registry imports, …`. A test launch whose store is missing or does
+  `tacli-state\registry.txt` holds TA's key, as a local instance's does. Every remote launch
+  passes the token `-xtacli-test`, which the engine skips; with it and the `tacli-state` folder
+  beside `TotalA.exe`, the DLL answers the registry calls of `TotalA.exe` and `win32.dll` from
+  the file, and any other key is read-only; either alone is refused. `launch` puts its values
+  (sound off, `Interface Type`, the display and skirmish values) into that file. The log's second line says which mode ran:
+  `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder beside
+  TotalA.exe -- its registry is … hooks: TotalA.exe 9 of 9 registry imports, …`. A test launch whose store is missing or does
   not load logs `…, but <what>: the game is not run` and ends at once. A player's own folder
   has neither signal and logs `registry: real (…)`. Nothing is restored after a test, and a
   test killed at any moment leaves the player's key as it was. What no hook reaches (the Task
@@ -428,7 +428,7 @@ tools/tacli rm w1                                 # deletes the test folder and 
   are theirs: pass `--los 0 --mapping 1`, the reference prefixes' values, or line-of-sight fog
   and unmapped ground differ between the machines (`--mapping 0` blacks the terrain out). Health
   bars need `damagebars` 1 in the store, and no launch flag sets it; a stopped instance's store
-  is changed through `_remote_store_update` in `tools/tacli`. Nothing writes `tagpu_zoom.txt`
+  is changed through `regstore_update` in `tools/tacli` (`tacli registry` is local only). Nothing writes `tagpu_zoom.txt`
   there, so the captures are at 1×. `ab` refuses a frame two passes drew into: the effects alone
   need `fx.on=nomodels`, since their 3D models are the unit pass's. A shadow cannot be captured,
   because a one-pass frame has nothing under it.

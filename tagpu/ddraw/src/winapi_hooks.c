@@ -630,6 +630,24 @@ HWND WINAPI fake_GetForegroundWindow()
     return real_GetForegroundWindow();
 }
 
+/* THE ARMED SHIELD OWNS KEYBOARD FOCUS TOO, as it owns every other input poll:
+   the injector is the game's only keyboard, so the game has focus. TotalA.exe
+   calls it in two places, both gates [DISASSEMBLED; the import thunk 0x49F7C4
+   has no callers]: the movie's frame routine 0x47C3A0 decodes nothing unless
+   GetFocus() is the game window (0x47C3A4), so an unfocused instance sits in
+   the movie loop without flipping; and the scroll poll's off-screen clamp
+   (0x41CF1C), which pulls a pointer up to 100 px past the screen back onto its
+   last row or column only while the game has focus. */
+HWND WINAPI fake_GetFocus()
+{
+    if (tagpu_shield_on() && g_ddraw.ref && g_ddraw.hwnd)
+    {
+        return g_ddraw.hwnd;
+    }
+
+    return real_GetFocus();
+}
+
 BOOL WINAPI fake_SetForegroundWindow(HWND hWnd)
 {
     if (g_ddraw.ref && g_ddraw.bnet_active)

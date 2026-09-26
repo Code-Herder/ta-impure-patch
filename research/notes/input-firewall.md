@@ -32,6 +32,13 @@ live and a running game picks it up within 15 frames.
   `fake_GetAsyncKeyState` return the virtual key state, and `fake_GetCursorPos` returns
   the injected cursor rather than the real pointer (the game polls it ~700× a launch).
   `WM_NCHITTEST` no longer forwards real pointer coordinates either.
+- **Focus is the game's.** `fake_GetFocus` answers the game window while armed, because the
+  injector is the game's only keyboard. The engine asks in two places and both are gates: the
+  movie's frame routine `0x47C3A0` decodes nothing unless `GetFocus()` is the game window, so
+  an unfocused instance sits in the movie loop without ever flipping; and the scroll poll's
+  off-screen clamp `0x41CF1C` ([engine map](exe-reverse-engineering.html), *The movie
+  player*). Disarmed, the real answer passes through, so a player's game that loses focus
+  pauses its movie as the stock game does.
 - **Modifiers are held, not interleaved.** A combo posts the modifier down with a
   **150 ms hold** (`MOD_HOLD_MS`); the frame hook posts the up when it expires. An
   interleaved up races the poll; a hold cannot.

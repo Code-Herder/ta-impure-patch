@@ -256,10 +256,14 @@ Every writer of `+0xBC`, and this is the whole list: [BINARY-VERIFIED]
 | `0x4A2F94` / `0x4A2FA4` | snaps to `selected` | `List_SelectByName 0x4A2E40`, when the selection leaves the view |
 | `0x4A3D82` / `0x4A3E26` | ∓1 row per 2 ticks | drag auto-scroll: press inside the list, hold the pointer above `y+2` or below `y+h-4` |
 | `0x4A2D61` | copies | another listbox with the same `assoc` |
-| `0x4A2DF6` | `round(maxtop * knobpos / (range-1))` | the bound scrollbar, through `Gadget_PropagateAssoc 0x4A2BE0` |
+| `0x4A2DF6` | `(count − h / itemheight) · (knobpos + pad) / (range−1)`, truncated; `pad` is `range / (maxtop+1)` when the list's attribs has bit `0x20`, else 0; `top` is left alone when `itemheight` is 0 (`0x4A2DB3`) | the bound scrollbar, through `Gadget_PropagateAssoc 0x4A2BE0` |
 
-The reverse sync (list → slider, `0x4A2CA8`) uses `knobpos = round(top * range / maxtop)`
-— **`range`, not `range-1`** — so a scrollbar at the bottom of its list reads
+Both directions are computed on the x87 and truncated: `_ftol 0x4E43A0` ORs `0xC00` (chop)
+into the control word before its `fistp`. [BINARY-VERIFIED]
+
+The reverse sync (list → slider, `0x4A2C9D..0x4A2CC3`) is `knobpos = top * range / maxtop`,
+truncated — 0 when `maxtop` is 0, and not run at all when the list has one row or none
+(`0x4A2C83`) — **`range`, not `range-1`** — so a scrollbar at the bottom of its list reads
 `knobpos == range`, one past the `[0, range-1]` the mouse path clamps to. Seen live on
 `SELMAP`: `pos 159, range 159`. Do not treat it as corruption. [BINARY-VERIFIED, LIVE]
 
@@ -303,11 +307,12 @@ file and flattens the field gets a Screen Size arrow that moves Gamma — and no
 because the miss at `0x4A6FD4` falls back to gadget 0 rather than running off the array.
 
 **A click on an arrow moves `knobpos` by one *pixel*, not one row** (`0x4A7006`,
-`0x4A7018`), and the row only follows through the `round(maxtop * knobpos / (range-1))`
+`0x4A7018`), and the row only follows through the truncated `knobpos / (range-1)` quotient
 above — so it takes roughly `(range-1)/maxtop` clicks to move a single row, and usually
 a click moves nothing at all. The same is true of clicking the scrollbar track
-(`0x4A426B`: ±1 px per frame). **There is no page-up/page-down anywhere**, and **no
-mouse wheel**: `WM_MOUSEWHEEL` (`0x20A`) does not appear in the binary.
+(`0x4A426B`: ±1 px per frame). **The engine has no page-up/page-down anywhere**, and **no
+mouse wheel**: `WM_MOUSEWHEEL` (`0x20A`) does not appear in the binary. The wheel a player
+has over a list is the DLL's (below).
 
 So the only mechanism that moves the selection a known number of rows is the keyboard.
 `GUI_HandleKey 0x4A9B90` dispatches on `key - 9` through a byte table at `0x4A9EE0`;
@@ -317,6 +322,57 @@ VK_LEFT/UP/RIGHT/DOWN), Up and Down act on the focused gadget when its `id == 2`
 Focus is `[guiobj+0x20]`, and **clicking inside a listbox sets it unconditionally**
 (`0x4A3AFB`). Left/Right act only on a *horizontal* slider. There is no PgUp/PgDn/Home/
 End. [BINARY-VERIFIED]
+
+#### The mouse wheel scrolls a list — the DLL's, not the engine's
+
+`tagpu_gui_hook.c`'s **list wheel** is one more writer of `+0xBC`, and the only one that is not
+the engine's. It is always on (`tagpu_listwheel.off` at launch leaves it out) and does not depend
+on `gui.on` or on the renderer.
+
+- **Which notches.** Every notch the zoom declines — anywhere off a live world viewport, and
+  anywhere while an in-game options screen owns input (`main+0x37EBE` bit 0) — is queued with
+  the point it was aimed at, in the engine's own space ([gpu-status](gpu-status.html) §2.3).
+- **What it scrolls.** On the game thread, at the entry of the GUI pump `0x4A9FD0`, the top
+  screen's first active gadget under that point that is a list box, or a slider or scroll arrow
+  bound to one. A slider or arrow finds its list the way `GUI_SliderUpdate 0x4A3EF0` does: the
+  first `id 2` record with the same `assoc`. Over anything else — a button, the map preview, the
+  panel — the notch does nothing and is counted as a miss.
+- **By how much.** The system's lines-per-notch (`SPI_GETWHEELSCROLLLINES`, 3 by default; the
+  one-screen setting scrolls `count − maxtop` rows, one page), a fraction of a notch kept for the
+  next one on the same list. Wheel up scrolls up. `top` is clamped to `[0, maxtop]`.
+- **How.** It writes `top`, calls the listbox handler `0x4A1B40(gi, idx)` as `List_SelectPrev`
+  does after its own write, and then moves every other gadget with the list's `assoc` as
+  `Gadget_PropagateAssoc 0x4A2BE0` would — a list gets the same `top` and its own `0x4A1B40`; a
+  slider, when the list has more than one row, gets `knobpos = top · range / maxtop`, truncated,
+  and the slider painter `0x4A2580` when that changed — but not through `0x4A2BE0` itself, which
+  from a list also copies the selected row into a bound textfield: a selection's consequence.
+  **The selection `+0xBA` is not touched**, so what is selected (and SELMAP's preview) changes
+  only on a click, as in any list view.
+- **When.** A notch waits behind every click queued before it. TA's window procedure queues
+  each button message on the engine's event ring and the pump takes at most one per call — none
+  while the record at the head is a held button off the top screen, which holds the engine's own
+  clicks as well — so a notch applied at once could overtake a click still in the ring, and the
+  click would land on the scrolled rows. Each notch records how far the ring had been filled when it arrived, and is
+  applied at the first pump entry where the engine has taken that far — counted from the
+  ring's read index, which moves at most two slots between entries — or where the ring is
+  empty, which also covers the flush that discards the ring when a game starts. A notch that
+  arrives while no pump runs (a load, a movie) waits for the next one and scrolls whatever list
+  is under its point then, as a Windows list does with a wheel message queued while its
+  application is busy. Engine map:
+  *The pump's entry, the pointer it reads, and what a list scroll is*.
+
+MEASURED 2026-09-26 on `SELMAP.GUI`'s 99-map list (`maxtop` 87, the scrollbar's `range` 56): from
+top 1, two notches down → 7 with the knob at 4, ten more → 37 (knob 23), forty more → 87 (knob
+56, the clamp), fifty up → 0 (knob 0); over the slider and both arrows it scrolls the list; over
+LOAD, Cancel and the preview nothing moves; the selection held throughout, and a click on a row
+after a scroll selects that row. Each knob is the engine's truncated `top · range / maxtop`
+(`30 · 56 / 87` = 19.3 read 19). **Order**: a click and three notches in one burst selected the
+row under the click in the unscrolled view and then scrolled; three notches and a click selected
+the row under the click in the scrolled view. The battle room's map list is the same gadget
+(`0x444A20`'s callers) and was not run. No in-game list with more rows than it shows was
+available (no saved games), so the in-game side was not exercised. The `GUI flips=` heartbeat,
+logged while the op capture (`gui.on`) is armed, counts them in `wheel=`: notches, rows moved,
+misses, and notches dropped — by a full queue, or arriving on a thread that is not the game's.
 
 ### 2.5 Textfield — `id 3`
 

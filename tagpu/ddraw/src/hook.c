@@ -42,6 +42,7 @@ MAPWINDOWPOINTSPROC real_MapWindowPoints = MapWindowPoints;
 SHOWWINDOWPROC real_ShowWindow = ShowWindow;
 GETTOPWINDOWPROC real_GetTopWindow = GetTopWindow;
 GETFOREGROUNDWINDOWPROC real_GetForegroundWindow = GetForegroundWindow;
+GETFOCUSPROC real_GetFocus = GetFocus;
 STRETCHBLTPROC real_StretchBlt = StretchBlt;
 BITBLTPROC real_BitBlt = BitBlt;
 SETDIBITSTODEVICEPROC real_SetDIBitsToDevice = SetDIBitsToDevice;
@@ -113,6 +114,7 @@ HOOKLIST g_hook_hooklist[] =
             { "ShowWindow", (PROC)fake_ShowWindow, (PROC*)&real_ShowWindow, 0 },
             { "GetTopWindow", (PROC)fake_GetTopWindow, (PROC*)&real_GetTopWindow, 0 },
             { "GetForegroundWindow", (PROC)fake_GetForegroundWindow, (PROC*)&real_GetForegroundWindow, 0 },
+            { "GetFocus", (PROC)fake_GetFocus, (PROC*)&real_GetFocus, 0 },
             { "PeekMessageA", (PROC)fake_PeekMessageA, (PROC*)&real_PeekMessageA, 0 },
             { "GetMessageA", (PROC)fake_GetMessageA, (PROC*)&real_GetMessageA, 0 },
             { "GetWindowPlacement", (PROC)fake_GetWindowPlacement, (PROC*)&real_GetWindowPlacement, 0 },

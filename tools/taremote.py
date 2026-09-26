@@ -961,24 +961,28 @@ TASK_RUNNING = 0x41301          # SCHED_S_TASK_RUNNING
 #
 # TA's registry in a test launch is `tacli-state\registry.txt`: the DLL serves TotalA.exe's
 # registry calls from it and writes the game's changes back to it (tagpu_regstore.h, which
-# specifies the format and the limits; the two must agree byte for byte). `remote add`
-# seeds it by reading the player's key, `launch` puts its test values in it, and tacli
-# writes no registry value on the remote machine.
+# specifies the format and the limits; the two must agree byte for byte). A remote
+# instance's is seeded by `remote add` reading the player's key, a local instance's by
+# tacli reading the template prefix's user.reg; `launch` puts its test values in it, and
+# tacli writes no value of TA's key into a registry.
 
 STORE = "registry.txt"
 STORE_ROOT = r"HKCU\Software\Cavedog Entertainment"
 STORE_TA = STORE_ROOT + r"\Total Annihilation"
 REG_SZ, REG_DWORD = 1, 4
-# The token every remote launch puts first on TotalA.exe's command line: the DLL's sign
-# of a test launch, which the engine ignores (tagpu_regstore.c, RS_TOKEN).
+# The token every launch whose DLL serves the store puts first on TotalA.exe's command
+# line: the DLL's sign of a test launch, which the engine ignores (tagpu_regstore.c, RS_TOKEN).
 TEST_TOKEN = "-xtacli-test"
 # Lines only a DLL that fails closed in test mode and closes the -r switch logs: tacli
-# starts no remote game with a DLL that lacks any of them.
-TEST_MODE_MARKS = (b"registry: TEST MODE, entered by",
-                   b"the -r switch (DirectPlay registration through dsetup.dll) is ignored")
+# starts no remote game with a DLL that lacks any of them, and runs a local game with such
+# a DLL on the registry every prefix shares, saying so.
+TEST_MODE_R_CLOSED = "the -r switch (DirectPlay registration through dsetup.dll) is ignored"
+TEST_MODE_MARKS = (b"registry: TEST MODE, entered by", TEST_MODE_R_CLOSED.encode("ascii"))
 # The DLL's own account of a test launch, the first `registry: ` line of its run: served
 # (`... entered by <signal> -- <exe>'s registry is ...`) or refused (`... entered by
-# <signal>, but <what>: the game is not run`), tagpu_regstore.c.
+# <signal>, but <what>: the game is not run`), tagpu_regstore.c. A served run then logs the
+# -r closure (TEST_MODE_R_CLOSED), or its own refusal, from tagpu_patches.c; every refusal
+# of a test launch ends with TEST_MODE_REFUSED.
 TEST_MODE_SERVED = "registry: TEST MODE, entered by "
 TEST_MODE_REFUSED = ": the game is not run"
 # The DLL's limits (tagpu_regstore.c): a store past any of them does not load whole, and
@@ -1049,6 +1053,11 @@ class RegStore:
             cur += b"\\" + part
             self._keys.setdefault(cur.lower(), (cur, {}))
         return self._keys[low]
+
+    def add_key(self, key):
+        """The key, with every missing key between it and STORE_ROOT; one that holds no
+        value is still a key the game can open."""
+        self._key(_b(key))
 
     def set(self, key, name, kind: int, data: bytes):
         name, data = _b(name), bytes(data)
@@ -1144,7 +1153,7 @@ class RegStore:
             hive, sep, rest = base64.b64decode(f[1]).partition(b"\\")
             key = _HIVES.get(hive.decode("ascii", "replace"), "?").encode("ascii") + sep + rest
             if f[0] == "K":
-                store._key(key)
+                store.add_key(key)
             else:
                 store.set(key, base64.b64decode(f[2]), int(f[3]) & 0xFFFFFFFF,
                           base64.b64decode(f[4]))

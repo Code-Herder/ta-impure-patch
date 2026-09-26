@@ -15,7 +15,8 @@
        change and an atlas recycle, and it dies only with the LEVEL or when the
        cache evicts it.
      MATERIAL, per (type, owner, atlas generation) — the UV, the flat colour
-       and colour key, and a SKIP flag. `face_texframe` picks
+       and colour key, a SKIP flag, and a textured quad's shape and frame
+       rect. `face_texframe` picks
        `tab + owner*0x18` for team-coloured faces, and every UV in the atlas
        moves when the shelf recycles, so both belong in the key.
 
@@ -36,7 +37,16 @@
 #include "tagpu_packet.h"        /* the bound on one frame's posed objects */
 
 #define TAGPU_PB_GEOMST  8      /* floats per geometry vertex */
-#define TAGPU_PB_MATST   5      /* floats per material vertex */
+/* floats per material vertex:
+     0-1  uv                the atlas corner this fan slot takes
+     2-3  flat index, key   (flat idx/255, -1) or (0, tex ck/255)
+     4    skip              1 = collapsed (a face the engine paints nothing for)
+     5-6  quad point        this corner's position in its quad's own frame
+     7-8  quad shape (a, b) the fourth corner in that frame, flat across the face
+     9-12 quad rect         u0 v0 u1 v1 for a face the fragment stage maps
+                            per pixel, (-1, -1, -1, -1) for one that keeps uv
+   tagpu_posebake.c `quad_frame` says what the frame is and why 5-12 exist. */
+#define TAGPU_PB_MATST   13
 
 /* THE BAKE'S TWO CACHES MUST HOLD EVERY ENTRY ONE FRAME DRAWS: an entry
    evicted mid-frame costs that frame objects, silently (content-ids.md

@@ -47,6 +47,10 @@ void tagpu_gui_init(void);                          /* DllMain                */
 void tagpu_gui_flush(unsigned int frame_counter);   /* render thread: the heartbeat line */
 int  tagpu_gui_installed(void);
 unsigned tagpu_gui_flips(void);                     /* the publisher's flip count, game thread */
+/* WINDOW PROCEDURE: a WM_MOUSEWHEEL the zoom did not take, lParam in the
+   engine's space. It only queues the notch; the game thread scrolls the list
+   under its point at the next GUI pump (tagpu_gui_hook.c, "the list wheel"). */
+void tagpu_gui_wheel(UINT msg, WPARAM wparam, LPARAM lparam);
 
 /* RENDER THREAD, PER PRESENT: poll the trigger, drain the queue into the twins
    and fill the Vulkan pass's hand-over. It APPLIES the op stream -- resolving
@@ -123,14 +127,36 @@ unsigned tagpu_gui_minimap_have(void);
    is the only thing the Vulkan pass has to reproduce. Keeping them separate
    means a change to the queue cannot silently change the port's contract.  */
 
-/* THE LIGHTEN TABLE'S SHAPE, AND THE SHAPE IS THE BOUND. `0x4CC8DF` indexes it
-   `[(row << 8) | dst]` with `dst` zero-extended from a byte (`xor eax,eax` then
-   `mov al,[edi]`), and `0x4BF4D0` -- the same table, the other consumer --
-   clamps its row to `<= 0x1F` at `0x4BF595`. So 32 x 256 is exactly what either
-   writer can reach, and a copy of that size reads what they read and nothing
-   more. The same argument `tagpu_packet_pub.c`'s `shd_snapshot` and
-   `lht_snapshot` already make for the world's two copies of these tables. */
-#define TAGPU_GUI_SHADE_ROWS  32u
+/* EITHER ENGINE REMAP TABLE'S SHAPE, AND THE SHAPE IS THE BOUND. The lighten
+   table `globals+0xC8` and PALETTE.SHD `globals+0xC4` are each 32 rows of 256
+   (`0x4BA610` / `0x4BA660` allocate 0x2000 bytes apiece). `0x4CC8DF` indexes
+   the lighten table `[(row << 8) | dst]` with `dst` zero-extended, and
+   `0x4BF4D0` clamps its row to `<= 0x1F` (`0x4BF595`) or `>= -0x20`
+   (`0x4BF572`), so no writer can reach a 33rd row -- the same argument
+   `tagpu_packet_pub.c`'s `shd_snapshot` and `lht_snapshot` make for the
+   world's copies. */
+#define TAGPU_GUI_TABLE_ROWS  32u
+
+/* THE HAND-OVER'S REMAP TABLE: 96 rows of 256, which is what a
+   `TAGPU_GUIOP_TINT`'s `fg` indexes.
+
+     rows  0..31  the lighten table as the engine holds it -- what a FOCUS
+                  edge (`0x4BF7B0` -> `0x4CC8DF`) remaps through, row = level.
+     rows 32..95  one row per BOX-SHADER level L = -32..31 (`0x4BF4D0`), at
+                  `TAGPU_GUI_SHADE_BOX + L + 32`, precomputed by the publisher
+                  from the two engine tables.
+
+   WHY THE BOX SHADER GETS ROWS OF ITS OWN rather than an index into the two
+   raw tables: `0x4BF4D0` reads its destination SIGNED (`movsx ebx,BYTE PTR
+   [ecx]` at `0x4BF5E8`), so a byte 0x80..0xFF lands 256 bytes back -- in the
+   PREVIOUS row of the same table. Its effective remap for one level is
+   therefore one 256-byte row, `T[r][i]` for i < 128 and `T[r-1][i]` above, and
+   carrying that row keeps the shader a plain table lookup with nothing about
+   signedness in it. For r = 0 the upper half reads the heap in front of the
+   table, which nothing can reproduce: those two levels (-32 and 0) are never
+   published, and their rows' upper halves are zero and unaddressed. */
+#define TAGPU_GUI_SHADE_BOX   32u
+#define TAGPU_GUI_SHADE_ROWS  (TAGPU_GUI_TABLE_ROWS + 64u)
 #define TAGPU_GUI_SHADE_BYTES (TAGPU_GUI_SHADE_ROWS * 256u)
 
 enum { TAGPU_GUICOL_DST = 1, TAGPU_GUICOL_ON = 2 };   /* TAGPU_GUIOP::col */
@@ -149,10 +175,13 @@ enum {
     TAGPU_GUIOP_RECT,       /* the box's four INCLUSIVE EDGES in palette index
                                `fg`, one pixel wide, interior untouched. No
                                arena bytes.                                    */
-    TAGPU_GUIOP_TINT        /* the box, one pixel thick, REMAPPED
-                               THROUGH ROW `fg` of `TAGPU_GUIHAND::shade` --
+    TAGPU_GUIOP_TINT        /* the box REMAPPED THROUGH ROW `fg` of
+                               `TAGPU_GUIHAND::shade` --
                                `idx = shade[fg * 256 + idx]`, coverage
-                               unchanged. No arena bytes.
+                               unchanged. No arena bytes. One pixel thick for a
+                               focus edge, any size for the box shader
+                               `0x4BF4D0` (a list's selected row, the dimming
+                               under a modal screen).
 
                                THE ONE OP IN THE STREAM THAT READS ITS OWN
                                DESTINATION, which is what a consumer has to
@@ -336,8 +365,9 @@ typedef struct TAGPU_GUIHAND {
     const unsigned char* pal;       /* 256 x RGBA8, tagpu_pal_live()          */
     unsigned             palSerial;
 
-    /* THE ENGINE'S LIGHTEN TABLE, `globals+0xC8`: 32 rows of 256 bytes, row
-       major, and the only thing a `TAGPU_GUIOP_TINT` needs beyond its box.
+    /* THE REMAP TABLE: `TAGPU_GUI_SHADE_ROWS` rows of 256 bytes, row major
+       (the layout is above), and the only thing a `TAGPU_GUIOP_TINT` needs
+       beyond its box.
        NULL until a `PK_SHADE` has been drained, which the producer publishes
        ahead of the first tint of a batch -- so a tint op and a null table
        cannot both be in one hand-over, and a port that finds them together is
@@ -345,8 +375,8 @@ typedef struct TAGPU_GUIHAND {
 
        `shadeSerial` is the atlas's rule, not the palette's: it moves when the
        BYTES move, which for this table is once a session in practice (the
-       engine builds it at init) and whenever the engine hands out a different
-       pointer. Uploading on a change rather than per frame is the point of
+       engine fills both source tables at init) and whenever the engine hands
+       out a different pointer. Uploading on a change rather than per frame is the point of
        carrying a serial at all. */
     const unsigned char* shade;
     unsigned             shadeSerial;

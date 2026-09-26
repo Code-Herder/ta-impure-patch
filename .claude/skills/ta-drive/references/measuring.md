@@ -10,8 +10,9 @@ rules are here.
 4. [Cross-build: two DLLs, one instance](#cross-build-two-dlls-one-instance)
 5. [The `.ab` capture of the presented frame](#the-ab-capture-of-the-presented-frame)
 6. [Frame-time A/Bs](#frame-time-abs)
-7. [Log oracles](#log-oracles)
-8. [The restore-dump byte oracle](#the-restore-dump-byte-oracle)
+7. [Movies](#movies)
+8. [Log oracles](#log-oracles)
+9. [The restore-dump byte oracle](#the-restore-dump-byte-oracle)
 
 ## The four gates
 
@@ -136,11 +137,11 @@ scores 0 magenta and shows no game.
   `PULSE_SERVER=unix:/nonexistent/pulse` and `ALSA_CONFIG_PATH=<a file holding
   pcm.!default { type null }>` in the shell that runs `tacli`, and set `"sound": true` in the
   instance's `instance.json` (`scenario load` has no `--sound`; set it back to false after). Effect
-  sounds also need the registry's `fxvol` above 0, and every silent launch writes it to 0 in the one
-  `user.reg` all instances share: `wine reg add` it in your own prefix just before the launch and
-  back to 0 after the game stops. The sound object is `*(main+0x10)`: `+0x2C` MixingBuffers,
-  `+0x30` the sounds in use. Any launch of the store's DLL saves its `mixingbuffers` (32) into that
-  shared registry, so a control launch reads 32 there, not stock's 8; write `MixingBuffers` back
+  sounds also need the registry's `fxvol` above 0, and every silent launch writes it to 0 in the
+  instance's registry: `tacli registry <i> fxvol=<n>` before the sound launch (which leaves it
+  alone). The sound object is `*(main+0x10)`: `+0x2C` MixingBuffers, `+0x30` the sounds in use.
+  Any launch of the store's DLL saves its `mixingbuffers` (32) into the instance's registry, so a
+  control launch of that instance reads 32, not stock's 8: `tacli registry <i> MixingBuffers=8`
   before a sound A/B that needs stock's.
 - **A single-player fight does not reproduce run to run, even under one DLL**, so a COB-trace or
   roster timeline compared across two runs measures noise from the first impact on. Compare what
@@ -238,6 +239,39 @@ capture time out; it never returns a stale file.
   **`terrown` is a play default**, so a defaults run already carries its hole and its saving; the
   A/B is `terrown.off`, and that costs the zoomed-out fog rather than the picture
   (`references/levers.md`, the play defaults).
+
+## Movies
+
+- **Only an `--intro` instance has one.** `tacli create <i> --intro` keeps `Data/1.ZRB`/`2.zrb` in
+  the mirror: the intro `1.zrb` (20 s) plays at every launch, and the main menu's `INTRO` gadget
+  (`tacli ui <i> click INTRO`) plays the cinematic `2.zrb` (135 s) on demand. A key (`WM_CHAR`)
+  ends a movie. The launch's intro starts before the Vulkan lane is up, so its first dozen frames
+  are never sent; measure on the INTRO button's movie.
+- **The armed shield answers `GetFocus` with the game window**, and the movie's frame routine
+  decodes nothing without focus. So an armed instance plays its movies unfocused, and a
+  `--no-shield` one holds its first frame until its window is focused, which you may not do.
+- **A movie is paced by its audio clock** (`SmackWait`), so a cadence needs `--sound` into a
+  sink that runs in real time. Silent, it runs unpaced: the launch's intro has flipped before the
+  lane records, and the cinematic's frames are nearly all skipped in flight. Into ALSA's `null`
+  device (the recipe above) its intervals scatter whatever the DLL does. The rig that works is a
+  private PulseAudio null sink: `pulseaudio -n -F <file> --daemonize=no --exit-idle-time=-1`,
+  with the file loading `module-null-sink` and `module-native-protocol-unix auth-anonymous=1
+  socket=<scratch>/native`, `HOME`/`XDG_RUNTIME_DIR` in the scratchpad and
+  `DBUS_SESSION_BUS_ADDRESS` unset, run in the background; then launch with
+  `PULSE_SERVER=unix:<scratch>/native` and `ALSA_CONFIG_PATH` unset. Nothing reaches a speaker.
+- **Read the lane off the log**: `gui: movie <W>x<H> at (0,<top>) on surface …` at a movie's
+  first carried frame; `gui: movie ended after N flip(s): R frame(s) recorded, S skipped in
+  flight, U not sent (the lane was not recording), F refused` at the next flip that is not a
+  movie's. Each movie logs its own (the player flips once before it); a looping movie's repeats
+  count as one. A skip means the render thread had not drained the frame before; `movie=` in the
+  `gui:` heartbeat counts the frames that reached the Vulkan lane.
+- **See it on a private Xvfb.** `tacli create <i> --display :N` on an `Xvfb :N -screen 0
+  1280x1024x24` of your own: the GPU presents into it, `DISPLAY=:N import -window <id>` captures
+  the presented picture, and `ffmpeg -f x11grab -framerate 60 -video_size 640x480 -i :N+0,0`
+  records it. Count the distinct frames of the recording: a 30 fps movie under FIFO at 60 Hz
+  holds each for exactly two captures. On the live display a monitor in DPMS power save
+  (`xset q`: `Monitor is Off`) throttles FIFO presents to about one a second on the reference
+  setup and `import -window` returns black; never wake or force it.
 
 ## Log oracles
 

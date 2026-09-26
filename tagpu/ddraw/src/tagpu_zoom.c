@@ -477,6 +477,8 @@ void tagpu_zoom_fog_held(unsigned* frames, int* maxPx, unsigned* paused, unsigne
     *back = s_fogBack;
 }
 
+static int options_gui_owns_input(void);
+
 int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
 {
     static DWORD s_offTick;       /* message thread only */
@@ -516,6 +518,18 @@ int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
             s_gripeTick = now;
             zlog(s_live ? "zoom: wheel ignored — pointer is off the world viewport"
                         : "zoom: wheel ignored — no zoomed world on screen");
+        }
+        return 0;
+    }
+    /* THE IN-GAME MENUS OWN IT, as they own every button (see
+       `options_gui_owns_input`, the same test at the click door): ARMOPT and
+       the screens under it sit over the world, and a notch there is the
+       menu's -- the list wheel's, when a list is under the pointer
+       (tagpu_gui.h) -- not a zoom of the world behind it. */
+    if (options_gui_owns_input()) {
+        if (now - s_gripeTick > 1000) {
+            s_gripeTick = now;
+            zlog("zoom: wheel ignored — an in-game menu owns input");
         }
         return 0;
     }

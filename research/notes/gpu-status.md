@@ -388,8 +388,11 @@ a bare `DefWindowProcA` tail call at `0x4B5FA8`. Nothing had to be taken away fr
 `tagpu_zoom_wheel()` is offered the message at the two of the three engine doors a wheel can
 arrive at (`wndproc.c`'s tail for hardware, the shield's `to_game` for injected; the third,
 `wndproc.c`'s `WM_NCHITTEST` arm, carries no wheel) and consumes it only over a
-live world viewport, so the menus cannot be wheeled and a future scrollable list keeps its
-wheel. It does one thing on the message thread — it queues the message as one slot of a
+live world viewport, and never while an in-game options screen owns input (`main+0x37EBE`
+bit 0, the test the click door makes: `ARMOPT.GUI` and the screens under it sit over the world,
+so a notch there is the menu's). **A notch it declines goes on to `tagpu_gui_wheel()`**, the
+list wheel, which scrolls a list under the pointer (§2.3e *The engine's UI, observed*;
+[GUI gadgets](gui-gadgets.html) §2.4.1). It does one thing on the message thread — it queues the message as one slot of a
 single-producer single-consumer ring: its delta, the point it was aimed at and its counter time
 (the slot is written, then the head published with an interlocked store; the render thread
 reads the head, then the slots, then publishes the tail) — and the level itself still moves in
@@ -498,6 +501,10 @@ Two Continents, camera released, viewport `(128,32 896x704)`:
 | a notch at `(60,400)`, over the side panel | — | *"wheel ignored — pointer is off the world viewport"* |
 | a notch at `(140,40)`, the ring's corner at z < 1 | — | accepted, `-120 -> 0.513` |
 | a notch at `MAINMENU.GUI` | — | *"wheel ignored — no zoomed world on screen"* |
+
+**An in-game menu declines it too** [MEASURED 2026-09-26]: with `ARMOPT.GUI` raised over a
+zoomed world, a notch over the world logs *"wheel ignored — an in-game menu owns input"* and the
+level does not move; once the menu is closed the same notch zooms again.
 
 **What the dead gate was also holding down**, all of it restored by the one line, because each
 reads `live` off the command record `tagpu_zoom_frame_end` posts:
@@ -1589,21 +1596,37 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 
 | VA | What it is | Stolen | Observer records |
 |---|---|---|---|
-| `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here, **and since the vulkan-only plan's landing 10c so does the whole on-demand trigger family** | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named. **Also `tagpu_triggers_frame`** (`tagpu_trigger.h`): peek, the weapon dump, the GUI snapshot, the unit/feature catalogues, scenario detection, — since 10c-2 — `tagpu_input.c`'s token half, and — since 11-2 — the engine-surface screenshot, which is the one member that answers a pass LATE: it services the previous pass's arm before polling for a new one, because at the flip's entry the primary still holds the frame the previous flip presented (§2.64). It runs from `before_flip`, above that function's three early returns, behind a **16 ms QPC gate** with its own counter: these throttle on `frame_counter % 5` (`% 15` for peek) written against the ~60/s *present* rate, and the shell flips **thousands of times a second** — `CENSUS_MS`'s comment beside it reads ~5 000 flips/s (measured 2026-09-07) with the op census at ~12 000 *ops*/s on MAINMENU, while §5352 and the GUI-renderer page say ~12 000 *flips*/s; **the two readings are not reconciled** and the gate does not depend on which is right, being a bound rather than a rate assumption. This is the only reason any `tacli` verb works on `renderer=gdi`, which reaches `tagpu_overlay_draw` never — **and therefore the observer installs whenever the flip's bytes match, NOT behind `tagpu_gui.on`**. For one commit it was behind that trigger, which `tagpu_defaults.off` (written by a bare `tacli launch`) takes away, so an ordinary instance had every `tacli` verb and all input injection silently dead **on every renderer**, with no line in the log because the early return was above the only one. The landing review of 10c-2 caught it. `tagpu_gui.on` now gates the UI layer, the census and the 17 leaves alone; `tacli gui remove` removes those and no longer removes the ability to drive the instance. The one trigger NOT here is `tagpu_input_eye_frame`, the camera hold: it dereferences `f->packet` and this frame has none |
+| `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here, **and since the vulkan-only plan's landing 10c so does the whole on-demand trigger family** | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named. **Also `tagpu_triggers_frame`** (`tagpu_trigger.h`): peek, the weapon dump, the GUI snapshot, the unit/feature catalogues, scenario detection, — since 10c-2 — `tagpu_input.c`'s token half, and — since 11-2 — the engine-surface screenshot, which is the one member that answers a pass LATE: it services the previous pass's arm before polling for a new one, because at the flip's entry the primary still holds the frame the previous flip presented (§2.64). It runs from `before_flip`, above that function's three early returns, behind a **16 ms QPC gate** with its own counter: these throttle on `frame_counter % 5` (`% 15` for peek) written against the ~60/s *present* rate, and the shell flips **thousands of times a second** — `CENSUS_MS`'s comment beside it reads ~5 000 flips/s (measured 2026-09-07) with the op census at ~12 000 *ops*/s on MAINMENU, while §5352 and the GUI-renderer page say ~12 000 *flips*/s; **the two readings are not reconciled** and the gate does not depend on which is right, being a bound rather than a rate assumption. This is the only reason any `tacli` verb works on `renderer=gdi`, which reaches `tagpu_overlay_draw` never — **and therefore the observer installs whenever the flip's bytes match, NOT behind `tagpu_gui.on`**. For one commit it was behind that trigger, which `tagpu_defaults.off` (written by a bare `tacli launch`) takes away, so an ordinary instance had every `tacli` verb and all input injection silently dead **on every renderer**, with no line in the log because the early return was above the only one. The landing review of 10c-2 caught it. `tagpu_gui.on` now gates the UI layer, the census and the 17 leaves alone; `tacli gui remove` removes those and no longer removes the ability to drive the instance. The one trigger NOT here is `tagpu_input_eye_frame`, the camera hold: it dereferences `f->packet` and this frame has none. **A movie frame is recorded here too**: a flip returning to `0x47C455`, the one flip of the movie's frame routine `0x47C3A0`, records the box `SmackDoFrame` filled as `OP_MOVIE` and publishes it in the same call, past the census cadence, as a `PK_MOVIE` with the decoded bytes ([GL UI renderer](gui-renderer.html) §25) |
 | `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function is UNPATCHED and now unpatchable by us: `tagpu_cursown.c` used to skip the `call` at `0x4C687D` that blits the sprite, and **the whole module was deleted by the clean cut** (§2.81) because the composite that replaced the cursor is gone. The observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes always ran and still do; the blit now runs as well, which is what keeps the cursor in the reference frame. (A leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor's record `+0x1B2`, and the three early-out words. Publishes a header-only `in_game = 0` packet carrying the record as `cur_rec` when the three words hold, and `cur_rec = 0` when they do not (the position `+0x1B6/+0x1BA` and the `cursor_live` flag are not published since 2026-09-23) — gated on **two** tests, `s_retDepth == 0` **and** `!s_levelOpen`. `s_retDepth == 0` alone is NOT the complement of the in-play gate: `0x495E66` calls `DrawGameScreen` and returns to `0x495E6B`, not the in-play `0x4969D2`, so a screenshot draw is in-play with `s_retDepth == 0`; `!s_levelOpen` is what keeps this channel out of a level. This row said "i.e. not inside an in-play draw" until the 2026-09-14 review — the code has always had both tests |
 | `0x4C25E0` | the body of the engine's **mouse thread** (`0x4C2990` is its entry, started by `_beginthread` at `0x4C2A9A` — which is why no `call 0x4C2990` exists); `stdcall(mouseObj)`, `ret 4`. Unpatched as a function, and since the clean cut (§2.81) unpatched entirely: its cursor blit `0x4C2732` was one of the four `tagpu_cursown.c` skips and that module is deleted | 8 | nothing — no observer, it is not a channel site. It writes `+0x196/+0x19A` and `+0x1B6/+0x1BA`, the latter as position **minus the hotspot**, exactly as `0x4C67C0` does [CORRECTED 2026-09-14: this row claimed the opposite and called it a fingerprint] |
 | `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
 | `0x4B8500`, `0x4B8310` | the shaded blit, and DrawText's alternate blit — which is **not** the same shape: five args, gated on `globals+0xF0` bit 7, and two arms: a raw frame BLENDS with the destination, an RLE frame is REMAPPED through row `a5` of the lighten table and reads no destination ([engine map](exe-reverse-engineering.html) "The leaves"). `OP_GAFA` and the raw arm of `OP_GAFB` are published as box bytes, which the drain drops, so **they do not reach the screen on the Vulkan lane**. The RLE arm of `OP_GAFB` does: `gafb_capture` remaps the plane at observe time and it crosses as an ordinary `PK_SPRITE` (2026-09-23). No op is recorded when bit 7 is clear, because the engine draws nothing then | 6 | the sprite box, as for `0x4B7F90` |
-| `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
-| `0x4C7580` | the textured-**quad** stamp `(ctx, src, xy[8], uv[8])`, FOUR vertices — the option screens' wide backdrop | 5 | the vertices' bounding box, over all four |
+| `0x4C6D20` | the rect copy `(ctx, src, srect, drect)` — the listbox's and textfield's background restore | 7 | **an `OP_COPY`** — `drect`'s top-left by `srect`'s extent, clamped to the destination, with the source's top-left — whenever `srect` lies inside the source, which publishes as `PK_COPY`; otherwise the box (`OP_GAFD`). The engine takes the size from `srect` alone ([engine map](exe-reverse-engineering.html) "The leaves") |
+| `0x4C7580` | the textured-**quad** stamp `(ctx, src, xy[8], uv[8])`, FOUR vertices — the option screens' wide backdrop, the in-game badge, SELMAP's map preview | 5 | the vertices' bounding box, over all four. An axis-aligned, unclipped stamp of a single frame also carries its resample (`scale_capture`) and publishes as **`PK_PLANE`**, a box of indices: the span `0x4C7310` copies every texel, key colour included, so there is nothing to key |
 | `0x4CCF60` | the glyph blitter, cdecl 9 args | 6 | the string's box from the font's width table, the string's bytes copied into a window scratch, and **since G19f-8 the font itself**: the slot id, `font[0]`/`font[2]`, and a glyph record for every code of this string the font has not sent yet (`text_capture`). `publish` then dereferences no font at all — the read happens one instruction before the engine's own, which is the whole of the lifetime argument |
-| `0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, `0x4BF7B0`, `0x4BF4D0` | line, bar, hollow rect, focus rect, framed box | 8/7/6/7/7 | the rect, clipped — **except the focus rectangle, which records FOUR ops since landing 8d (2026-09-21), one per edge in the engine's own order (top, right, bottom, left), each clipped on its own as `0x4BEA20` clips them.** The box is not what `0x4BF7B0` draws: its four edges go through four separate `0x4BEC70` calls, so a single clipped box would close a figure the engine left open, and the four shared corners are tinted twice. It also refuses a shade level outside the table's 32 rows, which nothing in the engine bounds |
+| `0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, `0x4BF7B0`, `0x4BF4D0` | line, bar, hollow rect, focus rect, box shader | 8/7/6/7/7 | the rect, clipped — **except the focus rectangle, which records FOUR ops since landing 8d (2026-09-21), one per edge in the engine's own order (top, right, bottom, left), each clipped on its own as `0x4BEA20` clips them.** The box is not what `0x4BF7B0` draws: its four edges go through four separate `0x4BEC70` calls, so a single clipped box would close a figure the engine left open, and the four shared corners are tinted twice. It also refuses a shade level outside the lighten table's 32 rows, which nothing in the engine bounds. **The box shader `0x4BF4D0` records its box and its level (`OP_FRAME`), clamped as the engine clamps it**, and publishes as `PK_TINT` whose row is that level's in `PK_SHADE` — a list's selected row, a disabled row, the modal dim; a level whose row is 0 publishes the box instead ([GUI renderer](gui-renderer.html) §`PK_TINT`) |
 | `0x4C6890` | `SurfaceFill(surface, colour)` | 7 | the whole surface |
 | `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
 | `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)` — return hijacked | 6 | registers the surface, seeds its copy so its build is diffed |
 | `0x4C6AC0` | `SurfaceFree(surface)` | 6 | forgets it |
-| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires the surface whose block it is (G18-8): `block+0x30` is the pixel base, and this is the only way an engine allocation dies |
+| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires every tracked surface inside the block (G18-8): each entry whose base lies in `[block, block + MEM_Size(block))`, the size asked inside the allocator's own critical section (`surf_dies_with`, `mem_block_size`) — a `0x4C69F0` surface's pixels sit at `block+0x30`, a frame's at `block+0x18` or its second plane — and this is the only way an engine allocation dies |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)` | 10 | a build/redraw event for the log |
+
+**AND ONE OBSERVER THAT IS NOT A LEAF: the list wheel on the GUI pump `0x4A9FD0`** (stolen 5,
+`83 EC 34 53 55`; an entry hook only). `tagpu_gui_init` installs it whether or not
+`tagpu_gui.on` exists — it does not depend on the op capture and works on every renderer —
+byte-matched on its own, logged as `gui: list wheel ARMED`, and left out by
+`tagpu_listwheel.off` at launch. The window procedure's `tagpu_gui_wheel`, called at both wheel
+doors (`wndproc.c`, the shield's `to_game`) after `tagpu_zoom_wheel` declines a notch, puts the
+notch's delta and point on a single-producer single-consumer ring — slot written, then the head
+published with an interlocked store — with the engine event ring's fill at that moment, read from
+the graphics globals `*(0x51FBD0)` on the game thread (the window's thread; a notch from any other
+thread is dropped and counted). The observer drains the ring
+on the game thread and scrolls the list under each point: it writes the list's `+0xBC`, calls
+the engine's `0x4A1B40`, and moves the gadgets bound to the list as `0x4A2BE0`'s list and slider
+arms would (§2.5). A notch is applied only once the engine has taken every click queued before
+it off its event ring, so it never overtakes one. Behaviour and measurement:
+[GUI gadgets](gui-gadgets.html) §2.4.1.
 
 **Two writers of the minimap composite are missing from this table, and what saves them is an
 accident** [VERIFIED 2026-09-08]: the radar coverage arcs `0x4C0070` and `DrawPoint 0x4BEE60`
@@ -1729,8 +1752,8 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   template wine prefix carries `Gamma = 15`" is withdrawn** ([GL UI renderer](gui-renderer.html)
   §15, measured 2026-09-09): the template and all 58 instance prefixes are **one inode**, wine
   rewrites it in place at launch, it now reads **12**, and instances launched under it present
-  `paldiff=0` — no seam. The mechanism is unchanged; the *value* is shared and mutable, so read
-  `paldiff=` rather than assuming it.
+  `paldiff=0` — no seam. The mechanism is unchanged; the *value* is mutable (under tacli each
+  instance's own, in its registry store, §2.92), so read `paldiff=` rather than assuming it.
 - *Fresh starts:* the trigger reappearing, a queue or arena overflow, a sprite whose bytes never arrived, a copy
   from a source with no twin, and the consumer coming back from a stall (below) all raise
   `reseed`; the next publish sends a **reset** and seeds every surface again from the
@@ -2010,7 +2033,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so the command apply recomputes it through the same wrapper on the draws it moved the eye. **Game thread since 2026-09-12**; it was the one render-thread write of it before (a one-frame torn box while the game thread drew the minimap) |
 | `main+0x14281` bit 3 | the screen fog grid's is-current flag. **CLEARED by the command apply after any eye it moved, on the game thread** — the same clear the engine's own eye writers make at `0x41CB6B`, and safe only there: `0x484904` sets it with an unlocked read-modify-write, so a clear from the render thread could be swallowed ([engine map](exe-reverse-engineering.html), "who may clear `main+0x14281` bit 3"). Until landing 2 the render thread asked terrown's fog tick for the rebuild through a request/ack pair instead; that handshake is gone |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live, on the game thread since 2026-09-12** (§2.3b, §2.17): the command apply derives the widened rect from the level the record carries and restores the true one when nothing is zoomed. The true 1× rect reaches the render thread as the packet's `vp`; `tagpu_vpwide_true_rect()` is game-thread only now. W/H are never written; a disagreement with the screen-derived size is counted (`vpwh=`), not repaired |
-| `main+0x37EBE` bit 0 | options/exit/preferences-stack ownership. **Read only**, at the shared screen→world input transform: set across `ARMOPT.GUI`, `EXITMENU.GUI`, `YESORNO.GUI` and preferences, even though `DrawGameScreen` continues underneath; while set, the whole transform is the identity so those gadget clicks stay in 1:1 screen space at every zoom (§2.3d). Measured Resume/close paths clear it before world input resumes. **Not a general modal flag:** `SHARE.GUI` sets bit 6 and is not covered |
+| `main+0x37EBE` bit 0 | options/exit/preferences-stack ownership. **Read only**, at the shared screen→world input transform, and by the zoom's wheel, which declines every notch while it is set (§2.3): set across `ARMOPT.GUI`, `EXITMENU.GUI`, `YESORNO.GUI` and preferences, even though `DrawGameScreen` continues underneath; while set, the whole transform is the identity so those gadget clicks stay in 1:1 screen space at every zoom (§2.3d). Measured Resume/close paths clear it before world input resumes. **Not a general modal flag:** `SHARE.GUI` sets bit 6 and is not covered |
 | `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index). `DrawGameScreen` caches it in a local at `0x468D49`/`0x468D51`, which is the `[esp+0x74]` the build-cursor block indexes |
 | `main+0x2CC3` / `+0x2CC6` | cursor/order mode byte and the mouse-region flags. Read only. The build-cursor draw keys off `0x2CC3 == 0x0E` (placement) or `0x2CC6 & 8` (band drag), and picks green vs blocked from `0x2CC6 & 0x40` |
@@ -2067,7 +2090,8 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **`UnitOrders->Pos`, `unit+0x5C` → `+0x22`/`+0x26`/`+0x2A`** | **WRITTEN, and it is SIM state** — not by us directly but by `ORDERS_NewMainOrder2Unit 0x43AFC0`, which the scenario applier calls on the game thread from the tick site. Three 16.16 dwords, `{x, altitude, depth}`, copied verbatim by the constructor `0x43A0C0`. An order is a sim command and replicates in multiplayer, so a wrong value here is a wrong game, not a wrong picture; the applier is a fixture tool and is never armed in a played session |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
 | **the unit composite's planes** — `Object3do+0x10` → the GAFFrame's colour plane (`+0x10`) and depth plane (`+0x14`), `w×h` bytes each. **WRITTEN — the planes are overwritten with the ColorKey (index 1) and far depth, on the GAME THREAD, in one place:** `tagpu_owndraw_classify` (its static `wipe_composite`) does it when it skips the engine's rasterise for a **husk** while the native wreck pass is armed. It never skips or wipes a unit. The completed-unit shadow's emit sites (`0x459338` / `0x45958C` / `0x4594DB`) had a second wipe, `tagpu_owndraw_preshadow`, gated on `tagpu_posedraw_live()` — a constant 0 — and it was deleted with its three patches on 2026-09-23. A render-side scratch the engine rebuilds from the posed prims, not sim state: the blit and the shadow read it, nothing else does |
-| **`panel+0xBC`'s surface, `gi+0xCCA` and gadget `+0x1F`, through the engine's own drawer** | **WRITTEN — the only entry here that is a CALL rather than a store, and the only engine draw function this stack invokes.** Besides the surface's pixels, a `0x40` redraw reaches `0x4A16F0`, which sets the **GUI dirty flag `gi+0xCCA`** and stamps gadget `+0x1F`; the pump `0x4A9FD0` clears that flag at `0x4AA0AF` and issues a further redraw. **Whether that amplifies is not settled**: `builds=` over three boots per arm gave overlapping means (1.0/72.0/69.1 shipped, 28.1/21.8/62.1 under `norepaint`). `buildFlags` is 0xC0 in every window of both arms — the engine redraws continuously by itself — and no runaway was observed. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` repaints the top screen's surface so its art reaches us as ops instead of as a `PK_SEED` of opaque bytes (§2.61). Game thread, at the flip's **return** with `s_inFlip` already cleared, non-reentrant by a flag. It is a **redraw**, the middle of the engine's own build/draw/teardown protocol: `0x4A82F0`'s build gate jumps past both allocations and the two frees are gated on the teardown bit, so it allocates nothing, frees nothing and changes no lifetime. Refused unless `gi->TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present — a NULL destination would resolve to the **primary surface** and paint the panel's wallpaper onto the frame. Off with the `norepaint` token |
+| **`panel+0xBC`'s surface, `gi+0xCCA` and gadget `+0x1F`, through the engine's own drawer** | **WRITTEN — one of the two entries here that are a CALL rather than a store (the list wheel's, next, is the other).** Besides the surface's pixels, a `0x40` redraw reaches `0x4A16F0`, which sets the **GUI dirty flag `gi+0xCCA`** and stamps gadget `+0x1F`; the pump `0x4A9FD0` clears that flag at `0x4AA0AF` and issues a further redraw. **Whether that amplifies is not settled**: `builds=` over three boots per arm gave overlapping means (1.0/72.0/69.1 shipped, 28.1/21.8/62.1 under `norepaint`). `buildFlags` is 0xC0 in every window of both arms — the engine redraws continuously by itself — and no runaway was observed. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` repaints the top screen's surface so its art reaches us as ops instead of as a `PK_SEED` of opaque bytes (§2.61). Game thread, at the flip's **return** with `s_inFlip` already cleared, non-reentrant by a flag. It is a **redraw**, the middle of the engine's own build/draw/teardown protocol: `0x4A82F0`'s build gate jumps past both allocations and the two frees are gated on the teardown bit, so it allocates nothing, frees nothing and changes no lifetime. Refused unless `gi->TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present — a NULL destination would resolve to the **primary surface** and paint the panel's wallpaper onto the frame. Off with the `norepaint` token |
+| **a list's `top` (`+0xBC`), then the engine's `0x4A1B40(gi, idx)`; a bound list's `top` and a bound slider's `knobpos` (`+0x140`), then `0x4A1B40(gi, j)` / `0x4A2580(gi, j)`** | **WRITTEN, on the GAME THREAD**, by the list wheel at the entry of the GUI pump `0x4A9FD0` (§2.3e *The engine's UI, observed*): `top` moved by a notch's rows and clamped to `[0, maxtop]` — both read from the same record — then the listbox handler as `List_SelectPrev 0x4A9830` calls it after its own write of `top` (`0x4A9983`), which repaints the rows into the panel's surface; then every other record with the list's `assoc`, as `Gadget_PropagateAssoc 0x4A2BE0`'s list and slider arms move them: a list takes the same `top`, a slider `top · range / maxtop` truncated, repainted only when it changed. `0x4A2BE0` itself is not called: from a list it also copies the selected row into a bound textfield. The selection `+0xBA` is never written. The target is `gi->TheActive_GUIMEM`'s gadget under the notch's point, indexed 1..`totalgadgets` capped at 512 — the pump reads the same screen at `0x4A9FDB` before anything it calls can change the stack, so the record is live exactly as long as the pump's own reads are. Off with `tagpu_listwheel.off` |
 
 ### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)
 
@@ -2083,7 +2107,7 @@ The fixes for the stock engine's own defects run code of ours too, §2.6c.
 | `0x4266A7` | the `jne` that reaches TA's startup DirectX-version warning | `75` → `EB`, so the warning is always skipped |
 | `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, so it governs which sprite is chosen — but the index it returns is *also* the left button's state, which is what the row below is for. `tagpu_curs.off` opts out, read once at attach |
 | `0x499041` | the left click's own dispatch inside `0x498F70`: `cmp dl,0x11 / jl` on `main+0x2CBE`, the installed cursor index, deciding "issue the order" against "deselect everything" | 27 bytes for 27, decided on `main+0x37EFA` and the order byte instead: `cmp [eax+0x37EFA],1 / jne classic / cmp cl,1 / jne classic / jmp deselect / classic: cmp dl,0x11 / jl act / jmp done`. Armed only when the `0x43E50C` patch above took, and off with the same `tagpu_curs.off` |
-| `0x49F4B8`, `0x49F4EC` | **in a tacli test folder only** (§2.92): the command-line parser's jump-table entries for `R` and `r`, both `0x49F249`, the `-r` switch's DirectPlay registration through `dsetup.dll` | `0x49F249` → `0x49F461`, the loop tail every unknown letter takes (entry 26 at `0x49F4FC`, checked to hold it), so `-r` is ignored. Any mismatch ends the process: in test mode the switch must not reach the real registry |
+| `0x49F4B8`, `0x49F4EC` | **in a tacli test launch only** (§2.92): the command-line parser's jump-table entries for `R` and `r`, both `0x49F249`, the `-r` switch's DirectPlay registration through `dsetup.dll` | `0x49F249` → `0x49F461`, the loop tail every unknown letter takes (entry 26 at `0x49F4FC`, checked to hold it), so `-r` is ignored. Any mismatch ends the process: in test mode the switch must not reach the real registry |
 
 None writes engine state, so none appears in §2.5. The engine still draws the cursor
 itself — the composite only moves it (§1); what the patch changes is which sequence out of
@@ -2264,9 +2288,9 @@ into the sound object's `+0x2C` after every registry load (`0x42F9A0`), where th
 stored the registry's `MixingBuffers` through a setter that takes anything. 32 is the engine's
 own table: past it a sound plays untracked and a looping one escapes the stop-all (engine map,
 *The sound object*). TADR writes 128. The engine saves the value back to the registry with its
-other options, as it does the store's Gamma, into the one `user.reg` every instance shares, so a
-control launch (`tagpu_defaults.off`, or the stock DLL) reads 32 where stock's missing key gives
-8. MEASURED 2026-09-23, tier 1 with sound on a null
+other options, as it does the store's Gamma, into the registry: a tacli instance's own
+registry store (§2.92), so a later control launch of that instance (`tagpu_defaults.off`, or the
+stock DLL) reads 32 where stock's missing key gives 8. MEASURED 2026-09-23, tier 1 with sound on a null
 device: 32 in use for the whole fight, never more; the store at 8 held 8.
 
 **The composite scratch frame** is the unit bake's one shared frame a level (engine map, *The
@@ -8851,8 +8875,10 @@ So every A/B on this plan has compared two upside-down pictures. That is a valid
 content** — geometry, colour, coverage and ordering were all genuinely checked and those figures
 stand — but two things fall outside it: the lane's presented picture, and any rasterisation rule
 whose answer depends on which way up the viewport is. The 32 px below are the second of those.
-Nothing culls (`VK_CULL_MODE_NONE` in all thirteen ported pipelines), so the winding argument the
-flip is also justified by buys nothing.
+Nothing culled at that landing (`VK_CULL_MODE_NONE` in all thirteen ported pipelines), so the
+winding argument the flip is also justified by bought nothing. The unit body and hard-shadow
+pipelines cull now (§2.98), on the unflipped y-down viewport this section settles, with the sign
+chosen for it.
 
 **Proven, not inferred, in three steps.** An X capture of the real game window shows the labels
 upright and the group digit *below* its bar; an X capture of the Route D window shows them mirrored
@@ -8985,8 +9011,8 @@ depends on which way up the viewport is. **The screen is the oracle for those, n
   here and in the seam's own log line because it is a behaviour nobody chose deliberately.
 * The prose that argued for the flip, in five pass headers, in `tagpu_vk_pass.h`'s `flipok`
   contract, and in four places in this file — including three `NO CULLING` comments whose stated
-  reason was the winding the flip reversed. Nothing culls and nothing should; only the
-  justification moved.
+  reason was the winding the flip reversed. Nothing culled then; the unit body and hard-shadow
+  pipelines cull since §2.98, for the engine's reason, not the flip's.
 
 #### How it was verified — and the method is the point
 
@@ -10943,10 +10969,12 @@ means reimplementing selection, box-select, build placement and every cursor mod
   on one found two bugs — 2026-09-10.** `renderer=openglcore` fell back to GDI on a real ICD
   because `glGetIntegerv` was fetched through `wglGetProcAddress`, which returns NULL for the
   OpenGL 1.1 entry points on Windows but not under Wine; and the GL UI layer painted its stale
-  twin over the entire intro movie, because the Smacker writes the primary surface directly and
-  the publisher never sees it. Both are fixed ([GL UI renderer](gui-renderer.html) §21) — the
-  point that survives is the **gap in the harness**: `tacli` runs every instance in a wine
-  prefix and skips the intro movies, so neither code path had an oracle at all. The Windows VM
+  twin over the entire intro movie, because no drawing routine touches a movie frame (the
+  decoder writes the offscreen and the ordinary flip presents it) and so the publisher never
+  saw one. Both were fixed on GL ([GL UI renderer](gui-renderer.html) §21), and the Vulkan
+  lane's movie is §25 there. The point that survives is the **gap in the harness**: `tacli`
+  runs every instance in a wine prefix and skipped the intro movies, so neither code path had
+  an oracle at all. `tacli create <i> --intro` plays them now. The Windows VM
   kit (`_local/vm/`) exists for exactly this and is still waiting on an ISO; until it runs, any
   claim about Windows behaviour in these notes is untested.
 
@@ -12158,7 +12186,9 @@ Not a layer. `LAY_FS` ends in `discard`, so where the twin has no coverage the s
 nothing and whatever is underneath shows through. `uSurf` is **read as a reference** by two
 consumers: the **stale-mirror guard** (`:630-635`, under `uGuard`), which discards where the twin
 says index 0 and the engine says otherwise — this is what stops the layer painting stale black
-over the intro Smacker — and the **`uStrict` harness**. Deleting it would re-open the first.
+over the intro Smacker — and the **`uStrict` harness**. Deleting it would re-open the first,
+and it did: the clean cut deleted `uSurf` (§2.81), the movies went black on the Vulkan lane, and
+`PK_MOVIE` closes that without the engine's frame ([GL UI renderer](gui-renderer.html) §25).
 
 #### The change
 
@@ -18581,21 +18611,37 @@ the remap in both caster vertex stages and the regenerated `tagpu_posedraw.spv.h
 `tagpu_shadow.spv.h` (the body program shares `VS`, so its words moved too; its A/B above is the
 check that its picture did not); `stencilok` now 1 wherever `dfmt` is set.
 
-### 2.92 TotalA.exe's registry in a tacli test folder (`tagpu_regstore.c`, test mode only) — G21c
+### 2.92 TotalA.exe's registry in a tacli test launch (`tagpu_regstore.c`, test mode only) — G21c
 
 The plan is [hardware portability](hardware-portability.html) §3 G21c, the contract is
 `tagpu_regstore.h`, and the engine's side, every call site with the keys and values it reads
 and writes, is [exe reverse engineering](exe-reverse-engineering.html) §"The registry".
+
+**Every tacli launch of a DLL that has this module runs in test mode, local ones included** (a
+`--keep-dll` build from before it runs on the shared registry, and tacli warns). A remote
+instance's test folder holds `tacli-state\registry.txt` so the player's key is never written; a
+local instance's gamedir holds `tacli-state/registry.txt` because every local prefix's
+`user.reg` is one inode, so the store is what makes TA's key the instance's own ([tacli design](tacli-design.html) §"The
+registry: a store per instance"). Under wine `GetModuleFileNameW(NULL)` names the gamedir,
+although `TotalA.exe` there is a symlink into the Steam install: a local launch logs `entered by
+the -xtacli-test token and the tacli-state folder beside TotalA.exe` [MEASURED 2026-09-26, wine
+9.0].
 
 **Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, which `DllMain`
 attach runs right after the fork's `delay_imports_init` and before the return for cnc-ddraw's
 config tool (so an inherited `cnc_ddraw_config_init` cannot skip it; detach returns early
 exactly when attach did), looks for the token `-xtacli-test` on the command line
 and for a `tacli-state` folder beside the running exe (`GetModuleFileNameW(NULL)`, never the
-working directory). tacli passes the token on every remote launch; the engine skips it (`x` is
+working directory). tacli passes the token on every remote launch, and on every local launch
+whose DLL serves the store; the engine skips it (`x` is
 above the `'B'..'w'` of its switch table, `ja 0x49F461`, [command-line
 options](cmdline-options.html)). **Real mode needs both absent**: no token, and the folder not
-found. A folder that cannot be looked at (a share, an access rule), without the token, is real
+found. **The store is served only with both**: `tagpu_regstore_init` refuses either alone. The
+folder without the token (`… but no -xtacli-test token on the command line: a launch by a tacli
+from before the per-instance store, or by hand -- launch it with the current tacli: the game
+is not run`) is a launch whose values went elsewhere, into the registry every wine prefix
+shares, which serving the store would drop without a word; the token without the folder has no
+store. A folder that cannot be looked at (a share, an access rule), without the token, is real
 mode too, so a player's folder stays inert. Real mode logs `registry: real (no -xtacli-test
 token, and no tacli-state folder beside TotalA.exe)` and installs nothing, so a player's game
 carries no hook of this section.
@@ -18605,8 +18651,11 @@ no memory for it, an exe path that cannot be read, a registry import the hooks d
 (`TotalA.exe`'s or `win32.dll`'s), or a `win32.dll` not loaded at attach (a static import of
 `TotalA.exe`, so the loader maps it before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
 log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
-first instruction never runs. The line names the process (`s_exe`), so a cnc-ddraw config
-tool started in a test folder reads as one. `rs_refuse_run` is `noreturn` by construction:
+first instruction never runs. The signal in every line names the module whose attach it ends
+(`s_exe`: `the tacli-state folder beside <module>`, `the -xtacli-test token on <module>'s
+command line`), so a cnc-ddraw config tool opened in a test folder is refused in words about
+itself and told to run from a folder with no `tacli-state`; only TotalA.exe's folder-alone
+refusal says to launch with the current tacli. `rs_refuse_run` is `noreturn` by construction:
 `ExitProcess` in a loop follows `TerminateProcess`, since a caller goes on as though the store
 were whole.
 
@@ -19045,3 +19094,147 @@ unit's `E` as saved, and only the loud unit's dot blinks.
 
 **Not covered.** The attack cursor's in-range answer for a keyed weapon was not seen: the AI flies
 its aircraft away. It follows from the cursor calling `0x49ABB0` itself.
+
+### 2.98 Unit faces seen from behind are not drawn (`tagpu_vk_unit.c` `build_body_pipeline`, `build_shadow_pipelines`)
+
+**What it is.** The unit body pipeline `s_pipeBody` and the two Classic hard-shadow pipelines
+(`s_pipeShMark`, `s_pipeShDraw`) cull back faces: `VK_CULL_MODE_BACK_BIT`, front face
+`VK_FRONT_FACE_CLOCKWISE`. No hook, no engine read or write, no shader change.
+
+**Why the engine is the rule.** Every rasteriser the unit bakes use fills a row only when the
+chain it walked forwards lies right of the one it walked backwards, so a face that does not run
+clockwise on the engine's y-down screen paints nothing ([engine map](exe-reverse-engineering.html),
+*The rasterisers paint only faces that run clockwise on screen*). Stock models rely on it: 209 of
+608 close a panel with two faces over the same vertices, wound apart and skinned apart. With both
+drawn, the depth tie chose the side, and ARMCV's closed hatches showed their inside machinery
+instead of the outside plating.
+
+**Why clockwise is the right sign, and what keeps it right.** Nothing between the engine's screen
+and the framebuffer reverses a winding: the bake emits each face's fan `(i0, ik, ik+1)` in index
+order (`pb_walk`), as `0x459830` copies the face (`0x459AD5`); the pose is rotations only, and the
+vertex stage (`tagpu_posedraw.c`) projects as the engine does, `px = x`, `py = −z − y/2`, then
+scales by the zoom about a centre and by `ss` through the viewport, both positive; and `record_stage`'s
+viewport keeps the engine's y growing downward ("NO Y FLIP"). In Vulkan's area rule
+(`a = −½ Σ (xᵢ·yᵢ₊₁ − xᵢ₊₁·yᵢ)` in framebuffer coordinates) a clockwise face on a y-down framebuffer
+has negative area, which `VK_FRONT_FACE_CLOCKWISE` keeps. **A future change that flips the
+viewport, mirrors a piece matrix or reverses the fan must flip `frontFace` with it**; the symptom
+of a wrong sign is every hull drawn inside out.
+
+**The hard shadow follows the body, on both of the engine's branches.** A mobile unit's shadow
+is the blackened composite, which holds only the faces the body bake painted; a structure's slant
+is `0x45A610`'s fill through `0x4C1000`, which drops the faces that do not run clockwise under its
+own projection `x + y/4`, `−z − y/4`. The vertex stage draws each range under its own projection
+on the same y-down framebuffer, so the body's rule reproduces both. The mark and the clear share
+one rasterisation state, so they still cover exactly the same fragments.
+
+**What stays unculled, and why.** Built from the body's create-info after `cullMode` goes back
+to NONE:
+
+- **the build ghosts' `s_pipeGhost`.** The engine draws no ghost, and the ghost's look is every
+  face blended at `uAlpha` 0.40 with depth writes off, back faces included — about 0.64 over a
+  closed hull. Culling would lighten every ghost to 0.40, and it shows both skins of a
+  back-to-back pair blended.
+- **the effects models' `s_pipeFx` and the nanoframe wire's `s_pipeWire`**: a run is a rectangle
+  and a wire record is a band, and neither's winding says anything about a face.
+
+The sun-shadow map's `s_pipeCast` keeps its own NONE (a caster's back faces write depth too).
+
+**Measured 2026-09-26** on one scenario (Two Continents, 1024×768, `ss=2`, the play arm set, a
+private Xvfb with the GPU presenting): four ARMCVs, one finishing an ARMFUS nanoframe. Against the
+GDI backend (`tagpu_gdi.on`) at 1×, the three idle ARMCVs' hatches match GDI with the change —
+grey plating — and did not without it (the dark inside skin on all three); no hull renders inside
+out; the building ARMCV's open hatches look the same in all three runs. A second run with the
+shadow pipelines culled too (Canal Crossing, four ARMSOLARs for the slant, two ARMCVs for the
+silhouette) draws every shadow where GDI draws it. On a closed hull the cull cannot change a
+shadow's coverage, so that run shows the pipelines still draw, not the sign; the sign is the
+body's argument above.
+
+**Not covered.**
+
+- Only ARMCV, ARMSOLAR and one nanoframe were looked at. Other units, wrecks and Classic++ were
+  not compared against GDI; by the argument above they change only where a face is seen from
+  behind.
+- **The nanoframe wire still outlines faces seen from behind.** The engine's wire walk `0x4C0820`
+  drops them like the fills do; ours draws every face's edges and relies on the body's depth, which
+  hides them behind a closed hull but not on a single-sided face seen from behind. Not new with this
+  change. Closing it needs each wire record to carry its face's winding (a third vertex) so the
+  wire's vertex stage can drop the edges of back faces.
+- Whether the engine's face-0 skip (`0x459AA2`) meets the file's selection primitive or a real face
+  is open (engine map, the same section); `tagpu_posebake.c` keeps face 0 in the body and wire
+  ranges.
+
+### 2.99 A textured quad is mapped per pixel (`tagpu_posebake.c` `quad_frame`, `tagpu_native.c` FS `taQuadST`)
+
+**What it is.** The unit pass draws a textured quad as two triangles, and until this change each
+triangle carried its own affine uv. On any quad that is not a parallelogram that bends the texture
+along the diagonal: the grid on an opened ARMSOLAR panel kinked into a V. The fragment stage now
+inverts the quad's bilinear map per pixel, so the texture spans the whole quad as one surface. No
+hook, no engine read or write.
+
+**What the engine does, and why we do not copy it.** `0x4C8760` carries u and v down the quad's
+two edge chains and then steps them linearly across each screen row (`0x4C7A20`; [engine
+map](exe-reverse-engineering.html), *How `0x4C8760` lays a texture on a quad*). For a
+parallelogram that is the bilinear map, and so are the two affine triangles, so only
+non-parallelograms change. For any other quad the engine's layout is the bilinear map only when
+two opposite sides lie along screen rows; otherwise it depends on how the quad sits on screen and
+shifts as a unit turns. Both remedies were shown to the owner side by side, front-on and rotating
+(an offline render of ARMSOLAR, 2026-09-26), and the per-pixel bilinear map was chosen.
+
+**How.** `quad_frame` places each textured four-vertex face of the BODY range in its own frame,
+`P0 = (0,0)`, `P1 = (1,0)`, `P3 = (0,1)`, `P2 = (a,b)`, with `(a,b)` the least-squares fit of
+`P2 − P0` on the two sides from the rest vertices. The material stream carries the corner's point
+in that frame, `(a,b)` and the frame's atlas rect (`TAGPU_PB_MATST` 5 → 13 floats: locations 7-9,
+`tagpu_posebake.h` lists them), and the rasteriser interpolates the point. That interpolation is
+exact because every step from the rest vertices to the framebuffer is affine: the piece transform
+is rigid, the projection `px = x`, `py = −z − y/2` is linear, and the zoom and the viewport are
+scales. An affine map leaves the bilinear coordinates unchanged, so the texture belongs to the
+model and does not swim as it turns. The fragment stage's `taQuadST` solves the quadratic for `t`
+through the root whose slope, which is the map's Jacobian there, is positive, then takes `s`. `(s,t)` is
+clamped to the face, so the sample stays inside the frame's rect, whose border repeats its edge.
+Classic++'s mipped twin reads `textureGrad` with the gradient `J⁻¹·dh`: the inverse Jacobian at
+the fragment's own clamped `(s,t)` times the screen derivatives of the interpolated point, taken
+before any discard. `h` is affine across the face, so its derivatives are exact on every lane of a
+2×2 quad. Inside a convex face the Jacobian stays above the bake's 1/64 margin, so no gradient
+depends on a helper lane past the face's edge, where the extrapolated point can pick the other
+root.
+
+**What stays on the triangles.** A face that is not a quad, and a quad that is not convex in its
+frame (`a > 0`, `b > 0`, `a + b > 1`, each with a 1/64 margin), where the bilinear map is not
+one-to-one over the face. So does anything drawn by `FXVS`, `WVS` or the lab's vertex stage,
+which write the rect as −1. In the 608 stock models there are 43 845 textured quads: 16 448
+parallelograms (unchanged), 27 362 convex non-parallelograms now mapped per pixel, and 35 kept on
+the triangles. 589 models have at least one changed quad. A non-planar quad (1 501 stray more
+than 1 % of an edge off the plane) is fitted, not exact; its two triangles still agree along the
+diagonal because both carry `P2`'s point.
+
+**What it costs.** 32 bytes more per material vertex (20 → 52), in the CPU mirror and the GPU
+buffer alike: a median model's stream is 74 KB rather than 28, and CORGANT's, the largest,
+310 KB rather than 119. A stream is per (type, owner), so a game holding a few hundred costs tens
+of MB more on each side. The fragment work is a square root and two divides per textured pixel.
+
+**Measured 2026-09-26** on a private Xvfb with the GPU presenting (1024×768, the play arm set),
+same-time A/B against the build before the change (08888b7):
+
+- Canal Crossing, four ARMSOLARs at facings 0/90/45/180 and two ARMCVs, Classic, zoom 1× and
+  3.5×. The panel grids run straight and meet the panel edges with no kink. The pixels that
+  differ lie on the units only: nearly every panel pixel, and the ARMCVs' tapered hull faces
+  (`Arm4c`, `Arm4d`, `camob3`, the `nano` arm; `quad_frame`'s rule puts them among the changed
+  quads). The minimap differed only where the two games' AI units had moved differently.
+- The same scene with Classic++ armed, at 0.5×, 1×, 3.5× and 5×: straight grids, no dark rim at a
+  face's edge, no seam along a diagonal. The analytic gradient against one taken by `dFdx` of the
+  solved coordinate, same scene and zooms: on the units only the thin ridge and fold faces differ
+  (991 to 5 899 px a frame, counting the feature beside the collectors, whose restore timing
+  varies), with no visible change at 6× magnification.
+- `crowd-static` (256 units of 16 types), zoom 1× and 2.5×: no face broken or missing.
+- Against GDI (`tagpu_gdi.on`) at 1×, the panels' texture layout matches the engine's frame.
+  GDI's ARMSOLARs also show a black panel with white edges that neither Vulkan build draws.
+  That is a separate, open question and not this change.
+
+**Not covered.**
+
+- The browser lab (`tools/tascene`) feeds no quad frame, so its unit lane keeps the two
+  triangles. Its extractor also stops at `tagpu_feat.c` on `TAGPU_FEAT_MIRROR`, independently of
+  this change. The unit shaders it extracts compile and link as GLSL ES 3.00.
+- Only these scenes were looked at; wrecks were not.
+- Where the engine pins a quad's corners to texels (`w − 1`, `h − 1`), ours sit on the frame's
+  edges, as before this change.

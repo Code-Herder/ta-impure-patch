@@ -16,6 +16,7 @@ PCGamingWiki), not yet runtime-confirmed on our stack. **[INFERRED]** = my readi
   (official, per-gamedir — no registry, no wine audio hacks). Switch form `-s`.
 - **Intro movies off**: don't symlink `Data/1.ZRB` and `Data/2.zrb` into the
   instance mirror — the play call is find-file-gated and skips gracefully.
+  `tacli create <i> --intro` keeps them, and the intro (`1.zrb`) then plays at every launch.
 - **Resolution**: registry `DisplaymodeWidth/Height` only (see `resolution.md`) —
   the stock exe has **no** resolution switches (`-screenwidth` is a 3.9.02-patch
   feature, absent from this binary).
@@ -89,7 +90,7 @@ Three globals are initialised before the loop: `main+0x37F31 = 30`,
 | `-s` | `0x49F402` | `0x51E690` | `0x47EFC0()` → NoDirectSound (same global as the INI). **Official: disable all sound.** |
 | `-t <n>` | `0x49F409` | `main+0x37F31`, clamp 30..300 | **Battleroom join timeout, seconds** (default 30) — feeds "will be rejected in %d seconds" at `0x453859`. |
 | `-w` | `0x49F45C` | `0x51E694` | `0x47EFD0()` → UseWindowsSound (same global as the INI). Official. |
-| `-xtacli-test` | `0x49F461` | — | **Not a switch of the engine: tacli's token.** `x` is above `w`, so the parser skips it. Every remote launch passes it, and it is how the DLL knows a tacli test launch ([exe reverse engineering](exe-reverse-engineering.html) §"The registry"). |
+| `-xtacli-test` | `0x49F461` | — | **Not a switch of the engine: tacli's token.** `x` is above `w`, so the parser skips it. Every remote launch passes it, and every local launch whose DLL serves the instance's registry store; it is how the DLL knows a tacli test launch ([exe reverse engineering](exe-reverse-engineering.html) §"The registry"). |
 
 The debug-runtime switches visible in strings (`-dprinton`, `-dprintfile`,
 `-memfussy`, `-gonzo`, …) belong to the CRT/debug layer, parsed elsewhere; they
@@ -250,8 +251,13 @@ Full silence = INI + registry + assets:
 Verified: with all three in place, `pactl list sink-inputs` shows **zero** TA clients at
 the menu *and* in a running skirmish.
 
-Also in that key: **`PlayMovie` (REG_DWORD)** — a second intro lever alongside the ZRB
-file gate; tacli sets it to 0.
+Also in that key: **`PlayMovie` (REG_DWORD)** — the cinematic's switch, not the intro's
+[DISASSEMBLED + MEASURED 2026-09-26]. The settings loader reads it into `main+0x3923D` at
+`0x430DEC`, and an absent value reads as 1. At the shell's start (`0x426F06`) a non-zero value
+plays `1.zrb` and then the cinematic `2.zrb`, and is written back as 0: the first launch of a
+fresh install. Zero plays `1.zrb` alone, unless the game was lobby-launched (`main+0x39245`,
+`-c`/`-n` above). So the ZRB file gate is what decides the intro. tacli writes 0
+([engine map](exe-reverse-engineering.html), *The movie player*).
 
 ## Intro/outro movies — Data/*.zrb [BINARY-VERIFIED file gate, COMMUNITY skip]
 

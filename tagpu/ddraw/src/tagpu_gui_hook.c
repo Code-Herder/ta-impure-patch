@@ -129,10 +129,8 @@ typedef struct OVL {
     unsigned glen;
 } OVL;
 typedef struct SURF {
-    unsigned base;                    /* pixel base — the identity           */
-    unsigned owner;                   /* the block MEM_Free 0x4D85A0 will be handed: the
-                                         surface object itself, whose pixels are the same
-                                         allocation at object+0x30 — see before_memfree */
+    unsigned base;                    /* pixel base — the identity; the block it
+                                         dies with is `surf_dies_with`'s        */
     int w, h, pitch;
     unsigned char* copy;              /* the surface as of the last flip     */
     unsigned char* mask;              /* the last census: 0/128/255          */
@@ -288,6 +286,51 @@ static void surf_drop_offscreens(unsigned keepBase)
     }
 }
 
+/* THE BLOCK A TRACKED BASE DIES WITH IS THE BLOCK IT LIES IN. A context's base
+   points into one MEM_Alloc `0x4D83B0` block, at an offset that depends on
+   what made it, and nothing in the context says which (every builder writes
+   the same flags at `+0x2C`):
+
+     `SurfaceCreateNamed 0x4C69F0`  `w*h+0x30`, the pixels at `+0x30` (`0x4C6A0E`)
+     `0x4B8DA0`, `0x4B8E00` frames  the pixels at `+0x18` (`0x4B8DD0`, `0x4B8E1F`);
+                                    `0x4B8A80` builds the context
+     `0x4B91B0` two-plane frames    `+0x18` or `+0x18 + w*h`: `0x4B9360` swaps
+                                    `+0x10`/`+0x14` and builds its context inline
+                                    over the first (`0x4B936D..0x4B93C8`), the
+                                    destination of `0x4C6D20` at `0x4B9433`
+
+   A list of offsets is closed only until the next builder is found, so the test
+   is the block's own extent: the entry dies with `p` when its base lies in
+   `[p, p + MEM_Size(p))`. That is containment, not a guess -- no other
+   allocation's pixels can lie inside a live block -- so it neither misses an
+   entry nor retires one that is not `p`'s. DISASSEMBLED 2026-09-26.
+
+   THE SIZE IS THE ALLOCATOR'S, ASKED UNDER ITS OWN LOCK. `MEM_Size 0x4D8360(p)`
+   (cdecl) answers through the pool's query `0x4DBAE0`, which enters the
+   allocator's critical section itself, or the CRT's `_msize 0x4E8FB0`, which
+   takes CRT heap lock 9 (`0x4EAC60`), on the same test `0x4D80D0` the free makes.
+   `mem_block_size` holds the allocator's section `0x528A28` (`0x4DA780`) around
+   it, as `0x4D85B0` holds it (`0x4D85C2`) around its own call at `0x4D85E7`: the
+   same locks in the same order. The block is the caller's until the free it is
+   about to make, so nothing else can resize it in between. */
+typedef CRITICAL_SECTION* (__cdecl *mem_lock_fn)(void);
+typedef unsigned (__cdecl *mem_size_fn)(unsigned block);
+#define MEM_LOCK ((mem_lock_fn)(size_t)0x004DA780u)
+#define MEM_SIZE ((mem_size_fn)(size_t)0x004D8360u)
+static unsigned mem_block_size(unsigned p)
+{
+    CRITICAL_SECTION* cs = MEM_LOCK();
+    unsigned n;
+    EnterCriticalSection(cs);
+    n = MEM_SIZE(p);
+    LeaveCriticalSection(cs);
+    return n;
+}
+static int surf_dies_with(const SURF* s, unsigned p, unsigned size)
+{
+    return s->base - p < size;             /* unsigned: a base below `p` is huge */
+}
+
 /* ---- blocks freed on a thread that is not the game thread ---------------
    The table is the game thread's alone — `surf_drop` swap-removes and
    `surf_get` memsets the tail — so an observer that fires on another thread
@@ -336,12 +379,14 @@ static volatile LONG s_freeqN;                  /* claimed, ever — any thread 
 static volatile LONG s_freeqIn;                 /* STORED, ever — any thread    */
 static LONG          s_freeqDone;               /* taken, ever — game thread    */
 static volatile LONG s_freeq[FREEQ];            /* 0 = taken, or claimed-not-yet-stored */
+static volatile LONG s_freeqSz[FREEQ];          /* its size, stored before it   */
 static unsigned      s_freeqFlush;              /* times the table was flushed  */
 
-static void surf_free_offthread(unsigned p)
+static void surf_free_offthread(unsigned p, unsigned size)
 {
     LONG n = InterlockedIncrement(&s_freeqN) - 1;   /* claim */
-    InterlockedExchange(&s_freeq[n & (FREEQ - 1)], (LONG)p);
+    InterlockedExchange(&s_freeqSz[n & (FREEQ - 1)], (LONG)size);   /* before `p`: a stored `p` */
+    InterlockedExchange(&s_freeq[n & (FREEQ - 1)], (LONG)p);        /* carries its size        */
     InterlockedIncrement(&s_freeqIn);               /* and only now is it there */
 }
 
@@ -364,10 +409,12 @@ static void surf_drain_freeq(void)              /* game thread only */
         LONG k;
         for (k = from; k != head; k++) {
             unsigned p = (unsigned)InterlockedExchange(&s_freeq[k & (FREEQ - 1)], 0);
+            unsigned size;
             int i;
             if (!p) { flush = 1; break; }        /* claimed, not yet stored  */
-            for (i = 0; i < s_nsurf; i++)
-                if (s_surf[i].owner == p) { surf_drop(i); break; }
+            size = (unsigned)InterlockedExchangeAdd(&s_freeqSz[k & (FREEQ - 1)], 0);
+            for (i = 0; i < s_nsurf; )          /* swap-remove: re-test slot i */
+                if (surf_dies_with(&s_surf[i], p, size)) surf_drop(i); else i++;
         }
         /* did a producer lap the window while we were walking it? */
         if (!flush && (unsigned long)InterlockedExchangeAdd(&s_freeqN, 0)
@@ -380,13 +427,12 @@ static void surf_drain_freeq(void)              /* game thread only */
     s_freeqDone = head;
 }
 
-static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
+static SURF* surf_get(unsigned base, int w, int h, int pitch)
 {
     int i;
     if (!base || w <= 0 || h <= 0 || pitch <= 0 || w > 4096 || h > 4096 || pitch > 8192) return NULL;
     for (i = 0; i < s_nsurf; i++)
         if (s_surf[i].base == base) {
-            s_surf[i].owner = owner;       /* re-made over the same bytes: the new block */
             if (s_surf[i].w != w || s_surf[i].h != h || s_surf[i].pitch != pitch) {
                 /* the object was re-allocated over the same bytes: start over.
                    The ops already recorded against the base carry the OLD
@@ -410,7 +456,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
     if (s_nsurf >= MAX_SURF) return NULL;
     memset(&s_surf[s_nsurf], 0, sizeof(SURF));
     s_surf[s_nsurf].base = base; s_surf[s_nsurf].w = w; s_surf[s_nsurf].h = h;
-    s_surf[s_nsurf].pitch = pitch; s_surf[s_nsurf].owner = owner;
+    s_surf[s_nsurf].pitch = pitch;
     s_surf[s_nsurf].bl = s_surf[s_nsurf].bt = 0x7FFF; s_surf[s_nsurf].br = s_surf[s_nsurf].bb = -1;
     return &s_surf[s_nsurf++];
 }
@@ -421,11 +467,8 @@ static SURF* surf_of_ctx(const int* ctx)
     unsigned base;
     if (!ptr_ok(ctx)) return NULL;
     base = (unsigned)ctx[CTX_BASE];
-    /* THE OWNER IS DERIVED FROM THE BASE, NOT FROM THE CONTEXT POINTER.
-       `SurfaceCreateNamed 0x4C69F0` asks MEM_Alloc for w*h+0x30 bytes and
-       points the object's base field at block+0x30 (0x4C6A01..0x4C6A14), so the
-       block MEM_Free will be handed is `base - 0x30` — and that holds however
-       we reached the surface. The CONTEXT is not usable for this: `GetContext
+    /* THE BLOCK IS DERIVED FROM THE BASE, NOT FROM THE CONTEXT POINTER
+       (`surf_dies_with`). The CONTEXT is not usable for this: `GetContext
        0x4C5E70` rep-movs a 12-dword copy into the caller's stack frame, so most
        blits hand us a copy whose address has nothing to do with the block.
        (MEASURED 2026-09-12: keying on the context refused 1235 draws in one
@@ -436,10 +479,10 @@ static SURF* surf_of_ctx(const int* ctx)
        0x4C6A60` — one caller, `0x4B5897` — lays the same header over the locked
        DirectDraw primary, memory the engine did not allocate and will not
        MEM_Free. Such a surface would have no destructor here. None was ever
-       recorded (every base this module has seen is an `0x4C69F0` object;
-       measured over a full session in game and in the shell), and its pixels
-       belong to the fork, which frees them only in the surface's own Release. */
-    return surf_get(base, ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH], base - 0x30);
+       recorded (measured over a full session in game and in the shell), and
+       its pixels belong to the fork, which frees them only in the surface's own
+       Release. */
+    return surf_get(base, ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH]);
 }
 
 /* ---- the ops recorded since the last flip ------------------------------ */
@@ -463,9 +506,11 @@ static SURF* surf_of_ctx(const int* ctx)
    the square the line crosses, and replaying it would paint the whole square.
    Keeping them as two kinds means `GUI kinds:` counts them apart, so the ratio
    is read rather than guessed. */
+/* `OP_MOVIE` is not a leaf's: `before_flip` records it for the movie's own
+   flip, whose box holds a Smacker frame -- see `movie_frame`. */
 enum { OP_GAF = 1, OP_GAFA, OP_GAFB, OP_GAFD, OP_SCALE, OP_TEXT, OP_LINE, OP_BAR, OP_RECT, OP_FRAME, OP_FILL, OP_COPY,
-       OP_FLIP, OP_FOCUS, OP_DIAG, OP_NKIND };
-static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag" };
+       OP_FLIP, OP_FOCUS, OP_DIAG, OP_MOVIE, OP_NKIND };
+static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag", "movie" };
 typedef struct OP {
     unsigned base; short l, t, r, b; unsigned char kind;
     /* what the publisher needs beyond the box (gui-renderer.md 3.6) */
@@ -521,9 +566,10 @@ typedef struct OP {
            of a 256-byte remap table -- `globals+0xC4` for negative, `+0xC8`
            for positive -- and every pixel already in the box is read and
            written back through that row. Truncating it to a byte is
-           meaningless, which is why `publish` never reads `col` for it.
-           `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is darken level 24,
-           NOT palette index 232.
+           meaningless, which is why `before_frame` stores the clamped level
+           there instead, as a signed byte, and `publish` reads it as the level
+           that picks the `PK_SHADE` row. `0x4AA912`'s `0x4BF4D0(panel+0xBC,
+           rect, -0x18)` is darken level 24, NOT palette index 232.
          - `OP_RECT` / `0x4BF8C0` writes four edges through the store-only
            Bresenham `0x4CC7AB`, whose colour is `[ebp+0x1C]` stored
            `stos BYTE al` -- the low byte, a palette index, which is why
@@ -570,11 +616,8 @@ typedef struct OP {
     unsigned char edge;
     /* OP_SCALE: THE SOURCE WINDOW the transformed draw takes out of its frame,
        in frame texels, half-open like the destination extent. The whole-frame
-       case is (0, 0, GF_W, GF_H) and every other kind leaves it zeroed.
-       `swin` is the same four values packed one byte each for the consumer's
-       atlas key, or 0 for "the whole frame" -- see `tagpu_gui_int.h`. */
+       case is (0, 0, GF_W, GF_H) and every other kind leaves it zeroed. */
     unsigned short su, sv, sww, swh;
-    unsigned       swin;
     unsigned char dup;                          /* an identical op follows: dropped */
 } OP;
 /* ---- THE UI FONTS, AS IDENTITIES AND BITS -------------------------------
@@ -888,7 +931,7 @@ static unsigned s_nullCtx[OP_NKIND];        /* ops whose ctx was NULL/unknown */
 static unsigned s_kindArea[OP_NKIND];
 /* THE SEMANTIC HALF OF `OP_SCALE`, which is the one kind that is semantic for
    SOME of its ops and not others. A transformed draw crosses as a
-   `PK_SPRITE` when its plane was captured -- an axis-aligned, keyable window of
+   `PK_PLANE` when its plane was captured -- an axis-aligned, unclipped window of
    a single-plane frame -- and as nothing at all otherwise. Summing the whole
    kind into `raw` would report `raw=0.21 pct` for a shell screen whose
    residual is zero. Counted
@@ -910,6 +953,13 @@ static unsigned s_assetDrift = 0;     /* pixels that moved in an ACKED asset -- 
 static unsigned s_tints = 0;
 static unsigned s_focusRowBad = 0;
 static unsigned s_tintNoTable = 0;
+/* ---- THE BOX SHADER'S THREE (`0x4BF4D0`, `box=` on the heartbeat) ---------
+   `s_boxes` crossed as `PK_TINT`; `s_boxRow0` a level whose row is 0, which
+   the engine reads off the front of its table and we refuse; `s_boxNoTable`
+   a table not built yet. The last two are expected to read 0. */
+static unsigned s_boxes = 0;
+static unsigned s_boxRow0 = 0;
+static unsigned s_boxNoTable = 0;
 
 /* NEVER REISSUED, which is what makes the echo an identity. Skips 0 on wrap so
    that 0 always means "no offer in flight"; a wrap needs 2^32 offers. */
@@ -1263,6 +1313,14 @@ static unsigned char* s_arena;
 volatile int g_gui_draw = 0;          /* 0 until the consumer arms: see above */
 static int   s_pubOverflow = 0;
 static unsigned s_pubOps = 0, s_pubBytes = 0;
+/* THE MOVIE FRAMES THAT MAY STILL BE QUEUED, for `movie_frame`'s rule: the
+   queue index just past each of the last two PK_MOVIEs of the movie playing,
+   newest first, and how many of the two are set. Dropped when the movie ends. */
+static unsigned s_movieQ[2] = { 0, 0 };
+static int      s_movieQueued = 0;
+/* the palette the newest carried frame was decoded under, and the one the
+   frame of this op window was -- adopted only once its op is committed */
+static unsigned char s_moviePal[1024], s_moviePalRec[1024];
 
 /* sprite frames whose bytes were already published (open addressing) */
 #define SEEN_N 8192
@@ -1437,88 +1495,125 @@ static int pub_seed(SURF* s)
     return 1;
 }
 
-/* ---- THE LIGHTEN TABLE, `globals+0xC8` ----------------------------------
-   What a focus tint remaps through: 32 rows of 256 bytes, built by the engine
-   at init. `tagpu_packet_pub.c` latches the same table for the world's flash
-   blit (`lht_snapshot`) and the shade table beside it the same way; this is
-   the GUI queue's own copy, because the op stream is a different channel from
-   the frame packet and a pointer between them would be a lifetime nobody has
-   established.
+/* ---- THE REMAP TABLE A TINT INDEXES ------------------------------------
+   `PK_SHADE` carries `TAGPU_GUI_SHADE_ROWS` rows (layout in inc/tagpu_gui.h):
+   the lighten table `globals+0xC8` whole, for the focus edges, and then one
+   row per box-shader level, derived here from that table and from PALETTE.SHD
+   `globals+0xC4`. `tagpu_packet_pub.c` latches the same two tables for the
+   world (`lht_snapshot`, `shd_snapshot`); this is the GUI queue's own copy,
+   because the op stream is a different channel from the frame packet and a
+   pointer between them would be a lifetime nobody has established.
 
-   LATCHED ON THE POINTER, exactly as those two are: the note records no
-   rebuild, but "no note establishes it" is the font's lesson, so a different
-   pointer is a different table and is re-copied. The SIZE is the format's
-   bound -- `TAGPU_GUI_SHADE_BYTES` carries that argument.
+   THE TABLES ARE WRITTEN ONCE, AT INIT. Each has one in-place setter --
+   `0x4BAB00` (SHD, from `0x42E21B`) and `0x4BAB30` (LHT, from `0x42E2AB`) --
+   reached only through `0x42E1D0` / `0x42E260`, whose one caller is
+   `UIPipelinesInit 0x491200` at `0x49139F` / `0x4913B1`, itself called once
+   (`0x49EA62`). So a table read here at the flip is the table the engine drew
+   with, whenever the draw was, once its caps bit is set.
 
-   THE READABILITY TEST IS `0x4BEC70`'S OWN. It fetches `[globals+0xC8]` and
-   returns 0 without drawing when it is NULL (`0x4BEC7B`), so a null table is
-   the state in which the engine draws no tint either -- publishing nothing is
-   a match, not a gap. `ptr_ok` on top of that is a value filter on a pointer
-   we are about to read 8 KB through and is NOT the safety argument; the
-   argument is that this is an init-time allocation the engine holds for the
-   process and hands to its own rasteriser on the same thread we are on. */
+   KEYED ON THE CONTENT anyway, and on which tables were built: the setters
+   rewrite in place and leave the pointer where it was, so a pointer latch
+   could not see a rewrite, and the comparison is the same 16 KB read either
+   way. The read is on the game thread, where both setters run.
+
+   THE READABILITY TEST IS THE ENGINE'S OWN, and it is a BOUND, not a probe.
+   `PROG_CAPS` bit 7 is "the lighten table is enabled" and bit 6 "PALETTE.SHD
+   is enabled": the init writes the word at `0x4B5AC4` and allocates each
+   buffer only when its bit is set (`0x4BA610` at `0x4B5ADF`, `0x4BA660` at
+   `0x4B5B0F`), and `0x4BAB30` / `0x4BAB00` refuse to fill one whose bit is
+   clear. The bit is set BEFORE the allocation and the fill, so a set bit
+   with a pointer means the buffer exists, not that it has been filled; the
+   fills follow once, at init (above), and the content key below re-sends the
+   rows when they do. `0x4BEC70` and `0x4BF4D0` test only the pointer; the
+   bit is the engine's own record of whether that pointer was ever made, so
+   an op whose table's bit is clear is refused and counted rather than read
+   through a pointer nothing allocated. `ptr_ok` is a value filter on a
+   pointer about to be read 8 KB through, not the safety argument; that is
+   that these are init-time allocations the engine holds for the process. */
 /* THE ADDRESSES COME FROM `tagpu_engine.h` (`TA_GFX_PP`, `PROG_LHT`,
-   `PROG_CAPS`), not from private copies here. This file is a `publisher` in
-   `thread-split.allow`, so it may include that header, and a second spelling
-   of `0x51FBD0` in a file that already reaches it twice is how two copies of
-   one fact drift apart. */
-static unsigned char s_lht[TAGPU_GUI_SHADE_BYTES];
-static int      s_lhtOk = 0;
+   `PROG_CAPS`, `GFX_SHD`), not from private copies here. This file is a
+   `publisher` in `thread-split.allow`, so it may include that header, and a
+   second spelling of `0x51FBD0` in a file that already reaches it twice is how
+   two copies of one fact drift apart. */
+enum { SHADE_LHT = 1, SHADE_SHD = 2 };
+static unsigned char s_lht[TAGPU_GUI_TABLE_ROWS * 256u];    /* globals+0xC8 */
+static unsigned char s_shd[TAGPU_GUI_TABLE_ROWS * 256u];    /* globals+0xC4 */
+static unsigned char s_shadeTab[TAGPU_GUI_SHADE_BYTES];     /* what PK_SHADE carries */
+static unsigned s_shadeBuilt = 0;     /* SHADE_*: the tables s_shadeTab came from */
 static int      s_lhtSent = 0;        /* crossed since the last reset          */
 static unsigned s_lhtCopies = 0;
 
-/* 1 = the consumer has the table (or will, ahead of this batch's first tint),
-   0 = there is none to publish, -1 = the queue is full and `publish` must
+/* THE BOX SHADER'S ROWS. For level L the engine picks table T and row r
+   (`0x4BF569`..`0x4BF5B5`: L < 0 is PALETTE.SHD at r = L + 32, else the
+   lighten table at r = L, both already clamped) and then reads
+   `T[r*256 + (signed char)dst]` (`0x4BF5E8`), so its whole effect is one
+   256-byte row: `T[r][i]` below 128 and `T[r-1][i]` from 128 up. For r = 0 the
+   upper half is the heap in front of the table; it stays zero here and
+   `publish` never emits the two levels that would read it. */
+static void shade_build(void)
+{
+    unsigned k, i;
+    memset(s_shadeTab, 0, sizeof s_shadeTab);
+    if (s_shadeBuilt & SHADE_LHT) memcpy(s_shadeTab, s_lht, sizeof s_lht);
+    for (k = 0; k < 64; k++) {
+        int lvl = (int)k - 32;
+        const unsigned char* T = lvl < 0 ? s_shd : s_lht;
+        unsigned r = lvl < 0 ? (unsigned)(lvl + 32) : (unsigned)lvl;
+        unsigned char* row = s_shadeTab + (TAGPU_GUI_SHADE_BOX + k) * 256u;
+        if (!(s_shadeBuilt & (lvl < 0 ? SHADE_SHD : SHADE_LHT))) continue;
+        for (i = 0; i < 128; i++) row[i] = T[r * 256u + i];
+        if (r) for (i = 128; i < 256; i++) row[i] = T[(r - 1) * 256u + i];
+    }
+}
+
+/* `need` is the SHADE_* tables the op about to be published indexes.
+   1 = the consumer has the table (or will, ahead of this batch's first tint),
+   0 = a table it needs is not built, -1 = the queue is full and `publish` must
    return. Three states rather than two because "no table" and "no room" call
    for opposite things and one of them is silent. */
-static int pub_shade(void)
+static int pub_shade(unsigned need)
 {
     const char* g;
     const unsigned char* t;
+    unsigned short caps;
+    unsigned have = 0;
+    int changed;
     TAGPU_PUBOP* o;
     unsigned char* dst;
     g = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(g)) return 0;
-    /* THE ENGINE'S OWN PRECONDITION, AND IT IS A BOUND AND NOT A PROBE.
-       `PROG_CAPS` bit 7 is the graphics globals'
-       "the lighten table is there" flag, and it is the engine's own gate on
-       this exact buffer: the in-place setter `0x4BAB30` tests `[globals+0xF0]`
-       bit 7 and returns without writing when it is clear, exactly as
-       `0x4BAB00` does for the darken table on bit 6 and `0x4BAAD0` for the
-       alpha table on bit 5. Its siblings' shape is the proof of what the bit
-       means. Without this test an allocation that exists but has not been
-       filled yet -- `0x4BA660` allocates the 8192 bytes and returns 1 without
-       touching the caps word, so the two are separate events -- is copied as
-       though it were a table. `tagpu_packet_pub.c`'s `lht_snapshot` has the
-       same test. `0x4BEC70` itself does NOT test the bit -- it null-
-       checks and draws -- so the engine will happily draw through an unbuilt
-       table and we deliberately will not. */
-    if (!(*(const unsigned short*)(g + PROG_CAPS) & 0x80u)) return 0;
-    t = *(const unsigned char* const*)(g + PROG_LHT);
-    if (!ptr_ok(t)) return 0;
-    /* KEYED ON THE CONTENT, NOT ON THE POINTER.
-       `0x4BAB30` is reached from `0x42E2AB`, which loads PALETTE.LHT into a
-       heap buffer, `rep movsd`s 0x800 dwords of it straight into
-       `[globals+0xC8]` and frees the source at `0x42E2B1` -- an IN-PLACE
-       rewrite that leaves the pointer exactly where it was. A latch keyed on
-       the pointer cannot see it, and `lhtcopies=1` would have read as proof
-       that nothing changed. Comparing the bytes we are about to rely on is
-       the same 8 KB read either way and needs no argument about how many
-       times that path can run. The read is ordered against the rewrite by
-       being on the same thread: `0x42E2AB` and this observer are both game
-       thread, so the engine cannot be mid-`rep movsd` while we are here. */
-    if (!s_lhtOk || memcmp(s_lht, t, sizeof s_lht) != 0) {
-        memcpy(s_lht, t, sizeof s_lht);
-        s_lhtOk = 1; s_lhtCopies++;
+    caps = *(const unsigned short*)(g + PROG_CAPS);
+    if (caps & 0x80u) {
+        t = *(const unsigned char* const*)(g + PROG_LHT);
+        if (ptr_ok(t)) {
+            have |= SHADE_LHT;
+            if (memcmp(s_lht, t, sizeof s_lht) != 0) { memcpy(s_lht, t, sizeof s_lht); s_shadeBuilt = 0; }
+        }
+    }
+    if (caps & 0x40u) {
+        t = *(const unsigned char* const*)(g + GFX_SHD);
+        if (ptr_ok(t)) {
+            have |= SHADE_SHD;
+            if (memcmp(s_shd, t, sizeof s_shd) != 0) { memcpy(s_shd, t, sizeof s_shd); s_shadeBuilt = 0; }
+        }
+    }
+    if ((have & need) != need) return 0;
+    /* `s_shadeBuilt` was cleared above on any content change, so a table
+       whose bytes moved, or one that has just been built, rebuilds the rows */
+    changed = (have != s_shadeBuilt);
+    if (changed) {
+        s_shadeBuilt = have;
+        shade_build();
+        s_lhtCopies++;
         s_lhtSent = 0;                 /* a different table is a different fact */
     }
     if (s_lhtSent) return 1;
     o = pub_op(PK_SHADE, 0);
     if (!o) return -1;
     o->w = (int)TAGPU_GUI_SHADE_ROWS; o->h = 256;
-    dst = pub_bytes(o, (unsigned)sizeof s_lht);
+    dst = pub_bytes(o, (unsigned)sizeof s_shadeTab);
     if (!dst) return -1;
-    memcpy(dst, s_lht, sizeof s_lht);
+    memcpy(dst, s_shadeTab, sizeof s_shadeTab);
     pub_commit();
     /* AFTER THE COMMIT, NEVER BEFORE IT. Marking it sent on the way in would
        claim a table that a full arena threw away -- the same shape of mistake
@@ -1733,7 +1828,7 @@ static void gaf_capture(OP* o, const unsigned char* fr, int force)
    thread inside the engine's own call that reads the same bytes -- the ordering
    `gaf_capture` argues, and the table is an init-time allocation besides.
    `row` is BOUNDED here and not by the engine: `0x4B84AB` shifts it unmasked,
-   and the table is 32 rows (`TAGPU_GUI_SHADE_ROWS`). */
+   and the table is 32 rows (`TAGPU_GUI_TABLE_ROWS`). */
 static unsigned char s_gafbCov[TAGPU_GAF_DECMAX * TAGPU_GAF_DECMAX];
 static void gafb_capture(OP* o, const unsigned char* fr, unsigned row, int force)
 {
@@ -1746,7 +1841,7 @@ static void gafb_capture(OP* o, const unsigned char* fr, unsigned row, int force
     o->fkey = 0; o->goff = o->glen = 0; o->sgen = s_seenGen;
     if (o->fcomp == 0 || o->fsub != 0) return;
     if (!o->fw || !o->fh || o->fw > TAGPU_GAF_DECMAX || o->fh > TAGPU_GAF_DECMAX) return;
-    if (row >= TAGPU_GUI_SHADE_ROWS) return;
+    if (row >= TAGPU_GUI_TABLE_ROWS) return;
     g = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(g)) return;
     t = *(const unsigned char* const*)(g + PROG_LHT);
@@ -1789,30 +1884,36 @@ static void gafb_capture(OP* o, const unsigned char* fr, unsigned row, int force
    nothing more. [The loop at `0x4C763D..0x4C7679` walks FOUR at stride 8, and
    the badge is the WHOLE-FRAME case of a uv quad that is in general a window.]
 
-   WHY NOT IN THE RENDERER. The Vulkan lane draws a sprite over
-   `(sl,st)-(sl+fw,st+fh)`, the FRAME's size, not the op's box, and it does that
-   deliberately: a clipped sprite still needs its whole quad. Teaching it a second
-   destination size would touch the render thread for one 21x21 badge. Resampling
-   here gives the existing sprite path a frame that is already the right size, and
-   the atlas keys on `(frame, pix, fw, fh)` plus the source WINDOW, so the scaled
-   variant is a different entry from any 1:1 use of the same art.
+   IT CROSSES AS A BOX OF INDICES, `PK_PLANE`, NOT AS A SPRITE. The span
+   `0x4C7310` copies every texel of the rectangle, the frame's key colour
+   included -- `mov dl,[edi+ebx]` / `mov [esi-1],dl` at `0x4C74C7`..`0x4C74CE`,
+   no compare (DISASSEMBLED 2026-09-26) -- so what a captured stamp leaves on the
+   surface is exactly this plane over exactly its rectangle. A sprite would add
+   two things the engine does not have. A KEY: every consumer of a sprite drops
+   texels equal to `ck`, and SELMAP's preview frame, which `0x4B8DA0` makes, has
+   a key byte that is whatever the allocation held (18, 65 measured), so a map
+   whose minimap used that index lost those texels. And an ATLAS ENTRY, which
+   needs a key saying which picture it holds: every pick frees the preview frame
+   and allocates the next at the same address and size (`0x444AF4`, `0x4295B0`
+   -> `0x4B8DA0`), and `0x4665D0` clears the plane to 0 before stamping the
+   letterboxed minimap, so a hash of the plane's head made every wide map the
+   same entry and the preview never changed after the first pick; keyed by
+   content instead, every map browsed took an entry of its own until the atlas
+   filled, and the full atlas's fresh start blanked the screens under the modal
+   [MEASURED 2026-09-26: 131 arrow presses through the list filled it]. A box
+   needs neither.
 
-   THE WINDOW IS PART OF THE KEY (`swin`, 0 meaning "the whole frame"): two
-   windows of ONE frame resampled to one destination size are the same `(frame,
-   pix, fw, fh)` with different texels -- and `atlas_find` runs before
-   `atlas_put`, so without it the second would silently wear the first one's
-   pixels.
+   RESAMPLED HERE, NOT IN THE RENDERER, so the lane copies bytes 1:1 through the
+   path `PK_MOVIE` already takes.
 
    NEAREST, AND SAID PLAINLY: this reproduces the engine's affine map by sampling
    `src[(y*sh)/dh][(x*sw)/dw]`, which is the same rule its rasteriser steps but not
    provably the same rounding on every texel. The badge is measured against the
    golden source rather than assumed; whatever that number is, it is in the note.
 
-   THE PLANE IS ALWAYS CARRIED. `gaf_capture` dedups through `seen_frame`, which is
-   keyed on the frame POINTER -- so a 1:1 sight of the same art would answer "the
-   consumer already has it" while the atlas held no scaled entry, and the sprite
-   would be lost and ask for a reseed, every window, for ever. 441 bytes against a
-   16 MB arena is the cheaper side of that trade by a wide margin. */
+   THE PLANE IS ALWAYS CARRIED, one box of bytes per stamp and nothing cached on
+   either side -- 441 bytes for the badge, 15 KB for the preview, against a
+   16 MB arena. */
 static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
 {
     /* the frame header's own w/h; `GF_W`/`GF_H` live in the leaves include,
@@ -1828,8 +1929,9 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
     int x, y;
     o->goff = o->glen = 0;
     o->sgen = s_seenGen;
-    o->fkey = (unsigned)(size_t)frame_key(fr, o->pix, sw, sh);
-    if (!o->fkey) return;                        /* unreadable now: publish nothing */
+    /* `frame_key` is the readability gate (header sane, plane readable); a
+       plane carries no key of its own */
+    if (!frame_key(fr, o->pix, sw, sh)) return;  /* unreadable now: publish the box */
     if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
     if (sw > TAGPU_GAF_DECMAX || sh > TAGPU_GAF_DECMAX) return;
     /* RE-TESTED HERE, against the header THIS function read. `before_scale`
@@ -2036,16 +2138,10 @@ static int op_same(const OP* a, const OP* b)
        a gadget whose repaint collapsed while its tints did not.) */
     if (a->kind == OP_FOCUS)
         return a->edge == b->edge && a->col == b->col;
-    /* TWO WINDOWS OF ONE FRAME ARE NOT ONE OP. The
-       prefix above compares the frame and the plane, which are equal for every
-       window of a frame, so without this a windowed stamp and a whole-frame one
-       over the same box collapse. Collapsing is right for an op that OVERWRITES
-       its box and these mostly do -- but a colour-keyed sprite leaves its
-       transparent texels alone, so the survivor does not write what both would
-       have written. Same shape as the `edge` field above: make the identity
-       finer rather than exempt the kind (the tint above measures why). */
-    if (a->kind == OP_SCALE)
-        return a->swin == b->swin;
+    /* The box shader collapses by the same rule, one call being one op: two
+       levels over one box are two different pictures. */
+    if (a->kind == OP_FRAME)
+        return a->col == b->col;
     if (a->kind == OP_TEXT)
         return a->slen == b->slen && a->dx == b->dx && a->dy == b->dy &&
                a->fg == b->fg && a->bg == b->bg && a->tr == b->tr &&
@@ -2213,12 +2309,12 @@ static void publish(unsigned flipSurf)
            says it was published. This is the same re-arm the sprite and pixel
            tables above get. */
         gfont_sent_clear();
-        /* AND THE LIGHTEN TABLE. Same rule as the glyphs and the asset: a
+        /* AND THE REMAP TABLE. Same rule as the glyphs and the asset: a
            reseed is the consumer saying it threw state away, and whatever was
            in flight when it did was skipped whole -- so a `PK_SHADE` that has
            not been drained yet is lost while `s_lhtSent` still claims it
            landed, and every tint afterwards would index a table the consumer
-           does not have. Cheap to redo: 8 KB once per reset. */
+           does not have. Cheap to redo: 24 KB once per reset. */
         s_lhtSent = 0;
         /* an overflow drops the queue's tail too: what the consumer has not
            taken is stale against the fresh seeds */
@@ -2353,7 +2449,34 @@ static void publish(unsigned flipSurf)
                          op->fkey && (op->glen || ovl_plane_of(s, op))))
             snap_free(s);
         if (op->world) { s_worldDropped++; continue; }
+        /* A SUB-FRAME STACK DRAWS NOTHING ITSELF. For a frame whose `+0x0A` is
+           non-zero, `0x4B7F90` hands each sub-frame to `0x4B8500` or back to
+           itself (`0x4B7FE9`..`0x4B801A`), `0x4B8500` to itself
+           (`0x4B8561`..`0x4B8586`) and `0x4B8310` to `0x4B8500`
+           (`0x4B8379`..`0x4B8397`), and all three leave without a write of
+           their own (DISASSEMBLED 2026-09-26). The callees are observed leaves,
+           so every pixel a stack puts down is carried by its sub-frames' ops.
+           Crossing the stack's own box as `PK_PIXELS` carried nothing -- the
+           drain drops it -- and marked the box lost, which kept a tint off
+           every pixel of it. SKIRMISH's side buttons are two-frame stacks. A
+           stack the chrome re-emit records (`chrome_emit`: no engine call, so
+           no sub-frame ops) was dropped the same way and draws nothing either
+           way. */
+        if ((op->kind == OP_GAF || op->kind == OP_GAFA || op->kind == OP_GAFB) && op->fsub) continue;
         if (!s->seeded && !pub_seed(s)) return;
+        /* THE MOVIE FRAME'S BYTES, READ NOW -- which is the movie's own flip,
+           because `before_flip` publishes a movie flip in the call that
+           recorded it and clears the window on every path that does not. */
+        if (op->kind == OP_MOVIE) {
+            o = pub_op(PK_MOVIE, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
+            pub_commit();
+            s_movieQ[1] = s_movieQ[0]; s_movieQ[0] = g_guiq.qHead;
+            if (s_movieQueued < 2) s_movieQueued++;
+            memcpy(s_moviePal, s_moviePalRec, sizeof s_moviePal);
+            continue;
+        }
         /* a plain keyed blit of a frame the atlas can hold is a sprite; a frame
            past the decoder's edge (TAGPU_GAF_DECMAX, the shell's 640-wide title
            art) is its box's bytes like everything else */
@@ -2607,7 +2730,7 @@ static void publish(unsigned flipSurf)
            has the table it indexes, and a batch that runs out of room loses
            both together. */
         if (op->kind == OP_FOCUS) {
-            int st = pub_shade();
+            int st = pub_shade(SHADE_LHT);
             if (st < 0) return;
             if (st == 0) { s_tintNoTable++; continue; }
             o = pub_op(PK_TINT, s->base); if (!o) return;
@@ -2617,36 +2740,63 @@ static void publish(unsigned flipSurf)
             s_tints++;
             continue;
         }
-        /* THE TRANSFORMED FRAME, already resampled to its box by `scale_capture`.
-           It carries its plane every time on purpose (see there), so there is no
-           `seen_frame` arm here and no first-sight case to get wrong. Without
-           this branch `OP_SCALE` falls to `as_pixels` -> `PK_PIXELS`, which the
-           drain drops: the player's colour badge, and every other transformed
-           GAF draw, would render NOTHING at all. */
+        /* THE BOX SHADER `0x4BF4D0` IS THE SAME OPERATION OVER A WHOLE BOX:
+           every pixel `dst = T[r*256 + (signed char)dst]`, one clip of the box
+           (`0x4BF620`), no colour anywhere. It is what a list's SELECTED ROW is
+           (`0x4A1FC4`, level +30), what greys a disabled or separator row
+           (`0x4A1F36`.., -19..-22), and what dims the screen under a modal one
+           (`GUI_Load`'s `0x4AA969`, -24, over the screen beneath). So it
+           crosses as `PK_TINT` with the row `pub_shade` precomputed for its
+           level (inc/tagpu_gui.h), and the consumer's tint does the rest.
+
+           A LEVEL WHOSE ROW IS 0 FALLS BACK TO THE BOX, which the drain drops
+           and remembers: the engine's signed read there reaches the heap in
+           front of the table, which nothing can reproduce. No stock caller
+           reaches it -- the fixed levels are +20, +30, +31, -19..-22, -20,
+           -24, -28, and the ten-step screen fade at `0x41DF70` / `0x41FAE2`
+           walks -19 to -28 -- so `box=` reports it rather than trusting that
+           list. A table whose caps bit is clear takes the same exit. */
+        if (op->kind == OP_FRAME) {
+            int lvl = (int)(signed char)op->col;  /* `before_frame` clamped it */
+            int st;
+            if ((lvl < 0 ? lvl + 32 : lvl) == 0) { s_boxRow0++; goto as_pixels; }
+            st = pub_shade(lvl < 0 ? SHADE_SHD : SHADE_LHT);
+            if (st < 0) return;
+            if (st == 0) { s_boxNoTable++; goto as_pixels; }
+            o = pub_op(PK_TINT, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->fg = (unsigned char)(TAGPU_GUI_SHADE_BOX + (unsigned)(lvl + 32));
+            pub_commit();
+            s_boxes++;
+            continue;
+        }
+        /* THE TRANSFORMED FRAME, already resampled to its stamp by
+           `scale_capture`, crossing as the box of indices it leaves (`PK_PLANE`;
+           see there for why a box and not a sprite). It carries its plane every
+           time, so there is no `seen_frame` arm here and no first-sight case to
+           get wrong. Without this branch `OP_SCALE` falls to `as_pixels` ->
+           `PK_PIXELS`, which the drain drops: the player's colour badge and the
+           map preview would render nothing at all.
+
+           THE BOX IS THE STAMP OR LESS. `before_scale` captures only an
+           unclipped stamp, `(dx, dy)` by `fw` x `fh`, and `op_add` can only
+           clamp that box to the surface, so the rows and columns below index
+           inside the plane -- which the test makes a fact rather than an
+           argument. */
         if (op->kind == OP_SCALE && op->glen && op->fw && op->fh) {
             unsigned char* dst;
-            /* THE CONTENT HASH, NOT THE PLANE POINTER -- the same key the 1:1
-               branch above publishes. `pix` is in the atlas key precisely
-               because "freed sequences get their address reused" (tagpu_gaf.h),
-               and the raw address would take that defence out of force for
-               every scaled sprite: the shell frees a popped screen's art, the
-               allocator hands a DIFFERENT frame the same header and plane
-               addresses, the same window at the same destination size is drawn,
-               `atlas_find` hits and `atlas_put` never runs -- the old texels
-               for the rest of the session. */
-            const void* skey = (const void*)(size_t)op->fkey;
-            if (!skey) goto as_pixels;       /* unreadable when drawn: box it */
-            o = pub_op(PK_SPRITE, s->base); if (!o) return;
+            int bw = op->r - op->l + 1, bh = op->b - op->t + 1;
+            int x0 = op->l - op->dx, y0 = op->t - op->dy, y;
+            if (bw < 1 || bh < 1 || x0 < 0 || y0 < 0 || x0 + bw > op->fw || y0 + bh > op->fh ||
+                op->glen != (unsigned)op->fw * op->fh)
+                goto as_pixels;
+            o = pub_op(PK_PLANE, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
-            o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
-            o->frame = op->frame; o->pix = skey;
-            /* the atlas's extra key: 0 for a whole-frame stamp, the packed
-               window for a sub-rectangle. Without it two windows of one frame
-               at one destination size are the same entry. */
-            o->swin = op->swin;
-            dst = pub_bytes(o, op->glen);
+            dst = pub_bytes(o, (unsigned)bw * (unsigned)bh);
             if (!dst) return;
-            memcpy(dst, s_gafBuf + op->goff, op->glen);
+            for (y = 0; y < bh; y++)
+                memcpy(dst + (size_t)y * bw,
+                       s_gafBuf + op->goff + (size_t)(y0 + y) * op->fw + x0, (size_t)bw);
             pub_commit();
             continue;
         }
@@ -2679,7 +2829,7 @@ static void publish(unsigned flipSurf)
                `surf_drain_freeq()` empties at the top of every `before_flip` --
                before the census or the publisher reads a single base. That
                covers an asset SOURCE exactly as it covers a seed's destination:
-               same object class, same `owner = base - 0x30`. The `ptr_ok` in
+               the same `surf_dies_with`. The `ptr_ok` in
                `pub_surface_bytes` is a value filter and is NOT this argument.
 
                "IMMUTABLE" IS TOO STRONG, so it is not claimed. What `op_add`
@@ -2900,6 +3050,119 @@ static unsigned s_builds, s_buildFlags;     /* GUI_StageUpdateDraw calls since t
    surface table have their detours. NOT s_installed, which a partial install
    leaves 0 while detours are live. */
 static int s_opsLive = 0;
+
+/* ---- THE MOVIE FRAME ------------------------------------------------------
+   A Smacker movie never passes a leaf: the frame routine `0x47C3A0` makes
+   `*(main+0x37E1B)` the back buffer (`0x4C69A0`, `0x47C413`), has
+   `SmackToBuffer` aim the decoder at that surface's pixels (`0x47C441`) and
+   `SmackDoFrame` write the frame into them (`0x47C44A`), then flips at
+   `0x47C450`. Without this the twin never holds a frame and the movie shows
+   whatever the twin held before it. [DISASSEMBLED, the pristine exe]
+
+   WHICH FLIP. `0x47C450` is the only call of the flip in `0x47C3A0`, so a
+   return address of `0x47C455` is a movie frame and nothing else.
+
+   THE BOX. `SmackToBuffer(smack, 0, (480 - H) >> 1, pitch, H, bits, 0)`: the
+   movie sits at x 0, centred in 480 rows by the engine's own unsigned
+   arithmetic (`0x47C434..0x47C43B`), `W` and `H` the Smack header's `+4` and
+   `+8` (the same two words `0x47C47A..0x47C490` compare its dirty rect with).
+
+   THE HEADER IS ALIVE, BY THE ENGINE'S ORDERING -- and it is the return
+   address that says so, not the field. The movie object is `*(main+0x38D7B)`,
+   stored at `0x426817` just before the loop's only call (`0x426829`); after it
+   returns the object is destroyed (`0x47BF20`, the only close of its Smack)
+   and freed (`0x426845`), and then either the field is cleared (`0x42685C`)
+   or, while the loop flag `main+0x39241` is set, the player goes back to
+   `0x4267E0` and stores the next object. The field therefore dangles between
+   that free and the next store, and no flip runs there. The frame routine's
+   only caller is `0x47C741` inside the loop, so a flip returning to
+   `0x47C455` is between the store and the free; the engine itself
+   dereferences the Smack again at that very instruction. The two words read
+   out of it are DATA and are bounded against the surface before they become
+   a box.
+
+   THE PALETTE. The frame routine copies a new one out of the Smack into
+   256 RGBX entries at `obj+0x10` (`0x47C3C8..0x47C3E9`) and hands those to
+   `SetEntries` (`0x47C404`) before it decodes; `obj+0x10` keeps the last one
+   until the next. The object is `operator new(0x5B8)` (`0x4267E0`), so the
+   1024 bytes read there are the engine's own allocation. */
+#define FLIP_RET_MOVIE 0x0047C455u
+#define OFF_MOVIE      0x38D7Bu       /* main+ : the playing movie object     */
+#define SMK_W          1              /* Smack header dwords: +4 Width         */
+#define SMK_H          2              /*                      +8 Height        */
+#define MOVIE_ROWS     480u           /* the engine centres the movie in these */
+#define MOVIE_PAL      4              /* object dwords: +0x10 the palette      */
+static unsigned s_movieFlips = 0;     /* flips of the movie now playing        */
+static unsigned s_movieRun = 0;       /* ...recorded as a frame                */
+static unsigned s_movieRefused = 0;   /* ...refused: no header, or it did not fit */
+static unsigned s_movieSkipped = 0;   /* ...skipped: the last one was still queued */
+static unsigned s_movieDeaf = 0;      /* ...not sent: the lane was not recording */
+
+/* 1 when the frame was recorded as an op of this window, which is what
+   obliges the flip to publish it at once */
+static int movie_frame(SURF* s)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const unsigned* obj;
+    const unsigned* smk;
+    const unsigned char* pal;
+    unsigned w, h, top;
+    int last, prev;
+    char b[200];
+    s_movieFlips++;
+    if (!ptr_ok(ta)) { s_movieRefused++; return 0; }
+    obj = *(const unsigned* const*)(ta + OFF_MOVIE);
+    if (!ptr_ok(obj)) { s_movieRefused++; return 0; }
+    smk = (const unsigned*)(size_t)obj[0];
+    if (!ptr_ok(smk)) { s_movieRefused++; return 0; }
+    w = smk[SMK_W]; h = smk[SMK_H];
+    top = (MOVIE_ROWS - h) >> 1;
+    if (w < 1 || h < 1 || w > (unsigned)s->w || h > (unsigned)s->h || top > (unsigned)s->h - h) {
+        if (!s_movieRefused++) {
+            _snprintf(b, sizeof b, "gui: movie REFUSED -- a %ux%u frame at row %u does not fit surface %08X %dx%d",
+                      w, h, top, s->base, s->w, s->h);
+            b[sizeof b - 1] = 0;
+            glog(b);
+        }
+        return 0;
+    }
+    /* NOTHING IS SENT TO A LANE THAT IS NOT RECORDING: its mirror drops a
+       PK_MOVIE's bytes, so composing one would be ~300 KB of memcpy for nobody.
+       This is `PK_ASSET`'s throttle (`mirArmed`, tagpu_gui_int.h). Read stale
+       it costs one frame either way, and every frame carries the whole picture. */
+    if (!g_guiq.mirArmed) { s_movieDeaf++; return 0; }
+    /* ONE FRAME IN FLIGHT, TWO ACROSS A PALETTE CHANGE. Every movie op carries
+       the WHOLE frame, so a frame skipped while the last one is still queued
+       costs that frame and nothing else -- the next one carried replaces the
+       box entire. Without it a movie decoding faster than the consumer drains
+       queues ~300 KB a flip until the arena overflows (MEASURED under Wine,
+       where it ran unpaced: 4 658 frames in seconds, 41 stalls and 42 reseeds).
+       A NEW PALETTE IS THE EXCEPTION. The lane resolves the twin through the
+       palette live at its present, which the engine set before this frame was
+       decoded, not through one that crossed with the bytes: skipping this frame
+       would show the last one under the new palette until the next crossed. So
+       a frame whose palette differs from the newest carried one goes with that
+       one still queued, and only a second queued frame stops it -- at most two
+       in flight. (The retail movies set a palette at frame 0, `5.zrb` at frame
+       1 as well.)
+       THE DISTANCES STAY FAR INSIDE 2^31. `qTail` is the consumer's and only
+       grows; each index is refreshed by every frame carried and dropped when
+       the movie ends, so it is never older than one movie's ops. A stale read
+       of `qTail` skips one more frame, never fewer. */
+    pal = (const unsigned char*)(obj + MOVIE_PAL);
+    last = s_movieQueued >= 1 && (int)(g_guiq.qTail - s_movieQ[0]) < 0;
+    prev = s_movieQueued >= 2 && (int)(g_guiq.qTail - s_movieQ[1]) < 0;
+    if (last && (prev || !memcmp(pal, s_moviePal, sizeof s_moviePal))) { s_movieSkipped++; return 0; }
+    memcpy(s_moviePalRec, pal, sizeof s_moviePalRec);
+    if (!s_movieRun++) {
+        _snprintf(b, sizeof b, "gui: movie %ux%u at (0,%u) on surface %08X %dx%d -- its frames cross as SmackDoFrame's decoded bytes",
+                  w, h, top, s->base, s->w, s->h);
+        b[sizeof b - 1] = 0;
+        glog(b);
+    }
+    op_add(OP_MOVIE, s, 0, (int)top, (int)w - 1, (int)(top + h) - 1);
+    return 1;
+}
 static volatile int s_inFlip = 0;      /* between the flip's entry and its return */
 static void* s_retStack[32];           /* hijacked returns, LIFO (alloc, flip)    */
 static int   s_retDepth = 0;
@@ -2910,6 +3173,8 @@ static int __cdecl before_flip(void* entry_esp)
     const int* src;
     SURF* s;
     int isGame = (ret == FLIP_RET_GAME);
+    int isMovie = (ret == FLIP_RET_MOVIE);
+    int movieRec = 0;                  /* this flip recorded a movie frame */
     unsigned changed = 0, unexpl = 0;
     char b[512];        /* holds the `gui area:` line: 288 of `ar` plus ~150 */
     static LARGE_INTEGER s_lastQpc, s_freq;
@@ -3034,6 +3299,17 @@ static int __cdecl before_flip(void* entry_esp)
 
     src = flip_source(entry_esp);
     s = surf_of_ctx(src);
+    /* the movie's frame is this flip's content, so it goes in ahead of the
+       flip marker below, like every other op of the frame */
+    if (isMovie && s && (s_census || g_gui_draw)) movieRec = movie_frame(s);
+    else if (!isMovie && s_movieFlips) {
+        _snprintf(b, sizeof b, "gui: movie ended after %u flip(s): %u frame(s) recorded, %u skipped in flight, "
+                  "%u not sent (the lane was not recording), %u refused",
+                  s_movieFlips, s_movieRun, s_movieSkipped, s_movieDeaf, s_movieRefused);
+        glog(b);
+        s_movieFlips = 0; s_movieRun = 0; s_movieSkipped = 0; s_movieDeaf = 0; s_movieRefused = 0;
+        s_movieQueued = 0;
+    }
     /* the marker: this flip's surface, and whether the frame that follows it is
        an in-play one and therefore owes the viewport its erase. Both terms are
        known on this thread and neither is a per-frame value the OTHER thread
@@ -3055,7 +3331,12 @@ static int __cdecl before_flip(void* entry_esp)
     if (!s_census && !g_gui_draw) { ops_window_reset(); return hijack; }
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&now);
-    if (s_lastQpc.QuadPart && (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
+    /* A FLIP THAT RECORDED A MOVIE FRAME PUBLISHES NOW, whatever the cadence:
+       the op's bytes are exact only at this flip (see `PK_MOVIE`). One that
+       recorded nothing keeps the cadence like any other, which matters when the
+       movie runs unpaced -- thousands of flips a second with no sound. */
+    if (!movieRec && s_lastQpc.QuadPart &&
+        (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
@@ -3170,7 +3451,7 @@ static int __cdecl before_flip(void* entry_esp)
         {
             /* THE SAME GUARD as the `gui area:` block below: `_snprintf`'s -1
                is tested rather than added to `n`, the buffer is sized past the
-               255-byte worst case, and it is always terminated. */
+               272-byte worst case, and it is always terminated. */
             char ops[288]; int k, n = 0, w; unsigned nullc = 0;
             for (k = 1; k < OP_NKIND; k++) {
                 nullc += s_nullCtx[k];
@@ -3211,8 +3492,8 @@ static int __cdecl before_flip(void* entry_esp)
                returns -1 on truncation rather than the length it wanted, so a
                bare `n += _snprintf(...)` makes `n` negative and
                `sizeof ar - (size_t)n` wrap to a size that writes BEFORE the
-               buffer. `ar` is sized past the worst case of fifteen kinds x
-               (five-char name + space + ten digits + separator) = 255, and is
+               buffer. `ar` is sized past the worst case of sixteen kinds x
+               (five-char name + space + ten digits + separator) = 272, and is
                terminated even when no kind had area and the loop never ran at
                all. `full` stops the TEXT while the totals keep accruing, so
                `sem`/`raw`/`pct` stay exact either way. */
@@ -3226,18 +3507,19 @@ static int __cdecl before_flip(void* entry_esp)
                    a `focus` of exactly that). `OP_FILL` is in it because it
                    crosses as a `PK_BAR` (the whole-surface fill branch).
                    `OP_SCALE` is NOT here and that is deliberate: it publishes a
-                   `PK_SPRITE` only when its resampled plane was captured, and a
+                   `PK_PLANE` only when its resampled plane was captured, and a
                    kind that is sometimes semantic cannot be summed as though it
                    always were. It stays in `raw`, which over-reports it -- the
                    direction an honest gap should err in. `OP_GAFB` stays out
-                   for the same reason: only its RLE arm is a sprite. */
+                   for the same reason: only its RLE arm is a sprite.
+                   `OP_MOVIE` crosses as `PK_MOVIE`, decoded bytes. */
                 if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
                     k == OP_RECT || k == OP_LINE || k == OP_COPY ||
-                    k == OP_FOCUS || k == OP_FILL) sem += s_kindArea[k];
+                    k == OP_FOCUS || k == OP_FILL || k == OP_MOVIE) sem += s_kindArea[k];
                 /* SPLIT, NOT PROMOTED. `OP_SCALE` is not a kind that can be
                    summed as though it were always semantic -- a rotated or
-                   sheared stamp, a sub-frame stack, a window too large to key
-                   and a clipped draw all publish nothing. The captured ones are
+                   sheared stamp, a sub-frame stack and a clipped draw all
+                   publish nothing. The captured ones are
                    the common case, so the two halves are counted apart instead
                    of the whole being charged to `raw`. `s_scaleSem` can never
                    exceed `s_kindArea` because both take the same box from the
@@ -3639,8 +3921,8 @@ static void repaint_service(void)
     s_repaintOps = (unsigned)(s_nops - n0);
     if (s_log) {
         /* SIZED FOR THE WORST CASE AND THE ACCUMULATOR CANNOT GO NEGATIVE.
-           `OP_NKIND - 1` kinds, each at most "scale " (6) plus ten digits plus a
-           separator, is 255 — hence 288. And mingw's `_snprintf` returns −1 on
+           `OP_NKIND - 1` kinds, sixteen, each at most "scale " (6) plus ten
+           digits plus a separator, is 272 — hence 288. And mingw's `_snprintf` returns −1 on
            truncation rather than the length it wanted, so `n += _snprintf(...)`
            would make `n` negative and `sizeof kinds - (size_t)n` wrap to a size
            that writes BEFORE the buffer. Checking the return keeps `n` a real
@@ -3689,7 +3971,12 @@ static void* __cdecl after_flip(unsigned int* regs)
        depth is unchanged across it, and a nested alloc (a 0x40 makes none)
        would push and pop above it */
     repaint_arm();
-    repaint_service();
+    /* NOT ON A MOVIE'S FLIP. The engine never redraws a GUI screen inside its
+       movie loop `0x47C6C0`, whose offscreen is the buffer `SmackDoFrame`
+       decodes into, so a forced redraw waits: the debt stays pending and is
+       paid at the first flip that is not a movie's. */
+    if (!(s_retDepth > 0 && (unsigned)(size_t)s_retStack[s_retDepth - 1] == FLIP_RET_MOVIE))
+        repaint_service();
     hud_invalidate();
     return s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
 }
@@ -3701,6 +3988,326 @@ static void* __cdecl after_flip(unsigned int* regs)
    prologues stolen, byte-matched at install. */
 
 #include "tagpu_gui_leaves.h"
+
+/* ---- the list wheel -------------------------------------------------------
+   A list box scrolls under the mouse wheel the way a list view does: the view
+   moves by the system's lines per notch (`SPI_GETWHEELSCROLLLINES`; a page
+   when that is `WHEEL_PAGESCROLL`), the selection stays where it is, and the
+   scrollbar follows. TA has no wheel of its own -- `WM_MOUSEWHEEL` appears
+   nowhere in the binary and its message table stops at 0x206
+   (gui-gadgets.md §2.4.1) -- so this adds one, through the engine's own scroll.
+
+   ONE THREAD. The producer is `tagpu_gui_wheel`, called by the window
+   procedure (wndproc.c, and the shield's delivery for injected input, which
+   arrives as posted messages) for a notch the zoom did not take. TA's window
+   belongs to its main thread, which is the game thread `s_gameTid`, so the
+   producer runs on the thread that dispatches every message and runs every
+   pump; the consumer is that thread again, at the entry of the GUI pump
+   `0x4A9FD0`. The producer checks this and drops (and counts) a notch from
+   any other thread, because the ordering below reads the engine's ring. The
+   interlocked head and tail make the ring correct for two threads anyway.
+
+   ORDERED BEHIND THE CLICKS ALREADY QUEUED. TA's window procedure pushes
+   every button message -- and only those; a move is kept as one current
+   record -- onto the engine's event ring (`0x4C2E30`, one call site
+   `0x4B5F51`), and the pump pops at most one per call (`0x4AB5D0` at
+   `0x4AA00A`, the only call, not in a loop): the head record, and only when
+   it lies over the top screen (`0x4A1920`) or holds no button, its wParam 0
+   (`0x4AB643..0x4AB64D`); otherwise it stays at the head (`0x4AB680`) and the
+   engine takes no click behind it either. A notch applied at the pump's
+   entry would otherwise overtake a click still in that ring, and the click
+   would then land on the scrolled rows. So each notch carries the index of
+   the last engine event queued before it, `seq`, and waits until the engine
+   has taken that far: until `s_lwPops`, the pops counted from the ring's
+   tail, reaches it, or until the ring reads empty, when nothing queued before
+   any notch is left in it. The pop `0x4C2D60` is called at `0x4AB654` (inside
+   the pump) and `0x4999C4` (straight after the in-game pump at `0x499992`),
+   so between two readings -- every pump entry and every notch -- the tail
+   moves at most two slots, fewer than the ring's 20 (`0x4C2BD0(20)`, once, at
+   `0x4B5A67`), and the modular difference is the exact count. The one other
+   move is the flush `0x4C2BB0` (head and tail to 0; one call, `0x426636`, in
+   the in-game setup `0x4263B0`), which discards what was queued and leaves
+   the count wrong by any amount. The empty-ring rule is what makes that
+   harmless: a notch queued before the flush has nothing left in front of it,
+   so an early release is correct, and it waits at most until the ring next
+   reads empty. Otherwise a notch waits exactly as long as the engine holds a
+   click queued before it. Engine map, *The pump's entry*.
+
+   WHERE: THE NOTCH'S OWN POINT. Every mouse message, this one included, has
+   been taken to the engine's space by the time it reaches the zoom (wndproc.c:
+   x_adjust, unscale, `tagpu_hud_to_engine`; the shield's `gx, gy` are already
+   there), which is the space of the records the engine's pointer is copied
+   from. The pointer itself (`gi+0x3C`) is the wrong source: the pump
+   refreshes it once, at `0x4AA00A` (`0x4AB5D0`: a queued button record
+   through `0x4C2D60`, else the current move record through `0x4C2340`),
+   after this observer, so at the entry it is the previous pump's point and a
+   move that arrives with the notch is missed.
+
+   WHAT IS UNDER IT: the top screen's (`gi+0x18`, the only interactive one)
+   first active gadget under the point that is a list box (`id 2`), or a slider
+   (`id 4`) or scroll arrow (`id 1`, attribs & 0x1800) bound to one -- the
+   first `id 2` record with the same `assoc`, from record 1, active or not,
+   which is the scan `GUI_SliderUpdate 0x4A3EF0` makes (`0x4A3F37`..`0x4A3F4A`).
+   A gadget's rect is inclusive of `x+w-1` and `y+h-1`, as the pump's own
+   panel test is (`0x4AA0F9`..`0x4AA128`).
+
+   THE SCROLL: `top` (`+0xBC`) moved and clamped to [0, maxtop], then the
+   listbox handler `0x4A1B40(gi, idx)`, as `List_SelectPrev` does after its own
+   write of `top` at `0x4A9947` (`0x4A9983`); then the gadgets bound to the list
+   follow (`lw_follow`). The selection `+0xBA` is not touched.
+
+   BOUNDED BY THE ENGINE'S OWN ORDERING AND COUNTS. This runs on the game
+   thread at the entry of the pump, whose first act is to read `gi+0x18`
+   (`0x4A9FDB`) and the screen under it, so everything read here is live
+   exactly as long as the pump's own reads are. The index runs
+   1..`totalgadgets`, the count `0x49FE60` and `0x4A3EF0` loop to, capped at
+   LW_GADGETS as a bound on a value read from memory; `ptr_ok` is a filter on
+   values, never the argument. */
+#define LW_PUMP_VA    0x004A9FD0u         /* GUI pump(GUIInfo*), stdcall ret 4 */
+static const unsigned char LW_PUMP_STOLEN[] = { 0x83, 0xEC, 0x34, 0x53, 0x55 };
+typedef void (__stdcall *lw_gadget_fn)(void* gi, int idx);
+#define LW_LISTBOX    ((lw_gadget_fn)(size_t)0x004A1B40u)   /* GUI_ListboxBuild      */
+#define LW_SLIDER     ((lw_gadget_fn)(size_t)0x004A2580u)   /* the slider painter    */
+#define LW_GADGETS    512                 /* tagpu_gui_snap.c's MAX_GADGETS */
+#define LW_STRIDE     0x15B               /* gadget record, pack(1)         */
+#define LW_GI_TOP     0x18                /* GUIInfo: TheActive_GUIMEM      */
+#define LW_G_ID       0x00                /* u8                             */
+#define LW_G_ASSOC    0x01                /* u8                             */
+#define LW_G_NAME     0x02                /* char[16]; the panel's is the screen's (GUI_Load stamps it) */
+#define LW_G_X        0x13                /* i16, panel-relative; the panel's own is absolute */
+#define LW_G_Y        0x15
+#define LW_G_W        0x17
+#define LW_G_H        0x19
+#define LW_G_ATTRIBS  0x1B                /* i32; 0x1800 = a scroll arrow   */
+#define LW_G_ACTIVE   0x29                /* u8; 0 = the engine skips it    */
+#define LW_P_TOTAL    0xB6                /* panel: i16 totalgadgets        */
+#define LW_L_TOP      0xBC                /* list: i16 first visible row    */
+#define LW_L_MAXTOP   0xBE                /* list: i16 count - visible      */
+#define LW_L_COUNT    0xC0                /* list: i16 rows                 */
+#define LW_S_RANGE    0x136               /* slider: i16 range              */
+#define LW_S_KNOB     0x140               /* slider: i16 knobpos            */
+#define LW_MR_CAP     0x186               /* graphics globals: the event ring's i32 capacity */
+#define LW_MR_HEAD    0x18E               /* i32 write index, [0, cap)      */
+#define LW_MR_TAIL    0x192               /* i32 read index, [0, cap)       */
+#define LW_MR_MAXCAP  4096                /* a bound on a value read from memory */
+
+#define LWQ 64                            /* divides 2^32: the indices wrap freely */
+typedef struct { LONG delta, xy; ULONG seq; } LWNOTCH;
+static LWNOTCH       s_lwq[LWQ];
+static volatile LONG s_lwHead;            /* written by the producer only */
+static volatile LONG s_lwTail;            /* written by the consumer only */
+static int           s_lwArmed;
+/* game thread only: the engine pops counted so far, and the ring's tail and
+   capacity at the last reading */
+static ULONG         s_lwPops;
+static int           s_lwEvTail, s_lwEvCap;
+/* game thread only: the remainder of a high-resolution wheel's partial rows,
+   kept for the list it was earned on and dropped when the target changes. A
+   list is its screen's address, the screen's name and its index: a screen
+   freed and loaded again at the same address is the same list only if it is
+   the same screen, so a fraction never lands on a different list. */
+static const void*   s_lwGui;
+static char          s_lwName[16];
+static int           s_lwIdx, s_lwRem;
+static unsigned      s_lwNotches, s_lwRows, s_lwMiss;   /* `wheel=`          */
+static volatile LONG s_lwFull;            /* notches a full ring (or a foreign thread) dropped: `wheel=`'s fourth */
+
+/* The engine's event ring as its own fields describe it, or 0 when they do
+   not describe one (before `0x4C2BD0` has run, or values out of range). */
+static int lw_evring(int* head, int* tail)
+{
+    const char* g = *(const char* const*)TA_GFX_PP;
+    int cap, h, t;
+    if (!ptr_ok(g)) return 0;
+    cap = *(const int*)(g + LW_MR_CAP);
+    h   = *(const int*)(g + LW_MR_HEAD);
+    t   = *(const int*)(g + LW_MR_TAIL);
+    if (cap < 3 || cap > LW_MR_MAXCAP || h < 0 || h >= cap || t < 0 || t >= cap) return 0;
+    *head = h; *tail = t;
+    return cap;
+}
+
+/* Brings `s_lwPops` up to the ring's tail. Exact while fewer than `cap` pops
+   fall between two calls, which the engine's two pop sites guarantee (above). */
+static void lw_count_pops(void)
+{
+    int h, t, cap = lw_evring(&h, &t);
+    if (!cap) { s_lwEvCap = 0; return; }
+    if (cap == s_lwEvCap) s_lwPops += (ULONG)((t - s_lwEvTail + cap) % cap);
+    s_lwEvCap = cap; s_lwEvTail = t;
+}
+
+void tagpu_gui_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    LONG h;
+    LWNOTCH* e;
+    int d, eh, et, cap;
+    if (msg != WM_MOUSEWHEEL || !s_lwArmed) return;
+    d = (int)(short)HIWORD(wparam);
+    if (!d) return;
+    if (!on_game_thread()) { InterlockedIncrement(&s_lwFull); return; }
+    h = s_lwHead;                          /* this thread's own index */
+    if ((ULONG)(h - s_lwTail) >= LWQ) { InterlockedIncrement(&s_lwFull); return; }
+    MemoryBarrier();                       /* the slot is written after the tail that frees it is read */
+    e = &s_lwq[(ULONG)h % LWQ];
+    e->delta = (LONG)d;
+    e->xy    = (LONG)lparam;
+    /* every engine event queued before this notch: counted pops + pending */
+    lw_count_pops();
+    cap = lw_evring(&eh, &et);
+    e->seq = s_lwPops + (cap ? (ULONG)((eh - et + cap) % cap) : 0u);
+    InterlockedExchange(&s_lwHead, h + 1); /* publish: the slot is complete */
+}
+
+static int lw_bound_list(const char* ctrls, int total, unsigned char assoc)
+{
+    int i;
+    for (i = 1; i <= total; i++) {
+        const char* g = ctrls + (size_t)i * LW_STRIDE;
+        if (g[LW_G_ID] == 2 && (unsigned char)g[LW_G_ASSOC] == assoc) return i;
+    }
+    return 0;
+}
+
+/* THE GADGETS BOUND TO THE LIST FOLLOW ITS `top`, as `Gadget_PropagateAssoc
+   0x4A2BE0` moves them -- but not through it. From a list it also copies the
+   SELECTED entry into every bound textfield (`0x4A2CEC..0x4A2D43`, when the
+   list's attribs has bit 3): a selection's consequence, which the engine
+   reaches only after writing the selection itself (`List_SelectPrev`, the
+   click at `0x4A3E8A`). The engine's own scrolls that leave the selection
+   alone propagate from the slider instead (`0x4A7037`, `0x4A42DA`) and never
+   reach that arm. So the two arms a scroll needs are made here, each as
+   `0x4A2BE0` makes it, for every other record with the list's `assoc`:
+
+     a list    its `top` becomes this one's and it repaints, `0x4A1B40(gi, j)`
+               (`0x4A2D56..0x4A2D78`; the engine copies the selection there
+               too, and the selection has not changed).
+     a slider  when the list has more than one row (`0x4A2C83`), `knobpos =
+               top * range / maxtop`, truncated (`0x4A2C9D..0x4A2CC3`: x87,
+               then `_ftol 0x4E43A0`, which truncates), written and repainted,
+               `0x4A2580(gi, j)`, only when it changed (`0x4A2CD0`). `maxtop`
+               is > 0 here, and with both operands 16-bit no rounding of the
+               engine's quotient can cross an integer, so the integer
+               quotient is the engine's. */
+static void lw_follow(char* gi, char* ctrls, int total, int idx)
+{
+    const char* list = ctrls + (size_t)idx * LW_STRIDE;
+    unsigned char assoc = (unsigned char)list[LW_G_ASSOC];
+    short top    = *(const short*)(list + LW_L_TOP);
+    int   maxtop = *(const short*)(list + LW_L_MAXTOP);
+    int   count  = *(const short*)(list + LW_L_COUNT);
+    int j;
+    for (j = 1; j <= total; j++) {
+        char* g = ctrls + (size_t)j * LW_STRIDE;
+        if (j == idx || (unsigned char)g[LW_G_ASSOC] != assoc) continue;
+        if (g[LW_G_ID] == 2) {
+            *(short*)(g + LW_L_TOP) = top;
+            LW_LISTBOX(gi, j);
+        } else if (g[LW_G_ID] == 4 && count > 1) {
+            short knob = (short)((int)top * (int)*(const short*)(g + LW_S_RANGE) / maxtop);
+            if (*(const short*)(g + LW_S_KNOB) == knob) continue;
+            *(short*)(g + LW_S_KNOB) = knob;
+            LW_SLIDER(gi, j);
+        }
+    }
+}
+
+static void lw_scroll(char* gi, int ex, int ey, int delta)
+{
+    const char* top;
+    char *ctrls, *list;
+    int total, i, px, py, idx = 0, lines, rows, cur, maxtop, ntop;
+    UINT spi = 3;
+    if (!ptr_ok(gi)) return;
+    top = *(const char* const*)(gi + LW_GI_TOP);
+    if (!ptr_ok(top)) return;
+    ctrls = *(char* const*)(top + GM_CTRLS);
+    if (!ptr_ok(ctrls)) return;
+    total = *(const short*)(ctrls + LW_P_TOTAL);
+    if (total > LW_GADGETS) total = LW_GADGETS;
+    px = ex - *(const short*)(ctrls + LW_G_X);
+    py = ey - *(const short*)(ctrls + LW_G_Y);
+    for (i = 1; i <= total && !idx; i++) {
+        const char* g = ctrls + (size_t)i * LW_STRIDE;
+        int x = px - *(const short*)(g + LW_G_X), y = py - *(const short*)(g + LW_G_Y);
+        if (!g[LW_G_ACTIVE]) continue;
+        if (x < 0 || y < 0 || x >= *(const short*)(g + LW_G_W) || y >= *(const short*)(g + LW_G_H)) continue;
+        if (g[LW_G_ID] == 2) idx = i;
+        else if (g[LW_G_ID] == 4 ||
+                 (g[LW_G_ID] == 1 && (*(const int*)(g + LW_G_ATTRIBS) & 0x1800)))
+            idx = lw_bound_list(ctrls, total, (unsigned char)g[LW_G_ASSOC]);
+    }
+    if (!idx) { s_lwMiss++; s_lwGui = NULL; return; }
+    list = ctrls + (size_t)idx * LW_STRIDE;
+    cur = *(const short*)(list + LW_L_TOP);
+    maxtop = *(const short*)(list + LW_L_MAXTOP);
+    if (maxtop <= 0) { s_lwGui = NULL; return; }          /* everything fits: nothing to move */
+    if (!SystemParametersInfoA(SPI_GETWHEELSCROLLLINES, 0, &spi, 0)) spi = 3;
+    if (spi == 0) return;                                  /* the player turned the wheel off */
+    if (spi == WHEEL_PAGESCROLL || spi > 0x7FFF) {
+        /* a PAGE is the visible rows, which is what `maxtop` leaves over */
+        lines = *(const short*)(list + LW_L_COUNT) - maxtop;
+        if (lines < 1) lines = 1;
+    } else lines = (int)spi;
+    if (s_lwGui != top || s_lwIdx != idx || memcmp(s_lwName, ctrls + LW_G_NAME, sizeof s_lwName)) {
+        s_lwGui = top; s_lwIdx = idx; s_lwRem = 0;
+        memcpy(s_lwName, ctrls + LW_G_NAME, sizeof s_lwName);
+    }
+    /* positive is the wheel pushed away: toward the top of the list */
+    s_lwRem += delta * lines;
+    rows = s_lwRem / WHEEL_DELTA;
+    if (!rows) return;                                     /* less than a row so far: kept */
+    s_lwRem -= rows * WHEEL_DELTA;
+    ntop = cur - rows;
+    if (ntop < 0) ntop = 0;
+    if (ntop > maxtop) ntop = maxtop;
+    if (ntop == cur) { s_lwRem = 0; return; }              /* at an end: a reversal answers at once */
+    *(short*)(list + LW_L_TOP) = (short)ntop;
+    LW_LISTBOX(gi, idx);
+    lw_follow(gi, ctrls, total, idx);
+    s_lwRows += (unsigned)(ntop > cur ? ntop - cur : cur - ntop);
+}
+
+static int __cdecl lw_before_pump(void* e)
+{
+    LONG t, h;
+    int eh, et, drained;
+    if (!on_game_thread()) return 0;
+    lw_count_pops();
+    drained = lw_evring(&eh, &et) && eh == et;
+    t = s_lwTail;                          /* this thread's own index */
+    h = s_lwHead;
+    MemoryBarrier();                       /* the slots are read after the head that publishes them */
+    for (; t != h; t++) {
+        const LWNOTCH* n = &s_lwq[(ULONG)t % LWQ];
+        /* an event queued before this notch is still in the engine's ring:
+           the pump pops it first, and this notch waits for the next entry */
+        if (!drained && (LONG)(s_lwPops - n->seq) < 0) break;
+        s_lwNotches++;
+        lw_scroll((char*)(size_t)ARG(e, 1),
+                  (int)(short)LOWORD(n->xy), (int)(short)HIWORD(n->xy), (int)n->delta);
+    }
+    InterlockedExchange(&s_lwTail, t);     /* release: every slot below `t` has been read */
+    return 0;
+}
+
+/* Always on, like the zoom's wheel; `tagpu_listwheel.off` leaves it out. Its
+   own byte-match and its own log line: the wheel does not depend on the op
+   capture, and works on every renderer. */
+static void lw_install(void)
+{
+    if (GetFileAttributesA("tagpu_listwheel.off") != INVALID_FILE_ATTRIBUTES) {
+        glog("gui: list wheel OFF (tagpu_listwheel.off)");
+        return;
+    }
+    if (!tagpu_detour_bytes_ok(LW_PUMP_VA, LW_PUMP_STOLEN, sizeof LW_PUMP_STOLEN) ||
+        !tagpu_detour_observe(LW_PUMP_VA, LW_PUMP_STOLEN, sizeof LW_PUMP_STOLEN, lw_before_pump, NULL)) {
+        glog("gui: list wheel NOT armed -- engine bytes differ at the GUI pump 0x4A9FD0");
+        return;
+    }
+    s_lwArmed = 1;
+    glog("gui: list wheel ARMED -- observer on the GUI pump 0x4A9FD0");
+}
 
 /* ---- the chrome re-emit --------------------------------------------------
    Owed by a reset (see `publish`), paid at the top of the next op window.
@@ -3894,6 +4501,7 @@ void tagpu_gui_init(void)
        game loop and every flip run on; taking it here rather than at the
        first flip means the splash screen's draws (before flip 1) are recorded */
     s_gameTid = GetCurrentThreadId();
+    lw_install();
 
     if (!tagpu_detour_bytes_ok(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN)) {
         glog("gui: NOT armed — engine bytes differ at the flip 0x4C63A0; the "
@@ -3977,31 +4585,33 @@ void tagpu_gui_flush(unsigned int frame_counter)
     /* mingw's `_snprintf` does not NUL-terminate on truncation, and `glog`
        hands the result to `fprintf("%s")`, so an undersized buffer is an
        out-of-bounds READ, not a tidy cut. */
-    char b[600];        /* 571 worst case, COUNTED OUT OF THE FORMAT STRING rather
-                           than adjusted by eye: 207 literal characters, 33 `%u` at
+    char b[700];        /* 658 worst case, COUNTED OUT OF THE FORMAT STRING rather
+                           than adjusted by eye: 224 literal characters, 40 `%u` at
                            ten digits, and THREE `%d` at eleven (`world=…/%d`,
                            `surfaces=%d`, `draw=%d`) plus the NUL. A conversion is
                            sized by its TYPE, not by the values you expect in it:
                            `s_phaseLive` only ever holds 0 or 1 and still counts
                            eleven. The `asset=` and `tint=` groups are FOUR fields
-                           each. */
+                           each, `wheel=` four too, `box=` three. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Thirty-three
-           `%u`s at ten digits and three `%d` at eleven, plus 207 literals, is
-           571 bytes, under the 600 of `b`. The observed line is ~300; the gap is
+        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Forty
+           `%u`s at ten digits and three `%d` at eleven, plus 224 literals, is
+           658 bytes, under the 700 of `b`. The observed line is ~300; the gap is
            entirely how long the session has run. COUNT IT AGAIN when you add a
            group. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u box=%u/%u/%u wheel=%u/%u/%u/%u",
                   s_flips, s_opsTotal, s_opsDropped,
                   s_worldOps, s_worldDropped, s_phaseLive, s_fillClipped, s_vpClears,
                   s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
                   s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused, s_hudPokes, s_hudRefused,
                   s_assetSends, s_assetAcked, s_assetRevoked, s_assetDrift,
-                  s_tints, s_lhtCopies, s_focusRowBad, s_tintNoTable);
+                  s_tints, s_lhtCopies, s_focusRowBad, s_tintNoTable,
+                  s_boxes, s_boxRow0, s_boxNoTable,
+                  s_lwNotches, s_lwRows, s_lwMiss, (unsigned)s_lwFull);
         glog(b);
         {
             /* THE SAME GUARD AS THE OTHER THREE IN THIS FILE: mingw's

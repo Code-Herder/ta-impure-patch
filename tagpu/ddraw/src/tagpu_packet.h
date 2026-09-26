@@ -802,7 +802,7 @@ typedef struct TAGPU_PACKET {
                                          diagnostic: the sub-particle table can
                                          be truncated, this count never is       */
     uint32_t fx_caps;                 /* TAProgram+0xF0: bit5 the ALP alpha
-                                         table is built, bit7 the LHT one        */
+                                         table is enabled, bit7 the LHT one      */
     uint32_t fx_want;                 /* what the gather actually ran with: bit0
                                          the three effect tables, bit1 the
                                          particle one. A consumer must not claim

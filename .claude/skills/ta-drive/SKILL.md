@@ -17,7 +17,7 @@ the research notes and in `git log`, not here (*Maintaining this skill*, at the 
 | file | read it when |
 |---|---|
 | `references/levers.md` | you arm anything beyond the bench line, drive zoom or the camera, or read a `tagpu.log` heartbeat |
-| `references/measuring.md` | before any A/B, pixel diff, cross-build comparison or frame-time figure |
+| `references/measuring.md` | before any A/B, pixel diff, cross-build comparison, frame-time figure or movie |
 | `references/ui-layer.md` | the question is the HUD, the shell, the cursor, text, the minimap, HUD scale or a windowed `k` |
 | `references/modules.md` | extra weapons, the COB trace, multiplayer, many unit types (the synthetic mod), weapons past 256, the new data keys (their fixtures), the render-options screen and the GPU row, a remote Windows machine |
 
@@ -35,7 +35,7 @@ isolation), `windowed-mode.md` (display bugs), `cmdline-options.md` (every launc
    *reading* window geometry and for capture. **Never run `xrandr` against the live display**,
    never move the human's pointer, never activate windows to "test" something.
 3. **Silence is the default** (`NoDirectSound`, six registry values, no `music/`). Pass
-   `--sound` only when asked, or to measure sound on a null device (`references/measuring.md`).
+   `--sound` only when asked, or to measure sound or a movie on a null sink (`references/measuring.md`).
 4. **Clean up**: `tacli stop <name>` when done, `tacli rm <name>` when the instance has no
    further use. Every running game is a GPU client.
 5. **Rebuilt the DLL? Relaunch.** `tacli launch` copies `ddraw.dll` into the instance from
@@ -65,9 +65,11 @@ instance with `tacli create <n> --display <live>` — `instance.json` is shared 
 session may own. A hand-run `wine TotalA.exe` without `WINEDLLOVERRIDES=ddraw=n,b` loads wine's
 builtin ddraw and fails with the same dialog, so it proves nothing.
 
-**Every instance prefix shares one `user.reg` inode** (the `cp -al` clone never breaks it), so
-the prefixes are isolated in everything except the registry. Never "fix" a launch by writing
-registry values.
+**TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, seeded
+from the template's `user.reg` (`gamespeed` 10); `tacli registry <i> [name[=value]]` reads it and,
+with the game stopped, sets it. The DLL serves it only to a launch carrying `-xtacli-test` (tacli
+adds it; a hand-run `wine TotalA.exe` is refused). `wine reg` reaches only the prefix's `user.reg`,
+one inode every prefix shares; a `--keep-dll` build without the store runs on it, with a warning.
 
 **The tile.** Instances are laid out in a grid so parallel windows do not stack; slots are held
 by **running** instances, `--slot 0` claims a cell explicitly. A window created off-screen is
@@ -186,13 +188,11 @@ as well. By hand: `ui t1 set Mapping 1`, `ui t1 set LineOfSight 0` before `Start
   read and your click, and a missed selection is silent: re-read right before clicking.
 - **A right-click on water is rejected for a ground unit** and draws no marker, which looks like
   a broken marker pass. Pick grass (`g > b + 30` in a shot).
-- **Game speed is `keys <i> plus`/`minus`** (up to +10), and it is **shared registry state that a
-  launch does not reset**: `gamespeed` lives in the one `user.reg` every prefix shares, so one
-  session pressing `+` leaves every later launch at that speed. It multiplies the sim tick (30/s
-  at 10, 60/s at 20) while the picture still changes 30 times a second. Read it before any
-  measurement whose answer is a rate: `wine reg query` under the instance's `WINEPREFIX` for
-  `gamespeed` in `HKCU\Software\Cavedog Entertainment\Total Annihilation` (`0xa` is normal).
-  `Gamma` lives in the same shared file and scales the presented palette (`references/ui-layer.md`).
+- **Game speed is `keys <i> plus`/`minus`** (up to +10), kept in the instance's registry and
+  not reset by a launch. It multiplies the sim tick (30/s at 10, 60/s at 20) while the picture
+  still changes 30 times a second: read `tacli registry <i> gamespeed` (10 is normal) before any
+  measurement whose answer is a rate. `Gamma` is in the same store and scales the presented
+  palette (`references/ui-layer.md`).
 
 ## Driving the UI (menus, options, build panel)
 
@@ -397,7 +397,7 @@ measurement.
 - **`<pass>.off` does nothing while `<pass>.on` exists.** Remove the arm instead
   (`classicpp.on=off`).
 - **Health bars are a registry value, not a lever**: no bars and no group digit until
-  `damagebars` is 1 under `HKCU\Software\Cavedog Entertainment\Total Annihilation`.
+  `tacli registry <i> damagebars=1` (with the game stopped).
 
 Every lever, its tokens, its verify line and the heartbeat fields that must read zero:
 `references/levers.md`.
@@ -413,9 +413,9 @@ of a gesture is `zoom: wheel +120 -> 1.163, landed 251.7 ms after the last notch
 need the mouse->world repair, which `zoom.on` or `vpwide.on` installs at launch; with neither the
 level is pinned at 1.0 and the log says so.
 
-- **Aim it.** `--at` is a `pmove:` first; notches over the side panel or a menu do nothing, and
-  the log says which gate refused. `tools/tacli wheel <i> 1 --at 576 384` (the viewport centre at
-  1024x768) is the camera-neutral control.
+- **Aim it.** `--at` is a `pmove:` first; off the viewport, or under an in-game options screen,
+  a notch does not zoom (over a list it scrolls it), and the log says which gate refused.
+  `tools/tacli wheel <i> 1 --at 576 384` (the viewport centre at 1024x768) is camera-neutral.
 - **In then out is 1.020, not 1.0**: to get back to 1.0 write it to `tagpu_zoom.txt`, then delete it.
 - **Re-read the eye after any wheel** — the game thread applies the delta at its next in-play
   draw. An off-centre notch in also **releases a camera follow** (`Ctrl+C`); read `main+0x142F3`

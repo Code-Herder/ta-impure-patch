@@ -81,6 +81,10 @@ Arming an attach-time token on a running instance silently does nothing.
 - **`sharptest`** — paints a 64x64 opaque green square at the viewport's top-left and a one-device-
   pixel white column at device x = 100, as geometry: the proof the device-resolution sharp layer
   is wired. Harness only; never hand a player an instance with it armed.
+- **The wheel scrolls a list.** `tacli wheel <i> -N --at X Y` over a list, its scrollbar or its
+  arrows scrolls it by the system's lines-per-notch (3) and leaves the selection alone, so a
+  scroll never changes SELMAP's preview; a click on a row does. It is always on and needs no
+  `gui.on`; `tagpu_listwheel.off` at launch leaves it out (`gui: list wheel ARMED` in the log).
 - **`mark.on=noselbox`** (a different file) takes our selection rects off the window and hands
   the box to the engine, which draws it at the unzoomed projection into `tacli shot` only.
   Confirm with `tacli log <i> -g 'markown: engine selection'`; remove it afterwards.
@@ -89,8 +93,9 @@ Arming an attach-time token on a running instance silently does nothing.
 
 `tacli log <i> -g 'gui: twins='`, one line per 300 frames. Fields worth reading:
 
-- `twins= seeds= sprites= pixels= bars= rects= atlas=` — running totals, not per-frame numbers.
-  `bars=` and `rects=` are bar and rectangle ops replayed as geometry.
+- `twins= seeds= sprites= pixels= planes= bars= rects= atlas=` — running totals, not per-frame
+  numbers. `bars=` and `rects=` are bar and rectangle ops replayed as geometry; `planes=` are
+  transformed stamps (the in-game badge, SELMAP's preview) carried as boxes of indices.
 - **`overflows=` and `lost=` must stay 0.** `resets=` is 2 per launch (the arm, the shell→game
   switch) and +1 per mode switch after that; under `log` each reset is named (`stall-over`,
   `arm`, `queue-full`, `arena-full`, `box-outside-surface`, `lost-sprite`, `atlas-full`,
@@ -114,6 +119,10 @@ Arming an attach-time token on a running instance silently does nothing.
 - `repaints=<done>/<refused> rops=<last>` — `<refused>` counts episodes, not flips.
 - `pixdrop=` — pixel ops dropped by design (a seed crosses as geometry).
 - `paldiff=n@i` and `palchg=` — see the palette rule below.
+- **The op capture's own line**, `tacli log <i> -g 'GUI flips='`, every 600 flips, ends
+  `box=<shaded>/<row 0>/<no table> wheel=<notches>/<rows>/<misses>/<dropped>`. A `box=` second or
+  third field above 0 is a box shader that crossed as dropped pixels; `wheel=` misses are notches
+  over no list, and dropped ones met a full queue or arrived off the game thread.
 
 ## The palette and Gamma
 
@@ -129,11 +138,11 @@ window grab shows the world after it. `tagpu.log`'s `pal: presented palette chan
 line carries the live factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'` gives the option, which
 after a `+gamma` no longer implies the factor.
 
-**`Gamma` is one shared, mutable registry value** — the `user.reg` inode every prefix shares,
-rewritten in place by wine at every launch — so it is whatever TA last stored. `paldiff=` in the
-heartbeat is whatever that makes it: 235 entries at Gamma 15 (factor 1.125), 0 at Gamma 12. **Read
-it, never assume it, and never "fix" the registry value** — that moves every measurement taken
-against the prefix. A world restored twin is restored from the engine's unscaled table at any
+**`Gamma` is a mutable value of the instance's registry** (`tacli registry <i> Gamma`), whatever
+that instance's TA last stored; a new instance takes the template's. `paldiff=` in the heartbeat
+is whatever that makes it: 235 entries at Gamma 15 (factor 1.125), 0 at Gamma 12. **Read it, never
+assume it**, and set it only as part of a measurement that says so — it moves every measurement
+taken on the instance. A world restored twin is restored from the engine's unscaled table at any
 Gamma; the UI's twin is restored through the presented palette, so an offline restore of a UI
 atlas must use that one, never the archives' `palette.pal`.
 
