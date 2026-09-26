@@ -910,7 +910,7 @@ def player_keys(spec: str):
             for i in range(1, len(parts)) if parts[i] != ""]
 
 
-def apply_prefix_settings(inst: Instance, res, sound: bool = False, intro: bool = False):
+def apply_prefix_settings(inst: Instance, res, sound: bool = False):
     """Registry state that must hold before launch."""
     # No XRandR: stops wine re-probing outputs, which blanks every physical monitor
     # for seconds at each launch (research/notes/windowed-mode.md).
@@ -920,10 +920,7 @@ def apply_prefix_settings(inst: Instance, res, sound: bool = False, intro: bool 
     reg_add(inst, GAME_REG, "DisplaymodeHeight", "REG_DWORD", str(h))
     # Right-mouse orders: the only interface type that accepts posted clicks.
     reg_add(inst, GAME_REG, "Interface Type", "REG_DWORD", "1")
-    # The intro plays at the shell's first screen while PlayMovie is non-zero
-    # (0x426F06), and only if Data/1.ZRB is in the mirror (cmdline-options.md);
-    # the game writes it back to 0 once the movie has played.
-    reg_add(inst, GAME_REG, "PlayMovie", "REG_DWORD", "1" if intro else "0")
+    reg_add(inst, GAME_REG, "PlayMovie", "REG_DWORD", "0")
     if not sound:
         # NoDirectSound (totala.ini) only silences DirectSound effects. The Steam
         # build also plays MP3 music through audiere, and TA keeps its own volume /
@@ -1108,7 +1105,7 @@ def _create(inst: Instance, args) -> dict:
         "prefix": str(inst.prefix),
     }
     inst.save_meta(meta)
-    apply_prefix_settings(inst, res, sound=args.sound, intro=args.intro)
+    apply_prefix_settings(inst, res, sound=args.sound)
     return meta
 
 
@@ -1417,8 +1414,7 @@ def _launch(args) -> dict:
     if not args.keep_dll:
         deploy_dll(inst)
         link_restorer_files(inst)
-    apply_prefix_settings(inst, tuple(meta["res"]), sound=meta.get("sound", False),
-                          intro=meta.get("intro", False))
+    apply_prefix_settings(inst, tuple(meta["res"]), sound=meta.get("sound", False))
     if args.map:
         reg_add(inst, GAME_REG, "SkirmishMap", "REG_SZ", args.map)
     for spec in args.player or []:
@@ -5309,8 +5305,7 @@ def build_parser():
     c.add_argument("name")
     add_launchish(c, default_res=DEFAULT_RES)
     c.add_argument("--sound", action="store_true", help="enable sound (default: silent)")
-    c.add_argument("--intro", action="store_true",
-                   help="keep the intro movies and play the intro at every launch")
+    c.add_argument("--intro", action="store_true", help="keep the intro movies")
     c.add_argument("--no-shield", dest="shield", action="store_false", default=None,
                    help="let hardware keyboard/mouse reach the game (default: blocked)")
     c.add_argument("--force", action="store_true")

@@ -2360,9 +2360,9 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     }
     mir_finish(f);          /* close and publish the frame's record */
     if (f->frame_counter - last >= 300) {
-        /* THE BUFFER: 438 literal characters and 72 conversions, worst case
-           1232 with the terminator, against 1280 bytes -- 48 bytes of headroom,
-           which is FOUR `%u`s (MEASURED 2026-09-21, by script over the format
+        /* THE BUFFER: 448 literal characters and 76 conversions, worst case
+           1284 with the terminator, against 1344 bytes -- 60 bytes of headroom,
+           which is SIX `%u`s (counted 2026-09-26, by script over the format
            string). Count it again when you add one, the same way: %u -> 10,
            %d -> 11, %08X -> 8, each float -> 24 (a bound on the values these
            carry, not on a double). A count by eye has been wrong here before,

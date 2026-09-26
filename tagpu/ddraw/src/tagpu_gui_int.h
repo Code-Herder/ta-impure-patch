@@ -117,10 +117,14 @@ enum {
                        else; the engine's cursor is blitted inside the flip,
                        after the observer has read it. The producer records the
                        op at that entry and publishes it IN THE SAME CALL --
-                       a movie flip bypasses the census cadence -- and every
-                       exit that does not publish clears the window, so the op
-                       never outlives the flip that recorded it and its bytes
-                       are never read at any other moment.
+                       the flip that recorded one bypasses the census cadence
+                       -- and every exit that does not publish clears the
+                       window, so the op never outlives the flip that recorded
+                       it and its bytes are never read at any other moment.
+                       The PALETTE does not cross with them: the lane resolves
+                       the box through the palette live at its present, which
+                       is why `movie_frame` never skips a frame that brings a
+                       new one.
 
                        The drain mirrors it as `TAGPU_GUIOP_PIXELS` with its
                        bytes, the shape the Vulkan lane already validates. */
