@@ -178,8 +178,9 @@ static unsigned s_rects = 0;
    kind that would otherwise be `PK_PIXELS` on the shell's menus, and the
    largest: 1 523 px of a 1 613 px difference at 640x480, MAINMENU. */
 static unsigned s_tints = 0;
-/* THE ENGINE'S LIGHTEN TABLE, `globals+0xC8`, as `PK_SHADE` delivered it. A
-   FILE-STATIC AND NOT A POINTER INTO THE QUEUE, for the reason the mirror
+/* THE HAND-OVER'S REMAP TABLE as `PK_SHADE` delivered it: the engine's
+   lighten table `globals+0xC8` and the box shader's rows (`TAGPU_GUI_SHADE_ROWS`,
+   layout in inc/tagpu_gui.h). A FILE-STATIC AND NOT A POINTER INTO THE QUEUE, for the reason the mirror
    exists at all: `drain` advances the arena tail per op, so the bytes are the
    game thread's again the moment this function returns, and the Vulkan lane
    does not run until two calls later. The hand-over carries THIS, by pointer,
@@ -463,9 +464,11 @@ static const char* CPY_FS =
    palette, which resolves the tinted index correctly; leaving it would show
    the untinted art through a highlight the engine has just drawn.
 
-   THE ROW IS AN INDEX INTO A 32-ROW TABLE AND IS BOUNDED BY THE PRODUCER
-   (`before_focus` refuses anything else), so there is no clamp here -- a clamp
-   would turn a producer bug into a wrong picture instead of a loud one. */
+   THE ROW IS AN INDEX INTO THE `TAGPU_GUI_SHADE_ROWS`-ROW TABLE AND IS BOUNDED
+   BEFORE THE DRAW (`before_focus` and `before_frame` produce only rows inside
+   it, and the Vulkan pass refuses a row past it), so there is no clamp here --
+   a clamp would turn a producer bug into a wrong picture instead of a loud
+   one. */
 static const char* TINT_FS =
     "#version 330 core\n"
     "layout(location=0) out vec4 oIdx;\n"
@@ -1547,13 +1550,15 @@ static void drain(void)
             }
             break;
         case PK_SHADE:
-            /* THE TABLE, AND IT IS NOT A PICTURE. `globals+0xC8` is a
-               palette-derived remap the engine builds at init -- the same
+            /* THE TABLE, AND IT IS NOT A PICTURE. Its rows are the engine's
+               two palette-derived remaps, `globals+0xC8` and PALETTE.SHD
+               `globals+0xC4`, which the engine fills at init -- the same
                category as the palette itself, which has always crossed -- so
                it is on the allowed side of the clean cut. Nothing composed it.
 
                VALIDATED AGAINST THE FORMAT rather than trusted: the producer
-               and this file agree on 32 x 256 through one constant, and an
+               and this file agree on `TAGPU_GUI_SHADE_ROWS` x 256 through one
+               constant, and an
                `alen` that is not exactly that is a queue this build did not
                write. Refusing it leaves `s_shadeHave` where it was, which the
                tint case below then reads as "no table". */

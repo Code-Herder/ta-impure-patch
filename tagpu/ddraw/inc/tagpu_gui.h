@@ -365,8 +365,9 @@ typedef struct TAGPU_GUIHAND {
     const unsigned char* pal;       /* 256 x RGBA8, tagpu_pal_live()          */
     unsigned             palSerial;
 
-    /* THE ENGINE'S LIGHTEN TABLE, `globals+0xC8`: 32 rows of 256 bytes, row
-       major, and the only thing a `TAGPU_GUIOP_TINT` needs beyond its box.
+    /* THE REMAP TABLE: `TAGPU_GUI_SHADE_ROWS` rows of 256 bytes, row major
+       (the layout is above), and the only thing a `TAGPU_GUIOP_TINT` needs
+       beyond its box.
        NULL until a `PK_SHADE` has been drained, which the producer publishes
        ahead of the first tint of a batch -- so a tint op and a null table
        cannot both be in one hand-over, and a port that finds them together is
@@ -374,8 +375,8 @@ typedef struct TAGPU_GUIHAND {
 
        `shadeSerial` is the atlas's rule, not the palette's: it moves when the
        BYTES move, which for this table is once a session in practice (the
-       engine builds it at init) and whenever the engine hands out a different
-       pointer. Uploading on a change rather than per frame is the point of
+       engine fills both source tables at init) and whenever the engine hands
+       out a different pointer. Uploading on a change rather than per frame is the point of
        carrying a serial at all. */
     const unsigned char* shade;
     unsigned             shadeSerial;

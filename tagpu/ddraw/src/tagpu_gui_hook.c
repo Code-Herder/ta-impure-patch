@@ -129,10 +129,8 @@ typedef struct OVL {
     unsigned glen;
 } OVL;
 typedef struct SURF {
-    unsigned base;                    /* pixel base — the identity           */
-    unsigned owner;                   /* the block MEM_Free 0x4D85A0 will be handed: the
-                                         surface object itself, whose pixels are the same
-                                         allocation at object+0x30 — see before_memfree */
+    unsigned base;                    /* pixel base — the identity; the block it
+                                         dies with is `surf_dies_with`'s        */
     int w, h, pitch;
     unsigned char* copy;              /* the surface as of the last flip     */
     unsigned char* mask;              /* the last census: 0/128/255          */
@@ -288,6 +286,32 @@ static void surf_drop_offscreens(unsigned keepBase)
     }
 }
 
+/* THE BLOCK A TRACKED BASE DIES WITH. A context's base is the pixels of one of
+   two allocation layouts, and nothing in the context says which (the builders
+   below all write the same flags at `+0x2C`):
+
+     a surface  `SurfaceCreateNamed 0x4C69F0`: `w*h+0x30` bytes from MEM_Alloc
+                `0x4D83B0` (`0x4C6A01..0x4C6A04`), the pixels at `block+0x30`
+                (`0x4C6A0E`).
+     a frame    `0x4B8DA0` (`w*h+0x18`) and `0x4B8E00` (`2*w*h+0x18`, two
+                planes), the pixels at `block+0x18` (`0x4B8DD0`, `0x4B8E1F`).
+                A context is built over a frame by `0x4B8A80` alone, and each of
+                its five callers draws into a frame one of those two made:
+                `0x458C2E` the unit composite (`0x4581A4`), `0x4666B1` and
+                `0x4666E2` SELMAP's preview and the scratch copy `0x4665D0`
+                frees before it returns, `0x483918`, `0x495BCF`.
+
+   So the block `p` MEM_Free is handed owns the entry based at `p+0x30` or
+   `p+0x18`, and neither test can name a live entry of another block: that
+   entry's block would have to overlap `p`'s. (A block under 0x18 bytes is the
+   one exception, and it errs toward retiring: a wrong retirement costs a
+   re-seed from live memory, a missed one a read of a freed block at the next
+   publish.) DISASSEMBLED 2026-09-26. */
+static int surf_dies_with(const SURF* s, unsigned p)
+{
+    return s->base == p + 0x30 || s->base == p + 0x18;
+}
+
 /* ---- blocks freed on a thread that is not the game thread ---------------
    The table is the game thread's alone — `surf_drop` swap-removes and
    `surf_get` memsets the tail — so an observer that fires on another thread
@@ -366,8 +390,8 @@ static void surf_drain_freeq(void)              /* game thread only */
             unsigned p = (unsigned)InterlockedExchange(&s_freeq[k & (FREEQ - 1)], 0);
             int i;
             if (!p) { flush = 1; break; }        /* claimed, not yet stored  */
-            for (i = 0; i < s_nsurf; i++)
-                if (s_surf[i].owner == p) { surf_drop(i); break; }
+            for (i = 0; i < s_nsurf; )          /* swap-remove: re-test slot i */
+                if (surf_dies_with(&s_surf[i], p)) surf_drop(i); else i++;
         }
         /* did a producer lap the window while we were walking it? */
         if (!flush && (unsigned long)InterlockedExchangeAdd(&s_freeqN, 0)
@@ -380,13 +404,12 @@ static void surf_drain_freeq(void)              /* game thread only */
     s_freeqDone = head;
 }
 
-static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
+static SURF* surf_get(unsigned base, int w, int h, int pitch)
 {
     int i;
     if (!base || w <= 0 || h <= 0 || pitch <= 0 || w > 4096 || h > 4096 || pitch > 8192) return NULL;
     for (i = 0; i < s_nsurf; i++)
         if (s_surf[i].base == base) {
-            s_surf[i].owner = owner;       /* re-made over the same bytes: the new block */
             if (s_surf[i].w != w || s_surf[i].h != h || s_surf[i].pitch != pitch) {
                 /* the object was re-allocated over the same bytes: start over.
                    The ops already recorded against the base carry the OLD
@@ -410,7 +433,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
     if (s_nsurf >= MAX_SURF) return NULL;
     memset(&s_surf[s_nsurf], 0, sizeof(SURF));
     s_surf[s_nsurf].base = base; s_surf[s_nsurf].w = w; s_surf[s_nsurf].h = h;
-    s_surf[s_nsurf].pitch = pitch; s_surf[s_nsurf].owner = owner;
+    s_surf[s_nsurf].pitch = pitch;
     s_surf[s_nsurf].bl = s_surf[s_nsurf].bt = 0x7FFF; s_surf[s_nsurf].br = s_surf[s_nsurf].bb = -1;
     return &s_surf[s_nsurf++];
 }
@@ -421,11 +444,8 @@ static SURF* surf_of_ctx(const int* ctx)
     unsigned base;
     if (!ptr_ok(ctx)) return NULL;
     base = (unsigned)ctx[CTX_BASE];
-    /* THE OWNER IS DERIVED FROM THE BASE, NOT FROM THE CONTEXT POINTER.
-       `SurfaceCreateNamed 0x4C69F0` asks MEM_Alloc for w*h+0x30 bytes and
-       points the object's base field at block+0x30 (0x4C6A01..0x4C6A14), so the
-       block MEM_Free will be handed is `base - 0x30` — and that holds however
-       we reached the surface. The CONTEXT is not usable for this: `GetContext
+    /* THE BLOCK IS DERIVED FROM THE BASE, NOT FROM THE CONTEXT POINTER
+       (`surf_dies_with`). The CONTEXT is not usable for this: `GetContext
        0x4C5E70` rep-movs a 12-dword copy into the caller's stack frame, so most
        blits hand us a copy whose address has nothing to do with the block.
        (MEASURED 2026-09-12: keying on the context refused 1235 draws in one
@@ -436,10 +456,10 @@ static SURF* surf_of_ctx(const int* ctx)
        0x4C6A60` — one caller, `0x4B5897` — lays the same header over the locked
        DirectDraw primary, memory the engine did not allocate and will not
        MEM_Free. Such a surface would have no destructor here. None was ever
-       recorded (every base this module has seen is an `0x4C69F0` object;
-       measured over a full session in game and in the shell), and its pixels
-       belong to the fork, which frees them only in the surface's own Release. */
-    return surf_get(base, ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH], base - 0x30);
+       recorded (measured over a full session in game and in the shell), and
+       its pixels belong to the fork, which frees them only in the surface's own
+       Release. */
+    return surf_get(base, ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH]);
 }
 
 /* ---- the ops recorded since the last flip ------------------------------ */
@@ -523,9 +543,10 @@ typedef struct OP {
            of a 256-byte remap table -- `globals+0xC4` for negative, `+0xC8`
            for positive -- and every pixel already in the box is read and
            written back through that row. Truncating it to a byte is
-           meaningless, which is why `publish` never reads `col` for it.
-           `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is darken level 24,
-           NOT palette index 232.
+           meaningless, which is why `before_frame` stores the clamped level
+           there instead, as a signed byte, and `publish` reads it as the level
+           that picks the `PK_SHADE` row. `0x4AA912`'s `0x4BF4D0(panel+0xBC,
+           rect, -0x18)` is darken level 24, NOT palette index 232.
          - `OP_RECT` / `0x4BF8C0` writes four edges through the store-only
            Bresenham `0x4CC7AB`, whose colour is `[ebp+0x1C]` stored
            `stos BYTE al` -- the low byte, a palette index, which is why
@@ -1473,15 +1494,19 @@ static int pub_seed(SURF* s)
    way. The read is on the game thread, where both setters run.
 
    THE READABILITY TEST IS THE ENGINE'S OWN, and it is a BOUND, not a probe.
-   `PROG_CAPS` bit 7 is "the lighten table is built" and bit 6 "PALETTE.SHD is
-   built": `0x4BAB30` and `0x4BAB00` each test their bit and refuse to write
-   while it is clear, and `0x4BA660` / `0x4BA610` allocate the buffers without
-   touching the word, so allocated and built are separate events. `0x4BEC70`
-   and `0x4BF4D0` only null-check, so the engine will draw through an unbuilt
-   table and we deliberately will not: an op that needs one is refused and
-   counted. `ptr_ok` is a value filter on a pointer about to be read 8 KB
-   through, not the safety argument; that is that these are init-time
-   allocations the engine holds for the process. */
+   `PROG_CAPS` bit 7 is "the lighten table is enabled" and bit 6 "PALETTE.SHD
+   is enabled": the init writes the word at `0x4B5AC4` and allocates each
+   buffer only when its bit is set (`0x4BA610` at `0x4B5ADF`, `0x4BA660` at
+   `0x4B5B0F`), and `0x4BAB30` / `0x4BAB00` refuse to fill one whose bit is
+   clear. The bit is set BEFORE the allocation and the fill, so a set bit
+   with a pointer means the buffer exists, not that it has been filled; the
+   fills follow once, at init (above), and the content key below re-sends the
+   rows when they do. `0x4BEC70` and `0x4BF4D0` test only the pointer; the
+   bit is the engine's own record of whether that pointer was ever made, so
+   an op whose table's bit is clear is refused and counted rather than read
+   through a pointer nothing allocated. `ptr_ok` is a value filter on a
+   pointer about to be read 8 KB through, not the safety argument; that is
+   that these are init-time allocations the engine holds for the process. */
 /* THE ADDRESSES COME FROM `tagpu_engine.h` (`TA_GFX_PP`, `PROG_LHT`,
    `PROG_CAPS`, `GFX_SHD`), not from private copies here. This file is a
    `publisher` in `thread-split.allow`, so it may include that header, and a
@@ -2404,16 +2429,17 @@ static void publish(unsigned flipSurf)
         /* A SUB-FRAME STACK DRAWS NOTHING ITSELF. For a frame whose `+0x0A` is
            non-zero, `0x4B7F90` hands each sub-frame to `0x4B8500` or back to
            itself (`0x4B7FE9`..`0x4B801A`), `0x4B8500` to itself
-           (`0x4B8561`..`0x4B8586`), and both leave without a write of their
-           own (DISASSEMBLED 2026-09-26). Both callees are observed leaves, so
-           every pixel a stack puts down is carried by its sub-frames' ops.
+           (`0x4B8561`..`0x4B8586`) and `0x4B8310` to `0x4B8500`
+           (`0x4B8379`..`0x4B8397`), and all three leave without a write of
+           their own (DISASSEMBLED 2026-09-26). The callees are observed leaves,
+           so every pixel a stack puts down is carried by its sub-frames' ops.
            Crossing the stack's own box as `PK_PIXELS` carried nothing -- the
            drain drops it -- and marked the box lost, which kept a tint off
            every pixel of it. SKIRMISH's side buttons are two-frame stacks. A
            stack the chrome re-emit records (`chrome_emit`: no engine call, so
            no sub-frame ops) was dropped the same way and draws nothing either
            way. */
-        if ((op->kind == OP_GAF || op->kind == OP_GAFA) && op->fsub) continue;
+        if ((op->kind == OP_GAF || op->kind == OP_GAFA || op->kind == OP_GAFB) && op->fsub) continue;
         if (!s->seeded && !pub_seed(s)) return;
         /* THE MOVIE FRAME'S BYTES, READ NOW -- which is the movie's own flip,
            because `before_flip` publishes a movie flip in the call that
@@ -2706,8 +2732,7 @@ static void publish(unsigned flipSurf)
            reaches it -- the fixed levels are +20, +30, +31, -19..-22, -20,
            -24, -28, and the ten-step screen fade at `0x41DF70` / `0x41FAE2`
            walks -19 to -28 -- so `box=` reports it rather than trusting that
-           list. An
-           unbuilt table takes the same exit. */
+           list. A table whose caps bit is clear takes the same exit. */
         if (op->kind == OP_FRAME) {
             int lvl = (int)(signed char)op->col;  /* `before_frame` clamped it */
             int st;
@@ -2781,7 +2806,7 @@ static void publish(unsigned flipSurf)
                `surf_drain_freeq()` empties at the top of every `before_flip` --
                before the census or the publisher reads a single base. That
                covers an asset SOURCE exactly as it covers a seed's destination:
-               same object class, same `owner = base - 0x30`. The `ptr_ok` in
+               the same `surf_dies_with`. The `ptr_ok` in
                `pub_surface_bytes` is a value filter and is NOT this argument.
 
                "IMMUTABLE" IS TOO STRONG, so it is not claimed. What `op_add`
@@ -3949,26 +3974,47 @@ static void* __cdecl after_flip(unsigned int* regs)
    nowhere in the binary and its message table stops at 0x206
    (gui-gadgets.md §2.4.1) -- so this adds one, through the engine's own scroll.
 
-   THE NOTCH RING. The producer is `tagpu_gui_wheel`, called by the window
-   procedure (wndproc.c, and the shield's delivery for injected input) for a
-   notch the zoom did not take; the consumer is the GAME thread, at the entry
-   of the GUI pump `0x4A9FD0`. The ordering is the zoom's (tagpu_zoom.c, "the
-   notch ring"): the producer writes a slot and only then publishes `head`
-   with an interlocked store, and never writes a slot while `head - tail ==
-   LWQ`; the consumer reads `head`, then the slots below it, and only then
-   publishes `tail` with an interlocked store. Nothing else crosses: the
-   target is found on the game thread from the engine's own state, so no
-   engine memory is read on the window procedure's thread, whichever thread
-   that is. A full ring drops the notch and counts it.
+   ONE THREAD. The producer is `tagpu_gui_wheel`, called by the window
+   procedure (wndproc.c, and the shield's delivery for injected input, which
+   arrives as posted messages) for a notch the zoom did not take. TA's window
+   belongs to its main thread, which is the game thread `s_gameTid`, so the
+   producer runs on the thread that dispatches every message and runs every
+   pump; the consumer is that thread again, at the entry of the GUI pump
+   `0x4A9FD0`. The producer checks this and drops (and counts) a notch from
+   any other thread, because the ordering below reads the engine's ring. The
+   interlocked head and tail make the ring correct for two threads anyway.
+
+   ORDERED BEHIND THE CLICKS ALREADY QUEUED. TA's window procedure pushes
+   every button message -- and only those; a move is kept as one current
+   record -- onto the engine's event ring (`0x4C2E30`, one call site
+   `0x4B5F51`), and the pump pops one per call (`0x4AB5D0` at
+   `0x4AA00A`, the only call, not in a loop). A notch applied at the pump's
+   entry would otherwise overtake a click still in that ring, and the click
+   would then land on the scrolled rows. So each notch carries the index of
+   the last engine event queued before it, `seq`, and waits until the engine
+   has taken that far: until `s_lwPops`, the pops counted from the ring's
+   tail, reaches it, or until the ring reads empty, when nothing queued before
+   any notch is left in it. The pop `0x4C2D60` is called at `0x4AB654` (inside
+   the pump) and `0x4999C4` (straight after the in-game pump at `0x499992`),
+   so between two readings -- every pump entry and every notch -- the tail
+   moves at most two slots, fewer than the ring's 20 (`0x4C2BD0(20)`, once, at
+   `0x4B5A67`), and the modular difference is the exact count. The one other
+   move is the flush `0x4C2BB0` (head and tail to 0; one call, `0x426636`, in
+   the in-game setup `0x4263B0`), which discards what was queued and leaves
+   the count wrong by any amount. The empty-ring rule is what makes that
+   harmless: a notch queued before the flush has nothing left in front of it,
+   so an early release is correct, and it is held no longer than the ring
+   takes to drain. Engine map, *The pump's entry*.
 
    WHERE: THE NOTCH'S OWN POINT. Every mouse message, this one included, has
    been taken to the engine's space by the time it reaches the zoom (wndproc.c:
    x_adjust, unscale, `tagpu_hud_to_engine`; the shield's `gx, gy` are already
-   there), which is the space of the move records the engine's pointer is
-   copied from. The pointer itself (`gi+0x3C`) is the wrong source: the pump
-   refreshes it from the engine's event ring only at `0x4AA00A`
-   (`0x4AB5D0` -> `0x4C2D60`), after this observer, so at the entry it is the
-   previous pump's point and a move that arrives with the notch is missed.
+   there), which is the space of the records the engine's pointer is copied
+   from. The pointer itself (`gi+0x3C`) is the wrong source: the pump
+   refreshes it once, at `0x4AA00A` (`0x4AB5D0`: a queued button record
+   through `0x4C2D60`, else the current move record through `0x4C2340`),
+   after this observer, so at the entry it is the previous pump's point and a
+   move that arrives with the notch is missed.
 
    WHAT IS UNDER IT: the top screen's (`gi+0x18`, the only interactive one)
    first active gadget under the point that is a list box (`id 2`), or a slider
@@ -3978,11 +4024,10 @@ static void* __cdecl after_flip(unsigned int* regs)
    A gadget's rect is inclusive of `x+w-1` and `y+h-1`, as the pump's own
    panel test is (`0x4AA0F9`..`0x4AA128`).
 
-   THE SCROLL IS THE ENGINE'S OWN: `top` (`+0xBC`) moved and clamped to
-   [0, maxtop], then the listbox handler `0x4A1B40(gi, idx)` and
-   `Gadget_PropagateAssoc 0x4A2BE0(gi, idx)` -- the two calls, with the same
-   arguments, that `List_SelectPrev` makes after its own write of `top` at
-   `0x4A9947` (`0x4A9983`, `0x4A998A`). The selection `+0xBA` is not touched.
+   THE SCROLL: `top` (`+0xBC`) moved and clamped to [0, maxtop], then the
+   listbox handler `0x4A1B40(gi, idx)`, as `List_SelectPrev` does after its own
+   write of `top` at `0x4A9947` (`0x4A9983`); then the gadgets bound to the list
+   follow (`lw_follow`). The selection `+0xBA` is not touched.
 
    BOUNDED BY THE ENGINE'S OWN ORDERING AND COUNTS. This runs on the game
    thread at the entry of the pump, whose first act is to read `gi+0x18`
@@ -3995,12 +4040,13 @@ static void* __cdecl after_flip(unsigned int* regs)
 static const unsigned char LW_PUMP_STOLEN[] = { 0x83, 0xEC, 0x34, 0x53, 0x55 };
 typedef void (__stdcall *lw_gadget_fn)(void* gi, int idx);
 #define LW_LISTBOX    ((lw_gadget_fn)(size_t)0x004A1B40u)   /* GUI_ListboxBuild      */
-#define LW_PROPAGATE  ((lw_gadget_fn)(size_t)0x004A2BE0u)   /* Gadget_PropagateAssoc */
+#define LW_SLIDER     ((lw_gadget_fn)(size_t)0x004A2580u)   /* the slider painter    */
 #define LW_GADGETS    512                 /* tagpu_gui_snap.c's MAX_GADGETS */
 #define LW_STRIDE     0x15B               /* gadget record, pack(1)         */
 #define LW_GI_TOP     0x18                /* GUIInfo: TheActive_GUIMEM      */
 #define LW_G_ID       0x00                /* u8                             */
 #define LW_G_ASSOC    0x01                /* u8                             */
+#define LW_G_NAME     0x02                /* char[16]; the panel's is the screen's (GUI_Load stamps it) */
 #define LW_G_X        0x13                /* i16, panel-relative; the panel's own is absolute */
 #define LW_G_Y        0x15
 #define LW_G_W        0x17
@@ -4011,35 +4057,78 @@ typedef void (__stdcall *lw_gadget_fn)(void* gi, int idx);
 #define LW_L_TOP      0xBC                /* list: i16 first visible row    */
 #define LW_L_MAXTOP   0xBE                /* list: i16 count - visible      */
 #define LW_L_COUNT    0xC0                /* list: i16 rows                 */
+#define LW_S_RANGE    0x136               /* slider: i16 range              */
+#define LW_S_KNOB     0x140               /* slider: i16 knobpos            */
+#define LW_MR_CAP     0x186               /* graphics globals: the event ring's i32 capacity */
+#define LW_MR_HEAD    0x18E               /* i32 write index, [0, cap)      */
+#define LW_MR_TAIL    0x192               /* i32 read index, [0, cap)       */
+#define LW_MR_MAXCAP  4096                /* a bound on a value read from memory */
 
 #define LWQ 64                            /* divides 2^32: the indices wrap freely */
-typedef struct { LONG delta, xy; } LWNOTCH;
+typedef struct { LONG delta, xy; ULONG seq; } LWNOTCH;
 static LWNOTCH       s_lwq[LWQ];
-static volatile LONG s_lwHead;            /* written by the window procedure only */
-static volatile LONG s_lwTail;            /* written by the game thread only      */
+static volatile LONG s_lwHead;            /* written by the producer only */
+static volatile LONG s_lwTail;            /* written by the consumer only */
 static int           s_lwArmed;
-/* game thread only: the remainder of a high-resolution wheel's partial
-   rows, kept for the list it was earned on and dropped when the target
-   changes, so a fraction never lands on a different list */
+/* game thread only: the engine pops counted so far, and the ring's tail and
+   capacity at the last reading */
+static ULONG         s_lwPops;
+static int           s_lwEvTail, s_lwEvCap;
+/* game thread only: the remainder of a high-resolution wheel's partial rows,
+   kept for the list it was earned on and dropped when the target changes. A
+   list is its screen's address, the screen's name and its index: a screen
+   freed and loaded again at the same address is the same list only if it is
+   the same screen, so a fraction never lands on a different list. */
 static const void*   s_lwGui;
+static char          s_lwName[16];
 static int           s_lwIdx, s_lwRem;
 static unsigned      s_lwNotches, s_lwRows, s_lwMiss;   /* `wheel=`          */
-static volatile LONG s_lwFull;            /* notches a full ring dropped: `wheel=`'s fourth */
+static volatile LONG s_lwFull;            /* notches a full ring (or a foreign thread) dropped: `wheel=`'s fourth */
+
+/* The engine's event ring as its own fields describe it, or 0 when they do
+   not describe one (before `0x4C2BD0` has run, or values out of range). */
+static int lw_evring(int* head, int* tail)
+{
+    const char* g = *(const char* const*)TA_GFX_PP;
+    int cap, h, t;
+    if (!ptr_ok(g)) return 0;
+    cap = *(const int*)(g + LW_MR_CAP);
+    h   = *(const int*)(g + LW_MR_HEAD);
+    t   = *(const int*)(g + LW_MR_TAIL);
+    if (cap < 3 || cap > LW_MR_MAXCAP || h < 0 || h >= cap || t < 0 || t >= cap) return 0;
+    *head = h; *tail = t;
+    return cap;
+}
+
+/* Brings `s_lwPops` up to the ring's tail. Exact while fewer than `cap` pops
+   fall between two calls, which the engine's two pop sites guarantee (above). */
+static void lw_count_pops(void)
+{
+    int h, t, cap = lw_evring(&h, &t);
+    if (!cap) { s_lwEvCap = 0; return; }
+    if (cap == s_lwEvCap) s_lwPops += (ULONG)((t - s_lwEvTail + cap) % cap);
+    s_lwEvCap = cap; s_lwEvTail = t;
+}
 
 void tagpu_gui_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
 {
     LONG h;
     LWNOTCH* e;
-    int d;
+    int d, eh, et, cap;
     if (msg != WM_MOUSEWHEEL || !s_lwArmed) return;
     d = (int)(short)HIWORD(wparam);
     if (!d) return;
+    if (!on_game_thread()) { InterlockedIncrement(&s_lwFull); return; }
     h = s_lwHead;                          /* this thread's own index */
     if ((ULONG)(h - s_lwTail) >= LWQ) { InterlockedIncrement(&s_lwFull); return; }
     MemoryBarrier();                       /* the slot is written after the tail that frees it is read */
     e = &s_lwq[(ULONG)h % LWQ];
     e->delta = (LONG)d;
     e->xy    = (LONG)lparam;
+    /* every engine event queued before this notch: counted pops + pending */
+    lw_count_pops();
+    cap = lw_evring(&eh, &et);
+    e->seq = s_lwPops + (cap ? (ULONG)((eh - et + cap) % cap) : 0u);
     InterlockedExchange(&s_lwHead, h + 1); /* publish: the slot is complete */
 }
 
@@ -4053,16 +4142,59 @@ static int lw_bound_list(const char* ctrls, int total, unsigned char assoc)
     return 0;
 }
 
+/* THE GADGETS BOUND TO THE LIST FOLLOW ITS `top`, as `Gadget_PropagateAssoc
+   0x4A2BE0` moves them -- but not through it. From a list it also copies the
+   SELECTED entry into every bound textfield (`0x4A2CEC..0x4A2D43`, when the
+   list's attribs has bit 3): a selection's consequence, which the engine
+   reaches only after writing the selection itself (`List_SelectPrev`, the
+   click at `0x4A3E8A`). The engine's own scrolls that leave the selection
+   alone propagate from the slider instead (`0x4A7037`, `0x4A42DA`) and never
+   reach that arm. So the two arms a scroll needs are made here, each as
+   `0x4A2BE0` makes it, for every other record with the list's `assoc`:
+
+     a list    its `top` becomes this one's and it repaints, `0x4A1B40(gi, j)`
+               (`0x4A2D56..0x4A2D78`; the engine copies the selection there
+               too, and the selection has not changed).
+     a slider  when the list has more than one row (`0x4A2C83`), `knobpos =
+               top * range / maxtop`, truncated (`0x4A2C9D..0x4A2CC3`: x87,
+               then `_ftol 0x4E43A0`, which truncates), written and repainted,
+               `0x4A2580(gi, j)`, only when it changed (`0x4A2CD0`). `maxtop`
+               is > 0 here, and with both operands 16-bit no rounding of the
+               engine's quotient can cross an integer, so the integer
+               quotient is the engine's. */
+static void lw_follow(char* gi, char* ctrls, int total, int idx)
+{
+    const char* list = ctrls + (size_t)idx * LW_STRIDE;
+    unsigned char assoc = (unsigned char)list[LW_G_ASSOC];
+    short top    = *(const short*)(list + LW_L_TOP);
+    int   maxtop = *(const short*)(list + LW_L_MAXTOP);
+    int   count  = *(const short*)(list + LW_L_COUNT);
+    int j;
+    for (j = 1; j <= total; j++) {
+        char* g = ctrls + (size_t)j * LW_STRIDE;
+        if (j == idx || (unsigned char)g[LW_G_ASSOC] != assoc) continue;
+        if (g[LW_G_ID] == 2) {
+            *(short*)(g + LW_L_TOP) = top;
+            LW_LISTBOX(gi, j);
+        } else if (g[LW_G_ID] == 4 && count > 1) {
+            short knob = (short)((int)top * (int)*(const short*)(g + LW_S_RANGE) / maxtop);
+            if (*(const short*)(g + LW_S_KNOB) == knob) continue;
+            *(short*)(g + LW_S_KNOB) = knob;
+            LW_SLIDER(gi, j);
+        }
+    }
+}
+
 static void lw_scroll(char* gi, int ex, int ey, int delta)
 {
-    const char *top, *ctrls;
-    char* list;
+    const char* top;
+    char *ctrls, *list;
     int total, i, px, py, idx = 0, lines, rows, cur, maxtop, ntop;
     UINT spi = 3;
     if (!ptr_ok(gi)) return;
     top = *(const char* const*)(gi + LW_GI_TOP);
     if (!ptr_ok(top)) return;
-    ctrls = *(const char* const*)(top + GM_CTRLS);
+    ctrls = *(char* const*)(top + GM_CTRLS);
     if (!ptr_ok(ctrls)) return;
     total = *(const short*)(ctrls + LW_P_TOTAL);
     if (total > LW_GADGETS) total = LW_GADGETS;
@@ -4079,7 +4211,7 @@ static void lw_scroll(char* gi, int ex, int ey, int delta)
             idx = lw_bound_list(ctrls, total, (unsigned char)g[LW_G_ASSOC]);
     }
     if (!idx) { s_lwMiss++; s_lwGui = NULL; return; }
-    list = (char*)ctrls + (size_t)idx * LW_STRIDE;
+    list = ctrls + (size_t)idx * LW_STRIDE;
     cur = *(const short*)(list + LW_L_TOP);
     maxtop = *(const short*)(list + LW_L_MAXTOP);
     if (maxtop <= 0) { s_lwGui = NULL; return; }          /* everything fits: nothing to move */
@@ -4090,10 +4222,14 @@ static void lw_scroll(char* gi, int ex, int ey, int delta)
         lines = *(const short*)(list + LW_L_COUNT) - maxtop;
         if (lines < 1) lines = 1;
     } else lines = (int)spi;
-    if (s_lwGui != top || s_lwIdx != idx) { s_lwGui = top; s_lwIdx = idx; s_lwRem = 0; }
+    if (s_lwGui != top || s_lwIdx != idx || memcmp(s_lwName, ctrls + LW_G_NAME, sizeof s_lwName)) {
+        s_lwGui = top; s_lwIdx = idx; s_lwRem = 0;
+        memcpy(s_lwName, ctrls + LW_G_NAME, sizeof s_lwName);
+    }
     /* positive is the wheel pushed away: toward the top of the list */
     s_lwRem += delta * lines;
     rows = s_lwRem / WHEEL_DELTA;
+    if (!rows) return;                                     /* less than a row so far: kept */
     s_lwRem -= rows * WHEEL_DELTA;
     ntop = cur - rows;
     if (ntop < 0) ntop = 0;
@@ -4101,20 +4237,25 @@ static void lw_scroll(char* gi, int ex, int ey, int delta)
     if (ntop == cur) { s_lwRem = 0; return; }              /* at an end: a reversal answers at once */
     *(short*)(list + LW_L_TOP) = (short)ntop;
     LW_LISTBOX(gi, idx);
-    LW_PROPAGATE(gi, idx);
+    lw_follow(gi, ctrls, total, idx);
     s_lwRows += (unsigned)(ntop > cur ? ntop - cur : cur - ntop);
 }
 
 static int __cdecl lw_before_pump(void* e)
 {
     LONG t, h;
+    int eh, et, drained;
     if (!on_game_thread()) return 0;
+    lw_count_pops();
+    drained = lw_evring(&eh, &et) && eh == et;
     t = s_lwTail;                          /* this thread's own index */
     h = s_lwHead;
     MemoryBarrier();                       /* the slots are read after the head that publishes them */
-    if (t == h) return 0;
     for (; t != h; t++) {
         const LWNOTCH* n = &s_lwq[(ULONG)t % LWQ];
+        /* an event queued before this notch is still in the engine's ring:
+           the pump pops it first, and this notch waits for the next entry */
+        if (!drained && (LONG)(s_lwPops - n->seq) < 0) break;
         s_lwNotches++;
         lw_scroll((char*)(size_t)ARG(e, 1),
                   (int)(short)LOWORD(n->xy), (int)(short)HIWORD(n->xy), (int)n->delta);

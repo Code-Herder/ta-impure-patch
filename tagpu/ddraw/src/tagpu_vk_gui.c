@@ -241,10 +241,10 @@ static VkImageView      s_atView, s_palView, s_dumView, s_glView;
 static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
-/* THE LIGHTEN TABLE: 256 wide by 32 tall, R8, so `TINT_FS`'s
+/* THE REMAP TABLE: 256 wide by `TAGPU_GUI_SHADE_ROWS` tall, R8, so `TINT_FS`'s
    `texelFetch(uShade, ivec2(index, row))` is the engine's own
    `LUT[row * 256 + index]` with no arithmetic in between. The hand-over's
-   bytes are already row-major 32 x 256, so the upload is one `copy_rect` of
+   bytes are already row-major rows of 256, so the upload is one `copy_rect` of
    the block. Uploaded on a serial change, like the atlas and the palette. */
 static VkImage          s_lutImg;
 static VkDeviceMemory   s_lutMem;
@@ -1984,7 +1984,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                one uniform window, one descriptor set -- `CPY_FS`'s cost.
                THE ROW IS BOUNDED IN THIS FILE'S OWN TERMS, which is this
                pass's rule and not a duplicate of the producer's: `fg` indexes
-               a 32-row image and a row past the end is a sampler read this
+               a `TAGPU_GUI_SHADE_ROWS`-row image and a row past the end is a sampler read this
                file cannot describe, whatever the other side believes it sent.
                THE TABLE IS A PRECONDITION and its absence is a `behind` rather
                than a skip: the drain does not mirror a tint without one, so a
@@ -2159,7 +2159,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         stOff += 256 * 4;
     }
     if (lutUp) {
-        /* 256 WIDE BY 32 TALL, so row-major `[row][index]` is `(x, y)` with no
+        /* 256 WIDE BY `TAGPU_GUI_SHADE_ROWS` TALL, so row-major `[row][index]` is `(x, y)` with no
            arithmetic in the shader and the hand-over's block copies straight
            in. The image is never recreated -- its size is a constant of the
            format -- so there is no retire here and no `ret_push`. */

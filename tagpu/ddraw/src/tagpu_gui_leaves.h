@@ -296,10 +296,14 @@ static int __cdecl before_line(void* e)
 static void rect_box_rc(void* e, int kind, const int* rc)
 {
     const int* ctx = ctx_or_back(ARG(e, 1));
-    if (s_inFlip) return;
     int l, t, r, b;
     int ol, ot, orr, ob;
     SURF* s;
+    /* NULL BEFORE THE FIRST RETURN: the callers decorate `s_lastOp` after this
+       returns (`before_frame` writes its level), so a return that records
+       nothing must not leave the previous op there to be written. */
+    s_lastOp = NULL;
+    if (s_inFlip) return;
     if (!ptr_ok(rc)) { op_add(kind, NULL, 0, 0, 0, 0); return; }
     l = rc[0]; t = rc[1]; r = rc[2]; b = rc[3];
     if (l > r) { int q = l; l = r; r = q; }
@@ -358,6 +362,12 @@ static int __cdecl before_frame(void* e)
         whole[3] = *(const int*)(g + 0xD8);
         rc = whole;
     }
+    /* AN INVERTED BOX SHADES NOTHING: the clipper `0x4BF620` only raises `l`
+       and `t` and lowers `r` and `b`, then refuses `l > r` or `t > b`
+       (`0x4BF6BB`), and `0x4BF4D0` returns on its refusal. `rect_box_rc`
+       swaps an inverted rect, which is right for the hollow rectangle's line
+       edges and would publish a tint here that the engine never draws. */
+    if (ptr_ok(rc) && (rc[0] > rc[2] || rc[1] > rc[3])) { s_lastOp = NULL; return 0; }
     rect_box_rc(e, OP_FRAME, rc);
     lvl = SARG(e, 3);
     if (lvl < -0x20) lvl = -0x20;
@@ -502,8 +512,9 @@ static const char* s_allocTag[32];
         source surface. Recorded as a box it crossed as `PK_PIXELS`, which the
         lane drops, and the drop then made the drain refuse every tint over the
         same rows: a list's selected-row highlight never reached the screen.
-        A window outside its source keeps the box (`OP_GAFD`): the engine reads
-        memory there that no twin holds. The destination is clamped to the
+        A window outside its source, or a source this module does not track,
+        keeps the box (`OP_GAFD`): the engine reads memory there that no twin
+        holds. The destination is clamped to the
         SURFACE only, not to the context's clip rect, because the engine does
         not clip; the source's top-left moves with the clamp. */
 static int __cdecl before_gafd(void* e)
@@ -518,11 +529,13 @@ static int __cdecl before_gafd(void* e)
     if (!on_game_thread()) return 0;
     if (!ptr_ok(rc)) { op_add(OP_GAFD, NULL, 0, 0, 0, 0); return 0; }
     s = surf_of_ctx(ctx);
+    /* THE SOURCE MUST BE A SURFACE THIS MODULE TRACKS: a free forgets every op
+       naming a tracked base (`ops_forget_base`), and an untracked one would
+       stay named after its block is gone, for whatever lands at that base. */
     if (s && ptr_ok(src) && ptr_ok(sr) &&
         sr[0] >= 0 && sr[1] >= 0 && sr[0] <= sr[2] && sr[1] <= sr[3] &&
-        sr[2] < src[CTX_W] && sr[3] < src[CTX_H]) {
+        sr[2] < src[CTX_W] && sr[3] < src[CTX_H] && surf_of_ctx(src)) {
         int sl = sr[0], st = sr[1];
-        surf_of_ctx(src);                         /* the source is a surface too */
         l = rc[0]; t = rc[1];
         r = l + (sr[2] - sr[0]); b = t + (sr[3] - sr[1]);
         if (l < 0) { sl -= l; l = 0; }
@@ -696,10 +709,9 @@ static int __cdecl before_free(void* e)
    that answers a question about the value, not about the memory — but this:
    the table entry cannot outlive the block it names.
 
-   Every destination this file records is a surface object from
-   SurfaceCreateNamed 0x4C69F0, which asks MEM_Alloc 0x4D83B0 for `w*h+0x30`
-   bytes (0x4C6A01..0x4C6A04) and points the object's base field at
-   `block+0x30` (0x4C6A0E/0x4C6A14): ONE allocation, header and pixels. The
+   Every destination this file records is ONE allocation, header and pixels:
+   a surface object from SurfaceCreateNamed 0x4C69F0 or a frame from 0x4B8DA0 /
+   0x4B8E00, whose block `surf_dies_with` derives from the base. The
    block can only be released through this function — 0x4D85A0 is the only
    caller of the allocator's own free 0x4D85B0, and all 363 sites that free
    anything in the engine call it, SurfaceFree 0x4C6AC0 included (0x4C6ACF).
@@ -737,8 +749,8 @@ static int __cdecl before_memfree(void* e)
     int i;
     if (!p) return 0;
     if (!on_game_thread()) { surf_free_offthread(p); return 0; }
-    for (i = 0; i < s_nsurf; i++) {
-        if (s_surf[i].owner != p) continue;   /* owner == base - 0x30 */
+    for (i = 0; i < s_nsurf; ) {          /* swap-remove: re-test slot i */
+        if (!surf_dies_with(&s_surf[i], p)) { i++; continue; }
         if (s_trace) {
             char b[220];
             _snprintf(b, sizeof b, "gui trace: MEM_Free surface %08X %dx%d from %08X",
@@ -746,7 +758,6 @@ static int __cdecl before_memfree(void* e)
             glog(b);
         }
         surf_drop(i);
-        return 0;
     }
     return 0;
 }
