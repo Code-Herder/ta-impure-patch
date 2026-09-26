@@ -1187,7 +1187,8 @@ whose findings were acted on; merged with main after B5 landed at `c01f6c6`). Wh
 and where it differs from the plan below:
 
 - **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (nine and three
-  rows: on its own branch, 173 sites in the raised build and 47 in the stock-limits build, both MEASURED at launch),
+  rows: on its own branch, 173 sites in the raised build and 47 in the stock-limits build; merged
+  with B1–B5, 224 and 99; all MEASURED at launch),
   and the three local fixes, each checked and skipped alone.
   The engine map's *The wind*, *A yardmap parsed past its string*, *The saved-game loader's order
   fallback*, *The stockpile bar's divide* and *A range circle of radius 1* have the disassembly.
@@ -1276,6 +1277,31 @@ and where it differs from the plan below:
   `SetSessionDesc` the engine makes, the battle room's included, goes through the one site the
   wrapper replaces. The wrapper's replacement and withholding were measured only at 0: nothing
   differed and nothing was withheld.
+- **Merged with B1–B5** (`2fc6528`: main `c01f6c6` merged at `38e2005`, then the last review's
+  lows). `ddraw.dll` md5 `08e0c4530e71235b709a1af8f050580b` and `ddraw-stocklimits.dll`
+  `c22ba59a2928d94e4682822a08bc305e`, both warning-free. The raised build reads `limits: installed
+  224 sites` and the stock-limits build `the simulation fixes' 99 sites installed`, B5's 212 and 87
+  plus the wind's and the yardmaps' twelve rows; in both, each of the twenty-eight fixes reads
+  `ARMED` or in the fail-closed table (the weapon IDs, in the raised build, with the raised limits)
+  and none is skipped, `tagpu_wirecheck.on` runs the wire's 33 cases, the stale hits' 23 and the
+  ghost's 21 with 0 failed, and the stubs take 4 208 bytes in two pages (raised) and 3 856 in one
+  (stock-limits). A skirmish on Town & Country seeds from the counter (game mode 2). Two peers on
+  Town & Country (`tools/mp_lobby.sh`; `limits-tier2-p0` applied on the host, `-p1` on the
+  joiner, and 512 of each army ordered onto the other): both seeded from the session
+  `{751C2AC8-58DC-4889-912B-2C36A717020F}` and the map's `0x29FE9EA5`, seed `0xDAD824C4D2EA38BC`,
+  the engine's copy agreeing; at the seed the host had made 6 `SetSessionDesc` calls and the
+  joiner 1, and by the end 7 and 3, none over another GUID and none withheld. The fight ended the
+  game at GameTime 2715 on the host and 2705 on the joiner: the joiner's commander died and
+  `MultiCommanderDeath` took its army. So the peers were compared at the level end, where the sim
+  had stopped on both, not at a pause. Both read the wind's next change 2880, speed 3123, heading
+  `0xE01C`. Every `wire:` drop and `noblock` count read 0 on both (2 691 and 2 704 `0x2C` parsed).
+  In `hits:`, `bad`, `bare` and `over` read 0 on both; the host sent 1 500 `0x09` and 930 `0x0B`
+  and the joiner received 1 500 and 930, the joiner sent 1 500 and 367 and the host received
+  1 500 and 367, and every copy was exact (1 500 on each). In `ghost:` every alert field read 0;
+  the joiner, which loaded last, made the host's commander in its first catch-up tick
+  (`created slot 1501 from sender 1 (birth 0, type 34) at GameTime 1, in a catch-up tick`,
+  `now=1`) and held both commanders from its first roster; the host, in play before the joiner's
+  create arrived, made it on arrival as stock does and held both from its second roster.
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
   before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,

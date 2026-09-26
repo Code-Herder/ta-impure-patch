@@ -2522,7 +2522,8 @@ the range circle, the table's fixes
 and, in the raised build, the limits' weapon sites take theirs from `fix_code`: each stub contiguous
 inside one page, a stub that does not fit the current page opening another, and every page kept
 for the process, since a simulation fix's table either goes in whole or ends the process at the
-report. MEASURED with B3 (2026-09-25): 3 984 bytes in one page in the raised build, B3's 480 among
+report. MEASURED on the tree merged with B6 (`2fc6528`): 4 208 bytes in two pages in the raised build,
+3 856 in one in the stock-limits build. MEASURED with B3 (2026-09-25): 3 984 bytes in one page in the raised build, B3's 480 among
 them; the nested references' two stubs and the `0x0A`'s add 64 (B3's 544 by the stub lengths, 4 048 in the page, not yet read live). MEASURED on the B2 branch: 3 504 bytes in one page in the raised build (the engine fixes'
 2 992 and the weapon sites' 512); 3 120 in the stock-limits build, whose weapon-ID stubs are fixes',
 measured before the line moved to the limits install, which takes none there. A scratch build cut

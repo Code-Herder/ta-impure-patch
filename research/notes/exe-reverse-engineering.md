@@ -2529,10 +2529,12 @@ Notes on the rows:
   at the start and nothing the seed reads.
 
 In a skirmish on `23b6b8b` the log reads `seeded from the performance counter (game mode 2, not a
-network game)`, and the wind draws (next 420, speed 1385 at GameTime 281). The install line reads
-`limits: installed 173 sites`: the 161 before B6, plus the wind's nine rows and the yardmaps' three.
-The stock-limits build reads `the simulation fixes' 47 sites installed` (MEASURED on `f44b5ee`'s
-code).
+network game)`, and the wind draws (next 420, speed 1385 at GameTime 281). The wind's nine rows
+and the yardmaps' three are all B6 adds to the table: on its own branch the install line read
+`limits: installed 173 sites` (the 161 before it) and the stock-limits build `the simulation
+fixes' 47 sites installed` (`f44b5ee`'s code); merged with B1–B5 (`2fc6528`) they read
+`limits: installed 224 sites` and `the simulation fixes' 99 sites installed`, B5's 212 and 87 plus
+the same twelve (MEASURED at launch, both builds).
 
 ### A yardmap parsed past its string — `0x42CF5E` [DISASSEMBLED + MEASURED 2026-09-25]
 
