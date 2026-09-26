@@ -1647,6 +1647,55 @@ refused) and at `0x459D1D` without it. No stock unit is near: the tallest 1× fr
 (`cordev1`, [limits-evidence §10](tadr-port/limits-evidence.md#10-composite-buffer-6002-12802-0x458195)).
 Drawing such a frame in bands of at most 800 rows at those call sites would close it.
 
+### The rasterisers paint only faces that run clockwise on screen [DISASSEMBLED 2026-09-26]
+
+There is no back-face test anywhere in the unit draw: no normal, no cross product, no flag. The
+cull falls out of how every polygon rasteriser the bakes use builds its span table. Each finds
+the first vertex at the least `y` (top) and the first at the greatest (bottom), walks the chain
+from top to bottom **stepping −1** (wrapping to `n − 1`) into each row's `+0x00`, walks it again
+**stepping +1** (wrapping to 0) into `+0x04`, and then fills a row only when `+0x04 − +0x00 > 0`.
+On a face whose vertices, in index order, run clockwise on the engine's y-down screen, the +1
+chain is the right one and every row fills; wound the other way, the chains swap sides and every
+row is empty. A face seen from behind therefore paints nothing, and the same face seen from the
+front paints normally.
+
+| rasteriser | used by | −1 chain → `+0x00` | +1 chain → `+0x04` | the fill test |
+|---|---|---|---|---|
+| `0x4C8760`, the textured quad (`n = 4`, `and 3` wrap) | the unit bake `0x459830` (`0x459B96`) | `0x4C88A0` | `0x4C8A18` | `0x4C8B6F..0x4C8B78` → span `0x4C7A20` |
+| `0x4C1000`, the flat n-gon | `0x459830` (`0x459BB1`); the shadow `0x45A610` (`0x45A750`) | `0x4C1110` | `0x4C1206` | `0x4C12E2..0x4C12EB` → span `0x4C06E0` |
+| `0x4C8BB0`, the textured quad | the structure/nanoframe bake `0x459C70` (`0x45A39C`) | `0x4C8CF7` | `0x4C8EC8` | `0x4C9078..0x4C9081` → span `0x4C8020` |
+| `0x4C0C70`, the Gouraud n-gon | `0x459C70` (`0x45A3BA`) | `0x4C0D80` | `0x4C0EAA` | `0x4C0FBC..0x4C0FC5` |
+| `0x4C0820`, the wire's edge walk | the nanoframe wire `0x458FA0` | `0x4C08BB` | `0x4C0988` | `0x4C0A53..0x4C0A5C`, and again in the row writer `0x4C0A90` (`0x4C0A9E..0x4C0AAC`) |
+
+So the build-state wire outlines only the faces that face the viewer, too: "every face" in
+[build-state](build-state.html) §`0x458FA0` is every face the walk visits, and the rasteriser then
+drops the back ones.
+
+**The unit bake's face walk, `0x459A9F..0x459BCB`** (`0x459830`, per visible piece; the node is
+`[prim+0x00]`, loaded at `0x45998B`):
+
+- From face 1 when `node+0x0C` is not −1, else from face 0 (`0x459AA2..0x459AB4`) — the rule
+  `0x45A610`, `0x46BAE0` and `0x458FA0` share. Which face the loader leaves at index 0 was not
+  read. In the files, 538 of the 3 014 pieces of the 608 stock models carry a selection
+  primitive and in 302 of them it is not primitive 0; `tagpu_posebake.c`'s body and wire ranges
+  start at face 0 and only its slant range skips it, so if the loader keeps the file's order, the
+  engine skips a real face on those pieces and we draw it. [OPEN — a live read of a node's faces
+  settles it.]
+- Each face's projected vertices are copied **in index order** (`0x459AD5..0x459B02`, 12 bytes a
+  vertex from the piece's projected array at `[esp+0x154]`), so the winding the rasteriser sees is
+  the file's.
+- Flag bit 0 (`face+0x1C`) → `0x4C1000(frame, verts, face+0x04 count, face+0x00 colour)`; else a
+  face of other than 4 vertices is skipped (`0x459B1A`); else `0x4C8760(frame, texture, verts, 0)`
+  with the texture `face+0x10`, or through `0x4B7F30` / `0x4B7EE0` when flag bit 1 is set.
+
+**What modellers did with it.** Two faces over the same vertices, wound apart, make a panel with a
+different skin on each side, and only the side facing the camera is ever painted. Of the 608 stock
+models, 255 carry such a pair and 209 give the two sides a different texture or colour (1 021 such
+pairs; a scan of every `.3do` for primitives in one piece over the same vertex set with opposite
+Newell normals). ARMCV's `door1` and `door2` are one each: `noise3a`, grey plating, facing up and
+out, and `bluenoise1`, dark machinery with lamps, facing down and in — the inside of the hatch. A renderer that draws both faces of a pair gets whichever side wins
+the depth tie (`gpu-status.md` §2.98).
+
 ### A builder's build list, `TEMP UTYPE LIST` — `0x42DA58`, `0x42DAC7`, `0x42BEAF..0x42BED3` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The list.** A builder's `canbuild%d` keys in `gamedata\sidedata.tdf`'s `[CANBUILD]` section are read

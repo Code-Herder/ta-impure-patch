@@ -3782,6 +3782,15 @@ every eye reader. The register, which lists every one, is [binary patches](binar
 | The stockpile bar `0x439D20` divides by the slot weapon's reload time with the slot index unbounded and the divisor untested (`0x439D41`) | ● done 2026-09-25 (B6) | a slot index above 2, a NULL weapon or a zero reload draws no bar. Not run: every stock stockpile weapon's `reloadtime` is 120 to 180, so it rests on the disassembly |
 | `DrawRangeCircle 0x438EA0` divides by zero segments for a radius of 1 (`0x438EDE`) | ● done 2026-09-25 (B6) | N = 0 draws no circle and no label. Not run: no stock unit has a range of 1 and the `ShowRanges` cheat could not be typed under injected input, so it rests on the disassembly |
 
+## Classic parity fixes (2026-09-26)
+
+Places where our Vulkan passes drew something the engine never does, found against the GDI
+backend (`tagpu_gdi.on`), which presents the engine's own frame.
+
+| Fix | Status | Result |
+|---|---|---|
+| Unit faces seen from behind were drawn: the body and ghost pipelines culled nothing, while every engine rasteriser paints only faces that run clockwise on screen ([engine map](exe-reverse-engineering.html), *The rasterisers paint only faces that run clockwise on screen*) | ● landed on local main 2026-09-26 — [GPU status](gpu-status.html) §2.98 | against GDI at 1× on four ARMCVs, the closed hatches show the outside plating with the change and the inside machinery without it; 209 of 608 stock models close a panel with two faces wound apart and skinned apart. **Not covered:** the nanoframe wire still outlines faces seen from behind (the engine's wire walk drops them); only ARMCV and one nanoframe were compared; whether the engine's face-0 skip meets the selection primitive or a real face is open |
+
 ## Shipping — the build people can download (2026-09-08)
 
 Until the game has the render options screen (**Phase F / G18** above; [renderers](renderers.html)

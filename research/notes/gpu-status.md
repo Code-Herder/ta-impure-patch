@@ -19045,3 +19045,53 @@ unit's `E` as saved, and only the loud unit's dot blinks.
 
 **Not covered.** The attack cursor's in-range answer for a keyed weapon was not seen: the AI flies
 its aircraft away. It follows from the cursor calling `0x49ABB0` itself.
+
+### 2.98 Unit faces seen from behind are not drawn (`tagpu_vk_unit.c` `build_body_pipeline`)
+
+**What it is.** The unit body pipeline `s_pipeBody` and the build ghosts' `s_pipeGhost` cull back
+faces: `VK_CULL_MODE_BACK_BIT`, front face `VK_FRONT_FACE_CLOCKWISE`. No hook, no engine read or
+write, no shader change.
+
+**Why the engine is the rule.** Every rasteriser the unit bakes use fills a row only when the
+chain it walked forwards lies right of the one it walked backwards, so a face that does not run
+clockwise on the engine's y-down screen paints nothing ([engine map](exe-reverse-engineering.html),
+*The rasterisers paint only faces that run clockwise on screen*). Stock models rely on it: 209 of
+608 close a panel with two faces over the same vertices, wound apart and skinned apart. With both
+drawn, the depth tie chose the side, and ARMCV's closed hatches showed their inside machinery
+instead of the outside plating.
+
+**Why clockwise is the right sign, and what keeps it right.** Nothing between the engine's screen
+and the framebuffer reverses a winding: the bake emits each face's fan `(i0, ik, ik+1)` in index
+order (`pb_walk`), as `0x459830` copies the face (`0x459AD5`); the pose is rotations only, and the
+vertex stage (`tagpu_posedraw.c`) projects as the engine does, `px = x`, `py = −z − y/2`, then
+scales by the zoom about a centre and by `ss` through the viewport, both positive; and `record_stage`'s
+viewport keeps the engine's y growing downward ("NO Y FLIP"). In Vulkan's area rule
+(`a = −½ Σ (xᵢ·yᵢ₊₁ − xᵢ₊₁·yᵢ)` in framebuffer coordinates) a clockwise face on a y-down framebuffer
+has negative area, which `VK_FRONT_FACE_CLOCKWISE` keeps. **A future change that flips the
+viewport, mirrors a piece matrix or reverses the fan must flip `frontFace` with it**; the symptom
+of a wrong sign is every hull drawn inside out.
+
+**What stays unculled, and why.** The effects models' `s_pipeFx` and the nanoframe wire's
+`s_pipeWire` are built from the same create-info and reset `cullMode` to NONE after the ghost: a
+run is a rectangle and a wire record is a band, and neither's winding says anything about a face.
+The shadow pipelines (`build_shadow_pipelines`, `s_pipeCast`) keep their own NONE for their own
+stated reasons.
+
+**Measured 2026-09-26** on one scenario (Two Continents, 1024×768, `ss=2`, the play arm set, a
+private Xvfb with the GPU presenting): four ARMCVs, one finishing an ARMFUS nanoframe. Against the
+GDI backend (`tagpu_gdi.on`) at 1×, the three idle ARMCVs' hatches match GDI with the change —
+grey plating — and did not without it (the dark inside skin on all three); no hull renders inside
+out; the building ARMCV's open hatches look the same in all three runs.
+
+**Not covered.**
+
+- Only ARMCV and one nanoframe were looked at. Other units, wrecks, ghosts and Classic++ were not
+  compared against GDI; by the argument above they change only where a face is seen from behind.
+- **The nanoframe wire still outlines faces seen from behind.** The engine's wire walk `0x4C0820`
+  drops them like the fills do; ours draws every face's edges and relies on the body's depth, which
+  hides them behind a closed hull but not on a single-sided face seen from behind. Not new with this
+  change. Closing it needs each wire record to carry its face's winding (a third vertex) so the
+  wire's vertex stage can drop the edges of back faces.
+- Whether the engine's face-0 skip (`0x459AA2`) meets the file's selection primitive or a real face
+  is open (engine map, the same section); `tagpu_posebake.c` keeps face 0 in the body and wire
+  ranges.

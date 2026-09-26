@@ -169,9 +169,12 @@ static int pb_walk(const char* const* nd, int nparts, int range,
         if (!ptr_ok(rv) || IsBadReadPtr(rv, (SIZE_T)nvert * 12)) { if (st) st->badNode++; continue; }
         if (nface <= 0 || nface > 512 || !ptr_ok(faces)) continue;
         if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) { if (st) st->badNode++; continue; }
-        /* the slant raster skips face 0 when the node carries a selection
-           primitive (0x45A610's rule); the body raster does not (skipping it
-           is also the effects draw's rule, 0x46BAE0, not a unit body's) */
+        /* the engine skips face 0 when the node carries a selection primitive
+           in every walk -- the body bake 0x459830 (0x459AA2), the slant
+           0x45A610, the wire 0x458FA0 -- but only the slant range skips it
+           here. Which face the loader leaves at index 0 is not measured
+           (exe-reverse-engineering.md, "The rasterisers paint only faces that
+           run clockwise on screen"), so the body and wire ranges keep it. */
         j0 = (range == TAGPU_PB_SLANT && *(const int*)(n + N_SELPRIM) != -1) ? 1 : 0;
         for (j = j0; j < nface; j++) {
             const char* fa = faces + j * FACE_STRIDE;

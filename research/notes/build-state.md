@@ -247,7 +247,11 @@ skipped, any vertex count, no cache/shade filter) builds the screen-space polygo
 colourByte)`:
 
 - `0x4C0820` edge-walks the polygon (screen-space left/right x + interpolated
-  depth per scanline) and calls `0x4C0A90` per scanline.
+  depth per scanline) and calls `0x4C0A90` per scanline — only where right minus
+  left is positive (`0x4C0A53`), so a face that does not run clockwise on screen,
+  one seen from behind, is not outlined at all: the wire outlines the faces
+  toward the viewer ([engine map](exe-reverse-engineering.html), *The rasterisers
+  paint only faces that run clockwise on screen*).
 - `0x4C0A90` draws **only the two edge pixels** of the scanline: for each, if the
   depth plane exists, `if (plane[px] <= edgeDepth) { colour[px] = wireColour;
   plane[px] = edgeDepth; }` — depth-tested *and depth-writing* (ties pass, so
