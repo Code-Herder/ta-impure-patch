@@ -943,35 +943,97 @@ int tagpu_datakeys_fire_gate(char* u, int idx, const char* w, const void* slot)
 /* =========================================================================
    5. nomapweaponalert: the silence of harmless weather (C2)
    =========================================================================
-   A weather hit -- no attacker, a weapon kind -- from the level's meteor
-   weapon, when that weapon carries the key and its default damage is 0, is
-   applied exactly as stock applies it and says nothing about it: no
+   A weather hit -- a projectile with no attacker whose weapon carries the key
+   and has default damage 0 -- is applied exactly as stock applies it and
+   says nothing about it: no
    "under attack" notification (its text and its sound), no blink of the hit
    unit's minimap dot, and no minimap dot for the projectile. DISPLAY ONLY:
    every sim write of the hit stays -- the recently-hit counter +0xFA, the kind
    +0xF5, the listeners' event, the remote owner's 0x0B. Each part below is
    skip-and-log and rests only on the sites it names.
 
-   THE DECISION, harmless_weather, reads the hit record 0x489CE0 is applying
-   (edi there: +3 the attacker's u16 id, +8 the kind) and the level's meteor
-   weapon [0x512328] -- bounded as a weapon record before its default damage
-   (+0xD4, a WORD: 0x499CE3, 0x42EFA9, 0x42F326) is read. Attacker-less
-   weapon-kind records come only from meteor projectiles, and a level has one
-   meteor weapon, so a hit computed here and one received as a 0x0B from a
-   peer answer alike: 0x489CE0 applies both. */
+   THE DECISION, harmless_weather, is about the hit record 0x489CE0 is
+   applying (edi there: +3 the attacker's u16 id, +5 the amount, +8 the
+   kind). The record names no weapon, and a weather stone is not the only
+   attacker-less weapon hit: a unit's death explosion (0x49B000 zeroes the
+   projectile's attacker) and the fire spreading from a burning feature
+   (0x49A0C0) make them too. So the answer comes from where the weapon is
+   known:
+   - A record computed HERE: every weapon-kind hit comes from one call,
+     0x489BB0 at 0x499E37 in the damage function 0x499CD0, whose projectile
+     is in hand. weather_send frames that call with the projectile's own
+     weapon's answer; 0x489BB0 builds the record on its own stack and applies
+     it at 0x489C89, where local_apply pins the answer to that record's
+     address. A record at that address is this hit; nothing else is.
+   - A record RECEIVED as a 0x0B from a peer (the dispatcher's case,
+     0x455412) carries no weapon, so it is harmless only when nothing was
+     lost: no attacker, a weapon kind, amount 0, and the level's meteor weapon
+     [0x512328] keyed with default damage 0. A received weather hit with a
+     per-type damage alerts; a received explosion or fire never goes silent.
+   Every weapon pointer is bounded as a record of the weapon array (the key
+   store's index) before its default damage (+0xD4, a WORD: 0x499CE3,
+   0x42EFA9, 0x42F326) is read. */
 
 #define VA_METEOR_WEAPON 0x00512328u
 #define WF_METEOR        0x20u       /* weapon +0x111 bit 5                 */
 #define WF_NORADAR       0x40u       /* bit 6: its one reader is the dot, 0x467206 */
 #define HIT_FA           0xF0u       /* what 0x467950 stores in +0xFA       */
 
+static int weather_weapon(const char* w)
+{
+    return (tagpu_datakeys_wkey(w) & TAGPU_WK_NOMAPALERT) && *(const short*)(w + 0xD4) == 0;
+}
+
+/* GAME thread only, like every hit. s_armed is weather_send's answer from its
+   set to the next local apply, which takes it; nothing else can run between
+   them (0x489BB0 reaches 0x489C89 on every path, calling only the arithmetic
+   helper 0x4E43D0 first), and weather_send zeroes it again on return. */
+static int s_armed;
+static const unsigned char* s_localRec;   /* the record 0x489C89 is applying, or NULL */
+static int s_localWeather;                /* ... and its answer */
+static int s_localOn;                     /* both local sites landed */
+
 static int harmless_weather(const unsigned char* rec)
 {
-    const char* w;
     unsigned char kind = rec[8];
+    if (s_localOn && rec == s_localRec) return s_localWeather;
     if (*(const unsigned short*)(rec + 3) != 0 || (kind != 1 && kind != 2)) return 0;
-    w = *(const char* const*)VA_METEOR_WEAPON;
-    return (tagpu_datakeys_wkey(w) & TAGPU_WK_NOMAPALERT) && *(const short*)(w + 0xD4) == 0;
+    if (*(const unsigned short*)(rec + 5) != 0) return 0;
+    return weather_weapon(*(const char* const*)VA_METEOR_WEAPON);
+}
+
+typedef int (__stdcall *PFN_HitSend)(char* attacker, char* victim, int amount, int kind, int angle);
+#define E_HitSend ((PFN_HitSend)0x00489BB0u)
+typedef int (__stdcall *PFN_Apply)(const unsigned char* rec);
+#define E_Apply   ((PFN_Apply)0x00489CE0u)
+
+/* 0x499E37's call of 0x489BB0(attacker, victim, amount, kind, angle), `ret
+   0x14`, through a stub that adds the projectile the damage function holds
+   ([esp+0x30] at the call; the engine reads its weapon, [proj], at 0x499E1E). */
+static int __stdcall weather_send(const char* const* proj, char* attacker, char* victim,
+                                  int amount, int kind, int angle)
+{
+    int r;
+    s_armed = !attacker && weather_weapon(*proj);
+    r = E_HitSend(attacker, victim, amount, kind, angle);
+    s_armed = 0;
+    return r;
+}
+
+/* 0x489C89's call of 0x489CE0(rec), `ret 4`: the local apply of the record
+   0x489BB0 just built. Saving and restoring makes a nested local apply hand
+   the outer record back its own answer. */
+static int __stdcall local_apply(const unsigned char* rec)
+{
+    const unsigned char* prevRec = s_localRec;
+    int prevWeather = s_localWeather, r;
+    s_localRec = rec;
+    s_localWeather = s_armed;
+    s_armed = 0;
+    r = E_Apply(rec);
+    s_localRec = prevRec;
+    s_localWeather = prevWeather;
+    return r;
 }
 
 static unsigned s_evSilenced, s_evQuietHit, s_evBlink, s_evNoRadar;
@@ -1136,7 +1198,7 @@ static int __cdecl weapon_closed(void* esp)
 /* --- install -------------------------------------------------------------------
    Three call sites become calls of ours, byte-matched against the retail call
    first; no branch in .text lands inside any of them (rel8/rel32 scan). The
-   0x489CE0 two go through a 4-byte stub that adds the record: `pop eax; push
+   0x489CE0 two go through an 8-byte stub that adds the record: `pop eax; push
    edi; push eax; jmp fn`, so fn(rec, <the callee's own arguments>) returns
    with the callee's `ret` plus 4. Neither 0x489D93 nor 0x489DA7 reads eax,
    ecx or edx before writing it. The frame lands before the notification's
@@ -1252,9 +1314,42 @@ static int save_install(void)
     return 1;
 }
 
+#define VA_SEND_CALL   0x00499E37u
+#define VA_APPLY_CALL  0x00489C89u
+static const unsigned char SEND_CALL_WAS[5]  = { 0xE8, 0x74, 0xFD, 0xFE, 0xFF };  /* call 0x489BB0 */
+static const unsigned char APPLY_CALL_WAS[5] = { 0xE8, 0x52, 0x00, 0x00, 0x00 };  /* call 0x489CE0 */
+
+/* The send's frame lands first and the apply second: without the apply, the
+   send's answer is taken by nothing and every record is judged as received
+   (never silencing a loss); s_localOn is set only once both have. */
+static int local_install(void)
+{
+    unsigned char *s, *p;
+    if (!site_is(VA_SEND_CALL, SEND_CALL_WAS, 5) || !site_is(VA_APPLY_CALL, APPLY_CALL_WAS, 5)) return 0;
+    if (!(s = tagpu_detour_stub())) return 0;
+    p = s;
+    *p++ = 0x58;                                    /* pop eax: the return  */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x30; /* push [esp+0x30]: the projectile */
+    *p++ = 0x50;                                    /* push eax             */
+    *p++ = 0xE9; tagpu_detour_rel(p, (unsigned)(size_t)weather_send);
+    if (!call_to(VA_SEND_CALL, s)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    if (!call_to(VA_APPLY_CALL, (const void*)local_apply)) return 0;
+    s_localOn = 1;
+    return 1;
+}
+
 static void alert_install(void)
 {
     unsigned char *frame, *mark;
+    if (local_install())
+        dlog("nomapweaponalert: a hit computed here is judged by its own weapon (0x499E37, 0x489C89)");
+    else
+        dlog("nomapweaponalert: a hit computed here is NOT judged by its weapon: the bytes at "
+             "0x499E37 or 0x489C89 are not the retail calls, or a write failed; every hit is "
+             "judged as a received one (harmless only when it did no damage)");
     if (!site_is(VA_HIT_CALL, HIT_CALL_WAS, 5) || !site_is(VA_ALERT_CALL, ALERT_CALL_WAS, 5)) {
         dlog("nomapweaponalert: the under-attack silence NOT installed: the bytes at 0x489DA2 or "
              "0x4071D8 are not the retail calls; harmless weather alerts as stock");

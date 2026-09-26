@@ -5417,7 +5417,7 @@ static int fix_los_local(void)
      (unit, target, idx), `ret 0xC`, 11 callers: wk_check takes its place with the same
      signature, asks stock's body through a trampoline (or the extra-weapons module's for a
      slot past 2 while it is armed) and filters the verdict by the slot's weapon. It is the
-     entry's one owner: the extra-weapons module no longer hooks it, and asks its own
+     entry's one owner: the extra-weapons module does not hook it, and asks its own
      verdicts through it.
    - 0x43F1D4, the order action's unit branch (`mov eax,[edi+0x110]`; reached only from
      0x43F17C, on its first byte): edi the target, ebp the shooter. The branch's decision is

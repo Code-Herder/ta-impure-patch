@@ -257,10 +257,14 @@ commit can change.
   - `0x42E310`: the store's clear.
   The extra-weapons module's C paths take the same verdict and gate for slots past 2
   ([extra weapons](../extra-weapons.html)).
-- **`nomapweaponalert`** (section 5, skip-and-log, display only), decided from the hit record
-  `0x489CE0` applies, local or received: no attacker, a weapon kind, and the level's meteor weapon
-  `[0x512328]` carrying the key with default damage 0. The hit is applied exactly as stock applies
-  it. Then:
+- **`nomapweaponalert`** (section 5, skip-and-log, display only). A hit is harmless weather when
+  its projectile has no attacker and its weapon carries the key with default damage 0. A hit
+  computed here is judged by that weapon: a frame around the damage function's one send of a
+  weapon hit (`0x499E37`) holds the answer, and the local apply (`0x489C89`) pins it to the record
+  it applies. A hit received from a peer names no weapon, so it is harmless only when it did no
+  damage: no attacker, a weapon kind, amount 0, and the level's meteor weapon `[0x512328]` keyed.
+  A death explosion or a burning feature, the other attacker-less weapon hits, always alerts. The
+  hit is applied exactly as stock applies it. Then:
   - no "Under Attack", at its one site `0x4071D8` and in the extra-weapons module's retaliation,
     through a frame around `0x406F80` (`0x489DA2`) that saves and restores its answer;
   - no blink of the hit unit's dot (`0x489D8E`, `0x466EB9`), for exactly the part of `+0xFA` that
@@ -314,6 +318,13 @@ commit can change.
     no text, against "Under Attack" on both under the control. A temporary counter showed that
     each peer's harmless hits on its own units arrive both ways, local (`0x489C89`) and received
     as a `0x0B` (the dispatcher's case, `0x455412`). The counter was removed.
+    **What stays loud** (the same map, a `CORFUS` of the AI's at 1 % health among the collectors,
+    finished by a Peewee): its `ATOMIC_BLAST` and a collector's `SMALL_BUILDINGEX`, attacker-less
+    like the stones, were judged loud (a temporary trace of every attacker-less record, since
+    removed), and "Solar Collector: Under Attack" came up at once; the stones around them stayed
+    silent. **Two peers, the rule for received hits**: a received stone with amount 0 was silent on
+    both peers, and a received per-type hit on a storage (amounts 3 and 5) alerted, while the same
+    hit computed locally stayed silent.
     **A save across the hail** (`WK Hail`, with a Peewee of the player's shooting one solar
     collector): the game was saved while three collectors held harmless hits (`+0xFA` 70, 220 and
     231, `E` 240 each) and the Peewee's target a loud one (`+0xFA` 239, `E` 0), and loaded back. A
@@ -344,10 +355,11 @@ commit can change.
 - **Section B, as B7, measured first:** a hit above 32 767 wrapping the HP word; kill-outright
   sparing a veteran above 24 000 HP (a vet-5 `CORKROG` survives its own self-destruct, INF); the
   NULL read at `0x4673B1` for an attacker-less targetable projectile out of sight; whether a meteor
-  hits once per peer in a network game. For that last one, C2's two-peer run found that each peer
+  hits once per peer in a network game. For that last one, C2's two-peer runs found that each peer
   applies attacker-less meteor hits on its own units both locally (`0x489C89`) and as `0x0B`s
-  received from the other peer (`0x455412`); how many applications one stone makes was not
-  counted. [B's plan](sim-fixes.md) does not list them yet; this is
+  received from the other peer (`0x455412`). On 2026-09-26 the owner of two storages applied each
+  per-type amount (3 and 5) twice from its own computation and twice received, one stone's hit
+  twice over [INFERRED from the matching counts, not a per-stone trace]. [B's plan](sim-fixes.md) does not list them yet; this is
   their record until it does.
 
 ## Open questions

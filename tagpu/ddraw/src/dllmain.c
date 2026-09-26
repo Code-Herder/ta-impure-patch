@@ -222,7 +222,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            extra-weapons module's own observers whenever that module installed
            them; the extra-weapons loader site is 0x42CEF2. They read and
            write nothing into the engine.
-           nomapweaponalert: the calls at 0x489DA2 (0x406F80, which the
+           nomapweaponalert: the damage function's send 0x499E37 and the
+           local apply 0x489C89, the calls at 0x489DA2 (0x406F80, which the
            extra-weapons module hooks at its entry, so the call reaches it
            either way), 0x4071D8 and 0x489D8E, the blink read at 0x466EB9, the
            unit saver's store 0x48797B and the restore's 0x4872CC, and an

@@ -2626,9 +2626,10 @@ back equal to the retail exe, and the atlas again stored row 1 and lit 111 cells
 Every address the weapon keys and `nomapweaponalert` touch or read
 ([data keys, C2 as built](tadr-port/data-keys.html#c2-as-built); the hooks are in
 [gpu-status §2.96](gpu-status.html)). A rel8/rel32 scan of `.text` finds no branch landing
-inside any of the nine sites' replaced bytes (`0x42E311`–`15`, `0x49ABB1`–`B6`, `0x43F1D5`–`D9`,
+inside any of the fourteen sites' replaced bytes (`0x42E311`–`15`, `0x49ABB1`–`B6`, `0x43F1D5`–`D9`,
 `0x49B9EC`–`F1`, `0x49E1FE`–`E202`, `0x489D8F`–`92`, `0x489DA3`–`A6`, `0x4071D9`–`DC`,
-`0x466EBA`–`BE`, `0x49E011`–`19`).
+`0x466EBA`–`BE`, `0x49E011`–`19`, `0x48797C`–`82`, `0x4872CD`–`D1`, `0x499E38`–`3B`,
+`0x489C8A`–`8D`), and no absolute pointer in the image names one.
 
 ### The can-engage test `0x49ABB0(unit, target, idx)`
 
@@ -2639,7 +2640,7 @@ callers: acquisition `0x40B914`, retaliation `0x4070D0`/`0x407125`/`0x40714F`, t
 - **Water path** (weapon `+0x111` bit 16) has exactly three exits: `0x49AC0F` returns 0 for a target
   that is not a `floater` (def `+0x241` bit 19) with `y` (`+0x70`) above the sea; `0x49AC3B` returns
   0 for a `canhover` target (bit 12) with `y + height/2` (def `+0x170`) above it; and the range test
-  `0x49AC47..0x49ACA2`, the high words of `dx²` and `dz²` (16.16 positions `+0x6A`, `+0x6E`) summed
+  `0x49AC47..0x49ACA2`, the high words of `dx²` and `dz²` (16.16 positions `+0x6A`, `+0x72`) summed
   against range² (weapon `+0xDC`). "Above" is `y > sea`, so a building standing at the sea level
   (a spawn at `height` 75 on a sea of 75) is not a surface target.
 - **Other weapons**: the shooter's top at or below the sea returns 0 (`0x49ACD4`), the target's
@@ -2710,13 +2711,31 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   `0x489DA7` (`0x489D93`); otherwise `push amount; push victim; push attacker; call 0x406F80` at
   `0x489DA2`. From `0x489D93` and `0x489DA7` on, nothing reads `eax`, `ecx` or `edx` before writing
   them. MEASURED on two peers: attacker-less meteor hits reach it by both callers.
+- **`0x489BB0(attacker, victim, amount, kind, angle)`**, `ret 0x14`, the hit's sender: it builds
+  the 9-byte record on its own stack (`[esp+0xC]`: `+0` `0x0B`, `+1` the victim's id, `+3` the
+  attacker's or 0, `+5` the amount after armour, `+7` the angle, `+8` the kind), applies it
+  locally with `push edx; call 0x489CE0` at `0x489C89`, then sends it to a remote victim's owner.
+  Before `0x489C89` it calls only the arithmetic helper `0x4E43D0` (`0x489BEC`) and has no exit.
+  Every weapon-kind hit comes from one of its twelve calls, **`0x499E37`** in the damage function
+  `0x499CD0`: attacker `[proj+0x52]` (`0x499D9D`), kind `1 + weapon bit 7` (`0x499E1E..0x499E32`,
+  where `[proj]`, the weapon, is read), the angle relative to the victim's heading; the
+  projectile is at `[esp+0x30]` at the call. After both calls nothing reads `eax`, `ecx` or `edx`
+  before writing them (`0x499E3C`, `0x489C8E`).
+- **Attacker-less weapon hits** come from three sources: a meteor's projectile (the pool's only
+  attacker-less kind), a unit's death explosion `0x49B000`, which zeroes its stack projectile's
+  `+0x52` (`0x49B03E`), and the fire spread `0x49A0C0` (a zeroed stack projectile). The record
+  cannot tell them apart. MEASURED 2026-09-26: a `CORFUS`'s `ATOMIC_BLAST` and a solar
+  collector's `SMALL_BUILDINGEX` reach `0x499E37` with attacker NULL and kind 1. In a two-peer
+  game each peer computes a stone's hit on every unit itself, and the victim's owner also
+  receives the other peer's copy.
 - **`0x467950(unit)`**: `mov byte [unit+0xFA],0xF0`, `ret 4`; its one caller is `0x489D8E`.
 - **`0x406F80(attacker, victim, amount)`**, `ret 0xC`; its one caller is `0x489DA2`. With no
   attacker it jumps to the notification (`0x406FFC`), which runs when `0x438BE0(victim) & 0x80` is
   clear and `+0xF4 ≠ +0xFF` or `+0xF5 == 1` (`0x4071B0..0x4071D1`). `+0xF5` still holds the previous
-  hit's kind there (stored at `0x489DAC`, after the call). `+0xF4` is written only by a hit with an
-  attacker (`0x489DC0`), and a unit the scenario applier spawned reads 10 there, so its first
-  hit already alerts, attacker or not. The call is `0x47F850(victim, 2, 0)` at `0x4071D8`.
+  hit's kind there (stored at `0x489DAC`, after the call). `+0xF4` is written by the create
+  (`0x485C83`, 10), by a hit with an attacker (`0x489DC0`), at `0x486787`, and by the saved game's
+  restore (`0x48722C`); a fresh unit reads 10 there, so its first hit already alerts, attacker or
+  not. The call is `0x47F850(victim, 2, 0)` at `0x4071D8`.
 - **`0x47F850(unit, index, text)`**, `ret 0xC`: requires the unit off screen (`0x48BCB0` over the
   on-screen list `main+0x1435F`, count `+0x14367`), owned by `main+0x2A43`, `+0x110` bit 28 set and
   bit 14 clear; then `0x47FAD0` on the queue `[0x51E68C]`. The queue: 8 entries of 17 bytes
@@ -2744,11 +2763,15 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   game's save routine, and walks the unit array from `main+0x14357` to `main+0x1435B` in `0x118`
   steps, saving every unit with `+0x110` bit 28 (alive; `0x487701`): one record of `0xB8` bytes
   built at `[esp+0x18]` and written whole by `0x4B4CF0` (`0x487A9E`), then the count. The restore
-  `0x487080(id, file)` (`ret 8`) reads records by index into its own `[esp+0x18]` (`0x4B4C80` at
-  `0x48711D`, refusing any length but `0xB8`) until the id word `+0x21` matches, creates the unit
-  (`0x485F50`) and recurses for the two unit ids at `+0x89` and `+0x8B` (`0x4871DD`,
-  `0x48720D`). Its caller `0x486FD0` (at `0x432672` in the game-load routine `0x432610`, on the
-  LOADER thread) reads every record but uses only `+0x21`, and accepts a record of `0xB6` bytes.
+  `0x487080(id, file)` (`ret 8`) returns at once when the unit at that id is already alive
+  (`0x4870C3`); otherwise it reads records by index into its own `[esp+0x18]` (`0x4B4C80` at
+  `0x48711D`, refusing any length but `0xB8`) until the id word `+0x21` matches, and creates the
+  unit (`0x485F50`). Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
+  (at `0x48705B`; itself at `0x432672` in the game-load routine `0x432610`, on the LOADER thread),
+  its own recursion for the ids at `+0x89` and `+0x8B` (`0x4871DD`, `0x48720D`), and the order
+  restore `0x43A420` (called at `0x487594`) with its helpers `0x44DE80` and `0x44E7D0` (`0x43A5ED`,
+  `0x44DEE8`, `0x44DEF6`, `0x44E816`). `0x486FD0` reads every record but uses only `+0x21`, and
+  accepts a record of `0xB6` bytes.
   Offsets in the record, as the two sides use them: `+0xAB` the unit's `+0xF5`, `+0xAC` `+0xF6`,
   `+0xAD` `+0xF7`, `+0xAE` the WORD `+0xBA`, `+0xB0` `+0xF8`, **`+0xB1` `+0xFA`** (out at `0x487996`,
   in at `0x4872CC`), **`+0xB2` a WORD, `movzx` of the byte `+0x10E`** (`0x48797B`), of which the

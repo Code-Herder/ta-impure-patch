@@ -573,8 +573,9 @@ with the measurement that would settle it.
 
 **The three findings that matter most:**
 
-1. **Stock's "map weapon" is the meteor shower, and its projectiles are the only ones with no
-   attacker.** A map's OTA schema names a `meteor=1` weapon; the shower spawns it from the sim tick
+1. **Stock's "map weapon" is the meteor shower, and its projectiles are the only pool projectiles
+   with no attacker** (a death explosion and a fire's spread detonate attacker-less projectiles of
+   their own, §0). A map's OTA schema names a `meteor=1` weapon; the shower spawns it from the sim tick
    with CRT `rand()`. The projectile initialiser gives it attacker NULL and owner index 10, and a
    receiver of its `0x0D` does the same. No stock map weapon has zero damage, so the key changes
    nothing on stock content (rule 7 holds trivially).
@@ -612,14 +613,20 @@ raises it), initialises it with `0x49C740(proj, weapon, start, 0, GameTime, 0)` 
 `main+0x2A44` bit 0 is set, broadcasts a `0x0D` (`0x49DFF6`; its `+0x1A..+0x23` are uninitialised
 stack in stock, cleared by A′3 in the raised build).
 
-**No attacker ⇔ meteor.** `0x49C740` stores the attacker at `+0x52` and its owner byte at `+0x66`;
+**No attacker ⇔ meteor, among pool projectiles.** `0x49C740` stores the attacker at `+0x52` and its owner byte at `+0x66`;
 with attacker NULL it stores `+0x52 = 0`, `+0x66 = 10` (`0x49C853..0x49C857`). Of its eight call
 sites, six pass a unit; the two that pass 0 are the meteor spawn `0x49DF7D` and the `0x0D`
 receiver's meteor branch `0x49D307`, which is taken when the message's weapon has bit 5
 (`0x49D2A6`). Nothing later writes `+0x52` in a projectile: `0x49C880`, called when a unit dies
 (`0x4867B5`), destroys that unit's projectiles with `+0x60 ≠ 0` and leaves the others' `+0x52`
 pointing at the dead slot. (The other `+0x52` writers in the image belong to other structures,
-`0x4388FA`, `0x43A2A4`…, with vtables.)
+`0x4388FA`, `0x43A2A4`…, with vtables.) **Hits are another matter**: two detonations build a
+projectile on their own stack, outside the pool, with no attacker. A unit's death explosion
+`0x49B000` stores 0 at the projectile's `+0x52` (`0x49B03E`), and the fire spread `0x49A0C0` hands
+a zeroed one to `0x49A120`, which reaches the damage function `0x499CD0` at `0x49A3F5`. So an
+attacker-less weapon-kind hit is a meteor, a death explosion or a fire. MEASURED 2026-09-26: a
+`CORFUS`'s `ATOMIC_BLAST` and a solar collector's `SMALL_BUILDINGEX` reach `0x489BB0` through
+`0x499E37` with attacker NULL.
 
 **The detonation.** `0x499EB0(proj, unit)` plays the explosion and sound, then damages only when the
 projectile's owner record `main+0x1B63 + 331·[proj+0x66]` is empty or not a remote player
@@ -769,9 +776,10 @@ stock weapon.
 - **`silent(rec)`** is true exactly when: the attacker word `rec+3` is 0; the kind `rec+8` is 1 or
   2 (the two weapon kinds `0x499CD0` passes); the amount `rec+5` is 0; and the level's meteor weapon
   `[0x512328]`, validated as a record of the weapon array (offset from the base a multiple of
-  `0x115`, index below the count), has the key's bit. Attacker-less weapon-kind records come only
-  from meteor projectiles (§0), and a level has one meteor weapon, so the record path and the
-  local path answer alike; on a received `0x0B` the record is all a receiver has, and it is enough.
+  `0x115`, index below the count), has the key's bit. The record names no weapon, and an
+  attacker-less weapon-kind record can also be a death explosion or a fire (§0), so on a received
+  `0x0B` only the amount keeps this from silencing a loss; as built, a hit computed locally is
+  judged by its own weapon instead (below).
 - **The invariant:** the silence changes only whether notification 2 is queued; every hit is
   applied exactly as stock applies it. `g_hit` is written and read only on the game thread: the
   local path runs inside the sim tick, and the dispatcher's `0x0B` case runs there in play: the
@@ -835,7 +843,19 @@ mark is its own site at `0x489D8E`, deciding from the same record. It keeps, per
 share of `+0xFA` that harmless hits alone put there, so a real hit followed by weather keeps
 blinking for its own 0xF0 ticks. `+0xFA`'s every writer is accounted for: the hit, the unit tick
 `0x48ADF0`, the create `0x485C12` and the saved game's restore `0x4872CC` (`0x4225EC` and
-`0x42E6D6` write other records). The restore writes `+0xFA` from the saved record, so the share
+`0x42E6D6` write other records). **The decision is not the record alone.** An attacker-less
+weapon-kind record can be a death explosion or a fire (§0), so the design's premise, that the
+record path and the local path answer alike, does not hold, and Q3's "the weapon's default
+damage" needs the weapon, which the record lacks. Decided 2026-09-26: a hit computed locally is
+judged by its own weapon, and a received one by its amount. Every weapon-kind hit is sent from one
+call, `0x489BB0` at `0x499E37` in the damage function `0x499CD0`, whose projectile is at
+`[esp+0x30]` there (its weapon `[proj]` is read at `0x499E1E`), and `0x489BB0` applies the record
+it builds on its own stack (`[esp+0xC]`) at `0x489C89`. So a frame around the send gives the answer
+of the projectile's weapon (no attacker, the key, default damage 0), and the apply pins it to that
+record's address. A record received as a `0x0B` is harmless only when its amount is 0 as well as
+attacker-less, a weapon kind, and the level's meteor weapon keyed: a weather hit sent by a peer
+with a per-type damage alerts, and a peer's explosion or fire never goes silent. The restore writes
+`+0xFA` from the saved record, so the share
 travels with it: the unit saver `0x4876C0` stores the record's `+0xB2` as a WORD zero-extended from
 the byte `+0x10E` (`0x48797B`), the restore reads only its low byte (`0x4872D2`), and `0x486FD0`
 reads only the id word `+0x21`, so `+0xB3` is 0 in every save stock writes and read by nothing; the
