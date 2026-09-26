@@ -16,6 +16,8 @@ PCGamingWiki), not yet runtime-confirmed on our stack. **[INFERRED]** = my readi
   (official, per-gamedir — no registry, no wine audio hacks). Switch form `-s`.
 - **Intro movies off**: don't symlink `Data/1.ZRB` and `Data/2.zrb` into the
   instance mirror — the play call is find-file-gated and skips gracefully.
+  `tacli create <i> --intro` keeps them and sets `PlayMovie` to 1 at every launch, which is
+  what plays the intro at the shell's first screen (below).
 - **Resolution**: registry `DisplaymodeWidth/Height` only (see `resolution.md`) —
   the stock exe has **no** resolution switches (`-screenwidth` is a 3.9.02-patch
   feature, absent from this binary).
@@ -251,7 +253,12 @@ Verified: with all three in place, `pactl list sink-inputs` shows **zero** TA cl
 the menu *and* in a running skirmish.
 
 Also in that key: **`PlayMovie` (REG_DWORD)** — a second intro lever alongside the ZRB
-file gate; tacli sets it to 0.
+file gate [DISASSEMBLED 2026-09-26]. The settings loader reads it into `main+0x3923D` at
+`0x430DEC`, and an absent value reads as 1. The shell's start tests it at `0x426F06` and, when it
+is non-zero, plays `1.zrb`, clears it and saves the settings, so the registry holds 0 after one
+intro. tacli writes 1 with `--intro` and 0 otherwise, at every launch. With it 0 a second flag,
+`main+0x39245`, can still play the intro ([engine map](exe-reverse-engineering.html), *The
+movie player*).
 
 ## Intro/outro movies — Data/*.zrb [BINARY-VERIFIED file gate, COMMUNITY skip]
 

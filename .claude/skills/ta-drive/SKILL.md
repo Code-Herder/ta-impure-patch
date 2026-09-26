@@ -17,7 +17,7 @@ the research notes and in `git log`, not here (*Maintaining this skill*, at the 
 | file | read it when |
 |---|---|
 | `references/levers.md` | you arm anything beyond the bench line, drive zoom or the camera, or read a `tagpu.log` heartbeat |
-| `references/measuring.md` | before any A/B, pixel diff, cross-build comparison or frame-time figure |
+| `references/measuring.md` | before any A/B, pixel diff, cross-build comparison, frame-time figure or movie |
 | `references/ui-layer.md` | the question is the HUD, the shell, the cursor, text, the minimap, HUD scale or a windowed `k` |
 | `references/modules.md` | extra weapons, the COB trace, multiplayer, many unit types (the synthetic mod), weapons past 256, the new data keys (their fixtures), the render-options screen and the GPU row, a remote Windows machine |
 
@@ -35,7 +35,7 @@ isolation), `windowed-mode.md` (display bugs), `cmdline-options.md` (every launc
    *reading* window geometry and for capture. **Never run `xrandr` against the live display**,
    never move the human's pointer, never activate windows to "test" something.
 3. **Silence is the default** (`NoDirectSound`, six registry values, no `music/`). Pass
-   `--sound` only when asked, or to measure sound on a null device (`references/measuring.md`).
+   `--sound` only when asked, or to measure sound or a movie on a null sink (`references/measuring.md`).
 4. **Clean up**: `tacli stop <name>` when done, `tacli rm <name>` when the instance has no
    further use. Every running game is a GPU client.
 5. **Rebuilt the DLL? Relaunch.** `tacli launch` copies `ddraw.dll` into the instance from

@@ -1,14 +1,14 @@
 # GL UI renderer — the plan for Phase E
 
-> **READ THIS FIRST — PHASE E's DRAWING HALF WAS DELETED 2026-09-20.** The clean cut removed
-> `tagpu_gui_surf.c`, `tagpu_vk_gui.c`, the twins, the sharp layer, the composite and their seven
-> shader programs: the engine's replayed UI twin and our own device-resolution layer reached the
-> screen through ONE quad, so removing the engine's half meant removing both
-> ([gpu-status](gpu-status.html) §2.81). The game has no UI on screen. **What survives is the
-> capture** — `tagpu_gui_hook.c`'s observers, the op stream and the census — and it survives
-> because the op stream is the engine's UI stated SEMANTICALLY, which is what the UI will be
-> rebuilt from. **Every engine fact on this page still holds and is the reason to keep it**; every
-> claim about a twin, a mirror, a layer or a composite is history.
+> **READ THIS FIRST — THE UI IS DRAWN ON THE VULKAN LANE, AND THE ENGINE'S FRAME IS NOT.** The
+> clean cut ([gpu-status](gpu-status.html) §2.81) removed every path by which TA's composed frame
+> reached the screen, and the drawing half came back the same day without it: `tagpu_gui_surf.c`
+> drains the op queue into the twins, and `tagpu_vk_gui.c` draws them and the sharp layer (cursor,
+> minimap) over the world. The twins are the UI's only picture — `LAY_FS` declares no sampler for
+> TA's surface, `PK_SEED` crosses without its bytes and `PK_PIXELS` is dropped — so whatever the
+> publisher does not observe is not on screen (§25 is the movie). `tagpu_gui.h`'s opening block is
+> the current description of the lane. **Every engine fact on this page holds**; the GL twins, the
+> composite over the engine's frame, `strict` and the stale-mirror guard of §21.2 are history.
 
 *The engine's software frame is UI only since G13b; this page is the plan for making the UI
 ours too — the side panel, the top and bottom bars, the minimap, chat and dialogs in game, and
@@ -3443,8 +3443,9 @@ luminance, flat, for eighteen seconds.
 
 `draw_layer` does not draw *over* the frame; it **replaces** it with a full-screen quad
 composed from the twin of the presented surface (§3.4). The twin is fed by the publisher,
-which observes the engine's drawing routines. **The intro Smacker writes the primary surface
-directly**, so no op ever reaches that queue: the twin keeps the bytes its seed left there —
+which observes the engine's drawing routines. **No drawing routine touches a movie frame**:
+`SmackDoFrame` decodes into the engine's offscreen and the ordinary flip presents it (§25), so no
+op ever reaches that queue: the twin keeps the bytes its seed left there —
 black, at coverage 255 — and the layer faithfully paints that stale black over a movie
 playing underneath.
 
@@ -4268,3 +4269,81 @@ previous build shows no cursor over the minimap, and this one draws it on top.
 
 **The rule for a future client of the layer**: record it before `sharp_cursor`. Anything
 recorded after the cursor covers it.
+
+## 25. The movie on the Vulkan lane — `PK_MOVIE`  [MEASURED 2026-09-26]
+
+**THE REPORT.** *"intro movie is a black screen, at least on windows machine."* Every movie was
+black on the Vulkan lane while the engine's own frame held the picture: the window's mean
+luminance was 3.3 against the golden source's 98.1, mid-intro.
+
+**WHY.** The twins are the UI's only picture (the banner), and a twin holds what the publisher
+observes. A movie frame passes no drawing routine: `SmackDoFrame` decodes it into the engine's
+offscreen and the ordinary flip `0x4C63A0` presents it ([exe map](exe-reverse-engineering.html),
+*The movie player*). So the twin kept what its seed left there, which is black.
+
+**WHAT CROSSES.** `PK_MOVIE` (`tagpu_gui_int.h`): the movie's box on the flipped surface, and the
+bytes in it. It is on the allowed side of the clean cut for `PK_ASSET`'s reason (§2, the
+loader's `bitmaps\` backdrops): the bytes are what the decoder wrote, and no pixel of the 1997
+rasteriser is in them. The drain bounds the box against the twin it lands in and mirrors it as
+`TAGPU_GUIOP_PIXELS` with its bytes, a shape the Vulkan lane already validates and uploads.
+
+**EXACT BY ORDERING, NOT BY TIMING.** `before_flip` knows a movie flip by its return address,
+`0x47C455`: the frame routine `0x47C3A0` has one call of the flip, the instruction after
+`SmackDoFrame`. At that entry the box holds the decoded frame and nothing else, since the engine
+blits its cursor inside the flip, after the observer has read the surface. The producer records the
+op and publishes it **in the same call**: a movie flip bypasses the census cadence
+(`CENSUS_MS`), and every exit that does not publish clears the op window. So the bytes are read
+at the one moment they are exact, and never at any other.
+
+**THE BOX IS DATA.** `W` and `H` come from the Smack header (`+4`, `+8`) through the movie object
+`*(main+0x38D7B)`, which the engine stores before the loop and clears after it. The header is
+alive across the flip because the engine closes the Smack only in the object's destructor, after
+the loop, and dereferences it again at the flip's own return. Both words are bounded against the
+surface before they become a box, and a box that does not fit is refused and logged once.
+
+**ONE FRAME IN FLIGHT.** Every `PK_MOVIE` carries the whole frame, so the producer skips a frame
+while the one before is still queued (`g_guiq.qTail` has not passed it). A skipped frame costs
+that frame and nothing else. Without the rule, a movie decoding faster than the drain queues about
+300 KB a flip until the arena overflows: under the harness's silence it ran unpaced, 4 658 frames
+in seconds with 41 stalls and 42 reseeds. `qTail` is the consumer's and only grows, so a stale
+read skips one frame more and never one fewer.
+
+**FOCUS.** The frame routine decodes nothing unless `GetFocus()` is the game window. The armed
+input shield answers `GetFocus` with the game window, as it answers every other input poll
+(`fake_GetFocus`, `winapi_hooks.c`), so a harness instance plays its movies without focus. With the
+shield off, the real answer passes through.
+
+**MEASURED** (Wine, the reference setup, `tacli create <i> --intro`, the intro `1.zrb`: 599
+frames, 30 fps):
+
+| what | result |
+|---|---|
+| the picture | the window shows the movie and matches the golden source except on pixels that moved between the two captures; the control DLL's window is black (3.3 against 98.1) |
+| the engine's cadence | every flip interval 30–37 ms with a real-time audio clock (449 of 449, 899 of 899), identical with the movie op off; the producer's own work under 1 ms a frame |
+| what reaches the lane | with vsync off the render thread presents once per movie flip, 60–61 presents in every 2 s window, and the movie frames drain 30–37 ms apart. 595 of 599 recorded, 4 skipped in flight, 587 mirrored into the lane |
+| the log | `gui: movie 640x480 at (0,0) on surface … -- its frames cross as SmackDoFrame's decoded bytes` at the first frame; `gui: movie ended after N flip(s): R frame(s) recorded, S skipped in flight, F refused` at the first flip that is not a movie's (the INTRO button's movies run back to back and count as one); `movie=` in the `gui:` heartbeat counts the frames mirrored |
+
+**How it was measured, and two traps.** A movie is paced by `SmackWait` off its audio track, so a
+cadence needs `--sound` into a sink that runs in real time. Wine's ALSA `null` device does not:
+its intervals scatter with the movie op on and off alike. The cadence above was taken into a
+private PulseAudio null sink. And **the reference setup's monitors were in DPMS power save**,
+under which a FIFO present is throttled to about one a second: the render thread logged 2–3
+presents per 2 s and the producer's skips climbed to 572 of 599. So the lane was measured with
+vsync off, where nothing but the game's flips paces the render thread.
+
+**NOT CLOSED.**
+
+- **The intro's first twelve frames do not show.** The engine starts `1.zrb` at the shell's first
+  screen, before the Vulkan lane is up (`vk: up in 214 ms`). The first frames are skipped in flight
+  while nothing drains (4), or drained before the lane records (8), and the lane then makes its
+  launch's one fresh start. `1.zrb` opens with a fade from black, luma 16 at frame 0 and 94 at
+  frame 12, so the movie appears part-way into its fade. Closing it means ordering the renderer's
+  bring-up before the first movie flip. A wait on the game thread is not that: the render thread's
+  bring-up can need the window's thread, so an unbounded wait can deadlock and a bounded one is a
+  timeout.
+- **Presented under FIFO with the display awake**, the lane's default, it is not measured here.
+  With vsync off the lane presents once per flip; at 60 Hz FIFO each frame should hold for two
+  blanks [INFERRED].
+- **Not run on a Windows driver**, the platform of the report. Nothing in the path is
+  platform-specific (the engine's own routine, flip and decoder), but that is an argument, not a
+  run.
