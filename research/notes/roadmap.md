@@ -3794,7 +3794,8 @@ backend (`tagpu_gdi.on`), which presents the engine's own frame.
 | The shell's map list: no highlight on the selected row, no modal dim over SKIRMISH under SELMAP, and a map preview that kept the first map picked. Each was an engine draw that crossed to the Vulkan lane as something it drops or as something it is not — the box shader `0x4BF4D0` and the list's background restore `0x4C6D20` as boxes, a sub-frame stack as its box, and the preview's transformed stamp as a keyed atlas sprite ([engine map](exe-reverse-engineering.html), *Who calls the box shader*, *SELMAP's map preview*) | ● landed on local main 2026-09-26 — [GUI renderer](gui-renderer.html) §26 | against the engine's golden source: SKIRMISH, SELMAP on entry and four picks at 0 px, also after walks of 131 and 27 arrow presses through the list; the atlas at 171 entries after the long walk. **Not covered:** the battle room's map list (the same builder, not run); a tint over more than 64 dropped pieces is still declined whole |
 
 **Added with the map-list fixes: a mouse wheel over a list** (● landed on local main 2026-09-26 —
-[GUI gadgets](gui-gadgets.html) §2.4.1, [GPU status](gpu-status.html) §2.3e). The engine has no
+[GUI gadgets](gui-gadgets.html) §2.4.1, [GPU status](gpu-status.html) §2.3e *The engine's UI,
+observed*). The engine has no
 wheel. A notch the zoom declines scrolls the list under the pointer — or the list a slider or scroll
 arrow is bound to — by the system's lines-per-notch, through the engine's own scroll calls, and
 leaves the selection alone; the zoom now also declines every notch while an in-game options screen

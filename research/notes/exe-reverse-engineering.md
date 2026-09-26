@@ -4348,13 +4348,17 @@ here** — the table at line 3421 named bits 5 and 7 and had nothing for the dar
 
 Two consequences, and landing 8d walked into both:
 
-- **The caps bit is the engine's own precondition for the buffer being a table**, and it is a
-  separate event from the allocation. `0x4BA660` allocates the LHT's 8192 bytes
-  (`push 0x2000; push 0x50A448; call 0x4D83B0`), stores the pointer at `[ecx+0xC8]` and returns
-  1 **without touching `[globals+0xF0]`**. So "the pointer is non-NULL" and "the table has been
-  built" are different facts, and only the second is the one a reader wants. `0x4BEC70` — the
-  tint's own writer — tests only the pointer (`0x4BEC7B`) and will draw through an unbuilt
-  table; `tagpu_packet_pub.c`'s `lht_snapshot` has always tested the bit.
+- **The caps bit says the table is enabled, not that it is filled.** The init writes the caps
+  word `[globals+0xF0]` at `0x4B5AC4`, before either allocation; then a set bit 6 allocates the
+  SHD's 8192 bytes (`0x4BA610` at `0x4B5ADF`) and a set bit 7 the LHT's (`0x4BA660` at
+  `0x4B5B0F`: `push 0x2000; push 0x50A448; call 0x4D83B0`, the pointer stored at `[ecx+0xC8]`,
+  the caps word not touched), and a clear bit stores NULL instead (`0x4B5AE6`, `0x4B5B16`). The
+  bytes come later, from the setters at UI init (`0x4BAB00` from `0x42E21B`, `0x4BAB30` from
+  `0x42E2AB`), which copy only when the bit is set. So a set bit and a non-NULL pointer are the
+  same fact, and neither says the bytes have been written. `0x4BEC70` — the tint's own writer —
+  tests only the pointer (`0x4BEC7B`), which is the bit's test too; `tagpu_packet_pub.c`'s
+  `lht_snapshot` tests the bit, and the GUI queue's copy re-sends the rows by content when the
+  setter fills them.
 - **The rewrite keeps the pointer.** `0x4BAB30`'s only caller is `0x42E2AB`, which loads
   PALETTE.LHT into a heap buffer through `0x4BBC40`/`0x4BBE50`, calls the setter, and frees the
   source immediately at `0x42E2B1`. The table's address is therefore a *poor identity*: a
@@ -6965,8 +6969,12 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
   (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
 - **`SurfaceAttach 0x4C6A60(OFFSCREEN* out, w, h, pitch, base)`** — `stdcall`, `ret 0x14`: the
-  same header laid over memory the object does NOT own (`+0x2C` keeps bit0 clear, so
-  `SurfaceFree` frees nothing). **One caller, `0x4B5897`**: right after `[0x4FC06C]` (the
+  same header laid over memory the object does NOT own. Its flags at `+0x2C` are the ones
+  `0x4C69F0` and the frame-context builder `0x4B8A80` write — bit 1 cleared, bit 0 SET
+  (`0x4C6A7C`, `0x4C6A84`) — so the flags do not tell an attached header from an owned one, and
+  `SurfaceFree 0x4C6AC0`, which hands the object to `MEM_Free` whenever bit 0 is set
+  (`0x4C6AC9`), does not either; whether anything ever frees an attached object that way was not
+  checked. **One caller, `0x4B5897`**: right after `[0x4FC06C]` (the
   DirectDraw `Lock`) it wraps the locked surface's bits, `w`/`h` from `globals+0xD4`/`+0xD8`
   and `pitch = (w+3) & ~3`, in the object at `that+0x50`. So the *primary* can be a drawing
   destination too — although MEASURED 2026-09-12 across a whole session, no UI blit named it:
@@ -6997,7 +7005,23 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   `block + 0x30 == the pixel base`, and an observer at this function's entry is exactly a
   surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
   publisher reads `s->base` at the flip, and what makes that safe is that the table entry
-  cannot outlive the block. MEASURED in game: **~10 500 calls a second**, so an observer that
+  cannot outlive the block.
+- **A frame is the other destination, and its pixels sit at `block + 0x18`.** `0x4B8DA0`
+  (`w·h + 0x18`) and `0x4B8E00` (`2·w·h + 0x18`, two planes) put the header and the pixels in one
+  block with the pixel pointer at `+0x10` = `block + 0x18` (`0x4B8DD0`, `0x4B8E1F`), and
+  `0x4B8A80(ctx, frame)` (`ret 8`) builds a drawing context over one: `w`, `h`, `pitch = w`, the
+  base from `frame+0x10`, the clip reset through `0x4C69C0`. Its five callers each draw into a
+  frame one of the two allocators made — `0x458C2E` the unit composite (`[obj+0x10]`, stored
+  by `0x4581A4` from `0x4B8E00("…", 600, 600)`), `0x4666B1` and `0x4666E2` SELMAP's scratch copy
+  and preview frame (*SELMAP's map preview*), `0x483918` the level's minimap picture, `0x495BCF`
+  a frame from `0x495ACD`/`0x495AEE` — so the leaves record draws into frames too, and a frame
+  dies by this function like a surface. `before_memfree` therefore retires an entry whose base
+  is `block + 0x30` **or** `block + 0x18` (`surf_dies_with`). MEASURED 2026-09-26 with the
+  `gui trace`: every SELMAP pick retires the 125×125 preview frame at the free returning to
+  `0x444AF9` and the 252×252 scratch copy at `0x466769`. With `block + 0x30` alone neither was
+  retired, and an arrow walk through the map list crashed in the publisher's seed of the freed
+  scratch copy: a read access violation at the end of its heap segment, 95 rows into a
+  125-pitch entry. MEASURED in game: **~10 500 calls a second**, so an observer that
   scans ≤ 24 recorded surfaces costs about 0.03 % of one core.
 - **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
   `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.
@@ -8976,8 +9000,24 @@ entry, on the game thread ([GUI gadgets](gui-gadgets.html) §2.4.1).*
   (`0x4A1680`, `0x4A1920` [INFERRED: a rect fetch and a point-in-rect test]) and pops it through
   `0x4C2D60` into a local — then copies six dwords of it to `gi+0x3C` (`0x4AB667..0x4AB66C`) and
   its third to `gi+0x54`; with the ring empty it fills `gi+0x3C` from `0x4C2340` instead.
-  `0x4C2D60` has two callers, `0x4999C4` and `0x4AB654`. So an observer at the entry that needs
-  the point a message was aimed at has to carry the point itself.
+  So an observer at the entry that needs the point a message was aimed at has to carry the
+  point itself.
+- **The engine's event ring, and how far it can move between two pump entries.** It lives in
+  the graphics globals (`*(0x51FBD0)`): capacity `+0x186`, base `+0x18A`, write index `+0x18E`,
+  read index `+0x192`, each index in `[0, cap)`. `0x4C2BD0(20)` sets it up once, at `0x4B5A67`.
+  The one push, `0x4C2E30`, is called from TA's window procedure at `0x4B5F51` for the button
+  messages only — down and up of both buttons and their double-clicks, `0x201..0x206` through
+  the table at `0x4B60F4`, a double-click with the record's flag set (`0x4B5F40`) — and drops
+  the record when the ring is full. A move (`0x200`) is never queued: `0x4C2360` copies it,
+  six dwords, into the current record at `+0x196`, which `0x4C2340` copies back out for the
+  pump when the ring is empty. The pop `0x4C2D60`
+  has two callers: `0x4AB654`, inside `0x4AB5D0` (the pump's one refresh), and `0x4999C4`, which
+  follows the in-game pump call at `0x499992` in straight-line code (`0x4999B5` is the only
+  branch in that span, and it leaves it); `0x4C2DE0` is a peek and moves nothing. So between
+  two entries of the pump the read index moves at most two slots. The one other writer of the
+  indices is the flush `0x4C2BB0` (both to 0), called once, at `0x426636`, in the in-game setup
+  `0x4263B0` (the frontend state machine's call at `0x4270A9`), which discards whatever was
+  queued. The list wheel's ordering rests on these facts ([GUI gadgets](gui-gadgets.html) §2.4.1).
 - **A gadget's rect is inclusive**: the pump's panel test (`0x4AA0F9..0x4AA128`) compares
   against `x+w−1` and `y+h−1`.
 - **The engine's own recipe for a scroll is `List_SelectPrev 0x4A9830`'s tail.** It decrements
@@ -8985,8 +9025,19 @@ entry, on the game thread ([GUI gadgets](gui-gadgets.html) §2.4.1).*
   it calls the listbox handler `0x4A1B40(gi, idx)` at `0x4A9983`, which repaints the rows, and
   `Gadget_PropagateAssoc 0x4A2BE0(gi, idx)` at `0x4A998A`, which moves the bound slider's knob to
   match (`0x4A2CA8`). Both `ret 8`; `0x4A1B40` has seven `E8` callers and `0x4A2BE0` fifteen.
-  A write of `+0xBC` followed by those two calls, with the same arguments, is therefore a scroll
-  the engine itself makes, and it leaves the selection alone when `+0xBA` is not touched.
+- **`0x4A2BE0` from a list is a selection's consequence, not a scroll's.** For each other record
+  with the source's `assoc` it takes the arm of that record's type. A list (`0x4A2D56..0x4A2D78`)
+  gets the source's `top` and selection and its own `0x4A1B40(gi, j)`. A slider
+  (`0x4A2C7A..0x4A2CE7`), when the list has more than one row (`0x4A2C83`), gets `knobpos =
+  top · range / maxtop` (0 when `maxtop` is 0), computed on the x87 and truncated by
+  `_ftol 0x4E43A0` (its control word ORs in `0xC00`, chop), written and repainted through the
+  slider painter `0x4A2580(gi, j)` (`ret 8`) only when it changed (`0x4A2CD0`). A textfield
+  (`0x4A2CEC..0x4A2D43`), when the list's attribs has bit 3, gets the SELECTED row's text and
+  `0x4A4D70`. The engine calls it from a list only after writing the selection
+  (`List_SelectPrev`, the click at `0x4A3E8A`); its scrolls that leave the selection alone
+  propagate from the slider (`0x4A7037`, `0x4A42DA`) and never reach the textfield arm. So a
+  scroll made from outside is `+0xBC`, `0x4A1B40`, and the list and slider arms made one by one
+  — the list wheel's `lw_follow`.
 - **A slider finds its list by `assoc`, first match, active or not.** `GUI_SliderUpdate
   0x4A3EF0(gi, idx)` scans from record 1 to `totalgadgets` (`ControlsAry+0xB6`) for the first
   `id == 2` record whose `assoc` equals the slider's (`0x4A3F37..0x4A3F4A`), tests no active
@@ -9019,6 +9070,9 @@ On each pick it:
    the frame's own width and height to the gadget's (`0x4666DB`, `0x4666DE`), **fills it with
    index 0** (`0x4C6890` at `0x4666EF`), stamps the temporary back into it scaled and letterboxed
    through `GAF_DrawTransformed 0x4C7580` (`0x46675E`), and frees the temporary (`0x466764`).
+   Both are destinations of observed draws — `0x4B7F90` at `0x4666C0` into the temporary,
+   `0x4C6890` into the frame, each through a context `0x4B8A80` builds — so both are surfaces
+   to the GUI lane, and both die by `MEM_Free` inside the pick (*`MEM_Free 0x4D85A0`* above).
 
 **`0x4B8DA0(name, w, h)` never writes the key byte.** `ret 0xC`, six callers (`0x420D49`,
 `0x42960D`, `0x4666A4`, `0x4838F5`, `0x495ACD`, `0x495AEE`): it allocates `w·h + 0x18` through the

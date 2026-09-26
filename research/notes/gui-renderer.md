@@ -482,8 +482,9 @@ put in a `PK_BAR` and no outline to put in a `PK_RECT`; it fell to `PK_PIXELS` a
 dropped every one of those since the clean cut.
 
 **What crosses is the operation.** `PK_TINT` carries a box and a row and no arena bytes;
-`PK_SHADE` carries the 32 × 256 table once. The table may cross for `PK_ASSET`'s reason and not a
-weaker one: it is a palette-derived remap the engine builds at init, and **nothing composed it** —
+`PK_SHADE` carries the table once — the lighten table's 32 × 256, with the box shader's rows
+after it (§26). The table may cross for `PK_ASSET`'s reason and not a weaker one: it is made of
+palette-derived remaps the engine fills at init, and **nothing composed it** —
 the same category as the palette itself, which has always crossed. The consumer then applies the
 remap to its own twin, and no engine pixel is involved at any point.
 
@@ -4443,6 +4444,16 @@ map preview*).
    window's packed atlas key (§2, *The focus glow*: "a window breaks the atlas key"): no transformed
    stamp takes an atlas entry any more, so `tagpu_gaf.c`'s entries are whole frames again.
 
+**A CRASH THE PICKS REACHED, in the surface table's destructor.** The preview builder `0x4665D0`
+draws into two frames — SELMAP's preview and a scratch copy it frees before it returns — through
+contexts `0x4B8A80` builds, so both were tracked surfaces; but `before_memfree` retired only an
+entry whose base was `block + 0x30`, the `0x4C69F0` surface layout, and a frame's pixels sit at
+`block + 0x18`. The scratch copy's entry and its op outlived the block, and `publish` seeded it
+from freed memory at the flip: an arrow walk up the list ended in a read access violation at the
+end of a heap segment. The destructor now matches both layouts (`surf_dies_with`; [engine
+map](exe-reverse-engineering.html), *`MEM_Free 0x4D85A0`*), and the `gui trace` shows both frames
+retired on every pick. The path is main's as well; this landing's picks are what reached it.
+
 **THE WHEEL** is the DLL's, the engine has none: a notch the zoom declines scrolls the list under
 the pointer by the system's lines-per-notch, through the engine's own scroll calls, and leaves the
 selection alone. Mechanism, gates and measurement: [GUI gadgets](gui-gadgets.html) §2.4.1. The
@@ -4460,6 +4471,7 @@ behind it.
 | the atlas after the 131-press walk | 171 entries, no fresh start |
 | a scroll, then a click on a row | the row selected, its highlight and its preview correct, 0 px |
 | the in-game badge and a label, zoomed | 0 px |
+| after the destructor fix: SKIRMISH, SELMAP and four picks, the last the 15-press walk to Acid Pools that crashed before | 0 px each, no crash; 224 more presses down and back through the list, no crash |
 | the shell tour | 0 px except `MAINMENU.GUI`'s own animation between the two captures |
 
 **NOT CLOSED.**

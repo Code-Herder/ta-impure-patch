@@ -120,9 +120,9 @@ Arming an attach-time token on a running instance silently does nothing.
 - `pixdrop=` — pixel ops dropped by design (a seed crosses as geometry).
 - `paldiff=n@i` and `palchg=` — see the palette rule below.
 - **The op capture's own line**, `tacli log <i> -g 'GUI flips='`, every 600 flips, ends
-  `box=<shaded>/<row 0>/<no table> wheel=<notches>/<rows>/<misses>/<full>`. A `box=` second or
+  `box=<shaded>/<row 0>/<no table> wheel=<notches>/<rows>/<misses>/<dropped>`. A `box=` second or
   third field above 0 is a box shader that crossed as dropped pixels; `wheel=` misses are notches
-  over no list.
+  over no list, and dropped ones met a full queue or arrived off the game thread.
 
 ## The palette and Gamma
 
