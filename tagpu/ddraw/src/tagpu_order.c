@@ -123,8 +123,8 @@
    WHAT WE DO DIFFERENTLY, AND WHY IT IS ON PURPOSE.
 
    - Circles are real arcs at a segment count chosen for the zoom, not sixteen
-     chords, and lines are one SCREEN pixel wide (line width `ss`) rather than
-     one game pixel magnified.
+     chords, and a line is the engine's walk on the ZOOMED frame's pixel grid
+     (tagpu_line.h) rather than a 1x line magnified.
    - Route dots and the waypoint sprite are drawn procedurally — a round dot
      and a pulsing crosshair — in the ink read out of the GAF frame the engine
      would have blitted. That is what keeps them crisp at 4x and legible at
@@ -912,8 +912,11 @@ static int    s_nrec, s_nline, s_ndot, s_nover, s_nlabel;
 /* the engine's projection, with the +0x80/+0x20 baked immediates the rest of
    this pass uses (tagpu_mark.c, the health bar). The engine halves the
    altitude with an arithmetic shift, i.e. rounded to a whole pixel; this
-   keeps the fraction, because the whole point of the port is that the marker
-   no longer has to land on a 1x pixel grid. */
+   keeps the fraction, because what it projects is OUR geometry (a unit's
+   interpolated anchor, an arc, a crosshair) and a line's ends are quantised
+   after the wheel zoom (tagpu_line.h), not on the 1x grid. The build site,
+   which the engine draws from its own integers, does not come through here
+   (`draw_build`). */
 static void project(double wx, double walt, double wz, float* sx, float* sy)
 {
     *sx = (float)(wx - (double)s_v->eyeX + 128.0);
@@ -1196,50 +1199,70 @@ static int seq_ink(const char* seq, int fallback)
     return best;
 }
 
-/* --- bit 0: the queued build site --- */
+/* an arithmetic shift right by one: floor(v / 2), which `sar` is and C's
+   division toward zero is not for a negative v */
+static int sar1(int v) { return v >= 0 ? v / 2 : -((1 - v) / 2); }
+
+/* one line between two ENGINE pixels, handed to the marker pass as their
+   centres: tagpu_line.h's rule for a line the engine draws from integers */
+static void oline_px(int x0, int y0, int x1, int y1, int col)
+{
+    oline((float)x0 + 0.5f, (float)y0 + 0.5f, (float)x1 + 0.5f, (float)y1 + 0.5f, col);
+}
+
+/* --- bit 0: the queued build site ---
+   IN THE ENGINE'S OWN INTEGERS, because the engine draws this rect as eight
+   DrawLines from them and a line's pixels follow from its ends
+   (tagpu_line.h). `0x438C00` [DISASSEMBLED]: each corner's 16.16 position
+   taken as its high word, the altitude halved by `sar` (a floor), then
+   `x = px - eyeX + 0x80` and `z = pz - (alt >> 1) - eyeY + 0x20`; the
+   ten-tick sweep `(x1 - x0) * t / 10` as a signed division that truncates
+   toward zero (the 0x66666667 multiply, `sar 2`, plus the sign bit), which is
+   C's `/`; and the outer outline one engine pixel outside the inner. At a
+   wheel zoom below 1 the two outlines are then less than a game pixel apart
+   and can land on one -- which is the engine's picture made smaller, not a
+   line lost. */
 static void draw_build(const ORDREC* r, int gameTime)
 {
-    double t;
-    double p0x, p0y, p0z, p1x, p1z;
-    float x0, z0, x1, z1;
-    float xg0, xg1, zg0, zg1, e;
+    int p0x, p0y, p0z, p1x, p1z, h;
+    int x0, z0, x1, z1, t, dxg, dzg, xg0, xg1, zg0, zg1;
     int colA, colB, age;
 
     if (!s_build || !r->btype || !r->haveBdef) return;
 
-    p0x = ((double)(short)((r->foot[0] + r->bx) >> 16));
-    p0y = ((double)(short)((r->foot[1] + r->by) >> 16));
-    p0z = ((double)(short)((r->foot[2] + r->bz) >> 16));
-    p1x = ((double)(short)((r->foot[3] + r->bx) >> 16));
-    p1z = ((double)(short)((r->foot[4] + r->bz) >> 16));
+    p0x = (short)((r->foot[0] + r->bx) >> 16);
+    p0y = (short)((r->foot[1] + r->by) >> 16);
+    p0z = (short)((r->foot[2] + r->bz) >> 16);
+    p1x = (short)((r->foot[3] + r->bx) >> 16);
+    p1z = (short)((r->foot[4] + r->bz) >> 16);
 
-    project(p0x, p0y, p0z, &x0, &z0);
-    project(p1x, p0y, p1z, &x1, &z1);
+    h = sar1(p0y);
+    x0 = p0x - s_v->eyeX + 0x80;
+    x1 = p1x - s_v->eyeX + 0x80;
+    z0 = p0z - h - s_v->eyeY + 0x20;
+    z1 = p1z - h - s_v->eyeY + 0x20;
 
     /* the ten-tick sweep, with the engine's UNSIGNED clamp: an age that came
        out negative reads as "finished", not as "not started" */
     age = gameTime - r->issue;
-    t = ((unsigned)age >= (unsigned)GROW_TICKS) ? (double)GROW_TICKS : (double)age;
-    xg0 = x0 + (float)((x1 - x0) * t / GROW_TICKS);
-    xg1 = x1 - (float)((x1 - x0) * t / GROW_TICKS);
-    zg0 = z0 + (float)((z1 - z0) * t / GROW_TICKS);
-    zg1 = z1 - (float)((z1 - z0) * t / GROW_TICKS);
+    t = ((unsigned)age >= (unsigned)GROW_TICKS) ? GROW_TICKS : age;
+    dxg = (x1 - x0) * t / GROW_TICKS;
+    dzg = (z1 - z0) * t / GROW_TICKS;
+    xg0 = x0 + dxg; xg1 = x1 - dxg;
+    zg0 = z0 + dzg; zg1 = z1 - dzg;
 
     colA = s_gui[r->sel ? GUI_SITE3 : GUI_SITE1];
     colB = s_gui[r->sel ? GUI_SITEA : GUI_SITE9];
 
-    /* One SCREEN pixel, not one game pixel: the engine's ±1 offsets are a
-       rasteriser detail, and at 0.25x a game pixel is a quarter of one, which
-       would collapse the double outline into a single line. */
-    e = (float)s_px;
-    oline(xg0 - e, z0 - e, xg0 - e, z1 + e, colA);
-    oline(xg1 + e, z0 - e, xg1 + e, z1 + e, colA);
-    oline(x0 - e, zg0 - e, x1 + e, zg0 - e, colA);
-    oline(x0 - e, zg1 + e, x1 + e, zg1 + e, colA);
-    oline(xg0, z0, xg0, z1, colB);
-    oline(xg1, z0, xg1, z1, colB);
-    oline(x0, zg0, x1, zg0, colB);
-    oline(x0, zg1, x1, zg1, colB);
+    /* the engine's call order, `0x438DAA` .. `0x438E6D` */
+    oline_px(xg0 - 1, z0 - 1, xg0 - 1, z1 + 1, colA);
+    oline_px(xg1 + 1, z0 - 1, xg1 + 1, z1 + 1, colA);
+    oline_px(x0 - 1, zg0 - 1, x1 + 1, zg0 - 1, colA);
+    oline_px(x0 - 1, zg1 + 1, x1 + 1, zg1 + 1, colA);
+    oline_px(xg0, z0, xg0, z1, colB);
+    oline_px(xg1, z0, xg1, z1, colB);
+    oline_px(x0, zg0, x1, zg0, colB);
+    oline_px(x0, zg1, x1, zg1, colB);
 }
 
 /* --- bit 3 (and bit 1's delegation): the waypoint crosshair ---

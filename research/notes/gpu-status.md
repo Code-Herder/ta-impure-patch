@@ -50,7 +50,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
-| Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **The Classic pair — the silhouette and the structure slant — is what the shipped configuration draws again since 2026-09-22, out of `tagpu_vk_unit.c`, and `shadows=` defaults to HARD (§2.83).** G14i's alternative, `tagpu_shadow.c`'s depth map at `shadows=1`, is unported: that module went with the GL backend and nothing produces a hand-over for the Vulkan map. **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. Both FBOs are `DEPTH24_STENCIL8` for it — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
+| Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **The Classic pair — the silhouette and the structure slant — is what the shipped configuration draws again since 2026-09-22, out of `tagpu_vk_unit.c`, and `shadows=` defaults to HARD (§2.83).** G14i's alternative, `tagpu_shadow.c`'s depth map at `shadows=1`, is unported: that module went with the GL backend and nothing produces a hand-over for the Vulkan map. **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. The world target's depth attachment carries the stencil plane for it, `D32_SFLOAT_S8_UINT` or `D24_UNORM_S8_UINT` (§2.91) — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
 | **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab; within that key it carries the merge's height offset (§2.87), which is what puts a transport's cargo under the transport. The carry relationship itself — attach/detach `0x48AB70`, and why a *released* unit appears to walk under the plant (stock, measured) — is on [factories](factory-build.html) |
 | Structure shadows (the cached slant projection) | G13k, redrawn 2026-09-22 | `owndraw all` flips the blit's two structure-shadow `je`s behind `g_ssSkip`; the SLANT range of the posed bake is drawn by `tagpu_vk_unit.c`, stencil-masked, before the bodies — see §2.83, §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
 | Weapon fire, explosions, debris | G12e | `fxown`: 2 call-site redirects + 4 leaf detours |
@@ -321,8 +321,8 @@ at 1:1** — 0 differing pixels and an unmoved md5 at `ss = 2` with the resolve,
 expressible on the Vulkan lane** (`tagpu_vk_world.h`: the world resolves in one draw, so there
 is no 1x buffer to defer the rect into), which is why both halves were deleted together rather
 than one being ported. **Do not read the 1320 figure as the cost of the move** either: the
-Vulkan rect (§2.84) is not a band at `ss`; it keeps whole game pixels, and measured 173 of its
-181 pixels at exactly the engine's colour.
+Vulkan rect is not that band; it is §2.93's line (DrawLine's walk on the world target, `ss`
+pixels wide), and §2.84 has what it measured when it kept whole game pixels.
 [UI markers](ui-markers.html) §1 has the numbers and the two construction traps
 (the cap must run along the segment; the band is nudged 1/256 px off the tie).
 
@@ -2021,7 +2021,10 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
 | `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
 | weapon `+0x68` | the ballistic launch speed, `weaponvelocity`·65 536/30, the divisor of `0x49CE6A`. **WRITTEN at load, on the game-load thread, by flak's floor (§2.6c)**: a ballistic weapon (`+0x111` bit 1) whose value is 0 gets 1, logged, before `0x49E010` picks its aim routine. No stock weapon is written |
-| area damage's victims | `unit − begin` against the slot count `u16 main+0x14351`, and `cell − grid` against `W·H` (`main+0x14233`, `+0x14237`), per victim, **read inside `0x49A120` on whichever thread calls it** — the game thread, or the one pumping the network for the `0x0E` receiver (§2.6c); nothing written |
+| area damage's victims | `unit − begin` against the slot count `u16 main+0x14351`, and `cell − grid` against `W·H` (`main+0x14233`, `+0x14237`), per victim, **read inside `0x49A120` on the thread that calls it** — the game thread, the `0x0E` receiver's included (its mask 4 passes in net state 6 only, §2.6c); nothing written |
+| area damage's slot selector `[esp+0x10]` | **WRITTEN 2 inside `0x49A120`, on whichever thread calls it, by the stacked-aircraft stubs** (§2.6c), after stock's walk: the value that makes `0x49A415` serve the next aircraft instead of stepping. Stock's selector is only ever 0 or 1. With it, `esi` gets the served unit before `0x49A24E`. The candidates are read from the unit array (`+0x110`, `+0x86`, `+0x9E`, `+0x82`, `+0x76..+0x80`) and bounded by the same slot count; nothing of the unit written |
+| **a unit's slot, and the hits it receives** — unit `+0xA6`, `+0x110` (bit 28 alive, bit 14 dying), `+0x96` → player `+0x00`/`+0x73`; the player records `main+0x1B63 + k·0x14B` `+0x18`/`+0x67`/`+0x6B`; `main+0x37EE6` (slots per player), `main+0x14357`/`+0x1435B`, `main+0x38A47` (GameTime), `main+0x391F1` (the dispatcher's state), the gate table `0x512BC0` | **Read by the stale-hit fix** (§2.6c) on two threads: the LOADING thread (`0x497C70` → `0x497180`) runs the level init that resets its tables (`0x4917D0` → `0x4854A0`) and the level's first creates (`0x496EE0`, `0x4977BB`), while the main thread pumps the network in state 5, where the dispatcher's gate keeps every carried `0x09`/`0x0B` and every `0x2C` out of the tables; in play, the game thread [INFERRED from the tick's order]. Its tables are DLL memory sized from the engine's slot count and never freed, so no thread's read can outlive them. **It does change SIM state, through control flow**: first-free skips a slot freed in this tick or the last while the block has another, so a create can land in a later slot than stock's, and a hit whose stamp proves it stale is not applied. Both are why it is in the fail-closed table |
+| **a create held during the load** — the dispatcher's state `main+0x391F1` and gate table `0x512BC0`, the sender's player record `main+0x1B63 + k·0x14B` (`+0x00`, `+4` its DirectPlay id, `+0x73`, `+0x146`) and the pump frame's `[esp+0x10]`/`[esp+0x14]`; at the replays the slot's `+0xA6` and `+0x96`, `main+0x14357`/`+0x1435B`; at a dirty create the unit def's `+0x22F`/`+0x241` (`main+0x1439B`, count `main+0x1438F`), the map size `main+0x14233`/`+0x14237`, the `0x2C`'s bit reader and B3's copy of the message with its length | **Read by the ghost-commander fix** (§2.6c): the hold and the kill note on whichever thread pumps during a load (the game thread or the loader), under a DLL lock; the replay, the catch-up ticks' creates, the dying mark and the position on the game thread. **WRITTEN: the dirty create's 23-byte record**, a stack record in `0x48B920`'s frame, its position `[5]`/`[13]` (and `[9]` for an air unit) before `CreateFromNetwork` reads it; **and unit `+0x110` bit 14 (pending death)** of a copy made before state 6 (by the replay or in a catch-up tick), when that unit's `0x0C` is refused during the catch-up ticks — the same bit, on the same thread and inside the pump, that the engine's own ghost sweep sets (`0x48B42C`), and only while the copy is still the one made before state 6 (its slot's player and B4 stamp). **It changes SIM state through control flow**: a create refused in state 5 is made before the first tick, or in the catch-up pump it arrives in, instead of never, one whose unit died meanwhile is not made, and a dirty create lands where its payload says instead of the slot's stale position; all are why it is in the fail-closed table |
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
 | `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only, and on the GAME THREAD only since the clean cut** (§2.81): the reader is `tagpu_packet_pub.c` (`MM_COMPOSITE`/`MM_FOGBASE`/`MM_SCALEDMAP`/`MM_PICFRAME`), which copies them into the packet. The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured. **The render-thread reader is gone**: `tagpu_gui_surf.c`'s sharp minimap layer read all three per frame while the game thread may have been rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19), and that layer is deleted. The `tagpu_gui_set_want_minimap` / `tagpu_gui_minimap_have` handshake survives in `tagpu_gui.h` with no consumer |
 | `[0x51FBD0]+0x1B2` | the cursor's **GAF frame**. Read only — **on the GAME THREAD**, by `tagpu_packet_pub.c` (the in-play fill, and in the shell its observer of `0x4C67C0`), and published as the packet's `cur_rec`, a KEY; `tagpu_gui_cursor_frame()` resolves it on the render thread through `tagpu_gaf_frame_sane` for the sharp layer's cursor. `+0x1B6`/`+0x1BA`, the position the engine last drew it at, are **not read since 2026-09-23**: the packet's `cur_pos`/`cur_w`/`cur_h`/`cursor_live` had no reader left and were deleted, so `cur_rec` is the whole cursor channel (0 = no cursor this frame). The engine blits its own sprite into the reference frame |
@@ -2029,6 +2032,9 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table, which the unit pass turns into its face-shade multipliers, §2.88); `[0x51FBD0]+0xCC`, the grey band's 256-byte remap, is **not** copied since G20d — the grey is computed in RGB. **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect plus the lead (`tagpu_zoom_pub_window`), and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
 | **the effects models** — a weapon's `+0x74` node and its `+0x30` child, an explosion's `+0x00` body, a flying piece's `*(sys+0x2C)` node; per node `+0x04`, `+0x08`, `+0x0C`, `+0x24`, `+0x28`, `+0x30`; per face `+0x00`, `+0x04`, `+0x0C`, `+0x10`, `+0x18`, `+0x1C`; a sequence's `u16` count and its `+0x28` frames; for a piece's team face `sys+0` → `+0x96` → `+0x27` → `+0x96` | **Read only, on the GAME THREAD**, by the frame packet's publisher (`tagpu_packet_pub.c` `fx_model`) in the same `after` as the tables above, and COPIED: posed by the engine's own `0x4B6CC0` into a `dst` of the publisher's, every count and index bounded before it is used — the vertex and face counts, each face index by its node's vertex count, each frame index by its sequence's count, the piece's unit a stride-aligned member of the unit array inside the slot count and its player one of the ten `main+0x1B63` records — into the packet's five model tables. The render thread reads the copies (`tagpu_fxmodel.c`) and the unit atlas's own mirror, never a model (§2.89) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
+| `UnitDef+0x18E` → the type's COB, and the template's node names `node+0x1C` | **the build ghost's mask** (§2.23). Read only, **on the GAME thread**, inside the in-play packet fill, once per type per level: the COB's header, its script and piece name tables, `Create()`'s entry and bytecode as `0x4B2450` left them relocated, each table and each name bounded by the block's own length (the size `0x4B6BA0` checksums it with, recorded by an observer); the template tree under `MODEL_PTRS[type]`, the type bounded by `UNITINFOCount`, with no length to bound its node pointers against (`exe-reverse-engineering.md`, *The loaded script*). Both are per-LEVEL: `0x42D2E0` loads them on the LOADER thread before the level's first in-play draw, the teardown frees them on the game thread (the COB at `0x42DC3C`, the template in `0x42DB90`), and a console `Reload` frees the type's COB and loads it anew on the game thread itself (`0x42D275` / `0x42D294`) |
+| the FBI section at `0x42BF97`, through `0x4C48C0` | **`PreviewPieces=`**, read by `tagpu_datakeys.c`'s observer inside the FBI loader `0x42BF40`, on the LOADER thread (the level's load) and on the game thread (the console `Reload`). Observers at the unit-data load's start `0x42D2E0` and the loader's entry (its `def` argument) keep each record to its own load. The records it writes are ours; nothing is written into the engine |
+| `0x4B6BA0`'s stack arguments `(buf, size)`, for the call that returns to `0x4B247C` | **each COB block's address and length**, recorded by `tagpu_datakeys.c`'s observer on the checksum's entry, on the thread that loads the script (the loader's, or the game thread's at a `Reload`); the bound on every read of that script. The other ten callers are ignored |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (the frame packet's `level_gen`) | not an engine field — our own counter, bumped on the game thread at every level end and carried to the render thread inside the packet. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`, and the geometry bake's) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a). **[CORRECTED 2026-09-12, a landing review]** between then and landing 3 the counter read was `tagpu_reclaim_level_gen()`, which is bumped only in reclaim's teardown post hook — so under `tagpu_reclaim.off`, or any of reclaim's four other ways not to arm, it never moved and the caches were exactly as stale as before 2026-09-08. The publisher owns the counter now and advances it whichever provider publishes the level-end packet |
@@ -2072,8 +2078,9 @@ The fixes for the stock engine's own defects run code of ours too, §2.6c.
 | `0x4266A7` | the `jne` that reaches TA's startup DirectX-version warning | `75` → `EB`, so the warning is always skipped |
 | `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, so it governs which sprite is chosen — but the index it returns is *also* the left button's state, which is what the row below is for. `tagpu_curs.off` opts out, read once at attach |
 | `0x499041` | the left click's own dispatch inside `0x498F70`: `cmp dl,0x11 / jl` on `main+0x2CBE`, the installed cursor index, deciding "issue the order" against "deselect everything" | 27 bytes for 27, decided on `main+0x37EFA` and the order byte instead: `cmp [eax+0x37EFA],1 / jne classic / cmp cl,1 / jne classic / jmp deselect / classic: cmp dl,0x11 / jl act / jmp done`. Armed only when the `0x43E50C` patch above took, and off with the same `tagpu_curs.off` |
+| `0x49F4B8`, `0x49F4EC` | **in a tacli test folder only** (§2.92): the command-line parser's jump-table entries for `R` and `r`, both `0x49F249`, the `-r` switch's DirectPlay registration through `dsetup.dll` | `0x49F249` → `0x49F461`, the loop tail every unknown letter takes (entry 26 at `0x49F4FC`, checked to hold it), so `-r` is ignored. Any mismatch ends the process: in test mode the switch must not reach the real registry |
 
-Neither writes engine state, so neither appears in §2.5. The engine still draws the cursor
+None writes engine state, so none appears in §2.5. The engine still draws the cursor
 itself — the composite only moves it (§1); what the patch changes is which sequence out of
 `cursor_ary` (`main+0x1487F + idx*4`) the engine hands to `SetUICursor 0x4AB400`.
 
@@ -2130,17 +2137,19 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
-while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 130 rows of
-the raise and 43 of the fixes in the raised build, 173 in all, and the fixes' 47 in the stock-limits
+while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 129 rows of
+the raise and 95 of the fixes in the raised build, 224 in all, and the fixes' 99 in the stock-limits
 build, where the weapon IDs' four sites join them (MEASURED 2026-09-25 from the log lines). It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 173 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 224 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16383, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
-nothing raised (…); the simulation fixes' 47 sites installed`.
+nothing raised (…); the simulation fixes' 99 sites installed`. Right before it, once both
+installers have taken their stubs, `enginefix: the fixes' and limits' stubs take N bytes in P page(s)
+of 4096` (§2.6c).
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -2339,24 +2348,23 @@ blames the disk, and four in combat ([section B's landing 1](tadr-port/sim-fixes
 hits a unit found past its twentieth victim, or a feature past its sixty-fourth, once per cell of it
 in the blast; flak fired nearly straight up divides by zero; a unit whose footprint ends on the
 map's last column or row is parked off the map, where nothing can hit it; and a unit whose altitude
-is more than twice its distance from the north edge is off every other player's line-of-sight grid;
-and five outside the battle ([section B's landing 6](tadr-port/sim-fixes.md)):
-each peer of a network game draws a wind of its own, a yardmap string is parsed past its end, the
-saved-game loader's order fallback walks one record past its table, the stockpile bar divides by a
-weapon's reload time without testing it, and a range circle of radius 1 divides by zero.
-Twenty-three fixes, built at every attach, in both builds, by `patch_engine_defects()` and then
-`patch_loader_defects()` at the end of `tagpu_apply_patches()`. Each patch is the identity on every input stock handles correctly.
+is more than twice its distance from the north edge is off every other player's line-of-sight grid.
+One more is [landing 2](tadr-port/sim-fixes.md): an aircraft whose cells other aircraft hold takes
+no splash at all (one that no in-rect slot names). And [landing 3](tadr-port/sim-fixes.md): five network receivers take a unit index, a type or a slot delta off the wire with no bound. [Landing 4](tadr-port/sim-fixes.md): a hit names its victim by slot and the owner reuses a freed slot at once, so a hit in flight lands on whatever unit the slot holds when it arrives. [Landing 5](tadr-port/sim-fixes.md): a peer still loading refuses the others' first units, their commanders among them, until the round robin re-creates each. And five outside the battle ([landing 6](tadr-port/sim-fixes.md)): each peer of a network game draws a wind of its own, a yardmap string is parsed past its end, the saved-game loader's order fallback walks one record past its table, the stockpile bar divides by a weapon's reload time without testing it, and a range circle of radius 1 divides by zero. Twenty-eight fixes, built at every attach, in both builds, by `patch_engine_defects()` and then `patch_loader_defects()` at the end of
+`tagpu_apply_patches()`. Each patch is the identity on every input stock handles correctly.
 
 **Two classes.** A *simulation* fix — one whose absence would let a player silently compute
 different shared state on an input stock does not fault on — hands its sites to the fail-closed
 table of §2.6b, in both builds: they are compared and written with the rest of the table or not at
-all, and a mismatch ends the process through the failure report. The thirteen such fixes are the
+all, and a mismatch ends the process through the failure report. The sixteen such fixes are the
 full wreck pool, the reclaim mark, the border features, the saved record's owner, whole build lists,
 the download menus, the sync keys, the weapon IDs, the victim caps, the last column and row, the
-line of sight, the wind and the yardmaps. A *local* fix — a crash, a draw, a message or a malformed input — compares and
-writes its own sites and is skipped alone: the sort buffer, the NULL plot, the terrain window, the
-composite scratch, the out-of-memory text, flak's divides, the projectile pass's view, the
-saved-game order fallback, the stockpile bar's divide and the range circle. The engine map's table gives each
+line of sight, stacked aircraft, stale hits, the ghost commander, the wind and the yardmaps. A
+*local* fix — a crash, a draw, a message or a malformed input — compares and writes its own sites
+and is skipped alone: the sort buffer, the NULL plot, the terrain window, the composite scratch,
+the out-of-memory text, flak's divides, the line of sight in local code, the projectile pass's
+view, the network receivers' bounds, the saved-game order fallback, the stockpile bar's divide and
+the range circle. The engine map's table gives each
 one's reason. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -2378,14 +2386,19 @@ engine defects we patch".
 | `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | area damage `0x49A120`, whose two stack lists hold 20 units and 64 feature anchors and whose damage runs for a victim past them once per cell of it in the blast | both calls of `0x49A120` retargeted to `dmg_area`, which holds a frame of two hash sets (unit slots, anchor ordinals; 32 keys each before they grow) as a local on the calling thread's stack, makes it the thread's innermost frame through a TLS slot for the call, and puts the previous one back; the 72-byte unit block and the 71-byte feature block replaced by calls of `dmg_unit_seen` / `dmg_feature_seen` that answer skip (`0x49A415`, `0x49A62B`) or damage (`0x49A2AA`, `0x49A615`) from the innermost frame's sets, each index bounded by the unit array's count or `W·H` first |
 | `0x49CF18`, `0x42F314`, `0x42F32E` | the ballistic fire `0x49CDE0`'s burnblow flight time, `idiv` by `v·cos(pitch)`, 0 within 0.35° of vertical; and its `div` by `w+0x68`, 0 for a ballistic weapon with `weaponvelocity` 0 | a `jmp` over the 9-byte `cdq; idiv ebp; mov edx,[main]` to a stub that divides as stock unless `ebp` is 0 and then takes `weapontimer` through `0x49CF29`, counted and logged; the loader's two calls of `0x49E010` routed through a stub that first gives such a weapon a `w+0x68` of 1, logged. Local |
 | `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | the grid stamp `0x47CC30`'s `X + fw ≥ W` and `Z + fh ≥ H`, which park a unit whose footprint ends on the last column or row | the two `jge` become `jg`; the 50-byte bucket block becomes a `jmp` to a stub that keeps stock's bucket index whenever its linear index is inside the `rows·cols` grid — stock's column −1 at the west edge is the previous row's last bucket, which simulation code reads — and clamps the column and row into the grid only for an index outside it; it rejoins at `0x47CCDB` |
-| `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`; `0x465DA9`, `0x408095`; `0x407F74` | `UnitInPlayerLOS 0x465AC0`'s four row reads under True line of sight, one for each point of the unit's box it tests, and under Permanent or Circular the same shear in `PositionInPlayerMapped 0x408090` (the first three points) and its inline copy (the fourth); and the same read inlined in `0x408090`'s AI caller `0x407E90`, whose probe it decides, `(z − y/2) >> 5` under an unsigned bound, off the grid for a unit high up near the north edge | each block (43, 43, 49, 34, 34, 44 and 40 bytes) becomes a `jmp` to a stub that uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, and otherwise keeps stock's answer |
-| `0x49BEE8` | the projectile draw pass `0x49BE60`'s inline copy of the same read, the local player's view of a projectile | the 40-byte block becomes a `jmp` to a stub with the same own-row rule, compared and written alone. Local: a draw of the engine's frame, which still runs as the golden source (`fxown` is not a play default) |
+| `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` | area damage `0x49A120` reads victims only from each cell's two unit slots, and the stamp `0x47CC30` gives a contested slot B to one aircraft, so an aircraft no in-rect slot names is never found | the walk's end (11 bytes) and the selector step (18) become `jmp`s to stubs that, after stock's walk, hand the aircraft stock missed to its own per-victim code at `0x49A24E` one at a time with the selector at 2, then run the displaced tail; candidates come from a pool of airborne slots rebuilt by a stub on the step's call of the unit tick (`0x4954ED`) and added to from the stamp's airborne path (`0x47CF98`), under a lock, each re-tested at hand-over (alive and airborne by slot B's rule, bit 29 in the mask so a bit-29 unit is excluded; in the grid, a real bucket; not dying, bit 14; uncarried; model present; in the blast's rect; not yet seen) with every index bounded; a failed grow of the list is the engine's out-of-memory exit (`eng_alloc_or_exit`) |
+| `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`; `0x465DA9`, `0x408095`; `0x407F74`; `0x43F5D1`, `0x43F631`, `0x43FC05`, `0x43FD1A`, `0x43FF85`, `0x4400AA`; `0x46778A`, `0x4677D0`; `0x482615` | the altitude-sheared row `(z − y/2) >> 5` under an unsigned bound, off the grid for a point high up near the north edge: `UnitInPlayerLOS 0x465AC0`'s four points under True line of sight, and under Permanent or Circular `PositionInPlayerMapped 0x408090` (the first three) and its inline copy (the fourth); the copy inlined in the AI caller `0x407E90`, whose probe it decides; the order resolver `0x43F0E0`'s six; the view player's map build `0x467440`'s two, which mark the units that player sees for the acquisition; and the sight emitter `0x4825B0`, the observer's side: a unit whose sheared row is off the grid stamps no sight at all. The census — by the data, every compare that reads a grid's height in memory: 57, 46 of them this read; what it does not enumerate, and the sight grid's builder found apart, are stated there — is the engine map's *Line of sight at the map's edge* | table rows. The first eight blocks (43, 43, 49, 34, 34, 44, 40 bytes, and the order resolver's 36 at `0x43F631`, whose point register stock overwrites before its row test) become a `jmp` to a hand stub; the other seven lone row tests (`cmp r,[g+0x84]` and its `jae`/`jb`, 8 or 12 bytes) to a generic stub built from the site's stock bytes, with a compare-only row over the span from its z load to its test, which the stub relies on; the emitter's row computation `0x482615..0x48261E` to a hand stub that fixes the row before stock compares it with the stored one and stores it — so the stamp and its later removal use one row by construction — with compare-only rows over the point `0x4825D4..0x482614` and from the landing point through the bound, `0x48261F..0x48266A`. Each uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, otherwise keeps stock's answer, and counts the own row per function |
+| `0x43E69D`, `0x43E904`, `0x43EBC6`, `0x43ECDB`, `0x43EE94`, `0x43EFA9`; `0x47D3B8`; `0x465942`, `0x46598A`, `0x465A17`, `0x465A63`; `0x46725F`, `0x467294`, `0x467340`, `0x467375`; `0x47360C`, `0x473657`, `0x473A94`, `0x473AD3`, `0x4741EC`, `0x474237`, `0x474674`, `0x4746BB`, `0x47551E`, `0x47556C`; `0x47F431`, `0x47F476` | the same read in local code: the cursor picker `0x43E490`, the build cursor's site test `0x47D2E0`, the feature helper `0x4658E0` (both corners), the radar rebuild `0x466DC0`'s projectile dots, the particle leaves `0x473590`, `0x473A00`, `0x474170`, `0x4745E0`, `0x475470`, positional sound `0x47F300` | each lone row test becomes a `jmp` to a generic stub with the same rule and count; the 27 are compared together, each from its z load through its test (the radar's whole loop `0x4671C0..0x46742E` for its dots), and written together or not at all (`fix_los_local`) |
+| `0x49BEE8` | the projectile draw pass `0x49BE60`'s inline copy of the same read, the local player's view of a projectile | the 40-byte block becomes a `jmp` to a stub with the same own-row rule and count, compared and written alone. Local: a draw of the engine's frame, which still runs as the golden source (`fxown` is not a play default) |
+| `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
+| **wire robustness (landing B3, local):** `0x4861F7` (`0x09`), `0x4553FE` (`0x0A`, at the dispatcher's case), `0x4866E5`+`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B92B`+`0x48B960`+`0x48B985`+`0x48B9AD`+`0x48BA05`+`0x48BA5E`+`0x48B40E`+`0x48B49C`+`0x48BA9F` (`0x2C`), `0x44E0DE`+`0x48B574` (the `0x2C`'s nested unit references: a move payload's target, the round robin's carrier), the length's capture in the receive (`0x453595`, `0x45361F`), the splitter's short messages (`0x463939`, `0x463B33`), and the diverged `0x0D` in `wpn_rx_fired` (`0x49D280`) | the network receivers index the unit array (stride `0x118`) by a `u16` off the wire with no bound, a `0x09` may name a slot outside its sender's block, the `0x0A` attach scales its child and parent unbounded, and the `0x2C` receiver also trusts a signed delta, an unbounded type, a missing move class, a NULL mover after a refused create (`0x48BA05`) and a NULL model object after one (`0x48B4A6`), a signed round-robin remainder, the player's block pointer, two unit references nested in its stream, and a bit reader with no end; the splitter loops for good on a message of length 0, and the pump dispatches from a freed buffer after a growth | each site is a `jmp` at a clean boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`; the receive's two statistics calls a `call`) to a stub that verifies the whole stock span first (all-or-nothing, `FIX_BYTES` on a mismatch), bounds the value by a pure predicate, and continues at the same address; the `0x2C` is parsed from a per-thread copy of itself followed by 48 zero bytes (the most the engine reads past the last check is 229 bits) and its reader is bounded by the message's length before each read the stubs precede, the paired `0x2C` stubs carry the validated type in a game-thread static, and a misframed `0x2C` points the bit reader at a zero dword and jumps to `0x48BA28`; a nested reference past the array becomes 0, the engine's own no unit; a message too short to advance ends the splitter's walk through its own end for an unknown code, and the receive's note keeps the pump's message pointer on the buffer. `tagpu_wirecheck.on` checks the C predicates at attach (22/22 OK, 2026-09-25; 33 cases since the nested references and the `0x0A`, not yet run in the game), and the heartbeat's `wire:` section counts, per receiver, the records accepted and dropped, the morph/dcreate/rcreate/ghost oracles and `CreateFromNetwork`'s no-block refusals. The engine map's *network receivers* subsection has the site table |
+| **stale hits (landing B4, simulation):** `0x486036` (first-free's free test), `0x486DC1` (the destructor's store of type 0), `0x48634F` (`CreateFromNetwork`'s success exit), `0x4854A0` (the unit array's allocation), `0x4653DE` (after the Deathmatch respawn's create `0x4653D9`), the sends `0x4560AE` (`0x09`), `0x489CB9` and `0x489CCD` (`0x0B`), the dispatch table's slots `0x455F90` (`0x05`), `0x455FA0` (`0x09`), `0x455FA8` (`0x0B`); compared, not written: `0x4553E9`, `0x455417`, `0x45605C`, `0x489CA8` | a `0x0B` names its victim by slot alone, and the owner's first-free allocator hands a slot freed by a death to its next create at once, so a hit in flight lands on the new unit on the owner and on every bystander | every row in the fail-closed table, both builds. The `0x09` and the `0x0B` leave inside a tagged `0x05` of `0x41` bytes (tags `0x4A`, `0x4B`) that carries the unit's incarnation in the same bytes — the owner's GameTime at the create, strictly increasing per slot, or for a copy the `0x2C` made a lower bound (bit 31) from the record whose block holds the slot (`+0x18`). The `0x05` slot's stub enters the stock `0x09`/`0x0B` handlers with their stock return addresses and the record in `eax`, so B3's bounds and counters see them unchanged, and mirrors the dispatcher's state gate (`[0x512BC0 + 4·type]`); a bare `0x09` or `0x0B` is counted and dropped. The owner applies a hit iff its unit's birth ≤ the stamp; a bystander refuses only a provably stale one (both exact and different, or an exact birth after the other side's bound) and applies the undecidable rest as stock. First-free (arg 8 = 0) is decided once, at the block's first free slot: an unheld one, else the one freed longest ago if in an earlier tick, never one freed this tick; a NULL at the Deathmatch respawn `0x4653D9`, which stock uses untested, takes the block's end and writes nothing, so the respawn's own countdown fires again six passes (about 180 ticks) later. The tables are sized from the engine's `u16` slot count and never freed. `tagpu_dmgdelay.on=K` (test only) holds every outgoing hit K ticks; `tagpu_wirecheck.on` unit-tests the rules at attach (23/23). The heartbeat's `hits:` section counts both sides. [sim-fixes.md](tadr-port/sim-fixes.md) B4 has the argument, the engine map's *Unit identity on the wire* the addresses |
+| **ghost commander (landing B5, simulation):** `0x497F5E` (the load state's first call), `0x49842F` (the in-play entry's call of the frame function), `0x45477F` (the dispatcher's refusal in state 5), `0x48BA00` (the dirty entry's `call 0x4861D0`); the hold rides in B4's `0x05` receiver (`0x455F90`); compared, not written: `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`, `0x48B933` (the `0x2C` reader's slots), `0x453E84` (the sender's record) | the dispatcher passes a unit create only in state 6, and each peer creates its commander from its loader while still in state 5, so a peer whose load ends later refuses the others' commanders: each is missing on it until the round robin re-creates it (50 s at 1500, 16.7 s at 500), and one that moves first comes back through a dirty `0x2C` entry at the slot's stale position, `(0,0,0)` in a fresh array | every row in the fail-closed table, both builds. B4's receiver holds a carried `0x09` its gate refuses in state 5, per sender in arrival order (ten × 64, the overflow counted), under a lock, since the game thread and the loader both pump during a load; a `0x0C` refused in state 5 cancels the latest create held for its slot from its sender. `0x497F5E` empties the queue at the load's start. At `0x49842F`, after the game thread has read the loader's last store and before the frame function runs the first tick, the game thread replays each held create through B4's receiver past its state test and `CreateFromNetwork` (a stub that puts the sender in `edi` as the `0x09` case does, its return treated as `0x4553E9`), only from a sender that passes the dispatcher's sender test under the same DirectPlay id, into a slot that is empty or older by B4's stamps; in the catch-up ticks that follow and the frame function's own pump after them (`0x4968CB`), still in state 5, B4's receiver makes a refused create at once, in the pump it arrives in, where state 6 makes it, and a kill refused there marks a copy made before state 6 dying as the engine's ghost sweep does. The dirty create's stub reads the entry's move payload ahead of its decoder — ground: path point 0, the last node the unit reached (a straight move's origin until it is within 5 px of its goal); air: selector 2's x, y, z — only from B3's copy of the `0x2C`, under B3's reader, with each read inside the message's length — so B5 requires B3 armed and refuses the fail-closed table when it is not (B3 stays local for its own purpose) — and takes it only on the map, for the four disassembled move classes. `tagpu_ghostq.off` (test only) turns the queue and the kill note off; `tagpu_wirecheck.on` unit-tests the rules at attach (21/21). The heartbeat's `ghost:` section counts. [sim-fixes.md](tadr-port/sim-fixes.md) B5 has the argument, the engine map's *A create refused during the load* the addresses |
 | `0x490C5A`, `0x491903`, `0x4982CA`, `0x4C98FD` | the wind updater `0x490C40`'s three draws (the next change, the speed, the heading), which each peer makes from its own RNGs, seeded from its own clock: the game thread's CRT stream by WinMain (`0x49E8BB`), the sim RNG by the loader (`0x497180`) | nine rows of the fail-closed table: a `jmp` over the draws' first instruction to a stub that calls `wind_draw` (stock's rules, our own splitmix64 generator) and rejoins at `0x490CE8` with `eax` the main pointer; a stub on the loader thread's start (`call 0x4B6B20` at `0x4982CA`, on the game thread) that first reads DirectPlay's session instance GUID with `GetSessionDesc` (used only with `dwSize` 0x50 and a non-null GUID, else the engine's copy `main+0x479` when not null); a stub on the level load's call that seeds the generator first — in a network game (the engine's own test, `GameingState +0` = 3) from that GUID and a hash of the map's name, or from the hash alone when neither source has one, counted; outside one from the performance counter; a `jmp` over the engine's one `SetSessionDesc` call (nine bytes at `0x4C98FD`) to a stub that makes it with a copy of the engine's descriptor carrying the GUID DirectPlay holds then, validated the same way (no call without one), counted, so no `SetSessionDesc` the engine makes can move the session; `0x490C40` (26 bytes), `0x490CE8` (13), `0x4982C5` (5, `push 0x497C70`), `0x4C98D9` (36, the descriptor and the interface) and `0x4C9906` (4, the result test) compared |
 | `0x42CF5E` | the unit-def parser `0x42BF40`'s yardmap fill, which steps past the `YardMap` string's NUL onto the stack when the key is missing or ends on an invalid char | three rows: a `jmp` through `fix_call_regs` into `yard_parse` (stock's allocation, table, skip and repeat rules; a cell past the string takes the last valid char or `o`), rejoining at `0x42D079`; the 32-byte key read `0x42CF3E` and `0x42D079` compared |
 | `0x43A58D` | the saved-game order loader `0x43A420`'s fallback, which walks the order table one record past its end and keeps a count it did not find as the order's type | local, 4 bytes: `jbe` → `jb`, and the not-found `jmp` → `0x43A552`, "Ready" |
 | `0x439D41` | the stockpile bar `0x439D20`'s `idiv` by the slot weapon's `+0xE4`, with the slot index unbounded | local: a `jmp` to a 38-byte stub that bounds the index to 0..2, tests the weapon for NULL and `+0xE4` for 0, and takes the function's `return 0` (`0x439D6B`) on any of them |
 | `0x438EDE` | `DrawRangeCircle 0x438EA0`'s guard, which lets N = 0 segments (radius 1) through to `idiv` | local: the `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, so N = 0 takes the radius-0 epilogue |
-| `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -2421,13 +2434,26 @@ and is stock's byte for byte but for the raised build's cleared meteor tail. The
 write nothing of the engine's: they skip a repeat victim, so a unit past the twentieth takes one
 hit and a feature past the sixty-fourth one `0x4244B0` call, as the first twenty and sixty-four
 already did. Their frames are locals of the wrapper on the calling thread's own stack, found through
-a TLS slot, so each thread has its own: the `0x0E` receiver reaches area damage on whichever thread
-pumps the network, the loader's included. A set that outgrows its frame's 32 keys takes a block
-from `0x4D83B0`, freed when its call returns. Flak's floor writes `w+0x68` of a ballistic weapon whose `weaponvelocity` is 0 (§2.5), at
+a TLS slot, so each thread has its own; the `0x0E` receiver reaches area damage on the game thread
+only (its mask 4 passes in net state 6 alone), so that costs nothing and needs no argument. A set that outgrows its frame's 32 keys takes a block
+from `0x4D83B0`, freed when its call returns. Stacked aircraft write area damage's selector
+`[esp+0x10]` (2, which stock never gives it) and `esi`, inside `0x49A120`, and otherwise only their
+own pool and list; the damage a served aircraft takes is stock's own code on a victim stock missed. Flak's floor writes `w+0x68` of a ballistic weapon whose `weaponvelocity` is 0 (§2.5), at
 load; no stock weapon has one. The last column and row change which bucket and cells the stamp
-writes, the engine's own, for a unit stock parked. The line-of-sight fix writes nothing: it reads
-the player's grid at a row inside it; the projectile pass's view writes nothing either, and changes only which projectiles the engine's
-frame draws and poses. The wind writes the engine's wind fields (`main+0x37EC4`, `+0x37EDA`,
+writes, the engine's own, for a unit stock parked. The line-of-sight fix writes nothing of the engine's, only its own
+counters: it reads a grid at a row inside it — the player's LOS grid, or under Permanent and
+Circular line of sight (and at every mapped-grid copy) the shared mapped grid `main+0x14273` at the
+player's bit. At the sight emitter what it changes is then written by the engine: the row stored in
+the unit (`+0x7A`/`+0x7C`), the height byte `+0xF8`, and the sight stamped from that row into the
+owner's grids, whose later removal reads the same stored words. The projectile pass's view and the local copies write nothing either, and change only
+which projectiles, particles and features the engine's frame draws, which sounds play, and the
+cursor's sprite over a point. The wire bounds write the registers and stack words stock itself
+sets on the path they continue (`esi`, a stock-stored `[esp+0x20]`, a player record's GameTime
+`+0x18` as stock's `0x48B963` does), and on a stop one thing stock never writes there: the `0x2C` bit
+reader in the receiver's frame (`[esp+0x10..0x18]`), pointed at a zero dword of ours so the
+engine's own end-of-list reads a clear flag. The length note writes two TLS slots of ours per
+received message.
+The wind writes the engine's wind fields (`main+0x37EC4`, `+0x37EDA`,
 `+0x37ED8`, §2.5) on the game thread, in the tick's call, where stock writes them, with values from
 our generator where stock drew its own: that is simulation state, and the point — the projectile
 pass and the fire spread move by it, and wind generators produce and animate by it. Its seed is
@@ -2442,7 +2468,7 @@ the host seat's index differs between peers, and its DirectPlay ID can change du
 for every string stock parses inside its NUL. The saved-game fallback, the stockpile bar and the
 range circle write nothing: they change one register or take a branch.
 
-**The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
+**The log lines.** The first is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
 reclaim tests the anchor's mark 0x423892 ARMED; saved features restored under the border mask
 (0x43265A) ARMED; a saved feature's state written only into the record it owns (0x4250C0 0x425185)
@@ -2452,11 +2478,19 @@ menus past five entries (0x42DCF0) ARMED; the out-of-memory text (0x49E700) ARME
 keys (0x42BD29) ARMED; weapon IDs bounded, feature hits told from sentinels (0x42E468 0x49D280
 0x455FB8 0x424575) ARMED; one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE)
 ARMED; flak's divides (0x49CF18 0x42F314 0x42F32E) ARMED; the map's last row and column (0x47CC8B
-0x47CCA3 0x47CCA9) ARMED; line of sight at the map's edge (0x465B6A 0x465C04 0x465CA2 0x465D46
-0x465DA9 0x408095 0x407F74) ARMED; the projectile pass's view at the map's edge (0x49BEE8) ARMED.
-Counters: unit
-repeats refused at 0x…, feature repeats refused at 0x…, victims refused off their arrays at 0x…,
-list blocks run unwrapped at 0x…, flak fallbacks at 0x…`, where a simulation fix reads `in the
+0x47CCA3 0x47CCA9) ARMED. Counters: unit repeats refused at 0x…, feature repeats refused at 0x…,
+victims refused off their arrays at 0x…, list blocks run unwrapped at 0x…, flak fallbacks at 0x…`,
+and the second `enginefix: line of sight at the map's edge, in the table (0x465B6A 0x465C04
+0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74; the sight emitter 0x482615; the order resolver 0x43F5D1 0x43F631 0x43FC05
+0x43FD1A 0x43FF85 0x4400AA; the view player's map 0x46778A 0x4677D0) in the fail-closed table (the
+limits line); local (the cursor …; the build cursor 0x47D3B8; the feature helper …; the radar's
+projectile dots …; the particles …; sound …) ARMED; the projectile pass (0x49BEE8) ARMED. Own row taken at 0x…, one LONG per function:
+0x465AC0 0x408090 0x407E90 0x43F0E0 0x467440 0x4825B0 0x49BE60 0x43E490 0x47D2E0 0x4658E0 0x47F300
+0x473590 0x474170 0x4745E0 0x475470 0x473A00 0x466DC0`, then the stacked aircraft's `enginefix: stacked aircraft
+served to area damage after its walk (…) in the fail-closed table (the limits line). Aircraft served, counted
+at 0x…`. The stubs are reported later, by the limits install, once the raised build's weapon
+sites have taken theirs too: `enginefix: the fixes' and limits' stubs take N bytes in P page(s) of
+4096`. A simulation fix reads `in the
 fail-closed table (the limits line)` in place of `ARMED`, and the counters are `tacli peek`
 addresses (the first two count the repeat hits stock would have made), and every grow or refusal of the frame logs its own line
 (`enginefix: composite scratch grown|refused (<reason>) for <writer>: N px in R rows asked, A held, P
@@ -2465,7 +2499,7 @@ that re-keys logs its first eight types and a total (`enginefix: unit sync keys:
 re-keyed`); a saved game's load logs what the border fix did (`savedfeat: the restore ran with the
 border mask open: N cells opened, M shut again and the pathing maps refreshed around each in T ms,
 K hold a restored feature's anchor`, or why it left the restore to stock). Landing 6's five fixes
-log a second line of their own, `enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) …; yardmaps
+log a line of their own, `enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) …; yardmaps
 parsed inside their string (0x42CF5E) …; the saved-game order fallback (0x43A58D) …; the
 stockpile bar's divide (0x439D41) …; a range circle of radius 1 (0x438EDE) …. Counters: levels
 seeded at 0x…, network levels seeded from the engine's session copy at 0x…, SetSessionDesc calls
@@ -2480,12 +2514,21 @@ performance counter (game mode M, not a network game), map "…"`), and a def wh
 its M cells lie past its YardMap string and take 0xXX (K so far)`, the first 32 and then every
 power of two. A
 site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
-`SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
+`SKIPPED (its stub could not be made)` or `SKIPPED (VirtualProtect of the site failed)` in
 place of a local fix's `ARMED`. The local fixes that take stubs of their own (the sort buffer, the
 NULL plot, the terrain window, the composite scratch) release them when their sites cannot be
-written; flak's divides, the stockpile bar, the range circle and the table's fixes share pages of
-stubs, which stay, since a simulation fix's table either goes in whole or ends the process at the
-report. There is no switch: all twenty-three fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
+written. Flak's divides, the projectile pass's view, the local line of sight, the stockpile bar,
+the range circle, the table's fixes
+and, in the raised build, the limits' weapon sites take theirs from `fix_code`: each stub contiguous
+inside one page, a stub that does not fit the current page opening another, and every page kept
+for the process, since a simulation fix's table either goes in whole or ends the process at the
+report. MEASURED with B3 (2026-09-25): 3 984 bytes in one page in the raised build, B3's 480 among
+them; the nested references' two stubs and the `0x0A`'s add 64 (B3's 544 by the stub lengths, 4 048 in the page, not yet read live). MEASURED on the B2 branch: 3 504 bytes in one page in the raised build (the engine fixes'
+2 992 and the weapon sites' 512); 3 120 in the stock-limits build, whose weapon-ID stubs are fixes',
+measured before the line moved to the limits install, which takes none there. A scratch build cut
+to 0x300 a page spread the engine fixes' 2 992 over five pages and played the stack fixture the
+same. There
+is no switch: all twenty-eight fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
 `enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped` or `enginefix: weapon
 <name>... (ID <id>) has a name longer than its record, and is skipped`, a duplicate `enginefix:
 weapon ID <id>: <name> replaces <name>`, and a dropped message or companion `enginefix: weapon
@@ -4268,8 +4311,10 @@ A translucent copy of the building under the placement cursor and of every queue
 pass is showing a site rect for, drawn through the posed program in the **model's own colours**
 at the ghost's alpha, over the footprint squares exactly as the mark and order passes draw them.
 The squares alone carry the green/blocked distinction; the ghost reads no colour at all. Nothing
-about the squares changes; no new engine hook and no engine write: the ghost is a posed body draw
-whose DATA arrives entirely in the frame packet.
+about the squares changes and nothing is written into the engine: the ghost is a posed body draw
+whose DATA arrives entirely in the frame packet. The engine hooks it depends on are TADR section
+C's observers (`tagpu_datakeys.c`): the FBI reader (`0x42BF40`, `0x42BF97`) for `PreviewPieces=`,
+and the COB length (`0x4B6BA0`) for the `Create()` mask.
 
 - **The data.** `TAGPU_PK_BUILD`, a build-orders table the publisher copies out of the order
   pass's own game-thread snapshot — the same records `draw_build` draws the squares from, under
@@ -4293,6 +4338,40 @@ whose DATA arrives entirely in the frame packet.
   player's own team colour — exactly what the built unit will look like. An earlier cut tinted
   it green/red (`uGhostTint`); the owner dropped the tint (2026-09-12): translucency alone, the
   existing `uAlpha` blend the cloak already rides.
+- **THE PIECES THE FINISHED BUILDING HIDES, THE GHOST HIDES** (TADR section C, landing C1,
+  [data keys](tadr-port/data-keys.html)). A structure's COB `Create()` hides pieces the moment the
+  unit exists — muzzle flares, a radar dish, a moho's rotary — and no script runs for a preview, so
+  the ghost used to show them: 21 of the 126 stock structures hide a piece with faces. The mask is
+  computed on the GAME thread by `tagpu_datakeys.c`, once per type per level, and published as
+  `TAGPU_PK_GHOSTMASK`: type, piece count, template root, 256 bits, one row per type a ghost may
+  draw this frame that hides anything, sorted by type (validated in `frame_valid`). What it hides:
+  - **by default, `Create()`'s hides, read and not run** — from the entry point, through the
+    opcodes whose length is certain (`tools/ta3do`'s `COB_PROLOGUE`), `HIDE` sets and `SHOW`
+    clears a COB piece; the walk stops at the first opcode it cannot size. Every read of the COB
+    is bounded by the block's own length: the size `0x4B2450` checksums the block with
+    (`0x4B6BA0(buf, size)`, the call that returns to `0x4B247C`), which an observer records. A
+    script with no recorded length gets no row. The template's node names have no such length;
+    they are read under the type bound and the level lifetime, as every reader of the tree is.
+  - **matched to the model as the engine matches it**: `0x45A950` builds the primitives in
+    `0x45AEC0`'s pre-order, then for COB piece *i* swaps in the first primitive at an index ≥ *i*
+    whose node name `_stricmp`-matches. `tagpu_datakeys.c` reproduces that, so COB piece *k* names
+    the node the engine will hide (on stock content it equals a by-name match).
+  - **with `PreviewPieces=` in the FBI**, every piece the list does not name (TADR's split and
+    fold; a list that names no piece of the model is ignored and logged).
+
+  The cursor's row rides every packet with a build on the cursor (mode `0x0E`, the packet's own
+  `build_unit_id`), not the builds table's poll; a packet whose mask table was cut or overflowed
+  (`TAGPU_PK_TRUNC_GHOSTMASK`) draws no ghost at all that frame, counted as `maskcut=` in the
+  heartbeat, so no ghost draws with the pieces it should hide. The bits are in the ghost's own walk order, and **both threads call one walk,
+  `tagpu_model_walk` (`tagpu_model3do.h`)**, so the order cannot drift. `ghost_one` applies a row
+  only when its root and piece count equal the template it walked — two values compared, never
+  followed — and a hidden piece takes `posed_pose`'s form: an all-zero matrix and visibility 0.
+  A type with no row takes exactly the path it took before. **Measured** with
+  `scenarios/ghost-mask.json` against the same tree without the mask, the cursor ghost at zoom 2:
+  ARMLLT differs by 34 px, ARMAP 177, ARMHLT 360, CORINT 395, CORMOHO 1 121, each inside the hidden
+  piece; CORDOOM (four hidden pieces, none with faces) and the no-row ARMSOLAR, ARMVP and CORFUS
+  by 0; two shots of one build 0 in every case. `tools/datakeys_fixture.py`'s clones show
+  `PreviewPieces=base` drawing the base alone.
 - **The cache key — and the leak it closed.** The synthesised run walks the tree in *its* order,
   which is not the prim order a live unit's packet run carries, and the bake lays the VBO's
   per-vertex piece indices and `parent[]` out in run order. So the ghost's bake is keyed apart
@@ -4354,9 +4433,10 @@ whose DATA arrives entirely in the frame packet.
   — and the fixed ghost matches the `0x8000` one, band at the top and ramps at the bottom.
   Same instance, same scenario, same camera, the two DLLs swapped under `--keep-dll`.
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
-  30-frame poll; the armed line and the `ghost: curs= queue= drawn= built= nobake= trunc= alpha=`
-  heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0; `built=` is
-  a count, not an alarm — it is non-zero whenever anything is being built. **It needs
+  30-frame poll; the armed line and the `ghost: curs= queue= drawn= built= nobake= trunc=
+  masked= maskmiss= maskcut= alpha=` heartbeat log only on change / every 300 frames. `nobake`,
+  `trunc`, `maskmiss` and `maskcut` must stay 0; `built=` and `masked=` are counts, not alarms —
+  `masked=` is the ghosts drawn with a mask row. **It needs
   `tagpu_native.on`** — the ghost draws through the unit pass's view and program — and says so:
   armed without it the log reads `ghost: off — needs tagpu_native.on (it draws through the unit
   pass)` and the pass declines. **Since 2026-09-14 it IS a play default** and carries `needs
@@ -5088,7 +5168,8 @@ mode `tools/vk-ab.py` exists to name.
   `UNDEFINED` in. Both subpass dependencies grew their depth halves
   (`LATE_FRAGMENT_TESTS`/`DEPTH_STENCIL_ATTACHMENT_WRITE` →
   `EARLY_FRAGMENT_TESTS`/read+write).
-* **The format is 24-bit fixed point or there is none.** The GL lane's world FBO is
+* **The format is 24-bit fixed point or there is none.** [Replaced by G21a, §2.91: float with
+  stencil first, 24-bit with stencil second, and the two test alike.] The GL lane's world FBO is
   `GL_DEPTH24_STENCIL8`, so a `D32_SFLOAT` attachment would settle a z-fight the other way in
   exactly the cases that are too close to call — which are the cases a 0-px comparison is made of.
   `vk_depth_format()` asks for `D24_UNORM_S8_UINT` and then `X8_D24_UNORM_PACK32`, and a device
@@ -5648,7 +5729,10 @@ before them.
 `lineRasterizationMode` drew a **strict superset** of the twin: all 126 of its pixels plus
 **exactly one extra fragment at the END of each segment** (4 px on the fixture, GL 126 ink against
 Vulkan 130, with *no* GL-only pixel anywhere). GL's non-antialiased lines follow the **diamond-exit
-rule** and Vulkan's default mode does not; `VK_LINE_RASTERIZATION_MODE_BRESENHAM` does. The seam
+rule** and Vulkan's default mode does not; `VK_LINE_RASTERIZATION_MODE_BRESENHAM` matched it on
+this device — but it is not a guarantee: the specification lets a Bresenham line deviate from the
+ideal fragments by up to one unit, so two conformant devices can differ (G21b, §2.93, replaced
+every line primitive with an integer test for that reason). The seam
 now asks for `VK_EXT_line_rasterization` and enables **`bresenhamLines`**, publishing it to passes
 as `TAGPU_VKPASS::lineok`, the same shape as `flipok`. A pass with line vertices and no `lineok`
 refuses the frame. That took 4 px to 0.
@@ -5880,6 +5964,8 @@ compares `p.z * 0.5 + 0.5`, computed in the consumer's own shader, against what 
 map, so the viewport transform has to be GL's arithmetic and the format has to be GL's
 quantisation.
 
+[Replaced by G21a, §2.91: the caster vertex stages remap z to `(z + w)/2` themselves, and the
+extension, `zclipok` and the pipeline state below are gone.]
 The seam therefore queries `depthClipControl` and publishes it as `TAGPU_VKPASS::zclipok`, in the
 same shape as `flipok` and `lineok`, and the pass stands down without it. **The feature is
 QUERIED through `vkGetPhysicalDeviceFeatures2KHR`, never inferred from a `vkCreateDevice` that
@@ -5994,9 +6080,8 @@ is ever used against — the map's and the 1×1 dummy's — and a device that wi
 keeps the NEAREST sampler and stands the pass down on a frame that would actually sample it. The
 map's format is **exposed by the shadow pass** (`tagpu_vk_shadow_format`) rather than re-derived in
 the consumer, so the two files agree by construction instead of by both happening to try the same
-candidates in the same order. On the reference setup it is
-`VK_FORMAT_X8_D24_UNORM_PACK32` — `GL_DEPTH_COMPONENT24` exactly — and linear filtering is
-available.
+candidates in the same order. On the reference setup it is `VK_FORMAT_D32_SFLOAT`, with linear
+filtering (§2.91).
 
 **So the terrain pass has a third way to stand down**, beside the restored atlas and a map this
 frame's shadow pass could not draw: a device that will not filter a depth format linearly. **And
@@ -9373,7 +9458,9 @@ silently.
    consumer's own render pass. `TRANSFER` is in both scopes because the dump's copy is exactly the
    reader a dependency naming only the sampling consumer would have left out. Not `BY_REGION`: a
    conv draw reads a 3×3 neighbourhood and OUT reads a different image entirely, so neither read is
-   framebuffer-local.
+   framebuffer-local. The dependencies are what the spec requires, but not every driver honours
+   them. AMD's Windows driver drops them for these passes, so `end_pass` records the same ordering
+   again as a pipeline barrier (§2.95).
 2. **`dst_ready` transitioned the destination from `UNDEFINED` unconditionally, including on a
    repaint** — which licenses the driver to discard every texel of the atlas the repaint exists to
    recolour *in place*. It would have blanked exactly the world it was added to avoid blanking. The
@@ -10425,8 +10512,9 @@ Two forms, then: **a GL handle used as a validity test**, and **a construction r
 through one**. Both are invisible while one backend exists, because the handle is always there.
 
 **The counterpart rule that came out of it**: a device limit belongs to the device that will
-consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_uniform_range()` read
-`maxImageDimension2D` and `maxUniformBufferRange` from the physical device actually bound, and
+consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_storage_range()` read
+`maxImageDimension2D` and `maxStorageBufferRange` from the physical device actually bound (the
+storage range capped at `INT_MAX`, since a driver may report `UINT32_MAX`; §2.94), and
 both return **0 for "no device yet" rather than a default** — the lane takes ~200 ms to come up
 while the gathers run from the first frame, so a pass that read 0 as a bound would cache a ruined
 atlas for the life of the process. That is measured, not hypothetical: it is what
@@ -16619,9 +16707,9 @@ the framebuffer is refused"*); `tagpu_vk.c` did the opposite, on a comment claim
 both aspects "cannot be used as a plain depth attachment on every driver". The world module is
 right and the seam now matches it: aspect mask, `stencilLoadOp = CLEAR`, `depthStencil.stencil =
 0` in the clear value. `TAGPU_VKPASS.stencilok` says whether the chosen depth format has the plane
-at all — `D24_UNORM_S8_UINT` does, the `X8_D24_UNORM_PACK32` fallback does not — and a device
-without one gets **no hard shadow** rather than an unmasked one. Same shape as `flipok`,
-`lineok`, `zclipok`.
+at all, and a device without one gets **no hard shadow** rather than an unmasked one. Same shape
+as `flipok` and `lineok`. Both formats the seam takes carry the plane (§2.91), so it is 1 wherever
+there is a depth format.
 
 **`shadows=` now defaults to HARD (2), and that is a consequence rather than a preference.** SOFT
 was the default and has drawn nothing since landing 11 D2 deleted `tagpu_shadow.c`: that module
@@ -16714,9 +16802,13 @@ pipeline took the whole marker layer with it — now it drops the rects alone. A
 binary.
 
 **Not covered.** The occlusion was compared against the stock game by eye on two trees, not
-swept. `0x4CC650`'s clip at the context edge is not reproduced (the scissor cuts the band
-instead). A device without Bresenham lines, or without a line `ceil(3·scale) + 2` wide, draws no rect —
-the rest of the marker layer still draws and the log says why once.
+swept. The rect's lines are now §2.93's: a band and an integer test on the line grid (the world
+target's pixels), `ss` pixels wide, with DrawLine's clip (`0x4BEA20` to the viewport, then
+`0x4CC650`) applied to their ends where the record is built, so the rect follows the engine at
+the viewport edge and needs no device line feature. At `ss = 2` that line steps by target pixels
+— smooth, by the owner's ruling — so on a window the game frame's size it no longer resolves to
+the flat colour the table above measured ([UI markers](ui-markers.html) §1). The line-primitive rule and the width requirement described above belong to the
+pipeline §2.93 replaced.
 
 **Found on the way.** On `500v500` the unit pass stood down for the whole frame
 (`vk: unit: the GL twin drew 348 posed unit(s) this hand-over does not carry`): about 860 units
@@ -17701,7 +17793,7 @@ Gamma once, at the world composite. No shadow is sampled and no waterline clips 
 and holds `2N + 2` keys for `N` models; model `k` takes `encFx + (2k + 1)·step`, a sprite or a
 line after `k` models `encFx + 2k·step`, and every flash the key the explosion walk starts at.
 The step is never below `16·2⁻²³` of the depth scale and the band grows to hold it, so adjacent
-keys stay apart in the D24 buffer; at the default six the air band is where it was
+keys stay apart in the depth buffer (D24 or float, §2.91); at the default six the air band is where it was
 (`airKey = fxKey + 12`). [Effects](effects.html) §4 has the sequence.
 
 **An effect is drawn whole or not at all, across two passes.** Inside `tagpu_fx.c` the record's
@@ -17995,8 +18087,8 @@ TNT feature that one of those spawns destroys still is.
   on-map feature sorts against units and 3D wrecks exactly as it does under black; `map_key` is
   the one function that computes them. **A mirrored feature takes its source's key, as copy 0 of
   its row takes it**: the source's own column, whatever copy the feature stands in. On the map's
-  rows copy 0 is the map, so a side copy's key is `map_key` — the same float, the same D24
-  quantization, the same ties. Above and below the clamped rows copy 0 is the mirror's upright
+  rows copy 0 is the map, so a side copy's key is `map_key` — the same float, the same stored
+  depth, the same ties. Above and below the clamped rows copy 0 is the mirror's upright
   band: a tall key is `map_key`'s rule on its row (`3 + 4·rel` plus `1.5·(col − c0)/cols`, `rel`
   clamped to the band the frame's keys were sized for, `rows + 8`, below the effects), and a flat
   one takes `0.40 + 0.10·f` with `f` in `[−0.6, −0.1)` above the map and `[1.1, 1.6)` below it,
@@ -18008,9 +18100,10 @@ TNT feature that one of those spawns destroys still is.
   reflection of what the view shows past an edge is on the map in view and its sweep holds the
   sources; a column outside them keys as the nearest inside, which only the sweep's margins reach.
   **Why partner keys and not a painter's order across the edge**: two flats of one row are
-  `0.1/span` apart in the key, and the 24-bit buffer resolves about `1.2e-7` of the frame's depth
+  `0.1/span` apart in the key, and the depth buffer resolves about `1.2e-7` of the frame's depth
   scale (`depthScale`, some 360 at 1× and 890 at 0.25× at 1024 × 768), so neighbouring flats of the
-  map's own tie in the depth buffer and `VK_COMPARE_OP_LESS` keeps the first drawn. Main draws the
+  map's own tie in the depth buffer and `VK_COMPARE_OP_LESS` keeps the first drawn — in the float
+  format as in D24, which tie the same flats (§2.91, 0 px on `feat-forest`). Main draws the
   map that way; a mirror keyed to continue the order would stack those same flats differently
   from the map it reflects, and a copy keyed as its source repeats the map's picture exactly.
 - **The fragment stage** reads the mode as bits: `TAGPU_FEAT_MIRROR` (4), `TAGPU_FEAT_OFFROW` (8)
@@ -18333,3 +18426,506 @@ the gather mirrors; the tie rule's nudge (`TAGPU_EDGE_NUDGE_PX / zoom`, `+x` on 
 the world corners taken after it; `mapfeat_unpark` at every
 join, under the lock, before the build's first check; the table's place in the fill and cut order
 and the reserve's assert.
+
+### 2.91 Float depth, the world and the sun-shadow map (`tagpu_vk.c`, `tagpu_vk_shadow.c`, `tagpu_posedraw.c`, `tagpu_shadow_glsl.h`) — G21a
+
+The plan is [hardware portability](hardware-portability.html) §3 G21a. This section replaces the
+24-bit rule of §2.29 ("the format is 24-bit fixed point or there is none"), the X8_D24 fallback and
+`zclipok` of §2.83, and the depth clip control of §2.32.
+
+**The world's depth format** (`vk_depth_format`) is `D32_SFLOAT_S8_UINT`, else
+`D24_UNORM_S8_UINT`. The Vulkan specification makes every conformant device offer one of the two
+as a depth-stencil attachment, so the world passes arm on every GPU; `UNDEFINED` is left for a
+device that offers neither, and the passes that test depth then refuse as before. Both carry a
+stencil plane, so `stencilok` is 1 wherever there is a format and the units' Classic hard shadow
+(§2.83) never loses its mask to the fallback. The seam logs the one it chose, once per device:
+`vk: depth format: D32_SFLOAT_S8_UINT (130)` on the reference setup (`D24_UNORM_S8_UINT (129)` on
+main). The world target, the seam's own attachment and the passes' `up` lines follow it unchanged.
+
+**Why float draws the same picture** [SOURCE: `tagpu_vk.c` above `vk_depth_format`; checked
+numerically]. Every world pass writes a clip z in [0, 1] and the viewport maps it onto [0.5, 1]
+(§2.28). A float32 `f` in (0.5, 1] is `j·2⁻²⁴` for an integer `j` in (2²³, 2²⁴], and D24's
+conversion takes `f·(2²⁴ − 1) = j − f`, which lies in [`j − 1`, `j − ½`): its two neighbouring
+integers are `j − 1` and `j`. Rounding to nearest or toward zero returns `j − 1` for every such
+float (checked over all 2²³ of them): one D24 value per float, in the same order. So on such a
+device a depth test between two float32 fragment depths gives the same answer on either
+attachment: equal keys tie on both and keys a float apart are apart on both. Vulkan's
+float-to-normalized conversion lets a device return either neighbour. Whichever it returns, a
+larger float never gets a smaller D24 value, so no test reverses; the most such a device could do
+is tie two adjacent floats, and the reference setup ties none it draws [INFERRED from the 0 px
+below].
+
+**The range is (0.5, 1], not [0.5, 1]**: rounded to nearest, 0.5 and the float above it
+(`0.5 + 2⁻²⁴`) convert to the same value, 2²³. No tested depth comes near 0.5. The highest key a
+depth-tested draw carries is `airKey + 5` (`encLayer[9]`) and `depthScale` is `airKey + 8`
+(`tagpu_native.c`), so every tested clip z is at least `3/depthScale` and every stored depth at
+least `0.5 + 1.5/depthScale`: some 28 000 float steps above 0.5 at the 0.25× scale of about 890.
+The marker draws that write clip z 0 have the depth test off (the selection rects, which test,
+carry the unit pass's keys). The plan expected changes where two keys lie within one
+24-bit step, and named the neighbouring flat features of one row (§2.90) as the known class. That
+class does not change: the flats that tie in D24 tie as floats, and the flats a step apart are a
+step apart in both. **The format changes a pixel only on a rasteriser that computes a D24
+target's depth other than as a float32** [INFERRED]; that the reference setup's does not is
+[INFERRED from the 0 px below].
+
+**The sun-shadow map** (`tagpu_vk_shadow_format`) prefers `D32_SFLOAT`, then
+`X8_D24_UNORM_PACK32`, then `D24_UNORM_S8_UINT`, taking a candidate with the depth-attachment,
+sampled and LINEAR-filter bits before one without LINEAR. The consumers' compare samplers and the
+unit pass's 1×1 stand-in follow it (§2.32). On the reference setup it is `D32_SFLOAT` with LINEAR:
+the unit pass logs `compare sampler LINEAR`. The texel is 4 bytes either way, so the map's size is
+unchanged (16 MB a slot at `shadowres=2048`).
+
+**Its projection.** The light matrix fills [−1, 1] in z, and Vulkan clips to [0, w]. Both caster
+vertex stages — the heightfield's `VS_H` (`tagpu_shadow_glsl.h`) and the unit pass's
+`uDepthPass == 1` path (`tagpu_posedraw.c` `VS`) — now end with
+`gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5`. The clip test `0 ≤ z′ ≤ w` is then the
+matrix's own `−w ≤ z ≤ w`, and the stored depth is `(z/w + 1)/2`. That is the value
+`negativeOneToOne` with `minDepth 0 / maxDepth 1` stored before, and the value `taShadowAt` compares
+against (`p.z * 0.5 + 0.5`). So `VK_EXT_depth_clip_control` is no longer asked for: the extension
+rung, its retry and its log line are gone from device creation, `TAGPU_VKPASS::zclipok` is gone,
+and neither caster pipeline chains `VkPipelineViewportDepthClipControlCreateInfoEXT`. The
+other rungs of the extension ladder are untouched.
+
+**The depth bias, re-checked against float** [SOURCE]. Neither caster pipeline has a rasteriser
+bias: `depthBiasEnable` is false in both, so a float attachment's exponent-scaled constant bias
+does not arise. The bias is the receiver's, in `taShadowAt`: the normal offset
+`W + n·uShScale.x·1.5` in world units, and `z − (1 + 2(1 − n·l))·uShScale.x / uShScale.y`, one to
+three texels' worth of depth, in the stored [0, 1] units. The remap stores the same value in the
+same units as before, and its depth slope is the one `negativeOneToOne` gave, half the matrix's
+clip-z slope, so none of those constants moves (old → new: unchanged). What the format could
+change is the step under the bias. D32_SFLOAT's step is 2⁻²⁴ in [0.5, 1) and finer below;
+X8_D24's is 2⁻²⁴ everywhere. So float is never coarser, and the bias is far above either.
+**None of this runs.** Nothing publishes `TAGPU_SHADOWHAND` and `TAGPU_PDHAND.depthOn` has no
+producer (§2.83), so neither caster pipeline is built in this build. The remap is checked in the
+translated GLSL (`tools/spirv-gen.py --dump`) and by the arithmetic above, not in a picture. The
+map's format is exercised: every launch asks for it, for the consumers' samplers and the stand-in.
+
+**MEASURED 2026-09-25 — the A/B against main.** The reference setup's discrete GPU on a private
+Xvfb display, 1024 × 768, `ss=2` (world captures 2048 × 1536, 3 145 728 px), `tagpu_defaults.off`.
+Main at `c225c3c` against the branch, both clean builds (`.text` 0xDE3E4 and 0xDE124). The forest
+runs used two instances in parallel, one taking main then the branch and the other the branch then
+main, so each build ran on both; every other fixture took main, branch, main, branch on one
+instance. Every capture was taken twice a few seconds apart
+(the static check). Classic, then Classic++ armed live in the same launch (the restorer's lines
+quiet first), at 1× and 0.877× (`tagpu_zoom.txt`).
+
+**Each world pass alone** (`.ab`: the pass under test drawing, every other pass `.on=off`, against
+the black clear). Changed pixels, main against the branch, of 3 145 728:
+
+| fixture | pass | Classic 1× | Classic 0.877× | Classic++ 1× | Classic++ 0.877× | drawn px (Classic 1×) |
+|---|---|---|---|---|---|---|
+| `feat-forest` | terrain | 0 | 0 | 0 | 0 | 2 522 876 |
+| `feat-forest` | features | 0 | 0 | 0 | 0 | 529 096 |
+| `feat-forest` | units | 0 | 0 | 0 | 0 | 36 247 |
+| `marker-mix` | markers | 0 | 0 | 0 | 0 | 1 080 |
+
+Each 0 holds for all four pairings (run 1 against run 1, run 2 against run 2, and both crossed);
+the static check is 0 everywhere and each build's own run-to-run floor is 0. The forest view is
+the flat-tie class's own ground: the feature heartbeat counts 118 anchors in the rect, 31 of them
+flat. The markers' fixture drew health bars only (the selection's boxes did not show in it).
+
+Two fixtures could not be paused on one frame twice, and read as noise, not as a result:
+`fx-rockets` (a live fight, paused once a projectile exists) differs 1 379–13 108 px between the
+builds against a floor of 4 167–12 588 within each build, and the units of `shadow-lab` 17 109–
+30 866 against 12 609–28 333. An effects-only capture could not show the format in any case: the
+effects pass tests depth and writes none, and alone against the clear every fragment passes on
+either attachment. Where effects meet the world's depth, the argument above is the whole case.
+
+**The whole frame, presented** (`import -window`, 1024 × 768 = 786 432 px), with terrain,
+features, units and the shipped `shadows=hard` — the units' Classic silhouette through the
+stencil, the structures' slant: `selbox-facings` at two stops (tanks on grass, whose silhouettes
+fall on the grass; a solar collector on water) and `static-terrain` at a light laser tower on
+land. 0 px at every stop, both presets, both zooms, for all four pairings; static 0, floor 0.
+
+**The classes.** None: with every repeatable count at 0, there is no change to classify against
+the engine's frame, closer or further.
+
+**Frame time and memory** (MEASURED 2026-09-25, the same GPU): 1920 × 1080, `ss=2`, the play arm
+set on `feat-forest`, paused, `maxfps` uncapped; `ftime.on`, four reports of 256 frames a preset,
+two launches a build taken main, branch, main, branch. Other sessions' game instances shared the
+GPU throughout, so each report moves by more than the builds differ:
+
+| preset | main p50 | branch p50 | main p99 | branch p99 |
+|---|---|---|---|---|
+| Classic | 1.82 ms (0.73–1.91) | 1.77 ms (1.54–1.99) | 4.57 ms (3.50–7.44) | 4.60 ms (3.92–6.00) |
+| Classic++ | 2.06 ms (0.41–2.19) | 2.02 ms (1.67–2.29) | 5.15 ms (4.00–6.10) | 4.88 ms (3.77–10.38) |
+
+The median of eight reports, the range in brackets. No change in frame time is measurable.
+
+**The float format costs memory.** The process holds 599 MiB of video memory on the branch
+against 478 MiB on main, in every one of the eight readings (`nvidia-smi`, per process): 121 MiB
+more at 1920 × 1080. The world target at `ss=2` is 3840 × 2160 in three frame slots, 24.9 M
+pixels, plus the seam's attachment at the swapchain's size; 121 MiB over those is about four
+more bytes a pixel, so the driver lays `D32_SFLOAT_S8_UINT` out at eight bytes a pixel where
+`D24_UNORM_S8_UINT` takes four [INFERRED from the total]. It scales with the target: a 3840 ×
+2160 game at `ss=2` would hold about 380 MiB more for the world target alone. Since the two
+formats draw the same picture (above), what float buys is the one format on every GPU, and the
+price is this memory where D24 exists.
+
+**Not covered.** The sun-shadow map's picture (no producer, above). A device that offers only
+`D24_UNORM_S8_UINT`, where nothing changes from main. Any rasteriser but the reference setup's
+under the float format; G21d takes the Windows card. The validation layer, still.
+
+**Risky spots for a review.** `vk_depth_format`'s order and the log line; the device-creation
+ladder with the depth-clip rung gone (`dexts[3]` and its bound, the pNext chain now carrying only
+the line struct); `tagpu_vk_shadow_format`'s two-pass choice and what `*linearOk` means after it;
+the remap in both caster vertex stages and the regenerated `tagpu_posedraw.spv.h` and
+`tagpu_shadow.spv.h` (the body program shares `VS`, so its words moved too; its A/B above is the
+check that its picture did not); `stencilok` now 1 wherever `dfmt` is set.
+
+### 2.92 TotalA.exe's registry in a tacli test folder (`tagpu_regstore.c`, test mode only) — G21c
+
+The plan is [hardware portability](hardware-portability.html) §3 G21c, the contract is
+`tagpu_regstore.h`, and the engine's side, every call site with the keys and values it reads
+and writes, is [exe reverse engineering](exe-reverse-engineering.html) §"The registry".
+
+**Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, which `DllMain`
+attach runs right after the fork's `delay_imports_init` and before the return for cnc-ddraw's
+config tool (so an inherited `cnc_ddraw_config_init` cannot skip it; detach returns early
+exactly when attach did), looks for the token `-xtacli-test` on the command line
+and for a `tacli-state` folder beside the running exe (`GetModuleFileNameW(NULL)`, never the
+working directory). tacli passes the token on every remote launch; the engine skips it (`x` is
+above the `'B'..'w'` of its switch table, `ja 0x49F461`, [command-line
+options](cmdline-options.html)). **Real mode needs both absent**: no token, and the folder not
+found. A folder that cannot be looked at (a share, an access rule), without the token, is real
+mode too, so a player's folder stays inert. Real mode logs `registry: real (no -xtacli-test
+token, and no tacli-state folder beside TotalA.exe)` and installs nothing, so a player's game
+carries no hook of this section.
+
+**Test mode fails closed.** A store that is missing, a folder, unreadable or not loaded whole,
+no memory for it, an exe path that cannot be read, a registry import the hooks do not answer
+(`TotalA.exe`'s or `win32.dll`'s), or a `win32.dll` not loaded at attach (a static import of
+`TotalA.exe`, so the loader maps it before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
+log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
+first instruction never runs. The line names the process (`s_exe`), so a cnc-ddraw config
+tool started in a test folder reads as one. `rs_refuse_run` is `noreturn` by construction:
+`ExitProcess` in a loop follows `TerminateProcess`, since a caller goes on as though the store
+were whole.
+
+**Import-table hooks, not engine addresses.** In test mode, at `DllMain` attach right after
+`tagpu_log_init` (before `cfg_load`, the byte patches and the fork's `hook_init`),
+`hook_patch_iat` replaces:
+
+| module | imports | slots |
+|---|---|---|
+| `TotalA.exe` | `RegOpenKeyExA`, `RegQueryValueExA`, `RegCreateKeyA`, `RegOpenKeyA`, `RegQueryValueA`, `RegCreateKeyExA`, `RegSetValueExA`, `RegFlushKey`, `RegCloseKey` | `0x4FC000..0x4FC020`, one each in that order; every call site is in the engine map |
+| `win32.dll` | `RegOpenKeyExA`, `RegQueryValueExA` | its own; it reads `musicvol` and `cdmode` |
+
+After patching, `rs_count` walks the import directories of the exe and of `win32.dll`: every
+ADVAPI32 import whose name begins with `Reg` must now hold one of the hooks, or the process is
+terminated with a log line before the game's first instruction. The fork's `hook_init`, which runs later, hooks no
+registry function, so nothing overwrites these slots.
+
+**What the hooks do.** `HKCU\Software\Cavedog Entertainment` and every key below it are served
+from the store in memory; each change rewrites the file whole (a temporary file, flushed, moved
+over it with `MoveFileExW`). `HKCU` and `HKCU\Software` get store handles that hold no values.
+Every other key is read-only: an open asking for any right beyond reading, a create and a value
+write are refused with `ERROR_ACCESS_DENIED`, and a read-only open, a query and a close go to
+the real registry. No hook calls a registry function that writes. A store handle is
+`0x6D5A0000 + 4 × index`, above every kernel handle and below the predefined keys.
+
+**One byte patch, also test mode only**: the `-r` switch's two jump-table entries (§2.6), since
+`dsetup.dll` writes the registry through imports of its own.
+
+**The fork's own registry writes.** `indeo.c` writes four `vidc.iv*` values under
+`HKCU\…\Drivers32` at attach and deletes them at detach; in test mode `dllmain.c` skips both
+(the game plays Smacker and loads no Video for Windows codec). `debug.c` and `utils.c` only read,
+and only in a `make DEBUG=1` build or under `age.dll`.
+
+**State and threads.** No engine memory is read or written, so `tagpu_regstore.c` is not on
+`thread-split.allow`. The store's keys and values sit under one critical section, which any
+thread calling the registry may take. Under it run only this module, kernel32 file calls and
+`tagpu_log`, whose own lock is a leaf. Real registry calls run outside it. A change of value
+rewrites the file under that lock, on the calling thread: the game's saver writes about fifty
+values in a burst, but only the ones that changed cost a rewrite (two rewrites in the logged
+run under wine).
+
+**The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
+above are the only way `TotalA.exe`'s and `win32.dll`'s code reaches the registry, and the `-r`
+switch is closed. Nothing hooks the system DLLs the game uses and loads by name; the other
+DLLs it loads at run time (`online.dll`, the extension DLLs `online.dll` loads into the game's
+process, `reporter.dll`, `DebugHelper.dll`); the programs the game starts (what `ShellExecuteA`
+opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task
+while it exists, and those of the programs it runs). The full list: [tacli
+design](tacli-design.html) §"The registry: a file in the test folder".
+
+**Measured** (the plan's G21c gate): under wine, `9 of 9 registry imports, win32.dll 2 of 2`,
+77 distinct values written to the store and TA's section of the prefix's `user.reg` unchanged;
+each fail-closed path (the token without a store, the store as a folder, the folder without a
+store) ended at attach with its line and no registry call from `TotalA.exe` or `ddraw.dll`;
+on the Windows test setup, TA's key and the Indeo key exported byte-identical before and after
+a `scenario load`, with the counters `the real registry was asked for 1 read-only opens, 1
+reads and 1 closes, and for no write ... 1 writes were refused`.
+
+**Risky spots for a review.** The decision ahead of the config tool's return, the token's
+parse of `GetCommandLineW` (the program name quoted or not), and the `TerminateProcess` inside
+`DllMain`; the `PREFIX` handles and `RS_READ_SAM` (what counts as a read-only open);
+`RegFlushKey` on a real key answering success without a call; the persistence under the lock;
+the handle range; the `-r` jump-table patch and its fail-closed mismatch; `win32.dll`
+required at attach (a static import of `TotalA.exe`).
+
+### 2.93 Every line is DrawLine's walk on the world target — G21b (`tagpu_line.h`, `tagpu_glsl.h`, the marker, effects and unit passes)
+
+**What it is.** Every line the Vulkan lane draws is `DrawLine 0x4CC7AB`'s walk on the LINE GRID
+— the world target's own pixels, `ss` to a game pixel — thickened to `w = ss` pixels across its
+minor axis, each end a `w` × `w` block, decided in integer arithmetic in the fragment stage. One rule for every preset:
+smooth when supersampled, and at `ss = 1` the engine's own line by construction. That covers the
+order markers (waypoint crosshairs), queued build sites, selection rects, lasers and lightning,
+and the nanoframe wire. The owner's decision and the gate's numbers are in
+[Hardware portability](hardware-portability.html), decision 4 and the G21b block; this section is
+the map of what implements it.
+
+| where | what |
+|---|---|
+| `tagpu_line.h` `tagpu_line_px` | the one endpoint rule: line-grid pixel `floor(ss·Z(p))`, `Z(p) = (p − c)·zoom + c`; `p = k + 0.5` where the engine draws that line from integers, the fractional position otherwise. An end outside the caller's bound is not drawn and is counted (`far=` in the pass's log line): `TAGPU_LINE_FAR` (2^29) for a line that is clipped next, `TAGPU_LINE_MAXC` (16383) for the wire |
+| `tagpu_line.h` `tagpu_line_rect` | the viewport's clip rect on the line grid: `{ss·vpL, ss·vpT, ss·(vpL + vw) − 1, ss·(vpT + vh) − 1}`, every game pixel's `ss` × `ss` block inside it |
+| `tagpu_line.h` `tagpu_line_clip` | DrawLine `0x4BE950`'s clip on the integer line-grid ends, in its order: `0x4BEA20` against that rect (inclusive), then `0x4CC650` against the line grid's surface (`ss` times the game's). Called where the marker (`put_line`) and effects (`emit_line`) records are built; its ends lie on the surface, which is what keeps them inside the fragment test's ±16383. 64-bit products; the loop of the second half is bounded at four passes (never more than one needed); a surface over 16384 is refused |
+| `tagpu_line.h` `tagpu_line_centre` | a record's end: the line-grid pixel's centre in game units, `(T + 0.5) / ss`, so every vertex stage keeps its game-frame mapping |
+| `tagpu_line.h` `tagpu_line_grid` | `uGrid` = (line-grid w \| `ss` << 16, line-grid h, target w, target h), from the game frame, `ss` and the extent the pass records into; a grid over 16384 or an `ss` out of range gives `ss = w = 0`, which keeps no fragment |
+| `tagpu_glsl.h` `TAGPU_GLSL_BAND_FN` | `taBand`: six vertices a record over two triangles, the segment between the end centres widened 2 game px each side and carried 2 past each end; `t` along the segment for per-end attributes |
+| `tagpu_glsl.h` `TAGPU_GLSL_LINE_FN` | `taLinePx` (the target pixel's line-grid pixel, `((2t+1)·lw)/(2·tw)`, the identity on the offscreen target), `taLineEnd` (an end's pixel back from its centre, `floor(c·ss)`), `taOnLine` (`0x4CC7AB`'s walk in closed form, unsigned products, thickened to `w`: kept when within the walk's major range widened by the same window, `[lower − w/2, upper − w/2 + w − 1]`, and within `[r − w/2, r − w/2 + w − 1]` across the minor axis of the walk's pixel `r` at the major position clamped to the walk — so each end is a `w` × `w` block, an engine pixel's end exactly its game pixel's block), `taLineKeeps` (the three) |
+| `tagpu_mark.c` `LVS`/`LFS`; `tagpu_vk_mark.c` `s_pipeLine`, `s_pipeLineZ` | marker lines as instanced records (`MVST` stride, instance rate); the selection rects are the depth-tested pipeline's; `uGrid` at 32 of the 48-byte fragment block, written at record time |
+| `tagpu_order.c` `draw_build` | `0x438C00`'s eight lines in integers, in its order (exe-reverse-engineering.md) |
+| `tagpu_fx.c` `LVS`/`LFS`; `tagpu_vk_fx.c` | the `LINES` bucket holds one record a line at the bucket stride, drawn `vkCmdDraw(6, n, 0, first)`; `uGrid` at 64 of the 80-byte fragment block, `ss` from the hand-over |
+| `tagpu_vk_unit.c` `wire_records`; `tagpu_posedraw.c` `WVS` | the wire posed on the CPU (the body's 16.16 rounding and projection, key + 0.15) into three-vec4 records after the pose words and before the effects runs, each end put on the line grid by `tagpu_line_px`; `WVS` mixes the per-end key, height and world point along `t`; `uGrid` at 256 of `tagpu_native::FS`'s 272-byte block |
+| `tagpu_native.c` FS | `vLineOn`/`vLine`: the line test for the wire; 0 from `VS` and `FXVS` |
+
+**The invariant, and why each part holds by construction.** The pixel decision takes only
+integers: two line-grid ends decided once on the CPU, the fragment's own integer target pixel,
+and the extent the pass records into. The band only has to COVER: a lit pixel lies within 1.21
+game px of the segment across it and 1.06 past an end at every `w = ss`, against a band of 2
+(`tools/line-band-check.py`: the closed form equals a step-by-step walk plus thickening at
+`w` = 1, 2, 3 and 4, on every shape with one end at the origin and the other in a box of 24,
+12, 10 and 8 px respectively, and on long lines to ±16383; the least margin found is 0.882 game
+px, 0.75 required). Float error in placing the band corners cannot reach that
+margin, and the unsigned products cannot overflow inside the bound. A clipped line is inside
+that bound by construction — `tagpu_line_clip` returns ends on the surface and refuses a surface
+over 16384 — so a segment with one end far off at a deep zoom is clipped and drawn, not refused
+whole; only the wire, which is not clipped, is held to ±16383 itself.
+
+**At `ss = 1` it is the engine's line.** The line grid is the game grid, `floor(1·Z(p))` is the
+game pixel, the rect is the viewport's, `taLinePx` is the identity, `w = 1` and the thickening
+keeps the walk's own pixel only — every step reduces to the game-grid walk with the clip, with
+no second path (`tagpu_line.h`, AT ss = 1). Measured 0 px against the game-grid oracle at an
+edge view with 6 lines clipped and 6 rejected (hardware-portability.md, G21b).
+
+**The clip.** Every line kind the lane redraws from the engine's DrawLine (selection rect
+`0x467A50`, build site `0x438C00`, the target and range circles' chords, the lasers) passes
+DrawLine `0x4BE950`, which runs `0x4BEA20` and then `0x4CC7AB` (whose first act is `0x4CC650`).
+A line crossing the viewport edge is walked from where `0x4BEA20` moved its end, and that walk
+differs from the unclipped one along the whole visible part — on 50 000 random short
+edge-crossing lines, ten pixels a line on average. `tagpu_line_clip` reproduces both halves on
+the line grid; the rect is `main+0x37E27`'s {128, 32, W − 1, H − 33} with each game pixel widened to its `ss` × `ss` block, {`ss`·128, `ss`·32, `ss`·W − 1, `ss`·(H − 32) − 1}
+(`tagpu_line_rect`), held to the surface as `vpwide` holds the engine's. At `ss = 1` that is the
+engine's clip exactly; at `ss = 2` it is the same routine on a grid twice as fine, so a clipped
+end lands on a target pixel rather than a game pixel. `tools/line-band-check.py` compiles the C
+function with the host gcc and checks it against its own transcription of the two routines on
+90 000 lines (same verdict and same ends on all; 44 338 moved, 40 527 rejected). The wire is not
+clipped: the engine draws it with the polygon edge walk `0x4C0820`, which clips scanlines, so its
+visible pixels stay where the unclipped line puts them.
+
+**The device.** No line primitive is drawn, so the device is created without
+`VK_EXT_line_rasterization` and without `wideLines`; `lineok`, `wideok`, `maxLineWidth`,
+`vkCmdSetLineWidth` and `tagpu_vk_world_scale` are gone, and nothing logs a line refusal. Every
+pipeline keeps `lineWidth = 1.0`, which the specification requires without `wideLines`. With
+G21a's depth clip control also gone, the device asks for no optional extension but
+`VK_KHR_maintenance1`, its retry ladder is that one rung, and the instance no longer asks for
+`VK_KHR_get_physical_device_properties2`, which only those two extensions depended on.
+
+**The A/B's line list.** A frame claimed by `tagpu_mark.ab`, `tagpu_fx.ab` or `tagpu_posedraw.ab`
+also writes `tagpu_<pass>_lines.txt` — `# <pass> <grid w> <grid h> <w>`, then `ax ay bx by col`
+a line, the ends as integer LINE-GRID pixels. The marker and effects lists carry the clip rect as
+well (`# <pass> <grid w> <grid h> <w> <L> <T> <R> <B>`, line-grid pixels) and the ends BEFORE
+the clip, collected where each record is built (`TAGPU_LINE_AB`); the wire's list is its records
+as drawn. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines with its own
+walk of that list, clipping first — with `line-band-check.py`'s transcription, not the C —
+thickening to `w`, and dropping what lies outside the rect, as the viewport scissor does. It
+refuses a capture that is not the line grid rather than resampling it.
+
+**Gaps.** The line-only capture the gate used came from a diagnostic build; the shipped build has
+no switch for it. The wire's rule is the walk, not the engine's polygon edge walk: they agree on
+steep edges and differ on shallow ones, where the engine lights two pixels a scanline and the
+walk a full run (hardware-portability.md, G21b). The clip at 8× was measured under the
+game-pixel rule the branch had before and not re-run under this one.
+
+### 2.94 The Windows gate: every pass on an AMD GCN card, and the restorer's unsigned limits (`tagpu_restore_core.c`, `tagpu_vk_restore.c`) — G21d
+
+The plan is [hardware portability](hardware-portability.html) §3 G21d. It ran on the Windows test
+setup (an AMD Radeon R9 200-series card on its Windows driver, 1920 × 1080) through a `tacli`
+remote instance (§2.92), with main carrying G21a–c, and beside the reference setup on a private
+1920 × 1080 Xvfb display. Both ran the same DLL at `ss=2`.
+
+**What the card does now [MEASURED 2026-09-25].** The log names `vk: depth format:
+D32_SFLOAT_S8_UINT (130)`; the world target, terrain, features, units (`hard shadows on
+(stencil-masked), nanoframe wire on`) and markers come up on it; and with the play arm set on
+`feat-forest` the census reads `6 pass(es) drew … (terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1
+fps=0)`. G21b's device asks for no line extension, and none is logged missing. GPU frame time
+(`ftime.on`, paused, `maxfps` uncapped, four reports of 256 frames each): Classic p50 1.68 ms,
+p99 1.84 ms; Classic++ p50 2.64 ms, p99 2.66 ms. The Classic++ terrain restore ran 5 062 frames
+in 10.6 s of wall time and 7.0 s of GPU time at NK=8.
+
+**The one refusal the run found, and its fix [SOURCE].** Before the fix the log read
+`restorevk: uniform block -1 < one k-block (9472)`, and the terrain, feature, unit and effects
+lanes each logged that they draw their base atlas: Classic++ restored nothing on that card. The driver reports
+`maxUniformBufferRange` as `UINT32_MAX` (the restorer's own line prints it as `4194303 KB`). The
+Vulkan backend passed it to `tagpu_rcore_pick_nk` through an `(int)` cast, where it became -1,
+less than one k-block. `tagpu_rcore_pick_nk` now takes both limits as `unsigned`, as Vulkan
+reports them, and clamps the quotient to `TAGPU_R_MAXNK` before narrowing it; the call passes
+them uncast. Below 2³¹ the arithmetic is unchanged, so no device that restored before picks a
+different NK. The other device limits read into an `int` are bounded first:
+`tagpu_vk_max_storage_range` caps `maxStorageBufferRange` at `INT_MAX`, and
+`tagpu_vk_max_image_dim` returns 0 ("no device yet") for a dimension above it. After the fix, the card's log holds no
+refusal line.
+
+**Its pictures against the reference setup [MEASURED].** These are the `.ab` world captures of
+G21a's fixtures and two of G21b's, at 1× in both presets, one pass at a time, 3840 × 2160 target
+pixels. They ran with `--los 0 --mapping 1` on both machines, because a remote test folder's
+store carries the player's own skirmish values. Every capture was taken twice, and each
+machine's own run-to-run floor is 0 everywhere, so every count below is a difference between
+the two GPUs:
+
+| capture | differ (of drawn) | > 8 levels | > 32 | largest |
+|---|---|---|---|---|
+| terrain, Classic | 0 of 7 282 264 | 0 | 0 | 0 |
+| features, Classic | 12 of 926 348 | 0 | 0 | 1 |
+| markers (health bars), both presets | 0 of 1 080 | 0 | 0 | 0 |
+| terrain, Classic++ | 180 359 (2.5 %) | 474 | 0 | 29 |
+| features, Classic++ | 216 876 (23 %) | 89 864 | 4 320 | 64 |
+| units, both presets | 1 207 (2.4 %) | 280 | 158 | 240 |
+
+- **Units**: 12 pixels are drawn on one GPU only; the 158 over 32 levels fall in 50 spots of at
+  most 33 pixels, single rows and short runs along polygon edges. The two rasterisers round a
+  triangle's edge differently. The Classic++ row matches the Classic one because on each machine
+  the two presets' unit captures are identical (0 px): the unit pass drew its base atlas. On the
+  AMD card its log gives the reason — the restored twin was published for 1.0× anisotropic
+  (`classicpp.cfg=aniso=1`, the A/B's setting) after its sampler was built for 4.0×, and a
+  sampler is not rebuilt mid-frame; the reference setup's log of that run was not kept.
+- **Classic++ terrain** is the same picture: mean 0.03 levels over the drawn pixels, 99th
+  percentile 1, differences along texel edges.
+- **Classic++ features** hold the one visible difference: on the AMD card the restored trees
+  carry a few off-hue specks (dim magenta, red, blue) near trunks and edges. 2 388 pixels
+  change hue by more than 32; the mean is 2.2 levels and the 99th percentile 27. The restorer
+  itself caused them: the card's driver dropped the render-pass dependencies between its
+  passes. §2.95 has the diagnosis and the fix; with it, this capture differs by one level at
+  most.
+- **The nanoframe ladder** (G21b's wire): 13 of 74 931 pixels are drawn on one GPU only, so the
+  line rule draws the same shape on both. Colours differ by up to 180 because the build colour
+  pulses with game time and the two games paused at different ticks.
+- **Timing, not the GPU**: `shadow-lab`'s units (the dish and turrets stand at other angles),
+  `fx-lasers` and `fx-rockets` are live and paused at different ticks. The reference setup's
+  rockets had not fired when it paused, so `fx-rockets` has a Windows capture only.
+- The effects captures need `fx.on=nomodels`: the effects' 3D models are drawn by the unit pass,
+  and a one-pass capture refuses a frame two passes drew into.
+
+**Not covered.** The hard shadows' picture: they are drawn (logged, stencil-masked), but a
+one-pass capture has black under them, and there is no presented-frame capture on a remote
+instance. The 0.877× zoom, since a remote instance cannot write `tagpu_zoom.txt`. The validation
+layer on either machine. (Restored units across the two GPUs are measured in §2.95.)
+
+### 2.95 The restorer's passes and a driver that drops their render-pass dependencies (`tagpu_vk_restore.c` `end_pass`) — G21d
+
+**What was wrong.** On the Windows test setup's AMD card (§2.94), Classic++ damaged restored,
+keyed art. The owner saw it in the UI first: the Impure menu's gear icon, colour smears on the
+main menu's buttons, and the team colours. The feature pass showed off-hue specks on trees. All
+three lanes are keyed, and all three go through the same restorer passes.
+
+**How it was isolated [MEASURED 2026-09-25].** The captures used `restoredump.on` on
+`feat-forest`, with Classic++ armed before launch and the game paused. The dumps are byte
+dumps of the feature lane's base atlas and its restored twin, taken on both machines.
+
+- **The input is identical.** The base atlas is the same bytes on both machines.
+- **The output is not.** The restored twin differs in 2 807 texels (up to 179 levels), in 6 of
+  its 24 frames.
+- **The damage follows the slot grid.** A per-frame map of the batches (frame → batch → slot)
+  puts every damaged frame in a block of its batch's slot grid, mostly the grid's bottom row.
+  That row is the part of the full-viewport draw that the GPU rasterises last. Frames in the
+  other slots of the same batches are byte-identical to the reference setup's.
+- **The block edges are sharp.** In one 37 × 60 frame, rows 31–48 are wrong and every other
+  row is exact. A fault inside the network would spread one texel per layer, so the damage
+  enters at the last layers.
+- **It is a hazard, not arithmetic.** The damaged texels are the same set in every run, but
+  their values change: two runs of the same build differ from each other in 544 of them.
+
+Each variant below was run on the card and compared with the reference setup:
+
+| variant on the AMD card | texels unlike the reference setup |
+|---|---|
+| as shipped (NK 8) | 2 807 |
+| NK 4 | 2 461 |
+| NK 1 (179 render passes a batch, against NK 8's 25) | 3 605 |
+| slicing budget 100 ms (no batch split across frames) | 2 807, the same texels |
+| fp16 activations (against the reference setup's fp16 run) | 5 595 |
+| `LOAD` instead of `DONT_CARE` on the activation attachments | 2 807 |
+| a full pipeline barrier after every restorer render pass | **0** |
+
+On the reference setup, a 0.5 ms budget, which splits every batch across frames, changes
+nothing (0 texels).
+
+**The cause and the fix [SOURCE + MEASURED].** Every restorer pass states its ordering as
+subpass dependencies (`rp_deps`):
+
+- **incoming:** `EXTERNAL → 0`, from fragment-shader reads, colour writes and transfers, to
+  colour writes;
+- **outgoing:** `0 → EXTERNAL`, from colour writes, to fragment-shader reads, colour writes and
+  transfers.
+
+By the spec, that orders FILL → CONV × depth → OUT → the consumer's sample. The card's driver
+does not honour it for these passes.
+
+What sets FILL and CONV apart from the rest of the backend is that their attachments never
+change layout. The activations stay `GENERAL` at both ends and inside the subpass, while OUT and
+the mip pass transition their attachments. That this is why the driver skips the dependencies
+is **[INFERRED]**. Whether the driver honours the backend's other passes,
+which do transition, is not isolated either: none of §2.94's captures shows a hazard in them,
+and the owner's review of those captures found none.
+
+`end_pass` now ends every render pass in the file (FILL, CONV, OUT and the mip chain). It
+records the same ordering again as a `vkCmdPipelineBarrier`:
+
+- **source:** `COLOR_ATTACHMENT_OUTPUT | FRAGMENT_SHADER`, access colour write;
+- **destination:** `FRAGMENT_SHADER | COLOR_ATTACHMENT_OUTPUT | TRANSFER`, access shader read,
+  colour read and write, and transfer read and write.
+
+A pipeline barrier's scopes are the whole queue in submission order, so the barrier covers:
+
+- the next pass's sample (RAW);
+- the next pass's write of the same attachment (WAW);
+- a later pass writing what this one sampled (WAR, through the fragment-shader source stage);
+- `dump_step`'s copy.
+
+The subpass dependencies stay. They are what the spec requires, and the OUT and mip passes'
+layout transitions hang on them. `dst_ready`'s last barrier before a job's first OUT names
+OUT's own stage and accesses (colour-attachment output, read and write) as well as the
+consumer's sample, so the cleared destination does not rely on OUT's incoming dependency
+either.
+
+**With the fix [MEASURED 2026-09-25, the same scenes on both machines].**
+
+- **Features.** The restored twin is byte-identical to the reference setup's at NK 8 and at
+  NK 1. The reference setup's own output is unchanged by the barrier (0 texels).
+- **The rendered feature pass.** Its `.ab` capture differs from the reference setup's in
+  22 672 of 927 200 pixels, by one level at most. Before the fix: 217 004 pixels, 6 252 of them
+  past 32 levels, up to 84. The one-level residue is the twin's filtering, which Classic
+  features show too (§2.94).
+- **Units** (`nanoframe-ladder`, `native.on=all wrecks`, 60 frames restored). The base atlas is
+  identical on both machines. The restored twin plus its mip chain (22 MB) differs in 11
+  bytes: four texels of level 0 by one level, plus the border copies and mip texels built from
+  them. This is float rounding between the two GPUs.
+- **GUI.** The UI atlas fills lazily and packs in a different order on each machine, so its
+  texels are compared by content. A texel is matched to one in the other atlas whose 25 × 25
+  source window — the network's receptive field — has the same indices.
+  - Of 99 268 matched texels, 98 730 are identical, 336 differ by one level, and 202 by two to
+    six.
+  - The bug's damage ran to 216 levels, in blocks.
+  - The small residue lies where a matching window can still differ: the frame's rect decides
+    the zero padding, and the colour-key fill searches the whole frame **[INFERRED]**.
+
+**The cost.** On the reference setup, the four feature batches of the first restore take
+8 slices both before and after the fix. On the AMD card they take 16 slices of the 12 ms budget
+(246 ms of wall time). That is paid once per atlas fill, and a settled scene restores nothing.
+
+**Not covered.**
+- A before/after of the shell menus' own pictures. The owner's report is the before; the
+  after is theirs to look at.
+- Other AMD cards and driver versions.
+- The validation layer on either machine.

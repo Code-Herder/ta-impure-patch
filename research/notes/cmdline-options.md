@@ -54,10 +54,19 @@ Nothing else reads the INI. There are no display/movie/window INI options.
 
 ## Command-line switches [BINARY-VERIFIED + RUNTIME-VERIFIED 2026-09-01]
 
-Parser at `0x49EEC0`, token loop over `strtok(cmdline, " \t")` (`0x4E5280`). A token
-starting with `-` or `/` (`0x49EEDD`) dispatches on the *next* character,
-case-insensitive, via jump table `0x49F494` + index bytes `0x49F500` (covering
-`'B'..'w'`; every unlisted letter maps to the loop tail, i.e. is silently ignored).
+Parser `CmdlineArgsNormalize 0x49EE30` (called at `0x49E8D2`), token loop over
+`strtok(cmdline, " \t")` (`0x4E5280`) with its head at `0x49EED3`. A token starting with `-`
+or `/` (`0x49EEDD`) is first matched by `0x4DA0E0` against the debug switches of the table
+`0x50C908..0x50C954` (`-memfussy`, `-dprinton`, `-gonzo`, `-debughelper`, …, as prefixes,
+without case), and skipped if it starts with one. Otherwise it dispatches on the *next*
+character, case-insensitive, via jump table `0x49F494` + index bytes `0x49F500` (covering
+`'B'..'w'`; every unlisted letter maps to the loop tail `0x49F461`, i.e. is silently ignored,
+and so does any character outside `'B'..'w'`: the index is the character less `'B'`, and
+`ja 0x49F461` takes everything above `0x35`, a character below `'B'` wrapping round to a large
+unsigned index). The debug switches `0x4DA0E0` takes before that include six that start with
+`-d` (`-dprinton`, `-dprintoff`, `-dprintfile`, `-disableimagehlp`, `-disableimagehlplines`,
+`-debughelper`): they never reach the `-d` case. The handler acts on that
+character whatever follows it: `-register` and `-r12` are `-r`.
 Any other token is copied to `0x51FB50`. Each handler advances `edi` past the two
 switch characters itself, so numeric/string arguments may be glued (`-t120`) or the
 next token (`-t 120`) — **except `-b`, which forgets to, see below**.
@@ -76,10 +85,11 @@ Three globals are initialised before the loop: `main+0x37F31 = 30`,
 | `-l` | `0x49F18B` | `0x502898 = 0` | **Dead switch**: writes a flag (init 1) that nothing in the image reads. |
 | `-n <n>[:<str>]` | `0x49F197` | `0x512C80 = n`, `main+0x39245=1` | **DirectPlay connection type**, `n` in 1..4 (others ignored) — jumps the frontend straight to SELECT CONNECTION with that provider's dialog open: **1 = Internet TCP/IP, 2 = IPX, 3 = Modem, 4 = Serial**. With `n == 1` a `:`-suffix is copied to `0x512D90`. |
 | `-p <n>` | `0x49F202` | `0x513004` | **Network send pacing.** `n<0` → `0x506DBC=0`; `n==0` → 200 ms; else clamp 2..30 and store `1000/n` ms ("setting m_defaultSendPacingMs to: %lums"). Default 200. |
-| `-r` | `0x49F249` | — | **DirectPlay registration, then quits.** Loads `dsetup.dll`, calls `DirectXRegisterApplicationA`, message-boxes "DirectPlay registration failed." on error, and returns 0 from the parser. An install-time switch. **Never pass it.** |
+| `-r` | `0x49F249` | — | **DirectPlay registration, then quits.** Loads `dsetup.dll`, calls `DirectXRegisterApplicationA`, message-boxes "DirectPlay registration failed." on error, and returns 0 from the parser. An install-time switch. **Never pass it**: `tacli launch` refuses it, and in a tacli test folder the DLL points its jump-table entries at the loop tail, so it is ignored ([exe reverse engineering](exe-reverse-engineering.html) §"The registry"). |
 | `-s` | `0x49F402` | `0x51E690` | `0x47EFC0()` → NoDirectSound (same global as the INI). **Official: disable all sound.** |
 | `-t <n>` | `0x49F409` | `main+0x37F31`, clamp 30..300 | **Battleroom join timeout, seconds** (default 30) — feeds "will be rejected in %d seconds" at `0x453859`. |
 | `-w` | `0x49F45C` | `0x51E694` | `0x47EFD0()` → UseWindowsSound (same global as the INI). Official. |
+| `-xtacli-test` | `0x49F461` | — | **Not a switch of the engine: tacli's token.** `x` is above `w`, so the parser skips it. Every remote launch passes it, and it is how the DLL knows a tacli test launch ([exe reverse engineering](exe-reverse-engineering.html) §"The registry"). |
 
 The debug-runtime switches visible in strings (`-dprinton`, `-dprintfile`,
 `-memfussy`, `-gonzo`, …) belong to the CRT/debug layer, parsed elsewhere; they

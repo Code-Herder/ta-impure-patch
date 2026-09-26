@@ -14,6 +14,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_log.h"
 #include "tagpu_limits.h"
+#include "tagpu_detour.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -153,8 +154,23 @@ static void wlog(const char* fmt, ...)
    def's index in the engine's array: the game-start loader (0x42D2E0) compacts
    the array, numbers it, and only then runs the FBI loader we detour on each
    final slot, so index == UnitTypeID for the life of the game. The record keeps
-   the def pointer it was written for and answers NULL on a mismatch, which is
-   what makes a stale row from an earlier game read as "stock". */
+   the def pointer it was written for and answers NULL on a mismatch.
+
+   THE RECORDS HOLD ONLY THIS LOAD'S WRITES, because the pointer check alone
+   cannot tell two games apart: the def array can come back at the same
+   address (freed 0x42DCCB, reallocated from the same count 0x42AA8A), and a
+   slot the FBI loader skips (no file, 0x42D71A) or leaves before 0x42CEF2 (the
+   open at 0x42BF66, no [UNITINFO] at 0x42BF7C) would keep an earlier game's
+   record under a matching pointer. `cb_unit_load` empties every record at the
+   entry of 0x42D2E0, before its def copies (0x42D501, the sorts 0x432D40 and
+   0x432FB0, the insertion pass 0x42D599..0x42D60E) and its FBI loop, so a
+   slot this load did not write reads as stock.
+
+   A RELOAD (0x42D1F0) whose FBI fails to open keeps the record's weapons,
+   count and masks, as the engine keeps the def's own weapon1..3; but it
+   replaces the COB whatever the FBI did (0x42D275 / 0x42D294), so the piece
+   caches, which are the COB's answers, are forgotten at every entry to the
+   FBI loader (`cb_fbi_load`) and asked again on their next use. */
 static WDef* def_rec(const char* def)
 {
     char* ta = TA();
@@ -284,6 +300,25 @@ static int slot_index(char* unit, WSlot* slot)
     if (g_hits[H_VIOLATION] <= 20)
         wlog("VIOLATION slot_index(unit %p, slot %p) — not a slot of this unit; 0 returned", unit, slot);
     return 0;
+}
+
+/* The 0x0D wire check's accessor (tagpu_patches.c wpn_rx_fired): the slot's WEAPON
+   pointer, or NULL when the slot is out of the unit's range — no clamp, no
+   VIOLATION. It writes no engine state; past slot 2 it goes through side_row, which
+   builds or rebuilds the module's own side table when the unit array has moved
+   (VirtualAlloc, VirtualFree of the old one, a log line), as every other side-row
+   read does. A NULL answer only makes the receiver drop the packet.
+   Armed or not: with the module disarmed a unit has three slots, so idx 0..2
+   answer from the inline slots and idx >= 3 answers NULL. */
+char* tagpu_weapons_slot_weapon(char* unit, unsigned idx)
+{
+    WSlot* row;
+    if (!unit) return 0;
+    if (idx < 3u) return ((WSlot*)(unit + 4 + idx * SLOT_STRIDE))->weapon;
+    if (!g_armed || idx >= (unsigned)wpn_count(unit) || idx >= WPN_CAP) return 0;
+    row = side_row(unit);
+    if (!row) return 0;
+    return row[idx - 3].weapon;
 }
 
 /* =========================================================================
@@ -1040,6 +1075,46 @@ static int __thiscall my_Acquire(char* self, int param)
     return 0;
 }
 
+/* -- the unit-data load's start (0x42D2E0's entry, LOADER thread): every
+   record emptied (def_rec's comment). An observer through the shared
+   primitive rather than a splice of this module's table, so another module
+   observing the same entry chains onto it. ------------------------------------ */
+
+#define VA_UNIT_LOAD 0x0042D2E0u
+static const u8 X_UNITLOAD[] = { 0x81,0xEC,0x10,0x06,0x00,0x00 };   /* sub esp,0x610 */
+
+static int __cdecl cb_unit_load(void* esp)
+{
+    u32 i, held = 0;
+    (void)esp;
+    if (!g_def) return 0;
+    for (i = 0; i < WPN_MAXDEFS; i++) held += g_def[i].def != 0;
+    memset(g_def, 0, sizeof(WDef) * WPN_MAXDEFS);
+    wlog("unit-data load: %u def record(s) of the last load emptied", held);
+    return 0;
+}
+
+/* -- the FBI loader's entry (0x42BF40(path, def)): the record's piece caches
+   forgotten (def_rec's comment), on the thread that loads the def. In the
+   level's load the record is already empty and def_rec answers NULL, so the
+   log line below marks a Reload; there this is what keeps the caches to the
+   COB the Reload is about to load, whether or not the FBI then opens. ------- */
+
+#define VA_FBI_LOADER 0x0042BF40u
+static const u8 X_FBILOADER[] = { 0x81,0xEC,0x18,0x05,0x00,0x00 };  /* sub esp,0x518 */
+
+static int __cdecl cb_fbi_load(void* esp)
+{
+    WDef* r = def_rec((const char*)((void* const*)esp)[2]);
+    if (r) {
+        wlog("reload: %.12s (def #%u) forgets its piece caches (slot 3 held %d,%d)",
+             r->def + 0x20, (u32)(r - g_def), r->pc_aimfrom[0], r->pc_query[0]);
+        memset(r->pc_aimfrom, -1, sizeof r->pc_aimfrom);
+        memset(r->pc_query,   -1, sizeof r->pc_query);
+    }
+    return 0;
+}
+
 /* -- def copy (0x42B370): keep the side record with the type it describes ---- */
 
 static void __thiscall my_DefCopy(void* dst, int src)
@@ -1141,7 +1216,24 @@ static void __cdecl cb_ground_order(char* unit, int* pos)
 
 /* WEAPON_FIRED receiver (0x49D270): the packet's WeapIdx byte at +0x23 names
    the slot. Beyond the unit's count it would have indexed past the inline
-   slots into UnitOrders; here it clamps to slot 0 and logs. */
+   slots into UnitOrders; here it clamps to slot 0 and logs.
+
+   IT CAN RUN WHILE A LEVEL LOADS: the packet dispatcher 0x453D40 is called by
+   the loading state's handler (0x49852E, game thread) and by the loader body
+   itself (0x49727D), and nothing on the way to 0x49D364 asks whether a game
+   is running. What it reads of the def records is safe stale or mid-clear:
+   g_def is one array allocated at install and never freed, and every value
+   taken out of it is bounded (count <= WPN_CAP, slot_ptr's own bound). It
+   also writes one: InitProjectile (0x49D4FC -> 0x49C740, whose slot search
+   stops at 3) asks my_QueryPiece for slot 3, which can run the unit's
+   QueryWeapon4 and cache the answer in pc_query[0] -- a byte into the same
+   never-freed array, holding the answer stock's 0x43E1E0 would hand the
+   engine for a stock slot; this module uses a cached piece only through
+   0x43DEF0, which tests it against the unit's own piece count
+   (0x43DF14..0x43DF1E). The side table is not safe: side_row reallocates
+   g_side when the unit array moves, and nothing orders a receiver in a load
+   against the loader thread creating units (a saved game's restore,
+   side_reset): an open gap, stated in extra-weapons.md §Known gaps. */
 static WSlot* __cdecl cb_recv_slot(char* unit, u8* pkt)
 {
     u32 idx = pkt[0x23];
@@ -1543,6 +1635,19 @@ static int install(void)
     g_def  = (WDef*)VirtualAlloc(NULL, sizeof(WDef) * WPN_MAXDEFS, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_pool || !g_def) { wlog("disarmed: VirtualAlloc failed"); return 0; }
 
+    /* THE RECORDS' LIFETIME FIRST, and nothing else without it: a sim module
+       whose records could outlive their game or their script fails closed.
+       Both sites are matched before either lands, and both land before any
+       other write. A byte mismatch leaves the image as it found it; the
+       second observer failing to land after the first did leaves the first
+       in place, and it touches only the module's own table. */
+    if (!tagpu_detour_bytes_ok(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD) ||
+        !tagpu_detour_bytes_ok(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER))
+    { wlog("disarmed: the unit-data load's or the FBI loader's entry bytes differ"); return 0; }
+    if (!tagpu_detour_observe(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD, cb_unit_load, NULL) ||
+        !tagpu_detour_observe(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER, cb_fbi_load, NULL))
+    { wlog("disarmed: the unit-data load's or the FBI loader's entry could not be observed"); return 0; }
+
     for (i = 0; i < N_HOOKS; i++) build_trampoline(&HOOKS[i]);
     for (i = 0; i < N_SPLICES; i++)
     {
@@ -1616,9 +1721,18 @@ static void dump_unit(Out* o, char* u, int first)
     int   count = wpn_count(u), i;
     oput(o, "%s{\"idx\":%d,\"type\":", first ? "" : ",", (int)*(i16*)(u + 0xA8));
     oname(o, def + 0x20, 32);
-    oput(o, ",\"owner\":%d,\"count\":%d,\"crc_weapons\":\"0x%08X\",\"crc_all\":\"0x%08X\",\"slots\":[",
+    oput(o, ",\"owner\":%d,\"count\":%d,\"crc_weapons\":\"0x%08X\",\"crc_all\":\"0x%08X\",",
          (int)*(u8*)(u + 0xFF), count,
          *(u32*)(def + DEF_CRC_WPN), *(u32*)(def + DEF_CRC_ALL));
+    {
+        /* The type's piece caches for slots 3.. as "aimfrom,query;..." (-1 =
+           unasked): what the extended slots aim from and fire from. */
+        const WDef* r = def_rec(def);
+        oput(o, "\"pieces\":\"");
+        if (r) for (i = 0; i + 3 < count && i < WPN_SIDE; i++)
+            oput(o, "%s%d,%d", i ? ";" : "", r->pc_aimfrom[i], r->pc_query[i]);
+        oput(o, "\",\"slots\":[");
+    }
     for (i = 0; i < count; i++)
     {
         WSlot* s = (i < 3) ? (WSlot*)(u + 4 + i * SLOT_STRIDE) : (side_row(u) ? side_row(u) + (i - 3) : 0);

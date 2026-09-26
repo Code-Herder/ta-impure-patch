@@ -19,7 +19,7 @@ the research notes and in `git log`, not here (*Maintaining this skill*, at the 
 | `references/levers.md` | you arm anything beyond the bench line, drive zoom or the camera, or read a `tagpu.log` heartbeat |
 | `references/measuring.md` | before any A/B, pixel diff, cross-build comparison or frame-time figure |
 | `references/ui-layer.md` | the question is the HUD, the shell, the cursor, text, the minimap, HUD scale or a windowed `k` |
-| `references/modules.md` | extra weapons, the COB trace, multiplayer, many unit types (the synthetic mod), weapons past 256, the render-options screen and the GPU row, a remote Windows machine |
+| `references/modules.md` | extra weapons, the COB trace, multiplayer, many unit types (the synthetic mod), weapons past 256, the new data keys (their fixtures), the render-options screen and the GPU row, a remote Windows machine |
 
 Design and mechanism: `research/notes/tacli-design.md` (the tool), `input-firewall.md` (input
 isolation), `windowed-mode.md` (display bugs), `cmdline-options.md` (every launch knob),

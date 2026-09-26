@@ -93,6 +93,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 #include "tagpu_native.h"   /* tagpu_native_owns_unit: the ownership answer, taken here */
+#include "tagpu_patches.h"   /* tagpu_wire_format: the B3 wire section, DLL counters only */
 #include "tagpu_zoom.h"      /* tagpu_zoom_pub_window: the rect the tables cover */
 #include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 #include "tagpu_gaf.h"       /* the GAF resolvers: pure reads, taken on THIS thread */
@@ -106,6 +107,7 @@
 #include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
+#include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -2370,20 +2372,79 @@ static void fill_cursor(TAGPU_PACKET* p)
    in the packet's `truncated` bit. */
 static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
 
+/* THE GHOSTS' PIECE MASKS: one row per type a ghost may be drawn for this
+   frame that hides a piece — the build cursor's type and every type in the
+   table above whose site is not started yet — sorted by type, because the
+   consumer binary-searches it per ghost. tagpu_datakeys computes each type
+   once a level, so a frame costs a pass over the builds and a cache hit per
+   distinct type. A type is taken ONCE through `s_gmSeen`, which is cleared
+   again from the collected list rather than wholesale. */
+static TAGPU_PK_GHOSTMASK s_gmask[TAGPU_PK_MAX_GHOSTMASK];
+static unsigned           s_gmSeen[TAGPU_LIM_TYPES / 32];
+
+static int gmask_type_cmp(const void* a, const void* b)
+{
+    return (int)((const TAGPU_PK_GHOSTMASK*)a)->type - (int)((const TAGPU_PK_GHOSTMASK*)b)->type;
+}
+
+/* The cursor's type is the packet's own `build_unit_id`, under the render
+   thread's own test for drawing it (cursor mode 0x0E), so every packet the
+   cursor ghost is drawn from carries that type's row, or the table's
+   TAGPU_PK_TRUNC_GHOSTMASK bit, on which the ghost pass draws nothing. */
+static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb)
+{
+    static unsigned short types[TAGPU_PK_MAX_BUILDS + 1];
+    unsigned nt = 0, nm = 0, k, over = 0;
+    unsigned cur = p->cursor_mode == 0x0E ? p->build_unit_id : 0u;
+    if (cur && cur < TAGPU_LIM_TYPES) {
+        s_gmSeen[cur >> 5] |= 1u << (cur & 31);
+        types[nt++] = (unsigned short)cur;
+    }
+    for (k = 0; k < (unsigned)nb; k++) {
+        unsigned t = s_builds[k].type;
+        if (s_builds[k].started || !t || t >= TAGPU_LIM_TYPES) continue;
+        if (s_gmSeen[t >> 5] >> (t & 31) & 1) continue;
+        s_gmSeen[t >> 5] |= 1u << (t & 31);
+        types[nt++] = (unsigned short)t;
+    }
+    for (k = 0; k < nt; k++) {
+        TAGPU_PK_GHOSTMASK row;
+        s_gmSeen[types[k] >> 5] &= ~(1u << (types[k] & 31));
+        if (!tagpu_datakeys_ghost_mask(types[k], &row)) continue;
+        if (nm >= TAGPU_PK_MAX_GHOSTMASK) { over = 1; continue; }
+        s_gmask[nm++] = row;
+    }
+    if (over) p->truncated |= TAGPU_PK_TRUNC_GHOSTMASK;
+    if (!nm) return *cursor;
+    qsort(s_gmask, nm, sizeof s_gmask[0], gmask_type_cmp);
+    return append_table(p, cursor, s_gmask, nm, (unsigned)sizeof(TAGPU_PK_GHOSTMASK),
+                        &p->off_ghostmask, &p->n_ghostmask, TAGPU_PK_TRUNC_GHOSTMASK);
+}
+
 static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
 {
     unsigned e, need = *cursor;
-    int n;
-    /* GATED ON THE ONLY PASS THAT READS IT, like the effect tables above. The
-       walk and the copy below are pure cost to a session with no build ghost.
-       `tagpu_native_want_builds()` is the ghost's own 30-frame
-       poll, published from the render thread; being a frame late either way
-       costs one frame of an unused or an empty table. */
-    if (!tagpu_native_want_builds()) return need;
-    n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
-    if (n <= 0) return need;
-    e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
-                     &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
+    int n = 0;
+    /* THE BUILDS TABLE IS GATED ON THE ONLY PASS THAT READS IT, like the
+       effect tables above: the walk and the copy are pure cost to a session
+       with no build ghost. `tagpu_native_want_builds()` is the ghost's own
+       30-frame poll, published from the render thread; being a frame late
+       either way costs one frame of an unused or an empty table. */
+    if (tagpu_native_want_builds()) {
+        n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
+        if (n > 0) {
+            e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
+                             &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
+            if (e > need) need = e;
+        }
+        if (n < 0) n = 0;
+    }
+    /* THE MASKS ARE NOT GATED: the cursor ghost draws whenever its lever is
+       on, whatever the poll has published yet, so its row rides every packet
+       that carries its type (a cut table sets its bit, and the ghost pass
+       then draws nothing). What that costs a session with no ghost is one
+       cached lookup a frame while a build is on the cursor. */
+    e = fill_ghostmask(p, cursor, n);
     if (e > need) need = e;
     return need;
 }
@@ -3452,6 +3513,18 @@ static void extra(char* buf, unsigned cap, double secs)
                   " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u",
                   s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
                   s_cCursorPub, s_cCursorSkip, s_cCursorForeign, s_cCursorStuck);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        /* B3's wire section (sim-fixes.md B3): DLL counters, no engine read */
+        if (cap > n) tagpu_wire_format(buf + n, cap - n);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        /* B4's stale-hits section (sim-fixes.md B4): DLL counters, no engine read */
+        if (cap > n) tagpu_hits_format(buf + n, cap - n);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        /* B5's ghost-commander section (sim-fixes.md B5): DLL counters, no engine read */
+        if (cap > n) tagpu_ghost_format(buf + n, cap - n);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;

@@ -371,7 +371,9 @@ static const char* VS =
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv   */
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
+    "flat out vec4 vLine; flat out int vLineOn;\n"
     "void main(){\n"
+    "  vLine = vec4(0.0); vLineOn = 0;\n"
     "  vec2 p = (aPos.xy + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
@@ -390,6 +392,7 @@ static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vFC; flat in float vShade; in vec2 vWorld;\n"
     "in float vEnc; in float vVY; flat in vec3 vNrm; in vec3 vShW;\n"
+    "flat in vec4 vLine; flat in int vLineOn;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uPal;\n"              /* 256x1 RGBA, the engine's table */
     "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin, mipped */
@@ -413,7 +416,11 @@ static const char* FS =
     /* the face-shade multiplier by SHD row, 32 x 1 floats
        (tagpu_render3do.c `s_shadeK`) */
     "uniform sampler2D uShadeK;\n"
+    /* game w, h and target w, h: the grid the line test runs on, read only
+       when `vLineOn` is 1 (tagpu_posedraw.c WVS) */
+    "uniform ivec4 uGrid;\n"
     TAGPU_GLSL_LIGHT_FN
+    TAGPU_GLSL_LINE_FN
     "void main(){\n"
     /* the shadow point's screen derivatives FIRST, while every fragment of
        the quad is still running -- the discards below end that (tagpu_glsl.h) */
@@ -434,6 +441,11 @@ static const char* FS =
     "    if (b.a < 0.5) discard;\n"
     "    base = b.rgb;\n"
     "  }\n"
+    /* A LINE (the nanoframe wire): the band WVS drew keeps only the line-grid
+       pixels tagpu_line.h's rule lights between its two ends (tagpu_glsl.h) */
+    "  if (vLineOn == 1 &&\n"
+    "      !taLineKeeps(gl_FragCoord.xy, vLine, uGrid))\n"
+    "    discard;\n"
     /* scaffold occlusion: nearer stamped rows hide this fragment (one copy
        of the rule, shared with the effects shader: tagpu_glsl.h) */
     TAGPU_GLSL_SCAF_TEST
@@ -854,8 +866,7 @@ static const SELAABB* selbox_aabb(const char* nd)
    depth key its body is drawn at. Returns 1 when a rect was emitted. */
 static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
                        float ax, float ay, float alt, float wx, float wz,
-                       float enc, float depthScale,
-                       int vpL, int vpT, int vw, int vh, float zoom)
+                       float enc, float depthScale, int vpL, int vpT)
 {
     const char* root;
     const SELAABB* a;
@@ -893,27 +904,14 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
            lands a pixel out on some edges (46 of ~110 box pixels, measured).
            The anchor carries the eye and the altitude already:
            ax = wx - eyeX + vpL, ay = wz - alt/2 - eyeY + vpT. The +0.5 puts
-           each corner on a pixel CENTRE, where a Bresenham line's endpoint
-           is. */
+           each corner on its engine pixel's CENTRE, which is what
+           tagpu_line.h's rule takes for an end the engine draws from
+           integers; the marker pass carries it through the wheel zoom. */
         {
             float zt = (ay - (float)vpT + alt * 0.5f) - z;
             float yt = floorf(floorf(y + alt) * 0.5f);
             px[k] = floorf(ax - (float)vpL + x) + (float)vpL + 0.5f;
             py[k] = floorf(zt) - yt + (float)vpT + 0.5f;
-        }
-        /* Away from 1x the vertex stage scales about the zoom centre and a
-           truncated corner lands between pixels, so snap there too: forward
-           through the zoom, onto the centre of a game pixel, and back -- the
-           rule tagpu_mark.c's `snap_device` restates. */
-        if (zoom > 0.0f && zoom != 1.0f) {
-            float zcx0 = (float)vpL + (float)vw * 0.5f;
-            float zcy0 = (float)vpT + (float)vh * 0.5f;
-            float sx = (px[k] - zcx0) * zoom + zcx0;
-            float sy = (py[k] - zcy0) * zoom + zcy0;
-            sx = floorf(sx) + 0.5f;
-            sy = floorf(sy) + 0.5f;
-            px[k] = (sx - zcx0) / zoom + zcx0;
-            py[k] = (sy - zcy0) / zoom + zcy0;
         }
     }
     /* HALF A KEY UNDER ITS OWN UNIT: `enc - 0.5` through the vertex stage's
@@ -1370,6 +1368,9 @@ static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
+static unsigned s_ghostMasked = 0;   /* ghosts drawn with a mask row          */
+static unsigned s_ghostMaskMiss = 0; /* rows refused: another root or count   */
+static unsigned s_ghostMaskCut = 0;  /* frames skipped: the mask table was cut */
 static unsigned s_ghostBuilt = 0;    /* queue sites already under construction */
 static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
 
@@ -1476,7 +1477,8 @@ static int ghost_armed(unsigned frame_counter)
 /* the model's piece list, parents first, as the packet would carry it for a
    live unit: one TAGPU_PK_PIECE per template node, at rest (pos and turn 0,
    visible). The tree is the per-type template PK_PIECE.node already
-   dereferences for units — the fenced read, nothing more.
+   dereferences for units — the fenced read, nothing more. The order is
+   tagpu_model_walk's, the one the game thread's ghost mask is written in.
 
    A MODEL THE WALK CANNOT HOLD IS REFUSED, NOT HALVED. Dropping what does not
    fit either cap — the piece count and the stack of pending siblings — and
@@ -1502,38 +1504,37 @@ static int ghost_armed(unsigned frame_counter)
    1 s timeout (thread-safe-destruction.md §6a), which this walk cannot
    close.
 
-   EVERY PIECE IS MARKED VISIBLE, which is the one place the ghost is not the
-   finished building: piece visibility is the COB script's (the live path takes
-   it from the unit's primitives), and no script runs for a preview. A
-   building whose script hides a piece at rest — doors, alternate geometry —
-   therefore shows it in the ghost. Every stock 3DO's full tree is what most
-   previews want, and a trigger in a stock building is unproven; it is a
-   known deviation, stated in gpu-status §2.23, not a hidden one. */
+   Every piece is marked visible here; which ones the ghost hides is the
+   packet's TAGPU_PK_GHOSTMASK, applied by ghost_one. */
 static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
 {
-    const char* stack[TAGPU_PBMAXPIECE];
-    int sp = 0, n = 0, over = 0;
-    if (!ptr_ok(root)) return 0;
-    stack[sp++] = root;
-    while (sp > 0) {
-        const char* nd = stack[--sp];
-        const char* ch;
-        if (n >= max) { over = 1; break; }
-        out[n].pos[0] = 0; out[n].pos[1] = 0; out[n].pos[2] = 0;
-        out[n].turn[0] = 0; out[n].turn[1] = 0; out[n].turn[2] = 0;
-        out[n].flags = 1;                     /* visible; bit1 unused here    */
-        out[n].node = (uint32_t)(size_t)nd;
-        n++;
-        for (ch = *(const char* const*)(nd + N_CHILD);
-             ptr_ok(ch);
-             ch = *(const char* const*)(ch + N_SIB)) {
-            if (sp >= TAGPU_PBMAXPIECE) { over = 1; break; }
-            stack[sp++] = ch;
-        }
-        if (over) break;
+    const char* nodes[TAGPU_PBMAXPIECE];
+    int n, i;
+    if (max > TAGPU_PBMAXPIECE) max = TAGPU_PBMAXPIECE;
+    n = tagpu_model_walk(root, nodes, max);
+    if (n < 0) { s_ghostTrunc++; return 0; }
+    for (i = 0; i < n; i++) {
+        out[i].pos[0] = 0; out[i].pos[1] = 0; out[i].pos[2] = 0;
+        out[i].turn[0] = 0; out[i].turn[1] = 0; out[i].turn[2] = 0;
+        out[i].flags = 1;                     /* visible; bit1 unused here    */
+        out[i].node = (uint32_t)(size_t)nodes[i];
     }
-    if (over) { s_ghostTrunc++; return 0; }
     return n;
+}
+
+/* the packet's mask row for model id `mid`, or NULL: the rows are sorted by
+   type, which the packet's validation checks */
+static const TAGPU_PK_GHOSTMASK* ghost_mask_row(const TAGPU_PACKET* pk, unsigned mid)
+{
+    const TAGPU_PK_GHOSTMASK* gm = tagpu_pk_ghostmask(pk);
+    unsigned lo = 0, hi = pk->n_ghostmask;
+    if (!gm) return NULL;
+    while (lo < hi) {
+        unsigned m = lo + (hi - lo) / 2;
+        if (gm[m].type == mid) return &gm[m];
+        if (gm[m].type < mid) lo = m + 1; else hi = m;
+    }
+    return NULL;
 }
 
 /* one ghost: the type's bake, a rest pose, one posed body draw.
@@ -1559,6 +1560,7 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     const char* root;
     const TAGPU_PBGEOM* bg;
     const TAGPU_PBMAT* bm;
+    const TAGPU_PK_GHOSTMASK* gm;
     TAGPU_PDUNIT q;
     int np, i;
 
@@ -1567,6 +1569,16 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     if (!root) { s_ghostNoBake++; return 0; }
     np = ghost_pieces(root, s_pc, TAGPU_PBMAXPIECE);
     if (np <= 0) { s_ghostNoBake++; return 0; }
+    /* THE PIECES THE FINISHED BUILDING WILL NOT SHOW (the packet's mask). It
+       is applied only to the model it was written for — the same template
+       root and the same node count, both compared as values — so a row that
+       does not describe this walk costs the ghost its mask, never a piece. */
+    gm = ghost_mask_row(pk, mid);
+    if (gm && (gm->root != (uint32_t)(size_t)root || gm->npieces != (unsigned)np)) {
+        s_ghostMaskMiss++;
+        gm = NULL;
+    }
+    if (gm) s_ghostMasked++;
     /* owner = the human whose cursor this is: the material's team-coloured
        frames, so the ghost shows the model exactly as the player's built
        unit will look. ghost=1 keys the bake APART from the units' entries:
@@ -1605,7 +1617,13 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
        root: ghost_pieces emits parents before children, so piece 0 is it. A
        chain in which nothing but the base turns collapses to ONE rotation
        about the root's own rest point, which is what this loop writes
-       directly rather than walking the tree a second time. */
+       directly rather than walking the tree a second time.
+
+       A hidden piece takes posed_pose's form for one: an all-zero matrix,
+       which collapses its triangles, and visibility 0. Its children keep
+       their own matrices, as the engine keeps drawing a hidden piece's
+       children. `bg->nparts` is the `np` pieces the bake was given, so bit
+       i of the mask is part i. */
     {
         static const unsigned short bt[3] = { 0, 0x8000u, 0 };  /* X, Y, Z */
         const float* r0 = bg->restOff[0];
@@ -1626,6 +1644,10 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
             }
             s_shaded[i] = 1;
             s_pvis[i] = 1;
+            if (gm && (gm->bits[i >> 5] >> (i & 31) & 1)) {
+                memset(o, 0, 12 * sizeof *o);
+                s_pvis[i] = 0;
+            }
         }
     }
     memset(&q, 0, sizeof q);
@@ -1702,14 +1724,20 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        draws. The counters are cumulative, so printing them on
        a frame that drew nothing is exactly as meaningful. */
     if ((frame_counter % 300) == 0) {
-        char b[160];
+        char b[224];
         _snprintf(b, sizeof b,
                   "ghost: curs=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
-                  " alpha=%.2f",
+                  " masked=%u maskmiss=%u maskcut=%u alpha=%.2f",
                   s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
-                  s_ghostNoBake, s_ghostTrunc, s_ghostAlpha);
+                  s_ghostNoBake, s_ghostTrunc, s_ghostMasked, s_ghostMaskMiss,
+                  s_ghostMaskCut, s_ghostAlpha);
         nlog(b);
     }
+    /* THE MASKS ARE WHOLE OR THE FRAME HAS NO GHOST. A packet whose mask table
+       was cut, or held more masked types than its cap, lacks rows for types
+       that hide pieces, and a missing row reads as "hides nothing"; so no ghost
+       draws from it rather than one drawing its hidden pieces. */
+    if (pk->truncated & TAGPU_PK_TRUNC_GHOSTMASK) { s_ghostMaskCut++; return; }
     /* the cursor: the square's own gate — mode 14, and either the band bit or
        the mouse inside the rect the engine can NAME (gather_cursor's test) —
        plus a build type the udef bound accepts.
@@ -1939,10 +1967,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_ss     = tagpu_settings_ss() == 2;
         /* THE DEVICE-RESOLUTION WORLD IS OPT-IN (`tagpu_devres.on`). The
            selection rect (`selbox_emit`, drawn by tagpu_vk_mark.c) does not
-           thin under it: the rect's fragment stage keeps whole GAME pixels on
-           the engine's Bresenham path, so it resolves to the full colour at any
-           `ss`, devres included (tagpu_mark.c, SVS/SFS). ui-markers.md keeps
-           the 2026-09-11 coverage numbers.
+           thin under it: every line's fragment stage keeps whole GAME pixels
+           on the engine's Bresenham path, so it resolves to the full colour at
+           any `ss`, devres included (tagpu_line.h). ui-markers.md keeps the
+           2026-09-11 coverage numbers.
 
            A refused supersampled target is not latched here: the lane that can
            see the target refuses it, and tagpu_vk.c names it in the log and
@@ -2158,9 +2186,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        stage writes 1 - enc / depthScale into a [0.5, 1] depth range, so a
        step moves the stored depth by step / (2 depthScale); with the step at
        16 x 2^-23 x ds0 and the grown scale at most 2 ds0 (true while
-       2N + 2 <= 2^19, and N is at most 10 000), that is 8 units of the D24
-       buffer's 2^-24 and 8 float ulps of the key itself -- so adjacent keys
-       stay apart through every rounding between the key and the buffer. At
+       2N + 2 <= 2^19, and N is at most 10 000), that is 8 steps of the depth
+       buffer's 2^-24 (D24's, or a float's over [0.5, 1)) and 8 float ulps of
+       the key itself -- so adjacent keys stay apart through every rounding
+       between the key and the buffer. At
        six keys wide, the default, the air band and the particle layers sit
        where they would with no band at all: airKey = fxKey + 12. */
     int fxBound = fxOn ? tagpu_fx_model_bound(pk) : 0;
@@ -2922,8 +2951,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (units[i].sel && markOn && units[i].pu)
             nselDrawn += selbox_emit(pk, units[i].pu, units[i].ax, units[i].ay,
                                      units[i].wy, units[i].wx0, units[i].wz0,
-                                     encBase, depthScale, vpL, vpT, vw, vh,
-                                     s_zoom);
+                                     encBase, depthScale, vpL, vpT);
         /* NOTHING IS RE-READ: the pose, the composite rect and every field
            below are a COPY the game thread made, in our own memory, valid for
            the whole frame. */

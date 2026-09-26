@@ -60,17 +60,19 @@ typedef struct {
        so a pass that does not test depth still declares one with testing and
        writes off. A pass that DOES test must refuse to arm when this is
        UNDEFINED rather than draw untested.
-       24-bit fixed point by construction (`stencilok` below names the two
-       formats). */
+       D32_SFLOAT_S8_UINT, else D24_UNORM_S8_UINT (tagpu_vk.c
+       `vk_depth_format` says why either draws the same picture); the
+       specification guarantees one of the two, so UNDEFINED is a
+       non-conformant device. */
     VkFormat                  dfmt;
     /* 1 when `dfmt` CARRIES A STENCIL PLANE and the render passes clear it --
        both the seam's and tagpu_vk_world.c's offscreen one -- so a pass may
-       build a pipeline with `stencilTestEnable`. The 24-bit format the seam
-       prefers is D24_UNORM_S8_UINT and has one; its fallback,
-       X8_D24_UNORM_PACK32, has none, and a device that offers only that gets a
-       0 here. Same shape as `flipok` and `lineok`: a capability a pass asks
-       about rather than assumes, and a pass whose device will not offer it
-       stands its stencil-masked work down instead of drawing without the mask.
+       build a pipeline with `stencilTestEnable`. Both formats the seam takes
+       carry one, so this is 1 whenever `dfmt` is set; it stays a field so that
+       the stencil-masked work states its own requirement where it is built.
+       Same shape as `flipok`: a capability a pass asks about
+       rather than assumes, and a pass whose device will not offer it stands its
+       stencil-masked work down instead of drawing without the mask.
        THE ONLY USER TODAY is the unit pass's Classic hard shadow, whose mask
        is what makes one 50% blend per silhouette PIXEL rather than one per
        surface -- see build_shadow_pipelines. */
@@ -100,44 +102,10 @@ typedef struct {
        pass, and a flip both share cancels. The screen is the only check for
        this one. */
     int                       flipok;
-    /* VK_EXT_line_rasterization WITH `bresenhamLines`, ENABLED ON THE DEVICE.
-       A pass that draws LINES needs it and may not draw without it: the lines
-       follow the diamond-exit rule, which BRESENHAM mode gives and Vulkan's
-       default mode does not. MEASURED 2026-09-15 (the effects pass, against
-       the OpenGL renderer this replaced): under Vulkan's DEFAULT
-       lineRasterizationMode the lasers came out a strict SUPERSET of the
-       diamond-exit lines -- all 126 of their pixels plus exactly one extra
-       fragment at the END of each line segment. It is the same shape as
-       `flipok`: a rule adopted as pipeline state rather than worked around,
-       and a pass whose device will not offer it stands down instead of drawing
-       those extra fragments. */
-    int                       lineok;
-    /* `wideLines` WAS ENABLED ON THE DEVICE, and the widest line it will
-       rasterise. A pass that draws lines into a SUPERSAMPLED target needs
-       it: a line one game pixel wide is `ss` pixels of the target, and a
-       pipeline fixed at 1.0 draws it `ss` times too thin. Same shape as
-       `flipok` and `lineok`: a rule adopted as pipeline state.
-       `maxLineWidth` is `lineWidthRange[1]`, and a width past it is refused
-       rather than clamped: a clamped width is a line a different thickness
-       from one game pixel, which is the thing this family of flags exists to
-       prevent. 0 means the device does not offer it. */
-    int                       wideok;
-    float                     maxLineWidth;
-    /* VK_EXT_depth_clip_control WITH `depthClipControl`, ENABLED ON THE DEVICE,
-       and so a pipeline may ask for OpenGL's CLIP-SPACE Z RANGE: clip z in
-       [-1, 1] mapped onto the depth range, where Vulkan takes [0, 1] and CLIPS
-       the rest. The other world passes write a z already in [0, 1], so
-       `minDepth 0.5 / maxDepth 1.0` reproduces the (z + 1) / 2 mapping exactly
-       and none of them needs this. THE SHADOW PASS IS THE EXCEPTION: its
-       orthographic light matrix fills [-1, 1] (tagpu_vk_shadow.h,
-       TAGPU_SHADOWHAND `mat`, which nothing produces today), so without this
-       the near half of every caster is clipped away and the depth map is WRONG
-       rather than merely different -- and the depths it stores are what the
-       consumers' taShadowAt compares against. Same shape as `flipok` and
-       `lineok`: a rule adopted as pipeline state rather than worked around,
-       and a pass whose device will not offer it stands down instead of drawing
-       a map with its casters' near halves missing. */
-    int                       zclipok;
+    /* NO LINE FEATURE IS HERE, AND NONE IS NEEDED: no pass rasterises a line
+       primitive. Every line is two triangles whose fragment stage keeps the
+       game pixels `0x4CC7AB` would plot (tagpu_line.h, tagpu_glsl.h), so a
+       line needs neither VK_EXT_line_rasterization nor `wideLines`. */
     /* `samplerAnisotropy` WAS ENABLED ON THE DEVICE, and the largest ratio it
        will apply. This fork filters exactly one class of texture -- the
        Classic++ restored twins, the only ones holding true colour rather than

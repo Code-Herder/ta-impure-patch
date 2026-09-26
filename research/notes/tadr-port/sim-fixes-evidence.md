@@ -185,8 +185,8 @@ recycling of deceased units' IDs for 5 seconds". The history:
 | `d6066f5` | | the Init hook removed; the state is reset when `GameTime == 0` (issue #124) |
 | `191c901` | 2026-09-09 | a **bump pointer over never-used slots, then a FIFO of freed slots gated at 150 ticks**, with the stated aim of maximising the time before a slot is reused, so that a stale `0x0D` lands on an empty slot |
 
-The prior art is the Delphi recorder's `.fixfacexps` (SRC `idplay.pas:1639` at `4eda8a8^`, since
-removed). It dropped each *incoming* `0x0B` that named a unit index this peer had sent a `0x0C` for
+The prior art is the Delphi recorder's `.fixfacexps` (SRC `idplay.pas:1639`, still at HEAD and in
+both shipped recorder binaries, off by default). It dropped each *incoming* `0x0B` that named a unit index this peer had sent a `0x0C` for
 within 3000 ms of wall-clock time.
 
 **Stock (DIS)** is §0 above. B's peer hits A's unit X in slot s and sends `0x0B(s)`. Meanwhile

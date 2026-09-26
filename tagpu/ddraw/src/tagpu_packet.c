@@ -544,6 +544,16 @@ static const char* frame_valid(const void* rec)
        raw pointer and no cap of its own, which is this line's whole point:
        every table a consumer indexes by `n_` alone is checked HERE. */
     if (!table_ok(p, p->off_builds, p->n_builds, sizeof(TAGPU_PK_BUILD))) return "builds table";
+    /* the ghost masks: the consumer binary-searches them by type, so the order
+       it rests on is checked here with the extent */
+    if (!table_ok(p, p->off_ghostmask, p->n_ghostmask, sizeof(TAGPU_PK_GHOSTMASK))) return "ghost mask table";
+    if (p->n_ghostmask > TAGPU_PK_MAX_GHOSTMASK) return "more ghost masks than the table holds";
+    {
+        const TAGPU_PK_GHOSTMASK* gm = tagpu_pk_ghostmask(p);
+        unsigned k;
+        for (k = 1; k < p->n_ghostmask; k++)
+            if (gm[k].type <= gm[k - 1].type) return "ghost masks out of type order";
+    }
     /* the map's own features: its consumer copies `n_mapfeat` entries into a
        buffer sized by the cap, so the cap is checked here with the extent */
     if (!table_ok(p, p->off_mapfeat, p->n_mapfeat, sizeof(TAGPU_PK_MAPFEAT))) return "map features table";
@@ -895,7 +905,7 @@ static void heartbeat(PKX* m, unsigned fc)
     double secs = 0.0;
     unsigned i, total = 0, acc = 0, p50 = 0, p99 = 0, pubs, taken;
     const TAGPU_PACKET* p = m->frameHead ? (const TAGPU_PACKET*)m->slot[m->read] : NULL;
-    char b[1700];
+    char b[2040];   /* one log line: tagpu_log.c cuts at LINE_MAX, 2048 */
     int n;
 
     if (have && fc - last < PK_HEARTBEAT) return;

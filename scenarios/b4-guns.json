@@ -1,0 +1,86 @@
+{
+  "format": "ta-scenario/1",
+  "description": "B4 stale hits, the attacker's half: a line of light and heavy laser towers at x 4985, y 6983 on Town & Country (three seats and more; the commanders start far from it), owned by the peer that applies it. Apply it on one peer and b4-victims on another, repeatedly (every few seconds), so the victims' owner keeps creating into the slots the towers keep freeing; with tagpu_dmgdelay.on=K on the attacker every hit it sends is K ticks late. Laser hits are instant, so every shot is one 0x0B; two fusion plants pay for the shots (a laser tower spends energy on each, and a game's starting income fires them a few times a second).",
+  "seed": 20260925,
+  "on_error": "abort",
+  "setup": {
+    "map": "Town & Country",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    }
+  },
+  "groups": [
+    {
+      "id": "llt",
+      "owner": 0,
+      "at": [
+        4985,
+        6983
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 1,
+        "spacing": 48,
+        "jitter": 0
+      },
+      "composition": [
+        {
+          "type": "ARMLLT",
+          "count": 10
+        }
+      ],
+      "facing": 90
+    },
+    {
+      "id": "hlt",
+      "owner": 0,
+      "at": [
+        4935,
+        6983
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 1,
+        "spacing": 64,
+        "jitter": 0
+      },
+      "composition": [
+        {
+          "type": "ARMHLT",
+          "count": 6
+        }
+      ],
+      "facing": 90
+    },
+    {
+      "id": "power",
+      "owner": 0,
+      "at": [
+        4700,
+        6983
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 1,
+        "spacing": 160,
+        "jitter": 0
+      },
+      "composition": [
+        {
+          "type": "ARMFUS",
+          "count": 2
+        }
+      ],
+      "facing": 90
+    }
+  ],
+  "camera": {
+    "at": [
+      5085,
+      6983
+    ]
+  }
+}

@@ -14,21 +14,25 @@ Everything is stdlib-only and every subcommand can print JSON (--json) for agent
 """
 
 import argparse
+import atexit
 import difflib
 import hashlib
 import bisect
 import json
 import math
+import ntpath
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import talog  # noqa: E402  the DLL's logs across their rotations (tools/talog.py)
+import taremote  # noqa: E402  remote instances: PowerShell over SSH (tools/taremote.py)
 
 # --------------------------------------------------------------------------- paths
 
@@ -226,6 +230,10 @@ def die(msg: str) -> "NoReturn":  # noqa: F821
     raise SystemExit(1)
 
 
+def warn(msg: str):
+    print(f"tacli: WARNING: {msg}", file=sys.stderr)
+
+
 def run(cmd, **kw):
     kw.setdefault("stdout", subprocess.DEVNULL)
     kw.setdefault("stderr", subprocess.DEVNULL)
@@ -277,7 +285,7 @@ def pointer_restore(display: str, pos):
 
 
 class Instance:
-    def __init__(self, name: str):
+    def __init__(self, name: str, lenient: bool = False):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", name):
             die(f"invalid instance name {name!r} (use letters, digits, . _ -)")
         self.name = name
@@ -285,6 +293,41 @@ class Instance:
         self.gamedir = self.dir / "gamedir"
         self.prefix = self.dir / "prefix"
         self.meta_path = self.dir / "instance.json"
+        # A REMOTE instance (`tacli remote add`) is a test folder on another machine:
+        # its gamedir is a taremote.RemotePath, whose file operations go over SSH and
+        # which open()/shutil/subprocess refuse, so a verb nobody routed cannot act on
+        # a local file of the same name. `self.dir` stays local: it holds the metadata.
+        #
+        # METADATA THAT DOES NOT READ IS AN UNUSABLE INSTANCE, never a local one: read
+        # as `{}` it would look local, and `rm` would delete tagpu/instances/<name>/
+        # whatever it is. Every verb refuses it; a loop over every instance (`ls`,
+        # the slot and window layout) passes `lenient`, gets `unusable` set, and skips
+        # it with a warning. save_meta replaces the file whole, so a crash cannot
+        # leave half of one.
+        self.remote = None
+        self.unusable = None
+        try:
+            meta = json.loads(self.meta_path.read_text()) if self.meta_path.exists() else {}
+            if not isinstance(meta, dict):
+                raise ValueError("not a JSON object")
+        except (OSError, ValueError) as e:
+            self.unusable = (f"{name}: its metadata ({self.meta_path}) does not read ({e}); "
+                             f"tacli does nothing with it until it is fixed or removed by hand")
+            if not lenient:
+                die(self.unusable)
+            self.prefix = None
+            return
+        if meta.get("type") == "remote":
+            try:
+                self.remote = taremote.Remote(meta["remote"])
+            except (KeyError, TypeError, ValueError) as e:
+                self.unusable = f"{name}: its remote metadata is unusable ({e})"
+                if not lenient:
+                    die(self.unusable)
+                self.prefix = None
+                return
+            self.gamedir = self.remote.root
+            self.prefix = None
 
     # -- state ------------------------------------------------------------
     @property
@@ -297,9 +340,22 @@ class Instance:
         return json.loads(self.meta_path.read_text())
 
     def save_meta(self, meta: dict):
-        self.meta_path.write_text(json.dumps(meta, indent=2))
+        """Replace instance.json whole: written under a name of this process's own, then
+        moved over it, so two tacli commands saving at once leave one whole file or the
+        other, never a mix of both."""
+        fd, tmp = tempfile.mkstemp(dir=self.meta_path.parent, prefix="instance.json.",
+                                   suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(meta, indent=2))
+            os.replace(tmp, self.meta_path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     def env(self) -> dict:
+        if self.remote:
+            die(f"{self.name} is a remote instance: nothing of it runs under wine here")
         meta = self.meta()
         e = dict(os.environ)
         e["WINEPREFIX"] = str(self.prefix)
@@ -314,7 +370,10 @@ class Instance:
         return e
 
     def pid(self):
-        """PID of this instance's TotalA.exe, identified by its own prefix."""
+        """PID of this instance's TotalA.exe, identified by its own prefix -- or, for a
+        remote instance, by the test folder it runs from."""
+        if self.remote:
+            return self.remote.pid()
         try:
             pids = subprocess.run(["pgrep", "-x", "TotalA.exe"],
                                   capture_output=True, text=True).stdout.split()
@@ -348,6 +407,8 @@ class Instance:
         tab about the game. The bare title stays in the list for an instance
         whose meta records no title, or with the label turned off.
         """
+        if self.remote:
+            return None             # its window is on another machine's desktop
         display = self.meta().get("display") or default_display()
         pid = self.pid()
         patterns = []
@@ -898,8 +959,11 @@ def place_window(inst: "Instance", display: str):
     wid, x, y, w, h = win
     others = []
     for meta_path in INSTANCES.glob("*/instance.json"):
-        other = Instance(meta_path.parent.name)
-        if other.name == inst.name or not other.running():
+        other = Instance(meta_path.parent.name, lenient=True)
+        if other.unusable:
+            warn(other.unusable)
+            continue
+        if other.remote or other.name == inst.name or not other.running():
             continue
         if (other.meta().get("display") or default_display()) != display:
             continue    # another X server's windows share no pixels with this one
@@ -1016,8 +1080,11 @@ def _create(inst: Instance, args) -> dict:
     # stopped instances are the normal state of this directory.
     taken = set()
     for meta_path in INSTANCES.glob("*/instance.json"):
-        other = Instance(meta_path.parent.name)
-        if other.name == args.name or not other.running():
+        other = Instance(meta_path.parent.name, lenient=True)
+        if other.unusable:
+            warn(other.unusable)
+            continue
+        if other.remote or other.name == args.name or not other.running():
             continue
         try:
             taken.add(json.loads(meta_path.read_text()).get("slot"))
@@ -1220,16 +1287,40 @@ def _ensure_markown_for_mark(inst) -> "str | None":
     return ("auto-armed markown.on (mark.on is set and markown must be installed at "
             "launch, not after)")
 
+# The engine's debug switches that start with -d (the table 0x4DA0E0 matches as
+# prefixes, without case, before the switch dispatch): they never act as -d.
+TA_DEBUG_D_SWITCHES = ("-dprinton", "-dprintoff", "-dprintfile", "-disableimagehlp",
+                       "-debughelper")
+
+
+def refuse_ta_switches(argv):
+    """Refuse the TotalA.exe switches a launch must never pass (cmdline-options.md): -r
+    registers DirectPlay and quits, -d bypasses the ddraw path our stack lives in. The
+    engine acts on a token's SECOND character whatever follows it, so `-register`,
+    `-r12` and `/Reg` are -r too. The same rule refuses the engine's debug switches that
+    start with -d (`-dprinton`, `-disableimagehlp`, `-debughelper`, ...): 0x4DA0E0 sets
+    them aside before the dispatch, so they are not -d, but a launch has no use for them
+    either. And the test token, which only a remote launch passes. All refused before
+    anything is created."""
+    for a in argv:
+        if a.lower().startswith(TA_DEBUG_D_SWITCHES):
+            die(f"refusing {a!r}: one of TotalA.exe's debug switches (0x4DA0E0 takes it before "
+                f"the -d dispatch), which a launch has no use for; see cmdline-options.md")
+        if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d"):
+            die(f"refusing {a!r}: TotalA.exe reads it as -{a[1:2].lower()} (the character "
+                f"after the dash decides); see cmdline-options.md (-r registers DirectPlay "
+                f"and quits, -d is the engine's own windowed mode)")
+        if a == taremote.TEST_TOKEN:
+            die(f"refusing {a!r}: it marks a tacli test launch (tagpu_regstore.h), which a "
+                f"remote launch passes itself; a local game with it has no store and is not run")
+
+
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
-    # research/notes/cmdline-options.md); -r aborts the launch and -d bypasses the
-    # ddraw path our stack lives in, so both are refused — before anything is created.
+    # research/notes/cmdline-options.md).
     argv = list(args.arg or [])
-    for a in argv:
-        if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d") and len(a) <= 3:
-            die(f"refusing {a!r}: see cmdline-options.md (-r registers DirectPlay and "
-                f"quits, -d is the engine's own windowed mode)")
+    refuse_ta_switches(argv)
     shipped = bool(getattr(args, "shipped", False))
     if shipped:
         clash = [f for f, v in (("--res", args.res), ("--window", getattr(args, "window", None)),
@@ -1489,8 +1580,16 @@ def cmd_launch(args):
 def cmd_ls(args):
     rows = []
     for meta_path in sorted(INSTANCES.glob("*/instance.json")):
-        inst = Instance(meta_path.parent.name)
+        inst = Instance(meta_path.parent.name, lenient=True)
+        if inst.unusable:
+            warn(inst.unusable)
+            continue
         meta = json.loads(meta_path.read_text())
+        if inst.remote:
+            # not asked: `ls` opens no link to another machine
+            meta.update(pid=None, running=None, window=None)
+            rows.append(meta)
+            continue
         pid = inst.pid()
         meta["pid"] = pid
         meta["running"] = pid is not None
@@ -1503,6 +1602,11 @@ def cmd_ls(args):
         print("no instances (tacli create <name>)")
     else:
         for m in rows:
+            if m.get("type") == "remote":
+                print(f"{m['name']:<16} {'remote':<11} {'(not asked)':<20} "
+                      f"{'shield' if m.get('shield', True) else 'OPEN':<7} "
+                      f"test folder on the remote machine")
+                continue
             state = f"running pid={m['pid']}" if m["running"] else "stopped"
             shield = "shield" if m["shield"] else "OPEN"
             print(f"{m['name']:<16} {m['res'][0]}x{m['res'][1]:<6} {state:<20} "
@@ -1535,6 +1639,20 @@ def _write_tokens(inst: Instance, tokens: str, timeout: float = 5.0):
         else:
             cur = f"{cur} {w}" if cur else w
     batches.append(cur)
+
+    if inst.remote:
+        # Never appended: a batch is moved into place once the DLL has taken the last
+        # one (RemotePath.create_new), so the DLL never reads half a batch and no
+        # append can land between its read and its delete.
+        wait = max(timeout, 10.0)
+        for batch in batches:
+            deadline = time.time() + wait
+            while not path.create_new((batch + "\n").encode()):
+                if time.time() >= deadline:
+                    die(f"{inst.name}: the game has not taken the previous key batch in "
+                        f"{wait:g}s -- is it running? (tacli log {inst.name} -n 20)")
+                time.sleep(0.05)
+        return
 
     for batch in batches:
         deadline = time.time() + timeout
@@ -1708,7 +1826,7 @@ def _peek(inst: Instance, specs, timeout: float):
     """
     if not inst.running():
         die(f"{inst.name} is not running")
-    cursor = talog.Cursor(inst.gamedir)
+    cursor = _log_cursor(inst)
     (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(specs) + "\n")
 
     deadline = time.time() + timeout
@@ -1774,7 +1892,7 @@ def cmd_weapons(args):
     # them across two instances is how a mismatched-peer test reads out.
     types = {}
     for u in data.get("units", []):
-        types.setdefault(u["type"], (u.get("crc_weapons"), u.get("crc_all"), u["count"]))
+        types.setdefault(u["type"], (u.get("crc_weapons"), u.get("crc_all"), u["count"], u.get("pieces")))
     for u in data.get("units", []):
         for s in u["slots"]:
             rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
@@ -1784,11 +1902,14 @@ def cmd_weapons(args):
                         f"aim={s['aimed']} thr={s['thread']}")
     hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())
     fires = " ".join(f"{i}={n}" for i, n in enumerate(data.get("fires", [])) if n)
-    crcs = " ".join(f"{t}(n={n},w={w},all={a})" for t, (w, a, n) in sorted(types.items())
+    crcs = " ".join(f"{t}(n={n},w={w},all={a})" for t, (w, a, n, _) in sorted(types.items())
                     if w is not None)
+    # AimFromWeaponN,QueryWeaponN per extended slot, as the type caches them (-1 = unasked).
+    pieces = " ".join(f"{t}({pc})" for t, (_, _, _, pc) in sorted(types.items()) if pc)
     head = (f"frame={data.get('frame')} armed={data.get('armed')} cap={data.get('cap')} "
             f"units={len(data.get('units', []))}\nhits: {hits}\nfires by slot: {fires or '-'}"
-            + (f"\ntype CRCs: {crcs}" if crcs else ""))
+            + (f"\ntype CRCs: {crcs}" if crcs else "")
+            + (f"\npieces (aimfrom,query from slot 3): {pieces}" if pieces else ""))
     out(data, args.json, human=head + ("\n" + "\n".join(rows) if rows else "\n(no matching units)"))
 
 
@@ -1941,18 +2062,45 @@ def cmd_shot(args):
     out({"name": args.name, "path": str(dest)}, args.json, human=str(dest))
 
 
+def _log_root(inst: Instance):
+    """The directory talog reads this instance's logs under: the gamedir, or for a
+    remote instance a local mirror of its test folder's `log` directory, synced now
+    (taremote.sync_logs: only what was appended crosses the link)."""
+    if inst.remote:
+        return taremote.sync_logs(inst.remote, inst.dir / "remote-log")
+    return inst.gamedir
+
+
+class _RemoteCursor:
+    """talog.Cursor over a remote instance's log mirror, re-synced before every read."""
+
+    def __init__(self, inst: Instance):
+        self.inst = inst
+        self.cursor = talog.Cursor(_log_root(inst))
+
+    def text(self, advance=False) -> str:
+        _log_root(self.inst)
+        return self.cursor.text(advance)
+
+
+def _log_cursor(inst: Instance):
+    """A place in the instance's log that survives rotation (talog.Cursor)."""
+    return _RemoteCursor(inst) if inst.remote else talog.Cursor(inst.gamedir)
+
+
 def cmd_log(args):
     inst = Instance(args.name)
-    if not talog.current(inst.gamedir).exists():
+    root = _log_root(inst)
+    if not talog.current(root).exists():
         die("no log/tagpu.log yet")
     # this run only, across its rotated parts; a grep needs the whole run, a tail only
     # as many parts as hold its lines
     if args.grep:
         rx = re.compile(args.grep)
-        data = [line for line in talog.run_text(inst.gamedir).splitlines() if rx.search(line)]
+        data = [line for line in talog.run_text(root).splitlines() if rx.search(line)]
         data = data[-args.tail:]
     else:
-        data = talog.tail_lines(inst.gamedir, args.tail)
+        data = talog.tail_lines(root, args.tail)
     out({"name": args.name, "lines": data}, args.json, human="\n".join(data))
 
 
@@ -2030,7 +2178,7 @@ def cmd_wait(args):
     """Block until a regex appears in log/tagpu.log (new lines only, across rotations)."""
     inst = Instance(args.name)
     rx = re.compile(args.pattern)
-    cursor = talog.Cursor(inst.gamedir)
+    cursor = _log_cursor(inst)
     watch = CrashWatch(inst, f"/{args.pattern}/")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
@@ -2046,6 +2194,8 @@ def cmd_wait(args):
 
 
 def _stop(inst: Instance, hard: bool = False) -> dict:
+    if inst.remote:
+        return _remote_stop(inst)
     pid = inst.pid()
     if pid:
         run(["kill", str(pid)])
@@ -4376,7 +4526,7 @@ def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
 
 def _scn_wait_live(inst: Instance, timeout: float) -> int:
     """Wait for a world: the overlay's own count of living units goes non-zero."""
-    cursor = talog.Cursor(inst.gamedir)
+    cursor = _log_cursor(inst)
     deadline = time.time() + timeout
     while True:
         if not inst.running():
@@ -4453,7 +4603,7 @@ def cmd_scenario_load(args):
     los = args.los
     if los is None and setup["los"] is not None:
         los = SCN_LOS[setup["los"]]
-    launched = _launch(argparse.Namespace(
+    launched = (_remote_launch if inst.remote else _launch)(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         maxfps=args.maxfps,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
@@ -4464,7 +4614,9 @@ def cmd_scenario_load(args):
     if launched.get("already_running"):
         die(f"{args.name} is still running after being stopped "
             f"(tacli stop {args.name} --hard)")
-    steps.append(f"launched {launched['res'][0]}x{launched['res'][1]}"
+    lres = launched.get("res")
+    steps.append("launched" + (f" {lres[0]}x{lres[1]}" if lres else "")
+                 + (" on the remote machine" if launched.get("remote") else "")
                  + (f", map {wanted_map!r}" if wanted_map else "")
                  + (f", unit limit {limit}" if limit is not None else ""))
     if launched.get("owndraw_note"):
@@ -4583,6 +4735,537 @@ def cmd_switches(args):
     out(res, args.json, human=human)
     if not res.get("ok"):
         sys.exit(1)
+
+
+# --------------------------------------------------------------- the .ab capture
+#
+# `tagpu_<pass>.ab` in the gamedir makes the Vulkan lane write one frame of that
+# pass as `tagpu_<pass>_vk.ppm` (the table in tagpu_vk.c, `s_abFiles`). The lever
+# latches until its file goes away, and the pass unlinks the target when it
+# latches, so a `.ppm` present after `vk: shot: wrote` is this arming's.
+
+AB_PASSES = ("terr", "feat", "fx", "mark", "posedraw", "scaffold", "fps", "gui")
+AB_WROTE_RX = re.compile(r"vk: shot: wrote (\S+), (\d+)x(\d+)")
+# The lines tagpu_vk.c logs when an arming produced no capture: more than one pass
+# drew, no world target ("Nothing captured"), no TRANSFER_SRC, the capture lost to a
+# device loss or resize ("was lost to"), the target not removable ("REFUSED"), or a
+# pass name it does not know.
+AB_REFUSED_RX = re.compile(r"^vk: .*(?:nothing captured|the A/B capture was lost to|"
+                           r"this arming is REFUSED|nothing unlinked)", re.IGNORECASE)
+
+
+def cmd_ab(args):
+    """Capture one pass's frame, and fetch the file when the instance is remote.
+
+    WHAT MAKES THE FILE THIS ARMING'S: the target is removed before the lever is
+    created, the pass unlinks it again when it latches, and only a `wrote` line
+    logged after this call's own log mark is accepted. So another arming's capture
+    can never be returned for this one.
+
+    WHAT THE SETTLE IS FOR, AND ONLY THAT: a pass re-arms only after its own poll
+    has SEEN the lever gone (every 30 frames, or 500 ms for the UI layer), and no
+    line logs that moment. A lever removed less than `--settle` seconds ago -- by a
+    leftover, or by the previous `ab` of this pass, whose removal time the metadata
+    keeps -- is therefore given the rest of that time before it is created again.
+    Too short a settle costs a capture, which fails here loudly; it cannot cost a
+    wrong one."""
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running")
+    lever = inst.gamedir / f"tagpu_{args.pass_}.ab"
+    target = inst.gamedir / f"tagpu_{args.pass_}_vk.ppm"
+    meta = inst.meta()
+    cleared = (meta.get("ab_cleared") or {}).get(args.pass_, 0.0)
+    if lever.exists():
+        lever.unlink(missing_ok=True)
+        cleared = time.time()
+    if time.time() - cleared < args.settle:
+        time.sleep(args.settle - (time.time() - cleared))
+    target.unlink(missing_ok=True)
+    cursor = _log_cursor(inst)
+    watch = CrashWatch(inst, "the capture")
+    lever.write_text("")
+    wrote, deadline = None, time.time() + args.timeout
+    try:
+        while wrote is None:
+            for line in cursor.text(advance=True).splitlines():
+                m = AB_WROTE_RX.search(line)
+                if m and m.group(1).replace("\\", "/").split("/")[-1] == target.name:
+                    wrote = (int(m.group(2)), int(m.group(3)))
+                elif AB_REFUSED_RX.search(line):
+                    die(f"no capture: {line.strip()}")
+            if wrote is None:
+                if time.time() >= deadline:
+                    die(f"no `vk: shot: wrote {target.name}` in {args.timeout:g}s -- is "
+                        f"the {args.pass_} pass armed and drawing? (tacli log {args.name} "
+                        f"-g 'vk: census'); below 15 fps, raise --settle")
+                watch.die_if_crashed()
+                time.sleep(0.5)
+    finally:
+        lever.unlink(missing_ok=True)
+        meta = inst.meta()
+        meta.setdefault("ab_cleared", {})[args.pass_] = time.time()
+        inst.save_meta(meta)
+    if inst.remote:
+        dest = Path(args.output).expanduser() if args.output else inst.dir / "ab" / target.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(target.read_bytes())
+    else:
+        dest = Path(args.output).expanduser() if args.output else target
+        if args.output:
+            shutil.copy2(target, dest)
+    out({"name": args.name, "pass": args.pass_, "size": list(wrote), "path": str(dest),
+         "bytes": dest.stat().st_size}, args.json,
+        human=f"{args.pass_}: {wrote[0]}x{wrote[1]} -> {dest}")
+
+
+# ------------------------------------------------------------ remote instances
+#
+# A remote instance is a test folder on another machine, reached over SSH
+# (tools/taremote.py). `remote add` copies the player's game folder there once;
+# the metadata under tagpu/instances/<name>/ holds the link and the folders, and
+# nothing else of it is kept locally. Design:
+# research/notes/tacli-design.md, "Remote instances".
+
+# The verbs a remote instance answers. Every other verb refuses on one: it would
+# act on local files, or on wine, that a remote instance does not have.
+REMOTE_VERBS = ("launch", "stop", "rm", "arm", "keys", "ui", "eye", "scenario load",
+                "log", "ab", "crash", "shield")
+
+# `launch` flags that only mean something to a wine instance on the local desktop.
+REMOTE_LOCAL_ONLY = (("--window", "window", None), ("--display", "display", None),
+                     ("--slot", "slot", None), ("--dplay/--no-dplay", "dplay", None),
+                     ("--intro", "intro", False), ("--free-dplay-port", "free_dplay_port", False),
+                     ("--shipped", "shipped", False),
+                     ("--no-restore-pointer", "no_restore_pointer", False))
+
+# Requests and results a previous run may have left: the list `_launch` clears, and
+# the key file, since a remote batch is moved in only once the last one is gone.
+STALE_TRIGGERS = ("tagpu_scenario.trigger", "tagpu_scenario.json",
+                  "tagpu_switches.trigger", "tagpu_switches.json",
+                  "tagpu_units.trigger", "tagpu_features.trigger",
+                  "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt",
+                  "tagpu_keys.txt")
+
+TA_ARG_RX = re.compile(r"[-/][A-Za-z0-9._=:]{1,40}|[A-Za-z0-9._=:]{1,40}")
+
+
+def _remote_store_values(meta: dict, args) -> list:
+    """The values a remote launch puts into the test folder's registry store: those a
+    local launch writes into its prefix (apply_prefix_settings and the skirmish flags).
+    They go into `tacli-state\\registry.txt`, which the DLL answers TotalA.exe's registry
+    calls from (tagpu_regstore.h), so TA's settings key on that machine is not written."""
+    vals = [("", "Interface Type", "REG_DWORD", 1), ("", "PlayMovie", "REG_DWORD", 0)]
+    if not meta.get("sound"):
+        vals += [("", v, "REG_DWORD", 0) for v in
+                 ("musicmode", "musicvol", "fxvol", "cdmode", "ackfx", "buildfx")]
+    if args.res:
+        vals += [("", "DisplaymodeWidth", "REG_DWORD", args.res[0]),
+                 ("", "DisplaymodeHeight", "REG_DWORD", args.res[1])]
+    if args.map:
+        vals.append(("", "SkirmishMap", "REG_SZ", args.map))
+    for spec in args.player or []:
+        vals += [("Skirmish", value, "REG_DWORD", data) for value, data in player_keys(spec)]
+    if args.los is not None:
+        vals.append(("", "SkirmishLineOfSight", "REG_DWORD", args.los))
+    if args.mapping is not None:
+        vals.append(("", "SkirmishMapping", "REG_DWORD", args.mapping))
+    return vals
+
+
+def _remote_store_path(inst: Instance):
+    return inst.gamedir / taremote.STATE_DIR / taremote.STORE
+
+
+def _remote_store_read(inst: Instance):
+    """The test folder's registry store as (RegStore, the file's bytes). Refuses one that
+    is missing or that the DLL would not load whole: its game would not run (in a test
+    launch the DLL ends the process rather than touch the real registry)."""
+    path = _remote_store_path(inst)
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        old = path.parent / (taremote.STORE + ".tacli-old")
+        if old.exists():
+            die(f"{inst.name}: its test folder has no {taremote.STATE_DIR}\\{taremote.STORE} "
+                f"but a {old.name}, which a replace that failed half-way (ReplaceFile error "
+                f"1177) leaves: the store is that file. Rename it back to {taremote.STORE}")
+        die(f"{inst.name}: its test folder has no {taremote.STATE_DIR}\\{taremote.STORE}, so the "
+            f"DLL would not run the game. `tacli rm {inst.name}` and `tacli remote add` again "
+            f"make a test folder that has one")
+    try:
+        return taremote.RegStore.parse(data), data
+    except ValueError as e:
+        die(f"{inst.name}: {taremote.STATE_DIR}\\{taremote.STORE} does not parse ({e}); tacli "
+            f"leaves it as it is")
+
+
+def _remote_store_update(inst: Instance, store, data: bytes, values) -> int:
+    """Put `values` into the store `_remote_store_read` gave, replacing the file whole
+    (RemotePath.write_bytes: a temporary name, then put in its place) when anything
+    changed. Only while no game of this instance runs: the DLL owns the file then."""
+    try:
+        for sub, name, kind, value in values:
+            key = taremote.STORE_TA + (("\\" + sub) if sub else "")
+            if kind == "REG_DWORD":
+                store.set_dword(key, name, int(value))
+            else:
+                try:
+                    store.set_sz(key, name, str(value))
+                except UnicodeEncodeError:
+                    die(f"{name}={value!r}: a registry string tacli writes is ASCII")
+        new = store.format()
+    except ValueError as e:
+        die(f"{inst.name}: the launch's values would make a store the DLL does not load ({e})")
+    if new != data:
+        _remote_store_path(inst).write_bytes(new)
+    return len(values)
+
+
+def _store_set(inst: Instance, key: str, value: str):
+    """One `key=value` line of the store, replacing any line with that key."""
+    path = inst.gamedir / "impure.cfg"
+    lines = path.read_text().splitlines() if path.exists() else []
+    lines = [ln for ln in lines if ln.partition("=")[0].strip().lower() != key]
+    path.write_text("\n".join(lines + [f"{key}={value}"]) + "\n")
+
+
+def _remote_log_key(inst: Instance):
+    """The run/part header of the test folder's `log\\tagpu.log`, or None -- also when
+    there is no `log\\` at all (a DLL older than the log sink, or a first launch)."""
+    try:
+        return taremote._key((inst.gamedir / "log" / "tagpu.log").read_bytes(0, taremote.HEAD_BYTES))
+    except FileNotFoundError:
+        return None
+
+
+def _remote_registry_line(inst: Instance, key):
+    """The first `registry: ` line of the run `key` names, from the head of the test
+    folder's `log\\tagpu.log` (the DLL logs it right after the run's header), or None
+    while there is none -- or when the file is no longer that run's."""
+    try:
+        head = (inst.gamedir / "log" / "tagpu.log").read_bytes(0, 4096)
+    except FileNotFoundError:
+        return None
+    if taremote._key(head[:taremote.HEAD_BYTES]) != key:
+        return None
+    for raw in head.split(b"\n")[1:-1]:     # the last piece has no newline yet
+        line = raw.rstrip(b"\r").decode("utf-8", "replace")
+        if line.startswith("registry: "):
+            return line
+    return None
+
+
+def _task_words(state, result) -> str:
+    if state is None:
+        return "its scheduled task is gone"
+    if result == taremote.TASK_RUNNING:
+        return f"its scheduled task is {state} and says the game is running"
+    if result is None:
+        return f"its scheduled task is {state} with no last result"
+    return f"its scheduled task is {state}, last result 0x{result:08X}"
+
+
+def _remote_launch(args) -> dict:
+    """`launch` for a remote instance: the harness files and the registry store into
+    the test folder, then TotalA.exe started on the remote desktop by a scheduled task,
+    and the wait for the DLL's new log run.
+
+    TA'S SETTINGS KEY ON THAT MACHINE IS NOT WRITTEN. The test values go into the store,
+    and the DLL answers TotalA.exe's registry calls from it (tagpu_regstore.h, which also
+    says what lies outside that). That holds only for a DLL that fails closed in a test
+    launch, so a launch whose DLL lacks it -- an old build, or `--keep-dll` on the
+    player's copy -- is refused before the task starts. The store is read and checked
+    before anything is written, and after the check that no game runs: a game that was
+    still exiting has made its last writes to it by then.
+
+    The launch succeeds only on the DLL's own word: its new run's `registry: ` line must
+    say the store is served. A refused run writes its log header before it ends, and its
+    process can still be seen, so the header and a pid are not enough."""
+    inst = Instance(args.name)
+    rem = inst.remote
+    bad = [flag for flag, attr, off in REMOTE_LOCAL_ONLY if getattr(args, attr, off) not in (off,)]
+    if bad:
+        die(f"{', '.join(bad)}: {args.name} is a remote instance, and these place or "
+            f"shape a wine instance on the local desktop")
+    argv = list(args.arg or [])
+    refuse_ta_switches(argv)
+    for a in argv:
+        if not TA_ARG_RX.fullmatch(a):
+            die(f"--arg {a!r}: a TotalA.exe switch is letters, digits and . _ = : here")
+    if getattr(args, "maxfps", None) is not None:
+        store_maxfps(args.maxfps)
+    notes = []
+    meta = inst.meta()
+    if meta.get("state") == "adding":
+        die(f"{args.name}: `remote add` did not finish; `tacli rm {args.name}` removes what "
+            f"it made")
+    procs = rem.procs()
+    ours = [pid for pid, path in procs if rem.is_ours(path)]
+    if ours:
+        return dict(meta, already_running=True, pid=ours[0], remote=True)
+    if procs:
+        die(f"TotalA.exe is already running on the remote machine ({len(procs)} "
+            f"process{'es' if len(procs) > 1 else ''}, not from {args.name}'s test "
+            f"folder): it may be the player's game, so tacli launches nothing beside it "
+            f"and stops nothing it did not start")
+    store, store_data = _remote_store_read(inst)
+    if not args.keep_dll:
+        if not BUILT_DLL.exists():
+            die(f"fork DLL not built: {BUILT_DLL}")
+        built = BUILT_DLL.read_bytes()
+        if not all(m in built for m in taremote.TEST_MODE_MARKS):
+            die(f"{BUILT_DLL} is not a DLL that fails closed in a test launch (tagpu_regstore.c, "
+                f"the -r closure): it could run the game against the remote machine's real "
+                f"registry. Build a tree that has both")
+    for key, attr in (("sound", "sound"), ("unit_limit", "unit_limit"), ("shield", "shield"),
+                      ("maxfps", "maxfps")):
+        if getattr(args, attr, None) is not None:
+            meta[key] = getattr(args, attr)
+    if args.res:
+        meta["res"] = list(args.res)
+    inst.save_meta(meta)
+
+    if not args.keep_dll:
+        (inst.gamedir / "ddraw.dll").upload(BUILT_DLL)
+        notes.append(f"deployed {BUILT_DLL} (md5 {hashlib.md5(BUILT_DLL.read_bytes()).hexdigest()})")
+    if not rem.dll_has_test_mode():
+        die(f"{args.name}: the test folder's ddraw.dll is not one that fails closed in a test "
+            f"launch (tagpu_regstore.c, the -r closure), so it could run the game against the "
+            f"remote machine's real registry; launch without --keep-dll to deploy "
+            f"{BUILT_DLL.name} from this tree")
+    write_totala_ini(inst, meta.get("sound", False), meta.get("unit_limit"))
+    write_nowarp(inst)
+    set_shield(inst, meta.get("shield", True))
+    defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
+    inst.save_meta(meta)
+    ensure_store(inst, tuple(args.res) if args.res else None)
+    if getattr(args, "maxfps", None) is not None:
+        _store_set(inst, "maxfps", store_maxfps(args.maxfps))
+    if args.title is not None:
+        if args.title.strip().lower() == "auto":
+            meta.pop("title", None)
+        else:
+            meta["title"] = args.title
+    label = meta["title"] if meta.get("title") is not None else default_label(inst)
+    meta["window_title"] = write_title(inst, label)
+    errlog = inst.gamedir / "ErrorLog.txt"
+    if errlog.exists():
+        errlog.rename(inst.gamedir / "ErrorLog.txt.prev")
+    for stale in STALE_TRIGGERS:
+        (inst.gamedir / stale).unlink(missing_ok=True)
+    auto = (_ensure_owndraw_for_native(inst), _ensure_fxown_for_fx(inst),
+            _ensure_featown_for_feat(inst), _ensure_terrown_for_terr(inst),
+            _ensure_markown_for_mark(inst))
+    n = _remote_store_update(inst, store, store_data, _remote_store_values(meta, args))
+    notes.append(f"{n} test values put into {taremote.STATE_DIR}\\{taremote.STORE}, which the DLL "
+                 f"answers TotalA.exe's registry calls from; TA's settings key there is not "
+                 f"written")
+    inst.save_meta(meta)
+
+    old = _remote_log_key(inst)
+    crash_since = crash_mtime(inst)
+    rem.task_start(argv)
+    deadline = time.time() + args.timeout
+    pid, seen = None, False
+    while True:
+        pid = rem.pid()
+        seen = seen or pid is not None
+        key = _remote_log_key(inst) if pid else None
+        if pid and key is not None and key != old:
+            break                       # the DLL attached and began this run's log
+        report = crash_report(inst, crash_since)
+        if report:
+            die(report)
+        if pid is None:
+            state, result = rem.task_status()
+            started = seen or result == taremote.TASK_RUNNING
+            if state not in ("Running", "Queued") and (state is None or result not in (
+                    None, taremote.TASK_RUNNING, 0x41303)):
+                die(f"{args.name}: " + ("the game exited during launch (no ErrorLog.txt); "
+                                        if started else
+                                        "no TotalA.exe from the test folder is running; ")
+                    + _task_words(state, result))
+        if time.time() >= deadline:
+            state, result = rem.task_status()
+            die(f"{args.name}: " + ("the game is running but its DLL began no new log in "
+                                    f"{args.timeout:g}s" if seen else
+                                    f"no TotalA.exe from the test folder in {args.timeout:g}s")
+                + f"; {_task_words(state, result)}")
+        time.sleep(0.5)
+    while True:
+        line = _remote_registry_line(inst, key)
+        if line is not None and line.endswith(taremote.TEST_MODE_REFUSED):
+            die(f"{args.name}: the DLL did not run the game: {line}")
+        if line is not None and line.startswith(taremote.TEST_MODE_SERVED):
+            break
+        if line is not None:
+            die(f"{args.name}: the DLL's run did not enter test mode ({line}); the game may "
+                f"be using the remote machine's registry: `tacli stop {args.name}`")
+        if time.time() >= deadline:
+            die(f"{args.name}: the DLL's run {key[0]} logged no registry line in "
+                f"{args.timeout:g}s, so nothing says the store is served")
+        time.sleep(0.5)
+    try:
+        prio = rem.priority(pid)
+    except taremote.RemoteError:
+        prio = ""                       # it exited since: the next verb says so
+    notes.append(f"TotalA.exe runs at priority {prio or '?'}")
+    meta["last_launch"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    inst.save_meta(meta)
+    names = ("owndraw_note", "fxown_note", "featown_note", "terrown_note", "markown_note")
+    return dict({"name": args.name, "remote": True, "pid": pid, "window": None,
+                 "priority": prio,
+                 "res": list(args.res) if args.res else store_res(inst),
+                 "map": args.map, "unit_limit": meta.get("unit_limit"), "args": argv,
+                 "shield": shield_state(inst), "defaults": bool(meta.get("defaults")),
+                 "defaults_note": defaults_note, "notes": notes,
+                 "window_title": meta["window_title"]}, **dict(zip(names, auto)))
+
+
+def cmd_remote_launch(args):
+    res = _remote_launch(args)
+    if res.get("already_running"):
+        out(res, args.json, human=f"{args.name} already running on the remote machine "
+                                  f"(pid {res['pid']})")
+        return
+    lines = [f"launched {args.name} on the remote machine pid={res['pid']} "
+             f"shield={'on' if res['shield'] else 'off'}"
+             + (" defaults=on" if res.get("defaults") else "")]
+    lines += [f"  {n}" for n in res["notes"]]
+    lines += [f"  {res[k]}" for k in ("defaults_note", "owndraw_note", "fxown_note",
+                                      "featown_note", "terrown_note", "markown_note")
+              if res.get(k)]
+    out(res, args.json, human="\n".join(lines))
+
+
+def _remote_stop(inst: Instance) -> dict:
+    """Stop the game that runs from the test folder -- never another TotalA.exe."""
+    rem = inst.remote
+    pid = rem.pid()
+    if pid and not rem.stop_pid(pid):
+        die(f"{inst.name}: TotalA.exe (pid {pid}) is still running after Stop-Process")
+    return {"name": inst.name, "stopped": True, "was": pid}
+
+
+def cmd_remote_stop(args):
+    res = _remote_stop(Instance(args.name))
+    out(res, args.json, human=f"stopped {args.name}" + (
+        f" (pid {res['was']})" if res["was"] else " (it was not running)"))
+
+
+def cmd_remote_rm(args):
+    """Delete the test folder (its marker must name this instance), the scheduled
+    task and the metadata. The player's folder is not touched."""
+    inst = Instance(args.name)
+    rem = inst.remote
+    if inst.meta().get("state") != "adding":
+        if rem.pid() and not args.force:
+            die(f"{args.name} is running (tacli stop {args.name}, or --force)")
+        _remote_stop(inst)
+        tasks = rem.task_remove()
+    else:
+        tasks = "not looked at"
+    if rem.root.exists():
+        rem.remove_folder(inst.name)
+    shutil.rmtree(inst.dir)
+    folder = {"removed": "removed, as it held no other task", "kept": "kept: it holds another task",
+              "absent": "not there"}.get(tasks, tasks)
+    out({"name": args.name, "removed": True, "task_folder": tasks}, args.json,
+        human=f"removed {args.name}: its test folder, its scheduled task and its metadata; the "
+              f"task folder {taremote.TASK_DIR} {folder}")
+
+
+def cmd_remote_add(args):
+    """Make a remote instance: copy the player's game folder once into a test folder
+    on the remote machine, seed its registry store by READING the player's key, and
+    record the link in the instance's metadata.
+
+    THE METADATA AND THE TEST FOLDER'S MARKER COME FIRST, before a byte is copied: a
+    copy that fails half-way leaves an instance marked `adding` that `tacli rm`
+    removes, instead of a gigabyte nobody can name. The store is written last, so an
+    instance that is no longer `adding` always has one."""
+    inst = Instance(args.name)
+    if inst.exists:
+        die(f"instance {args.name!r} already exists (tacli rm {args.name} first)")
+    key = None
+    if args.key:
+        key = Path(args.key).expanduser().resolve()
+        if not key.is_file():
+            die(f"--key {args.key}: no such file")
+    folder = args.to or ntpath.join(taremote.user_profile(args.ssh, key), "tacli", args.name)
+    spec = {"ssh": args.ssh, "key": str(key) if key else None, "player": args.from_,
+            "folder": folder, "task": f"{taremote.TASK_DIR}{args.name}"}
+    try:
+        rem = taremote.Remote(spec)
+        spec["console_user"] = rem.console()
+        if rem.procs():
+            die("TotalA.exe is running on the remote machine; the player's folder may be in "
+                "use, so it is not copied now")
+        spec["player"], spec["folder"] = rem.resolve_folders()
+        rem = taremote.Remote(spec)
+    except ValueError as e:
+        die(str(e))
+    before = rem.check_copy()
+    inst.dir.mkdir(parents=True, exist_ok=True)
+    meta = {"name": args.name, "type": "remote", "state": "adding",
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"), "remote": spec,
+            "gamedir": rem.folder, "shield": True, "defaults": False, "sound": False}
+    inst.save_meta(meta)
+    t0 = time.time()
+    try:
+        rem.begin_folder(args.name)
+        copied = rem.copy_player()
+        seed = rem.read_player_registry()
+        (rem.root / taremote.STATE_DIR / taremote.STORE).write_bytes(seed.format())
+    except taremote.RemoteError as e:
+        die(f"{e}\n  the add did not finish: `tacli rm {args.name}` removes what it made")
+    except ValueError as e:
+        die(f"the player's key cannot become a registry store the DLL loads ({e})\n  the add "
+            f"did not finish: `tacli rm {args.name}` removes what it made")
+    meta.pop("state")
+    nvals = sum(len(seed.values(k)) for k in seed.keys())
+    meta["copied"] = {"files": copied["files"], "bytes": copied["bytes"],
+                      "seconds": round(time.time() - t0, 1)}
+    meta["registry_seed"] = {"keys": len(seed.keys()), "values": nvals}
+    inst.save_meta(meta)
+    out(meta, args.json,
+        human=f"added {args.name}: copied {copied['files']} files "
+              f"({copied['bytes'] >> 20} MB, as the player's folder holds: "
+              f"{before['files']} files) into its test folder in "
+              f"{time.time() - t0:.0f}s\n  "
+              + "\n  ".join(copied["protected"])
+              + f"\n  registry store seeded from the player's key: {len(seed.keys())} keys, "
+                f"{nvals} values (read, not written)")
+
+
+def _remote_routes() -> dict:
+    """Each verb's handler -> what runs for a remote instance. Keyed by the HANDLER,
+    not by `args.cmd`: a subcommand's own positional can carry that name (`order`'s
+    order is `cmd`, so `order r1 stop` reads as `stop`)."""
+    return {cmd_launch: cmd_remote_launch, cmd_stop: cmd_remote_stop, cmd_rm: cmd_remote_rm,
+            cmd_arm: cmd_arm, cmd_keys: cmd_keys, cmd_ui: cmd_ui, cmd_eye: cmd_eye,
+            cmd_scenario_load: cmd_scenario_load, cmd_log: cmd_log, cmd_ab: cmd_ab,
+            cmd_crash: cmd_crash, cmd_shield: cmd_shield}
+
+
+def _route_remote(args):
+    """Send a verb aimed at a remote instance to its remote form, or refuse it."""
+    name = getattr(args, "name", None)
+    func = getattr(args, "func", None)
+    if (not name or func in (cmd_remote_add, cmd_ls)
+            or not (INSTANCES / name / "instance.json").exists()):
+        return
+    inst = Instance(name)
+    if not inst.remote:
+        return
+    routes = _remote_routes()
+    if func not in routes:
+        verb = func.__name__.removeprefix("cmd_").replace("_", " ")
+        die(f"`{verb}` does not reach a remote instance: {name} runs on another machine "
+            f"and this verb would act on files or processes here. A remote instance "
+            f"answers: {', '.join(REMOTE_VERBS)}")
+    args.func = routes[func]
 
 
 def cmd_scenario_todo(args):
@@ -4989,6 +5672,37 @@ def build_parser():
     rm.add_argument("name")
     rm.add_argument("--force", action="store_true")
     rm.set_defaults(func=cmd_rm)
+
+    ab = sub.add_parser("ab", help="capture one pass's Vulkan frame (tagpu_<pass>.ab) "
+                                   "and fetch the .ppm")
+    add_common(ab)
+    ab.add_argument("name")
+    ab.add_argument("pass_", metavar="PASS", choices=AB_PASSES,
+                    help=" | ".join(AB_PASSES) + " (posedraw is the units)")
+    ab.add_argument("-o", "--output", help="where to put the .ppm (default: the gamedir's "
+                                           "own file; a remote instance's comes to "
+                                           "tagpu/instances/<name>/ab/)")
+    ab.add_argument("--timeout", type=float, default=30.0)
+    ab.add_argument("--settle", type=float, default=2.0,
+                    help="seconds a removed lever stays gone before it is created again: "
+                         "a pass re-reads it every 30 frames (the UI layer every 500 ms), "
+                         "so 2 s covers 15 fps and up")
+    ab.set_defaults(func=cmd_ab)
+
+    rmt = sub.add_parser("remote", help="instances on another machine, over SSH")
+    rmv = rmt.add_subparsers(dest="verb", required=True)
+    ra = rmv.add_parser("add", help="copy a player's game folder once into a test folder "
+                                    "on a Windows machine, and make it an instance")
+    add_common(ra)
+    ra.add_argument("name")
+    ra.add_argument("--ssh", required=True, metavar="USER@HOST",
+                    help="the key login (OpenSSH on the Windows side, PowerShell as its shell)")
+    ra.add_argument("--key", help="the private key file for that login")
+    ra.add_argument("--from", dest="from_", required=True, metavar="FOLDER",
+                    help="the player's game folder there (C:\\...); read, never written")
+    ra.add_argument("--to", metavar="FOLDER",
+                    help="the test folder to create (default: <user profile>\\tacli\\<name>)")
+    ra.set_defaults(func=cmd_remote_add)
     return p
 
 
@@ -4997,7 +5711,12 @@ def main(argv=None):
     if not hasattr(args, "json"):
         args.json = False
     INSTANCES.mkdir(parents=True, exist_ok=True)
-    args.func(args)
+    atexit.register(taremote.close_all)
+    try:
+        _route_remote(args)
+        args.func(args)
+    except taremote.RemoteError as e:
+        die(f"{getattr(args, 'name', '')}: on the remote machine: {e}")
 
 
 if __name__ == "__main__":
