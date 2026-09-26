@@ -1078,11 +1078,10 @@ static void range_label(double wx, double walt, double wz, double rad,
 
     if (!s_labels || !label || !*label || rad <= 0.0) return;
     n = (int)(rad * 6.283185307179586 * 0.125);
-    /* The engine divides 0x10000 by this with an `idiv` and no zero test
-       (`0x438EEE`, after the `mov eax,0x10000` at `0x438EE4`), so a radius under
-       about 1.3 world units faults inside TA
-       itself. Nothing in stock content is that small; we simply have no label
-       to place. */
+    /* The engine's own segment count (`DrawRangeCircle 0x438EA0`). A radius under
+       about 1.3 world units gives none, and the engine then draws neither the circle
+       nor its label: `fix_range_circle` (tagpu_patches.c) sends N = 0 past the divide
+       at `0x438EEE` to the function's epilogue. So there is no label to place. */
     if (n <= 0) return;
     step = 65536 / n;
     k = slot * 3;

@@ -1613,8 +1613,11 @@ value when the string has none. Stock's allocation stays (never NULL).
 
 **Test.** A test `.ufo` (`tools/hpipack.py`, one unit = one `.ufo`): a copy of `CORSOLAR` (5×5)
 without `YardMap`, and one whose value is `"oo?"`. On the stock-rules build, `tacli peek` the 25
-bytes at `*(*0x511DE8+0x1439B)+type·0x249+0x14E` across two launches (expected to differ); with
-the fix, the chosen fill both times. A retail-units regression: all 126 structures' yardmap bytes
+bytes at `*(*0x511DE8+0x1439B)+type·0x249+0x14E` across two launches; with the fix, the chosen
+fill both times. MEASURED 2026-09-25 (B6): the stock-rules bytes did **not** differ between two
+launches of one build on the reference setup (`"oo?"` read `2f2f31313100002b2b…` both times, the missing
+key all `0x2F`), so the stack's leftovers are repeatable there; the defect is that they are the
+stack's, whatever a given build leaves in it. A retail-units regression: all 126 structures' yardmap bytes
 identical with and without the fix.
 
 **Decided 2026-09-25.** Past the terminator, the last valid char repeats; a string with no valid char fills `o`. The same rule covers a trailing invalid char ([the plan, B6](sim-fixes.md#the-landings)).
@@ -2179,7 +2182,10 @@ right after `+0x37EC8 = 5000` and `+0x37EC4 = esi`) and at `0x49558F` (the per-t
 **The two seeds (DIS). This settles the engine map's open [INFERRED].** At level load `0x497180`
 calls **`QueryPerformanceCounter`** (IAT `0x4FC0BC`), then **`0x4B6CA0(low + high)`**, which sets
 the sim RNG state `0x51FC88 = (seed ^ 0x66E29572) | 1`. It then calls `srand(time(0))`
-(`0x4971A5`/`0x4971AE`). **Both RNGs are seeded per peer.** So stock never intended the sim RNG
+(`0x4971A5`/`0x4971AE`), which seeds only the loader thread's CRT stream: `rand` keeps its state
+per thread (`+0x14` of `0x4EB0F0`'s data), and the wind's `rand()` at `0x490C60` runs on the game
+thread, whose stream WinMain seeds with `srand(time(0))` at `0x49E8BB`. **Both RNGs are seeded per
+peer.** So stock never intended the sim RNG
 to agree across peers, which fits the state-and-event replication model. It also means stock's wind
 differs per peer in both **when** it changes and **what** it changes to.
 
@@ -2187,10 +2193,16 @@ differs per peer in both **when** it changes and **what** it changes to.
 - `0x40156F`: the per-unit resource tick adds `ratio × UnitDef+0x1D2` (WindGenerator) into the
   unit's energy make `+0xBC`.
 - `0x488F68`: a unit's energy-make getter, which returns `−ratio × +0x1D2`.
-- `0x437933`/`0x437941`: the changed flag and the direction [INFERRED: the wind-generator COB
-  call-in].
-- `0x423AA1`/`0x423AC1` and `0x474B09..0x475651`: the components [INFERRED: wreck-smoke and
-  particle drift].
+- `0x437910` (`0x437933`/`0x437941`/`0x437973`), called from `0x48ADC4`: on a tick where the
+  changed flag is set, a wind generator's scripts `SetDirection(heading)` and `SetSpeed(speed << 4)`.
+- The projectile pass `0x49B720` (the tick's call at `0x495513`) adds the component vector from
+  `+0x37ECC` to a projectile's position every tick (`0x49BC58..0x49BC62`, `0x49BD04..0x49BD2D`).
+- The fire spread `0x4239C0` (from `0x424463`) reads both components (`0x423AA1`, `0x423AC1`).
+- The effect handlers at `0x474B09`, `0x474FC9`, `0x475366` and `0x475626` read both components
+  [INFERRED: smoke and particle drift].
+- `0x409B90` reads `+0x37EC8` (5000) against the map's maximum wind, not the drawn wind.
+
+The projectile pass and the fire spread make the wind simulation state, beyond the economy.
 
 **A real stock defect?** **Yes, in multiplayer.** Economy is owner-authoritative: resources travel
 as `0x28` (networking-lobbies.md). So each player's wind generators produce by the **wind on their
@@ -2221,10 +2233,13 @@ two peers and wind generators only: pause, then compare each player's energy pro
 - Our own generator: a specified Park–Miller or xorshift with **its own state**, never the sim RNG
   or the CRT.
 - **Reset at every level load** at `0x491903`, before the first call, from a value every peer
-  shares: the host's DirectPlay ID, mixed with a hash of the map name. Single player takes the same
+  shares: the host's DirectPlay ID, mixed with a hash of the map name (built instead from
+  DirectPlay's session instance GUID: the host's ID can change during the load, see the plan's B6
+  deviations). Single player takes the same
   path, seeded from the counter stock seeds its RNG with, so it stays random per game (decided).
-- It replaces both the schedule draw and the two value draws, on the game thread only (both
-  callers are on it).
+- It replaces both the schedule draw and the two value draws. They run on the game thread only:
+  the tick's call is there, and the level load's call, on the loader thread, finds `next` = 0 and
+  GameTime 0 and draws nothing.
 - Bound as stock does: `max ≤ min` gives `min`. Stock's `n < 2` path returns 0.
 - Written once and fail-closed per rule 3, with no runtime opt-out per rule 4; the comparison is
   the previous build's DLL.

@@ -2055,6 +2055,9 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `*(0x51FBD0) + 0x614` | the gamma factor `0x4BA200` multiplies every palette entry by on its way to DirectDraw (`SetGamma 0x4BA590`). Read only, **on the game thread by the packet publisher since 2026-09-12** (a bounded float in every packet; `tagpu_pal_gamma()` answers from the copy). **Its consumer is the world composite** (`tagpu_vk_world.c`, §2.3f): the engine's own curve `min(255, trunc(e × factor))`, uploaded per slot when the factor changes and applied to the finished world; at exactly 1.0 no curve is drawn. It also reaches the `pal:` log lines. **Bounded** to 0.05..8.0 against the slider's own 0.5..1.5 and the chat command's N/10; anything else, NaN included, reads as 1.0, the identity |
 | **`main+0x14287`** | the `FeatureStruct` grid, one 13-byte record per 16-px cell, `mapW16 × mapH16` (`main+0x14233`/`+0x14237`). **WRITTEN, on the LOADER thread, by the saved-feature border fix** (§2.6c): the def word `+0x08` of the border cells only, `0xFFFD` → `0xFFFF` before the saved-feature restore `0x424C00` and back to `0xFFFD` after it for every such cell then EMPTY or `0xFFFE`, inside the call at `0x43265A`, before any unit is restored and before the level's first in-play draw. Otherwise read only. `tagpu_feat.c` reads the height byte (`+0x04`) of the anchor's four corners per anchor per frame for the engine's own projection, and since G14f the four central-difference neighbours too, for the ground's lambert (Classic++ only); `tagpu_terr.c` (G14f) copies the height byte of **every** cell once per map, when it builds the atlas, into an R8 texture the terrain shader samples — keyed on the grid pointer, the dims and the tile set, re-checked every frame; the grid is `IsBadReadPtr`-checked whole before the copy (7 MB on Two Continents), and an unreadable grid leaves Classic++ terrain **unlit** (the restored colour and the grey rule stay, the lambert is skipped), logged and retried every 60 frames. **The map edge's mirror reads the height bytes of every anchor it keeps and of its right, lower and lower-right neighbours, once a load**, on the LOADER thread at LoadMap's join `0x483B53`, right after LoadMap wrote them (`mapfeat_at_load`, §2.90); its feature list comes from the TNT's records, not from the grid's def indices |
 | **`0x512358`** | the pathing maps: 32 movement classes of stride `0x20`, each with its map at `+0x18` and its class tick at `+0x1C` (built by `0x440940`, called at `0x4918E3`). **WRITTEN, on the LOADER thread, by the saved-feature border fix** (§2.6c), only through the engine's own refresh `0x440A40` over the 1 × 1 rectangle of each cell it sets back to `0xFFFD` — the call the engine makes for a grid change — inside the level load, before any unit is restored. Nothing of ours reads them |
+| **`main+0x37EC4`, `+0x37EDA`, `+0x37ED8`** | the wind: the GameTime of its next change (dword), its speed (dword) and its heading (word). **WRITTEN, and it is SIM state, on the GAME THREAD by the wind fix** (§2.6c): `wind_draw`, called from the tick's call of the updater `0x490C40` (`0x49558F`) in place of stock's three draws, by stock's rules, from our own generator; stock's derivations (`+0x37ECC`, `+0x37ED4`, the ratio `+0x37EDE`, the changed flag `+0x37EE2`) then run on its values. The generator is seeded on the LOADER thread, inside the level load's call at `0x491903`, before the loader's last store (bit 1 of `main+0x38D75`, `0x497C62`) that the game thread waits for (`0x498342`); in a network game from DirectPlay's session instance GUID, which the GAME THREAD reads with `GetSessionDesc` through the engine's interface (`main+0x4D9`, an `IDirectPlay3A`, or an `IDirectPlay2A` when lobbied) at the loader thread's start (`0x4982CA`), before that thread exists (else the engine's copy `main+0x479`, else nothing). Nothing of ours reads them |
+| `main+0x471` | the engine's `DPSESSIONDESC2` copy (0x50 bytes, its `guidInstance` at `main+0x479`), which the engine's one `SetSessionDesc` (`0x4C9903`) hands DirectPlay whole. **Read only, by the wind fix** (§2.6c): on whichever thread makes that call — the loader thread at the end of every load (`0x497C0B`), the battle room's and the network pump's callers otherwise — `wind_set_session_desc` copies it into its own frame and makes the call with that copy, carrying the GUID DirectPlay answers `GetSessionDesc` with right before (`dwSize` 0x50 and a non-null GUID, else no call). The capture at `0x4982CA` reads `main+0x479` on the game thread as the seed's second choice. Nothing of ours writes it, so its other readers — the session list's `EnumSessions` descriptor (`0x4C9EC1`) and `reporter.dll`'s `RIReport` through `0x46C620`, a DLL the retail install does not ship — read what stock leaves there |
+| **the unit def's yardmap, `def+0x14E`** (`main+0x1439B`, stride `0x249`) | a pointer to `footX · footZ` bytes (`+0x14A`, `+0x14C`). **WRITTEN, and it is SIM state, by the yardmap fix** (§2.6c), inside the unit-def parser `0x42BF40` for a def whose BMcode `+0x22F` is 0: the engine's own allocation through `0x4D83B0` at stock's size, filled by stock's rules and, past the `YardMap` string, with its last valid char or `o`. Stock's bytes for every string stock parses inside its NUL. On the LOADER thread: the parse at `0x42D722` is inside `0x42D2E0`, which the level load calls at `0x4918CA`; the other, at `0x42D269` inside `0x42D1F0`, runs only from the typed-command handler at `0x4174BE` (the game thread [INFERRED]). Nothing of ours reads them |
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z **by the command apply on the game thread since 2026-09-12** (every in-play draw, before the next frame's scroll poll reads it; the base restored at the level end), and its save path is guarded (§2.3) |
 | **`UnitOrders->Pos`, `unit+0x5C` → `+0x22`/`+0x26`/`+0x2A`** | **WRITTEN, and it is SIM state** — not by us directly but by `ORDERS_NewMainOrder2Unit 0x43AFC0`, which the scenario applier calls on the game thread from the tick site. Three 16.16 dwords, `{x, altitude, depth}`, copied verbatim by the constructor `0x43A0C0`. An order is a sim command and replicates in multiplayer, so a wrong value here is a wrong game, not a wrong picture; the applier is a fixture tool and is never armed in a played session |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
@@ -2134,17 +2137,17 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
-while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 130 rows of
-the raise and 53 of the fixes in the raised build, 183 in all, and the fixes' 57 in the stock-limits
+while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 129 rows of
+the raise and 95 of the fixes in the raised build, 224 in all, and the fixes' 99 in the stock-limits
 build, where the weapon IDs' four sites join them (MEASURED 2026-09-25 from the log lines). It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 183 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 224 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
-8192, unit types 16384, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
-nothing raised (…); the simulation fixes' 57 sites installed`. Right before it, once both
+8192, unit types 16383, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
+nothing raised (…); the simulation fixes' 99 sites installed`. Right before it, once both
 installers have taken their stubs, `enginefix: the fixes' and limits' stubs take N bytes in P page(s)
 of 4096` (§2.6c).
 
@@ -2347,20 +2350,21 @@ in the blast; flak fired nearly straight up divides by zero; a unit whose footpr
 map's last column or row is parked off the map, where nothing can hit it; and a unit whose altitude
 is more than twice its distance from the north edge is off every other player's line-of-sight grid.
 One more is [landing 2](tadr-port/sim-fixes.md): an aircraft whose cells other aircraft hold takes
-no splash at all (one that no in-rect slot names). And [landing 3](tadr-port/sim-fixes.md): five network receivers take a unit index, a type or a slot delta off the wire with no bound. [Landing 4](tadr-port/sim-fixes.md): a hit names its victim by slot and the owner reuses a freed slot at once, so a hit in flight lands on whatever unit the slot holds when it arrives. [Landing 5](tadr-port/sim-fixes.md): a peer still loading refuses the others' first units, their commanders among them, until the round robin re-creates each. Twenty-three fixes, built at every attach, in both builds, by `patch_engine_defects()` at the end of
+no splash at all (one that no in-rect slot names). And [landing 3](tadr-port/sim-fixes.md): five network receivers take a unit index, a type or a slot delta off the wire with no bound. [Landing 4](tadr-port/sim-fixes.md): a hit names its victim by slot and the owner reuses a freed slot at once, so a hit in flight lands on whatever unit the slot holds when it arrives. [Landing 5](tadr-port/sim-fixes.md): a peer still loading refuses the others' first units, their commanders among them, until the round robin re-creates each. And five outside the battle ([landing 6](tadr-port/sim-fixes.md)): each peer of a network game draws a wind of its own, a yardmap string is parsed past its end, the saved-game loader's order fallback walks one record past its table, the stockpile bar divides by a weapon's reload time without testing it, and a range circle of radius 1 divides by zero. Twenty-eight fixes, built at every attach, in both builds, by `patch_engine_defects()` and then `patch_loader_defects()` at the end of
 `tagpu_apply_patches()`. Each patch is the identity on every input stock handles correctly.
 
 **Two classes.** A *simulation* fix — one whose absence would let a player silently compute
 different shared state on an input stock does not fault on — hands its sites to the fail-closed
 table of §2.6b, in both builds: they are compared and written with the rest of the table or not at
-all, and a mismatch ends the process through the failure report. The fourteen such fixes are the
+all, and a mismatch ends the process through the failure report. The sixteen such fixes are the
 full wreck pool, the reclaim mark, the border features, the saved record's owner, whole build lists,
 the download menus, the sync keys, the weapon IDs, the victim caps, the last column and row, the
-line of sight, stacked aircraft, stale hits and the ghost commander. A *local* fix — a crash, a
-draw, a message or a malformed input — compares and writes its own sites and is skipped alone: the
-sort buffer, the NULL plot, the terrain window, the composite scratch, the out-of-memory text,
-flak's divides, the line of sight in local code, the projectile pass's view and the network
-receivers' bounds. The engine map's table gives each
+line of sight, stacked aircraft, stale hits, the ghost commander, the wind and the yardmaps. A
+*local* fix — a crash, a draw, a message or a malformed input — compares and writes its own sites
+and is skipped alone: the sort buffer, the NULL plot, the terrain window, the composite scratch,
+the out-of-memory text, flak's divides, the line of sight in local code, the projectile pass's
+view, the network receivers' bounds, the saved-game order fallback, the stockpile bar's divide and
+the range circle. The engine map's table gives each
 one's reason. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -2390,6 +2394,11 @@ engine defects we patch".
 | **wire robustness (landing B3, local):** `0x4861F7` (`0x09`), `0x4553FE` (`0x0A`, at the dispatcher's case), `0x4866E5`+`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B92B`+`0x48B960`+`0x48B985`+`0x48B9AD`+`0x48BA05`+`0x48BA5E`+`0x48B40E`+`0x48B49C`+`0x48BA9F` (`0x2C`), `0x44E0DE`+`0x48B574` (the `0x2C`'s nested unit references: a move payload's target, the round robin's carrier), the length's capture in the receive (`0x453595`, `0x45361F`), the splitter's short messages (`0x463939`, `0x463B33`), and the diverged `0x0D` in `wpn_rx_fired` (`0x49D280`) | the network receivers index the unit array (stride `0x118`) by a `u16` off the wire with no bound, a `0x09` may name a slot outside its sender's block, the `0x0A` attach scales its child and parent unbounded, and the `0x2C` receiver also trusts a signed delta, an unbounded type, a missing move class, a NULL mover after a refused create (`0x48BA05`) and a NULL model object after one (`0x48B4A6`), a signed round-robin remainder, the player's block pointer, two unit references nested in its stream, and a bit reader with no end; the splitter loops for good on a message of length 0, and the pump dispatches from a freed buffer after a growth | each site is a `jmp` at a clean boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`; the receive's two statistics calls a `call`) to a stub that verifies the whole stock span first (all-or-nothing, `FIX_BYTES` on a mismatch), bounds the value by a pure predicate, and continues at the same address; the `0x2C` is parsed from a per-thread copy of itself followed by 48 zero bytes (the most the engine reads past the last check is 229 bits) and its reader is bounded by the message's length before each read the stubs precede, the paired `0x2C` stubs carry the validated type in a game-thread static, and a misframed `0x2C` points the bit reader at a zero dword and jumps to `0x48BA28`; a nested reference past the array becomes 0, the engine's own no unit; a message too short to advance ends the splitter's walk through its own end for an unknown code, and the receive's note keeps the pump's message pointer on the buffer. `tagpu_wirecheck.on` checks the C predicates at attach (22/22 OK, 2026-09-25; 33 cases since the nested references and the `0x0A`, not yet run in the game), and the heartbeat's `wire:` section counts, per receiver, the records accepted and dropped, the morph/dcreate/rcreate/ghost oracles and `CreateFromNetwork`'s no-block refusals. The engine map's *network receivers* subsection has the site table |
 | **stale hits (landing B4, simulation):** `0x486036` (first-free's free test), `0x486DC1` (the destructor's store of type 0), `0x48634F` (`CreateFromNetwork`'s success exit), `0x4854A0` (the unit array's allocation), `0x4653DE` (after the Deathmatch respawn's create `0x4653D9`), the sends `0x4560AE` (`0x09`), `0x489CB9` and `0x489CCD` (`0x0B`), the dispatch table's slots `0x455F90` (`0x05`), `0x455FA0` (`0x09`), `0x455FA8` (`0x0B`); compared, not written: `0x4553E9`, `0x455417`, `0x45605C`, `0x489CA8` | a `0x0B` names its victim by slot alone, and the owner's first-free allocator hands a slot freed by a death to its next create at once, so a hit in flight lands on the new unit on the owner and on every bystander | every row in the fail-closed table, both builds. The `0x09` and the `0x0B` leave inside a tagged `0x05` of `0x41` bytes (tags `0x4A`, `0x4B`) that carries the unit's incarnation in the same bytes — the owner's GameTime at the create, strictly increasing per slot, or for a copy the `0x2C` made a lower bound (bit 31) from the record whose block holds the slot (`+0x18`). The `0x05` slot's stub enters the stock `0x09`/`0x0B` handlers with their stock return addresses and the record in `eax`, so B3's bounds and counters see them unchanged, and mirrors the dispatcher's state gate (`[0x512BC0 + 4·type]`); a bare `0x09` or `0x0B` is counted and dropped. The owner applies a hit iff its unit's birth ≤ the stamp; a bystander refuses only a provably stale one (both exact and different, or an exact birth after the other side's bound) and applies the undecidable rest as stock. First-free (arg 8 = 0) is decided once, at the block's first free slot: an unheld one, else the one freed longest ago if in an earlier tick, never one freed this tick; a NULL at the Deathmatch respawn `0x4653D9`, which stock uses untested, takes the block's end and writes nothing, so the respawn's own countdown fires again six passes (about 180 ticks) later. The tables are sized from the engine's `u16` slot count and never freed. `tagpu_dmgdelay.on=K` (test only) holds every outgoing hit K ticks; `tagpu_wirecheck.on` unit-tests the rules at attach (23/23). The heartbeat's `hits:` section counts both sides. [sim-fixes.md](tadr-port/sim-fixes.md) B4 has the argument, the engine map's *Unit identity on the wire* the addresses |
 | **ghost commander (landing B5, simulation):** `0x497F5E` (the load state's first call), `0x49842F` (the in-play entry's call of the frame function), `0x45477F` (the dispatcher's refusal in state 5), `0x48BA00` (the dirty entry's `call 0x4861D0`); the hold rides in B4's `0x05` receiver (`0x455F90`); compared, not written: `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`, `0x48B933` (the `0x2C` reader's slots), `0x453E84` (the sender's record) | the dispatcher passes a unit create only in state 6, and each peer creates its commander from its loader while still in state 5, so a peer whose load ends later refuses the others' commanders: each is missing on it until the round robin re-creates it (50 s at 1500, 16.7 s at 500), and one that moves first comes back through a dirty `0x2C` entry at the slot's stale position, `(0,0,0)` in a fresh array | every row in the fail-closed table, both builds. B4's receiver holds a carried `0x09` its gate refuses in state 5, per sender in arrival order (ten × 64, the overflow counted), under a lock, since the game thread and the loader both pump during a load; a `0x0C` refused in state 5 cancels the latest create held for its slot from its sender. `0x497F5E` empties the queue at the load's start. At `0x49842F`, after the game thread has read the loader's last store and before the frame function runs the first tick, the game thread replays each held create through B4's receiver past its state test and `CreateFromNetwork` (a stub that puts the sender in `edi` as the `0x09` case does, its return treated as `0x4553E9`), only from a sender that passes the dispatcher's sender test under the same DirectPlay id, into a slot that is empty or older by B4's stamps; in the catch-up ticks that follow and the frame function's own pump after them (`0x4968CB`), still in state 5, B4's receiver makes a refused create at once, in the pump it arrives in, where state 6 makes it, and a kill refused there marks a copy made before state 6 dying as the engine's ghost sweep does. The dirty create's stub reads the entry's move payload ahead of its decoder — ground: path point 0, the last node the unit reached (a straight move's origin until it is within 5 px of its goal); air: selector 2's x, y, z — only from B3's copy of the `0x2C`, under B3's reader, with each read inside the message's length — so B5 requires B3 armed and refuses the fail-closed table when it is not (B3 stays local for its own purpose) — and takes it only on the map, for the four disassembled move classes. `tagpu_ghostq.off` (test only) turns the queue and the kill note off; `tagpu_wirecheck.on` unit-tests the rules at attach (21/21). The heartbeat's `ghost:` section counts. [sim-fixes.md](tadr-port/sim-fixes.md) B5 has the argument, the engine map's *A create refused during the load* the addresses |
+| `0x490C5A`, `0x491903`, `0x4982CA`, `0x4C98FD` | the wind updater `0x490C40`'s three draws (the next change, the speed, the heading), which each peer makes from its own RNGs, seeded from its own clock: the game thread's CRT stream by WinMain (`0x49E8BB`), the sim RNG by the loader (`0x497180`) | nine rows of the fail-closed table: a `jmp` over the draws' first instruction to a stub that calls `wind_draw` (stock's rules, our own splitmix64 generator) and rejoins at `0x490CE8` with `eax` the main pointer; a stub on the loader thread's start (`call 0x4B6B20` at `0x4982CA`, on the game thread) that first reads DirectPlay's session instance GUID with `GetSessionDesc` (used only with `dwSize` 0x50 and a non-null GUID, else the engine's copy `main+0x479` when not null); a stub on the level load's call that seeds the generator first — in a network game (the engine's own test, `GameingState +0` = 3) from that GUID and a hash of the map's name, or from the hash alone when neither source has one, counted; outside one from the performance counter; a `jmp` over the engine's one `SetSessionDesc` call (nine bytes at `0x4C98FD`) to a stub that makes it with a copy of the engine's descriptor carrying the GUID DirectPlay holds then, validated the same way (no call without one), counted, so no `SetSessionDesc` the engine makes can move the session; `0x490C40` (26 bytes), `0x490CE8` (13), `0x4982C5` (5, `push 0x497C70`), `0x4C98D9` (36, the descriptor and the interface) and `0x4C9906` (4, the result test) compared |
+| `0x42CF5E` | the unit-def parser `0x42BF40`'s yardmap fill, which steps past the `YardMap` string's NUL onto the stack when the key is missing or ends on an invalid char | three rows: a `jmp` through `fix_call_regs` into `yard_parse` (stock's allocation, table, skip and repeat rules; a cell past the string takes the last valid char or `o`), rejoining at `0x42D079`; the 32-byte key read `0x42CF3E` and `0x42D079` compared |
+| `0x43A58D` | the saved-game order loader `0x43A420`'s fallback, which walks the order table one record past its end and keeps a count it did not find as the order's type | local, 4 bytes: `jbe` → `jb`, and the not-found `jmp` → `0x43A552`, "Ready" |
+| `0x439D41` | the stockpile bar `0x439D20`'s `idiv` by the slot weapon's `+0xE4`, with the slot index unbounded | local: a `jmp` to a 38-byte stub that bounds the index to 0..2, tests the weapon for NULL and `+0xE4` for 0, and takes the function's `return 0` (`0x439D6B`) on any of them |
+| `0x438EDE` | `DrawRangeCircle 0x438EA0`'s guard, which lets N = 0 segments (radius 1) through to `idiv` | local: the `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, so N = 0 takes the radius-0 epilogue |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -2444,6 +2453,20 @@ sets on the path they continue (`esi`, a stock-stored `[esp+0x20]`, a player rec
 reader in the receiver's frame (`[esp+0x10..0x18]`), pointed at a zero dword of ours so the
 engine's own end-of-list reads a clear flag. The length note writes two TLS slots of ours per
 received message.
+The wind writes the engine's wind fields (`main+0x37EC4`, `+0x37EDA`,
+`+0x37ED8`, §2.5) on the game thread, in the tick's call, where stock writes them, with values from
+our generator where stock drew its own: that is simulation state, and the point — the projectile
+pass and the fire spread move by it, and wind generators produce and animate by it. Its seed is
+ours, written on the loader thread inside the level load; in a network game it reads only what
+every peer shares and no departure changes: the game mode, DirectPlay's session instance GUID
+(read on the game thread before the loader thread starts, else the engine's copy of it) and the
+map's name. It writes nothing of the engine's session copy (`main+0x471`, §2.5): the engine's one
+`SetSessionDesc` is made with a copy of it that carries the GUID DirectPlay holds, so no call the
+engine makes can move the session. It reads no seat:
+the host seat's index differs between peers, and its DirectPlay ID can change during the load. The yardmap fix writes each def's yardmap
+(`def+0x14E`, §2.5), through the engine's own allocator and at stock's size, the same bytes as stock
+for every string stock parses inside its NUL. The saved-game fallback, the stockpile bar and the
+range circle write nothing: they change one register or take a branch.
 
 **The log lines.** The first is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
@@ -2475,22 +2498,38 @@ now`, and `composite scratch merge refused: a WxH cargo at (x,y) is past the WxH
 that re-keys logs its first eight types and a total (`enginefix: unit sync keys: N of M types
 re-keyed`); a saved game's load logs what the border fix did (`savedfeat: the restore ran with the
 border mask open: N cells opened, M shut again and the pathing maps refreshed around each in T ms,
-K hold a restored feature's anchor`, or why it left the restore to stock). A
+K hold a restored feature's anchor`, or why it left the restore to stock). Landing 6's five fixes
+log a line of their own, `enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) …; yardmaps
+parsed inside their string (0x42CF5E) …; the saved-game order fallback (0x43A58D) …; the
+stockpile bar's divide (0x439D41) …; a range circle of radius 1 (0x438EDE) …. Counters: levels
+seeded at 0x…, network levels seeded from the engine's session copy at 0x…, SetSessionDesc calls
+made, made over another GUID and withheld at 0x… 0x… 0x…, network levels seeded from the map alone
+at 0x…, yardmaps filled past their string at 0x…`, with the same readings in place of `…`. Each level load logs its wind seed (`enginefix:
+wind: level N seeded from the session {…} and the map "…" (0x…): seed 0x…; the engine's copy
+main+0x479 agrees: {…}; SetSessionDesc so far: M made, D with another GUID in the engine's
+descriptor, W withheld` (or `differs: {…}`), `… is a network game and DirectPlay's answer was refused (0x…, dwSize N): seeded from
+the engine's copy main+0x479 {…} and the map …`, `… is a network game with no session: …
+seeded from the map "…" (0x…) alone (K so far)`, or `… seeded from the
+performance counter (game mode M, not a network game), map "…"`), and a def whose yardmap is filled past its string logs `enginefix: yardmaps: <name>: N of
+its M cells lie past its YardMap string and take 0xXX (K so far)`, the first 32 and then every
+power of two. A
 site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (its stub could not be made)` or `SKIPPED (VirtualProtect of the site failed)` in
 place of a local fix's `ARMED`. The local fixes that take stubs of their own (the sort buffer, the
 NULL plot, the terrain window, the composite scratch) release them when their sites cannot be
-written. Flak's divides, the projectile pass's view, the local line of sight, the table's fixes
+written. Flak's divides, the projectile pass's view, the local line of sight, the stockpile bar,
+the range circle, the table's fixes
 and, in the raised build, the limits' weapon sites take theirs from `fix_code`: each stub contiguous
 inside one page, a stub that does not fit the current page opening another, and every page kept
 for the process, since a simulation fix's table either goes in whole or ends the process at the
-report. MEASURED with B3 (2026-09-25): 3 984 bytes in one page in the raised build, B3's 480 among
+report. MEASURED on the tree merged with B6 (`2fc6528`): 4 208 bytes in two pages in the raised build,
+3 856 in one in the stock-limits build. MEASURED with B3 (2026-09-25): 3 984 bytes in one page in the raised build, B3's 480 among
 them; the nested references' two stubs and the `0x0A`'s add 64 (B3's 544 by the stub lengths, 4 048 in the page, not yet read live). MEASURED on the B2 branch: 3 504 bytes in one page in the raised build (the engine fixes'
 2 992 and the weapon sites' 512); 3 120 in the stock-limits build, whose weapon-ID stubs are fixes',
 measured before the line moved to the limits install, which takes none there. A scratch build cut
 to 0x300 a page spread the engine fixes' 2 992 over five pages and played the stack fixture the
 same. There
-is no switch: all twenty-one fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
+is no switch: all twenty-eight fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
 `enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped` or `enginefix: weapon
 <name>... (ID <id>) has a name longer than its record, and is skipped`, a duplicate `enginefix:
 weapon ID <id>: <name> replaces <name>`, and a dropped message or companion `enginefix: weapon
@@ -2553,6 +2592,27 @@ handler's slot).
   stock; only a unit whose own row is on the grid is fixed.
 - A stock unit with `fw = 0` near the east edge already indexes a sort bucket one past the grid and
   near the west edge one before it; the bucket clamp now covers both, and neither was measured.
+- The saved-game order fallback, the stockpile bar's divide and the range circle were not run:
+  no save lacks an order's name, no stock stockpile weapon has a zero reload, the `ShowRanges`
+  cheat could not be typed under injected input, and no stock unit has a range of 1. All three rest
+  on the disassembly.
+- The wind was measured with two peers and with three, the three-peer game with the host killed
+  right after its own seed. That run did not exercise the engine's player removal during the load:
+  DirectPlay never reported the killed host (its seat still held its type and ID 115 s of game
+  time later), so the departure argument rests on the construction — the seed reads the session's
+  GUID, which no departure writes, captured before the load's pump runs. A peer whose
+  `GetSessionDesc` answer is refused takes the engine's copy, and with a null copy the map alone,
+  and can then draw a different wind from the others; no refusal was seen. `GetSessionDesc` fails
+  only with no interface or no open session, and such a peer exchanges no game traffic.
+- The `SetSessionDesc` wrapper was measured only where nothing differed: in a two-peer game the
+  host made 7 calls and the joiner 2, none over another GUID and none withheld. A lobbied launch,
+  the case whose descriptor can name another GUID (`0x4C9B4F`), was not run; the construction
+  covers it, since every `SetSessionDesc` the engine makes, the battle room's included, goes
+  through the one site the wrapper replaces.
+- The wind no longer draws from the sim RNG `0x4B6C30` or the CRT's `rand`, so each peer's sequence
+  of those two moves by the draws stock made. Both are seeded per peer from its own clock — the sim
+  RNG by the loader (`0x497180`), the game thread's CRT stream by WinMain (`0x49E8BB`) — so
+  neither sequence was shared between peers before.
 
 ---
 

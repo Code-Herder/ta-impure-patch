@@ -4,8 +4,8 @@
 
 Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our stack, as our own
 code, over six landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
-grill that followed [the evidence pass](sim-fixes-evidence.md). **Landing B1 is built (2026-09-25) and
-awaits its review; nothing is landed yet.** The rules
+grill that followed [the evidence pass](sim-fixes-evidence.md). **All six landings are landed on local
+main (2026-09-25), each after its review.** The rules
 shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
@@ -117,7 +117,8 @@ faces of `0x45A2EC` are left there.
   invent a projectile the owner never fired.
 - **Wind: one shared wind, re-seeded every game.** Our own generator with its own state, reset at
   each level load from the host's DirectPlay ID and a hash of the map's name; single player takes
-  the same path, seeded from the counter stock seeds its RNG with.
+  the same path, seeded from the counter stock seeds its RNG with. (Built with DirectPlay's session
+  instance GUID in place of the host's ID: see B6's deviations below.)
 - **Yardmaps: parsed inside the terminator.** Past it, the last valid char repeats; a string with
   no valid char fills `o`. Identical to stock for all 126 retail structures.
 - **Resurrection: a time-boxed measurement, else parked.** If the failure branch fires, the unit is
@@ -1179,7 +1180,128 @@ the first build's replays, which went through the same receiver path at a later 
 *Not run:* three peers (each peer holds per sender, so a third adds a second queue, not a new
 path), and the departing host in a three-peer game that the plan gives B5's session for group E.
 
-**B6 — loaders and the rest.**
+**B6 — loaders and the rest. LANDED 2026-09-25** on local main (built on its own branch,
+`worktree-tadr_port_b6`, from B1's tip at the time, before B2–B5 landed; reviewed at high by two
+reviewers at `7601399`, then in two focused reviews of its fix rounds at `0105d3c` and `1249243`,
+whose findings were acted on; merged with main after B5 landed at `c01f6c6`). What was built,
+and where it differs from the plan below:
+
+- **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (nine and three
+  rows: on its own branch, 173 sites in the raised build and 47 in the stock-limits build; merged
+  with B1–B5, 224 and 99; all MEASURED at launch),
+  and the three local fixes, each checked and skipped alone.
+  The engine map's *The wind*, *A yardmap parsed past its string*, *The saved-game loader's order
+  fallback*, *The stockpile bar's divide* and *A range circle of radius 1* have the disassembly.
+- **The path is the engine's own.** A network game is the engine's test, `GameingState +0` = 3
+  (the game start's dispatch, `0x4971C7`), not "some record looks like a host". Inside a network
+  game nothing local to a peer is read: when DirectPlay names no session the seed is the map's hash
+  alone, counted. TADR instead takes the host's ID with a clock fallback.
+- **Changed: the network seed is DirectPlay's session instance GUID, not the host's DirectPlay
+  ID.** The owner's decision named "host DPID + map hash". A focused review showed the host seat can
+  change during the load: until the load ends the game thread pumps the network
+  (`0x4984DD..0x49852E`), and the pump's leave case removes a departing human (`0x452CC0`: type
+  cleared, ID −1) and, for the host, elects the human seat with the highest ID
+  (`0x452EE3..0x452FF8`). A peer that handles the departure before its seed at `0x491903` would
+  read the new host, one that handles it after the old, one mid-removal a set type beside an ID of
+  −1, and the winds would differ for the rest of the game, silently — a timing-dependent seed.
+  The session's instance GUID is fixed when DirectPlay creates the session, every peer holds it
+  from the moment it joins (a joiner names it to `Open(DPOPEN_JOIN)`, `0x4CA03A`), and no departure
+  or host election writes it. It is read with `GetSessionDesc` through the engine's
+  interface (`main+0x4D9`, an `IDirectPlay3A`, or an `IDirectPlay2A` when lobbied) on the game
+  thread, from a stub on the loader thread's start (`0x4982CA`): before that thread exists, so the
+  call adds no DirectPlay concurrency stock does not already have (stock's loader pumps the
+  network at `0x49727D` while the game thread pumps at `0x49852E`, and it calls `SetSessionDesc`
+  at `0x497C0B`), and the thread's creation orders the capture before the seed. The engine map's
+  *The session, not the host* has the disassembly.
+- **Added: the engine's one `SetSessionDesc` passes the GUID DirectPlay holds.** It is the one
+  engine call that could move the GUID: it hands DirectPlay the engine's whole session copy, and an
+  implementation that takes `guidInstance` from it (Wine's copies the whole descriptor) moves the
+  session to the copy's GUID, which after a lobbied launch is the lobby's descriptor
+  (`0x4C9B4F`). The census found one site: of the six calls through a vtable's `+0x7C` in the
+  image, `0x4C9903` in `HAPINET_updategameinfo 0x4C9890` is the only one through `main+0x4D9` and
+  the only one with three arguments (the other five, `0x47C0CB`, `0x4B4FB8`, `0x4B5735`,
+  `0x4B6069`, `0x4B60E1`, push two). `0x4C9890` is reached from `0x451180` — the battle room's
+  handlers and every load's end on the loader thread (`0x497BFF`, `0x497C0B`) — and from the
+  pump (`0x454135`). A `jmp` over the call's nine bytes (`0x4C98FD`) goes to a wrapper that calls
+  `GetSessionDesc` first, validated as the capture validates it, and makes the call with a copy of
+  the engine's descriptor carrying that GUID, counted when the engine's differed; with no valid
+  answer it makes no call and returns the refusal, which the engine takes as a failed call,
+  counted. So no `SetSessionDesc` the engine makes, in the battle room or the load, lobbied or
+  not, can move the session, and the engine's copy is never written. This replaces the capture's
+  write of DirectPlay's GUID into the copy, which covered only the calls after the capture and
+  left a lobbied host's battle-room calls open; the capture stays the seed's source. `0x4C98FD`
+  is also the site of TADR's `NullLpszPasswordInUpdateGameInfo` (not ported, the evidence's §3):
+  a port of it now writes `lpszPassword` in the wrapper's copy.
+- **DirectPlay's answer is validated, and the engine's copy is the fallback.** The answer is used
+  only when its `dwSize` is 0x50 and its GUID is not null (Wine can answer `DP_OK` with a zeroed
+  descriptor). Otherwise the seed takes the engine's copy `main+0x479` when it is not null (it held
+  DirectPlay's answer on every peer measured), then the map alone, each counted. `GetSessionDesc`
+  fails only with no interface or no open session, and a peer with no open session exchanges no
+  game traffic, so its wind changes nothing another peer sees.
+- **Stock's load call draws nothing.** It finds `next` = 0 (`0x4918FD`) and GameTime 0, so the seed
+  at `0x491903` precedes every draw, and the first draw is the first tick's.
+- **Changed: B6 logs a line of its own** (`patch_loader_defects`), not a clause of B1's
+  `enginefix:` line, plus one line per level load naming the seed.
+- **Changed: a stockpile order whose slot index is above 2 draws no bar.** The extra-weapons
+  module's slots past the third are not inline slots, and the engine's bar has no reader for them.
+- **Evidence.** The wind is reproduced on the previous build: two peers paused at GameTime 825
+  read speed 2525, heading `0xF5C6`, and 1498, `0xC827`. Every peer read the same next change,
+  speed and heading in five games on the earlier seeds: a first one, sampled twice (at 795 and at
+  2003 or 2006); a second in the same processes; a third after restarting the joiner, where the
+  host was on its third level load and the joiner on its first; and, on the host-seat rule, one
+  with two peers and one with three (components and ratio equal too). On the session-GUID seed:
+  two peers on Two Continents logged the same GUID and seed and, paused at GameTime 1262, read
+  next 1350, speed 1627, heading `0xB693`; three peers on Town & Country logged the same GUID and
+  seed, the host was killed 3 ms after its own seed while the joiners loaded, and both joiners went
+  into play reading next 1530, speed 2834, heading `0x0616` at GameTime 1131 and 1137. With the
+  validation, two peers on Two Continents logged the same GUID and seed and read next 420, speed
+  433, heading `0x355C`; both answers passed and none was seeded from the copy or the map alone.
+  With the `SetSessionDesc` wrapper, two peers on Two Continents logged the same GUID
+  (`{181E3FD8-DEA0-42FE-AAB8-33E00D9AB262}`) and seed (`0xE5210DF9515CC70E`); the host made 6
+  calls before its seed and 7 by play, the joiner 1 and 2, none over another GUID and none
+  withheld. On every peer of the four games the engine's copy `main+0x479` held the GUID
+  `GetSessionDesc` returned. A skirmish reads game mode 2 and
+  takes the counter path. The yardmaps' 2440 retail cells are
+  byte-identical to the previous build's. The two scratch structures read `2f2f31313100002b2b…`
+  from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
+  three local fixes rest on the disassembly: none of their inputs is in stock content, and the
+  `ShowRanges` cheat could not be typed under injected input.
+- **Not measured:** the side measurement this landing was to carry (a tracked unit's death leaving
+  an order armed, and our build ghost drawing) did not fit its time budget. The engine's removal
+  of a departed host during the load was not exercised: DirectPlay never reported the killed host
+  (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
+  `DPSESSION_KEEPALIVE` when `createnewgame` makes them; a lobbied one takes the lobby's flags),
+  and a host cannot quit through the UI during the load. The departure argument rests on the
+  construction: the seed reads nothing a departure writes. **A lobbied launch was not run.** The
+  construction covers it: the seed reads DirectPlay's own record, validated, and every
+  `SetSessionDesc` the engine makes, the battle room's included, goes through the one site the
+  wrapper replaces. The wrapper's replacement and withholding were measured only at 0: nothing
+  differed and nothing was withheld.
+- **Merged with B1–B5** (`2fc6528`: main `c01f6c6` merged at `38e2005`, then the last review's
+  lows). `ddraw.dll` md5 `08e0c4530e71235b709a1af8f050580b` and `ddraw-stocklimits.dll`
+  `c22ba59a2928d94e4682822a08bc305e`, both warning-free. The raised build reads `limits: installed
+  224 sites` and the stock-limits build `the simulation fixes' 99 sites installed`, B5's 212 and 87
+  plus the wind's and the yardmaps' twelve rows; in both, each of the twenty-eight fixes reads
+  `ARMED` or in the fail-closed table (the weapon IDs, in the raised build, with the raised limits)
+  and none is skipped, `tagpu_wirecheck.on` runs the wire's 33 cases, the stale hits' 23 and the
+  ghost's 21 with 0 failed, and the stubs take 4 208 bytes in two pages (raised) and 3 856 in one
+  (stock-limits). A skirmish on Town & Country seeds from the counter (game mode 2). Two peers on
+  Town & Country (`tools/mp_lobby.sh`; `limits-tier2-p0` applied on the host, `-p1` on the
+  joiner, and 512 of each army ordered onto the other): both seeded from the session
+  `{751C2AC8-58DC-4889-912B-2C36A717020F}` and the map's `0x29FE9EA5`, seed `0xDAD824C4D2EA38BC`,
+  the engine's copy agreeing; at the seed the host had made 6 `SetSessionDesc` calls and the
+  joiner 1, and by the end 7 and 3, none over another GUID and none withheld. The fight ended the
+  game at GameTime 2715 on the host and 2705 on the joiner: the joiner's commander died and
+  `MultiCommanderDeath` took its army. So the peers were compared at the level end, where the sim
+  had stopped on both, not at a pause. Both read the wind's next change 2880, speed 3123, heading
+  `0xE01C`. Every `wire:` drop and `noblock` count read 0 on both (2 691 and 2 704 `0x2C` parsed).
+  In `hits:`, `bad`, `bare` and `over` read 0 on both; the host sent 1 500 `0x09` and 930 `0x0B`
+  and the joiner received 1 500 and 930, the joiner sent 1 500 and 367 and the host received
+  1 500 and 367, and every copy was exact (1 500 on each). In `ghost:` every alert field read 0;
+  the joiner, which loaded last, made the host's commander in its first catch-up tick
+  (`created slot 1501 from sender 1 (birth 0, type 34) at GameTime 1, in a catch-up tick`,
+  `now=1`) and held both commanders from its first roster; the host, in play before the joiner's
+  create arrived, made it on arrival as stock does and held both from its second roster.
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
   before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,
@@ -1218,6 +1340,16 @@ path), and the departing host in a three-peer game that the plan gives B5's sess
 
 ## Corrections this plan made
 
+- **The CRT's `srand(time(0))` at `0x4971AE` does not seed the wind's schedule.** `rand` keeps its
+  state per thread; the wind draws on the game thread, whose stream WinMain seeds (`0x49E8BB`).
+  Corrected in the evidence (§6a), the engine map and `gpu-status.md`; each peer's wind still
+  differs.
+- **The wind reaches the simulation beyond the economy.** The projectile pass `0x49B720` adds it to
+  a projectile's position every tick and the fire spread `0x4239C0` reads it; the evidence had
+  these readers as smoke drift [INFERRED].
+- **The yardmap's stale bytes repeat from launch to launch** for one build on the reference
+  setup (B6): the evidence expected two launches to differ. The fix does not rest on it; the bytes
+  are still the stack's.
 - **The engine map named `w+0xE0` `attackrunlength`.** The loader stores the `coverage` key there
   (`0x42E540`), and the drawer's label says so. Fixed in the engine map and `ui-markers.md`.
 - **The attach wrapper starts at `0x48AAC0`**, not `0x48AB40`: 30 callers, and it sends the `0x0A`
