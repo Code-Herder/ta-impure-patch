@@ -967,9 +967,10 @@ tick and one after the state-6 store, the first found nothing (GameTime 0) and t
 commander at GameTime 5; on the final build the drain again finds nothing and the create is made
 in the pump of the joiner's first tick (`created slot 1 from sender 1 … at GameTime 1, in a
 catch-up tick`), present at the host's position at the first sample, `(368,7663)` against
-`(369,7660)`. The final build has run two such starts (1500, the commander moving), and the
-replay at `0x49842F` has never replayed a record live; the 500-unit and idle starts were not
-re-run on it.
+`(369,7660)`. The final build has run two such starts (1500, the commander moving) and one with
+the joiner's queue off, where the dirty create alone put the commander at `(368, 7664)`, point 0,
+from B3's copy (`unbound=0 short=0`); the replay at `0x49842F` has never replayed a record live,
+and the 500-unit and idle starts were not re-run on it.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 

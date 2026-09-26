@@ -1063,10 +1063,10 @@ message's end and one that ends on its last bit, which create a kill cancels). C
 
 **B5 BUILT AHEAD (2026-09-25, from `c2e5850` on its own worktree from B4's `a8e529e`, B4's fix
 rounds merged at `fbda477`; not landed, not reviewed).** `fix_ghost_commander` in
-`tagpu_patches.c`. On the merged tree the install line reads `limits: installed 210 sites` in the
-raised build and `the simulation fixes' 85 sites installed` in the stock-limits one — the thirteen
-rows' sites on top of B4's (before the merge 202 against 189, and 77 against 64);
-`tagpu_wirecheck.on` runs the 17 rule cases, all OK, in both, beside B4's 23 and B3's 33. The
+`tagpu_patches.c`. Merged with main after B4 landed, the install line reads `limits: installed 212
+sites` in the raised build and `the simulation fixes' 87 sites installed` in the stock-limits one,
+B5's fifteen rows among them; `tagpu_wirecheck.on` runs its 21 rule cases, all OK, in both, beside
+B4's 23 and B3's 33. The
 table ran on the first build, which replayed at the state-6 store; the starts after it (below the
 table) on the builds that replay before the first tick.
 
@@ -1109,6 +1109,15 @@ from sender 1 (birth 0, type 34) at GameTime 1, in a catch-up tick`, `now=1`, co
 65 bytes (the bare `0x09`'s 23), `bad`, `bare`, `over` and `holdfail` read 0, and every `wire:`
 drop and `noblock` count is 0 over 1 743 and 1 676 parsed `0x2C`.
 
+*The dirty create alone, on the final build* (`8474cf4`, 1500, moved, `tagpu_ghostq.off` on the
+joiner, one start). The joiner refused the host's create (`gate=1`) and the host's commander, slot
+1, came back through the dirty create, its payload read from B3's copy within the message:
+`dirty create slot 1 type 34 at (368, 7664) from its ground payload; stock's record had (0, 0)`,
+`pos ground=1`, `unbound=0`, `short=0`, copy `bound=1`. At the joiner's first sample it stood at
+`(368,7663)` against the host's `(375,7655)` — point 0, the origin of a move begun a second
+earlier — and equal at `(841,7344)` from t = 20 s. Every `wire:` drop and `noblock` count is 0 on
+both peers (1 777 and 1 715 parsed `0x2C`).
+
 *B4's lower-bound copies at game start are gone.* The refused create now makes an exact copy: the
 joiner's `gate` and `bound` read 0 and `exact` 1 in every B5 start with the queue on, against `gate=1 bound=1` on the
 previous build. A lower-bound copy remains possible only through the round robin or a dirty entry
@@ -1144,12 +1153,13 @@ the rule cases, not provoked live: a kill has to land inside the late peer's rem
 fraction of a second in these starts.
 
 *What the final build has not run.* The table's five B5 starts ran the first build, which
-replayed at the state-6 store. The build that replays before the first tick has run two starts (1500, the
-commander moving; one before and one after B4's fix rounds were merged), and in both the drain
-found nothing and the create was made in the first catch-up tick: **the replay at `0x49842F` has
-never replayed a record live** — it rests on the disassembly, the rule cases and the first
-build's replays, which went through the same receiver path at a later point. The 500-unit and
-idle starts were not re-run on it.
+replayed at the state-6 store. The build that replays before the first tick has run three starts
+(1500, the commander moving): two with the queue on — one before and one after B4's fix rounds
+were merged — where the drain found nothing and the create was made in the first catch-up tick,
+and one with the joiner's queue off, where the dirty create placed it. **The replay at
+`0x49842F` has never replayed a record live** — it rests on the disassembly, the rule cases and
+the first build's replays, which went through the same receiver path at a later point. The
+500-unit and idle starts were not re-run on it.
 
 *Not run:* three peers (each peer holds per sender, so a third adds a second queue, not a new
 path), and the departing host in a three-peer game that the plan gives B5's session for group E.
