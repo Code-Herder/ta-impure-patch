@@ -153,6 +153,7 @@ static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seed
    sees that the traffic did not stop, the CARRYING did. */
 static unsigned s_pixDropped = 0;
 static unsigned s_assets = 0;          /* PK_ASSET ops carried into a twin     */
+static unsigned s_movies = 0;          /* PK_MOVIE frames carried into a twin  */
 /* TINTS THE DRAIN DECLINED, BY REASON. `tintdrop`
    is no twin or no table -- the comment on the case below says that cannot
    happen, so a non-zero here is that comment being wrong and the whole point
@@ -1395,6 +1396,23 @@ static void drain(void)
                 }
             }
             break; }
+        case PK_MOVIE: {
+            /* A SMACKER FRAME, carried as a box of bytes -- `TAGPU_GUIOP_PIXELS`
+               with its payload, which the Vulkan lane validates and uploads
+               as it stands. What makes these bytes legal to carry, and exact,
+               is the producer's: see PK_MOVIE in tagpu_gui_int.h. The box is
+               bounded HERE against the twin it lands in, whatever the producer
+               clipped it to. */
+            unsigned off = 0;
+            int bw = o->r - o->l + 1, bh = o->b - o->t + 1;
+            t = twin_find(o->surf);
+            if (t && bw > 0 && bh > 0 && o->l >= 0 && o->t >= 0 && o->r < t->w && o->b < t->h &&
+                o->alen == (unsigned)bw * (unsigned)bh &&
+                mir_bytes(g_guiq.arena + o->aoff, o->alen, &off)) {
+                TAGPU_GUIOP* m = mir_op();
+                if (m) { m->kind = TAGPU_GUIOP_PIXELS; mir_box(m, o); m->aoff = off; m->alen = o->alen; s_movies++; }
+            }
+            break; }
         case PK_FREE:
             t = twin_find(o->surf);
             if (t) { TAGPU_GUIOP* m; twin_drop(t);
@@ -2365,8 +2383,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
-                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_clears,
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u movie=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_movies, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
