@@ -448,9 +448,9 @@ under zoom and `wheel.off`: `references/levers.md` §"Camera, viewport and fog".
   so a dropped value becomes sticky; fix `res` in `instance.json`, or drive Screen Size from
   Options > Visuals.
 - **There is no `ddraw.ini`.** Every launch rewrites `impure.cfg`'s `display`, `window` and
-  `maxfps` (a window on the tile, the cap), which the DLL reads even under `tagpu_defaults.off`,
+  `vsync` (a window on the tile, the pacing), which the DLL reads even under `tagpu_defaults.off`,
   so a hand edit or menu click to those three lasts one session.
-- **`--maxfps` is 0 (unlimited), 60, 120 or negative (the refresh)**, nothing else; sticky.
+- **`--vsync on|off` is the only pacing**, sticky; local instances start `on`, `off` is uncapped.
 - **`tacli launch <i> --shipped` is the player's launch** — no harness file or shield, the play
   defaults, the player's own placement and size (kept across ordinary launches); a first run is
   fullscreen on the primary, the owner's screen on the live display. Refuses arm files and flags.

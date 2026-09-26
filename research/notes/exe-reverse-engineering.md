@@ -320,12 +320,18 @@ an explosion hits a unit found past its twentieth victim, or a feature past its 
 for every cell of it in the blast; flak fired nearly straight up divides by zero; a unit whose
 footprint ends on the map's last column or row is parked off the map, where nothing can hit it;
 and a unit whose altitude is more than twice its distance from the north edge falls off the
-line-of-sight grid, so no other player sees it; and one more in combat, landing B2: an aircraft
+line-of-sight grid, so no other player sees it; one more in combat, landing B2: an aircraft
 that shares its cells with other aircraft can hold none of them, and then no explosion finds it;
-and the network receivers, landing B3: five of them take a unit index, a type or a slot delta off
-the wire with no bound.
-`tagpu_patches.c` (`patch_engine_defects`) patches all of them, twenty-one fixes, at every attach, in
-both builds: `ddraw.dll` is a static
+three on the wire: five network receivers take a unit index, a type or a slot delta off the wire
+with no bound (landing B3), a hit names its victim by a slot the owner reuses at once, so a hit in
+flight lands on the next unit there (landing B4), and a peer still loading refuses the others'
+first units, their commanders among them, until the round robin re-creates each (landing B5);
+and five outside the battle, landing B6: each peer of a network game draws a wind of its own, a
+yardmap string is parsed past its end, the saved-game loader's order fallback walks one record
+past its table, the stockpile bar divides by a weapon's reload time without testing it, and a
+range circle of radius 1 divides by zero.
+`tagpu_patches.c` (`patch_engine_defects`, then `patch_loader_defects` for the last five)
+patches all of them, twenty-eight fixes, at every attach, in both builds: `ddraw.dll` is a static
 import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
 every input the stock code handles correctly.
 
@@ -339,7 +345,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the twenty-one, and why:
+made, or its page cannot be made writable. Each of the twenty-eight, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -365,6 +371,12 @@ made, or its page cannot be made writable. Each of the twenty-one, and why:
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 | wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`, with the sender's block), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B92B`/`0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48BA5E`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`, parsed from a zero-padded copy), the `0x2C`'s two nested unit references `0x44E0DE` (a move payload's target) and `0x48B574` (the round robin's carrier), `0x4553FE` (`0x0A` attach: child and parent), the `0x2C` length's capture in the receive `0x453595`/`0x45361F` (which also keeps the pump's message pointer on the buffer), and the splitter's short messages `0x463939`/`0x463B33` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local). The diverged `0x0D` drop rides the weapon-ID row `0x49D280` above: evidence §8 classes it simulation, only when diverged |
 | stale hits — the incarnation on the wire and the two-tick hold: first-free `0x486036`, the free `0x486DC1`, `CreateFromNetwork`'s exit `0x48634F`, the array's reset `0x4854A0`, the sends `0x4560AE`, `0x489CB9`, `0x489CCD`, the dispatch slots `0x455F90`, `0x455FA0`, `0x455FA8` (landing B4; the subsection *Unit identity on the wire*) | simulation | which hits a unit takes and which slot a create gets; and it is a wire format: a peer without it sends bare `0x09`/`0x0B`s this build drops, and cannot read the tagged `0x05`s this build sends |
+| ghost commander — the create refused during the load, held and replayed, a refused kill cancelling it, and the dirty create's position: the load's start `0x497F5E`, the frame function's call `0x49842F`, the dispatcher's refusal in state 5 `0x45477F`, the dirty entry's call `0x48BA00`, and the hold inside B4's `0x05` receiver (landing B5; the subsection *A create refused during the load*) | simulation | which units a peer holds at the start of play and where a dirty create puts one; a peer without it lacks the others' commanders until the round robin, as stock |
+| one wind for every peer `0x490C5A`, `0x491903`, `0x4982CA`, `0x4C98FD` | simulation | projectiles and the fire spread move by the wind and wind generators produce by it, and each peer draws its own |
+| yardmaps inside their string `0x42CF5E` | simulation | the yardmap decides where a unit can be placed, what it occupies and where others path |
+| the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
+| the stockpile bar's divide `0x439D41` | local | a HUD draw |
+| a range circle of radius 1 `0x438EDE` | local | a HUD draw |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -471,7 +483,7 @@ The pump names that record before the dispatch (DISASSEMBLED): it compares `[mai
 the id the receive reports as the sender] with the DirectPlay id `[rec+4]` of each of the ten records
 whose `[rec+0x73]` is nonzero (`0x453DBD..0x453E12`), keeps the match's index at `[esp+0x14]`
 (`0x455F78`), or 10 when none matches or the id is −1 (`0x453E14`, `mov byte [esp+0x14],0xA`), and
-takes the record `main+0x1B63 + index·0x14B` (`0x453E84..0x453E9B`) — for a sender it cannot find,
+takes the record `main+0x1B63 + index·0x14B` (`0x453E84..0x453EA1`) — for a sender it cannot find,
 record ten, one past the ten. Ten is the engine's own count of the records: the loop at `0x406E05`
 (`mov ebx,0xA`, in the AI plan's `Weight` command `0x406DB0`) steps `0x14B` over them (`0x406E2D`)
 and ends after ten (`0x406E33`). B3's `0x09` stub bounds the sender to one of the ten before it reads
@@ -500,7 +512,8 @@ malformed or foreign message reaches them — the fix is stock-exact for every w
 clean 5-byte boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`), verify the
 whole stock span first, and continue at the same address; a misframed `0x2C` points the reader at a
 zero dword and jumps to the engine's own end-of-list `0x48BA28`. The `0x2C` is parsed from a copy:
-at `0x48B92B` (eax = the message, loaded at `0x48B923`, stored as the reader's buffer at `0x48B933`)
+at `0x48B92B` (eax = the message, loaded at `0x48B923`, stored as the reader's buffer at `0x48B933`;
+`0x48B933..0x48B93E` sets the reader `{buffer, word 0, bit 0}` at `[esp+0x14..0x1C]`, with `push 8` taken)
 the message's length — the receive's delivered length, kept per thread at the two statistics calls,
 and the size field, the smaller — is copied into a per-thread DLL buffer followed by 48 zero bytes,
 and eax is the copy. The reader is then bounded by that length before each read the stubs precede:
@@ -595,7 +608,11 @@ each an optional reference whose 0 the engine itself takes as no unit; both are 
   `[unit+0x86]`, 0 for none, else its `+0xA8`, written by `0x415C10` at `0x48B321` — and the unit's own
   `+0xF9` in 8 (`0x48B2A4..0x48B332`). The flag-set
   path returns after the attach (`0x48B590`); the flag-clear path goes on to `[32] × 3`, the
-  position, into `+0x6A` (`0x48B5CA..0x48B5E6`), `[16] × 3`, the body turn, into `+0x64`
+  position, into `+0x6A` (read `0x48B5CA..0x48B5E6`; stored `0x48B676..0x48B682` when its grid
+  cell `+0x76`/`+0x78`, recomputed from the new position, and `+0x110`'s low two bits are
+  unchanged (`0x48B64B..0x48B66C`), else `0x48B684..0x48B6A7` between the grid's remove
+  `0x47D0E0` and re-stamp `0x47CC30`, then `0x4827B0` — so the round robin corrects a copy's
+  position within N of the owner's ticks), `[16] × 3`, the body turn, into `+0x64`
   (`0x48B5EB..0x48B60F`, stored `0x48B6C4..0x48B6E4`) and `[32]` into the mover's `+0x20`
   (`0x48B6F2`) — all into the entry's own slot. **Bounded at `0x48B574`** (the record's
   `mov [esp+0x17],ax`; span `0x48B55B..0x48B58F`, from the child id to the call of `0x48AB70`,
@@ -742,7 +759,9 @@ passes the text from `msg+1` to `0x463CA0`, which returns at once when it starts
 **GameTime `main+0x38A47` has five writers** (every store to that offset): the tick's increment
 `0x4954C0`, the shell's network clock `0x44A696` (in `0x44A680`, called from the menu's state
 machine at `0x42837F`), and three zeroings at a level's entry — `0x491979` (just after `0x4854A0`
-in the level init), `0x4971BB` (the loader), `0x498180` (before state 6). In play it only increments.
+in the level init), `0x4971BB` (the loader), `0x498180` (the load state's first call). In play it only
+increments. It is not 0 when play starts: the in-play entry runs up to five catch-up ticks in state 5
+before its state-6 store (below, *A create refused during the load*).
 
 **The send layer** (read, not patched). `0x451DF0(net, msg, len)` `ret 0xC` checks the sender
 (`0x44FFD0`, type 1 or 2) and, with `[0x506DBC]` set, queues through `0x461990` → `0x462710`
@@ -783,6 +802,186 @@ lever): hits applied to a unit younger than the delay fell from 1 562 to 0 on th
 1 406 to 1 on a bystander (0 in a second run); a hit costs 65 bytes on the wire instead of 9. After
 the fix round the owner still applied none young, both joiners computed real lower bounds with
 none unknown, and a bystander applied 52 undecidable hits on a `0x2C`-made commander copy.
+
+### A create refused during the load, and the dirty create's position — the load state `0x497F40`, `0x48BA00` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The load state `0x497F40`.** A state function, called once a frame from the main loop's
+`call [main+0x391F5]` at `0x499A1C`, and installed right after state 5 is stored (`0x496C2E` →
+`0x496C3D`, `0x496D65` → `0x496D75`, `0x496D87` → `0x496D9D`, `0x496DEF` → `0x496DFF`; and `0x490BB3`, a case
+of the table after the generic state store `0x490B3D`). Its flags are the word `main+0x38D75`:
+
+| bit | set | cleared | meaning |
+|---|---|---|---|
+| 0 (`1`) | `0x49832D`, the first call | `0x49847E` (with `+0x38D6F..+0x38D76`) | the load has started |
+| 1 (`2`) | `0x497C62`, the loader's **last store** before it returns | `0x49847E` | the loader is done |
+| 2 (`4`) | `0x4975CA`, the loader after the level init | `0x49855D` (and `0x49686E` in the frame function), the game thread | this peer has loaded |
+| 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x49847E` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time |
+
+**The first call** (bit 0 clear, tested at `0x497F54`) runs `0x497F5E..0x498334` once per level: the
+timing base `main+0x38A37` (`0x498164`), GameTime 0 (`0x498180`), and the loader thread
+(`push 0x497C70; call 0x4B6B20` at `0x4982C5..0x4982CA`; `0x497C70` is an exception frame around
+the body `0x497180`). **Every call** then tests bit 1
+(`0x498342..0x49834D`): clear, it is the loading frame `0x4984DD` — per-player `0x453320`, the pump
+`0x453D40` at `0x49852E`, the barrier above; set, it is **the in-play entry** — `0x467D70`, the
+frame function `0x496790` at `0x49842F`, `0x4C2870`, state 6 at `0x498445`, the next state function
+`0x499200` at `0x498455`, and the flag word zeroed at `0x49847E`.
+
+**Up to five ticks run before state 6.** The frame function `0x496790` first moves its profile
+counters (`main+0x38D85..`) and reads the clock (`0x4B6560`); in a network game (`main+0x2A44`
+bit 0) it asks `0x495230` how many ticks are due since the timing base (`main+0x38A3B`, capped at
+5 at `0x4953F5`; `0x495230` itself sends and receives nothing), and `0x495490(1)` (`0x49680B`) runs
+that many, each `GameTime++` (`0x4954C0`) and, its argument being nonzero, a pump (`0x4954C8`),
+then the units `0x48AD30` and the rest. After the ticks the frame function pumps once more itself
+(`0x453D40` at `0x4968CB`), still in state 5 at the in-play entry. At `0x49842F` the base is the
+load's start, so the catch-up is the cap: five ticks in state 5, before `0x498445`. MEASURED: GameTime read 5 just after the
+state-6 store in every two-peer start of B5's first build that held a create (four starts).
+GameTime's five writers stand; it is not 0 when play starts, and nothing ticks before
+`0x49842F`'s call.
+
+**The loader `0x497180`** (loader thread) pumps at `0x49727D` in its early wait, runs the level
+init `0x4917D0` at `0x497581` (the unit array, `0x4854A0` at `0x4918D4`), sets bit 2, waits for bit
+3, creates the local player's commander (`0x485F50` at `0x4977BB`, which sends its `0x09` while this
+peer is still in state 5), and sets bit 1 last. So during a load two threads pump: the game thread
+(`0x49852E`, and at the in-play entry the catch-up ticks' `0x4954C8` and the frame function's
+`0x4968CB`) and the loader (`0x49727D`). The loader's last pump
+precedes its last store, and the game thread reaches `0x498445` only after reading that store.
+
+**Why a peer loses the others' commanders.** Every peer creates its commander after the barrier,
+still in state 5, and the dispatcher passes `0x09` only in state 6 (`0x45473F`, `0x512BC0`): a peer
+whose remaining load is longer refuses the others' creates at `0x455F50`. In every two-peer start
+measured, the joiner. Since B4 the create rides in a `0x4A` companion, which state 5 passes (`0x05`
+has mask 7) and B4's receiver refuses by the same table (`gate=`). **Every unit message is
+refused alike:** `0x451FD0` gives mask 4 (state 6 only) to `0x09`, `0x0A`..`0x10` and `0x2C`
+among others (`0x451FE0..0x452035`), so in state 5 a peer drops the others' kills (`0x0C`), hits
+(`0x0B`) and full state (`0x2C`) too. A message failing its mask in state 5 leaves by the
+dispatcher's refusal branch `0x45477F..0x454787` (`cmp edx,5; je 0x455F50`), with the message at
+`[esp+0x10]` and the sender as below.
+
+**A create before the first tick is what stock does.** `CreateFromNetwork 0x4861D0` calls
+`0x485A40`, `0x485D40`, `0x49E070`, `0x437840`, `0x4B4F10`, `0x43DC00`, `0x48A870`, `0x47CC30`,
+`0x482AC0` and `0x490580`, every one of which the local create `0x485F50` calls too, and the loader
+runs `0x485F50` for this peer's commander in state 5 before any tick (`0x4977BB`); neither body reads
+the net state `main+0x391F1` or GameTime. Over an occupied slot `CreateFromNetwork` first destroys
+the occupant (`0x486237..0x486244`, `0x4864B0(unit, 0)`), which sends a `0x0C` only for a local
+player's unit (below).
+
+**What removes a copy whose unit is gone: the round robin's type 0.** The owner's `0x2C` sender
+`0x48B710` runs from the unit tick (`0x48B003`) for each local player in a network game
+(`main+0x2A44` bit 0). After the dirty entries and their `0xFFFF` end it always appends one
+round-robin entry (the flag bit set unconditionally, `0x48B81B..0x48B84C`) for the slot
+`GameTime % N` of its block (`N` = `main+0x37EE6`, `0x48B827..0x48B8A4`), written by `0x48B200`:
+the type word first (`0x48B222`), and for an empty slot nothing more (`0x48B227..0x48B22F`). The
+receiver `0x48B920` reads that flag (`0x48BA6A..0x48BA97`), takes the slot from the header's
+GameTime (`0x48B95A`) `% N` (`0x48BA9F..0x48BABA`) and hands it to `0x48B3F0`: a type 0 over an
+occupied slot sets `+0x110` bit 14, pending death (`0x48B415..0x48B42F`: an empty slot, `+0xA6` 0,
+leaves at `0x48B420`; the set itself is `0x48B426..0x48B42F`, `or ch,0x40`). The receiver's unit tick
+then calls `0x4864B0(unit, +0xF5)` for every unit with that bit (`0x48AFB9..0x48AFD1`), which
+destroys it (`0x4866D0` at `0x486679`) and sends a `0x0C` only when the unit's player is local
+(`0x48664B..0x48666D`, the image's one send of the `0x0C`'s 11 bytes). So a copy whose owner's
+slot is empty is gone within N of the owner's ticks: 1500 at the raised limit (50 s at 30 ticks a
+second), 500 at stock's (16.7 s).
+
+**A sender, as the dispatcher sees it.** The pump's frame holds the sender's **record index** in
+the low byte of `[esp+0x14]` and its record `main+0x1B63 + k·0x14B` in `edi`, paired by
+`0x453E84..0x453EA1` (the byte masked, then `edi = edx + k + 2·165k + 0x1B63` = `main + 0x1B63 +
+k·0x14B`, the `lea edi` ending at `0x453EA1`): the loop `0x453DBD..0x453E12` finds the record whose `+4` is the message's
+DirectPlay id and stores its index at `0x455F78`. The sender test
+(`0x4547AD..0x4547E2`): `[rec] ≠ 0`, `+0x73` 3 (1 and 2, local, are dropped), `+0x146 ≠ 10`; the
+destination record in `ebx` passes the same (`0x454821..0x454844`). A record's index is not its
+block's: blocks are handed out in DirectPlay-id order (`0x485842..0x485853` compares `[rec+4]`
+when `0x435100` returns 3; `0x4858BD` stores the block), records in local order.
+
+**The dirty create's record** (`0x48B9B6..0x48B9FB`, into the 0x2C frame's `esp+0x1C`): `[0]` 9,
+`[1]` the entry's type, `[3]` the slot's `+0xA8`, `[5]`/`[9]`/`[13]` the **slot's own** `+0x6A`,
+`+0x6E`, `+0x72` (zero in a fresh array, the last unit's in a freed slot), `[17]` `+0x64`, `[21]`
+`+0x68`; the player is the slot's `+0xFF`. `CreateFromNetwork` hands that position to `0x485A40` (`0x4862B8`) and
+gives the unit a move object (`0x43DC00`, `0x4862E9`) — only when the def's `+0x22F` is 1
+(`0x4862CF`) — before the rest of its set-up; only then does
+`0x48BA10` parse the entry's move payload with the new object's `[vt+0x24]`.
+
+**The move object `0x43DC00`** (`unit+0`, `0x2F` bytes; the class object is its `+0`). A unit
+whose player is remote (`+0x96` → `+0x73` 3, `0x43DC48..0x43DC57`) gets a proxy: the **air proxy**
+`0x490940` (`0x27` bytes, vtable `0x4FD9E0`) when `def+0x241` bit 11 is set (`0x43DC5F..0x43DC68`),
+else the **ground proxy** `0x44F570` (`0x1C` bytes, vtable `0x4FD488`). The owner's classes are the
+local ones. `[vt+0x1C]` says whether the unit is dirty, `[vt+0x20]` writes its payload and
+`[vt+0x24]` reads it (the dirty list, `0x48B77A..0x48B7FD`, writes delta, type and `[vt+0x20]`):
+
+| vtable | class | dirty `+0x1C` | writes `+0x20` | reads `+0x24` |
+|---|---|---|---|---|
+| `0x4FD428` | base | `0x44EFE0` (never) | `0x44EFC0` (nothing) | `0x44EFD0` (nothing) |
+| `0x4FD458` | local ground mover (`0x44F040`) | `0x44F480` | `0x44F4A0` | `0x44EFD0` |
+| `0x4FD488` | remote ground proxy (`0x44F570`) | never | nothing | `0x44F5C0` |
+| `0x4FD980` | air base (`0x490940` first) | never | nothing | `0x44EFD0` |
+| `0x4FD9B0` | local air mover | `0x4908B0` | `0x4908C0` | `0x44EFD0` |
+| `0x4FD9E0` | remote air proxy | never | nothing | `0x490A10` |
+
+**The payloads, and where a position lands.** The bit reader is `0x415DC0` (`{dwords, word, bit}`,
+least significant bit first; a read that ends on a word boundary still loads the next dword, masked
+to nothing), the writer `0x415C10`.
+
+- **Ground** (`0x44F4A0` → `0x44F5C0`): one flag bit (bit 2 of the move object's `+0x2E`), a 2-bit count n —
+  the local mover's path count `+0x5C`, capped at 3, 0 when `+0x64` bit 0 is clear — then n points
+  of `int16 x, int16 z`, whole world px, from the path's front `+0xC`. At most 99 bits. **No field is
+  the unit's own position; point 0 is the node the unit last reached.** A straight order's path
+  begins at the unit: `0x44F3F2..0x44F417` stores count 2, point 0 = the unit's `+0x6C`/`+0x74`
+  (the integer halves of `+0x6A`/`+0x72`), point 1 the goal. The front is dropped only by the
+  mover's step `0x44F1A0` (vtable `0x4FD458` `+8`, called through `0x43DD20` — `call [vt+8]` at
+  `0x43DD28` — from the unit tick at `0x48AFAA`; the drop is `0x44F1D7..0x44F235`, after calls
+  through the object at `+4`, `0x44F1A5..0x44F1D4`): with a count of 2 or more (`0x44F1D7`) it
+  takes the squared distance from the unit's `+0x6C`/`+0x74` to **point 1** (`0x44F1DF..0x44F203`)
+  and, only when it
+  is at most `0x19` (5 px, `0x44F205`), shifts the path down one point and decrements the count
+  (`0x44F20A..0x44F229`; below 2 it clears `+0x64` bit 0, `0x44F231`; `+0x64` bit 3 set,
+  `0x44F235`). So a straight move keeps its origin as point 0 until the unit is within 5 px of its
+  goal. `0x44F100` does the same shift by a count argument, and nothing calls it — no direct call
+  or jump and no stored pointer in the image. The proxy hands the points out as `x<<16, 0, z<<16`
+  (`0x44F650`, its `[vt+0x0C]`) [INFERRED: as the unit's path].
+- **Air** (`0x4908C0` → `0x490A10`): a 2-bit selector, the sub-object's type (`[vt+0x08]`) 2 → 1,
+  3 → 2, none → 0; then that sub-object's own payload (`[vt+0x28]`), then 2 bits of the move object's
+  `+0x2E`. The proxy's `0x490690` (its `[vt+0x08]`) [INFERRED: the per-tick step] asks the sub-object for its point (`[vt+0x20]`, at
+  `0x4906B8`) into its own `+0xC` — the point the unit is steered to (`0x490650`, its `[vt+0x10]`,
+  hands out `+0xC` and the velocity `+0x18`).
+  - selector 2, type 3 (`0x2C` bytes, vtable `0x4FD3F8`; `0x44E930` → `0x44E9C0`): one flag bit, x,
+    y, z (16.16) at `+0xA`/`+0xE`/`+0x12`, a velocity at `+0x16`/`+0x1A`/`+0x1E`, and with the flag
+    a `u16` at `+0x24` — 209 bits at most. Its point `0x44EA60` is the position, then advanced by
+    the velocity: the unit's dead-reckoned position.
+  - selector 1, type 2 (`0x36` bytes, vtable `0x4FD3B8`; `0x44DDC0` → `0x44E080`): 8 flag bits;
+    bit 0 a `u16` and a unit index (the followed unit, `0x489690`), bits 4, 3, 6 a `u16` each, bit 5
+    a vector at `+0x26` — 184 bits at most. Its point `0x44E3C0` is `+0x26`, refreshed from the
+    followed unit (`0x43E060`), its y clamped to `0x1FF` px (`0x44E4F1`): a **goal**, not the
+    unit's own position.
+
+**What B5 patches** (the plan's *B5 DESIGN*; the code is `fix_ghost_commander`): B4's `0x05`
+receiver holds a carried `0x09` its gate refuses in state 5, with the sender's record index and
+DirectPlay id; the refusal branch `0x45477F` notes a refused `0x0C`, which cancels the latest
+create held for its slot from its sender, or marks dying, as `0x48B42C` does, a copy made before
+state 6; `0x497F5E` empties the queue at the load's start; `0x49842F` replays it before the frame
+function runs the first tick, through B4's receiver past its state test and `CreateFromNetwork`,
+and from there on B4's receiver makes a create the gate refuses in a catch-up tick at once, in
+that tick's pump (or the frame function's `0x4968CB`);
+`0x48BA00` calls a stub that rewrites the dirty create's position from the entry's own payload
+(ground point 0; air selector 2's x, y, z) when it lies on the map, then enters `CreateFromNetwork`
+under `0x48BA05` — reading the payload only from B3's copy of the `0x2C`, under B3's reader, within
+the message's length; B5 refuses the fail-closed table unless B3 armed. Compared, not written: `0x497F54`, `0x497F64`,
+`0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`, `0x48B933`
+(12 bytes, the reader's slots) and `0x453E84` (30 bytes, the sender's record). All are rows of the
+fail-closed table, in both builds.
+MEASURED 2026-09-25 (the plan's *B5 LANDED* section, two peers, Two Continents): on the previous
+build the joiner lacked the host's commander until t = 50 s at the 1500-unit limit and t = 18 s at
+500, and one ordered to move at once appeared at `(1,−2)` / `(2,−3)` and walked from the corner;
+on B5's first build, which replayed at the state-6 store, it was present at the host's position at
+the first sample in all four starts, from an exact copy (record 1 on the joiner is the host, whose
+block holds slot 1), and with the queue turned off the dirty create alone put it at `(368, 7664)`
+where stock's record had `(0, 0)`. **The host's
+create reaches the joiner in its catch-up ticks, not its load**: with a drain before the first
+tick and one after the state-6 store, the first found nothing (GameTime 0) and the second made the
+commander at GameTime 5; on the final build the drain again finds nothing and the create is made
+in the pump of the joiner's first tick (`created slot 1 from sender 1 … at GameTime 1, in a
+catch-up tick`), present at the host's position at the first sample, `(368,7663)` against
+`(369,7660)`. The final build has run two such starts (1500, the commander moving) and one with
+the joiner's queue off, where the dirty create alone put the commander at `(368, 7664)`, point 0,
+from B3's copy (`unbound=0 short=0`); the replay at `0x49842F` has never replayed a record live,
+and the 500-unit and idle starts were not re-run on it.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -1981,6 +2180,495 @@ fire on a save loaded with its own content.
 refused `Animating` record of mode 1 or 2 whose cell is an indestructible neighbour's footprint
 starts or swaps that neighbour's sequence. That is stock; the gate skips only the write.
 
+### The wind — `0x490C40`, its draws `0x490C5A` and the level load's call `0x491903` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The updater.** `0x490C40()` takes no argument and returns with `ret`. It has exactly two callers:
+the level load `LoadGameData_Main 0x4917D0` at `0x491903`, on the loader thread, and the tick
+`0x495490` at `0x49558F`. `0x4917D0`'s only caller is `0x497581`. The updater compares `next`
+(`main+0x37EC4`, a dword) with GameTime (`main+0x38A47`) (`0x490C45..0x490C53`). While
+`next >= GameTime` it clears the changed flag `+0x37EE2` and returns (`0x490D87`). Otherwise it
+draws three values:
+
+| value | stock's draw | where |
+|---|---|---|
+| `next` `+0x37EC4` | `next += 30 · (5 + rand() · 10 / 0x8000)`, from the CRT's `rand 0x4E4870` through `_allmul 0x4E4400` and `_alldiv 0x4E4440` | `0x490C60..0x490C8E` |
+| speed `+0x37EDA` (dword) | `min + simrand(max − min)`, where min is `main+0x1425B` and max is `main+0x1425F` (the map's minimum and maximum wind [INFERRED]; Two Continents reads 0 and 3000); the difference is a 32-bit `sub` at `0x490CA1` | `0x490C90..0x490CB7` |
+| heading `+0x37ED8` (word) | `simrand(0x10000)`, drawn only when the speed is not 0 | `0x490CC8..0x490CDC` |
+
+`simrand` is the sim RNG `0x4B6C30(n)`, which answers 0 for `n < 2` (`0x4B6C35`). The
+updater then derives the components `+0x37ECC` and `+0x37ED4` from the speed and the heading
+(`0x490CE8..0x490D35`), and the ratio `+0x37EDE`: the speed over `+0x37EC8`, capped at 1.0
+(`0x490D3B..0x490D7B`). `+0x37EC8` is 5000, written only by the load (`0x4918ED`). It sets the changed flag to 1 (`0x490D7B`) and pops `esi` (`0x490D85`).
+
+**The writers and readers.** The only writers of `+0x37EC4`, `+0x37EDA` and `+0x37ED8` are
+`0x490C8E`, `0x490CB7`, `0x490CDC` and the load's `mov [ecx+0x37EC4],esi` at `0x4918FD`, which sets
+`next` to 0: `esi` is 0 from `0x4917E5`. The components `+0x37ECC` and `+0x37ED4` are written only
+by the updater (`0x490D09`, `0x490D35`). Besides the updater's own derivations, the readers are:
+
+| reader | what it reads | what it does with it |
+|---|---|---|
+| the projectile pass `0x49B720`, called from the tick at `0x495513` | the three dwords from `+0x37ECC` (x, y, z; nothing writes `+0x37ED0` by name) | adds them to a projectile's position after its velocity, every tick (`0x49BC58..0x49BC62` → `0x49BD10..0x49BD2D`, and `0x49BD04..0x49BD2D`), on the branches of `0x49BC0C` and `0x49BCD9` (which weapon kinds take them was not traced) |
+| the fire spread `0x4239C0` [role INFERRED], called from `0x424463` | `+0x37ECC` (`0x423AA1`) and `+0x37ED4` (`0x423AC1`) | scales each by `0x20000` (`_allmul 0x4E4400`, then `0x4E43D0` with 16) and adds it to a position |
+| four effect handlers | `+0x37ECC` at `0x474B09`, `0x474FC9`, `0x475366`, `0x475626`, and `+0x37ED4` after each (`0x474B3A`, `0x474FFA`, `0x475391`, `0x475651`) | drift [INFERRED: smoke and particles] |
+| `0x40156F`, in the resource step [INFERRED] | the ratio `+0x37EDE` | the ratio times the def's `WindGenerator` (`+0x1D2`, a float) is added to the player's energy income |
+| `0x488F68` | the ratio | returns the same product, negated |
+| `0x437910(unit)`, called from `0x48ADC4` | the changed flag, the heading, the speed | for a def with `WindGenerator > 0`, and only on a draw where the changed flag is set, calls the unit's script `SetDirection(heading)` and `SetSpeed(speed << 4)` through `0x4B0A70` (the names at `0x50500C` and `0x505000`) |
+| `0x409B90` | `+0x37EC8` (5000) and the map's maximum `+0x1425F` | zeroes a wind generator's weight when the map's maximum is below half of 5000 [INFERRED: the AI's build weighting]; the drawn wind is not read |
+
+So the wind is simulation state: it moves projectiles, and so where they land, it moves the fire
+spread, it is each wind generator's income, and it is the argument of two COB calls that run on
+every peer. These readers are what make the fix a simulation fix.
+
+**Each peer draws its own.** The two engine RNGs are both local to a machine:
+- the sim RNG `0x4B6C30` keeps its state at `0x51FC88`, one for the process, seeded by the loader
+  `0x497180` from `QueryPerformanceCounter` (`0x49718C`, then `0x4B6CA0` at `0x49719D`);
+- the CRT's `rand 0x4E4870` keeps its state per thread, at `+0x14` of the per-thread data
+  `0x4EB0F0` returns, and `srand 0x4E4860` writes only the calling thread's (see *The C
+  runtime's `rand` is a second, separate stream*, under the tacob value ids). The loader's `srand(time(0))` at `0x4971AE` seeds the loader thread's stream. The
+  tick's draw at `0x490C60` runs on the game thread, whose stream WinMain seeds with
+  `srand(time(0))` at `0x49E8BB`.
+
+The updater runs on every peer, so each peer draws its own wind. The schedule `next` diverges on
+every map, so the changed flag, and with it `0x437910`'s `SetSpeed` and `SetDirection`, fires on
+different ticks on different peers. The heading diverges on every map whose speed is not 0: with
+a range below 2 and a minimum above 0 the speed is the minimum on every peer, but `0x490CC8`
+tests the speed, not the range, so the heading is still drawn. MEASURED on the previous build, two
+peers on Two Continents (wind 0 to 3000) paused at GameTime 825:
+
+| peer | next | speed | heading |
+|---|---|---|---|
+| host | 990 | 2525 | `0xF5C6` |
+| joiner | 840 | 1498 | `0xC827` |
+
+The load's call draws nothing: it finds `next` = 0 and GameTime 0 (`0x4971BB`). The first draw
+is the first tick's.
+
+**The fix: one wind for every peer.** `fix_wind` (`tagpu_patches.c`) writes four rows of the
+fail-closed table that change code:
+- a `jmp` at `0x490C5A` replaces `lea esi,[eax+0x37EC4]`, the draws' first instruction, after
+  `0x490C51`'s `cmp ecx,edx` (`next` against GameTime), `0x490C53`'s `jae 0x490D87` and
+  `0x490C59`'s `push esi`. It goes to a stub `pushad; call wind_draw; popad; mov eax,[0x511DE8];
+  jmp 0x490CE8`, which leaves `eax` as stock's `0x490CE3` leaves it. After `0x490CE8`, `esi` is
+  read only by the pop at `0x490D85`.
+- a `call` at `0x491903` goes to a stub that calls `wind_seed` and then jumps to `0x490C40`.
+- a `call` at `0x4982CA`, the loader thread's start, goes to a stub `pushad; call
+  wind_session_capture; popad; jmp 0x4B6B20`, so `0x4B6B20` runs with stock's stack and returns
+  to `0x4982CF`.
+- a `jmp` at `0x4C98FD` replaces the engine's one `SetSessionDesc` call, nine bytes (`push 0;
+  mov ecx,[esi]; push eax; push esi; call [ecx+0x7C]`, NOP-padded after the `jmp`), and goes to
+  a stub `push eax; push esi; call wind_set_session_desc; jmp 0x4C9906`: `eax` is the descriptor
+  `main+0x471` and `esi` the interface `main+0x4D9`, and the wrapper is `__stdcall` with two
+  arguments, so it returns to `0x4C9906` with stock's stack and the `HRESULT` in `eax`
+  (*The session, not the host*, below).
+
+`wind_draw` makes stock's three draws, by stock's rules, from a splitmix64 generator of its own.
+It uses neither engine RNG:
+- `next += 30 · (5 + r % 10)`;
+- the speed is `min + r % (max − min)`, or `min` when the 32-bit difference is below 2;
+- the heading is `r % 0x10000`, drawn only when the speed is not 0.
+
+Five more rows check the bytes the stubs rest on, and the fix adds nine rows in all:
+- `0x490C40`, 26 bytes: the schedule test and its `push esi`;
+- `0x490CE8`, 13 bytes: the loads where the draws rejoin;
+- `0x4982C5`, 5 bytes: `push 0x497C70`, so the call hooked at `0x4982CA` is the loader's;
+- `0x4C98D9`, 36 bytes: `lea eax,[esi+0x45D]` … `mov esi,[esi+0x4C5]; mov dword [eax],0x50`,
+  so `eax` and `esi` at `0x4C98FD` are the descriptor and the interface;
+- `0x4C9906`, 4 bytes: `test eax,eax; jne 0x4C9914`, where the wrapper rejoins.
+
+**The seed.** `wind_seed` runs at every level load, so nothing crosses from one game to the next.
+The engine's own network test chooses its path: `GameingState +0` (through `main+0x391E9`; `0x435100`
+is `mov eax,[ecx]`) is 1 in a campaign, 2 in a skirmish and 3 in a network game, the dispatch the
+game start makes at `0x4971C7`.
+- **In a network game** the seed is FNV-1a 64 over DirectPlay's session instance GUID
+  (`guidInstance`) and then the map's hash, and nothing local to a peer is read.
+- **When DirectPlay's answer is refused** in a network game (no interface, `GetSessionDesc`
+  failed, or it answered with a `dwSize` other than 0x50 or a null GUID), the seed takes the
+  engine's copy `main+0x479` in its place when that is not null, counted (`network levels seeded
+  from the engine's session copy`), and otherwise the map's hash alone, counted (`network levels
+  seeded from the map alone`); both are logged with the refused answer's `HRESULT` and `dwSize`.
+- **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG.
+
+#### The engine's DirectPlay object — `main+0x14` [DISASSEMBLED 2026-09-25]
+
+The executable imports `DPLAYX.dll` by ordinal only: 2 (`DirectPlayEnumerateA`, thunk `0x4FAFF0`),
+4 (`DirectPlayLobbyCreateA`, `0x4FAFF6`) and 1 (`DirectPlayCreate`, `0x4FAFFC`, called at
+`0x4CA667` and `0x4CA922`). The functions that use it trace their names through `0x4C9740`:
+the strings `HAPINET_receivepacket` … `HAPINET_getplayeraddress` sit at `0x50B0AC..0x50B4A0`, one
+more copy of `HAPINET_receivepacket` at `0x507264`. Each takes the object as its first stack
+argument, and the engine passes `main+0x14` (`add edx,0x14` at `0x451203` before
+`HAPINET_updategameinfo 0x4C9890`). Its fields, as offsets of `main`:
+
+| `main+` | HAPINET `+` | what | written by |
+|---|---|---|---|
+| `0x451` | `0x43D` | the application GUID | `HAPINET_initmultiplay 0x4CA5D0`, from its argument |
+| `0x461` | `0x44D` | the service provider's GUID, `DirectPlayCreate`'s first argument | `0x4CA5D0` |
+| `0x471` | `0x45D` | a `DPSESSIONDESC2` (0x50 bytes), its `dwFlags` at `main+0x475` and its `guidInstance` at `main+0x479` | see below |
+| `0x4D5` | `0x4C1` | the `IDirectPlay` from `DirectPlayCreate` | `0x4CA649` (zero), then `DirectPlayCreate` through its out pointer (`0x4CA667`); released and zeroed by `HAPINET_uninitmultiplay 0x4C9B70` (`0x4C9BC3`) |
+| `0x4D9` | `0x4C5` | **the interface every call goes through**: an `IDirectPlay3A*`, or an `IDirectPlay2A*` when a lobby launched the game | `0x4CA64B` (zero); `QueryInterface(IID_IDirectPlay3A)` at `0x4CA684`, the IID at `0x4FCD78` (`{133EFE41-32DC-11D0-9CFB-00A0C90A43CB}`, as in `dplay.h`); the lobby's `Connect` at `0x4C9B59` (`IDirectPlayLobby` slot 3, `+0xC`, whose out parameter is an `LPDIRECTPLAY2`); `Close` (`0x4C9B92`), `Release` and zeroed at `0x4C9BA1`. `IDirectPlay2`'s table has 32 slots, `SetSessionDesc` (`+0x7C`) the last, and `GetSessionDesc` is slot 22 in it as in `IDirectPlay3`'s (`dplay.h` lines 561 and 677). Two engine calls go past it into `IDirectPlay3`'s own slots: `EnumConnections` (`+0x8C`, `0x4CA30D`) and `InitializeConnection` (`+0x98`, `0x4CA5B3`). The first always runs on a 3A: its function `0x4CA250` (one caller, `0x44471C`, in the provider screen's setup `0x444580` right after its `uninitmultiplay` at `0x4446F4`) calls `initmultiplay` first (`0x4CA2C2`) and returns unless it succeeded, and `initmultiplay` stores the `QueryInterface(IID_IDirectPlay3A)` result here and succeeds only on `S_OK` (`0x4CA686..0x4CA68C`). The second's wrapper `0x4CA590` tests nothing; its one caller is `0x450DBB` in `0x450D80`, which is called from `0x426D20` (no direct reference to it found) and from the state machine `0x426E80` on `main+0x2BBE` (`0x427AEA`, `0x427BF7`; called at `0x496BB5`). Whether that path can run while a lobby's `IDirectPlay2A` is here was not traced: after a lobbied launch the engine's calls stay inside the 2A's table only if it cannot [OPEN] |
+| `0x4E1` | `0x4CD` | the `IDirectPlayLobby` | released and zeroed at `0x4C9BD9` |
+| `0x4E5` | `0x4D1` | the lobby's `DPLCONNECTION*`, 0 when not lobbied | freed and zeroed at `0x4C9C08` |
+| `0x4F1` | `0x4DD` | `dwMaxPlayers` for a new session (16, `0x4C9C31`) | |
+
+The `HAPINET_*` functions read here test `+0x4C5` for NULL before calling through it, and its
+writers are the four above: nothing else in the image writes `main+0x4D9`. `uninitmultiplay` has four callers (`0x4446F4`, `0x450E06`, `0x4523C8`, `0x46C1B2`),
+`initmultiplay` one (`0x4CA2C2`); the thread they run on was not traced past the shell and the
+network module [INFERRED: the game thread].
+
+**The session description's writers.** The copy at `main+0x471` is written:
+- by `HAPINET_createnewgame 0x4C9920`, on the host: zeroed (`0x4C995E`), filled, then
+  `Open(DPOPEN_CREATE)` (vtable `+0x60`, `0x4C99DB`); then `GetSessionDesc` (`+0x58`) twice, once
+  for the size (`0x4C99F8`, expecting `DPERR_BUFFERTOOSMALL 0x8877001E`) and once into a buffer,
+  and on success its `guidInstance` is copied to `main+0x479` (`0x4C9A33..0x4C9A4C`). A failed
+  `GetSessionDesc` leaves the GUID zero;
+- by `HAPINET_joingame 0x4C9FD0`, on a joiner: zeroed, the GUID of the session to join (its
+  by-value argument) stored at `main+0x479` (`0x4CA03A`), `Open(DPOPEN_JOIN)` (`0x4CA05A`), then
+  `GetSessionDesc` (`0x4CA07D`) and its `guidInstance` copied again (`0x4CA0B8..0x4CA0CC`);
+- by `HAPINET_createorjoinlobbygame 0x4C9A70`, when lobbied: the lobby's `DPLCONNECTION`
+  `lpSessionDesc` copied whole (`0x4C9B4F`, `rep movs` of 0x14 dwords), on the host as on a joiner;
+- by the network pump, on every peer but the host: a `DPSYS_SETSESSIONDESC` (`0x104`, dispatched
+  at `0x454611..0x45461D`) is copied whole over it (`0x454689..0x454697`) when the local seat is
+  not the host seat;
+- `0x451180` sets `DPSESSION_JOINDISABLED` (0x20) in `main+0x475` when bit 4 of the local
+  PlayerInfo's `+0x9B` is set (`0x4511D2..0x4511DA`), as does the caller at `0x454135`
+  (`0x4540F0..0x4540F8`).
+
+Nothing of the wind fix writes it: the fix's `SetSessionDesc` passes a copy of it (below).
+
+**It reaches the session through `SetSessionDesc`, at one site.** `HAPINET_updategameinfo
+0x4C9890` hands the whole copy, `guidInstance` included, to `SetSessionDesc` (`+0x7C`,
+`0x4C9903`). It is the engine's only `SetSessionDesc`: the image has six calls through a vtable's
+`+0x7C` (`call [reg+0x7C]`), and `0x4C9903` is the only one through `main+0x4D9` and the only one
+with three arguments; `0x47C0CB`, `0x4B4FB8`, `0x4B5735`, `0x4B6069` and `0x4B60E1` push two, the
+shape of `IDirectDrawSurface::SetPalette` [INFERRED]. No register call in the image takes its
+target from a `+0x7C` load. `0x4C9890` has two callers: `0x451180` (`0x451208`; thirteen call
+sites of its own: twelve at `0x444E48` … `0x44AB32`, the battle room's handlers [INFERRED], and
+`0x497C0B`) and the pump `0x453D40` (`0x454135`, inside it). The function tests the interface
+for NULL (`0x4C98A9`, to `0x4C9914`), fills `dwUser1`..`dwUser4` and `lpszSessionName`
+(`0x4C98C2..0x4C98EB`), sets `dwSize` 0x50 (`0x4C98F7`), and returns 1 when the call answers
+`DP_OK` (`0x4C990A`) and 0 otherwise (`0x4C9914`), `ret 0x1C`.
+
+**Every load ends with one**, on the loader thread, in every game mode: `0x497BFF` sets bit 4 of
+the local PlayerInfo's `+0x9B` and `0x497C0B` calls `0x451180`, which then sets
+`DPSESSION_JOINDISABLED`. No branch in the loader body skips `0x497BFF..0x497C0B` and its one
+`ret` is `0x497C6C`, so every load reaches the call, and it reaches DirectPlay whenever
+`main+0x4D9` is set. MEASURED after a two-peer load: `main+0x475` reads `0x20` on both peers.
+DirectPlay accepts it only from the session's host. An implementation that takes
+`guidInstance` from it (Wine's `DP_SetSessionDesc` copies the whole descriptor) moves the
+session to whatever the descriptor holds.
+
+**The copy's GUID is read** by `SetSessionDesc` above; by `HAPINET_getgames 0x4C9E50`, which
+copies it into the descriptor it hands `EnumSessions` (`0x4C9EC1`), in the shell's session list;
+and through the getter `0x4CA9E0` (`add eax,0x465`) by `0x46C620` (called at twelve sites,
+`0x41F897` … `0x46BC65`, and `0x4978D0` in the loader body, so this read also runs on the loader
+thread), which passes it to `RIReport` of `reporter.dll` (the pointer `0x51E584`, resolved at
+`0x46C07A` from the names at `0x507AF8` and `0x507AB8`) or to the stub `0x4CAA10` (`mov eax,1;
+ret 0x28`). The retail install ships no `reporter.dll`. The other accesses in the copy's range
+are other fields: `dwFlags` (`HAPINET_passwordrequired` at `0x4CA479` tests 0x400),
+`dwMaxPlayers` (`main+0x499`, `0x447C8A`, `0x447D04`) and `dwUser2`/`dwUser3` (`main+0x4B5`,
+`+0x4B9`: `0x44FA71`, `0x463177..0x463189`, `0x46353E..0x463599`).
+
+`HAPINET_getcurrentplayers 0x4C9DD0` also calls `GetSessionDesc` (`0x4C9DFC`, `0x4C9E2A`) and
+returns `dwCurrentPlayers`. `createnewgame` leaves `dwFlags` 0 (nothing writes it after the zeroing
+at `0x4C995E`), so the sessions it creates have neither `DPSESSION_MIGRATEHOST` nor
+`DPSESSION_KEEPALIVE`; a lobbied session takes the lobby's descriptor whole, flags included
+(`0x4C9B4F`).
+
+#### The session, not the host [DISASSEMBLED + MEASURED 2026-09-25]
+
+**Why not the host's ID.** The host seat can change during the load. Until bit 1 of
+`main+0x38D75` is set, the game thread runs the network pump `0x453D40` in its load loop
+(`0x4984DD..0x49852E`, the call at `0x49852E`). The pump's leave case (`0x4550A0..0x4550D5`)
+calls the player removal `0x452CC0` for a remote human even during the load. The removal clears
+the seat's type (`0x463C60(0)` at `0x452E62`), sets its DirectPlay ID to −1 (`0x452E6D`), and, if
+the leaver held the host bit and bit 2 of `main+0x2A44` is set, elects a new host: the human seat
+with the highest ID (`0x452EE3..0x452FF8`). So a peer that handles a departure before its
+`0x491903` would seed from the new host, one that handles it after from the old, and one in the
+middle of the removal could read a set type beside an ID of −1. The winds would then differ for
+the rest of the game, silently.
+
+**The GUID has the property the host's ID lacks.** DirectPlay fixes a session's instance GUID when
+the session is created, and every peer holds it from the moment it enters: a joiner names it to
+`Open(DPOPEN_JOIN)` (`0x4CA03A`, `0x4CA05A`). No departure writes it, and the engine's host
+election touches only its own seat records. The one engine call that could move it is
+`SetSessionDesc`, under an implementation that takes `guidInstance` from it: the copy holds
+DirectPlay's own GUID after a create or a join (`0x4C9A33`, `0x4CA0BB`), but a lobby's descriptor
+after a lobbied launch (`0x4C9B4F`), and every peer makes the call at the end of every load, the
+host in the battle room as well, after the joiners may have captured.
+
+**So the engine's one `SetSessionDesc` passes the GUID DirectPlay holds.** The stub at `0x4C98FD`
+hands the interface and the descriptor to `wind_set_session_desc`, which calls `GetSessionDesc`
+through the same interface, validated as the capture validates it (below), copies the engine's
+0x50-byte descriptor into its own frame, writes DirectPlay's GUID into that copy, counted when the
+engine's differed (`made over another GUID`), and calls `SetSessionDesc` with it and stock's
+flags 0 (`made`). With no valid answer it makes no call and returns the refusal (`withheld`),
+which `0x4C9908` takes as it takes a failed call: `0x4C9890` returns 0. Every `SetSessionDesc`
+the engine makes, in the battle room or the load, lobbied or not, on whichever thread reaches
+it, then names the session's own GUID, whatever the implementation does with the field. The
+engine's copy is not written, so its other readers above read what stock leaves there. The
+`GetSessionDesc` runs right before stock's own `SetSessionDesc`, on the thread making it, so it
+adds no DirectPlay concurrency stock does not already have. `ecx` and `edx` come back clobbered
+as the COM call clobbers them, and `0x4C9906..0x4C9918` reads neither. No branch and no
+absolute reference in the image lands inside `0x4C98FE..0x4C9905`. `0x4C98FD` is also where TADR's
+`NullLpszPasswordInUpdateGameInfo` hooks, not ported ([the B evidence](tadr-port/sim-fixes-evidence.md),
+§3); the fail-closed table refuses two rows on one byte, so a port of it writes `lpszPassword` in
+the wrapper's copy.
+
+**How it is read.** `wind_session_capture` calls `GetSessionDesc` through `main+0x4D9` (vtable
+`+0x58`, slot 22 of `IDirectPlay2A` and of `IDirectPlay3A` in `dplay.h`: `QueryInterface`,
+`AddRef`, `Release`, then `AddPlayerToGroup` … `GetPlayerName`, then `GetSessionDesc`), into a
+0x400-byte stack buffer or, when DirectPlay asks for more, a heap one, each zeroed first so an
+answer that writes less than a descriptor cannot pass on a previous frame's bytes. It keeps the `guidInstance`
+only when the answer's `dwSize` is 0x50 and the GUID is not null: Wine can answer `DP_OK` with a
+zeroed descriptor. It runs on the **game thread**, from the stub at `0x4982CA`:
+- `0x4982C3..0x4982CA` is `push ebp; push ebp; push 0x497C70; call 0x4B6B20`, the CRT's
+  `_beginthread` over `CreateThread` (see *Thread creation*). `0x497C70` is referenced only by
+  that push (`0x4982C6`, the image's one absolute reference to it), and the loader body
+  `0x497180` is called only from `0x497CA1` inside it, so every seed at `0x491903` follows the
+  capture made for its own load, and the thread's creation orders the capture's stores before
+  anything the new thread reads.
+- At that call the loader thread does not exist yet. Once it runs, stock lets it call DirectPlay
+  concurrently with the game thread: the loader's wait pumps the network at `0x49727D` while the
+  game thread's load loop pumps at `0x49852E`, and the loader makes the `SetSessionDesc` at
+  `0x497C0B`. A call on the game thread before the loader starts adds no concurrency that stock
+  does not already have.
+
+The engine's copy `main+0x479` is the capture's second choice, taken only when DirectPlay's answer
+is refused: the pump rewrites `main+0x471` whole from every `DPSYS_SETSESSIONDESC` on every peer but
+the host (`0x454679`, `0x454689`), a lobbied host's copy is the lobby's (`0x4C9B4F`) rather than
+DirectPlay's, and a host whose `GetSessionDesc` failed at creation holds zero. It is read at the
+capture, on the game thread, and logged beside DirectPlay's answer. `GetSessionDesc` fails only
+with no interface or no open session, and a peer with no open session exchanges no game traffic,
+so its wind changes nothing another peer sees.
+
+**The host seat, for the record.** `0x456850()` takes no argument and returns a seat in `al`, or 10
+for none: the first seat, 0 to 9, whose type `+0x73` (records at `main+0x1B63`, stride `0x14B`)
+is not 0 and whose PlayerInfo (the pointer at the record's `+0x27`) has bit 0 of `+0x97`. The
+load waits for it only when bit 1 of the local record's `+0x21` is set: `0x49723B` tests it and
+jumps to `0x4972BA` otherwise. The wait (`0x49724D..0x4972AB`) pumps the network through
+`0x453D40` (`0x49727D`) and sleeps 50 ms while `0x456850` answers 10, or while the controlled seat's
+PlayerInfo (`[record(main+0x2A42)+0x27]`, loaded at `0x49724D..0x497261`; `+0x2A42` is the
+controlled player by *The order-marker chain*) reads `0xFF` at `+0x96`
+or 0 at `+0x8F` (`0x49729A`, `0x4972A3`). From `0x4972BA` the load takes the map from the seat `0x456850`
+answered at `0x497213` (`0x4972D6`, `0x435A20`), which past a skipped wait can be 10, and the unit
+limit from the seat it answers at `0x4972DB` (`0x4972E8..0x4973B5`, skipped when it answers 10).
+The same bit decides who damages a feature (`0x4244B0`, *Who sends a feature hit*). The seat index
+differs from peer to peer: MEASURED on `23b6b8b`, 0 on the host and 1 on each joiner, with two
+peers and with three.
+
+**The host bit's writers** (PlayerInfo `+0x97`, bit 0):
+
+| site | what |
+|---|---|
+| `0x45156C` | sets it on the controlled player's PlayerInfo (`main+0x2A42`) |
+| `0x451334` | writes it on a new seat's PlayerInfo as the argument `bl` is (`xor bl,cl; and ebx,1; xor ebx,ecx`), set when the seat being added is the current host seat (`0x45126F..0x451334`) |
+| `0x452FF8` | sets it on the seat the host election chooses, the first whose ID equals the one the loop at `0x452F89` searches for, when the host leaves |
+| `0x45035D` | sets it the same way (the loop at `0x4502EE`), inside `0x450240`, which has no call, no jump and no absolute reference anywhere in the image: dead |
+| `0x45193A`, `0x4280F3` | copy bit 1 of the lobby's `DPLCONNECTION` `dwFlags` (`[main+0x4E5]+4`, `DPLCONNECTION_CREATESESSION`) into it |
+| `0x451943`, `0x428117` | clear it when there is no lobby connection (`main+0x4E5` is 0) |
+| `0x46460F` | clears it, in a loop over the seat records (stride `0x14B`) |
+
+The nine word writes at `0x418D16`, `0x418DD6`, `0x418E96`, `0x418F56`, `0x419016`, `0x4190E6`,
+`0x419189`, `0x41922C` and `0x4192CF` rewrite the word with one of bits 1, 2, 3, 5 or 6 toggled
+and bit 0 kept. No setter tests the seat's type, so an AI seat that carries the bit is the seat
+`0x456850` returns. The seed no longer reads it.
+
+**The map** is FNV-1a over the lower-cased stem of the TNT path, `GameingState +0x204`:
+"Maps\Two Continents.TNT" on both peers, hashed as "two continents". `GameingState` is not NULL at
+`0x491903`: the loader body dereferences it at `0x4971CD` (`0x435100` is `mov eax,[ecx]`) on the
+only path into `0x4917D0` (`0x497CA1` → `0x497581`). Its writers are `0x434AB0(mode)`, which
+stores a new object or NULL (`0x434B64`, `0x434B78`), and `0x434B90`, which frees it and stores
+NULL (`0x434BE3`, called at `0x4917BF`).
+
+**The ordering.** The GUID is captured on the game thread before the loader thread is created.
+The seed is written on the loader thread before the loader's last store, bit 1 of `main+0x38D75`
+(`0x497C62`). The tick reads it only after the game thread has seen that bit (`0x498342`).
+
+**MEASURED on the new build.** The values in each row were read on every peer, and are identical
+on every peer:
+
+| build, game | seeded from | GameTime | next | speed | heading |
+|---|---|---|---|---|---|
+| `1a0c599`, game 1 | the ID `0x4961C0AB`, map hash `0x4934CBDE` | 795 / 796 | 930 | 1983 | `0x3E40` |
+| `1a0c599`, game 1, later | | 2003 / 2006 | 2220 | 1027 | `0x2643` |
+| `1a0c599`, game 2, same processes (the level counter reads 2) | `0x4962F926` | 795 | 1170 | 2632 | `0x6CAC` |
+| `1a0c599`, game 3, joiner restarted (host level 3, joiner level 1) | `0x4964DA8F` | 796 | 960 | 556 | `0xABFA` |
+| `23b6b8b`, two peers, Two Continents | host seat's `0x498AE486`, `0x4934CBDE` | 789 / 790 | 810 | 2745 | `0xB128` |
+| `23b6b8b`, three peers, Town & Country (wind 25 to 5000) | host seat's `0x498FABE4`, `0x29FE9EA5` | 797 / 795 / 795 | 870 | 1598 | `0x387C` |
+| `0885f46`, two peers, Two Continents | `{952E3FFB-DDEA-4B26-8BC6-210AD05BCACB}`, `0x4934CBDE`: seed `0x77A98479B8F3B818` | 1262 | 1350 | 1627 | `0xB693` |
+| `0885f46`, three peers, Town & Country, the host killed after its seed | `{D3E2100E-59EB-45F3-8124-DA6E4518236B}`, `0x29FE9EA5`: seed `0x14CE9DAA1CF3E1B0` on all three | 1131 / 1137 (the two joiners) | 1530 | 2834 | `0x0616` |
+| `ffadca6`, two peers, Two Continents | `{DE8782F9-D9D7-47A4-90D0-C09C60D4941D}`, `0x4934CBDE`: seed `0x0674C957184EEC35` | 265 / 320, running | 420 | 433 | `0x355C` |
+
+Notes on the rows:
+- On `1a0c599` the host was found by PlayerNum 1. That build's draws are the ones `23b6b8b` makes.
+- The ratio `+0x37EDE` also agreed on every peer: `0x3ECB0F28` in game 1, `0x3F0C8B44` (0.549)
+  and `0x3EA3A29C` (0.3196) on `23b6b8b`, `0x3EA69AD4` and `0x3F1119CE` with the session GUID.
+- The components agreed as well: 5122 and 1976 with two peers, −3142 and −584 with three on
+  `23b6b8b`; 3166 and 752, and −832 and −5606, with the session GUID.
+- On every peer of the three session-GUID games the engine's copy `main+0x479` read the GUID
+  `GetSessionDesc` returned. On `ffadca6` both answers passed the validation, that build's
+  capture wrote no copy (its counter 0), none was seeded from the copy or the map alone (both
+  0), and after the load the copy still held the session's GUID with `main+0x475` at `0x20`, the
+  load's `SetSessionDesc` made.
+- **The wrapped `SetSessionDesc`, `f44b5ee`'s code**, two peers on Two Continents: both seeded
+  from `{181E3FD8-DEA0-42FE-AAB8-33E00D9AB262}` and `0x4934CBDE`, seed `0xE5210DF9515CC70E`, and
+  on both the engine's copy agreed. At the seed the host had made 6 `SetSessionDesc` calls and
+  the joiner 1, all from the battle room's handlers and the pump: the load's own call
+  (`0x497C0B`) comes after the seed, since `0x497581` → `0x4917D0` → `0x491903` precede it in the
+  loader body with no branch back. None was over another GUID and none withheld; in play they
+  read 7 and 2, the load's call added on each, still 0 and 0. None was seeded from the copy or
+  the map alone, and `main+0x475` read `0x20` on both. The draws were not compared on this
+  build: its change is to the `SetSessionDesc` alone, and the seed is the draws' only input.
+- **The killed host.** The host's `TotalA.exe` was killed (`kill -9`) 3 ms after its seed line,
+  while the joiners loaded. Both joiners seeded from the same GUID and draw the same wind, and
+  both went into play. DirectPlay never reported the departure: 115 s of game time later both
+  joiners still held the host's seat with type 3 and its ID (`0x4AE1FCEC`), so the engine's
+  removal `0x452CC0` never ran and this run does not exercise it. A killed process sends no
+  `DestroyPlayer`, and a session `createnewgame` makes has no `DPSESSION_KEEPALIVE` (a lobbied
+  one takes the lobby's flags). The two
+  joiners' rosters also differed (one unit against two), which is stock's handling of a host lost
+  at the start and nothing the seed reads.
+
+In a skirmish on `23b6b8b` the log reads `seeded from the performance counter (game mode 2, not a
+network game)`, and the wind draws (next 420, speed 1385 at GameTime 281). The wind's nine rows
+and the yardmaps' three are all B6 adds to the table: on its own branch the install line read
+`limits: installed 173 sites` (the 161 before it) and the stock-limits build `the simulation
+fixes' 47 sites installed` (`f44b5ee`'s code); merged with B1–B5 (`2fc6528`) they read
+`limits: installed 224 sites` and `the simulation fixes' 99 sites installed`, B5's 212 and 87 plus
+the same twelve (MEASURED at launch, both builds).
+
+### A yardmap parsed past its string — `0x42CF5E` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**Where it is.** The unit-def parser `0x42BF40` (`sub esp,0x518`, `ret 8`) is called from
+`0x42D269` and `0x42D722`. `0x42D722` is inside `0x42D2E0`, which the level load `0x4917D0` calls
+at `0x4918CA`, on the loader thread; `0x42D269` is inside `0x42D1F0`, whose only call is at
+`0x4174BE` in the typed-command handler (the game thread [INFERRED]). The yardmap is read only for a def whose BMcode `[def+0x22F]` is 0
+(`0x42CF30..0x42CF38`):
+- **The read.** The parser reads the FBI's `YardMap` key with
+  `GetString 0x4C48C0(buf, "YardMap", 0x400, "")` into a 0x400-byte stack buffer at
+  `[esp+0x128]` (`0x42CF3E..0x42CF59`). GetString has 120 callers. It NUL-terminates inside the
+  size, or copies the `""` default when the key is missing, and the parser ignores its return.
+- **The allocation.** The parser allocates `footX · footZ` bytes (`+0x14A`, `+0x14C`, words) at
+  `def+0x14E` through `0x4D83B0` (`0x42CF5E..0x42CF7A`).
+- **The fill.** It fills the cells row by row (`0x42CF9D..0x42D06B`). The byte map `0x42D198`
+  sends each char into the jump table `0x42D16C`, and a char of `.CGOYcfowy` writes one cell:
+
+  | char | `.` | `C` | `G` | `O` | `Y` | `c` | `f` | `o` | `w` | `y` |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | cell | `00` | `35` | `8F` | `2B` | `31` | `2D` | `6F` | `2F` | `37` | `29` |
+
+  After writing a cell, the parser moves on to the next char unless that char is the NUL, so a
+  short string repeats its last char. Any other char, the NUL included, is skipped without
+  filling a cell (`0x42CFB5` → `0x42D049`).
+- **The rejoin.** The parse ends at `0x42D079`, where the footprint's box is loaded. Nothing after
+  it reads the parse's registers or `[esp+0x1C]` before writing them: `ebx` is written at
+  `0x42D0E3` and `edi` at `0x42D0F1`.
+
+**The defect.** Two strings walk past the NUL: a missing key, and a string that ends on an
+invalid char. The walk goes on up the stack until every cell has a byte. The yardmap decides
+placement (`0x47D2E0`), occupancy (`0x47CC30`) and pathing, and each peer's stack is its own.
+
+No retail unit reaches it. MEASURED: 279 defs, 126 of them with a yardmap (81 cells at most,
+2440 in all), and every one ends on a valid char. A mod reaches it. MEASURED with two
+scratch-built copies of a 5 × 5 retail structure, on the previous build:
+- `B6YARD0` has no key, and its cells read all `0x2F`: the stack held `o` bytes on both
+  launches;
+- `B6YARD1` has the key `oo?`. Its cells read `2f2f31313100002b2b…`: the `Y`, `.` and `O` bytes
+  come from past the string. The run was identical from launch to launch: what one build
+  leaves on its stack on the reference setup, not a rule.
+
+**The fix: the parse stays inside its string.** A `jmp` at `0x42CF5E`, a row of the fail-closed
+table, goes through `fix_call_regs` into `yard_parse`, and the stub rejoins at `0x42D079`.
+`yard_parse`:
+- makes stock's allocation through the same allocator;
+- fills the cells by stock's table, stock's skip rule and stock's repeat rule;
+- reads nothing past the string's NUL or past the buffer's 0x400 bytes;
+- gives each cell stock would have filled from past the NUL the last valid char's byte, or `o`
+  (`0x2F`) when the string had none [DECIDED 2026-09-25].
+
+Two more rows check the bytes around the site: `0x42CF3E`, the 32 bytes of the key's read into
+its 0x400 bytes, and `0x42D079`, 7 bytes.
+
+TADR's fix leaves `def+0x14E` NULL, and six readers dereference it unchecked. MEASURED on the new
+build:
+- the 2440 retail cells are identical to the previous build's, 0 of 2440 differing;
+- `B6YARD0` and `B6YARD1` read all `0x2F` on both launches, with the log lines `25 of its 25
+  cells` and `23 of its 25 cells ... take 0x2F`.
+
+### The saved-game loader's order fallback — `0x43A58D` [DISASSEMBLED 2026-09-25]
+
+**The walk.** The order loader `0x43A420` has one caller, `0x487594`. It takes an order's type
+from its `<key>_name` (`0x43C6B0`, then a `strcmp` against the table). A name not found goes to
+`0x43A552`, "Ready", with `dl` = 0. A record without the name falls back to its stored index. It
+walks the order table `0x512344` counting records whose `+0x14` bit 0 is clear
+(`0x43A556..0x43A58F`).
+
+**The defect.** The walk runs while the record is at most the table's end `0x512348`
+(`0x43A58B`, `cmp eax,esi; jbe 0x43A56D`). That is one record past the end. An index the walk
+does not meet goes from `0x43A58F` to `0x43A598`, which leaves `dl` at the count
+(`mov dl,cl`): 68 or 69 against a table of 68 records. That becomes the order's type byte, and a
+wild dispatch on its first tick.
+
+This exe's writer always stores the name (`0x43AA90..0x43AAE3`), so only a foreign or damaged
+save reaches the walk. The table holds 68 records for the whole process:
+`UIPipelinesInit 0x491200` fills it once. So the walk's first record, examined before the bound,
+is always a real one.
+
+**The fix, two bytes of one local site:**
+- `jbe` → `jb` at `0x43A58D`, so the table's end is exclusive;
+- the not-found `jmp` at `0x43A58F` → `0x43A552` (`EB 07` → `EB C1`), the by-name branch's own
+  "Ready".
+
+`ebx` and the other registers reach `0x43A59A` as before. Only `dl` differs, and only for an index
+the table does not hold. It is not run: it rests on the disassembly.
+
+### The stockpile bar's divide — `0x439D41` [DISASSEMBLED 2026-09-25]
+
+**The bar.** `0x439D20(unit)` has one caller, `0x46B446`, which draws the bottom panel. It finds
+the unit's first order with `+0x42` bit 19 (`0x80000`, the weapon build) and reads:
+- the order's slot index `+0x36` and progress `+0x3E`;
+- the slot's weapon, `[unit + 0x10 + idx · 0x1C]` (`0x439D51`);
+- that weapon's reload word `+0xE4`.
+
+It divides `progress · 100` by the reload word at `0x439D65` (`idiv esi`).
+
+**The defect.** Nothing bounds the index to the three inline slots, and nothing tests the divisor.
+Two slots hold a zero reload:
+- an unarmed slot, which holds `&Weapons[0]`, whose `+0xE4` is 0;
+- a stockpile weapon with no `reloadtime`.
+
+No stock weapon reaches it: every stockpile weapon's `reloadtime` is 120 to 180. A mod reaches
+it, and so does a remote unit whose type differs on this peer.
+
+**The fix.** A local site: a `jmp` at `0x439D41` replaces `mov ecx,[eax+0x36]; mov eax,[eax+0x3E]`.
+It goes to a stub that takes `0x439D6B`, the function's own `return 0`, for any of three:
+- an index above 2;
+- a NULL weapon;
+- a zero `+0xE4`.
+
+Otherwise the stub repeats the two loads and rejoins at `0x439D47`, with `ecx` the index and `eax`
+the progress. `esi`, pushed at `0x439D24`, is free until `0x439D47` rewrites it, and `0x439D6B`
+pops it.
+
+The only branch to the site is `0x439D34` → `0x439D41`, the site's own start. It is not run: it
+rests on the disassembly.
+
+### A range circle of radius 1 — `0x438EDE` [DISASSEMBLED 2026-09-25]
+
+**The defect.** `DrawRangeCircle 0x438EA0` (19 callers, `0x439106` … `0x439943`) divides `0x10000`
+by its segment count N at `0x438EEE`. Its only guard, `jl 0x43904D` at `0x438EDE`, catches a
+negative N, and radius 1 gives N = 0 (see the function's own entry below). TADR's `jle` sends
+N = 0 to `0x43904D`, which draws the circle's label at the screen's corner (0, 4).
+
+**The fix.** A local site: the six-byte `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F;
+jmp 0x438EE4`, on the flags of `0x438ED8`'s compare, which the `mov` at `0x438EDA` leaves alone.
+- N = 0 goes to `0x43908F`, the epilogue that radius 0 takes, with the same stack: no circle and
+  no label.
+- A negative N keeps stock's path.
+
+No branch or absolute literal points into any of the three local sites' replaced bytes. It is
+not run: the `ShowRanges` cheat could not be typed under injected input, so it rests on the
+disassembly.
+
 ### Area damage's victim lists — `0x49A120`, its lists `0x49A262` and `0x49A5CE` [DISASSEMBLED + MEASURED 2026-09-25]
 
 **The function.** Area damage `0x49A120(proj, at)` is `__stdcall`, `ret 8`, with an 8-aligned frame
@@ -2625,7 +3313,7 @@ back equal to the retail exe, and the atlas again stored row 1 and lit 111 cells
 
 Every address the weapon keys and `nomapweaponalert` touch or read
 ([data keys, C2 as built](tadr-port/data-keys.html#c2-as-built); the hooks are in
-[gpu-status §2.96](gpu-status.html)). A rel8/rel32 scan of `.text` finds no branch landing
+[gpu-status §2.97](gpu-status.html)). A rel8/rel32 scan of `.text` finds no branch landing
 inside any of the fourteen sites' replaced bytes (`0x42E311`–`15`, `0x49ABB1`–`B6`, `0x43F1D5`–`D9`,
 `0x49B9EC`–`F1`, `0x49E1FE`–`E202`, `0x489D8F`–`92`, `0x489DA3`–`A6`, `0x4071D9`–`DC`,
 `0x466EBA`–`BE`, `0x49E011`–`19`, `0x48797C`–`82`, `0x4872CD`–`D1`, `0x499E38`–`3B`,
@@ -2779,7 +3467,7 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   in at `0x4872CC`), **`+0xB2` a WORD, `movzx` of the byte `+0x10E`** (`0x48797B`), of which the
   restore reads only the low byte (`0x4872D2`), and `+0xB4` a DWORD of packed bits. So **`+0xB3`
   is 0 in every save stock writes and read by nothing**: the one spare byte, which
-  `nomapweaponalert` uses to carry its blink hold (gpu-status §2.96). The saver's three weapon
+  `nomapweaponalert` uses to carry its blink hold (gpu-status §2.97). The saver's three weapon
   slots fill `+0x41..+0x88` (`0x487A0D..0x487A7D`), clear of it. MEASURED 2026-09-25: the saver
   runs on the game thread (the thread of the radar rebuild) and the restore on the loader thread;
   a loaded game starts paused; the unit array's base moves at the load, so an address read before
@@ -4406,7 +5094,11 @@ colour B   (xg0, z0) -> (xg0, z1)              (xg1, z0) -> (xg1, z1)
 `alt >> 1` is a `sar`, so a negative altitude halves toward minus infinity, and the `/10` is the
 `0x66666667` multiply with the sign correction, a division that truncates toward zero.
 `tagpu_order.c`'s `draw_build` reproduces all of it in integers and hands the eight lines on as
-integer endpoints (`tagpu_line.h`: the engine pixel's centre, then the zoom, then `ss`).
+integer endpoints (`tagpu_line.h`: the engine pixel's centre, then the zoom, then `ss`). The
+colour-A lines are the one departure, and only at a wheel zoom: they are handed on as the
+colour-B pixels `(xg0, z0)` … with their `±1` taken AFTER the zoom, one game pixel of the zoomed
+frame (`tagpu_line_nudge`), so that the pair stays adjacent at every zoom; at 1× that is the
+engine's own `±1` (GPU status §2.93).
 
 **`DrawLine 0x4BE950` is `stdcall(ctx, x0, y0, x1, y1, colour)`** — fixed by those eight
 call sites, where the first and third pushed values are the two x's.
@@ -4612,10 +5304,11 @@ belongs to the TARGET circle `0x4399F0`, which multiplies **only** its y radius 
 both drawers and drew every range circle 11 % flat until G13p; the projection maps world z to
 screen y 1:1, so a round circle in world space is a round circle on screen.
 
-**And it can divide by zero.** `mov eax,0x10000` at `0x438EE4`, `cdq`, then **`idiv ecx` at
-`0x438EEE`** with `ecx` = N, guarded only by `jl` against a *negative* N (`0x438EDE`). A radius
-of 1 gives `(int)(1 · 0.7854) == 0` and faults inside TA. Nothing in stock content is that
-small.
+**And stock divides by zero there — patched.** `mov eax,0x10000` at `0x438EE4`, `cdq`, then
+**`idiv ecx` at `0x438EEE`** with `ecx` = N, guarded only by `jl` against a *negative* N
+(`0x438EDE`). A radius of 1 gives `(int)(1 · 0.7854) == 0` and faults inside TA. Nothing in stock
+content is that small. `fix_range_circle` sends N = 0 to the radius-0 epilogue `0x43908F` — see
+[A range circle of radius 1](#a-range-circle-of-radius-1-0x438ede-disassembled-2026-09-25).
 
 **`TurnXLookup 0x4B70EF` is a SINE and `TurnZLookup 0x4B7123` a COSINE**, off one shared
 table at **`0x509F00`**: 512 `s16` entries, `8192 = 1.0` (`shrd …,0xD` after a `+0x1000`
@@ -9618,8 +10311,10 @@ Helpers the ids reach, all read this session:
   of [the B evidence](tadr-port/sim-fixes-evidence.md), Part 4 §6a).
 - **The C runtime's `rand` is a second, separate stream** [DISASSEMBLED 2026-09-23]: `rand`
   `0x4E4870` is MSVC's LCG (`·0x343FD + 0x269EC3`, bits 16..30), its state at `+0x14` of the
-  per-thread data `0x4EB0F0` returns, and `srand` is `0x4E4860`. The match seeds it from the clock,
-  `srand(time(0))` at `0x4971AE` (`0x4E6480` is `time`), and 61 sites draw from it — the particle
+  per-thread data `0x4EB0F0` returns, and `srand` is `0x4E4860`, which writes only the calling
+  thread's state. Two calls seed it from the clock (`0x4E6480` is `time`): the match's
+  `srand(time(0))` at `0x4971AE` seeds the loader thread's stream, and WinMain's at `0x49E8BB` the
+  game thread's. 61 sites draw from it — the particle
   emitters among them. The three at `0x49C619`, `0x49C648` and `0x49C677` add `rand() % 11 − 5` to
   screen coordinates taken with the eye (`main+0x1431F`/`+0x14323`): the lightning bolt's jitter,
   a draw, not a rule.

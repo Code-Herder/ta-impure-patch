@@ -16,8 +16,6 @@ typedef struct CNCDDRAWCONFIG
     BOOL maintas;
     char aspect_ratio[16];
     BOOL boxing;
-    int maxfps;
-    BOOL vsync;
     BOOL adjmouse;
     BOOL gdi;
     BOOL devmode;

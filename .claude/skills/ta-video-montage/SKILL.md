@@ -899,7 +899,7 @@ Two defences, both cheap, and the shoot script has both:
 
 ### What the first real shoot measured (2026-09-10)
 
-The `big-battle` hero clip, `--res 2048x1536 --maxfps 60`, grabbed by window id:
+The `big-battle` hero clip, `--res 2048x1536` at a 60 fps cap, grabbed by window id:
 
 * **The game presents ~34 unique frames/s**, not 60: a 60 fps grab came back
   **43.3 % duplicate** frames (1500 frames, 25.0 s, 168 MB at `-crf 15`). Grab at

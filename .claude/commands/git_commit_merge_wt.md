@@ -8,7 +8,7 @@ description: Land this worktree on local main — commit, merge main in, then CH
 Argument (optional commit message): `$ARGUMENTS`
 
 **Invoking this command declares the work ready to land** — by the human directly, or by
-`/work-landing` on the landing it owns. The review runs from inside this command without asking
+an agent that owns the landing. The review runs from inside this command without asking
 again. It is also a statement that a gate may have been forgotten: every gate below is **checked
 first and only then done**, so a landing whose docs or review were already handled costs nothing
 extra, and one where they were forgotten gets them here instead of on `main`.
@@ -296,11 +296,10 @@ result.**
 **This records what the work showed; it does not re-plan the gate.** If the gate's *exit
 condition* is what has to change, that is **escalation reason 1** and it is the human's.
 
-If the landing is driven from a kanban Epic, the Epic's Landings table and a `decision` comment
-get the same re-cut — `/work-landing` §7 owns that half. **The link between them is one-way:** a
-ticket id or the bare word `kanban` in tracked content is a soft tell
-(`_local/sanitize-scan.sh`), so the plan note never names its Epic, and the join in the published
-direction is the landing number.
+If the landing is also tracked outside the repository, that record gets the same re-cut, from
+whatever drives the landing. **The link between them is one-way:** tracked content never names
+an outside tracker or its ticket ids (`_local/sanitize-scan.sh` treats both as soft tells), so the
+plan note never names its ticket, and the join in the published direction is the landing number.
 
 **The bar for the prose is the same as rule 2 above**: every claim traceable to disassembly or a
 live measurement, never to memory or to an agent's report you did not check. Mark guessed names

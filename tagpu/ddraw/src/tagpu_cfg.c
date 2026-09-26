@@ -35,7 +35,6 @@
 #include "dd.h"
 #include "tagpu_cfg.h"
 #include "tagpu_settings.h"
-#include "fps_limiter.h"
 
 /* TA's "DISPLAY MODES" buffer: 0x4B0 / 12 = 100 entries, and the count itself
    lives in a different allocation, so all 100 are usable. Our counter counts
@@ -67,17 +66,11 @@ void tagpu_cfg_defaults(void)
     g_config.gdi               = GetFileAttributesA(GDI_LEVER) != INVALID_FILE_ATTRIBUTES;
 
     /* ---- the store's placement (renderers.md 2.10b) ----------------------
-       Display mode, frame cap and the windowed frame. Read under
-       tagpu_defaults.off too: nothing else can place a control launch's
-       window, and tacli writes all three before every launch. */
+       Display mode and the windowed frame. Read under tagpu_defaults.off too:
+       nothing else can place a control launch's window, and tacli writes both
+       before every launch. Vsync is read every frame (render_vk.c). */
     if (tagpu_settings_placement(TS_DISPLAY, &v))
         g_config.fullscreen = v ? TRUE : FALSE;
-    if (tagpu_settings_placement(TS_MAXFPS, &v)) {
-        /* Refresh is resolved by fpsl_init, on the render thread, into a
-           positive cap; 60 until then */
-        g_config.maxfps = v < 0 ? 60 : v;
-        fpsl_request_cap(v);
-    }
     placed = tagpu_settings_window(&x, &y, &w, &h);
     if (placed) {
         g_config.window_rect.left   = x;
@@ -95,9 +88,9 @@ void tagpu_cfg_defaults(void)
 
     _snprintf(c, sizeof c,
               "cfg: max_resolutions %d, toggle_borderless, lock_surfaces, singlecpu off, maintas; "
-              "display=%s maxfps=%d window=%s; renderer %s",
+              "display=%s vsync=%d window=%s; renderer %s",
               g_config.max_resolutions, g_config.fullscreen ? "fullscreen" : "window",
-              g_config.maxfps, placed ? "placed (center_window never)" : "default",
+              tagpu_settings_vsync(), placed ? "placed (center_window never)" : "default",
               g_config.gdi ? "GDI (" GDI_LEVER ")" : "Vulkan");
     c[sizeof c - 1] = 0;
     tagpu_log(c);

@@ -82,9 +82,9 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     }
     case WM_DISPLAYCHANGE:
     {
-        /* tagpu: a Refresh cap is the monitor's rate, and the display just changed */
-        if (fpsl_cap_request() == -1)
-            fpsl_request_init();
+        /* tagpu: the vsync backstop is the monitor's rate, and the display
+           just changed */
+        fpsl_request_init();
         return real_DefWindowProcA(hWnd, uMsg, wParam, lParam);
     }
     case WM_GETMINMAXINFO:

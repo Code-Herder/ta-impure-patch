@@ -16,7 +16,6 @@ CNCDDRAWCONFIG g_config =
    needs that differ from these are tagpu_cfg_defaults', which runs last. */
 void cfg_load()
 {
-    g_config.maxfps = -1;
     g_config.adjmouse = TRUE;
     g_config.border = TRUE;
     g_config.resizable = TRUE;

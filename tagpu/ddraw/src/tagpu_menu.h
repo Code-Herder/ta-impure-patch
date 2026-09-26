@@ -50,13 +50,14 @@ int  tagpu_menu_click(int gx, int gy, int down);
    write. */
 void tagpu_menu_present(void);
 
-/* The WINDOW column's four rows -- Display mode, Monitor, UI scale, Frame cap
-   -- change the window the picture is presented in, not what is drawn into it,
-   so each one ends in a window call. A cross-thread window call is a wait on a
-   message pump rather than a visible error, so a click POSTS this and the
-   wndproc does the work: the thread that owns the window is the thread that
-   changes it, by construction. Same contract as tagpu_shield.c's injected
-   input, which is where the WM_TAGPU_* block comes from. */
+/* Three of the WINDOW column's rows -- Display mode, Monitor, UI scale --
+   change the window the picture is presented in, not what is drawn into it,
+   so each one ends in a window call; the GPU row rides the same message and
+   touches no window (tagpu_menu.c, VD_GPU). A cross-thread window call is a
+   wait on a message pump rather than a visible error, so a click POSTS this
+   and the wndproc does the work: the thread that owns the window is the
+   thread that changes it, by construction. Same contract as tagpu_shield.c's
+   injected input, which is where the WM_TAGPU_* block comes from. */
 #define WM_TAGPU_DISPLAY (WM_APP + 143)   /* wParam = the row index           */
 BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESULT* result);
 
@@ -71,9 +72,5 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
    delay -- the list is right on the first frame it is drawn, and stays right
    when the move lands. */
 BOOL tagpu_menu_monitor(RECT* out);
-
-/* The same monitor's adapter name (`\\.\DISPLAYn`), or NULL when the menu has
-   no choice. The table is filled at attach and never written after. */
-const char* tagpu_menu_monitor_device(void);
 
 #endif

@@ -456,13 +456,19 @@ static void put_ord(float* base, int i, float x, float y, float wx, float wz,
    then the fog cell, the colour and the depth. The ends go in the (x, y) and
    (u, v) slots of the vertex layout, so a line record and a triangle vertex
    share one stride and one buffer. 0 for a line the clip leaves nothing of,
-   and for one past TAGPU_LINE_FAR, which is counted in `s_lfar`. */
+   and for one past TAGPU_LINE_FAR, which is counted in `s_lfar`.
+
+   `nudge` is {x0, y0, x1, y1} in whole GAME pixels of the zoomed frame, NULL
+   for none: each end is moved by nudge * ss line-grid pixels AFTER the zoom
+   has quantised it (tagpu_line.h, "the nudge"). The bound is tested after
+   the move, so a nudged end is held to TAGPU_LINE_FAR like any other. */
 static int put_line(float* o, double x0, double y0, double x1, double y1,
-                    float wx, float wz, float col, float depth)
+                    const int nudge[4], float wx, float wz, float col, float depth)
 {
     int ax, ay, bx, by;
     if (!tagpu_line_px(x0, y0, s_zoom, s_zcx, s_zcy, s_ss, TAGPU_LINE_FAR, &ax, &ay) ||
-        !tagpu_line_px(x1, y1, s_zoom, s_zcx, s_zcy, s_ss, TAGPU_LINE_FAR, &bx, &by)) {
+        !tagpu_line_px(x1, y1, s_zoom, s_zcx, s_zcy, s_ss, TAGPU_LINE_FAR, &bx, &by) ||
+        (nudge && !tagpu_line_nudge(&ax, &ay, &bx, &by, nudge, s_ss))) {
         s_lfar++;
         return 0;
     }
@@ -479,10 +485,10 @@ static int put_line(float* o, double x0, double y0, double x1, double y1,
 /* 0 only when the bucket is full, which the caller counts; a line the bound
    refuses is counted here and is not the caller's overflow */
 int tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
-                         int colidx, float wx, float wz)
+                         const int nudge[4], int colidx, float wx, float wz)
 {
     if (s_nordl >= MAXORDL) return 0;
-    if (put_line(s_ordl + (size_t)s_nordl * MVST, x0, y0, x1, y1, wx, wz,
+    if (put_line(s_ordl + (size_t)s_nordl * MVST, x0, y0, x1, y1, nudge, wx, wz,
                  (float)colidx / 255.0f, 0.0f))
         s_nordl++;
     return 1;
@@ -534,7 +540,7 @@ int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
     for (k = 0; k < 4; k++) {
         int k2 = (k + 1) & 3;
         if (put_line(s_sel + (size_t)s_nsel * MVST, px[k], py[k], px[k2], py[k2],
-                     wx, wz, c, depth))
+                     NULL, wx, wz, c, depth))
             s_nsel++;
     }
     return 1;

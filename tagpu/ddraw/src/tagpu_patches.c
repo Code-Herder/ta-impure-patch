@@ -3,6 +3,8 @@
 
 #include <windows.h>
 #include <wincrypt.h>
+#include <dplay.h>          /* the engine's interface: IDirectPlay3A (IID at 0x4FCD78), or
+                               IDirectPlay2A when lobbied (main+0x4D9) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +90,7 @@ static int     s_nlim;
 static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
 static int     s_limOverflow;        /* the table itself was too small: our bug      */
 static int     s_limNoStub;          /* a code stub could not be made                */
+static char    s_limNeeds[192];      /* a table fix's required local fix is not armed */
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
 
@@ -141,6 +144,14 @@ static void lim_same(unsigned int va, int n, const unsigned char* stock, const c
 static void lim_no_stub(void)
 {
     s_limNoStub = 1;
+}
+
+/* a fix of the table that rests on a local fix, which did not arm: nothing of the table is
+   written, and the report says which */
+static void lim_needs(const char* fix, const char* needs, const char* state)
+{
+    _snprintf(s_limNeeds, sizeof s_limNeeds, "%s needs %s armed, and it is %s", fix, needs, state);
+    s_limNeeds[sizeof s_limNeeds - 1] = 0;
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -2807,6 +2818,11 @@ static int wire_block_ok(const char* first, const char* last, const char* begin,
     return last == first + (long long)(n - 1u) * 0x118;
 }
 
+/* 1 for CreateFromNetwork's return into the 0x09 case (0x4553E9) or into the ghost-commander
+   replay, which enters it as the case does with a record the case refused in state 5
+   (fix_ghost_commander): the receivers that key on the case's return treat both alike */
+static int ghost_is_09_return(unsigned int ret);
+
 /* The B4/B5 oracle counters (§10), observe-only. morph = a create onto a live slot whose type
    changes. dcreate = CreateFromNetwork called by the 0x2C dirty list (returning to 0x48BA05):
    a dirty entry whose type is not its slot's, the unit made from the entry rather than from its
@@ -3057,7 +3073,7 @@ static int __cdecl wire_s09(unsigned int* r)
         char* slot = (char*)first + (size_t)idx * 0x118;
         unsigned int ret = *(const unsigned int*)(sp + 0x1C);   /* CreateFromNetwork's caller */
         int noblk = *(const unsigned int*)(ta + r[PR_EDX] + 0x1BCA) == 0;   /* 0x486220 */
-        if (ret == 0x004553E9u) {
+        if (ghost_is_09_return(ret)) {
             const char* players = ta + 0x1B63;
             const char* snd = *(const char* const*)sp;     /* the dispatcher's edi */
             unsigned int si = 10;
@@ -5846,8 +5862,10 @@ static int hit_2c_bound(const char* ta, const char* slot, unsigned int* bound)
 /* At CreateFromNetwork's success exit 0x48634F (esi the unit; its caller's return address at
    the site's esp + 0x1C and its record argument at + 0x24, as 0x4861ED reads it). 0x4553E9 is
    the 0x09 case, reached only through our 0x05 slot (its jump-table entry is the one reference
-   to 0x4553DA in the image), so the record is a carried one, with its birth 23 bytes on;
-   0x48BA05 and 0x48B49C are the 0x2C's dirty entry and round robin. */
+   to 0x4553DA in the image), so the record is a carried one, with its birth 23 bytes on; the
+   ghost-commander's replay and catch-up creates enter with the same whole carried record, and
+   the replay's return counts as 0x4553E9 (ghost_is_09_return); 0x48BA05 and 0x48B49C are the
+   0x2C's dirty entry and round robin. */
 static void __cdecl hit_created(unsigned int* r)
 {
     struct hit_tab* t = s_hit;
@@ -5857,7 +5875,7 @@ static void __cdecl hit_created(unsigned int* r)
     const unsigned char* rec = *(const unsigned char* const*)(WPN_ESP_JMP(r) + 0x24);
     unsigned int idx, stamp = HIT_UNKNOWN;
     if (!hit_slot_index(t, ta, slot, &idx)) return;
-    if (ret == 0x004553E9u && (rec[3] | (unsigned int)rec[4] << 8) == idx) {
+    if (ghost_is_09_return(ret) && (rec[3] | (unsigned int)rec[4] << 8) == idx) {
         memcpy(&stamp, rec + 23, 4);
         s_hitCreateExact++;
     } else if ((ret == 0x0048BA05u || ret == 0x0048B49Cu) && hit_2c_bound(ta, slot, &stamp)) {
@@ -5939,14 +5957,22 @@ static int hit_young(const struct hit_tab* t, const char* ta, unsigned int idx)
     return s_hitDelayK && HIT_GAMETIME(ta) - t->local[idx] < s_hitDelayK;
 }
 
+/* A carried 0x09 past its gate: counted, and its record for CreateFromNetwork -- the whole
+   carried message from its 0x09 on, whose birth 0x48634F reads 23 bytes on. The ghost-commander
+   replay and catch-up creates enter here too, with the create the gate refused. */
+static const unsigned char* hit_rx_create_armed(const unsigned char* m)
+{
+    s_hitInCreate++;
+    return m + 3;
+}
+
 /* 0 stock's chat; 1 done; 2 CreateFromNetwork on the record; 3 0x489CE0 on the record, which
    goes back to the stub in regs[PR_EAX], where popad puts it in eax */
 static int hit_rx_create(unsigned int* regs, const char* ta, const unsigned char* m)
 {
     if (m[3] != 0x09) { s_hitMalformed++; return 1; }
     if (!hit_gate(ta, 0x09)) { s_hitStateRefused++; return 1; }
-    s_hitInCreate++;
-    regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
+    regs[PR_EAX] = (unsigned int)(size_t)hit_rx_create_armed(m);
     return 2;
 }
 
@@ -5990,6 +6016,11 @@ static int hit_rx_hit(unsigned int* regs, const char* ta, const unsigned char* m
     return 3;
 }
 
+/* For a carried 0x09 the gate refuses in state 5: 1 when the ghost-commander queue holds it,
+   2 when it is created now (the catch-up ticks, its record in regs[PR_EAX] as
+   hit_rx_create puts it), 0 when it is not the queue's */
+static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m);
+
 /* The dispatch table's 0x05 slot 0x455F90, entered by the dispatcher's `jmp [eax*4+0x455F84]`
    with its frame: the message at the site's esp + 0x10. */
 static int __cdecl hit_rx_chat(unsigned int* regs)
@@ -6001,7 +6032,10 @@ static int __cdecl hit_rx_chat(unsigned int* regs)
 #ifndef TAGPU_LIMITS_STOCK
     case WPN_CHAT_TAG:   wpn_rx_chat(regs); return 0;
 #endif
-    case HIT_TAG_CREATE: return hit_rx_create(regs, ta, m);
+    case HIT_TAG_CREATE: {
+        int g = ghost_take(regs, ta, m);
+        return g ? g : hit_rx_create(regs, ta, m);
+    }
     case HIT_TAG_HIT:    return hit_rx_hit(regs, ta, m);
     default:             return 0;
     }
@@ -6247,22 +6281,761 @@ static int fix_stale_hits(void)
    the companions' bytes and stockB= what the bare messages would have been; copy= counts the
    stamps CreateFromNetwork's exit took, by kind; held= creates the hold moved to an unheld
    slot, fallback= to a slot freed in the last tick, holdfail= creates it failed, retry= the
-   Deathmatch respawns that found no slot and wait for their countdown's next fire. */
+   Deathmatch respawns that found no slot and wait for their countdown's next fire. The alert
+   fields come first: the heartbeat is one log line of at most 2040 bytes, cut from its end,
+   and only the ghost section follows this one. */
 int tagpu_hits_format(char* buf, unsigned int cap)
 {
     const struct hit_tab* t = s_hit;
     return _snprintf(buf, cap,
-                     " | hits: slots=%u tables=%u out 09=%u 0b=%u B=%u stockB=%u unk=%u"
-                     " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u bad=%u"
-                     " bare 09=%u 0b=%u copy exact=%u bound=%u unk=%u held=%u fallback=%u"
-                     " holdfail=%u retry=%u delay=%u q=%u over=%u young owner=%u by=%u",
+                     " | hits: bad=%u bare 09=%u 0b=%u over=%u young owner=%u by=%u"
+                     " slots=%u tables=%u out 09=%u 0b=%u B=%u stockB=%u unk=%u"
+                     " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u"
+                     " copy exact=%u bound=%u unk=%u held=%u fallback=%u"
+                     " holdfail=%u retry=%u delay=%u q=%u",
+                     s_hitMalformed, s_hitBare09, s_hitBare0B, s_hitDelayOverflow,
+                     s_hitYoungOwner, s_hitYoungBy,
                      t ? t->n : 0u, s_hitTables, s_hitOutCreate, s_hitOutHit, s_hitOutBytes,
                      s_hitStockBytes, s_hitTxUnknown, s_hitInCreate, s_hitInHit, s_hitApplyOwner,
                      s_hitRefuseOwner, s_hitApplyBy, s_hitUndecidedBy, s_hitRefuseBy, s_hitDead,
-                     s_hitStateRefused, s_hitMalformed, s_hitBare09, s_hitBare0B,
+                     s_hitStateRefused,
                      s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown, s_hitHeld,
-                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed,
-                     s_hitDelayOverflow, s_hitYoungOwner, s_hitYoungBy);
+                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed);
+}
+
+/* ===== GHOST COMMANDER: THE CREATES REFUSED DURING THE LOAD, AND THE DIRTY CREATE'S POSITION ===
+   Landing B5 of research/notes/tadr-port/sim-fixes.md ("B5 DESIGN" has the argument in full;
+   the addresses are in exe-reverse-engineering.md, "A create refused during the load").
+
+   THE DEFECT [DISASSEMBLED; MEASURED with the fix off]. The dispatcher passes a unit
+   create only in net state 6 (0x45473F with the table 0x512BC0: 0x09 has mask 4 alone), and a
+   peer stays in state 5 until its game thread's 0x498445, after its load. A peer still loading
+   when the others enter play drops their first creates, the commanders among them, until the
+   round robin re-creates each unit (50 s at the 1500-unit limit, 16.7 s at 500). A unit that
+   moves first comes back sooner through a dirty 0x2C entry, whose create record
+   (0x48B9B6..0x48B9FB) takes the SLOT's own stale position, (0,0,0) in a fresh array.
+
+   THE FIX, three parts.
+   - The queue: a carried 0x09 the gate refuses while the level loads is kept per sender, in
+     arrival order, and replayed before the level's first tick, at the in-play entry's call of
+     the frame function (0x49842F). That function's catch-up ticks (up to five, 0x495490) still
+     run in state 5, and so does the frame function's own pump after them (0x4968CB); a create
+     refused in either is made at once, in the pump it arrives in (a tick's 0x4954C8, or
+     0x4968CB), which is where state 6 makes it. Both pass B4's receiver past
+     its state test only (hit_rx_create_armed), so the incarnation is set as a live create sets
+     it, and enter CreateFromNetwork with the sender in edi as the case has it, so B3's bounds
+     and observe run on them too.
+   - The kills: a 0x0C the gate refuses in state 5 (the dispatcher's refusal branch
+     0x45477F) cancels the latest create held for its slot from its sender, so a unit the
+     owner destroyed during the load is never made. One refused in the catch-up ticks, for a
+     copy the replay or a catch-up tick made, marks the copy dying as the engine's own ghost
+     sweep does (0x48B42C), and the unit tick destroys it (0x48AFB9 -> 0x4864B0).
+   - The position: the dirty create's record takes the position its entry's own move payload
+     carries, read ahead in the engine's bit order, for the payloads disassembled to carry one
+     (ghost_payload_pos says which, and where each lands).
+
+   INVARIANTS.
+   - Bounded: GHOST_DEPTH records per sender, ten senders. A create past a full queue is
+     counted and left to the round robin, which is where stock leaves every one of them.
+   - Emptied by the level's own lifetime, never by GameTime: cleared at the load's start
+     (0x497F5E, the load state 0x497F40's first call, on the game thread before 0x4982CA
+     creates the loader thread), drained before the first tick. Every record leaves exactly
+     once: replayed, cancelled by its kill, or counted.
+   - An ordering, not a window. During the load two threads pump (the game thread at 0x49852E,
+     the loader at 0x49727D), so records go in under a lock. The loader's last pump comes
+     before its last store, bit 1 (value 2) of main+0x38D75 at 0x497C62, and the game thread
+     reaches 0x49842F only after reading that bit at 0x498342, so the drain sees every create
+     the load refused. After it only the game thread pumps (the catch-up ticks' 0x4954C8, the
+     frame function's 0x4968CB), and nothing more is held: a create refused there is made in
+     that pump.
+   - Before the first tick is safe: CreateFromNetwork calls what the local create 0x485F50
+     calls (0x485A40, 0x485D40, 0x49E070, 0x437840, 0x43DC00, 0x48A870, 0x47CC30, 0x482AC0,
+     0x490580), and over an occupied slot first destroys its unit through 0x4864B0
+     (0x486237..0x486244), the unit tick's own destroy; that sends a 0x0C only for a local
+     player's unit (0x48664B), and the replay never takes a local player's slot. Stock's loader
+     runs 0x485F50 for this peer's commander in state 5, before any tick (0x4977BB); neither
+     body reads the net state or GameTime. What the
+     replay skips of the dispatcher is the state test alone: the sender test is re-run on the
+     record under the DirectPlay id it had. A create made in a catch-up tick has just passed
+     the dispatcher's sender test (0x4547AD) and is made where state 6 makes it.
+   - A record is replayed only when its sender passes the dispatcher's own sender test now
+     (0x4547AD..0x4547E2: present, type 3, +0x146 not 10) under the DirectPlay id it had, and
+     its slot is empty or holds an older incarnation by B4's stamps -- never a local player's.
+   - Kills pair with creates in ONE sender's arrival order: the owner alone sends a unit's 0x0C
+     (0x48664B..0x48666D, the one send of the 0x0C's 11 bytes), and a slot is taken only once
+     it is free, so its stream for a slot alternates create, kill. If one sender's messages could arrive out of order (the
+     plan's open question), a replayed ghost lasts until the owner's round robin marks it
+     (0x48B415), at most N of its ticks -- stock's bound for any ghost.
+   - The game thread only: the drain, the catch-up creates and the dying mark check their
+     thread and do nothing on any other.
+   - On the map by construction: a position is taken only when 0 <= x < W*16 and 0 <= z < H*16
+     px (W, H at main+0x14233/+0x14237, each 1..4096), and the record keeps stock's otherwise.
+
+   CLASS: simulation, fail closed, both builds -- which units a peer holds, and where, is shared
+   state. Every site is a row of the fail-closed table. */
+
+#define GHOST_DEPTH   64                    /* per sender: a load's window holds a few creates */
+#define GHOST_SENDERS 10                    /* the player records main+0x1B63, stride 0x14B    */
+#define GHOST_NOTES   64
+
+typedef struct {
+    unsigned char m[HIT_MSG];               /* the tagged 0x05 as received                     */
+    unsigned int  arg;                      /* the 0x09 case's player argument, its [esp+0x14] */
+    unsigned int  dpid;                     /* the sender's DirectPlay id, record + 4           */
+    int           dead;                     /* cancelled by a later refused 0x0C for its slot   */
+} GHOSTREC;
+
+#define GHOST_DONE    1024                  /* copies made before state 6 a kill can still mark */
+
+typedef struct { unsigned int idx, k, birth; } GHOSTDONE;
+
+typedef void* (__stdcall* GHOSTCALL)(unsigned int arg, const unsigned char* rec, const char* sender);
+
+static CRITICAL_SECTION s_ghostLock;        /* the queue: whichever thread pumps, then the drain */
+static GHOSTREC     s_ghostQ[GHOST_SENDERS][GHOST_DEPTH];
+static unsigned int s_ghostN[GHOST_SENDERS];
+static int          s_ghostPhase;           /* 1 once this level's first drain has run          */
+static GHOSTREC     s_ghostTake[GHOST_SENDERS][GHOST_DEPTH];   /* the drain's copy, game thread */
+static GHOSTDONE    s_ghostDone[GHOST_DONE];    /* the drain's and the catch-up ticks' copies */
+static unsigned int s_ghostDoneN;
+static DWORD        s_ghostGameTid;         /* DllMain's thread, which runs the main loop       */
+static int          s_ghostOff;             /* TEST LEVER tagpu_ghostq.off                      */
+static unsigned int s_ghostRet;             /* the replay stub's return into CreateFromNetwork  */
+static GHOSTCALL    s_ghostCall;
+
+/* counters for the heartbeat's ghost: section; u32. q, over, killed and nokill are written
+   under the lock, the rest on the game thread. */
+static unsigned int s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostKilled, s_ghostNoKill;
+static unsigned int s_ghostReplayed, s_ghostNow, s_ghostSwept, s_ghostUntracked;
+static unsigned int s_ghostInactive, s_ghostStale, s_ghostBad, s_ghostCleared;
+static unsigned int s_ghostOffThread, s_ghostLevels;
+static unsigned int s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff;
+static unsigned int s_ghostPosUnbound, s_ghostPosShort;
+static volatile LONG s_ghostNotes;
+
+static int ghost_is_09_return(unsigned int ret)
+{
+    return ret == 0x004553E9u || (s_ghostRet != 0u && ret == s_ghostRet);
+}
+
+/* ---- the pure rules; tagpu_wirecheck.on exercises them on boundary values ------------------ */
+
+/* 1 when a held create, the owner's birth `birth`, is newer than what its slot holds: an empty
+   slot, or a copy B4 stamped earlier -- an exact birth, or a lower bound g0 (the unit alive in
+   the slot at the owner's g0, so born at or before it). A birth that is itself unknown
+   replaces nothing. */
+static int ghost_newer(int occupied, unsigned int copy, unsigned int birth)
+{
+    if (!occupied) return 1;
+    if (birth & HIT_LB) return 0;
+    return birth > (copy & ~HIT_LB);
+}
+
+/* a position in whole world px against the map's size in 16-px cells */
+static int ghost_on_map(int x, int z, unsigned int w, unsigned int h)
+{
+    return w >= 1u && w <= 4096u && h >= 1u && h <= 4096u && x >= 0 && z >= 0 &&
+           (unsigned int)x < w * 16u && (unsigned int)z < h * 16u;
+}
+
+/* The record a kill for slot `idx` cancels: the latest create held for that slot and not yet
+   cancelled, or -1. One sender's stream for a slot alternates create, kill, so the latest is
+   the unit the kill names. */
+static int ghost_cancel(const GHOSTREC* q, unsigned int n, unsigned int idx)
+{
+    while (n-- > 0)
+        if (!q[n].dead && (q[n].m[6] | (unsigned int)q[n].m[7] << 8) == idx) return (int)n;
+    return -1;
+}
+
+/* The engine's bit reader 0x415DC0, on a copy: {dwords, word, bit}, least significant bit
+   first, n in 1..32. It reads no dword the engine's own read of the same bits does not. */
+typedef struct { const unsigned int* data; unsigned int word, bit; } GHOSTBITS;
+
+static unsigned int ghost_bits(GHOSTBITS* b, unsigned int n)
+{
+    unsigned int lo, used;
+    if (b->bit + n < 32u) {
+        lo = (b->data[b->word] >> b->bit) & ((1u << n) - 1u);
+        b->bit += n;
+        return lo;
+    }
+    if (b->bit == 0u) return b->data[b->word++];         /* n == 32 on a word boundary */
+    lo = b->data[b->word++] >> b->bit;                    /* the 32 - bit bits left     */
+    used = 32u - b->bit;
+    n -= used;
+    b->bit = n;
+    return n ? lo | (b->data[b->word] & ((1u << n) - 1u)) << used : lo;
+}
+
+enum { GHOST_POS_NONE, GHOST_POS_GROUND, GHOST_POS_AIR, GHOST_POS_SHORT };
+
+/* The position a dirty entry's move payload carries, read ahead of the decoder that will parse
+   it. A remote unit's move object is made by 0x43DC00: the ground proxy 0x4FD488 unless the
+   def's +0x241 bit 11 makes it the air proxy 0x4FD9E0 (0x43DC5F..0x43DC68).
+   - Ground, decoder 0x44F5C0 (the owner writes it at 0x44F4A0): one flag bit, a 2-bit count n
+     (0..3), then n points of int16 x, int16 z in whole world px -- the owner mover's path
+     from its front (+0xC, count +0x5C). Point 0 is the node the unit last REACHED, never the
+     next one: the mover's step 0x44F1A0 (vtable 0x4FD458 + 8, called through 0x43DD20 from
+     the unit tick at 0x48AFAA) drops the front only once the unit is within 5 px of point 1
+     (0x44F1D7..0x44F235, the squared distance against 0x19), and a straight order's path is
+     [the unit's position, the goal] (0x44F3F2..0x44F417 stores +0x6C/+0x74, the integer halves
+     of +0x6A/+0x72), so a straight move keeps its origin as point 0 until the unit is within
+     5 px of its goal. 0x44F100 does the same shift and nothing calls it. A unit created well
+     along a long straight move is therefore placed at its origin and trails the owner's until
+     the round robin's full state for its slot writes the owner's x, y, z into it
+     (0x48B5CA..0x48B6A7): at most N owner ticks, the bound stock's (0,0,0) has too. The
+     receiver's proxy hands the points to the unit as its path (0x44F650). Taken: point 0, x
+     and z; y stays stock's.
+   - Air, decoder 0x490A10: a 2-bit selector. 2 is the 0x2C-byte motion 0x44E9C0 (written by
+     0x44E930): one flag bit, then x, y, z in 16.16 and a velocity -- the point the proxy's step
+     0x490690 copies into its own +0xC each tick (0x44EA60, called at 0x4906B8), the unit's
+     dead-reckoned position. Taken: x, y, z. 1 is 0x44E080's object, whose optional vector
+     +0x26 is a GOAL (0x44E3C0 refreshes it from the followed unit) and not the unit's own
+     position; 0 and 3 carry no motion. Neither is taken.
+   `avail` is the bits left in the message from the reader's position: a read that would pass
+   the message's end is GHOST_POS_SHORT, before it is made. Only the bits read here are tested
+   (35 for ground, 99 for air), not the rest of the payload: the engine's decoder reads that
+   from B3's zero-padded copy, and B3's check before the next entry's type (wire_s2c_delta)
+   stops the stream if the payload ran past the end. A well-formed entry's payload is inside
+   its message, so the test never refuses one.
+   Returns the kind, with x, z in whole px and x16, y16, z16 as the record holds them. */
+static int ghost_payload_pos(GHOSTBITS b, unsigned long long avail, int air, int* x, int* z,
+                             unsigned int* x16, unsigned int* y16, unsigned int* z16)
+{
+    if (!air) {
+        unsigned int n;
+        if (avail < 3u) return GHOST_POS_SHORT;
+        (void)ghost_bits(&b, 1);
+        n = ghost_bits(&b, 2);
+        if (n == 0u) return GHOST_POS_NONE;
+        if (avail < 3u + 32u) return GHOST_POS_SHORT;
+        *x = (short)ghost_bits(&b, 16);
+        *z = (short)ghost_bits(&b, 16);
+        if (*x < 0 || *z < 0) return GHOST_POS_NONE;
+        *x16 = (unsigned int)*x << 16;
+        *z16 = (unsigned int)*z << 16;
+        return GHOST_POS_GROUND;
+    }
+    if (avail < 2u) return GHOST_POS_SHORT;
+    if (ghost_bits(&b, 2) != 2u) return GHOST_POS_NONE;
+    if (avail < 2u + 1u + 96u) return GHOST_POS_SHORT;
+    (void)ghost_bits(&b, 1);
+    *x16 = ghost_bits(&b, 32);
+    *y16 = ghost_bits(&b, 32);
+    *z16 = ghost_bits(&b, 32);
+    if ((int)*x16 < 0 || (int)*z16 < 0) return GHOST_POS_NONE;
+    *x = (int)(*x16 >> 16);
+    *z = (int)(*z16 >> 16);
+    return GHOST_POS_AIR;
+}
+
+/* ---- the engine side --------------------------------------------------------------------- */
+
+/* the dispatcher's own test of a sender (0x4547AD..0x4547E2), under the id it had */
+static int ghost_sender_active(const char* ta, unsigned int k, unsigned int dpid)
+{
+    const unsigned char* rec;
+    if (k >= GHOST_SENDERS) return 0;
+    rec = (const unsigned char*)ta + 0x1B63 + k * 0x14B;
+    return *(const unsigned int*)rec != 0u && rec[0x73] == 3 && rec[0x146] != 0x0A &&
+           *(const unsigned int*)(rec + 4) == dpid;
+}
+
+/* 1 when an occupied slot's owner is one of the ten records and a local player (type 1 or 2) */
+static int ghost_local_owner(const char* ta, const char* slot)
+{
+    const char* players = ta + 0x1B63;
+    const char* pl = *(const char* const*)(slot + 0x96);
+    if (pl < players || pl >= players + GHOST_SENDERS * 0x14B || (pl - players) % 0x14B) return 0;
+    return *(const unsigned int*)pl != 0u && (pl[0x73] == 1 || pl[0x73] == 2);
+}
+
+/* a copy made before state 6, which a kill refused in the catch-up ticks can still mark;
+   game thread. Past GHOST_DONE a copy is not tracked, and its kill waits for the round robin. */
+static void ghost_made(unsigned int idx, unsigned int k, unsigned int birth)
+{
+    GHOSTDONE* d;
+    if (s_ghostDoneN >= GHOST_DONE) { s_ghostUntracked++; return; }
+    d = &s_ghostDone[s_ghostDoneN++];
+    d->idx = idx;
+    d->k = k;
+    d->birth = birth;
+}
+
+/* In B4's 0x05 receiver, before the carried 0x09's own gate: in state 5, where that gate
+   refuses it, hold it, or after the drain make it at once. regs is the receiver's frame: edi
+   the sender's record, the case's player argument at the site's esp + 0x14, paired by
+   0x453E84..0x453EA1 (a row of the table). */
+static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m)
+{
+    const char* snd = (const char*)(size_t)regs[PR_EDI];
+    unsigned int arg, k, birth;
+    int now;
+    if (s_ghostOff || m[3] != 0x09 || *(const unsigned int*)(ta + 0x391F1) != 5u ||
+        hit_gate(ta, 0x09))
+        return 0;
+    arg = *(const unsigned int*)(WPN_ESP_JMP(regs) + 0x14);
+    k = arg & 0xFFu;
+    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return 0;
+    EnterCriticalSection(&s_ghostLock);
+    now = s_ghostPhase;
+    if (!now) {
+        if (s_ghostN[k] < GHOST_DEPTH) {
+            GHOSTREC* q = &s_ghostQ[k][s_ghostN[k]++];
+            memcpy(q->m, m, HIT_MSG);
+            q->arg = arg;
+            q->dpid = *(const unsigned int*)(snd + 4);
+            q->dead = 0;
+            s_ghostQueued++;
+            if (s_ghostN[k] > s_ghostDeep) s_ghostDeep = s_ghostN[k];
+        } else {
+            s_ghostOverflow++;
+        }
+    }
+    LeaveCriticalSection(&s_ghostLock);
+    if (!now) return 1;
+    /* after the drain only the game thread pumps (0x4954C8, 0x4968CB) */
+    if (GetCurrentThreadId() != s_ghostGameTid) { s_ghostOffThread++; return 0; }
+    memcpy(&birth, m + 26, 4);
+    ghost_made(m[6] | (unsigned int)m[7] << 8, k, birth);
+    s_ghostNow++;
+    if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+        tagpu_logf("enginefix: ghost commander: created slot %u from sender %u (birth %u, type %u) "
+                   "at GameTime %u, in a catch-up tick", m[6] | (unsigned int)m[7] << 8, k,
+                   birth, m[4] | (unsigned int)m[5] << 8, HIT_GAMETIME(ta));
+    regs[PR_EAX] = (unsigned int)(size_t)hit_rx_create_armed(m);
+    return 2;
+}
+
+/* A copy made before state 6 from sender k's create for slot idx, still that copy: marked
+   dying as the engine's ghost sweep marks one (0x48B426..0x48B42F, bit 14 of +0x110), which
+   the unit tick then destroys without a message (0x48AFB9 -> 0x4864B0; it sends a 0x0C only
+   for a local player's unit, 0x48664B). Game thread, from the pump, as that sweep runs. */
+static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
+{
+    const char* first = *(const char* const*)(ta + 0x14357);
+    const char* last  = *(const char* const*)(ta + 0x1435B);
+    const struct hit_tab* t = s_hit;
+    char* slot;
+    unsigned int i = s_ghostDoneN, flags;
+    while (i > 0 && !(s_ghostDone[i - 1].idx == idx && s_ghostDone[i - 1].k == k)) i--;
+    if (i == 0 || !t || !first || last < first || idx == 0u || idx >= t->n ||
+        idx > (unsigned int)(last - first) / 0x118)
+        return 0;
+    slot = (char*)first + (size_t)idx * 0x118;
+    flags = *(const unsigned int*)(slot + 0x110);
+    if (!*(const unsigned short*)(slot + 0xA6) ||
+        *(const char* const*)(slot + 0x96) != ta + 0x1B63 + k * 0x14B ||
+        t->stamp[idx] != s_ghostDone[i - 1].birth ||
+        !(flags & 0x10000000u) || (flags & 0x4000u))
+        return 0;
+    *(unsigned int*)(slot + 0x110) = flags | 0x4000u;
+    return 1;
+}
+
+/* The dispatcher's refusal of a message in state 5 (0x45477F), on whichever thread pumps: a
+   0x0C there names a unit its owner destroyed while this peer loaded. Its held create is
+   cancelled; failing that, in the catch-up ticks, the copy made before state 6 is marked
+   dying. */
+static void __cdecl ghost_refused(unsigned int* regs)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    const unsigned char* sp = WPN_ESP_JMP(regs);
+    const unsigned char* m = *(const unsigned char* const*)(sp + 0x10);
+    const char* snd = (const char*)(size_t)regs[PR_EDI];
+    unsigned int k, idx;
+    int i, late;
+    if (s_ghostOff || !ta || !m || m[0] != 0x0C) return;
+    k = *(const unsigned int*)(sp + 0x14) & 0xFFu;
+    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return;
+    idx = m[1] | (unsigned int)m[2] << 8;
+    EnterCriticalSection(&s_ghostLock);
+    i = ghost_cancel(s_ghostQ[k], s_ghostN[k], idx);
+    if (i >= 0) {
+        s_ghostQ[k][i].dead = 1;
+        s_ghostKilled++;
+    }
+    late = s_ghostPhase;
+    LeaveCriticalSection(&s_ghostLock);
+    if (i >= 0) return;
+    if (late && GetCurrentThreadId() == s_ghostGameTid && ghost_sweep(ta, k, idx)) {
+        s_ghostSwept++;
+        if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+            tagpu_logf("enginefix: ghost commander: slot %u from sender %u killed during the "
+                       "catch-up ticks; its copy made before state 6 marked dying", idx, k);
+        return;
+    }
+    EnterCriticalSection(&s_ghostLock);
+    s_ghostNoKill++;
+    LeaveCriticalSection(&s_ghostLock);
+}
+
+/* In place of 0x497F5E, the load state's first call (bit 0 of main+0x38D75 clear), on the game
+   thread before the loader thread exists: whatever an abandoned load left is counted and gone. */
+static void __cdecl ghost_reset(unsigned int* regs)
+{
+    unsigned int k, left = 0;
+    (void)regs;
+    EnterCriticalSection(&s_ghostLock);
+    for (k = 0; k < GHOST_SENDERS; k++) {
+        left += s_ghostN[k];
+        s_ghostN[k] = 0;
+    }
+    s_ghostPhase = 0;
+    s_ghostDoneN = 0;
+    LeaveCriticalSection(&s_ghostLock);
+    if (left) {
+        s_ghostCleared += left;
+        tagpu_logf("enginefix: ghost commander: %u held creates from a load that never reached "
+                   "play, cleared", left);
+    }
+}
+
+/* At 0x49842F, on the game thread, before the frame function runs the level's first tick:
+   every held create is replayed through B4's receiver past its state test and
+   CreateFromNetwork, or counted. From here on a create refused in state 5 is made at once. */
+static void __cdecl ghost_replay(unsigned int* regs)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    const struct hit_tab* t = s_hit;
+    const char* first;
+    const char* last;
+    unsigned int n[GHOST_SENDERS], k, i, total = 0, max = 0, done = 0, dead = 0, before;
+    (void)regs;
+    EnterCriticalSection(&s_ghostLock);
+    for (k = 0; k < GHOST_SENDERS; k++) {
+        n[k] = s_ghostN[k];
+        memcpy(s_ghostTake[k], s_ghostQ[k], n[k] * sizeof(GHOSTREC));
+        s_ghostN[k] = 0;
+        total += n[k];
+    }
+    s_ghostPhase = 1;
+    LeaveCriticalSection(&s_ghostLock);
+    s_ghostLevels++;
+    if (!ta || GetCurrentThreadId() != s_ghostGameTid) {
+        s_ghostOffThread += total;
+        tagpu_logf("enginefix: ghost commander: the in-play entry ran off the game thread; %u "
+                   "held creates dropped", total);
+        return;
+    }
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (first && last >= first) max = (unsigned int)(last - first) / 0x118;
+    before = s_ghostInactive + s_ghostStale + s_ghostBad;
+    for (k = 0; k < GHOST_SENDERS; k++)
+        for (i = 0; i < n[k]; i++) {
+            const GHOSTREC* q = &s_ghostTake[k][i];
+            unsigned int idx = q->m[6] | (unsigned int)q->m[7] << 8, birth;
+            const char* slot;
+            memcpy(&birth, q->m + 26, 4);
+            if (q->dead) { dead++; continue; }                     /* counted as killed */
+            if (!ghost_sender_active(ta, k, q->dpid)) { s_ghostInactive++; continue; }
+            if (idx == 0u || idx > max || !t || idx >= t->n) { s_ghostBad++; continue; }
+            slot = first + (size_t)idx * 0x118;
+            if (*(const unsigned short*)(slot + 0xA6) &&
+                (ghost_local_owner(ta, slot) || !ghost_newer(1, t->stamp[idx], birth))) {
+                s_ghostStale++;
+                continue;
+            }
+            /* the whole carried message: 0x48634F reads the birth 23 bytes into the record */
+            s_ghostCall(q->arg, hit_rx_create_armed(q->m), ta + 0x1B63 + k * 0x14B);
+            ghost_made(idx, k, birth);
+            s_ghostReplayed++;
+            done++;
+            if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+                tagpu_logf("enginefix: ghost commander: replayed slot %u from sender %u (birth %u, "
+                           "type %u) at GameTime %u, before the first tick; the slot now holds "
+                           "type %u", idx, k, birth, q->m[4] | (unsigned int)q->m[5] << 8,
+                           HIT_GAMETIME(ta), *(const unsigned short*)(slot + 0xA6));
+        }
+    tagpu_logf("enginefix: ghost commander: before the first tick (GameTime %u), %u held creates: "
+               "%u replayed, %u killed while held, %u not (inactive %u, stale %u, bad %u in "
+               "total)", HIT_GAMETIME(ta), total, done, dead,
+               s_ghostInactive + s_ghostStale + s_ghostBad - before, s_ghostInactive,
+               s_ghostStale, s_ghostBad);
+}
+
+/* In place of the dirty create's `call 0x4861D0` at 0x48BA00, entered by a call so that
+   CreateFromNetwork still sees 0x48BA05: [esp] the return, [esp+4] the player (its low byte,
+   the slot's +0xFF), [esp+8] the 23-byte record, and the 0x2C's reader at [esp+0x1C] (the
+   frame's esp + 0x10, after the two pushes and the call; its slots set at 0x48B933..0x48B93E,
+   a row of the table).
+   The payload is read only from B3's copy of the message, and only within its length: the
+   reader must be the one B3's wire_s2c_copy set up for this 0x2C (s_wire2cRd) and still point
+   at its copy, whose WIRE_2C_PAD zero bytes cover the dword a last read touches. B3 is armed
+   whenever this runs (fix_ghost_commander refuses the table otherwise), so `unbound` can only
+   count a reader that is not the 0x2C's own, which the disassembly says never reaches here. */
+static void __cdecl ghost_position(unsigned int* r)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned char* sp = WPN_ESP_JMP(r);
+    unsigned char* rec = *(unsigned char* const*)(sp + 8);
+    const unsigned int* rd = (const unsigned int*)(sp + 0x1C);
+    unsigned int k = *(const unsigned int*)(sp + 4) & 0xFFu;
+    unsigned int type, count, x16 = 0, y16 = 0, z16 = 0, sx, sz;
+    const unsigned char* pl;
+    const char* defs;
+    const char* def;
+    GHOSTBITS b;
+    unsigned long long pos, avail;
+    int kind, x = 0, z = 0;
+    if (!ta || !rec || k >= GHOST_SENDERS || !rd[0]) { s_ghostPosNone++; return; }
+    pl = (const unsigned char*)ta + 0x1B63 + k * 0x14B;
+    type  = rec[1] | (unsigned int)rec[2] << 8;
+    count = *(const unsigned int*)(ta + 0x1438F);
+    defs  = *(const char* const*)(ta + 0x1439B);
+    /* 0x43DC48..0x43DC57: only a remote player's unit gets a proxy; 0x4862CF: only a def
+       with a move class gets a move object at all */
+    if (!*(const unsigned int*)pl || pl[0x73] != 3 || !defs || type == 0u || type >= count) {
+        s_ghostPosNone++;
+        return;
+    }
+    def = defs + (size_t)type * 0x249;
+    if (*(const unsigned char*)(def + 0x22F) != 1) { s_ghostPosNone++; return; }
+    if ((const unsigned char*)rd != s_wire2cRd || !s_wire2cCopy ||
+        (const unsigned char*)(size_t)rd[0] != s_wire2cCopy) {
+        s_ghostPosUnbound++;
+        return;
+    }
+    b.data = (const unsigned int*)(size_t)rd[0];
+    b.word = rd[1];
+    b.bit  = rd[2];
+    if (b.bit >= 32u) { s_ghostPosNone++; return; }
+    pos   = wire_pos((const unsigned char*)rd);
+    avail = pos < s_wire2cEnd ? s_wire2cEnd - pos : 0u;
+    kind = ghost_payload_pos(b, avail, (*(const unsigned int*)(def + 0x241) >> 11) & 1u, &x, &z,
+                             &x16, &y16, &z16);
+    if (kind == GHOST_POS_SHORT) {
+        s_ghostPosShort++;
+        if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+            tagpu_logf("enginefix: ghost commander: dirty create slot %u: reading its move "
+                       "payload's position would pass the message's end (bit %u of %u); stock's "
+                       "record kept",
+                       rec[3] | (unsigned int)rec[4] << 8, (unsigned int)pos,
+                       (unsigned int)s_wire2cEnd);
+        return;
+    }
+    if (kind == GHOST_POS_NONE) { s_ghostPosNone++; return; }
+    if (!ghost_on_map(x, z, *(const unsigned int*)(ta + 0x14233),
+                      *(const unsigned int*)(ta + 0x14237))) {
+        s_ghostPosOff++;
+        return;
+    }
+    memcpy(&sx, rec + 5, 4);
+    memcpy(&sz, rec + 13, 4);
+    memcpy(rec + 5, &x16, 4);
+    memcpy(rec + 13, &z16, 4);
+    if (kind == GHOST_POS_AIR) {
+        /* y up to 0x1FF px, the ceiling the goal point 0x44E3C0 clamps its y to (0x44E4F1) */
+        if (y16 <= 0x01FF0000u) memcpy(rec + 9, &y16, 4);
+        s_ghostPosAir++;
+    } else {
+        s_ghostPosGround++;
+    }
+    if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+        tagpu_logf("enginefix: ghost commander: dirty create slot %u type %u at (%d, %d) from its "
+                   "%s payload; stock's record had (%d, %d)", rec[3] | (unsigned int)rec[4] << 8,
+                   type, x, z, kind == GHOST_POS_AIR ? "air" : "ground", (int)sx >> 16,
+                   (int)sz >> 16);
+}
+
+/* ---- stubs, in B5's own page ------------------------------------------------------------- */
+
+static unsigned char* s_ghostCode;
+static unsigned int   s_ghostCodeUsed;
+
+static unsigned char* ghost_code(unsigned int n)
+{
+    unsigned char* p;
+    if (!s_ghostCode)
+        s_ghostCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                   PAGE_EXECUTE_READWRITE);
+    if (!s_ghostCode || s_ghostCodeUsed + n > 0x1000) return NULL;
+    p = s_ghostCode + s_ghostCodeUsed;
+    s_ghostCodeUsed += (n + 15u) & ~15u;
+    return p;
+}
+
+static void ghost_selfcheck(void)
+{
+    /* a ground payload: flag 1, n = 2, (1234, 567), (40, 50); an air one: selector 2, flag 0,
+       x = 3000.5 px, y = 80 px, z = 12 px; both least significant bit first, as 0x415C10
+       writes them */
+    static const unsigned int ground[3] = { 0x11B82695u, 0x01900140u, 0x00000000u };
+    static const unsigned int air[4]    = { 0x5DC40002u, 0x02800000u, 0x00600000u, 0x00000000u };
+    static const unsigned int split[2]  = { 0x80000000u, 0x00000005u };
+    static const unsigned int still[1]  = { 0x00000001u };        /* flag 1, n = 0 */
+    struct { const char* name; int got; int want; } t[24];
+    GHOSTREC q[4];
+    int n = 0, bad = 0, i, x, z;
+    unsigned int x16, y16, z16;
+    GHOSTBITS b;
+    memset(q, 0, sizeof q);                  /* held creates for slots 7, 9, 7, 5; the last 7 dead */
+    q[0].m[6] = 7; q[1].m[6] = 9; q[2].m[6] = 7; q[3].m[6] = 5;
+    t[n].name = "newer: empty slot";         t[n].got = ghost_newer(0, 50, 3);                 t[n].want = 1; n++;
+    t[n].name = "newer: exact, later";       t[n].got = ghost_newer(1, 50, 51);                t[n].want = 1; n++;
+    t[n].name = "newer: exact, same";        t[n].got = ghost_newer(1, 50, 50);                t[n].want = 0; n++;
+    t[n].name = "newer: bound, later";       t[n].got = ghost_newer(1, HIT_LB | 50, 51);       t[n].want = 1; n++;
+    t[n].name = "newer: bound, at g0";       t[n].got = ghost_newer(1, HIT_LB | 50, 50);       t[n].want = 0; n++;
+    t[n].name = "newer: unknown birth";      t[n].got = ghost_newer(1, 50, HIT_UNKNOWN);       t[n].want = 0; n++;
+    t[n].name = "map: corners";              t[n].got = ghost_on_map(0, 0, 2, 3) && ghost_on_map(31, 47, 2, 3); t[n].want = 1; n++;
+    t[n].name = "map: past an edge";         t[n].got = ghost_on_map(32, 0, 2, 3) || ghost_on_map(0, 48, 2, 3) ||
+                                                        ghost_on_map(-1, 0, 2, 3);             t[n].want = 0; n++;
+    t[n].name = "map: no map";               t[n].got = ghost_on_map(0, 0, 0, 3) || ghost_on_map(0, 0, 4097, 3); t[n].want = 0; n++;
+    b.data = split; b.word = 0; b.bit = 31;
+    t[n].name = "bits: across a word";       t[n].got = ghost_bits(&b, 4) == 0xBu && b.word == 1 && b.bit == 3; t[n].want = 1; n++;
+    b.data = ground; b.word = 0; b.bit = 0;
+    t[n].name = "ground: point 0";           t[n].got = ghost_payload_pos(b, 96, 0, &x, &z, &x16, &y16, &z16) == GHOST_POS_GROUND &&
+                                                        x == 1234 && z == 567 && x16 == 1234u << 16; t[n].want = 1; n++;
+    b.data = air; b.word = 0; b.bit = 0;
+    t[n].name = "air: the motion's point";   t[n].got = ghost_payload_pos(b, 128, 1, &x, &z, &x16, &y16, &z16) == GHOST_POS_AIR &&
+                                                        x == 3000 && z == 12 && y16 == 80u << 16; t[n].want = 1; n++;
+    b.data = air; b.word = 0; b.bit = 1;
+    t[n].name = "air: a goal is not taken";  t[n].got = ghost_payload_pos(b, 127, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
+    b.data = ground; b.word = 0; b.bit = 0;
+    t[n].name = "ground: one bit short";     t[n].got = ghost_payload_pos(b, 34, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_SHORT; n++;
+    t[n].name = "ground: the read ends at end"; t[n].got = ghost_payload_pos(b, 35, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_GROUND; n++;
+    b.data = still; b.word = 0; b.bit = 0;
+    t[n].name = "ground: no point, at end";  t[n].got = ghost_payload_pos(b, 3, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
+    b.data = air; b.word = 0; b.bit = 0;
+    t[n].name = "air: one bit short";        t[n].got = ghost_payload_pos(b, 98, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_SHORT; n++;
+    t[n].name = "kill: the latest create";   t[n].got = ghost_cancel(q, 4, 7);                 t[n].want = 2; n++;
+    q[2].dead = 1;
+    t[n].name = "kill: past a cancelled one"; t[n].got = ghost_cancel(q, 4, 7);                t[n].want = 0; n++;
+    t[n].name = "kill: nothing held";        t[n].got = ghost_cancel(q, 4, 8);                 t[n].want = -1; n++;
+    t[n].name = "kill: the high byte";       t[n].got = ghost_cancel(q, 4, 7 + 256);           t[n].want = -1; n++;
+    for (i = 0; i < n; i++) {
+        if (t[i].got != t[i].want) bad++;
+        tagpu_logf("enginefix: ghostcheck %-26s got=%d want=%d %s",
+                   t[i].name, t[i].got, t[i].want, t[i].got == t[i].want ? "OK" : "FAIL");
+    }
+    tagpu_logf("enginefix: ghostcheck %d rule cases, %d failed", n, bad);
+}
+
+/* `wire` is fix_wire_bounds' result: the dirty create's position is read through B3's copy
+   of the 0x2C, so B5 requires B3 armed. B3 stays a local fix for its own purpose; a peer where
+   it did not arm would place dirty creates at the slot's stale position while the others take
+   the payload's, so the table is refused and the process ends through the report. */
+static int fix_ghost_commander(int wire)
+{
+    static const unsigned char firstCall[10] = { 0xF6, 0xC1, 0x01, 0x57, 0x0F, 0x85, 0xE2, 0x03,
+                                                 0x00, 0x00 };                   /* 0x497F54 */
+    static const unsigned char loadStart[6]  = { 0x8B, 0x88, 0x31, 0x05, 0x00, 0x00 };
+    static const unsigned char loadNext[2]   = { 0x33, 0xED };                    /* 0x497F64 */
+    static const unsigned char loaderDone[3] = { 0x83, 0xC9, 0x02 };              /* 0x497C5F */
+    static const unsigned char doneTest[5]   = { 0xD0, 0xEA, 0xF6, 0xC2, 0x01 };  /* 0x498348 */
+    static const unsigned char dirtyFrame[11] = { 0x8D, 0x4C, 0x24, 0x1C, 0x51, 0x52, 0x66, 0x89,
+                                                  0x44, 0x24, 0x39 };            /* 0x48B9F5 */
+    static const unsigned char dirtyCall[5]  = { 0xE8, 0xCB, 0xA7, 0xFF, 0xFF };  /* 0x48BA00 */
+    static const unsigned char cfnEntry[3]   = { 0x83, 0xEC, 0x0C };              /* 0x4861D0 */
+    static const unsigned char frameCall[5]  = { 0xE8, 0x5C, 0xE3, 0xFF, 0xFF };  /* 0x49842F */
+    static const unsigned char frameEntry[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };  /* 0x496790 */
+    static const unsigned char refused[9]    = { 0x83, 0xFA, 0x05, 0x0F, 0x84, 0xC8, 0x17, 0x00,
+                                                 0x00 };                         /* 0x45477F */
+    static const unsigned char notState5[9]  = { 0x83, 0xFA, 0x06, 0x0F, 0x84, 0xBF, 0x17, 0x00,
+                                                 0x00 };                         /* 0x454788 */
+    static const unsigned char nextSub[7]    = { 0x8B, 0x84, 0x24, 0xF0, 0x00, 0x00, 0x00 };
+    /* 0x48B933: the 0x2C reader's buffer, word and bit, [esp+0x14..0x1C] */
+    static const unsigned char readerSlots[12] = { 0x89, 0x44, 0x24, 0x14, 0x89, 0x74, 0x24, 0x18,
+                                                   0x89, 0x74, 0x24, 0x1C };
+    /* 0x453E84: edi = main + 0x1B63 + (byte [esp+0x14]) * 0x14B, the sender's record */
+    static const unsigned char senderRec[30] = { 0x8B, 0x74, 0x24, 0x14, 0x81, 0xE6, 0xFF, 0x00,
+                                                 0x00, 0x00, 0x8B, 0xC6, 0xC1, 0xE0, 0x05, 0x03,
+                                                 0xC6, 0x8D, 0x0C, 0x32, 0x8D, 0x04, 0x80, 0x8D,
+                                                 0xBC, 0x41, 0x63, 0x1B, 0x00, 0x00 };
+    unsigned char *aCall, *aReset, *aPos, *aEarly, *aRefused, *p;
+
+    InitializeCriticalSection(&s_ghostLock);
+    s_ghostGameTid = GetCurrentThreadId();
+    s_ghostOff = GetFileAttributesA("tagpu_ghostq.off") != INVALID_FILE_ATTRIBUTES;
+    if (s_ghostOff)
+        tagpu_logf("enginefix: ghost commander: TEST LEVER tagpu_ghostq.off -- nothing is held; "
+                   "the dirty create's position still applies");
+    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) ghost_selfcheck();
+    if (wire != FIX_ARMED) {
+        lim_needs("the ghost commander (a simulation fix)", "wire robustness", fix_state(wire));
+        return FIX_TABLE;
+    }
+
+    if (!(aCall = ghost_code(32)) || !(aReset = ghost_code(32)) || !(aPos = ghost_code(32)) ||
+        !(aEarly = ghost_code(32)) || !(aRefused = ghost_code(32))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+
+    /* the replay: CreateFromNetwork(arg, rec) with the sender in edi, as the 0x09 case has it
+       (CreateFromNetwork pushes edi at 0x4861EC, where B3's observe reads the sender) */
+    p = aCall;
+    *p++ = 0x57;                                         /* push edi           */
+    *p++ = 0x8B; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x10;  /* mov edi,[esp+0x10] */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;  /* push [esp+0xC]: rec */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;  /* push [esp+0xC]: arg */
+    p = hit_jmp(p, 0xE8, 0x004861D0);
+    s_ghostRet = (unsigned int)(size_t)p;
+    *p++ = 0x5F;                                         /* pop edi            */
+    *p++ = 0xC2; *p++ = 0x0C; *p++ = 0x00;               /* ret 0xC            */
+    s_ghostCall = (GHOSTCALL)(void*)aCall;
+
+    /* 0x497F5E: the reset, then stock's mov ecx,[eax+0x531] */
+    p = fix_call_regs(aReset, ghost_reset);
+    memcpy(p, loadStart, 6); p += 6;
+    hit_jmp(p, 0xE9, 0x00497F64);
+
+    /* 0x49842F: the drain, then the frame function under the return 0x498434 */
+    p = fix_call_regs(aEarly, ghost_replay);
+    hit_jmp(p, 0xE9, 0x00496790);
+
+    /* 0x45477F: stock's `cmp edx,5; je 0x455F50`, the refusal in state 5 noted first */
+    p = aRefused;
+    *p++ = 0x83; *p++ = 0xFA; *p++ = 0x05;               /* cmp edx,5          */
+    p = hit_jcc(p, 0x85, 0x00454788);
+    p = fix_call_regs(p, ghost_refused);
+    hit_jmp(p, 0xE9, 0x00455F50);
+
+    /* 0x48BA00: the position into the record, then CreateFromNetwork under 0x48BA05 */
+    p = fix_call_regs(aPos, ghost_position);
+    hit_jmp(p, 0xE9, 0x004861D0);
+
+    hit_site(0x00497F5E, 6, loadStart, 0xE9, aReset, "ghost commander: the queue emptied at the load's start");
+    hit_site(0x0049842F, 5, frameCall, 0xE8, aEarly, "ghost commander: the queue replayed before the first tick");
+    hit_site(0x0045477F, 9, refused, 0xE9, aRefused, "ghost commander: a kill refused in state 5");
+    hit_site(0x0048BA00, 5, dirtyCall, 0xE8, aPos, "ghost commander: the dirty create's position");
+    lim_same(0x00497F54, 10, firstCall, "ghost commander: the load state's first-call test");
+    lim_same(0x00497F64, 2, loadNext, "ghost commander: the load state's continuation");
+    lim_same(0x00497C5F, 3, loaderDone, "ghost commander: the loader's last store, bit 1");
+    lim_same(0x00498348, 5, doneTest, "ghost commander: the game thread's test of bit 1");
+    lim_same(0x0048B9F5, 11, dirtyFrame, "ghost commander: the dirty create's record and reader");
+    lim_same(0x004861D0, 3, cfnEntry, "ghost commander: CreateFromNetwork's entry");
+    lim_same(0x00496790, 5, frameEntry, "ghost commander: the frame function's entry");
+    lim_same(0x00454788, 9, notState5, "ghost commander: the refusal's other states");
+    lim_same(0x00455F50, 7, nextSub, "ghost commander: the dispatcher's next message");
+    lim_same(0x0048B933, 12, readerSlots, "ghost commander: the 0x2C reader's slots");
+    lim_same(0x00453E84, 30, senderRec, "ghost commander: the sender's record and argument");
+    return FIX_TABLE;
+}
+
+/* the heartbeat's ghost section (tagpu_packet_pub.c): DLL counters only. q= held, over= refused
+   by a full queue, deep= the deepest queue, replay= replayed before the first tick, now= made
+   in a catch-up tick; killed= held creates their refused 0x0C cancelled,
+   swept= copies made before state 6 marked dying, nokill= refused 0x0Cs that matched neither,
+   untracked= copies past the list a kill can mark; inactive/stale/bad are the drain's drops,
+   cleared= held by a load that never reached play; pos= the dirty creates' kind, unbound= with
+   a reader that is not B3's, short= a position read that would pass its message's end.
+   The alert fields come first: the heartbeat is one log line of at most 2040 bytes and this
+   section is its last, so a long game's line is cut from here. */
+int tagpu_ghost_format(char* buf, unsigned int cap)
+{
+    return _snprintf(buf, cap,
+                     " | ghost:%s over=%u bad=%u offthread=%u unbound=%u short=%u q=%u deep=%u"
+                     " replay=%u now=%u killed=%u swept=%u nokill=%u untracked=%u inactive=%u"
+                     " stale=%u cleared=%u levels=%u pos ground=%u air=%u none=%u off=%u",
+                     s_ghostOff ? " LEVER-OFF" : "", s_ghostOverflow, s_ghostBad,
+                     s_ghostOffThread, s_ghostPosUnbound, s_ghostPosShort, s_ghostQueued,
+                     s_ghostDeep, s_ghostReplayed, s_ghostNow, s_ghostKilled, s_ghostSwept,
+                     s_ghostNoKill, s_ghostUntracked, s_ghostInactive, s_ghostStale,
+                     s_ghostCleared, s_ghostLevels, s_ghostPosGround, s_ghostPosAir,
+                     s_ghostPosNone, s_ghostPosOff);
 }
 
 static void patch_engine_defects(void)
@@ -6290,6 +7063,7 @@ static void patch_engine_defects(void)
     int wkey = fix_weapon_keys();
     int wire = fix_wire_bounds();
     int hits = fix_stale_hits();
+    int ghost = fix_ghost_commander(wire);
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -6368,6 +7142,17 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b,
+              "enginefix: ghost commander %s: a carried 0x09 the gate refuses in state 5 held per "
+              "sender in the 0x05 receiver (0x455F90) and replayed through it before the first "
+              "tick (0x49842F), one refused in a catch-up tick made at once, a 0x0C refused in "
+              "state 5 cancelling its held create (0x45477F), the queue emptied at the load's start "
+              "(0x497F5E); the dirty create's position from its move payload (0x48BA00). Counters "
+              "on the heartbeat's 'ghost:' section. Stubs: %u of 4096 bytes at 0x%08X",
+              fix_state(ghost), s_ghostCodeUsed, (unsigned int)(size_t)s_ghostCode);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
               "enginefix: wire robustness %s: 0x09 create -- index, type, the sender's block "
               "(0x4861F7), 0x0A attach (0x4553FE), 0x0C destroy + killer (0x4866E5 0x486753), "
               "0x0B damage (0x489CED), "
@@ -6384,6 +7169,620 @@ static void patch_engine_defects(void)
               fix_state(wire), s_wireStubBytes);
     b[sizeof b - 1] = 0;
     plog(b);
+}
+
+/* ===== THE LOADERS AND TWO HUD DIVIDES =====================================================
+   Five stock defects outside the battle itself: the wind every peer draws for itself, a
+   yardmap parsed past the end of its string, the saved-game loader's order fallback, and two
+   divides in the HUD (research/notes/tadr-port/sim-fixes.md, landing B6). The wind and the
+   yardmaps change the simulation, so their sites are rows of the fail-closed table; the other
+   three are local, each checked, written and skipped on its own. */
+
+#define B6_MAIN        0x00511DE8u
+#define B6_TNT         0x391E9u       /* main+ : GameingState*; its +0x204 the TNT path    */
+#define B6_NETWORK     3              /* GameingState's +0: 1 campaign, 2 skirmish, 3 network */
+#define B6_DPLAY       0x4D9u         /* main+ : IDirectPlay3A* or, lobbied, 2A*; NULL: none */
+#define B6_DESC_GUID   0x479u         /* main+ : guidInstance of the engine's session copy */
+
+/* THE WIND [DISASSEMBLED]. The wind updater 0x490C40 has two callers: the level load
+   LoadGameData_Main 0x4917D0 at 0x491903, on the loader thread, and the tick 0x495490 at
+   0x49558F. While next (main+0x37EC4) >= GameTime (main+0x38A47) it clears the changed flag
+   +0x37EE2 and returns (0x490C51, 0x490D87). Otherwise it draws three values:
+     - the schedule, next += 30 * (5 + rand() * 10 / 0x8000), from the CRT's rand 0x4E4870
+       (0x490C60..0x490C8E);
+     - the speed +0x37EDA = min (main+0x1425B) + simrand(max (main+0x1425F) - min), from the
+       sim RNG 0x4B6C30, which answers 0 for an argument below 2 (0x4B6C35) (0x490C90..0x490CB7);
+     - when the speed is not 0, the heading +0x37ED8 = simrand(0x10000) (0x490CC8..0x490CDC);
+   then derives the components +0x37ECC and +0x37ED4 (0x490CE8..0x490D35) and the ratio
+   +0x37EDE, capped at 1.0 (0x490D3B..0x490D7B). The wind is simulation state: the projectile
+   pass 0x49B720 adds the components to a projectile's position (0x49BC58, 0x49BD04), the fire
+   spread 0x4239C0 reads them (0x423AA1, 0x423AC1), and a wind generator's energy follows the
+   ratio (0x40156F). The sim RNG is seeded from QueryPerformanceCounter by the loader 0x497180;
+   the CRT's rand keeps its state per thread, and the game thread's, which the tick's draw
+   uses, is seeded from time(0) by WinMain (0x49E8BB). So each peer draws a wind of its own:
+   MEASURED on two peers paused at GameTime 825, speed 2525 heading 0xF5C6 on the host against
+   1498 and 0xC827 on the joiner.
+   The load's call finds next = 0 (0x4918FD) and GameTime 0 (0x4971BB), so it draws nothing;
+   the first draw is the first tick's.
+   THE FIX draws the three values from our own generator (splitmix64, its own state; neither
+   engine RNG) with stock's rules: next += 30 * (5 + r % 10); the speed min + r % (max - min),
+   or min when max - min, taken in 32 bits as 0x490CA1 takes it, is below 2; the heading
+   r % 0x10000, drawn only when the speed is not 0. A jmp at 0x490C5A, the draws' first
+   instruction (after 0x490C59's push esi), goes to a stub that calls wind_draw and rejoins at
+   0x490CE8 with eax the main pointer, as stock's 0x490CE3 leaves it; esi, which stock points
+   at `next`, is read after 0x490CE8 only by its pop at 0x490D85. The load's call at 0x491903
+   goes through a stub that seeds the generator first: in a network game from DirectPlay's
+   session instance GUID and a hash of the map's name, or from the map's hash alone when
+   DirectPlay names no session; otherwise from QueryPerformanceCounter, the counter stock seeds
+   its own RNG with.
+   THE SESSION, NOT THE HOST [DISASSEMBLED]. The engine's DirectPlay object (its trace strings
+   "HAPINET_*" at 0x50B0AC..0x50B4A0) lives in main at +0x14. main+0x4D9 is the interface every
+   call goes through: an IDirectPlay3A from QueryInterface (IID 0x4FCD78, at 0x4CA684), or, when
+   a lobby launched the game, the IDirectPlay2A its Connect returns (0x4C9B59); GetSessionDesc is
+   slot 22 of both (vtable +0x58). Released and zeroed at 0x4C9B92..0x4C9BA1. main+0x471 is the
+   engine's DPSESSIONDESC2 copy.
+   The host's DirectPlay ID can change during the load: until bit 1 of main+0x38D75 is set the
+   game thread pumps the network in its load loop (0x4984DD..0x49852E), and the pump's leave
+   case removes a remote human even during the load (0x452CC0: the seat's type cleared at
+   0x452E62, its ID set to -1 at 0x452E6D) and, when the leaver held the host bit, elects the
+   human seat with the highest ID (0x452EE3..0x452FF8). A seed read from the host seat would
+   depend on whether a peer handled a departure before its 0x491903.
+   The session's instance GUID is fixed when DirectPlay creates the session, and every peer
+   holds it from the moment it enters (a joiner names it to Open(DPOPEN_JOIN), 0x4CA03A,
+   0x4CA05A). No departure and no host election writes it. The one engine call that could is
+   SetSessionDesc, which passes the engine's whole copy, guidInstance included; an
+   implementation that takes guidInstance from it (Wine's copies the whole descriptor) would move
+   the session to whatever the copy holds, and after a lobbied launch that is the lobby's
+   descriptor (0x4C9B4F), not DirectPlay's. The engine makes it at exactly one site: of the six
+   calls through a vtable's +0x7C in the image, 0x4C9903 in HAPINET_updategameinfo 0x4C9890 is
+   the only one through main+0x4D9 and the only one with three arguments (0x47C0CB, 0x4B4FB8,
+   0x4B5735, 0x4B6069 and 0x4B60E1 push two). 0x4C9890 is called from 0x451180 (0x451208) and
+   from the pump 0x453D40 (0x454135): the battle room's updates, the pump's, and every load's
+   end on the loader thread (0x497BFF sets bit 4 of the local PlayerInfo's +0x9B, 0x497C0B
+   calls 0x451180, which then sets DPSESSION_JOINDISABLED). So a jmp over the call's nine
+   bytes, 0x4C98FD..0x4C9905 (`push 0; mov ecx,[esi]; push eax; push esi; call [ecx+0x7C]`, eax
+   the descriptor main+0x471, esi the interface main+0x4D9, not null past 0x4C98A9's test; no
+   branch or absolute reference lands inside), goes to wind_set_session_desc: it reads the
+   GUID DirectPlay holds now, validated as below, and makes the call with a copy of the engine's
+   descriptor carrying that GUID, counted when it differed; with no valid answer it makes no
+   call and returns the refusal, counted, which 0x4C9908 takes as it takes a failed call (0 out
+   of 0x4C9914). No SetSessionDesc the engine makes can then move the session, whatever the
+   implementation does with the field, and the engine's copy is not written. It rejoins at
+   0x4C9906 (`test eax,eax`) with eax the HRESULT; ecx and edx are clobbered as the COM call
+   clobbers them, and nothing reads them before 0x4C9914's pops. On whichever thread reaches
+   it, the GetSessionDesc runs right before stock's own SetSessionDesc on that thread, so it adds
+   no DirectPlay concurrency stock does not already have.
+   The capture runs GetSessionDesc on the GAME THREAD, from a stub on the call that starts the
+   loader thread, 0x4982CA (`call 0x4B6B20`, the CRT's _beginthread over CreateThread).
+   0x497C70 is started only there and the loader body 0x497180 is called only from it
+   (0x497CA1), so every seed at 0x491903 follows the capture made for its own load, and thread
+   creation orders the capture's stores before anything the new thread reads. At that call the
+   loader thread does not exist yet; stock lets it call DirectPlay concurrently with the game
+   thread once it runs (its wait pumps the network at 0x49727D while the game thread pumps at
+   0x49852E, and it makes the SetSessionDesc above), so a call on the game thread before it
+   starts adds no concurrency that stock does not already have.
+   A successful answer is used only when its dwSize is sizeof(DPSESSIONDESC2) and its
+   guidInstance is not null (Wine can answer DP_OK with a zeroed descriptor). Otherwise the seed
+   takes the engine's copy main+0x479 when it is not null: it held DirectPlay's answer on every
+   peer MEASURED, but the pump rewrites it from every DPSYS_SETSESSIONDESC on every peer but the
+   host (0x454679, 0x454689), so it is the second choice. Then the map alone. Each is counted.
+   GetSessionDesc fails only with no interface or no open session, and a peer with no open
+   session exchanges no game traffic, so its wind changes nothing another peer sees.
+   THE INVARIANT: in a network game every peer draws the same wind at the same GameTime. It
+   rests on
+     - the seed, the same on every peer and made again at every level load, so nothing crosses
+       from one game to the next. Which path it takes is the engine's own network test,
+       GameingState's +0 == 3 (0x435100 is `mov eax,[ecx]`; the load dispatches on it at
+       0x4971C7), and inside a network game no path reads anything local to a peer: the
+       session's GUID, which no departure changes, from DirectPlay or else from the engine's
+       copy, or nothing; and the map, the TNT stem every peer loaded (GameingState +0x204,
+       "Maps\Two Continents.TNT" on both peers MEASURED);
+     - the draws, made only by the tick's call, once for each GameTime value on every peer, each
+       consuming a number of values fixed by the map's range and the values drawn before it;
+     - an ordering: the GUID is captured on the game thread before the loader thread is
+       created; the seed is written on the loader thread before the loader's last store, bit 1
+       of main+0x38D75 (0x497C62), and read only by the tick, which the game thread runs after
+       it has seen that bit (0x498342): the handshake every value of the load rests on.
+   CLASS: simulation, fail closed. A peer without it draws another wind. */
+static unsigned long long s_windState;          /* loader thread writes, then GAME THREAD   */
+static volatile LONG s_windLevels;              /* level loads seeded, peekable              */
+
+enum { WIND_NONE, WIND_DPLAY, WIND_COPY };        /* where this load's GUID came from */
+
+/* the GAME THREAD writes these at 0x4982CA; the loader thread that call creates reads them */
+static GUID    s_windSession;                   /* the GUID the network seed takes           */
+static int     s_windSource;                    /* WIND_*                                    */
+static GUID    s_windEngineCopy;                /* main+0x479 as the capture found it        */
+static HRESULT s_windSessionHr;                 /* GetSessionDesc's answer when refused      */
+static DWORD   s_windDescSize;                  /* the refused answer's dwSize, or 0         */
+static volatile LONG s_windFromCopy;            /* network loads seeded from the copy, peekable */
+
+/* the SetSessionDesc site 0x4C9903, any thread that reaches it; peekable */
+static volatile LONG s_windSetCalls;            /* calls made, with DirectPlay's GUID        */
+static volatile LONG s_windSetDiffered;         /* of those, the engine's GUID was another   */
+static volatile LONG s_windSetWithheld;         /* no valid answer: no call made             */
+
+static unsigned int wind_next(void)
+{
+    unsigned long long z = (s_windState += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return (unsigned int)((z ^ (z >> 31)) >> 32);
+}
+
+static volatile LONG s_windMapOnly;             /* network loads with no session, peekable   */
+
+static int wind_guid_null(const GUID* g)
+{
+    static const GUID zero;
+    return memcmp(g, &zero, sizeof zero) == 0;
+}
+
+/* DirectPlay's own record of the session's GUID: 1 with *out set when the answer has dwSize
+   sizeof(DPSESSIONDESC2) and a non-null GUID (Wine can answer DP_OK with a zeroed descriptor),
+   else 0 with *hr and *dwSize saying why */
+static int wind_dplay_guid(IDirectPlay2A* dp, GUID* out, HRESULT* hr, DWORD* dwSize)
+{
+    union { DPSESSIONDESC2 desc; unsigned char b[0x400]; } local;
+    unsigned char* buf = local.b;
+    DWORD size = sizeof local;
+    int ok = 0;
+    /* zeroed, as the heap buffer is: an answer that writes less than a descriptor leaves zeros,
+       which the dwSize and GUID tests refuse, never a previous frame's bytes */
+    memset(&local, 0, sizeof local);
+    *dwSize = 0;
+    *hr = IDirectPlay2_GetSessionDesc(dp, buf, &size);
+    if (*hr == DPERR_BUFFERTOOSMALL && size > sizeof local) {
+        buf = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+        *hr = buf ? IDirectPlay2_GetSessionDesc(dp, buf, &size) : E_OUTOFMEMORY;
+    }
+    if (SUCCEEDED(*hr)) {
+        const DPSESSIONDESC2* d = (const DPSESSIONDESC2*)buf;
+        *dwSize = d->dwSize;
+        if (size >= sizeof *d && d->dwSize == sizeof *d
+            && !wind_guid_null(&d->guidInstance)) {
+            memcpy(out, &d->guidInstance, sizeof(GUID));
+            ok = 1;
+        }
+    }
+    if (buf && buf != local.b) HeapFree(GetProcessHeap(), 0, buf);
+    return ok;
+}
+
+/* GAME THREAD, at 0x4982CA, before the loader thread exists: DirectPlay's own record of the
+   session this peer is in, else the engine's copy, else nothing (see THE SESSION above) */
+static void __cdecl wind_session_capture(void)
+{
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    IDirectPlay2A* dp;
+    s_windSource = WIND_NONE;
+    s_windDescSize = 0;
+    s_windSessionHr = DPERR_UNINITIALIZED;
+    memcpy(&s_windEngineCopy, ta + B6_DESC_GUID, sizeof s_windEngineCopy);
+    memcpy(&dp, ta + B6_DPLAY, sizeof dp);
+    if (dp && wind_dplay_guid(dp, &s_windSession, &s_windSessionHr, &s_windDescSize))
+        s_windSource = WIND_DPLAY;
+    else if (!wind_guid_null(&s_windEngineCopy)) {
+        memcpy(&s_windSession, &s_windEngineCopy, sizeof(GUID));
+        s_windSource = WIND_COPY;
+    }
+}
+
+/* the engine's one SetSessionDesc (0x4C9903), made with the GUID DirectPlay holds now or not at
+   all (see THE SESSION above); the engine's descriptor is read, never written */
+static HRESULT __stdcall wind_set_session_desc(IDirectPlay2A* dp, const DPSESSIONDESC2* engine)
+{
+    DPSESSIONDESC2 mine;
+    GUID now;
+    HRESULT hr;
+    DWORD dwSize;
+    if (!wind_dplay_guid(dp, &now, &hr, &dwSize)) {
+        InterlockedIncrement(&s_windSetWithheld);
+        return FAILED(hr) ? hr : DPERR_GENERIC;
+    }
+    memcpy(&mine, engine, sizeof mine);
+    if (memcmp(&mine.guidInstance, &now, sizeof now) != 0) {
+        memcpy(&mine.guidInstance, &now, sizeof now);
+        InterlockedIncrement(&s_windSetDiffered);
+    }
+    InterlockedIncrement(&s_windSetCalls);
+    return IDirectPlay2_SetSessionDesc(dp, &mine, 0);          /* stock's flags, 0x4C98FD */
+}
+
+/* FNV-1a 64 over the session's GUID, then the map's hash */
+static unsigned long long wind_session_seed(const GUID* g, unsigned int map)
+{
+    const unsigned char* p = (const unsigned char*)g;
+    unsigned long long h = 0xCBF29CE484222325ull;
+    int i;
+    for (i = 0; i < 16; i++) h = (h ^ p[i]) * 0x100000001B3ull;
+    for (i = 0; i < 4; i++) h = (h ^ ((map >> (8 * i)) & 0xFFu)) * 0x100000001B3ull;
+    return h;
+}
+
+static void wind_guid_text(const GUID* g, char* out, size_t room)
+{
+    snprintf(out, room, "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+             (unsigned long)g->Data1, g->Data2, g->Data3, g->Data4[0], g->Data4[1],
+             g->Data4[2], g->Data4[3], g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+}
+
+/* FNV-1a over the TNT path's stem, case folded: "Maps\Two Continents.TNT" -> "two continents" */
+static unsigned int wind_map_hash(const char* gs, char* stem, unsigned int room)
+{
+    const char* s;
+    const char* q;
+    unsigned int h = 0x811C9DC5u, n = 0;
+    stem[0] = 0;
+    s = gs + 0x204;
+    for (q = s; q < s + MAX_PATH && *q; q++)
+        if (*q == '\\' || *q == '/' || *q == ':') s = q + 1;
+    for (q = s; q < s + MAX_PATH && *q && *q != '.'; q++) {
+        char c = (*q >= 'A' && *q <= 'Z') ? (char)(*q + 32) : *q;
+        h = (h ^ (unsigned char)c) * 0x01000193u;
+        if (n + 1 < room) stem[n++] = c;
+    }
+    stem[n] = 0;
+    return h;
+}
+
+static void __cdecl wind_seed(void)
+{
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    const char* gs;
+    char stem[48];
+    int mode;
+    unsigned int map;
+    LONG level = InterlockedIncrement(&s_windLevels);
+    /* GameingState is not NULL here: the loader body dereferenced it at 0x4971CD, as `this`
+       for 0x435100, on the only path into 0x4917D0 (0x497CA1 -> 0x497581) */
+    memcpy(&gs, ta + B6_TNT, sizeof gs);
+    memcpy(&mode, gs, sizeof mode);
+    map = wind_map_hash(gs, stem, sizeof stem);
+    if (mode == B6_NETWORK) {
+        char copy[40], guid[40];
+        wind_guid_text(&s_windEngineCopy, copy, sizeof copy);
+        wind_guid_text(&s_windSession, guid, sizeof guid);
+        if (s_windSource == WIND_DPLAY) {
+            s_windState = wind_session_seed(&s_windSession, map);
+            tagpu_logf("enginefix: wind: level %ld seeded from the session %s and the map \"%s\" "
+                       "(0x%08X): seed 0x%08X%08X; the engine's copy main+0x479 %s %s; "
+                       "SetSessionDesc so far: %ld made, %ld with another GUID in the engine's "
+                       "descriptor, %ld withheld", (long)level, guid, stem, map,
+                       (unsigned int)(s_windState >> 32), (unsigned int)s_windState,
+                       memcmp(&s_windEngineCopy, &s_windSession, sizeof(GUID)) ? "differs:"
+                                                                                : "agrees:",
+                       copy, (long)s_windSetCalls, (long)s_windSetDiffered,
+                       (long)s_windSetWithheld);
+        } else if (s_windSource == WIND_COPY) {
+            LONG n = InterlockedIncrement(&s_windFromCopy);
+            s_windState = wind_session_seed(&s_windSession, map);
+            tagpu_logf("enginefix: wind: level %ld is a network game and DirectPlay's answer was "
+                       "refused (0x%08lX, dwSize %lu): seeded from the engine's copy main+0x479 "
+                       "%s and the map \"%s\" (0x%08X): seed 0x%08X%08X (%ld so far)",
+                       (long)level, (unsigned long)s_windSessionHr,
+                       (unsigned long)s_windDescSize, guid, stem, map,
+                       (unsigned int)(s_windState >> 32), (unsigned int)s_windState, (long)n);
+        } else {
+            LONG n = InterlockedIncrement(&s_windMapOnly);
+            s_windState = map;
+            tagpu_logf("enginefix: wind: level %ld is a network game with no session: "
+                       "DirectPlay's answer refused (0x%08lX, dwSize %lu) and the engine's copy "
+                       "null; seeded from the map \"%s\" (0x%08X) alone (%ld so far)",
+                       (long)level, (unsigned long)s_windSessionHr,
+                       (unsigned long)s_windDescSize, stem, map, (long)n);
+        }
+    } else {
+        LARGE_INTEGER c;
+        QueryPerformanceCounter(&c);
+        s_windState = (unsigned long long)c.QuadPart ^ ((unsigned long long)map << 32);
+        tagpu_logf("enginefix: wind: level %ld seeded from the performance counter (game mode "
+                   "%d, not a network game), map \"%s\"", (long)level, mode, stem);
+    }
+    wind_next();                                /* one step, so a seed of 0 is no special case */
+}
+
+static void __cdecl wind_draw(void)
+{
+    char* ta = *(char* const*)(size_t)B6_MAIN;
+    unsigned int next, dir, lo, hi, speed;
+    int range;
+    memcpy(&next, ta + 0x37EC4, 4);
+    next += 30u * (5u + wind_next() % 10u);
+    memcpy(ta + 0x37EC4, &next, 4);
+    memcpy(&lo, ta + 0x1425B, 4);
+    memcpy(&hi, ta + 0x1425F, 4);
+    range = (int)(hi - lo);                        /* stock's 32-bit sub at 0x490CA1 */
+    speed = range < 2 ? lo : lo + wind_next() % (unsigned int)range;
+    memcpy(ta + 0x37EDA, &speed, 4);
+    if (speed != 0) {
+        unsigned short h;
+        dir = wind_next() % 0x10000u;
+        h = (unsigned short)dir;
+        memcpy(ta + 0x37ED8, &h, 2);
+    }
+}
+
+static int fix_wind(void)
+{
+    static const unsigned char test[26] = {
+        0xA1, 0xE8, 0x1D, 0x51, 0x00, 0x8B, 0x88, 0xC4, 0x7E, 0x03, 0x00, 0x8B, 0x90,
+        0x47, 0x8A, 0x03, 0x00, 0x3B, 0xCA, 0x0F, 0x83, 0x2E, 0x01, 0x00, 0x00, 0x56,
+    };
+    static const unsigned char join[13] = {
+        0x8B, 0x90, 0xDA, 0x7E, 0x03, 0x00, 0x66, 0x8B, 0x80, 0xD8, 0x7E, 0x03, 0x00,
+    };
+    static const unsigned char draws[6] = { 0x8D, 0xB0, 0xC4, 0x7E, 0x03, 0x00 };
+    static const unsigned char load[5]  = { 0xE8, 0x38, 0xF3, 0xFF, 0xFF };  /* call 0x490C40 */
+    static const unsigned char start[10] = {       /* push 0x497C70; call 0x4B6B20 */
+        0x68, 0x70, 0x7C, 0x49, 0x00, 0xE8, 0x51, 0xE8, 0x01, 0x00,
+    };
+    static const unsigned char desc[36] = {         /* eax = &desc ... esi = dp; dwSize = 0x50 */
+        0x8D, 0x86, 0x5D, 0x04, 0x00, 0x00, 0x89, 0x8E, 0xA1, 0x04, 0x00, 0x00,
+        0x89, 0x96, 0x9D, 0x04, 0x00, 0x00, 0x89, 0xBE, 0x8D, 0x04, 0x00, 0x00,
+        0x8B, 0xB6, 0xC5, 0x04, 0x00, 0x00, 0xC7, 0x00, 0x50, 0x00, 0x00, 0x00,
+    };
+    static const unsigned char setdesc[9] = {       /* push 0; mov ecx,[esi]; push eax; push esi;
+                                                       call [ecx+0x7C] */
+        0x6A, 0x00, 0x8B, 0x0E, 0x50, 0x56, 0xFF, 0x51, 0x7C,
+    };
+    static const unsigned char after[4] = { 0x85, 0xC0, 0x75, 0x0A };   /* test eax,eax; jne */
+    unsigned char *a, *b, *c, *d, *p;
+    if (!(a = fix_code(24)) || !(b = fix_code(16)) || !(c = fix_code(16)) ||
+        !(d = fix_code(16))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    p = a;
+    *p++ = 0x60;                                                /* pushad               */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_draw); p += 4;
+    *p++ = 0x61;                                                /* popad                */
+    *p++ = 0xA1;                                                /* mov eax,[0x511DE8]   */
+    *p++ = 0xE8; *p++ = 0x1D; *p++ = 0x51; *p++ = 0x00;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00490CE8);
+    p = b;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_seed); p += 4;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00490C40);
+    p = c;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_session_capture); p += 4;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004B6B20);
+    p = d;
+    *p++ = 0x50;                                                /* push eax: the descriptor */
+    *p++ = 0x56;                                                /* push esi: the interface  */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_set_session_desc); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004C9906);
+    lim_same(0x004C98D9, sizeof desc, desc, "wind: SetSessionDesc's descriptor and interface");
+    lim_branch(0x004C98FD, sizeof setdesc, setdesc, 0xE9, (unsigned int)(size_t)d,
+               "wind: SetSessionDesc, with the GUID DirectPlay holds");
+    lim_same(0x004C9906, sizeof after, after, "wind: SetSessionDesc's result test");
+    lim_same(0x004982C5, 5, start, "wind: the loader thread's entry 0x497C70");
+    lim_branch(0x004982CA, 5, start + 5, 0xE8, (unsigned int)(size_t)c,
+               "wind: the loader thread's start, capturing the session first");
+    lim_same(0x00490C40, sizeof test, test, "wind: the schedule's test");
+    lim_branch(0x00490C5A, sizeof draws, draws, 0xE9, (unsigned int)(size_t)a,
+               "wind: the draws, from our generator");
+    lim_same(0x00490CE8, sizeof join, join, "wind: the components, where the draws rejoin");
+    lim_branch(0x00491903, sizeof load, load, 0xE8, (unsigned int)(size_t)b,
+               "wind: the level load's call, seeding first");
+    return FIX_TABLE;
+}
+
+/* A YARDMAP PARSED PAST ITS STRING [DISASSEMBLED]. For a def whose BMcode is 0 ([def+0x22F],
+   0x42CF30..0x42CF38) the unit-def loader reads the FBI's YardMap key with
+   GetString 0x4C48C0(buf, "YardMap", 0x400, "") into a 0x400-byte stack buffer at the call
+   site's [esp+0x128] (0x42CF3E..0x42CF59); GetString NUL-terminates inside that size, or copies
+   the "" default when the key is missing, and the return is ignored. The loader then allocates
+   footX * footZ bytes (+0x14A, +0x14C, words) at def+0x14E through 0x4D83B0 (0x42CF5E..0x42CF7A)
+   and fills them row by row (0x42CF9D..0x42D06B): a char of `.CGOYcfowy` writes one cell
+   (0x00 0x35 0x8F 0x2B 0x31 0x2D 0x6F 0x2F 0x37 0x29, the byte map 0x42D198 into the jump
+   table 0x42D16C) and moves on unless the NEXT char is the NUL, so a short string repeats its
+   last char; any other char, the NUL included, is skipped without filling a cell (0x42CFB5 ->
+   0x42D049). So a missing key, or a string that ends on an invalid char, walks past the NUL
+   into whatever the stack held and on up it until every cell has a byte: the yardmap decides
+   placement (0x47D2E0), occupancy (0x47CC30) and pathing, and each peer's stack is its own.
+   No retail unit reaches it (all 126 BMcode-0 units have a YardMap that ends on a valid char);
+   a mod does. TADR's fix leaves def+0x14E NULL, which six readers dereference unchecked.
+   THE FIX: a jmp at 0x42CF5E into yard_parse, which makes stock's allocation through the same
+   allocator and fills it by stock's table, skip rule and repeat rule, rejoining at 0x42D079,
+   where nothing the parse held is read again (ecx, eax, esi and edx are written first, ebx and
+   edi after 0x42D0E3). Where stock would step past the NUL with cells left, each remaining cell
+   takes the last valid char's byte, or 'o' (0x2F) when the string had none [DECIDED
+   2026-09-25].
+   THE INVARIANT: the parse reads only inside the string GetString wrote — never past its NUL,
+   never past the buffer's 0x400 bytes, whether or not a NUL is there — and writes only the
+   footX * footZ cells it allocated. Identical to stock for every string stock parses inside
+   its NUL, all 126 retail yardmaps among them.
+   CLASS: simulation, fail closed. A player without it builds by the bytes of its own stack. */
+#define YARD_BUF 0x400
+static volatile LONG s_yardFilled;              /* defs filled past their string, peekable   */
+
+static int yard_code(char c)
+{
+    switch (c) {
+    case '.': return 0x00;
+    case 'C': return 0x35;
+    case 'G': return 0x8F;
+    case 'O': return 0x2B;
+    case 'Y': return 0x31;
+    case 'c': return 0x2D;
+    case 'f': return 0x6F;
+    case 'o': return 0x2F;
+    case 'w': return 0x37;
+    case 'y': return 0x29;
+    default:  return -1;
+    }
+}
+
+static void __cdecl yard_parse(unsigned int* regs)
+{
+    unsigned char* def = (unsigned char*)(size_t)regs[PR_EBP];
+    const char* buf = (const char*)(size_t)(regs[PR_ESP] + 0x128);
+    const char* const end = buf + YARD_BUF;
+    const char* p = buf;
+    short fx, fz;
+    int cells, k, last = -1, past = 0;
+    unsigned char* map;
+    memcpy(&fx, def + 0x14A, 2);
+    memcpy(&fz, def + 0x14C, 2);
+    map = (unsigned char*)ENG_ALLOC((const char*)(size_t)0x00503978u,
+                                    (unsigned int)((int)fz * (int)fx));
+    memcpy(def + 0x14E, &map, sizeof map);
+    cells = (fx > 0 && fz > 0) ? (int)fx * (int)fz : 0;
+    for (k = 0; k < cells; ) {
+        int code;
+        if (p >= end || *p == 0) {                 /* stock would step past the string here */
+            map[k++] = (unsigned char)(last >= 0 ? last : 0x2F);
+            past++;
+            continue;
+        }
+        code = yard_code(*p);
+        if (code < 0) { p++; continue; }           /* skipped, the cell still to fill        */
+        map[k++] = (unsigned char)code;
+        last = code;
+        if (p + 1 < end && p[1] != 0) p++;         /* the last char before the NUL repeats   */
+    }
+    if (past) {
+        LONG n = InterlockedIncrement(&s_yardFilled);
+        if (n <= 32 || !(n & (n - 1)))
+            tagpu_logf("enginefix: yardmaps: %.32s: %d of its %d cells lie past its YardMap "
+                       "string and take 0x%02X (%ld so far)", (const char*)def, past, cells,
+                       last >= 0 ? last : 0x2F, (long)n);
+    }
+}
+
+static int fix_yardmap(void)
+{
+    static const unsigned char read[32] = {
+        0x8B, 0x4C, 0x24, 0x14, 0x68, 0xB8, 0x19, 0x51, 0x00, 0x68, 0x00, 0x04, 0x00, 0x00, 0x8D,
+        0x94, 0x24, 0x30, 0x01, 0x00, 0x00, 0x68, 0x88, 0x39, 0x50, 0x00, 0x52, 0xE8, 0x62, 0x79,
+        0x09, 0x00,
+    };
+    static const unsigned char parse[7] = { 0x0F, 0xBF, 0x85, 0x4C, 0x01, 0x00, 0x00 };
+    static const unsigned char join[7]  = { 0x0F, 0xBF, 0x8D, 0x4A, 0x01, 0x00, 0x00 };
+    unsigned char *a, *p;
+    if (!(a = fix_code(24))) { lim_no_stub(); return FIX_TABLE; }
+    p = fix_call_regs(a, yard_parse);
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0042D079);
+    lim_same(0x0042CF3E, sizeof read, read, "yardmaps: the key's read into its 0x400 bytes");
+    lim_branch(0x0042CF5E, sizeof parse, parse, 0xE9, (unsigned int)(size_t)a,
+               "yardmaps: the parse, inside the string");
+    lim_same(0x0042D079, sizeof join, join, "yardmaps: the footprint box, where the parse rejoins");
+    return FIX_TABLE;
+}
+
+/* THE SAVED-GAME LOADER'S ORDER FALLBACK [DISASSEMBLED]. The order loader 0x43A420 takes an
+   order's type from its `<key>_name` (0x43C6B0, then a strcmp against the table; not found ->
+   0x43A552, "Ready", dl = 0). A record without the name falls back to its stored index and
+   walks the order table 0x512344 counting records whose +0x14 bit 0 is clear
+   (0x43A556..0x43A58F): the walk runs while the record is <= the table's end 0x512348
+   (0x43A58B `cmp eax,esi; jbe 0x43A56D`), one record past it, and an index it does not meet
+   leaves dl at the count (0x43A58F -> 0x43A598 `mov dl,cl`), 68 or 69 against a table of 68
+   records: the order's type byte, and a wild dispatch on its first tick. This exe's writer
+   always stores the name (0x43AA90..0x43AAE3), so only a foreign or damaged save reaches it.
+   The table holds 68 records for the whole process (UIPipelinesInit 0x491200's one fill), so
+   the walk's first record, examined before the bound, is always a real one.
+   THE FIX, two bytes: `jbe` -> `jb` at 0x43A58D (the end is exclusive), and the not-found jmp
+   at 0x43A58F -> 0x43A552 (EB 07 -> EB C1), the by-name branch's own "Ready". ebx and the rest
+   reach 0x43A59A as they did; only dl differs, and only for an index the table does not hold.
+   THE INVARIANT: an order's type is an index below the table's count, or 0.
+   CLASS: local. A malformed save's fate, on one machine. */
+static int fix_save_order_fallback(void)
+{
+    FIXSITE site = { 0x0043A58D, 4, { 0x76, 0xDE, 0xEB, 0x07 }, { 0x72, 0xDE, 0xEB, 0xC1 } };
+    if (!fix_match(&site, 1)) return FIX_BYTES;
+    return fix_write(&site, 1);
+}
+
+/* THE STOCKPILE BAR'S DIVIDE [DISASSEMBLED]. 0x439D20(unit), called once at 0x46B446 for the
+   bottom panel, finds the unit's first order with +0x42 bit 19 (0x80000, the weapon build),
+   reads its slot index +0x36 and progress +0x3E, the slot's weapon [unit + 0x10 + idx * 0x1C]
+   (0x439D51) and the weapon's reload word +0xE4, and divides progress * 100 by it (0x439D65
+   `idiv esi`). Nothing bounds the index to the three inline slots, and nothing tests the
+   divisor: an unarmed slot holds &Weapons[0], whose +0xE4 is 0, and so does a stockpile weapon
+   with no reloadtime. No stock weapon reaches it (every stockpile weapon's reloadtime is
+   120-180); a mod, or a remote unit whose type differs on this peer, does. Side slots past the
+   third, which the extra-weapons module keeps in its own table, are not inline slots, and the
+   engine's bar has no reader for them.
+   THE FIX: a jmp at 0x439D41 (`mov ecx,[eax+0x36]; mov eax,[eax+0x3E]`) to a stub that takes
+   0x439D6B, the function's own `return 0`, for an index above 2, a NULL weapon or a zero
+   +0xE4, and otherwise repeats the two loads and rejoins at 0x439D47 with ecx the index and eax
+   the progress. esi, pushed at 0x439D24, is free until 0x439D47 rewrites it, and 0x439D6B
+   pops it.
+   THE INVARIANT: the divide at 0x439D65 sees a non-zero divisor read from an inline slot.
+   CLASS: local. A HUD draw. */
+static int fix_stockpile_bar(void)
+{
+    FIXSITE site = { 0x00439D41, 6, { 0x8B, 0x48, 0x36, 0x8B, 0x40, 0x3E }, { 0 } };
+    static const unsigned char stub[38] = {
+        0x8B, 0x48, 0x36,                               /* mov ecx,[eax+0x36]       */
+        0x83, 0xF9, 0x02,                               /* cmp ecx,2                */
+        0x77, 0x23,                                     /* ja zero                  */
+        0x8D, 0x34, 0xCD, 0x00, 0x00, 0x00, 0x00,       /* lea esi,[ecx*8]          */
+        0x2B, 0xF1,                                     /* sub esi,ecx: idx * 7     */
+        0x8B, 0x74, 0xB2, 0x10,                         /* mov esi,[edx+esi*4+0x10] */
+        0x85, 0xF6,                                     /* test esi,esi             */
+        0x74, 0x12,                                     /* jz zero                  */
+        0x66, 0x83, 0xBE, 0xE4, 0x00, 0x00, 0x00, 0x00, /* cmp word [esi+0xE4],0    */
+        0x74, 0x08,                                     /* je zero                  */
+        0x8B, 0x40, 0x3E,                               /* mov eax,[eax+0x3E]       */
+    };                                                  /* jmp 0x439D47; zero: jmp 0x439D6B */
+    unsigned char* a;
+    if (!fix_match(&site, 1)) return FIX_BYTES;
+    if (!(a = fix_code(sizeof stub + 10))) return FIX_STUB;
+    memcpy(a, stub, sizeof stub);
+    a[sizeof stub] = 0xE9;      tagpu_detour_rel(a + sizeof stub + 1, 0x00439D47);
+    a[sizeof stub + 5] = 0xE9;  tagpu_detour_rel(a + sizeof stub + 6, 0x00439D6B);
+    fix_branch(&site, 0xE9, a);
+    return fix_write(&site, 1);
+}
+
+/* A RANGE CIRCLE OF RADIUS 1 [DISASSEMBLED]. DrawRangeCircle 0x438EA0 returns at once for
+   radius 0 (0x438EAF), takes N = (int)(r * 2pi * 0.125) segments (the doubles 0x4FD2B0 and
+   0x4FD2B8, ftol 0x4E43A0), and divides 0x10000 by N at 0x438EEE. Its guard at 0x438EDE, `jl
+   0x43904D` after `cmp ecx,ebp` (ebp 0), catches only a negative N, and radius 1 gives N = 0: a
+   divide by zero. No stock unit has a range that small; a mod does. TADR's `jle` sends N = 0
+   to 0x43904D, which draws the circle's label at the screen's corner (0, 4).
+   THE FIX: the six-byte jl becomes a jmp to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, on the
+   flags of 0x438ED8's compare (the mov at 0x438EDA leaves them). N = 0 goes to 0x43908F, the
+   epilogue radius 0 takes, with the same stack; a negative N keeps stock's path.
+   THE INVARIANT: 0x438EEE divides by N >= 1.
+   CLASS: local. A HUD draw. */
+static int fix_range_circle(void)
+{
+    FIXSITE site = { 0x00438EDE, 6, { 0x0F, 0x8C, 0x69, 0x01, 0x00, 0x00 }, { 0 } };
+    unsigned char* a;
+    if (!fix_match(&site, 1)) return FIX_BYTES;
+    if (!(a = fix_code(17))) return FIX_STUB;
+    a[0] = 0x0F; a[1] = 0x8C;  tagpu_detour_rel(a + 2, 0x0043904D);    /* jl: stock's path  */
+    a[6] = 0x0F; a[7] = 0x84;  tagpu_detour_rel(a + 8, 0x0043908F);    /* je: no circle     */
+    a[12] = 0xE9;              tagpu_detour_rel(a + 13, 0x00438EE4);
+    fix_branch(&site, 0xE9, a);
+    return fix_write(&site, 1);
+}
+
+static void patch_loader_defects(void)
+{
+    int wind = fix_wind();
+    int yard = fix_yardmap();
+    int save = fix_save_order_fallback();
+    int bar  = fix_stockpile_bar();
+    int ring = fix_range_circle();
+    tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
+               "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
+               "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "
+               "radius 1 (0x438EDE) %s. Counters: levels seeded at 0x%08X, network levels "
+               "seeded from the engine's session copy at 0x%08X, SetSessionDesc calls made, "
+               "made over another GUID and withheld at 0x%08X 0x%08X 0x%08X, network levels "
+               "seeded from the map alone at 0x%08X, yardmaps filled past their string at 0x%08X",
+               fix_state(wind), fix_state(yard), fix_state(save), fix_state(bar),
+               fix_state(ring), (unsigned int)(size_t)&s_windLevels,
+               (unsigned int)(size_t)&s_windFromCopy, (unsigned int)(size_t)&s_windSetCalls,
+               (unsigned int)(size_t)&s_windSetDiffered, (unsigned int)(size_t)&s_windSetWithheld,
+               (unsigned int)(size_t)&s_windMapOnly, (unsigned int)(size_t)&s_yardFilled);
 }
 
 void tagpu_apply_patches(void)
@@ -6525,6 +7924,7 @@ void tagpu_apply_patches(void)
     }
 
     patch_engine_defects();
+    patch_loader_defects();
 }
 
 /* ===== THE RAISED LIMITS (tagpu_limits.h) ===================================================
@@ -7154,6 +8554,11 @@ int tagpu_limits_install(void)
                s_fixBytes, s_fixPages);
     if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
+    if (s_limNeeds[0]) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- %s; nothing written", s_limNeeds);
+        return 0;
+    }
     if (lim_overlap()) {
         s_limState = -1;
         tagpu_logf("limits: FAILED -- the sites at 0x%08X and 0x%08X overlap", s_limOverlapA,
@@ -7305,6 +8710,9 @@ void tagpu_limits_report(void)
     if (s_limNoStub || s_limOverflow || s_limOverlapA)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
+    else if (s_limNeeds[0])
+        why = "One of Impure's network fixes could not be installed on this TotalA.exe (the "
+              "log says why), and a fix that keeps every player's game the same relies on it.";
     else if (s_limWriteFail)
         why = "Windows refused to let Impure change the game's code in memory.";
     else if (strcmp(known, "none"))
@@ -7348,6 +8756,8 @@ void tagpu_limits_report(void)
     else if (s_limOverlapA)
         _snprintf(line, sizeof line, "result: the sites at 0x%08X and 0x%08X overlap, nothing "
                   "written\r\n", s_limOverlapA, s_limOverlapB);
+    else if (s_limNeeds[0])
+        _snprintf(line, sizeof line, "result: %s, nothing written\r\n", s_limNeeds);
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);

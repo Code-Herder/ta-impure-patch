@@ -695,7 +695,7 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
 
    ON WALL TIME, NOT ON A TICK COUNT. A tick here is a `DrawGameScreen` call, not a presented frame, and the game loop turns
    that over as fast as the scene allows while the presenter caps only the flip:
-   MEASURED 2026-09-10 at 1920x1080, `--maxfps 60`, both instances presenting
+   MEASURED 2026-09-10 at 1920x1080 at a 60 fps cap, both instances presenting
    58-60 fps, **330 ticks a second** on `crowd-static` (256 units, Two
    Continents) and **3200-4900** on a sparse Town & Country skirmish. So a
    block of 300 ticks is anywhere from a tenth of a second to a second — a

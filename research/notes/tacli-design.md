@@ -531,8 +531,8 @@ player's key as it was.
    fail-closed `tagpu_regstore.c` logs and the `-r` closure's line.
 3. Writes the harness files as a local launch does: `tagpu_shield.on` (unless `--no-shield`),
    `tagpu_nowarp.on`, `tagpu_defaults.off` (unless `--defaults`), the title label, `totala.ini`
-   (silence, `--unit-limit`), the settings store's `resolution=` for `--res` and `maxfps=` for
-   `--maxfps`. It rotates `ErrorLog.txt`, clears stale triggers and the key file, and auto-arms
+   (silence, `--unit-limit`), the settings store's `resolution=` for `--res` and `vsync=` for
+   `--vsync`. It rotates `ErrorLog.txt`, clears stale triggers and the key file, and auto-arms
    the `*own` halves.
 4. Puts the launch's values into the registry store: `Interface Type` 1, `PlayMovie` 0, the six
    sound values unless `--sound`, the display mode for `--res`, `--map`, `--player`, `--los`,

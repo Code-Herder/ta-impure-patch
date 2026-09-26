@@ -225,7 +225,8 @@ worktree. The fourth follows once they are on main.
   decided on the CPU (`tagpu_line.h` `tagpu_line_px`, then `tagpu_line_clip` on
   `tagpu_line_rect`), and a record carries each end's pixel centre in game units,
   `(T + 0.5) / ss`, so the vertex stages keep their game-frame mapping. The queued build site is
-  `0x438C00`'s integer geometry exactly (`tagpu_order.c` `draw_build`); the nanoframe wire is
+  `0x438C00`'s integer geometry exactly (`tagpu_order.c` `draw_build`), its colour-A lines'
+  one-pixel offset taken in the zoomed frame (`tagpu_line_nudge`, GPU status §2.93); the nanoframe wire is
   posed on the CPU into line records in the pose buffer (`tagpu_vk_unit.c` `wire_records`) and
   drawn by its own vertex stage (`tagpu_posedraw.c` `WVS`). The line pipelines, the `LINE_LIST`
   topology, `vkCmdSetLineWidth`, `lineok`, `wideok`, `maxLineWidth`, the two device asks and

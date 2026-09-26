@@ -15,10 +15,10 @@
      3. the consumer's compiled default -- `tagpu_settings_get` answers 0.
    With `tagpu_defaults.off` (every tacli control launch) the store has no say
    and `tagpu_settings_get` always answers 0 -- except for the window's
-   PLACEMENT, display mode, frame cap and windowed frame, which
-   `tagpu_settings_placement` and `tagpu_settings_window` answer under every
-   launch: the store is the only thing that places a window, and tacli writes
-   those three keys before every launch.
+   PLACEMENT and PRESENTATION -- display mode, vsync and windowed frame --
+   which `tagpu_settings_placement` and `tagpu_settings_window` answer
+   under every launch: the store is the only thing that places a window or
+   says how it presents, and tacli writes those keys before every launch.
 
    THREADS. Every value a consumer reads is an aligned LONG, written by
    InterlockedExchange and BOUNDED against its key's own table on every read,
@@ -42,7 +42,6 @@ typedef enum {
     TS_SHADOWRES,   /* 512 | 1024 | 2048 | 4096                           */
     TS_SS,          /* 1 | 2                                              */
     TS_FPS,         /* 0 | 1: the frame-rate readout                      */
-    TS_MAXFPS,      /* -1 (refresh) | 60 | 120 | 0 (uncapped)             */
     TS_HUDSCALE,    /* -1 off | 0 auto | 100 150 200 300 400              */
     TS_DISPLAY,     /* 0 window | 1 fullscreen (borderless)               */
     TS_MONITOR,     /* -1 none chosen | an index into the registered list */
@@ -50,6 +49,7 @@ typedef enum {
     TS_RESOLUTION,  /* 0 native | TS_RES(w, h): the in-game screen size       */
     TS_MIXING,      /* 8 | 16 | 24 | 32: sounds the engine plays at once      */
     TS_EDGE,        /* 1 mirror | 0 black: what the view shows past the map   */
+    TS_VSYNC,       /* 1 | 0: present on the display's vertical blank          */
     TS_NKEYS
 } TagpuSetting;
 
@@ -79,8 +79,9 @@ int  tagpu_settings_get(TagpuSetting key, int* out);
 /* 1 when the store has no say: tagpu_defaults.off is present. */
 int  tagpu_settings_ignored(void);
 
-/* TS_DISPLAY or TS_MAXFPS, answered under tagpu_defaults.off too (the
-   placement, above); 0 for any other key. Read at attach (tagpu_cfg.c). */
+/* TS_DISPLAY or TS_VSYNC, answered under tagpu_defaults.off too (the
+   placement, above); 0 for any other key. The display mode is read at attach
+   (tagpu_cfg.c), vsync every frame (`tagpu_settings_vsync`). */
 int  tagpu_settings_placement(TagpuSetting key, int* out);
 
 /* Any thread. Records the value (bounded: an invalid one is refused and
@@ -135,5 +136,12 @@ void tagpu_settings_save_window(int x, int y, int w, int h);
    file-attribute read each, so a caller polls them on its own cadence. */
 int  tagpu_settings_ss(void);
 int  tagpu_settings_fps(void);
+
+/* Vsync (0 | 1): the store under every launch, as the placement is, then 1.
+   No lever: the harness sets it through the store. It is the only frame pacing
+   there is -- on, the present waits for the vertical blank and the limiter
+   keeps a backstop just above the refresh rate (fps_limiter.c); off, nothing
+   holds the frame rate. Any thread; the render thread asks every frame. */
+int  tagpu_settings_vsync(void);
 
 #endif

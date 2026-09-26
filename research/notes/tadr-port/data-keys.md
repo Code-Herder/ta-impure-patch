@@ -274,7 +274,7 @@ commit can change.
     and never reads (`0x48797B`, `0x4872CC`);
   - no dot for the stones: the loader's closing call `0x49E010` gives such a meteor weapon
     `noradar`.
-  Detail and threads: [gpu-status §2.96](../gpu-status.html).
+  Detail and threads: [gpu-status §2.97](../gpu-status.html).
 - **Bad values**, logged at load: `surfacefire` without `waterweapon` (no effect, as documented),
   both `notover*` keys on one weapon (it fires only off the map), and `nomapweaponalert` on a
   weapon that is not a meteor with default damage 0 (its stones keep their dot).

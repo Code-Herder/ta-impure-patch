@@ -4,7 +4,7 @@
    ddraw.ini (config.c). The sibling of tagpu_opt.h: that one arms our render
    passes, this one configures cnc-ddraw itself.
 
-   Display mode, the frame cap and the windowed frame come from the settings
+   Display mode, vsync and the windowed frame come from the settings
    store (tagpu_settings.h, `tagpu_settings_placement`), under every launch.
    The renderer is Vulkan unless the harness lever `tagpu_gdi.on` sits beside
    TotalA.exe, which forces the GDI backend; GDI is otherwise only the lane the

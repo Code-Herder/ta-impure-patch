@@ -140,11 +140,11 @@ DLL reads under every launch, `tagpu_defaults.off` included:
 ```
 display=window        ; fullscreen here = borderless fullscreen, NOT a window
 window=<tile x>,<tile y>,0,0   ; 0,0 = the game's size; --window WxH gives a k != 1 client
-maxfps=60             ; 0 = uncapped (the store spells it `uncapped`), -1 = refresh
+vsync=on              ; the only pacing; off = uncapped (renderers.md 2.10c)
 ```
 
 Everything else is set in code (`config.c`, `tagpu_cfg.c`): the Vulkan backend (`tagpu_gdi.on`
-forces GDI), `maintas`, `vsync` off, `adjmouse`, a border, `lock_surfaces`, `singlecpu` off,
+forces GDI), `maintas`, `adjmouse`, a border, `lock_surfaces`, `singlecpu` off,
 `max_resolutions` 90, `maxgameticks` 0 (never raise: it perturbs the sim), and `center_window`
 never for a placed window — at cnc-ddraw's `auto` the shell-to-game mode switch re-centres it off
 its tile; a placed window the switch would leave with a corner on no monitor is moved into the work area of

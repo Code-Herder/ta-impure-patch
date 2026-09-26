@@ -656,10 +656,8 @@ void util_update_bnet_pos(int new_x, int new_y)
    - Fullscreen with no frame: the PRIMARY, the monitor at the desktop's origin.
      Never the window's own there: nothing has placed the window, so it is
      wherever wine created it (ddraw-ini-removal.md, the monitor rule).
-   Read on the render thread too (fpsl_init, through util_target_refresh):
-   `fullscreen` is an aligned BOOL and the frame four aligned LONGs, so a racing
-   read can mix an old and a new value, and every answer is a monitor that
-   exists: a point on none falls through to the primary. */
+   Every answer is a monitor that exists: a point on none falls through to
+   the primary. */
 HMONITOR util_default_monitor(void)
 {
     POINT origin = { 0, 0 };
@@ -739,42 +737,27 @@ BOOL util_target_monitor(RECT* out)
     return TRUE;
 }
 
-/* The target monitor's refresh rate in Hz, for the Refresh frame cap: the
-   frequency of that monitor's own adapter's CURRENT mode -- the menu's chosen
-   adapter by name (`tagpu_menu_monitor_device`), else `util_default_monitor`'s. Whether a secondary reports its own rate is not known on
-   wine: on the reference setup the secondaries' current mode reads 0x0 (the
-   comment above), and a frequency of 0 falls to the bound below.
-   BOUNDED: Windows answers 0 or 1 for "the hardware default", which would be a
-   cap of 0 or 1 fps, so anything outside 24..1000 Hz is the stock 60. */
-int util_target_refresh(void)
+/* The refresh rate of monitor `mon`'s current mode in Hz, or 0 when it cannot
+   be read. BOUNDED: Windows answers 0 or 1 for "the hardware default", and on
+   wine the reference setup's secondaries report their current mode as 0x0, so
+   anything outside 24..1000 Hz is 0 too -- a caller that must know the real
+   rate cannot use a guessed one. Windows reports a whole number: 59 on the AMD
+   test card's display (Win32_VideoController, MEASURED 2026-09-25), which is a
+   59.94 Hz mode rounded down [INFERRED]. */
+int util_monitor_refresh(HMONITOR mon)
 {
     MONITORINFOEXA mi;
     DEVMODEA m;
-    const char* dev = tagpu_menu_monitor_device();
-    int hz;
 
     memset(&m, 0, sizeof(m));
     m.dmSize = sizeof(m);
+    mi.cbSize = sizeof(mi);
 
-    if (!dev)
-    {
-        HMONITOR mon = util_default_monitor();
+    if (!mon || !GetMonitorInfoA(mon, (MONITORINFO*)&mi) ||
+        !real_EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &m))
+        return 0;
 
-        mi.cbSize = sizeof(mi);
-        if (mon && GetMonitorInfoA(mon, (MONITORINFO*)&mi))
-            dev = mi.szDevice;
-    }
-
-    if (!dev || !real_EnumDisplaySettingsA(dev, ENUM_CURRENT_SETTINGS, &m))
-    {
-        tagpu_log("frame cap: Refresh = 60 fps (the target monitor's mode could not be read)");
-        return 60;
-    }
-
-    hz = (m.dmDisplayFrequency >= 24 && m.dmDisplayFrequency <= 1000) ? (int)m.dmDisplayFrequency : 60;
-    tagpu_logf("frame cap: Refresh = %d fps (%s reports %lu Hz)", hz, dev,
-               (unsigned long)m.dmDisplayFrequency);
-    return hz;
+    return (m.dmDisplayFrequency >= 24 && m.dmDisplayFrequency <= 1000) ? (int)m.dmDisplayFrequency : 0;
 }
 
 BOOL util_get_lowest_resolution(
