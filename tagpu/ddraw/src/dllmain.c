@@ -224,8 +224,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            write nothing into the engine.
            nomapweaponalert: the calls at 0x489DA2 (0x406F80, which the
            extra-weapons module hooks at its entry, so the call reaches it
-           either way), 0x4071D8 and 0x489D8E, the blink read at 0x466EB9 and
-           an observer on the weapon loader's closing call 0x49E010. The
+           either way), 0x4071D8 and 0x489D8E, the blink read at 0x466EB9, the
+           unit saver's store 0x48797B and the restore's 0x4872CC, and an
+           observer on the weapon loader's closing call 0x49E010. The
            targeting keys' engine sites are in tagpu_patches.c. */
         tagpu_datakeys_init();
 

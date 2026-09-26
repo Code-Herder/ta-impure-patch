@@ -2740,6 +2740,26 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   `rand()` over the whole map (`main+0x14237`, `+0x14233`, scaled by `/0x8000`), so a test's
   units need a small map to be under it. `+meteor` (`0x438070`) turns the shower on.
 - **The meteor's dot**: weapon `+0x111` bit 6 (`noradar`), read only at `0x467206`.
+- **A saved game's unit records.** The saver `0x4876C0(file)` has one caller, `0x432A01` in the
+  game's save routine, and walks the unit array from `main+0x14357` to `main+0x1435B` in `0x118`
+  steps, saving every unit with `+0x110` bit 28 (alive; `0x487701`): one record of `0xB8` bytes
+  built at `[esp+0x18]` and written whole by `0x4B4CF0` (`0x487A9E`), then the count. The restore
+  `0x487080(id, file)` (`ret 8`) reads records by index into its own `[esp+0x18]` (`0x4B4C80` at
+  `0x48711D`, refusing any length but `0xB8`) until the id word `+0x21` matches, creates the unit
+  (`0x485F50`) and recurses for the two unit ids at `+0x89` and `+0x8B` (`0x4871DD`,
+  `0x48720D`). Its caller `0x486FD0` (at `0x432672` in the game-load routine `0x432610`, on the
+  LOADER thread) reads every record but uses only `+0x21`, and accepts a record of `0xB6` bytes.
+  Offsets in the record, as the two sides use them: `+0xAB` the unit's `+0xF5`, `+0xAC` `+0xF6`,
+  `+0xAD` `+0xF7`, `+0xAE` the WORD `+0xBA`, `+0xB0` `+0xF8`, **`+0xB1` `+0xFA`** (out at `0x487996`,
+  in at `0x4872CC`), **`+0xB2` a WORD, `movzx` of the byte `+0x10E`** (`0x48797B`), of which the
+  restore reads only the low byte (`0x4872D2`), and `+0xB4` a DWORD of packed bits. So **`+0xB3`
+  is 0 in every save stock writes and read by nothing**: the one spare byte, which
+  `nomapweaponalert` uses to carry its blink hold (gpu-status §2.96). The saver's three weapon
+  slots fill `+0x41..+0x88` (`0x487A0D..0x487A7D`), clear of it. MEASURED 2026-09-25: the saver
+  runs on the game thread (the thread of the radar rebuild) and the restore on the loader thread;
+  a loaded game starts paused; the unit array's base moves at the load, so an address read before
+  it is stale; the records do not appear as plain bytes in the `.SAV` file (compressed
+  [INFERRED]).
 
 ## Built-in cheat/console command surface
 

@@ -1024,11 +1024,10 @@ int __stdcall tagpu_datakeys_alert(char* unit, int kind, int arg)
    +0xFA and its loud part fall together. E = 0 is stock, and E means nothing
    while +0xFA is 0, so a slot's next unit needs no reset (the create zeroes
    +0xFA). The table is emptied at the level's weapon load 0x42E310, which the
-   saved game's restore follows (it writes weapon fields, 0x487628), so a
-   restored unit blinks as stock. THE RESIDUAL: a harmless hit's window that
-   spans a save and its restore blinks for its remainder -- the save carries
-   no E. Indexed by the unit's slot, bounded by the engine's own slot count
-   (u16 main+0x14351) and by the table. */
+   saved game's restore follows (it writes weapon fields, 0x487628), and a
+   saved game carries each unit's E beside its +0xFA (below). Indexed by the
+   unit's slot, bounded by the engine's own slot count (u16 main+0x14351) and
+   by the table. */
 #define DK_QUIET_SLOTS (10 * TAGPU_LIM_UNITS + 1)
 static unsigned char s_quiet[DK_QUIET_SLOTS];
 
@@ -1079,6 +1078,30 @@ static int __stdcall blink_quiet(const char* u)
     if (!fa || fa > s_quiet[s]) return 0;
     wk_event(&s_evBlink, "a minimap dot held still after a harmless weather hit");
     return 1;
+}
+
+/* --- the blink across a save ---------------------------------------------------
+   The unit saver 0x4876C0 (one caller, 0x432A01) builds each unit's 0xB8-byte
+   record at [esp+0x18] and writes it whole (0x487A9E); the restore 0x487080
+   reads a record back into its own [esp+0x18] (0x48711D) and writes +0xFA from
+   record +0xB1 (0x4872CC). Record +0xB2 is a WORD that 0x48797B stores from a
+   movzx of the byte +0x10E, and the restore reads only its low byte
+   (0x4872D2); the only other reader, 0x486FD0, reads the id word +0x21. So
+   record +0xB3 is 0 in every save stock writes and nothing reads it. E rides
+   there: the saver stores (E << 8) | +0x10E and the restore gives the unit's
+   slot the E beside its +0xFA, so a restored unit blinks exactly as it would
+   have. A save without E carries 0, which is stock. The restore runs on the
+   LOADER thread inside the level's load, after 0x42E310 emptied the table. */
+static unsigned __stdcall save_word(const char* u, unsigned v)
+{
+    int s = unit_slot(u);
+    return (s >= 0 ? (unsigned)s_quiet[s] << 8 : 0u) | (v & 0xFFu);
+}
+
+static void __stdcall restore_quiet(const char* u, unsigned e)
+{
+    int s = unit_slot(u);
+    if (s >= 0) s_quiet[s] = (unsigned char)e;
 }
 
 /* --- the projectile's dot ------------------------------------------------------
@@ -1182,6 +1205,53 @@ static int blink_install(void)
     return 1;
 }
 
+#define VA_SAVE_WORD       0x0048797Bu
+#define VA_SAVE_WORD_BACK  0x00487983u
+#define VA_REST_FA         0x004872CCu
+#define VA_REST_FA_BACK    0x004872D2u
+static const unsigned char SAVE_WORD_WAS[8] = { 0x66, 0x89, 0x84, 0x24, 0xCA, 0x00, 0x00, 0x00 };
+static const unsigned char REST_FA_WAS[6]   = { 0x88, 0x96, 0xFA, 0x00, 0x00, 0x00 };
+
+/* Both sites are whole instructions whose next instruction neither reads the
+   flags nor the registers the stubs clobber (eax is rewritten at 0x487983 and
+   0x4872D2). The restore lands first: a restore without the saver reads the
+   0 of every save, a saver without the restore writes a byte nothing reads. */
+static int save_install(void)
+{
+    unsigned char *r, *s, *p;
+    unsigned d = 0xCB + 12;                         /* record +0xB3, under three pushes */
+    if (!site_is(VA_SAVE_WORD, SAVE_WORD_WAS, 8) || !site_is(VA_REST_FA, REST_FA_WAS, 6)) return 0;
+    if (!(r = tagpu_detour_stub())) return 0;
+    if (!(s = tagpu_detour_stub())) { VirtualFree(r, 0, MEM_RELEASE); return 0; }
+    p = r;
+    memcpy(p, REST_FA_WAS, sizeof REST_FA_WAS); p += sizeof REST_FA_WAS; /* mov [esi+0xFA],dl */
+    *p++ = 0x50; *p++ = 0x51; *p++ = 0x52;          /* push eax, ecx, edx   */
+    *p++ = 0x0F; *p++ = 0xB6; *p++ = 0x84; *p++ = 0x24; memcpy(p, &d, 4); p += 4; /* movzx eax,byte [esp+d] */
+    *p++ = 0x50;                                    /* push eax: E as saved */
+    *p++ = 0x56;                                    /* push esi: the unit   */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)restore_quiet); p += 4;
+    *p++ = 0x5A; *p++ = 0x59; *p++ = 0x58;          /* pop edx, ecx, eax    */
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_REST_FA_BACK);
+    p = s;
+    *p++ = 0x51; *p++ = 0x52;                       /* push ecx, edx        */
+    *p++ = 0x50;                                    /* push eax: +0x10E     */
+    *p++ = 0x55;                                    /* push ebp: the unit   */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)save_word); p += 4;
+    *p++ = 0x5A; *p++ = 0x59;                       /* pop edx, ecx         */
+    memcpy(p, SAVE_WORD_WAS, sizeof SAVE_WORD_WAS); p += sizeof SAVE_WORD_WAS; /* mov [esp+0xCA],ax */
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_SAVE_WORD_BACK);
+    if (!tagpu_detour_land(VA_REST_FA, r, (int)sizeof REST_FA_WAS)) {
+        VirtualFree(r, 0, MEM_RELEASE);
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    if (!tagpu_detour_land(VA_SAVE_WORD, s, (int)sizeof SAVE_WORD_WAS)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    return 1;
+}
+
 static void alert_install(void)
 {
     unsigned char *frame, *mark;
@@ -1205,6 +1275,12 @@ static void alert_install(void)
              "as stock");
     } else {
         dlog("nomapweaponalert: the blink held at 0x489D8E and 0x466EB9");
+        if (save_install())
+            dlog("nomapweaponalert: a saved game carries the blink's hold (0x48797B, 0x4872CC)");
+        else
+            dlog("nomapweaponalert: a saved game does NOT carry the blink's hold: the bytes at "
+                 "0x48797B or 0x4872CC are not the retail ones, or a write failed; a harmless "
+                 "hit's blink that spans a save and its restore blinks for its remainder");
     }
     if (observe(VA_AIM_CHOICE, AIM_CHOICE_STOLEN, (int)sizeof AIM_CHOICE_STOLEN, weapon_closed))
         dlog("nomapweaponalert: the projectile's dot hidden through noradar at 0x49E010");

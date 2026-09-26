@@ -264,7 +264,9 @@ commit can change.
   - no "Under Attack", at its one site `0x4071D8` and in the extra-weapons module's retaliation,
     through a frame around `0x406F80` (`0x489DA2`) that saves and restores its answer;
   - no blink of the hit unit's dot (`0x489D8E`, `0x466EB9`), for exactly the part of `+0xFA` that
-    harmless hits alone put there, so a real hit keeps blinking for its own 0xF0 ticks;
+    harmless hits alone put there, so a real hit keeps blinking for its own 0xF0 ticks. A saved
+    game carries that part beside `+0xFA`, in a byte of the unit's record that stock writes as 0
+    and never reads (`0x48797B`, `0x4872CC`);
   - no dot for the stones: the loader's closing call `0x49E010` gives such a meteor weapon
     `noradar`.
   Detail and threads: [gpu-status §2.96](../gpu-status.html).
@@ -312,13 +314,19 @@ commit can change.
     no text, against "Under Attack" on both under the control. A temporary counter showed that
     each peer's harmless hits on its own units arrive both ways, local (`0x489C89`) and received
     as a `0x0B` (the dispatcher's case, `0x455412`). The counter was removed.
+    **A save across the hail** (`WK Hail`, with a Peewee of the player's shooting one solar
+    collector): the game was saved while three collectors held harmless hits (`+0xFA` 70, 220 and
+    231, `E` 240 each) and the Peewee's target a loud one (`+0xFA` 239, `E` 0), and loaded back. A
+    temporary trace, since removed, showed the saver on the game thread (the same thread as the
+    blink) and the restore on the loader thread, giving each of those slots exactly the `+0xFA` and
+    `E` it was saved with. A loaded game starts paused; once it ran, a burst of 8 shots over
+    2.5 s found one dot missing in some frames, the loud unit's, and 0 pixels changed anywhere
+    else while the harmless ones' `+0xFA` fell from 220 and 231 to 132 and 143.
   - **Stock content**: only the fixture's weapons log a key at load.
 - **Not covered.**
   - The attack cursor's in-range answer for a keyed weapon was not seen: the AI flies its
     aircraft out of range. It follows from the cursor asking `0x49ABB0`. Out of range, both
     towers show "too far" (3).
-  - A harmless hit's blink window that spans a save and its restore blinks for its remainder:
-    the save carries no record of which part of `+0xFA` was harmless.
   - What stock does with an attack order whose target `0x49ABB0` later refuses. For a keyed weapon
     it is moot, because the mirror refuses the order and the gate drops a flying target.
   - Escalation's own flight numbers for its vertical-launch sub missile

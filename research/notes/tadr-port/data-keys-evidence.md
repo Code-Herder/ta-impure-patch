@@ -835,8 +835,12 @@ mark is its own site at `0x489D8E`, deciding from the same record. It keeps, per
 share of `+0xFA` that harmless hits alone put there, so a real hit followed by weather keeps
 blinking for its own 0xF0 ticks. `+0xFA`'s every writer is accounted for: the hit, the unit tick
 `0x48ADF0`, the create `0x485C12` and the saved game's restore `0x4872CC` (`0x4225EC` and
-`0x42E6D6` write other records). The dot of the stones is Q2's `noradar`, set at the loader's
-closing call `0x49E010`, where the flags and the default damage are final. The plan's
+`0x42E6D6` write other records). The restore writes `+0xFA` from the saved record, so the share
+travels with it: the unit saver `0x4876C0` stores the record's `+0xB2` as a WORD zero-extended from
+the byte `+0x10E` (`0x48797B`), the restore reads only its low byte (`0x4872D2`), and `0x486FD0`
+reads only the id word `+0x21`, so `+0xB3` is 0 in every save stock writes and read by nothing; the
+share is stored there and read back at `0x4872CC`. The dot of the stones is Q2's `noradar`, set at
+the loader's closing call `0x49E010`, where the flags and the default damage are final. The plan's
 [C2, as built](data-keys.md#c2-as-built) has the rest and the measurements.
 
 ---

@@ -274,6 +274,11 @@ lists every one. Four scenarios, each pairing a keyed unit with its control:
   above 100: under stock the dot is missing from some of them.
 - **A meteor shower centres anywhere on the map**, so a test under one needs a small map; the hail
   maps are Show Down's terrain.
+- **Saving and loading in game**: Tab, `ui <i> click SAVEGAME`, `click GAMENAME`,
+  `fill GAMENAME <name>`, then `click LOAD` (the save screen's button is named LOAD). Loading is
+  Tab, `click LOADGAME`, `select GAMES <name>`, `click LOAD`. **A loaded game starts paused**
+  (`keys <i> pause` once), the menu pauses the game while it is open, and **the unit array's base
+  moves at a load**: re-read `*0x511DE8+0x14357` before peeking a unit.
 
 ## The render-options screen and the GPU row
 
