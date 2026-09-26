@@ -955,7 +955,7 @@ the message's length; B5 refuses the fail-closed table unless B3 armed. Compared
 `0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`, `0x48B933`
 (12 bytes, the reader's slots) and `0x453E84` (30 bytes, the sender's record). All are rows of the
 fail-closed table, in both builds.
-MEASURED 2026-09-25 (the plan's *B5 BUILT AHEAD*, two peers, Two Continents): on the previous
+MEASURED 2026-09-25 (the plan's *B5 LANDED* section, two peers, Two Continents): on the previous
 build the joiner lacked the host's commander until t = 50 s at the 1500-unit limit and t = 18 s at
 500, and one ordered to move at once appeared at `(1,−2)` / `(2,−3)` and walked from the corner;
 on B5's first build, which replayed at the state-6 store, it was present at the host's position at

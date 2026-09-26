@@ -1074,8 +1074,10 @@ bound, the bit reader, the ground and air payloads, a goal not taken, a position
 past its message's end and one that ends on its last bit, which create a kill cancels). Counters
 on the heartbeat's `ghost:` section, its alert fields first.
 
-**B5 BUILT AHEAD (2026-09-25, from `c2e5850` on its own worktree from B4's `a8e529e`, B4's fix
-rounds merged at `fbda477`; not landed, not reviewed).** `fix_ghost_commander` in
+**B5 LANDED 2026-09-25** on local main (from `c2e5850` on its own worktree from B4's `a8e529e`, B4's
+fix rounds merged at `fbda477`, main with B4 landed at `cf1ebe2`; reviewed at high by two reviewers,
+their findings acted on in `89a76b2`/`73573aa`, and a focused review of that round acted on in
+`58afd89`/`2573ce1`). `fix_ghost_commander` in
 `tagpu_patches.c`. Merged with main after B4 landed, the install line reads `limits: installed 212
 sites` in the raised build and `the simulation fixes' 87 sites installed` in the stock-limits one,
 B5's fifteen rows among them; `tagpu_wirecheck.on` runs its 21 rule cases, all OK, in both, beside
