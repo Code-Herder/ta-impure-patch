@@ -1244,11 +1244,16 @@ static int vk_swapchain(int w, int h)
             s_vk.fmt = fmts[i].format; s_vk.cspace = fmts[i].colorSpace; break;
         }
 
-    /* `vsync` PICKS FIFO OR IMMEDIATE. FIFO is the only mode the specification guarantees and is what vsync
-       means; IMMEDIATE is the unlocked one. MAILBOX IS NOT OFFERED on the
-       reference setup's 4070 under wine (roadmap, Phase G), so nothing here may
-       be designed around triple buffering -- `fps_limiter.c` and `maxfps`
-       remain the pacing mechanism. */
+    /* `vsync` (the store's `vsync` key) PICKS FIFO OR IMMEDIATE. FIFO is the
+       only mode the specification guarantees and is what vsync means;
+       IMMEDIATE is the unlocked one, and a surface without it gets FIFO anyway.
+       NEITHER TEST MACHINE OFFERS MAILBOX OR FIFO_RELAXED: the reference
+       setup's 4070 under wine (roadmap, Phase G) and the Windows AMD card
+       (MEASURED 2026-09-25, vulkaninfo: IMMEDIATE and FIFO only), so nothing
+       here may be designed around triple buffering. FIFO IS NOT A PACE THE
+       LIMITER CAN RELY ON: the AMD card's FIFO swapchain presented 300 fps at
+       59 Hz (MEASURED 2026-09-25), so with vsync on `fps_limiter.c` keeps a
+       backstop just above the refresh rate. */
     if (!s_vk.vsync) {
         vkGetPhysicalDeviceSurfacePresentModesKHR(s_vk.pd, s_vk.surf, &nm, NULL);
         if (nm > 8) nm = 8;
@@ -2794,21 +2799,15 @@ static int vk_present(void)
     return 1;
 }
 
-/* Rebuild the swapchain in place: the render thread owns `s_vk` in ST_READY, so
-   this is single-owner work. Everything sized by the swapchain goes with it. */
-/* 1 rebuilt, 0 the lane must come down, -1 not yet (a zero extent). */
-static int vk_resize(int w, int h)
+/* THE PASSES GO BACK ACROSS A RESIZE TOO, and the reason is the slot count:
+   a rebuilt swapchain may come back with a different number of images, and
+   a pass that kept buffers for the old count would be handed a slot index
+   past the end of them. The device wait before the rebuild is what makes
+   dropping them safe. (Their PIPELINES could have survived -- the render pass
+   does -- but a pass that rebuilds everything has one path instead of two, and
+   a resize is a window drag, not a frame.) */
+static void passes_down(void)
 {
-    int r;
-    int idle = vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
-    if (!idle) vklog("vkDeviceWaitIdle refused before a swapchain rebuild");
-    /* THE PASSES GO BACK ACROSS A RESIZE TOO, and the reason is the slot count:
-       a rebuilt swapchain may come back with a different number of images, and
-       a pass that kept buffers for the old count would be handed a slot index
-       past the end of them. The wait above is what makes dropping them safe.
-       (Their PIPELINES could have survived -- the render pass does -- but a
-       pass that rebuilds everything has one path instead of two, and a resize
-       is a window drag, not a frame.) */
     tagpu_vk_fps_down(&s_pass);
     tagpu_vk_scaffold_down(&s_pass);
     tagpu_vk_feat_down(&s_pass);
@@ -2825,9 +2824,38 @@ static int vk_resize(int w, int h)
        gone and the restore would restart from scratch whatever this line did
        -- keeping the shared build would buy a rebuild we have no use for. */
     tagpu_vk_restore_down(&s_pass);
+}
+
+/* Rebuild the swapchain in place: the render thread owns `s_vk` in ST_READY, so
+   this is single-owner work. Everything sized by the swapchain goes with it. */
+/* 1 rebuilt, 0 the lane must come down, -1 not yet (a zero extent). */
+static int vk_resize(int w, int h)
+{
+    int r;
+    uint32_t nimg = s_vk.nimg;
+    VkExtent2D ext = s_vk.ext;
+    VkFormat fmt = s_vk.fmt;
+    int idle = vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
+    if (!idle) vklog("vkDeviceWaitIdle refused before a swapchain rebuild");
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);
+    /* A REBUILD THAT CHANGES NOTHING A PASS HOLDS KEEPS THE PASSES. A pass
+       holds no swapchain object: it is handed a slot below `s_pass.slots`
+       and the extent at record time, and builds against `s_pass.rp`, which is
+       the swapchain's format. So with the image count, the extent and the
+       format all as they were, everything it holds is still valid, and the
+       device wait above means none of it is in use. That is the vsync toggle
+       (only the present mode moves) and an out-of-date surface at the same
+       size. Dropping them there would restart the Classic++ restorer from
+       scratch: 26.6 s of terrain job on the Windows AMD test card
+       (MEASURED 2026-09-25), with the unrestored art on screen meanwhile. */
+    if (r > 0 && idle && s_vk.nimg == nimg && s_vk.fmt == fmt &&
+        s_vk.ext.width == ext.width && s_vk.ext.height == ext.height)
+        vklog("swapchain rebuilt in place (%u images %ux%u) - the passes kept",
+              s_vk.nimg, s_vk.ext.width, s_vk.ext.height);
+    else
+        passes_down();
     if (r <= 0) return r;
     if (!vk_perimage()) return 0;
     s_pass.slots = s_vk.nimg;

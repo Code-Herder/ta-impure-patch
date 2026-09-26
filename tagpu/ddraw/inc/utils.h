@@ -27,6 +27,6 @@ BOOL CALLBACK util_enum_thread_wnd_proc(HWND hwnd, LPARAM lParam);
 BOOL CALLBACK util_enum_child_proc(HWND hwnd, LPARAM lParam);
 HMONITOR util_default_monitor(void);
 BOOL util_target_monitor(RECT* out);
-int util_target_refresh(void);
+int util_monitor_refresh(HMONITOR mon);
 
 #endif

@@ -72,8 +72,4 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
    when the move lands. */
 BOOL tagpu_menu_monitor(RECT* out);
 
-/* The same monitor's adapter name (`\\.\DISPLAYn`), or NULL when the menu has
-   no choice. The table is filled at attach and never written after. */
-const char* tagpu_menu_monitor_device(void);
-
 #endif

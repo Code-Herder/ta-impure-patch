@@ -57,7 +57,6 @@
 #include "config.h"
 #include "utils.h"
 #include "hook.h"
-#include "fps_limiter.h"
 #include "tagpu_detour.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_ufo.h"
@@ -164,15 +163,15 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
-/* EIGHT rows: ROW_Y0 34 + ROW_PITCH 28 * 7 = 230, and the row is ROW_H 20, so
-   the last one ends at 250; the bottom rule sits 8 px under it and the panel
+/* NINE rows: ROW_Y0 34 + ROW_PITCH 28 * 8 = 258, and the row is ROW_H 20, so
+   the last one ends at 278; the bottom rule sits 8 px under it and the panel
    ends 10 px under the rule (DIV_BOT). One define carries
    it: the GAF frame header (`FRMOFF + 0x02` below), `s_ground`, the ramp, the
    border and the corner bolts are all sized from it, and the panel is COMPOSED
    AT RUNTIME from the player's install rather than shipped, so no art is
    regenerated. tools/guipanel.py says 304x212 -- it is the lab's copy of this
    layout, not its source. */
-#define PANEL_H   268
+#define PANEL_H   296
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
@@ -187,13 +186,16 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 #define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
-/* Eight, and every one of them live. There is no mouse-wheel zoom row:
+/* Nine, and every one of them live. There is no mouse-wheel zoom row:
    tagpu_zoom_init() installs byte patches once at attach, so the row would
    light green and change no pixel until the next launch. The
    menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10), and
    the FPS counter honours it: tagpu_fps.c polls its trigger on the render
-   thread and tagpu_vk_fps.c builds its pipeline on first use. */
-enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_EDGE, R_COUNT };
+   thread and tagpu_vk_fps.c builds its pipeline on first use. Vsync does too:
+   the render thread reads the store every frame and the lane rebuilds its
+   swapchain when the answer changes (render_vk.c). */
+enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE,
+       R_COUNT };
 
 typedef struct {
     const char* name;                   /* the gadget name in the .GUI         */
@@ -210,6 +212,10 @@ static const Row s_row[R_COUNT] = {
     { "SHADOWQ", "Shadow quality",    "Low|Med|High|Ultra",       4 },
     { "SS",      "Supersampling",     "Off|2x",                   2 },
     { "FPS",     "FPS counter",       "Off|On",                   2 },
+    /* FIFO or IMMEDIATE present (tagpu_vk.c) and the frame limiter's one cap
+       (fps_limiter.c); the front-end screen shows it in the WINDOW column
+       (build_visuals_gui) */
+    { "VSYNC",   "Vsync",             "Off|On",                   2 },
     /* what the view shows past the map: the world reflected, or the engine's
        black (bar-camera-port.md 1.2) */
     { "EDGE",    "Map edge",          "Black|Mirror",             2 },
@@ -296,7 +302,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G20b-1"
+#define UFO_STAMP  "G21e-1"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -338,7 +344,7 @@ static int exists(const char* p)
 #define IX_KEY            0     /* the frame's transparency index -- never drawn */
 
 #define DIV_TOP    30
-#define DIV_BOT   258           /* under the last row: 250 + 8 */
+#define DIV_BOT   286           /* under the last row: 278 + 8 */
 #define PAD         2
 
 /* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
@@ -948,6 +954,7 @@ static void read_state(void)
     s_stage[R_LIGHT]   = tagpu_classicpp_lit() ? 1 : 0;
     s_stage[R_SS]      = tagpu_settings_ss() == 2;
     s_stage[R_FPS]     = tagpu_settings_fps() ? 1 : 0;
+    s_stage[R_VSYNC]   = tagpu_settings_vsync();
     /* the map edge in force: its lever, then the store, then the default --
        tagpu_opt.c answers in that order, and Black under tagpu_defaults.off */
     s_stage[R_EDGE]    = tagpu_opt_on(EDGE_ON) ? 1 : 0;
@@ -999,14 +1006,17 @@ static int row_held(int row)
 static int row_greyed(int row)
 {
     if (row_held(row)) return 1;
-    /* R_SS, R_FPS, R_SHADOWS and R_EDGE are orthogonal to the Classic/Classic++
-       lane, so none is one of the switch's dependants: supersampling is a
-       resolution choice, the FPS counter a diagnostic drawn OVER the finished
-       frame, Shadows is the engine's shadow switch too, and the map edge is
-       drawn in full colour under either lane. Grey them with the lane and a
-       player on Classic could not reach them. */
-    if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_SHADOWS ||
-        row == R_EDGE) return 0;
+    /* R_SS, R_FPS, R_VSYNC, R_SHADOWS and R_EDGE are orthogonal to the
+       Classic/Classic++ lane, so none is one of the switch's dependants:
+       supersampling is a resolution choice, the FPS counter a diagnostic drawn
+       OVER the finished frame, vsync how the frame is paced, Shadows is the
+       engine's shadow switch too, and the map edge is drawn in full colour
+       under either lane. Grey them with the lane and a player on Classic could
+       not reach them. Vsync is live under the GDI backend as well: it has no
+       present mode to pick there, but the frame limiter's backstop paces it
+       (fps_limiter.c). */
+    if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
+        row == R_SHADOWS || row == R_EDGE) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1263,6 +1273,7 @@ static void commit_one(int row)
     case R_SHADOWQ: tagpu_settings_set(TS_SHADOWRES, SHADOWQ_VAL[s_stage[R_SHADOWQ]]); break;
     case R_SS:      tagpu_settings_set(TS_SS, s_stage[R_SS] ? 2 : 1); break;
     case R_FPS:     tagpu_settings_set(TS_FPS, s_stage[R_FPS]); break;
+    case R_VSYNC:   tagpu_settings_set(TS_VSYNC, s_stage[R_VSYNC]); break;
     case R_EDGE:    tagpu_settings_set(TS_EDGE, s_stage[R_EDGE]); break;
     default:        break;
     }
@@ -1560,11 +1571,10 @@ static void read_tokens(void)
    switch pops the merged screen and that one rebuilds the next tab the same
    way.
 
-   THE LAYOUT. The stock column moves left by VIS_DX to make room and keeps
-   every gadget's own name, size and y -- only x changes -- and our six rows go
-   in a second column at VIS_COL_X. Every stock gadget is re-emitted in its
-   stock ORDER as well, so anything in the engine that dispatches by index
-   rather than by name sees exactly what it saw before.
+   THE LAYOUT is two columns, WINDOW and RENDERER (the geometry block below).
+   The stock gadgets the store still leaves the engine keep their names, their
+   sizes and their stock ORDER -- only x and y move -- so anything in the
+   engine that dispatches by index rather than by name sees them as before.
 
    THE ROWS ARE THE IN-GAME SCREEN'S, the same `s_row` table and the same
    `s_stage` model: one model, two views. A player who sets Classic++ here has
@@ -1630,7 +1640,7 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
 #define VIS_GAF       "anims/visuals.gaf"
 #define ART_VISBG     "VISBG"       /* the one ground frame, VP_W x VP_H       */
 
-/* the control positions, in screen coordinates: the WINDOW column's five
+/* the control positions, in screen coordinates: the WINDOW column's four
    buttons and two sliders, then the RENDERER column's rows on one pitch */
 /* The Gamma slider ends at 352 and the panel runs to VP_Y + VP_H = 474, so the
    GPU row's caption at 364 and its control at 380 sit in free space -- no
@@ -1646,9 +1656,28 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
    tail. The caption's width is not ours to set, so the row sits where it fits
    and `build_gpu_text` drops the part of the name that
    distinguishes nothing instead. */
-static const short VC0_BTN[5] = { 96, 140, 184, 292, 380 };
+static const short VC0_BTN[4] = { 96, 140, 184, 380 };
 #define VC0_BTN_N (int)(sizeof VC0_BTN / sizeof VC0_BTN[0])
 static const short VC0_SLD[2] = { 244, 336 };
+
+/* THE VSYNC ROW IS A RENDERER ROW SHOWN IN THE WINDOW COLUMN. It is `s_row`'s,
+   because the in-game panel carries it too, and it is found by name like every
+   row of that table, so where the .GUI puts it is free. The RENDERER column
+   has no room for a ninth: its slot would be 80 + 44 * 8 = 432, a control at
+   448..468 whose recess meets the panel's bottom-right bolt at 465 -- and the
+   panel cannot grow, the screen ends at 480. The WINDOW column has a slot
+   between its two sliders: Screen Size ends at 260 and Gamma's caption is at
+   320, and the row takes 276..312. The RENDERER column closes up over the gap
+   (`vis_slot`). */
+#define VSYNC_Y   276
+
+/* A RENDERER row's slot in its column, or -1 for the one the WINDOW column
+   carries */
+static int vis_slot(int row)
+{
+    if (row == R_VSYNC) return -1;
+    return row < R_VSYNC ? row : row - 1;
+}
 
 /* ONE GROUND, NOT FIFTEEN RECESSES. A small recess frame behind each control,
    with the stock background showing between them, cannot work: STARTOPT's
@@ -1697,10 +1726,16 @@ static void draw_visbg(unsigned char* f, int w, int h)
     for (i = 0; i < 2; i++)
         recess(&s, VC0_X - VP_X - VPAD, VC0_SLD[i] - VP_Y - VPAD,
                VSLD_W + 2 * VPAD, VSLD_H + 2 * VPAD);
-    for (i = 0; i < s_nrows; i++)       /* the RENDERER column: one per row */
-        recess(&s, VC1_X - VP_X - VPAD,
-               VROW_Y0 + VCTL_DY + VPITCH * i - VP_Y - VPAD,
-               VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
+    for (i = 0; i < s_nrows; i++) {     /* the RENDERER rows: one per row */
+        int slot = vis_slot(i);
+        if (slot < 0)
+            recess(&s, VC0_X - VP_X - VPAD, VSYNC_Y + VCTL_DY - VP_Y - VPAD,
+                   VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
+        else
+            recess(&s, VC1_X - VP_X - VPAD,
+                   VROW_Y0 + VCTL_DY + VPITCH * slot - VP_Y - VPAD,
+                   VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
+    }
 }
 
 
@@ -1742,7 +1777,7 @@ static const VisStock s_visStock[VIS_STOCK_N] = {
    they are not in `s_row` and never appear on the in-game panel -- and why
    every one of them is applied on the thread that owns the window (below)
    rather than wherever the click happened to land. */
-enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_GPU, VD_COUNT,
+enum { VD_MODE, VD_MON, VD_SCALE, VD_GPU, VD_COUNT,
        /* not a row: a second message the Display mode row posts to itself, so
           the frame restore lands after the style restore the fork posts */
        VD_RESTORE_FRAME,
@@ -1769,9 +1804,6 @@ static int  s_monCount;
    row is seeded from the window, and where the player actuates it. */
 static int  s_monChosen;
 
-/* -1 is Refresh, which fpsl_init resolves into the target monitor's rate
-   (fps_limiter.h); 0 is UNLIMITED, the one value that leaves tick_length 0. */
-static const int FPS_VAL[4] = { -1, 60, 120, 0 };
 /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22), 0 = Auto. These are
    percentages of the HUD's stock size, and Auto is the ceiling H/480, where
    the panel exactly fills the screen height.
@@ -1806,7 +1838,6 @@ static VisRow s_vrow[VD_COUNT] = {
     { "VMODE",  "Display mode", "Window|Fullscreen",          2 },
     { "VMON",   "Monitor",      s_monText,                    0 },
     { "VSCALE", "UI scale",     "Auto|100%|150%|200%|300%|400%", 6 },
-    { "VFPS",   "Frame cap",    "Refresh|60 fps|120 fps|Uncapped", 4 },
     { "VGPU",   "GPU (Vulkan)", s_gpuText,                    0 },
 };
 static int s_vstage[VD_COUNT];
@@ -1939,12 +1970,6 @@ static void build_gpu_text(void)
    racing click can do is hand back the monitor selected one click ago. A stale
    `s_monChosen` reads as "nobody has chosen", whose answer is
    `util_default_monitor` -- the correct fallback, not a wrong rect. */
-const char* tagpu_menu_monitor_device(void)
-{
-    int i = s_vstage[VD_MON];
-    return (s_monChosen && i >= 0 && i < s_monCount && s_monDev[i][0]) ? s_monDev[i] : NULL;
-}
-
 BOOL tagpu_menu_monitor(RECT* out)
 {
     int i = s_vstage[VD_MON];
@@ -2001,7 +2026,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
 
     /* ---- the WINDOW rows -------------------------------------------------- */
     {
-        static const short dy[VD_COUNT] = { 80, 124, 168, 276, 364 };
+        static const short dy[VD_COUNT] = { 80, 124, 168, 364 };
         for (i = 0; i < VD_COUNT; i++) {
             at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
             at = common(b, cap, at, 5, 0, "TEXT", VC0_X, dy[i], VCOL_W, VLBL_H, 18, 15, 104);
@@ -2016,15 +2041,17 @@ static int build_visuals_gui(char* b, int cap, int rows)
         }
     }
 
-    /* ---- the RENDERER rows: one slot each, top down ---------------------- */
+    /* ---- the RENDERER rows: one slot each, top down, Vsync aside ---------- */
     for (i = 0; i < rows; i++) {
-        int y = VROW_Y0 + VPITCH * i;
+        int slot = vis_slot(i);
+        int x = slot < 0 ? VC0_X : VC1_X;
+        int y = slot < 0 ? VSYNC_Y : VROW_Y0 + VPITCH * slot;
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-        at = common(b, cap, at, 5, 0, "TEXT", VC1_X, y, VCOL_W, VLBL_H, 18, 15, 104);
+        at = common(b, cap, at, 5, 0, "TEXT", x, y, VCOL_W, VLBL_H, 18, 15, 104);
         at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s_row[i].label);
 
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-        at = common(b, cap, at, 1, 0, s_row[i].name, VC1_X, y + VCTL_DY,
+        at = common(b, cap, at, 1, 0, s_row[i].name, x, y + VCTL_DY,
                     VCOL_W, VCTL_H, 1, 0, 0);
         at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n"
                               "\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
@@ -2258,8 +2285,6 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
         break;
     case VD_MON:
         move_to_monitor(s_vstage[VD_MON]);
-        /* a Refresh cap is the monitor's, and the monitor just changed */
-        if (fpsl_cap_request() == -1) fpsl_request_init();
         break;
     case VD_UNDO_SCALE:
         if (!tagpu_hud_held()) tagpu_hud_store_pct((int)s_scaleOpen);
@@ -2271,11 +2296,6 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
        above apply_display states. */
     case VD_SCALE:
         if (!tagpu_hud_held()) tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]);
-        break;
-    case VD_FPS:
-        /* a request: the render thread applies it at its next frame
-           (fps_limiter.h), so the cap is live from the next presented frame */
-        fpsl_request_cap(FPS_VAL[s_vstage[VD_FPS]]);
         break;
     /* THE GPU ROW TOUCHES NO WINDOW AND NO VULKAN OBJECT. It records the
        request and bumps a generation counter; the RENDER thread, which is the
@@ -2327,16 +2347,6 @@ static void read_display_state(void)
         s_vstage[VD_SCALE] = pct < 0 ? 1 : 0;
         for (k = 1; pct > 0 && k < (int)(sizeof SCALE_VAL / sizeof SCALE_VAL[0]); k++)
             if (SCALE_VAL[k] == pct) { s_vstage[VD_SCALE] = k; break; }
-    }
-
-    /* the cap requested, not the one in force: Refresh is in force as a
-       number (fps_limiter.h) */
-    {
-        int cap = fpsl_cap_request();
-        if (cap == FPSL_CAP_NONE) cap = g_config.maxfps;
-        s_vstage[VD_FPS] = 3;
-        if (cap < 0) s_vstage[VD_FPS] = 0;
-        for (i = 1; i < 4; i++) if (FPS_VAL[i] == cap) s_vstage[VD_FPS] = i;
     }
 
     /* AUTO PLATES AUTO; A NAMED CHOICE PLATES THE DEVICE IN USE, so the row
@@ -2401,7 +2411,6 @@ static void commit_display(int d)
     switch (d) {
     case VD_MODE: tagpu_settings_set(TS_DISPLAY, s_vstage[VD_MODE] ? 1 : 0); break;
     case VD_MON:  tagpu_settings_set(TS_MONITOR, s_vstage[VD_MON]); break;
-    case VD_FPS:  tagpu_settings_set(TS_MAXFPS, FPS_VAL[s_vstage[VD_FPS]]); break;
     default:      break;
     }
 }
@@ -2474,7 +2483,7 @@ static void vis_undo(void)
 
 /* RESTORE -- the store's defaults (renderers.md 2.10b): Classic++ with every
    row it owns at its Classic++ value, supersampling on, the FPS counter off,
-   the map edge mirrored, UI scale off and the Refresh cap. A row a lever holds keeps the
+   vsync on, the map edge mirrored and UI scale off. A row a lever holds keeps the
    lever's value: Restore changes the store, and the store is not what draws
    that row.
 
@@ -2495,14 +2504,10 @@ static void vis_restore(void)
     s_stage[R_SHADOWQ] = 2;
     s_stage[R_SS]      = 1;
     s_stage[R_FPS]     = 0;
+    s_stage[R_VSYNC]   = 1;
     s_stage[R_EDGE]    = 1;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
     commit_all_rows();
-    if (!vrow_held(VD_FPS)) {
-        s_vstage[VD_FPS] = 0;       /* the monitor's refresh */
-        apply_display(VD_FPS);
-        commit_display(VD_FPS);
-    }
     /* UI scale back to OFF, the store's default: HUD scale is off the play
        defaults (tagpu_opt.c), so "Restore defaults" must not be what arms it.
        No stage of the row means off, so the pass is turned off here directly,

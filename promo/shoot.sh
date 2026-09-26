@@ -48,7 +48,7 @@ mkdir -p "$OUTDIR"
 echo "== $CLIP -> $OUTDIR/$CLIP.mp4  (res $RES, settle ${SETTLE}s, ${LEN}s)"
 
 # --restart because a previous take may still be up; `load` refuses otherwise.
-"$TACLI" scenario load "$INSTANCE" "$CLIP" --res "$RES" --maxfps 60 --restart \
+"$TACLI" scenario load "$INSTANCE" "$CLIP" --res "$RES" --vsync on --restart \
   2>&1 | tee "$OUTDIR/$CLIP.txt"
 grep -q "^applied" "$OUTDIR/$CLIP.txt" || die "$CLIP: the scenario did not apply"
 

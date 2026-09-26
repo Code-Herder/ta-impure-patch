@@ -472,7 +472,7 @@ class Instance:
 # --------------------------------------------------------------------------- create
 
 def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=True,
-                   verbose=False, window=None, maxfps=60):
+                   verbose=False, window=None, vsync="on"):
     """Symlink-mirror the template gamedir, with instance-private config files."""
     inst.gamedir.mkdir(parents=True, exist_ok=True)
     (inst.gamedir / "Screenshots").mkdir(exist_ok=True)
@@ -524,7 +524,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
 
     write_totala_ini(inst, sound)
     ensure_store(inst)
-    write_placement(inst, tile, window, maxfps=maxfps)
+    write_placement(inst, tile, window, vsync=vsync)
     write_nowarp(inst)
     set_shield(inst, shield)
     deploy_dll(inst)
@@ -640,7 +640,7 @@ HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
-HARNESS_KEYS = ("display", "window", "maxfps", "resolution")
+HARNESS_KEYS = ("display", "window", "vsync", "resolution")
 
 
 def _split_store(inst: Instance):
@@ -699,24 +699,6 @@ def write_nowarp(inst: Instance):
     (inst.gamedir / "tagpu_nowarp.on").write_text("")
 
 
-STORE_MAXFPS = {0: "uncapped", 60: "60", 120: "120"}
-
-
-def store_maxfps(v) -> str:
-    """The store's spelling of a frame cap (`O_MAXFPS`, tagpu_settings.c): 0 is
-    uncapped, a negative value the display's refresh, and 60 and 120 themselves.
-    The store holds no other cap, so anything else is refused rather than
-    silently becoming one of these."""
-    v = int(v)
-    if v < 0:
-        return "refresh"
-    if v in STORE_MAXFPS:
-        return STORE_MAXFPS[v]
-    die(f"frame cap {v}: the store (impure.cfg) holds 0 (uncapped), 60, 120 or a "
-        f"negative value (the display's refresh), and nothing else -- pass --maxfps "
-        f"with one of those")
-
-
 def store_window(window):
     """A --window client size as the store takes it (`frame_ok`, tagpu_settings.c):
     0,0 for the game's own size, else 320x240 to 16384x16384. The DLL drops a
@@ -731,9 +713,10 @@ def store_window(window):
     return w, h
 
 
-def write_placement(inst: Instance, tile, window=None, maxfps=60):
-    """The window's placement, into the instance's settings store (`impure.cfg`,
-    renderers.md 2.10b): `display=window`, `window=x,y,W,H` and `maxfps`.
+def write_placement(inst: Instance, tile, window=None, vsync="on"):
+    """The window's placement and pacing, into the instance's settings store
+    (`impure.cfg`, renderers.md 2.10b): `display=window`, `window=x,y,W,H` and
+    `vsync`.
 
     The DLL reads these three under every launch, `tagpu_defaults.off` included,
     and nothing else places the window: the DLL reads no ddraw.ini. Written on
@@ -748,9 +731,11 @@ def write_placement(inst: Instance, tile, window=None, maxfps=60):
     mode), which is the one knob that produces k != 1 without an engine patch
     (gui-renderer.md 13.1, 13.9). `0,0` is the game's own size.
 
-    `maxfps`: see `store_maxfps`. Two paths that both hold 60 fps have not been
-    compared, they have both hit the cap: a frame-time A/B needs `--maxfps 0` on
-    BOTH sides."""
+    `vsync` is the only pacing there is (fps_limiter.c): "on", the DLL's
+    default, holds the frame rate at the display's refresh, so parallel
+    instances stay light GPU clients; "off" is uncapped. Two paths that both
+    hold the refresh rate have not been compared, they have both hit it: a
+    frame-time A/B needs `--vsync off` on BOTH sides."""
     x, y = tile
     w, h = store_window(window)
     path = inst.gamedir / "impure.cfg"
@@ -759,9 +744,8 @@ def write_placement(inst: Instance, tile, window=None, maxfps=60):
     except FileNotFoundError:
         lines = []
     keep = [ln for ln in lines
-            if ln.partition("=")[0].strip().lower() not in ("display", "window", "maxfps")]
-    keep += ["display=window", f"window={int(x)},{int(y)},{w},{h}",
-             f"maxfps={store_maxfps(maxfps)}"]
+            if ln.partition("=")[0].strip().lower() not in ("display", "window", "vsync")]
+    keep += ["display=window", f"window={int(x)},{int(y)},{w},{h}", f"vsync={vsync}"]
     path.write_text("\n".join(keep) + "\n")
 
 
@@ -1071,8 +1055,6 @@ def _create(inst: Instance, args) -> dict:
     if inst.exists and not args.force:
         die(f"instance {args.name!r} already exists (use --force to recreate)")
     # the store's refusals, before anything exists to be left half-made
-    if getattr(args, "maxfps", None) is not None:
-        store_maxfps(args.maxfps)
     store_window(getattr(args, "window", None))
     inst.dir.mkdir(parents=True, exist_ok=True)
     # Only a *running* instance holds a slot. Reserving one per instance that has
@@ -1102,14 +1084,14 @@ def _create(inst: Instance, args) -> dict:
     tile = tile_for(index, client_box(res, window), screen=screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
-    maxfps = 60 if getattr(args, "maxfps", None) is None else args.maxfps
+    vsync = getattr(args, "vsync", None) or "on"
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
-                   shield=shield, window=window, maxfps=maxfps)
+                   shield=shield, window=window, vsync=vsync)
     meta = {
         "name": args.name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "res": list(res),
-        "maxfps": maxfps,
+        "vsync": vsync,
         "store": "harness",             # mirror_gamedir wrote the placement (HARNESS_KEYS)
         "window": list(window) if window else None,
         "slot": index,
@@ -1324,7 +1306,7 @@ def _launch(args) -> dict:
     shipped = bool(getattr(args, "shipped", False))
     if shipped:
         clash = [f for f, v in (("--res", args.res), ("--window", getattr(args, "window", None)),
-                                ("--maxfps", getattr(args, "maxfps", None)),
+                                ("--vsync", getattr(args, "vsync", None)),
                                 ("--title", args.title), ("--sound/--no-sound", args.sound),
                                 ("--unit-limit", args.unit_limit), ("--shield/--no-shield", args.shield),
                                 ("--defaults/--no-defaults", getattr(args, "defaults", None)))
@@ -1332,8 +1314,6 @@ def _launch(args) -> dict:
         if clash:
             die(f"--shipped launches the gamedir as a player has it, so it writes nothing; "
                 f"{', '.join(clash)} would write something")
-    if getattr(args, "maxfps", None) is not None:
-        store_maxfps(args.maxfps)           # refused before anything is created
     if getattr(args, "window", None) is not None:
         store_window(args.window)
     inst = Instance(args.name)
@@ -1368,8 +1348,8 @@ def _launch(args) -> dict:
     if getattr(args, "window", None) is not None:
         meta["window"] = list(args.window)
     win = tuple(meta["window"]) if meta.get("window") else None
-    if getattr(args, "maxfps", None) is not None and args.maxfps != meta.get("maxfps", 60):
-        meta["maxfps"] = args.maxfps
+    if getattr(args, "vsync", None) is not None and args.vsync != meta.get("vsync", "on"):
+        meta["vsync"] = args.vsync
         inst.save_meta(meta)
     # A size the player picked in the menu is the store's, and a --defaults
     # launch opens at it: follow it, so the tile, the registry keys and what this
@@ -1485,7 +1465,7 @@ def _launch(args) -> dict:
         # the player's pick (ensure_store).
         ensure_store(inst, tuple(args.res) if args.res else None,
                      default_res=tuple(meta["res"]))
-        write_placement(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
+        write_placement(inst, meta["tile"], win, vsync=meta.get("vsync", "on"))
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
@@ -4605,7 +4585,7 @@ def cmd_scenario_load(args):
         los = SCN_LOS[setup["los"]]
     launched = (_remote_launch if inst.remote else _launch)(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
-        maxfps=args.maxfps,
+        vsync=args.vsync,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, free_dplay_port=False, title=None,
@@ -4993,8 +4973,6 @@ def _remote_launch(args) -> dict:
     for a in argv:
         if not TA_ARG_RX.fullmatch(a):
             die(f"--arg {a!r}: a TotalA.exe switch is letters, digits and . _ = : here")
-    if getattr(args, "maxfps", None) is not None:
-        store_maxfps(args.maxfps)
     notes = []
     meta = inst.meta()
     if meta.get("state") == "adding":
@@ -5019,7 +4997,7 @@ def _remote_launch(args) -> dict:
                 f"the -r closure): it could run the game against the remote machine's real "
                 f"registry. Build a tree that has both")
     for key, attr in (("sound", "sound"), ("unit_limit", "unit_limit"), ("shield", "shield"),
-                      ("maxfps", "maxfps")):
+                      ("vsync", "vsync")):
         if getattr(args, attr, None) is not None:
             meta[key] = getattr(args, attr)
     if args.res:
@@ -5040,8 +5018,10 @@ def _remote_launch(args) -> dict:
     defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
     inst.save_meta(meta)
     ensure_store(inst, tuple(args.res) if args.res else None)
-    if getattr(args, "maxfps", None) is not None:
-        _store_set(inst, "maxfps", store_maxfps(args.maxfps))
+    # only when asked: this store is seeded from the player's folder, and a key
+    # it lacks is the DLL's default, on
+    if getattr(args, "vsync", None) is not None:
+        _store_set(inst, "vsync", args.vsync)
     if args.title is not None:
         if args.title.strip().lower() == "auto":
             meta.pop("title", None)
@@ -5297,12 +5277,14 @@ def build_parser():
         add_common(sp)
         sp.add_argument("--res", type=res_type, default=default_res,
                         help="game resolution, e.g. 1024x768")
-        sp.add_argument("--maxfps", type=int, default=None,
-                        help="frame cap written into the instance's impure.cfg: 0 is "
-                             "UNLIMITED, 60 and 120 themselves, a negative value the "
-                             "display refresh; nothing else. Sticky per instance, like "
-                             "--res. Needed for any frame-time A/B: at the default "
-                             "60 both sides read 60 because both hit the cap")
+        sp.add_argument("--vsync", choices=("on", "off"), default=None,
+                        help="the only frame pacing (impure.cfg): on holds the frame "
+                             "rate at the display's refresh, off is UNCAPPED. Sticky per "
+                             "instance, like --res; a local instance starts on, a remote "
+                             "one keeps its store's value (the DLL's default is on) "
+                             "unless this is given. Needed for any frame-time A/B: with "
+                             "vsync on both sides read the refresh rate because both "
+                             "hit it")
         sp.add_argument("--window", type=res_type, default=None,
                         help="window CLIENT size, when it must differ from --res: the engine keeps "
                              "its own screen and the fork letterboxes it into this, so k = window/res "
@@ -5624,10 +5606,9 @@ def build_parser():
     # Launch options the file may also carry. Explicit flags win, so a scenario
     # re-runs at another resolution, or on another map, without being edited.
     scd.add_argument("--res", type=res_type, help="override setup.res")
-    scd.add_argument("--maxfps", type=int, default=None,
-                     help="frame cap for the launch: 0 (UNLIMITED), 60, 120, or a "
-                          "negative value (the refresh). Sticky per instance — omit it "
-                          "to keep what the instance has")
+    scd.add_argument("--vsync", choices=("on", "off"), default=None,
+                     help="vsync for the launch (impure.cfg): off is UNCAPPED. Sticky "
+                          "per instance — omit it to keep what the instance has")
     scd.add_argument("--map", help="override setup.map")
     scd.add_argument("--unit-limit", dest="unit_limit", type=int,
                      help="override setup.unit_limit")

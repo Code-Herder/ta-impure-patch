@@ -6,46 +6,75 @@
 #include "config.h"
 #include "versionhelpers.h"
 #include "utils.h"
+#include "tagpu_log.h"
+#include "tagpu_settings.h"
 
 
 FPSLIMITER g_fpsl;
 
 /* tagpu: fps_limiter.h, "THE RENDER THREAD IS fpsl_init's ONE OWNER" */
-static volatile LONG s_capWant = FPSL_CAP_NONE;
 static volatile LONG s_reinit;
-
-void fpsl_request_cap(int cap)
-{
-    InterlockedExchange(&s_capWant, cap);
-    InterlockedExchange(&s_reinit, 1);          /* after the cap: the init reads it */
-}
+/* the monitor the backstop was derived for, NULL with vsync off: the render
+   thread's alone, like everything fpsl_init writes */
+static HMONITOR s_pacedMon;
 
 void fpsl_request_init(void) { InterlockedExchange(&s_reinit, 1); }
-int  fpsl_cap_request(void)  { return (int)s_capWant; }
+
+/* tagpu: the monitor the backstop sits above -- the window's, with vsync on --
+   or NULL. MonitorFromWindow is a lookup, not a mode query. */
+static HMONITOR paced_monitor(void)
+{
+    return tagpu_settings_vsync() ? MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) : NULL;
+}
 
 void fpsl_init()
 {
-    int max_fps;
+    int max_fps = 0;
+    HMONITOR mon;
 
-    /* tagpu: the menu's cap, a positive number even for Refresh. The request
-       is cleared BEFORE the cap is read, so one made while this runs re-arms
-       it rather than being lost. */
+    /* tagpu: the request is cleared BEFORE anything is read, so one made while
+       this runs re-arms it rather than being lost. */
     InterlockedExchange(&s_reinit, 0);
-    {
-        LONG want = s_capWant;
-        if (want != FPSL_CAP_NONE)
-            g_config.maxfps = want < 0 ? util_target_refresh() : (int)want;
-    }
-    max_fps = g_config.maxfps;
+    mon = s_pacedMon = paced_monitor();
 
     g_fpsl.tick_length_ns = 0;
     g_fpsl.tick_length = 0;
 
-    if (max_fps < 0 || (g_config.vsync && (!g_config.maxfps || g_config.maxfps >= g_ddraw.mode.dmDisplayFrequency)))
-        max_fps = g_ddraw.mode.dmDisplayFrequency;
+    /* tagpu: THE ONE CAP IS VSYNC'S BACKSTOP, AT hz + 1, which a present that
+       waits for the vertical blank can never meet. The timer only waits when a
+       frame ended sooner after the last one than its period, so a period
+       shorter than the blank's is only met by jitter, and that wait ends before
+       the next blank. A timer AT the refresh rate is not that: Windows reports
+       59 Hz for a 59.94 Hz mode, and a 59 fps timer against it skips a blank
+       about once a second. `hz` is a whole number and the true rate lies within
+       one of it whether the driver rounds down, up or to nearest, so hz + 1 is
+       always the faster clock.
+       The backstop is there for a present that does NOT wait: the Windows AMD
+       test card's FIFO swapchain presented 300 fps at 59 Hz (MEASURED
+       2026-09-25, in play), and the GDI backend has no present mode at all.
+       Vsync off is no cap. A monitor whose rate cannot be read (0) leaves the
+       present to pace alone, because no backstop can be placed above an
+       unknown rate. */
+    if (!mon)
+    {
+        tagpu_log("frame cap: none (vsync off)");
+    }
+    else
+    {
+        int hz = util_monitor_refresh(mon);
 
-    if (max_fps > 1000)
-        max_fps = 0;
+        if (hz > 0)
+        {
+            max_fps = hz + 1;
+            tagpu_logf("frame cap: vsync on, a %d fps backstop over the monitor's %d Hz",
+                       max_fps, hz);
+        }
+        else
+        {
+            tagpu_log("frame cap: vsync on and the monitor's rate cannot be read - "
+                      "the present paces alone");
+        }
+    }
 
     if (max_fps > 0)
     {
@@ -71,23 +100,6 @@ void fpsl_init()
     if (!g_fpsl.gdi32_dll)
     {
         g_fpsl.gdi32_dll = real_LoadLibraryA("gdi32.dll");
-    }
-
-    if (!g_fpsl.dwmapi_dll)
-    {
-        g_fpsl.dwmapi_dll = real_LoadLibraryA("dwmapi.dll");
-    }
-
-    if (!g_fpsl.DwmFlush)
-    {
-        g_fpsl.DwmFlush =
-            (DWMFLUSHPROC)real_GetProcAddress(g_fpsl.dwmapi_dll, "DwmFlush");
-    }
-
-    if (!g_fpsl.DwmIsCompositionEnabled)
-    {
-        g_fpsl.DwmIsCompositionEnabled =
-            (DWMISCOMPOSITIONENABLEDPROC)real_GetProcAddress(g_fpsl.dwmapi_dll, "DwmIsCompositionEnabled");
     }
 
     if (!g_fpsl.D3DKMTWaitForVerticalBlankEvent)
@@ -142,28 +154,15 @@ BOOL fpsl_wait_for_vblank()
     return FALSE;
 }
 
-BOOL fpsl_dwm_flush()
-{
-    if (g_fpsl.initialized && fpsl_dwm_is_enabled() && g_fpsl.DwmFlush && !IsWine())
-    {
-        return SUCCEEDED(g_fpsl.DwmFlush());
-    }
-
-    return FALSE;
-}
-
-BOOL fpsl_dwm_is_enabled()
-{
-    BOOL dwm_enabled = FALSE;
-
-    if (g_fpsl.DwmIsCompositionEnabled)
-        g_fpsl.DwmIsCompositionEnabled(&dwm_enabled);
-
-    return dwm_enabled;
-}
-
 void fpsl_frame_start()
 {
+    /* tagpu: VSYNC AND THE WINDOW'S MONITOR ARE ASKED EVERY FRAME, on either
+       backend, so the frame that sees a change -- the menu's toggle, the
+       window dragged to another monitor -- is the one the backstop is
+       re-derived for; the monitor's mode is read only then. */
+    if (paced_monitor() != s_pacedMon)
+        InterlockedExchange(&s_reinit, 1);
+
     if (s_reinit)
         fpsl_init();
 
@@ -173,42 +172,24 @@ void fpsl_frame_start()
 
 void fpsl_frame_end()
 {
-    if (g_config.maxfps < 0 || 
-        (g_config.vsync && (!g_config.maxfps || g_config.maxfps >= g_ddraw.mode.dmDisplayFrequency)))
-    {
-        {
-            if (fpsl_dwm_flush() || fpsl_wait_for_vblank())
-                return;
-        }
-    }
-
     if (g_fpsl.tick_length > 0)
     {
         if (g_fpsl.htimer)
         {
-            if (g_config.vsync && (!g_config.maxfps || g_config.maxfps >= g_ddraw.mode.dmDisplayFrequency))
+            FILETIME ft = { 0 };
+            GetSystemTimeAsFileTime(&ft);
+
+            if (CompareFileTime((FILETIME*)&g_fpsl.due_time, &ft) == -1)
             {
-                WaitForSingleObject(g_fpsl.htimer, g_fpsl.tick_length * 2);
-                LARGE_INTEGER due_time = { .QuadPart = -g_fpsl.tick_length_ns };
-                SetWaitableTimer(g_fpsl.htimer, &due_time, 0, NULL, NULL, FALSE);
+                memcpy(&g_fpsl.due_time, &ft, sizeof(LARGE_INTEGER));
             }
             else
             {
-                FILETIME ft = { 0 };
-                GetSystemTimeAsFileTime(&ft);
-
-                if (CompareFileTime((FILETIME*)&g_fpsl.due_time, &ft) == -1)
-                {
-                    memcpy(&g_fpsl.due_time, &ft, sizeof(LARGE_INTEGER));
-                }
-                else
-                {
-                    WaitForSingleObject(g_fpsl.htimer, g_fpsl.tick_length * 2);
-                }
-
-                g_fpsl.due_time.QuadPart += g_fpsl.tick_length_ns;
-                SetWaitableTimer(g_fpsl.htimer, &g_fpsl.due_time, 0, NULL, NULL, FALSE);
+                WaitForSingleObject(g_fpsl.htimer, g_fpsl.tick_length * 2);
             }
+
+            g_fpsl.due_time.QuadPart += g_fpsl.tick_length_ns;
+            SetWaitableTimer(g_fpsl.htimer, &g_fpsl.due_time, 0, NULL, NULL, FALSE);
         }
         else
         {

@@ -1393,6 +1393,23 @@ class SettingsStore(unittest.TestCase):
             cfg.write_text("resolution=junk\n")
             self.assertIsNone(tacli.store_res(inst))
 
+    def test_the_placement_writes_vsync_on_unless_asked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            cfg.write_text("gamma=12\nvsync=off\n")        # a menu's choice
+            tacli.write_placement(inst, (10, 20))
+            self.assertEqual(cfg.read_text().splitlines(),
+                             ["gamma=12", "display=window", "window=10,20,0,0", "vsync=on"])
+            tacli.write_placement(inst, (10, 20), vsync="off")
+            self.assertEqual(cfg.read_text().splitlines()[-1], "vsync=off")
+            self.assertEqual(sum(ln.startswith("vsync=") for ln in cfg.read_text().splitlines()), 1)
+
+    def test_vsync_is_a_harness_key(self):
+        # a --shipped launch hands it to the player with the rest of the placement
+        self.assertIn("vsync", tacli.HARNESS_KEYS)
+
 
 # ----------------------------------------------------------- remote instances
 

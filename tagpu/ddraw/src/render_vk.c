@@ -32,6 +32,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"
 #include "tagpu_vk.h"
+#include "tagpu_settings.h"
 #include "tagpu_ftime.h"
 #include "tagpu_native.h"
 
@@ -165,8 +166,11 @@ DWORD WINAPI vk_render_main(void)
            WHAT IT CAN AND CANNOT ANSWER is in tagpu_ftime.h: this build's GPU
            time against a previous build's. */
         tagpu_ftime_poll();
+        /* VSYNC IS READ EVERY FRAME, so the menu's toggle takes effect on the
+           next one: the lane rebuilds its swapchain when the answer changes,
+           and fpsl_frame_start reads the same key for its backstop. */
         if (tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
-                           g_config.vsync, fc)) {
+                           tagpu_settings_vsync(), fc)) {
             came_up = 1;
             /* the world's fog witnesses count what reached the screen */
             tagpu_native_presented(fc);

@@ -58,10 +58,6 @@ static const Opt O_SHADOWS[] = { {"hard", 2}, {"off", 0}, {"2", 2}, {"0", 0},
                                  {"soft", 2}, {"1", 2} };
 static const Opt O_RES[]     = { {"2048", 2048}, {"512", 512}, {"1024", 1024}, {"4096", 4096} };
 static const Opt O_SS[]      = { {"2", 2}, {"1", 1}, {"on", 2}, {"off", 1} };
-/* -1 is cnc-ddraw's own "the display's refresh" (fps_limiter.c, which asks the
-   target monitor for it) */
-static const Opt O_MAXFPS[]  = { {"refresh", -1}, {"60", 60}, {"120", 120}, {"uncapped", 0},
-                                 {"0", 0}, {"-1", -1} };
 static const Opt O_HUD[]     = { {"off", -1}, {"auto", 0}, {"100", 100}, {"150", 150},
                                  {"200", 200}, {"300", 300}, {"400", 400} };
 static const Opt O_DISPLAY[] = { {"fullscreen", 1}, {"window", 0} };
@@ -96,7 +92,6 @@ static const Key s_key[TS_NKEYS] = {
     { "shadowres", O_RES,     N(O_RES),     2048 },
     { "ss",        O_SS,      N(O_SS),      2 },
     { "fps",       O_BOOL,    N(O_BOOL),    0 },
-    { "maxfps",    O_MAXFPS,  N(O_MAXFPS),  -1 },
     /* OFF, not Auto: HUD scale is off the play defaults and whether it belongs
        on is the owner's call (tagpu_opt.c). Off is also what the pass reads when
        nothing has armed it, so the default changes nothing. */
@@ -109,6 +104,9 @@ static const Key s_key[TS_NKEYS] = {
     { "resolution", NULL,     0,            0 },
     { "mixingbuffers", O_MIXING, N(O_MIXING), 32 },
     { "edge",      O_EDGE,    N(O_EDGE),    1 },
+    /* ON: a player sees no tearing unless they ask for the lower latency
+       (renderers.md 2.10b). */
+    { "vsync",     O_BOOL,    N(O_BOOL),    1 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -215,7 +213,7 @@ int tagpu_settings_ignored(void) { return s_ignored; }
 
 int tagpu_settings_placement(TagpuSetting key, int* out)
 {
-    if ((key != TS_DISPLAY && key != TS_MAXFPS) || !s_attached) return 0;
+    if ((key != TS_DISPLAY && key != TS_VSYNC) || !s_attached) return 0;
     if (out) *out = read_val(key);
     return 1;
 }
@@ -641,7 +639,7 @@ void tagpu_settings_attach(void)
     if (first && !s_ignored) flush(0);
 
     at = _snprintf(b, sizeof b, "%s%s:", STORE,
-                   s_ignored ? " IGNORED but for display, maxfps and window (" MASTER_OFF
+                   s_ignored ? " IGNORED but for display, vsync and window (" MASTER_OFF
                                " present: every other setting is the lever's or the compiled "
                                "default)" : "");
     for (i = 0; i < TS_NKEYS && at > 0 && at < (int)sizeof b; i++) {
@@ -741,3 +739,10 @@ int tagpu_settings_fps(void)
     if (exists("tagpu_fps.on")) return 1;
     return tagpu_settings_get(TS_FPS, &v) ? v : 0;
 }
+
+int tagpu_settings_vsync(void)
+{
+    int v;
+    return tagpu_settings_placement(TS_VSYNC, &v) ? v : s_key[TS_VSYNC].def;
+}
+
