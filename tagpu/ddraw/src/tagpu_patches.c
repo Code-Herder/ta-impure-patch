@@ -5407,7 +5407,7 @@ static int fix_los_local(void)
    NotToAir, SurfaceFire and TerrainFireGate are the prior art; the design is ours. The keys'
    store and every decision are in tagpu_datakeys.c; these are the five sites that ask it,
    all in the fail-closed table, in both builds (CLASS: simulation -- a player whose build
-   lacked them would play stock rules for his own units). Each re-executes the engine's own
+   lacked them would play stock rules for their own units). Each re-executes the engine's own
    instructions when the weapon it is about carries no key, so stock content runs stock's
    bytes.
 

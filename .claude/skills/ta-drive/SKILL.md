@@ -288,8 +288,8 @@ tools/tacli switches t1 shootall=on noshake=on  # the SoftwareDebugMode bits, li
 - **`load` is the whole trip; `apply` is the mutation.** `load` launches with the file's `setup`
   (map, resolution, players, unit limit), drives the menus, waits for a world, checks the map TA
   actually loaded, then applies; on a running instance it refuses without `--restart`. `apply`
-  stacks onto whatever is on screen and needs a **running game** (at `MAINMENU` it waits 600
-  frames and says so). Explicit flags (`--map`, `--res`, `--unit-limit`) win over the file.
+  needs a **running game** (at `MAINMENU` it waits 600 frames) and **first kills every unit there**
+  unless `"setup": {"clear_existing": false}`. Flags (`--map`, `--res`, …) win over the file.
 - **`shootall` (on by default) makes idle units engage enemy *buildings* in range**; turn it off
   when units must ignore structures. `noshake` kills screen shake, which matters for capture.
 - **It validates three times and creates nothing if anything fails**: schema, the cached

@@ -132,8 +132,8 @@ is remote, `+0x73 == 3` (`0x49A01D..0x49A047`, before the area-damage call `0x49
 remote projectile is a picture. Section B's evidence (Part 1 §0) has the rest: the owner's peer
 computes hits and sends `0x0B`; orders run on the owner's peer.
 
-**The can-engage test `0x49ABB0(unit, slot, target)`** (`stdcall`, `ret 0xC`; the weapon is
-`[unit + slot·0x1C + 0x10]`):
+**The can-engage test `0x49ABB0(unit, target, idx)`** (`stdcall`, `ret 0xC`; the weapon is
+`[unit + idx·0x1C + 0x10]`):
 
 - **Water path** (weapon bit 16): reject a target that is not a `floater` (def `+0x241` bit 19)
   and whose `y` (`+0x70`) is above sea (`0x49ABF9..0x49AC0F`). Reject a `canhover` target (bit 12)
@@ -283,15 +283,23 @@ identity for untagged weapons.
   air test. Re-validation (`0x4089A0`) never re-asks `0x49ABB0` (DIS, §0). So a landed aircraft
   acquired by a `nottoair` weapon is still fired at after it takes off. Stock's `toairweapon`
   has the same property the other way round.
-- The order action is not gated. A `nottoair` unit (weapon 0) offers the attack cursor on an
-  aircraft, and the attack order's own `0x49ABB0` then refuses the target. What the order does
-  next (chase, or drop it) is INF, settled by giving the order and watching it.
+- **The cursor is gated; the order is not.** The cursor mapper's attack case (`0x43E545`) asks
+  `0x49ABB0(candidate, hovered, 0)` itself (`0x43E59E`): 1 is the attack cursor, 3 "too far"; a
+  mobile candidate (`[candidate+0] != 0`, INF) gets the attack cursor without asking. So a filter
+  on the verdict already changes a tower's cursor. The right-click's order is made by the order
+  action `0x43F0E0` (called from `MOUSE_EVENT_2UnitOrder 0x48CF30` at `0x48D0A0`, and from a loop
+  over a group at `0x4804A3`), which does not ask `0x49ABB0`. Measured with a stock laser tower:
+  a right-click on a transport in flight gives it an attack order (node type 8 at unit `+0x5C`,
+  where its standing order is 22). C2 mirrors `toairweapon` there ([the plan, C2 as
+  built](data-keys.md#c2-as-built)).
 
 #### Overlap
 
 `my_CheckUnitWeapon` (slots ≥ 3) re-implements `0x49ABB0` in C, so the filter must run there too.
 When the module is armed it owns `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TADR's inner site
-`0x49AD07` would never be reached for slots ≥ 3.
+`0x49AD07` would never be reached for slots ≥ 3. **As built (C2):** the weapon keys own the entry
+in both builds, and the extra-weapons module no longer hooks it: the keys' detour asks that
+module's C verdict for a slot past 2 while it is armed.
 
 #### Proposed our-design
 
@@ -302,7 +310,7 @@ When the module is armed it owns `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TA
   armed, `my_CheckUnitWeapon` applies the filter to every slot: `o_Check` for slots 0..2 and its
   C body for 3..N. Unarmed, the key module installs its own entry detour on the same 7 bytes:
   `v = o_Check(…)`, then the filter. Both byte-match the same stock bytes, and exactly one is
-  written.
+  written. *Built otherwise:* the key module owns the entry always (Overlap, above).
 - **The order action mirrors `toairweapon`:** a splice at `0x43F1D4` (`mov eax,[edi+0x110]`, 6
   bytes; the only branch that reaches it lands on its first byte, `0x43F17C`). A flying target
   with a `nottoair` weapon 0 goes to the order action's refusal `0x4401DC`. Otherwise it
@@ -496,10 +504,12 @@ firer's position, which the firer's own peer owns.
 
 ### What this part did not establish
 
-- What an attack order does when `0x49ABB0` refuses its target (chase, or drop). Settle it by
-  ordering a flagged unit onto an aircraft.
-- Whether an above-water torpedo strikes a land unit (the terrain branch `0x49B37F..0x49B3CD`), and
-  therefore how useful `surfacefire` is against the shore. Settle it with the §4 fixture.
+- What an attack order does when `0x49ABB0` refuses its target (chase, or drop). For a keyed
+  weapon it is moot since C2: the order action refuses the order, and the fire gate drops a held
+  target that flies.
+- **Settled by C2's fixture:** an above-water torpedo does not reach a land unit. A `surfacefire`
+  torpedo launcher engages a kbot on the shore, but the torpedo stops in the shallows and the
+  kbot keeps its 700 HP.
 - The roles of the order handlers `0x4021F0`, `0x4035D0`, `0x406300`, `0x40FBE0` and `0x4138A0`
   (INF: attack-order states). Only their use of `0x49ABB0` matters here.
 - The stack offset of the section `ctx` at the `0x49E010` call sites. It was not needed, because
@@ -642,8 +652,15 @@ victim's owner applies it). `0x489CE0` has two callers, that one and the dispatc
 **The notification.** `0x47F850(unit, index, text)` (`ret 0xC`) requires the unit **not** in the
 on-screen list (`0x48BCB0` over `main+0x1435F`, count `+0x14367`), owned by `main+0x2A43`, alive
 (`+0x110` bit 28) and not bit 14, then calls `0x47FAD0` on the queue `[0x51E68C]` (eight 17-byte
-entries), which plays the index's sound and shows its text and is rate-limited per index by
-`GameTime` (`0x47FAF0`; the next time is written at `0x47FEFD`). The table at `0x5086E8`, 24 bytes an
+entries, count at `+0x99`; an index already queued is not queued twice). The consumer `0x47FCA0`
+hands entry 0 to `0x47FD70` and removes it in the same call. Its second argument, the sound flag,
+is 1 only when `+0xA1` ticks have passed since the stamp at `+0x9D`, which it then renews. The
+per-index rate limit (`0x47FAF0`, against the next time at `0x5086EC + 24·index`) is written at
+`0x47FEFD` only on the path where the entry's sound plays: a priority above
+`10 − main+0x37F17`, a sound for the unit's category, the sound flag, and bit `0x40` of
+`main+0x37F19`, each failing to `0x47FF03`. **So with sound off the limit never engages**:
+measured with sound off, the next time for index 2 (`0x50871C`) stayed 0 while "Under Attack"
+repeated, up to four lines at once. The table at `0x5086E8`, 24 bytes an
 index, names index 2 `underattack` / `"Under Attack"` (`0x508714`, `0x508718`) with an interval
 of 20 (×30 ticks). **Index 2 is passed at exactly one site in the image, `0x4071D8`** (a scan of
 all 83 calls of `0x47F780`/`0x47F850`; `0x47F7E0` has no caller; `0x47FAD0` is called only from
@@ -757,9 +774,10 @@ stock weapon.
   local path answer alike; on a received `0x0B` the record is all a receiver has, and it is enough.
 - **The invariant:** the silence changes only whether notification 2 is queued; every hit is
   applied exactly as stock applies it. `g_hit` is written and read only on the game thread: the
-  local path runs inside the sim tick, and the dispatcher's `0x0B` case runs there in play (section
-  B's B5 measurement: the dispatcher's state table `0x512BC0` drops `0x0A..0x12` during loading, at
-  `0x455F50`; re-check it for `0x0B` when this lands).
+  local path runs inside the sim tick, and the dispatcher's `0x0B` case runs there in play: the
+  state table `0x512BC0` gives `0x0B` the mask 4, which passes only in net state 6, set on the game
+  thread after the load ([engine map](../exe-reverse-engineering.html), *Which thread*), and B4's
+  tagged `0x05` that now carries every `0x0B` mirrors the same gate.
 - **Install:** local, so skip-and-log, not fail-closed. Both sites byte-checked; a mismatch leaves
   stock alerts and logs the reason. A counter `silenced`/`passed` on the `enginefix:` line.
 - **The dot:** nothing to hook. Either document that `noradar=1` hides the dot (stock since 1997;
@@ -807,6 +825,19 @@ By the documentation rule (the plan's [contract](data-keys.md#the-contract)):
   as TADR's documentation says.
 - **Q4: the blink is suppressed**, display only, under the "under-attack" the documentation
   promises to silence.
+
+#### As built (C2)
+
+The design above, with the decisions, and one correction. **The blink's mark is not inside the
+frame.** `0x489CE0` sets `+0xFA` (`0x467950`, called at `0x489D8E`) before it tests for kind `0xB`,
+which skips `0x406F80` (`0x489D93`). So a mark set inside the frame would miss those hits. The
+mark is its own site at `0x489D8E`, deciding from the same record. It keeps, per unit slot, the
+share of `+0xFA` that harmless hits alone put there, so a real hit followed by weather keeps
+blinking for its own 0xF0 ticks. `+0xFA`'s every writer is accounted for: the hit, the unit tick
+`0x48ADF0`, the create `0x485C12` and the saved game's restore `0x4872CC` (`0x4225EC` and
+`0x42E6D6` write other records). The dot of the stones is Q2's `noradar`, set at the loader's
+closing call `0x49E010`, where the flags and the default damage are final. The plan's
+[C2, as built](data-keys.md#c2-as-built) has the rest and the measurements.
 
 ---
 

@@ -213,15 +213,20 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            stock units trampoline to the untouched engine functions. */
         tagpu_weapons_init();
 
-        /* tagpu: TADR section C's unit keys (tagpu_datakeys.h). Always on:
-           observers at the unit-data load 0x42D2E0, the FBI loader's entry
-           0x42BF40 and its read site 0x42BF97, and the COB checksum 0x4B6BA0,
-           each byte-matched; 0x42D2E0 and 0x42BF40 chain onto the
+        /* tagpu: TADR section C's data keys (tagpu_datakeys.h). Always on,
+           each site byte-matched; a mismatch skips that site and those
+           resting on it, and logs.
+           The unit keys: observers at the unit-data load 0x42D2E0, the FBI
+           loader's entry 0x42BF40 and its read site 0x42BF97, and the COB
+           checksum 0x4B6BA0. 0x42D2E0 and 0x42BF40 chain onto the
            extra-weapons module's own observers whenever that module installed
-           them, every other site is disjoint from the detours above (the
-           extra-weapons loader site is 0x42CEF2). They
-           read and write nothing into the engine. A mismatch skips that site
-           and those resting on it, and logs. */
+           them; the extra-weapons loader site is 0x42CEF2. They read and
+           write nothing into the engine.
+           nomapweaponalert: the calls at 0x489DA2 (0x406F80, which the
+           extra-weapons module hooks at its entry, so the call reaches it
+           either way), 0x4071D8 and 0x489D8E, the blink read at 0x466EB9 and
+           an observer on the weapon loader's closing call 0x49E010. The
+           targeting keys' engine sites are in tagpu_patches.c. */
         tagpu_datakeys_init();
 
         /* tagpu: the COB script-call oracle. No-op unless
