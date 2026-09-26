@@ -1717,9 +1717,9 @@ the depth tie (`gpu-status.md` §2.98).
   (`0x4C7ABC..0x4C7ACD`).
 
 So the texture is linear along each edge and along each screen row. That is the quad's bilinear
-map only when two opposite sides lie along rows. Otherwise the layout depends on how the quad
-sits on screen and moves as the unit turns. For a parallelogram it is the affine map whichever
-way the quad sits. The Vulkan unit pass maps a convex textured quad by its bilinear map in the
+map in two cases: when two opposite sides lie along rows, and for a parallelogram whichever way
+it sits (its bilinear map is affine, and linear steps reproduce an affine map exactly). For any
+other quad the layout depends on how it sits on screen and moves as the unit turns. The Vulkan unit pass maps a convex textured quad by its bilinear map in the
 model's own frame instead, not by this per-row rule (`gpu-status.md` §2.99).
 
 ### A builder's build list, `TEMP UTYPE LIST` — `0x42DA58`, `0x42DAC7`, `0x42BEAF..0x42BED3` [DISASSEMBLED + MEASURED 2026-09-24]

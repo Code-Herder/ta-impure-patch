@@ -433,8 +433,8 @@ static const char* FS =
        root is the map's Jacobian there, so the root on the face is the one
        with the positive square root, and a convex quad (all the bake hands
        over) has no other; written as 2 hy / (k1 + sqrt(D)) it stays finite
-       as gx goes to 0 and is exactly hy on a parallelogram. Not clamped: the
-       caller takes its derivatives from this. */
+       as gx goes to 0 and is exactly hy on a parallelogram. The caller clamps
+       it to the face. */
     "vec2 taQuadST(vec2 h, vec2 ab){\n"
     "  vec2 g = ab - 1.0;\n"
     "  float k1 = 1.0 + h.x * g.y - h.y * g.x;\n"
@@ -449,21 +449,38 @@ static const char* FS =
     /* THE TEXEL: a textured quad the bake gave a frame (vQR.x >= 0) is
        mapped per pixel through taQuadST, as the engine's own rasteriser
        spans the whole quad rather than two triangles; every other textured
-       face keeps the uv interpolated across its triangle. The sample is
-       clamped to the frame's rect, whose border repeats the frame's edge
-       (tagpu_gaf.c), so no rounding past u1 or v1 reaches a neighbour.
-       Classic++: the twin's gradients are taken HERE, before any discard,
-       because it is mipmapped and a derivative is only defined while every
-       fragment of the quad is still running (the base atlas has no mips and
-       does not care); they come from the UNCLAMPED coordinate, which stays
-       smooth where the 2x2 quad reaches past the face's edge. The twin reads
-       zero for a flat face, and zero when the switch is off. The hole is the
-       base's alpha, 0 exactly where the frame's index is its key (NEAREST,
-       the texel the index was): it is what keeps a keyed texel out of the
-       depth buffer, where the twin's own alpha 0 at a key would not. */
-    "  vec2 uvD = vQR.x >= 0.0 ? mix(vQR.xy, vQR.zw, taQuadST(vQH, vQAB)) : vUV;\n"
-    "  vec2 uvX = dFdx(uvD), uvY = dFdy(uvD);\n"
-    "  vec2 uv = vQR.x >= 0.0 ? clamp(uvD, vQR.xy, vQR.zw) : vUV;\n"
+       face keeps the uv interpolated across its triangle. (s,t) is clamped
+       to the face, so the sample stays inside the frame's rect, whose border
+       repeats the frame's edge (tagpu_gaf.c): no rounding past u1 or v1
+       reaches a neighbour.
+       Classic++: the twin is mipmapped, so it is read with explicit
+       gradients, and the derivatives they come from are taken HERE, before
+       any discard, while every fragment of the quad is still running (the
+       base atlas has no mips and does not care). A mapped quad's gradient is
+       d(s,t) = J^-1 dh: the inverse of the bilinear map's Jacobian at THIS
+       fragment's clamped (s,t), times the screen derivatives of the frame
+       point h. h is affine across the face, so its derivatives are exact on
+       every lane of the 2x2 quad, and the Jacobian 1 + s(b-1) + t(a-1) is
+       evaluated inside the face, where a convex quad keeps it above the
+       bake's 1/64 margin. So the gradient is finite for every covered
+       fragment and never comes from a helper lane past the face's edge,
+       whose extrapolated h can land where the positive root is the other
+       one. The twin reads zero for a flat face, and zero when the switch is
+       off. The hole is the base's alpha, 0 exactly where the frame's index
+       is its key (NEAREST, the texel the index was): it is what keeps a
+       keyed texel out of the depth buffer, where the twin's own alpha 0 at a
+       key would not. */
+    "  vec2 hX = dFdx(vQH), hY = dFdy(vQH);\n"
+    "  vec2 uv = vUV, uvX = dFdx(vUV), uvY = dFdy(vUV);\n"
+    "  if (vQR.x >= 0.0) {\n"
+    "    vec2 st = clamp(taQuadST(vQH, vQAB), 0.0, 1.0);\n"
+    "    vec2 g = vQAB - 1.0, span = vQR.zw - vQR.xy;\n"
+    "    float jd = 1.0 + st.x * g.y + st.y * g.x;\n"
+    "    mat2 Ji = mat2(1.0 + st.x * g.y, -st.y * g.y,\n"
+    "                   -st.x * g.x, 1.0 + st.y * g.x) / jd;\n"
+    "    uv = vQR.xy + span * st;\n"
+    "    uvX = span * (Ji * hX); uvY = span * (Ji * hY);\n"
+    "  }\n"
     "  vec4 t = vec4(0.0);\n"
     "  vec3 base = vec3(0.0);\n"
     "  if (vUV.x >= 0.0) {\n"

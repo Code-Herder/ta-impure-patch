@@ -19130,12 +19130,12 @@ hook, no engine read or write.
 
 **What the engine does, and why we do not copy it.** `0x4C8760` carries u and v down the quad's
 two edge chains and then steps them linearly across each screen row (`0x4C7A20`; [engine
-map](exe-reverse-engineering.html), *How `0x4C8760` lays a texture on a quad*). That is a
-bilinear map only when two opposite sides of the quad lie along screen rows; otherwise the layout
-depends on how the quad sits on screen, so it shifts as a unit turns. Both remedies were shown to
-the owner side by side, front-on and rotating (an offline render of ARMSOLAR, 2026-09-26), and the
-per-pixel bilinear map was chosen. For a parallelogram the engine's rule, the two affine triangles
-and the bilinear map are the same map, so only non-parallelograms change.
+map](exe-reverse-engineering.html), *How `0x4C8760` lays a texture on a quad*). For a
+parallelogram that is the bilinear map, and so are the two affine triangles, so only
+non-parallelograms change. For any other quad the engine's layout is the bilinear map only when
+two opposite sides lie along screen rows; otherwise it depends on how the quad sits on screen and
+shifts as a unit turns. Both remedies were shown to the owner side by side, front-on and rotating
+(an offline render of ARMSOLAR, 2026-09-26), and the per-pixel bilinear map was chosen.
 
 **How.** `quad_frame` places each textured four-vertex face of the BODY range in its own frame,
 `P0 = (0,0)`, `P1 = (1,0)`, `P3 = (0,1)`, `P2 = (a,b)`, with `(a,b)` the least-squares fit of
@@ -19146,9 +19146,14 @@ exact because every step from the rest vertices to the framebuffer is affine: th
 is rigid, the projection `px = x`, `py = −z − y/2` is linear, and the zoom and the viewport are
 scales. An affine map leaves the bilinear coordinates unchanged, so the texture belongs to the
 model and does not swim as it turns. The fragment stage's `taQuadST` solves the quadratic for `t`
-through the root whose slope, which is the map's Jacobian there, is positive, then takes `s`. The
-sample is clamped to the frame's rect, whose border repeats its edge. Classic++'s mipped twin
-reads `textureGrad` with the gradients of the unclamped coordinate, taken before any discard.
+through the root whose slope, which is the map's Jacobian there, is positive, then takes `s`. `(s,t)` is
+clamped to the face, so the sample stays inside the frame's rect, whose border repeats its edge.
+Classic++'s mipped twin reads `textureGrad` with the gradient `J⁻¹·dh`: the inverse Jacobian at
+the fragment's own clamped `(s,t)` times the screen derivatives of the interpolated point, taken
+before any discard. `h` is affine across the face, so its derivatives are exact on every lane of a
+2×2 quad. Inside a convex face the Jacobian stays above the bake's 1/64 margin, so no gradient
+depends on a helper lane past the face's edge, where the extrapolated point can pick the other
+root.
 
 **What stays on the triangles.** A face that is not a quad, and a quad that is not convex in its
 frame (`a > 0`, `b > 0`, `a + b > 1`, each with a 1/64 margin), where the bilinear map is not
@@ -19173,7 +19178,10 @@ same-time A/B against the build before the change (08888b7):
   (`Arm4c`, `Arm4d`, `camob3`, the `nano` arm; `quad_frame`'s rule puts them among the changed
   quads). The minimap differed only where the two games' AI units had moved differently.
 - The same scene with Classic++ armed, at 0.5×, 1×, 3.5× and 5×: straight grids, no dark rim at a
-  face's edge, no seam along a diagonal.
+  face's edge, no seam along a diagonal. The analytic gradient against one taken by `dFdx` of the
+  solved coordinate, same scene and zooms: on the units only the thin ridge and fold faces differ
+  (991 to 5 899 px a frame, counting the feature beside the collectors, whose restore timing
+  varies), with no visible change at 6× magnification.
 - `crowd-static` (256 units of 16 types), zoom 1× and 2.5×: no face broken or missing.
 - Against GDI (`tagpu_gdi.on`) at 1×, the panels' texture layout matches the engine's frame.
   GDI's ARMSOLARs also show a black panel with white edges that neither Vulkan build draws.

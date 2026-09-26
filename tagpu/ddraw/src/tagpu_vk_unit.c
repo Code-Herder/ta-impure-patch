@@ -3009,9 +3009,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
            the entry is memset and handed back for the MATERIAL, and `g` and
            `m` now name the SAME entry. The `if (*e) continue` above would then
            leave `w->geom` and `w->mat` both pointing at it, and binding 0
-           would fetch 32-byte vertices out of a buffer holding 20-byte ones --
-           past its end, on a draw that still passes the every-unit-or-none
-           gate because the unit WAS drawn. */
+           would fetch GEOM_STRIDE vertices out of the material upload, laid
+           out at MAT_STRIDE -- every position wrong, and past the buffer's end
+           whenever MAT_STRIDE is the smaller -- on a draw that still passes
+           the every-unit-or-none gate because the unit WAS drawn. */
         if (g) g->lastFrame = d->frame;
         if (m) m->lastFrame = d->frame;
 
