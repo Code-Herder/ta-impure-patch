@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=6bb8232..454c58d findings=3 acted=3 rejected=0 date=2026-09-26 (focused re-review of the harmless-weather fix: code clean; three doc statements corrected in the next commit)
