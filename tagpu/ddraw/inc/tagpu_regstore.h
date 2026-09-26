@@ -25,9 +25,10 @@
    alone, a store that is missing, a folder, unreadable or not loaded whole, no memory, an
    exe path that cannot be read, a registry import these hooks do not answer, or a
    win32.dll not loaded at attach (it is a static import of TotalA.exe) ends the process at
-   attach (the line names the process: a cnc-ddraw config tool started in a test folder is
-   refused too), with a log line first and before the game's first instruction: a test
-   launch never runs against the real registry.
+   attach, with a log line first and before the game's first instruction: a test launch
+   never runs against the real registry. The line names the module whose attach it ends
+   (`entered by the tacli-state folder beside <module>`), so a cnc-ddraw config tool opened
+   in a test folder is refused in words about itself, not about TotalA.exe.
 
    The decision (tagpu_regstore_decide) comes before DllMain's return for cnc-ddraw's config
    tool, so an inherited cnc_ddraw_config_init cannot skip test mode.
