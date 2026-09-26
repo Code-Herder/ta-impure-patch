@@ -303,6 +303,25 @@ static int slot_index(char* unit, WSlot* slot)
     return 0;
 }
 
+/* The 0x0D wire check's accessor (tagpu_patches.c wpn_rx_fired): the slot's WEAPON
+   pointer, or NULL when the slot is out of the unit's range — no clamp, no
+   VIOLATION. It writes no engine state; past slot 2 it goes through side_row, which
+   builds or rebuilds the module's own side table when the unit array has moved
+   (VirtualAlloc, VirtualFree of the old one, a log line), as every other side-row
+   read does. A NULL answer only makes the receiver drop the packet.
+   Armed or not: with the module disarmed a unit has three slots, so idx 0..2
+   answer from the inline slots and idx >= 3 answers NULL. */
+char* tagpu_weapons_slot_weapon(char* unit, unsigned idx)
+{
+    WSlot* row;
+    if (!unit) return 0;
+    if (idx < 3u) return ((WSlot*)(unit + 4 + idx * SLOT_STRIDE))->weapon;
+    if (!g_armed || idx >= (unsigned)wpn_count(unit) || idx >= WPN_CAP) return 0;
+    row = side_row(unit);
+    if (!row) return 0;
+    return row[idx - 3].weapon;
+}
+
 /* =========================================================================
    5. Script names — stock strings for 0-2, Spring's names beyond
    ========================================================================= */
@@ -1796,14 +1815,6 @@ static void oracle(const char* spec, unsigned frame)
 int tagpu_weapons_armed(void)
 {
     return g_armed;
-}
-
-const char* tagpu_weapons_slot_weapon(char* u, unsigned idx)
-{
-    WSlot* sl;
-    if (!g_armed || idx < 3 || idx >= WPN_CAP) return NULL;
-    sl = slot_ptr(u, (int)idx);
-    return sl ? sl->weapon : NULL;
 }
 
 void tagpu_weapons_frame(unsigned int frame)

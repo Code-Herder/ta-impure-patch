@@ -2161,6 +2161,12 @@ static void wpn_note_in(volatile LONG* budget, const char* what, unsigned int a,
 }
 #define wpn_note(what, a, b) wpn_note_in(&s_wpnNotes, (what), (a), (b))
 
+/* B3's diverged-0x0D drop counter, incremented in wpn_rx_fired below and reported by
+   the wire-robustness block further down (its own enginefix line). It is defined here so the
+   0x0D fix that owns wpn_rx_fired keeps counting it whichever build is compiled. The
+   accepted count is the check run and passed on a live shooter: evidence the bound ran. */
+static unsigned int s_wireWpnxDrops, s_wireIn0D;
+
 /* In place of `mov edx,[main]` at 0x42E468, after the loader read `ID` into eax (-1 when the
    section has none) and the section's name into edi. edx is the base the loader's own
    arithmetic adds id * 0x115 + 0x2CF3 to. A weapon outside the array is skipped: the stub leaves
@@ -2232,6 +2238,31 @@ static int __cdecl wpn_rx_fired(unsigned int* regs)
             wpn_note("a weapon-fired message names a slot past the unit's three; dropped",
                      pkt[0x23], shooter);
             return 0;
+        }
+        /* B3: the diverged-shooter drop (sim-fixes.md B3; evidence §8). Stock branches
+           the projectile on the PACKET's weapon flags but divides by the LOCAL slot
+           weapon's velocity +0x68 (0x49CE62..0x49CE6A), so on a peer whose copy of the
+           shooter is a live unit of another type it faults #DE when that weapon's
+           velocity is 0 and otherwise builds a mixed projectile. Resolve the shooter's
+           own slot weapon (the extra-weapons accessor past slot 2, NULL when the slot is
+           past the unit's count) and drop when it is not &Weapons[id]. A bound on engine
+           + wire data, and the identity between consistent peers: the sender fills the
+           packet from that same slot (0x49D742), so they never differ. Evidence §8
+           classes it simulation, only when diverged; riding this site, it is held
+           fail-closed with the weapon IDs' rows. Only for a live shooter, since a dead
+           one the receiver drops anyway. */
+        {
+            char* shooter_u = (char*)first + shooter * 0x118;
+            if ((*(const unsigned int*)(shooter_u + 0x110)) & 0x10000000) {
+                char* sw = tagpu_weapons_slot_weapon(shooter_u, pkt[0x23]);
+                if (sw != w) {
+                    s_wireWpnxDrops++;
+                    wpn_note("a weapon-fired message whose shooter slot holds another weapon; dropped",
+                             id, pkt[0x23]);
+                    return 0;
+                }
+                s_wireIn0D++;
+            }
         }
     }
     regs[PR_ECX] = (unsigned int)(size_t)ta;
@@ -2402,8 +2433,9 @@ static int __cdecl wpn_rx_intercept(unsigned int* regs)
     return i >= 0 && i < 256 && (unsigned int)i == m[0xD];
 }
 
-/* The dispatch table's 0x05 slot (0x455F90), ahead of stock's chat handler 0x45522E, which
-   still runs and returns at once for text that starts with a zero byte (0x463CA7). A
+/* Tag 0x49 of the 0x05 receiver (hit_rx_chat, which owns the dispatch table's 0x05 slot
+   0x455F90 in both builds), ahead of stock's chat handler 0x45522E, which still runs and
+   returns at once for text that starts with a zero byte (0x463CA7). A
    companion detonates, as stock's 0x49AF90 does, the first local projectile whose target point
    is the message's, with a weapon whose index is its ID.
 
@@ -2423,7 +2455,8 @@ static int __cdecl wpn_rx_intercept(unsigned int* regs)
    damage for a projectile of a local owner only. The one residual is the first in-play
    frame, which 0x49842F runs before 0x498455 installs the handler: a projectile this peer
    fires in that frame and another peer catches before the frame ends. Stock's 0x0E has no
-   such gate and runs on whichever thread pumps. Drops are logged. */
+   such gate; the dispatcher passes it in net state 6 only (mask 4, 0x45200B and
+   0x454762..0x45478B). Drops are logged. */
 static volatile LONG s_wpnChatNotes;     /* its own budget: out of play a companion drops by design,
                                             and must not use up the malformed messages' notes */
 #define wpn_chat_note(what, a, b) wpn_note_in(&s_wpnChatNotes, (what), (a), (b))
@@ -2590,7 +2623,6 @@ static int wpn_build(WPNSITES* t)
             { 0xE8, 0x43, 0x76, 0xFB, 0xFF }, { 0xE8, 0x02, 0x76, 0xFB, 0xFF } };
         static const unsigned char icptCmp[11] = { 0x8B, 0x1E, 0x8A, 0x9B, 0x0A, 0x01, 0x00, 0x00,
                                                    0x3A, 0x5F, 0x0D };
-        static const unsigned char chat[4] = { 0x2E, 0x52, 0x45, 0x00 };            /* 0x45522E */
         static const struct { unsigned int va; unsigned char was[5]; } fired[5] = {
             { 0x0049D859, { 0xE8, 0x92, 0x45, 0xFB, 0xFF } },
             { 0x0049DB4D, { 0xE8, 0x9E, 0x42, 0xFB, 0xFF } },
@@ -2651,10 +2683,7 @@ static int wpn_build(WPNSITES* t)
         *wpn_call(a, (const void*)wpn_rx_intercept, -1, 1) = 0xC3;
         fix_branch(wpn_site(t, 0x0049AFC9, 11, icptCmp, "0x0E receiver, the match"), 0xE8, a);
 
-        if (!(a = fix_code(32))) return 0;
-        wpn_then(wpn_call(a, (const void*)wpn_rx_chat, -1, 0), 0x0045522E);
-        wpn_operand(wpn_site(t, 0x00455F90, 4, chat, "0x05 receiver, the companion"), 0,
-                    (unsigned int)(size_t)a);
+        /* the 0x05 receiver is B4's in both builds: hit_rx_chat hands this tag to wpn_rx_chat */
     }
 #endif
     return !t->over;
@@ -2678,6 +2707,1093 @@ static int fix_weapon_ids(void)
 #else
     return FIX_LIMITS;
 #endif
+}
+
+/* ===== WIRE ROBUSTNESS: THE RECEIVERS' UNBOUNDED INDICES ==================================
+   Landing B3 of research/notes/tadr-port/sim-fixes.md; the disassembly is in
+   sim-fixes-evidence.md Part 1 §3 (the unbounded 0x09/0x0B/0x0C indices), §8 (the diverged
+   0x0D, handled in wpn_rx_fired above) and §9 (the 0x2C receiver's bounds), and §10 (the
+   oracle counters). CLASS: local — every bound is stock-exact for a well-formed message and
+   drops only a malformed or foreign one, so a peer without the fix computes the same shared
+   state. The identity rests on the disassembly, not on injected traffic; tagpu_wirecheck.on
+   checks the C predicates at attach, and no more than them.
+
+   Five network receivers index the unit array (stride 0x118, first at main+0x14357, last
+   inclusive at main+0x1435B) by a u16 taken straight off the wire, with no bound:
+     - 0x09 CreateFromNetwork 0x4861D0: index at rec+3, type at rec+1. Index 0 faults at
+       0x486237; an index past the array points esi beyond the array. Type indexes the def
+       table main+0x1439B + type*0x249 unbounded.
+     - 0x0C the destructor 0x4866D0: index at rec+1 (0 faults at 0x486706), killer at rec+7.
+     - 0x0B the damage receiver 0x489CE0: victim at rec+1, attacker at rec+3.
+     - 0x0A the attach 0x48AB70: child at rec+1 (0 returns having done nothing, 0x48ABC7),
+       parent at rec+3 (0 is the detach, 0x48ABA9), both scaled at 0x48AB8A / 0x48ABAF.
+     - 0x2C the stat/move receiver 0x48B920: a dirty entry's slot delta (signed, relative to
+       the player's block), its type, and a round-robin full-state entry whose type and remainder
+       (a SIGNED idiv, 0x48BAAB) are likewise unbounded, and whose player block pointer is
+       trusted. Its bit reader 0x415DC0 has no end, and the receiver discards the message's own
+       [16] size at 0x48B944, so a message with no 0xFFFF inside it is parsed from whatever
+       follows it in the receive buffer. Two more unit indices ride inside it, each an optional
+       reference whose 0 the engine takes as no unit: the 0x4FD9E0 move class's payload names
+       a target (u16 at 0x44E0D0, handed to the reference set 0x489690 at 0x44E0FF), and the
+       round robin's full state names the unit's carrier (15 bits at 0x48B56B, the parent of
+       the attach record 0x48AB70 applies at 0x48B58B).
+
+   THE FIX bounds each value before use. Every stub is entered by a jmp at a clean 5-byte
+   boundary, verifies the whole stock span first (all-or-nothing: one non-stock span leaves the
+   image untouched), sets the same registers stock would, and continues at the same address; a
+   failed bound goes to the receiver's own drop/exit. A 0x2C is parsed from a zero-padded copy
+   of itself (wire_s2c_copy), and its reader's position is bounded by the message's length
+   before each read the stubs precede (wire_2c_len). On a misframed 0x2C the reader is pointed
+   at a static zero dword and sent to the engine's own end-of-list 0x48BA28, so no round-robin
+   entry is parsed from a stream that cannot be re-framed. The transport's splitter ends a
+   packet at a message too short to advance it (wire_split_*).
+
+   THREADS. These receivers run on the game thread only, by the dispatcher's gate: 0x451FD0
+   (called at 0x491369) is the only filler of the receive-mask table 0x512BC0 for their codes,
+   and gives 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E and 0x2C the mask 4 (0x451FE7..0x45200B); the
+   dispatcher passes mask 4 only in net state 6 (0x454762..0x45478B), which 0x498445 sets on
+   the game thread after the load (state 5 during it). The 0x2C statics below also rest on the
+   receiver being serialised with no re-entry between one check and the next: nothing it calls
+   between them (the direct-call closure of 0x4861D0, the move class's parse) reaches the pump
+   0x453D40. The one piece that runs on whichever thread pumps, the length capture in the
+   receive 0x4534E0, keeps its values in TLS. */
+
+/* pure predicates over field values and engine counts — no I/O, no engine reads; the
+   tagpu_wirecheck.on self-check exercises exactly these on boundary values */
+static int wire_index_ok(unsigned int idx, unsigned int max)  { return idx >= 1u && idx <= max; }
+static int wire_killer_ok(unsigned int idx, unsigned int max) { return idx == 0u || idx <= max; }
+static int wire_type_ok(unsigned int type, unsigned int count){ return type >= 1u && type < count; }
+static int wire_delta_ok(int delta, int n)                    { return delta >= 0 && delta < n; }
+/* an optional unit reference, as the index the engine should see: 0 (no unit) stays 0, a slot
+   stays itself, and an index past the array becomes 0, the engine's own "no unit" */
+static unsigned int wire_ref_idx(unsigned int idx, unsigned int max)
+{
+    return wire_index_ok(idx, max) ? idx : 0u;
+}
+/* an attach record's ids: the child a slot (0 is no record 0x48AB70 acts on), the parent no
+   unit (0, the detach) or a slot */
+static int wire_attach_ok(unsigned int child, unsigned int parent, unsigned int max)
+{
+    return wire_index_ok(child, max) && wire_ref_idx(parent, max) == parent;
+}
+static int wire_bits_ok(unsigned long long pos, unsigned int need, unsigned long long end)
+{
+    return pos + need <= end;
+}
+/* a message the splitter may take: a length that advances it, and for a 0x2C at least its
+   7-byte header ([8] code, [16] size, [32] GameTime), which every sender writes */
+static int wire_split_ok(unsigned int code, unsigned int len)
+{
+    return len != 0u && (code != 0x2Cu || len >= 7u);
+}
+
+/* A player's block is a run of N slots starting at begin + (1 + k*N)*0x118, k < 10 (10*N+1
+   slots, slot 0 the sentinel), and ending N-1 slots later, all inside [begin, arr_last].
+   k is the player's RANK, not its record's index: 0x4858A6..0x4858E0 assigns blocks in the
+   order of an insertion sort (0x485657..0x4856C0) that, in a network game, compares the
+   records' DirectPlay ids [rec+4]. A wild [player+0x67] fails this even when a 16-bit delta
+   could not. */
+static int wire_block_ok(const char* first, const char* last, const char* begin,
+                         const char* arr_last, unsigned int n)
+{
+    long long off;
+    unsigned int slot;
+    if (!first || !begin || !last || n == 0u) return 0;
+    if (first < begin || first > arr_last || last > arr_last || last < first) return 0;
+    off = (long long)(first - begin);
+    if (off % 0x118 != 0) return 0;
+    slot = (unsigned int)(off / 0x118);
+    if (slot < 1u || (slot - 1u) % n != 0u || (slot - 1u) / n >= 10u) return 0;
+    return last == first + (long long)(n - 1u) * 0x118;
+}
+
+/* The B4/B5 oracle counters (§10), observe-only. morph = a create onto a live slot whose type
+   changes. dcreate = CreateFromNetwork called by the 0x2C dirty list (returning to 0x48BA05):
+   a dirty entry whose type is not its slot's, the unit made from the entry rather than from its
+   own 0x09 — into an empty slot, the ghost commander's mechanism (§2). rcreate = the same from
+   the round robin (returning to 0x48B49C). ghost = the engine's own ghost sweep firing (a
+   round-robin type 0 over an occupied slot). */
+static unsigned int s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost;
+/* CreateFromNetwork's own refusal, for B5: when the create's player has no block
+   ([rec+0x67] == 0) the jne at 0x486229 falls through to 0x48622B, which returns 0; counted per
+   caller. noarr = wire_s09 found no unit array to bound against */
+static unsigned int s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr;
+/* drop counters, per message */
+static unsigned int s_wire09, s_wire09Blk, s_wire0A, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C;
+static unsigned int s_wire2CLen, s_wire2CStale, s_wire2CNoCopy;
+/* a 0x2C reference past the array, made no unit: the move payload's target, the carrier */
+static unsigned int s_wire2CTarget, s_wire2CCarrier;
+/* the splitter's stops and the pump's re-pointed message pointer run on whichever thread pumps */
+static volatile LONG s_wireSplit, s_wirePump;
+/* records accepted off the wire, per receiver: evidence each bound ran on real traffic (the
+   same role as the line-of-sight own-row counters). 0x0B and 0x0C count only the dispatcher's
+   call (return 0x455417 / 0x455428), not the local kill and damage paths that share the
+   function; 0x0A has only the dispatcher's stub to count at; 0x2C counts messages, dirty
+   entries, dirty creates and round-robin entries. */
+static unsigned int s_wireIn09, s_wireIn0A, s_wireIn0B, s_wireIn0C;
+static unsigned int s_wireIn2C, s_wireIn2CDirty, s_wireIn2CCreate, s_wireIn2CRR;
+/* the sender-block rule: a wire 0x09's slot lies in the block of its TRANSPORT sender, the
+   dispatcher's edi (its player record, the one the 0x2C and 0x0D cases pass), which
+   CreateFromNetwork saves with its last push (0x4861EC), so it is [esp+0] at 0x4861F7. The
+   sender is bounded as one of the ten records at main+0x1B63, stride 0x14B (the loop at
+   0x406E05 counts ten); the pump names record ten, one past them, for a sender it cannot
+   find (0x453E14). argdiff counts a create whose player argument is not the sender. */
+static unsigned int s_wireArgDiff, s_wireSendSeen;
+/* the type carried from the type check to the after-create check (game thread only) */
+static int s_wire_2c_type, s_wire_rr_type;
+/* the 0x2C being parsed: its reader's address and its end in bits (game thread only). A check
+   whose reader is not this one stops, so a nested or stale parse cannot borrow the bound. */
+static const unsigned char* s_wire2cRd;
+static unsigned long long   s_wire2cEnd;
+static const unsigned char* s_wire2cCopy;
+/* the stop path's zero dword: a misframed 0x2C reader points here so its flag bit reads 0 */
+static const unsigned int s_wireZero;
+/* the receive's buffer and delivered length, per thread (see wire_rx_note) */
+static DWORD s_wireTlsBuf = TLS_OUT_OF_INDEXES, s_wireTlsLen = TLS_OUT_OF_INDEXES;
+/* each thread's copy buffer for the 0x2C parse (see wire_s2c_copy) */
+static DWORD s_wireTlsCopy = TLS_OUT_OF_INDEXES;
+
+static volatile LONG s_wireNotes;
+static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigned int b)
+{
+    (*c)++;
+    if (InterlockedIncrement(&s_wireNotes) <= 64)
+        tagpu_logf("enginefix: wire robustness: %s (%u, %u)", what, a, b);
+}
+
+/* ---- the 0x2C length ----------------------------------------------------------------------
+
+   A message's bytes are the receive's own: 0x4534E0 takes one message into the buffer at
+   main+0x2A38 and learns its length, which it hands only to the statistics call 0x415EF0 and
+   then drops. wire_rx_note keeps both, per thread, at those two calls (0x453595 for the
+   transport 0x462F30, 0x45361F for a raw DirectPlay receive, `-p` below 0). On the transport
+   the length of a 0x2C IS its [16] size field (the splitter 0x463790 reads it at 0x4639E5 and
+   queues a 0x2C only when it fits the packet, 0x46393E); a raw receive has no splitter, so the
+   bound is the smaller of the two.
+
+   THE PUMP'S POINTER. The pump 0x453D40 takes its message pointer once, before its loop
+   (0x453D90 -> [esp+0x10]), and 0x4534E0 grows the buffer when a message outgrows it
+   (0x453565, 0x4535EE: 0x4D84A0, a realloc [INFERRED: (block, size) in, the block out]), so
+   after a growth that moves the block, every later message of the same pump call was
+   dispatched from the freed one. Nothing else writes the pump's [esp+0x10] or takes its
+   address. The note re-points the pump's
+   [esp+0x10] at the buffer the message was just received into, so the dispatcher reads the
+   message the length describes: the identity when the buffer did not move. The frame is the
+   pump's by construction: 0x4534E0's one caller is 0x453D94, its prologue is one push
+   (0x4534E0) and the three argument pushes are the span verified at install, and the note
+   checks the return address 0x453D99 before it writes. */
+
+/* call-entered at 0x453595 / 0x45361F in place of `call 0x415EF0` (code, len, 0), which the
+   stub then jumps to with the stack as stock left it. r[PR_RET+1..3] are the arguments,
+   r[PR_RET+4] 0x4534E0's local, r[PR_RET+5] its return into the pump, and the pump's frame
+   starts at r[PR_RET+6], so its [esp+0x10] is r[PR_RET+10]. */
+static int __cdecl wire_rx_note(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    void* buf = ta ? *(void* const*)(ta + 0x2A38) : NULL;
+    TlsSetValue(s_wireTlsBuf, buf);
+    TlsSetValue(s_wireTlsLen, (void*)(size_t)r[PR_RET + 2]);
+    if (buf && r[PR_RET + 5] == 0x00453D99u && r[PR_RET + 10] != (unsigned int)(size_t)buf) {
+        if (InterlockedIncrement(&s_wirePump) <= 16)
+            tagpu_logf("enginefix: wire robustness: the receive buffer moved to %p (capacity %u) "
+                       "inside a pump call; its message pointer follows (code %u, %u bytes)",
+                       buf, *(const unsigned int*)(ta + 0x2A34), r[PR_RET + 1] & 0xFFu,
+                       r[PR_RET + 2]);
+        r[PR_RET + 10] = (unsigned int)(size_t)buf;
+    }
+    return 1;
+}
+
+/* The copy's padding: the most the engine can read past the last check we control, by
+   disassembly of every path.
+     - a dirty entry: after the type check, the move class's payload parse [vt+0x24] and then
+       the next delta (16) at 0x48BA19, before the delta stub checks. The move classes'
+       vtables (0x4FD458, 0x4FD488, 0x4FD980, 0x4FD9B0, 0x4FD9E0; no other table's +0x24
+       reaches the reader) give 0x44EFD0 (reads 0), 0x44F5C0 (1 + 2 + 3 * 32 = 99: its loop
+       runs a 2-bit count) and 0x490A10 (2 + max(0x44E080's 8+32+16+16+16+96 = 184,
+       0x44E9C0's 1+6*32+16 = 209) + 2 = 213). 213 + 16 = 229.
+     - the round robin after 0x48B40E: 16+8+8+2+1 at 0x48B4A9..0x48B557, then 15+8 or
+       32*3+16*3 at 0x48B56B..0x48B60F and 32 at 0x48B6F2: 35 + 176 = 211. 0x48B090,
+       0x48AB70, 0x47D0E0, 0x47CC30 and 0x4827B0 read nothing.
+     - the header, before the entry check: 56.
+   229 bits is 29 bytes past the last checked bit; the message's end can sit 3 bytes into a
+   dword, and 0x415DC0 also loads the next dword when a read reaches the end of one
+   (0x415E0C..0x415E3E): 8 more. */
+enum {
+    WIRE_2C_OVER_BITS = 229,
+    WIRE_2C_PAD       = 48,
+    WIRE_2C_MAX       = 0xFFFF,                   /* the [16] size bounds the copied length */
+    WIRE_2C_COPY      = WIRE_2C_MAX + WIRE_2C_PAD
+};
+typedef char wire_2c_pad_covers[(WIRE_2C_PAD >= (WIRE_2C_OVER_BITS + 7) / 8 + 3 + 8) ? 1 : -1];
+
+/* 0x2C, the receiver's first instruction after its pushes, branch at 0x48B92B (before the
+   header's reads). eax = the message. Copies it -- the receive's delivered length, and the
+   size field when that is smaller, so at most 0xFFFF bytes -- into this thread's buffer,
+   zeroes WIRE_2C_PAD bytes after it, and hands the copy back in eax, which stock's
+   0x48B933 stores as the reader's buffer. Every read of the parse is then inside memory we
+   own, whatever the message says. A message that is not the buffer the receive described,
+   or no buffer, drops to 0x48BAC8. Continue -> xor esi,esi; push 8; lea ecx,[esp+0x14];
+   0x48B933. Nothing reads the reader after the handler returns: the dispatcher's case
+   jumps to the next receive (0x4553F9). */
+static int __cdecl wire_s2c_copy(unsigned int* r)
+{
+    const unsigned char* pkt = (const unsigned char*)(size_t)r[PR_EAX];
+    const unsigned char* buf = (const unsigned char*)TlsGetValue(s_wireTlsBuf);
+    unsigned int len = (unsigned int)(size_t)TlsGetValue(s_wireTlsLen);
+    unsigned char* copy = (unsigned char*)TlsGetValue(s_wireTlsCopy);
+    s_wire2cRd = 0;
+    s_wire2cCopy = 0;
+    if (!pkt || pkt != buf) {
+        wire_drop(&s_wire2CStale, "a 0x2C is not the message the receive delivered; dropped",
+                  0, len);
+        return 0;
+    }
+    if (len >= 3u && *(const unsigned short*)(pkt + 1) < len) len = *(const unsigned short*)(pkt + 1);
+    if (len > WIRE_2C_MAX) len = WIRE_2C_MAX;
+    if (!copy) {
+        copy = (unsigned char*)VirtualAlloc(NULL, WIRE_2C_COPY, MEM_COMMIT | MEM_RESERVE,
+                                            PAGE_READWRITE);
+        if (!copy) {
+            wire_drop(&s_wire2CNoCopy, "no copy buffer for a 0x2C; dropped", len, 0);
+            return 0;
+        }
+        TlsSetValue(s_wireTlsCopy, copy);
+    }
+    memcpy(copy, pkt, len);
+    memset(copy + len, 0, WIRE_2C_PAD);
+    s_wire2cRd   = WPN_ESP_JMP(r) + 0x10;
+    s_wire2cEnd  = (unsigned long long)len * 8u;
+    s_wire2cCopy = copy;
+    r[PR_EAX] = (unsigned int)(size_t)copy;
+    return 1;
+}
+
+/* The transport's splitter 0x463790 walks a packet by each message's length and advances by
+   it, so a length of 0 keeps its counting loop (0x4638F0..0x463947) on one message for good,
+   and its third walk (0x463AD3..0x463B8B) queues that message until the queue is full. Both
+   take the length at one place; a length wire_split_ok refuses ends the split there, through
+   the engine's own end for a code it does not know (0x463949; 0x463B91). The counting pass
+   decides how many messages the queuing pass 0x4639BC takes, so that pass never reaches it. */
+static int wire_split(unsigned int code, unsigned int len)
+{
+    if (wire_split_ok(code, len)) return 1;
+    if (InterlockedIncrement(&s_wireSplit) <= 16)
+        tagpu_logf("enginefix: wire robustness: a packet's message of code %u has length %u, too "
+                   "short to advance; the packet's split ends there", code, len);
+    return 0;
+}
+/* 0x463939 in the counting loop: ax = the length, the code at [esp+0x28] (0x4638F4) */
+static int __cdecl wire_split_count(unsigned int* r)
+{
+    return wire_split(*(const unsigned char*)(WPN_ESP_JMP(r) + 0x28), r[PR_EAX] & 0xFFFF);
+}
+/* 0x463B33 in the third walk: ax = the length, the code at [esp+0x2C] (0x463AD9) */
+static int __cdecl wire_split_walk(unsigned int* r)
+{
+    return wire_split(*(const unsigned char*)(WPN_ESP_JMP(r) + 0x2C), r[PR_EAX] & 0xFFFF);
+}
+
+static unsigned long long wire_pos(const unsigned char* rd)
+{
+    return (unsigned long long)*(const unsigned int*)(rd + 4) * 32u + *(const unsigned int*)(rd + 8);
+}
+
+/* the reader `rd` is the 0x2C's own, and `need` more bits fit inside it */
+static int wire_2c_len(const unsigned char* rd, unsigned int need, const char* where)
+{
+    unsigned long long pos;
+    if (rd != s_wire2cRd) {
+        wire_drop(&s_wire2CLen, "a 0x2C check found another reader; stream stopped", 0, 0);
+        return 0;
+    }
+    pos = wire_pos(rd);
+    if (!wire_bits_ok(pos, need, s_wire2cEnd)) {
+        if (InterlockedIncrement(&s_wireNotes) <= 64)
+            tagpu_logf("enginefix: wire robustness: a 0x2C runs past its own length at %s "
+                       "(bit %u + %u of %u); stream stopped", where, (unsigned int)pos, need,
+                       (unsigned int)s_wire2cEnd);
+        s_wire2CLen++;
+        return 0;
+    }
+    return 1;
+}
+
+/* ---- the checkers, one per site; regs is the stub's pushad frame (PR_* order) ------------- */
+
+/* the unit array's first slot, and its last valid index in *max (0 when there is no array) */
+static const char* wire_units(const char* ta, unsigned int* max)
+{
+    const char* first = ta ? *(const char* const*)(ta + 0x14357) : 0;
+    const char* last  = ta ? *(const char* const*)(ta + 0x1435B) : 0;
+    *max = (first && last >= first) ? (unsigned int)(last - first) / 0x118 : 0u;
+    return first;
+}
+
+/* 0x09, branch at 0x4861F7. edi = rec, edx = player*0x14B, ebx = main. Continue -> 0x486220
+   (esi = the unit, [esp+0x20] = edx as stock stored it); drop -> 0x48622B. */
+static int __cdecl wire_s09(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EDI];
+    unsigned char* sp = WPN_ESP_JMP(r);
+    const char* first;
+    const char* last;
+    unsigned int max, count, idx, type;
+    if (!ta || !rec) { s_wireNoArr++; return 0; }
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (!first || last < first) { s_wireNoArr++; return 0; }
+    max   = (unsigned int)(last - first) / 0x118;
+    count = *(const unsigned int*)(ta + 0x1438F);
+    idx   = *(const unsigned short*)(rec + 3);
+    type  = *(const unsigned short*)(rec + 1);
+    if (!wire_index_ok(idx, max) || !wire_type_ok(type, count)) {
+        wire_drop(&s_wire09, "a unit-create names a unit past the array or a bad type; dropped",
+                  idx, type);
+        return 0;
+    }
+    {
+        char* slot = (char*)first + (size_t)idx * 0x118;
+        unsigned int ret = *(const unsigned int*)(sp + 0x1C);   /* CreateFromNetwork's caller */
+        int noblk = *(const unsigned int*)(ta + r[PR_EDX] + 0x1BCA) == 0;   /* 0x486220 */
+        if (ret == 0x004553E9u) {
+            const char* players = ta + 0x1B63;
+            const char* snd = *(const char* const*)sp;     /* the dispatcher's edi */
+            unsigned int si = 10;
+            const char* sf = 0;
+            const char* sl = 0;
+            if (snd >= players && snd < players + 10 * 0x14B && (snd - players) % 0x14B == 0) {
+                si = (unsigned int)(snd - players) / 0x14B;
+                sf = *(const char* const*)(snd + 0x67);
+                sl = *(const char* const*)(snd + 0x6B);
+            }
+            if (si >= 10 || !sf || !sl || slot < sf || slot > sl) {
+                wire_drop(&s_wire09Blk, "a unit-create from a sender whose block does not hold "
+                          "the unit; dropped", si, idx);
+                return 0;
+            }
+            s_wireIn09++;
+            if (r[PR_EDX] != si * 0x14B) s_wireArgDiff++;
+            if (!(s_wireSendSeen & (1u << si))) {
+                s_wireSendSeen |= 1u << si;
+                tagpu_logf("enginefix: wire robustness: 0x09 from sender %u (type %u, '%.30s'), "
+                           "player arg %u, slot %u, sender block %u..%u", si,
+                           (unsigned int)*(const unsigned char*)(snd + 0x73), snd + 0x2B,
+                           r[PR_EDX] / 0x14B, idx, (unsigned int)(sf - first) / 0x118,
+                           (unsigned int)(sl - first) / 0x118);
+            }
+            if (noblk) s_wireNoBlk09++;
+        } else if (ret == 0x0048BA05u) {
+            s_wireDCreate++;
+            if (noblk) s_wireNoBlkDirty++;
+        } else if (ret == 0x0048B49Cu) {
+            s_wireRCreate++;
+            if (noblk) s_wireNoBlkRR++;
+        }
+        if (noblk && InterlockedIncrement(&s_wireNotes) <= 64)
+            tagpu_logf("enginefix: wire robustness: CreateFromNetwork refuses a create for player "
+                       "%u, which has no block (from %08X, slot %u, type %u)",
+                       r[PR_EDX] / 0x14B, ret, idx, type);
+        if ((*(const unsigned int*)(slot + 0x110) & 0x10000000u) &&
+            *(const unsigned short*)(slot + 0xA6) &&
+            *(const unsigned short*)(slot + 0xA6) != (unsigned short)type)
+            s_wireMorph++;
+        r[PR_ESI] = (unsigned int)(size_t)slot;
+        *(unsigned int*)(sp + 0x20) = r[PR_EDX];   /* stock's mov [esp+0x20],edx at 0x4861FE */
+    }
+    return 1;
+}
+
+/* 0x0C destructor, branch at 0x4866E5 (stock's push edi at 0x4866E4 is left in place, so the
+   drop's pop edi at 0x486E59 balances). ebx = rec, edx = main. Continue -> 0x486706 (esi = the
+   unit); drop -> 0x486E59. */
+static int __cdecl wire_s0c(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EBX];
+    const char* first;
+    const char* last;
+    unsigned int max, idx;
+    if (!ta || !rec) return 0;
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (!first || last < first) return 0;
+    max = (unsigned int)(last - first) / 0x118;
+    idx = *(const unsigned short*)(rec + 1);
+    if (!wire_index_ok(idx, max)) {
+        wire_drop(&s_wire0C, "a unit-destroy names a unit past the array; dropped", idx, max);
+        return 0;
+    }
+    if (*(const unsigned int*)(WPN_ESP_JMP(r) + 0x78) == 0x00455428u) s_wireIn0C++;
+    r[PR_ESI] = (unsigned int)(size_t)((char*)first + (size_t)idx * 0x118);
+    return 1;
+}
+
+/* 0x0C's killer, branch at 0x486753. ebx = rec, esi = the victim, edx = main. Always continues
+   to 0x486778 (mov [esi+0xF0],eax) with eax = the killer pointer, 0 for index 0 or a bounded
+   miss (counted). */
+static int __cdecl wire_s0ckill(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EBX];
+    r[PR_EAX] = 0;
+    if (ta && rec) {
+        const char* first = *(const char* const*)(ta + 0x14357);
+        const char* last  = *(const char* const*)(ta + 0x1435B);
+        if (first && last >= first) {
+            unsigned int max = (unsigned int)(last - first) / 0x118;
+            unsigned int kidx = *(const unsigned short*)(rec + 7);
+            if (kidx == 0) {
+                r[PR_EAX] = 0;
+            } else if (!wire_killer_ok(kidx, max)) {
+                wire_drop(&s_wire0Ckill, "a unit-destroy names a killer past the array; made NULL",
+                          kidx, max);
+                r[PR_EAX] = 0;
+            } else {
+                r[PR_EAX] = (unsigned int)(size_t)((char*)first + (size_t)kidx * 0x118);
+            }
+        }
+    }
+    return 1;
+}
+
+/* 0x0B, branch at 0x489CED. edi = rec, edx = main. Continue -> 0x489D37 (esi = victim, 0 for
+   index 0 which stock then drops; ebx = attacker, 0 allowed); drop -> 0x489F93. */
+static int __cdecl wire_s0b(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EDI];
+    const char* first;
+    const char* last;
+    unsigned int max, vidx, aidx;
+    if (!ta || !rec) return 0;
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (!first || last < first) return 0;
+    max  = (unsigned int)(last - first) / 0x118;
+    vidx = *(const unsigned short*)(rec + 1);
+    aidx = *(const unsigned short*)(rec + 3);
+    if (vidx > max || aidx > max) {
+        wire_drop(&s_wire0B, "a damage message names a unit past the array; dropped",
+                  vidx > aidx ? vidx : aidx, max);
+        return 0;
+    }
+    if (*(const unsigned int*)(WPN_ESP_JMP(r) + 0x0C) == 0x00455417u) s_wireIn0B++;
+    r[PR_ESI] = vidx ? (unsigned int)(size_t)((char*)first + (size_t)vidx * 0x118) : 0;
+    r[PR_EBX] = aidx ? (unsigned int)(size_t)((char*)first + (size_t)aidx * 0x118) : 0;
+    return 1;
+}
+
+/* 0x0A attach, the dispatcher's case, branch at 0x4553FE (entry 8 of the jump table 0x455F84,
+   code 0x0A), in place of stock's mov eax,[esp+0x10]; push eax before `call 0x48AB70`.
+   [esp+0x10] = the record, the pump's message pointer. 0x48AB70 scales both ids into the
+   array unbounded (child +1 at 0x48AB8A..0x48AB9F, parent +3 at 0x48ABAF..0x48ABC4); a child
+   0 returns having done nothing (0x48ABC7) and a parent 0 is the detach (0x48ABA9). The sender
+   0x48AAC0 writes its child's own +0xA8 (it has read the child's +0x110 at 0x48AAC7, so the
+   child is never NULL) and its parent's, or 0. A child outside [1, max] or a parent past the
+   array drops the record to 0x455F50, the back edge every case and every unknown code takes;
+   otherwise -> the displaced mov and push, then 0x455403. Only the wire's path is guarded:
+   0x48AB70's other callers are the local wrapper 0x48AB62 (the ids of live units) and the 0x2C
+   round robin (0x48B58B, its carrier bounded at 0x48B574; 0x48B5C5, the slot's own id and
+   parent 0). */
+static int __cdecl wire_s0a(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    const unsigned char* rec = *(const unsigned char* const*)(WPN_ESP_JMP(r) + 0x10);
+    unsigned int max, child, parent;
+    if (!ta || !rec) return 0;
+    wire_units(ta, &max);
+    child  = *(const unsigned short*)(rec + 1);
+    parent = *(const unsigned short*)(rec + 3);
+    if (!wire_attach_ok(child, parent, max)) {
+        wire_drop(&s_wire0A, "an attach names no child or a unit past the array; dropped",
+                  child, parent);
+        return 0;
+    }
+    s_wireIn0A++;
+    return 1;
+}
+
+/* 0x2C entry, branch at 0x48B960, after the header's three reads ([8] code, [16] size,
+   [32] GameTime, 56 bits, from the copy). edi = player record, ebp = GameTime, the reader at
+   [esp+0x10]. Continue -> 0x48B96E (stock's mov [edi+0x18],ebp done here); a reader that is
+   not the copy's, a header and first delta that do not fit the message, or a block that is
+   not a valid slot run, drops to 0x48BAC8, the engine's own clean 'no block' exit. The block check covers the dirty loop, the block sweep 0x48BA28 and the
+   round-robin slot 0x48BAAD, all of which read [edi+0x67]/[edi+0x6B]. */
+static int __cdecl wire_s2c_entry(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    char* pr = (char*)(size_t)r[PR_EDI];
+    unsigned char* sp = WPN_ESP_JMP(r);
+    const unsigned char* rd = sp + 0x10;
+    const char* arr_first;
+    const char* arr_last;
+    const char* bfirst;
+    const char* blast;
+    unsigned int n;
+    if (!pr || !ta) return 0;
+    if (!s_wire2cCopy || *(const unsigned char* const*)rd != s_wire2cCopy ||
+        !wire_2c_len(rd, 16, "the first delta")) {
+        s_wire2cRd = 0;
+        return 0;
+    }
+    *(unsigned int*)(pr + 0x18) = r[PR_EBP];
+    arr_first = *(const char* const*)(ta + 0x14357);
+    arr_last  = *(const char* const*)(ta + 0x1435B);
+    n = *(const unsigned short*)(ta + 0x37EE6);
+    bfirst = *(const char* const*)(pr + 0x67);
+    blast  = *(const char* const*)(pr + 0x6B);
+    if (!wire_block_ok(bfirst, blast, arr_first, arr_last, n)) {
+        wire_drop(&s_wire2C, "a 0x2C names a player whose block is not a valid slot run; dropped",
+                  0, n);
+        return 0;
+    }
+    s_wireIn2C++;
+    return 1;
+}
+
+/* 0x2C dirty-entry delta, branch at 0x48B985, after the delta's read (the first, or the one at
+   0x48BA19 after the previous entry's payload). edi = player record, ax = the signed delta.
+   Continue -> 0x48B99D (esi = the slot, eax = main); a delta outside [0, N), or a read so far
+   or a type read next that does not fit the message, stops the stream. */
+static int __cdecl wire_s2c_delta(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    char* pr = (char*)(size_t)r[PR_EDI];
+    const char* bfirst;
+    int delta;
+    unsigned int n;
+    if (!ta || !pr) return 0;
+    if (!wire_2c_len(WPN_ESP_JMP(r) + 0x10, *(const unsigned int*)(ta + 0x14393), "a dirty type"))
+        return 0;
+    bfirst = *(const char* const*)(pr + 0x67);
+    n = *(const unsigned short*)(ta + 0x37EE6);
+    delta = (int)(short)(unsigned short)(r[PR_EAX] & 0xFFFF);
+    if (!bfirst || !wire_delta_ok(delta, (int)n)) {
+        wire_drop(&s_wire2C, "a 0x2C dirty entry's slot delta is out of range; stream stopped",
+                  (unsigned int)delta, n);
+        return 0;
+    }
+    s_wireIn2CDirty++;
+    r[PR_ESI] = (unsigned int)(size_t)(bfirst + (size_t)delta * 0x118);
+    r[PR_EAX] = (unsigned int)(size_t)ta;
+    return 1;
+}
+
+/* 0x2C dirty-entry type, branch at 0x48B9AD. esi = the slot, ax = the type. Returns
+   0 stop, 1 create (-> 0x48B9B6), 2 the type matched the slot's own (-> 0x48BA05, parse in
+   place). A type outside [1, count) or one whose def has no move class stops the stream:
+   0x48BA05 would otherwise dereference a NULL mover (§9's 13 field faults at 0x48BA07). The
+   move class's own parse follows, and only it knows its width: a message that ends inside it
+   is caught at the next delta, after the parse. */
+static int __cdecl wire_s2c_type(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    char* slot = (char*)(size_t)r[PR_ESI];
+    const char* defs;
+    unsigned int count, type;
+    if (!ta || !slot) return 0;
+    count = *(const unsigned int*)(ta + 0x1438F);
+    type  = r[PR_EAX] & 0xFFFF;
+    if (!wire_type_ok(type, count)) {
+        wire_drop(&s_wire2C, "a 0x2C dirty entry's type is out of range; stream stopped",
+                  type, count);
+        return 0;
+    }
+    defs = *(const char* const*)(ta + 0x1439B);
+    if (!defs || *(const unsigned char*)(defs + (size_t)type * 0x249 + 0x22F) != 1) {
+        wire_drop(&s_wire2C, "a 0x2C dirty entry's type has no move class; stream stopped",
+                  type, count);
+        return 0;
+    }
+    s_wire_2c_type = (int)type;
+    if (*(const unsigned short*)(slot + 0xA6) == (unsigned short)type) return 2;
+    s_wireIn2CCreate++;
+    return 1;
+}
+
+/* 0x2C after the dirty create, branch at 0x48BA05. esi = the slot. Requires the slot now holds
+   the created type, and its mover [esi] and the mover's object [[esi]] non-NULL, before the
+   payload parse dereferences them. Continue -> 0x48BA0D (eax = &reader at [esp+0x10],
+   ecx = [[esi]]); a failed create stops. */
+static int __cdecl wire_s2c_after(unsigned int* r)
+{
+    unsigned char* sp = WPN_ESP_JMP(r);
+    char* slot = (char*)(size_t)r[PR_ESI];
+    const char* obj;
+    if (!slot || *(const unsigned short*)(slot + 0xA6) != (unsigned short)s_wire_2c_type) {
+        wire_drop(&s_wire2C, "a 0x2C dirty create did not take; stream stopped",
+                  (unsigned int)s_wire_2c_type, 0);
+        return 0;
+    }
+    obj = *(const char* const*)slot;
+    if (!obj || !*(const char* const*)obj) {
+        wire_drop(&s_wire2C, "a 0x2C dirty unit has no mover object; stream stopped", 0, 0);
+        return 0;
+    }
+    r[PR_EAX] = (unsigned int)(size_t)(sp + 0x10);
+    r[PR_ECX] = *(const unsigned int*)obj;
+    return 1;
+}
+
+/* 0x2C round-robin flag, at 0x48BA5E, after the dirty list's end and the block sweep, before
+   the flag bit's direct read. The stop path's zero reader passes (its bit reads 0). Otherwise
+   the flag bit must fit, and when it is set, so must the round-robin type read 0x48B409 that
+   follows. Continue -> the two stock loads, then 0x48BA66; otherwise -> 0x48BAC8, no round
+   robin. */
+static int __cdecl wire_s2c_flag(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    const unsigned char* rd = WPN_ESP_JMP(r) + 0x10;
+    const unsigned int* buf = *(const unsigned int* const*)rd;
+    unsigned long long pos;
+    if (buf == &s_wireZero) return 1;
+    if (!ta || !wire_2c_len(rd, 1, "the round-robin flag")) return 0;
+    pos = wire_pos(rd);
+    if ((buf[pos / 32u] >> (pos % 32u)) & 1u)
+        return wire_2c_len(rd, 1u + *(const unsigned int*)(ta + 0x14393), "the round-robin type");
+    return 1;
+}
+
+/* 0x2C round-robin type, branch at 0x48B40E. esi = the reader, [esp+0x38] = the slot, ax = the
+   type, and ebp is zeroed as stock's xor ebp,ebp. Returns 0 stop (-> 0x48B435), 1 the engine's
+   own type-0 ghost path (-> 0x48B415), 2 the typed path (-> 0x48B43F). A type 0 over an
+   occupied slot is the engine's ghost sweep and is counted, not dropped. Only the type is
+   bounded: the round robin carries every unit, structures included, and tests the mover itself
+   before its one use (0x48B6E8: [edi] == 0 skips to 0x48B6FC), so a type with no move class is
+   well-formed here, unlike in the dirty list, whose sender lists only units with a mover
+   (0x48B782..0x48B786). The full-state reads after the create branch on their own data, so a
+   message that ends inside them is read to their end. */
+static int __cdecl wire_s2c_rr(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* sp = WPN_ESP_JMP(r);
+    const char* slot;
+    unsigned int count, type;
+    r[PR_EBP] = 0;
+    if (!ta || !wire_2c_len((const unsigned char*)(size_t)r[PR_ESI], 0, "the round-robin entry"))
+        return 0;
+    slot  = *(const char* const*)(sp + 0x38);
+    count = *(const unsigned int*)(ta + 0x1438F);
+    type  = r[PR_EAX] & 0xFFFF;
+    if (type == 0) {
+        if (slot && *(const unsigned short*)(slot + 0xA6)) s_wireGhost++;
+        s_wireIn2CRR++;
+        return 1;
+    }
+    if (!wire_type_ok(type, count)) {
+        wire_drop(&s_wire2C, "a 0x2C round-robin type is out of range; entry stopped", type, count);
+        return 0;
+    }
+    s_wire_rr_type = (int)type;
+    s_wireIn2CRR++;
+    return 2;
+}
+
+/* 0x2C after the round-robin create, branch at 0x48B49C. edi = the slot. Requires the slot
+   holds the created type and its model object [edi+0x9E] (the Object3do, set at 0x485DCC;
+   +0x9A is the COB script) non-NULL, since 0x48B4A6 writes through it. Continue -> 0x48B4A2
+   (eax = [edi+0x9E]); otherwise stop -> 0x48B435. */
+static int __cdecl wire_s2c_rr_after(unsigned int* r)
+{
+    char* slot = (char*)(size_t)r[PR_EDI];
+    const char* obj;
+    if (!slot || *(const unsigned short*)(slot + 0xA6) != (unsigned short)s_wire_rr_type) {
+        wire_drop(&s_wire2C, "a 0x2C round-robin create did not take; entry stopped",
+                  (unsigned int)s_wire_rr_type, 0);
+        return 0;
+    }
+    obj = *(const char* const*)(slot + 0x9E);
+    if (!obj) {
+        wire_drop(&s_wire2C, "a 0x2C round-robin unit has no model object; entry stopped", 0, 0);
+        return 0;
+    }
+    r[PR_EAX] = (unsigned int)(size_t)obj;
+    return 1;
+}
+
+/* 0x2C move payload's target, branch at 0x44E0DE in 0x44E080, the payload parse of the
+   0x4FD9E0 move class (a dirty entry's [vt+0x24] 0x490A10 calls it at 0x490A4F), after stock's
+   own test has sent index 0 to 0x44E0DA. ax = the index, nonzero; the sender writes its
+   target's own +0xA8, or 0 for none (0x44DDEC..0x44DDF9). Continue -> 0x44E0FC (push eax; the
+   reference set 0x489690) with eax = the slot, or for an index past the array NULL, counted:
+   0x44E0DA's own value, which 0x489690 takes as no unit (0x4896C3 -> 0x4896E6 clears the
+   reference). ecx and edx as stock leaves them (index*35, main). */
+static int __cdecl wire_2c_target(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned int idx = r[PR_EAX] & 0xFFFF, max, keep;
+    const char* first = wire_units(ta, &max);
+    keep = wire_ref_idx(idx, max);
+    if (keep != idx)
+        wire_drop(&s_wire2CTarget, "a 0x2C move payload names a target past the array; no target",
+                  idx, max);
+    r[PR_EAX] = keep ? (unsigned int)(size_t)(first + (size_t)keep * 0x118) : 0u;
+    r[PR_ECX] = idx * 35u;
+    r[PR_EDX] = (unsigned int)(size_t)ta;
+    return 1;
+}
+
+/* 0x2C round-robin carrier, branch at 0x48B574 in the round robin's full-state tail, in place
+   of stock's mov [esp+0x17],ax. ax = the 15-bit carrier index read at 0x48B56B; the sender
+   writes its carrier's own +0xA8 (0x48B300..0x48B321). The tail packs it as the parent id (+3)
+   of the attach record that 0x48AB70 applies at 0x48B58B and scales into the array unbounded
+   (0x48ABAF..0x48ABC4); its 0 is 0x48AB70's own no parent (0x48ABA9), the detach the tail
+   itself builds at 0x48B5B5. Writes the record's word as stock does -- the index, or for one
+   past the array 0, counted -- leaves the same in ax, and continues -> 0x48B579. */
+static int __cdecl wire_2c_carrier(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned int idx = r[PR_EAX] & 0xFFFF, max, keep;
+    unsigned short word;
+    wire_units(ta, &max);
+    keep = wire_ref_idx(idx, max);
+    if (keep != idx)
+        wire_drop(&s_wire2CCarrier, "a 0x2C round robin names a carrier past the array; no "
+                  "carrier", idx, max);
+    word = (unsigned short)keep;
+    memcpy(WPN_ESP_JMP(r) + 0x17, &word, sizeof word);
+    r[PR_EAX] = (r[PR_EAX] & 0xFFFF0000u) | keep;
+    return 1;
+}
+
+/* ---- stub emission, into fix_code's pages ------------------------------------------------ */
+
+enum {
+    WIRE_PRO_LEN   = 10,                        /* pushad; push esp; call; add esp,4        */
+    WIRE_EMIT1_LEN = WIRE_PRO_LEN + 1 + 5,      /* popad; jmp                                */
+    WIRE_EMIT2_LEN = WIRE_PRO_LEN + 2 + 1 + 6 + 5,
+    WIRE_EMIT3_LEN = WIRE_PRO_LEN + 3 + 1 + 6 + 6 + 5,
+    WIRE_TAIL_LEN  = WIRE_PRO_LEN + 2 + 1 + 6 + 5,       /* plus the displaced bytes       */
+    WIRE_STOP_LEN  = 8 + 8 + 8 + 5
+};
+
+/* pushad; push esp; call fn; add esp,4 — the shared prologue; eax holds fn's return */
+static unsigned char* wire_pro(unsigned char* p, int (__cdecl *fn)(unsigned int*))
+{
+    *p++ = 0x60;
+    *p++ = 0x54;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)fn); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    return p;
+}
+
+/* two-way: test before popad (flags survive it), jz drop else jmp cont */
+static unsigned char* wire_emit2(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                 unsigned int drop, unsigned int cont)
+{
+    p = wire_pro(p, fn);
+    *p++ = 0x85; *p++ = 0xC0;                                  /* test eax,eax   */
+    *p++ = 0x61;                                               /* popad          */
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, drop); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, cont); p += 4;
+    return p;
+}
+
+/* one-way: always continue (the killer's bound never drops; the receive's note) */
+static unsigned char* wire_emit1(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                 unsigned int cont)
+{
+    p = wire_pro(p, fn);
+    *p++ = 0x61;                                               /* popad          */
+    *p++ = 0xE9; tagpu_detour_rel(p, cont); p += 4;
+    return p;
+}
+
+/* three-way: cmp eax,1 before popad, then jb t0 / je t1 / jmp t2 (0/1/2) */
+static unsigned char* wire_emit3(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                 unsigned int t0, unsigned int t1, unsigned int t2)
+{
+    p = wire_pro(p, fn);
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01;                     /* cmp eax,1      */
+    *p++ = 0x61;                                               /* popad          */
+    *p++ = 0x0F; *p++ = 0x82; tagpu_detour_rel(p, t0); p += 4; /* jb  t0 (==0)   */
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, t1); p += 4; /* je  t1 (==1)   */
+    *p++ = 0xE9; tagpu_detour_rel(p, t2); p += 4;              /* jmp t2 (==2)   */
+    return p;
+}
+
+/* two-way over displaced code: jz drop, else the n stock bytes the branch replaced (no
+   relative operand among them) and on at cont */
+static unsigned char* wire_emit_tail(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                     unsigned int drop, const unsigned char* bytes, int n,
+                                     unsigned int cont)
+{
+    p = wire_pro(p, fn);
+    *p++ = 0x85; *p++ = 0xC0;                                  /* test eax,eax   */
+    *p++ = 0x61;                                               /* popad          */
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, drop); p += 4;
+    memcpy(p, bytes, (size_t)n); p += n;
+    *p++ = 0xE9; tagpu_detour_rel(p, cont); p += 4;
+    return p;
+}
+
+/* the 0x2C stop stub: registers already restored, esp is the receiver's own; point the reader
+   (buf,dword,bit at [esp+0x10..0x18]) at s_wireZero and jump to the engine's end-of-list. */
+static unsigned char* wire_emit_stop(unsigned char* p)
+{
+    unsigned int z = (unsigned int)(size_t)&s_wireZero;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10; memcpy(p, &z, 4); p += 4;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x14; memset(p, 0, 4); p += 4;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18; memset(p, 0, 4); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048BA28u); p += 4;
+    return p;
+}
+
+/* ---- install: verify every stock span, build stubs, write the branches all-or-nothing ---- */
+
+typedef struct WIRESPAN { unsigned int va; int n; const unsigned char* stock; } WIRESPAN;
+
+static unsigned int s_wireStubBytes;
+
+static unsigned char* wire_code(unsigned int n)
+{
+    unsigned char* p = fix_code(n);
+    if (p) s_wireStubBytes += (n + 15u) & ~15u;
+    return p;
+}
+
+static int fix_wire_bounds(void)
+{
+    /* the whole stock span of each site, verified before any write */
+    static const unsigned char k09[41]  = {
+        0x66,0x8B,0x47,0x03,0x66,0x85,0xC0,0x89,0x54,0x24,0x20,0x75,0x04,0x33,0xF6,0xEB,
+        0x18,0x25,0xFF,0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8B,0x57,
+        0x43,0x01,0x00,0x8D,0x04,0x80,0x8D,0x34,0xC1 };
+    static const unsigned char k0c[38]  = {
+        0x66,0x8B,0x43,0x01,0x57,0x66,0x85,0xC0,0x75,0x04,0x33,0xF6,0xEB,0x18,0x25,0xFF,
+        0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,0x57,0x43,0x01,0x00,
+        0x8D,0x04,0x80,0x8D,0x34,0xC1 };
+    static const unsigned char k0ck[37] = {
+        0x66,0x8B,0x43,0x07,0x66,0x85,0xC0,0x75,0x04,0x33,0xC0,0xEB,0x18,0x25,0xFF,0xFF,
+        0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,0x57,0x43,0x01,0x00,0x8D,
+        0x04,0x80,0x8D,0x04,0xC1 };
+    static const unsigned char k0b[74]  = {
+        0x66,0x8B,0x47,0x01,0x66,0x85,0xC0,0x75,0x04,0x33,0xF6,0xEB,0x18,0x25,0xFF,0xFF,
+        0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,0x57,0x43,0x01,0x00,0x8D,
+        0x04,0x80,0x8D,0x34,0xC1,0x66,0x8B,0x47,0x03,0x66,0x85,0xC0,0x75,0x04,0x33,0xDB,
+        0xEB,0x18,0x25,0xFF,0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,
+        0x57,0x43,0x01,0x00,0x8D,0x04,0x80,0x8D,0x1C,0xC1 };
+    static const unsigned char ken[14] = {
+        0x8B,0x47,0x67,0x89,0x6F,0x18,0x3B,0xC6,0x0F,0x84,0x5A,0x01,0x00,0x00 };
+    static const unsigned char kdl[24] = {
+        0x0F,0xBF,0xC8,0x8B,0x57,0x67,0x8B,0xC1,0xC1,0xE0,0x03,0x2B,0xC1,0x8D,0x0C,0x80,
+        0xA1,0xE8,0x1D,0x51,0x00,0x8D,0x34,0xCA };
+    static const unsigned char kty[9]  = { 0x66,0x39,0x86,0xA6,0x00,0x00,0x00,0x74,0x4F };
+    static const unsigned char kaf[8]  = { 0x8B,0x06,0x8B,0x08,0x8D,0x44,0x24,0x10 };
+    static const unsigned char krem[14]= {
+        0x33,0xC9,0x8B,0xC5,0x66,0x8B,0x8A,0xE6,0x7E,0x03,0x00,0x99,0xF7,0xF9 };
+    static const unsigned char krr[7]  = { 0x33,0xED,0x66,0x3B,0xC5,0x75,0x2A };
+    static const unsigned char krra[6] = { 0x8B,0x87,0x9E,0x00,0x00,0x00 };
+    static const unsigned char kfl[8]  = { 0x8B,0x4C,0x24,0x18,0x8B,0x44,0x24,0x10 };
+    /* the receive's two statistics calls with the pushes that make their (code, len, 0) */
+    static const unsigned char krx1[21] = {
+        0x8B,0x54,0x24,0x00,0x6A,0x00,0x52,0x8B,0x88,0x38,0x2A,0x00,0x00,0x8A,0x11,0x52,
+        0xE8,0x56,0x29,0xFC,0xFF };
+    static const unsigned char krx2[21] = {
+        0x8B,0x44,0x24,0x00,0x6A,0x00,0x50,0x8B,0x91,0x38,0x2A,0x00,0x00,0x8A,0x02,0x50,
+        0xE8,0xCC,0x28,0xFC,0xFF };
+    /* the frame the note writes: 0x4534E0's one push, and the pump's pointer and call */
+    static const unsigned char kpro[1] = { 0x51 };
+    static const unsigned char kpump[9] = { 0x89,0x4C,0x24,0x10,0xE8,0x47,0xF7,0xFF,0xFF };
+    /* the 0x2C receiver's reader set-up, and the splitter's two length points */
+    static const unsigned char kcp[8]  = { 0x33,0xF6,0x6A,0x08,0x8D,0x4C,0x24,0x14 };
+    static const unsigned char ksc[5]  = { 0x25,0xFF,0xFF,0x00,0x00 };
+    static const unsigned char ksw[8]  = { 0x8B,0xD0,0x81,0xE2,0xFF,0xFF,0x00,0x00 };
+    static const unsigned char kscode[8] = { 0x8A,0x06,0x3C,0x01,0x88,0x44,0x24,0x28 };
+    static const unsigned char kswcode[8] = { 0x8A,0x06,0x3C,0x01,0x88,0x44,0x24,0x2C };
+    /* the move payload's target, from stock's zero test to the reference set's call */
+    static const unsigned char ktg[47] = {
+        0x66,0x3B,0xC5,0x75,0x04,0x33,0xC0,0xEB,0x1E,0x8B,0x15,0xE8,0x1D,0x51,0x00,0x25,
+        0xFF,0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8D,0x0C,0x80,0x8B,0x82,
+        0x57,0x43,0x01,0x00,0x8D,0x04,0xC8,0x50,0x8B,0xCB,0xE8,0x8C,0xB5,0x03,0x00 };
+    /* the round robin's attach record, from the child id to the call of 0x48AB70 */
+    static const unsigned char kcr[53] = {
+        0x66,0x8B,0x8F,0xA8,0x00,0x00,0x00,0x6A,0x0F,0x66,0x89,0x4C,0x24,0x15,0x8B,0xCE,
+        0xE8,0x50,0xA8,0xF8,0xFF,0x6A,0x08,0x8B,0xCE,0x66,0x89,0x44,0x24,0x17,0xE8,0xE2,
+        0xA8,0xF8,0xFF,0x8D,0x54,0x24,0x10,0x88,0x5C,0x24,0x16,0x52,0x88,0x44,0x24,0x19,
+        0xE8,0xE0,0xF5,0xFF,0xFF };
+    /* the 0x0A case (mov eax,[esp+0x10]; push eax; call 0x48AB70; jmp 0x455F50) and the jump
+       table's entry that makes it the 0x0A case */
+    static const unsigned char k0a[15] = {
+        0x8B,0x44,0x24,0x10,0x50,0xE8,0x68,0x57,0x03,0x00,0xE9,0x43,0x0B,0x00,0x00 };
+    static const unsigned char k0atab[4] = { 0xFE,0x53,0x45,0x00 };
+    static const WIRESPAN span[] = {
+        { 0x004861F7, 41, k09 }, { 0x004866E0, 38, k0c }, { 0x00486753, 37, k0ck },
+        { 0x00489CED, 74, k0b }, { 0x0048B960, 14, ken }, { 0x0048B985, 24, kdl },
+        { 0x0048B9AD,  9, kty }, { 0x0048BA05,  8, kaf }, { 0x0048BA9F, 14, krem },
+        { 0x0048B40E,  7, krr }, { 0x0048B49C,  6, krra }, { 0x0048BA5E,  8, kfl },
+        { 0x00453585, 21, krx1 }, { 0x0045360F, 21, krx2 }, { 0x004534E0, 1, kpro },
+        { 0x00453D90,  9, kpump }, { 0x0048B92B,  8, kcp }, { 0x00463939,  5, ksc },
+        { 0x00463B33,  8, ksw }, { 0x004638F0,  8, kscode }, { 0x00463AD5,  8, kswcode },
+        { 0x0044E0D5, 47, ktg }, { 0x0048B55B, 53, kcr }, { 0x004553FE, 15, k0a },
+        { 0x00455FA4,  4, k0atab },
+    };
+    static const unsigned char loads[8] = { 0x8B,0x4C,0x24,0x18,0x8B,0x44,0x24,0x10 };
+    /* S8, the unsigned remainder, patched in place (movzx ecx,[edx+0x37EE6]; mov eax,ebp;
+       xor edx,edx; div ecx; nop) */
+    static const unsigned char remNow[14] = {
+        0x0F,0xB7,0x8A,0xE6,0x7E,0x03,0x00,0x8B,0xC5,0x33,0xD2,0xF7,0xF1,0x90 };
+
+    unsigned char *stop, *a09, *a0c, *a0ck, *a0b, *aen, *adl, *aty, *aaf, *arr, *arra, *afl, *arx;
+    unsigned char *acp, *asc, *asw, *atg, *acr, *a0a;
+    FIXSITE s[20];
+    int i, n = 0;
+
+    for (i = 0; i < (int)(sizeof span / sizeof span[0]); i++)
+        if (memcmp((const void*)(size_t)span[i].va, span[i].stock, (size_t)span[i].n) != 0) {
+            tagpu_logf("enginefix: wire robustness SKIPPED (%08X not stock)", span[i].va);
+            return FIX_BYTES;
+        }
+
+    if (s_wireTlsBuf == TLS_OUT_OF_INDEXES) s_wireTlsBuf = TlsAlloc();
+    if (s_wireTlsLen == TLS_OUT_OF_INDEXES) s_wireTlsLen = TlsAlloc();
+    if (s_wireTlsCopy == TLS_OUT_OF_INDEXES) s_wireTlsCopy = TlsAlloc();
+    if (s_wireTlsBuf == TLS_OUT_OF_INDEXES || s_wireTlsLen == TLS_OUT_OF_INDEXES ||
+        s_wireTlsCopy == TLS_OUT_OF_INDEXES)
+        return FIX_STUB;
+
+    if (!(stop = wire_code(WIRE_STOP_LEN)) || !(a09 = wire_code(WIRE_EMIT2_LEN)) ||
+        !(a0c = wire_code(WIRE_EMIT2_LEN)) || !(a0ck = wire_code(WIRE_EMIT1_LEN)) ||
+        !(a0b = wire_code(WIRE_EMIT2_LEN)) || !(aen = wire_code(WIRE_EMIT2_LEN)) ||
+        !(adl = wire_code(WIRE_EMIT2_LEN)) || !(aty = wire_code(WIRE_EMIT3_LEN)) ||
+        !(aaf = wire_code(WIRE_EMIT2_LEN)) || !(arr = wire_code(WIRE_EMIT3_LEN)) ||
+        !(arra = wire_code(WIRE_EMIT2_LEN)) || !(afl = wire_code(WIRE_TAIL_LEN + 8)) ||
+        !(arx = wire_code(WIRE_EMIT1_LEN)) || !(acp = wire_code(WIRE_TAIL_LEN + 8)) ||
+        !(asc = wire_code(WIRE_TAIL_LEN + 5)) || !(asw = wire_code(WIRE_TAIL_LEN + 8)) ||
+        !(atg = wire_code(WIRE_EMIT1_LEN)) || !(acr = wire_code(WIRE_EMIT1_LEN)) ||
+        !(a0a = wire_code(WIRE_TAIL_LEN + 5)))
+        return FIX_STUB;
+    wire_emit_stop(stop);
+    wire_emit2(a09, wire_s09, 0x0048622Bu, 0x00486220u);
+    wire_emit2(a0c, wire_s0c, 0x00486E59u, 0x00486706u);
+    wire_emit1(a0ck, wire_s0ckill, 0x00486778u);
+    wire_emit2(a0b, wire_s0b, 0x00489F93u, 0x00489D37u);
+    wire_emit2(aen, wire_s2c_entry, 0x0048BAC8u, 0x0048B96Eu);
+    wire_emit2(adl, wire_s2c_delta, (unsigned int)(size_t)stop, 0x0048B99Du);
+    wire_emit3(aty, wire_s2c_type, (unsigned int)(size_t)stop, 0x0048B9B6u, 0x0048BA05u);
+    wire_emit2(aaf, wire_s2c_after, (unsigned int)(size_t)stop, 0x0048BA0Du);
+    wire_emit3(arr, wire_s2c_rr, 0x0048B435u, 0x0048B415u, 0x0048B43Fu);
+    wire_emit2(arra, wire_s2c_rr_after, 0x0048B435u, 0x0048B4A2u);
+    wire_emit_tail(afl, wire_s2c_flag, 0x0048BAC8u, loads, 8, 0x0048BA66u);
+    wire_emit1(arx, wire_rx_note, 0x00415EF0u);
+    wire_emit_tail(acp, wire_s2c_copy, 0x0048BAC8u, kcp, 8, 0x0048B933u);
+    wire_emit_tail(asc, wire_split_count, 0x00463949u, ksc, 5, 0x0046393Eu);
+    wire_emit_tail(asw, wire_split_walk, 0x00463B91u, ksw, 8, 0x00463B3Bu);
+    wire_emit1(atg, wire_2c_target, 0x0044E0FCu);
+    wire_emit1(acr, wire_2c_carrier, 0x0048B579u);
+    wire_emit_tail(a0a, wire_s0a, 0x00455F50u, k0a, 5, 0x00455403u);
+
+    /* the branch each site takes, at its clean boundary; the stock bytes were verified above.
+       The last entry of s is S8's, so a site past the one before it is refused, not written. */
+#define WIRE_SITE(va_, n_, op_, to_) do { \
+    if (n >= (int)(sizeof s / sizeof s[0]) - 1) return FIX_STUB; \
+    s[n].va = (va_); s[n].n = (n_); memcpy(s[n].was, (const void*)(size_t)(va_), (n_)); \
+    fix_branch(&s[n], (op_), (to_)); n++; \
+} while (0)
+    WIRE_SITE(0x004861F7, 5, 0xE9, a09);
+    WIRE_SITE(0x004866E5, 5, 0xE9, a0c);
+    WIRE_SITE(0x00486753, 5, 0xE9, a0ck);
+    WIRE_SITE(0x00489CED, 5, 0xE9, a0b);
+    WIRE_SITE(0x0048B960, 5, 0xE9, aen);
+    WIRE_SITE(0x0048B985, 5, 0xE9, adl);
+    WIRE_SITE(0x0048B9AD, 5, 0xE9, aty);
+    WIRE_SITE(0x0048BA05, 5, 0xE9, aaf);
+    WIRE_SITE(0x0048B40E, 5, 0xE9, arr);
+    WIRE_SITE(0x0048B49C, 6, 0xE9, arra);
+    WIRE_SITE(0x0048BA5E, 8, 0xE9, afl);
+    WIRE_SITE(0x00453595, 5, 0xE8, arx);
+    WIRE_SITE(0x0045361F, 5, 0xE8, arx);
+    WIRE_SITE(0x0048B92B, 8, 0xE9, acp);
+    WIRE_SITE(0x00463939, 5, 0xE9, asc);
+    WIRE_SITE(0x00463B33, 8, 0xE9, asw);
+    WIRE_SITE(0x0044E0DE, 5, 0xE9, atg);
+    WIRE_SITE(0x0048B574, 5, 0xE9, acr);
+    WIRE_SITE(0x004553FE, 5, 0xE9, a0a);
+#undef WIRE_SITE
+    s[n].va = 0x0048BA9F; s[n].n = 14;                         /* S8, in place */
+    memcpy(s[n].was, krem, 14); memcpy(s[n].now, remNow, 14); n++;
+    return fix_write(s, n);
+}
+
+/* the heartbeat's wire section, read by tagpu_packet_pub.c's extra() on the render thread:
+   DLL counters only, each a u32 the game thread alone writes */
+int tagpu_wire_format(char* buf, unsigned int cap)
+{
+    return _snprintf(buf, cap,
+                     " | wire: in 09=%u 0a=%u 0b=%u 0c=%u 0d=%u 2c=%u dirty=%u create=%u rr=%u"
+                     " drop 09=%u blk=%u 0a=%u 0b=%u 0c=%u kill=%u 2c=%u len=%u stale=%u nocopy=%u"
+                     " 0d=%u split=%u target=%u carrier=%u"
+                     " morph=%u dcreate=%u rcreate=%u ghost=%u argdiff=%u pump=%u"
+                     " noblock 09=%u dirty=%u rr=%u noarr=%u",
+                     s_wireIn09, s_wireIn0A, s_wireIn0B, s_wireIn0C, s_wireIn0D, s_wireIn2C,
+                     s_wireIn2CDirty, s_wireIn2CCreate, s_wireIn2CRR,
+                     s_wire09, s_wire09Blk, s_wire0A, s_wire0B, s_wire0C, s_wire0Ckill, s_wire2C,
+                     s_wire2CLen, s_wire2CStale, s_wire2CNoCopy, s_wireWpnxDrops,
+                     (unsigned int)s_wireSplit, s_wire2CTarget, s_wire2CCarrier,
+                     s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost, s_wireArgDiff,
+                     (unsigned int)s_wirePump,
+                     s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr);
+}
+
+/* tagpu_wirecheck.on: a unit test of the C predicates on boundary values (0, the last valid
+   index, one past, the receivers' own sentinels), each verdict logged against the expected.
+   The compiler folds every case to a constant, so this checks the predicates' C and nothing
+   else: the stubs and the drop paths rest on the disassembly. */
+static void wire_selfcheck(void)
+{
+    struct { const char* name; int got; int want; } t[40];
+    int n = 0, bad = 0, i;
+    t[n].name = "index 0 rejected";        t[n].got = wire_index_ok(0, 100);      t[n].want = 0; n++;
+    t[n].name = "index 1 accepted";        t[n].got = wire_index_ok(1, 100);      t[n].want = 1; n++;
+    t[n].name = "index max accepted";      t[n].got = wire_index_ok(100, 100);    t[n].want = 1; n++;
+    t[n].name = "index max+1 rejected";    t[n].got = wire_index_ok(101, 100);    t[n].want = 0; n++;
+    t[n].name = "killer 0 accepted";       t[n].got = wire_killer_ok(0, 100);     t[n].want = 1; n++;
+    t[n].name = "killer max accepted";     t[n].got = wire_killer_ok(100, 100);   t[n].want = 1; n++;
+    t[n].name = "killer max+1 rejected";   t[n].got = wire_killer_ok(101, 100);   t[n].want = 0; n++;
+    t[n].name = "type 0 rejected";         t[n].got = wire_type_ok(0, 50);        t[n].want = 0; n++;
+    t[n].name = "type 1 accepted";         t[n].got = wire_type_ok(1, 50);        t[n].want = 1; n++;
+    t[n].name = "type count-1 accepted";   t[n].got = wire_type_ok(49, 50);       t[n].want = 1; n++;
+    t[n].name = "type count rejected";     t[n].got = wire_type_ok(50, 50);       t[n].want = 0; n++;
+    t[n].name = "delta -1 rejected";       t[n].got = wire_delta_ok(-1, 500);     t[n].want = 0; n++;
+    t[n].name = "delta 0 accepted";        t[n].got = wire_delta_ok(0, 500);      t[n].want = 1; n++;
+    t[n].name = "delta N-1 accepted";      t[n].got = wire_delta_ok(499, 500);    t[n].want = 1; n++;
+    t[n].name = "delta N rejected";        t[n].got = wire_delta_ok(500, 500);    t[n].want = 0; n++;
+    t[n].name = "bits to the end accepted"; t[n].got = wire_bits_ok(56, 16, 72);  t[n].want = 1; n++;
+    t[n].name = "bits past the end rejected"; t[n].got = wire_bits_ok(57, 16, 72); t[n].want = 0; n++;
+    t[n].name = "split length 0 rejected";  t[n].got = wire_split_ok(0x0B, 0);     t[n].want = 0; n++;
+    t[n].name = "split length 1 accepted";  t[n].got = wire_split_ok(0x0B, 1);     t[n].want = 1; n++;
+    t[n].name = "split 0x2C of 6 rejected"; t[n].got = wire_split_ok(0x2C, 6);     t[n].want = 0; n++;
+    t[n].name = "split 0x2C of 7 accepted"; t[n].got = wire_split_ok(0x2C, 7);     t[n].want = 1; n++;
+    t[n].name = "ref 0 stays no unit";      t[n].got = (int)wire_ref_idx(0, 100);      t[n].want = 0; n++;
+    t[n].name = "ref 1 kept";               t[n].got = (int)wire_ref_idx(1, 100);      t[n].want = 1; n++;
+    t[n].name = "ref max kept";             t[n].got = (int)wire_ref_idx(100, 100);    t[n].want = 100; n++;
+    t[n].name = "ref max+1 made no unit";   t[n].got = (int)wire_ref_idx(101, 100);    t[n].want = 0; n++;
+    t[n].name = "ref 0xFFFF made no unit";  t[n].got = (int)wire_ref_idx(0xFFFF, 100); t[n].want = 0; n++;
+    t[n].name = "ref with no array no unit"; t[n].got = (int)wire_ref_idx(1, 0);       t[n].want = 0; n++;
+    t[n].name = "attach detach accepted";   t[n].got = wire_attach_ok(1, 0, 100);     t[n].want = 1; n++;
+    t[n].name = "attach max to max accepted"; t[n].got = wire_attach_ok(100, 100, 100); t[n].want = 1; n++;
+    t[n].name = "attach child 0 rejected";  t[n].got = wire_attach_ok(0, 5, 100);     t[n].want = 0; n++;
+    t[n].name = "attach child max+1 rejected"; t[n].got = wire_attach_ok(101, 5, 100); t[n].want = 0; n++;
+    t[n].name = "attach parent max+1 rejected"; t[n].got = wire_attach_ok(5, 101, 100); t[n].want = 0; n++;
+    {   /* the block-shape predicate on a synthetic array: begin, N=4, two players */
+        char base[1];
+        const char* begin = base;
+        const char* arr_last = begin + (4 * 2 + 1 - 1) * 0x118;   /* 10*N+1 shrunk to 2 players */
+        const char* p0 = begin + 1 * 0x118;                       /* player 0: slot 1 */
+        const char* p0l = p0 + 3 * 0x118;
+        int ok = wire_block_ok(p0, p0l, begin, arr_last, 4) &&
+                 !wire_block_ok(begin, begin + 3 * 0x118, begin, arr_last, 4) &&   /* slot 0 */
+                 !wire_block_ok(p0 + 1, p0l, begin, arr_last, 4);                  /* unaligned */
+        t[n].name = "block shape ok/rejects"; t[n].got = ok; t[n].want = 1; n++;
+    }
+    for (i = 0; i < n; i++) {
+        if (t[i].got != t[i].want) bad++;
+        tagpu_logf("enginefix: wirecheck %-26s got=%d want=%d %s",
+                   t[i].name, t[i].got, t[i].want, t[i].got == t[i].want ? "OK" : "FAIL");
+    }
+    tagpu_logf("enginefix: wirecheck %d predicate cases, %d failed", n, bad);
 }
 
 /* ===== DAMAGE: THE VICTIM CAPS, FLAK'S DIVIDES, THE MAP'S EDGES ============================
@@ -2722,12 +3838,11 @@ static int fix_weapon_ids(void)
        whose previous value the wrapper keeps and puts back. So a list block reads the frame of
        the innermost call on its own thread, whatever runs on any other. That matters: besides
        the projectile tick and the fire spread, 0x499EB0 is reached from the 0x0E receiver
-       (0x49AFEB), which runs on whichever thread pumps the network, the loader's included
-       during a network load. That receiver rarely damages anything -- 0x499EB0 skips a
-       projectile whose owner's player record has +0x73 == 3 (0x49A01B..0x49A047) [INFERRED: a
-       remote player], and the dispatcher passes a code in state 5 only with bit 1 of its
-       entry in the table 0x512BC0 (0x454758), which is filled at run time -- but neither fact
-       is what keeps two threads apart; the TLS slot is.
+       (0x49AFEB). That receiver runs on the game thread only: 0x451FD0 gives 0x0E the
+       receive mask 4 (0x45200B), which the dispatcher passes only in net state 6
+       (0x454762..0x45478B), set at 0x498445 on the game thread after the load. The frames
+       are per thread all the same, which costs nothing and asks no argument about who
+       calls 0x49A120.
    The sets grow through eng_alloc_or_exit, whose failure is the engine's own out-of-memory
    exit whatever the handler slot holds, so no answer is ever given from a set that could not
    hold it.
@@ -4441,6 +5556,715 @@ static int fix_weapon_keys(void)
     return FIX_TABLE;
 }
 
+/* ===== STALE HITS: THE INCARNATION ON THE WIRE, AND THE TWO-TICK HOLD ======================
+   Landing B4 of research/notes/tadr-port/sim-fixes.md ("B4 DESIGN" has the argument in full;
+   the addresses are in exe-reverse-engineering.md, "Unit identity on the wire").
+
+   THE DEFECT [DISASSEMBLED]. A hit is computed on the attacker's peer against its copy of the
+   victim and sent as a 0x0B naming the victim by SLOT alone (0x489BB0: the local apply at
+   0x489C89, the send at 0x489CB9 / 0x489CCD). The owner's allocator is first-free (0x486036), so
+   a slot freed by a death is taken by the owner's next create at once, and a hit still in
+   flight lands on the new unit, on the owner and on every bystander.
+
+   THE FIX, three parts.
+   - The incarnation: per slot, the owner's GameTime at the create, made strictly increasing
+     per slot (hit_next_birth), and a copy's stamp of it: exact for a copy made from the
+     owner's create message, a LOWER BOUND ("the unit in this slot at the owner's time g0",
+     bit 31) for a copy the 0x2C made, whose own header carries g0.
+   - Containment on the wire: the 0x09 and the 0x0B travel INSIDE tagged 0x05 messages that
+     carry the stamp in the same bytes (A′3's idiom), so no loss or reordering can separate a
+     record from its stamp. A bare 0x09 or 0x0B cannot come from this build and is dropped.
+   - The hold: first-free does not take a slot freed in this tick or the last while the block
+     has another free slot; with none, it takes the one freed longest ago, if that was in an
+     earlier tick, and never one freed in this tick.
+   THE RULES: the owner applies a hit iff its unit's birth <= the hit's stamp; a bystander
+   refuses only a hit provably aimed at another incarnation (hit_owner_accepts,
+   hit_bystander_rule).
+
+   CLASS: simulation, fail closed, both builds -- a peer without it applies hits this build
+   refuses. Every site is a row of the fail-closed table. */
+
+#define HIT_TAG_CREATE  0x4A                /* outside TADR's 0x2B..0x31 and 0x60, and A′3's 0x49 */
+#define HIT_TAG_HIT     0x4B
+#define HIT_LB          0x80000000u         /* a stamp's bit 31: a lower bound, not a birth     */
+#define HIT_UNKNOWN     HIT_LB              /* no information: the owner reads it as "alive at
+                                               time 0", a bystander as undecidable              */
+#define HIT_ROOM_MIN    16384u              /* a table's least room: 10 x 1500 + 1 fits          */
+#define HIT_MSG         0x41                /* the 0x05 length, the table 0x512AD8 + 5*4         */
+#define HIT_DELAY_MAX   512
+#define HIT_GAMETIME(ta) (*(const unsigned int*)((ta) + 0x38A47))
+#define HIT_SEND(net, m, n) (((int (__stdcall*)(unsigned int, const void*, unsigned int))0x00451DF0)((net), (m), (n)))
+
+enum { HIT_BY_STALE, HIT_BY_SAME, HIT_BY_UNDECIDED };
+
+/* THE PER-SLOT TABLES, sized from the engine's own slot count. 0x4854A0 sets u16 main+0x14351
+   to 10 x main+0x37EE6 + 1 in 16-bit arithmetic (0x4854E3..0x4854EF) and allocates that many
+   slots; hit_reset, in place of its first two instructions, computes the same count the same
+   way, and every index into a table is checked against that table's n before it is used. The
+   engine's count is a u16, so n < 65536 in either build, raised or not.
+
+   LIFETIME: a table is NEVER freed. A table is published whole through the one store to s_hit,
+   n and the arrays together, and a level whose count exceeds the room gets a new, larger table
+   while the old one stays allocated; a pointer any thread read before the swap still addresses
+   memory this DLL owns, bounded by that table's own n (n <= room). The room is a power of two
+   from 16384, so at most three tables are ever made.
+
+   THREADS: the loading thread (0x497C70 -> 0x497180) runs the level init that resets the table
+   (0x497581 -> 0x4917D0 -> 0x4854A0) and the level's first creates (0x496EE0, 0x4977BB), which
+   take and stamp; meanwhile the main thread pumps the network in state 5, where the gate (0x09,
+   0x0B, 0x2C pass in state 6 only, applied by hit_gate before any table access) keeps the
+   dispatch out of the tables. In play the creates, the frees, the dispatch and the hits run on
+   the thread that runs the tick and pumps the network (0x4954C8) [INFERRED from the tick's
+   order]; memory safety does not rest on that, only on the lifetime above. */
+struct hit_tab {
+    unsigned int n;           /* the level's slots                                   */
+    unsigned int room;        /* each array's length, n <= room                      */
+    unsigned int* stamp;      /* a local unit's birth, or a copy's stamp             */
+    unsigned int* freed;      /* GameTime of the slot's last free + 1; 0 never       */
+    unsigned int* local;      /* local GameTime at the create: the test oracle       */
+};
+static struct hit_tab* volatile s_hit;
+static unsigned int s_hitTables;
+
+/* counters for the heartbeat's hits: section; u32, one writer thread */
+static unsigned int s_hitOutCreate, s_hitOutHit, s_hitOutBytes, s_hitStockBytes, s_hitTxUnknown;
+static unsigned int s_hitInCreate, s_hitInHit, s_hitStateRefused, s_hitMalformed;
+static unsigned int s_hitApplyOwner, s_hitRefuseOwner, s_hitDead;
+static unsigned int s_hitApplyBy, s_hitUndecidedBy, s_hitRefuseBy;
+static unsigned int s_hitBare09, s_hitBare0B;
+static unsigned int s_hitHeld, s_hitFallback, s_hitHoldFail, s_hitRetry;
+static unsigned int s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown;
+static unsigned int s_hitYoungOwner, s_hitYoungBy, s_hitDelayed, s_hitDelayOverflow;
+
+/* TEST LEVER tagpu_dmgdelay.on=K: every outgoing hit waits until GameTime has advanced K
+   ticks and leaves at the next send opportunity (an outgoing hit, an incoming companion on the
+   game thread). 0 is off. The oracle it feeds, per receiver: a hit applied to a unit whose
+   local create is younger than K ticks. */
+static unsigned int s_hitDelayK;
+static struct { unsigned int net, due; unsigned char m[HIT_MSG]; } s_hitDelay[HIT_DELAY_MAX];
+static unsigned int s_hitDelayHead, s_hitDelayCount;
+static unsigned int s_hitTakeNotes;          /* the lever's creation trace, capped */
+
+/* ---- the pure rules; tagpu_wirecheck.on exercises them on boundary values ------------------ */
+
+static int hit_owner_accepts(unsigned int birth, unsigned int stamp)
+{
+    return !(birth & HIT_LB) && birth <= (stamp & ~HIT_LB);
+}
+
+/* A bystander refuses only a hit provably aimed at another incarnation; every value is the
+   owner's GameTime. Both exact: the same unit iff equal. One exact birth b and one lower bound
+   g0 (the unit alive at g0, so born at or before it): a unit born after g0 is another one. Two
+   bounds, or no information: undecidable, applied as stock applies it. Applying cannot kill a
+   remote copy: 0x489CE0 sets pending death only for a victim whose player is local (0x489EC6),
+   and the owner's round robin rewrites a copy's hit points (0x48B4B2). */
+static int hit_bystander_rule(unsigned int copy, unsigned int stamp)
+{
+    unsigned int b, g0;
+    if (copy == HIT_UNKNOWN || stamp == HIT_UNKNOWN) return HIT_BY_UNDECIDED;
+    if (!(copy & HIT_LB) && !(stamp & HIT_LB)) return copy == stamp ? HIT_BY_SAME : HIT_BY_STALE;
+    if ((copy & HIT_LB) && (stamp & HIT_LB)) return HIT_BY_UNDECIDED;
+    b  = (copy & HIT_LB) ? stamp : copy;
+    g0 = ((copy & HIT_LB) ? copy : stamp) & ~HIT_LB;
+    return b > g0 ? HIT_BY_STALE : HIT_BY_UNDECIDED;
+}
+
+/* freed1 = the free's GameTime + 1, 0 for never; unsigned, so a stamp from before a GameTime
+   reset (now < f) never holds */
+static int hit_held(unsigned int freed1, unsigned int now)
+{
+    return freed1 != 0 && now - (freed1 - 1u) < 2u;
+}
+
+/* a held slot the fallback may take: freed in an EARLIER tick. Birth > free time is what the
+   owner's rule needs of a reused slot; a slot freed in this tick is never taken. */
+static int hit_reusable(unsigned int freed1, unsigned int now)
+{
+    return freed1 != 0 && freed1 - 1u < now;
+}
+
+/* The next birth in a slot: its GameTime, and past the previous one. GameTime stays below
+   2^31 (a tick at speed 20 is 1/60 s: 414 days), and each create adds at most one, so a birth
+   never reaches bit 31. */
+static unsigned int hit_next_birth(unsigned int prev, unsigned int now)
+{
+    now &= ~HIT_LB;
+    if (!(prev & HIT_LB) && now <= prev) return prev + 1u;
+    return now;
+}
+
+/* ---- the engine side --------------------------------------------------------------------- */
+
+static int hit_slot_index(const struct hit_tab* t, const char* ta, const char* slot,
+                          unsigned int* idx)
+{
+    const char* first = ta ? *(const char* const*)(ta + 0x14357) : NULL;
+    size_t off;
+    if (!t || !first || !slot || slot < first) return 0;
+    off = (size_t)(slot - first);
+    if (off % 0x118 || off / 0x118 >= t->n) return 0;
+    *idx = (unsigned int)(off / 0x118);
+    return 1;
+}
+
+static void hit_delay_flush(unsigned int now)
+{
+    while (s_hitDelayCount && (int)(now - s_hitDelay[s_hitDelayHead].due) >= 0) {
+        HIT_SEND(s_hitDelay[s_hitDelayHead].net, s_hitDelay[s_hitDelayHead].m, HIT_MSG);
+        s_hitDelayHead = (s_hitDelayHead + 1u) % HIT_DELAY_MAX;
+        s_hitDelayCount--;
+    }
+}
+
+/* Without the tables no create can be stamped and no hit judged, and a peer that stops judging
+   applies hits the others refuse: the process ends here rather than play on unfixed. */
+static void hit_no_memory(unsigned int room)
+{
+    tagpu_logf("enginefix: stale hits: no memory for a table of %u slots -- the game closes", room);
+    MessageBoxA(NULL, "Total Annihilation: Impure ran out of memory while starting the level, "
+                "so the game will now close.", "Total Annihilation: Impure",
+                MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    ExitProcess(1);
+}
+
+static struct hit_tab* hit_tab_new(unsigned int n)
+{
+    unsigned int room = HIT_ROOM_MIN;
+    struct hit_tab* t;
+    while (room < n) room *= 2u;
+    t = (struct hit_tab*)VirtualAlloc(NULL, sizeof *t + 3u * room * sizeof(unsigned int),
+                                      MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!t) hit_no_memory(room);
+    t->room  = room;
+    t->stamp = (unsigned int*)(t + 1);
+    t->freed = t->stamp + room;
+    t->local = t->freed + room;
+    s_hitTables++;
+    return t;
+}
+
+/* In place of 0x4854A0's first two instructions, before the unit array is allocated: every
+   stamp starts unknown with the array it describes, never keyed to GameTime. */
+static void __cdecl hit_reset(unsigned int* regs)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int n = (unsigned short)(*(const unsigned short*)(ta + 0x37EE6) * 10u + 1u);
+    struct hit_tab* t = s_hit;
+    unsigned int i;
+    (void)regs;
+    if (!t || n > t->room) t = hit_tab_new(n);
+    for (i = 0; i < t->room; i++) t->stamp[i] = HIT_UNKNOWN;
+    memset(t->freed, 0, t->room * sizeof *t->freed);
+    memset(t->local, 0, t->room * sizeof *t->local);
+    t->n = n;
+    s_hit = t;
+    s_hitDelayHead = s_hitDelayCount = 0;
+}
+
+/* At 0x486036, the first free slot of the player's block that first-free meets (esi; the stub
+   has tested type 0; ebp is the block's last slot, [player+0x6B]). edx's low word is 0x485F50's
+   arg 8: nonzero asks for that slot, and only first-free holds. Returns 1 to take esi, which it
+   may move to a later free slot of the block through regs; 0 with esi at the block's end, where
+   0x486040's step ends the loop and the create returns NULL, as at the unit cap. */
+static int __cdecl hit_take(unsigned int* r)
+{
+    struct hit_tab* t = s_hit;
+    const char* ta = *(const char* const*)0x00511DE8;
+    const char* first = (const char*)(size_t)r[PR_ESI];
+    const char* last = (const char*)(size_t)r[PR_EBP];
+    const char* take = first;
+    unsigned int idx, now;
+    if (!hit_slot_index(t, ta, first, &idx)) return 1;   /* esi is a slot of the array: never */
+    now = HIT_GAMETIME(ta);
+    if ((r[PR_EDX] & 0xFFFF) == 0 && hit_held(t->freed[idx], now)) {
+        const char* s;
+        const char* older = NULL;
+        unsigned int oldest = 0, j;
+        take = NULL;
+        for (s = first; s <= last; s += 0x118) {
+            if (*(const unsigned short*)(s + 0xA6) || !hit_slot_index(t, ta, s, &j)) continue;
+            if (!hit_held(t->freed[j], now)) { take = s; break; }
+            if (hit_reusable(t->freed[j], now) && (!older || t->freed[j] < oldest)) {
+                older = s;
+                oldest = t->freed[j];
+            }
+        }
+        if (take) s_hitHeld++;
+        else if (older) { take = older; s_hitFallback++; }
+        else {
+            s_hitHoldFail++;
+            r[PR_ESI] = r[PR_EBP];
+            return 0;
+        }
+        r[PR_ESI] = (unsigned int)(size_t)take;
+        hit_slot_index(t, ta, take, &idx);
+    }
+    t->stamp[idx] = hit_next_birth(t->stamp[idx], now);
+    t->local[idx] = now;
+    if (s_hitDelayK && s_hitTakeNotes < 20000u) {
+        unsigned int stock = idx;
+        s_hitTakeNotes++;
+        hit_slot_index(t, ta, first, &stock);
+        tagpu_logf("enginefix: stale hits: take %u (first-free %u) at %u", idx, stock, now);
+    }
+    return 1;
+}
+
+/* At 0x486DC1, the destructor's store of type 0 (esi the slot), local and remote alike. */
+static void __cdecl hit_freed(unsigned int* r)
+{
+    struct hit_tab* t = s_hit;
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int idx;
+    if (hit_slot_index(t, ta, (const char*)(size_t)r[PR_ESI], &idx))
+        t->freed[idx] = HIT_GAMETIME(ta) + 1u;
+}
+
+/* The owner's time g0 of the 0x2C being parsed, as a lower bound. A 0x2C's creates are in its
+   sender's block (a dirty entry at +0x67 + delta, the round robin at +0x67 + GameTime % N), so
+   the record whose block holds the slot is the sender, whose +0x18 holds the header's [32]
+   field before the first entry: wire_s2c_entry stores it in place of stock's 0x48B963, after
+   the copy and length checks, and a 0x2C that fails them creates nothing. The blocks go to the ten records in DPID order
+   in a network game (0x485842 sorts the record pointers on +4 before 0x4858BD hands out
+   1 + k*N), not in record order, so the record is found by its block, [+0x67, +0x6B]: the
+   range first-free walks. */
+static int hit_2c_bound(const char* ta, const char* slot, unsigned int* bound)
+{
+    unsigned int k;
+    for (k = 0; k < 10u; k++) {
+        const char* rec = ta + 0x1B63 + k * 0x14B;
+        const char* lo = *(const char* const*)(rec + 0x67);
+        const char* hi = *(const char* const*)(rec + 0x6B);
+        if (lo && lo <= slot && slot <= hi) {
+            *bound = HIT_LB | (*(const unsigned int*)(rec + 0x18) & ~HIT_LB);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* At CreateFromNetwork's success exit 0x48634F (esi the unit; its caller's return address at
+   the site's esp + 0x1C and its record argument at + 0x24, as 0x4861ED reads it). 0x4553E9 is
+   the 0x09 case, reached only through our 0x05 slot (its jump-table entry is the one reference
+   to 0x4553DA in the image), so the record is a carried one, with its birth 23 bytes on;
+   0x48BA05 and 0x48B49C are the 0x2C's dirty entry and round robin. */
+static void __cdecl hit_created(unsigned int* r)
+{
+    struct hit_tab* t = s_hit;
+    const char* ta = *(const char* const*)0x00511DE8;
+    const char* slot = (const char*)(size_t)r[PR_ESI];
+    unsigned int ret = *(const unsigned int*)(WPN_ESP_JMP(r) + 0x1C);
+    const unsigned char* rec = *(const unsigned char* const*)(WPN_ESP_JMP(r) + 0x24);
+    unsigned int idx, stamp = HIT_UNKNOWN;
+    if (!hit_slot_index(t, ta, slot, &idx)) return;
+    if (ret == 0x004553E9u && (rec[3] | (unsigned int)rec[4] << 8) == idx) {
+        memcpy(&stamp, rec + 23, 4);
+        s_hitCreateExact++;
+    } else if ((ret == 0x0048BA05u || ret == 0x0048B49Cu) && hit_2c_bound(ta, slot, &stamp)) {
+        s_hitCreateLB++;
+    } else {
+        s_hitCreateUnknown++;
+    }
+    t->stamp[idx] = stamp;
+    t->local[idx] = HIT_GAMETIME(ta);
+}
+
+/* In place of 0x456050's `call 0x451DF0` (0x4560AE), with its signature: the unit's 0x09,
+   carried with its birth. */
+static int __stdcall hit_tx_create(unsigned int net, const unsigned char* msg, unsigned int len)
+{
+    const struct hit_tab* t = s_hit;
+    unsigned char m[HIT_MSG];
+    unsigned int idx = msg[3] | (unsigned int)msg[4] << 8;
+    unsigned int birth = t && idx < t->n ? t->stamp[idx] : HIT_UNKNOWN;
+    memset(m, 0, sizeof m);
+    m[0] = 0x05;
+    m[2] = HIT_TAG_CREATE;
+    memcpy(m + 3, msg, len < 23u ? len : 23u);
+    memcpy(m + 26, &birth, 4);
+    s_hitOutCreate++;
+    s_hitOutBytes += HIT_MSG;
+    s_hitStockBytes += len;
+    return HIT_SEND(net, m, sizeof m);
+}
+
+/* In place of 0x489BB0's two `call 0x451DF0` (0x489CB9, 0x489CCD), with its signature: the
+   0x0B, carried with this peer's stamp of its copy of the victim. */
+static int __stdcall hit_tx_hit(unsigned int net, const unsigned char* msg, unsigned int len)
+{
+    const struct hit_tab* t = s_hit;
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned char m[HIT_MSG];
+    unsigned int vidx = msg[1] | (unsigned int)msg[2] << 8;
+    unsigned int stamp = t && vidx && vidx < t->n ? t->stamp[vidx] : HIT_UNKNOWN;
+    memset(m, 0, sizeof m);
+    m[0] = 0x05;
+    m[2] = HIT_TAG_HIT;
+    memcpy(m + 3, msg, len < 9u ? len : 9u);
+    memcpy(m + 12, &stamp, 4);
+    if (stamp == HIT_UNKNOWN) s_hitTxUnknown++;
+    s_hitOutHit++;
+    s_hitOutBytes += HIT_MSG;
+    s_hitStockBytes += len;
+    if (s_hitDelayK && ta) {
+        unsigned int now = HIT_GAMETIME(ta);
+        hit_delay_flush(now);
+        if (s_hitDelayCount < HIT_DELAY_MAX) {
+            unsigned int q = (s_hitDelayHead + s_hitDelayCount) % HIT_DELAY_MAX;
+            s_hitDelay[q].net = net;
+            s_hitDelay[q].due = now + s_hitDelayK;
+            memcpy(s_hitDelay[q].m, m, sizeof m);
+            s_hitDelayCount++;
+            s_hitDelayed++;
+            return 1;
+        }
+        s_hitDelayOverflow++;
+    }
+    return HIT_SEND(net, m, sizeof m);
+}
+
+/* The dispatcher's type gate (0x45473F), for the type a companion carries: the same table,
+   the same state bits. */
+static int hit_gate(const char* ta, unsigned int type)
+{
+    unsigned int state = *(const unsigned int*)(ta + 0x391F1);
+    unsigned int bits = *(const unsigned int*)(size_t)(0x00512BC0u + 4u * type);
+    if (state == 5) return (bits & 2) != 0;
+    if (state == 6) return (bits & 4) != 0;
+    return (bits & 1) != 0;
+}
+
+static int hit_young(const struct hit_tab* t, const char* ta, unsigned int idx)
+{
+    return s_hitDelayK && HIT_GAMETIME(ta) - t->local[idx] < s_hitDelayK;
+}
+
+/* 0 stock's chat; 1 done; 2 CreateFromNetwork on the record; 3 0x489CE0 on the record, which
+   goes back to the stub in regs[PR_EAX], where popad puts it in eax */
+static int hit_rx_create(unsigned int* regs, const char* ta, const unsigned char* m)
+{
+    if (m[3] != 0x09) { s_hitMalformed++; return 1; }
+    if (!hit_gate(ta, 0x09)) { s_hitStateRefused++; return 1; }
+    s_hitInCreate++;
+    regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
+    return 2;
+}
+
+static int hit_rx_hit(unsigned int* regs, const char* ta, const unsigned char* m)
+{
+    const struct hit_tab* t = s_hit;
+    const char* first;
+    const char* last;
+    const char* slot;
+    const char* pl;
+    unsigned int vidx, stamp, flags;
+    if (m[3] != 0x0B) { s_hitMalformed++; return 1; }
+    if (!hit_gate(ta, 0x0B)) { s_hitStateRefused++; return 1; }
+    s_hitInHit++;
+    if (s_hitDelayK && GetCurrentThreadId() == s_wpnGameTid) hit_delay_flush(HIT_GAMETIME(ta));
+    regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
+    vidx = m[4] | (unsigned int)m[5] << 8;
+    memcpy(&stamp, m + 12, 4);
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    /* an index stock refuses (0), or past the array (B3's bound at 0x489CED): theirs to drop */
+    if (!t || !first || last < first || vidx == 0 || vidx >= t->n ||
+        vidx > (unsigned int)(last - first) / 0x118)
+        return 3;
+    slot = first + (size_t)vidx * 0x118;
+    flags = *(const unsigned int*)(slot + 0x110);
+    if (!(flags & 0x10000000u) || (flags & 0x4000u)) { s_hitDead++; return 3; }   /* 0x489D45 */
+    pl = *(const char* const*)(slot + 0x96);
+    if (pl && *(const unsigned int*)pl && (pl[0x73] == 1 || pl[0x73] == 2)) {     /* 0x489EC6 */
+        if (!hit_owner_accepts(t->stamp[vidx], stamp)) { s_hitRefuseOwner++; return 1; }
+        s_hitApplyOwner++;
+        if (hit_young(t, ta, vidx)) s_hitYoungOwner++;
+    } else {
+        switch (hit_bystander_rule(t->stamp[vidx], stamp)) {
+        case HIT_BY_STALE: s_hitRefuseBy++; return 1;
+        case HIT_BY_SAME:  s_hitApplyBy++; break;
+        default:           s_hitUndecidedBy++; break;
+        }
+        if (hit_young(t, ta, vidx)) s_hitYoungBy++;
+    }
+    return 3;
+}
+
+/* The dispatch table's 0x05 slot 0x455F90, entered by the dispatcher's `jmp [eax*4+0x455F84]`
+   with its frame: the message at the site's esp + 0x10. */
+static int __cdecl hit_rx_chat(unsigned int* regs)
+{
+    const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
+    const char* ta = *(const char* const*)0x00511DE8;
+    if (m[1] != 0 || !ta) return 0;
+    switch (m[2]) {
+#ifndef TAGPU_LIMITS_STOCK
+    case WPN_CHAT_TAG:   wpn_rx_chat(regs); return 0;
+#endif
+    case HIT_TAG_CREATE: return hit_rx_create(regs, ta, m);
+    case HIT_TAG_HIT:    return hit_rx_hit(regs, ta, m);
+    default:             return 0;
+    }
+}
+
+/* ---- stubs, in B4's own page ------------------------------------------------------------- */
+
+static unsigned char* s_hitCode;
+static unsigned int   s_hitCodeUsed;
+
+static unsigned char* hit_code(unsigned int n)
+{
+    unsigned char* p;
+    if (!s_hitCode)
+        s_hitCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                 PAGE_EXECUTE_READWRITE);
+    if (!s_hitCode || s_hitCodeUsed + n > 0x1000) return NULL;
+    p = s_hitCode + s_hitCodeUsed;
+    s_hitCodeUsed += (n + 15u) & ~15u;
+    return p;
+}
+
+static unsigned char* hit_jmp(unsigned char* p, unsigned char op, unsigned int target)
+{
+    *p++ = op;
+    tagpu_detour_rel(p, target);
+    return p + 4;
+}
+
+static unsigned char* hit_jcc(unsigned char* p, unsigned char cc, unsigned int target)
+{
+    *p++ = 0x0F;
+    *p++ = cc;
+    tagpu_detour_rel(p, target);
+    return p + 4;
+}
+
+static unsigned char* hit_abs(unsigned char* p, const void* a)
+{
+    unsigned int v = (unsigned int)(size_t)a;
+    memcpy(p, &v, 4);
+    return p + 4;
+}
+
+/* E8/E9 at `va` to `target`, NOP-padded to n, into the table */
+static void hit_site(unsigned int va, int n, const unsigned char* stock, unsigned char op,
+                     const void* target, const char* name)
+{
+    lim_branch(va, n, stock, op, (unsigned int)(size_t)target, name);
+}
+
+static void hit_slot(unsigned int va, unsigned int stock, const void* target, const char* name)
+{
+    unsigned int v = (unsigned int)(size_t)target;
+    lim_add(va, 4, (const unsigned char*)&stock, (const unsigned char*)&v, name);
+}
+
+static void hit_selfcheck(void)
+{
+    struct { const char* name; int got; int want; } t[24];
+    int n = 0, bad = 0, i;
+    t[n].name = "owner: birth = stamp";     t[n].got = hit_owner_accepts(100, 100);           t[n].want = 1; n++;
+    t[n].name = "owner: older stamp";       t[n].got = hit_owner_accepts(100, 99);            t[n].want = 0; n++;
+    t[n].name = "owner: bound after birth"; t[n].got = hit_owner_accepts(100, HIT_LB | 150);  t[n].want = 1; n++;
+    t[n].name = "owner: bound before";      t[n].got = hit_owner_accepts(100, HIT_LB | 99);   t[n].want = 0; n++;
+    t[n].name = "owner: unknown, first";    t[n].got = hit_owner_accepts(0, HIT_UNKNOWN);     t[n].want = 1; n++;
+    t[n].name = "owner: unknown, later";    t[n].got = hit_owner_accepts(5, HIT_UNKNOWN);     t[n].want = 0; n++;
+    t[n].name = "owner: own stamp unknown"; t[n].got = hit_owner_accepts(HIT_UNKNOWN, 7);     t[n].want = 0; n++;
+    t[n].name = "by: exact, equal";         t[n].got = hit_bystander_rule(42, 42);            t[n].want = HIT_BY_SAME; n++;
+    t[n].name = "by: exact, differ";        t[n].got = hit_bystander_rule(42, 43);            t[n].want = HIT_BY_STALE; n++;
+    t[n].name = "by: copy bound, born after"; t[n].got = hit_bystander_rule(HIT_LB | 50, 51); t[n].want = HIT_BY_STALE; n++;
+    t[n].name = "by: copy bound, born at";  t[n].got = hit_bystander_rule(HIT_LB | 50, 50);   t[n].want = HIT_BY_UNDECIDED; n++;
+    t[n].name = "by: hit bound, born after"; t[n].got = hit_bystander_rule(51, HIT_LB | 50);  t[n].want = HIT_BY_STALE; n++;
+    t[n].name = "by: hit bound, born before"; t[n].got = hit_bystander_rule(49, HIT_LB | 50); t[n].want = HIT_BY_UNDECIDED; n++;
+    t[n].name = "by: two bounds";           t[n].got = hit_bystander_rule(HIT_LB | 9, HIT_LB | 70); t[n].want = HIT_BY_UNDECIDED; n++;
+    t[n].name = "by: copy unknown";         t[n].got = hit_bystander_rule(HIT_UNKNOWN, 70);   t[n].want = HIT_BY_UNDECIDED; n++;
+    t[n].name = "by: hit unknown";          t[n].got = hit_bystander_rule(70, HIT_UNKNOWN);   t[n].want = HIT_BY_UNDECIDED; n++;
+    t[n].name = "hold: same tick";          t[n].got = hit_held(10 + 1, 10);                  t[n].want = 1; n++;
+    t[n].name = "hold: next tick";          t[n].got = hit_held(10 + 1, 11);                  t[n].want = 1; n++;
+    t[n].name = "hold: two ticks on";       t[n].got = hit_held(10 + 1, 12);                  t[n].want = 0; n++;
+    t[n].name = "hold: never / reset";      t[n].got = hit_held(0, 3) || hit_held(50 + 1, 3); t[n].want = 0; n++;
+    t[n].name = "fallback: earlier tick";   t[n].got = hit_reusable(10 + 1, 11);              t[n].want = 1; n++;
+    t[n].name = "fallback: this tick";      t[n].got = hit_reusable(10 + 1, 10) || hit_reusable(0, 10); t[n].want = 0; n++;
+    t[n].name = "birth: rises per slot";    t[n].got = hit_next_birth(HIT_UNKNOWN, 7) == 7 &&
+                                                       hit_next_birth(7, 7) == 8 && hit_next_birth(8, 20) == 20 &&
+                                                       hit_next_birth(20, 3) == 21;           t[n].want = 1; n++;
+    for (i = 0; i < n; i++) {
+        if (t[i].got != t[i].want) bad++;
+        tagpu_logf("enginefix: hitcheck %-27s got=%d want=%d %s",
+                   t[i].name, t[i].got, t[i].want, t[i].got == t[i].want ? "OK" : "FAIL");
+    }
+    tagpu_logf("enginefix: hitcheck %d rule cases, %d failed", n, bad);
+}
+
+static void hit_read_lever(void)
+{
+    FILE* f = fopen("tagpu_dmgdelay.on", "rb");
+    char b[16] = { 0 };
+    unsigned int k;
+    if (!f) return;
+    fread(b, 1, sizeof b - 1, f);
+    fclose(f);
+    k = (unsigned int)strtoul(b, NULL, 10);
+    s_hitDelayK = k ? (k > 3600u ? 3600u : k) : 30u;
+    tagpu_logf("enginefix: stale hits: TEST LEVER tagpu_dmgdelay.on -- every outgoing hit is "
+               "held %u ticks", s_hitDelayK);
+}
+
+static int fix_stale_hits(void)
+{
+    static const unsigned char take[10]  = { 0x66, 0x83, 0xBE, 0xA6, 0x00, 0x00, 0x00, 0x00,
+                                             0x74, 0x1D };                   /* 0x486036 */
+    static const unsigned char freed[6]  = { 0x8B, 0xAE, 0x10, 0x01, 0x00, 0x00 };
+    static const unsigned char exitCfn[5] = { 0x8B, 0xC6, 0x5F, 0x5E, 0x5D };
+    static const unsigned char alloc[8]  = { 0x83, 0xEC, 0x30, 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
+    static const unsigned char tx09[5]   = { 0xE8, 0x3D, 0xBD, 0xFF, 0xFF };
+    static const unsigned char tx0bA[5]  = { 0xE8, 0x32, 0x81, 0xFC, 0xFF };
+    static const unsigned char tx0bB[5]  = { 0xE8, 0x1E, 0x81, 0xFC, 0xFF };
+    static const unsigned char spawn[8]  = { 0x8B, 0xF0, 0x33, 0xC0, 0x8B, 0x7C, 0x24, 0x34 };
+    static const unsigned char back09[5] = { 0xE9, 0x62, 0x0B, 0x00, 0x00 };  /* 0x4553E9 */
+    static const unsigned char back0b[5] = { 0xE9, 0x34, 0x0B, 0x00, 0x00 };  /* 0x455417 */
+    static const unsigned char len09[2]  = { 0x6A, 0x17 };                    /* 0x45605C */
+    static const unsigned char len0b[2]  = { 0x6A, 0x09 };                    /* 0x489CA8 */
+    unsigned char *aTake, *aFree, *aExit, *aAlloc, *aChat, *aBare09, *aBare0B, *aSpawn, *p,
+                  *doCreate, *doHit, *jCreate, *jHit, *jNone;
+
+    hit_read_lever();
+    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) hit_selfcheck();
+
+    if (!(aTake = hit_code(64)) || !(aFree = hit_code(32)) || !(aExit = hit_code(32)) ||
+        !(aAlloc = hit_code(32)) || !(aChat = hit_code(96)) || !(aBare09 = hit_code(16)) ||
+        !(aBare0B = hit_code(16)) || !(aSpawn = hit_code(48))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+
+    /* 0x486036: cmp word [esi+0xA6],0; jne 0x486040; take esi as hit_take leaves it, or end */
+    p = aTake;
+    memcpy(p, take, 8); p += 8;
+    p = hit_jcc(p, 0x85, 0x00486040);
+    *p++ = 0x60; *p++ = 0x54;
+    p = hit_jmp(p, 0xE8, (unsigned int)(size_t)hit_take);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x61;
+    p = hit_jcc(p, 0x84, 0x00486040);
+    hit_jmp(p, 0xE9, 0x0048605D);
+
+    /* 0x486DC1: stamp the free, then stock's mov ebp,[esi+0x110] */
+    p = fix_call_regs(aFree, hit_freed);
+    memcpy(p, freed, 6); p += 6;
+    hit_jmp(p, 0xE9, 0x00486DC7);
+
+    /* 0x48634F: stamp the copy, then stock's mov eax,esi; pop edi; pop esi; pop ebp */
+    p = fix_call_regs(aExit, hit_created);
+    memcpy(p, exitCfn, 5); p += 5;
+    hit_jmp(p, 0xE9, 0x00486354);
+
+    /* 0x4854A0: reset with the array, then stock's sub esp,0x30; mov eax,[0x511DE8] */
+    p = fix_call_regs(aAlloc, hit_reset);
+    memcpy(p, alloc, 8); p += 8;
+    hit_jmp(p, 0xE9, 0x004854A8);
+
+    /* the 0x05 slot: 0 stock chat, 1 the loop, 2 the carried 0x09, 3 the carried 0x0B, each
+       entered with the return address stock's own case pushes and the record in eax */
+    p = aChat;
+    *p++ = 0x60; *p++ = 0x54;
+    p = hit_jmp(p, 0xE8, (unsigned int)(size_t)hit_rx_chat);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;                /* cmp eax,2          */
+    *p++ = 0x74; jCreate = p++;                          /* je do_create       */
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x03;                /* cmp eax,3          */
+    *p++ = 0x74; jHit = p++;                             /* je do_hit          */
+    *p++ = 0x85; *p++ = 0xC0;                            /* test eax,eax       */
+    *p++ = 0x61;                                         /* popad              */
+    p = hit_jcc(p, 0x84, 0x0045522E);                    /* jz stock's chat    */
+    p = hit_jmp(p, 0xE9, 0x00455F50);                    /* the loop           */
+    doCreate = p;
+    *p++ = 0x61;                                         /* popad: eax = record */
+    *p++ = 0x8B; *p++ = 0x4C; *p++ = 0x24; *p++ = 0x14;  /* mov ecx,[esp+0x14] */
+    *p++ = 0x50; *p++ = 0x51;                            /* push eax; push ecx */
+    *p++ = 0x68; p = hit_abs(p, (const void*)0x004553E9); /* push 0x4553E9     */
+    p = hit_jmp(p, 0xE9, 0x004861D0);
+    doHit = p;
+    *p++ = 0x61;                                         /* popad: eax = record */
+    *p++ = 0x50;                                         /* push eax           */
+    *p++ = 0x68; p = hit_abs(p, (const void*)0x00455417); /* push 0x455417     */
+    hit_jmp(p, 0xE9, 0x00489CE0);
+    *jCreate = (unsigned char)(doCreate - (jCreate + 1));
+    *jHit = (unsigned char)(doHit - (jHit + 1));
+
+    /* a bare 0x09 / 0x0B: counted, and the loop goes on */
+    p = aBare09;
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitBare09);
+    hit_jmp(p, 0xE9, 0x00455F50);
+    p = aBare0B;
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitBare0B);
+    hit_jmp(p, 0xE9, 0x00455F50);
+
+    /* 0x4653DE, after the Deathmatch respawn's create 0x4653D9, whose unit it uses at 0x465414
+       with no test: stock's mov esi,eax; xor eax,eax; mov edi,[esp+0x34] when there is one.
+       With none, the block's own end 0x4654FB is taken, whose stack is this site's (0x496E90
+       ret 0xC, 0x4816A0 and 0x48D630 ret 4) and which restores edi, bl and ebp. NULL comes from
+       the block with no free slot, from the hold (every free slot freed in this tick), and --
+       below the cap too, stock faulting here on each -- from a type 0 (0x485F7C), a type
+       without def+0x241 bit 0x800000 (0x485FAA) and the type's own limit def+0x15A (0x485FE4).
+       NOTHING IS WRITTEN: the countdown main+0x39239 stays at -1, as stock's fire leaves it, so
+       every reader of it (0x46554F, which gates 0x401360, above all) sees stock's own sequence, and
+       while the respawn's trigger still holds, its own countdown reloads (0x46518B) and fires
+       again six of the controlled player's passes later -- the retry, with its placement
+       search. */
+    p = aSpawn;
+    *p++ = 0x8B; *p++ = 0xF0;                            /* mov esi,eax        */
+    *p++ = 0x85; *p++ = 0xF6;                            /* test esi,esi       */
+    *p++ = 0x74; jNone = p++;                            /* jz none            */
+    *p++ = 0x33; *p++ = 0xC0;                            /* xor eax,eax        */
+    *p++ = 0x8B; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x34;  /* mov edi,[esp+0x34] */
+    p = hit_jmp(p, 0xE9, 0x004653E6);
+    *jNone = (unsigned char)(p - (jNone + 1));
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitRetry);          /* inc [s_hitRetry] */
+    hit_jmp(p, 0xE9, 0x004654FB);
+
+    hit_site(0x00486036, 10, take, 0xE9, aTake, "stale hits: the hold, first-free's free test");
+    hit_site(0x00486DC1, 6, freed, 0xE9, aFree, "stale hits: the free's stamp");
+    hit_site(0x0048634F, 5, exitCfn, 0xE9, aExit, "stale hits: a copy's stamp, CreateFromNetwork's exit");
+    hit_site(0x004854A0, 8, alloc, 0xE9, aAlloc, "stale hits: the reset, with the unit array");
+    hit_site(0x004560AE, 5, tx09, 0xE8, (const void*)hit_tx_create, "stale hits: the 0x09 sent carried");
+    hit_site(0x00489CB9, 5, tx0bA, 0xE8, (const void*)hit_tx_hit, "stale hits: the 0x0B sent carried");
+    hit_site(0x00489CCD, 5, tx0bB, 0xE8, (const void*)hit_tx_hit, "stale hits: the 0x0B sent carried, no attacker");
+    hit_site(0x004653DE, 8, spawn, 0xE9, aSpawn, "stale hits: the Deathmatch respawn's create, tested");
+    hit_slot(0x00455F90, 0x0045522Eu, aChat, "stale hits: the 0x05 receiver");
+    hit_slot(0x00455FA0, 0x004553DAu, aBare09, "stale hits: a bare 0x09 dropped");
+    hit_slot(0x00455FA8, 0x0045540Du, aBare0B, "stale hits: a bare 0x0B dropped");
+    lim_same(0x004553E9, 5, back09, "stale hits: the 0x09 case's continuation");
+    lim_same(0x00455417, 5, back0b, "stale hits: the 0x0B case's continuation");
+    lim_same(0x0045605C, 2, len09, "stale hits: the 0x09's length");
+    lim_same(0x00489CA8, 2, len0b, "stale hits: the 0x0B's length");
+    return FIX_TABLE;
+}
+
+/* the heartbeat's hits section (tagpu_packet_pub.c): DLL counters only. owner= is
+   applied/refused, by= applied as the same unit/applied undecidable/refused as stale; B= is
+   the companions' bytes and stockB= what the bare messages would have been; copy= counts the
+   stamps CreateFromNetwork's exit took, by kind; held= creates the hold moved to an unheld
+   slot, fallback= to a slot freed in the last tick, holdfail= creates it failed, retry= the
+   Deathmatch respawns that found no slot and wait for their countdown's next fire. */
+int tagpu_hits_format(char* buf, unsigned int cap)
+{
+    const struct hit_tab* t = s_hit;
+    return _snprintf(buf, cap,
+                     " | hits: slots=%u tables=%u out 09=%u 0b=%u B=%u stockB=%u unk=%u"
+                     " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u bad=%u"
+                     " bare 09=%u 0b=%u copy exact=%u bound=%u unk=%u held=%u fallback=%u"
+                     " holdfail=%u retry=%u delay=%u q=%u over=%u young owner=%u by=%u",
+                     t ? t->n : 0u, s_hitTables, s_hitOutCreate, s_hitOutHit, s_hitOutBytes,
+                     s_hitStockBytes, s_hitTxUnknown, s_hitInCreate, s_hitInHit, s_hitApplyOwner,
+                     s_hitRefuseOwner, s_hitApplyBy, s_hitUndecidedBy, s_hitRefuseBy, s_hitDead,
+                     s_hitStateRefused, s_hitMalformed, s_hitBare09, s_hitBare0B,
+                     s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown, s_hitHeld,
+                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed,
+                     s_hitDelayOverflow, s_hitYoungOwner, s_hitYoungBy);
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
@@ -4464,8 +6288,13 @@ static void patch_engine_defects(void)
     int losl = fix_los_local();
     int pview = fix_projectile_view();
     int wkey = fix_weapon_keys();
+    int wire = fix_wire_bounds();
+    int hits = fix_stale_hits();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
+
+    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES)
+        wire_selfcheck();
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
@@ -4524,6 +6353,35 @@ static void patch_engine_defects(void)
               "notoverland (the store 0x42E310 0x42E468; the verdict 0x49ABB0; the order action "
               "0x43F1D4; the guidance 0x49B9EB; the fire gate 0x49E1FD) %s",
               fix_state(wkey));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: stale hits %s: the 0x09 and 0x0B carried in tagged 0x05s with the "
+              "victim's incarnation (0x4560AE 0x489CB9 0x489CCD; the receiver 0x455F90; bare ones "
+              "dropped 0x455FA0 0x455FA8), a copy's stamp at CreateFromNetwork's exit (0x48634F), "
+              "the two-tick hold (0x486036 0x486DC1), reset with the unit array (0x4854A0), "
+              "the Deathmatch respawn's create tested (0x4653DE). "
+              "Counters on the heartbeat's 'hits:' section. Stubs: %u of 4096 bytes at 0x%08X",
+              fix_state(hits), s_hitCodeUsed, (unsigned int)(size_t)s_hitCode);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: wire robustness %s: 0x09 create -- index, type, the sender's block "
+              "(0x4861F7), 0x0A attach (0x4553FE), 0x0C destroy + killer (0x4866E5 0x486753), "
+              "0x0B damage (0x489CED), "
+              "0x2C stat/move -- parsed from a zero-padded copy (0x48B92B), the message's length "
+              "(the receive's 0x453595 0x45361F, which also keeps the pump's message pointer on "
+              "the buffer), block, delta, type, dirty-list move class, after-create, the "
+              "round-robin flag and type, and the unsigned round-robin remainder (0x48B960 "
+              "0x48B985 0x48B9AD 0x48BA05 0x48BA5E 0x48B40E 0x48B49C 0x48BA9F), a move "
+              "payload's target and the round robin's carrier (0x44E0DE 0x48B574); the splitter's "
+              "short messages (0x463939 0x463B33); the diverged 0x0D dropped in wpn_rx_fired "
+              "(0x49D280). Records accepted, drops, the morph/dcreate/rcreate/ghost oracles and "
+              "CreateFromNetwork's no-block refusals are on the heartbeat's 'wire:' section. "
+              "Stubs: %u bytes",
+              fix_state(wire), s_wireStubBytes);
     b[sizeof b - 1] = 0;
     plog(b);
 }

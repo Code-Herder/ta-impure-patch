@@ -321,8 +321,10 @@ for every cell of it in the blast; flak fired nearly straight up divides by zero
 footprint ends on the map's last column or row is parked off the map, where nothing can hit it;
 and a unit whose altitude is more than twice its distance from the north edge falls off the
 line-of-sight grid, so no other player sees it; and one more in combat, landing B2: an aircraft
-that shares its cells with other aircraft can hold none of them, and then no explosion finds it.
-`tagpu_patches.c` (`patch_engine_defects`) patches all of them, twenty fixes, at every attach, in
+that shares its cells with other aircraft can hold none of them, and then no explosion finds it;
+and the network receivers, landing B3: five of them take a unit index, a type or a slot delta off
+the wire with no bound.
+`tagpu_patches.c` (`patch_engine_defects`) patches all of them, twenty-one fixes, at every attach, in
 both builds: `ddraw.dll` is a static
 import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
 every input the stock code handles correctly.
@@ -337,7 +339,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the twenty, and why:
+made, or its page cannot be made writable. Each of the twenty-one, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -361,6 +363,8 @@ made, or its page cannot be made writable. Each of the twenty, and why:
 | line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440`, the sight emitter `0x4825B0` (sixteen sites in 25 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps, what a unit sees |
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
+| wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`, with the sender's block), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B92B`/`0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48BA5E`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`, parsed from a zero-padded copy), the `0x2C`'s two nested unit references `0x44E0DE` (a move payload's target) and `0x48B574` (the round robin's carrier), `0x4553FE` (`0x0A` attach: child and parent), the `0x2C` length's capture in the receive `0x453595`/`0x45361F` (which also keeps the pump's message pointer on the buffer), and the splitter's short messages `0x463939`/`0x463B33` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local). The diverged `0x0D` drop rides the weapon-ID row `0x49D280` above: evidence §8 classes it simulation, only when diverged |
+| stale hits — the incarnation on the wire and the two-tick hold: first-free `0x486036`, the free `0x486DC1`, `CreateFromNetwork`'s exit `0x48634F`, the array's reset `0x4854A0`, the sends `0x4560AE`, `0x489CB9`, `0x489CCD`, the dispatch slots `0x455F90`, `0x455FA0`, `0x455FA8` (landing B4; the subsection *Unit identity on the wire*) | simulation | which hits a unit takes and which slot a create gets; and it is a wire format: a peer without it sends bare `0x09`/`0x0B`s this build drops, and cannot read the tagged `0x05`s this build sends |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -374,6 +378,411 @@ locally from stock models (never committed), on Core Prime Industrial Area with 
 weapons `tools/weaponids_fixture.py` generates for the weapon IDs, on Two Continents with a save
 and its load for the border features, and on Two Continents with the `scenarios/b1-*.json`
 fixtures for the four combat fixes. Each compares against a build without the patch.
+
+### The network receivers take a unit index straight off the wire — `0x09`, `0x0B`, `0x0C`, `0x2C` [DISASSEMBLED 2026-09-25]
+
+Landing B3 of [the port's section B](tadr-port/sim-fixes.md). The dispatcher `0x45486D` indexes the
+jump table `0x455F84` by `code − 2` and gives each case the sender's player record in `edi` and the
+record pointer on the stack. Five cases index the unit array — begin `*(main+0x14357)`, last
+inclusive `*(main+0x1435B)`, stride `0x118` — by a `u16` from the record with no bound, and one also
+by a signed delta, an unbounded type, and a signed round-robin remainder (the heading keeps the
+four this section first listed, since other pages link to it):
+
+| code | case | handler | the unbounded reads |
+|---|---|---|---|
+| `0x09` | `0x4553DA` (→ `0x4553E9`) | `CreateFromNetwork 0x4861D0(player [esp+0x14], rec)` `ret 8` | index `rec+3` (0 faults at `0x486237`), type `rec+1` (indexes the def table `main+0x1439B + type·0x249` at `0x48626F`) |
+| `0x0B` | `0x45540D` | `0x489CE0(rec)` `ret 4` | victim `rec+1`, attacker `rec+3` (`0x489CED..0x489D36`); a heal-kind writes HP at `0x489D80` |
+| `0x0C` | `0x45541C` | `0x4866D0(rec, 0)` `ret 8` | index `rec+1` (0 faults at `0x486706`), killer `rec+7` (`0x486753..0x486777`; 0 → NULL, handled) |
+| `0x2C` | `0x4553EE` | `0x48B920(player edi, pkt)` `ret 8` | dirty-entry delta (signed, `0x48B985`), type (`0x48B9AD`), the mover after a refused create (`0x48BA05`, TADR's 13 field faults at `0x48BA07`), the round-robin type (`0x48B40E`) and model object (`0x48B49C`), and the **signed** `idiv` remainder at `0x48BAAB`; the bit reader has no end, and the message's own `[16]` size is read and discarded (`0x48B944`). Two unit references ride inside it: a `0x4FD9E0`-class move payload's target (`0x44E0D0`, scaled at `0x44E0DE..0x44E0F9`) and the round robin's carrier (`0x48B56B`, scaled inside `0x48AB70` at `0x48ABAF..0x48ABC4`) — below |
+| `0x0A` | `0x4553FE` (→ `0x455408`) | `0x48AB70(rec)` `ret 4`, [attach and detach](#0x48ab70-attach-and-detach-one-unit-to-another-mapped-by-us) | child `rec+1` (`0x48AB8A..0x48AB9F`), parent `rec+3` (`0x48ABAF..0x48ABC4`), each 0 → NULL, and a NULL child returns having done nothing (`0x48ABC7`) while a NULL parent is the detach (`0x48ABA9`); the child is then read at `+0x110` (`0x48ABCF`) and the parent at `+0x110` (`0x48ABFD`) and written at `+0x8A` (`0x48AC82`). The sender, the wrapper `0x48AAC0`, writes its child's own `+0xA8` (it reads the child's `+0x110` at `0x48AAC7` first, so the child is never NULL) and its parent's or 0 |
+
+**The player block** each `0x2C` path trusts: `[player+0x67]` = first slot, `[player+0x6B]` = last, and
+`10·[main+0x37EE6]+1` slots with slot 0 a sentinel. The block is assigned at `0x4858A6..0x4858E0` as
+`first = begin + (1 + k·N)·0x118`, `last = first + (N−1)·0x118`; that is the shape the entry check
+`0x48B960` verifies (a wild `[player+0x67]` fails it even where a 16-bit delta could not). `k` is a
+**rank**, not the record's index: the blocks are handed out in the order of an insertion sort
+(`0x485657..0x4856C0`) that, in a network game, compares the records' DirectPlay ids `[rec+4]`
+(DISASSEMBLED). Confirmed live 2026-09-25 in a four-player game with an AI seat: blocks at slots 1,
+1501, 3001, 4501 and 6001, `N` 1500, and on one joiner record 2 held the block at 6001.
+
+**Which thread.** The receivers above run on the game thread only, by the dispatcher's gate:
+`0x451FD0` (called at `0x491369`) is the only filler of the receive-mask table `0x512BC0` for these
+codes, and gives `0x09`, `0x0A`..`0x10` and `0x2C` the mask 4 (`0x451FE7..0x452017`, one store each;
+`0x0E`'s is `0x45200B`). The dispatcher passes a code in net state 5 only with mask bit 1
+(`0x454745..0x454760`), in state 6 only with bit 2 (`0x454762..0x45477D`), and in any other state only
+with bit 0 (`0x454791..0x4547A7`); a code whose bit fails in state 5 or 6 goes straight to `0x455F50`
+(`0x45477F..0x45478B`, the `je` at `0x45478B` state 6's), never on to the bit-0 test. State 6 is set at
+`0x498445`, on the game thread after the load (state 5 during it).
+
+**One receive, one message.** The pump `0x453D40` calls `0x4534E0` per message (`0x453D94`), which
+receives into the buffer at `main+0x2A38` — through the transport `0x462F30` when `[0x506DBC]` is set
+(the image's 1), or straight from DirectPlay (`0x4C9840`, `IDirectPlay::Receive`) when a `-p` switch
+below 0 has cleared it (`0x49F23F` → `0x4578D0` → `0x4619EB`). A too-small buffer is grown and the receive retried
+(`0x453565`, `0x4535EE`). The delivered length is handed only to the statistics call `0x415EF0` (code,
+length, 0; at `0x453595` and `0x45361F`) and then dropped: the pushes before each call,
+`0x453585..0x453594` (transport) and `0x45360F..0x45361E` (raw), take the length from the local
+`[esp]` and the code from the buffer's first byte, so the spans B3 compares before replacing the calls
+are `0x453585..0x453599` and `0x45360F..0x453623`. The transport's splitter `0x463790` walks a
+packet after its 4-byte header, taking each message's length from the table at `0x512AD8` by code —
+except a `0x2C`, whose length is its own `[16]` size, read at `0x46391F`/`0x4639E5` — and stops at a
+message that does not fit what is left (`0x46393E`, `0x463B3B`), so on the transport a delivered
+`0x2C`'s length **is** its size field. A code outside `[2, 0x2C]` ends the walk (`0x4638F2..0x4638FC`).
+The pump takes its message pointer once, before its loop (`0x453D90` → `[esp+0x10]`; the back edge
+`0x455F59` re-enters at the call `0x453D94`, which returns to `0x453D99`, `test eax,eax`, the result kept
+at `[esp+0xF0]` for `0x455F50` to test — the return address B3's length capture checks before it
+writes the pump's `[esp+0x10]`), and the dispatcher's cases read the message there
+(`0x4553DA`, `0x4553EE`, `0x4553FE`, …; one, `0x45504A`, builds a `0x1C` reply in the buffer itself);
+no other instruction of the pump writes that slot or takes its address. The growth is `0x4D84A0(block, "PACKET DATA AGAIN", size)` → `0x4D84C0`, a realloc
+[INFERRED: the block and size in, the block out; `0x4E9020(block, size)` inside], so a growth that moves
+the block inside one pump call leaves every later message of the call dispatched from the freed
+block (DISASSEMBLED). `main+0x2A34` (the capacity) and `main+0x2A38` (the buffer) have no writer by
+displacement other than the two growth paths, yet hold 0x2000 bytes at the main menu before any
+session, so something of another form sets them; MEASURED 2026-09-25, they stayed 0x2000 at one
+address through a four-peer tier-2 game on every peer. On the transport no well-formed message
+comes near that: the splitter's longest fixed length is 186 (code `0x20`) and a `0x2C` is capped by
+its sender, so a growth — and the stale pointer — takes a malformed message. Nothing reads a message after its case returns: each
+case jumps to `0x455F50` (the case calls return to `0x4553E9` for `0x09`, `0x4553F9` for `0x2C`,
+`0x455408` for `0x0A`, `0x455417` for `0x0B` and `0x455428` for `0x0C`, each a `jmp 0x455F50`), and
+the next message is a new receive. A length of 0 keeps the splitter's
+counting loop (`0x4638F0..0x463947`) on the same message for good whatever the code (`sub edi,eax`
+with eax 0, then `inc ebp` and back), and its third walk (`0x463AD3..0x463B8B`, entered at
+`0x463ABB`) queues the same message until the queue holds 512 (`0x463B46`) (DISASSEMBLED). Both
+take the length at one place after the `0x2C` and table paths join: `0x463939` (code at `[esp+0x28]`,
+stored `0x4638F4`) and `0x463B33` (code at `[esp+0x2C]`, stored `0x463AD9`); the queuing pass
+`0x4639BC` runs the count the counting pass found. Each loop's head loads and stores the code —
+`0x4638F0..0x4638F7`, and `0x463AD5..0x463ADC` from the third walk's `mov al,[esi]` at `0x463AD5`
+(entered there from `0x463AD1`, and through `0x463AD3` from the back edge) —
+the spans B3 compares with the two length points. The counting loop's exit is `0x463949` (`mov
+[esp+0x24],ebp`, the count found; `[esp+0x28]`, what is left, at `0x46394D`), where a code outside
+`[2, 0x2C]` (`0x4638F8`, `0x4638FC`) and a message that does not fit (`0x463940`) go; the splitter's
+`return 1`, `0x463B91` (`pop edi` … `ret 0x18`), is where a count of 0 (`0x463953`) and every end of
+the third walk go — a code outside `[2, 0x2C]` (`0x463ADD`, `0x463AE5`), a message that does not fit
+(`0x463B3D`), a full queue (`0x463B4C`). B3's refusal of a length ends each walk through those same
+exits (`0x463949`; `0x463B91`). The table `0x512AD8` (a `u16` per code, stride 4,
+filled at `0x451FD0..0x452311`) read live 2026-09-25: 0 for codes 4 and `0x2B` — which would hang the
+counting loop the same way — and at most 186 (code `0x20`) for the rest of `[2, 0x2B]`.
+
+**A wire `0x09` comes from its unit's own player.** The transport sender is the dispatcher's `edi`,
+which `CreateFromNetwork` pushes last (`0x4861EC`), so it is `[esp+0]` at `0x4861F7`. MEASURED
+2026-09-25 on four peers of a tier-2 game (three humans and an AI seat on the host): all 18 011 wire
+creates put the unit in the sender's own block, the player argument always equal to the sender —
+including the AI's, which arrive from the AI's own player record, not from the human hosting it.
+The pump names that record before the dispatch (DISASSEMBLED): it compares `[main+0x4C9]` [INFERRED:
+the id the receive reports as the sender] with the DirectPlay id `[rec+4]` of each of the ten records
+whose `[rec+0x73]` is nonzero (`0x453DBD..0x453E12`), keeps the match's index at `[esp+0x14]`
+(`0x455F78`), or 10 when none matches or the id is −1 (`0x453E14`, `mov byte [esp+0x14],0xA`), and
+takes the record `main+0x1B63 + index·0x14B` (`0x453E84..0x453E9B`) — for a sender it cannot find,
+record ten, one past the ten. Ten is the engine's own count of the records: the loop at `0x406E05`
+(`mov ebx,0xA`, in the AI plan's `Weight` command `0x406DB0`) steps `0x14B` over them (`0x406E2D`)
+and ends after ten (`0x406E33`). B3's `0x09` stub bounds the sender to one of the ten before it reads
+the sender's block.
+
+**The `0x2C` stream.** `0x48B920` reads `[8] code, [16] size, [32] GameTime` (the bit reader
+`0x415DC0(nbits)`, thiscall `ret 4`, ecx the reader `{u32* buf, u32 dword_idx, u32 bit_idx}`), then a
+dirty list of `[16] delta, [typeBits] type` (typeBits `main+0x14393`) and the move class's payload
+(capped 0x200 bytes at `0x48B7F6`), a `[16] 0xFFFF` terminator, and one round-robin full-state entry
+for slot `GameTime % N` (`0x48B3F0`). A dirty entry whose type differs from its slot creates the unit
+(`0x48BA00 → 0x4861D0`, returning to `0x48BA05`); the round robin creates at `0x48B497` (returning
+to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves the mover `[esi]` at
+0, and `0x48BA05` dereferences it — so the **dirty list** checks the move class, which is also the
+sender's own rule (it lists only units with a mover, `0x48B782..0x48B786`). The **round robin**
+carries every unit, structures included, and tests the mover itself before its one use (`0x48B6E8`:
+`[edi] == 0` skips to `0x48B6FC`), so there a type with no move class is well-formed and only the
+type is bounded; its after-create guard is on the model object `[edi+0x9E]` (the Object3do, set at
+`0x485DCC`; `+0x9A` is the COB script), which `0x48B4A6` writes through
+(DISASSEMBLED; MEASURED 2026-09-25: the AI's structures, types 78 and 112, arrive in the round robin
+on every joiner of a four-peer game). GameTime is `main+0x38A47`,
+incremented at `0x4954C0`; `UNITINFOCount` is `main+0x1438F` (the type bound `[1, count)`).
+
+Locally none of these indices can be 0 (`0x4864B0` writes the live unit's own `+0xA8`, ≥ 1), so only a
+malformed or foreign message reaches them — the fix is stock-exact for every well-formed one and is
+[class local](tadr-port/sim-fixes.md#b3-built-ahead-2026-09-25). Our stubs are entered by a jmp at a
+clean 5-byte boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`), verify the
+whole stock span first, and continue at the same address; a misframed `0x2C` points the reader at a
+zero dword and jumps to the engine's own end-of-list `0x48BA28`. The `0x2C` is parsed from a copy:
+at `0x48B92B` (eax = the message, loaded at `0x48B923`, stored as the reader's buffer at `0x48B933`)
+the message's length — the receive's delivered length, kept per thread at the two statistics calls,
+and the size field, the smaller — is copied into a per-thread DLL buffer followed by 48 zero bytes,
+and eax is the copy. The reader is then bounded by that length before each read the stubs precede:
+the entry (header and first delta), the delta (the type read next), `0x48BA5E` (the flag bit read
+directly at `0x48BA71`, and when set the round-robin type read `0x48B409`) and `0x48B40E`. Past the
+last check the engine reads at most **229 bits** (DISASSEMBLED, every path): the move-class payload
+`[vt+0x24]` then the next delta `0x48BA19` — the vtables `0x4FD458`, `0x4FD980`, `0x4FD9B0` →
+`0x44EFD0` (none), `0x4FD488` → `0x44F5C0` (1 + 2 + 3 × 32 = 99, its loop a 2-bit count),
+`0x4FD9E0` → `0x490A10` (2 + max(`0x44E080` 184, `0x44E9C0` 209) + 2 = 213), + 16 — and the round
+robin's tail after `0x48B40E` at most 211 (`0x48B4A9..0x48B6F2`); none loops on data it reads. The
+reader `0x415DC0` also loads the next dword whenever a read reaches the end of one
+(`0x415E0C..0x415E3E`; a read from bit 0 of a dword takes it alone, `0x415DF5`), so 29 + 3 + 8 bytes
+cover it and the padding is 48.
+
+**Where each stub continues and drops** (DISASSEMBLED 2026-09-25). The span is the stock bytes
+compared before any write; the branch sits at its first clean 5-byte boundary.
+
+- **`0x09`**, `CreateFromNetwork`: span `0x4861F7..0x48621F`. Stock stores player·0x14B over its own
+  player argument at `0x4861FE` (`mov [esp+0x20],edx`), which the stub repeats, and it continues at
+  `0x486220` with `esi` = the unit. `0x486220` reads the create's player's `[rec+0x67]` (`mov
+  eax,[ebx+edx+0x1BCA]`, its block's first slot), and `0x486229` (`jne 0x486237`) falls, when that is
+  0, into `0x48622B`: `xor eax,eax` and the epilogue, `ret 8` — the engine's own refusal of a create
+  for a player with no block, and the stub's drop.
+- **`0x0C`**, the destructor `0x4866D0`: span `0x4866E0..0x486705`, from the index read `mov
+  ax,[ebx+1]`; stock's `push edi` at `0x4866E4` lies inside it and stays, since the branch is at
+  `0x4866E5`. It continues at `0x486706` (the live test on `[esi+0x110]`) with `esi` = the unit and
+  drops to `0x486E59`, the destructor's own epilogue (`pop edi` … `ret 8`), which a victim that is not
+  live takes (`0x486710`), so the kept `push edi` balances. The killer: span `0x486753..0x486777`,
+  always continuing at `0x486778`, `mov [esi+0xF0],eax`, the killer pointer into the victim's `+0xF0`.
+- **`0x0B`**, `0x489CE0`: span `0x489CED..0x489D36`, both reads. It continues at `0x489D37` (`test
+  esi,esi`: a victim of 0 exits there, a dead one at `0x489D4A`) and drops to `0x489F93`, the
+  receiver's epilogue (`pop edi; pop esi; pop ebx; ret 4`), where both of those go. The `0x0B` and
+  `0x0C` stubs count a record as the wire's by the dispatcher's return address (`0x455417`,
+  `0x455428`): `0x489CE0` is also called by the damage function and `0x0B` sender `0x489BB0`
+  (`0x489C89`), and `0x4866D0` by `Send_UnitDeath` (`0x486679`); an E8/E9 scan finds no other callers.
+- **`0x2C`**, `0x48B920`: the copy (span `0x48B92B..0x48B932`, continuing at `0x48B933`) and the entry
+  (span `0x48B960..0x48B96D`, `mov eax,[edi+0x67]; mov [edi+0x18],ebp; cmp eax,esi; je 0x48BAC8`,
+  continuing at `0x48B96E`, the first delta's `push 0x10`) drop to `0x48BAC8`, the receiver's epilogue
+  (`pop edi` … `add esp,0x24; ret 8`) — stock's own exit for a player with no block (`0x48B968`), for
+  a clear round-robin flag (`0x48BA97`), and after the round robin. The delta (span
+  `0x48B985..0x48B99C`) continues at `0x48B99D` (`mov ecx,[eax+0x14393]`, typeBits, for the type read
+  at `0x48B9A8`). The type (span `0x48B9AD..0x48B9B5`) continues at `0x48B9B6` for a create — `mov
+  dx,[esi+0xA8]`, the start of the `0x09`-shaped record built on the stack for `0x4861D0`, called at
+  `0x48BA00` with the slot's `[esi+0xFF]` as the player — or at `0x48BA05` for the slot's own type;
+  the after-create check (span `0x48BA05..0x48BA0C`) at `0x48BA0D`, `push eax`, the reader handed to
+  the move class's `[vt+0x24]` at `0x48BA10`. The flag's stub replaces `0x48BA5E..0x48BA65` (`mov
+  ecx,[esp+0x18]; mov eax,[esp+0x10]`, replayed in the stub) and continues at `0x48BA66` (`mov
+  esi,[esp+0x14]`, the reader's dword index, before the bit read at `0x48BA71`), or ends at
+  `0x48BAC8`. After the remainder, patched in place at `0x48BA9F..0x48BAAC`, `0x48BAAD` (`mov
+  ecx,[edi+0x67]`) scales it from the player's first slot — with the dirty loop and the block sweep
+  `0x48BA28`, one of the reads of the block the entry check covers.
+- **The round robin** `0x48B3F0`: the type's span is `0x48B40E..0x48B414` (`xor ebp,ebp; cmp ax,bp;
+  jne 0x48B43F`). A stop goes to `0x48B435`, the entry's epilogue (`ret 8`); type 0 to `0x48B415`,
+  stock's own type-0 path (the slot `[esp+0x38]`: an empty one skips to `0x48B6FC`, an occupied one
+  has bit 14 of its `+0x110` set, `0x48B426..0x48B42F`, and returns through `0x48B435`); any other type
+  to `0x48B43F` (`mov edi,[esp+0x38]`: the slot's own type goes on at `0x48B49C`, another is created
+  at `0x48B44C..0x48B497`). After the create the span is `0x48B49C..0x48B4A1` (`mov eax,[edi+0x9E]`),
+  continuing at `0x48B4A2`, `push 0x10`, before `0x48B4A6` writes through `eax`.
+
+**The unit references inside a `0x2C`** (DISASSEMBLED 2026-09-25, every decoder the dirty list and
+the round robin reach). Two of the values the stream carries are unit indices that address the array,
+each an optional reference whose 0 the engine itself takes as no unit; both are bounded:
+
+- **A move payload's target.** `0x44E080` (thiscall `ret 8`: `this`, a `+0x12` pointer, the
+  reader) is the payload parse of the `0x4FD9E0` move class, reached only from `0x490A10` (its
+  `[vt+0x24]`, called for a dirty entry at `0x48BA10`) at `0x490A4F` when the 2-bit selector read at
+  `0x490A30` is 1. Under flag bit 0 of the 8-bit `[this+8]` it reads `[16]` into `[this+0x10]` and
+  then `[16]` the target index (`0x44E0D0`); stock's zero test `0x44E0D5` (`cmp ax,bp`, `ebp` zeroed at
+  `0x44E089`) sends index 0 to `0x44E0DA` (`xor eax,eax`), and any other is
+  scaled to `first + idx·0x118` with no bound (`0x44E0DE..0x44E0F9`), and either is handed at
+  `0x44E0FC..0x44E0FF` to `0x489690`, the reference set (thiscall on the reference at `[this+0x16]`,
+  `ret 4`): it unlinks the reference from its old unit's `+0xA2` chain (`0x489690..0x4896BC`), then
+  links it into the new unit's — reading `+0xA6` and writing `+0xA2` — or, for NULL (`0x4896C3`) or a
+  slot whose `+0xA6` is 0 (`0x4896C7`), clears it: `0x4896E6` zeroes the reference's `+4` and `+8`
+  (`0x4896BF..0x4896ED`). The owner's writer `0x44DDC0` sends the target's
+  own `+0xA8`, or 0 for none (`0x44DDEC..0x44DDF9`). `[this+0x10]` is not a unit index: the class
+  passes it as the piece to `0x43E060(out, unit, piece)` (`0x44E400`), and `0x43DEF0` bounds a piece
+  itself; the `0x44E190` constructor sets it `0xFFFF`. **Bounded at `0x44E0DE`** (span `0x44E0D5..0x44E103`,
+  from the zero test to the call of `0x489690`, continuing at `0x44E0FC`): an index past the array
+  takes `0x44E0DA`'s own NULL, counted (`target`).
+- **The round robin's carrier.** The round-robin entry `0x48B3F0` (`ret 8`, called once, at
+  `0x48BAC3`) is the full-state reader, `0x48B409..0x48B6F9`. After the type and the create it reads
+  `[16]` into `+0x108`, `[8]` ÷ 255 (the float at `0x4FD750`) into `+0x104` when it differs, `[8]` a state mask handed to
+  `UNITS_SetStateMask 0x48B090` (`0x48B50E`, `0x48B519`), `[2]` into `ebx` and one flag bit read in
+  place (`0x48B527..0x48B557`). With the flag set it takes the child id, its own `+0xA8` (`0x48B55B`),
+  reads a **15-bit carrier index** (`0x48B56B`) and
+  an 8-bit attach point (`0x415E60`, `0x48B579`) and applies the attach record `{+1 the unit's own
+  +0xA8, +3 the carrier, +5 the point, +6 ebx}` through `0x48AB70` (`0x48B58B`), which scales the
+  carrier with no bound; with it clear, a unit whose `+0x86` is set is detached (`0x48B59A..0x48B5C5`,
+  parent 0 written at `0x48B5B5`, point `0xFF`). The owner's writer sets the flag exactly when its unit
+  has a carrier and sends the carrier's own `+0xA8` in 15 bits — `0x48B300..0x48B321`: the carrier
+  `[unit+0x86]`, 0 for none, else its `+0xA8`, written by `0x415C10` at `0x48B321` — and the unit's own
+  `+0xF9` in 8 (`0x48B2A4..0x48B332`). The flag-set
+  path returns after the attach (`0x48B590`); the flag-clear path goes on to `[32] × 3`, the
+  position, into `+0x6A` (`0x48B5CA..0x48B5E6`), `[16] × 3`, the body turn, into `+0x64`
+  (`0x48B5EB..0x48B60F`, stored `0x48B6C4..0x48B6E4`) and `[32]` into the mover's `+0x20`
+  (`0x48B6F2`) — all into the entry's own slot. **Bounded at `0x48B574`** (the record's
+  `mov [esp+0x17],ax`; span `0x48B55B..0x48B58F`, from the child id to the call of `0x48AB70`,
+  continuing at `0x48B579`): a carrier past the array becomes 0, `0x48AB70`'s own no parent
+  (`0x48ABA9`), counted (`carrier`).
+- **The other decoders carry no unit index.** `0x44E9C0` (the `0x490A10` selector's 2): `[1]` flags,
+  `[32] × 6` and, under flag bit 0, `[16]` into `+0x24`, which the class's `0x44EA60` (vtable
+  `0x4FD3F8` `+0x20`) takes as a signed angle to step toward, by the def's `+0x1BA` over 8 — a
+  heading [INFERRED from `0x44EABA..0x44EB0F`], not an index. `0x44F5C0` (`0x4FD488`): one bit, a 2-bit count
+  into `+0x18`, and that many `[16]`,`[16]` pairs into `+0x0C..+0x16` — three pairs of room, and the
+  count cannot exceed 3. `0x490A10` itself: the 2-bit selector and a 2-bit value handed to
+  `0x43D210` (`0x490A7C..0x490A8C`). `0x44EFD0` reads nothing.
+
+**The `0x0A` receiver** is bounded at its case, not inside `0x48AB70`, whose other callers are
+local ([its call sites](#0x48ab70-attach-and-detach-one-unit-to-another-mapped-by-us)): B3's stub
+replaces the case's `mov eax,[esp+0x10]; push eax` at `0x4553FE` (entry 8 of the jump table, read
+at `0x455FA4`) and requires the child in `[1, max]` and the parent 0 or in `[1, max]`; a record
+that fails goes to `0x455F50`, the pump's back edge, which every case and every code the table
+does not handle (`0x45486D`'s `ja`, and entries 1, 2, 35 and 41) jumps to, and which reloads its
+own state (`0x455F50` reads `[esp+0xF0]`) before re-entering the receive at `0x453D94` (counted as a
+`0a` drop). A child of 0, which `0x48AB70` ignores, drops there too: no sender writes one. The
+diverged `0x0D` is dropped in `wpn_rx_fired` (`0x49D280`, [the
+weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot weapon and comparing it to
+`&Weapons[id]`: stock divides by the local slot weapon's `+0x68` (`0x49CE62..0x49CE6A`) and faults only
+when that is 0, otherwise building a projectile from the packet weapon's branch and the local
+weapon's velocity. Between consistent peers the two never differ (DISASSEMBLED): the sender's aim
+routine `0x49D580` fires the weapon of the shooter's own slot, `[slot+0xC]` read at `0x49D742` (its
+flags `+0x111`, `0x49D74B`, choose `0x49CDE0` at `0x49D76E` or `0x49C9C0` at `0x49D77E`), and when
+`[main+0x2A44]` bit 0 is set (`0x49D7A0` [INFERRED: a network game]; the pump tests the same bit at
+`0x453D4B`) builds the `0x0D` from that same slot — the weapon's ID byte `+0x10A` into `+0x19`
+(`0x49D7D6..0x49D7F5`), the slot's number (bits 2–3 of its `+0x1B`) into `+0x23` (`0x49D7ED`) — and
+broadcasts it through `0x451DF0` (`0x49D859`).
+
+### Unit identity on the wire: a hit names its victim by slot, and first-free reuses a slot at once — `0x0B`, `0x485F50` [DISASSEMBLED + MEASURED 2026-09-25]
+
+Landing B4 of [the port's section B](tadr-port/sim-fixes.md) ("B4 DESIGN"). Nothing on the wire
+says which unit a slot held when a message was made, and the owner hands a freed slot to its next
+create in the same tick, so a hit in flight lands on whatever the slot holds when it arrives.
+
+**The hit, `0x0B`, 9 bytes.** Built by `0x489BB0` (twelve callers): `[0]` `0x0B`, `[1]` `u16` the
+victim's index, `[3]` `u16` the attacker's (0 for none), `[5]` `u16` the damage (after armour, except
+for kind `0x0A`), `[7]` a byte argument, `[8]` the kind (`0x0A` heal, `0x0B` never sent, `2`
+paralysis: its path pushes `0x508D80`, "paralyze", at `0x489E49`). It applies the hit locally first (`0x489C89`),
+then sends it only when the victim's player (`+0x96`) exists with type 3 at `+0x73`, a remote
+player (`0x489C99`), and the kind is not `0x0B`: from the attacker's player's DPID (`+0x96` → `+4`,
+`0x489CB9`), or the local player's (`0x44FDB0`, `0x489CCD`) when there is no attacker; both sends
+take the length 9 from one `push 0x9` at `0x489CA8`, before the attacker test. **The
+receiver `0x489CE0(rec)`** refuses a victim that is not alive (`+0x110` bit `0x10000000`) or already
+pending death (bit `0x4000`) (`0x489D45`, `0x489D50`); a heal adds to hit points up to the type's
+maximum (`0x489D59..0x489D80`); any other kind calls `0x467950(victim)` and, but for kind `0x0B`,
+`0x406F80(attacker, victim, damage)`, and records the kind at `+0xF5` and the attacker at `+0xF0`/
+`+0xF4`. Kind 2 then leaves by `0x489DF5` without touching hit points, and paralyses only a
+victim whose player is local (`0x489E24`); the rest subtract from them (`0x489EB5`), and hit points
+at or below 0 set pending death only when the victim's player is local (`+0x73` 1 or 2,
+`0x489EC6..0x489EE5`), a remote copy's being clamped to 0 (`0x489EF1`). `0x406F80` tells the
+victim's orders (`0x4897B0`, event `0x10`) and does everything else only for a local victim
+(`0x406FC3`, `0x407013`). So every peer applies every hit to its own copy and the owner alone decides
+the death. The round robin carries hit points (`0x48B235`, written at `0x48B4B2`), so a bystander's
+copy is rewritten within N ticks.
+
+**The create, `0x09`, 23 bytes.** Built by `0x456050(unit)` `ret 4`, whose only caller is the create
+at `0x486115`: `[0]` `0x09`, `[1]` `u16` type (`+0xA6`), `[3]` `u16` index (`+0xA8`), `[5]` twelve
+bytes from `+0x6A` (the position), `[17]` `u32` from `+0x64`, `[21]` `u16` from `+0x68` [INFERRED:
+the orientation]; its send `0x4560AE` takes the length 23 from `push 0x17` at `0x45605C`. Of
+`0x451DF0`'s 57 callers, `0x4560AE` is the only one that sends a `0x09` and
+`0x489CB9`/`0x489CCD` the only ones that send a `0x0B` (an E8 scan, and the type byte each call site
+stores or builds). Every byte of both messages carries a field; neither has room for more.
+
+**The allocator.** `0x485F50` (`ret 0x20`, eleven callers) walks the player's block
+(`[player+0x67]`..`[player+0x6B]`, read as `main+0x1BCA`/`+0x1BCE` + `k·0x14B`) and takes the first
+slot whose type `+0xA6` is 0 (`0x486036`, `cmp word [esi+0xA6],0; je 0x48605D`). A free slot goes on
+at `0x48605D` (`test esi,esi`), the take, which writes the type at `0x486086`; a taken one goes to
+`0x486040`, the step: `test dx,dx` ends a requested index there (`jne 0x4861BD`, which returns NULL
+like `0x486053`), and otherwise the next slot is tried while it is at most `[player+0x6B]`
+(`0x486049..0x486051`). Its arg 8 is a requested index: then only that slot is
+tried. All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
+index. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
+(`0x485F7C`), a type without def `+0x241` bit `0x800000` (`0x485FAA`) and a type at its own
+limit, def `+0x15A` (`0x485FE4`). **Its callers and NULL**: the four factory and build callers
+(`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to the order (`0x489690` takes
+NULL) and test the link: NULL says "Unable to create any more units" (`0x4028FF` → `0x47F780`),
+and the first three sleep the order 300 ticks (`0x439E80`) while `0x41409B` returns 8 at once
+(`0x4140BD`); `0x41794F` ignores it; `0x48718E`, `0x488462` and `0x488700` test it; `0x497002`
+and `0x4977BB` are the level load's; **`0x4653D9`**, the Deathmatch respawn below, uses it at
+`0x465414` with no test, so stock faults there on every NULL.
+
+**The Deathmatch respawn, `0x4653D9`** [DISASSEMBLED; its trigger's meaning INFERRED]. It is in
+the players phase `0x464F80`, which walks the ten players and does a player's periodic work only
+on its pass, when GameTime reaches its `+0xF0` (`0x465083`, then `+0xF0 += 0x1E`: every 30
+ticks). On the controlled player's pass (`main+0x2A42`, `0x46509D`) outside a campaign
+(`0x435100` ≠ 1), with the options word's bit `0x40` clear (`[player+0x27]+0x9B`, `0x465154`) and
+`0x490360` nonzero (a test on `main+0x391ED` with a GameTime-keyed timer at `0x51E6C4`), it runs
+the countdown **`main+0x39239`**: below 0 it reloads to 4 and stops (`0x46518B`), else it
+decrements, and on reaching −1 it fires (`0x4651A4`). A fire with `ActiveCommanderDeath`
+(`main+0x37EF6`) at 2 creates a unit of a type named in the side's record (`0x488B10`)
+[INFERRED: the side's commander] for the controlled player at a free place: up to 9999 random
+points (`0x465236`), each tested over a 3 × 3 block of cells (`0x47DB70`); at any other value it
+goes to `0x465643`, which sets the player's options bit `0x40` (`0x46569D`, the bit `0x465154`
+tests, so the path stops) or the game-over bits of `main+0x3923B` (`0x46582E`) [INFERRED: the
+player is out]. Mode 2 is "Deathmatch" (the in-game options label, `0x45F279`), reachable from the
+multiplayer battle room, whose button cycles 0 → 1 → 2 → 0 (`0x448504..0x448546`, the options
+word's bits 11–12), and not from the skirmish screen, whose toggle is `xor [options+0x108],1`
+(`0x47B690`). **The countdown's readers and writers**: set to `0xFFFF` at a level's entry
+(`0x498199`); the respawn's path above (`0x46517F..0x4651A4`); two objective copies that set
+bits of `main+0x3923B` at their fire, `0x4650F3..0x465118` (a campaign, behind `0x490360`) and
+`0x465881..0x4658A6` (behind `0x490230`, campaign or not); a copy after the loop
+(`0x4655E8..0x465610`, a network game whose `ActiveCommanderDeath` is not 2, behind `0x457CB0`)
+[INFERRED: the end of a network game]; and **`0x46554F`**, on every
+player's pass, which calls `0x401360(player)` for a local player only while the countdown is below
+0 and `main+0x3923B` bit 2 is clear — `0x401360` zeroes the player's `+0xA4`/`+0xA8` and adds up
+each live unit's production [INFERRED: the economy's per-pass sum]. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
+records in DPID order in a network game**: `0x485842` sorts the ten record pointers on `+4` when
+`0x435100` answers 3 (otherwise on the pointer itself), and `0x4858BD` gives the k-th of the sorted
+list the block `1 + k·N` (`+0x67`, and its last slot at `+0x6B`, `0x4858E0`), so record k owns
+block k only on the peer first in DPID order. **The type word of a
+unit slot has three writers**: this create, `CreateFromNetwork` (`0x4862A2`), and the destructor `0x4866D0`'s
+free (`0x486DC7`, type 0). `0x421FE2` writes the same offset in a record the feature code allocates
+for itself (`0x421F9B`), and `0x485ED2` is in `0x485E90`, which nothing calls and no dword in the
+image points at — dead code. **`0x4854A0`** allocates and zeroes the unit array (`0x485515`,
+`0x485557`); its one call is `0x4918D4`, in the level's init. Before it allocates, it sets the slot
+count, `u16 main+0x14351`, to `10·[main+0x37EE6] + 1` in 16-bit arithmetic (`0x4854E3..0x4854EF`:
+`mov dx,[eax+0x37EE6]; imul dx,dx,0xA; inc edx; mov [eax+0x14351],dx`).
+
+**`CreateFromNetwork 0x4861D0`'s exits.** It refuses at `0x48622B` (the player has no block) and
+returns the unit from `0x48634F` (`mov eax,esi; pop edi; pop esi; pop ebp`, then `0x486354` `pop ebx`
+… `ret 8`). At `0x48634F` its frame is the one `0x4861ED` reads the record argument from (`mov
+edi,[esp+0x24]`), with the caller's return address at `[esp+0x1C]`. Its three callers are the `0x09` case (`0x4553E4`, returning to
+`0x4553E9`), the `0x2C` dirty entry (`0x48BA00` → `0x48BA05`) and round robin (`0x48B497` →
+`0x48B49C`). The two `0x2C` creates pass the slot's own `+0xFF` as the player (`0x48B9E7`,
+`0x48B47E`), not the sender. **The `0x2C` header's GameTime** (`[32]`, read at `0x48B955`) is
+stored at the sender's `player+0x18` (`0x48B963`) before the first entry.
+
+**The dispatcher's switch and gate.** The jump table `0x455F84` is indexed by `code − 2`
+(`0x454861`): `0x05` at `0x455F90` (→ `0x45522E`), `0x09` at `0x455FA0` (→ `0x4553DA`), `0x0B` at
+`0x455FA8` (→ `0x45540D`), `0x0F` at `0x455FB8`. Before it, `0x45473F` gates on the state
+`main+0x391F1`: `[0x512BC0 + 4·code]` bit 2 in state 5, bit 4 in state 6, bit 1 otherwise; `0x451FD0`
+fills it, `0x05` with 7 (every state), `0x09` and `0x0B` with 4 (state 6 only). The subpacket lengths
+are at `0x512AD8 + 4·code` (`0x05` `0x41`, `0x09` `0x17`, `0x0B` 9). A case finds the message at
+`[esp+0x10]`, the player at `[esp+0x14]` and the sender's record in `edi`, whose `+0x10` counts its
+messages and `+0x1C` holds the time of the last (`0x45484A..0x45485C`). Stock's chat `0x45522E`
+passes the text from `msg+1` to `0x463CA0`, which returns at once when it starts with a zero byte
+(`0x463CA7`).
+
+**GameTime `main+0x38A47` has five writers** (every store to that offset): the tick's increment
+`0x4954C0`, the shell's network clock `0x44A696` (in `0x44A680`, called from the menu's state
+machine at `0x42837F`), and three zeroings at a level's entry — `0x491979` (just after `0x4854A0`
+in the level init), `0x4971BB` (the loader), `0x498180` (before state 6). In play it only increments.
+
+**The send layer** (read, not patched). `0x451DF0(net, msg, len)` `ret 0xC` checks the sender
+(`0x44FFD0`, type 1 or 2) and, with `[0x506DBC]` set, queues through `0x461990` → `0x462710`
+(`ecx = 0x513000`): per destination, a packet of at most `0x42A` bytes and a ring of `0x400` sent
+packets [INFERRED: a resend queue]. Otherwise `0x4C97B0` calls `IDirectPlay::Send` (vtable `+0x68`)
+to DPID 0, every player, guaranteed when `[0x50A780]` is set. **Whether one peer's messages reach
+another in the order sent is not established** (the port's open question); B4 does not rely on it.
+
+**What B4 patches** (the design and its argument are in the plan; the code is `fix_stale_hits`):
+the three sends above call ours with the send's own signature and put the stock record inside a
+tagged `0x05` (`05 00 4A` + the `0x09` + the owner's birth, `05 00 4B` + the `0x0B` + the sender's
+stamp of its victim), and the stock lengths the tagged copy takes, `push 0x17` at `0x45605C` and `push
+0x9` at `0x489CA8`, are compared rows of the table, not written; the `0x05` slot `0x455F90` becomes
+the receiver, which applies the carried
+type's own gate and enters stock's handler with the return address stock's case pushes (`0x4553E9`,
+`0x455417`), so B3's bounds and its counters, which key on them, run unchanged; the `0x09` and `0x0B`
+slots drop a bare message; `0x48634F` stamps a copy (exact after a carried `0x09`, its birth
+read from `CreateFromNetwork`'s own record argument; after a recreate, the `0x2C`'s GameTime as a
+lower bound, from the record whose block holds the slot), then replays `mov eax,esi; pop edi; pop
+esi; pop ebp` and goes on at `0x486354`; `0x486036` decides first-free once, at
+the block's first free slot: an unheld one, else the one freed longest ago if in an earlier tick,
+never one freed this tick (arg 8 = 0 only) — a slot it takes goes on at `0x48605D`, a taken one to
+`0x486040`, and with none to take it leaves `esi` at the block's last slot and goes to `0x486040`,
+whose step ends the loop at `0x486053`, NULL, as at the unit cap; `0x486DC1` stamps the free;
+`0x4854A0` resets the tables with the array and sizes them from its count, computed as
+`0x4854E3..0x4854EF` computes it, in place of `sub esp,0x30; mov eax,[0x511DE8]`, going on at
+`0x4854A8`; `0x4653DE` sends a NULL from `0x4653D9` to the block's end `0x4654FB` (a unit goes on at
+`0x4653E6`, after the replayed `mov esi,eax; xor eax,eax; mov edi,[esp+0x34]`). `0x4654FB` runs on
+the site's own stack — the calls between clean their own arguments: `0x496E90` (`ret 0xC` at
+`0x496ED4`; it sets bit 0 of its first argument's `+0x149` and stores the other two, each at least
+200, as floats at `+0xE0` and `+0xDC`), `Game_SetLOSState 0x4816A0` and `0x48D630` (each `ret 4`,
+pushed `1` at `0x4654ED` and `0x4654F4`) — and reloads `edi`, `bl` and `ebp` itself
+(`0x4654FB..0x465503`). The stub writes nothing, so the countdown stays at −1 as stock's fire leaves
+it and fires again six passes later while its trigger holds. All are rows of
+the fail-closed table, in both builds.
+MEASURED 2026-09-25 (the plan's *B4 LANDED* section, three peers, every hit held 30 ticks by the test
+lever): hits applied to a unit younger than the delay fell from 1 562 to 0 on the owner and from
+1 406 to 1 on a bystander (0 in a second run); a hit costs 65 bytes on the wire instead of 9. After
+the fix round the owner still applied none young, both joiners computed real lower bounds with
+none unknown, and a bystander applied 52 undecidable hits on a `0x2C`-made commander copy.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -1632,13 +2041,13 @@ remainder 0 and below the array's count (`u16 main+0x14351`); an anchor by its o
 either is not damaged, and is counted. **Per thread, by a lifetime**: a call's frame is a local of
 its wrapper, on the calling thread's own C stack, and the innermost frame is a TLS slot whose
 previous value the wrapper keeps and restores, so a list block reads the innermost call's frame on
-its own thread whatever another thread runs. It has to be: `0x499EB0` is reached from the `0x0E`
-receiver (`0x49AFEB`), which runs on whichever thread pumps the network, the loader's included
-during a network load. Two facts make that receiver rarely damage anything — `0x499EB0` skips a
-projectile whose owner's player record (`main+0x1B63 + 0x14B·owner`) has `+0x73 == 3`
-(`0x49A01B..0x49A047`) [INFERRED: a remote player], and in state 5 the dispatcher passes a code
-only with bit 1 of its entry in the table `0x512BC0` (`0x454745..0x454760`, the entry read at `0x454758`; the table is zero in
-the image and filled at run time) — but neither is the safety argument. The sets live in the frame
+its own thread whatever another thread runs. `0x499EB0` is also reached from the `0x0E` receiver
+(`0x49AFEB`), which runs on the game thread only: its receive mask is 4 (`0x45200B`), which the
+dispatcher passes only in net state 6 (`0x454762..0x45477D`), set at `0x498445` after the load
+([which thread](#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)).
+The frames stay per thread: that costs nothing and asks nothing of who calls area damage.
+`0x499EB0` also skips a projectile whose owner's player record (`main+0x1B63 + 0x14B·owner`) has
+`+0x73 == 3` (`0x49A01B..0x49A047`) [INFERRED: a remote player]. The sets live in the frame
 (64 slots each, so 32 keys before one grows) and grow through `0x4D83B0`, whose failure is the engine's own out-of-memory exit.
 Both calls and both blocks are rows of the one fail-closed table and nothing else calls
 `0x49A120`, so a block never runs without a frame; if one did, it would be counted and logged once
@@ -4792,18 +5201,30 @@ clear); a unit that is itself carrying something cannot be attached (`+0x8A` mus
 by itself nor by its carrier. A unit attached to a *piece* — the one on a factory pad — has the
 bit clear and is drawn by its carrier, merged through `0x4B90A0`.
 
-**Call sites (4).** `0x455403` in a large command dispatcher (every arm `jmp`s `0x455F50`);
+**Call sites (4).** `0x455403`, the network dispatcher's case for code `0x0A` (`0x4553FE`, entry 8
+of the jump table `0x455F84`, indexed by `code − 2`), which hands it the received record;
 `0x48AB62` from the wrapper `0x48AAC0..0x48AB6A` (`ret 0x10`, 30 callers; it tests the unit alive
-and sends the `0x0A` through `0x44FDB0`/`0x451DF0` before applying it); `0x48B58B` attaching with a real
-piece; and **`0x48B5C5` the detach** — child id from `+0xA8`, parent id `0`, point `0xFF`, guarded
-on `[edi+0x86] != 0`. Detaching is "attach to nobody", and it happens in one step, so there is no
-state in which a unit is still in the chain but positioned away from its carrier.
+and sends the `0x0A` through `0x44FDB0`/`0x451DF0` before applying it); and the two in the `0x2C`
+round robin's full-state entry `0x48B3F0` (called once, at `0x48BAC3`), which replicates a remote
+unit's carrier: `0x48B58B` attaches to the carrier the stream names (a 15-bit id read at
+`0x48B56B`, the point an 8-bit read at `0x48B579`, both by the stream's bit reader), and
+**`0x48B5C5` the detach** — child id from `+0xA8`, parent id `0`, point `0xFF`, guarded on
+`[edi+0x86] != 0` when the stream says the owner's unit has no carrier. Detaching is "attach to
+nobody", and it happens in one step, so there is no state in which a unit is still in the chain but
+positioned away from its carrier (DISASSEMBLED 2026-09-25).
+
+**Neither id is bounded here.** Both are scaled into the array as they come (`0x48AB8A..0x48AB9F`,
+`0x48ABAF..0x48ABC4`). The two callers that take an id off the wire are bounded before the call,
+by B3's stubs ([the network
+receivers](#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)):
+the `0x0A` case at `0x4553FE` (both ids; a bad record is dropped) and the round robin's carrier at
+`0x48B574` (made 0). The wrapper's ids are live units' own `+0xA8`, and the round robin's child is
+its slot's own. The attach point `+5`, a byte stored into the child's `+0xF9`, is not an index into
+the unit array; its readers were not examined.
 
 **Negative results.** `0x47CB00` (no-previous-parent path) and `0x47CB40` (detach path) were not
 disassembled, and there is a **second `+0x8E` writer** in `0x47Cxxx` (`0x47CB26`, `0x47CB47`,
-`0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`) that has not been read. The enclosing
-function of `0x48B58B`/`0x48B5C5` was not delimited — `0x48B43C`'s `ret 8` is an early return
-inside it, not its end — so the COB opcode that reaches them is unidentified.
+`0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`) that has not been read.
 
 ## The mouse object, its event ring, and the two ways the cursor gets drawn — mapped by us
 
@@ -8147,7 +8568,7 @@ alive bit (`[esi+0x110] & 0x10000000`) and skips a dead unit. The tail runs, in 
 | **`0x486D9E`** | `call 0x45AAA0` | **`FreeObjectState(unit+0x9E)` — the model object is freed here** |
 | **`0x486DA3`** | `mov [esi+0x9E],ebx` (0) | **the pointer is nulled — the instruction after the free returns** |
 | `0x486DB1` / `0x486DB7` | `call 0x43DD10`; `call 0x4B4F20` | `FreeMoveClass` + free of `[unit+0]` |
-| `0x486DC7` | `mov word [esi+0xA6],0` | model index cleared |
+| `0x486DC7` | `mov word [esi+0xA6],0` | the unit's type (the UNITINFO index, the model it draws) cleared: 0 is what first-free's test at `0x486036` takes as a free slot. B4 stamps the free just before it, at `0x486DC1` |
 | **`0x486DCE`** | `and ebp,0xEFFFFFFF` → `[esi+0x110]` | **the alive bit `0x10000000` cleared — after the free** |
 | `0x486DE8` | `and al,0xCF` → `[esi+0x110]` | bits 4 and 5 (selected …) cleared |
 | `0x486DF6` | `mov [esi+0x92],[main+0x1439B]` | the type def reset to a default |

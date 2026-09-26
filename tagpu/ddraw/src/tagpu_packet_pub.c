@@ -93,6 +93,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 #include "tagpu_native.h"   /* tagpu_native_owns_unit: the ownership answer, taken here */
+#include "tagpu_patches.h"   /* tagpu_wire_format: the B3 wire section, DLL counters only */
 #include "tagpu_zoom.h"      /* tagpu_zoom_pub_window: the rect the tables cover */
 #include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 #include "tagpu_gaf.h"       /* the GAF resolvers: pure reads, taken on THIS thread */
@@ -3512,6 +3513,14 @@ static void extra(char* buf, unsigned cap, double secs)
                   " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u",
                   s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
                   s_cCursorPub, s_cCursorSkip, s_cCursorForeign, s_cCursorStuck);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        /* B3's wire section (sim-fixes.md B3): DLL counters, no engine read */
+        if (cap > n) tagpu_wire_format(buf + n, cap - n);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        /* B4's stale-hits section (sim-fixes.md B4): DLL counters, no engine read */
+        if (cap > n) tagpu_hits_format(buf + n, cap - n);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;

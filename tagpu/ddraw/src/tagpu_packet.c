@@ -905,7 +905,7 @@ static void heartbeat(PKX* m, unsigned fc)
     double secs = 0.0;
     unsigned i, total = 0, acc = 0, p50 = 0, p99 = 0, pubs, taken;
     const TAGPU_PACKET* p = m->frameHead ? (const TAGPU_PACKET*)m->slot[m->read] : NULL;
-    char b[1700];
+    char b[2040];   /* one log line: tagpu_log.c cuts at LINE_MAX, 2048 */
     int n;
 
     if (have && fc - last < PK_HEARTBEAT) return;
