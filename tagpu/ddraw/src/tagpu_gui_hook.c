@@ -2950,8 +2950,9 @@ static int s_opsLive = 0;
    that free and the next store, and no flip runs there. The frame routine's
    only caller is `0x47C741` inside the loop, so a flip returning to
    `0x47C455` is between the store and the free; the engine itself
-   dereferences the Smack again at that very instruction. The two words read out of it are DATA and
-   are bounded against the surface before they become a box.
+   dereferences the Smack again at that very instruction. The two words read
+   out of it are DATA and are bounded against the surface before they become
+   a box.
 
    THE PALETTE. The frame routine copies a new one out of the Smack into
    256 RGBX entries at `obj+0x10` (`0x47C3C8..0x47C3E9`) and hands those to
