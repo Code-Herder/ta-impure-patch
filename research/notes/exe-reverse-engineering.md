@@ -330,7 +330,7 @@ allocated, or its page cannot be made writable. Each of the twenty-three, and wh
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
 | line of sight at the map's edge `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`, `0x465DA9`, `0x408095`, `0x407F74` | simulation | what is acquired, and what the AI probe keeps |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
-| one wind for every peer `0x490C5A`, `0x491903` | simulation | projectiles and the fire spread move by the wind and wind generators produce by it, and each peer draws its own |
+| one wind for every peer `0x490C5A`, `0x491903`, `0x4982CA` | simulation | projectiles and the fire spread move by the wind and wind generators produce by it, and each peer draws its own |
 | yardmaps inside their string `0x42CF5E` | simulation | the yardmap decides where a unit can be placed, what it occupies and where others path |
 | the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
@@ -1608,13 +1608,17 @@ peers on Two Continents (wind 0 to 3000) paused at GameTime 825:
 The load's call draws nothing: it finds `next` = 0 and GameTime 0 (`0x4971BB`). The first draw
 is the first tick's.
 
-**The fix: one wind for every peer.** `fix_wind` (`tagpu_patches.c`) writes two rows of the
-fail-closed table:
-- a `jmp` at `0x490C5A` replaces `lea esi,[eax+0x37EC4]`, the draws' first instruction. It goes to
-  a stub `pushad; call wind_draw; popad; mov eax,[0x511DE8]; jmp 0x490CE8`, which leaves `eax`
-  as stock's `0x490CE3` leaves it. After `0x490CE8`, `esi` is read only by the pop at
-  `0x490D85`.
+**The fix: one wind for every peer.** `fix_wind` (`tagpu_patches.c`) writes three rows of the
+fail-closed table that change code:
+- a `jmp` at `0x490C5A` replaces `lea esi,[eax+0x37EC4]`, the draws' first instruction, after
+  `0x490C51`'s `cmp ecx,edx` (`next` against GameTime), `0x490C53`'s `jae 0x490D87` and
+  `0x490C59`'s `push esi`. It goes to a stub `pushad; call wind_draw; popad; mov eax,[0x511DE8];
+  jmp 0x490CE8`, which leaves `eax` as stock's `0x490CE3` leaves it. After `0x490CE8`, `esi` is
+  read only by the pop at `0x490D85`.
 - a `call` at `0x491903` goes to a stub that calls `wind_seed` and then jumps to `0x490C40`.
+- a `call` at `0x4982CA`, the loader thread's start, goes to a stub `pushad; call
+  wind_session_capture; popad; jmp 0x4B6B20`, so `0x4B6B20` runs with stock's stack and returns
+  to `0x4982CF`.
 
 `wind_draw` makes stock's three draws, by stock's rules, from a splitmix64 generator of its own.
 It uses neither engine RNG:
@@ -1622,61 +1626,151 @@ It uses neither engine RNG:
 - the speed is `min + r % (max − min)`, or `min` when the 32-bit difference is below 2;
 - the heading is `r % 0x10000`, drawn only when the speed is not 0.
 
-Two more rows check the bytes the stubs rest on, and the fix adds four rows in all:
+Three more rows check the bytes the stubs rest on, and the fix adds six rows in all:
 - `0x490C40`, 26 bytes: the schedule test and its `push esi`;
-- `0x490CE8`, 13 bytes: the loads where the draws rejoin.
+- `0x490CE8`, 13 bytes: the loads where the draws rejoin;
+- `0x4982C5`, 5 bytes: `push 0x497C70`, so the call hooked at `0x4982CA` is the loader's.
 
 **The seed.** `wind_seed` runs at every level load, so nothing crosses from one game to the next.
 The engine's own network test chooses its path: `GameingState +0` (through `main+0x391E9`; `0x435100`
 is `mov eax,[ecx]`) is 1 in a campaign, 2 in a skirmish and 3 in a network game, the dispatch the
 game start makes at `0x4971C7`.
-- **In a network game** the seed is the host's DirectPlay ID in the high half and a hash of the
-  map in the low half, and nothing local to a peer is read.
-- **When the engine names no host seat** in a network game, the seed is the map's hash alone,
-  counted (`network levels seeded from the map alone`) and logged.
+- **In a network game** the seed is FNV-1a 64 over DirectPlay's session instance GUID
+  (`guidInstance`) and then the map's hash, and nothing local to a peer is read.
+- **When DirectPlay names no session** in a network game (no interface, or `GetSessionDesc`
+  failed), the seed is the map's hash alone, counted (`network levels seeded from the map alone`)
+  and logged with the failing `HRESULT`.
 - **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG.
 
-**The host** is the engine's own host seat, `0x456850()`, which takes no argument and returns a
-seat in `al`, or 10 for none. It returns the first seat, 0 to 9, that meets two tests:
-- its type `+0x73` of the record (`main+0x1B63`, stride `0x14B`) is not 0;
-- bit 0 of `+0x97` is set in its PlayerInfo, the pointer at the record's `+0x27`.
+#### The engine's DirectPlay object — `main+0x14` [DISASSEMBLED 2026-09-25]
 
-Earlier in the same load the engine waits for that seat, pumping the network through `0x453D40`
-and sleeping 50 ms while it answers 10 (`0x497213..0x4972AB`). It then takes from the seat the map
-(`0x4972D6`, `0x435A20`) and the unit limit (`0x4972DB..0x4973B5`), values every peer must agree
-on; the same bit decides who damages a feature (`0x4244B0`, *Who sends a feature hit*). The seed
-takes the seat's DirectPlay ID (`+0x04`), which DirectPlay gives the whole session. MEASURED on
-`23b6b8b`:
+The executable imports `DPLAYX.dll` by ordinal only: 2 (`DirectPlayEnumerateA`, thunk `0x4FAFF0`),
+4 (`DirectPlayLobbyCreateA`, `0x4FAFF6`) and 1 (`DirectPlayCreate`, `0x4FAFFC`, called at
+`0x4CA667` and `0x4CA922`). The functions that use it trace their names through `0x4C9740`:
+the strings `HAPINET_receivepacket` … `HAPINET_getplayeraddress` sit at `0x50B0AC..0x50B4A0`, one
+more copy of `HAPINET_receivepacket` at `0x507264`. Each takes the object as its first stack
+argument, and the engine passes `main+0x14` (`add edx,0x14` at `0x451203` before
+`HAPINET_updategameinfo 0x4C9890`). Its fields, as offsets of `main`:
 
-| game | the host seat on the host | on each joiner | its DirectPlay ID on every peer |
+| `main+` | HAPINET `+` | what | written by |
 |---|---|---|---|
-| two peers, Two Continents | 0 | 1 | `0x498AE486` |
-| three peers, Town & Country | 0 | 1 and 1 | `0x498FABE4` |
+| `0x451` | `0x43D` | the application GUID | `HAPINET_initmultiplay 0x4CA5D0`, from its argument |
+| `0x461` | `0x44D` | the service provider's GUID, `DirectPlayCreate`'s first argument | `0x4CA5D0` |
+| `0x471` | `0x45D` | a `DPSESSIONDESC2` (0x50 bytes), its `dwFlags` at `main+0x475` and its `guidInstance` at `main+0x479` | see below |
+| `0x4D5` | `0x4C1` | the `IDirectPlay` from `DirectPlayCreate` | `0x4CA649` (zero), then `DirectPlayCreate` through its out pointer (`0x4CA667`); released and zeroed by `HAPINET_uninitmultiplay 0x4C9B70` (`0x4C9BC3`) |
+| `0x4D9` | `0x4C5` | **the `IDirectPlay3A*` every call goes through** | `0x4CA64B` (zero); `QueryInterface(IID_IDirectPlay3A)` at `0x4CA684`, the IID at `0x4FCD78` (`{133EFE41-32DC-11D0-9CFB-00A0C90A43CB}`, as in `dplay.h`); the lobby's `Connect` at `0x4C9B59`; `Close` (`0x4C9B92`), `Release` and zeroed at `0x4C9BA1` |
+| `0x4E1` | `0x4CD` | the `IDirectPlayLobby` | released and zeroed at `0x4C9BD9` |
+| `0x4E5` | `0x4D1` | the lobby's `DPLCONNECTION*`, 0 when not lobbied | freed and zeroed at `0x4C9C08` |
+| `0x4F1` | `0x4DD` | `dwMaxPlayers` for a new session (16, `0x4C9C31`) | |
 
-The seat index differs from peer to peer, and the ID does not.
+The `HAPINET_*` functions read here test `+0x4C5` for NULL before calling through it, and its
+writers are the four above: nothing else in the image writes `main+0x4D9`. `uninitmultiplay` has four callers (`0x4446F4`, `0x450E06`, `0x4523C8`, `0x46C1B2`),
+`initmultiplay` one (`0x4CA2C2`); the thread they run on was not traced past the shell and the
+network module [INFERRED: the game thread].
 
-**An AI seat.** `0x456850` tests the seat's type for 0 only, so an AI seat is eligible. It
-qualifies only through the host bit, and the bit's setters are three:
-- `0x45156C` sets it on the local player's PlayerInfo (`main+0x2A42`);
-- `0x45035D` and `0x452FF8` set it on the first seat whose DirectPlay ID equals the ID they search
-  for (the loops at `0x4502EE` and `0x452F89`).
+**The session description's writers.** The copy at `main+0x471` is written:
+- by `HAPINET_createnewgame 0x4C9920`, on the host: zeroed (`0x4C995E`), filled, then
+  `Open(DPOPEN_CREATE)` (vtable `+0x60`, `0x4C99DB`); then `GetSessionDesc` (`+0x58`) twice, once
+  for the size (`0x4C99F8`, expecting `DPERR_BUFFERTOOSMALL 0x8877001E`) and once into a buffer,
+  and on success its `guidInstance` is copied to `main+0x479` (`0x4C9A33..0x4C9A4C`). A failed
+  `GetSessionDesc` leaves the GUID zero;
+- by `HAPINET_joingame 0x4C9FD0`, on a joiner: zeroed, the GUID of the session to join (its
+  by-value argument) stored at `main+0x479` (`0x4CA03A`), `Open(DPOPEN_JOIN)` (`0x4CA05A`), then
+  `GetSessionDesc` (`0x4CA07D`) and its `guidInstance` copied again (`0x4CA0B8..0x4CA0CC`);
+- by `HAPINET_createorjoinlobbygame 0x4C9A70`, when lobbied: the lobby's `DPLCONNECTION`
+  `lpSessionDesc` copied whole (`0x4C9B4F`, `rep movs` of 0x14 dwords), on the host as on a joiner;
+- by the network pump, on every peer but the host: a `DPSYS_SETSESSIONDESC` (`0x104`, dispatched
+  at `0x454611..0x45461D`) is copied whole over it (`0x454689..0x454697`) when the local seat is
+  not the host seat;
+- `HAPINET_updategameinfo 0x4C9890` hands it to `SetSessionDesc` (`+0x7C`, `0x4C9903`); its caller
+  `0x451180` sets `DPSESSION_JOINDISABLED` (0x20) in `main+0x475` first when bit 4 of the local
+  PlayerInfo's `+0x9B` is set (`0x4511D2..0x4511DA`), as does the caller at `0x454135`
+  (`0x4540F0..0x4540F8`).
 
-`0x451943` clears it, and `0x45193A` copies a session flag into it. No setter tests the type.
-Whichever seat the rule returns, the seed is that seat's ID, and every peer agrees as long as the
-peers' records carry the same bit. The engine's own map and unit limit already rest on that
-premise. An AI seat was not run.
+`HAPINET_getcurrentplayers 0x4C9DD0` also calls `GetSessionDesc` (`0x4C9DFC`, `0x4C9E2A`) and
+returns `dwCurrentPlayers`. `createnewgame` leaves `dwFlags` 0: the engine's sessions are made
+without `DPSESSION_MIGRATEHOST` or `DPSESSION_KEEPALIVE`.
 
-For the record, the fix does not read PlayerNum `+0x0C`, which reads 1 for the host and 2 for the
-joiner on both peers. In single player every record reads PlayerNum 0 and a DirectPlay ID equal to
-its slot index, 0 to 3.
+#### The session, not the host [DISASSEMBLED + MEASURED 2026-09-25]
+
+**Why not the host's ID.** The host seat can change during the load. Until bit 1 of
+`main+0x38D75` is set, the game thread runs the network pump `0x453D40` in its load loop
+(`0x4984DD..0x49852E`, the call at `0x49852E`). The pump's leave case (`0x4550A0..0x4550D5`)
+calls the player removal `0x452CC0` for a remote human even during the load. The removal clears
+the seat's type (`0x463C60(0)` at `0x452E62`), sets its DirectPlay ID to −1 (`0x452E6D`), and, if
+the leaver held the host bit and bit 2 of `main+0x2A44` is set, elects a new host: the human seat
+with the highest ID (`0x452EE3..0x452FF8`). So a peer that handles a departure before its
+`0x491903` would seed from the new host, one that handles it after from the old, and one in the
+middle of the removal could read a set type beside an ID of −1. The winds would then differ for
+the rest of the game, silently.
+
+**The GUID has the property the host's ID lacks.** DirectPlay fixes a session's instance GUID when
+the session is created, and every peer holds it from the moment it enters: a joiner names it to
+`Open(DPOPEN_JOIN)` (`0x4CA03A`, `0x4CA05A`). No departure writes it, and the engine's host
+election touches only its own seat records.
+
+**How it is read.** `wind_session_capture` calls `GetSessionDesc` through `main+0x4D9` (vtable
+`+0x58`, slot 22 of `IDirectPlay3A` in `dplay.h`: `QueryInterface`, `AddRef`, `Release`, then
+`AddPlayerToGroup` … `GetPlayerName`, then `GetSessionDesc`), into a 0x400-byte stack buffer or,
+when DirectPlay asks for more, a heap one, and keeps the `guidInstance`. It runs on the **game
+thread**, from the stub at `0x4982CA`:
+- `0x4982C3..0x4982CA` is `push ebp; push ebp; push 0x497C70; call 0x4B6B20`, the CRT's
+  `_beginthread` over `CreateThread` (see *Thread creation*). `0x497C70` is referenced only by
+  that push (`0x4982C6`, the image's one absolute reference to it), and the loader body
+  `0x497180` is called only from `0x497CA1` inside it, so every seed at `0x491903` follows the
+  capture made for its own load, and the thread's creation orders the capture's stores before
+  anything the new thread reads.
+- At that call the loader thread does not exist yet. Once it runs, stock lets it call DirectPlay
+  concurrently with the game thread: the loader's wait pumps the network at `0x49727D` while the
+  game thread's load loop pumps at `0x49852E`. A call on the game thread before the loader starts
+  adds no concurrency that stock does not already have.
+
+The engine's own copy `main+0x479` is not used for the seed: the pump rewrites `main+0x471` whole
+from every `DPSYS_SETSESSIONDESC` (`0x454689`) while the loader runs, a lobbied host's copy is the
+lobby's (`0x4C9B4F`) rather than DirectPlay's, and a host whose `GetSessionDesc` failed at
+creation holds zero. It is read at the same moment, on the same thread, and logged beside
+DirectPlay's answer.
+
+**The host seat, for the record.** `0x456850()` takes no argument and returns a seat in `al`, or 10
+for none: the first seat, 0 to 9, whose type `+0x73` (records at `main+0x1B63`, stride `0x14B`)
+is not 0 and whose PlayerInfo (the pointer at the record's `+0x27`) has bit 0 of `+0x97`. The
+load waits for it only when bit 1 of the local record's `+0x21` is set: `0x49723B` tests it and
+jumps to `0x4972BA` otherwise. The wait (`0x49724D..0x4972AB`) pumps the network through
+`0x453D40` (`0x49727D`) and sleeps 50 ms while `0x456850` answers 10, the seat's `+0x96` reads
+`0xFF` or its `+0x8F` is 0. From `0x4972BA` the load takes the map from the seat `0x456850`
+answered at `0x497213` (`0x4972D6`, `0x435A20`), which past a skipped wait can be 10, and the unit
+limit from the seat it answers at `0x4972DB` (`0x4972E8..0x4973B5`, skipped when it answers 10).
+The same bit decides who damages a feature (`0x4244B0`, *Who sends a feature hit*). The seat index
+differs from peer to peer: MEASURED on `23b6b8b`, 0 on the host and 1 on each joiner, with two
+peers and with three.
+
+**The host bit's writers** (PlayerInfo `+0x97`, bit 0):
+
+| site | what |
+|---|---|
+| `0x45156C` | sets it on the local player's PlayerInfo (`main+0x2A42`) |
+| `0x451334` | writes it on a new seat's PlayerInfo as the argument `bl` is (`xor bl,cl; and ebx,1; xor ebx,ecx`), set when the seat being added is the current host seat (`0x45126F..0x451334`) |
+| `0x452FF8` | sets it on the seat the host election chooses, the first whose ID equals the one the loop at `0x452F89` searches for, when the host leaves |
+| `0x45035D` | sets it the same way (the loop at `0x4502EE`), inside `0x450240`, which has no call, no jump and no absolute reference anywhere in the image: dead |
+| `0x45193A`, `0x4280F3` | copy bit 1 of the lobby's `DPLCONNECTION` `dwFlags` (`[main+0x4E5]+4`, `DPLCONNECTION_CREATESESSION`) into it |
+| `0x451943`, `0x428117` | clear it when there is no lobby connection (`main+0x4E5` is 0) |
+| `0x46460F` | clears it, in a loop over the seat records (stride `0x14B`) |
+
+The nine word writes at `0x418D16`, `0x418DD6`, `0x418E96`, `0x418F56`, `0x419016`, `0x4190E6`,
+`0x419189`, `0x41922C` and `0x4192CF` rewrite the word with one of bits 1, 2, 3, 5 or 6 toggled
+and bit 0 kept. No setter tests the seat's type, so an AI seat that carries the bit is the seat
+`0x456850` returns. The seed no longer reads it.
 
 **The map** is FNV-1a over the lower-cased stem of the TNT path, `GameingState +0x204`:
-"Maps\Two Continents.TNT" on both peers, hashed as "two continents". The load reads the same
-pointer, as `this` for `0x435100`, at `0x491984`, so it is not NULL there.
+"Maps\Two Continents.TNT" on both peers, hashed as "two continents". `GameingState` is not NULL at
+`0x491903`: the loader body dereferences it at `0x4971CD` (`0x435100` is `mov eax,[ecx]`) on the
+only path into `0x4917D0` (`0x497CA1` → `0x497581`). Its writers are `0x434AB0(mode)`, which
+stores a new object or NULL (`0x434B64`, `0x434B78`), and `0x434B90`, which frees it and stores
+NULL (`0x434BE3`, called at `0x4917BF`).
 
-**The ordering.** The seed is written on the loader thread before the loader's last store, bit 1
-of `main+0x38D75` (`0x497C62`). The tick reads it only after the game thread has seen that bit
-(`0x498342`).
+**The ordering.** The GUID is captured on the game thread before the loader thread is created.
+The seed is written on the loader thread before the loader's last store, bit 1 of `main+0x38D75`
+(`0x497C62`). The tick reads it only after the game thread has seen that bit (`0x498342`).
 
 **MEASURED on the new build.** The values in each row were read on every peer, and are identical
 on every peer:
@@ -1689,17 +1783,29 @@ on every peer:
 | `1a0c599`, game 3, joiner restarted (host level 3, joiner level 1) | `0x4964DA8F` | 796 | 960 | 556 | `0xABFA` |
 | `23b6b8b`, two peers, Two Continents | host seat's `0x498AE486`, `0x4934CBDE` | 789 / 790 | 810 | 2745 | `0xB128` |
 | `23b6b8b`, three peers, Town & Country (wind 25 to 5000) | host seat's `0x498FABE4`, `0x29FE9EA5` | 797 / 795 / 795 | 870 | 1598 | `0x387C` |
+| session GUID, two peers, Two Continents | `{952E3FFB-DDEA-4B26-8BC6-210AD05BCACB}`, `0x4934CBDE`: seed `0x77A98479B8F3B818` | 1262 | 1350 | 1627 | `0xB693` |
+| session GUID, three peers, Town & Country, the host killed after its seed | `{D3E2100E-59EB-45F3-8124-DA6E4518236B}`, `0x29FE9EA5`: seed `0x14CE9DAA1CF3E1B0` on all three | 1131 / 1137 (the two joiners) | 1530 | 2834 | `0x0616` |
 
 Notes on the rows:
 - On `1a0c599` the host was found by PlayerNum 1. That build's draws are the ones `23b6b8b` makes.
 - The ratio `+0x37EDE` also agreed on every peer: `0x3ECB0F28` in game 1, `0x3F0C8B44` (0.549)
-  and `0x3EA3A29C` (0.3196) on `23b6b8b`.
-- The components agreed as well: 5122 and 1976 with two peers, −3142 and −584 with three.
+  and `0x3EA3A29C` (0.3196) on `23b6b8b`, `0x3EA69AD4` and `0x3F1119CE` with the session GUID.
+- The components agreed as well: 5122 and 1976 with two peers, −3142 and −584 with three on
+  `23b6b8b`; 3166 and 752, and −832 and −5606, with the session GUID.
+- On every peer of both session-GUID games the engine's copy `main+0x479` read the GUID
+  `GetSessionDesc` returned.
+- **The killed host.** The host's `TotalA.exe` was killed (`kill -9`) 3 ms after its seed line,
+  while the joiners loaded. Both joiners seeded from the same GUID and draw the same wind, and
+  both went into play. DirectPlay never reported the departure: 115 s of game time later both
+  joiners still held the host's seat with type 3 and its ID (`0x4AE1FCEC`), so the engine's
+  removal `0x452CC0` never ran and this run does not exercise it. A killed process sends no
+  `DestroyPlayer`, and the engine makes its sessions without `DPSESSION_KEEPALIVE`. The two
+  joiners' rosters also differed (one unit against two), which is stock's handling of a host lost
+  at the start and nothing the seed reads.
 
 In a skirmish on `23b6b8b` the log reads `seeded from the performance counter (game mode 2, not a
-network game)`, and the wind draws (next 420, speed 1385 at GameTime 281). The
-install line reads `limits: installed 168 sites`: the 161 before, plus these four rows and the
-yardmaps' three.
+network game)`, and the wind draws (next 420, speed 1385 at GameTime 281). The install line reads
+`limits: installed 170 sites`: the 161 before B6, plus the wind's six rows and the yardmaps' three.
 
 ### A yardmap parsed past its string — `0x42CF5E` [DISASSEMBLED + MEASURED 2026-09-25]
 

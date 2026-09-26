@@ -116,7 +116,8 @@ faces of `0x45A2EC` are left there.
   invent a projectile the owner never fired.
 - **Wind: one shared wind, re-seeded every game.** Our own generator with its own state, reset at
   each level load from the host's DirectPlay ID and a hash of the map's name; single player takes
-  the same path, seeded from the counter stock seeds its RNG with.
+  the same path, seeded from the counter stock seeds its RNG with. (Built with DirectPlay's session
+  instance GUID in place of the host's ID: see B6's deviations below.)
 - **Yardmaps: parsed inside the terminator.** Past it, the last valid char repeats; a string with
   no valid char fills `o`. Identical to stock for all 126 retail structures.
 - **Resurrection: a time-boxed measurement, else parked.** If the failure branch fires, the unit is
@@ -283,18 +284,33 @@ The plan as written:
 from B1's tip at the time), awaiting its review; not landed.** What was built, and where it differs
 from the plan below:
 
-- **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (four and three
-  rows: 168 sites in the raised build and 42 in the stock-limits build, both MEASURED at launch),
+- **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (six and three
+  rows: 170 sites in the raised build and 44 in the stock-limits build, both MEASURED at launch),
   and the three local fixes, each checked and skipped alone.
   The engine map's *The wind*, *A yardmap parsed past its string*, *The saved-game loader's order
   fallback*, *The stockpile bar's divide* and *A range circle of radius 1* have the disassembly.
-- **The path and the host are the engine's own.** A network game is the engine's test,
-  `GameingState +0` = 3 (the game start's dispatch, `0x4971C7`), not "some record looks like a
-  host"; the host is the engine's host seat `0x456850`, the seat the load already waits for and
-  takes the map and the unit limit from, and the seed is its DirectPlay ID. Inside a network game
-  nothing local to a peer is read: with no host seat the seed is the map's hash alone, counted. TADR
-  instead takes the host's ID with a clock fallback. MEASURED: the host seat is 0 on the host and
-  1 on each joiner, and its ID the same on every peer, with two peers and with three.
+- **The path is the engine's own.** A network game is the engine's test, `GameingState +0` = 3
+  (the game start's dispatch, `0x4971C7`), not "some record looks like a host". Inside a network
+  game nothing local to a peer is read: when DirectPlay names no session the seed is the map's hash
+  alone, counted. TADR instead takes the host's ID with a clock fallback.
+- **Changed: the network seed is DirectPlay's session instance GUID, not the host's DirectPlay
+  ID.** The owner's decision named "host DPID + map hash". A focused review showed the host seat can
+  change during the load: until the load ends the game thread pumps the network
+  (`0x4984DD..0x49852E`), and the pump's leave case removes a departing human (`0x452CC0`: type
+  cleared, ID −1) and, for the host, elects the human seat with the highest ID
+  (`0x452EE3..0x452FF8`). A peer that handles the departure before its seed at `0x491903` would
+  read the new host, one that handles it after the old, one mid-removal a set type beside an ID of
+  −1, and the winds would differ for the rest of the game, silently — a timing-dependent seed.
+  The session's instance GUID is fixed when DirectPlay creates the session, every peer holds it
+  from the moment it joins (a joiner names it to `Open(DPOPEN_JOIN)`, `0x4CA03A`), and no departure
+  or host election writes it. It is read with `GetSessionDesc` through the engine's
+  `IDirectPlay3A*` (`main+0x4D9`) on the game thread, from a stub on the loader thread's start
+  (`0x4982CA`): before that thread exists, so the call adds no DirectPlay concurrency stock does
+  not already have (stock's loader pumps the network at `0x49727D` while the game thread pumps at
+  `0x49852E`), and the thread's creation orders the capture before the seed. The engine's own copy
+  `main+0x479` is logged but not used: the pump rewrites it from every `DPSYS_SETSESSIONDESC`
+  while the loader runs, and a lobbied host's copy is the lobby's. The engine map's *The session,
+  not the host* has the disassembly.
 - **Stock's load call draws nothing.** It finds `next` = 0 (`0x4918FD`) and GameTime 0, so the seed
   at `0x491903` precedes every draw, and the first draw is the first tick's.
 - **Changed: B6 logs a line of its own** (`patch_loader_defects`), not a clause of B1's
@@ -302,19 +318,28 @@ from the plan below:
 - **Changed: a stockpile order whose slot index is above 2 draws no bar.** The extra-weapons
   module's slots past the third are not inline slots, and the engine's bar has no reader for them.
 - **Evidence.** The wind is reproduced on the previous build: two peers paused at GameTime 825
-  read speed 2525, heading `0xF5C6`, and 1498, `0xC827`. On the new build every peer read the same
-  next change, speed and heading in five games: a first one, sampled twice (at 795 and at 2003
-  or 2006); a second in the same processes; a third after restarting the joiner, where the host
-  was on its third level load and the joiner on its first; and, on the host-seat rule, one with two
-  peers and one with three (components and ratio equal too). A skirmish reads game mode 2 and
+  read speed 2525, heading `0xF5C6`, and 1498, `0xC827`. Every peer read the same next change,
+  speed and heading in five games on the earlier seeds: a first one, sampled twice (at 795 and at
+  2003 or 2006); a second in the same processes; a third after restarting the joiner, where the
+  host was on its third level load and the joiner on its first; and, on the host-seat rule, one
+  with two peers and one with three (components and ratio equal too). On the session-GUID seed:
+  two peers on Two Continents logged the same GUID and seed and, paused at GameTime 1262, read
+  next 1350, speed 1627, heading `0xB693`; three peers on Town & Country logged the same GUID and
+  seed, the host was killed 3 ms after its own seed while the joiners loaded, and both joiners went
+  into play reading next 1530, speed 2834, heading `0x0616` at GameTime 1131 and 1137. On every
+  peer the engine's copy `main+0x479` held the GUID `GetSessionDesc` returned. A skirmish reads game mode 2 and
   takes the counter path. The yardmaps' 2440 retail cells are
   byte-identical to the previous build's. The two scratch structures read `2f2f31313100002b2b…`
   from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
   three local fixes rest on the disassembly: none of their inputs is in stock content, and the
   `ShowRanges` cheat could not be typed under injected input.
 - **Not measured:** the side measurement this landing was to carry (a tracked unit's death leaving
-  an order armed, and our build ghost drawing) did not fit its time budget; nor a network game with
-  an AI seat (the engine map's *The wind* says what the rule does with one).
+  an order armed, and our build ghost drawing) did not fit its time budget. The engine's removal
+  of a departed host during the load was not exercised: DirectPlay never reported the killed host
+  (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
+  `DPSESSION_KEEPALIVE`), and a host cannot quit through the UI during the load. The departure
+  argument rests on the construction: the seed reads nothing a departure writes. A lobbied game
+  (a `DPLCONNECTION` from a lobby) was not run; the seed reads DirectPlay's own record there too.
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
   before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,

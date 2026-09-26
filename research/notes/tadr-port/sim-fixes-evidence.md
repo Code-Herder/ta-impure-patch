@@ -2233,7 +2233,9 @@ two peers and wind generators only: pause, then compare each player's energy pro
 - Our own generator: a specified Park–Miller or xorshift with **its own state**, never the sim RNG
   or the CRT.
 - **Reset at every level load** at `0x491903`, before the first call, from a value every peer
-  shares: the host's DirectPlay ID, mixed with a hash of the map name. Single player takes the same
+  shares: the host's DirectPlay ID, mixed with a hash of the map name (built instead from
+  DirectPlay's session instance GUID: the host's ID can change during the load, see the plan's B6
+  deviations). Single player takes the same
   path, seeded from the counter stock seeds its RNG with, so it stays random per game (decided).
 - It replaces both the schedule draw and the two value draws. They run on the game thread only:
   the tick's call is there, and the level load's call, on the loader thread, finds `next` = 0 and
