@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include <wincrypt.h>
+#include <dplay.h>          /* the engine's interface is IDirectPlay3A (IID at 0x4FCD78) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3368,11 +3369,10 @@ static void patch_engine_defects(void)
    three are local, each checked, written and skipped on its own. */
 
 #define B6_MAIN        0x00511DE8u
-#define B6_PLAYERS     0x1B63u        /* main+ : PlayerStruct[10], stride 0x14B            */
-#define B6_PSTRIDE     0x14Bu
 #define B6_TNT         0x391E9u       /* main+ : GameingState*; its +0x204 the TNT path    */
 #define B6_NETWORK     3              /* GameingState's +0: 1 campaign, 2 skirmish, 3 network */
-#define B6_HOST_SEAT   0x00456850u    /* the seat with the host bit, 10 for none            */
+#define B6_DPLAY       0x4D9u         /* main+ : the engine's IDirectPlay3A*, NULL when none */
+#define B6_DESC_GUID   0x479u         /* main+ : guidInstance of the engine's session copy */
 
 /* THE WIND [DISASSEMBLED]. The wind updater 0x490C40 has two callers: the level load
    LoadGameData_Main 0x4917D0 at 0x491903, on the loader thread, and the tick 0x495490 at
@@ -3399,31 +3399,60 @@ static void patch_engine_defects(void)
    or min when max - min, taken in 32 bits as 0x490CA1 takes it, is below 2; the heading
    r % 0x10000, drawn only when the speed is not 0. A jmp at 0x490C5A, the draws' first
    instruction (after 0x490C59's push esi), goes to a stub that calls wind_draw and rejoins at
-   0x490CE8 with eax the main pointer, as stock's 0x490CE3 leaves it; esi, which stock points at `next`, is read after 0x490CE8 only by its pop at
-   0x490D85. The load's call at 0x491903 goes through a stub that seeds the generator first:
-   in a network game from the host's DirectPlay ID and a hash of the map's name, or from the
-   map's hash alone when the engine names no host seat; otherwise from QueryPerformanceCounter,
-   the counter stock seeds its own RNG with.
+   0x490CE8 with eax the main pointer, as stock's 0x490CE3 leaves it; esi, which stock points
+   at `next`, is read after 0x490CE8 only by its pop at 0x490D85. The load's call at 0x491903
+   goes through a stub that seeds the generator first: in a network game from DirectPlay's
+   session instance GUID and a hash of the map's name, or from the map's hash alone when
+   DirectPlay names no session; otherwise from QueryPerformanceCounter, the counter stock seeds
+   its own RNG with.
+   THE SESSION, NOT THE HOST [DISASSEMBLED]. The engine's DirectPlay object (its trace strings
+   "HAPINET_*" at 0x50B0AC..0x50B4A0) lives in main at +0x14: its IDirectPlay3A* is main+0x4D9
+   (QueryInterface for IID_IDirectPlay3A 0x4FCD78 at 0x4CA684, or the lobby's Connect at
+   0x4C9B59; Released and zeroed at 0x4C9B92..0x4C9BA1), its DPSESSIONDESC2 main+0x471. The
+   session's instance GUID is fixed when the session is created and every peer holds it from
+   the moment it enters: a joiner names it to Open(DPOPEN_JOIN) (0x4CA03A, 0x4CA05A). No
+   departure changes it. The host's DirectPlay ID does not have that property: until bit 1 of
+   main+0x38D75 is set the game thread pumps the network in its load loop (0x4984DD..0x49852E),
+   and the pump's leave case removes a remote human even during the load (0x452CC0: the seat's
+   type cleared at 0x452E62, its ID set to -1 at 0x452E6D) and, when the leaver held the host
+   bit, elects the human seat with the highest ID (0x452EE3..0x452FF8). A seed read from the
+   host seat depends on whether a peer handled a departure before its 0x491903.
+   The GUID is read with GetSessionDesc (vtable +0x58, the call the engine makes at 0x4C99F8 and
+   0x4CA07D) by wind_session_capture, on the GAME THREAD, from a stub on the call that starts the
+   loader thread, 0x4982CA (`call 0x4B6B20`, the CRT's _beginthread over CreateThread).
+   0x497C70 is started only there and the loader body 0x497180 is called only from it
+   (0x497CA1), so every seed at 0x491903 follows the capture made for its own load, and thread
+   creation orders the capture's stores before anything the new thread reads. At that call the
+   loader thread does not exist yet; stock lets it call DirectPlay concurrently with the game
+   thread once it runs (its wait pumps the network at 0x49727D while the game thread pumps at
+   0x49852E), so a call on the game thread before it starts adds no concurrency that stock does
+   not already have. The engine's own copy main+0x479 is not used: the pump rewrites main+0x471
+   whole from every DPSYS_SETSESSIONDESC it receives (0x454689) while the loader runs, and a
+   lobbied host's copy is the lobby's (0x4C9B4F), not DirectPlay's. It is logged beside
+   DirectPlay's answer.
    THE INVARIANT: in a network game every peer draws the same wind at the same GameTime. It
    rests on
      - the seed, the same on every peer and made again at every level load, so nothing crosses
        from one game to the next. Which path it takes is the engine's own network test,
        GameingState's +0 == 3 (0x435100 is `mov eax,[ecx]`; the load dispatches on it at
-       0x4971C7), and inside a network game no path reads anything local to a peer. The host
-       is the engine's own host seat, 0x456850: the first seat whose type +0x73 is set and
-       whose PlayerInfo (+0x27) has bit 0 of +0x97. Earlier in the same load the engine waits
-       for that seat (0x497213..0x4972AB, pumping the network while it answers 10) and takes
-       from it the map (0x4972D6) and the unit limit (0x4972DB..0x4973B5), values every peer
-       must agree on. Its DirectPlay ID (+0x04) is session-wide. The map is the TNT stem every peer loaded
-       (GameingState +0x204, "Maps\Two Continents.TNT" on both peers MEASURED);
+       0x4971C7), and inside a network game no path reads anything local to a peer: the
+       session's GUID, which no departure changes, or nothing; and the map, the TNT stem every
+       peer loaded (GameingState +0x204, "Maps\Two Continents.TNT" on both peers MEASURED);
      - the draws, made only by the tick's call, once for each GameTime value on every peer, each
        consuming a number of values fixed by the map's range and the values drawn before it;
-     - an ordering: the seed is written on the loader thread before the loader's last store,
-       bit 1 of main+0x38D75 (0x497C62), and read only by the tick, which the game thread runs
-       after it has seen that bit (0x498342): the handshake every value of the load rests on.
+     - an ordering: the GUID is captured on the game thread before the loader thread is
+       created; the seed is written on the loader thread before the loader's last store, bit 1
+       of main+0x38D75 (0x497C62), and read only by the tick, which the game thread runs after
+       it has seen that bit (0x498342): the handshake every value of the load rests on.
    CLASS: simulation, fail closed. A peer without it draws another wind. */
 static unsigned long long s_windState;          /* loader thread writes, then GAME THREAD   */
 static volatile LONG s_windLevels;              /* level loads seeded, peekable              */
+
+/* the GAME THREAD writes these at 0x4982CA; the loader thread that call creates reads them */
+static GUID    s_windSession;                   /* DirectPlay's guidInstance                 */
+static GUID    s_windEngineCopy;                /* the engine's copy, main+0x479, for the log */
+static int     s_windSessionOk;                 /* 1: s_windSession is this load's           */
+static HRESULT s_windSessionHr;                 /* GetSessionDesc's failure, or 0            */
 
 static unsigned int wind_next(void)
 {
@@ -3433,7 +3462,55 @@ static unsigned int wind_next(void)
     return (unsigned int)((z ^ (z >> 31)) >> 32);
 }
 
-static volatile LONG s_windMapOnly;             /* network loads with no host seat, peekable */
+static volatile LONG s_windMapOnly;             /* network loads with no session, peekable   */
+
+/* GAME THREAD, at 0x4982CA, before the loader thread exists: DirectPlay's own record of the
+   session this peer is in. A failure leaves s_windSessionOk 0 and the network seed takes the
+   map alone. */
+static void __cdecl wind_session_capture(void)
+{
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    IDirectPlay3A* dp;
+    union { DPSESSIONDESC2 desc; unsigned char b[0x400]; } local;
+    unsigned char* buf = local.b;
+    DWORD size = sizeof local;
+    HRESULT hr;
+    s_windSessionOk = 0;
+    memcpy(&s_windEngineCopy, ta + B6_DESC_GUID, sizeof s_windEngineCopy);
+    memcpy(&dp, ta + B6_DPLAY, sizeof dp);
+    if (!dp) { s_windSessionHr = DPERR_UNINITIALIZED; return; }
+    hr = IDirectPlay3_GetSessionDesc(dp, buf, &size);
+    if (hr == DPERR_BUFFERTOOSMALL && size > sizeof local) {
+        buf = (unsigned char*)HeapAlloc(GetProcessHeap(), 0, size);
+        hr = buf ? IDirectPlay3_GetSessionDesc(dp, buf, &size) : E_OUTOFMEMORY;
+    }
+    if (SUCCEEDED(hr) && size >= sizeof(DPSESSIONDESC2)) {
+        memcpy(&s_windSession, &((const DPSESSIONDESC2*)buf)->guidInstance, sizeof(GUID));
+        s_windSessionOk = 1;
+        s_windSessionHr = 0;
+    } else {
+        s_windSessionHr = SUCCEEDED(hr) ? E_UNEXPECTED : hr;
+    }
+    if (buf && buf != local.b) HeapFree(GetProcessHeap(), 0, buf);
+}
+
+/* FNV-1a 64 over the session's GUID, then the map's hash */
+static unsigned long long wind_session_seed(const GUID* g, unsigned int map)
+{
+    const unsigned char* p = (const unsigned char*)g;
+    unsigned long long h = 0xCBF29CE484222325ull;
+    int i;
+    for (i = 0; i < 16; i++) h = (h ^ p[i]) * 0x100000001B3ull;
+    for (i = 0; i < 4; i++) h = (h ^ ((map >> (8 * i)) & 0xFFu)) * 0x100000001B3ull;
+    return h;
+}
+
+static void wind_guid_text(const GUID* g, char* out, size_t room)
+{
+    snprintf(out, room, "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+             (unsigned long)g->Data1, g->Data2, g->Data3, g->Data4[0], g->Data4[1],
+             g->Data4[2], g->Data4[3], g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+}
 
 /* FNV-1a over the TNT path's stem, case folded: "Maps\Two Continents.TNT" -> "two continents" */
 static unsigned int wind_map_hash(const char* gs, char* stem, unsigned int room)
@@ -3462,25 +3539,32 @@ static void __cdecl wind_seed(void)
     int mode;
     unsigned int map;
     LONG level = InterlockedIncrement(&s_windLevels);
-    /* GameingState is not NULL here: the load dereferences it right after, as `this` for
-       0x435100 (0x491984) */
+    /* GameingState is not NULL here: the loader body dereferenced it at 0x4971CD, as `this`
+       for 0x435100, on the only path into 0x4917D0 (0x497CA1 -> 0x497581) */
     memcpy(&gs, ta + B6_TNT, sizeof gs);
     memcpy(&mode, gs, sizeof mode);
     map = wind_map_hash(gs, stem, sizeof stem);
     if (mode == B6_NETWORK) {
-        unsigned int seat = ((unsigned char (__cdecl*)(void))(size_t)B6_HOST_SEAT)() & 0xFFu;
-        if (seat < 10) {
-            unsigned int host;
-            memcpy(&host, ta + B6_PLAYERS + seat * B6_PSTRIDE + 0x04, sizeof host);
-            s_windState = ((unsigned long long)host << 32) | map;
-            tagpu_logf("enginefix: wind: level %ld seeded from host seat %u's DirectPlay ID "
-                       "0x%08X and the map \"%s\" (0x%08X)", (long)level, seat, host, stem, map);
+        char copy[40];
+        wind_guid_text(&s_windEngineCopy, copy, sizeof copy);
+        if (s_windSessionOk) {
+            char guid[40];
+            wind_guid_text(&s_windSession, guid, sizeof guid);
+            s_windState = wind_session_seed(&s_windSession, map);
+            tagpu_logf("enginefix: wind: level %ld seeded from the session %s and the map \"%s\" "
+                       "(0x%08X): seed 0x%08X%08X; the engine's copy main+0x479 %s %s",
+                       (long)level, guid, stem, map, (unsigned int)(s_windState >> 32),
+                       (unsigned int)s_windState,
+                       memcmp(&s_windEngineCopy, &s_windSession, sizeof(GUID)) ? "differs:"
+                                                                                : "agrees:",
+                       copy);
         } else {
             LONG n = InterlockedIncrement(&s_windMapOnly);
             s_windState = map;
-            tagpu_logf("enginefix: wind: level %ld is a network game with no host seat: seeded "
-                       "from the map \"%s\" (0x%08X) alone (%ld so far)", (long)level, stem, map,
-                       (long)n);
+            tagpu_logf("enginefix: wind: level %ld is a network game and DirectPlay named no "
+                       "session (0x%08lX): seeded from the map \"%s\" (0x%08X) alone (%ld so "
+                       "far); the engine's copy main+0x479 reads %s", (long)level,
+                       (unsigned long)s_windSessionHr, stem, map, (long)n, copy);
         }
     } else {
         LARGE_INTEGER c;
@@ -3524,8 +3608,14 @@ static int fix_wind(void)
     };
     static const unsigned char draws[6] = { 0x8D, 0xB0, 0xC4, 0x7E, 0x03, 0x00 };
     static const unsigned char load[5]  = { 0xE8, 0x38, 0xF3, 0xFF, 0xFF };  /* call 0x490C40 */
-    unsigned char *a, *b, *p;
-    if (!(a = fix_code(24)) || !(b = fix_code(16))) { lim_no_stub(); return FIX_TABLE; }
+    static const unsigned char start[10] = {       /* push 0x497C70; call 0x4B6B20 */
+        0x68, 0x70, 0x7C, 0x49, 0x00, 0xE8, 0x51, 0xE8, 0x01, 0x00,
+    };
+    unsigned char *a, *b, *c, *p;
+    if (!(a = fix_code(24)) || !(b = fix_code(16)) || !(c = fix_code(16))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
     p = a;
     *p++ = 0x60;                                                /* pushad               */
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_draw); p += 4;
@@ -3538,6 +3628,14 @@ static int fix_wind(void)
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_seed); p += 4;
     *p++ = 0x61;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00490C40);
+    p = c;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_session_capture); p += 4;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004B6B20);
+    lim_same(0x004982C5, 5, start, "wind: the loader thread's entry 0x497C70");
+    lim_branch(0x004982CA, 5, start + 5, 0xE8, (unsigned int)(size_t)c,
+               "wind: the loader thread's start, capturing the session first");
     lim_same(0x00490C40, sizeof test, test, "wind: the schedule's test");
     lim_branch(0x00490C5A, sizeof draws, draws, 0xE9, (unsigned int)(size_t)a,
                "wind: the draws, from our generator");
@@ -3747,10 +3845,11 @@ static void patch_loader_defects(void)
     int save = fix_save_order_fallback();
     int bar  = fix_stockpile_bar();
     int ring = fix_range_circle();
-    tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903) %s; yardmaps parsed "
-               "inside their string (0x42CF5E) %s; the saved-game order fallback (0x43A58D) %s; "
-               "the stockpile bar's divide (0x439D41) %s; a range circle of radius 1 "
-               "(0x438EDE) %s. Counters: levels seeded at 0x%08X, network levels seeded from "
+    tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA) %s; yardmaps "
+               "parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
+               "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "
+               "radius 1 (0x438EDE) %s. Counters: levels seeded at 0x%08X, network levels "
+               "seeded from "
                "the map alone at 0x%08X, yardmaps filled past their string at 0x%08X",
                fix_state(wind), fix_state(yard), fix_state(save), fix_state(bar),
                fix_state(ring), (unsigned int)(size_t)&s_windLevels,
