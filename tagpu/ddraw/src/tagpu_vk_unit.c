@@ -180,7 +180,7 @@
 
 /* the two vertex bindings, which are the bake's two streams */
 #define GEOM_STRIDE (TAGPU_PB_GEOMST * 4)  /* 32 */
-#define MAT_STRIDE  (TAGPU_PB_MATST * 4)   /* 20 */
+#define MAT_STRIDE  (TAGPU_PB_MATST * 4)   /* 52 */
 
 /* the fog grid is RG8 and the widest the wide-fog builder produces is well
    inside this; a bound here is what keeps a handed-over number from sizing an
@@ -1056,7 +1056,9 @@ static int build_layouts(const TAGPU_VKPASS* d)
 }
 
 /* The two vertex bindings, which are the bake's two streams (GEOM_STRIDE,
-   MAT_STRIDE), and the seven attributes at the locations the shaders declare. */
+   MAT_STRIDE), and the ten attributes at the locations the shaders declare
+   (tagpu_posebake.h spells the material stream's floats). */
+#define NATTR 10
 static void vertex_layout(VkVertexInputBindingDescription* vb,
                           VkVertexInputAttributeDescription* va,
                           VkPipelineVertexInputStateCreateInfo* vi)
@@ -1064,7 +1066,7 @@ static void vertex_layout(VkVertexInputBindingDescription* vb,
     memset(vb, 0, sizeof vb[0] * 2);
     vb[0].binding = 0; vb[0].stride = GEOM_STRIDE; vb[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     vb[1].binding = 1; vb[1].stride = MAT_STRIDE;  vb[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    memset(va, 0, sizeof va[0] * 7);
+    memset(va, 0, sizeof va[0] * NATTR);
     va[0].location = 0; va[0].binding = 0; va[0].format = VK_FORMAT_R32G32B32_SFLOAT; va[0].offset = 0;
     va[1].location = 1; va[1].binding = 0; va[1].format = VK_FORMAT_R32G32B32_SFLOAT; va[1].offset = 12;
     va[2].location = 2; va[2].binding = 0; va[2].format = VK_FORMAT_R32_SFLOAT;       va[2].offset = 24;
@@ -1072,17 +1074,20 @@ static void vertex_layout(VkVertexInputBindingDescription* vb,
     va[4].location = 4; va[4].binding = 1; va[4].format = VK_FORMAT_R32G32_SFLOAT;    va[4].offset = 0;
     va[5].location = 5; va[5].binding = 1; va[5].format = VK_FORMAT_R32G32_SFLOAT;    va[5].offset = 8;
     va[6].location = 6; va[6].binding = 1; va[6].format = VK_FORMAT_R32_SFLOAT;       va[6].offset = 16;
+    va[7].location = 7; va[7].binding = 1; va[7].format = VK_FORMAT_R32G32_SFLOAT;    va[7].offset = 20;
+    va[8].location = 8; va[8].binding = 1; va[8].format = VK_FORMAT_R32G32_SFLOAT;    va[8].offset = 28;
+    va[9].location = 9; va[9].binding = 1; va[9].format = VK_FORMAT_R32G32B32A32_SFLOAT; va[9].offset = 36;
     vi->sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi->pNext = NULL; vi->flags = 0;
     vi->vertexBindingDescriptionCount = 2;   vi->pVertexBindingDescriptions = vb;
-    vi->vertexAttributeDescriptionCount = 7; vi->pVertexAttributeDescriptions = va;
+    vi->vertexAttributeDescriptionCount = NATTR; vi->pVertexAttributeDescriptions = va;
 }
 
 static int build_body_pipeline(const TAGPU_VKPASS* d)
 {
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb[2];
-    VkVertexInputAttributeDescription va[7];
+    VkVertexInputAttributeDescription va[NATTR];
     VkPipelineVertexInputStateCreateInfo vi;
     VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
@@ -1308,7 +1313,7 @@ static int build_shadow_pipelines(const TAGPU_VKPASS* d)
 {
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb[2];
-    VkVertexInputAttributeDescription va[7];
+    VkVertexInputAttributeDescription va[NATTR];
     VkPipelineVertexInputStateCreateInfo vi;
     VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
@@ -1429,7 +1434,7 @@ static int build_cast_pipeline(const TAGPU_VKPASS* d, VkRenderPass rp)
 {
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb[2];
-    VkVertexInputAttributeDescription va[7];
+    VkVertexInputAttributeDescription va[NATTR];
     VkPipelineVertexInputStateCreateInfo vi;
     VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };

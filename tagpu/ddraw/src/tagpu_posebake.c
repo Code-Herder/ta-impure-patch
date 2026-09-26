@@ -497,14 +497,65 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
 /* ---- the material stream ------------------------------------------------ */
 typedef struct { int nv; int owner; int nskip; int anom; int over; int defer; } PBMATCTX;
 
+/* A TEXTURED QUAD'S OWN FRAME, which is what lets the fragment stage map it
+   per pixel. The engine pins a quad's four corners to the frame's four
+   (0x4C8760) and fills between them; two triangles with affine uv bend the
+   texture along the diagonal of every quad that is not a parallelogram (a
+   solar collector's opened panels). The fragment stage inverts the bilinear
+   map P(s,t) = P0 + s e + t f + s t (P2 - P1 - P3 + P0) instead, in the frame
+   where P0 = (0,0), P1 = (1,0), P3 = (0,1) and P2 = (a,b): each corner carries
+   its point in that frame and the rasteriser interpolates it. That is exact
+   because every step from the rest vertices to the screen is affine -- the
+   piece transform is rigid, the engine's projection (px = x, py = -z - y/2)
+   is linear, the zoom is a scale -- and an affine map moves (s,t) nowhere, so
+   the mapping belongs to the model and does not swim as it turns.
+
+   (a,b) is the least-squares fit of P2 - P0 on e = P1 - P0 and f = P3 - P0:
+   exact for a planar quad. For one that is not, the two triangles still agree
+   along their shared diagonal, since both carry P2's point.
+
+   Returns 0 -- the face keeps its per-triangle uv -- unless the quad is convex
+   in that frame (a > 0, b > 0, a + b > 1). The bilinear map's Jacobian is
+   1 + s(b-1) + t(a-1), which is 1, b, a and a + b - 1 at the four corners and
+   linear between them: convex is exactly "one-to-one over the face", and it
+   is what makes the root the fragment stage takes (tagpu_native.c
+   `taQuadST`) the only one on the face.
+   The margin keeps a quad that has all but folded into a triangle, whose
+   texture pinches to a point, on the triangles. The corners are bounded
+   against the node's vertex count here: the walk bounds only the three
+   corners of the triangle it hands over. */
+static int quad_frame(const int* rv, int nvert, const char* fa, float* qa, float* qb)
+{
+    const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
+    float P[4][3], e[3], f[3], d[3];
+    float ee = 0.0f, ff = 0.0f, ef = 0.0f, de = 0.0f, df = 0.0f, det, a, b;
+    int k, r;
+    for (k = 0; k < 4; k++) {
+        if (idx[k] >= nvert) return 0;
+        for (r = 0; r < 3; r++) P[k][r] = (float)rv[idx[k] * 3 + r] / 65536.0f;
+    }
+    for (r = 0; r < 3; r++) {
+        e[r] = P[1][r] - P[0][r]; f[r] = P[3][r] - P[0][r]; d[r] = P[2][r] - P[0][r];
+        ee += e[r] * e[r]; ff += f[r] * f[r]; ef += e[r] * f[r];
+        de += d[r] * e[r]; df += d[r] * f[r];
+    }
+    det = ee * ff - ef * ef;
+    if (!(det > 1e-6f * ee * ff)) return 0;       /* e and f (nearly) parallel */
+    a = (de * ff - df * ef) / det;
+    b = (df * ee - de * ef) / det;
+    if (!(a > 1.0f / 64.0f && b > 1.0f / 64.0f && a + b > 1.0f + 1.0f / 64.0f)) return 0;
+    *qa = a; *qb = b;
+    return 1;
+}
+
 static void mat_emit(void* vctx, int range, int p, const char* nd,
                      const int* rv, int nvert, const char* fa, int fvc,
                      const unsigned short* vi, const int* slot, int n)
 {
     PBMATCTX* c = (PBMATCTX*)vctx;
-    float uv[4], ckf = -1.0f, colv = 0.0f;
-    int hasTex = 0, skip = 0, t;
-    (void)p; (void)nd; (void)rv; (void)nvert; (void)vi;
+    float uv[4], ckf = -1.0f, colv = 0.0f, qa = 1.0f, qb = 1.0f;
+    int hasTex = 0, skip = 0, quad = 0, t;
+    (void)p; (void)nd; (void)vi;
     /* the geometry walk bounded itself and the two are supposed to agree, but
        the check that says so runs after this loop — so bound it here as well
        rather than trusting the invariant with the scratch buffer */
@@ -539,6 +590,8 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
             else        colv = (float)fc / 255.0f;
         }
     }
+    if (range == TAGPU_PB_BODY && hasTex && fvc == 4)
+        quad = quad_frame(rv, nvert, fa, &qa, &qb);
     for (t = 0; t < n; t++) {
         float* o = s_scratchM + (size_t)(c->nv + t) * TAGPU_PB_MATST;
         if (range == TAGPU_PB_BODY && hasTex) {
@@ -554,6 +607,16 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
             o[3] = -1.0f;
         }
         o[4] = skip ? 1.0f : 0.0f;
+        if (quad) {
+            /* corner 0 (0,0), 1 (1,0), 2 (a,b), 3 (0,1): quad_frame's frame */
+            o[5] = slot[t] == 1 ? 1.0f : slot[t] == 2 ? qa : 0.0f;
+            o[6] = slot[t] == 3 ? 1.0f : slot[t] == 2 ? qb : 0.0f;
+            o[7] = qa; o[8] = qb;
+            o[9] = uv[0]; o[10] = uv[1]; o[11] = uv[2]; o[12] = uv[3];
+        } else {
+            o[5] = 0.0f; o[6] = 0.0f; o[7] = 1.0f; o[8] = 1.0f;
+            o[9] = o[10] = o[11] = o[12] = -1.0f;
+        }
         s_scratchSkip[c->nv + t] = (unsigned char)skip;
     }
     c->nv += n;
@@ -608,7 +671,7 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     }
     /* WHAT THE VERTEX LAYOUT IS, recorded because the consumer has to
        reproduce it and nothing else in this file states it. Locations 0-3 come
-       off the geometry stream (the type's), 4-6 off this material stream -- the
+       off the geometry stream (the type's), 4-9 off this material stream -- the
        same split the two mirrors have, so either can be re-baked without
        touching the other. tagpu_vk_unit.c builds its own binding from the two
        mirrors. */

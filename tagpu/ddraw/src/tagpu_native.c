@@ -372,8 +372,11 @@ static const char* VS =
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
+    "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
     "void main(){\n"
     "  vLine = vec4(0.0); vLineOn = 0;\n"
+    /* the lab's geometry carries no quad frame: every face keeps aUV */
+    "  vQH = vec2(0.0); vQAB = vec2(1.0); vQR = vec4(-1.0);\n"
     "  vec2 p = (aPos.xy + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
@@ -393,6 +396,7 @@ static const char* FS =
     "in vec2 vUV; flat in vec2 vFC; flat in float vShade; in vec2 vWorld;\n"
     "in float vEnc; in float vVY; flat in vec3 vNrm; in vec3 vShW;\n"
     "flat in vec4 vLine; flat in int vLineOn;\n"
+    "in vec2 vQH; flat in vec2 vQAB; flat in vec4 vQR;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uPal;\n"              /* 256x1 RGBA, the engine's table */
     "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin, mipped */
@@ -421,23 +425,50 @@ static const char* FS =
     "uniform ivec4 uGrid;\n"
     TAGPU_GLSL_LIGHT_FN
     TAGPU_GLSL_LINE_FN
+    /* THE INVERSE OF A TEXTURED QUAD'S BILINEAR MAP, in the frame
+       tagpu_posebake.c `quad_frame` builds, whose corners are (0,0) (1,0)
+       (a,b) (0,1): the (s,t) whose bilinear point is h. With g = (a-1, b-1)
+       that point is (s + s t gx, t + s t gy), so t solves
+       gx t^2 + (1 + hx gy - hy gx) t - hy = 0. The quadratic's slope at a
+       root is the map's Jacobian there, so the root on the face is the one
+       with the positive square root, and a convex quad (all the bake hands
+       over) has no other; written as 2 hy / (k1 + sqrt(D)) it stays finite
+       as gx goes to 0 and is exactly hy on a parallelogram. Not clamped: the
+       caller takes its derivatives from this. */
+    "vec2 taQuadST(vec2 h, vec2 ab){\n"
+    "  vec2 g = ab - 1.0;\n"
+    "  float k1 = 1.0 + h.x * g.y - h.y * g.x;\n"
+    "  float D = max(k1 * k1 + 4.0 * g.x * h.y, 0.0);\n"
+    "  float qt = 2.0 * h.y / max(k1 + sqrt(D), 1e-6);\n"
+    "  return vec2(h.x / max(1.0 + g.x * qt, 1e-6), qt);\n"
+    "}\n"
     "void main(){\n"
     /* the shadow point's screen derivatives FIRST, while every fragment of
        the quad is still running -- the discards below end that (tagpu_glsl.h) */
     "  vec3 taSx = dFdx(vShW), taSy = dFdy(vShW);\n"
-    /* Classic++: the twin is sampled HERE, before any discard, because it is
-       mipmapped and its implicit derivatives are only defined while every
+    /* THE TEXEL: a textured quad the bake gave a frame (vQR.x >= 0) is
+       mapped per pixel through taQuadST, as the engine's own rasteriser
+       spans the whole quad rather than two triangles; every other textured
+       face keeps the uv interpolated across its triangle. The sample is
+       clamped to the frame's rect, whose border repeats the frame's edge
+       (tagpu_gaf.c), so no rounding past u1 or v1 reaches a neighbour.
+       Classic++: the twin's gradients are taken HERE, before any discard,
+       because it is mipmapped and a derivative is only defined while every
        fragment of the quad is still running (the base atlas has no mips and
-       does not care). Zero for a flat face, and zero when the switch is off.
-       The hole is the base's alpha, 0 exactly where the frame's index is its
-       key (NEAREST, the texel the index was): it is what keeps a keyed texel
-       out of the depth buffer, where the twin's own alpha 0 at a key would
-       not. */
+       does not care); they come from the UNCLAMPED coordinate, which stays
+       smooth where the 2x2 quad reaches past the face's edge. The twin reads
+       zero for a flat face, and zero when the switch is off. The hole is the
+       base's alpha, 0 exactly where the frame's index is its key (NEAREST,
+       the texel the index was): it is what keeps a keyed texel out of the
+       depth buffer, where the twin's own alpha 0 at a key would not. */
+    "  vec2 uvD = vQR.x >= 0.0 ? mix(vQR.xy, vQR.zw, taQuadST(vQH, vQAB)) : vUV;\n"
+    "  vec2 uvX = dFdx(uvD), uvY = dFdy(uvD);\n"
+    "  vec2 uv = vQR.x >= 0.0 ? clamp(uvD, vQR.xy, vQR.zw) : vUV;\n"
     "  vec4 t = vec4(0.0);\n"
     "  vec3 base = vec3(0.0);\n"
     "  if (vUV.x >= 0.0) {\n"
-    "    vec4 b = texture(uBase, vUV);\n"
-    "    if (uRestored == 1) t = texture(uAtlasRGB, vUV);\n"
+    "    vec4 b = texture(uBase, uv);\n"
+    "    if (uRestored == 1) t = textureGrad(uAtlasRGB, uv, uvX, uvY);\n"
     "    if (b.a < 0.5) discard;\n"
     "    base = b.rgb;\n"
     "  }\n"
