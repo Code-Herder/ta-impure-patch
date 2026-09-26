@@ -407,8 +407,8 @@ tools/tacli rm w1                                 # deletes the test folder and 
   beside `TotalA.exe`, the DLL answers the registry calls of `TotalA.exe` and `win32.dll` from
   the file, and any other key is read-only; either alone is refused. `launch` puts its values
   (sound off, `Interface Type`, the display and skirmish values) into that file. The log's second line says which mode ran:
-  `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder -- …
-  hooks: TotalA.exe 9 of 9 registry imports, …`. A test launch whose store is missing or does
+  `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder beside
+  TotalA.exe -- its registry is … hooks: TotalA.exe 9 of 9 registry imports, …`. A test launch whose store is missing or does
   not load logs `…, but <what>: the game is not run` and ends at once. A player's own folder
   has neither signal and logs `registry: real (…)`. Nothing is restored after a test, and a
   test killed at any moment leaves the player's key as it was. What no hook reaches (the Task

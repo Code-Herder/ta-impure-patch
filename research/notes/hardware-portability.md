@@ -383,8 +383,11 @@ the plan's shape and what the work settled.
   `user.reg`, and a local launch whose DLL serves it passes the token and checks the run's
   served line as a remote launch does. A `--keep-dll` build without the store runs on the shared
   file with a warning. A tacli from before the store writes its values into the shared file and
-  passes no token, so the DLL refuses its game on an instance that has a store rather than
-  serving it with those values ignored. [tacli design](tacli-design.html) §"The registry: a store per instance".
+  passes no token, and what its game runs on is the DLL's decision. It normally deploys its own
+  tree's build: one without the store ignores the folder and runs on the shared file, and one
+  with the store but not the token rule serves the folder alone, those values ignored. Only a
+  DLL with the token rule refuses the game at attach: `--keep-dll` over such a build, or a tree
+  with no build of its own, which deploys the main checkout's. [tacli design](tacli-design.html) §"The registry: a store per instance".
 - **Launch** reads and checks the store first: a test folder whose store is missing, does not
   parse or passes one of the DLL's limits is refused with nothing written. It is a scheduled task
   of the instance's own, `\tacli\<name>`, that **runs TotalA.exe itself** with `-xtacli-test`

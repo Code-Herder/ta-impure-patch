@@ -18624,7 +18624,8 @@ local instance's gamedir holds `tacli-state/registry.txt` because every local pr
 `user.reg` is one inode, so the store is what makes TA's key the instance's own ([tacli design](tacli-design.html) §"The
 registry: a store per instance"). Under wine `GetModuleFileNameW(NULL)` names the gamedir,
 although `TotalA.exe` there is a symlink into the Steam install: a local launch logs `entered by
-the -xtacli-test token and the tacli-state folder` [MEASURED 2026-09-26, wine 9.0].
+the -xtacli-test token and the tacli-state folder beside TotalA.exe` [MEASURED 2026-09-26, wine
+9.0].
 
 **Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, which `DllMain`
 attach runs right after the fork's `delay_imports_init` and before the return for cnc-ddraw's
@@ -18650,8 +18651,11 @@ no memory for it, an exe path that cannot be read, a registry import the hooks d
 (`TotalA.exe`'s or `win32.dll`'s), or a `win32.dll` not loaded at attach (a static import of
 `TotalA.exe`, so the loader maps it before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
 log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
-first instruction never runs. The line names the process (`s_exe`), so a cnc-ddraw config
-tool started in a test folder reads as one. `rs_refuse_run` is `noreturn` by construction:
+first instruction never runs. The signal in every line names the module whose attach it ends
+(`s_exe`: `the tacli-state folder beside <module>`, `the -xtacli-test token on <module>'s
+command line`), so a cnc-ddraw config tool opened in a test folder is refused in words about
+itself and told to run from a folder with no `tacli-state`; only TotalA.exe's folder-alone
+refusal says to launch with the current tacli. `rs_refuse_run` is `noreturn` by construction:
 `ExitProcess` in a loop follows `TerminateProcess`, since a caller goes on as though the store
 were whole.
 
