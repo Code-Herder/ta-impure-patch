@@ -1,0 +1,306 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C3's veterancy, on Show Down, each effect beside its stock control. The AI (owner 1) holds the towers; everything of the player's is unarmed, so nothing fires back. dealt: VTLLT1 (keyed, a level a kill) and VTLLT0 (no key), each with 10 kills, facing a kill-less VTKROG0 -- VT_LAS deals 100 against every type, so a hit takes 160 (keyed level 10) or 112 (stock level 2). taken: two kill-less VTLLT0 facing VTKROG1 and VTKROG0 with 10 kills -- 60 ((25 - 10) * 4 %) or 92 a hit. reload: the dealt pair's shots, 40 % against 88 % of the laser's. capture: VTCOM1 and VTCOM0 with 10 kills, each ordered to capture a VTTGT1 or VTTGT0 of the AI's with 10 kills: the target's level sets the capture's cost, (10 + 10) / 10 against (10 + 2) / 10. reclaim: VTCOM1 and VTCOM0 with 10 kills, each reclaiming a VTTGT0 of the player's: the reclaimer's level sets a unit reclaim's time, 11 against stock's 3. The AI's fusion plant pays for the towers' shots. lead: VTLLT1 with no kills (keyed off), VTLLT0 with 10 (stock on) and VTLLT1 with 10 (keyed on), each facing a patrolling VTCOM0. The panel: hover VTKROG1 (Vet10) and the taken VTKROG0 (Vet2). Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORFUS",
+   "owner": 1,
+   "pos": [
+    4900,
+    1950
+   ]
+  },
+  {
+   "id": "dealt_k",
+   "type": "VTLLT1",
+   "owner": 1,
+   "pos": [
+    500,
+    450
+   ],
+   "kills": 10
+  },
+  {
+   "id": "dealt_k_target",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    700,
+    450
+   ]
+  },
+  {
+   "id": "dealt_s",
+   "type": "VTLLT0",
+   "owner": 1,
+   "pos": [
+    1400,
+    450
+   ],
+   "kills": 10
+  },
+  {
+   "id": "dealt_s_target",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1600,
+    450
+   ]
+  },
+  {
+   "id": "taken_k_gun",
+   "type": "VTLLT0",
+   "owner": 1,
+   "pos": [
+    500,
+    1150
+   ]
+  },
+  {
+   "id": "taken_k",
+   "type": "VTKROG1",
+   "owner": 0,
+   "pos": [
+    700,
+    1150
+   ],
+   "kills": 10
+  },
+  {
+   "id": "taken_s_gun",
+   "type": "VTLLT0",
+   "owner": 1,
+   "pos": [
+    1400,
+    1150
+   ]
+  },
+  {
+   "id": "taken_s",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1600,
+    1150
+   ],
+   "kills": 10
+  },
+  {
+   "id": "cap_k",
+   "type": "VTCOM1",
+   "owner": 0,
+   "pos": [
+    2500,
+    450
+   ],
+   "kills": 10,
+   "orders": [
+    {
+     "cmd": "capture",
+     "target": "cap_k_target"
+    }
+   ]
+  },
+  {
+   "id": "cap_k_target",
+   "type": "VTTGT1",
+   "owner": 1,
+   "pos": [
+    2650,
+    450
+   ],
+   "kills": 10
+  },
+  {
+   "id": "cap_s",
+   "type": "VTCOM0",
+   "owner": 0,
+   "pos": [
+    2500,
+    1150
+   ],
+   "kills": 10,
+   "orders": [
+    {
+     "cmd": "capture",
+     "target": "cap_s_target"
+    }
+   ]
+  },
+  {
+   "id": "cap_s_target",
+   "type": "VTTGT0",
+   "owner": 1,
+   "pos": [
+    2650,
+    1150
+   ],
+   "kills": 10
+  },
+  {
+   "id": "lead_off",
+   "type": "VTLLT1",
+   "owner": 1,
+   "pos": [
+    3500,
+    450
+   ]
+  },
+  {
+   "id": "lead_off_mover",
+   "type": "VTCOM0",
+   "owner": 0,
+   "pos": [
+    3650,
+    300
+   ],
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3650,
+      600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lead_s",
+   "type": "VTLLT0",
+   "owner": 1,
+   "pos": [
+    3500,
+    1150
+   ],
+   "kills": 10
+  },
+  {
+   "id": "lead_s_mover",
+   "type": "VTCOM0",
+   "owner": 0,
+   "pos": [
+    3650,
+    1000
+   ],
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3650,
+      1300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lead_k",
+   "type": "VTLLT1",
+   "owner": 1,
+   "pos": [
+    4400,
+    450
+   ],
+   "kills": 10
+  },
+  {
+   "id": "lead_k_mover",
+   "type": "VTCOM0",
+   "owner": 0,
+   "pos": [
+    4550,
+    300
+   ],
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4550,
+      600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rcl_k",
+   "type": "VTCOM1",
+   "owner": 0,
+   "pos": [
+    500,
+    1750
+   ],
+   "kills": 10,
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "rcl_k_target"
+    }
+   ]
+  },
+  {
+   "id": "rcl_k_target",
+   "type": "VTTGT0",
+   "owner": 0,
+   "pos": [
+    650,
+    1750
+   ]
+  },
+  {
+   "id": "rcl_s",
+   "type": "VTCOM0",
+   "owner": 0,
+   "pos": [
+    1400,
+    1750
+   ],
+   "kills": 10,
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "rcl_s_target"
+    }
+   ]
+  },
+  {
+   "id": "rcl_s_target",
+   "type": "VTTGT0",
+   "owner": 0,
+   "pos": [
+    1550,
+    1750
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   1100,
+   800
+  ]
+ }
+}

@@ -1534,10 +1534,11 @@ static unsigned vet_level(const DkUnit* r, unsigned k)
     return lo;
 }
 
-/* The capture level has no top in TADR: past the last threshold it goes on
-   by the last gap (by the one threshold, for a list of one). The gap is at
+/* The capture's level has no top in TADR: past the last threshold it goes
+   on by the last gap (by the one threshold, for a list of one); a unit
+   reclaim's time, which TADR leaves stock, takes the same level. The gap is at
    least 1 and the threshold at least 1 by the parse, so neither divides by
-   zero; the level is capped at stock's own ceiling, so no capture product
+   zero; the level is capped at stock's own ceiling, so no product
    exceeds one stock already computes. */
 static unsigned vet_level_open(const DkUnit* r, unsigned k)
 {
@@ -1554,7 +1555,7 @@ static void vet_event(unsigned* n, const char* what)
     unsigned c = ++*n;
     if ((c & (c - 1)) == 0) dlog("veterancy: %s (%u so far)", what, c);
 }
-static unsigned s_evTaken, s_evDealt, s_evReload, s_evLead, s_evAim, s_evCapTick, s_evCapTime,
+static unsigned s_evTaken, s_evDealt, s_evReload, s_evLead, s_evAim, s_evCapture, s_evReclaim,
                 s_evLabel;
 
 static const DkUnit* vet_keyed(const char* u)
@@ -1634,23 +1635,25 @@ int __stdcall tagpu_datakeys_vet_accuracy(const char* u)
     return r->vrate ? (int)(kills_of(u) / r->vrate) : 0;
 }
 
-/* 0x4043D8, the capture order's tick, read of the TARGET: 10 + L for
-   0x4043EC, stock's being 10 + kills / 5 */
-int __stdcall tagpu_datakeys_vet_capture_tick(const char* u)
+/* 0x4043D8, the capture's cost, set once as the capture starts and read of
+   the TARGET: 10 + L tenths of it for 0x4043EC, stock's being 10 + kills / 5 */
+int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
 {
     const DkUnit* r = vet_keyed(u);
     if (!r) return -1;
-    vet_event(&s_evCapTick, "a keyed target's level set a capture's cost");
+    vet_event(&s_evCapture, "a keyed target's level set a capture's cost");
     return 10 + (int)vet_level_open(r, kills_of(u));
 }
 
-/* 0x43869D, the capture's duration, read of the CAPTURER: L + 1 for
-   0x4386B9, stock's being (kills + 5) / 5 */
-int __stdcall tagpu_datakeys_vet_capture_time(const char* u)
+/* 0x43869D, inside 0x438650, the time a unit takes to reclaim another unit
+   (its callers are the reclaim order 0x40483D and the build order's reclaim
+   0x414C86), read of the RECLAIMER: L + 1 for 0x4386B9, stock's being
+   (kills + 5) / 5 */
+int __stdcall tagpu_datakeys_vet_reclaim_time(const char* u)
 {
     const DkUnit* r = vet_keyed(u);
     if (!r) return -1;
-    vet_event(&s_evCapTime, "a keyed capturer's level set a capture's time");
+    vet_event(&s_evReclaim, "a keyed reclaimer's level set a unit reclaim's time");
     return 1 + (int)vet_level_open(r, kills_of(u));
 }
 

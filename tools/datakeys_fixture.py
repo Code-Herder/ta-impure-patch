@@ -80,7 +80,11 @@ scenarios/c3-*.json, with their kills set by the scenario:
     VTBAD1 .. VTBAD8, each refused at load and played as stock: thresholds "0", "5 5",
               "10 5", "-3", "1.5", 33 of them; rate "-3", rate "1.5"
 
-and B7HUGE, ARMLLT with WK_HUGE (250): the light laser at damage 39 000, past the HP word.
+Unarmed, so a victim or a capturer never fires back, each with VTLLT1's thresholds (1) or no key
+(0): VTTGT0/1 (ARMLLT), VTCOM0/1 (ARMCOM, the capturers) and VTKROG0/1 (CORKROG, 29 918 HP to
+count hits on). B7HUGE is ARMLLT with
+WK_HUGE (250): the light laser at damage 65 000 and edge effectiveness 1, so its area pass deals
+every hit whole -- past the HP word, where stock's wrap reads it as -536 and the victim GAINS 536.
 
 Both maps set MeteorRadius=2800, MeteorDensity=400, MeteorDuration=35 (Flooded Glaciers' shower)
 and MeteorInterval=20, and drop Show Down's useonlyunits. Spawned by scenarios/c2-nomapalert.json.
@@ -254,15 +258,17 @@ def weather(tree, gd):
 
 
 def veterancy(tree, gd):
-    """C3's keyed and malformed types and B7's damage past the word"""
-    ta = hpipack.Archive(gd / "totala1.hpi")
+    """C3's keyed and malformed types, their unarmed targets and capturers, and B7's damage
+    past the word"""
+    ta, cc = hpipack.Archive(gd / "totala1.hpi"), hpipack.Archive(gd / "ccdata.ccx")
     text = "\n".join(ta.read(n).decode("latin-1") for n in ta.files if n.startswith("weapons/"))
     las = section(text, "ARM_LIGHTLASER")
-    tdf = [weapon(las, "VT_LAS", 249, {}, damage=100), weapon(las, "WK_HUGE", 250, {}, damage=39000)]
+    tdf = [weapon(las, "VT_LAS", 249, {}, damage=100),
+           weapon(las, "WK_HUGE", 250, {"edgeeffectiveness": 1}, damage=65000)]
     hpipack.insert(tree, "weapons/datakeys_vet.tdf", "\r\n".join(tdf).encode("latin-1"))
-    fbi, cob = ta.read("units/armllt.fbi").decode("latin-1"), ta.read("scripts/armllt.cob")
     levels = " ".join(str(k) for k in range(1, 31))
-    keyed = {"VTLLT0": {}, "VTLLT1": {"VeterancyThresholds": levels, "VeterancyAccuracyBuffRate": 1},
+    vet = {"VeterancyThresholds": levels}
+    keyed = {"VTLLT0": {}, "VTLLT1": dict(vet, VeterancyAccuracyBuffRate=1),
              "VTRATE0": {"VeterancyAccuracyBuffRate": 0},
              "VTBAD1": {"VeterancyThresholds": "0"}, "VTBAD2": {"VeterancyThresholds": "5 5"},
              "VTBAD3": {"VeterancyThresholds": "10 5"}, "VTBAD4": {"VeterancyThresholds": "-3"},
@@ -270,11 +276,20 @@ def veterancy(tree, gd):
              "VTBAD6": {"VeterancyThresholds": " ".join(str(k) for k in range(1, 34))},
              "VTBAD7": {"VeterancyAccuracyBuffRate": "-3"}, "VTBAD8": {"VeterancyAccuracyBuffRate": "1.5"},
              "B7HUGE": {}}
+    unarmed = {"VTTGT0": ("armllt", {}), "VTTGT1": ("armllt", vet),
+               "VTCOM0": ("armcom", {}), "VTCOM1": ("armcom", vet),
+               "VTKROG0": ("corkrog", {}), "VTKROG1": ("corkrog", vet)}
+    fbi, cob = ta.read("units/armllt.fbi").decode("latin-1"), ta.read("scripts/armllt.cob")
     for name, keys in keyed.items():
         gun = "WK_HUGE" if name == "B7HUGE" else "VT_LAS"
         hpipack.insert(tree, f"units/{name.lower()}.fbi", armed(fbi, name, {1: gun}, keys))
         hpipack.insert(tree, f"scripts/{name.lower()}.cob", cob)
-    return len(tdf), len(keyed)
+    for name, (stock, keys) in unarmed.items():
+        arc = cc if stock == "corkrog" else ta
+        body = arc.read(f"units/{stock}.fbi").decode("latin-1")
+        hpipack.insert(tree, f"units/{name.lower()}.fbi", armed(body, name, {}, keys))
+        hpipack.insert(tree, f"scripts/{name.lower()}.cob", arc.read(f"scripts/{stock}.cob"))
+    return len(tdf), len(keyed) + len(unarmed)
 
 
 def menu(builder, page, button, name):

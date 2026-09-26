@@ -5597,9 +5597,9 @@ static int fix_weapon_keys(void)
    - 0x49D6EA, the fire method's spread (`mov eax,0x2AAAAAAB`, edi the unit, ecx the spread):
      ebx = the divisor and ecx += 0x800 as stock adds it, on at 0x49D702, its `cmp ebx,1`.
      ebx is dead: stock writes it at 0x49D700.
-   - 0x4043D8, the capture order's tick (`mov cx,[edx+0xB8]`, edx the target): eax = 10 + L,
+   - 0x4043D8, the capture's cost (`mov cx,[edx+0xB8]`, edx the target): eax = 10 + L,
      on at 0x4043EC, `imul eax,edi`. The stock path keeps eax, 0x66666667.
-   - 0x43869D, the capture's time (`mov cx,[eax+0xB8]`, eax the capturer, dx its workertime
+   - 0x43869D, a unit reclaim's time (`mov cx,[eax+0xB8]`, eax the reclaimer, dx its workertime
    from 0x438694): edi = the workertime, edx = L + 1, on at 0x4386B9, `imul edi,edx`; nothing
      from there reads eax or ecx before writing them.
    No branch lands inside any of the seven (rel8/rel32 scan of .text and every dword of the
@@ -5626,8 +5626,8 @@ static int fix_veterancy(void)
     static const unsigned char lead[14]  = { 0x66, 0x83, 0xBF, 0xB8, 0x00, 0x00, 0x00, 0x05,
                                              0x0F, 0x86, 0xFB, 0x00, 0x00, 0x00 };
     static const unsigned char aim[5]    = { 0xB8, 0xAB, 0xAA, 0xAA, 0x2A };
-    static const unsigned char tick[7]   = { 0x66, 0x8B, 0x8A, 0xB8, 0x00, 0x00, 0x00 };
-    static const unsigned char tme[7]    = { 0x66, 0x8B, 0x88, 0xB8, 0x00, 0x00, 0x00 };
+    static const unsigned char cost[7]   = { 0x66, 0x8B, 0x8A, 0xB8, 0x00, 0x00, 0x00 };
+    static const unsigned char rcl[7]    = { 0x66, 0x8B, 0x88, 0xB8, 0x00, 0x00, 0x00 };
     unsigned char* ct = fix_code(48);
     unsigned char* cd = fix_code(48);
     unsigned char* cr = fix_code(48);
@@ -5688,9 +5688,9 @@ static int fix_veterancy(void)
     memcpy(p, aim, 5); p += 5;
     wk_jmp(p, 0xE9, 0x0049D6EFu);
 
-    /* 0x4043D8: pushad; push edx; call tick; cmp eax,-1; je stock; mov [esp+0x1C],eax;
+    /* 0x4043D8: pushad; push edx; call cost; cmp eax,-1; je stock; mov [esp+0x1C],eax;
        popad; jmp 0x4043EC; stock: popad; mov cx,[edx+0xB8]; jmp 0x4043DF */
-    p = vet_call(ck, 0x52, (const void*)tagpu_datakeys_vet_capture_tick);
+    p = vet_call(ck, 0x52, (const void*)tagpu_datakeys_vet_capture_cost);
     *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF;
     *p++ = 0x74; j = p++;
     *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
@@ -5698,13 +5698,13 @@ static int fix_veterancy(void)
     p = wk_jmp(p, 0xE9, 0x004043ECu);
     *j = (unsigned char)(p - (j + 1));
     *p++ = 0x61;
-    memcpy(p, tick, 7); p += 7;
+    memcpy(p, cost, 7); p += 7;
     wk_jmp(p, 0xE9, 0x004043DFu);
 
-    /* 0x43869D: pushad; push eax; call time; cmp eax,-1; je stock; mov [esp+0x1C],eax;
+    /* 0x43869D: pushad; push eax; call reclaim; cmp eax,-1; je stock; mov [esp+0x1C],eax;
        popad; mov edi,edx; mov edx,eax; jmp 0x4386B9; stock: popad; mov cx,[eax+0xB8];
        jmp 0x4386A4 */
-    p = vet_call(cm, 0x50, (const void*)tagpu_datakeys_vet_capture_time);
+    p = vet_call(cm, 0x50, (const void*)tagpu_datakeys_vet_reclaim_time);
     *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF;
     *p++ = 0x74; j = p++;
     *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
@@ -5714,7 +5714,7 @@ static int fix_veterancy(void)
     p = wk_jmp(p, 0xE9, 0x004386B9u);
     *j = (unsigned char)(p - (j + 1));
     *p++ = 0x61;
-    memcpy(p, tme, 7); p += 7;
+    memcpy(p, rcl, 7); p += 7;
     wk_jmp(p, 0xE9, 0x004386A4u);
 
 #define VET_SITE(va, n, stock, target, name) do { \
@@ -5726,8 +5726,8 @@ static int fix_veterancy(void)
     VET_SITE(0x0049E468u, 7,  reload, cr, "veterancy: a slot's reload");
     VET_SITE(0x0048A324u, 14, lead,   cl, "veterancy: target lead");
     VET_SITE(0x0049D6EAu, 5,  aim,    ca, "veterancy: the spread");
-    VET_SITE(0x004043D8u, 7,  tick,   ck, "veterancy: the capture's cost");
-    VET_SITE(0x0043869Du, 7,  tme,    cm, "veterancy: the capture's time");
+    VET_SITE(0x004043D8u, 7,  cost,   ck, "veterancy: the capture's cost");
+    VET_SITE(0x0043869Du, 7,  rcl,    cm, "veterancy: a unit reclaim's time");
 #undef VET_SITE
     return FIX_TABLE;
 }
@@ -5739,7 +5739,10 @@ static int fix_veterancy(void)
    9-byte record as a WORD (0x489C71); the damage path subtracts that word from the HP word and
    tests the result as signed (0x489EB5, 0x489EC4), and the paralyser (kind 2, 0x489DFD) and the
    heal (kind 0xA, 0x489D6E) read it unsigned. So an amount past the word's range wraps: 39 000
-   on a 3 000-HP unit leaves it 29 536. THE FIX, at the store: the amount is saturated into the
+   on a 3 000-HP unit leaves it 29 536. Retail play reaches it with the disintegrator, 30 000
+   raised by its commander's own level (0x499DB5): from level 2, 33 600 [MEASURED 2026-09-26: a
+   commander with 25 kills, 39 000 a hit, left a 1 329-HP storage 26 536 HP up a hit, dying only
+   when a second hit wrapped the HP word itself]. THE FIX, at the store: the amount is saturated into the
    range its reader reads -- -32768..32767 for the subtraction, 0..65535 for kinds 2 and 0xA --
    so any hit of 32 767 or more kills any unit whose HP the signed word can hold. Identity for
    every amount inside the range. CLASS: simulation (the firer's peer computes it, and the
@@ -5750,7 +5753,9 @@ static int fix_veterancy(void)
    4 and 9); the armour reduction exempts it (0x489BD1, `cmp edi,0x7530; jge`), and the
    veterancy reduction at 0x489BF3 does not, so a veteran above 24 000 HP survives it (stock's
    level 5 leaves 80 %). THE FIX: a call whose amount is 30 000 or more skips the veterancy
-   reduction as it skips the armour one, by the same test of the caller's own amount. A
+   reduction as it skips the armour one, by the same test of the caller's own amount. That
+   amount includes the disintegrators' hits (30 000, or more from a veteran commander), so a
+   D-gun kills a veteran Krogoth (29 918 HP), which stock's reduction let live from 5 kills. A
    veteran killed outright then reads the full overkill in its death's severity (0x48655E), as a
    recruit does. CLASS: simulation.
 
@@ -7519,8 +7524,8 @@ static void patch_engine_defects(void)
     _snprintf(b, sizeof b,
               "enginefix: veterancy -- VeterancyThresholds, VeterancyAccuracyBuffRate (the unit "
               "keys 0x42D2E0 0x42BF40 0x42BF97; damage taken 0x489BFA; dealt 0x499DB5; reload "
-              "0x49E468; lead 0x48A324; spread 0x49D6EA; the capture's cost 0x4043D8 and time "
-              "0x43869D) %s",
+              "0x49E468; lead 0x48A324; spread 0x49D6EA; the capture's cost 0x4043D8; a unit "
+              "reclaim's time 0x43869D) %s",
               fix_state(vet));
     b[sizeof b - 1] = 0;
     plog(b);
