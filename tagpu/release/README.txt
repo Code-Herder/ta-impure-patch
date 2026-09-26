@@ -15,9 +15,10 @@ WHAT IT IS
     - 0 to N weapons per unit, for units built for it
     - the game's own UI drawn by the patch too
 
-  Every patch checks the bytes it replaces before writing any of them, so on a
-  different build of the exe it arms nothing and you get the stock game through
-  the plain cnc-ddraw renderer.
+  Every patch checks the bytes it replaces before writing any of them. It needs
+  the original 3.1 TotalA.exe: on any other build (3.9.02, TA: Escalation and
+  other community patches ship a modified exe) it says why in a message box and
+  closes the game, rather than let it play by different rules from other players.
 
   Needs a GPU and driver with Vulkan (1.0 or later). Runs under Wine too;
   that is where it is developed.
@@ -109,8 +110,10 @@ WHAT IT WRITES
 
 MULTIPLAYER
 
-  Units with extra weapons change the simulation, so in multiplayer every player
-  needs the patch and the same unit files. Stock units simulate exactly as before.
+  The patch changes the simulation: it raises the game's limits (up to 1500 units
+  a player), fixes defects of the stock engine, and gives units built for it
+  extra weapons. In multiplayer every player needs this same version of the
+  patch and the same unit files.
 
 
 LICENCE
