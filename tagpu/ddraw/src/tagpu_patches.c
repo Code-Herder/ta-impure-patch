@@ -5572,6 +5572,387 @@ static int fix_weapon_keys(void)
     return FIX_TABLE;
 }
 
+/* ===== VETERANCY (C3) ======================================================================
+   Landing C3 of research/notes/tadr-port/data-keys.md; the disassembly is in
+   data-keys-evidence.md, Part 3, and exe-reverse-engineering.md. TADR's VeterancyHack is the
+   prior art; the design is ours. The keys' records, the levels and every bound are in
+   tagpu_datakeys.c; these are the seven sites that ask, all in the fail-closed table, in both
+   builds (CLASS: simulation -- a player whose build lacked them would play stock veterancy for
+   a keyed type). Each runs the engine's own instructions when the unit's type carries no key,
+   so stock content runs stock's bytes. The answers come from the unit-key reader, which is
+   installed here, before the table, and without which the table refuses to install.
+
+   Every stub asks with every register kept: pushad; push <the unit>; call <the answer>; the
+   answer stored in the pushad frame's slot the continuation reads; cmp eax,-1; popad (which
+   leaves the cmp's flags); je <stock: the stolen instructions, then on>.
+
+   - 0x489BFA, damage taken (`mov cx,[esi+0xB8]`, esi the victim): edx = L, on at 0x489C16,
+     (25 - L) * 4 % of edi. edx is dead at the site: 0x489C01's imul writes it.
+   - 0x499DB5, damage dealt (`mov cx,[ebx+0xB8]`, ebx the shooter): edx = L, on at 0x499DD1,
+     (100 + 6L) % of esi. edx is dead: 0x499DBC's imul writes it.
+   - 0x49E468, a slot's reload (`xor ecx,ecx; mov eax,0x66666667`, edi the unit): ecx = L, on
+     at 0x49E48D. ecx is dead: the stolen `xor` writes it.
+   - 0x48A324, target lead (`cmp word [edi+0xB8],5; jbe 0x48A42D`): on at 0x48A332 or
+     0x48A42D by the answer; neither reads the flags.
+   - 0x49D6EA, the fire method's spread (`mov eax,0x2AAAAAAB`, edi the unit, ecx the spread):
+     ebx = the divisor and ecx += 0x800 as stock adds it, on at 0x49D702, its `cmp ebx,1`.
+     ebx is dead: stock writes it at 0x49D700.
+   - 0x4043D8, the capture order's tick (`mov cx,[edx+0xB8]`, edx the target): eax = 10 + L,
+     on at 0x4043EC, `imul eax,edi`. The stock path keeps eax, 0x66666667.
+   - 0x43869D, the capture's time (`mov cx,[eax+0xB8]`, eax the capturer, dx its workertime
+   from 0x438694): edi = the workertime, edx = L + 1, on at 0x4386B9, `imul edi,edx`; nothing
+     from there reads eax or ecx before writing them.
+   No branch lands inside any of the seven (rel8/rel32 scan of .text and every dword of the
+   image). */
+static unsigned char* vet_call(unsigned char* p, unsigned char unit_push, const void* fn)
+{
+    *p++ = 0x60;                                                    /* pushad             */
+    *p++ = unit_push;                                               /* push <the unit>    */
+    return wk_jmp(p, 0xE8, (unsigned int)(size_t)fn);               /* call fn            */
+}
+static unsigned char* vet_stock(unsigned char* p, unsigned char slot)
+{
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = slot;             /* mov [esp+slot],eax */
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF;                          /* cmp eax,-1         */
+    *p++ = 0x61;                                                    /* popad              */
+    return p;
+}
+
+static int fix_veterancy(void)
+{
+    static const unsigned char taken[7]  = { 0x66, 0x8B, 0x8E, 0xB8, 0x00, 0x00, 0x00 };
+    static const unsigned char dealt[7]  = { 0x66, 0x8B, 0x8B, 0xB8, 0x00, 0x00, 0x00 };
+    static const unsigned char reload[7] = { 0x33, 0xC9, 0xB8, 0x67, 0x66, 0x66, 0x66 };
+    static const unsigned char lead[14]  = { 0x66, 0x83, 0xBF, 0xB8, 0x00, 0x00, 0x00, 0x05,
+                                             0x0F, 0x86, 0xFB, 0x00, 0x00, 0x00 };
+    static const unsigned char aim[5]    = { 0xB8, 0xAB, 0xAA, 0xAA, 0x2A };
+    static const unsigned char tick[7]   = { 0x66, 0x8B, 0x8A, 0xB8, 0x00, 0x00, 0x00 };
+    static const unsigned char tme[7]    = { 0x66, 0x8B, 0x88, 0xB8, 0x00, 0x00, 0x00 };
+    unsigned char* ct = fix_code(48);
+    unsigned char* cd = fix_code(48);
+    unsigned char* cr = fix_code(48);
+    unsigned char* cl = fix_code(64);
+    unsigned char* ca = fix_code(48);
+    unsigned char* ck = fix_code(48);
+    unsigned char* cm = fix_code(48);
+    unsigned char* p;
+    unsigned char* j;
+    unsigned char now[16];
+
+    if (!tagpu_datakeys_units_install()) {
+        lim_needs("veterancy (a simulation fix)", "the unit-key reader", "not installed");
+        return FIX_TABLE;
+    }
+    if (!ct || !cd || !cr || !cl || !ca || !ck || !cm) { lim_no_stub(); return FIX_TABLE; }
+
+    /* 0x489BFA: edx = L -> 0x489C16 */
+    p = vet_stock(vet_call(ct, 0x56, (const void*)tagpu_datakeys_vet_taken), 0x14);
+    *p++ = 0x74; *p++ = 0x05;                                       /* je stock           */
+    p = wk_jmp(p, 0xE9, 0x00489C16u);
+    memcpy(p, taken, 7); p += 7;
+    wk_jmp(p, 0xE9, 0x00489C01u);
+
+    /* 0x499DB5: edx = L -> 0x499DD1 */
+    p = vet_stock(vet_call(cd, 0x53, (const void*)tagpu_datakeys_vet_dealt), 0x14);
+    *p++ = 0x74; *p++ = 0x05;
+    p = wk_jmp(p, 0xE9, 0x00499DD1u);
+    memcpy(p, dealt, 7); p += 7;
+    wk_jmp(p, 0xE9, 0x00499DBCu);
+
+    /* 0x49E468: ecx = L -> 0x49E48D */
+    p = vet_stock(vet_call(cr, 0x57, (const void*)tagpu_datakeys_vet_reload), 0x18);
+    *p++ = 0x74; *p++ = 0x05;
+    p = wk_jmp(p, 0xE9, 0x0049E48Du);
+    memcpy(p, reload, 7); p += 7;
+    wk_jmp(p, 0xE9, 0x0049E46Fu);
+
+    /* 0x48A324: pushad; push edi; call lead; cmp eax,0; popad; jl stock; je off;
+       jmp 0x48A332; off: jmp 0x48A42D; stock: cmp word [edi+0xB8],5; jbe 0x48A42D;
+       jmp 0x48A332 */
+    p = vet_call(cl, 0x57, (const void*)tagpu_datakeys_vet_lead);
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x00;                          /* cmp eax,0          */
+    *p++ = 0x61;                                                    /* popad              */
+    *p++ = 0x7C; *p++ = 0x0C;                                       /* jl stock           */
+    *p++ = 0x74; *p++ = 0x05;                                       /* je off             */
+    p = wk_jmp(p, 0xE9, 0x0048A332u);
+    p = wk_jmp(p, 0xE9, 0x0048A42Du);
+    memcpy(p, lead, 8); p += 8;
+    p = wk_jcc(p, 0x86, 0x0048A42Du);
+    wk_jmp(p, 0xE9, 0x0048A332u);
+
+    /* 0x49D6EA: ebx = the divisor; add ecx,0x800 -> 0x49D702 */
+    p = vet_stock(vet_call(ca, 0x57, (const void*)tagpu_datakeys_vet_accuracy), 0x10);
+    *p++ = 0x74; *p++ = 0x0B;
+    *p++ = 0x81; *p++ = 0xC1; *p++ = 0x00; *p++ = 0x08; *p++ = 0x00; *p++ = 0x00;
+    p = wk_jmp(p, 0xE9, 0x0049D702u);
+    memcpy(p, aim, 5); p += 5;
+    wk_jmp(p, 0xE9, 0x0049D6EFu);
+
+    /* 0x4043D8: pushad; push edx; call tick; cmp eax,-1; je stock; mov [esp+0x1C],eax;
+       popad; jmp 0x4043EC; stock: popad; mov cx,[edx+0xB8]; jmp 0x4043DF */
+    p = vet_call(ck, 0x52, (const void*)tagpu_datakeys_vet_capture_tick);
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF;
+    *p++ = 0x74; j = p++;
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
+    *p++ = 0x61;
+    p = wk_jmp(p, 0xE9, 0x004043ECu);
+    *j = (unsigned char)(p - (j + 1));
+    *p++ = 0x61;
+    memcpy(p, tick, 7); p += 7;
+    wk_jmp(p, 0xE9, 0x004043DFu);
+
+    /* 0x43869D: pushad; push eax; call time; cmp eax,-1; je stock; mov [esp+0x1C],eax;
+       popad; mov edi,edx; mov edx,eax; jmp 0x4386B9; stock: popad; mov cx,[eax+0xB8];
+       jmp 0x4386A4 */
+    p = vet_call(cm, 0x50, (const void*)tagpu_datakeys_vet_capture_time);
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF;
+    *p++ = 0x74; j = p++;
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
+    *p++ = 0x61;
+    *p++ = 0x8B; *p++ = 0xFA;                                       /* mov edi,edx        */
+    *p++ = 0x8B; *p++ = 0xD0;                                       /* mov edx,eax        */
+    p = wk_jmp(p, 0xE9, 0x004386B9u);
+    *j = (unsigned char)(p - (j + 1));
+    *p++ = 0x61;
+    memcpy(p, tme, 7); p += 7;
+    wk_jmp(p, 0xE9, 0x004386A4u);
+
+#define VET_SITE(va, n, stock, target, name) do { \
+        unsigned int rel_ = (unsigned int)(size_t)(target) - ((va) + 5u); \
+        memset(now, 0x90, sizeof now); now[0] = 0xE9; memcpy(now + 1, &rel_, 4); \
+        lim_add((va), (n), (stock), now, (name)); } while (0)
+    VET_SITE(0x00489BFAu, 7,  taken,  ct, "veterancy: the damage taken");
+    VET_SITE(0x00499DB5u, 7,  dealt,  cd, "veterancy: the damage dealt");
+    VET_SITE(0x0049E468u, 7,  reload, cr, "veterancy: a slot's reload");
+    VET_SITE(0x0048A324u, 14, lead,   cl, "veterancy: target lead");
+    VET_SITE(0x0049D6EAu, 5,  aim,    ca, "veterancy: the spread");
+    VET_SITE(0x004043D8u, 7,  tick,   ck, "veterancy: the capture's cost");
+    VET_SITE(0x0043869Du, 7,  tme,    cm, "veterancy: the capture's time");
+#undef VET_SITE
+    return FIX_TABLE;
+}
+
+/* ===== B7: A HIT'S WORD, KILL-OUTRIGHT, THE RADAR'S OWNER TEST, ONE METEOR ONE HIT ==========
+   Section B's seventh item (research/notes/tadr-port/sim-fixes.md, B7), four stock defects.
+
+   THE HIT'S WORD [DISASSEMBLED]. 0x489BB0 computes a hit's amount as an int and stores it in the
+   9-byte record as a WORD (0x489C71); the damage path subtracts that word from the HP word and
+   tests the result as signed (0x489EB5, 0x489EC4), and the paralyser (kind 2, 0x489DFD) and the
+   heal (kind 0xA, 0x489D6E) read it unsigned. So an amount past the word's range wraps: 39 000
+   on a 3 000-HP unit leaves it 29 536. THE FIX, at the store: the amount is saturated into the
+   range its reader reads -- -32768..32767 for the subtraction, 0..65535 for kinds 2 and 0xA --
+   so any hit of 32 767 or more kills any unit whose HP the signed word can hold. Identity for
+   every amount inside the range. CLASS: simulation (the firer's peer computes it, and the
+   record carries it to the victim's owner).
+
+   KILL-OUTRIGHT [DISASSEMBLED]. The engine's "kill outright" is an amount of 30 000 or more
+   (self-destruct and player defeat 0x402147 0x486F94, a dying transport's cargo 0x48680B, kinds
+   4 and 9); the armour reduction exempts it (0x489BD1, `cmp edi,0x7530; jge`), and the
+   veterancy reduction at 0x489BF3 does not, so a veteran above 24 000 HP survives it (stock's
+   level 5 leaves 80 %). THE FIX: a call whose amount is 30 000 or more skips the veterancy
+   reduction as it skips the armour one, by the same test of the caller's own amount. A
+   veteran killed outright then reads the full overkill in its death's severity (0x48655E), as a
+   recruit does. CLASS: simulation.
+
+   THE RADAR'S OWNER TEST [DISASSEMBLED]. The radar rebuild's marker branch for a targetable or
+   interceptor projectile reads its attacker's owner when the point is out of the local player's
+   sight (0x4673B1, `mov ecx,[ebx+0x48]` = proj+0x52; `cmp [ecx+0xFF],al`), and a meteor has no
+   attacker. THE FIX: no attacker is not the local player's, the answer the test gives any other
+   player's projectile. CLASS: local (a fault on every peer's radar rebuild otherwise).
+
+   ONE METEOR, ONE HIT [DISASSEMBLED + MEASURED]. Every peer runs its own shower (0x437DE0 from
+   the sim tick 0x495594, no host test) and broadcasts each stone as a 0x0D (0x49DFF6); the
+   receiver builds the stone again through its meteor branch (0x49D307). A projectile's damage
+   is computed on a peer only when its owner record, main+0x1B63 + 331 * proj+0x66, is empty or
+   not remote (0x49A01B..0x49A047) -- the firer's peer for every unit's shot -- and a stone's
+   +0x66 is 10, a record no peer marks remote. So every peer computes every stone, on its own
+   copy, and the victim's owner applies it once from its own computation and once more for each
+   other peer's 0x0B. THE FIX: a stone is computed on the peer that spawned it, as a shot is on
+   the peer that fired it. The mark is the stone's own +0x62, the shooter's slot index, which
+   0x49C740 writes only for a projectile with a shooter (0x49C833) and whose one reader,
+   0x49B7D6, sits behind a burst count that is 0 for a stone. Both places that build a
+   shooterless projectile write it: the spawn (0x49DF7D) 0 and the receiver's meteor branch
+   (0x49D307) PJ_RECEIVED. It lives in the record, so the pool's compaction (0x49AEE0) carries
+   it with the stone, and no save carries projectiles. The damage gate sends a shooterless
+   projectile of owner 10 marked received where stock sends a remote one's, 0x49A0AE: its
+   explosion plays, its damage is left to its spawner, whose hit on another peer's unit travels
+   as every hit does, in B4's tagged 0x05. CLASS: simulation. */
+#define PJ_ORIGIN    0x62
+#define PJ_RECEIVED  1
+
+static unsigned int s_b7Word, s_b7Outright, s_b7Radar, s_b7Copies;
+
+static void b7_event(unsigned int* n, const char* what)
+{
+    unsigned int c = ++*n;
+    if ((c & (c - 1)) == 0) tagpu_logf("enginefix: %s (%u so far)", what, c);
+}
+static void __stdcall b7_word_event(void) { b7_event(&s_b7Word, "a hit's amount saturated into its word"); }
+static void __stdcall b7_radar_event(void) { b7_event(&s_b7Radar, "the radar's owner test met a projectile with no attacker"); }
+static void __stdcall b7_copy_event(void) { b7_event(&s_b7Copies, "a received meteor's damage left to its spawner"); }
+static void __stdcall b7_outright_event(const char* victim)
+{
+    if (tagpu_datakeys_vet_taken_level(victim))
+        b7_event(&s_b7Outright, "a kill-outright call on a veteran dealt its full amount");
+}
+
+typedef int (__stdcall *PFN_ProjInit)(char* proj, const char* weapon, const void* start,
+                                      const char* attacker, int time, int z);
+#define E_ProjInit ((PFN_ProjInit)0x0049C740u)
+
+static int __stdcall meteor_spawned(char* p, const char* w, const void* s, const char* a, int t, int z)
+{
+    int r = E_ProjInit(p, w, s, a, t, z);
+    *(unsigned short*)(p + PJ_ORIGIN) = 0;
+    return r;
+}
+static int __stdcall meteor_received(char* p, const char* w, const void* s, const char* a, int t, int z)
+{
+    int r = E_ProjInit(p, w, s, a, t, z);
+    *(unsigned short*)(p + PJ_ORIGIN) = PJ_RECEIVED;
+    return r;
+}
+
+static int fix_hit_word(void)
+{
+    static const unsigned char store[5] = { 0x66, 0x89, 0x54, 0x24, 0x11 };  /* mov [esp+0x11],dx */
+    unsigned char* c = fix_code(96);
+    unsigned char *p, *jU1, *jU2, *jLo, *jSatA, *jSt1, *jSatB, *jUp, *jSatC, *jSt2;
+    unsigned char now[5];
+    unsigned int rel;
+    if (!c) { lim_no_stub(); return FIX_TABLE; }
+    p = c;
+    *p++ = 0x83; *p++ = 0xFB; *p++ = 0x02; *p++ = 0x74; jU1 = p++;  /* cmp ebx,2; je unsig */
+    *p++ = 0x83; *p++ = 0xFB; *p++ = 0x0A; *p++ = 0x74; jU2 = p++;  /* cmp ebx,0xA; je     */
+    *p++ = 0x81; *p++ = 0xFA; *p++ = 0xFF; *p++ = 0x7F; *p++ = 0x00; *p++ = 0x00; /* cmp edx,0x7FFF */
+    *p++ = 0x7E; jLo = p++;                                         /* jle low            */
+    *p++ = 0xBA; *p++ = 0xFF; *p++ = 0x7F; *p++ = 0x00; *p++ = 0x00; /* mov edx,0x7FFF    */
+    *p++ = 0xEB; jSatA = p++;                                       /* jmp sat            */
+    *jLo = (unsigned char)(p - (jLo + 1));
+    *p++ = 0x81; *p++ = 0xFA; *p++ = 0x00; *p++ = 0x80; *p++ = 0xFF; *p++ = 0xFF; /* cmp edx,-0x8000 */
+    *p++ = 0x7D; jSt1 = p++;                                        /* jge store          */
+    *p++ = 0xBA; *p++ = 0x00; *p++ = 0x80; *p++ = 0xFF; *p++ = 0xFF; /* mov edx,-0x8000   */
+    *p++ = 0xEB; jSatB = p++;                                       /* jmp sat            */
+    *jU1 = (unsigned char)(p - (jU1 + 1));
+    *jU2 = (unsigned char)(p - (jU2 + 1));
+    *p++ = 0x85; *p++ = 0xD2;                                       /* test edx,edx       */
+    *p++ = 0x7D; jUp = p++;                                         /* jge up             */
+    *p++ = 0x33; *p++ = 0xD2;                                       /* xor edx,edx        */
+    *p++ = 0xEB; jSatC = p++;                                       /* jmp sat            */
+    *jUp = (unsigned char)(p - (jUp + 1));
+    *p++ = 0x81; *p++ = 0xFA; *p++ = 0xFF; *p++ = 0xFF; *p++ = 0x00; *p++ = 0x00; /* cmp edx,0xFFFF */
+    *p++ = 0x7E; jSt2 = p++;                                        /* jle store          */
+    *p++ = 0xBA; *p++ = 0xFF; *p++ = 0xFF; *p++ = 0x00; *p++ = 0x00; /* mov edx,0xFFFF    */
+    *jSatA = (unsigned char)(p - (jSatA + 1));
+    *jSatB = (unsigned char)(p - (jSatB + 1));
+    *jSatC = (unsigned char)(p - (jSatC + 1));
+    *p++ = 0x60;                                                    /* sat: pushad        */
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)b7_word_event);
+    *p++ = 0x61;                                                    /* popad              */
+    *jSt1 = (unsigned char)(p - (jSt1 + 1));
+    *jSt2 = (unsigned char)(p - (jSt2 + 1));
+    memcpy(p, store, 5); p += 5;                                    /* store              */
+    wk_jmp(p, 0xE9, 0x00489C76u);
+    rel = (unsigned int)(size_t)c - (0x00489C71u + 5u);
+    now[0] = 0xE9; memcpy(now + 1, &rel, 4);
+    lim_add(0x00489C71u, 5, store, now, "B7: a hit's amount saturated into its word");
+    return FIX_TABLE;
+}
+
+static int fix_kill_outright(void)
+{
+    static const unsigned char was[7] = { 0x33, 0xC9, 0xB8, 0x67, 0x66, 0x66, 0x66 };
+    unsigned char* c = fix_code(48);
+    unsigned char *p, *j;
+    unsigned char now[7];
+    unsigned int rel;
+    if (!c) { lim_no_stub(); return FIX_TABLE; }
+    p = c;
+    *p++ = 0x81; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x24;             /* cmp dword [esp+0x24], */
+    *p++ = 0x30; *p++ = 0x75; *p++ = 0x00; *p++ = 0x00;             /*   30000: the call's own amount */
+    *p++ = 0x7C; j = p++;                                           /* jl stock           */
+    *p++ = 0x60; *p++ = 0x56;                                       /* pushad; push esi   */
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)b7_outright_event);
+    *p++ = 0x61;                                                    /* popad              */
+    *p++ = 0x8B; *p++ = 0xD7;                                       /* mov edx,edi        */
+    p = wk_jmp(p, 0xE9, 0x00489C3Au);
+    *j = (unsigned char)(p - (j + 1));
+    memcpy(p, was, 7); p += 7;
+    wk_jmp(p, 0xE9, 0x00489BFAu);
+    rel = (unsigned int)(size_t)c - (0x00489BF3u + 5u);
+    memset(now, 0x90, sizeof now); now[0] = 0xE9; memcpy(now + 1, &rel, 4);
+    lim_add(0x00489BF3u, 7, was, now, "B7: kill-outright skips the veterancy reduction");
+    return FIX_TABLE;
+}
+
+static int fix_meteor_once(void)
+{
+    static const unsigned char spawn[5] = { 0xE8, 0xBE, 0xE7, 0xFF, 0xFF };  /* call 0x49C740 */
+    static const unsigned char recv[5]  = { 0xE8, 0x34, 0xF4, 0xFF, 0xFF };  /* call 0x49C740 */
+    static const unsigned char gate[5]  = { 0x33, 0xC9, 0x8A, 0x4E, 0x66 };  /* xor ecx,ecx; mov cl,[esi+0x66] */
+    unsigned char* c = fix_code(48);
+    unsigned char *p, *j1, *j2, *j3;
+    unsigned char now[5];
+    unsigned int rel;
+    if (!c) { lim_no_stub(); return FIX_TABLE; }
+    /* 0x49A01B: cmp dword [esi+0x52],0; jne stock; cmp byte [esi+0x66],10; jne stock;
+       cmp word [esi+0x62],PJ_RECEIVED; jne stock; pushad; call event; popad; jmp 0x49A0AE;
+       stock: xor ecx,ecx; mov cl,[esi+0x66]; jmp 0x49A020 */
+    p = c;
+    *p++ = 0x83; *p++ = 0x7E; *p++ = 0x52; *p++ = 0x00; *p++ = 0x75; j1 = p++;
+    *p++ = 0x80; *p++ = 0x7E; *p++ = 0x66; *p++ = 0x0A; *p++ = 0x75; j2 = p++;
+    *p++ = 0x66; *p++ = 0x83; *p++ = 0x7E; *p++ = PJ_ORIGIN; *p++ = PJ_RECEIVED;
+    *p++ = 0x75; j3 = p++;
+    *p++ = 0x60;
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)b7_copy_event);
+    *p++ = 0x61;
+    p = wk_jmp(p, 0xE9, 0x0049A0AEu);
+    *j1 = (unsigned char)(p - (j1 + 1));
+    *j2 = (unsigned char)(p - (j2 + 1));
+    *j3 = (unsigned char)(p - (j3 + 1));
+    memcpy(p, gate, 5); p += 5;
+    wk_jmp(p, 0xE9, 0x0049A020u);
+    rel = (unsigned int)(size_t)c - (0x0049A01Bu + 5u);
+    now[0] = 0xE9; memcpy(now + 1, &rel, 4);
+    lim_add(0x0049A01Bu, 5, gate, now, "B7: a received meteor's damage left to its spawner");
+    rel = (unsigned int)(size_t)meteor_spawned - (0x0049DF7Du + 5u);
+    now[0] = 0xE8; memcpy(now + 1, &rel, 4);
+    lim_add(0x0049DF7Du, 5, spawn, now, "B7: a spawned meteor marked its spawner's");
+    rel = (unsigned int)(size_t)meteor_received - (0x0049D307u + 5u);
+    now[0] = 0xE8; memcpy(now + 1, &rel, 4);
+    lim_add(0x0049D307u, 5, recv, now, "B7: a received meteor marked received");
+    return FIX_TABLE;
+}
+
+/* CLASS: local. Without it the radar rebuild reads through NULL. */
+static int fix_radar_owner(void)
+{
+    static const unsigned char was[11] = { 0x8B, 0x4B, 0x48,                     /* mov ecx,[ebx+0x48]   */
+                                           0x38, 0x81, 0xFF, 0x00, 0x00, 0x00,   /* cmp [ecx+0xFF],al    */
+                                           0x75, 0x4A };                          /* jne 0x467406         */
+    unsigned char *s, *p, *j1, *j2;
+    if (memcmp((const void*)0x004673B1, was, sizeof was) != 0) return FIX_BYTES;
+    s = p = tagpu_detour_stub();
+    if (!s) return FIX_STUB;
+    *p++ = 0x8B; *p++ = 0x4B; *p++ = 0x48;                          /* mov ecx,[ebx+0x48] */
+    *p++ = 0x85; *p++ = 0xC9;                                       /* test ecx,ecx       */
+    *p++ = 0x74; j1 = p++;                                          /* jz none            */
+    *p++ = 0x38; *p++ = 0x81; *p++ = 0xFF; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00; /* cmp [ecx+0xFF],al */
+    *p++ = 0x75; j2 = p++;                                          /* jne skip           */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004673BC); p += 4;
+    *j1 = (unsigned char)(p - (j1 + 1));
+    *p++ = 0x60;                                                    /* none: pushad       */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)b7_radar_event); p += 4;
+    *p++ = 0x61;                                                    /* popad              */
+    *j2 = (unsigned char)(p - (j2 + 1));
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00467406);                   /* skip               */
+    if (!tagpu_detour_land(0x004673B1, s, (int)sizeof was)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    return FIX_ARMED;
+}
+
 /* ===== STALE HITS: THE INCARNATION ON THE WIRE, AND THE TWO-TICK HOLD ======================
    Landing B4 of research/notes/tadr-port/sim-fixes.md ("B4 DESIGN" has the argument in full;
    the addresses are in exe-reverse-engineering.md, "Unit identity on the wire").
@@ -7061,6 +7442,11 @@ static void patch_engine_defects(void)
     int losl = fix_los_local();
     int pview = fix_projectile_view();
     int wkey = fix_weapon_keys();
+    int vet  = fix_veterancy();
+    int word = fix_hit_word();
+    int kout = fix_kill_outright();
+    int once = fix_meteor_once();
+    int radar = fix_radar_owner();
     int wire = fix_wire_bounds();
     int hits = fix_stale_hits();
     int ghost = fix_ghost_commander(wire);
@@ -7127,6 +7513,24 @@ static void patch_engine_defects(void)
               "notoverland (the store 0x42E310 0x42E468; the verdict 0x49ABB0; the order action "
               "0x43F1D4; the guidance 0x49B9EB; the fire gate 0x49E1FD) %s",
               fix_state(wkey));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: veterancy -- VeterancyThresholds, VeterancyAccuracyBuffRate (the unit "
+              "keys 0x42D2E0 0x42BF40 0x42BF97; damage taken 0x489BFA; dealt 0x499DB5; reload "
+              "0x49E468; lead 0x48A324; spread 0x49D6EA; the capture's cost 0x4043D8 and time "
+              "0x43869D) %s",
+              fix_state(vet));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: B7 -- a hit's amount saturated into its word (0x489C71) %s; "
+              "kill-outright skips the veterancy reduction (0x489BF3) %s; one meteor one hit, "
+              "a received stone's damage left to its spawner (0x49A01B 0x49DF7D 0x49D307) %s; "
+              "the radar's owner test with no attacker (0x4673B1) %s",
+              fix_state(word), fix_state(kout), fix_state(once), fix_state(radar));
     b[sizeof b - 1] = 0;
     plog(b);
 

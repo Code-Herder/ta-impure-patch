@@ -10,8 +10,10 @@
    UnitDef slot. Observers at the unit-data load's start (0x42D2E0) and the
    loader's entry keep each record to its own load, and one on the checksum
    0x4B6BA0 records each COB block's length for the mask's bounds. Installed
-   at attach for the process, each site byte-matched; a mismatch leaves that
-   site untouched, skips the sites that rest on it, and logs.
+   at attach for the process, before the fail-closed table, each site
+   byte-matched; a mismatch leaves that site untouched, skips the sites that
+   rest on it, logs, and makes the table refuse to install (the veterancy keys
+   it carries are simulation).
 
    The build ghost's piece mask (C1): which pieces a type's ghost hides. By
    default the pieces its COB `Create()` hides before anything else runs; with
@@ -54,8 +56,35 @@ int tagpu_datakeys_fire_gate(char* unit, int slot_index, const char* weapon, con
    and it is 0x47F850 itself whenever the silence is not installed. */
 int __stdcall tagpu_datakeys_alert(char* unit, int kind, int arg);
 
-/* DLL attach, before the engine runs: installs the FBI reader and the
-   nomapweaponalert silence, each skip-and-log. */
+/* Veterancy (C3): VeterancyThresholds= and VeterancyAccuracyBuffRate=, read
+   into the unit-key records. Each site's answer, on the GAME thread in play:
+   -1 means "run stock's own instructions" (the type carries no key), any
+   other value is the keyed type's, already bounded for the site's arithmetic.
+   The sites are in the fail-closed table (tagpu_patches.c, fix_veterancy):
+   taken 0x489BFA (L <= 25), dealt 0x499DB5, reload 0x49E468 (L <= 16), lead
+   0x48A324 (1 on, 0 off), accuracy 0x49D6EA (the divisor), the capture's
+   tick 0x4043D8 (10 + L) and time 0x43869D (L + 1, L <= 13107). */
+int __stdcall tagpu_datakeys_vet_taken(const char* unit);
+int __stdcall tagpu_datakeys_vet_dealt(const char* unit);
+int __stdcall tagpu_datakeys_vet_reload(const char* unit);
+int __stdcall tagpu_datakeys_vet_lead(const char* unit);
+int __stdcall tagpu_datakeys_vet_accuracy(const char* unit);
+int __stdcall tagpu_datakeys_vet_capture_tick(const char* unit);
+int __stdcall tagpu_datakeys_vet_capture_time(const char* unit);
+/* the reload level, keyed or stock's min(kills / 5, 5): the extra-weapons
+   module's C reload takes the same one */
+int tagpu_datakeys_vet_reload_level(const char* unit);
+/* the damage-taken level, keyed or stock's */
+unsigned tagpu_datakeys_vet_taken_level(const char* unit);
+
+/* DLL attach, before the fail-closed table is written: the unit-key reader
+   (0x42D2E0, 0x42BF40, 0x42BF97; and the COB checksum 0x4B6BA0 for the ghost
+   mask). 1 when armed. Asked again, it answers the first call's result. */
+int tagpu_datakeys_units_install(void);
+
+/* DLL attach, before the engine runs: the nomapweaponalert silence and the
+   veterancy panels, each skip-and-log, and the unit-key reader if the table
+   has not installed it. */
 void tagpu_datakeys_init(void);
 
 /* GAME THREAD, inside an in-play packet fill only. The ghost mask of unit type

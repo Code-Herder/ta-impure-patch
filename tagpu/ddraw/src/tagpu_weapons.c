@@ -934,10 +934,11 @@ static void __stdcall my_AutoAim(char* u)
         }
         else
         {
-            int m = (int)*(u16*)(u + 0xB8) / 5;
+            /* the veterancy level 0x49E468 takes for slots 0..2: stock's
+               min(kills / 5, 5), or the type's own (tagpu_datakeys.c) */
+            int m = tagpu_datakeys_vet_reload_level(u);
             u32 hp20 = (u32)((int)*(i16*)(u + 0x108) * 20);
             int a, b;
-            if (m > 5) m = 5;
             a = 0x78 - (int)(hp20 / *(u32*)(UDEF(u) + 0x1FA));
             b = ((100 - 6 * m) * (int)*(u16*)(w + 0xE4)) / 100;
             s->reload = (u16)((a * b) / 100);

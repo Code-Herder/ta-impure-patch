@@ -3572,6 +3572,7 @@ def _scn_entity_body(node, where, default=None):
         "height": _scn_int(node, "height", where, 0, SCN_WORLD_MAX, d.get("height")),
         "health": _scn_int(node, "health", where, 1, 100, d.get("health")),
         "nanoframe": _scn_int(node, "nanoframe", where, 0, 100, d.get("nanoframe")),
+        "kills": _scn_int(node, "kills", where, 0, 65535, d.get("kills")),
         "stance": _scn_str(node, "stance", where, choices=SCN_STANCES,
                            aliases=SCN_STANCE_ALIASES, default=d.get("stance")),
         "orders": _scn_orders(node, where, d.get("orders")),
@@ -3785,7 +3786,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: groups[{i}]"
         _scn_keys(g, w, required=("at", "composition", "pattern"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "stance", "orders"))
+                            "kills", "stance", "orders"))
         given = _scn_str(g, "id", w, raw=True)
         gid = claim(given or f"group{i}", "group", w, bool(given))
         composition = []
@@ -3809,7 +3810,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: units[{i}]"
         _scn_keys(u, w, required=("type", "pos"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "stance", "orders"))
+                            "kills", "stance", "orders"))
         given = _scn_str(u, "id", w, raw=True)
         norm["units"].append({"id": claim(given or f"#u{i}", "unit", w, bool(given)),
                               "type": _scn_type(u, w, unit_names, "unit", lenient),
@@ -3913,6 +3914,7 @@ def _scn_unit_record(handle, type_name, owner, pos, body, group=None):
     return {"id": handle, "type": type_name, "owner": owner, "pos": list(pos),
             "height": body["height"], "facing": body["facing"],
             "health": body["health"], "nanoframe": body["nanoframe"],
+            "kills": body["kills"],
             "stance": body["stance"], "orders": body["orders"], "group": group}
 
 
@@ -4018,11 +4020,11 @@ def _scn_wire(exp) -> str:
                          f"energy={_f(p['energy'])}")
 
     lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
-                 "<stance> <nano%>")
+                 "<stance> <nano%> <kills>")
     for i, u in enumerate(exp["units"]):
         lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
                      f"{_f(u['height'])} {_f(u['facing'])} {_f(u['health'])} "
-                     f"{_f(u['stance'])} {_f(u['nanoframe'])}")
+                     f"{_f(u['stance'])} {_f(u['nanoframe'])} {_f(u['kills'])}")
     for i, f in enumerate(exp["features"]):
         lines.append(f"feat {i} {f['type']} {f['pos'][0]} {f['pos'][1]} "
                      f"{_f(f['height'])} {_f(f['facing'])}")

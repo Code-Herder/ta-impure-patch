@@ -53,7 +53,13 @@ static int ptr_ok(const void* p) { return tagpu_m3_ptr_ok(p); }
    between a level's teardown and its first in-play draw, which is the same
    ordering every game-thread read of the def array itself rests on (the
    in-play publish point, exe-reverse-engineering.md); the reload is on the
-   reader's own thread. The render thread never reads a record. */
+   reader's own thread. The render thread never reads a record.
+
+   The veterancy keys make these records simulation state: the reader is
+   installed before the fail-closed table is written, and the table refuses
+   to install without it (tagpu_patches.c, fix_veterancy). */
+#define DK_VET_MAX 32       /* thresholds a list may carry                    */
+
 typedef struct DkUnit {
     const char* def;        /* the UnitDef this row was written for           */
     unsigned    serial;     /* a fresh number at every write: the mask cache's
@@ -61,6 +67,12 @@ typedef struct DkUnit {
     char*       pp;         /* PreviewPieces=, parsed: pp_n lower-case names,
                                each NUL-ended, back to back; NULL = absent    */
     unsigned    pp_n;
+    unsigned short vthr[DK_VET_MAX]; /* VeterancyThresholds=, strictly
+                               increasing, each 1..65535                      */
+    unsigned char  vthr_n;  /* 0 = absent or refused: the sites run stock's
+                               own instructions for this type                 */
+    unsigned char  vrate_on;/* VeterancyAccuracyBuffRate= accepted           */
+    unsigned short vrate;   /* 0 = no accuracy buff                           */
 } DkUnit;
 
 static DkUnit   s_unit[TAGPU_LIM_TYPES];
@@ -70,6 +82,7 @@ static void unit_clear(DkUnit* r)
 {
     free(r->pp);
     r->pp = NULL; r->pp_n = 0;
+    r->vthr_n = 0; r->vrate_on = 0; r->vrate = 0;
 }
 
 /* THE COB'S LENGTH, which the loaded script does not carry. 0x4B2450 reads
@@ -264,6 +277,79 @@ static void fbi_name(void* sec, char* nm, int cap)
     if (!nm[0]) { strncpy(nm, "?", (size_t)cap); nm[cap - 1] = 0; }
 }
 
+/* A whole number from lo to 65535, written in decimal digits alone: no sign,
+   no fraction, no suffix. */
+static int parse_u16(const char* s, unsigned len, unsigned lo, unsigned* out)
+{
+    unsigned v = 0, i;
+    if (!len || len > 5) return 0;
+    for (i = 0; i < len; i++) {
+        if (s[i] < '0' || s[i] > '9') return 0;
+        v = v * 10 + (unsigned)(s[i] - '0');
+    }
+    if (v < lo || v > 65535) return 0;
+    *out = v;
+    return 1;
+}
+
+static int vet_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+/* VeterancyThresholds='s value, split on white space as TADR splits it, taken
+   whole or not at all: 1..DK_VET_MAX whole numbers from 1 to 65535, strictly
+   increasing. Returns NULL with the list stored, or why it is refused. */
+static const char* parse_thresholds(const char* v, DkUnit* r)
+{
+    unsigned short thr[DK_VET_MAX];
+    unsigned n = 0, t;
+    while (*v) {
+        const char* s;
+        if (vet_space(*v)) { v++; continue; }
+        s = v;
+        while (*v && !vet_space(*v)) v++;
+        if (!parse_u16(s, (unsigned)(v - s), 1, &t)) return "a threshold is not a whole number from 1 to 65535";
+        if (n == DK_VET_MAX) return "it lists more than 32 thresholds";
+        if (n && t <= thr[n - 1]) return "the thresholds do not strictly increase";
+        thr[n++] = (unsigned short)t;
+    }
+    if (!n) return "it names no threshold";
+    memcpy(r->vthr, thr, n * sizeof thr[0]);
+    r->vthr_n = (unsigned char)n;
+    return NULL;
+}
+
+static void read_veterancy(DkUnit* r, void* sec)
+{
+    char v[DK_VALUE_CAP], nm[33];
+    const char* why;
+    unsigned rate;
+
+    v[0] = 0;
+    if (E_TdfGetStr(sec, v, "VeterancyThresholds", DK_VALUE_CAP, "")) {
+        fbi_name(sec, nm, (int)sizeof nm);
+        why = strlen(v) >= DK_VALUE_CAP - 1 ? "it fills the reader and may be cut"
+                                            : parse_thresholds(v, r);
+        if (why) dlog("%s: VeterancyThresholds= refused (%s); the type keeps stock's", nm, why);
+        else     dlog("%s: VeterancyThresholds= %u level(s), the first at %u kill(s)", nm,
+                      (unsigned)r->vthr_n, (unsigned)r->vthr[0]);
+    }
+    v[0] = 0;
+    if (E_TdfGetStr(sec, v, "VeterancyAccuracyBuffRate", DK_VALUE_CAP, "")) {
+        const char *s = v, *e, *t;
+        fbi_name(sec, nm, (int)sizeof nm);
+        while (vet_space(*s)) s++;
+        for (e = s; *e && !vet_space(*e); e++) {}
+        for (t = e; vet_space(*t); t++) {}
+        if (*t || !parse_u16(s, (unsigned)(e - s), 0, &rate)) {
+            dlog("%s: VeterancyAccuracyBuffRate= refused (not a whole number from 0 to 65535); "
+                 "the type keeps stock's", nm);
+        } else {
+            r->vrate_on = 1;
+            r->vrate = (unsigned short)rate;
+            dlog("%s: VeterancyAccuracyBuffRate= %u%s", nm, rate, rate ? "" : " (no accuracy buff)");
+        }
+    }
+}
+
 static void __cdecl fbi_at_read(const unsigned int* regs)
 {
     const char* def = (const char*)(size_t)regs[2];      /* ebp */
@@ -280,6 +366,8 @@ static void __cdecl fbi_at_read(const unsigned int* regs)
     if (!def_slot(def, &slot)) return;
     r = &s_unit[slot];
     if (r->def != def) return;
+
+    read_veterancy(r, sec);
 
     v[0] = 0;
     if (!E_TdfGetStr(sec, v, "PreviewPieces", DK_VALUE_CAP, "")) return;
@@ -329,33 +417,51 @@ static int observe(unsigned va, const unsigned char* stolen, int n, tagpu_detour
     return tagpu_detour_bytes_ok(va, stolen, n) && tagpu_detour_observe(va, stolen, n, fn, NULL);
 }
 
-/* DRAW KEYS, SO A MISMATCH SKIPS AND LOGS, and each part lands only on the
-   parts it rests on. The load's start empties both tables, so without it
-   nothing else lands and every ghost shows every piece. Without the checksum
-   observer no script has a length and no Create() mask is computed. Without
-   the loader's entry the reader does not land, so no record can outlive its
-   load. */
-static void alert_install(void);
+/* Each part lands only on the parts it rests on. The load's start empties
+   both tables, so without it nothing else lands. Without the checksum
+   observer no script has a length and no Create() mask is computed: a draw
+   difference, logged. Without the loader's entry the reader does not land, so
+   no record can outlive its load. The reader carries the veterancy keys, so
+   the fail-closed table installs it first and refuses to install when it is
+   not armed (tagpu_patches.c, fix_veterancy): a player whose reader failed
+   would play stock veterancy for keyed types. Asked again, it answers what
+   the first call did. */
+static int s_unitsState;                    /* 0 not tried, 1 armed, -1 not */
 
-void tagpu_datakeys_init(void)
+int tagpu_datakeys_units_install(void)
 {
-    alert_install();
+    if (s_unitsState) return s_unitsState > 0;
+    s_unitsState = -1;
     if (!observe(VA_UNIT_LOAD, UNIT_LOAD_STOLEN, (int)sizeof UNIT_LOAD_STOLEN, unit_load_begin)) {
-        dlog("NOT installed: the bytes at 0x42D2E0 are not the retail unit-data load's; "
-             "no PreviewPieces= and no Create() mask, every ghost shows every piece");
-        return;
+        dlog("the unit keys NOT installed: the bytes at 0x42D2E0 are not the retail unit-data "
+             "load's");
+        return 0;
     }
     if (observe(VA_CHECKSUM, CHECKSUM_STOLEN, (int)sizeof CHECKSUM_STOLEN, cob_checksummed))
         dlog("COB lengths recorded at 0x4B6BA0's call from 0x4B2450 (the Create() mask)");
     else
         dlog("COB lengths NOT recorded: the bytes at 0x4B6BA0 are not the retail checksum's; "
-             "no Create() mask is computed");
-    if (observe(VA_FBI_LOADER, FBI_LOADER_STOLEN, (int)sizeof FBI_LOADER_STOLEN, fbi_begin) &&
-        fbi_install())
-        dlog("FBI reader installed at 0x42BF40 and 0x42BF97 (PreviewPieces=)");
-    else
-        dlog("FBI reader NOT installed: the bytes at 0x42BF40 or 0x42BF97 are not the retail "
-             "loader's; PreviewPieces= is not read and every ghost takes its Create() mask");
+             "no Create() mask is computed, every ghost shows every piece its list keeps");
+    if (!observe(VA_FBI_LOADER, FBI_LOADER_STOLEN, (int)sizeof FBI_LOADER_STOLEN, fbi_begin) ||
+        !fbi_install()) {
+        dlog("the unit keys NOT installed: the bytes at 0x42BF40 or 0x42BF97 are not the retail "
+             "loader's, or a write failed");
+        return 0;
+    }
+    s_unitsState = 1;
+    dlog("the unit keys read at 0x42BF40 and 0x42BF97 (PreviewPieces=, VeterancyThresholds=, "
+         "VeterancyAccuracyBuffRate=), emptied at 0x42D2E0");
+    return 1;
+}
+
+static void alert_install(void);
+static void vet_panels_install(void);
+
+void tagpu_datakeys_init(void)
+{
+    alert_install();
+    vet_panels_install();
+    tagpu_datakeys_units_install();
 }
 
 /* =========================================================================
@@ -1383,4 +1489,261 @@ static void alert_install(void)
     else
         dlog("nomapweaponalert: the projectile's dot NOT hidden: the bytes at 0x49E010 are not "
              "the retail ones; a harmless meteor keeps its minimap dot");
+}
+
+/* =========================================================================
+   6. Veterancy (C3)
+   ========================================================================= */
+
+/* A unit's kills are the u16 +0xB8, zero-extended by every engine reader;
+   the one increment is the destructor's 0x4869CA, on every peer, from the
+   death record (data-keys-evidence.md Part 3 §0). A type's LEVEL is the
+   count of its thresholds at or below its kills, as TADR counts it. Each
+   effect bounds the level where its arithmetic needs a bound, and each bound
+   is stated at the effect. A type without the key never reaches these: its
+   site runs stock's own instructions. */
+#define U_KILLS         0xB8
+#define DK_VET_TAKEN    25      /* (25 - L) * 4 % of a weapon hit: L = 25 is none */
+#define DK_VET_RELOAD   16      /* the largest L with 100 - 6L > 0                */
+#define DK_VET_CAPTURE  13107   /* stock's own ceiling, 65535 / 5                 */
+
+static unsigned kills_of(const char* u) { return *(const unsigned short*)(u + U_KILLS); }
+
+/* the record of the unit's type, or NULL: the unit's def pointer is DATA,
+   bounded to a slot of the def array and taken only when the slot's row was
+   written for that def */
+static const DkUnit* vet_row(const char* u)
+{
+    const char* def;
+    unsigned slot;
+    const DkUnit* r;
+    if (!ptr_ok(u)) return NULL;
+    def = *(const char* const*)(u + U_TYPE);
+    if (!def_slot(def, &slot)) return NULL;
+    r = &s_unit[slot];
+    return r->def == def ? r : NULL;
+}
+
+static unsigned vet_level(const DkUnit* r, unsigned k)
+{
+    unsigned lo = 0, hi = r->vthr_n;
+    while (lo < hi) {
+        unsigned m = (lo + hi) / 2;
+        if (r->vthr[m] <= k) lo = m + 1; else hi = m;
+    }
+    return lo;
+}
+
+/* The capture level has no top in TADR: past the last threshold it goes on
+   by the last gap (by the one threshold, for a list of one). The gap is at
+   least 1 and the threshold at least 1 by the parse, so neither divides by
+   zero; the level is capped at stock's own ceiling, so no capture product
+   exceeds one stock already computes. */
+static unsigned vet_level_open(const DkUnit* r, unsigned k)
+{
+    unsigned n = r->vthr_n, top = r->vthr[n - 1], l;
+    if (k <= top) return vet_level(r, k);
+    l = n >= 2 ? n + (k - top) / (unsigned)(top - r->vthr[n - 2]) : k / r->vthr[0];
+    return l > DK_VET_CAPTURE ? DK_VET_CAPTURE : l;
+}
+
+static unsigned stock_level(unsigned k) { return k / 5 > 5 ? 5 : k / 5; }
+
+static void vet_event(unsigned* n, const char* what)
+{
+    unsigned c = ++*n;
+    if ((c & (c - 1)) == 0) dlog("veterancy: %s (%u so far)", what, c);
+}
+static unsigned s_evTaken, s_evDealt, s_evReload, s_evLead, s_evAim, s_evCapTick, s_evCapTime,
+                s_evLabel;
+
+static const DkUnit* vet_keyed(const char* u)
+{
+    const DkUnit* r = vet_row(u);
+    return r && r->vthr_n ? r : NULL;
+}
+
+/* THE SITES' ANSWERS, each on the GAME thread in play: -1 runs stock's own
+   instructions; any other value is the keyed type's. */
+
+/* 0x489BFA, the damage a hit's victim takes: L for 0x489C16's (25 - L) * 4 %.
+   A call of 30 000 or more never reaches it (the kill-outright exemption at
+   0x489BF3). */
+static unsigned taken_level(const DkUnit* r, unsigned k)
+{
+    unsigned l = vet_level(r, k);
+    return l > DK_VET_TAKEN ? DK_VET_TAKEN : l;
+}
+
+int __stdcall tagpu_datakeys_vet_taken(const char* u)
+{
+    const DkUnit* r = vet_keyed(u);
+    if (!r) return -1;
+    vet_event(&s_evTaken, "a keyed type's level set the damage it took");
+    return (int)taken_level(r, kills_of(u));
+}
+
+/* 0x499DB5, the damage a shooter deals: L for 0x499DD1's (100 + 6L) %. L is
+   at most DK_VET_MAX, so the product stays far inside an int; the HP word's
+   saturation (0x489C71) bounds what the hit can do. */
+int __stdcall tagpu_datakeys_vet_dealt(const char* u)
+{
+    const DkUnit* r = vet_keyed(u);
+    if (!r) return -1;
+    vet_event(&s_evDealt, "a keyed type's level set the damage it dealt");
+    return (int)vet_level(r, kills_of(u));
+}
+
+/* 0x49E468, a slot's reload: L for 0x49E48D's (100 - 6L) %. */
+int __stdcall tagpu_datakeys_vet_reload(const char* u)
+{
+    const DkUnit* r = vet_keyed(u);
+    unsigned l;
+    if (!r) return -1;
+    l = vet_level(r, kills_of(u));
+    vet_event(&s_evReload, "a keyed type's level set a reload");
+    return (int)(l > DK_VET_RELOAD ? DK_VET_RELOAD : l);
+}
+
+/* the same level for the extra-weapons module's own reload (tagpu_weapons.c),
+   stock's min(kills / 5, 5) for a type without the key */
+int tagpu_datakeys_vet_reload_level(const char* u)
+{
+    int l = tagpu_datakeys_vet_reload(u);
+    return l < 0 ? (int)stock_level(kills_of(u)) : l;
+}
+
+/* 0x48A324, target lead: on past the first threshold, as stock's is past 5 */
+int __stdcall tagpu_datakeys_vet_lead(const char* u)
+{
+    const DkUnit* r = vet_keyed(u);
+    if (!r) return -1;
+    vet_event(&s_evLead, "a keyed type's first threshold decided its target lead");
+    return kills_of(u) > r->vthr[0] ? 1 : 0;
+}
+
+/* 0x49D6EA, the fire method's spread: the divisor kills / rate, which the
+   engine applies when it exceeds 1 (0x49D702). Rate 0 is no buff. Stock's
+   divisor is kills / 12, which TADR documents as its default rate; so the
+   formula is the code's, and TADR's written "1 + kills / rate" is not. */
+int __stdcall tagpu_datakeys_vet_accuracy(const char* u)
+{
+    const DkUnit* r = vet_row(u);
+    if (!r || !r->vrate_on) return -1;
+    vet_event(&s_evAim, "a keyed type's rate set its spread");
+    return r->vrate ? (int)(kills_of(u) / r->vrate) : 0;
+}
+
+/* 0x4043D8, the capture order's tick, read of the TARGET: 10 + L for
+   0x4043EC, stock's being 10 + kills / 5 */
+int __stdcall tagpu_datakeys_vet_capture_tick(const char* u)
+{
+    const DkUnit* r = vet_keyed(u);
+    if (!r) return -1;
+    vet_event(&s_evCapTick, "a keyed target's level set a capture's cost");
+    return 10 + (int)vet_level_open(r, kills_of(u));
+}
+
+/* 0x43869D, the capture's duration, read of the CAPTURER: L + 1 for
+   0x4386B9, stock's being (kills + 5) / 5 */
+int __stdcall tagpu_datakeys_vet_capture_time(const char* u)
+{
+    const DkUnit* r = vet_keyed(u);
+    if (!r) return -1;
+    vet_event(&s_evCapTime, "a keyed capturer's level set a capture's time");
+    return 1 + (int)vet_level_open(r, kills_of(u));
+}
+
+/* the level a hit's victim would take the reduction of, keyed or stock: the
+   kill-outright exemption counts the calls it changed with it */
+unsigned tagpu_datakeys_vet_taken_level(const char* u)
+{
+    const DkUnit* r = vet_keyed(u);
+    return r ? taken_level(r, kills_of(u)) : stock_level(kills_of(u));
+}
+
+/* --- the panels ----------------------------------------------------------------
+   Both kill lines, the unit panel's 0x46AEE0 (at 0x46B306, the unit in esi)
+   and the second panel's 0x467CB0 (at 0x467CCF, the unit in edi), print
+   "N kills - Veteran" past 4 kills and "N kill(s)" otherwise. Here every unit
+   at level 1 or more says "VetL", its own type's level or stock's for a type
+   without the key, as TADR does; below level 1 the line is stock's short
+   one. The singular "kill" stays stock's choice, which TADR drops. DISPLAY:
+   a mismatch skips and logs. Both run on the game thread inside the panel's
+   draw, and each site has its own buffer, used by the sprintf that follows
+   the site before anything else runs. */
+static char s_labelPanel[16], s_labelDev[16];
+
+static const char* vet_label(const char* u, char* buf)
+{
+    const DkUnit* r = vet_keyed(u);
+    unsigned k = kills_of(u), l = r ? vet_level(r, k) : stock_level(k);
+    if (!l) return NULL;
+    _snprintf(buf, 16, "Vet%u", l);
+    buf[15] = 0;
+    vet_event(&s_evLabel, "a panel named a veteran's level");
+    return buf;
+}
+
+static const char* __stdcall label_panel(const char* u) { return vet_label(u, s_labelPanel); }
+static const char* __stdcall label_dev(const char* u)   { return vet_label(u, s_labelDev); }
+
+#define VA_PANEL_KILLS  0x0046B306u
+#define VA_DEV_KILLS    0x00467CCFu
+static const unsigned char PANEL_KILLS_WAS[7] = { 0x66, 0x8B, 0x8E, 0xB8, 0x00, 0x00, 0x00 }; /* mov cx,[esi+0xB8] */
+static const unsigned char DEV_KILLS_WAS[7]   = { 0x66, 0x8B, 0x8F, 0xB8, 0x00, 0x00, 0x00 }; /* mov cx,[edi+0xB8] */
+
+/* pushad; push <unit>; call label; mov [esp+0x18],eax (popad's ecx); popad;
+   test ecx,ecx; jz short; cmp word [<unit>+0xB8],1; jne; <the singular>;
+   mov eax,ecx; jmp <vet>; short: mov cx,[<unit>+0xB8]; jmp <short>. eax is
+   the translated "kill" at both sites, kept by popad for the short line and
+   for the singular; ecx is rewritten by both lines before it is read.
+   unit_reg is 6 (esi) or 7 (edi); `single` stores eax where the site's own
+   singular does. */
+static unsigned char* label_stub(unsigned char unit_reg, const void* fn,
+                                 const unsigned char* single, int nsingle,
+                                 unsigned vet, unsigned shortline)
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char *p = s, *jz, *jne;
+    if (!s) return NULL;
+    *p++ = 0x60;                                            /* pushad             */
+    *p++ = (unsigned char)(0x50 + unit_reg);                /* push esi / edi     */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)fn); p += 4;
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18;     /* mov [esp+0x18],eax */
+    *p++ = 0x61;                                            /* popad              */
+    *p++ = 0x85; *p++ = 0xC9;                               /* test ecx,ecx       */
+    *p++ = 0x74; jz = p++;                                  /* jz short           */
+    *p++ = 0x66; *p++ = 0x83; *p++ = (unsigned char)(0xB8 + unit_reg); /* cmp word [reg+0xB8],1 */
+    *p++ = 0xB8; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00; *p++ = 0x01;
+    *p++ = 0x75; jne = p++;                                 /* jne plural         */
+    memcpy(p, single, (size_t)nsingle); p += nsingle;
+    *jne = (unsigned char)(p - (jne + 1));
+    *p++ = 0x8B; *p++ = 0xC1;                               /* mov eax,ecx        */
+    *p++ = 0xE9; tagpu_detour_rel(p, vet); p += 4;
+    *jz = (unsigned char)(p - (jz + 1));
+    *p++ = 0x66; *p++ = 0x8B; *p++ = (unsigned char)(0x88 + unit_reg); /* mov cx,[reg+0xB8] */
+    *p++ = 0xB8; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    *p++ = 0xE9; tagpu_detour_rel(p, shortline);
+    return s;
+}
+
+static void vet_panels_install(void)
+{
+    static const unsigned char single_panel[4] = { 0x89, 0x44, 0x24, 0x10 }; /* mov [esp+0x10],eax (0x46B319) */
+    static const unsigned char single_dev[2]   = { 0x8B, 0xF0 };             /* mov esi,eax (0x467CE2)       */
+    unsigned char *a, *b;
+    if (!site_is(VA_PANEL_KILLS, PANEL_KILLS_WAS, 7) || !site_is(VA_DEV_KILLS, DEV_KILLS_WAS, 7)) {
+        dlog("veterancy: the panels NOT installed: the bytes at 0x46B306 or 0x467CCF are not the "
+             "retail ones; a veteran's line reads stock's \"Veteran\"");
+        return;
+    }
+    a = label_stub(6, (const void*)label_panel, single_panel, 4, 0x0046B331u, 0x0046B358u);
+    b = label_stub(7, (const void*)label_dev, single_dev, 2, 0x00467CEEu, 0x00467D0Eu);
+    if (!a || !b || !tagpu_detour_land(VA_PANEL_KILLS, a, 7) || !tagpu_detour_land(VA_DEV_KILLS, b, 7)) {
+        dlog("veterancy: the panels NOT installed (a stub or a write failed); a veteran's line "
+             "reads stock's \"Veteran\"");
+        return;
+    }
+    dlog("veterancy: both kill lines name the level, \"VetN\" (0x46B306, 0x467CCF)");
 }
