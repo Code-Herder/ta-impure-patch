@@ -1114,9 +1114,26 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* CULL OFF: a unit's back faces are rasterised. */
-    rs.cullMode = VK_CULL_MODE_NONE;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    /* BACK FACES CULLED, because the engine paints none. Every rasteriser the
+       unit bakes use (0x4C8760 and 0x4C1000 in 0x459830, 0x4C8BB0 and
+       0x4C0C70 in 0x459C70) walks a face's left edge chain BACKWARDS from its
+       top vertex and its right chain forwards, and fills a row only when
+       xr - xl > 0 (0x4C8B6F, 0x4C12E2, 0x4C9078, 0x4C0FBC): a face whose
+       vertices, in index order, do not run clockwise on the engine's y-down
+       screen paints nothing. DISASSEMBLED. Modellers relied on it: 209 of the
+       608 stock models close a surface with two faces over the same vertices,
+       wound apart and textured apart -- ARMCV's doors are grey plating one
+       way and machinery the other -- and with both drawn the depth tie
+       decides which side shows.
+
+       CLOCKWISE, because nothing between the engine's screen and ours
+       reverses a winding: the bake emits each face's fan in index order, as
+       0x459830 copies it (0x459AD5), the vertex stage projects to the
+       engine's own screen position, and this pass's viewport keeps the
+       engine's y growing downward (`record_stage`, "NO Y FLIP") -- and a
+       negative Vulkan area is a clockwise face on a y-down framebuffer. */
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -1191,6 +1208,9 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
        units draw, `tagpu_vk_unit_fx_ready` answers 0, and the native pass
        takes back every record that carries a model while the rest of the
        effects draw. */
+    /* the effects models and the wire below are bands and runs, not faces:
+       neither culls, so what they share with the body stops at the cull */
+    rs.cullMode = VK_CULL_MODE_NONE;
     if (ok) {
         VkShaderModule fxvs = mk_module(d, tagpu_spv_tagpu_posedraw_FXVS,
                                         sizeof tagpu_spv_tagpu_posedraw_FXVS / 4);
