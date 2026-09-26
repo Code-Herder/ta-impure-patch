@@ -2178,12 +2178,15 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        room, so they do not count as recent: the pictures drawn again after the
        re-arm are restored and asked a repaint for. */
     if (s_psPalHave && h->pal && h->colourTwins && memcmp(h->pal, s_psPal, sizeof s_psPal)) {
+        int kept = 0, dropped = 0;
         ps_job_free(d);
         for (i = 0; i < PS_MAX; i++) {
             if (s_ps[i].state == PSE_FREE) continue;
-            if (!s_ps[i].pins) { ps_evict(d, &s_ps[i], 0); continue; }
-            s_ps[i].state = PSE_NEW; s_ps[i].fresh = 1;
+            if (!s_ps[i].pins) { ps_evict(d, &s_ps[i], 0); dropped++; continue; }
+            s_ps[i].state = PSE_NEW; s_ps[i].fresh = 1; kept++;
         }
+        plog(d, "gui: the presented palette moved under the picture store - %d "
+                "bound picture(s) restored again, %d dropped", kept, dropped);
         s_psEvN = 0;
         for (k = 0; k < s_ntw; k++)
             if (s_tw[k].pic && s_tw[k].colImg) { s_tw[k].colNeedClear = 1; s_tw[k].picGen = 0; }

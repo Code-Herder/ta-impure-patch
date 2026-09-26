@@ -3702,7 +3702,24 @@ static void repaint_arm(void)
     unsigned colarm = g_guiq.colarm;
     if (draw && !s_drawShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
     if (resets != s_resetShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
-    if (colarm != s_colarmShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
+    if (colarm != s_colarmShadow) {
+        int i;
+        s_repaintPend = 1; s_repaintCounted = 0;
+        /* A SNAPSHOT IS THE ONE SURFACE THE REDRAW DOES NOT REPAINT -- nothing
+           draws into the post-game backdrop again (see `snap_take`) -- so its
+           repaint is a re-seed. It matters for Classic++'s pictures: the
+           snapshot's sprites follow its seed in the same window, so the
+           consumer's twin is drawn over before the picture is restored and
+           cannot take it (tagpu_vk_gui.c, "A PICTURE TWIN STOPS BEING ONE").
+           Re-sent now, the seed finds the picture done and colours at once,
+           and the sprites land on top again. Exact by construction: a held
+           `snap` plus its `ovl` IS the surface -- anything that could not be
+           replayed has already dropped the snapshot. Bounded by `colarm`'s
+           own bound (tagpu_gui_int.h): a re-seed restores nothing new, so it
+           raises no settle of its own. */
+        for (i = 0; i < s_nsurf; i++)
+            if (s_surf[i].snap) s_surf[i].seeded = 0;
+    }
     s_drawShadow = draw;
     s_resetShadow = resets;
     s_colarmShadow = colarm;
