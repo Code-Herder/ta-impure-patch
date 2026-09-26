@@ -472,7 +472,7 @@ The pump names that record before the dispatch (DISASSEMBLED): it compares `[mai
 the id the receive reports as the sender] with the DirectPlay id `[rec+4]` of each of the ten records
 whose `[rec+0x73]` is nonzero (`0x453DBD..0x453E12`), keeps the match's index at `[esp+0x14]`
 (`0x455F78`), or 10 when none matches or the id is −1 (`0x453E14`, `mov byte [esp+0x14],0xA`), and
-takes the record `main+0x1B63 + index·0x14B` (`0x453E84..0x453E9B`) — for a sender it cannot find,
+takes the record `main+0x1B63 + index·0x14B` (`0x453E84..0x453EA1`) — for a sender it cannot find,
 record ten, one past the ten. Ten is the engine's own count of the records: the loop at `0x406E05`
 (`mov ebx,0xA`, in the AI plan's `Weight` command `0x406DB0`) steps `0x14B` over them (`0x406E2D`)
 and ends after ten (`0x406E33`). B3's `0x09` stub bounds the sender to one of the ten before it reads
@@ -951,7 +951,7 @@ that tick's pump (or the frame function's `0x4968CB`);
 `0x48BA00` calls a stub that rewrites the dirty create's position from the entry's own payload
 (ground point 0; air selector 2's x, y, z) when it lies on the map, then enters `CreateFromNetwork`
 under `0x48BA05` — reading the payload only from B3's copy of the `0x2C`, under B3's reader, within
-the message's length (no position without B3). Compared, not written: `0x497F54`, `0x497F64`,
+the message's length; B5 refuses the fail-closed table unless B3 armed. Compared, not written: `0x497F54`, `0x497F64`,
 `0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`, `0x48B933`
 (12 bytes, the reader's slots) and `0x453E84` (30 bytes, the sender's record). All are rows of the
 fail-closed table, in both builds.

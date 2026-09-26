@@ -1018,10 +1018,19 @@ a straight move keeps its origin as point 0 until the unit is within 5 px of its
 
 The payload is read only from B3's copy of the `0x2C` and only within the message's length: the
 reader must be the one B3's copy stub set up for this message and still point at its copy (whose
-48 zero bytes cover the dword a last read touches), and a payload whose bits would run past the
-message's end is refused before any of them is read (`short=`). B3 is a local fix that can be
-skipped; without it no position is taken (`unbound=`). Either way the record keeps stock's, and a
-well-formed entry's payload is always inside its message.
+48 zero bytes cover the dword a last read touches), and a read that would pass the message's end
+is refused before it is made (`short=`), leaving stock's record. Only the bits the stub reads are
+tested — 35 for a ground payload, 99 for an air one — not the payload's remaining points or
+fields: the engine's decoder reads those from B3's zero-padded copy, and B3's length check before
+the next entry's type (`0x48B985`) stops the stream if the payload ran past the end. A well-formed
+entry's payload is always inside its message.
+
+**B5 requires B3 armed.** B3 stays a local fix for its own purpose, but a peer where it did not
+arm would place dirty creates at the slot's stale position while the others take the payload's —
+a peer silently playing by stock's rule, which *How B fixes are held* forbids. So
+`fix_ghost_commander` takes `fix_wire_bounds`' result and refuses the fail-closed table unless it
+is `ARMED`: the limits line fails with the reason and the startup report names it. The
+heartbeat's `unbound=` stays as the in-game guard, for a reader that is not B3's.
 
 *Invariants* (the code's header states each beside the code):
 
@@ -1053,13 +1062,17 @@ well-formed entry's payload is always inside its message.
 `0x48BA00` written; `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`,
 `0x496790`, `0x454788`, `0x455F50`, and the two layouts the stubs read without writing —
 `0x48B933` (the `0x2C` reader's buffer, word and bit) and `0x453E84` (the sender's record from
-the message's player byte) — compared. The hold itself is code in
+`[esp+0x14]`, the index the pump found by matching `main+0x4C9` [INFERRED: the sender's
+DirectPlay id] against each record's `+4`, `0x453DBD..0x453E12`, stored at `0x455F78`) —
+compared; and the whole
+table is refused unless B3 armed (above). The hold itself is code in
 B4's receiver, whose slot `0x455F90` is B4's row; B4's `hit_rx_create` is split into its gate and
 `hit_rx_create_armed`, and a catch-up create hands its record back through `regs[PR_EAX]` as a live
 one does. Lever `tagpu_ghostq.off` (test only: nothing is held or noted, the position
 still applies); `tagpu_wirecheck.on` runs 21 rule cases at attach (the queue's age rule, the map
-bound, the bit reader, the ground and air payloads, a goal not taken, a payload one bit past its
-message's end and one that ends on its last bit, which create a kill cancels). Counters on the heartbeat's `ghost:` section.
+bound, the bit reader, the ground and air payloads, a goal not taken, a position read one bit
+past its message's end and one that ends on its last bit, which create a kill cancels). Counters
+on the heartbeat's `ghost:` section, its alert fields first.
 
 **B5 BUILT AHEAD (2026-09-25, from `c2e5850` on its own worktree from B4's `a8e529e`, B4's fix
 rounds merged at `fbda477`; not landed, not reviewed).** `fix_ghost_commander` in
