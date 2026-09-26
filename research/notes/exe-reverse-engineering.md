@@ -10929,7 +10929,8 @@ a register once and call through it; the register is given with the load.
    `0x49F249` loads `dsetup.dll` (`0x4FDAC0`) and calls `DirectXRegisterApplicationA`
    (`0x4FDAA0`, found with `GetProcAddress`), which writes DirectPlay's application key through
    `dsetup.dll`'s own imports, then quits ([command-line options](cmdline-options.html)). In
-   test mode `tagpu_patches.c` points the switch's two jump-table entries (`0x49F4B8` for `R`,
+   test mode `tagpu_patches.c` points two entries of the switch's jump table `0x49F494` (indexed
+   through the byte table `0x49F500`, `jmp [ecx*4+0x49F494]` at `0x49EF33`) (`0x49F4B8` for `R`,
    `0x49F4EC` for `r`, both `0x49F249`) at the loop tail `0x49F461`, where every unknown letter
    goes (entry 26, `0x49F4FC`). The parser is `CmdlineArgsNormalize 0x49EE30` (called at
    `0x49E8D2`, its token loop head `0x49EED3`); the same rule is what lets tacli's token
