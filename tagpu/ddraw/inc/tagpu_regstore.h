@@ -1,24 +1,33 @@
 #ifndef TAGPU_REGSTORE_H
 #define TAGPU_REGSTORE_H
-/* tagpu_regstore -- in a tacli test folder, TotalA.exe's registry is a file.
+/* tagpu_regstore -- in a tacli test launch, TotalA.exe's registry is a file beside it.
 
    TEST MODE has two signals, and either is enough: the token `-xtacli-test` on the command
-   line, which tacli's scheduled task always passes and the engine ignores, and a
-   `tacli-state` folder beside the running exe (GetModuleFileNameW(NULL), never the working
-   directory), which `remote add` makes and a player's folder never has. REAL MODE needs
-   both absent: no token, and the folder not there. An error that cannot tell (a share, an
-   access rule) without the token is real mode, so a player's folder stays inert whatever
-   its file system answers; tacli never launches without the token, so that doubt cannot
-   reach one of its launches. Real mode logs one line, `registry: real ...`, and does
-   nothing else: no hook, no lock, no file.
+   line, which tacli passes on every launch of a DLL that has this module (a remote
+   instance's scheduled task, a local instance's `wine TotalA.exe`) and the engine ignores,
+   and a `tacli-state` folder beside the running exe (GetModuleFileNameW(NULL), never the
+   working directory), which tacli makes (a remote test folder's, a local instance's gamedir)
+   and a player's folder never has. REAL MODE needs both absent: no token, and the folder
+   not there. An error that cannot tell (a share, an access rule) without the token is real
+   mode, so a player's folder stays inert whatever its file system answers; tacli never
+   launches this DLL without the token, so that doubt cannot reach one of its launches.
+   Real mode logs one line, `registry: real ...`, and does nothing else: no hook, no lock,
+   no file.
+
+   THE STORE IS SERVED ONLY WITH BOTH SIGNALS. The token without the folder has no store;
+   the folder without the token is a launch that put its values somewhere else (a tacli
+   from before the per-instance store writes them into the registry every wine prefix
+   shares), or one by hand. Both are test mode, and both are refused below.
 
    IN TEST MODE EVERYTHING FAILS CLOSED. `tacli-state\registry.txt` holds the registry
-   (`remote add` seeds it by reading the player's key; `launch` puts its test values in it).
-   A store that is missing, a folder, unreadable or not loaded whole, no memory, an exe
-   path that cannot be read, a registry import these hooks do not answer, or a win32.dll not
-   loaded at attach (it is a static import of TotalA.exe) ends the process at attach (the
-   line names the process: a cnc-ddraw config tool started in a test folder is refused too), with a log line first and before the game's first instruction: a test launch
-   never runs against the real registry.
+   (tacli seeds it: a remote instance's by reading the player's key, a local instance's by
+   reading the template prefix's user.reg; `launch` puts its test values in it). A signal
+   alone, a store that is missing, a folder, unreadable or not loaded whole, no memory, an
+   exe path that cannot be read, a registry import these hooks do not answer, or a
+   win32.dll not loaded at attach (it is a static import of TotalA.exe) ends the process at
+   attach (the line names the process: a cnc-ddraw config tool started in a test folder is
+   refused too), with a log line first and before the game's first instruction: a test
+   launch never runs against the real registry.
 
    The decision (tagpu_regstore_decide) comes before DllMain's return for cnc-ddraw's config
    tool, so an inherited cnc_ddraw_config_init cannot skip test mode.

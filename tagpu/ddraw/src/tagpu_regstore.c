@@ -1,4 +1,4 @@
-/* tagpu_regstore -- TotalA.exe's registry, answered from a file in a tacli test folder.
+/* tagpu_regstore -- TotalA.exe's registry, answered from a file beside it in a tacli test launch.
    The contract (what is served, refused and passed, the handles, the file, the threads)
    is in tagpu_regstore.h. */
 
@@ -16,8 +16,8 @@
 #define RS_FILE        L"tacli-state\\registry.txt"
 #define RS_TMP         L"tacli-state\\registry.txt.tmp"
 
-/* The launch's token: tacli's scheduled task puts it on TotalA.exe's command line, and the
-   engine ignores it. CmdlineArgsNormalize 0x49EE30 splits its arguments at blanks (strtok,
+/* The launch's token: tacli puts it on TotalA.exe's command line (a remote instance's
+   scheduled task, a local instance's `wine TotalA.exe`), and the engine ignores it. CmdlineArgsNormalize 0x49EE30 splits its arguments at blanks (strtok,
    loop head 0x49EED3); a token starting with '-' or '/' dispatches on its SECOND character,
    less 'B', and anything above 0x35 ('w') takes `ja 0x49F461`, the loop tail every unknown
    switch goes to [DISASSEMBLED 2026-09-25]. 'x' is 0x36 there. The token starts with none of
@@ -1063,6 +1063,15 @@ void tagpu_regstore_init(void)
     s_active = 1;
     InitializeCriticalSection(&s_lock);
     if (!s_dir) rs_refuse_run(by, s_why);
+    /* The store is served only to a launch that asked for it. A folder without the token is
+       a launch that wrote its values somewhere else -- a tacli from before the per-instance
+       store writes them into the registry -- and serving the store would drop them without
+       a word; the registry is not what it asked for either, since the folder says this is
+       an instance's game. */
+    if (s_by == RS_BY_FOLDER)
+        rs_refuse_run(by, "no " RS_TOKEN_A " token on the command line: a launch by a tacli from "
+                          "before the per-instance store, or by hand -- launch it with the "
+                          "current tacli");
     dir = wcslen(s_dir);
     s_file = (WCHAR*)malloc((dir + wcslen(RS_FILE) + 1) * sizeof(WCHAR));
     s_tmp  = (WCHAR*)malloc((dir + wcslen(RS_TMP) + 1) * sizeof(WCHAR));

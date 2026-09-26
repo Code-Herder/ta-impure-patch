@@ -64,7 +64,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         delay_imports_init();
 
-        /* tagpu: whether tacli launched this game into a test folder (tagpu_regstore.h),
+        /* tagpu: whether this is a tacli test launch (tagpu_regstore.h),
            decided before the config tool's return below: an inherited
            cnc_ddraw_config_init must not run a test launch against the real registry. */
         int test_launch = tagpu_regstore_decide();
@@ -368,7 +368,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             g_screensaver_disabled = TRUE;
         }
 
-        /* The Indeo codec entries go into the user's registry; in a test folder nothing
+        /* The Indeo codec entries go into the user's registry; in a test launch nothing
            does (tagpu_regstore.h). TotalA.exe loads no Video for Windows codec -- its
            movies are Smacker (smackw32.dll) -- so nothing of the game needs them there. */
         if (!tagpu_regstore_active())
