@@ -474,7 +474,8 @@ malformed or foreign message reaches them — the fix is stock-exact for every w
 clean 5-byte boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`), verify the
 whole stock span first, and continue at the same address; a misframed `0x2C` points the reader at a
 zero dword and jumps to the engine's own end-of-list `0x48BA28`. The `0x2C` is parsed from a copy:
-at `0x48B92B` (eax = the message, loaded at `0x48B923`, stored as the reader's buffer at `0x48B933`)
+at `0x48B92B` (eax = the message, loaded at `0x48B923`, stored as the reader's buffer at `0x48B933`;
+`0x48B933..0x48B93E` sets the reader `{buffer, word 0, bit 0}` at `[esp+0x14..0x1C]`, with `push 8` taken)
 the message's length — the receive's delivered length, kept per thread at the two statistics calls,
 and the size field, the smaller — is copied into a per-thread DLL buffer followed by 48 zero bytes,
 and eax is the copy. The reader is then bounded by that length before each read the stubs precede:
@@ -708,8 +709,9 @@ counters (`main+0x38D85..`) and reads the clock (`0x4B6560`); in a network game 
 bit 0) it asks `0x495230` how many ticks are due since the timing base (`main+0x38A3B`, capped at
 5 at `0x4953F5`; `0x495230` itself sends and receives nothing), and `0x495490(1)` (`0x49680B`) runs
 that many, each `GameTime++` (`0x4954C0`) and, its argument being nonzero, a pump (`0x4954C8`),
-then the units `0x48AD30` and the rest. At `0x49842F` the base is the load's start, so the catch-up
-is the cap: five ticks in state 5, before `0x498445`. MEASURED: GameTime read 5 just after the
+then the units `0x48AD30` and the rest. After the ticks the frame function pumps once more itself
+(`0x453D40` at `0x4968CB`), still in state 5 at the in-play entry. At `0x49842F` the base is the
+load's start, so the catch-up is the cap: five ticks in state 5, before `0x498445`. MEASURED: GameTime read 5 just after the
 state-6 store in every two-peer start of B5's first build that held a create (four starts).
 GameTime's five writers stand; it is not 0 when play starts, and nothing ticks before
 `0x49842F`'s call.
@@ -718,7 +720,8 @@ GameTime's five writers stand; it is not 0 when play starts, and nothing ticks b
 init `0x4917D0` at `0x497581` (the unit array, `0x4854A0` at `0x4918D4`), sets bit 2, waits for bit
 3, creates the local player's commander (`0x485F50` at `0x4977BB`, which sends its `0x09` while this
 peer is still in state 5), and sets bit 1 last. So during a load two threads pump: the game thread
-(`0x49852E`, and the catch-up ticks' `0x4954C8`) and the loader (`0x49727D`). The loader's last pump
+(`0x49852E`, and at the in-play entry the catch-up ticks' `0x4954C8` and the frame function's
+`0x4968CB`) and the loader (`0x49727D`). The loader's last pump
 precedes its last store, and the game thread reaches `0x498445` only after reading that store.
 
 **Why a peer loses the others' commanders.** Every peer creates its commander after the barrier,
@@ -758,7 +761,8 @@ second), 500 at stock's (16.7 s).
 
 **A sender, as the dispatcher sees it.** The pump's frame holds the sender's **record index** in
 the low byte of `[esp+0x14]` and its record `main+0x1B63 + k·0x14B` in `edi`, paired by
-`0x453E84..0x453E9B`: the loop `0x453DBD..0x453E12` finds the record whose `+4` is the message's
+`0x453E84..0x453EA1` (the byte masked, then `edi = edx + k + 2·165k + 0x1B63` = `main + 0x1B63 +
+k·0x14B`, the `lea edi` ending at `0x453EA1`): the loop `0x453DBD..0x453E12` finds the record whose `+4` is the message's
 DirectPlay id and stores its index at `0x455F78`. The sender test
 (`0x4547AD..0x4547E2`): `[rec] ≠ 0`, `+0x73` 3 (1 and 2, local, are dropped), `+0x146 ≠ 10`; the
 destination record in `ebx` passes the same (`0x454821..0x454844`). A record's index is not its
@@ -796,11 +800,18 @@ to nothing), the writer `0x415C10`.
 - **Ground** (`0x44F4A0` → `0x44F5C0`): one flag bit (bit 2 of the move object's `+0x2E`), a 2-bit count n —
   the local mover's path count `+0x5C`, capped at 3, 0 when `+0x64` bit 0 is clear — then n points
   of `int16 x, int16 z`, whole world px, from the path's front `+0xC`. At most 99 bits. **No field is
-  the unit's own position.** A path the mover starts itself begins at it: `0x44F3F2..0x44F417`
-  stores count 2, point 0 = the unit's `+0x6C`/`+0x74` (the integer halves of `+0x6A`/`+0x72`),
-  point 1 the goal; `0x44F100` drops points from the front [INFERRED: as they are reached]. The
-  proxy hands the points out as `x<<16, 0, z<<16` (`0x44F650`, its `[vt+0x0C]`) [INFERRED: as the
-  unit's path].
+  the unit's own position; point 0 is the node the unit last reached.** A straight order's path
+  begins at the unit: `0x44F3F2..0x44F417` stores count 2, point 0 = the unit's `+0x6C`/`+0x74`
+  (the integer halves of `+0x6A`/`+0x72`), point 1 the goal. The front is dropped only by the
+  mover's step `0x44F1A0` (vtable `0x4FD458` `+8`, called through `0x43DD20` — `call [vt+8]` at
+  `0x43DD28` — from the unit tick at `0x48AFAA`): with a count of 2 or more it takes the squared
+  distance from the unit's `+0x6C`/`+0x74` to **point 1** (`0x44F1DF..0x44F203`) and, only when it
+  is at most `0x19` (5 px, `0x44F205`), shifts the path down one point and decrements the count
+  (`0x44F20A..0x44F229`; below 2 it clears `+0x64` bit 0, `0x44F231`; `+0x64` bit 3 set,
+  `0x44F235`). So a straight move keeps its origin as point 0 until the unit is within 5 px of its
+  goal. `0x44F100` does the same shift by a count argument, and nothing calls it — no direct call
+  or jump and no stored pointer in the image. The proxy hands the points out as `x<<16, 0, z<<16`
+  (`0x44F650`, its `[vt+0x0C]`) [INFERRED: as the unit's path].
 - **Air** (`0x4908C0` → `0x490A10`): a 2-bit selector, the sub-object's type (`[vt+0x08]`) 2 → 1,
   3 → 2, none → 0; then that sub-object's own payload (`[vt+0x28]`), then 2 bits of the move object's
   `+0x2E`. The proxy's `0x490690` (its `[vt+0x08]`) [INFERRED: the per-tick step] asks the sub-object for its point (`[vt+0x20]`, at
@@ -823,24 +834,29 @@ create held for its slot from its sender, or marks dying, as `0x48B42C` does, a 
 state 6; `0x497F5E` empties the queue at the load's start; `0x49842F` replays it before the frame
 function runs the first tick, through B4's receiver past its state test and `CreateFromNetwork`,
 and from there on B4's receiver makes a create the gate refuses in a catch-up tick at once, in
-that tick's pump;
+that tick's pump (or the frame function's `0x4968CB`);
 `0x48BA00` calls a stub that rewrites the dirty create's position from the entry's own payload
 (ground point 0; air selector 2's x, y, z) when it lies on the map, then enters `CreateFromNetwork`
-under `0x48BA05`. Compared, not written: `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`,
-`0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`. All are rows of the fail-closed table,
-in both builds.
+under `0x48BA05` — reading the payload only from B3's copy of the `0x2C`, under B3's reader, within
+the message's length (no position without B3). Compared, not written: `0x497F54`, `0x497F64`,
+`0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`, `0x48B933`
+(12 bytes, the reader's slots) and `0x453E84` (30 bytes, the sender's record). All are rows of the
+fail-closed table, in both builds.
 MEASURED 2026-09-25 (the plan's *B5 BUILT AHEAD*, two peers, Two Continents): on the previous
 build the joiner lacked the host's commander until t = 50 s at the 1500-unit limit and t = 18 s at
 500, and one ordered to move at once appeared at `(1,−2)` / `(2,−3)` and walked from the corner;
-on B5 it was present at the host's position at the first sample in all four starts, from an exact
-copy (record 1 on the joiner is the host, whose block holds slot 1), and with the queue turned off
-the dirty create alone put it at `(368, 7664)` where stock's record had `(0, 0)`. **The host's
+on B5's first build, which replayed at the state-6 store, it was present at the host's position at
+the first sample in all four starts, from an exact copy (record 1 on the joiner is the host, whose
+block holds slot 1), and with the queue turned off the dirty create alone put it at `(368, 7664)`
+where stock's record had `(0, 0)`. **The host's
 create reaches the joiner in its catch-up ticks, not its load**: with a drain before the first
 tick and one after the state-6 store, the first found nothing (GameTime 0) and the second made the
 commander at GameTime 5; on the final build the drain again finds nothing and the create is made
 in the pump of the joiner's first tick (`created slot 1 from sender 1 … at GameTime 1, in a
 catch-up tick`), present at the host's position at the first sample, `(368,7663)` against
-`(369,7660)`.
+`(369,7660)`. The final build has run two such starts (1500, the commander moving), and the
+replay at `0x49842F` has never replayed a record live; the 500-unit and idle starts were not
+re-run on it.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 

@@ -146,7 +146,10 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   replays them before its first tick, and makes one refused in a catch-up tick at once (`now=`,
   a `created slot … at GameTime 1, in a catch-up tick` line — where the host's commander lands
   in a two-peer start). Order the host's commander to move the moment it is in play to exercise
-  the dirty create; `ghostq.off` on the late peer leaves that half alone (`pos ground=1`).
+  the dirty create; `ghostq.off` on the late peer leaves that half alone (`pos ground=1`,
+  `unbound=0 short=0`). Its ground position is point 0 of the owner's path — a straight move's
+  origin until the unit is within 5 px of its goal — so it lands on the host's commander only
+  while that one has just set off.
 - **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
   is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP

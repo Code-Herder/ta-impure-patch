@@ -6309,7 +6309,7 @@ enum { GHOST_POS_NONE, GHOST_POS_GROUND, GHOST_POS_AIR, GHOST_POS_SHORT };
      5 px of its goal. 0x44F100 does the same shift and nothing calls it. A unit created well
      along a long straight move is therefore placed at its origin and trails the owner's until
      the round robin's full state for its slot writes the owner's x, y, z into it
-     (0x48B5CA..0x48B682): at most N owner ticks, the bound stock's (0,0,0) has too. The
+     (0x48B5CA..0x48B6A7): at most N owner ticks, the bound stock's (0,0,0) has too. The
      receiver's proxy hands the points to the unit as its path (0x44F650). Taken: point 0, x
      and z; y stays stock's.
    - Air, decoder 0x490A10: a 2-bit selector. 2 is the 0x2C-byte motion 0x44E9C0 (written by
