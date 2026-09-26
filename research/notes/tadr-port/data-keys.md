@@ -263,7 +263,8 @@ commit can change.
   weapon hit (`0x499E37`) holds the answer, and the local apply (`0x489C89`) pins it to the record
   it applies. A hit received from a peer names no weapon, so it is harmless only when it did no
   damage: no attacker, a weapon kind, amount 0, and the level's meteor weapon `[0x512328]` keyed.
-  A death explosion or a burning feature, the other attacker-less weapon hits, always alerts. The
+  A death explosion or a burning feature, the other attacker-less weapon hits, alerts unless it
+  did no damage (received) or its own weapon carries the key with default damage 0 (local). The
   hit is applied exactly as stock applies it. Then:
   - no "Under Attack", at its one site `0x4071D8` and in the extra-weapons module's retaliation,
     through a frame around `0x406F80` (`0x489DA2`) that saves and restores its answer;

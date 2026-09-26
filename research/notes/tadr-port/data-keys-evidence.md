@@ -792,9 +792,10 @@ stock weapon.
   `EARTHQUAKE` uses it), or have the weapon loader set bit 6 for a weapon carrying
   `nomapweaponalert=1` and `meteor=1`, which is exactly as if the TDF said `noradar=1` (bit 6 has
   one reader, the dot). Owner's choice (Q2).
-- **The residual:** a unit-fired `meteor=1` weapon (content only) is turned attacker-less on remote
-  peers by the `0x0D` receiver's bit-5 branch; its harmless hits there follow the level's meteor
-  weapon's key, not its own. It can only miss or keep an alert.
+- **A unit-fired `meteor=1` weapon** (content only) is turned attacker-less on remote peers by the
+  `0x0D` receiver's bit-5 branch. As built, a peer's own computation of those hits is judged by the
+  weapon itself at `0x499E37`; only a `0x0B` received from another peer falls to the level's meteor
+  weapon and the amount.
 
 #### How to test
 
@@ -854,7 +855,10 @@ it builds on its own stack (`[esp+0xC]`) at `0x489C89`. So a frame around the se
 of the projectile's weapon (no attacker, the key, default damage 0), and the apply pins it to that
 record's address. A record received as a `0x0B` is harmless only when its amount is 0 as well as
 attacker-less, a weapon kind, and the level's meteor weapon keyed: a weather hit sent by a peer
-with a per-type damage alerts, and a peer's explosion or fire never goes silent. The restore writes
+with a per-type damage alerts, and a peer's explosion or fire is silent only when it did no damage
+(the edge of a blast truncates to 0, and `0x489BB0` scales a veteran's amount down at `0x489BF3`).
+Locally, an explosion or fire whose own weapon carries the key with default damage 0 is silent,
+as any keyed weapon is. The restore writes
 `+0xFA` from the saved record, so the share
 travels with it: the unit saver `0x4876C0` stores the record's `+0xB2` as a WORD zero-extended from
 the byte `+0x10E` (`0x48797B`), the restore reads only its low byte (`0x4872D2`), and `0x486FD0`

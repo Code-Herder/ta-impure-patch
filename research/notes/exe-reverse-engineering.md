@@ -2733,8 +2733,10 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   attacker it jumps to the notification (`0x406FFC`), which runs when `0x438BE0(victim) & 0x80` is
   clear and `+0xF4 ≠ +0xFF` or `+0xF5 == 1` (`0x4071B0..0x4071D1`). `+0xF5` still holds the previous
   hit's kind there (stored at `0x489DAC`, after the call). `+0xF4` is written by the create
-  (`0x485C83`, 10), by a hit with an attacker (`0x489DC0`), at `0x486787`, and by the saved game's
-  restore (`0x48722C`); a fresh unit reads 10 there, so its first hit already alerts, attacker or
+  (`0x485C83`, 10), by a hit with an attacker (`0x489DC0`), at `0x486787`, by the saved game's
+  restore (`0x48722C`), and by the key switch `0x4956C0` (10) for the unit under the cursor
+  (`u16 main+0x2CBA`, `0x495780`, gated on `main+0x3923B` bit 1, which also sets `+0x110` bit 14
+  and zeroes `+0xF0`); a fresh unit reads 10 there, so its first hit already alerts, attacker or
   not. The call is `0x47F850(victim, 2, 0)` at `0x4071D8`.
 - **`0x47F850(unit, index, text)`**, `ret 0xC`: requires the unit off screen (`0x48BCB0` over the
   on-screen list `main+0x1435F`, count `+0x14367`), owned by `main+0x2A43`, `+0x110` bit 28 set and

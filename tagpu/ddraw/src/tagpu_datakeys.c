@@ -969,7 +969,8 @@ int tagpu_datakeys_fire_gate(char* u, int idx, const char* w, const void* slot)
      0x455412) carries no weapon, so it is harmless only when nothing was
      lost: no attacker, a weapon kind, amount 0, and the level's meteor weapon
      [0x512328] keyed with default damage 0. A received weather hit with a
-     per-type damage alerts; a received explosion or fire never goes silent.
+     per-type damage alerts, and a received explosion or fire is silent only
+     when it did no damage.
    Every weapon pointer is bounded as a record of the weapon array (the key
    store's index) before its default damage (+0xD4, a WORD: 0x499CE3,
    0x42EFA9, 0x42F326) is read. */
