@@ -1637,9 +1637,11 @@ is `mov eax,[ecx]`) is 1 in a campaign, 2 in a skirmish and 3 in a network game,
 game start makes at `0x4971C7`.
 - **In a network game** the seed is FNV-1a 64 over DirectPlay's session instance GUID
   (`guidInstance`) and then the map's hash, and nothing local to a peer is read.
-- **When DirectPlay names no session** in a network game (no interface, or `GetSessionDesc`
-  failed), the seed is the map's hash alone, counted (`network levels seeded from the map alone`)
-  and logged with the failing `HRESULT`.
+- **When DirectPlay's answer is refused** in a network game (no interface, `GetSessionDesc`
+  failed, or it answered with a `dwSize` other than 0x50 or a null GUID), the seed takes the
+  engine's copy `main+0x479` in its place when that is not null, counted (`network levels seeded
+  from the engine's session copy`), and otherwise the map's hash alone, counted (`network levels
+  seeded from the map alone`); both are logged with the refused answer's `HRESULT` and `dwSize`.
 - **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG.
 
 #### The engine's DirectPlay object — `main+0x14` [DISASSEMBLED 2026-09-25]
@@ -1658,7 +1660,7 @@ argument, and the engine passes `main+0x14` (`add edx,0x14` at `0x451203` before
 | `0x461` | `0x44D` | the service provider's GUID, `DirectPlayCreate`'s first argument | `0x4CA5D0` |
 | `0x471` | `0x45D` | a `DPSESSIONDESC2` (0x50 bytes), its `dwFlags` at `main+0x475` and its `guidInstance` at `main+0x479` | see below |
 | `0x4D5` | `0x4C1` | the `IDirectPlay` from `DirectPlayCreate` | `0x4CA649` (zero), then `DirectPlayCreate` through its out pointer (`0x4CA667`); released and zeroed by `HAPINET_uninitmultiplay 0x4C9B70` (`0x4C9BC3`) |
-| `0x4D9` | `0x4C5` | **the `IDirectPlay3A*` every call goes through** | `0x4CA64B` (zero); `QueryInterface(IID_IDirectPlay3A)` at `0x4CA684`, the IID at `0x4FCD78` (`{133EFE41-32DC-11D0-9CFB-00A0C90A43CB}`, as in `dplay.h`); the lobby's `Connect` at `0x4C9B59`; `Close` (`0x4C9B92`), `Release` and zeroed at `0x4C9BA1` |
+| `0x4D9` | `0x4C5` | **the interface every call goes through**: an `IDirectPlay3A*`, or an `IDirectPlay2A*` when a lobby launched the game | `0x4CA64B` (zero); `QueryInterface(IID_IDirectPlay3A)` at `0x4CA684`, the IID at `0x4FCD78` (`{133EFE41-32DC-11D0-9CFB-00A0C90A43CB}`, as in `dplay.h`); the lobby's `Connect` at `0x4C9B59` (`IDirectPlayLobby` slot 3, `+0xC`, whose out parameter is an `LPDIRECTPLAY2`); `Close` (`0x4C9B92`), `Release` and zeroed at `0x4C9BA1`. Every method the engine calls, `SetSessionDesc` (`+0x7C`) the last, is in `IDirectPlay2`'s table, where `GetSessionDesc` is slot 22 as in `IDirectPlay3`'s (`dplay.h` lines 561 and 677) |
 | `0x4E1` | `0x4CD` | the `IDirectPlayLobby` | released and zeroed at `0x4C9BD9` |
 | `0x4E5` | `0x4D1` | the lobby's `DPLCONNECTION*`, 0 when not lobbied | freed and zeroed at `0x4C9C08` |
 | `0x4F1` | `0x4DD` | `dwMaxPlayers` for a new session (16, `0x4C9C31`) | |
@@ -1682,14 +1684,39 @@ network module [INFERRED: the game thread].
 - by the network pump, on every peer but the host: a `DPSYS_SETSESSIONDESC` (`0x104`, dispatched
   at `0x454611..0x45461D`) is copied whole over it (`0x454689..0x454697`) when the local seat is
   not the host seat;
-- `HAPINET_updategameinfo 0x4C9890` hands it to `SetSessionDesc` (`+0x7C`, `0x4C9903`); its caller
-  `0x451180` sets `DPSESSION_JOINDISABLED` (0x20) in `main+0x475` first when bit 4 of the local
+- `0x451180` sets `DPSESSION_JOINDISABLED` (0x20) in `main+0x475` when bit 4 of the local
   PlayerInfo's `+0x9B` is set (`0x4511D2..0x4511DA`), as does the caller at `0x454135`
-  (`0x4540F0..0x4540F8`).
+  (`0x4540F0..0x4540F8`);
+- by the wind fix's capture at the loader thread's start, `main+0x479` only: DirectPlay's own GUID
+  where the copy differs (*The session, not the host*, below).
+
+**It reaches the session through `SetSessionDesc`.** `HAPINET_updategameinfo 0x4C9890` hands the
+whole copy, `guidInstance` included, to `SetSessionDesc` (`+0x7C`, `0x4C9903`), called from
+`0x451180` (thirteen call sites: twelve at `0x444E48` … `0x44AB32`, the battle room's handlers
+[INFERRED], and `0x497C0B`) and from `0x454135`. **Every load ends with one**, on the loader thread, in every game
+mode: `0x497BFF` sets bit 4 of the local PlayerInfo's `+0x9B` and `0x497C0B` calls `0x451180`,
+which then sets `DPSESSION_JOINDISABLED`. No branch in the loader body skips `0x497BFF..0x497C0B`
+and its one `ret` is `0x497C6C`, so every load reaches the call, and it reaches DirectPlay
+whenever `main+0x4D9` is set. MEASURED after a
+two-peer load: `main+0x475` reads `0x20` on both peers. DirectPlay accepts it only from the
+session's host. An implementation that takes `guidInstance` from it (Wine's `DP_SetSessionDesc`
+copies the whole descriptor) moves the session to whatever the copy holds.
+
+**The copy's GUID is read** by `SetSessionDesc` above; by `HAPINET_getgames 0x4C9E50`, which
+copies it into the descriptor it hands `EnumSessions` (`0x4C9EC1`), in the shell's session list;
+and through the getter `0x4CA9E0` (`add eax,0x465`) by `0x46C620` (called at ten sites, `0x41F897`
+… `0x464E28`), which passes it to `RIReport` of `reporter.dll` (the pointer `0x51E584`, resolved at
+`0x46C07A` from the names at `0x507AF8` and `0x507AB8`) or to the stub `0x4CAA10` (`mov eax,1;
+ret 0x28`). The retail install ships no `reporter.dll`. The other accesses in the copy's range
+are other fields: `dwFlags` (`HAPINET_passwordrequired` at `0x4CA479` tests 0x400),
+`dwMaxPlayers` (`main+0x499`, `0x447C8A`, `0x447D04`) and `dwUser2`/`dwUser3` (`main+0x4B5`,
+`+0x4B9`: `0x44FA71`, `0x463177..0x463189`, `0x46353E..0x463599`).
 
 `HAPINET_getcurrentplayers 0x4C9DD0` also calls `GetSessionDesc` (`0x4C9DFC`, `0x4C9E2A`) and
-returns `dwCurrentPlayers`. `createnewgame` leaves `dwFlags` 0: the engine's sessions are made
-without `DPSESSION_MIGRATEHOST` or `DPSESSION_KEEPALIVE`.
+returns `dwCurrentPlayers`. `createnewgame` leaves `dwFlags` 0 (nothing writes it after the zeroing
+at `0x4C995E`), so the sessions it creates have neither `DPSESSION_MIGRATEHOST` nor
+`DPSESSION_KEEPALIVE`; a lobbied session takes the lobby's descriptor whole, flags included
+(`0x4C9B4F`).
 
 #### The session, not the host [DISASSEMBLED + MEASURED 2026-09-25]
 
@@ -1707,13 +1734,21 @@ the rest of the game, silently.
 **The GUID has the property the host's ID lacks.** DirectPlay fixes a session's instance GUID when
 the session is created, and every peer holds it from the moment it enters: a joiner names it to
 `Open(DPOPEN_JOIN)` (`0x4CA03A`, `0x4CA05A`). No departure writes it, and the engine's host
-election touches only its own seat records.
+election touches only its own seat records. The one engine call that could move it is the host's
+`SetSessionDesc`, under an implementation that takes `guidInstance` from it: the copy holds
+DirectPlay's own GUID after a create or a join (`0x4C9A33`, `0x4CA0BB`), but a lobby's descriptor
+after a lobbied launch (`0x4C9B4F`), and the load's own call at `0x497C0B` comes after the joiners
+may have captured. So the capture writes DirectPlay's GUID into the copy where it differs
+(`session copies set to DirectPlay's GUID`, counted): every `SetSessionDesc` after the capture
+passes the GUID DirectPlay already holds. The write is on the game thread, before the loader
+thread exists; the copy's other readers above see a different value only where it differed.
 
 **How it is read.** `wind_session_capture` calls `GetSessionDesc` through `main+0x4D9` (vtable
-`+0x58`, slot 22 of `IDirectPlay3A` in `dplay.h`: `QueryInterface`, `AddRef`, `Release`, then
-`AddPlayerToGroup` … `GetPlayerName`, then `GetSessionDesc`), into a 0x400-byte stack buffer or,
-when DirectPlay asks for more, a heap one, and keeps the `guidInstance`. It runs on the **game
-thread**, from the stub at `0x4982CA`:
+`+0x58`, slot 22 of `IDirectPlay2A` and of `IDirectPlay3A` in `dplay.h`: `QueryInterface`,
+`AddRef`, `Release`, then `AddPlayerToGroup` … `GetPlayerName`, then `GetSessionDesc`), into a
+0x400-byte stack buffer or, when DirectPlay asks for more, a heap one. It keeps the `guidInstance`
+only when the answer's `dwSize` is 0x50 and the GUID is not null: Wine can answer `DP_OK` with a
+zeroed descriptor. It runs on the **game thread**, from the stub at `0x4982CA`:
 - `0x4982C3..0x4982CA` is `push ebp; push ebp; push 0x497C70; call 0x4B6B20`, the CRT's
   `_beginthread` over `CreateThread` (see *Thread creation*). `0x497C70` is referenced only by
   that push (`0x4982C6`, the image's one absolute reference to it), and the loader body
@@ -1722,22 +1757,26 @@ thread**, from the stub at `0x4982CA`:
   anything the new thread reads.
 - At that call the loader thread does not exist yet. Once it runs, stock lets it call DirectPlay
   concurrently with the game thread: the loader's wait pumps the network at `0x49727D` while the
-  game thread's load loop pumps at `0x49852E`. A call on the game thread before the loader starts
-  adds no concurrency that stock does not already have.
+  game thread's load loop pumps at `0x49852E`, and the loader makes the `SetSessionDesc` at
+  `0x497C0B`. A call on the game thread before the loader starts adds no concurrency that stock
+  does not already have.
 
-The engine's own copy `main+0x479` is not used for the seed: the pump rewrites `main+0x471` whole
-from every `DPSYS_SETSESSIONDESC` (`0x454689`) while the loader runs, a lobbied host's copy is the
-lobby's (`0x4C9B4F`) rather than DirectPlay's, and a host whose `GetSessionDesc` failed at
-creation holds zero. It is read at the same moment, on the same thread, and logged beside
-DirectPlay's answer.
+The engine's copy `main+0x479` is the second choice, taken only when DirectPlay's answer is
+refused: the pump rewrites `main+0x471` whole from every `DPSYS_SETSESSIONDESC` on every peer but
+the host (`0x454679`, `0x454689`), a lobbied host's copy is the lobby's (`0x4C9B4F`) rather than
+DirectPlay's, and a host whose `GetSessionDesc` failed at creation holds zero. It is read at the
+capture, on the game thread, and logged beside DirectPlay's answer. `GetSessionDesc` fails only
+with no interface or no open session, and a peer with no open session exchanges no game traffic,
+so its wind changes nothing another peer sees.
 
 **The host seat, for the record.** `0x456850()` takes no argument and returns a seat in `al`, or 10
 for none: the first seat, 0 to 9, whose type `+0x73` (records at `main+0x1B63`, stride `0x14B`)
 is not 0 and whose PlayerInfo (the pointer at the record's `+0x27`) has bit 0 of `+0x97`. The
 load waits for it only when bit 1 of the local record's `+0x21` is set: `0x49723B` tests it and
 jumps to `0x4972BA` otherwise. The wait (`0x49724D..0x4972AB`) pumps the network through
-`0x453D40` (`0x49727D`) and sleeps 50 ms while `0x456850` answers 10, the seat's `+0x96` reads
-`0xFF` or its `+0x8F` is 0. From `0x4972BA` the load takes the map from the seat `0x456850`
+`0x453D40` (`0x49727D`) and sleeps 50 ms while `0x456850` answers 10, or while the LOCAL seat's
+PlayerInfo (`[record(main+0x2A42)+0x27]`, loaded at `0x49724D..0x497261`) reads `0xFF` at `+0x96`
+or 0 at `+0x8F` (`0x49729A`, `0x4972A3`). From `0x4972BA` the load takes the map from the seat `0x456850`
 answered at `0x497213` (`0x4972D6`, `0x435A20`), which past a skipped wait can be 10, and the unit
 limit from the seat it answers at `0x4972DB` (`0x4972E8..0x4973B5`, skipped when it answers 10).
 The same bit decides who damages a feature (`0x4244B0`, *Who sends a feature hit*). The seat index
@@ -1785,6 +1824,7 @@ on every peer:
 | `23b6b8b`, three peers, Town & Country (wind 25 to 5000) | host seat's `0x498FABE4`, `0x29FE9EA5` | 797 / 795 / 795 | 870 | 1598 | `0x387C` |
 | session GUID, two peers, Two Continents | `{952E3FFB-DDEA-4B26-8BC6-210AD05BCACB}`, `0x4934CBDE`: seed `0x77A98479B8F3B818` | 1262 | 1350 | 1627 | `0xB693` |
 | session GUID, three peers, Town & Country, the host killed after its seed | `{D3E2100E-59EB-45F3-8124-DA6E4518236B}`, `0x29FE9EA5`: seed `0x14CE9DAA1CF3E1B0` on all three | 1131 / 1137 (the two joiners) | 1530 | 2834 | `0x0616` |
+| validated answer and aligned copy, two peers, Two Continents | `{DE8782F9-D9D7-47A4-90D0-C09C60D4941D}`, `0x4934CBDE`: seed `0x0674C957184EEC35` | 265 / 320, running | 420 | 433 | `0x355C` |
 
 Notes on the rows:
 - On `1a0c599` the host was found by PlayerNum 1. That build's draws are the ones `23b6b8b` makes.
@@ -1792,14 +1832,18 @@ Notes on the rows:
   and `0x3EA3A29C` (0.3196) on `23b6b8b`, `0x3EA69AD4` and `0x3F1119CE` with the session GUID.
 - The components agreed as well: 5122 and 1976 with two peers, −3142 and −584 with three on
   `23b6b8b`; 3166 and 752, and −832 and −5606, with the session GUID.
-- On every peer of both session-GUID games the engine's copy `main+0x479` read the GUID
-  `GetSessionDesc` returned.
+- On every peer of the three session-GUID games the engine's copy `main+0x479` read the GUID
+  `GetSessionDesc` returned. In the third, both answers passed the validation, no copy was set
+  (`session copies set` 0), none was seeded from the copy or the map alone (both 0), and after
+  the load the copy still held the session's GUID with `main+0x475` at `0x20`, the load's
+  `SetSessionDesc` made.
 - **The killed host.** The host's `TotalA.exe` was killed (`kill -9`) 3 ms after its seed line,
   while the joiners loaded. Both joiners seeded from the same GUID and draw the same wind, and
   both went into play. DirectPlay never reported the departure: 115 s of game time later both
   joiners still held the host's seat with type 3 and its ID (`0x4AE1FCEC`), so the engine's
   removal `0x452CC0` never ran and this run does not exercise it. A killed process sends no
-  `DestroyPlayer`, and the engine makes its sessions without `DPSESSION_KEEPALIVE`. The two
+  `DestroyPlayer`, and a session `createnewgame` makes has no `DPSESSION_KEEPALIVE` (a lobbied
+  one takes the lobby's flags). The two
   joiners' rosters also differed (one unit against two), which is stock's handling of a host lost
   at the start and nothing the seed reads.
 

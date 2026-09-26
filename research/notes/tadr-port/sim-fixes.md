@@ -304,13 +304,27 @@ from the plan below:
   The session's instance GUID is fixed when DirectPlay creates the session, every peer holds it
   from the moment it joins (a joiner names it to `Open(DPOPEN_JOIN)`, `0x4CA03A`), and no departure
   or host election writes it. It is read with `GetSessionDesc` through the engine's
-  `IDirectPlay3A*` (`main+0x4D9`) on the game thread, from a stub on the loader thread's start
-  (`0x4982CA`): before that thread exists, so the call adds no DirectPlay concurrency stock does
-  not already have (stock's loader pumps the network at `0x49727D` while the game thread pumps at
-  `0x49852E`), and the thread's creation orders the capture before the seed. The engine's own copy
-  `main+0x479` is logged but not used: the pump rewrites it from every `DPSYS_SETSESSIONDESC`
-  while the loader runs, and a lobbied host's copy is the lobby's. The engine map's *The session,
-  not the host* has the disassembly.
+  interface (`main+0x4D9`, an `IDirectPlay3A`, or an `IDirectPlay2A` when lobbied) on the game
+  thread, from a stub on the loader thread's start (`0x4982CA`): before that thread exists, so the
+  call adds no DirectPlay concurrency stock does not already have (stock's loader pumps the
+  network at `0x49727D` while the game thread pumps at `0x49852E`, and it calls `SetSessionDesc`
+  at `0x497C0B`), and the thread's creation orders the capture before the seed. The engine map's
+  *The session, not the host* has the disassembly.
+- **The capture closes the one engine write that could move the GUID.** Every load ends with a
+  `SetSessionDesc` of the engine's whole session copy (`0x497BFF`, `0x497C0B` → `0x451180` →
+  `0x4C9903`), and the host makes more in the battle room; an implementation that takes
+  `guidInstance` from it (Wine's copies the whole descriptor) moves the session to the copy's
+  GUID, which after a lobbied launch is the lobby's descriptor (`0x4C9B4F`). Once the capture has
+  a valid GUID it writes it into the copy (`main+0x479`) where the copy differs, counted, so every
+  later `SetSessionDesc` passes the GUID DirectPlay already holds. The copy's other readers (the
+  session list's `EnumSessions` descriptor, `reporter.dll`'s `RIReport`, which the retail install
+  does not ship) see a change only where it differed.
+- **DirectPlay's answer is validated, and the engine's copy is the fallback.** The answer is used
+  only when its `dwSize` is 0x50 and its GUID is not null (Wine can answer `DP_OK` with a zeroed
+  descriptor). Otherwise the seed takes the engine's copy `main+0x479` when it is not null (it held
+  DirectPlay's answer on every peer measured), then the map alone, each counted. `GetSessionDesc`
+  fails only with no interface or no open session, and a peer with no open session exchanges no
+  game traffic, so its wind changes nothing another peer sees.
 - **Stock's load call draws nothing.** It finds `next` = 0 (`0x4918FD`) and GameTime 0, so the seed
   at `0x491903` precedes every draw, and the first draw is the first tick's.
 - **Changed: B6 logs a line of its own** (`patch_loader_defects`), not a clause of B1's
@@ -326,8 +340,11 @@ from the plan below:
   two peers on Two Continents logged the same GUID and seed and, paused at GameTime 1262, read
   next 1350, speed 1627, heading `0xB693`; three peers on Town & Country logged the same GUID and
   seed, the host was killed 3 ms after its own seed while the joiners loaded, and both joiners went
-  into play reading next 1530, speed 2834, heading `0x0616` at GameTime 1131 and 1137. On every
-  peer the engine's copy `main+0x479` held the GUID `GetSessionDesc` returned. A skirmish reads game mode 2 and
+  into play reading next 1530, speed 2834, heading `0x0616` at GameTime 1131 and 1137. With the
+  validation and the copy alignment, two peers on Two Continents logged the same GUID and seed and
+  read next 420, speed 433, heading `0x355C`; both answers passed, no copy was set, and none was
+  seeded from the copy or the map alone. On every peer of the three games the engine's copy
+  `main+0x479` held the GUID `GetSessionDesc` returned. A skirmish reads game mode 2 and
   takes the counter path. The yardmaps' 2440 retail cells are
   byte-identical to the previous build's. The two scratch structures read `2f2f31313100002b2b…`
   from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
@@ -337,9 +354,16 @@ from the plan below:
   an order armed, and our build ghost drawing) did not fit its time budget. The engine's removal
   of a departed host during the load was not exercised: DirectPlay never reported the killed host
   (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
-  `DPSESSION_KEEPALIVE`), and a host cannot quit through the UI during the load. The departure
-  argument rests on the construction: the seed reads nothing a departure writes. A lobbied game
-  (a `DPLCONNECTION` from a lobby) was not run; the seed reads DirectPlay's own record there too.
+  `DPSESSION_KEEPALIVE` when `createnewgame` makes them; a lobbied one takes the lobby's flags),
+  and a host cannot quit through the UI during the load. The departure argument rests on the
+  construction: the seed reads nothing a departure writes. **A lobbied launch was not run.** What
+  the construction covers there: the seed reads DirectPlay's own record, validated; the copy
+  alignment keeps every `SetSessionDesc` after the capture, the load's own included, from moving
+  the session. What it does not cover: the `SetSessionDesc` calls a lobbied host makes in the
+  battle room, before any capture, under an implementation that takes `guidInstance` from them —
+  Wine's builtin DirectPlay, the one known to, cannot host a session (networking-lobbies.md), and
+  Microsoft's handling of the field in `SetSessionDesc` was not established here. The alignment
+  was measured only at 0 writes.
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
   before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,
