@@ -286,30 +286,49 @@ static void surf_drop_offscreens(unsigned keepBase)
     }
 }
 
-/* THE BLOCK A TRACKED BASE DIES WITH. A context's base is the pixels of one of
-   two allocation layouts, and nothing in the context says which (the builders
-   below all write the same flags at `+0x2C`):
+/* THE BLOCK A TRACKED BASE DIES WITH IS THE BLOCK IT LIES IN. A context's base
+   points into one MEM_Alloc `0x4D83B0` block, at an offset that depends on
+   what made it, and nothing in the context says which (every builder writes
+   the same flags at `+0x2C`):
 
-     a surface  `SurfaceCreateNamed 0x4C69F0`: `w*h+0x30` bytes from MEM_Alloc
-                `0x4D83B0` (`0x4C6A01..0x4C6A04`), the pixels at `block+0x30`
-                (`0x4C6A0E`).
-     a frame    `0x4B8DA0` (`w*h+0x18`) and `0x4B8E00` (`2*w*h+0x18`, two
-                planes), the pixels at `block+0x18` (`0x4B8DD0`, `0x4B8E1F`).
-                A context is built over a frame by `0x4B8A80` alone, and each of
-                its five callers draws into a frame one of those two made:
-                `0x458C2E` the unit composite (`0x4581A4`), `0x4666B1` and
-                `0x4666E2` SELMAP's preview and the scratch copy `0x4665D0`
-                frees before it returns, `0x483918`, `0x495BCF`.
+     `SurfaceCreateNamed 0x4C69F0`  `w*h+0x30`, the pixels at `+0x30` (`0x4C6A0E`)
+     `0x4B8DA0`, `0x4B8E00` frames  the pixels at `+0x18` (`0x4B8DD0`, `0x4B8E1F`);
+                                    `0x4B8A80` builds the context
+     `0x4B91B0` two-plane frames    `+0x18` or `+0x18 + w*h`: `0x4B9360` swaps
+                                    `+0x10`/`+0x14` and builds its context inline
+                                    over the first (`0x4B936D..0x4B93C8`), the
+                                    destination of `0x4C6D20` at `0x4B9433`
 
-   So the block `p` MEM_Free is handed owns the entry based at `p+0x30` or
-   `p+0x18`, and neither test can name a live entry of another block: that
-   entry's block would have to overlap `p`'s. (A block under 0x18 bytes is the
-   one exception, and it errs toward retiring: a wrong retirement costs a
-   re-seed from live memory, a missed one a read of a freed block at the next
-   publish.) DISASSEMBLED 2026-09-26. */
-static int surf_dies_with(const SURF* s, unsigned p)
+   A list of offsets is closed only until the next builder is found, so the test
+   is the block's own extent: the entry dies with `p` when its base lies in
+   `[p, p + MEM_Size(p))`. That is containment, not a guess -- no other
+   allocation's pixels can lie inside a live block -- so it neither misses an
+   entry nor retires one that is not `p`'s. DISASSEMBLED 2026-09-26.
+
+   THE SIZE IS THE ALLOCATOR'S, ASKED UNDER ITS OWN LOCK. `MEM_Size 0x4D8360(p)`
+   (cdecl) answers through the pool's query `0x4DBAE0`, which enters the
+   allocator's critical section itself, or the CRT's `_msize 0x4E8FB0`, which
+   takes CRT heap lock 9 (`0x4EAC60`), on the same test `0x4D80D0` the free makes.
+   `mem_block_size` holds the allocator's section `0x528A28` (`0x4DA780`) around
+   it, as `0x4D85B0` holds it (`0x4D85C2`) around its own call at `0x4D85E7`: the
+   same locks in the same order. The block is the caller's until the free it is
+   about to make, so nothing else can resize it in between. */
+typedef CRITICAL_SECTION* (__cdecl *mem_lock_fn)(void);
+typedef unsigned (__cdecl *mem_size_fn)(unsigned block);
+#define MEM_LOCK ((mem_lock_fn)(size_t)0x004DA780u)
+#define MEM_SIZE ((mem_size_fn)(size_t)0x004D8360u)
+static unsigned mem_block_size(unsigned p)
 {
-    return s->base == p + 0x30 || s->base == p + 0x18;
+    CRITICAL_SECTION* cs = MEM_LOCK();
+    unsigned n;
+    EnterCriticalSection(cs);
+    n = MEM_SIZE(p);
+    LeaveCriticalSection(cs);
+    return n;
+}
+static int surf_dies_with(const SURF* s, unsigned p, unsigned size)
+{
+    return s->base - p < size;             /* unsigned: a base below `p` is huge */
 }
 
 /* ---- blocks freed on a thread that is not the game thread ---------------
@@ -360,12 +379,14 @@ static volatile LONG s_freeqN;                  /* claimed, ever — any thread 
 static volatile LONG s_freeqIn;                 /* STORED, ever — any thread    */
 static LONG          s_freeqDone;               /* taken, ever — game thread    */
 static volatile LONG s_freeq[FREEQ];            /* 0 = taken, or claimed-not-yet-stored */
+static volatile LONG s_freeqSz[FREEQ];          /* its size, stored before it   */
 static unsigned      s_freeqFlush;              /* times the table was flushed  */
 
-static void surf_free_offthread(unsigned p)
+static void surf_free_offthread(unsigned p, unsigned size)
 {
     LONG n = InterlockedIncrement(&s_freeqN) - 1;   /* claim */
-    InterlockedExchange(&s_freeq[n & (FREEQ - 1)], (LONG)p);
+    InterlockedExchange(&s_freeqSz[n & (FREEQ - 1)], (LONG)size);   /* before `p`: a stored `p` */
+    InterlockedExchange(&s_freeq[n & (FREEQ - 1)], (LONG)p);        /* carries its size        */
     InterlockedIncrement(&s_freeqIn);               /* and only now is it there */
 }
 
@@ -388,10 +409,12 @@ static void surf_drain_freeq(void)              /* game thread only */
         LONG k;
         for (k = from; k != head; k++) {
             unsigned p = (unsigned)InterlockedExchange(&s_freeq[k & (FREEQ - 1)], 0);
+            unsigned size;
             int i;
             if (!p) { flush = 1; break; }        /* claimed, not yet stored  */
+            size = (unsigned)InterlockedExchangeAdd(&s_freeqSz[k & (FREEQ - 1)], 0);
             for (i = 0; i < s_nsurf; )          /* swap-remove: re-test slot i */
-                if (surf_dies_with(&s_surf[i], p)) surf_drop(i); else i++;
+                if (surf_dies_with(&s_surf[i], p, size)) surf_drop(i); else i++;
         }
         /* did a producer lap the window while we were walking it? */
         if (!flush && (unsigned long)InterlockedExchangeAdd(&s_freeqN, 0)
@@ -3987,8 +4010,11 @@ static void* __cdecl after_flip(unsigned int* regs)
    ORDERED BEHIND THE CLICKS ALREADY QUEUED. TA's window procedure pushes
    every button message -- and only those; a move is kept as one current
    record -- onto the engine's event ring (`0x4C2E30`, one call site
-   `0x4B5F51`), and the pump pops one per call (`0x4AB5D0` at
-   `0x4AA00A`, the only call, not in a loop). A notch applied at the pump's
+   `0x4B5F51`), and the pump pops at most one per call (`0x4AB5D0` at
+   `0x4AA00A`, the only call, not in a loop): the head record, and only when
+   it lies over the top screen (`0x4A1920`) or holds no button, its wParam 0
+   (`0x4AB643..0x4AB64D`); otherwise it stays at the head (`0x4AB680`) and the
+   engine takes no click behind it either. A notch applied at the pump's
    entry would otherwise overtake a click still in that ring, and the click
    would then land on the scrolled rows. So each notch carries the index of
    the last engine event queued before it, `seq`, and waits until the engine
@@ -4003,8 +4029,9 @@ static void* __cdecl after_flip(unsigned int* regs)
    the in-game setup `0x4263B0`), which discards what was queued and leaves
    the count wrong by any amount. The empty-ring rule is what makes that
    harmless: a notch queued before the flush has nothing left in front of it,
-   so an early release is correct, and it is held no longer than the ring
-   takes to drain. Engine map, *The pump's entry*.
+   so an early release is correct, and it waits at most until the ring next
+   reads empty. Otherwise a notch waits exactly as long as the engine holds a
+   click queued before it. Engine map, *The pump's entry*.
 
    WHERE: THE NOTCH'S OWN POINT. Every mouse message, this one included, has
    been taken to the engine's space by the time it reaches the zoom (wndproc.c:

@@ -529,9 +529,11 @@ static int __cdecl before_gafd(void* e)
     if (!on_game_thread()) return 0;
     if (!ptr_ok(rc)) { op_add(OP_GAFD, NULL, 0, 0, 0, 0); return 0; }
     s = surf_of_ctx(ctx);
-    /* THE SOURCE MUST BE A SURFACE THIS MODULE TRACKS: a free forgets every op
-       naming a tracked base (`ops_forget_base`), and an untracked one would
-       stay named after its block is gone, for whatever lands at that base. */
+    /* THE SOURCE BECOMES A SURFACE THIS MODULE TRACKS, or the copy keeps its
+       box: `surf_of_ctx(src)` registers it, which gives it the destructor
+       (`surf_dies_with` retires it with its block, and a free forgets every op
+       naming it, `ops_forget_base`). A source it cannot register would stay
+       named after its block is gone, for whatever lands at that base. */
     if (s && ptr_ok(src) && ptr_ok(sr) &&
         sr[0] >= 0 && sr[1] >= 0 && sr[0] <= sr[2] && sr[1] <= sr[3] &&
         sr[2] < src[CTX_W] && sr[3] < src[CTX_H] && surf_of_ctx(src)) {
@@ -709,9 +711,11 @@ static int __cdecl before_free(void* e)
    that answers a question about the value, not about the memory — but this:
    the table entry cannot outlive the block it names.
 
-   Every destination this file records is ONE allocation, header and pixels:
-   a surface object from SurfaceCreateNamed 0x4C69F0 or a frame from 0x4B8DA0 /
-   0x4B8E00, whose block `surf_dies_with` derives from the base. The
+   Every destination this file records lies inside one MEM_Alloc block --
+   a surface object from SurfaceCreateNamed 0x4C69F0, header and pixels, or a
+   frame one of the frame allocators made -- and `surf_dies_with` retires the
+   entries inside the block being freed (the block's extent is the allocator's
+   own answer, `mem_block_size`). The
    block can only be released through this function — 0x4D85A0 is the only
    caller of the allocator's own free 0x4D85B0, and all 363 sites that free
    anything in the engine call it, SurfaceFree 0x4C6AC0 included (0x4C6ACF).
@@ -745,12 +749,13 @@ static int __cdecl before_free(void* e)
    critical section, so the CRT `free()` that surf_drop calls inverts no lock. */
 static int __cdecl before_memfree(void* e)
 {
-    unsigned p = ARG(e, 1);
+    unsigned p = ARG(e, 1), size;
     int i;
     if (!p) return 0;
-    if (!on_game_thread()) { surf_free_offthread(p); return 0; }
+    size = mem_block_size(p);             /* now: the block is still the caller's */
+    if (!on_game_thread()) { surf_free_offthread(p, size); return 0; }
     for (i = 0; i < s_nsurf; ) {          /* swap-remove: re-test slot i */
-        if (!surf_dies_with(&s_surf[i], p)) { i++; continue; }
+        if (!surf_dies_with(&s_surf[i], p, size)) { i++; continue; }
         if (s_trace) {
             char b[220];
             _snprintf(b, sizeof b, "gui trace: MEM_Free surface %08X %dx%d from %08X",

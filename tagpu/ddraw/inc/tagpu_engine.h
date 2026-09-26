@@ -369,16 +369,15 @@
 #define VT_BASE            0x004FD5A8u /* destroyed: draws nothing             */
 /* TAProgram (the graphics globals' owner, TA_GFX_PP) */
 #define PROG_LHT           0x0C8       /* u8[32][256] lighten table            */
-#define PROG_CAPS          0x0F0       /* u16: bit5 ALP built, bit6 SHD built, */
-                                       /* bit7 LHT built. Established by the    */
-                                       /* three in-place setters 0x4BAAD0 /     */
-                                       /* 0x4BAB00 / 0x4BAB30, each of which    */
-                                       /* tests its own bit and refuses to      */
-                                       /* write when it is clear. The bit is a   */
-                                       /* SEPARATE fact from the pointer being  */
-                                       /* non-NULL: 0x4BA660 allocates the LHT  */
-                                       /* and returns without touching this     */
-                                       /* word. Test it before reading a table. */
+#define PROG_CAPS          0x0F0       /* u16: bit5 ALP, bit6 SHD, bit7 LHT     */
+                                       /* ENABLED: written at 0x4B5AC4 before   */
+                                       /* the allocations, which it gates, and  */
+                                       /* tested by the in-place setters        */
+                                       /* 0x4BAAD0 / 0x4BAB00 / 0x4BAB30, each  */
+                                       /* refusing to write when its bit is     */
+                                       /* clear. So a set bit means the table   */
+                                       /* exists, not that it has been filled.  */
+                                       /* Test it before reading a table.       */
 
 /* ---- the graphics globals ------------------------------------------------ */
 #define GFX_FONT           0x204        /* the current font object: SetFont 0x4C1420 */
