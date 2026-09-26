@@ -357,8 +357,10 @@ the plan's shape and what the work settled.
   unknown switch; no debug switch of `0x4DA0E0`'s table is a prefix of it [DISASSEMBLED].
   **Real mode needs both absent.** A folder that cannot be looked at, without the token, is real
   mode, so a player's folder on a share or behind an access rule stays inert; a `tacli` launch
-  of a DLL that has the store always carries the token. Real mode logs `registry: real (no -xtacli-test token, and ...)` and
-  does nothing else. The decision is the first thing `DllMain` does, before cnc-ddraw's
+  of a DLL that has the store always carries the token. **The store is served only with both**:
+  the folder alone (a launch by a tacli from before the per-instance store, or by hand) and the
+  token alone (no store) are test mode and refused. Real mode logs `registry: real
+  (no -xtacli-test token, and ...)` and does nothing else. The decision is the first thing `DllMain` does, before cnc-ddraw's
   config-tool return, so an inherited `cnc_ddraw_config_init` cannot skip it. **Test mode fails
   closed**: a store that is missing, a folder, unreadable or not loaded whole, no memory, or a
   registry import of `TotalA.exe` or `win32.dll` the hooks do not answer ends the process at
@@ -380,7 +382,9 @@ the plan's shape and what the work settled.
   local gamedir now holds `tacli-state/registry.txt`, seeded by reading the template's
   `user.reg`, and a local launch whose DLL serves it passes the token and checks the run's
   served line as a remote launch does. A `--keep-dll` build without the store runs on the shared
-  file with a warning. [tacli design](tacli-design.html) §"The registry: a store per instance".
+  file with a warning. A tacli from before the store writes its values into the shared file and
+  passes no token, so the DLL refuses its game on an instance that has a store rather than
+  serving it with those values ignored. [tacli design](tacli-design.html) §"The registry: a store per instance".
 - **Launch** reads and checks the store first: a test folder whose store is missing, does not
   parse or passes one of the DLL's limits is refused with nothing written. It is a scheduled task
   of the instance's own, `\tacli\<name>`, that **runs TotalA.exe itself** with `-xtacli-test`

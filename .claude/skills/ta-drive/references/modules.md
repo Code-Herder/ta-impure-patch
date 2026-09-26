@@ -403,10 +403,10 @@ tools/tacli rm w1                                 # deletes the test folder and 
   locally. `--window`, `--display`, `--slot`, `--dplay`, `--intro` and `--shipped` are refused.
 - **A test folder's registry is a file; TA's settings key on that machine is never written.**
   `tacli-state\registry.txt` holds TA's key, as a local instance's does. Every remote launch
-  passes the token `-xtacli-test`, which the engine skips; with it, or with a `tacli-state` folder beside
-  `TotalA.exe`, the DLL answers the registry calls of `TotalA.exe` and `win32.dll` from the file,
-  and any other key is read-only. `launch` puts its values (sound off, `Interface Type`, the
-  display and skirmish values) into that file. The log's second line says which mode ran:
+  passes the token `-xtacli-test`, which the engine skips; with it and the `tacli-state` folder
+  beside `TotalA.exe`, the DLL answers the registry calls of `TotalA.exe` and `win32.dll` from
+  the file, and any other key is read-only; either alone is refused. `launch` puts its values
+  (sound off, `Interface Type`, the display and skirmish values) into that file. The log's second line says which mode ran:
   `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder -- …
   hooks: TotalA.exe 9 of 9 registry imports, …`. A test launch whose store is missing or does
   not load logs `…, but <what>: the game is not run` and ends at once. A player's own folder

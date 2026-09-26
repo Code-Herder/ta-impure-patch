@@ -65,11 +65,11 @@ instance with `tacli create <n> --display <live>` — `instance.json` is shared 
 session may own. A hand-run `wine TotalA.exe` without `WINEDLLOVERRIDES=ddraw=n,b` loads wine's
 builtin ddraw and fails with the same dialog, so it proves nothing.
 
-**TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, served to
-TotalA.exe by the DLL and seeded from the template's `user.reg` (`gamespeed` forced to 10).
-`tacli registry <i> [name[=value]]` reads it and, with the game stopped, sets it. `wine reg`
-reaches only the prefix's `user.reg`, one inode every prefix shares (Wine's own keys); a
-`--keep-dll` build without the store runs on that shared file, and the launch warns.
+**TA's registry key is the instance's own file**, `gamedir/tacli-state/registry.txt`, seeded
+from the template's `user.reg` (`gamespeed` 10); `tacli registry <i> [name[=value]]` reads it and,
+with the game stopped, sets it. The DLL serves it only to a launch carrying `-xtacli-test` (tacli
+adds it; a hand-run `wine TotalA.exe` is refused). `wine reg` reaches only the prefix's `user.reg`,
+one inode every prefix shares; a `--keep-dll` build without the store runs on it, with a warning.
 
 **The tile.** Instances are laid out in a grid so parallel windows do not stack; slots are held
 by **running** instances, `--slot 0` claims a cell explicitly. A window created off-screen is

@@ -18617,10 +18617,11 @@ The plan is [hardware portability](hardware-portability.html) §3 G21c, the cont
 `tagpu_regstore.h`, and the engine's side, every call site with the keys and values it reads
 and writes, is [exe reverse engineering](exe-reverse-engineering.html) §"The registry".
 
-**Every tacli instance runs in test mode, local ones included.** A remote instance's test folder
-holds `tacli-state\registry.txt` so the player's key is never written; a local instance's
-gamedir holds `tacli-state/registry.txt` because every local prefix's `user.reg` is one inode, so
-the store is what makes TA's key the instance's own ([tacli design](tacli-design.html) §"The
+**Every tacli launch of a DLL that has this module runs in test mode, local ones included** (a
+`--keep-dll` build from before it runs on the shared registry, and tacli warns). A remote
+instance's test folder holds `tacli-state\registry.txt` so the player's key is never written; a
+local instance's gamedir holds `tacli-state/registry.txt` because every local prefix's
+`user.reg` is one inode, so the store is what makes TA's key the instance's own ([tacli design](tacli-design.html) §"The
 registry: a store per instance"). Under wine `GetModuleFileNameW(NULL)` names the gamedir,
 although `TotalA.exe` there is a symlink into the Steam install: a local launch logs `entered by
 the -xtacli-test token and the tacli-state folder` [MEASURED 2026-09-26, wine 9.0].
@@ -18634,7 +18635,12 @@ working directory). tacli passes the token on every remote launch, and on every 
 whose DLL serves the store; the engine skips it (`x` is
 above the `'B'..'w'` of its switch table, `ja 0x49F461`, [command-line
 options](cmdline-options.html)). **Real mode needs both absent**: no token, and the folder not
-found. A folder that cannot be looked at (a share, an access rule), without the token, is real
+found. **The store is served only with both**: `tagpu_regstore_init` refuses either alone. The
+folder without the token (`… but no -xtacli-test token on the command line: a launch by a tacli
+from before the per-instance store, or by hand -- launch it with the current tacli: the game
+is not run`) is a launch whose values went elsewhere, into the registry every wine prefix
+shares, which serving the store would drop without a word; the token without the folder has no
+store. A folder that cannot be looked at (a share, an access rule), without the token, is real
 mode too, so a player's folder stays inert. Real mode logs `registry: real (no -xtacli-test
 token, and no tacli-state folder beside TotalA.exe)` and installs nothing, so a player's game
 carries no hook of this section.

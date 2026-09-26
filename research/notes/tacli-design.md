@@ -297,9 +297,20 @@ in-memory copy back when it saves.
 - **How the DLL finds it.** `gamedir/TotalA.exe` is a symlink into the Steam install, yet
   `GetModuleFileNameW(NULL)` names the gamedir: a launch logs `registry: TEST MODE, entered by the
   -xtacli-test token and the tacli-state folder -- …`, and the Steam folder has no
-  `tacli-state` [MEASURED 2026-09-26, wine 9.0]. tacli also passes the token first on the command
+  `tacli-state` [MEASURED 2026-09-26, wine 9.0]. tacli passes the token first on the command
   line whenever the DLL serves the store, so a store the DLL cannot find ends the game at attach
   instead of running it on the shared registry.
+- **The store is served only with both signals.** The folder without the token is a launch
+  that put its values somewhere else — a tacli from before the per-instance store writes them
+  into the shared `user.reg` — or a hand-run `wine TotalA.exe`; served the store, its `--res`,
+  `--map` and `--player` would be dropped without a word (a window placed for one resolution
+  around an engine running at another). The DLL refuses it at attach instead: `registry: TEST
+  MODE, entered by the tacli-state folder beside TotalA.exe, but no -xtacli-test token on the
+  command line: a launch by a tacli from before the per-instance store, or by hand -- launch it
+  with the current tacli: the game is not run`. The token without the folder is refused as it
+  always was (there is no store). **The rule is the DLL's**, so it holds for builds that have
+  it: a tree from before it deploys its own build, which serves the folder alone, until that
+  tree takes this change.
 - **Seeding.** `create`, and the first launch (or `tacli registry`) of an instance that has no
   store, **read** TA's key out of the template prefix's `user.reg` as it stands (`hive_store`:
   dword, sz, `str(N)`, `hex`/`hex(N)`, names and text in code page 1252) and write it as the
@@ -307,15 +318,23 @@ in-memory copy back when it saves.
   The shared file is never written for this. The creation line says what it was seeded from
   (`registry store created: …, seeded from TA's key in …/wineprefix/user.reg as it stood at …
   (3 keys, 97 values), gamespeed forced to 10`), and `instance.json` keeps it as
-  `registry_seed`. An existing store is the instance's and is never re-seeded.
+  `registry_seed` (`create --force` keeps both). An existing store is the instance's and is never
+  re-seeded, and the store is **created exclusively**: written under a temporary name, then
+  linked onto `registry.txt`, which fails when one is there, so a store another process made
+  first is kept whole.
 - **A read cut short is refused.** Wine's in-place rewrite truncates the hive and writes it front
-  to back in sorted key order [INFERRED from `save_branch`; the order is the file's], so a read
-  can see any prefix of the new file. `hive_store` accepts
-  the text only when a key that sorts after TA's follows its last line (every prefix has
-  `Software\Wine`), which proves TA's lines whole; a cut read is read again, five times at most,
-  and nothing is seeded from one. Not excluded, since wine takes no lock: a read overlapping a
-  rewrite that changes one of TA's own values can take some from before it and some from after,
-  each a value the key held.
+  to back, a key and all its subkeys before its next sibling [INFERRED from `save_branch`; the
+  order is the file's], so a read can see any prefix of the new file, mid-line included.
+  `hive_store` accepts the text only when a key header outside TA's key follows TA's last line
+  (every prefix has `Software\Wine`), which proves TA's lines whole. A text that ends first, or
+  whose last line (where a cut falls) does not parse, is a cut read (`HiveCut`), not a content
+  error. The seed then reads the file again 0.2 s later, five reads in all, makes no store from a
+  cut read, and after the fifth stops with `read cut short five times`. Checked on the
+  template's own `user.reg` cut at every byte of TA's section and every 17th byte elsewhere:
+  17 682 cuts, 13 143 refused as cut, 4 539 accepted and each identical to the full read, none
+  refused as content. Not excluded, since wine takes no lock: a read overlapping a rewrite that
+  changes one of TA's own values can take some from before it and some from after, each a
+  value the key held.
 - **What a launch writes into it**: `Interface Type` 1, `PlayMovie` 0, the six sound values 0
   unless `--sound`, `DisplaymodeWidth/Height`, and `--map`, `--player`, `--los`, `--mapping`
   (`regstore_values`, shared with the remote launch). The file is replaced whole (a temporary
@@ -323,10 +342,22 @@ in-memory copy back when it saves.
   game of the instance runs**: the DLL owns it then and rewrites it on every change the game
   makes. `regstore_update` refuses otherwise. Wine's own key, `UseXRandR`, is still `wine reg add`
   into the prefix, the same value for every instance.
+- **tacli against tacli: `tacli-state/tacli.lock`.** Every sequence that reads the store's state
+  and acts on it holds an exclusive `flock` on that file: the seed (none there, so make one),
+  `create`'s and `tacli registry`'s writes (no game runs, so replace the file), and a launch
+  from its first write until its run's served line, when the DLL has loaded the store. A second
+  tacli waits rather than interleaving, and its not-running check then sees the first one's
+  game. It orders tacli processes only; the DLL takes no part, and the file is the DLL's while
+  its game runs. A read takes no lock: the file is only ever replaced whole.
 - **The DLL's word, not the process, says it is served.** After the window appears, `launch`
-  reads the new run's first `registry: ` line and fails unless it says `TEST MODE, entered by …
-  --`; a refusal fails it with the DLL's line (the game has ended at attach), and any other line
-  fails it with `tacli stop <i>` as the remedy. The line is part of `launch`'s output.
+  reads the `registry: ` lines at the head of the new run's log: the first must say `TEST MODE,
+  entered by … --`, and the -r closure's `… the -r switch (DirectPlay registration through
+  dsetup.dll) is ignored` must follow. A line ending `: the game is not run` — the store's own
+  refusal, which its reasons precede (`… line 3 does not parse`), or the -r closure's after a
+  served line — fails the launch with every registry line of the run up to it, the per-value
+  record aside; so does a game that exits before its window, locally and remotely. Any other
+  first line fails it with `tacli stop <i>` as the remedy. The served line is part of
+  `launch`'s output.
 - **A DLL without the store still runs.** Which DLL will run is read from `gamedir/ddraw.dll`
   after the deploy, by `taremote.TEST_MODE_MARKS` (the check a remote launch refuses on). A
   `--keep-dll` build from before the store gets the launch's values in the prefix's shared
@@ -340,9 +371,11 @@ in-memory copy back when it saves.
   `wine reg` no longer reaches.
 - **What stays shared.** The prefix's hives: Wine's own keys (the X11 driver's `UseXRandR`, the
   font cache under `HKCU\Software\Wine\Fonts`, which each wineserver refreshes) and everything
-  else a wine program writes. TA's section of that file is written only by a launch that runs on
-  it (a `--keep-dll` fallback, or a tacli from before the store); a wineserver that loaded an
-  older copy can still put that copy back when it exits. No store-served game reads it.
+  else a wine program writes. TA's section of that file is written by a launch that runs on it: a
+  `--keep-dll` fallback, or a tacli from before the store on an instance that has no store yet.
+  On an instance that has one, that tacli still writes its values there, and a DLL with the
+  token rule then refuses the game (above). A wineserver that loaded an older copy can still put
+  that copy back when it exits. No store-served game reads it.
 - **A `--shipped` launch keeps the store**: its gamedir is a player's but for `tacli-state/`, so
   its game runs on the instance's own key too.
 
@@ -365,6 +398,21 @@ diffed before and after, TA's section extracted by its `[Software\\Cavedog…]` 
   Anteer Strait; the same instance with this tree's DLL showed Anteer Strait.
 - Over the whole run TA's section of `user.reg` did not change. Wine changed its own: the
   `Software\Wine\Fonts` keys' stamps, and one font entry of `External Fonts`.
+- **The token rule**, the same evening with the DLL that has it: `launch lr0 --res 800x600`
+  served the store and logged the -r closure after it; `tacli-state/tacli.lock` was free once
+  the launch returned. The main checkout's tacli, from before the store, then launched the same
+  instance with `--keep-dll` (this DLL, no token on the command line): its run logged `registry:
+  TEST MODE, entered by the tacli-state folder beside TotalA.exe, but no -xtacli-test token on
+  the command line: a launch by a tacli from before the per-instance store, or by hand --
+  launch it with the current tacli: the game is not run` as its only registry line, that tacli
+  reported `exited during launch before showing a window`, and the store was byte-identical,
+  its mtime unchanged. The pre-store build still ran on the shared registry with the one
+  warning and no token. A 2-peer game through `tools/mp_lobby.sh` (lr1 hosting at 800x600, lr2
+  at 640x480) went live with each store served and its -r closure logged, the stores holding
+  LR1 and LR2 and each engine at its own width; each run's counters read `the real registry
+  was asked for 1 read-only opens, 1 reads and 1 closes, and for no write`. In the same
+  minutes other sessions, launching through a tacli from before the store, rewrote the shared
+  key's `SkirmishMap`, `SingleMapping` and `SingleLineOfSight`.
 
 ## Remote instances: a test folder on a Windows machine (G21c)
 
@@ -551,9 +599,11 @@ player's key as it was.
   access rule) and there is no token, that is real mode, so a player's folder stays inert
   whatever its file system answers; a tacli launch of such a DLL always carries the token, so the
   doubt never reaches one. A player's game logs `registry: real (no -xtacli-test token, and no
-  tacli-state folder beside TotalA.exe)`, and nothing is hooked. The decision comes first in
-  `DllMain`, before the return for cnc-ddraw's config tool, so an inherited
-  `cnc_ddraw_config_init` cannot skip it.
+  tacli-state folder beside TotalA.exe)`, and nothing is hooked. **The store is served only with
+  both**: either signal alone is test mode, refused (the folder alone: `… but no -xtacli-test
+  token on the command line: …`; the token alone: no store), so a test folder's game started by
+  hand does not run either. The decision comes first in `DllMain`, before the return for
+  cnc-ddraw's config tool, so an inherited `cnc_ddraw_config_init` cannot skip it.
 - **In test mode everything fails closed.** A store that is missing, a folder, unreadable or
   not loaded whole, no memory, an exe path that cannot be read, a registry import the hooks
   do not answer, or a `win32.dll` not loaded at attach (a static import of `TotalA.exe`) ends
