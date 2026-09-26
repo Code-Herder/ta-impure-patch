@@ -982,14 +982,21 @@ static int box_on_screen(float x0, float y0, float x1, float y1, float slack)
 /* one marker line, fogged at its own first endpoint (the same pure
    translation between screen and world layer_quad uses). `nudge` is
    tagpu_mark_emit_line's; it moves an end by at most one screen pixel, s_px
-   here, which the cull's slack takes in. */
+   here, which the cull's slack takes in. The fog is sampled at the NUDGED
+   first end, where the line is drawn -- at 1x that is the engine's own end
+   exactly, so a line on a fog edge keeps the engine's verdict. */
 static void oline_n(float x0, float y0, float x1, float y1, const int nudge[4],
                     int col)
 {
+    float fx = x0, fy = y0;
+    if (nudge) {
+        fx += (float)(nudge[0] * s_px);
+        fy += (float)(nudge[1] * s_px);
+    }
     if (!box_on_screen(x0, y0, x1, y1, nudge ? 8.0f + (float)s_px : 8.0f)) return;
     if (!tagpu_mark_emit_line(x0, y0, x1, y1, nudge, col,
-                              x0 - (float)s_v->vpL + (float)s_v->eyeX,
-                              y0 - (float)s_v->vpT + (float)s_v->eyeY))
+                              fx - (float)s_v->vpL + (float)s_v->eyeX,
+                              fy - (float)s_v->vpT + (float)s_v->eyeY))
         s_nover++;
     else
         s_nline++;
@@ -1229,8 +1236,8 @@ static void oline_px(int x0, int y0, int x1, int y1, const int nudge[4], int col
    ten-tick sweep `(x1 - x0) * t / 10` as a signed division that truncates
    toward zero (the 0x66666667 multiply, `sar 2`, plus the sign bit), which is
    C's `/`; and the colour-A lines one pixel beside the colour-B ones, on the
-   side the sweep came from -- outside the rect at the start of the sweep,
-   inside it once the sweep has swapped the edges.
+   side the sweep came from -- outside the rect before the sweep has moved,
+   inside it from the first tick that moves an edge.
 
    THAT ONE PIXEL IS A SCREEN PIXEL, taken after the wheel zoom: each
    colour-A line is a colour-B line's own engine pixels with each end nudged

@@ -25,8 +25,8 @@
    arc, a waypoint crosshair, a posed nanoframe vertex -- it is the fractional
    position itself. A line the engine draws one pixel beside another (the
    build site's colour-A lines) takes its neighbour's ends and moves them by
-   whole line-grid game pixels afterwards (tagpu_line_nudge), so the two stay
-   adjacent at every zoom.
+   whole game pixels of the zoomed frame, ss line-grid pixels each,
+   afterwards (tagpu_line_nudge), so the two stay adjacent at every zoom.
 
    THE THICKENING. Each pixel the walk lights is copied to w = ss pixels along
    the minor axis (y for a line with |dy| <= |dx|, the walk's own x-major
@@ -246,7 +246,7 @@ static __inline int tagpu_line_clip(int* px0, int* py0, int* px1, int* py1,
    whose A/B claims a frame writes every line it built that frame to
    `tagpu_<pass>_lines.txt` beside the capture: a header, then
    `<ax> <ay> <bx> <by> <palette index>` a line, the ends as tagpu_line_px
-   decided them, in line-grid pixels. tools/line-oracle.py walks and thickens
+   decided them and tagpu_line_nudge moved them, in line-grid pixels. tools/line-oracle.py walks and thickens
    each line with its own reading of `0x4CC7AB` and compares the pixels with
    the capture, so the ends are the one input the model and the shader share.
 
