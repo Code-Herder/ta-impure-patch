@@ -1729,11 +1729,15 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   with the world passes disarmed — so without this the UI atlas's queue is never drained and the
   shell stays indexed for ever (found by the landing review; `tagpu_rglsl_calls()` compared across
   presents means the budget is still sliced once per frame). The atlas restores at **priority 4**
-  (`MAX_JOBS` is 6 since this landing; 0–3 are terrain, features, effects, 3DO units) and skips
+  (`MAX_JOBS` is 6 since this landing; 0–3 are terrain, features, effects, 3DO units, and 5 is
+  the UI's picture store since 2026-09-26 — every slot taken) and skips
   frames under **12×12**
   (`restoreMinEdge`, G15-0's verdict). Trigger token **`norestore`** is the A/B. Heartbeat gains
   `cpp= col=<made>/<live> colvalid= rearms= rgb=`. **Colour reaches a twin only through a sprite
-  op, so seeded art stays indexed until the engine redraws it** — entering a game, the panel is
+  op, so seeded art stays indexed until the engine redraws it** *[since 2026-09-26 a backdrop's
+  `PK_ASSET` and a stamp's `PK_PLANE` take the picture store's restored colour, a tint shades the
+  colour instead of dropping it, and a colour repaint re-seeds the post-game snapshot —
+  [GUI renderer](gui-renderer.html) §27]* — entering a game, the panel is
   seeded and indexed until a repaint. Measured: `fps=60.0`, 37 415 of 45 056 px of the menu's
   panel rect against `norestore`, **7 963 px of the 640×480 shell frame**, and `+gamma 15` → 235
   entries differ, one re-arm, colour valid again ([GL UI renderer](gui-renderer.html) §14).
@@ -6639,7 +6643,11 @@ followed by every sprite drawn on it since (each with its own plane, in `ovl`), 
 source is such a surface seeds it on demand. Any draw it cannot replay drops the snapshot, which
 is exactly the old behaviour. MEASURED on the same fixture: backdrop, title, labels, frame, the
 stats and the Main Menu button all on screen, the main menu after it correct, the in-game UI
-unchanged. Design in [GUI renderer](gui-renderer.html), under `PK_ASSET`.
+unchanged. Design in [GUI renderer](gui-renderer.html), under `PK_ASSET`. **A colour repaint
+re-seeds it too** (2026-09-26): in Classic++ the seed's sprites land in the same window, before
+the picture store has restored the backdrop, so `repaint_arm` clears `seeded` on every surface
+holding a snapshot at each `colarm` edge, and the re-sent seed finds its picture done
+([GUI renderer](gui-renderer.html) §27.2).
 
 **The player names on the coloured bars (closed 2026-09-23).** They are drawn through `0x4B8310`,
 which was recorded as `OP_GAFB` and published as box bytes the drain drops, so they reached no screen

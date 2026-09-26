@@ -8358,6 +8358,14 @@ itself called once, from WinMain at `0x49EA62`. The allocations are `0x4BA610` (
 0x2000; push 0x50A43C; call 0x4D83B0`, stored at `[globals+0xC4]`), one caller `0x4B5ADF`, and
 `0x4BA660` (LHT, into `[globals+0xC8]`), one caller `0x4B5B0F` — 32 rows of 256 each.
 
+**As maps of colour, the two tables are not the same kind of thing** [MEASURED 2026-09-26, the
+presented palette of the reference setup]. Fitted as `out = b + k·in` over the 256 palette
+entries (one scale per row, an offset per channel, least squares), the modal dim's row (−24,
+PALETTE.SHD) is k = 0.513 with b ≈ 0 at rms 8.8/255 — close to a plain darkening. The selected
+row's (+30, the lighten table) misses by rms 36.3/255 with the scale pinned at 1, so it is not
+an affine map of colour at all. That is why the Vulkan lane's colour rule for a tint is per
+entry, not per row ([GUI renderer](gui-renderer.html) §27.3).
+
 [Established because the vulkan-only plan's landing 8 turns these ops from published SURFACE BYTES
 into drawn geometry, and needed to know what each one's third argument means before choosing a
 packet field. Landing 8a shipped `OP_BAR` only, which is the one this section gets right.]
