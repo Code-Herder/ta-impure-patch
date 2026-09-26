@@ -6132,7 +6132,7 @@ int tagpu_hits_format(char* buf, unsigned int cap)
    Landing B5 of research/notes/tadr-port/sim-fixes.md ("B5 DESIGN" has the argument in full;
    the addresses are in exe-reverse-engineering.md, "A create refused during the load").
 
-   THE DEFECT [DISASSEMBLED; MEASURED on the previous build]. The dispatcher passes a unit
+   THE DEFECT [DISASSEMBLED; MEASURED with the fix off]. The dispatcher passes a unit
    create only in net state 6 (0x45473F with the table 0x512BC0: 0x09 has mask 4 alone), and a
    peer stays in state 5 until its game thread's 0x498445, after its load. A peer still loading
    when the others enter play drops their first creates, the commanders among them, until the
@@ -6144,8 +6144,9 @@ int tagpu_hits_format(char* buf, unsigned int cap)
    - The queue: a carried 0x09 the gate refuses while the level loads is kept per sender, in
      arrival order, and replayed before the level's first tick, at the in-play entry's call of
      the frame function (0x49842F). That function's catch-up ticks (up to five, 0x495490) still
-     run in state 5; a create refused in one of them is made at once, in the pump of the tick
-     it arrives in (0x4954C8), which is where state 6 makes it. Both pass B4's receiver past
+     run in state 5, and so does the frame function's own pump after them (0x4968CB); a create
+     refused in either is made at once, in the pump it arrives in (a tick's 0x4954C8, or
+     0x4968CB), which is where state 6 makes it. Both pass B4's receiver past
      its state test only (hit_rx_create_armed), so the incarnation is set as a live create sets
      it, and enter CreateFromNetwork with the sender in edi as the case has it, so B3's bounds
      and observe run on them too.
@@ -6169,12 +6170,16 @@ int tagpu_hits_format(char* buf, unsigned int cap)
      the loader at 0x49727D), so records go in under a lock. The loader's last pump comes
      before its last store, bit 1 (value 2) of main+0x38D75 at 0x497C62, and the game thread
      reaches 0x49842F only after reading that bit at 0x498342, so the drain sees every create
-     the load refused. After it only the game thread pumps (the catch-up ticks, 0x4954C8), and
-     nothing more is held: a create refused there is made in that pump.
-   - Before the first tick is safe: CreateFromNetwork calls exactly what the local create
-     0x485F50 calls (0x485A40, 0x485D40, 0x49E070, 0x437840, 0x43DC00, 0x48A870, 0x47CC30,
-     0x482AC0, 0x490580), and stock's loader runs 0x485F50 for this peer's commander in state
-     5, before any tick (0x4977BB); neither body reads the net state or GameTime. What the
+     the load refused. After it only the game thread pumps (the catch-up ticks' 0x4954C8, the
+     frame function's 0x4968CB), and nothing more is held: a create refused there is made in
+     that pump.
+   - Before the first tick is safe: CreateFromNetwork calls what the local create 0x485F50
+     calls (0x485A40, 0x485D40, 0x49E070, 0x437840, 0x43DC00, 0x48A870, 0x47CC30, 0x482AC0,
+     0x490580), and over an occupied slot first destroys its unit through 0x4864B0
+     (0x486237..0x486244), the unit tick's own destroy; that sends a 0x0C only for a local
+     player's unit (0x48664B), and the replay never takes a local player's slot. Stock's loader
+     runs 0x485F50 for this peer's commander in state 5, before any tick (0x4977BB); neither
+     body reads the net state or GameTime. What the
      replay skips of the dispatcher is the state test alone: the sender test is re-run on the
      record under the DirectPlay id it had. A create made in a catch-up tick has just passed
      the dispatcher's sender test (0x4547AD) and is made where state 6 makes it.
@@ -6230,6 +6235,7 @@ static unsigned int s_ghostReplayed, s_ghostNow, s_ghostSwept, s_ghostUntracked;
 static unsigned int s_ghostInactive, s_ghostStale, s_ghostBad, s_ghostCleared;
 static unsigned int s_ghostOffThread, s_ghostLevels;
 static unsigned int s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff;
+static unsigned int s_ghostPosUnbound, s_ghostPosShort;
 static volatile LONG s_ghostNotes;
 
 static int ghost_is_09_return(unsigned int ret)
@@ -6287,33 +6293,45 @@ static unsigned int ghost_bits(GHOSTBITS* b, unsigned int n)
     return n ? lo | (b->data[b->word] & ((1u << n) - 1u)) << used : lo;
 }
 
-enum { GHOST_POS_NONE, GHOST_POS_GROUND, GHOST_POS_AIR };
+enum { GHOST_POS_NONE, GHOST_POS_GROUND, GHOST_POS_AIR, GHOST_POS_SHORT };
 
 /* The position a dirty entry's move payload carries, read ahead of the decoder that will parse
    it. A remote unit's move object is made by 0x43DC00: the ground proxy 0x4FD488 unless the
    def's +0x241 bit 11 makes it the air proxy 0x4FD9E0 (0x43DC5F..0x43DC68).
    - Ground, decoder 0x44F5C0 (the owner writes it at 0x44F4A0): one flag bit, a 2-bit count n
      (0..3), then n points of int16 x, int16 z in whole world px -- the owner mover's path
-     from its front (+0xC, count +0x5C). A path the owner starts itself begins at the unit's own
-     position (0x44F3F2..0x44F417 stores +0x6C/+0x74, the integer halves of +0x6A/+0x72), and
-     the front is dropped as the unit reaches it (0x44F100), so point 0 is where the unit
-     stands or the next node on its path. The receiver's proxy hands the points to the unit as
-     its path (0x44F650). Taken: point 0, x and z; y stays stock's.
+     from its front (+0xC, count +0x5C). Point 0 is the node the unit last REACHED, never the
+     next one: the mover's step 0x44F1A0 (vtable 0x4FD458 + 8, called through 0x43DD20 from
+     the unit tick at 0x48AFAA) drops the front only once the unit is within 5 px of point 1
+     (0x44F1D7..0x44F235, the squared distance against 0x19), and a straight order's path is
+     [the unit's position, the goal] (0x44F3F2..0x44F417 stores +0x6C/+0x74, the integer halves
+     of +0x6A/+0x72), so a straight move keeps its origin as point 0 until the unit is within
+     5 px of its goal. 0x44F100 does the same shift and nothing calls it. A unit created well
+     along a long straight move is therefore placed at its origin and trails the owner's until
+     the round robin's full state for its slot writes the owner's x, y, z into it
+     (0x48B5CA..0x48B682): at most N owner ticks, the bound stock's (0,0,0) has too. The
+     receiver's proxy hands the points to the unit as its path (0x44F650). Taken: point 0, x
+     and z; y stays stock's.
    - Air, decoder 0x490A10: a 2-bit selector. 2 is the 0x2C-byte motion 0x44E9C0 (written by
      0x44E930): one flag bit, then x, y, z in 16.16 and a velocity -- the point the proxy's step
      0x490690 copies into its own +0xC each tick (0x44EA60, called at 0x4906B8), the unit's
      dead-reckoned position. Taken: x, y, z. 1 is 0x44E080's object, whose optional vector
      +0x26 is a GOAL (0x44E3C0 refreshes it from the followed unit) and not the unit's own
      position; 0 and 3 carry no motion. Neither is taken.
+   `avail` is the bits left in the message from the reader's position: a payload that would
+   read past it is GHOST_POS_SHORT, before any of those bits is read. A well-formed entry's
+   payload is inside its message, so the test never refuses one.
    Returns the kind, with x, z in whole px and x16, y16, z16 as the record holds them. */
-static int ghost_payload_pos(GHOSTBITS b, int air, int* x, int* z,
+static int ghost_payload_pos(GHOSTBITS b, unsigned long long avail, int air, int* x, int* z,
                              unsigned int* x16, unsigned int* y16, unsigned int* z16)
 {
     if (!air) {
         unsigned int n;
+        if (avail < 3u) return GHOST_POS_SHORT;
         (void)ghost_bits(&b, 1);
         n = ghost_bits(&b, 2);
         if (n == 0u) return GHOST_POS_NONE;
+        if (avail < 3u + 32u) return GHOST_POS_SHORT;
         *x = (short)ghost_bits(&b, 16);
         *z = (short)ghost_bits(&b, 16);
         if (*x < 0 || *z < 0) return GHOST_POS_NONE;
@@ -6321,7 +6339,9 @@ static int ghost_payload_pos(GHOSTBITS b, int air, int* x, int* z,
         *z16 = (unsigned int)*z << 16;
         return GHOST_POS_GROUND;
     }
+    if (avail < 2u) return GHOST_POS_SHORT;
     if (ghost_bits(&b, 2) != 2u) return GHOST_POS_NONE;
+    if (avail < 2u + 1u + 96u) return GHOST_POS_SHORT;
     (void)ghost_bits(&b, 1);
     *x16 = ghost_bits(&b, 32);
     *y16 = ghost_bits(&b, 32);
@@ -6353,9 +6373,6 @@ static int ghost_local_owner(const char* ta, const char* slot)
     return *(const unsigned int*)pl != 0u && (pl[0x73] == 1 || pl[0x73] == 2);
 }
 
-/* In B4's 0x05 receiver, before the carried 0x09's own gate: in state 5, where that gate
-   refuses it, hold it. regs is the receiver's frame: edi the sender's record, the case's
-   player argument at the site's esp + 0x14, paired by 0x453E84..0x453E9B. */
 /* a copy made before state 6, which a kill refused in the catch-up ticks can still mark;
    game thread. Past GHOST_DONE a copy is not tracked, and its kill waits for the round robin. */
 static void ghost_made(unsigned int idx, unsigned int k, unsigned int birth)
@@ -6368,6 +6385,10 @@ static void ghost_made(unsigned int idx, unsigned int k, unsigned int birth)
     d->birth = birth;
 }
 
+/* In B4's 0x05 receiver, before the carried 0x09's own gate: in state 5, where that gate
+   refuses it, hold it, or after the drain make it at once. regs is the receiver's frame: edi
+   the sender's record, the case's player argument at the site's esp + 0x14, paired by
+   0x453E84..0x453EA1 (a row of the table). */
 static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m)
 {
     const char* snd = (const char*)(size_t)regs[PR_EDI];
@@ -6396,7 +6417,7 @@ static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m
     }
     LeaveCriticalSection(&s_ghostLock);
     if (!now) return 1;
-    /* a catch-up tick: only the game thread pumps after the drain (0x4954C8) */
+    /* after the drain only the game thread pumps (0x4954C8, 0x4968CB) */
     if (GetCurrentThreadId() != s_ghostGameTid) { s_ghostOffThread++; return 0; }
     memcpy(&birth, m + 26, 4);
     ghost_made(m[6] | (unsigned int)m[7] << 8, k, birth);
@@ -6464,7 +6485,7 @@ static void __cdecl ghost_refused(unsigned int* regs)
         s_ghostSwept++;
         if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
             tagpu_logf("enginefix: ghost commander: slot %u from sender %u killed during the "
-                       "catch-up ticks; its replayed copy marked dying", idx, k);
+                       "catch-up ticks; its copy made before state 6 marked dying", idx, k);
         return;
     }
     EnterCriticalSection(&s_ghostLock);
@@ -6560,7 +6581,12 @@ static void __cdecl ghost_replay(unsigned int* regs)
 /* In place of the dirty create's `call 0x4861D0` at 0x48BA00, entered by a call so that
    CreateFromNetwork still sees 0x48BA05: [esp] the return, [esp+4] the player (its low byte,
    the slot's +0xFF), [esp+8] the 23-byte record, and the 0x2C's reader at [esp+0x1C] (the
-   frame's esp + 0x10, after the two pushes and the call). */
+   frame's esp + 0x10, after the two pushes and the call; its slots set at 0x48B933..0x48B93E,
+   a row of the table).
+   The payload is read only from B3's copy of the message, and only within its length: the
+   reader must be the one B3's wire_s2c_copy set up for this 0x2C (s_wire2cRd) and still point
+   at its copy, whose WIRE_2C_PAD zero bytes cover the dword a last read touches. B3 is a local
+   fix that can be skipped; without it no position is taken and the record keeps stock's. */
 static void __cdecl ghost_position(unsigned int* r)
 {
     const char* ta = *(const char* const*)0x00511DE8;
@@ -6573,6 +6599,7 @@ static void __cdecl ghost_position(unsigned int* r)
     const char* defs;
     const char* def;
     GHOSTBITS b;
+    unsigned long long pos, avail;
     int kind, x = 0, z = 0;
     if (!ta || !rec || k >= GHOST_SENDERS || !rd[0]) { s_ghostPosNone++; return; }
     pl = (const unsigned char*)ta + 0x1B63 + k * 0x14B;
@@ -6587,12 +6614,28 @@ static void __cdecl ghost_position(unsigned int* r)
     }
     def = defs + (size_t)type * 0x249;
     if (*(const unsigned char*)(def + 0x22F) != 1) { s_ghostPosNone++; return; }
+    if ((const unsigned char*)rd != s_wire2cRd || !s_wire2cCopy ||
+        (const unsigned char*)(size_t)rd[0] != s_wire2cCopy) {
+        s_ghostPosUnbound++;
+        return;
+    }
     b.data = (const unsigned int*)(size_t)rd[0];
     b.word = rd[1];
     b.bit  = rd[2];
     if (b.bit >= 32u) { s_ghostPosNone++; return; }
-    kind = ghost_payload_pos(b, (*(const unsigned int*)(def + 0x241) >> 11) & 1u, &x, &z,
+    pos   = wire_pos((const unsigned char*)rd);
+    avail = pos < s_wire2cEnd ? s_wire2cEnd - pos : 0u;
+    kind = ghost_payload_pos(b, avail, (*(const unsigned int*)(def + 0x241) >> 11) & 1u, &x, &z,
                              &x16, &y16, &z16);
+    if (kind == GHOST_POS_SHORT) {
+        s_ghostPosShort++;
+        if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+            tagpu_logf("enginefix: ghost commander: dirty create slot %u: its move payload runs "
+                       "past the message (bit %u of %u); stock's record kept",
+                       rec[3] | (unsigned int)rec[4] << 8, (unsigned int)pos,
+                       (unsigned int)s_wire2cEnd);
+        return;
+    }
     if (kind == GHOST_POS_NONE) { s_ghostPosNone++; return; }
     if (!ghost_on_map(x, z, *(const unsigned int*)(ta + 0x14233),
                       *(const unsigned int*)(ta + 0x14237))) {
@@ -6642,7 +6685,8 @@ static void ghost_selfcheck(void)
     static const unsigned int ground[3] = { 0x11B82695u, 0x01900140u, 0x00000000u };
     static const unsigned int air[4]    = { 0x5DC40002u, 0x02800000u, 0x00600000u, 0x00000000u };
     static const unsigned int split[2]  = { 0x80000000u, 0x00000005u };
-    struct { const char* name; int got; int want; } t[20];
+    static const unsigned int still[1]  = { 0x00000001u };        /* flag 1, n = 0 */
+    struct { const char* name; int got; int want; } t[24];
     GHOSTREC q[4];
     int n = 0, bad = 0, i, x, z;
     unsigned int x16, y16, z16;
@@ -6662,13 +6706,20 @@ static void ghost_selfcheck(void)
     b.data = split; b.word = 0; b.bit = 31;
     t[n].name = "bits: across a word";       t[n].got = ghost_bits(&b, 4) == 0xBu && b.word == 1 && b.bit == 3; t[n].want = 1; n++;
     b.data = ground; b.word = 0; b.bit = 0;
-    t[n].name = "ground: point 0";           t[n].got = ghost_payload_pos(b, 0, &x, &z, &x16, &y16, &z16) == GHOST_POS_GROUND &&
+    t[n].name = "ground: point 0";           t[n].got = ghost_payload_pos(b, 96, 0, &x, &z, &x16, &y16, &z16) == GHOST_POS_GROUND &&
                                                         x == 1234 && z == 567 && x16 == 1234u << 16; t[n].want = 1; n++;
     b.data = air; b.word = 0; b.bit = 0;
-    t[n].name = "air: the motion's point";   t[n].got = ghost_payload_pos(b, 1, &x, &z, &x16, &y16, &z16) == GHOST_POS_AIR &&
+    t[n].name = "air: the motion's point";   t[n].got = ghost_payload_pos(b, 128, 1, &x, &z, &x16, &y16, &z16) == GHOST_POS_AIR &&
                                                         x == 3000 && z == 12 && y16 == 80u << 16; t[n].want = 1; n++;
     b.data = air; b.word = 0; b.bit = 1;
-    t[n].name = "air: a goal is not taken";  t[n].got = ghost_payload_pos(b, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
+    t[n].name = "air: a goal is not taken";  t[n].got = ghost_payload_pos(b, 127, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
+    b.data = ground; b.word = 0; b.bit = 0;
+    t[n].name = "ground: one bit short";     t[n].got = ghost_payload_pos(b, 34, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_SHORT; n++;
+    t[n].name = "ground: to the last bit";   t[n].got = ghost_payload_pos(b, 35, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_GROUND; n++;
+    b.data = still; b.word = 0; b.bit = 0;
+    t[n].name = "ground: no point, at end";  t[n].got = ghost_payload_pos(b, 3, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
+    b.data = air; b.word = 0; b.bit = 0;
+    t[n].name = "air: one bit short";        t[n].got = ghost_payload_pos(b, 98, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_SHORT; n++;
     t[n].name = "kill: the latest create";   t[n].got = ghost_cancel(q, 4, 7);                 t[n].want = 2; n++;
     q[2].dead = 1;
     t[n].name = "kill: past a cancelled one"; t[n].got = ghost_cancel(q, 4, 7);                t[n].want = 0; n++;
@@ -6701,6 +6752,14 @@ static int fix_ghost_commander(void)
     static const unsigned char notState5[9]  = { 0x83, 0xFA, 0x06, 0x0F, 0x84, 0xBF, 0x17, 0x00,
                                                  0x00 };                         /* 0x454788 */
     static const unsigned char nextSub[7]    = { 0x8B, 0x84, 0x24, 0xF0, 0x00, 0x00, 0x00 };
+    /* 0x48B933: the 0x2C reader's buffer, word and bit, [esp+0x14..0x1C] */
+    static const unsigned char readerSlots[12] = { 0x89, 0x44, 0x24, 0x14, 0x89, 0x74, 0x24, 0x18,
+                                                   0x89, 0x74, 0x24, 0x1C };
+    /* 0x453E84: edi = main + 0x1B63 + (byte [esp+0x14]) * 0x14B, the sender's record */
+    static const unsigned char senderRec[30] = { 0x8B, 0x74, 0x24, 0x14, 0x81, 0xE6, 0xFF, 0x00,
+                                                 0x00, 0x00, 0x8B, 0xC6, 0xC1, 0xE0, 0x05, 0x03,
+                                                 0xC6, 0x8D, 0x0C, 0x32, 0x8D, 0x04, 0x80, 0x8D,
+                                                 0xBC, 0x41, 0x63, 0x1B, 0x00, 0x00 };
     unsigned char *aCall, *aReset, *aPos, *aEarly, *aRefused, *p;
 
     InitializeCriticalSection(&s_ghostLock);
@@ -6763,6 +6822,8 @@ static int fix_ghost_commander(void)
     lim_same(0x00496790, 5, frameEntry, "ghost commander: the frame function's entry");
     lim_same(0x00454788, 9, notState5, "ghost commander: the refusal's other states");
     lim_same(0x00455F50, 7, nextSub, "ghost commander: the dispatcher's next message");
+    lim_same(0x0048B933, 12, readerSlots, "ghost commander: the 0x2C reader's slots");
+    lim_same(0x00453E84, 30, senderRec, "ghost commander: the sender's record and argument");
     return FIX_TABLE;
 }
 
@@ -6771,18 +6832,20 @@ static int fix_ghost_commander(void)
    in a catch-up tick; killed= held creates their refused 0x0C cancelled,
    swept= copies made before state 6 marked dying, nokill= refused 0x0Cs that matched neither,
    untracked= copies past the list a kill can mark; inactive/stale/bad are the drain's drops,
-   cleared= held by a load that never reached play; pos= the dirty creates' kind */
+   cleared= held by a load that never reached play; pos= the dirty creates' kind, unbound= with
+   no B3 copy to read the payload from, short= a payload past its message's end */
 int tagpu_ghost_format(char* buf, unsigned int cap)
 {
     return _snprintf(buf, cap,
                      " | ghost: q=%u over=%u deep=%u replay=%u now=%u killed=%u swept=%u"
                      " nokill=%u untracked=%u inactive=%u stale=%u bad=%u"
-                     " cleared=%u offthread=%u levels=%u pos ground=%u air=%u none=%u off=%u%s",
+                     " cleared=%u offthread=%u levels=%u pos ground=%u air=%u none=%u off=%u"
+                     " unbound=%u short=%u%s",
                      s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostReplayed, s_ghostNow,
                      s_ghostKilled, s_ghostSwept, s_ghostNoKill, s_ghostUntracked, s_ghostInactive,
                      s_ghostStale, s_ghostBad, s_ghostCleared, s_ghostOffThread, s_ghostLevels,
                      s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff,
-                     s_ghostOff ? " LEVER-OFF" : "");
+                     s_ghostPosUnbound, s_ghostPosShort, s_ghostOff ? " LEVER-OFF" : "");
 }
 
 static void patch_engine_defects(void)
