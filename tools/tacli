@@ -17,6 +17,7 @@ Everything is stdlib-only and every subcommand can print JSON (--json) for agent
 import argparse
 import atexit
 import difflib
+import fcntl
 import hashlib
 import bisect
 import json
@@ -303,6 +304,7 @@ class Instance:
         # leave half of one.
         self.remote = None
         self.unusable = None
+        self.seeded_now = None      # the store `_create` just seeded (seed_regstore's record)
         try:
             meta = json.loads(self.meta_path.read_text()) if self.meta_path.exists() else {}
             if not isinstance(meta, dict):
@@ -935,11 +937,33 @@ def apply_prefix_settings(inst: Instance):
 # because every local prefix's user.reg is one inode (clone_prefix).
 #
 # THE STORE IS THE DLL'S WHILE A GAME OF THE INSTANCE RUNS: it rewrites the file on every
-# change the game makes. tacli writes it only after checking that none runs.
+# change the game makes. tacli writes it only after checking that none runs, and a local
+# instance's only under regstore_lock, which orders tacli against tacli: a check and the
+# write it permits cannot have another tacli's seed, write or game start between them.
 
 def regstore_path(inst: Instance):
     """The store: a local Path, or a taremote.RemotePath in a remote test folder."""
     return inst.gamedir / taremote.STATE_DIR / taremote.STORE
+
+
+REGSTORE_LOCK = "tacli.lock"
+
+
+def regstore_lock(inst: Instance):
+    """Take the local instance's store lock: an exclusive flock on `tacli-state/tacli.lock`,
+    held until the returned file is closed or this process ends (a `die` included).
+
+    It covers tacli against tacli, across every sequence that reads the store's state
+    and then acts on it: the seed (none there -> make one), a write (no game runs ->
+    replace the file), and a launch from its first write until the DLL's run says it has
+    the store. From then the file is the DLL's (regstore_update refuses while the game
+    runs). flock is per open file, so a holder never takes it a second time: the verbs
+    take it, the functions they call assume it."""
+    d = inst.gamedir / taremote.STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    f = open(d / REGSTORE_LOCK, "a")
+    fcntl.flock(f, fcntl.LOCK_EX)
+    return f
 
 
 def dll_serves_regstore(data: bytes) -> bool:
@@ -1000,15 +1024,17 @@ def regstore_read(inst: Instance):
             f"leaves it as it is")
 
 
-def _regstore_write(inst: Instance, data: bytes):
-    """Replace the store whole, so the DLL's next read finds the old file or the new one
-    and never a part: a remote file through RemotePath.write_bytes (a temporary name, then
-    Replace), a local one under a name of this process's own, flushed, then moved over it.
-    The name is never the DLL's own temporary (`registry.txt.tmp`)."""
+def _regstore_write(inst: Instance, data: bytes, create: bool = False) -> bool:
+    """Put `data` in place as the store, whole, so the DLL's next read finds the old file
+    or the new one and never a part: a remote file through RemotePath.write_bytes (a
+    temporary name, then Replace), a local one under a name of this process's own,
+    flushed, then moved over it -- or, with `create`, linked onto the store's name, which
+    fails when a store is there: False then, and nothing replaced. The name is never the
+    DLL's own temporary (`registry.txt.tmp`)."""
     path = regstore_path(inst)
     if inst.remote:
         path.write_bytes(data)
-        return
+        return True
     path.parent.mkdir(exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=taremote.STORE + ".", suffix=".tacli-tmp")
     try:
@@ -1016,10 +1042,16 @@ def _regstore_write(inst: Instance, data: bytes):
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
+        if not create:
+            os.replace(tmp, path)
+            return True
+        try:
+            os.link(tmp, path)
+            return True
+        except FileExistsError:
+            return False
+    finally:
         Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def regstore_update(inst: Instance, store, data: bytes, values) -> int:
@@ -1103,17 +1135,19 @@ def hive_store(text: str, root: str = taremote.STORE_ROOT) -> "taremote.RegStore
     ValueError names the line that does not parse or the store limit it passes.
 
     WHOLE, OR HiveCut. Wine rewrites a hive with several links IN PLACE -- truncated,
-    then written front to back in its sorted key order [INFERRED: server/registry.c,
-    save_branch] -- so a read can see any prefix of the new file. A key that sorts
-    after `root` and comes after its last line in the text proves every line of it was
-    written; without one the text is refused. Every wine prefix has such a key
-    (`Software\\Wine`). What no lock excludes: a read that overlaps a rewrite changing a
-    value of `root` itself can take some values from before it and some from after --
-    each a value the key did hold."""
+    then written front to back, a key with all its subkeys before the key's next
+    sibling, siblings in sorted order [INFERRED: server/registry.c, save_branch] -- so a
+    read can see any prefix of the new file. What proves `root`'s lines whole is a key
+    header outside it after them (or, when the hive has no `root`, one that sorts after
+    it); every wine prefix has one (`Software\\Wine`). Without it the text is refused, and
+    so is a line that does not parse when it is the text's last: that is where a cut
+    falls. What no lock excludes: a read that overlaps a rewrite changing a value of
+    `root` itself can take some values from before it and some from after -- each a value
+    the key did hold."""
     store = taremote.RegStore()
     rel = root.split("\\", 1)[1].lower()           # user.reg's paths are relative to HKCU
     lines = text.split("\n")
-    key, n, passed = None, 0, False
+    key, n, passed, seen = None, 0, False, False
     if not text.startswith("WINE REGISTRY Version 2"):
         raise HiveCut("no wine registry header: not a hive, or read while being rewritten")
     while n < len(lines):
@@ -1126,8 +1160,8 @@ def hive_store(text: str, root: str = taremote.STORE_ROOT) -> "taremote.RegStore
                 key = (b"HKCU\\" + _ansi(path)) if low == rel or low.startswith(rel + "\\") else None
                 if key is not None:
                     store.add_key(key)
-                    passed = False
-                elif low > rel:
+                    passed, seen = False, True
+                elif seen or low > rel:
                     passed = True
                 continue
             if key is None or not line or line[0] in "#;":
@@ -1160,6 +1194,9 @@ def hive_store(text: str, root: str = taremote.STORE_ROOT) -> "taremote.RegStore
                 raise ValueError(f"data {rest[:20]!r}")
             store.set(key, _ansi(name), kind, data)
         except ValueError as e:
+            if n == len(lines):                   # the text's last piece: no newline after it
+                raise HiveCut(f"line {n}, the last, does not parse ({e}): read while wine "
+                              f"was rewriting it") from None
             raise ValueError(f"line {n}: {e}") from None
     if not passed:
         raise HiveCut(f"the text ends without a key after {root}'s: read while wine was "
@@ -1173,7 +1210,8 @@ def seed_regstore(inst: Instance) -> "dict | None":
     Seeded from TA's key as it stands in the template prefix's user.reg now -- READ,
     never written -- then `gamespeed` set to 10, TA's normal speed, which the harness's
     measurements assume and the shared key does not guarantee. None when a store exists:
-    it is the instance's, and nothing replaces it."""
+    it is the instance's, and nothing replaces it -- the store is created exclusively, so
+    one another process made meanwhile is kept too. The caller holds regstore_lock."""
     path = regstore_path(inst)
     if path.exists():
         return None
@@ -1196,7 +1234,8 @@ def seed_regstore(inst: Instance) -> "dict | None":
                 f"loads ({e})")
     else:
         die(f"{inst.name}: {hive} read cut short five times ({cut}); no store was made")
-    _regstore_write(inst, data)
+    if not _regstore_write(inst, data, create=True):
+        return None
     return {"store": str(path), "from": str(hive), "keys": len(store.keys()),
             "values": sum(len(store.values(k)) for k in store.keys()),
             "created": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -1217,7 +1256,8 @@ def local_registry(inst: Instance, meta: dict, values) -> dict:
     only that, and the launch passes it the test token; one that does not -- a
     `--keep-dll` build from before the store -- reads the prefix's user.reg, which every
     instance shares, so the values go there as well and the launch says so. Never
-    refused: an A/B against an old build has to keep running."""
+    refused: an A/B against an old build has to keep running. The caller holds
+    regstore_lock."""
     seeded = seed_regstore(inst)
     if seeded:
         meta["registry_seed"] = seeded
@@ -1389,6 +1429,7 @@ def _create(inst: Instance, args) -> dict:
     # the CLIENT is what has to fit on the desktop, not the engine's screen
     tile = tile_for(index, client_box(res, window), screen=screen_size(display))
     shield = args.shield is not False
+    kept_seed = inst.meta().get("registry_seed") if inst.exists else None
     clone_prefix(inst)
     vsync = getattr(args, "vsync", None) or "on"
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
@@ -1411,14 +1452,16 @@ def _create(inst: Instance, args) -> dict:
     }
     inst.save_meta(meta)
     apply_prefix_settings(inst)
-    # the store, before anything can launch the instance; nothing runs yet, so it is
-    # tacli's to write (a --force over a running instance is refused by regstore_update)
-    seeded = seed_regstore(inst)
-    if seeded:
-        meta["registry_seed"] = seeded
-        inst.save_meta(meta)
-    store, data = regstore_read(inst)
-    regstore_update(inst, store, data, regstore_values(args.sound, res))
+    # the store, before anything can launch the instance (a --force over a running
+    # instance is refused by regstore_update); an existing one, and its record, are kept
+    with regstore_lock(inst):
+        seeded = seed_regstore(inst)
+        if seeded or (kept_seed and regstore_path(inst).exists()):
+            meta["registry_seed"] = seeded or kept_seed
+            inst.save_meta(meta)
+        store, data = regstore_read(inst)
+        regstore_update(inst, store, data, regstore_values(args.sound, res))
+    inst.seeded_now = seeded
     return meta
 
 
@@ -1430,8 +1473,8 @@ def cmd_create(args):
              f"({res[0]}x{res[1]}, window at {tile[0]},{tile[1]}, "
              f"sound={'on' if args.sound else 'off'}, "
              f"shield={'on' if meta['shield'] else 'off'})")
-    if meta.get("registry_seed"):
-        human += f"\n  {seed_note(meta['registry_seed'])}"
+    if inst.seeded_now:
+        human += f"\n  {seed_note(inst.seeded_now)}"
     out(meta, args.json, human=human)
 
 
@@ -1731,11 +1774,14 @@ def _launch(args) -> dict:
         deploy_dll(inst)
         link_restorer_files(inst)
     apply_prefix_settings(inst)
+    # Held from the store's first write until the DLL's run says it has the store: no
+    # other tacli seeds, writes or launches in between (regstore_lock).
+    store_lock = regstore_lock(inst)
     # after deploy_dll: which DLL will run decides where TA's values are read
     registry = local_registry(inst, meta, regstore_values(meta.get("sound", False),
                                                           tuple(meta["res"]), args))
-    if created and meta.get("registry_seed"):
-        registry["seeded"] = meta["registry_seed"]      # _create made it
+    if created:
+        registry["seeded"] = inst.seeded_now            # _create made it
     if not registry["serves"]:
         warn(f"{inst.name}: this run uses the SHARED registry: {inst.gamedir / 'ddraw.dll'} "
              f"does not serve the instance's registry store (no fail-closed "
@@ -1833,9 +1879,9 @@ def _launch(args) -> dict:
             break
         if proc.poll() is not None:
             time.sleep(0.3)               # let TA's handler finish writing
-            line = _run_registry_line(inst, old_log) if token else None
-            if line and line.endswith(taremote.TEST_MODE_REFUSED):
-                die(f"{inst.name}: the DLL did not run the game: {line}")
+            refusal = _registry_refusal(_run_registry_lines(inst, old_log))
+            if refusal:
+                die(f"{inst.name}: the DLL did not run the game: {refusal}")
             die(crash_report(inst, crash_since) or
                 f"{inst.name} exited during launch before showing a window "
                 f"(no ErrorLog.txt)")
@@ -1847,6 +1893,7 @@ def _launch(args) -> dict:
     registry_line = (_await_registry_line(inst, old_log, max(deadline, time.time() + 5),
                                           args.timeout, "the registry every instance shares")
                      if token else None)
+    store_lock.close()
     # a --shipped game places itself, as a player's does
     win = inst.window() if shipped else place_window(inst, display)
     restored = pointer_restore(display, pointer_before)
@@ -2512,11 +2559,16 @@ def cmd_registry(args):
     """Read or set values of TA's key in a local instance's registry store, which is what
     the game reads (the prefix's user.reg is every instance's). `[Sub\\]Name` reads a
     value; `[Sub\\]Name=Value` sets one, keeping the type it has (dword: decimal or 0x hex;
-    sz: text) or, for a new value, a number as a dword and anything else as an sz.
-    Setting is refused while the game runs: the store is the DLL's then."""
+    sz: text) or, for a new value, a number as a dword and anything else as an sz; a
+    dword with a leading zero (`010`) is refused rather than guessed at. Setting is refused
+    while the game runs: the store is the DLL's then. A read takes no lock (the file is
+    only ever replaced whole); a seed or a write takes regstore_lock."""
     inst = Instance(args.name)
     meta = inst.meta()
-    seeded = seed_regstore(inst)
+    lock = None
+    if any("=" in v for v in args.values) or not regstore_path(inst).exists():
+        lock = regstore_lock(inst)
+    seeded = seed_regstore(inst) if lock else None
     if seeded:
         meta["registry_seed"] = seeded
         inst.save_meta(meta)
@@ -2533,16 +2585,20 @@ def cmd_registry(args):
         have = store.get(key, name)
         if have and have[1] not in (taremote.REG_DWORD, taremote.REG_SZ):
             die(f"{path} is a hex({have[1]}) value: tacli sets dword and sz values only")
-        number = re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]+", text)
-        if (have and have[1] == taremote.REG_DWORD) or (not have and number):
+        number = re.fullmatch(r"0|[1-9][0-9]*|0[xX][0-9a-fA-F]+", text)
+        numeric = re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]+", text)
+        if (have and have[1] == taremote.REG_DWORD) or (not have and numeric):
             if not number or int(text, 0) > 0xFFFFFFFF:
-                die(f"{path}={text!r}: a dword is 0..4294967295, in decimal or 0x hex")
+                die(f"{path}={text!r}: a dword is 0..4294967295, in decimal without a leading "
+                    f"zero or in 0x hex")
             values.append((sub, name, "REG_DWORD", int(text, 0)))
         else:
             values.append((sub, name, "REG_SZ", text))
     if values:
         regstore_update(inst, store, data, values)
         store, data = regstore_read(inst)
+    if lock:
+        lock.close()
     if wanted:
         rows = [_reg_row(sub, name, store.get(key, name)) for sub, name, key in wanted]
     else:
@@ -5274,45 +5330,69 @@ def _log_key(inst: Instance):
         return None
 
 
-def _run_registry_line(inst: Instance, old):
-    """The first `registry: ` line of the run the DLL began after `old` (a `_log_key`),
-    from the head of `log/tagpu.log` (the DLL logs it right after the run's header), or
-    None while there is none -- or while the file is still `old`'s run."""
+REGISTRY_HEAD = 8192     # the attach-time lines of a run: its registry lines and the -r closure's
+
+
+def _run_registry_lines(inst: Instance, old):
+    """The `registry: ` lines at the head of the run the DLL began after `old` (a
+    `_log_key`), in order -- the lines it logs at attach, the store's decision and the -r
+    closure's -- or None while `log/tagpu.log` is absent or still `old`'s run."""
     try:
-        head = _head(inst.gamedir / "log" / "tagpu.log", 4096)
+        head = _head(inst.gamedir / "log" / "tagpu.log", REGISTRY_HEAD)
     except FileNotFoundError:
         return None
     key = taremote._key(head[:taremote.HEAD_BYTES])
     if key is None or key == old:
         return None
+    lines = []
     for raw in head.split(b"\n")[1:-1]:     # the last piece has no newline yet
         line = raw.rstrip(b"\r").decode("utf-8", "replace")
         if line.startswith("registry: "):
-            return line
+            lines.append(line)
+    return lines
+
+
+# The store's per-value record (`registry: read …`, first seen), which says nothing about
+# whether the run was refused.
+_REGISTRY_TRACE = ("registry: read ", "registry: write ", "registry: open ", "registry: create ")
+
+
+def _registry_refusal(lines) -> "str | None":
+    """When a run's registry lines hold a refusal (a line ending TEST_MODE_REFUSED:
+    the store's decision, or the -r closure's after a served line), the account of it:
+    every line up to and including the refusal but the per-value record, since the
+    store's own reasons (`… does not parse`, `… cannot be opened`) come before it."""
+    for i, line in enumerate(lines or []):
+        if line.endswith(taremote.TEST_MODE_REFUSED):
+            return " | ".join(ln for ln in lines[:i + 1] if not ln.startswith(_REGISTRY_TRACE))
     return None
 
 
 def _await_registry_line(inst: Instance, old, deadline: float, timeout: float,
                          registry: str) -> str:
-    """Wait for the DLL's account of the run it began after `old`, and return it when it
-    says the store is served. Anything else ends the launch: a refusal (the game is not
-    run), any other line (the game may be running on `registry`), and none by
-    `deadline`. A refused run has written its log header and can still be seen as a
-    process, so neither says the store is served."""
+    """Wait for the DLL's account of the run it began after `old`, and return its first
+    registry line once the run has said the store is served AND the -r switch is closed.
+    Anything else ends the launch: a refusal (the game is not run), a first line that is
+    not test mode (the game may be running on `registry`), and neither by `deadline`. A
+    refused run has written its log header and can still be seen as a process, so
+    neither says the store is served."""
     while True:
-        line = _run_registry_line(inst, old)
-        if line is not None and line.endswith(taremote.TEST_MODE_REFUSED):
-            die(f"{inst.name}: the DLL did not run the game: {line}")
-        if line is not None and line.startswith(taremote.TEST_MODE_SERVED):
-            return line
-        if line is not None:
-            die(f"{inst.name}: the DLL's run did not enter test mode ({line}); the game may "
-                f"be using {registry}: `tacli stop {inst.name}`")
+        lines = _run_registry_lines(inst, old)
+        refusal = _registry_refusal(lines)
+        if refusal:
+            die(f"{inst.name}: the DLL did not run the game: {refusal}")
+        if lines and not lines[0].startswith(taremote.TEST_MODE_SERVED):
+            die(f"{inst.name}: the DLL's run did not enter test mode ({lines[0]}); the game "
+                f"may be using {registry}: `tacli stop {inst.name}`")
+        if lines and any(taremote.TEST_MODE_R_CLOSED in ln for ln in lines):
+            return lines[0]
         if time.time() >= deadline:
             key = _log_key(inst)
             run = key[0] if key is not None and key != old else "(none begun)"
-            die(f"{inst.name}: the DLL's run {run} logged no registry line in {timeout:g}s, "
-                f"so nothing says the store is served: `tacli stop {inst.name}`")
+            said = (f"said the store is served but not that the -r switch is closed"
+                    if lines else "logged no registry line")
+            die(f"{inst.name}: the DLL's run {run} {said} in {timeout:g}s, so nothing says "
+                f"the game runs on the store alone: `tacli stop {inst.name}`")
         time.sleep(0.5)
 
 
@@ -5442,6 +5522,9 @@ def _remote_launch(args) -> dict:
             started = seen or result == taremote.TASK_RUNNING
             if state not in ("Running", "Queued") and (state is None or result not in (
                     None, taremote.TASK_RUNNING, 0x41303)):
+                refusal = _registry_refusal(_run_registry_lines(inst, old))
+                if refusal:
+                    die(f"{args.name}: the DLL did not run the game: {refusal}")
                 die(f"{args.name}: " + ("the game exited during launch (no ErrorLog.txt); "
                                         if started else
                                         "no TotalA.exe from the test folder is running; ")

@@ -976,11 +976,13 @@ TEST_TOKEN = "-xtacli-test"
 # Lines only a DLL that fails closed in test mode and closes the -r switch logs: tacli
 # starts no remote game with a DLL that lacks any of them, and runs a local game with such
 # a DLL on the registry every prefix shares, saying so.
-TEST_MODE_MARKS = (b"registry: TEST MODE, entered by",
-                   b"the -r switch (DirectPlay registration through dsetup.dll) is ignored")
+TEST_MODE_R_CLOSED = "the -r switch (DirectPlay registration through dsetup.dll) is ignored"
+TEST_MODE_MARKS = (b"registry: TEST MODE, entered by", TEST_MODE_R_CLOSED.encode("ascii"))
 # The DLL's own account of a test launch, the first `registry: ` line of its run: served
 # (`... entered by <signal> -- <exe>'s registry is ...`) or refused (`... entered by
-# <signal>, but <what>: the game is not run`), tagpu_regstore.c.
+# <signal>, but <what>: the game is not run`), tagpu_regstore.c. A served run then logs the
+# -r closure (TEST_MODE_R_CLOSED), or its own refusal, from tagpu_patches.c; every refusal
+# of a test launch ends with TEST_MODE_REFUSED.
 TEST_MODE_SERVED = "registry: TEST MODE, entered by "
 TEST_MODE_REFUSED = ": the game is not run"
 # The DLL's limits (tagpu_regstore.c): a store past any of them does not load whole, and
