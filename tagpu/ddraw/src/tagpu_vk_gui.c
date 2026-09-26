@@ -222,8 +222,10 @@ static VkPipeline       s_pipeSpr2, s_pipeCpy2, s_pipeStr2;
 /* THE FOCUS TINT. One more pair against the same two passes and
    the same layout -- `TINT_FS` samples at bindings 40 and 41 and reads one int
    at 32, which is `CPY_FS`'s shape exactly, so nothing about the descriptor
-   set layout or the pipeline layout changes for it. */
-static VkPipeline       s_pipeTint, s_pipeTint2;
+   set layout or the pipeline layout changes for it.
+   `s_pipeTintFit` is the colour edition that shades the colour plane
+   (`tint_table`); `s_pipeTint2` drops it, for a table made with no palette. */
+static VkPipeline       s_pipeTint, s_pipeTint2, s_pipeTintFit;
 /* THE SHARP LAYER. Its three programs share one layout -- all three have a
    16-byte block at binding 32 and CURS/MM three samplers at 40..42 -- so one
    descriptor set layout serves them and `SDSET_*` indexes one pre-written set
@@ -249,16 +251,22 @@ static VkImageView      s_atView, s_palView, s_dumView, s_glView;
 static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
-/* THE REMAP TABLE: 256 wide by `TAGPU_GUI_SHADE_ROWS` tall, R8, so `TINT_FS`'s
-   `texelFetch(uShade, ivec2(index, row))` is the engine's own
-   `LUT[row * 256 + index]` with no arithmetic in between. The hand-over's
-   bytes are already row-major rows of 256, so the upload is one `copy_rect` of
-   the block. Uploaded on a serial change, like the atlas and the palette. */
+/* THE REMAP TABLE: 256 wide by `TAGPU_GUI_SHADE_ROWS` tall in its upper half,
+   the index in `.r`, so `TINT_FS`'s `texelFetch(uShade, ivec2(index, row))`
+   is the engine's own `LUT[row * 256 + index]` with no arithmetic in between;
+   the lower half is each entry's map of colour (`tint_table`). Uploaded on a
+   serial change, like the atlas and the palette. */
 static VkImage          s_lutImg;
 static VkDeviceMemory   s_lutMem;
 static VkImageView      s_lutView;
 static unsigned         s_lutSerial;
 static int              s_lutHave;
+/* the palette serial the colour half was made against, and whether there was
+   one: without it the colour half is zeros and a colour twin's tint takes the
+   pipeline that does not blend (`s_pipeTint2`), dropping the colour as an
+   indexed tint must */
+static unsigned         s_lutPal;
+static int              s_fitHave;
 /* ...AND THE SNAPSHOT A TINT READS. A tint is a read-modify-write of the twin
    it draws into, and sampling an attachment a draw is writing is undefined, so
    the box is copied out to this image first and the draw samples the copy.
@@ -1121,8 +1129,10 @@ static int build_sharp_rp(const TAGPU_VKPASS* d)
     return vkCreateRenderPass(d->dev, &ri, NULL, &s_sharpRp) == VK_SUCCESS;
 }
 
+/* `blend`: the tint's colour rule (TINT_FS), `src + dst * srcAlpha` with the
+   destination's alpha kept. Every other twin draw writes whole. */
 static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
-                           VkRenderPass rp, int natt, VkPipeline* out)
+                           VkRenderPass rp, int natt, int blend, VkPipeline* out)
 {
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb;
@@ -1161,14 +1171,28 @@ static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     /* blending OFF: a sprite discards its keyed texels and writes the rest
-       whole, which is what coverage means here */
-    cba[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
-    /* THE COLOUR ATTACHMENT TAKES ALL FOUR CHANNELS, ALPHA ABOVE ALL: alpha is
+       whole, which is what coverage means here.
+       THE COLOUR ATTACHMENT TAKES ALL FOUR CHANNELS, ALPHA ABOVE ALL: alpha is
        "this texel has restored colour" to every reader of a colour twin, so a
        write mask that dropped it would leave the flag standing wherever an op
-       cleared the colour under it. */
-    cba[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+       cleared the colour under it.
+       AND THE TWO ATTACHMENTS' STATES ARE IDENTICAL, which the device requires
+       without `independentBlend` (not enabled, tagpu_vk.c): the index
+       attachment takes the same four-channel mask, and R8G8 has no B or A to
+       write. The same holds for the tint's blend, which is a plain write of the
+       index because `TINT_FS`'s `oIdx.a` is 0. */
+    cba[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    if (blend) {
+        cba[0].blendEnable = VK_TRUE;
+        cba[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba[0].dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cba[0].colorBlendOp = VK_BLEND_OP_ADD;
+        cba[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        cba[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba[0].alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    cba[1] = cba[0];
     cb.attachmentCount = (uint32_t)natt; cb.pAttachments = cba;
     ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
     gp.stageCount = 2; gp.pStages = st;
@@ -1390,33 +1414,38 @@ static int build(const TAGPU_VKPASS* d)
        same shader against a pass that HAS the second attachment. */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
-                         s_twRp, 1, &s_pipeSpr)) return 0;
+                         s_twRp, 1, 0, &s_pipeSpr)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_CPY_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4,
-                         s_twRp, 1, &s_pipeCpy)) return 0;
+                         s_twRp, 1, 0, &s_pipeCpy)) return 0;
     /* the string shares the twin pipelines' layout exactly: QVS at binding 0,
        its own block at 32, one sampler at 40 */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4,
-                         s_twRp, 1, &s_pipeStr)) return 0;
+                         s_twRp, 1, 0, &s_pipeStr)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
-                         s_twRp2, 2, &s_pipeSpr2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeSpr2)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_CPY_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4,
-                         s_twRp2, 2, &s_pipeCpy2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeCpy2)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4,
-                         s_twRp2, 2, &s_pipeStr2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeStr2)) return 0;
     /* the tint, on the same two passes: it writes both locations exactly as
        the other three do, so the one-attachment edition simply discards the
-       colour write */
+       colour write. Only the colour edition blends -- it is the one with a
+       colour plane to shade -- so an indexed twin's tint is the plain write
+       it always was. */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
-                         s_twRp, 1, &s_pipeTint)) return 0;
+                         s_twRp, 1, 0, &s_pipeTint)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
-                         s_twRp2, 2, &s_pipeTint2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeTint2)) return 0;
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
+                         s_twRp2, 2, 1, &s_pipeTintFit)) return 0;
     if (!build_sharp_rp(d)) return 0;
     if (!build_sharp_pipe(d, tagpu_spv_tagpu_gui_surf_SHARP_FS,
                           sizeof tagpu_spv_tagpu_gui_surf_SHARP_FS / 4, &s_pipeFlat)) return 0;
@@ -2249,6 +2278,49 @@ static void pic_down(const TAGPU_VKPASS* d)
     tagpu_gui_pic_settled(s_psSettled);
 }
 
+/* THE REMAP TABLE AS THE IMAGE `TINT_FS` READS, into `dst`: RGBA8, 256 wide
+   and twice `TAGPU_GUI_SHADE_ROWS` tall. The upper half is the remap, the
+   index in `.r`. The lower half is, per entry, the map of COLOUR that goes
+   with it -- `out = b + k * restored`, the blend's own form (TINT_FS):
+
+       i the entry, j = row[i] where the row sends it, s = min(1, min over
+       the channels of pal[j] / pal[i]);   k = s,   b = pal[j] - s * pal[i]
+
+   so `out = pal[j] + s * (restored - pal[i])`: a texel whose restored colour
+   IS its palette colour is shaded to the engine's own tinted colour exactly
+   (to a level, the table being bytes), and the restorer's detail is kept on
+   top, scaled down with a darkening and whole with a lightening. k in [0, 1]
+   and b >= 0 are the blend's limits and not a choice -- a UNORM attachment
+   clamps the source and its factors to [0, 1] before blending -- and `s` is
+   the largest scale that keeps every channel's offset non-negative.
+   With no palette the colour half stays zeros and this returns 0. */
+static int tint_table(unsigned char* dst, const unsigned char* shade, const unsigned char* pal)
+{
+    unsigned r;
+    int i, c;
+    unsigned char* fit = dst + (size_t)TAGPU_GUI_SHADE_ROWS * 256u * 4u;
+    memset(dst, 0, (size_t)TAGPU_GUI_SHADE_ROWS * 256u * 8u);
+    for (r = 0; r < TAGPU_GUI_SHADE_ROWS; r++)
+        for (i = 0; i < 256; i++) dst[((size_t)r * 256u + (unsigned)i) * 4u] = shade[(size_t)r * 256u + (unsigned)i];
+    if (!pal) return 0;
+    for (r = 0; r < TAGPU_GUI_SHADE_ROWS; r++)
+        for (i = 0; i < 256; i++) {
+            const unsigned char* x = pal + (size_t)i * 4u;
+            const unsigned char* y = pal + (size_t)shade[(size_t)r * 256u + (unsigned)i] * 4u;
+            unsigned char* f = fit + ((size_t)r * 256u + (unsigned)i) * 4u;
+            double k = 1.0;
+            for (c = 0; c < 3; c++)
+                if (x[c] && (double)y[c] / x[c] < k) k = (double)y[c] / x[c];
+            for (c = 0; c < 3; c++) {
+                double o = y[c] - k * x[c];
+                if (o < 0.0) o = 0.0;
+                f[c] = (unsigned char)(o + 0.5);
+            }
+            f[3] = (unsigned char)(k * 255.0 + 0.5);
+        }
+    return 1;
+}
+
 /* THE REPLAY. Every reason not to draw is taken BEFORE a byte is written, and
    each one stands the whole frame down rather than drawing part of it: a twin
    store is cumulative, so a partially applied frame is not a smaller picture,
@@ -2272,7 +2344,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0, lutOff = 0;
-    int atUp = 0, palUp = 0, lutUp = 0;
+    int atUp = 0, palUp = 0, lutUp = 0, lutFit = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
@@ -2599,10 +2671,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
-    /* THE LIGHTEN TABLE, on the palette's rule: uploaded when its serial moves,
-       which for this table is once a session in practice. */
-    if (h.shade && (!s_lutHave || s_lutSerial != h.shadeSerial)) {
-        lutUp = 1; stNeed += TAGPU_GUI_SHADE_BYTES;
+    /* THE REMAP TABLE, on the palette's rule: uploaded when its serial moves,
+       which for this table is once a session in practice -- and when the
+       palette's does, because its colour half is made against the palette
+       (`tint_table`). */
+    if (h.shade && (!s_lutHave || s_lutSerial != h.shadeSerial ||
+                    (h.pal ? 1u : 0u) != (unsigned)s_fitHave ||
+                    (h.pal && s_lutPal != h.palSerial))) {
+        lutUp = 1; stNeed += (VkDeviceSize)TAGPU_GUI_SHADE_BYTES * 8u;
     }
     /* THE MINIMAP'S TWO, WIDENED RGB8 -> RGBA8 ON THE WAY IN, so what they
        reserve is FOUR bytes a texel and not three. The picture moves on a map
@@ -2736,17 +2812,18 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         stOff += 256 * 4;
     }
     if (lutUp) {
-        /* 256 WIDE BY `TAGPU_GUI_SHADE_ROWS` TALL, so row-major `[row][index]` is `(x, y)` with no
-           arithmetic in the shader and the hand-over's block copies straight
-           in. The image is never recreated -- its size is a constant of the
-           format -- so there is no retire here and no `ret_push`. */
+        /* 256 WIDE, so row-major `[row][index]` is `(x, y)` with no arithmetic
+           in the shader, and twice `TAGPU_GUI_SHADE_ROWS` tall for the colour
+           half (`tint_table`). The image is never recreated -- its size is a
+           constant of the format -- so there is no retire here and no
+           `ret_push`. */
         if (!s_lutImg &&
-            !mk_image(d, 256, (int)TAGPU_GUI_SHADE_ROWS, VK_FORMAT_R8_UNORM,
+            !mk_image(d, 256, 2 * (int)TAGPU_GUI_SHADE_ROWS, VK_FORMAT_R8G8B8A8_UNORM,
                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                       &s_lutImg, &s_lutMem, &s_lutView)) goto refuse;
         lutOff = stOff;
-        memcpy(s->stMap + stOff, h.shade, TAGPU_GUI_SHADE_BYTES);
-        stOff += TAGPU_GUI_SHADE_BYTES;
+        lutFit = tint_table(s->stMap + stOff, h.shade, h.pal);
+        stOff += (VkDeviceSize)TAGPU_GUI_SHADE_BYTES * 8u;
     }
 
     if (atUp) {
@@ -2856,12 +2933,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                               : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                     s_lutHave ? VK_ACCESS_SHADER_READ_BIT : 0,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        copy_rect(cb, s->stage, lutOff, s_lutImg, 0, 0, 256, (int)TAGPU_GUI_SHADE_ROWS);
+        copy_rect(cb, s->stage, lutOff, s_lutImg, 0, 0, 256, 2 * (int)TAGPU_GUI_SHADE_ROWS);
         img_barrier(cb, s_lutImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_lutHave = 1; s_lutSerial = h.shadeSerial;
+        s_fitHave = lutFit; s_lutPal = lutFit ? h.palSerial : 0;
     }
     /* ---- CLASSIC++: THE UI ATLAS IS RESTORED HERE. After the copy above, so
        a restore issued this frame reads the texels this frame delivered and
@@ -3403,10 +3481,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             rgn.extent.width = (uint32_t)(x1 - x0 + 1);
             rgn.extent.height = (uint32_t)(y1 - y0 + 1);
             rgn.extent.depth = 1;
-            /* ONLY THE INDEX PLANE IS SNAPSHOTTED. The colour twin is not read
-               by `TINT_FS` at all -- the op changes the index, so whatever
-               restored colour stood there is colour for a different index and
-               is written to zero rather than remapped. */
+            /* ONLY THE INDEX PLANE IS SNAPSHOTTED. The colour plane is shaded
+               by the blend instead (`tint_table`), which needs no read of it. */
             vkCmdCopyImage(cb, t->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            s_tintImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
             lay_to(cb, s_tintImg, &s_tintLay, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -3463,7 +3539,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             set_viewport(cb, t->w, t->h);
             set_scissor(cb, x0, y0, x1 - x0 + 1, y1 - y0 + 1, t->w, t->h);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              t->colImg ? s_pipeTint2 : s_pipeTint);
+                              !t->colImg ? s_pipeTint : s_fitHave ? s_pipeTintFit : s_pipeTint2);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     s_ploTwin, 0, 1, &dst_, 2, dynb);
             vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &vbOff);
@@ -3854,6 +3930,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_lutImg,  &s_lutMem,  &s_lutView);
     kill_image(d, &s_tintImg, &s_tintMem, &s_tintView);
     s_lutHave = 0; s_lutSerial = 0;
+    s_fitHave = 0; s_lutPal = 0;
     s_tintW = s_tintH = 0; s_tintLay = VK_IMAGE_LAYOUT_UNDEFINED;
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
     /* THE RESTORE GOES WITH THE DEVICE. The job is freed BEFORE the image it
@@ -3883,6 +3960,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_pipeStr2) { vkDestroyPipeline(d->dev, s_pipeStr2, NULL); s_pipeStr2 = VK_NULL_HANDLE; }
     if (s_pipeTint) { vkDestroyPipeline(d->dev, s_pipeTint, NULL); s_pipeTint = VK_NULL_HANDLE; }
     if (s_pipeTint2) { vkDestroyPipeline(d->dev, s_pipeTint2, NULL); s_pipeTint2 = VK_NULL_HANDLE; }
+    if (s_pipeTintFit) { vkDestroyPipeline(d->dev, s_pipeTintFit, NULL); s_pipeTintFit = VK_NULL_HANDLE; }
     if (s_pipeCurs) { vkDestroyPipeline(d->dev, s_pipeCurs, NULL); s_pipeCurs = VK_NULL_HANDLE; }
     if (s_pipeMM)   { vkDestroyPipeline(d->dev, s_pipeMM,   NULL); s_pipeMM   = VK_NULL_HANDLE; }
     if (s_pipeFlat) { vkDestroyPipeline(d->dev, s_pipeFlat, NULL); s_pipeFlat = VK_NULL_HANDLE; }

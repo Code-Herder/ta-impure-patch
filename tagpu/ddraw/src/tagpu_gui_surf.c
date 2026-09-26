@@ -471,11 +471,14 @@ static const char* CPY_FS =
    because the engine has no such concept and this op only remaps a byte. So
    green comes from the snapshot rather than from a constant.
 
-   `oCol` GOES TO ZERO for `STR_FS`'s reason: the index under this pixel has
-   changed, so whatever restored colour the Classic++ lane had painted there is
-   now colour for a different index. Dropping it falls the texel back to the
-   palette, which resolves the tinted index correctly; leaving it would show
-   the untinted art through a highlight the engine has just drawn.
+   THE RESTORED COLOUR IS SHADED BY BLENDING, NOT READ. The table's lower
+   half holds, beside each entry's remap, that entry's map of colour -- rgb an
+   offset, a a scale (tagpu_vk_gui.c `tint_table`) -- and the Classic++ pipeline
+   blends `src + dst * srcAlpha` with the destination's alpha kept. So a texel
+   with restored colour becomes that colour shaded as the engine shaded its
+   index, and one without stays without. `oIdx.a` is 0, which is what makes
+   the same blend a plain write of the index. Reading the colour plane instead
+   would need a snapshot of it as well, for the reason above.
 
    THE ROW IS AN INDEX INTO THE `TAGPU_GUI_SHADE_ROWS`-ROW TABLE AND IS BOUNDED
    BEFORE THE DRAW (`before_focus` and `before_frame` produce only rows inside
@@ -492,7 +495,7 @@ static const char* TINT_FS =
     "  vec2 g = texelFetch(uSrc, p, 0).rg;\n"
     "  int i = int(g.r * 255.0 + 0.5);\n"
     "  oIdx = vec4(texelFetch(uShade, ivec2(i, uRow), 0).r, g.g, 0.0, 0.0);\n"
-    "  oCol = vec4(0.0); }\n";
+    "  oCol = texelFetch(uShade, ivec2(i, uRow + textureSize(uShade, 0).y / 2), 0); }\n";
 /* the layer over the frame: uv.y = 0 at the top of the screen; the twin's
    row 0 is the surface's row 0 */
 static const char* LAY_VS =
