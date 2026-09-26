@@ -4357,13 +4357,26 @@ no power saving touches (`ta-drive`, `references/measuring.md`, *Movies*).
 
 **NOT CLOSED.**
 
-- **The launch's intro loses its first eleven or twelve frames.** The engine starts `1.zrb` at the
-  shell's first screen, before the Vulkan lane is up (`vk: up in 214 ms`), and nothing is sent
-  until the lane records. `1.zrb` opens with a fade from black, luma 16 at frame 0 and 94 at frame
-  12, so the movie appears part-way into its fade. Closing it means ordering the renderer's
-  bring-up before the first movie flip. A wait on the game thread is not that: the render thread's
-  bring-up can need the window's thread, so an unbounded wait can deadlock and a bounded one is a
-  timeout. The INTRO button's cinematic starts with the lane up and is not affected.
+- **The launch's intro loses its first eleven or twelve frames — left open by the owner's
+  decision (2026-09-26).** The engine starts `1.zrb` at the shell's first screen, before the
+  Vulkan lane is up (`vk: up in 214 ms`), and nothing is sent until the lane records. `1.zrb`
+  opens with a fade from black, luma 16 at frame 0 and 94 at frame 12, so the movie appears
+  part-way into its fade. The INTRO button's cinematic starts with the lane up and is not
+  affected. What closing it would take, as surveyed:
+  - **A plain wait on the game thread deadlocks.** The render loop (`vk_render_main`) advances
+    only when the game thread's DirectDraw calls release `render.sem`, and bring-up is started
+    by one of those iterations (`tagpu_vk_frame` in `ST_OFF` starts `up_worker`); the game's
+    first flip is the movie player's own pre-movie flip, so a game thread parked after it stops
+    the renderer from coming up at all.
+  - **A wait that keeps releasing the loop still needs a terminal state from every startup
+    path, and several have none**: the window with no extent ("trying again"), the `ST_OFF`
+    refusals, a failure before the first present (put back to `ST_OFF`, then the hand-over to
+    `gdi_render_main`), a refused GUI pass. And `mirArmed` reading 1 does not yet mean the next
+    `PK_MOVIE` composites: the pass is built at its first hand-over, and the store may still be
+    waiting on the RESET only a game-thread publish sends.
+  - So a fix by construction is a startup protocol across cnc-ddraw's render loop and the
+    Vulkan state machine; a capped wait would be a timing mitigation. Neither was judged worth
+    0.4 s of a once-per-launch fade.
 - **Not run on a Windows driver**, the platform of the report. Nothing in the path is
   platform-specific (the engine's own routine, flip and decoder), but that is an argument, not a
   run.
