@@ -243,33 +243,35 @@ capture time out; it never returns a stale file.
 ## Movies
 
 - **Only an `--intro` instance has one.** `tacli create <i> --intro` keeps `Data/1.ZRB`/`2.zrb` in
-  the mirror and writes `PlayMovie` 1 at every launch, so the intro plays at the shell's first
-  screen. That value sits in the shared `user.reg`, where another instance's launch can write 0
-  over it; the main menu's `INTRO` gadget (`tacli ui <i> click INTRO`) plays the intro and the
-  long cinematic back to back whatever the registry says. A key (`WM_CHAR`) ends a movie.
+  the mirror: the intro `1.zrb` (20 s) plays at every launch, and the main menu's `INTRO` gadget
+  (`tacli ui <i> click INTRO`) plays the cinematic `2.zrb` (135 s) on demand. A key (`WM_CHAR`)
+  ends a movie. The launch's intro starts before the Vulkan lane is up, so its first dozen frames
+  are never sent; measure on the INTRO button's movie.
 - **The armed shield answers `GetFocus` with the game window**, and the movie's frame routine
   decodes nothing without focus. So an armed instance plays its movies unfocused, and a
   `--no-shield` one holds its first frame until its window is focused, which you may not do.
 - **A movie is paced by its audio clock** (`SmackWait`), so a cadence needs `--sound` into a
-  sink that runs in real time. Silent, it runs unpaced. Into ALSA's `null` device (the recipe
-  above) its intervals scatter whatever the DLL does. The rig that works is a private
-  PulseAudio null sink: `pulseaudio -n -F <file> --daemonize=no --exit-idle-time=-1`, with the
-  file loading `module-null-sink` and `module-native-protocol-unix auth-anonymous=1
+  sink that runs in real time. Silent, it runs unpaced: the launch's intro has flipped before the
+  lane records, and the cinematic's frames are nearly all skipped in flight. Into ALSA's `null`
+  device (the recipe above) its intervals scatter whatever the DLL does. The rig that works is a
+  private PulseAudio null sink: `pulseaudio -n -F <file> --daemonize=no --exit-idle-time=-1`,
+  with the file loading `module-null-sink` and `module-native-protocol-unix auth-anonymous=1
   socket=<scratch>/native`, `HOME`/`XDG_RUNTIME_DIR` in the scratchpad and
   `DBUS_SESSION_BUS_ADDRESS` unset, run in the background; then launch with
   `PULSE_SERVER=unix:<scratch>/native` and `ALSA_CONFIG_PATH` unset. Nothing reaches a speaker.
-- **Read the lane off the log**: `gui: movie <W>x<H> at (0,<top>) on surface …` at the first
-  frame; `gui: movie ended after N flip(s): R frame(s) recorded, S skipped in flight, F refused`
-  at the first flip that is not a movie's (back-to-back movies count as one). A skip means the
-  render thread had not drained the frame before; `movie=` in the `gui:` heartbeat counts the
-  frames that reached the Vulkan lane. The first dozen frames of a launch's intro are lost while
-  the lane comes up.
-- **A monitor in DPMS power save throttles FIFO presents to about one a second** on the
-  reference setup (`xset q`: `Monitor is Off`). It reads as a stalled render thread and a storm
-  of skipped frames, and `import -window` returns the window black. Measure the presented cadence
-  with `--vsync off` then, where the render thread presents once per game flip; never wake or
-  force the display. The picture itself needs the display awake (`tacli shot` is the engine's
-  frame, not the presented one).
+- **Read the lane off the log**: `gui: movie <W>x<H> at (0,<top>) on surface …` at a movie's
+  first carried frame; `gui: movie ended after N flip(s): R frame(s) recorded, S skipped in
+  flight, U not sent (the lane was not recording), F refused` at the next flip that is not a
+  movie's. Each movie logs its own (the player flips once before it); a looping movie's repeats
+  count as one. A skip means the render thread had not drained the frame before; `movie=` in the
+  `gui:` heartbeat counts the frames that reached the Vulkan lane.
+- **See it on a private Xvfb.** `tacli create <i> --display :N` on an `Xvfb :N -screen 0
+  1280x1024x24` of your own: the GPU presents into it, `DISPLAY=:N import -window <id>` captures
+  the presented picture, and `ffmpeg -f x11grab -framerate 60 -video_size 640x480 -i :N+0,0`
+  records it. Count the distinct frames of the recording: a 30 fps movie under FIFO at 60 Hz
+  holds each for exactly two captures. On the live display a monitor in DPMS power save
+  (`xset q`: `Monitor is Off`) throttles FIFO presents to about one a second on the reference
+  setup and `import -window` returns black; never wake or force it.
 
 ## Log oracles
 

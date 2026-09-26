@@ -179,7 +179,7 @@ TA refuses to play Smacker movies when it believes it is windowed (string: *"You
 full-screen mode to play a movie"*). The DLL's window does not make it believe that: the game
 is told it is fullscreen, and the intro plays in a tacli window (`tacli create <i> --intro`,
 MEASURED 2026-09-26). What would trip the refusal is TA's own `-d` switch [INFERRED: not run]. Instances skip the intro by
-leaving `Data/1.ZRB`/`2.zrb` out of the mirror and writing `PlayMovie` 0 (`cmdline-options.md`).
+leaving `Data/1.ZRB`/`2.zrb` out of the mirror (`cmdline-options.md`).
 
 ## Debug tooling left in the tree
 

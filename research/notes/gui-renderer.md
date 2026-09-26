@@ -4291,7 +4291,7 @@ rasteriser is in them. The drain bounds the box against the twin it lands in and
 `0x47C455`: the frame routine `0x47C3A0` has one call of the flip, the instruction after
 `SmackDoFrame`. At that entry the box holds the decoded frame and nothing else, since the engine
 blits its cursor inside the flip, after the observer has read the surface. The producer records the
-op and publishes it **in the same call**: a movie flip bypasses the census cadence
+op and publishes it **in the same call**: the flip that recorded it bypasses the census cadence
 (`CENSUS_MS`), and every exit that does not publish clears the op window. So the bytes are read
 at the one moment they are exact, and never at any other.
 
@@ -4301,49 +4301,69 @@ alive across the flip because the engine closes the Smack only in the object's d
 the loop, and dereferences it again at the flip's own return. Both words are bounded against the
 surface before they become a box, and a box that does not fit is refused and logged once.
 
-**ONE FRAME IN FLIGHT.** Every `PK_MOVIE` carries the whole frame, so the producer skips a frame
-while the one before is still queued (`g_guiq.qTail` has not passed it). A skipped frame costs
-that frame and nothing else. Without the rule, a movie decoding faster than the drain queues about
-300 KB a flip until the arena overflows: under the harness's silence it ran unpaced, 4 658 frames
-in seconds with 41 stalls and 42 reseeds. `qTail` is the consumer's and only grows, so a stale
-read skips one frame more and never one fewer.
+**NOTHING TO A LANE THAT IS NOT RECORDING.** The lane's mirror drops a `PK_MOVIE`'s bytes while
+it is not recording, so the producer sends none then: it reads `mirArmed`, the throttle `PK_ASSET`
+already reads, and a stale read costs one frame either way.
+
+**ONE FRAME IN FLIGHT, TWO ACROSS A PALETTE CHANGE.** Every `PK_MOVIE` carries the whole frame, so
+the producer skips a frame while the one before is still queued (`g_guiq.qTail` has not passed
+it). A skipped frame costs that frame and nothing else. Without the rule, a movie decoding faster
+than the drain queues about 300 KB a flip until the arena overflows: under the harness's silence
+it ran unpaced, 4 658 frames in seconds with 41 stalls and 42 reseeds. **The exception is a new
+palette.** It does not cross with the bytes: the frame routine hands it to `SetEntries` before it
+decodes (`0x47C404`), and the lane resolves the twin through the palette live at its present.
+Skipping that frame would leave the last one on screen under the new palette until the next
+crossed, so a frame whose palette (`obj+0x10`) differs from the newest carried one goes with that
+one still queued, and only a second queued frame stops it. The retail movies set a palette at
+frame 0, and `5.zrb` at frame 1 as well. The present that falls between `SetEntries` and the
+frame's own flip still shows the old frame under the new palette, as a palettized primary does
+when its palette changes before the flip [INFERRED].
+
+**THE INDICES CANNOT AGE PAST 2^31.** `qTail` is the consumer's and only grows, and each index the
+rule keeps is refreshed by every frame carried and dropped at the first flip that is not a
+movie's, so it is never older than one movie's ops. A stale read of `qTail` skips one frame more,
+never one fewer. Only a flip that recorded a frame bypasses the census cadence; the rest keep it,
+which matters when a silent movie flips thousands of times a second.
+
+**NO REDRAW INSIDE A MOVIE.** A forced screen repaint (`repaint_service`, owed by a reset) is not
+paid on a movie's flip: the engine never redraws a GUI screen inside its movie loop, whose
+offscreen is the buffer the decoder writes. The debt waits for the first flip that is not a
+movie's.
 
 **FOCUS.** The frame routine decodes nothing unless `GetFocus()` is the game window. The armed
 input shield answers `GetFocus` with the game window, as it answers every other input poll
 (`fake_GetFocus`, `winapi_hooks.c`), so a harness instance plays its movies without focus. With the
 shield off, the real answer passes through.
 
-**MEASURED** (Wine, the reference setup, `tacli create <i> --intro`, the intro `1.zrb`: 599
-frames, 30 fps):
+**MEASURED** (Wine, `tacli create <i> --intro`; 1.zrb, the launch's intro, 599 frames, and the
+INTRO button's cinematic 2.zrb, 4 058; both 30 fps):
 
 | what | result |
 |---|---|
-| the picture | the window shows the movie and matches the golden source except on pixels that moved between the two captures; the control DLL's window is black (3.3 against 98.1) |
+| the picture | on the reference setup's desktop, the control DLL's window is black while the golden source has the movie (mean 3.3 against 98.1), and this build's window shows it. On a private Xvfb with the RTX presenting, the presented window and the golden source agree except on pixels that moved between the two captures (2.3 % over 32 levels, mid-cinematic) |
 | the engine's cadence | every flip interval 30–37 ms with a real-time audio clock (449 of 449, 899 of 899), identical with the movie op off; the producer's own work under 1 ms a frame |
-| what reaches the lane | with vsync off the render thread presents once per movie flip, 60–61 presents in every 2 s window, and the movie frames drain 30–37 ms apart. 595 of 599 recorded, 4 skipped in flight, 587 mirrored into the lane |
-| the log | `gui: movie 640x480 at (0,0) on surface … -- its frames cross as SmackDoFrame's decoded bytes` at the first frame; `gui: movie ended after N flip(s): R frame(s) recorded, S skipped in flight, F refused` at the first flip that is not a movie's (the INTRO button's movies run back to back and count as one); `movie=` in the `gui:` heartbeat counts the frames mirrored |
+| the presented cadence | FIFO at 60 Hz on the Xvfb, recorded at 60 fps for 4 s mid-cinematic: 120 distinct frames, 118 of them held for exactly two captures. With vsync off on the desktop the render thread presents once per movie flip, 60–61 presents in every 2 s window |
+| what reaches the lane | the launch's intro: 588 of 599 recorded and carried, 0 skipped in flight, 11 not sent while the lane came up. Silent (unpaced): all 599 flip before the lane records; the cinematic's 4 058 flips carry 51 and skip 4 007, with no overflow, no stall and no reset |
+| the log | `gui: movie 640x480 at (0,0) on surface … -- its frames cross as SmackDoFrame's decoded bytes` at a movie's first carried frame; `gui: movie ended after N flip(s): R frame(s) recorded, S skipped in flight, U not sent (the lane was not recording), F refused` at the next flip that is not a movie's, one per movie (the player flips once before each); `movie=` in the `gui:` heartbeat counts the frames mirrored |
 
-**How it was measured, and two traps.** A movie is paced by `SmackWait` off its audio track, so a
+**How it was measured, and the traps.** A movie is paced by `SmackWait` off its audio track, so a
 cadence needs `--sound` into a sink that runs in real time. Wine's ALSA `null` device does not:
-its intervals scatter with the movie op on and off alike. The cadence above was taken into a
-private PulseAudio null sink. And **the reference setup's monitors were in DPMS power save**,
-under which a FIFO present is throttled to about one a second: the render thread logged 2–3
-presents per 2 s and the producer's skips climbed to 572 of 599. So the lane was measured with
-vsync off, where nothing but the game's flips paces the render thread.
+its intervals scatter with the movie op on and off alike. The cadences above were taken into a
+private PulseAudio null sink. **The reference setup's monitors were in DPMS power save**, under
+which a FIFO present is throttled to about one a second and `import -window` reads black: the
+render thread logged 2–3 presents per 2 s and the producer's skips climbed to 572 of 599. So the
+desktop runs used vsync off, and the picture and the FIFO cadence came from a private Xvfb, which
+no power saving touches (`ta-drive`, `references/measuring.md`, *Movies*).
 
 **NOT CLOSED.**
 
-- **The intro's first twelve frames do not show.** The engine starts `1.zrb` at the shell's first
-  screen, before the Vulkan lane is up (`vk: up in 214 ms`). The first frames are skipped in flight
-  while nothing drains (4), or drained before the lane records (8), and the lane then makes its
-  launch's one fresh start. `1.zrb` opens with a fade from black, luma 16 at frame 0 and 94 at
-  frame 12, so the movie appears part-way into its fade. Closing it means ordering the renderer's
+- **The launch's intro loses its first eleven or twelve frames.** The engine starts `1.zrb` at the
+  shell's first screen, before the Vulkan lane is up (`vk: up in 214 ms`), and nothing is sent
+  until the lane records. `1.zrb` opens with a fade from black, luma 16 at frame 0 and 94 at frame
+  12, so the movie appears part-way into its fade. Closing it means ordering the renderer's
   bring-up before the first movie flip. A wait on the game thread is not that: the render thread's
   bring-up can need the window's thread, so an unbounded wait can deadlock and a bounded one is a
-  timeout.
-- **Presented under FIFO with the display awake**, the lane's default, it is not measured here.
-  With vsync off the lane presents once per flip; at 60 Hz FIFO each frame should hold for two
-  blanks [INFERRED].
+  timeout. The INTRO button's cinematic starts with the lane up and is not affected.
 - **Not run on a Windows driver**, the platform of the report. Nothing in the path is
   platform-specific (the engine's own routine, flip and decoder), but that is an argument, not a
   run.
