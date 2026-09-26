@@ -3802,7 +3802,8 @@ leaves the selection alone; the zoom now also declines every notch while an in-g
 owns input. Measured on SELMAP's 99 maps: it scrolls, clamps at both ends, works over the slider and
 both arrows, does nothing over buttons or the preview, and the frame after a scroll is 0 px from the
 golden source. **Not covered:** no in-game list was scrolled (none with more rows than it shows was
-reachable).
+reachable). **Next:** in Classic++, transformed stamps (the swatches, the in-game badge, the preview)
+show palette colour, not restored colour ([GUI renderer](gui-renderer.html) §26, *NOT CLOSED*).
 
 ## Shipping — the build people can download (2026-09-08)
 

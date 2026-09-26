@@ -4479,6 +4479,15 @@ behind it.
 
 **NOT CLOSED.**
 
+- **In Classic++ a `PK_PLANE` stamp shows the palette, not restored colour.** The drain mirrors
+  it as `TAGPU_GUIOP_PIXELS`, which clears the colour twin under its box, and nothing restores a
+  plane. That covers SKIRMISH's player swatches, the in-game badge and the preview. Main restored
+  the first two as atlas sprites. MEASURED 2026-09-26, Classic++ under `--defaults`: a swatch is
+  337 colours on main against 17 here, at most 22/255 per channel apart, and the Comet Catcher
+  preview is a mean of 2.7 apart. Each matches the engine's frame here. The owner's call was to
+  land and restore it next: stamps of archive frames go back to restorable atlas sprites, drawn
+  unkeyed (the span copies the key colour), and the preview keeps its plane, because every pick
+  makes a new runtime picture.
 - **The battle room's SELMAP was not run.** It is the same builder (`0x444A20`, called from
   `0x47AADE`/`0x47AC73`), the same gadget and the same `0x800` load; that is an argument from the
   disassembly, not a run.
