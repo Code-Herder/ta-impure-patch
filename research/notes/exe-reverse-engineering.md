@@ -597,7 +597,11 @@ each an optional reference whose 0 the engine itself takes as no unit; both are 
   `[unit+0x86]`, 0 for none, else its `+0xA8`, written by `0x415C10` at `0x48B321` — and the unit's own
   `+0xF9` in 8 (`0x48B2A4..0x48B332`). The flag-set
   path returns after the attach (`0x48B590`); the flag-clear path goes on to `[32] × 3`, the
-  position, into `+0x6A` (`0x48B5CA..0x48B5E6`), `[16] × 3`, the body turn, into `+0x64`
+  position, into `+0x6A` (read `0x48B5CA..0x48B5E6`; stored `0x48B676..0x48B682` when its grid
+  cell `+0x76`/`+0x78`, recomputed from the new position, and `+0x110`'s low two bits are
+  unchanged (`0x48B64B..0x48B66C`), else `0x48B684..0x48B6A7` between the grid's remove
+  `0x47D0E0` and re-stamp `0x47CC30`, then `0x4827B0` — so the round robin corrects a copy's
+  position within N of the owner's ticks), `[16] × 3`, the body turn, into `+0x64`
   (`0x48B5EB..0x48B60F`, stored `0x48B6C4..0x48B6E4`) and `[32]` into the mover's `+0x20`
   (`0x48B6F2`) — all into the entry's own slot. **Bounded at `0x48B574`** (the record's
   `mov [esp+0x17],ax`; span `0x48B55B..0x48B58F`, from the child id to the call of `0x48AB70`,
@@ -911,8 +915,10 @@ to nothing), the writer `0x415C10`.
   begins at the unit: `0x44F3F2..0x44F417` stores count 2, point 0 = the unit's `+0x6C`/`+0x74`
   (the integer halves of `+0x6A`/`+0x72`), point 1 the goal. The front is dropped only by the
   mover's step `0x44F1A0` (vtable `0x4FD458` `+8`, called through `0x43DD20` — `call [vt+8]` at
-  `0x43DD28` — from the unit tick at `0x48AFAA`): with a count of 2 or more it takes the squared
-  distance from the unit's `+0x6C`/`+0x74` to **point 1** (`0x44F1DF..0x44F203`) and, only when it
+  `0x43DD28` — from the unit tick at `0x48AFAA`; the drop is `0x44F1D7..0x44F235`, after calls
+  through the object at `+4`, `0x44F1A5..0x44F1D4`): with a count of 2 or more (`0x44F1D7`) it
+  takes the squared distance from the unit's `+0x6C`/`+0x74` to **point 1** (`0x44F1DF..0x44F203`)
+  and, only when it
   is at most `0x19` (5 px, `0x44F205`), shifts the path down one point and decrements the count
   (`0x44F20A..0x44F229`; below 2 it clears `+0x64` bit 0, `0x44F231`; `+0x64` bit 3 set,
   `0x44F235`). So a straight move keeps its origin as point 0 until the unit is within 5 px of its
