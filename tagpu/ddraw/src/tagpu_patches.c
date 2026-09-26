@@ -87,6 +87,7 @@ static int     s_nlim;
 static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
 static int     s_limOverflow;        /* the table itself was too small: our bug      */
 static int     s_limNoStub;          /* a code stub could not be made                */
+static char    s_limNeeds[192];      /* a table fix's required local fix is not armed */
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
 
@@ -140,6 +141,14 @@ static void lim_same(unsigned int va, int n, const unsigned char* stock, const c
 static void lim_no_stub(void)
 {
     s_limNoStub = 1;
+}
+
+/* a fix of the table that rests on a local fix, which did not arm: nothing of the table is
+   written, and the report says which */
+static void lim_needs(const char* fix, const char* needs, const char* state)
+{
+    _snprintf(s_limNeeds, sizeof s_limNeeds, "%s needs %s armed, and it is %s", fix, needs, state);
+    s_limNeeds[sizeof s_limNeeds - 1] = 0;
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -6111,22 +6120,26 @@ static int fix_stale_hits(void)
    the companions' bytes and stockB= what the bare messages would have been; copy= counts the
    stamps CreateFromNetwork's exit took, by kind; held= creates the hold moved to an unheld
    slot, fallback= to a slot freed in the last tick, holdfail= creates it failed, retry= the
-   Deathmatch respawns that found no slot and wait for their countdown's next fire. */
+   Deathmatch respawns that found no slot and wait for their countdown's next fire. The alert
+   fields come first: the heartbeat is one log line of at most 2040 bytes, cut from its end,
+   and only the ghost section follows this one. */
 int tagpu_hits_format(char* buf, unsigned int cap)
 {
     const struct hit_tab* t = s_hit;
     return _snprintf(buf, cap,
-                     " | hits: slots=%u tables=%u out 09=%u 0b=%u B=%u stockB=%u unk=%u"
-                     " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u bad=%u"
-                     " bare 09=%u 0b=%u copy exact=%u bound=%u unk=%u held=%u fallback=%u"
-                     " holdfail=%u retry=%u delay=%u q=%u over=%u young owner=%u by=%u",
+                     " | hits: bad=%u bare 09=%u 0b=%u over=%u young owner=%u by=%u"
+                     " slots=%u tables=%u out 09=%u 0b=%u B=%u stockB=%u unk=%u"
+                     " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u"
+                     " copy exact=%u bound=%u unk=%u held=%u fallback=%u"
+                     " holdfail=%u retry=%u delay=%u q=%u",
+                     s_hitMalformed, s_hitBare09, s_hitBare0B, s_hitDelayOverflow,
+                     s_hitYoungOwner, s_hitYoungBy,
                      t ? t->n : 0u, s_hitTables, s_hitOutCreate, s_hitOutHit, s_hitOutBytes,
                      s_hitStockBytes, s_hitTxUnknown, s_hitInCreate, s_hitInHit, s_hitApplyOwner,
                      s_hitRefuseOwner, s_hitApplyBy, s_hitUndecidedBy, s_hitRefuseBy, s_hitDead,
-                     s_hitStateRefused, s_hitMalformed, s_hitBare09, s_hitBare0B,
+                     s_hitStateRefused,
                      s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown, s_hitHeld,
-                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed,
-                     s_hitDelayOverflow, s_hitYoungOwner, s_hitYoungBy);
+                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed);
 }
 
 /* ===== GHOST COMMANDER: THE CREATES REFUSED DURING THE LOAD, AND THE DIRTY CREATE'S POSITION ===
@@ -6319,9 +6332,12 @@ enum { GHOST_POS_NONE, GHOST_POS_GROUND, GHOST_POS_AIR, GHOST_POS_SHORT };
      dead-reckoned position. Taken: x, y, z. 1 is 0x44E080's object, whose optional vector
      +0x26 is a GOAL (0x44E3C0 refreshes it from the followed unit) and not the unit's own
      position; 0 and 3 carry no motion. Neither is taken.
-   `avail` is the bits left in the message from the reader's position: a payload that would
-   read past it is GHOST_POS_SHORT, before any of those bits is read. A well-formed entry's
-   payload is inside its message, so the test never refuses one.
+   `avail` is the bits left in the message from the reader's position: a read that would pass
+   the message's end is GHOST_POS_SHORT, before it is made. Only the bits read here are tested
+   (35 for ground, 99 for air), not the rest of the payload: the engine's decoder reads that
+   from B3's zero-padded copy, and B3's check before the next entry's type (wire_s2c_delta)
+   stops the stream if the payload ran past the end. A well-formed entry's payload is inside
+   its message, so the test never refuses one.
    Returns the kind, with x, z in whole px and x16, y16, z16 as the record holds them. */
 static int ghost_payload_pos(GHOSTBITS b, unsigned long long avail, int air, int* x, int* z,
                              unsigned int* x16, unsigned int* y16, unsigned int* z16)
@@ -6586,8 +6602,9 @@ static void __cdecl ghost_replay(unsigned int* regs)
    a row of the table).
    The payload is read only from B3's copy of the message, and only within its length: the
    reader must be the one B3's wire_s2c_copy set up for this 0x2C (s_wire2cRd) and still point
-   at its copy, whose WIRE_2C_PAD zero bytes cover the dword a last read touches. B3 is a local
-   fix that can be skipped; without it no position is taken and the record keeps stock's. */
+   at its copy, whose WIRE_2C_PAD zero bytes cover the dword a last read touches. B3 is armed
+   whenever this runs (fix_ghost_commander refuses the table otherwise), so `unbound` can only
+   count a reader that is not the 0x2C's own, which the disassembly says never reaches here. */
 static void __cdecl ghost_position(unsigned int* r)
 {
     const char* ta = *(const char* const*)0x00511DE8;
@@ -6631,8 +6648,9 @@ static void __cdecl ghost_position(unsigned int* r)
     if (kind == GHOST_POS_SHORT) {
         s_ghostPosShort++;
         if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
-            tagpu_logf("enginefix: ghost commander: dirty create slot %u: its move payload runs "
-                       "past the message (bit %u of %u); stock's record kept",
+            tagpu_logf("enginefix: ghost commander: dirty create slot %u: reading its move "
+                       "payload's position would pass the message's end (bit %u of %u); stock's "
+                       "record kept",
                        rec[3] | (unsigned int)rec[4] << 8, (unsigned int)pos,
                        (unsigned int)s_wire2cEnd);
         return;
@@ -6716,7 +6734,7 @@ static void ghost_selfcheck(void)
     t[n].name = "air: a goal is not taken";  t[n].got = ghost_payload_pos(b, 127, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
     b.data = ground; b.word = 0; b.bit = 0;
     t[n].name = "ground: one bit short";     t[n].got = ghost_payload_pos(b, 34, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_SHORT; n++;
-    t[n].name = "ground: to the last bit";   t[n].got = ghost_payload_pos(b, 35, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_GROUND; n++;
+    t[n].name = "ground: the read ends at end"; t[n].got = ghost_payload_pos(b, 35, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_GROUND; n++;
     b.data = still; b.word = 0; b.bit = 0;
     t[n].name = "ground: no point, at end";  t[n].got = ghost_payload_pos(b, 3, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
     b.data = air; b.word = 0; b.bit = 0;
@@ -6734,7 +6752,11 @@ static void ghost_selfcheck(void)
     tagpu_logf("enginefix: ghostcheck %d rule cases, %d failed", n, bad);
 }
 
-static int fix_ghost_commander(void)
+/* `wire` is fix_wire_bounds' result: the dirty create's position is read through B3's copy
+   of the 0x2C, so B5 requires B3 armed. B3 stays a local fix for its own purpose; a peer where
+   it did not arm would place dirty creates at the slot's stale position while the others take
+   the payload's, so the table is refused and the process ends through the report. */
+static int fix_ghost_commander(int wire)
 {
     static const unsigned char firstCall[10] = { 0xF6, 0xC1, 0x01, 0x57, 0x0F, 0x85, 0xE2, 0x03,
                                                  0x00, 0x00 };                   /* 0x497F54 */
@@ -6770,6 +6792,10 @@ static int fix_ghost_commander(void)
         tagpu_logf("enginefix: ghost commander: TEST LEVER tagpu_ghostq.off -- nothing is held; "
                    "the dirty create's position still applies");
     if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) ghost_selfcheck();
+    if (wire != FIX_ARMED) {
+        lim_needs("the ghost commander (a simulation fix)", "wire robustness", fix_state(wire));
+        return FIX_TABLE;
+    }
 
     if (!(aCall = ghost_code(32)) || !(aReset = ghost_code(32)) || !(aPos = ghost_code(32)) ||
         !(aEarly = ghost_code(32)) || !(aRefused = ghost_code(32))) {
@@ -6834,19 +6860,21 @@ static int fix_ghost_commander(void)
    swept= copies made before state 6 marked dying, nokill= refused 0x0Cs that matched neither,
    untracked= copies past the list a kill can mark; inactive/stale/bad are the drain's drops,
    cleared= held by a load that never reached play; pos= the dirty creates' kind, unbound= with
-   no B3 copy to read the payload from, short= a payload past its message's end */
+   a reader that is not B3's, short= a position read that would pass its message's end.
+   The alert fields come first: the heartbeat is one log line of at most 2040 bytes and this
+   section is its last, so a long game's line is cut from here. */
 int tagpu_ghost_format(char* buf, unsigned int cap)
 {
     return _snprintf(buf, cap,
-                     " | ghost: q=%u over=%u deep=%u replay=%u now=%u killed=%u swept=%u"
-                     " nokill=%u untracked=%u inactive=%u stale=%u bad=%u"
-                     " cleared=%u offthread=%u levels=%u pos ground=%u air=%u none=%u off=%u"
-                     " unbound=%u short=%u%s",
-                     s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostReplayed, s_ghostNow,
-                     s_ghostKilled, s_ghostSwept, s_ghostNoKill, s_ghostUntracked, s_ghostInactive,
-                     s_ghostStale, s_ghostBad, s_ghostCleared, s_ghostOffThread, s_ghostLevels,
-                     s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff,
-                     s_ghostPosUnbound, s_ghostPosShort, s_ghostOff ? " LEVER-OFF" : "");
+                     " | ghost:%s over=%u bad=%u offthread=%u unbound=%u short=%u q=%u deep=%u"
+                     " replay=%u now=%u killed=%u swept=%u nokill=%u untracked=%u inactive=%u"
+                     " stale=%u cleared=%u levels=%u pos ground=%u air=%u none=%u off=%u",
+                     s_ghostOff ? " LEVER-OFF" : "", s_ghostOverflow, s_ghostBad,
+                     s_ghostOffThread, s_ghostPosUnbound, s_ghostPosShort, s_ghostQueued,
+                     s_ghostDeep, s_ghostReplayed, s_ghostNow, s_ghostKilled, s_ghostSwept,
+                     s_ghostNoKill, s_ghostUntracked, s_ghostInactive, s_ghostStale,
+                     s_ghostCleared, s_ghostLevels, s_ghostPosGround, s_ghostPosAir,
+                     s_ghostPosNone, s_ghostPosOff);
 }
 
 static void patch_engine_defects(void)
@@ -6873,7 +6901,7 @@ static void patch_engine_defects(void)
     int pview = fix_projectile_view();
     int wire = fix_wire_bounds();
     int hits = fix_stale_hits();
-    int ghost = fix_ghost_commander();
+    int ghost = fix_ghost_commander(wire);
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -7741,6 +7769,11 @@ int tagpu_limits_install(void)
                s_fixBytes, s_fixPages);
     if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
+    if (s_limNeeds[0]) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- %s; nothing written", s_limNeeds);
+        return 0;
+    }
     if (lim_overlap()) {
         s_limState = -1;
         tagpu_logf("limits: FAILED -- the sites at 0x%08X and 0x%08X overlap", s_limOverlapA,
@@ -7892,6 +7925,9 @@ void tagpu_limits_report(void)
     if (s_limNoStub || s_limOverflow || s_limOverlapA)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
+    else if (s_limNeeds[0])
+        why = "One of Impure's network fixes could not be installed on this TotalA.exe (the "
+              "log says why), and a fix that keeps every player's game the same relies on it.";
     else if (s_limWriteFail)
         why = "Windows refused to let Impure change the game's code in memory.";
     else if (strcmp(known, "none"))
@@ -7935,6 +7971,8 @@ void tagpu_limits_report(void)
     else if (s_limOverlapA)
         _snprintf(line, sizeof line, "result: the sites at 0x%08X and 0x%08X overlap, nothing "
                   "written\r\n", s_limOverlapA, s_limOverlapB);
+    else if (s_limNeeds[0])
+        _snprintf(line, sizeof line, "result: %s, nothing written\r\n", s_limNeeds);
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);
