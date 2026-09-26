@@ -361,8 +361,10 @@ down in the same buffer:
 [ body triangles ][ slant triangles ][ wire lines ]
 ```
 
-- **body** — every face that `emit_node` would emit, with the selection-primitive skip and the
-  quad rule applied as they are today;
+- **body** — every face that `emit_node` would emit, with the quad rule applied, and face 0 kept
+  whatever `N_SELPRIM` says — the engine's body bake skips it (`0x459AA2`), and which face the
+  loader leaves there is open ([engine map](exe-reverse-engineering.html), *The rasterisers paint
+  only faces that run clockwise on screen*);
 - **slant** — every face except face 0 when `N_SELPRIM != -1`, flat, following `0x45A610`'s
   rules rather than the body rasteriser's;
 - **wire** — each drawable face as a closed polygon outline.
