@@ -387,7 +387,7 @@ int tagpu_r3d_atlas_restore_armed(void) { return s_atlas.rlistWant ? 1 : 0; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
 /* ---- THE LEVEL BOUNDARY ------------------------------------------------
    THIS ATLAS KEYS ON AN ADDRESS AND THE ADDRESSES ARE RECYCLED.
-   `tagpu_gaf_atlas_find(a, g, pix, w, h, win)` matches on the frame header's
+   `tagpu_gaf_atlas_find(a, g, pix, w, h)` matches on the frame header's
    address and the pixel plane's, so an entry is only right for as long as
    that address means that art. The engine's per-level teardown frees the
    model textures and the next level's loader is free to hand a new frame the

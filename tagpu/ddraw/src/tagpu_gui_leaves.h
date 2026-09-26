@@ -88,12 +88,13 @@ static void gaf_record(const int* ctx, SURF* s, const unsigned char* fr,
     op_add(kind, s, l, t, r, b);
     if (s_lastOp) {
         /* a plain keyed blit of an uncompressed-or-RLE frame with no sub-frames
-           is the sprite the twin replays by identity; anything else (sub-frame
-           stacks, the blended variants) is published as pixels */
+           is the sprite the twin replays by identity; a sub-frame stack draws
+           nothing itself and is skipped at publish (its sub-frames are ops of
+           their own); the blended variants are published as pixels */
         s_lastOp->frame = fr; s_lastOp->pix = *(const void* const*)(fr + 0x10);
         s_lastOp->fw = GF_W(fr); s_lastOp->fh = GF_H(fr); s_lastOp->ck = fr[0x08];
         s_lastOp->dx = (short)(x - GF_HX(fr)); s_lastOp->dy = (short)(y - GF_HY(fr));
-        if (kind == OP_GAF && fr[0x0A] != 0) s_lastOp->kind = OP_GAFA;   /* sub-frames: pixels */
+        if (kind == OP_GAF && fr[0x0A] != 0) s_lastOp->kind = OP_GAFA;   /* a stack: never a sprite */
         /* THE IDENTITY AND THE PLANE, TAKEN HERE. We are inside the
            engine's own blit of this frame, which is the only moment the art is
            alive by the engine's ordering rather than by our hope; `publish`
@@ -291,11 +292,11 @@ static int __cdecl before_line(void* e)
 /* ---- 0x4BF6F0 DrawBar(ctx, RECT*, colour) and 0x4BF8C0
         DrawTranspRectangle(ctx, RECT*, colour), stdcall; RECT = 4 ints, edges
         inclusive (ui-markers.md §4) -------------------------------------- */
-static void rect_box(void* e, int kind)
+/* `rc` is the call's RECT, or one the observer built for a NULL argument */
+static void rect_box_rc(void* e, int kind, const int* rc)
 {
     const int* ctx = ctx_or_back(ARG(e, 1));
     if (s_inFlip) return;
-    const int* rc  = (const int*)(size_t)ARG(e, 2);
     int l, t, r, b;
     int ol, ot, orr, ob;
     SURF* s;
@@ -325,12 +326,45 @@ static void rect_box(void* e, int kind)
         s_lastOp->clipped = (unsigned char)(l != ol || t != ot || r != orr || b != ob);
     }
 }
+static void rect_box(void* e, int kind)
+{
+    rect_box_rc(e, kind, (const int*)(size_t)ARG(e, 2));
+}
 static int __cdecl before_bar(void* e)  { if (on_game_thread()) rect_box(e, OP_BAR);  return 0; }
 /* 0x4BF4D0: NOT a fill — a SHADE of what is already in the box, (ctx, RECT*, level)
    ret 0xC; one clip through 0x4BF620, then every pixel remapped through a 256-byte
-   row of globals+0xC4 (darken) or +0xC8 (lighten). What the F4 popup 0x4948E0 draws
-   its border with (×3 — three calls, not three fills). */
-static int __cdecl before_frame(void* e) { if (on_game_thread()) rect_box(e, OP_FRAME); return 0; }
+   row of globals+0xC4 (PALETTE.SHD, level < 0) or +0xC8 (lighten). A list's
+   selected row, the dimming under a modal screen, the F4 popup's border.
+
+   `col` CARRIES THE LEVEL AS THE ENGINE WILL USE IT, clamped here the way
+   `0x4BF572` (>= -0x20) and `0x4BF595` (<= 0x1F) clamp it, so the byte is
+   exact where `rect_box`'s low-byte cut of the raw argument is not: +200
+   is +31 to the engine and would be -56 as a byte.
+
+   A NULL RECT IS THE WHOLE SURFACE (`0x4BF50B`: 0, 0, [globals+0xD4],
+   [globals+0xD8], then the one clip), and `GUI_Load` passes exactly that
+   (`0x4AA984`) when there is no screen beneath to dim. `rect_box` treats NULL
+   as nothing drawn, so this builds the engine's rect and hands it that. */
+static int __cdecl before_frame(void* e)
+{
+    const int* rc = (const int*)(size_t)ARG(e, 2);
+    int whole[4], lvl;
+    if (!on_game_thread()) return 0;
+    if (!rc) {
+        const char* g = *(const char* const*)TA_GFX_PP;
+        if (!ptr_ok(g)) return 0;
+        whole[0] = 0; whole[1] = 0;
+        whole[2] = *(const int*)(g + 0xD4);
+        whole[3] = *(const int*)(g + 0xD8);
+        rc = whole;
+    }
+    rect_box_rc(e, OP_FRAME, rc);
+    lvl = SARG(e, 3);
+    if (lvl < -0x20) lvl = -0x20;
+    if (lvl > 0x1F) lvl = 0x1F;
+    if (s_lastOp) s_lastOp->col = (unsigned char)(signed char)lvl;
+    return 0;
+}
 static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
 /* 0x4BF7B0: the focus rectangle GUI_StageUpdateDraw draws last, (ctx, RECT*, level).
    ITS OWN KIND, not OP_RECT: four edges of one box through 0x4BEC70, whose
@@ -388,7 +422,7 @@ static int __cdecl before_focus(void* e)
        happens. It never can from the one caller: `0x4A16F0` starts at 0x1F and
        walks 31, 28, 24, 19, 13, 6 over six expanding rectangles. */
     lvl = SARG(e, 3);
-    if (lvl < 0 || lvl >= (int)TAGPU_GUI_SHADE_ROWS) { s_focusRowBad++; return 0; }
+    if (lvl < 0 || lvl >= (int)TAGPU_GUI_TABLE_ROWS) { s_focusRowBad++; return 0; }
     box[0] = rc[0]; box[1] = rc[1]; box[2] = rc[2]; box[3] = rc[3];
     /* NORMALISING IS EXACT HERE where it would not be for a filled box: each
        edge is a SEGMENT and `0x4CC8DF` swaps its own endpoints (`0x4CC8FA`,
@@ -452,20 +486,57 @@ static int __cdecl before_copy(void* e)
 /* the allocation's tag rides beside the shared return stack (s_retStack) */
 static const char* s_allocTag[32];
 
-/* ---- 0x4C6D20(ctx, desc, RECT* src, RECT* dst) stdcall ret 0x10 — the
-        descriptor blit the listbox and textfield handlers use; the box is the
-        destination rect (edges inclusive, like every RECT here) ------------ */
+/* ---- 0x4C6D20(ctx, src, RECT* srect, RECT* drect) stdcall ret 0x10 — a
+        RECT COPY between two contexts, which the listbox (`0x4A1C08`) and the
+        textfield (`0x4A4EC0`) restore their background with, from the
+        screen's background surface `[GUIMEM+0x24]` over their own rect.
+
+        It hands both to `0x4CBDD1(dst, src, srect, drect)` cdecl, which takes
+        the SIZE from `srect` alone (`r-l+1` by `b-t+1`, `0x4CBDE2`..`0x4CBDF2`),
+        takes only the TOP-LEFT of `drect`, and clips nothing: it is
+        `base + t*pitch + l` on both sides and a row copy (DISASSEMBLED
+        2026-09-26, `0x4CBDD1`..`0x4CBE6F`).
+
+        SO IT IS AN `OP_COPY` -- a destination box and the source's top-left,
+        which is exactly `PK_COPY` -- whenever the source window lies inside the
+        source surface. Recorded as a box it crossed as `PK_PIXELS`, which the
+        lane drops, and the drop then made the drain refuse every tint over the
+        same rows: a list's selected-row highlight never reached the screen.
+        A window outside its source keeps the box (`OP_GAFD`): the engine reads
+        memory there that no twin holds. The destination is clamped to the
+        SURFACE only, not to the context's clip rect, because the engine does
+        not clip; the source's top-left moves with the clamp. */
 static int __cdecl before_gafd(void* e)
 {
     if (s_inFlip) return 0;
     const int* ctx = ctx_or_back(ARG(e, 1));
+    const int* src = (const int*)(size_t)ARG(e, 2);
+    const int* sr  = (const int*)(size_t)ARG(e, 3);
     const int* rc  = (const int*)(size_t)ARG(e, 4);
     int l, t, r, b;
     SURF* s;
     if (!on_game_thread()) return 0;
     if (!ptr_ok(rc)) { op_add(OP_GAFD, NULL, 0, 0, 0, 0); return 0; }
-    l = rc[0]; t = rc[1]; r = rc[2]; b = rc[3];
     s = surf_of_ctx(ctx);
+    if (s && ptr_ok(src) && ptr_ok(sr) &&
+        sr[0] >= 0 && sr[1] >= 0 && sr[0] <= sr[2] && sr[1] <= sr[3] &&
+        sr[2] < src[CTX_W] && sr[3] < src[CTX_H]) {
+        int sl = sr[0], st = sr[1];
+        surf_of_ctx(src);                         /* the source is a surface too */
+        l = rc[0]; t = rc[1];
+        r = l + (sr[2] - sr[0]); b = t + (sr[3] - sr[1]);
+        if (l < 0) { sl -= l; l = 0; }
+        if (t < 0) { st -= t; t = 0; }
+        if (r > s->w - 1) r = s->w - 1;
+        if (b > s->h - 1) b = s->h - 1;
+        op_add(OP_COPY, s, l, t, r, b);
+        if (s_lastOp) {
+            s_lastOp->src = (unsigned)src[CTX_BASE];
+            s_lastOp->sl = (short)sl; s_lastOp->st = (short)st;
+        }
+        return 0;
+    }
+    l = rc[0]; t = rc[1]; r = rc[2]; b = rc[3];
     if (s) clip_ctx(ctx, &l, &t, &r, &b);
     op_add(OP_GAFD, s, l, t, r, b);
     return 0;
@@ -550,17 +621,8 @@ static int __cdecl before_scale(void* e)
             su >= 0 && sv >= 0 && sww > 0 && swh > 0 &&
             fw > 0 && fh > 0 && su + sww <= fw && sv + swh <= fh &&
             l == xy[0] && t == xy[1]) {
-            /* AND IT MUST BE KEYABLE. The consumer tells two windows of one
-               frame apart by this packed value alone, so a window that will
-               not fit it publishes its box rather than claiming an identity
-               it does not have. 0 is reserved for the whole frame, which is
-               what every 1:1 sprite and the in-game badge publish. */
-            if (su == 0 && sv == 0 && sww == fw && swh == fh) {
-                r = l + dw - 1; b = t + dh - 1; plain = 1;
-            } else if (su <= 255 && sv <= 255 && sww <= 255 && swh <= 255) {
-                r = l + dw - 1; b = t + dh - 1; plain = 2;
-            }
-            if (plain) { winU = su; winV = sv; winW = sww; winH = swh; }
+            r = l + dw - 1; b = t + dh - 1; plain = 1;
+            winU = su; winV = sv; winW = sww; winH = swh;
         }
     }
     s = surf_of_ctx(ctx);
@@ -579,16 +641,10 @@ static int __cdecl before_scale(void* e)
         o->fcomp = fr[0x09]; o->fsub = fr[0x0A]; o->fsubn = fr[0x0B];
         o->su  = (unsigned short)winU;  o->sv  = (unsigned short)winV;
         o->sww = (unsigned short)winW; o->swh = (unsigned short)winH;
-        /* 0 = the whole frame; `plain == 2` is the windowed case, and the pack
-           cannot produce 0 there because both extents are > 0 */
-        o->swin = (plain == 2)
-                ? ((unsigned)winU | ((unsigned)winV << 8) |
-                   ((unsigned)winW << 16) | ((unsigned)winH << 24))
-                : 0u;
         /* the same gate `gaf_record` uses: never decode for a window nobody reads */
         if (s_census || g_gui_draw) scale_capture(o, fr, dw, dh);
         /* AFTER the capture, and on its result: `glen` is what `publish` tests
-           before it makes a `PK_SPRITE`, so counting the same thing keeps the
+           before it makes a `PK_PLANE`, so counting the same thing keeps the
            census and the queue telling one story.
 
            FROM THE OP'S OWN BOX, not from the locals. `op_add` clamps to the

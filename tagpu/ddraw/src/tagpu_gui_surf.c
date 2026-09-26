@@ -124,16 +124,17 @@ typedef struct TWIN {
        the twin already holds. Cleared at the top of every `drain`, so they
        mean "in this batch", never "ever".
 
-       PER BOX AND NOT PER SURFACE, MEASURED: SKIRMISH.GUI's player-colour
-       swatches fall to `PK_PIXELS` on the SAME surface as the focus rings, so
-       a surface-wide flag declines 2.4 M tints for drops nowhere near them and
-       drops that screen to 98.95 %. What makes a tint unsafe is that the box it
-       is about to READ was not repainted, so the box is the unit of the test.
+       PER PIXEL AND NOT PER SURFACE, MEASURED: SKIRMISH.GUI's side buttons,
+       drawn through the ALP blit `0x4B8500` on every frame, fall to
+       `PK_PIXELS` on the SAME surface as the focus rings and the modal dim, so
+       a surface-wide flag declines 2.4 M tints for drops nowhere near them.
+       What makes a tint unsafe is that the pixels it is about to READ were not
+       repainted, so `tint_pieces` takes exactly those out of its box.
 
        Past `TINT_LOST_MAX` the extras are merged into the last slot. A union
-       is a SUPERSET of the boxes it replaces, so a tint that intersects any
-       of them still intersects the union: the overflow costs precision and
-       cannot cost soundness, and the array needs no second state. */
+       is a SUPERSET of the boxes it replaces, so subtracting it removes at
+       least every dropped pixel: the overflow costs precision and cannot cost
+       soundness, and the array needs no second state. */
     int nLost;
     int lost[TINT_LOST_MAX][4];
 } TWIN;
@@ -154,6 +155,7 @@ static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seed
 static unsigned s_pixDropped = 0;
 static unsigned s_assets = 0;          /* PK_ASSET ops carried into a twin     */
 static unsigned s_movies = 0;          /* PK_MOVIE frames carried into a twin  */
+static unsigned s_planes = 0;          /* PK_PLANE stamps carried into a twin  */
 /* TINTS THE DRAIN DECLINED, BY REASON. `tintdrop`
    is no twin or no table -- the comment on the case below says that cannot
    happen, so a non-zero here is that comment being wrong and the whole point
@@ -161,8 +163,11 @@ static unsigned s_movies = 0;          /* PK_MOVIE frames carried into a twin  *
    non-zero on a screen whose paint falls back to `PK_PIXELS`: the tint was
    declined because the pixels under it were, which is the compounding guard
    and not a fault. Two counters and not one, because "the table never came"
-   and "the paint under it went" are opposite bugs. */
-static unsigned s_tintDrop = 0, s_tintStale = 0;
+   and "the paint under it went" are opposite bugs. `tintsplit` is the third:
+   tints drawn over only the part of their box that was repainted
+   (`tint_pieces`), so a non-zero `tintstale` now means a box wholly dropped
+   or past the piece cap, never one sprite somewhere under it. */
+static unsigned s_tintDrop = 0, s_tintStale = 0, s_tintSplit = 0;
 /* SOLID RECTANGLES REPLAYED AS GEOMETRY, counted beside `pixels=` so the two
    can be read against each other: every one of these would otherwise be a
    `PK_PIXELS` box of arena bytes. */
@@ -1294,18 +1299,57 @@ static void mir_box(TAGPU_GUIOP* m, const TAGPU_PUBOP* o)
     m->sl = o->sl; m->st = o->st;
 }
 
-/* DOES THIS TINT READ A BOX THIS PASS FAILED TO REPAINT? Inclusive on every
-   edge, which is the convention `mir_box` carries and the one the Vulkan lane
-   reads back (`extent = x1 - x0 + 1`). Erring inclusive is erring toward
-   declining a tint, which costs one frame of glow and never compounds. */
-static int tint_over_lost(const TWIN* t, const TAGPU_PUBOP* o)
+/* THE PART OF A TINT'S BOX THIS PASS DID REPAINT: the box minus every box
+   dropped in this batch, as disjoint pieces. Inclusive on every edge, which
+   is the convention `mir_box` carries and the one the Vulkan lane reads back
+   (`extent = x1 - x0 + 1`).
+
+   THE HAZARD IS PER PIXEL, SO THE REFUSAL IS PER PIXEL. A pixel outside every
+   dropped box holds what the engine held before its tint, so tinting it is
+   exact; a pixel inside one does not, and is left where the drop left it,
+   untinted. Declining the whole box instead was sound but lost the modal dim
+   `0x4AA969` lays over a 640x480 panel whenever one sprite anywhere on it was
+   dropped -- SKIRMISH's side buttons, drawn every frame through the ALP blit
+   `0x4B8500` and sitting under the dialog that dims them.
+
+   Each subtraction splits a piece into at most four around the overlap (the
+   bands above and below it, then the two sides), so pieces never overlap and
+   no pixel is tinted twice. Past `TINT_PIECES` the whole box is declined,
+   which is the old answer and never compounds. Returns the piece count; 0 is
+   a box wholly under dropped ones. */
+#define TINT_PIECES 64
+static int tint_pieces(const TWIN* t, const TAGPU_PUBOP* o, int out[TINT_PIECES][4])
 {
-    int k;
-    for (k = 0; k < t->nLost; k++) {
+    int n = 1, k;
+    out[0][0] = o->l; out[0][1] = o->t; out[0][2] = o->r; out[0][3] = o->b;
+    for (k = 0; k < t->nLost && n > 0; k++) {
         const int* L = t->lost[k];
-        if (o->l <= L[2] && o->r >= L[0] && o->t <= L[3] && o->b >= L[1]) return 1;
+        int i, m = n;
+        for (i = 0; i < m; ) {
+            int l = out[i][0], tp = out[i][1], r = out[i][2], b = out[i][3];
+            int il = l > L[0] ? l : L[0], it = tp > L[1] ? tp : L[1];
+            int ir = r < L[2] ? r : L[2], ib = b < L[3] ? b : L[3];
+            int add[4][4], na = 0, j;
+            if (il > ir || it > ib) { i++; continue; }
+            if (it > tp) { add[na][0] = l;      add[na][1] = tp;     add[na][2] = r;      add[na][3] = it - 1; na++; }
+            if (ib < b)  { add[na][0] = l;      add[na][1] = ib + 1; add[na][2] = r;      add[na][3] = b;      na++; }
+            if (il > l)  { add[na][0] = l;      add[na][1] = it;     add[na][2] = il - 1; add[na][3] = ib;     na++; }
+            if (ir < r)  { add[na][0] = ir + 1; add[na][1] = it;     add[na][2] = r;      add[na][3] = ib;     na++; }
+            /* the piece goes; the last unvisited one takes its slot, the
+               already-split tail moves down behind it */
+            out[i][0] = out[m - 1][0]; out[i][1] = out[m - 1][1];
+            out[i][2] = out[m - 1][2]; out[i][3] = out[m - 1][3];
+            out[m - 1][0] = out[n - 1][0]; out[m - 1][1] = out[n - 1][1];
+            out[m - 1][2] = out[n - 1][2]; out[m - 1][3] = out[n - 1][3];
+            m--; n--;
+            if (n + na > TINT_PIECES) return -1;
+            for (j = 0; j < na; j++) {
+                out[n][0] = add[j][0]; out[n][1] = add[j][1];
+                out[n][2] = add[j][2]; out[n][3] = add[j][3]; n++;
+            }
+        }
     }
-    return 0;
+    return n;
 }
 
 static void drain(void)
@@ -1396,13 +1440,14 @@ static void drain(void)
                 }
             }
             break; }
-        case PK_MOVIE: {
-            /* A SMACKER FRAME, carried as a box of bytes -- `TAGPU_GUIOP_PIXELS`
-               with its payload, which the Vulkan lane validates and uploads
-               as it stands. What makes these bytes legal to carry, and exact,
-               is the producer's: see PK_MOVIE in tagpu_gui_int.h. The box is
-               bounded HERE against the twin it lands in, whatever the producer
-               clipped it to. */
+        case PK_MOVIE:
+        case PK_PLANE: {
+            /* A SMACKER FRAME, or a transformed GAF stamp's indices, carried as
+               a box of bytes -- `TAGPU_GUIOP_PIXELS` with its payload, which the
+               Vulkan lane validates and uploads as it stands. What makes these
+               bytes legal to carry, and exact, is the producer's: see PK_MOVIE
+               and PK_PLANE in tagpu_gui_int.h. The box is bounded HERE against
+               the twin it lands in, whatever the producer clipped it to. */
             unsigned off = 0;
             int bw = o->r - o->l + 1, bh = o->b - o->t + 1;
             t = twin_find(o->surf);
@@ -1410,7 +1455,8 @@ static void drain(void)
                 o->alen == (unsigned)bw * (unsigned)bh &&
                 mir_bytes(g_guiq.arena + o->aoff, o->alen, &off)) {
                 TAGPU_GUIOP* m = mir_op();
-                if (m) { m->kind = TAGPU_GUIOP_PIXELS; mir_box(m, o); m->aoff = off; m->alen = o->alen; s_movies++; }
+                if (m) { m->kind = TAGPU_GUIOP_PIXELS; mir_box(m, o); m->aoff = off; m->alen = o->alen;
+                         if (o->kind == PK_MOVIE) s_movies++; else s_planes++; }
             }
             break; }
         case PK_FREE:
@@ -1454,9 +1500,9 @@ static void drain(void)
                A tint READS the box, so applying one over a box we did not
                repaint folds this frame's error into next frame's input:
                `LUT[LUT[x]]`, then `LUT^3[x]`, with nothing short of a
-               `PK_RESET` to unwind it. Declining the tint instead leaves the
-               twin at its last CONSISTENT state, which is the same thing the
-               dropped pixels themselves leave there. */
+               `PK_RESET` to unwind it. Leaving those pixels untinted instead
+               leaves them at their last CONSISTENT state, which is the same
+               thing the dropped pixels themselves leave there. */
             if (t) {
                 if (t->nLost < TINT_LOST_MAX) {
                     int* L = t->lost[t->nLost++];
@@ -1517,9 +1563,11 @@ static void drain(void)
             }
             break;
         case PK_TINT:
-            /* ONE EDGE OF A FOCUS RECTANGLE, REMAPPED THROUGH ROW `fg`. No
-               arena bytes: what the op carries is the operation, and the
-               consumer applies it to its own twin.
+            /* A BOX REMAPPED THROUGH ROW `fg` -- one edge of a focus
+               rectangle, or the box shader's whole box (a list's selected row,
+               the dim under a modal screen). No arena bytes: what the op
+               carries is the operation, and the consumer applies it to its own
+               twin.
 
                THE TABLE IS A PRECONDITION AND NOT A FALLBACK. The producer
                publishes `PK_SHADE` ahead of the first tint of a batch and the
@@ -1531,15 +1579,22 @@ static void drain(void)
                index a table of zeros. */
             t = twin_find(o->surf);
             if (!t || !s_shadeHave) { s_tintDrop++; break; }
-            /* SEE `PK_PIXELS` ABOVE: not over a box this batch failed to
-               repaint. A tint is the only op here that reads its own
-               destination, so it is the only one that may not run against a
-               destination we know is wrong. */
-            if (tint_over_lost(t, o)) { s_tintStale++; break; }
+            /* SEE `PK_PIXELS` ABOVE: only over the part of its box this
+               batch did repaint (`tint_pieces`). A tint is the only op here
+               that reads its own destination, so it is the only one that may
+               not run against pixels we know are wrong. */
             {
-                TAGPU_GUIOP* m;
-                m = mir_op();
-                if (m) { m->kind = TAGPU_GUIOP_TINT; mir_box(m, o); m->fg = o->fg; }
+                int pc[TINT_PIECES][4];
+                int n = tint_pieces(t, o, pc), k;
+                if (n <= 0) { s_tintStale++; break; }
+                if (n != 1 || pc[0][0] != o->l || pc[0][1] != o->t ||
+                    pc[0][2] != o->r || pc[0][3] != o->b) s_tintSplit++;
+                for (k = 0; k < n; k++) {
+                    TAGPU_GUIOP* m = mir_op();
+                    if (!m) break;
+                    m->kind = TAGPU_GUIOP_TINT; mir_box(m, o); m->fg = o->fg;
+                    m->l = pc[k][0]; m->t = pc[k][1]; m->r = pc[k][2]; m->b = pc[k][3];
+                }
                 s_tints++;
             }
             break;
@@ -1547,8 +1602,8 @@ static void drain(void)
             const TAGPU_GAFENT* e;
             t = twin_find(o->surf);
             if (!t) break;
-            e = tagpu_gaf_atlas_find(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->swin);
-            if (!e && o->alen) e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->swin, o->ck, g_guiq.arena + o->aoff);
+            e = tagpu_gaf_atlas_find(&s_atlas, o->frame, o->pix, o->fw, o->fh);
+            if (!e && o->alen) e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->ck, g_guiq.arena + o->aoff);
             if (!e) {
                 /* the atlas is full, or the frame's bytes never arrived (an
                    earlier reset lost them): a fresh start — the seeds carry
@@ -1662,7 +1717,7 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
     s_curCK = fr[TAGPU_GF_CK];
     s_curFrame = fr;
     pix = *(const void* const*)(fr + TAGPU_GF_PIX);
-    if (tagpu_gaf_atlas_find(&s_atlas, fr, pix, s_curW, s_curH, 0u)) s_curOwn = 1;  /* the cursor is never windowed */
+    if (tagpu_gaf_atlas_find(&s_atlas, fr, pix, s_curW, s_curH)) s_curOwn = 1;
     else s_curWarm++;
 }
 
@@ -2360,9 +2415,9 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     }
     mir_finish(f);          /* close and publish the frame's record */
     if (f->frame_counter - last >= 300) {
-        /* THE BUFFER: 448 literal characters and 76 conversions, worst case
-           1284 with the terminator, against 1344 bytes -- 60 bytes of headroom,
-           which is SIX `%u`s (counted 2026-09-26, by script over the format
+        /* THE BUFFER: 457 literal characters and 78 conversions, worst case
+           1313 with the terminator, against 1344 bytes -- 31 bytes of headroom,
+           which is THREE `%u`s (counted 2026-09-26, by script over the format
            string). Count it again when you add one, the same way: %u -> 10,
            %d -> 11, %08X -> 8, each float -> 24 (a bound on the values these
            carry, not on a double). A count by eye has been wrong here before,
@@ -2383,8 +2438,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u movie=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
-                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_movies, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_clears,
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u movie=%u planes=%u bars=%u rects=%u tints=%u/%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_movies, s_planes, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_tintSplit, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,

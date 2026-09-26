@@ -17,6 +17,7 @@
 #include "tagpu_menu.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
+#include "tagpu_gui.h"
 #include "tagpu_log.h"
 
 #define SHIELD_TRIGGER  "tagpu_shield.on"
@@ -201,6 +202,7 @@ static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
            offered to the zoom here rather than short-circuited at the token */
         if (tagpu_zoom_wheel(msg, wparam, lparam))
             return 0;
+        tagpu_gui_wheel(msg, wparam, lparam);
         if (tagpu_zoom_drop_mouse(msg, lparam))
             return 0;
         return CallWindowProcA(g_ddraw.wndproc, hwnd, msg, wparam,

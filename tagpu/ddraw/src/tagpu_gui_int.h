@@ -65,12 +65,15 @@ enum {
                        also what makes reading it AT THE FLIP exact, where the
                        same read for `PK_PIXELS` is a box of bytes from a moment
                        later than the draw it stands for. */,
-    PK_SHADE,       /* the engine's LIGHTEN table, `globals+0xC8`, 32 rows of
-                       256 bytes, in the arena. It is a palette-derived REMAP
-                       and not a picture -- the same category as the palette
-                       itself, which has always crossed -- so it is on the
-                       allowed side of the clean cut for the reason `PK_ASSET`
-                       is: nothing composed it.
+    PK_SHADE,       /* the hand-over's remap table, `TAGPU_GUI_SHADE_ROWS`
+                       rows of 256 bytes, in the arena: the engine's LIGHTEN
+                       table `globals+0xC8` whole, then the box shader's
+                       per-level rows derived from it and from PALETTE.SHD
+                       `globals+0xC4` (inc/tagpu_gui.h has the layout). It is a
+                       palette-derived REMAP and not a picture -- the same
+                       category as the palette itself, which has always crossed
+                       -- so it is on the allowed side of the clean cut for the
+                       reason `PK_ASSET` is: nothing composed it.
 
                        PUBLISHED AHEAD OF THE FIRST `PK_TINT` OF A BATCH AND AT
                        MOST ONCE PER RESET, and the ordering is the whole
@@ -85,25 +88,31 @@ enum {
                        half keeps, which the hand-over then carries by pointer
                        every frame, so an abandoned mirror frame cannot lose
                        it. */
-    PK_TINT         /* ONE EDGE of a focus rectangle -- the box is `l,t,r,b`
-                       inclusive and one pixel thick, `fg` is the ROW of the
-                       lighten table, and NOTHING follows in the arena.
+    PK_TINT         /* A REMAP OF THE BOX -- `l,t,r,b` inclusive, `fg` the
+                       ROW of `PK_SHADE`'s table, and NOTHING follows in the
+                       arena. Two engine writers produce it: ONE EDGE of a
+                       focus rectangle (one pixel thick, a lighten-table row),
+                       and one call of the box shader `0x4BF4D0` (any size, a
+                       row from `TAGPU_GUI_SHADE_BOX` on).
 
-                       It is a READ-MODIFY-WRITE: the writer `0x4CC8DF` does `dst = LUT[row*256 + dst]` per pixel, so
-                       there is no colour to name. What crosses instead is the
-                       OPERATION -- a box, a row, and (once) the table -- and
-                       the consumer applies it to its own twin. No engine pixel
-                       is involved at any point.
+                       It is a READ-MODIFY-WRITE: `0x4CC8DF` does `dst =
+                       LUT[row*256 + dst]` per pixel and `0x4BF4D0` the same
+                       with a signed `dst`, so there is no colour to name. What
+                       crosses instead is the OPERATION -- a box, a row, and
+                       (once) the table -- and the consumer applies it to its
+                       own twin. No engine pixel is involved at any point.
 
-                       ONE EDGE PER OP, NOT ONE BOX. `0x4BF7B0` draws top,
-                       right, bottom then left through four separate
-                       `0x4BEC70` calls, each clipped on its own by `0x4BEA20`,
-                       and the four CORNERS are therefore tinted TWICE --
-                       `LUT[row][LUT[row][x]]`. Publishing the box would have
-                       to carry both the clip rect and that overlap rule;
-                       four ops carry them by construction, in the engine's own
-                       order, and `op_add`'s existing clip drops an edge that
-                       falls outside exactly as `0x4BEA20` does. */,
+                       A FOCUS RECTANGLE IS ONE EDGE PER OP, NOT ONE BOX.
+                       `0x4BF7B0` draws top, right, bottom then left through
+                       four separate `0x4BEC70` calls, each clipped on its own
+                       by `0x4BEA20`, and the four CORNERS are therefore tinted
+                       TWICE -- `LUT[row][LUT[row][x]]`. Publishing the box
+                       would have to carry both the clip rect and that overlap
+                       rule; four ops carry them by construction, in the
+                       engine's own order, and `op_add`'s existing clip drops
+                       an edge that falls outside exactly as `0x4BEA20` does.
+                       The box shader clips its box once (`0x4BF620`), so it is
+                       one op. */,
     PK_MOVIE        /* A SMACKER FRAME: the box `l,t,r,b` of the movie's own
                        surface, and its bytes follow in the arena. On the
                        allowed side of the clean cut for `PK_ASSET`'s reason:
@@ -127,7 +136,24 @@ enum {
                        new one.
 
                        The drain mirrors it as `TAGPU_GUIOP_PIXELS` with its
-                       bytes, the shape the Vulkan lane already validates. */
+                       bytes, the shape the Vulkan lane already validates. */,
+    PK_PLANE        /* A TRANSFORMED GAF STAMP, AS THE INDICES IT LEAVES: the
+                       box `l,t,r,b` and its bytes in the arena, row by row. The
+                       bytes are `scale_capture`'s resample of the frame's own
+                       art, decoded inside the engine's `0x4C7580` call -- the
+                       class a sprite's plane is -- and never the composed
+                       surface, which is `PK_PIXELS` and dropped.
+
+                       A BOX AND NOT A SPRITE because that is what the engine
+                       writes: the span `0x4C7310` copies every texel of the
+                       rectangle, key colour included (`0x4C74C7`..`0x4C74CE`,
+                       no compare), so there is nothing to key and no atlas
+                       entry to name. An entry would need a key saying which
+                       picture it holds, and SELMAP's preview changes picture
+                       under one frame address on every pick.
+
+                       The drain mirrors it as `TAGPU_GUIOP_PIXELS`, as it does
+                       `PK_MOVIE`. */
 };
 
 typedef struct TAGPU_PUBOP {
@@ -172,20 +198,13 @@ typedef struct TAGPU_PUBOP {
     unsigned short gcount;          /* glyph records at the head of the block   */
     unsigned char  font_rows;       /* font[0], the rows the blitter writes     */
     signed char    font_yoff;       /* font[2], subtracted from y               */
-    /* PK_SPRITE: THE SOURCE WINDOW, as the atlas's extra key byte-packed
-       (u0, v0, uw, uh). 0 means the whole frame and is what every 1:1 GAF
-       sprite publishes, so nothing but a windowed `OP_SCALE` ever sets it.
-       It exists because `GAF_DrawTransformed 0x4C7580` can map a SUB-rectangle
-       of a frame -- SKIRMISH.GUI's player swatches take (1,1)..(31,31) of a
-       32x32 frame -- and the consumer's atlas key (frame, pix, w, h) cannot
-       tell two such windows apart. */
-    unsigned       swin;
     unsigned       assetTok;        /* PK_ASSET: the offer's one-time token     */
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
 } TAGPU_PUBOP;
 
-/* `TAGPU_GUI_SHADE_ROWS` / `_BYTES` -- the lighten table's shape, and the
-   argument that the shape is the bound -- are in the PUBLIC header
+/* `TAGPU_GUI_TABLE_ROWS` (either engine table's shape, and the argument that
+   the shape is the bound) and `TAGPU_GUI_SHADE_ROWS` / `_BYTES` (the remap
+   table `PK_SHADE` carries) are in the PUBLIC header
    (`inc/tagpu_gui.h`), beside the `shade` pointer the hand-over carries,
    because the Vulkan lane needs them and this header is private to the
    tagpu_gui_* family. */
