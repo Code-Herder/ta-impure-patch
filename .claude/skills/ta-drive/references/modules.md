@@ -302,8 +302,9 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   3840x2160 start-up; that only happens now on a machine with no GPU.
 - **Vsync is a row of both screens** — the in-game panel, and the shell's Window column between
   the two sliders. On logs `frame cap: vsync on, a N fps backstop over the monitor's M Hz` (the
-  monitor's rate + 1; a present that waits for the blank never meets it), off `frame cap: none
-  (vsync off)`; a click rebuilds the swapchain on the next frame, in place (`swapchain rebuilt in
+  monitor's rate + 1; a present that waits for the blank never meets it; `… over an assumed 60
+  Hz` on a monitor whose rate wine cannot read, its secondaries), off `frame cap: none (vsync
+  off)`; a click rebuilds the swapchain on the next frame, in place (`swapchain rebuilt in
   place … - the passes kept`), so the restored art stays. A tacli instance's `--vsync` is written
   over it at every launch.
 - **At most eight devices are listed** (our cap; a stage button's art index is clamped by the

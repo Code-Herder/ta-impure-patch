@@ -1398,7 +1398,7 @@ class SettingsStore(unittest.TestCase):
             inst = self._inst(tmp)
             inst.gamedir.mkdir()
             cfg = inst.gamedir / "impure.cfg"
-            cfg.write_text("gamma=12\nvsync=off\n")        # a menu's choice
+            cfg.write_text("gamma=12\nvsync=off\nmaxfps=60\n")   # a menu's choice; a dead key
             tacli.write_placement(inst, (10, 20))
             self.assertEqual(cfg.read_text().splitlines(),
                              ["gamma=12", "display=window", "window=10,20,0,0", "vsync=on"])

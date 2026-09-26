@@ -60,7 +60,8 @@ void fpsl_frame_end();
 void fpsl_request_init(void);
 
 /* THE ONE CAP IS VSYNC'S. With the store's vsync on, a backstop just above
-   the refresh rate of the monitor the window is on (fpsl_init says why); off,
-   none. fpsl_frame_start asks both every frame. */
+   the refresh rate of the monitor the window is on, or above an assumed 60 Hz
+   when that rate cannot be read (fpsl_init says why); off, none.
+   fpsl_frame_start asks both every frame. */
 
 #endif

@@ -723,7 +723,8 @@ def write_placement(inst: Instance, tile, window=None, vsync="on"):
     EVERY launch, because the store is also the menu's file -- a
     `display=fullscreen` clicked in an instance's menu and kept by a bare
     relaunch would open it fullscreen on the owner's screen. Every other line of
-    the store is left as it is.
+    the store is left as it is, but a `maxfps=` line: the removed Frame cap's,
+    which nothing reads.
 
     `window` is the CLIENT size when it must differ from the game's resolution:
     the fork takes the frame's W,H as the client and letterboxes the engine's
@@ -744,7 +745,7 @@ def write_placement(inst: Instance, tile, window=None, vsync="on"):
     except FileNotFoundError:
         lines = []
     keep = [ln for ln in lines
-            if ln.partition("=")[0].strip().lower() not in ("display", "window", "vsync")]
+            if ln.partition("=")[0].strip().lower() not in ("display", "window", "vsync", "maxfps")]
     keep += ["display=window", f"window={int(x)},{int(y)},{w},{h}", f"vsync={vsync}"]
     path.write_text("\n".join(keep) + "\n")
 
@@ -1350,6 +1351,14 @@ def _launch(args) -> dict:
     win = tuple(meta["window"]) if meta.get("window") else None
     if getattr(args, "vsync", None) is not None and args.vsync != meta.get("vsync", "on"):
         meta["vsync"] = args.vsync
+        inst.save_meta(meta)
+    # `maxfps` went with the Frame cap. An instance made before that and set
+    # uncapped (0) for a frame-time A/B keeps being uncapped -- vsync off --
+    # instead of silently measuring the refresh rate on both sides.
+    if "maxfps" in meta:
+        if meta.pop("maxfps") == 0 and getattr(args, "vsync", None) is None:
+            meta["vsync"] = "off"
+            warn(f"{inst.name}: its old --maxfps 0 (uncapped) is now --vsync off")
         inst.save_meta(meta)
     # A size the player picked in the menu is the store's, and a --defaults
     # launch opens at it: follow it, so the tile, the registry keys and what this

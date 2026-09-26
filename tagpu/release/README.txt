@@ -67,7 +67,7 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
   tagpu_classicpp.off also works, and holds that row until it is deleted.)
 
   tagpu_defaults.off turns the whole list off at once, and ignores impure.cfg
-  but for the display mode, the frame cap and the window's position: the menu's
+  but for the display mode, vsync and the window's position: the menu's
   rows are greyed while it is there, except Shadows, which is then
   the game's own shadow option, kept with the game's other options as before. Two things stay on because
   they are fixes rather than modes, each with its own switch:

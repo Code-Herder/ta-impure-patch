@@ -3071,7 +3071,7 @@ still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inline
 ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
 [engine map](exe-reverse-engineering.html).
 
-**The front-end screen carries fourteen rows in two columns.** `VISUALS.GUI` is re-emitted into
+**The front-end screen carries fifteen rows in two columns.** `VISUALS.GUI` is re-emitted into
 the same `.ufo` with five of the stock gadgets moved (`GAMMA`, `VIDSLDR` and their three
 captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the stock `SHADING`,
 `ANTI` and `BSHADOWS` toggles removed, and thirteen rows of our own:
@@ -3083,10 +3083,11 @@ captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the s
 
 Four things this rests on, each measured rather than assumed:
 
-- **The four Window rows are applied on the thread that owns the window.** Each ends in a
-  window call, and a cross-thread one is a wait on a message pump rather than a visible
-  error, so the click POSTS `WM_TAGPU_DISPLAY` and the wndproc does the work — the same
-  contract `tagpu_shield.c` uses for injected input.
+- **Display mode, Monitor and UI scale are applied on the thread that owns the window.**
+  Each ends in a window call, and a cross-thread one is a wait on a message pump rather than
+  a visible error, so the click POSTS `WM_TAGPU_DISPLAY` and the wndproc does the work — the
+  same contract `tagpu_shield.c` uses for injected input. The GPU row rides the same message
+  and touches no window.
 - **`util_toggle_fullscreen` does not restore the window size on the way back** (measured:
   1024x768 -> 3840x2160 -> 3840x2160), so the Display mode row saves the windowed client
   before leaving and puts it back itself.
@@ -18899,8 +18900,9 @@ wait before the rebuild means none of it is in use. That covers the vsync toggle
 present mode moves, and an out-of-date surface at the same size. A resize still drops them.
 
 Measured: on the AMD card the toggle logs `swapchain rebuilt in place (2 images 1920x1080) - the
-passes kept`, and no second `restorevk: terr: job started` follows. Before, the toggle
-restarted the Classic++ restore, 26.6 s of terrain job at 50–52 fps with the unrestored art on
-screen. On Xvfb (1024 × 768, Classic++, three images), a window grab is byte-identical before
+passes kept`, and no second `restorevk: terr: job started` follows; on the reference setup, the
+owner's toggle off and back on at 3840 × 2160 fullscreen logged the same, both ways. Before, the
+toggle restarted the Classic++ restore, 26.6 s of terrain job at 50–52 fps with the unrestored
+art on screen. On Xvfb (1024 × 768, Classic++, three images), a window grab is byte-identical before
 and after an off and an on toggle.
 

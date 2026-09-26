@@ -782,26 +782,26 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
 
 **The two rules the owner set.**
 
-*The count has been six, seven and eight, and the changes are unrelated: mouse-wheel zoom was
-cut as a seventh row (below), the **FPS readout** was added as one on 2026-09-09, and the **Map
-edge** as the eighth on 2026-09-24 (G20b). The row table and every geometry number here are the
-current **eight**.*
+*The count has been six, seven, eight and nine, and the changes are unrelated: mouse-wheel zoom
+was cut as a seventh row (below), the **FPS readout** was added as one on 2026-09-09, the **Map
+edge** as the eighth on 2026-09-24 (G20b), and **Vsync** as the ninth on 2026-09-25 (G21e,
+§2.10c). The row table and every geometry number here are the current **nine**.*
 
 1. **The menu never offers the unmodified original engine.** No row has an "off, let the
    1997 code draw it" position — we own the draw, and the only question a row asks is which
    of *our* two renderers owns it.
-2. **Simplify.** Eight gadgets, and everything else demoted to the cfg. (Six when the rules
-   were set; the additions are the readout, a diagnostic rather than a render option, and the
-   map edge — see the row table.)
+2. **Simplify.** Nine gadgets, and everything else demoted to the cfg. (Six when the rules
+   were set; the additions are the readout, a diagnostic rather than a render option, vsync and
+   the map edge — see the row table.)
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
-panel `id=0` at `(w−16−304, 32) 304×268` — right-aligned by `MARGIN = 16`, hanging from the
-top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Eight
+panel `id=0` at `(w−16−304, 32) 304×296` — right-aligned by `MARGIN = 16`, hanging from the
+top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Nine
 `id=1` buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at
 `x=14 w=144` **on the same line**:
 
-*The height is **268**, and the arithmetic is why: eight rows on the 28 px pitch put the last
-row's end at `34 + 28×7 + 20 = 250`, the bottom rule (`DIV_BOT`) sits 8 px under it at 258, and
+*The height is **296**, and the arithmetic is why: nine rows on the 28 px pitch put the last
+row's end at `34 + 28×8 + 20 = 278`, the bottom rule (`DIV_BOT`) sits 8 px under it at 286, and
 the panel ends 10 px under the rule. **`tools/guipanel.py` is not the source of truth for this
 number** — it says `W,H = 304,212` — and `PANEL_H` in `tagpu_menu.c` is the one define the
 screen is actually built from (the panel is composed at runtime from the player's install, so
@@ -817,7 +817,8 @@ nothing is regenerated when it changes).*
 | 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=` — it sizes the soft map and nothing else, so with no soft map the row is **greyed unconditionally**. It is kept rather than removed: one line un-greys it the day the map's producer is written |
 | 174 | **Supersampling** | Off \| 2× | `ss=` in the store (§2.10b); `tagpu_ss.off` is its lever |
 | 202 | **FPS counter** | Off \| On | `fps=` in the store; `tagpu_fps.on` is its lever — the readout, [GPU status](gpu-status.html) §2.14 |
-| 230 | **Map edge** | Black \| Mirror | `edge=` in the store (§2.10b); `tagpu_mirror.on`/`.off` are its levers — what the view shows past the map, [GPU status](gpu-status.html) §2.90. Never greyed with the lane: the mirror is drawn under either preset |
+| 230 | **Vsync** | Off \| On | `vsync=` in the store (§2.10c) — FIFO present and the limiter's backstop, on by default. Never greyed with the lane; greyed under `tagpu_defaults.off`, where the harness owns it |
+| 258 | **Map edge** | Black \| Mirror | `edge=` in the store (§2.10b); `tagpu_mirror.on`/`.off` are its levers — what the view shows past the map, [GPU status](gpu-status.html) §2.90. Never greyed with the lane: the mirror is drawn under either preset |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
 was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
@@ -849,6 +850,12 @@ Renderer read `Custom`, and it is never greyed by the Classic lane, because the 
 in full colour under either preset. `read_state()` shows the edge **in force** — the lever's
 where one exists, which also greys the row — so the plate cannot disagree with the picture.
 
+**The Vsync row clears the same bar** [2026-09-25, G21e]. `render_vk.c` hands
+`tagpu_settings_vsync()` to `tagpu_vk_frame` every frame, which rebuilds the swapchain in the new
+present mode on the frame that sees the change, keeping every pass (§2.10c), and
+`fpsl_frame_start` re-derives the backstop on the same frame. It has the FPS row's two
+exemptions: `derive_style()` does not read it, and the Classic lane does not grey it.
+
 *This supersedes a 150×352 panel at `(128,128)` — the rect `VISUALRT.GUI` uses — with the
 label 16 px **above** its control on a 44 px pitch. The label moved beside the control, and
 that is the whole reason the frame has to be composed rather than reused: every stock panel
@@ -858,7 +865,7 @@ puts the label above, which seven rows have no room for.*
 behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
 clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
 **every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
-you would click, close, look, reopen; and the panel is 304×268 in a corner, covering ~10 % of a
+you would click, close, look, reopen; and the panel is 304×296 in a corner, covering ~10 % of a
 1024×768 frame and none of the side panel. It also removes the only place our input code would
 have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
 dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.
@@ -873,9 +880,9 @@ at `main+0x38A47`, and the notes record the seconds *stopping* with TA's own men
 **No Apply button** [DECIDED 2026-09-09]. A stage button **is** the setting — there is no
 edit buffer for an Apply to commit — so `OnCommand` writes the row's key on the click and
 the panel is dismissed by the trigger or by clicking away, the way a drop-down is. Not only
-a visual choice: it removes an eighth gadget from the `.GUI` and means no code ever has to
+a visual choice: it removes a gadget from the `.GUI` and means no code ever has to
 gather every gadget's state at once. It also takes 40 px off the panel, which is why the
-height is 268 and not 308.
+height is 296 and not 336.
 
 **The ground is `frontend.gaf`'s own `back*` nine-slice** [DECIDED 2026-09-09] — the shell's
 mottled panelling, 64×64, composed at the panel's size (`tools/guipanel.py --nine back` is the
@@ -1557,14 +1564,18 @@ uncapped, in play; IMMEDIATE ran 401). So with vsync on, `fpsl_init` keeps one t
 window's monitor rate + 1. The timer waits only when a frame ended sooner after the last one than
 its period. A period shorter than the blank's is therefore met only by jitter, and that wait ends
 before the next blank, so a present that does wait never meets the backstop. A timer at the rate
-itself does not have that property: Windows reports 59 Hz for a 59.94 Hz mode [INFERRED], and a
-59 fps timer against it skips a blank about once a second. `hz` is a whole number and the true
-rate lies within one of it however the driver rounds, so hz + 1 is always the faster clock. A
-monitor whose rate cannot be read (wine's secondaries report 0x0) gets no backstop, and the
-present paces alone. `fpsl_frame_start` asks for vsync and the window's monitor every frame, so a
+itself does not have that property: the rate is reported rounded down — wine reports 59 for the
+reference setup's 4K mode, 533.25 MHz over 4000 × 2222 = 59.997 Hz (MEASURED 2026-09-25), and the
+AMD card's display reads 59 too [INFERRED: a 59.94 Hz mode] — and a 59 fps timer against it skips
+a blank about once a second. `hz` is a whole number and the true rate lies within one of it
+however the driver rounds, so hz + 1 is always the faster clock. A monitor whose rate cannot be
+read (wine's secondaries report their mode as 0x0) is taken as the stock 60 Hz, a 61 fps
+backstop, as the Refresh cap's fallback was: on such a monitor that is faster than 60 Hz, vsync
+holds 61 fps rather than none. `fpsl_frame_start` asks for vsync and the window's monitor every frame, so a
 toggle or a window dragged to another monitor re-derives it on the frame that sees the change;
 `WM_DISPLAYCHANGE` does too. Logged: `frame cap: vsync on, a N fps backstop over the monitor's M
-Hz`, or `frame cap: none (vsync off)`.
+Hz`, `… over an assumed 60 Hz (the monitor's rate cannot be read)`, or `frame cap: none (vsync
+off)`.
 
 **A toggle keeps the restored art.** Any swapchain rebuild used to drop every pass and the
 restorer, so a vsync click restarted the Classic++ restore: 26.6 s of terrain job on the AMD card,
@@ -1572,7 +1583,8 @@ with the unrestored art on screen meanwhile. A rebuild that keeps the image coun
 and the format now keeps them ([GPU status](gpu-status.html) §2.96).
 
 **What went with the Frame cap.** The `maxfps` key: a `maxfps=` line in an existing store is kept
-as an unknown key and ignored, as any key another build wrote is. Also the Refresh resolution
+as an unknown key and ignored, as any key another build wrote is (tacli drops it from a harness
+store, and turns an old instance's uncapped `--maxfps 0` into `--vsync off`). Also the Refresh resolution
 (`util_target_refresh`, `fpsl_request_cap`), `g_config.maxfps` and `g_config.vsync` with
 upstream's DwmFlush and vblank-wait branches, the menu's device-name lookup that only Refresh
 used, and tacli's `--maxfps`.
@@ -1589,11 +1601,22 @@ when given.
   backstop over the monitor's 59 Hz`, swapchain FIFO. The in-game toggle to off rebuilt the
   swapchain in place (`2 images 1920x1080 - the passes kept`) as IMMEDIATE, with no second
   restore job.
+- **Windows, the same card, this build, the owner's eyes:** no tearing at 60 fps with vsync on.
+  What stops the tear there, given a FIFO that does not wait, is the compositor [INFERRED].
+- **The reference setup, 3840 × 2160 fullscreen on the 4K, the owner playing:** `frame cap:
+  vsync on, a 60 fps backstop over the monitor's 59 Hz`, FIFO; the toggle to off and back rebuilt
+  in place both ways (IMMEDIATE, about 1070 fps in the shell; then FIFO).
 - **Xvfb, 1024 × 768, Classic++.** Both screens toggle live and write the store. A window grab is
   byte-identical before and after an off and an on toggle, and one restore job ran in all.
 
-**Open.** Whether FIFO takes the tearing away on the AMD card is for the owner's eyes: its FIFO
-does not wait for the blank, so what stops a tear there, if anything does, is the compositor. The
+**Open.** **The reference setup still tears with vsync on** (the owner, 2026-09-25), and vsync off
+hides it, as a tear line at about 1000 fps moves by a sliver. It is not the present mode: the log
+shows FIFO. Nor is it wine copying the frame: wine 9.0 has no off-screen Vulkan path (its
+`winex11` refuses child-window rendering outright), so the image goes to NVIDIA's X11 driver on a
+real X window. The likely cause is that driver on an X screen of three monitors: a flip needs a
+window that covers the whole 6200 × 2160 screen, so a fullscreen game on one monitor is copied at
+a blank instead, and without `ForceFullCompositionPipeline` that copy can tear [INFERRED, not
+tested]. A native Vulkan program fullscreen on the same monitor (`vkcube`) would tell. The
 latency is about one frame more with vsync on; the game cursor is drawn into the frame.
 
 ### 2.11 Two small calls made by the implementer

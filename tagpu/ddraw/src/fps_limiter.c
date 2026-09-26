@@ -14,28 +14,33 @@ FPSLIMITER g_fpsl;
 
 /* tagpu: fps_limiter.h, "THE RENDER THREAD IS fpsl_init's ONE OWNER" */
 static volatile LONG s_reinit;
-/* the monitor the backstop was derived for, NULL with vsync off: the render
-   thread's alone, like everything fpsl_init writes */
+/* what the backstop was derived for -- vsync, and with it on the window's
+   monitor (NULL when off): the render thread's alone, like everything
+   fpsl_init writes */
+static int s_pacedVsync = -1;
 static HMONITOR s_pacedMon;
 
 void fpsl_request_init(void) { InterlockedExchange(&s_reinit, 1); }
 
-/* tagpu: the monitor the backstop sits above -- the window's, with vsync on --
-   or NULL. MonitorFromWindow is a lookup, not a mode query. */
-static HMONITOR paced_monitor(void)
+/* tagpu: the store's vsync, and with it on the monitor the backstop sits
+   above -- the window's. MonitorFromWindow is a lookup, not a mode query; its
+   NULL (no window) is a monitor whose rate cannot be read, never vsync off. */
+static int paced_state(HMONITOR* mon)
 {
-    return tagpu_settings_vsync() ? MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) : NULL;
+    int vsync = tagpu_settings_vsync();
+
+    *mon = vsync ? MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) : NULL;
+    return vsync;
 }
 
 void fpsl_init()
 {
     int max_fps = 0;
-    HMONITOR mon;
 
     /* tagpu: the request is cleared BEFORE anything is read, so one made while
        this runs re-arms it rather than being lost. */
     InterlockedExchange(&s_reinit, 0);
-    mon = s_pacedMon = paced_monitor();
+    s_pacedVsync = paced_state(&s_pacedMon);
 
     g_fpsl.tick_length_ns = 0;
     g_fpsl.tick_length = 0;
@@ -44,24 +49,27 @@ void fpsl_init()
        waits for the vertical blank can never meet. The timer only waits when a
        frame ended sooner after the last one than its period, so a period
        shorter than the blank's is only met by jitter, and that wait ends before
-       the next blank. A timer AT the refresh rate is not that: Windows reports
-       59 Hz for a 59.94 Hz mode, and a 59 fps timer against it skips a blank
-       about once a second. `hz` is a whole number and the true rate lies within
-       one of it whether the driver rounds down, up or to nearest, so hz + 1 is
-       always the faster clock.
+       the next blank. A timer AT the refresh rate is not that: the rate is
+       reported as a whole number, rounded down -- wine reports 59 for the
+       reference setup's 4K mode, 533.25 MHz over 4000x2222 = 59.997 Hz
+       (MEASURED 2026-09-25), and the Windows AMD test card's display reads 59
+       too [INFERRED: a 59.94 Hz mode] -- and a 59 fps timer against it skips a
+       blank about once a second. The true rate lies within one of `hz` whether
+       the driver rounds down, up or to nearest, so hz + 1 is always the faster
+       clock.
        The backstop is there for a present that does NOT wait: the Windows AMD
        test card's FIFO swapchain presented 300 fps at 59 Hz (MEASURED
        2026-09-25, in play), and the GDI backend has no present mode at all.
-       Vsync off is no cap. A monitor whose rate cannot be read (0) leaves the
-       present to pace alone, because no backstop can be placed above an
-       unknown rate. */
-    if (!mon)
+       A monitor whose rate cannot be read -- wine's secondaries report their
+       mode as 0x0 (utils.c) -- is taken as the stock 60 Hz: on one that is
+       faster, vsync holds 61 fps rather than none. Vsync off is no cap. */
+    if (!s_pacedVsync)
     {
         tagpu_log("frame cap: none (vsync off)");
     }
     else
     {
-        int hz = util_monitor_refresh(mon);
+        int hz = util_monitor_refresh(s_pacedMon);
 
         if (hz > 0)
         {
@@ -71,8 +79,9 @@ void fpsl_init()
         }
         else
         {
-            tagpu_log("frame cap: vsync on and the monitor's rate cannot be read - "
-                      "the present paces alone");
+            max_fps = 60 + 1;
+            tagpu_logf("frame cap: vsync on, a %d fps backstop over an assumed 60 Hz "
+                       "(the monitor's rate cannot be read)", max_fps);
         }
     }
 
@@ -160,19 +169,24 @@ void fpsl_frame_start()
        backend, so the frame that sees a change -- the menu's toggle, the
        window dragged to another monitor -- is the one the backstop is
        re-derived for; the monitor's mode is read only then. */
-    if (paced_monitor() != s_pacedMon)
+    HMONITOR mon;
+
+    if (paced_state(&mon) != s_pacedVsync || mon != s_pacedMon)
         InterlockedExchange(&s_reinit, 1);
 
     if (s_reinit)
         fpsl_init();
 
-    if (g_fpsl.tick_length > 0)
+    if (g_fpsl.tick_length_ns > 0)
         g_fpsl.tick_start = timeGetTime();
 }
 
+/* tagpu: tick_length_ns, not the whole-millisecond tick_length, says whether
+   there is a cap: a backstop over a 1000 Hz monitor has a period under one
+   millisecond, and its timeout is at least one. */
 void fpsl_frame_end()
 {
-    if (g_fpsl.tick_length > 0)
+    if (g_fpsl.tick_length_ns > 0)
     {
         if (g_fpsl.htimer)
         {
@@ -185,7 +199,7 @@ void fpsl_frame_end()
             }
             else
             {
-                WaitForSingleObject(g_fpsl.htimer, g_fpsl.tick_length * 2);
+                WaitForSingleObject(g_fpsl.htimer, g_fpsl.tick_length * 2 + 1);
             }
 
             g_fpsl.due_time.QuadPart += g_fpsl.tick_length_ns;
