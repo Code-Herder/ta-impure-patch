@@ -2304,7 +2304,7 @@ argument, and the engine passes `main+0x14` (`add edx,0x14` at `0x451203` before
 | `0x461` | `0x44D` | the service provider's GUID, `DirectPlayCreate`'s first argument | `0x4CA5D0` |
 | `0x471` | `0x45D` | a `DPSESSIONDESC2` (0x50 bytes), its `dwFlags` at `main+0x475` and its `guidInstance` at `main+0x479` | see below |
 | `0x4D5` | `0x4C1` | the `IDirectPlay` from `DirectPlayCreate` | `0x4CA649` (zero), then `DirectPlayCreate` through its out pointer (`0x4CA667`); released and zeroed by `HAPINET_uninitmultiplay 0x4C9B70` (`0x4C9BC3`) |
-| `0x4D9` | `0x4C5` | **the interface every call goes through**: an `IDirectPlay3A*`, or an `IDirectPlay2A*` when a lobby launched the game | `0x4CA64B` (zero); `QueryInterface(IID_IDirectPlay3A)` at `0x4CA684`, the IID at `0x4FCD78` (`{133EFE41-32DC-11D0-9CFB-00A0C90A43CB}`, as in `dplay.h`); the lobby's `Connect` at `0x4C9B59` (`IDirectPlayLobby` slot 3, `+0xC`, whose out parameter is an `LPDIRECTPLAY2`); `Close` (`0x4C9B92`), `Release` and zeroed at `0x4C9BA1`. Every method the engine calls, `SetSessionDesc` (`+0x7C`) the last, is in `IDirectPlay2`'s table, where `GetSessionDesc` is slot 22 as in `IDirectPlay3`'s (`dplay.h` lines 561 and 677) |
+| `0x4D9` | `0x4C5` | **the interface every call goes through**: an `IDirectPlay3A*`, or an `IDirectPlay2A*` when a lobby launched the game | `0x4CA64B` (zero); `QueryInterface(IID_IDirectPlay3A)` at `0x4CA684`, the IID at `0x4FCD78` (`{133EFE41-32DC-11D0-9CFB-00A0C90A43CB}`, as in `dplay.h`); the lobby's `Connect` at `0x4C9B59` (`IDirectPlayLobby` slot 3, `+0xC`, whose out parameter is an `LPDIRECTPLAY2`); `Close` (`0x4C9B92`), `Release` and zeroed at `0x4C9BA1`. `IDirectPlay2`'s table has 32 slots, `SetSessionDesc` (`+0x7C`) the last, and `GetSessionDesc` is slot 22 in it as in `IDirectPlay3`'s (`dplay.h` lines 561 and 677). Two engine calls go past it into `IDirectPlay3`'s own slots: `EnumConnections` (`+0x8C`, `0x4CA30D`) and `InitializeConnection` (`+0x98`, `0x4CA5B3`). The first always runs on a 3A: its function `0x4CA250` (one caller, `0x44471C`, in the provider screen's setup `0x444580` right after its `uninitmultiplay` at `0x4446F4`) calls `initmultiplay` first (`0x4CA2C2`) and returns unless it succeeded, and `initmultiplay` stores the `QueryInterface(IID_IDirectPlay3A)` result here and succeeds only on `S_OK` (`0x4CA686..0x4CA68C`). The second's wrapper `0x4CA590` tests nothing; its one caller is `0x450DBB` in `0x450D80`, which is called from `0x426D20` (no direct reference to it found) and from the state machine `0x426E80` on `main+0x2BBE` (`0x427AEA`, `0x427BF7`; called at `0x496BB5`). Whether that path can run while a lobby's `IDirectPlay2A` is here was not traced: after a lobbied launch the engine's calls stay inside the 2A's table only if it cannot [OPEN] |
 | `0x4E1` | `0x4CD` | the `IDirectPlayLobby` | released and zeroed at `0x4C9BD9` |
 | `0x4E5` | `0x4D1` | the lobby's `DPLCONNECTION*`, 0 when not lobbied | freed and zeroed at `0x4C9C08` |
 | `0x4F1` | `0x4DD` | `dwMaxPlayers` for a new session (16, `0x4C9C31`) | |
@@ -2358,8 +2358,9 @@ session to whatever the descriptor holds.
 
 **The copy's GUID is read** by `SetSessionDesc` above; by `HAPINET_getgames 0x4C9E50`, which
 copies it into the descriptor it hands `EnumSessions` (`0x4C9EC1`), in the shell's session list;
-and through the getter `0x4CA9E0` (`add eax,0x465`) by `0x46C620` (called at ten sites, `0x41F897`
-… `0x464E28`), which passes it to `RIReport` of `reporter.dll` (the pointer `0x51E584`, resolved at
+and through the getter `0x4CA9E0` (`add eax,0x465`) by `0x46C620` (called at twelve sites,
+`0x41F897` … `0x46BC65`, and `0x4978D0` in the loader body, so this read also runs on the loader
+thread), which passes it to `RIReport` of `reporter.dll` (the pointer `0x51E584`, resolved at
 `0x46C07A` from the names at `0x507AF8` and `0x507AB8`) or to the stub `0x4CAA10` (`mov eax,1;
 ret 0x28`). The retail install ships no `reporter.dll`. The other accesses in the copy's range
 are other fields: `dwFlags` (`HAPINET_passwordrequired` at `0x4CA479` tests 0x400),
@@ -2415,7 +2416,8 @@ the wrapper's copy.
 **How it is read.** `wind_session_capture` calls `GetSessionDesc` through `main+0x4D9` (vtable
 `+0x58`, slot 22 of `IDirectPlay2A` and of `IDirectPlay3A` in `dplay.h`: `QueryInterface`,
 `AddRef`, `Release`, then `AddPlayerToGroup` … `GetPlayerName`, then `GetSessionDesc`), into a
-0x400-byte stack buffer or, when DirectPlay asks for more, a heap one. It keeps the `guidInstance`
+0x400-byte stack buffer or, when DirectPlay asks for more, a heap one, each zeroed first so an
+answer that writes less than a descriptor cannot pass on a previous frame's bytes. It keeps the `guidInstance`
 only when the answer's `dwSize` is 0x50 and the GUID is not null: Wine can answer `DP_OK` with a
 zeroed descriptor. It runs on the **game thread**, from the stub at `0x4982CA`:
 - `0x4982C3..0x4982CA` is `push ebp; push ebp; push 0x497C70; call 0x4B6B20`, the CRT's
@@ -2443,8 +2445,9 @@ for none: the first seat, 0 to 9, whose type `+0x73` (records at `main+0x1B63`, 
 is not 0 and whose PlayerInfo (the pointer at the record's `+0x27`) has bit 0 of `+0x97`. The
 load waits for it only when bit 1 of the local record's `+0x21` is set: `0x49723B` tests it and
 jumps to `0x4972BA` otherwise. The wait (`0x49724D..0x4972AB`) pumps the network through
-`0x453D40` (`0x49727D`) and sleeps 50 ms while `0x456850` answers 10, or while the LOCAL seat's
-PlayerInfo (`[record(main+0x2A42)+0x27]`, loaded at `0x49724D..0x497261`) reads `0xFF` at `+0x96`
+`0x453D40` (`0x49727D`) and sleeps 50 ms while `0x456850` answers 10, or while the controlled seat's
+PlayerInfo (`[record(main+0x2A42)+0x27]`, loaded at `0x49724D..0x497261`; `+0x2A42` is the
+controlled player by *The order-marker chain*) reads `0xFF` at `+0x96`
 or 0 at `+0x8F` (`0x49729A`, `0x4972A3`). From `0x4972BA` the load takes the map from the seat `0x456850`
 answered at `0x497213` (`0x4972D6`, `0x435A20`), which past a skipped wait can be 10, and the unit
 limit from the seat it answers at `0x4972DB` (`0x4972E8..0x4973B5`, skipped when it answers 10).
@@ -2456,7 +2459,7 @@ peers and with three.
 
 | site | what |
 |---|---|
-| `0x45156C` | sets it on the local player's PlayerInfo (`main+0x2A42`) |
+| `0x45156C` | sets it on the controlled player's PlayerInfo (`main+0x2A42`) |
 | `0x451334` | writes it on a new seat's PlayerInfo as the argument `bl` is (`xor bl,cl; and ebx,1; xor ebx,ecx`), set when the seat being added is the current host seat (`0x45126F..0x451334`) |
 | `0x452FF8` | sets it on the seat the host election chooses, the first whose ID equals the one the loop at `0x452F89` searches for, when the host leaves |
 | `0x45035D` | sets it the same way (the loop at `0x4502EE`), inside `0x450240`, which has no call, no jump and no absolute reference anywhere in the image: dead |
@@ -2508,9 +2511,11 @@ Notes on the rows:
   load's `SetSessionDesc` made.
 - **The wrapped `SetSessionDesc`, `f44b5ee`'s code**, two peers on Two Continents: both seeded
   from `{181E3FD8-DEA0-42FE-AAB8-33E00D9AB262}` and `0x4934CBDE`, seed `0xE5210DF9515CC70E`, and
-  on both the engine's copy agreed. At the seed the host had made 6 `SetSessionDesc` calls
-  (the battle room's and its load's) and the joiner 1 (its load's), none over another GUID and
-  none withheld; in play they read 7 and 2, still 0 and 0. None was seeded from the copy or
+  on both the engine's copy agreed. At the seed the host had made 6 `SetSessionDesc` calls and
+  the joiner 1, all from the battle room's handlers and the pump: the load's own call
+  (`0x497C0B`) comes after the seed, since `0x497581` → `0x4917D0` → `0x491903` precede it in the
+  loader body with no branch back. None was over another GUID and none withheld; in play they
+  read 7 and 2, the load's call added on each, still 0 and 0. None was seeded from the copy or
   the map alone, and `main+0x475` read `0x20` on both. The draws were not compared on this
   build: its change is to the `SetSessionDesc` alone, and the seed is the draws' only input.
 - **The killed host.** The host's `TotalA.exe` was killed (`kill -9`) 3 ms after its seed line,

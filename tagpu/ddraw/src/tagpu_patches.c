@@ -3,7 +3,8 @@
 
 #include <windows.h>
 #include <wincrypt.h>
-#include <dplay.h>          /* the engine's interface is IDirectPlay3A (IID at 0x4FCD78) */
+#include <dplay.h>          /* the engine's interface: IDirectPlay3A (IID at 0x4FCD78), or
+                               IDirectPlay2A when lobbied (main+0x4D9) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7158,10 +7159,13 @@ static int wind_dplay_guid(IDirectPlay2A* dp, GUID* out, HRESULT* hr, DWORD* dwS
     unsigned char* buf = local.b;
     DWORD size = sizeof local;
     int ok = 0;
+    /* zeroed, as the heap buffer is: an answer that writes less than a descriptor leaves zeros,
+       which the dwSize and GUID tests refuse, never a previous frame's bytes */
+    memset(&local, 0, sizeof local);
     *dwSize = 0;
     *hr = IDirectPlay2_GetSessionDesc(dp, buf, &size);
     if (*hr == DPERR_BUFFERTOOSMALL && size > sizeof local) {
-        buf = (unsigned char*)HeapAlloc(GetProcessHeap(), 0, size);
+        buf = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
         *hr = buf ? IDirectPlay2_GetSessionDesc(dp, buf, &size) : E_OUTOFMEMORY;
     }
     if (SUCCEEDED(*hr)) {
