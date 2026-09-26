@@ -284,8 +284,8 @@ The plan as written:
 from B1's tip at the time), awaiting its review; not landed.** What was built, and where it differs
 from the plan below:
 
-- **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (six and three
-  rows: 170 sites in the raised build and 44 in the stock-limits build, both MEASURED at launch),
+- **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (nine and three
+  rows: 173 sites in the raised build and 47 in the stock-limits build, both MEASURED at launch),
   and the three local fixes, each checked and skipped alone.
   The engine map's *The wind*, *A yardmap parsed past its string*, *The saved-game loader's order
   fallback*, *The stockpile bar's divide* and *A range circle of radius 1* have the disassembly.
@@ -310,15 +310,25 @@ from the plan below:
   network at `0x49727D` while the game thread pumps at `0x49852E`, and it calls `SetSessionDesc`
   at `0x497C0B`), and the thread's creation orders the capture before the seed. The engine map's
   *The session, not the host* has the disassembly.
-- **The capture closes the one engine write that could move the GUID.** Every load ends with a
-  `SetSessionDesc` of the engine's whole session copy (`0x497BFF`, `0x497C0B` → `0x451180` →
-  `0x4C9903`), and the host makes more in the battle room; an implementation that takes
-  `guidInstance` from it (Wine's copies the whole descriptor) moves the session to the copy's
-  GUID, which after a lobbied launch is the lobby's descriptor (`0x4C9B4F`). Once the capture has
-  a valid GUID it writes it into the copy (`main+0x479`) where the copy differs, counted, so every
-  later `SetSessionDesc` passes the GUID DirectPlay already holds. The copy's other readers (the
-  session list's `EnumSessions` descriptor, `reporter.dll`'s `RIReport`, which the retail install
-  does not ship) see a change only where it differed.
+- **Added: the engine's one `SetSessionDesc` passes the GUID DirectPlay holds.** It is the one
+  engine call that could move the GUID: it hands DirectPlay the engine's whole session copy, and an
+  implementation that takes `guidInstance` from it (Wine's copies the whole descriptor) moves the
+  session to the copy's GUID, which after a lobbied launch is the lobby's descriptor
+  (`0x4C9B4F`). The census found one site: of the six calls through a vtable's `+0x7C` in the
+  image, `0x4C9903` in `HAPINET_updategameinfo 0x4C9890` is the only one through `main+0x4D9` and
+  the only one with three arguments (the other five, `0x47C0CB`, `0x4B4FB8`, `0x4B5735`,
+  `0x4B6069`, `0x4B60E1`, push two). `0x4C9890` is reached from `0x451180` — the battle room's
+  handlers and every load's end on the loader thread (`0x497BFF`, `0x497C0B`) — and from the
+  pump (`0x454135`). A `jmp` over the call's nine bytes (`0x4C98FD`) goes to a wrapper that calls
+  `GetSessionDesc` first, validated as the capture validates it, and makes the call with a copy of
+  the engine's descriptor carrying that GUID, counted when the engine's differed; with no valid
+  answer it makes no call and returns the refusal, which the engine takes as a failed call,
+  counted. So no `SetSessionDesc` the engine makes, in the battle room or the load, lobbied or
+  not, can move the session, and the engine's copy is never written. This replaces the capture's
+  write of DirectPlay's GUID into the copy, which covered only the calls after the capture and
+  left a lobbied host's battle-room calls open; the capture stays the seed's source. `0x4C98FD`
+  is also the site of TADR's `NullLpszPasswordInUpdateGameInfo` (not ported, the evidence's §3):
+  a port of it now writes `lpszPassword` in the wrapper's copy.
 - **DirectPlay's answer is validated, and the engine's copy is the fallback.** The answer is used
   only when its `dwSize` is 0x50 and its GUID is not null (Wine can answer `DP_OK` with a zeroed
   descriptor). Otherwise the seed takes the engine's copy `main+0x479` when it is not null (it held
@@ -341,10 +351,13 @@ from the plan below:
   next 1350, speed 1627, heading `0xB693`; three peers on Town & Country logged the same GUID and
   seed, the host was killed 3 ms after its own seed while the joiners loaded, and both joiners went
   into play reading next 1530, speed 2834, heading `0x0616` at GameTime 1131 and 1137. With the
-  validation and the copy alignment, two peers on Two Continents logged the same GUID and seed and
-  read next 420, speed 433, heading `0x355C`; both answers passed, no copy was set, and none was
-  seeded from the copy or the map alone. On every peer of the three games the engine's copy
-  `main+0x479` held the GUID `GetSessionDesc` returned. A skirmish reads game mode 2 and
+  validation, two peers on Two Continents logged the same GUID and seed and read next 420, speed
+  433, heading `0x355C`; both answers passed and none was seeded from the copy or the map alone.
+  With the `SetSessionDesc` wrapper, two peers on Two Continents logged the same GUID
+  (`{181E3FD8-DEA0-42FE-AAB8-33E00D9AB262}`) and seed (`0xE5210DF9515CC70E`); the host made 6
+  calls before its seed and 7 by play, the joiner 1 and 2, none over another GUID and none
+  withheld. On every peer of the four games the engine's copy `main+0x479` held the GUID
+  `GetSessionDesc` returned. A skirmish reads game mode 2 and
   takes the counter path. The yardmaps' 2440 retail cells are
   byte-identical to the previous build's. The two scratch structures read `2f2f31313100002b2b…`
   from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
@@ -356,14 +369,11 @@ from the plan below:
   (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
   `DPSESSION_KEEPALIVE` when `createnewgame` makes them; a lobbied one takes the lobby's flags),
   and a host cannot quit through the UI during the load. The departure argument rests on the
-  construction: the seed reads nothing a departure writes. **A lobbied launch was not run.** What
-  the construction covers there: the seed reads DirectPlay's own record, validated; the copy
-  alignment keeps every `SetSessionDesc` after the capture, the load's own included, from moving
-  the session. What it does not cover: the `SetSessionDesc` calls a lobbied host makes in the
-  battle room, before any capture, under an implementation that takes `guidInstance` from them —
-  Wine's builtin DirectPlay, the one known to, cannot host a session (networking-lobbies.md), and
-  Microsoft's handling of the field in `SetSessionDesc` was not established here. The alignment
-  was measured only at 0 writes.
+  construction: the seed reads nothing a departure writes. **A lobbied launch was not run.** The
+  construction covers it: the seed reads DirectPlay's own record, validated, and every
+  `SetSessionDesc` the engine makes, the battle room's included, goes through the one site the
+  wrapper replaces. The wrapper's replacement and withholding were measured only at 0: nothing
+  differed and nothing was withheld.
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
   before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,
