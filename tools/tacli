@@ -937,9 +937,9 @@ def apply_prefix_settings(inst: Instance):
 # because every local prefix's user.reg is one inode (clone_prefix).
 #
 # THE STORE IS THE DLL'S WHILE A GAME OF THE INSTANCE RUNS: it rewrites the file on every
-# change the game makes. tacli writes it only after checking that none runs, and a local
-# instance's only under regstore_lock, which orders tacli against tacli: a check and the
-# write it permits cannot have another tacli's seed, write or game start between them.
+# change the game makes. tacli writes it only after checking that none runs, and only
+# under regstore_lock, which orders tacli against tacli: a check and the write it permits
+# cannot have another tacli's seed, write or game start between them.
 
 def regstore_path(inst: Instance):
     """The store: a local Path, or a taremote.RemotePath in a remote test folder."""
@@ -950,16 +950,21 @@ REGSTORE_LOCK = "tacli.lock"
 
 
 def regstore_lock(inst: Instance):
-    """Take the local instance's store lock: an exclusive flock on `tacli-state/tacli.lock`,
-    held until the returned file is closed or this process ends (a `die` included).
+    """Take the instance's store lock: an exclusive flock on `tacli.lock`, held until the
+    returned file is closed or this process ends (a `die` included). A local instance's
+    is in `tacli-state/` beside its store; a remote instance's in its metadata folder
+    (INSTANCES/<name>/), on this machine, since flock does not cross SSH -- so it orders
+    the tacli processes of this machine, and a tacli elsewhere reaching the same test
+    folder is not ordered by it.
 
     It covers tacli against tacli, across every sequence that reads the store's state
     and then acts on it: the seed (none there -> make one), a write (no game runs ->
-    replace the file), and a launch from its first write until the DLL's run says it has
-    the store. From then the file is the DLL's (regstore_update refuses while the game
-    runs). flock is per open file, so a holder never takes it a second time: the verbs
-    take it, the functions they call assume it."""
-    d = inst.gamedir / taremote.STATE_DIR
+    replace the file), and a launch from the check that no game runs until the DLL's run
+    says it has the store. From then the file is the DLL's (regstore_update refuses while
+    a local game runs; a remote launch writes nothing after its task starts). flock is
+    per open file, so a holder never takes it a second time: the verbs take it, the
+    functions they call assume it."""
+    d = inst.dir if inst.remote else inst.gamedir / taremote.STATE_DIR
     d.mkdir(parents=True, exist_ok=True)
     f = open(d / REGSTORE_LOCK, "a")
     fcntl.flock(f, fcntl.LOCK_EX)
@@ -5352,6 +5357,9 @@ def _run_registry_lines(inst: Instance, old):
     return lines
 
 
+# The DLL's line for a run it did not put in test mode: the registry is the real one.
+REGISTRY_REAL = "registry: real "
+
 # The store's per-value record (`registry: read …`, first seen), which says nothing about
 # whether the run was refused.
 _REGISTRY_TRACE = ("registry: read ", "registry: write ", "registry: open ", "registry: create ")
@@ -5370,27 +5378,31 @@ def _registry_refusal(lines) -> "str | None":
 
 def _await_registry_line(inst: Instance, old, deadline: float, timeout: float,
                          registry: str) -> str:
-    """Wait for the DLL's account of the run it began after `old`, and return its first
-    registry line once the run has said the store is served AND the -r switch is closed.
-    Anything else ends the launch: a refusal (the game is not run), a first line that is
-    not test mode (the game may be running on `registry`), and neither by `deadline`. A
-    refused run has written its log header and can still be seen as a process, so
-    neither says the store is served."""
+    """Wait for the DLL's account of the run it began after `old`, and return its served
+    line once the run has said the store is served AND the -r switch is closed. Anything
+    else ends the launch: a refusal (the game is not run), a `registry: real` line (the
+    game may be running on `registry`), and neither by `deadline`. Any other line is
+    polled past: the store logs its reasons (`… does not parse`) in writes of their own
+    before the refusal they lead to. A refused run has written its log header and can
+    still be seen as a process, so neither says the store is served."""
     while True:
-        lines = _run_registry_lines(inst, old)
+        lines = _run_registry_lines(inst, old) or []
         refusal = _registry_refusal(lines)
         if refusal:
             die(f"{inst.name}: the DLL did not run the game: {refusal}")
-        if lines and not lines[0].startswith(taremote.TEST_MODE_SERVED):
-            die(f"{inst.name}: the DLL's run did not enter test mode ({lines[0]}); the game "
+        real = next((ln for ln in lines if ln.startswith(REGISTRY_REAL)), None)
+        if real:
+            die(f"{inst.name}: the DLL's run did not enter test mode ({real}); the game "
                 f"may be using {registry}: `tacli stop {inst.name}`")
-        if lines and any(taremote.TEST_MODE_R_CLOSED in ln for ln in lines):
-            return lines[0]
+        served = next((ln for ln in lines if ln.startswith(taremote.TEST_MODE_SERVED)), None)
+        if served and any(taremote.TEST_MODE_R_CLOSED in ln for ln in lines):
+            return served
         if time.time() >= deadline:
             key = _log_key(inst)
             run = key[0] if key is not None and key != old else "(none begun)"
-            said = (f"said the store is served but not that the -r switch is closed"
-                    if lines else "logged no registry line")
+            said = ("said the store is served but not that the -r switch is closed" if served
+                    else "logged no decision on the store" if lines
+                    else "logged no registry line")
             die(f"{inst.name}: the DLL's run {run} {said} in {timeout:g}s, so nothing says "
                 f"the game runs on the store alone: `tacli stop {inst.name}`")
         time.sleep(0.5)
@@ -5434,6 +5446,9 @@ def _remote_launch(args) -> dict:
         if not TA_ARG_RX.fullmatch(a):
             die(f"--arg {a!r}: a TotalA.exe switch is letters, digits and . _ = : here")
     notes = []
+    # Held from the check that no game runs until the DLL's run says it has the store, so
+    # no other launch of this instance from this machine starts a game in between.
+    store_lock = regstore_lock(inst)
     meta = inst.meta()
     if meta.get("state") == "adding":
         die(f"{args.name}: `remote add` did not finish; `tacli rm {args.name}` removes what "
@@ -5537,6 +5552,7 @@ def _remote_launch(args) -> dict:
                 + f"; {_task_words(state, result)}")
         time.sleep(0.5)
     _await_registry_line(inst, old, deadline, args.timeout, "the remote machine's registry")
+    store_lock.close()
     try:
         prio = rem.priority(pid)
     except taremote.RemoteError:
@@ -5643,6 +5659,9 @@ def cmd_remote_add(args):
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "remote": spec,
             "gamedir": rem.folder, "shield": True, "defaults": False, "sound": False}
     inst.save_meta(meta)
+    # Held until the store is written and the metadata no longer says `adding`: a launch
+    # waits for it, then reads the finished instance.
+    store_lock = regstore_lock(inst)
     t0 = time.time()
     try:
         rem.begin_folder(args.name)
@@ -5660,6 +5679,7 @@ def cmd_remote_add(args):
                       "seconds": round(time.time() - t0, 1)}
     meta["registry_seed"] = {"keys": len(seed.keys()), "values": nvals}
     inst.save_meta(meta)
+    store_lock.close()
     out(meta, args.json,
         human=f"added {args.name}: copied {copied['files']} files "
               f"({copied['bytes'] >> 20} MB, as the player's folder holds: "

@@ -19,6 +19,7 @@ import io
 import json
 import ntpath
 import re
+import shutil
 import tempfile
 import types
 import unittest
@@ -1659,12 +1660,13 @@ class FakeWindows(taremote.Session):
         self.reparse = set()                    # folders that are junctions
         self.robocopy_fails = False
         self.task_error = None                  # the task starts no game: this LastTaskResult
-        self.game_exits = False                 # the game exits at once, code 1
+        self.game_exits = False                 # the game exits at once, code 1, its log
+                                                # written (a refused run's is its refusal)
         # the DLL's registry line after the run's header; None: it logs none
         self.dll_says = ("registry: TEST MODE, entered by the -xtacli-test token and the "
-                         "tacli-state folder -- TotalA.exe's registry is tacli-state\\registry.txt: "
-                         "3 keys, 79 values loaded; hooks: TotalA.exe 9 of 9 registry imports, "
-                         "win32.dll 2 of 2")
+                         "tacli-state folder beside TotalA.exe -- its registry is "
+                         "tacli-state\\registry.txt: 3 keys, 79 values loaded; hooks: TotalA.exe "
+                         "9 of 9 registry imports, win32.dll 2 of 2")
         # the -r closure's line, which a served run logs next (tagpu_patches.c); None: none
         self.dll_then = R_CLOSED
         self.vanish_after_listing = None        # a log file deleted right after a listing
@@ -1791,14 +1793,14 @@ class FakeWindows(taremote.Session):
             exe = task["action"]["execute"]
             pid, self.next_pid = self.next_pid, self.next_pid + 1
             task.update(state="Running", result=taremote.TASK_RUNNING, pid=pid)
-            if self.game_exits:
-                task.update(state="Ready", result=1)
-                return []
-            self.procs.append((pid, exe))
             self.put(ntpath.dirname(exe) + r"\log\tagpu.log",
                      f"log: run R{pid} part 1 of tagpu.log, started\n".encode()
                      + b"".join(ln.encode() + b"\n" for ln in (self.dll_says, self.dll_then)
                                 if ln is not None))
+            if self.game_exits:
+                task.update(state="Ready", result=1)
+                return []
+            self.procs.append((pid, exe))
             return []
         if st.startswith("$t = Get-ScheduledTask") and "Unregister-ScheduledTask" in st:
             self.tasks.pop(after("-TaskName "), None)
@@ -2453,6 +2455,30 @@ class RemoteRouting(unittest.TestCase):
         self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), TEST_DLL)
         self.assertFalse(any("WriteAllBytes(" in st for st in self.win.sent))
 
+    def test_the_launch_holds_the_instance_lock_from_the_game_check_to_the_task(self):
+        # flock does not cross SSH: the lock is the instance's metadata folder's, on this
+        # machine, taken before the check that no game runs and held past the task's start
+        taken = []
+
+        def try_lock(*_):
+            with open(tacli.INSTANCES / "r1" / "tacli.lock", "a") as f:
+                try:
+                    tacli.fcntl.flock(f, tacli.fcntl.LOCK_EX | tacli.fcntl.LOCK_NB)
+                    taken.append(True)
+                except BlockingIOError:
+                    taken.append(False)
+        for name in ("procs", "task_start"):
+            real = getattr(taremote.Remote, name)
+            self.addCleanup(setattr, taremote.Remote, name, real)
+            setattr(taremote.Remote, name,
+                    lambda rem, *a, _real=real: (try_lock(), _real(rem, *a))[1])
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 0, err)
+        self.assertGreaterEqual(len(taken), 2)      # the check, the start, the polls
+        self.assertFalse(any(taken), taken)
+        try_lock()                                  # and released once the DLL has the store
+        self.assertEqual(taken[-1], True)
+
     def test_the_store_is_put_in_place_without_ever_being_missing(self):
         # Move-Item -Force deletes the target and then moves: a launch in between would
         # find no store. Replace swaps the file in; the name never goes free.
@@ -2465,7 +2491,8 @@ class RemoteRouting(unittest.TestCase):
 
     def test_launch_fails_when_the_dll_refuses_its_run(self):
         # the refused run wrote its header, and its dying process can still be seen
-        self.win.dll_says = ("registry: TEST MODE, entered by the -xtacli-test token, but "
+        self.win.dll_says = ("registry: TEST MODE, entered by the -xtacli-test token and the "
+                             "tacli-state folder beside TotalA.exe, but "
                              "tacli-state\\registry.txt did not load whole (the line above "
                              "says why): the game is not run")
         code, out, err = self.main("launch", "r1", "--keep-dll")
@@ -2594,6 +2621,19 @@ class RemoteRouting(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("no TotalA.exe from the test folder is running", err)
         self.assertIn("is Ready, last result 0x00000001", err)
+
+    def test_a_game_the_dll_ended_at_attach_is_reported_by_its_refusal(self):
+        # gone before tacli saw a process: the task's exit code, and the log says why
+        self.use_fake_clock()
+        self.win.game_exits = True
+        self.win.dll_says = ("registry: TEST MODE, entered by the -xtacli-test token and the "
+                             "tacli-state folder beside TotalA.exe, but there is no memory for "
+                             "the store: the game is not run")
+        self.win.dll_then = None
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("the DLL did not run the game: " + self.win.dll_says, err)
+        self.assertNotIn("last result", err)
 
     def test_stop_ends_the_game_and_writes_no_registry(self):
         self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
@@ -2980,25 +3020,32 @@ class FakeGame:
         dll = (gamedir / "ddraw.dll").read_bytes()
         lines = []
         if tacli.dll_serves_regstore(dll):
+            # tagpu_regstore.c's order: no signal is real mode; the folder alone is refused
+            # for its missing token before anything looks for a store; then the store
             token = taremote.TEST_TOKEN in argv
             folder = (gamedir / "tacli-state").is_dir()
             store = (gamedir / "tacli-state" / "registry.txt").exists()
+            by = ("the -xtacli-test token and the tacli-state folder beside TotalA.exe"
+                  if token and folder else "the -xtacli-test token on TotalA.exe's command line"
+                  if token else "the tacli-state folder beside TotalA.exe")
             if self.says == "real" or not (token or folder):
                 lines = ["registry: real (no -xtacli-test token, and no tacli-state folder "
                          "beside TotalA.exe)"]
-            elif self.says == "refused" or not store:
-                lines = ["registry: TEST MODE, entered by the -xtacli-test token, but there is "
-                         "no tacli-state\\registry.txt beside TotalA.exe: the game is not run"]
-            elif not token:              # tagpu_regstore.c: the folder alone is refused
-                lines = ["registry: TEST MODE, entered by the tacli-state folder beside "
-                         "TotalA.exe, but no -xtacli-test token on the command line: a launch by "
-                         "a tacli from before the per-instance store, or by hand -- launch it "
-                         "with the current tacli: the game is not run"]
+            elif not token:
+                lines = [f"registry: TEST MODE, entered by {by}, but no -xtacli-test token on "
+                         f"the command line: a launch by a tacli from before the per-instance "
+                         f"store, or by hand -- launch it with the current tacli: the game is "
+                         f"not run"]
+            elif not store:
+                lines = [f"registry: TEST MODE, entered by {by}, but there is no "
+                         f"tacli-state\\registry.txt beside TotalA.exe: the game is not run"]
+            elif self.says == "refused":
+                lines = [f"registry: TEST MODE, entered by {by}, but tacli-state\\registry.txt "
+                         f"did not load whole (the line above says why): the game is not run"]
             else:
-                lines = ["registry: TEST MODE, entered by the -xtacli-test token and the "
-                         "tacli-state folder -- TotalA.exe's registry is tacli-state\\registry.txt: "
-                         "3 keys, 12 values loaded; hooks: TotalA.exe 9 of 9 registry imports, "
-                         "win32.dll 2 of 2"]
+                lines = [f"registry: TEST MODE, entered by {by} -- its registry is "
+                         f"tacli-state\\registry.txt: 3 keys, 12 values loaded; hooks: "
+                         f"TotalA.exe 9 of 9 registry imports, win32.dll 2 of 2"]
                 if self.then:
                     lines.append(self.then)
             lines = self.before + lines
@@ -3342,9 +3389,34 @@ class LocalRegistry(unittest.TestCase):
         code, _, err = self.main("launch", "l1", "--no-restore-pointer")
         self.assertEqual(code, 1)
         self.assertIn("the DLL did not run the game: registry: TEST MODE, entered by the "
-                      "-xtacli-test token and the tacli-state folder", err)
+                      "-xtacli-test token and the tacli-state folder beside TotalA.exe", err)
         self.assertIn(" | " + R_REFUSED, err)
         self.assertNotIn("before showing a window", err)
+
+    def test_the_fake_game_refuses_in_the_dlls_order(self):
+        # tagpu_regstore_init: a folder without the token is refused for the token whether
+        # or not a store is there (a tacli from before the store launching by hand); the
+        # token without a folder, for the store it cannot find
+        self.assertEqual(self.main("create", "l1")[0], 0)
+        inst = tacli.Instance("l1")
+        state = inst.gamedir / "tacli-state"
+
+        def refusal(*token):
+            self.game(["wine", "TotalA.exe", *token], cwd=str(inst.gamedir))
+            return tacli._registry_refusal(tacli._run_registry_lines(inst, None))
+
+        no_token = ("entered by the tacli-state folder beside TotalA.exe, but no -xtacli-test "
+                    "token on the command line")
+        self.assertIn(no_token, refusal())
+        (state / "registry.txt").unlink()
+        self.assertIn(no_token, refusal())
+        self.assertIn("entered by the -xtacli-test token and the tacli-state folder beside "
+                      "TotalA.exe, but there is no tacli-state\\registry.txt beside TotalA.exe",
+                      refusal(taremote.TEST_TOKEN))
+        shutil.rmtree(state)
+        self.assertIn("entered by the -xtacli-test token on TotalA.exe's command line, but there "
+                      "is no tacli-state\\registry.txt", refusal(taremote.TEST_TOKEN))
+        self.assertIsNone(refusal())
 
     # -- the store is the DLL's while the game runs
     def test_nothing_writes_the_store_while_the_game_runs(self):
@@ -3396,6 +3468,70 @@ class LocalRegistry(unittest.TestCase):
         self.assertIn({"key": "", "name": "gamespeed", "type": 4, "value": 20,
                        "shown": "dword 20"}, rows)
         self.assertEqual(self.hive.read_text(), HIVE)
+
+
+class AwaitRegistryLine(unittest.TestCase):
+    """The wait for the DLL's word reads the log as the DLL writes it, a line at a time:
+    only `registry: real` says the run is not in test mode, and the store's reasons,
+    logged before the refusal they lead to, are polled past."""
+
+    SERVED = ("registry: TEST MODE, entered by the -xtacli-test token and the tacli-state "
+              "folder beside TotalA.exe -- its registry is tacli-state\\registry.txt: 3 keys, "
+              "79 values loaded; hooks: TotalA.exe 9 of 9 registry imports, win32.dll 2 of 2")
+    REASON = "registry: tacli-state\\registry.txt line 3 does not parse"
+    REFUSED = ("registry: TEST MODE, entered by the -xtacli-test token and the tacli-state "
+               "folder beside TotalA.exe, but tacli-state\\registry.txt did not load whole "
+               "(the line above says why): the game is not run")
+
+    def wait(self, *polls, timeout=5.0):
+        """Run _await_registry_line against a log that reads as `polls`, one per poll,
+        the last repeated; (exit code, stderr, the value returned, polls made)."""
+        clock, seen = FakeClock(), []
+        for name in ("time", "sleep"):
+            self.addCleanup(setattr, tacli.time, name, getattr(tacli.time, name))
+            setattr(tacli.time, name, getattr(clock, name))
+
+        def lines(inst, old):
+            seen.append(1)
+            return polls[min(len(seen), len(polls)) - 1]
+        self.addCleanup(setattr, tacli, "_run_registry_lines", tacli._run_registry_lines)
+        tacli._run_registry_lines = lines
+        self.addCleanup(setattr, tacli, "_log_key", tacli._log_key)
+        tacli._log_key = lambda inst: ("R7", 0)
+        inst = types.SimpleNamespace(name="l1")
+        got = None
+        with contextlib.redirect_stderr(io.StringIO()) as se:
+            try:
+                got = tacli._await_registry_line(inst, None, clock.time() + timeout, timeout,
+                                                 "the registry every instance shares")
+                code = 0
+            except SystemExit as e:
+                code = e.code
+        return code, se.getvalue(), got, len(seen)
+
+    def test_a_reason_before_its_refusal_is_polled_past(self):
+        code, err, _, n = self.wait(None, [self.REASON], [self.REASON],
+                                    [self.REASON, self.REFUSED])
+        self.assertEqual(code, 1)
+        self.assertEqual(n, 4)
+        self.assertIn("the DLL did not run the game: " + self.REASON + " | " + self.REFUSED, err)
+        self.assertNotIn("did not enter test mode", err)
+
+    def test_only_a_real_line_says_the_run_is_not_in_test_mode(self):
+        real = "registry: real (no -xtacli-test token, and no tacli-state folder beside TotalA.exe)"
+        code, err, _, _ = self.wait([real])
+        self.assertEqual(code, 1)
+        self.assertIn(f"did not enter test mode ({real}); the game may be using the registry "
+                      f"every instance shares", err)
+
+    def test_the_served_line_is_returned_once_minus_r_is_closed(self):
+        code, _, got, n = self.wait([self.SERVED], [self.SERVED, R_CLOSED])
+        self.assertEqual((code, got, n), (0, self.SERVED, 2))
+
+    def test_reasons_with_no_decision_by_the_deadline_end_the_launch(self):
+        code, err, _, _ = self.wait([self.REASON])
+        self.assertEqual(code, 1)
+        self.assertIn("the DLL's run R7 logged no decision on the store in 5s", err)
 
 
 class AbRefusals(unittest.TestCase):
