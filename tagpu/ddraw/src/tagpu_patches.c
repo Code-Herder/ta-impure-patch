@@ -5599,7 +5599,7 @@ static int fix_weapon_keys(void)
      ebx is dead: stock writes it at 0x49D700.
    - 0x4043D8, the capture's cost (`mov cx,[edx+0xB8]`, edx the target): eax = 10 + L,
      on at 0x4043EC, `imul eax,edi`. The stock path keeps eax, 0x66666667.
-   - 0x43869D, a unit reclaim's time (`mov cx,[eax+0xB8]`, eax the reclaimer, dx its workertime
+   - 0x43869D, a unit reclaim's step (`mov cx,[eax+0xB8]`, eax the reclaimer, dx its workertime
    from 0x438694): edi = the workertime, edx = L + 1, on at 0x4386B9, `imul edi,edx`; nothing
      from there reads eax or ecx before writing them.
    No branch lands inside any of the seven (rel8/rel32 scan of .text and every dword of the
@@ -5704,7 +5704,7 @@ static int fix_veterancy(void)
     /* 0x43869D: pushad; push eax; call reclaim; cmp eax,-1; je stock; mov [esp+0x1C],eax;
        popad; mov edi,edx; mov edx,eax; jmp 0x4386B9; stock: popad; mov cx,[eax+0xB8];
        jmp 0x4386A4 */
-    p = vet_call(cm, 0x50, (const void*)tagpu_datakeys_vet_reclaim_time);
+    p = vet_call(cm, 0x50, (const void*)tagpu_datakeys_vet_reclaim_step);
     *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF;
     *p++ = 0x74; j = p++;
     *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
@@ -5727,7 +5727,7 @@ static int fix_veterancy(void)
     VET_SITE(0x0048A324u, 14, lead,   cl, "veterancy: target lead");
     VET_SITE(0x0049D6EAu, 5,  aim,    ca, "veterancy: the spread");
     VET_SITE(0x004043D8u, 7,  cost,   ck, "veterancy: the capture's cost");
-    VET_SITE(0x0043869Du, 7,  rcl,    cm, "veterancy: a unit reclaim's time");
+    VET_SITE(0x0043869Du, 7,  rcl,    cm, "veterancy: a unit reclaim's step");
 #undef VET_SITE
     return FIX_TABLE;
 }
@@ -7525,7 +7525,7 @@ static void patch_engine_defects(void)
               "enginefix: veterancy -- VeterancyThresholds, VeterancyAccuracyBuffRate (the unit "
               "keys 0x42D2E0 0x42BF40 0x42BF97; damage taken 0x489BFA; dealt 0x499DB5; reload "
               "0x49E468; lead 0x48A324; spread 0x49D6EA; the capture's cost 0x4043D8; a unit "
-              "reclaim's time 0x43869D) %s",
+              "reclaim's step 0x43869D) %s",
               fix_state(vet));
     b[sizeof b - 1] = 0;
     plog(b);

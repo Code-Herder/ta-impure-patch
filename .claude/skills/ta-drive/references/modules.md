@@ -130,6 +130,10 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   `+0x108` (and 1.0 in `+0x104`) whatever it has taken, so read a unit's HP where it is owner 0;
   the firer's peer computes a hit and sends it to the owner as a `0x0B`. Tab opens the options
   panel and does not pause a network game.
+- **Kill counts differ between peers.** A kill of another peer's unit is counted on the victim's
+  owner's copy of the killer; the killer's own copy does not change. Read a unit's kills where it
+  is owner 0 and expect another peer to disagree. A scenario's `kills` is set only on the peer that
+  applies it.
 - **Stale hits: a hit names its victim by slot.** To make one land on a reused slot, arm
   `dmgdelay.on=30` on every peer (the attacker's are the hits delayed, and a receiver counts
   `young` only while armed), apply
@@ -259,6 +263,31 @@ lists every one. Four scenarios, each pairing a keyed unit with its control:
 | `c2-order-cursor` | the right-click's order and the attack cursor per key | select the player's tower, park the pointer on a target, `click --right`; a sonar sees the submerged target |
 | `c2-surfacefire` | Escalation's two `surfacefire` shapes | `order --unit N --expect WKCOMSF blast unit T` for the D-guns, `attack unit` for the subs; `switches <i> radar=on` for sight |
 | `c2-nomapalert` | `nomapweaponalert` under keyed hail | `--map "WK Hail C"` gives the same hail without the key |
+
+### Veterancy and the four stock defects beside it
+
+The same fixture carries veterancy's types: `VTLLT0` (no key), `VTLLT1` (a level a kill),
+`VTRATE0`, `VTBAD1..8` (each refused at load, with its reason in `log -g datakeys`), the unarmed
+`VTTGT0/1`, `VTCOM0/1` and `VTKROG0/1`, `B7HUGE` (a laser past the HP word), and the map
+`WK Hail T` (targetable hail). A scenario sets a unit's kill count with `"kills"`.
+
+| scenario | what it shows | how it is driven |
+|---|---|---|
+| `c3-veterancy` | every effect beside its stock control: dealt, taken, reload, lead, spread, the capture's cost, a unit reclaim's step | runs by itself; read HP over time |
+| `c3-kill-lines` | "10 kills - Vet10" and the three other lines | hover each tower (`keys <i> pmove:X,Y`) and crop the bottom bar |
+| `b7-word-outright` | a hit past the HP word; kill-outright on veterans | self-destruct: `click` the unit, then `keys <i> mouse:600,500 ctrl+d` |
+| `b7-dgun` | the retail D-gun past the HP word | `order --unit N --expect ARMCOM --expect-target ARMMSTOR blast unit T` |
+| `b7-radar-hail` | the radar's owner test under targetable hail | launch with `--los 1 --mapping 0`: mapped with permanent sight, nothing is out of sight |
+| `b7-mp-host`, `b7-mp-join` | one meteor, one hit, on two peers | `mp_lobby.sh --map 'WK Hail C'`, then apply one file on each peer |
+
+- **Read HP and kills with `peek`**: `*0x511DE8+0x14357` is the unit array; a unit's slot is
+  `engine_index · 0x118` into it, its HP the signed word `+0x108`, its kills the word `+0xB8`. The
+  array moves at a load: re-read it.
+- **`stance: hold` is a movement stance.** A unit on hold still fires at what comes in range, so a
+  victim that must not shoot back is one of the unarmed `VT…` types.
+- **The engine prints a kill line only for a unit that has fired** (`+0x110` bit 31) and has kills.
+- **Log lines**: `veterancy: …` and `enginefix: …` count their events at powers of two; at load,
+  each keyed type logs its level count, each malformed key its reason.
 
 - **`tacli log <i> -g "weapon keys"`** shows each decision's event at its 1st, 2nd, 4th, 8th…
   occurrence, and every keyed weapon as it loads.

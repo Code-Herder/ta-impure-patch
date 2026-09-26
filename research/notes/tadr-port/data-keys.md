@@ -4,8 +4,8 @@
 
 Section C brings the weapon and unit keys that TADR taught the engine to read into our stack, as
 our own code, over four landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**,
-in a grill that followed [the evidence pass](data-keys-evidence.md). **C1 and C2 have landed**; C3 and
-C4 are not. The rules shared by every group are in
+in a grill that followed [the evidence pass](data-keys-evidence.md). **C1, C2 and C3 have landed**;
+C4 has not. The rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 The keys are not a blank slate. TA: Escalation, the largest live mod, ships TADR's DLL and uses
@@ -117,11 +117,13 @@ kept in the evidence pass.
   exactly as stock applies it. Display only.
 - **Veterancy: TADR's levels, bounded per effect.** Levels are the count of thresholds at or below
   the kill count (u16, as stock). Damage taken: up to 25 levels for weapon hits, as TADR documents,
-  so a unit at 25 takes no weapon damage; **a kill-outright call (30 000 or more) uses stock's level,
-  so self-destruct, defeat and a dying transport kill every unit stock kills**. Damage dealt:
-  saturated at 32 767 for keyed types. Reload: up to 16 levels, the largest with a positive
-  multiplier. Accuracy: `kills / rate`, 0 = off. Capture: both formulas (`0x4043D8` and `0x438650`,
-  which TADR misses), the level capped at stock's own maximum, 13 107. The panel shows "VetN" on
+  so a unit at 25 takes no weapon damage; **a call of 30 000 or more (kill outright: self-destruct,
+  defeat, a dying transport; and the D-guns) takes no veterancy reduction**, as it takes no armour
+  reduction, so it kills every unit, veteran or not (B7's fix of stock, which let a veteran above
+  24 000 HP live). Damage dealt: every hit saturated into the HP word's range (B7). Reload: up to
+  16 levels, the largest with a positive multiplier. Accuracy: `kills / rate`, 0 = off. The
+  capture's cost (`0x4043D8`) and a unit reclaim's step (`0x438650`, which TADR misses), the level
+  capped at stock's own maximum, 13 107. The panel shows "VetN" on
   every unit, as TADR. Our C copy of the reload formula in `tagpu_weapons.c` takes the same level.
 - **Transported explosions: carried at death, decided inside the death itself.** A per-slot byte
   set and consumed within one death: carried when the transporter link `+0x86` is set before the
@@ -164,10 +166,11 @@ commit can change.
    `surfacefire` shapes real content uses: a water beam D-gun fired by a commander on land and from
    the seabed, and a `vlaunch` missile from a submerged submarine that must steer above water.
    Reviewed at `high`. How it is built is in [C2, as built](#c2-as-built) below.
-3. **C3 — the unit-key store and veterancy.** Every effect site and the panels, the fold site C4
-   will use, the saturation for keyed types. It measures what the evidence left open: kill counts
-   equal on two peers after a paused fight, and whether a loaded saved game runs `0x42D2E0` with
-   its keys. Reviewed at `high`.
+3. **C3 — the unit-key store and veterancy. Landed 2026-09-26**, with section B's B7. Every effect
+   site and both panels; the saturation became B7's, for every hit. It measured what the evidence
+   left open: a loaded saved game runs `0x42D2E0` and reads its keys again, and kill counts are
+   **not** equal on two peers, in stock. Reviewed at `high`. How it is built is in
+   [C3, as built](#c3-as-built) below; the fold site went to C4.
 4. **C4 — transported explosions**, after B4 has landed its companion messages. The per-slot mark,
    the pick at `0x49B017`, the fold, the "died carried" companion, and the two-peer test that the
    blast's damage and its picture agree on both. Reviewed at `high`.
@@ -345,6 +348,81 @@ commit can change.
     (`weaponvelocity=-10`, `startvelocity=690`) never reach a target on the stock engine, steering
     or not; the fixture uses the Merl's flight.
 
+## C3, as built
+
+- **The keys** (`tagpu_datakeys.c`, section 6, read by the unit-key reader at `0x42BF97`).
+  `VeterancyThresholds=`: whitespace-separated whole numbers, each 1..65 535, strictly
+  increasing, at most 32. `VeterancyAccuracyBuffRate=`: one whole number 0..65 535, 0 meaning no
+  buff. A malformed key is refused whole with its reason in the log ("a threshold is not a whole
+  number from 1 to 65535", "the thresholds do not strictly increase", "it lists more than 32
+  thresholds", "not a whole number from 0 to 65535") and the type plays as stock; a good one logs
+  its level count and first threshold. A type's level is the count of its thresholds at or below
+  its kills, a binary search.
+- **The reader installs before the fail-closed table.** C3's sites read keys, so
+  `fix_veterancy` calls `tagpu_datakeys_units_install()` first and the table refuses to install
+  if the reader's sites did not byte-match. The extra-weapons module's observers on the same
+  loader chain onto it.
+- **Seven sites in the fail-closed table** (`tagpu_patches.c`, `fix_veterancy`), both builds. Each
+  runs the engine's own instructions for a type without the key.
+  - Damage taken (`0x489BFA`): L, at most 25 (TADR's documented −4 % a level, so a unit at 25 takes
+    no weapon damage).
+  - Damage dealt (`0x499DB5`): L, unbounded; the HP word's saturation (B7) bounds the hit.
+  - Reload (`0x49E468`): L, at most 16. `tagpu_weapons.c`'s own reload for slots past 2 takes the
+    same level.
+  - Target lead (`0x48A324`): on past the first threshold.
+  - Spread (`0x49D6EA`): the divisor `kills / rate`, which the engine applies above 1; rate 0 is no
+    buff. This is the code's formula, stock's `kills / 12` with the rate in place of 12; TADR's
+    documentation writes `1 + kills / rate`, its code does not.
+  - The capture's cost (`0x4043D8`), the target's level: `10 + L` tenths of the cost, set once as
+    the capture starts.
+  - A unit reclaim's step (`0x43869D`, in `0x438650`), the HP a reclaimer takes from the unit it
+    reclaims every 15 ticks, by the reclaimer's level: `1 + L` in place of
+    stock's `(kills + 5)/5`. Both this and the capture's cost take the level open past the last
+    threshold, by the last gap (by the threshold, for a list of one), capped at 13 107, stock's own
+    ceiling.
+- **`0x438650` is a unit reclaim, not a capture.** Its callers are the reclaim order (`0x40483D`)
+  and the build order's reclaim (`0x414C86`); the evidence pass had it as the capture's time. The
+  decision stands for it unchanged: every place stock reads a level reads the keyed type's.
+- **The kill lines** (skip-and-log, display only): at `0x46B306` and `0x467CCF` every unit at level 1
+  or more says "VetL", its type's level or stock's; stock's own line below level 1.
+- **The scenario's `kills`** (`tagpu_scenario.c`, `tools/tacli`): a unit attribute 0..65 535 written
+  into `+0xB8` as the unit is dressed, on the peer that applies it.
+- **Measured** on the new build, on a private Xvfb, against stock controls in the same game. The
+  fixture is `tools/datakeys_fixture.py` (types `VTLLT0/1`, `VTRATE0`, `VTBAD1..8`, the unarmed
+  `VTTGT0/1`, `VTCOM0/1`, `VTKROG0/1`; `VT_LAS` deals 100 against every type).
+  - **The effects** (`scenarios/c3-veterancy.json`, HP read every 0.3 s, and a temporary trace of
+    every answer, since removed): a keyed shooter at 10 kills took 160 a hit off a kill-less
+    Krogoth, the control at stock's level 2 took 112; a keyed Krogoth at 10 kills lost 60 a hit,
+    the control 92. The keyed tower landed 4.95 hits/s against the control's 2.29 (2.16; the
+    formula's 40 % against 88 % of the laser's 15.6 ticks, 6 against 13, predicts 2.17). A keyed
+    reclaimer's steps took 472 HP from its target, the control's 128 (3.69 against 11/3). A keyed
+    capture target (cost × 20/10) was taken in 16.4 s, the control (× 12/10) in 9.9 s. Lead
+    answered 1 for a keyed tower at 10 kills, 0 at none, stock's for the control; the spread's
+    divisor 10, 0 and stock's; every answer for a type without the key was stock's.
+  - **The kill lines** (`scenarios/c3-kill-lines.json`, the bottom bar hovered): "10 kills - Vet10"
+    (keyed), "10 kills - Vet2" (no key, stock's level), "1 kill - Vet1" and stock's "1 kill". The
+    engine draws the line only for a unit whose `+0x110` bit 31 is set, which armed units get once
+    they have fired.
+  - **Malformed keys**: all eight refused at load with their reasons, each type played as stock.
+  - **A saved game**: saved mid-fight and loaded back, the load ran the unit-key reader again (every
+    key re-read, the malformed ones refused again) and the towers kept their kills and levels
+    ("10 kills - Vet10", "1 kill - Vet1").
+  - **The stock-limits build**: the 116 simulation sites install and the amounts are the same.
+  - **Stock content** (`scenarios/200v200.json`): every answer was stock's through the fight, and no
+    veterancy or B7 event fired.
+  - **Two peers** (`scenarios/b7-mp-host.json`, `b7-mp-join.json`): a keyed tower's hits on the other
+    peer's Krogoth took 160 there (computed on the firer's peer, applied on the owner's).
+- **Not covered.**
+  - The second kill line (`0x467CB0`, no direct caller) was not seen drawn.
+  - **Kill counts differ between peers, in stock.** A kill of another peer's unit is counted on the
+    victim's owner's copy of the killer, not on the killer's own: the host's copy of its tower stayed
+    at 10 through two kills of the joiner's units while the joiner's copy counted 2 (the build before
+    C3; the same on C3's, where the joiner's copy reached 3). Each effect reads the copy of the
+    peer that computes it, as stock's own levels do, so a veteran's level in a network game depends
+    on which peer applies the effect. A stock defect for section B, reported to the owner; the
+    evidence pass's "kills equal on two peers" does not hold.
+  - The fold site C4 will use (`0x42B019`) stays C4's.
+
 ## Handed to other groups
 
 - **Group D:** building rotation with `Rotations=`, the per-facing `PreviewPiecesS/E/N/W=` and
@@ -353,15 +431,10 @@ commit can change.
   the reload bars with `reloadbar=` (the engine's stored reload recorded where it is made, drawn in
   our marker pass: [evidence Part 2 §2](data-keys-evidence.md#2-reloadbar)). Their questions are
   recorded there for D's plan.
-- **Section B, as B7, measured first:** a hit above 32 767 wrapping the HP word; kill-outright
-  sparing a veteran above 24 000 HP (a vet-5 `CORKROG` survives its own self-destruct, INF); the
-  NULL read at `0x4673B1` for an attacker-less targetable projectile out of sight; whether a meteor
-  hits once per peer in a network game. For that last one, C2's two-peer runs found that each peer
-  applies attacker-less meteor hits on its own units both locally (`0x489C89`) and as `0x0B`s
-  received from the other peer (`0x455412`). On 2026-09-26 the owner of two storages applied each
-  per-type amount (3 and 5) twice from its own computation and twice received, one stone's hit
-  twice over [INFERRED from the matching counts, not a per-stone trace]. [B's plan](sim-fixes.md) does not list them yet; this is
-  their record until it does.
+- **Section B, as B7:** the four stock defects the veterancy survey found (a hit past the HP word,
+  kill-outright sparing veterans, the radar's NULL read at `0x4673B1`, a meteor hitting once per
+  peer) landed with C3; their record is B7 in [B's plan](sim-fixes.md).
+  The kill counts that differ between peers are a new question for B, not fixed.
 
 ## Open questions
 

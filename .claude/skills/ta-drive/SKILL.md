@@ -119,7 +119,7 @@ tools/tacli order t1 --unit 2 stop
 - **World coordinates, not pixels** — immune to zoom, resolution, the camera and the addressable
   ring. No selection, no camera work, and the order type is yours rather than the engine's guess.
 - Orders: `move attack defend repair patrol reclaim capture load unload blast stop mobilebuild`
-  (`guard` is an alias of `defend`). There is no attack-move in TA; `attack pos <x> <y>` is the idiom.
+  (`guard` = `defend`, `blast` = the D-gun, `ctrl+d` self-destructs). No attack-move: `attack pos <x> <y>`.
 - **Not a validator.** A nonsense order is issued, not caught, so `1 issued` is not evidence the
   unit did anything — read the roster. **Not ownership-checked**: an enemy unit takes the order.
 

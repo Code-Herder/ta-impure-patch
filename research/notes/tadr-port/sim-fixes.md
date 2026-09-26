@@ -3,9 +3,10 @@
 ## Summary
 
 Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our stack, as our own
-code, over six landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
+code, over six landings and a seventh. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
 grill that followed [the evidence pass](sim-fixes-evidence.md). **All six landings are landed on local
-main (2026-09-25), each after its review.** The rules
+main (2026-09-25), each after its review**, and B7, four defects the veterancy survey found, landed
+with section C's C3 on 2026-09-26. The rules
 shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
@@ -1315,6 +1316,66 @@ and where it differs from the plan below:
   `+0xE4` goes to `0x439D6B`.
 - **A range circle of radius 1** (local): at `0x438EDE`, N = 0 skips the circle and its label.
 
+**B7 — four defects the veterancy survey found. LANDED 2026-09-26** on local main with C3
+([C3, as built](data-keys.md#c3-as-built)), built on C's branch; reviewed at high with C3. The
+survey of [data keys Part 3](data-keys-evidence.md) found them; the owner assigned them to C3's
+session. The disassembly is the engine map's *Veterancy, a hit's word, the radar's owner test and
+the meteor shower*; the hooks are [gpu-status §2.100](../gpu-status.html).
+
+- **A hit's word** (sim, the fail-closed table, `0x489C71`): `0x489BB0` stores a hit's int amount
+  into its record's WORD; the damage path subtracts it signed and the paralyser and the heal read it
+  unsigned, so a hit past 32 767 wrapped into a gain. The store saturates into the reader's range
+  (−32 768..32 767, or 0..65 535 for kinds 2 and `0xA`), the identity inside it. Retail play reaches
+  it with the D-gun of a commander at level 2 or more (30 000 raised by its own level).
+- **Kill-outright** (sim, the table, `0x489BF3`): a call of 30 000 or more skips the veterancy
+  reduction as it skips the armour one, by the same test of the caller's amount. Stock let a
+  veteran above 24 000 HP survive its own self-destruct, defeat or a dying transport; the only
+  retail unit that high is CORKROG (29 918), whom a D-gun now kills whatever its level. A veteran
+  so killed reads the full overkill in its death's severity (`0x48655E`), as a recruit does. This
+  replaces the plan's "kill-outright uses stock's level": stock's level is the defect.
+- **The radar's owner test** (local, `0x4673B1`): the radar rebuild's marker branch for a targetable
+  or interceptor projectile out of sight read its attacker's owner, and a meteor has no attacker.
+  No attacker is not the local player's.
+- **One meteor, one hit** (sim, the table, the gate `0x49A01B` and the calls at `0x49DF7D` and
+  `0x49D307`): every peer runs its own shower and broadcasts each stone, and stock computed every
+  stone's damage on every peer, so a stone's hit on a unit was applied once by its owner and once
+  more for each other peer. A stone is now computed on the peer that spawned it, as a shot is on the
+  firer's: the spawn marks its stone's `+0x62` 0, the receiver's meteor branch 1 (the field is the
+  shooter's slot index, written only for a projectile with a shooter and read only behind a burst
+  count a stone does not have), and the gate sends a received stone where stock sends a remote
+  projectile. The mark lives in the record, so the pool's compaction carries it.
+
+**Measured** on a private Xvfb, each defect first on the build before B7 (C2's tip with the
+scenario `kills` column), then on the new one:
+
+- **The word** (`scenarios/b7-word-outright.json`, `WK_HUGE` deals 65 000 whole): the storage went
+  1 329 → 7 225 over eleven hits, 536 up a hit, and died only when its HP word wrapped; on the new
+  build it died at the first hit, one saturation logged. **The retail D-gun**
+  (`scenarios/b7-dgun.json`, a commander with 25 kills, `blast unit N`): the storage read
+  −11 135 = 1 329 + 2 · 26 536 − 65 536, two wrapped hits; on the new build −31 438 = 1 329 − 32 767 at
+  the first.
+- **Kill-outright**: the Krogoth with 25 kills survived its self-destruct at 5 918 HP; on the new
+  build it died, and so did a keyed tower at 30 kills (level 25, which no weapon hit can damage),
+  both counted.
+- **The radar** (`scenarios/b7-radar-hail.json`, `WK Hail T`'s targetable hail, True line of sight,
+  unmapped): an access violation at `0x4673B4` reading `0xFF` with `ECX = 0`; the new build runs,
+  the event counted. Owner 10's player record is populated and its colour pointer valid, so the
+  stones in sight draw safely.
+- **The meteors** (two peers, `scenarios/b7-mp-host.json` and `b7-mp-join.json` on `WK Hail C`,
+  5 a stone against a storage; a temporary trace of every stone hit a peer computed, since
+  removed): before, all 19 hits were computed on both peers and each owner's storages lost exactly
+  twice what the stones dealt; after, none of 24 was computed on both, each peer computed only its
+  own stones, and each storage lost exactly the damage computed against it (11, 19, 15, 10 on one
+  peer; 3, 10, 0, 5 on the other).
+- **Stock content** (`scenarios/200v200.json`): no B7 event through the fight.
+
+**Not covered, and left as they are:**
+
+- Every peer still runs its own shower, so a network game of N players rains N showers.
+- Kill counts differ between peers in stock (the victim's owner counts a kill of its unit on its
+  copy of the killer; the killer's own copy does not). Found by C3's two-peer run; a new question
+  for B.
+
 **Measured alongside a landing** (time-boxed, each with its session):
 
 - resurrection's failure branch: counters on `0x405155`/`0x405164` over a few hundred CORNECRO
@@ -1332,9 +1393,12 @@ and where it differs from the plan below:
 - The `0x2C` dirty list stops at 0x200 bytes a tick, filled in slot order. If a skipped unit's
   dirty state is not kept, high slots of a busy block wait for the round robin, up to N ticks: this
   bears on [section A's open question](raised-limits.md#open-questions) about remote lag at 1500.
-- Two stock-fix claims in the Delphi recorder, both inactive for stock content and not yet verified:
-  a veteran's damage reduction scaling the kill damage (`0x489C2F`), and a ground transport's
-  overload (`0x406789`) (evidence Part 4 §7).
+- A stock-fix claim in the Delphi recorder, inactive for stock content and not yet verified: a
+  ground transport's overload (`0x406789`) (evidence Part 4 §7). Its other claim, a veteran's
+  damage reduction scaling the kill damage (`0x489C2F`), is B7's kill-outright.
+- Kill counts differ between peers: a kill of another peer's unit is counted on the victim's
+  owner's copy of the killer, not on the killer's own (MEASURED by C3, 2026-09-26; the engine map's
+  *The kill increment*). Veterancy, stock's and C3's, reads the computing peer's copy.
 - Where stock acquisition stops aiming a flak gun upward. B1 measured that it never aimed above
   29.6°, far from the zero band, but did not disassemble the cut-off.
 

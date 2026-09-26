@@ -63,7 +63,7 @@ int __stdcall tagpu_datakeys_alert(char* unit, int kind, int arg);
    The sites are in the fail-closed table (tagpu_patches.c, fix_veterancy):
    taken 0x489BFA (L <= 25), dealt 0x499DB5, reload 0x49E468 (L <= 16), lead
    0x48A324 (1 on, 0 off), accuracy 0x49D6EA (the divisor), the capture's
-   cost 0x4043D8 (10 + L) and a unit reclaim's time 0x43869D (L + 1), both
+   cost 0x4043D8 (10 + L) and a unit reclaim's step 0x43869D (L + 1), both
    with L <= 13107. */
 int __stdcall tagpu_datakeys_vet_taken(const char* unit);
 int __stdcall tagpu_datakeys_vet_dealt(const char* unit);
@@ -71,7 +71,7 @@ int __stdcall tagpu_datakeys_vet_reload(const char* unit);
 int __stdcall tagpu_datakeys_vet_lead(const char* unit);
 int __stdcall tagpu_datakeys_vet_accuracy(const char* unit);
 int __stdcall tagpu_datakeys_vet_capture_cost(const char* unit);
-int __stdcall tagpu_datakeys_vet_reclaim_time(const char* unit);
+int __stdcall tagpu_datakeys_vet_reclaim_step(const char* unit);
 /* the reload level, keyed or stock's min(kills / 5, 5): the extra-weapons
    module's C reload takes the same one */
 int tagpu_datakeys_vet_reload_level(const char* unit);

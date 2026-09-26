@@ -1536,7 +1536,7 @@ static unsigned vet_level(const DkUnit* r, unsigned k)
 
 /* The capture's level has no top in TADR: past the last threshold it goes
    on by the last gap (by the one threshold, for a list of one); a unit
-   reclaim's time, which TADR leaves stock, takes the same level. The gap is at
+   reclaim's step, which TADR leaves stock, takes the same level. The gap is at
    least 1 and the threshold at least 1 by the parse, so neither divides by
    zero; the level is capped at stock's own ceiling, so no product
    exceeds one stock already computes. */
@@ -1645,15 +1645,16 @@ int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
     return 10 + (int)vet_level_open(r, kills_of(u));
 }
 
-/* 0x43869D, inside 0x438650, the time a unit takes to reclaim another unit
-   (its callers are the reclaim order 0x40483D and the build order's reclaim
-   0x414C86), read of the RECLAIMER: L + 1 for 0x4386B9, stock's being
-   (kills + 5) / 5 */
-int __stdcall tagpu_datakeys_vet_reclaim_time(const char* u)
+/* 0x43869D, inside 0x438650, a unit reclaim's step: the HP the reclaimer
+   takes from its target every 15 ticks (0x404981 deals it as a kind-5 hit;
+   0x438650's callers are the reclaim order 0x40483D and the build order's
+   reclaim 0x414C86), read of the RECLAIMER: L + 1 for 0x4386B9, stock's
+   being (kills + 5) / 5 */
+int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u)
 {
     const DkUnit* r = vet_keyed(u);
     if (!r) return -1;
-    vet_event(&s_evReclaim, "a keyed reclaimer's level set a unit reclaim's time");
+    vet_event(&s_evReclaim, "a keyed reclaimer's level set a unit reclaim's step");
     return 1 + (int)vet_level_open(r, kills_of(u));
 }
 
