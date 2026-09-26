@@ -1,0 +1,156 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C2's order mirrors at the order action's unit branch 0x43F1D4: the cursor over an enemy, with the player's keyed unit and its stock twin selected in turn. nottoair: f_na (WKLLTNA) and f_llt (ARMLLT) over t_air, a WKAIR hovering (MaxVelocity 1, so the AI flies it off slowly: re-order it with tacli order before a reading). nottounderwater: f_nu (WKTLNU) and f_tl (ARMTL) over t_sub, an ARMTL on the sea floor, submerged, which the player sees through the sonar station beside it (a submerged enemy is neither drawn nor picked without one). surfacefire: the hovercraft f_hsf (WKSHSF) and f_htp (WKSHTP) over t_land, a CORSOLAR ashore. Every target is 450+ from its shooters, out of reach, so nothing is destroyed while the cursor is read (peek *0x511DE8+0x2CBE:1 the cursor, +0x2CBA the unit under it). Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "f_na",
+   "type": "WKLLTNA",
+   "owner": 0,
+   "pos": [
+    3000,
+    1000
+   ]
+  },
+  {
+   "id": "f_llt",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    3300,
+    1000
+   ]
+  },
+  {
+   "id": "f_nu",
+   "type": "WKTLNU",
+   "owner": 0,
+   "pos": [
+    3000,
+    600
+   ]
+  },
+  {
+   "id": "f_tl",
+   "type": "ARMTL",
+   "owner": 0,
+   "pos": [
+    3300,
+    600
+   ]
+  },
+  {
+   "id": "f_hsf",
+   "type": "WKSHSF",
+   "owner": 0,
+   "pos": [
+    3600,
+    600
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "f_htp",
+   "type": "WKSHTP",
+   "owner": 0,
+   "pos": [
+    3900,
+    600
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "t_air",
+   "type": "WKAIR",
+   "owner": 1,
+   "pos": [
+    3150,
+    1500
+   ],
+   "height": 100,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3150,
+      1500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "t_sub",
+   "type": "ARMTL",
+   "owner": 1,
+   "pos": [
+    3150,
+    150
+   ]
+  },
+  {
+   "id": "sonar",
+   "type": "ARMSONAR",
+   "owner": 0,
+   "pos": [
+    3150,
+    450
+   ]
+  },
+  {
+   "id": "t_land",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    3750,
+    1100
+   ]
+  },
+  {
+   "id": "keep_arm",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    9000,
+    4500
+   ]
+  },
+  {
+   "id": "keep_fus",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    9500,
+    5000
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   3150,
+   1100
+  ]
+ }
+}

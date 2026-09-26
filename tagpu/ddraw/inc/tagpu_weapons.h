@@ -49,4 +49,10 @@ void tagpu_weapons_init(void);                 /* DllMain: arm if the flag file 
 void tagpu_weapons_frame(unsigned int frame);  /* overlay: oracle trigger, every 5th frame */
 int  tagpu_weapons_armed(void);                /* the splices are installed, 0x49D364's with them */
 
+/* GAME thread, for the weapon keys' detour on 0x49ABB0 (tagpu_patches.c):
+   the can-engage verdict of slot idx >= 3 and that slot's weapon. Called only
+   while the module is armed. */
+int         tagpu_weapons_check_slot(char* unit, char* target, unsigned idx);
+const char* tagpu_weapons_slot_weapon(char* unit, unsigned idx);
+
 #endif

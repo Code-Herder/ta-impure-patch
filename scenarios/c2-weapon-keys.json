@@ -1,0 +1,366 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C2's weapon keys, one group per key with its control, on Two Continents' island and the sea south and north of it. The AI (owner 1) holds every armed tower; the player (owner 0) holds unarmed targets on hold, so nothing shoots back. A1 nottoair vs a hovering Atlas and a kbot; A2 the stock laser's control; A3 a damage-1 nottoair tower holding a landed Atlas (order it to take off: the held target is dropped); E WKLLT5's extended slots, 0 and 3 plain at damage 1 and 4 nottoair (arm weapons.on); D3/D4 notoverland/notoverwater towers on land; B1/B2 nottounderwater vs a submerged WKSUB and a ship; D1/D2 the floating towers' notoverwater/notoverland, spawned at the sea's surface (height 75: a spawn otherwise sits on the sea floor, where a laser cannot fire at all); C1/C2 surfacefire vs a hovercraft on the water and a kbot ashore. The order cursor is scenarios/c2-order-cursor.json. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "a1_tower",
+   "type": "WKLLTNA",
+   "owner": 1,
+   "pos": [
+    1900,
+    1200
+   ]
+  },
+  {
+   "id": "a1_air",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    2050,
+    1200
+   ],
+   "height": 100,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      2050,
+      1200
+     ]
+    }
+   ]
+  },
+  {
+   "id": "a1_ground",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    1900,
+    1350
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "a2_tower",
+   "type": "ARMLLT",
+   "owner": 1,
+   "pos": [
+    2900,
+    1200
+   ]
+  },
+  {
+   "id": "a2_air",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    3050,
+    1200
+   ],
+   "height": 100,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3050,
+      1200
+     ]
+    }
+   ]
+  },
+  {
+   "id": "a3_tower",
+   "type": "WKLLTWK",
+   "owner": 1,
+   "pos": [
+    1900,
+    2100
+   ]
+  },
+  {
+   "id": "a3_air",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    2050,
+    2100
+   ]
+  },
+  {
+   "id": "e_tower",
+   "type": "WKLLT5",
+   "owner": 1,
+   "pos": [
+    2400,
+    1600
+   ]
+  },
+  {
+   "id": "e_air",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    2550,
+    1600
+   ],
+   "height": 100,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      2550,
+      1600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "d3_tower",
+   "type": "WKLLTNL",
+   "owner": 1,
+   "pos": [
+    2700,
+    2000
+   ]
+  },
+  {
+   "id": "d3_ground",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    2700,
+    2100
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "d4_tower",
+   "type": "WKLLTNW",
+   "owner": 1,
+   "pos": [
+    3200,
+    1550
+   ]
+  },
+  {
+   "id": "d4_ground",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    3200,
+    1700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "b1_tower",
+   "type": "WKTLNU",
+   "owner": 1,
+   "pos": [
+    1800,
+    2900
+   ]
+  },
+  {
+   "id": "b1_sub",
+   "type": "WKSUB",
+   "owner": 0,
+   "pos": [
+    1950,
+    2900
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "b1_ship",
+   "type": "ARMCS",
+   "owner": 0,
+   "pos": [
+    1800,
+    3050
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "b2_tower",
+   "type": "ARMTL",
+   "owner": 1,
+   "pos": [
+    2800,
+    2900
+   ]
+  },
+  {
+   "id": "b2_sub",
+   "type": "WKSUB",
+   "owner": 0,
+   "pos": [
+    2950,
+    2900
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "b2_ship",
+   "type": "ARMCS",
+   "owner": 0,
+   "pos": [
+    2800,
+    3050
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "d1_tower",
+   "type": "WKFHLNW",
+   "owner": 1,
+   "pos": [
+    1800,
+    3700
+   ],
+   "height": 75
+  },
+  {
+   "id": "d1_ship",
+   "type": "ARMCS",
+   "owner": 0,
+   "pos": [
+    1800,
+    3850
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "d2_tower",
+   "type": "WKFHLNL",
+   "owner": 1,
+   "pos": [
+    2800,
+    3700
+   ],
+   "height": 75
+  },
+  {
+   "id": "d2_ship",
+   "type": "ARMCS",
+   "owner": 0,
+   "pos": [
+    2800,
+    3850
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "c1_tower",
+   "type": "WKTLSF",
+   "owner": 1,
+   "pos": [
+    3200,
+    700
+   ]
+  },
+  {
+   "id": "c1_hover",
+   "type": "ARMCH",
+   "owner": 0,
+   "pos": [
+    3350,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "c1_ground",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    3200,
+    900
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "c2_tower",
+   "type": "ARMTL",
+   "owner": 1,
+   "pos": [
+    4200,
+    700
+   ]
+  },
+  {
+   "id": "c2_hover",
+   "type": "ARMCH",
+   "owner": 0,
+   "pos": [
+    4350,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "c2_ground",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    4200,
+    900
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "keep_arm",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    9000,
+    4500
+   ]
+  },
+  {
+   "id": "keep_fus",
+   "type": "CORFUS",
+   "owner": 1,
+   "pos": [
+    9500,
+    5000
+   ]
+  },
+  {
+   "id": "keep_stor",
+   "type": "CORESTOR",
+   "owner": 1,
+   "pos": [
+    9300,
+    4500
+   ]
+  }
+ ],
+ "camera": {
+  "center_on": "a1_tower"
+ }
+}
