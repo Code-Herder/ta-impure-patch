@@ -472,14 +472,14 @@ Everything below was measured on the pristine 3.1 build under wine with `tacli`.
 | Piece | What it is |
 |---|---|
 | Gate | `tagpu_weapons.on` next to the exe at attach; absent = not one byte written (the oracle still works). `tacli arm <inst> weapons.on` before launch. |
-| Install | 20 entry hooks, 21 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used). |
-| Entry hooks (trampoline for stock) | `UNITS_StartWeaponsScripts`, `AutoAim`, the three name helpers, retaliation `0x406F80`, acquisition `0x4089A0` (per *batch*: the original runs unless a unit in the cursor's batch is extended), `0x4897E0`, `0x4898B0`, `0x489800` (an index helper the survey missed — the allocator's per-slot "enable"), `0x48A060/0A0/0F0/160`, `0x49ADF0`, `0x48A190`, `CheckUnitWeapon`, `Trajectory3` (also missed by the survey: it reads `unit+0x10+idx*0x1C`), `0x49D120`, and the def copy `0x42B370` (keeps the side record with the type it describes). |
+| Install | 20 entry hooks, 21 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. A failure after the match leaves what was written before it: the stub pool running out leaves only the two entry observers, which touch only the module's own table; a `VirtualProtect` failing in the write loops (logged `image partially patched!`, never observed on the image's own `.text`) leaves every hook and splice written before it, and because the `loader` splice is written before the `crc` one and `cb_crc_weapons` folds only while armed, extended records can then fill with the sync fold off. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used); the two entry observers' stubs come from the shared `tagpu_detour_stub`. |
+| Entry hooks (trampoline for stock) | `UNITS_StartWeaponsScripts`, `AutoAim`, the three name helpers, retaliation `0x406F80`, acquisition `0x4089A0` (per *batch*: the original runs unless a unit in the cursor's batch is extended), `0x4897E0`, `0x4898B0`, `0x489800` (an index helper the survey missed — the allocator's per-slot "enable"), `0x48A060/0A0/0F0/160`, `0x49ADF0`, `0x48A190`, `CheckUnitWeapon`, `Trajectory3` (also missed by the survey: it reads `unit+0x10+idx*0x1C`), `0x49D120`, and the def copy `0x42B370` (keeps the side record with the type it describes). Two observers, not trampolines: the unit-data load's entry `0x42D2E0` and the FBI loader's entry `0x42BF40`, through the shared `tagpu_detour_observe` so `tagpu_datakeys.c`'s observers on the same entries chain onto them; landed before any other write, and the module disarms without them. |
 | Splices | loader `0x42CEF2` (reads `weaponN` / `wN_badTargetCategory`), unit-info CRC `0x42B004` (folds `weapon4..N` into `CRC_weapons`), `WEAPON_FIRED` receiver `0x49D364` (clamps `WeapIdx >= count` to slot 0 and logs), the three `FireProjectile_*` name lookups, eleven `state>>2&3` decodes in the four fire callbacks, two in the target finder `0x40B7B0`, one in the target-position helper `0x48A1E0`. |
 | Byte patches | the three `FireProjectile_*` heading loads (`mov si,[ebp+ecx*4+0x1a]` → `mov si,[edi+0x16]`, the slot pointer is in a register) and one `and al,3` after a spliced decode. |
-| Side tables | def records keyed by def array index (the game-start loader compacts the array, numbers it, *then* runs the FBI loader per final slot, so the index is stable; the record also stores the def pointer and answers "stock" on a mismatch); unit side rows `[units][13]` sized from the live unit array and reset by the module's own `StartWeaponsScripts` at creation (which every create path, savegame load included, goes through). |
+| Side tables | def records keyed by def array index (the game-start loader compacts the array, numbers it, *then* runs the FBI loader per final slot, so the index is stable; the record also stores the def pointer and answers "stock" on a mismatch). The pointer check alone cannot tell two games apart — the def array can come back at the same address, and the FBI loader skips a slot with no file or leaves one whose file does not open — so every record is emptied at the unit-data load's entry (`0x42D2E0`, logged as `unit-data load: N def record(s) of the last load emptied`), before the load's def copies and its FBI loop, and a slot this load did not write reads as stock. The piece caches (the COB's `AimFromWeaponN` / `QueryWeaponN` answers) are forgotten at every entry to the FBI loader, because a `Reload` replaces the COB even when its FBI fails to open; the console kills every unit of the type before it reloads (`0x486E80`, engine map), so the answers asked again only ever serve units created after the reload (measured 2026-09-25: the same pieces, 2 and 1, on every extended slot, and new towers launching from them — once with the FBI opening, when the loader splice rewrites the record anyway, and once with a loose `units/ARMLLT10.fbi` holding no `[UNITINFO]`, when only the entry observer resets them: the log reads `reload: ARMLLT10 (def #72) forgets its piece caches (slot 3 held 2,1)`, no second `loader:` line follows, and the record keeps its ten weapons and its CRC); unit side rows `[units][13]` sized from the live unit array and reset by the module's own `StartWeaponsScripts` at creation (which every create path, savegame load included, goes through). |
 | Slot index | derived from pointers (`SlotIndex(unit, slot)`); the 2-bit field still holds `i & 3`. |
 | Names | slots 0–2 use the engine's own strings and tables; 3+ are `AimWeaponN` / `FireWeaponN` / `QueryWeaponN` / `AimFromWeaponN` (1-based). |
-| Oracle | `tagpu_weapons.trigger` → `tagpu_weapons.json`; `tacli weapons <inst> [idx…]` prints every slot of every unit (state, weapon, target, reload, heading, pitch, stock, aim result, thread), the arming state, the C-path hit counters and projectile launches per slot. Works unarmed, which makes the unarmed instance the control. Four counters are diagnostics rather than coverage: `violation` and `mismatch` must stay 0 (assertions 3 and 13), `cob_full` must stay 0 (snag 10 — nonzero means the unit ran out of COB threads and some slot is aiming from piece 0), and `hold_fire` counts shots declined because the barrel had not slewed on target yet, which is working as intended. |
+| Oracle | `tagpu_weapons.trigger` → `tagpu_weapons.json`; `tacli weapons <inst> [idx…]` prints every slot of every unit (state, weapon, target, reload, heading, pitch, stock, aim result, thread), the arming state, the C-path hit counters, projectile launches per slot, and a `pieces` line: each extended type's cached `AimFromWeaponN,QueryWeaponN` pieces from slot 3 on (`-1` = not asked yet). Works unarmed, which makes the unarmed instance the control. Four counters are diagnostics rather than coverage: `violation` and `mismatch` must stay 0 (assertions 3 and 13), `cob_full` must stay 0 (snag 10 — nonzero means the unit ran out of COB threads and some slot is aiming from piece 0), and `hold_fire` counts shots declined because the barrel had not slewed on target yet, which is working as intended. |
 
 ### Content tooling (no COB compiler needed)
 
@@ -778,6 +778,22 @@ the mount→muzzle vector is too short or too lateral to mean anything; or trust
 the COB's own `aimed` signal for slots whose `Aim*` script returns within the
 tick.
 
+**Open — uneven launches on `ARMLLT10` [MEASURED 2026-09-25, cause not
+established].** Two towers against two `CORSOLAR`s in range, three rounds in one
+game: the extended slots launch unevenly and the set that fires changes from
+round to round — `0=+8 3=+7 4..8=+3 9=+0`, then `0=+4 3=+0 4=+2 5=+1 6=+2 7=+1
+8=+4`, then `0=+14 3=+14 4=+2 5..9=+0` — while `hold_fire` climbed by roughly 900
+a round, with `cob_full` at 0 and every extended slot's cached pieces the same
+(2, 1). A 1 s poll of the targets showed one tower's slots split across the two
+solars (slot 0 on one, slot 4 on the other). The fixture's ten aim scripts all
+turn the one turret piece (`cobclone` copies the primary scripts), so a slot
+whose target is not the one the turret was last turned toward fails
+`barrel_on_target()` [INFERRED]; the poll also caught every slot on the same
+target for a second or so with slots 5–9 not launching, which that does not
+explain. Assertion 6's "every slot launched" rests on the 2026-09-02 measurement
+alone: in these three rounds slot 9 launched in none and slot 3 in two. "Towers
+are unaffected" above is about the lateral-offset gate only.
+
 ### Assertions — status
 
 | # | Status | Evidence |
@@ -910,3 +926,17 @@ Found 2026-09-02 while answering "do the per-weapon FBI tags work for slots 4+"
   target the stock slots would have dropped.
 - `0x48A46C` ("which of my slots is aiming at unit X") and the `weapon %d -
   coverage` debug overlay still stop at three.
+
+**The side table has no owner thread while a level loads.** The `WEAPON_FIRED` receiver
+(`0x49D270`, our splice at `0x49D364`) is reached from the packet dispatcher `0x453D40`, which the
+loading state's handler calls on the game thread (`0x49852E`) and the loader body calls on the
+loader thread (`0x49727D`); nothing on that path asks whether a game is running. What it reads of
+the def records is bounded (one array, never freed; count ≤ 16; `slot_ptr`'s bound). But for a
+slot of 3 or more it reaches `side_row`, which reallocates `g_side` and frees the old one whenever
+the unit array has moved, and nothing orders that against the loader thread creating units in
+the same load (a saved game's restore, 0x497B29, through `side_reset`). It needs a network game,
+a `WEAPON_FIRED` packet arriving during the load, and units with extra weapons being restored at
+the same time; it is not measured and not closed. The oracle is a second reader of the same
+kind: `dump_unit` calls `side_row` on the game thread, so a `tacli weapons` during a saved game's
+restore races the loader thread the same way. A fix gives `g_side` one owner: allocated where the
+unit array is, and never reallocated from a reader.

@@ -264,7 +264,7 @@ The plan as written:
   previous build faults at `0x49CF19`, the new one counts fallbacks. An ARMATLAS on the last column
   and one near the north edge at cruise altitude.
 
-**B2 — stacked aircraft. Built 2026-09-25 on its own branch from B1 and reviewed at high; landing next.** What was
+**B2 — stacked aircraft. Landed 2026-09-25 on local main (`74dc093`) after its reviews.** What was
 built, and where it differs from the plan below (the engine map's *Stacked aircraft in area damage*
 has the sites, the disassembly and the numbers):
 
@@ -346,11 +346,11 @@ has the sites, the disassembly and the numbers):
 - Class: local (malformed input only). Tests: the two-peer weapon-ID fixture and a ten-peer tier 2
   run with every counter at 0.
 
-**B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`;
-commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`, the `0x2C`'s nested unit
-references `b9a5692` and the `0x0A` attach `cefcac8`; not landed; two high reviews, their findings
-acted on in `49c640c` and `5193986` — the nested references and the `0x0A` came after them and have
-had no review yet). What was done, and where it deviates from the plan above:
+**B3 LANDED 2026-09-25** on local main (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`
+and again before landing; two high reviews, their findings acted on in `49c640c` and `5193986`, and two
+focused reviews of the rounds after them — the padded copy, the splitter, the pump's pointer, the
+`0x2C`'s nested unit references `b9a5692` and the `0x0A` attach `cefcac8` — whose three lows were
+acted on in `18667b4`). What was done, and where it deviates from the plan above:
 
 - **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
   meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
@@ -362,8 +362,8 @@ had no review yet). What was done, and where it deviates from the plan above:
   C and nothing more; the stubs and their drop paths rest on the disassembly. Measured 2026-09-25:
   22/22 predicate cases OK. The table has 33 since `cefcac8` (`wire_ref_idx`'s six, `wire_attach_ok`'s
   five); those eleven, with six more (a child and parent both 0, no array, the raised limit of
-  15 000), have been run only on the host, against the predicates compiled from the source (8/8 and
-  9/9 OK), not yet through `tagpu_wirecheck.on` in the game.
+  15 000), ran first on the host against the predicates compiled from the source (8/8 and 9/9 OK),
+  then through `tagpu_wirecheck.on` in the game: 33/33 OK on both peers of the final round below.
 - **Every stub is a jmp at a clean 5-byte boundary**, verifies the whole stock span first
   (all-or-nothing: one non-stock span leaves the image untouched, `FIX_BYTES`), sets the registers
   stock sets, and continues at the same address; a failed bound goes to the receiver's own drop/exit.
@@ -631,6 +631,20 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   creates are the path the plan's ghost commander takes, each passing the delta and type checks and
   the after-create guard. The receive buffer held 0x2000 bytes at one address from the menu to the
   pause on every peer. The in-play heartbeat line is now about 1 470 bytes of its 1 700.
+- **The final round, two peers** (`3e6a684`, raised ddraw.dll md5
+  `65b43b35f3fdccc47c93821b395ed83a`; host + joiner through `tools/mp_lobby.sh`, `limits-tier2-p0`/`p1`,
+  the armies ordered onto each other, a factory building; both paused before reading). Install
+  **ARMED** on both, stubs 544 bytes, `limits: installed 183 sites`, `tagpu_wirecheck.on` 33/33 OK.
+  **PASS**: every drop counter 0 on both peers (`09 blk 0a 0b 0c kill 2c len stale nocopy 0d split
+  target carrier`), the `0x0A` attach receiver on real traffic, no ErrorLog, no crash:
+
+  | peer | ticks | in `09` | `0a` | `0b` | `0c` | `0d` | `2c` | dirty | rr | rcreate |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | host | 1951 | 1503 | 2 | 6226 | 777 | 24936 | 12315 | 342850 | 12315 | 0 |
+  | joiner | — | 1510 | 13 | 11270 | 614 | 10575 | 12306 | 333682 | 12306 | 1 |
+
+  The landed build adds to it only the site table's bound (`18667b4`, install code) and main's merge;
+  its install lines were read again on it before landing.
 
 **B4 — stale hits.**
 
@@ -805,9 +819,10 @@ sender's order, the open question below; B4 fixes the case that needs no answer 
 peer that is not the owner. B5's queue now holds `0x4A` companions refused in state 5, not bare
 `0x09`s.
 
-**B4 BUILT AHEAD (2026-09-25, `e10201f` on its own worktree from B3's `bd5582b`; reviewed at high by
-two reviewers, fix round `c9f939b`; not landed).** The first build's numbers follow; the fix
-round's are after them. As designed above; `fix_stale_hits` in `tagpu_patches.c`. The install line reads
+**B4 LANDED 2026-09-25** on local main (`e10201f` on its own worktree from B3's `bd5582b`; reviewed
+at high by two reviewers, fix rounds `c9f939b` and `3eb0237` each reviewed again, B3's final tip
+merged and the merge reviewed on its own). The first build's numbers follow; the fix round's and
+the merged build's are after them. As designed above; `fix_stale_hits` in `tagpu_patches.c`. The install line reads
 `limits: installed 189 sites` in the raised build (176 before: fourteen rows, less A′3's `0x455F90`
 row, which B4 now owns) and `the simulation fixes' 64 sites installed` in the stock-limits one;
 `tagpu_wirecheck.on` runs the rules' 16 cases, all OK.
@@ -894,6 +909,26 @@ undecidable ones, by definition not provably stale; the owner's rule is the one 
 death, and it applied none young. The fallback and the retry did not fire: both need a block
 with no unheld free slot, which eight minutes of four kbots at a time do not reach; they rest on the
 disassembly above and the self-check's cases.
+
+*The merged build, two peers* (`ae5e632`: B4 with B3's final tip; raised ddraw.dll md5
+`f2802b871fbeb515611e3453cd04a8d1`; Town & Country through `tools/mp_lobby.sh`, `limits-tier2-p0`/`p1`,
+1 499 units a side, about 3.5 minutes of battle, both peers paused at tick 7 838 / 7 844). Install:
+`limits: installed 197 sites` (B3's 183, fifteen rows, less A′3's `0x455F90`), stale hits in the
+fail-closed table (stubs 336 of 4 096 bytes), wire robustness ARMED, the shared stubs 4 016 bytes in
+one page; the rules' 23 cases and the wire's 33 all OK; the stock-limits build `the simulation
+fixes' 72 sites installed`, `hits: slots=2501`. Every `wire:` drop counter 0 on both peers, no bare
+`0x09`/`0x0B`, and each peer's hits sent are the other's received:
+
+| | host | joiner |
+|---|---|---|
+| `0x09` sent / received | 1 500 / 1 500 | 1 500 / 1 499 |
+| `0x0B` sent / received | 9 645 / 3 049 | 3 049 / 9 645 |
+| owner applied / refused, dead | 2 922 / 0, 127 | 9 008 / 0, 637 |
+| copies: exact / real lower bound | — / 0 | — / 1 |
+
+The joiner's one missing create is the host's commander, refused in the joiner's load and
+recreated by the round robin as a real lower bound (`gate=1`, `bound=1`, `rcreate=1`) — the ghost
+B5 closes; every `0x0B` received is accounted for (3 049 = 2 922 + 127; 9 645 = 9 008 + 637).
 
 **B5 — ghost commander.**
 
