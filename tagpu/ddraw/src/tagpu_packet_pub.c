@@ -3521,6 +3521,10 @@ static void extra(char* buf, unsigned cap, double secs)
         while (n < cap && buf[n]) n++;
         /* B4's stale-hits section (sim-fixes.md B4): DLL counters, no engine read */
         if (cap > n) tagpu_hits_format(buf + n, cap - n);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        /* B5's ghost-commander section (sim-fixes.md B5): DLL counters, no engine read */
+        if (cap > n) tagpu_ghost_format(buf + n, cap - n);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;

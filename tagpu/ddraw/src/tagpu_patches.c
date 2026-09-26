@@ -87,6 +87,7 @@ static int     s_nlim;
 static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
 static int     s_limOverflow;        /* the table itself was too small: our bug      */
 static int     s_limNoStub;          /* a code stub could not be made                */
+static char    s_limNeeds[192];      /* a table fix's required local fix is not armed */
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
 
@@ -140,6 +141,14 @@ static void lim_same(unsigned int va, int n, const unsigned char* stock, const c
 static void lim_no_stub(void)
 {
     s_limNoStub = 1;
+}
+
+/* a fix of the table that rests on a local fix, which did not arm: nothing of the table is
+   written, and the report says which */
+static void lim_needs(const char* fix, const char* needs, const char* state)
+{
+    _snprintf(s_limNeeds, sizeof s_limNeeds, "%s needs %s armed, and it is %s", fix, needs, state);
+    s_limNeeds[sizeof s_limNeeds - 1] = 0;
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -2803,6 +2812,11 @@ static int wire_block_ok(const char* first, const char* last, const char* begin,
     return last == first + (long long)(n - 1u) * 0x118;
 }
 
+/* 1 for CreateFromNetwork's return into the 0x09 case (0x4553E9) or into the ghost-commander
+   replay, which enters it as the case does with a record the case refused in state 5
+   (fix_ghost_commander): the receivers that key on the case's return treat both alike */
+static int ghost_is_09_return(unsigned int ret);
+
 /* The B4/B5 oracle counters (§10), observe-only. morph = a create onto a live slot whose type
    changes. dcreate = CreateFromNetwork called by the 0x2C dirty list (returning to 0x48BA05):
    a dirty entry whose type is not its slot's, the unit made from the entry rather than from its
@@ -3053,7 +3067,7 @@ static int __cdecl wire_s09(unsigned int* r)
         char* slot = (char*)first + (size_t)idx * 0x118;
         unsigned int ret = *(const unsigned int*)(sp + 0x1C);   /* CreateFromNetwork's caller */
         int noblk = *(const unsigned int*)(ta + r[PR_EDX] + 0x1BCA) == 0;   /* 0x486220 */
-        if (ret == 0x004553E9u) {
+        if (ghost_is_09_return(ret)) {
             const char* players = ta + 0x1B63;
             const char* snd = *(const char* const*)sp;     /* the dispatcher's edi */
             unsigned int si = 10;
@@ -5687,8 +5701,10 @@ static int hit_2c_bound(const char* ta, const char* slot, unsigned int* bound)
 /* At CreateFromNetwork's success exit 0x48634F (esi the unit; its caller's return address at
    the site's esp + 0x1C and its record argument at + 0x24, as 0x4861ED reads it). 0x4553E9 is
    the 0x09 case, reached only through our 0x05 slot (its jump-table entry is the one reference
-   to 0x4553DA in the image), so the record is a carried one, with its birth 23 bytes on;
-   0x48BA05 and 0x48B49C are the 0x2C's dirty entry and round robin. */
+   to 0x4553DA in the image), so the record is a carried one, with its birth 23 bytes on; the
+   ghost-commander's replay and catch-up creates enter with the same whole carried record, and
+   the replay's return counts as 0x4553E9 (ghost_is_09_return); 0x48BA05 and 0x48B49C are the
+   0x2C's dirty entry and round robin. */
 static void __cdecl hit_created(unsigned int* r)
 {
     struct hit_tab* t = s_hit;
@@ -5698,7 +5714,7 @@ static void __cdecl hit_created(unsigned int* r)
     const unsigned char* rec = *(const unsigned char* const*)(WPN_ESP_JMP(r) + 0x24);
     unsigned int idx, stamp = HIT_UNKNOWN;
     if (!hit_slot_index(t, ta, slot, &idx)) return;
-    if (ret == 0x004553E9u && (rec[3] | (unsigned int)rec[4] << 8) == idx) {
+    if (ghost_is_09_return(ret) && (rec[3] | (unsigned int)rec[4] << 8) == idx) {
         memcpy(&stamp, rec + 23, 4);
         s_hitCreateExact++;
     } else if ((ret == 0x0048BA05u || ret == 0x0048B49Cu) && hit_2c_bound(ta, slot, &stamp)) {
@@ -5780,14 +5796,22 @@ static int hit_young(const struct hit_tab* t, const char* ta, unsigned int idx)
     return s_hitDelayK && HIT_GAMETIME(ta) - t->local[idx] < s_hitDelayK;
 }
 
+/* A carried 0x09 past its gate: counted, and its record for CreateFromNetwork -- the whole
+   carried message from its 0x09 on, whose birth 0x48634F reads 23 bytes on. The ghost-commander
+   replay and catch-up creates enter here too, with the create the gate refused. */
+static const unsigned char* hit_rx_create_armed(const unsigned char* m)
+{
+    s_hitInCreate++;
+    return m + 3;
+}
+
 /* 0 stock's chat; 1 done; 2 CreateFromNetwork on the record; 3 0x489CE0 on the record, which
    goes back to the stub in regs[PR_EAX], where popad puts it in eax */
 static int hit_rx_create(unsigned int* regs, const char* ta, const unsigned char* m)
 {
     if (m[3] != 0x09) { s_hitMalformed++; return 1; }
     if (!hit_gate(ta, 0x09)) { s_hitStateRefused++; return 1; }
-    s_hitInCreate++;
-    regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
+    regs[PR_EAX] = (unsigned int)(size_t)hit_rx_create_armed(m);
     return 2;
 }
 
@@ -5831,6 +5855,11 @@ static int hit_rx_hit(unsigned int* regs, const char* ta, const unsigned char* m
     return 3;
 }
 
+/* For a carried 0x09 the gate refuses in state 5: 1 when the ghost-commander queue holds it,
+   2 when it is created now (the catch-up ticks, its record in regs[PR_EAX] as
+   hit_rx_create puts it), 0 when it is not the queue's */
+static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m);
+
 /* The dispatch table's 0x05 slot 0x455F90, entered by the dispatcher's `jmp [eax*4+0x455F84]`
    with its frame: the message at the site's esp + 0x10. */
 static int __cdecl hit_rx_chat(unsigned int* regs)
@@ -5842,7 +5871,10 @@ static int __cdecl hit_rx_chat(unsigned int* regs)
 #ifndef TAGPU_LIMITS_STOCK
     case WPN_CHAT_TAG:   wpn_rx_chat(regs); return 0;
 #endif
-    case HIT_TAG_CREATE: return hit_rx_create(regs, ta, m);
+    case HIT_TAG_CREATE: {
+        int g = ghost_take(regs, ta, m);
+        return g ? g : hit_rx_create(regs, ta, m);
+    }
     case HIT_TAG_HIT:    return hit_rx_hit(regs, ta, m);
     default:             return 0;
     }
@@ -6088,22 +6120,761 @@ static int fix_stale_hits(void)
    the companions' bytes and stockB= what the bare messages would have been; copy= counts the
    stamps CreateFromNetwork's exit took, by kind; held= creates the hold moved to an unheld
    slot, fallback= to a slot freed in the last tick, holdfail= creates it failed, retry= the
-   Deathmatch respawns that found no slot and wait for their countdown's next fire. */
+   Deathmatch respawns that found no slot and wait for their countdown's next fire. The alert
+   fields come first: the heartbeat is one log line of at most 2040 bytes, cut from its end,
+   and only the ghost section follows this one. */
 int tagpu_hits_format(char* buf, unsigned int cap)
 {
     const struct hit_tab* t = s_hit;
     return _snprintf(buf, cap,
-                     " | hits: slots=%u tables=%u out 09=%u 0b=%u B=%u stockB=%u unk=%u"
-                     " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u bad=%u"
-                     " bare 09=%u 0b=%u copy exact=%u bound=%u unk=%u held=%u fallback=%u"
-                     " holdfail=%u retry=%u delay=%u q=%u over=%u young owner=%u by=%u",
+                     " | hits: bad=%u bare 09=%u 0b=%u over=%u young owner=%u by=%u"
+                     " slots=%u tables=%u out 09=%u 0b=%u B=%u stockB=%u unk=%u"
+                     " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u"
+                     " copy exact=%u bound=%u unk=%u held=%u fallback=%u"
+                     " holdfail=%u retry=%u delay=%u q=%u",
+                     s_hitMalformed, s_hitBare09, s_hitBare0B, s_hitDelayOverflow,
+                     s_hitYoungOwner, s_hitYoungBy,
                      t ? t->n : 0u, s_hitTables, s_hitOutCreate, s_hitOutHit, s_hitOutBytes,
                      s_hitStockBytes, s_hitTxUnknown, s_hitInCreate, s_hitInHit, s_hitApplyOwner,
                      s_hitRefuseOwner, s_hitApplyBy, s_hitUndecidedBy, s_hitRefuseBy, s_hitDead,
-                     s_hitStateRefused, s_hitMalformed, s_hitBare09, s_hitBare0B,
+                     s_hitStateRefused,
                      s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown, s_hitHeld,
-                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed,
-                     s_hitDelayOverflow, s_hitYoungOwner, s_hitYoungBy);
+                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed);
+}
+
+/* ===== GHOST COMMANDER: THE CREATES REFUSED DURING THE LOAD, AND THE DIRTY CREATE'S POSITION ===
+   Landing B5 of research/notes/tadr-port/sim-fixes.md ("B5 DESIGN" has the argument in full;
+   the addresses are in exe-reverse-engineering.md, "A create refused during the load").
+
+   THE DEFECT [DISASSEMBLED; MEASURED with the fix off]. The dispatcher passes a unit
+   create only in net state 6 (0x45473F with the table 0x512BC0: 0x09 has mask 4 alone), and a
+   peer stays in state 5 until its game thread's 0x498445, after its load. A peer still loading
+   when the others enter play drops their first creates, the commanders among them, until the
+   round robin re-creates each unit (50 s at the 1500-unit limit, 16.7 s at 500). A unit that
+   moves first comes back sooner through a dirty 0x2C entry, whose create record
+   (0x48B9B6..0x48B9FB) takes the SLOT's own stale position, (0,0,0) in a fresh array.
+
+   THE FIX, three parts.
+   - The queue: a carried 0x09 the gate refuses while the level loads is kept per sender, in
+     arrival order, and replayed before the level's first tick, at the in-play entry's call of
+     the frame function (0x49842F). That function's catch-up ticks (up to five, 0x495490) still
+     run in state 5, and so does the frame function's own pump after them (0x4968CB); a create
+     refused in either is made at once, in the pump it arrives in (a tick's 0x4954C8, or
+     0x4968CB), which is where state 6 makes it. Both pass B4's receiver past
+     its state test only (hit_rx_create_armed), so the incarnation is set as a live create sets
+     it, and enter CreateFromNetwork with the sender in edi as the case has it, so B3's bounds
+     and observe run on them too.
+   - The kills: a 0x0C the gate refuses in state 5 (the dispatcher's refusal branch
+     0x45477F) cancels the latest create held for its slot from its sender, so a unit the
+     owner destroyed during the load is never made. One refused in the catch-up ticks, for a
+     copy the replay or a catch-up tick made, marks the copy dying as the engine's own ghost
+     sweep does (0x48B42C), and the unit tick destroys it (0x48AFB9 -> 0x4864B0).
+   - The position: the dirty create's record takes the position its entry's own move payload
+     carries, read ahead in the engine's bit order, for the payloads disassembled to carry one
+     (ghost_payload_pos says which, and where each lands).
+
+   INVARIANTS.
+   - Bounded: GHOST_DEPTH records per sender, ten senders. A create past a full queue is
+     counted and left to the round robin, which is where stock leaves every one of them.
+   - Emptied by the level's own lifetime, never by GameTime: cleared at the load's start
+     (0x497F5E, the load state 0x497F40's first call, on the game thread before 0x4982CA
+     creates the loader thread), drained before the first tick. Every record leaves exactly
+     once: replayed, cancelled by its kill, or counted.
+   - An ordering, not a window. During the load two threads pump (the game thread at 0x49852E,
+     the loader at 0x49727D), so records go in under a lock. The loader's last pump comes
+     before its last store, bit 1 (value 2) of main+0x38D75 at 0x497C62, and the game thread
+     reaches 0x49842F only after reading that bit at 0x498342, so the drain sees every create
+     the load refused. After it only the game thread pumps (the catch-up ticks' 0x4954C8, the
+     frame function's 0x4968CB), and nothing more is held: a create refused there is made in
+     that pump.
+   - Before the first tick is safe: CreateFromNetwork calls what the local create 0x485F50
+     calls (0x485A40, 0x485D40, 0x49E070, 0x437840, 0x43DC00, 0x48A870, 0x47CC30, 0x482AC0,
+     0x490580), and over an occupied slot first destroys its unit through 0x4864B0
+     (0x486237..0x486244), the unit tick's own destroy; that sends a 0x0C only for a local
+     player's unit (0x48664B), and the replay never takes a local player's slot. Stock's loader
+     runs 0x485F50 for this peer's commander in state 5, before any tick (0x4977BB); neither
+     body reads the net state or GameTime. What the
+     replay skips of the dispatcher is the state test alone: the sender test is re-run on the
+     record under the DirectPlay id it had. A create made in a catch-up tick has just passed
+     the dispatcher's sender test (0x4547AD) and is made where state 6 makes it.
+   - A record is replayed only when its sender passes the dispatcher's own sender test now
+     (0x4547AD..0x4547E2: present, type 3, +0x146 not 10) under the DirectPlay id it had, and
+     its slot is empty or holds an older incarnation by B4's stamps -- never a local player's.
+   - Kills pair with creates in ONE sender's arrival order: the owner alone sends a unit's 0x0C
+     (0x48664B..0x48666D, the one send of the 0x0C's 11 bytes), and a slot is taken only once
+     it is free, so its stream for a slot alternates create, kill. If one sender's messages could arrive out of order (the
+     plan's open question), a replayed ghost lasts until the owner's round robin marks it
+     (0x48B415), at most N of its ticks -- stock's bound for any ghost.
+   - The game thread only: the drain, the catch-up creates and the dying mark check their
+     thread and do nothing on any other.
+   - On the map by construction: a position is taken only when 0 <= x < W*16 and 0 <= z < H*16
+     px (W, H at main+0x14233/+0x14237, each 1..4096), and the record keeps stock's otherwise.
+
+   CLASS: simulation, fail closed, both builds -- which units a peer holds, and where, is shared
+   state. Every site is a row of the fail-closed table. */
+
+#define GHOST_DEPTH   64                    /* per sender: a load's window holds a few creates */
+#define GHOST_SENDERS 10                    /* the player records main+0x1B63, stride 0x14B    */
+#define GHOST_NOTES   64
+
+typedef struct {
+    unsigned char m[HIT_MSG];               /* the tagged 0x05 as received                     */
+    unsigned int  arg;                      /* the 0x09 case's player argument, its [esp+0x14] */
+    unsigned int  dpid;                     /* the sender's DirectPlay id, record + 4           */
+    int           dead;                     /* cancelled by a later refused 0x0C for its slot   */
+} GHOSTREC;
+
+#define GHOST_DONE    1024                  /* copies made before state 6 a kill can still mark */
+
+typedef struct { unsigned int idx, k, birth; } GHOSTDONE;
+
+typedef void* (__stdcall* GHOSTCALL)(unsigned int arg, const unsigned char* rec, const char* sender);
+
+static CRITICAL_SECTION s_ghostLock;        /* the queue: whichever thread pumps, then the drain */
+static GHOSTREC     s_ghostQ[GHOST_SENDERS][GHOST_DEPTH];
+static unsigned int s_ghostN[GHOST_SENDERS];
+static int          s_ghostPhase;           /* 1 once this level's first drain has run          */
+static GHOSTREC     s_ghostTake[GHOST_SENDERS][GHOST_DEPTH];   /* the drain's copy, game thread */
+static GHOSTDONE    s_ghostDone[GHOST_DONE];    /* the drain's and the catch-up ticks' copies */
+static unsigned int s_ghostDoneN;
+static DWORD        s_ghostGameTid;         /* DllMain's thread, which runs the main loop       */
+static int          s_ghostOff;             /* TEST LEVER tagpu_ghostq.off                      */
+static unsigned int s_ghostRet;             /* the replay stub's return into CreateFromNetwork  */
+static GHOSTCALL    s_ghostCall;
+
+/* counters for the heartbeat's ghost: section; u32. q, over, killed and nokill are written
+   under the lock, the rest on the game thread. */
+static unsigned int s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostKilled, s_ghostNoKill;
+static unsigned int s_ghostReplayed, s_ghostNow, s_ghostSwept, s_ghostUntracked;
+static unsigned int s_ghostInactive, s_ghostStale, s_ghostBad, s_ghostCleared;
+static unsigned int s_ghostOffThread, s_ghostLevels;
+static unsigned int s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff;
+static unsigned int s_ghostPosUnbound, s_ghostPosShort;
+static volatile LONG s_ghostNotes;
+
+static int ghost_is_09_return(unsigned int ret)
+{
+    return ret == 0x004553E9u || (s_ghostRet != 0u && ret == s_ghostRet);
+}
+
+/* ---- the pure rules; tagpu_wirecheck.on exercises them on boundary values ------------------ */
+
+/* 1 when a held create, the owner's birth `birth`, is newer than what its slot holds: an empty
+   slot, or a copy B4 stamped earlier -- an exact birth, or a lower bound g0 (the unit alive in
+   the slot at the owner's g0, so born at or before it). A birth that is itself unknown
+   replaces nothing. */
+static int ghost_newer(int occupied, unsigned int copy, unsigned int birth)
+{
+    if (!occupied) return 1;
+    if (birth & HIT_LB) return 0;
+    return birth > (copy & ~HIT_LB);
+}
+
+/* a position in whole world px against the map's size in 16-px cells */
+static int ghost_on_map(int x, int z, unsigned int w, unsigned int h)
+{
+    return w >= 1u && w <= 4096u && h >= 1u && h <= 4096u && x >= 0 && z >= 0 &&
+           (unsigned int)x < w * 16u && (unsigned int)z < h * 16u;
+}
+
+/* The record a kill for slot `idx` cancels: the latest create held for that slot and not yet
+   cancelled, or -1. One sender's stream for a slot alternates create, kill, so the latest is
+   the unit the kill names. */
+static int ghost_cancel(const GHOSTREC* q, unsigned int n, unsigned int idx)
+{
+    while (n-- > 0)
+        if (!q[n].dead && (q[n].m[6] | (unsigned int)q[n].m[7] << 8) == idx) return (int)n;
+    return -1;
+}
+
+/* The engine's bit reader 0x415DC0, on a copy: {dwords, word, bit}, least significant bit
+   first, n in 1..32. It reads no dword the engine's own read of the same bits does not. */
+typedef struct { const unsigned int* data; unsigned int word, bit; } GHOSTBITS;
+
+static unsigned int ghost_bits(GHOSTBITS* b, unsigned int n)
+{
+    unsigned int lo, used;
+    if (b->bit + n < 32u) {
+        lo = (b->data[b->word] >> b->bit) & ((1u << n) - 1u);
+        b->bit += n;
+        return lo;
+    }
+    if (b->bit == 0u) return b->data[b->word++];         /* n == 32 on a word boundary */
+    lo = b->data[b->word++] >> b->bit;                    /* the 32 - bit bits left     */
+    used = 32u - b->bit;
+    n -= used;
+    b->bit = n;
+    return n ? lo | (b->data[b->word] & ((1u << n) - 1u)) << used : lo;
+}
+
+enum { GHOST_POS_NONE, GHOST_POS_GROUND, GHOST_POS_AIR, GHOST_POS_SHORT };
+
+/* The position a dirty entry's move payload carries, read ahead of the decoder that will parse
+   it. A remote unit's move object is made by 0x43DC00: the ground proxy 0x4FD488 unless the
+   def's +0x241 bit 11 makes it the air proxy 0x4FD9E0 (0x43DC5F..0x43DC68).
+   - Ground, decoder 0x44F5C0 (the owner writes it at 0x44F4A0): one flag bit, a 2-bit count n
+     (0..3), then n points of int16 x, int16 z in whole world px -- the owner mover's path
+     from its front (+0xC, count +0x5C). Point 0 is the node the unit last REACHED, never the
+     next one: the mover's step 0x44F1A0 (vtable 0x4FD458 + 8, called through 0x43DD20 from
+     the unit tick at 0x48AFAA) drops the front only once the unit is within 5 px of point 1
+     (0x44F1D7..0x44F235, the squared distance against 0x19), and a straight order's path is
+     [the unit's position, the goal] (0x44F3F2..0x44F417 stores +0x6C/+0x74, the integer halves
+     of +0x6A/+0x72), so a straight move keeps its origin as point 0 until the unit is within
+     5 px of its goal. 0x44F100 does the same shift and nothing calls it. A unit created well
+     along a long straight move is therefore placed at its origin and trails the owner's until
+     the round robin's full state for its slot writes the owner's x, y, z into it
+     (0x48B5CA..0x48B6A7): at most N owner ticks, the bound stock's (0,0,0) has too. The
+     receiver's proxy hands the points to the unit as its path (0x44F650). Taken: point 0, x
+     and z; y stays stock's.
+   - Air, decoder 0x490A10: a 2-bit selector. 2 is the 0x2C-byte motion 0x44E9C0 (written by
+     0x44E930): one flag bit, then x, y, z in 16.16 and a velocity -- the point the proxy's step
+     0x490690 copies into its own +0xC each tick (0x44EA60, called at 0x4906B8), the unit's
+     dead-reckoned position. Taken: x, y, z. 1 is 0x44E080's object, whose optional vector
+     +0x26 is a GOAL (0x44E3C0 refreshes it from the followed unit) and not the unit's own
+     position; 0 and 3 carry no motion. Neither is taken.
+   `avail` is the bits left in the message from the reader's position: a read that would pass
+   the message's end is GHOST_POS_SHORT, before it is made. Only the bits read here are tested
+   (35 for ground, 99 for air), not the rest of the payload: the engine's decoder reads that
+   from B3's zero-padded copy, and B3's check before the next entry's type (wire_s2c_delta)
+   stops the stream if the payload ran past the end. A well-formed entry's payload is inside
+   its message, so the test never refuses one.
+   Returns the kind, with x, z in whole px and x16, y16, z16 as the record holds them. */
+static int ghost_payload_pos(GHOSTBITS b, unsigned long long avail, int air, int* x, int* z,
+                             unsigned int* x16, unsigned int* y16, unsigned int* z16)
+{
+    if (!air) {
+        unsigned int n;
+        if (avail < 3u) return GHOST_POS_SHORT;
+        (void)ghost_bits(&b, 1);
+        n = ghost_bits(&b, 2);
+        if (n == 0u) return GHOST_POS_NONE;
+        if (avail < 3u + 32u) return GHOST_POS_SHORT;
+        *x = (short)ghost_bits(&b, 16);
+        *z = (short)ghost_bits(&b, 16);
+        if (*x < 0 || *z < 0) return GHOST_POS_NONE;
+        *x16 = (unsigned int)*x << 16;
+        *z16 = (unsigned int)*z << 16;
+        return GHOST_POS_GROUND;
+    }
+    if (avail < 2u) return GHOST_POS_SHORT;
+    if (ghost_bits(&b, 2) != 2u) return GHOST_POS_NONE;
+    if (avail < 2u + 1u + 96u) return GHOST_POS_SHORT;
+    (void)ghost_bits(&b, 1);
+    *x16 = ghost_bits(&b, 32);
+    *y16 = ghost_bits(&b, 32);
+    *z16 = ghost_bits(&b, 32);
+    if ((int)*x16 < 0 || (int)*z16 < 0) return GHOST_POS_NONE;
+    *x = (int)(*x16 >> 16);
+    *z = (int)(*z16 >> 16);
+    return GHOST_POS_AIR;
+}
+
+/* ---- the engine side --------------------------------------------------------------------- */
+
+/* the dispatcher's own test of a sender (0x4547AD..0x4547E2), under the id it had */
+static int ghost_sender_active(const char* ta, unsigned int k, unsigned int dpid)
+{
+    const unsigned char* rec;
+    if (k >= GHOST_SENDERS) return 0;
+    rec = (const unsigned char*)ta + 0x1B63 + k * 0x14B;
+    return *(const unsigned int*)rec != 0u && rec[0x73] == 3 && rec[0x146] != 0x0A &&
+           *(const unsigned int*)(rec + 4) == dpid;
+}
+
+/* 1 when an occupied slot's owner is one of the ten records and a local player (type 1 or 2) */
+static int ghost_local_owner(const char* ta, const char* slot)
+{
+    const char* players = ta + 0x1B63;
+    const char* pl = *(const char* const*)(slot + 0x96);
+    if (pl < players || pl >= players + GHOST_SENDERS * 0x14B || (pl - players) % 0x14B) return 0;
+    return *(const unsigned int*)pl != 0u && (pl[0x73] == 1 || pl[0x73] == 2);
+}
+
+/* a copy made before state 6, which a kill refused in the catch-up ticks can still mark;
+   game thread. Past GHOST_DONE a copy is not tracked, and its kill waits for the round robin. */
+static void ghost_made(unsigned int idx, unsigned int k, unsigned int birth)
+{
+    GHOSTDONE* d;
+    if (s_ghostDoneN >= GHOST_DONE) { s_ghostUntracked++; return; }
+    d = &s_ghostDone[s_ghostDoneN++];
+    d->idx = idx;
+    d->k = k;
+    d->birth = birth;
+}
+
+/* In B4's 0x05 receiver, before the carried 0x09's own gate: in state 5, where that gate
+   refuses it, hold it, or after the drain make it at once. regs is the receiver's frame: edi
+   the sender's record, the case's player argument at the site's esp + 0x14, paired by
+   0x453E84..0x453EA1 (a row of the table). */
+static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m)
+{
+    const char* snd = (const char*)(size_t)regs[PR_EDI];
+    unsigned int arg, k, birth;
+    int now;
+    if (s_ghostOff || m[3] != 0x09 || *(const unsigned int*)(ta + 0x391F1) != 5u ||
+        hit_gate(ta, 0x09))
+        return 0;
+    arg = *(const unsigned int*)(WPN_ESP_JMP(regs) + 0x14);
+    k = arg & 0xFFu;
+    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return 0;
+    EnterCriticalSection(&s_ghostLock);
+    now = s_ghostPhase;
+    if (!now) {
+        if (s_ghostN[k] < GHOST_DEPTH) {
+            GHOSTREC* q = &s_ghostQ[k][s_ghostN[k]++];
+            memcpy(q->m, m, HIT_MSG);
+            q->arg = arg;
+            q->dpid = *(const unsigned int*)(snd + 4);
+            q->dead = 0;
+            s_ghostQueued++;
+            if (s_ghostN[k] > s_ghostDeep) s_ghostDeep = s_ghostN[k];
+        } else {
+            s_ghostOverflow++;
+        }
+    }
+    LeaveCriticalSection(&s_ghostLock);
+    if (!now) return 1;
+    /* after the drain only the game thread pumps (0x4954C8, 0x4968CB) */
+    if (GetCurrentThreadId() != s_ghostGameTid) { s_ghostOffThread++; return 0; }
+    memcpy(&birth, m + 26, 4);
+    ghost_made(m[6] | (unsigned int)m[7] << 8, k, birth);
+    s_ghostNow++;
+    if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+        tagpu_logf("enginefix: ghost commander: created slot %u from sender %u (birth %u, type %u) "
+                   "at GameTime %u, in a catch-up tick", m[6] | (unsigned int)m[7] << 8, k,
+                   birth, m[4] | (unsigned int)m[5] << 8, HIT_GAMETIME(ta));
+    regs[PR_EAX] = (unsigned int)(size_t)hit_rx_create_armed(m);
+    return 2;
+}
+
+/* A copy made before state 6 from sender k's create for slot idx, still that copy: marked
+   dying as the engine's ghost sweep marks one (0x48B426..0x48B42F, bit 14 of +0x110), which
+   the unit tick then destroys without a message (0x48AFB9 -> 0x4864B0; it sends a 0x0C only
+   for a local player's unit, 0x48664B). Game thread, from the pump, as that sweep runs. */
+static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
+{
+    const char* first = *(const char* const*)(ta + 0x14357);
+    const char* last  = *(const char* const*)(ta + 0x1435B);
+    const struct hit_tab* t = s_hit;
+    char* slot;
+    unsigned int i = s_ghostDoneN, flags;
+    while (i > 0 && !(s_ghostDone[i - 1].idx == idx && s_ghostDone[i - 1].k == k)) i--;
+    if (i == 0 || !t || !first || last < first || idx == 0u || idx >= t->n ||
+        idx > (unsigned int)(last - first) / 0x118)
+        return 0;
+    slot = (char*)first + (size_t)idx * 0x118;
+    flags = *(const unsigned int*)(slot + 0x110);
+    if (!*(const unsigned short*)(slot + 0xA6) ||
+        *(const char* const*)(slot + 0x96) != ta + 0x1B63 + k * 0x14B ||
+        t->stamp[idx] != s_ghostDone[i - 1].birth ||
+        !(flags & 0x10000000u) || (flags & 0x4000u))
+        return 0;
+    *(unsigned int*)(slot + 0x110) = flags | 0x4000u;
+    return 1;
+}
+
+/* The dispatcher's refusal of a message in state 5 (0x45477F), on whichever thread pumps: a
+   0x0C there names a unit its owner destroyed while this peer loaded. Its held create is
+   cancelled; failing that, in the catch-up ticks, the copy made before state 6 is marked
+   dying. */
+static void __cdecl ghost_refused(unsigned int* regs)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    const unsigned char* sp = WPN_ESP_JMP(regs);
+    const unsigned char* m = *(const unsigned char* const*)(sp + 0x10);
+    const char* snd = (const char*)(size_t)regs[PR_EDI];
+    unsigned int k, idx;
+    int i, late;
+    if (s_ghostOff || !ta || !m || m[0] != 0x0C) return;
+    k = *(const unsigned int*)(sp + 0x14) & 0xFFu;
+    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return;
+    idx = m[1] | (unsigned int)m[2] << 8;
+    EnterCriticalSection(&s_ghostLock);
+    i = ghost_cancel(s_ghostQ[k], s_ghostN[k], idx);
+    if (i >= 0) {
+        s_ghostQ[k][i].dead = 1;
+        s_ghostKilled++;
+    }
+    late = s_ghostPhase;
+    LeaveCriticalSection(&s_ghostLock);
+    if (i >= 0) return;
+    if (late && GetCurrentThreadId() == s_ghostGameTid && ghost_sweep(ta, k, idx)) {
+        s_ghostSwept++;
+        if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+            tagpu_logf("enginefix: ghost commander: slot %u from sender %u killed during the "
+                       "catch-up ticks; its copy made before state 6 marked dying", idx, k);
+        return;
+    }
+    EnterCriticalSection(&s_ghostLock);
+    s_ghostNoKill++;
+    LeaveCriticalSection(&s_ghostLock);
+}
+
+/* In place of 0x497F5E, the load state's first call (bit 0 of main+0x38D75 clear), on the game
+   thread before the loader thread exists: whatever an abandoned load left is counted and gone. */
+static void __cdecl ghost_reset(unsigned int* regs)
+{
+    unsigned int k, left = 0;
+    (void)regs;
+    EnterCriticalSection(&s_ghostLock);
+    for (k = 0; k < GHOST_SENDERS; k++) {
+        left += s_ghostN[k];
+        s_ghostN[k] = 0;
+    }
+    s_ghostPhase = 0;
+    s_ghostDoneN = 0;
+    LeaveCriticalSection(&s_ghostLock);
+    if (left) {
+        s_ghostCleared += left;
+        tagpu_logf("enginefix: ghost commander: %u held creates from a load that never reached "
+                   "play, cleared", left);
+    }
+}
+
+/* At 0x49842F, on the game thread, before the frame function runs the level's first tick:
+   every held create is replayed through B4's receiver past its state test and
+   CreateFromNetwork, or counted. From here on a create refused in state 5 is made at once. */
+static void __cdecl ghost_replay(unsigned int* regs)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    const struct hit_tab* t = s_hit;
+    const char* first;
+    const char* last;
+    unsigned int n[GHOST_SENDERS], k, i, total = 0, max = 0, done = 0, dead = 0, before;
+    (void)regs;
+    EnterCriticalSection(&s_ghostLock);
+    for (k = 0; k < GHOST_SENDERS; k++) {
+        n[k] = s_ghostN[k];
+        memcpy(s_ghostTake[k], s_ghostQ[k], n[k] * sizeof(GHOSTREC));
+        s_ghostN[k] = 0;
+        total += n[k];
+    }
+    s_ghostPhase = 1;
+    LeaveCriticalSection(&s_ghostLock);
+    s_ghostLevels++;
+    if (!ta || GetCurrentThreadId() != s_ghostGameTid) {
+        s_ghostOffThread += total;
+        tagpu_logf("enginefix: ghost commander: the in-play entry ran off the game thread; %u "
+                   "held creates dropped", total);
+        return;
+    }
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (first && last >= first) max = (unsigned int)(last - first) / 0x118;
+    before = s_ghostInactive + s_ghostStale + s_ghostBad;
+    for (k = 0; k < GHOST_SENDERS; k++)
+        for (i = 0; i < n[k]; i++) {
+            const GHOSTREC* q = &s_ghostTake[k][i];
+            unsigned int idx = q->m[6] | (unsigned int)q->m[7] << 8, birth;
+            const char* slot;
+            memcpy(&birth, q->m + 26, 4);
+            if (q->dead) { dead++; continue; }                     /* counted as killed */
+            if (!ghost_sender_active(ta, k, q->dpid)) { s_ghostInactive++; continue; }
+            if (idx == 0u || idx > max || !t || idx >= t->n) { s_ghostBad++; continue; }
+            slot = first + (size_t)idx * 0x118;
+            if (*(const unsigned short*)(slot + 0xA6) &&
+                (ghost_local_owner(ta, slot) || !ghost_newer(1, t->stamp[idx], birth))) {
+                s_ghostStale++;
+                continue;
+            }
+            /* the whole carried message: 0x48634F reads the birth 23 bytes into the record */
+            s_ghostCall(q->arg, hit_rx_create_armed(q->m), ta + 0x1B63 + k * 0x14B);
+            ghost_made(idx, k, birth);
+            s_ghostReplayed++;
+            done++;
+            if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+                tagpu_logf("enginefix: ghost commander: replayed slot %u from sender %u (birth %u, "
+                           "type %u) at GameTime %u, before the first tick; the slot now holds "
+                           "type %u", idx, k, birth, q->m[4] | (unsigned int)q->m[5] << 8,
+                           HIT_GAMETIME(ta), *(const unsigned short*)(slot + 0xA6));
+        }
+    tagpu_logf("enginefix: ghost commander: before the first tick (GameTime %u), %u held creates: "
+               "%u replayed, %u killed while held, %u not (inactive %u, stale %u, bad %u in "
+               "total)", HIT_GAMETIME(ta), total, done, dead,
+               s_ghostInactive + s_ghostStale + s_ghostBad - before, s_ghostInactive,
+               s_ghostStale, s_ghostBad);
+}
+
+/* In place of the dirty create's `call 0x4861D0` at 0x48BA00, entered by a call so that
+   CreateFromNetwork still sees 0x48BA05: [esp] the return, [esp+4] the player (its low byte,
+   the slot's +0xFF), [esp+8] the 23-byte record, and the 0x2C's reader at [esp+0x1C] (the
+   frame's esp + 0x10, after the two pushes and the call; its slots set at 0x48B933..0x48B93E,
+   a row of the table).
+   The payload is read only from B3's copy of the message, and only within its length: the
+   reader must be the one B3's wire_s2c_copy set up for this 0x2C (s_wire2cRd) and still point
+   at its copy, whose WIRE_2C_PAD zero bytes cover the dword a last read touches. B3 is armed
+   whenever this runs (fix_ghost_commander refuses the table otherwise), so `unbound` can only
+   count a reader that is not the 0x2C's own, which the disassembly says never reaches here. */
+static void __cdecl ghost_position(unsigned int* r)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned char* sp = WPN_ESP_JMP(r);
+    unsigned char* rec = *(unsigned char* const*)(sp + 8);
+    const unsigned int* rd = (const unsigned int*)(sp + 0x1C);
+    unsigned int k = *(const unsigned int*)(sp + 4) & 0xFFu;
+    unsigned int type, count, x16 = 0, y16 = 0, z16 = 0, sx, sz;
+    const unsigned char* pl;
+    const char* defs;
+    const char* def;
+    GHOSTBITS b;
+    unsigned long long pos, avail;
+    int kind, x = 0, z = 0;
+    if (!ta || !rec || k >= GHOST_SENDERS || !rd[0]) { s_ghostPosNone++; return; }
+    pl = (const unsigned char*)ta + 0x1B63 + k * 0x14B;
+    type  = rec[1] | (unsigned int)rec[2] << 8;
+    count = *(const unsigned int*)(ta + 0x1438F);
+    defs  = *(const char* const*)(ta + 0x1439B);
+    /* 0x43DC48..0x43DC57: only a remote player's unit gets a proxy; 0x4862CF: only a def
+       with a move class gets a move object at all */
+    if (!*(const unsigned int*)pl || pl[0x73] != 3 || !defs || type == 0u || type >= count) {
+        s_ghostPosNone++;
+        return;
+    }
+    def = defs + (size_t)type * 0x249;
+    if (*(const unsigned char*)(def + 0x22F) != 1) { s_ghostPosNone++; return; }
+    if ((const unsigned char*)rd != s_wire2cRd || !s_wire2cCopy ||
+        (const unsigned char*)(size_t)rd[0] != s_wire2cCopy) {
+        s_ghostPosUnbound++;
+        return;
+    }
+    b.data = (const unsigned int*)(size_t)rd[0];
+    b.word = rd[1];
+    b.bit  = rd[2];
+    if (b.bit >= 32u) { s_ghostPosNone++; return; }
+    pos   = wire_pos((const unsigned char*)rd);
+    avail = pos < s_wire2cEnd ? s_wire2cEnd - pos : 0u;
+    kind = ghost_payload_pos(b, avail, (*(const unsigned int*)(def + 0x241) >> 11) & 1u, &x, &z,
+                             &x16, &y16, &z16);
+    if (kind == GHOST_POS_SHORT) {
+        s_ghostPosShort++;
+        if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+            tagpu_logf("enginefix: ghost commander: dirty create slot %u: reading its move "
+                       "payload's position would pass the message's end (bit %u of %u); stock's "
+                       "record kept",
+                       rec[3] | (unsigned int)rec[4] << 8, (unsigned int)pos,
+                       (unsigned int)s_wire2cEnd);
+        return;
+    }
+    if (kind == GHOST_POS_NONE) { s_ghostPosNone++; return; }
+    if (!ghost_on_map(x, z, *(const unsigned int*)(ta + 0x14233),
+                      *(const unsigned int*)(ta + 0x14237))) {
+        s_ghostPosOff++;
+        return;
+    }
+    memcpy(&sx, rec + 5, 4);
+    memcpy(&sz, rec + 13, 4);
+    memcpy(rec + 5, &x16, 4);
+    memcpy(rec + 13, &z16, 4);
+    if (kind == GHOST_POS_AIR) {
+        /* y up to 0x1FF px, the ceiling the goal point 0x44E3C0 clamps its y to (0x44E4F1) */
+        if (y16 <= 0x01FF0000u) memcpy(rec + 9, &y16, 4);
+        s_ghostPosAir++;
+    } else {
+        s_ghostPosGround++;
+    }
+    if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+        tagpu_logf("enginefix: ghost commander: dirty create slot %u type %u at (%d, %d) from its "
+                   "%s payload; stock's record had (%d, %d)", rec[3] | (unsigned int)rec[4] << 8,
+                   type, x, z, kind == GHOST_POS_AIR ? "air" : "ground", (int)sx >> 16,
+                   (int)sz >> 16);
+}
+
+/* ---- stubs, in B5's own page ------------------------------------------------------------- */
+
+static unsigned char* s_ghostCode;
+static unsigned int   s_ghostCodeUsed;
+
+static unsigned char* ghost_code(unsigned int n)
+{
+    unsigned char* p;
+    if (!s_ghostCode)
+        s_ghostCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                   PAGE_EXECUTE_READWRITE);
+    if (!s_ghostCode || s_ghostCodeUsed + n > 0x1000) return NULL;
+    p = s_ghostCode + s_ghostCodeUsed;
+    s_ghostCodeUsed += (n + 15u) & ~15u;
+    return p;
+}
+
+static void ghost_selfcheck(void)
+{
+    /* a ground payload: flag 1, n = 2, (1234, 567), (40, 50); an air one: selector 2, flag 0,
+       x = 3000.5 px, y = 80 px, z = 12 px; both least significant bit first, as 0x415C10
+       writes them */
+    static const unsigned int ground[3] = { 0x11B82695u, 0x01900140u, 0x00000000u };
+    static const unsigned int air[4]    = { 0x5DC40002u, 0x02800000u, 0x00600000u, 0x00000000u };
+    static const unsigned int split[2]  = { 0x80000000u, 0x00000005u };
+    static const unsigned int still[1]  = { 0x00000001u };        /* flag 1, n = 0 */
+    struct { const char* name; int got; int want; } t[24];
+    GHOSTREC q[4];
+    int n = 0, bad = 0, i, x, z;
+    unsigned int x16, y16, z16;
+    GHOSTBITS b;
+    memset(q, 0, sizeof q);                  /* held creates for slots 7, 9, 7, 5; the last 7 dead */
+    q[0].m[6] = 7; q[1].m[6] = 9; q[2].m[6] = 7; q[3].m[6] = 5;
+    t[n].name = "newer: empty slot";         t[n].got = ghost_newer(0, 50, 3);                 t[n].want = 1; n++;
+    t[n].name = "newer: exact, later";       t[n].got = ghost_newer(1, 50, 51);                t[n].want = 1; n++;
+    t[n].name = "newer: exact, same";        t[n].got = ghost_newer(1, 50, 50);                t[n].want = 0; n++;
+    t[n].name = "newer: bound, later";       t[n].got = ghost_newer(1, HIT_LB | 50, 51);       t[n].want = 1; n++;
+    t[n].name = "newer: bound, at g0";       t[n].got = ghost_newer(1, HIT_LB | 50, 50);       t[n].want = 0; n++;
+    t[n].name = "newer: unknown birth";      t[n].got = ghost_newer(1, 50, HIT_UNKNOWN);       t[n].want = 0; n++;
+    t[n].name = "map: corners";              t[n].got = ghost_on_map(0, 0, 2, 3) && ghost_on_map(31, 47, 2, 3); t[n].want = 1; n++;
+    t[n].name = "map: past an edge";         t[n].got = ghost_on_map(32, 0, 2, 3) || ghost_on_map(0, 48, 2, 3) ||
+                                                        ghost_on_map(-1, 0, 2, 3);             t[n].want = 0; n++;
+    t[n].name = "map: no map";               t[n].got = ghost_on_map(0, 0, 0, 3) || ghost_on_map(0, 0, 4097, 3); t[n].want = 0; n++;
+    b.data = split; b.word = 0; b.bit = 31;
+    t[n].name = "bits: across a word";       t[n].got = ghost_bits(&b, 4) == 0xBu && b.word == 1 && b.bit == 3; t[n].want = 1; n++;
+    b.data = ground; b.word = 0; b.bit = 0;
+    t[n].name = "ground: point 0";           t[n].got = ghost_payload_pos(b, 96, 0, &x, &z, &x16, &y16, &z16) == GHOST_POS_GROUND &&
+                                                        x == 1234 && z == 567 && x16 == 1234u << 16; t[n].want = 1; n++;
+    b.data = air; b.word = 0; b.bit = 0;
+    t[n].name = "air: the motion's point";   t[n].got = ghost_payload_pos(b, 128, 1, &x, &z, &x16, &y16, &z16) == GHOST_POS_AIR &&
+                                                        x == 3000 && z == 12 && y16 == 80u << 16; t[n].want = 1; n++;
+    b.data = air; b.word = 0; b.bit = 1;
+    t[n].name = "air: a goal is not taken";  t[n].got = ghost_payload_pos(b, 127, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
+    b.data = ground; b.word = 0; b.bit = 0;
+    t[n].name = "ground: one bit short";     t[n].got = ghost_payload_pos(b, 34, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_SHORT; n++;
+    t[n].name = "ground: the read ends at end"; t[n].got = ghost_payload_pos(b, 35, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_GROUND; n++;
+    b.data = still; b.word = 0; b.bit = 0;
+    t[n].name = "ground: no point, at end";  t[n].got = ghost_payload_pos(b, 3, 0, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_NONE; n++;
+    b.data = air; b.word = 0; b.bit = 0;
+    t[n].name = "air: one bit short";        t[n].got = ghost_payload_pos(b, 98, 1, &x, &z, &x16, &y16, &z16); t[n].want = GHOST_POS_SHORT; n++;
+    t[n].name = "kill: the latest create";   t[n].got = ghost_cancel(q, 4, 7);                 t[n].want = 2; n++;
+    q[2].dead = 1;
+    t[n].name = "kill: past a cancelled one"; t[n].got = ghost_cancel(q, 4, 7);                t[n].want = 0; n++;
+    t[n].name = "kill: nothing held";        t[n].got = ghost_cancel(q, 4, 8);                 t[n].want = -1; n++;
+    t[n].name = "kill: the high byte";       t[n].got = ghost_cancel(q, 4, 7 + 256);           t[n].want = -1; n++;
+    for (i = 0; i < n; i++) {
+        if (t[i].got != t[i].want) bad++;
+        tagpu_logf("enginefix: ghostcheck %-26s got=%d want=%d %s",
+                   t[i].name, t[i].got, t[i].want, t[i].got == t[i].want ? "OK" : "FAIL");
+    }
+    tagpu_logf("enginefix: ghostcheck %d rule cases, %d failed", n, bad);
+}
+
+/* `wire` is fix_wire_bounds' result: the dirty create's position is read through B3's copy
+   of the 0x2C, so B5 requires B3 armed. B3 stays a local fix for its own purpose; a peer where
+   it did not arm would place dirty creates at the slot's stale position while the others take
+   the payload's, so the table is refused and the process ends through the report. */
+static int fix_ghost_commander(int wire)
+{
+    static const unsigned char firstCall[10] = { 0xF6, 0xC1, 0x01, 0x57, 0x0F, 0x85, 0xE2, 0x03,
+                                                 0x00, 0x00 };                   /* 0x497F54 */
+    static const unsigned char loadStart[6]  = { 0x8B, 0x88, 0x31, 0x05, 0x00, 0x00 };
+    static const unsigned char loadNext[2]   = { 0x33, 0xED };                    /* 0x497F64 */
+    static const unsigned char loaderDone[3] = { 0x83, 0xC9, 0x02 };              /* 0x497C5F */
+    static const unsigned char doneTest[5]   = { 0xD0, 0xEA, 0xF6, 0xC2, 0x01 };  /* 0x498348 */
+    static const unsigned char dirtyFrame[11] = { 0x8D, 0x4C, 0x24, 0x1C, 0x51, 0x52, 0x66, 0x89,
+                                                  0x44, 0x24, 0x39 };            /* 0x48B9F5 */
+    static const unsigned char dirtyCall[5]  = { 0xE8, 0xCB, 0xA7, 0xFF, 0xFF };  /* 0x48BA00 */
+    static const unsigned char cfnEntry[3]   = { 0x83, 0xEC, 0x0C };              /* 0x4861D0 */
+    static const unsigned char frameCall[5]  = { 0xE8, 0x5C, 0xE3, 0xFF, 0xFF };  /* 0x49842F */
+    static const unsigned char frameEntry[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };  /* 0x496790 */
+    static const unsigned char refused[9]    = { 0x83, 0xFA, 0x05, 0x0F, 0x84, 0xC8, 0x17, 0x00,
+                                                 0x00 };                         /* 0x45477F */
+    static const unsigned char notState5[9]  = { 0x83, 0xFA, 0x06, 0x0F, 0x84, 0xBF, 0x17, 0x00,
+                                                 0x00 };                         /* 0x454788 */
+    static const unsigned char nextSub[7]    = { 0x8B, 0x84, 0x24, 0xF0, 0x00, 0x00, 0x00 };
+    /* 0x48B933: the 0x2C reader's buffer, word and bit, [esp+0x14..0x1C] */
+    static const unsigned char readerSlots[12] = { 0x89, 0x44, 0x24, 0x14, 0x89, 0x74, 0x24, 0x18,
+                                                   0x89, 0x74, 0x24, 0x1C };
+    /* 0x453E84: edi = main + 0x1B63 + (byte [esp+0x14]) * 0x14B, the sender's record */
+    static const unsigned char senderRec[30] = { 0x8B, 0x74, 0x24, 0x14, 0x81, 0xE6, 0xFF, 0x00,
+                                                 0x00, 0x00, 0x8B, 0xC6, 0xC1, 0xE0, 0x05, 0x03,
+                                                 0xC6, 0x8D, 0x0C, 0x32, 0x8D, 0x04, 0x80, 0x8D,
+                                                 0xBC, 0x41, 0x63, 0x1B, 0x00, 0x00 };
+    unsigned char *aCall, *aReset, *aPos, *aEarly, *aRefused, *p;
+
+    InitializeCriticalSection(&s_ghostLock);
+    s_ghostGameTid = GetCurrentThreadId();
+    s_ghostOff = GetFileAttributesA("tagpu_ghostq.off") != INVALID_FILE_ATTRIBUTES;
+    if (s_ghostOff)
+        tagpu_logf("enginefix: ghost commander: TEST LEVER tagpu_ghostq.off -- nothing is held; "
+                   "the dirty create's position still applies");
+    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) ghost_selfcheck();
+    if (wire != FIX_ARMED) {
+        lim_needs("the ghost commander (a simulation fix)", "wire robustness", fix_state(wire));
+        return FIX_TABLE;
+    }
+
+    if (!(aCall = ghost_code(32)) || !(aReset = ghost_code(32)) || !(aPos = ghost_code(32)) ||
+        !(aEarly = ghost_code(32)) || !(aRefused = ghost_code(32))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+
+    /* the replay: CreateFromNetwork(arg, rec) with the sender in edi, as the 0x09 case has it
+       (CreateFromNetwork pushes edi at 0x4861EC, where B3's observe reads the sender) */
+    p = aCall;
+    *p++ = 0x57;                                         /* push edi           */
+    *p++ = 0x8B; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x10;  /* mov edi,[esp+0x10] */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;  /* push [esp+0xC]: rec */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;  /* push [esp+0xC]: arg */
+    p = hit_jmp(p, 0xE8, 0x004861D0);
+    s_ghostRet = (unsigned int)(size_t)p;
+    *p++ = 0x5F;                                         /* pop edi            */
+    *p++ = 0xC2; *p++ = 0x0C; *p++ = 0x00;               /* ret 0xC            */
+    s_ghostCall = (GHOSTCALL)(void*)aCall;
+
+    /* 0x497F5E: the reset, then stock's mov ecx,[eax+0x531] */
+    p = fix_call_regs(aReset, ghost_reset);
+    memcpy(p, loadStart, 6); p += 6;
+    hit_jmp(p, 0xE9, 0x00497F64);
+
+    /* 0x49842F: the drain, then the frame function under the return 0x498434 */
+    p = fix_call_regs(aEarly, ghost_replay);
+    hit_jmp(p, 0xE9, 0x00496790);
+
+    /* 0x45477F: stock's `cmp edx,5; je 0x455F50`, the refusal in state 5 noted first */
+    p = aRefused;
+    *p++ = 0x83; *p++ = 0xFA; *p++ = 0x05;               /* cmp edx,5          */
+    p = hit_jcc(p, 0x85, 0x00454788);
+    p = fix_call_regs(p, ghost_refused);
+    hit_jmp(p, 0xE9, 0x00455F50);
+
+    /* 0x48BA00: the position into the record, then CreateFromNetwork under 0x48BA05 */
+    p = fix_call_regs(aPos, ghost_position);
+    hit_jmp(p, 0xE9, 0x004861D0);
+
+    hit_site(0x00497F5E, 6, loadStart, 0xE9, aReset, "ghost commander: the queue emptied at the load's start");
+    hit_site(0x0049842F, 5, frameCall, 0xE8, aEarly, "ghost commander: the queue replayed before the first tick");
+    hit_site(0x0045477F, 9, refused, 0xE9, aRefused, "ghost commander: a kill refused in state 5");
+    hit_site(0x0048BA00, 5, dirtyCall, 0xE8, aPos, "ghost commander: the dirty create's position");
+    lim_same(0x00497F54, 10, firstCall, "ghost commander: the load state's first-call test");
+    lim_same(0x00497F64, 2, loadNext, "ghost commander: the load state's continuation");
+    lim_same(0x00497C5F, 3, loaderDone, "ghost commander: the loader's last store, bit 1");
+    lim_same(0x00498348, 5, doneTest, "ghost commander: the game thread's test of bit 1");
+    lim_same(0x0048B9F5, 11, dirtyFrame, "ghost commander: the dirty create's record and reader");
+    lim_same(0x004861D0, 3, cfnEntry, "ghost commander: CreateFromNetwork's entry");
+    lim_same(0x00496790, 5, frameEntry, "ghost commander: the frame function's entry");
+    lim_same(0x00454788, 9, notState5, "ghost commander: the refusal's other states");
+    lim_same(0x00455F50, 7, nextSub, "ghost commander: the dispatcher's next message");
+    lim_same(0x0048B933, 12, readerSlots, "ghost commander: the 0x2C reader's slots");
+    lim_same(0x00453E84, 30, senderRec, "ghost commander: the sender's record and argument");
+    return FIX_TABLE;
+}
+
+/* the heartbeat's ghost section (tagpu_packet_pub.c): DLL counters only. q= held, over= refused
+   by a full queue, deep= the deepest queue, replay= replayed before the first tick, now= made
+   in a catch-up tick; killed= held creates their refused 0x0C cancelled,
+   swept= copies made before state 6 marked dying, nokill= refused 0x0Cs that matched neither,
+   untracked= copies past the list a kill can mark; inactive/stale/bad are the drain's drops,
+   cleared= held by a load that never reached play; pos= the dirty creates' kind, unbound= with
+   a reader that is not B3's, short= a position read that would pass its message's end.
+   The alert fields come first: the heartbeat is one log line of at most 2040 bytes and this
+   section is its last, so a long game's line is cut from here. */
+int tagpu_ghost_format(char* buf, unsigned int cap)
+{
+    return _snprintf(buf, cap,
+                     " | ghost:%s over=%u bad=%u offthread=%u unbound=%u short=%u q=%u deep=%u"
+                     " replay=%u now=%u killed=%u swept=%u nokill=%u untracked=%u inactive=%u"
+                     " stale=%u cleared=%u levels=%u pos ground=%u air=%u none=%u off=%u",
+                     s_ghostOff ? " LEVER-OFF" : "", s_ghostOverflow, s_ghostBad,
+                     s_ghostOffThread, s_ghostPosUnbound, s_ghostPosShort, s_ghostQueued,
+                     s_ghostDeep, s_ghostReplayed, s_ghostNow, s_ghostKilled, s_ghostSwept,
+                     s_ghostNoKill, s_ghostUntracked, s_ghostInactive, s_ghostStale,
+                     s_ghostCleared, s_ghostLevels, s_ghostPosGround, s_ghostPosAir,
+                     s_ghostPosNone, s_ghostPosOff);
 }
 
 static void patch_engine_defects(void)
@@ -6130,6 +6901,7 @@ static void patch_engine_defects(void)
     int pview = fix_projectile_view();
     int wire = fix_wire_bounds();
     int hits = fix_stale_hits();
+    int ghost = fix_ghost_commander(wire);
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -6196,6 +6968,17 @@ static void patch_engine_defects(void)
               "the Deathmatch respawn's create tested (0x4653DE). "
               "Counters on the heartbeat's 'hits:' section. Stubs: %u of 4096 bytes at 0x%08X",
               fix_state(hits), s_hitCodeUsed, (unsigned int)(size_t)s_hitCode);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: ghost commander %s: a carried 0x09 the gate refuses in state 5 held per "
+              "sender in the 0x05 receiver (0x455F90) and replayed through it before the first "
+              "tick (0x49842F), one refused in a catch-up tick made at once, a 0x0C refused in "
+              "state 5 cancelling its held create (0x45477F), the queue emptied at the load's start "
+              "(0x497F5E); the dirty create's position from its move payload (0x48BA00). Counters "
+              "on the heartbeat's 'ghost:' section. Stubs: %u of 4096 bytes at 0x%08X",
+              fix_state(ghost), s_ghostCodeUsed, (unsigned int)(size_t)s_ghostCode);
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -6986,6 +7769,11 @@ int tagpu_limits_install(void)
                s_fixBytes, s_fixPages);
     if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
+    if (s_limNeeds[0]) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- %s; nothing written", s_limNeeds);
+        return 0;
+    }
     if (lim_overlap()) {
         s_limState = -1;
         tagpu_logf("limits: FAILED -- the sites at 0x%08X and 0x%08X overlap", s_limOverlapA,
@@ -7137,6 +7925,9 @@ void tagpu_limits_report(void)
     if (s_limNoStub || s_limOverflow || s_limOverlapA)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
+    else if (s_limNeeds[0])
+        why = "One of Impure's network fixes could not be installed on this TotalA.exe (the "
+              "log says why), and a fix that keeps every player's game the same relies on it.";
     else if (s_limWriteFail)
         why = "Windows refused to let Impure change the game's code in memory.";
     else if (strcmp(known, "none"))
@@ -7180,6 +7971,8 @@ void tagpu_limits_report(void)
     else if (s_limOverlapA)
         _snprintf(line, sizeof line, "result: the sites at 0x%08X and 0x%08X overlap, nothing "
                   "written\r\n", s_limOverlapA, s_limOverlapB);
+    else if (s_limNeeds[0])
+        _snprintf(line, sizeof line, "result: %s, nothing written\r\n", s_limNeeds);
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);
