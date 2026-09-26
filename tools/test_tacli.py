@@ -2456,8 +2456,8 @@ class RemoteRouting(unittest.TestCase):
         self.assertFalse(any("WriteAllBytes(" in st for st in self.win.sent))
 
     def test_the_launch_holds_the_instance_lock_from_the_game_check_to_the_task(self):
-        # flock does not cross SSH: the lock is the instance's metadata folder's, on this
-        # machine, taken before the check that no game runs and held past the task's start
+        # flock does not cross SSH: the lock is in the instance's metadata folder, local to
+        # tacli, taken before the check that no game runs and held past the task's start
         taken = []
 
         def try_lock(*_):

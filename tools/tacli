@@ -953,9 +953,9 @@ def regstore_lock(inst: Instance):
     """Take the instance's store lock: an exclusive flock on `tacli.lock`, held until the
     returned file is closed or this process ends (a `die` included). A local instance's
     is in `tacli-state/` beside its store; a remote instance's in its metadata folder
-    (INSTANCES/<name>/), on this machine, since flock does not cross SSH -- so it orders
-    the tacli processes of this machine, and a tacli elsewhere reaching the same test
-    folder is not ordered by it.
+    (INSTANCES/<name>/), local to tacli, since flock does not cross SSH -- so it orders the
+    tacli processes that share that folder, and a tacli on another computer reaching the
+    same test folder is not ordered by it.
 
     It covers tacli against tacli, across every sequence that reads the store's state
     and then acts on it: the seed (none there -> make one), a write (no game runs ->
@@ -5447,7 +5447,8 @@ def _remote_launch(args) -> dict:
             die(f"--arg {a!r}: a TotalA.exe switch is letters, digits and . _ = : here")
     notes = []
     # Held from the check that no game runs until the DLL's run says it has the store, so
-    # no other launch of this instance from this machine starts a game in between.
+    # no other launch of this instance through the same metadata folder starts a game in
+    # between.
     store_lock = regstore_lock(inst)
     meta = inst.meta()
     if meta.get("state") == "adding":
