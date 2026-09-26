@@ -980,16 +980,24 @@ static int box_on_screen(float x0, float y0, float x1, float y1, float slack)
 }
 
 /* one marker line, fogged at its own first endpoint (the same pure
-   translation between screen and world layer_quad uses) */
-static void oline(float x0, float y0, float x1, float y1, int col)
+   translation between screen and world layer_quad uses). `nudge` is
+   tagpu_mark_emit_line's; it moves an end by at most one screen pixel, s_px
+   here, which the cull's slack takes in. */
+static void oline_n(float x0, float y0, float x1, float y1, const int nudge[4],
+                    int col)
 {
-    if (!box_on_screen(x0, y0, x1, y1, 8.0f)) return;
-    if (!tagpu_mark_emit_line(x0, y0, x1, y1, col,
+    if (!box_on_screen(x0, y0, x1, y1, nudge ? 8.0f + (float)s_px : 8.0f)) return;
+    if (!tagpu_mark_emit_line(x0, y0, x1, y1, nudge, col,
                               x0 - (float)s_v->vpL + (float)s_v->eyeX,
                               y0 - (float)s_v->vpT + (float)s_v->eyeY))
         s_nover++;
     else
         s_nline++;
+}
+
+static void oline(float x0, float y0, float x1, float y1, int col)
+{
+    oline_n(x0, y0, x1, y1, NULL, col);
 }
 
 /* A filled disc of a constant SCREEN radius — the route dot. Constant in
@@ -1204,10 +1212,12 @@ static int seq_ink(const char* seq, int fallback)
 static int sar1(int v) { return v >= 0 ? v / 2 : -((1 - v) / 2); }
 
 /* one line between two ENGINE pixels, handed to the marker pass as their
-   centres: tagpu_line.h's rule for a line the engine draws from integers */
-static void oline_px(int x0, int y0, int x1, int y1, int col)
+   centres: tagpu_line.h's rule for a line the engine draws from integers,
+   each end then moved by `nudge` screen pixels (NULL for none) */
+static void oline_px(int x0, int y0, int x1, int y1, const int nudge[4], int col)
 {
-    oline((float)x0 + 0.5f, (float)y0 + 0.5f, (float)x1 + 0.5f, (float)y1 + 0.5f, col);
+    oline_n((float)x0 + 0.5f, (float)y0 + 0.5f, (float)x1 + 0.5f, (float)y1 + 0.5f,
+            nudge, col);
 }
 
 /* --- bit 0: the queued build site ---
@@ -1218,12 +1228,26 @@ static void oline_px(int x0, int y0, int x1, int y1, int col)
    `x = px - eyeX + 0x80` and `z = pz - (alt >> 1) - eyeY + 0x20`; the
    ten-tick sweep `(x1 - x0) * t / 10` as a signed division that truncates
    toward zero (the 0x66666667 multiply, `sar 2`, plus the sign bit), which is
-   C's `/`; and the outer outline one engine pixel outside the inner. At a
-   wheel zoom below 1 the two outlines are then less than a game pixel apart
-   and can land on one -- which is the engine's picture made smaller, not a
-   line lost. */
+   C's `/`; and the colour-A lines one pixel beside the colour-B ones, on the
+   side the sweep came from -- outside the rect at the start of the sweep,
+   inside it once the sweep has swapped the edges.
+
+   THAT ONE PIXEL IS A SCREEN PIXEL, taken after the wheel zoom: each
+   colour-A line is a colour-B line's own engine pixels with each end nudged
+   by the engine's -1/+1 in game pixels of the zoomed frame
+   (tagpu_line_nudge). Both lines are one pixel wide, so the offset has to be
+   a pixel of the same frame for them to abut -- an engine pixel is `zoom`
+   screen pixels, and taking the offset there pulls the pair apart at a
+   zoom-in and lands them on one pixel at a zoom-out. At 1x the nudge is
+   exactly the engine's offset. */
 static void draw_build(const ORDREC* r, int gameTime)
 {
+    /* the colour-A nudges, {x0, y0, x1, y1}: the engine draws the left line
+       from (xg0 - 1, z0 - 1) to (xg0 - 1, z1 + 1), and so on round */
+    static const int nL[4] = { -1, -1, -1, +1 };
+    static const int nR[4] = { +1, -1, +1, +1 };
+    static const int nT[4] = { -1, -1, +1, -1 };
+    static const int nB[4] = { -1, +1, +1, +1 };
     int p0x, p0y, p0z, p1x, p1z, h;
     int x0, z0, x1, z1, t, dxg, dzg, xg0, xg1, zg0, zg1;
     int colA, colB, age;
@@ -1255,14 +1279,14 @@ static void draw_build(const ORDREC* r, int gameTime)
     colB = s_gui[r->sel ? GUI_SITEA : GUI_SITE9];
 
     /* the engine's call order, `0x438DAA` .. `0x438E6D` */
-    oline_px(xg0 - 1, z0 - 1, xg0 - 1, z1 + 1, colA);
-    oline_px(xg1 + 1, z0 - 1, xg1 + 1, z1 + 1, colA);
-    oline_px(x0 - 1, zg0 - 1, x1 + 1, zg0 - 1, colA);
-    oline_px(x0 - 1, zg1 + 1, x1 + 1, zg1 + 1, colA);
-    oline_px(xg0, z0, xg0, z1, colB);
-    oline_px(xg1, z0, xg1, z1, colB);
-    oline_px(x0, zg0, x1, zg0, colB);
-    oline_px(x0, zg1, x1, zg1, colB);
+    oline_px(xg0, z0, xg0, z1, nL, colA);
+    oline_px(xg1, z0, xg1, z1, nR, colA);
+    oline_px(x0, zg0, x1, zg0, nT, colA);
+    oline_px(x0, zg1, x1, zg1, nB, colA);
+    oline_px(xg0, z0, xg0, z1, NULL, colB);
+    oline_px(xg1, z0, xg1, z1, NULL, colB);
+    oline_px(x0, zg0, x1, zg0, NULL, colB);
+    oline_px(x0, zg1, x1, zg1, NULL, colB);
 }
 
 /* --- bit 3 (and bit 1's delegation): the waypoint crosshair ---

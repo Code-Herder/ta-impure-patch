@@ -4928,7 +4928,11 @@ colour B   (xg0, z0) -> (xg0, z1)              (xg1, z0) -> (xg1, z1)
 `alt >> 1` is a `sar`, so a negative altitude halves toward minus infinity, and the `/10` is the
 `0x66666667` multiply with the sign correction, a division that truncates toward zero.
 `tagpu_order.c`'s `draw_build` reproduces all of it in integers and hands the eight lines on as
-integer endpoints (`tagpu_line.h`: the engine pixel's centre, then the zoom, then `ss`).
+integer endpoints (`tagpu_line.h`: the engine pixel's centre, then the zoom, then `ss`). The
+colour-A lines are the one departure, and only at a wheel zoom: they are handed on as the
+colour-B pixels `(xg0, z0)` … with their `±1` taken AFTER the zoom, one game pixel of the zoomed
+frame (`tagpu_line_nudge`), so that the pair stays adjacent at every zoom; at 1× that is the
+engine's own `±1` (GPU status §2.93).
 
 **`DrawLine 0x4BE950` is `stdcall(ctx, x0, y0, x1, y1, colour)`** — fixed by those eight
 call sites, where the first and third pushed values are the two x's.

@@ -66,10 +66,12 @@ int  tagpu_mark_gather(const TAGPU_FXVIEW* v);
    one game pixel wide at any zoom and any `ss`: its ends are quantised AFTER
    the wheel zoom by tagpu_line.h's rule, so a caller hands the end it means -- an engine
    pixel's CENTRE where the engine draws the line from integers, the
-   fractional position where the geometry is ours. Triangles carry no such
-   rule and must be sized by the caller. */
+   fractional position where the geometry is ours. `nudge` ({x0, y0, x1, y1},
+   NULL for none) then moves each end by whole game pixels of the ZOOMED frame
+   (tagpu_line_nudge): a fixed screen offset from a neighbouring line.
+   Triangles carry no such rule and must be sized by the caller. */
 int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
-                          int colidx, float wx, float wz);
+                          const int nudge[4], int colidx, float wx, float wz);
 int  tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
                          float x2, float y2, int colidx, float wx, float wz);
 /* One unit's SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md

@@ -23,7 +23,10 @@
    selection rect's corners -- and is then that engine pixel's CENTRE, k + 0.5;
    for our own geometry -- the sub-pixel anchor of a walking unit, a range
    arc, a waypoint crosshair, a posed nanoframe vertex -- it is the fractional
-   position itself.
+   position itself. A line the engine draws one pixel beside another (the
+   build site's colour-A lines) takes its neighbour's ends and moves them by
+   whole line-grid game pixels afterwards (tagpu_line_nudge), so the two stay
+   adjacent at every zoom.
 
    THE THICKENING. Each pixel the walk lights is copied to w = ss pixels along
    the minor axis (y for a line with |dy| <= |dx|, the walk's own x-major
@@ -100,6 +103,33 @@ static __inline int tagpu_line_px(double x, double y, double zoom, double zcx,
     if (!(fx >= -bound && fx <= bound && fy >= -bound && fy <= bound)) return 0;
     *gx = (int)fx;
     *gy = (int)fy;
+    return 1;
+}
+
+/* THE NUDGE: an end moved by n whole game pixels of the ZOOMED frame, n * ss
+   line-grid pixels, after tagpu_line_px has placed it. It is for a line the
+   engine draws a fixed pixel beside another -- the queued build site's
+   colour-A lines, one pixel beside its colour-B lines -- where the offset
+   belongs to the screen and not to the world: taking it in the 1x frame
+   instead would scale it with the zoom, so the two lines would draw `zoom`
+   pixels apart at a zoom-in and on one pixel at a zoom-out. Moved here, an end nudged by one
+   and an end left alone differ by exactly ss, the thickness w, so their
+   bands abut without a gap or an overlap at every zoom; and at zoom 1 it is
+   the engine's own offset, floor(ss * (k + 0.5)) - ss = floor(ss * (k - 1 +
+   0.5)). `n` is {x0, y0, x1, y1}. 1, or 0 when a moved end leaves
+   [-TAGPU_LINE_FAR, TAGPU_LINE_FAR], the bound its clip needs. */
+static __inline int tagpu_line_nudge(int* ax, int* ay, int* bx, int* by,
+                                     const int n[4], int ss)
+{
+    long long v[4];
+    int i;
+    v[0] = *ax + (long long)n[0] * ss;
+    v[1] = *ay + (long long)n[1] * ss;
+    v[2] = *bx + (long long)n[2] * ss;
+    v[3] = *by + (long long)n[3] * ss;
+    for (i = 0; i < 4; i++)
+        if (v[i] < -TAGPU_LINE_FAR || v[i] > TAGPU_LINE_FAR) return 0;
+    *ax = (int)v[0]; *ay = (int)v[1]; *bx = (int)v[2]; *by = (int)v[3];
     return 1;
 }
 
