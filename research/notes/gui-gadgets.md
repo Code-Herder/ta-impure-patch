@@ -349,12 +349,16 @@ on `gui.on` or on the renderer.
   **The selection `+0xBA` is not touched**, so what is selected (and SELMAP's preview) changes
   only on a click, as in any list view.
 - **When.** A notch waits behind every click queued before it. TA's window procedure queues
-  each button message on the engine's event ring and the pump takes one per call, so a notch
-  applied at once could overtake a click still in the ring, and the click would land on the
-  scrolled rows. Each notch records how far the ring had been filled when it arrived, and is
+  each button message on the engine's event ring and the pump takes at most one per call — none
+  while the record at the head is a held button off the top screen, which holds the engine's own
+  clicks as well — so a notch applied at once could overtake a click still in the ring, and the
+  click would land on the scrolled rows. Each notch records how far the ring had been filled when it arrived, and is
   applied at the first pump entry where the engine has taken that far — counted from the
   ring's read index, which moves at most two slots between entries — or where the ring is
-  empty, which also covers the flush that discards the ring when a game starts. Engine map:
+  empty, which also covers the flush that discards the ring when a game starts. A notch that
+  arrives while no pump runs (a load, a movie) waits for the next one and scrolls whatever list
+  is under its point then, as a Windows list does with a wheel message queued while its
+  application is busy. Engine map:
   *The pump's entry, the pointer it reads, and what a list scroll is*.
 
 MEASURED 2026-09-26 on `SELMAP.GUI`'s 99-map list (`maxtop` 87, the scrollbar's `range` 56): from

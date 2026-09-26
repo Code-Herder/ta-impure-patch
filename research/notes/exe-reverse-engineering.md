@@ -6993,36 +6993,47 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   `0x4DBAE0(p)` (the private heap's sizer) or `0x4E8FB0(p)` (the CRT `_msize`); it returns 0 for
   a NULL block and the size in `eax` otherwise. `MEM_Alloc`'s dispatch at `0x4D83D5` tests the
   same predicate, so the two agree by construction about which heap a block came from.
-  **This was looked up to answer a question and then not used, which is the fact worth
-  recording.** The landing-5 re-review proposed a block-keyed forget on the `MEM_Free` observer
-  and said it needed a size the observer is not handed; it is handed one, right here. The reason
-  G19f-7 did not build it is that `0x4D8360` reads the heap's own structures **outside the
-  critical section** — `0x4D85B0` takes the lock at `0x4D85C2`, i.e. *after* the entry an
-  observer sits at, and `0x4D8360` takes none of its own — so calling it from a detour on a
-  genuinely multi-threaded allocator would add a cross-thread hazard in order to fix a
-  single-thread one. The fix moved the read instead ([gpu-status](gpu-status.html) §2.34
-  landing 7). Anyone reaching for this later needs an answer to the lock, not to the size. Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
+  **It takes no lock of its own, but both of its callees do**: `0x4DBAE0` enters the allocator's
+  critical section `0x528A28` first (`0x4DA780`, then `EnterCriticalSection`), and `_msize` takes
+  CRT heap lock 9 (`0x4EAC60(9)`). So it is safe to call from an observer at `MEM_Free`'s entry;
+  the G19f-7 reason for not using it — that it read the heap outside any lock — was wrong. The
+  GUI lane's destructor calls it inside the allocator's section, as `0x4D85B0` does (below).
+  Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
   `block + 0x30 == the pixel base`, and an observer at this function's entry is exactly a
   surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
   publisher reads `s->base` at the flip, and what makes that safe is that the table entry
-  cannot outlive the block.
-- **A frame is the other destination, and its pixels sit at `block + 0x18`.** `0x4B8DA0`
-  (`w·h + 0x18`) and `0x4B8E00` (`2·w·h + 0x18`, two planes) put the header and the pixels in one
-  block with the pixel pointer at `+0x10` = `block + 0x18` (`0x4B8DD0`, `0x4B8E1F`), and
-  `0x4B8A80(ctx, frame)` (`ret 8`) builds a drawing context over one: `w`, `h`, `pitch = w`, the
-  base from `frame+0x10`, the clip reset through `0x4C69C0`. Its five callers each draw into a
-  frame one of the two allocators made — `0x458C2E` the unit composite (`[obj+0x10]`, stored
-  by `0x4581A4` from `0x4B8E00("…", 600, 600)`), `0x4666B1` and `0x4666E2` SELMAP's scratch copy
-  and preview frame (*SELMAP's map preview*), `0x483918` the level's minimap picture, `0x495BCF`
-  a frame from `0x495ACD`/`0x495AEE` — so the leaves record draws into frames too, and a frame
-  dies by this function like a surface. `before_memfree` therefore retires an entry whose base
-  is `block + 0x30` **or** `block + 0x18` (`surf_dies_with`). MEASURED 2026-09-26 with the
-  `gui trace`: every SELMAP pick retires the 125×125 preview frame at the free returning to
-  `0x444AF9` and the 252×252 scratch copy at `0x466769`. With `block + 0x30` alone neither was
-  retired, and an arrow walk through the map list crashed in the publisher's seed of the freed
-  scratch copy: a read access violation at the end of its heap segment, 95 rows into a
-  125-pitch entry. MEASURED in game: **~10 500 calls a second**, so an observer that
-  scans ≤ 24 recorded surfaces costs about 0.03 % of one core.
+  cannot outlive the block. MEASURED in game (2026-09-12): **~10 500 calls a second**.
+- **A drawing destination lies inside one block, at an offset that depends on what made it,**
+  and the context over it does not say which (every builder writes the same `+0x2C` flags):
+  - `0x4C69F0` surfaces: the pixels at `block + 0x30`.
+  - frames from `0x4B8DA0` (`w·h + 0x18`) and `0x4B8E00` (`2·w·h + 0x18`, two planes): the
+    pixel pointer `+0x10` = `block + 0x18` (`0x4B8DD0`, `0x4B8E1F`). `0x4B8A80(ctx, frame)`
+    (`ret 8`) builds the context — `w`, `h`, `pitch = w`, the base from `frame+0x10`, the clip
+    reset through `0x4C69C0` — and each of its five callers draws into a frame one of those two
+    made: `0x458C2E` the unit composite (`[obj+0x10]`, stored by `0x4581A4` from
+    `0x4B8E00("…", 600, 600)`), `0x4666B1` and `0x4666E2` SELMAP's scratch copy and preview
+    frame (*SELMAP's map preview*), `0x483918` the level's minimap picture, `0x495BCF` a frame
+    from `0x495ACD`/`0x495AEE`.
+  - two-plane frames from `0x4B91B0` (one caller, `0x42063A`, `(22, 22, 8)`): the header width
+    is `2w`, `+0x10` = `block + 0x18` and `+0x14` = `block + 0x18 + 2w·h` (`0x4B91E8..0x4B91F3`).
+    `0x4B9360` (one caller, the projectile drawer's render-type-2 arm at `0x49C1E8`, the frame at
+    `[main+0x1AB9B]`) swaps `+0x10` and `+0x14` on every call (`0x4B936D..0x4B9376`) and builds a
+    context INLINE over the first (`0x4B937F..0x4B93C8`), the destination of the rect copy
+    `0x4C6D20` at `0x4B9433`. The frame dies at leave-game: `0x491B9F` → `0x420960` →
+    `MEM_Free` at `0x420A09`. (`0x4B94C0` builds the same inline context and has no caller.)
+
+  A list of offsets is closed only until the next builder is found, so `before_memfree` retires
+  every entry whose base lies in `[block, block + MEM_Size(block))` (`surf_dies_with`; the size
+  asked inside the allocator's section, `mem_block_size`) — containment, so it neither misses an
+  entry nor retires another block's. MEASURED 2026-09-26 with the `gui trace`: every SELMAP pick
+  retires the 125×125 preview frame at the free returning to `0x444AF9` and the 252×252 scratch
+  copy at `0x466769`. With `block + 0x30` alone neither was retired, and an arrow walk through the
+  map list — several picks between two flips — crashed in the publisher's seed of a freed preview
+  frame: a read access violation at the end of its heap segment, 95 rows into a 125-pitch entry.
+  The size query costs **~85 ns a call** (MEASURED 2026-09-26, 200v200 on Two Continents, 80 144
+  calls; ~675 frees a second in that battle), so even the ~10 500 a second above is under 0.1 % of
+  one core. No fixture draws the render-type-2 effect, so `0x4B9360`'s frame was not seen
+  retired live; the test that retires it is the one measured on the SELMAP frames.
 - **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
   `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.
 - **`GetContext 0x4C5E70(OFFSCREEN* out)`** — `stdcall`, `ret 4`, prologue `83 EC 6C 56 57`
@@ -8325,7 +8336,7 @@ front of* its table rather than the previous row.
 | call site | in | level | what it shades |
 |---|---|---|---|
 | `0x41DF70`, `0x41FAE2` | `0x41DF20`, and a function whose early return is `0x41FA8E` | `[main+0x39067] − 29` | a **ten-step fade of the whole screen** (NULL ctx, the rect `0,0`..`main+0x37E1F`,`+0x37E23`): the counter is set to 10 at `0x41DEE5`/`0x41FA3D`, decremented after each shade (`0x41DF92`, `0x41FB04`), so the level runs −19 down to −28, and at 0 `main+0x39063` is set |
-| `0x467F45`, `0x4686A3` | `UnitStateProbe 0x467E50`, `UnitBuilderProbe 0x4685A0` (`ta_symbols.txt`) | −24 | the in-game unit panels |
+| `0x467F45`, `0x4686A3` | `UnitStateProbe 0x467E50`, `UnitBuilderProbe 0x4685A0` (`ta_symbols.txt`) | −24 | none: neither function has a call, a jump or an absolute pointer anywhere in the image — dead code |
 | `0x494A93`, `0x494C55`, `0x494C62` | `DrawPopupF4Dialog 0x4948E0` | −24, +31, +20 | the popup's frame |
 | `0x4A1F36`, `0x4A1F49`, `0x4A1F5C`, `0x4A1F6F` | the listbox handler `0x4A1B40` | −19, −20, −21, −22 | a disabled or separator row's bands |
 | **`0x4A1FC4`, `0x4A1FD7`** | the listbox handler `0x4A1B40` | **+30** | **the SELECTED ROW**: taken when `+0xBA` (selected) equals the row being drawn and `+0xC0` (count) is non-zero (`0x4A1F89..0x4A1F9E`); the two sites are the two arms of a focus test (`[TheActive_GUIMEM+0x20]` against the gadget index, `0x4A1FB3`), identical in arguments, and differ in what follows |
@@ -8994,14 +9005,17 @@ entry, on the game thread ([GUI gadgets](gui-gadgets.html) §2.4.1).*
   `0x41FFBE`, `0x42056D`, `0x499992`, `0x49FA1B` (the shell modal loop `0x49F9C0`) and
   `0x4AC035`. Its first read is `gi->TheActive_GUIMEM` (`mov eax,[ebp+0x18]` at `0x4A9FDB`);
   with no screen it returns 0.
-- **At the entry, the pointer `gi+0x3C` is the previous pump's.** It is refreshed once a pump,
-  at `0x4AA00A`, by `0x4AB5D0(gi)` (`ret 4`, that one caller). When the engine's event ring holds
-  a record (`0x4C2DE0`, a peek) and a screen is up, it tests the record against the top screen
-  (`0x4A1680`, `0x4A1920` [INFERRED: a rect fetch and a point-in-rect test]) and pops it through
-  `0x4C2D60` into a local — then copies six dwords of it to `gi+0x3C` (`0x4AB667..0x4AB66C`) and
-  its third to `gi+0x54`; with the ring empty it fills `gi+0x3C` from `0x4C2340` instead.
-  So an observer at the entry that needs the point a message was aimed at has to carry the
-  point itself.
+- **At the entry, the pointer `gi+0x3C` is the previous pump's.** It is refreshed at most once a
+  pump, at `0x4AA00A`, by `0x4AB5D0(gi)` (`ret 4`, that one caller). When the engine's event ring
+  holds a record (`0x4C2DE0`, a peek) and a screen is up, it tests the record against the top
+  screen (`0x4A1680`, `0x4A1920` [INFERRED: a rect fetch and a point-in-rect test]) and pops it
+  through `0x4C2D60` into a local only when its point is inside or its third dword — the
+  message's wParam, the buttons held — is 0 (`0x4AB643..0x4AB64D`); it then copies six dwords of
+  it to `gi+0x3C` (`0x4AB667..0x4AB66C`) and its third to `gi+0x54`. Otherwise it returns at
+  `0x4AB680` with the record still at the head and `gi+0x3C` unchanged, and in the shell, where
+  the pump is the only pop, every click behind that record waits. With the ring empty it fills
+  `gi+0x3C` from `0x4C2340` instead. So an observer at the entry that needs the point a message
+  was aimed at has to carry the point itself.
 - **The engine's event ring, and how far it can move between two pump entries.** It lives in
   the graphics globals (`*(0x51FBD0)`): capacity `+0x186`, base `+0x18A`, write index `+0x18E`,
   read index `+0x192`, each index in `[0, cap)`. `0x4C2BD0(20)` sets it up once, at `0x4B5A67`.

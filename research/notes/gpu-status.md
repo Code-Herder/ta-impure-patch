@@ -1609,7 +1609,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
 | `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)` — return hijacked | 6 | registers the surface, seeds its copy so its build is diffed |
 | `0x4C6AC0` | `SurfaceFree(surface)` | 6 | forgets it |
-| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires every tracked surface whose block it is (G18-8): the pixel base is `block+0x30` for a `0x4C69F0` surface and `block+0x18` for a `0x4B8DA0`/`0x4B8E00` frame (`surf_dies_with`), and this is the only way an engine allocation dies |
+| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires every tracked surface inside the block (G18-8): each entry whose base lies in `[block, block + MEM_Size(block))`, the size asked inside the allocator's own critical section (`surf_dies_with`, `mem_block_size`) — a `0x4C69F0` surface's pixels sit at `block+0x30`, a frame's at `block+0x18` or its second plane — and this is the only way an engine allocation dies |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)` | 10 | a build/redraw event for the log |
 
 **AND ONE OBSERVER THAT IS NOT A LEAF: the list wheel on the GUI pump `0x4A9FD0`** (stolen 5,
@@ -1619,7 +1619,9 @@ byte-matched on its own, logged as `gui: list wheel ARMED`, and left out by
 `tagpu_listwheel.off` at launch. The window procedure's `tagpu_gui_wheel`, called at both wheel
 doors (`wndproc.c`, the shield's `to_game`) after `tagpu_zoom_wheel` declines a notch, puts the
 notch's delta and point on a single-producer single-consumer ring — slot written, then the head
-published with an interlocked store — and reads no engine memory. The observer drains the ring
+published with an interlocked store — with the engine event ring's fill at that moment, read from
+the graphics globals `*(0x51FBD0)` on the game thread (the window's thread; a notch from any other
+thread is dropped and counted). The observer drains the ring
 on the game thread and scrolls the list under each point: it writes the list's `+0xBC`, calls
 the engine's `0x4A1B40`, and moves the gadgets bound to the list as `0x4A2BE0`'s list and slider
 arms would (§2.5). A notch is applied only once the engine has taken every click queued before

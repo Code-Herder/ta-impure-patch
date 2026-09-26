@@ -4416,7 +4416,7 @@ map preview*).
    STACKS: `0x4B7F90` hands each sub-frame to `0x4B8500` and writes nothing itself. The stack's own
    op crossed as its box, `PK_PIXELS`, and the drop marked it lost — so the guard, which then
    declined any tint touching a lost box, declined the whole 640×480 dim. Two changes. **A stack
-   is not published at all** (`publish`: an `OP_GAF`/`OP_GAFA` with sub-frames), because its
+   is not published at all** (`publish`: an `OP_GAF`/`OP_GAFA`/`OP_GAFB` with sub-frames), because its
    sub-frames' ops carry every pixel it puts down. And **the refusal is per pixel**: the drain cuts
    a tint's box around every box dropped in its batch (`tint_pieces`, up to 64 disjoint pieces;
    past that the whole box is declined, which is the old answer) and applies the rest. The hazard
@@ -4448,11 +4448,14 @@ map preview*).
 draws into two frames — SELMAP's preview and a scratch copy it frees before it returns — through
 contexts `0x4B8A80` builds, so both were tracked surfaces; but `before_memfree` retired only an
 entry whose base was `block + 0x30`, the `0x4C69F0` surface layout, and a frame's pixels sit at
-`block + 0x18`. The scratch copy's entry and its op outlived the block, and `publish` seeded it
-from freed memory at the flip: an arrow walk up the list ended in a read access violation at the
-end of a heap segment. The destructor now matches both layouts (`surf_dies_with`; [engine
-map](exe-reverse-engineering.html), *`MEM_Free 0x4D85A0`*), and the `gui trace` shows both frames
-retired on every pick. The path is main's as well; this landing's picks are what reached it.
+`block + 0x18` (or, for `0x4B91B0`'s two-plane frames, at the second plane). The frames' entries
+and their ops outlived the blocks: an arrow walk up the list, several picks between two flips,
+had `publish` seed a freed preview frame at the flip and ended in a read access violation at the
+end of a heap segment. The
+destructor now retires every entry whose base lies inside the freed block, by the allocator's own
+size (`surf_dies_with`; [engine map](exe-reverse-engineering.html), *`MEM_Free 0x4D85A0`*), and
+the `gui trace` shows both frames retired on every pick. The path is main's as well; this
+landing's picks are what reached it.
 
 **THE WHEEL** is the DLL's, the engine has none: a notch the zoom declines scrolls the list under
 the pointer by the system's lines-per-notch, through the engine's own scroll calls, and leaves the
