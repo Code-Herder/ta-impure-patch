@@ -132,7 +132,8 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
   *This read "three vertices are origin, `+u` and `+u+v`" until the landing review disassembled the
   loop; the 2026-09-07 sighting that produced it had only looked at the first three.* That case is
   now resampled to its destination in `scale_capture` and published as an ordinary `PK_SPRITE`, so
-  **the render thread is untouched** (its sprite quad is `(sl,st)-(sl+fw,st+fh)`, the frame's size,
+  **the render thread is untouched** *[a sprite no longer: since 2026-09-26 it crosses as `PK_PLANE`, a box of
+  indices with no key and no atlas entry — §26]* (its sprite quad is `(sl,st)-(sl+fw,st+fh)`, the frame's size,
   deliberately — a clipped sprite still needs its whole quad); anything rotated, sheared or clipped
   keeps the old behaviour and publishes its box. *["partial" left this list in landing 8e: a
   partial uv window is a supported source now, and it was the whole of the shell's last residual —
@@ -573,7 +574,7 @@ untouched. The window is bounded against the frame header at observe time **and 
 `scale_capture`** against the header that function reads, because the decode and the walk both
 index off the second read.
 
-**The one non-local consequence: a window breaks the atlas key.** The consumer keys a sprite on
+**The one non-local consequence: a window breaks the atlas key.** *[Gone since 2026-09-26 with the atlas entry itself: a transformed stamp crosses as `PK_PLANE` — §26.]* The consumer keys a sprite on
 `(frame, pix, w, h)`, which was an identity for exactly as long as a transformed draw could only be
 the whole frame. Two windows of one frame resampled to the same destination size are the same key
 with different texels — and `tagpu_gaf_atlas_find` runs **before** `atlas_put`, so the second draw
@@ -702,7 +703,8 @@ so applying one over a box the drain failed to repaint folds this frame's error 
 input — `LUT[LUT[x]]`, then `LUT³[x]`, with nothing short of a `PK_RESET` to unwind it. Since
 `PK_PIXELS` is dropped by design, the ingredient was already on the shelf. The drain now records
 the boxes it dropped a `PK_PIXELS` for and **declines any tint that intersects one**, which leaves
-the twin at its last consistent state instead of compounding.
+the twin at its last consistent state instead of compounding. *[Per pixel since 2026-09-26: the tint is cut
+around the dropped boxes and the rest applied — §26.]*
 
 **Two things the reviewers went after and did not get.** The tint adds 24 draws and 24 quads per
 focused-gadget flip where there were none, which is new pressure on `DRAW_MAX` (16 384) — but
@@ -1159,8 +1161,8 @@ they carry there; G15a adds the new ones.
 | `0x4C5E70` | `GetContext(out)`: NULL-context path, arm 1 = `*(globals+0xBC)` | VERIFIED 2026-09-07 |
 | `*(0x51FBD0)+0xBC` / `+0xDC` | the system back buffer every flip presents / its valid flag | VERIFIED 2026-09-07 |
 | `0x4C7580` | textured-**quad** stamp `(ctx, src, xy[8], uv[8])`; **FOUR** vertices (`cmp ecx,0x4` at `0x4C7676`, stride 8), origin, `+u`, `+u+v`, `+v`, and the span is HALF-OPEN in both axes — the far vertex is the edge it stops before, not a pixel. With `uv == NULL` the engine synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)` — note `w-1` | VERIFIED; args MEASURED 2026-09-07, the half-open extent MEASURED 2026-09-21, **the vertex COUNT corrected from three to four 2026-09-21 by the landing review** |
-| `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)`, `ret 0x10` | VERIFIED 2026-09-07 |
-| `0x4BF4D0` | framed box `(ctx, RECT*, colour)`, `ret 0xC` — the F4 popup's border | VERIFIED 2026-09-07 |
+| `0x4C6D20` | the rect copy `(ctx, src, srect, drect)`, `ret 0x10` — the size from `srect`, only the top-left of `drect`, no clip [DISASSEMBLED 2026-09-26] | VERIFIED 2026-09-07 |
+| `0x4BF4D0` | the box SHADER `(ctx, RECT*, level)`, `ret 0xC` — a remap of what is in the box, not a fill: the F4 popup's border, a list's selected row, the modal dim [CORRECTED 2026-09-18; its callers 2026-09-26, engine map] | VERIFIED 2026-09-07 |
 | `0x4BF7B0` | the focus rectangle, `(ctx, RECT*, **level**)` — the third argument is a shade level into `globals+0xC8`, not a colour [CORRECTED 2026-09-18; four edges, six rings, disassembled 2026-09-21] | VERIFIED 2026-09-07 |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)`, `ret 8`; flags `1` build, `2` teardown, `0x40` redraw | VERIFIED 2026-09-07 |
 | `0x466B00` | `DrawMinimap(ctx)`, `ret 4`, one caller `0x46961F` | VERIFIED 2026-09-07 |
@@ -4380,3 +4382,92 @@ no power saving touches (`ta-drive`, `references/measuring.md`, *Movies*).
 - **Not run on a Windows driver**, the platform of the report. Nothing in the path is
   platform-specific (the engine's own routine, flip and decoder), but that is an argument, not a
   run.
+
+## 26. A list's selected row, the modal dim and SELMAP's map preview  [MEASURED 2026-09-26]
+
+**THE REPORT.** On the skirmish map list the preview refreshed only on the first pick, and the
+selected row had no highlight. The same ask added a mouse wheel that scrolls a list as a list view
+does.
+
+**FOUR DRAWS, ONE SHAPE.** Each was an engine draw that crossed as something the lane drops, or as
+something it is not. All four are shell draws, and the multiplayer battle room's map list is the
+same screen and the same preview builder ([engine map](exe-reverse-engineering.html), *SELMAP's
+map preview*).
+
+1. **The selected row is the box shader.** `0x4BF4D0` at level +30 (`0x4A1FC4`/`0x4A1FD7`), a
+   remap of what is already under the row. It crossed as its box, `PK_PIXELS`, and was dropped.
+   It now crosses as **`PK_TINT`**, whose row is precomputed for its level: `PK_SHADE` carries 96
+   rows (`TAGPU_GUI_SHADE_ROWS`, layout in `inc/tagpu_gui.h`) — the lighten table whole for the
+   focus edges, then one row per box-shader level −32..31. The box shader reads its destination
+   SIGNED (`0x4BF5E8`), so its effect for one level is `T[r][i]` below 128 and `T[r−1][i]` above;
+   carrying that row keeps the consumer a plain lookup. A level whose row is 0 would read the heap
+   in front of the table: it publishes its box instead, and no stock caller reaches one (engine
+   map, *Who calls the box shader*). The disabled rows (−19..−22), the popup frames and the modal
+   dim ride the same path.
+2. **The tint was refused, because the list's background restore crossed as a box.** Before the
+   listbox repaints its rows it restores its rect with `0x4C6D20`, a rect copy from the screen's
+   background surface. Recorded as a box, it crossed as `PK_PIXELS`; the drop marked the rows
+   lost, and the compounding guard (§2, *The focus glow*: `tintstale`) then declined the highlight.
+   It is an **`OP_COPY` → `PK_COPY`** now, twin to twin, whenever the source window lies inside
+   the source: `0x4CBDD1` takes the size from `srect` and only the top-left of `drect`.
+3. **The modal dim was refused over SKIRMISH's side buttons.** `GUI_Load`'s `0x800` flag dims the
+   covered screen at level −24 (`0x4AA969`), and the side buttons under SELMAP are two-frame
+   STACKS: `0x4B7F90` hands each sub-frame to `0x4B8500` and writes nothing itself. The stack's own
+   op crossed as its box, `PK_PIXELS`, and the drop marked it lost — so the guard, which then
+   declined any tint touching a lost box, declined the whole 640×480 dim. Two changes. **A stack
+   is not published at all** (`publish`: an `OP_GAF`/`OP_GAFA` with sub-frames), because its
+   sub-frames' ops carry every pixel it puts down. And **the refusal is per pixel**: the drain cuts
+   a tint's box around every box dropped in its batch (`tint_pieces`, up to 64 disjoint pieces;
+   past that the whole box is declined, which is the old answer) and applies the rest. The hazard
+   was always per pixel — a pixel outside every dropped box holds what the engine held before its
+   tint — so this is exact rather than lenient. `tints=` gained the split count.
+4. **The preview is a transformed stamp, and it cannot be a keyed sprite.** `MAPPIC`'s frame
+   reaches the panel through `GAF_DrawTransformed 0x4C7580`, which crossed as a resampled sprite
+   (§2, *The focus glow*, the player-colour swatches) keyed in the atlas. Three facts break that. Every pick frees the frame and
+   allocates the next at the same address and size; `0x4665D0` fills it with 0 before stamping the
+   letterboxed minimap, so a hash of the plane's head is the same for every map wider than tall —
+   the first map's entry was hit for ever after, which is the report. `0x4B8DA0` never writes the
+   frame's key byte, so it is whatever the allocation held (18 and 65 measured), and texels equal
+   to it were keyed out. And keying the entry by the whole plane's content instead gave every map
+   browsed an entry of its own: **131 arrow presses through the list filled the atlas**, and the
+   full atlas's fresh start blanked the screens under the modal (SKIRMISH 92 323 px black; an A/B
+   with the stack skip off showed the skip was not the cause).
+
+   **What crosses now is `PK_PLANE`**: the stamp's box and the indices it leaves, row by row — the
+   crop of `scale_capture`'s resample to the op's box, a bound checked against the resample's own
+   extent before a byte is copied. It is a box because that is what the engine writes: the span
+   `0x4C7310` copies every texel of the rectangle, key colour included (`0x4C74C7..0x4C74CE`, no
+   compare). The drain mirrors it as `TAGPU_GUIOP_PIXELS`, the path `PK_MOVIE` takes, so there is
+   no key and no atlas entry at all. The bytes are the frame's own art resampled inside the
+   engine's call, the class a sprite's plane is, and never the composed surface. With it went the
+   window's packed atlas key (§2, *The focus glow*: "a window breaks the atlas key"): no transformed
+   stamp takes an atlas entry any more, so `tagpu_gaf.c`'s entries are whole frames again.
+
+**THE WHEEL** is the DLL's, the engine has none: a notch the zoom declines scrolls the list under
+the pointer by the system's lines-per-notch, through the engine's own scroll calls, and leaves the
+selection alone. Mechanism, gates and measurement: [GUI gadgets](gui-gadgets.html) §2.4.1. The
+zoom now also declines every notch while an in-game options screen owns input
+([gpu-status](gpu-status.html) §2.3), so a wheel over `ARMOPT.GUI` no longer zooms the world
+behind it.
+
+**MEASURED** on a private Xvfb, 1024×768, `SINGLE → Skirmish → SelectMap` and four picks by
+`ui select`, each frame the presented window (`import -window`) against the engine's golden source
+(`tacli shot`):
+
+| what | result |
+|---|---|
+| SKIRMISH, SELMAP on entry, and four picks | 0 px differing, highlight and preview on every pick — and after walks of 131 and 27 arrow presses through the list |
+| the atlas after the 131-press walk | 171 entries, no fresh start |
+| a scroll, then a click on a row | the row selected, its highlight and its preview correct, 0 px |
+| the in-game badge and a label, zoomed | 0 px |
+| the shell tour | 0 px except `MAINMENU.GUI`'s own animation between the two captures |
+
+**NOT CLOSED.**
+
+- **The battle room's SELMAP was not run.** It is the same builder (`0x444A20`, called from
+  `0x47AADE`/`0x47AC73`), the same gadget and the same `0x800` load; that is an argument from the
+  disassembly, not a run.
+- **No in-game list was scrolled**: no in-game screen with more rows than it shows was reachable
+  (no saved games on the instance).
+- **A tint over more than 64 pieces is declined whole**, as every tint over a dropped box was
+  before. Nothing measured reached the cap.

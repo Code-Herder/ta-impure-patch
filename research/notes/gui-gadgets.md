@@ -306,8 +306,9 @@ because the miss at `0x4A6FD4` falls back to gadget 0 rather than running off th
 `0x4A7018`), and the row only follows through the `round(maxtop * knobpos / (range-1))`
 above — so it takes roughly `(range-1)/maxtop` clicks to move a single row, and usually
 a click moves nothing at all. The same is true of clicking the scrollbar track
-(`0x4A426B`: ±1 px per frame). **There is no page-up/page-down anywhere**, and **no
-mouse wheel**: `WM_MOUSEWHEEL` (`0x20A`) does not appear in the binary.
+(`0x4A426B`: ±1 px per frame). **The engine has no page-up/page-down anywhere**, and **no
+mouse wheel**: `WM_MOUSEWHEEL` (`0x20A`) does not appear in the binary. The wheel a player
+has over a list is the DLL's (below).
 
 So the only mechanism that moves the selection a known number of rows is the keyboard.
 `GUI_HandleKey 0x4A9B90` dispatches on `key - 9` through a byte table at `0x4A9EE0`;
@@ -317,6 +318,38 @@ VK_LEFT/UP/RIGHT/DOWN), Up and Down act on the focused gadget when its `id == 2`
 Focus is `[guiobj+0x20]`, and **clicking inside a listbox sets it unconditionally**
 (`0x4A3AFB`). Left/Right act only on a *horizontal* slider. There is no PgUp/PgDn/Home/
 End. [BINARY-VERIFIED]
+
+#### The mouse wheel scrolls a list — the DLL's, not the engine's
+
+`tagpu_gui_hook.c`'s **list wheel** is one more writer of `+0xBC`, and the only one that is not
+the engine's. It is always on (`tagpu_listwheel.off` at launch leaves it out) and does not depend
+on `gui.on` or on the renderer.
+
+- **Which notches.** Every notch the zoom declines — anywhere off a live world viewport, and
+  anywhere while an in-game options screen owns input (`main+0x37EBE` bit 0) — is queued with
+  the point it was aimed at, in the engine's own space ([gpu-status](gpu-status.html) §2.3).
+- **What it scrolls.** On the game thread, at the entry of the GUI pump `0x4A9FD0`, the top
+  screen's first active gadget under that point that is a list box, or a slider or scroll arrow
+  bound to one. A slider or arrow finds its list the way `GUI_SliderUpdate 0x4A3EF0` does: the
+  first `id 2` record with the same `assoc`. Over anything else — a button, the map preview, the
+  panel — the notch does nothing and is counted as a miss.
+- **By how much.** The system's lines-per-notch (`SPI_GETWHEELSCROLLLINES`, 3 by default; the
+  one-screen setting scrolls `count − maxtop` rows, one page), a fraction of a notch kept for the
+  next one on the same list. Wheel up scrolls up. `top` is clamped to `[0, maxtop]`.
+- **How.** It writes `top` and then makes the two calls `List_SelectPrev` makes after its own
+  write — the listbox handler `0x4A1B40(gi, idx)`, which repaints the rows, and
+  `Gadget_PropagateAssoc 0x4A2BE0(gi, idx)`, which moves the knob. **The selection `+0xBA` is not
+  touched**, so what is selected (and SELMAP's preview) changes only on a click, as in any list
+  view. Engine map: *The pump's entry, the pointer it reads, and what a list scroll is*.
+
+MEASURED 2026-09-26 on `SELMAP.GUI`'s 99-map list (`maxtop` 87): from top 12, two notches down
+→ 18, one up → 15, ten up → 0, forty down → 87; over the slider and both arrows it scrolls the
+list; over LOAD, Cancel and the preview nothing moves; the selection held throughout, and a click
+on a row after a scroll selects that row. The battle room's map list is the same gadget
+(`0x444A20`'s callers) and was not run. No in-game list with more rows than it shows was
+available (no saved games), so the in-game side was not exercised. The `GUI flips=` heartbeat,
+logged while the op capture (`gui.on`) is armed, counts them in `wheel=`: notches, rows moved,
+misses and ring overflows.
 
 ### 2.5 Textfield — `id 3`
 

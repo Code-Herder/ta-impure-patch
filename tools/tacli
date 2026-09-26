@@ -1696,14 +1696,19 @@ def device_point(snap: dict, gx: int, gy: int):
 
 
 def cmd_wheel(args):
-    """Turn the mouse wheel, which is the zoom control.
+    """Turn the mouse wheel: the zoom over the world, a scroll over a list.
 
-    The wheel is only live over the world viewport, exactly as it is for a
-    player, so a position is almost always what you want: without `--at` the
-    notches land wherever the injected pointer happens to be, and if that is the
-    side panel or a menu they do nothing at all (the game logs `zoom: wheel
-    ignored`). One notch in is x1.163, out x0.877 (14 % of the camera distance
-    1/z), tweened over 250 ms; zooming out pulls back from the centre.
+    Over the world viewport the wheel is the zoom control, exactly as it is for
+    a player. One notch in is x1.163, out x0.877 (14 % of the camera distance
+    1/z), tweened over 250 ms; zooming out pulls back from the centre. While an
+    in-game options screen is up it does not zoom.
+
+    Over a list, its scrollbar or its arrows -- SELMAP's maps, any menu list --
+    each notch scrolls that list by the system's lines-per-notch (3), a positive
+    count up, and the selection stays where it is. Anywhere else a notch does
+    nothing (the game logs `zoom: wheel ignored`, and the `GUI flips=`
+    heartbeat's `wheel=` counts a miss). So a position is almost always what you want:
+    without `--at` the notches land wherever the injected pointer happens to be.
     """
     inst = Instance(args.name)
     tokens = []
@@ -5419,13 +5424,15 @@ def build_parser():
     od.add_argument("--timeout", type=float, default=ORDER_TIMEOUT)
     od.set_defaults(func=cmd_order)
 
-    wh = sub.add_parser("wheel", help="turn the mouse wheel (the zoom control)")
+    wh = sub.add_parser("wheel", help="turn the mouse wheel (zoom over the world, scroll over a list)")
     add_common(wh)
     wh.add_argument("name")
     wh.add_argument("notches", type=int,
-                    help="+N zooms in, -N zooms out (x1.163 in, x0.877 out per notch)")
+                    help="+N zooms in or scrolls a list up, -N zooms out or scrolls down "
+                         "(x1.163 in, x0.877 out per notch; 3 rows a notch)")
     wh.add_argument("--at", type=int, nargs=2, metavar=("X", "Y"),
-                    help="point here first — the wheel is dead off the world viewport")
+                    help="point here first — the wheel zooms only over the world viewport "
+                         "and scrolls only over a list")
     wh.set_defaults(func=cmd_wheel)
 
     e = sub.add_parser("eye", help="hold the camera at a world position")

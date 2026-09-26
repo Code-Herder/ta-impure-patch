@@ -573,15 +573,15 @@ static int __cdecl before_scale(void* e)
         if (xy[2 * i + 1] < t) t = xy[2 * i + 1];
         if (xy[2 * i + 1] > b) b = xy[2 * i + 1];
     }
-    /* AN AXIS-ALIGNED, UNCLIPPED, WHOLE-FRAME STAMP IS A SPRITE -- and NOTHING
-       ELSE IS CLAIMED HERE. The three vertices are origin, +u and +u+v, so the
-       stamp is axis-aligned exactly when v0 and v1 share a y and v1 and v2 share
-       an x, and it covers the whole frame exactly when the uv triangle runs
-       (0,0) (w,0) (w,h). The in-game player badge is that case, measured
-       2026-09-21 as `xy=(132,5)(152,5)(152,25) uv=(0,0)(32,0)(32,32)`. A rotated
-       or sheared stamp, a partial uv window, or one the context clipped
-       publishes its box: the bound is the test, not a belief about what the
-       engine draws.
+    /* AN AXIS-ALIGNED, UNCLIPPED STAMP IS A PLANE -- and NOTHING ELSE IS
+       CLAIMED HERE. The vertices are origin, +u, +u+v and +v, so the stamp is
+       axis-aligned exactly when v0 and v1 share a y, v1 and v2 share an x and
+       v3 closes the rectangle, in `xy` and in `uv` alike. The in-game player
+       badge is that case, measured 2026-09-21 as
+       `xy=(132,5)(152,5)(152,25)(132,25) uv=(0,0)(32,0)(32,32)(0,32)`. It
+       crosses as `PK_PLANE`, `scale_capture`'s resample of the window below. A
+       rotated or sheared stamp, or one the context clipped, publishes its box:
+       the bound is the test, not a belief about what the engine draws.
 
        AND THE EXTENT IS HALF-OPEN, which the vertices' bounding box is not. The
        far vertex is the edge the span stops BEFORE, not a pixel: golden draws
@@ -595,7 +595,7 @@ static int __cdecl before_scale(void* e)
     /* ALL FOUR VERTICES, or the shape is not the rectangle this claims it is.
        v0's row, v1's column and the u/v extents alone are satisfied by a quad
        whose fourth corner (`xy[6]`/`xy[7]`) sits anywhere at all -- and such a
-       quad would be published as an axis-aligned sprite. Every caller
+       quad would be published as an axis-aligned plane. Every caller
        disassembled so far builds a true rectangle. */
     if (ptr_ok(fr) && ptr_ok(uv) && fr[0x0A] == 0 &&
         xy[1] == xy[3] && xy[2] == xy[4] &&

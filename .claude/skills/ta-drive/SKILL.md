@@ -413,9 +413,9 @@ of a gesture is `zoom: wheel +120 -> 1.163, landed 251.7 ms after the last notch
 need the mouse->world repair, which `zoom.on` or `vpwide.on` installs at launch; with neither the
 level is pinned at 1.0 and the log says so.
 
-- **Aim it.** `--at` is a `pmove:` first; notches over the side panel or a menu do nothing, and
-  the log says which gate refused. `tools/tacli wheel <i> 1 --at 576 384` (the viewport centre at
-  1024x768) is the camera-neutral control.
+- **Aim it.** `--at` is a `pmove:` first; off the viewport, or under an in-game options screen,
+  a notch does not zoom (over a list it scrolls it), and the log says which gate refused.
+  `tools/tacli wheel <i> 1 --at 576 384` (the viewport centre at 1024x768) is camera-neutral.
 - **In then out is 1.020, not 1.0**: to get back to 1.0 write it to `tagpu_zoom.txt`, then delete it.
 - **Re-read the eye after any wheel** — the game thread applies the delta at its next in-play
   draw. An off-centre notch in also **releases a camera follow** (`Ctrl+C`); read `main+0x142F3`

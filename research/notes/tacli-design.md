@@ -169,7 +169,8 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
      listbox by `assoc` is a scrollbar and `set` refuses it, pointing at `select`.
    - **`select` scrolls.** Reaching an off-screen row is the arrow keys and nothing
      else: the scroll arrows move the knob one *pixel* (usually no rows), the track
-     click likewise, and TA has neither page-up/down nor a mouse wheel. `select` clicks
+     click likewise, and TA has neither page-up/down nor a mouse wheel of its own (the DLL's
+     list wheel moves the view, not the selection, so `select` does not use it). `select` clicks
      the nearest visible row for focus, then steps, polling the selection rather than
      counting presses — a rapid batch is partly dropped, and a `&G` separator swallows
      a press without moving. 96 rows in ~8 s on `SELMAP`'s 99-map list.

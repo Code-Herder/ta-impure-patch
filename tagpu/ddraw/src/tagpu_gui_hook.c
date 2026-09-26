@@ -2704,8 +2704,9 @@ static void publish(unsigned flipSurf)
            and remembers: the engine's signed read there reaches the heap in
            front of the table, which nothing can reproduce. No stock caller
            reaches it -- the fixed levels are +20, +30, +31, -19..-22, -20,
-           -24, -28, and the message fade `0x41DF20` / `0x41FAD2` walks -19 to
-           -28 -- so `box=` reports it rather than trusting that list. An
+           -24, -28, and the ten-step screen fade at `0x41DF70` / `0x41FAE2`
+           walks -19 to -28 -- so `box=` reports it rather than trusting that
+           list. An
            unbuilt table takes the same exit. */
         if (op->kind == OP_FRAME) {
             int lvl = (int)(signed char)op->col;  /* `before_frame` clamped it */
