@@ -373,7 +373,12 @@ Keyed by `(template root, level generation)`. Static: it survives an atlas reset
 
 ### Per (type, owner, atlas generation) — the material stream
 
-`uv`, the colour-key flag, the flat colour, and a **skip** flag. A face with no resolved texture
+`uv`, the colour-key flag, the flat colour, a **skip** flag, and for a convex textured quad its
+own frame: the corner's point in it, the fourth corner `(a,b)` and the frame's atlas rect, from
+which the fragment stage maps the quad per pixel (`tagpu_posebake.h` lists the thirteen floats;
+[GPU status](gpu-status.html) §2.99). The frame is a fact about the geometry, but only a textured
+face needs it and the rect is material, so it rides the material stream and the geometry stride
+stays as it is. A face with no resolved texture
 *and* no flat colour is skipped by the engine's rasteriser too — today that changes the vertex
 *count*; here the face is baked anyway and the skip flag collapses its triangles in the vertex
 shader, exactly as a HIDden piece's all-zero matrix already does. **The two buffers therefore

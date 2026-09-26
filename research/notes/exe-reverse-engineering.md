@@ -1696,6 +1696,32 @@ Newell normals). ARMCV's `door1` and `door2` are one each: `noise3a`, grey plati
 out, and `bluenoise1`, dark machinery with lamps, facing down and in — the inside of the hatch. A renderer that draws both faces of a pair gets whichever side wins
 the depth tie (`gpu-status.md` §2.98).
 
+### How `0x4C8760` lays a texture on a quad [DISASSEMBLED 2026-09-26]
+
+`0x4C8760(frame, texture, verts, uvs)`, `ret 0x10`, called by the unit bake at `0x459B96` with
+`uvs = 0`.
+
+- **The corners.** With `uvs = 0` (`0x4C879D`) the function builds its own four on the stack
+  (`0x4C87A6..0x4C87DA`): `(0,0)`, `(w−1, 0)`, `(w−1, h−1)`, `(0, h−1)`, where `w` and `h` are
+  the texture's `u16` at `+0x00` and `+0x02`. So a face's vertex 0 takes the frame's top-left
+  texel and the corners follow the face's index order. Our bake puts them on the frame's edges,
+  `0` and `w`, rather than on the last texel's.
+- **The chains.** Each edge chain carries x (16.16, `+0xFFFF` added, so the ceiling), u, v and the
+  vertex's third coordinate, each in 16.16, into a 0x28-byte row entry: `+0x00` xl, `+0x04` xr,
+  `+0x08`/`+0x0C` u and v from the −1 chain, `+0x10`/`+0x14` from the +1 chain, and `+0x18`/`+0x1C`
+  the third coordinate at the two ends (`0x4C89AF..0x4C89C4`, `0x4C8B18..0x4C8B2E`).
+- **The row.** The span `0x4C7A20` divides each quantity's difference by `xr − xl`
+  (`0x4C7A48..0x4C7A7C`) and steps it linearly along the row. A row starting left of the frame is
+  clipped at 0, with u, v and the third coordinate advanced by as many steps
+  (`0x4C7A80..0x4C7AB9`), and xr is clamped to the frame's last column, its `u16 +0x00` less one
+  (`0x4C7ABC..0x4C7ACD`).
+
+So the texture is linear along each edge and along each screen row. That is the quad's bilinear
+map only when two opposite sides lie along rows. Otherwise the layout depends on how the quad
+sits on screen and moves as the unit turns. For a parallelogram it is the affine map whichever
+way the quad sits. The Vulkan unit pass maps a convex textured quad by its bilinear map in the
+model's own frame instead, not by this per-row rule (`gpu-status.md` §2.99).
+
 ### A builder's build list, `TEMP UTYPE LIST` — `0x42DA58`, `0x42DAC7`, `0x42BEAF..0x42BED3` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The list.** A builder's `canbuild%d` keys in `gamedata\sidedata.tdf`'s `[CANBUILD]` section are read

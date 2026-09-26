@@ -19115,3 +19115,71 @@ body's argument above.
 - Whether the engine's face-0 skip (`0x459AA2`) meets the file's selection primitive or a real face
   is open (engine map, the same section); `tagpu_posebake.c` keeps face 0 in the body and wire
   ranges.
+
+### 2.99 A textured quad is mapped per pixel (`tagpu_posebake.c` `quad_frame`, `tagpu_native.c` FS `taQuadST`)
+
+**What it is.** The unit pass draws a textured quad as two triangles, and until this change each
+triangle carried its own affine uv. On any quad that is not a parallelogram that bends the texture
+along the diagonal: the grid on an opened ARMSOLAR panel kinked into a V. The fragment stage now
+inverts the quad's bilinear map per pixel, so the texture spans the whole quad as one surface. No
+hook, no engine read or write.
+
+**What the engine does, and why we do not copy it.** `0x4C8760` carries u and v down the quad's
+two edge chains and then steps them linearly across each screen row (`0x4C7A20`; [engine
+map](exe-reverse-engineering.html), *How `0x4C8760` lays a texture on a quad*). That is a
+bilinear map only when two opposite sides of the quad lie along screen rows; otherwise the layout
+depends on how the quad sits on screen, so it shifts as a unit turns. Both remedies were shown to
+the owner side by side, front-on and rotating (an offline render of ARMSOLAR, 2026-09-26), and the
+per-pixel bilinear map was chosen. For a parallelogram the engine's rule, the two affine triangles
+and the bilinear map are the same map, so only non-parallelograms change.
+
+**How.** `quad_frame` places each textured four-vertex face of the BODY range in its own frame,
+`P0 = (0,0)`, `P1 = (1,0)`, `P3 = (0,1)`, `P2 = (a,b)`, with `(a,b)` the least-squares fit of
+`P2 − P0` on the two sides from the rest vertices. The material stream carries the corner's point
+in that frame, `(a,b)` and the frame's atlas rect (`TAGPU_PB_MATST` 5 → 13 floats: locations 7-9,
+`tagpu_posebake.h` lists them), and the rasteriser interpolates the point. That interpolation is
+exact because every step from the rest vertices to the framebuffer is affine: the piece transform
+is rigid, the projection `px = x`, `py = −z − y/2` is linear, and the zoom and the viewport are
+scales. An affine map leaves the bilinear coordinates unchanged, so the texture belongs to the
+model and does not swim as it turns. The fragment stage's `taQuadST` solves the quadratic for `t`
+through the root whose slope, which is the map's Jacobian there, is positive, then takes `s`. The
+sample is clamped to the frame's rect, whose border repeats its edge. Classic++'s mipped twin
+reads `textureGrad` with the gradients of the unclamped coordinate, taken before any discard.
+
+**What stays on the triangles.** A face that is not a quad, and a quad that is not convex in its
+frame (`a > 0`, `b > 0`, `a + b > 1`, each with a 1/64 margin), where the bilinear map is not
+one-to-one over the face. So does anything drawn by `FXVS`, `WVS` or the lab's vertex stage,
+which write the rect as −1. In the 608 stock models there are 43 845 textured quads: 16 448
+parallelograms (unchanged), 27 362 convex non-parallelograms now mapped per pixel, and 35 kept on
+the triangles. 589 models have at least one changed quad. A non-planar quad (1 501 stray more
+than 1 % of an edge off the plane) is fitted, not exact; its two triangles still agree along the
+diagonal because both carry `P2`'s point.
+
+**What it costs.** 32 bytes more per material vertex (20 → 52), in the CPU mirror and the GPU
+buffer alike: a median model's stream is 74 KB rather than 28, and CORGANT's, the largest,
+310 KB rather than 119. A stream is per (type, owner), so a game holding a few hundred costs tens
+of MB more on each side. The fragment work is a square root and two divides per textured pixel.
+
+**Measured 2026-09-26** on a private Xvfb with the GPU presenting (1024×768, the play arm set),
+same-time A/B against the build before the change (08888b7):
+
+- Canal Crossing, four ARMSOLARs at facings 0/90/45/180 and two ARMCVs, Classic, zoom 1× and
+  3.5×. The panel grids run straight and meet the panel edges with no kink. The pixels that
+  differ lie on the units only: nearly every panel pixel, and the ARMCVs' tapered hull faces
+  (`Arm4c`, `Arm4d`, `camob3`, the `nano` arm; `quad_frame`'s rule puts them among the changed
+  quads). The minimap differed only where the two games' AI units had moved differently.
+- The same scene with Classic++ armed, at 0.5×, 1×, 3.5× and 5×: straight grids, no dark rim at a
+  face's edge, no seam along a diagonal.
+- `crowd-static` (256 units of 16 types), zoom 1× and 2.5×: no face broken or missing.
+- Against GDI (`tagpu_gdi.on`) at 1×, the panels' texture layout matches the engine's frame.
+  GDI's ARMSOLARs also show a black panel with white edges that neither Vulkan build draws.
+  That is a separate, open question and not this change.
+
+**Not covered.**
+
+- The browser lab (`tools/tascene`) feeds no quad frame, so its unit lane keeps the two
+  triangles. Its extractor also stops at `tagpu_feat.c` on `TAGPU_FEAT_MIRROR`, independently of
+  this change. The unit shaders it extracts compile and link as GLSL ES 3.00.
+- Only these scenes were looked at; wrecks were not.
+- Where the engine pins a quad's corners to texels (`w − 1`, `h − 1`), ours sit on the frame's
+  edges, as before this change.
