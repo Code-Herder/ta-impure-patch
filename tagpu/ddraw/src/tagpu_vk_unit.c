@@ -1175,12 +1175,17 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
     gp.subpass = 0;
     ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
                                    &s_pipeBody) == VK_SUCCESS;
-    /* THE GHOST PIPELINE, AND IT DIFFERS IN ONE BIT. Build ghosts are drawn
-       with depth WRITES off and nothing else changed -- so ghosts blend with
-       each other (the usual case is the
-       cursor ghost standing on a queued ghost's own site) while units drawn
-       earlier still occlude them, because the depth TEST stays on. Same
-       shaders, same blend, same layout; `depthWriteEnable` alone moves. */
+    /* NOTHING BUILT BELOW CULLS. The ghost, the effects models and the wire
+       share this create-info with the body, and each has its own reason. */
+    rs.cullMode = VK_CULL_MODE_NONE;
+    /* THE GHOST PIPELINE, AND IT DIFFERS IN TWO BITS. Build ghosts are drawn
+       with depth WRITES off -- so ghosts blend with each other (the usual case
+       is the cursor ghost standing on a queued ghost's own site) while units
+       drawn earlier still occlude them, because the depth TEST stays on. And
+       they are NOT CULLED: the engine draws no ghost, and its look is every
+       face blended at `uAlpha`, back faces included, so a closed hull reads
+       about 0.64 opaque at 0.40 -- culling alone would lighten every ghost to
+       0.40. Same shaders, same blend, same layout. */
     if (ok) {
         ds.depthWriteEnable = VK_FALSE;
         ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
@@ -1208,9 +1213,6 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
        units draw, `tagpu_vk_unit_fx_ready` answers 0, and the native pass
        takes back every record that carries a model while the rest of the
        effects draw. */
-    /* the effects models and the wire below are bands and runs, not faces:
-       neither culls, so what they share with the body stops at the cull */
-    rs.cullMode = VK_CULL_MODE_NONE;
     if (ok) {
         VkShaderModule fxvs = mk_module(d, tagpu_spv_tagpu_posedraw_FXVS,
                                         sizeof tagpu_spv_tagpu_posedraw_FXVS / 4);
@@ -1240,8 +1242,11 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
        record, each a band the fragment stage cuts to `0x4CC7AB`'s pixels.
        Depth is the body's own -- tested LESS and WRITTEN -- and the records'
        one-notch-nearer keys (+0.15) are what let an edge win against the
-       surface it traces. NOT A REASON TO REFUSE THE PASS: without it a
-       nanoframe keeps its recolour and loses only the outline. */
+       surface it traces. NOT CULLED: a band's winding says nothing about its
+       face, so the edges of faces seen from behind are drawn and left to the
+       depth test, where the engine's walk 0x4C0820 drops them (gpu-status.md
+       §2.98). NOT A REASON TO REFUSE THE PASS: without it a nanoframe keeps
+       its recolour and loses only the outline. */
     if (ok) {
         VkShaderModule wvs = mk_module(d, tagpu_spv_tagpu_posedraw_WVS,
                                        sizeof tagpu_spv_tagpu_posedraw_WVS / 4);
@@ -1338,8 +1343,15 @@ static int build_shadow_pipelines(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_NONE;          /* the body pipeline's rule       */
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    /* THE BODY PIPELINE'S CULL, AND FOR BOTH OF THE ENGINE'S BRANCHES. The
+       silhouette is the blackened composite, which holds only the faces the
+       body bake painted; the slant is 0x45A610's fill through 0x4C1000, which
+       drops the faces that do not run clockwise under ITS projection. The
+       vertex stage puts each range on the same y-down framebuffer under its
+       own projection, so one rule reproduces both (build_body_pipeline has
+       the argument). */
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -1350,8 +1362,9 @@ static int build_shadow_pipelines(const TAGPU_VKPASS* d)
     ds.depthCompareOp = VK_COMPARE_OP_LESS;
     ds.maxDepthBounds = 1.0f;
     ds.stencilTestEnable = VK_TRUE;
-    /* BOTH FACES, because this pipeline does not cull: a back face must mark
-       and clear exactly as a front face does. */
+    /* THE MARK AND THE CLEAR SHARE `rs`, so they cull the same faces and still
+       cover exactly the same fragments. Both stencil faces carry the same
+       ops; only the front one is reached. */
     memset(&so, 0, sizeof so);
     so.failOp = VK_STENCIL_OP_KEEP;
     so.depthFailOp = VK_STENCIL_OP_KEEP;

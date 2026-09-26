@@ -8851,8 +8851,10 @@ So every A/B on this plan has compared two upside-down pictures. That is a valid
 content** — geometry, colour, coverage and ordering were all genuinely checked and those figures
 stand — but two things fall outside it: the lane's presented picture, and any rasterisation rule
 whose answer depends on which way up the viewport is. The 32 px below are the second of those.
-Nothing culls (`VK_CULL_MODE_NONE` in all thirteen ported pipelines), so the winding argument the
-flip is also justified by buys nothing.
+Nothing culled at that landing (`VK_CULL_MODE_NONE` in all thirteen ported pipelines), so the
+winding argument the flip is also justified by bought nothing. The unit body and hard-shadow
+pipelines cull now (§2.98), on the unflipped y-down viewport this section settles, with the sign
+chosen for it.
 
 **Proven, not inferred, in three steps.** An X capture of the real game window shows the labels
 upright and the group digit *below* its bar; an X capture of the Route D window shows them mirrored
@@ -8985,8 +8987,8 @@ depends on which way up the viewport is. **The screen is the oracle for those, n
   here and in the seam's own log line because it is a behaviour nobody chose deliberately.
 * The prose that argued for the flip, in five pass headers, in `tagpu_vk_pass.h`'s `flipok`
   contract, and in four places in this file — including three `NO CULLING` comments whose stated
-  reason was the winding the flip reversed. Nothing culls and nothing should; only the
-  justification moved.
+  reason was the winding the flip reversed. Nothing culled then; the unit body and hard-shadow
+  pipelines cull since §2.98, for the engine's reason, not the flip's.
 
 #### How it was verified — and the method is the point
 
@@ -19046,11 +19048,11 @@ unit's `E` as saved, and only the loud unit's dot blinks.
 **Not covered.** The attack cursor's in-range answer for a keyed weapon was not seen: the AI flies
 its aircraft away. It follows from the cursor calling `0x49ABB0` itself.
 
-### 2.98 Unit faces seen from behind are not drawn (`tagpu_vk_unit.c` `build_body_pipeline`)
+### 2.98 Unit faces seen from behind are not drawn (`tagpu_vk_unit.c` `build_body_pipeline`, `build_shadow_pipelines`)
 
-**What it is.** The unit body pipeline `s_pipeBody` and the build ghosts' `s_pipeGhost` cull back
-faces: `VK_CULL_MODE_BACK_BIT`, front face `VK_FRONT_FACE_CLOCKWISE`. No hook, no engine read or
-write, no shader change.
+**What it is.** The unit body pipeline `s_pipeBody` and the two Classic hard-shadow pipelines
+(`s_pipeShMark`, `s_pipeShDraw`) cull back faces: `VK_CULL_MODE_BACK_BIT`, front face
+`VK_FRONT_FACE_CLOCKWISE`. No hook, no engine read or write, no shader change.
 
 **Why the engine is the rule.** Every rasteriser the unit bakes use fills a row only when the
 chain it walked forwards lies right of the one it walked backwards, so a face that does not run
@@ -19071,22 +19073,40 @@ has negative area, which `VK_FRONT_FACE_CLOCKWISE` keeps. **A future change that
 viewport, mirrors a piece matrix or reverses the fan must flip `frontFace` with it**; the symptom
 of a wrong sign is every hull drawn inside out.
 
-**What stays unculled, and why.** The effects models' `s_pipeFx` and the nanoframe wire's
-`s_pipeWire` are built from the same create-info and reset `cullMode` to NONE after the ghost: a
-run is a rectangle and a wire record is a band, and neither's winding says anything about a face.
-The shadow pipelines (`build_shadow_pipelines`, `s_pipeCast`) keep their own NONE for their own
-stated reasons.
+**The hard shadow follows the body, on both of the engine's branches.** A mobile unit's shadow
+is the blackened composite, which holds only the faces the body bake painted; a structure's slant
+is `0x45A610`'s fill through `0x4C1000`, which drops the faces that do not run clockwise under its
+own projection `x + y/4`, `−z − y/4`. The vertex stage draws each range under its own projection
+on the same y-down framebuffer, so the body's rule reproduces both. The mark and the clear share
+one rasterisation state, so they still cover exactly the same fragments.
+
+**What stays unculled, and why.** Built from the body's create-info after `cullMode` goes back
+to NONE:
+
+- **the build ghosts' `s_pipeGhost`.** The engine draws no ghost, and the ghost's look is every
+  face blended at `uAlpha` 0.40 with depth writes off, back faces included — about 0.64 over a
+  closed hull. Culling would lighten every ghost to 0.40, and it shows both skins of a
+  back-to-back pair blended.
+- **the effects models' `s_pipeFx` and the nanoframe wire's `s_pipeWire`**: a run is a rectangle
+  and a wire record is a band, and neither's winding says anything about a face.
+
+The sun-shadow map's `s_pipeCast` keeps its own NONE (a caster's back faces write depth too).
 
 **Measured 2026-09-26** on one scenario (Two Continents, 1024×768, `ss=2`, the play arm set, a
 private Xvfb with the GPU presenting): four ARMCVs, one finishing an ARMFUS nanoframe. Against the
 GDI backend (`tagpu_gdi.on`) at 1×, the three idle ARMCVs' hatches match GDI with the change —
 grey plating — and did not without it (the dark inside skin on all three); no hull renders inside
-out; the building ARMCV's open hatches look the same in all three runs.
+out; the building ARMCV's open hatches look the same in all three runs. A second run with the
+shadow pipelines culled too (Canal Crossing, four ARMSOLARs for the slant, two ARMCVs for the
+silhouette) draws every shadow where GDI draws it. On a closed hull the cull cannot change a
+shadow's coverage, so that run shows the pipelines still draw, not the sign; the sign is the
+body's argument above.
 
 **Not covered.**
 
-- Only ARMCV and one nanoframe were looked at. Other units, wrecks, ghosts and Classic++ were not
-  compared against GDI; by the argument above they change only where a face is seen from behind.
+- Only ARMCV, ARMSOLAR and one nanoframe were looked at. Other units, wrecks and Classic++ were
+  not compared against GDI; by the argument above they change only where a face is seen from
+  behind.
 - **The nanoframe wire still outlines faces seen from behind.** The engine's wire walk `0x4C0820`
   drops them like the fills do; ours draws every face's edges and relies on the body's depth, which
   hides them behind a closed hull but not on a single-sided face seen from behind. Not new with this
