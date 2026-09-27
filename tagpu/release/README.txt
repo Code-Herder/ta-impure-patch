@@ -15,10 +15,13 @@ WHAT IT IS
     - 0 to N weapons per unit, for units built for it
     - the game's own UI drawn by the patch too
 
-  Every patch checks the bytes it replaces before writing any of them. It needs
-  the original 3.1 TotalA.exe: on any other build (3.9.02, TA: Escalation and
-  other community patches ship a modified exe) it says why in a message box and
-  closes the game, rather than let it play by different rules from other players.
+  Every patch checks the bytes it replaces before writing any of them. It runs
+  on the original 3.1 TotalA.exe and beside the community's builds and mods:
+  the 3.9.02 exe, TADR, the Community Patch Loader, Total Mayhem, ProTA, TA Zero
+  and TA: Escalation. For a mod, copy it into the mod's folder and leave the
+  mod's files as they are, TADR's included. TADR's own code does not run while
+  the patch is installed: no demo recording, no TADR mega map or overlays.
+  gammata's drop-in package is not supported yet.
 
   Needs a GPU and driver with Vulkan (1.0 or later). Runs under Wine too;
   that is where it is developed.
