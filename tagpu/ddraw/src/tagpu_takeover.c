@@ -270,20 +270,71 @@ static int to_inert(HMODULE m)
     ep = nt->OptionalHeader.AddressOfEntryPoint;
     if (!ep || ep + sizeof TO_INERT > nt->OptionalHeader.SizeOfImage) return 0;
     p = (unsigned char*)m + ep;
-    if (!VirtualProtect(p, sizeof TO_INERT, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    /* PAGE_READWRITE, not PAGE_EXECUTE_READWRITE: no thread runs this module's code while the
+       eight bytes are being written -- the loader has not called its entry point yet -- so the
+       page never needs to be writable and executable at once, and a foreign module's image
+       briefly made RWX is the shape behaviour-based anti-virus watches for. The protection it
+       had is put back, and the instruction cache flushed, before anything can run. */
+    if (!VirtualProtect(p, sizeof TO_INERT, PAGE_READWRITE, &old)) return 0;
     memcpy(p, TO_INERT, sizeof TO_INERT);
     VirtualProtect(p, sizeof TO_INERT, old, &old);
     FlushInstructionCache(GetCurrentProcess(), p, sizeof TO_INERT);
     return 1;
 }
 
+/* THE PRECONDITION OF MAKING ANYTHING INERT: no module of the game folder has been initialised
+   yet, so none of the entry points below is one the loader has already called or is calling.
+   The loader initialises the exe's imports as a post-order walk in import-directory order, and
+   Impure imports nothing from the game folder, so the condition is exactly "the first descriptor
+   of the exe that leads into the game folder is Impure's": every other game-folder module is in a
+   later descriptor's subtree and runs after us.
+
+   It is not an assumption about the retail exe. The 3.9.02 and Escalation exes import `TDRAW` /
+   `TAESC` and no `DDRAW` at all (DISASSEMBLED: objdump -p), so on those routes TADR's `DllMain`
+   is what loads Impure and is running while this would write -- and there this returns 0 and the
+   pass is skipped. Part 4's comparison still refuses such a launch. */
+static int to_first_local_is_ours(const BYTE* exe, DWORD image, const wchar_t* game)
+{
+    DWORD at, end;
+    const IMAGE_NT_HEADERS32* nt = to_nt((HMODULE)exe);
+    const IMAGE_DATA_DIRECTORY* dd;
+    if (!nt || nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_IMPORT) return 0;
+    dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dd->VirtualAddress || dd->VirtualAddress >= image) return 0;
+    end = image - (DWORD)sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    for (at = dd->VirtualAddress; at <= end; at += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+        const IMAGE_IMPORT_DESCRIPTOR* d = (const IMAGE_IMPORT_DESCRIPTOR*)(exe + at);
+        HMODULE m = NULL;
+        wchar_t path[MAX_PATH], dir[MAX_PATH];
+        if (!d->FirstThunk) break;
+        if (d->FirstThunk + sizeof(DWORD) > image) continue;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                (LPCWSTR)(size_t)*(const DWORD*)(exe + d->FirstThunk), &m) || !m)
+            continue;
+        if (!GetModuleFileNameW(m, path, MAX_PATH) || !to_dir(path, dir, MAX_PATH) ||
+            _wcsicmp(dir, game))
+            continue;
+        return m == (HMODULE)g_ddraw_module;
+    }
+    return 1;           /* the exe imports nothing from the game folder: nothing has run */
+}
+
 void tagpu_takeover_tadr_init(void)
 {
     wchar_t path[MAX_PATH], game[MAX_PATH];
+    BYTE* exe = (BYTE*)GetModuleHandleW(NULL);
+    const IMAGE_NT_HEADERS32* nt = to_nt((HMODULE)exe);
     HMODULE m = NULL;
-    if (!g_ddraw_module) return;
+    if (!g_ddraw_module || !nt) return;
     if (!GetModuleFileNameW(NULL, path, MAX_PATH) || !to_dir(path, game, MAX_PATH)) return;
     if (to_off(game)) return;
+    if (!to_first_local_is_ours(exe, nt->OptionalHeader.SizeOfImage, game)) {
+        tagpu_log("takeover: a DLL of the game folder started before Impure, so nothing of TADR's "
+                  "is made inert -- its code is already running, and the comparison at the first "
+                  "DirectDraw call is what answers for this launch");
+        return;
+    }
     while ((m = to_next_local(m, game, path))) {
         const char* what = NULL;
         char base[MAX_PATH];
@@ -486,6 +537,21 @@ void tagpu_takeover_dplay_init(void)
             n++;
         }
         if (!n) continue;
+        /* The slots are about to hold addresses of code in Impure's module for the life of the
+           process. PIN it first: a FreeLibrary that unmapped Impure would leave the exe calling
+           into nothing, and the reference LoadLibrary gave whoever loaded us is not ours to
+           rely on. Pinning cannot be undone, which is exactly what is wanted here. */
+        {
+            HMODULE pinned = NULL;
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN |
+                                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                    (LPCWSTR)(void*)dp_create, &pinned)) {
+                tagpu_logf("takeover: %s's slots lead into %s, but Impure's own module could not "
+                           "be pinned (error %lu) -- the descriptor is left alone", dll, who,
+                           GetLastError());
+                continue;
+            }
+        }
         {
             DWORD* slot = (DWORD*)(exe + slots), old;
             if (!VirtualProtect(slot, n * sizeof(DWORD), PAGE_READWRITE, &old)) {
@@ -512,7 +578,7 @@ void tagpu_takeover_dplay_init(void)
 typedef struct { DWORD lo, hi; int tadr; char name[64]; } TO_MOD;
 typedef struct {
     DWORD va, target;
-    int mod, n;
+    int mod, n, slot;               /* slot: an import slot of the exe, not a site of its code */
     unsigned char mem[TO_SITE_B], file[TO_SITE_B];
 } TO_FIND;
 
@@ -525,6 +591,7 @@ typedef struct {
     int nfind, sections;
     int tadr;                       /* leading into a TADR module: what refuses the launch */
     int other;                      /* leading into another DLL of the folder: the mod's own */
+    int maybe;                      /* a run whose bytes merely HOLD such an address: see below */
     DWORD runs;
     const char* why;                /* NULL when the code really was compared */
 } TO_SCAN;
@@ -538,9 +605,9 @@ static int to_mod_at(const TO_SCAN* sc, DWORD target)
 }
 
 /* The address a control transfer at p[s] leads to, or 0. `va` is the address of p[0]. Only
-   the shapes a hook writes -- nothing here disassembles, and nothing here is a list of
-   TADR's sites: the absolute-address test in to_scan_section catches a target this misses,
-   and pass 4's job is to refuse, not to name the mechanism. */
+   the shapes a hook writes -- nothing here disassembles, and nothing here is a list of TADR's
+   sites. THIS IS WHAT A REFUSAL RESTS ON: an instruction that transfers control names its target,
+   where four bytes that merely hold a value do not (to_scan_section). */
 static DWORD to_target(const TO_SCAN* sc, const unsigned char* p, DWORD n, DWORD va, DWORD s)
 {
     DWORD imm;
@@ -584,9 +651,31 @@ static void to_found(TO_SCAN* sc, DWORD va, const unsigned char* mem, const unsi
     f->va = va;
     f->target = target;
     f->mod = mod;
+    f->slot = 0;
     f->n = (int)(avail < TO_SITE_B ? avail : TO_SITE_B);
     memcpy(f->mem, mem, (size_t)f->n);
     memcpy(f->file, file, (size_t)f->n);
+}
+
+/* A CHANGED RUN WHOSE BYTES MERELY HOLD an address inside one of the modules -- at any offset,
+   aligned to nothing. That is a coincidence, not a hook, and it is COUNTED AND NOT REFUSED:
+   the four bytes are as likely to be the middle of an instruction or the displacement of a jump
+   as a pointer, and which of them happen to look like an address depends on where the loader put
+   a DLL that day. MEASURED on Windows 2026-09-27, both halves of it: `8B 96 92 00` -- the middle
+   of a `mov esi,[esi+0x92]` of ours -- reads as 0x0092968B, and Total Mayhem's recorder was
+   mapped at 0x00910000, so three of Impure's own sites refused that install; and a rel32
+   displacement of ours to a stub above the image reads as 0x020F0000-something, where Windows
+   maps the recorder beside the retail exe, which refused `retail+tadr1` over 32 more. Every TADR
+   hook actually measured -- 24 on the 2006 recorder, 6 on the entry-point route, 13 to 18 of a
+   tdraw's -- is found by its instruction, so nothing is lost by not refusing on a value. */
+static int to_holds_address(TO_SCAN* sc, const unsigned char* mem, DWORD a, DWORD b)
+{
+    DWORD s, t;
+    for (s = a; s + 4 <= b; s++) {
+        memcpy(&t, mem + s, 4);
+        if (to_mod_at(sc, t) >= 0) return 1;
+    }
+    return 0;
 }
 
 static void to_scan_section(TO_SCAN* sc, const unsigned char* mem, const unsigned char* file,
@@ -595,6 +684,7 @@ static void to_scan_section(TO_SCAN* sc, const unsigned char* mem, const unsigne
     DWORD i = 0;
     while (i < n) {
         DWORD a, b, s;
+        int found = 0;
         if (mem[i] == file[i]) { i++; continue; }
         a = i;
         while (i < n && mem[i] != file[i]) i++;
@@ -603,18 +693,15 @@ static void to_scan_section(TO_SCAN* sc, const unsigned char* mem, const unsigne
         /* The opcode of a changed jump can begin up to four bytes BEFORE the first byte that
            differs: a hook that reuses a stock E8 changes only its displacement. One finding a
            run is enough to refuse, and keeps the report one line a site. */
-        for (s = a >= 4 ? a - 4 : 0; s < b; s++) {
+        for (s = a >= 4 ? a - 4 : 0; s < b && !found; s++) {
             DWORD t = to_target(sc, mem, n, va, s);
             int k = t ? to_mod_at(sc, t) : -1;
-            if (k < 0 && s >= a && s + 4 <= b) {
-                memcpy(&t, mem + s, 4);          /* an absolute address the run itself holds */
-                k = to_mod_at(sc, t);
-            }
             if (k >= 0) {
                 to_found(sc, va + s, mem + s, file + s, n - s, t, k);
-                break;
+                found = 1;
             }
         }
+        if (!found && to_holds_address(sc, mem, a, b)) sc->maybe++;
     }
 }
 
@@ -632,6 +719,50 @@ static void to_mods(TO_SCAN* sc, const wchar_t* game)
         d->hi = d->lo + nt->OptionalHeader.SizeOfImage;
         d->tadr = to_file_ask(path, to_ask_tadr, &what);
         to_basename(path, d->name, sizeof d->name);
+    }
+}
+
+/* EVERY IMPORT SLOT OF THE EXE, which is the other way a call can leave the image: the code
+   that reaches a slot is stock, so the comparison above never looks at it, and the file holds
+   no bound address to compare with. What makes a slot wrong is not a changed byte but where it
+   leads -- into a TADR module of the game folder -- and by this point every DllMain has run, so
+   whatever rewrote one has done it.
+
+   This is also the failure mode pass 3 leaves behind: a descriptor it could not name every slot
+   of keeps the recorder's addresses, and the recorder is now inert, so the exe's first
+   DirectPlay call would enter uninitialised Delphi code. Refusing is the answer to that, not a
+   crash. The exe's own TADR imports on the routes where TADR loads Impure (TDRAW, TPLAYX) are
+   not reached: those launches are refused by the limits table first. */
+static void to_imports(TO_SCAN* sc, const unsigned char* exe, DWORD image)
+{
+    const IMAGE_NT_HEADERS32* nt = to_nt((HMODULE)exe);
+    const IMAGE_DATA_DIRECTORY* dd;
+    DWORD at, end;
+    if (!nt || nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_IMPORT) return;
+    dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dd->VirtualAddress || dd->VirtualAddress >= image) return;
+    end = image - (DWORD)sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    for (at = dd->VirtualAddress; at <= end; at += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+        const IMAGE_IMPORT_DESCRIPTOR* d = (const IMAGE_IMPORT_DESCRIPTOR*)(exe + at);
+        DWORD k, slots = d->FirstThunk;
+        if (!slots) break;
+        /* a bound IAT keeps the null terminator the file's array ends with */
+        for (k = 0; slots + (k + 1) * sizeof(DWORD) <= image; k++) {
+            DWORD target = ((const DWORD*)(exe + slots))[k];
+            int mod;
+            if (!target) break;
+            mod = to_mod_at(sc, target);
+            if (mod < 0 || !sc->mod[mod].tadr) continue;
+            if (sc->nfind < TO_MAX_FIND) {
+                TO_FIND* f = &sc->find[sc->nfind++];
+                f->va = sc->base + slots + k * (DWORD)sizeof(DWORD);
+                f->target = target;
+                f->mod = mod;
+                f->slot = 1;
+                f->n = 0;
+            }
+            sc->tadr++;
+        }
     }
 }
 
@@ -719,13 +850,13 @@ static void to_report(TO_SCAN* sc, char* text, size_t cap)
         "impure %s (%s)\r\n"
         "exe %lu bytes, PE stamp 0x%08lX, image 0x%08lX+0x%08lX\r\n"
         "%lu changed run%s in %d executable section%s, %d into TADR, %d into another DLL of "
-        "the folder\r\n",
+        "the folder, %d merely holding such an address\r\n",
         sc->tadr, sc->tadr == 1 ? "" : "s", *who ? who : "a TADR DLL of the game folder",
         *who ? who : "tdraw.dll and tplayx.dll, or copies of them under other names",
         GIT_COMMIT, GIT_BRANCH, (unsigned long)sc->bytes, (unsigned long)sc->stamp,
         (unsigned long)sc->base, (unsigned long)sc->image,
         (unsigned long)sc->runs, sc->runs == 1 ? "" : "s", sc->sections,
-        sc->sections == 1 ? "" : "s", sc->tadr, sc->other);
+        sc->sections == 1 ? "" : "s", sc->tadr, sc->other, sc->maybe);
     text[cap - 1] = 0;
     for (i = 0; i < sc->nmod; i++) {
         _snprintf(line, sizeof line, "module 0x%08lX-0x%08lX %s%s\r\n",
@@ -734,21 +865,28 @@ static void to_report(TO_SCAN* sc, char* text, size_t cap)
         line[sizeof line - 1] = 0;
         strncat(text, line, cap - strlen(text) - 1);
     }
-    for (i = 0; i < sc->nfind; i++) {
+    for (i = 0; i < sc->nfind && shown < TO_BOX_FIND; i++) {
         const TO_FIND* f = &sc->find[i];
         if (!sc->mod[f->mod].tadr) continue;      /* the box shows what refuses, the log all */
-        if (++shown > TO_BOX_FIND) {
-            _snprintf(line, sizeof line, "... and %d more, all of them in log\\tagpu.log\r\n",
-                      sc->tadr - TO_BOX_FIND);
+        shown++;
+        if (f->slot) {
+            _snprintf(line, sizeof line, "0x%08lX -> 0x%08lX %s (an import slot)\r\n",
+                      (unsigned long)f->va, (unsigned long)f->target, sc->mod[f->mod].name);
             line[sizeof line - 1] = 0;
             strncat(text, line, cap - strlen(text) - 1);
-            break;
+            continue;
         }
         to_hex(mem, f->mem, f->n);
         to_hex(file, f->file, f->n);
         _snprintf(line, sizeof line, "0x%08lX -> 0x%08lX %s\r\n  now  %s\r\n  file %s\r\n",
                   (unsigned long)f->va, (unsigned long)f->target, sc->mod[f->mod].name,
                   mem, file);
+        line[sizeof line - 1] = 0;
+        strncat(text, line, cap - strlen(text) - 1);
+    }
+    if (shown < sc->tadr) {
+        _snprintf(line, sizeof line, "... and %d more, all of them in log\\tagpu.log\r\n",
+                  sc->tadr - shown);
         line[sizeof line - 1] = 0;
         strncat(text, line, cap - strlen(text) - 1);
     }
@@ -778,6 +916,7 @@ void tagpu_takeover_verify_image(void)
     sc.base = (DWORD)(size_t)exe;
     sc.image = nt->OptionalHeader.SizeOfImage;
     to_mods(&sc, game);
+    to_imports(&sc, sc.exe, sc.image);
     sc.why = "the exe file could not be read";
     to_file_ask(path, to_ask_image, &sc);
     if (sc.why) {
@@ -790,16 +929,24 @@ void tagpu_takeover_verify_image(void)
     for (i = 0; i < sc.nfind; i++) {
         const TO_FIND* f = &sc.find[i];
         char mem[3 * TO_SITE_B], file[3 * TO_SITE_B];
+        if (f->slot) {
+            tagpu_logf("takeover:   0x%08lX -> 0x%08lX %s (TADR) -- an import slot of the exe",
+                       (unsigned long)f->va, (unsigned long)f->target, sc.mod[f->mod].name);
+            continue;
+        }
         to_hex(mem, f->mem, f->n);
         to_hex(file, f->file, f->n);
         tagpu_logf("takeover:   0x%08lX -> 0x%08lX %s%s now %s file %s",
                    (unsigned long)f->va, (unsigned long)f->target, sc.mod[f->mod].name,
                    sc.mod[f->mod].tadr ? " (TADR)" : " (not TADR: the mod's own)", mem, file);
     }
-    tagpu_logf("takeover: the exe's code against its file -- %lu changed run%s in %d executable "
-               "section%s, %d leading into a TADR module of the game folder and %d into another "
-               "of its DLLs, of %d looked at", (unsigned long)sc.runs, sc.runs == 1 ? "" : "s",
-               sc.sections, sc.sections == 1 ? "" : "s", sc.tadr, sc.other, sc.nmod);
+    tagpu_logf("takeover: the exe's code against its file, and its import slots -- %lu changed "
+               "run%s in %d executable section%s, %d leading into a TADR module of the game folder "
+               "and %d into another of its DLLs, of %d looked at; %d run%s such an address without "
+               "an instruction that goes there, which is a coincidence and is not counted",
+               (unsigned long)sc.runs, sc.runs == 1 ? "" : "s", sc.sections,
+               sc.sections == 1 ? "" : "s", sc.tadr, sc.other, sc.nmod,
+               sc.maybe, sc.maybe == 1 ? " holds" : "s hold");
     if (!sc.tadr) return;
     tagpu_logf("takeover: FAILED -- %d place%s of the game's code lead into a TADR module",
                sc.tadr, sc.tadr == 1 ? "" : "s");

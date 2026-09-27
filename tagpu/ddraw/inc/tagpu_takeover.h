@@ -42,17 +42,27 @@
    answer. Beside the retail exe the 2006 recorder IS the game folder's dplayx.dll, imported
    by the exe itself.
 
-   It can be kept from RUNNING, because loading and running are two steps. When Impure's
-   DllMain runs, every module the exe's imports pull in is mapped and bound and NONE of their
-   DllMains has been called yet -- the loader maps the whole graph, then initialises it in
-   dependency order, and the exe imports DDRAW first (DISASSEMBLED: objdump -p; MEASURED on
-   Wine and on Windows, the suite 2026-09-26, Impure's limits installed before TADR's limit
-   crack ran). tagpu_takeover_tadr_init, from DllMain, writes `mov eax,1; ret 0Ch` over the
-   PE entry point of every module of the game folder that is a TADR build, so the loader's
-   call into it reports success and does nothing: no unit initialization, no threads, no
-   window hooks, and not the jump the recorder's DllMain splices over the exe's entry point
-   (0x004E6FA0, research/notes/deep-tadr.md). Its exports stay bound, which is why pass 3 is
-   not optional: an uninitialised Delphi DLL must never be called.
+   It can be kept from RUNNING, because loading and running are two steps.
+   tagpu_takeover_tadr_init, from DllMain, writes `mov eax,1; ret 0Ch` over the PE entry point
+   of every module of the game folder that is a TADR build, so the loader's call into it
+   reports success and does nothing: no unit initialization, no threads, no window hooks, and
+   not the jump the recorder's DllMain splices over the exe's entry point (0x004E6FA0,
+   research/notes/deep-tadr.md). Its exports stay bound, which is why pass 3 is not optional:
+   an uninitialised Delphi DLL must never be called.
+
+   THE INVARIANT THIS RESTS ON is that no module of the game folder has been initialised yet,
+   so no entry point written here is one the loader has already called or is calling. The
+   loader maps the whole import graph, then initialises it as a post-order walk in
+   import-directory order; Impure imports nothing from the game folder; so the condition is
+   exactly "the FIRST import descriptor of the exe that leads into the game folder is
+   Impure's", and every other game-folder module is in a later descriptor's subtree.
+   to_first_local_is_ours tests that against the exe in front of it and the pass does nothing
+   when it fails -- it is not an assumption about the retail exe. The 3.9.02 and Escalation
+   exes import TDRAW / TAESC and no DDRAW at all (DISASSEMBLED: objdump -p), so there TADR's
+   DllMain is what loads Impure and is running while this would write: the pass is skipped and
+   says so, and pass 4 is what answers for such a launch. MEASURED on Wine and on Windows (the
+   suite, 2026-09-26): on the retail and Patch Loader exes, which import DDRAW first, Impure's
+   limits were installed before TADR's limit crack ran.
 
    WHICH MODULES ARE TADR: the ones whose FILE carries "TADemo-MKChat", the name TADR's own
    builds give their chat channel. MEASURED 2026-09-27 over every file of the suite's
@@ -66,10 +76,12 @@
    ---- 3. the exe's DirectPlay imports ----------------------------------------------------
 
    tagpu_takeover_dplay_init, from DllMain -- after the loader has bound every import, before
-   the exe's entry point: every import descriptor of the exe whose slots lead into a DLL in
-   the game folder that exports DirectPlayCreate (and is not Impure) has ALL its slots
-   pointed at Impure's forwarders, or none of them: a slot this cannot name leaves the
-   descriptor as it is and says so. A forwarder loads Windows' own dplayx.dll by its full
+   the exe's entry point, and therefore before the exe can make a DirectPlay call: every
+   import descriptor of the exe whose slots lead into a DLL in the game folder that exports
+   DirectPlayCreate (and is not Impure) has ALL its slots pointed at Impure's forwarders, or
+   none of them: a slot this cannot name leaves the descriptor as it is and says so. Impure's
+   own module is PINNED before the first such write, because the slots then hold addresses of
+   its code for the life of the process. A forwarder loads Windows' own dplayx.dll by its full
    path on its first call -- from the game's code, outside the loader lock -- and passes every
    call on. An exe whose DirectPlay is Windows' own (the retail game alone) is not touched.
    TotalA.exe 3.1 imports DPLAYX.dll by ordinal 1, 2 and 4 and looks up no DirectPlay name
@@ -92,18 +104,40 @@
    (tagpu_patches.c, lim_verify). It reads the exe file from disk, compares every executable
    section of it with the same bytes in memory, and for each run of changed bytes decodes what
    a hook has to be: a rel32 call or jump (E8, E9), a call or jump through a pointer inside the
-   image (FF 15, FF 25), `push imm32; ret`, `mov eax,imm32; jmp eax`, and any absolute address
-   the run itself holds. A target inside a module of the game folder that is not Impure's
-   refuses the launch, naming the site, the bytes and the module.
+   image (FF 15, FF 25), `push imm32; ret`, `mov eax,imm32; jmp eax`. A target inside a module of
+   the game folder that is not Impure's refuses the launch, naming the site, the bytes and the
+   module.
+
+   ONLY AN INSTRUCTION THAT TRANSFERS CONTROL NAMES A TARGET. Four bytes of changed code that
+   merely HOLD an address inside such a module are counted (`maybe`, one line in the log) and
+   never refuse, because the bytes are as likely to be the middle of an instruction or the
+   displacement of a jump, and which of them look like an address depends on where the loader put
+   a DLL that day. MEASURED on Windows, the suite 2026-09-27, both halves: `8B 96 92 00` -- the
+   middle of a `mov esi,[esi+0x92]` of ours -- reads as 0x0092968B with Total Mayhem's recorder
+   mapped at 0x00910000, and a rel32 displacement of ours to a stub above the image reads as
+   0x020F-something with the recorder beside the retail exe mapped at 0x020C0000; judged as
+   addresses they refused those two installs over 3 and 32 of Impure's own patch sites, TADR
+   having run nothing at all. Every TADR hook ever measured here -- 24 on the 2006 recorder, 6 on
+   the entry-point route, 13 to 18 of a tdraw's -- is found by its instruction.
+
+   The same pass reads EVERY IMPORT SLOT of the exe, which is the other way a call can leave the
+   image: the code that reaches a slot is stock, so the comparison never looks at it, and the
+   file holds no bound address to compare with -- what makes a slot wrong is where it leads. A
+   slot leading into a TADR module refuses too, and that is also the answer to pass 3's own
+   failure mode: a descriptor it could not name every slot of still holds the recorder's
+   addresses, and the recorder is inert by then, so the first call into it would run
+   uninitialised Delphi code.
 
    WHY THIS EXEMPTS THE MOD AND NOT TADR, with no list of sites in it: a mod's own changes to
    the engine are in its exe FILE, so they are not changed bytes at all; Impure's patches and
    the Patch Loader's lead into Impure's module or into stubs Impure allocated, which are in no
-   module image; TADR's lead into TADR. WHAT IT DOES NOT SEE: a write to a data section (the
-   engine's globals differ from the file everywhere by the time this runs), a hook whose target
-   is computed at run time, and anything written after this call -- which is why passes 1 to 3
-   keep TADR's code from running at all rather than cleaning up after it. An exe loaded away
-   from its own ImageBase is not compared, and says so in the log. */
+   module image; TADR's lead into TADR. WHAT IT DOES NOT SEE: a hook installed by writing a
+   function pointer into a data section other than an import slot (the engine's globals differ
+   from the file everywhere by the time this runs, so comparing them would be noise), a hook
+   whose target is computed at run time, a TADR build carrying neither marker string, and
+   anything written after this call -- which is why passes 1 to 3 keep TADR's code from running
+   at all rather than cleaning up after it. An exe loaded away from its own ImageBase has its
+   code left uncompared, and says so in the log; its import slots are still read. */
 
 #include <windows.h>
 
