@@ -1236,9 +1236,9 @@ static int fix_restore_record_owner(void)
 #define SCR_MIN_PX    64u
 #define SCR_ROWS_POLY 2048u     /* 0x4C0820, 0x4C0C70, 0x4C1000: 2048-entry span tables */
 #define SCR_ROWS_SPAN 800u      /* 0x4C8760, 0x4C8BB0: 800                              */
-/* the stress lever's freed-frame plane pointers: a region RESERVED with no access when the lever
-   is read, twice the largest plane offset (at most 8 MB) long, so any plane access through a
-   poisoned frame faults. Reserved rather than an address above 2 GB, which is only no one's
+/* the stress lever's freed-frame plane pointers: the MIDDLE of a region RESERVED with no access
+   when the lever is read, the largest plane offset (at most 8 MB) on either side, so any plane
+   access through a poisoned frame faults, forwards or backwards. Reserved rather than an address above 2 GB, which is only no one's
    while the exe is not large-address-aware (tagpu_addr.h) -- TA:ESC's exe is. */
 #define SCR_POISON_SPAN (16u << 20)
 static unsigned char* s_scr_poison;
@@ -1331,8 +1331,8 @@ static int scratch_hold(unsigned char* ctx, unsigned char* f, unsigned a,
             *(unsigned char**)(g + 0x14) = g + 0x18 + px;
             *(unsigned char**)(ctx + 0x10) = g;
             if (s_scr_stress) {                /* a reader still holding f faults here */
-                *(unsigned char**)(f + 0x10) = s_scr_poison;
-                *(unsigned char**)(f + 0x14) = s_scr_poison;
+                *(unsigned char**)(f + 0x10) = s_scr_poison + SCR_POISON_SPAN / 2;
+                *(unsigned char**)(f + 0x14) = s_scr_poison + SCR_POISON_SPAN / 2;
             }
             ((void (__cdecl*)(void*))0x004D85A0)(f);
             scratch_log("grown", who, need, rows, a, px, ++s_scr_grows[who]);

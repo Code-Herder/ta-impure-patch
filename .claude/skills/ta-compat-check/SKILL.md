@@ -56,8 +56,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, 11 cases
 - **The mod's own content** (`content` in a setup): at the menu, the unit types it names — ones
   only that mod defines — must be in the engine's table of loaded types (`tacli units`, a walk of
   the table in memory). A loader that never started leaves stock TA beside the mod's files.
-- **No sound**: Wine's audio drivers are disabled for every game the suite starts; the game takes
-  its no-device path, and no file of the setup is changed for it.
+- **No sound, but a device**: every game the suite starts is kept off PulseAudio and its ALSA
+  driver opens a null device (`tools/compat/asound-null.conf`); with no device at all TA:ESC stops
+  at "No sound driver is available for use.". No file of the setup is changed for it.
 - **The network stage** (Wine only, on by default, 30 s): every player's setup whose
   single-player run shows Impure running also plays a two-player game — a second instance of the
   same folder (`compat-<setup>-j`), hosted and joined through the game's own battle room over

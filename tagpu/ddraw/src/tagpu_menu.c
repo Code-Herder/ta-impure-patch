@@ -3143,8 +3143,11 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
 }
 
 /* ---- the redirect: GUI_Load reads our screens out of GUI_DIR ------------
-   `0x4AA99A` is GUI_Load's `strncpy(path, gi+0x9B6, 0x100)`, the one read of
-   the prefix on the load path; the name is appended to that local copy next.
+   `0x4AA99A` is GUI_Load's `strncpy(path, gi+0x9B6, 0x100)`, the read that
+   names the .GUI file; the name is appended to that local copy next. The one
+   other read, in the stage drawer `0x4A81E0` that GUI_Load calls at
+   `0x4AACC4`, prefixes a gadget's own file name (`0x4A8FA0`), and no gadget
+   of ours names one -- so that read stays the mod's folder, correctly.
    At `0x4AA99F`, just after it returns, `[esp]` is still the copy's address
    and `[esp+0x240]` the caller's `name` (entry esp - 0x22C after the prologue,
    name at entry+8, the three strncpy arguments not yet popped). For our names

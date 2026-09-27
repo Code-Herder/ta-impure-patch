@@ -21,6 +21,7 @@
    "The repose" and "The 3DO model tree". */
 
 #include <stddef.h>
+#include "tagpu_addr.h"
 
 /* The piece-count bound every reader of an Object3do uses. Nothing in the
    engine bounds a model's piece count. Measured over all 608 models
@@ -110,7 +111,7 @@
    VALUE, the end-of-list test; what makes the reads safe is the caller's
    bound on the type and the template's LEVEL lifetime. */
 static __inline int tagpu_m3_ptr_ok(const void* p)
-{ return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+{ return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
 static __inline int tagpu_model_walk(const char* root, const char** nodes, int max)
 {

@@ -1758,9 +1758,10 @@ from `0x4B8E00` and at least 64 from a grow. Identical to stock for every unit w
 
 **Levers**, read once at attach. `tagpu_scratch.stress` treats every frame as too small, so every
 writer call regrows it to exactly `max(need, 64)` pixels and frees the old one, after setting the old
-block's two plane pointers to a 16 MB region the lever reserves with no access at attach: a freed
-block the heap keeps mapped would hand a stale reader its old bytes rather than fault, and at twice
-the largest plane offset (8 MB) the region makes one faulting at any offset. It is reserved rather
+block's two plane pointers to the middle of a 16 MB region the lever reserves with no access at
+attach: a freed block the heap keeps mapped would hand a stale reader its old bytes rather than
+fault, and with the largest plane offset (8 MB) on either side the region makes one fault at any
+offset, forwards or backwards. It is reserved rather
 than taken from above 2 GB because that span is no one's only while the exe is not
 large-address-aware: retail's is not (PE characteristics `0x10B`), TA:ESC's is (`0x12B`), and there
 the heap is up there (below). With no region the lever is refused and logged. A reader that kept a
@@ -9531,7 +9532,9 @@ that folder. `0x502820` has six references: `0x41AD2C`, `0x42A6FE`, `0x42A752`, 
 
 **`gi+0x9B6` has two readers besides its clear (`0x4AA861`) and its setter (`0x49FBAB`):** `GUI_Load`'s
 `0x4AA989` (`add edi,0x9b6`, then the `strncpy` at `0x4AA99A`) and `0x4A8381`, a per-gadget
-loop in the stage drawer `0x4A81E0` that copies it into its own buffer. **A missing file is
+loop in the stage drawer `0x4A81E0` — which GUI_Load itself calls at `0x4AACC4` unless `flags &
+0x400` — that copies it into its own buffer and appends a gadget's own file name to it
+(`0x4A8FA0`, the gadget record's `+0xB6`). **A missing file is
 a fault, never a NULL return:** when the open at `0x4AAA10` returns 0, `0x4AAA17` jumps to
 `0x4AAC2D`, which takes `edi` from a local only the merge path wrote (`[esp+0x10]`,
 `0x4AAA3B`), and `0x4AAC43` writes `[edi+4]` — the in-game menu's crash on TA:ESC before our

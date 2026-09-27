@@ -26,8 +26,9 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   not of any archive path). **The units are seen**: after the battle's scenario, the newest
   `units: alive=N` header in `tagpu.log` — the frame packet, what Impure draws — must hold nine
   in ten of the units the applier made. MEASURED 2026-09-27: Escalation made 401 and Impure saw
-  0, which every earlier check had passed. Every game runs with Wine's audio drivers disabled —
-  the no-device path, with no file of the setup changed for it.
+  0, which every earlier check had passed. Every game runs silent but with a sound device: Wine is kept off
+  PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
+  device at all stops at "No sound driver is available for use."; no file of the setup changes.
 - **The network stage** (`wine --mp SECONDS`, 30 by default, 0 for none): for each player's
   setup whose single-player run showed Impure running, a second instance of the same folder
   (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's

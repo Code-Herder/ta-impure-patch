@@ -739,7 +739,9 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
     # nothing drawn and nothing in the roster -- passes every other check. The header is
     # written every half second; at least nine in ten of what was made must be in it.
     made = re.search(r"\((\d+) units?\b", applied)        # "applied 402 of 402 (401 units + 1 feature)"
-    want = int(made.group(1)) if made else 1
+    if not made:
+        return {"ok": False, "why": f"the applier's count is unreadable, so the units seen cannot be judged ({applied})"}
+    want = int(made.group(1))
     time.sleep(4)
     got = alive_seen(gamedir)
     if got is None or got < max(1, want * 9 // 10):
