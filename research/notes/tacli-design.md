@@ -724,7 +724,7 @@ player's key as it was.
 7. Reports the game's priority class (`Get-Process`), which should read `Normal`.
 
 Flags that shape a wine instance on the local desktop (`--window`, `--display`, `--slot`,
-`--dplay`, `--intro`, `--free-dplay-port`, `--shipped`, `--no-restore-pointer`) are refused.
+`--dplay`, `--intro`, `--free-dplay-port`, `--dplay-port`, `--shipped`, `--no-restore-pointer`) are refused.
 
 `stop` stops only the test folder's `TotalA.exe` (`Stop-Process`) and waits for it to go. `rm`
 stops it the same way (`--force` for a running one), removes the task, **and the task folder
