@@ -118,7 +118,9 @@ kept in the evidence pass.
 - **Veterancy: TADR's levels, bounded per effect.** Levels are the count of thresholds at or below
   the kill count (u16, as stock). Damage taken: up to 25 levels, as TADR documents, applied where
   stock applies its own level, to every hit but the heal, so a unit at 25 takes no weapon damage, no
-  paralysis and no unit reclaim's step (TADR's hook sits at the same site); **a call of 30 000 or more (kill outright: self-destruct,
+  paralysis and no unit reclaim's step (TADR's hook sits at the same site) — **kept so by the
+  owner on 2026-09-26 [DECIDED]**, after C3 measured it: a list of 25 thresholds or more is the
+  mod author's choice, and no known content has one; **a call of 30 000 or more (kill outright: self-destruct,
   defeat, a dying transport; and the D-guns) takes no veterancy reduction**, as it takes no armour
   reduction, so it kills every unit, veteran or not (B7's fix of stock, which let a veteran above
   24 000 HP live). Damage dealt: every hit saturated into the HP word's range (B7). Reload: up to
@@ -369,7 +371,8 @@ commit can change.
   - Damage taken (`0x489BFA`): L, at most 25 (TADR's documented −4 % a level). Stock's reduction
     there covers every hit but the heal (`0xA`) and, since B7, the kill-outright calls, so a unit at
     25 takes no weapon damage, no paralysis and no unit reclaim's step: it cannot be reclaimed. No
-    known content reaches 25; every list of Escalation's has five thresholds.
+    known content reaches 25; every list of Escalation's has five thresholds, so its units top out
+    at level 5. The owner kept this after the landing [DECIDED 2026-09-26].
   - Damage dealt (`0x499DB5`): L, at most 32 (`DK_VET_MAX`, the thresholds a list may carry); the HP
     word's saturation (B7) bounds the hit.
   - Reload (`0x49E468`): L, at most 16. `tagpu_weapons.c`'s own reload for slots past 2 takes the

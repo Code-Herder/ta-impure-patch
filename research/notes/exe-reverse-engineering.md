@@ -3705,6 +3705,127 @@ sight. Out of sight (`0x4673AF`), **`0x4673B1` reads the attacker's owner**: `mo
 - **`0x467CB0`**, a second panel with the same line at `0x467CCF`; no direct caller (TADR's
   `devDrawKills`). Not seen drawn in play.
 
+## A unit's death, its transport and its explosion — mapped for TADR section C, landing C4 [DISASSEMBLED + MEASURED 2026-09-26]
+
+Every address transported explosions (C4) touch or read
+([data keys, C4 as built](tadr-port/data-keys.html#c4-as-built); the hooks are in
+[gpu-status §2.101](gpu-status.html)). A rel8/rel32 scan of `.text` and every dword of the image
+finds no branch or pointer landing inside any replaced range past its first byte except the pick's
+own `je` (`0x49B017` → `0x49B021`): `0x49B017`–`26`, `0x48664B`–`50` (`0x48663D` jumps to its first
+byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–`1E`.
+
+### The death explosion — `0x49B000(unit, selfd)`, stdcall, `ret 8`
+
+- **Frame and pick.** `0x49B000..0x49B016`: `eax = selfd`, `ecx = unit`, `sub esp,0x6C`,
+  `edx = 0`, `cmp eax,edx`, `eax = [ecx+0x92]` (the def), `push esi; push edi` — so at `0x49B017`
+  `selfd` is `[esp+0x7C]` and the flags are still the compare's. `0x49B017..0x49B026` (16 bytes):
+  `je` → `def+0x220` (ExplodeAs), else `def+0x224` (SelfDestructAs); `0x49B027` `cmp eax,edx`, a NULL
+  weapon returns at once.
+- **The projectile.** A stack record at the unit's position (`+0x6A`), its player the dying unit's
+  (`unit+0xFF`, `0x49B034`, stored at `proj+0x66`, `0x49B055`), no shooter (`proj+0x52` = 0,
+  `0x49B03E`), handed to `0x499EB0` (`0x49B074`). Its area damage runs
+  only on the dying unit's owner's peer (the owner gate `0x49A03F..0x49A047`); elsewhere it is a
+  picture.
+- **Its two callers.** The destructor at `0x486D50`, when the record's severity `rec+9 > 0`
+  (`0x486D28`) and `+0x104` is 0.0 (`0x486D2F..0x486D40`), with `selfd` = (the record's kind
+  nibble `== 3`) (`0x486D42..0x486D4B`); and kill-all at `0x486F9E` with `selfd` = 1.
+
+### `Send_UnitDeath 0x4864B0(unit, kind)`, stdcall, `ret 8`
+
+- `0x4864BB`: a unit without the alive bit (`+0x110` bit 28) returns. `0x4864CB..0x48650F`:
+  `edi` = 1 when the unit's type name (`def+0x20`) equals (`0x4F8A70`) the commander name of its
+  player's side (`main+0x37F5F + 0x232·side`); such a death clears bit 0 of the player's word
+  `+0x149`.
+- `0x486521..0x4865CE`: the severity (`[esp+0x24]`, the unit argument's slot reused) and the corpse
+  type (`[esp+0x10]`). Kind 7: severity 0, corpse 1. Kinds 4, 5 and 9, and a unit whose HP word
+  (`+0x108`) is above 0: both 0. Otherwise the severity is `(100·(−HP) / max HP (def+0x1FA) +
+  unit+0xF7) / 2`, held to 1..100, and `0x4865C3` runs the unit's COB script `Killed` (the name at
+  `0x508BE8`, through `0x4B0BC0`) with pointers to both, and the script answers the corpse type.
+  `0x4865D2..0x4865E5`: a unit whose `+0x104` is not 0.0 leaves no corpse.
+- **The record**, 11 bytes at `[esp+0x14]`: `+0` = `0x0C`; `+1` = the unit's index word, copied
+  from `+0xA8` (`0x4865ED`, `0x4865FC`); `+3` = the DirectPlay ID `0x44FFD0` gives for the player byte `unit+0xF4` (`0x486625`); `+7` = the
+  killer's index, `+0xF0`'s `+0xA8` or 0 (`0x48662E..0x486646`); `+9` = the severity; `+0xA` =
+  `kind << 4 | corpse` (`0x48661C..0x486621`). It is complete at `0x48664B`.
+- `0x48664B..0x48666D`: the send, `0x451DF0([player+4], rec, 0xB)`, only for a unit whose player
+  record has a nonzero first dword and type 1 or 2 (`+0x73`) — a LOCAL player;
+  `0x486672..0x486679`: the destructor on the same record, `0x4866D0(rec, 1)`.
+- `0x48667E..0x4866B3`: a commander's death (`edi`) with `ActiveCommanderDeath` (`main+0x37EF6`)
+  set, for a local player, calls `0x491D70(1)` (deselect everything) and kill-all for `unit+0xFF`.
+
+### The destructor `0x4866D0(rec, mode)`, stdcall, `ret 8`
+
+- `0x4866E0..0x486703`: the unit is the slot `rec+1` names (`[main+0x14357] + idx·0x118`; B3's
+  bound sits at `0x4866E5`); `0x486706` returns for a slot that is not alive.
+- `0x4867BA..0x4867CB`: a carried unit (`+0x86` the transporter) is detached, `0x48AAC0(unit, 0,
+  -1, 1)`.
+- **The cargo loop** `0x4867D0..0x48682A`, while `+0x8A` (the first passenger) is set: kind =
+  3 when the record's kind nibble is 3 and 6 otherwise (`0x4867DA..0x4867EC`); `0x48680B` hits the
+  passenger, `0x489BB0([esi+0xF0], passenger, 30000, kind, 0)`; `0x486810` reloads `+0x8A` and
+  `0x48681D` detaches it. The loop runs on every peer. `0x489BB0` applies the hit through
+  `0x489CE0` (`0x489C89`), which refuses a victim that is not alive or already pending death
+  (`0x489D45`, `0x489D50`), so such a passenger keeps its own kind; stores the kind at `+0xF5`
+  (`0x489DAC`); and sets the pending bit (`+0x110` bit 14, `0x489EE2`) only when the HP reaches 0
+  and the victim's player is local (`0x489ECC..0x489ED8`), so a passenger dies of the loop only on
+  its owner's peer, where the reaper sends its death with that kind (`0x48AFC9`). **Kind 6 comes
+  from nowhere else**: of `0x489BB0`'s twelve callers the others pass 3, 4, 5, 9, 10, 11 or the
+  weapon kind 1 or 2 (`0x499E37`).
+- `0x486D24..0x486D50`: the explosion, as above; `0x486DC7` clears the slot's type (`+0xA6`) and
+  `0x486DCE` its alive bit (the free, *Unit identity on the wire*).
+
+### Kill-all for a player — `0x486F10(player)`, stdcall, `ret 4`
+
+- The player record from the byte argument (`main+0x1B63 + p·0x14B`), nothing when its unit
+  count `+0x144` is 0; its block `[+0x67, +0x6B]`, stride `0x118` (`0x486F48..0x486F5A`).
+- For each unit alive and not pending death: a player of type 1 or 2 with a DirectPlay id (a
+  LOCAL player, `0x486F73..0x486F87`) hits its own unit with 30 000 of kind 3, the unit as its own
+  attacker (`0x486F94`), and the reaper destroys it later; any other player's unit is detonated at once, `0x49B000(unit, 1)`
+  (`0x486F9E`), marked pending (`0x486FAE`) and destroyed, `Send_UnitDeath(unit, 3)` (`0x486FB4`),
+  whose destructor runs the cargo loop with kind 3 — and, the passengers' player not being local,
+  only detaches them, before their own turn when the transport is earlier in the block. `0x486FC4..0x486FC6`: `pop edi; pop esi; ret 4`.
+- Callers: `0x4866B3` (a commander's death); `0x452E17` in the player removal `0x452CC0(dpid)`
+  (nine callers, among them the network pump's leave case `0x4550D5`; *The session, not the host*),
+  which kills the seat's army before it clears the seat's type (`0x452E62`), so every remaining peer
+  takes the non-local branch for a departed player's units; and `0x4164DF`, `0x416A00`, `0x416A58`
+  [role not traced].
+
+### The keys' weapons and their sync
+
+- **`0x49E5B0(name)`**, stdcall: the first weapon record whose name equals `name` (`0x4F8A70`),
+  over the 256 records of `0x115` bytes from `main+0x2CF3` (A′3 re-bases it, `0x49E5CB` and
+  `0x49E5EB`); NULL for a NULL or empty name or none found. The FBI loader resolves ExplodeAs and
+  SelfDestructAs with it at `0x42CEA8` and `0x42CEE1`, each value read by `0x4C48C0` into a
+  0x80-byte buffer (`0x42CE9B`, `0x42CED4`), and stores them at `def+0x220` and `+0x224`
+  (`0x42CEB7`, `0x42CEEC`); a name it does not find gets the stock array's first record
+  (`esi` = `main+0x2CF3` since `0x42CDE8`; `0x42CEB1`, `0x42CEEA`).
+- **The menu-time loader's folds.** `0x42A8D0` XORs into `CRC_weapons` (def `+0x146`) the stored CRC
+  (`[section+0x25]`) of each weapon section the unit's weapon keys, ExplodeAs (key `0x5037F4`,
+  `0x42AF23`) and SelfDestructAs (`0x5037E4`, `0x42AF99`) name, each found by rewinding the weapon-TDF contexts (`*0x5122A0`,
+  `*0x5122A4` of them, 12 bytes each) with `0x4C3E10` and asking `0x4C3410` for the section
+  (`0x42AFC6..0x42AFFD`); the key is read with `0x4C4630` on the unit's UNITINFO context
+  (`ecx`, reloaded at `0x42B00A`). `0x42B019` stores the result, with the three arguments of the
+  float read at `0x42B01F` already pushed. **A type whose ExplodeAs and SelfDestructAs name the same
+  weapon folds it twice: it cancels.** MEASURED: an unarmed ARMCOM clone (COMMANDER_BLAST both)
+  reads `CRC_weapons` 0. `+0x146` reaches the lobby's sync value `+0x142` through `0x42A610` (*The
+  unit sync's keys*, above). The def array is sealed read-only at `0x42B328`, after the store.
+
+### What the tests measured
+
+MEASURED 2026-09-26 on Show Down with C4's fixture: an ATLAS carrying an ARM Commander clone,
+AI towers, and unarmed Krogoth clones (29 918 HP) as the ring.
+
+- **A carried unit takes no area damage.** A missile dealing 65 000 to the commander hit its ATLAS
+  nine times and never touched the passenger — the victim test "uncarried (`+0x86` 0)" in the area
+  pass above. So in stock a unit dies carried only through kill-all, a self-destruct, or its
+  transport's cargo loop.
+- **An aircraft is hit well past a weapon's `range`**: a missile tower at `range=150` downed an
+  ATLAS 440 away.
+- **A player's own tower takes no `attack unit` against the player's own aircraft**: the order is
+  issued and the tower's order node reverts to its standing type (46).
+- **The cargo loop's 30 000 leaves a passenger above 30 000 HP alive**: a 32 000-HP commander clone
+  came down with 2 066 HP, detached, on the ground.
+- A carried transport is picked by the pointer where `+0x2CBA` names it **and** the cursor
+  (`main+0x2CBE`) reads 15; its passenger sits on top of it and reads 19.
+
 ## Built-in cheat/console command surface
 
 This is the richest extension point in the binary, and the evidence is unusually good.
