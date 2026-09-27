@@ -334,6 +334,9 @@ static int              s_rjTaken, s_rjPainted;
 static unsigned         s_rjBlanks;
 static VkImageView      s_rjSrcView;
 static int              s_rjTried;
+/* the generation `s_arImg` holds a restore of, left by a job the restorer's
+   going down took away (`tagpu_vk_gui_restore_drop`); 0 = none */
+static unsigned         s_rjKeepGen;
 /* the last `colRearm` seen: when it moves, every colour twin was invalidated */
 static unsigned         s_colRearm;
 static int              s_colRearmSeen;
@@ -750,12 +753,8 @@ static unsigned         s_psGen = 1;
 static unsigned         s_psFrame, s_psSettled;
 static int              s_psBound;                /* twins a fill can reach:
                                                      `pic` set, `picDrawn` 0 */
-typedef struct { unsigned hash, round; } PSEV;   /* round: s_psSettled then */
-static PSEV             s_psEv[PS_EVRING];
+static unsigned         s_psEv[PS_EVRING];
 static unsigned         s_psEvN;
-/* the round of the newest eviction the ring has overwritten */
-static unsigned         s_psEvLost;
-static int              s_psEvLostHave;
 static unsigned         s_psStored, s_psEvicted, s_psFills, s_psRefused;
 static int              s_psSaid;
 
@@ -1718,10 +1717,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
            painted stops being a picture -- nothing else fills this image, so
            leaving `s_arHave` set would have the layer sample a frozen twin for
            the rest of the session. */
-        if (s_rjob) {
-            tagpu_vk_restore_job_free(d, s_rjob);
+        if (s_rjob || s_rjKeepGen) {
+            if (s_rjob) tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
-            s_rjSrcView = VK_NULL_HANDLE;
+            s_rjSrcView = VK_NULL_HANDLE; s_rjKeepGen = 0;
             s_arHave = 0;
         }
         tagpu_gui_col_ready(0, s_arSettled);
@@ -1813,6 +1812,14 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        producer frame by a repainting one would otherwise hand this pass "keep
        what you have" over an image the producer had cleared. */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
+    /* ...AND OVER THE SAME GENERATION'S OWN RESTORE when a resize took its job
+       away: the image holds exactly what that job painted, so repainting
+       keeps it on screen instead of blanking it, and colour validity does not
+       drop -- which would spend one of the producer's repaints for each
+       rebuild of a window being dragged. */
+    if (s_rjKeepGen && s_rjKeepGen == h->restoreGen && s_arHave &&
+        h->restoreBlanks == s_rjBlanks) repaint = 1;
+    s_rjKeepGen = 0;
     s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, repaint,
                                       s_atImg, s_atView, s_atDim, s_atDim, 0,
                                       h->pal,
@@ -1939,13 +1946,7 @@ static void ps_evict(const TAGPU_VKPASS* d, PSENT* e, int remember)
     for (y = 0; y < e->ch; y++)
         for (x = 0; x < e->cw; x++) s_psCell[e->cy + y][e->cx + x] = 0;
     s_psCellsFree += e->cw * e->ch;
-    if (remember) {
-        PSEV* v = &s_psEv[s_psEvN % PS_EVRING];
-        /* rounds only grow, so the entry overwritten last is the newest lost */
-        if (s_psEvN >= PS_EVRING) { s_psEvLost = v->round; s_psEvLostHave = 1; }
-        v->hash = e->hash; v->round = s_psSettled;
-        s_psEvN++;
-    }
+    if (remember) s_psEv[s_psEvN++ % PS_EVRING] = e->hash;
     free(e->bytes);
     memset(e, 0, sizeof *e);
     s_psEvicted++;
@@ -1990,23 +1991,20 @@ static int pic_current(const TAGPU_GUIHAND* h)
     return h->pal && s_psPalHave && !memcmp(h->pal, s_psPal, sizeof s_psPal);
 }
 
-/* WHETHER STORING THIS CONTENT NOW MAY BE THE REPAINT LOOP, in which case it
-   raises no settle when it lands. A ROUND is `s_psSettled`: one settle, one
-   repaint. Content evicted in this round or the last one is recent -- the
-   repaint that asked for this one, or this one itself, took it out. That is
-   the bound: a repaint draws the pictures the previous one drew, each of
-   them was stored or found then, and one missing now was evicted since, so
-   a repaint that brings in nothing new raises no settle and the loop ends.
-   Content evicted longer ago, a map preview picked again after a walk
-   through the list, is fresh and asks for its repaint. A ring that has
-   overwritten a recent eviction cannot tell, and says recent: the cost of
-   that answer is a picture that waits for the next repaint, never a loop. */
+/* CONTENT AMONG THE LAST `PS_EVRING` EVICTED, whose store raises no settle
+   when it lands: a repaint that evicts a picture of its own screen and draws
+   it again must not ask for another repaint. It is what makes the loop
+   converge on a screen larger than the store, and a filter rather than the
+   bound -- a screen that evicts more than the ring holds between two draws
+   of one picture gets past it. The bound is the drain's budget
+   (tagpu_gui_surf.c `pic_ask_repaint`). Content evicted longer ago, a map
+   preview picked again after a walk through the list, is fresh and asks for
+   its repaint. */
 static int ps_recent(unsigned hv)
 {
     int i;
-    if (s_psEvLostHave && s_psEvLost + 1u >= s_psSettled) return 1;
     for (i = 0; i < PS_EVRING && i < (int)s_psEvN; i++)
-        if (s_psEv[i].hash == hv && s_psEv[i].round + 1u >= s_psSettled) return 1;
+        if (s_psEv[i] == hv) return 1;
     return 0;
 }
 
@@ -2233,7 +2231,7 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        and is stored again against the new palette when it is next drawn --
        so a level load does not restore the shell's whole map list for
        nothing. Nothing is filled from the old colours meanwhile:
-       `pic_current` refuses until the new job exists. A bound twin's colour
+       `pic_current` refuses until the new job exists. A pinning twin's colour
        plane is cleared now, since the composite would otherwise show the old
        palette's colours for as long as the restore takes -- the drain's own
        re-arm does the same to every colour twin. The evictions are not about
@@ -2249,7 +2247,7 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
         }
         plog(d, "gui: the presented palette moved under the picture store - %d "
                 "pinned picture(s) restored again, %d dropped", kept, dropped);
-        s_psEvN = 0; s_psEvLostHave = 0;
+        s_psEvN = 0;
         for (k = 0; k < s_ntw; k++)
             if (s_tw[k].pic && s_tw[k].colImg) { s_tw[k].colNeedClear = 1; s_tw[k].picGen = 0; }
         s_psGen++;
@@ -2303,7 +2301,7 @@ static void pic_forget(void)
     s_psSrcLay = VK_IMAGE_LAYOUT_UNDEFINED;
     s_psDstLive = 0; s_psPalHave = 0; s_psTried = 0; s_psBound = 0;
     s_psGen++;
-    s_psEvN = 0; s_psEvLostHave = 0;
+    s_psEvN = 0;
 }
 
 /* the store goes with the device: behind the seam's vkDeviceWaitIdle */
@@ -2320,12 +2318,16 @@ static void pic_down(const TAGPU_VKPASS* d)
 
 /* tagpu_vk_gui.h. Both jobs go back while the restorer can still take them;
    the images they paint into are this pass's and keep what they hold. The UI
-   atlas's next job is made for the same generation, and `s_arHave` stands
-   until that job says whether it repaints or blanks; the store's QUEUED
-   pictures are owed again (`ps_job_free`) and its DONE ones stay DONE. */
+   atlas's next job is made for the same generation and repaints over it
+   (`s_rjKeepGen`, `restore_want`); the store's QUEUED pictures are owed again
+   (`ps_job_free`) and its DONE ones stay DONE. */
 void tagpu_vk_gui_restore_drop(const TAGPU_VKPASS* d)
 {
-    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    if (s_rjob) {
+        tagpu_vk_restore_job_free(d, s_rjob);
+        s_rjob = NULL;
+        s_rjKeepGen = s_rjGen;
+    }
     s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
     ps_job_free(d);
 }
@@ -3969,7 +3971,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
         /* forgotten like the store's job in `pic_forget`: with no device the
            restorer forgets its job table, and a pointer kept would alias */
         s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
-        s_rjSrcView = VK_NULL_HANDLE;
+        s_rjSrcView = VK_NULL_HANDLE; s_rjKeepGen = 0;
         pic_forget();
         return;
     }
@@ -4009,7 +4011,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
        `TAGPU_GUICOL_ON` into a lane with no atlas until its next present. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
     s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjBlanks = 0;
-    s_rjSrcView = VK_NULL_HANDLE; s_rjTried = 0;
+    s_rjSrcView = VK_NULL_HANDLE; s_rjTried = 0; s_rjKeepGen = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     s_arDim = 0; s_arHave = 0; s_arSettled = 0;
     tagpu_gui_col_ready(0, s_arSettled);

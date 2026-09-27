@@ -238,6 +238,10 @@ static unsigned s_colRepaintsGen = (unsigned)-1;
 static int      s_picArm = 0;
 static unsigned s_picSettled = 0, s_picSettledSeen = 0;
 #define COL_REPAINT_MAX 32
+/* the picture store's own repaint budget, per palette generation as the
+   atlas's is (see pic_ask_repaint) */
+#define PIC_REPAINT_MAX 1024
+static unsigned s_picRepaints = 0, s_picRepaintsGen = (unsigned)-1;
 /* THE PALETTE THE RESTORED ART IS RIGHT FOR, and the settle counter of 3.4.
    `s_colPalSeen` distinguishes "never armed" from "armed against serial 0". */
 static unsigned s_colPalSerial = 0, s_colPalLast = 0;
@@ -1018,6 +1022,37 @@ static int col_ask_repaint(void)
     return 1;
 }
 
+/* ONE REPAINT PER PICTURE SETTLE, OUT OF A BUDGET OF ITS OWN PER PALETTE
+   GENERATION. The store's settles converge by themselves -- a repaint that
+   draws only pictures the store holds finishes nothing new, and a picture it
+   evicted recently and stores again is not counted (tagpu_vk_gui.c
+   `ps_recent`) -- and this is the bound for the screen that gets past that
+   filter: at most PIC_REPAINT_MAX repaints a generation, whatever the store
+   does. Its own budget and not the atlas's, because a walk through the map
+   list asks once per pick and would spend the repaint an in-game sidebar
+   needs later; 1024 is ten walks through all 99 maps. Spent, a picture
+   restored afterwards takes colour at the engine's own next redraw. Returns
+   1 when it actually asked. */
+static int pic_ask_repaint(void)
+{
+    if (s_rearms != s_picRepaintsGen) {
+        s_picRepaintsGen = s_rearms;
+        s_picRepaints = 0;
+    }
+    if (s_picRepaints >= PIC_REPAINT_MAX) {
+        if (s_picRepaints == PIC_REPAINT_MAX) {
+            s_picRepaints++;
+            slog("gui: the picture store has asked for 1024 repaints in one palette "
+                 "generation - no further ones are asked for, and a picture restored from "
+                 "now on takes colour at the engine's own next redraw");
+        }
+        return 0;
+    }
+    s_picRepaints++;
+    g_guiq.colarm++;
+    return 1;
+}
+
 static void col_valid_edge(int on)
 {
     static int was = 0;
@@ -1031,24 +1066,19 @@ static void col_valid_edge(int on)
         if (col_ask_repaint())
             slog("gui: Classic++ colour is valid - asking the engine for a repaint, because "
                  "art already on a surface keeps the indices it was drawn with");
-        /* a picture settle it absorbs keeps its own ask, outside the budget
-           (below): the budget refusing the edge must not refuse the picture */
+        /* a picture settle it absorbs keeps its own ask, from its own budget
+           (below): the atlas's refusing the edge must not refuse the picture */
         else if (pic)
-            g_guiq.colarm++;
+            pic_ask_repaint();
         return;
     }
     if (!on) return;
-    /* THE PICTURE STORE ASKS FOR ITS OWN, OUTSIDE THE ATLAS'S BUDGET. A settle
-       there is a picture new to the store finished (tagpu_vk_gui.c `pic_step`),
-       so a repaint that draws only pictures the store holds cannot cause
-       another, and content the last two repaints evicted and it stores again
-       does not count (`ps_recent`) -- which is the bound the budget stands in
-       for on the atlas's side. Spending
-       the atlas's 32 instead would let a walk through the map list (a new
-       preview each pick) use up the repaint an in-game sidebar needs later. */
+    /* THE PICTURE STORE ASKS FOR ITS OWN, from `pic_ask_repaint`'s budget and
+       not the atlas's. A settle there is a picture new to the store finished
+       (tagpu_vk_gui.c `pic_step`). */
     if (s_picSettled != s_picSettledSeen) {
         s_picSettledSeen = s_picSettled;
-        g_guiq.colarm++;
+        pic_ask_repaint();
     }
     /* AND AGAIN EVERY TIME THE RESTORE SETTLES HAVING PAINTED MORE. The sprites
        drawn by the last repaint may have put entries in the atlas that had no

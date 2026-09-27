@@ -2597,19 +2597,15 @@ void tagpu_vk_restore_lost(void)
        device's `retire_slot_done` destroy handles that belong to nothing. */
     memset(&s_ret, 0, sizeof s_ret);
     memset(s_jret, 0, sizeof s_jret);
-    /* AND EVERY DUMP'S STAGING, forgotten the same way: the buffer and its
-       memory died with the device, and a handle left standing here would have
-       a later `down` destroy it against the NEW device. The copy it was owed
-       never completes, so there is nothing to collect either. */
-    {
-        int j;
-        for (j = 0; j < TAGPU_R_MAXJOBS; j++) {
-            s_vjob[j].dumpBuf = VK_NULL_HANDLE; s_vjob[j].dumpMem = VK_NULL_HANDLE;
-            s_vjob[j].dumpMap = NULL; s_vjob[j].dumpBytes = 0;
-            s_vjob[j].dumpState = 0; s_vjob[j].dumpPainted = 0;
-            s_vjob[j].dumpW = s_vjob[j].dumpH = 0;
-        }
-    }
+    /* AND EVERY JOB, forgotten whole: its framebuffers, sets, palette images
+       and dump staging died with the device, and the pool its sets came from
+       with them. A handle left standing would have a later `job_free` or
+       `down` destroy it against the NEW device, a `chainN` would have the next
+       reduction bind a set that belongs to nothing, and a `core` would name a
+       scheduler slot `tagpu_rcore_lost` clears below -- so `core` is also what
+       `down` reads as "an owner still holds this job". The dump copy a job was
+       owed never completes, so there is nothing to collect either. */
+    memset(s_vjob, 0, sizeof s_vjob);
     memset(s_tabImg, 0, sizeof s_tabImg); memset(s_tabMem, 0, sizeof s_tabMem);
     memset(s_tabView, 0, sizeof s_tabView);
     s_tabStage = VK_NULL_HANDLE; s_tabStageMem = VK_NULL_HANDLE; s_tabInit = 0;
@@ -2622,19 +2618,6 @@ void tagpu_vk_restore_lost(void)
     s_ploFill = s_ploConv = s_ploOut = s_ploMip = VK_NULL_HANDLE;
     s_pipeFill = s_pipeOut = s_pipeMip = VK_NULL_HANDLE;
     s_rpMip = VK_NULL_HANDLE;
-    /* AND EVERY JOB'S CHAIN, forgotten rather than freed like everything else
-       here: the framebuffers and the sets died with the device, and the pool
-       they came from with them. A `chainN` left standing would have the next
-       reduction bind a set that belongs to nothing. */
-    {
-        int j;
-        for (j = 0; j < TAGPU_R_MAXJOBS; j++) {
-            memset(s_vjob[j].chainFb, 0, sizeof s_vjob[j].chainFb);
-            memset(s_vjob[j].chainSet, 0, sizeof s_vjob[j].chainSet);
-            s_vjob[j].chainN = 0; s_vjob[j].chainDim = 0;
-            s_vjob[j].chainPainted = 0; s_vjob[j].chainDone = 0;
-        }
-    }
     memset(s_pipeConv, 0, sizeof s_pipeConv);
     memset(s_rpAct, 0, sizeof s_rpAct); s_rpOut = VK_NULL_HANDLE;
     s_actSide = 0; s_actLayers = 0; s_actGen++;

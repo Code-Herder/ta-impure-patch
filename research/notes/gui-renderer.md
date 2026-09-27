@@ -4559,25 +4559,25 @@ strip on SELMAP. Now each tile's bytes are written into `s_psSrc` at the positio
 - The consumer counts a settle whenever the job goes idle having finished a picture new to the
   store (`s_psSettled`). The drain answers each new count with `g_guiq.colarm++`, the engine
   repaint that §14 already asks for when colour becomes valid.
-- **This request is not from the atlas's budget of 32**, at the edge where colour becomes valid
-  either: a settle that edge absorbs raises its own `colarm` when the budget refuses the edge's
-  ask. Its bound is its own. A repaint that draws only pictures the store already holds finishes
-  nothing new.
-- **Nor does content the last two repaints evicted** (`ps_recent`). A *round* is one settle
-  and the repaint it asks for. A repaint draws the pictures the previous one drew, and each was
-  stored or found then, so one missing now was evicted since: storing it again raises no settle,
-  and a screen too large for the store cannot repaint itself for ever. Content evicted longer
-  ago, such as a map preview picked again after a walk through the list, is fresh and asks for
-  its repaint. The 64-entry eviction ring records each eviction's round. Once it has overwritten
-  an eviction of the current or the previous round it cannot tell, and answers *recent*: the cost
-  of that answer is a picture that waits for the next repaint, never a loop.
+- **The loop converges by itself.** A repaint that draws only pictures the store already holds
+  finishes nothing new. A picture stored again while its hash is among the last 64 evicted is not
+  counted either (`ps_recent`), so a repaint that evicts a picture of its own screen and draws it
+  again does not ask for another. Content evicted longer ago, such as a map preview picked again
+  after a walk through the list, is fresh and asks for its repaint.
+- **The bound is a budget of its own**, 1024 repaints per palette generation
+  (`pic_ask_repaint` in `tagpu_gui_surf.c`), keyed like the atlas's 32 but not spent from them: a
+  walk through the map list asks once per pick, and would otherwise spend the repaint an in-game
+  sidebar needs later. It holds whatever the store does, including a screen that evicts more than
+  the ring holds between two draws of one picture. Spent, a picture restored afterwards takes
+  colour at the engine's own next redraw. A picture settle absorbed at the edge where colour
+  becomes valid asks from this budget when the atlas's refuses the edge.
 
 **The palette.** Pictures are restored against the presented palette. When the palette moves
 and the producer reports the new one settled (`colourTwins`):
 
 - entries a twin pins are restored again in place;
 - every other entry goes, and is stored again when next drawn;
-- bound twins' colour planes are cleared, and nothing is filled from the old colours meanwhile.
+- pinning twins' colour planes are cleared, and nothing is filled from the old colours meanwhile.
 
 **A job is only ever made against the palette the done entries were restored against**
 (`s_psPal`). A palette that has moved but not settled waits for the rebuild, so an entry restored
@@ -4589,8 +4589,10 @@ only copy of what the shell has drawn. The pass gives both its jobs back first
 (`tagpu_vk_gui_restore_drop`), because the restorer forgets its job table on the way down and a
 job pointer kept across it would name a slot the next `job_new` hands to another pass.
 
-- The UI atlas then restarts from blank for the same generation, the way every world pass does on
-  a resize.
+- The UI atlas's next job, for the same generation, repaints over what its image already holds
+  (`s_rjKeepGen`), so the restored art stays on screen and colour validity does not drop. A drop
+  in validity would spend one of the atlas's 32 repaints for every rebuild of a window being
+  dragged. Every world pass restarts from scratch on a resize.
 - The store keeps its done pictures and requeues the queued ones.
 - `tagpu_vk_restore_down` frees and logs any job an owner has left standing (`job '<tag>' was
   still held by its owner`).
@@ -4737,9 +4739,11 @@ with a scratch build forcing it every 600 frames, over the shell tour and 35 s o
 
 - **without the drop**, the restorer found both UI jobs still held at the first rebuild, and the
   UI never restored again: SINGLE and SKIRMISH 100 % palette-exact;
-- **with it**, no job was held at any rebuild, SINGLE read 2.0 % and SKIRMISH 17.6 %, and the
-  terrain and the UI atlas restored again after each. A SELMAP captured just after one rebuild
-  read 69.9 % while the atlas restarted.
+- **with it**, no job was held at any of the tour's 7 rebuilds. Each new atlas job repainted over
+  its image for the same generation (`generation 4, repaint` in the log), colour validity rose
+  once and never dropped, and every screen read what it reads without the forcing: the main menu
+  1.4 %, SINGLE 2.0 %, SKIRMISH 17.6 %, SELMAP 26.2 %. In game the terrain restored again after
+  each rebuild.
 
 **THE BATTLE ROOM, RUN.** The host was launched with `--dplay`, then
 `MULTI → TCP/IP → OK → STARTNEW → OK → LOUNGE2 → MAP`.
