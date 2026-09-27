@@ -7100,6 +7100,26 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
    - A unit still being built is carried at its fraction, and its copy is finished as every
      copy was: by the round robin and by its builder's 0x12, unchanged.
 
+   THE WIRE. Both are B4's 65-byte 0x05 (HIT_MSG): m[0] 0x05, m[1] 0, m[2] the tag. A byte no
+   line below names is sent 0 and read by no receiver.
+   The death, 0x4C (kill_tx_death builds it, kill_rx_death reads it):
+     m[3..13]   the stock 0x0C record, 11 bytes, as Send_UnitDeath built it: +0 0x0C, +1 the
+                victim's slot (u16), +3 the killer's player's DirectPlay id, +7 the killer's
+                slot (u16, 0 for none), +9 the severity, +0xA the kind << 4 | the corpse type
+                (0x4865E9..0x486621). The destructor and B5's refusal read the record at m+3.
+     m[14..17]  the victim's +0x104, its float bits, read on the owner as the message leaves
+     m[18]      1 when m[14..17] holds it; 0 when the victim's index named no slot, and the
+                receiver then writes nothing into its copy
+     m[19..64]  0, unread
+   The create, 0x4A (B4's hit_tx_create and hit_created; B8's bytes are kill_state_put's and
+   kill_apply_state's, which reads them through rec = m+3):
+     m[3..25]   the stock 0x09, 23 bytes (its slot at m[6..7]); m[26..29] its birth (B4)
+     m[30..33]  the unit's +0x104, its float bits
+     m[34..35]  its HP, +0x108 (u16)
+     m[36]      1 when m[30..35] hold them; 0 when the index named no slot, and the copy
+                stays as CreateFromNetwork made it
+     m[37..64]  0, unread
+
    INVARIANTS.
    - Every peer's copy starts from its owner's values, and every peer judges a death on the
      owner's value: by construction, not by the round robin's phase.
