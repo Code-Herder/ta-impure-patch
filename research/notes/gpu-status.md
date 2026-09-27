@@ -2174,14 +2174,14 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
-while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 129 rows of
-the raise and 95 of the fixes in the raised build, 224 in all, and the fixes' 99 in the stock-limits
-build, where the weapon IDs' four sites join them (MEASURED 2026-09-25 from the log lines). It
+while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 265 sites in
+all in the raised build (MEASURED 2026-09-26 from the log line), and the fixes' 99 in the
+stock-limits build, where the weapon IDs' four sites join them (MEASURED 2026-09-25). It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 224 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 265 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16383, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
 nothing raised (…); the simulation fixes' 99 sites installed`. Right before it, once both
@@ -2198,6 +2198,19 @@ whoever debugs it: the impure commit and branch, the exe's name, size, md5 and P
 the md5 is a known build, and every differing site as `want` and `have` bytes (twelve in the box,
 all of them in `log\tagpu.log`). It prints no path. The same text is written to
 `log\startup-failure.txt`. `tagpu_log_dir()` gives the folder.
+
+**The safety net.** The same first DirectDraw call re-reads every site once more (`lim_verify`),
+now against the bytes Impure wrote: it comes after every DLL's `DllMain`, so a site that no longer
+holds them was rewritten by a patcher that started after Impure. The report then says so — *changed
+by another program … before a battle can crash*, `result: N of M sites rewritten after they were
+installed`, each site's `want` being Impure's bytes — and the process ends before a game exists.
+`s_limState` stays installed while it does: the engine code already points at the raised pools.
+MEASURED 2026-09-26 (Wine, the suite's `mayhem-11.3.0-net`): Total Mayhem 11.3.0's 2024 TADR
+with the takeover (§2.6d) switched off rewrites 17 of 265 sites — ten of the unit-type
+relocations (the AI plan's Weight and Limit frames, the category mask at `0x488CC2`) and seven
+sites of the fixes (`0x42DAC7`, `0x4954ED`, `0x486036`, `0x486DC1`, `0x4854A0`, `0x490C5A`,
+`0x42CF5E`). A write made after that first call is outside the net
+([the takeover](compat/takeover.md), part 4).
 
 **The stock build.** `make LIMITS=stock` builds `ddraw-stocklimits.dll` from objects with their
 own suffix (`.stock.o`), with `TAGPU_LIMITS_STOCK` defined: nothing is raised and every accessor
@@ -2654,6 +2667,25 @@ handler's slot).
   neither sequence was shared between peers before.
 
 ---
+
+### 2.6d Keeping TADR out (`tagpu_takeover.c`, on, `tagpu_takeover.off`)
+
+No engine address: the fork's `LoadLibraryA/W/ExA/ExW` hooks (`winapi_hooks.c`), which
+`hook_init` puts into the import table of every module in the game folder from Impure's
+`DllMain`, ask `tagpu_takeover_loadlibrary_*` first. A request for a DLL file in the game folder
+whose export table names `DirectDrawCreate`, that is not Impure's own file and not already
+loaded, is answered with Impure's module (one more reference, as `LoadLibrary` gives), and the
+log says `takeover: DPLAYX.dll asked for tdraw.dll … answered with Impure, so it does not start`.
+On the Community Patch Loader route that request is the loader's `LoadLibraryA("tdraw.dll")`:
+TADR installs everything in its `DllMain`, so none of it runs, and the loader's `patch_call` at
+`0x47BFA2`/`0x4B55FB` points the exe's two `DirectDrawCreate` calls at Impure's export. The
+loader's own presets stay. The file's exports are read from disk with every offset bounded by the
+file's size; a read-only load (`LOAD_LIBRARY_AS_DATAFILE*`, `AS_IMAGE_RESOURCE`) is never
+answered. `tagpu_takeover.off` in the game folder turns it off, which is how the suite shows the
+safety net (§2.6b) catching what it keeps out. MEASURED 2026-09-26 on Wine: Total Mayhem 11.3.0,
+ProTA 4.8 and the three Patch Loader setups start with no `tdrawlog.txt` and fight the 200v200
+battle; the retail setups log no takeover. The plan and the other routes: [the
+takeover](compat/takeover.md).
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 

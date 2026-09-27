@@ -29,8 +29,15 @@ the report.
 - **"Total Annihilation: Impure cannot start"** and `log\startup-failure.txt` are Impure
   refusing: the report lists every site that differed. `0x0040EAD6 pathfinding budget` alone
   means an exe with a changed path budget — the 3.9.02 exe (66650) or Escalation's (1114).
+- **`log\tagpu.log`** says `takeover: DPLAYX.dll asked for tdraw.dll … answered with Impure`
+  when the Patch Loader route was taken over: TADR did not start, and there is no
+  `tdrawlog.txt` from this launch.
+- **"Impure's engine limits and fixes were changed by another program"** is the safety net:
+  a patcher that started after Impure rewrote the sites listed, and the game stopped before a
+  battle could crash on them.
 - **`ErrorLog.txt`** is the engine's own crash report. An access violation at `0x004C9396`
-  writing `0x0042C029` in the Load Thread is [the pre-2026 limit crack beside Impure](tadr-collision.md#the-crash-read-from-the-running-process).
+  writing `0x0042C029` in the Load Thread is [the pre-2026 limit crack beside Impure](tadr-collision.md#the-crash-read-from-the-running-process)
+  — Impure v0.2.3; a later build takes that route over or stops at start-up.
 
 ## A worked example: the TA Zero report
 

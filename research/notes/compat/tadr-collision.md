@@ -2,12 +2,14 @@
 
 ## Summary
 
-Both TADR generations players run meet Impure's engine patches on the
+What happens when TADR starts beside Impure on the
 [Patch Loader route](overview.md#the-load-routes), where Impure has installed first. A 2026 TADR
 validates the bytes it is about to patch and refuses to start (**"TADR engine-limit error"**). An
 older TADR, the "Install Limit Crack" that Total Mayhem 11.3.0 and ProTA 4.8 ship, writes
-without reading, corrupts twelve of Impure's unit-type sites, and **crashes the game on the
-first skirmish load**. The engine facts are in the
+without reading, rewrites 17 of Impure's sites, and **crashes the game on the first skirmish
+load**. Since [the takeover](takeover.md)'s first landing TADR does not start on this route, and
+if one got through by another way, the safety net stops the game at the first DirectDraw call
+instead; this page is what both of them exist for, and what Impure v0.2.3 players met. The engine facts are in the
 [engine map](../exe-reverse-engineering.md#where-other-patchers-meet-ours-the-patch-loaders-hand-off-and-tadrs-limit-crack-disassembled-measured-2026-09-26).
 
 ## 2026 TADR: EngineLimits refuses
@@ -29,7 +31,12 @@ it copies the bytes at its site as if they were stock, re-assembles them into a 
 own replacement, and jumps back past them (`hook/ModifyHook.cpp`). Twelve of its sites are
 exactly Impure's unit-type relocations — `0x406DB5`, `0x406DC9`, `0x406DFD`, `0x406E3A`
 (the AI plan's `Weight`), `0x406E45`, `0x406E5D`, `0x406E64`, `0x406EB2`, `0x406ED6` (its
-`Limit`), `0x488CC2` (the category-mask allocation), `0x48BE08`, `0x48BF1E` (Ctrl-Z).
+`Limit`), `0x488CC2` (the category-mask allocation), `0x48BE08`, `0x48BF1E` (Ctrl-Z) — in the
+current source. Total Mayhem's 2024 build, measured by the safety net with the takeover
+switched off (the suite's `mayhem-11.3.0-net`), rewrites 17 of Impure's 265 sites: ten of those
+(not Ctrl-Z's two), and seven of the fixes Impure ported from TADR, whose hooks sit at the same
+places — the whole build lists `0x42DAC7`, stacked aircraft `0x4954ED`, the stale-hit sites
+`0x486036`, `0x486DC1`, `0x4854A0`, the wind `0x490C5A` and the yardmap parse `0x42CF5E`.
 
 ## The crash, read from the running process
 

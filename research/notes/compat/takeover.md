@@ -43,7 +43,8 @@ per-mod check (below).
    TA Zero). Impure's `DllMain` runs `hook_init` (`dllmain.c`), which points the `LoadLibrary`
    imports of every module in the game folder at the fork's `fake_LoadLibrary*`
    (`winapi_hooks.c`), the loader's `dplayx.dll` included, before the loader's own `DllMain`
-   runs: the exe imports `DDRAW` first and `DPLAYX` eighth, and on Wine and on Windows (the suite,
+   runs (`tagpu_takeover.c`, [§2.6d](../gpu-status.md#26d-keeping-tadr-out-tagpu_takeoverc-on-tagpu_takeoveroff)):
+   the exe imports `DDRAW` first and `DPLAYX` eighth, and on Wine and on Windows (the suite,
    2026-09-26, Total Mayhem and ProTA) Impure's limits were installed before TADR's limit crack
    ran. Where the order were the other way, TADR would have patched before Impure started, and
    Impure's existing stock check refuses. When a module asks for a DLL in the
@@ -75,7 +76,7 @@ per-mod check (below).
 
 | landing | parts | setups it moves to the goal |
 |---|---|---|
-| **T1** | 4, then 1 | `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8` |
+| **T1** — built | 4, then 1 | `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8` |
 | **T2** | 3 | none alone; Escalation's exe stops being refused at `0x40EAD6` |
 | **T3** | 2 | `392+tadr-dev`, `392+tadr-2026.8.6`, `escalation`, `escalation+tadr-dev` |
 | **T4** | distribution | `gammata-ota`: its tdraw loads only `ddraw_custom.dll`, so Impure is installed under that name too |

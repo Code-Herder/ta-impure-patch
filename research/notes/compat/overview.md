@@ -13,24 +13,23 @@ runs before every release (`CLAUDE.md` *Releases*; the `ta-compat-check` skill d
 
 The short version, measured on the reference setup with the DLL at `main`:
 
-- **Retail exe, nothing else, or the 2006 recorder**: Impure runs. These are the only setups
-  that meet the goal.
-- **Retail exe + Patch Loader + a 2026 TADR** (the TA Zero player's report): TADR refuses at its
-  first DirectDraw call with "TADR engine-limit error", because Impure's limits are already in
-  the bytes it validates.
-- **Retail exe + Patch Loader + a pre-2026 TADR** (Total Mayhem 11.3.0 and ProTA 4.8, both the
-  current releases): nobody validates, both patch the engine, and **the game crashes on the
-  first skirmish load** — TADR's limit crack rewrites twelve of Impure's unit-type sites and
-  corrupts them. The menu works, so the player meets it in their first game.
+- **Retail exe, nothing else, or the 2006 recorder**: Impure runs.
+- **Retail exe + Patch Loader + any TADR** (Total Mayhem 11.3.0, ProTA 4.8, the TA Zero
+  player's files): Impure runs and TADR never starts — [the takeover](takeover.md)'s first
+  part answers the loader's request for `tdraw.dll` with Impure. Before it, a 2026 TADR refused
+  to start ("TADR engine-limit error", the TA Zero report) and a pre-2026 one crashed the first
+  skirmish load (Impure v0.2.3 with Mayhem and ProTA); both are [what TADR does beside
+  Impure](tadr-collision.md), and the safety net now stops the game at start-up if anything
+  like it gets through.
 - **An exe that imports TADR** (the 3.9.02 exe, Escalation): Impure loads nested inside TADR's
   start-up and refuses at `0x40EAD6`, the one byte those exes change that Impure checks.
 - **gammata's drop-in**: its `tdraw.dll` loads `ddraw_custom.dll`, so Impure never loads.
 
 The **goal** for every setup is the same: Impure active, running the mod's own exe and files as
 the player has them, with TADR not patching the engine beside it. Reaching it is [the takeover](takeover.md)
-(the owner's direction, 2026-09-26, not built): Impure keeps TADR's engine patches out of the
-process instead of sharing the engine with them. Until then each setup records its behaviour
-today as a **known gap**.
+(the owner's direction, 2026-09-26): Impure keeps TADR's code out of the process instead of
+sharing the engine with it. Its first landing covers every setup where Impure starts first;
+until the others land, the rest record their behaviour today as a **known gap**.
 
 ## The load routes
 
@@ -62,9 +61,9 @@ map, which a mod may not ship.
 
 ## Gaps
 
-- **The takeover is not built.** No setup but the retail ones meets the goal.
-- **Windows has no battle stage**, so it cannot see the Mayhem crash; its Mayhem row stops at
-  the menu with TADR installed.
+- **The takeover covers the Patch Loader route only.** The 3.9.02 exe, Escalation and gammata's
+  drop-in are still refused or never load Impure ([its landings](takeover.md#landings)).
+- **Windows has no battle stage**: its rows stop at the main menu.
 - **Multiplayer is not in the suite.** An earlier two-peer run with the 2006 recorder wrote no
   `.tad` demo and is not a pass.
 - **TA Zero is covered by its DLL layer only** (the player's files): its archives are not in

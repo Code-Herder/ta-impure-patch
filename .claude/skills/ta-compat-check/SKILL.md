@@ -82,6 +82,9 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
   Windows. Also `tdrawlog`, `failure`, `loaded`, `not_loaded` to pin the evidence.
 - `registry_roots`: where a Patch Loader moved the game's registry key (`RegistryPath=`), so the
   battle's map lands there too.
+- `levers`: empty files put in the game folder, a DLL switch. A setup with one checks a mechanism,
+  not a player's folder: `mayhem-11.3.0-net` turns the takeover off (`tagpu_takeover.off`) so the
+  safety net has TADR to catch, and its goal is the net's refusal.
 
 Run the new setup before writing its `today` — write down what it did, not what you expect.
 **The commit that makes a setup meet its goal deletes its `today`.**

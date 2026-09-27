@@ -480,6 +480,8 @@ def prepare_wine(setup, dll: Path, display: int) -> dict:
     shutil.copy2(dll, ddraw)
     for leftover in ("ErrorLog.txt", "tdrawlog.txt"):
         (gamedir / leftover).unlink(missing_ok=True)
+    for lever in setup.get("levers", []):
+        (gamedir / lever).write_bytes(b"")
     return {"name": name, "gamedir": gamedir, "prefix": prefix}
 
 
@@ -813,6 +815,8 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
                f"{ps(ntpath.join(work, *Path(dest).parts))} -Force"])
     w.run([f"Copy-Item -LiteralPath {ps(w.path('dll', 'ddraw.dll'))} -Destination "
            f"{ps(ntpath.join(work, 'ddraw.dll'))} -Force"])
+    for lever in setup.get("levers", []):
+        w.run([f"New-Item -ItemType File -Force -Path {ps(ntpath.join(work, lever))} | Out-Null"])
     out = w.path("results", setup["name"] + ".jsonl")
     w.run([f"New-Item -ItemType Directory -Force -Path {ps(w.path('results'))} | Out-Null",
            f"Remove-Item -LiteralPath {ps(out)} -ErrorAction SilentlyContinue"])

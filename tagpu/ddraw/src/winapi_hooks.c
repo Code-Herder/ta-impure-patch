@@ -3,6 +3,7 @@
 #include <windowsx.h>
 #include <math.h>
 #include <vfw.h>
+#include "tagpu_takeover.h"
 #include "debug.h"
 #include "config.h"
 #include "dd.h"
@@ -1701,6 +1702,11 @@ UINT WINAPI fake_RealizePalette(HDC hdc)
 
 HMODULE WINAPI fake_LoadLibraryA(LPCSTR lpLibFileName)
 {
+    /* tagpu: a DirectDraw DLL of the game folder is answered with Impure (tagpu_takeover.h) */
+    HMODULE taken = tagpu_takeover_loadlibrary_a(lpLibFileName, _ReturnAddress());
+    if (taken)
+        return taken;
+
     HMODULE hmod_old = GetModuleHandleA(lpLibFileName);
     HMODULE hmod = real_LoadLibraryA(lpLibFileName);
 
@@ -1729,6 +1735,10 @@ HMODULE WINAPI fake_LoadLibraryA(LPCSTR lpLibFileName)
 
 HMODULE WINAPI fake_LoadLibraryW(LPCWSTR lpLibFileName)
 {
+    HMODULE taken = tagpu_takeover_loadlibrary_w(lpLibFileName, _ReturnAddress());
+    if (taken)
+        return taken;
+
     HMODULE hmod_old = GetModuleHandleW(lpLibFileName);
     HMODULE hmod = real_LoadLibraryW(lpLibFileName);
 
@@ -1757,6 +1767,12 @@ HMODULE WINAPI fake_LoadLibraryW(LPCWSTR lpLibFileName)
 
 HMODULE WINAPI fake_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
+    /* tagpu: not for a load that only reads the file */
+    HMODULE taken = (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) ? NULL
+        : tagpu_takeover_loadlibrary_a(lpLibFileName, _ReturnAddress());
+    if (taken)
+        return taken;
+
     HMODULE hmod_old = GetModuleHandleA(lpLibFileName);
     HMODULE hmod = real_LoadLibraryExA(lpLibFileName, hFile, dwFlags);
 
@@ -1785,6 +1801,11 @@ HMODULE WINAPI fake_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwF
 
 HMODULE WINAPI fake_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
+    HMODULE taken = (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) ? NULL
+        : tagpu_takeover_loadlibrary_w(lpLibFileName, _ReturnAddress());
+    if (taken)
+        return taken;
+
     HMODULE hmod_old = GetModuleHandleW(lpLibFileName);
     HMODULE hmod = real_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 

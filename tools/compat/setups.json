@@ -1,5 +1,5 @@
 {
-  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and TADR not patching the engine beside it. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome.",
+  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and TADR not patching the engine beside it. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder.",
   "setups": [
     {
       "name": "retail",
@@ -265,6 +265,26 @@
       },
       "registry_roots": [
         "Software\\ProTA"
+      ]
+    },
+    {
+      "name": "mayhem-11.3.0-net",
+      "about": "Total Mayhem 11.3.0 with the takeover switched off (tagpu_takeover.off): TADR starts and rewrites twelve of Impure's sites, and the safety net must stop the game at the first DirectDraw call instead of letting the first skirmish load crash",
+      "add": [
+        {
+          "fixture": "mayhem-11.3.0",
+          "files": "*"
+        }
+      ],
+      "levers": [
+        "tagpu_takeover.off"
+      ],
+      "goal": {
+        "outcome": "impure-refused",
+        "failure": "rewritten after they were installed"
+      },
+      "registry_roots": [
+        "Software\\TotalM"
       ]
     },
     {

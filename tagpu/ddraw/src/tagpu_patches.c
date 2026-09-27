@@ -93,6 +93,7 @@ static int     s_limNoStub;          /* a code stub could not be made           
 static char    s_limNeeds[192];      /* a table fix's required local fix is not armed */
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
+static int     s_limRewritten;       /* installed, then rewritten by someone else      */
 
 static void lim_add(unsigned int va, int n, const unsigned char* stock,
                     const unsigned char* ours, const char* name)
@@ -9741,10 +9742,32 @@ static void lim_hex(char* out, const unsigned char* b, int n, int max)
     if (n > max) strcat(out, " ...");
 }
 
+/* THE SAFETY NET (research/notes/compat/takeover.md, part 4): every site of the table re-read
+   at the first DirectDraw call, which comes after every DLL's DllMain -- the exe's entry point
+   runs after all of them, and its WinMain makes the call. A site that no longer holds our
+   bytes was rewritten by a patcher that started after Impure (a pre-2026 TADR's limit crack
+   rewrites twelve and crashes the first skirmish load); stopping here, before any game exists,
+   turns that into a refusal. A write made after this call is outside it. s_limState stays 1:
+   the raised pools stay the ones the engine code was pointed at while the report runs. */
+static void lim_verify(void)
+{
+    int i;
+    for (i = 0; i < s_nlim; i++) {
+        LIMSITE* s = &s_lim[i];
+        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->ours, s->n)) {
+            s->differs = 1;
+            s_limRewritten++;
+        }
+    }
+    if (s_limRewritten)
+        tagpu_logf("limits: FAILED -- %d of %d sites were rewritten after Impure installed them",
+                   s_limRewritten, s_nlim);
+}
+
 void tagpu_limits_report(void)
 {
     static char text[8192];
-    static LONG once;
+    static LONG once, verified;
     char exe[MAX_PATH], md5[33] = "unknown", line[768], want[3 * LIM_MAXB + 8],
          have[3 * LIM_MAXB + 8];
     const char* base;
@@ -9755,7 +9778,8 @@ void tagpu_limits_report(void)
     int i, bad = 0, shown = 0;
     HMODULE me = GetModuleHandleA(NULL);
 
-    if (s_limState >= 0) return;
+    if (!InterlockedExchange(&verified, 1) && s_limState > 0) lim_verify();
+    if (s_limState >= 0 && !s_limRewritten) return;
     if (InterlockedExchange(&once, 1)) return;
 
     GetModuleFileNameA(NULL, exe, sizeof exe);
@@ -9773,7 +9797,11 @@ void tagpu_limits_report(void)
     /* ONE LINE PER PARAGRAPH: the box wraps prose to its own width, and a hard break
        inside a paragraph wraps a second time into ragged half-lines. The report lines
        are kept short enough that the box never wraps them. */
-    if (s_limNoStub || s_limOverflow || s_limOverlapA)
+    if (s_limRewritten)
+        why = "Impure installed them, but another program that started after it -- usually "
+              "TADR's tdraw.dll, or a copy of it under another name -- rewrote some of those "
+              "places, and the game would crash as soon as a battle loads.";
+    else if (s_limNoStub || s_limOverflow || s_limOverlapA)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
     else if (s_limNeeds[0])
@@ -9789,8 +9817,7 @@ void tagpu_limits_report(void)
         why = "This TotalA.exe is not the Total Annihilation 3.1 that Impure is built for.";
 
     _snprintf(text, sizeof text,
-        "Impure could not install its engine limits and fixes, so Total Annihilation will "
-        "now close. Nothing was changed.\r\n"
+        "%s\r\n"
         "\r\n"
         "WHY\r\n"
         "Impure raises the game's limits (units, projectiles, explosions...) and fixes "
@@ -9812,6 +9839,10 @@ void tagpu_limits_report(void)
         "exe %s, %lu bytes\r\n"
         "md5 %s\r\n"
         "PE stamp 0x%08lX, known build: %s\r\n",
+        s_limRewritten ? "Impure's engine limits and fixes were changed by another program, so "
+                         "Total Annihilation will now close before a battle can crash."
+                       : "Impure could not install its engine limits and fixes, so Total "
+                         "Annihilation will now close. Nothing was changed.",
         why, GIT_COMMIT, GIT_BRANCH, base, size, md5, (unsigned long)stamp, known);
     text[sizeof text - 1] = 0;
 
@@ -9827,6 +9858,9 @@ void tagpu_limits_report(void)
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);
+    else if (s_limRewritten)
+        _snprintf(line, sizeof line, "result: %d of %d sites rewritten after they were installed\r\n",
+                  bad, s_nlim);
     else
         _snprintf(line, sizeof line, "result: %d of %d sites differ, nothing written\r\n", bad, s_nlim);
     line[sizeof line - 1] = 0;
@@ -9841,7 +9875,7 @@ void tagpu_limits_report(void)
             strncat(text, line, sizeof text - strlen(text) - 1);
             break;
         }
-        lim_hex(want, s->stock, s->n, 16);
+        lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, 16);
         lim_hex(have, s->have, s->n, 16);
         _snprintf(line, sizeof line, "0x%08X %s\r\n  want %s\r\n  have %s\r\n",
                   s->va, s->name, want, have);
@@ -9854,7 +9888,7 @@ void tagpu_limits_report(void)
     for (i = 0; i < s_nlim; i++) {
         const LIMSITE* s = &s_lim[i];
         if (!s->differs) continue;
-        lim_hex(want, s->stock, s->n, LIM_MAXB);
+        lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, LIM_MAXB);
         lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
     }

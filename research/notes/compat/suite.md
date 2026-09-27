@@ -32,4 +32,7 @@ third-party is in the repository. A setup in `tools/compat/setups.json` lists th
 overlays on the retail folder, its `goal`, and, while it falls short, its `today` — written from
 a run, not from expectation. The commit that makes a setup meet its goal deletes its `today`.
 A Patch Loader that moves the registry (`RegistryPath=`) needs the setup's `registry_roots`, or
-the battle stage opens on a map the mod does not ship.
+the battle stage opens on a map the mod does not ship. `levers` are empty files the setup puts in
+the game folder — a DLL switch. A setup with one checks a mechanism rather than a player's
+folder: `mayhem-11.3.0-net` switches the takeover off (`tagpu_takeover.off`) so that the safety
+net has something to catch, and its goal is the net's refusal.
