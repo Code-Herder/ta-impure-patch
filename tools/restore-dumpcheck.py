@@ -13,7 +13,8 @@ its queue drains (tagpu_vk_restore.c `dump_step`):
     tagpu_restore_<tag>_vk.pal    the job's palette snapshot, 256 x RGBA
     tagpu_restore_<tag>_vk.idx    `# atlas W H`, `# source W H` (the source's
                                   own size, which a neighbourhood job's differs
-                                  from), then `x y w h key wrap border
+                                  from), `# model NAME` (the weights the job
+                                  ran), then `x y w h key wrap border
                                   padR padB` per painted frame, a neighbourhood
                                   frame's followed by `ax ay edge` and its eight
                                   neighbours' origins (tagpu_restoreglsl.h)
@@ -21,7 +22,9 @@ its queue drains (tagpu_vk_restore.c `dump_step`):
                                   (tagpu_terr.c `nb_build`), for --whole-map
 
 and this restores every listed frame again from that source with
-unditherer/models/<model>.pt in strict fp32 (no TF32), and holds the dump to it.
+unditherer/models/<model>.pt in strict fp32 (no TF32) -- the model the `.idx`
+names, so the terrain is checked with tiny and every other job with full
+(D3) -- and holds the dump to it.
 
 THE INPUT IS THE DLL'S, ON PURPOSE. The unditherer inpaints a keyed texel with
 OpenCV's TELEA; the game stands in with the mean colour of the nearest ring of
@@ -74,8 +77,8 @@ COLS = ("x", "y", "w", "h", "key", "wrap", "border", "padR", "padB")
 
 
 def read_idx(path):
-    """(W, H, entries, source W, source H) of one `.idx`"""
-    W = H = SW = SH = None
+    """(W, H, entries, source W, source H, model name or None) of one `.idx`"""
+    W = H = SW = SH = MODEL = None
     ent = []
     for line in path.read_text().splitlines():
         if not line.strip():
@@ -86,6 +89,8 @@ def read_idx(path):
                 W, H = int(p[2]), int(p[3])
             if len(p) == 4 and p[1] == "source":
                 SW, SH = int(p[2]), int(p[3])
+            if len(p) == 3 and p[1] == "model":
+                MODEL = p[2]
             continue
         v = [int(t) for t in line.split()]
         if len(v) == 9:
@@ -102,7 +107,7 @@ def read_idx(path):
         raise SystemExit(f"{path}: no `# atlas W H` line -- a dump from an older build")
     if SW is None:
         SW, SH = W, H
-    return W, H, ent, SW, SH
+    return W, H, ent, SW, SH, MODEL
 
 
 def last_wins(ent):
@@ -214,9 +219,10 @@ def nb_window(e, src_rgb, a):
     return src_rgb[oy, ox]
 
 
-def check_job(pre, model, batch):
+def check_job(pre, models, batch):
     idx = pre.with_suffix(".idx")
-    W, H, ent, SW, SH = read_idx(idx)
+    W, H, ent, SW, SH, name = read_idx(idx)
+    model = models(name)
     mips = pre.with_suffix(".mips")
     got_all = np.fromfile(mips if mips.exists() else pre.with_suffix(".rgba"), dtype=np.uint8)
     got = got_all[:W * H * 4].reshape(H, W, 4)
@@ -341,7 +347,7 @@ def restore_chunked(model, img, core=512):
     return out
 
 
-def check_whole_map(gd, model):
+def check_whole_map(gd, models):
     """every cell of the terrain's map, its ring included, against a restore of
     the whole map reflect-padded (the module docstring)"""
     raw = (gd / "tagpu_restore_terr_vk.map").read_bytes()
@@ -351,7 +357,8 @@ def check_whole_map(gd, model):
     ids = np.frombuffer(raw, np.uint16, W * H, 32).reshape(H, W)
     keys = np.frombuffer(raw, np.int32, W * H, 32 + 2 * W * H).reshape(H, W)
     pre = gd / "tagpu_restore_terr_vk.rgba"
-    AW, AH, _, _, _ = read_idx(pre.with_suffix(".idx"))
+    AW, AH, _, _, _, name = read_idx(pre.with_suffix(".idx"))
+    model = models(name)
     got = np.fromfile(pre, dtype=np.uint8)[:AW * AH * 4].reshape(AH, AW, 4)
     base = np.fromfile(pre.with_suffix(".base"), dtype=np.uint8)
     BH = base.size // (4 * acols * pitch)
@@ -396,7 +403,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("gamedir", help="the instance's game directory holding tagpu_restore_*_vk.*")
     ap.add_argument("--tag", action="append", choices=TAGS, help="check only these jobs (repeatable)")
-    ap.add_argument("--model", default="full", help="unditherer/models/<model>.pt (default full)")
+    ap.add_argument("--model", default=None,
+                    help="unditherer/models/<model>.pt for every job (default: the one each .idx names, "
+                         "full where it names none)")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--json", action="store_true")
@@ -404,9 +413,16 @@ def main():
                     help="the terrain's cells against a whole-map restore (needs the .map dump)")
     a = ap.parse_args()
     gd = pathlib.Path(a.gamedir).expanduser()
-    model = Model(a.model, a.device)
+    loaded = {}
+
+    def models(named):
+        name = a.model or named or "full"
+        if name not in loaded:
+            loaded[name] = Model(name, a.device)
+        return loaded[name]
+
     if a.whole_map:
-        r = check_whole_map(gd, model)
+        r = check_whole_map(gd, models)
         if a.json:
             print(json.dumps(r, indent=1))
         else:
@@ -420,7 +436,7 @@ def main():
         if not pre.with_suffix(".idx").exists():
             rep[tag] = None
             continue
-        rep[tag] = check_job(pre, model, a.batch)
+        rep[tag] = check_job(pre, models, a.batch)
         checked += 1
     if a.json:
         print(json.dumps(rep, indent=1))

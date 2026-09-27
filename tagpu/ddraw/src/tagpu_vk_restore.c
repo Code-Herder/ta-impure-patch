@@ -1847,7 +1847,8 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         b[sizeof b - 1] = 0;
         rlog(b);
         /* THE ENTRY LIST AND THE PALETTE, which make the pair self-describing:
-           a `# atlas W H` line and a `# source W H` one, then a line per painted frame, `x y w h key
+           a `# atlas W H` line, a `# source W H` one and a `# model NAME` one
+           (the weights the job ran), then a line per painted frame, `x y w h key
            wrap border padR padB` at its destination cell -- a neighbourhood's
            followed by `ax ay edge` and its eight neighbours' origins, `x y`
            each -- and the job's palette snapshot as 256 x RGBA: everything an
@@ -1863,6 +1864,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
             if (g->recOn && (sf = fopen(sn, "wb")) != NULL) {
                 fprintf(sf, "# atlas %d %d\n", g->dumpW, g->dumpH);
                 fprintf(sf, "# source %d %d\n", g->srcW, g->srcH);
+                fprintf(sf, "# model %s\n", g->core->m->name);
                 for (i = 0; i < g->nrec; i++) {
                     const TAGPU_RGLSL_FRAME* r = &g->rec[i].f;
                     int k;
