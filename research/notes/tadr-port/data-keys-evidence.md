@@ -1691,8 +1691,9 @@ syncs clean; the new one drops the type.
   or more. Fixed by B7.
 - The roles of damage kinds 4, 5 and 9, and of `0x46A860`. In the capture order `+0x3A` holds the
   capture's cost; in the reclaim order `+0x36` holds the step and `+0x3A` counts ticks to 15 (C3).
-- Whether `+0x86` is set on a non-owner peer for a remote passenger, which only affects the
-  picture.
+- **`+0x86` is set on a non-owner peer for a remote passenger** [MEASURED by C4, 2026-09-26]: the
+  host's copy of the joiner's loaded commander names the host's copy of the ATLAS. The picture no
+  longer rests on it: the owner's decision travels in the death record (C4's `m[19]`).
 - Whether a loaded saved game runs `0x42D2E0`. `tagpu_weapons` relies on it; measure with a
   keyed type across a save and a load.
 

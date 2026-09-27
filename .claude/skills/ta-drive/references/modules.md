@@ -306,7 +306,9 @@ The same fixture carries veterancy's types: `VTLLT0` (no key), `VTLLT1` (a level
 - **A submerged enemy is neither drawn nor pickable** without the player's own sonar in range.
 - **The AI owns its units' orders**: it replaces an order given to one (type 26) and flies its
   aircraft off. Give orders to the player's units; `attack unit` on the player's own unit
-  force-fires. An aircraft slower than `MaxVelocity=1` leaves the map (the fixture's `WKAIR` is 1).
+  force-fires, except on the player's own aircraft, which a tower refuses (its order node goes
+  back to its standing 46). An aircraft slower than `MaxVelocity=1` leaves the map (the fixture's
+  `WKAIR` is 1).
 - **`keys <i> pause` toggles**, so send it once; `ctrl+d` starts a selected unit's self-destruct
   and a second press cancels it.
 - **A water building spawns on the sea floor** unless the scenario gives it a `height`; a floating
@@ -324,6 +326,43 @@ The same fixture carries veterancy's types: `VTLLT0` (no key), `VTLLT1` (a level
   Tab, `click LOADGAME`, `select GAMES <name>`, `click LOAD`. **A loaded game starts paused**
   (`keys <i> pause` once), the menu pauses the game while it is open, and **the unit array's base
   moves at a load**: re-read `*0x511DE8+0x14357` before peeking a unit.
+
+### Transported explosions
+
+The same fixture carries C4's types: `TXCOM1` (both `Transported…As` keys), `TXCOME`
+(`TransportedExplodeAs` only), `TXNONE` (a name that resolves to no weapon), `TXBIG` (32 000 HP, so
+it outlives the cargo loop's 30 000); `TX_BLAST_E` does 111 and `TX_BLAST_S` 222 to anything
+within its 2000 area, so a ring's HP names the blast. The towers `TXRL` and `TXRL2` down aircraft,
+`TXLLT2` kills a commander in one shot. `--tx-damage N` writes another peer's `TX_BLAST_E`, for the
+sync test.
+
+| scenario | what it shows | how it is driven |
+|---|---|---|
+| `c4-transport-down` | a keyed passenger's carried death beside an unkeyed control | wait until each passenger's `+0x86` names its ATLAS, then `order --unit N --expect ARMATLAS move pos X 1600` over the AI's tower |
+| `c4-transport-selfd` | a self-destructing transport, with both keys and with one | select the ATLAS, then `keys <i> mouse:600,500 ctrl+d` |
+| `c4-survivor` | a passenger that outlives its transport, then dies on the ground | fly it over the tower as above |
+| `c4-kill-all` | kill-all's local branch, single player | `+kill 1` in the chat, with `cheats` set by the file |
+| `c4-mp-host`, `c4-mp-join` | a carried death drawn on the other peer from the death record alone | `mp_lobby.sh --map 'Show Down'`, one file on each peer, fly the joiner's ATLAS to the host's tower |
+| `c4-mp-removal` | a departed player's loaded transports, three peers | apply on one joiner, freeze it, then `REJECT` on the others one at a time |
+
+- **Log lines**: `tacli log <i> -g "transported:"` — the decision, the mark, the kill-all list, a
+  received carried death, the pick with its weapon, each at powers of two; `-g datakeys` shows each
+  key resolved at load.
+- **Selecting a carried transport**: the pointer must sit where `u16 *0x511DE8+0x2CBA` names the
+  ATLAS **and** the cursor byte `+0x2CBE` reads 15; its passenger is drawn on top of it and reads 19.
+- **A carried unit takes no area damage**, and an aircraft is hit well past a weapon's `range` (a
+  tower at `range=150` downed an ATLAS 440 away): space the cases thousands apart.
+- **A departed player, for real: freeze a peer.** `kill -STOP` its `TotalA.exe` (the pid from `tacli
+  ls --json`) and the others raise `TIMEOUT.GUI` within seconds; `ui <i> click REJECT` runs the
+  engine's own player removal, and so kill-all for that army. A surrender (`mp_leave.sh`) never
+  gets there: it kills its own army before it leaves. `kill -CONT` the frozen one before `tacli
+  stop`, and kill its leftover `dplaysvr.exe` by PID after (check the prefix in its environment).
+- **A seat's number differs per peer**: each peer is seat 0 on its own screen, and the blocks of
+  slots are in DirectPlay-id order. A player's seat on a peer is the record `main+0x1B63 +
+  seat·0x14B` whose block start `+0x67` holds that player's units; `+0x73` is 1 for the local
+  human, 2 an AI, 3 a remote player.
+- **In the chat, a space is the key `space`**: `char:space` types an `s`. `+kill <seat>` needs
+  `cheats`, and on a live player it desyncs the game.
 
 ## The render-options screen and the GPU row
 

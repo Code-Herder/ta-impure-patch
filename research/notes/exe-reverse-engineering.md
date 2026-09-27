@@ -3897,6 +3897,29 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   reads `CRC_weapons` 0. `+0x146` reaches the lobby's sync value `+0x142` through `0x42A610` (*The
   unit sync's keys*, above). The def array is sealed read-only at `0x42B328`, after the store.
 
+### What a death sends, and who removes a player
+
+- **The detach broadcasts.** `0x48AAC0(child, parent, a3, a4)` (`ret 0x10`) returns doing nothing
+  unless the child is alive, lacks `+0x110` bit 29 and carries nothing (`0x48AAC7..0x48AAED`), and a
+  named parent is alive, not the child and not itself carried (`0x48AAF7..0x48AB0D`); it then builds
+  the 7-byte `0x0A` (`+1` the child's `+0xA8`, `+3` the parent's or 0, `+5`/`+6` the low bytes of
+  `a3`/`a4`, `0x48AB0F..0x48AB4E`), sends it through `0x451DF0` whichever peer runs it
+  (`0x48AB58`), and applies it with `0x48AB70` (`0x48AB62`). So the destructor's cargo loop, which runs
+  on every peer, broadcasts a detach for each passenger from every peer that runs it.
+- **The hit's send.** `0x489BB0` applies a hit locally (`0x489C89`) and sends it only when the
+  victim's player record has a nonzero first dword and type 3 (a remote player) and the kind is
+  not 11 (`0x489C8E..0x489CA2`); with an attacker the sender is the attacker's player's
+  DirectPlay id (`0x489CAF..0x489CB9`), else `0x44FDB0()` (`0x489CC7`). A peer that runs the
+  cargo loop for another player's transport therefore sends that player a 30 000 hit on each
+  passenger. `0x489CE0` clamps a remote copy's HP word at 0 (`0x489EF1`) where a local one goes
+  pending.
+- **The removal from TIMEOUT.GUI.** A peer that stops answering raises `TIMEOUT.GUI` on the others
+  ("<name> will be rejected in N seconds"); its `REJECT` (the name at `0x506570`, compared at
+  `0x453A14`) calls `0x453010(dpid, 6)` (`0x453A2B`), which holds four of the removal `0x452CC0`'s
+  nine calls (`0x453169`, `0x453200`, `0x4532C8`, `0x4532FA`; which one reason 6 takes is not
+  traced). MEASURED: a peer frozen with `SIGSTOP` raised it on both others within seconds, and
+  `REJECT` ran the kill-all of the frozen player's army on the peer that pressed it.
+
 ### What the tests measured
 
 MEASURED 2026-09-26 on Show Down with C4's fixture: an ATLAS carrying an ARM Commander clone,
@@ -3914,6 +3937,21 @@ AI towers, and unarmed Krogoth clones (29 918 HP) as the ring.
   came down with 2 066 HP, detached, on the ground.
 - A carried transport is picked by the pointer where `+0x2CBA` names it **and** the cursor
   (`main+0x2CBE`) reads 15; its passenger sits on top of it and reads 19.
+- **A remote copy is carried too**: the host's copy of the joiner's loaded commander has `+0x86`
+  naming the host's copy of the ATLAS.
+- **A surrender kills the army before the peer leaves.** Through `tools/mp_leave.sh`, the joiner
+  sent the deaths of all five of its remaining units (B8's `out` counter); its loaded ATLAS died
+  with a kind other than 3, so its passenger died of the cargo loop's kind 6, a carried death that
+  is not a self-destruct (`TX_BLAST_E`, on both peers), and the host destroyed every copy from those
+  deaths. So a graceful leave leaves kill-all's non-local branch nothing to do.
+- **Kill-all's local branch damaged nothing around it.** In a single-player skirmish (both
+  players' records have first dword 1: the human type 1, the AI type 2), the console's `+kill 1`
+  killed the AI's loaded ATLAS and its passenger through the reaper, and the player's Krogoths 260
+  away took nothing, keyed passenger or not (an unkeyed `VTCOM0` the same). The damage path was not
+  traced; the owner gate is not it (type 2 passes).
+- **Kill-all's non-local branch detonates a passenger twice**: once at `0x486F9E`, and again in its
+  destructor (`0x486D50`) since the cargo loop's 30 000 left its HP word at or below 0 and so the
+  severity above 0. The ATLAS, not hit, detonates once.
 
 ## Built-in cheat/console command surface
 
