@@ -988,6 +988,7 @@ struct TAGPU_VKRJOB {
        list always names the cells as they are in the destination now. */
     TAGPU_RQF*     rec;
     int            nrec, caprec, recOn;
+    int            feeding;                 /* the consumer has more to add    */
 };
 static struct TAGPU_VKRJOB s_vjob[TAGPU_R_MAXJOBS];
 
@@ -1657,6 +1658,21 @@ int tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames,
     return tagpu_rcore_job_add_nbhd(&s_sched, j->core, frames, count);
 }
 
+void tagpu_vk_restore_job_budget(TAGPU_VKRJOB* j, int prio, double capMs)
+{
+    if (j && j->core) tagpu_rcore_job_budget(j->core, prio, capMs);
+}
+
+int tagpu_vk_restore_job_queued(const TAGPU_VKRJOB* j)
+{
+    return (j && j->core && j->core->used) ? j->core->qn : 0;
+}
+
+void tagpu_vk_restore_job_feeding(TAGPU_VKRJOB* j, int more)
+{
+    if (j) j->feeding = more != 0;
+}
+
 int tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j)
 {
     return !j || !j->core || !j->core->used || (j->core->qn == 0 && !j->core->inflight);
@@ -1879,7 +1895,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
        One painted frame is also what proves the destination is in
        SHADER_READ_ONLY -- an OUT has run and left it there, which is the
        layout the copy borrows and gives back. */
-    if (g->core->failed || g->core->qn != 0 || g->core->inflight) return 0;
+    if (g->core->failed || g->core->qn != 0 || g->core->inflight || g->feeding) return 0;
     if (painted < 1 || !g->dstImg || g->dstW <= 0 || g->dstH <= 0) return 0;
 
     g->dumpW = g->dstW; g->dumpH = g->dstH;

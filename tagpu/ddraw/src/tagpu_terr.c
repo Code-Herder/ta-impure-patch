@@ -158,7 +158,8 @@ static unsigned           s_rSerial;   /* bumped on every change, drop included 
    k % s_nbCols, row k / s_nbCols, on the CELL_PITCH pitch. */
 static int*               s_cellKey;
 static int                s_keyW, s_keyH;
-static TAGPU_RNBFRAME*    s_nbFrames;  /* s_nbN entries, restore order        */
+static TAGPU_RNBFRAME*    s_nbFrames;  /* s_nbN entries, key order            */
+static int*               s_nbOrder;   /* the keys, centre-out                */
 static int                s_nbN, s_nbCols, s_nbW, s_nbH;
 static int                s_nbKeysOn;  /* this frame's records carry the keys */
 
@@ -172,6 +173,7 @@ static void rlist_drop(void)
     s_rFrameN = 0;
     free(s_cellKey); s_cellKey = NULL; s_keyW = s_keyH = 0;
     free(s_nbFrames); s_nbFrames = NULL;
+    free(s_nbOrder); s_nbOrder = NULL;
     s_nbN = s_nbCols = s_nbW = s_nbH = 0;
     s_rSerial++;
 }
@@ -923,10 +925,9 @@ static int nb_build(const char* ta)
     for (i = 1; i <= maxRank + 1; i++) bucket[i] += bucket[i - 1];
     for (i = 0; i < n; i++) order[bucket[rank[i]]++] = i;
     for (i = 0; i < n; i++) {
-        const int k = order[i];
-        frames[i] = keys[k];
-        frames[i].f.dx = (k % cols) * CELL_PITCH + CELL_BORDER;
-        frames[i].f.dy = (k / cols) * CELL_PITCH + CELL_BORDER;
+        frames[i] = keys[i];
+        frames[i].f.dx = (i % cols) * CELL_PITCH + CELL_BORDER;
+        frames[i].f.dy = (i / cols) * CELL_PITCH + CELL_BORDER;
     }
     /* UNDER `tagpu_restoredump.on`, THE MAP BESIDE THE RESTORER'S DUMP of this
        atlas: every cell's tile and key, which tools/restore-dumpcheck.py
@@ -948,6 +949,7 @@ static int nb_build(const char* ta)
     s_cellKey = cellKey; cellKey = NULL;
     s_keyW = w; s_keyH = h;
     s_nbFrames = frames; frames = NULL;
+    s_nbOrder = order; order = NULL;
     s_nbN = n; s_nbCols = cols; s_nbW = cols * CELL_PITCH; s_nbH = rows * CELL_PITCH;
     _snprintf(b, sizeof b, "terr: %d neighbourhood keys over %dx%d cells, a %dx%d atlas (%u KB)",
               n, w, h, s_nbW, s_nbH, (unsigned)(((size_t)s_nbW * s_nbH * 4) >> 10));
@@ -1446,7 +1448,8 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
         s_pub.restoreSerial  = s_rSerial;
         /* the neighbourhoods only with the records that name their cells */
         if (s_nbKeysOn) {
-            s_pub.nbFrames = s_nbFrames; s_pub.nbN = s_nbN;
+            s_pub.nbFrames = s_nbFrames; s_pub.nbOrder = s_nbOrder;
+            s_pub.nbN = s_nbN; s_pub.nbCols = s_nbCols;
             s_pub.nbW = s_nbW; s_pub.nbH = s_nbH;
             s_pub.nbTexelW = 1.0f / (float)s_nbW; s_pub.nbTexelH = 1.0f / (float)s_nbH;
         }

@@ -123,6 +123,14 @@ int  tagpu_vk_restore_fits(const TAGPU_VKPASS* d, unsigned long long bytes, char
    taken, and tagpu_rcore_job_add_nbhd says which are refused. The job's
    source is the atlas their origins name. */
 int  tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames, int count);
+/* A FED JOB -- one its consumer adds to as it goes rather than handing it a
+   whole list: its place and GPU share (tagpu_rcore_job_budget), and whether
+   more is still to come. `more` holds the dump back: a queue that drains
+   between feeds is not a finished picture. */
+void tagpu_vk_restore_job_budget(TAGPU_VKRJOB* j, int prio, double capMs);
+/* frames queued and not yet in a batch */
+int  tagpu_vk_restore_job_queued(const TAGPU_VKRJOB* j);
+void tagpu_vk_restore_job_feeding(TAGPU_VKRJOB* j, int more);
 /* 1 when nothing is queued or in flight -- every frame added is painted, once
    the GPU drains, i.e. before any later draw samples the destination. */
 int  tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j);

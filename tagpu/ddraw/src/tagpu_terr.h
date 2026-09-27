@@ -245,15 +245,19 @@ typedef struct TAGPU_TERRHAND {
     int                      restoreN;
     unsigned                 restoreSerial;
     /* THE NEIGHBOURHOODS, the same request in the seam-correct form
-       (research/notes/compute-restorer.md D5): one frame per key, in the
-       centre-out order, painting the key's 34-texel cell of an `nbW` x `nbH`
-       atlas from the base atlas. Published with `restoreFrames` and under the
-       same serial and lifetime; NULL when the map's keys could not be built or
-       do not fit one image of the device's size, and then `restoreFrames` is
-       the whole request. Whether the device has the memory for it is the
-       consumer's to decide (D10), and the per-tile list is its fallback. */
+       (research/notes/compute-restorer.md D5): one frame per key, IN KEY
+       ORDER -- frame k paints key k's 34-texel cell, column k % nbCols and row
+       k / nbCols of an `nbW` x `nbH` atlas, from the base atlas -- and
+       `nbOrder`, the keys in the centre-out order. A record's key cell (its
+       shorts 4 and 5) is therefore its frame's index, row * nbCols + column.
+       Published with `restoreFrames` and under the same serial and lifetime;
+       NULL when the map's keys could not be built or do not fit one image of
+       the device's size, and then `restoreFrames` is the whole request.
+       Whether the device has the memory for it is the consumer's to decide
+       (D10), and the per-tile list is its fallback. */
     const TAGPU_RNBFRAME*    nbFrames;
-    int                      nbN, nbW, nbH;
+    const int*               nbOrder;
+    int                      nbN, nbCols, nbW, nbH;
     const unsigned char* height;      /* hW x hH R8, or NULL                */
     int                  hW, hH;
     unsigned             heightSerial;

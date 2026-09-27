@@ -49,6 +49,7 @@
 #define OPT_FILE          "tagpu_restoreglsl.on"
 #define DEFAULT_BUDGET_MS 12.0
 #define FIXED_DRAWS       6     /* no timer: dispatches per slice              */
+#define FIXED_CAP_DRAWS   2     /* ...and a capped job's, tagpu_rcore_job_budget */
 #define IDLE_FRAMES       180   /* activations freed after                     */
 #define QUEUE_LOG_FRAMES  300   /* a queue's tally, at most                    */
 #define STALL_GIVEUP      300   /* slices waited on one result before giving up */
@@ -591,6 +592,26 @@ static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
     return units;
 }
 
+void tagpu_rcore_job_budget(TAGPU_RCORE* j, int prio, double capMs)
+{
+    if (!j || !j->used) return;
+    j->prio = prio;
+    j->cap = capMs > 0.0 ? capMs : 0.0;
+}
+
+/* 1 when a job other than `j` has frames queued and may be picked */
+static int others_waiting(const TAGPU_RSCHED* s, const TAGPU_RCORE* j)
+{
+    int i;
+    for (i = 0; i < TAGPU_R_MAXJOBS; i++) {
+        const TAGPU_RCORE* o = &s->jobs[i];
+        if (o == j || !o->used || o->failed || o->qn == 0) continue;
+        if (s->gate && o->prio >= 0) continue;
+        return 1;
+    }
+    return 0;
+}
+
 /* the job whose batch is in flight, else the lowest prio with a queue. Under
    the self-test's gate a job of non-negative prio is not a candidate at all. */
 static TAGPU_RCORE* pick_job(TAGPU_RSCHED* s)
@@ -629,8 +650,9 @@ static void job_drained(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         rlog(b);
     } else if (s_opt.log || s->slice - j->lastTallySlice >= QUEUE_LOG_FRAMES) {
         j->lastTallySlice = s->slice;
-        _snprintf(b, sizeof b, "%s: %s: queue drained: %d frames in %d batches this run, %u frames from the first queued to the last painted (%.0f ms, %d slices drawn in); %d frames, %d batches, %d dispatches so far",
+        _snprintf(b, sizeof b, "%s: %s: queue drained: %d frames in %d batches this run, %u frames from the first queued to the last painted (%.0f ms, %d slices drawn in, GPU %.0f ms measured over %.0f%% of the work); %d frames, %d batches, %d dispatches so far",
                   s->be->name, j->tag, j->rframes, j->rbatches, frames, wall, j->rslices,
+                  j->rgpuNs / 1e6, j->runits > 0.0 ? 100.0 * j->rgpuUnits / j->runits : 0.0,
                   j->tframes, j->tbatches, j->tdraws);
         rlog(b);
     }
@@ -638,8 +660,8 @@ static void job_drained(TAGPU_RSCHED* s, TAGPU_RCORE* j)
 
 void tagpu_rcore_step(TAGPU_RSCHED* s)
 {
-    double allowed, spent = 0.0;
-    int q, ndraw = 0, i;
+    double allowed, spent = 0.0, capSpent = 0.0;
+    int q, ndraw = 0, capDraws = 0, i;
     TAGPU_RCORE* j;
     char b[300];
 
@@ -714,11 +736,21 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
         {
             double u = issue_draw(s, j);
             spent += u; j->runits += u;
+            if (j->cap > 0.0) { capSpent += u; capDraws++; }
         }
         ndraw++;
         if (!j->inflight && j->qn == 0 && j->running) job_drained(s, j);
         if (s->timer) { if (s->nsPerUnit <= 0.0 && ndraw >= 2) break; if (spent >= allowed) break; }
         else if (ndraw >= FIXED_DRAWS) break;
+        /* A CAPPED JOB STOPS AT ITS CAP, and what it spent is counted across
+           the slice, so re-picking it after a batch lands does not reset it.
+           Its batch in flight is the exception while another job waits: that
+           batch is all that stands between the other and the GPU. */
+        if (j->cap > 0.0 && !others_waiting(s, j)) {
+            if (s->timer ? s->nsPerUnit > 0.0 && capSpent >= j->cap * 1e6 / s->nsPerUnit
+                         : capDraws >= FIXED_CAP_DRAWS)
+                break;
+        }
     } while (1);
     if (s->timer) { s->be->slice_end(q); s->qUnits[q] = spent; s->qHave[q] = 1; s->qFrame++; }
     s->slice++;

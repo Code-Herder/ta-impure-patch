@@ -35,9 +35,10 @@
 #define TAGPU_R_BATCH     (TAGPU_R_SLOTCOLS * TAGPU_R_SLOTROWS)  /* frames per batch, at most */
 #define TAGPU_R_ACTMAX    512    /* a slot's side cap, texels                  */
 /* terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures 5,
-   and the backend's two self-test probes: every slot is taken, so another
-   consumer raises this */
-#define TAGPU_R_MAXJOBS   8
+   and the backend's three self-test probes, which can run beside all six (a
+   device the picker changed to is tested with the game's jobs standing):
+   every slot is taken, so another consumer raises this */
+#define TAGPU_R_MAXJOBS   9
 #define TAGPU_R_MAXLAYERS 32
 /* THE GRID'S TILING, which is the conv kernel's (tagpu_restore_comp.h CONV): a
    workgroup covers 16 columns and 8, 16 or 32 rows, so a grid padded to a
@@ -95,6 +96,7 @@ typedef struct {
 
 typedef struct TAGPU_RCORE {
     int    used, prio, oneshot, failed;
+    double cap;                              /* ms a slice at most, 0 = no cap */
     int    model;                            /* TAGPU_RM_*, loaded: `m` is it  */
     const TAGPU_RMODEL* m;
     char   tag[12];
@@ -226,6 +228,13 @@ int  tagpu_rcore_job_add_nbhd(TAGPU_RSCHED* s, TAGPU_RCORE* j,
 /* tagpu_rcore_nb_frame, which builds a neighbourhood frame from a map, is
    declared beside the frame's type in tagpu_restoreglsl.h: the consumers that
    build them include only that. */
+/* THE JOB'S PLACE AND SHARE, which a fed job moves as it goes: `prio` as at
+   `job_new`, and `capMs` the GPU time it may take in one slice, 0 for the
+   whole budget. A capped job stops at its cap -- except that a batch it has in
+   flight runs at the full budget while another job waits behind it, since
+   only one batch is ever in flight and the other's latency is that batch.
+   With no GPU timer the cap is two dispatches a slice. */
+void tagpu_rcore_job_budget(TAGPU_RCORE* j, int prio, double capMs);
 /* Drop everything queued or in flight; the backend clears the destination. */
 void tagpu_rcore_job_drop(TAGPU_RCORE* j);
 /* Every job fails, as the self-test's failure has them do: queues dropped,
