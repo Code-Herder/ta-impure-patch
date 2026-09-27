@@ -51,6 +51,7 @@ public static class CompatWin {
 "@
 
 function Emit($obj) { Add-Content -LiteralPath $Out -Value ($obj | ConvertTo-Json -Compress) -Encoding UTF8 }
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
 
 $t0 = Get-Date
 $seen = @{}

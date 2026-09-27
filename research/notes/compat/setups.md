@@ -18,24 +18,26 @@ the DLL at `main`, the battle stage on (a skirmish on Two Continents and
 
 | setup | what it is | Wine, today | Windows, today |
 |---|---|---|---|
-| `retail` | Impure alone on the retail exe (the control) | **meets goal**: menu, battle 402 of 402 applied | WIN_retail |
-| `retail+tadr1` | + the 2006 recorder `Dplayx.dll` | **meets goal** | WIN_retail+tadr1 |
-| `retail+tadr-files` | + a modern `tdraw.dll` and `tplayx.dll` nothing loads | **meets goal** | WIN_retail+tadr-files |
-| `loader+tadr-ota` | + Patch Loader v1.3.0.0, TADR `dev-dcff5dd` (OTA), its recorder | `tadr-refused` at `0x00499A32` | WIN_loader+tadr-ota |
-| `loader+tadr-tazero` | the TA Zero report: loader, TADR `tazero`, the 2022 recorder | `tadr-refused` at `0x00499A32` | WIN_loader+tadr-tazero |
-| `loader+tadr-mayhem` | loader, TADR's current Mayhem build and recorder | `tadr-refused` at `0x00499A32` | WIN_loader+tadr-mayhem |
-| `392+tadr-dev` | the 3.9.02 exe, TADR `dev-dcff5dd` | `impure-refused` at `0x0040EAD6` | WIN_392+tadr-dev |
-| `392+tadr-2026.8.6` | the 3.9.02 exe, TADR v2026.8.6 | `impure-refused` at `0x0040EAD6` | WIN_392+tadr-2026.8.6 |
-| `mayhem-11.3.0` | Total Mayhem 11.3.0 as installed | **`battle-crash`**: menu, then the first skirmish load | WIN_mayhem-11.3.0 |
-| `prota-4.8` | ProTA 4.8 as installed | **`battle-crash`**: the same crash | WIN_prota-4.8 |
-| `gammata-ota` | gammata's OTA drop-in | `impure-not-loaded` (`ddraw_custom.dll` runs) | WIN_gammata-ota |
-| `escalation` | Escalation GOLD 10.2.0 as installed | `impure-refused` at `0x0040EAD6` | WIN_escalation |
-| `escalation+tadr-dev` | Escalation with TADR's current Escalation build | `impure-refused` at `0x0040EAD6` | WIN_escalation+tadr-dev |
+| `retail` | Impure alone on the retail exe (the control) | **meets goal**: menu, battle 402 of 402 applied | **meets goal** |
+| `retail+tadr1` | + the 2006 recorder `Dplayx.dll` | **meets goal** | **meets goal**: the recorder loads |
+| `retail+tadr-files` | + a modern `tdraw.dll` and `tplayx.dll` nothing loads | **meets goal** | **meets goal** |
+| `loader+tadr-ota` | + Patch Loader v1.3.0.0, TADR `dev-dcff5dd` (OTA), its recorder | `tadr-refused` at `0x00499A32` | `tadr-refused`: the box, seen |
+| `loader+tadr-tazero` | the TA Zero report: loader, TADR `tazero`, the 2022 recorder | `tadr-refused` at `0x00499A32` | `tadr-refused`: the box, seen |
+| `loader+tadr-mayhem` | loader, TADR's current Mayhem build and recorder | `tadr-refused` at `0x00499A32` | `tadr-refused`: the box, seen |
+| `392+tadr-dev` | the 3.9.02 exe, TADR `dev-dcff5dd` | `impure-refused` at `0x0040EAD6` | `impure-refused` |
+| `392+tadr-2026.8.6` | the 3.9.02 exe, TADR v2026.8.6 | `impure-refused` at `0x0040EAD6` | `impure-refused` |
+| `mayhem-11.3.0` | Total Mayhem 11.3.0 as installed | **`battle-crash`**: menu, then the first skirmish load | `impure-active`, TADR installed beside it (no battle stage) |
+| `prota-4.8` | ProTA 4.8 as installed | **`battle-crash`**: the same crash | `impure-active`, TADR installed beside it (no battle stage) |
+| `gammata-ota` | gammata's OTA drop-in | `impure-not-loaded` (`ddraw_custom.dll` runs) | `impure-not-loaded` |
+| `escalation` | Escalation GOLD 10.2.0 as installed | `impure-refused` at `0x0040EAD6` | `impure-refused` |
+| `escalation+tadr-dev` | Escalation with TADR's current Escalation build | `impure-refused` at `0x0040EAD6` | `impure-refused` |
 
-A full Wine run of all thirteen takes about seven minutes on the reference setup, six at a
-time.
-
-The Windows column is the Windows test box, one setup at a time, start-up only.
+A full Wine run takes about seven minutes on the reference setup, six setups at a time; the
+Windows column is the Windows test box, one setup at a time, start-up only, about ten minutes
+(2026-09-26, the DLL at `main`). On both platforms Impure's limits were installed before
+TADR's limit crack ran on the Patch Loader route (`limits: installed 241 sites` in
+`tagpu.log`, then "Install Limit Crack" in `tdrawlog.txt`): Impure's `DllMain` runs before the
+loader's.
 
 ## The 3.9.02 exe
 

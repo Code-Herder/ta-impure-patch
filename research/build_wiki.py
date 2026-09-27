@@ -139,6 +139,7 @@ PAGES = [
     ("tadr-port/data-keys-evidence", "C. New data keys — evidence", "TADR port"),
 
     ("compat/overview",           "Overview & load routes",    "Compatibility"),
+    ("compat/takeover",           "The takeover (plan)",       "Compatibility"),
     ("compat/tadr-collision",     "TADR beside Impure",        "Compatibility"),
     ("compat/setups",             "Setups & outcomes",         "Compatibility"),
     ("compat/identify",           "Identifying a setup",       "Compatibility"),

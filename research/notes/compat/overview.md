@@ -27,7 +27,7 @@ The short version, measured on the reference setup with the DLL at `main`:
 - **gammata's drop-in**: its `tdraw.dll` loads `ddraw_custom.dll`, so Impure never loads.
 
 The **goal** for every setup is the same: Impure active, running the mod's own exe and files as
-the player has them, with TADR not patching the engine beside it. Reaching it is the *takeover*
+the player has them, with TADR not patching the engine beside it. Reaching it is [the takeover](takeover.md)
 (the owner's direction, 2026-09-26, not built): Impure keeps TADR's engine patches out of the
 process instead of sharing the engine with them. Until then each setup records its behaviour
 today as a **known gap**.

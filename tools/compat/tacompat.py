@@ -312,6 +312,8 @@ def classify(o: dict) -> str:
     """One word for what happened. A crash outranks everything; then the first known
     refusal box; then an unknown box; then how the process ended; then whether Impure
     loaded and drew."""
+    if o.get("watched") is False:
+        return "no-result"          # the window watcher never finished: nothing seen is evidence
     titles = [b["title"] for b in o["boxes"]]
     if o.get("errorlog") or any(CRASH_TITLES.search(t) for t in titles):
         return "battle-crash" if o.get("menu") and o.get("battle") is not None else "crash"
@@ -710,6 +712,10 @@ class Win:
         self.s = taremote.Session(cfg["ssh"], cfg.get("key"))
         self.profile = self.one("Write-Output $env:USERPROFILE")
         self.root = ntpath.join(self.profile, WIN_ROOT)
+        # The 32-bit PowerShell: a 64-bit one lists only the exe and the WOW64 layer among a
+        # 32-bit process's modules, never the DLLs it loaded from the game folder.
+        self.powershell32 = ntpath.join(self.one("Write-Output $env:windir"), "SysWOW64",
+                                        "WindowsPowerShell", "v1.0", "powershell.exe")
 
     def run(self, statements, timeout=120.0):
         return self.s.run(statements, timeout=timeout)
@@ -742,7 +748,9 @@ class Win:
         if not out:
             return None
         import base64
-        return base64.b64decode("".join(out)).decode("utf-8", "replace")
+        # utf-8-sig: Windows PowerShell 5 starts a file it writes as UTF8 with a byte-order
+        # mark, and a first line that does not start with "{" is not read as an event.
+        return base64.b64decode("".join(out)).decode("utf-8-sig", "replace")
 
     def game_procs(self) -> list:
         return self.run(["Get-Process TotalA -ErrorAction SilentlyContinue | ForEach-Object "
@@ -806,10 +814,11 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     w.run([f"Copy-Item -LiteralPath {ps(w.path('dll', 'ddraw.dll'))} -Destination "
            f"{ps(ntpath.join(work, 'ddraw.dll'))} -Force"])
     out = w.path("results", setup["name"] + ".jsonl")
-    w.run([f"Remove-Item -LiteralPath {ps(out)} -ErrorAction SilentlyContinue"])
+    w.run([f"New-Item -ItemType Directory -Force -Path {ps(w.path('results'))} | Out-Null",
+           f"Remove-Item -LiteralPath {ps(out)} -ErrorAction SilentlyContinue"])
     t0 = time.time()
     w.task(WIN_GAME_TASK, ntpath.join(work, "TotalA.exe"), "", work)
-    w.task(WIN_WATCH_TASK, "powershell.exe",
+    w.task(WIN_WATCH_TASK, w.powershell32,
            f"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File {w.path('watch.ps1')} "
            f"-Folder {work} -Seconds {watch} -Out {out}", w.root)
     events = []
@@ -831,6 +840,7 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     tagpu = w.read_b64(ntpath.join(work, "log", "tagpu.log"))
     o = {
         "setup": setup["name"], "platform": "windows",
+        "watched": any(e.get("done") for e in events),
         "boxes": boxes, "alive_at_end": alive,
         "exit_code": None if alive else result,
         "impure_loaded": tagpu is not None,

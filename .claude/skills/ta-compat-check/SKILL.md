@@ -101,6 +101,13 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - On Windows, SSH cannot see the desktop's windows (every title reads empty); the watcher
   must run as an interactive scheduled task. The game holds `log\tagpu.log` open until it is
   stopped.
+- **A run is only evidence if the watcher saw it.** A Windows run whose watcher never wrote its
+  `done` line is `no-result`, never a guess from the logs: a retail setup still "meets the
+  goal" on frames drawn alone, so a dead watcher hides behind the controls. Read a setup's
+  `watch.jsonl` when a result surprises you.
+- The watcher runs under the **32-bit** PowerShell (`SysWOW64`): a 64-bit one lists only the
+  exe among a 32-bit game's modules. Windows PowerShell 5 writes its UTF-8 files with a
+  byte-order mark, which the runner strips when it reads them.
 - `tadr_installed` reads tdrawlog.txt: "Install Limit Crack" (pre-2026 TADR) or
   "[EngineLimits] installed" (2026). Either means a second patcher rewrote engine code.
 
