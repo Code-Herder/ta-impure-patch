@@ -233,6 +233,49 @@ OUT on a keyed base atlas exactly as the features' job does.
   reaching a second is a device far below anything the self-test has run on.
 - **The timeout rule is not exercised**: no lever makes a fence time out on a live device.
 
+## Landing 2, as designed
+
+The terrain seam fix (D5–D10) and tiny for terrain (D3). How the decisions map onto the code:
+
+- **A model per job.** The core loads both weight files (`full`, `tiny`) and a job names its
+  model; the backend repacks both into one weights buffer, keeps a conv pipeline set per model
+  (tiny's shapes are already compiled by `spirv-gen`), and sizes the activations for the wider.
+  The terrain's jobs are tiny, every other job full. The self-test gains a tiny probe, checked
+  against the CPU reference run with tiny.
+- **A neighbourhood frame.** Today a frame's source is its own tile, wrapped. A neighbourhood
+  frame restores one tile of the map with its eight neighbours around it: FILL reads a window of
+  32 + 2a texels (a = the model's depth + 1: the depth makes the centre exact, the +1 makes the
+  cell's one-texel ring exact too, which then holds real neighbour texels instead of a copy of
+  the edge). The slot carries the centre's cell in the base atlas and the eight neighbours' tile
+  ids (the four spare ints, two ids each); where a neighbour is off the map, the CPU puts the
+  reflected cell's id there and the edge bits flip its texels, which is the mirror border's own
+  rule. OUT writes the 34-texel cell and reads the input colour through the same addressing —
+  the network predicts a residual, so OUT needs the input at the texel, not at the destination
+  coordinate. The window reads the RGBA base atlas the terrain already has; nothing is uploaded
+  per key.
+- **The keys.** One key per distinct (tile, eight neighbours, edge bits) over the map's cells, a
+  32-bit per-cell key index on the CPU. The instance record gains the key's cell in the
+  neighbourhood atlas beside the tile's cell in the base atlas, so the fragment stage samples the
+  restored colour at one and the dithered fallback at the other; a cell whose key is not painted
+  yet (alpha 0) draws dithered (D7).
+- **The atlas is one 2D image**, near square, its side at most `maxImageDimension2D`, in the
+  34-texel cell pitch: 16384 holds 231,361 cells, three times Seven Islands' keys. That replaces
+  the 2D array of the Open list, whose reason was the 64-column layout's height; a map whose keys
+  do not fit one image on a smaller device keeps today's atlas.
+- **Whether it fits** (D10): keys × 34 × 34 × 4 bytes against half of what the driver says is
+  free — `VK_EXT_memory_budget` through `VK_KHR_get_physical_device_properties2` where both are
+  offered, a quarter of the largest device-local heap where not. A refused allocation falls back
+  too. The fallback is today's per-tile atlas and frames, on tiny.
+- **The budget** (D8): two terrain jobs paint the same atlas. The on-screen job (prio 0, the
+  `budget=`) is fed each frame with the keys of the cells on screen that are not queued yet; the
+  trickle job (after every other job, 2 ms) is fed the rest in centre-out order, one batch at a
+  time, so a key scrolled onto the screen waits behind at most one small batch. The core gains a
+  budget per job, and room for the extra jobs.
+- **The bar.** The dumps restored again offline with tiny, per neighbourhood frame, and — the
+  point of the landing — the restored terrain against a whole-map restore of the same map
+  (reflect-padded at its edges): within one level on under 0.01 % of bytes, the tile-line ring
+  included. The tile-grid lines of D6 are the art's and stay.
+
 ## Decisions
 
 | # | decision |
@@ -282,9 +325,9 @@ a choice, and landing 2 takes them as given:
 
 - **The per-cell index is 32-bit.** Seven Islands' 303 MB atlas is roughly 65,000–69,000 cells of
   34×34 RGBA8, at or past what today's 16-bit `TILE_MAP` can index.
-- **The atlas pages within the device's limits** (a 2D array texture sized by
-  `maxImageDimension2D` and `maxImageArrayLayers`): in today's 64-column layout Seven Islands would
-  be about 35,000 px tall, past the 16384 most devices allow.
+- **The atlas stays within the device's limits**: in today's 64-column layout Seven Islands would
+  be about 35,000 px tall, past the 16384 most devices allow, so the neighbourhood atlas is laid
+  out near square instead (*Landing 2, as designed*).
 - **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
   no `rundll32`, both of which antivirus software watches.
 - **The Windows test runs on** the Windows test setup's AMD Radeon R9 200-series card (2816 MB, a
