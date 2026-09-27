@@ -1,0 +1,30 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A unit reclaim's step across stock's 32-bit wrap (B10), on Show Down. 0x438650 multiplies the reclaimer's workertime, (kills + 5)/5, the target's MaxHitPoints and the 15 ticks between steps; ARMCOM's 300 on a CORKROG wraps at the factor 32, 155 kills. Four ARMCOMs of the player's, at 0, 150, 155 and 1000 kills (factors 1, 31, 32, 201), each reclaim a CORKROG of the player's; read each target's HP (+0x108) as it falls, one step every 15 ticks. Stock: 0 and 150 take the formula's step, 155 a sliver (the product less 2^32), 1000 whatever the wrap leaves. B10: every one the formula's step.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "units": [
+  {"id": "keep_ai", "type": "CORFUS", "owner": 1, "pos": [4900, 1950]},
+  {"id": "r0", "type": "ARMCOM", "owner": 0, "pos": [600, 600], "kills": 0, "orders": [{"cmd": "reclaim", "target": "t0"}]},
+  {"id": "t0", "type": "CORKROG", "owner": 0, "pos": [800, 600]},
+  {"id": "r150", "type": "ARMCOM", "owner": 0, "pos": [600, 1100], "kills": 150, "orders": [{"cmd": "reclaim", "target": "t150"}]},
+  {"id": "t150", "type": "CORKROG", "owner": 0, "pos": [800, 1100]},
+  {"id": "r155", "type": "ARMCOM", "owner": 0, "pos": [1500, 600], "kills": 155, "orders": [{"cmd": "reclaim", "target": "t155"}]},
+  {"id": "t155", "type": "CORKROG", "owner": 0, "pos": [1700, 600]},
+  {"id": "r1000", "type": "ARMCOM", "owner": 0, "pos": [1500, 1100], "kills": 1000, "orders": [{"cmd": "reclaim", "target": "t1000"}]},
+  {"id": "t1000", "type": "CORKROG", "owner": 0, "pos": [1700, 1100]}
+ ],
+ "camera": {"at": [1100, 850]}
+}

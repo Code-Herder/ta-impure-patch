@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "B7's hit word and kill-outright, on Show Down. word: B7HUGE (owner 1), the light laser at 65 000 damage dealt whole, facing a metal storage of the player's (1 329 HP); stock wraps each hit's amount to -536 in its word and the storage GAINS 536 HP a hit, where the saturated word kills it at the first. outright: a Krogoth of the player's with 25 kills (stock level 5, 80 % taken) and a VTLLT1 with 30 (keyed level 25, 0 % taken), each on hold and far from everything; `tacli order --unit N --expect CORKROG blast` self-destructs it with a 30 000 call, which stock reduces to 24 000 (the Krogoth's 29 918 HP survive it) and B7 deals in full. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "description": "B7's hit word and kill-outright, on Show Down. word: B7HUGE (owner 1), the light laser at 65 000 damage dealt whole, facing a metal storage of the player's (1 329 HP); stock wraps each hit's amount to -536 in its word and the storage GAINS 536 HP a hit, where the saturated word kills it at the first. outright: a Krogoth of the player's with 25 kills (stock level 5, 80 % taken) and a VTLLT1 with 30 (keyed level 25, 0 % taken), each on hold and far from everything; selected and given Ctrl+D (`click` it, then `keys <i> mouse:600,500 ctrl+d`) it self-destructs with a 30 000 call, which stock reduces to 24 000 (the Krogoth's 29 918 HP survive it) and B7 deals in full. Content: tools/datakeys_fixture.py into the instance's gamedir.",
  "seed": 20260926,
  "on_error": "abort",
  "setup": {

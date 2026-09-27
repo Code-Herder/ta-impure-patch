@@ -4,8 +4,8 @@
 
 Section C brings the weapon and unit keys that TADR taught the engine to read into our stack, as
 our own code, over four landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**,
-in a grill that followed [the evidence pass](data-keys-evidence.md). **C1, C2 and C3 have landed**;
-C4 has not. The rules shared by every group are in
+in a grill that followed [the evidence pass](data-keys-evidence.md). **All four landings have
+landed**, C4 on 2026-09-26. The rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 The keys are not a blank slate. TA: Escalation, the largest live mod, ships TADR's DLL and uses
@@ -118,7 +118,9 @@ kept in the evidence pass.
 - **Veterancy: TADR's levels, bounded per effect.** Levels are the count of thresholds at or below
   the kill count (u16, as stock). Damage taken: up to 25 levels, as TADR documents, applied where
   stock applies its own level, to every hit but the heal, so a unit at 25 takes no weapon damage, no
-  paralysis and no unit reclaim's step (TADR's hook sits at the same site); **a call of 30 000 or more (kill outright: self-destruct,
+  paralysis and no unit reclaim's step (TADR's hook sits at the same site) — **kept so by the
+  owner on 2026-09-26 [DECIDED]**, after C3 measured it: a list of 25 thresholds or more is the
+  mod author's choice, and no known content has one; **a call of 30 000 or more (kill outright: self-destruct,
   defeat, a dying transport; and the D-guns) takes no veterancy reduction**, as it takes no armour
   reduction, so it kills every unit, veteran or not (B7's fix of stock, which let a veteran above
   24 000 HP live). Damage dealt: every hit saturated into the HP word's range (B7). Reload: up to
@@ -129,11 +131,13 @@ kept in the evidence pass.
   every unit, as TADR. Our C copy of the reload formula in `tagpu_weapons.c` takes the same level.
 - **Transported explosions: carried at death, decided inside the death itself.** A per-slot byte
   set and consumed within one death: carried when the transporter link `+0x86` is set before the
-  detach (`0x4867BA`), or when the death's kind is 6, which only the cargo loop passes; a passenger
-  already dying when its transport dies, or of a self-destructing transport, is marked in the cargo
-  loop on its owner's peer, **and the owner sends "died carried" in a companion message beside the
-  passenger's `0x0C`**, so every screen draws the same blast. Names resolved once at load; the fold
-  above.
+  detach, or when the death's kind is 6, which only the cargo loop passes; a passenger already
+  dying when its transport dies, or of a self-destructing transport, is marked in the cargo loop on
+  its owner's peer, **and the owner's decision travels with the death itself**, as a byte of B8's
+  `0x4C` that carries the `0x0C`, so every screen draws the same blast. Names resolved once at load;
+  the fold above. As built, the decision is taken in `Send_UnitDeath` before the send, each
+  kill-all marks the passengers it detaches with a token of its own, and inside it a departed
+  player's units are detached without the stock broadcast ([C4, as built](#c4-as-built)).
 - **The ghost: the hides of `Create()` by default, `PreviewPieces=` as the override.** At level load,
   on the game thread, `Create()`'s prologue is read, not run, with `tools/ta3do`'s conservative rule
   (it stops at the first opcode whose length is not certain; every operand bounded by the COB's own
@@ -173,9 +177,11 @@ commit can change.
    left open: a loaded saved game runs `0x42D2E0` and reads its keys again, and kill counts are
    **not** equal on two peers, in stock. Reviewed at `high`. How it is built is in
    [C3, as built](#c3-as-built) below; the fold site went to C4.
-4. **C4 — transported explosions**, after B4 has landed its companion messages. The per-slot mark,
-   the pick at `0x49B017`, the fold, the "died carried" companion, and the two-peer test that the
-   blast's damage and its picture agree on both. Reviewed at `high`.
+4. **C4 — transported explosions. Landed 2026-09-26**, after B8, whose death record carries the
+   decision. The decision, the pick at `0x49B017`, kill-all's token, the fold, the carried byte
+   on the wire, and two stock broadcasts kept local inside kill-all. The blast's damage is the
+   owner's alone (the owner gate), so what two peers must agree on is the picture: measured on two
+   peers and on three. Reviewed at `high`. How it is built is in [C4, as built](#c4-as-built) below.
 
 ## C1, as built
 
@@ -369,7 +375,8 @@ commit can change.
   - Damage taken (`0x489BFA`): L, at most 25 (TADR's documented −4 % a level). Stock's reduction
     there covers every hit but the heal (`0xA`) and, since B7, the kill-outright calls, so a unit at
     25 takes no weapon damage, no paralysis and no unit reclaim's step: it cannot be reclaimed. No
-    known content reaches 25; every list of Escalation's has five thresholds.
+    known content reaches 25; every list of Escalation's has five thresholds, so its units top out
+    at level 5. The owner kept this after the landing [DECIDED 2026-09-26].
   - Damage dealt (`0x499DB5`): L, at most 32 (`DK_VET_MAX`, the thresholds a list may carry); the HP
     word's saturation (B7) bounds the hit.
   - Reload (`0x49E468`): L, at most 16. `tagpu_weapons.c`'s own reload for slots past 2 takes the
@@ -393,6 +400,9 @@ commit can change.
     MEASURED (`scenarios/c3-reclaim-bound.json`, VTCOM1 and VTCOM0 at 31 kills on a CORKROG each):
     on the build before the bound the keyed target lost 30 HP in 16 s against stock's 3 074, the
     wrapped product; with it, 11 304 per 13 s against 2 544, 4.44 ≈ 31/7 (each step floored by `0x4386DA`'s conversion), the event logged.
+    Since B10 ([simulation fixes, B10](sim-fixes.md)) takes that product in 64 bits in both builds, the
+    hold no longer prevents a wrap; it caps a keyed veteran's step below its formula, and whether to
+    release it is open for the owner.
 - **`0x438650` is a unit reclaim, not a capture.** Its callers are the reclaim order (`0x40483D`)
   and the build order's reclaim (`0x414C86`); the evidence pass had it as the capture's time. The
   decision stands for it unchanged: every place stock reads a level reads the keyed type's.
@@ -434,6 +444,106 @@ commit can change.
     on which peer applies the effect. A stock defect for section B, reported to the owner; the
     evidence pass's "kills equal on two peers" does not hold.
   - The fold site C4 will use (`0x42B019`) stays C4's.
+
+## C4, as built
+
+- **The keys** (`tagpu_datakeys.c`, section 2, read by the unit-key reader at `0x42BF97`, beside
+  C3's). `TransportedExplodeAs=` and `TransportedSelfDestructAs=` each name a weapon, resolved at the
+  FBI load through the loader's own `0x49E5B0` to an ID of the weapon array (1..4095; 1..255 with
+  the stock limits); a name that resolves to none is
+  logged and the type keeps stock's weapon for that death. The answer is bounded again where it is
+  used (`tagpu_datakeys_tx_weapon`).
+- **The decision, at `0x48664B`**, in `Send_UnitDeath` once its `0x0C` record is complete and before
+  the send (`0x48666D`) and the destructor (`0x486679`). The evidence pass placed it at the
+  destructor's detach (`0x4867BA`); `Send_UnitDeath` is the one place a death starts on the peer
+  that runs it, so the decision exists before the record leaves. A keyed unit's death is carried
+  when `+0x86` is set, when the record's kind is 6, or when the cargo loop marked it. The mark is
+  the passenger's B4 birth stamp + 1, taken at `0x486810` just after the loop's hit when the
+  passenger is pending death, so it holds for that incarnation alone; the decision consumes it and
+  the unit array's allocation empties every one.
+- **One byte per slot, for one destructor call.** Every destructor call this build makes goes
+  through `tx_wrap`: `Send_UnitDeath`'s at `0x486679` and the `0x4C`'s (B4's `doDeath`). It reads the
+  record's index before the call and clears the byte after; the pick at `0x49B017` reads it by the
+  slot of the unit it is given.
+- **Kill-all (`0x486F10`) draws a token.** Its branch for a player that is not local detonates
+  each unit at once and then destroys it, in slot order, so a transport earlier in the block has
+  detached its passengers before their turn. The site jumps to `tx_kill_all`: the outermost
+  kill-all on a thread draws a token from an interlocked counter into a TLS slot, the cargo loop
+  marks each keyed passenger it detaches with it, and the pick honours a mark only inside the
+  kill-all that wrote it. The state is the thread's own because the removal's kill-all runs on
+  whichever thread pumps: the pump holds no lock, and during a network load both the loader and
+  the game thread run it. A mark left behind matches no later kill-all until the 32-bit counter has turned, so nothing is
+  emptied.
+- **Inside kill-all, a departed player's units are detached without the broadcast (`0x4867CB`,
+  `0x48681D`).** The detach wrapper `0x48AAC0` sends its `0x0A` from whichever peer runs it, and
+  every remaining peer runs the removal's kill-all on its own copy; with three peers or more the
+  first to do it detached the passengers on the others first, and they drew stock's weapon. Found
+  by the two-peer `+kill` run, where the host's broadcast detached the joiner's second passenger
+  before its death; the owner chose the fix over documenting it [DECIDED 2026-09-26]. The
+  destructor detaches twice: a transport's passengers in its cargo loop (`0x48681D`), and its own
+  unit when that unit is carried (`0x4867CB`), which is how a passenger earlier in the block than
+  its transport leaves it. Both go through one stub, and the player tested is the dying unit's.
+  Only for a unit whose player is not local, only inside kill-all: the owner's own units broadcast
+  as stock.
+- **On the wire: `m[19]` of B8's `0x4C`.** The owner's decision is copied as the record leaves
+  (`kill_tx_death`). A receiver arms it for the destructor call the `0x4C` makes; its own `+0x86`
+  cannot say it, since the transport's `0x4C`, sent first, has already detached the passenger
+  there. A `0x4C` refused in state 5 whose copy B5 marks dying leaves the decision as a mark on the
+  copy's exact stamp, for `tx_arm` when the unit tick destroys it.
+- **The fold** at `0x42B019`: each key whose name is a weapon section of the loaded weapon TDFs
+  XORs in that section's stored CRC, XORed with its own constant and rotated by its own count, so a
+  key naming the same weapon as `ExplodeAs` cannot cancel stock's term. A key naming no section
+  folds nothing.
+- **Seventeen rows in the fail-closed table** (`fix_transported`), both builds: eight sites and
+  nine compared spans. 282 sites install on the raised build with B8 and B9.
+- **Measured** on the new build, on a private Xvfb. The fixture is `tools/datakeys_fixture.py`
+  (`TXCOM1` with both keys, `TXCOME` with `TransportedExplodeAs` only, `TXNONE` naming no weapon,
+  `TXBIG` at 32 000 HP; `TX_BLAST_E` 111 and `TX_BLAST_S` 222 to anything within its area of
+  2000; the towers `TXRL`, `TXRL2`, `TXLLT2`; `--tx-damage` makes another peer's TDF).
+  - **A transport shot down** (`scenarios/c4-transport-down.json`, an AI tower downing an ATLAS
+    flown over it): each of the keyed passenger's two ring Krogoths lost exactly 111 and the tower
+    111; the unkeyed control took stock's `COMMANDER_BLAST` (7 530 on the nearer ring Krogoth); the build before gave
+    the keyed case stock's blast, which destroyed the tower. Re-run on the merged tree: the same.
+  - **A transport self-destructed** (`c4-transport-selfd.json`, click then `keys <i> mouse:600,500
+    ctrl+d`): `TXCOM1`'s ring lost 222 each (`TX_BLAST_S`); `TXCOME`, with no
+    `TransportedSelfDestructAs`, was decided carried and exploded as its stock `SelfDestructAs`.
+  - **A passenger that outlives its transport** (`c4-survivor.json`): `TXBIG` came down with 2 066
+    HP, detached and unmarked; killed later on the ground it took stock's blast (7 559), and a
+    `TXCOM1` killed uncarried did too.
+  - **Two peers** (`c4-mp-host.json`, `c4-mp-join.json`): the joiner's ATLAS, downed by the host's
+    tower, killed its passenger on the joiner (its ring: 111 each); the host logged `a carried death
+    received` and drew `TX_BLAST_E`, and its received-death and received-`0x0C` counts agreed (2
+    and 2). The joiner's surrender then killed its army itself: the second passenger died in its
+    transport's cargo loop, carried, and both peers drew `TX_BLAST_E`.
+  - **Kill-all's local branch** (`c4-kill-all.json`, single player, the console's `+kill 1` for
+    the AI): the passenger, marked in the cargo loop, exploded `TX_BLAST_S` and took 222 from each
+    ring Krogoth, on the build before the review's fixes, after them and merged with B10, whenever
+    the pair was still near its start at the kill. The AI flies its own ATLAS about, so a run can
+    find its passenger unloaded (a stock blast) or its blast out of the ring's reach
+    ([engine map](../exe-reverse-engineering.html), *What the tests measured*, in the C4 section).
+  - **Kill-all's non-local branch, three peers** (`c4-mp-removal.json`): with the joiner frozen,
+    one peer's `+kill` for it logged both passengers detached inside kill-all and without the
+    broadcast; the third peer's copies stayed carried and its `0x0A` count did not move; its own
+    `REJECT` on TIMEOUT.GUI, the engine's removal, then detonated both as `TX_BLAST_S`. On two
+    peers before the fix, the same `+kill` had detached one passenger on the joiner first. After
+    the review, with one pair in each slot order, the host's `REJECT` removed the joiner on both
+    remaining peers: each applied both detaches locally (the cargo loop's, and `0x4867CB` for the
+    passenger below its ATLAS), detonated both passengers as `TX_BLAST_S`, and the third peer's
+    received `0x0A` count stayed at 2.
+  - **The fold**: `CRC_weapons` of `TXCOM1` reads `0xB71E6070` with `TX_BLAST_E` at 111 and
+    `0xCF066848` at 112 (`TXCOME`: `0x18B7ADE0`, `0x60AFA5D8`); the unkeyed control reads 0; the
+    build before read 0 for all. On two peers with the joiner's TDF at 112, exactly the three keyed
+    types (`TXCOM1`, `TXCOME`, `TXBIG`) left the game on both (322 of 325); `TXNONE` stayed; with the
+    same TDF on both, `TXCOM1` played on both peers (the runs above).
+- **Not covered.**
+  - A unit killed through its transport's deck (`ARMTSHIP`) was not run; it is the `+0x86` case,
+    which the network hits did run.
+  - A carried `0x4C` refused while the receiver loads (`tx_rx_swept`) was not run: it needs a death
+    inside B5's catch-up window.
+  - A departure that DirectPlay reports (a lobbied session's keepalive) was not run; TIMEOUT.GUI's
+    `REJECT` calls the same removal.
+  - A removal during a network load, where the loader thread runs the kill-all, was not run; the
+    token makes that kill-all's state its thread's own by construction.
 
 ## Handed to other groups
 

@@ -1,0 +1,153 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C4, a transport shot down with a keyed passenger, on Show Down. k: an ATLAS loads TXCOM1 (TransportedExplodeAs=TX_BLAST_E) at (800, 700); once it is aboard (the commander's +0x86 names the ATLAS), `tacli order --unit N --expect ARMATLAS move pos 800 1600` flies it toward k_gun, the AI's tower at (800, 1600), which downs it on the way (TX_AA: 1000 to the ATLAS, 1 to a commander); the ATLAS's cargo loop kills the commander with kind 6, a carried death: TX_BLAST_E, 111. c: the same at x 4300 with VTCOM0, no key: stock's COMMANDER_BLAST. Each ring is two unarmed CORKROGs (29 918 HP) 260 either side of the load site: read their HP (+0x108) before and after. TX_BLAST_E takes 111 and TX_BLAST_S 222 from anywhere within 2000; stock's COMMANDER_BLAST takes thousands within 950. The cases are 3500 apart. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2550,
+    2050
+   ]
+  },
+  {
+   "id": "k_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    800,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "k_com"
+    }
+   ]
+  },
+  {
+   "id": "k_com",
+   "type": "TXCOM1",
+   "owner": 0,
+   "pos": [
+    800,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "k_gun",
+   "type": "TXRL",
+   "owner": 1,
+   "pos": [
+    800,
+    1600
+   ]
+  },
+  {
+   "id": "k_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    540,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "k_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1060,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "c_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    4300,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "c_com"
+    }
+   ]
+  },
+  {
+   "id": "c_com",
+   "type": "VTCOM0",
+   "owner": 0,
+   "pos": [
+    4300,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "c_gun",
+   "type": "TXRL",
+   "owner": 1,
+   "pos": [
+    4300,
+    1600
+   ]
+  },
+  {
+   "id": "c_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    4040,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "c_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    4560,
+    700
+   ],
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "at": [
+   800,
+   900
+  ]
+ }
+}

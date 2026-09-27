@@ -1,0 +1,135 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C4, a transport's self-destruct with a keyed passenger, on Show Down. s: an ATLAS loads TXCOM1 at (800, 700) and self-destructs (select it, then `keys <i> ctrl+d ctrl+d`: a keys call drops its first token); its cargo loop hits the commander with kind 3, a carried self-destruct: TransportedSelfDestructAs=TX_BLAST_S, 222. e: the same at x 4300 with TXCOME, which has TransportedExplodeAs alone, so its carried self-destruct is stock's SelfDestructAs. Each ring is two unarmed CORKROGs (29 918 HP) 260 either side of the load site: read their HP (+0x108) before and after. TX_BLAST_E takes 111 and TX_BLAST_S 222 from anywhere within 2000; stock's COMMANDER_BLAST takes thousands within 950. The cases are 3500 apart. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2550,
+    2050
+   ]
+  },
+  {
+   "id": "s_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    800,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "s_com"
+    }
+   ]
+  },
+  {
+   "id": "s_com",
+   "type": "TXCOM1",
+   "owner": 0,
+   "pos": [
+    800,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "s_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    540,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "s_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1060,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "e_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    4300,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "e_com"
+    }
+   ]
+  },
+  {
+   "id": "e_com",
+   "type": "TXCOME",
+   "owner": 0,
+   "pos": [
+    4300,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "e_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    4040,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "e_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    4560,
+    700
+   ],
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "at": [
+   800,
+   900
+  ]
+ }
+}

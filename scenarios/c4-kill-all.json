@@ -1,0 +1,125 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C4, kill-all on a loaded transport, on Show Down. a: the AI's ATLAS loads its TXCOM1 at (2000, 700), the ATLAS listed first so it takes the lower slot and kill-all reaches it before its passenger; p: the same for the player at (3200, 700). With `tacli switches <i> cheats=on`, the chat line `+kill 1` runs kill-all 0x486F10 for the AI and `+kill 0` for the player (the console command Kill, 0x4164DF): a player whose record is not local takes the branch that detonates each unit at once, so the ATLAS's destructor detaches the passenger before its turn and only C4's kill mark says it was carried; a local player's units are hit with 30 000 of kind 3 and die through the reaper. Either way the passenger is a carried self-destruct: TX_BLAST_S, 222 to each of a's ring (the player's two unarmed VTKROG0, 260 either side) when this peer computes the blast. Content: tools/datakeys_fixture.py into the instance's gamedir. The AI flies its own ATLAS about and may unload it: read the pair's positions and +0x86 right before the kill, or the blast lands elsewhere (or uncarried).",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true,
+   "cheats": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2550,
+    2050
+   ]
+  },
+  {
+   "id": "keep_me",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    4400,
+    2050
+   ]
+  },
+  {
+   "id": "a_atlas",
+   "type": "ARMATLAS",
+   "owner": 1,
+   "pos": [
+    2000,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "a_com"
+    }
+   ]
+  },
+  {
+   "id": "a_com",
+   "type": "TXCOM1",
+   "owner": 1,
+   "pos": [
+    2000,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "a_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1740,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "a_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    2260,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "p_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    3200,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "p_com"
+    }
+   ]
+  },
+  {
+   "id": "p_com",
+   "type": "TXCOM1",
+   "owner": 0,
+   "pos": [
+    3200,
+    700
+   ],
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "at": [
+   2000,
+   900
+  ]
+ }
+}

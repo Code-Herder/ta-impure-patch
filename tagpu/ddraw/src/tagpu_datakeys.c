@@ -74,6 +74,9 @@ typedef struct DkUnit {
                                own instructions for this type                 */
     unsigned char  vrate_on;/* VeterancyAccuracyBuffRate= accepted           */
     unsigned short vrate;   /* 0 = no accuracy buff                           */
+    unsigned short txw[2];  /* TransportedExplodeAs=, TransportedSelfDestructAs=:
+                               the named weapon's ID, 0 = absent or naming no
+                               loaded weapon (stock's for that death)         */
 } DkUnit;
 
 static DkUnit   s_unit[TAGPU_LIM_TYPES];
@@ -84,6 +87,7 @@ static void unit_clear(DkUnit* r)
     free(r->pp);
     r->pp = NULL; r->pp_n = 0;
     r->vthr_n = 0; r->vrate_on = 0; r->vrate = 0;
+    r->txw[0] = r->txw[1] = 0;
 }
 
 /* THE COB'S LENGTH, which the loaded script does not carry. 0x4B2450 reads
@@ -351,6 +355,33 @@ static void read_veterancy(DkUnit* r, void* sec)
     }
 }
 
+/* TransportedExplodeAs= and TransportedSelfDestructAs= (section 7), each
+   resolved to its weapon's ID with the loader's own resolver 0x49E5B0, the one
+   that resolves ExplodeAs later in this same call (0x42CEA8): the weapons are
+   loaded before the units, so a name means here what it means there. A key
+   whose value is empty is absent, as in TADR. */
+typedef void* (__stdcall *PFN_WeaponByName)(const char* name);
+#define E_WeaponByName ((PFN_WeaponByName)0x0049E5B0u)
+static const char* const TX_KEY[2] = { "TransportedExplodeAs", "TransportedSelfDestructAs" };
+
+static void read_transported(DkUnit* r, void* sec)
+{
+    char v[DK_VALUE_CAP], nm[33];
+    int k, id;
+    for (k = 0; k < 2; k++) {
+        v[0] = 0;
+        if (!E_TdfGetStr(sec, v, TX_KEY[k], DK_VALUE_CAP, "") || !v[0]) continue;
+        fbi_name(sec, nm, (int)sizeof nm);
+        id = tagpu_limits_weapon_index(E_WeaponByName(v));
+        if (id < 1) {
+            dlog("%s: %s=%.64s names no loaded weapon; the type keeps stock's", nm, TX_KEY[k], v);
+            continue;
+        }
+        r->txw[k] = (unsigned short)id;
+        dlog("%s: %s=%.64s, weapon ID %d", nm, TX_KEY[k], v, id);
+    }
+}
+
 static void __cdecl fbi_at_read(const unsigned int* regs)
 {
     const char* def = (const char*)(size_t)regs[2];      /* ebp */
@@ -369,6 +400,7 @@ static void __cdecl fbi_at_read(const unsigned int* regs)
     if (r->def != def) return;
 
     read_veterancy(r, sec);
+    read_transported(r, sec);
 
     v[0] = 0;
     if (!E_TdfGetStr(sec, v, "PreviewPieces", DK_VALUE_CAP, "")) return;
@@ -451,7 +483,8 @@ int tagpu_datakeys_units_install(void)
     }
     s_unitsState = 1;
     dlog("the unit keys read at 0x42BF40 and 0x42BF97 (PreviewPieces=, VeterancyThresholds=, "
-         "VeterancyAccuracyBuffRate=), emptied at 0x42D2E0");
+         "VeterancyAccuracyBuffRate=, TransportedExplodeAs=, TransportedSelfDestructAs=), "
+         "emptied at 0x42D2E0");
     return 1;
 }
 
@@ -1654,13 +1687,14 @@ int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
    0x438650's callers are the reclaim order 0x40483D and the build order's
    reclaim 0x414C86), read of the RECLAIMER: L + 1 for 0x4386B9, stock's
    being (kills + 5) / 5.
-   THE BOUND: 0x4386B9..0x4386C3 multiply the workertime, this factor, the
-   target's MaxHitPoints (def +0x1FA) and the ticks between steps in 32 bits,
-   and 0x4386CC reads the product unsigned, so a factor past what the product
-   holds wraps the step to a fraction of itself (ARMCOM's 300 on a CORKROG
-   wraps at 32). The factor is held to the largest that fits. A product that
-   does not fit at 1 is the engine's own at a recruit's factor, and the
-   answer is 1.
+   THE HOLD: the factor is held to the largest for which the workertime, the
+   factor, the target's MaxHitPoints (def +0x1FA) and the ticks between steps
+   multiply to below 2^32, the product stock's 0x4386B9..0x4386C3 take in 32
+   bits (ARMCOM's 300 on a CORKROG wraps at 32). A product that does not fit
+   at 1 is the engine's own at a recruit's factor, and the answer is 1.
+   B10 (tagpu_patches.c, fix_reclaim_wrap) takes that product in 64 bits in
+   both builds, so the hold caps a keyed veteran's step below its formula;
+   releasing it is open for the owner (sim-fixes.md, B10).
    Called with the engine's x87 stack live (tagpu_patches.c, fix_veterancy): integer code only. */
 int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u, unsigned workertime,
                                               unsigned maxhp, unsigned ticks)
@@ -1780,4 +1814,95 @@ static void vet_panels_install(void)
         return;
     }
     dlog("veterancy: both kill lines name the level, \"VetN\" (0x46B306, 0x467CCF)");
+}
+
+/* =========================================================================
+   7. Transported explosions (C4)
+   ========================================================================= */
+
+/* TADR's meaning: a unit that dies carried explodes with TransportedExplodeAs=
+   in place of ExplodeAs, or with TransportedSelfDestructAs= in place of
+   SelfDestructAs when its death is a self-destruct (0x49B000's `selfd`, the
+   death's kind 3). The two keys are independent, and one that is absent or
+   names no loaded weapon leaves stock's for its case. Whether a death is
+   carried is decided in tagpu_patches.c (fix_transported), which asks these
+   on the GAME thread; a type without either key reads 0 and NULL. */
+#define DK_WEAPON_REC 0x115
+
+int tagpu_datakeys_tx_keyed(const char* u)
+{
+    const DkUnit* r = vet_row(u);
+    return r && (r->txw[0] || r->txw[1]);
+}
+
+/* the stored ID is bounded to the weapon array before it becomes an address */
+const char* tagpu_datakeys_tx_weapon(const char* u, int selfd)
+{
+    const DkUnit* r = vet_row(u);
+    const char* w0 = tagpu_limits_weapon0();
+    unsigned id;
+    if (!r || !w0) return NULL;
+    id = r->txw[selfd ? 1 : 0];
+    if (!id || id >= TAGPU_LIM_WEAPONS) return NULL;
+    return w0 + id * DK_WEAPON_REC;
+}
+
+/* THE FOLD. The lobby's per-type sync covers a unit's FBI file (+0x13E) and,
+   through CRC_weapons (def+0x146), the TDF sections its weapon1..3, ExplodeAs
+   and SelfDestructAs name: the menu-time loader 0x42A8D0 XORs each named
+   section's stored CRC in (0x42AF23..0x42B019). A section a C4 key names is in
+   neither, so two peers whose TDF for that weapon differs, or a peer without
+   this build, would pass the lobby and play the type's carried blast
+   differently. So at 0x42B019, where the loader stores its last fold, each key
+   that names a section folds that section's CRC in too, through a mix of its
+   own, so that neither cancels the other or a stock fold of the same weapon. A
+   key that names no section folds nothing: it changes nothing on any peer.
+   MAIN thread, the menu-time load; integer only. */
+typedef char* (__thiscall *PFN_TdfValue)(void* tdf, const char* key);
+typedef void  (__thiscall *PFN_TdfRewind)(void* ctx);
+typedef int   (__thiscall *PFN_TdfSection)(void* ctx, const char* name);
+#define E_TdfValue   ((PFN_TdfValue)0x004C4630u)
+#define E_TdfRewind  ((PFN_TdfRewind)0x004C3E10u)
+#define E_TdfSection ((PFN_TdfSection)0x004C3410u)
+#define WTDF_BASE    (*(char* const*)0x005122A0u)   /* the weapon TDFs, 12-byte contexts */
+#define WTDF_COUNT   (*(const int*)0x005122A4u)
+
+/* the stored CRC of weapon section `name`, found as the stock folds find it
+   (0x42AFC6..0x42AFFD): the first weapon-TDF context that holds the section,
+   whose +4 is then that section and +0x25 its CRC */
+static int wtdf_crc(const char* name, unsigned* crc)
+{
+    char* ctx = WTDF_BASE;
+    int i, n = WTDF_COUNT;
+    if (!ptr_ok(ctx)) return 0;
+    for (i = 0; i < n; i++, ctx += 0xC) {
+        E_TdfRewind(ctx);
+        if (E_TdfSection(ctx, name)) {
+            *crc = *(const unsigned*)(*(char* const*)(ctx + 4) + 0x25);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static unsigned s_txFolded;
+
+unsigned __stdcall tagpu_datakeys_tx_fold(unsigned crc, void* tdf)
+{
+    static const unsigned mix[2] = { 0x7F4A7C15u, 0x94D049BBu };
+    static const unsigned rot[2] = { 11u, 23u };
+    unsigned c, n;
+    int k, folded = 0;
+    for (k = 0; k < 2; k++) {
+        const char* v = E_TdfValue(tdf, TX_KEY[k]);
+        if (!v || !*v || !wtdf_crc(v, &c)) continue;
+        c ^= mix[k];
+        crc ^= (c << rot[k]) | (c >> (32u - rot[k]));
+        folded = 1;
+    }
+    if (folded) {
+        n = ++s_txFolded;
+        if ((n & (n - 1)) == 0) dlog("transported: a type's keys folded into its sync (%u so far)", n);
+    }
+    return crc;
 }

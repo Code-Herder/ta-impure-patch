@@ -88,6 +88,27 @@ every hit whole -- past the HP word, where stock's wrap reads it as -536 and the
 
 Both maps set MeteorRadius=2800, MeteorDensity=400, MeteorDuration=35 (Flooded Glaciers' shower)
 and MeteorInterval=20, and drop Show Down's useonlyunits. Spawned by scenarios/c2-nomapalert.json.
+
+C4, transported explosions: unarmed ARM Commanders under new names, carried by the stock ARMATLAS,
+with blasts that read straight off a CORKROG's health (COMMANDER_BLAST's look at area 2000 and edge
+effectiveness 1, so every unit within 2000 takes the whole amount wherever the transport falls;
+stock's COMMANDER_BLAST is 9999 over 950 at edge effectiveness 0.75):
+
+    TXCOM1    TransportedExplodeAs=TX_BLAST_E (252, 111) and TransportedSelfDestructAs=TX_BLAST_S
+              (253, 222)
+    TXCOME    TransportedExplodeAs=TX_BLAST_E alone: a carried self-destruct is stock's
+    TXNONE    TransportedExplodeAs=TX_NO_SUCH, which names no weapon: refused at load
+    TXBIG     TXCOM1's keys at MaxDamage 32000, so it lives through its transport's 30 000
+
+and three towers for the AI, which fire at what is flown or placed near them (a tower of the
+player's own takes no `attack unit` against the player's ATLAS; an aircraft is hit well past a
+weapon's range): TXRL with TX_AA
+(254), ARMRL_MISSILE dealing 1000 but 1 to the commanders, so the ATLAS dies and its passenger
+lives until its transport's cargo loop kills it; TXRL2 with TX_AA2 (255), dealing 1 but 65 000
+to the commanders, so the passenger dies in a transport that lives; TXLLT2 with TX_LAS2 (229),
+ARM_LIGHTLASER at range 200 with TX_AA2's damage, for a commander on the ground. VTCOM0 is the unkeyed
+control. `--tx-damage N` writes TX_BLAST_E with N instead of 111: a second peer's TDF
+for the same name, for the sync fold (def+0x146 of TXCOM1 differs, VTCOM0's does not).
 """
 
 import argparse
@@ -292,6 +313,44 @@ def veterancy(tree, gd):
     return len(tdf), len(keyed) + len(unarmed)
 
 
+def damage(body, default, per):
+    """the weapon body with its [DAMAGE] block replaced: `default` and the {unit: amount} entries"""
+    head, rest = body.split("[DAMAGE]", 1)
+    tail = rest[rest.index("}") + 1:]
+    lines = "".join(f"\t\t{k}={v};\r\n" for k, v in dict(default=default, **per).items())
+    return f"{head}[DAMAGE]\r\n\t\t{{\r\n{lines}\t\t}}{tail}"
+
+
+def transported(tree, gd, tx_damage):
+    """C4's keyed commanders, their blasts and the two towers that bring a transport down"""
+    ta = hpipack.Archive(gd / "totala1.hpi")
+    text = "\n".join(ta.read(n).decode("latin-1") for n in ta.files if n.startswith("weapons/"))
+    blast, aa = section(text, "COMMANDER_BLAST"), section(text, "ARMRL_MISSILE")
+    las = section(text, "ARM_LIGHTLASER")
+    area = {"areaofeffect": 2000, "edgeeffectiveness": 1}
+    coms = ("TXCOM1", "TXCOME", "TXNONE", "TXBIG", "VTCOM0")
+    tdf = [weapon(blast, "TX_BLAST_E", 252, area, damage=tx_damage),
+           weapon(blast, "TX_BLAST_S", 253, area, damage=222),
+           damage(weapon(aa, "TX_AA", 254, {}), 1000, {c: 1 for c in coms}),
+           damage(weapon(aa, "TX_AA2", 255, {}), 1, {c: 65000 for c in coms}),
+           damage(weapon(las, "TX_LAS2", 229, {"range": 200}), 1, {c: 65000 for c in coms})]
+    hpipack.insert(tree, "weapons/datakeys_tx.tdf", "\r\n".join(tdf).encode("latin-1"))
+    com, rl, llt = (ta.read(f"units/{u}.fbi").decode("latin-1") for u in ("armcom", "armrl", "armllt"))
+    units = {"TXCOM1": (com, {}, {"TransportedExplodeAs": "TX_BLAST_E",
+                                  "TransportedSelfDestructAs": "TX_BLAST_S"}),
+             "TXCOME": (com, {}, {"TransportedExplodeAs": "TX_BLAST_E"}),
+             "TXNONE": (com, {}, {"TransportedExplodeAs": "TX_NO_SUCH"}),
+             "TXBIG": (com, {}, {"TransportedExplodeAs": "TX_BLAST_E",
+                                 "TransportedSelfDestructAs": "TX_BLAST_S", "MaxDamage": 32000}),
+             "TXRL": (rl, {1: "TX_AA"}, {}), "TXRL2": (rl, {1: "TX_AA2"}, {}),
+             "TXLLT2": (llt, {1: "TX_LAS2"}, {})}
+    for name, (fbi, weapons, keys) in units.items():
+        stock = {id(com): "armcom", id(rl): "armrl", id(llt): "armllt"}[id(fbi)]
+        hpipack.insert(tree, f"units/{name.lower()}.fbi", armed(fbi, name, weapons, keys))
+        hpipack.insert(tree, f"scripts/{name.lower()}.cob", ta.read(f"scripts/{stock}.cob"))
+    return len(tdf), len(units)
+
+
 def menu(builder, page, button, name):
     return (f"[MENUENTRY1]\r\n\t{{\r\n\tUNITMENU={builder};\r\n\tMENU={page};\r\n"
             f"\tBUTTON={button};\r\n\tUNITNAME={name};\r\n\t}}\r\n").encode("latin-1")
@@ -300,6 +359,8 @@ def menu(builder, page, button, name):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out", type=Path)
+    ap.add_argument("--tx-damage", type=int, default=111,
+                    help="TX_BLAST_E's damage (111): another value is another peer's TDF")
     a = ap.parse_args()
 
     gd = gamedir()
@@ -323,10 +384,12 @@ def main():
     nw, nu = weapon_keys(tree, gd)
     nw += weather(tree, gd)
     vw, vu = veterancy(tree, gd)
+    tw, tu = transported(tree, gd, a.tx_damage)
 
     data = hpipack.build(tree)
     a.out.write_bytes(data)
-    print(f"{a.out}: {len(clones) + nu + vu} units, {nw + vw} weapons, 3 maps, {len(data)} bytes")
+    print(f"{a.out}: {len(clones) + nu + vu + tu} units, {nw + vw + tw} weapons, 3 maps, "
+          f"{len(data)} bytes")
 
 
 if __name__ == "__main__":

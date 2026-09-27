@@ -81,6 +81,17 @@ int tagpu_datakeys_vet_reload_level(const char* unit);
 /* the damage-taken level, keyed or stock's */
 unsigned tagpu_datakeys_vet_taken_level(const char* unit);
 
+/* Transported explosions (C4): TransportedExplodeAs= and
+   TransportedSelfDestructAs=, read into the unit-key records and resolved to
+   weapon IDs at load. GAME thread: whether the unit's type carries either key,
+   and the weapon its carried death explodes with (NULL = stock's, the key
+   absent for that case). MAIN thread, the menu-time loader's last fold
+   (0x42B019): CRC_weapons with the keys' weapon sections folded in. The sites
+   are in the fail-closed table (tagpu_patches.c, fix_transported). */
+int tagpu_datakeys_tx_keyed(const char* unit);
+const char* tagpu_datakeys_tx_weapon(const char* unit, int selfd);
+unsigned __stdcall tagpu_datakeys_tx_fold(unsigned crc, void* tdf);
+
 /* DLL attach, before the fail-closed table is written: the unit-key reader
    (0x42D2E0, 0x42BF40, 0x42BF97; and the COB checksum 0x4B6BA0 for the ghost
    mask). 1 when armed. Asked again, it answers the first call's result. */
