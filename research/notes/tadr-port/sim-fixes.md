@@ -1410,9 +1410,8 @@ scenario `kills` column), then on the new one:
 **Not covered, and left as they are:**
 
 - Every peer still runs its own shower, so a network game of N players rains N showers.
-- Kill counts differ between peers in stock (the victim's owner counts a kill of its unit on its
-  copy of the killer; the killer's own copy does not). Found by C3's two-peer run; a new question
-  for B.
+- Kill counts can differ between peers in stock: every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer. Found by C3's two-peer run;
+  measured for B8 below.
 - A unit reclaim's step wraps in stock as well: `0x438650` multiplies the workertime, the factor
   `(kills + 5)/5`, the target's MaxHitPoints and 15 in 32 bits, so ARMCOM reclaiming a CORKROG from
   155 kills takes a sliver of its step. C3 bounds the keyed factor only; stock's is a new question
@@ -1465,9 +1464,10 @@ measured.
 - A stock-fix claim in the Delphi recorder, inactive for stock content and not yet verified: a
   ground transport's overload (`0x406789`) (evidence Part 4 §7). Its other claim, a veteran's
   damage reduction scaling the kill damage (`0x489C2F`), is B7's kill-outright.
-- Kill counts differ between peers: a kill of another peer's unit is counted on the victim's
-  owner's copy of the killer, not on the killer's own (MEASURED by C3, 2026-09-26; the engine map's
-  *The kill increment*). Veterancy, stock's and C3's, reads the computing peer's copy.
+- Kill counts can differ between peers: every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer (*Kill counts across peers*, above; the
+  engine map's *The kill count reads this peer's copy of the victim*). How often a factory-built
+  unit dies in that window in play is not measured. Veterancy, stock's and C3's, reads the
+  computing peer's copy.
 - Where stock acquisition stops aiming a flak gun upward. B1 measured that it never aimed above
   29.6°, far from the zero band, but did not disassemble the cut-off.
 

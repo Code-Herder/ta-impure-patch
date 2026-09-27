@@ -1161,7 +1161,7 @@ skirmish, compare `+0xB8` of every live unit on both.]
   copies the packet's 12-byte vectors (`0x49D30C..0x49D31C`). It never calls the fire method, so
   the spread is rolled once, on the firer, with that peer's RNG (`0x4B6C30`).
 - **Capture.** The capture order runs on the capturer's owner's peer and reads the target's kills
-  as that peer counts them; kill counts differ between peers (below, *What this part did not
+  as that peer counts them; kill counts can differ between peers (below, *What this part did not
   establish*).
 
 **A mixed build therefore never desyncs through veterancy.** It applies different rules to
@@ -1492,9 +1492,9 @@ previous build (a scratch checkout, `--keep-dll`) with the new one:
 
 Kill-outright: a (b) unit at 30 levels self-destructs, is carried in a transport that is shot down,
 and belongs to a defeated player, and **must die** every time. Two peers (`a2net0`/`a2net1`):
-after a paused fight, every unit's `+0xB8` is equal on both. [MEASURED 2026-09-26: it is not, in
-stock — a kill of another peer's unit is counted on the victim's owner's copy of the killer; see
-*What this part did not establish*.]
+after a paused fight, every unit's `+0xB8` is equal on both. [MEASURED 2026-09-26: not always, in
+stock — a unit killed before the other peers' copies of it read `+0x104` = 0.0 is counted only on
+its owner's copy of the killer; see *What this part did not establish*.]
 
 #### Questions for the owner
 
@@ -1683,11 +1683,10 @@ syncs clean; the new one drops the type.
 
 ### What this part did not establish
 
-- **Kill counts are not equal on every peer** [MEASURED by C3, 2026-09-26, two peers]: a kill of
-  another peer's unit is counted on the victim's owner's copy of the killer and not on the killer's
-  own (a host tower's copy stayed at 10 through two kills of the joiner's units; the joiner's copy
-  counted 2). `+0x104` read 0.0 on both copies, so the attacker fields `+0xF0`/`+0xF4` decide
-  [INFERRED]. A stock defect, open for section B.
+- **Kill counts are not always equal on every peer** [MEASURED by C3 and for B8, 2026-09-26]:
+  every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer (a host tower's copy stayed at 10 through two kills of the joiner's
+  scenario-created units; the joiner's copy counted 2). A stock defect, open for section B
+  ([sim-fixes.md](sim-fixes.md), *Kill counts across peers*).
 - **A hit above 32 767 does reach the HP word** [MEASURED, B7]: the D-gun of a commander at level 2
   or more. Fixed by B7.
 - The roles of damage kinds 4, 5 and 9, and of `0x46A860`. In the capture order `+0x3A` holds the

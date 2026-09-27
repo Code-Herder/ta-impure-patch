@@ -19320,8 +19320,7 @@ the radar rebuild, the panels' draw. The render thread reads none of it.
 **Not covered.**
 
 - The second kill line (`0x467CB0`, no direct caller) was not seen drawn in play.
-- A unit's kills are not the same on two peers in stock: a kill of another peer's unit is counted on
-  the victim's owner's copy of the killer. Veterancy reads the copy of the peer that computes the
+- A unit's kills are not always the same on two peers in stock: every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer. Veterancy reads the copy of the peer that computes the
   effect, as stock's own levels do. Not fixed here; a section-B question.
 - Every peer still runs its own meteor shower, so a network game rains N showers where a
   single-player game rains one. B7 makes each stone hit once; how many showers fall is unchanged.

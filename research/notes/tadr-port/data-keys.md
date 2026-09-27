@@ -427,10 +427,9 @@ commit can change.
     peer's Krogoth took 160 there (computed on the firer's peer, applied on the owner's).
 - **Not covered.**
   - The second kill line (`0x467CB0`, no direct caller) was not seen drawn.
-  - **Kill counts differ between peers, in stock.** A kill of another peer's unit is counted on the
-    victim's owner's copy of the killer, not on the killer's own: the host's copy of its tower stayed
-    at 10 through two kills of the joiner's units while the joiner's copy counted 2 (the build before
-    C3; the same on C3's, where the joiner's copy reached 3). Each effect reads the copy of the
+  - **Kill counts can differ between peers, in stock:** every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer. C3's two-peer run met it:
+    the host's copy of its tower stayed at 10 through two kills of the joiner's scenario-created
+    units while the joiner's copy counted 2 (the build before C3; 3 on C3's). Each effect reads the copy of the
     peer that computes it, as stock's own levels do, so a veteran's level in a network game depends
     on which peer applies the effect. A stock defect for section B, reported to the owner; the
     evidence pass's "kills equal on two peers" does not hold.
@@ -447,7 +446,7 @@ commit can change.
 - **Section B, as B7:** the four stock defects the veterancy survey found (a hit past the HP word,
   kill-outright sparing veterans, the radar's NULL read at `0x4673B1`, a meteor hitting once per
   peer) landed with C3; their record is B7 in [B's plan](sim-fixes.md).
-  The kill counts that differ between peers are a new question for B, not fixed.
+  The kill counts that can differ between peers are B's question ([B8's measurement](sim-fixes.md)), not fixed.
 
 ## Open questions
 

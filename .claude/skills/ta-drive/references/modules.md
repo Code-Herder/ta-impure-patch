@@ -128,13 +128,15 @@ tools/mp_leave.sh h1                                 # surrender -> main menu; a
   it, so compare against the owning peer (the one where the unit is owner 0) and scale the
   tolerance by the unit's speed; the pause itself lands a few ticks apart (`GameTime`,
   `*511DE8+38A47:4`). **HP lives on the owning peer only**: a peer reads 0 in a remote unit's
-  `+0x108` (and 1.0 in `+0x104`) whatever it has taken, so read a unit's HP where it is owner 0;
+  `+0x108` whatever it has taken (and 1.0 in `+0x104` until the owner's round robin writes it,
+  26–37 s after a create), so read a unit's HP where it is owner 0;
   the firer's peer computes a hit and sends it to the owner as a `0x0B`. Tab opens the options
   panel and does not pause a network game.
-- **Kill counts differ between peers.** A kill of another peer's unit is counted on the victim's
-  owner's copy of the killer; the killer's own copy does not change. Read a unit's kills where it
-  is owner 0 and expect another peer to disagree. A scenario's `kills` is set only on the peer that
-  applies it.
+- **Kill counts can differ between peers.** A peer counts a kill only when its own copy of the
+  victim reads `+0x104` = 0.0, and another peer's copy of a new unit reads 1.0 for 26–37 s after
+  its create, so a unit killed sooner (a scenario's victims, typically) counts only on its owner's
+  peer. Wait that long, or read kills on every peer. A scenario's `kills` is set only on the peer
+  that applies it.
 - **Stale hits: a hit names its victim by slot.** To make one land on a reused slot, arm
   `dmgdelay.on=30` on every peer (the attacker's are the hits delayed, and a receiver counts
   `young` only while armed), apply

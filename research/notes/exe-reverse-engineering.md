@@ -3612,13 +3612,12 @@ damage steps through `0x489BB0` every half second, so the target's own taken lev
 - **`+0xF0`/`+0xF4` have two writers that matter**: the hit's apply `0x489CE0` (`0x489DBA`,
   `0x489DC0`, only for a hit with an attacker, on the peer that applies it), and the death's
   receive (`0x486778` from the death record's `+7`, `0x486787` from `0x44FE40([rec+3])`).
-- **MEASURED 2026-09-26, two peers:** kills of another peer's units are counted on the VICTIM's
-  owner's copy of the killer, not on the killer's own: a host tower's own copy stayed at 10 through
-  two kills of the joiner's units while the joiner's copy counted 0 → 2 (the pre-C3 build); on the
-  C3 build the joiner's copy reached 3. `+0x104` read 0.0 on both peers' copies, so the other two
-  conditions decide [INFERRED: which one, not traced]. Every level-reading effect reads the copy of
-  the peer that runs it, so a veteran's level depends on which peer computes. A stock defect,
-  outside C3; not fixed.
+- **Where the counts part:** every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer (*The kill count reads this peer's copy of the
+  victim*, above). MEASURED 2026-09-26 on two peers by C3: a host tower's own copy stayed at 10
+  through two kills of the joiner's scenario-created units while the joiner's copy counted 0 → 2
+  (the pre-C3 build; 3 on C3's); the `+0x104` reads of 0.0 there were taken after the kills, not at
+  them. Every level-reading effect reads the copy of the peer that runs it, so inside that window a
+  veteran's level depends on which peer computes. A stock defect, outside C3; not fixed.
 
 ### The hit sender `0x489BB0` and the HP word
 
