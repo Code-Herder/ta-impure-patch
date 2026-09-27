@@ -224,7 +224,24 @@ static unsigned s_colSettled = 0, s_colSettledSeen = 0, s_colRepaints = 0;
 /* the palette generation `s_colRepaints` was granted for: the budget below is
    per GENERATION, not per validity edge (see col_ask_repaint) */
 static unsigned s_colRepaintsGen = (unsigned)-1;
+/* THE PICTURE STORE'S HALF (tagpu_vk_gui.c): a decoded asset and a
+   transformed stamp cross as bytes rather than as atlas sprites, and the
+   consumer restores them in a store of its own.
+   `s_picArm` is Classic++'s assets being armed at all -- NOT `s_colValid`,
+   because an asset is seeded ONCE, at the flip that first copies it, and that
+   is usually before the UI atlas has restored anything: gated on validity,
+   the main menu's backdrop would never be restored. A colour plane on a twin
+   while colour is not valid is harmless -- the composite reads it only under
+   `s_colValid` (`colourTwins`).
+   `s_picSettled` is the consumer's settle count, and each new one asks the
+   engine for a repaint (`tagpu_gui_pic_settled`). */
+static int      s_picArm = 0;
+static unsigned s_picSettled = 0, s_picSettledSeen = 0;
 #define COL_REPAINT_MAX 32
+/* the picture store's own repaint budget, per palette generation as the
+   atlas's is (see pic_ask_repaint) */
+#define PIC_REPAINT_MAX 1024
+static unsigned s_picRepaints = 0, s_picRepaintsGen = (unsigned)-1;
 /* THE PALETTE THE RESTORED ART IS RIGHT FOR, and the settle counter of 3.4.
    `s_colPalSeen` distinguishes "never armed" from "armed against serial 0". */
 static unsigned s_colPalSerial = 0, s_colPalLast = 0;
@@ -458,11 +475,14 @@ static const char* CPY_FS =
    because the engine has no such concept and this op only remaps a byte. So
    green comes from the snapshot rather than from a constant.
 
-   `oCol` GOES TO ZERO for `STR_FS`'s reason: the index under this pixel has
-   changed, so whatever restored colour the Classic++ lane had painted there is
-   now colour for a different index. Dropping it falls the texel back to the
-   palette, which resolves the tinted index correctly; leaving it would show
-   the untinted art through a highlight the engine has just drawn.
+   THE RESTORED COLOUR IS SHADED BY BLENDING, NOT READ. The table's lower
+   half holds, beside each entry's remap, that entry's map of colour -- rgb an
+   offset, a a scale (tagpu_vk_gui.c `tint_table`) -- and the Classic++ pipeline
+   blends `src + dst * srcAlpha` with the destination's alpha kept. So a texel
+   with restored colour becomes that colour shaded as the engine shaded its
+   index, and one without stays without. `oIdx.a` is 0, which is what makes
+   the same blend a plain write of the index. Reading the colour plane instead
+   would need a snapshot of it as well, for the reason above.
 
    THE ROW IS AN INDEX INTO THE `TAGPU_GUI_SHADE_ROWS`-ROW TABLE AND IS BOUNDED
    BEFORE THE DRAW (`before_focus` and `before_frame` produce only rows inside
@@ -479,7 +499,7 @@ static const char* TINT_FS =
     "  vec2 g = texelFetch(uSrc, p, 0).rg;\n"
     "  int i = int(g.r * 255.0 + 0.5);\n"
     "  oIdx = vec4(texelFetch(uShade, ivec2(i, uRow), 0).r, g.g, 0.0, 0.0);\n"
-    "  oCol = vec4(0.0); }\n";
+    "  oCol = texelFetch(uShade, ivec2(i, uRow + textureSize(uShade, 0).y / 2), 0); }\n";
 /* the layer over the frame: uv.y = 0 at the top of the screen; the twin's
    row 0 is the surface's row 0 */
 static const char* LAY_VS =
@@ -924,6 +944,11 @@ void tagpu_gui_col_ready(int have, unsigned settled)
     s_colSettled = settled;
 }
 
+void tagpu_gui_pic_settled(unsigned settled)
+{
+    s_picSettled = settled;
+}
+
 /* Once per present, BEFORE the drain, because the sprite ops it replays ask
    whether colour is valid and the answer has to be one frame's answer.
 
@@ -997,19 +1022,64 @@ static int col_ask_repaint(void)
     return 1;
 }
 
+/* ONE REPAINT PER PICTURE SETTLE, OUT OF A BUDGET OF ITS OWN PER PALETTE
+   GENERATION. The store's settles converge by themselves -- a repaint that
+   draws only pictures the store holds finishes nothing new, and a picture it
+   evicted recently and stores again is not counted (tagpu_vk_gui.c
+   `ps_recent`) -- and this is the bound for the screen that gets past that
+   filter: at most PIC_REPAINT_MAX repaints a generation, whatever the store
+   does. Its own budget and not the atlas's, because a walk through the map
+   list asks once per pick and would spend the repaint an in-game sidebar
+   needs later; 1024 is ten walks through all 99 maps. Spent, a picture
+   restored afterwards takes colour at the engine's own next redraw. Returns
+   1 when it actually asked. */
+static int pic_ask_repaint(void)
+{
+    if (s_rearms != s_picRepaintsGen) {
+        s_picRepaintsGen = s_rearms;
+        s_picRepaints = 0;
+    }
+    if (s_picRepaints >= PIC_REPAINT_MAX) {
+        if (s_picRepaints == PIC_REPAINT_MAX) {
+            s_picRepaints++;
+            slog("gui: the picture store has asked for 1024 repaints in one palette "
+                 "generation - no further ones are asked for, and a picture restored from "
+                 "now on takes colour at the engine's own next redraw");
+        }
+        return 0;
+    }
+    s_picRepaints++;
+    g_guiq.colarm++;
+    return 1;
+}
+
 static void col_valid_edge(int on)
 {
     static int was = 0;
     if (on != was) {
+        int pic;
         was = on;
         if (!on) return;
+        pic = s_picSettled != s_picSettledSeen;
         s_colSettledSeen = s_colSettled;
+        s_picSettledSeen = s_picSettled;
         if (col_ask_repaint())
             slog("gui: Classic++ colour is valid - asking the engine for a repaint, because "
                  "art already on a surface keeps the indices it was drawn with");
+        /* a picture settle it absorbs keeps its own ask, from its own budget
+           (below): the atlas's refusing the edge must not refuse the picture */
+        else if (pic)
+            pic_ask_repaint();
         return;
     }
     if (!on) return;
+    /* THE PICTURE STORE ASKS FOR ITS OWN, from `pic_ask_repaint`'s budget and
+       not the atlas's. A settle there is a picture new to the store finished
+       (tagpu_vk_gui.c `pic_step`). */
+    if (s_picSettled != s_picSettledSeen) {
+        s_picSettledSeen = s_picSettled;
+        pic_ask_repaint();
+    }
     /* AND AGAIN EVERY TIME THE RESTORE SETTLES HAVING PAINTED MORE. The sprites
        drawn by the last repaint may have put entries in the atlas that had no
        restored texels yet, and those draws took alpha 0; one more repaint draws
@@ -1027,12 +1097,15 @@ static void restore_step(void)
 
     /* `norestore` is the A/B lever: the UI layer with the art it would have
        had before Classic++, while the world goes on restoring. */
+    s_picArm = 0;
     if (s_norestore || !tagpu_classicpp_assets()) { s_colValid = 0; col_valid_edge(0); return; }
     /* ARMING IS POLLED, NOT LATCHED AT START-UP. `tagpu_gaf_atlas_restore_vk`
        is idempotent and answers 1 on every call after the first, so this is a
        compare once the list exists -- and `assets=0 -> 1` from the
        render-options row arms it on the next present. */
     if (!tagpu_gaf_atlas_restore_vk(&s_atlas)) { s_colValid = 0; col_valid_edge(0); return; }
+    /* the list the consumer keys its picture store on is published from here */
+    s_picArm = 1;
     /* AND THE CONSUMER HAS TO HAVE SOMETHING TO SAMPLE. Saying restored to a
        consumer with no restored image is a frame it must refuse WHOLE -- the
        op would write alpha 0 into a twin that keeps it -- so the first two
@@ -1432,6 +1505,15 @@ static void drain(void)
                     m->kind = TAGPU_GUIOP_SEED; mir_box(m, o);
                     m->w = o->w; m->h = o->h;
                     m->aoff = off; m->alen = o->alen;
+                    /* A PICTURE FOR THE CONSUMER'S STORE: the loader's bytes,
+                       which nothing has drawn over, restored and coloured
+                       there. Its colour plane makes every copy out of it carry
+                       colour (`twin_copy`). */
+                    if (s_picArm) {
+                        if (!t->col) { t->col = 1; s_colTwins++; }
+                        m->col = TAGPU_GUICOL_DST | TAGPU_GUICOL_ON;
+                        s_colOps++;
+                    }
                     /* REMEMBERED, NOT YET ACKED -- `mir_finish` publishes it
                        if and only if this record is handed over. */
                     /* ONLY A REAL OFFER'S TOKEN: a snapshot seed carries 0
@@ -1459,7 +1541,18 @@ static void drain(void)
                 mir_bytes(g_guiq.arena + o->aoff, o->alen, &off)) {
                 TAGPU_GUIOP* m = mir_op();
                 if (m) { m->kind = TAGPU_GUIOP_PIXELS; mir_box(m, o); m->aoff = off; m->alen = o->alen;
-                         if (o->kind == PK_MOVIE) s_movies++; else s_planes++; }
+                         if (o->kind == PK_MOVIE) s_movies++; else s_planes++;
+                         /* A STAMP IS A PICTURE THE CONSUMER RESTORES, under
+                            the same rule as a sprite (`twin_sprite`): only
+                            while colour is valid. One drawn before that is
+                            drawn again -- in the shell at the next flip, in
+                            game by the repaint the validity edge asks for. A
+                            movie frame is not art to restore. */
+                         if (o->kind == PK_PLANE && s_colValid) {
+                             if (!t->col) { t->col = 1; s_colTwins++; }
+                             m->col = TAGPU_GUICOL_DST | TAGPU_GUICOL_ON;
+                             s_colOps++;
+                         } }
             }
             break; }
         case PK_FREE:

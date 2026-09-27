@@ -232,7 +232,11 @@ typedef struct TAGPU_GUIOP {
                             this op (the drain gave it one, or it already had
                             one)
          TAGPU_GUICOL_ON    the program's own `uRestored` (SPRITE) or
-                            `uSrcHasCol` (COPY) was 1
+                            `uSrcHasCol` (COPY) was 1; on a SEED with bytes
+                            (a decoded asset) or a PIXELS (a transformed
+                            stamp), the bytes are a PICTURE the consumer
+                            restores in its own store and colours the box from
+                            once the restore has landed
        Both are 0 on every op of a session that is not restoring, which is what
        makes this field free when Classic++ is off. */
     unsigned char  col;
@@ -439,6 +443,18 @@ void tagpu_gui_mirror_want(int on);
    been restored. It converges because the set of atlas entries a screen uses
    is finite: a repaint that introduces no new entry produces no new settle. */
 void tagpu_gui_col_ready(int have, unsigned settled);
+
+/* ...AND THE SAME CUE FOR THE PICTURE STORE: how many times the consumer's
+   picture restore (a backdrop, a transformed stamp -- `TAGPU_GUICOL_ON` on a
+   SEED or a PIXELS op) went quiet having finished a picture drawn for the
+   first time. Each one asks the engine for one repaint, so a copy out of a
+   backdrop, and a stamp in a sidebar the engine draws once, are drawn again
+   against the restored picture. It is not the atlas's budgeted ask: a settle
+   needs a picture whose content the store has not held since it last evicted
+   it, so a repaint that draws nothing new asks for nothing, and a store too
+   small for a screen cannot turn eviction into a repaint loop. Render thread
+   only. */
+void tagpu_gui_pic_settled(unsigned settled);
 
 /* ASK THE PRODUCER FOR A FRESH START, through the very flag the drain raises
    for itself. The mirror's consumer keeps a twin store of its own, and any

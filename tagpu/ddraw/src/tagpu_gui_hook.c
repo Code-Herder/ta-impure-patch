@@ -140,6 +140,10 @@ typedef struct SURF {
     unsigned changed, explained, unexplained;   /* running totals            */
     int bl, bt, br, bb;               /* worst unexplained box last flip     */
     int seeded;                       /* a PK_SEED was published for it      */
+    int reseed;                       /* a snapshot's seed is owed again: set by
+                                         `repaint_arm`, cleared by a seed and by
+                                         `snap_free`. Apart from `seeded`, which
+                                         `surf_drop` reads as "the twin exists" */
     int lastCopyFrom;                 /* dedup(): position in the batch of the last
                                          COPY that read this surface, -1 if none  */
     int isOffscreen;                  /* created with the tag "OFFSCREEN" (0x5091D4): THE
@@ -251,6 +255,13 @@ static void snap_free(SURF* s)
     for (k = 0; k < s->novl; k++) free(s->ovl[k].plane);
     free(s->ovl); free(s->snap);
     s->ovl = NULL; s->novl = 0; s->snap = NULL;
+    s->reseed = 0;
+}
+
+/* a seed is due: never sent for this twin, or a snapshot's owed again */
+static int seed_due(const SURF* s)
+{
+    return !s->seeded || s->reseed;
 }
 
 /* forget a surface: its buffers, its recorded boxes, and the twin */
@@ -1402,7 +1413,8 @@ static int pub_surface_bytes(SURF* s, int l, int t, int r, int b, TAGPU_PUBOP* o
    since, each carrying its own plane so the consumer's atlas does not have to
    still hold it. Token 0: nothing waits for an ack, because the ack exists to
    retire an OFFER that is re-made at every copy, and this is a seed, made
-   again only when a reset clears `seeded`. */
+   again only when a reset clears `seeded` or a colour repaint owes it
+   (`reseed`). */
 static int pub_seed_snap(SURF* s)
 {
     TAGPU_PUBOP* o = pub_op(PK_ASSET, s->base);
@@ -1427,7 +1439,7 @@ static int pub_seed_snap(SURF* s)
         pub_commit();
         seen_frame(v->frame, (const void*)(size_t)v->key, 1);
     }
-    s->seeded = 1;
+    s->seeded = 1; s->reseed = 0;
     return 1;
 }
 
@@ -1491,7 +1503,7 @@ static int pub_seed(SURF* s)
     o->l = 0; o->t = 0; o->r = (short)(s->w - 1); o->b = (short)(s->h - 1);
     if (!pub_surface_bytes(s, 0, 0, s->w - 1, s->h - 1, o)) return 0;
     pub_commit();
-    s->seeded = 1;
+    s->seeded = 1; s->reseed = 0;
     return 1;
 }
 
@@ -2357,7 +2369,7 @@ static void publish(unsigned flipSurf)
         if (W > 0 && H > 0) { vl = L; vt = T; vr = L + W - 1; vb = T + H - 1; }
     }
     fs = surf_by_base(flipSurf);
-    if (fs && !fs->seeded && !pub_seed(fs)) return;
+    if (fs && seed_due(fs) && !pub_seed(fs)) return;
     /* ---- THE VIEWPORT'S ERASE -------------------------------------------
        What the viewport region holds BEFORE this window's draws, which is why
        it is emitted HERE and not at the flip marker: the marker is pushed at
@@ -2403,7 +2415,7 @@ static void publish(unsigned flipSurf)
         TAGPU_PUBOP* o;
         if (op->kind == OP_FLIP) {
             s = surf_by_base(op->base);
-            if (s && !s->seeded && !pub_seed(s)) return;
+            if (s && seed_due(s) && !pub_seed(s)) return;
             o = pub_op(PK_FRAME, op->base); if (!o) return; pub_commit();
             continue;
         }
@@ -2463,7 +2475,7 @@ static void publish(unsigned flipSurf)
            no sub-frame ops) was dropped the same way and draws nothing either
            way. */
         if ((op->kind == OP_GAF || op->kind == OP_GAFA || op->kind == OP_GAFB) && op->fsub) continue;
-        if (!s->seeded && !pub_seed(s)) return;
+        if (seed_due(s) && !pub_seed(s)) return;
         /* THE MOVIE FRAME'S BYTES, READ NOW -- which is the movie's own flip,
            because `before_flip` publishes a movie flip in the call that
            recorded it and clears the window on every path that does not. */
@@ -2888,7 +2900,7 @@ static void publish(unsigned flipSurf)
                it: after a reset nothing draws into the post-game backdrop again,
                but the engine's repaint copies it onto the frame every time, and
                this is the one place that learns it is needed. */
-            if (src && !src->seeded && src->snap && !pub_seed(src)) return;
+            if (src && seed_due(src) && src->snap && !pub_seed(src)) return;
             if (src && src->seeded) {
                 o = pub_op(PK_COPY, s->base); if (!o) return;
                 o->src = op->src; o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
@@ -3702,7 +3714,27 @@ static void repaint_arm(void)
     unsigned colarm = g_guiq.colarm;
     if (draw && !s_drawShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
     if (resets != s_resetShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
-    if (colarm != s_colarmShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
+    if (colarm != s_colarmShadow) {
+        int i;
+        s_repaintPend = 1; s_repaintCounted = 0;
+        /* A SNAPSHOT IS THE ONE SURFACE THE REDRAW DOES NOT REPAINT -- nothing
+           draws into the post-game backdrop again (see `snap_take`) -- so its
+           repaint is a re-seed. It matters for Classic++'s pictures: the
+           snapshot's sprites follow its seed in the same window, so the
+           consumer's twin is drawn over before the picture is restored and
+           cannot take it (tagpu_vk_gui.c, "A PICTURE TWIN STOPS BEING ONE").
+           Re-sent now, the seed finds the picture done and colours at once,
+           and the sprites land on top again. Exact by construction: a held
+           `snap` plus its `ovl` IS the surface -- anything that could not be
+           replayed has already dropped the snapshot. Bounded by `colarm`'s
+           own bound (tagpu_gui_int.h): the consumer keeps a seeded picture
+           pinned for as long as its twin lives, so a re-seed finds it stored
+           and raises no settle of its own.
+           `reseed` and not `seeded`: the twins stay alive until the re-seed
+           arrives, and `surf_drop` owes them a FREE on `seeded`. */
+        for (i = 0; i < s_nsurf; i++)
+            if (s_surf[i].snap) s_surf[i].reseed = 1;
+    }
     s_drawShadow = draw;
     s_resetShadow = resets;
     s_colarmShadow = colarm;

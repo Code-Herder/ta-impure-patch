@@ -264,11 +264,14 @@ typedef struct TAGPU_GUIQ {
     volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */
     volatile unsigned resets;                /* fresh starts published (TAGPU_GUI_WHY_*) */
-    /* ASK THE ENGINE TO REDRAW ITS SCREENS, AND NOTHING ELSE. Raised by the
-       render half when Classic++ colour becomes valid: colour reaches a twin
-       only through the op that DRAWS the art, so a surface already painted
-       keeps its indices until something repaints it -- in game that is the
-       whole sidebar, which the engine draws once per selection change.
+    /* ASK THE ENGINE TO REDRAW ITS SCREENS, AND NOTHING ELSE -- plus the
+       re-seed of any snapshot surface, which is the one surface that redraw
+       cannot repaint (`repaint_arm`). Raised by the render half when Classic++
+       colour becomes valid and whenever the UI's picture store settles a
+       picture: colour reaches a twin only through the op that DRAWS the art,
+       so a surface already painted keeps its indices until something repaints
+       it -- in game that is the whole sidebar, which the engine draws once per
+       selection change.
        DELIBERATELY NOT `reseed`. A reseed resets the twin store and the UI
        atlas, which re-arms the restore list, which clears the consumer's
        `arHave`, which clears colour validity -- and raising a reseed on the

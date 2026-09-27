@@ -141,6 +141,20 @@ typedef struct {
     VkFramebuffer   fb2;            /* [index, colour], against s_twRp2      */
     VkImageLayout   colLayout;
     int             colNeedClear;   /* colour made this frame, not cleared   */
+    /* ---- CLASSIC++: THE PICTURE THIS TWIN WAS SEEDED FROM (the picture
+       store's entry + 1), pinned in the store from the SEED until the twin's
+       next SEED or its drop. While `picDrawn` is 0 the twin IS the picture,
+       and the store fills its colour plane whole when the entry's restore
+       lands; the first op that names the twin as a destination sets it,
+       because from then on the twin holds pixels the picture does not
+       describe. THE PIN OUTLIVES THE DRAW on purpose: a snapshot's re-seed
+       (tagpu_gui_hook.c `repaint_arm`) comes back for the same picture, and
+       finds it stored and restored only because nothing could evict it in
+       between. `picGen` is the store generation the fill was made in;
+       0 = owed. */
+    int             pic;
+    int             picDrawn;
+    unsigned        picGen;
 } TWIN;
 
 typedef struct {
@@ -214,8 +228,10 @@ static VkPipeline       s_pipeSpr2, s_pipeCpy2, s_pipeStr2;
 /* THE FOCUS TINT. One more pair against the same two passes and
    the same layout -- `TINT_FS` samples at bindings 40 and 41 and reads one int
    at 32, which is `CPY_FS`'s shape exactly, so nothing about the descriptor
-   set layout or the pipeline layout changes for it. */
-static VkPipeline       s_pipeTint, s_pipeTint2;
+   set layout or the pipeline layout changes for it.
+   `s_pipeTintFit` is the colour edition that shades the colour plane
+   (`tint_table`); `s_pipeTint2` drops it, for a table made with no palette. */
+static VkPipeline       s_pipeTint, s_pipeTint2, s_pipeTintFit;
 /* THE SHARP LAYER. Its three programs share one layout -- all three have a
    16-byte block at binding 32 and CURS/MM three samplers at 40..42 -- so one
    descriptor set layout serves them and `SDSET_*` indexes one pre-written set
@@ -241,16 +257,22 @@ static VkImageView      s_atView, s_palView, s_dumView, s_glView;
 static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
-/* THE REMAP TABLE: 256 wide by `TAGPU_GUI_SHADE_ROWS` tall, R8, so `TINT_FS`'s
-   `texelFetch(uShade, ivec2(index, row))` is the engine's own
-   `LUT[row * 256 + index]` with no arithmetic in between. The hand-over's
-   bytes are already row-major rows of 256, so the upload is one `copy_rect` of
-   the block. Uploaded on a serial change, like the atlas and the palette. */
+/* THE REMAP TABLE: 256 wide by `TAGPU_GUI_SHADE_ROWS` tall in its upper half,
+   the index in `.r`, so `TINT_FS`'s `texelFetch(uShade, ivec2(index, row))`
+   is the engine's own `LUT[row * 256 + index]` with no arithmetic in between;
+   the lower half is each entry's map of colour (`tint_table`). Uploaded on a
+   serial change, like the atlas and the palette. */
 static VkImage          s_lutImg;
 static VkDeviceMemory   s_lutMem;
 static VkImageView      s_lutView;
 static unsigned         s_lutSerial;
 static int              s_lutHave;
+/* the palette serial the colour half was made against, and whether there was
+   one: without it the colour half is zeros and a colour twin's tint takes the
+   pipeline that does not blend (`s_pipeTint2`), dropping the colour as an
+   indexed tint must */
+static unsigned         s_lutPal;
+static int              s_fitHave;
 /* ...AND THE SNAPSHOT A TINT READS. A tint is a read-modify-write of the twin
    it draws into, and sampling an attachment a draw is writing is undefined, so
    the box is copied out to this image first and the draw samples the copy.
@@ -312,6 +334,9 @@ static int              s_rjTaken, s_rjPainted;
 static unsigned         s_rjBlanks;
 static VkImageView      s_rjSrcView;
 static int              s_rjTried;
+/* the generation `s_arImg` holds a restore of, left by a job the restorer's
+   going down took away (`tagpu_vk_gui_restore_drop`); 0 = none */
+static unsigned         s_rjKeepGen;
 /* the last `colRearm` seen: when it moves, every colour twin was invalidated */
 static unsigned         s_colRearm;
 static int              s_colRearmSeen;
@@ -637,6 +662,110 @@ static void ret_drain_idle(const TAGPU_VKPASS* d)
     for (i = 0; i < RET_MAX; i++) ret_kill(d, &s_ret[i]);
 }
 
+/* ---- CLASSIC++: THE PICTURE STORE ----------------------------------------
+   A box of indices -- a decoded asset's SEED (a backdrop PCX, the sidebar
+   plate) or a transformed stamp's PIXELS -- reaches its twin as bytes, not as
+   a draw out of the UI atlas, so the atlas's restore never sees it and the
+   box stayed at palette colour. This store restores those bytes: each distinct
+   picture is written once into `s_psSrc` (R8 indices), restored by ONE job of
+   its own into `s_psDst` (RGBA8), and copied into the colour plane of the box
+   it was drawn to. The job is the restorer's sixth and last (tagpu_restore_core.h
+   `TAGPU_R_MAXJOBS`), which is why the pictures share one pair of images
+   rather than taking a job each.
+
+   KEYED BY CONTENT AND CHECKED BYTE FOR BYTE. A hit compares the whole
+   picture against the bytes the entry was made from, so a hash collision
+   costs a second entry and can never lend a picture another's colour.
+
+   PLACED ON A GRID OF `PS_CELL` CELLS and never moved: an entry keeps its
+   rectangle until it is evicted, so a fill already recorded this frame reads
+   the texels it was recorded against. Eviction takes the least recently used
+   entry that no twin pins, and `tagpu_vk_restore_job_remap` removes its
+   frames from the job BEFORE its cells are handed out -- including a batch in
+   flight, which goes back to the queue -- so the job can never paint an
+   evicted picture over the one that replaced it.
+
+   LARGER THAN THE RESTORER'S SLOT, CUT INTO OVERLAPPING TILES. The core
+   refuses a frame over `TAGPU_R_ACTMAX` (512) on either edge, and a shell
+   backdrop is 640 wide. Each tile is restored with `PS_MARGIN` texels of the
+   picture's own context past its core, and only the core is copied out: the
+   model's receptive radius is its depth (tagpu_restore_glsl.h, 12 layers of
+   3x3), so a core texel never sees the zero padding at a tile's cut edge and
+   the tiled result is the whole-picture result exactly. The tiles lie side
+   by side, which is why an entry's rectangle is wider than its picture --
+   and they lie side by side in BOTH images, the overlap written twice into
+   `s_psSrc`, because the restorer's OUT pass reads a texel's own colour from
+   the source at the DESTINATION's coordinates (tagpu_restore_glsl.h
+   `TAGPU_RESTORE_OUT_FS`): the two images must share one layout. */
+#define PS_W       2048
+#define PS_H       1536
+#define PS_CELL    64
+#define PS_CW      (PS_W / PS_CELL)
+#define PS_CH      (PS_H / PS_CELL)
+#define PS_MAX     256              /* entries                              */
+#define PS_TMAX    16               /* tiles per picture                    */
+#define PS_TILE    512              /* TAGPU_R_ACTMAX                       */
+#define PS_MARGIN  16               /* > the model's receptive radius of 12 */
+#define PS_CORE    (PS_TILE - 2 * PS_MARGIN)
+/* tagpu_gui_surf.c's UI_RESTORE_MIN: below the model's receptive field there
+   is nothing to restore, and the atlas keeps such frames indexed too */
+#define PS_MIN     12
+/* recently evicted content, so that restoring it again does not count as a
+   settle -- see `ps_recent` */
+#define PS_EVRING  64
+
+enum { PSE_FREE = 0, PSE_NEW, PSE_QUEUED, PSE_DONE, PSE_BAD };
+
+typedef struct {
+    int              state;          /* PSE_*                               */
+    unsigned         hash;           /* pic_hash: a filter, not the key     */
+    int              w, h;           /* the picture                         */
+    int              cx, cy, cw, ch; /* its cells                           */
+    int              nt;             /* tiles                               */
+    TAGPU_RGLSL_FRAME f[PS_TMAX];    /* the job's frames, one per tile      */
+    /* per tile: where its core sits in s_psDst, where in the picture, and
+       its size -- the copy regions of a fill */
+    short            core[PS_TMAX][6];
+    unsigned char*   bytes;          /* w*h, what a hit is compared against */
+    unsigned         used;           /* s_psFrame at the last lookup        */
+    int              pins;           /* twins seeded from it (TWIN `pic`)   */
+    int              fresh;          /* its settle may ask for a repaint    */
+} PSENT;
+
+static PSENT            s_ps[PS_MAX];
+static unsigned short   s_psCell[PS_CH][PS_CW];  /* entry index + 1, or 0  */
+static int              s_psCellsFree = PS_CW * PS_CH;
+static VkImage          s_psSrc, s_psDst;
+static VkDeviceMemory   s_psSrcMem, s_psDstMem;
+static VkImageView      s_psSrcView, s_psDstView;
+static VkImageLayout    s_psSrcLay;
+/* THE DESTINATION HAS BEEN MADE READY BY A JOB, so a later job may repaint
+   over it rather than clear it: `tagpu_vk_restore_job_new`'s `repaint` names
+   SHADER_READ_ONLY as the image's layout, which is only true after the first
+   job's own clear. */
+static int              s_psDstLive;
+static TAGPU_VKRJOB*    s_psJob;
+static unsigned char    s_psPal[256 * 4];         /* the job's palette       */
+static int              s_psPalHave;
+static int              s_psTried;                /* the device refused      */
+/* moves when every fill made so far stops being current: a palette rebuild */
+static unsigned         s_psGen = 1;
+static unsigned         s_psFrame, s_psSettled;
+static int              s_psBound;                /* twins a fill can reach:
+                                                     `pic` set, `picDrawn` 0 */
+static unsigned         s_psEv[PS_EVRING];
+static unsigned         s_psEvN;
+static unsigned         s_psStored, s_psEvicted, s_psFills, s_psRefused;
+static int              s_psSaid;
+
+static void pic_unbind(TWIN* t)
+{
+    if (!t->pic) return;
+    if (t->pic >= 1 && t->pic <= PS_MAX && s_ps[t->pic - 1].pins > 0) s_ps[t->pic - 1].pins--;
+    if (!t->picDrawn && s_psBound > 0) s_psBound--;
+    t->pic = 0; t->picDrawn = 0; t->picGen = 0;
+}
+
 /* ---- the twin store ----------------------------------------------------- */
 
 static TWIN* tw_find(unsigned surf)
@@ -657,6 +786,7 @@ static int tw_drop(const TAGPU_VKPASS* d, TWIN* t)
        of its attachments first (see RET). */
     if (!ret_push2(d, t->img, t->mem, t->view, t->fb,
                    t->colImg, t->colMem, t->colView, t->fb2)) return 0;
+    pic_unbind(t);
     /* THE CLAIM IS DELIBERATELY LEFT STANDING. `tw_drop` only RETIRES, so the
        view stays alive for the whole frame and no handle can be recycled
        inside it -- while clearing `s_setView` here would free the set index
@@ -1009,8 +1139,10 @@ static int build_sharp_rp(const TAGPU_VKPASS* d)
     return vkCreateRenderPass(d->dev, &ri, NULL, &s_sharpRp) == VK_SUCCESS;
 }
 
+/* `blend`: the tint's colour rule (TINT_FS), `src + dst * srcAlpha` with the
+   destination's alpha kept. Every other twin draw writes whole. */
 static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
-                           VkRenderPass rp, int natt, VkPipeline* out)
+                           VkRenderPass rp, int natt, int blend, VkPipeline* out)
 {
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb;
@@ -1049,14 +1181,28 @@ static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     /* blending OFF: a sprite discards its keyed texels and writes the rest
-       whole, which is what coverage means here */
-    cba[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
-    /* THE COLOUR ATTACHMENT TAKES ALL FOUR CHANNELS, ALPHA ABOVE ALL: alpha is
+       whole, which is what coverage means here.
+       THE COLOUR ATTACHMENT TAKES ALL FOUR CHANNELS, ALPHA ABOVE ALL: alpha is
        "this texel has restored colour" to every reader of a colour twin, so a
        write mask that dropped it would leave the flag standing wherever an op
-       cleared the colour under it. */
-    cba[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+       cleared the colour under it.
+       AND THE TWO ATTACHMENTS' STATES ARE IDENTICAL, which the device requires
+       without `independentBlend` (not enabled, tagpu_vk.c): the index
+       attachment takes the same four-channel mask, and R8G8 has no B or A to
+       write. The same holds for the tint's blend, which is a plain write of the
+       index because `TINT_FS`'s `oIdx.a` is 0. */
+    cba[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    if (blend) {
+        cba[0].blendEnable = VK_TRUE;
+        cba[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba[0].dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cba[0].colorBlendOp = VK_BLEND_OP_ADD;
+        cba[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        cba[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba[0].alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    cba[1] = cba[0];
     cb.attachmentCount = (uint32_t)natt; cb.pAttachments = cba;
     ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
     gp.stageCount = 2; gp.pStages = st;
@@ -1278,33 +1424,38 @@ static int build(const TAGPU_VKPASS* d)
        same shader against a pass that HAS the second attachment. */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
-                         s_twRp, 1, &s_pipeSpr)) return 0;
+                         s_twRp, 1, 0, &s_pipeSpr)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_CPY_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4,
-                         s_twRp, 1, &s_pipeCpy)) return 0;
+                         s_twRp, 1, 0, &s_pipeCpy)) return 0;
     /* the string shares the twin pipelines' layout exactly: QVS at binding 0,
        its own block at 32, one sampler at 40 */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4,
-                         s_twRp, 1, &s_pipeStr)) return 0;
+                         s_twRp, 1, 0, &s_pipeStr)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
-                         s_twRp2, 2, &s_pipeSpr2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeSpr2)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_CPY_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4,
-                         s_twRp2, 2, &s_pipeCpy2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeCpy2)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4,
-                         s_twRp2, 2, &s_pipeStr2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeStr2)) return 0;
     /* the tint, on the same two passes: it writes both locations exactly as
        the other three do, so the one-attachment edition simply discards the
-       colour write */
+       colour write. Only the colour edition blends -- it is the one with a
+       colour plane to shade -- so an indexed twin's tint is the plain write
+       it always was. */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
-                         s_twRp, 1, &s_pipeTint)) return 0;
+                         s_twRp, 1, 0, &s_pipeTint)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
-                         s_twRp2, 2, &s_pipeTint2)) return 0;
+                         s_twRp2, 2, 0, &s_pipeTint2)) return 0;
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
+                         s_twRp2, 2, 1, &s_pipeTintFit)) return 0;
     if (!build_sharp_rp(d)) return 0;
     if (!build_sharp_pipe(d, tagpu_spv_tagpu_gui_surf_SHARP_FS,
                           sizeof tagpu_spv_tagpu_gui_surf_SHARP_FS / 4, &s_pipeFlat)) return 0;
@@ -1566,10 +1717,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
            painted stops being a picture -- nothing else fills this image, so
            leaving `s_arHave` set would have the layer sample a frozen twin for
            the rest of the session. */
-        if (s_rjob) {
-            tagpu_vk_restore_job_free(d, s_rjob);
+        if (s_rjob || s_rjKeepGen) {
+            if (s_rjob) tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
-            s_rjSrcView = VK_NULL_HANDLE;
+            s_rjSrcView = VK_NULL_HANDLE; s_rjKeepGen = 0;
             s_arHave = 0;
         }
         tagpu_gui_col_ready(0, s_arSettled);
@@ -1661,6 +1812,14 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        producer frame by a repainting one would otherwise hand this pass "keep
        what you have" over an image the producer had cleared. */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
+    /* ...AND OVER THE SAME GENERATION'S OWN RESTORE when a resize took its job
+       away: the image holds exactly what that job painted, so repainting
+       keeps it on screen instead of blanking it, and colour validity does not
+       drop -- which would spend one of the producer's repaints for each
+       rebuild of a window being dragged. */
+    if (s_rjKeepGen && s_rjKeepGen == h->restoreGen && s_arHave &&
+        h->restoreBlanks == s_rjBlanks) repaint = 1;
+    s_rjKeepGen = 0;
     s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, repaint,
                                       s_atImg, s_atView, s_atDim, s_atDim, 0,
                                       h->pal,
@@ -1676,6 +1835,557 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
             "generation %u%s", s_rjTaken, h->restoreN, s_atDim, s_atDim,
          h->restoreGen, repaint ? ", repaint" : "");
     tagpu_gui_col_ready(s_arHave, s_arSettled);
+}
+
+/* ---- CLASSIC++: THE PICTURE STORE'S MACHINERY (the store is described
+   above `pic_unbind`) ---------------------------------------------------- */
+
+/* A FILTER, NOT THE KEY: 32-bit FNV-1a over words, and every hit is then
+   compared byte for byte (`pic_get`). */
+static unsigned pic_hash(const unsigned char* p, int w, int h)
+{
+    unsigned x = 2166136261u ^ ((unsigned)w * 65599u + (unsigned)h);
+    size_t i, n = (size_t)w * (size_t)h;
+    for (i = 0; i + 4 <= n; i += 4) {
+        unsigned v;
+        memcpy(&v, p + i, 4);
+        x = (x ^ v) * 16777619u;
+    }
+    for (; i < n; i++) x = (x ^ p[i]) * 16777619u;
+    return x;
+}
+
+/* ONE AXIS CUT INTO TILES: `[t0, t1)` is what a tile restores, `[c0, c1)` the
+   core copied out of it. The cores partition `[0, L)`, each at most
+   `PS_CORE`, so a tile is at most `PS_TILE`. The count. */
+static int ps_axis(int L, int* t0, int* t1, int* c0, int* c1)
+{
+    int n, i;
+    if (L <= PS_TILE) { t0[0] = c0[0] = 0; t1[0] = c1[0] = L; return 1; }
+    n = (L + PS_CORE - 1) / PS_CORE;
+    if (n > PS_TMAX) return 0;
+    for (i = 0; i < n; i++) {
+        c0[i] = (int)((long long)L * i / n);
+        c1[i] = (int)((long long)L * (i + 1) / n);
+        t0[i] = c0[i] - PS_MARGIN; if (t0[i] < 0) t0[i] = 0;
+        t1[i] = c1[i] + PS_MARGIN; if (t1[i] > L) t1[i] = L;
+    }
+    return n;
+}
+
+/* THE STAGING A NEW PICTURE'S TILES TAKE, each tile's rows packed and its
+   start rounded to 4; 0 for a picture the store will not take. Pass 1
+   reserves this for every op that may be a new picture. */
+static VkDeviceSize ps_stage_need(int w, int h)
+{
+    int tx0[PS_TMAX], tx1[PS_TMAX], cx0[PS_TMAX], cx1[PS_TMAX];
+    int ty0[PS_TMAX], ty1[PS_TMAX], cy0[PS_TMAX], cy1[PS_TMAX];
+    int nx, ny, i, j;
+    VkDeviceSize n = 0;
+    if (w < PS_MIN || h < PS_MIN) return 0;
+    nx = ps_axis(w, tx0, tx1, cx0, cx1);
+    ny = ps_axis(h, ty0, ty1, cy0, cy1);
+    if (!nx || !ny || nx * ny > PS_TMAX) return 0;
+    for (j = 0; j < ny; j++)
+        for (i = 0; i < nx; i++)
+            n += align_up((VkDeviceSize)(tx1[i] - tx0[i]) * (VkDeviceSize)(ty1[j] - ty0[j]), 4);
+    return n + 4;
+}
+
+/* the first free `cw` x `ch` rectangle of cells, row by row */
+static int ps_fit(int cw, int ch, int* ox, int* oy)
+{
+    int x, y, i, j, ok;
+    if (cw > PS_CW || ch > PS_CH) return 0;
+    for (y = 0; y + ch <= PS_CH; y++)
+        for (x = 0; x + cw <= PS_CW; x++) {
+            ok = 1;
+            for (j = 0; j < ch && ok; j++)
+                for (i = 0; i < cw; i++)
+                    if (s_psCell[y + j][x + i]) { ok = 0; break; }
+            if (ok) { *ox = x; *oy = y; return 1; }
+        }
+    return 0;
+}
+
+/* the job's frames that lie in an evicted entry's cells go; the rest stay */
+static int ps_keep_frame(void* ctx, TAGPU_RGLSL_FRAME* f)
+{
+    const PSENT* e = (const PSENT*)ctx;
+    int x0 = e->cx * PS_CELL, y0 = e->cy * PS_CELL;
+    return !(f->ax >= x0 && f->ax < x0 + e->cw * PS_CELL &&
+             f->ay >= y0 && f->ay < y0 + e->ch * PS_CELL);
+}
+
+/* The job goes; what it had queued is queued again on the next one. */
+static void ps_job_free(const TAGPU_VKPASS* d)
+{
+    int i;
+    if (!s_psJob) return;
+    if (tagpu_vk_restore_job_dst_live(s_psJob)) s_psDstLive = 1;
+    tagpu_vk_restore_job_free(d, s_psJob);
+    s_psJob = NULL;
+    for (i = 0; i < PS_MAX; i++) if (s_ps[i].state == PSE_QUEUED) s_ps[i].state = PSE_NEW;
+}
+
+/* `remember` puts the content in the ring of recently evicted pictures, so
+   that storing it again asks for no repaint -- see `tagpu_gui_pic_settled`.
+   0 when the eviction is not about room. */
+static void ps_evict(const TAGPU_VKPASS* d, PSENT* e, int remember)
+{
+    int x, y;
+    /* THE JOB LETS GO OF IT FIRST, and that is what makes the cells safe to
+       hand out: a frame of this entry still queued, or in the batch in flight,
+       would otherwise paint it over whatever is written there next. A job that
+       cannot take the remap is dropped whole, which is the same guarantee. */
+    if (s_psJob) {
+        int kept, requeued, dropped;
+        if (!tagpu_vk_restore_job_remap(s_psJob, ps_keep_frame, e, &kept, &requeued, &dropped))
+            ps_job_free(d);
+    }
+    for (y = 0; y < e->ch; y++)
+        for (x = 0; x < e->cw; x++) s_psCell[e->cy + y][e->cx + x] = 0;
+    s_psCellsFree += e->cw * e->ch;
+    if (remember) s_psEv[s_psEvN++ % PS_EVRING] = e->hash;
+    free(e->bytes);
+    memset(e, 0, sizeof *e);
+    s_psEvicted++;
+}
+
+static void ps_queue(PSENT* e)
+{
+    int took;
+    if (!s_psJob) { e->state = PSE_NEW; return; }
+    took = tagpu_vk_restore_job_add(s_psJob, e->f, e->nt);
+    /* A PARTLY QUEUED PICTURE IS NEVER DONE: a tile left out would read as
+       restored from whatever its cells held before. */
+    e->state = (took == e->nt) ? PSE_QUEUED : PSE_BAD;
+}
+
+/* the pair of images, made on the first picture and kept for the session */
+static int ps_images(const TAGPU_VKPASS* d)
+{
+    if (s_psSrc && s_psDst) return 1;
+    if (!mk_image(d, PS_W, PS_H, VK_FORMAT_R8_UNORM,
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                  &s_psSrc, &s_psSrcMem, &s_psSrcView) ||
+        !mk_image(d, PS_W, PS_H, VK_FORMAT_R8G8B8A8_UNORM,
+                  VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                  &s_psDst, &s_psDstMem, &s_psDstView)) {
+        kill_image(d, &s_psSrc, &s_psSrcMem, &s_psSrcView);
+        kill_image(d, &s_psDst, &s_psDstMem, &s_psDstView);
+        s_psTried = 1;
+        plog(d, "gui: no device images for the picture store - backdrops and "
+                "stamps stay indexed");
+        return 0;
+    }
+    s_psSrcLay = VK_IMAGE_LAYOUT_UNDEFINED;
+    return 1;
+}
+
+/* The pictures in the store are restored against the palette the frame is
+   presented with. */
+static int pic_current(const TAGPU_GUIHAND* h)
+{
+    return h->pal && s_psPalHave && !memcmp(h->pal, s_psPal, sizeof s_psPal);
+}
+
+/* CONTENT AMONG THE LAST `PS_EVRING` EVICTED, whose store raises no settle
+   when it lands: a repaint that evicts a picture of its own screen and draws
+   it again must not ask for another repaint. It is what makes the loop
+   converge on a screen larger than the store, and a filter rather than the
+   bound -- a screen that evicts more than the ring holds between two draws
+   of one picture gets past it. The bound is the drain's budget
+   (tagpu_gui_surf.c `pic_ask_repaint`). Content evicted longer ago, a map
+   preview picked again after a walk through the list, is fresh and asks for
+   its repaint. */
+static int ps_recent(unsigned hv)
+{
+    int i;
+    for (i = 0; i < PS_EVRING && i < (int)s_psEvN; i++)
+        if (s_psEv[i] == hv) return 1;
+    return 0;
+}
+
+/* THE ENTRY FOR THIS PICTURE, stored now if it is new: its bytes go through
+   the slot's staging into `s_psSrc` in this command buffer, ahead of the
+   restore step that reads them (tagpu_vk.c runs the step last of every
+   `prepare`). NULL when the picture is below the model's reach or the store
+   cannot hold it -- it then stays indexed, which is the fallback and not a
+   fault. */
+static PSENT* pic_get(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
+                      VkDeviceSize* stOff, const unsigned char* idx, int w, int h)
+{
+    int tx0[PS_TMAX], tx1[PS_TMAX], cx0[PS_TMAX], cx1[PS_TMAX];
+    int ty0[PS_TMAX], ty1[PS_TMAX], cy0[PS_TMAX], cy1[PS_TMAX];
+    int nx, ny, dw = 0, dh = 0, cw, ch, ox = 0, oy = 0, i, j, k, slot = -1;
+    int ex, ey, offy;
+    unsigned hv;
+    size_t n;
+    PSENT* e;
+    unsigned char* bytes;
+
+    if (s_psTried || w < PS_MIN || h < PS_MIN) return NULL;
+    n = (size_t)w * (size_t)h;
+    hv = pic_hash(idx, w, h);
+    for (i = 0; i < PS_MAX; i++) {
+        e = &s_ps[i];
+        if (e->state == PSE_FREE) { if (slot < 0) slot = i; continue; }
+        if (e->hash == hv && e->w == w && e->h == h && !memcmp(e->bytes, idx, n)) {
+            e->used = s_psFrame;
+            return e;
+        }
+    }
+
+    nx = ps_axis(w, tx0, tx1, cx0, cx1);
+    ny = ps_axis(h, ty0, ty1, cy0, cy1);
+    if (!nx || !ny || nx * ny > PS_TMAX) {
+        s_psRefused++;
+        if (!(s_psSaid & 1)) { s_psSaid |= 1;
+            plog(d, "gui: a %dx%d picture needs more than %d restore tiles - it "
+                    "stays indexed", w, h, PS_TMAX); }
+        return NULL;
+    }
+    for (i = 0; i < nx; i++) dw += tx1[i] - tx0[i];
+    for (j = 0; j < ny; j++) dh += ty1[j] - ty0[j];
+    cw = (dw + PS_CELL - 1) / PS_CELL;
+    ch = (dh + PS_CELL - 1) / PS_CELL;
+    if (cw > PS_CW || ch > PS_CH) {
+        s_psRefused++;
+        if (!(s_psSaid & 2)) { s_psSaid |= 2;
+            plog(d, "gui: a %dx%d picture is larger than the %dx%d picture store - "
+                    "it stays indexed", w, h, PS_W, PS_H); }
+        return NULL;
+    }
+    if (!ps_images(d)) return NULL;
+    bytes = (unsigned char*)malloc(n);
+    if (!bytes) return NULL;
+
+    /* ROOM: the least recently used entry no twin pins goes, until a slot
+       and a rectangle of cells are both free. Pinned entries are what a
+       backdrop's fill, a snapshot's re-seed and a palette rebuild read, so
+       they stay. */
+    while (slot < 0 || s_psCellsFree < cw * ch || !ps_fit(cw, ch, &ox, &oy)) {
+        int v = -1;
+        for (i = 0; i < PS_MAX; i++) {
+            if (s_ps[i].state == PSE_FREE || s_ps[i].pins) continue;
+            if (v < 0 || s_ps[i].used < s_ps[v].used) v = i;
+        }
+        if (v < 0) {
+            free(bytes);
+            s_psRefused++;
+            if (!(s_psSaid & 4)) { s_psSaid |= 4;
+                plog(d, "gui: the picture store is full of pictures twins pin "
+                        "- a %dx%d picture stays indexed", w, h); }
+            return NULL;
+        }
+        ps_evict(d, &s_ps[v], 1);
+        if (slot < 0) slot = v;
+    }
+
+    e = &s_ps[slot];
+    memset(e, 0, sizeof *e);
+    memcpy(bytes, idx, n);
+    e->bytes = bytes;
+    e->hash = hv; e->w = w; e->h = h;
+    e->cx = ox; e->cy = oy; e->cw = cw; e->ch = ch;
+    e->used = s_psFrame;
+    for (j = 0; j < ch; j++)
+        for (i = 0; i < cw; i++) s_psCell[oy + j][ox + i] = (unsigned short)(slot + 1);
+    s_psCellsFree -= cw * ch;
+    e->fresh = !ps_recent(hv);
+
+    /* the tiles, side by side in the destination from the entry's origin */
+    ex = ox * PS_CELL; ey = oy * PS_CELL;
+    k = 0; offy = 0;
+    for (j = 0; j < ny; j++) {
+        int offx = 0;
+        for (i = 0; i < nx; i++) {
+            TAGPU_RGLSL_FRAME* f = &e->f[k];
+            memset(f, 0, sizeof *f);
+            f->w = tx1[i] - tx0[i]; f->h = ty1[j] - ty0[j];
+            f->ax = f->dx = ex + offx;
+            f->ay = f->dy = ey + offy;
+            f->key = -1;                        /* a picture has no key */
+            e->core[k][0] = (short)(f->dx + (cx0[i] - tx0[i]));
+            e->core[k][1] = (short)(f->dy + (cy0[j] - ty0[j]));
+            e->core[k][2] = (short)cx0[i];
+            e->core[k][3] = (short)cy0[j];
+            e->core[k][4] = (short)(cx1[i] - cx0[i]);
+            e->core[k][5] = (short)(cy1[j] - cy0[j]);
+            offx += f->w;
+            k++;
+        }
+        offy += ty1[j] - ty0[j];
+    }
+    e->nt = k;
+
+    /* EACH TILE'S BYTES WHERE ITS OUTPUT GOES, through this slot's staging
+       (pass 1 reserved `ps_stage_need`) */
+    lay_to(cb, s_psSrc, &s_psSrcLay, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    k = 0;
+    for (j = 0; j < ny; j++)
+        for (i = 0; i < nx; i++) {
+            const TAGPU_RGLSL_FRAME* f = &e->f[k++];
+            unsigned char* dst = s->stMap + *stOff;
+            int r;
+            for (r = 0; r < f->h; r++)
+                memcpy(dst + (size_t)r * f->w, idx + (size_t)(ty0[j] + r) * w + tx0[i], (size_t)f->w);
+            copy_rect(cb, s->stage, *stOff, s_psSrc, f->ax, f->ay, f->w, f->h);
+            *stOff = align_up(*stOff + (VkDeviceSize)f->w * (VkDeviceSize)f->h, 4);
+        }
+    lay_to(cb, s_psSrc, &s_psSrcLay, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    ps_queue(e);
+    s_psStored++;
+    return e;
+}
+
+/* THE RESTORED PICTURE INTO A TWIN'S COLOUR PLANE, its top-left at (bx, by):
+   one copy region per tile core. Only for a DONE entry, which a job has
+   painted -- so `s_psDst` is in the SHADER_READ_ONLY layout the restorer
+   leaves it in, and it is handed back in that layout for the restorer's next
+   draw. The barrier into the copy names the OUT pass's writes itself rather
+   than leaning on its render pass's outgoing dependency (the half of a
+   dependency a driver can drop, tagpu_vk_restore.c `end_pass`). */
+static void pic_fill(VkCommandBuffer cb, TWIN* t, const PSENT* e, int bx, int by)
+{
+    VkImageCopy rg[PS_TMAX];
+    int k, n = 0;
+    if (!t->colImg || e->state != PSE_DONE) return;
+    for (k = 0; k < e->nt; k++) {
+        int sx = e->core[k][0], sy = e->core[k][1];
+        int px = bx + e->core[k][2], py = by + e->core[k][3];
+        int w = e->core[k][4], h = e->core[k][5];
+        if (px < 0) { sx -= px; w += px; px = 0; }
+        if (py < 0) { sy -= py; h += py; py = 0; }
+        if (px + w > t->w) w = t->w - px;
+        if (py + h > t->h) h = t->h - py;
+        if (w <= 0 || h <= 0) continue;
+        memset(&rg[n], 0, sizeof rg[n]);
+        rg[n].srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg[n].srcSubresource.layerCount = 1;
+        rg[n].dstSubresource = rg[n].srcSubresource;
+        rg[n].srcOffset.x = sx; rg[n].srcOffset.y = sy;
+        rg[n].dstOffset.x = px; rg[n].dstOffset.y = py;
+        rg[n].extent.width = (uint32_t)w; rg[n].extent.height = (uint32_t)h;
+        rg[n].extent.depth = 1;
+        n++;
+    }
+    if (!n) return;
+    tw_to(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    img_barrier(cb, s_psDst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    vkCmdCopyImage(cb, s_psDst, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   t->colImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, (uint32_t)n, rg);
+    img_barrier(cb, s_psDst, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    s_psFills++;
+}
+
+/* ONCE PER PREPARE, before the replay: what the job finished, a palette that
+   replaced the one the pictures were restored against, and the job itself. */
+static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
+{
+    int i, k, any = 0, fresh = 0;
+    s_psFrame++;
+    if (s_psJob) {
+        if (tagpu_vk_restore_job_dst_live(s_psJob)) s_psDstLive = 1;
+        if (tagpu_vk_restore_job_failed(s_psJob)) {
+            plog(d, "gui: the picture restore failed on this lane - backdrops and "
+                    "stamps stay indexed");
+            ps_job_free(d);
+            s_psTried = 1;
+        } else if (tagpu_vk_restore_job_idle(s_psJob)) {
+            /* IDLE IS "EVERY FRAME ADDED IS PAINTED" (tagpu_vk_restore.h), and
+               this runs before anything is added this frame, so every entry
+               queued so far is in the destination -- in the command buffers
+               already submitted ahead of this one. */
+            for (i = 0; i < PS_MAX; i++) {
+                if (s_ps[i].state != PSE_QUEUED) continue;
+                s_ps[i].state = PSE_DONE; any++;
+                if (s_ps[i].fresh) { fresh++; s_ps[i].fresh = 0; }
+            }
+            if (fresh) s_psSettled++;
+            if (any) {
+                static unsigned said;
+                if (said < 32 || (said % 64) == 0)
+                    plog(d, "gui: %d picture(s) restored HERE - %u stored, %d bound, "
+                            "%u fills, %u evicted, %u refused", any, s_psStored,
+                         s_psBound, s_psFills, s_psEvicted, s_psRefused);
+                said++;
+            }
+        }
+    }
+    /* THE PALETTE MOVED, AND THE PRODUCER SAYS THE NEW ONE HAS SETTLED
+       (`colourTwins` is its `s_colValid`). A picture a twin pins is
+       restored again against it, repainting in place; every other one goes,
+       and is stored again against the new palette when it is next drawn --
+       so a level load does not restore the shell's whole map list for
+       nothing. Nothing is filled from the old colours meanwhile:
+       `pic_current` refuses until the new job exists. A pinning twin's colour
+       plane is cleared now, since the composite would otherwise show the old
+       palette's colours for as long as the restore takes -- the drain's own
+       re-arm does the same to every colour twin. The evictions are not about
+       room, so they do not count as recent: the pictures drawn again after the
+       re-arm are restored and asked a repaint for. */
+    if (s_psPalHave && h->pal && h->colourTwins && memcmp(h->pal, s_psPal, sizeof s_psPal)) {
+        int kept = 0, dropped = 0;
+        ps_job_free(d);
+        for (i = 0; i < PS_MAX; i++) {
+            if (s_ps[i].state == PSE_FREE) continue;
+            if (!s_ps[i].pins) { ps_evict(d, &s_ps[i], 0); dropped++; continue; }
+            s_ps[i].state = PSE_NEW; s_ps[i].fresh = 1; kept++;
+        }
+        plog(d, "gui: the presented palette moved under the picture store - %d "
+                "pinned picture(s) restored again, %d dropped", kept, dropped);
+        s_psEvN = 0;
+        for (k = 0; k < s_ntw; k++)
+            if (s_tw[k].pic && s_tw[k].colImg) { s_tw[k].colNeedClear = 1; s_tw[k].picGen = 0; }
+        s_psGen++;
+        s_psPalHave = 0;
+    }
+    /* Classic++'s assets are off: nothing is restored, and what the entries
+       hold stays for the next arm. */
+    if (!h->restoreFrames || h->restoreGen == 0) { ps_job_free(d); return; }
+    if (s_psJob || s_psTried || !h->pal) return;
+    /* ONLY AGAINST THE PALETTE THE DONE ENTRIES WERE RESTORED AGAINST.
+       `s_psPal` is written below and nowhere else, and a new palette reaches
+       it only through the rebuild above, which requeues or evicts every entry
+       first. A job made while a new palette has not yet settled would name
+       it, and every entry restored against the old one would then pass
+       `pic_current`. */
+    if (s_psPalHave && memcmp(h->pal, s_psPal, sizeof s_psPal)) return;
+    for (i = 0; i < PS_MAX; i++) if (s_ps[i].state == PSE_NEW) break;
+    if (i == PS_MAX) return;
+    if (!tagpu_vk_restore_up(d)) { s_psTried = 1; return; }
+    /* REPAINT ONCE A JOB HAS MADE THE DESTINATION READY: the DONE entries in
+       it stay DONE, and only the new ones are painted. Before that there is
+       nothing to keep, and the job's own clear is what makes the image a
+       picture. */
+    s_psJob = tagpu_vk_restore_job_new(d, "pic", 5, 0, s_psDstLive,
+                                       s_psSrc, s_psSrcView, PS_W, PS_H, 0, h->pal,
+                                       s_psDst, s_psDstView, PS_W, PS_H);
+    if (!s_psJob) {
+        s_psTried = 1;
+        plog(d, "gui: no restore job for the picture store - backdrops and stamps "
+                "stay indexed");
+        return;
+    }
+    memcpy(s_psPal, h->pal, sizeof s_psPal);
+    s_psPalHave = 1;
+    for (i = 0; i < PS_MAX; i++) if (s_ps[i].state == PSE_NEW) ps_queue(&s_ps[i]);
+}
+
+/* THE HANDLES ARE FORGOTTEN, NOT DESTROYED: the device they belong to is
+   already gone. The entries' bytes are ours and go. */
+static void pic_forget(void)
+{
+    int i;
+    for (i = 0; i < PS_MAX; i++) free(s_ps[i].bytes);
+    memset(s_ps, 0, sizeof s_ps);
+    memset(s_psCell, 0, sizeof s_psCell);
+    s_psCellsFree = PS_CW * PS_CH;
+    s_psJob = NULL;
+    s_psSrc = s_psDst = VK_NULL_HANDLE;
+    s_psSrcMem = s_psDstMem = VK_NULL_HANDLE;
+    s_psSrcView = s_psDstView = VK_NULL_HANDLE;
+    s_psSrcLay = VK_IMAGE_LAYOUT_UNDEFINED;
+    s_psDstLive = 0; s_psPalHave = 0; s_psTried = 0; s_psBound = 0;
+    s_psGen++;
+    s_psEvN = 0;
+}
+
+/* the store goes with the device: behind the seam's vkDeviceWaitIdle */
+static void pic_down(const TAGPU_VKPASS* d)
+{
+    /* the job first: it names both views */
+    if (s_psJob) { tagpu_vk_restore_job_free(d, s_psJob); s_psJob = NULL; }
+    kill_image(d, &s_psSrc, &s_psSrcMem, &s_psSrcView);
+    kill_image(d, &s_psDst, &s_psDstMem, &s_psDstView);
+    pic_forget();
+    s_psSettled = 0;
+    tagpu_gui_pic_settled(s_psSettled);
+}
+
+/* tagpu_vk_gui.h. Both jobs go back while the restorer can still take them;
+   the images they paint into are this pass's and keep what they hold. The UI
+   atlas's next job is made for the same generation and repaints over it
+   (`s_rjKeepGen`, `restore_want`); the store's QUEUED pictures are owed again
+   (`ps_job_free`) and its DONE ones stay DONE. */
+void tagpu_vk_gui_restore_drop(const TAGPU_VKPASS* d)
+{
+    if (s_rjob) {
+        tagpu_vk_restore_job_free(d, s_rjob);
+        s_rjob = NULL;
+        s_rjKeepGen = s_rjGen;
+    }
+    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
+    ps_job_free(d);
+}
+
+/* THE REMAP TABLE AS THE IMAGE `TINT_FS` READS, into `dst`: RGBA8, 256 wide
+   and twice `TAGPU_GUI_SHADE_ROWS` tall. The upper half is the remap, the
+   index in `.r`. The lower half is, per entry, the map of COLOUR that goes
+   with it -- `out = b + k * restored`, the blend's own form (TINT_FS):
+
+       i the entry, j = row[i] where the row sends it, s = min(1, min over
+       the channels of pal[j] / pal[i]);   k = s,   b = pal[j] - s * pal[i]
+
+   and for black, which no channel constrains, s is the row's own ratio
+   (sum of pal[j] over sum of pal[i] across the entries, at most 1): a black
+   texel's restored colour is the detail the restorer put into dark art, and
+   a dim has to scale it with its neighbours rather than leave it whole.
+   So `out = pal[j] + s * (restored - pal[i])`: a texel whose restored colour
+   IS its palette colour is shaded to the engine's own tinted colour exactly
+   (to a level, the table being bytes), and the restorer's detail is kept on
+   top, scaled down with a darkening and whole with a lightening. k in [0, 1]
+   and b >= 0 are the blend's limits and not a choice -- a UNORM attachment
+   clamps the source and its factors to [0, 1] before blending -- and `s` is
+   the largest scale that keeps every channel's offset non-negative.
+   With no palette the colour half stays zeros and this returns 0. */
+static int tint_table(unsigned char* dst, const unsigned char* shade, const unsigned char* pal)
+{
+    unsigned r;
+    int i, c;
+    unsigned char* fit = dst + (size_t)TAGPU_GUI_SHADE_ROWS * 256u * 4u;
+    memset(dst, 0, (size_t)TAGPU_GUI_SHADE_ROWS * 256u * 8u);
+    for (r = 0; r < TAGPU_GUI_SHADE_ROWS; r++)
+        for (i = 0; i < 256; i++) dst[((size_t)r * 256u + (unsigned)i) * 4u] = shade[(size_t)r * 256u + (unsigned)i];
+    if (!pal) return 0;
+    for (r = 0; r < TAGPU_GUI_SHADE_ROWS; r++) {
+        const unsigned char* row = shade + (size_t)r * 256u;
+        double sx = 0.0, sy = 0.0, rowk;
+        for (i = 0; i < 256; i++)
+            for (c = 0; c < 3; c++) {
+                sx += pal[(size_t)i * 4u + (unsigned)c];
+                sy += pal[(size_t)row[i] * 4u + (unsigned)c];
+            }
+        rowk = (sx > 0.0 && sy < sx) ? sy / sx : 1.0;
+        for (i = 0; i < 256; i++) {
+            const unsigned char* x = pal + (size_t)i * 4u;
+            const unsigned char* y = pal + (size_t)row[i] * 4u;
+            unsigned char* f = fit + ((size_t)r * 256u + (unsigned)i) * 4u;
+            double k = (x[0] | x[1] | x[2]) ? 1.0 : rowk;
+            for (c = 0; c < 3; c++)
+                if (x[c] && (double)y[c] / x[c] < k) k = (double)y[c] / x[c];
+            for (c = 0; c < 3; c++) {
+                double o = y[c] - k * x[c];
+                if (o < 0.0) o = 0.0;
+                f[c] = (unsigned char)(o + 0.5);
+            }
+            f[3] = (unsigned char)(k * 255.0 + 0.5);
+        }
+    }
+    return 1;
 }
 
 /* THE REPLAY. Every reason not to draw is taken BEFORE a byte is written, and
@@ -1701,7 +2411,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0, lutOff = 0;
-    int atUp = 0, palUp = 0, lutUp = 0;
+    int atUp = 0, palUp = 0, lutUp = 0, lutFit = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
@@ -1799,8 +2509,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (h.colRearm != s_colRearm || !s_colRearmSeen) {
         if (s_colRearmSeen && h.colRearm != s_colRearm) {
             int k;
-            for (k = 0; k < s_ntw; k++)
+            for (k = 0; k < s_ntw; k++) {
                 if (s_tw[k].colImg) s_tw[k].colNeedClear = 1;
+                s_tw[k].picGen = 0;          /* a bound picture is filled again */
+            }
             plog(d, "gui: the presented palette moved - %d colour twin(s) "
                     "invalidated, as the producer invalidated its own", s_ntw);
         }
@@ -1922,6 +2634,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 if (o->alen != (unsigned)o->w * (unsigned)o->h) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
                 if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
                 stNeed += (VkDeviceSize)o->alen * 2;
+                /* A PICTURE MAY BE NEW TO THE STORE, and its tiles' R8 bytes
+                   then go through this staging too */
+                if (o->col & TAGPU_GUICOL_ON) stNeed += ps_stage_need(o->w, o->h);
             }
             break;
         case TAGPU_GUIOP_PIXELS:
@@ -1929,6 +2644,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (o->alen != (unsigned)bw * (unsigned)bh) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             stNeed += (VkDeviceSize)o->alen * 2;
+            if (o->col & TAGPU_GUICOL_ON) stNeed += ps_stage_need(bw, bh);
             break;
         case TAGPU_GUIOP_SPRITE:
             if (o->fw < 1 || o->fh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
@@ -2022,10 +2738,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
-    /* THE LIGHTEN TABLE, on the palette's rule: uploaded when its serial moves,
-       which for this table is once a session in practice. */
-    if (h.shade && (!s_lutHave || s_lutSerial != h.shadeSerial)) {
-        lutUp = 1; stNeed += TAGPU_GUI_SHADE_BYTES;
+    /* THE REMAP TABLE, on the palette's rule: uploaded when its serial moves,
+       which for this table is once a session in practice -- and when the
+       palette's does, because its colour half is made against the palette
+       (`tint_table`). */
+    if (h.shade && (!s_lutHave || s_lutSerial != h.shadeSerial ||
+                    (h.pal ? 1u : 0u) != (unsigned)s_fitHave ||
+                    (h.pal && s_lutPal != h.palSerial))) {
+        lutUp = 1; stNeed += (VkDeviceSize)TAGPU_GUI_SHADE_BYTES * 8u;
     }
     /* THE MINIMAP'S TWO, WIDENED RGB8 -> RGBA8 ON THE WAY IN, so what they
        reserve is FOUR bytes a texel and not three. The picture moves on a map
@@ -2159,17 +2879,18 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         stOff += 256 * 4;
     }
     if (lutUp) {
-        /* 256 WIDE BY `TAGPU_GUI_SHADE_ROWS` TALL, so row-major `[row][index]` is `(x, y)` with no
-           arithmetic in the shader and the hand-over's block copies straight
-           in. The image is never recreated -- its size is a constant of the
-           format -- so there is no retire here and no `ret_push`. */
+        /* 256 WIDE, so row-major `[row][index]` is `(x, y)` with no arithmetic
+           in the shader, and twice `TAGPU_GUI_SHADE_ROWS` tall for the colour
+           half (`tint_table`). The image is never recreated -- its size is a
+           constant of the format -- so there is no retire here and no
+           `ret_push`. */
         if (!s_lutImg &&
-            !mk_image(d, 256, (int)TAGPU_GUI_SHADE_ROWS, VK_FORMAT_R8_UNORM,
+            !mk_image(d, 256, 2 * (int)TAGPU_GUI_SHADE_ROWS, VK_FORMAT_R8G8B8A8_UNORM,
                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                       &s_lutImg, &s_lutMem, &s_lutView)) goto refuse;
         lutOff = stOff;
-        memcpy(s->stMap + stOff, h.shade, TAGPU_GUI_SHADE_BYTES);
-        stOff += TAGPU_GUI_SHADE_BYTES;
+        lutFit = tint_table(s->stMap + stOff, h.shade, h.pal);
+        stOff += (VkDeviceSize)TAGPU_GUI_SHADE_BYTES * 8u;
     }
 
     if (atUp) {
@@ -2279,12 +3000,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                               : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                     s_lutHave ? VK_ACCESS_SHADER_READ_BIT : 0,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        copy_rect(cb, s->stage, lutOff, s_lutImg, 0, 0, 256, (int)TAGPU_GUI_SHADE_ROWS);
+        copy_rect(cb, s->stage, lutOff, s_lutImg, 0, 0, 256, 2 * (int)TAGPU_GUI_SHADE_ROWS);
         img_barrier(cb, s_lutImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_lutHave = 1; s_lutSerial = h.shadeSerial;
+        s_fitHave = lutFit; s_lutPal = lutFit ? h.palSerial : 0;
     }
     /* ---- CLASSIC++: THE UI ATLAS IS RESTORED HERE. After the copy above, so
        a restore issued this frame reads the texels this frame delivered and
@@ -2293,6 +3015,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        nothing into `cb`; `tagpu_vk_restore_step` does that, last of every
        pass's prepare. */
     restore_want(d, &h);
+    pic_step(d, &h);
+    tagpu_gui_pic_settled(s_psSettled);
 
     /* no barrier and no copy for the engine's frame: `tagpu_vk_surf_prepare`
        recorded both into this same command buffer, for this same slot, before
@@ -2325,6 +3049,21 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         for (k = 0; k < s_ntw; k++) tw_fresh(cb, &s_tw[k]);
     }
 
+    /* A BACKDROP WHOSE RESTORE HAS LANDED SINCE IT WAS SEEDED is coloured now,
+       before this frame's ops: every copy out of it below then carries the
+       restored picture. Only a twin still bound -- nothing has drawn into it
+       since its seed -- so the picture is exactly what the twin holds. */
+    if (s_psBound && pic_current(&h)) {
+        int k;
+        for (k = 0; k < s_ntw; k++) {
+            TWIN* bt = &s_tw[k];
+            if (!bt->pic || bt->picDrawn || bt->picGen == s_psGen || bt->pic > PS_MAX) continue;
+            if (s_ps[bt->pic - 1].state != PSE_DONE) continue;
+            pic_fill(cb, bt, &s_ps[bt->pic - 1], 0, 0);
+            bt->picGen = s_psGen;
+        }
+    }
+
     memset(s_setView, 0, sizeof s_setView);   /* the frame's claims start clean */
     memset(s_setView2, 0, sizeof s_setView2);
 
@@ -2340,6 +3079,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (s_behind) {
             if (o->kind != TAGPU_GUIOP_RESET) continue;
             s_behind = 0;               /* the fresh start has arrived */
+        }
+        /* A PICTURE TWIN STOPS BEING ONE AT THE FIRST OP THAT DRAWS INTO IT:
+           a later fill would paint the picture over what that op drew. It
+           keeps the pin (TWIN `pic`). A re-seed is handled in its own arm. */
+        if (s_psBound && o->kind != TAGPU_GUIOP_SEED &&
+            o->kind != TAGPU_GUIOP_FREE && o->kind != TAGPU_GUIOP_RESET) {
+            TWIN* bt = tw_find(o->surf);
+            if (bt && bt->pic && !bt->picDrawn) { bt->picDrawn = 1; s_psBound--; }
         }
 
         /* a draw needs a render pass open on ITS destination; everything else
@@ -2668,10 +3415,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (o->kind == TAGPU_GUIOP_SEED) {
                 t = tw_make(d, o->surf, o->w, o->h);
                 if (!t) goto refuse;
+                pic_unbind(t);               /* new contents, whatever they are */
             } else {
                 t = tw_find(o->surf);
                 if (!t) { sdWhy = "a pixel op names a surface this store never seeded";
                           goto standdown; }
+            }
+            /* A RESTORABLE PICTURE GIVES ITS TWIN A COLOUR PLANE, as a
+               coloured draw does -- the drain decided it (`TAGPU_GUICOL_DST`). */
+            if ((o->col & TAGPU_GUICOL_DST) && !t->colImg && !tw_colour(d, t)) {
+                sdWhy = "the producer gave a twin colour and this store could not";
+                goto standdown;
             }
             tw_fresh(cb, t);
             if (!o->alen) break;
@@ -2691,6 +3445,20 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                colour left standing under them would show through a panel the
                engine has just repainted. */
             tw_col_drop(cb, t, ux, uy, uw, uh);
+            /* ...UNLESS THE BYTES ARE A PICTURE THE STORE HAS RESTORED, in
+               which case the colour is the restored picture's. A backdrop's
+               seed binds its twin, so a restore that lands later still
+               reaches it (the fill before pass 2). */
+            if (o->col & TAGPU_GUICOL_ON) {
+                PSENT* e = pic_get(d, cb, s, &stOff, idx, uw, uh);
+                if (e && o->kind == TAGPU_GUIOP_SEED) {
+                    t->pic = (int)(e - s_ps) + 1; e->pins++; s_psBound++;
+                }
+                if (e && e->state == PSE_DONE && pic_current(&h)) {
+                    pic_fill(cb, t, e, ux, uy);
+                    if (o->kind == TAGPU_GUIOP_SEED) t->picGen = s_psGen;
+                }
+            }
             break; }
         /* ---- THE FOCUS TINT ------------------------------------------------
            The only op in the stream that READS ITS DESTINATION: `0x4CC8DF`
@@ -2780,10 +3548,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             rgn.extent.width = (uint32_t)(x1 - x0 + 1);
             rgn.extent.height = (uint32_t)(y1 - y0 + 1);
             rgn.extent.depth = 1;
-            /* ONLY THE INDEX PLANE IS SNAPSHOTTED. The colour twin is not read
-               by `TINT_FS` at all -- the op changes the index, so whatever
-               restored colour stood there is colour for a different index and
-               is written to zero rather than remapped. */
+            /* ONLY THE INDEX PLANE IS SNAPSHOTTED. The colour plane is shaded
+               by the blend instead (`tint_table`), which needs no read of it. */
             vkCmdCopyImage(cb, t->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            s_tintImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
             lay_to(cb, s_tintImg, &s_tintLay, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -2840,7 +3606,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             set_viewport(cb, t->w, t->h);
             set_scissor(cb, x0, y0, x1 - x0 + 1, y1 - y0 + 1, t->w, t->h);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              t->colImg ? s_pipeTint2 : s_pipeTint);
+                              !t->colImg ? s_pipeTint : s_fitHave ? s_pipeTintFit : s_pipeTint2);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     s_ploTwin, 0, 1, &dst_, 2, dynb);
             vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &vbOff);
@@ -3202,6 +3968,11 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (!d->dev || !vkDestroyPipeline) {
         s_state = owed ? ST_REFUSED : ST_UNBUILT;
         s_ntw = 0;
+        /* forgotten like the store's job in `pic_forget`: with no device the
+           restorer forgets its job table, and a pointer kept would alias */
+        s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+        s_rjSrcView = VK_NULL_HANDLE; s_rjKeepGen = 0;
+        pic_forget();
         return;
     }
     /* behind the seam's vkDeviceWaitIdle: nothing of ours is in a queue, so
@@ -3230,6 +4001,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_lutImg,  &s_lutMem,  &s_lutView);
     kill_image(d, &s_tintImg, &s_tintMem, &s_tintView);
     s_lutHave = 0; s_lutSerial = 0;
+    s_fitHave = 0; s_lutPal = 0;
     s_tintW = s_tintH = 0; s_tintLay = VK_IMAGE_LAYOUT_UNDEFINED;
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
     /* THE RESTORE GOES WITH THE DEVICE. The job is freed BEFORE the image it
@@ -3239,10 +4011,11 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
        `TAGPU_GUICOL_ON` into a lane with no atlas until its next present. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
     s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjBlanks = 0;
-    s_rjSrcView = VK_NULL_HANDLE; s_rjTried = 0;
+    s_rjSrcView = VK_NULL_HANDLE; s_rjTried = 0; s_rjKeepGen = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     s_arDim = 0; s_arHave = 0; s_arSettled = 0;
     tagpu_gui_col_ready(0, s_arSettled);
+    pic_down(d);
     s_colRearm = 0; s_colRearmSeen = 0;
     s_palHave = 0; s_palSerial = 0;
     s_dumReady = 0;
@@ -3258,6 +4031,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_pipeStr2) { vkDestroyPipeline(d->dev, s_pipeStr2, NULL); s_pipeStr2 = VK_NULL_HANDLE; }
     if (s_pipeTint) { vkDestroyPipeline(d->dev, s_pipeTint, NULL); s_pipeTint = VK_NULL_HANDLE; }
     if (s_pipeTint2) { vkDestroyPipeline(d->dev, s_pipeTint2, NULL); s_pipeTint2 = VK_NULL_HANDLE; }
+    if (s_pipeTintFit) { vkDestroyPipeline(d->dev, s_pipeTintFit, NULL); s_pipeTintFit = VK_NULL_HANDLE; }
     if (s_pipeCurs) { vkDestroyPipeline(d->dev, s_pipeCurs, NULL); s_pipeCurs = VK_NULL_HANDLE; }
     if (s_pipeMM)   { vkDestroyPipeline(d->dev, s_pipeMM,   NULL); s_pipeMM   = VK_NULL_HANDLE; }
     if (s_pipeFlat) { vkDestroyPipeline(d->dev, s_pipeFlat, NULL); s_pipeFlat = VK_NULL_HANDLE; }

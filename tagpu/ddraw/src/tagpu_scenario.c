@@ -18,6 +18,7 @@
 #include "tagpu_log.h"
 #include "tagpu_limits.h"   /* TAGPU_LIM_UNITS: the arena holds a full game */
 #include "tagpu_zoom.h"     /* tagpu_zoom_place_eye: the camera's range */
+#include "tagpu_patches.h"  /* tagpu_kill_hold: a create's messages wait for dress_unit */
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -1406,11 +1407,15 @@ static void create_units(void)
 
         alt = u->height != SCN_UNSET ? u->height : ground_at(u->x, u->y);
 
+        /* In a network game the create's messages leave at the flush, after dress_unit, so the
+           other peers' copies start with the HP and build state it writes (sim-fixes.md B8). */
+        tagpu_kill_hold();
         u->unit = UNITS_CreateUnit(u->owner, u->defIdx,
                                    u->x << 16, alt << 16, u->y << 16, 1, 1, 0);
 
         if (!u->unit || !readable(u->unit, UNIT_STRIDE))
         {
+            tagpu_kill_flush();
             u->unit = 0;
             u->ok = 0;
             g_failed++;
@@ -1420,6 +1425,7 @@ static void create_units(void)
         }
 
         dress_unit(u);
+        tagpu_kill_flush();
         g_applied++;
     }
 }

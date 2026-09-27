@@ -72,8 +72,9 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
    here unless `repaint`, which is the palette-moved case that recolours in
    place instead of blanking the world for the length of the job.
    `tag` prefixes the log lines, `prio` orders it against the other jobs
-   (terrain 0, features 1, effects 2, units 3, the UI 4), `oneshot` marks a
-   fixed list whose completion is logged as the restore's "done" line.
+   (terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures
+   5), `oneshot` marks a fixed list whose completion is logged as the
+   restore's "done" line.
    NULL, with the reason in tagpu.log, when the model or the device cannot.
    Render thread only, and only between the seam's frames. */
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
@@ -161,7 +162,11 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 /* The device went with everything on it: forget every id without destroying,
    and every job with them. Call it BEFORE the jobs' owners forget theirs. */
 void tagpu_vk_restore_lost(void);
-/* Ordinary teardown, device still alive. */
+/* Ordinary teardown, device still alive. EVERY JOB MUST HAVE BEEN FREED BY
+   ITS OWNER FIRST: this forgets the job table, so an owner's pointer kept
+   across it names a slot the next `job_new` hands to someone else. A job
+   still standing here is freed and logged, which recovers its objects and
+   not the owner's pointer. */
 void tagpu_vk_restore_down(const TAGPU_VKPASS* d);
 
 #endif
