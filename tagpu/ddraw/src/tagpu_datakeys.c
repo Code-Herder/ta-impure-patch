@@ -1543,7 +1543,7 @@ static unsigned vet_level(const DkUnit* r, unsigned k)
    least 1 and the threshold at least 1 by the parse, so neither divides by
    zero. The level is capped at stock's own ceiling, 13 107: the capture's
    base is at most 1800 (0x404396), so its product (0x4043EC..0x4043F7) stays
-   below 236 million; the reclaim step's product is bounded by its answer. */
+   at 236 106 000, below 2^31; the reclaim step's product is bounded by its answer. */
 static unsigned vet_level_open(const DkUnit* r, unsigned k)
 {
     unsigned n = r->vthr_n, top = r->vthr[n - 1], l;
@@ -1660,7 +1660,8 @@ int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
    holds wraps the step to a fraction of itself (ARMCOM's 300 on a CORKROG
    wraps at 32). The factor is held to the largest that fits. A product that
    does not fit at 1 is the engine's own at a recruit's factor, and the
-   answer is 1. */
+   answer is 1.
+   Called with the engine's x87 stack live (tagpu_patches.c, fix_veterancy): integer code only. */
 int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u, unsigned workertime,
                                               unsigned maxhp, unsigned ticks)
 {

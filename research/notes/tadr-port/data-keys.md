@@ -384,7 +384,7 @@ commit can change.
     reclaims every 15 ticks, by the reclaimer's level: `1 + L` in place of
     stock's `(kills + 5)/5`. Both this and the capture's cost take the level open past the last
     threshold, by the last gap (by the threshold, for a list of one), capped at 13 107, stock's own
-    ceiling. The capture's product stays below 236 million at the cap (its base is at most 1 800,
+    ceiling. The capture's product is at most 236 106 000 at the cap, below 2³¹ (its base is at most 1 800,
     `0x404396`). The reclaim step's does not: `0x4386B9..0x4386C3` multiply the workertime, the
     factor, the target's MaxHitPoints and the 15 ticks in 32 bits and `0x4386CC` reads the product
     unsigned, so ARMCOM's 300 on a CORKROG wraps at a factor of 32. The answer takes the other three
@@ -392,7 +392,7 @@ commit can change.
     largest that fits, 1 when even 1 does not (the engine's own product at a recruit's factor).
     MEASURED (`scenarios/c3-reclaim-bound.json`, VTCOM1 and VTCOM0 at 31 kills on a CORKROG each):
     on the build before the bound the keyed target lost 30 HP in 16 s against stock's 3 074, the
-    wrapped product; with it, 11 304 per 13 s against 2 544, 4.44 = 31/7, the event logged.
+    wrapped product; with it, 11 304 per 13 s against 2 544, 4.44 ≈ 31/7 (each step floored by `0x4386DA`'s conversion), the event logged.
 - **`0x438650` is a unit reclaim, not a capture.** Its callers are the reclaim order (`0x40483D`)
   and the build order's reclaim (`0x414C86`); the evidence pass had it as the capture's time. The
   decision stands for it unchanged: every place stock reads a level reads the keyed type's.

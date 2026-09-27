@@ -5703,7 +5703,10 @@ static int fix_veterancy(void)
     memcpy(p, cost, 7); p += 7;
     wk_jmp(p, 0xE9, 0x004043DFu);
 
-    /* 0x43869D: pushad; push [esp+0x3C] (the ticks); push [esi+0x1FA] (the target's
+    /* The x87 stack is live here: 0x438672/0x43867A load the target's cost, which 0x4386D0
+       uses after the stub, so tagpu_datakeys_vet_reclaim_step and all it calls stay free of
+       x87 and MMX code.
+       0x43869D: pushad; push [esp+0x3C] (the ticks); push [esi+0x1FA] (the target's
        MaxHitPoints, which 0x4386BC reads next); push edx; push eax; call reclaim;
        cmp eax,-1; je stock; mov [esp+0x1C],eax; popad; mov edi,edx; mov edx,eax;
        jmp 0x4386B9; stock: popad; mov cx,[eax+0xB8]; jmp 0x4386A4 */

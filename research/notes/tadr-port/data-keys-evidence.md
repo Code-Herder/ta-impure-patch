@@ -1461,7 +1461,7 @@ each stated at its site:**
 - **Accuracy:** `kills / rate` with rate 1…65 535. 0 = off. Anything else is malformed.
 - **The capture's cost and a unit reclaim's step** (`0x4043D8` and `0x438650`): the unbounded level with the last gap. The
   gap is ≥ 1 by the parse rule below. Cap the level at **13 107**, stock's own maximum
-  (65 535 / 5). The capture's product stays below 236 million at it; the reclaim step's is a 32-bit
+  (65 535 / 5). The capture's product is at most 236 106 000 at it, below 2³¹; the reclaim step's is a 32-bit
   product of four factors that wraps well below it (ARMCOM on CORKROG at a factor of 32, stock's
   included at 155 kills), so C3 holds that factor to what the product holds ([C3, as built](data-keys.md#c3-as-built)).
 - **Display:** local, skip-and-log if its bytes differ (owner question 3).
