@@ -6707,7 +6707,7 @@ static int fix_stale_hits(void)
    slot, fallback= to a slot freed in the last tick, holdfail= creates it failed, retry= the
    Deathmatch respawns that found no slot and wait for their countdown's next fire. The alert
    fields come first: the heartbeat is one log line of at most 2040 bytes, cut from its end,
-   and only the kills and ghost sections follow this one. */
+   and only the ghost section follows this one. */
 int tagpu_hits_format(char* buf, unsigned int cap)
 {
     const struct hit_tab* t = s_hit;
@@ -7035,8 +7035,10 @@ static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m
 /* A copy made before state 6 from sender k's create for slot idx, still that copy: marked
    dying as the engine's ghost sweep marks one (0x48B426..0x48B42F, bit 14 of +0x110), which
    the unit tick then destroys without a message (0x48AFB9 -> 0x4864B0; it sends a 0x0C only
-   for a local player's unit, 0x48664B). Game thread, from the pump, as that sweep runs. */
-static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
+   for a local player's unit, 0x48664B). Game thread, from the pump, as that sweep runs.
+   frac, when not NULL, is the owner's +0x104 carried by the death (B8), already checked to be
+   a number in [0, 1]: written first, so that destroy decides on the owner's value. */
+static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx, const unsigned char* frac)
 {
     const char* first = *(const char* const*)(ta + 0x14357);
     const char* last  = *(const char* const*)(ta + 0x1435B);
@@ -7054,6 +7056,7 @@ static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
         t->stamp[idx] != s_ghostDone[i - 1].birth ||
         !(flags & 0x10000000u) || (flags & 0x4000u))
         return 0;
+    if (frac) memcpy(slot + 0x104, frac, 4);
     *(unsigned int*)(slot + 0x110) = flags | 0x4000u;
     return 1;
 }
@@ -7061,18 +7064,19 @@ static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
 /* A 0x0C refused in state 5, `m` its record and regs the dispatcher's frame (the sender's
    record index in the low byte of the site's esp + 0x14, its record in edi): a unit its owner
    destroyed while this peer loaded. Its held create is cancelled; failing that, in the
-   catch-up ticks, the copy made before state 6 is marked dying. Reached from B4's 0x05
-   receiver for the carried 0x0C (kill_rx_death), whose frame is the dispatcher's. */
-static void ghost_refused_kill(unsigned int* regs, const unsigned char* m)
+   catch-up ticks, the copy made before state 6 is marked dying, with frac (ghost_sweep)
+   written first. Reached from B4's 0x05 receiver for the carried 0x0C (kill_rx_death), whose
+   frame is the dispatcher's. 1 when a copy was marked dying, on the game thread. */
+static int ghost_refused_kill(unsigned int* regs, const unsigned char* m, const unsigned char* frac)
 {
     const char* ta = *(const char* const*)0x00511DE8;
     const unsigned char* sp = WPN_ESP_JMP(regs);
     const char* snd = (const char*)(size_t)regs[PR_EDI];
     unsigned int k, idx;
     int i, late;
-    if (s_ghostOff || !ta || !m || m[0] != 0x0C) return;
+    if (s_ghostOff || !ta || !m || m[0] != 0x0C) return 0;
     k = *(const unsigned int*)(sp + 0x14) & 0xFFu;
-    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return;
+    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return 0;
     idx = m[1] | (unsigned int)m[2] << 8;
     EnterCriticalSection(&s_ghostLock);
     i = ghost_cancel(s_ghostQ[k], s_ghostN[k], idx);
@@ -7082,17 +7086,18 @@ static void ghost_refused_kill(unsigned int* regs, const unsigned char* m)
     }
     late = s_ghostPhase;
     LeaveCriticalSection(&s_ghostLock);
-    if (i >= 0) return;
-    if (late && GetCurrentThreadId() == s_ghostGameTid && ghost_sweep(ta, k, idx)) {
+    if (i >= 0) return 0;
+    if (late && GetCurrentThreadId() == s_ghostGameTid && ghost_sweep(ta, k, idx, frac)) {
         s_ghostSwept++;
         if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
             tagpu_logf("enginefix: ghost commander: slot %u from sender %u killed during the "
                        "catch-up ticks; its copy made before state 6 marked dying", idx, k);
-        return;
+        return 1;
     }
     EnterCriticalSection(&s_ghostLock);
     s_ghostNoKill++;
     LeaveCriticalSection(&s_ghostLock);
+    return 0;
 }
 
 /* The dispatcher's refusal of a message in state 5 (0x45477F), on whichever thread pumps. A
@@ -7491,6 +7496,9 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
      as its float bits, read at the send (0x48666D) before the owner's own destructor reads it
      (0x486679). Every other peer writes it into its copy and runs the destructor on the record
      as the 0x0C case does (0x45541C), so all four decisions read the owner's value there too.
+     A death the gate refuses in state 5 is B5's: it cancels a create still held, or, in the
+     catch-up ticks, marks the copy dying with the owner's value written first (ghost_sweep),
+     so the unit tick's destroy (0x48AFB9 -> 0x4864B0) decides on it as well.
    - The create: the 0x4A also carries its unit's +0x104 and HP, read as the message leaves,
      and CreateFromNetwork's exit writes them into the copy it made, as the round robin writes
      them (kill_apply_state). Three engine callers and tacli's scenario applier set a new unit's
@@ -7522,8 +7530,11 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
      m[37..64]  0, unread
 
    INVARIANTS.
-   - Every peer's copy starts from its owner's values, and every peer judges a death on the
-     owner's value: by construction, not by the round robin's phase.
+   - A copy made from a held or unheld create starts from its owner's values (a late flush's
+     excepted, which starts as stock's), and every peer that holds a copy when the death
+     arrives judges it on the owner's value -- in play and in the catch-up ticks alike, by
+     construction, not by the round robin's phase. A peer that never had a copy judges
+     nothing (GAPS).
    - Bounded: an index names a slot only inside [1, (last - first) / 0x118] (kill_slot); a
      fraction is written only as a number in [0, 1], since the reclaim credit multiplies by
      1 - f; HP is the u16 the round robin itself writes unchecked (0x48B4B2).
@@ -7534,16 +7545,21 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
      unit's straight line (0x4884AC), the resurrection's three (0x405119 no unit linked,
      0x405155 no wreck, 0x405164 its success) -- each span a row of the table, no branch
      leaving it -- and tacli's applier on both of its own [DISASSEMBLED].
-   - The queue's bound is what one create sends [DISASSEMBLED, every direct call followed from
-     0x485F50]: the 0x09 as its 0x4A (65 bytes, 0x486115), the 0x12 (5, 0x48612A, a finished
-     type with def+0x22F 0), the 0x11 (4, 0x48B090's end, def+0x241 bit 18) and the 0x13 (18,
-     0x48B1AA -> 0x47F780 -> 0x47F0C0), so 4 messages and 92 bytes; nothing between the create
-     and its flush sends (the spans are straight code; the resurrection's calls 0x489690,
-     0x4815F0 and 0x421E60 are leaves). Indirect calls on the way are not followed (0x48B195,
-     0x49059A and 0x4905BC in the create's own callees [INFERRED: a unit's script calls], and
-     the runtime's under 0x47F780): a message past the bound sends the whole queue at once, in
-     order, then itself, and is counted (late=) -- nothing dropped or reordered, the create
-     then as stale as stock's.
+   - The queue's bound is what one create's DIRECT calls send [DISASSEMBLED, every direct call
+     followed from 0x485F50]: the 0x09 as its 0x4A (65 bytes, 0x486115), the 0x12 (5,
+     0x48612A, a finished type with def+0x22F 0), the 0x13 (18: 0x48B090(1, 1) newly sets bit 0
+     only, so its one reachable sound is 0x48B110 -> 0x47F780(unit, 3, 0) -> 0x47F0C0, sent at
+     0x47F14C; its bit-2 path 0x48B16E..0x48B1AA is not reached) and the 0x11 (4, 0x48B1F3,
+     def+0x241 bit 18), so 4 messages and 92 bytes. Nothing between the create and its flush
+     sends: the spans are straight code, and the resurrection's calls 0x489690, 0x4815F0 and
+     0x421E60 are leaves. A unit's scripts are not covered: the COB interpreter 0x4B0DA0 (19
+     callbacks) and 0x4B1C00 (4) are not followed, nor the create's indirect calls 0x49059A and
+     0x4905BC, and a Create or Activate script can send a 0x13, 0x11 or 0x0A through the host
+     vtable 0x4FD698 [INFERRED]. Such a send takes the late path: past the bound, the whole
+     queue goes at once, in order, then the message itself, counted (late=) -- nothing dropped
+     or reordered -- and the queued 0x4A goes WITHOUT a state (m+36 0), since its caller's
+     writes are still to come: the copy starts exactly as stock's, unfinished at HP 0, and
+     takes its values from the round robin, as stock's does.
    - A hold is its thread's own, bounded in time by its caller: an entry claimed with the
      thread id by one InterlockedCompareExchange, touched only by that thread and released at
      its flush in the same call of the caller. The send gate (0x451DF0), which every thread's
@@ -7552,9 +7568,15 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
      and resurrection 0x405104 under the unit tick 0x43C334, a capture the dispatcher's case
      0x45577B takes in its pumps 0x4954C8, 0x4968CB and 0x49852E, tacli's applier) and the
      loader (the placed units 0x497B40 -> 0x488310, and that case in its pump 0x49727D). A
-     third finds no entry, is counted (full=) and sends as stock.
+     third would find no entry: counted (full=), its messages sent at once, its 0x4A with the
+     state at the create.
 
-   GAPS. The saved-game restore 0x487080 (its create 0x48718E, HP at 0x4871B5, +0x104 at
+   GAPS. A unit created and destroyed while this peer is still loading (state 5): its create
+   is held by B5 and the death cancels it, so this peer never has a copy, runs no destructor
+   for it and counts none of its kill, while its owner and every peer already in play count
+   it. The window: a unit whose create and death both reach this peer before its in-play
+   entry replays what B5 held -- so within the time this peer's load runs past its owner's.
+   The saved-game restore 0x487080 (its create 0x48718E, HP at 0x4871B5, +0x104 at
    0x48727C) is not held. It is reached only from the level load (0x497B29 -> 0x432610 ->
    0x486FD0 -> 0x487080) and from itself; whether a network game can start from a save is not
    established. Between its create and its writes it restores the units the record names
@@ -7585,8 +7607,9 @@ static struct kill_hold s_killHold[KILL_HOLDS];
    during a load (the refused deaths) or from any thread that holds, the rest by the thread
    that runs the tick */
 static unsigned int s_killOut, s_killIn, s_killBadFrac, s_killDeadCopy, s_killNoSlot;
-static unsigned int s_killSame, s_killTurned, s_killTurnedBack;
-static unsigned int s_killCreateDone, s_killCreateNano, s_killCreateBad, s_kill12Drop;
+static unsigned int s_killSame, s_killTurned, s_killTurnedBack, s_killSwept;
+static unsigned int s_killCreateDone, s_killCreateNano, s_killCreateAbsent, s_killCreateBad;
+static unsigned int s_kill12Drop;
 static volatile LONG s_killRefused, s_killHeld, s_killHoldLate, s_killHoldFull, s_killNotes;
 
 /* slot idx of the unit array, or NULL for 0 or past it (B3's bound, wire_index_ok) */
@@ -7626,17 +7649,23 @@ static struct kill_hold* kill_hold_mine(void)
     return NULL;
 }
 
-/* Sends what h queued, in order, and frees h. A queued 0x4A takes its unit's state now, or the
-   caller's (ov) where the caller writes it after this flush. */
-static void kill_flush(struct kill_hold* h, int ov, unsigned int fbits, unsigned int hp)
+/* how a flush fills a queued 0x4A's state */
+#define KILL_READ    0      /* its unit's state now: the caller's writes are done              */
+#define KILL_GIVEN   1      /* the caller's values, which it writes after this flush           */
+#define KILL_ABSENT  2      /* none (m+36 0): the caller's writes are still to come, so the copy
+                               starts as stock's, unfinished at HP 0, for the round robin      */
+
+/* Sends what h queued, in order, and frees h. */
+static void kill_flush(struct kill_hold* h, int how, unsigned int fbits, unsigned int hp)
 {
     unsigned int i;
     h->flushing = 1;
     for (i = 0; i < h->n; i++) {
         unsigned char* m = h->bytes + h->q[i].off;
         if (h->q[i].len == HIT_MSG && m[0] == 0x05 && m[1] == 0 && m[2] == HIT_TAG_CREATE) {
-            if (ov) kill_state_put(m, fbits, hp);
-            else kill_state_read(m, m[6] | (unsigned int)m[7] << 8);
+            memset(m + 30, 0, 7);
+            if (how == KILL_GIVEN) kill_state_put(m, fbits, hp);
+            else if (how == KILL_READ) kill_state_read(m, m[6] | (unsigned int)m[7] << 8);
         }
         HIT_SEND(h->q[i].net, m, h->q[i].len);
     }
@@ -7645,7 +7674,8 @@ static void kill_flush(struct kill_hold* h, int ov, unsigned int fbits, unsigned
     InterlockedExchange(&h->tid, 0);
 }
 
-/* before a create whose caller sets the unit's HP or fraction after it returns */
+/* before a create whose caller sets the unit's HP or fraction after it returns; a hold this
+   thread still has (no caller reaches here holding, by the flush sites) goes first, late */
 static void kill_hold_arm(void)
 {
     LONG me = (LONG)GetCurrentThreadId();
@@ -7653,7 +7683,7 @@ static void kill_hold_arm(void)
     int i;
     if (h) {
         InterlockedIncrement(&s_killHoldLate);
-        kill_flush(h, 0, 0, 0);
+        kill_flush(h, KILL_ABSENT, 0, 0);
     }
     for (i = 0; i < KILL_HOLDS; i++) {
         if (InterlockedCompareExchange(&s_killHold[i].tid, me, 0) == 0) {
@@ -7668,7 +7698,9 @@ static void kill_hold_arm(void)
 
 /* In place of the send 0x451DF0's first three instructions, on every thread and for every
    message: 1 when this thread holds a create, the message then queued behind it and the send
-   answered as a sent message (eax 1, ret 0xC); 0 for the send to go on. */
+   answered as a sent message (eax 1, ret 0xC); 0 for the send to go on. A message past the
+   bound (a unit script's, which the bound does not cover) sends the queue first, in order,
+   late: its 0x4A without a state, since the caller's writes are still to come. */
 static int __cdecl kill_send_gate(unsigned int* regs)
 {
     struct kill_hold* h = kill_hold_mine();
@@ -7680,7 +7712,7 @@ static int __cdecl kill_send_gate(unsigned int* regs)
     len = *(const unsigned int*)(sp + 12);
     if (!msg || !len || len > KILL_Q_BYTES - h->used || h->n >= KILL_Q_N) {
         InterlockedIncrement(&s_killHoldLate);
-        kill_flush(h, 0, 0, 0);
+        kill_flush(h, KILL_ABSENT, 0, 0);
         return 0;
     }
     h->q[h->n].net = *(const unsigned int*)(sp + 4);
@@ -7699,7 +7731,7 @@ static void __cdecl kill_flush_site(unsigned int* regs)
 {
     struct kill_hold* h = kill_hold_mine();
     (void)regs;
-    if (h) kill_flush(h, 0, 0, 0);
+    if (h) kill_flush(h, KILL_READ, 0, 0);
 }
 
 /* 0x405164, the resurrection's success: from here it runs straight to its writes of +0x104 =
@@ -7709,7 +7741,7 @@ static void __cdecl kill_flush_resurrected(unsigned int* regs)
 {
     struct kill_hold* h = kill_hold_mine();
     (void)regs;
-    if (h) kill_flush(h, 1, 0x00000000u, 1u);
+    if (h) kill_flush(h, KILL_GIVEN, 0x00000000u, 1u);
 }
 
 static void __cdecl kill_hold_site(unsigned int* regs)
@@ -7738,6 +7770,7 @@ static void kill_apply_state(char* slot, const unsigned char* rec)
     unsigned int fbits;
     float f;
     char* ob;
+    if (rec[33] == 0) { s_killCreateAbsent++; return; }
     if (rec[33] != 1) { s_killCreateBad++; return; }
     memcpy(&fbits, rec + 27, 4);
     memcpy(&f, &fbits, 4);
@@ -7778,26 +7811,34 @@ static int __stdcall kill_tx_death(unsigned int net, const unsigned char* msg, u
 
 /* A carried 0x0C in B4's 0x05 receiver: 1 done; 4 the destructor on the record (regs[PR_EAX]),
    the owner's fraction first written into the copy. Refused in state 5 it is B5's
-   (ghost_refused_kill); a victim index past the array goes to the destructor unwritten, where
-   B3's bound drops it (0x4866E5). */
+   (ghost_refused_kill), which writes the same fraction into a copy it marks dying; a victim
+   index past the array goes to the destructor unwritten, where B3's bound drops it
+   (0x4866E5). The counters a refusal touches are written only after a mark, on the game
+   thread (ghost_refused_kill's own test). */
 static int kill_rx_death(unsigned int* regs, const char* ta, const unsigned char* m)
 {
     char* slot;
     unsigned int fbits;
     float f;
+    int ok;
     if (m[3] != 0x0C) { s_hitMalformed++; return 1; }
+    memcpy(&fbits, m + 14, 4);
+    memcpy(&f, &fbits, 4);
+    ok = m[18] == 1 && f >= 0.0f && f <= 1.0f;
     if (!hit_gate(ta, 0x0C)) {
         InterlockedIncrement(&s_killRefused);
-        if (*(const unsigned int*)(ta + 0x391F1) == 5u) ghost_refused_kill(regs, m + 3);
+        if (*(const unsigned int*)(ta + 0x391F1) == 5u &&
+            ghost_refused_kill(regs, m + 3, ok ? m + 14 : NULL)) {
+            if (ok) s_killSwept++;
+            else s_killBadFrac++;
+        }
         return 1;
     }
     s_killIn++;
     regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
     slot = kill_slot(ta, m[4] | (unsigned int)m[5] << 8);
     if (!slot) return 4;
-    memcpy(&fbits, m + 14, 4);
-    memcpy(&f, &fbits, 4);
-    if (m[18] != 1 || !(f >= 0.0f && f <= 1.0f)) { s_killBadFrac++; return 4; }
+    if (!ok) { s_killBadFrac++; return 4; }
     if (!(*(const unsigned int*)(slot + 0x110) & 0x10000000u)) { s_killDeadCopy++; return 4; }
     if (*(const float*)(slot + 0x104) == f) s_killSame++;
     else if (f == 0.0f) s_killTurned++;
@@ -7813,6 +7854,10 @@ static int fix_kill_counts(void)
     static const unsigned char txDeath[5] = { 0xE8, 0x7E, 0xB7, 0xFC, 0xFF };   /* 0x48666D */
     static const unsigned char len0c[2]   = { 0x6A, 0x0B };                     /* 0x486669 */
     static const unsigned char back0c[5]  = { 0xE9, 0x23, 0x0B, 0x00, 0x00 };   /* 0x455428 */
+    /* 0x45541C..0x455427, the 0x0C case the 0x4C's branch of B4's stub reproduces (doDeath):
+       mov edx,[esp+0x10]; push 0; push edx; call 0x4866D0 */
+    static const unsigned char case0c[12] = {
+        0x8B, 0x54, 0x24, 0x10, 0x6A, 0x00, 0x52, 0xE8, 0xA8, 0x12, 0x03, 0x00 };
     static const unsigned char send[6]    = { 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x0C }; /* 0x451DF0 */
     static const unsigned char capCall[5] = { 0xE8, 0x4B, 0xD8, 0xFF, 0xFF };   /* 0x488700 */
     static const unsigned char plcCall[5] = { 0xE8, 0xE9, 0xDA, 0xFF, 0xFF };   /* 0x488462 */
@@ -7942,6 +7987,7 @@ static int fix_kill_counts(void)
     hit_site(0x00405155, 5, resFail, 0xE9, aResFail, "kill counts: the resurrection's flush, no wreck");
     hit_site(0x00405164, 6, resDone, 0xE9, aResDone, "kill counts: the resurrection's flush, its values");
     lim_same(0x00486669, 2, len0c, "kill counts: the 0x0C's length");
+    lim_same(0x0045541C, 12, case0c, "kill counts: the 0x0C case the carried death reproduces");
     lim_same(0x00455428, 5, back0c, "kill counts: the 0x0C case's continuation");
     lim_same(0x00488705, 62, capSpan, "kill counts: the capture's writes from its record");
     lim_same(0x00488774, 29, capOldSpan, "kill counts: the capture's writes from the old unit");
@@ -7994,23 +8040,30 @@ static int fix_built_bounds(void)
     return fix_write(&s, 1);
 }
 
-/* the heartbeat's kills section (tagpu_packet_pub.c): DLL counters only. The alerts first:
-   bad= deaths whose fraction was not a number in [0, 1], bare= bare 0x0Cs dropped, late=
-   holds flushed by anything but their own site, full= holds that found no free entry, noslot=
-   messages sent without a state, b12= 0x12s dropped past the array. Then out/in= deaths sent
-   and taken, st5= deaths refused by the gate, same/fix/rev= a copy's fraction that already
-   matched, was unfinished where the owner's was finished, or the reverse; dead= deaths for a
-   copy already gone; cr= copies made finished/unfinished/without a valid state; held= holds. */
+/* the heartbeat's kills line (tagpu_packet_pub.c), a line of its own after the packet: line:
+   DLL counters only. The alerts first: bad= deaths whose fraction was not a number in [0, 1],
+   bare= bare 0x0Cs dropped, late= holds flushed by anything but their own site (their 0x4A
+   without a state), full= holds that found no free entry, noslot= messages sent without a
+   state, b12= 0x12s dropped past the array. Then out/in= deaths sent and taken, st5= deaths
+   refused by the gate, sw= those whose copy B5 marked dying with the owner's fraction,
+   same/fix/rev= a copy's fraction that already matched, was unfinished where the owner's was
+   finished, or the reverse; dead= deaths for a copy already gone; cr= copies made
+   finished/unfinished/without a state/with an invalid one; held= holds.
+   CUT FROM NOTHING: every conversion in KILLS_FMT is a %u of an unsigned int, at most 10
+   digits for its 2 characters, so the line is at most 5 times the format's length, which the
+   typedef proves shorter than TAGPU_KILLS_LINE, its buffer. */
+#define KILLS_FMT "kills: bad=%u bare=%u late=%u full=%u noslot=%u b12=%u out=%u in=%u st5=%u" \
+                  " sw=%u same=%u fix=%u rev=%u dead=%u cr=%u/%u/%u/%u held=%u"
+typedef char kills_line_fits[(5 * (sizeof KILLS_FMT - 1) < TAGPU_KILLS_LINE) ? 1 : -1];
+
 int tagpu_kills_format(char* buf, unsigned int cap)
 {
-    return _snprintf(buf, cap,
-                     " | kills: bad=%u bare=%u late=%u full=%u noslot=%u b12=%u out=%u in=%u"
-                     " st5=%u same=%u fix=%u rev=%u dead=%u cr=%u/%u/%u held=%u",
+    return _snprintf(buf, cap, KILLS_FMT,
                      s_killBadFrac, (unsigned int)s_killBare0C, (unsigned int)s_killHoldLate,
                      (unsigned int)s_killHoldFull, s_killNoSlot, s_kill12Drop, s_killOut, s_killIn,
-                     (unsigned int)s_killRefused, s_killSame, s_killTurned, s_killTurnedBack,
-                     s_killDeadCopy, s_killCreateDone, s_killCreateNano, s_killCreateBad,
-                     (unsigned int)s_killHeld);
+                     (unsigned int)s_killRefused, s_killSwept, s_killSame, s_killTurned,
+                     s_killTurnedBack, s_killDeadCopy, s_killCreateDone, s_killCreateNano,
+                     s_killCreateAbsent, s_killCreateBad, (unsigned int)s_killHeld);
 }
 
 static void patch_engine_defects(void)

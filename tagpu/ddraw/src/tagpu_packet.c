@@ -225,6 +225,7 @@ static PKX s_cmd   = { "cmd" };
 static int s_armed, s_check, s_stress, s_poison;
 static LARGE_INTEGER s_freq;
 static tagpu_packet_extra_fn s_extra;
+static tagpu_packet_extra_fn s_extraLine;
 /* the render thread's own copy of the last command it posted, for the
    heartbeat's unacked delta (never a read of a slot it has handed over) */
 static TAGPU_CMD s_lastPosted;
@@ -966,6 +967,13 @@ static void heartbeat(PKX* m, unsigned fc)
     if (s_extra && n < (int)sizeof b - 1) s_extra(b + n, (unsigned)(sizeof b - (size_t)n), secs);
     b[sizeof b - 1] = 0;
     plog(b);
+    if (s_extraLine) {
+        char x[TAGPU_PACKET_LINE2];
+        x[0] = 0;
+        s_extraLine(x, sizeof x, secs);
+        x[sizeof x - 1] = 0;
+        if (x[0]) plog(x);
+    }
     last = fc; lastQpc = now; lastPub = pubs; lastTaken = taken; have = 1;
 }
 
@@ -1003,6 +1011,7 @@ void tagpu_cmd_done(void)
 }
 
 void tagpu_packet_set_extra(tagpu_packet_extra_fn fn) { s_extra = fn; }
+void tagpu_packet_set_extra_line(tagpu_packet_extra_fn fn) { s_extraLine = fn; }
 
 int tagpu_packet_armed(void) { return s_armed; }
 
