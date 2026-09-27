@@ -2711,9 +2711,9 @@ the game folder -- pointed at Windows' own, so it does not start`, then, at the 
 touched. The same lever turns it off. MEASURED 2026-09-27, single player, Wine and Windows: no
 recorder answered a call beside the 2006 recorder, the three Patch Loader setups, Total Mayhem or
 ProTA (its log has no `DLL.DirectPlay` line, or there is none), and with the lever the 2006
-recorder does; and on Wine the suite's two-player game played over Windows' DirectPlay beside
-the retail exe, the Patch Loader with TADR's OTA and Mayhem builds, Total Mayhem and ProTA, with
-no TADR code on either peer.
+recorder does; and on Wine the suite's two-player game played over Windows' DirectPlay in every
+one of those setups and beside the retail exe alone, with no TADR code on either peer (the full
+run, [the setups](compat/setups.md)).
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 
