@@ -63,8 +63,13 @@
 
 /* FILL: the model's input, one vec4 per texel (RGB, 0). Inside a slot's rect,
    pad = (rect - size) / 2 is the wrap radius (0 for a frame that does not
-   tile), and the source texel wraps by floor division, so a pad wider than
-   the frame is still right. A keyed texel takes the stand-in above, searched
+   tile), and the source texel wraps by a floor modulo, so a pad wider than
+   the frame is still right. THE MODULO IS INTEGER ARITHMETIC: a driver may
+   divide floats through the reciprocal, and floor(6.0 / 6.0) then lands on 0
+   and the tap reads outside the frame (MEASURED on the AMD R9 200-series
+   driver: a 6x8 wrapping frame off by up to 10 levels, an 8x8 one exact).
+   GLSL leaves `%` undefined for a negative operand, so a negative t folds
+   through -t - 1, which is not negative. A keyed texel takes the stand-in above, searched
    inside the frame (wrapped when the frame wraps, clipped when it does not).
    Outside every rect: 0, which is half of the padding rule. */
 #define TAGPU_RESTORE_FILL_CS \
@@ -80,8 +85,10 @@
     "vec3 colOf(vec4 v) {\n" \
     "  return pc.base == 1 ? v.rgb : texelFetch(uPal, ivec2(int(v.r * 255.0 + 0.5), 0), 0).rgb;\n" \
     "}\n" \
+    "int wrap1(int t, int s) { return t >= 0 ? t % s : s - 1 - (-t - 1) % s; }\n" \
+    "ivec2 wrap2(ivec2 t, ivec2 sz) { return ivec2(wrap1(t.x, sz.x), wrap1(t.y, sz.y)); }\n" \
     "void tap(ivec2 t, ivec2 o, ivec2 sz, bool wrap, int key, inout vec3 acc, inout int n) {\n" \
-    "  if (wrap) t -= sz * ivec2(floor(vec2(t) / vec2(sz)));\n" \
+    "  if (wrap) t = wrap2(t, sz);\n" \
     "  else if (t.x < 0 || t.y < 0 || t.x >= sz.x || t.y >= sz.y) return;\n" \
     "  vec4 q = texelFetch(uAtlas, o + t, 0);\n" \
     "  if (keyOf(q, key)) return;\n" \
@@ -99,7 +106,7 @@
     "    if (sl.x < s.rw && sl.y < s.rh && sz.x > 0 && sz.y > 0) {\n" \
     "      ivec2 pad = (ivec2(s.rw, s.rh) - sz) / 2;\n" \
     "      ivec2 t = sl - pad;\n" \
-    "      t -= sz * ivec2(floor(vec2(t) / vec2(sz)));\n" \
+    "      t = wrap2(t, sz);\n" \
     "      ivec2 o = ivec2(s.ax, s.ay);\n" \
     "      vec4 pv = texelFetch(uAtlas, o + t, 0);\n" \
     "      if (keyOf(pv, s.key)) {\n" \
