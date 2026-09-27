@@ -1,5 +1,5 @@
 {
-  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and none of TADR's code run -- 'tadr_ran' false, judged two ways on every peer: nothing of TADR's in the game folder (no tdrawlog.txt, no recorder log) AND no site of the game's own code leading into a TADR module, read out of the running process -- in single player and, on Wine, in a two-player network game. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder.",
+  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and none of TADR's code run -- 'tadr_ran' false, judged two ways on every peer: nothing of TADR's in the game folder (no tdrawlog.txt, no recorder log) AND no site of the game's own code leading into a TADR module, read out of the running process -- in single player and, on Wine, in a two-player network game. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'tadr_started' allows the one thing the routes where TADR's DllMain loads Impure cannot avoid -- its first log line, written before Impure exists -- and nothing else: no engine patch, no recorder log, and no site of the game's code leading into TADR. 'no_network_game' says why a setup plays no two-player game, in words, measured: the walk of the battle room does not reach a game there. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder.",
   "setups": [
     {
       "name": "retail",
@@ -205,12 +205,8 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_ran": false
-      },
-      "today": {
-        "outcome": "impure-refused",
-        "failure": "0x0040EAD6",
-        "tadr_ran": true
+        "tadr_ran": false,
+        "tadr_started": true
       }
     },
     {
@@ -240,12 +236,8 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_ran": false
-      },
-      "today": {
-        "outcome": "impure-refused",
-        "failure": "0x0040EAD6",
-        "tadr_ran": true
+        "tadr_ran": false,
+        "tadr_started": true
       }
     },
     {
@@ -334,13 +326,10 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_ran": false
+        "tadr_ran": false,
+        "tadr_started": true
       },
-      "today": {
-        "outcome": "impure-refused",
-        "failure": "0x0040EAD6",
-        "tadr_ran": true
-      }
+      "no_network_game": "its battle room starts a game with no units on either peer -- both load the map and play, resources and HUD up and the camera in the world, with nothing to fight -- so the suite's fight cannot be applied (MEASURED 2026-09-27; the same setup applies 402 of 402 entities in a single-player skirmish, so it is the room's seating and not the engine)"
     },
     {
       "name": "escalation+tadr-dev",
@@ -360,13 +349,10 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_ran": false
+        "tadr_ran": false,
+        "tadr_started": true
       },
-      "today": {
-        "outcome": "impure-refused",
-        "failure": "0x0040EAD6",
-        "tadr_ran": true
-      }
+      "no_network_game": "its battle room starts a game with no units on either peer -- both load the map and play, resources and HUD up and the camera in the world, with nothing to fight -- so the suite's fight cannot be applied (MEASURED 2026-09-27; the same setup applies 402 of 402 entities in a single-player skirmish, so it is the room's seating and not the engine)"
     }
   ]
 }

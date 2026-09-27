@@ -115,6 +115,10 @@ BATTLE_MAP = "Two Continents"          # scenarios/200v200.json's setup.map
 # over the exe's entry point writes no log at all (research/notes/compat/takeover.md, part 1).
 # That is what exe_hooks is for, and a goal of tadr_ran: false is judged on both.
 TADR_INSTALLED = re.compile(r"Install Limit Crack|\[EngineLimits\] installed")
+# The whole of what TADR's DllMain has done on the routes where it is what loads Impure: it
+# writes this line before LoadLibrary("ddraw.dll") returns, so the game folder cannot come up
+# empty there however completely the takeover stops the rest (setups.json: tadr_started).
+TADR_ONLY_STARTED = re.compile(r"(?:.*: )?tdraw started \(tdrawlog\.txt\)$")
 RECORDER_LOG = re.compile(r"Demo Recorder Log", re.I)
 RECORDER_CALLED = re.compile(r"^\s*DLL\.DirectPlay", re.M)
 # The two-player stage: small halves applied one per peer, each as that peer's own units.
@@ -371,6 +375,12 @@ def judge(o: dict, exp: dict) -> list:
     if exp["outcome"] == "impure-active" and o.get("menu") is False:
         miss.append("the main menu was never reached")
     ran = o.get("tadr_ran") or []
+    if exp.get("tadr_started"):
+        # On the routes where TADR's DllMain is what loads Impure, it has written its first log
+        # line before Impure exists. That one line is the whole of it -- no engine patch, no
+        # recorder log, and nothing of its code after -- so it is allowed here and nothing else
+        # is: every other piece of evidence still fails the setup.
+        ran = [e for e in ran if not TADR_ONLY_STARTED.match(e)]
     if "tadr_ran" in exp and bool(ran) != exp["tadr_ran"]:
         miss.append("TADR ran: " + "; ".join(ran) if ran else "TADR did not run")
     # Claiming no TADR code ran needs the reading of the process, not only the log files
@@ -445,7 +455,8 @@ def report(results, platform, dll, started, strict=False) -> int:
     for r in results:
         box = f" [{r['boxes'][0]['title']}]" if r["boxes"] else ""
         mp = r.get("mp")
-        net = "-" if mp is None else ("mp ok" if mp["ok"] else "mp FAILED")
+        net = ("no mp" if r.get("mp_skip") else "-") if mp is None else \
+              ("mp ok" if mp["ok"] else "mp FAILED")
         lines.append(f"  {mark[r['verdict']]} {r['setup']:22} {r['outcome']:18} {net:9}{box}")
         if r["verdict"] == "UNEXPECTED":
             for m in r.get("differs_today") or r.get("differs", []):
@@ -624,10 +635,32 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
     The menus are driven by tacli's gadget layer and the units placed by its scenario
     applier (scenarios/200v200.json), as in any tacli run."""
     name = inst["name"]
+    # A CLICK WAITS FOR ITS SCREEN. A mod with more content than stock takes longer between
+    # these screens than a click's own patience allows, and Escalation goes from Skirmish
+    # straight towards a load: both read as "no active gui" or a gadget that is not there yet,
+    # neither of which is a failure. So each click is retried while that is what it says, and the
+    # walk stops early if the game screen is already up (MEASURED 2026-09-27: Escalation's two
+    # setups, whose battle stage no run had ever reached before the takeover let them start).
+    in_game = False
     for gadget in ("SINGLE", "Skirmish", "Start"):
-        r = tacli("ui", name, "click", gadget, timeout=60)
-        if r.returncode != 0:
-            return {"ok": False, "why": f"ui click {gadget}: {(r.stderr or r.stdout).strip()[:200]}"}
+        if in_game or re.search(r"ARMMAIN|CORMAIN",
+                                (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]):
+            break
+        end, last = time.time() + 45, ""
+        while True:
+            r = tacli("ui", name, "click", gadget, timeout=60)
+            if r.returncode == 0:
+                break
+            last = (r.stderr or r.stdout).strip()[:200]
+            # The click landed on the game screen: this mod's front end needed fewer of them
+            # than stock's (Escalation's Skirmish goes straight into a game, so there is no
+            # Start to press), and the walk is done.
+            if re.search(r"on (ARM|COR)MAIN", last):
+                in_game = True
+                break
+            if time.time() >= end or not re.search(r"no active gui|is not on|no gadget", last):
+                return {"ok": False, "why": f"ui click {gadget}: {last}"}
+            time.sleep(3)
     deadline = time.time() + 90
     while time.time() < deadline:
         time.sleep(3)
@@ -1161,8 +1194,10 @@ class Lobby(Exception):
 
 def mp_eligible(setup) -> bool:
     """A player's setup whose goal is Impure running: a harness setup (one with a lever)
-    checks a mechanism, not a game."""
-    return setup["goal"]["outcome"] == "impure-active" and not setup.get("levers")
+    checks a mechanism, not a game, and a setup whose battle room this walk cannot start a game
+    in says so in `no_network_game` -- with what it does instead, measured."""
+    return (setup["goal"]["outcome"] == "impure-active" and not setup.get("levers")
+            and not setup.get("no_network_game"))
 
 
 def dplay_holders() -> list:
@@ -1227,10 +1262,19 @@ def stop_wine(g):
 
 
 def lobby_ui(inst, *argv, timeout=40) -> str:
-    r = tacli("ui", inst, *argv, "--timeout", str(timeout), timeout=timeout + 30)
-    if r.returncode != 0:
-        raise Lobby(f"{inst}: ui {' '.join(argv)}: {(r.stderr or r.stdout).strip()[:200]}")
-    return r.stdout
+    # A SCREEN STILL COMING UP IS NOT A FAILURE. Between two of the battle room's screens there
+    # is a moment with no gadget layer at all, and a mod with more content than stock stays in it
+    # longer than one call's patience (MEASURED 2026-09-27: Escalation's host on START). Retried
+    # while that is what it says, and no longer.
+    end, last = time.time() + 40, ""
+    while True:
+        r = tacli("ui", inst, *argv, "--timeout", str(timeout), timeout=timeout + 30)
+        if r.returncode == 0:
+            return r.stdout
+        last = (r.stderr or r.stdout).strip()[:200]
+        if time.time() >= end or "no active gui" not in last:
+            raise Lobby(f"{inst}: ui {' '.join(argv)}: {last}")
+        time.sleep(3)
 
 
 def lobby_field(inst, name, value):
@@ -1268,7 +1312,10 @@ def wine_lobby(host, join):
     # The session list is filled when SELGAME opens and again on UPDATE, never by itself: a
     # host still answering its map load when the joiner looked is missing until someone
     # presses UPDATE, as a player would (seen with Total Mayhem 11.3.0, 2026-09-27).
-    for _ in range(6):
+    # Twelve rounds, not six: a mod's host is still answering its own map load well past the
+    # half-minute stock TA needs (MEASURED 2026-09-27: Escalation's host, where JOINGAME was
+    # still grey after six).
+    for _ in range(12):
         if re.search(r"^grayed\s+0\s*$", lobby_ui(join, "show", "JOINGAME"), re.M):
             break
         lobby_ui(join, "click", "UPDATE")
@@ -1277,7 +1324,15 @@ def wine_lobby(host, join):
     lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
     lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
     lobby_ui(host, "click", "READY0", timeout=20)
-    lobby_ui(host, "click", "START", timeout=30)
+    # THE ORACLE FOR START IS THE GAME COMING ALIVE, NOT THE CLICK'S ANSWER. The click that
+    # starts the game takes away the gadget layer it was read from, so a click that worked can
+    # still answer "no active gui" -- or, one patient retry later, name the in-game panel
+    # (MEASURED 2026-09-27: Escalation's host, ARMMAIN2.GUI, twice). The wait below decides.
+    try:
+        lobby_ui(host, "click", "START", timeout=30)
+    except Lobby as e:
+        if not re.search(r"no active gui|ARMMAIN|CORMAIN", str(e)):
+            raise
     for inst in (host, join):
         r = tacli("wait", inst, "alive=[1-9]", "--timeout", "150", timeout=200)
         if r.returncode != 0:
@@ -1440,6 +1495,8 @@ def cmd_wine(args):
             verdict(o, s, "wine")
             print(f"  {s['name']}: {o['outcome']} ({o['verdict']})")
             results.append(o)
+            if s.get("no_network_game"):
+                o["mp_skip"] = s["no_network_game"]
             if args.mp and mp_eligible(s) and o["outcome"] == "impure-active" and o.get("menu"):
                 mp_futs[s["name"]] = (s, o, mp_pool.submit(run_wine_mp, s, dll, args.mp,
                                                            taken, mine))
@@ -1623,7 +1680,21 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
             modules = e["modules"]
         if e.get("code"):
             hooks = win_hooks(e)
-    tagpu = w.read_b64(ntpath.join(work, "log", "tagpu.log"))
+    # THE LOG IS READ ONLY ONCE NOTHING HOLDS IT. The DLL opens it without read sharing, and a
+    # process that has been asked to stop lets go of its files some time after it stops being
+    # listed -- so a read here can find the file in use even though stop_work_games waited. Stop
+    # again and retry rather than lose the whole setup's evidence to it (seen 2026-09-27 on the
+    # first setup of a run).
+    tagpu = None
+    for attempt in range(5):
+        try:
+            tagpu = w.read_b64(ntpath.join(work, "log", "tagpu.log"))
+            break
+        except taremote.RemoteError as e:
+            if attempt == 4 or not re.search(r"IOException|another process|en cours d", str(e)):
+                raise
+            stop_work_games(w, work)
+            time.sleep(3)
     o = {
         "setup": setup["name"], "platform": "windows",
         "watched": any(e.get("done") for e in events),
