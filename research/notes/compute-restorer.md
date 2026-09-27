@@ -24,6 +24,9 @@ torch fp32 reference.
 | cuDNN fp32 (torch, best algorithm per layer) | 63.6 |
 | the fragment backend the game runs today | ~300 |
 
+Against the torch reference, the fp32 kernel differs on 0.0011 % of bytes, by at most one level
+(the same region, rerun 2026-09-27).
+
 - The fp32 kernel stays inside Vulkan 1.0's minimums: 12 KB of shared memory, 128 invocations,
   storage buffers under 128 MB. It needs no extension, so it is the path every Vulkan device
   gets.
@@ -34,7 +37,7 @@ torch fp32 reference.
 | # | decision |
 |---|---|
 | D1 | **Two landings.** Landing 1 swaps the backend: fp32 compute for all six jobs (terrain, features, effects, units, UI, pictures) under the existing core, the fragment backend deleted. It is tested on Windows too, sharing the Windows test machine with the mod-compatibility regression work. Landing 2 is the terrain seam fix. |
-| D2 | **A self-test at every launch** runs the same pipelines on a synthetic probe against an embedded golden (nothing from the original game). A crash attributed to the restorer records `off` for that device and driver, and the game relaunches at once with a notice. A new driver version gets a fresh try. |
+| D2 | **A self-test at every launch** runs the same pipelines on a synthetic probe (nothing from the original game) and checks the result against D13's reference. A crash attributed to the restorer records `off` for that device and driver, and the game relaunches at once with a notice. A new driver version gets a fresh try. |
 | D3 | **tiny for terrain, full for everything else** (units, features, effects, UI). Terrain is the volume; tiny (6 layers × 24 channels, 22k MACs per pixel) costs about a tenth of full (12 × 64, 372k). It is gated on a wider terrain A/B first (water, snow, lava and metal maps); any visible loss sends terrain back to full. |
 | D4 | **The browser lab's `restore=glsl` lane is dropped.** The lab keeps `restore=pack`. |
 | D5 | **A neighbourhood atlas for terrain:** one restored copy per distinct tile graphic *plus its 8 neighbours*, drawn through a per-cell index. King of the Hill: 2,978 graphics, 69,958 spots, 26,827 keys, 118 MB. Median map 35 MB, Two Continents 193 MB, Seven Islands (the largest) 303 MB, against 14–51 MB for today's per-graphic atlas. A map whose atlas does not fit the GPU's memory budget keeps today's atlas, seams included. |
@@ -42,18 +45,32 @@ torch fp32 reference.
 | D7 | **No quick per-tile pass first.** Terrain restores straight into the neighbourhood atlas, spots on screen first; a spot not restored yet draws dithered, as it does during today's reveal. |
 | D8 | **The GPU budget during play:** spots on screen get the full budget (12 ms per frame); the rest of the map restores at a fixed trickle of about 2 ms. Spots scrolled onto the screen move to the front. |
 | D9 | **No disk cache.** The terrain is restored every time a map is played. |
+| D10 | **Whether the atlas fits** is decided before allocating. Its size is exact once the map loads (keys × cell size). The driver's memory-budget query gives the memory still free for the game; a driver without that query counts a quarter of the GPU's device-local memory as free. The atlas fits when it takes at most half of that free memory. An allocation the driver still refuses falls back as well. |
+| D11 | **Settings and the bar for landing 1.** The `fp16`, `nk=` and `tiny` settings are removed; `budget=` and `log` stay. The swap passes when every job is within one level of the torch reference on under 0.01 % of bytes. The terrain A/B that gates D3 runs offline with the unditherer, so the game has no model switch. |
+| D12 | **The notice.** One message box when the restorer turns itself off (it crashed, or the startup check failed), saying what happened and that it is tried again after a driver update. While it stays off, the render options' *Undithered assets* row reads "Off (this driver)"; picking On clears the record and tries once more, and another crash turns it off again. |
+| D13 | **The self-test's reference is computed on the CPU at launch**, by a plain C version of the network from the weight files actually loaded, on a worker thread while the game starts (about 0.5 s; 1–2 s on an old CPU). It passes when every byte is within one level of it. Nothing has to be kept in step with the weight files, and the build needs no torch. |
+| D14 | **What counts as the restorer crashing:** a crash on the render thread inside a restorer call; the GPU device lost while a frame carrying restorer work is unfinished (today a lost device takes the whole Vulkan renderer down, whoever caused it); the launch self-test failing. Nothing else is blamed. A wrong blame costs only undithering on that driver, and D12's row retries. |
+| D15 | **D3's gate is a sheet the owner judges**, published as an artifact: eight maps picked by terrain type (water, snow, lava, metal, desert, grass, rock, the largest), each with the crop where tiny and full differ most and one ordinary crop, shown dithered, tiny, full and their difference. Every image opens in a lightbox that zooms to 100 % and beyond. The numbers go in this note beside the verdict; a map where the owner sees a loss sends terrain back to full. |
 
 **When the restorer is off** (the self-test failed, or it crashed on this driver), Classic++ keeps
 running and draws the original dithered art.
 
 ## Open
 
-- **Not yet confirmed by the owner** (proposals only): removing the in-game `fp16` and `nk=`
-  tokens, keeping `budget=` and `log`, and the acceptance bar for landing 1 — at most one level
-  off and under 0.01 % of bytes against the torch reference.
-- The GPU memory budget for D5: how it is read and what counts as not fitting.
-- Landing 1: the notice's text and where it shows; the self-test's probe and golden.
-- The wider terrain A/B that gates D3.
+Nothing: every question has an answer. These follow from the code and the limits rather than from
+a choice, and the implementation takes them as given:
+
+- **The per-cell index is 32-bit.** Seven Islands' 303 MB atlas is roughly 65,000–69,000 cells of
+  34×34 RGBA8, at or past what today's 16-bit `TILE_MAP` can index.
+- **The atlas pages within the device's limits** (a 2D array texture sized by
+  `maxImageDimension2D` and `maxImageArrayLayers`): in today's 64-column layout Seven Islands would
+  be about 35,000 px tall, past the 16384 most devices allow.
+- **The per-driver record lives in `impure.cfg`,** not in a new file.
+- **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
+  no `rundll32`, both of which antivirus software watches.
+- **The Windows test runs before landing 1 lands**, on the Windows test setup's AMD Radeon R9
+  200-series card (2816 MB, a Vulkan 1.1 driver: fp32 only), with the machine's time shared with
+  the mod-compatibility regression work.
 
 ## TODO
 
