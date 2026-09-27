@@ -282,57 +282,53 @@ static int to_inert(HMODULE m)
     return 1;
 }
 
-/* THE PRECONDITION OF MAKING ANYTHING INERT: no module of the game folder has been initialised
-   yet, so none of the entry points below is one the loader has already called or is calling.
-   The loader initialises the exe's imports as a post-order walk in import-directory order, and
-   Impure imports nothing from the game folder, so the condition is exactly "the first descriptor
-   of the exe that leads into the game folder is Impure's": every other game-folder module is in a
-   later descriptor's subtree and runs after us.
+/* WHICH IMPORT DESCRIPTORS OF THE EXE NAME A MODULE: the first one's index, and through `last`
+   the highest. -1 when none does.
 
-   It is not an assumption about the retail exe. The 3.9.02 and Escalation exes import `TDRAW` /
-   `TAESC` and no `DDRAW` at all (DISASSEMBLED: objdump -p), so on those routes TADR's `DllMain`
-   is what loads Impure and is running while this would write -- and there this returns 0 and the
-   pass is skipped. Part 4's comparison still refuses such a launch.
+   THE PRECONDITION OF MAKING A MODULE INERT is that the loader has not called its entry point
+   yet. The loader initialises the exe's imports as a post-order walk in import-directory order,
+   and the DllMain running right now is the one of the module Impure was loaded from -- Impure's
+   own on the routes where the exe imports DDRAW, TADR's on the routes where it imports TDRAW or
+   TAESC and 1d has just stopped it. So a module is untouched exactly when every descriptor that
+   names it comes AFTER the descriptor that names the module we are inside: its subtree has not
+   been walked. That is why the answer is an index and not a yes or no -- on the routes where TADR
+   loads Impure its own descriptor is first, and the recorder's is later, so the recorder can
+   still be made inert even though TADR itself cannot.
 
-   EVERY SLOT of a descriptor is looked at, not its first: a descriptor can name functions from
-   more than one module only in the sense that its slots are all one module's, but a slot the
-   loader could not bind is left as the file's value, and reading only slot 0 would then miss the
-   descriptor entirely. WHAT IT STILL CANNOT SEE: a game-folder module that is not in the exe's
-   import table at all -- pulled in as the dependency of an earlier descriptor's module, or by a
-   forwarded export. Such a module is initialised before us and is made inert anyway; the log's
-   "none of its own code runs" would be wrong about it, and part 3 is what answers for it. No
-   fixture has one (MEASURED 2026-09-27: objdump -p over every setup's exe and DLLs). */
-static int to_first_local_is_ours(const BYTE* exe, DWORD image, const wchar_t* game)
+   EVERY SLOT of a descriptor is looked at, not its first: a slot the loader could not bind is
+   left as the file's value, and reading only slot 0 would then miss the descriptor entirely.
+   WHAT IT CANNOT SEE: a module the exe does not import at all -- pulled in as the dependency of
+   an earlier descriptor's module, or by a forwarded export. Such a module may already be
+   initialised and would be made inert anyway; the log's "none of its own code runs" would be
+   wrong about it, and part 3 is what answers for it. No fixture has one (MEASURED 2026-09-27:
+   objdump -p over every setup's exe and DLLs). */
+static int to_descriptor_of(const BYTE* exe, DWORD image, HMODULE m, int* last)
 {
     DWORD at, end;
     const IMAGE_NT_HEADERS32* nt = to_nt((HMODULE)exe);
     const IMAGE_DATA_DIRECTORY* dd;
-    if (!nt || nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_IMPORT) return 0;
+    const IMAGE_NT_HEADERS32* mnt = to_nt(m);
+    int k = 0, first = -1;
+    if (last) *last = -1;
+    if (!nt || !mnt || nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_IMPORT)
+        return -1;
     dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (!dd->VirtualAddress || dd->VirtualAddress >= image) return 0;
+    if (!dd->VirtualAddress || dd->VirtualAddress >= image) return -1;
     end = image - (DWORD)sizeof(IMAGE_IMPORT_DESCRIPTOR);
-    for (at = dd->VirtualAddress; at <= end; at += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+    for (at = dd->VirtualAddress; at <= end; at += sizeof(IMAGE_IMPORT_DESCRIPTOR), k++) {
         const IMAGE_IMPORT_DESCRIPTOR* d = (const IMAGE_IMPORT_DESCRIPTOR*)(exe + at);
-        HMODULE m = NULL;
-        wchar_t path[MAX_PATH], dir[MAX_PATH];
-        DWORD k;
-        int local = 0;
+        DWORD j;
         if (!d->FirstThunk) break;
-        for (k = 0; d->FirstThunk + (k + 1) * sizeof(DWORD) <= image && !local; k++) {
-            DWORD target = ((const DWORD*)(exe + d->FirstThunk))[k];
-            if (!target) break;
-            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                    (LPCWSTR)(size_t)target, &m) || !m)
-                continue;
-            if (GetModuleFileNameW(m, path, MAX_PATH) && to_dir(path, dir, MAX_PATH) &&
-                !_wcsicmp(dir, game))
-                local = 1;
+        for (j = 0; d->FirstThunk + (j + 1) * sizeof(DWORD) <= image; j++) {
+            DWORD t = ((const DWORD*)(exe + d->FirstThunk))[j];
+            if (!t) break;
+            if (t - (DWORD)(size_t)m >= mnt->OptionalHeader.SizeOfImage) continue;
+            if (first < 0) first = k;
+            if (last) *last = k;
+            break;
         }
-        if (!local) continue;
-        return m == (HMODULE)g_ddraw_module;
     }
-    return 1;           /* the exe imports nothing from the game folder: nothing has run */
+    return first;
 }
 
 /* Whether the module's PE TLS directory names a callback the loader calls whatever the entry point
@@ -366,35 +362,535 @@ static int to_tls_callbacks(HMODULE m)
     return *(const DWORD*)(size_t)cb != 0;
 }
 
+/* 1d, below: the pass for the routes where this one's invariant cannot hold. */
+static HMODULE tagpu_takeover_nested_init(const wchar_t* game);
+
 void tagpu_takeover_tadr_init(void)
 {
     wchar_t path[MAX_PATH], game[MAX_PATH];
     BYTE* exe = (BYTE*)GetModuleHandleW(NULL);
     const IMAGE_NT_HEADERS32* nt = to_nt((HMODULE)exe);
-    HMODULE m = NULL;
+    HMODULE m = NULL, inside;
+    DWORD image;
+    int kme, klast;
     if (!g_ddraw_module || !nt) return;
     if (!GetModuleFileNameW(NULL, path, MAX_PATH) || !to_dir(path, game, MAX_PATH)) return;
     if (to_off(game)) return;
-    if (!to_first_local_is_ours(exe, nt->OptionalHeader.SizeOfImage, game)) {
-        tagpu_log("takeover: a DLL of the game folder started before Impure, so nothing of TADR's "
-                  "is made inert -- its code is already running, and the comparison at the first "
-                  "DirectDraw call is what answers for this launch");
-        return;
+    image = nt->OptionalHeader.SizeOfImage;
+
+    /* WHOSE DllMain THIS IS RUNNING INSIDE. Impure's own, unless the exe imports no DDRAW and
+       TADR loaded us -- then 1d stops the rest of that DllMain and names the module, and the
+       walk below is measured against ITS descriptor instead of Impure's. */
+    inside = g_ddraw_module;
+    if (to_descriptor_of(exe, image, g_ddraw_module, NULL) < 0) {
+        inside = tagpu_takeover_nested_init(game);
+        if (!inside) return;        /* 1d said why; part 3 answers for this launch */
     }
+    kme = to_descriptor_of(exe, image, inside, NULL);
+
     while ((m = to_next_local(m, game, path))) {
         const char* what = NULL;
         char base[MAX_PATH];
+        int kfirst;
         if (!to_file_ask(path, to_ask_tadr, &what)) continue;
         to_basename(path, base, sizeof base);
+        kfirst = to_descriptor_of(exe, image, m, &klast);
+        /* Its subtree must not have been walked yet: every descriptor naming it comes after the
+           one we are inside. A module the exe does not import at all (kfirst < 0) is not covered
+           by this argument -- it may already be initialised -- so it is left alone. */
+        if (kfirst < 0 || kfirst <= kme) {
+            tagpu_logf("takeover: %s is %s, and the loader has already called its entry point "
+                       "or may have -- it is left running, and the comparison at the first "
+                       "DirectDraw call is what answers for this launch", base, what);
+            continue;
+        }
+        (void)klast;
+        /* A LIVE CALLBACK ARRAY IS A MODULE TO LEAVE RUNNING, NOT ONE TO MAKE INERT. The entry
+           point this would overwrite is the module's C runtime start-up, so an inert one never
+           allocates its TLS index -- and the loader still calls its DLL_THREAD_ATTACH callback on
+           every thread the game creates, which would then index another module's TLS block. The
+           launch refuses at the first DirectDraw call instead, where TADR's own writes are what
+           it is refused over (part 3): a refusal is better than a wrong read per thread. */
+        if (to_tls_callbacks(m)) {
+            tagpu_logf("takeover: %s is %s and carries TLS callbacks the loader calls whatever "
+                       "its entry point holds -- it is left running, and the comparison at the "
+                       "first DirectDraw call is what answers for this launch", base, what);
+            continue;
+        }
         if (to_inert(m))
             tagpu_logf("takeover: %s is %s -- its entry point was made inert before the loader "
-                       "called it, so none of its own code runs%s", base, what,
-                       to_tls_callbacks(m) ? ", except the TLS callbacks it carries, which the "
-                                             "loader calls and this does not touch" : "");
+                       "called it, so none of its own code runs", base, what);
         else
             tagpu_logf("takeover: %s is %s and its entry point could not be made inert "
                        "(error %lu) -- its code runs", base, what, GetLastError());
     }
+}
+
+
+
+/* ---- the exe file read by virtual address: the reference part 2 compares with -------------
+   The same file, opened the same way, that part 3 compares the whole image against: one
+   reference for the whole takeover rather than two that could disagree. Open, read every site,
+   close -- the mapping is not kept, so nothing of ours holds the player's exe open. */
+
+static HANDLE s_refFile = INVALID_HANDLE_VALUE, s_refMap;
+static const unsigned char* s_refView;
+static DWORD s_refSize;
+static const IMAGE_SECTION_HEADER* s_refSec;
+static WORD s_refNsec;
+static DWORD s_refBase;
+
+int tagpu_takeover_file_open(void)
+{
+    wchar_t path[MAX_PATH];
+    const IMAGE_DOS_HEADER* dos;
+    const IMAGE_NT_HEADERS32* nt;
+    DWORD first;
+    if (s_refView) return 1;
+    if (!GetModuleFileNameW(NULL, path, MAX_PATH)) return 0;
+    s_refFile = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE |
+                            FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (s_refFile == INVALID_HANDLE_VALUE) return 0;
+    s_refSize = GetFileSize(s_refFile, NULL);
+    if (s_refSize == INVALID_FILE_SIZE || s_refSize < sizeof *dos || s_refSize > TO_MAX_FILE) {
+        tagpu_takeover_file_close();
+        return 0;
+    }
+    s_refMap = CreateFileMappingW(s_refFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (s_refMap) s_refView = (const unsigned char*)MapViewOfFile(s_refMap, FILE_MAP_READ, 0, 0, 0);
+    if (!s_refView) { tagpu_takeover_file_close(); return 0; }
+    dos = (const IMAGE_DOS_HEADER*)to_at(s_refView, s_refSize, 0, sizeof *dos);
+    if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0) goto no;
+    nt = (const IMAGE_NT_HEADERS32*)to_at(s_refView, s_refSize, (DWORD)dos->e_lfanew, sizeof *nt);
+    if (!nt || nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) goto no;
+    /* The site table names absolute addresses, so the file can only be the reference for them
+       when the exe is loaded at the base its file asks for -- as part 3 also requires. */
+    if (nt->OptionalHeader.ImageBase != (DWORD)(size_t)GetModuleHandleW(NULL)) goto no;
+    s_refBase = nt->OptionalHeader.ImageBase;
+    s_refNsec = nt->FileHeader.NumberOfSections;
+    first = (DWORD)((const unsigned char*)IMAGE_FIRST_SECTION(nt) - s_refView);
+    if (!to_at(s_refView, s_refSize, first, (DWORD)s_refNsec * sizeof *s_refSec)) goto no;
+    s_refSec = (const IMAGE_SECTION_HEADER*)(s_refView + first);
+    return 1;
+no:
+    tagpu_takeover_file_close();
+    return 0;
+}
+
+int tagpu_takeover_file_at(unsigned int va, void* out, int n)
+{
+    DWORD rva, i;
+    if (!s_refView || !s_refSec || n <= 0 || va < s_refBase) return 0;
+    rva = va - s_refBase;
+    for (i = 0; i < s_refNsec; i++) {
+        DWORD len = s_refSec[i].SizeOfRawData;
+        if (rva < s_refSec[i].VirtualAddress) continue;
+        if (rva - s_refSec[i].VirtualAddress >= len) continue;
+        if (len - (rva - s_refSec[i].VirtualAddress) < (DWORD)n) return 0;
+        if (!to_at(s_refView, s_refSize,
+                   s_refSec[i].PointerToRawData + (rva - s_refSec[i].VirtualAddress), (DWORD)n))
+            return 0;
+        memcpy(out, s_refView + s_refSec[i].PointerToRawData +
+                    (rva - s_refSec[i].VirtualAddress), (size_t)n);
+        return 1;
+    }
+    return 0;
+}
+
+void tagpu_takeover_file_close(void)
+{
+    if (s_refView) UnmapViewOfFile(s_refView);
+    if (s_refMap) CloseHandle(s_refMap);
+    if (s_refFile != INVALID_HANDLE_VALUE) CloseHandle(s_refFile);
+    s_refView = NULL;
+    s_refMap = NULL;
+    s_refFile = INVALID_HANDLE_VALUE;
+    s_refSec = NULL;
+}
+
+/* ---- 1d. the exe imports TADR, so TADR's DllMain is what loads Impure -------------------
+   The 3.9.02 exe imports TDRAW, Escalation's imports TAESC, and neither imports DDRAW: the
+   loader never loads Impure from the exe, TADR's DllMain does with LoadLibraryA("ddraw.dll"),
+   and this runs nested inside a DllMain that has done nothing but write one line to its own
+   log and load dplayx.dll (DISASSEMBLED in two builds; MEASURED: the exe's code is still
+   byte-identical to its file here). The fourth way in is answered like the other three -- THE
+   REST OF THAT DllMain DOES NOT RUN -- and not by putting bytes back afterwards.
+
+   HOW, in one sentence: the saved return address of that LoadLibrary call is replaced with a
+   stub that returns TRUE out of TADR's DllMain. Nothing of TADR's code is written; the only
+   write outside Impure is one dword of this thread's own stack, plus the exe's one import slot
+   below.
+
+   EVERY INPUT IS VERIFIED AT RUN TIME, none inferred from a build:
+     * the frame is found by walking this thread's stack for a word that is a return address
+       inside a game-folder module whose FILE carries TADR's marker, with a call in front of it,
+       and whose NEXT word points at a string naming Impure's own module file -- LoadLibrary is
+       stdcall, so its argument is still one word above its return address;
+     * DllMain's own frame is the word above that which is a return address into the same
+       module and is followed by `hinstDLL == that module's base` and `fdwReason ==
+       DLL_PROCESS_ATTACH`. Those two arguments are what make the frame DllMain's rather than
+       something that looks like it;
+     * `ebp` is that word minus four, and the saved `ebp` it points at must itself be a stack
+       address further up the stack;
+     * the SEH registration to put back is FOUND, by walking fs:0 for the innermost record that
+       lies inside the frame and whose Next lies outside it -- not assumed to be at ebp-0xC,
+       which is only where the two builds read put it;
+     * the caller must not pop the arguments itself (`add esp, imm8` at its return address),
+       since then DllMain would be cdecl and the stub's `ret 0Ch` would move the caller's stack.
+   ANY of them failing means NOTHING is written and the launch refuses at the first DirectDraw
+   call exactly as it does today (part 3). A build this cannot read is left no worse than it is.
+
+   WHAT IS LEFT BEHIND, and why it is little: TADR has started no thread yet (MEASURED: one
+   thread, the exe's own, at this point; three at the first DirectDraw call when it is allowed to
+   finish), it has subclassed no window, and its module's C runtime has already run -- the PE
+   entry point IS the CRT's start-up and it calls DllMain after itself -- so the module is not
+   left half-initialised in the way an inert entry point would leave it. Its exports must still
+   never be called, which is what nest_take_imports is for. */
+
+#define NEST_FRAME   0x40        /* how far below ebp a frame's own SEH record may sit */
+
+typedef struct {
+    DWORD*  at;                  /* the stack slot holding the LoadLibrary return address */
+    DWORD   ebp;                 /* TADR's DllMain frame pointer                          */
+    DWORD   seh;                 /* what fs:0 must be put back to; 0 = leave it alone      */
+    HMODULE mod;
+    char    name[64];
+} NEST;
+
+/* The top of the running thread's stack, so a walk cannot run off the end of it. */
+/* The TIB, one field at a time. One instruction, where mingw's `__readfsdword` expands to a
+   subscript of a zero-length array that GCC reports as out of bounds for a non-zero offset. */
+static __inline DWORD nest_fs(unsigned off)
+{
+    DWORD v;
+    __asm__ __volatile__("movl %%fs:(%1), %0" : "=r"(v) : "r"(off));
+    return v;
+}
+
+static const unsigned char* nest_top(const void* here)
+{
+    MEMORY_BASIC_INFORMATION mbi, tip;
+    /* NT_TIB.StackBase, one past the stack's highest usable byte. A VirtualQuery region stops at
+       the first page whose state or protection differs, which can be below the frames wanted
+       here; the TIB's value cannot. It is taken only when its last byte is committed in the same
+       allocation `here` lies in -- the region, which is never too high, otherwise. */
+    const unsigned char* top = (const unsigned char*)(size_t)nest_fs(4);
+    if (!VirtualQuery(here, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return NULL;
+    if (top > (const unsigned char*)here &&
+        VirtualQuery(top - 1, &tip, sizeof tip) && tip.State == MEM_COMMIT &&
+        tip.AllocationBase == mbi.AllocationBase)
+        return top;
+    return (const unsigned char*)mbi.BaseAddress + mbi.RegionSize;
+}
+
+/* Whether the bytes in front of `ret` are a call of any form. The form does not have to name
+   its target: what names the target here is the argument on the stack, never the instruction
+   (part 3 says why an address that merely sits in the bytes is no evidence). */
+static int nest_call_before(DWORD ret, DWORD base)
+{
+    const unsigned char* p = (const unsigned char*)(size_t)ret;
+    if (ret - base >= 6 && p[-6] == 0xFF && p[-5] == 0x15) return 1;             /* call [imm32] */
+    if (ret - base >= 5 && p[-5] == 0xE8) return 1;                             /* call rel32   */
+    if (ret - base >= 3 && p[-3] == 0xFF && (p[-2] & 0xF8) == 0x50) return 1;    /* call [r+d8]  */
+    if (ret - base >= 2 && p[-2] == 0xFF &&
+        ((p[-1] & 0xF8) == 0xD0 || (p[-1] >= 0x10 && p[-1] <= 0x17))) return 1;  /* call r, [r]  */
+    return 0;
+}
+
+/* Whether `s` points at a string naming Impure's own module file, ANSI or wide. The string is
+   read through the module it lives in -- GetModuleHandleEx first, then bounded by that module's
+   image -- so a stack word that happens to look like a pointer is never followed. */
+static int nest_names_us(DWORD s)
+{
+    HMODULE owner = NULL;
+    const IMAGE_NT_HEADERS32* nt;
+    wchar_t self[MAX_PATH];
+    char mine[64];
+    DWORD room;
+    const char* a;
+    const wchar_t* w;
+    DWORD i;
+    if (!s || !g_ddraw_module) return 0;
+    if (!GetModuleFileNameW(g_ddraw_module, self, MAX_PATH)) return 0;
+    to_basename(self, mine, sizeof mine);
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)(size_t)s, &owner) || !owner) return 0;
+    nt = to_nt(owner);
+    if (!nt) return 0;
+    if (s < (DWORD)(size_t)owner) return 0;
+    room = nt->OptionalHeader.SizeOfImage - (s - (DWORD)(size_t)owner);
+    if (room > MAX_PATH) room = MAX_PATH;
+    a = (const char*)(size_t)s;
+    for (i = 0; i < room && a[i]; i++) ;
+    if (i < room) {                       /* NUL-terminated inside the module: ANSI */
+        const char* base = a;
+        for (; *a; a++) if (*a == '\\' || *a == '/') base = a + 1;
+        if (!_stricmp(base, mine)) return 1;
+    }
+    w = (const wchar_t*)(size_t)s;
+    room /= sizeof(wchar_t);
+    for (i = 0; i < room && w[i]; i++) ;
+    if (i < room) {
+        wchar_t wide[MAX_PATH];
+        char narrow[64];
+        _snwprintf(wide, MAX_PATH - 1, L"%s", w);
+        wide[MAX_PATH - 1] = 0;
+        to_basename(wide, narrow, sizeof narrow);
+        if (!_stricmp(narrow, mine)) return 1;
+    }
+    return 0;
+}
+
+/* fs:0's chain walked for the record TADR's DllMain registered: the innermost one that lies
+   inside its frame and whose Next lies outside it. 0 when the frame registered none, which is
+   as valid an answer as an address -- then fs:0 is left alone. */
+static DWORD nest_seh(DWORD ebp, const unsigned char* top)
+{
+    const DWORD* r = (const DWORD*)(size_t)nest_fs(0);
+    int hops;
+    for (hops = 0; hops < 64; hops++) {
+        DWORD at = (DWORD)(size_t)r, next;
+        if (at == 0xFFFFFFFF || !at) break;
+        if (at < 0x1000 || (const unsigned char*)(size_t)at + 8 > top) break;
+        next = r[0];
+        if (at < ebp && ebp - at <= NEST_FRAME && (next > ebp || next == 0xFFFFFFFF))
+            return next;
+        if (next <= at) break;            /* the chain only ever goes up the stack */
+        r = (const DWORD*)(size_t)next;
+    }
+    return 0;
+}
+
+/* The frame, or 0 with `why` saying which condition was not met. */
+static int nest_find(NEST* n, const wchar_t* game, const char** why)
+{
+    DWORD* p;
+    const unsigned char* top;
+    volatile DWORD here = 0;
+    HMODULE m = NULL;
+    wchar_t path[MAX_PATH];
+    struct { DWORD base, size; HMODULE h; char name[64]; } tadr[8];
+    int ntadr = 0, i;
+
+    memset(n, 0, sizeof *n);
+    *why = "the stack could not be read";
+    top = nest_top((const void*)&here);
+    if (!top) return 0;
+
+    /* Which modules of the game folder are TADR's -- asked of the FILE, as everywhere else. */
+    while (ntadr < 8 && (m = to_next_local(m, game, path))) {
+        const char* what = NULL;
+        const IMAGE_NT_HEADERS32* nt = to_nt(m);
+        if (!nt || !to_file_ask(path, to_ask_tadr, &what)) continue;
+        tadr[ntadr].base = (DWORD)(size_t)m;
+        tadr[ntadr].size = nt->OptionalHeader.SizeOfImage;
+        tadr[ntadr].h = m;
+        to_basename(path, tadr[ntadr].name, sizeof tadr[ntadr].name);
+        ntadr++;
+    }
+    *why = "no module of the game folder that carries TADR's marker is loaded";
+    if (!ntadr) return 0;
+
+    /* The LoadLibrary call that loaded us: the innermost return address into one of them whose
+       argument -- one word above it, LoadLibrary being stdcall -- names Impure's own file. */
+    *why = "no LoadLibrary of Impure's own file was found on the stack inside a TADR module";
+    for (p = (DWORD*)(((size_t)&here + 3) & ~(size_t)3);
+         (const unsigned char*)(p + 1) <= top; p++) {
+        for (i = 0; i < ntadr; i++)
+            if (*p >= tadr[i].base && *p - tadr[i].base < tadr[i].size &&
+                nest_call_before(*p, tadr[i].base) &&
+                (const unsigned char*)(p + 2) <= top && nest_names_us(p[1])) {
+                n->at = p;
+                n->mod = tadr[i].h;
+                _snprintf(n->name, sizeof n->name - 1, "%s", tadr[i].name);
+                break;
+            }
+        if (n->at) break;
+    }
+    if (!n->at) return 0;
+
+    /* DllMain's own frame: a return address into the same module, followed by its first two
+       arguments -- the module's own base, and DLL_PROCESS_ATTACH. */
+    *why = "the DllMain frame of that module is not on the stack above the call";
+    for (p = n->at + 1; (const unsigned char*)(p + 3) <= top; p++) {
+        DWORD base = (DWORD)(size_t)n->mod;
+        const IMAGE_NT_HEADERS32* nt = to_nt(n->mod);
+        if (!nt) return 0;
+        if (*p < base || *p - base >= nt->OptionalHeader.SizeOfImage) continue;
+        if (!nest_call_before(*p, base)) continue;
+        if (p[1] != base || p[2] != DLL_PROCESS_ATTACH) continue;
+        /* The caller must not pop the arguments itself: that would make DllMain cdecl, and the
+           stub's `ret 0Ch` would move the caller's stack by twelve bytes. */
+        if (((const unsigned char*)(size_t)*p)[0] == 0x83 &&
+            ((const unsigned char*)(size_t)*p)[1] == 0xC4) {
+            *why = "that module's DllMain is called with the arguments popped by its caller";
+            return 0;
+        }
+        n->ebp = (DWORD)(size_t)(p - 1);
+        break;
+    }
+    if (!n->ebp) return 0;
+
+    /* The saved ebp of an ebp-framed function points further up its own stack. */
+    *why = "the DllMain frame does not carry a frame pointer this can unwind";
+    {
+        DWORD saved = *(const DWORD*)(size_t)n->ebp;
+        if (saved <= n->ebp || (const unsigned char*)(size_t)saved + 4 > top) return 0;
+    }
+    n->seh = nest_seh(n->ebp, top);
+    *why = NULL;
+    return 1;
+}
+
+/* `mov eax,1` / put fs:0 back / `mov esp,ebp` / `pop ebp` / `ret 0Ch`: TADR's DllMain returns
+   TRUE to the loader having done nothing more. The immediates are this frame's, read above and
+   valid for the one return this stub serves. */
+static void* nest_stub(const NEST* n)
+{
+    unsigned char code[32];
+    int k = 0;
+    DWORD old;
+    void* page = VirtualAlloc(NULL, sizeof code, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!page) return NULL;
+    code[k++] = 0xB8; *(DWORD*)(code + k) = 1; k += 4;              /* mov eax,1        */
+    if (n->seh) {
+        code[k++] = 0xB9; *(DWORD*)(code + k) = n->seh; k += 4;     /* mov ecx,<next>   */
+        code[k++] = 0x64; code[k++] = 0x89; code[k++] = 0x0D;       /* mov fs:0,ecx     */
+        *(DWORD*)(code + k) = 0; k += 4;
+    }
+    code[k++] = 0xBC; *(DWORD*)(code + k) = n->ebp; k += 4;         /* mov esp,<ebp>    */
+    code[k++] = 0x5D;                                               /* pop ebp          */
+    code[k++] = 0xC2; code[k++] = 0x0C; code[k++] = 0x00;           /* ret 0Ch          */
+    memcpy(page, code, (size_t)k);
+    if (!VirtualProtect(page, sizeof code, PAGE_EXECUTE_READ, &old)) {
+        VirtualFree(page, 0, MEM_RELEASE);
+        return NULL;
+    }
+    FlushInstructionCache(GetCurrentProcess(), page, sizeof code);
+    return page;
+}
+
+/* The exe's imports from the module whose start-up was stopped: its exports must never be
+   called now. All of a descriptor's slots or none, and only where Impure exports every name the
+   descriptor imports -- which is one name, DirectDrawCreate, in both exes that take this route
+   (DISASSEMBLED: objdump -p). A descriptor left alone is what part 3 refuses over. */
+static void nest_take_imports(HMODULE mod, const char* name)
+{
+    BYTE* exe = (BYTE*)GetModuleHandleW(NULL);
+    const IMAGE_NT_HEADERS32* nt = to_nt((HMODULE)exe);
+    const IMAGE_NT_HEADERS32* mnt = to_nt(mod);
+    const IMAGE_DATA_DIRECTORY* dd;
+    DWORD image, at, end, mbase = (DWORD)(size_t)mod;
+    if (!exe || !nt || !mnt || !g_ddraw_module) return;
+    image = nt->OptionalHeader.SizeOfImage;
+    if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_IMPORT) return;
+    dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dd->VirtualAddress || dd->VirtualAddress >= image) return;
+    end = image - (DWORD)sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    for (at = dd->VirtualAddress; at <= end; at += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+        const IMAGE_IMPORT_DESCRIPTOR* d = (const IMAGE_IMPORT_DESCRIPTOR*)(exe + at);
+        DWORD names, slots, k, n = 0;
+        FARPROC ours[16];
+        if (!d->FirstThunk) break;
+        names = d->OriginalFirstThunk;
+        slots = d->FirstThunk;
+        if (!slots || slots + sizeof(DWORD) > image) continue;
+        if (*(const DWORD*)(exe + slots) - mbase >= mnt->OptionalHeader.SizeOfImage) continue;
+        if (!names || names >= image) {
+            tagpu_logf("takeover: the exe's imports from %s cannot be named -- it has no name "
+                       "table for them, and the comparison at the first DirectDraw call is what "
+                       "answers for this launch", name);
+            continue;
+        }
+        for (k = 0;; k++) {
+            DWORD t;
+            const IMAGE_IMPORT_BY_NAME* by;
+            if (names + (k + 1) * sizeof(DWORD) > image ||
+                slots + (k + 1) * sizeof(DWORD) > image) { n = 0; break; }
+            t = ((const DWORD*)(exe + names))[k];
+            if (!t) break;
+            /* ALL OF A DESCRIPTOR OR NONE OF IT: a descriptor with more imports than there is
+               room to answer must be left whole, or the slots past the room would still hold the
+               module's addresses while the log claimed otherwise. */
+            if (k >= sizeof ours / sizeof ours[0]) {
+                tagpu_logf("takeover: the exe imports more than %u names from %s -- the "
+                           "descriptor is left alone", (unsigned)(sizeof ours / sizeof ours[0]),
+                           name);
+                n = 0;
+                break;
+            }
+            if (t & IMAGE_ORDINAL_FLAG32 || t + sizeof *by >= image) {
+                tagpu_logf("takeover: the exe imports slot %lu from %s by ordinal, which Impure "
+                           "cannot answer by name -- the descriptor is left alone", k, name);
+                n = 0;
+                break;
+            }
+            by = (const IMAGE_IMPORT_BY_NAME*)(exe + t);
+            ours[k] = GetProcAddress(g_ddraw_module, (const char*)by->Name);
+            if (!ours[k]) {
+                tagpu_logf("takeover: the exe imports %.32s from %s and Impure does not export "
+                           "it -- the descriptor is left alone", (const char*)by->Name, name);
+                n = 0;
+                break;
+            }
+            n++;
+        }
+        if (!n) continue;
+        /* The slots are about to hold addresses of Impure's code for the life of the process:
+           PIN the module first, exactly as 1c does. */
+        {
+            HMODULE pinned = NULL;
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN |
+                                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                    (LPCWSTR)(void*)ours[0], &pinned)) {
+                tagpu_logf("takeover: Impure's own module could not be pinned (error %lu) -- "
+                           "the exe's imports from %s are left alone", GetLastError(), name);
+                continue;
+            }
+        }
+        {
+            DWORD* slot = (DWORD*)(exe + slots), old;
+            if (!VirtualProtect(slot, n * sizeof(DWORD), PAGE_READWRITE, &old)) {
+                tagpu_logf("takeover: the exe's import slots from %s could not be written "
+                           "(error %lu)", name, GetLastError());
+                continue;
+            }
+            for (k = 0; k < n; k++) slot[k] = (DWORD)(size_t)ours[k];
+            VirtualProtect(slot, n * sizeof(DWORD), old, &old);
+        }
+        tagpu_logf("takeover: the exe's %lu import(s) from %s now lead into Impure's own "
+                   "exports, so nothing of that module is ever called", n, name);
+    }
+}
+
+/* From DllMain, only where a module of the game folder started before Impure. Logs what it did
+   either way; writes nothing at all unless every condition above holds. */
+static HMODULE tagpu_takeover_nested_init(const wchar_t* game)
+{
+    NEST n;
+    const char* why = NULL;
+    void* stub;
+    if (!nest_find(&n, game, &why)) {
+        tagpu_logf("takeover: the start-up that loaded Impure was not stopped -- %s; the "
+                   "comparison at the first DirectDraw call is what answers for this launch",
+                   why ? why : "no reason");
+        return NULL;
+    }
+    stub = nest_stub(&n);
+    if (!stub) {
+        tagpu_logf("takeover: %s's start-up was not stopped -- no page for the return stub "
+                   "(error %lu)", n.name, GetLastError());
+        return NULL;
+    }
+    *n.at = (DWORD)(size_t)stub;
+    tagpu_logf("takeover: %s loaded Impure from its own DllMain, and the rest of that DllMain "
+               "does not run -- its return address now leaves it with TRUE, frame 0x%08lX, "
+               "fs:0 put back to 0x%08lX%s", n.name, (unsigned long)n.ebp,
+               (unsigned long)n.seh, n.seh ? "" : " (it registered none)");
+    nest_take_imports(n.mod, n.name);
+    return n.mod;
 }
 
 /* ---- 3. the exe's DirectPlay imports (tagpu_takeover.h) --------------------------------- */

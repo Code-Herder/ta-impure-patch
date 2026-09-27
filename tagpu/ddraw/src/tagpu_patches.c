@@ -13,6 +13,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_refuse.h"
+#include "tagpu_takeover.h"
 #include "tagpu_regstore.h"
 #include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
@@ -82,8 +83,12 @@ typedef struct LIMSITE {
     unsigned char stock[LIM_MAXB];
     unsigned char ours[LIM_MAXB];
     unsigned char have[LIM_MAXB];   /* what the image held when compared            */
+    unsigned char file[LIM_MAXB];   /* what the exe FILE says: the reference        */
+    unsigned char want[LIM_MAXB];   /* what must be there after the install         */
     unsigned char differs;
     unsigned char unreadable;       /* the page could not be read: `have` means nothing */
+    unsigned char fileok;           /* the mod's own value may stand here: lim_file_ok */
+    unsigned char kept;             /* it does, and `want` is the file's bytes         */
     const char*   name;
 } LIMSITE;
 
@@ -141,6 +146,22 @@ static void lim_branch(unsigned int va, int n, const unsigned char* stock, unsig
 static void lim_same(unsigned int va, int n, const unsigned char* stock, const char* name)
 {
     lim_add(va, n, stock, stock, name);
+}
+
+/* A SITE WHERE THE MOD'S OWN EXE MAY DIFFER FROM STOCK 3.1 AND IMPURE LEAVES IT ALONE.
+   The rule for every other site is that the bytes must be the stock 3.1 ones, and a mod's exe
+   that changes one is refused: Impure's value there is part of a fix whose argument rests on
+   what the stock bytes do, and a mod that moved them has changed that argument. A site listed
+   here is one where the value stands alone -- nothing is sized or indexed by it, no stub reads
+   it, no other site's argument depends on it -- so whatever the mod's exe FILE says is kept and
+   Impure writes nothing. Adding one is a claim about that site, checked in a review, never a way
+   past a refusal (research/notes/compat/takeover.md, part 2). */
+static void lim_file_ok(unsigned int va)
+{
+    int i;
+    for (i = 0; i < s_nlim; i++)
+        if (s_lim[i].va == va) { s_lim[i].fileok = 1; return; }
+    s_limOverflow = 1;              /* a marked site that is not in the table is our bug */
 }
 
 /* a fix of the table whose code stub could not be made: nothing of the table is written */
@@ -10135,6 +10156,10 @@ static void lim_sites(void)
        the per-tick 0x40EB70, which shares it among the players; nothing is sized or indexed
        by it, so the raise costs time, not memory. */
     lim_dword(0x0040EAD6, 1333, TAGPU_LIM_PATH, "pathfinding budget");
+    /* Nothing is sized or indexed by it and no stub reads it, so a mod's own value stands:
+       the 3.9.02 exe sets 66650, which is what Impure writes anyway, and Escalation's sets
+       1114, below stock, deliberately. */
+    lim_file_ok(0x0040EAD6);
 
     /* ---- particles: two ceilings. Every emitter (0x470F00..0x472F00) takes its layer's
        size and `cmp eax,0x190 / jbe append`; past the cap it destroys the layer's oldest
@@ -10354,7 +10379,7 @@ static int lim_overlap(void)
 
 int tagpu_limits_install(void)
 {
-    int i, bad = 0, written;
+    int i, bad = 0, written, haveFile, noFile = 0, kept = 0, modBad = 0;
     if (s_limState) return s_limState > 0;
 #ifndef TAGPU_LIMITS_STOCK
     lim_sites();
@@ -10375,29 +10400,69 @@ int tagpu_limits_install(void)
         return 0;
     }
 
+    /* THE EXE FILE ON DISK IS THE REFERENCE (research/notes/compat/takeover.md, part 2). A site
+       whose bytes in memory differ from the FILE was rewritten by something that ran before
+       Impure, which is what this refuses over. A site whose FILE differs from stock 3.1 is the
+       MOD'S OWN CHANGE -- a mod ships its engine changes in its exe -- and is refused just the
+       same, because Impure's value there belongs to a fix that argues from the stock bytes,
+       EXCEPT where lim_file_ok says the value stands alone: there the mod's bytes are kept and
+       nothing is written. Comparing with baked stock bytes alone could not tell the two apart,
+       and refused every mod's own exe at its first changed site. */
+    haveFile = tagpu_takeover_file_open();
     for (i = 0; i < s_nlim; i++) {
         LIMSITE* s = &s_lim[i];
         s->unreadable = !lim_read(s->va, s->have, s->n);
-        if (s->unreadable || memcmp(s->have, s->stock, s->n)) {
+        memcpy(s->want, s->ours, s->n);
+        if (!haveFile || !tagpu_takeover_file_at(s->va, s->file, s->n)) {
+            /* No reference: fall back to the stock bytes, which is the rule as it was. The log
+               says so, since a mod's exe then refuses at its first changed site. */
+            memcpy(s->file, s->stock, s->n);
+            noFile++;
+        }
+        if (s->unreadable || memcmp(s->have, s->file, s->n)) {
             s->differs = 1;
             bad++;
+            continue;
         }
+        if (!memcmp(s->file, s->stock, s->n)) continue;     /* stock: ours goes in */
+        if (!s->fileok) {
+            s->differs = 1;
+            bad++;
+            modBad++;
+            continue;
+        }
+        s->kept = 1;                                       /* the mod's own value stands */
+        memcpy(s->want, s->file, s->n);
+        kept++;
     }
+    tagpu_takeover_file_close();
+    if (noFile)
+        tagpu_logf("limits: the exe file could not be read for %d of %d sites -- those are "
+                   "compared with the stock 3.1 bytes, so a mod's own exe refuses there", noFile,
+                   s_nlim);
     if (bad) {
         s_limState = -1;
-        tagpu_logf("limits: FAILED -- %d of %d sites differ from stock 3.1, nothing written; "
-                   "the report shows at the first DirectDraw call", bad, s_nlim);
+        tagpu_logf("limits: FAILED -- %d of %d sites differ from the exe file%s, nothing "
+                   "written; the report shows at the first DirectDraw call", bad, s_nlim,
+                   modBad ? " or are the mod's own change at a site Impure's own value needs"
+                          : "");
         return 0;
     }
+    if (kept)
+        tagpu_logf("limits: %d site(s) carry the mod's own value in its exe file and are left "
+                   "alone", kept);
     for (written = 0; written < s_nlim; written++) {
         LIMSITE* s = &s_lim[written];
-        if (!tagpu_detour_write(s->va, s->ours, s->n)) break;
+        if (s->kept) continue;
+        if (!tagpu_detour_write(s->va, s->want, s->n)) break;
     }
     if (written < s_nlim) {
         /* PUT BACK WHAT WAS WRITTEN: the process ends at the report either way, but
            nothing runs meanwhile on a half-changed engine. */
         s_limWriteFail = s_lim[written].va;
-        while (written-- > 0) tagpu_detour_write(s_lim[written].va, s_lim[written].stock, s_lim[written].n);
+        while (written-- > 0)
+            if (!s_lim[written].kept)
+                tagpu_detour_write(s_lim[written].va, s_lim[written].file, s_lim[written].n);
         s_limState = -1;
         tagpu_logf("limits: FAILED -- the write at 0x%08X was refused; everything written was put back",
                    s_limWriteFail);
@@ -10499,7 +10564,7 @@ static void lim_verify(void)
     for (i = 0; i < s_nlim; i++) {
         LIMSITE* s = &s_lim[i];
         s->unreadable = !lim_read(s->va, s->have, s->n);
-        if (s->unreadable || memcmp(s->have, s->ours, s->n)) {
+        if (s->unreadable || memcmp(s->have, s->want, s->n)) {
             s->differs = 1;
             s_limRewritten++;
         }

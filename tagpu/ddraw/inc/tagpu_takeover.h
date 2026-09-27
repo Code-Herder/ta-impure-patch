@@ -163,6 +163,16 @@
 HMODULE tagpu_takeover_loadlibrary_a(const char* name, DWORD flags, void* caller);
 HMODULE tagpu_takeover_loadlibrary_w(const wchar_t* name, DWORD flags, void* caller);
 
+/* The exe FILE on disk read by virtual address -- the reference the whole takeover compares
+   with, so the fail-closed site table (tagpu_patches.c) and the image comparison cannot
+   disagree about what the player's exe says. Open, read every site, close; `_at` answers 0 when
+   the VA is in no raw section of the file, and `_open` when the file cannot be read or the exe
+   is loaded away from the base its file asks for -- the site table's addresses are absolute, so
+   there is no reference for them then. DllMain, one thread. */
+int  tagpu_takeover_file_open(void);
+int  tagpu_takeover_file_at(unsigned int va, void* out, int n);
+void tagpu_takeover_file_close(void);
+
 /* DllMain, DLL_PROCESS_ATTACH, in this order and before anything of ours patches the exe.
    Both log what they did. */
 void tagpu_takeover_tadr_init(void);
