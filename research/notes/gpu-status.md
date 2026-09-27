@@ -19528,8 +19528,11 @@ to TA's. After a crash it starts TotalA.exe again, and the new process waits at
 `DLL_PROCESS_ATTACH` for the old one to end, because TotalA.exe exits silently while another copy
 holds its single-instance semaphore (`0x49E885`). The engine side is in the
 [engine map](exe-reverse-engineering.html), *TA's crash filter* and *TA's single-instance test*.
-The record is keyed `vendor:device:driver:build`, so a new driver or a new DLL tries again, and
-the crash marker stays on disk until the record it stands for is.
+The record is keyed `vendor:device:driver:build`, so a new driver or a new DLL tries again. The
+crash marker is read at the first bring-up only, becomes the record only when it names this
+device and build, and stays on disk until the disk holds the record as the process last made it
+(its key, or nothing after a retry). The retry is carried out on the render thread in the render
+options' per-frame hook, under either backend.
 
 **The seam's part** (`tagpu_vk.c`). Every Vulkan failure that ends the lane (`-2`) notes whether
 the device reported itself lost, or a fence or an acquire only timed out; a timeout asks
@@ -19561,6 +19564,9 @@ The crash path ran there too: the filter ahead of `004DA2A0`, one relaunch, the 
 
 **Not covered.** The effects job on the AMD card (the scene drew no effects). The timeout rule
 (no lever makes a fence time out on a live device). The residuals the plan note lists: a relaunch
-that can stop inside a crash holding the heap lock (the marker is on disk first), and a store
-that cannot be written, which leaves the marker standing as the record and the notice showing at
-every launch.
+that can stop inside a crash holding the heap lock (the marker is on disk first); a store that
+cannot be written, which leaves the marker standing as the record and the notice showing once per
+launch until the row's retry supersedes it; a device that hangs for good without reporting the
+loss, which is not blamed, because nothing tells it from a long stall; and a restorer frame over
+the fence's one-second wait that still finishes, which takes the lane down unblamed, as any
+timeout does.

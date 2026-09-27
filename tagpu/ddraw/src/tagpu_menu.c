@@ -1375,6 +1375,11 @@ void __stdcall tagpu_menu_oncommand(void* gi)
    (`commit_row`); this coalesces any number of them into one write. */
 void tagpu_menu_present(void)
 {
+    /* THE RESTORER GUARD'S RETRY AND ITS CRASH MARKER, here because this is
+       the one per-frame call on the render thread under either backend: a
+       retry picked while the Vulkan lane is down for good must still clear
+       the record. Before the flush, so that it writes the cleared record. */
+    tagpu_rguard_tick();
     if (!s_installed) return;
     /* THE GPU ROW HAS ITS OWN FLAG: its value is a device NAME, and the name
        is handed to the store on this thread so that no string crosses one

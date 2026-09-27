@@ -101,8 +101,8 @@ static int s_state;
 static unsigned s_refEpoch;
 
 /* `ep` is the epoch the refused attempt BEGAN in, read before anything it
-   refused on: a click that lands during the attempt has then already moved
-   the epoch past the one stamped, so the next `up` asks again. */
+   refused on. Only the guard's tick moves the epoch, on this thread and never
+   during an attempt, so the stamp is the epoch the attempt saw whole. */
 static int refuse_at(unsigned ep)
 {
     s_state = ST_REFUSED;
@@ -2043,9 +2043,6 @@ static void step_impl(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 
 void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
-    /* the guard's own per-frame work, a retry the player asked for and the
-       crash marker: outside the guard, since neither is the restorer's */
-    tagpu_rguard_tick();
     tagpu_rguard_enter();
     s_rec = 0;
     step_impl(d, cb, slot);

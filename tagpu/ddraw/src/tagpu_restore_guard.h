@@ -33,16 +33,20 @@
    CreateProcessA are the system's and may take the process heap's lock, so a
    crash that holds it can stop there, with the marker on disk -- then starts
    TotalA.exe again with its own command line and ends this process. The new
-   process turns the marker into the record and shows the notice, and deletes
-   the marker only once the record is on disk: until then the marker is the
-   record. A relaunched process never relaunches again
+   process's first bring-up turns a marker that names its own device and build
+   into the record and shows the notice, once; a marker naming another key
+   goes, as a record naming it would. The marker is deleted once the disk
+   holds the record as this process last made it -- that key, or nothing after
+   a retry or a drop: until then the marker is the record. A relaunched
+   process never relaunches again
    (TAGPU_RESTORE_RELAUNCHED in its environment), and without a marker on disk
    there is no relaunch at all: a relaunch that could not be remembered would
    only crash the same way.
 
-   THE RECORD'S WRITERS ARE SERIALISED: `_device` and `_turn_off` on the
-   render thread and `_clear` on the game thread take one lock, and `_clear`
-   moves the epoch inside it, after the record. */
+   THE RECORD IS THE RENDER THREAD'S: `_device`, `_turn_off` and `_tick` are
+   its only writers, and `_tick` the epoch's. `_clear`, on the game thread,
+   only raises a request that `_tick` carries out: the record first, then the
+   epoch, then the request lowered. */
 
 enum { TAGPU_RG_CRASH = 1, TAGPU_RG_LOST = 2, TAGPU_RG_SELFTEST = 3 };
 
@@ -57,16 +61,17 @@ void tagpu_rguard_attach(void);
    record (and owes the notice), drops a record that names another device, and
    answers 1 when this one is recorded off. */
 int  tagpu_rguard_device(unsigned vendor, unsigned device, unsigned driver);
-/* 1 while the device `_device` last named is recorded off. Any thread. */
+/* 1 while the device `_device` last named is recorded off and no retry is
+   pending. Any thread. */
 int  tagpu_rguard_off(void);
 /* The device's key as `_device` formatted it, "" before. */
 const char* tagpu_rguard_key(void);
 /* The self-test found wrong bytes: record this device off and say so. */
 void tagpu_rguard_turn_off(int why);
-/* The render options' On, on the game thread: forget the record, and move the
-   epoch so that the restorer and every consumer that gave up on it ask again
-   (tagpu_vk_restore_epoch). An attempt that read the epoch before this call
-   holds its refusal for that older epoch, so it asks again too. */
+/* The render options' On, on the game thread: ask for the record to be
+   forgotten. `_tick` forgets it and then moves the epoch, so that the
+   restorer and every consumer that gave up on it ask again
+   (tagpu_vk_restore_epoch). */
 void tagpu_rguard_clear(void);
 unsigned tagpu_rguard_epoch(void);
 
@@ -76,17 +81,22 @@ void tagpu_rguard_leave(void);
 
 /* Restorer work went into the command buffer of frame slot `slot`; that
    slot's fence has since signalled; the device is proven idle or destroyed,
-   which finishes every slot, whatever the slot count becomes. Render thread. */
+   which finishes every slot, whatever the slot count becomes. Render thread;
+   `_idle` also from the bring-up worker's teardown, while the lane is not
+   ready. */
 void tagpu_rguard_work(unsigned slot);
 void tagpu_rguard_fenced(unsigned slot);
 void tagpu_rguard_idle(void);
-/* Render thread, once a frame: the marker goes once the record it stands for
-   is on disk. */
+/* Render thread, once a frame under either backend (tagpu_menu_present,
+   before the store's flush): carries out a retry the player asked for, and
+   deletes the marker once the disk holds the record. */
 void tagpu_rguard_tick(void);
-/* The seam's fatal path, when the device was lost or a fence timed out, and
-   before it takes the lane down. When a frame carrying restorer work was
-   unfinished this records the device off and relaunches the game, and does
-   not return; otherwise 0. */
+/* The seam's fatal path, when the device reported itself lost -- directly,
+   or when asked after a timeout -- and before it takes the lane down. When a
+   frame carrying restorer work was unfinished this records the device off and
+   relaunches the game, and does not return; otherwise 0. A device that hangs
+   and never reports the loss is not blamed: the seam's wait on it does not
+   return, and nothing tells that hang from a long presentation stall. */
 int  tagpu_rguard_blame_lost(void);
 
 /* THE FAULT LEVER, tagpu_restorefault.on, for testing the three paths above:

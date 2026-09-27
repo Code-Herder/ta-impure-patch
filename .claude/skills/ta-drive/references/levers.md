@@ -324,7 +324,8 @@ bring-up and a swapchain rebuild add nothing to them.
   the DLL's commit, so **every rebuild from a new commit drops the record** and tests again.
   The record is `restoreoff=` in the instance's `impure.cfg`, or `tagpu_restore_off.txt` in the
   gamedir under `tagpu_defaults.off`; `tagpu_restore_crashed.txt` is the marker a crash leaves for
-  the relaunch, deleted once the relaunch has the record on disk (`the crash marker is deleted`).
+  the relaunch: read at the first bring-up only, dropped when it names another build or device,
+  and deleted once the disk holds the record (`the crash marker is deleted`).
   Delete all three by hand to start clean. The render options' *Undithered assets* row reading
   "Off (driver)" is the same record, and picking On from it or from Off retries; under
   `tagpu_defaults.off` that row is greyed, so the file goes by hand.

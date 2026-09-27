@@ -25,10 +25,13 @@ static volatile LONG s_off;
 static volatile LONG s_epoch;
 static volatile LONG s_clearReq;
 
-/* the marker the last run left, while the record it stands for is not yet on
-   disk */
-static int  s_markPending;
-static char s_markKey[KEY_LEN];
+/* THE RECORD AS THIS PROCESS LAST READ OR WROTE IT -- what the disk has to
+   hold before the marker can go, whatever superseded the marker's own key (a
+   retry, a drop) */
+static char s_want[KEY_LEN];
+/* the last run's marker: read at the first bring-up only, and pending while
+   the disk does not hold `s_want` */
+static int  s_markSeen, s_markPending;
 
 /* ---- the notice (D12) ----------------------------------------------------- */
 
@@ -109,6 +112,7 @@ static void record_read(char* out, int cap)
 
 static void record_write(const char* key)
 {
+    lstrcpynA(s_want, key, sizeof s_want);
     if (tagpu_settings_ignored()) {
         if (key[0]) {
             FILE* f = fopen(RECORD_FILE, "wb");
@@ -132,14 +136,18 @@ static int record_saved(const char* key)
     return !strcmp(rec, key);
 }
 
-/* the marker goes once its record is on disk; until then it is the record,
-   and a launch that dies first reads it again */
+/* the marker goes once the disk holds the record as this process last made
+   it; until then the marker is the record, and a launch that dies first reads
+   it again */
 static void marker_settle(void)
 {
-    if (!s_markPending || !record_saved(s_markKey)) return;
+    if (!s_markPending || !record_saved(s_want)) return;
     DeleteFileA(MARKER);
     s_markPending = 0;
-    tagpu_logf("restoreguard: the record for %s is on disk - the crash marker is deleted", s_markKey);
+    if (s_want[0])
+        tagpu_logf("restoreguard: the record for %s is on disk - the crash marker is deleted", s_want);
+    else
+        tagpu_logf("restoreguard: the record is cleared on disk - the crash marker is deleted");
 }
 
 /* ---- the crash path: everything it touches is built here, at install ------ */
@@ -286,11 +294,22 @@ void tagpu_rguard_attach(void)
     }
     h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);
     if (!h) {
-        lstrcpynA(s_waited, "the crashed process was already gone", sizeof s_waited);
+        /* a process object that no longer exists: every handle it held, the
+           semaphore's among them, is closed */
+        DWORD err = GetLastError();
+        if (err == ERROR_INVALID_PARAMETER)
+            lstrcpynA(s_waited, "the crashed process was already gone", sizeof s_waited);
+        else
+            _snprintf(s_waited, sizeof s_waited,
+                      "the crashed process could not be opened (error %lu) and was not waited for", err);
+        s_waited[sizeof s_waited - 1] = 0;
         return;
     }
     memset(&c, 0, sizeof c);
     if (GetProcessTimes(h, &c, &e, &k, &u) && c.dwHighDateTime == hi && c.dwLowDateTime == lo) {
+        /* INFINITE, not a timeout: a process that never finishes ending keeps
+           the semaphore too, so no copy of the game could start before then
+           anyway, and this one comes up when it does */
         WaitForSingleObject(h, INFINITE);
         lstrcpynA(s_waited, "it waited for the crashed process to end", sizeof s_waited);
     } else {
@@ -312,9 +331,15 @@ int tagpu_rguard_device(unsigned vendor, unsigned device, unsigned driver)
     install();
     s_markHeadLen = _snprintf(s_markHead, sizeof s_markHead, "%s\r\n", s_key);
 
-    /* THE LAST RUN'S MARKER, turned into the record for the key it names --
-       which is the device that crashed, whichever this one is */
-    f = fopen(MARKER, "rb");
+    record_read(rec, sizeof rec);
+    lstrcpynA(s_want, rec, sizeof s_want);
+
+    /* THE LAST RUN'S MARKER, at the first bring-up only: a later one would
+       convert it again and show the notice again. It becomes the record only
+       when it names this device and build; one naming another key goes, as a
+       record naming it would just below. */
+    f = s_markSeen ? NULL : fopen(MARKER, "rb");
+    s_markSeen = 1;
     if (f) {
         char body[160];
         size_t n = fread(body, 1, sizeof body - 1, f);
@@ -328,23 +353,24 @@ int tagpu_rguard_device(unsigned vendor, unsigned device, unsigned driver)
         if (!strncmp(reason, "lost", 4)) why = TAGPU_RG_LOST;
         if (!body[0]) {
             DeleteFileA(MARKER);                /* it names nothing */
+        } else if (strcmp(body, s_key)) {
+            tagpu_logf("restoreguard: the last run's crash marker names %s; this is %s, a new "
+                       "driver, another card or a new build - it is dropped", body, s_key);
+            DeleteFileA(MARKER);
         } else {
-            record_read(rec, sizeof rec);
             if (strcmp(rec, body)) {
                 tagpu_logf("restoreguard: the last run turned the restorer off (%s, device %s) - "
                            "recorded, and the player is told", reason[0] ? reason : "?", body);
                 record_write(body);
+                lstrcpynA(rec, body, sizeof rec);
                 notice(why);
             } else {
                 tagpu_logf("restoreguard: a crash marker for %s is still on disk, and so is its record", body);
             }
             s_markPending = 1;
-            lstrcpynA(s_markKey, body, sizeof s_markKey);
-            marker_settle();
         }
     }
 
-    record_read(rec, sizeof rec);
     if (rec[0] && strcmp(rec, s_key)) {
         tagpu_logf("restoreguard: the restorer was off for %s; this is %s, a new driver, "
                    "another card or a new build - it is tried again", rec, s_key);
@@ -355,11 +381,18 @@ int tagpu_rguard_device(unsigned vendor, unsigned device, unsigned driver)
     if (rec[0])
         tagpu_logf("restoreguard: the restorer is recorded off for %s - the original art is drawn "
                    "(the render options' Undithered assets row tries again)", s_key);
+    marker_settle();
     return (int)s_off;
 }
 
-/* a retry the render thread has not carried out yet already reads as on */
-int tagpu_rguard_off(void) { return s_off && !s_clearReq; }
+/* A retry the render thread has not carried out yet already reads as on. The
+   request is read FIRST: the tick lowers it only after `s_off`, so a request
+   seen lowered is a retry whose `s_off = 0` is already visible. */
+int tagpu_rguard_off(void)
+{
+    if (s_clearReq) return 0;
+    return s_off != 0;
+}
 
 const char* tagpu_rguard_key(void) { return s_key; }
 
@@ -382,13 +415,17 @@ void tagpu_rguard_clear(void)
     InterlockedExchange(&s_clearReq, 1);
 }
 
+/* THE REQUEST IS LOWERED LAST, after `s_off` and the epoch (see `_off`). No
+   request is lost by that: the menu asks only while `_off` answers 1, which it
+   does not while this one is raised. */
 void tagpu_rguard_tick(void)
 {
-    if (InterlockedExchange(&s_clearReq, 0)) {
+    if (s_clearReq) {
         record_write("");
         InterlockedExchange(&s_off, 0);
         /* AFTER the record: an epoch seen moved is a record already cleared */
         InterlockedIncrement(&s_epoch);
+        InterlockedExchange(&s_clearReq, 0);
         tagpu_logf("restoreguard: the player turned undithering back on - the record is cleared "
                    "and the restorer tries again");
     }

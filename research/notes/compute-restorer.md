@@ -77,8 +77,9 @@ exact box average of the level above; a pass opens the gate.
 
 - **Wrong bytes**: the device and driver are recorded off, every job fails, the notice shows.
 - **Could not run** (the probe could not be built, a probe job failed): the restorer is off with no
-  record until the Vulkan lane next comes down and up (a shell↔game switch, a swapchain rebuild),
-  which tests again.
+  record until the Vulkan lane next comes down and up (a shell↔game switch, a new window size or
+  swapchain image count), which tests again. A swapchain rebuilt at the same size and image count
+  (a vsync toggle can be one) keeps the lane up and does not.
 - A device that passed is not tested again in the same process.
 
 On the reference setup the CPU reference takes 313–339 ms and the readback matches it exactly
@@ -98,7 +99,9 @@ On the reference setup the CPU reference takes 313–339 ms and the readback mat
   anything, cleared after that slot's fence wait, and cleared for every slot once the device is
   proven idle or destroyed). A fence wait or an acquire that times out is not a loss by itself —
   a presentation stall does that too — so the seam asks `vkDeviceWaitIdle` and blames only when
-  it answers `VK_ERROR_DEVICE_LOST`.
+  it answers `VK_ERROR_DEVICE_LOST`. A device that hangs and never reports the loss is not
+  blamed: nothing tells that hang from a long stall, and the wait does not return (see *Not
+  closed*).
 - **Relaunch.** For a crash or a lost device, the process writes `tagpu_restore_crashed.txt`
   from buffers built at install (nothing of ours on that path allocates), starts `TotalA.exe`
   again with its own command line and working directory plus
@@ -111,17 +114,21 @@ On the reference setup the CPU reference takes 313–339 ms and the readback mat
   commit (`-dirty` from an unclean tree): `restoreoff=` in `impure.cfg`, or
   `tagpu_restore_off.txt` under `tagpu_defaults.off`. The build is in it so that a DLL which
   fixes a fault does not inherit the record of the one that had it; a record naming another
-  device, driver or build is dropped and the restorer tried again. The next process turns the
-  marker into the record and shows the notice, and deletes the marker only once the record is on
-  disk (the store's flush): until then the marker is the record, and a launch that dies first
-  reads it again.
+  device, driver or build is dropped and the restorer tried again. The next process reads the
+  marker at its first bring-up only: one that names this device and build becomes the record and
+  shows the notice, once; one that names another key is dropped, as its record would be. The
+  marker is deleted once the disk holds the record as this process last made it — that key, or
+  nothing after a retry or a drop (the store's flush): until then the marker is the record, and a
+  launch that dies first reads it again.
 - **The notice** is one message box on its own thread saying what happened and that it is tried
   again by itself after a driver or game update, or from the render options.
 - **The render options.** *Undithered assets* has a third stage, **"Off (driver)"**, shown while
   the record names this device. D12 asked for "Off (this driver)"; that text overran the row's
   three stage lights, so it is shortened. Picking On while the device is recorded off — from
   "Off (driver)" or from Off — asks for the record to be cleared; the render thread's next tick
-  clears it and then moves an epoch. The backend's refusal and every consumer's "the restorer
+  clears it and then moves an epoch. The tick runs in the render options' per-frame hook under
+  either backend, before the store's flush, so a retry lands even when the Vulkan lane has gone
+  down for good. The backend's refusal and every consumer's "the restorer
   refused" latch hold only for the epoch of their attempt, so all of them ask again; another
   failure turns it off again. Under `tagpu_defaults.off` the row is greyed like the rest of the
   store's rows, and the file record is cleared by deleting it.
@@ -147,10 +154,14 @@ from the source dumped beside it, with the DLL's key stand-in, and holds the twi
 **The guard**, one launch per path: the self-test passing; `probe` failing it (the notice, the
 row reading "Off (driver)"); the record holding on the next launch; the row's retry, both from
 "Off (driver)" and through Off back to On; `crash` and `lost` each relaunching once, the new
-process logging that it waited for the old one, then the record, the notice and the marker's
-deletion once the record was on disk; the file record under `tagpu_defaults.off`; a record
-without a build (`10de:2786:94d50000`) dropped as a new build, and the self-test passing after
-it. The timeout rule has no fault lever and was not exercised.
+process logging that it waited for the old one (or, on another run, that the old one had already
+ended), then the record, the notice and the marker's deletion once the record was on disk; the
+file record under `tagpu_defaults.off`; a record without a build (`10de:2786:94d50000`) dropped
+as a new build, and the self-test passing after it; a marker from another build dropped with no
+notice. With the store's writes failing (a directory where its temporary file goes): the marker
+stays pending, a second bring-up (into a skirmish) does not convert it again, and the row's retry
+supersedes it — the marker deleted, the self-test passing. The timeout rule has no fault lever
+and was not exercised.
 
 **The cost**, the same instance and scenario (`feat-forest`, 1024 × 768, vsync off, a private
 display, the RTX 4070), terrain only:
@@ -190,7 +201,10 @@ OUT on a keyed base atlas exactly as the features' job does.
   backend took 10.6 s and 7.0 s on the same card ([status](gpu-status.html) §2.94).
 - **The guard on Windows**: the filter installed ahead of `004DA2A0`; `crash` relaunched the game
   from its own process, and the relaunch logged that it will not relaunch again, turned the marker
-  into the record (`crash c0000005`) and raised the notice. No `ErrorLog.txt` was written.
+  into the record (`crash c0000005`) and raised the notice. No `ErrorLog.txt` was written. With
+  the key carrying the build (`1002:6798:0080005b:8e896d4`) the self-test passes (CPU reference
+  716 ms), and on `crash` the relaunch found the old process already ended, recorded the device
+  and deleted the marker once the record was on disk.
 
 ### Not closed by landing 1
 
@@ -198,8 +212,18 @@ OUT on a keyed base atlas exactly as the features' job does.
   system's and may take the process heap's lock. A crash that holds it can stop there; the marker
   is written first, so the next launch by hand still has the record.
 - **A settings store that cannot be written** never gets the record, so the marker stays on disk
-  as the record: the restorer stays off for that device and the notice shows at every launch
-  until the store can be written. The row's retry lasts for that process.
+  as the record: the restorer stays off for that device and the notice shows once at every
+  launch, until the store can be written or the row's retry supersedes the marker.
+- **A hang that never reports itself lost** is not blamed. The seam asks the device after a
+  timeout, and that wait does not return from a device that hangs for good, so no record is
+  written; the next launch runs the restorer again. A driver whose watchdog resets a hung GPU
+  reports the loss, and that is blamed. A provisional marker written before the wait would catch
+  the hang, and would also record a working driver off whenever the player quits during a long
+  presentation stall; it is not built.
+- **A restorer frame slower than the fence's one-second wait that still finishes** is not blamed
+  either, and the lane goes down as for any timeout. A slice is two dispatches before its cost is
+  measured and the 12 ms budget after (six dispatches where the device cannot time one), so
+  reaching a second is a device far below anything the self-test has run on.
 - **The timeout rule is not exercised**: no lever makes a fence time out on a live device.
 
 ## Decisions
