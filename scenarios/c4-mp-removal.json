@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "C4, a departed player's loaded transports, on three peers. Apply on one joiner (J) after `tools/mp_lobby.sh --map 'Show Down'` with three instances: k and l each load a TXCOM1 at (1400, 2000) and (3800, 2000), clear of the three start positions, each ATLAS listed first so it takes the lower slot. Then freeze J's TotalA.exe (kill -STOP its pid): the other peers raise TIMEOUT.GUI, whose REJECT runs the engine's own player removal 0x452CC0, and so kill-all's non-local branch for J's army. Run it on one peer first (REJECT, or `+kill <J's seat>` with `tacli switches <i> cheats=on`), then read the other before it rejects: J's passengers must still be carried there (+0x86 set) and its wire 0a count unchanged, since kill-all's cargo loop detaches a departed player's passenger without broadcasting the 0x0A. Its REJECT then logs 'a keyed passenger detached inside kill-all' and 'a carried self-destruct: TXCOM1 -> TX_BLAST_S' for each. Content: tools/datakeys_fixture.py into every instance's gamedir.",
+ "description": "C4, a departed player's loaded transports, on three peers, in both slot orders. Apply on one joiner (J) after `tools/mp_lobby.sh --map 'Show Down'` with three instances: k and l each load a TXCOM1 at (1400, 2000) and (3800, 2000), clear of the three start positions. k's ATLAS is listed first, so it takes the lower slot and kill-all reaches its passenger through the transport's cargo loop; l's passenger is listed first, so kill-all reaches it first and its own destructor detaches it. Then freeze J's TotalA.exe (kill -STOP its pid): the other peers raise TIMEOUT.GUI, whose REJECT runs the engine's own player removal 0x452CC0, and so kill-all's non-local branch for J's army. Run it on one peer first (REJECT, or `+kill <J's seat>` with `tacli switches <i> cheats=on`), then read the other before it rejects: both of J's passengers must still be carried there (+0x86 set) and its wire 0a count unchanged, since inside kill-all neither detach of a departed player's unit broadcasts its 0x0A. Its REJECT then logs 'a keyed passenger detached inside kill-all' for k's and 'a carried self-destruct: TXCOM1 -> TX_BLAST_S' for both. Content: tools/datakeys_fixture.py into every instance's gamedir.",
  "seed": 20260926,
  "on_error": "abort",
  "setup": {
@@ -59,6 +59,16 @@
    "stance": "hold"
   },
   {
+   "id": "l_com",
+   "type": "TXCOM1",
+   "owner": 0,
+   "pos": [
+    3800,
+    2000
+   ],
+   "stance": "hold"
+  },
+  {
    "id": "l_atlas",
    "type": "ARMATLAS",
    "owner": 0,
@@ -72,16 +82,6 @@
      "target": "l_com"
     }
    ]
-  },
-  {
-   "id": "l_com",
-   "type": "TXCOM1",
-   "owner": 0,
-   "pos": [
-    3800,
-    2000
-   ],
-   "stance": "hold"
   }
  ],
  "camera": {
