@@ -370,10 +370,26 @@ bytes.
 other jobs at the same build: features and effects 0 bytes, units 1, the UI 6, its pictures
 17, each at most one level.
 
+**On the Windows test setup's AMD card** (`1002:6798:0080005b`, 1920 × 1080, `feat-forest` on Two
+Continents, a `tacli` remote instance): the self-test passes with the neighbourhood probe (22,696
+bytes within 0 levels, the CPU reference in 808 ms); the memory-budget query answers there (192 MB
+against half of the 2,105 MB the driver says is free, of 2,816 MB); the whole map is painted in
+31.3 s, the restorer working in 1,773 of the 1,793 frames the game drew meanwhile (58.8 fps). The
+dumps:
+
+| check | what | bytes that differ |
+|---|---|---|
+| per window | 43,658 keys | 1,479 of 151,405,944 (0.0010 %) |
+| whole map | 134,400 cells | 3,324 of 466,099,200 (0.0007 %) |
+
+and features, effects, units and the UI as on the reference setup (0, 0, 1 and 7 bytes), each at
+most one level. Defender, fully armed there, raised no detection.
+
 ### Not closed by landing 2
 
 - **The trickle is seconds, not frames.** Two Continents' whole map takes about 20 s at 2 ms of GPU
-  a frame; a cell whose key is not painted yet draws dithered (D7). How long a key scrolled onto
+  a frame on the reference setup and 31 s on the AMD card; a cell whose key is not painted yet
+  draws dithered (D7). How long a key scrolled onto
   the screen waits was not measured; the design bound is the two trickle batches ahead of it.
 - **At the mirrored map edge** (the edge setting of [GPU status](gpu-status.html) §2.90) the
   half-texel at the fold samples the key's ring, which is now the network's output for the
