@@ -3,10 +3,11 @@
 ## Summary
 
 Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our stack, as our own
-code, over six landings and a seventh. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
+code, over six landings and the ones found since (B7, B8, B9). The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
 grill that followed [the evidence pass](sim-fixes-evidence.md). **All six landings are landed on local
 main (2026-09-25), each after its review**, and B7, four defects the veterancy survey found, landed
-with section C's C3 on 2026-09-26. The rules
+with section C's C3 on 2026-09-26. B8, kill counts across peers, landed the same day after its
+review. The rules
 shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
@@ -131,7 +132,7 @@ faces of `0x45A2EC` are left there.
   player record (`0x454934`), and what a departing host does to the others.
 - TADR's `IsBadReadPtr` finding under Wine (a guard-page violation escapes and kills the process)
   is recorded in the notes, not in CLAUDE.md.
-- **Kill counts across peers (B8): decided and built 2026-09-26, not landed.** A kill is counted
+- **Kill counts across peers (B8): landed 2026-09-26.** A kill is counted
   only where the copy of the victim reads finished, and a copy starts unfinished until the owner's
   round robin reaches it. The death now carries the owner's build fraction, and the create the
   owner's fraction and HP. B8's entry at the end of [the landings](#the-landings) has the decisions,
@@ -1433,8 +1434,8 @@ scenario `kills` column), then on the new one:
   floating wreck is raised as a visual residual);
 - the repair rate per call, ARMCOM against ARMCK on an ARMLLT (B1's session).
 
-**B8 — kill counts across peers. DECIDED 2026-09-26; BUILT 2026-09-26 on its own worktree
-(`worktree-agent-a68f1b8c83d2f4da6`, from main `1fc3a92`), not landed or reviewed.** The C3 session
+**B8 — kill counts across peers. DECIDED and LANDED 2026-09-26** on local main (built on
+`worktree-agent-a68f1b8c83d2f4da6`; reviewed at high by two reviewers, every finding acted on). The C3 session
 reported the defect; the disassembly is the engine map's *Who counts a kill, and why two peers can
 disagree*, under the destructor `0x4866D0`, and the measurement on main is *Kill counts across
 peers — measured for B8* below.
