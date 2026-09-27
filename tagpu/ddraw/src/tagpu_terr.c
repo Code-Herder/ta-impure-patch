@@ -361,8 +361,9 @@ typedef char terr_mirror_flags_unchanged[
    1023 — so each product and sum is exact in float and aPos, aUV and aWorld
    are bit for bit the floats a CPU would write. Those same bounds are what
    puts every field of aCell inside a signed short, and a key's column and row
-   are under 16384 / CELL_PITCH (nb_build bounds the neighbourhood atlas by
-   the device's image limit). The atlas texel size arrives as the `uTexel`
+   are under the device's image limit over CELL_PITCH (nb_build bounds the
+   neighbourhood atlas by it; tagpu_vk_terr.c then refuses one past 16384):
+   963 at a 32768 limit. The atlas texel size arrives as the `uTexel`
    float a CPU would multiply by, so the UVs are the same product of the same
    two operands. The cost is eight shorts a cell against six vertices of six
    floats — and that is what lets one frame's budget cover a 3840x2160 view at

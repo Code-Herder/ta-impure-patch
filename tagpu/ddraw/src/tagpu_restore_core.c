@@ -745,7 +745,7 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
            the slice, so re-picking it after a batch lands does not reset it.
            Its batch in flight is the exception while another job waits: that
            batch is all that stands between the other and the GPU. */
-        if (j->cap > 0.0 && !others_waiting(s, j)) {
+        if (j->cap > 0.0 && !(j->inflight && others_waiting(s, j))) {
             if (s->timer ? s->nsPerUnit > 0.0 && capSpent >= j->cap * 1e6 / s->nsPerUnit
                          : capDraws >= FIXED_CAP_DRAWS)
                 break;

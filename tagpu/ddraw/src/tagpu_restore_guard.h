@@ -107,7 +107,8 @@ int  tagpu_rguard_blame_lost(void);
    a restorer call, `lost` has the seam report a device loss while restorer
    work is in flight. Two more drive the terrain's per-tile fallback (D10):
    `nbfit` has the neighbourhood atlas not fit, `nballoc` has the device
-   refuse it. Read once. */
+   refuse it -- on the first map after the terrain pass comes up, where no
+   restored atlas exists yet. Read once. */
 int  tagpu_rguard_fault(const char* token);
 /* The `lost` lever's one shot: 1 once, when armed and restorer work is in flight. */
 int  tagpu_rguard_fault_lost(void);

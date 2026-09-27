@@ -56,7 +56,7 @@ void tagpu_rref_probe(TAGPU_RPROBE* p)
         {160, 60, 180}, {200, 70, 120}, {150, 110, 80}, {110, 140, 110},
         {140, 140, 150}, {90, 100, 120}, {190, 170, 140}, {70, 60, 50} };
     static const int bayer[4][4] = { {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5} };
-    static const int perm[NBN] = { 4, 7, 2, 8, 0, 5, 1, 6, 3 };
+    static const int perm[NBN] = { 4, 7, 5, 8, 0, 2, 1, 6, 3 };
     unsigned s = 0x7A5EEDu;
     int x, y, i, c;
 
@@ -102,9 +102,10 @@ void tagpu_rref_probe(TAGPU_RPROBE* p)
                 p->r8[(2 + y) * DIM + 2 + x] = 7;
 
     /* the neighbourhood map: atlas tile k at (1 + 21 (k % 3), 1 + 21 (k / 3)),
-       five texels apart, and map cell i is tile perm[i] -- so no neighbour in
-       the map sits beside its cell in the atlas, and a window that read past
-       its tile rather than into the neighbour would read other texels. The
+       five texels apart, and map cell i is tile perm[i] -- chosen so that no
+       map neighbour's tile sits at the same offset from its cell's tile in the
+       atlas, and a window that read the atlas beside its tile rather than the
+       neighbour its frame names would read other texels. The
        alpha-0 keys under tile 0 are nothing to a neighbourhood, which is
        opaque. Every cell is a frame, cell (c, r) painted at (1 + 18c, 1 + 18r)
        with a one-texel ring. */

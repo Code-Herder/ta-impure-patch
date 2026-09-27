@@ -1515,7 +1515,7 @@ static TAGPU_VKRJOB* job_new_impl(const TAGPU_VKPASS* d, const char* tag,
     g->setGen = 0;
 
     if (!oneshot) {
-        _snprintf(b, sizeof b, LANE ": %s: lazy restore armed (%dx%d twin of the %dx%d atlas)",
+        _snprintf(b, sizeof b, LANE ": %s: lazy restore armed (a %dx%d destination, a %dx%d source)",
                   c->tag, dstW, dstH, srcW, srcH);
         rlog(b);
     }

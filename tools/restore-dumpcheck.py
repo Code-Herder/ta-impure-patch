@@ -357,7 +357,15 @@ def check_whole_map(gd, models):
     ids = np.frombuffer(raw, np.uint16, W * H, 32).reshape(H, W)
     keys = np.frombuffer(raw, np.int32, W * H, 32 + 2 * W * H).reshape(H, W)
     pre = gd / "tagpu_restore_terr_vk.rgba"
-    AW, AH, _, _, _, name = read_idx(pre.with_suffix(".idx"))
+    AW, AH, ent, _, _, name = read_idx(pre.with_suffix(".idx"))
+    # THE DUMP HAS TO BE THIS MAP'S NEIGHBOURHOODS: the .map is written
+    # whenever the keys build, and the terrain may still have restored per
+    # tile (a refused fit or image), which dumps a per-tile atlas beside it
+    nkeys = int(keys.max()) + 1 if keys.size else 0
+    if not ent or any(e["nb"] is None for e in ent) or len(ent) != nkeys or AW != cols * pitch:
+        raise SystemExit("tagpu_restore_terr_vk: not a neighbourhood dump of this .map's "
+                         f"{nkeys} keys ({len(ent)} entries, atlas {AW} wide) -- the terrain "
+                         "restored per tile, or the dumps are from different requests")
     model = models(name)
     got = np.fromfile(pre, dtype=np.uint8)[:AW * AH * 4].reshape(AH, AW, 4)
     base = np.fromfile(pre.with_suffix(".base"), dtype=np.uint8)

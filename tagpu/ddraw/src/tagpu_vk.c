@@ -283,10 +283,6 @@ static const char* res_name(VkResult r)
    instead of failing to load the DLL. */
 static HMODULE  s_mod;
 static PFN_vkGetInstanceProcAddr s_gipa;
-/* OPTIONAL, AND NULL WHERE NOT OFFERED: the memory-budget query
-   (tagpu_vk_mem_free) needs VK_KHR_get_physical_device_properties2 on a 1.0
-   instance, which `vk_instance` enables only when the loader offers it */
-static PFN_vkGetPhysicalDeviceMemoryProperties2KHR s_mp2;
 
 #define IFNS(X) \
     X(vkCreateInstance) X(vkDestroyInstance) \
@@ -378,6 +374,10 @@ typedef struct {
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
     int              budgetok;             /* VK_EXT_memory_budget is offered   */
+    /* the budget query's entry point, from THIS lane's instance, NULL where
+       VK_KHR_get_physical_device_properties2 is not offered: lane state, so it
+       is written before ST_READY and cleared with the rest at teardown */
+    PFN_vkGetPhysicalDeviceMemoryProperties2KHR mp2;
     /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
        largest ratio this device will apply. The Classic++ restored twins are
        the only textures this fork filters at all, and they are specified at
@@ -906,7 +906,10 @@ static int vk_load(void)
 
 /* An instance with the two surface extensions. Shared by the enumeration worker
    and the bring-up worker; each destroys its own. */
-static VkInstance vk_instance(void)
+/* A new instance, and in `*mp2` (when asked) the memory-budget query's entry
+   point resolved from THAT instance, or NULL where the loader does not offer
+   VK_KHR_get_physical_device_properties2. */
+static VkInstance vk_instance(PFN_vkGetPhysicalDeviceMemoryProperties2KHR* mp2)
 {
     const char* iexts[3] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME, NULL };
     uint32_t niext = 2;
@@ -955,8 +958,10 @@ static VkInstance vk_instance(void)
         r = vkCreateInstance(&ici, NULL, &inst);
     }
     if (r != VK_SUCCESS) { vklog("vkCreateInstance: %s (%d)", res_name(r), (int)r); return VK_NULL_HANDLE; }
-    s_mp2 = props2 ? (PFN_vkGetPhysicalDeviceMemoryProperties2KHR)s_gipa(inst, "vkGetPhysicalDeviceMemoryProperties2KHR")
-                   : NULL;
+    if (mp2)
+        *mp2 = props2 ? (PFN_vkGetPhysicalDeviceMemoryProperties2KHR)
+                        s_gipa(inst, "vkGetPhysicalDeviceMemoryProperties2KHR")
+                      : NULL;
 
 #define RES(n) n = (PFN_##n)s_gipa(inst, #n);
     IFNS(RES)
@@ -1040,13 +1045,13 @@ int tagpu_vk_mem_free(unsigned long long* freeBytes, unsigned long long* heapByt
     VkPhysicalDeviceMemoryProperties2 mp;
     unsigned long long best = 0, fr = 0, budget = 0;
     uint32_t i;
-    if (!s_vk.pd || lane_state() != ST_READY || !s_vk.budgetok || !s_mp2) return 0;
+    if (!s_vk.pd || lane_state() != ST_READY || !s_vk.budgetok || !s_vk.mp2) return 0;
     memset(&mb, 0, sizeof mb);
     memset(&mp, 0, sizeof mp);
     mb.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
     mp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
     mp.pNext = &mb;
-    s_mp2(s_vk.pd, &mp);
+    s_vk.mp2(s_vk.pd, &mp);
     for (i = 0; i < mp.memoryProperties.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; i++) {
         const VkMemoryHeap* h = &mp.memoryProperties.memoryHeaps[i];
         if (!(h->flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) || h->size <= best) continue;
@@ -1146,7 +1151,7 @@ static DWORD WINAPI enum_worker(LPVOID arg)
 
     (void)arg;
     if (!vk_load())            { lane_release(); return 0; }
-    inst = vk_instance();
+    inst = vk_instance(NULL);
     if (!inst)                 { lane_release(); return 0; }
 
     /* A FAILED OR EMPTY ENUMERATION LEAVES THE CACHE ALONE. Unchecked, `n = 0`
@@ -2033,7 +2038,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     if (!vk_load()) goto fail;
     va_log("before bring-up");
 
-    s_vk.inst = vk_instance();
+    s_vk.inst = vk_instance(&s_vk.mp2);
     if (!s_vk.inst) goto fail;
 
     {

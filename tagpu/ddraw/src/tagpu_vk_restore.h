@@ -70,7 +70,8 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
    place instead of blanking the world for the length of the job.
    `tag` prefixes the log lines, `prio` orders it against the other jobs
    (terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures
-   5; a negative prio is the backend's own self-test), `oneshot` marks a fixed list whose completion is logged as the
+   5, the terrain's fed job 6 while it trickles -- tagpu_vk_restore_job_budget;
+   a negative prio is the backend's own self-test), `oneshot` marks a fixed list whose completion is logged as the
    restore's "done" line, and `model` is the network it runs (TAGPU_RM_*).
    NULL, with the reason in tagpu.log, when the model or the device cannot.
    Render thread only, and only between the seam's frames. */

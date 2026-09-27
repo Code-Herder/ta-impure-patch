@@ -1180,6 +1180,10 @@ static int nb_choose(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 {
     char why[160];
     if (!t->nbFrames || t->nbN < 1) return 0;
+    /* A REFUSAL THAT STANDS paints nothing this epoch (`restore_want`), so the
+       neighbourhood atlas -- up to half the memory the driver calls free --
+       would be memory held for nothing: the per-tile layout keeps its size */
+    if (s_rjTried && s_rjEpoch == tagpu_vk_restore_epoch()) return 0;
     if (t->nbW < 1 || t->nbH < 1 || t->nbW > ATLAS_MAXDIM || t->nbH > ATLAS_MAXDIM) {
         plog(d, "terr: a %dx%d neighbourhood atlas is outside what this pass carries - "
                 "the terrain restores per tile", t->nbW, t->nbH);
@@ -1199,15 +1203,18 @@ static int nb_choose(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 /* ---- THE NEIGHBOURHOOD FEED (D8) ------------------------------------------
    The neighbourhood job is FED rather than handed its list. Each frame the
    keys of the cells in this frame's records -- the cells on screen -- that are
-   not queued yet go in, at prio 0 with the whole budget; while none of those
-   is waiting, the rest of the map follows centre-out (`nbOrder`), topped up to
-   one batch waiting behind the one in flight, after every other job and at
-   NB_TRICKLE_MS a frame. Every neighbourhood is one size class, so the queue
-   is FIFO and "an on-screen key is still waiting" is exactly "fewer frames
-   painted than the place of the last on-screen one queued": a key scrolled
-   onto the screen waits behind at most two trickle batches, the one in flight
-   and the one queued -- and the cap can spend its 2 ms a frame on both rather
-   than on one batch a frame, since the feed comes round once a frame.
+   not queued yet go in; while any key on screen is not painted, the job runs
+   at prio 0 with the whole budget. Otherwise the rest of the map follows
+   centre-out (`nbOrder`), topped up to one batch waiting behind the one in
+   flight, after every other job and at NB_TRICKLE_MS a frame -- the cap can
+   spend its 2 ms on both batches rather than on one a frame, since the feed
+   comes round once a frame.
+   "A KEY ON SCREEN IS NOT PAINTED" IS EXACT: every neighbourhood is one size
+   class, so the queue is FIFO and a key is painted exactly when the job has
+   painted more frames than its place in the queue (`s_nbPos`). That holds for
+   a key the trickle queued as much as for one queued on screen, so a key
+   scrolled onto the screen is at prio 0 however it was queued, behind at most
+   the keys queued before it: the two trickle batches and the screen's own.
    THE STATE IS ONE JOB'S. `s_nbGen` is the generation of the job it was built
    for (`s_rjGen`, bumped at every terrain job made), so a new job starts from
    nothing whichever table slot it lands in. */
@@ -1215,11 +1222,12 @@ static int nb_choose(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 #define NB_TRICKLE_PRIO  6      /* after the UI's pictures (5), the last job      */
 #define NB_TRICKLE_MS    2.0
 static unsigned        s_rjGen, s_nbGen;
-static unsigned char*  s_nbQ;               /* per key: queued                 */
+static int*            s_nbPos;             /* per key: its place, -1 unqueued */
 static int             s_nbQN;              /* its length, the request's keys  */
 static int             s_nbCursor;          /* the next place in `nbOrder`     */
 static int             s_nbAdded;           /* keys queued, in queue order     */
-static int             s_nbLastSeen;        /* ...to the last on-screen one    */
+static int             s_nbLastSeen;        /* one past the last unpainted key
+                                               seen on screen, in queue places */
 static TAGPU_RNBFRAME* s_nbTmp;
 static int             s_nbTmpCap;
 static DWORD           s_nbT0;
@@ -1227,7 +1235,7 @@ static int             s_nbSaidDone;
 
 static void nb_feed_free(void)
 {
-    free(s_nbQ); s_nbQ = NULL; s_nbQN = 0;
+    free(s_nbPos); s_nbPos = NULL; s_nbQN = 0;
     free(s_nbTmp); s_nbTmp = NULL; s_nbTmpCap = 0;
     s_nbCursor = s_nbAdded = s_nbLastSeen = 0;
     s_nbSaidDone = 0;
@@ -1246,9 +1254,9 @@ static int nb_room(int n)
     return 1;
 }
 
-/* The staged frames into the job. ALL OR THE JOB IS GIVEN UP: the keys are
-   already marked queued, and one the job did not take would be a cell nothing
-   ever paints. */
+/* The staged frames into the job. ALL OR THE JOB IS GIVEN UP: the keys already
+   have their places, and one the job did not take would be a cell nothing ever
+   paints. */
 static int nb_push(int n, int onScreen)
 {
     if (n == 0) return 1;
@@ -1263,33 +1271,40 @@ static int nb_push(int n, int onScreen)
    the request's own key count before it is used. */
 static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 {
-    int i, n, pending;
+    int i, n, pending, painted;
     if (s_nbGen != s_rjGen || s_nbQN != t->nbN) {
         nb_feed_free();
-        if (!(s_nbQ = (unsigned char*)calloc((size_t)t->nbN, 1))) return 0;
+        if (t->nbN < 1 || !(s_nbPos = (int*)malloc((size_t)t->nbN * sizeof *s_nbPos))) return 0;
+        for (i = 0; i < t->nbN; i++) s_nbPos[i] = -1;
         s_nbQN = t->nbN; s_nbGen = s_rjGen; s_nbT0 = GetTickCount();
     }
+    painted = tagpu_vk_restore_job_painted(s_rjob);
     /* THE CELLS ON SCREEN: a record's key cell is its frame's index
-       (tagpu_terr.h, `nbFrames`) */
-    if (s_nbAdded < s_nbQN && t->nbOn) {
+       (tagpu_terr.h, `nbFrames`). An unqueued key goes in; a queued one not
+       painted yet raises the mark to its place. */
+    if (painted < s_nbQN && t->nbOn) {
         for (i = 0, n = 0; i < t->ncell; i++) {
             const short* r = t->cells + (size_t)i * TAGPU_TERR_ICOMP;
             int k = r[5] * t->nbCols + r[4];
-            if (r[4] < 0 || r[4] >= t->nbCols || k < 0 || k >= s_nbQN || s_nbQ[k]) continue;
+            if (r[4] < 0 || r[4] >= t->nbCols || k < 0 || k >= s_nbQN) continue;
+            if (s_nbPos[k] >= 0) {
+                if (s_nbPos[k] >= painted && s_nbPos[k] >= s_nbLastSeen) s_nbLastSeen = s_nbPos[k] + 1;
+                continue;
+            }
             if (!nb_room(n + 1)) return 0;
-            s_nbQ[k] = 1;
+            s_nbPos[k] = s_nbAdded + n;
             s_nbTmp[n++] = t->nbFrames[k];
         }
         if (!nb_push(n, 1)) return 0;
     }
-    pending = tagpu_vk_restore_job_painted(s_rjob) < s_nbLastSeen;
+    pending = painted < s_nbLastSeen;
     /* THE REST OF THE MAP, topped up to a batch waiting */
     if (!pending && s_nbCursor < s_nbQN && tagpu_vk_restore_job_queued(s_rjob) < NB_TRICKLE) {
         if (!nb_room(NB_TRICKLE)) return 0;
         for (n = 0; s_nbCursor < s_nbQN && n < NB_TRICKLE; ) {
             int k = t->nbOrder[s_nbCursor++];
-            if (k < 0 || k >= s_nbQN || s_nbQ[k]) continue;
-            s_nbQ[k] = 1;
+            if (k < 0 || k >= s_nbQN || s_nbPos[k] >= 0) continue;
+            s_nbPos[k] = s_nbAdded + n;
             s_nbTmp[n++] = t->nbFrames[k];
         }
         if (!nb_push(n, 0)) return 0;
@@ -1302,6 +1317,24 @@ static int nb_feed(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
              s_nbQN, (unsigned long)(GetTickCount() - s_nbT0));
     }
     return 1;
+}
+
+/* THE JOB GOES BEFORE AN IMAGE IT USES IS RETIRED. `shared_resize` retires
+   the image it replaces, and `shared_slot_done`'s count proves the last use by
+   THIS pass's descriptor sets -- but the restorer records its own dispatches,
+   after every pass's prepare, reading the base atlas and writing the restored
+   one, and a job left alive would name the retired image again on every frame
+   up to its destruction. So a resize that will retire an image the job uses
+   frees the job first (tagpu_vk_restore.h: the consumer keeps its images until
+   after `job_free`), and the retire's count then covers the job's last
+   dispatch too, whatever the frames in between do. `restore_want` makes a new
+   job on the new image. Exactly `shared_resize`'s retire condition. */
+static void rjob_release_for(const TAGPU_VKPASS* d, const SHARED* sh, int w, int h)
+{
+    if (!s_rjob || !sh->img || sh->oldImg || (sh->w == w && sh->h == h)) return;
+    tagpu_vk_restore_job_free(d, s_rjob);
+    s_rjob = NULL; s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
+    s_rgbAtlas.have = 0;
 }
 
 /* ---- THE RESTORE REQUEST, TAKEN --------------------------------------------
@@ -1335,7 +1368,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
            the atlas: one painted frame is what makes it a picture, and it is
            what `uRestored` and binding 41 are both computed from, below. */
         int painted;
-        if (s_nbMode && !nb_feed(d, t)) {
+        /* fed only on a frame whose records carry keys, and never once the job
+           failed: the failure is said below, as the failure it is */
+        if (s_nbMode && t->nbOn && !tagpu_vk_restore_job_failed(s_rjob) && !nb_feed(d, t)) {
             plog(d, "terr: the neighbourhood job could not be fed; what it painted "
                     "stands until the request changes, and nothing more is queued");
             tagpu_vk_restore_job_free(d, s_rjob);
@@ -1389,6 +1424,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        and a FILL over an image with no contents would paint undefined texels
        over the world. Neither is an error -- the next frame asks again. */
     if (!s_rgbAtlas.img || !s_rgbAtlas.view || !s_base.view || !s_base.have) return;
+    /* a neighbourhood job starts on a frame whose records carry its keys */
+    if (s_nbMode && !t->nbOn) return;
     /* THE CONSUMER IS WHAT ASKS THE DEVICE, and that is deliberate: `up`
        loads the model off disk, so a session that never publishes a request
        never pays for it. It latches its verdict, so this is one integer
@@ -1577,6 +1614,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         s_rjob = NULL; s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
         s_rgbAtlas.have = 0;
     }
+    rjob_release_for(d, &s_base, t.atlasW, t.atlasH);
     if (!shared_resize(d, &s_base, t.atlasW, t.atlasH, VK_FORMAT_R8G8B8A8_UNORM, IMG_SAMPLED)) {
         if (!s_base.img) goto refuse;
         return 0;                          /* a retire is still clearing       */
@@ -1607,21 +1645,27 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         s_nbMode = nb_choose(d, &t);
         s_nbChosen = 1; s_nbFor = t.restoreSerial;
     }
-    /* tagpu_restorefault.on's `nballoc` stands in for the device refusing the
-       neighbourhood atlas, where no image is there yet: the state a refusal
-       leaves once `shared_resize` has retired the old one */
-    if (t.restoreFrames &&
-        ((s_nbMode && !s_rgbAtlas.img && tagpu_rguard_fault("nballoc")) ||
-         !shared_resize(d, &s_rgbAtlas, s_nbMode ? t.nbW : t.atlasW, s_nbMode ? t.nbH : t.atlasH,
-                        VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED))) {
-        if (s_rgbAtlas.img) return 0;
-        /* A REFUSED ALLOCATION FALLS BACK (D10): the per-tile atlas, sized on
-           a later frame once the retire of the image this one replaced has
-           cleared -- meanwhile the terrain draws its base atlas */
-        if (s_nbMode) {
-            plog(d, "terr: the device refused the %dx%d neighbourhood atlas - "
-                    "the terrain restores per tile", t.nbW, t.nbH);
-            s_nbMode = 0;
+    /* A FRAME WHOSE RECORDS CARRY NO KEYS DOES NOT SIZE THE NEIGHBOURHOOD
+       ATLAS: it has no size to give (`nbW` 0), and it draws its base atlas
+       (`restored` below) while the atlas and its job stand. */
+    if (t.restoreFrames && !(s_nbMode && !t.nbOn)) {
+        const int rw = s_nbMode ? t.nbW : t.atlasW, rh = s_nbMode ? t.nbH : t.atlasH;
+        rjob_release_for(d, &s_rgbAtlas, rw, rh);
+        /* tagpu_restorefault.on's `nballoc` stands in for the device refusing
+           the neighbourhood atlas, where no image is there yet -- on the first
+           map after the lane comes up: the state a refusal leaves once
+           `shared_resize` has retired the old one */
+        if ((s_nbMode && !s_rgbAtlas.img && tagpu_rguard_fault("nballoc")) ||
+            !shared_resize(d, &s_rgbAtlas, rw, rh, VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED)) {
+            if (s_rgbAtlas.img) return 0;
+            /* A REFUSED ALLOCATION FALLS BACK (D10): the per-tile atlas, sized
+               on a later frame once the retire of the image this one replaced
+               has cleared -- meanwhile the terrain draws its base atlas */
+            if (s_nbMode) {
+                plog(d, "terr: the device refused the %dx%d neighbourhood atlas - "
+                        "the terrain restores per tile", t.nbW, t.nbH);
+                s_nbMode = 0;
+            }
         }
     }
     if (!slot_build(d, s)) goto refuse;
