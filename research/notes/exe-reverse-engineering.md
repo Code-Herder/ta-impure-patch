@@ -596,7 +596,9 @@ each an optional reference whose 0 the engine itself takes as no unit; both are 
   takes `0x44E0DA`'s own NULL, counted (`target`).
 - **The round robin's carrier.** The round-robin entry `0x48B3F0` (`ret 8`, called once, at
   `0x48BAC3`) is the full-state reader, `0x48B409..0x48B6F9`. After the type and the create it reads
-  `[16]` into `+0x108`, `[8]` ÷ 255 (the float at `0x4FD750`) into `+0x104` when it differs, `[8]` a state mask handed to
+  `[16]` into `+0x108`, `[8]` ÷ 255 (the float at `0x4FD750`) into `+0x104` when it differs (MEASURED:
+  the refresh a non-owner's copy took 26–37 s after a create at 1500, which the kill count reads —
+  *The kill count reads this peer's copy of the victim*, below), `[8]` a state mask handed to
   `UNITS_SetStateMask 0x48B090` (`0x48B50E`, `0x48B519`), `[2]` into `ebx` and one flag bit read in
   place (`0x48B527..0x48B557`). With the flag set it takes the child id, its own `+0xA8` (`0x48B55B`),
   reads a **15-bit carrier index** (`0x48B56B`) and
@@ -618,6 +620,18 @@ each an optional reference whose 0 the engine itself takes as no unit; both are 
   `mov [esp+0x17],ax`; span `0x48B55B..0x48B58F`, from the child id to the call of `0x48AB70`,
   continuing at `0x48B579`): a carrier past the array becomes 0, `0x48AB70`'s own no parent
   (`0x48ABA9`), counted (`carrier`).
+- **The kill count reads this peer's copy of the victim** [DISASSEMBLED + MEASURED 2026-09-26].
+  The destructor `0x4866D0` runs on every peer and counts a kill only when the attacker
+  `[victim+0xF0]` is non-NULL (`0x48699D..0x4869A5`), the victim's `+0x104` equals `0.0f`
+  (`fld [esi+0x104]; fcomp [0x4FD6F8]`, `0x4869A7..0x4869B8`; the dword at `0x4FD6F8` is 0), and the
+  victim's owner `+0xFF` differs from the killer's player `+0xF4` (`0x4869BA..0x4869C8`); then
+  `inc word [ecx+0xB8]` at `0x4869CA`, the kill count. A non-owner's copy made by a create keeps
+  its `+0x104` until the owner's round robin writes it (above), so a victim that dies before that
+  is counted only on its owner's peer. MEASURED on three peers (`tadr-port/sim-fixes.md`, *Kill
+  counts across peers*): ARMCK dead ~1 s after their create read `+0x104` 1.0 on both non-owners
+  and added 0 / 4 / 0 kills to the towers' copies (killer's owner / victims' owner / bystander);
+  ARMCK dead 40–94 s after it, whose non-owner copies had turned 0.0 at 26–37 s, added the same
+  kills on all three.
 - **The other decoders carry no unit index.** `0x44E9C0` (the `0x490A10` selector's 2): `[1]` flags,
   `[32] × 6` and, under flag bit 0, `[16]` into `+0x24`, which the class's `0x44EA60` (vtable
   `0x4FD3F8` `+0x20`) takes as a signed angle to step toward, by the def's `+0x1BA` over 8 — a
@@ -816,6 +830,15 @@ of the table after the generic state store `0x490B3D`). Its flags are the word `
 | 1 (`2`) | `0x497C62`, the loader's **last store** before it returns | `0x49847E` | the loader is done |
 | 2 (`4`) | `0x4975CA`, the loader after the level init | `0x49855D` (and `0x49686E` in the frame function), the game thread | this peer has loaded |
 | 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x49847E` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time |
+
+**Who passes the barrier last** [MEASURED 2026-09-26, three peers, Town & Country]. A peer frozen
+(SIGSTOP) at the barrier with bit 2 set holds every other peer at bit 2 too (`0x0005` on both
+others for 90 s), so bit 3 needs a message from each peer after the waiting peer's own load, not
+only the status sent before it. The peer that finishes loading **first** passes the barrier
+**last**: a peer slowed through its whole load holds everyone's status when it is done and makes
+the others' commanders in catch-up ticks, while a peer that loaded at full speed and was then
+slowed to 3 % at the barrier held both others' creates and replayed them at `0x49842F` (one start
+of two; `tadr-port/sim-fixes.md`, B5).
 
 **The first call** (bit 0 clear, tested at `0x497F54`) runs `0x497F5E..0x498334` once per level: the
 timing base `main+0x38A37` (`0x498164`), GameTime 0 (`0x498180`), and the loader thread

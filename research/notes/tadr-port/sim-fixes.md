@@ -1172,13 +1172,51 @@ fraction of a second in these starts.
 replayed at the state-6 store. The build that replays before the first tick has run three starts
 (1500, the commander moving): two with the queue on — one before and one after B4's fix rounds
 were merged — where the drain found nothing and the create was made in the first catch-up tick,
-and one with the joiner's queue off, where the dirty create placed it. **The replay at
-`0x49842F` has never replayed a record live** — it rests on the disassembly, the rule cases and
-the first build's replays, which went through the same receiver path at a later point. The
-500-unit and idle starts were not re-run on it.
+and one with the joiner's queue off, where the dirty create placed it. The 500-unit and idle
+starts were not re-run on it. Its live replay and three peers were measured afterwards (below).
 
-*Not run:* three peers (each peer holds per sender, so a third adds a second queue, not a new
-path), and the departing host in a three-peer game that the plan gives B5's session for group E.
+*Measured on local main `8d033d1`, three peers (2026-09-26).* `b5dh` hosting, `b5dj` and `b5dk`
+joining, Town & Country, 1500, `tools/mp_lobby.sh`; three scripted runs (a scratch driver: launch,
+battle room, the start, counters, stop), wall 321 s, 126 s and 136 s, plus one start driven step
+by step before the scripted-run rule.
+
+- **Natural three-peer starts** (two): every peer's drain before the first tick found nothing
+  (`q=0 replay=0`) and made each late create in a catch-up tick (`created slot … at GameTime 1`
+  or `3`): `now=1` on the host and on `b5dj`, `now=2` on `b5dk`. Every copy `exact` (`exact=2` on
+  each peer), every `wire:` drop and `noblock` count 0, no ErrorLog.
+- **The replay at `0x49842F`, live: one start in two of the design below.** The peer that
+  finishes loading *first* passes the barrier *last* — it waits for the others' status, while a
+  slow loader already holds everyone's — so the driver duty-cycles the host and `b5dj`
+  (SIGSTOP/SIGCONT, 10 %) through their load, lets `b5dk` load at full speed, and once
+  `b5dk` waits at the barrier (bit 2 of `main+0x38D75` set, bit 3 clear) slows it to 3 % until
+  both others have played 4 s. In the run that replayed, `b5dk` logged `replayed slot 1 from
+  sender 1 (birth 0, type 34) at GameTime 0, before the first tick; the slot now holds type 34`,
+  the same for slot 1501 from sender 2, and `before the first tick (GameTime 0), 2 held creates:
+  2 replayed, 0 killed while held, 0 not (inactive 0, stale 0, bad 0 in total)`. That run stopped
+  at the start, before a heartbeat, so the replayed copies' positions and `copy` counters were not
+  read. The repeat, which read every commander on every peer 12 s in, did not replay: `b5dk` made
+  both in catch-up ticks at GameTime 3, and every commander stood at its owner's position on all
+  three peers (`(352,4384)`, `(8400,4384)`, `(4336,304)`), `exact=2` on each, every drop 0.
+  **What does not provoke it:** slowing the late peer through its whole load (15 %, 15 s) — it
+  then holds everyone's status and passes the barrier first, making both creates in catch-up
+  ticks; and freezing it at the barrier — the others stay at bit 2 (`[5,0,5]` on both for 90 s),
+  so the barrier needs a live message from every peer after the waiting peer's own load, not the
+  status it sent before.
+- **Kills while held** (`killed=`, `swept=`) were not provoked: nothing dies inside a peer's
+  remaining load at a start, where only commanders exist.
+
+*The departing host (for group E).* The host leaves through its own menus (`tools/mp_leave.sh`:
+Tab → OPTIONS → EXIT → MAINMENU → "Surrender this battle and return to main menu?" → yes).
+**The game ends on every joiner.** In the step-by-step start, each joiner dropped from 23 units
+to its own commander (the host's 21 and the other joiner's commander left its roster) within one
+150-tick heartbeat, and both left the level at the same GameTime, 11345, for `ENDMSN` with the
+net state 7; in the scripted repeat both read state 7 and GameTime 2495 on `ENDMSN` 15 s after
+the host's click, each with one unit. No fault, no ErrorLog, and every `wire:` drop and `ghost:`
+count 0 on all three at their last in-play heartbeat. **A joiner leaving leaves the others
+playing:** when `b5dk` surrendered, the host and `b5dj` played on (state 6, GameTime 1992 → 2354),
+each with both remaining commanders; the host leaving that two-peer game then ended it on `b5dj`
+(`ENDMSN`, state 7). Whether the end is the engine's rule or DirectPlay's session ending with
+its host was not traced; that is group E's question.
 
 **B6 — loaders and the rest. LANDED 2026-09-25** on local main (built on its own branch,
 `worktree-tadr_port_b6`, from B1's tip at the time, before B2–B5 landed; reviewed at high by two
@@ -1320,10 +1358,37 @@ and where it differs from the plan below:
 - resurrection's failure branch: counters on `0x405155`/`0x405164` over a few hundred CORNECRO
   resurrections of 1×1 and multi-cell wrecks (B1's session);
 - a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6);
-- a departing host in a three-peer game (B5's session; the result goes to group E);
+- a departing host in a three-peer game (B5's session; the result goes to group E) — measured
+  2026-09-26: it ends the game on every joiner (B5, *The departing host*);
 - a cargo unit killed in a transport over land leaving its wreck in the air (B2's session; a
   floating wreck is raised as a visual residual);
 - the repair rate per call, ARMCOM against ARMCK on an ARMLLT (B1's session).
+
+**Kill counts across peers — measured for B8 (2026-09-26, local main `8d033d1`).** The destructor
+counts a kill (`inc word [attacker+0xB8]`, `0x4869CA`) only when the attacker is non-NULL
+(`0x48699D`), the victim's owner `+0xFF` differs from the killer's player `+0xF4` (`0x4869BA`),
+and the victim's `+0x104` equals `0.0f` (`0x4869A7`, the constant at `0x4FD6F8`) — read from
+**this peer's own copy** of the victim. Three peers in one game (the B5 runs above): the host's
+towers (`scenarios/b4-guns.json`) against `b5dj`'s ARMCK, `b5dk` a bystander, every value read
+by `tacli peek` of the slot on each peer:
+
+| victims (`b5dj`'s, by the scenario applier) | victim's `+0x104` on host / `b5dj` / `b5dk` | kills added to the towers' copies on host / `b5dj` / `b5dk` |
+|---|---|---|
+| four ARMCK, dead within ~1 s of their create (`b4-victims.json` beside the towers), step-by-step start | 1.0 / 0.0 / 1.0 | 0 / 4 / 0 (one each on four towers) |
+| the same, scripted repeat, 8 s after the apply | 1.0 / 0.0 / 1.0 | 0 / 4 / 0 |
+| four ARMCK on hold at (2600, 6983) for 90 s, then two ARMLLT created beside them, step-by-step start | 0.0 / 0.0 / 0.0 | 4 / 4 / 4 (two each) |
+| the same, 40 s old, scripted repeat | 0.0 / 0.0 / 0.0 | 3 / 3 / 3 (one victim still alive at the read) |
+
+The 1.0 → 0.0 of the remote copies is a `tacli peek` series every ~3 s from the apply: it read
+1.0 on both non-owners until 26–32 s after the create (step-by-step) and 29–37 s (scripted,
+`b5dk` first), then 0.0, all four victims at once — the owner's round robin writing `+0x104` from
+its full state (`0x48B3F0`, `[8] ÷ 255`). The towers' own remote copies read 1.0 on both joiners
+right after their create and 0.0 later. Every commander's copy read 0.0 on every peer from the
+start. **So a kill counts on every peer once the non-owners' copy of the victim reads 0.0, and
+only on the victim's owner before that.** The victims here come from the scenario applier, which
+creates a unit complete and then writes its `+0x104` locally; how long a factory-built unit's
+copy reads nonzero on the other peers, and so how often the split happens in play, was not
+measured.
 
 ## Open questions
 
