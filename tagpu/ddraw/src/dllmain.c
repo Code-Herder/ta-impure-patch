@@ -88,9 +88,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            import tables are patched here, while no game code has run. */
         tagpu_regstore_init();
 
-        /* tagpu: TADR's recorder, which the Patch Loader's dplayx.dll forwards the exe's
-           DirectPlay imports to, never runs (tagpu_takeover.h). Every import is bound by
-           now, and the exe's first DirectPlay call is still to come. */
+        /* tagpu: TADR's DLLs run none of their own code (tagpu_takeover.h). Every module the
+           exe's imports pull in is mapped and bound by now and none of their DllMains has
+           been called, so a TADR build's entry point can be made inert before the loader
+           reaches it; then the exe's DirectPlay imports are pointed at Windows' own, so a
+           recorder that no longer initialises is never called either. Both before the first
+           DirectDraw call, where tagpu_takeover_verify_image compares what is left with the
+           exe file on disk. */
+        tagpu_takeover_tadr_init();
         tagpu_takeover_dplay_init();
 
 #ifdef _DEBUG 
@@ -463,6 +468,7 @@ HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnk
     TRACE("-> %s(lpGUID=%p, lplpDD=%p, pUnkOuter=%p) [%p]\n", __FUNCTION__, lpGUID, lplpDD, pUnkOuter, _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_takeover_verify_image();
 
     HRESULT ret;
 
@@ -510,6 +516,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnk
         _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_takeover_verify_image();
 
     HRESULT ret;
 

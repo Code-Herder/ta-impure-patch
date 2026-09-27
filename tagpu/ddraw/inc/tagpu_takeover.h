@@ -1,9 +1,16 @@
 #ifndef TAGPU_TAKEOVER_H
 #define TAGPU_TAKEOVER_H
-/* tagpu_takeover -- keeping TADR's code out of the process on the routes where Impure starts
-   first (research/notes/compat/takeover.md, part 1). Two ways TADR gets in, one answer each.
+/* tagpu_takeover -- TADR's DLLs run none of their own code, and no launch goes ahead with a
+   byte of the game's code leading into one (research/notes/compat/takeover.md, part 1).
 
-   ---- tdraw.dll: the LoadLibrary answer -------------------------------------------------
+   THE EXE FILE ON DISK IS THE REFERENCE. Three passes keep TADR's code from running -- one
+   for each way it gets in -- and a fourth compares the whole image against that file and
+   refuses the launch when any of them missed. The first three are a list of the ways in and
+   so a guess about what TADR does; the fourth is not, which is why it is the one that decides.
+   `tagpu_takeover.off` in the game folder turns all four off, for the suite's harness setups
+   that need TADR running to show the safety net and the recorder check firing.
+
+   ---- 1. tdraw.dll asked for by name: the LoadLibrary answer ------------------------------
 
    On the Community Patch Loader route the retail exe imports DDRAW (Impure) before DPLAYX
    (the loader), so Impure's DllMain has pointed the loader's LoadLibrary imports at the fork's
@@ -27,12 +34,36 @@
    RETURNS Impure's module with one more reference (as LoadLibrary would), or NULL when the
    request is not ours to answer -- the caller then loads normally. Any thread; no state.
 
-   ---- the recorder: the exe's DirectPlay imports ----------------------------------------
+   ---- 2. a TADR module already mapped: the inert entry point ------------------------------
 
-   TADR's recorder (tplayx.dll; the 2006 build is a dplayx.dll of its own) cannot be kept
-   from loading: the Patch Loader's dplayx.dll FORWARDS its DirectPlay exports to tplayx, and
-   Windows resolves a forwarder while it binds the exe's imports, before any DllMain runs and
-   without a LoadLibrary call anyone can hook.
+   The recorder cannot be kept from loading. On the Patch Loader route the loader's dplayx.dll
+   FORWARDS its DirectPlay exports to tplayx.dll, and Windows resolves a forwarder while it
+   binds the exe's imports -- before any DllMain runs, with no LoadLibrary call anyone can
+   answer. Beside the retail exe the 2006 recorder IS the game folder's dplayx.dll, imported
+   by the exe itself.
+
+   It can be kept from RUNNING, because loading and running are two steps. When Impure's
+   DllMain runs, every module the exe's imports pull in is mapped and bound and NONE of their
+   DllMains has been called yet -- the loader maps the whole graph, then initialises it in
+   dependency order, and the exe imports DDRAW first (DISASSEMBLED: objdump -p; MEASURED on
+   Wine and on Windows, the suite 2026-09-26, Impure's limits installed before TADR's limit
+   crack ran). tagpu_takeover_tadr_init, from DllMain, writes `mov eax,1; ret 0Ch` over the
+   PE entry point of every module of the game folder that is a TADR build, so the loader's
+   call into it reports success and does nothing: no unit initialization, no threads, no
+   window hooks, and not the jump the recorder's DllMain splices over the exe's entry point
+   (0x004E6FA0, research/notes/deep-tadr.md). Its exports stay bound, which is why pass 3 is
+   not optional: an uninitialised Delphi DLL must never be called.
+
+   WHICH MODULES ARE TADR: the ones whose FILE carries "TADemo-MKChat", the name TADR's own
+   builds give their chat channel. MEASURED 2026-09-27 over every file of the suite's
+   fixtures (130 files, 12 installs): it is in all 18 TADR modules -- every tdraw.dll and its
+   renamed copies (TAESC.dll), every recorder (tplayx, eplayx, zplayx, the 2006 Dplayx.dll)
+   -- and in nothing else, the Patch Loader's own dplayx.dll, Total Mayhem's and ProTA's
+   dplayx.dll, cnc-ddraw's ddraw_custom.dll, the audio DLLs and every mod's TotalA.exe
+   included. "TA Demo Recorder", in the 9 recorders only, tells the two apart for the log.
+   Never the file's name: the mods rename everything.
+
+   ---- 3. the exe's DirectPlay imports ----------------------------------------------------
 
    tagpu_takeover_dplay_init, from DllMain -- after the loader has bound every import, before
    the exe's entry point: every import descriptor of the exe whose slots lead into a DLL in
@@ -45,25 +76,34 @@
    anywhere (DISASSEMBLED: objdump -p, strings), so those three slots are every way the exe
    has of reaching DirectPlay.
 
-   WHAT THIS DOES NOT DO: keep the recorder from running. It closes the DirectPlay-call path
-   -- the path that writes the recorder's log, loads Windows' DirectPlay and installs its code
-   injections from inside an export (vendor/TADR/src/Recorder/Dplayx_exports.pas, OnInit ->
-   InitCode.pas, OnInitialize(false)). The recorder has a second way in, taken instead: its
-   DllMain splices a jump over the exe's ENTRY POINT 0x004E6FA0 and installs the same code
-   injections there, through OnInitialize(true), with no DirectPlay call and no log
-   (InitCode_CoreExePatching.pas, whose unit initialization runs in the recorder's DllMain;
-   research/notes/deep-tadr.md). MEASURED 2026-09-27, retail+tadr1 on Wine, reading the live
-   process: seven sites of the game's code hold a jump or call into the recorder where the
-   retail control holds stock bytes, and the entry point is stock again by then -- the recorder
-   restores it after running. Impure's safety net does not fire on them (none is one of its
-   sites, and the recorder writes Impure's own 1500 at the three unit-limit sites). So on every
-   Patch Loader setup, and beside the 2006 recorder, TADR's recorder still runs and still
-   patches the engine, after Impure. Closing that is the takeover's open work
-   (research/notes/compat/takeover.md, part 1).
+   This is what keeps a game the recorder can no longer initialise from calling into it, and
+   it also closes the recorder's second way in on its own: the path that writes the
+   recorder's log, loads Windows' DirectPlay and installs its code injections from inside an
+   export (vendor/TADR/src/Recorder/Dplayx_exports.pas, OnInit -> InitCode.pas,
+   OnInitialize(false)). Windows' own service provider still reads gdwDPlaySPRefCount from
+   whatever module is loaded under the name dplayx.dll, which on the loader route is the
+   loader's and forwards to the recorder: that is one counter in a statically initialised data
+   section, read and written by DirectPlay alone, and no code of the recorder's runs for it.
 
-   `tagpu_takeover.off` in the game folder turns both off: the suite's harness setups that
-   show the safety net (tagpu_patches.c, lim_verify) and the recorder check firing on what
-   this keeps out. */
+   ---- 4. the whole image against the file: the check that decides ------------------------
+
+   tagpu_takeover_verify_image, from the first DirectDraw call -- after every DllMain and the
+   exe's entry point, before the first frame, beside the limits' own safety net
+   (tagpu_patches.c, lim_verify). It reads the exe file from disk, compares every executable
+   section of it with the same bytes in memory, and for each run of changed bytes decodes what
+   a hook has to be: a rel32 call or jump (E8, E9), a call or jump through a pointer inside the
+   image (FF 15, FF 25), `push imm32; ret`, `mov eax,imm32; jmp eax`, and any absolute address
+   the run itself holds. A target inside a module of the game folder that is not Impure's
+   refuses the launch, naming the site, the bytes and the module.
+
+   WHY THIS EXEMPTS THE MOD AND NOT TADR, with no list of sites in it: a mod's own changes to
+   the engine are in its exe FILE, so they are not changed bytes at all; Impure's patches and
+   the Patch Loader's lead into Impure's module or into stubs Impure allocated, which are in no
+   module image; TADR's lead into TADR. WHAT IT DOES NOT SEE: a write to a data section (the
+   engine's globals differ from the file everywhere by the time this runs), a hook whose target
+   is computed at run time, and anything written after this call -- which is why passes 1 to 3
+   keep TADR's code from running at all rather than cleaning up after it. An exe loaded away
+   from its own ImageBase is not compared, and says so in the log. */
 
 #include <windows.h>
 
@@ -71,7 +111,13 @@
 HMODULE tagpu_takeover_loadlibrary_a(const char* name, DWORD flags, void* caller);
 HMODULE tagpu_takeover_loadlibrary_w(const wchar_t* name, DWORD flags, void* caller);
 
-/* DllMain, DLL_PROCESS_ATTACH. Logs what it pointed where. */
+/* DllMain, DLL_PROCESS_ATTACH, in this order and before anything of ours patches the exe.
+   Both log what they did. */
+void tagpu_takeover_tadr_init(void);
 void tagpu_takeover_dplay_init(void);
+
+/* The first DirectDraw call. Logs what it compared; refuses the launch (tagpu_refuse.h) and
+   does not return when a byte of the game's code leads into another module of the folder. */
+void tagpu_takeover_verify_image(void);
 
 #endif
