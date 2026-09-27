@@ -10,6 +10,7 @@
 #include "config.h"
 #include "hook.h"
 #include "indeo.h"
+#include "tagpu_takeover.h"
 #include "tagpu_patches.h"
 #include "tagpu_limits.h"
 #include "tagpu_tracer.h"
@@ -86,6 +87,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            Before anything else of ours, and long before TotalA.exe's entry point: the
            import tables are patched here, while no game code has run. */
         tagpu_regstore_init();
+
+        /* tagpu: TADR's recorder, which the Patch Loader's dplayx.dll forwards the exe's
+           DirectPlay imports to, never runs (tagpu_takeover.h). Every import is bound by
+           now, and the exe's first DirectPlay call is still to come. */
+        tagpu_takeover_dplay_init();
 
 #ifdef _DEBUG 
         dbg_init();

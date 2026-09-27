@@ -9,7 +9,7 @@ mod or patch install puts next to it (fixtures.json), and the ddraw.dll under te
     tacompat.py fetch --import NAME=PATH               # a fixture behind a browser check
     tacompat.py list                                   # setups, fixtures, what is missing
     tacompat.py wine    [--dll PATH] [SETUP ...]       # every setup at once, on Wine
-    tacompat.py wine    --battle 0                     # start-up only, no skirmish
+    tacompat.py wine    --battle 0 --mp 0              # start-up only: no skirmish, no network game
     tacompat.py windows [--dll PATH] [SETUP ...]       # one at a time, on a Windows desktop
     tacompat.py clean                                  # remove the Wine instances
 
@@ -19,9 +19,12 @@ once, then rebuilds one work folder per setup and starts the game on the machine
 desktop through a scheduled task. Both watch every window the game opens for the whole
 run and read what each party logs. On Wine, a setup that reaches the main menu then
 starts a skirmish and fights 200 against 200, because two patchers that both start can
-still collide where the limits are used: `battle-crash` is a crash after the menu.
-Each setup has a `goal` (Impure active) and, until the takeover reaches it, `today`: the
-behaviour accepted meanwhile. A run is "meets goal", "known gap" (matches today) or
+still collide where the limits are used: `battle-crash` is a crash after the menu. Where
+Impure runs, a second instance of the same folder then joins it in a two-player network game
+over Windows' DirectPlay, one such game at a time (the port is the machine's). Every run, and
+every peer, is read for TADR's code having run (tadr_evidence).
+Each setup has a `goal` (Impure active, no TADR code run) and, until the takeover reaches
+it, `today`: the behaviour accepted meanwhile. A run is "meets goal", "known gap" (matches today) or
 UNEXPECTED. Exit status: 1 on anything UNEXPECTED (with --strict, on a known gap too),
 0 otherwise, 2 when nothing could run.
 
@@ -96,10 +99,17 @@ OUTCOMES = ("impure-active", "impure-inactive", "impure-not-loaded", "impure-ref
             "no-result")
 REFUSED_EXIT = 0xC1
 BATTLE_MAP = "Two Continents"          # scenarios/200v200.json's setup.map
-# TADR says in tdrawlog.txt when it has written its engine patches: the old limit crack,
-# and the validated EngineLimits of the 2026 builds. Either line means a second patcher
-# is running on the engine beside Impure.
+# Whether any of TADR's code ran, from what each part leaves behind. tdraw.dll writes
+# tdrawlog.txt from its DllMain, and says there when it has written its engine patches (the
+# old limit crack, the 2026 EngineLimits). The recorder -- tplayx.dll, or the 2006
+# dplayx.dll -- writes "log\TA Demo Recorder Log -<date>.txt" in the game folder, and a
+# "DLL.DirectPlay..." line in it only from inside one of its DirectPlay exports, which is
+# where it starts: a log with no such line is a recorder that loaded and never ran.
 TADR_INSTALLED = re.compile(r"Install Limit Crack|\[EngineLimits\] installed")
+RECORDER_CALLED = re.compile(r"^\s*DLL\.DirectPlay", re.M)
+# The two-player stage: small halves applied one per peer, each as that peer's own units.
+MP_SCENARIOS = ("compat-mp-host", "compat-mp-join")
+MP_PORT = 47624                         # DirectPlay's name server: one per machine
 # An archive the game reads and never writes is linked into a Wine folder, not copied.
 LINKED = {".ufo", ".gp3", ".hpi", ".ccx", ".ufo2"}
 
@@ -350,13 +360,38 @@ def judge(o: dict, exp: dict) -> list:
                 miss.append(f"{dll} was loaded from the game folder")
     if exp["outcome"] == "impure-active" and o.get("menu") is False:
         miss.append("the main menu was never reached")
-    installed = bool(TADR_INSTALLED.search(o.get("tdrawlog") or ""))
-    if "tadr_installed" in exp and installed != exp["tadr_installed"]:
-        miss.append("TADR installed its engine patches beside Impure" if installed
-                    else "TADR did not install its engine patches")
+    ran = o.get("tadr_ran") or []
+    if "tadr_ran" in exp and bool(ran) != exp["tadr_ran"]:
+        miss.append("TADR ran: " + "; ".join(ran) if ran else "TADR did not run")
     if o.get("battle") is not None and not o["battle"].get("ok", False) and exp["outcome"] != "battle-crash":
         miss.append(f"the battle failed: {o['battle'].get('why', '?')}")
+    if o.get("mp") is not None and not o["mp"].get("ok", False):
+        miss.append(f"the network game failed: {o['mp'].get('why', '?')}")
     return miss
+
+
+def tadr_evidence(tdrawlog, logs: dict, where="") -> list:
+    """What says TADR's code ran: tdrawlog.txt at all, and a recorder log that an export
+    call wrote into. `logs` maps a log folder file's name to its text."""
+    ev = []
+    if tdrawlog is not None:
+        ev.append(f"{where}tdraw started (tdrawlog.txt" +
+                  (", engine patches installed)" if TADR_INSTALLED.search(tdrawlog) else ")"))
+    for name, text in sorted(logs.items()):
+        if RECORDER_CALLED.search(text or ""):
+            ev.append(f"{where}the recorder ran (log\\{name})")
+    return ev
+
+
+def other_logs(folder: Path, since: float) -> dict:
+    """The game folder's log\\ files that are not Impure's, written since `since`."""
+    out = {}
+    if folder.is_dir():
+        for f in folder.iterdir():
+            if (f.is_file() and not f.name.lower().startswith("tagpu")
+                    and f.name.lower() != "startup-failure.txt" and f.stat().st_mtime >= since):
+                out[f.name] = f.read_text(errors="replace")
+    return out
 
 
 def report(results, platform, dll, started, strict=False) -> int:
@@ -381,7 +416,9 @@ def report(results, platform, dll, started, strict=False) -> int:
     mark = {"meets goal": "ok ", "known gap": "gap", "UNEXPECTED": "BAD"}
     for r in results:
         box = f" [{r['boxes'][0]['title']}]" if r["boxes"] else ""
-        lines.append(f"  {mark[r['verdict']]} {r['setup']:22} {r['outcome']:18}{box}")
+        mp = r.get("mp")
+        net = "-" if mp is None else ("mp ok" if mp["ok"] else "mp FAILED")
+        lines.append(f"  {mark[r['verdict']]} {r['setup']:22} {r['outcome']:18} {net:9}{box}")
         if r["verdict"] == "UNEXPECTED":
             for m in r.get("differs_today") or r.get("differs", []):
                 lines.append(f"      {m}")
@@ -422,7 +459,7 @@ def start_xvfb(n: int) -> subprocess.Popen:
     die(f"Xvfb :{n} did not start")
 
 
-def prepare_wine(setup, dll: Path, display: int) -> dict:
+def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     """A fresh tacli instance holding the setup's folder.
 
     Its registry is made PRIVATE: `tacli create` clones the prefix with hardlinks, so
@@ -430,7 +467,7 @@ def prepare_wine(setup, dll: Path, display: int) -> dict:
     the registry. So the hives are copied into new files, but only after the wineserver
     that `create` started (for Wine's own settings) has exited: it rewrites the shared
     hive when it goes (tacli-shared-registry-inode). Creates therefore run one at a time."""
-    name = PREFIX + re.sub(r"[^a-z0-9]+", "-", setup["name"].lower()).strip("-")
+    name = PREFIX + re.sub(r"[^a-z0-9]+", "-", setup["name"].lower()).strip("-") + suffix
     tacli("rm", name, "--force")
     r = tacli("create", name, "--display", f":{display}", "--res", "1024x768")
     if r.returncode != 0:
@@ -486,12 +523,13 @@ def prepare_wine(setup, dll: Path, display: int) -> dict:
 
 
 def x_windows(display: int) -> list:
-    """(title, width, height) of every named top-level window on the display."""
+    """(title, width, height) of every named top-level window on the display, less the
+    input method's and DirectPlay's own helper (a 1x1 window a session opens)."""
     r = subprocess.run(["xwininfo", "-root", "-tree"], env=dict(os.environ, DISPLAY=f":{display}"),
                        capture_output=True, text=True, timeout=10)
     out = []
     for m in re.finditer(r'^\s+0x[0-9a-f]+ "(.*)": \("[^"]*" "[^"]*"\)\s+(\d+)x(\d+)', r.stdout, re.M):
-        if m.group(1) != "Default IME":
+        if m.group(1) not in ("Default IME", "DPlayHelpWndClass"):
             out.append((m.group(1), int(m.group(2)), int(m.group(3))))
     return out
 
@@ -631,8 +669,10 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "battle": fight,
         "seconds": round(time.time() - t0, 1),
     }
+    logs = other_logs(gamedir / "log", t0)
+    o["tadr_ran"] = tadr_evidence(o["tdrawlog"], logs)
     o["outcome"] = classify(o)
-    files = {"wine.log": wlog}
+    files = {"wine.log": wlog, **{f"log-{k}": v for k, v in logs.items()}}
     for k in ("tdrawlog", "failure", "errorlog"):
         if o[k]:
             files[{"tdrawlog": "tdrawlog.txt", "failure": "startup-failure.txt",
@@ -642,6 +682,222 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     o["_files"], o["_copies"] = files, shots
     os.unlink(log.name)
     return o
+
+
+# ------------------------------------------------------------------------- Wine, two players
+
+class Lobby(Exception):
+    """A step of the two-player start that did not happen, in words."""
+
+
+def mp_eligible(setup) -> bool:
+    """A player's setup whose goal is Impure running: a harness setup (one with a lever)
+    checks a mechanism, not a game."""
+    return setup["goal"]["outcome"] == "impure-active" and not setup.get("levers")
+
+
+def dplay_holders() -> list:
+    """(pid, WINEPREFIX) of every process listening on DirectPlay's port."""
+    r = subprocess.run(["ss", "-lunpH", f"sport = :{MP_PORT}"], capture_output=True, text=True,
+                       timeout=10)
+    out = []
+    for pid in sorted(set(re.findall(r"pid=(\d+)", r.stdout))):
+        try:
+            env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        prefix = next((e[11:].decode(errors="replace") for e in env if e.startswith(b"WINEPREFIX=")), "")
+        out.append((int(pid), prefix))
+    return out
+
+
+def free_dplay_port(wait=300) -> "str | None":
+    """Make the port free for our host, or say who holds it. A holder in one of this tool's
+    instances is ours and stale, and its wineserver is ended; any other is someone else's
+    game, which is waited for and never touched (parallel-mp-runs-share-dplay-port)."""
+    deadline = time.time() + wait
+    while True:
+        holders = dplay_holders()
+        if not holders:
+            return None
+        ours = [pf for _, pf in holders if Path(pf).parent.name.startswith(PREFIX)]
+        for pf in ours:
+            subprocess.run(["wineserver", "-k"], env=dict(os.environ, WINEPREFIX=pf),
+                           capture_output=True, timeout=30)
+        if not ours and time.time() > deadline:
+            return ", ".join(f"pid {pid} ({pf or 'no WINEPREFIX'})" for pid, pf in holders)
+        time.sleep(2 if ours else 5)
+
+
+def start_wine(inst, display):
+    """TotalA.exe in the instance's game folder on its own virtual display."""
+    env = dict(os.environ, WINEPREFIX=str(inst["prefix"]), DISPLAY=f":{display}",
+               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES}", WINEDEBUG="+loaddll")
+    xv = start_xvfb(display)
+    log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
+    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,
+                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            start_new_session=True)
+    return {"inst": inst, "display": display, "env": env, "xv": xv, "log": log, "proc": proc}
+
+
+def stop_wine(g):
+    subprocess.run(["wineserver", "-k"], env=g["env"], capture_output=True, timeout=30)
+    try:
+        g["proc"].wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        g["proc"].kill()
+    g["xv"].kill()
+    g["xv"].wait()
+    g["log"].close()
+    os.unlink(g["log"].name)
+
+
+def lobby_ui(inst, *argv, timeout=40) -> str:
+    r = tacli("ui", inst, *argv, "--timeout", str(timeout), timeout=timeout + 30)
+    if r.returncode != 0:
+        raise Lobby(f"{inst}: ui {' '.join(argv)}: {(r.stderr or r.stdout).strip()[:200]}")
+    return r.stdout
+
+
+def lobby_field(inst, name, value):
+    """Click, then fill -- an unfocused field takes the text as quickkeys -- and leave a
+    field alone that already reads the value (tools/mp_lobby.sh has the story)."""
+    cur = re.search(r"^text\s+(.*)$", lobby_ui(inst, "show", name), re.M)
+    if cur and cur.group(1).strip() == value:
+        return
+    lobby_ui(inst, "click", name)
+    lobby_ui(inst, "fill", name, value)
+
+
+def lobby_to_selgame(inst, nick):
+    lobby_ui(inst, "click", "MULTI")
+    lobby_ui(inst, "select", "DPLAY", "Internet TCP/IP Connection For DirectPlay")
+    lobby_ui(inst, "click", "SELECT", timeout=25)
+    lobby_field(inst, "ADDRESS", "127.0.0.1")
+    lobby_ui(inst, "click", "OK", timeout=30)
+    lobby_ui(inst, "wait", "--gui", "SELGAME", timeout=30)
+    lobby_field(inst, "NICKNAME", nick)
+
+
+def wine_lobby(host, join):
+    """tools/mp_lobby.sh's walk, host then joiner, into one live game on the battle's map."""
+    lobby_to_selgame(host, "HOST")
+    lobby_ui(host, "click", "STARTNEW", timeout=30)
+    lobby_field(host, "GAMENAME", "COMPAT")
+    lobby_field(host, "NICKNAME", "HOST")
+    lobby_ui(host, "click", "OK", timeout=30)
+    lobby_ui(host, "wait", "--gui", "LOUNGE2", timeout=30)
+    lobby_ui(host, "click", "MAP", timeout=25)
+    lobby_ui(host, "select", "MAPNAMES", BATTLE_MAP, timeout=120)
+    lobby_ui(host, "click", "LOAD", timeout=25)
+    lobby_to_selgame(join, "JOIN")
+    # The session list is filled when SELGAME opens and again on UPDATE, never by itself: a
+    # host still answering its map load when the joiner looked is missing until someone
+    # presses UPDATE, as a player would (seen with Total Mayhem 11.3.0, 2026-09-27).
+    for _ in range(6):
+        if re.search(r"^grayed\s+0\s*$", lobby_ui(join, "show", "JOINGAME"), re.M):
+            break
+        lobby_ui(join, "click", "UPDATE")
+        time.sleep(5)
+    lobby_ui(join, "click", "JOINGAME", timeout=30)
+    lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
+    lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
+    lobby_ui(host, "click", "READY0", timeout=20)
+    lobby_ui(host, "click", "START", timeout=30)
+    for inst in (host, join):
+        r = tacli("wait", inst, "alive=[1-9]", "--timeout", "150", timeout=200)
+        if r.returncode != 0:
+            raise Lobby(f"{inst}: the game never came alive: {(r.stderr or r.stdout).strip()[:200]}")
+
+
+def run_wine_mp(setup, dll, seconds, displays) -> dict:
+    """Two players, the setup's folder on each, hosted and joined through the game's own
+    battle room over Windows' DirectPlay, a small fight between them, then watched. Every
+    peer's folder is read for TADR's evidence. One game at a time: see free_dplay_port."""
+    create_display, host_display, join_display = displays
+    xv = start_xvfb(create_display)
+    try:
+        join = prepare_wine(setup, dll, create_display, suffix="-j")
+    finally:
+        xv.kill()
+        xv.wait()
+    held = free_dplay_port()
+    if held:
+        return {"ok": False, "why": f"could not run: DirectPlay's port {MP_PORT} is held by {held}",
+                "evidence": []}
+    peers = {"host": setup["_inst"], "join": join}
+    t0 = time.time()
+    games = {}
+    boxes, seen, why = [], set(), None
+    shots = {}
+    try:
+        try:
+            games["host"] = start_wine(peers["host"], host_display)
+            time.sleep(3)
+            games["join"] = start_wine(peers["join"], join_display)
+            deadline = time.time() + 60
+            menus = set()
+            while len(menus) < 2 and time.time() < deadline and not boxes:
+                time.sleep(2)
+                for role, g in games.items():
+                    new_boxes(g["display"], seen, boxes, t0)
+                    if role not in menus:
+                        first = (tacli("ui", g["inst"]["name"], timeout=15).stdout.splitlines() or [""])[0]
+                        if "MAINMENU" in first:
+                            menus.add(role)
+            if boxes:
+                raise Lobby(f"a box before the menu: {boxes[0]['title']}")
+            if len(menus) < 2:
+                raise Lobby(f"the main menu never came up on {', '.join(sorted(set(games) - menus))}")
+            wine_lobby(peers["host"]["name"], peers["join"]["name"])
+            for role, scen in zip(("host", "join"), MP_SCENARIOS):
+                r = tacli("scenario", "apply", peers[role]["name"], scen, timeout=180)
+                if r.returncode != 0:
+                    raise Lobby(f"{role}: scenario apply {scen}: {(r.stderr or r.stdout).strip()[:200]}")
+            end = time.time() + seconds
+            while time.time() < end and not why:
+                time.sleep(2)
+                for role, g in games.items():
+                    new_boxes(g["display"], seen, boxes, t0)
+                    if g["proc"].poll() is not None:
+                        why = f"the {role}'s game exited during the fight"
+                    elif (peers[role]["gamedir"] / "ErrorLog.txt").exists():
+                        why = f"the {role}'s game wrote a crash report"
+                if boxes and not why:
+                    why = f"a box during the fight: {boxes[0]['title']}"
+        except Lobby as e:
+            why = str(e)
+        if why:                         # what each screen showed when the step failed
+            for role, g in games.items():
+                shot = Path(g["log"].name).with_suffix(f".mp-{role}.png")
+                subprocess.run(["import", "-display", f":{g['display']}", "-window", "root", str(shot)],
+                               capture_output=True, timeout=20)
+                shots[f"mp-{role}.png"] = str(shot)
+    finally:
+        for g in games.values():
+            stop_wine(g)
+    out = {"ok": False, "boxes": boxes, "evidence": [], "_files": {}, "_copies": shots}
+    for role, inst in peers.items():
+        gd = inst["gamedir"]
+        tlog = gd / "log" / "tagpu.log"
+        tagpu = tlog.read_text(errors="replace") if tlog.exists() and tlog.stat().st_mtime >= t0 else ""
+        td = gd / "tdrawlog.txt"
+        tdrawlog = td.read_text(errors="replace") if td.exists() and td.stat().st_mtime >= t0 else None
+        logs = other_logs(gd / "log", t0)
+        out[role] = {"packet_pub": packet_pub(tagpu), "impure_loaded": bool(tagpu)}
+        out["evidence"] += tadr_evidence(tdrawlog, logs, where=f"network game, {role}: ")
+        out["_files"].update({f"mp-{role}-tagpu.log": tagpu,
+                              **{f"mp-{role}-log-{k}": v for k, v in logs.items()}})
+        err = gd / "ErrorLog.txt"
+        if err.exists() and err.stat().st_mtime >= t0:
+            out["_files"][f"mp-{role}-ErrorLog.txt"] = err.read_text(errors="replace")
+        if not why and not out[role]["packet_pub"]:
+            why = f"Impure drew nothing on the {role}'s game"
+    out["ok"] = why is None
+    out["why"] = why or f"two players, {MP_SCENARIOS[0]} and {MP_SCENARIOS[1]} applied, {seconds} s"
+    out["seconds"] = round(time.time() - t0, 1)
+    return out
 
 
 def cmd_wine(args):
@@ -667,9 +923,13 @@ def cmd_wine(args):
         xv.kill()
         xv.wait()
     displays = {s["name"]: free_display(taken) for s in ready}
-    print(f"running {len(ready)} setups, {args.jobs} at a time, {args.watch} s each")
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+    print(f"running {len(ready)} setups, {args.jobs} at a time, {args.watch} s each"
+          + (f"; a two-player game of {args.mp} s for each that starts" if args.mp else ""))
+    results, mp_futs = [], {}
+    # One network game at a time (DirectPlay's port is the machine's), each queued the
+    # moment its setup's single-player run shows Impure running, beside the other runs.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=1) as mp_pool:
         futs = {pool.submit(run_wine, s, dll, args.watch, displays[s["name"]], args.screens,
                             args.battle): s
                 for s in ready}
@@ -679,6 +939,17 @@ def cmd_wine(args):
             verdict(o, s, "wine")
             print(f"  {s['name']}: {o['outcome']} ({o['verdict']})")
             results.append(o)
+            if args.mp and mp_eligible(s) and o["outcome"] == "impure-active" and o.get("menu"):
+                mp_futs[s["name"]] = (s, o, mp_pool.submit(
+                    run_wine_mp, s, dll, args.mp, [free_display(taken) for _ in range(3)]))
+        for name, (s, o, f) in mp_futs.items():
+            m = f.result()
+            o["_files"].update(m.pop("_files", {}))
+            o["_copies"].update(m.pop("_copies", {}))
+            o["tadr_ran"] = o.get("tadr_ran", []) + m["evidence"]
+            o["mp"] = m
+            verdict(o, s, "wine")
+            print(f"  {name}: network game {'ok' if m['ok'] else 'FAILED: ' + m['why']} ({o['verdict']})")
     results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
     return report(results, "wine", dll, started, args.strict)
 
@@ -818,8 +1089,13 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     for lever in setup.get("levers", []):
         w.run([f"New-Item -ItemType File -Force -Path {ps(ntpath.join(work, lever))} | Out-Null"])
     out = w.path("results", setup["name"] + ".jsonl")
+    logdir = ntpath.join(work, "log")
+    # what a recorder or anything else writes into log\ this run, and nothing older
+    not_ours = "Where-Object { $_.Name -notlike 'tagpu*' -and $_.Name -ne 'startup-failure.txt' }"
     w.run([f"New-Item -ItemType Directory -Force -Path {ps(w.path('results'))} | Out-Null",
-           f"Remove-Item -LiteralPath {ps(out)} -ErrorAction SilentlyContinue"])
+           f"Remove-Item -LiteralPath {ps(out)} -ErrorAction SilentlyContinue",
+           f"Get-ChildItem -LiteralPath {ps(logdir)} -File -ErrorAction SilentlyContinue | "
+           f"{not_ours} | Remove-Item -Force"])
     t0 = time.time()
     w.task(WIN_GAME_TASK, ntpath.join(work, "TotalA.exe"), "", work)
     w.task(WIN_WATCH_TASK, w.powershell32,
@@ -859,8 +1135,13 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     }
     if o["exit_code"] is not None and o["exit_code"] >= 0xC0000000 and o["exit_code"] != TASK_RUNNING:
         o["errorlog"] = o["errorlog"] or f"exit code 0x{o['exit_code']:08X}"
+    names = w.run([f"Get-ChildItem -LiteralPath {ps(logdir)} -File -ErrorAction SilentlyContinue | "
+                   f"{not_ours} | ForEach-Object {{ $_.Name }}"])
+    logs = {n.strip(): w.read_b64(ntpath.join(logdir, n.strip())) or "" for n in names if n.strip()}
+    o["tadr_ran"] = tadr_evidence(o["tdrawlog"], logs)
     o["outcome"] = classify(o)
-    files = {"watch.jsonl": "\n".join(json.dumps(e) for e in events)}
+    files = {"watch.jsonl": "\n".join(json.dumps(e) for e in events),
+             **{f"log-{k}": v for k, v in logs.items()}}
     for k, fname in (("tdrawlog", "tdrawlog.txt"), ("failure", "startup-failure.txt"),
                      ("errorlog", "ErrorLog.txt")):
         if o[k]:
@@ -959,6 +1240,9 @@ def main():
     wi.add_argument("--battle", type=int, default=60, metavar="SECONDS",
                     help="where the menu is reached, also fight a 200v200 skirmish this long "
                          "(0: start-up only)")
+    wi.add_argument("--mp", type=int, default=30, metavar="SECONDS",
+                    help="where Impure runs, also play a two-player network game this long, "
+                         "one game at a time (0: none)")
     wi.set_defaults(fn=cmd_wine)
     wn = sub.add_parser("windows", help="run the setups on a Windows desktop, one at a time")
     wn.add_argument("setups", nargs="*")

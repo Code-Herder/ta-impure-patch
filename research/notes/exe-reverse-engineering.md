@@ -313,6 +313,19 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   without Impure that is TADR's, which calls whatever `ddraw.dll` it loaded; with Impure, which
   answers that request with itself (`tagpu_takeover.c`), it is Impure's own. Neither address is
   a site of Impure's table.
+- **`0x4FC034`, `0x4FC038`, `0x4FC03C`** — the exe's `DPLAYX.dll` import slots, in the import
+  address table in `.rdata` (read-only once bound): ordinal 2 `DirectPlayEnumerateA`, 1
+  `DirectPlayCreate`, 4 `DirectPlayLobbyCreateA`, and nothing else; the descriptor is at RVA
+  `0xFF194`, its name table at `0xFF218`. Reached only through the thunks `0x4FAFF0`
+  (`jmp [0x4FC034]`), `0x4FAFF6` (`jmp [0x4FC03C]`) and `0x4FAFFC` (`jmp [0x4FC038]`), whose
+  callers are `0x4CA435` (the enumeration), `0x4CA4D7` (the lobby object) and `0x4CA667`,
+  `0x4CA922` (`DirectPlayCreate`). No other instruction reads the slots, and the exe holds no
+  DirectPlay name to look one up by (DISASSEMBLED: the whole `objdump -d`, and `strings`). The
+  first call is `DirectPlayLobbyCreateA`, at start-up, in single player too (MEASURED
+  2026-09-26: the first export call every recorder build logs). A DirectPlay stand-in in the
+  game folder — the 2006 recorder, or the Patch Loader whose exports forward to `tplayx.dll` —
+  is reached through these slots alone, which is how Impure keeps the recorder from running
+  (`tagpu_takeover.c`, [GPU status](gpu-status.md) §2.6d).
 - **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a

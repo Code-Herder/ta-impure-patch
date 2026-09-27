@@ -1,5 +1,5 @@
 {
-  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and TADR not patching the engine beside it. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder.",
+  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and none of TADR's code run -- 'tadr_ran' false: tdraw.dll never started (no tdrawlog.txt) and the recorder never answered a DirectPlay call (no DLL.DirectPlay line in its log), in single player and, on Wine, in a two-player network game. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder.",
   "setups": [
     {
       "name": "retail",
@@ -7,7 +7,7 @@
       "add": [],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       }
     },
     {
@@ -27,7 +27,27 @@
         "loaded": [
           "dplayx.dll"
         ],
-        "tadr_installed": false
+        "tadr_ran": false
+      }
+    },
+    {
+      "name": "retail+tadr1-recorder",
+      "about": "the check of the recorder evidence: the 2006 recorder with the takeover switched off (tagpu_takeover.off) answers the exe's DirectPlay, and the suite must see it run -- the proof that a 'tadr_ran: false' elsewhere is a recorder kept out, not one the check cannot see",
+      "add": [
+        {
+          "fixture": "tadr-1.0.0.545",
+          "files": [
+            "Dplayx.dll",
+            "Dplayx.map"
+          ]
+        }
+      ],
+      "levers": [
+        "tagpu_takeover.off"
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": true
       }
     },
     {
@@ -54,7 +74,7 @@
           "tdraw.dll",
           "tplayx.dll"
         ],
-        "tadr_installed": false
+        "tadr_ran": false
       }
     },
     {
@@ -83,7 +103,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       }
     },
     {
@@ -112,7 +132,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       }
     },
     {
@@ -136,7 +156,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       }
     },
     {
@@ -166,7 +186,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       },
       "today": {
         "outcome": "impure-refused",
@@ -200,7 +220,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       },
       "today": {
         "outcome": "impure-refused",
@@ -218,7 +238,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       },
       "registry_roots": [
         "Software\\TotalM"
@@ -235,7 +255,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       },
       "registry_roots": [
         "Software\\ProTA"
@@ -272,7 +292,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       },
       "today": {
         "outcome": "impure-not-loaded",
@@ -292,7 +312,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       },
       "today": {
         "outcome": "impure-refused",
@@ -317,7 +337,7 @@
       ],
       "goal": {
         "outcome": "impure-active",
-        "tadr_installed": false
+        "tadr_ran": false
       },
       "today": {
         "outcome": "impure-refused",

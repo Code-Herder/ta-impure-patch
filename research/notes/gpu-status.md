@@ -2693,6 +2693,28 @@ ProTA 4.8 and the three Patch Loader setups start with no `tdrawlog.txt` (and on
 takeover. The plan and the other routes: [the
 takeover](compat/takeover.md).
 
+**The recorder.** From `DllMain` too, after every import is bound and before the exe's entry
+point, `tagpu_takeover_dplay_init` reads the exe's import directory (every RVA bounded by the
+image): a descriptor whose first slot leads into a DLL of the game folder that exports
+`DirectPlayCreate` and is not Impure has every one of its slots pointed at Impure's forwarders
+— `DirectPlayCreate`, `DirectPlayEnumerate`/`A`/`W`, `DirectPlayLobbyCreateA`/`W`, by
+Microsoft's ordinals or by name — or, if one slot is anything else, none of them. On the retail
+exe that is `DPLAYX.dll`'s three slots (`0x4FC034`..`0x4FC03C`, the [engine
+map](exe-reverse-engineering.md)); the page is made writable for the write and put back. A
+forwarder loads Windows' `dplayx.dll` by its full path on its first call — from the game's code,
+outside the loader lock — publishes it with a compare-exchange and passes the call on (E_FAIL,
+as a system without DirectPlay answers, if it cannot load). TADR's recorder starts on its first
+DirectPlay call, so it never starts, although the Patch Loader's forwarders have loaded it. The
+log says `takeover: DPLAYX.dll's 3 DirectPlay imports led into tplayx.dll, a DirectPlay DLL in
+the game folder -- pointed at Windows' own, so it does not start`, then, at the first call,
+`the game's DirectPlay is Windows' dplayx.dll`. An exe whose DirectPlay is Windows' own is not
+touched. The same lever turns it off. MEASURED 2026-09-27, single player, Wine and Windows: no
+recorder answered a call beside the 2006 recorder, the three Patch Loader setups, Total Mayhem or
+ProTA (its log has no `DLL.DirectPlay` line, or there is none), and with the lever the 2006
+recorder does; and on Wine the suite's two-player game played over Windows' DirectPlay beside
+the retail exe, the Patch Loader with TADR's OTA and Mayhem builds, Total Mayhem and ProTA, with
+no TADR code on either peer.
+
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 
 The one module that patches nothing the engine *draws* with: it changes **when** a freed block

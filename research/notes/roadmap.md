@@ -3814,24 +3814,27 @@ store does ([GUI renderer](gui-renderer.html) §27, *NOT CLOSED*).
 
 Players put Impure's `ddraw.dll` into folders that already carry TADR, the Community Patch Loader
 or a mod's own exe. The wiki's [Compatibility](compat/overview.html) section is the map of those
-routes; its [suite](compat/suite.html) (`tools/compat/tacompat.py`) runs the DLL beside fourteen
+routes; its [suite](compat/suite.html) (`tools/compat/tacompat.py`) runs the DLL beside fifteen
 setups on Wine and on the Windows test box and is required before a `v*` tag (`CLAUDE.md`
 *Releases*). v0.2.3 crashed Total Mayhem 11.3.0 and ProTA 4.8 on the first skirmish load: their
 TADR rewrites 17 of Impure's 265 fail-closed sites ([the collision](compat/tadr-collision.html)).
 The owner's rule for every setup (2026-09-26): **stop TADR's code, keep every byte the mod sets**
 — resource paths, the multiplayer version bytes, the mod's gameplay patches
-([the plan](compat/takeover.html)).
+([the plan](compat/takeover.html)) — and TADR's code is all of it, the recorder included: "We do
+not load TADR, we will replace it" (the owner, 2026-09-26).
 
 | Gate | Status | Exit |
 |---|---|---|
 | The suite — fourteen setups, Wine all at once with a 200v200 battle, Windows one at a time | ● landed on local main 2026-09-26 (`d1caabf`) | every setup either meets its goal or matches its recorded `today`; nothing UNEXPECTED |
-| T1 — the Patch Loader route and the safety net: a game-folder DLL that exports `DirectDrawCreate` is answered with Impure, so TADR's `DllMain` never runs; every fail-closed site re-read at the first DirectDraw call ([GPU status](gpu-status.html) §2.6b, §2.6d) | ● landed on local main 2026-09-26 (`aeba0f7`) after its review (high, two reviewers; every finding acted on) | 9 of 14 setups meet their goal on Wine and on Windows, 5 known gaps, 0 UNEXPECTED; Mayhem, ProTA and the three loader setups log the takeover, fight the battle, and on Windows carry no `tdraw.dll`; with the takeover off the net refuses Mayhem's TADR, 17 of 265 sites, on both. **Not covered:** what each mod's content takes from TADR (its data keys, its UI) |
+| T1 — the Patch Loader route and the safety net: a game-folder DLL that exports `DirectDrawCreate` is answered with Impure, so TADR's `DllMain` never runs; every fail-closed site re-read at the first DirectDraw call ([GPU status](gpu-status.html) §2.6b, §2.6d) | ● landed on local main 2026-09-26 (`aeba0f7`) after its review (high, two reviewers; every finding acted on) | 9 of 14 setups met the goal of the time on Wine and on Windows, 5 known gaps, 0 UNEXPECTED; Mayhem, ProTA and the three loader setups log the takeover, fight the battle, and on Windows carry no `tdraw.dll`; with the takeover off the net refuses Mayhem's TADR, 17 of 265 sites, on both. That goal asked only whether TADR patched the engine: the recorder still ran in six of those setups, which T1b closes. **Not covered:** what each mod's content takes from TADR (its data keys, its UI) |
+| The suite's network stage and the TADR check: a two-player game over Windows' DirectPlay for every setup where Impure runs, and every goal `tadr_ran: false` — no `tdrawlog.txt`, no recorder log with a `DLL.DirectPlay` call in it, on any peer — with `retail+tadr1-recorder` proving the recorder check can fire | ◐ built 2026-09-27 | Wine only; Windows has neither the battle nor the network stage |
+| T1b — the recorder: the exe's DirectPlay import slots that lead into a DirectPlay DLL of the game folder point at Impure's forwarders to Windows' `dplayx.dll`, so the recorder, which starts on its first DirectPlay call, never starts ([GPU status](gpu-status.html) §2.6d) | ◐ built 2026-09-27 | no TADR code in `retail+tadr1`, the three loader setups, Mayhem and ProTA, alone or in a network game |
 | T2 — a site the mod's exe file changes belongs to the mod | ○ | Escalation's exe no longer refused at `0x40EAD6` |
 | T3 — the routes where the exe imports TADR (3.9.02, Escalation): snapshot the code, revert TADR's writes at the entry point | ○ | `392+tadr-*`, `escalation`, `escalation+tadr-dev` meet their goal |
 | T4 — gammata's drop-in, whose `tdraw` loads only `ddraw_custom.dll` | ○ distribution | `gammata-ota` meets its goal |
 
-**Open, the owner's:** the recorder (`tplayx.dll`), which the Patch Loader still loads — demos and
-TA Forever's replays depend on it.
+**Next, after T1b:** Impure's own replacement for the recorder — demos, TA Forever's replays, its
+in-game commands. Until it exists, a game played with Impure records no demo.
 
 ## Shipping — the build people can download (2026-09-08)
 
