@@ -1193,7 +1193,13 @@ static void upload_table(const TAGPU_RDRAWREQ* r)
    alpha 0 unless this is a repaint in place. `dstHas` is the source layout:
    UNDEFINED for an image whose contents are ours to throw away (which is
    cheaper -- the driver may skip a decompress), SHADER_READ_ONLY_OPTIMAL for
-   one a repaint is about to paint over. See the field. */
+   one a repaint is about to paint over. See the field.
+   THE FIRST SCOPE IS EVERY USER THE IMAGE HAS HAD, whichever the old layout:
+   the consumer's sampling in frames still in flight, a previous job's OUT or
+   clear, a dump's copy. A transition out of UNDEFINED discards the contents
+   but is still a write, and without those stages nothing orders it after
+   them -- TOP_OF_PIPE chains to no earlier barrier, the slice's own
+   included. */
 static void dst_ready(struct TAGPU_VKRJOB* g)
 {
     VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -1210,13 +1216,13 @@ static void dst_ready(struct TAGPU_VKRJOB* g)
     mb.subresourceRange = rg;
     mb.oldLayout = g->dstHas ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                              : VK_IMAGE_LAYOUT_UNDEFINED;
-    mb.srcAccessMask = g->dstHas ? VK_ACCESS_SHADER_READ_BIT : 0;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     mb.newLayout = g->clearDue ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     mb.dstAccessMask = g->clearDue ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(s_cb,
-                         g->dstHas ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                   : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
                          g->clearDue ? VK_PIPELINE_STAGE_TRANSFER_BIT : readyStage,
                          0, 0, NULL, 0, NULL, 1, &mb);
     if (g->clearDue) {

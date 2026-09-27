@@ -19598,7 +19598,10 @@ queued go in, and while any key on screen is not painted — however it was queu
 its place in the FIFO queue — the job runs at prio 0 with the whole budget; otherwise the rest of
 the map follows centre-out, one batch queued behind the one in flight, at prio 6 with a 2 ms GPU
 cap (`tagpu_rcore_job_budget`). A resize that retires an image the job uses frees the job first:
-the retire's count covers the terrain pass's descriptor sets, not the restorer's dispatches. Two jobs painting one image, as the plan had it, would each clear and
+the retire ends the image's use only if nothing names it afterwards, which the terrain pass
+guarantees for its own descriptor sets and a live job would not. A new job's first barrier on its
+destination (`dst_ready`) now waits for every earlier user of the image, the transition out of
+`UNDEFINED` included, where it chained to nothing before. Two jobs painting one image, as the plan had it, would each clear and
 move the destination on their own schedule. Two Continents at 1024 × 768 on the RTX 4070: the first
 screen's 479 keys in 114 ms, the whole map in 19.3–26.3 s, Lava Alley's in 3.2 s.
 
@@ -19609,7 +19612,8 @@ rode with it:** the device-extension walk in `tagpu_vk.c` stopped as soon as its
 was full, which `VK_KHR_maintenance1` fills, so no extension listed after it was ever seen; the
 bound now guards the append. Where the atlas does not fit, the device refuses it, the keys need an
 image wider than the device allows or than the pass carries (16384), the map names a tile past the
-atlas, or a refusal of the restorer stands, the terrain restores per tile as in §2.102, on tiny.
+atlas, or a refusal of the restorer stands (asked before the atlas is sized, so a device recorded
+off allocates none), the terrain restores per tile as in §2.102, on tiny.
 `tagpu_restorefault.on`'s `nbfit` drives the first, `nballoc` the second on the first map after
 the pass comes up.
 
@@ -19621,8 +19625,9 @@ free of 2,816), the whole map paints in 31.3 s at about 59 fps, and every cell i
 of the whole-map restore on 0.0007 % of bytes (the plan note has the table).
 
 **Not covered.** How long a key scrolled onto the screen waits was not measured (by construction it
-is at prio 0 behind at most two trickle batches and the screen's own keys). The fixes of the
-landing's review were re-measured on the reference setup only (the bytes unchanged). At the
+is at prio 0 behind at most two trickle batches and the screen's own keys). The Windows run
+predates the review's fixes, which were re-measured on the reference setup only (the bytes
+unchanged, the self-test passing, a device recorded off sizing no neighbourhood atlas). At the
 mirrored edge (§2.90) the half-texel at the fold now samples the key's ring, the network's output
 for the reflected map, where it sampled a copy of the edge; the fold stays continuous. The tile-grid
 lines are the art's and stay (the plan's TODO).

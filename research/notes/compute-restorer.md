@@ -308,16 +308,24 @@ that heap. The log says which rule answered. On the reference setup: 192 MB agai
 **The per-tile fallback** is landing 1's atlas and frames, on tiny. It is taken when the fit says
 no, when the device refuses the image, when the keys need an image wider than the device allows
 or than the terrain pass carries (16384), when the map names a tile past the atlas, and while a
-refusal of the restorer stands (no neighbourhood atlas is allocated for a job that will not run).
+refusal of the restorer stands: the choice asks the restorer first (a device recorded off
+answers then), so no neighbourhood atlas is allocated for a job that will not run. The choice is
+made once per request and restorer epoch, so the render options' retry chooses again.
 The fault lever drives the first two: `tagpu_restorefault.on` holding `nbfit`, or `nballoc` on the
 first map after the terrain pass comes up, where no restored atlas exists yet.
 
 **The job goes before its images.** A resize retires the image it replaces once every frame slot
-has been through its fence — which proves the last use by the terrain pass's own descriptor sets,
-not by the restorer, which records its dispatches after every pass's prepare. So a resize that
-will retire an image the job reads or writes frees the job first (`rjob_release_for`), and the
-retire then covers the job's last dispatch too; a new job starts on the new image. A frame whose
-records carry no keys does not size the neighbourhood atlas at all.
+has been through its fence, which covers every command buffer submitted until then. That is the
+image's last use only if nothing names it after the retire begins: the terrain pass guarantees it
+for its own descriptor sets, but the restorer records its dispatches after every pass's prepare,
+and a job left alive would name the old image on the next frame. So a resize that will retire an
+image the job reads or writes frees the job first (`rjob_release_for`); a new job starts on the new
+image. A frame whose records carry no keys does not size the neighbourhood atlas at all.
+
+**A new job's destination waits for the image's earlier users.** The job's first barrier on its
+destination (`dst_ready`) has every stage the image has been used in as its first scope — the
+terrain's sampling in frames still in flight, an earlier job's writes, a dump's copy — including
+the transition out of `UNDEFINED`, which discards the contents but is still a write.
 
 ### The feed (D8)
 
@@ -337,8 +345,9 @@ schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tag
   a key scrolled onto the screen puts the job at prio 0 however it was queued, and waits behind at
   most the keys queued before it: the two trickle batches and the screen's own.
 - **The core** gains a budget per job (`tagpu_rcore_job_budget`): a capped job stops at its cap,
-  counted across the slice, except that its batch in flight runs at the full budget while another
-  job waits behind it; with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 9:
+  counted across the slice, and is passed over for the rest of it, which the other jobs keep —
+  except that its batch in flight runs on at the full budget while another job waits behind it;
+  with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 9:
   the six consumers and three probes.
 - **The dump waits for the feed** (`tagpu_vk_restore_job_feeding`): a queue that drains between
   feeds is not a finished picture.

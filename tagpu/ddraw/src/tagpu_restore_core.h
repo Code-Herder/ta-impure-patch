@@ -97,6 +97,9 @@ typedef struct {
 typedef struct TAGPU_RCORE {
     int    used, prio, oneshot, failed;
     double cap;                              /* ms a slice at most, 0 = no cap */
+    double capUnits;                         /* ...spent in slice `capSlice`   */
+    int    capDraws;
+    unsigned capSlice, capOut;               /* slice marks: counted, capped   */
     int    model;                            /* TAGPU_RM_*, loaded: `m` is it  */
     const TAGPU_RMODEL* m;
     char   tag[12];
@@ -230,8 +233,9 @@ int  tagpu_rcore_job_add_nbhd(TAGPU_RSCHED* s, TAGPU_RCORE* j,
    build them include only that. */
 /* THE JOB'S PLACE AND SHARE, which a fed job moves as it goes: `prio` as at
    `job_new`, and `capMs` the GPU time it may take in one slice, 0 for the
-   whole budget. A capped job stops at its cap -- except that a batch it has in
-   flight runs at the full budget while another job waits behind it, since
+   whole budget. A capped job stops at its cap and is passed over for the rest
+   of the slice, which the other jobs keep -- except that a batch it has in
+   flight runs on at the full budget while another job waits behind it, since
    only one batch is ever in flight and the other's latency is that batch.
    With no GPU timer the cap is two dispatches a slice. */
 void tagpu_rcore_job_budget(TAGPU_RCORE* j, int prio, double capMs);

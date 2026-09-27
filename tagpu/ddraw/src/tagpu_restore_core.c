@@ -607,13 +607,15 @@ static int others_waiting(const TAGPU_RSCHED* s, const TAGPU_RCORE* j)
         const TAGPU_RCORE* o = &s->jobs[i];
         if (o == j || !o->used || o->failed || o->qn == 0) continue;
         if (s->gate && o->prio >= 0) continue;
+        if (o->capOut == s->slice + 1) continue;
         return 1;
     }
     return 0;
 }
 
-/* the job whose batch is in flight, else the lowest prio with a queue. Under
-   the self-test's gate a job of non-negative prio is not a candidate at all. */
+/* the job whose batch is in flight, else the lowest prio with a queue that is
+   not at its cap this slice. Under the self-test's gate a job of non-negative
+   prio is not a candidate at all. */
 static TAGPU_RCORE* pick_job(TAGPU_RSCHED* s)
 {
     TAGPU_RCORE* best = NULL;
@@ -626,6 +628,7 @@ static TAGPU_RCORE* pick_job(TAGPU_RSCHED* s)
         TAGPU_RCORE* j = &s->jobs[i];
         if (!j->used || j->failed || j->qn == 0) continue;
         if (s->gate && j->prio >= 0) continue;
+        if (j->capOut == s->slice + 1) continue;     /* at its cap this slice */
         if (!best || j->prio < best->prio) best = j;
     }
     return best;
@@ -659,8 +662,8 @@ static void job_drained(TAGPU_RSCHED* s, TAGPU_RCORE* j)
 
 void tagpu_rcore_step(TAGPU_RSCHED* s)
 {
-    double allowed, spent = 0.0, capSpent = 0.0;
-    int q, ndraw = 0, capDraws = 0, i;
+    double allowed, spent = 0.0;
+    int q, ndraw = 0, i;
     TAGPU_RCORE* j;
     char b[300];
 
@@ -735,7 +738,10 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
         {
             double u = issue_draw(s, j);
             spent += u; j->runits += u;
-            if (j->cap > 0.0) { capSpent += u; capDraws++; }
+            if (j->cap > 0.0) {
+                if (j->capSlice != s->slice + 1) { j->capSlice = s->slice + 1; j->capUnits = 0.0; j->capDraws = 0; }
+                j->capUnits += u; j->capDraws++;
+            }
         }
         ndraw++;
         if (!j->inflight && j->qn == 0 && j->running) job_drained(s, j);
@@ -743,13 +749,17 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
         else if (ndraw >= FIXED_DRAWS) break;
         /* A CAPPED JOB STOPS AT ITS CAP, and what it spent is counted across
            the slice, so re-picking it after a batch lands does not reset it.
-           Its batch in flight is the exception while another job waits: that
-           batch is all that stands between the other and the GPU. */
-        if (j->cap > 0.0 && !(j->inflight && others_waiting(s, j))) {
-            if (s->timer ? s->nsPerUnit > 0.0 && capSpent >= j->cap * 1e6 / s->nsPerUnit
-                         : capDraws >= FIXED_CAP_DRAWS)
-                break;
-        }
+           At the cap it is passed over for the rest of the slice (`pick_job`)
+           and the slice goes on for the other jobs, or ends when there are
+           none. Its batch in flight is the exception while another job waits:
+           `pick_job` returns it first, and that batch is all that stands
+           between the other and the GPU. */
+        if (j->cap > 0.0 && j->capSlice == s->slice + 1 &&
+            (s->timer ? s->nsPerUnit > 0.0 && j->capUnits >= j->cap * 1e6 / s->nsPerUnit
+                      : j->capDraws >= FIXED_CAP_DRAWS))
+            j->capOut = s->slice + 1;
+        if (j->capOut == s->slice + 1 && (j->inflight ? !others_waiting(s, j) : !pick_job(s)))
+            break;
     } while (1);
     if (s->timer) { s->be->slice_end(q); s->qUnits[q] = spent; s->qHave[q] = 1; s->qFrame++; }
     s->slice++;
