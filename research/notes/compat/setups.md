@@ -2,32 +2,34 @@
 
 ## Summary
 
-Thirteen setups, each a game folder as a player has it: the retail 3.1 game, what a mod or patch
-install puts next to it, and Impure's `ddraw.dll`. Three meet the goal (the retail exe alone or
-beside files nothing loads); the rest are known gaps until the takeover — three refused by a
-2026 TADR, five refused by Impure on an exe that imports TADR, one where Impure never loads,
-and two, **Total Mayhem 11.3.0 and ProTA 4.8, that crash on the first skirmish load**
-([why](tadr-collision.md)). The 3.9.02 exe, which several of them run, is described at the end.
+Thirteen setups, each a game folder as a player has it — the retail 3.1 game, what a mod or
+patch install puts next to it, and Impure's `ddraw.dll` — and one check of the safety net. Nine
+meet the goal on Wine and on Windows: the retail exe alone or beside files nothing loads, and
+every Patch Loader setup, **Total Mayhem 11.3.0 and ProTA 4.8** among them, since [the
+takeover](takeover.md)'s first landing keeps their TADR from starting. The rest are known gaps
+until its next landings: four refused by Impure on an exe that imports TADR and one where Impure
+never loads. The 3.9.02 exe, which several of them run, is described at the end.
 
 ## The table
 
 `tools/compat/setups.json` holds every setup; `fixtures.json` names every third-party file by
-md5 (nothing third-party is in the repository). Measured on Wine on the reference setup with
+md5 (nothing third-party is in the repository). Measured on Wine on the reference setup and on the Windows test box, with
 the DLL at `main`, the battle stage on (a skirmish on Two Continents and
 `scenarios/200v200.json` for 60 s wherever the menu is reached):
 
-| setup | what it is | Wine, today | Windows, today |
+| setup | what it is | Wine | Windows |
 |---|---|---|---|
 | `retail` | Impure alone on the retail exe (the control) | **meets goal**: menu, battle 402 of 402 applied | **meets goal** |
 | `retail+tadr1` | + the 2006 recorder `Dplayx.dll` | **meets goal** | **meets goal**: the recorder loads |
 | `retail+tadr-files` | + a modern `tdraw.dll` and `tplayx.dll` nothing loads | **meets goal** | **meets goal** |
-| `loader+tadr-ota` | + Patch Loader v1.3.0.0, TADR `dev-dcff5dd` (OTA), its recorder | `tadr-refused` at `0x00499A32` | `tadr-refused`: the box, seen |
-| `loader+tadr-tazero` | the TA Zero report: loader, TADR `tazero`, the 2022 recorder | `tadr-refused` at `0x00499A32` | `tadr-refused`: the box, seen |
-| `loader+tadr-mayhem` | loader, TADR's current Mayhem build and recorder | `tadr-refused` at `0x00499A32` | `tadr-refused`: the box, seen |
+| `loader+tadr-ota` | + Patch Loader v1.3.0.0, TADR `dev-dcff5dd` (OTA), its recorder | **meets goal**: TADR does not start | **meets goal** |
+| `loader+tadr-tazero` | the TA Zero report: loader, TADR `tazero`, the 2022 recorder | **meets goal** | **meets goal** |
+| `loader+tadr-mayhem` | loader, TADR's current Mayhem build and recorder | **meets goal** | **meets goal** |
 | `392+tadr-dev` | the 3.9.02 exe, TADR `dev-dcff5dd` | `impure-refused` at `0x0040EAD6` | `impure-refused` |
 | `392+tadr-2026.8.6` | the 3.9.02 exe, TADR v2026.8.6 | `impure-refused` at `0x0040EAD6` | `impure-refused` |
-| `mayhem-11.3.0` | Total Mayhem 11.3.0 as installed | **`battle-crash`**: menu, then the first skirmish load | `impure-active`, TADR installed beside it (no battle stage) |
-| `prota-4.8` | ProTA 4.8 as installed | **`battle-crash`**: the same crash | `impure-active`, TADR installed beside it (no battle stage) |
+| `mayhem-11.3.0` | Total Mayhem 11.3.0 as installed | **meets goal**: battle fought | **meets goal** |
+| `prota-4.8` | ProTA 4.8 as installed | **meets goal**: battle fought | **meets goal** |
+| `mayhem-11.3.0-net` | the check of the safety net: Mayhem with the takeover off | refused by the net: 17 of 265 sites | the same |
 | `gammata-ota` | gammata's OTA drop-in | `impure-not-loaded` (`ddraw_custom.dll` runs) | `impure-not-loaded` |
 | `escalation` | Escalation GOLD 10.2.0 as installed | `impure-refused` at `0x0040EAD6` | `impure-refused` |
 | `escalation+tadr-dev` | Escalation with TADR's current Escalation build | `impure-refused` at `0x0040EAD6` | `impure-refused` |

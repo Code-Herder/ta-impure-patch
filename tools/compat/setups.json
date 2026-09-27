@@ -59,7 +59,7 @@
     },
     {
       "name": "loader+tadr-ota",
-      "about": "the Community Patch route on the retail exe: the Patch Loader as dplayx.dll loads tdraw.dll after Impure has installed its limits",
+      "about": "the Community Patch route on the retail exe: the Patch Loader as dplayx.dll asks for tdraw.dll after Impure has installed its limits, and Impure answers for it (the takeover), so TADR does not start",
       "add": [
         {
           "fixture": "patchloader-1.3.0.0",
@@ -84,10 +84,6 @@
       "goal": {
         "outcome": "impure-active",
         "tadr_installed": false
-      },
-      "today": {
-        "outcome": "tadr-refused",
-        "tdrawlog": "address validation failed for projectile allocation size at 0x00499A32"
       }
     },
     {
@@ -117,10 +113,6 @@
       "goal": {
         "outcome": "impure-active",
         "tadr_installed": false
-      },
-      "today": {
-        "outcome": "tadr-refused",
-        "tdrawlog": "address validation failed for projectile allocation size at 0x00499A32"
       }
     },
     {
@@ -145,10 +137,6 @@
       "goal": {
         "outcome": "impure-active",
         "tadr_installed": false
-      },
-      "today": {
-        "outcome": "tadr-refused",
-        "tdrawlog": "address validation failed for projectile allocation size at 0x00499A32"
       }
     },
     {
@@ -221,7 +209,7 @@
     },
     {
       "name": "mayhem-11.3.0",
-      "about": "Total Mayhem 11.3.0 as installed, with Impure's ddraw.dll copied over the mod's cnc-ddraw: the stock exe, Mayhem's Patch Loader and its 2024 TADR; its loader moves the game's registry to Software\\TotalM. TADR's limit crack rewrites twelve of Impure's unit-type sites without reading them, so the menu works and the first skirmish load crashes (at 0x488C50, the category-mask allocation)",
+      "about": "Total Mayhem 11.3.0 as installed, with Impure's ddraw.dll copied over the mod's cnc-ddraw: the stock exe, Mayhem's Patch Loader and its 2024 TADR, which the takeover keeps from starting; its loader moves the game's registry to Software\\TotalM",
       "add": [
         {
           "fixture": "mayhem-11.3.0",
@@ -232,20 +220,13 @@
         "outcome": "impure-active",
         "tadr_installed": false
       },
-      "today": {
-        "outcome": "battle-crash",
-        "tadr_installed": true
-      },
-      "today_windows": {
-        "outcome": "impure-active"
-      },
       "registry_roots": [
         "Software\\TotalM"
       ]
     },
     {
       "name": "prota-4.8",
-      "about": "ProTA 4.8 as installed, with Impure's ddraw.dll copied over the mod's cnc-ddraw: the stock exe, ProTA's Patch Loader and its 2025 TADR; its loader moves the game's registry to Software\\ProTA. The same limit crack as Total Mayhem's, and the same crash on the first skirmish load",
+      "about": "ProTA 4.8 as installed, with Impure's ddraw.dll copied over the mod's cnc-ddraw: the stock exe, ProTA's Patch Loader and its 2025 TADR, which the takeover keeps from starting; its loader moves the game's registry to Software\\ProTA",
       "add": [
         {
           "fixture": "prota-4.8",
@@ -255,13 +236,6 @@
       "goal": {
         "outcome": "impure-active",
         "tadr_installed": false
-      },
-      "today": {
-        "outcome": "battle-crash",
-        "tadr_installed": true
-      },
-      "today_windows": {
-        "outcome": "impure-active"
       },
       "registry_roots": [
         "Software\\ProTA"

@@ -44,8 +44,9 @@ tools/compat/tacompat.py clean                       # remove the compat-* Wine 
   the skirmish loads or fights), `other-box`, `exited`, `no-result`.
 - **The battle stage** (Wine only, on by default, 60 s): every setup that reaches the main
   menu clicks through to a skirmish on Two Continents and applies `scenarios/200v200.json`.
-  Collisions between two patchers show where the limits are *used*, not at start-up: Total
-  Mayhem 11.3.0 reaches the menu and crashes on the first skirmish load.
+  Collisions between two patchers show where the limits are *used*, not at start-up: Impure
+  v0.2.3 beside Total Mayhem 11.3.0 reached the menu and crashed on the first skirmish load, which
+  a start-up-only run passes.
 - **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>/` (default cache
   `~/.local/share/ta-compat`, outside every repository because results carry absolute
   paths): `summary.txt`, and per setup the tdrawlog, `tagpu.log`, `ErrorLog.txt`,
