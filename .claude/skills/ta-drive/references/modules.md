@@ -87,6 +87,7 @@ tools/tacli launch h1 --dplay --free-dplay-port     # the host
 tools/tacli launch j1 --dplay                       # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
+tools/mp_leave.sh h1                                 # surrender -> main menu; a host's ends it for all
 ```
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
