@@ -213,6 +213,12 @@ for. Nothing is lost by not judging a held value: every TADR hook measured on an
 the 2006 recorder, 6 on the entry-point route, 13 to 18 of a `tdraw`'s — is found by its
 instruction. `tacompat.py selftest` carries all three coincidences as cases that must not fire.
 
+How much noise that rule silences is measurable, because the suite still counts what it will not
+judge: over one Windows run of the sixteen setups, the changed runs held **43** such addresses on
+`loader+tadr-tazero`, 19 on `escalation+tadr-dev`, 18 on `392+tadr-dev`, 11 on `retail+tadr-files`
+and 0 on most of the rest — a different set on every setup and every platform, because it follows
+where the loader put a DLL. Judged, each of those was a refused launch.
+
 A decoded instruction is *narrower* evidence than a held value, not proof: nothing here disassembles,
 so a stock byte that happens to be `E8` or `E9` inside a changed run is decoded as though it were an
 opcode, and its target could in principle land inside a module of the folder. It is a far smaller
@@ -294,11 +300,18 @@ Both refuse through `tagpu_refuse` — the report, `log\startup-failure.txt`, th
   is the eight bytes written over **another DLL's** PE entry point, which is a shape
   behaviour-based engines watch; it is made with `PAGE_READWRITE` rather than
   `PAGE_EXECUTE_READWRITE`, since nothing runs that module's code while the bytes go in, so the
-  page is never writable and executable at once. MEASURED on the Windows test box 2026-09-27, all
-  sixteen setups, Defender armed (`RealTimeProtectionEnabled`, `AntivirusEnabled`,
-  `AMServiceEnabled`, `BehaviorMonitorEnabled` all true): **no event at all** in
-  `Microsoft-Windows-Windows Defender/Operational` over the run, and nothing in
-  `Get-MpThreatDetection`. That is one machine with one engine and one signature set, so it is
-  evidence and not a guarantee. The suite's own `OpenProcess`/`ReadProcessMemory` is the most
-  anti-virus-shaped code in the change and ships to nobody — it is in `win-watch.ps1`, on our own
-  machine.
+  page is never writable and executable at once. MEASURED on the Windows test box 2026-09-27, three
+  full runs of all sixteen setups, Defender armed (`RealTimeProtectionEnabled`, `AntivirusEnabled`,
+  `AMServiceEnabled`, `BehaviorMonitorEnabled` all true; platform 4.18.26080.4, signatures
+  1.459.421.0): **no detection at all** — 0 events of ids 1006–1009, 1015 or 1116–1119 in
+  `Microsoft-Windows-Windows Defender/Operational`, and nothing in `Get-MpThreatDetection`. What the
+  log does hold over the same hours is the hourly health report (1150/1151) and six id 2050
+  submissions, each of an `amsistream-…`: **AMSI script content — the harness's own PowerShell over
+  SSH, uploaded for analysis.** Not one event names `TotalA.exe`, `ddraw.dll` or any TADR DLL. Two
+  things follow: the writes into the engine and into a TADR DLL's entry point drew nothing, and our
+  own automation scripts are what gets sampled, so anything secret has no business in one. That is
+  one machine with one engine and one signature set, so it is evidence and not a guarantee. The
+  suite's `OpenProcess`/`ReadProcessMemory` is the most anti-virus-shaped code in the change and
+  ships to nobody — it is in `win-watch.ps1`, on our own machine.
+  **Counting the right ids matters**: id 5007 is Defender's own configuration change and id 2050 a
+  sample upload; a first pass that counted both read 65 "detections" that were nothing.

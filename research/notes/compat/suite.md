@@ -79,8 +79,12 @@ leads into the mod's own `WIN32.dll`, and taking that one would hide a hook behi
 **The exe's import slots are read too, on Wine.** The layout comes from the exe file (`pe_imports`:
 each descriptor's first slot and how many), the bound values from the process, and a slot leading
 into a TADR module counts exactly as a site of the code does — it is the other way a call leaves
-the image, and the code that reaches it is stock, so the comparison of the code cannot see it. The
-Windows watcher does not read them; a row whose slots were not read says so.
+the image, and the code that reaches it is stock, so the comparison of the code cannot see it. A
+slot bound into the very DLL its descriptor names is **not a change at all** and is left out: the
+retail exe's own imports of `WIN32.dll` and `smackw32.DLL` are sixteen such slots on every setup,
+and reporting them would bury the one that matters. The exception is a descriptor whose own DLL is
+TADR's, which is precisely the recorder installed as the game folder's `dplayx.dll`. The Windows
+watcher does not read the slots at all; a row whose slots were not read says so.
 
 The decode is deliberately the same set of shapes `tagpu_takeover.c` decodes in-process, down to
 the five bytes of lookback before a changed run, so the suite and the DLL answer the same question

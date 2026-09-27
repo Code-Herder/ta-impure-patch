@@ -92,12 +92,16 @@ claude-in-chrome tools (the owner allows it for fixtures), then
 Impure rewrites the host exe's code in memory (265 sites, plus detour trampolines) and, since T1c,
 eight bytes over a TADR DLL's PE entry point — a write into a foreign module's image, which is the
 one new shape, and `PAGE_READWRITE` rather than `PAGE_EXECUTE_READWRITE` for that reason.
-**Defender says nothing to any of it** (MEASURED 2026-09-27: all 16 setups on the box, Defender
-with `RealTimeProtectionEnabled`, `AntivirusEnabled`, `AMServiceEnabled` and
-`BehaviorMonitorEnabled` all true — **0** events in
-`Microsoft-Windows-Windows Defender/Operational` over the whole run and 0 in
-`Get-MpThreatDetection`). Read that log again after a Windows session that changes how the DLL
-writes memory, and say in the hand-over what it said. `win-watch.ps1`'s
+**Defender detects none of it** (MEASURED 2026-09-27, three full 16-setup runs, Defender with
+`RealTimeProtectionEnabled`, `AntivirusEnabled`, `AMServiceEnabled` and `BehaviorMonitorEnabled`
+all true: **0** detection events in `Microsoft-Windows-Windows Defender/Operational` and 0 in
+`Get-MpThreatDetection`; no event of any id names `TotalA.exe`, `ddraw.dll` or a TADR DLL).
+Read that log after a Windows session that changes how the DLL writes memory, and say in the
+hand-over what it said. **Filter by id or you will read noise as a finding**: the detections are
+1006–1009, 1015 and 1116–1119; id 5007 is a configuration change, 1150/1151 the hourly health
+report, and id 2050 a sample upload — every 2050 on that box so far is an `amsistream-…`, i.e. the
+harness's own PowerShell over SSH being sent to Microsoft for analysis, which is worth knowing
+before putting anything private in a script. `win-watch.ps1`'s
 `OpenProcess`/`ReadProcessMemory` is harness code and is never shipped.
 
 ## Windows

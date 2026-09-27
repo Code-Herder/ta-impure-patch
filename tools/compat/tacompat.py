@@ -964,13 +964,19 @@ def exe_hooks(root, gamedir: Path) -> dict:
 
 
 def import_slots(slots, table) -> list:
-    """Every import slot of the exe that leads into one of `table` -- (name, address, target).
-    `slots` is [(dll, address, bound value)] read out of the running process."""
+    """Every import slot of the exe that leads somewhere surprising. `slots` is [(dll, address,
+    bound value)] read out of the running process, `dll` the descriptor's own name.
+
+    A slot bound into the very DLL its descriptor names is not a change at all -- the retail exe's
+    own imports of WIN32.dll and smackw32.DLL are 16 such slots on every setup -- so those are left
+    out unless that DLL is TADR's, which is exactly the recorder installed as the game folder's
+    dplayx.dll. What is left is a slot leading somewhere the file did not ask for."""
     out = []
     for dll, addr, target in slots:
         m = next((m for m in table if m[0] <= target < m[1]), None)
-        if m:
-            out.append({"dll": dll, "site": addr, "target": target, "module": m[2], "tadr": m[3]})
+        if not m or (not m[3] and m[2].lower() == dll.lower()):
+            continue
+        out.append({"dll": dll, "site": addr, "target": target, "module": m[2], "tadr": m[3]})
     return out
 
 
