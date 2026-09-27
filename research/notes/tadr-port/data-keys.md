@@ -400,6 +400,9 @@ commit can change.
     MEASURED (`scenarios/c3-reclaim-bound.json`, VTCOM1 and VTCOM0 at 31 kills on a CORKROG each):
     on the build before the bound the keyed target lost 30 HP in 16 s against stock's 3 074, the
     wrapped product; with it, 11 304 per 13 s against 2 544, 4.44 ≈ 31/7 (each step floored by `0x4386DA`'s conversion), the event logged.
+    Since B10 ([simulation fixes, B10](sim-fixes.md)) takes that product in 64 bits in both builds, the
+    hold no longer prevents a wrap; it caps a keyed veteran's step below its formula, and whether to
+    release it is open for the owner.
 - **`0x438650` is a unit reclaim, not a capture.** Its callers are the reclaim order (`0x40483D`)
   and the build order's reclaim (`0x414C86`); the evidence pass had it as the capture's time. The
   decision stands for it unchanged: every place stock reads a level reads the keyed type's.

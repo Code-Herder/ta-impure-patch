@@ -5609,7 +5609,8 @@ static int fix_weapon_keys(void)
      from 0x438694, esi the target's def from 0x438658, the ticks between steps at [esp+0x1C],
      the argument 0x4386C3 multiplies by): the answer takes all four, to hold the factor to
      what the 32-bit product holds; edi = the workertime, edx = the factor, on at 0x4386B9,
-     `imul edi,edx`; nothing from there reads eax or ecx before writing them.
+     stock's `imul edi,edx` or B10's jump (fix_reclaim_wrap), which reads the same two;
+     nothing from there reads eax or ecx before writing them.
    No branch lands inside any of the seven (rel8/rel32 scan of .text and every dword of the
    image). */
 static unsigned char* vet_call(unsigned char* p, unsigned char unit_push, const void* fn)
@@ -5747,6 +5748,123 @@ static int fix_veterancy(void)
     VET_SITE(0x004043D8u, 7,  cost,   ck, "veterancy: the capture's cost");
     VET_SITE(0x0043869Du, 7,  rcl,    cm, "veterancy: a unit reclaim's step");
 #undef VET_SITE
+    return FIX_TABLE;
+}
+
+/* ===== B10: A UNIT RECLAIM'S STEP, ITS PRODUCT IN 64 BITS ====================================
+   Section B's tenth item (research/notes/tadr-port/sim-fixes.md, B10).
+
+   THE DEFECT [DISASSEMBLED]. 0x438650(reclaimer, target, ticks), ret 0xC, called by the reclaim
+   order 0x40483D and the build order's reclaim 0x414C86 (both push 0xF), sets the HP a unit
+   reclaim takes from its target every 15 ticks ([order+0x36], dealt as a kind-5 hit through
+   0x489BB0 at 0x404981 and 0x414B8D):
+       st0 = max(the target's def +0x18A, 10.0 at 0x4FD2A4)              (0x43865F..0x438680)
+       edi = workertime (def +0x1FE, u16) * (kills + 5)/5 * the target's MaxHitPoints
+             (def +0x1FA) * ticks, in 32 bits           (0x4386B9 0x4386BC 0x4386C3; C3's
+             keyed factor arrives at 0x4386B9 in edx, as stock's does)
+       step = _ftol(edi, read as a qword with a zero high dword at 0x4386CC,
+                    / (st0 * 300.0 at 0x4FD2A8)), at least 1                   (0x4386D0..0x4386E9)
+   so the product wraps past 2^32 - 1: ARMCOM's 300 on a CORKROG wraps at stock's factor 32, 155
+   kills, and takes a sliver of its step. And a quotient past 2^31 - 1 would come back from
+   _ftol 0x4E43A0 (fistp qword, chop) as its low dword, which `cmp eax,1; jg` turns into 1 when
+   negative. The only product that takes a def's +0x1FA (0x46A4CC's mul is the health bar's
+   divide by 3); the other ten workertime reads divide it by 30 (0x88888889), and 0x42B673
+   copies it.
+
+   THE FIX. The product is computed exactly as an unsigned 64-bit value, saturated at INT64_MAX so
+   that `fild qword` reads it positive, into the same qword (0x4386B9..0x4386CF: the three
+   imuls, the store and the fild, replaced; the stub runs the fild and goes on at 0x4386D0, so
+   the engine's own fxch, fmul and fdivp run unchanged). And the quotient is clamped to
+   2147483647.0 before _ftol (0x4386D8..0x4386DE: the fdivp and the call, replaced; the stub runs
+   the same fdivp and call and goes on at 0x4386DF).
+
+   THE INVARIANT. For every product below 2^32 the step is bit-identical to stock's: the qword
+   holds the same value with a zero high dword, the x87 operations are the engine's in its own
+   order under its own control word, and the quotient is below 2^32 / 3000, so the clamp never
+   engages. Above, the step is the formula's value, bounded by the saturation and the clamp;
+   B7's saturation of a hit's word (0x489C71) then bounds what it does to the target.
+
+   CLASS: simulation, fail closed, both builds (the reclaimer's peer computes the step and the
+   target's HP carries it). Silent at run time. C3's keyed stub at 0x43869D is untouched: its
+   factor arrives in edx, held to what a 32-bit product holds, which caps a keyed veteran's step
+   below its formula (sim-fixes.md, B10, open for the owner). */
+
+/* x87-free, and so is everything it calls: 0x4386B9's caller holds the target's cost in st0. */
+static void __stdcall b10_reclaim_product(unsigned int workertime, unsigned int factor,
+                                          unsigned int maxhp, unsigned int ticks,
+                                          unsigned int* qword)
+{
+    unsigned long long a = (unsigned long long)workertime * factor;
+    unsigned long long b = (unsigned long long)maxhp * ticks;
+    unsigned long long p;
+    if (__builtin_mul_overflow(a, b, &p) || p > 0x7FFFFFFFFFFFFFFFull)
+        p = 0x7FFFFFFFFFFFFFFFull;
+    qword[0] = (unsigned int)p;
+    qword[1] = (unsigned int)(p >> 32);
+}
+
+static const double s_b10_cap = 2147483647.0;
+
+static int fix_reclaim_wrap(void)
+{
+    static const unsigned char prod[23] = {
+        0x0F, 0xAF, 0xFA,                                   /* imul edi,edx               */
+        0x0F, 0xAF, 0xBE, 0xFA, 0x01, 0x00, 0x00,           /* imul edi,[esi+0x1FA]       */
+        0x0F, 0xAF, 0x7C, 0x24, 0x1C,                       /* imul edi,[esp+0x1C]        */
+        0x89, 0x7C, 0x24, 0x08,                             /* mov [esp+8],edi            */
+        0xDF, 0x6C, 0x24, 0x08 };                           /* fild qword [esp+8]         */
+    static const unsigned char quot[7] = {
+        0xDE, 0xF9,                                         /* fdivp st(1),st             */
+        0xE8, 0xC1, 0xBC, 0x0A, 0x00 };                     /* call 0x4E43A0              */
+    unsigned char* cp = fix_code(48);
+    unsigned char* cq = fix_code(48);
+    unsigned char *p, *j;
+    unsigned int cap = (unsigned int)(size_t)&s_b10_cap, rel;
+    unsigned char now[23];
+
+    if (!cp || !cq) { lim_no_stub(); return FIX_TABLE; }
+
+    /* pushad; lea eax,[esp+0x28] (the qword, [esp+8] before the pushad); push eax;
+       push [esp+0x40] (the ticks, [esp+0x1C]); push [esi+0x1FA]; push edx (the factor);
+       push edi (the workertime); call b10_reclaim_product; popad; fild qword [esp+8];
+       jmp 0x4386D0 */
+    p = cp;
+    *p++ = 0x60;
+    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x28;
+    *p++ = 0x50;
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x40;
+    *p++ = 0xFF; *p++ = 0xB6; *p++ = 0xFA; *p++ = 0x01; *p++ = 0x00; *p++ = 0x00;
+    *p++ = 0x52;
+    *p++ = 0x57;
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)b10_reclaim_product);
+    *p++ = 0x61;
+    *p++ = 0xDF; *p++ = 0x6C; *p++ = 0x24; *p++ = 0x08;
+    wk_jmp(p, 0xE9, 0x004386D0u);
+
+    /* fdivp; fld qword [cap]; fcomp st(1); fnstsw ax; sahf; jae keep (cap >= the quotient);
+       fstp st(0); fld qword [cap]; keep: call 0x4E43A0; jmp 0x4386DF. eax and the flags are
+       dead here: _ftol writes eax, and 0x4386DF's cmp the flags. */
+    p = cq;
+    *p++ = 0xDE; *p++ = 0xF9;
+    *p++ = 0xDD; *p++ = 0x05; memcpy(p, &cap, 4); p += 4;
+    *p++ = 0xD8; *p++ = 0xD9;
+    *p++ = 0xDF; *p++ = 0xE0;
+    *p++ = 0x9E;
+    *p++ = 0x73; j = p++;
+    *p++ = 0xDD; *p++ = 0xD8;
+    *p++ = 0xDD; *p++ = 0x05; memcpy(p, &cap, 4); p += 4;
+    *j = (unsigned char)(p - (j + 1));
+    p = wk_jmp(p, 0xE8, 0x004E43A0u);
+    wk_jmp(p, 0xE9, 0x004386DFu);
+
+    memset(now, 0x90, sizeof now);
+    now[0] = 0xE9;
+    rel = (unsigned int)(size_t)cp - (0x004386B9u + 5u); memcpy(now + 1, &rel, 4);
+    lim_add(0x004386B9u, 23, prod, now, "B10: a unit reclaim's step, its product in 64 bits");
+    memset(now, 0x90, sizeof now);
+    now[0] = 0xE9;
+    rel = (unsigned int)(size_t)cq - (0x004386D8u + 5u); memcpy(now + 1, &rel, 4);
+    lim_add(0x004386D8u, 7, quot, now, "B10: a unit reclaim's step, its quotient clamped");
     return FIX_TABLE;
 }
 
@@ -8546,6 +8664,7 @@ static void patch_engine_defects(void)
     int pview = fix_projectile_view();
     int wkey = fix_weapon_keys();
     int vet  = fix_veterancy();
+    int rclm = fix_reclaim_wrap();
     int word = fix_hit_word();
     int kout = fix_kill_outright();
     int once = fix_meteor_once();
@@ -8646,6 +8765,13 @@ static void patch_engine_defects(void)
               "a received stone's damage left to its spawner (0x49A01B 0x49DF7D 0x49D307) %s; "
               "the radar's owner test with no attacker (0x4673B1) %s",
               fix_state(word), fix_state(kout), fix_state(once), fix_state(radar));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: B10 -- a unit reclaim's step, its product in 64 bits and its quotient "
+              "clamped (0x4386B9 0x4386D8) %s",
+              fix_state(rclm));
     b[sizeof b - 1] = 0;
     plog(b);
 

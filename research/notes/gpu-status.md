@@ -2176,14 +2176,14 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
-while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 265 sites in
+while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 267 sites in
 all in the raised build (MEASURED 2026-09-26 from the log line), and the fixes alone in the
 stock-limits build, where the weapon IDs' four sites join them. It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 265 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 267 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16383, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
 nothing raised (…); the simulation fixes' N sites installed`. Right before it, once both
@@ -2453,6 +2453,7 @@ engine defects we patch".
 | `0x439D41` | the stockpile bar `0x439D20`'s `idiv` by the slot weapon's `+0xE4`, with the slot index unbounded | local: a `jmp` to a 38-byte stub that bounds the index to 0..2, tests the weapon for NULL and `+0xE4` for 0, and takes the function's `return 0` (`0x439D6B`) on any of them |
 | `0x438EDE` | `DrawRangeCircle 0x438EA0`'s guard, which lets N = 0 segments (radius 1) through to `idiv` | local: the `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, so N = 0 takes the radius-0 epilogue |
 | `0x49697B`, `0x499226` | the frame's `call 0x48BAE0` (after the ticks and the keys, before the cull and the draw) and the in-play handler's first instruction after the mouse's world position (after the GUI's dispatch, before the head's first reader), while an order (`main+0x2CC3`: a build placement `0x0E`, or a command mode 2..9, `0xC`, `0xD`) outlives every unit its click would order | local (B9): an `E8` and an `E9` to stubs that call `order_check` under `pushad`, which, when nobody would take the armed order — for a placement the walk `0x419755..0x41976A`'s own test, for a command mode `0x48CF30`'s first test (a selected unit), both bounded — calls the right button's cancel `0x499100` — not while `main+0x531` is NULL, and not until the engine's modal test (`0x37EBE & 0x865` or `0x2BEE & 0xE0`) clears; then `0x48BAE0`, or the stolen `mov edx,[main]` and `0x49922C`; silent at run time |
+| `0x4386B9`, `0x4386D8` | the unit reclaim's step `0x438650`: its product (workertime · `(kills + 5)/5` · the target's MaxHitPoints · 15), taken in 32 bits and read as an unsigned qword by `0x4386CC`'s `fild`, and its quotient's `_ftol` (`0x4E43A0`), which returns the low dword | two rows of the fail-closed table (B10, simulation, both builds): 23 bytes at `0x4386B9` become a `jmp` to a stub that calls the x87-free `b10_reclaim_product` under `pushad` (the product in 64 bits, saturated at `INT64_MAX`, into the same qword `[esp+8]`), runs the `fild` and goes on at `0x4386D0`; 7 bytes at `0x4386D8` become a `jmp` to the same `fdivp`, a clamp of st0 to 2147483647.0, the `call 0x4E43A0` and `0x4386DF`. Stock's step for every product below 2³², bit for bit; C3's keyed stub `0x43869D` is untouched and jumps to `0x4386B9`; silent at run time |
 | **the weapon keys (TADR section C, landing C2, simulation):** `0x42E310` (the weapon load's entry), `0x49ABB0` (the can-engage test's entry), `0x43F1D4` (the order action's unit branch), `0x49B9EB` (the guidance's water test), `0x49E1FD` (AutoAim's fire gate); the store is filled at A′3's ID site `0x42E468` | not a defect: TADR's weapon keys `nottoair`, `nottounderwater`, `surfacefire`, `notoverwater` and `notoverland`, which the stock loader never reads | every row in the fail-closed table, both builds; each site runs the engine's own instructions for a weapon whose key byte is 0, so stock content runs stock's bytes. §2.97 has the whole landing |
 | **transported explosions (TADR section C, landing C4, simulation):** `0x49B017` (the death explosion's pick), `0x48664B` (`Send_UnitDeath`, its record complete), `0x486679` (its call of the destructor), `0x4867CB` (the destructor's detach of its own unit when carried), `0x486810` and `0x48681D` (the destructor's cargo loop: a passenger, and its detach), `0x486F10` (kill-all's entry), `0x42B019` (the menu-time loader's store of `CRC_weapons`); B4's `0x4C` branch (`doDeath`) calls the destructor through the same wrap | not a defect: TADR's unit keys `TransportedExplodeAs` and `TransportedSelfDestructAs`, which the stock loader never reads; and two stock broadcasts inside kill-all for a departed player (the `0x0A` of each of the destructor's detaches), which let the first peer to remove a player decide the others' pictures of its passengers | every row in the fail-closed table, both builds; a type without the keys gets stock's pick, and a unit's sync value changes only for a type with a key naming a loaded weapon. §2.101 has the whole landing |
 
@@ -19354,6 +19355,16 @@ by the `sprintf` that follows it.
 | `0x489BF3`, the veterancy reduction's start | A call whose amount is 30 000 or more (kill outright: self-destruct, player defeat, a dying transport's cargo; and the D-guns) skips the reduction, as the armour reduction already skips it (`0x489BD1`). Stock let a veteran above 24 000 HP survive its own self-destruct. Counted when the victim had a level. Simulation. |
 | `0x49A01B`, the damage gate, with the calls at `0x49DF7D` and `0x49D307` | A meteor is computed on the peer that spawned it. Every peer runs its own shower and broadcasts each stone; stock computed every stone on every peer, so a stone's hit was applied once by the victim's owner and once more for each other peer's `0x0B`. The spawn marks its stone's `+0x62` 0, the receiver's meteor branch 1; the gate sends a projectile with no attacker, owner 10 and the mark 1 where stock sends a remote one's (`0x49A0AE`): its explosion plays and its damage is its spawner's. The mark lives in the record, so the pool's compaction carries it. Counted. Simulation. |
 | `0x4673B1`, 11 bytes, local | The radar rebuild's owner test for a targetable projectile out of sight read the attacker's owner through a NULL attacker. No attacker is not the local player's, the answer every other player's projectile gets. Counted. |
+
+**B10: a unit reclaim's step in 64 bits (two rows of the fail-closed table).** C3's survey found that
+`0x438650` multiplies the reclaimer's workertime, its `(kills + 5)/5`, the target's MaxHitPoints and the
+15 ticks in 32 bits, so a veteran's step wraps: an ARMCOM at 155 kills (factor 32) reclaiming a CORKROG
+took 1 HP a step where the formula gives 486. `0x4386B9` (23 bytes) takes the product in 64 bits,
+saturated at `INT64_MAX`; `0x4386D8` (7 bytes) clamps the quotient to 2147483647.0 before `_ftol`. Both
+keep the engine's x87 operations in its order, so every product below 2³² gives stock's step bit for bit.
+C3's keyed site `0x43869D` is not touched: its keyed path jumps to `0x4386B9`, so a keyed factor gets the
+same product. The plan's B10 entry has the numbers ([simulation fixes, B10](tadr-port/sim-fixes.html)).
+C3's factor hold is now narrower than it needs to be; releasing it is left open for the owner.
 
 **Threads.** The keys are written on the LOADER thread inside the level's load (and a saved game's),
 before play; everything else runs on the GAME thread: the sim tick's damage, reload, aim and orders,
