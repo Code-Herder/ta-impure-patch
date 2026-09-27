@@ -298,8 +298,16 @@ capture time out; it never returns a stale file.
 drains, with the source it restored from beside it: `tagpu_restore_<tag>_vk.rgba` (`.mips` for the
 units, whose twin carries a mip chain) and `tagpu_restore_<tag>_vk.base` — the RGBA8 base atlas
 the world passes draw from — for the terrain, features, effects and units; the UI's source is its
-R8 atlas, `.r8`. It reads a finished image off the device, so it needs no window, no parked pointer and no settle
+R8 atlas, `.r8`. Beside them, `.pal` (the palette) and `.idx` (`# atlas W H`, then one line per
+painted frame: `dx dy w h key wrap border padR padB`). It reads a finished image off the device, so it needs no window, no parked pointer and no settle
 heuristics, and it answers whether two builds restore the **same bytes** for the whole atlas.
+
+**Whether the bytes are right** is `tools/restore-dumpcheck.py <gamedir>` (the venv's python):
+it restores every frame the `.idx` lists again from the dumped source with the torch model in
+strict fp32 and the DLL's colour-key stand-in, and holds the twin to it — at most one level on
+under 0.01 % of opaque bytes, keyed texels `(0,0,0,0)`, the ring a copy of the edge, the mips the
+exact box average. One line per job, `PASS`/`FAIL`; `--tag terr` for one job, `--json`; exit 0, 1,
+or 2 when nothing was checked. It needs no pack, so it works on any scenario.
 
 ```bash
 tools/tacli arm <i> classicpp.on 'native.on=all wrecks' terr.on feat.on fx.on gui.on \
@@ -314,7 +322,7 @@ tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --vsync off
   fixtures and often never drain inside the window.
 - **Diff the `.base` too** — a twin that differs over a source that does not is the restorer's;
   one whose source differs is the atlas upload's, and the restore is only repeating it.
-- **Compare the code-determined counts** in the restorer's lines (frames, batches, draws), never
+- **Compare the code-determined counts** in the restorer's lines (frames, batches, dispatches), never
   the timings: the slice budget is wall-clock driven.
 - **A difference that is a multiple of the cell pitch squared is a dropped frame, not a wrong
   pixel**: `34² = 1156` for terrain (32 px tile + 1 px border each side). Cluster by

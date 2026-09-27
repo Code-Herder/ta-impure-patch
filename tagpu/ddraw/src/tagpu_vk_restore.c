@@ -24,9 +24,10 @@
    push constants, recorded into the stream with the dispatch it belongs to.
 
    THE CHECK ON THIS FILE IS BYTES, NOT PIXELS. Under `tagpu_restoredump.on`
-   each job writes its finished destination (`dump_step`), and that file is
-   compared against the torch reference of the same source by `tools/tascene`
-   restorediff and its siblings. It needs no window and no settle heuristic.
+   each job writes its finished destination (`dump_step`) with its source and
+   frame list beside it, and tools/restore-dumpcheck.py restores the same frames
+   with the torch model and holds the two to D11's bar. It needs no window and
+   no settle heuristic.
 
    THE LAUNCH SELF-TEST IS HERE TOO (research/notes/compute-restorer.md D2,
    D13): the first bring-up on a device closes the core's gate, runs a

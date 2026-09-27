@@ -1,14 +1,15 @@
-# The fp32 compute restorer — the plan
+# The fp32 compute restorer
 
-**Written** 2026-09-27. **Planned, nothing built in the game.** The design is being settled one
-question at a time with the owner; this page holds the decisions taken so far, the questions still
-open, and the TODO list of the work. fp16 (cooperative matrices) is deferred.
+**Landing 1 is built** (2026-09-27): the restorer's backend is Vulkan compute, with a self-test at
+every launch and a per-driver record when it fails. It is verified on the reference setup; its
+Windows test is still to run. **Landing 2** (the terrain seam fix and the tiny model for terrain)
+is planned. fp16 (cooperative matrices) is deferred.
 
 The restorer is the learned unditherer Classic++ runs on the game's art ([Classic and Classic++
-renderers](renderers.html), [Undithering screenshots](undither.html)). Today it is a fragment-shader backend
-(`tagpu_vk_restore.c`) under the API-free core (`tagpu_restore_core.c`): job queues, batches, a
-GPU-time budget per frame, and the pass sequence fill → one pass per layer → out. This work
-replaces that backend with Vulkan compute, then uses the speed for terrain restored across tile
+renderers](renderers.html), [Undithering screenshots](undither.html)). The API-free core
+(`tagpu_restore_core.c`) owns the job queues, the batches, a GPU-time budget per frame and the pass
+sequence fill → one conv per layer → out. Landing 1 replaced the fragment-shader backend under it
+with compute (`tagpu_vk_restore.c`); landing 2 uses the speed for terrain restored across tile
 seams.
 
 ## What the benchmark measured
@@ -32,6 +33,123 @@ Against the torch reference, the fp32 kernel differs on 0.0011 % of bytes, by at
   gets.
 - A 12-px apron makes chunking exact: identical bytes at chunk sizes 37, 64, 100 and 200.
 
+## Landing 1, as built
+
+### The backend
+
+`tagpu_vk_restore.c` is a Vulkan compute backend under the unchanged core
+(`tagpu_restore_core.c`); the fragment backend, its shader header and its settings are gone. The
+shaders are `tagpu_restore_comp.h`, compiled by `tools/spirv-gen.py`:
+
+| shader | what it does |
+|---|---|
+| FILL | the model's input, one vec4 per texel; a keyed texel takes the mean of the opaque texels on the nearest Chebyshev ring within the model's depth (wrapped for a wrapping frame, clipped otherwise); 0 outside every slot's rect |
+| CONV | one 3×3 layer; a workgroup is 16 × TH texels and all output channels, each invocation 8 texels × 8 channels, the input staged 4 channels at a time with its halo. At most 12 KB of shared memory and 128 invocations. One variant per layer shape, read out of the shipped weight files at build time |
+| OUT | `in − net`, written as `(k + 0.25) / 255` into the consumer's twin (a storage image) with the frame's border and slack ring as a copy of the edge; `(0, 0, 0, 0)` at a keyed texel |
+| MIP | the unit chain's levels, the exact integer `(sum + 1) / 4` of each 2×2 box |
+
+- **The grid.** A batch is a square of up to 8 × 8 slots, pitch S + 1, so every slot ends in a zero
+  column and row and a 3×3 tap never reaches a neighbour's rect: that is the padding rule by
+  construction. The activations are two storage buffers (the ping-pong), `[gh][gw][channels]` fp32.
+- **Bands.** A conv layer is dispatched in bands of 64 rows (`TAGPU_R_BAND`), so the core's
+  budget (12 ms of GPU time per frame by default) can stop between them on a slow device.
+- **The slot table** goes into the stream with `vkCmdUpdateBuffer` at each batch's FILL.
+- **Ordering** is pipeline barriers only; there are no render passes. One barrier after each stage
+  (FILL, a layer's last band, OUT) from compute writes to every later reader, and one at the head
+  of each slice whose first scope is every earlier submission on the queue, which is what lets
+  the activations and the table be shared across slices instead of copied per frame slot.
+- **The weights** are the same `<model>.w32.bin` (`unditherer/weights.py`), repacked once at
+  bring-up into the conv kernel's layout and uploaded to one storage buffer.
+- **Settings.** `tagpu_restoreglsl.on` takes `log` and `budget=<ms>` (0.5 to 100) and nothing
+  else (D11).
+
+### The launch self-test (D2, D13)
+
+The first bring-up on a device closes the core's gate, so consumers' jobs queue but nothing of
+theirs is dispatched. Two probe jobs (priority −1) then run through the same pipelines: a base
+atlas with a keyed frame (a disc, a strip and lone keyed texels, with right-hand slack) and a
+wrapping frame, restored into a twin with a two-level mip chain; and an R8 atlas with a keyed
+frame (bottom slack) and a wrapping frame. Nothing in the probe comes from the game. While the
+GPU runs it, a worker thread computes the same frames on the CPU from the loaded weights
+(`tagpu_restore_ref.c`). The readback passes when every colour byte is within one level of the
+CPU's and every alpha byte equal, the border and slack rings included, and the mip levels are the
+exact box average of the level above; a pass opens the gate.
+
+- **Wrong bytes**: the device and driver are recorded off, every job fails, the notice shows.
+- **Could not run** (the probe could not be built, a probe job failed): the restorer is off for this
+  session only, with no record.
+- A swapchain rebuild on the same device does not test again.
+
+On the reference setup the CPU reference takes 313–339 ms and the readback matches it exactly
+(11,032 bytes, 0 levels).
+
+### The guard (D2, D12, D14) — `tagpu_restore_guard.c`
+
+- **A crash.** An unhandled-exception filter, installed at the restorer's first bring-up ahead of
+  TA's own (`0x4DA2A0`, which writes the crash report and calls no earlier filter). It blames the
+  restorer only while the render thread is inside one of the backend's public calls; everything
+  else goes on to TA's filter. Unhandled only, never vectored: drivers raise and catch
+  first-chance exceptions of their own.
+- **A lost device.** The seam blames the restorer when the device is lost or a frame fence times
+  out while a frame that carried restorer work is unfinished (a per-slot mask, set when a step
+  records anything and cleared after that slot's fence wait).
+- **Relaunch.** For a crash or a lost device, the process writes `tagpu_restore_crashed.txt`
+  from buffers built at install (nothing on that path allocates), starts `TotalA.exe` again with
+  its own command line and working directory plus `TAGPU_RESTORE_RELAUNCHED=1`, and ends. There is
+  no relaunch when the marker could not be written, and a relaunched process never relaunches.
+- **The record** is one key, `vendor:device:driver` in hex: `restoreoff=` in `impure.cfg`, or
+  `tagpu_restore_off.txt` under `tagpu_defaults.off`. The next process turns the marker into the
+  record and shows the notice. A record naming another device or driver is dropped.
+- **The notice** is one message box on its own thread saying what happened and that it is tried
+  again after a driver update, or from the render options.
+- **The render options.** *Undithered assets* has a third stage, **"Off (driver)"**, shown while
+  the record names this device. D12 asked for "Off (this driver)"; that text overran the row's
+  three stage lights, so it is shortened. A click on it clears the record, moves an epoch and
+  goes to On. The backend's refusal and every consumer's "the restorer refused" latch hold only for
+  the epoch of their attempt, so all of them ask again; another failure turns it off again.
+- **The fault lever** `tagpu_restorefault.on` drives each path: `probe` spoils one byte of the
+  self-test's readback, `crash` faults inside FILL, and `lost` has the seam report a device loss
+  while restorer work is in flight.
+
+### Verified on the reference setup
+
+**D11's bar**, by `tools/restore-dumpcheck.py` on the dumps of `tagpu_restoredump.on`
+(`feat-forest`, Two Continents). It restores every dumped frame again with torch fp32 (TF32 off)
+from the source dumped beside it, with the DLL's key stand-in, and holds the twin to it:
+
+| job | frames | bytes that differ | max | also checked |
+|---|---|---|---|---|
+| terrain | 5,062 | 152 of 15,550,464 (0.0010 %) | 1 | ring 0 of 2,672,736 |
+| features | 22 | 0 of 61,911 | 0 | 19,553 keyed texels (0,0,0,0) |
+| effects | 10 | 0 of 4,242 | 0 | 1,159 keyed texels |
+| units | 57 | 1 of 236,544 | 1 | mip levels 1 and 2 exact |
+| UI | 3 | 6 of 322,032 (0.0019 %) | 1 | 416 keyed texels |
+| UI pictures | 9 | 17 of 2,906,289 | 1 | — |
+
+**The guard**, one launch per path: the self-test passing; `probe` failing it (the notice, the
+row reading "Off (driver)"); the record holding on the next launch; the row's retry passing;
+`crash` and `lost` each relaunching once, with the record and the notice in the new process;
+the file record under `tagpu_defaults.off`; a record naming another driver dropped.
+
+**The cost**, the same instance and scenario (`feat-forest`, 1024 × 768, vsync off, a private
+display, the RTX 4070), terrain only:
+
+| backend | wall | GPU | fps while restoring |
+|---|---|---|---|
+| fragment (main before this landing) | 3,578 ms | 1,627 ms | 39.4 |
+| compute | 996 ms | 389 ms | 42.2 |
+
+### Not closed by landing 1
+
+- **The Windows test** (D1) on the AMD R9 200-series card is still to run. The fragment backend's
+  fix for that driver (render-pass dependencies it dropped, [status](gpu-status.html) §2.95) does
+  not apply to compute, which has no render passes; the same bytes check is what shows whether
+  the card is right.
+- **The crash filter's relaunch** calls `CreateProcessA`. A crash that holds the heap lock can
+  deadlock it; the marker is written before, so the next launch still has the record.
+- **An unreadable settings store** keeps the record in memory only: at most one crash and one
+  relaunch per launch by hand.
+
 ## Decisions
 
 | # | decision |
@@ -47,7 +165,7 @@ Against the torch reference, the fp32 kernel differs on 0.0011 % of bytes, by at
 | D9 | **No disk cache.** The terrain is restored every time a map is played. |
 | D10 | **Whether the atlas fits** is decided before allocating. Its size is exact once the map loads (keys × cell size). The driver's memory-budget query gives the memory still free for the game; a driver without that query counts a quarter of the GPU's device-local memory as free. The atlas fits when it takes at most half of that free memory. An allocation the driver still refuses falls back as well. |
 | D11 | **Settings and the bar for landing 1.** The `fp16`, `nk=` and `tiny` settings are removed; `budget=` and `log` stay. The swap passes when every job is within one level of the torch reference on under 0.01 % of bytes. The terrain A/B that gates D3 runs offline with the unditherer, so the game has no model switch. |
-| D12 | **The notice.** One message box when the restorer turns itself off (it crashed, or the startup check failed), saying what happened and that it is tried again after a driver update. While it stays off, the render options' *Undithered assets* row reads "Off (this driver)"; picking On clears the record and tries once more, and another crash turns it off again. |
+| D12 | **The notice.** One message box when the restorer turns itself off (it crashed, or the startup check failed), saying what happened and that it is tried again after a driver update. While it stays off, the render options' *Undithered assets* row reads "Off (driver)" (built shorter than the "Off (this driver)" asked for, which did not fit); picking On clears the record and tries once more, and another crash turns it off again. |
 | D13 | **The self-test's reference is computed on the CPU at launch**, by a plain C version of the network from the weight files actually loaded, on a worker thread while the game starts (about 0.5 s; 1–2 s on an old CPU). It passes when every byte is within one level of it. Nothing has to be kept in step with the weight files, and the build needs no torch. |
 | D14 | **What counts as the restorer crashing:** a crash on the render thread inside a restorer call; the GPU device lost while a frame carrying restorer work is unfinished (today a lost device takes the whole Vulkan renderer down, whoever caused it); the launch self-test failing. Nothing else is blamed. A wrong blame costs only undithering on that driver, and D12's row retries. |
 | D15 | **D3's gate is a sheet the owner judges**, published as an artifact: eight maps picked by terrain type (water, snow, lava, metal, desert, grass, rock, the largest), each with the crop where tiny and full differ most and one ordinary crop, shown dithered, tiny, full and their difference. Every image opens in a lightbox that zooms to 100 % and beyond. The numbers go in this note beside the verdict; a map where the owner sees a loss sends terrain back to full. |
@@ -77,19 +195,18 @@ running and draws the original dithered art.
 ## Open
 
 Nothing: every question has an answer. These follow from the code and the limits rather than from
-a choice, and the implementation takes them as given:
+a choice, and landing 2 takes them as given:
 
 - **The per-cell index is 32-bit.** Seven Islands' 303 MB atlas is roughly 65,000–69,000 cells of
   34×34 RGBA8, at or past what today's 16-bit `TILE_MAP` can index.
 - **The atlas pages within the device's limits** (a 2D array texture sized by
   `maxImageDimension2D` and `maxImageArrayLayers`): in today's 64-column layout Seven Islands would
   be about 35,000 px tall, past the 16384 most devices allow.
-- **The per-driver record lives in `impure.cfg`,** not in a new file.
 - **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
   no `rundll32`, both of which antivirus software watches.
-- **The Windows test runs before landing 1 lands**, on the Windows test setup's AMD Radeon R9
-  200-series card (2816 MB, a Vulkan 1.1 driver: fp32 only), with the machine's time shared with
-  the mod-compatibility regression work.
+- **The Windows test runs on** the Windows test setup's AMD Radeon R9 200-series card (2816 MB, a
+  Vulkan 1.1 driver: fp32 only), with the machine's time shared with the mod-compatibility
+  regression work.
 
 ## TODO
 

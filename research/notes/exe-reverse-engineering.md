@@ -1919,6 +1919,39 @@ flagged `0x800000` at `+0x241`, a flag the sync clears for a type that did not s
 Divide by Zero … at `0049e6b0`, Exception handler called in Out of memory handler" under our text
 ("1778 unit types are installed"), the box shows it, and OK exits.
 
+### TA's crash filter — `0x4DA1D0`, `0x4DA2A0` [DISASSEMBLED + MEASURED 2026-09-27]
+
+**`0x4DA1D0(flags)`**, cdecl, sets up crash reporting once (the latch `0x5289CC`). It reads the
+command line's `-debughelper` (`0x4D9F60` with the text at `0x50D1A8`, then `=%d`), and then, by
+bit:
+
+- bit 2 clear: `SetUnhandledExceptionFilter(0x4DA2A0)` at `0x4DA247` (the IAT slot `0x4FC1AC`).
+  The previous filter it returns is **discarded**.
+- bit 4 clear: `0x4DF160`.
+- bit 8 clear: more setup from `0x4DA266` on, not traced.
+
+Its one live caller is WinMain, `0x49E83C`, with flags 8, just before it installs the
+out-of-memory handler above (`0x49E849`). The other call site, `0x4DA3E0` (flags 0), has no
+callers: no call, no jump and no pointer to it anywhere in the image.
+
+**`0x4DA2A0`**, the top-level filter, stdcall on the `EXCEPTION_POINTERS*`: it returns
+`0x4D8E60(e, "Global Exception Handler")` (the text at `0x50D2D0`) and calls no earlier filter,
+because none was kept. `0x4D8E60` is the crash report: an `0x143F0`-byte frame, and a re-entry
+latch at `0x5289C0`, so a fault inside the report answers 0 (`EXCEPTION_CONTINUE_SEARCH`) at
+once. Its other callers are `0x49E6BF` (inside `0x49E680`, the out-of-memory handler's register
+dump), `0x4CBABD` and `0x4D9C07`.
+
+**The C runtime's pair.** `0x4F2240` installs `0x4F21E0` and keeps the previous filter at
+`0x52A428`; `0x4F2260` puts that one back. Neither has a direct caller: the only references are
+the pointers at `0x50105C` and `0x50107C`, in two null-bounded tables of function pointers in
+`.data` — the runtime's start-up and exit lists [INFERRED]. So the runtime's filter is in place
+before WinMain and is replaced, unchained, by `0x4DA2A0`.
+
+**What this means for us** ([gpu-status](gpu-status.html) §2.102): a filter installed after
+WinMain sees an exception first and must pass on what is not its own; `tagpu_restore_guard.c`'s
+is installed at the restorer's first bring-up and logs `004DA2A0` as the filter it passes to
+(MEASURED on the reference setup).
+
 ### The unit sync's keys, and the join's pace — `0x4B6BA0`, def `+0x13E`, `0x46D6C0..0x46DEC8` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The key.** The menu-time loader `0x42A8D0` reads each FBI whole (`0x4BB7C0`) and stores

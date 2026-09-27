@@ -778,8 +778,7 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
 
 
 # The Classic++ restorer's weights (unditherer export-weights): the DLL runs the
-# model as GLSL passes in its own context and reads <model>.w32.bin beside
-# TotalA.exe, so the two files are linked from the package that owns them rather
+# model as Vulkan compute and reads <model>.w32.bin beside TotalA.exe, so the two files are linked from the package that owns them rather
 # than copied into every gamedir. mirror_gamedir() runs only at create, so an
 # instance made before a file existed would never see it -- they are re-linked
 # at launch instead, alongside deploy_dll and so, deliberately, under the same

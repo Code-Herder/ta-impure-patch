@@ -1853,6 +1853,16 @@ raw, 0.93 GB zstd (§4). Recorded because the asymmetry is worth knowing; it is 
 
 ## 4c. The GLSL restorer — how it works, and the prototype plan  [DECIDED 2026-09-05]
 
+**The fragment mechanism below is no longer what runs.** Since 2026-09-27 the restorer's backend
+is Vulkan compute: FILL, one conv per layer in bands of 64 rows, OUT and MIP as compute shaders,
+with a self-test at every launch ([The fp32 compute restorer](compute-restorer.html)). Gone with
+the fragment backend: the one-pass-per-layer draws, the float-texture activations, NK, fp16, the
+`tiny` switch, the browser lab's `restore=glsl` lane and `tascene restore`. **Still true, and
+still the core's** (`tagpu_restore_core.c`): the padding rule, the size-class batches and their
+slot grid, the queues and priorities, the GPU-time budget, the reveal by the twin's alpha, the
+colour-key stand-in, the `(k + 0.25) / 255` rounding, Q2's bar and Q8's dump trigger. The
+measurements in this section are the fragment backend's.
+
 *The decisions below were taken one branch at a time on 2026-09-05; each is marked with what
 it fixes. The mechanism comes first because the decisions refer to it.*
 
@@ -1984,8 +1994,8 @@ two-frame batch must not pay for sixty-four — and its slot pitch is its larges
 shares a batch with a 63×60 rock, a 512-px frame restores alone, and the lab's four feature batches
 run on 5×5, 4×4, 4×4 and 3×3 grids.
 Activations are sized to the largest `cols × S` seen, never past 512² (128 MB at fp32), and freed
-after 3 s without work. The lab and the DLL run the identical batcher (`tascene-restore.js`
-`batchFrames`, `tagpu_restoreglsl.c` `form_batch`); the terrain's two classes come out as before.
+after 3 s without work. The batcher is the core's `form_batch` (`tagpu_restore_core.c`); the terrain's two classes come
+out as before.
 
 **The queues.** `tagpu_restoreglsl.c` is a pool of jobs sharing one set of GL objects and one
 per-frame budget, stepped once per frame by `tagpu_native.c` *after the gathers* (so a frame missed

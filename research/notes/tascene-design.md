@@ -221,11 +221,21 @@ the visible cell count, off-map cells, features and unit triangles.
 | `serve <pack>` | the lab on loopback. `--port` (default: an ephemeral one) |
 | `shot <pack> -o <png>` | one deterministic headless frame. `--opts '<query>'` passes the viewer parameters below; `--timeout`, `--budget` (Chrome's `--virtual-time-budget`, ms); `--json` |
 | `artlight` | **is the map art already painted lit?** `--map <name>` or `--all`; `--steep` (default 0.25 ≈ 14°), `--elevation` (default 53.1, the engine's own), `--json` for the whole azimuth curve. Needs no pack and no game — it reads the TNT. See "Does the art already contain the hill" below |
-| `restore <pack>` | **the GLSL restorer's bench** ([renderers](renderers.html) §4c): the viewer under `restore=glsl&restorediff=1` in headless Chrome, its report read out of the DOM — the terrain atlas **and the feature atlas** (colour-keyed, non-square: since 2026-09-05). `--model full\|tiny`, `--precision fp32\|fp16`, `--nk N` (output channel-tiles per conv draw; default the device's most), `--no-diff` to time only, **`--gpu vulkan`** for ANGLE on the real adapter (SwiftShader is the default: deterministic, and ~10 min for Two Continents against 1.2 s on the 4070), **`--save-features <rgba>`** to write the restored feature atlas (the pack's layout), `--opts`, `--timeout`, `--budget`, `--json`. Exit 1 when either diff fails its bar: the terrain's is Q2; the features' is Q2 on the *far band* (opaque texels farther than the model's depth from any keyed texel) with the near band reported — max, mean, differing — for the eye |
-| `restorediff <pack> <dump.rgba>` | the in-game proof: the DLL's `tagpu_restore.rgba` (written once under `tagpu_restoredump.on`, the same 2176-wide 34-pitch layout as the pack's `terrain/atlas.rgba.bin`) diffed against the pack with the same bar. Exit 1 on failure |
+| `restorediff <pack> <dump.rgba>` | the terrain twin the DLL dumps under `tagpu_restoredump.on` (`tagpu_restore_terr_vk.rgba`, the terrain pass's 2176-wide atlas of 34-pitch cells, the pack's `terrain/atlas.rgba.bin` layout) diffed against the pack with the Q2 bar ([renderers](renderers.html) §4c). Exit 1 on failure |
 | `uidiff <prefix>` | G15e's Q2 diff for the **UI** atlas's restored twin ([GL UI renderer](gui-renderer.html) §14). There is no UI pack and no sequence-name registry, so the reference is the dump's own cells: each entry's index plane is cut from the `.r8` and restored offline through the same cached wrapper `build --undither` uses, which makes the coverage total. Applies the same two-band bar as `featdiff`. Reads the presented palette from `<prefix>.pal` when `uiwalk --restore` left one there (`--palette` overrides, `palette.pal` is the fallback) — **assuming `palette.pal` is wrong on any instance whose Gamma is not 12**. Restores each cell with the **tileability flag the dump carries** rather than re-deriving one, and counts the entries whose flag the live palette would not produce. `--min-edge` (default 12) is the atlas's own restore floor: those entries were never queued, and are reported, not diffed. `--sheet` writes the worst frames as indexed \| ours \| offline \| difference ×8 |
-| `featdiff <pack> <prefix>` | the in-game proof for a GAF atlas's restored twin: `tagpu_restoredump.on` also makes the DLL write `tagpu_restore_feat.{r8,rgba,idx}` (and `_fx`) once the queue drains — the source atlas, the twin and a line per entry `x y w h key wrap` — and this finds each entry's frame in the pack (same size, identical indices) and applies the two-band bar, plus alpha 0 on the key and the 1-texel border a copy of the edge. `--radius` (default 12, the model's depth). Entries the pack does not carry (effects: the pack has no weapon or build sprites) are counted, not diffed; exit 1 on failure or when nothing matched |
+| `featdiff <pack> <prefix>` | the in-game proof for a GAF atlas's restored twin, written for dumps with an R8 source: the world passes now dump their RGBA base atlas as `.base` and no `.r8`, so `featdiff` and `unitdiff` find nothing to read there, and `tools/restore-dumpcheck.py` (below) is their check. The dump format it was written for: `tagpu_restoredump.on` makes the DLL write `tagpu_restore_feat.{r8,rgba,idx}` (and `_fx`) once the queue drains — the source atlas, the twin and a line per entry `x y w h key wrap` — and this finds each entry's frame in the pack (same size, identical indices) and applies the two-band bar, plus alpha 0 on the key and the 1-texel border a copy of the edge. `--radius` (default 12, the model's depth). Entries the pack does not carry (effects: the pack has no weapon or build sprites) are counted, not diffed; exit 1 on failure or when nothing matched |
 | `ab <scenario.json>` | drive both sides and diff. `--name` the instance (default `tascene`), `--no-launch` to use one already running, `--eye X,Y` to pin the camera, `--los`/`--mapping` for the SKIRMISH fog toggles (defaults `0`/`1` = no fog), `--settle` seconds to wait for a roster with units and a real eye, `--opts`, `--launch-timeout`, `--json` |
+
+**The game's own dumps, every job, no pack: `tools/restore-dumpcheck.py <gamedir>`.** Under
+`tagpu_restoredump.on` each restorer job writes `tagpu_restore_<tag>_vk.*`: the source (`.base`,
+RGBA, for the world passes; `.r8` for the UI's), `.pal`, the twin (`.rgba`, or `.mips` with the
+unit chain) and `.idx` — `# atlas W H`, then one line per painted frame, `dx dy w h key wrap
+border padR padB`. The script restores every listed frame again from the dumped source with the
+unditherer's torch model in strict fp32 (TF32 off), with the DLL's colour-key stand-in rather than
+TELEA, and applies D11's bar ([The fp32 compute restorer](compute-restorer.html)): at most one
+level on under 0.01 % of opaque bytes, `(0, 0, 0, 0)` at every keyed texel, the border and slack
+ring a copy of the edge, and each mip level the exact box average of the one above. `--tag` picks
+jobs, `--model` the weights, `--json`; exit 0 pass, 1 fail, 2 nothing checked.
 
 ### Viewer query parameters
 
@@ -277,7 +287,6 @@ deleted by the vulkan-only plan's landing 11 D3, so the citation is to git, not 
 | `castsmooth=<n>` | low-pass the CASTER's heights over a (2n+1)-cell box, default 0 (off). The obvious "make the caster depict what the flat art depicts" move, and **it makes the acne much worse** — 7.66 → 20.26 at n=3, because caster and receiver must stay the same surface to the world unit. Kept for the null result: it rules out every fix that reshapes the caster |
 | `bslack=<k>` | `k` world units of extra depth allowance per world unit of blocker-search tap offset — `d < z + dot(o, dzduv) − k·|o|`. The receiver-plane bias is a *linear* extrapolation and the search runs a fixed 24 world units; this is the candidate fix for what that leaves uncovered on a curved receiver, in the lab so the game and the lab can be swept with the same knob. 0 = off (default) |
 | `debug=shadow` | (global) show side A's depth map instead of the frame, near = bright |
-| `restore=<how>` | **CLASSIC++ only.** Where the terrain's and the features' restored colour comes from: `pack` (default — `terrain/atlas.rgba.bin` and `features/atlas.rgba.bin`, restored offline by the unditherer at build time) or **`glsl`** — the GLSL restorer (`tascene-restore.js`, the shaders extracted from `tagpu_restore_glsl.h`, the weights from `restore/<model>.w32.bin`) run in the page on the pack's own R8 atlases, which is what the game does; the feature frames go through with their colour key (the FILL pass's nearest-ring stand-in for the reference's TELEA inpaint, alpha 0 written at the key). Implies `undither=1`. With `model=full\|tiny`, `precision=fp32\|fp16`, `nk=N`; **`restorediff=1`** reads both results back and diffs them against the pack's atlases (terrain: the Q2 bar — max 1 level, < 0.01 % of interior RGB bytes, the guard ring a copy of the edge; features: Q2 on the far band, the near band reported), in the status bar and as a hidden `<pre id="restore-report">` for `tascene restore`, with the restored feature atlas as base64 in `<pre id="restore-features">` for `--save-features` |
 | `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
 
 ### The renderer buttons
@@ -333,9 +342,10 @@ inside one — a comment naming a variable the way prose does — closes the lit
 dies at parse time. The symptom is the worst kind: `tascene shot` still exits 0 and still writes
 a PNG, because the shooter's error check reads the page's own error banner and the page never
 got far enough to render one. The frame is simply blank. Cost one debugging cycle on
-2026-09-09. `node --input-type=module --eval "$(the <script> block)"` catches it in a second and
-is the check to run after editing the viewer — a `ERR_MODULE_NOT_FOUND` for `tascene-restore.js`
-means the syntax is fine and nothing else ran.
+2026-09-09. The check to run after editing the viewer is `node --check` on the page's
+`<script type="module">` block saved as an `.mjs` file: it catches the stray backtick in a second.
+Running the block instead of checking it stops at `ReferenceError: location is not defined`, which
+also means the syntax is fine.
 
 
 **The coordinate convention is tagpu's, deliberately.** The extracted vertex shader maps game
@@ -690,6 +700,10 @@ a couple of minutes on the 4070). Against the strict reference the GLSL restorer
 0.0012 % (179 bytes of 15.5 M, max 1 level) on the GPU and 0.0011 % on SwiftShader.
 
 ### The colour key in the lab  [MEASURED 2026-09-05]
+
+*The lab's `restore=glsl` lane was removed on 2026-09-27 with the game's fragment backend; the
+colour-key stand-in it settled is the game's compute FILL today ([The fp32 compute
+restorer](compute-restorer.html)). This is the record of what it measured.*
 
 `restore=glsl` also restores the pack's feature atlas (51 keyed, non-square frames on Two
 Continents' fixture) through the very shaders the DLL runs, and it is where the lazy GAF restore's

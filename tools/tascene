@@ -1362,10 +1362,10 @@ def cmd_shot(args):
 # --------------------------------------------------------------------------- restore
 
 # The in-game proof (renderers.md 4c Q8): tagpu_restoredump.on makes the DLL
-# write its finished atlas once, as raw RGBA in the terrain pass's layout, and
-# this holds it to the pack's atlas with the same bar as `restore` -- same
-# tiles, same 2176-wide 34-pitch cells, same order, so the file diffs byte for
-# byte with no re-layout.
+# write the terrain's finished twin once, as raw RGBA in the terrain pass's
+# layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's atlas
+# with the Q2 bar -- same tiles, same 2176-wide 34-pitch cells, same order, so
+# the file diffs byte for byte with no re-layout.
 
 def cmd_restorediff(args):
     pack = Path(args.pack).resolve()
@@ -1977,10 +1977,10 @@ def main(argv=None):
     t.add_argument("--json", action="store_true")
     t.set_defaults(func=cmd_shot)
 
-    rd = sub.add_parser("restorediff", help="diff the DLL's tagpu_restore.rgba dump against a "
+    rd = sub.add_parser("restorediff", help="diff the DLL's terrain twin dump against a "
                                               "pack's restored terrain atlas (the in-game proof)")
     rd.add_argument("pack")
-    rd.add_argument("dump", help="gamedir/tagpu_restore.rgba, written under tagpu_restoredump.on")
+    rd.add_argument("dump", help="gamedir/tagpu_restore_terr_vk.rgba, written under tagpu_restoredump.on")
     rd.add_argument("--json", action="store_true")
     rd.set_defaults(func=cmd_restorediff)
     fd = sub.add_parser("featdiff", help="hold a GAF atlas's restored twin dumped by the DLL "
