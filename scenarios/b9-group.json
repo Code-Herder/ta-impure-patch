@@ -1,0 +1,25 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B9: a build placement and the units it would order. Three CORCK at 10 percent health for the group case, a CORAK at 10 percent and an ARM LLT out of their reach to the east (Two Continents SW); any of them dies once walked to (1100, 7700) with tacli order. tools/b9-attack-mode.sh arms the CORAK's attack and walks it in.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": { "noshake": true },
+  "players": [
+   { "slot": 0, "controller": "human", "side": "core", "color": 1, "metal": 5000, "energy": 5000 },
+   { "slot": 1, "controller": "ai", "side": "arm", "color": 0 }
+  ]
+ },
+ "units": [
+  { "id": "ck1", "type": "CORCK", "owner": 0, "pos": [740, 7680], "health": 10 },
+  { "id": "ck2", "type": "CORCK", "owner": 0, "pos": [740, 7740], "health": 10 },
+  { "id": "ck3", "type": "CORCK", "owner": 0, "pos": [740, 7800], "health": 10 },
+  { "id": "ak", "type": "CORAK", "owner": 0, "pos": [480, 7880], "health": 10 },
+  { "id": "llt", "type": "ARMLLT", "owner": 1, "pos": [1300, 7700] },
+  { "id": "ai_keepalive", "type": "ARMSOLAR", "owner": 1, "pos": [1400, 7300] }
+ ],
+ "camera": { "at": [700, 7700] }
+}

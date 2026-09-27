@@ -6,8 +6,8 @@ Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our s
 code, over six landings and the ones found since (B7, B8, B9). The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
 grill that followed [the evidence pass](sim-fixes-evidence.md). **All six landings are landed on local
 main (2026-09-25), each after its review**, and B7, four defects the veterancy survey found, landed
-with section C's C3 on 2026-09-26. B8, kill counts across peers, landed the same day after its
-review. The rules
+with section C's C3 on 2026-09-26. B8, kill counts across peers, and B9, an order disarmed when nobody is left to take it,
+landed the same day after their reviews. The rules
 shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
@@ -125,6 +125,9 @@ faces of `0x45A2EC` are left there.
   no valid char fills `o`. Identical to stock for all 126 retail structures.
 - **Resurrection: a time-boxed measurement, else parked.** If the failure branch fires, the unit is
   finalised as the success path does, touching no grid cell.
+- **An order disarmed when nobody is left to take it (B9, added 2026-09-26 from B6's side
+  measurement):** when no unit is left that the click of an armed build placement or command mode
+  would order, the order is ended through the engine's own cancel, silently. Local.
 - **TA's repair rate is the game's rule, not a B defect.** Stock clamps each repairer's HP and
   energy per call to *at most* 1 (`0x41BD87..0x41BDA3`, `min` where the formula reads as `max`).
   It is recorded, and a live check of the per-call rate rides along with a landing.
@@ -239,10 +242,16 @@ the plan below:
   wrecks, 2 standing, and the joiner lost the same 30 with its own damage fields all 0; on the new
   build all 96 stand at 9 999 on the host and all stand on the joiner, whose feature-repeat counter
   read 602, every other B1 counter 0 on both.
-- **Not run:** resurrection's failure branch (parked: no resurrect verb to drive a few hundred of
-  them). The
-  repair rate was measured flat per repairer, ARMCOM (WorkerTime 300) and ARMCK (80) alike, as the
-  disassembly says.
+- **Resurrection's failure branch never fired** (measured 2026-09-26, after the landing, on main
+  `8d033d1` with scratch counters on both exits that were never committed): **847 resurrections
+  by CORNECRO took the success path `0x405164` and none the failure exit `0x405155`**. That is 440
+  of 1×1 wrecks, 126 ordered at a multi-cell wreck's anchor, 136 at another cell of one, and 145
+  in a first layout that was not split by footprint (`scenarios/b1-resurrect.json` and seven
+  variants from its generator, `b1-resurrect.gen.py`). There is no resurrect verb because none is
+  needed: the order resolver makes `reclaim` a RESURRECT for a unit that can resurrect (the
+  engine map's section on `Order_Resurrect 0x404DB0`). TADR's trigger stays unfound, so nothing
+  is ported, as decided. The repair rate was measured flat per repairer, ARMCOM (WorkerTime 300)
+  and ARMCK (80) alike, as the disassembly says.
 
 The plan as written:
 
@@ -1311,9 +1320,17 @@ and where it differs from the plan below:
   from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
   three local fixes rest on the disassembly: none of their inputs is in stock content, and the
   `ShowRanges` cheat could not be typed under injected input.
-- **Not measured:** the side measurement this landing was to carry (a tracked unit's death leaving
-  an order armed, and our build ghost drawing) did not fit its time budget. The engine's removal
-  of a departed host during the load was not exercised: DirectPlay never reported the killed host
+- **The side measurement: the tracked unit's death left the placement armed** (measured
+  2026-09-26, after the landing, on main `8d033d1` with the play defaults, one run of
+  `tools/b6-tracked-death.sh`). A CORCK with CORSOLAR pressed (`main+0x2CC3` = `0x0E`,
+  `BuildUnitID` 246, tracked unit 2) died in an LLT's range. The engine then cleared the tracked
+  unit and popped the build menu, but `0x2CC3` stayed `0x0E` and `0x2CC4` 246, and the placement
+  square and our build ghost kept drawing at the pointer. Both left clicks of the run landed on
+  blocked sites (trees; the CORAK's own cells) and were refused: nothing was placed, the CORAK was
+  not selected, and no order reached any unit. By disassembly a click on a clear site would have
+  handed the build to whatever is selected and ended the placement (`0x498F93..0x498FC0`). It
+  became B9, below.
+- **Not measured:** the engine's removal of a departed host during the load was not exercised: DirectPlay never reported the killed host
   (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
   `DPSESSION_KEEPALIVE` when `createnewgame` makes them; a lobbied one takes the lobby's flags),
   and a host cannot quit through the UI during the load. The departure argument rests on the
@@ -1426,8 +1443,10 @@ scenario `kills` column), then on the new one:
 **Measured alongside a landing** (time-boxed, each with its session):
 
 - resurrection's failure branch: counters on `0x405155`/`0x405164` over a few hundred CORNECRO
-  resurrections of 1×1 and multi-cell wrecks (B1's session);
-- a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6);
+  resurrections of 1×1 and multi-cell wrecks (B1's session) — measured: 0 failures in 847
+  (B1's results above);
+- a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6) —
+  measured: the placement stayed armed and the ghost drew (B6's results above), fixed as B9;
 - a departing host in a three-peer game (B5's session; the result goes to group E) — measured
   2026-09-26: it ends the game on every joiner (B5, *The departing host*);
 - a cargo unit killed in a transport over land leaving its wreck in the air (B2's session; a
@@ -1690,6 +1709,146 @@ only on the victim's owner before that.** The victims here come from the scenari
 creates a unit finished through `0x485F50` (it writes `+0x104` afterwards only for a scenario's
 `nanoframe`, which these set none of); how long a factory-built unit's copy reads nonzero on the
 other peers, and so how often the split happens in play, was not measured.
+
+**B9 — an order disarmed when nobody is left to take it.** Added 2026-09-26 by the owner from B6's
+side measurement; LANDED 2026-09-26 on local main after two reviews at high, every finding acted
+on. Local, both builds, silent at run time. Its
+first build keyed the disarm to the tracked unit's free; the landing review found that a
+regression, since a placement other selected builders could still take would be disarmed with
+the one unit, and it was rebuilt on the click's own test. The owner then extended it from
+build placements to the command modes.
+
+*The defect (stock, UI).* The order byte `main+0x2CC3` is 1 when no order is armed. A build button
+arms a placement, `0x0E`, with `BuildUnitID` `main+0x2CC4` (`0x41AB89`, `0x41AB9C`). The orders
+menu arms a command mode, each value from one gadget and nothing else: MOVE 2 (`0x419C6A`), ATTACK
+3 (`0x419D44`), BLAST 4 (`0x419DB9`), UNLOAD 5 (`0x41A066`), LOAD 6 (`0x41A0D7`), DEFEND 7
+(`0x419E2D`), REPAIR 8 (`0x419EA1`), PATROL 9 (`0x419F16`), RECLAIM `0xC` (`0x419F8A`), CAPTURE `0xD`
+(`0x419FFB`). `0xA` and `0xB` have no writer. Every one is an order for the selection; none stays
+armed with nothing selected on purpose. A left click hands the order to the controlled player's
+block (the record of `main+0x2A42`; `+0x2A43` is the viewed player):
+a placement's click orders **every** selected unit whose type has `+0x241` bit `0x40` (the walk
+`0x419755..0x41976A`) and ends the placement (`0x498FC0`); a command mode's click, `0x48CF30`,
+counts the selected units other than the one under the pointer, returns when there are none
+(`0x48CFDF..0x48D011`), and asks the order resolver `0x43F0E0` per unit with the click's target
+and position (`0x48D0A0`). Stock leaves the byte armed when that set empties: when the selection
+dies (the frame check `0x4995C3` drops the tracked unit through `0x491D70(0)`, which writes
+neither byte), when a key recalls a group without such a unit (the keys' one writer of the byte
+is their cancel `0x495F36`), and when a button arms from a menu `0x491D70` left up because it
+deferred the drop (it only sets `0x37EBE` bit `0x10` while `0x37EBE & 0x865` or `0x2BEE & 0xE0`
+holds, `0x491D86..0x491DA2`). Every left press then goes to the order (`0x4993B6` → `0x498F70`)
+and orders nobody: a placement keeps its square and our build ghost on the pointer, and a command
+mode swallows the click — measured below, the CORCK clicked after the attacker's death was
+neither selected nor tracked, until a right-click or a key cancels the mode.
+
+*The invariant: an order is armed only while at least one unit exists that its click would order.*
+For a placement that is `0x419670`'s own test, the walk over every selected builder, so whenever
+several builders are selected B9 disarms exactly when stock's click would order none. For a command
+mode it is `0x48CF30`'s first test, a selected unit in the block. The resolver's answer depends on
+the click's target and position, so it cannot be asked ahead of the click: **the residual** is a
+selection whose units cannot carry the mode (ATTACK with only builders left), which keeps stock's
+behaviour — armed, and the click ordering nobody.
+
+*The fix.* `order_check` (`tagpu_patches.c`) disarms when `order_anyone` finds nobody for the armed
+order: for `0x0E` a selected unit whose type has `+0x241` bit `0x40`, for 2..9, `0xC` and `0xD` a
+selected unit, each value it reads bounded (the controlled player below 10, the block inside the
+unit array and on its stride, each type inside `UNITINFOCount`). The disarm is the engine's own cancel:
+it calls `0x499100`, which with the byte not 1 is the right button's cancel for every order and
+reads nothing of its message — `0x2CC3` = 1, `0x2CC6` bit 5 cleared, and the menu's STOP radio
+group reset through `0x49FE60(menu, "STOP")` and `0x4A6A40`, which releases the pressed order
+button, as every cancel does (`0x4990AE`, `0x4992FA`, `0x495F36`, `0x498FC0`). It writes the same
+for every mode and leaves `BuildUnitID`, as every cancel does; every reader of it, the engine's
+(`0x419686`, `0x4197DD`) and our packet's, is behind the byte. The disarm logs nothing; the one
+`enginefix:` line at install says ARMED or why it was skipped.
+
+*Where it does not act.* Two states make the engine's own cancel wrong to call:
+
+- **No menu.** `0x499100` reads `[[main+0x531]+4]` at `0x49913B` with no test. The frame
+  `0x496790` has three callers: the in-play handler (`0x4995B8`), the loading screen (`0x49842F`,
+  after the load's reset wrote the byte to 1 at `0x4917F9`), and a network game's end (`0x4996A5`),
+  which runs after `0x491D70(1)` (`0x499674`) and `GUI_Pop` `0x4A9660` (`0x499686`) have popped the
+  menu stack, possibly to NULL. `order_check` returns while `main+0x531` is NULL, the engine's own
+  guard on the same read (`0x491DB3..0x491DBB`), on the same thread as the call.
+- **A modal screen on top.** The engine defers its own menu work on one test, `0x37EBE & 0x865` or
+  `0x2BEE & 0xE0`: `0x491D70(0)` only marks the drop pending (`0x491D76..0x491DA2`) and the frame
+  runs it once the test clears (`0x496986..0x4969B4`). The bits that are named: bit 0 is the options
+  stack (`ARMOPT`, `EXITMENU`, `YESORNO`, the preferences; set at `0x4961C1`, `0x49477E`,
+  `0x45D002`), bit 2 is the chat, `TALK.GUI` (pushed by `0x494050` from the Enter key's case
+  `0x4964FD`, the bit at `0x49412C`), bit 6 is `SHARE.GUI` (`0x49374F`); bits 5 and 11 of the word
+  and the byte's three are not identified. Under such a screen the cancel's `0x49FE60(top, "STOP")`
+  searches the modal screen, returns -1, and the pressed order button underneath stays drawn with
+  the byte 1. `order_check` waits on the same test, so the disarm lands on the first of its two
+  checks after the test clears; until then the byte stays armed as in stock. It is not keyed on STOP
+  being absent from the top menu.
+
+*Where it runs, and why at two points.* The in-play handler `0x499200`, entered from IdleTick at
+`0x499A1C` in state 6, reads the byte in its head (the build cursor `0x4197D0` at `0x499241`, the
+cursor choice at `0x499297`, the click routing `0x4993B6`, the order's click at `0x4995B3`), then
+calls the frame `0x496790` (`0x4995B8`), whose ticks free units, whose keys (`0x495E90`) recall
+groups and whose draw (`0x4969CD`) reads the byte and publishes our packet. IdleTick runs the GUI's
+dispatch `0x4A9FD0` (`0x499992`), which reaches the menus' buttons, before the handler. No one
+point follows every writer and precedes every reader, so the check runs at two, both on the game
+thread:
+
+- `0x49697B`, the frame's `call 0x48BAE0`, reached by every path of `0x496790` after the ticks,
+  the keys and the scroll poll, and before the cull and the draw — so the frame drawn and the
+  packet published never show an order with nobody to take it;
+- `0x499226`, the handler's first instruction after the mouse's world position (`0x498DA0`),
+  after the GUI's dispatch and before the head's first reader of the byte.
+
+*The ends, by disassembly.* The check reads the state, not the event, so every end that empties
+the set is covered where it happens to be written:
+
+- **Death, self-destruct, the owner's defeat:** the free clears `+0x110` bits 4 and 5
+  (`0x486DE8`), so a freed unit leaves the set. The tracked unit's slot is no longer the test.
+- **Given away or captured:** `UNITS_GiveUnit 0x488570` (the capture's call at `0x4046C5`) kills
+  the old unit — to a remote player after sending a `0x14` (`0x4885E9..0x4886A4`, the kill at
+  `0x4886A4`), to a local one after creating the receiver's (`0x488700`, the kill at `0x4887D0`).
+- **Loaded into a transport:** the unit keeps its slot; whether it stays in the set is the walk's
+  own answer.
+- **A selection change while armed** (a group recalled by a key): the set is the new selection's.
+  Stock leaves the order armed over it, and a click orders the units that can take it; with
+  nobody, B9 disarms.
+- **The deferred drop:** a button armed while the menu stays up for a dead unit arms with nobody
+  to order, and the first check after the deferral's test clears disarms it (`0x499226` before
+  the head reads the byte, or `0x49697B` before the frame runs the drop).
+- **A game-state change:** a load resets the byte and the ID (`0x4917D0`, called at `0x497581`).
+
+**The group case** (a placement with several builders selected) was not reached in a run. With
+several units selected the engine tracks none (`main+0x37E9C` 0) and shows the generic orders menu
+`CORGEN.GUI`, whose `CORBUILD` tab is greyed — read back in the game with three CORCK selected
+through a click and two shift-clicks (`+0x110` bit `0x10` on all three). By the disassembly a
+key's group recall after arming from one builder reaches it (the keys leave the byte); the
+harness's recall of a `ctrl+1` group read back one unit selected of three. The predicate is the
+click's own walk, so B9 matches stock whenever the case arises.
+
+*Verification* (single player, private Xvfb, one script invocation per run), on the final build
+(the menu guard and the modal deferral in) unless a line says otherwise:
+
+- `tools/b9-command-mode.sh` (the CORAK alone, killed by the LLT after `tacli order` walks it in):
+  ATTACK armed (`0x03`) — after the death the byte read 1, and the next left click on a CORCK
+  tracked and selected it (159 s); the same on `ddraw-stocklimits.dll` (180 s). MOVE (`0x02`), on
+  the build before the two guards: the same (158 s). On the build before the command modes were
+  covered, the same attack run left the byte at `0x03` after the death and the click was swallowed
+  (the CORCK neither selected nor tracked); that run overran its ten minutes (907 s) because a
+  window picture was taken with an empty window id and `import` waited for a click holding the X
+  server. The scripts now retry the lookup and never capture without an id.
+- `tools/b9-under-chat.sh` (192 s): ATTACK armed, Enter put `TALK.GUI` on top (`0x37EBE` read
+  `0x2006`, bit 2 set), and the CORAK died under it — the byte stayed `0x03` (the deferral), with
+  the drop pending (`0x2016`). Escape closed the chat: the byte read 1, and the engine ran the drop
+  it had deferred, so the dead unit's menu was gone (`CORMAIN2.GUI` on top) and no ATTACK button
+  was left drawn pressed (it was drawn pressed while armed: 1 619 pixels of its rectangle differed
+  from the picture before the press). Every verdict passed.
+- `tools/b6-tracked-death.sh` (207 s): after the CORCK's death the byte read 1 and the tracked unit
+  0, `BuildUnitID` stayed 246 as every cancel leaves it, the ghost's cursor count stood still
+  across two heartbeats, and a left click on the CORAK made it the tracked unit (3). Every verdict
+  passed. On `ddraw-stocklimits.dll`, on the build before the two guards: the same (207 s).
+- `tools/b9-placement-paths.sh` (145 s, the unchanged ends): a right-click still cancels an armed
+  placement (the CORCK still tracked), and a left click on a clear site still places a CORSOLAR and
+  ends it. Every verdict passed.
+- **Not measured.** The menu guard rests on the disassembly: the network game's end was not run.
+  The options stack stops the ticks in single player (`0x496918`), so no unit dies under it there;
+  a network game keeps them running, and that case was not run. The chat is the modal screen
+  measured, on the same test.
 
 ## Open questions
 

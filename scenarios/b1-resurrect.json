@@ -1,0 +1,2938 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 side measurement: 110 wrecks (50 of 1x1, the rest 2x2 to 5x6), each with a CORNECRO ordered to reclaim it -- the resolver makes that RESURRECT. Ten wrecks have a second Necro; a third of the multi-cell orders name the anchor, the others the footprint's centre or far corner. Written by b1-resurrect.gen.py.",
+ "seed": 20260926,
+ "on_error": "skip",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "core",
+    "color": 1,
+    "metal": 20000,
+    "energy": 20000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "arm",
+    "color": 0
+   }
+  ]
+ },
+ "features": [
+  {
+   "id": "w000",
+   "type": "armflea_dead",
+   "pos": [
+    1760,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w001",
+   "type": "armflea_dead",
+   "pos": [
+    1936,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w002",
+   "type": "armflea_dead",
+   "pos": [
+    2112,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w003",
+   "type": "armflea_dead",
+   "pos": [
+    2288,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w004",
+   "type": "armflea_dead",
+   "pos": [
+    2464,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w005",
+   "type": "armflea_dead",
+   "pos": [
+    2640,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w006",
+   "type": "armflea_dead",
+   "pos": [
+    2816,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w007",
+   "type": "armflea_dead",
+   "pos": [
+    2992,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w008",
+   "type": "armflea_dead",
+   "pos": [
+    3168,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w009",
+   "type": "armflea_dead",
+   "pos": [
+    3344,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w010",
+   "type": "armflea_dead",
+   "pos": [
+    3520,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w011",
+   "type": "armflea_dead",
+   "pos": [
+    3696,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w012",
+   "type": "armflea_dead",
+   "pos": [
+    3872,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w013",
+   "type": "armflea_dead",
+   "pos": [
+    4048,
+    880
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w014",
+   "type": "armflea_dead",
+   "pos": [
+    1760,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w015",
+   "type": "armflea_dead",
+   "pos": [
+    1936,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w016",
+   "type": "armflea_dead",
+   "pos": [
+    2112,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w017",
+   "type": "armflea_dead",
+   "pos": [
+    2288,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w018",
+   "type": "armflea_dead",
+   "pos": [
+    2464,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w019",
+   "type": "armflea_dead",
+   "pos": [
+    2640,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w020",
+   "type": "armflea_dead",
+   "pos": [
+    2816,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w021",
+   "type": "armflea_dead",
+   "pos": [
+    2992,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w022",
+   "type": "armflea_dead",
+   "pos": [
+    3168,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w023",
+   "type": "armflea_dead",
+   "pos": [
+    3344,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w024",
+   "type": "armflea_dead",
+   "pos": [
+    3520,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w025",
+   "type": "armaser_dead",
+   "pos": [
+    3696,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w026",
+   "type": "armaser_dead",
+   "pos": [
+    3872,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w027",
+   "type": "armaser_dead",
+   "pos": [
+    4048,
+    1056
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w028",
+   "type": "armaser_dead",
+   "pos": [
+    1760,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w029",
+   "type": "armaser_dead",
+   "pos": [
+    1936,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w030",
+   "type": "armaser_dead",
+   "pos": [
+    2112,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w031",
+   "type": "armaser_dead",
+   "pos": [
+    2288,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w032",
+   "type": "armaser_dead",
+   "pos": [
+    2464,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w033",
+   "type": "armaser_dead",
+   "pos": [
+    2640,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w034",
+   "type": "armaser_dead",
+   "pos": [
+    2816,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w035",
+   "type": "armaser_dead",
+   "pos": [
+    2992,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w036",
+   "type": "armaser_dead",
+   "pos": [
+    3168,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w037",
+   "type": "armaser_dead",
+   "pos": [
+    3344,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w038",
+   "type": "armaser_dead",
+   "pos": [
+    3520,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w039",
+   "type": "armaser_dead",
+   "pos": [
+    3696,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w040",
+   "type": "armaser_dead",
+   "pos": [
+    3872,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w041",
+   "type": "armaser_dead",
+   "pos": [
+    4048,
+    1232
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w042",
+   "type": "armaser_dead",
+   "pos": [
+    1760,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w043",
+   "type": "armaser_dead",
+   "pos": [
+    1936,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w044",
+   "type": "armaser_dead",
+   "pos": [
+    2112,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w045",
+   "type": "armaser_dead",
+   "pos": [
+    2288,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w046",
+   "type": "armaser_dead",
+   "pos": [
+    2464,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w047",
+   "type": "armaser_dead",
+   "pos": [
+    2640,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w048",
+   "type": "armaser_dead",
+   "pos": [
+    2816,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w049",
+   "type": "armaser_dead",
+   "pos": [
+    2992,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w050",
+   "type": "armpw_dead",
+   "pos": [
+    3168,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w051",
+   "type": "armpw_dead",
+   "pos": [
+    3344,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w052",
+   "type": "armpw_dead",
+   "pos": [
+    3520,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w053",
+   "type": "armpw_dead",
+   "pos": [
+    3696,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w054",
+   "type": "armpw_dead",
+   "pos": [
+    3872,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w055",
+   "type": "armpw_dead",
+   "pos": [
+    4048,
+    1408
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w056",
+   "type": "armpw_dead",
+   "pos": [
+    1760,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w057",
+   "type": "armpw_dead",
+   "pos": [
+    1936,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w058",
+   "type": "armpw_dead",
+   "pos": [
+    2112,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w059",
+   "type": "armpw_dead",
+   "pos": [
+    2288,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w060",
+   "type": "armpw_dead",
+   "pos": [
+    2464,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w061",
+   "type": "armpw_dead",
+   "pos": [
+    2640,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w062",
+   "type": "armpw_dead",
+   "pos": [
+    2816,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w063",
+   "type": "armpw_dead",
+   "pos": [
+    2992,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w064",
+   "type": "armpw_dead",
+   "pos": [
+    3168,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w065",
+   "type": "armllt_dead",
+   "pos": [
+    3344,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w066",
+   "type": "armllt_dead",
+   "pos": [
+    3520,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w067",
+   "type": "armllt_dead",
+   "pos": [
+    3696,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w068",
+   "type": "armllt_dead",
+   "pos": [
+    3872,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w069",
+   "type": "armllt_dead",
+   "pos": [
+    4048,
+    1584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w070",
+   "type": "armllt_dead",
+   "pos": [
+    1760,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w071",
+   "type": "armllt_dead",
+   "pos": [
+    1936,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w072",
+   "type": "armllt_dead",
+   "pos": [
+    2112,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w073",
+   "type": "armllt_dead",
+   "pos": [
+    2288,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w074",
+   "type": "armllt_dead",
+   "pos": [
+    2464,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w075",
+   "type": "armmex_dead",
+   "pos": [
+    2640,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w076",
+   "type": "armmex_dead",
+   "pos": [
+    2816,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w077",
+   "type": "armmex_dead",
+   "pos": [
+    2992,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w078",
+   "type": "armmex_dead",
+   "pos": [
+    3168,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w079",
+   "type": "armmex_dead",
+   "pos": [
+    3344,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w080",
+   "type": "armmex_dead",
+   "pos": [
+    3520,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w081",
+   "type": "armmex_dead",
+   "pos": [
+    3696,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w082",
+   "type": "armmex_dead",
+   "pos": [
+    3872,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w083",
+   "type": "armmex_dead",
+   "pos": [
+    4048,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w084",
+   "type": "armmex_dead",
+   "pos": [
+    1760,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w085",
+   "type": "armwin_dead",
+   "pos": [
+    1936,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w086",
+   "type": "armwin_dead",
+   "pos": [
+    2112,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w087",
+   "type": "armwin_dead",
+   "pos": [
+    2288,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w088",
+   "type": "armwin_dead",
+   "pos": [
+    2464,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w089",
+   "type": "armwin_dead",
+   "pos": [
+    2640,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w090",
+   "type": "armsolar_dead",
+   "pos": [
+    2816,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w091",
+   "type": "armsolar_dead",
+   "pos": [
+    2992,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w092",
+   "type": "armsolar_dead",
+   "pos": [
+    3168,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w093",
+   "type": "armsolar_dead",
+   "pos": [
+    3344,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w094",
+   "type": "armsolar_dead",
+   "pos": [
+    3520,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w095",
+   "type": "armlab_dead",
+   "pos": [
+    3696,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w096",
+   "type": "armlab_dead",
+   "pos": [
+    3872,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w097",
+   "type": "armlab_dead",
+   "pos": [
+    4048,
+    1936
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w098",
+   "type": "armlab_dead",
+   "pos": [
+    1760,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w099",
+   "type": "armlab_dead",
+   "pos": [
+    1936,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w100",
+   "type": "armflea_dead",
+   "pos": [
+    2112,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w101",
+   "type": "armflea_dead",
+   "pos": [
+    2288,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w102",
+   "type": "armflea_dead",
+   "pos": [
+    2464,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w103",
+   "type": "armflea_dead",
+   "pos": [
+    2640,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w104",
+   "type": "armflea_dead",
+   "pos": [
+    2816,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w105",
+   "type": "armpw_dead",
+   "pos": [
+    2992,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w106",
+   "type": "armpw_dead",
+   "pos": [
+    3168,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w107",
+   "type": "armpw_dead",
+   "pos": [
+    3344,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w108",
+   "type": "armpw_dead",
+   "pos": [
+    3520,
+    2112
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w109",
+   "type": "armpw_dead",
+   "pos": [
+    3696,
+    2112
+   ],
+   "facing": 0
+  }
+ ],
+ "units": [
+  {
+   "id": "n000",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w000"
+    }
+   ]
+  },
+  {
+   "id": "n001",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w001"
+    }
+   ]
+  },
+  {
+   "id": "n002",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w002"
+    }
+   ]
+  },
+  {
+   "id": "n003",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w003"
+    }
+   ]
+  },
+  {
+   "id": "n004",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w004"
+    }
+   ]
+  },
+  {
+   "id": "n005",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w005"
+    }
+   ]
+  },
+  {
+   "id": "n006",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w006"
+    }
+   ]
+  },
+  {
+   "id": "n007",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w007"
+    }
+   ]
+  },
+  {
+   "id": "n008",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w008"
+    }
+   ]
+  },
+  {
+   "id": "n009",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w009"
+    }
+   ]
+  },
+  {
+   "id": "n010",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w010"
+    }
+   ]
+  },
+  {
+   "id": "n011",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w011"
+    }
+   ]
+  },
+  {
+   "id": "n012",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3832,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w012"
+    }
+   ]
+  },
+  {
+   "id": "n013",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    4008,
+    840
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w013"
+    }
+   ]
+  },
+  {
+   "id": "n014",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w014"
+    }
+   ]
+  },
+  {
+   "id": "n015",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w015"
+    }
+   ]
+  },
+  {
+   "id": "n016",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w016"
+    }
+   ]
+  },
+  {
+   "id": "n017",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w017"
+    }
+   ]
+  },
+  {
+   "id": "n018",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w018"
+    }
+   ]
+  },
+  {
+   "id": "n019",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w019"
+    }
+   ]
+  },
+  {
+   "id": "n020",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w020"
+    }
+   ]
+  },
+  {
+   "id": "n021",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w021"
+    }
+   ]
+  },
+  {
+   "id": "n022",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w022"
+    }
+   ]
+  },
+  {
+   "id": "n023",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w023"
+    }
+   ]
+  },
+  {
+   "id": "n024",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w024"
+    }
+   ]
+  },
+  {
+   "id": "n025",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w025"
+    }
+   ]
+  },
+  {
+   "id": "n026",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3832,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w026"
+    }
+   ]
+  },
+  {
+   "id": "n027",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    4008,
+    1016
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w027"
+    }
+   ]
+  },
+  {
+   "id": "n028",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w028"
+    }
+   ]
+  },
+  {
+   "id": "n029",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w029"
+    }
+   ]
+  },
+  {
+   "id": "n030",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w030"
+    }
+   ]
+  },
+  {
+   "id": "n031",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w031"
+    }
+   ]
+  },
+  {
+   "id": "n032",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w032"
+    }
+   ]
+  },
+  {
+   "id": "n033",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w033"
+    }
+   ]
+  },
+  {
+   "id": "n034",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w034"
+    }
+   ]
+  },
+  {
+   "id": "n035",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w035"
+    }
+   ]
+  },
+  {
+   "id": "n036",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w036"
+    }
+   ]
+  },
+  {
+   "id": "n037",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w037"
+    }
+   ]
+  },
+  {
+   "id": "n038",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w038"
+    }
+   ]
+  },
+  {
+   "id": "n039",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w039"
+    }
+   ]
+  },
+  {
+   "id": "n040",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3832,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w040"
+    }
+   ]
+  },
+  {
+   "id": "n041",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    4008,
+    1192
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w041"
+    }
+   ]
+  },
+  {
+   "id": "n042",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w042"
+    }
+   ]
+  },
+  {
+   "id": "n043",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w043"
+    }
+   ]
+  },
+  {
+   "id": "n044",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w044"
+    }
+   ]
+  },
+  {
+   "id": "n045",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w045"
+    }
+   ]
+  },
+  {
+   "id": "n046",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w046"
+    }
+   ]
+  },
+  {
+   "id": "n047",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w047"
+    }
+   ]
+  },
+  {
+   "id": "n048",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w048"
+    }
+   ]
+  },
+  {
+   "id": "n049",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w049"
+    }
+   ]
+  },
+  {
+   "id": "n050",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w050"
+    }
+   ]
+  },
+  {
+   "id": "n051",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3360,
+      1424
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n052",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3544,
+      1432
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n053",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w053"
+    }
+   ]
+  },
+  {
+   "id": "n054",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3832,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3888,
+      1424
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n055",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    4008,
+    1368
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      4072,
+      1432
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n056",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w056"
+    }
+   ]
+  },
+  {
+   "id": "n057",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      1952,
+      1600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n058",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2136,
+      1608
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n059",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w059"
+    }
+   ]
+  },
+  {
+   "id": "n060",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2480,
+      1600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n061",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2664,
+      1608
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n062",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w062"
+    }
+   ]
+  },
+  {
+   "id": "n063",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3008,
+      1600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n064",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3192,
+      1608
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n065",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w065"
+    }
+   ]
+  },
+  {
+   "id": "n066",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3536,
+      1600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n067",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3720,
+      1608
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n068",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3832,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w068"
+    }
+   ]
+  },
+  {
+   "id": "n069",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    4008,
+    1544
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      4064,
+      1600
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n070",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      1784,
+      1784
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n071",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w071"
+    }
+   ]
+  },
+  {
+   "id": "n072",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2128,
+      1776
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n073",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2312,
+      1784
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n074",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w074"
+    }
+   ]
+  },
+  {
+   "id": "n075",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2664,
+      1784
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n076",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2856,
+      1800
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n077",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w077"
+    }
+   ]
+  },
+  {
+   "id": "n078",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3192,
+      1784
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n079",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3384,
+      1800
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n080",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w080"
+    }
+   ]
+  },
+  {
+   "id": "n081",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3720,
+      1784
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n082",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3832,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3912,
+      1800
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n083",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    4008,
+    1720
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w083"
+    }
+   ]
+  },
+  {
+   "id": "n084",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      1784,
+      1960
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n085",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      1992,
+      1992
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n086",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w086"
+    }
+   ]
+  },
+  {
+   "id": "n087",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2320,
+      1968
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n088",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2520,
+      1992
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n089",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w089"
+    }
+   ]
+  },
+  {
+   "id": "n090",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      2856,
+      1976
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n091",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3064,
+      2008
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n092",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w092"
+    }
+   ]
+  },
+  {
+   "id": "n093",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3384,
+      1976
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n094",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3592,
+      2008
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n095",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w095"
+    }
+   ]
+  },
+  {
+   "id": "n096",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3832,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      3920,
+      1984
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n097",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    4008,
+    1896
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      4136,
+      2024
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n098",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1720,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w098"
+    }
+   ]
+  },
+  {
+   "id": "n099",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    1896,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "to": [
+      1984,
+      2160
+     ]
+    }
+   ]
+  },
+  {
+   "id": "n100",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2072,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w100"
+    }
+   ]
+  },
+  {
+   "id": "m100",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2168,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w100"
+    }
+   ]
+  },
+  {
+   "id": "n101",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2248,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w101"
+    }
+   ]
+  },
+  {
+   "id": "m101",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2344,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w101"
+    }
+   ]
+  },
+  {
+   "id": "n102",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2424,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w102"
+    }
+   ]
+  },
+  {
+   "id": "m102",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2520,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w102"
+    }
+   ]
+  },
+  {
+   "id": "n103",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2600,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w103"
+    }
+   ]
+  },
+  {
+   "id": "m103",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2696,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w103"
+    }
+   ]
+  },
+  {
+   "id": "n104",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2776,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w104"
+    }
+   ]
+  },
+  {
+   "id": "m104",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2872,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w104"
+    }
+   ]
+  },
+  {
+   "id": "n105",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    2952,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w105"
+    }
+   ]
+  },
+  {
+   "id": "m105",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3064,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w105"
+    }
+   ]
+  },
+  {
+   "id": "n106",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3128,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w106"
+    }
+   ]
+  },
+  {
+   "id": "m106",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3240,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w106"
+    }
+   ]
+  },
+  {
+   "id": "n107",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3304,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w107"
+    }
+   ]
+  },
+  {
+   "id": "m107",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3416,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w107"
+    }
+   ]
+  },
+  {
+   "id": "n108",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3480,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w108"
+    }
+   ]
+  },
+  {
+   "id": "m108",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3592,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w108"
+    }
+   ]
+  },
+  {
+   "id": "n109",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3656,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w109"
+    }
+   ]
+  },
+  {
+   "id": "m109",
+   "type": "CORNECRO",
+   "owner": 0,
+   "pos": [
+    3768,
+    2072
+   ],
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w109"
+    }
+   ]
+  },
+  {
+   "id": "ai_keepalive",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    1400,
+    7300
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   2992,
+   1584
+  ]
+ }
+}
