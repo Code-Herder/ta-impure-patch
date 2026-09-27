@@ -1,0 +1,8 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=main..ae908e4 findings=8 acted=8 rejected=0 date=2026-09-27
+- HIGH tagpu_model3do.h tagpu_m3_ptr_ok still stopped at 2 GB (datakeys, model walk) -> 62a764f
+- MEDIUM redirect installed before the ufo write; s_redirVis fixed before the handlers armed -> 9fa8794
+- LOW exe-RE: gi+0x9B6 has two readers, not three; the stage drawer's read named -> 9fa8794, 62a764f
+- LOW tagpu_ufo.h/.c comments named guis/ -> 9fa8794
+- LOW suite audio described as no device; it is a null ALSA device -> 62a764f
+- LOW units-seen threshold fell to 1 on an unreadable count -> 62a764f
+- LOW stress poison covered only forward offsets -> 62a764f
