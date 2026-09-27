@@ -113,6 +113,10 @@ int  tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
 /* Queue frames (copied) behind what is already queued; they restore in order.
    The count taken, 0 if none was. */
 int  tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, int count);
+/* Queue neighbourhood frames (tagpu_restoreglsl.h, TAGPU_RNBFRAME): the count
+   taken, and tagpu_rcore_job_add_nbhd says which are refused. The job's
+   source is the atlas their origins name. */
+int  tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames, int count);
 /* 1 when nothing is queued or in flight -- every frame added is painted, once
    the GPU drains, i.e. before any later draw samples the destination. */
 int  tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j);

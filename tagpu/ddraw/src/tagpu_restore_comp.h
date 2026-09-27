@@ -15,7 +15,7 @@
 
    THE GRID. A batch is a square of `cols` x `cols` slots, one frame per slot,
    `pitch` apart, where pitch = the core's slot size S + 1. Slot (c, r) is entry
-   r * 8 + c of the table (TAGPU_RSLOT, 64 bytes each). The activations are one
+   r * 8 + c of the table (TAGPU_RSLOT, 96 bytes each). The activations are one
    storage buffer per ping-pong side, [gh][gw][channels] fp32, gw a multiple of
    16 and gh of 32 so that every conv variant's tiles cover the grid exactly.
 
@@ -43,6 +43,12 @@
    RGBA8 already expanded through the palette, a texel keyed where its alpha is
    0. A slot's key of -1 keys nothing on either kind.
 
+   A NEIGHBOURHOOD SLOT (slot.nb = 1, TAGPU_RNBFRAME) reads its source through
+   nbAt, in FILL and OUT alike: a texel d relative to the centre tile's corner
+   is in the centre or in one of its eight neighbours -- the core bounds the
+   window to one neighbour on every side (tagpu_rcore_job_add_nbhd) -- and a
+   neighbour past an `edge` side is read mirrored across it. Its key is -1.
+
    THE ROUNDING. OUT and MIP write (k + 0.25) / 255 into an RGBA8 image, so a
    driver whose float-to-unorm conversion truncates and one that rounds both
    store exactly k (the specification allows either). */
@@ -59,7 +65,8 @@
     "  int dstW, dstH;\n" \
     "  int spare;\n" \
     "} pc;\n" \
-    "struct Slot { int rw, rh, ax, ay, sw, sh, key, dx, dy, border, padR, padB, r0, r1, r2, r3; };\n"
+    "struct Slot { int rw, rh, ax, ay, sw, sh, key, dx, dy, border, padR, padB, nb, edge;\n" \
+    "              uint nbo[8]; int r0, r1; };\n"
 
 /* FILL: the model's input, one vec4 per texel (RGB, 0). Inside a slot's rect,
    pad = (rect - size) / 2 is the wrap radius (0 for a frame that does not
@@ -71,6 +78,8 @@
    GLSL leaves `%` undefined for a negative operand, so a negative t folds
    through -t - 1, which is not negative. A keyed texel takes the stand-in above, searched
    inside the frame (wrapped when the frame wraps, clipped when it does not).
+   A neighbourhood slot's rect is its window, pad = depth + border texels past
+   the tile, read through nbAt with no wrap and no key.
    Outside every rect: 0, which is half of the padding rule. */
 #define TAGPU_RESTORE_FILL_CS \
     "layout(local_size_x = 8, local_size_y = 8) in;\n" \
@@ -87,6 +96,18 @@
     "}\n" \
     "int wrap1(int t, int s) { return t >= 0 ? t % s : s - 1 - (-t - 1) % s; }\n" \
     "ivec2 wrap2(ivec2 t, ivec2 sz) { return ivec2(wrap1(t.x, sz.x), wrap1(t.y, sz.y)); }\n" \
+    "ivec2 nbAt(int si, ivec2 d) {\n" \
+    "  ivec2 sz = ivec2(slot[si].sw, slot[si].sh);\n" \
+    "  int e = slot[si].edge;\n" \
+    "  ivec2 n = ivec2(d.x < 0 ? 0 : d.x < sz.x ? 1 : 2, d.y < 0 ? 0 : d.y < sz.y ? 1 : 2);\n" \
+    "  ivec2 l = d - (n - 1) * sz;\n" \
+    "  if ((n.x == 0 && (e & 1) != 0) || (n.x == 2 && (e & 2) != 0)) l.x = sz.x - 1 - l.x;\n" \
+    "  if ((n.y == 0 && (e & 4) != 0) || (n.y == 2 && (e & 8) != 0)) l.y = sz.y - 1 - l.y;\n" \
+    "  int k = n.y * 3 + n.x;\n" \
+    "  if (k == 4) return ivec2(slot[si].ax, slot[si].ay) + l;\n" \
+    "  uint o = slot[si].nbo[k < 4 ? k : k - 1];\n" \
+    "  return ivec2(int(o & 0xFFFFu), int(o >> 16)) + l;\n" \
+    "}\n" \
     "void tap(ivec2 t, ivec2 o, ivec2 sz, bool wrap, int key, inout vec3 acc, inout int n) {\n" \
     "  if (wrap) t = wrap2(t, sz);\n" \
     "  else if (t.x < 0 || t.y < 0 || t.x >= sz.x || t.y >= sz.y) return;\n" \
@@ -101,29 +122,34 @@
     "  ivec2 sl = f - cr * pc.pitch;\n" \
     "  vec4 v = vec4(0.0);\n" \
     "  if (cr.x < pc.cols && cr.y < pc.cols) {\n" \
-    "    Slot s = slot[cr.y * 8 + cr.x];\n" \
+    "    int si = cr.y * 8 + cr.x;\n" \
+    "    Slot s = slot[si];\n" \
     "    ivec2 sz = ivec2(s.sw, s.sh);\n" \
     "    if (sl.x < s.rw && sl.y < s.rh && sz.x > 0 && sz.y > 0) {\n" \
     "      ivec2 pad = (ivec2(s.rw, s.rh) - sz) / 2;\n" \
     "      ivec2 t = sl - pad;\n" \
-    "      t = wrap2(t, sz);\n" \
-    "      ivec2 o = ivec2(s.ax, s.ay);\n" \
-    "      vec4 pv = texelFetch(uAtlas, o + t, 0);\n" \
-    "      if (keyOf(pv, s.key)) {\n" \
-    "        bool wrap = pad.x > 0 || pad.y > 0;\n" \
-    "        vec3 acc = vec3(0.0); int n = 0;\n" \
-    "        for (int r = 1; r <= pc.keyR; r++) {\n" \
-    "          for (int i = -r; i < r; i++) {\n" \
-    "            tap(t + ivec2(i, -r), o, sz, wrap, s.key, acc, n);\n" \
-    "            tap(t + ivec2(r, i), o, sz, wrap, s.key, acc, n);\n" \
-    "            tap(t + ivec2(-i, r), o, sz, wrap, s.key, acc, n);\n" \
-    "            tap(t + ivec2(-r, -i), o, sz, wrap, s.key, acc, n);\n" \
-    "          }\n" \
-    "          if (n > 0) break;\n" \
-    "        }\n" \
-    "        v = vec4(n > 0 ? acc / float(n) : vec3(0.0), 0.0);\n" \
+    "      if (s.nb != 0) {\n" \
+    "        v = vec4(colOf(texelFetch(uAtlas, nbAt(si, t), 0)), 0.0);\n" \
     "      } else {\n" \
-    "        v = vec4(colOf(pv), 0.0);\n" \
+    "        t = wrap2(t, sz);\n" \
+    "        ivec2 o = ivec2(s.ax, s.ay);\n" \
+    "        vec4 pv = texelFetch(uAtlas, o + t, 0);\n" \
+    "        if (keyOf(pv, s.key)) {\n" \
+    "          bool wrap = pad.x > 0 || pad.y > 0;\n" \
+    "          vec3 acc = vec3(0.0); int n = 0;\n" \
+    "          for (int r = 1; r <= pc.keyR; r++) {\n" \
+    "            for (int i = -r; i < r; i++) {\n" \
+    "              tap(t + ivec2(i, -r), o, sz, wrap, s.key, acc, n);\n" \
+    "              tap(t + ivec2(r, i), o, sz, wrap, s.key, acc, n);\n" \
+    "              tap(t + ivec2(-i, r), o, sz, wrap, s.key, acc, n);\n" \
+    "              tap(t + ivec2(-r, -i), o, sz, wrap, s.key, acc, n);\n" \
+    "            }\n" \
+    "            if (n > 0) break;\n" \
+    "          }\n" \
+    "          v = vec4(n > 0 ? acc / float(n) : vec3(0.0), 0.0);\n" \
+    "        } else {\n" \
+    "          v = vec4(colOf(pv), 0.0);\n" \
+    "        }\n" \
     "      }\n" \
     "    }\n" \
     "  }\n" \
@@ -231,7 +257,12 @@
    output at the slot's matching texel (pad undoes the wrap padding: a centre
    crop) and the input colour from the SOURCE atlas at the destination
    coordinate itself -- the source atlas and the RGBA destination share one
-   layout. A keyed texel is written (0, 0, 0, 0): alpha 0 is the hole, and the
+   layout. A NEIGHBOURHOOD slot is the exception on both counts: its border is
+   not a copy but the network's own output over the real neighbours, which
+   the window holds exactly (d runs -border .. size + border - 1 unclamped),
+   and its input colour is read through nbAt, since the destination is laid
+   out by key and the source by tile. A keyed texel is written (0, 0, 0, 0):
+   alpha 0 is the hole, and the
    atlas's alpha is also how a consumer tells a painted cell from one the job
    has not reached. A texel past the destination is not written: the bound is
    the destination's own size, in pc.dstW / pc.dstH. */
@@ -249,10 +280,23 @@
     "vec3 colOf(vec4 v) {\n" \
     "  return pc.base == 1 ? v.rgb : texelFetch(uPal, ivec2(int(v.r * 255.0 + 0.5), 0), 0).rgb;\n" \
     "}\n" \
+    "ivec2 nbAt(int si, ivec2 d) {\n" \
+    "  ivec2 sz = ivec2(slot[si].sw, slot[si].sh);\n" \
+    "  int e = slot[si].edge;\n" \
+    "  ivec2 n = ivec2(d.x < 0 ? 0 : d.x < sz.x ? 1 : 2, d.y < 0 ? 0 : d.y < sz.y ? 1 : 2);\n" \
+    "  ivec2 l = d - (n - 1) * sz;\n" \
+    "  if ((n.x == 0 && (e & 1) != 0) || (n.x == 2 && (e & 2) != 0)) l.x = sz.x - 1 - l.x;\n" \
+    "  if ((n.y == 0 && (e & 4) != 0) || (n.y == 2 && (e & 8) != 0)) l.y = sz.y - 1 - l.y;\n" \
+    "  int k = n.y * 3 + n.x;\n" \
+    "  if (k == 4) return ivec2(slot[si].ax, slot[si].ay) + l;\n" \
+    "  uint o = slot[si].nbo[k < 4 ? k : k - 1];\n" \
+    "  return ivec2(int(o & 0xFFFFu), int(o >> 16)) + l;\n" \
+    "}\n" \
     "void main() {\n" \
     "  int t = int(gl_WorkGroupID.z);\n" \
     "  ivec2 cr = ivec2(t % pc.cols, t / pc.cols);\n" \
-    "  Slot s = slot[cr.y * 8 + cr.x];\n" \
+    "  int si = cr.y * 8 + cr.x;\n" \
+    "  Slot s = slot[si];\n" \
     "  ivec2 size = ivec2(s.sw, s.sh);\n" \
     "  ivec2 q = ivec2(gl_GlobalInvocationID.xy);\n" \
     "  ivec2 quad = size + 2 * s.border + ivec2(s.padR, s.padB);\n" \
@@ -260,8 +304,9 @@
     "  ivec2 cell = ivec2(s.dx, s.dy);\n" \
     "  ivec2 f = cell - s.border + q;\n" \
     "  if (f.x < 0 || f.y < 0 || f.x >= pc.dstW || f.y >= pc.dstH) return;\n" \
-    "  ivec2 d = clamp(f - cell, ivec2(0), size - 1);\n" \
-    "  vec4 pv = texelFetch(uAtlas, cell + d, 0);\n" \
+    "  bool nb = s.nb != 0;\n" \
+    "  ivec2 d = nb ? f - cell : clamp(f - cell, ivec2(0), size - 1);\n" \
+    "  vec4 pv = texelFetch(uAtlas, nb ? nbAt(si, d) : cell + d, 0);\n" \
     "  if (keyOf(pv, s.key)) { imageStore(uDst, f, vec4(0.0)); return; }\n" \
     "  ivec2 pad = (ivec2(s.rw, s.rh) - size) / 2;\n" \
     "  ivec2 a = cr * pc.pitch + pad + d;\n" \

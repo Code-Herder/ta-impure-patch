@@ -6,8 +6,10 @@
    the padding rule, in plain loops: zero padding at every layer of a slot's
    rect, a wrap-padded rect for a frame that tiles and a centre crop after, the
    key stand-in FILL uses, OUT's rounding and its (0,0,0,0) at a key, the
-   border OUT replicates and MIP's integer box. A device that disagrees with it
-   by more than one level anywhere has computed something else. */
+   border OUT replicates and MIP's integer box -- and, for the neighbourhoods,
+   no window at all but the whole map restored at once. A device that
+   disagrees with it by more than one level anywhere has computed something
+   else. */
 
 #include <windows.h>
 #include <stdlib.h>
@@ -18,6 +20,9 @@
 
 #define DIM  TAGPU_RPROBE_DIM
 #define NF   TAGPU_RPROBE_NF
+#define NBT  TAGPU_RPROBE_NBT
+#define NBM  TAGPU_RPROBE_NBM
+#define NBN  TAGPU_RPROBE_NBN
 
 /* ---- the probe ------------------------------------------------------------ */
 
@@ -34,6 +39,11 @@ static void frame(TAGPU_RGLSL_FRAME* f, int x, int y, int w, int h, int wrap, in
     f->border = 1; f->padR = padR; f->padB = padB;
 }
 
+static unsigned probe_org(void* ctx, int x, int y)
+{
+    return ((const TAGPU_RPROBE*)ctx)->map[y * NBM + x];
+}
+
 /* A smooth field with a coarse ordered dither on top -- the kind of picture
    the network exists for -- so its outputs are not a constant and every
    channel of every layer carries something. Integers only: the same bytes on
@@ -46,6 +56,7 @@ void tagpu_rref_probe(TAGPU_RPROBE* p)
         {160, 60, 180}, {200, 70, 120}, {150, 110, 80}, {110, 140, 110},
         {140, 140, 150}, {90, 100, 120}, {190, 170, 140}, {70, 60, 50} };
     static const int bayer[4][4] = { {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5} };
+    static const int perm[NBN] = { 4, 7, 2, 8, 0, 5, 1, 6, 3 };
     unsigned s = 0x7A5EEDu;
     int x, y, i, c;
 
@@ -89,6 +100,19 @@ void tagpu_rref_probe(TAGPU_RPROBE* p)
         for (x = 0; x < 20; x++)
             if ((x >= 12 && x < 17 && y >= 3 && y < 8) || (x == 2 && y == 10) || (x == 19 && y == 0))
                 p->r8[(2 + y) * DIM + 2 + x] = 7;
+
+    /* the neighbourhood map: atlas tile k at (1 + 21 (k % 3), 1 + 21 (k / 3)),
+       five texels apart, and map cell i is tile perm[i] -- so no neighbour in
+       the map sits beside its cell in the atlas, and a window that read past
+       its tile rather than into the neighbour would read other texels. The
+       alpha-0 keys under tile 0 are nothing to a neighbourhood, which is
+       opaque. Every cell is a frame, cell (c, r) painted at (1 + 18c, 1 + 18r)
+       with a one-texel ring. */
+    for (i = 0; i < NBN; i++)
+        p->map[i] = (unsigned)(1 + 21 * (perm[i] % 3)) | (unsigned)(1 + 21 * (perm[i] / 3)) << 16;
+    for (i = 0; i < NBN; i++)
+        tagpu_rcore_nb_frame(&p->fn[i], i % NBM, i / NBM, NBM, NBM, probe_org, p, NBT, NBT,
+                             1 + (NBT + 2) * (i % NBM), 1 + (NBT + 2) * (i / NBM), 1);
 }
 
 int tagpu_rref_chain_bytes(void)
@@ -285,13 +309,75 @@ static int restore_frame(const NET* n, const SRC* s, unsigned char* out)
     return 1;
 }
 
+/* ---- the neighbourhoods: the whole map at once ---------------------------- */
+
+/* the map continued as its own reflection, texel -1 being texel 0 -- the rule
+   the neighbourhood frames' edge bits stand for (tagpu_restoreglsl.h) */
+static int reflect(int t, int m) { return t < 0 ? -1 - t : t >= m ? 2 * m - 1 - t : t; }
+
+static void map_colour(const TAGPU_RPROBE* pr, int mx, int my, float c[3])
+{
+    unsigned o;
+    const unsigned char* px;
+    int i;
+    mx = reflect(mx, NBM * NBT); my = reflect(my, NBM * NBT);
+    o = pr->map[(my / NBT) * NBM + mx / NBT];
+    px = pr->base + ((size_t)((int)(o >> 16) + my % NBT) * DIM + (int)(o & 0xFFFFu) + mx % NBT) * 4;
+    for (i = 0; i < 3; i++) c[i] = (float)px[i] / 255.0f;
+}
+
+/* The probe's map reflect-padded by P texels on every side and restored in
+   one piece: (M + 2P)^2 RGBA into `out`, M the map's side. With P = depth +
+   border, every texel a neighbourhood frame paints -- its ring included --
+   is at least `depth` from the padded edge, so the zero padding there reaches
+   none of them, and each frame's answer is a crop of this. 0 out of memory. */
+static int restore_map(const NET* n, const TAGPU_RPROBE* pr, int P, unsigned char* out)
+{
+    const int W = NBM * NBT + 2 * P;
+    int ch = 4, l, x, y, c;
+    float* a;
+    float* b;
+    for (l = 0; l < n->depth; l++) if (n->cout[l] > ch) ch = n->cout[l];
+    a = (float*)malloc((size_t)W * W * ch * sizeof(float));
+    b = (float*)malloc((size_t)W * W * ch * sizeof(float));
+    if (!a || !b) { free(a); free(b); return 0; }
+    for (y = 0; y < W; y++)
+        for (x = 0; x < W; x++) {
+            float* o = a + ((size_t)y * W + x) * 4;
+            map_colour(pr, x - P, y - P, o);
+            o[3] = 0.0f;
+        }
+    for (l = 0; l < n->depth; l++) {
+        float* t;
+        conv(n, l, a, b, W, W);
+        t = a; a = b; b = t;
+    }
+    for (y = 0; y < W; y++)
+        for (x = 0; x < W; x++) {
+            unsigned char* o = out + ((size_t)y * W + x) * 4;
+            const float* nv = a + ((size_t)y * W + x) * n->cout[n->depth - 1];
+            float col[3];
+            map_colour(pr, x - P, y - P, col);
+            for (c = 0; c < 3; c++) {
+                float k = (float)floor((double)((col[c] - nv[c]) * 255.0f + 0.5f));
+                o[c] = (unsigned char)(k < 0.0f ? 0 : k > 255.0f ? 255 : (int)k);
+            }
+            o[3] = 255;
+        }
+    free(a); free(b);
+    return 1;
+}
+
 /* ---- the worker and the verdict ------------------------------------------- */
 
 struct TAGPU_RTEST {
     HANDLE        th;
     NET           net;
+    NET           netN;               /* the neighbourhoods' model              */
     TAGPU_RPROBE  probe;
     unsigned char* exp[2 * NF];       /* fb[0..NF-1], then fr[0..NF-1]          */
+    unsigned char* expN;              /* the whole map, padded by padN          */
+    int           padN;
     volatile LONG status;             /* 0 running, 1 done, -1 out of memory    */
     double        ms;
 };
@@ -311,20 +397,27 @@ static DWORD WINAPI worker(LPVOID arg)
         t->exp[k] = (unsigned char*)malloc((size_t)s.f->w * s.f->h * 4);
         ok = t->exp[k] && restore_frame(&t->net, &s, t->exp[k]);
     }
+    if (ok) {
+        const int W = NBM * NBT + 2 * (t->padN = t->netN.depth + t->probe.fn[0].f.border);
+        t->expN = (unsigned char*)malloc((size_t)W * W * 4);
+        ok = t->expN && restore_map(&t->netN, &t->probe, t->padN, t->expN);
+    }
     QueryPerformanceCounter(&c1);
     t->ms = 1000.0 * (double)(c1.QuadPart - c0.QuadPart) / (double)f0.QuadPart;
     InterlockedExchange(&t->status, ok ? 1 : -1);
     return 0;
 }
 
-TAGPU_RTEST* tagpu_rref_test_start(const TAGPU_RMODEL* m, const TAGPU_RPROBE* p)
+TAGPU_RTEST* tagpu_rref_test_start(const TAGPU_RMODEL* m, const TAGPU_RMODEL* mn,
+                                   const TAGPU_RPROBE* p)
 {
     TAGPU_RTEST* t = (TAGPU_RTEST*)calloc(1, sizeof *t);
     if (!t) return NULL;
     t->probe = *p;
     if (!net_copy(&t->net, m)) { free(t); return NULL; }
+    if (!net_copy(&t->netN, mn)) { net_free(&t->net); free(t); return NULL; }
     t->th = CreateThread(NULL, 0, worker, t, 0, NULL);
-    if (!t->th) { net_free(&t->net); free(t); return NULL; }
+    if (!t->th) { net_free(&t->net); net_free(&t->netN); free(t); return NULL; }
     return t;
 }
 
@@ -339,7 +432,9 @@ void tagpu_rref_test_free(TAGPU_RTEST* t)
     if (!t) return;
     if (t->th) { WaitForSingleObject(t->th, INFINITE); CloseHandle(t->th); }
     for (k = 0; k < 2 * NF; k++) free(t->exp[k]);
+    free(t->expN);
     net_free(&t->net);
+    net_free(&t->netN);
     free(t);
 }
 
@@ -380,8 +475,42 @@ static int check_frames(const TAGPU_RGLSL_FRAME* fs, unsigned char* const* exp,
     return 1;
 }
 
-int tagpu_rref_test_check(TAGPU_RTEST* t, const unsigned char* gotB,
-                          const unsigned char* gotR, char* why, int whyLen)
+/* The neighbourhood job's destination against the whole-map restore: every
+   texel of every frame's cell, its ring included, is the whole map's texel at
+   that place -- within one level on RGB and exactly on alpha. No clamping:
+   the ring is the neighbours', not a copy of the edge. */
+static int check_nbhd(const TAGPU_RTEST* t, const unsigned char* got,
+                      long* bytes, int* worst, char* why, int whyLen)
+{
+    const int W = NBM * NBT + 2 * t->padN;
+    int k, qx, qy, c;
+    for (k = 0; k < NBN; k++) {
+        const TAGPU_RGLSL_FRAME* f = &t->probe.fn[k].f;
+        const int q = NBT + 2 * f->border;
+        for (qy = 0; qy < q; qy++)
+            for (qx = 0; qx < q; qx++) {
+                const int gx = f->dx - f->border + qx, gy = f->dy - f->border + qy;
+                const int mx = (k % NBM) * NBT + qx - f->border + t->padN;
+                const int my = (k / NBM) * NBT + qy - f->border + t->padN;
+                const unsigned char* e = t->expN + ((size_t)my * W + mx) * 4;
+                const unsigned char* g = got + ((size_t)gy * DIM + gx) * 4;
+                for (c = 0; c < 4; c++) {
+                    int d = abs((int)g[c] - (int)e[c]);
+                    (*bytes)++;
+                    if (d > *worst) *worst = d;
+                    if (c == 3 ? d != 0 : d > 1) {
+                        _snprintf(why, whyLen, "cell %d at (%d,%d) channel %d: %d, the whole map %d",
+                                  k, gx, gy, c, g[c], e[c]);
+                        return 0;
+                    }
+                }
+            }
+    }
+    return 1;
+}
+
+int tagpu_rref_test_check(TAGPU_RTEST* t, const unsigned char* gotB, const unsigned char* gotR,
+                          const unsigned char* gotN, char* why, int whyLen)
 {
     long bytes = 0;
     int worst = 0, L, off = 0;
@@ -397,6 +526,10 @@ int tagpu_rref_test_check(TAGPU_RTEST* t, const unsigned char* gotB,
     }
     if (!check_frames(t->probe.fr, t->exp + NF, gotR, &bytes, &worst, w, sizeof w)) {
         _snprintf(why, whyLen, "palette job: %s", w);
+        return 0;
+    }
+    if (!check_nbhd(t, gotN, &bytes, &worst, w, sizeof w)) {
+        _snprintf(why, whyLen, "neighbourhood job (%d layers): %s", t->netN.depth, w);
         return 0;
     }
     /* THE CHAIN, EXACTLY: each level the integer (sum + 1) / 4 of the 2 x 2

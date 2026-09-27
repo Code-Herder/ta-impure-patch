@@ -85,8 +85,13 @@ const TAGPU_ROPT*   tagpu_rcore_opt(void);
 
 /* ---- a job, as the core sees it ---- */
 
-/* a queued frame with its padded edge S and its size class */
-typedef struct { TAGPU_RGLSL_FRAME f; short S, cls; } TAGPU_RQF;
+/* a queued frame with its padded edge S and its size class; `nb` marks a
+   neighbourhood frame, whose `edge` and `nbo` are TAGPU_RNBFRAME's */
+typedef struct {
+    TAGPU_RGLSL_FRAME f;
+    short    S, cls, nb, edge;
+    unsigned nbo[8];
+} TAGPU_RQF;
 
 typedef struct TAGPU_RCORE {
     int    used, prio, oneshot, failed;
@@ -108,13 +113,16 @@ typedef struct TAGPU_RCORE {
 } TAGPU_RCORE;
 
 /* ---- one slot of a batch, as the shaders read it ----
-   tagpu_restore_comp.h's `Slot`, field for field: sixteen ints, so the std430
-   array has no padding and this struct is its bytes. The valid rect (rw, rh)
-   is slot-local from (0, 0); (ax, ay, sw, sh) the frame in the source atlas;
-   `key` its colour key or -1; (dx, dy, border, padR, padB) its cell in the
-   destination. r0..r3 are the record's padding to 64 bytes. */
+   tagpu_restore_comp.h's `Slot`, field for field: twenty-four 32-bit words,
+   so the std430 array has no padding and this struct is its bytes. The valid
+   rect (rw, rh) is slot-local from (0, 0); (ax, ay, sw, sh) the frame in the
+   source atlas; `key` its colour key or -1; (dx, dy, border, padR, padB) its
+   cell in the destination. `nb` is 1 for a neighbourhood frame, whose `edge`
+   and `nbo` are TAGPU_RNBFRAME's. r0, r1 are the record's padding to 96 bytes. */
 typedef struct {
-    int rw, rh, ax, ay, sw, sh, key, dx, dy, border, padR, padB, r0, r1, r2, r3;
+    int rw, rh, ax, ay, sw, sh, key, dx, dy, border, padR, padB, nb, edge;
+    unsigned nbo[8];
+    int r0, r1;
 } TAGPU_RSLOT;
 
 /* ---- the dispatch the core asks a backend for ---- */
@@ -208,6 +216,21 @@ void tagpu_rcore_job_free(TAGPU_RSCHED* s, TAGPU_RCORE* j);
 /* Queue frames (copied), classed and edge-padded. The count actually taken. */
 int  tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
                          const TAGPU_RGLSL_FRAME* frames, int count);
+/* Queue neighbourhood frames (copied). The window a slot restores reaches
+   a = depth + border texels past the tile on every side -- the depth makes the
+   tile exact, the border its ring -- so a frame is refused, with a line in
+   tagpu.log, when that is more than one neighbour away (a > the tile's side)
+   or when it carries alignment slack. The count actually taken. */
+int  tagpu_rcore_job_add_nbhd(TAGPU_RSCHED* s, TAGPU_RCORE* j,
+                              const TAGPU_RNBFRAME* frames, int count);
+/* Map cell (c, r) of a w x h map as a neighbourhood frame into `o`: `org(ctx,
+   x, y)` is cell (x, y)'s tile in the source (x | y << 16), each tile `tw` x
+   `th`, and the frame paints (dx, dy) of the destination with `border`. A
+   neighbour past a side of the map is the cell mirrored back across it, with
+   that side's edge bit. 0 for a cell off the map. */
+int  tagpu_rcore_nb_frame(TAGPU_RNBFRAME* o, int c, int r, int w, int h,
+                          unsigned (*org)(void* ctx, int x, int y), void* ctx,
+                          int tw, int th, int dx, int dy, int border);
 /* Drop everything queued or in flight; the backend clears the destination. */
 void tagpu_rcore_job_drop(TAGPU_RCORE* j);
 /* Every job fails, as the self-test's failure has them do: queues dropped,
@@ -220,8 +243,9 @@ void tagpu_rcore_fail_all(TAGPU_RSCHED* s);
    THE BATCH IN FLIGHT IS TAKEN BACK OUT: its FILL read the old rects, so its
    frames go back to the head of the queue, mapped, and are restored from the
    start -- nothing in flight spans the move. None of them was painted yet, so
-   nothing is restored twice. `kept` is the queued frames kept, `requeued` the
-   batch's, `dropped` both kinds dropped.
+   nothing is restored twice. A NEIGHBOURHOOD FRAME IS DROPPED, never mapped:
+   `map` moves one rect and its neighbours are eight more. `kept` is the
+   queued frames kept, `requeued` the batch's, `dropped` both kinds dropped.
    1 done; 0 when the queue could not grow to take the batch back, and then
    nothing has changed and the caller drops the job. */
 int  tagpu_rcore_job_remap(TAGPU_RCORE* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),

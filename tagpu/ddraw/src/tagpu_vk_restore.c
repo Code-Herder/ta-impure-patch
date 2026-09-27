@@ -1630,6 +1630,12 @@ int tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, i
     return tagpu_rcore_job_add(&s_sched, j->core, frames, count);
 }
 
+int tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames, int count)
+{
+    if (!j || !j->core) return 0;
+    return tagpu_rcore_job_add_nbhd(&s_sched, j->core, frames, count);
+}
+
 int tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j)
 {
     return !j || !j->core || !j->core->used || (j->core->qn == 0 && !j->core->inflight);
@@ -2190,9 +2196,9 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
    consumer's job can be picked before the verdict: one created in between
    queues and waits, and its destination is never painted by a device that
    has not passed. Then, one step at a time:
-     ARMED     build the probe's images and its two jobs (prio -1, which the
+     ARMED     build the probe's images and its three jobs (prio -1, which the
                gate lets through), upload the sources, start the CPU worker
-     RUNNING   both jobs have painted and the chain is reduced: record the
+     RUNNING   every job has painted and the chain is reduced: record the
                readback into this frame
      READBACK  the slot that took the readback comes round again -- its fence
                has signalled, so the bytes are in
@@ -2210,23 +2216,25 @@ enum { PR_NONE, PR_ARMED, PR_RUNNING, PR_READBACK, PR_WAITCPU };
 #define PR_OFF_SRCB 0
 #define PR_OFF_SRCR (PR_OFF_SRCB + PR_DIM * PR_DIM * 4)
 #define PR_OFF_GOTB (PR_OFF_SRCR + PR_DIM * PR_DIM)
-#define PR_NVIEW    (4 + TAGPU_RPROBE_MIPS)
+#define PR_NIMG     5
+#define PR_NVIEW    (PR_NIMG + TAGPU_RPROBE_MIPS)
 
 static struct {
     int                  state;
     TAGPU_RPROBE*        probe;
     TAGPU_RTEST*         ref;
     /* the base source, the index source, the base job's destination (with
-       its chain) and the palette job's destination */
-    VkImage              img[4];
-    VkDeviceMemory       mem[4];
+       its chain), the palette job's destination and the neighbourhood job's,
+       which reads the base source too */
+    VkImage              img[PR_NIMG];
+    VkDeviceMemory       mem[PR_NIMG];
     /* each image's level 0, then the base destination's levels 1.. */
     VkImageView          view[PR_NVIEW];
     VkBuffer             buf;                 /* the sources up, the answers back */
     VkDeviceMemory       bufMem;
     unsigned char*       map;
-    int                  offR, bytes;
-    struct TAGPU_VKRJOB* job[2];
+    int                  offR, offN, bytes;
+    struct TAGPU_VKRJOB* job[3];
     uint32_t             rbSlot;
 } s_pr;
 static char s_passedKey[48];
@@ -2235,8 +2243,8 @@ static char s_passedKey[48];
    readback, the uploads and the jobs' sets that name them were recorded into
    frames still in flight. */
 static struct {
-    VkImage        img[4];
-    VkDeviceMemory mem[4];
+    VkImage        img[PR_NIMG];
+    VkDeviceMemory mem[PR_NIMG];
     VkImageView    view[PR_NVIEW];
     VkBuffer       buf;
     VkDeviceMemory bufMem;
@@ -2248,7 +2256,7 @@ static void prret_kill(const TAGPU_VKPASS* d)
     int i;
     if (d && d->dev) {
         for (i = 0; i < PR_NVIEW; i++) if (s_prRet.view[i]) vkDestroyImageView(d->dev, s_prRet.view[i], NULL);
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < PR_NIMG; i++) {
             if (s_prRet.img[i]) vkDestroyImage(d->dev, s_prRet.img[i], NULL);
             if (s_prRet.mem[i]) vkFreeMemory(d->dev, s_prRet.mem[i], NULL);
         }
@@ -2278,10 +2286,10 @@ static void probe_arm(void)
 static void probe_free(const TAGPU_VKPASS* d)
 {
     int i, any = 0;
-    for (i = 0; i < 2; i++) if (s_pr.job[i]) tagpu_vk_restore_job_free(d, s_pr.job[i]);
+    for (i = 0; i < 3; i++) if (s_pr.job[i]) tagpu_vk_restore_job_free(d, s_pr.job[i]);
     tagpu_rref_test_free(s_pr.ref);
     free(s_pr.probe);
-    for (i = 0; i < 4; i++) any |= s_pr.img[i] != VK_NULL_HANDLE || s_pr.mem[i] != VK_NULL_HANDLE;
+    for (i = 0; i < PR_NIMG; i++) any |= s_pr.img[i] != VK_NULL_HANDLE || s_pr.mem[i] != VK_NULL_HANDLE;
     any |= s_pr.buf != VK_NULL_HANDLE || s_pr.bufMem != VK_NULL_HANDLE;
     if (any && d && d->dev) {
         /* one probe retire at a time; a second within `slots` frames of the
@@ -2391,29 +2399,33 @@ static int probe_start(const TAGPU_VKPASS* d, VkCommandBuffer cb)
                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     const VkImageUsageFlags dstUse = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    static const VkFormat fmt[4] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8_UNORM,
-                                     VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM };
+    static const VkFormat fmt[PR_NIMG] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8_UNORM,
+                                           VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
+                                           VK_FORMAT_R8G8B8A8_UNORM };
+    /* the neighbourhoods run the terrain's model, whichever that is */
+    const int mn = tagpu_rcore_model(TAGPU_RM_TINY) ? TAGPU_RM_TINY : TAGPU_RM_FULL;
     VkImageView attach[TAGPU_RPROBE_MIPS], sample[TAGPU_RPROBE_MIPS];
     int i, L;
 
     s_pr.probe = (TAGPU_RPROBE*)malloc(sizeof *s_pr.probe);
     if (!s_pr.probe) return 0;
     tagpu_rref_probe(s_pr.probe);
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < PR_NIMG; i++) {
         if (!pr_image(d, i, fmt[i], i == 2 ? 1 + TAGPU_RPROBE_MIPS : 1, i < 2 ? srcUse : dstUse)) return 0;
         if (!(s_pr.view[i] = pr_view(d, s_pr.img[i], fmt[i], 0))) return 0;
     }
     for (L = 1; L <= TAGPU_RPROBE_MIPS; L++)
-        if (!(s_pr.view[3 + L] = pr_view(d, s_pr.img[2], fmt[2], L))) return 0;
+        if (!(s_pr.view[PR_NIMG - 1 + L] = pr_view(d, s_pr.img[2], fmt[2], L))) return 0;
     /* level L - 1 is read and level L written, each through a view of that
        one level (tagpu_vk_restore_job_chain) */
     for (L = 1; L <= TAGPU_RPROBE_MIPS; L++) {
-        attach[L - 1] = s_pr.view[3 + L];
-        sample[L - 1] = L == 1 ? s_pr.view[2] : s_pr.view[3 + L - 1];
+        attach[L - 1] = s_pr.view[PR_NIMG - 1 + L];
+        sample[L - 1] = L == 1 ? s_pr.view[2] : s_pr.view[PR_NIMG - 1 + L - 1];
     }
 
     s_pr.offR = PR_OFF_GOTB + tagpu_rref_chain_bytes();
-    s_pr.bytes = s_pr.offR + PR_DIM * PR_DIM * 4;
+    s_pr.offN = s_pr.offR + PR_DIM * PR_DIM * 4;
+    s_pr.bytes = s_pr.offN + PR_DIM * PR_DIM * 4;
     if (!mk_buffer(d, (VkDeviceSize)s_pr.bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s_pr.buf, &s_pr.bufMem, &s_pr.map)) return 0;
@@ -2430,22 +2442,28 @@ static int probe_start(const TAGPU_VKPASS* d, VkCommandBuffer cb)
                                            PR_DIM, PR_DIM, 0, s_pr.probe->pal,
                                            s_pr.img[3], s_pr.view[3], PR_DIM, PR_DIM);
     if (!s_pr.job[1]) return 0;
+    s_pr.job[2] = tagpu_vk_restore_job_new(d, "probe-nbhd", -1, 1, mn, 0, s_pr.img[0], s_pr.view[0],
+                                           PR_DIM, PR_DIM, 1, s_pr.probe->pal,
+                                           s_pr.img[4], s_pr.view[4], PR_DIM, PR_DIM);
+    if (!s_pr.job[2]) return 0;
     if (tagpu_vk_restore_job_add(s_pr.job[0], s_pr.probe->fb, TAGPU_RPROBE_NF) != TAGPU_RPROBE_NF ||
-        tagpu_vk_restore_job_add(s_pr.job[1], s_pr.probe->fr, TAGPU_RPROBE_NF) != TAGPU_RPROBE_NF) return 0;
-    s_pr.ref = tagpu_rref_test_start(tagpu_rcore_model(TAGPU_RM_FULL), s_pr.probe);
+        tagpu_vk_restore_job_add(s_pr.job[1], s_pr.probe->fr, TAGPU_RPROBE_NF) != TAGPU_RPROBE_NF ||
+        tagpu_vk_restore_job_add_nbhd(s_pr.job[2], s_pr.probe->fn, TAGPU_RPROBE_NBN) != TAGPU_RPROBE_NBN)
+        return 0;
+    s_pr.ref = tagpu_rref_test_start(tagpu_rcore_model(TAGPU_RM_FULL), tagpu_rcore_model(mn), s_pr.probe);
     return s_pr.ref != NULL;
 }
 
-/* both destinations, every level of the chain, into the staging after the
-   sources; borrowed from SHADER_READ_ONLY, where OUT and MIP leave them, and
-   given back */
+/* the three destinations, every level of the chain, into the staging after
+   the sources; borrowed from SHADER_READ_ONLY, where OUT and MIP leave them,
+   and given back */
 static void pr_readback(VkCommandBuffer cb)
 {
-    VkImageMemoryBarrier mb[2];
+    VkImageMemoryBarrier mb[3];
     VkBufferImageCopy rg[1 + TAGPU_RPROBE_MIPS];
     int i, L, off = PR_OFF_GOTB;
     memset(mb, 0, sizeof mb);
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 3; i++) {
         mb[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         mb[i].srcQueueFamilyIndex = mb[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         mb[i].image = s_pr.img[2 + i];
@@ -2458,7 +2476,7 @@ static void pr_readback(VkCommandBuffer cb)
         mb[i].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     }
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         0, 0, NULL, 0, NULL, 2, mb);
+                         0, 0, NULL, 0, NULL, 3, mb);
     memset(rg, 0, sizeof rg);
     for (L = 0; L <= TAGPU_RPROBE_MIPS; L++) {
         rg[L].bufferOffset = (VkDeviceSize)off;
@@ -2474,15 +2492,17 @@ static void pr_readback(VkCommandBuffer cb)
                            1 + TAGPU_RPROBE_MIPS, rg);
     rg[0].bufferOffset = (VkDeviceSize)s_pr.offR;
     vkCmdCopyImageToBuffer(cb, s_pr.img[3], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_pr.buf, 1, rg);
+    rg[0].bufferOffset = (VkDeviceSize)s_pr.offN;
+    vkCmdCopyImageToBuffer(cb, s_pr.img[4], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_pr.buf, 1, rg);
     host_ready(cb);
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 3; i++) {
         mb[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         mb[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         mb[i].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         mb[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     }
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         0, 0, NULL, 0, NULL, 2, mb);
+                         0, 0, NULL, 0, NULL, 3, mb);
     s_rec = 1;
 }
 
@@ -2518,16 +2538,18 @@ static void probe_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     case PR_ARMED:
         if (!probe_start(d, cb)) { probe_verdict(d, -1, "the probe could not be built"); return; }
         s_pr.state = PR_RUNNING;
-        rlog(LANE ": self-test started: 4 synthetic frames on the device, the reference on a CPU worker");
+        rlog(LANE ": self-test started: 4 synthetic frames and 9 neighbourhoods on the device,"
+                  " the reference on a CPU worker");
         return;
     case PR_RUNNING: {
         struct TAGPU_VKRJOB* a = s_pr.job[0];
         struct TAGPU_VKRJOB* r = s_pr.job[1];
-        if (tagpu_vk_restore_job_failed(a) || tagpu_vk_restore_job_failed(r)) {
+        struct TAGPU_VKRJOB* n = s_pr.job[2];
+        if (tagpu_vk_restore_job_failed(a) || tagpu_vk_restore_job_failed(r) || tagpu_vk_restore_job_failed(n)) {
             probe_verdict(d, -1, "a probe job failed");
             return;
         }
-        if (!tagpu_vk_restore_job_idle(a) || !tagpu_vk_restore_job_idle(r)) return;
+        if (!tagpu_vk_restore_job_idle(a) || !tagpu_vk_restore_job_idle(r) || !tagpu_vk_restore_job_idle(n)) return;
         if (!a->chainDone || a->chainPainted != a->core->tframes) return;
         pr_readback(cb);
         s_pr.rbSlot = slot;
@@ -2546,7 +2568,8 @@ static void probe_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         /* the fault lever spoils one texel of the base job's keyed frame,
            away from its keys */
         if (tagpu_rguard_fault("probe")) s_pr.map[PR_OFF_GOTB + (5 * PR_DIM + 5) * 4] ^= 0x40;
-        v = tagpu_rref_test_check(s_pr.ref, s_pr.map + PR_OFF_GOTB, s_pr.map + s_pr.offR, why, sizeof why);
+        v = tagpu_rref_test_check(s_pr.ref, s_pr.map + PR_OFF_GOTB, s_pr.map + s_pr.offR,
+                                  s_pr.map + s_pr.offN, why, sizeof why);
         probe_verdict(d, v, why);
         return;
     }

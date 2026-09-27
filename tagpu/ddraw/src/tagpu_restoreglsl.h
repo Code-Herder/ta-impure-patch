@@ -51,6 +51,26 @@ typedef struct TAGPU_RGLSL_FRAME_S {
     int ax, ay, w, h, wrap, dx, dy, border, key, padR, padB;
 } TAGPU_RGLSL_FRAME;
 
+/* A NEIGHBOURHOOD FRAME: one tile of a map restored with its eight neighbours
+   around it, so the restored tile and its one-texel ring are the texels a
+   restore of the whole map gives there (research/notes/compute-restorer.md
+   D5). `f` is the centre -- (ax, ay) its tile in the source, (dx, dy) its cell
+   in the destination, `border` the ring painted from the real neighbours;
+   `wrap`, `key`, `padR` and `padB` are not used (a neighbourhood is opaque and
+   never tiles). `nbo` is each neighbour's tile in the source, x | y << 16, in
+   the order NW N NE W E SW S SE. Past a side of the map where `edge` has its
+   bit, the neighbour is the mirror image of the cell inside -- `nbo` names
+   that cell and the restorer flips its texels across the side -- so the map
+   continues as its own reflection, texel -1 being texel 0.
+   tagpu_rcore_nb_frame builds one from a map; every neighbour tile has the
+   centre's size. */
+enum { TAGPU_RNB_L = 1, TAGPU_RNB_R = 2, TAGPU_RNB_T = 4, TAGPU_RNB_B = 8 };
+typedef struct {
+    TAGPU_RGLSL_FRAME f;
+    int      edge;
+    unsigned nbo[8];
+} TAGPU_RNBFRAME;
+
 /* THE MODEL A JOB RUNS: full for every job but the terrain's, which is tiny
    (research/notes/compute-restorer.md D3). Each is <name>.w32.bin beside
    TotalA.exe; a job whose model is missing runs full. */

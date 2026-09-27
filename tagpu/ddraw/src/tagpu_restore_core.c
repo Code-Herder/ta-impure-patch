@@ -258,11 +258,11 @@ int tagpu_rcore_job_remap(TAGPU_RCORE* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAM
         j->q = nq; j->qcap = j->qn + nb;
     }
     for (i = 0; i < j->qn; i++) {
-        if (map(ctx, &j->q[i].f)) j->q[k++] = j->q[i];
+        if (!j->q[i].nb && map(ctx, &j->q[i].f)) j->q[k++] = j->q[i];
         else (*dropped)++;
     }
     for (i = 0; i < nb; i++) {
-        if (map(ctx, &j->bf[i].f)) j->bf[b++] = j->bf[i];
+        if (!j->bf[i].nb && map(ctx, &j->bf[i].f)) j->bf[b++] = j->bf[i];
         else (*dropped)++;
     }
     /* the batch at the head, in the order it was taken: it was the oldest */
@@ -325,11 +325,16 @@ void tagpu_rcore_job_free(TAGPU_RSCHED* s, TAGPU_RCORE* j)
     if (!any && s->be->act_free) s->be->act_free();
 }
 
-int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
-                        const TAGPU_RGLSL_FRAME* frames, int count)
+/* the pad a queued frame's rect has on every side: a neighbourhood's window
+   (tagpu_rcore_job_add_nbhd), a tiling frame's wrap, or none */
+static int frame_pad(const TAGPU_RCORE* j, const TAGPU_RQF* p)
 {
-    int i, added = 0;
-    if (!j || !j->used || j->failed || !frames || count <= 0) return 0;
+    return p->nb ? j->m->depth + p->f.border : p->f.wrap ? j->m->depth : 0;
+}
+
+/* room for `count` more queued frames; 0 out of memory */
+static int queue_room(TAGPU_RSCHED* s, TAGPU_RCORE* j, int count)
+{
     if (j->qn + count > j->qcap) {
         int cap = j->qcap ? j->qcap : 256;
         TAGPU_RQF* nq;
@@ -338,38 +343,124 @@ int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
         if (!nq) { char b[64]; _snprintf(b, sizeof b, "%s: out of memory", s->be->name); rlog(b); return 0; }
         j->q = nq; j->qcap = cap;
     }
+    return 1;
+}
+
+/* the frame at j->q[qn], filled by the caller, classed and taken -- or not,
+   with the reason in tagpu.log: 1 taken */
+static int queue_take(TAGPU_RSCHED* s, TAGPU_RCORE* j)
+{
+    TAGPU_RQF* p = &j->q[j->qn];
+    int S, c;
+    S = (p->f.w > p->f.h ? p->f.w : p->f.h) + 2 * frame_pad(j, p);
+    if (S > TAGPU_R_ACTMAX && p->f.wrap) { p->f.wrap = 0; S = p->f.w > p->f.h ? p->f.w : p->f.h; }
+    if (S > TAGPU_R_ACTMAX) {
+        char b[160];
+        _snprintf(b, sizeof b, "%s: %s: %dx%d frame exceeds the %d-texel slot, left indexed",
+                  s->be->name, j->tag, p->f.w, p->f.h, TAGPU_R_ACTMAX);
+        rlog(b);
+        return 0;
+    }
+    for (c = 0; c < NCLASSES && s_classes[c] < S; c++) ;
+    p->S = (short)S; p->cls = (short)c;
+    j->qn++;
+    return 1;
+}
+
+/* the run's start, once a call has queued something while the job was idle */
+static void run_begin(TAGPU_RSCHED* s, TAGPU_RCORE* j)
+{
+    int i;
+    if (j->running) return;
+    j->running = 1; j->rframes = 0; j->rwrap = 0; j->rbatches = 0; j->rdraws = 0; j->rslices = 0;
+    j->rt0 = now_ms(); j->rgpuNs = 0.0; j->rgpuUnits = 0.0; j->runits = 0.0;
+    j->rcall0 = s->calls;
+    if (j->oneshot) {
+        char b[200];
+        int w = 0, n = 0;
+        for (i = 0; i < j->qn; i++) { w += j->q[i].f.wrap ? 1 : 0; n += j->q[i].nb ? 1 : 0; }
+        _snprintf(b, sizeof b, "%s: %s: job started: %d frames (%d wrap-padded, %d neighbourhoods), model %s %dx%d",
+                  s->be->name, j->tag, j->qn, w, n, j->m->name, j->m->depth, j->m->ch);
+        rlog(b);
+    }
+}
+
+int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
+                        const TAGPU_RGLSL_FRAME* frames, int count)
+{
+    int i, added = 0;
+    if (!j || !j->used || j->failed || !frames || count <= 0) return 0;
+    if (!queue_room(s, j, count)) return 0;
     for (i = 0; i < count; i++) {
         TAGPU_RQF* p = &j->q[j->qn];
-        int S, c;
         if (frames[i].w <= 0 || frames[i].h <= 0) continue;
+        memset(p, 0, sizeof *p);
         p->f = frames[i];
-        S = (p->f.w > p->f.h ? p->f.w : p->f.h) + (p->f.wrap ? 2 * j->m->depth : 0);
-        if (S > TAGPU_R_ACTMAX && p->f.wrap) { p->f.wrap = 0; S = p->f.w > p->f.h ? p->f.w : p->f.h; }
-        if (S > TAGPU_R_ACTMAX) {
-            char b[160];
-            _snprintf(b, sizeof b, "%s: %s: %dx%d frame exceeds the %d-texel slot, left indexed",
-                      s->be->name, j->tag, p->f.w, p->f.h, TAGPU_R_ACTMAX);
+        added += queue_take(s, j);
+    }
+    if (added) run_begin(s, j);
+    return added;
+}
+
+int tagpu_rcore_job_add_nbhd(TAGPU_RSCHED* s, TAGPU_RCORE* j,
+                             const TAGPU_RNBFRAME* frames, int count)
+{
+    int i, added = 0;
+    if (!j || !j->used || j->failed || !frames || count <= 0) return 0;
+    if (!queue_room(s, j, count)) return 0;
+    for (i = 0; i < count; i++) {
+        const TAGPU_RGLSL_FRAME* f = &frames[i].f;
+        TAGPU_RQF* p = &j->q[j->qn];
+        const int a = j->m->depth + f->border;
+        /* THE BOUND the shaders' addressing rests on (tagpu_restore_comp.h
+           nbAt): every window texel is in the centre or in ONE neighbour, and
+           every cell texel OUT reads is in the window */
+        if (f->w <= 0 || f->h <= 0) continue;
+        if (f->border < 0 || a > f->w || a > f->h || f->padR || f->padB) {
+            char b[200];
+            _snprintf(b, sizeof b, "%s: %s: a %dx%d neighbourhood with border %d and slack %d,%d does not fit"
+                                   " a %d-texel window, left indexed",
+                      s->be->name, j->tag, f->w, f->h, f->border, f->padR, f->padB, a);
             rlog(b);
             continue;
         }
-        for (c = 0; c < NCLASSES && s_classes[c] < S; c++) ;
-        p->S = (short)S; p->cls = (short)c;
-        j->qn++; added++;
+        memset(p, 0, sizeof *p);
+        p->f = *f;
+        p->f.wrap = 0; p->f.key = -1;
+        p->nb = 1;
+        p->edge = (short)(frames[i].edge & (TAGPU_RNB_L | TAGPU_RNB_R | TAGPU_RNB_T | TAGPU_RNB_B));
+        memcpy(p->nbo, frames[i].nbo, sizeof p->nbo);
+        added += queue_take(s, j);
     }
-    if (added && !j->running) {
-        j->running = 1; j->rframes = 0; j->rwrap = 0; j->rbatches = 0; j->rdraws = 0; j->rslices = 0;
-        j->rt0 = now_ms(); j->rgpuNs = 0.0; j->rgpuUnits = 0.0; j->runits = 0.0;
-        j->rcall0 = s->calls;
-        if (j->oneshot) {
-            char b[200];
-            int w = 0;
-            for (i = 0; i < j->qn; i++) w += j->q[i].f.wrap ? 1 : 0;
-            _snprintf(b, sizeof b, "%s: %s: job started: %d frames (%d wrap-padded), model %s %dx%d",
-                      s->be->name, j->tag, j->qn, w, j->m->name, j->m->depth, j->m->ch);
-            rlog(b);
-        }
-    }
+    if (added) run_begin(s, j);
     return added;
+}
+
+/* THE MIRROR RULE at the map's edge: cell -1 is cell 0 flipped, cell w is
+   cell w - 1 -- the map reflected with its edge texel repeated. A window
+   reaches one neighbour at most, so one reflection is all there is. */
+static int nb_reflect(int x, int w) { return x < 0 ? -1 - x : x >= w ? 2 * w - 1 - x : x; }
+
+int tagpu_rcore_nb_frame(TAGPU_RNBFRAME* o, int c, int r, int w, int h,
+                         unsigned (*org)(void* ctx, int x, int y), void* ctx,
+                         int tw, int th, int dx, int dy, int border)
+{
+    static const signed char dir[8][2] = { {-1, -1}, {0, -1}, {1, -1}, {-1, 0},
+                                           {1, 0}, {-1, 1}, {0, 1}, {1, 1} };
+    unsigned o0;
+    int k;
+    if (c < 0 || r < 0 || c >= w || r >= h) return 0;
+    memset(o, 0, sizeof *o);
+    o0 = org(ctx, c, r);
+    o->f.ax = (int)(o0 & 0xFFFFu); o->f.ay = (int)(o0 >> 16);
+    o->f.w = tw; o->f.h = th;
+    o->f.dx = dx; o->f.dy = dy; o->f.border = border;
+    o->f.key = -1;
+    o->edge = (c == 0 ? TAGPU_RNB_L : 0) | (c == w - 1 ? TAGPU_RNB_R : 0) |
+              (r == 0 ? TAGPU_RNB_T : 0) | (r == h - 1 ? TAGPU_RNB_B : 0);
+    for (k = 0; k < 8; k++)
+        o->nbo[k] = org(ctx, nb_reflect(c + dir[k][0], w), nb_reflect(r + dir[k][1], h));
+    return 1;
 }
 
 /* THE GRID of a batch of `cols` x `cols` slots of edge S: the pitch is S + 1
@@ -454,12 +545,14 @@ static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         for (t = 0; t < j->bn; t++) {
             const TAGPU_RGLSL_FRAME* f = &j->bf[t].f;
             TAGPU_RSLOT* o = &s->slot[(t / cols) * TAGPU_R_SLOTCOLS + (t % cols)];
-            int p = f->wrap ? j->m->depth : 0;
+            int p = frame_pad(j, &j->bf[t]);
             o->rw = f->w + 2 * p; o->rh = f->h + 2 * p;
             o->ax = f->ax; o->ay = f->ay; o->sw = f->w; o->sh = f->h;
             o->key = f->key;
             o->dx = f->dx; o->dy = f->dy; o->border = f->border;
             o->padR = f->padR; o->padB = f->padB;
+            o->nb = j->bf[t].nb; o->edge = j->bf[t].edge;
+            memcpy(o->nbo, j->bf[t].nbo, sizeof o->nbo);
         }
         r.kind = TAGPU_RDRAW_FILL;
         if (!s->be->draw(&r)) { j->failed = 1; tagpu_rcore_job_drop(j); return 0.0; }
