@@ -10003,8 +10003,8 @@ owner holds its own value; a copy's value comes from exactly these writers:
     unfinished the same way, which is why the ARMCK victims of the measurements below, builders,
     lagged.
   - The callers passing `finished = 1` (DIS): `0x4977BB` (the level load's commanders), `0x497002`
-    (the level load), `0x4653D9` (the Deathmatch respawn), `0x488700` and `0x488462` (ownership
-    changes). After the sends, `0x488700` sets the new unit's HP and `+0x104` either from the `0x14`
+    (the level load), `0x4653D9` (the Deathmatch respawn), `0x488700` (the capture, an ownership
+    change) and `0x488462` (the map's placed units). After the sends, `0x488700` sets the new unit's HP and `+0x104` either from the `0x14`
     record (`0x488729..0x48873D`, the fraction `fild` from an integer the sender truncated at
     `0x488614..0x488623`) or from the old unit (`0x488774..0x48878B`). `0x48718E` (the saved-game restore), `0x41794F` [role not traced], and
     `tacli`'s scenario applier (`tagpu_scenario.c`, `create_units`). The build paths `0x4028EA`,
@@ -10027,10 +10027,16 @@ owner holds its own value; a copy's value comes from exactly these writers:
     `0x48605A`) comes before its first call (`0x4860A0`), so a NULL create sends nothing. A unit
     returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
     `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
-    `+0x241` bit 18) a `0x11` (4, `0x48B1F3`, a local player's unit) and, under its flag 4, a `0x13`
-    (18 bytes, `0x48B1AA` → `0x47F780(unit, 0xF, 0)` → … → `0x47F0C0`, sent at `0x47F14C`).
-    Indirect calls on the way are not followed: `0x48B195` (`call [eax]` in a loop in `0x48B090`),
-    `0x49059A` and `0x4905BC` (`0x490580`, at `0x4861AE`) [INFERRED: a unit's script calls].
+    `+0x241` bit 18) a `0x13` and a `0x11`. The create calls it as `0x48B090(1, 1)`, which newly sets
+    bit 0 only, so of its per-bit paths only bit 0's runs: the unit's `Activate` script started
+    by name through `0x4B0940` (`0x48B106`, the name at `0x501280`) and a `0x13` (18 bytes, `0x48B110` → `0x47F780(unit, 3, 0)` → … →
+    `0x47F0C0`, sent at `0x47F14C`); its bit-2 path (`0x48B16E..0x48B1AA`, a `0x13` at `0x48B1AA`
+    and the `call [eax]` loop at `0x48B195`) is not reached. Then the `0x11` (4, `0x48B1F3`, a local
+    player's unit). **So a create's direct calls send at most 4 messages, 92 bytes.** Not followed:
+    the COB interpreter a started script runs in (`0x4B0DA0`, 19 callbacks, and `0x4B1C00`, 4), and
+    `0x49059A` and `0x4905BC` (`0x490580`, at `0x4861AE`) [INFERRED: a unit's script calls]. A
+    Create or Activate script can send a `0x13`, `0x11` or `0x0A` through the host vtable `0x4FD698`
+    [INFERRED], which that count does not cover: B8 sends it through its late path.
   - **The send `0x451DF0`** (`stdcall(net, msg, len)`, `ret 0xC`, 1 when sent) begins `push ebx;
     push ebp; mov ebp,[esp+0xC]` (`53 55 8B 6C 24 0C`): six bytes on an instruction boundary. It has
     57 direct callers and no branch into `0x451DF1..0x451DF5`. It sends only in a network game
@@ -10077,7 +10083,9 @@ B8 has the argument and the measurements). Rows of the fail-closed table unless 
 
 - **The death.** `call 0x451DF0` at `0x48666D` → `kill_tx_death`, the `0x0C`'s length `push 0xB`
   at `0x486669` compared. A received `0x4C` enters `0x4866D0(rec, 0)` from B4's `0x05` stub with
-  the return address `0x455428` (`jmp 0x455F50`, compared), as the case `0x45541C` calls it. The
+  the return address `0x455428` (`jmp 0x455F50`, compared), as the case `0x45541C` calls it (its
+  twelve bytes `0x45541C..0x455427`, `mov edx,[esp+0x10]; push 0; push edx; call 0x4866D0`,
+  compared too). The
   `0x0C`'s dispatch slot `0x455FAC` → a stub that counts a bare `0x0C` and goes on at `0x455F50`.
 - **The create's state.** Written into a copy at `CreateFromNetwork`'s exit (B4's `0x48634F`
   stub) as the round robin writes it: `[+0x9E]+0x10 = 0` (`0x48B4A6`; the create's own last store
@@ -10097,7 +10105,9 @@ B8 has the argument and the measurements). Rows of the fail-closed table unless 
   `0x455FC4` of the table `0x455F84`) → a stub that drops a record whose `rec+1` or `rec+3` is past
   the array to `0x455F50` and otherwise runs them and goes on at `0x4555C4`.
 - **B5's `0x45477F`** now only counts a bare `0x0C` refused in state 5; a carried one refused
-  there reaches B5's cancel and dying mark through B8's receiver.
+  there reaches B5's cancel and dying mark through B8's receiver, and the dying mark writes the
+  carried `+0x104` into the copy first, so the unit tick's destroy (`0x48AFB9` → `0x4864B0`)
+  decides on the owner's value.
 
 ### `0x45AAA0` `FreeObjectState` — the `Object3do` destructor
 
