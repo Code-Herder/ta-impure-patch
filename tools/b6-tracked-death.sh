@@ -11,9 +11,10 @@
 # BuildUnitID 0x2CC4 and the tracked unit 0x37E9C, the top GUI and the ghost's counters ->
 # left-click the map with nothing selected -> left-click the CORAK -> left-click the map
 # again -> read the CORAK's first order node's type -> stop. A window picture at each stage.
-# It ends with B9's verdicts: after the death the byte is 1, BuildUnitID 0 and the ghost's
-# cursor count still, and a left click on the CORAK makes it the tracked unit. A build without
-# B9 fails them; that is the defect. Prints the wall time it measured.
+# It ends with B9's verdicts: after the death the byte is 1, BuildUnitID is what the engine's
+# cancel leaves (the armed ID), the ghost's cursor count is still, and a left click on the CORAK
+# makes it the tracked unit. A build without B9 fails them; that is the defect. Prints the wall
+# time it measured.
 set -u
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 T="$REPO/tools/tacli"
@@ -32,12 +33,19 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
   XPID=$!
   for _ in $(seq 1 20); do xdpyinfo -display "$D" > /dev/null 2>&1 && break; sleep 0.5; done
 fi
-"$T" ls --json | python3 -c "import json,sys; sys.exit(not any(r['name']=='$I' for r in json.load(sys.stdin)))" \
-  || "$T" create "$I" --display "$D" > /dev/null || fail create
-info() { "$T" ls --json | python3 -c "
+"$T" create "$I" --display "$D" > "$OUT/create.txt" 2>&1 || grep -q 'already exists' "$OUT/create.txt" \
+  || fail "create: $(tail -1 "$OUT/create.txt")"
+info() {        # retried: `tacli ls` fails while another session's instance is half made
+  local v
+  for _ in $(seq 1 20); do
+    v=$("$T" ls --json 2>/dev/null | python3 -c "
 import json,sys
 for r in json.load(sys.stdin):
-    if r['name']=='$I': print(r['$1'] if '$1'!='window' else r['window'][0])"; }
+    if r['name']=='$I': print(r['$1'] if '$1'!='window' else r['window'][0])" 2>/dev/null)
+    [ -n "$v" ] && { echo "$v"; return; }
+    sleep 0.5
+  done
+}
 KEEP=()
 if [ "${B6_DLL:-}" = stocklimits ]; then
   cp "$REPO/tagpu/ddraw/ddraw-stocklimits.dll" "$(info gamedir)/ddraw.dll" || fail "stock-limits dll"
@@ -47,7 +55,7 @@ fi
 "$T" scenario load "$I" "$REPO/scenarios/b6-tracked-death.json" --defaults --los 0 --restart \
   "${KEEP[@]}" > "$OUT/load.txt" 2>&1 || fail "load: $(tail -2 "$OUT/load.txt")"
 LOG="$(info gamedir)/log/tagpu.log"
-grep -m1 -o "a build placement disarmed with its tracked builder (0x486DC7) [A-Z]*" "$LOG" \
+grep -m1 -o "a build placement disarmed with nobody to order ([0-9xA-F ]*) [A-Z]*" "$LOG" \
   | sed 's/^/  enginefix: /'
 
 val() { "$T" peek "$I" "$1" 2>/dev/null | tail -1 | awk '{print $3}'; }
@@ -61,7 +69,11 @@ ghost() {   # the heartbeat's next ghost line
   for _ in $(seq 1 40); do [ "$(grep -c '^ghost: curs' "$LOG")" -gt "$n0" ] && break; sleep 0.5; done
   echo "  $(grep '^ghost: curs' "$LOG" | tail -1 | cut -d' ' -f1-5)"
 }
-cap() { DISPLAY="$D" import -window "$(info window)" -depth 8 "$OUT/$1.png" && echo "  picture $OUT/$1.png"; }
+cap() {         # never `import` without a window: it would wait for a click, grabbing the server
+  local w; w=$(info window)
+  [ -n "$w" ] || { echo "  picture $1: no window id"; return; }
+  DISPLAY="$D" import -window "$w" -depth 8 "$OUT/$1.png" && echo "  picture $OUT/$1.png"
+}
 unit() {    # roster type -> "idx sx sy"
   local l
   for _ in $(seq 1 30); do
@@ -84,6 +96,7 @@ for _ in $(seq 1 10); do "$T" ui "$I" 2>/dev/null | head -1 | grep -q CORCK1.GUI
 "$T" keys "$I" mouse:600,560 > /dev/null
 sleep 1
 state "armed"
+ID_ARMED=$(val '*0x511DE8+0x2CC4:2')
 ghost
 cap 1-armed
 
@@ -135,7 +148,7 @@ cap 4-after-click
 
 verdict() { if [ "$2" = "$3" ]; then echo "PASS  $1 ($2)"; else echo "FAIL  $1 (read $2, want $3)"; fi; }
 verdict "order byte after the death" "$BYTE_DEAD" 1
-verdict "BuildUnitID after the death" "$ID_DEAD" 0
+verdict "BuildUnitID after the death, as the engine's cancel leaves it" "$ID_DEAD" "$ID_ARMED"
 verdict "ghost cursor draws across two heartbeats after the death" "$((G2 - G1))" 0
 verdict "tracked unit after a left click on the CORAK" "$TRACKED_AK" "$AK"
 

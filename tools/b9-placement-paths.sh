@@ -29,20 +29,31 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
   XPID=$!
   for _ in $(seq 1 20); do xdpyinfo -display "$D" > /dev/null 2>&1 && break; sleep 0.5; done
 fi
-"$T" ls --json | python3 -c "import json,sys; sys.exit(not any(r['name']=='$I' for r in json.load(sys.stdin)))" \
-  || "$T" create "$I" --display "$D" > /dev/null || fail create
+"$T" create "$I" --display "$D" > "$OUT/create.txt" 2>&1 || grep -q 'already exists' "$OUT/create.txt" \
+  || fail "create: $(tail -1 "$OUT/create.txt")"
 "$T" scenario load "$I" "$REPO/scenarios/b6-tracked-death.json" --defaults --los 0 --restart \
   > "$OUT/load.txt" 2>&1 || fail "load: $(tail -2 "$OUT/load.txt")"
-info() { "$T" ls --json | python3 -c "
+info() {        # retried: `tacli ls` fails while another session's instance is half made
+  local v
+  for _ in $(seq 1 20); do
+    v=$("$T" ls --json 2>/dev/null | python3 -c "
 import json,sys
 for r in json.load(sys.stdin):
-    if r['name']=='$I': print(r['$1'] if '$1'!='window' else r['window'][0])"; }
+    if r['name']=='$I': print(r['$1'] if '$1'!='window' else r['window'][0])" 2>/dev/null)
+    [ -n "$v" ] && { echo "$v"; return; }
+    sleep 0.5
+  done
+}
 val() { "$T" peek "$I" "$1" 2>/dev/null | tail -1 | awk '{print $3}'; }
 state() {
   printf '%-16s order_byte=0x%02X build_id=%s tracked=%s\n' "$1" \
     "$(val '*0x511DE8+0x2CC3:1')" "$(val '*0x511DE8+0x2CC4:2')" "$(val '*0x511DE8+0x37E9C:2')"
 }
-cap() { DISPLAY="$D" import -window "$(info window)" -depth 8 "$OUT/$1.png" && echo "  picture $OUT/$1.png"; }
+cap() {         # never `import` without a window: it would wait for a click, grabbing the server
+  local w; w=$(info window)
+  [ -n "$w" ] || { echo "  picture $1: no window id"; return; }
+  DISPLAY="$D" import -window "$w" -depth 8 "$OUT/$1.png" && echo "  picture $OUT/$1.png"
+}
 unit() {
   local l
   for _ in $(seq 1 30); do

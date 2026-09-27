@@ -377,7 +377,7 @@ made, or its page cannot be made writable. Each of the twenty-nine, and why:
 | the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
-| a build placement disarmed with its tracked builder `0x486DC7` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
+| a build placement disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -1256,7 +1256,7 @@ why TADR's post-create fix was not ported, are in
   and the `0xFFFE` hop, `0x43F50B..0x43F58A`), and when the def also has `+0x245` bit `0x800`
   (`0x43F5A5`) [INFERRED: `canresurrect`; CORNECRO is the one retail unit with that tag], the
   cell is in the viewing player's sight (`0x43F5D1..0x43F5FF`: the word at `main+0x14273`, bit
-  `main+0x2A43`) and FeatureDef `+0xFE` has bit 7 (`0x43F609`), it jumps to `0x44004C`, which
+  `main+0x2A43`) and FeatureDef `+0xFE` has bit 7 (`0x43F609`), it jumps to `0x44004C` (`0x43F612`), which
   resolves the name "RESURRECT" (`0x5052F0`) through `0x438760`. So a scenario's or `tacli order`'s
   `reclaim` of a wreck by a Necro is a resurrect order.
 
@@ -7053,38 +7053,75 @@ and only these three sources can be what `0x499027` reads.
 - **The right button cannot execute a command button, by construction** — `0x499100` returns at
   its first test whenever `main+0x2CC3 != 1`, and its order call passes the literal 1.
 
-**A build placement and its builder (B9).** A build button arms the placement: `0x41AB89` writes
-the order byte `main+0x2CC3` = `0x0E` and `0x41AB9C` `BuildUnitID` `main+0x2CC4`, from the menu
-of the tracked unit `main+0x37E9C`. The engine ends a placement in five places, each writing
-`0x2CC3` = 1 and clearing `0x2CC6` bit 5 (`0x20`, the order kept while a modifier is held; the
-release test is `0x4992D8`) and playing "STOP" (`0x502714`): the right button `0x499110`, the
-modifier's release `0x4992FA`, a key's case of the in-game key switch (`0x495ECD`, table
-`0x496694`) at `0x495F36`, and the placement's own left click on
-a clear site `0x498FC0`, after `0x419670` has issued the build to the selection
-(`0x498F93..0x498FA4`; a press whose record has `+8` bit 2 keeps the placement and sets the flag
-instead, `0x498FB4`). A left click on a blocked site plays the refusal and keeps it (`0x499016`). None of
-them writes `0x2CC4`; the load's UI reset `0x4917D0` (called at `0x497581`) writes both,
-`0x4917F9` and `0x491805`. Every engine reader of `0x2CC4` (`0x419686` in `0x419670`, `0x4197DD`
-in the build cursor `0x4197D0`) runs only with `0x2CC3 == 0x0E`, and every reader of `0x2CC3`
-(`0x469DD8`, `0x469E51`, `0x469EF4`, `0x48D3DB`, `0x491CD2`, `0x491D2F`, `0x495F2D`,
-`0x498F77`, `0x499107`, `0x499238`, `0x499290`, `0x4993B6`) is the UI [DISASSEMBLED].
+**A build placement and the units it orders (B9).** A build button arms the placement: the build
+menus' handler `0x41AA00` (address-taken, no direct caller) writes the order byte `main+0x2CC3` =
+`0x0E` at `0x41AB89` and `BuildUnitID` `main+0x2CC4` at `0x41AB9C`. It is reached through the
+GUI's dispatch `0x4A9FD0`, which IdleTick `0x499890` calls at `0x499992` before it enters the
+state's handler (`0x499A1C`). **The placement's click orders the selection, not the tracked
+unit**: `0x419670` walks the view player's block — record `main+0x1B63 + 0x14B·main+0x2A42`, units
+`+0x67` to `+0x6B` inclusive (`0x41972A..0x419753`) — and orders every unit that is selected
+(`+0x110` bit `0x10`, `0x419755`) and whose type (`+0x92`) has `+0x241` bit `0x40`
+(`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`). The free clears
+bits 4 and 5 of `+0x110` (`0x486DE8`), so a freed unit leaves that set.
+
+The engine ends an order mode in five places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5
+(`0x20`, the order kept while a modifier is held; the release test is `0x4992D8`) and resetting
+the radio group of the menu's STOP gadget — `0x49FE60(menu, "STOP")` (the name at `0x502714`)
+finds it and `0x4A6A40` resets it: the right button `0x499110` (in `0x499100`, called at
+`0x4993AC`), the modifier's release `0x4992FA`, a key's case of the in-game key switch
+(`0x495ECD`, table `0x496694`) at `0x495F36`, a command mode's click `0x4990AE` (in the click
+handler `0x498F70`, after `0x48CF30` has issued the command at `0x499087`, for a cursor type
+`main+0x2CBE` below `0x11` other than `0x0F`; type `0x0F` hands the click to `0x48C7F0` and returns at `0x49903E`,
+and from `0x11` up it returns at `0x4990F6` unless `0x37EFA` is 1 and the byte 1), and the placement's
+own left click on a clear site `0x498FC0`, after `0x419670` has issued the build
+(`0x498F93..0x498FA4`). In both clicks a press whose record has `+8` bit 2 keeps the mode and
+sets the flag instead (`0x498FB4`, `0x499097`). A left click on a blocked site plays the refusal and keeps it
+(`0x499016`). `0x4958D7`, in `0x4958C0`, writes the byte too and is dead: `0x4958C0` has no
+caller and its address is stored nowhere; so is the setter `0x419BC0`, which stores its argument
+at `0x419BC9`. The command modes 2..`0xD` (attack, move and the rest) are armed by the orders
+menu's writers `0x419C6A`..`0x41A0D7`. None of the cancels writes `0x2CC4`; the load's UI reset
+`0x4917D0` (called at `0x497581`) writes both, `0x4917F9` and `0x491805`. Every engine reader of
+`0x2CC4` (`0x419686` in `0x419670`, `0x4197DD` in the build cursor `0x4197D0`) runs only with
+`0x2CC3 == 0x0E`, and every reader of `0x2CC3` (`0x469DD8`, `0x469E51`, `0x469EF4`, `0x48D3DB`,
+`0x491CD2`, `0x491D2F`, `0x495F2D`, `0x498F77`, `0x499107`, `0x499238`, `0x499290`, `0x4993B6`)
+is the UI [DISASSEMBLED].
 
 The per-frame check at `0x4995C3..0x4995F1`, after `GameFrame_InGame 0x496790` (`0x4995B8`),
 reads the tracked unit; when its slot's `+0xA6` word is 0 (`0x4995E4`) it calls `0x491D70(0)`
-(`push 0` at `0x4995EF`, the call at `0x4995F1`), which clears `0x37E9C` and pops the GUI, and
-writes neither byte. **In stock the placement outlives its builder** — MEASURED 2026-09-26 with
+(`push 0` at `0x4995EF`, the call at `0x4995F1`), which writes neither byte. **That call does not
+always drop the unit**: when `0x37EBE & 0x865` or `0x2BEE & 0xE0` is set and the argument is 0
+(`0x491D76..0x491D95`, the second flag test at `0x491D86`), it only sets `0x37EBE` bit `0x10` and returns (`0x491D97..0x491DA2`),
+leaving the tracked unit and its menu up; the frame drops it later (`0x496986..0x4969C9`: through
+`0x41B2E0` once the flags clear, or by zeroing `0x37E9C` while they hold). Otherwise it clears
+`0x37E9C` (`0x491DA5`) and pops the GUI. The keys `0x495E90` write the byte only at their cancel
+`0x495F36`, so recalling a group leaves the placement armed over the new selection. **In stock a
+placement outlives the units it would order** — MEASURED 2026-09-26 with
 `tools/b6-tracked-death.sh` on main `8d033d1`: after the CORCK's death `0x2CC3` stayed `0x0E`
 and `0x2CC4` 246, and the square and our build ghost stayed on the pointer.
 
-**B9 disarms it at the free.** `0x486DC7`, the unit destructor's `mov word [esi+0xA6],bx`, is
-the only store of type 0 to a unit slot (the other writers, `0x485ED2`, `0x486086`, `0x4862A2`,
-store a created unit's type); give and capture (`UNITS_GiveUnit 0x488570`, from the capture at
-`0x4046C5`) make the unit anew for the receiver (`0x488700`) and kill the old one with 30 000
-damage (`0x4887D0`), so every end of a unit passes it before its slot can be reused. There a stub
-(`fix_placement_builder`, `tagpu_patches.c`) makes the cancel's two writes and clears `0x2CC4`
-when the byte is `0x0E` and `esi` is the tracked unit's slot, runs the stolen store, and rejoins
-at `0x486DCE`. MEASURED on the fixed build (the same script): the byte read 1, `0x2CC4` 0, the
-ghost drew nothing more and the square was gone, and a left click selected the CORAK.
+**B9 checks it at two points of the frame.** The in-play handler `0x499200` handles the mouse
+first (the build cursor at `0x499241`, the cursor choice `0x48D220` at `0x499297`, the click
+routing `0x4993B6`, the placement's click `0x498F70` at `0x4995B3`), then calls the frame
+`0x496790` (`0x4995B8`), whose ticks (`0x495490` at `0x49680C`, `0x49693E`) free units, whose keys
+(`0x495E90` at `0x496971`) recall groups, and whose draw `0x468CF0` (`0x4969CD`) reads the byte
+and publishes our packet; the head holds no `ret` before `0x4995B8`. With the GUI's dispatch
+before the handler, no one point follows every writer and precedes every reader, so
+`placement_check` (`tagpu_patches.c`) runs at two: the frame's `call 0x48BAE0` at `0x49697B`
+(the stub tail-jumps to `0x48BAE0`, whose `ret` comes back to `0x496980`), which every path of
+`0x496790` reaches (`0x49691E` and `0x49696F` jump to it; its one `ret` is `0x496A56`) after the ticks,
+the keys and the scroll poll `0x41CE90` and before the cull and the draw; and `0x499226`, the
+handler's first instruction after `0x498DA0` (the mouse's world position, `0x499221`; the stub runs
+the stolen `mov edx,[0x511DE8]` and rejoins at `0x49922C`), after the GUI's dispatch and before the
+head's first reader. When the byte is `0x0E` and the walk's own
+test, its values bounded (the view player below 10, the block inside the array and on its
+stride, each type inside `UNITINFOCount`), finds nobody, it calls `0x499100`: with the byte not
+1 that is the right button's cancel, and it reads nothing of its message. MEASURED on the fixed
+build: see [the plan's B9](tadr-port/sim-fixes.md).
+
+**The remote give.** `UNITS_GiveUnit 0x488570` to a remote player builds a `0x14` record
+(`0x488603`), sends it (`0x451DF0` at `0x488693`) and kills the unit at `0x4886A4` (`0x489BB0`)
+over `0x4885E9..0x4886A4`; to a local player it creates the unit for the receiver (`0x488700`)
+and kills the old one with 30 000 damage (`0x4887D0`). The capture reaches it at `0x4046C5`.
 
 ## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
 

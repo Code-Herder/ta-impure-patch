@@ -8188,70 +8188,106 @@ static int fix_range_circle(void)
     return fix_write(&site, 1);
 }
 
-/* A BUILD PLACEMENT OUTLIVING ITS BUILDER [DISASSEMBLED; MEASURED]. A build button arms the
-   placement: the order byte main+0x2CC3 = 0x0E and BuildUnitID main+0x2CC4 (0x41AB89,
-   0x41AB9C), taken from the menu of the tracked unit main+0x37E9C. When that unit's slot empties,
-   the per-frame check at 0x4995C3..0x4995F1 drops the tracked unit and pops its menu
-   (0x491D70(0)), but nothing on that path writes 0x2CC3: the square and our build ghost stay on
-   the pointer, and every left press goes to the placement (0x4993B6 -> 0x498F70) until a
-   right-click, a key or a click on a clear site ends it.
-   THE FIX: a jmp at the unit destructor's store of type 0, 0x486DC7 (`mov word [esi+0xA6],bx`,
-   esi the unit), to a stub that, when the byte is 0x0E and esi is the tracked unit's slot
-   (units main+0x14357 + tracked * 0x118, tracked nonzero), makes the writes the engine's cancel
-   makes -- 0x2CC3 = 1 and 0x2CC6 bit 5 (0x20, the order kept while a modifier is held)
-   cleared, as 0x499110, 0x4992FA, 0x495F36 and 0x498FC0 do -- and clears 0x2CC4 as the UI
-   reset at load does (0x491805). It does not play the cancels' "STOP" sound: that answers the player's own
-   input, and a builder dying is not one. Then the stolen store runs and 0x486DCE follows.
-   Registers and flags are restored before the store; B4's stub at 0x486DC1 ends by jumping
-   here, so it runs first and this stub after it.
-   THE INVARIANT: a build placement is armed only while its tracked builder exists. Every
-   engine reader of 0x2CC4 (0x419686, 0x4197DD) and our packet's (tagpu_packet_pub.c) is behind
-   0x2CC3 == 0x0E, so the cleared ID is read by nothing until a build button arms again.
-   WHY THE FREE AND NOT THE FRAME CHECK: 0x486DC7 is the only store of type 0 to a unit slot
-   (the other writers of +0xA6, 0x485ED2 0x486086 0x4862A2, store a created unit's type), so
-   every way a unit ends passes it before its slot can be reused; the frame check runs once a
-   frame, after up to five ticks, and a slot freed and re-taken inside one frame never reads
-   empty there. Death, self-destruct and the owner's defeat free the slot through it; give and
-   capture (UNITS_GiveUnit 0x488570, from the capture at 0x4046C5) create the unit anew for the
-   receiver (0x488700) and kill the old one with 30000 damage (0x4887D0); one the damage leaves
-   alive still exists, and so does its placement. A unit loaded into a
-   transport keeps its slot: the builder still exists and the placement is stock's. A load
-   resets the byte and the ID (0x4917D0, called at 0x497581).
-   CLASS: local. Every reader of 0x2CC3 is the UI (the mouse, keys, cursor and draw paths), and
-   no peer reads it. The disarm is silent: a builder dying mid-placement is ordinary play. */
-static int fix_placement_builder(void)
+/* A BUILD PLACEMENT WITH NOBODY TO ORDER [DISASSEMBLED; MEASURED]. A build button arms the
+   placement: the order byte main+0x2CC3 = 0x0E and BuildUnitID main+0x2CC4 (0x41AB89, 0x41AB9C,
+   in the build menus' handler 0x41AA00). A left click on a clear site then hands the build to
+   every unit the walk 0x419755..0x41976A accepts -- the view player's block (record main+0x1B63
+   + 0x14B * main+0x2A42, units +0x67 .. +0x6B inclusive), each unit selected (+0x110 bit 0x10)
+   whose type (+0x92) has +0x241 bit 0x40 -- and ends the placement (0x498FC0). Stock leaves the
+   byte armed when that set empties: the selection dies (the frame check 0x4995C3 drops the
+   tracked unit and pops its menu through 0x491D70(0), which writes neither placement byte), a
+   key recalls a group with no builder in it (0x495E90's one writer of the byte is its cancel
+   0x495F36), or a build button arms from the menu 0x491D70 left up because it deferred the
+   drop (0x37EBE & 0x865 or 0x2BEE & 0xE0: 0x491D86..0x491DA2 only sets 0x37EBE bit 0x10). The
+   square and our build ghost then stay on the pointer and every left press goes to the
+   placement (0x4993B6 -> 0x498F70), ordering nobody.
+   THE FIX: placement_check, at two points of the game thread's frame, disarms through the
+   engine's own cancel when the byte is 0x0E and placement_orderable finds nobody.
+   THE INVARIANT: a build placement is armed only while at least one unit exists that 0x419670
+   would order. placement_orderable is the walk's own test, with every value it reads bounded
+   first.
+   WHY TWO POINTS AND NOT ONE: the readers of the byte sit on both sides of the ticks. The
+   in-play handler 0x499200 (state 6, entered from IdleTick 0x499890 at 0x499A1C) handles the
+   mouse first -- the build cursor 0x4197D0 (0x499241), the cursor choice 0x48D220 (0x499297),
+   the click routing 0x4993B6 and the placement's click 0x498F70 (0x4995B3) -- then calls the
+   frame 0x496790 (0x4995B8), whose ticks (0x495490 at 0x49680C, 0x49693E) free units, whose
+   keys (0x495E90 at 0x496971) recall groups, and whose draw 0x468CF0 (0x4969CD) reads the byte
+   and publishes our packet. IdleTick runs the GUI's dispatch 0x4A9FD0 (0x499992), which reaches
+   the build buttons, before it enters the handler. So no one point follows every writer and
+   precedes every reader:
+     0x49697B, the frame's `call 0x48BAE0`: every path of 0x496790 reaches it (0x49691E and
+       0x49696F jump to it; nothing leaves the function before 0x496A56), after the ticks, the
+       keys and the scroll poll 0x41CE90, and before the cull and the draw.
+     0x499226, the handler's first instruction after 0x498DA0 (the mouse's world position):
+       after IdleTick's GUI dispatch and before the head's first reader (0x499238); every path
+       of the head reaches 0x4995B8 (it holds no ret).
+   Both run on the game thread, where the key cancel 0x495F36 and the right-button cancel
+   (0x4993AC -> 0x499100) already run, inside the same two functions.
+   THE CANCEL: 0x499100 with the byte != 1 is the right button's cancel and reads nothing of its
+   message: 0x2CC3 = 1, 0x2CC6 &= ~0x20 (the order kept while a modifier is held), then
+   0x49FE60(menu, "STOP") finds the menu's STOP gadget and 0x4A6A40 resets its radio group, as
+   0x4990AE, 0x4992FA, 0x495F36 and 0x498FC0 do. It leaves BuildUnitID, as every cancel does;
+   its readers (0x419686, 0x4197DD, our packet) are behind the byte.
+   CLASS: local. Every reader of 0x2CC3 is the UI, and no peer reads it. The disarm logs nothing:
+   a builder dying mid-placement is ordinary play. */
+static const unsigned int s_placementMsg[6];    /* 0x499100's message: its cancel never reads it */
+
+static int placement_orderable(const unsigned char* m)
 {
-    FIXSITE site = { 0x00486DC7, 7, { 0x66, 0x89, 0x9E, 0xA6, 0x00, 0x00, 0x00 }, { 0 } };
-    static const unsigned char stub[] = {
-        0x9C,                                           /* pushfd                          */
-        0x50,                                           /* push eax                        */
-        0x51,                                           /* push ecx                        */
-        0xA1, 0xE8, 0x1D, 0x51, 0x00,                   /* mov eax,[0x511DE8]              */
-        0x80, 0xB8, 0xC3, 0x2C, 0x00, 0x00, 0x0E,       /* cmp byte [eax+0x2CC3],0x0E      */
-        0x75, 0x32,                                     /* jne done                        */
-        0x0F, 0xB7, 0x88, 0x9C, 0x7E, 0x03, 0x00,       /* movzx ecx,word [eax+0x37E9C]    */
-        0x85, 0xC9,                                     /* test ecx,ecx                    */
-        0x74, 0x27,                                     /* jz done                         */
-        0x69, 0xC9, 0x18, 0x01, 0x00, 0x00,             /* imul ecx,ecx,0x118              */
-        0x03, 0x88, 0x57, 0x43, 0x01, 0x00,             /* add ecx,[eax+0x14357]           */
-        0x3B, 0xCE,                                     /* cmp ecx,esi                     */
-        0x75, 0x17,                                     /* jne done                        */
-        0xC6, 0x80, 0xC3, 0x2C, 0x00, 0x00, 0x01,       /* mov byte [eax+0x2CC3],1         */
-        0x80, 0xA0, 0xC6, 0x2C, 0x00, 0x00, 0xDF,       /* and byte [eax+0x2CC6],0xDF      */
-        0x66, 0xC7, 0x80, 0xC4, 0x2C, 0x00, 0x00,
-        0x00, 0x00,                                     /* mov word [eax+0x2CC4],0         */
-        0x59,                                           /* done: pop ecx                   */
-        0x58,                                           /* pop eax                         */
-        0x9D,                                           /* popfd                           */
-        0x66, 0x89, 0x9E, 0xA6, 0x00, 0x00, 0x00,       /* mov word [esi+0xA6],bx (stolen) */
-    };                                                  /* jmp 0x486DCE                    */
-    unsigned char* a;
-    if (!fix_match(&site, 1)) return FIX_BYTES;
-    if (!(a = fix_code(sizeof stub + 5))) return FIX_STUB;
-    memcpy(a, stub, sizeof stub);
-    a[sizeof stub] = 0xE9;  tagpu_detour_rel(a + sizeof stub + 1, 0x00486DCE);
-    fix_branch(&site, 0xE9, a);
-    return fix_write(&site, 1);
+    unsigned int view = m[0x2A42];
+    const unsigned char* rec;
+    unsigned int begin, end, first, last, defs, ndefs, u;
+    if (view >= 10) return 0;
+    rec   = m + 0x1B63 + view * 0x14Bu;
+    begin = *(const unsigned int*)(m + 0x14357);
+    end   = *(const unsigned int*)(m + 0x1435B);      /* the array's last slot, inclusive */
+    first = *(const unsigned int*)(rec + 0x67);
+    last  = *(const unsigned int*)(rec + 0x6B);
+    if (first < begin || last > end || first > last ||
+        (first - begin) % 0x118u || (last - begin) % 0x118u) return 0;
+    defs  = *(const unsigned int*)(m + 0x1439B);
+    ndefs = *(const unsigned int*)(m + 0x1438F);      /* UNITINFOCount */
+    for (u = first; u <= last; u += 0x118u) {
+        const unsigned char* unit = (const unsigned char*)(size_t)u;
+        unsigned int def;
+        if (!(unit[0x110] & 0x10)) continue;
+        def = *(const unsigned int*)(unit + 0x92);
+        if (def < defs || (def - defs) % 0x249u || (def - defs) / 0x249u >= ndefs) continue;
+        if (((const unsigned char*)(size_t)def)[0x241] & 0x40) return 1;
+    }
+    return 0;
+}
+
+static void __cdecl placement_check(void)
+{
+    const unsigned char* m = *(unsigned char* const*)0x00511DE8;
+    if (!m || m[0x2CC3] != 0x0E || placement_orderable(m)) return;
+    ((void (__stdcall*)(const void*))0x00499100)(s_placementMsg);
+}
+
+static int fix_placement_orderable(void)
+{
+    FIXSITE site[2] = {
+        { 0x0049697B, 5, { 0xE8, 0x60, 0x51, 0xFF, 0xFF }, { 0 } },         /* call 0x48BAE0  */
+        { 0x00499226, 6, { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, { 0 } },   /* mov edx,[main] */
+    };
+    unsigned char *a, *b, *p;
+    if (!fix_match(site, 2)) return FIX_BYTES;
+    if (!(a = fix_code(12)) || !(b = fix_code(18))) return FIX_STUB;
+    p = a;                                          /* pushad; call; popad; jmp 0x48BAE0 */
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)placement_check); p += 4;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048BAE0);   /* whose ret comes back to 0x496980 */
+    p = b;                                          /* pushad; call; popad; the stolen mov; jmp */
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)placement_check); p += 4;
+    *p++ = 0x61;
+    memcpy(p, site[1].was, 6); p += 6;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049922C);
+    fix_branch(&site[0], 0xE8, a);
+    fix_branch(&site[1], 0xE9, b);
+    return fix_write(site, 2);
 }
 
 static void patch_loader_defects(void)
@@ -8261,12 +8297,12 @@ static void patch_loader_defects(void)
     int save = fix_save_order_fallback();
     int bar  = fix_stockpile_bar();
     int ring = fix_range_circle();
-    int plc  = fix_placement_builder();
+    int plc  = fix_placement_orderable();
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
                "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
                "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "
-               "radius 1 (0x438EDE) %s; a build placement disarmed with its tracked builder "
-               "(0x486DC7) %s. Counters: levels seeded at 0x%08X, network levels "
+               "radius 1 (0x438EDE) %s; a build placement disarmed with nobody to order "
+               "(0x49697B 0x499226) %s. Counters: levels seeded at 0x%08X, network levels "
                "seeded from the engine's session copy at 0x%08X, SetSessionDesc calls made, "
                "made over another GUID and withheld at 0x%08X 0x%08X 0x%08X, network levels "
                "seeded from the map alone at 0x%08X, yardmaps filled past their string at 0x%08X",

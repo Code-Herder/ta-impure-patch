@@ -124,9 +124,9 @@ faces of `0x45A2EC` are left there.
   no valid char fills `o`. Identical to stock for all 126 retail structures.
 - **Resurrection: a time-boxed measurement, else parked.** If the failure branch fires, the unit is
   finalised as the success path does, touching no grid cell.
-- **A build placement disarmed with its builder (B9, added 2026-09-26 from B6's side
-  measurement):** when the tracked unit ends, a placement armed from its menu is cancelled the
-  way the engine cancels one, silently. Local.
+- **A build placement disarmed when nobody is left to order (B9, added 2026-09-26 from B6's side
+  measurement):** when no unit is left that the placement's click would order, the placement is
+  ended through the engine's own cancel, silently. Local.
 - **TA's repair rate is the game's rule, not a B defect.** Stock clamps each repairer's HP and
   energy per call to *at most* 1 (`0x41BD87..0x41BDA3`, `min` where the formula reads as `max`).
   It is recorded, and a live check of the per-call rate rides along with a landing.
@@ -1473,66 +1473,95 @@ creates a unit complete and then writes its `+0x104` locally; how long a factory
 copy reads nonzero on the other peers, and so how often the split happens in play, was not
 measured.
 
-**B9 — a build placement disarmed with its builder.** Added 2026-09-26 by the owner from B6's
-side measurement, built on its own branch, not landed. Local, both builds, silent at run time.
+**B9 — a build placement disarmed when nobody is left to order.** Added 2026-09-26 by the owner
+from B6's side measurement, built on its own branch, not landed. Local, both builds, silent at
+run time. Its first build keyed the disarm to the tracked unit's free; the landing review found
+that a regression (below) and it was rebuilt on the walk's own test.
 
 *The defect (stock, UI).* A build button arms the placement: the order byte `main+0x2CC3` =
-`0x0E` and `BuildUnitID` `main+0x2CC4` (`0x41AB89`, `0x41AB9C`), from the menu of the tracked
-unit `main+0x37E9C`. When that unit ends, the frame check `0x4995C3..0x4995F1` drops the tracked
-unit and pops its menu, and nothing writes the byte. The placement square and our build ghost stay
-on the pointer. Every left press goes to the placement (`0x4993B6` → `0x498F70`): a blocked site
-refuses it, and a clear one hands the build to whatever is selected. Only a right-click, a key, or
-a click on a clear site ends it (`0x498FC0`).
+`0x0E` and `BuildUnitID` `main+0x2CC4` (`0x41AB89`, `0x41AB9C`). A left click on a clear site
+orders **every** unit the walk `0x419755..0x41976A` accepts — the view player's block, each unit
+selected (`+0x110` bit `0x10`) whose type has `+0x241` bit `0x40` — and ends the placement
+(`0x498FC0`). Stock leaves the byte armed when that set empties: when the selection dies (the frame
+check `0x4995C3` drops the tracked unit through `0x491D70(0)`, which writes neither byte), when a
+key recalls a group with no builder (the keys' one writer of the byte is their cancel `0x495F36`),
+and when a build button arms from a menu `0x491D70` left up because it deferred the drop (it only
+sets `0x37EBE` bit `0x10` while `0x37EBE & 0x865` or `0x2BEE & 0xE0` holds, `0x491D86..0x491DA2`).
+The square and our build ghost then stay on the pointer. Every left press goes to the placement
+(`0x4993B6` → `0x498F70`): a blocked site refuses it, and a clear one orders nobody and ends it.
 
-*The fix.* A `jmp` at the unit destructor's store of type 0, `0x486DC7`. When the byte is `0x0E`
-and the unit being freed is the tracked unit's slot, it makes the engine's own cancel writes:
-`0x2CC3` = 1 and `0x2CC6` bit 5 (the order kept while a modifier is held) cleared, as the
-right-click `0x499110`,
-the modifier's release `0x4992FA`, a key's case at `0x495F36` and the placement's own end
-`0x498FC0`
-all do. It also clears `BuildUnitID`, as the load's UI reset does (`0x491805`). It does not play
-the cancels' "STOP" sound, which answers the player's input. Every reader of `0x2CC4`, the
-engine's (`0x419686`, `0x4197DD`) and our packet's, is behind `0x2CC3 == 0x0E`. The disarm logs
-nothing; the one `enginefix:` line at install says ARMED or why it was skipped.
+*The invariant: a build placement is armed only while at least one unit exists that `0x419670`
+would order.* With three CORCK selected and the tracked one dead, stock builds with the other two
+on the next click, and so does B9.
 
-*The invariant: a build placement is armed only while its tracked builder exists.* The proof, by
-disassembly, for every way the tracked unit can end:
+*The fix.* `placement_check` (`tagpu_patches.c`) disarms when the byte is `0x0E` and
+`placement_orderable`, the walk's own test with every value it reads bounded (the view player
+below 10, the block inside the unit array and on its stride, each type inside `UNITINFOCount`),
+finds nobody. The disarm is the engine's own cancel: it calls `0x499100`, which with the byte not 1
+is the right button's cancel and reads nothing of its message — `0x2CC3` = 1, `0x2CC6` bit 5
+cleared, and the menu's STOP radio group reset through `0x49FE60(menu, "STOP")` and `0x4A6A40`, as
+every cancel does (`0x4990AE`, `0x4992FA`, `0x495F36`, `0x498FC0`). It leaves `BuildUnitID`, as
+every cancel does; every reader of it, the engine's (`0x419686`, `0x4197DD`) and our packet's, is
+behind the byte. The disarm logs nothing; the one `enginefix:` line at install says ARMED or why it
+was skipped.
 
-- **Death, self-destruct, the owner's defeat:** the unit dies and its slot is freed through the
-  destructor, whose store at `0x486DC7` is the only store of type 0 to a unit slot. The other
-  writers of `+0xA6` (`0x485ED2`, `0x486086`, `0x4862A2`) store a created unit's type.
-- **Given away, captured:** `UNITS_GiveUnit 0x488570`, reached from the capture at `0x4046C5`,
-  creates the unit anew for the receiver (`0x488700`) and kills the old one with 30 000 damage
-  (`0x4887D0`), so the old slot is freed through the same store.
-- **Loaded into a transport:** the unit keeps its slot. The builder still exists, so the
-  invariant holds and the placement is stock's.
-- **A game-state change:** a load resets the byte and the ID (`0x4917D0`, called at `0x497581`),
-  and no in-game code runs between levels.
-- **A slot freed and re-taken inside one frame:** covered by construction. The disarm happens at
-  the free, before any reuse; the frame check, which runs after up to five ticks, never sees such
-  a slot empty.
+*Where it runs, and why at two points.* The in-play handler `0x499200`, entered from IdleTick at
+`0x499A1C` in state 6, reads the byte in its head (the build cursor `0x4197D0` at `0x499241`, the
+cursor choice at `0x499297`, the click routing `0x4993B6`, the placement's click at `0x4995B3`),
+then calls the frame `0x496790` (`0x4995B8`), whose ticks free units, whose keys (`0x495E90`)
+recall groups and whose draw (`0x4969CD`) reads the byte and publishes our packet. IdleTick runs
+the GUI's dispatch `0x4A9FD0` (`0x499992`), which reaches the build buttons, before the handler.
+No one point follows every writer and precedes every reader, so the check runs at two, both on the
+game thread:
 
-The selection moving to another unit is not an end. The builder still exists, and what the
-placement does then is stock's.
+- `0x49697B`, the frame's `call 0x48BAE0`, reached by every path of `0x496790` after the ticks,
+  the keys and the scroll poll, and before the cull and the draw — so the frame drawn and the
+  packet published never show a placement with nobody to order;
+- `0x499226`, the handler's first instruction after the mouse's world position (`0x498DA0`),
+  after the GUI's dispatch and before the head's first reader of the byte.
+
+*The ends, by disassembly.* The check reads the state, not the event, so every end that empties
+the set is covered where it happens to be written:
+
+- **Death, self-destruct, the owner's defeat:** the free clears `+0x110` bits 4 and 5
+  (`0x486DE8`), so a freed unit leaves the set. The tracked unit's slot is no longer the test.
+- **Given away or captured:** `UNITS_GiveUnit 0x488570` (the capture's call at `0x4046C5`) kills
+  the old unit — to a remote player after sending a `0x14` (`0x4885E9..0x4886A4`, the kill at
+  `0x4886A4`), to a local one after creating the receiver's (`0x488700`, the kill at `0x4887D0`).
+- **Loaded into a transport:** the unit keeps its slot; whether it stays in the set is the walk's
+  own answer.
+- **A selection change while armed** (a group recalled by a key): the set is the new selection's.
+  Stock leaves the placement armed over it, and a click orders its builders; with none, B9
+  disarms.
+- **The deferred drop:** a build button armed while the menu stays up for a dead unit arms with
+  nobody to order, and the check at `0x499226` disarms it before the head reads the byte.
+- **A game-state change:** a load resets the byte and the ID (`0x4917D0`, called at `0x497581`).
 
 *Verification* (single player, private Xvfb, one script invocation per run):
 
-- `tools/b6-tracked-death.sh` on the fixed build (196 s): after the CORCK's death the byte read 1,
-  `BuildUnitID` 0 and the tracked unit 0. The ghost's cursor count stood at 2 683 across two
-  heartbeats, and the window picture has no square and no ghost. A left click on the CORAK made it
-  the tracked unit (3, `CORGEN.GUI`). Every verdict passed.
-- `tools/b9-placement-paths.sh` on the fixed build (129 s, the unchanged ends): a right-click
-  cancelled an armed placement (byte 1, the CORCK still tracked), and a left click on a clear site
-  placed a CORSOLAR (in the roster, and framed on the map) and ended it (byte 1). Both ends left
-  `BuildUnitID` at 246: the engine's cancels do not clear it, so B9 clearing it is the load's
-  reset, not the cancels', and harmless because every reader is behind the byte.
-- `B6_DLL=stocklimits tools/b6-tracked-death.sh` (234 s, `ddraw-stocklimits.dll`, the AI's slots
-  at 252–253): the same readings and verdicts, the ghost's count still at 2 760, and the picture
-  has no square and no ghost.
-- The previous build, the same script: the byte stayed `0x0E` and the ID 246 (B6's side
-  measurement above).
-- All three again on the branch with main merged in (C3 and B7 included): every verdict passed
-  (202 s, 136 s and 215 s).
+- `tools/b6-tracked-death.sh` on the fixed build: after the CORCK's death the byte read 1 and
+  the tracked unit 0, `BuildUnitID` stayed 246 as every cancel leaves it, the ghost's cursor count
+  stood at 2 841 across two heartbeats, and the window picture has no square and no ghost; a left
+  click on the CORAK made it the tracked unit (3). Every verdict passed. The run took 1 028 s, past
+  its ten minutes: a window picture was taken with an empty window id (`tacli ls` failed while
+  another session's instance was half made), and `import` then waited for a click, holding the X
+  server until it was killed. The scripts now retry the lookup and never capture without an id.
+- The same script on `ddraw-stocklimits.dll` (222 s): the same readings, and every verdict passed.
+- `tools/b9-placement-paths.sh` (the unchanged ends): a right-click still cancels an armed
+  placement (the CORCK still tracked), and a left click on a clear site still places a CORSOLAR and
+  ends it. Every verdict passed; 714 s, held up by the same stuck `tacli ls`.
+- **The group case is not verified.** `tools/b9-group-build.sh` needs three CORCK selected with a
+  placement armed, and the harness cannot make that state: a click and two shift-clicks select all
+  three (read back through `+0x110` bit `0x10`, 3 of 3), but with several units selected the engine
+  tracks none (`main+0x37E9C` 0) and shows the generic orders menu `CORGEN.GUI`, whose `CORBUILD`
+  tab is greyed, so no build button can be pressed; and arming from one CORCK's menu, then
+  recalling a group assigned with `ctrl+1`, read back 1 of 3. `tacli` has no selection verb and a
+  scenario cannot spawn units selected.
+
+*Measured, not fixed: the command modes.* The orders menu's modes 2..`0xD` (attack, move and the
+rest) are armed by `0x419C6A`..`0x41A0D7` and outlive their unit the same way, because
+`0x491D70` never writes `0x2CC3`. `tools/b9-attack-mode.sh`: with the CORAK alone in attack mode (the byte `0x03`), its death left the byte at `0x03` and no tracked unit. One left click on a CORCK afterwards was swallowed: the byte stayed `0x03`, and the CORCK was neither selected nor tracked. Nothing of the mode stayed drawn; the pointer was the plain arrow, not the attack cursor. The click goes to `0x498F70` (the byte is not 1, `0x4993B6`), and the byte staying `0x03` rules out its issuing path, which ends the mode at `0x4990AE`; the paths left return at `0x49903E` (cursor type `0xF`) or `0x4990F6` (from `0x11` up) with nothing issued. So until a right-click or a key cancels the mode, every left click is swallowed. The run took 907 s, past its ten minutes: a window picture was taken with an empty window id (`tacli ls` failed while another session's instance was half made), and `import` then waited for a click and held the X server until it was killed. The scripts now retry the lookup and never capture without an id. Whether B9 covers
+them is the owner's call.
 
 ## Open questions
 
