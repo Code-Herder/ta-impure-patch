@@ -262,10 +262,15 @@ static SHARED s_rgbAtlas;
    job goes and a new one is built. `s_rjPal` is the engine palette serial it
    was built with, and a move of it is a new job too: the job keeps the
    palette it was made with, and the base atlas it reads is re-sent in the new
-   colours. `s_rjTried` stops a device that refused from being asked once a
-   frame for the rest of the session. */
+   colours. `s_rjNb` is the layout it was built in (`s_nbMode`, below): the
+   choice can move under a standing request when the restorer epoch does, and
+   an atlas of either layout can have the other's size, so the layout is
+   compared as the serial is rather than left to a resize. `s_rjTried` stops a
+   device that refused from being asked once a frame for the rest of the
+   session. */
 static TAGPU_VKRJOB* s_rjob;
 static unsigned      s_rjSerial, s_rjPal;
+static int           s_rjNb;
 static int           s_rjTried;
 static unsigned      s_rjEpoch;            /* the restorer epoch it was set in */
 static int           s_rjPainted;          /* job_painted at the last report  */
@@ -1358,12 +1363,12 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         if (s_rjob) {
             tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL;
-           
             s_rgbAtlas.have = 0;           /* what it holds is the old map's   */
         }
         return;
     }
-    if (s_rjob && s_rjSerial == t->restoreSerial && s_rjPal == t->palSerial) {
+    if (s_rjob && s_rjSerial == t->restoreSerial && s_rjPal == t->palSerial &&
+        s_rjNb == s_nbMode) {
         /* Live. `painted` is the only thing that changes the pass's own view of
            the atlas: one painted frame is what makes it a picture, and it is
            what `uRestored` and binding 41 are both computed from, below. */
@@ -1410,10 +1415,12 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        map's colours over this one -- which is the failure class this stack is
        worst at. Dropping it falls back to the base atlas, which is the
        documented Classic++ fallback. The palette serial moving is the same
-       fact about colour: the picture was painted in the old table's. Both
-       unmoved is a job that failed on this request, and its picture stands
-       (above). */
-    if (s_rjSerial != t->restoreSerial || s_rjPal != t->palSerial) s_rgbAtlas.have = 0;
+       fact about colour: the picture was painted in the old table's, and the
+       layout moving is the same fact about addressing: the shader would read
+       the picture's cells in the other layout. All three unmoved is a job that
+       failed on this request, and its picture stands (above). */
+    if (s_rjSerial != t->restoreSerial || s_rjPal != t->palSerial || s_rjNb != s_nbMode)
+        s_rgbAtlas.have = 0;
     /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
     if (s_rjTried && s_rjEpoch != tagpu_vk_restore_epoch()) s_rjTried = 0;
     if (s_rjTried) return;
@@ -1444,8 +1451,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
     }
     s_rjGen++;
     /* THE LIST IN THE LAYOUT THE IMAGE WAS SIZED FOR: `s_nbMode` chose the
-       image's size in this frame's `prepare`, and it cannot change under the
-       request, so the frames and the image agree */
+       image's size in this frame's `prepare`, and a later change of it is a
+       new job (`s_rjNb`, above), so the frames and the image agree */
     if (!(s_nbMode ? nb_feed(d, t)
                    : tagpu_vk_restore_job_add(s_rjob, t->restoreFrames, t->restoreN))) {
         plog(d, "terr: %d restore frames would not queue - nothing restored here",
@@ -1457,6 +1464,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
     }
     s_rjSerial = t->restoreSerial;
     s_rjPal = t->palSerial;
+    s_rjNb = s_nbMode;
     s_rjPainted = 0;
     plog(d, "terr: restoring the tile atlas HERE - %d %s over %dx%d, "
             "serial %u", s_nbMode ? t->nbN : t->restoreN,
