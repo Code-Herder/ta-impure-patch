@@ -65,7 +65,10 @@ byte from `+0x245`/`ah&0x10` to `+0x246`/`ah&0x04`); resurrection units can recl
 (`0x004266A5`); `+atm` fills storage (`0x000FBA7F`, float `-1000.0` → `-4.3e12`).
 
 **6. Unknown.** The file honestly labels `0x000FB239`, `0x000FB255`, `0x000FB271`, `0x001005D8`,
-`0x001005E4` as `STILL UNKNOWN`. 11.3.0 adds two identified ones: click-snap radii for metal patches
+`0x001005E4` as `STILL UNKNOWN`. The last two are identified: `0x00501FD8` and `0x00501FE4` are the
+permission levels of the console commands `+AI` and `+Control`, lowered from 4 (developer) to 2
+(cheat, beside `+ATM` and `+LOS`); the 3.9.02 exe carries the same two bytes
+([the 3.9.02 exe](compat/setups.md#the-3902-exe)). 11.3.0 adds two identified ones: click-snap radii for metal patches
 (`0x00101F0A` = `03 03`) and reclaimable features (`0x00101F12` = `01 01`), poked into `.rdata` padding
 and read by `tdraw.dll`.
 
@@ -191,18 +194,23 @@ The reported 680,448-byte community `tdraw.dll` matches **neither** file here. O
 a byte-for-byte diff was not performed; the export-name evidence settles it regardless.
 
 Other DLLs in 11.3.0: `ddraw.dll` (358,912) and `ddraw_custom.dll` (316,928) are **cnc-ddraw** by
-FunkyFr3sh; `tplayx.dll` (298,496) is the TA Patch demo-recorder DirectPlay component.
+FunkyFr3sh; `tplayx.dll` (298,496) is TADR's demo recorder, which loads the system's DirectPlay.
 
 ## Relationship to the community patch stack
 
 Mayhem 11.3.0 does **not** "auto-download the TA Patch" — it **bundles** it and **hard-requires** it.
-The shipped `dplayx.dll` (the Patch Loader) refuses to start unless (a) a byte signature at
-`game_exe+0x00010000` matches official 3.1, and (b) the exe's DirectDraw import string at `0x004FF618`
-has been renamed away from `DDRAW.dll` — otherwise it shows *"Incompatible game files detected…"* or
-*"Incompatible tdraw.dll found, please re-install the Total Annihilation Community Patch."* So the load
-chain is: `TotalA.exe` → `tdraw.dll` (community patch, replaces `ddraw`) → `dplayx.dll` (Patch Loader,
-applies 160 Mayhem hex patches from its embedded INI) → `tplayx.dll` (real DirectPlay) →
-`ddraw.dll` (cnc-ddraw) for rendering.
+The shipped `dplayx.dll` (the Patch Loader) refuses to start unless a byte signature at
+`game_exe+0x00010000` matches official 3.1, and refuses a mixed install — an exe whose DirectDraw
+import string at `0x004FF618` is **not** `DDRAW.dll` while its multiplayer version is not 3.1
+(*"Incompatible game files detected…"*); it refuses a missing or foreign `tdraw.dll` too. The load
+chain, measured on Wine with the `+loaddll` trace (2026-09-26): the stock `TotalA.exe` imports
+`DDRAW.dll` and `DPLAYX.dll` from the game folder — cnc-ddraw and the Patch Loader; the loader's
+forwarded exports bring in `tplayx.dll` (the recorder), which loads the system's `dplayx.dll`; the
+loader applies the Mayhem patches, loads `tdraw.dll` and points the exe's two `DirectDrawCreate`
+calls at it, and tdraw wraps the `ddraw.dll` already loaded. `ddraw_custom.dll` is never loaded.
+A player who copies Impure over `ddraw.dll` therefore gets Impure under TADR's wrapper, with TADR's
+limit crack on top of Impure's limits, and a crash on the first skirmish load
+([TADR beside Impure](compat/tadr-collision.md)).
 
 **Does the Patch Loader ship a config for Mayhem? Yes** — `res/mayhem.ini` is one of only three INIs in
 the repo (`patches.ini` = plain OTA, `prota.ini` = ProTA, `mayhem.ini` = Total Mayhem), i.e. Mayhem is
