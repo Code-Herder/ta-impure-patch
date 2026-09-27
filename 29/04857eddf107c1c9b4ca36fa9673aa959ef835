@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high focused range=23ad7d3..2904857 findings=3 acted=3 rejected=0 date=2026-09-27 (no code defect; the leave case's bit numbers, the 0x4867CB site's registers in the comment, the counter-turn caveat in two notes -- in 392d25e)
