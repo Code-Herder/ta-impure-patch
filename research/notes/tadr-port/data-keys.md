@@ -469,7 +469,8 @@ commit can change.
   marks each keyed passenger it detaches with it, and the pick honours a mark only inside the
   kill-all that wrote it. The state is the thread's own because the removal's kill-all runs on
   whichever thread pumps: the pump holds no lock, and during a network load both the loader and
-  the game thread run it. A mark left behind matches no later kill-all, so nothing is emptied.
+  the game thread run it. A mark left behind matches no later kill-all until the 32-bit counter has turned, so nothing is
+  emptied.
 - **Inside kill-all, a departed player's units are detached without the broadcast (`0x4867CB`,
   `0x48681D`).** The detach wrapper `0x48AAC0` sends its `0x0A` from whichever peer runs it, and
   every remaining peer runs the removal's kill-all on its own copy; with three peers or more the

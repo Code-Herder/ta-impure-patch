@@ -3928,8 +3928,8 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   dispatch: it tests `main+0x2A44` bit 0, zeroes ten dwords and calls the receive `0x4534E0`
   (`0x453D40..0x453D94`), and the cases run on the caller's thread. During a network
   load the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) both run it, and the
-  leave case (`0x4550B8..0x4550D5`) tests only the seat record and bits 1 and 2 of
-  `main+0x38D75`, so the removal `0x452CC0`, and its kill-all, can run on either thread.
+  leave case (`0x4550B8..0x4550D5`) tests only the seat record and bits 0 and 1 of
+  `main+0x38D75` (`0x4550C2`, `0x4550CB`), so the removal `0x452CC0`, and its kill-all, can run on either thread.
 
 ### What the tests measured
 

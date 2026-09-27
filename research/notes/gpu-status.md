@@ -19456,7 +19456,7 @@ across its dispatch, and both the loader (`0x49727D`) and the game thread's load
 and the removal's kill-all. So the running kill-all is the thread's own: its token, from an
 interlocked counter, lives in a TLS slot, and a kill mark matches only the kill-all that wrote it;
 two threads' kill-alls never honour each other's marks, and a mark left behind matches no later
-one, so nothing is emptied. Every index is a u16 or bounded by B4's table, and each per-slot array
+one until the 32-bit counter has turned, so nothing is emptied. Every index is a u16 or bounded by B4's table, and each per-slot array
 holds 65 536 entries.
 
 **Measured** (the full list is in the plan's *C4, as built*):

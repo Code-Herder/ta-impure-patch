@@ -7753,9 +7753,10 @@ static void tx_rx_swept(const unsigned char* m)
      it); 0x48663D jumps to the site's first byte.
    - 0x486679 (call 0x4866D0): tx_wrap has the destructor's signature, stdcall (rec, mode),
      ret 8. eax holds the record there and nothing reads it after the call (0x48667E on).
+   - 0x4867CB (call 0x48AAC0, after its four pushes): esi the dying unit, which is the child;
+     the stub has the wrapper's signature, stdcall (child, parent, a3, a4), ret 0x10 (0x48AB6A).
    - 0x486810 (mov ecx,[esi+0x8A]): esi the transport, after the hit's return.
-   - 0x48681D (call 0x48AAC0, after its four pushes): esi still the transport; the stub has the
-     wrapper's signature, stdcall (child, parent, a3, a4), ret 0x10 (0x48AB6A).
+   - 0x48681D (call 0x48AAC0, after its four pushes): esi still the transport; the same stub.
    - 0x486F10 (kill-all's first ten bytes): stdcall (player), ret 4 (0x486FC6).
    - 0x42B019 (mov [ebp+0x146],edx): edx the finished CRC_weapons, ecx the unit's UNITINFO
      context (0x42B00A), ebp the def, and the call 0x42B01F's three arguments already pushed.
