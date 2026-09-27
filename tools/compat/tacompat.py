@@ -1372,7 +1372,7 @@ def lobby_to_selgame(inst, nick):
     lobby_field(inst, "NICKNAME", nick)
 
 
-def wine_lobby(host, join):
+def wine_lobby(host, join, port):
     """tools/mp_lobby.sh's walk, host then joiner, into one live game on the battle's map."""
     lobby_to_selgame(host, "HOST")
     lobby_ui(host, "click", "STARTNEW", timeout=30)
@@ -1395,6 +1395,11 @@ def wine_lobby(host, join):
             break
         lobby_ui(join, "click", "UPDATE")
         time.sleep(5)
+    else:
+        # Say who answers the joiner's enumeration: the host's own name server, a stale one of
+        # another prefix, or nobody -- three different failures that read the same on screen.
+        raise Lobby(f"{join}: no session listed after 12 UPDATEs; DirectPlay port {port} held by "
+                    f"{dplay_holders(port) or 'nobody'}")
     lobby_ui(join, "click", "JOINGAME", timeout=30)
     lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
     lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
@@ -1448,7 +1453,7 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
         if held:
             return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
                     "evidence": [], "port": port}
-        out = play_mp(setup["_inst"], join, seconds, host_display, join_display)
+        out = play_mp(setup["_inst"], join, seconds, host_display, join_display, port)
         out["port"] = port
         return out
     except SystemExit as e:                     # dpport refused the files: say so, as a result
@@ -1457,7 +1462,7 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
         ports.put(port)
 
 
-def play_mp(host, join, seconds, host_display, join_display) -> dict:
+def play_mp(host, join, seconds, host_display, join_display, port) -> dict:
     """The game itself: both peers started, walked into one game, fought, watched, read."""
     peers = {"host": host, "join": join}
     t0 = time.time()
@@ -1483,7 +1488,7 @@ def play_mp(host, join, seconds, host_display, join_display) -> dict:
                 raise Lobby(f"a box before the menu: {boxes[0]['title']}")
             if len(menus) < 2:
                 raise Lobby(f"the main menu never came up on {', '.join(sorted(set(games) - menus))}")
-            wine_lobby(peers["host"]["name"], peers["join"]["name"])
+            wine_lobby(peers["host"]["name"], peers["join"]["name"], port)
             for role, scen in zip(("host", "join"), MP_SCENARIOS):
                 r = tacli("scenario", "apply", peers[role]["name"], scen, timeout=180)
                 if r.returncode != 0:
