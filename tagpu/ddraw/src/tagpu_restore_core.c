@@ -650,9 +650,8 @@ static void job_drained(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         rlog(b);
     } else if (s_opt.log || s->slice - j->lastTallySlice >= QUEUE_LOG_FRAMES) {
         j->lastTallySlice = s->slice;
-        _snprintf(b, sizeof b, "%s: %s: queue drained: %d frames in %d batches this run, %u frames from the first queued to the last painted (%.0f ms, %d slices drawn in, GPU %.0f ms measured over %.0f%% of the work); %d frames, %d batches, %d dispatches so far",
+        _snprintf(b, sizeof b, "%s: %s: queue drained: %d frames in %d batches this run, %u frames from the first queued to the last painted (%.0f ms, %d slices drawn in); %d frames, %d batches, %d dispatches so far",
                   s->be->name, j->tag, j->rframes, j->rbatches, frames, wall, j->rslices,
-                  j->rgpuNs / 1e6, j->runits > 0.0 ? 100.0 * j->rgpuUnits / j->runits : 0.0,
                   j->tframes, j->tbatches, j->tdraws);
         rlog(b);
     }

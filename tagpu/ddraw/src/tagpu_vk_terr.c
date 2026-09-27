@@ -123,6 +123,7 @@
 #include "tagpu_terr.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_restore_guard.h"        /* tagpu_rguard_fault */
 #include "tagpu_vk_stage.h"
 #include "tagpu_pal.h"                  /* tagpu_pal_expand */
 #include "spirv/tagpu_terr.spv.h"
@@ -1606,9 +1607,13 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         s_nbMode = nb_choose(d, &t);
         s_nbChosen = 1; s_nbFor = t.restoreSerial;
     }
+    /* tagpu_restorefault.on's `nballoc` stands in for the device refusing the
+       neighbourhood atlas, where no image is there yet: the state a refusal
+       leaves once `shared_resize` has retired the old one */
     if (t.restoreFrames &&
-        !shared_resize(d, &s_rgbAtlas, s_nbMode ? t.nbW : t.atlasW, s_nbMode ? t.nbH : t.atlasH,
-                       VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED)) {
+        ((s_nbMode && !s_rgbAtlas.img && tagpu_rguard_fault("nballoc")) ||
+         !shared_resize(d, &s_rgbAtlas, s_nbMode ? t.nbW : t.atlasW, s_nbMode ? t.nbH : t.atlasH,
+                        VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED))) {
         if (s_rgbAtlas.img) return 0;
         /* A REFUSED ALLOCATION FALLS BACK (D10): the per-tile atlas, sized on
            a later frame once the retire of the image this one replaced has

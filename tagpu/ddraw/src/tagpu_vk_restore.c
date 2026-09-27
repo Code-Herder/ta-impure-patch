@@ -1639,6 +1639,13 @@ int tagpu_vk_restore_fits(const TAGPU_VKPASS* d, unsigned long long bytes, char*
     uint32_t i;
     if (why && whyLen > 0) why[0] = 0;
     if (!d || !d->pd) return 0;
+    if (tagpu_rguard_fault("nbfit")) {
+        if (why) {
+            _snprintf(why, whyLen, "%llu MB, and tagpu_restorefault.on's nbfit says no", bytes >> 20);
+            why[whyLen - 1] = 0;
+        }
+        return 0;
+    }
     if (tagpu_vk_mem_free(&freeB, &heap)) {
         if (why) {
             _snprintf(why, whyLen, "%llu MB against half of the %llu MB the driver says is free (of %llu MB)",

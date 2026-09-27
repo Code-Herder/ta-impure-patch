@@ -105,7 +105,9 @@ int  tagpu_rguard_blame_lost(void);
 /* THE FAULT LEVER, tagpu_restorefault.on, for testing the three paths above:
    `probe` spoils one byte of the self-test's readback, `crash` faults inside
    a restorer call, `lost` has the seam report a device loss while restorer
-   work is in flight. Read once. */
+   work is in flight. Two more drive the terrain's per-tile fallback (D10):
+   `nbfit` has the neighbourhood atlas not fit, `nballoc` has the device
+   refuse it. Read once. */
 int  tagpu_rguard_fault(const char* token);
 /* The `lost` lever's one shot: 1 once, when armed and restorer work is in flight. */
 int  tagpu_rguard_fault_lost(void);
