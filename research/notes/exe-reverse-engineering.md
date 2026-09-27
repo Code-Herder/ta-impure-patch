@@ -377,7 +377,7 @@ made, or its page cannot be made writable. Each of the twenty-nine, and why:
 | the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
-| a build placement disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
+| an order mode disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -4128,8 +4128,10 @@ through the engine's **state-handler slot `[main+0x391F5]`**, dispatched at the 
 in-game handler by the loading-screen handler `0x497F40` (`mov [ecx+0x391F5], 0x499200` at
 `0x498455`, beside `mov [ecx+0x391F1], 6`), and also at `0x490BC5`. The same slot holds
 `0x496BB0`, `0x496B10`, `0x496CE0`, `0x496DB0`, `0x497F40` and `0x499880` — it is the engine's
-whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it is
-called directly from `0x499200` at `0x4995B8` and `0x4996A5`.
+whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it has
+three direct callers: `0x499200` at `0x4995B8` (in play) and `0x4996A5` (a network game's end,
+after `0x491D70(1)` at `0x499674` and `GUI_Pop 0x4A9660` at `0x499686`), and the loading screen
+at `0x49842F`.
 
 **But THREE OF THE SIX are pinned to the game thread by construction, in the strongest way this
 binary allows.** `0x499200` — the function holding `0x4996AA`, `0x49971D` and `0x4997AF` — also
@@ -7058,7 +7060,8 @@ menus' handler `0x41AA00` (address-taken, no direct caller) writes the order byt
 `0x0E` at `0x41AB89` and `BuildUnitID` `main+0x2CC4` at `0x41AB9C`. It is reached through the
 GUI's dispatch `0x4A9FD0`, which IdleTick `0x499890` calls at `0x499992` before it enters the
 state's handler (`0x499A1C`). **The placement's click orders the selection, not the tracked
-unit**: `0x419670` walks the view player's block — record `main+0x1B63 + 0x14B·main+0x2A42`, units
+unit**: `0x419670` walks the controlled player's block (`main+0x2A43` is the viewed player) —
+record `main+0x1B63 + 0x14B·main+0x2A42`, units
 `+0x67` to `+0x6B` inclusive (`0x41972A..0x419753`) — and orders every unit that is selected
 (`+0x110` bit `0x10`, `0x419755`) and whose type (`+0x92`) has `+0x241` bit `0x40`
 (`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`). The free clears
@@ -7120,11 +7123,34 @@ the keys and the scroll poll `0x41CE90` and before the cull and the draw; and `0
 handler's first instruction after `0x498DA0` (the mouse's world position, `0x499221`; the stub runs
 the stolen `mov edx,[0x511DE8]` and rejoins at `0x49922C`), after the GUI's dispatch and before the
 head's first reader. When the byte is `0x0E` and the placement walk's own test, or a command
-mode and `0x48CF30`'s first test (a selected unit), finds nobody, its values bounded (the view
-player below 10, the block inside the array and on its stride, each type inside
+mode and `0x48CF30`'s first test (a selected unit), finds nobody, its values bounded (the
+controlled player below 10, the block inside the array and on its stride, each type inside
 `UNITINFOCount`), it calls `0x499100`: with the byte not 1 that is the right button's cancel for
 every order, the same writes whatever the mode, and it reads nothing of its message. MEASURED on the fixed
 build: see [the plan's B9](tadr-port/sim-fixes.md).
+
+**Where the cancel cannot be called.** `0x499100` reads the menu `[[main+0x531]+4]` at `0x49913B`
+with no test, and passes it to `0x49FE60(menu, "STOP")` (`0x49913F`); the engine guards the same
+read in `0x491D70` (`0x491DB3..0x491DBB`). Of `0x496790`'s three callers, the network game's end
+`0x4996A5` runs after the stack was popped, possibly to NULL, and the loading screen's `0x49842F`
+runs after the load's reset wrote the byte to 1 (`0x4917F9`), so `order_check` returns while
+`main+0x531` is NULL. The other is a modal screen: under one, `0x49FE60` searches the modal
+screen, returns -1, and the order button underneath stays drawn pressed with the byte 1. The
+engine's own test for deferring menu work is `0x37EBE & 0x865` or `0x2BEE & 0xE0` — in
+`0x491D70(0)` (`0x491D76..0x491D8D`) and in the frame before the deferred drop
+(`0x496986..0x4969A4`, the drop `0x41B2E0` at `0x4969B4`). Its named bits: bit 0, the options
+stack (`ARMOPT`, `EXITMENU`, `YESORNO`, the preferences), set at `0x4961C1` (the key that pushes
+`ARMOPT`), `0x49477E` (beside `"OPTIONS"`) and `0x45D002` (`0x45CFC0`); bit 2, set at
+`0x49412C`, the chat `TALK.GUI`, pushed by `0x494050` (`0x49410A`) from the Enter key's case
+`0x4964FD` of the in-game key switch and cleared by its handler `0x493BF0` (`0x493C18`); bit 6,
+`SHARE.GUI` (`0x49374F`). Bits 5 and
+11 of the word and `0x2BEE`'s three were not identified. `order_check` defers on the same test.
+In single player the frame skips the ticks while bit 0 is set (`0x496918` → `0x49697B`), so no
+unit dies under the options stack; with `main+0x2A44` bit 0 [INFERRED: a network game] they run
+(`0x4967E7`). The chat does not stop them: MEASURED 2026-09-26 with `tools/b9-under-chat.sh`, a
+CORAK died under `TALK.GUI` with ATTACK armed; the word read `0x2006` with the chat up and `0x2016`
+after the death (the drop pending), the byte stayed 3 until Escape closed the chat, then read 1,
+and the engine's deferred drop took the dead unit's menu down (`CORMAIN2.GUI` on top).
 
 **The remote give.** `UNITS_GiveUnit 0x488570` to a remote player builds a `0x14` record
 (`0x488603`), sends it (`0x451DF0` at `0x488693`) and kills the unit at `0x4886A4` (`0x489BB0`)
