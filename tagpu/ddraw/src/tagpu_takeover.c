@@ -78,7 +78,11 @@ static int to_file_exports(const wchar_t* path, const char* want)
     const unsigned char* b;
     DWORD size;
     int yes = 0;
-    f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    /* No FILE_SHARE_WRITE: while this handle is open no handle with write access can exist
+       (the open fails if one does), so nothing can shorten the file under the view, and the
+       size read here is the size of what is mapped. A file held open for writing is not
+       looked at -- the load goes ahead as asked, and the safety net is behind it. */
+    f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return 0;
     size = GetFileSize(f, NULL);
@@ -110,7 +114,7 @@ static int to_dir(const wchar_t* path, wchar_t* dir, size_t cap)
     return 1;
 }
 
-HMODULE tagpu_takeover_loadlibrary_w(const wchar_t* name, void* caller)
+HMODULE tagpu_takeover_loadlibrary_w(const wchar_t* name, DWORD flags, void* caller)
 {
     wchar_t exe[MAX_PATH], game[MAX_PATH], self[MAX_PATH], full[MAX_PATH], dir[MAX_PATH], who[MAX_PATH];
     char whoA[MAX_PATH], fullA[MAX_PATH];
@@ -119,6 +123,7 @@ HMODULE tagpu_takeover_loadlibrary_w(const wchar_t* name, void* caller)
     HMODULE callmod = NULL;
     DWORD n;
     if (!name || !*name || !g_ddraw_module) return NULL;
+    if (flags & ~(DWORD)LOAD_WITH_ALTERED_SEARCH_PATH) return NULL;
     if (!GetModuleFileNameW(NULL, exe, MAX_PATH) || !to_dir(exe, game, MAX_PATH)) return NULL;
     if (!GetModuleFileNameW(g_ddraw_module, self, MAX_PATH)) return NULL;
     /* the lever: the suite's proof that the safety net catches what this keeps out */
@@ -130,6 +135,7 @@ HMODULE tagpu_takeover_loadlibrary_w(const wchar_t* name, void* caller)
        name with a folder in it loads from that folder. Either way, only a file in the
        game folder is a candidate: nothing from the system is ever answered for. */
     if (!wcschr(name, L'\\') && !wcschr(name, L'/')) {
+        if (GetModuleHandleW(name)) return NULL;
         n = (DWORD)_snwprintf(full, MAX_PATH, L"%s%s%s", game, name, wcschr(name, L'.') ? L"" : L".dll");
         if (n >= MAX_PATH) return NULL;
         full[MAX_PATH - 1] = 0;
@@ -160,9 +166,9 @@ HMODULE tagpu_takeover_loadlibrary_w(const wchar_t* name, void* caller)
     return real_LoadLibraryW(self);
 }
 
-HMODULE tagpu_takeover_loadlibrary_a(const char* name, void* caller)
+HMODULE tagpu_takeover_loadlibrary_a(const char* name, DWORD flags, void* caller)
 {
     wchar_t w[MAX_PATH];
     if (!name || !MultiByteToWideChar(CP_ACP, 0, name, -1, w, MAX_PATH)) return NULL;
-    return tagpu_takeover_loadlibrary_w(w, caller);
+    return tagpu_takeover_loadlibrary_w(w, flags, caller);
 }

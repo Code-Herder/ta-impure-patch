@@ -9746,7 +9746,8 @@ static void lim_hex(char* out, const unsigned char* b, int n, int max)
    at the first DirectDraw call, which comes after every DLL's DllMain -- the exe's entry point
    runs after all of them, and its WinMain makes the call. A site that no longer holds our
    bytes was rewritten by a patcher that started after Impure (a pre-2026 TADR's limit crack
-   rewrites twelve and crashes the first skirmish load); stopping here, before any game exists,
+   rewrote 17 beside Total Mayhem 11.3.0, MEASURED 2026-09-26, and crashes the first skirmish
+   load); stopping here, before any game exists,
    turns that into a refusal. A write made after this call is outside it. s_limState stays 1:
    the raised pools stay the ones the engine code was pointed at while the report runs. */
 static void lim_verify(void)
@@ -9827,8 +9828,7 @@ void tagpu_limits_report(void)
         "break multiplayer without warning.\r\n"
         "\r\n"
         "WHAT TO DO\r\n"
-        "- Use the original 3.1 TotalA.exe (the Steam copy is 3.1). Community patches "
-        "such as 3.9.02 and TA: Escalation ship a modified exe.\r\n"
+        "%s"
         "- Or report it: press Ctrl+C to copy this message and paste it into a new "
         "issue at\r\n"
         "github.com/Code-Herder/ta-impure-patch/issues\r\n"
@@ -9843,7 +9843,13 @@ void tagpu_limits_report(void)
                          "Total Annihilation will now close before a battle can crash."
                        : "Impure could not install its engine limits and fixes, so Total "
                          "Annihilation will now close. Nothing was changed.",
-        why, GIT_COMMIT, GIT_BRANCH, base, size, md5, (unsigned long)stamp, known);
+        why,
+        s_limRewritten ? "- Take the other patcher out of the game folder: TADR's tdraw.dll, or "
+                         "a copy of it under another name. If the folder has a file named "
+                         "tagpu_takeover.off, delete it: it lets TADR start.\r\n"
+                       : "- Use the original 3.1 TotalA.exe (the Steam copy is 3.1). Community "
+                         "patches such as 3.9.02 and TA: Escalation ship a modified exe.\r\n",
+        GIT_COMMIT, GIT_BRANCH, base, size, md5, (unsigned long)stamp, known);
     text[sizeof text - 1] = 0;
 
     if (s_limNoStub)

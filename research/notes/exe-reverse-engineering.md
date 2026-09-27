@@ -309,8 +309,10 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
 
 - **`0x47BFA2`, `0x4B55FB`** — the exe's two `call 0x49F710`, and `0x49F710` is the
   `DirectDrawCreate` import thunk (`jmp [0x4FC02C]`). The Community Patch Loader's `patch_call`
-  points both at `tdraw.dll`'s export, so on that route the exe's DirectDraw goes through TADR
-  and TADR calls whatever `ddraw.dll` it loaded.
+  points both at the `DirectDrawCreate` of the module its `LoadLibraryA("tdraw.dll")` returned:
+  without Impure that is TADR's, which calls whatever `ddraw.dll` it loaded; with Impure, which
+  answers that request with itself (`tagpu_takeover.c`), it is Impure's own. Neither address is
+  a site of Impure's table.
 - **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a

@@ -40,7 +40,7 @@ bytes it finds.
 |---|---|---|---|
 | retail | `DDRAW`, `DPLAYX` | the exe | Impure's `DllMain`, before the exe's entry point |
 | retail + recorder | `DDRAW`, `DPLAYX` → the 2006 `Dplayx.dll` | the exe | Impure; the recorder loads as the exe's DirectPlay |
-| retail + Patch Loader | `DDRAW`, `DPLAYX` → the loader | the exe | Impure, then the loader's presets, then `tdraw.dll` |
+| retail + Patch Loader | `DDRAW`, `DPLAYX` → the loader | the exe | Impure, then the loader's presets; its `tdraw.dll` is answered with Impure ([the takeover](takeover.md)) |
 | 3.9.02 / Escalation | `TDRAW` / `TAESC` | `tdraw.dll`'s `DllMain`, `LoadLibrary("ddraw.dll")` | Impure, *inside* tdraw's start-up |
 | gammata's drop-in | `TDRAW` | nobody: tdraw loads `ddraw_custom.dll` | cnc-ddraw |
 
@@ -49,11 +49,16 @@ bytes it finds.
 DirectPlay import loads it. Its `DllMain` checks for the retail exe, applies its preset list
 without reading the bytes it replaces, sets `0x401064` = 1 (the handshake tdraw reads),
 `LoadLibraryA("tdraw.dll")` (it shows an error box and exits if that fails), and points the
-exe's two `DirectDrawCreate` calls, `0x47BFA2` and `0x4B55FB`, at tdraw's export. Its DirectPlay
-exports forward to `tplayx.dll`, TADR's recorder. Impure's `DllMain` has run before all of this:
-`tagpu_limits_install` (`dllmain.c`) compares its whole fail-closed site table with the stock
-3.1 bytes, finds them stock, and writes every site. Nothing reads those sites again afterwards —
-which is the gap the pre-2026 TADR falls through.
+exe's two `DirectDrawCreate` calls, `0x47BFA2` and `0x4B55FB`, at the `DirectDrawCreate` of the
+module that call returned. Its DirectPlay exports forward to `tplayx.dll`, TADR's recorder.
+Impure's `DllMain` has run before all of this: `tagpu_limits_install` (`dllmain.c`) compares its
+whole fail-closed site table with the stock 3.1 bytes, finds them stock, and writes every site,
+and the fork's `hook_init` points the loader's `LoadLibrary` imports at Impure's. So the
+loader's request for `tdraw.dll` is answered with Impure itself, TADR's `DllMain` never runs,
+and the two calls reach Impure's own export ([the takeover](takeover.md), part 1). At the first
+DirectDraw call Impure reads every site again (part 4): with the takeover switched off, a
+pre-2026 TADR's rewrites are what it finds, and the game stops there instead of crashing when
+the first battle loads.
 
 Mods on this route move the game's registry key through the loader's `RegistryPath=`:
 Total Mayhem to `Software\TotalM`, ProTA to `Software\ProTA`. A fresh key has the stock default

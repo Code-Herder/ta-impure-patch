@@ -243,7 +243,7 @@
     },
     {
       "name": "mayhem-11.3.0-net",
-      "about": "Total Mayhem 11.3.0 with the takeover switched off (tagpu_takeover.off): TADR starts and rewrites twelve of Impure's sites, and the safety net must stop the game at the first DirectDraw call instead of letting the first skirmish load crash",
+      "about": "Total Mayhem 11.3.0 with the takeover switched off (tagpu_takeover.off): TADR starts and rewrites 17 of Impure's sites, and the safety net must stop the game at the first DirectDraw call instead of letting the first skirmish load crash",
       "add": [
         {
           "fixture": "mayhem-11.3.0",

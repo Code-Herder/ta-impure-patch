@@ -2175,8 +2175,8 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 265 sites in
-all in the raised build (MEASURED 2026-09-26 from the log line), and the fixes' 99 in the
-stock-limits build, where the weapon IDs' four sites join them (MEASURED 2026-09-25). It
+all in the raised build (MEASURED 2026-09-26 from the log line), and the fixes alone in the
+stock-limits build, where the weapon IDs' four sites join them. It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
@@ -2184,7 +2184,7 @@ never restored. The log line names the moved pools' addresses for `tacli peek`: 
 installed 265 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16383, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
-nothing raised (…); the simulation fixes' 99 sites installed`. Right before it, once both
+nothing raised (…); the simulation fixes' N sites installed`. Right before it, once both
 installers have taken their stubs, `enginefix: the fixes' and limits' stubs take N bytes in P page(s)
 of 4096` (§2.6c).
 
@@ -2680,11 +2680,15 @@ On the Community Patch Loader route that request is the loader's `LoadLibraryA("
 TADR installs everything in its `DllMain`, so none of it runs, and the loader's `patch_call` at
 `0x47BFA2`/`0x4B55FB` points the exe's two `DirectDrawCreate` calls at Impure's export. The
 loader's own presets stay. The file's exports are read from disk with every offset bounded by the
-file's size; a read-only load (`LOAD_LIBRARY_AS_DATAFILE*`, `AS_IMAGE_RESOURCE`) is never
-answered. `tagpu_takeover.off` in the game folder turns it off, which is how the suite shows the
-safety net (§2.6b) catching what it keeps out. MEASURED 2026-09-26 on Wine: Total Mayhem 11.3.0,
-ProTA 4.8 and the three Patch Loader setups start with no `tdrawlog.txt` and fight the 200v200
-battle; the retail setups log no takeover. The plan and the other routes: [the
+file's size, through a handle that refuses writers while it is open, so the size is the view's.
+Only a plain load is answered — `LoadLibrary`, or `LoadLibraryEx` with no flag but
+`LOAD_WITH_ALTERED_SEARCH_PATH`; a load that keeps the DLL from running or searches elsewhere
+goes through untouched, and so does a bare name already loaded under that name.
+`tagpu_takeover.off` in the game folder turns it off, which is how the suite shows the safety net
+(§2.6b) catching what it keeps out. MEASURED 2026-09-26 on Wine and Windows: Total Mayhem 11.3.0,
+ProTA 4.8 and the three Patch Loader setups start with no `tdrawlog.txt` (and on Windows no
+`tdraw.dll` among the modules) and, on Wine, fight the 200v200 battle; the retail setups log no
+takeover. The plan and the other routes: [the
 takeover](compat/takeover.md).
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)

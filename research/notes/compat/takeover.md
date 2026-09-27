@@ -21,7 +21,9 @@ build):
   `0x49E9C0`/`0x49E9C9`, which all players must match.
 - **The mod's gameplay patches**: the AI fixes, target acquisition, teleport, reclaim rules,
   `+AI`/`+Control` levels, allied victory — the mod's rules. Where one lands on an Impure site
-  the mod's value wins. Measured today: Mayhem's loader writes the path budget at `0x40EAD6` with
+  the plan is that the mod's value wins (part 3 does it for the exe file's bytes). Today the
+  safety net refuses a loader write that leaves other bytes than Impure's on one of its sites;
+  it read every site after each of the suite's Patch Loader setups and found none. Measured today: Mayhem's loader writes the path budget at `0x40EAD6` with
   Impure's own value (66 650); Mayhem and ProTA write `B0 01` at `0x4266A5`, beside Impure's
   `EB` at `0x4266A7`, both removing the DirectX box; the 3.9.02 and Escalation exes carry their
   own path budget in the file.
