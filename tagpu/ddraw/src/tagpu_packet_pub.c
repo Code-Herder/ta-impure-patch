@@ -3523,6 +3523,10 @@ static void extra(char* buf, unsigned cap, double secs)
         if (cap > n) tagpu_hits_format(buf + n, cap - n);
         n = 0;
         while (n < cap && buf[n]) n++;
+        /* B8's kill-counts section (sim-fixes.md B8): DLL counters, no engine read */
+        if (cap > n) tagpu_kills_format(buf + n, cap - n);
+        n = 0;
+        while (n < cap && buf[n]) n++;
         /* B5's ghost-commander section (sim-fixes.md B5): DLL counters, no engine read */
         if (cap > n) tagpu_ghost_format(buf + n, cap - n);
     }
