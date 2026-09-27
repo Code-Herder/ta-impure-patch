@@ -186,10 +186,18 @@ Two features the brief attributes to ProTA — **build-menu rotation overlays** 
 queued-build overlays** — are `tdraw.dll` features contributed by TAG_Venom (`tdraw.txt:81, 725,
 768-775`), not `prota.ini` hex patches.
 
-I could **not obtain any ProTA binary**: no ProTA folder under `files.tauniverse.com/files/ta/mods/`;
-it is a TAF featured mod whose client "pulls down each mod on demand", and `content.taforever.com`
-returns 403 anonymously. So **no `sha256sum`/`strings`/`objdump -p` was run**, and the reported
-680,448-byte `tdraw.dll` size is [CLAIMED], unverified here.
+**ProTA 4.8** (29 August 2025, the current release) is `https://prota.tauniverse.com/ProTA4.8.zip`
+(behind a browser check; 17,103,752 bytes, sha256 `1b0acde1…`; the installation page lists 4.8
+and the earlier releases, and TA Forever installs it too). It is unzipped into a copy of the TA folder and
+ships [VERIFIED — downloaded 2026-09-26]: the **stock 3.1 `TotalA.exe`** (md5 `8e74a1df…`); the Patch
+Loader as `dplayx.dll` (156,672 bytes, image `0x31000`, `; ProTA 4.8 Patches`,
+`RegistryPath=ProTA`, `ConfigFileName=ProTA.ini`, `Gp3FileName=ProTA.gp3`, MP version 4.8); a 2025
+TADR `tdraw.dll` (716,800 bytes, image `0xB6000`, the "Install Limit Crack" generation); the
+recorder `tplayx.dll` (298,496, image `0x4F000`); cnc-ddraw as `ddraw.dll`; `win32.dll`,
+`tmusi.dll`, `wgmus.dll` and the bass libraries for sound; and `ProTA.gp3` with the mod's data.
+With Impure copied over `ddraw.dll` it reaches the menu and crashes on the first skirmish load,
+the same collision as Total Mayhem's ([TADR beside Impure](compat/tadr-collision.md)). The
+earlier reported 680,448-byte `tdraw.dll` is a different, older build.
 
 ## Multiplayer version enforcement
 

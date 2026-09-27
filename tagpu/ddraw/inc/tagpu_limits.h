@@ -77,7 +77,8 @@ typedef char tagpu_lim_wrecks_fit[(TAGPU_LIM_WRECKS <= 0x7FFF) ? 1 : -1];
    0 when it is not, which the report at the first DirectDraw call then explains. */
 int tagpu_limits_install(void);
 
-/* The first DirectDraw call: if the install failed, show the report, write it to
+/* The first DirectDraw call: re-read every installed site (the safety net), then, if the
+   install failed or a site was rewritten since, show the report, write it to
    log\startup-failure.txt and exit the process. Otherwise nothing. */
 void tagpu_limits_report(void);
 

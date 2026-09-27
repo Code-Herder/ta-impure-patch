@@ -82,6 +82,7 @@ typedef struct LIMSITE {
     unsigned char ours[LIM_MAXB];
     unsigned char have[LIM_MAXB];   /* what the image held when compared            */
     unsigned char differs;
+    unsigned char unreadable;       /* the page could not be read: `have` means nothing */
     const char*   name;
 } LIMSITE;
 
@@ -93,6 +94,7 @@ static int     s_limNoStub;          /* a code stub could not be made           
 static char    s_limNeeds[192];      /* a table fix's required local fix is not armed */
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
+static int     s_limRewritten;       /* installed, then rewritten by someone else      */
 
 static void lim_add(unsigned int va, int n, const unsigned char* stock,
                     const unsigned char* ours, const char* name)
@@ -9269,6 +9271,154 @@ static int fix_range_circle(void)
     return fix_write(&site, 1);
 }
 
+/* AN ORDER MODE WITH NOBODY TO ORDER [DISASSEMBLED; MEASURED]. The order byte main+0x2CC3 is 1
+   when no order is armed. A build button arms a placement, 0x0E, with BuildUnitID main+0x2CC4
+   (0x41AB89, 0x41AB9C, in the build menus' handler 0x41AA00). The orders menu's handler arms a
+   command mode, each from its gadget: MOVE 2 (0x419C6A), ATTACK 3 (0x419D44), BLAST 4
+   (0x419DB9), UNLOAD 5 (0x41A066), LOAD 6 (0x41A0D7), DEFEND 7 (0x419E2D), REPAIR 8 (0x419EA1),
+   PATROL 9 (0x419F16), RECLAIM 0xC (0x419F8A), CAPTURE 0xD (0x419FFB). Nothing else writes those
+   values (0xA and 0xB have no writer; the setter 0x419BC0 has no caller), and every one of them
+   is an order for the selection: none stays armed with nothing selected on purpose.
+   A left click hands the order to the controlled player's block (record main+0x1B63 + 0x14B *
+   main+0x2A42, units +0x67 .. +0x6B inclusive). A placement's click, 0x419670, orders each unit
+   selected (+0x110 bit 0x10) whose type (+0x92) has +0x241 bit 0x40 (0x419755..0x41976A). A
+   command mode's click, 0x48CF30, counts the selected units other than the one under the pointer
+   and returns when there are none (0x48CFDF..0x48D011), then asks the order resolver 0x43F0E0 per
+   unit with the click's target and position (0x48D0A0). Stock leaves the byte armed when the set
+   empties: the selection dies (the frame check 0x4995C3 drops the tracked unit and pops its menu
+   through 0x491D70(0), which writes neither byte), a key recalls a group without such a unit
+   (0x495E90's one writer of the byte is its cancel 0x495F36), or a button arms from the menu
+   0x491D70 left up because it deferred the drop (0x37EBE & 0x865 or 0x2BEE & 0xE0:
+   0x491D86..0x491DA2 only sets 0x37EBE bit 0x10). Every left press then goes to the order
+   (0x4993B6 -> 0x498F70) and orders nobody: a placement keeps its square and our build ghost on
+   the pointer, and a command mode swallows the click.
+   THE FIX: order_check, at two points of the game thread's frame, disarms through the engine's
+   own cancel when order_anyone finds nobody for the armed order.
+   THE INVARIANT: an order is armed only while at least one unit exists that its click would
+   order. For a placement that is 0x419670's own test. For a command mode it is 0x48CF30's first
+   test, a selected unit in the block; the resolver's answer depends on the click, so a
+   selection whose units cannot carry the mode (ATTACK with only builders left) keeps stock's
+   behaviour. Every value read is bounded first.
+   WHY TWO POINTS AND NOT ONE: the readers of the byte sit on both sides of the ticks. The
+   in-play handler 0x499200 (state 6, entered from IdleTick 0x499890 at 0x499A1C) handles the
+   mouse first -- the build cursor 0x4197D0 (0x499241), the cursor choice 0x48D220 (0x499297),
+   the click routing 0x4993B6 and the order's click 0x498F70 (0x4995B3) -- then calls the frame
+   0x496790 (0x4995B8), whose ticks (0x495490 at 0x49680C, 0x49693E) free units, whose keys
+   (0x495E90 at 0x496971) recall groups, and whose draw 0x468CF0 (0x4969CD) reads the byte and
+   publishes our packet. IdleTick runs the GUI's dispatch 0x4A9FD0 (0x499992), which reaches the
+   menus' buttons, before it enters the handler. So no one point follows every writer and
+   precedes every reader:
+     0x49697B, the frame's `call 0x48BAE0`: every path of 0x496790 reaches it (0x49691E and
+       0x49696F jump to it; nothing leaves the function before 0x496A56), after the ticks, the
+       keys and the scroll poll 0x41CE90, and before the cull and the draw.
+     0x499226, the handler's first instruction after 0x498DA0 (the mouse's world position):
+       after IdleTick's GUI dispatch and before the head's first reader (0x499238); every path
+       of the head reaches 0x4995B8 (it holds no ret).
+   Both run on the game thread, where the key cancel 0x495F36 and the right-button cancel
+   (0x4993AC -> 0x499100) already run, inside the same two functions.
+   NO MENU, NO CANCEL: the frame 0x496790 has three callers -- 0x4995B8 (in play), 0x49842F (the
+   loading screen, after the load's reset wrote the byte to 1 at 0x4917F9) and 0x4996A5 (a
+   network game's end, after 0x491D70(1) at 0x499674 and GUI_Pop 0x4A9660 at 0x499686 have
+   popped the menu stack, possibly to NULL). 0x499100 reads [[main+0x531]+4] at 0x49913B with no
+   test, so order_check returns while main+0x531 is NULL, the guard the engine puts on the same
+   read at 0x491DB3..0x491DBB. The test and the call are on one thread with nothing between.
+   UNDER A MODAL SCREEN, LATER: the engine defers its own menu work on one test, 0x37EBE & 0x865
+   or 0x2BEE & 0xE0 -- 0x491D70(0) only marks the drop pending (0x491D76..0x491DA2) and the frame
+   runs it once the test clears (0x496986..0x4969B4) -- and order_check waits on the same test.
+   Its bits that are named: bit 0 is the options stack (ARMOPT, EXITMENU, YESORNO and the
+   preferences; set at 0x4961C1, 0x49477E, 0x45D002), bit 2 is the chat, TALK.GUI (pushed by
+   0x494050 from the Enter key's case 0x4964FD, the bit at 0x49412C), bit 6 is SHARE.GUI
+   (0x49374F); bits 5 and 11 of the word and the byte's three are not identified. Under such a
+   screen the cancel's 0x49FE60(top, "STOP") searches the modal screen and misses, which would
+   leave the pressed order button drawn with the byte 1; deferred, the disarm lands on the
+   first of the two checks after the test clears. While deferred the byte stays armed as in
+   stock. A single-player game skips the ticks while bit 0 is set (0x496918 jumps to 0x49697B),
+   so no unit dies under the options stack there; a network game (main+0x2A44 bit 0 [INFERRED])
+   keeps ticking (0x4967E7), and so does the chat -- MEASURED 2026-09-26 with
+   tools/b9-under-chat.sh: a unit died under TALK.GUI, the byte stayed armed until the chat
+   closed, then read 1.
+   THE CANCEL: 0x499100 with the byte != 1 is the right button's cancel for every order, and
+   reads nothing of its message: 0x2CC3 = 1, 0x2CC6 &= ~0x20 (the order kept while a modifier is
+   held), then 0x49FE60(menu, "STOP") finds the menu's STOP gadget and 0x4A6A40 resets its radio
+   group, which releases the pressed order button, as 0x4990AE, 0x4992FA, 0x495F36 and 0x498FC0
+   do. It leaves BuildUnitID, as every cancel does; its readers (0x419686, 0x4197DD, our packet)
+   are behind the byte.
+   CLASS: local. Every reader of 0x2CC3 is the UI, and no peer reads it. The disarm logs nothing:
+   a unit dying with an order armed is ordinary play. */
+static const unsigned int s_orderMsg[6];        /* 0x499100's message: its cancel never reads it */
+
+/* 1 when a unit of the controlled player's block would take the armed order; builders_only is
+   the placement's type test */
+static int order_anyone(const unsigned char* m, int builders_only)
+{
+    unsigned int player = m[0x2A42];                  /* the controlled player */
+    const unsigned char* rec;
+    unsigned int begin, end, first, last, defs, ndefs, u;
+    if (player >= 10) return 0;
+    rec   = m + 0x1B63 + player * 0x14Bu;
+    begin = *(const unsigned int*)(m + 0x14357);
+    end   = *(const unsigned int*)(m + 0x1435B);      /* the array's last slot, inclusive */
+    first = *(const unsigned int*)(rec + 0x67);
+    last  = *(const unsigned int*)(rec + 0x6B);
+    if (first < begin || last > end || first > last ||
+        (first - begin) % 0x118u || (last - begin) % 0x118u) return 0;
+    defs  = *(const unsigned int*)(m + 0x1439B);
+    ndefs = *(const unsigned int*)(m + 0x1438F);      /* UNITINFOCount */
+    for (u = first; u <= last; u += 0x118u) {
+        const unsigned char* unit = (const unsigned char*)(size_t)u;
+        unsigned int def;
+        if (!(unit[0x110] & 0x10)) continue;
+        if (!builders_only) return 1;
+        def = *(const unsigned int*)(unit + 0x92);
+        if (def < defs || (def - defs) % 0x249u || (def - defs) / 0x249u >= ndefs) continue;
+        if (((const unsigned char*)(size_t)def)[0x241] & 0x40) return 1;
+    }
+    return 0;
+}
+
+static void __cdecl order_check(void)
+{
+    const unsigned char* m = *(unsigned char* const*)0x00511DE8;
+    unsigned char mode;
+    if (!m || !*(void* const*)(m + 0x531)) return;                  /* no menu to cancel in  */
+    if ((*(const unsigned short*)(m + 0x37EBE) & 0x865) || (m[0x2BEE] & 0xE0))
+        return;                                                     /* a modal screen on top */
+    mode = m[0x2CC3];
+    if (mode == 0x0E) {
+        if (order_anyone(m, 1)) return;
+    } else if ((mode >= 2 && mode <= 9) || mode == 0x0C || mode == 0x0D) {
+        if (order_anyone(m, 0)) return;
+    } else {
+        return;
+    }
+    ((void (__stdcall*)(const void*))0x00499100)(s_orderMsg);
+}
+
+static int fix_order_anyone(void)
+{
+    FIXSITE site[2] = {
+        { 0x0049697B, 5, { 0xE8, 0x60, 0x51, 0xFF, 0xFF }, { 0 } },         /* call 0x48BAE0  */
+        { 0x00499226, 6, { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, { 0 } },   /* mov edx,[main] */
+    };
+    unsigned char *a, *b, *p;
+    if (!fix_match(site, 2)) return FIX_BYTES;
+    if (!(a = fix_code(12)) || !(b = fix_code(18))) return FIX_STUB;
+    p = a;                                          /* pushad; call; popad; jmp 0x48BAE0 */
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)order_check); p += 4;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048BAE0);   /* whose ret comes back to 0x496980 */
+    p = b;                                          /* pushad; call; popad; the stolen mov; jmp */
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)order_check); p += 4;
+    *p++ = 0x61;
+    memcpy(p, site[1].was, 6); p += 6;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049922C);
+    fix_branch(&site[0], 0xE8, a);
+    fix_branch(&site[1], 0xE9, b);
+    return fix_write(site, 2);
+}
+
 static void patch_loader_defects(void)
 {
     int wind = fix_wind();
@@ -9276,15 +9426,17 @@ static void patch_loader_defects(void)
     int save = fix_save_order_fallback();
     int bar  = fix_stockpile_bar();
     int ring = fix_range_circle();
+    int plc  = fix_order_anyone();
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
                "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
                "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "
-               "radius 1 (0x438EDE) %s. Counters: levels seeded at 0x%08X, network levels "
+               "radius 1 (0x438EDE) %s; an order mode disarmed with nobody to order "
+               "(0x49697B 0x499226) %s. Counters: levels seeded at 0x%08X, network levels "
                "seeded from the engine's session copy at 0x%08X, SetSessionDesc calls made, "
                "made over another GUID and withheld at 0x%08X 0x%08X 0x%08X, network levels "
                "seeded from the map alone at 0x%08X, yardmaps filled past their string at 0x%08X",
                fix_state(wind), fix_state(yard), fix_state(save), fix_state(bar),
-               fix_state(ring), (unsigned int)(size_t)&s_windLevels,
+               fix_state(ring), fix_state(plc), (unsigned int)(size_t)&s_windLevels,
                (unsigned int)(size_t)&s_windFromCopy, (unsigned int)(size_t)&s_windSetCalls,
                (unsigned int)(size_t)&s_windSetDiffered, (unsigned int)(size_t)&s_windSetWithheld,
                (unsigned int)(size_t)&s_windMapOnly, (unsigned int)(size_t)&s_yardFilled);
@@ -10073,7 +10225,8 @@ int tagpu_limits_install(void)
 
     for (i = 0; i < s_nlim; i++) {
         LIMSITE* s = &s_lim[i];
-        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->stock, s->n)) {
+        s->unreadable = !lim_read(s->va, s->have, s->n);
+        if (s->unreadable || memcmp(s->have, s->stock, s->n)) {
             s->differs = 1;
             bad++;
         }
@@ -10180,10 +10333,34 @@ static void lim_hex(char* out, const unsigned char* b, int n, int max)
     if (n > max) strcat(out, " ...");
 }
 
+/* THE SAFETY NET (research/notes/compat/takeover.md, part 4): every site of the table re-read
+   at the first DirectDraw call, which comes after every DLL's DllMain -- the exe's entry point
+   runs after all of them, and its WinMain makes the call. A site that no longer holds our
+   bytes was rewritten by a patcher that started after Impure (a pre-2026 TADR's limit crack
+   rewrote 17 beside Total Mayhem 11.3.0, MEASURED 2026-09-26, and crashes the first skirmish
+   load); stopping here, before any game exists,
+   turns that into a refusal. A write made after this call is outside it. s_limState stays 1:
+   the raised pools stay the ones the engine code was pointed at while the report runs. */
+static void lim_verify(void)
+{
+    int i;
+    for (i = 0; i < s_nlim; i++) {
+        LIMSITE* s = &s_lim[i];
+        s->unreadable = !lim_read(s->va, s->have, s->n);
+        if (s->unreadable || memcmp(s->have, s->ours, s->n)) {
+            s->differs = 1;
+            s_limRewritten++;
+        }
+    }
+    if (s_limRewritten)
+        tagpu_logf("limits: FAILED -- %d of %d sites were rewritten after Impure installed them",
+                   s_limRewritten, s_nlim);
+}
+
 void tagpu_limits_report(void)
 {
     static char text[8192];
-    static LONG once;
+    static LONG once, verified;
     char exe[MAX_PATH], md5[33] = "unknown", line[768], want[3 * LIM_MAXB + 8],
          have[3 * LIM_MAXB + 8];
     const char* base;
@@ -10194,7 +10371,8 @@ void tagpu_limits_report(void)
     int i, bad = 0, shown = 0;
     HMODULE me = GetModuleHandleA(NULL);
 
-    if (s_limState >= 0) return;
+    if (!InterlockedExchange(&verified, 1) && s_limState > 0) lim_verify();
+    if (s_limState >= 0 && !s_limRewritten) return;
     if (InterlockedExchange(&once, 1)) return;
 
     GetModuleFileNameA(NULL, exe, sizeof exe);
@@ -10212,7 +10390,11 @@ void tagpu_limits_report(void)
     /* ONE LINE PER PARAGRAPH: the box wraps prose to its own width, and a hard break
        inside a paragraph wraps a second time into ragged half-lines. The report lines
        are kept short enough that the box never wraps them. */
-    if (s_limNoStub || s_limOverflow || s_limOverlapA)
+    if (s_limRewritten)
+        why = "Impure installed them, but another program that started after it -- usually "
+              "TADR's tdraw.dll, or a copy of it under another name -- rewrote some of those "
+              "places, and the game would crash as soon as a battle loads.";
+    else if (s_limNoStub || s_limOverflow || s_limOverlapA)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
     else if (s_limNeeds[0])
@@ -10228,8 +10410,7 @@ void tagpu_limits_report(void)
         why = "This TotalA.exe is not the Total Annihilation 3.1 that Impure is built for.";
 
     _snprintf(text, sizeof text,
-        "Impure could not install its engine limits and fixes, so Total Annihilation will "
-        "now close. Nothing was changed.\r\n"
+        "%s\r\n"
         "\r\n"
         "WHY\r\n"
         "Impure raises the game's limits (units, projectiles, explosions...) and fixes "
@@ -10239,8 +10420,7 @@ void tagpu_limits_report(void)
         "break multiplayer without warning.\r\n"
         "\r\n"
         "WHAT TO DO\r\n"
-        "- Use the original 3.1 TotalA.exe (the Steam copy is 3.1). Community patches "
-        "such as 3.9.02 and TA: Escalation ship a modified exe.\r\n"
+        "%s"
         "- Or report it: press Ctrl+C to copy this message and paste it into a new "
         "issue at\r\n"
         "github.com/Code-Herder/ta-impure-patch/issues\r\n"
@@ -10251,7 +10431,17 @@ void tagpu_limits_report(void)
         "exe %s, %lu bytes\r\n"
         "md5 %s\r\n"
         "PE stamp 0x%08lX, known build: %s\r\n",
-        why, GIT_COMMIT, GIT_BRANCH, base, size, md5, (unsigned long)stamp, known);
+        s_limRewritten ? "Impure's engine limits and fixes were changed by another program, so "
+                         "Total Annihilation will now close before a battle can crash."
+                       : "Impure could not install its engine limits and fixes, so Total "
+                         "Annihilation will now close. Nothing was changed.",
+        why,
+        s_limRewritten ? "- Take the other patcher out of the game folder: TADR's tdraw.dll, or "
+                         "a copy of it under another name. If the folder has a file named "
+                         "tagpu_takeover.off, delete it: it lets TADR start.\r\n"
+                       : "- Use the original 3.1 TotalA.exe (the Steam copy is 3.1). Community "
+                         "patches such as 3.9.02 and TA: Escalation ship a modified exe.\r\n",
+        GIT_COMMIT, GIT_BRANCH, base, size, md5, (unsigned long)stamp, known);
     text[sizeof text - 1] = 0;
 
     if (s_limNoStub)
@@ -10266,6 +10456,9 @@ void tagpu_limits_report(void)
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);
+    else if (s_limRewritten)
+        _snprintf(line, sizeof line, "result: %d of %d sites rewritten after they were installed\r\n",
+                  bad, s_nlim);
     else
         _snprintf(line, sizeof line, "result: %d of %d sites differ, nothing written\r\n", bad, s_nlim);
     line[sizeof line - 1] = 0;
@@ -10280,8 +10473,8 @@ void tagpu_limits_report(void)
             strncat(text, line, sizeof text - strlen(text) - 1);
             break;
         }
-        lim_hex(want, s->stock, s->n, 16);
-        lim_hex(have, s->have, s->n, 16);
+        lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, 16);
+        if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, 16);
         _snprintf(line, sizeof line, "0x%08X %s\r\n  want %s\r\n  have %s\r\n",
                   s->va, s->name, want, have);
         line[sizeof line - 1] = 0;
@@ -10293,8 +10486,8 @@ void tagpu_limits_report(void)
     for (i = 0; i < s_nlim; i++) {
         const LIMSITE* s = &s_lim[i];
         if (!s->differs) continue;
-        lim_hex(want, s->stock, s->n, LIM_MAXB);
-        lim_hex(have, s->have, s->n, LIM_MAXB);
+        lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, LIM_MAXB);
+        if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
     }
     {

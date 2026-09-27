@@ -558,6 +558,15 @@ remaining selection holds and whether the ghost still draws. Port only if that s
 or a stale ghost; the fix is then a detour on the 7 bytes at `0x4995EF` (`push 0`, then the
 relative `call`, which must be re-encoded).
 
+**Measured 2026-09-26** (`tools/b6-tracked-death.sh`): no wrong order, and a stale ghost. After the
+death `0x37E9C` read 0 and the build menu was popped, while `0x2CC3` stayed `0x0E` and `0x2CC4`
+246. The engine's placement square and our ghost kept drawing, and every left press went to the
+placement (`0x4993B6` → `0x498F70`): both clicks landed on blocked sites, so the map got no
+building and the CORAK was not selected. A click on a clear site would have handed the build to
+the selection (`0x498F93..0x498FC0`). The owner ruled it a defect to fix; it is B9, which disarms
+the placement, and any command mode, whenever no unit is left that the click would order, checked in the frame
+(`0x49697B`) and in the in-play handler's head (`0x499226`) ([the plan's B9](sim-fixes.md)).
+
 ---
 
 ### 6. HostDoesntLeave, i.e. PutDeadHostInWatchMode (`0x4656E5`)
@@ -1551,6 +1560,11 @@ order button with `tacli ui`. Read each new unit's `+0x104`/`+0x108` with `tacli
 array `*0x511DE8+0x14357`, stride `0x118`).
 
 **Decided 2026-09-25.** (a) A time-boxed measurement; parked if the counter never fires. (b) If it fires, the unit is finalised as the success path does, touching no grid cell ([the plan](sim-fixes.md#the-landings)).
+
+**Measured 2026-09-26: it never fired** — 0 of 847 resurrections took `0x405155`, 262 of them
+ordered on a multi-cell wreck. There is no resurrect verb to add: `reclaim` by a unit that can
+resurrect resolves to RESURRECT (`0x43F5A5` → `0x44004C`). The numbers are in
+[the plan's B1 results](sim-fixes.md), the paths in the engine map's `Order_Resurrect` section.
 
 ### 2. `TABugFix.cpp`: KeepOnReclaimPreparedOrder, JunkYardmapFix, UnitVolumeYequZero, BadModelHunter
 

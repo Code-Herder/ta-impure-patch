@@ -302,6 +302,48 @@ the rest at the game's first call into a DirectPlay export.
 | `0x4D989B` | the crash writer: `push esi; call [0x4FC0EC]` (`CloseHandle`) | append a module list |
 | `0x417B9B` | `call 0x4B7900`, the console command interpreter | a command table, empty in the shipped build |
 
+### Where other patchers meet ours — the Patch Loader's hand-off and TADR's limit crack [DISASSEMBLED + MEASURED 2026-09-26]
+
+What happens when these run beside Impure, and the suite that tests it, is
+the wiki's Compatibility section, from [its overview](compat/overview.md). The engine facts:
+
+- **`0x47BFA2`, `0x4B55FB`** — the exe's two `call 0x49F710`, and `0x49F710` is the
+  `DirectDrawCreate` import thunk (`jmp [0x4FC02C]`). The Community Patch Loader's `patch_call`
+  points both at the `DirectDrawCreate` of the module its `LoadLibraryA("tdraw.dll")` returned:
+  without Impure that is TADR's, which calls whatever `ddraw.dll` it loaded; with Impure, which
+  answers that request with itself (`tagpu_takeover.c`), it is Impure's own. Neither address is
+  a site of Impure's table.
+- **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
+  (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
+- **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a
+  refcounted string passed by value. It binary-searches the sorted array
+  `[0x51E6B4, 0x51E6B8)` of 8-byte `{name, mask}` entries with `strcmp 0x4F8A70`. On a name it does
+  not hold it allocates the 0x40-byte mask (`push 0x40; call 0x4B4F10` at `0x488CC2`, the
+  site Impure widens for 16 384 types), clears 16 dwords (`0x488CD2`), inserts through
+  `0x488FB0` (`this` = `0x51E6B0`), then releases its two strings through `0x4C9390` and returns
+  the mask. The carry flag is clear on both paths into `0x488CC2` (`je` after a `cmp` that
+  found equality, `jne` after `test eax,eax`).
+- **`0x42C028`** — one caller of `0x488C50`, in the unit-definition load: it reads the FBI key
+  `wpri_badTargetCategory` (string `0x503E88`, default `"none"` at `0x503EA0`) and stores the
+  mask at `def+0x231`. It runs on the Load Thread when a skirmish loads.
+- **`0x4C9390`** — releases a refcounted string: the count is the dword before the text,
+  decremented at `0x4C9396`, and the block is freed through `0x4E8820` when it reaches zero.
+  `ecx` points at the string object.
+- **The collision** — a pre-2026 TADR's `ModifyHook` at `0x488CC2` re-assembles the bytes it
+  finds there as if they were stock. After Impure's `jmp` it leaves `E9 <stub> 90 90 90 90 90`
+  through `0x488CCB` and a stub `push 0x800; jae 0x488D0D; …; jmp 0x488CCC` (read from the
+  running process, Total Mayhem 11.3.0). The `jae` is always taken, the allocation is skipped,
+  the frame is one dword low, and `0x4C9390` writes through `0x0042C02D`, the return address:
+  *Access Violation at `0x004C9396`, illegal write to `0x0042C029`*, Load Thread. TADR's
+  other `ModifyHook` sites fall on eleven more of Impure's unit-type relocations
+  (`0x406DB5`…`0x406ED6`, `0x48BE08`, `0x48BF1E`).
+- **The 3.9.02 exe's own bytes** — `0x406FB4` (an AI commander keeps its orders when hit),
+  `0x43E784` (the reclaim cursor over any unit), `0x4266A5` (the DirectX version box),
+  `0x4966E7` and `0x496776` (two debug keys), `0x4FCC7C` (the `+atm` amount),
+  `0x501FD8` and `0x501FE4` (`+AI` and `+Control` from level 4 to 2), `0x5098A4`
+  (`totala.ini` → `ta.ini`), and `0x40EAD6` (the path budget). The table is in
+  [the setups page](compat/setups.md#the-3902-exe).
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
@@ -345,7 +387,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the twenty-eight, and why:
+made, or its page cannot be made writable. Each of the twenty-nine, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -377,6 +419,7 @@ made, or its page cannot be made writable. Each of the twenty-eight, and why:
 | the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
+| an order mode disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -1148,7 +1191,7 @@ overwrite easier to reach. The patch does not depend on the cap.
 |---|---|---|
 | `0x47EAE3` | a lookup on the plot `0x4815A0` returns | yes, `0x47EADA` |
 | `0x498F4F` | the hovered feature in the pointer→world function `0x498DA0` (one caller, `0x499221`), stored at `main+0x2CBC` | **no** |
-| `0x40514A` | the target lookup of the order handler `0x404DB0`, through `0x4815F0` on the order's position. The order-descriptor record at `0x4FC8A6` (file `0xFB6A6`) names that handler with the string "Resurrecting", so this is the resurrect order [INFERRED from the name] | **no** — its reachability is not audited |
+| `0x40514A` | the target lookup of the resurrect order `Order_Resurrect 0x404DB0` (its own section below), through `0x4815F0` on the order's position, after the unit is made | **no** — but `0x4815F0` answers NULL only for a position off the grid or a `0xFFFE` cell whose offsets lead off it (`0x481602..0x48162A`, `0x48165A..0x48166A`), and the order's entry check has already found a feature at that position in the same call |
 
 **How `0x498F4F` gets its plot.** `0x498DA0` turns the pointer into a world point: the viewport arm
 is `eye + clamp(pos, L, R) − L`, and the minimap arm scales the pointer by `main+0x1422B`/`+0x1422F`
@@ -1187,8 +1230,9 @@ measured it: map 10752 × 12800, extent 10720 × 12672.
 - **The debug-level console command `Edge`** (run level 4; table entry `0x50206C`, handler
   `0x416730`) rewrites both margins from its two arguments, 32 and 128 by default. A bottom margin
   under 128 lets the pointer's row leave the map. [INFERRED from the arithmetic; not run.]
-- **`0x40514A`** hands over the plot `0x4815F0` returns for the order's position, and that path is
-  not audited. The guard covers it whether or not it is reachable.
+- **`0x40514A`** hands over the plot `0x4815F0` returns for the order's position. 847 live
+  resurrections never reached the branch a NULL plot would take (the resurrect order's section
+  below); the guard covers it whether or not it is reachable.
 
 **Our build.** Zoom > 1 lets the eye past the stock range, and vpwide's rect at zoom < 1 lets the
 pointer past it, so both can hand `0x498DA0` a point beyond the extent. Two clamps keep it off
@@ -1219,10 +1263,55 @@ jmp  0x421E68
   branch lands inside the eight stolen bytes [rel8/rel32 scan].
 - **What it changes:** nothing for a non-NULL plot. For a NULL plot stock faults, so nothing the
   simulation reads differs except where stock would have crashed. `0x40514A` is on the resurrect
-  order's path [INFERRED], so in a network game with a peer on stock, the stock peer crashes where
-  the patched one goes on.
+  order's path, so in a network game with a peer on stock, the stock peer crashes where the
+  patched one goes on.
 - **What it leaves:** the off-map cell `0x498F2E` stores at `main+0x2C8E` is untouched, as it is in
   stock under `Edge`. Its readers are not audited here.
+
+### The resurrect order `Order_Resurrect 0x404DB0`, and its exits after the unit is made
+
+`0x404DB0` is `stdcall(builder, order, flags)`, `ret 0xC`, the handler of order descriptor 18
+(record `0x4FC8AA`: "Resurrecting", the handler at `+4`, the name "Resurrect" at `+0x15`)
+[DISASSEMBLED; MEASURED live: the counters below fire inside it on RESURRECT orders]. Its state is
+the order's byte `+0x5`, dispatched through the table `0x4052D8` (states 0–6). The full walk, and
+why TADR's post-create fix was not ported, are in
+[the section B evidence, Part 3 §1](tadr-port/sim-fixes-evidence.md). What this map keeps:
+
+- **The entry check, every state ≤ 5** (`0x404DC6..0x404E16`): `0x421DA0(order+0x22)` answers the
+  feature's def through one `0xFFFE` hop; `0xFFFF` → "Resurrection failed" (`0x501698`) and
+  return 8, and a FeatureDef without `+0xFE` bit 7 → return 8.
+- **The countdown** (state 3, `0x404F92..0x404FEE`): `order+0x3A = BuildTime × 0.3 /
+  ⌊WorkerTime / 30⌋`, the resurrected type's UnitDef `+0x1EA` against the builder's `+0x1FE`, the
+  0.3 being the double at `0x4FC948`, made an integer by `0x4E43A0` [INFERRED: `_ftol`]. State 4
+  (`0x405005`) counts it down, one per call.
+- **The second lookup, after `CreateUnit`** (state 5): `0x4815F0(order+0x22)` → the anchor cell,
+  and `GetGridPosFeature 0x421E60` → its def. **`0x4815F0` follows the `0xFFFE` hop itself**
+  (`0x481640..0x481679`, bounded), so an order on any cell of a multi-cell wreck reads the
+  anchor's record at `0x40516C` — the record index at the anchor's `+0xA`, not the hop offsets.
+  `0x40514F cmp ax,0xFFFB; jb 0x405164`: the **failure exit `0x405155`** returns 8 with the new
+  unit left a nanoframe; the **success path `0x405164`** copies the record's `+0x20` rotation to
+  `unit+0x64` (`0x40516C..0x405191`), removes the wreck with `FEATURES_Destroy 0x4246B0` (which
+  hops too, `0x4246BE..0x4246E6`), and finishes the unit.
+- **How a player gives it: `reclaim`** [DISASSEMBLED]. The order resolver `0x43F0E0` has no
+  resurrect type among its 1–14 (jump table `0x4401EC`); its reclaim case `0x43F4F7` needs the
+  unit's def `+0x245` bit `0x400` (`0x43F4FD`), finds the feature under the position (`0x4815A0`
+  and the `0xFFFE` hop, `0x43F50B..0x43F58A`), and when the def also has `+0x245` bit `0x800`
+  (`0x43F5A5`) [INFERRED: `canresurrect`; CORNECRO is the one retail unit with that tag], the
+  cell is in the viewing player's sight (`0x43F5D1..0x43F5FF`: the word at `main+0x14273`, bit
+  `main+0x2A43`) and FeatureDef `+0xFE` has bit 7 (`0x43F609`), it jumps to `0x44004C` (`0x43F612`), which
+  resolves the name "RESURRECT" (`0x5052F0`) through `0x438760`. So a scenario's or `tacli order`'s
+  `reclaim` of a wreck by a Necro is a resurrect order.
+
+**MEASURED 2026-09-26: the failure exit never fired.** Scratch counters (a build never committed)
+on `0x405155` and `0x405164` logged the order's position, the cell and its record index at each
+pass; `ddraw.dll` at `8d033d1`, gamespeed 10, `scenarios/b1-resurrect.json` and seven variants of
+it (`b1-resurrect.gen.py`: 110 wrecks of 1×1 to 5×6 on the Two Continents plateau, each with a
+CORNECRO ordered to reclaim it, ten wrecks with a second Necro, a third of the multi-cell orders at
+the anchor and the rest at the footprint's centre or far corner). **847 passes through `0x405164`,
+0 through `0x405155`**: 440 on 1×1 wrecks, 126 on a multi-cell wreck's anchor, 136 on another cell
+of one, and 145 in a first layout that was not split by footprint. Every pass read the anchor's
+own def at the cell `0x4815F0` returned. About a third of the orders never reached state 5 (a
+shared wreck's second Necro finds it gone at the entry check; the rest were not followed up).
 
 ### The terrain pass reads off its tile map when the view is larger than the map — `0x483FA0`, bounded at `0x484057`
 
@@ -4202,8 +4291,10 @@ through the engine's **state-handler slot `[main+0x391F5]`**, dispatched at the 
 in-game handler by the loading-screen handler `0x497F40` (`mov [ecx+0x391F5], 0x499200` at
 `0x498455`, beside `mov [ecx+0x391F1], 6`), and also at `0x490BC5`. The same slot holds
 `0x496BB0`, `0x496B10`, `0x496CE0`, `0x496DB0`, `0x497F40` and `0x499880` — it is the engine's
-whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it is
-called directly from `0x499200` at `0x4995B8` and `0x4996A5`.
+whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it has
+three direct callers: `0x499200` at `0x4995B8` (in play) and `0x4996A5` (a network game's end,
+after `0x491D70(1)` at `0x499674` and `GUI_Pop 0x4A9660` at `0x499686`), and the loading screen
+at `0x49842F`.
 
 **But THREE OF THE SIX are pinned to the game thread by construction, in the strongest way this
 binary allows.** `0x499200` — the function holding `0x4996AA`, `0x49971D` and `0x4997AF` — also
@@ -7126,6 +7217,108 @@ and only these three sources can be what `0x499027` reads.
   engine's own dispatch covers `0x200..0x206` and the double-click arrives as another down.
 - **The right button cannot execute a command button, by construction** — `0x499100` returns at
   its first test whenever `main+0x2CC3 != 1`, and its order call passes the literal 1.
+
+**A build placement and the units it orders (B9).** A build button arms the placement: the build
+menus' handler `0x41AA00` (address-taken, no direct caller) writes the order byte `main+0x2CC3` =
+`0x0E` at `0x41AB89` and `BuildUnitID` `main+0x2CC4` at `0x41AB9C`. It is reached through the
+GUI's dispatch `0x4A9FD0`, which IdleTick `0x499890` calls at `0x499992` before it enters the
+state's handler (`0x499A1C`). **The placement's click orders the selection, not the tracked
+unit**: `0x419670` walks the controlled player's block (`main+0x2A43` is the viewed player) —
+record `main+0x1B63 + 0x14B·main+0x2A42`, units
+`+0x67` to `+0x6B` inclusive (`0x41972A..0x419753`) — and orders every unit that is selected
+(`+0x110` bit `0x10`, `0x419755`) and whose type (`+0x92`) has `+0x241` bit `0x40`
+(`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`). The free clears
+bits 4 and 5 of `+0x110` (`0x486DE8`), so a freed unit leaves that set.
+
+The engine ends an order mode in five places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5
+(`0x20`, the order kept while a modifier is held; the release test is `0x4992D8`) and resetting
+the radio group of the menu's STOP gadget — `0x49FE60(menu, "STOP")` (the name at `0x502714`)
+finds it and `0x4A6A40` resets it: the right button `0x499110` (in `0x499100`, called at
+`0x4993AC`), the modifier's release `0x4992FA`, a key's case of the in-game key switch
+(`0x495ECD`, table `0x496694`) at `0x495F36`, a command mode's click `0x4990AE` (in the click
+handler `0x498F70`, after `0x48CF30` has issued the command at `0x499087`, for a cursor type
+`main+0x2CBE` below `0x11` other than `0x0F`; type `0x0F` hands the click to `0x48C7F0` and returns at `0x49903E`,
+and from `0x11` up it returns at `0x4990F6` unless `0x37EFA` is 1 and the byte 1), and the placement's
+own left click on a clear site `0x498FC0`, after `0x419670` has issued the build
+(`0x498F93..0x498FA4`). In both clicks a press whose record has `+8` bit 2 keeps the mode and
+sets the flag instead (`0x498FB4`, `0x499097`). A left click on a blocked site plays the refusal and keeps it
+(`0x499016`). `0x4958D7`, in `0x4958C0`, writes the byte too and is dead: `0x4958C0` has no
+caller and its address is stored nowhere; so is the setter `0x419BC0`, which stores its argument
+at `0x419BC9`. The command modes are armed by the orders menu's handler, one value per gadget
+(the names compared through `0x4E49B0`): MOVE 2 (`0x419C6A`), ATTACK 3 (`0x419D44`), BLAST 4
+(`0x419DB9`), UNLOAD 5 (`0x41A066`), LOAD 6 (`0x41A0D7`), DEFEND 7 (`0x419E2D`), REPAIR 8
+(`0x419EA1`), PATROL 9 (`0x419F16`), RECLAIM `0xC` (`0x419F8A`), CAPTURE `0xD` (`0x419FFB`); pressing
+the armed one again writes 1 (`0x419C52` and the like). `0xA` and `0xB` have no writer. **A command
+mode's click** is `0x48CF30(msg, mode, …)` (from `0x499087`): it walks the same block, counts the
+selected units other than the one under the pointer (`main+0x2CBA`) and returns when there are
+none (`0x48CFDF..0x48D011`), then asks the order resolver `0x43F0E0` for each unit with the
+click's target and position (`0x48D0A0`) and skips a unit it answers 0 for. None of the cancels writes `0x2CC4`; the load's UI reset
+`0x4917D0` (called at `0x497581`) writes both, `0x4917F9` and `0x491805`. Every engine reader of
+`0x2CC4` (`0x419686` in `0x419670`, `0x4197DD` in the build cursor `0x4197D0`) runs only with
+`0x2CC3 == 0x0E`, and every reader of `0x2CC3` (`0x469DD8`, `0x469E51`, `0x469EF4`, `0x48D3DB`,
+`0x491CD2`, `0x491D2F`, `0x495F2D`, `0x498F77`, `0x499107`, `0x499238`, `0x499290`, `0x4993B6`)
+is the UI [DISASSEMBLED].
+
+The per-frame check at `0x4995C3..0x4995F1`, after `GameFrame_InGame 0x496790` (`0x4995B8`),
+reads the tracked unit; when its slot's `+0xA6` word is 0 (`0x4995E4`) it calls `0x491D70(0)`
+(`push 0` at `0x4995EF`, the call at `0x4995F1`), which writes neither byte. **That call does not
+always drop the unit**: when `0x37EBE & 0x865` or `0x2BEE & 0xE0` is set and the argument is 0
+(`0x491D76..0x491D95`, the second flag test at `0x491D86`), it only sets `0x37EBE` bit `0x10` and returns (`0x491D97..0x491DA2`),
+leaving the tracked unit and its menu up; the frame drops it later (`0x496986..0x4969C9`: through
+`0x41B2E0` once the flags clear, or by zeroing `0x37E9C` while they hold). Otherwise it clears
+`0x37E9C` (`0x491DA5`) and pops the GUI. The keys `0x495E90` write the byte only at their cancel
+`0x495F36`, so recalling a group leaves the placement armed over the new selection. **In stock a
+placement outlives the units it would order** — MEASURED 2026-09-26 with
+`tools/b6-tracked-death.sh` on main `8d033d1`: after the CORCK's death `0x2CC3` stayed `0x0E`
+and `0x2CC4` 246, and the square and our build ghost stayed on the pointer.
+
+**B9 checks it at two points of the frame, for a placement and for every command mode.** The in-play handler `0x499200` handles the mouse
+first (the build cursor at `0x499241`, the cursor choice `0x48D220` at `0x499297`, the click
+routing `0x4993B6`, the placement's click `0x498F70` at `0x4995B3`), then calls the frame
+`0x496790` (`0x4995B8`), whose ticks (`0x495490` at `0x49680C`, `0x49693E`) free units, whose keys
+(`0x495E90` at `0x496971`) recall groups, and whose draw `0x468CF0` (`0x4969CD`) reads the byte
+and publishes our packet; the head holds no `ret` before `0x4995B8`. With the GUI's dispatch
+before the handler, no one point follows every writer and precedes every reader, so
+`order_check` (`tagpu_patches.c`) runs at two: the frame's `call 0x48BAE0` at `0x49697B`
+(the stub tail-jumps to `0x48BAE0`, whose `ret` comes back to `0x496980`), which every path of
+`0x496790` reaches (`0x49691E` and `0x49696F` jump to it; its one `ret` is `0x496A56`) after the ticks,
+the keys and the scroll poll `0x41CE90` and before the cull and the draw; and `0x499226`, the
+handler's first instruction after `0x498DA0` (the mouse's world position, `0x499221`; the stub runs
+the stolen `mov edx,[0x511DE8]` and rejoins at `0x49922C`), after the GUI's dispatch and before the
+head's first reader. When the byte is `0x0E` and the placement walk's own test, or a command
+mode and `0x48CF30`'s first test (a selected unit), finds nobody, its values bounded (the
+controlled player below 10, the block inside the array and on its stride, each type inside
+`UNITINFOCount`), it calls `0x499100`: with the byte not 1 that is the right button's cancel for
+every order, the same writes whatever the mode, and it reads nothing of its message. MEASURED on the fixed
+build: see [the plan's B9](tadr-port/sim-fixes.md).
+
+**Where the cancel cannot be called.** `0x499100` reads the menu `[[main+0x531]+4]` at `0x49913B`
+with no test, and passes it to `0x49FE60(menu, "STOP")` (`0x49913F`); the engine guards the same
+read in `0x491D70` (`0x491DB3..0x491DBB`). Of `0x496790`'s three callers, the network game's end
+`0x4996A5` runs after the stack was popped, possibly to NULL, and the loading screen's `0x49842F`
+runs after the load's reset wrote the byte to 1 (`0x4917F9`), so `order_check` returns while
+`main+0x531` is NULL. The other is a modal screen: under one, `0x49FE60` searches the modal
+screen, returns -1, and the order button underneath stays drawn pressed with the byte 1. The
+engine's own test for deferring menu work is `0x37EBE & 0x865` or `0x2BEE & 0xE0` — in
+`0x491D70(0)` (`0x491D76..0x491D8D`) and in the frame before the deferred drop
+(`0x496986..0x4969A4`, the drop `0x41B2E0` at `0x4969B4`). Its named bits: bit 0, the options
+stack (`ARMOPT`, `EXITMENU`, `YESORNO`, the preferences), set at `0x4961C1` (the key that pushes
+`ARMOPT`), `0x49477E` (beside `"OPTIONS"`) and `0x45D002` (`0x45CFC0`); bit 2, set at
+`0x49412C`, the chat `TALK.GUI`, pushed by `0x494050` (`0x49410A`) from the Enter key's case
+`0x4964FD` of the in-game key switch and cleared by its handler `0x493BF0` (`0x493C18`); bit 6,
+`SHARE.GUI` (`0x49374F`). Bits 5 and
+11 of the word and `0x2BEE`'s three were not identified. `order_check` defers on the same test.
+In single player the frame skips the ticks while bit 0 is set (`0x496918` → `0x49697B`), so no
+unit dies under the options stack; with `main+0x2A44` bit 0 [INFERRED: a network game] they run
+(`0x4967E7`). The chat does not stop them: MEASURED 2026-09-26 with `tools/b9-under-chat.sh`, a
+CORAK died under `TALK.GUI` with ATTACK armed; the word read `0x2006` with the chat up and `0x2016`
+after the death (the drop pending), the byte stayed 3 until Escape closed the chat, then read 1,
+and the engine's deferred drop took the dead unit's menu down (`CORMAIN2.GUI` on top).
+
+**The remote give.** `UNITS_GiveUnit 0x488570` to a remote player builds a `0x14` record
+(`0x488603`), sends it (`0x451DF0` at `0x488693`) and kills the unit at `0x4886A4` (`0x489BB0`)
+over `0x4885E9..0x4886A4`; to a local player it creates the unit for the receiver (`0x488700`)
+and kills the old one with 30 000 damage (`0x4887D0`). The capture reaches it at `0x4046C5`.
 
 ## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
 

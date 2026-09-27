@@ -1,0 +1,328 @@
+{
+  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and TADR not patching the engine beside it. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder.",
+  "setups": [
+    {
+      "name": "retail",
+      "about": "the control: Impure alone on the retail exe",
+      "add": [],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      }
+    },
+    {
+      "name": "retail+tadr1",
+      "about": "the 2006 recorder, Dplayx.dll, beside Impure; the retail exe loads it as its DirectPlay",
+      "add": [
+        {
+          "fixture": "tadr-1.0.0.545",
+          "files": [
+            "Dplayx.dll",
+            "Dplayx.map"
+          ]
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "loaded": [
+          "dplayx.dll"
+        ],
+        "tadr_installed": false
+      }
+    },
+    {
+      "name": "retail+tadr-files",
+      "about": "a modern tdraw.dll and tplayx.dll left in the folder: nothing on the retail exe loads them",
+      "add": [
+        {
+          "fixture": "tadr-dev-ota",
+          "files": [
+            "tdraw.dll",
+            "totala.ini"
+          ]
+        },
+        {
+          "fixture": "tadr-recorder-ota",
+          "files": [
+            "tplayx.dll"
+          ]
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "not_loaded": [
+          "tdraw.dll",
+          "tplayx.dll"
+        ],
+        "tadr_installed": false
+      }
+    },
+    {
+      "name": "loader+tadr-ota",
+      "about": "the Community Patch route on the retail exe: the Patch Loader as dplayx.dll asks for tdraw.dll after Impure has installed its limits, and Impure answers for it (the takeover), so TADR does not start",
+      "add": [
+        {
+          "fixture": "patchloader-1.3.0.0",
+          "files": [
+            "dplayx.dll"
+          ]
+        },
+        {
+          "fixture": "tadr-dev-ota",
+          "files": [
+            "tdraw.dll",
+            "totala.ini"
+          ]
+        },
+        {
+          "fixture": "tadr-recorder-ota",
+          "files": [
+            "tplayx.dll"
+          ]
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      }
+    },
+    {
+      "name": "loader+tadr-tazero",
+      "about": "a player's TA Zero install: the Patch Loader, TADR's tazero tdraw.dll and the 2022 community-patch recorder",
+      "add": [
+        {
+          "fixture": "patchloader-1.3.0.0",
+          "files": [
+            "dplayx.dll"
+          ]
+        },
+        {
+          "fixture": "tadr-dev-tazero",
+          "files": [
+            "tdraw.dll",
+            "totala.ini"
+          ]
+        },
+        {
+          "fixture": "gammata-ota",
+          "files": [
+            "tplayx.dll"
+          ]
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      }
+    },
+    {
+      "name": "loader+tadr-mayhem",
+      "about": "the same route with TADR's Total Mayhem build and its recorder (the DLL layer only: the mod's own archives are not in the fixtures)",
+      "add": [
+        {
+          "fixture": "patchloader-1.3.0.0",
+          "files": [
+            "dplayx.dll"
+          ]
+        },
+        {
+          "fixture": "tadr-dev-mayhem",
+          "files": [
+            "tdraw.dll",
+            "tplayx.dll",
+            "totala.ini"
+          ]
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      }
+    },
+    {
+      "name": "392+tadr-dev",
+      "about": "the 3.9.02 exe with a current TADR: tdraw.dll loads Impure from inside its own start-up",
+      "add": [
+        {
+          "fixture": "gammata-ota",
+          "files": [
+            "TotalA.exe",
+            "tmusi.dll"
+          ]
+        },
+        {
+          "fixture": "tadr-dev-ota",
+          "files": [
+            "tdraw.dll",
+            "totala.ini"
+          ]
+        },
+        {
+          "fixture": "tadr-recorder-ota",
+          "files": [
+            "tplayx.dll"
+          ]
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      },
+      "today": {
+        "outcome": "impure-refused",
+        "failure": "0x0040EAD6"
+      }
+    },
+    {
+      "name": "392+tadr-2026.8.6",
+      "about": "the 3.9.02 exe with the last stable TADR",
+      "add": [
+        {
+          "fixture": "gammata-ota",
+          "files": [
+            "TotalA.exe",
+            "tmusi.dll"
+          ]
+        },
+        {
+          "fixture": "tadr-v2026.8.6-full",
+          "files": [
+            "tdraw.dll",
+            "totala.ini"
+          ]
+        },
+        {
+          "fixture": "tadr-recorder-ota",
+          "files": [
+            "tplayx.dll"
+          ]
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      },
+      "today": {
+        "outcome": "impure-refused",
+        "failure": "0x0040EAD6"
+      }
+    },
+    {
+      "name": "mayhem-11.3.0",
+      "about": "Total Mayhem 11.3.0 as installed, with Impure's ddraw.dll copied over the mod's cnc-ddraw: the stock exe, Mayhem's Patch Loader and its 2024 TADR, which the takeover keeps from starting; its loader moves the game's registry to Software\\TotalM",
+      "add": [
+        {
+          "fixture": "mayhem-11.3.0",
+          "files": "*"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      },
+      "registry_roots": [
+        "Software\\TotalM"
+      ]
+    },
+    {
+      "name": "prota-4.8",
+      "about": "ProTA 4.8 as installed, with Impure's ddraw.dll copied over the mod's cnc-ddraw: the stock exe, ProTA's Patch Loader and its 2025 TADR, which the takeover keeps from starting; its loader moves the game's registry to Software\\ProTA",
+      "add": [
+        {
+          "fixture": "prota-4.8",
+          "files": "*"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      },
+      "registry_roots": [
+        "Software\\ProTA"
+      ]
+    },
+    {
+      "name": "mayhem-11.3.0-net",
+      "about": "Total Mayhem 11.3.0 with the takeover switched off (tagpu_takeover.off): TADR starts and rewrites 17 of Impure's sites, and the safety net must stop the game at the first DirectDraw call instead of letting the first skirmish load crash",
+      "add": [
+        {
+          "fixture": "mayhem-11.3.0",
+          "files": "*"
+        }
+      ],
+      "levers": [
+        "tagpu_takeover.off"
+      ],
+      "goal": {
+        "outcome": "impure-refused",
+        "failure": "rewritten after they were installed"
+      },
+      "registry_roots": [
+        "Software\\TotalM"
+      ]
+    },
+    {
+      "name": "gammata-ota",
+      "about": "gammata's drop-in with Impure's ddraw.dll copied over it: its tdraw.dll loads ddraw_custom.dll (cnc-ddraw), never ddraw.dll",
+      "add": [
+        {
+          "fixture": "gammata-ota",
+          "files": "*"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      },
+      "today": {
+        "outcome": "impure-not-loaded",
+        "loaded": [
+          "ddraw_custom.dll"
+        ]
+      }
+    },
+    {
+      "name": "escalation",
+      "about": "Escalation GOLD 10.2.0 as installed: its exe imports TAESC.dll, which loads Impure from inside its start-up",
+      "add": [
+        {
+          "fixture": "escalation-gold-10.2.0",
+          "files": "*"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      },
+      "today": {
+        "outcome": "impure-refused",
+        "failure": "0x0040EAD6"
+      }
+    },
+    {
+      "name": "escalation+tadr-dev",
+      "about": "Escalation's exe and archives with the current TADR Escalation build in place of TAESC.dll",
+      "add": [
+        {
+          "fixture": "escalation-gold-10.2.0",
+          "files": "*"
+        },
+        {
+          "fixture": "tadr-dev-escalation",
+          "files": {
+            "TAESC.dll": "tdraw.dll",
+            "eplayx.dll": "eplayx.dll"
+          }
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_installed": false
+      },
+      "today": {
+        "outcome": "impure-refused",
+        "failure": "0x0040EAD6"
+      }
+    }
+  ]
+}

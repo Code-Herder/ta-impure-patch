@@ -137,16 +137,23 @@ PAGES = [
     ("tadr-port/sim-fixes-evidence", "B. Simulation bug fixes — evidence", "TADR port"),
     ("tadr-port/data-keys",       "C. New data keys — plan",   "TADR port"),
     ("tadr-port/data-keys-evidence", "C. New data keys — evidence", "TADR port"),
+
+    ("compat/overview",           "Overview & load routes",    "Compatibility"),
+    ("compat/takeover",           "The takeover (plan)",       "Compatibility"),
+    ("compat/tadr-collision",     "TADR beside Impure",        "Compatibility"),
+    ("compat/setups",             "Setups & outcomes",         "Compatibility"),
+    ("compat/identify",           "Identifying a setup",       "Compatibility"),
+    ("compat/suite",              "The compat suite",          "Compatibility"),
 ]
 
 # A folder of notes is a section of its own: research/notes/<folder>/<name>.md is the slug
 # "<folder>/<name>" and renders to site/<folder>/<name>.html, so a relative link between
 # notes is the same path in the repo and on the site. A note added to the folder is listed
 # in its section without being registered in PAGES; register it to choose its label and order.
-FOLDERS = {"tadr-port": "TADR port"}
+FOLDERS = {"tadr-port": "TADR port", "compat": "Compatibility"}
 
 SECTION_ORDER = ["Overview", "Renderer", "Tooling", "Mechanism", "TADR port", "Projects",
-                 "Reference", "Survey"]
+                 "Compatibility", "Reference", "Survey"]
 SECTION_BLURB = {
     "Overview": "Where the project stands, and the gotchas that cost time",
     "Renderer": "The GPU renderer: TA's draw paths mapped, and our passes",
@@ -154,6 +161,7 @@ SECTION_BLURB = {
     "Mechanism": "How the patching actually works",
     "TADR port": "Bringing TADR's engine features into our stack — the rules, then one plan per feature group",
     "Projects": "The mods and patches, one page each",
+    "Compatibility": "Impure beside the mods, TADR and the Patch Loader players already have — the routes, what each setup does, and the suite every release runs",
     "Survey": "Discovery passes and comparisons",
     "Reference": "Asset formats and the stock engine's external surfaces",
 }

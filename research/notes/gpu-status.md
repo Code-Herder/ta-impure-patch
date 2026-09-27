@@ -2174,17 +2174,17 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
-while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 129 rows of
-the raise and 95 of the fixes in the raised build, 224 in all, and the fixes' 99 in the stock-limits
-build, where the weapon IDs' four sites join them (MEASURED 2026-09-25 from the log lines). It
+while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 265 sites in
+all in the raised build (MEASURED 2026-09-26 from the log line), and the fixes alone in the
+stock-limits build, where the weapon IDs' four sites join them. It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 224 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 265 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16383, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
-nothing raised (…); the simulation fixes' 99 sites installed`. Right before it, once both
+nothing raised (…); the simulation fixes' N sites installed`. Right before it, once both
 installers have taken their stubs, `enginefix: the fixes' and limits' stubs take N bytes in P page(s)
 of 4096` (§2.6c).
 
@@ -2198,6 +2198,19 @@ whoever debugs it: the impure commit and branch, the exe's name, size, md5 and P
 the md5 is a known build, and every differing site as `want` and `have` bytes (twelve in the box,
 all of them in `log\tagpu.log`). It prints no path. The same text is written to
 `log\startup-failure.txt`. `tagpu_log_dir()` gives the folder.
+
+**The safety net.** The same first DirectDraw call re-reads every site once more (`lim_verify`),
+now against the bytes Impure wrote: it comes after every DLL's `DllMain`, so a site that no longer
+holds them was rewritten by a patcher that started after Impure. The report then says so — *changed
+by another program … before a battle can crash*, `result: N of M sites rewritten after they were
+installed`, each site's `want` being Impure's bytes — and the process ends before a game exists.
+`s_limState` stays installed while it does: the engine code already points at the raised pools.
+MEASURED 2026-09-26 (Wine, the suite's `mayhem-11.3.0-net`): Total Mayhem 11.3.0's 2024 TADR
+with the takeover (§2.6d) switched off rewrites 17 of 265 sites — ten of the unit-type
+relocations (the AI plan's Weight and Limit frames, the category mask at `0x488CC2`) and seven
+sites of the fixes (`0x42DAC7`, `0x4954ED`, `0x486036`, `0x486DC1`, `0x4854A0`, `0x490C5A`,
+`0x42CF5E`). A write made after that first call is outside the net
+([the takeover](compat/takeover.md), part 4).
 
 **The stock build.** `make LIMITS=stock` builds `ddraw-stocklimits.dll` from objects with their
 own suffix (`.stock.o`), with `TAGPU_LIMITS_STOCK` defined: nothing is raised and every accessor
@@ -2437,6 +2450,7 @@ engine defects we patch".
 | `0x43A58D` | the saved-game order loader `0x43A420`'s fallback, which walks the order table one record past its end and keeps a count it did not find as the order's type | local, 4 bytes: `jbe` → `jb`, and the not-found `jmp` → `0x43A552`, "Ready" |
 | `0x439D41` | the stockpile bar `0x439D20`'s `idiv` by the slot weapon's `+0xE4`, with the slot index unbounded | local: a `jmp` to a 38-byte stub that bounds the index to 0..2, tests the weapon for NULL and `+0xE4` for 0, and takes the function's `return 0` (`0x439D6B`) on any of them |
 | `0x438EDE` | `DrawRangeCircle 0x438EA0`'s guard, which lets N = 0 segments (radius 1) through to `idiv` | local: the `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, so N = 0 takes the radius-0 epilogue |
+| `0x49697B`, `0x499226` | the frame's `call 0x48BAE0` (after the ticks and the keys, before the cull and the draw) and the in-play handler's first instruction after the mouse's world position (after the GUI's dispatch, before the head's first reader), while an order (`main+0x2CC3`: a build placement `0x0E`, or a command mode 2..9, `0xC`, `0xD`) outlives every unit its click would order | local (B9): an `E8` and an `E9` to stubs that call `order_check` under `pushad`, which, when nobody would take the armed order — for a placement the walk `0x419755..0x41976A`'s own test, for a command mode `0x48CF30`'s first test (a selected unit), both bounded — calls the right button's cancel `0x499100` — not while `main+0x531` is NULL, and not until the engine's modal test (`0x37EBE & 0x865` or `0x2BEE & 0xE0`) clears; then `0x48BAE0`, or the stolen `mov edx,[main]` and `0x49922C`; silent at run time |
 | **the weapon keys (TADR section C, landing C2, simulation):** `0x42E310` (the weapon load's entry), `0x49ABB0` (the can-engage test's entry), `0x43F1D4` (the order action's unit branch), `0x49B9EB` (the guidance's water test), `0x49E1FD` (AutoAim's fire gate); the store is filled at A′3's ID site `0x42E468` | not a defect: TADR's weapon keys `nottoair`, `nottounderwater`, `surfacefire`, `notoverwater` and `notoverland`, which the stock loader never reads | every row in the fail-closed table, both builds; each site runs the engine's own instructions for a weapon whose key byte is 0, so stock content runs stock's bytes. §2.97 has the whole landing |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
@@ -2538,9 +2552,10 @@ that re-keys logs its first eight types and a total (`enginefix: unit sync keys:
 re-keyed`); a saved game's load logs what the border fix did (`savedfeat: the restore ran with the
 border mask open: N cells opened, M shut again and the pathing maps refreshed around each in T ms,
 K hold a restored feature's anchor`, or why it left the restore to stock). Landing 6's five fixes
-log a line of their own, `enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) …; yardmaps
+and B9 log a line of their own, `enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) …; yardmaps
 parsed inside their string (0x42CF5E) …; the saved-game order fallback (0x43A58D) …; the
-stockpile bar's divide (0x439D41) …; a range circle of radius 1 (0x438EDE) …. Counters: levels
+stockpile bar's divide (0x439D41) …; a range circle of radius 1 (0x438EDE) …; an order mode
+disarmed with nobody to order (0x49697B 0x499226) …. Counters: levels
 seeded at 0x…, network levels seeded from the engine's session copy at 0x…, SetSessionDesc calls
 made, made over another GUID and withheld at 0x… 0x… 0x…, network levels seeded from the map alone
 at 0x…, yardmaps filled past their string at 0x…`, with the same readings in place of `…`. Each level load logs its wind seed (`enginefix:
@@ -2654,6 +2669,29 @@ handler's slot).
   neither sequence was shared between peers before.
 
 ---
+
+### 2.6d Keeping TADR out (`tagpu_takeover.c`, on, `tagpu_takeover.off`)
+
+No engine address: the fork's `LoadLibraryA/W/ExA/ExW` hooks (`winapi_hooks.c`), which
+`hook_init` puts into the import table of every module in the game folder from Impure's
+`DllMain`, ask `tagpu_takeover_loadlibrary_*` first. A request for a DLL file in the game folder
+whose export table names `DirectDrawCreate`, that is not Impure's own file and not already
+loaded, is answered with Impure's module (one more reference, as `LoadLibrary` gives), and the
+log says `takeover: DPLAYX.dll asked for tdraw.dll … answered with Impure, so it does not start`.
+On the Community Patch Loader route that request is the loader's `LoadLibraryA("tdraw.dll")`:
+TADR installs everything in its `DllMain`, so none of it runs, and the loader's `patch_call` at
+`0x47BFA2`/`0x4B55FB` points the exe's two `DirectDrawCreate` calls at Impure's export. The
+loader's own presets stay. The file's exports are read from disk with every offset bounded by the
+file's size, through a handle that refuses writers while it is open, so the size is the view's.
+Only a plain load is answered — `LoadLibrary`, or `LoadLibraryEx` with no flag but
+`LOAD_WITH_ALTERED_SEARCH_PATH`; a load that keeps the DLL from running or searches elsewhere
+goes through untouched, and so does a bare name already loaded under that name.
+`tagpu_takeover.off` in the game folder turns it off, which is how the suite shows the safety net
+(§2.6b) catching what it keeps out. MEASURED 2026-09-26 on Wine and Windows: Total Mayhem 11.3.0,
+ProTA 4.8 and the three Patch Loader setups start with no `tdrawlog.txt` (and on Windows no
+`tdraw.dll` among the modules) and, on Wine, fight the 200v200 battle; the retail setups log no
+takeover. The plan and the other routes: [the
+takeover](compat/takeover.md).
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 
