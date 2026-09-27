@@ -2778,6 +2778,16 @@ hooks into the 2006 recorder. With `tagpu_takeover.off` that recorder installs 6
 and 24 once a battle lets its DirectPlay path run, which is the proof the check can see what the
 game folder cannot show ([the setups](compat/setups.md)).
 
+Three things the landing review changed here, each a hole the measurements could not have shown:
+the exe's **import slots are judged even when the code comparison could not be made** (an exe held
+open for writing, or loaded away from its `ImageBase`), since a slot does not depend on the file;
+a changed run is scanned for a **TADR** target before any other module's, because the bytes before
+it can be a stock `FF 15` through a slot into the mod's own `WIN32.dll` and stopping there hid a
+hook behind it; and the lookback is **five** bytes, not four, since `FF 15`/`FF 25` carry their
+operand at offsets 2 to 5. Pass 3 also asks a DLL's **file** whether it exports `DirectPlayCreate`
+rather than asking the loaded module: `GetProcAddress` on a forwarded export loads and initialises
+the target, and every Patch Loader's `dplayx.dll` forwards all nine of its exports to `tplayx`.
+
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 
 The one module that patches nothing the engine *draws* with: it changes **when** a freed block

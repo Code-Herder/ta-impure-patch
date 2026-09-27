@@ -68,9 +68,10 @@ instruction that goes there — 18 on `392+tadr-dev`, 19 on `escalation+tadr-dev
 control's Windows run. Those are coincidences and are counted, never judged
 ([the takeover](takeover.md), part 4).
 
-A full Wine run takes about 21 minutes on the reference setup: the single-player runs six at a
-time, and the nine network games one at a time, about 80 s each, queued beside them. The Windows
-runs take about 45 s a setup, one at a time; there is no battle or network stage there yet.
+A full Wine run takes about 24 minutes of runs on the reference setup — the single-player six at a
+time, the nine network games one at a time, about 80 s each, queued beside them — plus about 16
+minutes to build the sixteen instances first, since each is created fresh. The Windows runs take
+about 45 s a setup, one at a time; there is no battle or network stage there yet.
 
 ## The 3.9.02 exe
 

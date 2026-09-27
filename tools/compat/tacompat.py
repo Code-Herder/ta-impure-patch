@@ -377,9 +377,17 @@ def judge(o: dict, exp: dict) -> list:
     # (see hook_evidence): a comparison that could not be made leaves the claim unproven, on
     # the single-player run and on each peer of the network game alike.
     if exp.get("tadr_ran") is False:
-        for who, h in [("", o.get("hooks"))] + [(f"network game, {r}: ", (o.get("mp") or {}).get(r, {}).get("hooks"))
-                                                for r in ("host", "join")]:
-            if h and h.get("why"):
+        peers = [("", o.get("hooks"), True)]
+        mp = o.get("mp")
+        if mp is not None:
+            peers += [(f"network game, {r}: ", (mp.get(r) or {}).get("hooks"), mp.get("ok", False))
+                      for r in ("host", "join")]
+        for who, h, expected in peers:
+            # `h is None` is a read that never happened -- no process left to read, no `code`
+            # event from the Windows watcher -- and that is not a pass either: the claim is
+            # "nothing of TADR's ran", and nothing looked. A peer of a network game that never
+            # started is not held to it.
+            if expected and (h is None or h.get("why")):
                 miss.append(who + hook_note(h))
     if o.get("battle") is not None and not o["battle"].get("ok", False) and exp["outcome"] != "battle-crash":
         miss.append(f"the battle failed: {o['battle'].get('why', '?')}")
@@ -682,6 +690,36 @@ def pe_sections(exe: bytes):
     return base, out
 
 
+def pe_imports(exe: bytes, base: int, secs) -> list:
+    """[(dll name, the address of its first import slot, how many slots)] from the exe FILE. The
+    file gives the layout; what the slots HOLD only the running process has, which is the point --
+    the code that reaches a slot is stock, so the comparison of the code never looks at it, and
+    what makes a slot wrong is where it leads."""
+    def off(va):
+        for name, sva, vsize, raw, rsize, ch in secs:
+            if sva <= va < sva + max(vsize, rsize):
+                return raw + (va - sva)
+        return None
+    pe = struct.unpack_from("<I", exe, 0x3C)[0]
+    imp = struct.unpack_from("<I", exe, pe + 24 + 104)[0]
+    out, o = [], off(base + imp) if imp else None
+    if o is None:
+        return out
+    for i in range(96):                     # a 1997 exe has ten descriptors; this is a bound
+        oft, ts, fc, nm, ft = struct.unpack_from("<IIIII", exe, o + 20 * i)
+        if not nm and not ft:
+            break
+        p_nm, p_ft = off(base + nm), off(base + ft)
+        if p_nm is None or p_ft is None:
+            continue
+        name = exe[p_nm:exe.index(b"\0", p_nm)].decode("latin1")
+        k = 0
+        while p_ft + 4 * (k + 1) <= len(exe) and struct.unpack_from("<I", exe, p_ft + 4 * k)[0]:
+            k += 1
+        out.append((name, base + ft, k))
+    return out
+
+
 def proc_modules(pid) -> list:
     """(lo, hi, path) of every PE image mapped from a file in the process. /proc/<pid>/maps
     shows a PE image's header page alone, so the extent is the SizeOfImage in that header."""
@@ -739,6 +777,10 @@ def decode_run(run, read_dword=None) -> list:
     live process gives: without `read_dword` it is left undecoded, which is the Windows watcher's
     one gap.
 
+    The opcode is looked for from five bytes before the first changed byte, because `FF 15`/`FF 25`
+    carry their operand at offsets 2 to 5 and a repointed slot address whose last byte alone
+    differs begins five bytes back; the other shapes end at offset 4.
+
     `shaped` is False for four bytes that merely HOLD such a value, at any offset and aligned to
     nothing. Those are a coincidence, not a hook, and nothing is judged on them -- the bytes are
     as likely to be the middle of an instruction or the displacement of a jump: `8B 96 92 00`, the
@@ -747,7 +789,7 @@ def decode_run(run, read_dword=None) -> list:
     its instruction ([the takeover](../../research/notes/compat/takeover.md), part 4)."""
     mem, at, lo, hi = bytes.fromhex(run["mem"]), run["at"], run["lo"], run["hi"]
     out = []
-    for s in range(max(at, lo - 4), hi):
+    for s in range(max(at, lo - 5), hi):
         o, n = s - at, len(mem)
         if o < 0 or o >= n:
             continue
@@ -778,7 +820,11 @@ def foreign_hooks(runs, mods, read_dword=None) -> list:
                 for m in [next((m for m in mods if m[0] <= t < m[1]), None)] if m]
         if not hits:
             continue
-        site, target, shaped, m = next((h for h in hits if h[2]), hits[0])
+        # A TADR hit wins the run: the bytes before a run may be a stock `FF 15` through an import
+        # slot that leads into the mod's own WIN32.dll, and taking that one would hide a TADR hook
+        # in the same run -- the DLL's own pass scans for a TADR target first for that reason.
+        site, target, shaped, m = next((h for h in hits if h[2] and h[3][3]),
+                                       next((h for h in hits if h[2]), hits[0]))
         out.append({"site": site, "target": target, "module": m[2], "tadr": m[3],
                     "shaped": shaped, "at": run["at"], "mem": run["mem"], "file": run["file"]})
     return out
@@ -899,19 +945,48 @@ def exe_hooks(root, gamedir: Path) -> dict:
         except OSError:
             return None
 
-    out = judge_hooks(runs, table, sections, read_dword)
+    slots = []
+    try:
+        with open(f"/proc/{pid}/mem", "rb") as f:
+            for dll, addr, n in pe_imports(exe, base, secs):
+                f.seek(addr)
+                got = f.read(4 * n)
+                if len(got) != 4 * n:
+                    slots = None
+                    break
+                slots += [(dll, addr + 4 * k, v)
+                          for k, v in enumerate(struct.unpack(f"<{n}I", got))]
+    except (OSError, struct.error):
+        slots = None
+    out = judge_hooks(runs, table, sections, read_dword, slots)
     out["pid"] = pid
     return out
 
 
-def judge_hooks(runs, table, sections, read_dword=None) -> dict:
-    """The verdict both platforms share, from the changed runs and the module table."""
+def import_slots(slots, table) -> list:
+    """Every import slot of the exe that leads into one of `table` -- (name, address, target).
+    `slots` is [(dll, address, bound value)] read out of the running process."""
+    out = []
+    for dll, addr, target in slots:
+        m = next((m for m in table if m[0] <= target < m[1]), None)
+        if m:
+            out.append({"dll": dll, "site": addr, "target": target, "module": m[2], "tadr": m[3]})
+    return out
+
+
+def judge_hooks(runs, table, sections, read_dword=None, slots=None) -> dict:
+    """The verdict both platforms share, from the changed runs, the module table and -- where the
+    reader can give them -- the exe's bound import slots."""
     hooks = foreign_hooks(runs, table, read_dword)
+    iat = import_slots(slots, table) if slots is not None else []
     return {"why": None, "runs": len(runs), "sections": sections,
+            "slots_read": slots is not None, "slots": iat,
             "modules": [f"{m[2]} 0x{m[0]:08X}-0x{m[1]:08X}{' TADR' if m[3] else ''}"
                         for m in table],
-            "tadr": [h for h in hooks if h["tadr"] and h["shaped"]],
-            "other": [h for h in hooks if not h["tadr"] and h["shaped"]],
+            "tadr": [h for h in hooks if h["tadr"] and h["shaped"]]
+                    + [h for h in iat if h["tadr"]],
+            "other": [h for h in hooks if not h["tadr"] and h["shaped"]]
+                     + [h for h in iat if not h["tadr"]],
             "holds": [h for h in hooks if not h["shaped"]]}
 
 
@@ -949,7 +1024,8 @@ def hook_evidence(h, where="") -> list:
         return []
     by = {}
     for x in h["tadr"]:
-        by.setdefault(x["module"], []).append(x)
+        by.setdefault(x["module"] + (" (an import slot of the exe)" if x.get("dll") else ""),
+                      []).append(x)
     return [f"{where}the game's code leads into {name} at "
             + ", ".join(f"0x{x['site']:08X}" for x in sites[:6])
             + (f" and {len(sites) - 6} more" if len(sites) > 6 else "")
@@ -965,7 +1041,8 @@ def hook_note(h) -> str:
     return (f"{h['runs']} changed runs in {h['sections']} executable section(s), "
             f"{len(h['tadr'])} into TADR and {len(h['other'])} into another DLL of the "
             f"folder, of {len(h['modules'])} looked at; {len(h.get('holds', []))} hold such an "
-            f"address with no instruction that goes there, which is not counted")
+            f"address with no instruction that goes there, which is not counted"
+            + ("" if h.get("slots_read") else "; the exe's import slots were not read"))
 
 
 def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
@@ -1665,6 +1742,7 @@ DECODE_CASES = [
     ("a mov that looks like it", b"\x90" * 12,                         "midmov",   None),
     ("FF15 pointer moved",      b"\x90" * 4 + b"\xFF\x15\x00\xC1\x4F\x00" + b"\x90" * 2,
                                                                        "ff15",     "tplayx.dll"),
+    ("TADR later in the run",   b"\x90" * 16,                          "second",   "tplayx.dll"),
 ]
 
 
@@ -1689,6 +1767,10 @@ def cmd_selftest(args):
         # mov esi,[esi+0x92] -- its first four bytes read as 0x0092968B, inside tplayx here
         "midmov":  b"\x90" * 4 + b"\x8B\x96\x92\x00\x00\x00" + b"\x90" * 2,
         "ff15":    b"\x90" * 4 + b"\xFF\x15\x04\xC1\x4F\x00" + b"\x90" * 2,
+        # two shapes in one changed run: the mod's own DLL first, TADR after it -- the TADR one
+        # has to win, or a stock call into the mod's win32.dll hides a hook behind it
+        "second":  b"\xE8" + struct.pack("<i", mod - (va + 5)) + b"\xE9"
+                   + struct.pack("<i", tadr - (va + 10)) + b"\x90" * 6,
     }
     bad = 0
     for name, stock, key, want in DECODE_CASES:

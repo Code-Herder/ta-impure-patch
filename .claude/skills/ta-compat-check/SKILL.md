@@ -32,7 +32,7 @@ tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py clean                       # remove the compat-* Wine instances
-tools/compat/tacompat.py selftest                    # the hook decode, 8 cases, no game needed
+tools/compat/tacompat.py selftest                    # the hook decode, 11 cases, no game needed
 ```
 
 - **Verdicts.** `meets goal` (Impure active, none of TADR's code run); `known gap` (matches

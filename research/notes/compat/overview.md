@@ -92,8 +92,9 @@ map, which a mod may not ship.
 
 - **The takeover covers the routes where Impure loads first.** The 3.9.02 exe, Escalation and
   gammata's drop-in are still refused or never load Impure ([its landings](takeover.md#landings)).
-- **Windows has no battle stage and no network stage**: its rows stop at the main menu. The
-  reading of the game's code is written for it and unrun there ([the suite](suite.md)).
+- **Windows has no battle stage and no network stage**: its rows stop at the main menu, which is
+  why a recorder there shows only the six sites its entry point installs. The reading of the game's
+  code runs on both platforms; the exe's import slots are read on Wine only ([the suite](suite.md)).
 - **The network stage is two players on one machine**, over Windows' DirectPlay on loopback;
   a game between two machines, and one with a player who still runs TADR, are not tested.
 - **TA Zero is covered by its DLL layer only** (the player's files): its archives are not in

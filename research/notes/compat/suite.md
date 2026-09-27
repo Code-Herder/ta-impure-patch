@@ -35,10 +35,12 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
   process started over SSH cannot see the desktop's windows.
-- `selftest`: the hook decode against every shape it claims to decode and one it must leave
-  alone, with no game and no fixtures — eight cases, built from what was measured, including the
-  Patch Loader's own thunk rewrite and a plain immediate that must not fire. It is the only check
-  of `decode_run` that does not need a running game, and both platforms' verdicts rest on it.
+- `selftest`: the hook decode against every shape it claims to decode and every byte pattern it
+  must not judge on, with no game and no fixtures — eleven cases, each built from something that
+  was measured: the Patch Loader's own thunk rewrite, a plain immediate, the two coincidences that
+  refused a launch on the Windows box, and a run holding a call into the mod's own DLL *and* a jump
+  into TADR, where the TADR one has to win. It is the only check of `decode_run` that does not need
+  a running game, and both platforms' verdicts rest on it.
 
 A run is **meets goal**, **known gap** (matches `today`) or **UNEXPECTED**; the exit status is
 1 on any UNEXPECTED. The rule: no UNEXPECTED before a release.
@@ -70,12 +72,25 @@ likely to be the middle of an instruction or the displacement of a jump ([the ta
 part 4, where both halves of that are measured). A target in a module whose file carries
 `TADemo-MKChat` is TADR's code having run; a target in any other DLL of the folder is a byte the
 mod itself sets and is reported, never counted — the Patch Loader rewrites three of the exe's
-import thunks into direct calls to the mod's `win32.dll`. The decode is deliberately the same set
-of shapes `tagpu_takeover.c` decodes in-process, so the suite and the DLL answer the same
-question and may be compared.
+import thunks into direct calls to the mod's `win32.dll`. One finding a run, and **a TADR target
+wins the run**: the bytes before a changed run can be a stock `FF 15` through an import slot that
+leads into the mod's own `WIN32.dll`, and taking that one would hide a hook behind it.
+
+**The exe's import slots are read too, on Wine.** The layout comes from the exe file (`pe_imports`:
+each descriptor's first slot and how many), the bound values from the process, and a slot leading
+into a TADR module counts exactly as a site of the code does — it is the other way a call leaves
+the image, and the code that reaches it is stock, so the comparison of the code cannot see it. The
+Windows watcher does not read them; a row whose slots were not read says so.
+
+The decode is deliberately the same set of shapes `tagpu_takeover.c` decodes in-process, down to
+the five bytes of lookback before a changed run, so the suite and the DLL answer the same question
+and may be compared. One divergence is left and is deliberate: the DLL reads an `FF 15`/`FF 25`
+pointer only where the read is safe by construction — inside the exe's image or inside a
+game-folder module — while the suite, reading from outside, reads any address.
 
 **A goal of `tadr_ran: false` is not met by a comparison that did not happen.** When the read
-fails — no process to read, the exe mapped away from its `ImageBase`, `ptrace_scope` refusing —
+fails — no process to read, the exe mapped away from its `ImageBase`, `ptrace_scope` refusing — or
+when no read was attempted at all,
 the row says so and reads UNEXPECTED. It is not counted as TADR having run: it is counted as
 unproven, which is the same rule as *a run is only evidence if the watcher saw it*.
 

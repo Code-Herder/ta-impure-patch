@@ -102,7 +102,18 @@ when it fails — it is not an assumption about the retail exe. The 3.9.02 and E
 `TDRAW` / `TAESC` and **no `DDRAW` at all** (DISASSEMBLED: `objdump -p`), so on those routes TADR's
 `DllMain` is what loads Impure and is running while this would write: the pass is skipped, says so
 in the log, and part 4 is what answers for such a launch. That is also why part 2 is a separate
-design rather than this pass applied twice.
+design rather than this pass applied twice. Every slot of a descriptor is looked at, not its first,
+so a descriptor one unbindable slot would have hidden still counts.
+
+**What the invariant does not cover**, and the log would be wrong about: a game-folder module that
+is in the exe's import table not at all — pulled in as a dependency of an earlier descriptor's
+module, or by a forwarded export. Such a module is already initialised when this runs, and its
+entry point is made inert anyway; only part 4 answers for it. No setup of the suite has one
+(MEASURED 2026-09-27, `objdump -p` over every fixture's exe and DLLs). Nor does it cover a **PE TLS
+callback**, which the loader calls whatever the entry point says: both `tdraw.dll` builds of the
+fixtures carry a TLS directory (Mayhem RVA `0x6E240`, ProTA `0x81F00`) whose callback array begins
+with NULL, so nothing runs today, and a build that ever carries one is named in the log instead of
+passing for silent.
 
 A module is TADR's when its **file** carries `TADemo-MKChat`, the name TADR's builds give their
 chat channel. MEASURED 2026-09-27 over every file of the suite's fixtures — 130 files, 12
@@ -116,7 +127,13 @@ Never the file's name: the mods rename everything.
 **1c. The exe's DirectPlay imports** — which is now load-bearing rather than belt-and-braces,
 because an uninitialised Delphi DLL must never be called. After the loader has bound every
 import, every import descriptor of the exe whose slots lead into a DLL of the game folder that
-exports `DirectPlayCreate` (and is not Impure) has **all** its slots pointed at Impure's own
+exports `DirectPlayCreate` (and is not Impure) — **asked of the DLL's file, never of the loaded
+module**, because `GetProcAddress` on a forwarded export makes the loader load and initialise the
+target, and every Patch Loader's `dplayx.dll` forwards all nine of its exports to `tplayx`: asking
+from inside `DllMain`, under the loader lock, would start the recorder out of the loader's own
+order, on the very routes where 1b did not make it inert. Every one of those files exports the
+*name* `DirectPlayCreate` (MEASURED 2026-09-27: the loader's, the 2006 recorder's, Mayhem's and
+ProTA's), so the file answers the same question — has **all** its slots pointed at Impure's own
 forwarders, or none of them: a slot Impure cannot name leaves the descriptor alone and says so
 in the log. A forwarder loads Windows' `dplayx.dll` by its full path on its first call, from
 the game's code and outside the loader lock, and passes every call on. TotalA.exe 3.1 imports
@@ -196,6 +213,14 @@ for. Nothing is lost by not judging a held value: every TADR hook measured on an
 the 2006 recorder, 6 on the entry-point route, 13 to 18 of a `tdraw`'s — is found by its
 instruction. `tacompat.py selftest` carries all three coincidences as cases that must not fire.
 
+A decoded instruction is *narrower* evidence than a held value, not proof: nothing here disassembles,
+so a stock byte that happens to be `E8` or `E9` inside a changed run is decoded as though it were an
+opcode, and its target could in principle land inside a module of the folder. It is a far smaller
+surface than a held value — the target has to fall inside one of a handful of image ranges rather
+than merely resemble an address — and it has never fired: 0 in some 8 000 changed runs over 32
+launches on the two platforms. If one ever does, the site will be one of Impure's own patch
+addresses, which is how to tell it from TADR.
+
 **Why this needs no list of sites, and exempts the mod without one.** A mod's own changes to
 the engine are in its exe *file*, so they are not changed bytes at all. Impure's patches and
 the Patch Loader's lead into Impure's module or into stubs Impure allocated, which are in no
@@ -211,6 +236,17 @@ holds no bound address to compare with — what makes a slot wrong is where it l
 into a TADR module refuses too, and that is also the answer to part 1c's own failure mode: a
 descriptor it could not name every slot of still holds the recorder's addresses, and the recorder
 is inert by then, so the exe's first DirectPlay call would run uninitialised Delphi code.
+**The slots are judged even when the code comparison could not be made at all** — an exe someone
+else holds open for writing, or one loaded away from its own `ImageBase` — because a slot does not
+depend on the file. Discarding the slot verdict with the file verdict would have let exactly the
+launch above proceed.
+
+**One finding a changed run, and a TADR one wins it.** The bytes before a run can be a stock
+`FF 15` through an import slot that leads into the mod's own `WIN32.dll`, which the retail exe
+imports: taking that finding and stopping would hide a TADR hook in the same run behind a byte that
+is allowed to be there. The opcode is looked for from **five** bytes before the first changed byte,
+not four, because `FF 15`/`FF 25` carry their operand at offsets 2 to 5 — a repointed slot address
+whose last byte alone differs begins five bytes back.
 
 **What it does not see**: a hook installed by writing a function pointer into a data section other
 than an import slot (the engine's globals differ from the file everywhere by the time this runs, so

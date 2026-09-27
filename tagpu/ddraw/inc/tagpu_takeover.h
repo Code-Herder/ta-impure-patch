@@ -56,8 +56,12 @@
    import-directory order; Impure imports nothing from the game folder; so the condition is
    exactly "the FIRST import descriptor of the exe that leads into the game folder is
    Impure's", and every other game-folder module is in a later descriptor's subtree.
-   to_first_local_is_ours tests that against the exe in front of it and the pass does nothing
-   when it fails -- it is not an assumption about the retail exe. The 3.9.02 and Escalation
+   to_first_local_is_ours tests that against the exe in front of it, over every slot of a
+   descriptor rather than its first, and the pass does nothing when it fails -- it is not an
+   assumption about the retail exe. WHAT IT DOES NOT COVER: a game-folder module that is not in
+   the exe's import table at all, and a PE TLS callback, which the loader calls whatever the entry
+   point holds. Both are named where they are found (to_tls_callbacks logs one) and answered by
+   pass 4; no setup of the suite has either (MEASURED 2026-09-27). The 3.9.02 and Escalation
    exes import TDRAW / TAESC and no DDRAW at all (DISASSEMBLED: objdump -p), so there TADR's
    DllMain is what loads Impure and is running while this would write: the pass is skipped and
    says so, and pass 4 is what answers for such a launch. MEASURED on Wine and on Windows (the
@@ -79,7 +83,11 @@
    the exe's entry point, and therefore before the exe can make a DirectPlay call: every
    import descriptor of the exe whose slots lead into a DLL in the game folder that exports
    DirectPlayCreate (and is not Impure) has ALL its slots pointed at Impure's forwarders, or
-   none of them: a slot this cannot name leaves the descriptor as it is and says so. Impure's
+   none of them: a slot this cannot name leaves the descriptor as it is and says so. THE EXPORT
+   IS ASKED OF THE FILE, never of the loaded module: GetProcAddress on a forwarded export makes
+   the loader load and initialise the target, and every Patch Loader's dplayx.dll forwards all
+   nine of its exports to tplayx, so asking here -- from DllMain, under the loader lock -- would
+   start the recorder out of the loader's order, on the routes where pass 2 was skipped. Impure's
    own module is PINNED before the first such write, because the slots then hold addresses of
    its code for the life of the process. A forwarder loads Windows' own dplayx.dll by its full
    path on its first call -- from the game's code, outside the loader lock -- and passes every
@@ -126,7 +134,14 @@
    slot leading into a TADR module refuses too, and that is also the answer to pass 3's own
    failure mode: a descriptor it could not name every slot of still holds the recorder's
    addresses, and the recorder is inert by then, so the first call into it would run
-   uninitialised Delphi code.
+   uninitialised Delphi code. THE SLOTS ARE JUDGED EVEN WHEN THE CODE COULD NOT BE COMPARED --
+   an exe another program holds open for writing, or one loaded away from its ImageBase -- since
+   a slot does not depend on the file.
+
+   ONE FINDING A CHANGED RUN, AND A TADR ONE WINS IT: the bytes before a run can be a stock FF 15
+   through an import slot into the mod's own WIN32.dll, which the retail exe imports, and stopping
+   there would hide a TADR hook in the same run. The opcode is looked for from FIVE bytes before
+   the first changed byte, since FF 15 / FF 25 carry their operand at offsets 2 to 5.
 
    WHY THIS EXEMPTS THE MOD AND NOT TADR, with no list of sites in it: a mod's own changes to
    the engine are in its exe FILE, so they are not changed bytes at all; Impure's patches and
