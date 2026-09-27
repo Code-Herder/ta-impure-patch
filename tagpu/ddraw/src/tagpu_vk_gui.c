@@ -141,13 +141,19 @@ typedef struct {
     VkFramebuffer   fb2;            /* [index, colour], against s_twRp2      */
     VkImageLayout   colLayout;
     int             colNeedClear;   /* colour made this frame, not cleared   */
-    /* ---- CLASSIC++: THE PICTURE THIS TWIN IS, while it is nothing else. Set
-       by a restorable asset's SEED (the picture store's entry + 1), cleared by
-       the first op that names the twin as a destination, because from then on
-       the twin holds pixels the picture does not describe. While set, the
-       store fills the colour plane whole when the entry's restore lands.
-       `picGen` is the store generation the fill was made in; 0 = owed. */
+    /* ---- CLASSIC++: THE PICTURE THIS TWIN WAS SEEDED FROM (the picture
+       store's entry + 1), pinned in the store from the SEED until the twin's
+       next SEED or its drop. While `picDrawn` is 0 the twin IS the picture,
+       and the store fills its colour plane whole when the entry's restore
+       lands; the first op that names the twin as a destination sets it,
+       because from then on the twin holds pixels the picture does not
+       describe. THE PIN OUTLIVES THE DRAW on purpose: a snapshot's re-seed
+       (tagpu_gui_hook.c `repaint_arm`) comes back for the same picture, and
+       finds it stored and restored only because nothing could evict it in
+       between. `picGen` is the store generation the fill was made in;
+       0 = owed. */
     int             pic;
+    int             picDrawn;
     unsigned        picGen;
 } TWIN;
 
@@ -671,7 +677,7 @@ static void ret_drain_idle(const TAGPU_VKPASS* d)
    PLACED ON A GRID OF `PS_CELL` CELLS and never moved: an entry keeps its
    rectangle until it is evicted, so a fill already recorded this frame reads
    the texels it was recorded against. Eviction takes the least recently used
-   entry that no twin is bound to, and `tagpu_vk_restore_job_remap` removes its
+   entry that no twin pins, and `tagpu_vk_restore_job_remap` removes its
    frames from the job BEFORE its cells are handed out -- including a batch in
    flight, which goes back to the queue -- so the job can never paint an
    evicted picture over the one that replaced it.
@@ -702,7 +708,7 @@ static void ret_drain_idle(const TAGPU_VKPASS* d)
    is nothing to restore, and the atlas keeps such frames indexed too */
 #define PS_MIN     12
 /* recently evicted content, so that restoring it again does not count as a
-   settle -- see `tagpu_gui_pic_settled` */
+   settle -- see `ps_recent` */
 #define PS_EVRING  64
 
 enum { PSE_FREE = 0, PSE_NEW, PSE_QUEUED, PSE_DONE, PSE_BAD };
@@ -719,7 +725,7 @@ typedef struct {
     short            core[PS_TMAX][6];
     unsigned char*   bytes;          /* w*h, what a hit is compared against */
     unsigned         used;           /* s_psFrame at the last lookup        */
-    int              pins;           /* twins bound to it                   */
+    int              pins;           /* twins seeded from it (TWIN `pic`)   */
     int              fresh;          /* its settle may ask for a repaint    */
 } PSENT;
 
@@ -742,9 +748,14 @@ static int              s_psTried;                /* the device refused      */
 /* moves when every fill made so far stops being current: a palette rebuild */
 static unsigned         s_psGen = 1;
 static unsigned         s_psFrame, s_psSettled;
-static int              s_psBound;                /* twins with `pic` set    */
-static unsigned         s_psEv[PS_EVRING];
+static int              s_psBound;                /* twins a fill can reach:
+                                                     `pic` set, `picDrawn` 0 */
+typedef struct { unsigned hash, round; } PSEV;   /* round: s_psSettled then */
+static PSEV             s_psEv[PS_EVRING];
 static unsigned         s_psEvN;
+/* the round of the newest eviction the ring has overwritten */
+static unsigned         s_psEvLost;
+static int              s_psEvLostHave;
 static unsigned         s_psStored, s_psEvicted, s_psFills, s_psRefused;
 static int              s_psSaid;
 
@@ -752,8 +763,8 @@ static void pic_unbind(TWIN* t)
 {
     if (!t->pic) return;
     if (t->pic >= 1 && t->pic <= PS_MAX && s_ps[t->pic - 1].pins > 0) s_ps[t->pic - 1].pins--;
-    t->pic = 0; t->picGen = 0;
-    if (s_psBound > 0) s_psBound--;
+    if (!t->picDrawn && s_psBound > 0) s_psBound--;
+    t->pic = 0; t->picDrawn = 0; t->picGen = 0;
 }
 
 /* ---- the twin store ----------------------------------------------------- */
@@ -1928,7 +1939,13 @@ static void ps_evict(const TAGPU_VKPASS* d, PSENT* e, int remember)
     for (y = 0; y < e->ch; y++)
         for (x = 0; x < e->cw; x++) s_psCell[e->cy + y][e->cx + x] = 0;
     s_psCellsFree += e->cw * e->ch;
-    if (remember) s_psEv[s_psEvN++ % PS_EVRING] = e->hash;
+    if (remember) {
+        PSEV* v = &s_psEv[s_psEvN % PS_EVRING];
+        /* rounds only grow, so the entry overwritten last is the newest lost */
+        if (s_psEvN >= PS_EVRING) { s_psEvLost = v->round; s_psEvLostHave = 1; }
+        v->hash = e->hash; v->round = s_psSettled;
+        s_psEvN++;
+    }
     free(e->bytes);
     memset(e, 0, sizeof *e);
     s_psEvicted++;
@@ -1971,6 +1988,26 @@ static int ps_images(const TAGPU_VKPASS* d)
 static int pic_current(const TAGPU_GUIHAND* h)
 {
     return h->pal && s_psPalHave && !memcmp(h->pal, s_psPal, sizeof s_psPal);
+}
+
+/* WHETHER STORING THIS CONTENT NOW MAY BE THE REPAINT LOOP, in which case it
+   raises no settle when it lands. A ROUND is `s_psSettled`: one settle, one
+   repaint. Content evicted in this round or the last one is recent -- the
+   repaint that asked for this one, or this one itself, took it out. That is
+   the bound: a repaint draws the pictures the previous one drew, each of
+   them was stored or found then, and one missing now was evicted since, so
+   a repaint that brings in nothing new raises no settle and the loop ends.
+   Content evicted longer ago, a map preview picked again after a walk
+   through the list, is fresh and asks for its repaint. A ring that has
+   overwritten a recent eviction cannot tell, and says recent: the cost of
+   that answer is a picture that waits for the next repaint, never a loop. */
+static int ps_recent(unsigned hv)
+{
+    int i;
+    if (s_psEvLostHave && s_psEvLost + 1u >= s_psSettled) return 1;
+    for (i = 0; i < PS_EVRING && i < (int)s_psEvN; i++)
+        if (s_psEv[i].hash == hv && s_psEv[i].round + 1u >= s_psSettled) return 1;
+    return 0;
 }
 
 /* THE ENTRY FOR THIS PICTURE, stored now if it is new: its bytes go through
@@ -2027,9 +2064,10 @@ static PSENT* pic_get(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     bytes = (unsigned char*)malloc(n);
     if (!bytes) return NULL;
 
-    /* ROOM: the least recently used entry no twin is bound to goes, until a
-       slot and a rectangle of cells are both free. Bound entries are what a
-       backdrop's fill and a palette rebuild read, so they stay. */
+    /* ROOM: the least recently used entry no twin pins goes, until a slot
+       and a rectangle of cells are both free. Pinned entries are what a
+       backdrop's fill, a snapshot's re-seed and a palette rebuild read, so
+       they stay. */
     while (slot < 0 || s_psCellsFree < cw * ch || !ps_fit(cw, ch, &ox, &oy)) {
         int v = -1;
         for (i = 0; i < PS_MAX; i++) {
@@ -2040,8 +2078,8 @@ static PSENT* pic_get(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
             free(bytes);
             s_psRefused++;
             if (!(s_psSaid & 4)) { s_psSaid |= 4;
-                plog(d, "gui: the picture store is full of pictures twins are bound "
-                        "to - a %dx%d picture stays indexed", w, h); }
+                plog(d, "gui: the picture store is full of pictures twins pin "
+                        "- a %dx%d picture stays indexed", w, h); }
             return NULL;
         }
         ps_evict(d, &s_ps[v], 1);
@@ -2058,12 +2096,7 @@ static PSENT* pic_get(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     for (j = 0; j < ch; j++)
         for (i = 0; i < cw; i++) s_psCell[oy + j][ox + i] = (unsigned short)(slot + 1);
     s_psCellsFree -= cw * ch;
-    /* A RE-STORE OF CONTENT EVICTED A MOMENT AGO does not ask for a repaint
-       when it lands: only content new to the store can, which is what keeps a
-       store too small for a screen from repainting it for ever. */
-    e->fresh = 1;
-    for (i = 0; i < PS_EVRING && i < (int)s_psEvN; i++)
-        if (s_psEv[i] == hv) { e->fresh = 0; break; }
+    e->fresh = !ps_recent(hv);
 
     /* the tiles, side by side in the destination from the entry's origin */
     ex = ox * PS_CELL; ey = oy * PS_CELL;
@@ -2195,7 +2228,7 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
         }
     }
     /* THE PALETTE MOVED, AND THE PRODUCER SAYS THE NEW ONE HAS SETTLED
-       (`colourTwins` is its `s_colValid`). A picture a twin is bound to is
+       (`colourTwins` is its `s_colValid`). A picture a twin pins is
        restored again against it, repainting in place; every other one goes,
        and is stored again against the new palette when it is next drawn --
        so a level load does not restore the shell's whole map list for
@@ -2215,8 +2248,8 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
             s_ps[i].state = PSE_NEW; s_ps[i].fresh = 1; kept++;
         }
         plog(d, "gui: the presented palette moved under the picture store - %d "
-                "bound picture(s) restored again, %d dropped", kept, dropped);
-        s_psEvN = 0;
+                "pinned picture(s) restored again, %d dropped", kept, dropped);
+        s_psEvN = 0; s_psEvLostHave = 0;
         for (k = 0; k < s_ntw; k++)
             if (s_tw[k].pic && s_tw[k].colImg) { s_tw[k].colNeedClear = 1; s_tw[k].picGen = 0; }
         s_psGen++;
@@ -2226,6 +2259,13 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        hold stays for the next arm. */
     if (!h->restoreFrames || h->restoreGen == 0) { ps_job_free(d); return; }
     if (s_psJob || s_psTried || !h->pal) return;
+    /* ONLY AGAINST THE PALETTE THE DONE ENTRIES WERE RESTORED AGAINST.
+       `s_psPal` is written below and nowhere else, and a new palette reaches
+       it only through the rebuild above, which requeues or evicts every entry
+       first. A job made while a new palette has not yet settled would name
+       it, and every entry restored against the old one would then pass
+       `pic_current`. */
+    if (s_psPalHave && memcmp(h->pal, s_psPal, sizeof s_psPal)) return;
     for (i = 0; i < PS_MAX; i++) if (s_ps[i].state == PSE_NEW) break;
     if (i == PS_MAX) return;
     if (!tagpu_vk_restore_up(d)) { s_psTried = 1; return; }
@@ -2263,7 +2303,7 @@ static void pic_forget(void)
     s_psSrcLay = VK_IMAGE_LAYOUT_UNDEFINED;
     s_psDstLive = 0; s_psPalHave = 0; s_psTried = 0; s_psBound = 0;
     s_psGen++;
-    s_psEvN = 0;
+    s_psEvN = 0; s_psEvLostHave = 0;
 }
 
 /* the store goes with the device: behind the seam's vkDeviceWaitIdle */
@@ -2278,6 +2318,18 @@ static void pic_down(const TAGPU_VKPASS* d)
     tagpu_gui_pic_settled(s_psSettled);
 }
 
+/* tagpu_vk_gui.h. Both jobs go back while the restorer can still take them;
+   the images they paint into are this pass's and keep what they hold. The UI
+   atlas's next job is made for the same generation, and `s_arHave` stands
+   until that job says whether it repaints or blanks; the store's QUEUED
+   pictures are owed again (`ps_job_free`) and its DONE ones stay DONE. */
+void tagpu_vk_gui_restore_drop(const TAGPU_VKPASS* d)
+{
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
+    ps_job_free(d);
+}
+
 /* THE REMAP TABLE AS THE IMAGE `TINT_FS` READS, into `dst`: RGBA8, 256 wide
    and twice `TAGPU_GUI_SHADE_ROWS` tall. The upper half is the remap, the
    index in `.r`. The lower half is, per entry, the map of COLOUR that goes
@@ -2286,7 +2338,11 @@ static void pic_down(const TAGPU_VKPASS* d)
        i the entry, j = row[i] where the row sends it, s = min(1, min over
        the channels of pal[j] / pal[i]);   k = s,   b = pal[j] - s * pal[i]
 
-   so `out = pal[j] + s * (restored - pal[i])`: a texel whose restored colour
+   and for black, which no channel constrains, s is the row's own ratio
+   (sum of pal[j] over sum of pal[i] across the entries, at most 1): a black
+   texel's restored colour is the detail the restorer put into dark art, and
+   a dim has to scale it with its neighbours rather than leave it whole.
+   So `out = pal[j] + s * (restored - pal[i])`: a texel whose restored colour
    IS its palette colour is shaded to the engine's own tinted colour exactly
    (to a level, the table being bytes), and the restorer's detail is kept on
    top, scaled down with a darkening and whole with a lightening. k in [0, 1]
@@ -2303,12 +2359,20 @@ static int tint_table(unsigned char* dst, const unsigned char* shade, const unsi
     for (r = 0; r < TAGPU_GUI_SHADE_ROWS; r++)
         for (i = 0; i < 256; i++) dst[((size_t)r * 256u + (unsigned)i) * 4u] = shade[(size_t)r * 256u + (unsigned)i];
     if (!pal) return 0;
-    for (r = 0; r < TAGPU_GUI_SHADE_ROWS; r++)
+    for (r = 0; r < TAGPU_GUI_SHADE_ROWS; r++) {
+        const unsigned char* row = shade + (size_t)r * 256u;
+        double sx = 0.0, sy = 0.0, rowk;
+        for (i = 0; i < 256; i++)
+            for (c = 0; c < 3; c++) {
+                sx += pal[(size_t)i * 4u + (unsigned)c];
+                sy += pal[(size_t)row[i] * 4u + (unsigned)c];
+            }
+        rowk = (sx > 0.0 && sy < sx) ? sy / sx : 1.0;
         for (i = 0; i < 256; i++) {
             const unsigned char* x = pal + (size_t)i * 4u;
-            const unsigned char* y = pal + (size_t)shade[(size_t)r * 256u + (unsigned)i] * 4u;
+            const unsigned char* y = pal + (size_t)row[i] * 4u;
             unsigned char* f = fit + ((size_t)r * 256u + (unsigned)i) * 4u;
-            double k = 1.0;
+            double k = (x[0] | x[1] | x[2]) ? 1.0 : rowk;
             for (c = 0; c < 3; c++)
                 if (x[c] && (double)y[c] / x[c] < k) k = (double)y[c] / x[c];
             for (c = 0; c < 3; c++) {
@@ -2318,6 +2382,7 @@ static int tint_table(unsigned char* dst, const unsigned char* shade, const unsi
             }
             f[3] = (unsigned char)(k * 255.0 + 0.5);
         }
+    }
     return 1;
 }
 
@@ -2990,7 +3055,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         int k;
         for (k = 0; k < s_ntw; k++) {
             TWIN* bt = &s_tw[k];
-            if (!bt->pic || bt->picGen == s_psGen || bt->pic > PS_MAX) continue;
+            if (!bt->pic || bt->picDrawn || bt->picGen == s_psGen || bt->pic > PS_MAX) continue;
             if (s_ps[bt->pic - 1].state != PSE_DONE) continue;
             pic_fill(cb, bt, &s_ps[bt->pic - 1], 0, 0);
             bt->picGen = s_psGen;
@@ -3014,12 +3079,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             s_behind = 0;               /* the fresh start has arrived */
         }
         /* A PICTURE TWIN STOPS BEING ONE AT THE FIRST OP THAT DRAWS INTO IT:
-           a later fill would paint the picture over what that op drew. A
-           re-seed is handled in its own arm. */
+           a later fill would paint the picture over what that op drew. It
+           keeps the pin (TWIN `pic`). A re-seed is handled in its own arm. */
         if (s_psBound && o->kind != TAGPU_GUIOP_SEED &&
             o->kind != TAGPU_GUIOP_FREE && o->kind != TAGPU_GUIOP_RESET) {
             TWIN* bt = tw_find(o->surf);
-            if (bt && bt->pic) pic_unbind(bt);
+            if (bt && bt->pic && !bt->picDrawn) { bt->picDrawn = 1; s_psBound--; }
         }
 
         /* a draw needs a render pass open on ITS destination; everything else
@@ -3901,6 +3966,10 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (!d->dev || !vkDestroyPipeline) {
         s_state = owed ? ST_REFUSED : ST_UNBUILT;
         s_ntw = 0;
+        /* forgotten like the store's job in `pic_forget`: with no device the
+           restorer forgets its job table, and a pointer kept would alias */
+        s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+        s_rjSrcView = VK_NULL_HANDLE;
         pic_forget();
         return;
     }

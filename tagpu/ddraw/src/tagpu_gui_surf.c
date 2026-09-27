@@ -1022,21 +1022,28 @@ static void col_valid_edge(int on)
 {
     static int was = 0;
     if (on != was) {
+        int pic;
         was = on;
         if (!on) return;
+        pic = s_picSettled != s_picSettledSeen;
         s_colSettledSeen = s_colSettled;
         s_picSettledSeen = s_picSettled;
         if (col_ask_repaint())
             slog("gui: Classic++ colour is valid - asking the engine for a repaint, because "
                  "art already on a surface keeps the indices it was drawn with");
+        /* a picture settle it absorbs keeps its own ask, outside the budget
+           (below): the budget refusing the edge must not refuse the picture */
+        else if (pic)
+            g_guiq.colarm++;
         return;
     }
     if (!on) return;
     /* THE PICTURE STORE ASKS FOR ITS OWN, OUTSIDE THE ATLAS'S BUDGET. A settle
        there is a picture new to the store finished (tagpu_vk_gui.c `pic_step`),
        so a repaint that draws only pictures the store holds cannot cause
-       another, and content it evicted and stores again does not count --
-       which is the bound the budget stands in for on the atlas's side. Spending
+       another, and content the last two repaints evicted and it stores again
+       does not count (`ps_recent`) -- which is the bound the budget stands in
+       for on the atlas's side. Spending
        the atlas's 32 instead would let a walk through the map list (a new
        preview each pick) use up the repaint an in-game sidebar needs later. */
     if (s_picSettled != s_picSettledSeen) {

@@ -6645,9 +6645,10 @@ is exactly the old behaviour. MEASURED on the same fixture: backdrop, title, lab
 stats and the Main Menu button all on screen, the main menu after it correct, the in-game UI
 unchanged. Design in [GUI renderer](gui-renderer.html), under `PK_ASSET`. **A colour repaint
 re-seeds it too** (2026-09-26): in Classic++ the seed's sprites land in the same window, before
-the picture store has restored the backdrop, so `repaint_arm` clears `seeded` on every surface
+the picture store has restored the backdrop, so `repaint_arm` raises `reseed` on every surface
 holding a snapshot at each `colarm` edge, and the re-sent seed finds its picture done
-([GUI renderer](gui-renderer.html) §27.2).
+([GUI renderer](gui-renderer.html) §27.2). The flag is apart from `seeded`, which is what owes a
+freed surface's twins their `PK_FREE`.
 
 **The player names on the coloured bars (closed 2026-09-23).** They are drawn through `0x4B8310`,
 which was recorded as `OP_GAFB` and published as box bytes the drain drops, so they reached no screen
@@ -19022,6 +19023,15 @@ swapchain object: it is handed a slot and the extent at record time, and builds 
 all come back as they were, `vk_resize` keeps the passes (`passes_down` otherwise). The device
 wait before the rebuild means none of it is in use. That covers the vsync toggle, where only the
 present mode moves, and an out-of-date surface at the same size. A resize still drops them.
+
+**The UI pass is the one that stays up across `passes_down`**, since its twins are the only copy
+of what the shell has drawn. It gives its two restore jobs back first
+(`tagpu_vk_gui_restore_drop`, before `tagpu_vk_restore_down`), because the restorer forgets its
+job table on the way down and a job pointer kept across it would alias the next pass's.
+`tagpu_vk_restore_down` frees and logs any job an owner leaves standing. On Linux a window resize
+goes through the fork's mode set, which brings the whole lane down instead, so this path runs on
+a live extent change such as a Windows drag. It was measured with a forced rebuild: [GUI
+renderer](gui-renderer.html) §27.4.
 
 Measured: on the AMD card the toggle logs `swapchain rebuilt in place (2 images 1920x1080) - the
 passes kept`, and no second `restorevk: terr: job started` follows; on the reference setup, the

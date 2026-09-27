@@ -2823,7 +2823,12 @@ static void passes_down(void)
        `s_vk.nimg` and can change under a swapchain rebuild. The passes above
        have already dropped everything for the same reason, so their jobs are
        gone and the restore would restart from scratch whatever this line did
-       -- keeping the shared build would buy a rebuild we have no use for. */
+       -- keeping the shared build would buy a rebuild we have no use for.
+       THE UI PASS IS THE ONE THAT STAYS UP, since its twins are the only copy
+       of what the shell has drawn, so its jobs are handed back here instead:
+       the restorer's down forgets every job, and one kept across it would
+       alias the next pass's. */
+    tagpu_vk_gui_restore_drop(&s_pass);
     tagpu_vk_restore_down(&s_pass);
 }
 

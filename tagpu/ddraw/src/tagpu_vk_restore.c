@@ -2647,6 +2647,18 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
 {
     int i, l;
     if (!d || !d->dev) { tagpu_vk_restore_lost(); return; }
+    /* A JOB ITS OWNER DID NOT GIVE BACK (the contract in tagpu_vk_restore.h).
+       Its framebuffer, palette images and staging would otherwise outlive the
+       device; freed here they go into the retire the flush below empties. */
+    for (i = 0; i < TAGPU_R_MAXJOBS; i++)
+        if (s_vjob[i].core) {
+            char b[160];
+            _snprintf(b, sizeof b, LANE ": job '%s' was still held by its owner when "
+                      "the restorer went down - freed here", s_vjob[i].tag);
+            b[sizeof b - 1] = 0;
+            rlog(b);
+            tagpu_vk_restore_job_free(d, &s_vjob[i]);
+        }
     /* THE TWO RETIRES GO FIRST. A retire outstanding at teardown -- an
        activation grow, or the idle release after 180 quiet slices -- holds two
        array images, their memory, every layer view and up to 32 framebuffers,

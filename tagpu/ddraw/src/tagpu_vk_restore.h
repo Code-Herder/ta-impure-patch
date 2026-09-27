@@ -162,7 +162,11 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 /* The device went with everything on it: forget every id without destroying,
    and every job with them. Call it BEFORE the jobs' owners forget theirs. */
 void tagpu_vk_restore_lost(void);
-/* Ordinary teardown, device still alive. */
+/* Ordinary teardown, device still alive. EVERY JOB MUST HAVE BEEN FREED BY
+   ITS OWNER FIRST: this forgets the job table, so an owner's pointer kept
+   across it names a slot the next `job_new` hands to someone else. A job
+   still standing here is freed and logged, which recovers its objects and
+   not the owner's pointer. */
 void tagpu_vk_restore_down(const TAGPU_VKPASS* d);
 
 #endif

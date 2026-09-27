@@ -4525,7 +4525,7 @@ bytes up in a content-keyed store:
 
 **Placement.** An entry takes a rectangle on a grid of 64-px cells and keeps it until evicted, so
 a fill already recorded this frame reads the texels it was recorded against. Eviction takes the
-least recently used entry that no twin is bound to. `tagpu_vk_restore_job_remap` first removes
+least recently used entry that no twin pins. `tagpu_vk_restore_job_remap` first removes
 the entry's frames from the job, including a batch already in flight, which goes back to the
 queue. So the job can never paint an evicted picture over the one that replaced it.
 
@@ -4544,10 +4544,13 @@ strip on SELMAP. Now each tile's bytes are written into `s_psSrc` at the positio
 
 **Binding, and when a fill happens.**
 
-- **A backdrop's seed binds its twin to the entry.** The first job idle after that fills the
-  twin's colour plane, before the frame's ops, so every copy out of the backdrop carries colour.
-- **The first op that draws into a bound twin unbinds it.** A later fill would paint the picture
-  over what that op drew. A re-seed or a free has its own arm.
+- **A backdrop's seed binds its twin to the entry and pins the entry**, until the twin's next
+  seed or its free. The first job idle after the seed fills the twin's colour plane, before the
+  frame's ops, so every copy out of the backdrop carries colour.
+- **The first op that draws into a bound twin stops its fills** (`picDrawn`): a later fill would
+  paint the picture over what that op drew. **The pin stays.** A snapshot's re-seed (27.2) comes
+  back for the same picture, and finds it stored and restored only because nothing could evict
+  it in between. A re-seed or a free has its own arm.
 - **A stamp does not bind.** Its `PIXELS` op fills at once if the entry is done. Otherwise the
   engine's next repaint draws the stamp again, and that draw finds it done.
 
@@ -4556,17 +4559,41 @@ strip on SELMAP. Now each tile's bytes are written into `s_psSrc` at the positio
 - The consumer counts a settle whenever the job goes idle having finished a picture new to the
   store (`s_psSettled`). The drain answers each new count with `g_guiq.colarm++`, the engine
   repaint that §14 already asks for when colour becomes valid.
-- **This request is not from the atlas's budget of 32**, and its bound is its own. A repaint
-  that draws only pictures the store already holds finishes nothing new. A picture stored again
-  shortly after being evicted is not counted either: a ring of the last 64 evicted hashes marks
-  it, so a store too small for a screen cannot repaint that screen forever.
+- **This request is not from the atlas's budget of 32**, at the edge where colour becomes valid
+  either: a settle that edge absorbs raises its own `colarm` when the budget refuses the edge's
+  ask. Its bound is its own. A repaint that draws only pictures the store already holds finishes
+  nothing new.
+- **Nor does content the last two repaints evicted** (`ps_recent`). A *round* is one settle
+  and the repaint it asks for. A repaint draws the pictures the previous one drew, and each was
+  stored or found then, so one missing now was evicted since: storing it again raises no settle,
+  and a screen too large for the store cannot repaint itself for ever. Content evicted longer
+  ago, such as a map preview picked again after a walk through the list, is fresh and asks for
+  its repaint. The 64-entry eviction ring records each eviction's round. Once it has overwritten
+  an eviction of the current or the previous round it cannot tell, and answers *recent*: the cost
+  of that answer is a picture that waits for the next repaint, never a loop.
 
 **The palette.** Pictures are restored against the presented palette. When the palette moves
 and the producer reports the new one settled (`colourTwins`):
 
-- entries a twin is bound to are restored again in place;
+- entries a twin pins are restored again in place;
 - every other entry goes, and is stored again when next drawn;
 - bound twins' colour planes are cleared, and nothing is filled from the old colours meanwhile.
+
+**A job is only ever made against the palette the done entries were restored against**
+(`s_psPal`). A palette that has moved but not settled waits for the rebuild, so an entry restored
+against the old palette can never be taken for current. `s_psPal` is written in one place.
+
+**A resize.** A swapchain rebuild that changes the extent, the image count or the format takes
+the restorer down while the UI pass stays up (`passes_down` in `tagpu_vk.c`): the twins are the
+only copy of what the shell has drawn. The pass gives both its jobs back first
+(`tagpu_vk_gui_restore_drop`), because the restorer forgets its job table on the way down and a
+job pointer kept across it would name a slot the next `job_new` hands to another pass.
+
+- The UI atlas then restarts from blank for the same generation, the way every world pass does on
+  a resize.
+- The store keeps its done pictures and requeues the queued ones.
+- `tagpu_vk_restore_down` frees and logs any job an owner has left standing (`job '<tag>' was
+  still held by its owner`).
 
 **The drain's gate is `s_picArm`, not `s_colValid`.** An asset is seeded once, at the flip that
 first copies it, and that is usually before the UI atlas has restored anything. Gated on
@@ -4590,15 +4617,20 @@ same window. The consumer's twin is therefore drawn over before its picture is r
 never took colour: ENDMSN measured 97.9 % palette-exact, with 11 pictures stored and none bound.
 
 Nothing draws into a snapshot again, so the engine's repaint cannot repaint it. **On the colour
-repaint edge (`repaint_arm`, the `colarm` shadow), the game thread clears `seeded` on every
+repaint edge (`repaint_arm`, the `colarm` shadow), the game thread raises `reseed` on every
 surface holding a snapshot.** The repaint's copy then re-sends the seed and the `ovl`. The seed
 finds its picture done and fills at once, and the sprites land on top again.
+
+`reseed` is a flag of its own, not a cleared `seeded`: the twins stay alive until the re-seed
+arrives, and `seeded` is what `surf_drop` reads to owe the consumer a `PK_FREE`. A snapshot freed
+before its re-seed would otherwise leave both twins standing, and a same-size surface landing on
+its base would be seeded over the old backdrop's pixels.
 
 - **Exact by construction:** a held snapshot plus its `ovl` IS the surface. Anything that could
   not be replayed has already dropped the snapshot (`publish`, "A SNAPSHOT SURFACE TAKES ONLY
   WHAT IT CAN REPLAY").
-- **Bounded by `colarm`'s own bound:** a re-seed restores nothing new, so it raises no settle of
-  its own.
+- **Bounded by `colarm`'s own bound:** the snapshot's picture stays pinned while its twin lives
+  (27.1, *Binding*), so a re-seed always finds it stored and raises no settle of its own.
 
 ### 27.3 A tint shades the restored colour (`TINT_FS`, `tint_table`)
 
@@ -4618,6 +4650,12 @@ a modal showed palette colour (SKIRMISH under SELMAP, the lounge under the battl
 s = min(1, min over channels of pal[j] / pal[i]);   k = s;   b = pal[j] - s * pal[i]
 out = b + k * restored  =  pal[j] + s * (restored - pal[i])
 ```
+
+**Black is the one entry no channel constrains**, and it takes its row's own ratio instead: the
+sum of `pal[j]` over the sum of `pal[i]` across the row's entries, at most 1. A black texel's
+restored colour is the detail the restorer put into dark dithered art, and a dim has to scale it
+with its neighbours rather than leave it whole. On the tour's screens the change is invisible,
+because the dimmed black there restores to black; the rule is for dark art under a dim.
 
 The Classic++ tint pipeline blends `src + dst * srcAlpha`, with the destination's alpha kept.
 `TINT_FS` writes the entry's `(b, k)` as `oCol`.
@@ -4664,14 +4702,14 @@ by construction.
 | screen | before | this landing |
 |---|---|---|
 | `MAINMENU.GUI` | 97 % | **1.4 %** |
-| `SINGLE.GUI` | — | 2.0 % |
+| `SINGLE.GUI` | 97.2 % | 2.0 % |
 | `SKIRMISH.GUI` | 90 % | 17.6 % |
-| `SELMAP.GUI` over SKIRMISH, on entry / after a pick | — | 25.5 % / 26.2 % — the dimmed strip left of the panel 100 % → 22.7 % |
+| `SELMAP.GUI` over SKIRMISH, on entry / after a pick | 98.3 % | 25.5 % / 26.2 % — the dimmed strip left of the panel 100 % → 22.7 % |
 | `ENDMSN.GUI`, the post-game screen | 97.9 % | **35.1 %**; 35.7 % after a live Classic → Classic++ flip |
 | multiplayer: TCP, `SELGAME`, `NEWMULTI`, `LOUNGE2` | — | 3.1 %, 5.3 %, 8.1 %, 8.2 % |
 | the battle room's SELMAP on entry / after a pick | — | 25.9 % / 27.2 % |
 
-*Before* is main (a241217) for the main menu and SKIRMISH. For ENDMSN it is this branch before
+*Before* is main (a241217) for the main menu, SINGLE, SKIRMISH and SELMAP. For ENDMSN it is this branch before
 27.2's re-seed, and for SELMAP's dimmed strip this branch before 27.3's tint. What is left on
 SELMAP and ENDMSN is the list and table bodies (flat), the labels and the text.
 
@@ -4682,14 +4720,26 @@ SELMAP and ENDMSN is the list and table bodies (flat), the labels and the text.
 - **The tint:** the list's selected row is identical to the engine's (flat body, text, and a
   table exact at palette colours). The six-pixel focus glow on the main menu, SINGLE and SKIRMISH
   buttons now shades restored colour instead of showing palette colour.
-- **The store:**
-  - a revisit fills in the same frame;
-  - a forced palette rebuild requeued 3 bound pictures and evicted 11;
-  - with a temporary 2048×1024 store, a walk through the map list evicted 73 entries by LRU;
-  - with a temporary most-recently-used eviction, 25 queued frames were removed from the job.
-
-    Both eviction walks left the display correct afterwards.
 - **In game** (`mex-ghost` at 1024×768, before 27.3), the side panel is 20.9 % palette-exact.
+
+**The store, driven:**
+
+- a revisit fills in the same frame;
+- a forced palette rebuild requeued 3 bound pictures and evicted 11;
+- with a temporary 2048×1024 store, a walk through the map list evicted 73 entries by LRU;
+- with a temporary most-recently-used eviction, 25 queued frames were removed from the job.
+
+Both eviction walks left the display correct afterwards.
+
+**A resize.** On Linux a window resize goes through the fork's mode set, which brings the whole
+lane down, so `passes_down` runs only on a live extent change (a drag on Windows). It was measured
+with a scratch build forcing it every 600 frames, over the shell tour and 35 s of a game:
+
+- **without the drop**, the restorer found both UI jobs still held at the first rebuild, and the
+  UI never restored again: SINGLE and SKIRMISH 100 % palette-exact;
+- **with it**, no job was held at any rebuild, SINGLE read 2.0 % and SKIRMISH 17.6 %, and the
+  terrain and the UI atlas restored again after each. A SELMAP captured just after one rebuild
+  read 69.9 % while the atlas restarted.
 
 **THE BATTLE ROOM, RUN.** The host was launched with `--dplay`, then
 `MULTI → TCP/IP → OK → STARTNEW → OK → LOUNGE2 → MAP`.
@@ -4717,8 +4767,9 @@ SELMAP and ENDMSN is the list and table bodies (flat), the labels and the text.
   back. A colour repaint then owes the chrome a re-emit, as a reset does. Not done here: it is
   in game, and the ask was the shell.
 - **A non-snapshot twin that is drawn over before its picture is restored** stays in palette
-  colour until it is seeded again. None was observed in the shell: every backdrop there is
-  copied out of, not drawn into.
+  colour until it is seeded again, and its picture stays pinned meanwhile. None was observed in
+  the shell, where every backdrop is copied out of rather than drawn into, and neither the tour
+  nor ENDMSN refused or evicted a picture.
 - **Text is palette**, by design (`STR_FS`): the glyphs are one flat colour each.
 - **No Vulkan validation layer ran.** None is installed on the reference setup, and installing
   one needs root. The identical-blend-state requirement above is argued from the spec, not
