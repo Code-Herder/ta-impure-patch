@@ -2697,6 +2697,101 @@ ProTA 4.8 and the three Patch Loader setups start with no `tdrawlog.txt` (and on
 takeover. The plan and the other routes: [the
 takeover](compat/takeover.md).
 
+**TADR's modules never run.** Loading and running are two steps, and the second one is ours.
+`tagpu_takeover_tadr_init` walks every mapped
+image (`util_enumerate_modules`, which reads the address space rather than the loader's list, so a
+mapped-but-uninitialised module is found), and for each one whose file is in the game folder, is
+not Impure's and is not the exe, writes `mov eax,1; ret 0Ch` over its PE entry point if the file
+is a TADR build. The loader's call into it then reports success and does nothing: no Delphi unit
+initialization, no threads, no window hooks, and **not the jump the recorder's `DllMain` splices
+over the exe's entry point `0x004E6FA0`** ([the engine map](exe-reverse-engineering.md)). The log
+says `takeover: DPLAYX.dll is TADR's recorder -- its entry point was made inert before the loader
+called it, so none of its own code runs`. This is why the recorder cannot be kept out by answering
+a `LoadLibrary`: the Patch Loader's `dplayx.dll` forwards its DirectPlay exports to `tplayx.dll`,
+and Windows binds a forwarder before any `DllMain`, with no call anyone can answer.
+
+A module is TADR's when its **file** carries `TADemo-MKChat`, the name TADR's builds give their
+chat channel; `TA Demo Recorder`, in the recorders only, tells a recorder from a tdraw for the log.
+MEASURED 2026-09-27 over the suite's 130 fixture files: in all 18 TADR modules and in nothing else
+— not the Patch Loader's `dplayx.dll`, not Total Mayhem's or ProTA's own, not cnc-ddraw's
+`ddraw_custom.dll`, not any mod's exe. Never the file's name, which the mods change.
+
+**The invariant**: no module of the game folder has been initialised yet, so no entry point written
+is one the loader has already called or is calling. The loader maps the whole import graph, then
+initialises it as a post-order walk in import-directory order, and Impure imports nothing from the
+game folder, so the condition is exactly *the first import descriptor of the exe that leads into
+the game folder is Impure's*. `to_first_local_is_ours` tests it against the exe in front of it and
+the pass does nothing when it fails; the 3.9.02 and Escalation exes import `TDRAW`/`TAESC` and no
+`DDRAW` at all (DISASSEMBLED: `objdump -p`), so there TADR's `DllMain` is what loads Impure and is
+running while this would write, the pass is skipped and says so, and the image comparison below is
+what answers for that launch.
+
+**The exe's DirectPlay imports**, which this makes load-bearing: an uninitialised Delphi DLL must
+never be called. From `DllMain` too, after every import is bound and before the exe's entry point,
+`tagpu_takeover_dplay_init` reads the exe's import directory (every RVA bounded by the
+image): a descriptor whose first slot leads into a DLL of the game folder that exports
+`DirectPlayCreate` and is not Impure has every one of its slots pointed at Impure's forwarders
+— `DirectPlayCreate`, `DirectPlayEnumerate`/`A`/`W`, `DirectPlayLobbyCreateA`/`W`, by
+Microsoft's ordinals or by name — or, if one slot is anything else, none of them. On the retail
+exe that is `DPLAYX.dll`'s three slots (`0x4FC034`..`0x4FC03C`, the [engine
+map](exe-reverse-engineering.md)); the page is made writable for the write and put back. A
+forwarder loads Windows' `dplayx.dll` by its full path on its first call — from the game's code,
+outside the loader lock — publishes it with a compare-exchange and passes the call on. If it
+cannot load, E_FAIL, which each of the exe's four DirectPlay call sites survives: the enum at
+`0x4CA435` discards the result, the lobby at `0x4CA4D7` tests it and has zeroed its out-pointer
+first, and the creates at `0x4CA667` and `0x4CA922` test it and return (DISASSEMBLED). The log
+says `takeover: DPLAYX.dll's 3 DirectPlay imports led into tplayx.dll, a DirectPlay DLL in the
+game folder -- pointed at Windows' own, so it does not start`, then, at the first call, `the
+game's DirectPlay is Windows' dplayx.dll`. An exe whose DirectPlay is Windows' own is not
+touched. The same lever turns it off. It also closes the recorder's *other* way in on its own —
+the path that writes the recorder's log and installs its injections from inside an export.
+
+**The exe image against the exe file** (`tagpu_takeover_verify_image`), at the first DirectDraw
+call, beside §2.6b's net and before the first frame. The exe file is read from disk and every
+executable section of it compared with the same bytes in memory; each run of changed bytes is
+decoded for what a hook has to be — `E8`/`E9` rel32, `FF 15`/`FF 25` through a pointer inside the
+image, `push imm32; ret`, `mov eax,imm32; jmp eax`, and any absolute address the run holds — and a
+target inside a TADR module of the game folder refuses the launch through `tagpu_refuse`, naming
+the site, the bytes, the file's bytes and the module. **Only an instruction that transfers control
+names a target**: four bytes that merely hold such an address are counted in the log and never
+refuse, because they are as likely to be the middle of an instruction or the displacement of a
+jump, and where a DLL lands decides which of them look like an address — judged as addresses they
+refused `retail+tadr1` over 32 of our own sites and Total Mayhem over 3 (MEASURED on Windows
+2026-09-27, TADR having run nothing on either; Wine maps both DLLs elsewhere and showed neither).
+**No list of sites is involved**: a mod's own
+changes are in its exe file, so they are not changed bytes; Impure's patches and the loader's lead
+into Impure's module or into stubs Impure allocated, which are in no module image. Only TADR
+refuses, and a measurement is why — the Patch Loader rewrites `0x4E4708`, `0x4E71A0` and
+`0x4EADF2` into direct calls to the mod's own `win32.dll`, which is the mod's byte and stays; both
+kinds are logged. The same pass reads **every import slot of the exe** too, the other way a call can
+leave the image: the code reaching a slot is stock and the file holds no bound address, so what
+makes a slot wrong is where it leads, and a slot leading into a TADR module refuses — which is also
+the answer to a descriptor the DirectPlay pass could not name every slot of, since the recorder is
+inert by then. It does not see a function pointer written into a data section other than an import
+slot, a target computed at run time, a TADR build with neither marker, or anything written after
+this call, which is what the passes above are for; an exe loaded away from its own `ImageBase` has
+its code left uncompared and says so.
+
+MEASURED 2026-09-27, one full suite run on Wine and one on the Windows test box, read out of the
+live process by the suite as well as in-process — **11 of 16 setups meet the goal, 5 known gaps, 0
+UNEXPECTED on each platform**: `retail` 431 changed runs in `.text` and nothing leading out of the
+exe; `retail+tadr1`, `retail+tadr-recorder-ota`, `retail+tadr-files`, the three Patch Loader
+setups, Total Mayhem 11.3.0 and ProTA 4.8 all **0 sites leading into TADR**, alone, in the battle
+and in the two-player network game, on every peer — where the same read on the T1b DLL found 6
+hooks into the 2006 recorder. With `tagpu_takeover.off` that recorder installs 6 sites by start-up
+and 24 once a battle lets its DirectPlay path run, which is the proof the check can see what the
+game folder cannot show ([the setups](compat/setups.md)).
+
+Three things the landing review changed here, each a hole the measurements could not have shown:
+the exe's **import slots are judged even when the code comparison could not be made** (an exe held
+open for writing, or loaded away from its `ImageBase`), since a slot does not depend on the file;
+a changed run is scanned for a **TADR** target before any other module's, because the bytes before
+it can be a stock `FF 15` through a slot into the mod's own `WIN32.dll` and stopping there hid a
+hook behind it; and the lookback is **five** bytes, not four, since `FF 15`/`FF 25` carry their
+operand at offsets 2 to 5. Pass 3 also asks a DLL's **file** whether it exports `DirectPlayCreate`
+rather than asking the loaded module: `GetProcAddress` on a forwarded export loads and initialises
+the target, and every Patch Loader's `dplayx.dll` forwards all nine of its exports to `tplayx`.
+
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 
 The one module that patches nothing the engine *draws* with: it changes **when** a freed block

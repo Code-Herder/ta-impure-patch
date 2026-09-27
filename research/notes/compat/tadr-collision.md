@@ -7,9 +7,12 @@ What happens when TADR starts beside Impure on the
 validates the bytes it is about to patch and refuses to start (**"TADR engine-limit error"**). An
 older TADR, the "Install Limit Crack" that Total Mayhem 11.3.0 and ProTA 4.8 ship, writes
 without reading, rewrites 17 of Impure's sites, and **crashes the game on the first skirmish
-load**. Since [the takeover](takeover.md)'s first landing TADR does not start on this route, and
-if one got through by another way, the safety net stops the game at the first DirectDraw call
-instead; this page is what both of them exist for, and what Impure v0.2.3 players met. The engine facts are in the
+load**. Since [the takeover](takeover.md) no TADR code starts on this route at all — `tdraw.dll`
+is answered with Impure, and a TADR module the loader mapped has its entry point made inert
+before it is called, the recorder included (neither of the two failures on this page is the
+recorder's) — and if any of it got through by a way nobody foresaw, Impure stops the game at the
+first DirectDraw call: the safety net on its own sites, and the whole exe image against the exe
+file. This page is what all of that exists for, and what Impure v0.2.3 players met. The engine facts are in the
 [engine map](../exe-reverse-engineering.md#where-other-patchers-meet-ours-the-patch-loaders-hand-off-and-tadrs-limit-crack-disassembled-measured-2026-09-26).
 
 ## 2026 TADR: EngineLimits refuses

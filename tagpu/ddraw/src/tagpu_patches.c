@@ -12,6 +12,7 @@
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_refuse.h"
 #include "tagpu_regstore.h"
 #include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
@@ -10641,24 +10642,5 @@ void tagpu_limits_report(void)
         if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
     }
-    {
-        char path[MAX_PATH];
-        const char* dir = tagpu_log_dir();
-        if (dir && *dir && _snprintf(path, sizeof path, "%sstartup-failure.txt", dir) > 0) {
-            HANDLE f;
-            path[sizeof path - 1] = 0;
-            f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-                            FILE_ATTRIBUTE_NORMAL, NULL);
-            if (f != INVALID_HANDLE_VALUE) {
-                DWORD w;
-                WriteFile(f, text, (DWORD)strlen(text), &w, NULL);
-                CloseHandle(f);
-            }
-        }
-    }
-    tagpu_log(text);
-
-    MessageBoxA(NULL, text, "Total Annihilation: Impure cannot start",
-                MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
-    ExitProcess(ERROR_BAD_EXE_FORMAT);
+    tagpu_refuse(text);
 }

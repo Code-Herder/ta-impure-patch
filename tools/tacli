@@ -3236,6 +3236,12 @@ def _ui_select_row(inst: Instance, before: dict, g: dict, idx: int,
     deadline = time.time() + max(timeout, 15.0)
     steps = 0
     seen = None
+    # A batch that lands nowhere is not a wall. A rapid batch is partly dropped by design (see
+    # below) and a game busy elsewhere can swallow one whole, so a single round of no progress
+    # says nothing; a row the selection cannot pass stops every round. Three in a row is the
+    # wall. MEASURED 2026-09-27: Total Mayhem's 106-row map list stopped at #35 on one run and
+    # #59 on another, both of them a dropped batch reported as a separator.
+    stalls = 0
 
     while True:
         snap = _ui_snapshot(inst)
@@ -3250,8 +3256,12 @@ def _ui_select_row(inst: Instance, before: dict, g: dict, idx: int,
                                + (f" in {steps} arrow presses" if steps else "")}
 
         if sel == seen:
-            die(f'{g["name"]} stopped moving at #{sel} on the way to #{idx} '
-                "— a separator or a disabled row is in the way")
+            stalls += 1
+            if stalls >= 3:
+                die(f'{g["name"]} stopped moving at #{sel} on the way to #{idx}, over three '
+                    "rounds — a separator or a disabled row is in the way")
+        else:
+            stalls = 0
         seen = sel
 
         if time.time() >= deadline:

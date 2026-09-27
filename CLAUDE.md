@@ -298,7 +298,8 @@ afterwards with `gh release edit <tag> --notes-file <file>`.
 **Before the tag is pushed, the compatibility suite runs on the DLL being released**
 (`tools/compat/tacompat.py wine`, the `ta-compat-check` skill): the setups players actually run
 — TADR, the Community Patch Loader, Total Mayhem, ProTA, TA Zero's files, Escalation, gammata's
-drop-in — each started, and fought in where the menu comes up. **Nothing may be UNEXPECTED.**
+drop-in — each started, fought in where the menu comes up, and played as a two-player network
+game where Impure runs, with none of TADR's code allowed to run. **Nothing may be UNEXPECTED.**
 A known gap is the behaviour accepted until the takeover reaches that setup
 (the wiki's *Compatibility* section, `research/notes/compat/`); a crash beside a popular mod is found here or by a
 player. The Windows half (`tacompat.py windows`) runs on the owner's desktop, so ask first,

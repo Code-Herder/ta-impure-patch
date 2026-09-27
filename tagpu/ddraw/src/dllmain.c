@@ -10,6 +10,7 @@
 #include "config.h"
 #include "hook.h"
 #include "indeo.h"
+#include "tagpu_takeover.h"
 #include "tagpu_patches.h"
 #include "tagpu_limits.h"
 #include "tagpu_tracer.h"
@@ -92,6 +93,16 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            Before anything else of ours, and long before TotalA.exe's entry point: the
            import tables are patched here, while no game code has run. */
         tagpu_regstore_init();
+
+        /* tagpu: TADR's DLLs run none of their own code (tagpu_takeover.h). Every module the
+           exe's imports pull in is mapped and bound by now and none of their DllMains has
+           been called, so a TADR build's entry point can be made inert before the loader
+           reaches it; then the exe's DirectPlay imports are pointed at Windows' own, so a
+           recorder that no longer initialises is never called either. Both before the first
+           DirectDraw call, where tagpu_takeover_verify_image compares what is left with the
+           exe file on disk. */
+        tagpu_takeover_tadr_init();
+        tagpu_takeover_dplay_init();
 
 #ifdef _DEBUG 
         dbg_init();
@@ -463,6 +474,7 @@ HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnk
     TRACE("-> %s(lpGUID=%p, lplpDD=%p, pUnkOuter=%p) [%p]\n", __FUNCTION__, lpGUID, lplpDD, pUnkOuter, _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_takeover_verify_image();
 
     HRESULT ret;
 
@@ -510,6 +522,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnk
         _ReturnAddress());
 
     tagpu_limits_report();
+    tagpu_takeover_verify_image();
 
     HRESULT ret;
 
