@@ -40,6 +40,7 @@
 #include "keyboard.h"
 #include "tagpu_log.h"
 #include "tagpu_regstore.h"
+#include "tagpu_restore_guard.h"
 
 
 /* export for cncnet cnc games */
@@ -77,6 +78,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             g_config_tool_only = TRUE;
             return TRUE;
         }
+
+        /* tagpu: a relaunch after a restorer crash waits for the crashed process
+           to end (tagpu_restore_guard.h) -- before the log, which that process may
+           still hold, rotates. */
+        tagpu_rguard_attach();
 
         /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
            After the config tool's return above, so opening the tool never rotates the

@@ -145,6 +145,7 @@
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_restore_guard.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_shot.h"
@@ -372,6 +373,11 @@ typedef struct {
     int              vsync;
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
+    int              budgetok;             /* VK_EXT_memory_budget is offered   */
+    /* the budget query's entry point, from THIS lane's instance, NULL where
+       VK_KHR_get_physical_device_properties2 is not offered: lane state, so it
+       is written before ST_READY and cleared with the rest at teardown */
+    PFN_vkGetPhysicalDeviceMemoryProperties2KHR mp2;
     /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
        largest ratio this device will apply. The Classic++ restored twins are
        the only textures this fork filters at all, and they are specified at
@@ -416,6 +422,13 @@ static void passlog(const char* m) { vklog("%s", m); }
    mechanism, that the copy has completed. `nimg` frames later, which at any
    frame rate the lane runs at is a few milliseconds. */
 static int s_abSlot1;       /* 0 = nothing pending, else the slot index + 1 */
+/* WHAT THE LAST FATAL SAYS ABOUT THE DEVICE, for tagpu_restore_guard.h, which
+   blames the restorer only for a device that reports itself lost. A fence or
+   an acquire that timed out is ASKED: a presentation stall times out too, and
+   the device's own answer after a vkDeviceWaitIdle -- the wait the teardown
+   makes anyway -- is what tells a hang from a stall. */
+enum { LL_NONE = 0, LL_LOST, LL_ASK };
+static int s_lostLike;
 static const char* s_abPath;/* the file the pending capture belongs in         */
 
 /* Give the staging buffer back at a point where the device is idle. The FILE is
@@ -893,14 +906,42 @@ static int vk_load(void)
 
 /* An instance with the two surface extensions. Shared by the enumeration worker
    and the bring-up worker; each destroys its own. */
-static VkInstance vk_instance(void)
+/* A new instance, and in `*mp2` (when asked) the memory-budget query's entry
+   point resolved from THAT instance, or NULL where the loader does not offer
+   VK_KHR_get_physical_device_properties2. */
+static VkInstance vk_instance(PFN_vkGetPhysicalDeviceMemoryProperties2KHR* mp2)
 {
-    const char* iexts[2] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
+    const char* iexts[3] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME, NULL };
     uint32_t niext = 2;
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     VkInstance inst = VK_NULL_HANDLE;
+    PFN_vkEnumerateInstanceExtensionProperties eie =
+        (PFN_vkEnumerateInstanceExtensionProperties)s_gipa(NULL, "vkEnumerateInstanceExtensionProperties");
+    int props2 = 0;
     VkResult r;
+
+    /* THE ONE OPTIONAL INSTANCE EXTENSION: what the memory-budget query rides
+       on (research/notes/compute-restorer.md D10). Asked of the loader and
+       enabled only when offered: without it the instance carries the two
+       surface extensions alone, and the restorer counts a quarter of the heap
+       as free. */
+    if (eie) {
+        uint32_t n = 0, k;
+        VkExtensionProperties* ep = NULL;
+        VkResult er = eie(NULL, &n, NULL);
+        if ((er == VK_SUCCESS || er == VK_INCOMPLETE) && n)
+            ep = (VkExtensionProperties*)malloc((size_t)n * sizeof *ep);
+        if (ep) {
+            er = eie(NULL, &n, ep);
+            if (er == VK_SUCCESS || er == VK_INCOMPLETE)
+                for (k = 0; k < n; k++)
+                    if (!strcmp(ep[k].extensionName, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
+                        props2 = 1;
+            free(ep);
+        }
+    }
+    if (props2) iexts[niext++] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
 
     app.pApplicationName = "Total Annihilation (impure)";
     app.apiVersion = VK_API_VERSION_1_0;
@@ -908,7 +949,19 @@ static VkInstance vk_instance(void)
     ici.enabledExtensionCount = niext;
     ici.ppEnabledExtensionNames = iexts;
     r = vkCreateInstance(&ici, NULL, &inst);
+    if (r != VK_SUCCESS && props2) {
+        /* the optional extension is never the reason there is no instance */
+        vklog("vkCreateInstance refused %s (%s) - retrying without it",
+              VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, res_name(r));
+        props2 = 0;
+        ici.enabledExtensionCount = niext = 2;
+        r = vkCreateInstance(&ici, NULL, &inst);
+    }
     if (r != VK_SUCCESS) { vklog("vkCreateInstance: %s (%d)", res_name(r), (int)r); return VK_NULL_HANDLE; }
+    if (mp2)
+        *mp2 = props2 ? (PFN_vkGetPhysicalDeviceMemoryProperties2KHR)
+                        s_gipa(inst, "vkGetPhysicalDeviceMemoryProperties2KHR")
+                      : NULL;
 
 #define RES(n) n = (PFN_##n)s_gipa(inst, #n);
     IFNS(RES)
@@ -979,6 +1032,38 @@ int tagpu_vk_max_image_dim(void)
     cached = (int)p.limits.maxImageDimension2D;
     cachedFor = s_vk.pd;
     return cached;
+}
+
+/* THE MEMORY THE DRIVER SAYS IS FREE for this process, in the largest
+   device-local heap -- its budget less its usage (VK_EXT_memory_budget) --
+   and that heap's size. 0 when the lane is not up or the query is not
+   offered; the caller then has only the heap's size to go on. Render thread,
+   like the other device queries here. */
+int tagpu_vk_mem_free(unsigned long long* freeBytes, unsigned long long* heapBytes)
+{
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT mb;
+    VkPhysicalDeviceMemoryProperties2 mp;
+    unsigned long long best = 0, fr = 0, budget = 0;
+    uint32_t i;
+    if (!s_vk.pd || lane_state() != ST_READY || !s_vk.budgetok || !s_vk.mp2) return 0;
+    memset(&mb, 0, sizeof mb);
+    memset(&mp, 0, sizeof mp);
+    mb.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    mp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    mp.pNext = &mb;
+    s_vk.mp2(s_vk.pd, &mp);
+    for (i = 0; i < mp.memoryProperties.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; i++) {
+        const VkMemoryHeap* h = &mp.memoryProperties.memoryHeaps[i];
+        if (!(h->flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) || h->size <= best) continue;
+        best = h->size;
+        budget = mb.heapBudget[i];
+        fr = mb.heapBudget[i] > mb.heapUsage[i] ? mb.heapBudget[i] - mb.heapUsage[i] : 0;
+    }
+    /* a zero budget is a driver that left the chain as it found it: no answer */
+    if (!best || !budget) return 0;
+    *freeBytes = fr;
+    *heapBytes = best;
+    return 1;
 }
 
 /* THE DEVICE'S LARGEST STORAGE BUFFER RANGE, or 0 while there is no device.
@@ -1066,7 +1151,7 @@ static DWORD WINAPI enum_worker(LPVOID arg)
 
     (void)arg;
     if (!vk_load())            { lane_release(); return 0; }
-    inst = vk_instance();
+    inst = vk_instance(NULL);
     if (!inst)                 { lane_release(); return 0; }
 
     /* A FAILED OR EMPTY ENUMERATION LEAVES THE CACHE ALONE. Unchecked, `n = 0`
@@ -1822,6 +1907,9 @@ static void vk_down(void)
         if (s_vk.sc)   { vkDestroySwapchainKHR(s_vk.dev, s_vk.sc, NULL);  s_vk.sc = VK_NULL_HANDLE; }
         vkDestroyDevice(s_vk.dev, NULL);
         s_vk.dev = VK_NULL_HANDLE;
+        /* no work of the restorer's outlives its device: a later loss on the
+           next device must not be blamed for it */
+        tagpu_rguard_idle();
     }
     if (s_vk.surf && s_vk.inst) { vkDestroySurfaceKHR(s_vk.inst, s_vk.surf, NULL); s_vk.surf = VK_NULL_HANDLE; }
     if (s_vk.inst) { vkDestroyInstance(s_vk.inst, NULL); s_vk.inst = VK_NULL_HANDLE; }
@@ -1950,7 +2038,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     if (!vk_load()) goto fail;
     va_log("before bring-up");
 
-    s_vk.inst = vk_instance();
+    s_vk.inst = vk_instance(&s_vk.mp2);
     if (!s_vk.inst) goto fail;
 
     {
@@ -2039,12 +2127,18 @@ static DWORD WINAPI up_worker(LPVOID arg)
                            a name is not enumerated twice; an ICD or layer that
                            does it anyway would write one past this array, and a
                            bound that costs one comparison is cheaper than
-                           trusting that. */
-                        if (ndext >= (uint32_t)(sizeof dexts / sizeof dexts[0])) break;
-                        if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
+                           trusting that. The bound guards the APPEND, not the
+                           walk: the array is full once maintenance1 is in, and
+                           the names after it are still read. */
+                        if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1") &&
+                            ndext < (uint32_t)(sizeof dexts / sizeof dexts[0])) {
                             dexts[ndext++] = "VK_KHR_maintenance1";
                             s_vk.flipok = 1;
                         }
+                        /* a physical-device query, so it is offered, not
+                           enabled: the device needs nothing for it */
+                        if (!strcmp(ext[k].extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+                            s_vk.budgetok = 1;
                     }
                 free(ext);
             }
@@ -2264,10 +2358,21 @@ static int vk_present(void)
        that has not completed in a second means the device is wedged, so this is
        fatal rather than a skipped frame -- returning 0 here would leave the
        caller presenting nothing, for ever, at one frame a second, in silence. */
-    if (vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull) != VK_SUCCESS) {
+    r = vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull);
+    if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : r == VK_TIMEOUT ? LL_ASK : LL_NONE;
         vklog("a frame fence did not signal within a second - the device is not answering");
         return -2;
     }
+    /* tagpu_restorefault.on's `lost`: a device loss, reported while restorer
+       work is in flight, so the blame and the relaunch run without one */
+    if (tagpu_rguard_fault_lost()) {
+        vklog("tagpu_restorefault.on: a device loss is simulated with restorer work in flight");
+        s_lostLike = LL_LOST;
+        return -2;
+    }
+    /* slot `fi`'s last frame has completed, restorer work and all */
+    tagpu_rguard_fenced(fi);
 
     /* ---- tagpu_ftime: THIS SLOT'S PREVIOUS PAIR, AND IT COSTS NO WAIT.
        The fence above has just signalled, which is precisely the statement that
@@ -2306,7 +2411,9 @@ static int vk_present(void)
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_mark_down_owed() || tagpu_vk_surf_down_owed() ||
         tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed()) {
-        if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
+        r = vkDeviceWaitIdle ? vkDeviceWaitIdle(s_vk.dev) : VK_ERROR_INITIALIZATION_FAILED;
+        if (r != VK_SUCCESS) {
+            s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
         }
@@ -2336,6 +2443,7 @@ static int vk_present(void)
        DEVICE_LOST and SURFACE_LOST come back for ever, and a silent `return 0`
        would present nothing at one frame a second and not a line in the log. */
     else if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : r == VK_TIMEOUT ? LL_ASK : LL_NONE;
         vklog("vkAcquireNextImageKHR: %s (%d) - down", res_name(r), (int)r);
         return -2;
     }
@@ -2545,14 +2653,15 @@ static int vk_present(void)
                run before the slice that drains them -- the reverse of the
                shadow map's ordering and the same argument. The slice then
                paints into images the render pass below samples; what makes
-               that write visible to those samples is the OUT render pass's
-               own subpass dependency, stated in tagpu_vk_restore.c, and not
-               the accident of a render-pass boundary.
+               that write visible to those samples is the barrier after its
+               OUT dispatch (tagpu_vk_restore.c `stage_done`, compute write to
+               fragment read), not the accident of a render-pass boundary.
 
-               Its own render passes are begun in here, which is legal in
-               `prepare` and nowhere else because render passes may not nest
-               and this runs before vkCmdBeginRenderPass. It is a no-op until
-               a consumer has asked the device for it. */
+               Its dispatches are recorded in here, which is legal in
+               `prepare` and nowhere else because a dispatch may not be
+               recorded inside a render pass and this runs before
+               vkCmdBeginRenderPass. It is a no-op until a consumer has asked
+               the device for it. */
             tagpu_vk_restore_step(&s_pass, cb, fi);
 
         }
@@ -2778,7 +2887,9 @@ static int vk_present(void)
        and nothing will ever signal it again: `s_vk.frame` does not advance on
        an early return, so `fi` would stay on that fence and every later frame
        would burn the full one-second wait. Silently, at one frame a second. */
-    if (vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]) != VK_SUCCESS) {
+    r = vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]);
+    if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
         vklog("vkQueueSubmit refused the frame - down");
         return -2;
     }
@@ -2796,7 +2907,11 @@ static int vk_present(void)
        has moved on and the next frame should be drawn against a fresh
        swapchain. Rebuilding here instead would throw away a good frame. */
     if (r == VK_SUBOPTIMAL_KHR) { s_vk.rebuild = 1; return 1; }
-    if (r != VK_SUCCESS) { vklog("vkQueuePresentKHR: %s - down", res_name(r)); return -2; }
+    if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
+        vklog("vkQueuePresentKHR: %s - down", res_name(r));
+        return -2;
+    }
     return 1;
 }
 
@@ -2843,6 +2958,8 @@ static int vk_resize(int w, int h)
     VkFormat fmt = s_vk.fmt;
     int idle = vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
     if (!idle) vklog("vkDeviceWaitIdle refused before a swapchain rebuild");
+    /* every slot's restorer work is finished, whatever the slot count becomes */
+    else tagpu_rguard_idle();
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);
@@ -3001,6 +3118,18 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     {
         int rc = vk_present();
         if (rc == -2) {                /* fatal: the lane cannot carry on */
+            /* BEFORE the teardown: when a frame carrying restorer work was
+               unfinished, the restorer is blamed, recorded off and the game
+               relaunched, and this does not return -- or, where no relaunch
+               can be made, recorded off in this process, so that the lane's
+               retry comes up without it */
+            if (s_lostLike == LL_ASK && vkDeviceWaitIdle &&
+                vkDeviceWaitIdle(s_vk.dev) == VK_ERROR_DEVICE_LOST) {
+                vklog("the device, asked after the timeout, reports itself lost");
+                s_lostLike = LL_LOST;
+            }
+            if (s_lostLike == LL_LOST) tagpu_rguard_blame_lost();
+            s_lostLike = LL_NONE;
             vk_down();
             InterlockedExchange(&s_state, ST_FAILED);
             return 0;

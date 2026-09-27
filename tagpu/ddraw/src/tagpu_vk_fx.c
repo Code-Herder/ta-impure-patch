@@ -219,6 +219,7 @@ static unsigned       s_rjGen, s_rjPal;
 static int            s_rjTaken;
 static int            s_rjPainted;
 static int            s_rjTried;           /* the device refused; do not ask again */
+static unsigned       s_rjEpoch;           /* ...in this restorer epoch            */
 static VkImageView    s_rjSrcView;
 
 /* what `record` was left to draw: the four buckets, in bucket order */
@@ -325,18 +326,18 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     return 1;
 }
 
-/* `usage` IS THE CALLER'S BECAUSE THE RESTORED ATLAS IS A RENDER TARGET.
+/* `usage` IS THE CALLER'S BECAUSE THE RESTORED ATLAS IS WRITTEN BY A SHADER.
    The base atlas is only ever copied into and sampled, but the restored
-   one is what this lane's own restorer PAINTS, and a Vulkan image may only be a colour attachment if it was
-   created saying so. Nothing infers it from the format -- the destination's
-   usage is a promise made at creation and tagpu_vk_restore.h asks for it by
-   name. */
-/* WHAT EACH OF THIS PASS'S IMAGES IS FOR. The restored atlas carries
-   COLOR_ATTACHMENT because this lane's restorer paints into it;
-   it costs nothing when nothing restores, and an image created without it
-   could not be lent to the restorer at all. */
+   one is what this lane's own restorer PAINTS, as a storage image, and a
+   Vulkan image may only be one if it was created saying so. Nothing infers it
+   from the format -- the destination's usage is a promise made at creation and
+   tagpu_vk_restore.h asks for it by name. */
+/* WHAT EACH OF THIS PASS'S IMAGES IS FOR. The restored atlas carries STORAGE
+   because this lane's restorer paints into it; it costs nothing when nothing
+   restores, and an image created without it could not be lent to the
+   restorer at all. */
 #define IMG_SAMPLED  (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
-#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_STORAGE_BIT)
 
 static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
                     VkImageUsageFlags usage,
@@ -1002,7 +1003,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
        run one, a job that cannot be made -- so none of them leaves the flag
        naming the old picture. */
     s_arHave = 0;
+    /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
+    if (s_rjTried && s_rjEpoch != tagpu_vk_restore_epoch()) s_rjTried = 0;
     if (s_rjTried) return;
+    s_rjEpoch = tagpu_vk_restore_epoch();
     /* BOTH SURFACES HAVE TO BE THERE, and the source has to have contents: a
        FILL over a base no copy has reached yet would paint undefined texels
        over the art. Neither is an error -- the next frame asks again. */
@@ -1013,7 +1017,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
     /* EVERY GENERATION BLANKS, for tagpu_vk_feat.c's reason: nothing the
        restore reads moves in play. */
-    s_rjob = tagpu_vk_restore_job_new(d, "fx", 2, 0, 0,
+    s_rjob = tagpu_vk_restore_job_new(d, "fx", 2, 0, TAGPU_RM_FULL, 0,
                                       s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);

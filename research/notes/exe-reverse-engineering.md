@@ -1962,6 +1962,57 @@ flagged `0x800000` at `+0x241`, a flag the sync clears for a type that did not s
 Divide by Zero … at `0049e6b0`, Exception handler called in Out of memory handler" under our text
 ("1778 unit types are installed"), the box shows it, and OK exits.
 
+### TA's crash filter — `0x4DA1D0`, `0x4DA2A0` [DISASSEMBLED + MEASURED 2026-09-27]
+
+**`0x4DA1D0(flags)`**, cdecl, sets up crash reporting once (the latch `0x5289CC`). It reads the
+command line's `-debughelper` (`0x4D9F60` with the text at `0x50D1A8`, then `=%d`), and then, by
+bit:
+
+- bit 2 clear: `SetUnhandledExceptionFilter(0x4DA2A0)` at `0x4DA247` (the IAT slot `0x4FC1AC`).
+  The previous filter it returns is **discarded**.
+- bit 4 clear: `0x4DF160`.
+- bit 8 clear: more setup from `0x4DA266` on, not traced.
+
+Its one live caller is WinMain, `0x49E83C`, with flags 8, just before it installs the
+out-of-memory handler above (`0x49E849`). The other call site, `0x4DA3E0` (flags 0), has no
+callers: no call, no jump and no pointer to it anywhere in the image.
+
+**`0x4DA2A0`**, the top-level filter, stdcall on the `EXCEPTION_POINTERS*`: it returns
+`0x4D8E60(e, "Global Exception Handler")` (the text at `0x50D2D0`) and calls no earlier filter,
+because none was kept. `0x4D8E60` is the crash report: an `0x143F0`-byte frame, and a re-entry
+latch at `0x5289C0`, so a fault inside the report answers 0 (`EXCEPTION_CONTINUE_SEARCH`) at
+once. Its other callers are `0x49E6BF` (inside `0x49E680`, the out-of-memory handler's register
+dump), `0x4CBABD` and `0x4D9C07`.
+
+**The C runtime's pair.** `0x4F2240` installs `0x4F21E0` and keeps the previous filter at
+`0x52A428`; `0x4F2260` puts that one back. Neither has a direct caller: the only references are
+the pointers at `0x50105C` and `0x50107C`, in two null-bounded tables of function pointers in
+`.data` — the runtime's start-up and exit lists [INFERRED]. So the runtime's filter is in place
+before WinMain and is replaced, unchained, by `0x4DA2A0`.
+
+**What this means for us** ([gpu-status](gpu-status.html) §2.102): a filter installed after
+WinMain sees an exception first and must pass on what is not its own; `tagpu_restore_guard.c`'s
+is installed at the restorer's first bring-up and logs `004DA2A0` as the filter it passes to
+(MEASURED on the reference setup).
+
+### TA's single-instance test — `0x49E877..0x49E8AB` [DISASSEMBLED + MEASURED 2026-09-27]
+
+In WinMain, right after the crash-reporting setup above: `OpenSemaphoreA(0x1F0003
+SEMAPHORE_ALL_ACCESS, FALSE, name)` at `0x49E885` (the IAT slot `0x4FC0AC`, KERNEL32's seventh
+thunk from `0x4FC094`), the name through the pointer at `0x50971C`, which holds `0x507A58`,
+`"Total Annihilation"`. A non-NULL handle means another TotalA.exe runs, and WinMain returns −1
+at once (`0x49E88F`), with no message. Otherwise `CreateSemaphoreA(NULL, 1, 1, name)` at
+`0x49E8AB` (the slot `0x4FC0B0`) creates it, and the process holds it until it ends.
+
+**What this means for us**: a process that starts TotalA.exe again, as the restorer's crash
+relaunch does ([compute-restorer](compute-restorer.html)), must not let the new process reach
+`0x49E885` while the old one still holds the semaphore, or the relaunch silently exits.
+`tagpu_rguard_attach` waits for the old process at `DLL_PROCESS_ATTACH`, which runs before WinMain:
+a terminating process's handles are closed before its process object is signalled, so once the
+wait returns the semaphore is gone. MEASURED: on the reference setup the relaunch has logged
+both that it waited and, on another run, that the old process had already ended, and came up
+each time; on the Windows test setup it came up.
+
 ### The unit sync's keys, and the join's pace — `0x4B6BA0`, def `+0x13E`, `0x46D6C0..0x46DEC8` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The key.** The menu-time loader `0x42A8D0` reads each FBI whole (`0x4BB7C0`) and stores
@@ -4111,7 +4162,7 @@ so machine-checked against the real layout rather than guessed. [VERIFIED]
 | Resource accounting | Inside `PlayerStruct`: `fCurrentEnergy`, `fEnergyProducton`, `fEnergyExpense`, `fCurrentMetal`, `fMetalProduction`, `fMetalExpense`, `fMaxEnergyStorage`, `fMaxMetalStorage` as **`float`**; lifetime totals (`fTotalEnergyProduced`, `fEnergyWasted`, …) as **`double`**. |
 | `UnitDefStruct` (FBI) | **`sizeof == 0x249`** (585 bytes). CRCs at 0x13E/0x142/0x146; `buildLimit` 0x15A; **`weapon1/2/3` at 0x1EE/0x1F2/0x1F6**; `nMaxHP` 0x1FA; sight/radar/sonar 0x202/0x204/0x206; **`BuildAngle` 0x210** (the spawn's heading spread, §"`0x485A40`"). |
 | Map / features | `FeatureStruct` is a **13-byte (`0x0D`) per-tile record**; `FeatureMapSizeX/Y` at `0x14233`/`0x14237`; `MAPPED_MEMORY_p` `0x14273`; `FeatureMap` `0x14287`. |
-| Tile set / tile map | **`TILE_SET`** at `main+0x14283` → `{u32 count; u8* pixels}`: `count` 32×32 8bpp tiles of `0x400` bytes each, built by `LoadMap` and static for the map (Two Continents: 5062). **`TILE_MAP`** at `main+0x1428B`: `u16` tile index per 32-px cell, row stride `FeatureMapSizeX/2`. LoadMap allocates the tile map as `(pxW/32)·(pxH/32)` entries from `main+0x14223`/`+0x14227` (`0x48393C..0x483969`) and the tile set as `count·0x400 + 8` bytes (`0x483B53..0x483B80`) [DISASSEMBLED 2026-09-24]. The stock terrain pass checks its reads against neither; our bound is in "Engine defects we patch". Both byte-confirmed against the terrain blit `0x483FA0` ([terrain & depth](terrain-depth.html) §2) and read every frame by `tagpu_terr.c`. The Classic++ restorer reads them once more per map, on the render thread, at the moment its job starts (`tagpu_terr.c` `glsl_begin`/`restore_order`, 2026-09-05): every `TILE_SET` tile's edge texels for the tileability test, and the whole `TILE_MAP` once to rank each tile by its distance in cells from the viewport (the restore runs visible tiles first). The pixels themselves are never copied again — the GLSL passes sample the RGBA8 base atlas already on the GPU ([GPU status](gpu-status.html) §2.88) (the ONNX path that copied the whole set was deleted 2026-09-05). Read-only. |
+| Tile set / tile map | **`TILE_SET`** at `main+0x14283` → `{u32 count; u8* pixels}`: `count` 32×32 8bpp tiles of `0x400` bytes each, built by `LoadMap` and static for the map (Two Continents: 5062). **`TILE_MAP`** at `main+0x1428B`: `u16` tile index per 32-px cell, row stride `FeatureMapSizeX/2`. LoadMap allocates the tile map as `(pxW/32)·(pxH/32)` entries from `main+0x14223`/`+0x14227` (`0x48393C..0x483969`) and the tile set as `count·0x400 + 8` bytes (`0x483B53..0x483B80`) [DISASSEMBLED 2026-09-24]. The stock terrain pass checks its reads against neither; our bound is in "Engine defects we patch". Both byte-confirmed against the terrain blit `0x483FA0` ([terrain & depth](terrain-depth.html) §2) and read every frame by `tagpu_terr.c`. The Classic++ restorer reads them once more per map, on the render thread under the teardown fence, when the restore request is built (`tagpu_terr.c` `restore_publish`): every `TILE_SET` tile's edge texels for the tileability test; the whole `TILE_MAP` once to rank each tile by its distance in cells from the viewport (`restore_order`, the restore runs visible tiles first); and the whole `TILE_MAP` into a copy, every id bounded by the atlas's tile count, from which the neighbourhood keys are made (`nb_build`, [GPU status](gpu-status.html) §2.103). The pixels themselves are never copied again — the compute restorer reads the RGBA8 base atlas already on the GPU ([GPU status](gpu-status.html) §2.88). Read-only. |
 | Live palette | `main+0x143A7`: 256 entries × 4 bytes, **R, G, B, pad** — and it does **not** cycle, and nothing moves it in play: its one writer is the PALETTE load `0x42A400`, run once per process (the writer survey is in "The palette the screen is presented with", below). [MEASURED 2026-09-05] Read out of the live
 process with `tacli peek '*0x511DE8+0x143A7:x256'` ×4 for the whole table: **all 1024 bytes
 identical across 16 samples over 8 s** in a live skirmish, on two maps, with a further 24

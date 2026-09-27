@@ -334,6 +334,7 @@ static int            s_arLvlN;
 static TAGPU_VKRJOB*  s_rjob;
 static unsigned       s_rjGen, s_rjPal;
 static int            s_rjTaken, s_rjPainted, s_rjTried, s_rjChain;
+static unsigned       s_rjEpoch;           /* the restorer epoch s_rjTried was set in */
 static VkImageView    s_rjSrcView, s_rjDstView;
 static int            s_arHave;
 
@@ -1695,7 +1696,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; s_rjChain = 0; }
+    /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
+    if (s_rjTried && s_rjEpoch != tagpu_vk_restore_epoch()) s_rjTried = 0;
     if (s_rjTried) { s_arHave = 0; return; }
+    s_rjEpoch = tagpu_vk_restore_epoch();
     if (!s_arImg || !s_arView || !s_bView || !s_bHave) return;
     /* THE CHAIN IS A PREREQUISITE, NOT AN EXTRA. Without per-level views this
        lane cannot reduce, and a twin whose levels 1.. are undefined is a wrong
@@ -1715,7 +1719,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
     /* EVERY GENERATION BLANKS, for tagpu_vk_feat.c's reason: nothing the
        restore reads moves in play. */
-    s_rjob = tagpu_vk_restore_job_new(d, "unit", 3, 0, 0,
+    s_rjob = tagpu_vk_restore_job_new(d, "unit", 3, 0, TAGPU_RM_FULL, 0,
                                       s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
                                       s_arImg, s_arLvl[0], s_arDim, s_arDim);
@@ -1731,9 +1735,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
         s_rjTried = 1;
         return;
     }
-    /* THE OUT PASS PAINTS LEVEL 0 THROUGH `s_arLvl[0]`, not through the
-       whole-chain view: a framebuffer attachment must name exactly one level,
-       and the whole-chain view names more than one. */
+    /* OUT PAINTS LEVEL 0 THROUGH `s_arLvl[0]`, not through the whole-chain
+       view: a storage image view names exactly one level, and the whole-chain
+       view names more than one. */
     s_rjChain = 1;
     if (s_arMips > 0) {
         s_rjChain = tagpu_vk_restore_job_chain(d, s_rjob, s_arMips, s_arDim,
@@ -1772,8 +1776,8 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     int i;
     if (s_arImg && s_arDim == dim && s_arMips == mips) return 1;
     /* A LIVE JOB NAMES WHAT THE NEXT FOUR LINES DESTROY, so it goes FIRST and
-       it goes from here rather than from `restore_want`. The job holds `dstFb`,
-       `dstView` and every `chainFb[]` over this image and these views, and
+       it goes from here rather than from `restore_want`. The job's descriptor
+       sets name `dstView` and every chain view over this image, and
        `job_free` retires them on the mask a submitted command buffer is bound
        by; `kill_image` below does not defer. `restore_want`'s "the twin moved"
        check is the backstop and cannot be the fix: it runs LATER in the frame,
@@ -1796,13 +1800,13 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     s_arLvlN = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     s_arDim = 0; s_arMips = 0; s_arHave = 0;
-    /* COLOR_ATTACHMENT: the restorer paints level 0 into this image through a
-       render pass and reduces the rest into it the same way, so every level is
-       a colour attachment at some point. The usage flag does not change how
-       the image is sampled. */
+    /* STORAGE: the restorer paints level 0 into this image from a compute
+       shader and reduces the rest into it the same way, so every level is a
+       storage image at some point. The usage flag does not change how the
+       image is sampled. */
     if (!mk_image(d, dim, dim, mips + 1, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                  VK_IMAGE_USAGE_STORAGE_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView))
         /* every out-param is NULL on this path, from EVERY exit of `mk_image`
            and not merely because a `kill_image` ran before this call -- see its

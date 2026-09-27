@@ -79,20 +79,20 @@
 #define CELL_PITCH   (TILE_PX + 2 * CELL_BORDER) /* 34                         */
 #define ATLAS_W      (ATLAS_COLS * CELL_PITCH)   /* 2176                       */
 #define MAX_TILES    65536                      /* the index is a u16          */
-#define ICOMP        4                          /* col,row, atlas col,row      */
-/* THE STAGING CEILING IS MEMORY, NOT A RESOLUTION. What one frame may need is
-   reserved from the live viewport at the zoom floor (tagpu_terr_clamp_span),
-   so it tracks the screen. MEASURED, from the `terr: staging` line: 1024x768
-   reserves 10672 cells (83 KB), 2560x1440 54208 (423 KB), 3840x2160 124488
-   (972 KB), 5120x2880 223568 (1746 KB); 7680x4320 works out at 507592
-   (3966 KB). This is only the point past which a viewport is NOT BELIEVED —
-   `vw`/`vh` are read out of engine memory, and a garbage pair must not be
-   allowed to ask for an arbitrary allocation. 24 MB is a viewport of about
-   14000 x 14000, which is past any screen and well short of a wild value.
-   A cell costs FOUR SHORTS (s_inst); as six vertices of six floats, the same
-   ceiling would be 432 MB. */
-#define INST_MAX_BYTES  (24u * 1024u * 1024u)
-#define INST_MAX_CELLS  ((int)(INST_MAX_BYTES / (ICOMP * sizeof(short))))
+#define ICOMP        TAGPU_TERR_ICOMP           /* the record, tagpu_terr.h    */
+/* THE STAGING CEILING IS A CELL COUNT, NOT A RESOLUTION. What one frame may
+   need is reserved from the live viewport at the zoom floor
+   (tagpu_terr_clamp_span), so it tracks the screen. MEASURED, from the
+   `terr: staging` line: 1024x768 reserves 10672 cells, 2560x1440 54208,
+   3840x2160 124488, 5120x2880 223568; 7680x4320 works out at 507592. This is
+   only the point past which a viewport is NOT BELIEVED — `vw`/`vh` are read
+   out of engine memory, and a garbage pair must not be allowed to ask for an
+   arbitrary allocation. 3 Mi cells is a viewport of about 14000 x 14000,
+   which is past any screen and well short of a wild value. A cell costs
+   EIGHT SHORTS (s_inst), 48 MB at the ceiling; as six vertices of six
+   floats it would be 432 MB. */
+#define INST_MAX_CELLS  (3 * 1024 * 1024)
+#define INST_MAX_BYTES  ((size_t)INST_MAX_CELLS * ICOMP * sizeof(short))
 #define TERR_ENC     0.10f                      /* under every other band      */
 #define DEFAULT_KEY  254                        /* see tagpu_terrown.c         */
 
@@ -150,6 +150,18 @@ static int                s_rvkWant;   /* Classic++ `assets=`, latched        */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
 static int                s_rFrameN;
 static unsigned           s_rSerial;   /* bumped on every change, drop included */
+/* THE NEIGHBOURHOODS, the same request in its seam-correct form
+   (research/notes/compute-restorer.md D5; `nb_build`): each map cell's key,
+   and one frame per key. Built with the list above, dropped with it, and
+   published under its serial. `s_cellKey` is the key of map cell (x, y) at
+   y * s_keyW + x; key k's cell in the neighbourhood atlas is column
+   k % s_nbCols, row k / s_nbCols, on the CELL_PITCH pitch. */
+static int*               s_cellKey;
+static int                s_keyW, s_keyH;
+static TAGPU_RNBFRAME*    s_nbFrames;  /* s_nbN entries, key order            */
+static int*               s_nbOrder;   /* the keys, centre-out                */
+static int                s_nbN, s_nbCols, s_nbW, s_nbH;
+static int                s_nbKeysOn;  /* this frame's records carry the keys */
 
 /* Forget the list. Every caller is a point where the ATLAS stopped being the
    one the list describes, so the serial moves even though nothing replaces it:
@@ -159,6 +171,10 @@ static void rlist_drop(void)
 {
     if (s_rFrames) { free(s_rFrames); s_rFrames = NULL; }
     s_rFrameN = 0;
+    free(s_cellKey); s_cellKey = NULL; s_keyW = s_keyH = 0;
+    free(s_nbFrames); s_nbFrames = NULL;
+    free(s_nbOrder); s_nbOrder = NULL;
+    s_nbN = s_nbCols = s_nbW = s_nbH = 0;
     s_rSerial++;
 }
 static unsigned char* s_hMirror;       /* s_hW x s_hH, or NULL                */
@@ -334,8 +350,8 @@ typedef char terr_mirror_flags_unchanged[
      ATLAS_COLS <= TAGPU_TERR_FOLD_HI && 65536 / ATLAS_COLS <= TAGPU_TERR_FOLD_HI) ? 1 : -1];
 /* ONE QUAD PER VISIBLE CELL, AND THE CELL IS AN INSTANCE. `aCorner` is the
    unit quad's six corners in the engine's own vertex order — one static buffer
-   uploaded at init and never touched again — and `aCell` is this frame's four
-   shorts for the cell, per instance.
+   uploaded at init and never touched again — and `aCell` and `aKey` are this
+   frame's eight shorts for the cell, per instance (tagpu_terr.h).
 
    The three values a per-vertex stream would carry are rebuilt here, and
    rebuilt EXACTLY: every term is an integer far below 2^24 — a grid column is
@@ -344,11 +360,14 @@ typedef char terr_mirror_flags_unchanged[
    the tile map's stride is half that), an atlas column 63 and an atlas row
    1023 — so each product and sum is exact in float and aPos, aUV and aWorld
    are bit for bit the floats a CPU would write. Those same bounds are what
-   puts every field of aCell inside a signed short. The atlas texel size
-   arrives as the `uTexel` float a CPU would multiply by, so the UVs are the
-   same product of the same two operands. The cost is four shorts a cell
-   against six vertices of six floats — and that is what lets one frame's
-   budget cover a 3840x2160 view at the zoom floor. */
+   puts every field of aCell inside a signed short, and a key's column and row
+   are under the device's image limit over CELL_PITCH (nb_build bounds the
+   neighbourhood atlas by it; tagpu_vk_terr.c then refuses one past 16384):
+   963 at a 32768 limit. The atlas texel size arrives as the `uTexel`
+   float a CPU would multiply by, so the UVs are the same product of the same
+   two operands. The cost is eight shorts a cell against six vertices of six
+   floats — and that is what lets one frame's budget cover a 3840x2160 view at
+   the zoom floor. */
 /* THIS PASS'S TWO SHADERS, AND NEITHER HAS A C REFERENCE. They are a
    BUILD INPUT, not dead code: `tools/spirv-gen.py` reads them out of the
    PREPROCESSED translation unit under the manifest names tagpu_terr::VS and
@@ -365,6 +384,7 @@ static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec2 aCorner;\n"   /* per vertex: 0/1 x 0/1        */
     "layout(location=1) in vec4 aCell;\n"     /* per instance: col,row,cx,cy  */
+    "layout(location=2) in vec4 aKey;\n"      /* ...and the key's cell, 0, 0  */
     "uniform vec2 uGame;\n"
     "uniform float uZoom;\n"
     "uniform vec2 uZoomC;\n"
@@ -373,7 +393,9 @@ static const char* VS =
     "uniform vec2 uOrigin;\n"   /* screen px of grid cell (0,0)'s corner      */
     "uniform vec2 uTile0;\n"    /* the map cell grid cell (0,0) IS            */
     "uniform vec2 uTexel;\n"    /* 1/ATLAS_W, 1/atlas height                  */
-    "out vec2 vUV; out vec2 vWorld; flat out float vMirror;\n"
+    "uniform int uNbhd;\n"      /* 1 = uAtlasRGB is the neighbourhood atlas   */
+    "uniform vec2 uTexelN;\n"   /* ...and 1/its width, 1/its height           */
+    "out vec2 vUV; out vec2 vWorld; flat out float vMirror; out vec2 vUVR;\n"
     "void main(){\n"
     /* CELL_PITCH 34, CELL_BORDER 1, TILE_PX 32 — held to those values by
        terr_atlas_consts_unchanged in tagpu_terr.c. The tile's column and row
@@ -400,7 +422,13 @@ static const char* VS =
        function's value, 32 + 2e or 2e, which reads the guard ring only for the
        samples within 2e of the fold -- where r(w) + e is past the tile's last
        texel, whose copy the guard ring is. On-map and unflipped axes are
-       -NUDGE and u = the corner, as before. */
+       -NUDGE and u = the corner, as before.
+       THE RESTORED COLOUR'S UV, vUVR, is the same function over the cell the
+       restored atlas holds: the tile's own cell in the per-tile atlas, or the
+       KEY's cell in the neighbourhood atlas (uNbhd), whose ring is the real
+       neighbours' texels rather than a copy -- which is the seam fix. A
+       mirrored cell takes the key of the cell it reflects to, turned over
+       with it, so its ring is still the texels beside it in the reflection. */
     "  vec2 f = step(16384.0, aCell.zw);\n"
     "  vec2 t = aCell.zw - f * 16384.0;\n"
     "  float m = step(8192.0, t.x);\n"
@@ -415,7 +443,9 @@ static const char* VS =
     "  vec2 g = aCell.xy + aCorner;\n"
     "  vec2 aPos = uOrigin + g * 32.0;\n"
     "  vec2 aWorld = (uTile0 + g) * 32.0;\n"
-    "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0 + f * fold * (2.0 * " TAGPU_EDGE_NUDGE " / uZoom)) * uTexel;\n"
+    "  vec2 e = f * fold * (2.0 * " TAGPU_EDGE_NUDGE " / uZoom);\n"
+    "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0 + e) * uTexel;\n"
+    "  vUVR = uNbhd == 1 ? (aKey.xy * 34.0 + 1.0 + k * 32.0 + e) * uTexelN : aUV;\n"
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - (1.0 - 2.0 * back) * " TAGPU_EDGE_NUDGE ";\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
@@ -423,11 +453,12 @@ static const char* VS =
     "}\n";
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; in vec2 vWorld; flat in float vMirror;\n"
+    "in vec2 vUV; in vec2 vWorld; flat in float vMirror; in vec2 vUVR;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uPal;\n"        /* the engine's table: index 0 is the
                                           unexplored black (FOG_TERRAIN)    */
-    "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas    */
+    "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas, per
+                                          tile or per neighbourhood, at vUVR */
     "uniform int uRestored;\n"         /* 1 = a restore is running or done:
                                           sample it where its alpha says so */
     "uniform sampler2D uHeight;\n"     /* R8 height per 16-px cell          */
@@ -510,7 +541,7 @@ static const char* FS =
        have explored -- and no light, for the reason at taEdge. The restored
        colour where the reveal has painted it, as on the map. */
     "  if (vMirror > 0.5) {\n"
-    "    vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
     "    frag = vec4(taEdge(e.a > 0.5 ? e.rgb : texture(uBase, vUV).rgb, vWorld), 1.0);\n"
     "    return;\n"
     "  }\n"
@@ -527,7 +558,7 @@ static const char* FS =
        quad spans exactly the tile's 32 texels, so no filtering to get wrong;
        a fragment landing exactly on the far edge reads the cell's replicated
        guard texel rather than the next cell (CELL_PITCH). */
-    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
     "  vec3 c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
     "  if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
     "                                   taW, taWx, taWy);\n"
@@ -747,6 +778,191 @@ static int* restore_order(const char* ta, int count)
     return order;
 }
 
+/* ---- Classic++: the NEIGHBOURHOOD KEYS ----------------------------------
+   A tile restored alone has seams: the network sees zeros past its edge where
+   the map has the next tile. A cell restored with its eight neighbours around
+   it is exactly what a restore of the whole map gives there
+   (tagpu_restoreglsl.h, TAGPU_RNBFRAME), and cells that share a tile AND its
+   eight neighbours share the result -- so there is one restore per KEY, the
+   distinct (tile, eight neighbours, map sides) over the map's cells: King of
+   the Hill's 69,958 cells are 26,827 keys (D5).
+
+   THE KEY IS THE FRAME tagpu_rcore_nb_frame BUILDS FOR THE CELL, less its
+   destination: the centre's origin, the eight neighbours' and the edge bits.
+   Origins stand one-to-one for tile ids in the base atlas, so equal frames
+   are equal windows, and the one rule that builds a key is the one the
+   self-test's map is built by. The tile map is read ONCE, into a copy, and
+   every id in it is bounded by the atlas (`s_atlasN`) before any key is made:
+   a map naming a tile the atlas does not hold gets no neighbourhoods rather
+   than a frame that reads outside it.
+
+   THE ATLAS IS ONE IMAGE, near square, on CELL_PITCH: `s_maxTex` bounds its
+   side, so a map with more keys than one image of this device holds keeps
+   the per-tile request. Whether the device has the memory is the consumer's
+   (D10). */
+typedef struct { const unsigned short* ids; int w; } NBMAP;
+
+static unsigned nb_org(void* ctx, int x, int y)
+{
+    const NBMAP* m = (const NBMAP*)ctx;
+    int t = m->ids[(size_t)y * m->w + x];
+    return (unsigned)((t % ATLAS_COLS) * CELL_PITCH + CELL_BORDER) |
+           (unsigned)((t / ATLAS_COLS) * CELL_PITCH + CELL_BORDER) << 16;
+}
+
+static unsigned nb_hash(const TAGPU_RNBFRAME* f)
+{
+    unsigned h = 2166136261u, v[10];
+    int i;
+    v[0] = (unsigned)f->f.ax | (unsigned)f->f.ay << 16;
+    v[1] = (unsigned)f->edge;
+    memcpy(v + 2, f->nbo, sizeof f->nbo);
+    for (i = 0; i < 10; i++) { h ^= v[i]; h *= 16777619u; h ^= h >> 15; }
+    return h;
+}
+
+static int nb_same(const TAGPU_RNBFRAME* a, const TAGPU_RNBFRAME* b)
+{
+    return a->f.ax == b->f.ax && a->f.ay == b->f.ay && a->edge == b->edge &&
+           !memcmp(a->nbo, b->nbo, sizeof a->nbo);
+}
+
+/* the open-addressed index of the keys so far, at least twice their count */
+static int nb_rehash(int** tab, int* cap, const TAGPU_RNBFRAME* keys, int n)
+{
+    int c = *cap ? *cap * 2 : 65536, i;
+    int* t = (int*)malloc((size_t)c * sizeof *t);
+    if (!t) return 0;
+    for (i = 0; i < c; i++) t[i] = -1;
+    for (i = 0; i < n; i++) {
+        unsigned h = nb_hash(&keys[i]) & (unsigned)(c - 1);
+        while (t[h] >= 0) h = (h + 1) & (unsigned)(c - 1);
+        t[h] = i;
+    }
+    free(*tab);
+    *tab = t; *cap = c;
+    return 1;
+}
+
+/* Build the keys of the map `ta` holds, the centre-out order over them and
+   their frames, into the neighbourhood statics. 0 with the reason in the log
+   when the map gets none; the per-tile list stands either way. */
+static int nb_build(const char* ta)
+{
+    const unsigned short* tmap = *(const unsigned short* const*)(ta + OFF_TILEMAP);
+    int mapW16 = *(const int*)(ta + OFF_MAPW16), mapH16 = *(const int*)(ta + OFF_MAPH16);
+    const int w = mapW16 / 2, h = mapH16 / 2;
+    const int cx = s_rectTx0 + s_rectCols / 2, cy = s_rectTy0 + s_rectRows / 2;
+    unsigned short* ids = NULL;
+    int *cellKey = NULL, *tab = NULL, *rank = NULL, *order = NULL, *bucket = NULL;
+    TAGPU_RNBFRAME* keys = NULL;
+    TAGPU_RNBFRAME* frames = NULL;
+    int cap = 0, n = 0, kcap = 0, x, y, i, maxRank = 0, cols, rows, ok = 0;
+    NBMAP m;
+    char b[200];
+    const char* why = "terr: the neighbourhood keys could not be allocated - the terrain restores per tile";
+
+    if (!ptr_ok(tmap) || w <= 0 || h <= 0 || w > 2048 || h > 2048) return 0;
+    ids = (unsigned short*)malloc((size_t)w * h * sizeof *ids);
+    cellKey = (int*)malloc((size_t)w * h * sizeof *cellKey);
+    if (!ids || !cellKey) goto out;
+    memcpy(ids, tmap, (size_t)w * h * sizeof *ids);
+    for (i = 0; i < w * h; i++)
+        if (ids[i] >= s_atlasN) {
+            _snprintf(b, sizeof b, "terr: map cell %d names tile %d past the atlas's %d - "
+                                   "the terrain restores per tile", i, ids[i], s_atlasN);
+            why = b;
+            goto out;
+        }
+    m.ids = ids; m.w = w;
+    if (!nb_rehash(&tab, &cap, keys, 0)) goto out;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            TAGPU_RNBFRAME f;
+            unsigned hh;
+            int d = (x < cx ? cx - x : x - cx), dy = (y < cy ? cy - y : y - cy);
+            if (dy > d) d = dy;
+            tagpu_rcore_nb_frame(&f, x, y, w, h, nb_org, &m, TILE_PX, TILE_PX, 0, 0, CELL_BORDER);
+            hh = nb_hash(&f) & (unsigned)(cap - 1);
+            while (tab[hh] >= 0 && !nb_same(&keys[tab[hh]], &f)) hh = (hh + 1) & (unsigned)(cap - 1);
+            if (tab[hh] < 0) {
+                if (n == kcap) {
+                    int nc = kcap ? kcap * 2 : 4096;
+                    TAGPU_RNBFRAME* nk = (TAGPU_RNBFRAME*)realloc(keys, (size_t)nc * sizeof *nk);
+                    int* nr = (int*)realloc(rank, (size_t)nc * sizeof *nr);
+                    if (nk) keys = nk;
+                    if (nr) rank = nr;
+                    if (!nk || !nr) goto out;
+                    kcap = nc;
+                }
+                keys[n] = f; rank[n] = d;
+                tab[hh] = n++;
+                if (2 * n > cap) {
+                    if (!nb_rehash(&tab, &cap, keys, n)) goto out;
+                }
+                cellKey[(size_t)y * w + x] = n - 1;
+            } else {
+                cellKey[(size_t)y * w + x] = tab[hh];
+                if (d < rank[tab[hh]]) rank[tab[hh]] = d;
+            }
+        }
+    /* the atlas: near square, one CELL_PITCH cell a key */
+    for (cols = 1; cols * cols < n; cols++) ;
+    rows = (n + cols - 1) / cols;
+    if (cols * CELL_PITCH > s_maxTex || rows * CELL_PITCH > s_maxTex) {
+        _snprintf(b, sizeof b, "terr: %d neighbourhood keys need a %dx%d atlas, past this device's %d - "
+                               "the terrain restores per tile", n, cols * CELL_PITCH, rows * CELL_PITCH, s_maxTex);
+        why = b;
+        goto out;
+    }
+    /* the centre-out order (restore_order's rule, over keys): counting sort
+       by rank, stable in key order */
+    for (i = 0; i < n; i++) if (rank[i] > maxRank) maxRank = rank[i];
+    order = (int*)malloc((size_t)n * sizeof *order);
+    bucket = (int*)calloc((size_t)maxRank + 2, sizeof *bucket);
+    frames = (TAGPU_RNBFRAME*)malloc((size_t)n * sizeof *frames);
+    if (!order || !bucket || !frames) goto out;
+    for (i = 0; i < n; i++) bucket[rank[i] + 1]++;
+    for (i = 1; i <= maxRank + 1; i++) bucket[i] += bucket[i - 1];
+    for (i = 0; i < n; i++) order[bucket[rank[i]]++] = i;
+    for (i = 0; i < n; i++) {
+        frames[i] = keys[i];
+        frames[i].f.dx = (i % cols) * CELL_PITCH + CELL_BORDER;
+        frames[i].f.dy = (i / cols) * CELL_PITCH + CELL_BORDER;
+    }
+    /* UNDER `tagpu_restoredump.on`, THE MAP BESIDE THE RESTORER'S DUMP of this
+       atlas: every cell's tile and key, which tools/restore-dumpcheck.py
+       --whole-map holds the painted cells to a restore of the whole map with.
+       "TNB1", then W, H, the atlas's columns, CELL_PITCH, CELL_BORDER,
+       TILE_PX and ATLAS_COLS as int32, then W x H u16 tiles and W x H int32
+       keys. */
+    if (GetFileAttributesA("tagpu_restoredump.on") != INVALID_FILE_ATTRIBUTES) {
+        FILE* mf = fopen("tagpu_restore_terr_vk.map", "wb");
+        if (mf) {
+            const int hd[7] = { w, h, cols, CELL_PITCH, CELL_BORDER, TILE_PX, ATLAS_COLS };
+            fwrite("TNB1", 1, 4, mf);
+            fwrite(hd, sizeof hd[0], 7, mf);
+            fwrite(ids, sizeof *ids, (size_t)w * h, mf);
+            fwrite(cellKey, sizeof *cellKey, (size_t)w * h, mf);
+            fclose(mf);
+        }
+    }
+    s_cellKey = cellKey; cellKey = NULL;
+    s_keyW = w; s_keyH = h;
+    s_nbFrames = frames; frames = NULL;
+    s_nbOrder = order; order = NULL;
+    s_nbN = n; s_nbCols = cols; s_nbW = cols * CELL_PITCH; s_nbH = rows * CELL_PITCH;
+    _snprintf(b, sizeof b, "terr: %d neighbourhood keys over %dx%d cells, a %dx%d atlas (%u KB)",
+              n, w, h, s_nbW, s_nbH, (unsigned)(((size_t)s_nbW * s_nbH * 4) >> 10));
+    flog(b);
+    ok = 1;
+out:
+    if (!ok) flog(why);
+    free(ids); free(cellKey); free(tab); free(rank); free(order); free(bucket);
+    free(keys); free(frames);
+    return ok;
+}
+
 /* ONE REQUEST PER TILE SET, AND NO REPAINT IS OWED: the restore's input is the
    base atlas, built from the engine's table, which nothing in play writes
    (tagpu_pal.h). The Gamma factor is applied to the finished world image,
@@ -790,11 +1006,12 @@ static int restore_publish(const char* ta)
     rlist_drop();                      /* whatever was there is the old list */
     s_rFrames = frames;
     s_rFrameN = n;
+    nb_build(ta);
     if (s_log) {
         char b[160];
         _snprintf(b, sizeof b, "terr: restore request published -- %d frames, "
-                  "%dx%d atlas, serial %u",
-                  n, ATLAS_W, s_atlasH, s_rSerial);
+                  "%dx%d atlas, %d neighbourhoods, serial %u",
+                  n, ATLAS_W, s_atlasH, s_nbN, s_rSerial);
         flog(b);
     }
     return 1;
@@ -926,10 +1143,13 @@ static int edge_folds(int m, int n)
     return (p == 0 ? TAGPU_TERR_FOLD_LO : 0) | (p == n - 1 ? TAGPU_TERR_FOLD_HI : 0);
 }
 
-static void put_cell(int col, int row, int cx, int cy)
+static void put_cell(int col, int row, int cx, int cy, int key)
 {
     short* o = s_inst + (size_t)s_ncell * ICOMP;
     o[0] = (short)col; o[1] = (short)row; o[2] = (short)cx; o[3] = (short)cy;
+    o[4] = (short)(key >= 0 ? key % s_nbCols : 0);
+    o[5] = (short)(key >= 0 ? key / s_nbCols : 0);
+    o[6] = 0; o[7] = 0;
     s_ncell++;
 }
 
@@ -957,7 +1177,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     const unsigned short* tmap;
     int mapW16, mapH16, stride, mrows;
     int tx0, ty0, fx, fy, cols, rows, r, c;
-    int skipped = 0, junk = 0, mirrored = 0, own;
+    int skipped = 0, junk = 0, mirrored = 0, own, keysOn;
     int eyeX, eyeY, vpL, vpT, evw, evh;
     float iw, ih;
 
@@ -1061,6 +1281,11 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     s_origX = (float)(vpL - fx); s_origY = (float)(vpT - fy);
     s_iw = iw; s_ih = ih;
     s_mapCellsW = stride; s_mapCellsH = mrows;
+    /* THE KEYS ARE THIS MAP'S OR NOT USED: built over a map of these very
+       dimensions, which the drop on a new tile set keeps true, and checked
+       here because the index below is a bound only while they are */
+    keysOn = s_cellKey && s_nbFrames && s_keyW == stride && s_keyH == mrows;
+    s_nbKeysOn = keysOn;
     for (r = 0; r < rows; r++) {
         int my = ty0 + r, sy = my, flipY = 0, offY = (my < 0 || my >= mrows), foldY = 0;
         if (offY) {
@@ -1070,7 +1295,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
         }
         for (c = 0; c < cols; c++) {
             int mx = tx0 + c, sx = mx, flipX = 0, off = offY, foldX = 0;
-            int idx;
+            int idx, key;
             if (mx < 0 || mx >= stride) {
                 if (!v->mirror) { skipped++; continue; }
                 sx = tagpu_edge_reflect(mx, stride, &flipX);
@@ -1088,12 +1313,13 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
                past the map keeps that rect -- the edge tone fades with its
                distance from the map -- and takes the tile of (sx, sy), the
                cell it mirrors (TAGPU_TERR_MIRROR, tagpu_terr.h). */
+            key = keysOn ? s_cellKey[(size_t)sy * stride + sx] : -1;
             if (off) {
                 put_cell(c, r, (idx % ATLAS_COLS) | TAGPU_TERR_MIRROR | (flipX ? TAGPU_TERR_FLIP : 0) | foldX,
-                         (idx / ATLAS_COLS) | (flipY ? TAGPU_TERR_FLIP : 0) | foldY);
+                         (idx / ATLAS_COLS) | (flipY ? TAGPU_TERR_FLIP : 0) | foldY, key);
                 mirrored++;
             } else {
-                put_cell(c, r, idx % ATLAS_COLS, idx / ATLAS_COLS);
+                put_cell(c, r, idx % ATLAS_COLS, idx / ATLAS_COLS, key);
             }
         }
     }
@@ -1193,6 +1419,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.tile0X = (float)s_rectTx0; s_pub.tile0Y = (float)s_rectTy0;
     s_pub.texelW = s_iw; s_pub.texelH = s_ih;
     s_pub.restored = restored;
+    s_pub.nbOn = s_nbKeysOn;
     s_pub.lambert = tagpu_classicpp_lit() ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
     /* THE CAST-SHADOW BLOCK: 0. The map is drawn by tagpu_vk_shadow.c into an
@@ -1220,6 +1447,13 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
         s_pub.restoreFrames  = s_rFrames;
         s_pub.restoreN       = s_rFrames ? s_rFrameN : 0;
         s_pub.restoreSerial  = s_rSerial;
+        /* the neighbourhoods only with the records that name their cells */
+        if (s_nbKeysOn) {
+            s_pub.nbFrames = s_nbFrames; s_pub.nbOrder = s_nbOrder;
+            s_pub.nbN = s_nbN; s_pub.nbCols = s_nbCols;
+            s_pub.nbW = s_nbW; s_pub.nbH = s_nbH;
+            s_pub.nbTexelW = 1.0f / (float)s_nbW; s_pub.nbTexelH = 1.0f / (float)s_nbH;
+        }
     }
     /* the height mirror only while it matches the dimensions the shader is
        being told about -- build_height keeps those two in step (see there) */

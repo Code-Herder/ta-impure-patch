@@ -118,19 +118,15 @@ than source ones -- they belong to the pass being ported, not here:
     A flipped viewport puts it back, but a pass that reads it (the GUI sharp
     layer, the restorer) should say so where it sets its viewport up.
 
-THE RESTORER is the one VARIANT set. Its five shaders live in
-`tagpu_restore_glsl.h` as macros under a prefix the DEVICE decides -- `NK` is
-the device's `maxUniformBufferRange` divided by the weights' widest k-block,
-clamped to its colour-attachment limit (`tagpu_rcore_pick_nk`), and `WMAX` is
-`NK` times that same k-block. `NK` changes how many fragment outputs the conv pass
-declares, so it cannot be a specialisation constant, and a variant is therefore
-an (`NK`, `kmax`) PAIR -- `WMAX` cannot be compiled once at the largest `kmax`
-and shared, because `NK` is derived from the very limit the block has to fit.
-`kmax` is READ OUT OF THE WEIGHT BINARIES (`restore_kmax`) rather than written
-down, so the weights are part of what these headers are generated from. The
-consequence is a constraint on the project and is stated in
-research/notes/vulkan-only-plan.md landing 7 rather than here: the restorer
-restores with the shipped models and no others.
+THE RESTORER'S COMPUTE SHADERS are the one set that is not translated.
+`tagpu_restore_comp.h` holds them as macros written in Vulkan GLSL, since
+nothing ever compiled them for GL; the transform below does not apply to them,
+glslang preprocesses them itself, and each is its own program (a compute
+pipeline has one stage). The conv shader is compiled once per LAYER SHAPE, and
+the shapes are READ OUT OF THE SHIPPED WEIGHT FILES (`restore_shapes`) rather
+than written down, so the weights are part of what the headers are generated
+from: a model with a shape no variant covers fails the build until it is
+regenerated.
 
 THE ONE INVARIANT THAT MAKES THIS SAFE, and it is checked on every run rather
 than argued: strip the global-scope `in` / `out` / `uniform` declarations out of
@@ -222,120 +218,71 @@ PROGRAMS = [
 
 # ---------------------------------------------------------------- the restorer
 #
-# THE ONE VARIANT SHADER SET, and the only one read out of a HEADER rather than a
-# .c. `tagpu_restore_glsl.h` holds five shaders as macros under a prefix the
-# consumer builds. NO C FILE INCLUDES IT: the macros' only readers are this tool
-# (which turns them into the SPIR-V the Vulkan restorer runs) and `tools/tascene`
-# (which extracts the same macros for the browser lab). The GLSL is the SOURCE
-# OF TRUTH for both:
+# THE RESTORER'S COMPUTE SHADERS, read out of a HEADER rather than a .c:
+# `tagpu_restore_comp.h` holds them as macros, `TAGPU_RESTORE_<NAME>_CS`, and no
+# C file includes it -- this tool is its only reader. They are Vulkan GLSL as
+# written, so they skip the GL-330 transform and its residual check entirely;
+# what they share with the rest is the hash chain and the emitted header.
 #
-#     #define NK   <n>    output channel-tiles per conv draw
-#     #define WMAX <m>    mat4s in the bound weight range = NK * kmax
-#
-# `NK` guards extra `out` locations with `#if`, so it is a shape of the fragment
-# interface and cannot be a specialisation constant. `WMAX` is only the declared
-# length of `uniform WBlock { mat4 w[WMAX]; }` -- but it CANNOT be compiled at the
-# largest kmax and shared, because `NK` is derived from the device limit that
-# block has to fit: nk = maxUniformBufferRange / (kmax*64), clamped to the
-# colour-attachment limit and rounded down to a power of two. Inflating kmax declares a
-# block past the very limit that chose NK. So a variant is an (NK, kmax) PAIR.
-#
-# KMAX IS A PROPERTY OF THE SHIPPED WEIGHTS, read out of the binaries rather than
-# taken from a comment (`unditherer/models/{tiny,full}.w32.bin`, the layer table's
-# widest kstride / 4). THE CONSEQUENCE IS A CONSTRAINT ON THE PROJECT and is
-# stated in research/notes/vulkan-only-plan.md landing 7 rather than here: the
-# restorer restores with these two models and no others, and a third needs its
-# four variants generated and committed.
-# THE SHAPES THE RESTORER NEEDS FROM `transform`. CONV_FS has two that no
-# other shader here writes:
-#
-#   1. `uniform highp sampler2DArray uAct;` -- a precision qualifier AFTER the
-#      storage qualifier. `_VAR` captures it as its own group and re-emits it
-#      where it was read; unmatched, the declaration would pass through with no
-#      binding and glslang would refuse it: "sampler/texture/image requires
-#      layout(binding=X)".
-#   2. `layout(std140) uniform WBlock { mat4 w[WMAX]; };` -- a named block
-#      written on ONE line, which `_BLOCK_OPEN` does not see. `normalise_blocks`
-#      splits it on the way in.
-#
-# Both are the tool's to handle rather than the shader's to reformat:
-# `tagpu_restore_glsl.h` is the ONE copy of that text, shared with
-# tools/tascene's browser pack, and reflowing it for a generator's convenience is
-# the sort of thing its own header forbids.
-RESTORE_HDR   = "tagpu_restore_glsl"
-RESTORE_NK    = (1, 2, 4, 8)
+# A shader is assembled as `#version 450`, the variant's `#define` lines,
+# TAGPU_RESTORE_COMMON_CS (the push constants and the slot record every one of
+# them declares), and then its own macro. glslang does the preprocessing.
+COMPUTE_HDR    = "tagpu_restore_comp"
 RESTORE_MODELS = ("tiny", "full")
 
 
-def restore_kmax():
-    """`(kmax, model)` for each shipped model, READ OUT OF THE WEIGHT BINARY.
+def restore_shapes():
+    """Every conv LAYER SHAPE the shipped models have, as (CIN, COUT, LAST, TH),
+    READ OUT OF THE WEIGHT BINARIES.
 
-    IT IS READ AND NOT WRITTEN DOWN, AND THAT IS THE WHOLE POINT. `kmax` decides
-    the declared length of `uniform WBlock { mat4 w[WMAX]; }`, so a literal here
-    would sit outside the freshness chain: retrain `full.w32.bin` with a
-    different widest k-block and neither the shader text nor this tool's hash
-    moves, `--check` stays green, and the committed SPIR-V declares a block of
-    the wrong length -- found on a device, months later. Reading the file makes
-    the weights part of what the headers are generated FROM, so changing them
-    fails the build until the headers are regenerated.
+    IT IS READ AND NOT WRITTEN DOWN, AND THAT IS THE WHOLE POINT: a literal
+    here would sit outside the freshness chain, so a retrained model with a
+    new layer shape would keep `--check` green and fail on a device, where
+    tagpu_vk_restore.c finds no pipeline for it. Reading the files makes the
+    weights part of what the header is generated FROM.
 
     The format is `unditherer/weights.py`: u32 magic, then u32 depth, ch, ntex,
-    then `depth` x {offset, jin, kout, kstride} in vec4 texels. kmax is the
-    widest k-block in mat4s, `max(kstride) / 4` -- the same reduction
-    `tagpu_restore_core.c:139` does at load time.
-    """
+    then `depth` x {offset, jin, kout, kstride} in vec4 texels, where jin and
+    kout count 4-channel tiles. CIN = 4 x jin. COUT = 4 x kout, except the LAST
+    layer's, whose one tile of output is padded to 8 channels -- one
+    invocation's share (tagpu_restore_comp.h CONV).
+
+    TH, the rows one workgroup covers, is the largest of 32, 16 and 8 that
+    keeps a workgroup (2 x TH x COUT/8 invocations) within the 128 Vulkan 1.0
+    guarantees. All three divide 32, the grid's row granularity. It is in the
+    symbol's name, so tagpu_vk_restore.c's table cannot disagree with it and
+    still compile."""
     import struct
-    out = []
+    shapes = set()
     for model in RESTORE_MODELS:
         path = REPO / "unditherer" / "models" / ("%s.w32.bin" % model)
         if not path.exists():
-            die("%s is not there, and the restorer's shaders are generated from "
-                "it -- its widest k-block is the length of WBlock" % path)
+            die("%s is not there, and the restorer's conv variants are generated "
+                "from its layer shapes" % path)
         raw = path.read_bytes()
         try:
             depth, ch, ntex = struct.unpack_from("<III", raw, 4)
-            ks = [struct.unpack_from("<IIII", raw, 16 + 16 * l)[3]
-                  for l in range(depth)]
+            layers = [struct.unpack_from("<IIII", raw, 16 + 16 * l) for l in range(depth)]
         except struct.error:
             die("%s is truncated" % path)
-        if not (1 <= depth <= 32) or not ks or min(ks) == 0 or max(ks) % 4:
-            die("%s: depth %d and k-strides %s are not a weight table"
-                % (path, depth, ks[:4]))
-        out.append((max(ks) // 4, model))
-    return tuple(out)
-
-# Which of the five actually reads NK or WMAX -- measured over the QUOTED shader
-# text of each macro, not over the macro's region in the file: the doc comment
-# that introduces CONV mentions NK and is not shader source, which is what makes
-# a careless scan say FILL_FS depends on it. Only CONV_FS does.
-RESTORE_VARIANT = ("CONV_FS",)
-
-
-def restore_keys(name):
-    """Every key one restorer shader contributes: one, or one per (NK, kmax)."""
-    if name not in RESTORE_VARIANT:
-        return [(name, None, None)]
-    return [("%s_NK%d_K%d" % (name, nk, kmax), nk, nk * kmax)
-            for nk in RESTORE_NK for kmax, _ in restore_kmax()]
+        if not (2 <= depth <= 32):
+            die("%s: depth %d is not a weight table" % (path, depth))
+        for l, (_, jin, kout, _) in enumerate(layers):
+            last = l == depth - 1
+            cin, cout = 4 * jin, (8 if last else 4 * kout)
+            if last and kout != 1:
+                die("%s: the last layer has %d output tiles; the network's output "
+                    "is one (RGB and a zero)" % (path, kout))
+            if cout % 8 or cout > 64 or cin > 256:
+                die("%s: layer %d is %d -> %d channels, which no conv variant can "
+                    "take (COUT a multiple of 8, at most 64)" % (path, l, cin, cout))
+            th = next(t for t in (32, 16, 8) if 2 * t * (cout // 8) <= 128)
+            shapes.add((cin, cout, 1 if last else 0, th))
+    return sorted(shapes)
 
 
-def _restore_programs():
-    out = []
-    # EVERY SHADER IN `tagpu_restore_glsl.h` IS A PROGRAM HERE: one that no
-    # program uses fails the gate, precisely so that a shader and its consumer
-    # cannot drift apart while one of them is unwritten. This tool reads the
-    # five straight out of the header (see extract_restore) rather than out of
-    # any .c; tagpu_vk_restore.c builds the pipelines from the result.
-    for prog, vs, fs in (("restore_fill", "FS_VS", "FILL_FS"),
-                         ("restore_conv", "FS_VS", "CONV_FS"),
-                         ("restore_out",  "OUT_VS", "OUT_FS"),
-                         ("restore_mip",  "FS_VS", "MIP_FS")):
-        for fkey, _, _ in restore_keys(fs):
-            vkey = restore_keys(vs)[0][0]
-            out.append(("%s%s" % (prog, fkey[len(fs):]),
-                        "%s::%s" % (RESTORE_HDR, vkey),
-                        "%s::%s" % (RESTORE_HDR, fkey)))
-    return out
+def conv_key(cin, cout, last, th):
+    return "CONV_CS_I%d_O%d_T%d%s" % (cin, cout, th, "_LAST" if last else "")
 
 
 # Every C source a shader is read out of, in the order the headers are emitted.
@@ -351,19 +298,17 @@ SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
 # shader, giving each attribute's location.
 ATTR_LOCATIONS = {}
 
-# Sources that are not `src/<name>.c`. `tagpu_restore_glsl` is a header because
-# its shaders are macros (see extract_restore).
+# Sources that are not `src/<name>.c`. `tagpu_restore_comp` is a header because
+# its shaders are macros (see extract_compute).
 HEADER_SOURCES = {# THE SHADOW SHADERS HAVE NO .c OF THEIR OWN. Their name
                   # stays `tagpu_shadow` in `SOURCES` and `PROGRAMS` on purpose
                   # -- the name is what generates the `inc/spirv/*.spv.h` that
                   # `tagpu_vk_shadow.c` includes.
                   "tagpu_shadow": "src/tagpu_shadow_glsl.h"}
 
-# The restorer's pairings are appended rather than written out: eight of the ten
-# are the same conv program at a different (NK, kmax), and spelling them by hand
-# is how the list and `restore_keys` would drift apart.
-SOURCES.append(RESTORE_HDR)
-PROGRAMS += _restore_programs()
+# The restorer's compute header is emitted last, as one more source; its
+# shaders are not in PROGRAMS, since a compute pipeline has one stage.
+SOURCES.append(COMPUTE_HDR)
 
 CC = os.environ.get("CC", "i686-w64-mingw32-gcc")
 
@@ -404,18 +349,17 @@ def unescape(s):
     return "".join(out)
 
 
-_MACRO = re.compile(r'^#define\s+(TAGPU_RESTORE_(\w+_(?:VS|FS)))\b')
+_MACRO = re.compile(r'^#define\s+TAGPU_RESTORE_(\w+_CS)\b')
 
 
-def extract_restore():
-    """The five shaders out of tagpu_restore_glsl.h, one entry per variant.
+def extract_compute():
+    """The compute shaders out of tagpu_restore_comp.h, one entry per variant,
+    each the whole text glslang compiles.
 
     READ OUT OF THE HEADER AND NOT OUT OF A PREPROCESSED .c, because these are
-    macros pasted at call sites rather than `static const char*` initialisers --
-    there is no translation unit in which they appear as a literal with a
-    `#version` on the front. The prefix the runtime builds is reconstructed here
-    instead, one (NK, WMAX) at a time."""
-    path = DDRAW / "src" / ("%s.h" % RESTORE_HDR)
+    macros that no translation unit expands. `#if LAST` in CONV is left for
+    glslang: the text is Vulkan GLSL, and nothing here parses its interface."""
+    path = DDRAW / "src" / ("%s.h" % COMPUTE_HDR)
     if not path.exists():
         die("%s is not there" % path)
     lines = path.read_text().split("\n")
@@ -425,7 +369,7 @@ def extract_restore():
         if not m:
             i += 1
             continue
-        short, lits = m.group(2), []
+        short, lits = m.group(1), []
         while i < len(lines):
             lits.extend(_LIT.findall(lines[i]))
             if not lines[i].rstrip().endswith("\\"):
@@ -433,79 +377,23 @@ def extract_restore():
             i += 1
         bodies[short] = "".join(unescape(x) for x in lits)
         i += 1
-    if not bodies:
-        die("%s has no TAGPU_RESTORE_*_{VS,FS} macros" % path)
+    common = bodies.pop("COMMON_CS", None)
+    if common is None:
+        die("%s has no TAGPU_RESTORE_COMMON_CS" % path)
+    want = {"FILL_CS", "CONV_CS", "OUT_CS", "MIP_CS"}
+    if set(bodies) != want:
+        die("%s: expected the shaders %s and found %s"
+            % (path, sorted(want), sorted(bodies)))
     out = {}
     for short, body in bodies.items():
-        for key, nk, wmax in restore_keys(short):
-            pre = "#version 330 core\n"
-            if nk is not None:
-                pre += "#define NK %d\n#define WMAX %d\n" % (nk, wmax)
-            out[key] = pp_expand(pre + body, key)
+        if short == "CONV_CS":
+            for cin, cout, last, th in restore_shapes():
+                pre = ("#version 450\n#define CIN %d\n#define COUT %d\n#define LAST %d\n"
+                       "#define TH %d\n" % (cin, cout, last, th))
+                out[conv_key(cin, cout, last, th)] = pre + common + body
+        else:
+            out[short] = "#version 450\n" + common + body
     return out
-
-
-_IFGT = re.compile(r'^\s*#if\s+(\w+)\s*>\s*(\d+)\s*$')
-_DEF = re.compile(r'^\s*#define\s+(\w+)\s+(\d+)\s*$')
-
-
-def pp_expand(src, key):
-    """Resolve `#define <ID> <int>` and `#if <ID> > <int>` / `#endif`, and
-    substitute the identifiers.
-
-    THE TOOL'S OWN PARSER HAS TO SEE THE FINAL INTERFACE. `transform` assigns
-    locations from the global `out` declarations it can see, and CONV_FS declares
-    a different number of them per NK -- so the conditionals cannot survive into
-    the text that is parsed, and pre-expanding them here is what makes each
-    variant ordinary GLSL from that point on.
-
-    IT REFUSES EVERYTHING IT DOES NOT UNDERSTAND. A hand-rolled preprocessor that
-    guesses is worse than none: `#else`, `#elif`, a nested `#if`, any other
-    directive or any surviving `#` line but `#version` is an error that names
-    itself, so a shader edit that reaches for one fails the build here instead of
-    silently compiling a different interface than a GLSL preprocessor would."""
-    defs, out, depth = {}, [], []
-    for ln in src.split("\n"):
-        # THE REGION TEST COMES FIRST, for every directive and not only for
-        # text. A `#define` inside a FALSE `#if` must not be honoured, and
-        # matching it before this test would be the one hole in this function's
-        # promise to refuse what it does not understand -- a silent one.
-        if depth and not depth[0]:
-            if re.match(r'^\s*#if\b', ln):
-                die("%s: nested `#if` is not supported: %s" % (key, ln.strip()))
-            if re.match(r'^\s*#endif\b', ln):
-                depth.pop()
-            continue
-        m = _DEF.match(ln)
-        if m:
-            defs[m.group(1)] = int(m.group(2))
-            continue
-        m = _IFGT.match(ln)
-        if m:
-            if m.group(1) not in defs:
-                die("%s: `%s` tests %s, which is not defined" % (key, ln.strip(), m.group(1)))
-            if depth:
-                die("%s: nested `#if` is not supported: %s" % (key, ln.strip()))
-            depth.append(defs[m.group(1)] > int(m.group(2)))
-            continue
-        if re.match(r'^\s*#endif\b', ln):
-            if not depth:
-                die("%s: `#endif` with no `#if`" % key)
-            depth.pop()
-            continue
-        if re.match(r'^\s*#(else|elif|if|ifdef|ifndef|undef|define)\b', ln):
-            die("%s: this tool resolves only `#define <ID> <int>` and "
-                "`#if <ID> > <int>` / `#endif`, and got: %s" % (key, ln.strip()))
-        out.append(ln)
-    if depth:
-        die("%s: an `#if` was not closed" % key)
-    text = "\n".join(out)
-    for name, val in defs.items():
-        text = re.sub(r'\b%s\b' % name, str(val), text)
-    for ln in text.split("\n"):
-        if ln.lstrip().startswith("#") and not ln.lstrip().startswith("#version"):
-            die("%s: a directive survived expansion: %s" % (key, ln.strip()))
-    return text
 
 
 def extract(cfile):
@@ -515,8 +403,6 @@ def extract(cfile):
     between the literals and their quoted FILE NAME would otherwise be spliced
     into the middle of a shader, which is exactly the kind of fault that would
     compile and then draw something wrong."""
-    if cfile == RESTORE_HDR:
-        return extract_restore()
     lines = preprocess(cfile)
     found, i = {}, 0
     while i < len(lines):
@@ -559,11 +445,11 @@ OPAQUE = re.compile(r'^(sampler|isampler|usampler|image|iimage|uimage|texture|'
 # qualifier, type, name, optional array.
 #
 # THE PRECISION QUALIFIER IS CAPTURED SEPARATELY BECAUSE IT SITS ON THE OTHER
-# SIDE OF THE STORAGE ONE. GLSL takes it either way round and this tree writes
-# both: the varyings use `flat out vec2`, and `tagpu_restore_glsl.h` writes
-# `uniform highp sampler2DArray uAct`. Folding the second into `quals` would put
-# it back in the FIRST position, which is legal but is not what the shader said,
-# and the rewriter below re-emits each group where it was read. Unmatched, the
+# SIDE OF THE STORAGE ONE. GLSL takes it either way round: `flat out vec2`
+# puts the qualifier first, `uniform highp sampler2DArray x` puts the precision
+# after the storage qualifier. Folding the second into `quals` would put it back
+# in the FIRST position, which is legal but is not what the shader said, and the
+# rewriter below re-emits each group where it was read. Unmatched, the
 # declaration would pass through untouched and reach glslang with no binding.
 _VAR = re.compile(r'^\s*((?:(?:flat|smooth|noperspective|centroid|highp|mediump|lowp)\s+)*)'
                   r'(in|out|uniform)\s+'
@@ -588,9 +474,9 @@ def block_qual(q):
 # The same block written on ONE line, `{ members } ;` and all. Split rather than
 # parsed in place: every reader below already handles the multi-line spelling, and
 # one normalisation is a smaller thing to get right than a second code path in the
-# parser, the transform and the emitter. `tagpu_restore_glsl.h`'s
-# `layout(std140) uniform WBlock { mat4 w[WMAX]; };` is one; unsplit, the block
-# would never be seen and would never get its set/binding.
+# parser, the transform and the emitter. `layout(std140) uniform W { mat4 w[4]; };`
+# is one; unsplit, the block would never be seen and would never get its
+# set/binding.
 _BLOCK_1LINE = re.compile(
     r'^(\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*(?:uniform|readonly\s+buffer)\s+\w+\s*\{)'
     r'(.+?)'
@@ -606,11 +492,10 @@ _BLOCK_1LINE_INST = re.compile(
 def normalise_blocks(src):
     """A one-line named uniform block, spread over three lines.
 
-    THE SHADER TEXT IS NOT EDITED ON DISK, and that is the point: this header is
-    the one copy of it and is shared with tools/tascene's browser pack, so
-    reflowing it to suit a generator is what its own header forbids. The
-    normalisation happens on the way IN, before the source is parsed or
-    translated, so `residual()` still compares like with like."""
+    THE SHADER TEXT IS NOT EDITED ON DISK: a shader is written the way its
+    author wrote it, and reflowing it to suit a generator is not this tool's
+    call. The normalisation happens on the way IN, before the source is parsed
+    or translated, so `residual()` still compares like with like."""
     out = []
     for ln in src.split("\n"):
         if _BLOCK_1LINE_INST.match(ln):
@@ -678,7 +563,7 @@ def split_statements(line):
 class Shader(object):
     def __init__(self, key, stage, src):
         self.key = key            # "tagpu_fps::VS"
-        self.stage = stage        # "vert" | "frag"
+        self.stage = stage        # "vert" | "frag" | "comp"
         self.src = src
         self.globals = []         # (type, name, arrsize) in declaration order
         self.samplers = []        # (type, name)
@@ -974,6 +859,8 @@ def build_all():
     Shader with `.vk` filled in."""
     texts = {}
     for cfile in SOURCES:
+        if cfile == COMPUTE_HDR:
+            continue
         for name, src in extract(cfile).items():
             texts["%s::%s" % (cfile, name)] = normalise_blocks(src)
 
@@ -1041,6 +928,14 @@ def build_all():
             die("%s: the transform changed something that is not a declaration "
                 "-- see the diff above" % key)
 
+    # THE COMPUTE SHADERS, untranslated: each is compiled as written, so its
+    # Vulkan text IS its source and the residual check has nothing to compare.
+    for name, src in extract_compute().items():
+        key = "%s::%s" % (COMPUTE_HDR, name)
+        sh = Shader(key, "comp", src)
+        sh.vk = src
+        shaders[key] = sh
+
     return [shaders[k] for k in sorted(shaders)]
 
 
@@ -1067,6 +962,12 @@ def compile_spv(sh):
     return list(struct.unpack("<%dI" % (len(data) // 4), data))
 
 
+def nprog(shaders):
+    """The pipelines these shaders make: the paired graphics programs, and one
+    per compute shader."""
+    return len(PROGRAMS) + sum(1 for s in shaders if s.stage == "comp")
+
+
 def sym(key):
     return key.replace("::", "_")
 
@@ -1089,7 +990,7 @@ def emit(cfile, shaders, words):
          " *",
          " * The Vulkan (SPIR-V) edition of %s's shaders. The source of"
          % (HEADER_SOURCES.get(cfile,
-                               "%s%s" % (cfile, ".h" if cfile == RESTORE_HDR else ".c"))),
+                               "%s%s" % (cfile, ".h" if cfile == COMPUTE_HDR else ".c"))),
          " * truth is the GLSL string in that file; this is its translation, and",
          " * `make` fails if the two have drifted (tools/spirv-check.sh).",
          " *",
@@ -1113,13 +1014,11 @@ def emit(cfile, shaders, words):
                                                   "[%d]" % arr if arr else ""))
         # NAMED BLOCKS ARE REPORTED TOO. The header is the CONTRACT for the C
         # side (that is what the offsets above are for), and without this line a
-        # block's binding -- `tagpu_restore_glsl`'s `WBlock` -- is written down
-        # nowhere: the allocation rule is in this file's own header comment, so
-        # the only way to learn it would be to read the generator or to decode
-        # the module by hand.
-        # The block's SIZE is deliberately not reported: `WBlock` is
-        # `mat4 w[WMAX]` and WMAX is NK x kmax, which varies per variant and
-        # which the C side already computes to size its buffer.
+        # named block's binding is written down nowhere: the allocation rule is
+        # in this file's own header comment, so the only way to learn it would be
+        # to read the generator or to decode the module by hand.
+        # The block's SIZE is not reported: a storage block's last member is
+        # usually unsized, and the C side sizes its own buffer.
         for i, bn in enumerate(sh.blocks):
             L.append(" * set 0 binding %d: %s block %s"
                      % ((VERT_BASE if sh.stage == "vert" else FRAG_BASE) + 1 + i,
@@ -1259,7 +1158,7 @@ def main():
                 "Run tools/spirv-gen.py and commit tagpu/ddraw/inc/spirv/.\n")
             return 1
         print("spirv: %d shaders, %d programs, headers current"
-              % (len(shaders), len(PROGRAMS)))
+              % (len(shaders), nprog(shaders)))
         return 0
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
@@ -1272,7 +1171,7 @@ def main():
         mine = [s for s in shaders if s.key.startswith(cfile + "::")]
         emit(cfile, mine, words)
     print("spirv: %d shaders in %d programs -> %d words (%d KB) in %d headers"
-          % (len(shaders), len(PROGRAMS), total, total * 4 // 1024, len(SOURCES)))
+          % (len(shaders), nprog(shaders), total, total * 4 // 1024, len(SOURCES)))
     return 0
 
 

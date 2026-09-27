@@ -283,8 +283,9 @@ bring-up and a swapchain rebuild add nothing to them.
 |---|---|---|
 | `classicpp.on` | polled twice a second | the master arm: restored true-colour terrain, features, effects, unit textures **and the UI** (sidebar, minimap, top bar, shell), the lambert lighting and the cast shadows. Flips live; arming mid-play restores what is on screen |
 | `classicpp.cfg` | live (re-read on the poll when its mtime or size changes) | the knobs: `sun=AZ,EL` or `sun=off`, `unitsun=AZ,EL`, `amb=A`, `assets=0|1`, `light=0|1`, `shadows=0|1|2`, `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B` or `off`, `shade=S`, `terrainshadow=0|1`, `shadowres=N`, `airshadow=len|physical|drop`, `aniso=N`. Written by `tacli arm <i> 'classicpp.cfg=sun=off shadows=0'`, removed by `classicpp.cfg=off` |
-| `restoreglsl.on` | when the restorer starts (arm before launch) | the restorer core's knobs, in the file that keeps the name it had: `log` (a line per batch), `tiny` (the small model), `fp16`, and the numeric knobs in `tagpu_restore_core.c` |
-| `restoredump.on` | after each queue drains | writes `tagpu_restore_<tag>_vk.rgba` (`.mips` for the units) and its source, `.base` for a world atlas or `.r8` for the UI's, per atlas — the byte oracle (`references/measuring.md`) |
+| `restoreglsl.on` | when the restorer starts (arm before launch) | the restorer core's two knobs, in the file that keeps the name it had: `log` (a line per batch) and `budget=MS` (GPU milliseconds per frame, 0.5–100, default 12). Nothing else is read |
+| `restoredump.on` | after each queue drains (the terrain's once every neighbourhood is painted) | writes `tagpu_restore_<tag>_vk.rgba` (`.mips` for the units), its source (`.base` for a world atlas, `.r8` for the UI's), `.pal` and `.idx` per job, and the terrain's map `tagpu_restore_terr_vk.map` — the byte oracle, checked by `tools/restore-dumpcheck.py` (`references/measuring.md`) |
+| `restorefault.on` | once per process, at the first restorer frame (arm before launch) | drives the restorer's guard: `probe` spoils one byte of the launch self-test, `crash` faults inside a restorer call, `lost` has the seam report a device loss with restorer work in flight. Each turns the restorer off for this device and driver, `crash` and `lost` by relaunching the game, so **remove the file and the record afterwards** (below). Two more drive the terrain's per-tile fallback and record nothing: `nbfit` (the neighbourhood atlas does not fit) and `nballoc` (the device refuses it — on the first map after the terrain pass comes up only) |
 
 - The DLL answers every cfg read on its own lines: `classicpp: assets=1 light=1 (…)`,
   `classicpp: light sun=… unitsun=… amb=… level=…/…`, `classicpp: shadows=2(hard) shadowsun=…`;
@@ -307,12 +308,36 @@ bring-up and a swapchain rebuild add nothing to them.
   nearly invisible, so the fixture for the map is `shadowsun=225,8` on `static-terrain`.
 - `aniso=1` for a unit-pass A/B; 4 ships.
 - Read the result of a restore in the `restorevk:` lines — `restorevk: <tag>: lazy restore armed
-  (…)`, `restorevk: <tag>: done: N frames (… wrap-padded) in B batches, D draws in S of F frames = …`
+  (…)`, `restorevk: <tag>: done: N frames (… wrap-padded) in B batches, D dispatches in S of F frames = …`
   and, with `restoredump.on`, `restorevk: <tag>: restored atlas dumped to …`. The tags are
-  `terr`, `feat`, `fx`, `unit` and `gui`. The fps in the
+  `terr`, `feat`, `fx`, `unit`, `gui` and `pic`, plus the self-test's `probe-base`,
+  `probe-pal` and `probe-nbhd`. The fps in the
   `done` line is the rate the game held during the restore. The first job of every launch is abandoned by the
   startup reset and restarted; the `done` line is the second job's. Wait for it before a parity
   capture.
+- **The terrain restores by neighbourhood** where its atlas fits: `vk: terr: the terrain restores by
+  neighbourhood - K keys in a WxH atlas: … MB against half of the … MB the driver says is free`
+  (or `… a quarter of the … heap: no memory-budget query here`), else `… does not fit … - the
+  terrain restores per tile`. Its job is fed, so it has no `done` line: wait for `vk: terr: every
+  neighbourhood painted here - K keys, … ms since the job began` (about 20 s on Two Continents)
+  before a whole-map capture. The first screen is painted within about 0.1 s.
+- **Nothing restores before the self-test's line**: `restorevk: self-test passed on <vendor:device:driver>:
+  N bytes within 0 level(s) of the CPU reference, computed in … ms`, once per device per process. A
+  `self-test FAILED` or `could not be run` line means the art stays dithered.
+- **The restorer can be off by record.** `restoreguard:` lines say why: the crash filter installed
+  at the restorer's first bring-up, a record naming this device (`recorded off for …`), a record
+  dropped for a new driver, card or build. The key is `vendor:device:driver:build`, the build being
+  the DLL's commit, so **every rebuild from a new commit drops the record** and tests again.
+  The record is `restoreoff=` in the instance's `impure.cfg`, or `tagpu_restore_off.txt` in the
+  gamedir under `tagpu_defaults.off`; `tagpu_restore_crashed.txt` is the marker a crash leaves for
+  the relaunch: read at the first bring-up only, dropped when it names another build or device,
+  and deleted once the disk holds the record (`the crash marker is deleted`).
+  Delete all three by hand to start clean. The render options' *Undithered assets* row reading
+  "Off (driver)" is the same record, and picking On from it or from Off retries; under
+  `tagpu_defaults.off` that row is greyed, so the file goes by hand.
+- **A relaunch logs `this process is a relaunch … it waited for the crashed process to end`**:
+  it holds at attach until the old process is gone, since TotalA.exe exits silently while another
+  copy holds its semaphore. `tacli ls` then shows the new pid; `tacli` commands keep working.
 
 ## The Vulkan lane
 

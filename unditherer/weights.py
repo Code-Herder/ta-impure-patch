@@ -1,26 +1,28 @@
-"""The GLSL restorer's weight file: the model's convolutions, BatchNorm already
-folded, laid out exactly as the fragment shaders index them, so the shader does
-no reshaping at all.
+"""The Classic++ restorer's weight file: the model's convolutions, BatchNorm
+already folded, in channel tiles of four.  The game reads it three ways: the
+compute backend repacks it once into its conv kernel's layout
+(tagpu/ddraw/src/tagpu_vk_restore.c `repack`), the launch self-test's CPU
+reference runs from it (tagpu_restore_ref.c), and tools/spirv-gen.py takes the
+layer shapes out of it to generate one conv shader per shape.
 
     python -m unditherer export-weights --model full      # -> models/full.w32.bin
 
-THE SHADER'S VIEW.  Activations are stored four channels per texel ("channel
-tiles": tile j holds channels 4j..4j+3), and one conv pass computes output tile
-k from the 9 taps x Jin input tiles of the previous layer.  For every (k, tap,
-j) the shader wants a 4x4 matrix M with M[o][i] = W[4k+o][4j+i][tap], applied
-as `acc += M * a` where `a` is the input tile's texel -- in GLSL a mat4 is four
-COLUMN vectors, so column c is the weights of input channel 4j+c across the
-four output channels.  A layer's k-block is therefore:
+THE LAYOUT.  Channels are grouped four at a time ("channel tiles": tile j holds
+channels 4j..4j+3), and output tile k of a layer is computed from the 9 taps x
+Jin input tiles of the previous layer.  For every (k, tap, j) the file holds a
+4x4 matrix M with M[o][i] = W[4k+o][4j+i][tap], applied as `acc += M * a` where
+`a` is the input tile -- stored as a GLSL mat4 is, four COLUMN vectors, so
+column c is the weights of input channel 4j+c across the four output channels.
+A layer's k-block is therefore:
 
     mat4 0            bias in column 0 (the other three columns are 0)
     mat4 1 + t*Jin + j    the 4x4 for tap t (t = ky*3 + kx, ONNX order:
                           offset (kx-1, ky-1)) and input tile j
 
-padded to a multiple of 256 bytes, because the blocks are bound one (or a few)
-at a time as a std140 uniform-block range and 256 is the largest
-UNIFORM_BUFFER_OFFSET_ALIGNMENT any driver reports.  Channels that do not
-exist (the 4th input of layer 0, the 4th output of the last layer) are zero
-weights, so the shader never special-cases them.
+padded to a multiple of 256 bytes, which is part of the format: a reader
+steps by the header's `kstride`, never by the matrix count.  Channels that do
+not exist (the 4th input of layer 0, the 4th output of the last layer) are zero
+weights, so no reader special-cases them.
 
 THE FILE.  Little-endian:
 
@@ -33,9 +35,8 @@ vec4s per k-block (4 x mat4 count, padded).  Layer l's k-block k starts at
 offset + k * kstride.  Everything a consumer needs is in the header; the only
 formula it must know is the mat4 index above.
 
-`run_reference` below runs the model FROM THE PACKED BLOCKS, tap by tap,
-exactly as the shader does, so a layout mistake shows up here against
-onnxruntime without a shader.
+`run_reference` below runs the model FROM THE PACKED BLOCKS, tap by tap, so a
+layout mistake shows up here against onnxruntime without the game.
 """
 import struct
 from pathlib import Path

@@ -123,6 +123,18 @@ const char* tagpu_settings_gpu(void);
    lock, which the serialiser takes too. */
 void tagpu_settings_set_gpu(const char* name);
 
+/* The device, driver and build the restorer is recorded off for,
+   `vendor:device:driver:build` (tagpu_restore_guard.h); "" for none, and
+   always "" under tagpu_defaults.off. Render thread; copied under the store's
+   lock, which the store's own write holds. */
+void tagpu_settings_restoreoff(char* out, int cap);
+void tagpu_settings_set_restoreoff(const char* key);
+/* 1 when the store's FILE carries `key` as its record: read so at load, or
+   written so by the last write that succeeded. The record is set in memory at
+   once and reaches the file on the flushing thread's schedule; this is the
+   answer to "is it on disk yet". 0 under tagpu_defaults.off. */
+int  tagpu_settings_restoreoff_saved(const char* key);
+
 /* The windowed frame: x, y and the client size, 0,0 for the size the game
    asks for. 0 when the store has none; answered under tagpu_defaults.off too.
    Read at attach (tagpu_cfg.c). */

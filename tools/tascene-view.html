@@ -307,9 +307,6 @@
 <div id="err"></div>
 
 <script type="module">
-import { RESTORE_SHADERS, Restorer, parseWeights, terrainFrames, featureFrames, readTexture,
-         diffAtlas, diffFrames }
-  from "./tascene-restore.js";
 const Q = new URLSearchParams(location.search);
 const SHOT = Q.get("shot") === "1";
 const SS   = Math.max(1, parseInt(Q.get("ss") || "2", 10));
@@ -364,8 +361,7 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
                       "terrainshadow", "shadowres", "unitsun", "shadowsun",
-                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit", "pbias", "mindist", "castsmooth", "noff", "pofac", "pounits",
-                      "nk", "restorediff"];
+                      "shadowlen", "airshadow", "bslack", "bfloor", "castsplit", "pbias", "mindist", "castsmooth", "noff", "pofac", "pounits"];
 
 function sideQuery(side, presets) {
   const p = new URLSearchParams();
@@ -511,25 +507,6 @@ function readLook(p, label) {
         fail(`${label}: airshadow must be drop, len or physical`);
       return v;
     })(),
-    // the terrain's restored colour: the pack's pre-restored atlas, or the
-    // GLSL restorer run here on the pack's R8 atlas (tascene-restore.js)
-    restore: (() => {
-      const v = p.get("restore") || "pack";
-      if (!["pack", "glsl"].includes(v)) fail(`${label}: restore must be pack or glsl`);
-      return v;
-    })(),
-    model: (() => {
-      const v = p.get("model") || "full";
-      if (!["full", "tiny"].includes(v)) fail(`${label}: model must be full or tiny`);
-      return v;
-    })(),
-    precision: (() => {
-      const v = p.get("precision") || "fp32";
-      if (!["fp32", "fp16"].includes(v)) fail(`${label}: precision must be fp32 or fp16`);
-      return v;
-    })(),
-    nk: p.get("nk") === null ? null : Math.max(1, num("nk", 1) | 0),
-    restorediff: p.get("restorediff") === "1",
     // past the map's edge (header, EDGE): black, as the game draws it, or the
     // map mirrored across the edge in the fog's grey, dimmed and faded
     edge: (() => {
@@ -1243,7 +1220,7 @@ async function main() {
   // aircraft, so that lane needs the parity unit program compiled as well
   const wantUnitClassic = wantParity || any(
     (L) => L.lane === "explore" && L.airshadow === "drop" && L.unitShadows);
-  let wantRGB = any((L) => L.undither);
+  const wantRGB = any((L) => L.undither);
   const labD = scene.labDepth || { terrain: 0.10, flat: 0.50, tallCol: 0.9 };
   // tagpu_terr.c's guard rail: cells sit CELL_PITCH apart and the border texel
   // is a COPY of the cell's edge, so a fragment landing exactly on a quad's far
@@ -1253,18 +1230,8 @@ async function main() {
   const PITCH = map.atlas.pitch || TILE_PX;
   const BORDER = map.atlas.border || 0;
 
-  // restore=glsl on any Classic++ side restores the terrain HERE, from the R8
-  // atlas; the side that names it decides model/precision/nk for the one atlas
-  const glslSide = sides.find((L) => L.lane === "explore" && L.restore === "glsl") || null;
-  if (glslSide) { for (const L of sides) if (L.lane === "explore") L.undither = true; wantRGB = true; }
-  if (wantRGB && !map.atlas.rgba && !glslSide)
+  if (wantRGB && !map.atlas.rgba)
     fail("undither=1, but this pack has no restored atlases.\n" +
-         "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");
-  if (glslSide && !(scene.restore && scene.restore.weights && scene.restore.weights[glslSide.model]))
-    fail(`restore=glsl, but this pack carries no ${glslSide.model} weights.\n` +
-         "Rebuild it with:  tools/tascene build <scenario> -o <pack>");
-  if (glslSide && glslSide.restorediff && !map.atlas.rgba)
-    fail("restorediff=1 needs the pack's own restored atlas to diff against.\n" +
          "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");
 
   const [atlasBuf, tilemapBuf, heightBuf, palBuf, terrVS, terrFS, sprVS, sprFS] =
@@ -1300,7 +1267,7 @@ async function main() {
     }));
   }
   const [terrRGB, featRGB, unitRGB] = wantRGB ? await Promise.all([
-    map.atlas.rgba && (!glslSide || glslSide.restorediff) ? fetchBin(map.atlas.rgba) : null,
+    map.atlas.rgba ? fetchBin(map.atlas.rgba) : null,
     hasFeat && scene.features.atlas.rgba ? fetchBin(scene.features.atlas.rgba) : null,
     hasUnit && scene.units.atlas.rgba ? fetchBin(scene.units.atlas.rgba) : null,
   ]) : [null, null, null];
@@ -1367,46 +1334,7 @@ async function main() {
     for (let r = 0; r < 32; r++) k[r] = raw[r] / n;
     return k;
   }
-  let restoreReport = null, restorer = null, palTexObj = null;
-  // an RGBA8 destination for the restorer, bound on `unit`
-  const restoreDest = (unit, w, h) => {
-    const dest = { tex: gl.createTexture(), w, h };
-    gl.activeTexture(gl.TEXTURE0 + unit);
-    gl.bindTexture(gl.TEXTURE_2D, dest.tex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return dest;
-  };
-  if (glslSide) {
-    // the GLSL restorer, on the very R8 atlas texture bound on unit 0; the
-    // same restorer runs the feature atlas below, once that is uploaded
-    const [wBytes, ...bodies] = await Promise.all([
-      fetchBin(scene.restore.weights[glslSide.model]),
-      ...RESTORE_SHADERS.map((n) => fetchText("shaders/" + n)),
-    ]);
-    const shaders = Object.fromEntries(RESTORE_SHADERS.map((n, i) => [n, bodies[i]]));
-    gl.activeTexture(gl.TEXTURE0);
-    const atlasTex = gl.getParameter(gl.TEXTURE_BINDING_2D);   // unit 0: the R8 atlas
-    gl.activeTexture(gl.TEXTURE1);
-    palTexObj = gl.getParameter(gl.TEXTURE_BINDING_2D);         // unit 1: the palette
-    const dest = restoreDest(8, map.atlas.w, map.atlas.h);
-    restorer = new Restorer(gl, shaders, parseWeights(wBytes),
-                            { precision: glslSide.precision, nk: glslSide.nk });
-    const frames = terrainFrames(map, atlasBuf, palBuf);
-    const stats = await restorer.restore(frames, atlasTex, palTexObj, dest);
-    restoreReport = { model: glslSide.model, ...stats };
-    if (glslSide.restorediff) {
-      const got = readTexture(gl, dest.tex, dest.w, dest.h);
-      restoreReport.diff = diffAtlas(got, terrRGB, map);
-    }
-    gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, dest.tex);
-    gl.activeTexture(gl.TEXTURE0);
-  } else {
-    rgbaTex(8, terrRGB, map.atlas.w, map.atlas.h);
-  }
+  rgbaTex(8, terrRGB, map.atlas.w, map.atlas.h);
 
   // ---- offscreen(s) at game resolution (x SS). One per wipe side, because the
   // wipe compares two whole frames, not two halves of one.
@@ -1520,37 +1448,9 @@ async function main() {
   let sprVerts = null, esProg = null, esVAO = null, esVBO = null, ESU = {};
   let esVerts = new Float32Array(1);
   if (hasFeat) {
-    const featTex = tex2D(gl, 5, gl.R8, scene.features.atlas.w, scene.features.atlas.h,
-                          gl.RED, gl.UNSIGNED_BYTE, featAtlas);
-    if (restorer) {
-      // the feature atlas through the same restorer: colour-keyed, non-square
-      // frames of many sizes in one shelf — the shape of the game's lazy GAF
-      // restore (renderers.md 4b Option 4). Its diff has two bands, see
-      // diffFrames.
-      const dest = restoreDest(9, scene.features.atlas.w, scene.features.atlas.h);
-      const frames = featureFrames(scene.features, featAtlas, palBuf);
-      const stats = await restorer.restore(frames, featTex, palTexObj, dest);
-      restoreReport.features = { ...stats };
-      if (glslSide.restorediff && featRGB) {
-        const got = readTexture(gl, dest.tex, dest.w, dest.h);
-        restoreReport.features.diff = diffFrames(got, featRGB, frames, featAtlas,
-                                                 scene.features.atlas.w, restorer.W.depth);
-        restoreReport.features.frames_list = frames.map((f) => ({ id: f.id, name: f.name, x: f.ax, y: f.ay, w: f.w, h: f.h, wrap: f.wrap, key: f.key }));
-        // the restored atlas itself, for `tascene restore --save-features`:
-        // base64 in a hidden element, the way the report travels
-        let bin = "";
-        for (let i = 0; i < got.length; i += 0x8000)
-          bin += String.fromCharCode.apply(null, got.subarray(i, Math.min(i + 0x8000, got.length)));
-        const pre = document.createElement("pre");
-        pre.id = "restore-features"; pre.hidden = true;
-        pre.textContent = btoa(bin);
-        document.body.appendChild(pre);
-      }
-      gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, dest.tex);
-      gl.activeTexture(gl.TEXTURE0);
-    } else {
-      rgbaTex(9, featRGB, scene.features.atlas.w, scene.features.atlas.h);
-    }
+    tex2D(gl, 5, gl.R8, scene.features.atlas.w, scene.features.atlas.h,
+          gl.RED, gl.UNSIGNED_BYTE, featAtlas);
+    rgbaTex(9, featRGB, scene.features.atlas.w, scene.features.atlas.h);
     sprVBO = gl.createBuffer();
     if (wantParity) {
       sprProg = program(gl, sprVS, sprFS, "sprite");
@@ -1615,15 +1515,6 @@ async function main() {
     ESU = uniforms(gl, esProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uAtlas", "uRGB",
                                 "uUndither", "uPal", "uMapPx", "uEdge", "uDither"]);
   }
-  if (restorer) {
-    restorer.dispose();
-    // the report is DOM text so a headless run (`tascene restore`) can read it
-    const pre = document.createElement("pre");
-    pre.id = "restore-report"; pre.hidden = true;
-    pre.textContent = JSON.stringify(restoreReport);
-    document.body.appendChild(pre);
-  }
-
   // ---- unit pass — tagpu_native.c's shaders, tagpu_render3do.c's geometry rule
   const UVST = 17;      // x,y,enc, u,v, fc,ck, shade, wx,wz, vy, nx,ny,nz, WX,WY,WZ
   let uProg = null, uVAO = null, uVBO = null, luProg = null, UU = {}, LUU = {};
@@ -2916,27 +2807,7 @@ async function main() {
                        `<span>shadowsun</span><b>${L.shadowSunAE.join(",")}</b>` : "") +
             `<span>amb</span><b>${L.amb.toFixed(2)}</b>` +
             `<span>slope</span><b>${L.slope}</b>` +
-            `<span>colour</span><b>${L.undither ? "restored" : "indexed"}` +
-            (restoreReport && L === glslSide
-              ? ` (glsl ${restoreReport.model} ${restoreReport.precision} nk${restoreReport.nk}` +
-                ` ${restoreReport.ms.toFixed(0)} ms` +
-                (restoreReport.diff
-                  ? `; diff ${restoreReport.diff.pass ? "PASS" : "FAIL"} max ${restoreReport.diff.max}` +
-                    ` ${restoreReport.diff.differing}/${restoreReport.diff.bytes} bytes` +
-                    ` ${restoreReport.diff.pct.toFixed(4)}% ring ${restoreReport.diff.ring}`
-                  : "") +
-                (restoreReport.features
-                  ? `; features ${restoreReport.features.frames} frames ${restoreReport.features.ms.toFixed(0)} ms` +
-                    (restoreReport.features.diff
-                      ? ` far ${restoreReport.features.diff.far.pass ? "PASS" : "FAIL"}` +
-                        ` max ${restoreReport.features.diff.far.max}` +
-                        ` ${restoreReport.features.diff.far.pct.toFixed(4)}%,` +
-                        ` near max ${restoreReport.features.diff.near.max}` +
-                        ` mean ${restoreReport.features.diff.near.mean.toFixed(3)}` +
-                        ` alpha-bad ${restoreReport.features.diff.alpha_bad}`
-                      : "")
-                  : "") + ")"
-              : "") + `</b>` +
+            `<span>colour</span><b>${L.undither ? "restored" : "indexed"}</b>` +
             `<span>filter</span><b>${L.filter}${L.filter === "linear" && L.aniso > 1
                 ? ` ·${Math.min(L.aniso, ANISO_MAX || 1)}x` : ""}</b>` +
             `<span>shadows</span><b>${L.shadows

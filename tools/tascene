@@ -368,7 +368,22 @@ def _macro_body(body: str, params, args) -> str:
     return "".join(out)
 
 
-def expand_glsl(body: str, macros) -> str:
+def read_int_macros(src_dir: Path):
+    """Every `#define TAGPU_NAME <integer>` of the tree's headers, as its text.
+
+    A shader string can stringify one of these -- tagpu_feat.c writes
+    `FEAT_S(TAGPU_FEAT_MIRROR)`, whose `#x` makes the literal "4" -- and the
+    tokenizer below sees only the name inside it. The preprocessor's answer is
+    the integer's own spelling, so that is what the expansion writes."""
+    ints = {}
+    for h in sorted(src_dir.glob("*.h")):
+        for m in re.finditer(r"^#define[ \t]+(TAGPU_\w+)[ \t]+(-?\d+)[ \t]*(?:/[*/].*)?$",
+                             h.read_text(errors="replace"), flags=re.M):
+            ints.setdefault(m.group(1), m.group(2))
+    return ints
+
+
+def expand_glsl(body: str, macros, ints=None) -> str:
     """Concatenate string literals and expand TAGPU_GLSL_* invocations in order."""
     out = []
     i = 0
@@ -381,6 +396,9 @@ def expand_glsl(body: str, macros) -> str:
             out.append(_unescape(text[1:-1]))
             continue
         name = re.match(r"TAGPU_\w+", text).group(0)
+        if name not in macros and ints and name in ints:
+            out.append(ints[name])
+            continue
         if name not in macros:
             # never drop it: a silently missing token is a shader that either
             # fails to compile or, worse, compiles and renders subtly wrong
@@ -400,6 +418,7 @@ def expand_glsl(body: str, macros) -> str:
 def extract_shaders(pairs):
     """[(c_source, {glsl_name: c_symbol})] -> {glsl_name: source}, GLSL ES 300."""
     macros = read_glsl_macros(SRC_ROOT / "tagpu/ddraw/src/tagpu_glsl.h")
+    ints = read_int_macros(SRC_ROOT / "tagpu/ddraw/src")
     out = {}
     for src, wanted in pairs:
         path = SRC_ROOT / "tagpu/ddraw/src" / src
@@ -411,7 +430,7 @@ def extract_shaders(pairs):
                           text, flags=re.S)
             if not m:
                 die(f"{src}: cannot find `static const char* {symbol} =`")
-            body = expand_glsl(m.group(1), macros)
+            body = expand_glsl(m.group(1), macros, ints)
             if not body.startswith("#version 330 core\n"):
                 die(f"{src}:{symbol} does not start with #version 330 core")
             out[glsl_name] = GLSL_ES_HEADER + body[len("#version 330 core\n"):]
@@ -421,48 +440,6 @@ def extract_shaders(pairs):
 SHADER_SET = [("tagpu_terr.c", {"terrain.vert": "VS", "terrain.frag": "FS"}),
               ("tagpu_feat.c", {"sprite.vert": "VS", "sprite.frag": "FS"}),
               ("tagpu_native.c", {"unit.vert": "VS", "unit.frag": "FS"})]
-
-# The GLSL restorer's shaders (renderers.md 4c) live as macros in their own
-# header, with no #version line: the DLL prefixes "#version 330 core" and the
-# lab "#version 300 es" plus the NK/WMAX defines, and the body is the same
-# bytes on both sides -- that is the whole point of extracting rather than
-# copying (tascene-restore.js is the driver, not a second shader).
-RESTORE_HEADER = "tagpu_restore_glsl.h"
-RESTORE_SHADERS = {"restore_fs.vert": "TAGPU_RESTORE_FS_VS",
-                   "restore_fill.frag": "TAGPU_RESTORE_FILL_FS",
-                   "restore_conv.frag": "TAGPU_RESTORE_CONV_FS",
-                   "restore_out.vert": "TAGPU_RESTORE_OUT_VS",
-                   "restore_out.frag": "TAGPU_RESTORE_OUT_FS"}
-RESTORE_MODELS = ("full", "tiny")
-
-
-def extract_restore_shaders():
-    """{glsl_name: body} from tagpu_restore_glsl.h, bodies without a #version."""
-    header = SRC_ROOT / "tagpu/ddraw/src" / RESTORE_HEADER
-    if not header.exists():
-        die(f"no such tagpu header: {header}")
-    macros = read_glsl_macros(header)
-    out = {}
-    for glsl_name, symbol in RESTORE_SHADERS.items():
-        if symbol not in macros:
-            die(f"{RESTORE_HEADER}: no macro {symbol}")
-        params, body = macros[symbol]
-        text = _macro_body(body, params, [])
-        if not text.strip():
-            die(f"{RESTORE_HEADER}: {symbol} is empty")
-        out[glsl_name] = text
-    return out
-
-
-def restore_weights():
-    """{model: path} of the shipped weight files (unditherer export-weights)."""
-    found = {}
-    for name in RESTORE_MODELS:
-        path = SRC_ROOT / "unditherer/models" / f"{name}.w32.bin"
-        if path.exists():
-            found[name] = path
-    return found
-
 
 # --------------------------------------------------------------------------- undither
 
@@ -1204,14 +1181,6 @@ def cmd_build(args):
 
     for name, src in extract_shaders(SHADER_SET).items():
         (out / "shaders" / name).write_text(src)
-    for name, src in extract_restore_shaders().items():
-        (out / "shaders" / name).write_text(src)
-    weights = restore_weights()
-    if not weights:
-        die("no restorer weights in unditherer/models (run: python -m unditherer export-weights)")
-    (out / "restore").mkdir(exist_ok=True)
-    for name, path in weights.items():
-        (out / "restore" / path.name).write_bytes(path.read_bytes())
 
     defs = FeatureDefs(assets)
     features = None
@@ -1242,11 +1211,7 @@ def cmd_build(args):
         "depth": {"terrain": 0.10, "scale": 512.0,
                   "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0, "rowStep": 4.0,
                   "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
-        "shaders": sorted(list(extract_shaders(SHADER_SET)) + list(RESTORE_SHADERS)),
-        # the GLSL restorer: the viewer's restore=glsl runs these shaders with
-        # these weights on terrain/atlas.r8.bin (tascene-restore.js)
-        "restore": {"weights": {n: f"restore/{p.name}" for n, p in weights.items()},
-                    "shaders": sorted(RESTORE_SHADERS)},
+        "shaders": sorted(extract_shaders(SHADER_SET)),
         # the exploration lane's own depth keys: with a HEIGHTFIELD the ground
         # is per-row, so the parity lane's one global terrain key (and the flat
         # features' global 0.40-0.50 band, which would then sit behind it) do
@@ -1295,7 +1260,6 @@ def scenario_centre(scenario, tnt):
 
 VIEWER = HERE / "tascene-view.html"
 PRESETS = HERE / "tascene-presets.json"
-RESTORE_JS = HERE / "tascene-restore.js"
 
 
 def cmd_serve(args):
@@ -1331,7 +1295,7 @@ RELOAD_TOKEN = "__reload"
 def _source_token() -> str:
     """mtime+size of every checked-in file the served page is built from."""
     parts = []
-    for f in (VIEWER, PRESETS, RESTORE_JS):
+    for f in (VIEWER, PRESETS):
         st = f.stat() if f.exists() else None
         parts.append(f"{f.name}:{st.st_mtime_ns}:{st.st_size}" if st else f"{f.name}:-")
     return " ".join(parts)
@@ -1364,7 +1328,6 @@ def _stage_viewer(pack: Path):
     if not VIEWER.exists():
         die(f"viewer missing: {VIEWER}")
     (pack / VIEWER.name).write_text(VIEWER.read_text())
-    (pack / RESTORE_JS.name).write_text(RESTORE_JS.read_text())
     if PRESETS.exists():
         (pack / PRESETS.name).write_text(PRESETS.read_text())
 
@@ -1398,110 +1361,11 @@ def cmd_shot(args):
 
 # --------------------------------------------------------------------------- restore
 
-# The GLSL restorer's bench (renderers.md 4c, Q2/Q3): the viewer under
-# restore=glsl&restorediff=1 in headless Chrome, its report read out of the DOM.
-# SwiftShader is the default renderer (deterministic, slow); --gpu vulkan asks
-# ANGLE for the real adapter, which is where the wall times mean anything.
-
-def cmd_restore(args):
-    pack = Path(args.pack).resolve()
-    if not (pack / "scene.json").exists():
-        die(f"{pack} has no scene.json (run `tascene build` first)")
-    _stage_viewer(pack)
-    scene = json.loads((pack / "scene.json").read_text())
-    if not scene.get("restore"):
-        die(f"{pack} was built before the restorer: rebuild it")
-    if args.diff and not scene["map"]["atlas"].get("rgba"):
-        die(f"{pack} has no terrain/atlas.rgba.bin to diff against: rebuild with --undither")
-    w, h = scene["view"]["res"]
-    q = {"shot": "1", "lane": "classicpp", "restore": "glsl", "model": args.model,
-         "precision": args.precision, "restorediff": "1" if args.diff else "0",
-         "pass": "terrain,features"}      # both restored atlases; units are not restored in the page
-    if args.nk:
-        q["nk"] = str(args.nk)
-    if args.opts:
-        for k, v in urllib.parse.parse_qsl(args.opts):
-            q[k] = v
-    chrome = ta3do.find_chrome()
-    display = ta3do.Display()
-    server = ta3do.Viewer(pack)
-    try:
-        url = f"{server.base}/{VIEWER.name}?" + urllib.parse.urlencode(q)
-        dom, error = ta3do.dump_dom(chrome, display.name, url, (w, h), args.timeout,
-                                    args.budget, gpu=args.gpu)
-        if error:
-            die(error)
-    finally:
-        server.close()
-        display.close()
-    m = re.search(r'<pre id="restore-report"[^>]*>(.*?)</pre>', dom, flags=re.S)
-    if not m:
-        err = re.search(r'<pre id="err"[^>]*>(.*?)</pre>', dom, flags=re.S)
-        die("the page produced no restore report" +
-            (": " + html.unescape(err.group(1)).strip()[:600] if err else " (and no error banner)"))
-    rep = json.loads(html.unescape(m.group(1)))
-    rep["renderer"] = args.gpu or "swiftshader"
-    if args.save_features:
-        fm = re.search(r'<pre id="restore-features"[^>]*>(.*?)</pre>', dom, flags=re.S)
-        if not fm:
-            die("--save-features needs --diff and a pack with features")
-        Path(args.save_features).expanduser().write_bytes(base64.b64decode(html.unescape(fm.group(1)).strip()))
-        rep["saved_features"] = str(args.save_features)
-    verdict = None
-    if args.diff:
-        d = rep["diff"]
-        verdict = (f"{'PASS' if d['pass'] else 'FAIL'}: max {d['max']} level(s), "
-                   f"{d['differing']}/{d['bytes']} interior bytes differ ({d['pct']:.4f}%), "
-                   f"guard ring {d['ring']}/{d['ring_bytes']} not a copy of the edge, "
-                   f"worst tile {d['worst']} ({d['worst_bytes']} bytes)")
-    gpu = rep.get("gpu_ms")
-    ms = lambda v: f"{v['gpu_ms']:.0f} ms GPU" if gpu is not None else f"{v['ms']:.0f} ms wall"
-    by = ", ".join(f"S{k}: {v['frames']} frames in {v['batches']} batches {ms(v)}"
-                   for k, v in rep["by_slot"].items())
-    total = (f"{rep['wall_ms']:.0f} ms wall" +
-             (f", {gpu:.0f} ms GPU (first batch {rep['first_gpu_ms']:.0f} ms)" if gpu is not None
-              else " (no GPU timer)"))
-    human = (f"{rep['model']} {rep['precision']} nk={rep['nk']} on {rep['renderer']}: "
-             f"{rep['frames']} frames ({rep['wrapped']} wrap-padded), {rep['draws']} draws, "
-             f"{total}; {by}"
-             + (f"\n{verdict}" if verdict else "") + (f"\nGL error 0x{rep['gl_error']:x}" if rep.get("gl_error") else ""))
-    # the feature atlas: colour-keyed frames, two bands (renderers.md 4c). The
-    # bar applies to `far` -- opaque texels beyond the model's reach of any
-    # keyed texel; `near` is where the inpaint stand-in differs from TELEA by
-    # construction, reported for the eye
-    feat = rep.get("features")
-    failed = bool(args.diff and not rep["diff"]["pass"])
-    if feat:
-        fb = ", ".join(f"S{k}: {v['frames']} in {v['batches']} batch{'es' if v['batches'] != 1 else ''}"
-                       f" ({v['cols']}x{v['cols']} slots) {ms(v)}"
-                       for k, v in feat["by_slot"].items())
-        human += (f"\nfeatures: {feat['frames']} frames ({feat['keyed']} keyed, {feat['wrapped']} wrap-padded), "
-                  f"{feat['draws']} draws, {feat['wall_ms']:.0f} ms wall"
-                  + (f", {feat['gpu_ms']:.0f} ms GPU" if feat.get("gpu_ms") is not None else "")
-                  + f"; {fb}")
-        d = feat.get("diff")
-        if d:
-            human += (f"\n  far band (> {d['radius']} px from any key): "
-                      f"{'PASS' if d['far']['pass'] else 'FAIL'}: max {d['far']['max']} level(s), "
-                      f"{d['far']['differing']}/{d['far']['bytes']} bytes differ ({d['far']['pct']:.4f}%)"
-                      f"\n  near band: max {d['near']['max']} level(s), mean {d['near']['mean']:.3f}, "
-                      f"{d['near']['differing']}/{d['near']['bytes']} bytes differ ({d['near']['pct']:.2f}%); "
-                      f"{d['keyed_texels']} keyed texels, alpha wrong on {d['alpha_bad']}, "
-                      f"worst frame {d['worst']} ({d['worst_bytes']} bytes)")
-            if not d["pass"]:
-                failed = True
-        elif args.diff:
-            human += "\n  (no features/atlas.rgba.bin in the pack: not diffed)"
-    ta3do.out(rep, args.json, human=human)
-    if failed:
-        sys.exit(1)
-
-
 # The in-game proof (renderers.md 4c Q8): tagpu_restoredump.on makes the DLL
-# write its finished atlas once, as raw RGBA in the terrain pass's layout, and
-# this holds it to the pack's atlas with the same bar as `restore` -- same
-# tiles, same 2176-wide 34-pitch cells, same order, so the file diffs byte for
-# byte with no re-layout.
+# write the terrain's finished twin once, as raw RGBA in the terrain pass's
+# layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's atlas
+# with the Q2 bar -- same tiles, same 2176-wide 34-pitch cells, same order, so
+# the file diffs byte for byte with no re-layout.
 
 def cmd_restorediff(args):
     pack = Path(args.pack).resolve()
@@ -1565,10 +1429,9 @@ def cmd_restorediff(args):
 # tagpu_restoredump.on makes the DLL write each GAF atlas's restored twin
 # once (tagpu_gaf.c dump_if_armed) -- <prefix>.r8, .rgba and .idx -- and this
 # finds every dumped entry's frame in the pack (same size, identical palette
-# indices) and holds the twin to the two-band bar tascene-restore.js
-# diffFrames applies in the lab: the Q2 bar beyond the model's reach of any
-# keyed texel, the near band reported; alpha 0 on the key, the 1-texel border
-# a copy of the edge.
+# indices) and holds the twin to the two-band bar: the Q2 bar beyond the
+# model's reach of any keyed texel, the near band reported; alpha 0 on the
+# key, the 1-texel border a copy of the edge.
 
 def _frame_bands(got, ref, r8, W, x, y, w, h, key, wrap, border, radius, acc):
     """one frame's bytes into acc (far/near/alpha/ring tallies); `border` is
@@ -1637,7 +1500,11 @@ def _read_dump(prefix):
     """(prefix, entries, R8 bytes, RGBA bytes, dim) of one DLL-dumped atlas
     twin — <prefix>.{r8,rgba,idx}, written under tagpu_restoredump.on."""
     prefix = Path(prefix).expanduser()
-    idx = [tuple(int(v) for v in line.split()) for line in (prefix.with_suffix(".idx")).read_text().split("\n") if line.strip()]
+    # `x y w h key wrap` are the first six columns of an entry line; the
+    # backend's `# atlas W H` header and its ring columns are for
+    # tools/restore-dumpcheck.py
+    idx = [tuple(int(v) for v in line.split()[:6]) for line in (prefix.with_suffix(".idx")).read_text().split("\n")
+           if line.strip() and not line.startswith("#")]
     gr8 = prefix.with_suffix(".r8").read_bytes()
     grgba = prefix.with_suffix(".rgba").read_bytes()
     dim = int(round(len(gr8) ** 0.5))
@@ -2110,29 +1977,10 @@ def main(argv=None):
     t.add_argument("--json", action="store_true")
     t.set_defaults(func=cmd_shot)
 
-    rs = sub.add_parser("restore", help="run the GLSL restorer on a pack's terrain and feature "
-                                          "atlases in headless Chrome and diff them against the pack's")
-    rs.add_argument("pack")
-    rs.add_argument("--model", choices=("full", "tiny"), default="full")
-    rs.add_argument("--precision", choices=("fp32", "fp16"), default="fp32")
-    rs.add_argument("--nk", type=int, help="output channel-tiles per conv draw (default: the device's max)")
-    rs.add_argument("--no-diff", dest="diff", action="store_false",
-                    help="time it only; do not diff against terrain/atlas.rgba.bin")
-    rs.add_argument("--save-features", metavar="RGBA",
-                    help="write the restored feature atlas (raw RGBA, the pack's layout) here")
-    rs.add_argument("--gpu", choices=("vulkan", "gl"),
-                    help="ANGLE backend on the real adapter instead of SwiftShader")
-    rs.add_argument("--opts", help="extra viewer query, e.g. 'eye=0,0'")
-    rs.add_argument("--timeout", type=float, default=900.0)
-    rs.add_argument("--budget", type=int, default=60000,
-                    help="chrome --virtual-time-budget in ms")
-    rs.add_argument("--json", action="store_true")
-    rs.set_defaults(func=cmd_restore)
-
-    rd = sub.add_parser("restorediff", help="diff the DLL's tagpu_restore.rgba dump against a "
+    rd = sub.add_parser("restorediff", help="diff the DLL's terrain twin dump against a "
                                               "pack's restored terrain atlas (the in-game proof)")
     rd.add_argument("pack")
-    rd.add_argument("dump", help="gamedir/tagpu_restore.rgba, written under tagpu_restoredump.on")
+    rd.add_argument("dump", help="gamedir/tagpu_restore_terr_vk.rgba, written under tagpu_restoredump.on")
     rd.add_argument("--json", action="store_true")
     rd.set_defaults(func=cmd_restorediff)
     fd = sub.add_parser("featdiff", help="hold a GAF atlas's restored twin dumped by the DLL "

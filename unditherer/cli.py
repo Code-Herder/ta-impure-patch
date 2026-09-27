@@ -210,8 +210,8 @@ def cmd_models(a):
 
 
 def cmd_export_weights(a):
-    """models/<name>.onnx -> models/<name>.w32.bin, the fragment shaders' layout
-    (weights.py).  Checked three ways before it is written: the ONNX initializers
+    """models/<name>.onnx -> models/<name>.w32.bin, the Classic++ restorer's
+    weight file (weights.py).  Checked three ways before it is written: the ONNX initializers
     against an independent fold of the .pt checkpoint, then the packed blocks run
     through weights.run_reference against onnxruntime on a random tile in both
     padding classes."""

@@ -334,6 +334,7 @@ static int              s_rjTaken, s_rjPainted;
 static unsigned         s_rjBlanks;
 static VkImageView      s_rjSrcView;
 static int              s_rjTried;
+static unsigned         s_rjEpoch;                /* the restorer epoch it was set in */
 /* the generation `s_arImg` holds a restore of, left by a job the restorer's
    going down took away (`tagpu_vk_gui_restore_drop`); 0 = none */
 static unsigned         s_rjKeepGen;
@@ -748,6 +749,7 @@ static TAGPU_VKRJOB*    s_psJob;
 static unsigned char    s_psPal[256 * 4];         /* the job's palette       */
 static int              s_psPalHave;
 static int              s_psTried;                /* the device refused      */
+static unsigned         s_psEpoch;                /* ...in this restorer epoch */
 /* moves when every fill made so far stops being current: a palette rebuild */
 static unsigned         s_psGen = 1;
 static unsigned         s_psFrame, s_psSettled;
@@ -1780,7 +1782,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; }
+    /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
+    if (s_rjTried && s_rjEpoch != tagpu_vk_restore_epoch()) s_rjTried = 0;
     if (s_rjTried) { s_arHave = 0; tagpu_gui_col_ready(0, s_arSettled); return; }
+    s_rjEpoch = tagpu_vk_restore_epoch();
     /* THE SOURCE HAS TO EXIST AND HAVE CONTENTS: a restore over an atlas no
        copy has reached yet paints the palette's entry 0 over the art. Not an
        error -- the next frame asks again. */
@@ -1788,7 +1793,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
     if (!s_arImg) {
         if (!mk_image(d, s_atDim, s_atDim, VK_FORMAT_R8G8B8A8_UNORM,
                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                      VK_IMAGE_USAGE_STORAGE_BIT,
                       &s_arImg, &s_arMem, &s_arView)) {
             /* `mk_image` can fail after the image and the memory were made, so
                hand both back rather than nulling the handles. */
@@ -1820,7 +1825,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
     if (s_rjKeepGen && s_rjKeepGen == h->restoreGen && s_arHave &&
         h->restoreBlanks == s_rjBlanks) repaint = 1;
     s_rjKeepGen = 0;
-    s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, repaint,
+    s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, TAGPU_RM_FULL, repaint,
                                       s_atImg, s_atView, s_atDim, s_atDim, 0,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
@@ -1971,7 +1976,7 @@ static int ps_images(const TAGPU_VKPASS* d)
                   &s_psSrc, &s_psSrcMem, &s_psSrcView) ||
         !mk_image(d, PS_W, PS_H, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                  VK_IMAGE_USAGE_STORAGE_BIT,
                   &s_psDst, &s_psDstMem, &s_psDstView)) {
         kill_image(d, &s_psSrc, &s_psSrcMem, &s_psSrcView);
         kill_image(d, &s_psDst, &s_psDstMem, &s_psDstView);
@@ -2256,7 +2261,10 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
     /* Classic++'s assets are off: nothing is restored, and what the entries
        hold stays for the next arm. */
     if (!h->restoreFrames || h->restoreGen == 0) { ps_job_free(d); return; }
+    /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
+    if (s_psTried && s_psEpoch != tagpu_vk_restore_epoch()) s_psTried = 0;
     if (s_psJob || s_psTried || !h->pal) return;
+    s_psEpoch = tagpu_vk_restore_epoch();
     /* ONLY AGAINST THE PALETTE THE DONE ENTRIES WERE RESTORED AGAINST.
        `s_psPal` is written below and nowhere else, and a new palette reaches
        it only through the rebuild above, which requeues or evicts every entry
@@ -2271,7 +2279,7 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        it stay DONE, and only the new ones are painted. Before that there is
        nothing to keep, and the job's own clear is what makes the image a
        picture. */
-    s_psJob = tagpu_vk_restore_job_new(d, "pic", 5, 0, s_psDstLive,
+    s_psJob = tagpu_vk_restore_job_new(d, "pic", 5, 0, TAGPU_RM_FULL, s_psDstLive,
                                        s_psSrc, s_psSrcView, PS_W, PS_H, 0, h->pal,
                                        s_psDst, s_psDstView, PS_W, PS_H);
     if (!s_psJob) {
