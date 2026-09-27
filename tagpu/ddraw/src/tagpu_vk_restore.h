@@ -156,6 +156,12 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
    switch the jobs pause under is off; the queues keep filling either way. */
 void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 
+/* THE EPOCH A REFUSAL HOLDS FOR. A consumer that latches "the restorer
+   refused" latches it for the epoch of its attempt, and asks again once this
+   has moved: the render options' On after the restorer turned itself off
+   (tagpu_restore_guard.h) moves it, and `up` answers afresh from then on. */
+unsigned tagpu_vk_restore_epoch(void);
+
 /* The device went with everything on it: forget every id without destroying,
    and every job with them. Call it BEFORE the jobs' owners forget theirs. */
 void tagpu_vk_restore_lost(void);

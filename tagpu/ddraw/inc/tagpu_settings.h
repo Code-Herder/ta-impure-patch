@@ -123,6 +123,13 @@ const char* tagpu_settings_gpu(void);
    lock, which the serialiser takes too. */
 void tagpu_settings_set_gpu(const char* name);
 
+/* The device and driver the restorer is recorded off for, `vendor:device:driver`
+   (tagpu_restore_guard.h); "" for none, and always "" under
+   tagpu_defaults.off. Copied out under the store's lock: the render thread
+   reads it and the game thread's menu clears it. */
+void tagpu_settings_restoreoff(char* out, int cap);
+void tagpu_settings_set_restoreoff(const char* key);
+
 /* The windowed frame: x, y and the client size, 0,0 for the size the game
    asks for. 0 when the store has none; answered under tagpu_defaults.off too.
    Read at attach (tagpu_cfg.c). */

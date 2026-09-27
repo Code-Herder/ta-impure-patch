@@ -266,6 +266,7 @@ static SHARED s_rgbAtlas;
 static TAGPU_VKRJOB* s_rjob;
 static unsigned      s_rjSerial, s_rjPal;
 static int           s_rjTried;
+static unsigned      s_rjEpoch;            /* the restorer epoch it was set in */
 static int           s_rjPainted;          /* job_painted at the last report  */
 /* THE SOURCE VIEW THE LIVE JOB NAMES, and it is a separate key from the serial
    because the two move for different reasons. A job captures `s_base.view` at
@@ -1227,7 +1228,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        unmoved is a job that failed on this request, and its picture stands
        (above). */
     if (s_rjSerial != t->restoreSerial || s_rjPal != t->palSerial) s_rgbAtlas.have = 0;
+    /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
+    if (s_rjTried && s_rjEpoch != tagpu_vk_restore_epoch()) s_rjTried = 0;
     if (s_rjTried) return;
+    s_rjEpoch = tagpu_vk_restore_epoch();
     /* THE DESTINATION AND THE SOURCE BOTH HAVE TO BE THERE. `img` absent means
        the device refused the image (the resize above reads that way); `have`
        absent on the base atlas means its upload has not been recorded yet,

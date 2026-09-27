@@ -127,6 +127,7 @@ static volatile LONG s_detaching;       /* process detach: see tagpu_settings_de
    also takes -- so no half-written name is ever serialised. */
 static CRITICAL_SECTION s_io;
 static char s_gpu[GPU_LEN];
+static char s_restoreOff[GPU_LEN];     /* tagpu_restore_guard.h's record      */
 static char s_monName[MON_MAX][MON_LEN];
 static int  s_monCount;
 static char s_monStored[MON_LEN];      /* the name the file held            */
@@ -271,6 +272,13 @@ static int serialise(char* b, int cap)
     k = _snprintf(b + at, cap - at, "gpu=%s\r\n", s_gpu[0] ? s_gpu : "auto");
     if (k < 0 || k >= cap - at) return -1;
     at += k;
+    /* only while there is a record: a player whose restorer works never sees
+       the key */
+    if (s_restoreOff[0]) {
+        k = _snprintf(b + at, cap - at, "restoreoff=%s\r\n", s_restoreOff);
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+    }
     if (s_winSet) {
         k = _snprintf(b + at, cap - at, "window=%d,%d,%d,%d\r\n",
                       s_win[0], s_win[1], s_win[2], s_win[3]);
@@ -387,6 +395,7 @@ static void parse_line(char* line)
     if (!*k || *k == '#' || *k == ';') return;
 
     if (!lstrcmpiA(k, "gpu"))     { lstrcpynA(s_gpu, v, sizeof s_gpu); return; }
+    if (!lstrcmpiA(k, "restoreoff")) { lstrcpynA(s_restoreOff, v, sizeof s_restoreOff); return; }
     if (!lstrcmpiA(k, "monitor")) { lstrcpynA(s_monStored, v, sizeof s_monStored); return; }
     if (!lstrcmpiA(k, "window")) {
         int w[4];
@@ -690,6 +699,27 @@ void tagpu_settings_set_gpu(const char* name)
     EnterCriticalSection(&s_io);
     if (lstrcmpiA(s_gpu, name)) {
         lstrcpynA(s_gpu, name, sizeof s_gpu);
+        InterlockedIncrement(&s_dirty);
+    }
+    LeaveCriticalSection(&s_io);
+}
+
+void tagpu_settings_restoreoff(char* out, int cap)
+{
+    if (!out || cap <= 0) return;
+    out[0] = 0;
+    if (!s_attached || s_ignored) return;
+    EnterCriticalSection(&s_io);
+    lstrcpynA(out, s_restoreOff, cap);
+    LeaveCriticalSection(&s_io);
+}
+
+void tagpu_settings_set_restoreoff(const char* key)
+{
+    if (!s_attached || s_ignored || !key) return;
+    EnterCriticalSection(&s_io);
+    if (lstrcmpiA(s_restoreOff, key)) {
+        lstrcpynA(s_restoreOff, key, sizeof s_restoreOff);
         InterlockedIncrement(&s_dirty);
     }
     LeaveCriticalSection(&s_io);

@@ -28,6 +28,13 @@
    compared against the torch reference of the same source by `tools/tascene`
    restorediff and its siblings. It needs no window and no settle heuristic.
 
+   THE LAUNCH SELF-TEST IS HERE TOO (research/notes/compute-restorer.md D2,
+   D13): the first bring-up on a device closes the core's gate, runs a
+   synthetic probe through these same pipelines, reads it back and holds it to
+   the CPU reference (tagpu_restore_ref.c) before any consumer's job may run.
+   Every public entry runs inside tagpu_restore_guard.h's enter/leave, which
+   is what lets a crash in one be blamed on the restorer and nothing else.
+
    EVERYTHING ELSE -- the padding rule, the batch grid, the size-class ladder,
    the budget, every counter and every log line -- is the core's
    (tagpu_restore_core.c). */
@@ -38,6 +45,8 @@
 #include <string.h>
 #include "tagpu_vk_restore.h"
 #include "tagpu_restore_core.h"
+#include "tagpu_restore_guard.h"
+#include "tagpu_restore_ref.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_gaf.h"      /* tagpu_gaf_mip_off/_chain: the chain LAYOUT, so
                               the offsets the dump copies to come from the one
@@ -83,6 +92,17 @@ DFNS(DECL)
 
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 static int s_state;
+/* A REFUSAL HOLDS FOR ONE EPOCH (tagpu_rguard_epoch): the render options' On
+   after the restorer turned itself off moves it, and `up` then asks the
+   device again instead of answering from the latch. */
+static unsigned s_refEpoch;
+
+static int refuse(void)
+{
+    s_state = ST_REFUSED;
+    s_refEpoch = tagpu_rguard_epoch();
+    return 0;
+}
 
 /* what the device answered, kept for the log and for the refusals */
 static struct {
@@ -154,8 +174,9 @@ static const CONVV* conv_for(const TAGPU_RLAYER* L, int last)
    one stands the pass down, and Classic++ then draws the original dithered
    art, which is the shipped fallback rather than a fault. */
 static uint64_t act_bytes_max(const TAGPU_RMODEL* w);
+static void probe_arm(void);
 
-int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
+static int up_impl(const TAGPU_VKPASS* d)
 {
     VkPhysicalDeviceProperties dp;
     VkQueueFamilyProperties qp[16];
@@ -167,13 +188,16 @@ int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
     uint64_t need;
 
     if (s_state == ST_READY)   return 1;
-    if (s_state == ST_REFUSED) return 0;
+    if (s_state == ST_REFUSED) {
+        if (s_refEpoch == tagpu_rguard_epoch()) return 0;
+        s_state = ST_UNBUILT;
+    }
 
     if (!d || !d->dev || !d->pd) return 0;
-    if (!resolve(d)) { s_state = ST_REFUSED; rlog(LANE ": a Vulkan entry point this pass needs is missing"); return 0; }
+    if (!resolve(d)) { refuse(); rlog(LANE ": a Vulkan entry point this pass needs is missing"); return 0; }
 
     /* the model and the options, reloaded per DEVICE (tagpu_restore_core.c) */
-    if (!tagpu_rcore_reload(LANE)) { s_state = ST_REFUSED; return 0; }
+    if (!tagpu_rcore_reload(LANE)) return refuse();
     w = tagpu_rcore_model();
     opt = tagpu_rcore_opt();
 
@@ -182,13 +206,18 @@ int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
     vkGetPhysicalDeviceProperties(d->pd, &dp);
     s_dev.maxSsbo = dp.limits.maxStorageBufferRange;
 
+    /* THE RECORD FIRST (tagpu_restore_guard.h): a device and driver the
+       restorer crashed on, lost, or failed its self-test on stays on the
+       original art until the driver changes or the player asks again */
+    if (tagpu_rguard_device(dp.vendorID, dp.deviceID, dp.driverVersion)) return refuse();
+
     memset(qp, 0, sizeof qp);
     vkGetPhysicalDeviceQueueFamilyProperties(d->pd, &nq, qp);
     if (nq > 16) nq = 16;
     if (d->qfam >= nq || !(qp[d->qfam].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
         _snprintf(b, sizeof b, LANE ": queue family %u has no COMPUTE - the lane cannot restore",
                   (unsigned)d->qfam);
-        rlog(b); s_state = ST_REFUSED; return 0;
+        rlog(b); return refuse();
     }
 
     memset(&fp, 0, sizeof fp);
@@ -196,7 +225,7 @@ int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
         rlog(LANE ": R8G8B8A8_UNORM is not a storage image here, which the spec requires"
                   " - the lane cannot restore");
-        s_state = ST_REFUSED; return 0;
+        return refuse();
     }
 
     /* THE LIMIT STAYS UNSIGNED, as Vulkan reports it: a driver may report
@@ -208,7 +237,7 @@ int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
         _snprintf(b, sizeof b, LANE ": maxStorageBufferRange %u < the %u-byte activation buffer"
                                " the %dx%d model needs - the lane cannot restore",
                   s_dev.maxSsbo, (unsigned)need, w->depth, w->ch);
-        rlog(b); s_state = ST_REFUSED; return 0;
+        rlog(b); return refuse();
     }
 
     /* ---- the slice timer, and this is the ONLY soft refusal ----
@@ -231,8 +260,20 @@ int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
        never turns Classic++ on should pay nothing for this pass beyond the
        queries above. */
     s_state = ST_READY;
+    probe_arm();
     return 1;
 }
+
+int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
+{
+    int r;
+    tagpu_rguard_enter();
+    r = up_impl(d);
+    tagpu_rguard_leave();
+    return r;
+}
+
+unsigned tagpu_vk_restore_epoch(void) { return tagpu_rguard_epoch(); }
 
 /* ============================ RESOURCES ============================
    ALL OF THEM ARE SHARED, NOT PER SLOT, AND THE ARGUMENT IS AN ORDERING.
@@ -368,6 +409,9 @@ static const TAGPU_VKPASS* s_d;
 static VkCommandBuffer     s_cb;
 static uint32_t            s_slot;
 static int                 s_sliceOpen;             /* the head barrier is done */
+/* anything recorded into this frame's command buffer: the slot then carries
+   restorer work until its fence signals (tagpu_rguard_work) */
+static int                 s_rec;
 
 static TAGPU_RSCHED s_sched;                        /* `be` set in build()      */
 
@@ -627,9 +671,12 @@ static void retire_take(const TAGPU_VKPASS* d)
 /* A SLOT HAS TURNED OVER: its last submit is complete, because the seam waited
    on that slot's fence before handing us this command buffer. Called at the top
    of every step, UNCONDITIONALLY. */
+static void prret_slot_done(const TAGPU_VKPASS* d, uint32_t slot);
+
 static void retire_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
 {
     int i;
+    prret_slot_done(d, slot);
     /* THE JOB RETIRES FIRST, and they are independent of the activation one --
        several can be outstanding at once, each with its own mask, because a job
        is freed whenever its consumer's serial moves and not on a schedule. */
@@ -712,8 +759,7 @@ static int build_shared(const TAGPU_VKPASS* d)
                                    " model - the headers were not regenerated for it",
                       l, w->layer[l].jin, w->layer[l].kout, w->depth, w->ch);
             rlog(b);
-            s_state = ST_REFUSED;
-            return 0;
+            return refuse();
         }
 
     /* the sampler: NEAREST and clamp; every read here is a texelFetch */
@@ -1232,6 +1278,10 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
 
     if (!d || !s_cb || !g || !s_built) return 0;
     if (!s_sliceOpen) { slice_head(); s_sliceOpen = 1; }
+    s_rec = 1;
+    /* the fault lever's crash, inside a restorer call on the render thread */
+    if (r->kind == TAGPU_RDRAW_FILL && tagpu_rguard_fault("crash"))
+        RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, NULL);
     /* A GENERATION CHANGE MEANS NEW SETS, not a rewrite of the bound ones --
        see `set_pair_new`. `setGen` 0 is the first dispatch, where the sets
        were allocated by `job_new` and have never been bound. */
@@ -1341,13 +1391,13 @@ static void pal_pack(unsigned char* out, const unsigned char* pal)
     }
 }
 
-TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
-                                       int prio, int oneshot, int repaint,
-                                       VkImage srcImg, VkImageView srcView,
-                                       int srcW, int srcH, int srcBase,
-                                       const unsigned char* pal,
-                                       VkImage dstImg, VkImageView dstView,
-                                       int dstW, int dstH)
+static TAGPU_VKRJOB* job_new_impl(const TAGPU_VKPASS* d, const char* tag,
+                                  int prio, int oneshot, int repaint,
+                                  VkImage srcImg, VkImageView srcView,
+                                  int srcW, int srcH, int srcBase,
+                                  const unsigned char* pal,
+                                  VkImage dstImg, VkImageView dstView,
+                                  int dstW, int dstH)
 {
     VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     VkDescriptorSetLayout lay[2];
@@ -1405,9 +1455,25 @@ fail:
     return NULL;
 }
 
-int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
-                               int mips, int dim,
-                               const VkImageView* attach, const VkImageView* sample)
+TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
+                                       int prio, int oneshot, int repaint,
+                                       VkImage srcImg, VkImageView srcView,
+                                       int srcW, int srcH, int srcBase,
+                                       const unsigned char* pal,
+                                       VkImage dstImg, VkImageView dstView,
+                                       int dstW, int dstH)
+{
+    TAGPU_VKRJOB* j;
+    tagpu_rguard_enter();
+    j = job_new_impl(d, tag, prio, oneshot, repaint, srcImg, srcView, srcW, srcH, srcBase,
+                     pal, dstImg, dstView, dstW, dstH);
+    tagpu_rguard_leave();
+    return j;
+}
+
+static int job_chain_impl(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
+                          int mips, int dim,
+                          const VkImageView* attach, const VkImageView* sample)
 {
     VkDescriptorSetLayout lay[TAGPU_VK_MAXMIP];
     VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
@@ -1479,6 +1545,17 @@ int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
     return 1;
 }
 
+int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
+                               int mips, int dim,
+                               const VkImageView* attach, const VkImageView* sample)
+{
+    int r;
+    tagpu_rguard_enter();
+    r = job_chain_impl(d, j, mips, dim, attach, sample);
+    tagpu_rguard_leave();
+    return r;
+}
+
 int tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, int count)
 {
     if (!j || !j->core) return 0;
@@ -1524,7 +1601,7 @@ int tagpu_vk_restore_job_dst_live(const TAGPU_VKRJOB* j)
 /* below, beside the rest of the dump */
 static void dump_free(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g);
 
-void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
+static void job_free_impl(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
 {
     if (!j) return;
     if (d && d->dev) {
@@ -1558,6 +1635,13 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
     /* with no device there is nothing to destroy and nothing still executing:
        the memset below forgets the handles, which is what `lost` does too */
     memset(j, 0, sizeof *j);
+}
+
+void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
+{
+    tagpu_rguard_enter();
+    job_free_impl(d, j);
+    tagpu_rguard_leave();
 }
 
 /* ---- the byte dump ---------------------------------------------------- */
@@ -1801,6 +1885,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0, 0, NULL, 0, NULL, 1, &mb);
     }
+    s_rec = 1;
     g->dumpSlot = slot;
     g->dumpState = 1;
     g->dumpPainted = painted;
@@ -1836,6 +1921,7 @@ static void chain_step(VkCommandBuffer cb, struct TAGPU_VKRJOB* g)
        when the paint count has NOT moved but the levels are stale. */
     if (painted <= 0) return;
     if (g->chainDone && painted == g->chainPainted) return;
+    s_rec = 1;
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_pipeMip);
     for (L = 1; L <= g->chainN; L++) {
         VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -1879,14 +1965,21 @@ static void chain_step(VkCommandBuffer cb, struct TAGPU_VKRJOB* g)
    before any early return -- tagpu_vk_terr.c's rule, and the reason for it is
    that a bit which clears only on the paths that dispatch would stall the
    retire for ever on a lane that is paused. */
-void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+static void probe_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
+
+static void step_impl(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     int i;
     if (!d || !d->dev) return;
     retire_slot_done(d, slot);
-    if (!s_built || s_state != ST_READY) return;
+    if (s_state != ST_READY) return;
     s_d = d; s_cb = cb; s_slot = slot < TAGPU_VK_SLOTS ? slot : 0;
     s_sliceOpen = 0;
+    /* THE SELF-TEST BEFORE THE SLICE, for the dump's reason below: a readback
+       recorded here sees the probe as the previous frame left it. It builds
+       the shared resources itself, so it runs before the `s_built` test. */
+    probe_step(d, cb, slot);
+    if (!s_built || s_state != ST_READY) { s_cb = VK_NULL_HANDLE; return; }
     /* THE ORACLE BEFORE THE SLICE: nothing has been recorded into `cb` yet, so
        a copy recorded here sees the destination as the previous frame left it
        -- which is the state the `idle` gate has just called finished. One job
@@ -1903,8 +1996,20 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     s_cb = VK_NULL_HANDLE;
 }
 
+void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    tagpu_rguard_enter();
+    s_rec = 0;
+    step_impl(d, cb, slot);
+    if (s_rec) tagpu_rguard_work(slot);
+    tagpu_rguard_leave();
+}
+
+static void probe_forget(void);
+
 void tagpu_vk_restore_lost(void)
 {
+    probe_forget();
     /* every id died with the device: forget without destroying, and the jobs
        with them -- the core's own `lost` frees the queues and nothing else */
     memset(s_act, 0, sizeof s_act); memset(s_actMem, 0, sizeof s_actMem);
@@ -1942,10 +2047,17 @@ void tagpu_vk_restore_lost(void)
     tagpu_rcore_lost(&s_sched);
 }
 
-void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
+static void probe_free(const TAGPU_VKPASS* d);
+static void prret_kill(const TAGPU_VKPASS* d);
+
+static void down_impl(const TAGPU_VKPASS* d)
 {
     int i;
     if (!d || !d->dev) { tagpu_vk_restore_lost(); return; }
+    /* THE PROBE FIRST, and its retire with the others below: the seam's
+       vkDeviceWaitIdle is above this call */
+    probe_free(d);
+    prret_kill(d);
     /* A JOB ITS OWNER DID NOT GIVE BACK (the contract in tagpu_vk_restore.h).
        Its palette images and staging would otherwise outlive the device;
        freed here they go into the retire the flush below empties. */
@@ -1994,4 +2106,381 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
     if (s_dpool) vkDestroyDescriptorPool(d->dev, s_dpool, NULL);
     if (s_samp) vkDestroySampler(d->dev, s_samp, NULL);
     tagpu_vk_restore_lost();
+}
+
+void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
+{
+    tagpu_rguard_enter();
+    down_impl(d);
+    tagpu_rguard_leave();
+}
+
+/* ============================ THE SELF-TEST ============================
+   research/notes/compute-restorer.md D2 and D13; tagpu_restore_ref.h has the
+   probe and the reference.
+
+   ARMED BY `up`, WHICH CLOSES THE CORE'S GATE IN THE SAME CALL, so no
+   consumer's job can be picked before the verdict: one created in between
+   queues and waits, and its destination is never painted by a device that
+   has not passed. Then, one step at a time:
+     ARMED     build the probe's images and its two jobs (prio -1, which the
+               gate lets through), upload the sources, start the CPU worker
+     RUNNING   both jobs have painted and the chain is reduced: record the
+               readback into this frame
+     READBACK  the slot that took the readback comes round again -- its fence
+               has signalled, so the bytes are in
+     WAITCPU   the CPU worker has finished: the verdict
+   A pass opens the gate. Wrong bytes record the device off (and the notice
+   says so) and fail every job. A probe that could not be run at all -- no
+   memory, a job refused, a reference that could not be computed -- turns the
+   restorer off for this session only: that says nothing about the driver.
+   A device that has passed is not tested again in this process, so a
+   swapchain rebuild, which takes the restorer down and up, costs nothing. */
+enum { PR_NONE, PR_ARMED, PR_RUNNING, PR_READBACK, PR_WAITCPU };
+#define PR_DIM      TAGPU_RPROBE_DIM
+#define PR_OFF_SRCB 0
+#define PR_OFF_SRCR (PR_OFF_SRCB + PR_DIM * PR_DIM * 4)
+#define PR_OFF_GOTB (PR_OFF_SRCR + PR_DIM * PR_DIM)
+#define PR_NVIEW    (4 + TAGPU_RPROBE_MIPS)
+
+static struct {
+    int                  state;
+    TAGPU_RPROBE*        probe;
+    TAGPU_RTEST*         ref;
+    /* the base source, the index source, the base job's destination (with
+       its chain) and the palette job's destination */
+    VkImage              img[4];
+    VkDeviceMemory       mem[4];
+    /* each image's level 0, then the base destination's levels 1.. */
+    VkImageView          view[PR_NVIEW];
+    VkBuffer             buf;                 /* the sources up, the answers back */
+    VkDeviceMemory       bufMem;
+    unsigned char*       map;
+    int                  offR, bytes;
+    struct TAGPU_VKRJOB* job[2];
+    uint32_t             rbSlot;
+} s_pr;
+static char s_passedKey[48];
+
+/* THE PROBE'S OBJECTS AFTER THE VERDICT, retired with a job's licence: the
+   readback, the uploads and the jobs' sets that name them were recorded into
+   frames still in flight. */
+static struct {
+    VkImage        img[4];
+    VkDeviceMemory mem[4];
+    VkImageView    view[PR_NVIEW];
+    VkBuffer       buf;
+    VkDeviceMemory bufMem;
+    uint32_t       pending;
+} s_prRet;
+
+static void prret_kill(const TAGPU_VKPASS* d)
+{
+    int i;
+    if (d && d->dev) {
+        for (i = 0; i < PR_NVIEW; i++) if (s_prRet.view[i]) vkDestroyImageView(d->dev, s_prRet.view[i], NULL);
+        for (i = 0; i < 4; i++) {
+            if (s_prRet.img[i]) vkDestroyImage(d->dev, s_prRet.img[i], NULL);
+            if (s_prRet.mem[i]) vkFreeMemory(d->dev, s_prRet.mem[i], NULL);
+        }
+        if (s_prRet.buf) vkDestroyBuffer(d->dev, s_prRet.buf, NULL);
+        if (s_prRet.bufMem) vkFreeMemory(d->dev, s_prRet.bufMem, NULL);
+    }
+    memset(&s_prRet, 0, sizeof s_prRet);
+}
+
+static void prret_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
+{
+    if (!s_prRet.pending) return;
+    s_prRet.pending &= ~(1u << slot);
+    if (!s_prRet.pending) prret_kill(d);
+}
+
+static void probe_arm(void)
+{
+    if (s_pr.state != PR_NONE) return;
+    if (s_passedKey[0] && !strcmp(s_passedKey, tagpu_rguard_key())) return;
+    s_pr.state = PR_ARMED;
+    s_sched.gate = 1;
+}
+
+/* Everything the probe holds, into the retire (or forgotten, with no
+   device). The jobs go through `job_free`, which retires their own objects. */
+static void probe_free(const TAGPU_VKPASS* d)
+{
+    int i, any = 0;
+    for (i = 0; i < 2; i++) if (s_pr.job[i]) tagpu_vk_restore_job_free(d, s_pr.job[i]);
+    tagpu_rref_test_free(s_pr.ref);
+    free(s_pr.probe);
+    for (i = 0; i < 4; i++) any |= s_pr.img[i] != VK_NULL_HANDLE || s_pr.mem[i] != VK_NULL_HANDLE;
+    any |= s_pr.buf != VK_NULL_HANDLE || s_pr.bufMem != VK_NULL_HANDLE;
+    if (any && d && d->dev) {
+        /* one probe retire at a time; a second within `slots` frames of the
+           first is a down and up in between, which drains the device anyway */
+        if (s_prRet.pending) { if (vkDeviceWaitIdle) vkDeviceWaitIdle(d->dev); prret_kill(d); }
+        if (s_pr.map && s_pr.bufMem) vkUnmapMemory(d->dev, s_pr.bufMem);
+        memcpy(s_prRet.img, s_pr.img, sizeof s_prRet.img);
+        memcpy(s_prRet.mem, s_pr.mem, sizeof s_prRet.mem);
+        memcpy(s_prRet.view, s_pr.view, sizeof s_prRet.view);
+        s_prRet.buf = s_pr.buf; s_prRet.bufMem = s_pr.bufMem;
+        s_prRet.pending = all_slots(d);
+    }
+    memset(&s_pr, 0, sizeof s_pr);
+}
+
+/* the device died: every handle with it; the worker is host memory and is
+   joined and freed */
+static void probe_forget(void)
+{
+    tagpu_rref_test_free(s_pr.ref);
+    free(s_pr.probe);
+    memset(&s_pr, 0, sizeof s_pr);
+    memset(&s_prRet, 0, sizeof s_prRet);
+}
+
+static int pr_image(const TAGPU_VKPASS* d, int i, VkFormat fmt, int levels, VkImageUsageFlags use)
+{
+    VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkMemoryRequirements req;
+    uint32_t type;
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = fmt;
+    ici.extent.width = PR_DIM; ici.extent.height = PR_DIM; ici.extent.depth = 1;
+    ici.mipLevels = (uint32_t)levels; ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = use;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(d->dev, &ici, NULL, &s_pr.img[i]) != VK_SUCCESS) { s_pr.img[i] = VK_NULL_HANDLE; return 0; }
+    memset(&req, 0, sizeof req);
+    vkGetImageMemoryRequirements(d->dev, s_pr.img[i], &req);
+    type = mem_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type == UINT32_MAX) return 0;
+    mai.allocationSize = req.size; mai.memoryTypeIndex = type;
+    if (vkAllocateMemory(d->dev, &mai, NULL, &s_pr.mem[i]) != VK_SUCCESS) { s_pr.mem[i] = VK_NULL_HANDLE; return 0; }
+    return vkBindImageMemory(d->dev, s_pr.img[i], s_pr.mem[i], 0) == VK_SUCCESS;
+}
+
+static VkImageView pr_view(const TAGPU_VKPASS* d, VkImage img, VkFormat fmt, int level)
+{
+    VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    VkImageView v = VK_NULL_HANDLE;
+    ivi.image = img;
+    ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivi.format = fmt;
+    ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ivi.subresourceRange.baseMipLevel = (uint32_t)level;
+    ivi.subresourceRange.levelCount = 1;
+    ivi.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(d->dev, &ivi, NULL, &v) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return v;
+}
+
+/* the two sources, from the staging onto the device, before any FILL reads
+   them -- the barrier out names the compute stage that does */
+static void pr_upload(VkCommandBuffer cb)
+{
+    VkImageMemoryBarrier mb[2];
+    VkBufferImageCopy bc;
+    int i;
+    memset(mb, 0, sizeof mb);
+    for (i = 0; i < 2; i++) {
+        mb[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        mb[i].srcQueueFamilyIndex = mb[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        mb[i].image = s_pr.img[i];
+        mb[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        mb[i].subresourceRange.levelCount = 1;
+        mb[i].subresourceRange.layerCount = 1;
+        mb[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        mb[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        mb[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    }
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 2, mb);
+    for (i = 0; i < 2; i++) {
+        memset(&bc, 0, sizeof bc);
+        bc.bufferOffset = i == 0 ? PR_OFF_SRCB : PR_OFF_SRCR;
+        bc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        bc.imageSubresource.layerCount = 1;
+        bc.imageExtent.width = PR_DIM; bc.imageExtent.height = PR_DIM; bc.imageExtent.depth = 1;
+        vkCmdCopyBufferToImage(cb, s_pr.buf, s_pr.img[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+        mb[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        mb[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mb[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    }
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 2, mb);
+    s_rec = 1;
+}
+
+static int probe_start(const TAGPU_VKPASS* d, VkCommandBuffer cb)
+{
+    const VkImageUsageFlags srcUse = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    const VkImageUsageFlags dstUse = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    static const VkFormat fmt[4] = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8_UNORM,
+                                     VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM };
+    VkImageView attach[TAGPU_RPROBE_MIPS], sample[TAGPU_RPROBE_MIPS];
+    int i, L;
+
+    s_pr.probe = (TAGPU_RPROBE*)malloc(sizeof *s_pr.probe);
+    if (!s_pr.probe) return 0;
+    tagpu_rref_probe(s_pr.probe);
+    for (i = 0; i < 4; i++) {
+        if (!pr_image(d, i, fmt[i], i == 2 ? 1 + TAGPU_RPROBE_MIPS : 1, i < 2 ? srcUse : dstUse)) return 0;
+        if (!(s_pr.view[i] = pr_view(d, s_pr.img[i], fmt[i], 0))) return 0;
+    }
+    for (L = 1; L <= TAGPU_RPROBE_MIPS; L++)
+        if (!(s_pr.view[3 + L] = pr_view(d, s_pr.img[2], fmt[2], L))) return 0;
+    /* level L - 1 is read and level L written, each through a view of that
+       one level (tagpu_vk_restore_job_chain) */
+    for (L = 1; L <= TAGPU_RPROBE_MIPS; L++) {
+        attach[L - 1] = s_pr.view[3 + L];
+        sample[L - 1] = L == 1 ? s_pr.view[2] : s_pr.view[3 + L - 1];
+    }
+
+    s_pr.offR = PR_OFF_GOTB + tagpu_rref_chain_bytes();
+    s_pr.bytes = s_pr.offR + PR_DIM * PR_DIM * 4;
+    if (!mk_buffer(d, (VkDeviceSize)s_pr.bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s_pr.buf, &s_pr.bufMem, &s_pr.map)) return 0;
+    memcpy(s_pr.map + PR_OFF_SRCB, s_pr.probe->base, sizeof s_pr.probe->base);
+    memcpy(s_pr.map + PR_OFF_SRCR, s_pr.probe->r8, sizeof s_pr.probe->r8);
+    pr_upload(cb);
+
+    s_pr.job[0] = tagpu_vk_restore_job_new(d, "probe-base", -1, 1, 0, s_pr.img[0], s_pr.view[0],
+                                           PR_DIM, PR_DIM, 1, s_pr.probe->pal,
+                                           s_pr.img[2], s_pr.view[2], PR_DIM, PR_DIM);
+    if (!s_pr.job[0]) return 0;
+    if (!tagpu_vk_restore_job_chain(d, s_pr.job[0], TAGPU_RPROBE_MIPS, PR_DIM, attach, sample)) return 0;
+    s_pr.job[1] = tagpu_vk_restore_job_new(d, "probe-pal", -1, 1, 0, s_pr.img[1], s_pr.view[1],
+                                           PR_DIM, PR_DIM, 0, s_pr.probe->pal,
+                                           s_pr.img[3], s_pr.view[3], PR_DIM, PR_DIM);
+    if (!s_pr.job[1]) return 0;
+    if (tagpu_vk_restore_job_add(s_pr.job[0], s_pr.probe->fb, TAGPU_RPROBE_NF) != TAGPU_RPROBE_NF ||
+        tagpu_vk_restore_job_add(s_pr.job[1], s_pr.probe->fr, TAGPU_RPROBE_NF) != TAGPU_RPROBE_NF) return 0;
+    s_pr.ref = tagpu_rref_test_start(tagpu_rcore_model(), s_pr.probe);
+    return s_pr.ref != NULL;
+}
+
+/* both destinations, every level of the chain, into the staging after the
+   sources; borrowed from SHADER_READ_ONLY, where OUT and MIP leave them, and
+   given back */
+static void pr_readback(VkCommandBuffer cb)
+{
+    VkImageMemoryBarrier mb[2];
+    VkBufferImageCopy rg[1 + TAGPU_RPROBE_MIPS];
+    int i, L, off = PR_OFF_GOTB;
+    memset(mb, 0, sizeof mb);
+    for (i = 0; i < 2; i++) {
+        mb[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        mb[i].srcQueueFamilyIndex = mb[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        mb[i].image = s_pr.img[2 + i];
+        mb[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        mb[i].subresourceRange.levelCount = i == 0 ? 1 + TAGPU_RPROBE_MIPS : 1;
+        mb[i].subresourceRange.layerCount = 1;
+        mb[i].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mb[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        mb[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+        mb[i].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    }
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 2, mb);
+    memset(rg, 0, sizeof rg);
+    for (L = 0; L <= TAGPU_RPROBE_MIPS; L++) {
+        rg[L].bufferOffset = (VkDeviceSize)off;
+        rg[L].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg[L].imageSubresource.mipLevel = (uint32_t)L;
+        rg[L].imageSubresource.layerCount = 1;
+        rg[L].imageExtent.width = (uint32_t)(PR_DIM >> L);
+        rg[L].imageExtent.height = (uint32_t)(PR_DIM >> L);
+        rg[L].imageExtent.depth = 1;
+        off += (PR_DIM >> L) * (PR_DIM >> L) * 4;
+    }
+    vkCmdCopyImageToBuffer(cb, s_pr.img[2], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_pr.buf,
+                           1 + TAGPU_RPROBE_MIPS, rg);
+    rg[0].bufferOffset = (VkDeviceSize)s_pr.offR;
+    vkCmdCopyImageToBuffer(cb, s_pr.img[3], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_pr.buf, 1, rg);
+    for (i = 0; i < 2; i++) {
+        mb[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        mb[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mb[i].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        mb[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    }
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 2, mb);
+    s_rec = 1;
+}
+
+/* `v`: 1 pass, 0 wrong bytes, -1 could not be run */
+static void probe_verdict(const TAGPU_VKPASS* d, int v, const char* why)
+{
+    char b[400];
+    char key[48];
+    lstrcpynA(key, tagpu_rguard_key(), sizeof key);
+    probe_free(d);
+    if (v == 1) {
+        _snprintf(b, sizeof b, LANE ": self-test passed on %s: %s", key, why);
+        b[sizeof b - 1] = 0;
+        rlog(b);
+        lstrcpynA(s_passedKey, key, sizeof s_passedKey);
+        s_sched.gate = 0;
+        return;
+    }
+    _snprintf(b, sizeof b, LANE ": self-test %s on %s: %s - the restorer is off%s", v == 0 ? "FAILED" : "could not be run",
+              key, why, v == 0 ? " for this driver" : " for this session");
+    b[sizeof b - 1] = 0;
+    rlog(b);
+    if (v == 0) tagpu_rguard_turn_off(TAGPU_RG_SELFTEST);
+    tagpu_rcore_fail_all(&s_sched);
+    s_sched.gate = 0;
+    refuse();
+}
+
+static void probe_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    char why[240];
+    switch (s_pr.state) {
+    case PR_ARMED:
+        if (!probe_start(d, cb)) { probe_verdict(d, -1, "the probe could not be built"); return; }
+        s_pr.state = PR_RUNNING;
+        rlog(LANE ": self-test started: 4 synthetic frames on the device, the reference on a CPU worker");
+        return;
+    case PR_RUNNING: {
+        struct TAGPU_VKRJOB* a = s_pr.job[0];
+        struct TAGPU_VKRJOB* r = s_pr.job[1];
+        if (tagpu_vk_restore_job_failed(a) || tagpu_vk_restore_job_failed(r)) {
+            probe_verdict(d, -1, "a probe job failed");
+            return;
+        }
+        if (!tagpu_vk_restore_job_idle(a) || !tagpu_vk_restore_job_idle(r)) return;
+        if (!a->chainDone || a->chainPainted != a->core->tframes) return;
+        pr_readback(cb);
+        s_pr.rbSlot = slot;
+        s_pr.state = PR_READBACK;
+        return;
+    }
+    case PR_READBACK:
+        /* this slot's fence has signalled since the readback was recorded
+           into it: that is what `step` being called for it means */
+        if (slot != s_pr.rbSlot) return;
+        s_pr.state = PR_WAITCPU;
+        /* fall through: the worker has usually finished already */
+    case PR_WAITCPU: {
+        int v;
+        if (!tagpu_rref_test_done(s_pr.ref)) return;
+        /* the fault lever spoils one texel of the base job's keyed frame,
+           away from its keys */
+        if (tagpu_rguard_fault("probe")) s_pr.map[PR_OFF_GOTB + (5 * PR_DIM + 5) * 4] ^= 0x40;
+        v = tagpu_rref_test_check(s_pr.ref, s_pr.map + PR_OFF_GOTB, s_pr.map + s_pr.offR, why, sizeof why);
+        probe_verdict(d, v, why);
+        return;
+    }
+    default:
+        return;
+    }
 }

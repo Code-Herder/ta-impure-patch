@@ -145,6 +145,7 @@
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_restore_guard.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_shot.h"
@@ -416,6 +417,10 @@ static void passlog(const char* m) { vklog("%s", m); }
    mechanism, that the copy has completed. `nimg` frames later, which at any
    frame rate the lane runs at is a few milliseconds. */
 static int s_abSlot1;       /* 0 = nothing pending, else the slot index + 1 */
+/* THE LAST FATAL WAS A LOST DEVICE OR A FENCE THAT TIMED OUT: the two a
+   restorer dispatch can cause, and so the two the fatal path asks
+   tagpu_restore_guard.h about before it takes the lane down */
+static int s_lostLike;
 static const char* s_abPath;/* the file the pending capture belongs in         */
 
 /* Give the staging buffer back at a point where the device is idle. The FILE is
@@ -2264,10 +2269,21 @@ static int vk_present(void)
        that has not completed in a second means the device is wedged, so this is
        fatal rather than a skipped frame -- returning 0 here would leave the
        caller presenting nothing, for ever, at one frame a second, in silence. */
-    if (vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull) != VK_SUCCESS) {
+    r = vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull);
+    if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_TIMEOUT || r == VK_ERROR_DEVICE_LOST;
         vklog("a frame fence did not signal within a second - the device is not answering");
         return -2;
     }
+    /* tagpu_restorefault.on's `lost`: a device loss, reported while restorer
+       work is in flight, so the blame and the relaunch run without one */
+    if (tagpu_rguard_fault_lost()) {
+        vklog("tagpu_restorefault.on: a device loss is simulated with restorer work in flight");
+        s_lostLike = 1;
+        return -2;
+    }
+    /* slot `fi`'s last frame has completed, restorer work and all */
+    tagpu_rguard_fenced(fi);
 
     /* ---- tagpu_ftime: THIS SLOT'S PREVIOUS PAIR, AND IT COSTS NO WAIT.
        The fence above has just signalled, which is precisely the statement that
@@ -2306,7 +2322,9 @@ static int vk_present(void)
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_mark_down_owed() || tagpu_vk_surf_down_owed() ||
         tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed()) {
-        if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
+        r = vkDeviceWaitIdle ? vkDeviceWaitIdle(s_vk.dev) : VK_ERROR_INITIALIZATION_FAILED;
+        if (r != VK_SUCCESS) {
+            s_lostLike = r == VK_ERROR_DEVICE_LOST;
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
         }
@@ -2336,6 +2354,7 @@ static int vk_present(void)
        DEVICE_LOST and SURFACE_LOST come back for ever, and a silent `return 0`
        would present nothing at one frame a second and not a line in the log. */
     else if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_TIMEOUT || r == VK_ERROR_DEVICE_LOST;
         vklog("vkAcquireNextImageKHR: %s (%d) - down", res_name(r), (int)r);
         return -2;
     }
@@ -2778,7 +2797,9 @@ static int vk_present(void)
        and nothing will ever signal it again: `s_vk.frame` does not advance on
        an early return, so `fi` would stay on that fence and every later frame
        would burn the full one-second wait. Silently, at one frame a second. */
-    if (vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]) != VK_SUCCESS) {
+    r = vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]);
+    if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_ERROR_DEVICE_LOST;
         vklog("vkQueueSubmit refused the frame - down");
         return -2;
     }
@@ -2796,7 +2817,11 @@ static int vk_present(void)
        has moved on and the next frame should be drawn against a fresh
        swapchain. Rebuilding here instead would throw away a good frame. */
     if (r == VK_SUBOPTIMAL_KHR) { s_vk.rebuild = 1; return 1; }
-    if (r != VK_SUCCESS) { vklog("vkQueuePresentKHR: %s - down", res_name(r)); return -2; }
+    if (r != VK_SUCCESS) {
+        s_lostLike = r == VK_ERROR_DEVICE_LOST;
+        vklog("vkQueuePresentKHR: %s - down", res_name(r));
+        return -2;
+    }
     return 1;
 }
 
@@ -3001,6 +3026,11 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     {
         int rc = vk_present();
         if (rc == -2) {                /* fatal: the lane cannot carry on */
+            /* BEFORE the teardown: when a frame carrying restorer work was
+               unfinished, the restorer is blamed, recorded off and the game
+               relaunched, and this does not return */
+            if (s_lostLike) tagpu_rguard_blame_lost();
+            s_lostLike = 0;
             vk_down();
             InterlockedExchange(&s_state, ST_FAILED);
             return 0;

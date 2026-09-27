@@ -250,6 +250,7 @@ static unsigned       s_rjGen, s_rjPal;
 static int            s_rjTaken;
 static int            s_rjPainted;
 static int            s_rjTried;           /* the device refused; do not ask again */
+static unsigned       s_rjEpoch;           /* ...in this restorer epoch            */
 static VkImageView    s_rjSrcView;
 
 /* what `record` was left to draw */
@@ -980,7 +981,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        run one, a job that cannot be made -- so none of them leaves the flag
        naming the old picture. */
     s_arHave = 0;
+    /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
+    if (s_rjTried && s_rjEpoch != tagpu_vk_restore_epoch()) s_rjTried = 0;
     if (s_rjTried) return;
+    s_rjEpoch = tagpu_vk_restore_epoch();
     /* BOTH SURFACES HAVE TO BE THERE, and the source has to have contents: a
        FILL over a base no copy has reached yet would paint undefined texels
        over the art. Neither is an error -- the next frame asks again. */

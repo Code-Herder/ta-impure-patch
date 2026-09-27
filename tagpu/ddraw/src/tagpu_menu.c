@@ -52,6 +52,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_log.h"
+#include "tagpu_restore_guard.h"
 
 #include "dd.h"
 #include "config.h"
@@ -206,7 +207,10 @@ typedef struct {
 
 static const Row s_row[R_COUNT] = {
     { "STYLE",   "Renderer",          "Classic|Classic++|Custom", 3 },
-    { "ASSETS",  "Undithered assets", "Off|On",                   2 },
+    /* the third stage is On as the player chose it and Off because the
+       restorer turned itself off on this driver (tagpu_restore_guard.h); a
+       click on it is the retry (tagpu_menu_oncommand) */
+    { "ASSETS",  "Undithered assets", "Off|On|Off (driver)",      3 },
     { "LIGHT",   "Dynamic lighting",  "Off|On",                   2 },
     { "SHADOWS", "Shadows",           "Off|Hard",                 2 },
     { "SHADOWQ", "Shadow quality",    "Low|Med|High|Ultra",       4 },
@@ -941,7 +945,7 @@ static int build_gui(char* b, int cap, int rows)
    nothing in the lane customised. */
 static int derive_style(void)
 {
-    return (s_stage[R_ASSETS] != 1 || s_stage[R_LIGHT] != 1 || s_stage[R_SHADOWQ] != 2)
+    return (s_stage[R_ASSETS] == 0 || s_stage[R_LIGHT] != 1 || s_stage[R_SHADOWQ] != 2)
            ? STYLE_CUSTOM : STYLE_PP;
 }
 
@@ -950,7 +954,9 @@ static void read_state(void)
     const TAGPU_LIGHT* L = tagpu_classicpp_light();
     int i;
 
-    s_stage[R_ASSETS]  = tagpu_classicpp_assets() ? 1 : 0;
+    /* On as chosen, and "Off (driver)" while the restorer is recorded
+       off here: the player asked for it and the driver is what says no */
+    s_stage[R_ASSETS]  = tagpu_classicpp_assets() ? (tagpu_rguard_off() ? 2 : 1) : 0;
     s_stage[R_LIGHT]   = tagpu_classicpp_lit() ? 1 : 0;
     s_stage[R_SS]      = tagpu_settings_ss() == 2;
     s_stage[R_FPS]     = tagpu_settings_fps() ? 1 : 0;
@@ -1261,7 +1267,7 @@ static void commit_one(int row)
 {
     if (row_held(row)) return;
     switch (row) {
-    case R_ASSETS:  tagpu_settings_set(TS_ASSETS, s_stage[R_ASSETS]); break;
+    case R_ASSETS:  tagpu_settings_set(TS_ASSETS, s_stage[R_ASSETS] != 0); break;
     case R_LIGHT:   tagpu_settings_set(TS_LIGHT, s_stage[R_LIGHT]); break;
     case R_SHADOWS:
         tagpu_settings_set(TS_SHADOWS, SHADOW_VAL[s_stage[R_SHADOWS]]);
@@ -1330,8 +1336,15 @@ void __stdcall tagpu_menu_oncommand(void* gi)
             /* NOT R_SS OR R_SHADOWS: both are orthogonal to the lane (see
                derive_style), so the preset must not silently undo a player
                who turned either off. */
-            s_stage[R_ASSETS] = 1; s_stage[R_LIGHT] = 1; s_stage[R_SHADOWQ] = 2;
+            s_stage[R_ASSETS] = tagpu_rguard_off() ? 2 : 1; s_stage[R_LIGHT] = 1; s_stage[R_SHADOWQ] = 2;
         }
+    } else if (row == R_ASSETS) {
+        /* Off and On alternate. "Off (driver)" goes to On and is the
+           retry: the record is forgotten and the restorer asked again, and a
+           second crash or failed check turns it off again (D12). */
+        if (s_stage[R_ASSETS] == 2) tagpu_rguard_clear();
+        s_stage[R_ASSETS] = s_stage[R_ASSETS] == 1 ? 0 : 1;
+        if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
     } else {
         s_stage[row] = (s_stage[row] + 1) % s_row[row].stages;
         /* DERIVED, not forced to Custom. A row clicked back to its Classic++
@@ -2498,7 +2511,7 @@ static void vis_restore(void)
     int keep[R_COUNT], i;
     memcpy(keep, s_stage, sizeof keep);
     s_stage[R_STYLE]   = STYLE_PP;
-    s_stage[R_ASSETS]  = 1;
+    s_stage[R_ASSETS]  = tagpu_rguard_off() ? 2 : 1;
     s_stage[R_LIGHT]   = 1;
     s_stage[R_SHADOWS] = SHADOWS_HARD_STAGE;
     s_stage[R_SHADOWQ] = 2;

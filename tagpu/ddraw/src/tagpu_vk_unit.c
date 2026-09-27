@@ -334,6 +334,7 @@ static int            s_arLvlN;
 static TAGPU_VKRJOB*  s_rjob;
 static unsigned       s_rjGen, s_rjPal;
 static int            s_rjTaken, s_rjPainted, s_rjTried, s_rjChain;
+static unsigned       s_rjEpoch;           /* the restorer epoch s_rjTried was set in */
 static VkImageView    s_rjSrcView, s_rjDstView;
 static int            s_arHave;
 
@@ -1695,7 +1696,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; s_rjChain = 0; }
+    /* a refusal holds for the epoch of its attempt (tagpu_vk_restore.h) */
+    if (s_rjTried && s_rjEpoch != tagpu_vk_restore_epoch()) s_rjTried = 0;
     if (s_rjTried) { s_arHave = 0; return; }
+    s_rjEpoch = tagpu_vk_restore_epoch();
     if (!s_arImg || !s_arView || !s_bView || !s_bHave) return;
     /* THE CHAIN IS A PREREQUISITE, NOT AN EXTRA. Without per-level views this
        lane cannot reduce, and a twin whose levels 1.. are undefined is a wrong
