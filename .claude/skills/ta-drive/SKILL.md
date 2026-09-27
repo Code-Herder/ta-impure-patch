@@ -463,8 +463,8 @@ under zoom and `wheel.off`: `references/levers.md` §"Camera, viewport and fog".
 ## Multiplayer: two to ten instances in one game
 
 ```bash
-tools/tacli launch h1 --dplay --dplay-port 47631 --free-dplay-port   # the host
-tools/tacli launch j1 --dplay --dplay-port 47631                     # a joiner, as many as nine
+tools/tacli launch h1 --dplay --dplay-port 47731 --free-dplay-port   # the host
+tools/tacli launch j1 --dplay --dplay-port 47731                     # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 ```
 

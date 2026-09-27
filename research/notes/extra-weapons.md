@@ -874,17 +874,18 @@ kept because the two dead ends in it are expensive to re-derive.
    `win32` and `win64` prefixes. `tools/dpinstall.sh <prefix>` installs them.
    Two traps: the two **EXEs must be overridden by name** as well
    (`dplaysvr.exe,dpnsvr.exe=n`) or `Open` hangs silently on wine's stub
-   dplaysvr, and a **stale `dplaysvr.exe` holding UDP 47624** across prefixes
-   makes the next host fail `DPERR_GENERIC` — `pkill -x dplaysvr.exe` first.
+   dplaysvr, and a **stale `dplaysvr.exe` holding the port** across prefixes
+   makes the next host on it fail `DPERR_GENERIC` — end that holder first (never
+   every `dplaysvr.exe`: other ports are other games; `networking-lobbies.md`).
    Provenance and the Authenticode verification are in
    [Networking, Lobbies & Multiplayer](networking-lobbies.md).
 
 6. **`tacli` learned to launch a multiplayer instance.** `--dplay` installs native
    DirectPlay into that instance's prefix and appends the overrides to the
    hard-coded `ddraw=n,b` (sticky per instance, so a stock single-player instance is
-   unaffected); `--free-dplay-port` kills a stale `dplaysvr.exe` first and belongs on
-   the **hosting** launch only, since UDP 47624 is owned machine-wide and killing it
-   while a peer hosts takes that game down. One trap found the hard way:
+   unaffected); `--free-dplay-port` ends a stale `dplaysvr.exe` on the instance's own
+   DirectPlay port and belongs on the **hosting** launch only, since the port is owned
+   machine-wide and ending its server while a peer hosts takes that game down. One trap found the hard way:
    `tools/dpinstall.sh` used a plain `cp`, and tacli clones prefixes with `cp -al`,
    so every instance shares one inode per `system32` file with the template —
    overwriting in place would have written wine's builtin `dplayx` out of the

@@ -70,7 +70,8 @@ address element to wine only"*, *"Fix jdplay latent bugs exposed by Wine builtin
 (`copyOnlineDll`, line 383).
 
 **4. The tunnel — this is the interesting part.** From the repo `readme.md`: ordinarily TA/DirectPlay
-listens on **TCP 2300**, **UDP 2350**, and **TCP/UDP 47624** for session "enumeration" (the
+listens on **TCP 2300**, **UDP 2350** (the first free port from there, up to 2400), and
+**TCP/UDP 47624** for session "enumeration" (the
 enumeration reply is how a host advertises which ports it is listening on). gpgnet4ta instead:
 
 - instantiates a `GameReceiver`/`GameSender` pair **per remote player** on loopback random ports, and
@@ -300,17 +301,21 @@ prints the override string.
    |---|---|---|
    | `dplaysvr.exe` | `0x010022FD`, `0x010023E2` | `push 8BAh` |
    | `dplaysvr.exe` | `0x01002DE8` | `mov ebx, 8BAh` |
-   | `dpwsockx.dll` | `0x5DF08300` | `mov word [ebp-12h], 8BAh` |
-   | `dpwsockx.dll` | `0x5DF08D8C` | `push 8BAh` |
-   | `dpwsockx.dll` | `0x5DF091C5`, `0x5DF0921D` | `mov word [edi+0Ch]` / `[edi+2], 8BAh` |
+   | `dpwsockx.dll` | `0x5DF08300`, `0x5DF0921D` | `mov word [ebp-12h]` / `[edi+2], 8BAh` (TCP/IP `sin_port`) |
+   | `dpwsockx.dll` | `0x5DF08D8C` | `push 8BAh` (IPX path only, gated on family 6) |
+   | `dpwsockx.dll` | `0x5DF091C5` | `mov word [edi+0Ch], 8BAh` (IPX `sa_socket`) |
 
-   The only other `08 BA` pair in the eight files is the tail of a `call rel32` in `dplayx.dll`.
+   The two IPX sites are patched too, so the file stays consistent. The other `08 BA` / `BA 08`
+   pairs in the eight files bind nothing: the tail of a `call rel32` in `dplayx.dll`, and
+   `cmp ax, 8BAh` / `cmp ax, 0BA08h` in the DirectPlay 8 NAT helpers (`dpnhpast.dll`,
+   `dpnhupnp.dll`), whose random-port picker steps around 47624 in both byte orders. The data
+   ports do not collide either: `dpwsockx` binds the first free port from 2300 (stream) or 2350
+   (datagram) up to 2400, so two games on one machine take different ones.
    `tools/dpport.py` writes another port into all seven, refusing any file that is not
    byte-identical to these outside them. The name server listens there and the joiner's
    transport enumerates there, so peers carrying the same port find each other on
    `127.0.0.1` and on no other game's server: MEASURED 2026-09-27, `b1h`/`b1j` on 47700 walked
    into a live game while the compat suite's own game hosted on 47624, and that one passed too.
-   The game's data ports did not collide either.
 
 Where the files came from is its own small saga — see the routes below. They live
 outside the repo at `~/.local/share/ta-directplay/` (Microsoft redistributables,

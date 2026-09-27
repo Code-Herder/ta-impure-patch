@@ -11,8 +11,10 @@ immediates in their code, each already in network byte order (0x08BA is htons(47
     dpwsockx.dll  0x5DF08300  mov word [ebp-12h],8BAh      0x5DF08D8C  push 8BAh
                   0x5DF091C5  mov word [edi+0Ch],8BAh      0x5DF0921D  mov word [edi+2],8BAh
 
-(DISASSEMBLED from the files tools/dpinstall.sh installs; the only other 08BA/BA08 pair in the
-eight files is the tail of a call's rel32 in dplayx.dll.) Every peer of one game must carry
+(DISASSEMBLED from the files tools/dpinstall.sh installs. Two of the dpwsockx sites are its IPX
+path, patched so the file stays consistent. The other 08BA/BA08 pairs in the eight files bind
+nothing: a call's rel32 tail in dplayx.dll, and the DirectPlay 8 NAT helpers' comparisons that
+keep their random ports off 47624.) Every peer of one game must carry
 the same port: the host's name server listens on it and the joiner's transport asks it.
 
     dpport.py <wineprefix> <port>      # 47624 puts the stock bytes back

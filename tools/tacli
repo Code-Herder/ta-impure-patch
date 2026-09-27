@@ -873,6 +873,23 @@ def dplay_port_holders(port: int) -> list:
     return sorted({int(p) for p in re.findall(r"pid=(\d+)", r.stdout)})
 
 
+def end_prefix_dplaysvr(prefix: Path) -> int:
+    """End every dplaysvr.exe running in `prefix`, on whatever port. Called only while the
+    instance's own game is not running, when such a server is stale by construction."""
+    ended = 0
+    for pid in subprocess.run(["pgrep", "-x", "dplaysvr.exe"], capture_output=True,
+                              text=True).stdout.split():
+        try:
+            env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+            if (b"WINEPREFIX=" + str(prefix).encode()) not in env:
+                continue
+            os.kill(int(pid), 15)
+            ended += 1
+        except OSError:
+            continue
+    return ended
+
+
 def free_dplay_port(port: int) -> int:
     """Kill the dplaysvr.exe holding THIS instance's DirectPlay port.
 
@@ -1783,11 +1800,21 @@ def _launch(args) -> dict:
         meta["dplay"] = args.dplay
         inst.save_meta(meta)
     if getattr(args, "dplay_port", None) is not None:
+        if not meta.get("dplay"):
+            die("--dplay-port moves native DirectPlay, and this instance has none (add --dplay)")
+        if not 1024 <= args.dplay_port <= 65535:     # before it is saved: a bad port must not stick
+            die(f"--dplay-port {args.dplay_port}: not a port a game can bind (1024..65535)")
         meta["dplay_port"] = args.dplay_port
         inst.save_meta(meta)
     port = meta.get("dplay_port") or dpport.STOCK
     dplay_note = None
     if meta.get("dplay"):
+        # THIS PREFIX'S OWN NAME SERVER GOES FIRST, whatever port it holds. It outlives the game,
+        # and the game is not running here (an already-running instance returned above), so any
+        # dplaysvr.exe of this prefix is stale by construction -- and one left on the port a
+        # previous launch used would take this game's registration there while its joiners
+        # enumerate the new one: SELGAME with JOINGAME grey and nothing to say why.
+        ended = end_prefix_dplaysvr(inst.prefix)
         # AFTER the install, which puts the stock files back on every launch: the port is
         # the instance's, re-applied each time like the install itself.
         dplay_note = install_dplay(inst)
@@ -1795,7 +1822,8 @@ def _launch(args) -> dict:
             dpport.set_port(inst.prefix, port)
         except SystemExit as e:
             die(str(e))
-        dplay_note += f"; DirectPlay port {port}"
+        dplay_note += f"; DirectPlay port {port}" + (
+            f"; ended {ended} stale dplaysvr.exe of this prefix" if ended else "")
     if args.free_dplay_port:
         killed = free_dplay_port(port)
         dplay_note = ((dplay_note + "; ") if dplay_note else "") + (
