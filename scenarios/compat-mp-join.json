@@ -1,0 +1,47 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The compat suite's two-player stage (tools/compat/tacompat.py): the joining peer's half, applied on that peer, where owner 0 is the local player. Thirty units meet the hosting peer's (scenarios/compat-mp-host.json) in the middle of Two Continents, so both peers send each other creates, moves and hits within the stage's thirty seconds. Stock types only: every mod the suite runs has them. The commanders stay (clear_existing false).",
+ "seed": 20260927,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": false,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  }
+ },
+ "groups": [
+  {
+   "id": "join_wave",
+   "owner": 0,
+   "at": [
+    3200,
+    1200
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 6,
+    "spacing": 40,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 30
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      2800,
+      1200
+     ]
+    }
+   ]
+  }
+ ]
+}
