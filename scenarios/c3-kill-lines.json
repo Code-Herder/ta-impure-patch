@@ -1,0 +1,94 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C3's kill lines, on Show Down. Four towers of the player's, shooting an unarmed VTKROG0 of the AI's (the engine prints a unit's kill line only once the unit has fired, bit 31 of +0x110): VTLLT1 with 10 kills says \"10 kills - Vet10\", VTLLT0 with 10 \"10 kills - Vet2\" (stock's level), VTLLT1 with 1 \"1 kill - Vet1\" and VTLLT0 with 1 stock's \"1 kill\". Hover each one. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    4900,
+    1950
+   ]
+  },
+  {
+   "id": "target",
+   "type": "VTKROG0",
+   "owner": 1,
+   "pos": [
+    800,
+    700
+   ]
+  },
+  {
+   "id": "k10_keyed",
+   "type": "VTLLT1",
+   "owner": 0,
+   "pos": [
+    600,
+    550
+   ],
+   "kills": 10
+  },
+  {
+   "id": "k10_stock",
+   "type": "VTLLT0",
+   "owner": 0,
+   "pos": [
+    1000,
+    550
+   ],
+   "kills": 10
+  },
+  {
+   "id": "k1_keyed",
+   "type": "VTLLT1",
+   "owner": 0,
+   "pos": [
+    600,
+    850
+   ],
+   "kills": 1
+  },
+  {
+   "id": "k1_stock",
+   "type": "VTLLT0",
+   "owner": 0,
+   "pos": [
+    1000,
+    850
+   ],
+   "kills": 1
+  }
+ ],
+ "camera": {
+  "at": [
+   800,
+   700
+  ]
+ }
+}

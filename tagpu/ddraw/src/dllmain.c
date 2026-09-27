@@ -218,10 +218,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            resting on it, and logs.
            The unit keys: observers at the unit-data load 0x42D2E0, the FBI
            loader's entry 0x42BF40 and its read site 0x42BF97, and the COB
-           checksum 0x4B6BA0. 0x42D2E0 and 0x42BF40 chain onto the
-           extra-weapons module's own observers whenever that module installed
-           them; the extra-weapons loader site is 0x42CEF2. They read and
-           write nothing into the engine.
+           checksum 0x4B6BA0. The fail-closed table has already installed them
+           (tagpu_patches.c, fix_veterancy: the reader carries the veterancy
+           keys), so the call here answers what that one did, and the
+           extra-weapons module's own observers on 0x42D2E0 and 0x42BF40 chain
+           onto them above; the extra-weapons loader site is 0x42CEF2. They
+           read and write nothing into the engine.
            nomapweaponalert: the damage function's send 0x499E37 and the
            local apply 0x489C89, the calls at 0x489DA2 (0x406F80, which the
            extra-weapons module hooks at its entry, so the call reaches it

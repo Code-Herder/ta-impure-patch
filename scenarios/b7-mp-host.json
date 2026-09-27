@@ -1,0 +1,63 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B7's one meteor, one hit, and C3's veterancy across peers: the host's half, applied on the hosting peer (owner 0 is always the local player). WK Hail C rains WK_HAIL_L on Show Down, 5 a stone against ARMMSTOR and 0 against the rest, and every peer runs its own shower; a stone is computed on the peer that spawned it, and a stone that hits another peer's storage travels as that peer's hit. Four metal storages, and VTLLT1 with 10 kills beside the joiner's targets (scenarios/b7-mp-join.json): a hit it lands on the joiner's VTKROG0 takes 160, computed here and applied there, and every kill it makes reads the same on both peers. Content: tools/datakeys_fixture.py into both instances' gamedirs.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "WK Hail C",
+  "res": "1024x768",
+  "clear_existing": false,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  }
+ },
+ "units": [
+  {
+   "id": "h_store_1",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    400,
+    400
+   ]
+  },
+  {
+   "id": "h_store_2",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    1400,
+    400
+   ]
+  },
+  {
+   "id": "h_store_3",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    2400,
+    400
+   ]
+  },
+  {
+   "id": "h_store_4",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    3400,
+    400
+   ]
+  },
+  {
+   "id": "h_vet",
+   "type": "VTLLT1",
+   "owner": 0,
+   "pos": [
+    1000,
+    1100
+   ],
+   "kills": 10
+  }
+ ]
+}

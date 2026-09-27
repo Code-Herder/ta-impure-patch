@@ -1,0 +1,41 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A unit reclaim's step held to what its product holds, on Show Down. 0x4386B9..0x4386C3 multiply the reclaimer's workertime, its factor, the target's MaxHitPoints and the 15 ticks between steps in 32 bits: ARMCOM's 300 on a CORKROG's 29 918 is 134 631 000 a factor, so a factor of 32 wraps. rcl_k: VTCOM1 (keyed, a level a kill) with 31 kills, factor 32, held to 31. rcl_s: VTCOM0 (no key) with 31 kills, stock's factor (31 + 5) / 5 = 7. Each reclaims a kill-less VTKROG0 of the player's; read the two targets' HP (+0x108) over time: the keyed one falls 31/7 as fast as the stock one. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {"id": "keep_ai", "type": "CORFUS", "owner": 1, "pos": [4900, 1950]},
+  {"id": "rcl_k", "type": "VTCOM1", "owner": 0, "pos": [600, 700], "kills": 31, "orders": [{"cmd": "reclaim", "target": "rcl_k_target"}]},
+  {"id": "rcl_k_target", "type": "VTKROG0", "owner": 0, "pos": [800, 700]},
+  {"id": "rcl_s", "type": "VTCOM0", "owner": 0, "pos": [1500, 700], "kills": 31, "orders": [{"cmd": "reclaim", "target": "rcl_s_target"}]},
+  {"id": "rcl_s_target", "type": "VTKROG0", "owner": 0, "pos": [1700, 700]}
+ ],
+ "camera": {
+  "at": [
+   1100,
+   700
+  ]
+ }
+}

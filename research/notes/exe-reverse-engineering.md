@@ -597,7 +597,9 @@ each an optional reference whose 0 the engine itself takes as no unit; both are 
   takes `0x44E0DA`'s own NULL, counted (`target`).
 - **The round robin's carrier.** The round-robin entry `0x48B3F0` (`ret 8`, called once, at
   `0x48BAC3`) is the full-state reader, `0x48B409..0x48B6F9`. After the type and the create it reads
-  `[16]` into `+0x108`, `[8]` ÷ 255 (the float at `0x4FD750`) into `+0x104` when it differs, `[8]` a state mask handed to
+  `[16]` into `+0x108`, `[8]` ÷ 255 (the float at `0x4FD750`) into `+0x104` when it differs (MEASURED:
+  the refresh a non-owner's copy took 26–37 s after a create at 1500, which the kill count reads —
+  *The kill count reads this peer's copy of the victim*, below), `[8]` a state mask handed to
   `UNITS_SetStateMask 0x48B090` (`0x48B50E`, `0x48B519`), `[2]` into `ebx` and one flag bit read in
   place (`0x48B527..0x48B557`). With the flag set it takes the child id, its own `+0xA8` (`0x48B55B`),
   reads a **15-bit carrier index** (`0x48B56B`) and
@@ -619,6 +621,18 @@ each an optional reference whose 0 the engine itself takes as no unit; both are 
   `mov [esp+0x17],ax`; span `0x48B55B..0x48B58F`, from the child id to the call of `0x48AB70`,
   continuing at `0x48B579`): a carrier past the array becomes 0, `0x48AB70`'s own no parent
   (`0x48ABA9`), counted (`carrier`).
+- **The kill count reads this peer's copy of the victim** [DISASSEMBLED + MEASURED 2026-09-26].
+  The destructor `0x4866D0` runs on every peer and counts a kill only when the attacker
+  `[victim+0xF0]` is non-NULL (`0x48699D..0x4869A5`), the victim's `+0x104` equals `0.0f`
+  (`fld [esi+0x104]; fcomp [0x4FD6F8]`, `0x4869A7..0x4869B8`; the dword at `0x4FD6F8` is 0), and the
+  victim's owner `+0xFF` differs from the killer's player `+0xF4` (`0x4869BA..0x4869C8`); then
+  `inc word [ecx+0xB8]` at `0x4869CA`, the kill count. A non-owner's copy made by a create keeps
+  its `+0x104` until the owner's round robin writes it (above), so a victim that dies before that
+  is counted only on its owner's peer. MEASURED on three peers (`tadr-port/sim-fixes.md`, *Kill
+  counts across peers*): ARMCK dead ~1 s after their create read `+0x104` 1.0 on both non-owners
+  and added 0 / 4 / 0 kills to the towers' copies (killer's owner / victims' owner / bystander);
+  ARMCK dead 40–94 s after it, whose non-owner copies had turned 0.0 at 26–37 s, added the same
+  kills on all three.
 - **The other decoders carry no unit index.** `0x44E9C0` (the `0x490A10` selector's 2): `[1]` flags,
   `[32] × 6` and, under flag bit 0, `[16]` into `+0x24`, which the class's `0x44EA60` (vtable
   `0x4FD3F8` `+0x20`) takes as a signed angle to step toward, by the def's `+0x1BA` over 8 — a
@@ -817,6 +831,15 @@ of the table after the generic state store `0x490B3D`). Its flags are the word `
 | 1 (`2`) | `0x497C62`, the loader's **last store** before it returns | `0x49847E` | the loader is done |
 | 2 (`4`) | `0x4975CA`, the loader after the level init | `0x49855D` (and `0x49686E` in the frame function), the game thread | this peer has loaded |
 | 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x49847E` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time |
+
+**Who passes the barrier last** [MEASURED 2026-09-26, three peers, Town & Country]. A peer frozen
+(SIGSTOP) at the barrier with bit 2 set holds every other peer at bit 2 too (`0x0005` on both
+others for 90 s), so bit 3 needs a message from each peer after the waiting peer's own load, not
+only the status sent before it. The peer that finishes loading **first** passes the barrier
+**last**: a peer slowed through its whole load holds everyone's status when it is done and makes
+the others' commanders in catch-up ticks, while a peer that loaded at full speed and was then
+slowed to 3 % at the barrier held both others' creates and replayed them at `0x49842F` (one start
+of two; `tadr-port/sim-fixes.md`, B5).
 
 **The first call** (bit 0 clear, tested at `0x497F54`) runs `0x497F5E..0x498334` once per level: the
 timing base `main+0x38A37` (`0x498164`), GameTime 0 (`0x498180`), and the loader thread
@@ -3595,6 +3618,139 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   a loaded game starts paused; the unit array's base moves at the load, so an address read before
   it is stale; the records do not appear as plain bytes in the `.SAV` file (compressed
   [INFERRED]).
+
+## Veterancy, a hit's word, the radar's owner test and the meteor shower — mapped for TADR landings C3 and B7 [DISASSEMBLED + MEASURED 2026-09-26]
+
+Every address veterancy (C3) and section B's seventh item (B7) touch or read
+([data keys, C3 as built](tadr-port/data-keys.html#c3-as-built),
+[simulation fixes, B7](tadr-port/sim-fixes.html); the hooks are in [gpu-status §2.100](gpu-status.html)).
+A rel8/rel32 scan of `.text` and every dword of the image finds no branch or pointer landing inside
+any of the replaced ranges: the seven veterancy sites, `0x489BF3`–`F9`, `0x489C71`–`75`,
+`0x49A01B`–`1F`, `0x4673B1`–`BB`, the two panel sites, and the calls at `0x49DF7D` and `0x49D307`.
+
+### A unit's kills and the seven places stock reads a level
+
+Kills are the u16 `unit+0xB8`, zero-extended by every reader; stock's level is `min(kills / 5, 5)`
+(`imul 0x66666667; sar edx,1`), except where noted.
+
+| site | function, what it computes | registers at the site |
+|---|---|---|
+| `0x489BFA` (7 bytes, `mov cx,[esi+0xB8]`) | the hit sender `0x489BB0`: the victim takes `(25 − L)·4 %` of the amount after armour (`0x489C16..0x489C32`), result in `edx` | `esi` the victim, `edi` the amount; `edx` dead (the `imul` at `0x489C01` writes it) |
+| `0x499DB5` (7, `mov cx,[ebx+0xB8]`) | the damage function `0x499CD0`: the shooter deals `(100 + 6L) %` (`0x499DD1`) | `ebx` = `[proj+0x52]`, the shooter, tested non-NULL at `0x499DAA`; `esi` the amount |
+| `0x49E468` (7, `xor ecx,ecx; mov eax,0x66666667`) | AutoAim's reload: the slot waits `reload · (100 − 6L) % · (120 − 20·HP/maxHP) %` (`0x49E48D..0x49E4BB`), so a damaged unit reloads slower | `edi` the unit; `ecx` = L at `0x49E48D` |
+| `0x48A324` (14, `cmp word [edi+0xB8],5; jbe 0x48A42D`) | target lead: on past 5 kills (`0x48A332`), off at `0x48A42D`; neither reads the flags | `edi` the unit |
+| `0x49D6EA` (5, `mov eax,0x2AAAAAAB`) | the fire method's spread: the divisor `kills / 12`, applied when above 1 (`0x49D702`, `cmp ebx,1`); `ecx += 0x800` first | `edi` the unit, `ecx` the spread; `ebx` written at `0x49D700` |
+| `0x4043D8` (7, `mov cx,[edx+0xB8]`) | the capture order `0x4042xx` (a state machine on `[order+5]`, jump table `0x404714`; "Capturing" `0x5013B8`, "That unit cannot be captured" `0x501618`, "…a cloud of vapor…" `0x5015E0`): the capture's cost, `min(f(def), 0x708)` (the clamp at `0x40438A..0x404396`) scaled by the target's HP (`0x404359..0x4043C7`; at most the clamped base, 1 800, for a target at full HP), times `(10 + L)/10` (`0x4043E8..0x404407`, a 32-bit product of at most 236 106 000 at the level cap 13 107, below 2³¹), written once to `[order+0x3A]` as the capture starts | `edx` = `[order+0x16]`, the TARGET; `edi` the cost; `eax` = 10 + L at `0x4043EC` |
+| `0x43869D` (7, `mov cx,[eax+0xB8]`) | `0x438650`, a UNIT RECLAIM's step: `workertime (def +0x1FE) · (k + 5)/5 · the target's maxHP (def +0x1FA) · 15` over the target's cost (`0x4386B9..0x4386D8`: the four factors multiplied in 32 bits, the product read unsigned by `fild qword` at `0x4386CC` with a zero high dword, so it wraps past 2³² − 1, at a factor of 32 for ARMCOM's 300 on a CORKROG, stock's factor at 155 kills), into `[order+0x36]`, the HP the reclaim order deals the target as a kind-5 hit every 15 ticks (`0x40496E..0x404986`, `[order+0x3A]` counting the ticks). Its two callers are the reclaim order (`0x40483D`; "Reclaiming" `0x501388`, "That unit cannot be reclaimed" `0x50164C`) and the build order's reclaim (`0x414C86`) — not capture, which an earlier survey had it as | `eax` the RECLAIMER, `dx` its workertime (`0x438694`); `edx` = the factor at `0x4386B9` |
+
+**MEASURED on the new build** (C3's fixture: `VT_LAS` deals 100 to every type, the victims are
+unarmed Krogoth clones with 29 918 HP): a keyed shooter at 10 kills and level 10 took 160 a hit,
+the unkeyed control at stock's level 2 took 112; a keyed victim at level 10 lost 60 a hit, the
+control 92. The keyed tower landed 4.95 hits/s, the control 2.29 (2.16 against the formula's 2.2,
+13 ticks against 6). A keyed reclaimer's steps were 472 HP, stock's 128 (3.69 against 11/3). A keyed
+capture target (cost × 20/10) took 16.4 s, stock's (× 12/10) 9.9 s. The unit reclaim lands as
+damage steps through `0x489BB0` every half second, so the target's own taken level applies to them.
+
+### The kill increment and where the counts part on two peers
+
+- **`0x4869CA`**, in the destructor `0x4866D0`, is the one increment: `inc word [ecx+0xB8]` with
+  `ecx` = the victim's `+0xF0` (the last attacker), when that is non-NULL, the victim's float
+  `+0x104` equals 0.0 (`0x4FD6F8`), and its owner `+0xFF` differs from `+0xF4`.
+- **`+0xF0`/`+0xF4` have two writers that matter**: the hit's apply `0x489CE0` (`0x489DBA`,
+  `0x489DC0`, only for a hit with an attacker, on the peer that applies it), and the death's
+  receive (`0x486778` from the death record's `+7`, `0x486787` from `0x44FE40([rec+3])`).
+- **Where the counts part:** every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer (*The kill count reads this peer's copy of the
+  victim*, above). MEASURED 2026-09-26 on two peers by C3: a host tower's own copy stayed at 10
+  through two kills of the joiner's scenario-created units while the joiner's copy counted 0 → 2
+  (the pre-C3 build; 3 on C3's); the `+0x104` reads of 0.0 there were taken after the kills, not at
+  them. Every level-reading effect reads the copy of the peer that runs it, so inside that window a
+  veteran's level depends on which peer computes. A stock defect, outside C3; not fixed.
+
+### The hit sender `0x489BB0` and the HP word
+
+- Stack at `0x489BF3` (after `sub esp,0xC` and three pushes): the caller's amount at `[esp+0x24]`,
+  `esi` the victim, `edi` the amount after armour, `ebx` the kind. Kind `0xA` (heal) skips armour
+  and veterancy (`0x489BBD` → `0x489C36`, `edx` = the amount).
+- **Armour** (`0x489BC3..0x489BF1`): only when the victim's `+0x10E` bit 1 is set, and never for an
+  amount of 30 000 or more (`0x489BD1`, `cmp edi,0x7530; jge`): `amount · def+0x1AA / 16` through
+  `0x4E43D0`.
+- **The store**: `mov [esp+0x11],dx` at `0x489C71` — the 9-byte record's `+5` is a WORD. The apply
+  `0x489CE0` subtracts it from the HP word (`sub word [esi+0x108],ax`, `0x489EB5`) and tests the
+  result signed (`0x489EBC..0x489EC4`); the paralyser (kind 2, `0x489DFD`) and the heal (kind `0xA`,
+  `0x489D6E`) read it with `movzx`. So an amount past 32 767 wraps into a gain.
+- **The 30 000 callers** (kill outright): self-destruct and player defeat `0x402147` and `0x486F94`
+  (`push 0x7530`, kind 3), a dying transport's cargo `0x48680B` (kind 3 or 6:
+  `0x4867DA..0x4867EC` pick 3 when the transport's death byte's high nibble is 3, else 6), and `0x402701`,
+  `0x41BC49`, `0x4886A4`, `0x4887D0` (kinds 4 and 9). The disintegrators (`ARM_DISINTEGRATOR`,
+  `CORE_DISINTEGRATOR`, default damage 30 000 in `ccdata`, `btdata` and `rev31`) are the only retail
+  weapons past 20 000, and their hit is raised by the shooter's level at `0x499DB5`.
+- **MEASURED, the pre-B7 build:** `WK_HUGE` (65 000, edge effectiveness 1) left a 1 329-HP storage
+  536 HP up a hit (1 329 → 7 225 in eleven hits); a commander with 25 kills (level 5) firing the
+  retail D-gun (39 000 a hit) left a storage at HP −11 135 = 1 329 + 2 · 26 536 − 65 536, two
+  wrapped hits, dying only because the second wrapped the HP word itself; a Krogoth with 25 kills
+  survived its own self-destruct at 5 918 HP (29 918 − 24 000).
+
+### `0x499CD0`, the damage function, and its factor
+
+`0x499CD0(proj, unit, factor)` reads the weapon's default damage zero-extended (`0x499CE3`, the
+word `+0xD4`), a per-type entry if the weapon has a table (`+0x64`, a sorted search through
+`0x4F8A70`), multiplies by the float `factor` (`0x499D73`), applies the shooter's level
+(`0x499DB5`), then the cheat bits of `main+0x37F2F` (bit 7 doubles, bit 8 halves), and calls
+`0x489BB0` at `0x499E37`. Its three callers: `0x499C82` in `0x499C70` (factor 1.0; no direct caller,
+reached through a pointer), the direct hit `0x49A062` (1.0), and the area pass `0x49A3F5`, whose
+factor is `edge + (1 − edge) · (1 − d/aoe)` (`0x49A3B6..0x49A3E0`, `edge` the weapon's `+0xD8`;
+1.0 at `d = 0`). So a weapon with edge effectiveness 1 deals every area hit whole.
+
+### The radar rebuild's projectile markers — `0x467300..0x467406`
+
+For a targetable or interceptor projectile (`ebx` = `proj+0x0A`), `al` = the local player
+`main+0x2A43`, the sight test is one of two grids by `main+0x14281` bit 1 (a byte grid at the
+player record's `+0x7C`, or the bit mask `1 << player` in the word grid `main+0x14273`), `edx` = in
+sight. Out of sight (`0x4673AF`), **`0x4673B1` reads the attacker's owner**: `mov ecx,[ebx+0x48]`
+(`proj+0x52`), `cmp [ecx+0xFF],al`, the marker drawn only for the local player's own. In sight
+(`0x4673BC`), the colour comes from the projectile owner's record: `[ebx+0x5C]` = `proj+0x66`,
+`main+0x1B8A + 331 · owner` → `+0x96`.
+- **MEASURED, the pre-B7 build:** targetable hail (`WK Hail T`, True line of sight, unmapped)
+  faults at `0x4673B4`, "Illegal read, data address 0x000000FF", `ECX=0`. Mapped with Permanent
+  line of sight nothing is ever out of sight and the read never runs.
+- **Owner 10, the stones' owner, is a populated record:** `main+0x2851` holds the name
+  "Player 10…" at `+0x2C` and a non-NULL colour pointer at `+0x27` (`main+0x2878`) [MEASURED], so
+  the in-sight path is sound for a stone.
+
+### The meteor shower on two peers
+
+- **The shower** `0x437DE0` runs from the sim tick `0x495594` on every peer, with no host test; the
+  map's OTA arms it through `0x437D40` at `0x4367F9`. Each stone is spawned at `0x49DF7D` (a call of
+  the projectile init `0x49C740` with no attacker) and broadcast as a `0x0D` (`0x49DFF6`); the
+  receiver `0x49D270` (from the dispatcher at `0x455433`) builds it again in its meteor branch,
+  `0x49D307`, also with no attacker.
+- **`0x49C740(proj, weapon, start, target, time, attacker)`**, stdcall (`ret 0x18`), has eight
+  callers; only those two pass no attacker (argument 6, `[esp+0x28]` at `0x49C7A8`; argument 4 is a
+  target position, copied to `+0x28` when not NULL, and `0x49CE4A` and `0x49D064` pass it NULL). It
+  writes `+0x62`, the firing piece, which the shooter's `QueryPrimary`/`QuerySecondary`/`QueryTertiary` script answers (`0x43E1E0`, run with the slot index), only for a projectile with an
+  attacker (`0x49C833`); the one reader of `+0x62` is `0x49B7D6`, behind the burst count `+0x60`,
+  which is 0 for a stone. `+0x66` is the owner byte, 10 for no attacker.
+- **The damage gate** `0x49A01B..0x49A047` computes a projectile's damage only when its owner's
+  record `main+0x1B63 + 331 · [proj+0x66]` is empty or not remote (`+0x73 == 3`), and sends a
+  remote one's to `0x49A0AE`: the firer's peer computes a shot. No peer marks record 10 remote.
+- **The pool** (base `*(main+0x141F7)`, count `*(main+0x141F3)`, stride `0x6B`) compacts by copying
+  records (`rep movs`, `0x49AEE0`), so a record's own bytes travel with it; only projectile code
+  reads the pool, and no save carries projectiles.
+- **MEASURED, the pre-B7 build, two peers on `WK Hail C`:** every one of 19 stone hits was
+  computed on both peers (matched by victim and game time within 20 ticks), and each owner's
+  storages lost exactly twice what the stones dealt (38 = 2 · 19, 22, 4 on the host; 10, 36, 30 on
+  the joiner). Each peer spawns its own shower: about 2 900 stones a peer in three minutes, each
+  received by the other.
+
+### The two kill lines
+
+- **`0x46AEE0`**, the unit panel, reached by `je 0x46AEE0` at `0x46ADD2`: the kill line is drawn
+  only when the unit's `+0x110` bit 31 is set and its kills are not 0 (`0x46B2B8..0x46B2D0`); then
+  `"kills"` `0x507548` and `"kill"` `0x507540` are translated (`0x4C5740`) and `0x46B306` reads the
+  kills. MEASURED: bit 31 is set on armed units once they have fired (the AI's firing towers read
+  `0xA0284101` and `0xB0280121`) and never on the unarmed [INFERRED meaning].
+- **`0x467CB0`**, a second panel with the same line at `0x467CCF`; no direct caller (TADR's
+  `devDrawKills`). Not seen drawn in play.
 
 ## Built-in cheat/console command surface
 

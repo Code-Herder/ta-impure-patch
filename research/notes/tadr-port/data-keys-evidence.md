@@ -30,7 +30,7 @@ is the case rule 3 exists for.
 | `surfacefire` (TADR's jumps froze the game once; its code also engages aircraft) | sim, flagged content | C2 · Part 1 §4 |
 | `notoverwater` / `notoverland` (TADR's gate skips the per-tick target read and reopens the stale-target class) | sim, flagged content | C2 · Part 1 §5 |
 | `nomapweaponalert` (TADR deletes the hit; the doc promises a silence) | display, built as a silence | C2 · Part 2 §1 |
-| `VeterancyThresholds` / `VeterancyAccuracyBuffRate` (TADR's cap of 25 makes a unit immortal, even to kill-outright; two lists divide by zero; one capture formula missed) | sim, keyed types | C3 · Part 3 §2 |
+| `VeterancyThresholds` / `VeterancyAccuracyBuffRate` (TADR's cap of 25 makes a unit immortal, even to kill-outright; two lists divide by zero; one level site missed, a unit reclaim's step) | sim, keyed types | C3 · Part 3 §2 |
 | `TransportedExplodeAs` / `TransportedSelfDestructAs` (TADR's passenger list is timing; no fold) | sim, keyed types | C4 · Part 3 §3 |
 | `PreviewPieces=`, over **our ghost showing pieces `Create()` hides, on 21 of 126 stock structures** | draw | C1 · Part 4 §2 |
 | `PreviewObject3D=` | draw | parked · Part 4 §3 |
@@ -1003,12 +1003,13 @@ section as its evidence.
   (DIS).** The marker branch `0x467300` reads the attacker's owner at `0x4673B1` (`mov
   ecx,[ebx+0x48]`, i.e. `proj+0x52`; `cmp [ecx+0xFF],al`) whenever the point is outside the local
   player's sight. A meteor weapon with `targetable=1` or `interceptor=1` (content only; no retail
-  weapon) faults every peer's radar rebuild on its first out-of-sight flight. A stock defect for
-  section B's register: bound it by skipping the owner test when `+0x52` is 0.
-- **Meteor showers in a network game (INF).** Every peer runs the shower from its own `rand()` and,
-  with `main+0x2A44` bit 0, broadcasts each meteor, and whether a peer computes damage for its copy
-  depends on the record at `main+0x2851`. Whether a unit takes one hit or one per peer is not
-  established: a two-peer measurement on a retail meteor map settles it (group E or B).
+  weapon) faults every peer's radar rebuild on its first out-of-sight flight (MEASURED, B7). Fixed
+  by [B7](sim-fixes.md): no attacker is not the local player's.
+- **Meteor showers in a network game (MEASURED, B7).** Every peer runs the shower from its own
+  `rand()` and, with `main+0x2A44` bit 0, broadcasts each meteor, and every peer computed every
+  stone's damage (no peer marks the record at `main+0x2851` remote), so a unit took one hit per
+  peer. Fixed by [B7](sim-fixes.md): a stone is computed on the peer that spawned it. Every peer
+  still runs its own shower.
 - **Stock `noradar=1` is only the minimap dot** (bit 6, one reader). Worth a line in the weapon-key
   reference Part 1 writes.
 
@@ -1138,8 +1139,8 @@ skirmish, compare `+0xB8` of every live unit on both.]
 | `0x49E46F` | `0x49E1A0`, the weapon tick's reload | `min(k/5, 5)` | yes (`reloadTimeBuffProc`, at `0x49E468`) |
 | `0x48A324` | target lead, in the aim path | `k > 5` | yes (`aimBuffProc`) |
 | `0x49D6E0` | `0x49D580`, the weapon class's fire method (vtable `+0x60`, stored at `0x49E024`) | `k/12` | yes (`accuracyBuffProc`, at `0x49D6EA`) |
-| `0x4043D8` | the capture order's tick | `k/5`, **unbounded** | yes (`captureCostProc`) |
-| `0x43869D` | `0x438650`, the capture duration (callers `0x40483D`, `0x414C86`) | `(k+5)/5` | **no** |
+| `0x4043D8` | the capture's cost, set once as the capture starts | `k/5`, **unbounded** | yes (`captureCostProc`) |
+| `0x43869D` | `0x438650`, a UNIT RECLAIM's step, the HP taken every 15 ticks (callers: the reclaim order `0x40483D`, the build order's reclaim `0x414C86`) | `(k+5)/5` | **no** |
 | `0x46B2C8`, `0x46B306`, `0x46B338` | the unit panel `0x46AEE0` | "N kill(s)", and "Veteran" at k ≥ 5 | yes (`drawKillsProc`) |
 | `0x467CCF`, `0x467CF1` | `0x467CB0`, a second panel | as above | yes (`devDrawKillsProc`) |
 | `0x46AC0D` | `0x46A860` (caller `0x469615`) | copied into a local record [role INFERRED: the panel's state; no send found] | no |
@@ -1159,8 +1160,9 @@ skirmish, compare `+0xB8` of every live unit on both.]
 - **The `0x0D` receiver** `0x49D270` builds its projectile directly (`0x49D307` → `0x49C740`) and
   copies the packet's 12-byte vectors (`0x49D30C..0x49D31C`). It never calls the fire method, so
   the spread is rolled once, on the firer, with that peer's RNG (`0x4B6C30`).
-- **Capture.** The capture order runs on the capturer's owner's peer and reads the target's
-  replicated kills.
+- **Capture.** The capture order runs on the capturer's owner's peer and reads the target's kills
+  as that peer counts them; kill counts can differ between peers (below, *What this part did not
+  establish*).
 
 **A mixed build therefore never desyncs through veterancy.** It applies different rules to
 different players' units, which is what the same-build contract exists to prevent, so the feature
@@ -1193,7 +1195,7 @@ is **sim** and fails closed (rule 3). This is the same shape section B's Part 2 
 | 1 or 2 | `0x499E37` | a weapon (2 = paralyser) |
 | 3 | `0x402147`, `0x486F94`, and the cargo of a self-destructing transport (`0x48680B`) | self-destruct; player defeat |
 | 4 | `0x4886A4`, `0x4887D0` | [role INFERRED] |
-| 5 | `0x404981`, `0x414B8D` | [role INFERRED: capture] |
+| 5 | `0x404981`, `0x414B8D` | a unit reclaim's step: `[order+0x36]` from `0x438650`, dealt every 15 ticks (DISASSEMBLED at `0x404981`; MEASURED by C3 as HP steps) |
 | **6** | **`0x48680B` only** | a passenger of a dying transport |
 | 9 | `0x402701`, `0x41BC49` | [role INFERRED] |
 | 0xA | `0x41BDC7` | heal: skips every multiplier (`0x489BBD`) |
@@ -1360,8 +1362,8 @@ Stock (DIS). With **L = min(k/5, 5)** unless noted:
 | reload | `0x49E468..0x49E4EE` | `reload(+0xE4) · (100 − 6L)/100 · (120 − 20·HP/maxHP)/100` → slot `+0x14` |
 | target lead | `0x48A324` | on when `k > 5` |
 | accuracy | `0x49D6C2..0x49D711` | spread = `weapon+0x104 + 2048·(1 − HP/maxHP)`, divided by `k/12` when that exceeds 1 |
-| capture, tick | `0x4043D5..0x404407` | `· (10 + k/5)/10`, with k/5 **unbounded** |
-| capture, duration | `0x438650` | `workertime · (k+5)/5 · …` |
+| capture, cost | `0x4043D5..0x404407` | `· (10 + k/5)/10`, with k/5 **unbounded** |
+| a unit reclaim, duration | `0x438650` | `workertime · (k+5)/5 · …` |
 | display | panels | "Veteran" at k ≥ 5 |
 
 TADR (SRC) replaces `k/5` with `L = |{t ∈ thresholds : t ≤ k}|` (an `upper_bound`) at the tick,
@@ -1409,9 +1411,12 @@ Only the display text differs from stock for every unit. **Rule 7 is easier than
     Both are reachable from mod data on the first capture of a veteran, so a crash comes from data.
 - **Signed kills.** `tamem.h` declares `Kills` as `short`, so from 32 768 kills TADR's levels differ
   from stock's zero-extended ones. That is unreachable in play, but it is not the identity.
-- **One capture formula is missed.** `0x438650`, which sets the order's `+0x36` at the start of a
-  capture (`0x40483D`, `0x414C86`), still uses stock's `(k+5)/5`. The tick uses TADR's levels, so a
-  keyed type's capture mixes the two [roles of `+0x36`/`+0x3A` INFERRED: total and progress].
+- **One level site is missed.** `0x438650`, which sets the order's `+0x36` as a unit reclaim starts
+  (the reclaim order `0x40483D` and the build order's reclaim `0x414C86`; "Reclaiming" and "That
+  unit cannot be reclaimed" are those handlers' strings), still uses stock's `(k+5)/5`. It is not a
+  capture: the capture's own site is `0x4043D8`, the cost written once to `+0x3A` as the capture
+  starts. [This pass first had `0x438650` as the capture's duration; C3 traced both callers,
+  2026-09-26.]
 - **Hot-path allocation.** `getThresholds` inserts into a map on first use mid-game, on the game
   thread (every hooked site runs there), so this is not a race. It is still a parse in the damage
   path.
@@ -1421,10 +1426,10 @@ Only the display text differs from stock for every unit. **Rule 7 is easier than
   - Stock reaches this only at L = 5 with a 30 000 weapon (×1.3 = 39 000).
   - TADR's uncapped levels reach it with far smaller weapons.
   
-  [INF: whether the disintegrator's hit goes through `0x499DB5` with its shooter set. Measure: a
-  vet-5 commander's D-gun on a 3 000-HP unit, on the previous build.] If it does, **it is a stock
-  defect for section B**, and a saturation at the word makes every multiplier here safe by
-  construction.
+  **It does** [MEASURED 2026-09-26, B7]: a commander with 25 kills fired the retail D-gun at a
+  1 329-HP storage and left it at HP −11 135 = 1 329 + 2 · 26 536 − 65 536, two hits of 39 000
+  each wrapped into a gain. **A stock defect, fixed by B7**: the store saturates into the word's
+  range, which makes every multiplier here safe by construction.
 
 #### Overlap
 
@@ -1454,9 +1459,11 @@ each stated at its site:**
 - **Reload:** L ≤ min(N, 16), the largest level with `100 − 6L > 0`.
 - **Lead:** `kills > thr[0]`.
 - **Accuracy:** `kills / rate` with rate 1…65 535. 0 = off. Anything else is malformed.
-- **Capture, both sites** (`0x4043D8` and `0x438650`): the unbounded level with the last gap. The
+- **The capture's cost and a unit reclaim's step** (`0x4043D8` and `0x438650`): the unbounded level with the last gap. The
   gap is ≥ 1 by the parse rule below. Cap the level at **13 107**, stock's own maximum
-  (65 535 / 5), so no product exceeds what stock already computes.
+  (65 535 / 5). The capture's product is at most 236 106 000 at it, below 2³¹; the reclaim step's is a 32-bit
+  product of four factors that wraps well below it (ARMCOM on CORKROG at a factor of 32, stock's
+  included at 155 kills), so C3 holds that factor to what the product holds ([C3, as built](data-keys.md#c3-as-built)).
 - **Display:** local, skip-and-log if its bytes differ (owner question 3).
 
 **Parse at load, reject whole.** 1…32 tokens, each a decimal in 1…65 535, strictly increasing. Any
@@ -1480,12 +1487,14 @@ previous build (a scratch checkout, `--keep-dll`) with the new one:
 
 - (a) is identical everywhere;
 - (b) gives the expected numbers: reload ticks read from slot `+0x14` after a shot, the victim's HP
-  delta for dealt and taken, `+0x36`/`+0x3A` for capture;
+  delta for dealt and taken, the time of a capture and of a unit reclaim;
 - (c) logs a rejection and plays stock.
 
 Kill-outright: a (b) unit at 30 levels self-destructs, is carried in a transport that is shot down,
 and belongs to a defeated player, and **must die** every time. Two peers (`a2net0`/`a2net1`):
-after a paused fight, every unit's `+0xB8` is equal on both.
+after a paused fight, every unit's `+0xB8` is equal on both. [MEASURED 2026-09-26: not always, in
+stock — a unit killed before the other peers' copies of it read `+0x104` = 0.0 is counted only on
+its owner's copy of the killer; see *What this part did not establish*.]
 
 #### Questions for the owner
 
@@ -1501,6 +1510,7 @@ after a paused fight, every unit's `+0xB8` is equal on both.
 3. **The panel text:** "VetN" for every unit, as TADR does and which changes stock's "Veteran", or
    only for types that carry the key?
 4. **Capture:** port both formulas (TADR misses `0x438650`) with stock's level ceiling of 13 107?
+   [`0x438650` is a unit reclaim's step, not a capture's: see §2, *One level site is missed*.]
 
 #### Decided 2026-09-25
 
@@ -1510,8 +1520,10 @@ after a paused fight, every unit's `+0xB8` is equal on both.
    stock's `min(kills/5, 5)`, so it kills every unit stock kills.
 2. **16**, decided without asking: it is a bound, the largest level with `100 − 6L > 0`.
 3. **"VetN" on every unit**, as TADR. Display only.
-4. **Both capture formulas, the level capped at 13 107**, decided without asking: it fixes TADR's
-   miss and keeps every product inside what stock already computes.
+4. **Both capture formulas, the level capped at 13 107**, decided without asking (the second is a
+   unit reclaim's step; the reason holds for it unchanged): it fixes TADR's
+   miss; the capture's product stays inside an int at the cap, and the reclaim step's factor is
+   held to what its own product holds.
 
 A malformed list or rate is rejected whole and the type plays stock for that key, with the file,
 the key and the reason logged ([the plan](data-keys.md#bad-values)).
@@ -1642,7 +1654,8 @@ syncs clean; the new one drops the type.
   comes from `rec+7`, and the three conditions are an attacker, `+0x104 == 0`, and `+0xFF != +0xF4`.
   Kills are saved at `0x487857` and restored at `0x4871C1`.
 - **The veterancy formulas** at `0x489BF3`, `0x499DAE`, `0x49E468`, `0x48A324`, `0x49D6C2`,
-  `0x4043D5`, and `0x438650` (whose callers are `0x40483D` and `0x414C86`). The display strings are
+  `0x4043D5` (the capture's cost), and `0x438650` (a unit reclaim's step; its callers are `0x40483D`
+  and `0x414C86`). The display strings are
   `"kills"` `0x507548`, `"kill"` `0x507540`, `"Veteran"` `0x507538`, and `"%d %s - %s"` `0x50752C`.
 - **`0x49A043`** is the gate that computes a projectile's damage only for a non-remote owner.
 - **The `0x0D` receiver** builds its projectile from the packet (`0x49D307`) and does not call the
@@ -1670,12 +1683,14 @@ syncs clean; the new one drops the type.
 
 ### What this part did not establish
 
-- Whether kill counts are equal on every peer in practice: `+0x104` is each peer's own copy.
-  Measure with two peers and a paused census.
-- Whether a hit above 32 767 reaches the HP word (the disintegrator at vet 5). This one goes to
-  section B.
-- The roles of damage kinds 4, 5 and 9, and of `0x46A860`, and the capture order's
-  `+0x36`/`+0x3A`.
+- **Kill counts are not always equal on every peer** [MEASURED by C3 and for B8, 2026-09-26]:
+  every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer (a host tower's copy stayed at 10 through two kills of the joiner's
+  scenario-created units; the joiner's copy counted 2). A stock defect, open for section B
+  ([sim-fixes.md](sim-fixes.md), *Kill counts across peers*).
+- **A hit above 32 767 does reach the HP word** [MEASURED, B7]: the D-gun of a commander at level 2
+  or more. Fixed by B7.
+- The roles of damage kinds 4, 5 and 9, and of `0x46A860`. In the capture order `+0x3A` holds the
+  capture's cost; in the reclaim order `+0x36` holds the step and `+0x3A` counts ticks to 15 (C3).
 - Whether `+0x86` is set on a non-owner peer for a remote passenger, which only affects the
   picture.
 - Whether a loaded saved game runs `0x42D2E0`. `tagpu_weapons` relies on it; measure with a
