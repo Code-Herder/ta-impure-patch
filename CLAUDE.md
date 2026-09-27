@@ -295,6 +295,15 @@ Pushing a `v*` tag is what cuts a release — GitHub Actions builds `ddraw.dll`,
 publishes the zip. The workflow writes only a one-line placeholder note, so the body is set
 afterwards with `gh release edit <tag> --notes-file <file>`.
 
+**Before the tag is pushed, the compatibility suite runs on the DLL being released**
+(`tools/compat/tacompat.py wine`, the `ta-compat-check` skill): the setups players actually run
+— TADR, the Community Patch Loader, Total Mayhem, ProTA, TA Zero's files, Escalation, gammata's
+drop-in — each started, and fought in where the menu comes up. **Nothing may be UNEXPECTED.**
+A known gap is the behaviour accepted until the takeover reaches that setup
+(the wiki's *Compatibility* section, `research/notes/compat/`); a crash beside a popular mod is found here or by a
+player. The Windows half (`tacompat.py windows`) runs on the owner's desktop, so ask first,
+and say in the hand-over which platforms ran.
+
 **Release notes are for the person downloading the zip, not a lab report.** Say what changed and
 what it means for them, lead with anything that made the previous release not work, and stop
 there. **Never carry the engineering apparatus into them** — no "what was measured", no

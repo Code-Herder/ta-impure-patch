@@ -115,5 +115,6 @@ renders/
 !/.claude/skills/
 /.claude/skills/*
 !/.claude/skills/ta-capture/
+!/.claude/skills/ta-compat-check/
 !/.claude/skills/ta-drive/
 !/.claude/skills/ta-video-montage/

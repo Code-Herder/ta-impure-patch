@@ -302,6 +302,46 @@ the rest at the game's first call into a DirectPlay export.
 | `0x4D989B` | the crash writer: `push esi; call [0x4FC0EC]` (`CloseHandle`) | append a module list |
 | `0x417B9B` | `call 0x4B7900`, the console command interpreter | a command table, empty in the shipped build |
 
+### Where other patchers meet ours — the Patch Loader's hand-off and TADR's limit crack [DISASSEMBLED + MEASURED 2026-09-26]
+
+What happens when these run beside Impure, and the suite that tests it, is
+the wiki's Compatibility section, from [its overview](compat/overview.md). The engine facts:
+
+- **`0x47BFA2`, `0x4B55FB`** — the exe's two `call 0x49F710`, and `0x49F710` is the
+  `DirectDrawCreate` import thunk (`jmp [0x4FC02C]`). The Community Patch Loader's `patch_call`
+  points both at `tdraw.dll`'s export, so on that route the exe's DirectDraw goes through TADR
+  and TADR calls whatever `ddraw.dll` it loaded.
+- **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
+  (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
+- **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a
+  refcounted string passed by value. It binary-searches the sorted array
+  `[0x51E6B4, 0x51E6B8)` of 8-byte `{name, mask}` entries with `strcmp 0x4F8A70`. On a name it does
+  not hold it allocates the 0x40-byte mask (`push 0x40; call 0x4B4F10` at `0x488CC2`, the
+  site Impure widens for 16 384 types), clears 16 dwords (`0x488CD2`), inserts through
+  `0x488FB0` (`this` = `0x51E6B0`), then releases its two strings through `0x4C9390` and returns
+  the mask. The carry flag is clear on both paths into `0x488CC2` (`je` after a `cmp` that
+  found equality, `jne` after `test eax,eax`).
+- **`0x42C028`** — one caller of `0x488C50`, in the unit-definition load: it reads the FBI key
+  `wpri_badTargetCategory` (string `0x503E88`, default `"none"` at `0x503EA0`) and stores the
+  mask at `def+0x231`. It runs on the Load Thread when a skirmish loads.
+- **`0x4C9390`** — releases a refcounted string: the count is the dword before the text,
+  decremented at `0x4C9396`, and the block is freed through `0x4E8820` when it reaches zero.
+  `ecx` points at the string object.
+- **The collision** — a pre-2026 TADR's `ModifyHook` at `0x488CC2` re-assembles the bytes it
+  finds there as if they were stock. After Impure's `jmp` it leaves `E9 <stub> 90 90 90 90 90`
+  through `0x488CCB` and a stub `push 0x800; jae 0x488D0D; …; jmp 0x488CCC` (read from the
+  running process, Total Mayhem 11.3.0). The `jae` is always taken, the allocation is skipped,
+  the frame is one dword low, and `0x4C9390` writes through `0x0042C02D`, the return address:
+  *Access Violation at `0x004C9396`, illegal write to `0x0042C029`*, Load Thread. TADR's
+  other `ModifyHook` sites fall on eleven more of Impure's unit-type relocations
+  (`0x406DB5`…`0x406ED6`, `0x48BE08`, `0x48BF1E`).
+- **The 3.9.02 exe's own bytes** — `0x406FB4` (an AI commander keeps its orders when hit),
+  `0x43E784` (the reclaim cursor over any unit), `0x4266A5` (the DirectX version box),
+  `0x4966E7` and `0x496776` (two debug keys), `0x4FCC7C` (the `+atm` amount),
+  `0x501FD8` and `0x501FE4` (`+AI` and `+Control` from level 4 to 2), `0x5098A4`
+  (`totala.ini` → `ta.ini`), and `0x40EAD6` (the path budget). The table is in
+  [the setups page](compat/setups.md#the-3902-exe).
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the

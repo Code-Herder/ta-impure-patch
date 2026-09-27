@@ -27,7 +27,7 @@ EXPORTS
     DllGetClassObject      = tplayx.DllGetClassObject      PRIVATE
 ```
 
-These are PE **export forwarders**: the export directory stores the string `"tplayx.DirectPlayCreate"` and the loader resolves it transparently, so real DirectPlay is reached with zero per-call overhead and the correct ordinals (`@1`–`@6`, `@9`) preserved. The same list is repeated as `#pragma comment(linker, "/export:...")` for MSVC builds (`tapl/dllmain.c:100-110`). `tplayx.dll` is the real DirectPlay renamed and shipped in the game folder by the Community Patch installer. [CLAIMED — the rename is not in this repo; only the forwarder target name is verified.] Build is a minimal MinGW cross-compile, `-Wl,--enable-stdcall-fixup -s -shared -static`, i686 (`tapl/Makefile:5-13`).
+These are PE **export forwarders**: the export directory stores the string `"tplayx.DirectPlayCreate"` and the loader resolves it transparently, so real DirectPlay is reached with zero per-call overhead and the correct ordinals (`@1`–`@6`, `@9`) preserved. The same list is repeated as `#pragma comment(linker, "/export:...")` for MSVC builds (`tapl/dllmain.c:100-110`). `tplayx.dll` is TADR's demo recorder (TADR ships it from `src/Recorder/dist/<mod>/tplayx.dll`), which in turn loads the system's `dplayx.dll`: measured on Wine with the `+loaddll` trace for Total Mayhem 11.3.0 and ProTA 4.8 (2026-09-26, [the Compatibility section](compat/overview.md)). Build is a minimal MinGW cross-compile, `-Wl,--enable-stdcall-fixup -s -shared -static`, i686 (`tapl/Makefile:5-13`).
 
 ## Exe fingerprinting & version detection
 

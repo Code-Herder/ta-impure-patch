@@ -1,0 +1,226 @@
+{
+  "fixtures": {
+    "tadr-1.0.0.545": {
+      "about": "TADR 1.0.0.545 (2006), the old recorder: one Dplayx.dll the retail exe loads as its DirectPlay",
+      "manual": "https://cc.tauniverse.com/downloads/tadr/tadr1RC2.zip -- behind a browser check; the same Dplayx.dll is ModDB's tadr1.0.0.545.zip",
+      "archive": "tadr1RC2.zip",
+      "md5": "63b19fd750681c2c5f5e25575d9d6b2d",
+      "files": {
+        "Dplayx.dll": "d0733fffbef4c2878c71b825d9cccbe0",
+        "Dplayx.map": "4cd760b14cbde19c17b6c80401558f55"
+      }
+    },
+    "tadr-v2026.8.6-full": {
+      "about": "TADR v2026.8.6 (the last stable release), 'full' build: tdraw.dll for the 3.9.02 exe",
+      "url": "https://github.com/tanvanman/TADR/releases/download/v2026.8.6/tdraw-full.zip",
+      "archive": "tdraw-full.zip",
+      "md5": "ecf6057c6f94fe68bb49ac5fe2802172",
+      "files": {
+        "tdraw.dll": "ff20584cc5fda7b6c2d74405e7a06978",
+        "totala.ini": "1913d2152aa43a56183b3b2539909cc4"
+      }
+    },
+    "tadr-dev-ota": {
+      "about": "TADR pre-release dev-dcff5dd (2026-09-20), OTA build",
+      "url": "https://github.com/tanvanman/TADR/releases/download/dev-dcff5dd/tdraw-ota.zip",
+      "archive": "tdraw-ota.zip",
+      "md5": "9220d98aae3bf8cb9b2ea862b92846e9",
+      "files": {
+        "tdraw.dll": "35941adcdf7679f042bfe03b6886d6cb",
+        "totala.ini": "a6a0664ddbade576ab9f1dd910568626"
+      }
+    },
+    "tadr-dev-tazero": {
+      "about": "TADR pre-release dev-dcff5dd, TA Zero build (config=tazero); its recorder is named zplayx.dll",
+      "url": "https://github.com/tanvanman/TADR/releases/download/dev-dcff5dd/tdraw-tazero.zip",
+      "archive": "tdraw-tazero.zip",
+      "md5": "0a3dfc91219e5633694b0a8c5de90e9c",
+      "files": {
+        "tdraw.dll": "24b2241c9611c48b5e821f268a83ed0a",
+        "zplayx.dll": "d84a0c09687cb3022db026b3eca35074",
+        "totala.ini": "a6a0664ddbade576ab9f1dd910568626"
+      }
+    },
+    "tadr-dev-mayhem": {
+      "about": "TADR pre-release dev-dcff5dd, Total Mayhem build, with its tplayx.dll",
+      "url": "https://github.com/tanvanman/TADR/releases/download/dev-dcff5dd/tdraw-mayhem.zip",
+      "archive": "tdraw-mayhem.zip",
+      "md5": "a3da79f70cb3f119a7fc1ea5821a4796",
+      "files": {
+        "tdraw.dll": "cf46bc87c69b3c18190ca77c126fc347",
+        "tplayx.dll": "ffe8d85e1ac277a26b4b88d2dfdf5455",
+        "totala.ini": "a6a0664ddbade576ab9f1dd910568626"
+      }
+    },
+    "tadr-dev-escalation": {
+      "about": "TADR pre-release dev-dcff5dd, Escalation build: tdraw.dll is installed as TAESC.dll",
+      "url": "https://github.com/tanvanman/TADR/releases/download/dev-dcff5dd/tdraw-escalation.zip",
+      "archive": "tdraw-escalation.zip",
+      "md5": "203bc33a2be191006f4d3efcc0ce3a12",
+      "files": {
+        "tdraw.dll": "3ea03c9c6e9c5f8856c8614f5844338d",
+        "eplayx.dll": "f1e21fc4a9c000e3e308cf55173cc95b",
+        "totala.ini": "a6a0664ddbade576ab9f1dd910568626"
+      }
+    },
+    "tadr-recorder-ota": {
+      "about": "TADR's OTA recorder tplayx.dll 2026.9.9, from the repository's dist folder at dcff5dd",
+      "url": "https://github.com/tanvanman/TADR/raw/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/dist/ota/tplayx.dll",
+      "md5": "802186c97e5b6a74fc6eff0c8b1b1c2f",
+      "files": {
+        "tplayx.dll": "802186c97e5b6a74fc6eff0c8b1b1c2f"
+      }
+    },
+    "patchloader-1.3.0.0": {
+      "about": "The Community Patch Loader v1.3.0.0: a dplayx.dll that patches the retail exe in memory, loads tdraw.dll and forwards DirectPlay to tplayx.dll",
+      "url": "https://github.com/FunkyFr3sh/Total-Annihilation-Patch-Loader/releases/download/v1.3.0.0/dplayx.dll",
+      "md5": "d2dc016d6a014f5b187026c9b3f1ab57",
+      "files": {
+        "dplayx.dll": "d2dc016d6a014f5b187026c9b3f1ab57"
+      }
+    },
+    "gammata-ota": {
+      "about": "gammata's OTA drop-in (2022/2023): the 3.9.02 TotalA.exe, 2022 tdraw.dll + tplayx.dll, tmusi.dll, and cnc-ddraw as ddraw_custom.dll",
+      "url": "https://github.com/gammata/TA-Unofficial-Patch-Install/raw/ce3f950d015c3361b64564b590c43bba303f23e5/OTA.Dropin.Install.zip",
+      "archive": "OTA.zip",
+      "md5": "05f56b58f2c7e786903fd0d643d9209e",
+      "files": {
+        "TotalA.exe": "df08c41ea3e508a0debb6bfb16af1e5e",
+        "tdraw.dll": "e2cd40ae60d7e92b09afa1e97f86c927",
+        "tplayx.dll": "d38f252cb07531a2bcf8fec9e68163dc",
+        "tmusi.dll": "3f88d6150c7d9fa543134f89ce8b27d7",
+        "ddraw_custom.dll": "7d2233c8df901fb3d398ad10a85bd3b7",
+        "ddraw.ini": "576ab272920e2b0e98b641dfc97b2abd",
+        "Settings.ini": "c22bc20928af0e0a873d63b8aa6a8f7b",
+        "ChatMacro.ini": "b591d63ab6dd6abf1dcae771a789a0d2"
+      }
+    },
+    "escalation-gold-10.2.0": {
+      "about": "Escalation GOLD 10.2.0: its own TotalA.exe importing TAESC.dll (TADR under Escalation's names), the recorder eplayx.dll, and the mod's archives",
+      "manual": "TAESC_GOLD_10_2_0_FULL.rar from https://taesc.tauniverse.com/ (behind a browser check); import the unpacked folder 'Step_2_Install Main Files (copy all contents into your main TA folder)'",
+      "files": {
+        "TotalA.exe": "1e677a7f92c79b5ab35440853d822c17",
+        "TAESC.dll": "7203733f33b8ce0b4831e211584bb24c",
+        "eplayx.dll": "b92d4277ff79c3183025a9a5a38c3434",
+        "emusi.dll": "a66f7650ab393518b471fbeed0cd4e28",
+        "TAESC.ini": "a95eb6d53be1c0b0c60ddbff982a1411",
+        "TAESC.gp3": "e6d52ca4d5d916c63a47c6f15ed8edc9",
+        "T2ESC.ufo": "29c46b11f47d519649b3154f864ebd66",
+        "T3ESC.ufo": "bdb22cc60acec41412cfa7f56d835979",
+        "T4ESC1.ufo": "6c7828a657b97367d97647d8b5f272b8",
+        "T4ESC2.ufo": "df37365ae0866c55221d1651d7919671",
+        "T5ESC.ufo": "331a68f4217583f7e64bb04973fd949e",
+        "TXESC.ufo": "f6f116625ea8e3632ec672c64389b9be",
+        "TADEMO.ufo": "010a5fb83919622caf756e510c149396"
+      }
+    },
+    "mayhem-11.3.0": {
+      "about": "Total Mayhem 11.3.0 (20 June 2024, the current release): the stock 3.1 TotalA.exe, its own Patch Loader build as dplayx.dll with the Mayhem patch list built in, a TADR tdraw.dll and tplayx.dll, cnc-ddraw as ddraw.dll and ddraw_custom.dll, and the mod's archives",
+      "manual": "https://mayhem.tauniverse.com/totalm/TotalM1130.zip -- behind a browser check; sha256 f485e8950a4b71940f414159ab6375a3cc32f35c2e8a962918e5984d801363af",
+      "archive": "TotalM1130.zip",
+      "md5": "9f96d80651934c048d134f007cd324cd",
+      "files": {
+        "1092 to 113 changelog.txt": "99b51b99da8aba7d516ac64e35ad0a1a",
+        "824e and OTA to 109 changelog.txt": "1e4e6590b0107b11f985f6d0605ba78f",
+        "bass.dll": "8e58fcc0672a66c827c6f90fa4b58538",
+        "basscd.dll": "158f9d9b41ad9a5c1e29531b8b849484",
+        "bassflac.dll": "64c96631887874f7ed9d8881fc016846",
+        "bassmix.dll": "d31da7583083c1370f3c6b9c15f363cc",
+        "basswasapi.dll": "39b0dacbe212510c6b6514b0f27f7515",
+        "ddraw.dll": "14ed39075b7bea30808a2f23b5cbe187",
+        "ddraw.ini": "9ebf75da3f9393ea984936bca00a99f2",
+        "ddraw_custom.dll": "7d2233c8df901fb3d398ad10a85bd3b7",
+        "dplayx.dll": "aa06f3ef83c04fc048edbb28e49a5894",
+        "Icon/AIRCONS.PCX": "4f449669130832446c2ea39499292da9",
+        "Icon/AIRCRAFTCOMBAT.PCX": "4f449669130832446c2ea39499292da9",
+        "Icon/ARM.pcx": "296a463f7532d584fcfbac85460cb234",
+        "Icon/BUILDING.PCX": "dbe074b61817dbdc54232a2f3dc9670d",
+        "Icon/CONS.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "Icon/CORE.pcx": "8c803553e7a311c177246006e294b9bc",
+        "Icon/FACTORY.PCX": "a9cdfaffb78c8952b26f5c0234481433",
+        "Icon/GOK.pcx": "b3ab7742aed8ab18150e146283da2934",
+        "Icon/iconcfg.ini": "422dad72f026f7f62bf72a731d02bcd1",
+        "Icon/MOBILECOMBAT.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "Icon/NONE.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "Icon/NUKEICON.pcx": "4c1c8ef84a7c86f72b9bba4121d27eed",
+        "Icon/smallcircle.pcx": "07963ea68881795d0673e7d7890f57e9",
+        "Icon/UNKNOWN.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "mayhem.gp3": "0864f29b060f9a2f2bbd433776a0bacc",
+        "mayhem.ini": "b27132a032e15afbe461aa33e28f5c42",
+        "TADemoM.ufo": "6df4ad7ea15f5b0f97d646b12e067b23",
+        "tdraw.dll": "cd2fed496addb4fec8dfe16f1dbdec95",
+        "tmusi.dll": "7aa463bc86b27c02d411bba47424a69c",
+        "TotalA.exe": "8e74a1dffa1f5988624c52048f5b20cd",
+        "tplayx.dll": "802e12e5aae66085f8da47bad120eacb",
+        "wgmus.ini": "6b35f4864e0ac8d5d25efd316c98119a",
+        "win32.dll": "7aa463bc86b27c02d411bba47424a69c"
+      }
+    },
+    "prota-4.8": {
+      "about": "ProTA 4.8 (29 August 2025, the current release): the stock 3.1 TotalA.exe, its own Patch Loader build as dplayx.dll with the ProTA patch list built in, a 2025 TADR tdraw.dll (the unvalidated limit crack) and tplayx.dll, cnc-ddraw as ddraw.dll, and the mod's ProTA.gp3",
+      "manual": "https://prota.tauniverse.com/ProTA4.8.zip -- behind a browser check; sha256 1b0acde162f30007a0e3a7a5a76e224217cec73a6a48e7894e394bff4ede0001",
+      "archive": "ProTA4.8.zip",
+      "md5": "692ad3851ae802186d6738b38ccbdad9",
+      "files": {
+        "audiere.dll": "14fdbcf78f39553202d382d9082dc9cb",
+        "bass.dll": "8e58fcc0672a66c827c6f90fa4b58538",
+        "basscd.dll": "158f9d9b41ad9a5c1e29531b8b849484",
+        "bassflac.dll": "64c96631887874f7ed9d8881fc016846",
+        "bassmix.dll": "d31da7583083c1370f3c6b9c15f363cc",
+        "basswasapi.dll": "39b0dacbe212510c6b6514b0f27f7515",
+        "ddraw.dll": "448b879e977c12436f3661b61b462696",
+        "ddraw.ini": "2b0c8b36be0544d0c53eb38364a428d9",
+        "dplayx.dll": "521ab149b64c1245e3c9fbf3d50803ca",
+        "Icon/AIR.PCX": "738929cdb7039ec24005cb223c4dbdd7",
+        "Icon/AIRCONS.PCX": "5e41046a6b7fdb2ece388a94912d486e",
+        "Icon/AIRCRAFTCOMBAT.PCX": "738929cdb7039ec24005cb223c4dbdd7",
+        "Icon/AIRFAC.PCX": "ed480c2e09e19d274a53cee6cd948a0e",
+        "Icon/ARM.pcx": "28fb0fafda2849ad7d86f8662129c4a2",
+        "Icon/BUILDING.PCX": "d62657cd3ddef8a4de3360f5aa491a6c",
+        "Icon/CONS.PCX": "e4975c3bc5e8ddfb986eaea8542bb26f",
+        "Icon/CORE.pcx": "b07e8488e953b4772040fc8a4423db7c",
+        "Icon/EXP.pcx": "b96a55c1cc51e3fc0d38721ff0e5d4e8",
+        "Icon/EXPFAC.PCX": "1b1fb52c091b2ecf6718edced79f5954",
+        "Icon/FACTORY.PCX": "8a4ff4463270acd81907f9694bf3b229",
+        "Icon/HOVCONS.pcx": "a9c125521049da24b6b63b7c05de3e78",
+        "Icon/HOVER.PCX": "bc396ae862369ee954a2de585373b653",
+        "Icon/HOVFAC.PCX": "299a9962bca47277d06ae8e4752c121b",
+        "Icon/iconcfg.ini": "5acc3aa0161487a77c7ee067d2e99530",
+        "Icon/KBOT.PCX": "b4eac2846e437a0ed135e9cbdcd8ac0b",
+        "Icon/KBOTCONS.pcx": "e4975c3bc5e8ddfb986eaea8542bb26f",
+        "Icon/KBOTFAC.pcx": "18341f8d86341345f02438ebace36fa6",
+        "Icon/MINE.PCX": "e3e3dd03fa992bbfcca576d1f26970ec",
+        "Icon/MOBILECOMBAT.PCX": "b4eac2846e437a0ed135e9cbdcd8ac0b",
+        "Icon/NONE.PCX": "b4eac2846e437a0ed135e9cbdcd8ac0b",
+        "Icon/NUKEICON.pcx": "c96be59d2e15a33e2967cdabfe4293e4",
+        "Icon/SHIP.PCX": "d84bcacfb8a966b5b0e815c8eb11f661",
+        "Icon/SHIPCONS.pcx": "fbd20dbaf6755d4c2c6155325aa0c8e0",
+        "Icon/SHIPFAC.PCX": "93c2fbd6810636cf67329a137bd70bc2",
+        "Icon/smallcircle.pcx": "e1ec5f7954e3d1660377424e02d5a9ff",
+        "Icon/SUB.PCX": "9c0e7a8cfe39bedaee9b2638e15c7fd1",
+        "Icon/SUBCONS.pcx": "90a5be8c3c28c4cc7c5848b08b746b51",
+        "Icon/UNKNOWN.PCX": "b4eac2846e437a0ed135e9cbdcd8ac0b",
+        "Icon/VEHCONS.pcx": "889ae5d76602ffab55f2ac673b357948",
+        "Icon/VEHFAC.PCX": "64c8634bdac895f257f4f9a38c9989e7",
+        "Icon/VEHICLE.PCX": "2a11042961aea6082843c7a337376d33",
+        "OTA 3.1 to ProTA 4.3 changelog.txt": "f58b52a3166bb9821e330130b784fa79",
+        "ProTA 4.4 changelog.txt": "0245cf2fe7225b36eb5e76f31cc94c1b",
+        "ProTA 4.5 changelog.txt": "2c50db5981d6b3254b4af9ff9f8f92db",
+        "ProTA 4.6 changelog.txt": "94b6ded2410a1cabd16a9151b232f0e1",
+        "ProTA 4.7 changelog.txt": "8ab5e93640221f1f85485eef7126ea09",
+        "ProTA 4.8 changelog.txt": "61ce9eac143f2912809b8e4352136287",
+        "ProTA readme.txt": "3bcd8819ae02853e32dc23ab03df9e41",
+        "ProTA.gp3": "1ca22145993383e636712aabad626464",
+        "ProTA.ini": "2ebe3373a96afca47f1c856ce29f7a0e",
+        "tdraw.dll": "9bea96406f918ef119f0de00a2c3617a",
+        "tmusi.dll": "3f88d6150c7d9fa543134f89ce8b27d7",
+        "TotalA.exe": "8e74a1dffa1f5988624c52048f5b20cd",
+        "tplayx.dll": "ffe575e6c4fae53dd71088697b089262",
+        "wgmus readme.MD": "689e18a8ed15141703fe4db40135a93a",
+        "wgmus.dll": "eb4c059868b39fa07154c9f576431b06",
+        "wgmus.ini": "14fcf8f9b3281eff1fa226efb644d634",
+        "win32.dll": "db359e64607c86a7de2048e83a46f89c"
+      }
+    }
+  }
+}
