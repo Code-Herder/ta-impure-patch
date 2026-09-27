@@ -3121,6 +3121,10 @@ static int __cdecl wire_s09(unsigned int* r)
     return 1;
 }
 
+/* the destructor's caller, past C4's tx_wrap (TRANSPORTED EXPLOSIONS, below), which makes
+   every destructor call */
+static unsigned int tx_dtor_caller(const unsigned char* ret);
+
 /* 0x0C destructor, branch at 0x4866E5 (stock's push edi at 0x4866E4 is left in place, so the
    drop's pop edi at 0x486E59 balances). ebx = rec, edx = main. Continue -> 0x486706 (esi = the
    unit); drop -> 0x486E59. */
@@ -3141,7 +3145,7 @@ static int __cdecl wire_s0c(unsigned int* r)
         wire_drop(&s_wire0C, "a unit-destroy names a unit past the array; dropped", idx, max);
         return 0;
     }
-    if (*(const unsigned int*)(WPN_ESP_JMP(r) + 0x78) == 0x00455428u) s_wireIn0C++;
+    if (tx_dtor_caller(WPN_ESP_JMP(r) + 0x78) == 0x00455428u) s_wireIn0C++;
     r[PR_ESI] = (unsigned int)(size_t)((char*)first + (size_t)idx * 0x118);
     return 1;
 }
@@ -6011,6 +6015,9 @@ static void kill_state_read(unsigned char* m, unsigned int idx);
 static void kill_apply_state(char* slot, const unsigned char* rec);
 static int kill_rx_death(unsigned int* regs, const char* ta, const unsigned char* m);
 static volatile LONG s_killBare0C;
+/* C4's destructor wrap, in the TRANSPORTED EXPLOSIONS section below: the 0x4C's destructor
+   call goes through it */
+static unsigned char* tx_wrap_code(void);
 #define HIT_LB          0x80000000u         /* a stamp's bit 31: a lower bound, not a birth     */
 #define HIT_UNKNOWN     HIT_LB              /* no information: the owner reads it as "alive at
                                                time 0", a bystander as undecidable              */
@@ -6577,15 +6584,15 @@ static int fix_stale_hits(void)
     static const unsigned char back0b[5] = { 0xE9, 0x34, 0x0B, 0x00, 0x00 };  /* 0x455417 */
     static const unsigned char len09[2]  = { 0x6A, 0x17 };                    /* 0x45605C */
     static const unsigned char len0b[2]  = { 0x6A, 0x09 };                    /* 0x489CA8 */
-    unsigned char *aTake, *aFree, *aExit, *aAlloc, *aChat, *aBare09, *aBare0B, *aSpawn, *p,
-                  *doCreate, *doHit, *doDeath, *jCreate, *jHit, *jDeath, *jNone;
+    unsigned char *aTake, *aFree, *aExit, *aAlloc, *aChat, *aBare09, *aBare0B, *aSpawn, *aWrap,
+                  *p, *doCreate, *doHit, *doDeath, *jCreate, *jHit, *jDeath, *jNone;
 
     hit_read_lever();
     if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) hit_selfcheck();
 
     if (!(aTake = hit_code(64)) || !(aFree = hit_code(32)) || !(aExit = hit_code(32)) ||
         !(aAlloc = hit_code(32)) || !(aChat = hit_code(96)) || !(aBare09 = hit_code(16)) ||
-        !(aBare0B = hit_code(16)) || !(aSpawn = hit_code(48))) {
+        !(aBare0B = hit_code(16)) || !(aSpawn = hit_code(48)) || !(aWrap = tx_wrap_code())) {
         lim_no_stub();
         return FIX_TABLE;
     }
@@ -6645,12 +6652,12 @@ static int fix_stale_hits(void)
     *p++ = 0x50;                                         /* push eax           */
     *p++ = 0x68; p = hit_abs(p, (const void*)0x00455417); /* push 0x455417     */
     p = hit_jmp(p, 0xE9, 0x00489CE0);
-    doDeath = p;                                         /* the case 0x45541C: */
-    *p++ = 0x61;                                         /* popad: eax = record */
+    doDeath = p;                                         /* the case 0x45541C, */
+    *p++ = 0x61;                                         /* through tx_wrap (C4): */
     *p++ = 0x6A; *p++ = 0x00;                            /* push 0 (mode 0)    */
     *p++ = 0x50;                                         /* push eax           */
     *p++ = 0x68; p = hit_abs(p, (const void*)0x00455428); /* push 0x455428     */
-    hit_jmp(p, 0xE9, 0x004866D0);
+    hit_jmp(p, 0xE9, (unsigned int)(size_t)aWrap);
     *jCreate = (unsigned char)(doCreate - (jCreate + 1));
     *jHit = (unsigned char)(doHit - (jHit + 1));
     *jDeath = (unsigned char)(doDeath - (jDeath + 1));
@@ -7469,7 +7476,8 @@ static int fix_ghost_commander(int wire)
    unit of a player that is not local (a player who left, 0x452E17). The destructor's two
    callers: Send_UnitDeath 0x4864B0 at 0x486679, on the peer that runs the death (the reaper of
    a local unit 0x48AFC9, kill-all's non-local branch 0x486FB4, the teardown), and the 0x0C case
-   at 0x455423 on every other peer. `unit+0x86` is the transporter while the unit is carried.
+   at 0x455423 on every other peer -- which this build reaches only through B8's 0x4C (B4's
+   doDeath), a bare 0x0C being dropped. `unit+0x86` is the transporter while the unit is carried.
    The destructor detaches its unit (0x4867BA, 0x4867CB) before its explosion, and a dying
    transport's cargo loop (0x4867D0..0x48682A) hits each passenger with 30 000 of kind 6 (kind 3
    when the transport self-destructs) and detaches it: when 0x49B017 runs from the destructor,
@@ -7489,9 +7497,17 @@ static int fix_ghost_commander(int wire)
        for the incarnation it was taken for; the decision consumes it, and hit_reset empties
        every mark with the stamps at the unit array's allocation.
    The answer lives in s_txCarried[idx], idx = rec+1, for exactly one destructor call: tx_wrap,
-   which makes the call at 0x486679, reads idx before the call and clears it when the call
+   which makes every destructor call, reads idx before the call and clears it when the call
    returns. The destructor finds its unit by rec+1 (0x4866E0, B3's wire_s0c), and the pick at
    0x49B017 reads the flag by the slot of the unit it is given, which is that slot.
+
+   ON THE WIRE. The owner's answer travels as m[19] of B8's 0x4C (kill_tx_death), since a
+   passenger's copy on another peer has been detached by its transport's death, sent first.
+   The receiver arms it for the destructor call the 0x4C makes (tx_rx_death, then doDeath ->
+   tx_wrap). A 0x4C refused while the receiver loads reaches no destructor then: when B5 marks
+   the copy dying instead, the answer waits as a mark on that copy's stamp (tx_rx_swept), for
+   tx_arm when the unit tick destroys it. The blast's damage is the owner's alone (0x49A043),
+   so what m[19] decides elsewhere is the explosion drawn.
 
    KILL-ALL [DISASSEMBLED]. Its non-local branch detonates each unit in slot order (0x486F9E),
    then destroys it through Send_UnitDeath, whose destructor runs the cargo loop: a transport
@@ -7499,7 +7515,12 @@ static int fix_ghost_commander(int wire)
    as not carried. So kill-all is bracketed (tx_kill_wrap, depth counted), the cargo loop lists
    every keyed passenger it detaches inside the bracket, and the list is emptied when the
    outermost kill-all returns; the pick honours it only inside. With +0x86 for a passenger whose
-   turn comes first, every carried unit of the player detonates carried, on every peer alike.
+   turn comes first, every carried unit of the player detonates carried. The cargo loop's detach
+   broadcasts a 0x0A (0x48AAC0), and with three peers or more the first to run the player
+   removal (0x452E17) would detach the departed player's passengers on the others before their
+   own kill-all: inside kill-all, a non-local transport's detach is applied without it
+   (tx_detach), so each peer decides on its own copy alone. A departed player's blasts damage
+   nothing (the owner gate 0x49A043), so what that decides is the explosion drawn.
 
    THE FOLD: tagpu_datakeys.c, tagpu_datakeys_tx_fold, at the menu-time loader's last store.
 
@@ -7516,7 +7537,8 @@ static unsigned int   s_txMark[65536];       /* a dying passenger's birth stamp 
 static unsigned char  s_txKillMark[65536];   /* detached inside the running kill-all          */
 static unsigned short s_txKillList[65536];   /* which, to empty at its end; each listed once  */
 static unsigned int   s_txKillN, s_txKillDepth;
-static unsigned int   s_txDecided, s_txMarked, s_txKillMarked, s_txPicked;
+static unsigned int   s_txDecided, s_txMarked, s_txKillMarked, s_txPicked, s_txReceived;
+static unsigned int   s_txDetachedHere;
 static unsigned int   s_txWrapRet;           /* tx_wrap's return point inside the destructor  */
 
 static void tx_reset(void)
@@ -7577,6 +7599,40 @@ static void __stdcall tx_cargo(const char* passenger)
     }
 }
 
+typedef void (__stdcall *PFN_Attach)(const unsigned char* rec);
+#define E_Attach ((PFN_Attach)0x0048AB70u)   /* the attach record's apply, ret 4 */
+
+/* 0x48681D, the cargo loop's `call 0x48AAC0(passenger, 0, -1, 1)`, with the transport (esi
+   there): 1 when the detach was applied here without its broadcast, 0 for the stock wrapper.
+   Inside kill-all, a transport whose player is not local (kill-all's own test, 0x486F73..
+   0x486F87) belongs to a player every peer is destroying on its own copy; the wrapper's 0x0A
+   would reach a peer that has not yet run its own kill-all and detach the passenger there
+   first, so that peer's pick would see an uncarried unit. Applied here only, each peer's
+   decision rests on its own copy of the departed player's units. The record is the wrapper's
+   own (0x48AB0F..0x48AB4E: 0x0A, the child's +0xA8, parent 0, then -1 and 1), and only when
+   the wrapper would apply it: the child alive, not bit 29, carrying nothing (0x48AAC7..
+   0x48AAED). */
+static int __stdcall tx_detach(const char* child, const char* transport)
+{
+    const unsigned char* pl;
+    unsigned char rec[7];
+    unsigned int f;
+    if (!s_txKillDepth) return 0;
+    pl = *(const unsigned char* const*)(transport + 0x96);
+    if (!pl || (*(const unsigned int*)pl && (pl[0x73] == 1 || pl[0x73] == 2))) return 0;
+    f = *(const unsigned int*)(child + 0x110);
+    if (!(f & 0x10000000u) || (f & 0x20000000u) || *(const unsigned int*)(child + 0x8A)) return 0;
+    rec[0] = 0x0A;
+    memcpy(rec + 1, child + 0xA8, 2);
+    rec[3] = rec[4] = 0;
+    rec[5] = 0xFF;
+    rec[6] = 1;
+    E_Attach(rec);
+    tx_event(&s_txDetachedHere, "a departed player's passenger detached here, not broadcast",
+             NULL, NULL);
+    return 1;
+}
+
 /* 0x49B017: the weapon a carried keyed unit explodes with, or NULL for stock's pick */
 static const char* __stdcall tx_pick(const char* unit, int selfd)
 {
@@ -7600,6 +7656,65 @@ static void __stdcall tx_kill_end(void)
     while (s_txKillN) s_txKillMark[s_txKillList[--s_txKillN]] = 0;
 }
 
+/* tx_wrap(rec, mode), the destructor with its own signature: mov eax,[esp+4];
+   movzx eax,word [eax+1]; push eax; push [esp+0xC]; push [esp+0xC]; call 0x4866D0;
+   xchg eax,[esp]; mov byte [eax+s_txCarried],0; pop eax; ret 8 -- the record's index is read
+   before the call, and the flag it names is clear whenever no destructor call made through
+   here is running. Every destructor call this build makes goes through it: Send_UnitDeath's
+   (0x486679) and the 0x4C's (B4's doDeath, which jumps here with 0x455428 as the return);
+   the stock 0x0C case 0x455423 never runs, since a bare 0x0C is dropped (B8). Built on first
+   use, so that B4's stub, built before this section's sites, can name it. */
+static unsigned char* tx_wrap_code(void)
+{
+    static unsigned char* wrap;
+    unsigned char* p;
+    if (wrap || !(p = fix_code(48))) return wrap;
+    wrap = p;
+    *p++ = 0x8B; *p++ = 0x44; *p++ = 0x24; *p++ = 0x04;
+    *p++ = 0x0F; *p++ = 0xB7; *p++ = 0x40; *p++ = 0x01;
+    *p++ = 0x50;
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;
+    p = wk_jmp(p, 0xE8, 0x004866D0u);
+    s_txWrapRet = (unsigned int)(size_t)p;
+    *p++ = 0x87; *p++ = 0x04; *p++ = 0x24;
+    *p++ = 0xC6; *p++ = 0x80; p = hit_abs(p, s_txCarried); *p++ = 0x00;
+    *p++ = 0x58;
+    *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;
+    return wrap;
+}
+
+/* The destructor's return address as its caller left it, `ret` pointing at the slot: past
+   tx_wrap's frame (idx, mode, rec, then tx_wrap's own return) when tx_wrap made the call */
+static unsigned int tx_dtor_caller(const unsigned char* ret)
+{
+    unsigned int a = *(const unsigned int*)ret;
+    return s_txWrapRet && a == s_txWrapRet ? *(const unsigned int*)(ret + 0x10) : a;
+}
+
+/* A 0x4C accepted in state 6 (kill_rx_death, on the game thread), m[3..13] its record: the
+   owner's decision, m[19], armed for the one destructor call doDeath makes next through
+   tx_wrap, which clears it. The receiver's own +0x86 cannot say it: the transport's 0x4C,
+   sent first, has already detached the passenger here. */
+static void tx_rx_death(const unsigned char* m)
+{
+    s_txCarried[m[4] | (unsigned int)m[5] << 8] = (unsigned char)(m[19] == 1);
+    if (m[19] == 1) tx_event(&s_txReceived, "a carried death received", NULL, NULL);
+}
+
+/* A carried 0x4C refused in state 5 whose copy ghost_refused_kill has marked dying, on the
+   game thread: the unit tick destroys that copy later through Send_UnitDeath, where tx_arm
+   decides, so the owner's decision waits as a mark on the copy's exact stamp, which
+   ghost_sweep has just matched to the create it replayed. */
+static void tx_rx_swept(const unsigned char* m)
+{
+    const struct hit_tab* t = s_hit;
+    unsigned int idx = m[4] | (unsigned int)m[5] << 8;
+    if (m[19] != 1 || !t || idx >= t->n || (t->stamp[idx] & HIT_LB)) return;
+    s_txMark[idx] = t->stamp[idx] + 1u;
+    tx_event(&s_txMarked, "a carried death refused while loading, its copy marked", NULL, NULL);
+}
+
 /* The sites. Each stub's registers are the site's own [DISASSEMBLED]:
    - 0x49B017 (16 bytes, the pick; nothing lands inside them but their own jumps): ecx the
      unit, eax its def, edx 0, and selfd at [esp+0x7C] (0x49B000's frame: sub esp,0x6C, then
@@ -7610,6 +7725,8 @@ static void __stdcall tx_kill_end(void)
    - 0x486679 (call 0x4866D0): tx_wrap has the destructor's signature, stdcall (rec, mode),
      ret 8. eax holds the record there and nothing reads it after the call (0x48667E on).
    - 0x486810 (mov ecx,[esi+0x8A]): esi the transport, after the hit's return.
+   - 0x48681D (call 0x48AAC0, after its four pushes): esi still the transport; the stub has the
+     wrapper's signature, stdcall (child, parent, a3, a4), ret 0x10 (0x48AB6A).
    - 0x486F10 (kill-all's first ten bytes): stdcall (player), ret 4 (0x486FC6).
    - 0x42B019 (mov [ebp+0x146],edx): edx the finished CRC_weapons, ecx the unit's UNITINFO
      context (0x42B00A), ebp the def, and the call 0x42B01F's three arguments already pushed.
@@ -7631,6 +7748,8 @@ static int fix_transported(void)
     static const unsigned char recArg[7] = { 0x8D, 0x44, 0x24, 0x14, 0x6A, 0x01, 0x50 }; /* 0x486672 */
     static const unsigned char dtor[5]   = { 0xE8, 0x52, 0x00, 0x00, 0x00 };             /* 0x486679 */
     static const unsigned char cargo[6]  = { 0x8B, 0x8E, 0x8A, 0x00, 0x00, 0x00 };       /* 0x486810 */
+    static const unsigned char detach[5] = { 0xE8, 0x9E, 0x42, 0x00, 0x00 };             /* 0x48681D */
+    static const unsigned char detArgs[7] = { 0x6A, 0x01, 0x6A, 0xFF, 0x6A, 0x00, 0x51 }; /* 0x486816 */
     static const unsigned char kill[10]  = { 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x15, 0xE8, 0x1D,
                                              0x51, 0x00 };                               /* 0x486F10 */
     static const unsigned char killRet[5] = { 0x5F, 0x5E, 0xC2, 0x04, 0x00 };             /* 0x486FC4 */
@@ -7638,17 +7757,21 @@ static int fix_transported(void)
     static const unsigned char foldTdf[4] = { 0x8B, 0x4C, 0x24, 0x1C };                  /* 0x42B00A */
     unsigned char* aPick = fix_code(64);
     unsigned char* aArm  = fix_code(32);
-    unsigned char* aWrap = fix_code(48);
+    unsigned char* aWrap = tx_wrap_code();
     unsigned char* aCarg = fix_code(32);
     unsigned char* aKill = fix_code(48);
     unsigned char* aFold = fix_code(32);
+    unsigned char* aDet  = fix_code(32);
     unsigned char *p, *j, *tramp;
 
     if (!tagpu_datakeys_units_install()) {
         lim_needs("transported explosions (a simulation fix)", "the unit-key reader", "not installed");
         return FIX_TABLE;
     }
-    if (!aPick || !aArm || !aWrap || !aCarg || !aKill || !aFold) { lim_no_stub(); return FIX_TABLE; }
+    if (!aPick || !aArm || !aWrap || !aCarg || !aKill || !aFold || !aDet) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
 
     /* 0x49B017: pushad; push [esp+0x9C] (selfd); push ecx; call tx_pick; test eax,eax; je stock;
        mov [esp+0x1C],eax; popad; jmp 0x49B027; stock: popad; cmp dword [esp+0x7C],0;
@@ -7684,23 +7807,6 @@ static int fix_transported(void)
     memcpy(p, arm, 6); p += 6;
     wk_jmp(p, 0xE9, 0x00486651u);
 
-    /* tx_wrap(rec, mode): mov eax,[esp+4]; movzx eax,word [eax+1]; push eax; push [esp+0xC];
-       push [esp+0xC]; call 0x4866D0; xchg eax,[esp]; mov byte [eax+s_txCarried],0; pop eax;
-       ret 8 -- the record's index is read before the call, and the flag it names is clear
-       whenever no destructor call made through here is running */
-    p = aWrap;
-    *p++ = 0x8B; *p++ = 0x44; *p++ = 0x24; *p++ = 0x04;
-    *p++ = 0x0F; *p++ = 0xB7; *p++ = 0x40; *p++ = 0x01;
-    *p++ = 0x50;
-    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;
-    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x0C;
-    p = wk_jmp(p, 0xE8, 0x004866D0u);
-    s_txWrapRet = (unsigned int)(size_t)p;
-    *p++ = 0x87; *p++ = 0x04; *p++ = 0x24;
-    *p++ = 0xC6; *p++ = 0x80; p = hit_abs(p, s_txCarried); *p++ = 0x00;
-    *p++ = 0x58;
-    *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;
-
     /* 0x486810: pushad; push [esi+0x8A]; call tx_cargo; popad; mov ecx,[esi+0x8A];
        jmp 0x486816 */
     p = aCarg;
@@ -7710,6 +7816,21 @@ static int fix_transported(void)
     *p++ = 0x61;
     memcpy(p, cargo, 6); p += 6;
     wk_jmp(p, 0xE9, 0x00486816u);
+
+    /* 0x48681D, in place of `call 0x48AAC0` with its stack: pushad; push esi (the transport);
+       push [esp+0x28] (the passenger); call tx_detach; test eax,eax; popad; jnz done;
+       jmp 0x48AAC0; done: ret 0x10 -- popad leaves the flags, and the stock path is a tail
+       jump with the call's own frame */
+    p = aDet;
+    *p++ = 0x60;
+    *p++ = 0x56;
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x28;
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)tx_detach);
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x61;
+    *p++ = 0x75; *p++ = 0x05;
+    p = wk_jmp(p, 0xE9, 0x0048AAC0u);
+    *p++ = 0xC2; *p++ = 0x10; *p++ = 0x00;
 
     /* tx_kill_wrap(player): inc dword [s_txKillDepth]; push [esp+4]; call tramp; pushad;
        call tx_kill_end; popad; ret 4. tramp: kill-all's first ten bytes; jmp 0x486F1A */
@@ -7741,6 +7862,7 @@ static int fix_transported(void)
     hit_site(0x0048664B, 6, arm, 0xE9, aArm, "transported: the decision, before the send");
     hit_site(0x00486679, 5, dtor, 0xE8, aWrap, "transported: the destructor call, bracketed");
     hit_site(0x00486810, 6, cargo, 0xE9, aCarg, "transported: the cargo loop's passenger");
+    hit_site(0x0048681D, 5, detach, 0xE8, aDet, "transported: the cargo loop's detach, in kill-all");
     hit_site(0x00486F10, 10, kill, 0xE9, aKill, "transported: kill-all, bracketed");
     hit_site(0x0042B019, 6, fold, 0xE9, aFold, "transported: the keys' weapons in the sync");
     lim_same(0x0049B000, 23, frame, "transported: the explosion's frame and selfd");
@@ -7748,6 +7870,7 @@ static int fix_transported(void)
     lim_same(0x004865FC, 5, recIdx, "transported: the record's unit index");
     lim_same(0x0048661C, 9, recKind, "transported: the record's kind");
     lim_same(0x00486672, 7, recArg, "transported: the record passed to the destructor");
+    lim_same(0x00486816, 7, detArgs, "transported: the detach's arguments");
     lim_same(0x00486FC4, 5, killRet, "transported: kill-all's return");
     lim_same(0x0042B00A, 4, foldTdf, "transported: the fold's UNITINFO context");
     return FIX_TABLE;
@@ -7819,7 +7942,10 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
      m[14..17]  the victim's +0x104, its float bits, read on the owner as the message leaves
      m[18]      1 when m[14..17] holds it; 0 when the victim's index named no slot, and the
                 receiver then writes nothing into its copy
-     m[19..64]  0, unread
+     m[19]      1 when the death is carried (C4: tx_arm's decision at 0x48664B, which the
+                receiver arms for its destructor call, tx_rx_death, or keeps as a mark on a
+                copy refused while it loads, tx_rx_swept)
+     m[20..64]  0, unread
    The create, 0x4A (B4's hit_tx_create and hit_created; B8's bytes are kill_state_put's and
    kill_apply_state's, which reads them through rec = m+3):
      m[3..25]   the stock 0x09, 23 bytes (its slot at m[6..7]); m[26..29] its birth (B4)
@@ -8103,6 +8229,7 @@ static int __stdcall kill_tx_death(unsigned int net, const unsigned char* msg, u
     } else {
         s_killNoSlot++;
     }
+    m[19] = s_txCarried[msg[1] | (unsigned int)msg[2] << 8];   /* tx_arm's, at 0x48664B */
     s_killOut++;
     s_hitOutBytes += HIT_MSG;
     s_hitStockBytes += len;
@@ -8131,11 +8258,13 @@ static int kill_rx_death(unsigned int* regs, const char* ta, const unsigned char
             ghost_refused_kill(regs, m + 3, ok ? m + 14 : NULL)) {
             if (ok) s_killSwept++;
             else s_killBadFrac++;
+            tx_rx_swept(m);
         }
         return 1;
     }
     s_killIn++;
     regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
+    tx_rx_death(m);
     slot = kill_slot(ta, m[4] | (unsigned int)m[5] << 8);
     if (!slot) return 4;
     if (!ok) { s_killBadFrac++; return 4; }
@@ -8478,7 +8607,7 @@ static void patch_engine_defects(void)
     _snprintf(b, sizeof b,
               "enginefix: transported explosions -- TransportedExplodeAs, "
               "TransportedSelfDestructAs (the unit keys 0x42BF97; the pick 0x49B017; the "
-              "decision 0x48664B; the destructor call 0x486679; the cargo loop 0x486810; "
+              "decision 0x48664B; the destructor call 0x486679; the cargo loop 0x486810 and its detach 0x48681D; "
               "kill-all 0x486F10; the sync fold 0x42B019) %s",
               fix_state(tx));
     b[sizeof b - 1] = 0;

@@ -1,0 +1,32 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C4 across peers, the host's half, applied on the hosting peer after `tools/mp_lobby.sh --map 'Show Down'` (owner 0 is always the local player). h_gun, a TXRL at (2000, 1600), downs the joiner's k_atlas when `tacli order --unit N --expect ARMATLAS move pos 2000 1600` flies it over (scenarios/c4-mp-join.json): the ATLAS's cargo loop kills TXCOM1 on the joiner with kind 6, and the host, whose copy of the passenger its transport's death has already detached, draws TX_BLAST_E only from the 0x4C's carried flag (m[19]; the host's log: 'a carried death received', then 'a carried death: TXCOM1 -> TX_BLAST_E'). Content: tools/datakeys_fixture.py into both instances' gamedirs.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "res": "1024x768",
+  "clear_existing": false,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  }
+ },
+ "units": [
+  {
+   "id": "h_gun",
+   "type": "TXRL",
+   "owner": 0,
+   "pos": [
+    2000,
+    1600
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   2000,
+   1200
+  ]
+ }
+}

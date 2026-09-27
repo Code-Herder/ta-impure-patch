@@ -1,0 +1,93 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C4 across peers, the joiner's half (scenarios/c4-mp-host.json has the host's and the run). k: an ATLAS loads TXCOM1 (TransportedExplodeAs=TX_BLAST_E, TransportedSelfDestructAs=TX_BLAST_S) at (2000, 700) and flies to the host's tower; each of k's ring (two unarmed VTKROG0, 260 either side) takes 111 on this peer, the blast's owner. l: the same load at (3200, 700), the ATLAS listed first so it takes the lower slot. Surrendering (tools/mp_leave.sh) kills this peer's army here before it leaves: l's passenger dies in its transport's cargo loop, a carried death (TX_BLAST_E), sent to the host with m[19] set, and the host's player removal then finds nothing alive. Content: tools/datakeys_fixture.py into both instances' gamedirs.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "res": "1024x768",
+  "clear_existing": false,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  }
+ },
+ "units": [
+  {
+   "id": "k_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    2000,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "k_com"
+    }
+   ]
+  },
+  {
+   "id": "k_com",
+   "type": "TXCOM1",
+   "owner": 0,
+   "pos": [
+    2000,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "k_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1740,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "k_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    2260,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "l_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    3200,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "l_com"
+    }
+   ]
+  },
+  {
+   "id": "l_com",
+   "type": "TXCOM1",
+   "owner": 0,
+   "pos": [
+    3200,
+    700
+   ],
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "at": [
+   2000,
+   900
+  ]
+ }
+}
