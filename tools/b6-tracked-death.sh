@@ -55,7 +55,7 @@ fi
 "$T" scenario load "$I" "$REPO/scenarios/b6-tracked-death.json" --defaults --los 0 --restart \
   "${KEEP[@]}" > "$OUT/load.txt" 2>&1 || fail "load: $(tail -2 "$OUT/load.txt")"
 LOG="$(info gamedir)/log/tagpu.log"
-grep -m1 -o "a build placement disarmed with nobody to order ([0-9xA-F ]*) [A-Z]*" "$LOG" \
+grep -m1 -o "an order mode disarmed with nobody to order ([0-9xA-F ]*) [A-Z]*" "$LOG" \
   | sed 's/^/  enginefix: /'
 
 val() { "$T" peek "$I" "$1" 2>/dev/null | tail -1 | awk '{print $3}'; }

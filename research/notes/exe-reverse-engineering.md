@@ -7078,8 +7078,15 @@ own left click on a clear site `0x498FC0`, after `0x419670` has issued the build
 sets the flag instead (`0x498FB4`, `0x499097`). A left click on a blocked site plays the refusal and keeps it
 (`0x499016`). `0x4958D7`, in `0x4958C0`, writes the byte too and is dead: `0x4958C0` has no
 caller and its address is stored nowhere; so is the setter `0x419BC0`, which stores its argument
-at `0x419BC9`. The command modes 2..`0xD` (attack, move and the rest) are armed by the orders
-menu's writers `0x419C6A`..`0x41A0D7`. None of the cancels writes `0x2CC4`; the load's UI reset
+at `0x419BC9`. The command modes are armed by the orders menu's handler, one value per gadget
+(the names compared through `0x4E49B0`): MOVE 2 (`0x419C6A`), ATTACK 3 (`0x419D44`), BLAST 4
+(`0x419DB9`), UNLOAD 5 (`0x41A066`), LOAD 6 (`0x41A0D7`), DEFEND 7 (`0x419E2D`), REPAIR 8
+(`0x419EA1`), PATROL 9 (`0x419F16`), RECLAIM `0xC` (`0x419F8A`), CAPTURE `0xD` (`0x419FFB`); pressing
+the armed one again writes 1 (`0x419C52` and the like). `0xA` and `0xB` have no writer. **A command
+mode's click** is `0x48CF30(msg, mode, …)` (from `0x499087`): it walks the same block, counts the
+selected units other than the one under the pointer (`main+0x2CBA`) and returns when there are
+none (`0x48CFDF..0x48D011`), then asks the order resolver `0x43F0E0` for each unit with the
+click's target and position (`0x48D0A0`) and skips a unit it answers 0 for. None of the cancels writes `0x2CC4`; the load's UI reset
 `0x4917D0` (called at `0x497581`) writes both, `0x4917F9` and `0x491805`. Every engine reader of
 `0x2CC4` (`0x419686` in `0x419670`, `0x4197DD` in the build cursor `0x4197D0`) runs only with
 `0x2CC3 == 0x0E`, and every reader of `0x2CC3` (`0x469DD8`, `0x469E51`, `0x469EF4`, `0x48D3DB`,
@@ -7099,23 +7106,24 @@ placement outlives the units it would order** — MEASURED 2026-09-26 with
 `tools/b6-tracked-death.sh` on main `8d033d1`: after the CORCK's death `0x2CC3` stayed `0x0E`
 and `0x2CC4` 246, and the square and our build ghost stayed on the pointer.
 
-**B9 checks it at two points of the frame.** The in-play handler `0x499200` handles the mouse
+**B9 checks it at two points of the frame, for a placement and for every command mode.** The in-play handler `0x499200` handles the mouse
 first (the build cursor at `0x499241`, the cursor choice `0x48D220` at `0x499297`, the click
 routing `0x4993B6`, the placement's click `0x498F70` at `0x4995B3`), then calls the frame
 `0x496790` (`0x4995B8`), whose ticks (`0x495490` at `0x49680C`, `0x49693E`) free units, whose keys
 (`0x495E90` at `0x496971`) recall groups, and whose draw `0x468CF0` (`0x4969CD`) reads the byte
 and publishes our packet; the head holds no `ret` before `0x4995B8`. With the GUI's dispatch
 before the handler, no one point follows every writer and precedes every reader, so
-`placement_check` (`tagpu_patches.c`) runs at two: the frame's `call 0x48BAE0` at `0x49697B`
+`order_check` (`tagpu_patches.c`) runs at two: the frame's `call 0x48BAE0` at `0x49697B`
 (the stub tail-jumps to `0x48BAE0`, whose `ret` comes back to `0x496980`), which every path of
 `0x496790` reaches (`0x49691E` and `0x49696F` jump to it; its one `ret` is `0x496A56`) after the ticks,
 the keys and the scroll poll `0x41CE90` and before the cull and the draw; and `0x499226`, the
 handler's first instruction after `0x498DA0` (the mouse's world position, `0x499221`; the stub runs
 the stolen `mov edx,[0x511DE8]` and rejoins at `0x49922C`), after the GUI's dispatch and before the
-head's first reader. When the byte is `0x0E` and the walk's own
-test, its values bounded (the view player below 10, the block inside the array and on its
-stride, each type inside `UNITINFOCount`), finds nobody, it calls `0x499100`: with the byte not
-1 that is the right button's cancel, and it reads nothing of its message. MEASURED on the fixed
+head's first reader. When the byte is `0x0E` and the placement walk's own test, or a command
+mode and `0x48CF30`'s first test (a selected unit), finds nobody, its values bounded (the view
+player below 10, the block inside the array and on its stride, each type inside
+`UNITINFOCount`), it calls `0x499100`: with the byte not 1 that is the right button's cancel for
+every order, the same writes whatever the mode, and it reads nothing of its message. MEASURED on the fixed
 build: see [the plan's B9](tadr-port/sim-fixes.md).
 
 **The remote give.** `UNITS_GiveUnit 0x488570` to a remote player builds a `0x14` record

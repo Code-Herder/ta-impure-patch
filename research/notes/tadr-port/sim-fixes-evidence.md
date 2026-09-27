@@ -564,7 +564,7 @@ death `0x37E9C` read 0 and the build menu was popped, while `0x2CC3` stayed `0x0
 placement (`0x4993B6` → `0x498F70`): both clicks landed on blocked sites, so the map got no
 building and the CORAK was not selected. A click on a clear site would have handed the build to
 the selection (`0x498F93..0x498FC0`). The owner ruled it a defect to fix; it is B9, which disarms
-the placement whenever no unit is left that the click would order, checked in the frame
+the placement, and any command mode, whenever no unit is left that the click would order, checked in the frame
 (`0x49697B`) and in the in-play handler's head (`0x499226`) ([the plan's B9](sim-fixes.md)).
 
 ---
