@@ -88,7 +88,9 @@ per-mod check (below).
   DirectPlay imports at the system's `dplayx.dll` and neutering its entry point. The owner's
   decision; until then the safety net is what guards against its start-up writes.
 - **What each mod's content takes from TADR**: its data keys in unit and weapon files (some
-  already ported, [TADR port C](../tadr-port/data-keys.md)), its UI features. A survey per mod
-  before its setup's `today` is deleted.
+  already ported, [TADR port C](../tadr-port/data-keys.md)), its UI features. A setup that meets
+  its goal starts Impure with TADR out and fights the suite's battle; it does not show that the
+  mod's content lost nothing. That is a survey per mod, not yet made for Total Mayhem, ProTA or
+  TA Zero.
 - **Multiplayer with players who still run TADR** is not a goal: the mods' battlerooms check the
   version bytes, not the DLLs, so such a game may start and then disagree.
