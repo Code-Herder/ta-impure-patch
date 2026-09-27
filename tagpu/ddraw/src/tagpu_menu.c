@@ -4,9 +4,11 @@
    written up in exe-reverse-engineering.md "The screen lifecycle":
 
    - `GUI_Load 0x4AA8F0(gi, name, flags)` -- __stdcall, ret 0xC -- turns `name`
-     into the FILE PATH `<prefix at gi+0x9B6><name>.GUI`, and the prefix is
-     "guis\" (set at 0x4914CE). The exe's screen-name table is never consulted,
-     so a name we invent loads if the file exists.
+     into the FILE PATH `<prefix at gi+0x9B6><name>`, and the prefix is the
+     folder string at 0x502820 plus "\\" (0x4914CE through 0x49FBA0). Retail's
+     is "guis"; a mod's exe or Patch Loader renames it ("guiE", "guiM", "guiP"),
+     so our screens do not live there -- see GUI_DIR. The exe's screen-name
+     table is never consulted, so a name we invent loads if the file exists.
    - It also STAMPS the name into `ControlsAry[0].name` (0x4AAC98:
      `strncpy(ctrls+2, name, 16)`), which is what `GUICONTROL_IsOnTop 0x4AB060`
      compares -- so the `name=` authored in the file is irrelevant, and ours has
@@ -278,6 +280,13 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 #define ART_NAME   "RENDERDD"
 #define UFO_FILE   "impure-patch.ufo"
 #define SCREEN     "RENDER.GUI"
+/* OUR SCREENS' FOLDER IN THE ARCHIVE, and the prefix GUI_Load reads them with.
+   Not the engine's gui folder: a mod renames that one, at run time when a
+   Patch Loader does it (Total Mayhem's patches "guis" into "guiM" after the
+   exe is mapped), and ships its own VISUALS.GUI there, which an archive later
+   in the engine's order would shadow ours with. A folder only we write has
+   neither problem; `gui_redirect` points GUI_Load at it for our names only. */
+#define GUI_DIR    "impure"
 #define ON_FILE    "tagpu_menu.on"
 #define OFF_FILE   "tagpu_menu.off"
 #define OPEN_FILE  "tagpu_menu.open"    /* the spike's stand-in for the trigger */
@@ -1095,7 +1104,7 @@ static void menu_open(char* main_p, int fresh)
     gm = ((gui_load_fn)VA_GUI_LOAD)(gi, expect, 0x20 | 0x400);
     if (!gm) {
         lstrcpynA(expect, s_saved, 16);
-        mlog("menu: GUI_Load returned NULL - guis\\RENDER.GUI not readable");
+        mlog("menu: GUI_Load returned NULL - " GUI_DIR "\\" SCREEN " not readable");
         return;
     }
 
@@ -1560,12 +1569,12 @@ static void read_tokens(void)
    The render options reachable before a game starts, on the screen TA already
    ships for display settings: Single Player -> Options -> Visuals.
 
-   WHY WE MAY REPLACE IT AT ALL. `InitTAHPIAry 0x41D4C0` globs `*.UFO` at
-   position 3 and `*.HPI` at 4, and a .ufo entry SHADOWS the same path in a
-   stock .hpi -- measured 2026-09-11 by packing a `guis/VISUALS.GUI` whose
-   `Shading` caption read `UFO-WINS` and reading it back through `tacli ui`.
-   So the screen ships as a third file in the archive the DLL already writes at
-   attach, with no gadget-array surgery and no patched stock archive.
+   WHY WE MAY REPLACE IT AT ALL. GUI_Load reads VISUALS.GUI out of our own
+   folder while the observers are in (`gui_redirect`), so neither the stock
+   file nor a mod's is consulted, whatever the engine's gui folder is called.
+   The screen ships as a third file in the archive the DLL already writes at
+   attach, with no gadget-array surgery and no patched stock archive. It
+   replaces a mod's Visuals screen as it replaces the stock one.
 
    WHAT THE STOCK FILE ACTUALLY IS, and it is not what the screenshot suggests:
    VISUALS.GUI carries ONLY the right-hand column -- eleven gadgets, the five
@@ -1617,7 +1626,7 @@ typedef void (__stdcall *vis_build_fn)(int selvmode);
 static const unsigned char VIS_BUILD_STOLEN[7] =
     { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC, 0x10 };   /* mov eax,[esp+4]; sub esp,0x10 */
 
-#define VIS_FILE      "guis/visuals.gui"
+#define VIS_FILE      GUI_DIR "/visuals.gui"
 
 /* ---- the layout, in screen coordinates ----------------------------------
    TWO COLUMNS, in the space STARTOPT leaves free: x 200..470, between its tab
@@ -2100,7 +2109,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
 #define VRT_W      150
 #define VRT_H      352
 #define ART_VRTBG  "VRTBG"
-#define VRT_FILE   "guis/visualrt.gui"
+#define VRT_FILE   GUI_DIR "/visualrt.gui"
 #define VRT_GAF    "anims/visualrt.gaf"
 
 static void draw_vrtbg(unsigned char* f, int w, int h)
@@ -3133,6 +3142,49 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
     if (s_visPrevOnCmd) s_visPrevOnCmd(gi);
 }
 
+/* ---- the redirect: GUI_Load reads our screens out of GUI_DIR ------------
+   `0x4AA99A` is GUI_Load's `strncpy(path, gi+0x9B6, 0x100)`, the one read of
+   the prefix on the load path; the name is appended to that local copy next.
+   At `0x4AA99F`, just after it returns, `[esp]` is still the copy's address
+   and `[esp+0x240]` the caller's `name` (entry esp - 0x22C after the prologue,
+   name at entry+8, the three strncpy arguments not yet popped). For our names
+   only, the copy is rewritten to GUI_DIR -- the engine's own prefix string is
+   never written, so every other file it names, and the mod's gui folder, stay
+   the engine's. Game thread only: GUI_Load has no other caller.
+   `s_redirVis` is set before the observer lands and not changed after: the
+   Visuals screens are redirected only where their handlers are in. */
+#define VA_GUI_PATHCOPY 0x004AA99Fu
+static const unsigned char PATHCOPY_STOLEN[7] =
+    { 0x8B, 0x94, 0x24, 0x40, 0x02, 0x00, 0x00 };   /* mov edx,[esp+0x240]    */
+static int s_redirected;
+static int s_redirVis;
+
+static int __cdecl gui_redirect(void* esp)
+{
+    char* path = ((char**)esp)[0];
+    const char* name = *(const char**)((char*)esp + 0x240);
+    /* the site's own stack shape, re-checked: `path` is the buffer GUI_Load
+       lea'd at `0x4AA994` (`esp+0x30` after one push, so `esp+0x38` here, and
+       `0x4AA9B0` addresses it as `esp+0x2C` after the `add esp,0xC`) --
+       anything else means this is not that call */
+    if (path != (char*)esp + 0x38 || !name) return 0;
+    if (!lstrcmpiA(name, SCREEN) ||
+        (s_redirVis && (!lstrcmpiA(name, "VISUALS.GUI") || !lstrcmpiA(name, "VISUALRT.GUI"))))
+        lstrcpynA(path, GUI_DIR "\\", 0x100);
+    return 0;
+}
+
+static int gui_redirect_install(int vis)
+{
+    if (s_redirected) return 1;
+    s_redirVis = vis;
+    s_redirected =
+        tagpu_detour_bytes_ok(VA_GUI_PATHCOPY, PATHCOPY_STOLEN, sizeof PATHCOPY_STOLEN) &&
+        tagpu_detour_observe(VA_GUI_PATHCOPY, PATHCOPY_STOLEN, sizeof PATHCOPY_STOLEN,
+                             gui_redirect, NULL);
+    return s_redirected;
+}
+
 static void vis_install(void)
 {
     s_visArmed =
@@ -3156,7 +3208,7 @@ void tagpu_menu_init(void)
     static const GafEnt VENTS[1] = { { ART_VISBG, VP_W,    VP_H,    draw_visbg       } };
     TAGPU_UFO_FILE f[6];
     char b[300];
-    int len, vlen, rtlen, wrote, armed, visOk;
+    int len, vlen, rtlen, wrote, armed, visOk, redirected;
     unsigned glen, vglen, rtglen;
 
     read_tokens();
@@ -3185,7 +3237,7 @@ void tagpu_menu_init(void)
     if (rtlen < 0) { mlog("menu: NOT armed - the generated VISUALRT.GUI does not fit"); return; }
     rtglen = build_gaf(rtgaf, sizeof rtgaf, RTENTS, 1, s_nrows);
     if (!rtglen) { mlog("menu: NOT armed - the in-game Visuals ground does not fit"); return; }
-    f[0].path = "guis/render.gui";
+    f[0].path = GUI_DIR "/render.gui";
     f[0].data = gui;
     f[0].size = (unsigned)len;
     f[1].path = "anims/render.gaf";
@@ -3203,17 +3255,21 @@ void tagpu_menu_init(void)
     f[5].path = VRT_GAF;
     f[5].data = rtgaf;
     f[5].size = rtglen;
-    /* THE TWO VISUALS SCREENS SHIP ONLY WITH THEIR HANDLERS. They drop the
+    /* THE TWO VISUALS SCREENS LOAD ONLY WITH THEIR HANDLERS. They drop the
        stock toggles and route Restore/Undo to us, so without the dialog-build
-       observer (tagpu_menu.off, or an exe whose bytes differ) the stock files
-       must stay the ones the engine finds. Checked before the write, and the
-       install below uses the same test. */
+       observer (tagpu_menu.off, or an exe whose bytes differ) the engine must
+       keep finding its own files: `gui_redirect` sends it to ours only when
+       `visOk`. And nothing of ours loads without the redirect -- GUI_Load
+       does not return NULL for a file it cannot find, it faults (`0x4AAC43`,
+       a null write, MEASURED on TA:ESC before the redirect existed). */
     visOk = !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
             tagpu_detour_bytes_ok(VA_VIS_BUILD, VIS_BUILD_STOLEN, sizeof VIS_BUILD_STOLEN);
+    redirected = !exists(OFF_FILE) && gui_redirect_install(visOk);
+    visOk = visOk && redirected;
     wrote = tagpu_ufo_write(UFO_FILE, f, visOk ? 6 : 2);
 
-    armed = wrote && !exists(OFF_FILE) &&
+    armed = wrote && redirected &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
             tagpu_detour_observe(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN,
                                  before_update, NULL);
@@ -3232,10 +3288,10 @@ void tagpu_menu_init(void)
     }
 
     _snprintf(b, sizeof b,
-              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u vis=%d vgaf=%u trigger=%d bytes "
+              "menu: %s " UFO_STAMP " ufo=%d redirect=%d (" GUI_DIR "\\ at 0x4AA99F) rows=%d gui=%d gaf=%u vis=%d vgaf=%u trigger=%d bytes "
               "(RENDER.GUI over DrawGameScreen 0x468CF0, open with " OPEN_FILE "; "
               "VISUALS.GUI over the dialog build 0x45E5E0, OnCommand chained at GUIMEMSTRUCT+8, front end=%d)",
-              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen, vlen, vglen,
+              armed ? "ARMED" : "NOT armed", wrote, redirected, s_nrows, len, glen, vlen, vglen,
               s_drawTrigger, s_visArmed);
     b[sizeof b - 1] = 0;
     mlog(b);
