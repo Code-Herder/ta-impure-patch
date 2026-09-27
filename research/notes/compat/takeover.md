@@ -219,10 +219,37 @@ and its own globals are half-constructed. What it does **not** have to solve, me
 runtime is already initialised, since the PE entry point is the CRT's start-up and it calls
 `DllMain` after itself.
 
-**The measurement that chooses: does TADR write anything after the exe's entry point?** If it
-does, repair at the entry point is an argument about timing rather than an invariant, and only
-prevention is left. Unmeasured; it needs a build that gets past the refusal on these routes, since
-today the game stops at the first `DirectDraw` call.
+**TADR writes nothing after its own start-up.** MEASURED 2026-09-27 on `392+tadr-dev` and
+`escalation`, Wine: the same comparison run 27 times a launch — in Impure's `DllMain`, at the
+first `DirectDraw` call, and then every two seconds to `t+50s` — and the set of places leading
+into TADR is **identical at every sample**, not merely the same size (15 sites on `392+tadr-dev`,
+10 on `escalation`, compared as a set). The exe's code is byte-identical to its file in Impure's
+`DllMain`: **0 changed runs**, the only TADR finding being the `TDRAW`/`TAESC` import slot the
+loader bound. The total of changed runs does grow from the first `DirectDraw` call to `t+2s` (407
+to 436, and 371 to 407) — those are Impure's own detours arming at first use; TADR's count does not
+move.
+
+What that bounds, and what it does not. The samples say TADR's footprint is **complete by the
+first `DirectDraw` call and never grows after it**, over a shell and a battleroom. They do not
+separate the window between the exe's entry point and that call, which is where the recorder's
+entry-point splice runs — a revert at the entry point removes the splice before it runs, so the
+question that matters is only whether something *else* writes later, and nothing does. Not
+covered: a **network game**, where the recorder's other way in (a DirectPlay export) installs
+eighteen more sites; the battle stage did not load in this measurement, since neutralising the
+refusal leaves the engine with TADR's writes over Impure's fix sites.
+
+So repair at the entry point is not an argument about timing, and both shapes stay open.
+Prevention remains the better of the two on its merits: nothing to put back, and TADR's one thread
+never starts.
+
+**What TADR rewrites of Impure's own work on these routes**, measured the same day: **15 of the
+159** fail-closed sites a `LIMITS=stock` build installs — so on this route the safety net is what
+would stop the launch even once part 3 stops refusing `0x0040EAD6`. Part 3 alone does not make
+these setups playable; part 2 is what does.
+
+**Part 1c already works here.** With no lever set, the three `TPLAYX`/`EPLAYX` DirectPlay import
+slots of the exe are pointed at Impure's forwarders before the scan sees them: 18 places into TADR
+become 15. The recorder's six entry-point sites and `tdraw`'s own remain, which is part 2's work.
 
 ### Part 3 — sites a mod's exe changes belong to the mod
 
