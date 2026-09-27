@@ -1,0 +1,80 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B7's one meteor, one hit, and C3's veterancy across peers: the joiner's half, applied on the joining peer; see scenarios/b7-mp-host.json. Four metal storages, two unarmed VTTGT0 and a VTKROG0 in the range of the host's VTLLT1. Content: tools/datakeys_fixture.py into both instances' gamedirs.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "WK Hail C",
+  "res": "1024x768",
+  "clear_existing": false,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  }
+ },
+ "units": [
+  {
+   "id": "j_store_1",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    400,
+    1800
+   ]
+  },
+  {
+   "id": "j_store_2",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    1400,
+    1800
+   ]
+  },
+  {
+   "id": "j_store_3",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    2400,
+    1800
+   ]
+  },
+  {
+   "id": "j_store_4",
+   "type": "ARMMSTOR",
+   "owner": 0,
+   "pos": [
+    3400,
+    1800
+   ]
+  },
+  {
+   "id": "j_tgt_1",
+   "type": "VTTGT0",
+   "owner": 0,
+   "pos": [
+    1150,
+    1100
+   ]
+  },
+  {
+   "id": "j_tgt_2",
+   "type": "VTTGT0",
+   "owner": 0,
+   "pos": [
+    1000,
+    1250
+   ]
+  },
+  {
+   "id": "j_krog",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1200,
+    1250
+   ]
+  }
+ ]
+}

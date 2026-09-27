@@ -1,0 +1,63 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B7's radar owner test. The map WK Hail T rains WK_HAIL_T, a HAILSTORM with targetable=1 and default damage 0, over Show Down; the player holds two solar collectors in the west, so most stones land out of the player's sight, where the radar rebuild's marker branch for a targetable projectile reads its attacker's owner (0x4673B1) -- a stone has none. Stock faults there; with B7 the stone is not the local player's and the branch goes on. The stones in sight take the branch's colour path through owner 10's record. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "WK Hail T",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    4800,
+    1900
+   ]
+  },
+  {
+   "id": "west_a",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    400,
+    500
+   ]
+  },
+  {
+   "id": "west_b",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    600,
+    500
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   600,
+   600
+  ]
+ }
+}

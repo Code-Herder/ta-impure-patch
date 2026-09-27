@@ -82,6 +82,7 @@
 #define U_OWNER       0xFF         /* unsigned char cOwnerID                      */
 #define U_NANOFRAME   0x104        /* float, fraction of the build REMAINING      */
 #define U_HEALTH      0x108        /* short                                       */
+#define U_KILLS       0xB8         /* u16                                         */
 #define U_STATE       0x110        /* alive 0x10000000; 0x20 is written below for  */
                                    /* a nanoframe but the DRAW path never reads it */
                                    /* — under construction is +0x104 alone, and    */
@@ -158,6 +159,7 @@ typedef struct {
     char  type[SCN_NAMELEN];
     int   owner, x, y;
     int   height, facing, health, stance, nano;   /* SCN_UNSET = engine default  */
+    int   kills;                                  /* SCN_UNSET = the engine's 0  */
     int   defIdx;                                 /* resolved UNITINFO index     */
     void* unit;                                   /* the created UnitStruct*     */
     int   ax, ay, ah;                             /* where it actually landed    */
@@ -763,7 +765,7 @@ static int parse_wire(char* text)
                 !req(tok(&cur), &u->x) || !req(tok(&cur), &u->y) ||
                 !num(tok(&cur), &u->height) || !num(tok(&cur), &u->facing) ||
                 !num(tok(&cur), &u->health) || !stance(tok(&cur), &u->stance) ||
-                !num(tok(&cur), &u->nano))
+                !num(tok(&cur), &u->nano) || !num(tok(&cur), &u->kills))
             {
                 scn_err("line %d: unit %d has a malformed column", line, ord);
                 return 0;
@@ -1371,6 +1373,13 @@ static void dress_unit(scn_unit* u)
         *(unsigned char*)(p + U_HEALTHPCTA) = (unsigned char)pct;
         *(unsigned char*)(p + U_HEALTHPCTB) = (unsigned char)pct;
     }
+
+    /* the kill count +0xB8, a u16 every engine reader zero-extends; its
+       one increment is the destructor's, so a unit's veterancy is its
+       kills, and this sets it without a fight */
+    if (u->kills != SCN_UNSET)
+        *(unsigned short*)(p + U_KILLS) =
+            (unsigned short)(u->kills < 0 ? 0 : (u->kills > 65535 ? 65535 : u->kills));
 
     *(unsigned*)(p + U_STATE) = state;
 

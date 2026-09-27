@@ -3,9 +3,10 @@
 ## Summary
 
 Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our stack, as our own
-code, over six landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
+code, over six landings and a seventh. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
 grill that followed [the evidence pass](sim-fixes-evidence.md). **All six landings are landed on local
-main (2026-09-25), each after its review.** The rules
+main (2026-09-25), each after its review**, and B7, four defects the veterancy survey found, landed
+with section C's C3 on 2026-09-26. The rules
 shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
@@ -1172,13 +1173,51 @@ fraction of a second in these starts.
 replayed at the state-6 store. The build that replays before the first tick has run three starts
 (1500, the commander moving): two with the queue on — one before and one after B4's fix rounds
 were merged — where the drain found nothing and the create was made in the first catch-up tick,
-and one with the joiner's queue off, where the dirty create placed it. **The replay at
-`0x49842F` has never replayed a record live** — it rests on the disassembly, the rule cases and
-the first build's replays, which went through the same receiver path at a later point. The
-500-unit and idle starts were not re-run on it.
+and one with the joiner's queue off, where the dirty create placed it. The 500-unit and idle
+starts were not re-run on it. Its live replay and three peers were measured afterwards (below).
 
-*Not run:* three peers (each peer holds per sender, so a third adds a second queue, not a new
-path), and the departing host in a three-peer game that the plan gives B5's session for group E.
+*Measured on local main `8d033d1`, three peers (2026-09-26).* `b5dh` hosting, `b5dj` and `b5dk`
+joining, Town & Country, 1500, `tools/mp_lobby.sh`; three scripted runs (a scratch driver: launch,
+battle room, the start, counters, stop), wall 321 s, 126 s and 136 s, plus one start driven step
+by step before the scripted-run rule.
+
+- **Natural three-peer starts** (two): every peer's drain before the first tick found nothing
+  (`q=0 replay=0`) and made each late create in a catch-up tick (`created slot … at GameTime 1`
+  or `3`): `now=1` on the host and on `b5dj`, `now=2` on `b5dk`. Every copy `exact` (`exact=2` on
+  each peer), every `wire:` drop and `noblock` count 0, no ErrorLog.
+- **The replay at `0x49842F`, live: one start in two of the design below.** The peer that
+  finishes loading *first* passes the barrier *last* — it waits for the others' status, while a
+  slow loader already holds everyone's — so the driver duty-cycles the host and `b5dj`
+  (SIGSTOP/SIGCONT, 10 %) through their load, lets `b5dk` load at full speed, and once
+  `b5dk` waits at the barrier (bit 2 of `main+0x38D75` set, bit 3 clear) slows it to 3 % until
+  both others have played 4 s. In the run that replayed, `b5dk` logged `replayed slot 1 from
+  sender 1 (birth 0, type 34) at GameTime 0, before the first tick; the slot now holds type 34`,
+  the same for slot 1501 from sender 2, and `before the first tick (GameTime 0), 2 held creates:
+  2 replayed, 0 killed while held, 0 not (inactive 0, stale 0, bad 0 in total)`. That run stopped
+  at the start, before a heartbeat, so the replayed copies' positions and `copy` counters were not
+  read. The repeat, which read every commander on every peer 12 s in, did not replay: `b5dk` made
+  both in catch-up ticks at GameTime 3, and every commander stood at its owner's position on all
+  three peers (`(352,4384)`, `(8400,4384)`, `(4336,304)`), `exact=2` on each, every drop 0.
+  **What does not provoke it:** slowing the late peer through its whole load (15 %, 15 s) — it
+  then holds everyone's status and passes the barrier first, making both creates in catch-up
+  ticks; and freezing it at the barrier — the others stay at bit 2 (`[5,0,5]` on both for 90 s),
+  so the barrier needs a live message from every peer after the waiting peer's own load, not the
+  status it sent before.
+- **Kills while held** (`killed=`, `swept=`) were not provoked: nothing dies inside a peer's
+  remaining load at a start, where only commanders exist.
+
+*The departing host (for group E).* The host leaves through its own menus (`tools/mp_leave.sh`:
+Tab → OPTIONS → EXIT → MAINMENU → "Surrender this battle and return to main menu?" → yes).
+**The game ends on every joiner.** In the step-by-step start, each joiner dropped from 23 units
+to its own commander (the host's 21 and the other joiner's commander left its roster) within one
+150-tick heartbeat, and both left the level at the same GameTime, 11345, for `ENDMSN` with the
+net state 7; in the scripted repeat both read state 7 and GameTime 2495 on `ENDMSN` 15 s after
+the host's click, each with one unit. No fault, no ErrorLog, and every `wire:` drop and `ghost:`
+count 0 on all three at their last in-play heartbeat. **A joiner leaving leaves the others
+playing:** when `b5dk` surrendered, the host and `b5dj` played on (state 6, GameTime 1992 → 2354),
+each with both remaining commanders; the host leaving that two-peer game then ended it on `b5dj`
+(`ENDMSN`, state 7). Whether the end is the engine's rule or DirectPlay's session ending with
+its host was not traced; that is group E's question.
 
 **B6 — loaders and the rest. LANDED 2026-09-25** on local main (built on its own branch,
 `worktree-tadr_port_b6`, from B1's tip at the time, before B2–B5 landed; reviewed at high by two
@@ -1315,15 +1354,105 @@ and where it differs from the plan below:
   `+0xE4` goes to `0x439D6B`.
 - **A range circle of radius 1** (local): at `0x438EDE`, N = 0 skips the circle and its label.
 
+**B7 — four defects the veterancy survey found. LANDED 2026-09-26** on local main with C3
+([C3, as built](data-keys.md#c3-as-built)), built on C's branch; reviewed at high with C3. The
+survey of [data keys Part 3](data-keys-evidence.md) found them; the owner assigned them to C3's
+session. The disassembly is the engine map's *Veterancy, a hit's word, the radar's owner test and
+the meteor shower*; the hooks are [gpu-status §2.100](../gpu-status.html).
+
+- **A hit's word** (sim, the fail-closed table, `0x489C71`): `0x489BB0` stores a hit's int amount
+  into its record's WORD; the damage path subtracts it signed and the paralyser and the heal read it
+  unsigned, so a hit past 32 767 wrapped into a gain. The store saturates into the reader's range
+  (−32 768..32 767, or 0..65 535 for kinds 2 and `0xA`), the identity inside it. Retail play reaches
+  it with the D-gun of a commander at level 2 or more (30 000 raised by its own level).
+- **Kill-outright** (sim, the table, `0x489BF3`): a call of 30 000 or more skips the veterancy
+  reduction as it skips the armour one, by the same test of the caller's amount. Stock let a
+  veteran above 24 000 HP survive its own self-destruct, defeat or a dying transport; the only
+  retail unit that high is CORKROG (29 918), whom a D-gun now kills whatever its level. A veteran
+  so killed reads the full overkill in its death's severity (`0x48655E`), as a recruit does. This
+  replaces the plan's "kill-outright uses stock's level": stock's level is the defect.
+- **The radar's owner test** (local, `0x4673B1`): the radar rebuild's marker branch for a targetable
+  or interceptor projectile out of sight read its attacker's owner, and a meteor has no attacker.
+  No attacker is not the local player's.
+- **One meteor, one hit** (sim, the table, the gate `0x49A01B` and the calls at `0x49DF7D` and
+  `0x49D307`): every peer runs its own shower and broadcasts each stone, and stock computed every
+  stone's damage on every peer, so a stone's hit on a unit was applied once by its owner and once
+  more for each other peer. A stone is now computed on the peer that spawned it, as a shot is on the
+  firer's: the spawn marks its stone's `+0x62` 0, the receiver's meteor branch 1 (the field is the
+  firing piece the shooter's `Query*` script answers, written only for a projectile with a shooter
+  and read only behind a burst count a stone does not have), and the gate sends a received stone where stock sends a remote
+  projectile. The mark lives in the record, so the pool's compaction carries it.
+
+**Measured** on a private Xvfb, each defect first on the build before B7 (C2's tip with the
+scenario `kills` column), then on the new one:
+
+- **The word** (`scenarios/b7-word-outright.json`, `WK_HUGE` deals 65 000 whole): the storage went
+  1 329 → 7 225 over eleven hits, 536 up a hit, and died only when its HP word wrapped; on the new
+  build it died at the first hit, one saturation logged. **The retail D-gun**
+  (`scenarios/b7-dgun.json`, a commander with 25 kills, `blast unit N`): the storage read
+  −11 135 = 1 329 + 2 · 26 536 − 65 536, two wrapped hits; on the new build −31 438 = 1 329 − 32 767 at
+  the first.
+- **Kill-outright**: the Krogoth with 25 kills survived its self-destruct at 5 918 HP; on the new
+  build it died, and so did a keyed tower at 30 kills (level 25, which no hit under 30 000 can damage),
+  both counted.
+- **The radar** (`scenarios/b7-radar-hail.json`, `WK Hail T`'s targetable hail, True line of sight,
+  unmapped): an access violation at `0x4673B4` reading `0xFF` with `ECX = 0`; the new build runs,
+  the event counted. Owner 10's player record is populated and its colour pointer valid, so the
+  stones in sight draw safely.
+- **The meteors** (two peers, `scenarios/b7-mp-host.json` and `b7-mp-join.json` on `WK Hail C`,
+  5 a stone against a storage; a temporary trace of every stone hit a peer computed, since
+  removed): before, all 19 hits were computed on both peers and each owner's storages lost exactly
+  twice what the stones dealt; after, none of 24 was computed on both, each peer computed only its
+  own stones, and each storage lost exactly the damage computed against it (11, 19, 15, 10 on one
+  peer; 3, 10, 0, 5 on the other).
+- **Stock content** (`scenarios/200v200.json`): no B7 event through the fight.
+
+**Not covered, and left as they are:**
+
+- Every peer still runs its own shower, so a network game of N players rains N showers.
+- Kill counts can differ between peers in stock: every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer. Found by C3's two-peer run;
+  measured for B8 below.
+- A unit reclaim's step wraps in stock as well: `0x438650` multiplies the workertime, the factor
+  `(kills + 5)/5`, the target's MaxHitPoints and 15 in 32 bits, so ARMCOM reclaiming a CORKROG from
+  155 kills takes a sliver of its step. C3 bounds the keyed factor only; stock's is a new question
+  for B.
+
 **Measured alongside a landing** (time-boxed, each with its session):
 
 - resurrection's failure branch: counters on `0x405155`/`0x405164` over a few hundred CORNECRO
   resurrections of 1×1 and multi-cell wrecks (B1's session);
 - a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6);
-- a departing host in a three-peer game (B5's session; the result goes to group E);
+- a departing host in a three-peer game (B5's session; the result goes to group E) — measured
+  2026-09-26: it ends the game on every joiner (B5, *The departing host*);
 - a cargo unit killed in a transport over land leaving its wreck in the air (B2's session; a
   floating wreck is raised as a visual residual);
 - the repair rate per call, ARMCOM against ARMCK on an ARMLLT (B1's session).
+
+**Kill counts across peers — measured for B8 (2026-09-26, local main `8d033d1`).** The destructor
+counts a kill (`inc word [attacker+0xB8]`, `0x4869CA`) only when the attacker is non-NULL
+(`0x48699D`), the victim's owner `+0xFF` differs from the killer's player `+0xF4` (`0x4869BA`),
+and the victim's `+0x104` equals `0.0f` (`0x4869A7`, the constant at `0x4FD6F8`) — read from
+**this peer's own copy** of the victim. Three peers in one game (the B5 runs above): the host's
+towers (`scenarios/b4-guns.json`) against `b5dj`'s ARMCK, `b5dk` a bystander, every value read
+by `tacli peek` of the slot on each peer:
+
+| victims (`b5dj`'s, by the scenario applier) | victim's `+0x104` on host / `b5dj` / `b5dk` | kills added to the towers' copies on host / `b5dj` / `b5dk` |
+|---|---|---|
+| four ARMCK, dead within ~1 s of their create (`b4-victims.json` beside the towers), step-by-step start | 1.0 / 0.0 / 1.0 | 0 / 4 / 0 (one each on four towers) |
+| the same, scripted repeat, 8 s after the apply | 1.0 / 0.0 / 1.0 | 0 / 4 / 0 |
+| four ARMCK on hold at (2600, 6983) for 90 s, then two ARMLLT created beside them, step-by-step start | 0.0 / 0.0 / 0.0 | 4 / 4 / 4 (two each) |
+| the same, 40 s old, scripted repeat | 0.0 / 0.0 / 0.0 | 3 / 3 / 3 (one victim still alive at the read) |
+
+The 1.0 → 0.0 of the remote copies is a `tacli peek` series every ~3 s from the apply: it read
+1.0 on both non-owners until 26–32 s after the create (step-by-step) and 29–37 s (scripted,
+`b5dk` first), then 0.0, all four victims at once — the owner's round robin writing `+0x104` from
+its full state (`0x48B3F0`, `[8] ÷ 255`). The towers' own remote copies read 1.0 on both joiners
+right after their create and 0.0 later. Every commander's copy read 0.0 on every peer from the
+start. **So a kill counts on every peer once the non-owners' copy of the victim reads 0.0, and
+only on the victim's owner before that.** The victims here come from the scenario applier, which
+creates a unit complete and then writes its `+0x104` locally; how long a factory-built unit's
+copy reads nonzero on the other peers, and so how often the split happens in play, was not
+measured.
 
 ## Open questions
 
@@ -1332,9 +1461,13 @@ and where it differs from the plan below:
 - The `0x2C` dirty list stops at 0x200 bytes a tick, filled in slot order. If a skipped unit's
   dirty state is not kept, high slots of a busy block wait for the round robin, up to N ticks: this
   bears on [section A's open question](raised-limits.md#open-questions) about remote lag at 1500.
-- Two stock-fix claims in the Delphi recorder, both inactive for stock content and not yet verified:
-  a veteran's damage reduction scaling the kill damage (`0x489C2F`), and a ground transport's
-  overload (`0x406789`) (evidence Part 4 §7).
+- A stock-fix claim in the Delphi recorder, inactive for stock content and not yet verified: a
+  ground transport's overload (`0x406789`) (evidence Part 4 §7). Its other claim, a veteran's
+  damage reduction scaling the kill damage (`0x489C2F`), is B7's kill-outright.
+- Kill counts can differ between peers: every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer (*Kill counts across peers*, above; the
+  engine map's *The kill count reads this peer's copy of the victim*). How often a factory-built
+  unit dies in that window in play is not measured. Veterancy, stock's and C3's, reads the
+  computing peer's copy.
 - Where stock acquisition stops aiming a flak gun upward. B1 measured that it never aimed above
   29.6°, far from the zero band, but did not disassemble the cut-off.
 
