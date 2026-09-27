@@ -3870,7 +3870,8 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   attacker (`0x486F94`), and the reaper destroys it later; any other player's unit is detonated at once, `0x49B000(unit, 1)`
   (`0x486F9E`), marked pending (`0x486FAE`) and destroyed, `Send_UnitDeath(unit, 3)` (`0x486FB4`),
   whose destructor runs the cargo loop with kind 3 — and, the passengers' player not being local,
-  only detaches them, before their own turn when the transport is earlier in the block. `0x486FC4..0x486FC6`: `pop edi; pop esi; ret 4`.
+  only detaches them, before their own turn when the transport is earlier in the block. A passenger
+  earlier in the block is still carried at its turn and detaches itself (`0x4867CB`). `0x486FC4..0x486FC6`: `pop edi; pop esi; ret 4`.
 - Callers: `0x4866B3` (a commander's death); `0x452E17` in the player removal `0x452CC0(dpid)`
   (nine callers, among them the network pump's leave case `0x4550D5`; *The session, not the host*),
   which kills the seat's army before it clears the seat's type (`0x452E62`), so every remaining peer
@@ -3904,8 +3905,9 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   named parent is alive, not the child and not itself carried (`0x48AAF7..0x48AB0D`); it then builds
   the 7-byte `0x0A` (`+1` the child's `+0xA8`, `+3` the parent's or 0, `+5`/`+6` the low bytes of
   `a3`/`a4`, `0x48AB0F..0x48AB4E`), sends it through `0x451DF0` whichever peer runs it
-  (`0x48AB58`), and applies it with `0x48AB70` (`0x48AB62`). So the destructor's cargo loop, which runs
-  on every peer, broadcasts a detach for each passenger from every peer that runs it.
+  (`0x48AB58`), and applies it with `0x48AB70` (`0x48AB62`). So the destructor, which runs on every
+  peer, broadcasts both of its detaches from every peer that runs it: its own unit's when that
+  unit is carried (`0x4867CB`), and each passenger's in the cargo loop (`0x48681D`).
 - **The hit's send.** `0x489BB0` applies a hit locally (`0x489C89`) and sends it only when the
   victim's player record has a nonzero first dword and type 3 (a remote player) and the kind is
   not 11 (`0x489C8E..0x489CA2`); with an attacker the sender is the attacker's player's
@@ -3918,7 +3920,16 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   `0x453A14`) calls `0x453010(dpid, 6)` (`0x453A2B`), which holds four of the removal `0x452CC0`'s
   nine calls (`0x453169`, `0x453200`, `0x4532C8`, `0x4532FA`; which one reason 6 takes is not
   traced). MEASURED: a peer frozen with `SIGSTOP` raised it on both others within seconds, and
-  `REJECT` ran the kill-all of the frozen player's army on the peer that pressed it.
+  `REJECT` ran the kill-all of the frozen player's army on the peer that pressed it. When the peer
+  that pressed it was the host, the third peer removed the player at the same moment, without its
+  own `REJECT` (MEASURED once, 2026-09-27); after the host's console `+kill` instead, the third
+  peer's copies stood until its own `REJECT`.
+- **The removal runs on whichever thread pumps.** The pump `0x453D40` holds no lock across its
+  dispatch: it tests `main+0x2A44` bit 0, zeroes ten dwords and calls the receive `0x4534E0`
+  (`0x453D40..0x453D94`), and the cases run on the caller's thread. During a network
+  load the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) both run it, and the
+  leave case (`0x4550B8..0x4550D5`) tests only the seat record and bits 1 and 2 of
+  `main+0x38D75`, so the removal `0x452CC0`, and its kill-all, can run on either thread.
 
 ### What the tests measured
 
@@ -3944,11 +3955,12 @@ AI towers, and unarmed Krogoth clones (29 918 HP) as the ring.
   with a kind other than 3, so its passenger died of the cargo loop's kind 6, a carried death that
   is not a self-destruct (`TX_BLAST_E`, on both peers), and the host destroyed every copy from those
   deaths. So a graceful leave leaves kill-all's non-local branch nothing to do.
-- **Kill-all's local branch damaged nothing around it.** In a single-player skirmish (both
+- **Kill-all's local branch: the blast lands in full.** In a single-player skirmish (both
   players' records have first dword 1: the human type 1, the AI type 2), the console's `+kill 1`
-  killed the AI's loaded ATLAS and its passenger through the reaper, and the player's Krogoths 260
-  away took nothing, keyed passenger or not (an unkeyed `VTCOM0` the same). The damage path was not
-  traced; the owner gate is not it (type 2 passes).
+  hit the AI's loaded ATLAS and its passenger with 30 000 of kind 3; the reaper destroyed both
+  within a second, and the passenger's carried `TX_BLAST_S` took 222 from each of the player's
+  Krogoths 260 away (29 918 to 29 696). MEASURED 2026-09-27 three times, on C4 before and after its
+  review's fixes; a reading of no damage on 2026-09-26 did not reproduce.
 - **Kill-all's non-local branch detonates a passenger twice**: once at `0x486F9E`, and again in its
   destructor (`0x486D50`) since the cargo loop's 30 000 left its HP word at or below 0 and so the
   severity above 0. The ATLAS, not hit, detonates once.

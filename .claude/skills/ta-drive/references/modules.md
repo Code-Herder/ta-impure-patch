@@ -343,9 +343,9 @@ sync test.
 | `c4-survivor` | a passenger that outlives its transport, then dies on the ground | fly it over the tower as above |
 | `c4-kill-all` | kill-all's local branch, single player | `+kill 1` in the chat, with `cheats` set by the file |
 | `c4-mp-host`, `c4-mp-join` | a carried death drawn on the other peer from the death record alone | `mp_lobby.sh --map 'Show Down'`, one file on each peer, fly the joiner's ATLAS to the host's tower |
-| `c4-mp-removal` | a departed player's loaded transports, three peers | apply on one joiner, freeze it, then `REJECT` on the others one at a time |
+| `c4-mp-removal` | a departed player's loaded transports, three peers, one pair in each slot order | apply on one joiner, freeze it, then `REJECT` on a peer. The host's removes the player on the third peer at the same moment, so compare the third's `wire:` `0a` count before and after; after a console `+kill` instead, the third's copies stand until its own `REJECT` |
 
-- **Log lines**: `tacli log <i> -g "transported:"` — the decision, the mark, the kill-all list, a
+- **Log lines**: `tacli log <i> -g "transported:"` — the decision, the mark, the kill mark, a
   received carried death, the pick with its weapon, each at powers of two; `-g datakeys` shows each
   key resolved at load.
 - **Selecting a carried transport**: the pointer must sit where `u16 *0x511DE8+0x2CBA` names the

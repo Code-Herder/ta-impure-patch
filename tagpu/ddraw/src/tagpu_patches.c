@@ -7532,7 +7532,7 @@ static int fix_ghost_commander(int wire)
 
    THREADS: a death, its cargo loop and its pick run on the thread that runs the death -- the
    game thread in play, and during a network load either thread that pumps: the pump 0x453D40
-   takes no lock, and both the loader (0x49727D) and the game thread's load loop (0x49852E)
+   holds no lock across its dispatch, and both the loader (0x49727D) and the game thread's load loop (0x49852E)
    reach its leave case and the removal's kill-all. So the running kill-all is the thread's own:
    its token lives in a TLS slot, drawn from an interlocked counter, and a mark matches only the
    kill-all that wrote it. Two threads' kill-alls never honour each other's marks, and a mark

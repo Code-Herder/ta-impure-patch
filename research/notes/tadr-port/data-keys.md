@@ -135,9 +135,9 @@ kept in the evidence pass.
   dying when its transport dies, or of a self-destructing transport, is marked in the cargo loop on
   its owner's peer, **and the owner's decision travels with the death itself**, as a byte of B8's
   `0x4C` that carries the `0x0C`, so every screen draws the same blast. Names resolved once at load;
-  the fold above. As built, the decision is taken in `Send_UnitDeath` before the send, kill-all is
-  bracketed for the passengers it detaches, and inside it a departed player's passengers are
-  detached without the stock broadcast ([C4, as built](#c4-as-built)).
+  the fold above. As built, the decision is taken in `Send_UnitDeath` before the send, each
+  kill-all marks the passengers it detaches with a token of its own, and inside it a departed
+  player's units are detached without the stock broadcast ([C4, as built](#c4-as-built)).
 - **The ghost: the hides of `Create()` by default, `PreviewPieces=` as the override.** At level load,
   on the game thread, `Create()`'s prologue is read, not run, with `tools/ta3do`'s conservative rule
   (it stops at the first opcode whose length is not certain; every operand bounded by the COB's own
@@ -178,8 +178,8 @@ commit can change.
    **not** equal on two peers, in stock. Reviewed at `high`. How it is built is in
    [C3, as built](#c3-as-built) below; the fold site went to C4.
 4. **C4 — transported explosions. Landed 2026-09-26**, after B8, whose death record carries the
-   decision. The decision, the pick at `0x49B017`, the kill-all bracket, the fold, the carried byte
-   on the wire, and one stock broadcast kept local inside kill-all. The blast's damage is the
+   decision. The decision, the pick at `0x49B017`, kill-all's token, the fold, the carried byte
+   on the wire, and two stock broadcasts kept local inside kill-all. The blast's damage is the
    owner's alone (the owner gate), so what two peers must agree on is the picture: measured on two
    peers and on three. Reviewed at `high`. How it is built is in [C4, as built](#c4-as-built) below.
 
@@ -446,7 +446,8 @@ commit can change.
 
 - **The keys** (`tagpu_datakeys.c`, section 2, read by the unit-key reader at `0x42BF97`, beside
   C3's). `TransportedExplodeAs=` and `TransportedSelfDestructAs=` each name a weapon, resolved at the
-  FBI load through the loader's own `0x49E5B0` to an ID in 1..4095; a name that resolves to none is
+  FBI load through the loader's own `0x49E5B0` to an ID of the weapon array (1..4095; 1..255 with
+  the stock limits); a name that resolves to none is
   logged and the type keeps stock's weapon for that death. The answer is bounded again where it is
   used (`tagpu_datakeys_tx_weapon`).
 - **The decision, at `0x48664B`**, in `Send_UnitDeath` once its `0x0C` record is complete and before
@@ -461,17 +462,24 @@ commit can change.
   through `tx_wrap`: `Send_UnitDeath`'s at `0x486679` and the `0x4C`'s (B4's `doDeath`). It reads the
   record's index before the call and clears the byte after; the pick at `0x49B017` reads it by the
   slot of the unit it is given.
-- **Kill-all (`0x486F10`) is bracketed.** Its branch for a player that is not local detonates each
-  unit at once and then destroys it, in slot order, so a transport earlier in the block has
-  detached its passengers before their turn. The cargo loop lists each keyed passenger it detaches
-  inside the bracket, the pick honours the list inside, and the outermost return empties it.
-- **Inside kill-all, a departed player's passengers are detached without the broadcast
-  (`0x48681D`).** The detach wrapper `0x48AAC0` sends its `0x0A` from whichever peer runs it, and
+- **Kill-all (`0x486F10`) draws a token.** Its branch for a player that is not local detonates
+  each unit at once and then destroys it, in slot order, so a transport earlier in the block has
+  detached its passengers before their turn. The site jumps to `tx_kill_all`: the outermost
+  kill-all on a thread draws a token from an interlocked counter into a TLS slot, the cargo loop
+  marks each keyed passenger it detaches with it, and the pick honours a mark only inside the
+  kill-all that wrote it. The state is the thread's own because the removal's kill-all runs on
+  whichever thread pumps: the pump holds no lock, and during a network load both the loader and
+  the game thread run it. A mark left behind matches no later kill-all, so nothing is emptied.
+- **Inside kill-all, a departed player's units are detached without the broadcast (`0x4867CB`,
+  `0x48681D`).** The detach wrapper `0x48AAC0` sends its `0x0A` from whichever peer runs it, and
   every remaining peer runs the removal's kill-all on its own copy; with three peers or more the
   first to do it detached the passengers on the others first, and they drew stock's weapon. Found
   by the two-peer `+kill` run, where the host's broadcast detached the joiner's second passenger
-  before its death; the owner chose the fix over documenting it [DECIDED 2026-09-26]. Only for a
-  transport whose player is not local, only inside kill-all: the owner's own transports broadcast
+  before its death; the owner chose the fix over documenting it [DECIDED 2026-09-26]. The
+  destructor detaches twice: a transport's passengers in its cargo loop (`0x48681D`), and its own
+  unit when that unit is carried (`0x4867CB`), which is how a passenger earlier in the block than
+  its transport leaves it. Both go through one stub, and the player tested is the dying unit's.
+  Only for a unit whose player is not local, only inside kill-all: the owner's own units broadcast
   as stock.
 - **On the wire: `m[19]` of B8's `0x4C`.** The owner's decision is copied as the record leaves
   (`kill_tx_death`). A receiver arms it for the destructor call the `0x4C` makes; its own `+0x86`
@@ -482,8 +490,8 @@ commit can change.
   XORs in that section's stored CRC, XORed with its own constant and rotated by its own count, so a
   key naming the same weapon as `ExplodeAs` cannot cancel stock's term. A key naming no section
   folds nothing.
-- **Fifteen rows in the fail-closed table** (`fix_transported`), both builds: seven sites and eight
-  compared spans. 280 sites install on the raised build with B8 and B9.
+- **Seventeen rows in the fail-closed table** (`fix_transported`), both builds: eight sites and
+  nine compared spans. 282 sites install on the raised build with B8 and B9.
 - **Measured** on the new build, on a private Xvfb. The fixture is `tools/datakeys_fixture.py`
   (`TXCOM1` with both keys, `TXCOME` with `TransportedExplodeAs` only, `TXNONE` naming no weapon,
   `TXBIG` at 32 000 HP; `TX_BLAST_E` 111 and `TX_BLAST_S` 222 to anything within its area of
@@ -504,12 +512,17 @@ commit can change.
     and 2). The joiner's surrender then killed its army itself: the second passenger died in its
     transport's cargo loop, carried, and both peers drew `TX_BLAST_E`.
   - **Kill-all's local branch** (`c4-kill-all.json`, single player, the console's `+kill 1` for
-    the AI): the passenger, marked in the cargo loop, exploded `TX_BLAST_S`.
+    the AI): the passenger, marked in the cargo loop, exploded `TX_BLAST_S` and took 222 from each
+    ring Krogoth, on the build before the review's fixes and after them.
   - **Kill-all's non-local branch, three peers** (`c4-mp-removal.json`): with the joiner frozen,
     one peer's `+kill` for it logged both passengers detached inside kill-all and without the
     broadcast; the third peer's copies stayed carried and its `0x0A` count did not move; its own
     `REJECT` on TIMEOUT.GUI, the engine's removal, then detonated both as `TX_BLAST_S`. On two
-    peers before the fix, the same `+kill` had detached one passenger on the joiner first.
+    peers before the fix, the same `+kill` had detached one passenger on the joiner first. After
+    the review, with one pair in each slot order, the host's `REJECT` removed the joiner on both
+    remaining peers: each applied both detaches locally (the cargo loop's, and `0x4867CB` for the
+    passenger below its ATLAS), detonated both passengers as `TX_BLAST_S`, and the third peer's
+    received `0x0A` count stayed at 2.
   - **The fold**: `CRC_weapons` of `TXCOM1` reads `0xB71E6070` with `TX_BLAST_E` at 111 and
     `0xCF066848` at 112 (`TXCOME`: `0x18B7ADE0`, `0x60AFA5D8`); the unkeyed control reads 0; the
     build before read 0 for all. On two peers with the joiner's TDF at 112, exactly the three keyed
@@ -522,8 +535,8 @@ commit can change.
     inside B5's catch-up window.
   - A departure that DirectPlay reports (a lobbied session's keepalive) was not run; TIMEOUT.GUI's
     `REJECT` calls the same removal.
-  - Kill-all's local branch killed without damaging anything around it, keyed or not; a stock
-    finding, handed to section B below.
+  - A removal during a network load, where the loader thread runs the kill-all, was not run; the
+    token makes that kill-all's state its thread's own by construction.
 
 ## Handed to other groups
 
@@ -537,11 +550,6 @@ commit can change.
   kill-outright sparing veterans, the radar's NULL read at `0x4673B1`, a meteor hitting once per
   peer) landed with C3; their record is B7 in [B's plan](sim-fixes.md).
   The kill counts that can differ between peers are B's question ([B8's measurement](sim-fixes.md)), not fixed.
-- **Section B, an observation from C4:** in a single-player skirmish the console's `+kill` for the
-  AI (kill-all's local branch: 30 000 of kind 3 to each unit, then the reaper) killed the AI's
-  units and their death explosions damaged nothing 260 away, keyed or not; the cause is not
-  traced ([engine map](../exe-reverse-engineering.html), *What the tests measured*, in the C4
-  section).
 
 ## Open questions
 

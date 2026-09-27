@@ -2072,7 +2072,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | a projectile's `+0x62` (u16, the firing piece: the shooter's `Query*` script's answer, `0x43E1E0`) | **WRITTEN for an attacker-less projectile, on the GAME thread, by B7** (§2.100): 0 when the spawn `0x49DF7D` builds a stone, 1 when the `0x0D` receiver's meteor branch `0x49D307` builds one. `0x49C740` writes `+0x62` only for a projectile with an attacker (`0x49C833`), and its one reader, `0x49B7D6`, is behind a burst count that is 0 for a stone, so the field is otherwise dead for these two. The damage gate `0x49A01B` reads it with `+0x52` (attacker) and `+0x66` (owner) |
 | the hit record's amount (`+5`, a WORD) | **Written by the engine's own store at `0x489C71`, with B7's value** (§2.100): the int amount saturated into the range its reader reads — −32 768..32 767 for the subtraction, 0..65 535 for kinds 2 and `0xA`. Identity for every amount inside the range, so only a hit past the word differs from stock |
 | unit def `+0x146` (`CRC_weapons`, folded into the lobby's sync value `+0x142` by `0x42A610`) | **Written by the engine's own store at `0x42B019`, with C4's value** (§2.101), on the thread that runs the menu-time loader `0x42A8D0`, before the def array is sealed (`0x42B328`): stock's value XOR, for each transported key whose name is a weapon section of the loaded weapon TDFs, that section's stored CRC mixed and rotated by its own constant. Identity for a type without the keys, so stock content syncs exactly as before |
-| the transported explosions' reads | unit `+0x86` (the transporter), `+0x8A` (the first passenger), `+0x92` (the def: its `+0x20` name and the key record matched to it), `+0x96` (the player record: its first dword and `+0x73`, kill-all's own local test), `+0x110` bits 28 and 14 (alive, pending death), bit 29, `+0xA8`; `Send_UnitDeath`'s record at `[esp+0x14]` (`+1` the index, `+0xA` the kind nibble); B4's stamp table; B8's `0x4C` (`m[4..5]`, `m[19]`) | **Read by C4, on the GAME thread** (the death, the cargo loop, kill-all, the pick, the `0x4C`'s receipt in play). **WRITTEN: `m[19]` of every `0x4C` this peer sends; and inside kill-all, for a transport whose player is not local, the passenger's detach record**, applied through the engine's own `0x48AB70` (the child's `+0x86`, the transport's `+0x8A`, exactly as the wrapper `0x48AAC0` would) without the wrapper's `0x0A` broadcast |
+| the transported explosions' reads | unit `+0x86` (the transporter), `+0x8A` (the first passenger), `+0x92` (the def: its `+0x20` name and the key record matched to it), `+0x96` (the player record: its first dword and `+0x73`, kill-all's own local test), `+0x110` bits 28 and 14 (alive, pending death), bit 29, `+0xA8`; `Send_UnitDeath`'s record at `[esp+0x14]` (`+1` the index, `+0xA` the kind nibble); B4's stamp table; B8's `0x4C` (`m[4..5]`, `m[19]`) | **Read by C4, on the thread that runs the death**: the GAME thread in play (the death, the cargo loop, kill-all, the pick, the `0x4C`'s receipt), and during a network load either thread that pumps messages, since the removal's kill-all is reached from the pump's leave case. **WRITTEN: `m[19]` of every `0x4C` this peer sends; and inside kill-all, for a dying unit whose player is not local, the detach record of that unit or of its passenger**, applied through the engine's own `0x48AB70` (the child's `+0x86`, the transport's `+0x8A`, exactly as the wrapper `0x48AAC0` would) without the wrapper's `0x0A` broadcast |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (the frame packet's `level_gen`) | not an engine field — our own counter, bumped on the game thread at every level end and carried to the render thread inside the packet. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`, and the geometry bake's) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a). **[CORRECTED 2026-09-12, a landing review]** between then and landing 3 the counter read was `tagpu_reclaim_level_gen()`, which is bumped only in reclaim's teardown post hook — so under `tagpu_reclaim.off`, or any of reclaim's four other ways not to arm, it never moved and the caches were exactly as stale as before 2026-09-08. The publisher owns the counter now and advances it whichever provider publishes the level-end packet |
@@ -2454,7 +2454,7 @@ engine defects we patch".
 | `0x438EDE` | `DrawRangeCircle 0x438EA0`'s guard, which lets N = 0 segments (radius 1) through to `idiv` | local: the `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, so N = 0 takes the radius-0 epilogue |
 | `0x49697B`, `0x499226` | the frame's `call 0x48BAE0` (after the ticks and the keys, before the cull and the draw) and the in-play handler's first instruction after the mouse's world position (after the GUI's dispatch, before the head's first reader), while an order (`main+0x2CC3`: a build placement `0x0E`, or a command mode 2..9, `0xC`, `0xD`) outlives every unit its click would order | local (B9): an `E8` and an `E9` to stubs that call `order_check` under `pushad`, which, when nobody would take the armed order — for a placement the walk `0x419755..0x41976A`'s own test, for a command mode `0x48CF30`'s first test (a selected unit), both bounded — calls the right button's cancel `0x499100` — not while `main+0x531` is NULL, and not until the engine's modal test (`0x37EBE & 0x865` or `0x2BEE & 0xE0`) clears; then `0x48BAE0`, or the stolen `mov edx,[main]` and `0x49922C`; silent at run time |
 | **the weapon keys (TADR section C, landing C2, simulation):** `0x42E310` (the weapon load's entry), `0x49ABB0` (the can-engage test's entry), `0x43F1D4` (the order action's unit branch), `0x49B9EB` (the guidance's water test), `0x49E1FD` (AutoAim's fire gate); the store is filled at A′3's ID site `0x42E468` | not a defect: TADR's weapon keys `nottoair`, `nottounderwater`, `surfacefire`, `notoverwater` and `notoverland`, which the stock loader never reads | every row in the fail-closed table, both builds; each site runs the engine's own instructions for a weapon whose key byte is 0, so stock content runs stock's bytes. §2.97 has the whole landing |
-| **transported explosions (TADR section C, landing C4, simulation):** `0x49B017` (the death explosion's pick), `0x48664B` (`Send_UnitDeath`, its record complete), `0x486679` (its call of the destructor), `0x486810` and `0x48681D` (the destructor's cargo loop: a passenger, and its detach), `0x486F10` (kill-all's entry), `0x42B019` (the menu-time loader's store of `CRC_weapons`); B4's `0x4C` branch (`doDeath`) calls the destructor through the same wrap | not a defect: TADR's unit keys `TransportedExplodeAs` and `TransportedSelfDestructAs`, which the stock loader never reads; and one stock broadcast inside kill-all for a departed player (the cargo loop's `0x0A`), which let the first peer to remove a player decide the others' pictures of its passengers | every row in the fail-closed table, both builds; a type without the keys gets stock's pick, and a unit's sync value changes only for a type with a key naming a loaded weapon. §2.101 has the whole landing |
+| **transported explosions (TADR section C, landing C4, simulation):** `0x49B017` (the death explosion's pick), `0x48664B` (`Send_UnitDeath`, its record complete), `0x486679` (its call of the destructor), `0x4867CB` (the destructor's detach of its own unit when carried), `0x486810` and `0x48681D` (the destructor's cargo loop: a passenger, and its detach), `0x486F10` (kill-all's entry), `0x42B019` (the menu-time loader's store of `CRC_weapons`); B4's `0x4C` branch (`doDeath`) calls the destructor through the same wrap | not a defect: TADR's unit keys `TransportedExplodeAs` and `TransportedSelfDestructAs`, which the stock loader never reads; and two stock broadcasts inside kill-all for a departed player (the `0x0A` of each of the destructor's detaches), which let the first peer to remove a player decide the others' pictures of its passengers | every row in the fail-closed table, both builds; a type without the keys gets stock's pick, and a unit's sync value changes only for a type with a key naming a loaded weapon. §2.101 has the whole landing |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -19413,23 +19413,27 @@ only for that incarnation. The answer lives in one byte per slot for exactly one
 | `0x48664B`, 6 bytes | in `Send_UnitDeath`, the record complete and before its send and its destructor call: decides, consumes the mark |
 | `0x486679`, 5 | the destructor call, through `tx_wrap`: reads the record's index before the call and clears its byte after. B4's `0x4C` branch (`doDeath`) jumps to the same wrap, so every destructor call this build makes goes through it |
 | `0x49B017`, 16 | the pick: a carried keyed unit takes its key's weapon for the same `selfd` stock tests (`def+0x224` when set, else `+0x220`); any other unit, stock's |
-| `0x486810`, 6 | the cargo loop, after each passenger's hit: the mark, and inside kill-all the kill list |
-| `0x48681D`, 5 | the cargo loop's detach: inside kill-all, a transport whose player is not local detaches here without the wrapper's `0x0A` broadcast |
-| `0x486F10`, 10 | kill-all, bracketed: the depth counted, the kill list emptied at the outermost return |
+| `0x486810`, 6 | the cargo loop, after each passenger's hit: the mark, and inside kill-all the kill mark |
+| `0x4867CB`, 5 | a carried unit's own detach: inside kill-all, for a unit whose player is not local, applied here without the wrapper's `0x0A` broadcast |
+| `0x48681D`, 5 | the cargo loop's detach of each passenger, the same way, through the same stub |
+| `0x486F10`, 10 | kill-all, entered as `tx_kill_all`: the outermost call on a thread draws the token its kill marks carry |
 | `0x42B019`, 6 | the menu-time fold, below |
 
-Seven compared spans hold the bytes the stubs rely on (the pick's frame `0x49B000`, its
-continuation, the record's index and kind stores, the destructor's arguments, the detach's pushes,
-kill-all's return, the fold's context load). 15 rows in all.
+Nine compared spans hold the bytes the stubs rely on (the pick's frame `0x49B000`, its
+continuation, the record's index and kind stores, the destructor's arguments, the two detaches'
+pushes, kill-all's return, the fold's context load). 17 rows in all.
 
 **Kill-all.** Its branch for a player that is not local — a departed one, through the player
 removal `0x452CC0` — detonates each unit at once and then destroys it, in slot order, so a
-transport earlier in the block detaches its passengers before their turn. The cargo loop lists
-every keyed passenger it detaches inside the bracket and the pick honours the list there, so each
-detonates carried. The loop's detach is applied locally only: the wrapper broadcasts it, and with
-three peers or more the first to remove the player would detach the passengers on the others
-before their own kill-all. A departed player's blasts damage nothing (the owner gate `0x49A043`),
-so what this decides is the explosion drawn, and each peer now decides it from its own copy.
+transport earlier in the block detaches its passengers before their turn. Each outermost kill-all
+draws a token; the cargo loop marks with it every keyed passenger it detaches inside, and the pick
+honours a mark only inside the kill-all that wrote it, so each detonates carried. A passenger
+earlier in the block than its transport is still carried at its turn (`+0x86`), and its own
+destructor detaches it. Both detaches are applied locally only: the wrapper broadcasts each, and
+with three peers or more the first to remove the player would detach its units on the others
+before their own kill-all, in either slot order. A departed player's blasts damage nothing (the
+owner gate `0x49A043`), so what this decides is the explosion drawn, and each peer decides it from
+its own copy.
 
 **The wire.** The owner's decision travels as `m[19]` of B8's `0x4C`. A receiver arms it for the
 destructor call the `0x4C` makes: its own `+0x86` cannot say it, since the transport's `0x4C`, sent
@@ -19445,9 +19449,15 @@ Two peers whose TDF for a named weapon differs lose the keyed types from the gam
 edit. A key naming no section folds nothing.
 
 **Threads.** The keys are written on the LOADER thread inside the load; the fold runs where the
-menu-time loader runs, before the seal; everything else on the GAME thread: every death, the cargo
-loop, kill-all, the pick and the `0x4C`'s receipt. Every index is a u16 or bounded by B4's table,
-and each per-slot array holds 65 536 entries.
+menu-time loader runs, before the seal; everything else runs on the thread that runs the death:
+the GAME thread in play (every death, the cargo loop, kill-all, the pick and the `0x4C`'s
+receipt), and during a network load either thread that pumps. The pump `0x453D40` holds no lock
+across its dispatch, and both the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) reach its leave case
+and the removal's kill-all. So the running kill-all is the thread's own: its token, from an
+interlocked counter, lives in a TLS slot, and a kill mark matches only the kill-all that wrote it;
+two threads' kill-alls never honour each other's marks, and a mark left behind matches no later
+one, so nothing is emptied. Every index is a u16 or bounded by B4's table, and each per-slot array
+holds 65 536 entries.
 
 **Measured** (the full list is in the plan's *C4, as built*):
 
@@ -19458,17 +19468,23 @@ and each per-slot array holds 65 536 entries.
   with only `TransportedExplodeAs` got stock's `SelfDestructAs`.
 - **A passenger that survives its transport** (`c4-survivor.json`, 32 000 HP against the loop's
   30 000): not marked, and killed later on the ground it took stock's blast.
+- **Kill-all's local branch** (`c4-kill-all.json`, single player, `+kill 1` for the AI): the
+  passenger, marked in the cargo loop, exploded `TX_BLAST_S`, 222 to each ring Krogoth.
 - **Two peers** (`c4-mp-host.json`, `c4-mp-join.json`): the joiner's ATLAS downed by the host's
   tower; the host drew `TX_BLAST_E` from `m[19]` alone, and its received-death and received-`0x0C`
   counts agree.
-- **Three peers, one frozen** (`c4-mp-removal.json`): after the first peer's kill-all of the frozen
-  player, the third peer's copies stayed carried and its `0x0A` count unchanged; its own removal
-  (TIMEOUT.GUI's REJECT) detonated both passengers as `TX_BLAST_S`.
+- **Three peers, one frozen** (`c4-mp-removal.json`, one pair in each slot order): the host's
+  TIMEOUT.GUI `REJECT` removed the frozen player there, and the session's drop removed it on the
+  third peer too. Each peer ran its own kill-all, applied both detaches locally (the cargo loop's,
+  and at `0x4867CB` a passenger's own, its slot below its ATLAS's), and detonated both passengers
+  as `TX_BLAST_S`, one by its kill mark and one by `+0x86`; the third peer's received `0x0A` count
+  stayed at 2. With both transports first in their blocks and the host's `+kill` in place of the
+  `REJECT` (no session drop), the third peer's copies stayed carried until its own `REJECT`.
 - **The fold**: `CRC_weapons` of a keyed type differs with the named weapon's TDF (`0xB71E6070` at
   111, `0xCF066848` at 112) and is 0 for the unkeyed control; the build before read 0 for all. On
   two peers with the joiner's TDF at 112, exactly the three keyed types left the game on both
   (322 of 325).
-- 280 sites install, B8 and B9 included.
+- 282 sites install, B8 and B9 included.
 
 **Not covered.**
 
@@ -19478,3 +19494,5 @@ and each per-slot array holds 65 536 entries.
   needs a death inside B5's catch-up window.
 - A departure DirectPlay reports (a lobbied session's keepalive) was not run; TIMEOUT.GUI's REJECT
   is the same removal.
+- A removal during a network load, where the loader thread runs the kill-all, was not run; the
+  token makes that kill-all's state its thread's own by construction.
