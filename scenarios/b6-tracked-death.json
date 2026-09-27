@@ -1,0 +1,23 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B6 side measurement: the tracked unit dies with a build order armed. A CORCK at 10 percent health and a CORAK on open ground (Two Continents SW), an ARM LLT out of their reach to the east. Select the CORCK, press a build button (main+0x2CC3 = 0x0E), then order it (tacli order, not the mouse) into the LLT's range; read 0x2CC3, 0x2CC4 and the tracked unit 0x37E9C before and after it dies, and watch the build ghost.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": { "noshake": true },
+  "players": [
+   { "slot": 0, "controller": "human", "side": "core", "color": 1, "metal": 5000, "energy": 5000 },
+   { "slot": 1, "controller": "ai", "side": "arm", "color": 0 }
+  ]
+ },
+ "units": [
+  { "id": "ck", "type": "CORCK", "owner": 0, "pos": [560, 7700], "health": 10 },
+  { "id": "ak", "type": "CORAK", "owner": 0, "pos": [640, 7760] },
+  { "id": "llt", "type": "ARMLLT", "owner": 1, "pos": [1300, 7700] },
+  { "id": "ai_keepalive", "type": "ARMSOLAR", "owner": 1, "pos": [1400, 7300] }
+ ],
+ "camera": { "at": [700, 7700] }
+}

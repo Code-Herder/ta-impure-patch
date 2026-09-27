@@ -1125,7 +1125,7 @@ overwrite easier to reach. The patch does not depend on the cap.
 |---|---|---|
 | `0x47EAE3` | a lookup on the plot `0x4815A0` returns | yes, `0x47EADA` |
 | `0x498F4F` | the hovered feature in the pointer→world function `0x498DA0` (one caller, `0x499221`), stored at `main+0x2CBC` | **no** |
-| `0x40514A` | the target lookup of the order handler `0x404DB0`, through `0x4815F0` on the order's position. The order-descriptor record at `0x4FC8A6` (file `0xFB6A6`) names that handler with the string "Resurrecting", so this is the resurrect order [INFERRED from the name] | **no** — its reachability is not audited |
+| `0x40514A` | the target lookup of the resurrect order `Order_Resurrect 0x404DB0` (its own section below), through `0x4815F0` on the order's position, after the unit is made | **no** — but `0x4815F0` answers NULL only for a position off the grid or a `0xFFFE` cell whose offsets lead off it (`0x481602..0x48162A`, `0x48165A..0x48166A`), and the order's entry check has already found a feature at that position in the same call |
 
 **How `0x498F4F` gets its plot.** `0x498DA0` turns the pointer into a world point: the viewport arm
 is `eye + clamp(pos, L, R) − L`, and the minimap arm scales the pointer by `main+0x1422B`/`+0x1422F`
@@ -1164,8 +1164,9 @@ measured it: map 10752 × 12800, extent 10720 × 12672.
 - **The debug-level console command `Edge`** (run level 4; table entry `0x50206C`, handler
   `0x416730`) rewrites both margins from its two arguments, 32 and 128 by default. A bottom margin
   under 128 lets the pointer's row leave the map. [INFERRED from the arithmetic; not run.]
-- **`0x40514A`** hands over the plot `0x4815F0` returns for the order's position, and that path is
-  not audited. The guard covers it whether or not it is reachable.
+- **`0x40514A`** hands over the plot `0x4815F0` returns for the order's position. 847 live
+  resurrections never reached the branch a NULL plot would take (the resurrect order's section
+  below); the guard covers it whether or not it is reachable.
 
 **Our build.** Zoom > 1 lets the eye past the stock range, and vpwide's rect at zoom < 1 lets the
 pointer past it, so both can hand `0x498DA0` a point beyond the extent. Two clamps keep it off
@@ -1196,10 +1197,55 @@ jmp  0x421E68
   branch lands inside the eight stolen bytes [rel8/rel32 scan].
 - **What it changes:** nothing for a non-NULL plot. For a NULL plot stock faults, so nothing the
   simulation reads differs except where stock would have crashed. `0x40514A` is on the resurrect
-  order's path [INFERRED], so in a network game with a peer on stock, the stock peer crashes where
-  the patched one goes on.
+  order's path, so in a network game with a peer on stock, the stock peer crashes where the
+  patched one goes on.
 - **What it leaves:** the off-map cell `0x498F2E` stores at `main+0x2C8E` is untouched, as it is in
   stock under `Edge`. Its readers are not audited here.
+
+### The resurrect order `Order_Resurrect 0x404DB0`, and its exits after the unit is made
+
+`0x404DB0` is `stdcall(builder, order, flags)`, `ret 0xC`, the handler of order descriptor 18
+(record `0x4FC8AA`: "Resurrecting", the handler at `+4`, the name "Resurrect" at `+0x15`)
+[DISASSEMBLED; MEASURED live: the counters below fire inside it on RESURRECT orders]. Its state is
+the order's byte `+0x5`, dispatched through the table `0x4052D8` (states 0–6). The full walk, and
+why TADR's post-create fix was not ported, are in
+[the section B evidence, Part 3 §1](tadr-port/sim-fixes-evidence.md). What this map keeps:
+
+- **The entry check, every state ≤ 5** (`0x404DC6..0x404E16`): `0x421DA0(order+0x22)` answers the
+  feature's def through one `0xFFFE` hop; `0xFFFF` → "Resurrection failed" (`0x501698`) and
+  return 8, and a FeatureDef without `+0xFE` bit 7 → return 8.
+- **The countdown** (state 3, `0x404F92..0x404FEE`): `order+0x3A = BuildTime × 0.3 /
+  ⌊WorkerTime / 30⌋`, the resurrected type's UnitDef `+0x1EA` against the builder's `+0x1FE`, the
+  0.3 being the double at `0x4FC948`, made an integer by `0x4E43A0` [INFERRED: `_ftol`]. State 4
+  (`0x405005`) counts it down, one per call.
+- **The second lookup, after `CreateUnit`** (state 5): `0x4815F0(order+0x22)` → the anchor cell,
+  and `GetGridPosFeature 0x421E60` → its def. **`0x4815F0` follows the `0xFFFE` hop itself**
+  (`0x481640..0x481679`, bounded), so an order on any cell of a multi-cell wreck reads the
+  anchor's record at `0x40516C` — the record index at the anchor's `+0xA`, not the hop offsets.
+  `0x40514F cmp ax,0xFFFB; jb 0x405164`: the **failure exit `0x405155`** returns 8 with the new
+  unit left a nanoframe; the **success path `0x405164`** copies the record's `+0x20` rotation to
+  `unit+0x64` (`0x40516C..0x405191`), removes the wreck with `FEATURES_Destroy 0x4246B0` (which
+  hops too, `0x4246BE..0x4246E6`), and finishes the unit.
+- **How a player gives it: `reclaim`** [DISASSEMBLED]. The order resolver `0x43F0E0` has no
+  resurrect type among its 1–14 (jump table `0x4401EC`); its reclaim case `0x43F4F7` needs the
+  unit's def `+0x245` bit `0x400` (`0x43F4FD`), finds the feature under the position (`0x4815A0`
+  and the `0xFFFE` hop, `0x43F50B..0x43F58A`), and when the def also has `+0x245` bit `0x800`
+  (`0x43F5A5`) [INFERRED: `canresurrect`; CORNECRO is the one retail unit with that tag], the
+  cell is in the viewing player's sight (`0x43F5D1..0x43F5FF`: the word at `main+0x14273`, bit
+  `main+0x2A43`) and FeatureDef `+0xFE` has bit 7 (`0x43F609`), it jumps to `0x44004C`, which
+  resolves the name "RESURRECT" (`0x5052F0`) through `0x438760`. So a scenario's or `tacli order`'s
+  `reclaim` of a wreck by a Necro is a resurrect order.
+
+**MEASURED 2026-09-26: the failure exit never fired.** Scratch counters (a build never committed)
+on `0x405155` and `0x405164` logged the order's position, the cell and its record index at each
+pass; `ddraw.dll` at `8d033d1`, gamespeed 10, `scenarios/b1-resurrect.json` and seven variants of
+it (`b1-resurrect.gen.py`: 110 wrecks of 1×1 to 5×6 on the Two Continents plateau, each with a
+CORNECRO ordered to reclaim it, ten wrecks with a second Necro, a third of the multi-cell orders at
+the anchor and the rest at the footprint's centre or far corner). **847 passes through `0x405164`,
+0 through `0x405155`**: 440 on 1×1 wrecks, 126 on a multi-cell wreck's anchor, 136 on another cell
+of one, and 145 in a first layout that was not split by footprint. Every pass read the anchor's
+own def at the cell `0x4815F0` returned. About a third of the orders never reached state 5 (a
+shared wreck's second Necro finds it gone at the entry check; the rest were not followed up).
 
 ### The terrain pass reads off its tile map when the view is larger than the map — `0x483FA0`, bounded at `0x484057`
 
@@ -6849,6 +6895,23 @@ and only these three sources can be what `0x499027` reads.
   engine's own dispatch covers `0x200..0x206` and the double-click arrives as another down.
 - **The right button cannot execute a command button, by construction** — `0x499100` returns at
   its first test whenever `main+0x2CC3 != 1`, and its order call passes the literal 1.
+
+**The tracked unit's death leaves the placement armed.** The per-frame check at
+`0x4995C3..0x4995F1`, after `GameFrame_InGame 0x496790` (`0x4995B8`), reads the tracked unit
+`main+0x37E9C`; when that slot's `+0xA6` word is 0 (`0x4995E4`) it calls `0x491D70(0)` (`push 0`
+at `0x4995EF`, the call at `0x4995F1`: the 7 bytes a reset of the byte would take over), which
+clears `0x37E9C` and pops the GUI. Nothing on that path writes the order byte
+`main+0x2CC3` or `BuildUnitID` `main+0x2CC4` [DISASSEMBLED]. MEASURED 2026-09-26 with
+`tools/b6-tracked-death.sh` (main `8d033d1`, play defaults, `scenarios/b6-tracked-death.json`):
+a CORCK with CORSOLAR pressed read `0x2CC3` = `0x0E`, `0x2CC4` = 246 and `0x37E9C` = 2; ordered
+into an ARM LLT's range with `tacli order`, it died, and then `0x37E9C` read 0 and the top GUI was
+`CORMAIN2.GUI` while `0x2CC3` stayed `0x0E` and `0x2CC4` 246. The engine's placement square and
+our build ghost kept drawing at the pointer (the ghost's cursor count rose on every heartbeat).
+Because `0x4993B6` sends a left press to `0x498F70` whenever the byte is not 1, a left click on
+the map placed nothing, and a left click on the CORAK did not select it; no order reached any
+unit (the CORAK's first order node stayed type 41). The right button still cancels (`0x499100`
+above) [DISASSEMBLED; not run]. So the symptom is a stale placement cursor that swallows left
+clicks, UI-local.
 
 ## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
 

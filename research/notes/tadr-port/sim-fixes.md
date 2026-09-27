@@ -232,10 +232,16 @@ the plan below:
   wrecks, 2 standing, and the joiner lost the same 30 with its own damage fields all 0; on the new
   build all 96 stand at 9 999 on the host and all stand on the joiner, whose feature-repeat counter
   read 602, every other B1 counter 0 on both.
-- **Not run:** resurrection's failure branch (parked: no resurrect verb to drive a few hundred of
-  them). The
-  repair rate was measured flat per repairer, ARMCOM (WorkerTime 300) and ARMCK (80) alike, as the
-  disassembly says.
+- **Resurrection's failure branch never fired** (measured 2026-09-26, after the landing, on main
+  `8d033d1` with scratch counters on both exits that were never committed): **847 resurrections
+  by CORNECRO took the success path `0x405164` and none the failure exit `0x405155`**. That is 440
+  of 1×1 wrecks, 126 ordered at a multi-cell wreck's anchor, 136 at another cell of one, and 145
+  in a first layout that was not split by footprint (`scenarios/b1-resurrect.json` and seven
+  variants from its generator, `b1-resurrect.gen.py`). There is no resurrect verb because none is
+  needed: the order resolver makes `reclaim` a RESURRECT for a unit that can resurrect (the
+  engine map's section on `Order_Resurrect 0x404DB0`). TADR's trigger stays unfound, so nothing
+  is ported, as decided. The repair rate was measured flat per repairer, ARMCOM (WorkerTime 300)
+  and ARMCK (80) alike, as the disassembly says.
 
 The plan as written:
 
@@ -1266,9 +1272,17 @@ and where it differs from the plan below:
   from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
   three local fixes rest on the disassembly: none of their inputs is in stock content, and the
   `ShowRanges` cheat could not be typed under injected input.
-- **Not measured:** the side measurement this landing was to carry (a tracked unit's death leaving
-  an order armed, and our build ghost drawing) did not fit its time budget. The engine's removal
-  of a departed host during the load was not exercised: DirectPlay never reported the killed host
+- **The side measurement: the tracked unit's death leaves the placement armed** (measured
+  2026-09-26, after the landing, on main `8d033d1` with the play defaults, one run of
+  `tools/b6-tracked-death.sh`). A CORCK with CORSOLAR pressed (`main+0x2CC3` = `0x0E`,
+  `BuildUnitID` 246, tracked unit 2) died in an LLT's range. The engine then cleared the tracked
+  unit and popped the build menu, but `0x2CC3` stayed `0x0E` and `0x2CC4` 246, and the placement
+  square and our build ghost kept drawing at the pointer. Left clicks were swallowed: one on the
+  map placed nothing, one on the CORAK did not select it, and no order reached any unit. So it is
+  a stale placement cursor, UI-local, with no wrong order; the ghost only follows the engine's
+  own square. Resetting the byte at `0x4995EF` is the fix if the owner wants one (the engine
+  map's "The tracked unit's death leaves the placement armed").
+- **Not measured:** the engine's removal of a departed host during the load was not exercised: DirectPlay never reported the killed host
   (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
   `DPSESSION_KEEPALIVE` when `createnewgame` makes them; a lobbied one takes the lobby's flags),
   and a host cannot quit through the UI during the load. The departure argument rests on the
@@ -1318,8 +1332,10 @@ and where it differs from the plan below:
 **Measured alongside a landing** (time-boxed, each with its session):
 
 - resurrection's failure branch: counters on `0x405155`/`0x405164` over a few hundred CORNECRO
-  resurrections of 1×1 and multi-cell wrecks (B1's session);
-- a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6);
+  resurrections of 1×1 and multi-cell wrecks (B1's session) — measured: 0 failures in 847
+  (B1's results above);
+- a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6) —
+  measured: the placement stays armed and the ghost draws, no order goes out (B6's results above);
 - a departing host in a three-peer game (B5's session; the result goes to group E);
 - a cargo unit killed in a transport over land leaving its wreck in the air (B2's session; a
   floating wreck is raised as a visual residual);
