@@ -29,18 +29,22 @@ The short version, measured on the reference setup with the DLL at `main`:
   game at start-up if anything like it gets through — the safety net on its own sites, and the
   whole exe image against the exe file on disk.
 - **An exe that imports TADR** (the 3.9.02 exe, Escalation): Impure loads nested inside TADR's
-  start-up and refuses at `0x40EAD6`, the one byte those exes change that Impure checks.
+  start-up and **stops the rest of it** — the `DllMain` that loaded Impure returns without
+  patching anything, the recorder's entry point is made inert before the loader calls it, and the
+  exe's imports from both lead into Impure's own exports. TADR's `DllMain` has written one line to
+  its own log by the time Impure exists, and that is the whole of what runs
+  ([the takeover](takeover.md), 1d).
 - **gammata's drop-in**: its `tdraw.dll` loads `ddraw_custom.dll`, so Impure never loads.
 
 The **goal** for every setup is the same: Impure active, running the mod's own exe and files as
 the player has them, with none of TADR's code run — `tdraw.dll` and the recorder alike. Reaching it
 is [the takeover](takeover.md) (the owner's direction, 2026-09-26): Impure keeps TADR's code out of
 the process instead of sharing the engine with it, and the exe file on disk is the reference every
-launch is compared against. **Every route where Impure loads first meets that goal as of
+launch is compared against. **Every route where Impure loads at all meets that goal as of
 2026-09-27**, and the suite proves it by reading the running game's code rather than its log files
-([the suite](suite.md), *Whether TADR ran*). The routes where TADR loads Impure — the 3.9.02 exe,
-Escalation, gammata's drop-in — are still refused or never load Impure, and record their behaviour
-today as known gaps.
+([the suite](suite.md), *Whether TADR ran*). On the routes where TADR's own `DllMain` is what loads
+Impure it has written its first log line before Impure exists, and that one line is the whole of
+what runs. Only gammata's drop-in is left, where Impure never loads.
 
 ## The load routes
 
@@ -52,7 +56,7 @@ bytes it finds.
 | retail | `DDRAW`, `DPLAYX` | the exe | Impure's `DllMain`, before the exe's entry point |
 | retail + recorder | `DDRAW`, `DPLAYX` → the 2006 `Dplayx.dll` | the exe | Impure; the recorder's entry point is made inert before the loader calls it, and it is never called |
 | retail + Patch Loader | `DDRAW`, `DPLAYX` → the loader | the exe | Impure, then the loader's presets; its `tdraw.dll` is answered with Impure, its recorder is made inert and never called ([the takeover](takeover.md)) |
-| 3.9.02 / Escalation | `TDRAW` / `TAESC` | `tdraw.dll`'s `DllMain`, `LoadLibrary("ddraw.dll")` | Impure, *inside* tdraw's start-up |
+| 3.9.02 / Escalation | `TDRAW` / `TAESC` | `tdraw.dll`'s `DllMain`, `LoadLibrary("ddraw.dll")` | Impure, *inside* tdraw's start-up, and the rest of that start-up does not run; the recorder's entry point is made inert before the loader calls it ([the takeover](takeover.md), 1d) |
 | gammata's drop-in | `TDRAW` | nobody: tdraw loads `ddraw_custom.dll` | cnc-ddraw |
 
 **The Patch Loader route in detail** (`vendor/Total-Annihilation-Patch-Loader/dllmain.c`, and
@@ -90,8 +94,8 @@ map, which a mod may not ship.
 
 ## Gaps
 
-- **The takeover covers the routes where Impure loads first.** The 3.9.02 exe, Escalation and
-  gammata's drop-in are still refused or never load Impure ([its landings](takeover.md#landings)).
+- **gammata's drop-in never loads Impure at all**: its `tdraw.dll` loads `ddraw_custom.dll`, so
+  Impure would have to be installed under that name ([its landings](takeover.md#landings)).
 - **Windows has no battle stage and no network stage**: its rows stop at the main menu, which is
   why a recorder there shows only the six sites its entry point installs. The reading of the game's
   code runs on both platforms; the exe's import slots are read on Wine only ([the suite](suite.md)).

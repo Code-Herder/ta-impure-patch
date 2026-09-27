@@ -122,11 +122,18 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
 
 - `add`: fixtures in order; `files` is a list, `"*"` for all, or `{"name in folder": "name in
   fixture"}`; later entries replace earlier ones.
-- `goal`: `{"outcome": "impure-active", "tadr_ran": false}` for every player's setup.
+- `goal`: `{"outcome": "impure-active", "tadr_ran": false}` for every player's setup. Add
+  `"tadr_started": true` only where TADR's own `DllMain` is what loads Impure (an exe importing
+  `TDRAW`/`TAESC`): there it has written its first line to `tdrawlog.txt` before Impure exists, and
+  that allowance covers that line and nothing else — an engine patch installed, a recorder log or
+  any site of the game's code leading into TADR still fails the setup.
 - `today`: what it does now, when that is not the goal; `today_windows` overrides fields on
   Windows. Also `tdrawlog`, `failure`, `loaded`, `not_loaded` to pin the evidence.
 - `registry_roots`: where a Patch Loader moved the game's registry key (`RegistryPath=`), so the
   battle's map lands there too.
+- `no_network_game`: why a setup plays none, in words and from a run; its column reads `no mp`.
+  Escalation's two carry it — its battle room starts the game on both peers with no units on
+  either, so there is nothing to fight.
 - `levers`: empty files put in the game folder, a DLL switch. A setup with one checks a mechanism,
   not a player's folder, and plays no network game: `mayhem-11.3.0-net` turns the takeover off
   (`tagpu_takeover.off`) so the safety net has TADR to catch, and its goal is the net's refusal;
@@ -188,7 +195,12 @@ Run the new setup before writing its `today` — write down what it did, not wha
   structural one.
 - **The joiner's session list fills when SELGAME opens and on UPDATE, never by itself**: a host
   still busy with its map load is missing from it. The runner presses UPDATE while JOIN is grey,
-  as a player would (Total Mayhem needed it one run in three).
+  as a player would, twelve rounds of five seconds (Total Mayhem needed it one run in three;
+  Escalation's host was still grey after six).
+- **A mod's front end is not stock's, and a screen still coming up is not a failure.** Both walks
+  retry a click while the answer is "no active gui" or a gadget that is not there yet, and the
+  single-player walk stops early when a click lands on `ARMMAIN`/`CORMAIN`: Escalation's Skirmish
+  button goes straight into a game, so there is no Start to press.
 - `DPlayHelpWndClass` is DirectPlay's own 1x1 helper window, opened with a session: not a box.
 - **A host frozen at CREATE NEW GAME** (the click on Next never returns, no frame after it) was
   seen twice on 2026-09-27 while two `TotalA.exe` of another session were stuck on the machine —

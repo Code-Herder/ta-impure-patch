@@ -31,7 +31,14 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   five minutes and never touched, and then the stage fails as not run. "Its own" is the set of
   prefixes **this run** created, not every `compat-` name: the instance names are fixed, so a
   session in another worktree runs prefixes named exactly like ours
-  (`parallel-mp-runs-share-dplay-port`).
+  (`parallel-mp-runs-share-dplay-port`). A setup whose battle room this walk cannot reach a game
+  in says so in `no_network_game`, in words and from a run, and plays none: the report's column
+  reads `no mp`. **Escalation's two setups are the ones that do** — its room starts the game on
+  both peers with **no units on either**, resources and HUD up and the camera in the world, so
+  there is nothing to fight and the fight cannot be applied (MEASURED 2026-09-27; the same setups
+  apply 402 of 402 entities in a single-player skirmish, so it is the room's seating, not the
+  engine). What a two-player game proves for those routes is proved by `392+tadr-dev` and
+  `392+tadr-2026.8.6`, which run the same takeover and play one.
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
   process started over SSH cannot see the desktop's windows.
@@ -54,7 +61,12 @@ The second is what the first cannot give.
 **From the game folder.**
 
 - **`tdraw.dll`** writes `tdrawlog.txt` from its `DllMain`: the file at all means it started
-  (the result says too whether it installed its engine patches).
+  (the result says too whether it installed its engine patches). **On the routes where TADR's own
+  `DllMain` is what loads Impure** — the 3.9.02 exe, Escalation — it has written that first line
+  before Impure exists, so the file cannot be absent there however completely the takeover stops
+  the rest. Those setups carry `tadr_started` in their goal, which allows that one line and
+  nothing else: an engine patch installed, a recorder log, or any site of the game's code leading
+  into TADR still fails them.
 - **The recorder** (`tplayx.dll`, or the 2006 `dplayx.dll`) writes `log\TA Demo Recorder Log
   -<date>.txt` **only when it starts from inside one of its DirectPlay exports**. Any such log
   written during the run means it ran; the absence of one does **not** mean it did not, because
@@ -131,4 +143,5 @@ A Patch Loader that moves the registry (`RegistryPath=`) needs the setup's `regi
 the battle stage opens on a map the mod does not ship. `levers` are empty files the setup puts in
 the game folder — a DLL switch. A setup with one checks a mechanism rather than a player's
 folder: `mayhem-11.3.0-net` switches the takeover off (`tagpu_takeover.off`) so that the safety
-net has something to catch, and its goal is the net's refusal.
+net has something to catch, and its goal is the net's refusal. `no_network_game` holds a setup out
+of the network stage with its reason, measured (above).

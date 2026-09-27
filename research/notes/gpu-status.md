@@ -2180,8 +2180,8 @@ while it changes. The same table holds the simulation fixes of §2.6c, in both b
 all in the raised build (MEASURED 2026-09-26 from the log line), and the fixes alone in the
 stock-limits build, where the weapon IDs' four sites join them. It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
-assuming the page), compares all of them with the stock bytes, and writes them only if every one
-matches; a refused write puts back what was written. The patches last for the process and are
+assuming the page), compares all of them with **the exe file on disk**, and writes them only if
+every one matches; a refused write puts back the file's bytes. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
 installed 267 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
@@ -2189,6 +2189,22 @@ pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280
 nothing raised (…); the simulation fixes' N sites installed`. Right before it, once both
 installers have taken their stubs, `enginefix: the fixes' and limits' stubs take N bytes in P page(s)
 of 4096` (§2.6c).
+
+**The exe file is the reference, and a site the mod's own exe changes belongs to the mod.** The
+comparison is made against the bytes of `TotalA.exe` itself, read through the takeover's mapping of
+it (`tagpu_takeover_file_*`, §2.6d). A site whose bytes in memory differ from the file was
+rewritten by something that ran before Impure, which is what the table refuses over. A site whose
+*file* differs from stock 3.1 is the mod's own build — a mod ships its engine changes in its exe —
+and is refused just the same, because Impure's value there belongs to a fix that argues from the
+stock bytes; the exception is a site marked `lim_file_ok`, where the value stands alone and nothing
+of ours reads it, and there the mod's own bytes are **kept** and nothing is written (`limits: N
+site(s) carry the mod's own value in its exe file and are left alone`). **One site is marked**: the
+pathfinding budget `0x0040EAD6`, a lone dword that Escalation's exe sets to 1114 where stock has
+1333 and the raised build 66650. Baked stock bytes alone cannot tell a rewrite from a mod's own
+value, and comparing against them refused Escalation at its first changed site (MEASURED
+2026-09-27). Where the file cannot be read for a site — no mapping, or an exe loaded away from its
+own `ImageBase` — that site falls back to the stock bytes and the log says how many, since a mod's
+exe then refuses there.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -2212,7 +2228,7 @@ with the takeover (§2.6d) switched off rewrites 17 of 265 sites — ten of the 
 relocations (the AI plan's Weight and Limit frames, the category mask at `0x488CC2`) and seven
 sites of the fixes (`0x42DAC7`, `0x4954ED`, `0x486036`, `0x486DC1`, `0x4854A0`, `0x490C5A`,
 `0x42CF5E`). A write made after that first call is outside the net
-([the takeover](compat/takeover.md), part 4).
+([the takeover](compat/takeover.md), part 3).
 
 **The stock build.** `make LIMITS=stock` builds `ddraw-stocklimits.dll` from objects with their
 own suffix (`.stock.o`), with `TAGPU_LIMITS_STOCK` defined: nothing is raised and every accessor
@@ -2716,15 +2732,60 @@ MEASURED 2026-09-27 over the suite's 130 fixture files: in all 18 TADR modules a
 — not the Patch Loader's `dplayx.dll`, not Total Mayhem's or ProTA's own, not cnc-ddraw's
 `ddraw_custom.dll`, not any mod's exe. Never the file's name, which the mods change.
 
-**The invariant**: no module of the game folder has been initialised yet, so no entry point written
-is one the loader has already called or is calling. The loader maps the whole import graph, then
-initialises it as a post-order walk in import-directory order, and Impure imports nothing from the
-game folder, so the condition is exactly *the first import descriptor of the exe that leads into
-the game folder is Impure's*. `to_first_local_is_ours` tests it against the exe in front of it and
-the pass does nothing when it fails; the 3.9.02 and Escalation exes import `TDRAW`/`TAESC` and no
-`DDRAW` at all (DISASSEMBLED: `objdump -p`), so there TADR's `DllMain` is what loads Impure and is
-running while this would write, the pass is skipped and says so, and the image comparison below is
-what answers for that launch.
+**The invariant**: an entry point is written only while it is one the loader has not called yet.
+The loader maps the whole import graph, then initialises it as a post-order walk in
+import-directory order, and Impure imports nothing from the game folder, so a module's place in
+that walk is the place of the exe's import descriptor that names it. `to_descriptor_of` gives that
+index — the first, and the last, for a module named more than once — and a module is made inert
+only when its **first** descriptor comes after the descriptor of the module Impure is running
+inside. On the retail routes that module is Impure's own, the exe's `DDRAW`, and every TADR module
+in the folder is named later or not named by the exe at all. Where the comparison cannot be made or
+fails, the module is left running and the log says which and why; the image comparison below is
+what answers for that launch. Per module rather than once for the exe, because on the 3.9.02 routes
+Impure runs inside `TDRAW` and the recorder is named after it: judged by one flag for the whole
+pass, the recorder stayed running there (MEASURED 2026-09-27, seven of its sites in the engine).
+
+**Where the exe imports TADR, TADR's `DllMain` is what loads Impure, and the rest of it does not
+run** (`tagpu_takeover_nested_init`, pass 1d). The 3.9.02 and Escalation exes import
+`TDRAW`/`TAESC` and no `DDRAW` at all (DISASSEMBLED: `objdump -p`), and that `DllMain` loads
+`ddraw.dll` itself, so Impure's own `DllMain` runs nested inside it with the whole rest of TADR's
+still to come. Stopping that rest is **prevention, not repair**: nothing of TADR's has been
+installed at that moment, so nothing has to be undone, and no build of TADR has to be understood.
+Impure reads its own thread's stack, from its frame up to the stack's top (`VirtualQuery`), and
+finds two things in it:
+
+- **the slot holding the return address of the `LoadLibrary` that is loading us** — a slot whose
+  value lies inside a module of the game folder whose *file* carries TADR's marker, six bytes
+  before which that module's own bytes decode as a call (`FF 15` through a pointer, `E8` rel32,
+  `FF /2` with a register and a displacement, `FF D0`..`FF D7`, `FF 10`..`FF 17`), and whose next
+  slot up — `LoadLibrary` being `stdcall`, its argument sits directly above its return address —
+  points at a string naming Impure's own file, read bounded, ANSI or wide, compared as a basename;
+- **that module's `DllMain` frame** above it: the first slot holding a return address into the
+  same module whose next two slots are the module's own base and `DLL_PROCESS_ATTACH`, which is
+  what the loader pushes. `DllMain`'s `ebp` is the slot below it, and it must hold a saved `ebp`
+  further up the stack; a caller that pops the arguments itself (`83 C4`, which would make
+  `DllMain` `cdecl`) refuses the pass, since the stub returns with `ret 0Ch`.
+
+The return address in that first slot is then replaced with a stub Impure generates from those
+values: `mov eax,1`, the frame's own innermost SEH record restored to `fs:0` where it has one (the
+record inside `[ebp-0x40, ebp)` whose `Next` is above `ebp`, so the chain TADR pushed is unwound
+and the loader's is not), `mov esp,<that ebp>`, `pop ebp`, `ret 0Ch`. TADR's `DllMain` therefore
+returns success to the loader the moment `LoadLibrary` hands it Impure. The stub's page is
+allocated `PAGE_READWRITE` and then made `PAGE_EXECUTE_READ` — never writable and executable at
+once — and nothing inside TADR's own image is written. Every value is verified before anything is
+changed, and each one that is missing leaves the pass undone with its reason in the log (`takeover:
+the rest of TDRAW.dll's DllMain is left to run -- …`). MEASURED 2026-09-27: it fires on `TDRAW.dll`
+(TADR `dev-dcff5dd` and v2026.8.6) and on Escalation's `TAESC.dll`, and the log then reads
+`takeover: TDRAW.dll loaded Impure from its own DllMain, and the rest of that DllMain does not run`.
+The fail-safe is the image comparison at the first DirectDraw call: a launch where this pass did
+nothing and TADR then hooked the engine is refused, not played.
+
+Once that `DllMain` is stopped, the exe's import from it leads into a module that will never
+initialise, so `nest_take_imports` points the slots of the descriptors naming it at Impure's own
+exports of the same names — all of a descriptor's slots or none of them, as the DirectPlay pass
+does, and only where Impure exports every name the exe asks for. One slot on both routes,
+`DirectDrawCreate`. What a 3.9.02 player loses with it is what TADR's tdraw drew; the exe's own
+raised limits are in the exe.
 
 **The exe's DirectPlay imports**, which this makes load-bearing: an uninitialised Delphi DLL must
 never be called. From `DllMain` too, after every import is bound and before the exe's entry point,
@@ -2772,15 +2833,17 @@ slot, a target computed at run time, a TADR build with neither marker, or anythi
 this call, which is what the passes above are for; an exe loaded away from its own `ImageBase` has
 its code left uncompared and says so.
 
-MEASURED 2026-09-27, one full suite run on Wine and one on the Windows test box, read out of the
-live process by the suite as well as in-process — **11 of 16 setups meet the goal, 5 known gaps, 0
-UNEXPECTED on each platform**: `retail` 431 changed runs in `.text` and nothing leading out of the
-exe; `retail+tadr1`, `retail+tadr-recorder-ota`, `retail+tadr-files`, the three Patch Loader
-setups, Total Mayhem 11.3.0 and ProTA 4.8 all **0 sites leading into TADR**, alone, in the battle
-and in the two-player network game, on every peer — where the same read on the T1b DLL found 6
-hooks into the 2006 recorder. With `tagpu_takeover.off` that recorder installs 6 sites by start-up
-and 24 once a battle lets its DirectPlay path run, which is the proof the check can see what the
-game folder cannot show ([the setups](compat/setups.md)).
+MEASURED 2026-09-27, one full suite run on Wine and one on the Windows test box on the same DLL,
+read out of the live process by the suite as well as in-process — **15 of 16 setups meet the goal,
+1 known gap, 0 UNEXPECTED on each platform**: `retail` 443 changed runs in `.text` and nothing
+leading out of the exe; `retail+tadr1`, `retail+tadr-recorder-ota`, `retail+tadr-files`, the three
+Patch Loader setups, Total Mayhem 11.3.0, ProTA 4.8, **both 3.9.02 routes and both Escalation
+routes** all **0 sites leading into TADR**, alone, in the battle and — for eleven of them — in the
+two-player network game, on every peer, where the same read on the T1b DLL found 6 hooks into the
+2006 recorder. With `tagpu_takeover.off` that recorder installs 6 sites by start-up and 28 plus the
+exe's 3 DirectPlay slots once a battle and a network game let its DirectPlay path run, which is the
+proof the check can see what the game folder cannot show ([the setups](compat/setups.md)). The one
+gap is gammata's drop-in, where Impure never loads.
 
 Three things the landing review changed here, each a hole the measurements could not have shown:
 the exe's **import slots are judged even when the code comparison could not be made** (an exe held
