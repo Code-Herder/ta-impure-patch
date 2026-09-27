@@ -1,0 +1,138 @@
+{
+ "format": "ta-scenario/1",
+ "description": "C4, keyed units that die NOT carried, on Show Down. v: an ATLAS loads TXBIG (TXCOM1's keys, MaxDamage 32000) at (800, 700); once it is aboard (its +0x86 names the ATLAS), `tacli order --unit N --expect ARMATLAS move pos 800 1600` flies it toward v_gun, the AI's TXRL (TX_AA: 1000 to the ATLAS, 1 to a commander), which downs it; the cargo loop's 30 000 leaves TXBIG 2000 HP, not dying, so it is not marked. It lands; `tacli scenario apply` of a TXLLT2 of the AI's beside it (TX_LAS2: 65 000 to a commander) kills it on the ground: not carried, stock's COMMANDER_BLAST, and no `decided carried` in the log. f: TXCOM1 at (4300, 1600) with no transport, beside f_gun, the AI's TXLLT2 (range 200), which kills it at once: not carried, stock's COMMANDER_BLAST. Each ring is two unarmed CORKROGs (29 918 HP) 260 either side of the load site: read their HP (+0x108) before and after. TX_BLAST_E takes 111 and TX_BLAST_S 222 from anywhere within 2000; stock's COMMANDER_BLAST takes thousands within 950. The cases are 3500 apart. Content: tools/datakeys_fixture.py into the instance's gamedir.",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "keep_ai",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    2550,
+    2050
+   ]
+  },
+  {
+   "id": "v_atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    800,
+    820
+   ],
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "v_com"
+    }
+   ]
+  },
+  {
+   "id": "v_com",
+   "type": "TXBIG",
+   "owner": 0,
+   "pos": [
+    800,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "v_gun",
+   "type": "TXRL",
+   "owner": 1,
+   "pos": [
+    800,
+    1600
+   ]
+  },
+  {
+   "id": "v_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    540,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "v_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    1060,
+    700
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "f_com",
+   "type": "TXCOM1",
+   "owner": 0,
+   "pos": [
+    4300,
+    1600
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "f_gun",
+   "type": "TXLLT2",
+   "owner": 1,
+   "pos": [
+    4300,
+    1750
+   ]
+  },
+  {
+   "id": "f_ring_w",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    4040,
+    1600
+   ],
+   "stance": "hold"
+  },
+  {
+   "id": "f_ring_e",
+   "type": "VTKROG0",
+   "owner": 0,
+   "pos": [
+    4560,
+    1600
+   ],
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "at": [
+   800,
+   900
+  ]
+ }
+}
