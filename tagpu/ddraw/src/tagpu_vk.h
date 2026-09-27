@@ -166,6 +166,12 @@ int tagpu_vk_max_image_dim(void);
    no device is up. 0 means "not yet", never a limit. */
 int tagpu_vk_max_storage_range(void);
 
+/* 1 with the memory the driver says is free for this process in the bound
+   device's largest device-local heap (VK_EXT_memory_budget: its budget less
+   its usage), and that heap's size; 0 when the lane is not up or the driver
+   does not offer the query. */
+int tagpu_vk_mem_free(unsigned long long* freeBytes, unsigned long long* heapBytes);
+
 /* 1 when the lane has given up (ST_FAILED) -- a fact the backend can act on
    rather than a frame count it has to guess.
 

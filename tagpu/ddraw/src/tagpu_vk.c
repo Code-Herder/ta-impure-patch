@@ -283,6 +283,10 @@ static const char* res_name(VkResult r)
    instead of failing to load the DLL. */
 static HMODULE  s_mod;
 static PFN_vkGetInstanceProcAddr s_gipa;
+/* OPTIONAL, AND NULL WHERE NOT OFFERED: the memory-budget query
+   (tagpu_vk_mem_free) needs VK_KHR_get_physical_device_properties2 on a 1.0
+   instance, which `vk_instance` enables only when the loader offers it */
+static PFN_vkGetPhysicalDeviceMemoryProperties2KHR s_mp2;
 
 #define IFNS(X) \
     X(vkCreateInstance) X(vkDestroyInstance) \
@@ -373,6 +377,7 @@ typedef struct {
     int              vsync;
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
+    int              budgetok;             /* VK_EXT_memory_budget is offered   */
     /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
        largest ratio this device will apply. The Classic++ restored twins are
        the only textures this fork filters at all, and they are specified at
@@ -903,12 +908,36 @@ static int vk_load(void)
    and the bring-up worker; each destroys its own. */
 static VkInstance vk_instance(void)
 {
-    const char* iexts[2] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
+    const char* iexts[3] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME, NULL };
     uint32_t niext = 2;
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     VkInstance inst = VK_NULL_HANDLE;
+    PFN_vkEnumerateInstanceExtensionProperties eie =
+        (PFN_vkEnumerateInstanceExtensionProperties)s_gipa(NULL, "vkEnumerateInstanceExtensionProperties");
+    int props2 = 0;
     VkResult r;
+
+    /* THE ONE OPTIONAL INSTANCE EXTENSION: what the memory-budget query rides
+       on (research/notes/compute-restorer.md D10). Asked of the loader and
+       enabled only when offered, so an instance that lacks it is the instance
+       it always was, and the restorer counts a quarter of the heap as free. */
+    if (eie) {
+        uint32_t n = 0, k;
+        VkExtensionProperties* ep = NULL;
+        VkResult er = eie(NULL, &n, NULL);
+        if ((er == VK_SUCCESS || er == VK_INCOMPLETE) && n)
+            ep = (VkExtensionProperties*)malloc((size_t)n * sizeof *ep);
+        if (ep) {
+            er = eie(NULL, &n, ep);
+            if (er == VK_SUCCESS || er == VK_INCOMPLETE)
+                for (k = 0; k < n; k++)
+                    if (!strcmp(ep[k].extensionName, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
+                        props2 = 1;
+            free(ep);
+        }
+    }
+    if (props2) iexts[niext++] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
 
     app.pApplicationName = "Total Annihilation (impure)";
     app.apiVersion = VK_API_VERSION_1_0;
@@ -916,7 +945,17 @@ static VkInstance vk_instance(void)
     ici.enabledExtensionCount = niext;
     ici.ppEnabledExtensionNames = iexts;
     r = vkCreateInstance(&ici, NULL, &inst);
+    if (r != VK_SUCCESS && props2) {
+        /* the optional extension is never the reason there is no instance */
+        vklog("vkCreateInstance refused %s (%s) - retrying without it",
+              VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, res_name(r));
+        props2 = 0;
+        ici.enabledExtensionCount = niext = 2;
+        r = vkCreateInstance(&ici, NULL, &inst);
+    }
     if (r != VK_SUCCESS) { vklog("vkCreateInstance: %s (%d)", res_name(r), (int)r); return VK_NULL_HANDLE; }
+    s_mp2 = props2 ? (PFN_vkGetPhysicalDeviceMemoryProperties2KHR)s_gipa(inst, "vkGetPhysicalDeviceMemoryProperties2KHR")
+                   : NULL;
 
 #define RES(n) n = (PFN_##n)s_gipa(inst, #n);
     IFNS(RES)
@@ -987,6 +1026,38 @@ int tagpu_vk_max_image_dim(void)
     cached = (int)p.limits.maxImageDimension2D;
     cachedFor = s_vk.pd;
     return cached;
+}
+
+/* THE MEMORY THE DRIVER SAYS IS FREE for this process, in the largest
+   device-local heap -- its budget less its usage (VK_EXT_memory_budget) --
+   and that heap's size. 0 when the lane is not up or the query is not
+   offered; the caller then has only the heap's size to go on. Render thread,
+   like the other device queries here. */
+int tagpu_vk_mem_free(unsigned long long* freeBytes, unsigned long long* heapBytes)
+{
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT mb;
+    VkPhysicalDeviceMemoryProperties2 mp;
+    unsigned long long best = 0, fr = 0, budget = 0;
+    uint32_t i;
+    if (!s_vk.pd || lane_state() != ST_READY || !s_vk.budgetok || !s_mp2) return 0;
+    memset(&mb, 0, sizeof mb);
+    memset(&mp, 0, sizeof mp);
+    mb.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    mp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    mp.pNext = &mb;
+    s_mp2(s_vk.pd, &mp);
+    for (i = 0; i < mp.memoryProperties.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; i++) {
+        const VkMemoryHeap* h = &mp.memoryProperties.memoryHeaps[i];
+        if (!(h->flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) || h->size <= best) continue;
+        best = h->size;
+        budget = mb.heapBudget[i];
+        fr = mb.heapBudget[i] > mb.heapUsage[i] ? mb.heapBudget[i] - mb.heapUsage[i] : 0;
+    }
+    /* a zero budget is a driver that left the chain as it found it: no answer */
+    if (!best || !budget) return 0;
+    *freeBytes = fr;
+    *heapBytes = best;
+    return 1;
 }
 
 /* THE DEVICE'S LARGEST STORAGE BUFFER RANGE, or 0 while there is no device.
@@ -2050,12 +2121,18 @@ static DWORD WINAPI up_worker(LPVOID arg)
                            a name is not enumerated twice; an ICD or layer that
                            does it anyway would write one past this array, and a
                            bound that costs one comparison is cheaper than
-                           trusting that. */
-                        if (ndext >= (uint32_t)(sizeof dexts / sizeof dexts[0])) break;
-                        if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
+                           trusting that. The bound guards the APPEND, not the
+                           walk: the array is full once maintenance1 is in, and
+                           the names after it are still read. */
+                        if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1") &&
+                            ndext < (uint32_t)(sizeof dexts / sizeof dexts[0])) {
                             dexts[ndext++] = "VK_KHR_maintenance1";
                             s_vk.flipok = 1;
                         }
+                        /* a physical-device query, so it is offered, not
+                           enabled: the device needs nothing for it */
+                        if (!strcmp(ext[k].extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+                            s_vk.budgetok = 1;
                     }
                 free(ext);
             }

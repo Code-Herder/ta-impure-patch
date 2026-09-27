@@ -50,6 +50,7 @@
 #include "tagpu_restore_core.h"
 #include "tagpu_restore_guard.h"
 #include "tagpu_restore_ref.h"
+#include "tagpu_vk.h"           /* tagpu_vk_mem_free */
 #include "tagpu_classicpp.h"
 #include "tagpu_gaf.h"      /* tagpu_gaf_mip_off/_chain: the chain LAYOUT, so
                               the offsets the dump copies to come from the one
@@ -1638,6 +1639,14 @@ int tagpu_vk_restore_fits(const TAGPU_VKPASS* d, unsigned long long bytes, char*
     uint32_t i;
     if (why && whyLen > 0) why[0] = 0;
     if (!d || !d->pd) return 0;
+    if (tagpu_vk_mem_free(&freeB, &heap)) {
+        if (why) {
+            _snprintf(why, whyLen, "%llu MB against half of the %llu MB the driver says is free (of %llu MB)",
+                      bytes >> 20, freeB >> 20, heap >> 20);
+            why[whyLen - 1] = 0;
+        }
+        return bytes <= freeB / 2;
+    }
     vkGetPhysicalDeviceMemoryProperties(d->pd, &mp);
     for (i = 0; i < mp.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; i++)
         if ((mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
@@ -1645,7 +1654,8 @@ int tagpu_vk_restore_fits(const TAGPU_VKPASS* d, unsigned long long bytes, char*
             heap = mp.memoryHeaps[i].size;
     freeB = heap / 4;
     if (why) {
-        _snprintf(why, whyLen, "%llu MB against half of %llu MB free (a quarter of the %llu MB heap)",
+        _snprintf(why, whyLen, "%llu MB against half of %llu MB free (a quarter of the %llu MB heap: "
+                               "no memory-budget query here)",
                   bytes >> 20, freeB >> 20, heap >> 20);
         why[whyLen - 1] = 0;
     }
