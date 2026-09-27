@@ -310,7 +310,10 @@ no, when the device refuses the image, when the keys need an image wider than th
 or than the terrain pass carries (16384), when the map names a tile past the atlas, and while a
 refusal of the restorer stands: the choice asks the restorer first (a device recorded off
 answers then), so no neighbourhood atlas is allocated for a job that will not run. The choice is
-made once per request and restorer epoch, so the render options' retry chooses again.
+made once per request and restorer epoch, so the render options' retry chooses again. A job is of
+one layout (`s_rjNb`): when the choice moves under a standing request, the job goes and the
+picture stops being sampled, as for a new map — the two layouts can have one size, so a resize
+would not catch it.
 The fault lever drives the first two: `tagpu_restorefault.on` holding `nbfit`, or `nballoc` on the
 first map after the terrain pass comes up, where no restored atlas exists yet.
 
@@ -391,11 +394,12 @@ other jobs at the same build: features and effects 0 bytes, units 1, the UI 6, i
 17, each at most one level.
 
 **On the Windows test setup's AMD card** (`1002:6798:0080005b`, 1920 × 1080, `feat-forest` on Two
-Continents, a `tacli` remote instance): the self-test passes with the neighbourhood probe (22,696
-bytes within 0 levels, the CPU reference in 808 ms); the memory-budget query answers there (192 MB
-against half of the 2,105 MB the driver says is free, of 2,816 MB); the whole map is painted in
-31.3 s, the restorer working in 1,773 of the 1,793 frames the game drew meanwhile (58.8 fps). The
-dumps:
+Continents, a `tacli` remote instance), on the landing's last build with main merged in: the
+self-test passes with the neighbourhood probe (22,696 bytes within 0 levels, in 902 ms); the
+memory-budget query answers there (192 MB against half of the 2,105 MB the driver says is free, of
+2,816 MB); the whole map is painted in 30.4 s, the restorer working in 1,784 of the 1,801 frames
+the game drew meanwhile (59.2 fps). The terrain's dump is byte-identical to the run before the
+review's fixes. The dumps:
 
 | check | what | bytes that differ |
 |---|---|---|

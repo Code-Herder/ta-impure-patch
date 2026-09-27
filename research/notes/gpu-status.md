@@ -19715,14 +19715,13 @@ the pass comes up.
 **The self-test** gains a neighbourhood probe on tiny: nine frames over a 3 × 3 map, checked
 against one reflect-padded restore of the whole map on the CPU (22,696 bytes within 0 levels).
 
-**On the Windows test setup's AMD card** the self-test passes, the budget query answers (2,105 MB
-free of 2,816), the whole map paints in 31.3 s at about 59 fps, and every cell is within one level
-of the whole-map restore on 0.0007 % of bytes (the plan note has the table).
+**On the Windows test setup's AMD card**, on the landing's last build, the self-test passes, the
+budget query answers (2,105 MB free of 2,816), the whole map paints in 30.4 s at about 59 fps, and
+every cell is within one level of the whole-map restore on 0.0007 % of bytes (the plan note has
+the table).
 
 **Not covered.** How long a key scrolled onto the screen waits was not measured (by construction it
-is at prio 0 behind at most two trickle batches and the screen's own keys). The Windows run
-predates the review's fixes, which were re-measured on the reference setup only (the bytes
-unchanged, the self-test passing, a device recorded off sizing no neighbourhood atlas). At the
+is at prio 0 behind at most two trickle batches and the screen's own keys). At the
 mirrored edge (§2.90) the half-texel at the fold now samples the key's ring, the network's output
 for the reflected map, where it sampled a copy of the edge; the fold stays continuous. The tile-grid
 lines are the art's and stay (the plan's TODO).
