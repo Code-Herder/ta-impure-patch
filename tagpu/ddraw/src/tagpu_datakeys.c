@@ -1660,9 +1660,8 @@ int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
    bits (ARMCOM's 300 on a CORKROG wraps at 32). A product that does not fit
    at 1 is the engine's own at a recruit's factor, and the answer is 1.
    B10 (tagpu_patches.c, fix_reclaim_wrap) takes that product in 64 bits in
-   both builds, so the hold no longer prevents a wrap: it caps a keyed
-   veteran's step below its formula. Whether to release it is open for the
-   owner (sim-fixes.md, B10).
+   both builds, so the hold caps a keyed veteran's step below its formula;
+   releasing it is open for the owner (sim-fixes.md, B10).
    Called with the engine's x87 stack live (tagpu_patches.c, fix_veterancy): integer code only. */
 int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u, unsigned workertime,
                                               unsigned maxhp, unsigned ticks)

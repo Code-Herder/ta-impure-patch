@@ -2174,14 +2174,14 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
-while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 265 sites in
+while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 267 sites in
 all in the raised build (MEASURED 2026-09-26 from the log line), and the fixes alone in the
 stock-limits build, where the weapon IDs' four sites join them. It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 265 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 267 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16383, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
 nothing raised (…); the simulation fixes' N sites installed`. Right before it, once both

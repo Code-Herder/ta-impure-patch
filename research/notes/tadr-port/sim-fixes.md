@@ -1854,7 +1854,8 @@ click's own walk, so B9 matches stock whenever the case arises.
   measured, on the same test.
 
 **B10 — a unit reclaim's step in 64 bits.** Added 2026-09-26 by the owner from C3's survey (the
-*Not covered* list of B7, above), built on its own branch. Simulation, fail closed, both builds.
+*Not covered* list of B7, above); LANDED 2026-09-27 on local main after two reviews at high, every
+finding acted on. Simulation, fail closed, both builds.
 
 *The defect [DISASSEMBLED, MEASURED].* `0x438650(reclaimer, target, ticks)`, `ret 0xC`, has two
 callers, the reclaim order (`0x40483D`) and the build order's reclaim (`0x414C86`), both `push 0xF`.
@@ -1871,9 +1872,9 @@ The four factors are multiplied in 32 bits and `0x4386CC`'s `fild qword` reads t
 zero high dword, so it wraps past 2³² − 1. ARMCOM's workertime 300 on a CORKROG (29 918 HP, def
 `+0x18A` 29 489.0) is 134 631 000 a factor, so stock's factor 32, from 155 kills, wraps: the
 product less 2³² is 13 224 704 and the step is 1 where the formula gives 486. A quotient of 2³¹ or
-more would also come back wrong: `_ftol` (`0x4E43A0`, `fistp qword` under chop) returns the
-low dword, which `cmp eax,1; jg` turns into 1 when negative. The census: this is the only multiply
-by a def's `+0x1FA` in the exe; the other ten reads of a def's workertime divide it by 30
+more, which stock's product cannot reach and an exact one can, would come back wrong: `_ftol` (`0x4E43A0`, `fistp qword` under chop) returns the
+low dword, which `cmp eax,1; jg` turns into 1 when negative. The census: this is the only product
+that takes a def's `+0x1FA` (`0x46A4CC`'s `mul` is the health bar's divide by 3); the other ten reads of a def's workertime divide it by 30
 (`0x88888889`, `sar 4`), and `0x42B673` copies it.
 
 *The fix.* Two sites in the fail-closed table, both builds:

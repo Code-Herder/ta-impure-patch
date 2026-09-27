@@ -5763,8 +5763,9 @@ static int fix_veterancy(void)
    so the product wraps past 2^32 - 1: ARMCOM's 300 on a CORKROG wraps at stock's factor 32, 155
    kills, and takes a sliver of its step. And a quotient past 2^31 - 1 would come back from
    _ftol 0x4E43A0 (fistp qword, chop) as its low dword, which `cmp eax,1; jg` turns into 1 when
-   negative. The only multiply by a def's +0x1FA in the exe; the other ten workertime reads
-   divide it by 30 (0x88888889), and 0x42B673 copies it.
+   negative. The only product that takes a def's +0x1FA (0x46A4CC's mul is the health bar's
+   divide by 3); the other ten workertime reads divide it by 30 (0x88888889), and 0x42B673
+   copies it.
 
    THE FIX. The product is computed exactly as an unsigned 64-bit value, saturated at INT64_MAX so
    that `fild qword` reads it positive, into the same qword (0x4386B9..0x4386CF: the three
@@ -5781,7 +5782,8 @@ static int fix_veterancy(void)
 
    CLASS: simulation, fail closed, both builds (the reclaimer's peer computes the step and the
    target's HP carries it). Silent at run time. C3's keyed stub at 0x43869D is untouched: its
-   factor still arrives in edx, held to what a 32-bit product holds (an open question now). */
+   factor arrives in edx, held to what a 32-bit product holds, which caps a keyed veteran's step
+   below its formula (sim-fixes.md, B10, open for the owner). */
 
 /* x87-free, and so is everything it calls: 0x4386B9's caller holds the target's cost in st0. */
 static void __stdcall b10_reclaim_product(unsigned int workertime, unsigned int factor,
