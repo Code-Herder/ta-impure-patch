@@ -1339,11 +1339,12 @@ void __stdcall tagpu_menu_oncommand(void* gi)
             s_stage[R_ASSETS] = tagpu_rguard_off() ? 2 : 1; s_stage[R_LIGHT] = 1; s_stage[R_SHADOWQ] = 2;
         }
     } else if (row == R_ASSETS) {
-        /* Off and On alternate. "Off (driver)" goes to On and is the
-           retry: the record is forgotten and the restorer asked again, and a
-           second crash or failed check turns it off again (D12). */
-        if (s_stage[R_ASSETS] == 2) tagpu_rguard_clear();
+        /* Off and On alternate, and "Off (driver)" goes to On. Every way to
+           On is the retry while the driver is recorded off: the record is
+           forgotten and the restorer asked again, and a second crash or
+           failed check turns it off again (D12). */
         s_stage[R_ASSETS] = s_stage[R_ASSETS] == 1 ? 0 : 1;
+        if (s_stage[R_ASSETS] == 1 && tagpu_rguard_off()) tagpu_rguard_clear();
         if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
     } else {
         s_stage[row] = (s_stage[row] + 1) % s_row[row].stages;

@@ -1735,9 +1735,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
         s_rjTried = 1;
         return;
     }
-    /* THE OUT PASS PAINTS LEVEL 0 THROUGH `s_arLvl[0]`, not through the
-       whole-chain view: a framebuffer attachment must name exactly one level,
-       and the whole-chain view names more than one. */
+    /* OUT PAINTS LEVEL 0 THROUGH `s_arLvl[0]`, not through the whole-chain
+       view: a storage image view names exactly one level, and the whole-chain
+       view names more than one. */
     s_rjChain = 1;
     if (s_arMips > 0) {
         s_rjChain = tagpu_vk_restore_job_chain(d, s_rjob, s_arMips, s_arDim,
@@ -1776,8 +1776,8 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     int i;
     if (s_arImg && s_arDim == dim && s_arMips == mips) return 1;
     /* A LIVE JOB NAMES WHAT THE NEXT FOUR LINES DESTROY, so it goes FIRST and
-       it goes from here rather than from `restore_want`. The job holds `dstFb`,
-       `dstView` and every `chainFb[]` over this image and these views, and
+       it goes from here rather than from `restore_want`. The job's descriptor
+       sets name `dstView` and every chain view over this image, and
        `job_free` retires them on the mask a submitted command buffer is bound
        by; `kill_image` below does not defer. `restore_want`'s "the twin moved"
        check is the backstop and cannot be the fix: it runs LATER in the frame,

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "git.h"
 #include "hook.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
@@ -16,9 +17,18 @@
 #define RELAUNCHED  "TAGPU_RESTORE_RELAUNCHED"
 #define KEY_LEN     40
 
+/* THE RECORD IS THE RENDER THREAD'S: `_device`, `_turn_off` and the tick
+   that carries out a retry are its only writers, and so is the epoch's. The
+   game thread's one write is the request, `s_clearReq`. */
 static char          s_key[KEY_LEN];
 static volatile LONG s_off;
 static volatile LONG s_epoch;
+static volatile LONG s_clearReq;
+
+/* the marker the last run left, while the record it stands for is not yet on
+   disk */
+static int  s_markPending;
+static char s_markKey[KEY_LEN];
 
 /* ---- the notice (D12) ----------------------------------------------------- */
 
@@ -26,16 +36,16 @@ static const char* const NOTICE[] = {
     "",
     "Undithering crashed on this graphics driver, so it is now off for this driver and "
     "the game shows the original dithered art.\n\n"
-    "It is tried again by itself after a driver update. To try it now, set Undithered "
-    "assets to On in the render options.",
+    "It is tried again by itself after a driver or game update. To try it now, set "
+    "Undithered assets to On in the render options.",
     "The graphics device stopped responding while undithering was running, so undithering "
     "is now off for this driver and the game shows the original dithered art.\n\n"
-    "It is tried again by itself after a driver update. To try it now, set Undithered "
-    "assets to On in the render options.",
+    "It is tried again by itself after a driver or game update. To try it now, set "
+    "Undithered assets to On in the render options.",
     "Undithering failed its startup check on this graphics driver: its results were "
     "wrong. It is now off for this driver and the game shows the original dithered art.\n\n"
-    "It is tried again by itself after a driver update. To try it now, set Undithered "
-    "assets to On in the render options.",
+    "It is tried again by itself after a driver or game update. To try it now, set "
+    "Undithered assets to On in the render options.",
 };
 
 /* ON A THREAD OF ITS OWN: a message box is modal and pumps its own messages,
@@ -68,6 +78,9 @@ int tagpu_rguard_fault(const char* token)
         size_t n = 0;
         if (f) { n = fread(s_fault, 1, sizeof s_fault - 1, f); fclose(f); }
         s_fault[n] = 0;
+        /* one log line whatever the file's line ends; the tokens are words */
+        for (size_t i = 0; i < n; ++i)
+            if (s_fault[i] == '\r' || s_fault[i] == '\n') s_fault[i] = ' ';
         s_faultRead = 1;
         if (f) tagpu_logf("restoreguard: %s holds \"%s\" - a restorer fault is armed", FAULT_FILE, s_fault);
     }
@@ -108,6 +121,27 @@ static void record_write(const char* key)
     }
 }
 
+/* 1 when `key` is the record ON DISK: the file read back, or the store as its
+   last successful write left it -- the store writes later, on its own
+   thread's schedule (tagpu_settings.h) */
+static int record_saved(const char* key)
+{
+    char rec[KEY_LEN];
+    if (!tagpu_settings_ignored()) return tagpu_settings_restoreoff_saved(key);
+    record_read(rec, sizeof rec);
+    return !strcmp(rec, key);
+}
+
+/* the marker goes once its record is on disk; until then it is the record,
+   and a launch that dies first reads it again */
+static void marker_settle(void)
+{
+    if (!s_markPending || !record_saved(s_markKey)) return;
+    DeleteFileA(MARKER);
+    s_markPending = 0;
+    tagpu_logf("restoreguard: the record for %s is on disk - the crash marker is deleted", s_markKey);
+}
+
 /* ---- the crash path: everything it touches is built here, at install ------ */
 
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prev;
@@ -117,7 +151,9 @@ static char  s_markHead[KEY_LEN + 16];   /* "<key>\r\n", written first          
 static int   s_markHeadLen;
 static char  s_exe[MAX_PATH], s_cwd[MAX_PATH];
 static char* s_cmd;                      /* CreateProcessA may write into it    */
-static char* s_env;                      /* ours plus RELAUNCHED=1              */
+static char* s_env;                      /* ours plus RELAUNCHED=<this process> */
+
+static char  s_waited[96];               /* what tagpu_rguard_attach found      */
 
 static volatile LONG s_depth;
 static volatile LONG s_tid;
@@ -132,11 +168,13 @@ static int hex8(char* o, unsigned v)
     return 8;
 }
 
-/* THE MARKER, THEN THE RELAUNCH, AND NOTHING THAT ALLOCATES BEFORE THE
-   MARKER: the crash may have happened inside the heap or the log with its
-   lock held. CreateFile, WriteFile and CreateProcess are the kernel's; what
-   they need from us is in static buffers. Returns only when the relaunch did
-   not happen. */
+/* THE MARKER, THEN THE RELAUNCH, AND NOTHING OF OURS THAT ALLOCATES: the
+   crash may have happened inside the heap or the log with its lock held, so
+   what the calls need from us is in static buffers. CreateFileA and
+   CreateProcessA are the system's and may take the heap's lock themselves;
+   a crash holding it stops there, with the marker already written, and a
+   second fault inside them goes to TA's filter (`s_fired`). Returns only when
+   the relaunch did not happen. */
 static void blame(int why, unsigned code, unsigned addr)
 {
     static char text[KEY_LEN + 64];
@@ -189,11 +227,20 @@ static void install(void)
     char* env;
     size_t n = 0, cl;
     const char* cmd = GetCommandLineA();
-    char buf[8];
+    char buf[8], mark[80];
+    FILETIME c, e, k, u;
+    int ml;
 
     if (s_installed) return;
     s_installed = 1;
     s_relaunched = GetEnvironmentVariableA(RELAUNCHED, buf, sizeof buf) > 0;
+    /* THIS PROCESS, BY PID AND CREATION TIME, for the relaunch to wait on
+       (tagpu_rguard_attach): a pid alone can be reused once we are gone */
+    memset(&c, 0, sizeof c);
+    GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
+    ml = _snprintf(mark, sizeof mark, "%s=%lu:%08lx:%08lx", RELAUNCHED, (unsigned long)GetCurrentProcessId(),
+                   (unsigned long)c.dwHighDateTime, (unsigned long)c.dwLowDateTime);
+    if (ml < 0 || ml >= (int)sizeof mark) ml = 0;
     if (!GetFullPathNameA(MARKER, sizeof s_markPath, s_markPath, NULL)) lstrcpynA(s_markPath, MARKER, sizeof s_markPath);
     if (!GetModuleFileNameA(NULL, s_exe, sizeof s_exe)) s_exe[0] = 0;
     if (!GetCurrentDirectoryA(sizeof s_cwd, s_cwd)) s_cwd[0] = 0;
@@ -205,16 +252,51 @@ static void install(void)
     if (env) {
         while (env[n] || env[n + 1]) n++;
         n += 2;
-        s_env = (char*)malloc(sizeof RELAUNCHED + 2 + n);
+        s_env = ml ? (char*)malloc((size_t)ml + 1 + n) : NULL;
         if (s_env) {
-            memcpy(s_env, RELAUNCHED "=1", sizeof RELAUNCHED + 2);
-            memcpy(s_env + sizeof RELAUNCHED + 2, env, n);
+            memcpy(s_env, mark, (size_t)ml + 1);
+            memcpy(s_env + ml + 1, env, n);
         }
         FreeEnvironmentStringsA(env);
     }
     s_prev = real_SetUnhandledExceptionFilter(filter);
-    tagpu_logf("restoreguard: crash filter installed ahead of %p%s", (void*)s_prev,
-               s_relaunched ? "; this process is a relaunch and will not relaunch again" : "");
+    tagpu_logf("restoreguard: crash filter installed ahead of %p%s%s", (void*)s_prev,
+               s_relaunched ? "; this process is a relaunch and will not relaunch again - " : "",
+               s_relaunched ? s_waited : "");
+}
+
+/* THE RELAUNCH WAITS FOR THE PROCESS THAT CRASHED, before TotalA.exe's
+   WinMain can run: WinMain refuses to start while the semaphore "Total
+   Annihilation" exists (OpenSemaphoreA at 0x49E885, DISASSEMBLED), and the
+   crashed process holds it until it is gone. A terminating process's handles
+   are closed before its process object is signalled, so the wait orders this
+   process after the semaphore is released. The crashed process is found by
+   pid AND creation time: a pid can be reused once it has exited, and then
+   there is nothing left to wait for. */
+void tagpu_rguard_attach(void)
+{
+    char v[64];
+    unsigned long pid = 0, hi = 0, lo = 0;
+    FILETIME c, e, k, u;
+    HANDLE h;
+    if (!GetEnvironmentVariableA(RELAUNCHED, v, sizeof v)) return;
+    if (sscanf(v, "%lu:%lx:%lx", &pid, &hi, &lo) != 3) {
+        lstrcpynA(s_waited, "no process to wait for is named", sizeof s_waited);
+        return;
+    }
+    h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);
+    if (!h) {
+        lstrcpynA(s_waited, "the crashed process was already gone", sizeof s_waited);
+        return;
+    }
+    memset(&c, 0, sizeof c);
+    if (GetProcessTimes(h, &c, &e, &k, &u) && c.dwHighDateTime == hi && c.dwLowDateTime == lo) {
+        WaitForSingleObject(h, INFINITE);
+        lstrcpynA(s_waited, "it waited for the crashed process to end", sizeof s_waited);
+    } else {
+        lstrcpynA(s_waited, "the crashed process was already gone (its pid is reused)", sizeof s_waited);
+    }
+    CloseHandle(h);
 }
 
 /* ---- the entries ---------------------------------------------------------- */
@@ -224,7 +306,8 @@ int tagpu_rguard_device(unsigned vendor, unsigned device, unsigned driver)
     char rec[KEY_LEN];
     FILE* f;
 
-    _snprintf(s_key, sizeof s_key, "%04x:%04x:%08x", vendor & 0xFFFF, device & 0xFFFF, driver);
+    _snprintf(s_key, sizeof s_key, "%04x:%04x:%08x:%.16s", vendor & 0xFFFF, device & 0xFFFF, driver,
+              GIT_COMMIT);
     s_key[sizeof s_key - 1] = 0;
     install();
     s_markHeadLen = _snprintf(s_markHead, sizeof s_markHead, "%s\r\n", s_key);
@@ -243,17 +326,28 @@ int tagpu_rguard_device(unsigned vendor, unsigned device, unsigned driver)
         while (*reason == '\r' || *reason == '\n') *reason++ = 0;
         reason[strcspn(reason, "\r\n")] = 0;
         if (!strncmp(reason, "lost", 4)) why = TAGPU_RG_LOST;
-        tagpu_logf("restoreguard: the last run turned the restorer off (%s, device %s) - "
-                   "recorded, and the player is told", reason[0] ? reason : "?", body);
-        if (body[0]) record_write(body);
-        DeleteFileA(MARKER);
-        notice(why);
+        if (!body[0]) {
+            DeleteFileA(MARKER);                /* it names nothing */
+        } else {
+            record_read(rec, sizeof rec);
+            if (strcmp(rec, body)) {
+                tagpu_logf("restoreguard: the last run turned the restorer off (%s, device %s) - "
+                           "recorded, and the player is told", reason[0] ? reason : "?", body);
+                record_write(body);
+                notice(why);
+            } else {
+                tagpu_logf("restoreguard: a crash marker for %s is still on disk, and so is its record", body);
+            }
+            s_markPending = 1;
+            lstrcpynA(s_markKey, body, sizeof s_markKey);
+            marker_settle();
+        }
     }
 
     record_read(rec, sizeof rec);
     if (rec[0] && strcmp(rec, s_key)) {
-        tagpu_logf("restoreguard: the restorer was off for %s; this is %s, a new driver or "
-                   "another card - it is tried again", rec, s_key);
+        tagpu_logf("restoreguard: the restorer was off for %s; this is %s, a new driver, "
+                   "another card or a new build - it is tried again", rec, s_key);
         record_write("");
         rec[0] = 0;
     }
@@ -264,7 +358,8 @@ int tagpu_rguard_device(unsigned vendor, unsigned device, unsigned driver)
     return (int)s_off;
 }
 
-int tagpu_rguard_off(void) { return (int)s_off; }
+/* a retry the render thread has not carried out yet already reads as on */
+int tagpu_rguard_off(void) { return s_off && !s_clearReq; }
 
 const char* tagpu_rguard_key(void) { return s_key; }
 
@@ -278,14 +373,26 @@ void tagpu_rguard_turn_off(int why)
     notice(why);
 }
 
+/* THE GAME THREAD ONLY ASKS: TA is lockstep, and a write to the store's
+   file -- or a wait on the store's lock while the render thread writes it --
+   must not stall OnCommand (tagpu_menu.c). The render thread's tick carries it
+   out. */
 void tagpu_rguard_clear(void)
 {
-    record_write("");
-    InterlockedExchange(&s_off, 0);
-    /* AFTER the record: an epoch seen moved is a record already cleared */
-    InterlockedIncrement(&s_epoch);
-    tagpu_logf("restoreguard: the player turned undithering back on - the record is cleared "
-               "and the restorer tries again");
+    InterlockedExchange(&s_clearReq, 1);
+}
+
+void tagpu_rguard_tick(void)
+{
+    if (InterlockedExchange(&s_clearReq, 0)) {
+        record_write("");
+        InterlockedExchange(&s_off, 0);
+        /* AFTER the record: an epoch seen moved is a record already cleared */
+        InterlockedIncrement(&s_epoch);
+        tagpu_logf("restoreguard: the player turned undithering back on - the record is cleared "
+                   "and the restorer tries again");
+    }
+    marker_settle();
 }
 
 unsigned tagpu_rguard_epoch(void) { return (unsigned)s_epoch; }
@@ -308,6 +415,11 @@ void tagpu_rguard_work(unsigned slot)
 void tagpu_rguard_fenced(unsigned slot)
 {
     if (slot < 32) InterlockedAnd(&s_work, ~(LONG)(1u << slot));
+}
+
+void tagpu_rguard_idle(void)
+{
+    InterlockedExchange(&s_work, 0);
 }
 
 int tagpu_rguard_blame_lost(void)

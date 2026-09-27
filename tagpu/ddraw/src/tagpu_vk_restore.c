@@ -33,8 +33,10 @@
    D13): the first bring-up on a device closes the core's gate, runs a
    synthetic probe through these same pipelines, reads it back and holds it to
    the CPU reference (tagpu_restore_ref.c) before any consumer's job may run.
-   Every public entry runs inside tagpu_restore_guard.h's enter/leave, which
-   is what lets a crash in one be blamed on the restorer and nothing else.
+   The entries that build and dispatch -- `up`, `job_new`, `job_chain`,
+   `step` -- run inside tagpu_restore_guard.h's enter/leave, which is what lets
+   a crash in one be blamed on the restorer and nothing else; the teardown
+   (`job_free`, `down`) does not.
 
    EVERYTHING ELSE -- the padding rule, the batch grid, the size-class ladder,
    the budget, every counter and every log line -- is the core's
@@ -98,12 +100,17 @@ static int s_state;
    device again instead of answering from the latch. */
 static unsigned s_refEpoch;
 
-static int refuse(void)
+/* `ep` is the epoch the refused attempt BEGAN in, read before anything it
+   refused on: a click that lands during the attempt has then already moved
+   the epoch past the one stamped, so the next `up` asks again. */
+static int refuse_at(unsigned ep)
 {
     s_state = ST_REFUSED;
-    s_refEpoch = tagpu_rguard_epoch();
+    s_refEpoch = ep;
     return 0;
 }
+
+static int refuse(void) { return refuse_at(tagpu_rguard_epoch()); }
 
 /* what the device answered, kept for the log and for the refusals */
 static struct {
@@ -187,18 +194,20 @@ static int up_impl(const TAGPU_VKPASS* d)
     const TAGPU_ROPT*   opt;
     char b[420];
     uint64_t need;
+    unsigned ep;
 
     if (s_state == ST_READY)   return 1;
+    ep = tagpu_rguard_epoch();
     if (s_state == ST_REFUSED) {
-        if (s_refEpoch == tagpu_rguard_epoch()) return 0;
+        if (s_refEpoch == ep) return 0;
         s_state = ST_UNBUILT;
     }
 
     if (!d || !d->dev || !d->pd) return 0;
-    if (!resolve(d)) { refuse(); rlog(LANE ": a Vulkan entry point this pass needs is missing"); return 0; }
+    if (!resolve(d)) { refuse_at(ep); rlog(LANE ": a Vulkan entry point this pass needs is missing"); return 0; }
 
     /* the model and the options, reloaded per DEVICE (tagpu_restore_core.c) */
-    if (!tagpu_rcore_reload(LANE)) return refuse();
+    if (!tagpu_rcore_reload(LANE)) return refuse_at(ep);
     w = tagpu_rcore_model();
     opt = tagpu_rcore_opt();
 
@@ -210,7 +219,7 @@ static int up_impl(const TAGPU_VKPASS* d)
     /* THE RECORD FIRST (tagpu_restore_guard.h): a device and driver the
        restorer crashed on, lost, or failed its self-test on stays on the
        original art until the driver changes or the player asks again */
-    if (tagpu_rguard_device(dp.vendorID, dp.deviceID, dp.driverVersion)) return refuse();
+    if (tagpu_rguard_device(dp.vendorID, dp.deviceID, dp.driverVersion)) return refuse_at(ep);
 
     memset(qp, 0, sizeof qp);
     vkGetPhysicalDeviceQueueFamilyProperties(d->pd, &nq, qp);
@@ -218,7 +227,7 @@ static int up_impl(const TAGPU_VKPASS* d)
     if (d->qfam >= nq || !(qp[d->qfam].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
         _snprintf(b, sizeof b, LANE ": queue family %u has no COMPUTE - the lane cannot restore",
                   (unsigned)d->qfam);
-        rlog(b); return refuse();
+        rlog(b); return refuse_at(ep);
     }
 
     memset(&fp, 0, sizeof fp);
@@ -226,7 +235,7 @@ static int up_impl(const TAGPU_VKPASS* d)
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
         rlog(LANE ": R8G8B8A8_UNORM is not a storage image here, which the spec requires"
                   " - the lane cannot restore");
-        return refuse();
+        return refuse_at(ep);
     }
 
     /* THE LIMIT STAYS UNSIGNED, as Vulkan reports it: a driver may report
@@ -238,7 +247,7 @@ static int up_impl(const TAGPU_VKPASS* d)
         _snprintf(b, sizeof b, LANE ": maxStorageBufferRange %u < the %u-byte activation buffer"
                                " the %dx%d model needs - the lane cannot restore",
                   s_dev.maxSsbo, (unsigned)need, w->depth, w->ch);
-        rlog(b); return refuse();
+        rlog(b); return refuse_at(ep);
     }
 
     /* ---- the slice timer, and this is the ONLY soft refusal ----
@@ -537,6 +546,18 @@ static void stage_done(VkCommandBuffer cb)
                          0, 1, &mb, 0, NULL, 0, NULL);
 }
 
+/* A COPY THE HOST WILL READ: the fence the seam waits on makes device writes
+   available to the device only, so without this the host may read the buffer
+   as it was -- the specification's rule, whatever a given driver does. */
+static void host_ready(VkCommandBuffer cb)
+{
+    VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                         0, 1, &mb, 0, NULL, 0, NULL);
+}
+
 static VkShaderModule mk_mod(const TAGPU_VKPASS* d, const uint32_t* w, size_t words)
 {
     VkShaderModuleCreateInfo smi = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
@@ -626,16 +647,31 @@ static void jret_flush(const TAGPU_VKPASS* d)
     for (i = 0; i < JRET_MAX; i++) if (s_jret[i].pending) jret_kill(d, &s_jret[i]);
 }
 
-/* A free slot of the ring, draining the device to make one if it is full. */
+/* A free slot of the ring, draining the device to make one if it is full.
+
+   THE DRAIN LICENSES ONLY WHAT HAS BEEN SUBMITTED. Inside `step` the frame's
+   command buffer is still being recorded, and a retire made earlier in this
+   same step names sets that buffer binds: its bit for the recording slot must
+   survive the drain, or the buffer is submitted with freed sets. Every older
+   retire has that bit clear already -- `retire_slot_done` ran at the top of
+   this step -- so the retires kept are this step's alone: a set pair per job
+   and the self-test's two freed jobs, far below the ring's size. NULL if none
+   is free all the same, and the caller then keeps what it would have
+   retired: a leak, where freeing it would be a fault. */
 static JRETIRE* jret_take(const TAGPU_VKPASS* d)
 {
+    uint32_t keep = s_cb ? 1u << s_slot : 0u;
     int i;
     for (i = 0; i < JRET_MAX; i++) if (!s_jret[i].pending) return &s_jret[i];
     rlog(LANE ": the job retire is full, so the device is drained to empty it "
                "-- a stall on this frame and nothing worse");
     if (vkDeviceWaitIdle) vkDeviceWaitIdle(d->dev);
-    jret_flush(d);
-    return &s_jret[0];
+    for (i = 0; i < JRET_MAX; i++) {
+        s_jret[i].pending &= keep;
+        if (!s_jret[i].pending) jret_kill(d, &s_jret[i]);
+    }
+    for (i = 0; i < JRET_MAX; i++) if (!s_jret[i].pending) return &s_jret[i];
+    return NULL;
 }
 
 static uint32_t all_slots(const TAGPU_VKPASS* d)
@@ -957,6 +993,10 @@ static int set_pair_new(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
     if (vkAllocateDescriptorSets(d->dev, &dai, got) != VK_SUCCESS) return 0;
     if (g->set[0]) {
         JRETIRE* r = jret_take(d);
+        if (!r) {
+            vkFreeDescriptorSets(d->dev, s_dpool, 2, got);
+            return 0;
+        }
         r->set[0] = g->set[0]; r->set[1] = g->set[1];
         r->nset = 2;
         r->pending = all_slots(d);
@@ -1602,7 +1642,10 @@ int tagpu_vk_restore_job_dst_live(const TAGPU_VKRJOB* j)
 /* below, beside the rest of the dump */
 static void dump_free(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g);
 
-static void job_free_impl(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
+/* THE TEARDOWN IS NOT GUARDED (tagpu_restore_guard.h), this and `down`: a
+   fault in it is the driver freeing objects, not the restorer's work, and at
+   exit it would relaunch a game the player has just quit. */
+void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
 {
     if (!j) return;
     if (d && d->dev) {
@@ -1611,7 +1654,13 @@ static void job_free_impl(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
            MAPPINGS go now, because unmapping is not a device operation and the
            memory they belong to is kept until the mask clears. */
         JRETIRE* r = jret_take(d);
+        JRETIRE kept;
         int L;
+        if (!r) {
+            rlog(LANE ": no retire could be had, so a freed job's objects are kept, not destroyed");
+            memset(&kept, 0, sizeof kept);
+            r = &kept;
+        }
         if (j->dumpMap && j->dumpMem) vkUnmapMemory(d->dev, j->dumpMem);
         r->buf = j->dumpBuf; r->bufMem = j->dumpMem;
         j->dumpBuf = VK_NULL_HANDLE; j->dumpMem = VK_NULL_HANDLE; j->dumpMap = NULL;
@@ -1638,12 +1687,6 @@ static void job_free_impl(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
     memset(j, 0, sizeof *j);
 }
 
-void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
-{
-    tagpu_rguard_enter();
-    job_free_impl(d, j);
-    tagpu_rguard_leave();
-}
 
 /* ---- the byte dump ---------------------------------------------------- */
 
@@ -1885,6 +1928,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0, 0, NULL, 0, NULL, 1, &mb);
+        host_ready(cb);
     }
     s_rec = 1;
     g->dumpSlot = slot;
@@ -1999,6 +2043,9 @@ static void step_impl(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 
 void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
+    /* the guard's own per-frame work, a retry the player asked for and the
+       crash marker: outside the guard, since neither is the restorer's */
+    tagpu_rguard_tick();
     tagpu_rguard_enter();
     s_rec = 0;
     step_impl(d, cb, slot);
@@ -2051,7 +2098,7 @@ void tagpu_vk_restore_lost(void)
 static void probe_free(const TAGPU_VKPASS* d);
 static void prret_kill(const TAGPU_VKPASS* d);
 
-static void down_impl(const TAGPU_VKPASS* d)
+void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
 {
     int i;
     if (!d || !d->dev) { tagpu_vk_restore_lost(); return; }
@@ -2109,12 +2156,6 @@ static void down_impl(const TAGPU_VKPASS* d)
     tagpu_vk_restore_lost();
 }
 
-void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
-{
-    tagpu_rguard_enter();
-    down_impl(d);
-    tagpu_rguard_leave();
-}
 
 /* ============================ THE SELF-TEST ============================
    research/notes/compute-restorer.md D2 and D13; tagpu_restore_ref.h has the
@@ -2134,7 +2175,9 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
    A pass opens the gate. Wrong bytes record the device off (and the notice
    says so) and fail every job. A probe that could not be run at all -- no
    memory, a job refused, a reference that could not be computed -- turns the
-   restorer off for this session only: that says nothing about the driver.
+   restorer off with no record, since that says nothing about the driver: until
+   the lane next comes down and up (a shell/game switch, a swapchain rebuild),
+   which runs the self-test again.
    A device that has passed is not tested again in this process, so a
    swapchain rebuild, which takes the restorer down and up, costs nothing. */
 enum { PR_NONE, PR_ARMED, PR_RUNNING, PR_READBACK, PR_WAITCPU };
@@ -2406,6 +2449,7 @@ static void pr_readback(VkCommandBuffer cb)
                            1 + TAGPU_RPROBE_MIPS, rg);
     rg[0].bufferOffset = (VkDeviceSize)s_pr.offR;
     vkCmdCopyImageToBuffer(cb, s_pr.img[3], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_pr.buf, 1, rg);
+    host_ready(cb);
     for (i = 0; i < 2; i++) {
         mb[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         mb[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -2433,7 +2477,7 @@ static void probe_verdict(const TAGPU_VKPASS* d, int v, const char* why)
         return;
     }
     _snprintf(b, sizeof b, LANE ": self-test %s on %s: %s - the restorer is off%s", v == 0 ? "FAILED" : "could not be run",
-              key, why, v == 0 ? " for this driver" : " for this session");
+              key, why, v == 0 ? " for this driver" : " until the lane next comes up");
     b[sizeof b - 1] = 0;
     rlog(b);
     if (v == 0) tagpu_rguard_turn_off(TAGPU_RG_SELFTEST);

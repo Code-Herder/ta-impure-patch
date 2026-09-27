@@ -76,9 +76,10 @@ CPU's and every alpha byte equal, the border and slack rings included, and the m
 exact box average of the level above; a pass opens the gate.
 
 - **Wrong bytes**: the device and driver are recorded off, every job fails, the notice shows.
-- **Could not run** (the probe could not be built, a probe job failed): the restorer is off for this
-  session only, with no record.
-- A swapchain rebuild on the same device does not test again.
+- **Could not run** (the probe could not be built, a probe job failed): the restorer is off with no
+  record until the Vulkan lane next comes down and up (a shell↔game switch, a swapchain rebuild),
+  which tests again.
+- A device that passed is not tested again in the same process.
 
 On the reference setup the CPU reference takes 313–339 ms and the readback matches it exactly
 (11,032 bytes, 0 levels).

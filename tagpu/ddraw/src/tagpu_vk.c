@@ -417,9 +417,12 @@ static void passlog(const char* m) { vklog("%s", m); }
    mechanism, that the copy has completed. `nimg` frames later, which at any
    frame rate the lane runs at is a few milliseconds. */
 static int s_abSlot1;       /* 0 = nothing pending, else the slot index + 1 */
-/* THE LAST FATAL WAS A LOST DEVICE OR A FENCE THAT TIMED OUT: the two a
-   restorer dispatch can cause, and so the two the fatal path asks
-   tagpu_restore_guard.h about before it takes the lane down */
+/* WHAT THE LAST FATAL SAYS ABOUT THE DEVICE, for tagpu_restore_guard.h, which
+   blames the restorer only for a device that reports itself lost. A fence or
+   an acquire that timed out is ASKED: a presentation stall times out too, and
+   the device's own answer after a vkDeviceWaitIdle -- the wait the teardown
+   makes anyway -- is what tells a hang from a stall. */
+enum { LL_NONE = 0, LL_LOST, LL_ASK };
 static int s_lostLike;
 static const char* s_abPath;/* the file the pending capture belongs in         */
 
@@ -1827,6 +1830,9 @@ static void vk_down(void)
         if (s_vk.sc)   { vkDestroySwapchainKHR(s_vk.dev, s_vk.sc, NULL);  s_vk.sc = VK_NULL_HANDLE; }
         vkDestroyDevice(s_vk.dev, NULL);
         s_vk.dev = VK_NULL_HANDLE;
+        /* no work of the restorer's outlives its device: a later loss on the
+           next device must not be blamed for it */
+        tagpu_rguard_idle();
     }
     if (s_vk.surf && s_vk.inst) { vkDestroySurfaceKHR(s_vk.inst, s_vk.surf, NULL); s_vk.surf = VK_NULL_HANDLE; }
     if (s_vk.inst) { vkDestroyInstance(s_vk.inst, NULL); s_vk.inst = VK_NULL_HANDLE; }
@@ -2271,7 +2277,7 @@ static int vk_present(void)
        caller presenting nothing, for ever, at one frame a second, in silence. */
     r = vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull);
     if (r != VK_SUCCESS) {
-        s_lostLike = r == VK_TIMEOUT || r == VK_ERROR_DEVICE_LOST;
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : r == VK_TIMEOUT ? LL_ASK : LL_NONE;
         vklog("a frame fence did not signal within a second - the device is not answering");
         return -2;
     }
@@ -2279,7 +2285,7 @@ static int vk_present(void)
        work is in flight, so the blame and the relaunch run without one */
     if (tagpu_rguard_fault_lost()) {
         vklog("tagpu_restorefault.on: a device loss is simulated with restorer work in flight");
-        s_lostLike = 1;
+        s_lostLike = LL_LOST;
         return -2;
     }
     /* slot `fi`'s last frame has completed, restorer work and all */
@@ -2324,7 +2330,7 @@ static int vk_present(void)
         tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed()) {
         r = vkDeviceWaitIdle ? vkDeviceWaitIdle(s_vk.dev) : VK_ERROR_INITIALIZATION_FAILED;
         if (r != VK_SUCCESS) {
-            s_lostLike = r == VK_ERROR_DEVICE_LOST;
+            s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
         }
@@ -2354,7 +2360,7 @@ static int vk_present(void)
        DEVICE_LOST and SURFACE_LOST come back for ever, and a silent `return 0`
        would present nothing at one frame a second and not a line in the log. */
     else if (r != VK_SUCCESS) {
-        s_lostLike = r == VK_TIMEOUT || r == VK_ERROR_DEVICE_LOST;
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : r == VK_TIMEOUT ? LL_ASK : LL_NONE;
         vklog("vkAcquireNextImageKHR: %s (%d) - down", res_name(r), (int)r);
         return -2;
     }
@@ -2564,14 +2570,15 @@ static int vk_present(void)
                run before the slice that drains them -- the reverse of the
                shadow map's ordering and the same argument. The slice then
                paints into images the render pass below samples; what makes
-               that write visible to those samples is the OUT render pass's
-               own subpass dependency, stated in tagpu_vk_restore.c, and not
-               the accident of a render-pass boundary.
+               that write visible to those samples is the barrier after its
+               OUT dispatch (tagpu_vk_restore.c `stage_done`, compute write to
+               fragment read), not the accident of a render-pass boundary.
 
-               Its own render passes are begun in here, which is legal in
-               `prepare` and nowhere else because render passes may not nest
-               and this runs before vkCmdBeginRenderPass. It is a no-op until
-               a consumer has asked the device for it. */
+               Its dispatches are recorded in here, which is legal in
+               `prepare` and nowhere else because a dispatch may not be
+               recorded inside a render pass and this runs before
+               vkCmdBeginRenderPass. It is a no-op until a consumer has asked
+               the device for it. */
             tagpu_vk_restore_step(&s_pass, cb, fi);
 
         }
@@ -2799,7 +2806,7 @@ static int vk_present(void)
        would burn the full one-second wait. Silently, at one frame a second. */
     r = vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]);
     if (r != VK_SUCCESS) {
-        s_lostLike = r == VK_ERROR_DEVICE_LOST;
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
         vklog("vkQueueSubmit refused the frame - down");
         return -2;
     }
@@ -2818,7 +2825,7 @@ static int vk_present(void)
        swapchain. Rebuilding here instead would throw away a good frame. */
     if (r == VK_SUBOPTIMAL_KHR) { s_vk.rebuild = 1; return 1; }
     if (r != VK_SUCCESS) {
-        s_lostLike = r == VK_ERROR_DEVICE_LOST;
+        s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
         vklog("vkQueuePresentKHR: %s - down", res_name(r));
         return -2;
     }
@@ -2868,6 +2875,8 @@ static int vk_resize(int w, int h)
     VkFormat fmt = s_vk.fmt;
     int idle = vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
     if (!idle) vklog("vkDeviceWaitIdle refused before a swapchain rebuild");
+    /* every slot's restorer work is finished, whatever the slot count becomes */
+    else tagpu_rguard_idle();
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);
@@ -3029,8 +3038,13 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
             /* BEFORE the teardown: when a frame carrying restorer work was
                unfinished, the restorer is blamed, recorded off and the game
                relaunched, and this does not return */
-            if (s_lostLike) tagpu_rguard_blame_lost();
-            s_lostLike = 0;
+            if (s_lostLike == LL_ASK && vkDeviceWaitIdle &&
+                vkDeviceWaitIdle(s_vk.dev) == VK_ERROR_DEVICE_LOST) {
+                vklog("the device, asked after the timeout, reports itself lost");
+                s_lostLike = LL_LOST;
+            }
+            if (s_lostLike == LL_LOST) tagpu_rguard_blame_lost();
+            s_lostLike = LL_NONE;
             vk_down();
             InterlockedExchange(&s_state, ST_FAILED);
             return 0;

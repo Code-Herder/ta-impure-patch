@@ -128,6 +128,7 @@ static volatile LONG s_detaching;       /* process detach: see tagpu_settings_de
 static CRITICAL_SECTION s_io;
 static char s_gpu[GPU_LEN];
 static char s_restoreOff[GPU_LEN];     /* tagpu_restore_guard.h's record      */
+static char s_restoreOffDisk[GPU_LEN]; /* ...as the file on disk has it        */
 static char s_monName[MON_MAX][MON_LEN];
 static int  s_monCount;
 static char s_monStored[MON_LEN];      /* the name the file held            */
@@ -361,6 +362,8 @@ static void flush(int final)
     if (write_store()) {
         InterlockedCompareExchange(&s_dirty, 0, seen);
         s_retryAt = 0;
+        /* still under s_io, so this is the value serialise just wrote */
+        lstrcpynA(s_restoreOffDisk, s_restoreOff, sizeof s_restoreOffDisk);
     } else {
         s_retryAt = GetTickCount() + RETRY_MS;
         if (!s_retryAt) s_retryAt = 1;
@@ -395,7 +398,11 @@ static void parse_line(char* line)
     if (!*k || *k == '#' || *k == ';') return;
 
     if (!lstrcmpiA(k, "gpu"))     { lstrcpynA(s_gpu, v, sizeof s_gpu); return; }
-    if (!lstrcmpiA(k, "restoreoff")) { lstrcpynA(s_restoreOff, v, sizeof s_restoreOff); return; }
+    if (!lstrcmpiA(k, "restoreoff")) {
+        lstrcpynA(s_restoreOff, v, sizeof s_restoreOff);
+        lstrcpynA(s_restoreOffDisk, v, sizeof s_restoreOffDisk);
+        return;
+    }
     if (!lstrcmpiA(k, "monitor")) { lstrcpynA(s_monStored, v, sizeof s_monStored); return; }
     if (!lstrcmpiA(k, "window")) {
         int w[4];
@@ -712,6 +719,16 @@ void tagpu_settings_restoreoff(char* out, int cap)
     EnterCriticalSection(&s_io);
     lstrcpynA(out, s_restoreOff, cap);
     LeaveCriticalSection(&s_io);
+}
+
+int tagpu_settings_restoreoff_saved(const char* key)
+{
+    int yes;
+    if (!s_attached || s_ignored || !key) return 0;
+    EnterCriticalSection(&s_io);
+    yes = !lstrcmpiA(s_restoreOffDisk, key);
+    LeaveCriticalSection(&s_io);
+    return yes;
 }
 
 void tagpu_settings_set_restoreoff(const char* key)
