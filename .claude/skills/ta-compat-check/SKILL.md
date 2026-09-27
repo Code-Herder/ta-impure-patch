@@ -176,6 +176,12 @@ Run the new setup before writing its `today` — write down what it did, not wha
   a display in use: a few hundred runs used to exhaust `:180`–`:399` and the next run died with
   "no free X display number". `stop_xvfb` terminates and removes the lock. If a run dies that way
   again, look for locks in that range with no live Xvfb before blaming anything else.
+- **"stopped moving at #n on the way to #m" from `tacli ui select` is usually a dropped batch, not a
+  separator.** A rapid batch of arrow presses is partly dropped by design and a busy game can
+  swallow one whole; Total Mayhem's 106-row map list stopped at #35 on one run and #59 on another,
+  both of them drops. `ui select` now needs three no-progress rounds before it calls it a wall, so a
+  real separator still fails and a drop recovers. A failure at the *same* index every time is the
+  structural one.
 - **The joiner's session list fills when SELGAME opens and on UPDATE, never by itself**: a host
   still busy with its map load is missing from it. The runner presses UPDATE while JOIN is grey,
   as a player would (Total Mayhem needed it one run in three).
