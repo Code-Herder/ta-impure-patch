@@ -10069,6 +10069,171 @@ its ARMATLAS over land left no wreck record in B2's measurements: by design, not
 cargo type whose `Killed` gives 1 or 2 at severity 100 would spawn at its own `+0x76`/`+0x78`; that
 path was not measured.
 
+**Who counts a kill, and why two peers can disagree** [DISASSEMBLED 2026-09-26; section B's
+[B8 plan](tadr-port/sim-fixes.html)]. Every peer runs this destructor for every death: the victim's
+owner from `Send_UnitDeath` (mode 1), every other peer from the `0x0C` case (mode 0). The record's
+fields reach the unit on every peer before the stats are counted. `0x486753..0x486778` sets
+`+0xF0` to the unit at `rec+7` (0 → NULL; the scaling is `0x486760..0x486775`). `0x48677E..0x486787` sets `+0xF4` to `0x44FE40([rec+3])`.
+`Send_UnitDeath` wrote `rec+3` as `0x44FFD0(+0xF4)` at `0x486625` and `rec+7` as the killer's `+0xA8`
+at `0x48662E..0x486646`. `0x44FFD0(index)` returns the player record's DirectPlay id `+4`, or −1 for an
+inactive record; `0x44FE40(id)` returns the index whose `+4` matches, or 10. So a record's killer and
+killer's player resolve to the same unit and player on every peer. The kind (`rec+0x0A >> 4`)
+selects the stats through the jump table `0x486E64` (`0x486880..0x486892`, index kind − 1):
+
+| kind | target | counts |
+|---|---|---|
+| 1 (a weapon), 6 (a dying transport's cargo) | `0x4868B3` | losses, then kills |
+| 5 (the unit reclaim, `0x404981` and `0x414B8D`) | `0x486899` | as 1, after refusing `+0xF4` of 10 or equal to `+0xFF` |
+| 3 (self-destruct, defeat) | `0x4869F5` | the victim player's losses only (`0x486A33`) |
+| 2, 4 (ownership change), 7..11, 0 | `0x486A98` | nothing |
+
+On the counting path:
+
+- `0x4868C1`: the victim's player `+0xFE` (losses) + 1, ungated.
+- `0x4868C8..0x486906`: the killer's player `+0xFC` (kills: `main + idx·0x14B + 0x1C5F`) + 1. Gated on
+  `+0xF4 ≠ 10`, **the unit's `+0x104 == 0.0` (`0x4868D3`)**, and `+0xFF ≠ +0xF4`.
+- `0x486915..0x486996`: `strcmp 0x4F8A70` compares the unit's type name with a name at `main+0x37F5F`
+  indexed by its player's side [INFERRED: the side's commander]. On a match, the killer's player
+  `+0x104` + 1 (`0x486981`) and the victim's player `+0x106` + 1 (`0x486996`).
+- `0x48699D..0x4869CA`: **the unit kill count** — the killer's `+0xB8` + 1, gated on `+0xF0` non-NULL,
+  **`+0x104 == 0.0` (`0x4869A7`)**, and `+0xFF ≠ +0xF4`.
+
+Two more reads of `+0x104` come after the stats. `0x486C9E..0x486D1E` (kind 5 with a killer) credits
+`(1.0 − +0x104) × def+0x18A` to the killer's `+0xD4` at `0x486CBD`. The credit is scaled by a factor that
+depends on `main+0x37EEE` when the killer's `+0xEC` record is active and its `+0x73` is 2. [INFERRED: `+0xD4` is the
+reclaimer's metal intake, `def+0x18A` the metal cost.] `0x486D24..0x486D50` runs the death explosion
+`0x49B000` only when `rec+9 > 0` and `+0x104 == 0.0` (`0x486D2F`). The explosion's damage is computed
+only on the owner's peer (C's evidence), so elsewhere it is a picture. The severity `rec+9` is read
+signed twice: for the `Killed` script in mode 0 (`0x486855`, `movsx`, `jle`) and for the explosion
+(`0x486D28`, `test`, `jle`). The `0x0C`'s entry in the dispatch table `0x455F84` is at `0x455FAC`
+(→ `0x45541C`).
+
+So the only per-peer input to all four gates is **that peer's copy of the victim's `+0x104`**. The
+owner holds its own value; a copy's value comes from exactly these writers:
+
+- **`CreateFromNetwork` makes every copy unfinished.** It calls `0x485A40(unit, pos, finished = 0)`
+  (`0x486299`). With the flag clear, `0x485A40` sets `+0x104 = 1.0`, `+0x100 = 0` and HP 0
+  (`0x485B27..0x485B37`). A set flag gives `+0x104 = 0` and HP = def `+0x1FA` (`0x485B09..0x485B25`).
+- **The owner's `0x12` finishes it.** `0x4560C0(builder, built)` sends `{0x12, u16 built, u16
+  builder}`. The receiving case `0x4555BA` (dispatch slot `0x12` of `0x455F84`) calls
+  `0x41B8D0(builder, built)` at `0x4555F1` or `0x455610`, which clears `+0x104` (`0x41B933`) only when
+  the builder is alive and **its def has a build list, `+0x156`** (`0x41B8F1..0x41B8FF`).
+  - The owner's local create `0x485F50` takes `finished` as its sixth argument (`0x486075`, handed
+    to `0x485A40` at `0x4860A0`). It sends the `0x09` (`0x456050` at `0x486115`), and for a finished
+    unit whose def `+0x22F` is 0 it sends a `0x12` **naming the unit as its own builder**
+    (`0x4560C0(unit, unit)`, `0x48611A..0x48612A`). So a finished create of a type with no build
+    list is refused on every receiver, and its copies stay `+0x104 = 1.0`, HP 0. A finished type
+    whose `+0x22F` is not 0 gets **no `0x12` at all**, builder or not: 1 is the value that
+    allocates a mover at `0x4860BB..0x4860ED` [INFERRED: every mobile unit]. Its copies stay
+    unfinished the same way, which is why the ARMCK victims of the measurements below, builders,
+    lagged.
+  - The callers passing `finished = 1` (DIS): `0x4977BB` (the level load's commanders), `0x497002`
+    (the level load), `0x4653D9` (the Deathmatch respawn), `0x488700` (the capture, an ownership
+    change) and `0x488462` (the map's placed units). After the sends, `0x488700` sets the new unit's HP and `+0x104` either from the `0x14`
+    record (`0x488729..0x48873D`, the fraction `fild` from an integer the sender truncated at
+    `0x488614..0x488623`) or from the old unit (`0x488774..0x48878B`). `0x48718E` (the saved-game restore), `0x41794F` [role not traced], and
+    `tacli`'s scenario applier (`tagpu_scenario.c`, `create_units`). The build paths `0x4028EA`,
+    `0x403D5B`, `0x405104` and `0x41409B` pass 0.
+  - **Four callers set the new unit's state after the create returns**, so after its `0x09` has
+    left (DIS): `0x488700` as above; `0x488462` (the map's placed units, `0x488310` from the loader
+    at `0x497B40`), HP = `def+0x1FA × (i16)[esi+0x1A] / 100` at `0x48848E..0x4884A5` (the divide is
+    `mul 0x51EB851F; shr edx,5`); the resurrection `0x405104` in the order code `0x404DB0`, which
+    creates unfinished, links the unit to the order (`0x489690`, a leaf), looks the wreck up
+    (`0x4815F0`, `0x421E60`, leaves) and, when it is there (`0x405153`), removes it, sends a `0x0F`
+    in a network game (`0x405210`) and writes `+0x104 = 0.0` and HP 1 (`0x405219`, `0x405226`) —
+    a straight line from `0x405164`; its other paths, no unit linked (`0x405119`, the fall-through of
+    the test of the order's link `+0x16` at `0x405117`, before its own `0x47F780` at `0x405121`) and no wreck
+    (`0x405155`, return 8), leave the unit as created; and the saved-game restore `0x487080`,
+    HP at `0x4871B5` and `+0x104` at `0x48727C`, after it has restored the units its record names
+    through itself (`0x4871DD`, `0x48720D`) and attached (`0x48AAC0`). The restore is reached only
+    from a saved game's load (`0x497B29` → `0x432610` → `0x486FD0`) and from itself.
+  - **What one local create sends** [DISASSEMBLED 2026-09-26, every direct call from `0x485F50`
+    followed]. Every NULL return (the jumps to `0x4861BD` from `0x485F7C`..`0x486043`, and
+    `0x48605A`) comes before its first call (`0x4860A0`), so a NULL create sends nothing. A unit
+    returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
+    `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
+    `+0x241` bit 18) a `0x13` and a `0x11`. The create calls it as `0x48B090(1, 1)`, which newly sets
+    bit 0 only, so of its per-bit paths only bit 0's runs: the unit's `Activate` script started
+    by name through `0x4B0940` (`0x48B106`, the name at `0x501280`) and a `0x13` (18 bytes, `0x48B110` → `0x47F780(unit, 3, 0)` → … →
+    `0x47F0C0`, sent at `0x47F14C`); its bit-2 path (`0x48B16E..0x48B1AA`, a `0x13` at `0x48B1AA`
+    and the `call [eax]` loop at `0x48B195`) is not reached. Then the `0x11` (4, `0x48B1F3`, a local
+    player's unit). **So a create's direct calls send at most 4 messages, 92 bytes.** Not followed:
+    the COB interpreter a started script runs in (`0x4B0DA0`, 19 callbacks, and `0x4B1C00`, 4), and
+    `0x49059A` and `0x4905BC` (`0x490580`, at `0x4861AE`) [INFERRED: a unit's script calls]. A
+    Create or Activate script can send a `0x13`, `0x11` or `0x0A` through the host vtable `0x4FD698`
+    [INFERRED], which that count does not cover: B8 sends it through its late path.
+  - **The send `0x451DF0`** (`stdcall(net, msg, len)`, `ret 0xC`, 1 when sent) begins `push ebx;
+    push ebp; mov ebp,[esp+0xC]` (`53 55 8B 6C 24 0C`): six bytes on an instruction boundary. It has
+    57 direct callers and no branch into `0x451DF1..0x451DF5`. It sends only in a network game
+    (`main+0x2A44` bit 0, `0x451EAB`) and from a local player's record (`+0x73` 1 or 2).
+  - The owner's completion `0x41B8D0` sends the `0x12` for a local unit (`0x41BA0E..0x41BA26`), so
+    a unit built by a builder is finished on every copy when the message lands.
+  - `0x12` is refused in net state 5 like `0x09`: `0x451FD0` gives it mask 4 at `0x452029` (and
+    `0x11`, `0x14`, `0x16` at `0x452023`, `0x45202F`, `0x452035`).
+  - **The case bounds neither index**: `rec+1` and `rec+3` are scaled into the unit array at
+    `0x4555C4..0x4555E2` and `0x4555FB..0x45560C`. B3's census of the receivers did not include it.
+- **The owner's round robin refreshes it**, at most once every N owner ticks.
+  - The sender `0x48B200` writes 0 for a `+0x104` of exactly 0.0 (`0x48B246..0x48B257`, `0x4FD748`).
+    Otherwise it writes `1 − ftol(+0x104 × −254.0)` (`0x48B259..0x48B271`, `0x4FD74C`), which is 1..255:
+    a fraction left never rounds to finished.
+  - The receiver `0x48B3F0` stores `value × 1/255` (`0x4FD750`) when it differs
+    (`0x48B4B9..0x48B4E3`). It writes HP from 16 bits at `0x48B4A9..0x48B4B2`, the only `0x2C`
+    writer of a copy's HP.
+  - A dirty create (`0x48BA05`) goes through `CreateFromNetwork` and is unfinished like any copy.
+    The round robin's own create (`0x48B497`) is corrected at once by the entry it came with.
+
+`0x489CE0` never finishes a remote copy either. A hit that takes its HP to 0 or below sets pending
+death only for a local owner (`0x489EC6..0x489EEE`); a remote copy is clamped to 0 (`0x489EF1`).
+
+**Consequence** (on stock and before B8): the kills of a unit that was created finished — a mobile
+type, which gets no `0x12`, or a structure without a build list, whose `0x12` is refused — and dies
+within N of its owner's ticks are counted only on its owner's peer: the unit kill count, the killer
+player's `+0xFC`, and (for a reclaim) the credit. On every other peer the copy still reads
+`+0x104 = 1.0` and the gates refuse. MEASURED by the C3 session (two peers, 2026-09-26): a host
+VTLLT1's own copy stayed at 10 through two kills of the joiner's scenario-spawned units (ARMMSTOR,
+VTTGT0, VTKROG0: none a builder) while the joiner's copy went 0 → 2. It read `+0x104 = 0.0` on both
+peers' copies at a time not tied to the kills, which this analysis predicts is after the round
+robin; the value at the kill was not read. MEASURED on three peers on main (`tadr-port/sim-fixes.md`,
+*Kill counts across peers — measured for B8*; *The kill count reads this peer's copy of the
+victim*, above): ARMCK dead ~1 s after their create added 0 / 4 / 0 kills to the towers' copies
+(killer's owner / victims' owner / bystander), those dead 40–94 s after it the same on all three;
+the non-owners' copies turned 0.0 at 26–37 s.
+
+Other readers of a unit's `+0x104` see the same stale copy in the window. One is `0x40408E`, which
+returns 5 only for a target at 0.0, in the order code before the capture order's tick [role
+INFERRED]; the draw is another.
+
+**B8's patch** (`fix_kill_counts`, `fix_built_bounds`; [sim-fixes.md](tadr-port/sim-fixes.html)
+B8 has the argument and the measurements). Rows of the fail-closed table unless marked local:
+
+- **The death.** `call 0x451DF0` at `0x48666D` → `kill_tx_death`, the `0x0C`'s length `push 0xB`
+  at `0x486669` compared. A received `0x4C` enters `0x4866D0(rec, 0)` from B4's `0x05` stub with
+  the return address `0x455428` (`jmp 0x455F50`, compared), as the case `0x45541C` calls it (its
+  twelve bytes `0x45541C..0x455427`, `mov edx,[esp+0x10]; push 0; push edx; call 0x4866D0`,
+  compared too). The
+  `0x0C`'s dispatch slot `0x455FAC` → a stub that counts a bare `0x0C` and goes on at `0x455F50`.
+- **The create's state.** Written into a copy at `CreateFromNetwork`'s exit (B4's `0x48634F`
+  stub) as the round robin writes it: `[+0x9E]+0x10 = 0` (`0x48B4A6`; the create's own last store
+  of it is `0x485DF2`), HP (`0x48B4B2`), the fraction and bit 13 of `+0x110` when it differs
+  (`0x48B4D0..0x48B4EC`).
+- **The hold.** The send's entry `0x451DF0` (6 bytes) → the gate, which goes on at `0x451DF6`.
+  The creates `0x488700`, `0x488462` and `0x405104` → one wrapper. The flushes, each running its
+  displaced instructions and going on after them: `0x488743` → `0x48874B` and `0x488791` →
+  `0x488796` (the capture; spans `0x488705..0x488742` and `0x488774..0x488790` compared),
+  `0x4884AC` → `0x4884B4` (the placed unit; span `0x488467..0x4884AB`), `0x405119` → `0x40511E`,
+  `0x405155` → `0x40515A` and `0x405164` → `0x40516A` (the resurrection; spans
+  `0x405109..0x405118`, `0x405141..0x405154`, `0x40515A..0x405163` and its straight line
+  `0x40516A..0x40522E` in three rows from `0x40516A`, `0x4051B9` and `0x405202`). The capture's
+  function `0x488570` has three callers: the order code (`0x4046C5`, under the unit tick
+  `0x43C334`), the dispatcher's case at `0x45577B`, and `0x4933E0` (`0x493486`).
+- **Local: the `0x12` bound.** `0x4555BA`'s first two instructions (10 bytes; the case is entry
+  `0x455FC4` of the table `0x455F84`) → a stub that drops a record whose `rec+1` or `rec+3` is past
+  the array to `0x455F50` and otherwise runs them and goes on at `0x4555C4`.
+- **B5's `0x45477F`** now only counts a bare `0x0C` refused in state 5; a carried one refused
+  there reaches B5's cancel and dying mark through B8's receiver, and the dying mark writes the
+  carried `+0x104` into the copy first, so the unit tick's destroy (`0x48AFB9` → `0x4864B0`)
+  decides on the owner's value.
+
 ### `0x45AAA0` `FreeObjectState` — the `Object3do` destructor
 
 `__stdcall`, one argument (the object), single exit `ret 4` at `0x45AB01`; the body is

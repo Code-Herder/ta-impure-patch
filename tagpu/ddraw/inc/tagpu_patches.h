@@ -20,4 +20,17 @@ int tagpu_hits_format(char* buf, unsigned int cap);
    load, replayed or dropped at the in-play entry, and the dirty creates' positions by kind.
    DLL counters only; returns _snprintf's count. */
 int tagpu_ghost_format(char* buf, unsigned int cap);
+
+/* The kill-counts landing's heartbeat line (sim-fixes.md B8), a line of its own: deaths
+   carried out and in with the owner's build fraction, copies made with their owner's state,
+   the holds, and the 0x12's bound. DLL counters only; returns _snprintf's count, and never
+   needs more than TAGPU_KILLS_LINE bytes (a compile-time bound in tagpu_patches.c). */
+#define TAGPU_KILLS_LINE 1024
+int tagpu_kills_format(char* buf, unsigned int cap);
+
+/* Around a create whose caller then sets the unit's HP or build fraction itself (tacli's
+   scenario applier): this thread's messages wait from tagpu_kill_hold until tagpu_kill_flush,
+   which sends them with the unit's state as it is then (sim-fixes.md B8). */
+void tagpu_kill_hold(void);
+void tagpu_kill_flush(void);
 #endif

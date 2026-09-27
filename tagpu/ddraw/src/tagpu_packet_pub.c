@@ -3530,6 +3530,17 @@ static void extra(char* buf, unsigned cap, double secs)
     lastAll = all; lastIn = in;
 }
 
+/* B8's kill counts (sim-fixes.md B8), the heartbeat's second line: DLL counters, no engine
+   read. A line of their own, so that neither they nor the packet: line's last sections are
+   cut; the typedef ties the kills line's proven bound to the line's buffer. */
+typedef char kills_line_in_line2[(TAGPU_KILLS_LINE <= TAGPU_PACKET_LINE2) ? 1 : -1];
+
+static void extra_line(char* buf, unsigned cap, double secs)
+{
+    (void)secs;
+    tagpu_kills_format(buf, cap);
+}
+
 /* ---- the level-end packet's second provider -------------------------------
    THE OUT-OF-GAME PACKET MUST NOT DEPEND ON ANOTHER MODULE BEING ARMED:
    tagpu_reclaim's teardown wrap publishes it when reclaim
@@ -3807,6 +3818,7 @@ void tagpu_packet_pub_init(void)
                tagpu_detour_observe(VA_CURSOR_DRAW, CURSOR_STOLEN, sizeof CURSOR_STOLEN,
                                     before_cursor, after_cursor);
     tagpu_packet_set_extra(extra);
+    tagpu_packet_set_extra_line(extra_line);
     _snprintf(b, sizeof b,
               "packet: publisher %s on DrawGameScreen 0x468CF0 (in-play gate: return address 0x4969D2; "
               "chained after tagpu_menu's observer), level-end packet by %s, loader-thread observer at 0x497C70=%d, game thread %u%s",
