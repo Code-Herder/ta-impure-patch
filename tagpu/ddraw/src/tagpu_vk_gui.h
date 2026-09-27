@@ -52,4 +52,12 @@ int  tagpu_vk_gui_ab_frame(void);
 void tagpu_vk_gui_down(const TAGPU_VKPASS* d);
 int  tagpu_vk_gui_down_owed(void);
 void tagpu_vk_gui_down_paid(const TAGPU_VKPASS* d);
+
+/* THE RESTORER IS GOING DOWN AND THIS PASS IS NOT -- a swapchain resize
+   (`passes_down` in tagpu_vk.c) keeps the twins and drops the restorer. Gives
+   back both of this pass's restore jobs, which `tagpu_vk_restore_down`
+   requires of every owner: it forgets the job table, and a job pointer kept
+   across it names a slot the next `tagpu_vk_restore_job_new` hands to another
+   pass. Call it BEFORE `tagpu_vk_restore_down`, behind the device wait. */
+void tagpu_vk_gui_restore_drop(const TAGPU_VKPASS* d);
 #endif

@@ -300,7 +300,8 @@ then left the backdrop with no path to the screen at all. `op_add` runs inside e
 `snap_take` copies it then. From there the surface is **those bytes plus the sprites drawn onto
 them** (`ovl`, each with its own copy of the plane): `pub_seed` sends the bytes as a `PK_ASSET` and
 replays the sprites, and a copy that reads such a surface seeds it on demand, which is what lets it
-survive a reset. This is not the refused `wasAsset` repair, which re-sent the surface as it stood
+survive a reset — and a Classic++ colour repaint, which re-seeds it so the backdrop's restored
+picture can land under the sprites (§27.2). This is not the refused `wasAsset` repair, which re-sent the surface as it stood
 after the draws: what crosses here is still only what the loader made. Any op that is not a
 replayable 1:1 sprite (and any draw that could not be recorded) drops the snapshot, and the
 surface is then exactly as unrecoverable as before; so does any op on it that the window
@@ -2173,7 +2174,8 @@ G15b already built.
   the panel is painted into `panel+0xBC` once and blitted to the frame later — restored art
   reaches the screen through `PK_COPY` or not at all. A copy from a source with *no* colour twin
   writes zero, which invalidates the destination over the box: a copy from indexed art means
-  indexed art. Seeds and pixel ops carry indices only and drop the colour of their box.
+  indexed art. Seeds and pixel ops carry indices only and drop the colour of their box. *[Since
+  2026-09-26 a backdrop's seed and a stamp's plane then take the picture store's colour, §27.]*
 - **The layer chooses per texel** — restored where alpha is 1, the live palette everywhere else —
   so a surface only half restored is never half *wrong*.
 - **The palette-validity rule (§3.4), in full.** `tagpu_rglsl_job_new` snapshots the palette into
@@ -2390,7 +2392,8 @@ DLL change with its own review.
   tileability is a property of the ART (`tagpu_pal_engine()`).
 - **Seeded art stays indexed** until redrawn (above). Restoring a seed directly — the surface is
   an indexed image and the restorer restores indexed images — is the obvious candidate and is
-  not taken here.
+  not taken here. *[Taken 2026-09-26: §27's picture store restores a backdrop's seed and a
+  stamp's plane directly, and a tint shades the colour instead of dropping it.]*
 - **The `uirestore` name globs and the sequence-name registry are not built.** Cursors are
   excluded *structurally* — the cursor's blits are excluded at the source, so its frames never
   enter the UI atlas at all — and the 12-px floor covers the rest of the ruled default; only
@@ -4477,21 +4480,303 @@ behind it.
 | after the destructor fix: SKIRMISH, SELMAP and four picks, the last the 15-press walk to Acid Pools that crashed before | 0 px each, no crash; 224 more presses down and back through the list, no crash |
 | the shell tour | 0 px except `MAINMENU.GUI`'s own animation between the two captures |
 
-**NOT CLOSED.**
+**NOT CLOSED.** *[The Classic++ colour of a `PK_PLANE` stamp, and the battle room's SELMAP,
+which this section left open, are closed by §27.]*
 
-- **In Classic++ a `PK_PLANE` stamp shows the palette, not restored colour.** The drain mirrors
-  it as `TAGPU_GUIOP_PIXELS`, which clears the colour twin under its box, and nothing restores a
-  plane. That covers SKIRMISH's player swatches, the in-game badge and the preview. Main restored
-  the first two as atlas sprites. MEASURED 2026-09-26, Classic++ under `--defaults`: a swatch is
-  337 colours on main against 17 here, at most 22/255 per channel apart, and the Comet Catcher
-  preview is a mean of 2.7 apart. Each matches the engine's frame here. The owner's call was to
-  land and restore it next: stamps of archive frames go back to restorable atlas sprites, drawn
-  unkeyed (the span copies the key colour), and the preview keeps its plane, because every pick
-  makes a new runtime picture.
-- **The battle room's SELMAP was not run.** It is the same builder (`0x444A20`, called from
-  `0x47AADE`/`0x47AC73`), the same gadget and the same `0x800` load; that is an argument from the
-  disassembly, not a run.
 - **No in-game list was scrolled**: no in-game screen with more rows than it shows was reachable
   (no saved games on the instance).
 - **A tint over more than 64 pieces is declined whole**, as every tint over a dropped box was
   before. Nothing measured reached the cap.
+
+## 27. Classic++ colours the shell: the picture store, the snapshot's re-seed and the tint's colour  [MEASURED 2026-09-26]
+
+**THE REPORT.** With Classic++ on, the shell's backgrounds and many of its elements were not in
+full colour: the owner's words were that they "are not full color or they dont get undithered".
+§26 had left one class open, the `PK_PLANE` stamps (SKIRMISH's swatches, the in-game badge,
+SELMAP's preview). The same ask ran the battle room's SELMAP, which §26 had argued from the
+disassembly and not run.
+
+**WHY THE SHELL STAYED IN PALETTE COLOUR.** Colour reached a twin only through a sprite drawn out
+of the UI atlas, and only the atlas was restored (§14). Three other things put pixels on the
+shell's surfaces, and each of them dropped the colour under its box.
+
+- **A backdrop is a `PK_ASSET`**: the decoded PCX, mirrored as a `SEED` with its bytes.
+- **A stamp is a `PK_PLANE`** (§26): a box of indices, mirrored as `PIXELS`.
+- **A dim or a highlight is a `PK_TINT`**: a remap of the index, whose shader wrote `oCol = 0`.
+
+On main the Classic++ main menu is 97 % palette-exact against the engine's golden source, and
+SKIRMISH is 90 %.
+
+### 27.1 The picture store (`tagpu_vk_gui.c`, "THE PICTURE STORE")
+
+**The bytes are restored as they arrive, in a store of their own.** When the drain mirrors a
+`PK_ASSET` or a `PK_PLANE`, it flags the op `TAGPU_GUICOL_DST | ON`. The consumer then looks the
+bytes up in a content-keyed store:
+
+- **Keyed by content, checked byte for byte.** A 32-bit FNV hash of the indices only filters the
+  candidates. A hit then compares the whole picture against the bytes the entry was made from, so
+  a collision costs a second entry and can never lend one picture another's colour.
+- **Restored by one job of its own**, the restorer's sixth (priority 5, `"pic"`). The job reads
+  `s_psSrc` (R8, 2048×1536) and writes `s_psDst` (RGBA8, the same size). This takes every slot
+  `TAGPU_R_MAXJOBS` has; a seventh consumer raises the constant.
+- **Copied into the twin's colour plane** once the job is done: one `vkCmdCopyImage` region per
+  tile core. The barrier into the copy names the OUT pass's writes itself rather than relying on
+  the render pass's outgoing dependency (G21d's `end_pass` finding).
+
+**Placement.** An entry takes a rectangle on a grid of 64-px cells and keeps it until evicted, so
+a fill already recorded this frame reads the texels it was recorded against. Eviction takes the
+least recently used entry that no twin pins. `tagpu_vk_restore_job_remap` first removes
+the entry's frames from the job, including a batch already in flight, which goes back to the
+queue. So the job can never paint an evicted picture over the one that replaced it.
+
+**A picture wider than the restorer's slot is restored in tiles.** The core refuses a frame over
+`TAGPU_R_ACTMAX` (512) on either edge, and a backdrop is 640 wide. Each tile is restored with
+16 texels of the picture's own context past its core, and only the core is copied out. The
+model's receptive radius is 12, so a core texel never sees the zero padding at a cut edge, and
+the tiled result equals the whole-picture result. The tiles are laid out side by side, and they
+must share one layout **in both images**. The reason is the restorer's OUT pass: it reads a
+texel's own colour from the SOURCE at the DESTINATION's coordinates
+(`TAGPU_RESTORE_OUT_FS`).
+
+The first build overlapped the tiles in the source and laid them side by side in the
+destination. That shifted the right half of every backdrop by about 32 px and left a magenta
+strip on SELMAP. Now each tile's bytes are written into `s_psSrc` at the position of its output.
+
+**Binding, and when a fill happens.**
+
+- **A backdrop's seed binds its twin to the entry and pins the entry**, until the twin's next
+  seed or its free. The first job idle after the seed fills the twin's colour plane, before the
+  frame's ops, so every copy out of the backdrop carries colour.
+- **The first op that draws into a bound twin stops its fills** (`picDrawn`): a later fill would
+  paint the picture over what that op drew. **The pin stays.** A snapshot's re-seed (27.2) comes
+  back for the same picture, and finds it stored and restored only because nothing could evict
+  it in between. A re-seed or a free has its own arm.
+- **A stamp does not bind.** Its `PIXELS` op fills at once if the entry is done. Otherwise the
+  engine's next repaint draws the stamp again, and that draw finds it done.
+
+**The repaint that makes that happen.**
+
+- The consumer counts a settle whenever the job goes idle having finished a picture new to the
+  store (`s_psSettled`). The drain answers each new count with `g_guiq.colarm++`, the engine
+  repaint that §14 already asks for when colour becomes valid.
+- **The loop converges by itself.** A repaint that draws only pictures the store already holds
+  finishes nothing new. A picture stored again while its hash is among the last 64 evicted is not
+  counted either (`ps_recent`), so a repaint that evicts a picture of its own screen and draws it
+  again does not ask for another. Content evicted longer ago, such as a map preview picked again
+  after a walk through the list, is fresh and asks for its repaint.
+- **The bound is a budget of its own**, 1024 repaints per palette generation
+  (`pic_ask_repaint` in `tagpu_gui_surf.c`), keyed like the atlas's 32 but not spent from them: a
+  walk through the map list asks once per pick, and would otherwise spend the repaint an in-game
+  sidebar needs later. It holds whatever the store does, including a screen that evicts more than
+  the ring holds between two draws of one picture. Spent, a picture restored afterwards takes
+  colour at the engine's own next redraw. A picture settle absorbed at the edge where colour
+  becomes valid asks from this budget when the atlas's refuses the edge.
+
+**The palette.** Pictures are restored against the presented palette. When the palette moves
+and the producer reports the new one settled (`colourTwins`):
+
+- entries a twin pins are restored again in place;
+- every other entry goes, and is stored again when next drawn;
+- pinning twins' colour planes are cleared, and nothing is filled from the old colours meanwhile.
+
+**A job is only ever made against the palette the done entries were restored against**
+(`s_psPal`). A palette that has moved but not settled waits for the rebuild, so an entry restored
+against the old palette can never be taken for current. `s_psPal` is written in one place.
+
+**A resize.** A swapchain rebuild that changes the extent, the image count or the format takes
+the restorer down while the UI pass stays up (`passes_down` in `tagpu_vk.c`): the twins are the
+only copy of what the shell has drawn. The pass gives both its jobs back first
+(`tagpu_vk_gui_restore_drop`), because the restorer forgets its job table on the way down and a
+job pointer kept across it would name a slot the next `job_new` hands to another pass.
+
+- The UI atlas's next job, for the same generation, repaints over what its image already holds
+  (`s_rjKeepGen`), so the restored art stays on screen and colour validity does not drop. A drop
+  in validity would spend one of the atlas's 32 repaints for every rebuild of a window being
+  dragged. Every world pass restarts from scratch on a resize.
+- The store keeps its done pictures and requeues the queued ones.
+- `tagpu_vk_restore_down` frees and logs any job an owner has left standing (`job '<tag>' was
+  still held by its owner`).
+
+**The drain's gate is `s_picArm`, not `s_colValid`.** An asset is seeded once, at the flip that
+first copies it, and that is usually before the UI atlas has restored anything. Gated on
+validity, the main menu's backdrop would never be restored. A colour plane on a twin while
+colour is not valid is harmless, because the composite reads it only under validity. A
+`PK_PLANE` keeps the validity gate, because a stamp is drawn again at every repaint.
+
+**Why not §26's plan**, which was stamps back to atlas sprites, drawn unkeyed:
+
+- a backdrop is not a sprite;
+- the preview needs a plane anyway, because every pick makes a new runtime frame;
+- content-keying frames in the atlas is what filled it in §26, and a full atlas means a fresh
+  start. The store evicts instead.
+
+### 27.2 The post-game backdrop: a colour repaint re-seeds the snapshot surfaces
+
+`ENDMSN.GUI`'s backdrop is a **snapshot seed**: the loader's bytes taken before any draw, with
+every sprite drawn onto it since kept as `ovl` (`tagpu_gui_hook.c` `snap_take`,
+`pub_seed_snap`). The seed and those sprites (the DEFEAT title, the player names) arrive in the
+same window. The consumer's twin is therefore drawn over before its picture is restored, and it
+never took colour: ENDMSN measured 97.9 % palette-exact, with 11 pictures stored and none bound.
+
+Nothing draws into a snapshot again, so the engine's repaint cannot repaint it. **On the colour
+repaint edge (`repaint_arm`, the `colarm` shadow), the game thread raises `reseed` on every
+surface holding a snapshot.** The repaint's copy then re-sends the seed and the `ovl`. The seed
+finds its picture done and fills at once, and the sprites land on top again.
+
+`reseed` is a flag of its own, not a cleared `seeded`: the twins stay alive until the re-seed
+arrives, and `seeded` is what `surf_drop` reads to owe the consumer a `PK_FREE`. A snapshot freed
+before its re-seed would otherwise leave both twins standing, and a same-size surface landing on
+its base would be seeded over the old backdrop's pixels.
+
+- **Exact by construction:** a held snapshot plus its `ovl` IS the surface. Anything that could
+  not be replayed has already dropped the snapshot (`publish`, "A SNAPSHOT SURFACE TAKES ONLY
+  WHAT IT CAN REPLAY").
+- **Bounded by `colarm`'s own bound:** the snapshot's picture stays pinned while its twin lives
+  (27.1, *Binding*), so a re-seed always finds it stored and raises no settle of its own.
+
+### 27.3 A tint shades the restored colour (`TINT_FS`, `tint_table`)
+
+**The box shader and the focus edges remap an index** (`0x4BF4D0`, `0x4BF7B0`: §26 and the
+button row above). The colour twin used to drop the colour under them. So the screen dimmed under
+a modal showed palette colour (SKIRMISH under SELMAP, the lounge under the battle room's SELMAP,
+100 % palette-exact in the dimmed strip), and so did every highlight.
+
+**What is built.** The remap table is now RGBA8 and twice as tall.
+
+- **Upper half:** the remap, the index in `.r`. It is read exactly as the R8 table was, so the
+  indexed pipeline is untouched.
+- **Lower half:** for each entry `i`, sent by its row to `j`, the map of colour that goes with
+  it, below.
+
+```
+s = min(1, min over channels of pal[j] / pal[i]);   k = s;   b = pal[j] - s * pal[i]
+out = b + k * restored  =  pal[j] + s * (restored - pal[i])
+```
+
+**Black is the one entry no channel constrains**, and it takes its row's own ratio instead: the
+sum of `pal[j]` over the sum of `pal[i]` across the row's entries, at most 1. A black texel's
+restored colour is the detail the restorer put into dark dithered art, and a dim has to scale it
+with its neighbours rather than leave it whole. On the tour's screens the change is invisible,
+because the dimmed black there restores to black; the rule is for dark art under a dim.
+
+The Classic++ tint pipeline blends `src + dst * srcAlpha`, with the destination's alpha kept.
+`TINT_FS` writes the entry's `(b, k)` as `oCol`.
+
+- **A texel whose restored colour is its palette colour** is shaded to the engine's own tinted
+  colour, exact to one level (the table is bytes).
+- **Restored detail is kept on top**, scaled down with a darkening and whole with a lightening.
+- **A texel without colour stays without**, because its alpha is kept at 0.
+- **k in [0, 1] and b ≥ 0 are the blend's limits, not a choice:** a UNORM attachment clamps the
+  source and its factors to [0, 1] before blending. `s` is the largest scale that keeps every
+  channel's offset non-negative.
+
+**Why blending rather than reading the colour plane.** A tint already snapshots the index box,
+because a draw may not sample the attachment it writes. A second snapshot, of the colour plane,
+would need a third sampler, which is a layout change for every twin pipeline. The blend needs
+neither.
+
+It is a plain write of the index, because `oIdx.a` is 0: `src + dst * 0`. And both attachments
+now carry identical blend state, which the spec requires without `independentBlend`; that
+feature is not enabled. The masks differed before this landing (R|G against RGBA) and are now
+both RGBA; an R8G8 attachment has no B or A to write.
+
+**Without a palette the colour half is zeros**, and a colour twin's tint takes the pipeline
+that does not blend (`s_pipeTint2`). That drops the colour exactly as before, and never keeps an
+alpha over a black. **Indexed twins** (Classic mode, and any twin with no colour plane) take the
+one-attachment pipeline, which is unchanged.
+
+**One affine map per row was tried first and rejected.** The rule was `out = b + k·x` with one
+scale per row, fitted by least squares over the palette, the shape `shade_k_build` takes for the
+unit lane. It fits the modal dim (−24) at k = 0.513, b ≈ 0, rms 8.8/255. It fits the selected
+row's lighten (+30) at rms **36.3/255**, with the scale pinned at 1: that row is not an affine
+map of colour. The list's selected row came out as a light grey band where the engine draws a
+subtle green. The per-entry table is exact at every palette colour, so no row can miss that way.
+
+### 27.4 Measured
+
+On a private Xvfb, Classic++ under `--defaults`, the shell at 640×480. Each screen is the
+presented window (`import -window`) against the engine's golden source (`tacli shot`).
+**Palette-exact** is the share of pixels identical to the engine's indexed frame. It is an upper
+bound on what stayed unrestored, because a flat area restores to its own palette colour and
+counts as exact. So do text (`STR_FS` carries no colour) and the tinted entries that are exact
+by construction.
+
+| screen | before | this landing |
+|---|---|---|
+| `MAINMENU.GUI` | 97 % | **1.4 %** |
+| `SINGLE.GUI` | 97.2 % | 2.0 % |
+| `SKIRMISH.GUI` | 90 % | 17.6 % |
+| `SELMAP.GUI` over SKIRMISH, on entry / after a pick | 98.3 % | 25.5 % / 26.2 % — the dimmed strip left of the panel 100 % → 22.7 % |
+| `ENDMSN.GUI`, the post-game screen | 97.9 % | **35.1 %**; 35.7 % after a live Classic → Classic++ flip |
+| multiplayer: TCP, `SELGAME`, `NEWMULTI`, `LOUNGE2` | — | 3.1 %, 5.3 %, 8.1 %, 8.2 % |
+| the battle room's SELMAP on entry / after a pick | — | 25.9 % / 27.2 % |
+
+*Before* is main (a241217) for the main menu, SINGLE, SKIRMISH and SELMAP. For ENDMSN it is this branch before
+27.2's re-seed, and for SELMAP's dimmed strip this branch before 27.3's tint. What is left on
+SELMAP and ENDMSN is the list and table bodies (flat), the labels and the text.
+
+**Other effects measured:**
+
+- **Stamps:** SKIRMISH's player swatches carry about 300 distinct colours against the golden's
+  8, at most 22–36/255 from it per channel. The in-game badge has 373 against 20.
+- **The tint:** the list's selected row is identical to the engine's (flat body, text, and a
+  table exact at palette colours). The six-pixel focus glow on the main menu, SINGLE and SKIRMISH
+  buttons now shades restored colour instead of showing palette colour.
+- **In game** (`mex-ghost` at 1024×768, before 27.3), the side panel is 20.9 % palette-exact.
+
+**The store, driven:**
+
+- a revisit fills in the same frame;
+- a forced palette rebuild requeued 3 bound pictures and evicted 11;
+- with a temporary 2048×1024 store, a walk through the map list evicted 73 entries by LRU;
+- with a temporary most-recently-used eviction, 25 queued frames were removed from the job.
+
+Both eviction walks left the display correct afterwards.
+
+**A resize.** On Linux a window resize goes through the fork's mode set, which brings the whole
+lane down, so `passes_down` runs only on a live extent change (a drag on Windows). It was measured
+with a scratch build forcing it every 600 frames, over the shell tour and 35 s of a game:
+
+- **without the drop**, the restorer found both UI jobs still held at the first rebuild, and the
+  UI never restored again: SINGLE and SKIRMISH 100 % palette-exact;
+- **with it**, no job was held at any of the tour's 7 rebuilds. Each new atlas job repainted over
+  its image for the same generation (`generation 4, repaint` in the log), colour validity rose
+  once and never dropped, and every screen read what it reads without the forcing: the main menu
+  1.4 %, SINGLE 2.0 %, SKIRMISH 17.6 %, SELMAP 26.2 %. In game the terrain restored again after
+  each rebuild.
+
+**THE BATTLE ROOM, RUN.** The host was launched with `--dplay`, then
+`MULTI → TCP/IP → OK → STARTNEW → OK → LOUNGE2 → MAP`.
+
+- In Classic, four picks each refreshed the preview with the highlight following, **0 px**
+  against the golden on every one.
+- The wheel scrolled three notches down (top row 1 → 10) and two back (→ 4) with the selection
+  kept.
+- In Classic++ the dimmed lounge, the preview and the selected row match the engine's frame.
+
+**Classic is untouched.**
+
+- The shell tour is 0 px on every screen, except the main menu's own animation between the two
+  captures (88 px).
+- ENDMSN in Classic is 0 px, measured before 27.3. The tint change reaches only twins that
+  have a colour plane, and Classic has none.
+
+**NOT CLOSED.**
+
+- **The in-game top and bottom bars stay in palette colour** (100 % palette-exact). Their frames
+  are 513 px wide, one over the restorer's slot, so the UI atlas leaves them indexed. They are
+  drawn once per level, by the engine and by `chrome_emit` after a reset. **The by-construction
+  fix is the store's own tiling applied to the atlas:** an entry wider than `TAGPU_R_ACTMAX` is
+  restored in margined tiles laid side by side in both images, and only the cores are copied
+  back. A colour repaint then owes the chrome a re-emit, as a reset does. Not done here: it is
+  in game, and the ask was the shell.
+- **A non-snapshot twin that is drawn over before its picture is restored** stays in palette
+  colour until it is seeded again, and its picture stays pinned meanwhile. None was observed in
+  the shell, where every backdrop is copied out of rather than drawn into, and neither the tour
+  nor ENDMSN refused or evicted a picture.
+- **Text is palette**, by design (`STR_FS`): the glyphs are one flat colour each.
+- **No Vulkan validation layer ran.** None is installed on the reference setup, and installing
+  one needs root. The identical-blend-state requirement above is argued from the spec, not
+  reported by a layer.
+- **A picture the store cannot take stays indexed**, and the log says so once per reason:
+  under 12 px, more than 16 tiles, larger than the store, or a store full of bound pictures.

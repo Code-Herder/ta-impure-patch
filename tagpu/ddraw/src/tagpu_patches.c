@@ -6003,6 +6003,14 @@ static int fix_radar_owner(void)
 
 #define HIT_TAG_CREATE  0x4A                /* outside TADR's 0x2B..0x31 and 0x60, and A′3's 0x49 */
 #define HIT_TAG_HIT     0x4B
+#define HIT_TAG_DEATH   0x4C                /* the 0x0C with its victim's build fraction (B8)  */
+
+/* B8's half of the envelope, in the KILL COUNTS section below: the 0x4A also carries its
+   unit's build fraction and HP, and the 0x0C travels as the 0x4C */
+static void kill_state_read(unsigned char* m, unsigned int idx);
+static void kill_apply_state(char* slot, const unsigned char* rec);
+static int kill_rx_death(unsigned int* regs, const char* ta, const unsigned char* m);
+static volatile LONG s_killBare0C;
 #define HIT_LB          0x80000000u         /* a stamp's bit 31: a lower bound, not a birth     */
 #define HIT_UNKNOWN     HIT_LB              /* no information: the owner reads it as "alive at
                                                time 0", a bystander as undecidable              */
@@ -6283,6 +6291,7 @@ static void __cdecl hit_created(unsigned int* r)
     if (ghost_is_09_return(ret) && (rec[3] | (unsigned int)rec[4] << 8) == idx) {
         memcpy(&stamp, rec + 23, 4);
         s_hitCreateExact++;
+        kill_apply_state((char*)slot, rec);
     } else if ((ret == 0x0048BA05u || ret == 0x0048B49Cu) && hit_2c_bound(ta, slot, &stamp)) {
         s_hitCreateLB++;
     } else {
@@ -6293,7 +6302,8 @@ static void __cdecl hit_created(unsigned int* r)
 }
 
 /* In place of 0x456050's `call 0x451DF0` (0x4560AE), with its signature: the unit's 0x09,
-   carried with its birth. */
+   carried with its birth and its state (a create its caller holds is read again when the
+   caller lets it go, kill_flush). */
 static int __stdcall hit_tx_create(unsigned int net, const unsigned char* msg, unsigned int len)
 {
     const struct hit_tab* t = s_hit;
@@ -6305,6 +6315,7 @@ static int __stdcall hit_tx_create(unsigned int net, const unsigned char* msg, u
     m[2] = HIT_TAG_CREATE;
     memcpy(m + 3, msg, len < 23u ? len : 23u);
     memcpy(m + 26, &birth, 4);
+    kill_state_read(m, idx);
     s_hitOutCreate++;
     s_hitOutBytes += HIT_MSG;
     s_hitStockBytes += len;
@@ -6371,8 +6382,9 @@ static const unsigned char* hit_rx_create_armed(const unsigned char* m)
     return m + 3;
 }
 
-/* 0 stock's chat; 1 done; 2 CreateFromNetwork on the record; 3 0x489CE0 on the record, which
-   goes back to the stub in regs[PR_EAX], where popad puts it in eax */
+/* 0 stock's chat; 1 done; 2 CreateFromNetwork on the record; 3 0x489CE0 on the record; 4 the
+   destructor 0x4866D0 on the record in mode 0 -- the record goes back to the stub in
+   regs[PR_EAX], where popad puts it in eax */
 static int hit_rx_create(unsigned int* regs, const char* ta, const unsigned char* m)
 {
     if (m[3] != 0x09) { s_hitMalformed++; return 1; }
@@ -6442,6 +6454,7 @@ static int __cdecl hit_rx_chat(unsigned int* regs)
         return g ? g : hit_rx_create(regs, ta, m);
     }
     case HIT_TAG_HIT:    return hit_rx_hit(regs, ta, m);
+    case HIT_TAG_DEATH:  return kill_rx_death(regs, ta, m);
     default:             return 0;
     }
 }
@@ -6565,7 +6578,7 @@ static int fix_stale_hits(void)
     static const unsigned char len09[2]  = { 0x6A, 0x17 };                    /* 0x45605C */
     static const unsigned char len0b[2]  = { 0x6A, 0x09 };                    /* 0x489CA8 */
     unsigned char *aTake, *aFree, *aExit, *aAlloc, *aChat, *aBare09, *aBare0B, *aSpawn, *p,
-                  *doCreate, *doHit, *jCreate, *jHit, *jNone;
+                  *doCreate, *doHit, *doDeath, *jCreate, *jHit, *jDeath, *jNone;
 
     hit_read_lever();
     if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) hit_selfcheck();
@@ -6604,8 +6617,9 @@ static int fix_stale_hits(void)
     memcpy(p, alloc, 8); p += 8;
     hit_jmp(p, 0xE9, 0x004854A8);
 
-    /* the 0x05 slot: 0 stock chat, 1 the loop, 2 the carried 0x09, 3 the carried 0x0B, each
-       entered with the return address stock's own case pushes and the record in eax */
+    /* the 0x05 slot: 0 stock chat, 1 the loop, 2 the carried 0x09, 3 the carried 0x0B, 4 the
+       carried 0x0C, each entered with the return address stock's own case pushes and the
+       record in eax */
     p = aChat;
     *p++ = 0x60; *p++ = 0x54;
     p = hit_jmp(p, 0xE8, (unsigned int)(size_t)hit_rx_chat);
@@ -6614,6 +6628,8 @@ static int fix_stale_hits(void)
     *p++ = 0x74; jCreate = p++;                          /* je do_create       */
     *p++ = 0x83; *p++ = 0xF8; *p++ = 0x03;                /* cmp eax,3          */
     *p++ = 0x74; jHit = p++;                             /* je do_hit          */
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x04;                /* cmp eax,4          */
+    *p++ = 0x74; jDeath = p++;                           /* je do_death        */
     *p++ = 0x85; *p++ = 0xC0;                            /* test eax,eax       */
     *p++ = 0x61;                                         /* popad              */
     p = hit_jcc(p, 0x84, 0x0045522E);                    /* jz stock's chat    */
@@ -6628,9 +6644,16 @@ static int fix_stale_hits(void)
     *p++ = 0x61;                                         /* popad: eax = record */
     *p++ = 0x50;                                         /* push eax           */
     *p++ = 0x68; p = hit_abs(p, (const void*)0x00455417); /* push 0x455417     */
-    hit_jmp(p, 0xE9, 0x00489CE0);
+    p = hit_jmp(p, 0xE9, 0x00489CE0);
+    doDeath = p;                                         /* the case 0x45541C: */
+    *p++ = 0x61;                                         /* popad: eax = record */
+    *p++ = 0x6A; *p++ = 0x00;                            /* push 0 (mode 0)    */
+    *p++ = 0x50;                                         /* push eax           */
+    *p++ = 0x68; p = hit_abs(p, (const void*)0x00455428); /* push 0x455428     */
+    hit_jmp(p, 0xE9, 0x004866D0);
     *jCreate = (unsigned char)(doCreate - (jCreate + 1));
     *jHit = (unsigned char)(doHit - (jHit + 1));
+    *jDeath = (unsigned char)(doDeath - (jDeath + 1));
 
     /* a bare 0x09 / 0x0B: counted, and the loop goes on */
     p = aBare09;
@@ -6730,8 +6753,8 @@ int tagpu_hits_format(char* buf, unsigned int cap)
      its state test only (hit_rx_create_armed), so the incarnation is set as a live create sets
      it, and enter CreateFromNetwork with the sender in edi as the case has it, so B3's bounds
      and observe run on them too.
-   - The kills: a 0x0C the gate refuses in state 5 (the dispatcher's refusal branch
-     0x45477F) cancels the latest create held for its slot from its sender, so a unit the
+   - The kills: a death the gate refuses in state 5 (the carried 0x0C in B4's receiver,
+     kill_rx_death) cancels the latest create held for its slot from its sender, so a unit the
      owner destroyed during the load is never made. One refused in the catch-up ticks, for a
      copy the replay or a catch-up tick made, marks the copy dying as the engine's own ghost
      sweep does (0x48B42C), and the unit tick destroys it (0x48AFB9 -> 0x4864B0).
@@ -7016,8 +7039,10 @@ static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m
 /* A copy made before state 6 from sender k's create for slot idx, still that copy: marked
    dying as the engine's ghost sweep marks one (0x48B426..0x48B42F, bit 14 of +0x110), which
    the unit tick then destroys without a message (0x48AFB9 -> 0x4864B0; it sends a 0x0C only
-   for a local player's unit, 0x48664B). Game thread, from the pump, as that sweep runs. */
-static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
+   for a local player's unit, 0x48664B). Game thread, from the pump, as that sweep runs.
+   frac, when not NULL, is the owner's +0x104 carried by the death (B8), already checked to be
+   a number in [0, 1]: written first, so that destroy decides on the owner's value. */
+static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx, const unsigned char* frac)
 {
     const char* first = *(const char* const*)(ta + 0x14357);
     const char* last  = *(const char* const*)(ta + 0x1435B);
@@ -7035,25 +7060,27 @@ static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
         t->stamp[idx] != s_ghostDone[i - 1].birth ||
         !(flags & 0x10000000u) || (flags & 0x4000u))
         return 0;
+    if (frac) memcpy(slot + 0x104, frac, 4);
     *(unsigned int*)(slot + 0x110) = flags | 0x4000u;
     return 1;
 }
 
-/* The dispatcher's refusal of a message in state 5 (0x45477F), on whichever thread pumps: a
-   0x0C there names a unit its owner destroyed while this peer loaded. Its held create is
-   cancelled; failing that, in the catch-up ticks, the copy made before state 6 is marked
-   dying. */
-static void __cdecl ghost_refused(unsigned int* regs)
+/* A 0x0C refused in state 5, `m` its record and regs the dispatcher's frame (the sender's
+   record index in the low byte of the site's esp + 0x14, its record in edi): a unit its owner
+   destroyed while this peer loaded. Its held create is cancelled; failing that, in the
+   catch-up ticks, the copy made before state 6 is marked dying, with frac (ghost_sweep)
+   written first. Reached from B4's 0x05 receiver for the carried 0x0C (kill_rx_death), whose
+   frame is the dispatcher's. 1 when a copy was marked dying, on the game thread. */
+static int ghost_refused_kill(unsigned int* regs, const unsigned char* m, const unsigned char* frac)
 {
     const char* ta = *(const char* const*)0x00511DE8;
     const unsigned char* sp = WPN_ESP_JMP(regs);
-    const unsigned char* m = *(const unsigned char* const*)(sp + 0x10);
     const char* snd = (const char*)(size_t)regs[PR_EDI];
     unsigned int k, idx;
     int i, late;
-    if (s_ghostOff || !ta || !m || m[0] != 0x0C) return;
+    if (s_ghostOff || !ta || !m || m[0] != 0x0C) return 0;
     k = *(const unsigned int*)(sp + 0x14) & 0xFFu;
-    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return;
+    if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return 0;
     idx = m[1] | (unsigned int)m[2] << 8;
     EnterCriticalSection(&s_ghostLock);
     i = ghost_cancel(s_ghostQ[k], s_ghostN[k], idx);
@@ -7063,17 +7090,27 @@ static void __cdecl ghost_refused(unsigned int* regs)
     }
     late = s_ghostPhase;
     LeaveCriticalSection(&s_ghostLock);
-    if (i >= 0) return;
-    if (late && GetCurrentThreadId() == s_ghostGameTid && ghost_sweep(ta, k, idx)) {
+    if (i >= 0) return 0;
+    if (late && GetCurrentThreadId() == s_ghostGameTid && ghost_sweep(ta, k, idx, frac)) {
         s_ghostSwept++;
         if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
             tagpu_logf("enginefix: ghost commander: slot %u from sender %u killed during the "
                        "catch-up ticks; its copy made before state 6 marked dying", idx, k);
-        return;
+        return 1;
     }
     EnterCriticalSection(&s_ghostLock);
     s_ghostNoKill++;
     LeaveCriticalSection(&s_ghostLock);
+    return 0;
+}
+
+/* The dispatcher's refusal of a message in state 5 (0x45477F), on whichever thread pumps. A
+   bare 0x0C cannot come from this build, which sends every death as a 0x4C (B8): counted and
+   dropped, as the 0x0C slot drops one in state 6. */
+static void __cdecl ghost_refused(unsigned int* regs)
+{
+    const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
+    if (m && m[0] == 0x0C) InterlockedIncrement(&s_killBare0C);
 }
 
 /* In place of 0x497F5E, the load state's first call (bit 0 of main+0x38D75 clear), on the game
@@ -7739,6 +7776,596 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
                      s_ghostPosNone, s_ghostPosOff);
 }
 
+/* ===== KILL COUNTS ACROSS PEERS: THE OWNER'S BUILD STATE AT THE CREATE AND AT THE DEATH ======
+   Landing B8 of research/notes/tadr-port/sim-fixes.md ("B8" has the argument and the
+   measurements; the addresses are in exe-reverse-engineering.md, "Who counts a kill, and why two
+   peers can disagree").
+
+   THE DEFECT [DISASSEMBLED; MEASURED on three peers]. Every peer runs the destructor 0x4866D0
+   for every death, the owner from Send_UnitDeath 0x4864B0 and every other peer from the 0x0C,
+   and four of its decisions test the victim's +0x104, the build fraction left, on THIS peer's
+   copy: the unit's kill count (0x4869A7), the killer player's Kills (0x4868D3), a reclaim's
+   credit (0x486CBD) and the death explosion (0x486D2F). A copy starts unfinished at HP 0
+   whatever its owner's unit is (CreateFromNetwork 0x4861D0 -> 0x485A40 with finished 0,
+   0x485B27..0x485B37) and takes the owner's values only when the owner's round robin reaches
+   its slot, up to N owner ticks later (0x48B4B2, 0x48B4E3), or from a 0x12 that only a type
+   with a build list takes (0x41B8F1). A kill in that window counts on the owner's peer alone.
+
+   THE FIX: the owner's value travels in the message that needs it.
+   - The death: the 0x0C travels as a tagged 0x05 (B4's idiom, 0x4C) with the victim's +0x104
+     as its float bits, read at the send (0x48666D) before the owner's own destructor reads it
+     (0x486679). Every other peer writes it into its copy and runs the destructor on the record
+     as the 0x0C case does (0x45541C), so all four decisions read the owner's value there too.
+     A death the gate refuses in state 5 is B5's: it cancels a create still held, or, in the
+     catch-up ticks, marks the copy dying with the owner's value written first (ghost_sweep),
+     so the unit tick's destroy (0x48AFB9 -> 0x4864B0) decides on it as well.
+   - The create: the 0x4A also carries its unit's +0x104 and HP, read as the message leaves,
+     and CreateFromNetwork's exit writes them into the copy it made, as the round robin writes
+     them (kill_apply_state). Three engine callers and tacli's scenario applier set a new unit's
+     HP or fraction after the create returns, and so after its 0x09 has left inside it
+     (0x486115): the capture 0x488700, the map's placed units 0x488462 and the resurrection
+     0x405104. Each one HOLDS its thread's messages from the call to a flush after its writes;
+     the flush reads the unit again and sends what the create sent, in order.
+   - A unit still being built is carried at its fraction, and its copy is finished as every
+     copy was: by the round robin and by its builder's 0x12, unchanged.
+
+   THE WIRE. Both are B4's 65-byte 0x05 (HIT_MSG): m[0] 0x05, m[1] 0, m[2] the tag. A byte no
+   line below names is sent 0 and read by no receiver.
+   The death, 0x4C (kill_tx_death builds it, kill_rx_death reads it):
+     m[3..13]   the stock 0x0C record, 11 bytes, as Send_UnitDeath built it: +0 0x0C, +1 the
+                victim's slot (u16), +3 the killer's player's DirectPlay id, +7 the killer's
+                slot (u16, 0 for none), +9 the severity, +0xA the kind << 4 | the corpse type
+                (0x4865E9..0x486621). The destructor and B5's refusal read the record at m+3.
+     m[14..17]  the victim's +0x104, its float bits, read on the owner as the message leaves
+     m[18]      1 when m[14..17] holds it; 0 when the victim's index named no slot, and the
+                receiver then writes nothing into its copy
+     m[19..64]  0, unread
+   The create, 0x4A (B4's hit_tx_create and hit_created; B8's bytes are kill_state_put's and
+   kill_apply_state's, which reads them through rec = m+3):
+     m[3..25]   the stock 0x09, 23 bytes (its slot at m[6..7]); m[26..29] its birth (B4)
+     m[30..33]  the unit's +0x104, its float bits
+     m[34..35]  its HP, +0x108 (u16)
+     m[36]      1 when m[30..35] hold them; 0 when the index named no slot, and the copy
+                stays as CreateFromNetwork made it
+     m[37..64]  0, unread
+
+   INVARIANTS.
+   - A copy made from a held or unheld create starts from its owner's values (a late flush's
+     excepted, which starts as stock's), and every peer that holds a copy when the death
+     arrives judges it on the owner's value -- in play and in the catch-up ticks alike, by
+     construction, not by the round robin's phase. A peer that never had a copy judges
+     nothing (GAPS).
+   - Bounded: an index names a slot only inside [1, (last - first) / 0x118] (kill_slot); a
+     fraction is written only as a number in [0, 1], since the reclaim credit multiplies by
+     1 - f; HP is the u16 the round robin itself writes unchecked (0x48B4B2).
+   - No hold is left open. The wrapper that holds calls the create itself and lets go at once
+     when it returns NULL: every NULL return of 0x485F50 (to 0x4861BD, and 0x48605A) comes
+     before its first call, so nothing was sent. A unit returned reaches a flush on every path:
+     the capture's two branches (0x488743 with its record, 0x488791 without), the placed
+     unit's straight line (0x4884AC), the resurrection's three (0x405119 no unit linked,
+     0x405155 no wreck, 0x405164 its success) -- each span a row of the table, no branch
+     leaving it -- and tacli's applier on both of its own [DISASSEMBLED].
+   - The queue's bound is what one create's DIRECT calls send [DISASSEMBLED, every direct call
+     followed from 0x485F50]: the 0x09 as its 0x4A (65 bytes, 0x486115), the 0x12 (5,
+     0x48612A, a finished type with def+0x22F 0), the 0x13 (18: 0x48B090(1, 1) newly sets bit 0
+     only, so its one reachable sound is 0x48B110 -> 0x47F780(unit, 3, 0) -> 0x47F0C0, sent at
+     0x47F14C; its bit-2 path 0x48B16E..0x48B1AA is not reached) and the 0x11 (4, 0x48B1F3,
+     def+0x241 bit 18), so 4 messages and 92 bytes. Nothing between the create and its flush
+     sends: the spans are straight code, and the resurrection's calls 0x489690, 0x4815F0 and
+     0x421E60 are leaves. A unit's scripts are not covered: the COB interpreter 0x4B0DA0 (19
+     callbacks) and 0x4B1C00 (4) are not followed, nor the create's indirect calls 0x49059A and
+     0x4905BC, and a Create or Activate script can send a 0x13, 0x11 or 0x0A through the host
+     vtable 0x4FD698 [INFERRED]. Such a send takes the late path: past the bound, the whole
+     queue goes at once, in order, then the message itself, counted (late=) -- nothing dropped
+     or reordered -- and the queued 0x4A goes WITHOUT a state (m+36 0), since its caller's
+     writes are still to come: the copy starts exactly as stock's, unfinished at HP 0, and
+     takes its values from the round robin, as stock's does.
+   - A hold is its thread's own, bounded in time by its caller: an entry claimed with the
+     thread id by one InterlockedCompareExchange, touched only by that thread and released at
+     its flush in the same call of the caller. The send gate (0x451DF0), which every thread's
+     messages pass, queues only the holding thread's; no thread flushes or waits on another's.
+     Two threads create, so two entries: the game thread (the order code's capture 0x4046C5
+     and resurrection 0x405104 under the unit tick 0x43C334, a capture the dispatcher's case
+     0x45577B takes in its pumps 0x4954C8, 0x4968CB and 0x49852E, tacli's applier) and the
+     loader (the placed units 0x497B40 -> 0x488310, and that case in its pump 0x49727D). A
+     third would find no entry: counted (full=), its messages sent at once, its 0x4A with the
+     state at the create.
+
+   GAPS. A unit created and destroyed while this peer is still loading (state 5): its create
+   is held by B5 and the death cancels it, so this peer never has a copy, runs no destructor
+   for it and counts none of its kill, while its owner and every peer already in play count
+   it. The window: a unit whose create and death both reach this peer before its in-play
+   entry replays what B5 held -- so within the time this peer's load runs past its owner's.
+   The saved-game restore 0x487080 (its create 0x48718E, HP at 0x4871B5, +0x104 at
+   0x48727C) is not held. It is reached only from the level load (0x497B29 -> 0x432610 ->
+   0x486FD0 -> 0x487080) and from itself; whether a network game can start from a save is not
+   established. Between its create and its writes it restores the units the record names
+   through itself (0x4871DD, 0x48720D) and attaches (0x48AAC0 sends a 0x0A), so closing it takes
+   nested holds with a bound per depth, or the state read from the saved record before the
+   create. A copy the 0x2C makes (the dirty create 0x48BA05, the round robin 0x48B497) takes the
+   0x2C's state, as stock. A count set on one peer (a scenario's kills, a saved game) stays
+   different: B8 makes the increments equal, not the totals.
+
+   CLASS: simulation, fail closed, both builds -- a peer without it counts kills and credits
+   reclaims on its own copy's value. Every site is a row of the fail-closed table, beside B4's
+   0x05 receiver that it extends. The 0x12's index bound (fix_built_bounds) is local. */
+
+#define KILL_HOLDS    2                     /* the threads that create: the game's and the loader */
+#define KILL_Q_N      4                     /* what one create sends: 0x09, 0x12, 0x11, 0x13     */
+#define KILL_Q_BYTES  92                    /* 65 + 5 + 4 + 18                                   */
+
+struct kill_hold {
+    volatile LONG tid;                      /* the holding thread, 0 when free                  */
+    int flushing;                           /* the flush's own sends pass the gate              */
+    unsigned int n, used;
+    struct { unsigned int net, len, off; } q[KILL_Q_N];
+    unsigned char bytes[KILL_Q_BYTES];
+};
+static struct kill_hold s_killHold[KILL_HOLDS];
+
+/* counters for the heartbeat's kills: section; the LONGs are written from both pumping threads
+   during a load (the refused deaths) or from any thread that holds, the rest by the thread
+   that runs the tick */
+static unsigned int s_killOut, s_killIn, s_killBadFrac, s_killDeadCopy, s_killNoSlot;
+static unsigned int s_killSame, s_killTurned, s_killTurnedBack, s_killSwept;
+static unsigned int s_killCreateDone, s_killCreateNano, s_killCreateAbsent, s_killCreateBad;
+static unsigned int s_kill12Drop;
+static volatile LONG s_killRefused, s_killHeld, s_killHoldLate, s_killHoldFull, s_killNotes;
+
+/* slot idx of the unit array, or NULL for 0 or past it (B3's bound, wire_index_ok) */
+static char* kill_slot(const char* ta, unsigned int idx)
+{
+    unsigned int max;
+    char* first = (char*)wire_units(ta, &max);
+    return first && wire_index_ok(idx, max) ? first + (size_t)idx * 0x118 : NULL;
+}
+
+/* the 0x4A's state: +0x104's float bits at m+30, HP at m+34, m+36 = 1 */
+static void kill_state_put(unsigned char* m, unsigned int fbits, unsigned int hp)
+{
+    memcpy(m + 30, &fbits, 4);
+    m[34] = (unsigned char)hp;
+    m[35] = (unsigned char)(hp >> 8);
+    m[36] = 1;
+}
+
+/* the state of slot idx as it is now; a slot outside the array leaves m+36 0, and the
+   receivers keep the copy CreateFromNetwork made */
+static void kill_state_read(unsigned char* m, unsigned int idx)
+{
+    const char* slot = kill_slot(*(const char* const*)0x00511DE8, idx);
+    unsigned int fbits;
+    if (!slot) { s_killNoSlot++; return; }
+    memcpy(&fbits, slot + 0x104, 4);
+    kill_state_put(m, fbits, *(const unsigned short*)(slot + 0x108));
+}
+
+static struct kill_hold* kill_hold_mine(void)
+{
+    LONG me = (LONG)GetCurrentThreadId();
+    int i;
+    for (i = 0; i < KILL_HOLDS; i++)
+        if (s_killHold[i].tid == me) return &s_killHold[i];
+    return NULL;
+}
+
+/* how a flush fills a queued 0x4A's state */
+#define KILL_READ    0      /* its unit's state now: the caller's writes are done              */
+#define KILL_GIVEN   1      /* the caller's values, which it writes after this flush           */
+#define KILL_ABSENT  2      /* none (m+36 0): the caller's writes are still to come, so the copy
+                               starts as stock's, unfinished at HP 0, for the round robin      */
+
+/* Sends what h queued, in order, and frees h. */
+static void kill_flush(struct kill_hold* h, int how, unsigned int fbits, unsigned int hp)
+{
+    unsigned int i;
+    h->flushing = 1;
+    for (i = 0; i < h->n; i++) {
+        unsigned char* m = h->bytes + h->q[i].off;
+        if (h->q[i].len == HIT_MSG && m[0] == 0x05 && m[1] == 0 && m[2] == HIT_TAG_CREATE) {
+            memset(m + 30, 0, 7);
+            if (how == KILL_GIVEN) kill_state_put(m, fbits, hp);
+            else if (how == KILL_READ) kill_state_read(m, m[6] | (unsigned int)m[7] << 8);
+        }
+        HIT_SEND(h->q[i].net, m, h->q[i].len);
+    }
+    h->n = h->used = 0;
+    h->flushing = 0;
+    InterlockedExchange(&h->tid, 0);
+}
+
+/* before a create whose caller sets the unit's HP or fraction after it returns; a hold this
+   thread still has (no caller reaches here holding, by the flush sites) goes first, late */
+static void kill_hold_arm(void)
+{
+    LONG me = (LONG)GetCurrentThreadId();
+    struct kill_hold* h = kill_hold_mine();
+    int i;
+    if (h) {
+        InterlockedIncrement(&s_killHoldLate);
+        kill_flush(h, KILL_ABSENT, 0, 0);
+    }
+    for (i = 0; i < KILL_HOLDS; i++) {
+        if (InterlockedCompareExchange(&s_killHold[i].tid, me, 0) == 0) {
+            s_killHold[i].n = s_killHold[i].used = 0;
+            s_killHold[i].flushing = 0;
+            InterlockedIncrement(&s_killHeld);
+            return;
+        }
+    }
+    InterlockedIncrement(&s_killHoldFull);
+}
+
+/* In place of the send 0x451DF0's first three instructions, on every thread and for every
+   message: 1 when this thread holds a create, the message then queued behind it and the send
+   answered as a sent message (eax 1, ret 0xC); 0 for the send to go on. A message past the
+   bound (a unit script's, which the bound does not cover) sends the queue first, in order,
+   late: its 0x4A without a state, since the caller's writes are still to come. */
+static int __cdecl kill_send_gate(unsigned int* regs)
+{
+    struct kill_hold* h = kill_hold_mine();
+    const unsigned char* sp = WPN_ESP_JMP(regs);          /* the return, then net, msg, len */
+    const unsigned char* msg;
+    unsigned int len;
+    if (!h || h->flushing) return 0;
+    msg = *(const unsigned char* const*)(sp + 8);
+    len = *(const unsigned int*)(sp + 12);
+    if (!msg || !len || len > KILL_Q_BYTES - h->used || h->n >= KILL_Q_N) {
+        InterlockedIncrement(&s_killHoldLate);
+        kill_flush(h, KILL_ABSENT, 0, 0);
+        return 0;
+    }
+    h->q[h->n].net = *(const unsigned int*)(sp + 4);
+    h->q[h->n].len = len;
+    h->q[h->n].off = h->used;
+    memcpy(h->bytes + h->used, msg, len);
+    h->used += len;
+    h->n++;
+    regs[PR_EAX] = 1;
+    return 1;
+}
+
+/* the flush sites after the capture's and the placed unit's writes, and on the resurrection's
+   paths that write nothing (0x405119, 0x405155) */
+static void __cdecl kill_flush_site(unsigned int* regs)
+{
+    struct kill_hold* h = kill_hold_mine();
+    (void)regs;
+    if (h) kill_flush(h, KILL_READ, 0, 0);
+}
+
+/* 0x405164, the resurrection's success: from here it runs straight to its writes of +0x104 =
+   0.0 (0x405219) and HP = 1 (0x405226), rows of the table, through a 0x0F send (0x405210) the
+   create must go before. Its 0x4A carries those two values. */
+static void __cdecl kill_flush_resurrected(unsigned int* regs)
+{
+    struct kill_hold* h = kill_hold_mine();
+    (void)regs;
+    if (h) kill_flush(h, KILL_GIVEN, 0x00000000u, 1u);
+}
+
+static void __cdecl kill_hold_site(unsigned int* regs)
+{
+    (void)regs;
+    kill_hold_arm();
+}
+
+void tagpu_kill_hold(void)
+{
+    kill_hold_arm();
+}
+
+void tagpu_kill_flush(void)
+{
+    kill_flush_site(NULL);
+}
+
+/* CreateFromNetwork's exit, for a copy made from a carried 0x09 (hit_created, rec = m+3): the
+   owner's fraction and HP, written as the round robin writes them -- +0x9E's +0x10 cleared
+   (0x48B4A6), the HP (0x48B4B2), the fraction with bit 13 of +0x110 when it changes
+   (0x48B4D0..0x48B4EC). +0x9E is the pointer this create stored and dereferenced itself
+   (0x485DCC, 0x485DF2), on this thread. */
+static void kill_apply_state(char* slot, const unsigned char* rec)
+{
+    unsigned int fbits;
+    float f;
+    char* ob;
+    if (rec[33] == 0) { s_killCreateAbsent++; return; }
+    if (rec[33] != 1) { s_killCreateBad++; return; }
+    memcpy(&fbits, rec + 27, 4);
+    memcpy(&f, &fbits, 4);
+    if (!(f >= 0.0f && f <= 1.0f)) { s_killCreateBad++; return; }
+    ob = *(char* const*)(slot + 0x9E);
+    if (ob) *(unsigned int*)(ob + 0x10) = 0;
+    *(unsigned short*)(slot + 0x108) = (unsigned short)(rec[31] | (unsigned int)rec[32] << 8);
+    if (*(const float*)(slot + 0x104) != f) {
+        memcpy(slot + 0x104, &fbits, 4);
+        *(unsigned int*)(slot + 0x110) |= 0x2000u;
+    }
+    if (f == 0.0f) s_killCreateDone++;
+    else s_killCreateNano++;
+}
+
+/* In place of Send_UnitDeath's `call 0x451DF0` (0x48666D), with its signature: the 0x0C,
+   carried with its victim's +0x104 at m+14 (m+18 = 1) */
+static int __stdcall kill_tx_death(unsigned int net, const unsigned char* msg, unsigned int len)
+{
+    const char* slot = kill_slot(*(const char* const*)0x00511DE8,
+                                 msg[1] | (unsigned int)msg[2] << 8);
+    unsigned char m[HIT_MSG];
+    memset(m, 0, sizeof m);
+    m[0] = 0x05;
+    m[2] = HIT_TAG_DEATH;
+    memcpy(m + 3, msg, len < 11u ? len : 11u);
+    if (slot) {
+        memcpy(m + 14, slot + 0x104, 4);
+        m[18] = 1;
+    } else {
+        s_killNoSlot++;
+    }
+    s_killOut++;
+    s_hitOutBytes += HIT_MSG;
+    s_hitStockBytes += len;
+    return HIT_SEND(net, m, sizeof m);
+}
+
+/* A carried 0x0C in B4's 0x05 receiver: 1 done; 4 the destructor on the record (regs[PR_EAX]),
+   the owner's fraction first written into the copy. Refused in state 5 it is B5's
+   (ghost_refused_kill), which writes the same fraction into a copy it marks dying; a victim
+   index past the array goes to the destructor unwritten, where B3's bound drops it
+   (0x4866E5). The counters a refusal touches are written only after a mark, on the game
+   thread (ghost_refused_kill's own test). */
+static int kill_rx_death(unsigned int* regs, const char* ta, const unsigned char* m)
+{
+    char* slot;
+    unsigned int fbits;
+    float f;
+    int ok;
+    if (m[3] != 0x0C) { s_hitMalformed++; return 1; }
+    memcpy(&fbits, m + 14, 4);
+    memcpy(&f, &fbits, 4);
+    ok = m[18] == 1 && f >= 0.0f && f <= 1.0f;
+    if (!hit_gate(ta, 0x0C)) {
+        InterlockedIncrement(&s_killRefused);
+        if (*(const unsigned int*)(ta + 0x391F1) == 5u &&
+            ghost_refused_kill(regs, m + 3, ok ? m + 14 : NULL)) {
+            if (ok) s_killSwept++;
+            else s_killBadFrac++;
+        }
+        return 1;
+    }
+    s_killIn++;
+    regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
+    slot = kill_slot(ta, m[4] | (unsigned int)m[5] << 8);
+    if (!slot) return 4;
+    if (!ok) { s_killBadFrac++; return 4; }
+    if (!(*(const unsigned int*)(slot + 0x110) & 0x10000000u)) { s_killDeadCopy++; return 4; }
+    if (*(const float*)(slot + 0x104) == f) s_killSame++;
+    else if (f == 0.0f) s_killTurned++;
+    else s_killTurnedBack++;
+    memcpy(slot + 0x104, &fbits, 4);
+    return 4;
+}
+
+/* The table's rows. B8 extends B4's 0x05 receiver (the 0x4C branch of its stub), a row of the
+   same table: the one cannot be written without the other. */
+static int fix_kill_counts(void)
+{
+    static const unsigned char txDeath[5] = { 0xE8, 0x7E, 0xB7, 0xFC, 0xFF };   /* 0x48666D */
+    static const unsigned char len0c[2]   = { 0x6A, 0x0B };                     /* 0x486669 */
+    static const unsigned char back0c[5]  = { 0xE9, 0x23, 0x0B, 0x00, 0x00 };   /* 0x455428 */
+    /* 0x45541C..0x455427, the 0x0C case the 0x4C's branch of B4's stub reproduces (doDeath):
+       mov edx,[esp+0x10]; push 0; push edx; call 0x4866D0 */
+    static const unsigned char case0c[12] = {
+        0x8B, 0x54, 0x24, 0x10, 0x6A, 0x00, 0x52, 0xE8, 0xA8, 0x12, 0x03, 0x00 };
+    static const unsigned char send[6]    = { 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x0C }; /* 0x451DF0 */
+    static const unsigned char capCall[5] = { 0xE8, 0x4B, 0xD8, 0xFF, 0xFF };   /* 0x488700 */
+    static const unsigned char plcCall[5] = { 0xE8, 0xE9, 0xDA, 0xFF, 0xFF };   /* 0x488462 */
+    static const unsigned char resCall[5] = { 0xE8, 0x47, 0x0E, 0x08, 0x00 };   /* 0x405104 */
+    static const unsigned char capRec[8]  = { 0x8B, 0x29, 0x89, 0x2A, 0x66, 0x8B, 0x49, 0x04 };
+    static const unsigned char capOld[5]  = { 0x8B, 0x0A, 0x8D, 0x47, 0x64 };   /* 0x488791 */
+    static const unsigned char plcNext[8] = { 0x66, 0x8B, 0x46, 0x18, 0x66, 0x89, 0x41, 0x66 };
+    static const unsigned char resNone[5] = { 0x68, 0x10, 0x13, 0x50, 0x00 };   /* 0x405119 */
+    static const unsigned char resFail[5] = { 0xB8, 0x08, 0x00, 0x00, 0x00 };   /* 0x405155 */
+    static const unsigned char resDone[6] = { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }; /* 0x405164 */
+    /* 0x488705..0x488742: the capture's test of its create and the record path's writes */
+    static const unsigned char capSpan[62] = {
+        0x8B,0xF8,0x85,0xFF,0x0F,0x84,0xE8,0x00,0x00,0x00,0x8B,0x97,0x10,0x01,0x00,0x00,
+        0x8B,0x44,0x24,0x34,0x81,0xE2,0xFF,0xFF,0xC3,0xFF,0x85,0xC0,0x89,0x97,0x10,0x01,
+        0x00,0x00,0x74,0x4B,0x66,0x8B,0x50,0x0B,0x8D,0x48,0x0F,0x66,0x89,0x97,0x08,0x01,
+        0x00,0x00,0x8D,0x57,0x64,0xDB,0x40,0x07,0xD9,0x9F,0x04,0x01,0x00,0x00 };
+    /* 0x488774..0x488790: the path without a record, its writes from the old unit */
+    static const unsigned char capOldSpan[29] = {
+        0x66,0x8B,0x86,0x08,0x01,0x00,0x00,0x8D,0x56,0x64,0x66,0x89,0x87,0x08,0x01,0x00,
+        0x00,0x8B,0x8E,0x04,0x01,0x00,0x00,0x89,0x8F,0x04,0x01,0x00,0x00 };
+    /* 0x488467..0x4884AB: the placed unit's test and its HP write */
+    static const unsigned char plcSpan[69] = {
+        0x8B,0xC8,0x85,0xC9,0x74,0x4E,0x8B,0x91,0x10,0x01,0x00,0x00,0x33,0xC0,0x8A,0x46,
+        0x23,0x80,0xE6,0x7F,0x24,0x80,0xC1,0xE0,0x08,0x0B,0xD0,0x89,0x91,0x10,0x01,0x00,
+        0x00,0x8B,0x91,0x92,0x00,0x00,0x00,0x0F,0xBF,0x46,0x1A,0x8B,0x92,0xFA,0x01,0x00,
+        0x00,0x0F,0xAF,0xD0,0xB8,0x1F,0x85,0xEB,0x51,0xF7,0xE2,0xC1,0xEA,0x05,0x66,0x89,
+        0x91,0x08,0x01,0x00,0x00 };
+    /* the resurrection, 0x405109..0x405118 (the order's link 0x489690 and its test),
+       0x405141..0x405154 (the two lookups and the branch) and 0x40515A..0x405163 (the failure's
+       return), then its straight line from the success branch to its writes, 0x40516A..0x40522E */
+    static const unsigned char resLink[16] = {
+        0x50,0x8D,0x4E,0x12,0xE8,0x7E,0x45,0x08,0x00,0x8B,0x46,0x16,0x85,0xC0,0x75,0x28 };
+    static const unsigned char resLook[20] = {
+        0x53,0xE8,0xA9,0xC4,0x07,0x00,0x8B,0xF8,0x57,0xE8,0x11,0xCD,0x01,0x00,0x66,0x3D,
+        0xFB,0xFF,0x72,0x0F };
+    static const unsigned char resRet[10] = {
+        0x5F,0x5E,0x5D,0x5B,0x83,0xC4,0x68,0xC2,0x0C,0x00 };
+    static const unsigned char resLine1[79] = {
+        0x33,0xC0,0x66,0x8B,0x47,0x0A,0x8B,0x91,0x0B,0x42,0x01,0x00,0x8D,0x04,0x40,0xC1,
+        0xE0,0x04,0x03,0xC2,0x74,0x15,0x8B,0x56,0x16,0x83,0xC0,0x20,0x83,0xC2,0x64,0x8B,
+        0x08,0x89,0x0A,0x66,0x8B,0x40,0x04,0x66,0x89,0x42,0x04,0x6A,0x00,0x53,0xE8,0x03,
+        0xC4,0x07,0x00,0x50,0xE8,0x0D,0xF5,0x01,0x00,0x8B,0x0D,0xE8,0x1D,0x51,0x00,0x8B,
+        0x89,0xE9,0x91,0x03,0x00,0xE8,0x4C,0xFF,0x02,0x00,0x83,0xF8,0x03,0x75,0x5C };
+    static const unsigned char resLine2[73] = {
+        0x8B,0x1D,0xE8,0x1D,0x51,0x00,0xB8,0x4F,0xEC,0xC4,0x4E,0x6A,0x06,0x2B,0xBB,0x87,
+        0x42,0x01,0x00,0xF7,0xEF,0xC1,0xFA,0x02,0x8B,0xC2,0x8B,0xBB,0x33,0x42,0x01,0x00,
+        0xC1,0xE8,0x1F,0x03,0xD0,0xC6,0x44,0x24,0x18,0x0F,0x8B,0xCA,0xC6,0x44,0x24,0x19,
+        0xFF,0x8B,0xC1,0x99,0xF7,0xFF,0x8B,0xC1,0x8D,0x4C,0x24,0x18,0x51,0x66,0x8B,0xDA,
+        0x99,0xF7,0xFF,0x8B,0x95,0x96,0x00,0x00,0x00 };
+    static const unsigned char resLine3[45] = {
+        0x66,0x89,0x5C,0x24,0x1E,0x66,0x89,0x44,0x24,0x20,0x8B,0x42,0x04,0x50,0xE8,0xDB,
+        0xCB,0x04,0x00,0x8B,0x4E,0x16,0x55,0xC7,0x81,0x04,0x01,0x00,0x00,0x00,0x00,0x00,
+        0x00,0x8B,0x56,0x16,0x66,0xC7,0x82,0x08,0x01,0x00,0x00,0x01,0x00 };
+    unsigned char *aGate, *aBare, *aHold, *aCapRec, *aCapOld, *aPlc, *aResNone, *aResFail,
+                  *aResDone, *p, *jPass, *jHeld;
+    int k;
+
+    if (!(aGate = hit_code(48)) || !(aBare = hit_code(16)) || !(aHold = hit_code(80)) ||
+        !(aCapRec = hit_code(32)) || !(aCapOld = hit_code(32)) || !(aPlc = hit_code(32)) ||
+        !(aResNone = hit_code(32)) || !(aResFail = hit_code(32)) || !(aResDone = hit_code(32))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+
+    /* 0x451DF0: queued -> ret 0xC with eax 1; else stock's push ebx; push ebp;
+       mov ebp,[esp+0xC] */
+    p = aGate;
+    *p++ = 0x60; *p++ = 0x54;
+    p = hit_jmp(p, 0xE8, (unsigned int)(size_t)kill_send_gate);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x85; *p++ = 0xC0;                            /* test eax,eax       */
+    *p++ = 0x61;                                         /* popad              */
+    *p++ = 0x74; jPass = p++;                            /* jz pass            */
+    *p++ = 0xC2; *p++ = 0x0C; *p++ = 0x00;               /* ret 0xC            */
+    *jPass = (unsigned char)(p - (jPass + 1));
+    memcpy(p, send, 6); p += 6;
+    hit_jmp(p, 0xE9, 0x00451DF6);
+
+    /* a bare 0x0C: counted, and the loop goes on */
+    p = aBare;
+    *p++ = 0xF0; *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, (const void*)&s_killBare0C);
+    hit_jmp(p, 0xE9, 0x00455F50);
+
+    /* in place of a caller's `call 0x485F50`: hold, the create on a copy of its eight
+       arguments, and a NULL let go at once (it sent nothing) */
+    p = fix_call_regs(aHold, kill_hold_site);
+    for (k = 0; k < 8; k++) {
+        *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x20;   /* push [esp+0x20]    */
+    }
+    p = hit_jmp(p, 0xE8, 0x00485F50);
+    *p++ = 0x85; *p++ = 0xC0;                            /* test eax,eax       */
+    *p++ = 0x75; jHeld = p++;                            /* jnz held           */
+    p = fix_call_regs(p, kill_flush_site);
+    *jHeld = (unsigned char)(p - (jHeld + 1));
+    *p++ = 0xC2; *p++ = 0x20; *p++ = 0x00;               /* ret 0x20           */
+
+    /* each flush, then the instructions it displaced */
+    p = fix_call_regs(aCapRec, kill_flush_site);
+    memcpy(p, capRec, 8); p += 8;
+    hit_jmp(p, 0xE9, 0x0048874B);
+    p = fix_call_regs(aCapOld, kill_flush_site);
+    memcpy(p, capOld, 5); p += 5;
+    hit_jmp(p, 0xE9, 0x00488796);
+    p = fix_call_regs(aPlc, kill_flush_site);
+    memcpy(p, plcNext, 8); p += 8;
+    hit_jmp(p, 0xE9, 0x004884B4);
+    p = fix_call_regs(aResNone, kill_flush_site);
+    memcpy(p, resNone, 5); p += 5;
+    hit_jmp(p, 0xE9, 0x0040511E);
+    p = fix_call_regs(aResFail, kill_flush_site);
+    memcpy(p, resFail, 5); p += 5;
+    hit_jmp(p, 0xE9, 0x0040515A);
+    p = fix_call_regs(aResDone, kill_flush_resurrected);
+    memcpy(p, resDone, 6); p += 6;
+    hit_jmp(p, 0xE9, 0x0040516A);
+
+    hit_site(0x0048666D, 5, txDeath, 0xE8, (const void*)kill_tx_death, "kill counts: the 0x0C sent carried");
+    hit_slot(0x00455FAC, 0x0045541Cu, aBare, "kill counts: a bare 0x0C dropped");
+    hit_site(0x00451DF0, 6, send, 0xE9, aGate, "kill counts: the send, gated by a held create");
+    hit_site(0x00488700, 5, capCall, 0xE8, aHold, "kill counts: the capture's create, held");
+    hit_site(0x00488462, 5, plcCall, 0xE8, aHold, "kill counts: a placed unit's create, held");
+    hit_site(0x00405104, 5, resCall, 0xE8, aHold, "kill counts: the resurrection's create, held");
+    hit_site(0x00488743, 8, capRec, 0xE9, aCapRec, "kill counts: the capture's flush, from its record");
+    hit_site(0x00488791, 5, capOld, 0xE9, aCapOld, "kill counts: the capture's flush, from the old unit");
+    hit_site(0x004884AC, 8, plcNext, 0xE9, aPlc, "kill counts: a placed unit's flush");
+    hit_site(0x00405119, 5, resNone, 0xE9, aResNone, "kill counts: the resurrection's flush, no unit");
+    hit_site(0x00405155, 5, resFail, 0xE9, aResFail, "kill counts: the resurrection's flush, no wreck");
+    hit_site(0x00405164, 6, resDone, 0xE9, aResDone, "kill counts: the resurrection's flush, its values");
+    lim_same(0x00486669, 2, len0c, "kill counts: the 0x0C's length");
+    lim_same(0x0045541C, 12, case0c, "kill counts: the 0x0C case the carried death reproduces");
+    lim_same(0x00455428, 5, back0c, "kill counts: the 0x0C case's continuation");
+    lim_same(0x00488705, 62, capSpan, "kill counts: the capture's writes from its record");
+    lim_same(0x00488774, 29, capOldSpan, "kill counts: the capture's writes from the old unit");
+    lim_same(0x00488467, 69, plcSpan, "kill counts: a placed unit's HP write");
+    lim_same(0x00405109, 16, resLink, "kill counts: the resurrection's link and test");
+    lim_same(0x00405141, 20, resLook, "kill counts: the resurrection's lookups");
+    lim_same(0x0040515A, 10, resRet, "kill counts: the resurrection's failure return");
+    lim_same(0x0040516A, 79, resLine1, "kill counts: the resurrection's straight line, 1");
+    lim_same(0x004051B9, 73, resLine2, "kill counts: the resurrection's straight line, 2");
+    lim_same(0x00405202, 45, resLine3, "kill counts: the resurrection's writes");
+    return FIX_TABLE;
+}
+
+/* 0x12, the builder's finish (the case 0x4555BA, entry 0x455FC4 of the jump table 0x455F84):
+   stock scales both indices into the unit array with no bound (the built unit at rec+1,
+   0x4555C4..0x4555E2; the builder at rec+3, 0x4555FB..0x45560C), and 0x41B8D0 reads +0x110
+   through each. 0 stays stock's NULL; an index past the array drops the record to 0x455F50,
+   the back edge every case takes. regs: the case's frame, the record at the site's esp + 0x10. */
+static int __cdecl kill_s12(unsigned int* r)
+{
+    const unsigned char* rec = *(const unsigned char* const*)(WPN_ESP_JMP(r) + 0x10);
+    unsigned int max, built, builder;
+    wire_units(*(const char* const*)0x00511DE8, &max);
+    if (!rec) return 0;
+    built   = *(const unsigned short*)(rec + 1);
+    builder = *(const unsigned short*)(rec + 3);
+    if (wire_killer_ok(built, max) && wire_killer_ok(builder, max)) return 1;
+    s_kill12Drop++;
+    if (InterlockedIncrement(&s_killNotes) <= 16)
+        tagpu_logf("enginefix: kill counts: a 0x12 names a unit past the array (built %u, "
+                   "builder %u, last %u); dropped", built, builder, max);
+    return 0;
+}
+
+/* LOCAL: its absence changes only a malformed record's fate. The case's first two
+   instructions, `mov esi,[esp+0x10]; mov ecx,[0x511DE8]`, go to the stub. */
+static int fix_built_bounds(void)
+{
+    static const unsigned char k12[10] = { 0x8B, 0x74, 0x24, 0x10, 0x8B, 0x0D, 0xE8, 0x1D, 0x51,
+                                           0x00 };                             /* 0x4555BA */
+    FIXSITE s;
+    unsigned char* a;
+    s.va = 0x004555BA;
+    s.n = 10;
+    memcpy(s.was, k12, 10);
+    if (!fix_match(&s, 1)) return FIX_BYTES;
+    if (!(a = fix_code(40))) return FIX_STUB;
+    wire_emit_tail(a, kill_s12, 0x00455F50u, k12, 10, 0x004555C4u);
+    fix_branch(&s, 0xE9, a);
+    return fix_write(&s, 1);
+}
+
+/* the heartbeat's kills line (tagpu_packet_pub.c), a line of its own after the packet: line:
+   DLL counters only. The alerts first: bad= deaths whose fraction was not a number in [0, 1],
+   bare= bare 0x0Cs dropped, late= holds flushed by anything but their own site (their 0x4A
+   without a state), full= holds that found no free entry, noslot= messages sent without a
+   state, b12= 0x12s dropped past the array. Then out/in= deaths sent and taken, st5= deaths
+   refused by the gate, sw= those whose copy B5 marked dying with the owner's fraction,
+   same/fix/rev= a copy's fraction that already matched, was unfinished where the owner's was
+   finished, or the reverse; dead= deaths for a copy already gone; cr= copies made
+   finished/unfinished/without a state/with an invalid one; held= holds.
+   CUT FROM NOTHING: every conversion in KILLS_FMT is a %u of an unsigned int, at most 10
+   digits for its 2 characters, so the line is at most 5 times the format's length, which the
+   typedef proves shorter than TAGPU_KILLS_LINE, its buffer. */
+#define KILLS_FMT "kills: bad=%u bare=%u late=%u full=%u noslot=%u b12=%u out=%u in=%u st5=%u" \
+                  " sw=%u same=%u fix=%u rev=%u dead=%u cr=%u/%u/%u/%u held=%u"
+typedef char kills_line_fits[(5 * (sizeof KILLS_FMT - 1) < TAGPU_KILLS_LINE) ? 1 : -1];
+
+int tagpu_kills_format(char* buf, unsigned int cap)
+{
+    return _snprintf(buf, cap, KILLS_FMT,
+                     s_killBadFrac, (unsigned int)s_killBare0C, (unsigned int)s_killHoldLate,
+                     (unsigned int)s_killHoldFull, s_killNoSlot, s_kill12Drop, s_killOut, s_killIn,
+                     (unsigned int)s_killRefused, s_killSwept, s_killSame, s_killTurned,
+                     s_killTurnedBack, s_killDeadCopy, s_killCreateDone, s_killCreateNano,
+                     s_killCreateAbsent, s_killCreateBad, (unsigned int)s_killHeld);
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
@@ -7770,6 +8397,8 @@ static void patch_engine_defects(void)
     int wire = fix_wire_bounds();
     int hits = fix_stale_hits();
     int ghost = fix_ghost_commander(wire);
+    int kills = fix_kill_counts();
+    int built = fix_built_bounds();
     int tx   = fix_transported();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
@@ -7878,11 +8507,24 @@ static void patch_engine_defects(void)
     _snprintf(b, sizeof b,
               "enginefix: ghost commander %s: a carried 0x09 the gate refuses in state 5 held per "
               "sender in the 0x05 receiver (0x455F90) and replayed through it before the first "
-              "tick (0x49842F), one refused in a catch-up tick made at once, a 0x0C refused in "
-              "state 5 cancelling its held create (0x45477F), the queue emptied at the load's start "
+              "tick (0x49842F), one refused in a catch-up tick made at once, a death refused in "
+              "state 5 cancelling its held create (the 0x4C in 0x455F90; a bare 0x0C counted "
+              "at 0x45477F), the queue emptied at the load's start "
               "(0x497F5E); the dirty create's position from its move payload (0x48BA00). Counters "
               "on the heartbeat's 'ghost:' section. Stubs: %u of 4096 bytes at 0x%08X",
               fix_state(ghost), s_ghostCodeUsed, (unsigned int)(size_t)s_ghostCode);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: kill counts %s: the 0x0C carried in a tagged 0x05 with its victim's "
+              "build fraction (0x48666D; the receiver 0x455F90; a bare one dropped 0x455FAC), the "
+              "0x09's carrying its unit's fraction and HP, held across the post-create writes of "
+              "the capture (0x488700; flushed 0x488743 0x488791), the placed units (0x488462; "
+              "0x4884AC) and the resurrection (0x405104; 0x405119 0x405155 0x405164) by the send's "
+              "gate (0x451DF0). Counters on the heartbeat's 'kills:' section. The 0x12's two "
+              "indices bounded (0x4555BA) %s",
+              fix_state(kills), fix_state(built));
     b[sizeof b - 1] = 0;
     plog(b);
 

@@ -1022,4 +1022,10 @@ int  tagpu_cmd_post(const TAGPU_CMD* c);
    that one log line carries both halves. Registered once by the publisher. */
 typedef void (*tagpu_packet_extra_fn)(char* buf, unsigned cap, double seconds);
 void tagpu_packet_set_extra(tagpu_packet_extra_fn fn);
+
+/* A second heartbeat line, logged right after the packet: line in the same interval: fn
+   writes one whole line of fewer than TAGPU_PACKET_LINE2 bytes, or nothing, and its producer
+   proves that bound, so this line is never cut. Registered once by the publisher. */
+#define TAGPU_PACKET_LINE2 1024
+void tagpu_packet_set_extra_line(tagpu_packet_extra_fn fn);
 #endif
