@@ -1454,6 +1454,33 @@ COUNTS ACROSS PEERS*).
 - **Rows.** Twelve sites and eleven compared spans: the raised build installs 252 rows (229 before),
   the stock-limits build 127. `LIM_MAXSITE` is 320.
 
+**The two records on the wire.** Both are B4's 65-byte `0x05`: `m[0]` `0x05`, `m[1]` 0, `m[2]` the
+tag. A byte the tables do not name is sent 0 and read by no receiver. B8 owns the send site
+`0x48666D` and the tag `0x4C`; C4 extends the death record after B8 lands, and no field is set
+aside for it here. The same layout is in the code, the *THE WIRE* paragraph of the section's
+header.
+
+The death, `0x4C` (`kill_tx_death` builds it, `kill_rx_death` reads it):
+
+| bytes | content |
+|---|---|
+| `m[3..13]` | the stock `0x0C` record, 11 bytes, as `Send_UnitDeath` built it: `+0` `0x0C`, `+1` the victim's slot (u16), `+3` the killer's player's DirectPlay id, `+7` the killer's slot (u16, 0 for none), `+9` the severity, `+0xA` the kind << 4 \| the corpse type (`0x4865E9..0x486621`). The destructor and B5's refusal read it at `m+3` |
+| `m[14..17]` | the victim's `+0x104`, its float bits, read on the owner as the message leaves |
+| `m[18]` | 1 when `m[14..17]` holds it; 0 when the victim's index named no slot, and the receiver then writes nothing into its copy |
+| `m[19..64]` | 0, unread |
+
+The create, `0x4A` (B4's `hit_tx_create` and `hit_created`; B8's bytes are `kill_state_put`'s and
+`kill_apply_state`'s, which reads them through `rec = m+3`):
+
+| bytes | content |
+|---|---|
+| `m[3..25]` | the stock `0x09`, 23 bytes, its slot at `m[6..7]` (B4) |
+| `m[26..29]` | its birth stamp (B4) |
+| `m[30..33]` | the unit's `+0x104`, its float bits |
+| `m[34..35]` | its HP, `+0x108` (u16) |
+| `m[36]` | 1 when `m[30..35]` hold them; 0 when the index named no slot, and the copy stays as `CreateFromNetwork` made it |
+| `m[37..64]` | 0, unread |
+
 **The hold's invariants** (the three conditions set on the design, 2026-09-26):
 
 1. *No path leaves a hold open.* Every NULL return of `0x485F50` (the jumps to `0x4861BD`, and

@@ -9875,7 +9875,8 @@ owner holds its own value; a copy's value comes from exactly these writers:
     creates unfinished, links the unit to the order (`0x489690`, a leaf), looks the wreck up
     (`0x4815F0`, `0x421E60`, leaves) and, when it is there (`0x405153`), removes it, sends a `0x0F`
     in a network game (`0x405210`) and writes `+0x104 = 0.0` and HP 1 (`0x405219`, `0x405226`) —
-    a straight line from `0x405164`; its other paths, no unit linked (`0x405119`) and no wreck
+    a straight line from `0x405164`; its other paths, no unit linked (`0x405119`, the fall-through of
+    the test of the order's link `+0x16` at `0x405117`, before its own `0x47F780` at `0x405121`) and no wreck
     (`0x405155`, return 8), leave the unit as created; and the saved-game restore `0x487080`,
     HP at `0x4871B5` and `+0x104` at `0x48727C`, after it has restored the units its record names
     through itself (`0x4871DD`, `0x48720D`) and attached (`0x48AAC0`). The restore is reached only
