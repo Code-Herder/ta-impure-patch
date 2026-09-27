@@ -19594,9 +19594,11 @@ size; `nbOn` says this frame's records carry keys. The terrain's vertex shader s
 restored colour at the key's cell when `uNbhd` is set, and the base atlas's tile otherwise.
 
 **The feed.** One terrain job, fed each frame (`nb_feed`): the keys of the cells on screen not yet
-queued go in at prio 0 with the whole budget; while none waits, the rest of the map follows
-centre-out, one batch queued behind the one in flight, at prio 6 with a 2 ms GPU cap
-(`tagpu_rcore_job_budget`). Two jobs painting one image, as the plan had it, would each clear and
+queued go in, and while any key on screen is not painted — however it was queued, each key keeps
+its place in the FIFO queue — the job runs at prio 0 with the whole budget; otherwise the rest of
+the map follows centre-out, one batch queued behind the one in flight, at prio 6 with a 2 ms GPU
+cap (`tagpu_rcore_job_budget`). A resize that retires an image the job uses frees the job first:
+the retire's count covers the terrain pass's descriptor sets, not the restorer's dispatches. Two jobs painting one image, as the plan had it, would each clear and
 move the destination on their own schedule. Two Continents at 1024 × 768 on the RTX 4070: the first
 screen's 479 keys in 114 ms, the whole map in 19.3–26.3 s, Lava Alley's in 3.2 s.
 
@@ -19606,9 +19608,10 @@ enables when the loader offers it — or a quarter of the largest device-local h
 rode with it:** the device-extension walk in `tagpu_vk.c` stopped as soon as its two-entry array
 was full, which `VK_KHR_maintenance1` fills, so no extension listed after it was ever seen; the
 bound now guards the append. Where the atlas does not fit, the device refuses it, the keys need an
-image wider than the device allows, or the map names a tile past the atlas, the terrain restores
-per tile as in §2.102, on tiny. `tagpu_restorefault.on`'s `nbfit` and `nballoc` drive the first
-two.
+image wider than the device allows or than the pass carries (16384), the map names a tile past the
+atlas, or a refusal of the restorer stands, the terrain restores per tile as in §2.102, on tiny.
+`tagpu_restorefault.on`'s `nbfit` drives the first, `nballoc` the second on the first map after
+the pass comes up.
 
 **The self-test** gains a neighbourhood probe on tiny: nine frames over a 3 × 3 map, checked
 against one reflect-padded restore of the whole map on the CPU (22,696 bytes within 0 levels).
@@ -19617,7 +19620,9 @@ against one reflect-padded restore of the whole map on the CPU (22,696 bytes wit
 free of 2,816), the whole map paints in 31.3 s at about 59 fps, and every cell is within one level
 of the whole-map restore on 0.0007 % of bytes (the plan note has the table).
 
-**Not covered.** How long a key scrolled onto the screen waits was not measured (the bound is two trickle batches). At the
+**Not covered.** How long a key scrolled onto the screen waits was not measured (by construction it
+is at prio 0 behind at most two trickle batches and the screen's own keys). The fixes of the
+landing's review were re-measured on the reference setup only (the bytes unchanged). At the
 mirrored edge (§2.90) the half-texel at the fold now samples the key's ring, the network's output
 for the reflected map, where it sampled a copy of the edge; the fold stays continuous. The tile-grid
 lines are the art's and stay (the plan's TODO).

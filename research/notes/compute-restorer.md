@@ -306,9 +306,18 @@ that heap. The log says which rule answered. On the reference setup: 192 MB agai
 10,203 MB the driver says is free, of 12,282 MB.
 
 **The per-tile fallback** is landing 1's atlas and frames, on tiny. It is taken when the fit says
-no, when the device refuses the image, when the keys need an image wider than the device allows,
-and when the map names a tile past the atlas. The fault lever drives the first two:
-`tagpu_restorefault.on` holding `nbfit` or `nballoc`.
+no, when the device refuses the image, when the keys need an image wider than the device allows
+or than the terrain pass carries (16384), when the map names a tile past the atlas, and while a
+refusal of the restorer stands (no neighbourhood atlas is allocated for a job that will not run).
+The fault lever drives the first two: `tagpu_restorefault.on` holding `nbfit`, or `nballoc` on the
+first map after the terrain pass comes up, where no restored atlas exists yet.
+
+**The job goes before its images.** A resize retires the image it replaces once every frame slot
+has been through its fence — which proves the last use by the terrain pass's own descriptor sets,
+not by the restorer, which records its dispatches after every pass's prepare. So a resize that
+will retire an image the job reads or writes frees the job first (`rjob_release_for`), and the
+retire then covers the job's last dispatch too; a new job starts on the new image. A frame whose
+records carry no keys does not size the neighbourhood atlas at all.
 
 ### The feed (D8)
 
@@ -317,14 +326,16 @@ image; two jobs over one destination would each clear it and move its layout on 
 schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tagpu_vk_terr.c`):
 
 - **Each frame**, the keys of the cells in the frame's records — the cells on screen — that are not
-  queued yet go in, and the job runs at prio 0 with the whole budget.
-- **While none of those is waiting**, the rest of the map follows in centre-out order, topped up to
-  one batch (64 keys) waiting behind the one in flight, at prio 6 — after every other job — with a
-  cap of 2 ms of GPU a slice.
-- **"Waiting" is exact**: every neighbourhood is one size class, so the queue is FIFO, and an
-  on-screen key is still waiting exactly when fewer frames are painted than the place of the last
-  on-screen one queued. A key scrolled onto the screen waits behind at most the two trickle
-  batches, the one in flight and the one queued.
+  queued yet go in, and while any key on screen is not painted the job runs at prio 0 with the
+  whole budget.
+- **Otherwise** the rest of the map follows in centre-out order, topped up to one batch (64 keys)
+  waiting behind the one in flight, at prio 6 — after every other job — with a cap of 2 ms of GPU
+  a slice.
+- **"Not painted" is exact**: every neighbourhood is one size class, so the queue is FIFO, and a
+  key is painted exactly when the job has painted more frames than its place in the queue, which
+  each key keeps. That holds for a key the trickle queued as much as for one queued on screen, so
+  a key scrolled onto the screen puts the job at prio 0 however it was queued, and waits behind at
+  most the keys queued before it: the two trickle batches and the screen's own.
 - **The core** gains a budget per job (`tagpu_rcore_job_budget`): a capped job stops at its cap,
   counted across the slice, except that its batch in flight runs at the full budget while another
   job waits behind it; with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 9:
@@ -389,8 +400,8 @@ most one level. Defender, fully armed there, raised no detection.
 
 - **The trickle is seconds, not frames.** Two Continents' whole map takes about 20 s at 2 ms of GPU
   a frame on the reference setup and 31 s on the AMD card; a cell whose key is not painted yet
-  draws dithered (D7). How long a key scrolled onto
-  the screen waits was not measured; the design bound is the two trickle batches ahead of it.
+  draws dithered (D7). How long a key scrolled onto the screen waits was not measured; by
+  construction it is at prio 0 behind at most the two trickle batches and the screen's own keys.
 - **At the mirrored map edge** (the edge setting of [GPU status](gpu-status.html) §2.90) the
   half-texel at the fold samples the key's ring, which is now the network's output for the
   reflected map rather than a copy of the edge texel. Both sides of the fold blend the same pair,
