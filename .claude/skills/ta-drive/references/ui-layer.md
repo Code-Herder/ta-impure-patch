@@ -193,10 +193,18 @@ follow for a measurement:
 
 - **give it a few seconds.** The repaints chase the restore; at 1024x768 the UI settles within
   about five seconds of the level coming up.
-- **a surface adopted whole from the engine's bytes is never restored.** The shell's backdrop and
-  the in-game panel's ground plate arrive as `PK_ASSET` and carry indices only, so they stay
-  dithered by design. That is why a shell A/B moves ~3 % of the frame and an in-game one moves
-  53 % of the sidebar.
+- **a backdrop or a stamp is restored by the picture store, not the atlas.** A `PK_ASSET` (a
+  decoded PCX) or `PK_PLANE` (a transformed stamp: a swatch, the badge, SELMAP's preview) goes to
+  a content-keyed store with a restore job of its own. Its log line is
+  `vk: gui: N picture(s) restored HERE - S stored, B bound, F fills, E evicted, R refused`. A
+  backdrop fills when its picture settles; a stamp takes colour at the next repaint. A tint (the
+  modal dim, a selected row, a focus glow) shades the restored colour beneath it.
+- **what stays in palette colour:** text, flat areas (which restore to themselves), and the
+  in-game top and bottom bars — 513-px frames, one over the restorer's 512-px slot.
+- **measure it against the golden source.** The share of window pixels identical to `tacli
+  shot`'s indexed frame is an upper bound on unrestored art, since flat areas count as identical.
+  At 640×480 the main menu reads about 1.4 %, SKIRMISH 18 %, SELMAP 26 % and the post-game screen
+  35 %; in Classic every screen reads 100 %.
 
 Measured at 1024x768 on `pose-inventory` with a unit selected, `assets=0` vs `1`: the sidebar
 (0,120)-(128,768) goes from 273 to 23 662 distinct colours, 44 061 of 82 944 px differing; the

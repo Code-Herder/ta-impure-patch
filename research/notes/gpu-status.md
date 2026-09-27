@@ -1729,11 +1729,15 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   with the world passes disarmed — so without this the UI atlas's queue is never drained and the
   shell stays indexed for ever (found by the landing review; `tagpu_rglsl_calls()` compared across
   presents means the budget is still sliced once per frame). The atlas restores at **priority 4**
-  (`MAX_JOBS` is 6 since this landing; 0–3 are terrain, features, effects, 3DO units) and skips
+  (`MAX_JOBS` is 6 since this landing; 0–3 are terrain, features, effects, 3DO units, and 5 is
+  the UI's picture store since 2026-09-26 — every slot taken) and skips
   frames under **12×12**
   (`restoreMinEdge`, G15-0's verdict). Trigger token **`norestore`** is the A/B. Heartbeat gains
   `cpp= col=<made>/<live> colvalid= rearms= rgb=`. **Colour reaches a twin only through a sprite
-  op, so seeded art stays indexed until the engine redraws it** — entering a game, the panel is
+  op, so seeded art stays indexed until the engine redraws it** *[since 2026-09-26 a backdrop's
+  `PK_ASSET` and a stamp's `PK_PLANE` take the picture store's restored colour, a tint shades the
+  colour instead of dropping it, and a colour repaint re-seeds the post-game snapshot —
+  [GUI renderer](gui-renderer.html) §27]* — entering a game, the panel is
   seeded and indexed until a repaint. Measured: `fps=60.0`, 37 415 of 45 056 px of the menu's
   panel rect against `norestore`, **7 963 px of the 640×480 shell frame**, and `+gamma 15` → 235
   entries differ, one re-arm, colour valid again ([GL UI renderer](gui-renderer.html) §14).
@@ -2064,6 +2068,9 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | the weapon keys' reads | weapon `+0x111` (the flags), `+0xDC` (range), `+0xD4` (default damage, a WORD); the target's `+0x110` (bits 0–1: 2 = flying), `+0x70` (y), `+0x6A`/`+0x72` (position), def `+0x170` (height), `+0x241` (bit 12 `canhover`); the order action's shooter `+0x10`/`+0x2C`/`+0x3B`; `main+0x1427F` (sea level); `0x485070` (the ground under the firer); the slot's target word and spot `(+0, +2)`, bounded by the unit array before the unit is read. **Read only, on the GAME thread**, in the decisions of §2.97 |
 | the hit record `0x489CE0` applies (`edi`: `+3` the attacker's id, `+5` the amount, `+8` the kind), the projectile's weapon at the send `0x499E37` (`[[esp+0x30]]`, as the engine reads it at `0x499E1E`) and its `+0xD4`, `[0x512328]` (the level's meteor weapon) and its `+0xD4`; unit `+0xFA` | **Read by `nomapweaponalert`, on the GAME thread** (the sim tick, and the dispatcher's `0x0B` case in play), to decide a harmless weather hit and to hold its victim's minimap dot still. Every weapon pointer is bounded as a record of the weapon array before its damage is read. Nothing of the engine's is written; the per-slot "harmless share of `+0xFA`" is ours (§2.97) |
 | a saved game's unit record `+0xB3` (the high byte of the WORD `+0xB2`, whose low byte is unit `+0x10E`) | **WRITTEN into the save file, on the GAME thread, by `nomapweaponalert`** (§2.97): the unit saver `0x4876C0` stores the unit's `E` there (`0x48797B`), and the restore `0x487080` reads it back (`0x4872CC`). Stock writes 0 there in every save and no reader in the binary reads it (the restore takes the WORD's low byte at `0x4872D2`; `0x486FD0` reads only the id word `+0x21`), so stock restores a save of ours exactly as its own (DISASSEMBLED, not run), and a stock save carries `E = 0`. Nonzero only after a harmless weather hit, so a game without the key saves stock's bytes |
+| unit `+0xB8` (kills, u16) | **Read by veterancy, on the GAME thread**, at the seven sites of §2.100 and in both panels; the level is taken from the unit's type's record (`+0x92`, the def, bounded to a slot of the def array and matched to the record's own def). **WRITTEN only by the scenario applier** (`tagpu_scenario.c`, the wire line's `kills` column, clamped to 0..65 535), on the game thread, into the units a scenario creates on the peer that applies it: the create packet carries no kills, so another peer's copy starts at 0. Nothing of ours writes it in play |
+| a projectile's `+0x62` (u16, the firing piece: the shooter's `Query*` script's answer, `0x43E1E0`) | **WRITTEN for an attacker-less projectile, on the GAME thread, by B7** (§2.100): 0 when the spawn `0x49DF7D` builds a stone, 1 when the `0x0D` receiver's meteor branch `0x49D307` builds one. `0x49C740` writes `+0x62` only for a projectile with an attacker (`0x49C833`), and its one reader, `0x49B7D6`, is behind a burst count that is 0 for a stone, so the field is otherwise dead for these two. The damage gate `0x49A01B` reads it with `+0x52` (attacker) and `+0x66` (owner) |
+| the hit record's amount (`+5`, a WORD) | **Written by the engine's own store at `0x489C71`, with B7's value** (§2.100): the int amount saturated into the range its reader reads — −32 768..32 767 for the subtraction, 0..65 535 for kinds 2 and `0xA`. Identity for every amount inside the range, so only a hit past the word differs from stock |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (the frame packet's `level_gen`) | not an engine field — our own counter, bumped on the game thread at every level end and carried to the render thread inside the packet. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`, and the geometry bake's) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a). **[CORRECTED 2026-09-12, a landing review]** between then and landing 3 the counter read was `tagpu_reclaim_level_gen()`, which is bumped only in reclaim's teardown post hook — so under `tagpu_reclaim.off`, or any of reclaim's four other ways not to arm, it never moved and the caches were exactly as stale as before 2026-09-08. The publisher owns the counter now and advances it whichever provider publishes the level-end packet |
@@ -6641,7 +6648,12 @@ followed by every sprite drawn on it since (each with its own plane, in `ovl`), 
 source is such a surface seeds it on demand. Any draw it cannot replay drops the snapshot, which
 is exactly the old behaviour. MEASURED on the same fixture: backdrop, title, labels, frame, the
 stats and the Main Menu button all on screen, the main menu after it correct, the in-game UI
-unchanged. Design in [GUI renderer](gui-renderer.html), under `PK_ASSET`.
+unchanged. Design in [GUI renderer](gui-renderer.html), under `PK_ASSET`. **A colour repaint
+re-seeds it too** (2026-09-26): in Classic++ the seed's sprites land in the same window, before
+the picture store has restored the backdrop, so `repaint_arm` raises `reseed` on every surface
+holding a snapshot at each `colarm` edge, and the re-sent seed finds its picture done
+([GUI renderer](gui-renderer.html) §27.2). The flag is apart from `seeded`, which is what owes a
+freed surface's twins their `PK_FREE`.
 
 **The player names on the coloured bars (closed 2026-09-23).** They are drawn through `0x4B8310`,
 which was recorded as `OP_GAFB` and published as box bytes the drain drops, so they reached no screen
@@ -19017,6 +19029,15 @@ all come back as they were, `vk_resize` keeps the passes (`passes_down` otherwis
 wait before the rebuild means none of it is in use. That covers the vsync toggle, where only the
 present mode moves, and an out-of-date surface at the same size. A resize still drops them.
 
+**The UI pass is the one that stays up across `passes_down`**, since its twins are the only copy
+of what the shell has drawn. It gives its two restore jobs back first
+(`tagpu_vk_gui_restore_drop`, before `tagpu_vk_restore_down`), because the restorer forgets its
+job table on the way down and a job pointer kept across it would alias the next pass's.
+`tagpu_vk_restore_down` frees and logs any job an owner leaves standing. On Linux a window resize
+goes through the fork's mode set, which brings the whole lane down instead, so this path runs on
+a live extent change such as a Windows drag. It was measured with a forced rebuild: [GUI
+renderer](gui-renderer.html) §27.4.
+
 Measured: on the AMD card the toggle logs `swapchain rebuilt in place (2 images 1920x1080) - the
 passes kept`, and no second `restorevk: terr: job started` follows; on the reference setup, the
 owner's toggle off and back on at 3840 × 2160 fullscreen logged the same, both ways. Before, the
@@ -19240,3 +19261,86 @@ same-time A/B against the build before the change (08888b7):
 - Only these scenes were looked at; wrecks were not.
 - Where the engine pins a quad's corners to texels (`w − 1`, `h − 1`), ours sit on the frame's
   edges, as before this change.
+
+### 2.100 Veterancy and four stock defects (`tagpu_datakeys.c`, `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_scenario.c`) — TADR section C, landing C3, and section B's B7, 2026-09-26
+
+**What it is.** Two unit keys TADR's content uses, `VeterancyThresholds=` and
+`VeterancyAccuracyBuffRate=`, read into the unit-key records and consulted at every place the engine
+reads a unit's veterancy level; and four stock defects the veterancy survey found (B7). The plan and
+the measurements are [data keys, C3 as built](tadr-port/data-keys.html#c3-as-built) and
+[simulation fixes, B7](tadr-port/sim-fixes.html); the disassembly is in the
+[engine map](exe-reverse-engineering.html), *Veterancy, a hit's word, the radar's owner test and the
+meteor shower*.
+
+**The keys.** Read by the unit-key reader (`0x42BF97`, inside the FBI loader `0x42BF40`) into the
+type's record, emptied at the unit-data load `0x42D2E0`, on the LOADER thread at the level's load
+and at a saved game's load, and on the GAME thread at the console's one-type `Reload`.
+`VeterancyThresholds=` is up to 32 whole numbers from 1 to 65 535, strictly increasing;
+`VeterancyAccuracyBuffRate=` one whole number from 0 to 65 535 (0: no accuracy buff). A malformed
+key is refused whole, logged with its reason, and the type plays with stock's levels. A type's
+level is the count of its thresholds at or below its kills (a binary search).
+
+**The reader installs before the fail-closed table.** `fix_veterancy` calls
+`tagpu_datakeys_units_install()` first; if the reader's sites did not byte-match, the table
+refuses to install and the process ends through the limits report, since the veterancy sites would
+otherwise read no keys. `tagpu_datakeys_init()` asks again later, and gets the first answer.
+
+**Veterancy: seven sites in the fail-closed table.** Each stub asks a C answer (`pushad; push
+unit; call`); `-1` runs stock's own instructions (the type has no key), any other value is the
+keyed type's, already bounded, and resumes at the instruction that consumes stock's value.
+
+| site | the effect, its answer and its bound |
+|---|---|
+| `0x489BFA`, 7 bytes | damage taken, the victim's: L for `(25 − L)·4 %`, L ≤ 25. Stock's reduction there covers every hit but the heal and (B7) the kill-outright calls, so a unit at 25 takes no weapon damage, no paralysis and no unit reclaim's step |
+| `0x499DB5`, 7 | damage dealt, the shooter's: L for `(100 + 6L) %`, L ≤ 32 (`DK_VET_MAX`); the HP word's saturation bounds the hit |
+| `0x49E468`, 7 | a slot's reload: L for `(100 − 6L) %`, L ≤ 16, the largest level with a positive reload. The extra-weapons module's own reload for slots past 2 takes the same level (`tagpu_datakeys_vet_reload_level`) |
+| `0x48A324`, 14 | target lead: on past the first threshold (1 → `0x48A332`, 0 → `0x48A42D`) |
+| `0x49D6EA`, 5 | the fire method's spread: the divisor `kills / rate`, applied when above 1 as stock's `kills / 12` is; a type with the rate but no thresholds keeps stock's levels elsewhere |
+| `0x4043D8`, 7 | the capture's cost, the target's: `10 + L` tenths of it, the level open past the last threshold (by the last gap) and capped at 13 107 |
+| `0x43869D`, 7 | a unit reclaim's step (the HP taken from the target every 15 ticks), the reclaimer's: `1 + L`, the same open level and cap, then held to what the step's 32-bit product holds: the stub also passes the workertime `edx`, the target's MaxHitPoints `[esi+0x1FA]` and the ticks `[esp+0x1C]`, the product's other factors, and the answer is the largest factor that keeps it at or below 2³² − 1 (1 when none does, the engine's own product at a recruit's factor). MEASURED with `scenarios/c3-reclaim-bound.json`: 4.44 × stock's rate at 31 kills (31/7, each step floored), where the build before the bound wrapped to 1 % of it |
+
+**The kill lines: display only, skip-and-log.** At `0x46B306` (the unit panel, the unit in `esi`)
+and `0x467CCF` (the second panel, `edi`), every unit at level 1 or more says `"VetL"` where stock
+says `"Veteran"` past 4 kills: its own type's level, or stock's for a type without the key. Below
+level 1 the line is stock's; the singular "kill" stays. Each site writes into its own buffer, used
+by the `sprintf` that follows it.
+
+**B7: four stock defects, three in the fail-closed table and one local.**
+
+| site | what it fixes |
+|---|---|
+| `0x489C71`, the store of a hit's amount into the record's WORD | The amount saturates into the range its reader reads: −32 768..32 767 for the HP subtraction, 0..65 535 for the paralyser and the heal. Stock wraps a hit past 32 767 into a gain; retail play reaches it with a veteran commander's D-gun (30 000 raised by the commander's level). A saturation is counted and logged at powers of two. Simulation. |
+| `0x489BF3`, the veterancy reduction's start | A call whose amount is 30 000 or more (kill outright: self-destruct, player defeat, a dying transport's cargo; and the D-guns) skips the reduction, as the armour reduction already skips it (`0x489BD1`). Stock let a veteran above 24 000 HP survive its own self-destruct. Counted when the victim had a level. Simulation. |
+| `0x49A01B`, the damage gate, with the calls at `0x49DF7D` and `0x49D307` | A meteor is computed on the peer that spawned it. Every peer runs its own shower and broadcasts each stone; stock computed every stone on every peer, so a stone's hit was applied once by the victim's owner and once more for each other peer's `0x0B`. The spawn marks its stone's `+0x62` 0, the receiver's meteor branch 1; the gate sends a projectile with no attacker, owner 10 and the mark 1 where stock sends a remote one's (`0x49A0AE`): its explosion plays and its damage is its spawner's. The mark lives in the record, so the pool's compaction carries it. Counted. Simulation. |
+| `0x4673B1`, 11 bytes, local | The radar rebuild's owner test for a targetable projectile out of sight read the attacker's owner through a NULL attacker. No attacker is not the local player's, the answer every other player's projectile gets. Counted. |
+
+**Threads.** The keys are written on the LOADER thread inside the level's load (and a saved game's),
+before play; everything else runs on the GAME thread: the sim tick's damage, reload, aim and orders,
+the radar rebuild, the panels' draw. The render thread reads none of it.
+
+**The scenario's kills.** A scenario unit takes a `kills` attribute (0..65 535), written into
+`+0xB8` by the applier as it dresses the unit; the wire line gains an eleventh column.
+
+**Measured** (the full list is in the plan's *C3, as built* and in B7's entry):
+
+- Veterancy against its stock controls: dealt 160 against 112 a hit, taken 60 against 92, the keyed
+  reload 4.95 hits/s against 2.29, a keyed capture 16.4 s against 9.9 (its cost × 20/10 against
+  × 12/10), a keyed reclaim 472 HP a step against 128; lead and spread answered 1/0/stock and 10/0/stock
+  as their types; the kill lines "10 kills - Vet10", "10 kills - Vet2", "1 kill - Vet1" and stock's
+  "1 kill"; the eight malformed keys refused with their reasons; a saved game's load reads the keys
+  again and its units keep their kills and levels. The stock-limits build gave the same amounts.
+- B7 against the build before it: the 65 000-damage laser raised a storage 536 HP a hit where the
+  new build kills it at the first; a 25-kill commander's D-gun wrapped (HP −11 135 after two hits)
+  where the new build kills at the first (−31 438); a 25-kill Krogoth survived its self-destruct at
+  5 918 HP where the new build kills it and a keyed 30-kill tower; targetable hail faulted at
+  `0x4673B4` where the new build runs; on two peers every stone was computed on both and each
+  storage lost twice its hits, where on the new build none was and each lost exactly its hits.
+- Retail content: every veterancy answer is stock's and no B7 event fires through a 200-unit fight.
+
+**Not covered.**
+
+- The second kill line (`0x467CB0`, no direct caller) was not seen drawn in play.
+- A unit's kills are not always the same on two peers in stock: every peer counts a kill only when its own copy of the victim reads `+0x104` = 0.0 (`0x4869A7`), and another peer's copy of a newly created unit reads 1.0 until the owner's round robin writes it, 26–37 s after the create (measured for B8), so a unit killed in that window is counted only on its owner's copy of the killer. Veterancy reads the copy of the peer that computes the
+  effect, as stock's own levels do. Not fixed here; a section-B question.
+- Every peer still runs its own meteor shower, so a network game rains N showers where a
+  single-player game rains one. B7 makes each stone hit once; how many showers fall is unchanged.

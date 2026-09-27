@@ -891,10 +891,23 @@ class ScenarioLimits(unittest.TestCase):
         with refuses(self):
             compile_doc(scn(setup={"unit_limit": 100}, groups=[group()]))
 
-    def test_over_tas_stock_cap_only_warns(self):
-        exp = compile_doc(scn(groups=[group(composition=[{"type": "ARMPW",
-                                                          "count": 300}])]))
-        self.assertTrue(any("250" in w for w in exp["warnings"]))
+    def test_over_the_default_cap_only_warns(self):
+        n = tacli.SCN_DEFAULT_LIMIT + 1
+        exp = compile_doc(scn(groups=[group(composition=[{"type": "ARMPW", "count": n}])]))
+        self.assertTrue(any(f"cap of {tacli.SCN_DEFAULT_LIMIT}" in w for w in exp["warnings"]))
+
+    def test_at_the_default_cap_nothing_is_said(self):
+        n = tacli.SCN_DEFAULT_LIMIT
+        exp = compile_doc(scn(groups=[group(composition=[{"type": "ARMPW", "count": n}])]))
+        self.assertFalse(any("per-player cap" in w for w in exp["warnings"]))
+
+    def test_the_default_and_ceiling_are_the_dlls(self):
+        # tagpu_limits.h's raised build sets the per-player ceiling AND the
+        # default (the stock-limits build's 500 and 250 are behind TAGPU_LIMITS_STOCK)
+        header = (Path(__file__).resolve().parents[1] / "tagpu/ddraw/inc/tagpu_limits.h").read_text()
+        raised = header.split("#else", 1)[1].split("#endif", 1)[0]
+        units = int(re.search(r"#define TAGPU_LIM_UNITS\s+(\d+)", raised).group(1))
+        self.assertEqual((tacli.SCN_DEFAULT_LIMIT, tacli.SCN_MAX_LIMIT), (units, units))
 
     def test_units_are_counted_per_player_not_in_total(self):
         exp = compile_doc(scn(setup={"unit_limit": 250},
@@ -939,10 +952,10 @@ class ScenarioWire(unittest.TestCase):
     def test_a_unit_line_carries_every_column_in_order(self):
         lines = self.wire(scn(units=[unit(id="hero", type="ARMCOM", facing=90,
                                           health=60, stance="hold")]))
-        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold -", lines)
+        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - -", lines)
 
     def test_unset_fields_are_dashes_not_guesses(self):
-        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - -", self.wire(scn(units=[unit()])))
+        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - -", self.wire(scn(units=[unit()])))
 
     def test_the_header_carries_the_seed_and_the_counts(self):
         head = self.wire(scn(seed=7, units=[unit()]))[1]

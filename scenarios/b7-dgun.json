@@ -1,0 +1,55 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B7's word and kill-outright on the retail D-gun, on Show Down. The D-gun deals 30 000; a commander's own level scales what it deals (0x499DB5), so a commander with 25 kills (stock level 5, 130 %) deals 39 000, past the HP word: stock wraps it to -26 536 and the metal storage it hits (1 329 HP) GAINS 26 536, where B7's saturation kills it. Select vet_com, press its D-GUN order and click the storage. The commanders stay (the player's energy pays for the shot).",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": false,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "vet_com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    2400,
+    1100
+   ],
+   "kills": 25
+  },
+  {
+   "id": "storage",
+   "type": "ARMMSTOR",
+   "owner": 1,
+   "pos": [
+    2600,
+    1100
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   2500,
+   1100
+  ]
+ }
+}

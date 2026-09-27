@@ -46,7 +46,7 @@ unit names by scanning the live definition table. This design follows its recipe
 | Mechanism | **Runtime spawn from inside the fork**, calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`. Not a `.sav` writer, not a generated `.ota` mission. |
 | Menus | **No menu navigation by the agent**: `scenario load` drives `ui click SINGLE → Skirmish → Start` internally, each step auto-waiting and reporting the screen it landed on. Not an engine bypass — the Start button *is* map load, player setup and start positions, so it gets pressed rather than reimplemented. |
 | File ownership | **Self-contained.** `setup` carries map, players, resolution, unit limit, switches; the entity list carries the situation. `load` = launch + apply (always a clean start); `apply` = mutate a live game, ignoring `setup`. Two verbs, two unambiguous meanings. |
-| Scope | Units (type, owner, position, facing, health, nanoframe, stance), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
+| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
 | Coordinates | **World units, one space**, exactly what `roster` / `eye` / `click` already speak: `pos: [x, y]` on the eye plane, optional `height` (default: engine snaps to terrain). No normalized space, no tile space. Out-of-map is a validation error. |
 | Facing | **Degrees, `0` = TA's own default build facing** (heading word `0x8000`, *not* `0x0000`). Omitted = engine default. |
 | Bulk authoring | **`groups` (count + composition + pattern) and a flat `units` array, both.** Expansion is **seeded and deterministic**, and happens in Python — the DLL only ever sees a flat list. `scenario expand` prints it without launching. |
@@ -121,7 +121,12 @@ unit names by scanning the live definition table. This design follows its recipe
 - `health` is a **percentage** (mirrors `HealthPerA`); `nanoframe` is separate, for a
   half-built look, and is the percentage **built** — `40` is a 40%-complete scaffold.
   The engine's own field is the fraction *remaining*, so the applier inverts it.
-- `stance` is a token (`hold` / `manoeuvre` / `roam`), never a raw mask.
+- `stance` is a token (`hold` / `manoeuvre` / `roam`), never a raw mask. It is the MOVEMENT
+  stance: a unit on `hold` still fires at what comes in range, so a target that must not shoot
+  back has to be unarmed.
+- `kills` (0..65 535) sets the unit's kill count, which veterancy reads. It is written on the peer
+  that applies the scenario only: the engine's create message carries no kills, so another peer's
+  copy of the unit starts at 0.
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
   wreck gets reclaimed), never a group.
@@ -134,7 +139,7 @@ unit names by scanning the live definition table. This design follows its recipe
   passing `shift = 1` for the second and later orders, and that path is the one whose
   duplicate scan *cancels* a matching order rather than adding one — it needs a live test
   before it is used.
-- Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`,
+- Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`, `kills`,
   `orders`) may sit on a group, where it applies to every member.
 - **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
   the camera, so there is one rule for the word.
@@ -172,6 +177,10 @@ TA's own order names, from the engine's button/order table [VERIFIED,
 
 `stop`(1) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
 `patrol`(9) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+
+`blast` is the commander's D-gun (the order panel's `ARMBLAST`, key `d`): `blast unit <n>` fires it
+at that unit [MEASURED 2026-09-26, `scenarios/b7-dgun.json`]. A unit without a D-gun ignores it; it
+is not self-destruct, which is `Ctrl+D` on a selected unit.
 
 **There is no attack-move in Total Annihilation.** Units *do* fire while moving, but a
 `move` order alone will not make a blob seek the enemy. Three idioms, all supported:
@@ -442,6 +451,7 @@ bug, and it loops its lane now.
 | health % | `+0xF6` `HealthPerA`, `+0xF7` `HealthPerB` | Write both; the second lags the first and the GUI reads it. |
 | owner slot | `+0xFF` `cOwnerID` | |
 | build fraction | `+0x104` `Nanoframe` | Fraction **REMAINING**, `0.0` = finished (`build-state.md`). The file's `nanoframe` is the percentage **built**, so the applier writes `1 - n/100`. |
+| kills | `+0xB8` | u16, zero-extended by every engine reader; the one increment is the destructor's `0x4869CA`. |
 | health | `+0x108` | Max HP needs no `UnitDefStruct` offset: create with `fullHp = 1` and this field *is* the maximum, so scale it in place. |
 | state mask | `+0x110` | `0x10000000` alive, and `(mask & 0xC0000) >> 18` is the stance: **0 hold, 1 manoeuvre, 2 roam** [VERIFIED, TADR `dialog.cpp:409-417`]. The applier also sets `0x20` for a nanoframe, which **the draw path does not read** — measured 2026-09-03 (G13l): under construction is `Nanoframe != 0` at `+0x104` and nothing else, and `0x20000000` is the **structure** bit, set by the engine for any building whether finished or not. A scenario nanoframe therefore renders correctly on the strength of `+0x104` alone, and the `0x20` write is inert. |
 
@@ -484,8 +494,8 @@ map Two Continents
 limit 500
 sw noshake=1 shootall=1
 player 1 metal=5000 energy=5000
-# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%>
-unit 0 ARMPW 1 775 1098 - 90 - - -
+# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills>
+unit 0 ARMPW 1 775 1098 - 90 - - - -
 feat 0 ARMCOM_DEAD 1700 1200 - 45
 order 0 attack pos 2400 1200
 cam feat 0 pin=0
