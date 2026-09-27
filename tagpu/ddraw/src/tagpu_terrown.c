@@ -48,6 +48,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_terrown.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_owndraw.h"
 #include "tagpu_opt.h"
 #include "tagpu_terr.h"
@@ -117,7 +118,7 @@ static void flog(const char* s)
     tagpu_log(s);
 }
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 /* In place of the terrain blit: paint the viewport rect of the engine's
    offscreen with the key. Runs on the GAME thread, inside DrawGameScreen. */

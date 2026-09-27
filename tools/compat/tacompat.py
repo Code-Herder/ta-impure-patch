@@ -63,12 +63,14 @@ TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
 DPLAY_SRC = Path(os.environ.get("TA_DIRECTPLAY_SRC", Path.home() / ".local/share/ta-directplay"))
 DPLAY_OVERRIDES = "dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n"
-# NO SOUND: nothing the suite checks listens, and a dozen games at once through the owner's
-# speakers is noise. Wine's audio drivers are disabled for the game's process, so it finds no
-# sound device -- the game's own no-device path, which is what a machine without a sound card
-# gets -- and every file of the setup stays exactly as its mod shipped it (a mod's own
-# totala.ini is part of the setup under test, so NoDirectSound is not written into it).
-AUDIO_OFF = "winepulse.drv,winealsa.drv,wineoss.drv=d"
+# NO SOUND, AND A SOUND DEVICE: nothing the suite checks listens, and a dozen games at once
+# through the owner's speakers is noise -- but a game with no device at all is a different game
+# (TA:ESC stops at "No sound driver is available for use."). So Wine is kept off PulseAudio and
+# its ALSA driver opens ALSA's default device, which asound-null.conf makes the null plugin: the
+# game plays, the samples go nowhere, and no file of the setup changes (a mod's own totala.ini is
+# part of the setup under test, so NoDirectSound is not written into it).
+AUDIO_OFF = "winepulse.drv=d"
+ASOUND_NULL = HERE / "asound-null.conf"
 RETAIL_MD5 = "8e74a1dffa1f5988624c52048f5b20cd"      # TotalA.exe 3.1, pristine/manifest.md5
 PREFIX = "compat-"                                   # every Wine instance this tool owns
 
@@ -1156,7 +1158,8 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     inst = setup["_inst"]
     gamedir, prefix = inst["gamedir"], inst["prefix"]
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{display}",
-               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", WINEDEBUG="+loaddll")
+               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
+               ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG="+loaddll")
     xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     t0 = time.time()
@@ -1310,7 +1313,8 @@ def free_dplay_port(port, mine: set, wait=300) -> "str | None":
 def start_wine(inst, display):
     """TotalA.exe in the instance's game folder on its own virtual display."""
     env = dict(os.environ, WINEPREFIX=str(inst["prefix"]), DISPLAY=f":{display}",
-               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", WINEDEBUG="+loaddll")
+               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
+               ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG="+loaddll")
     xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,

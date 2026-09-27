@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_fogwide.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_log.h"
@@ -54,7 +55,7 @@ static void flog(const char* s)
     tagpu_log(s);
 }
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 /* ---- what a build reads ------------------------------------------------- */
 typedef struct {

@@ -65,6 +65,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_opt.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_feat.h"
 #include "tagpu_pal.h"
 #include "tagpu_glsl.h"
@@ -146,7 +147,7 @@
 #define MAXFOOT      16        /* junk-def guard: footprints beyond this are  */
                                /* garbage (terrain-depth "Corrections")       */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
 static void flog(const char* s)
 {

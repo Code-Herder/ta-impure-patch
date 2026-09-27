@@ -17,6 +17,7 @@
 #include <string.h>
 #include "dd.h"
 #include "tagpu_hud.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_opt.h"
 #include "tagpu_settings.h"
 #include "tagpu_detour.h"
@@ -307,7 +308,7 @@ static const unsigned char LOADBG_STOLEN[7] = { 0x83,0xEC,0x30, 0x8B,0x44,0x24,0
 #define OFF_VIEW_W    0x37E37
 #define OFF_VIEW_H    0x37E3B
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 /* The vector that takes a point in the ENGINE's surface to the same point on
    the screen, inside the world region. 1 when it is not (0,0). */

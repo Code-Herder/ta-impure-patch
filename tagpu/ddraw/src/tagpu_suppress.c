@@ -89,6 +89,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_suppress.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_log.h"
 
 /* ---- target + engine layout (all G3/G4/tamem.h-verified) --------------------------- */
@@ -122,7 +123,7 @@ static void slog(const char* s)
 }
 
 /* sim/heap pointers live well above 0x600000 (matches overlay/tracer guards) */
-static int ptr_ok(unsigned int p) { return p > 0x00600000u && p < 0x7FFF0000u; }
+static int ptr_ok(unsigned int p) { return p > 0x00600000u && p <= tagpu_user_top(); }
 
 /* ---- classification (read-only, hot path; no CRT file I/O) ------------------------- */
 

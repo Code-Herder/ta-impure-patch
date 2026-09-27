@@ -49,6 +49,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_opt.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_fx.h"
 #include "tagpu_pal.h"
 #include "tagpu_fxown.h"
@@ -763,7 +764,7 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
        heap allocation, and the process heap of a 0x400000 image can sit below
        0x600000. Nothing is given up — both faults this
        guard has actually caught were a base of -9 and one of -318. */
-    if ((size_t)grid <= 0x10000u || (size_t)grid >= 0x7FFF0000u) {
+    if ((size_t)grid <= 0x10000u || (size_t)grid > tagpu_user_top()) {
         fog_alarm("grid pointer is not a plausible allocation",
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;

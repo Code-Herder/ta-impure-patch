@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "tagpu_scaffold.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
 #include "tagpu_vk.h"        /* tagpu_vk_ab_arm: the A/B claim */
@@ -67,7 +68,7 @@
 #define SEQ_NFRAMES  0x00      /* GAF anim entry: u16 frame count               */
 #define SEQ_FRAMES   0x28      /* -> inline GAFFrame[] table, stride 0x18       */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
 static void slog(const char* s)
 {

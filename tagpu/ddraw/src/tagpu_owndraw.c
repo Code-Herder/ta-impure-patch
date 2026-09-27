@@ -81,6 +81,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_owndraw.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_opt.h"
 #include "tagpu_log.h"
 
@@ -281,7 +282,7 @@ static void ss_recompute(void)
     }
 }
 
-static int ptr_ok(unsigned int p) { return p > 0x00600000u && p < 0x7FFF0000u; }
+static int ptr_ok(unsigned int p) { return p > 0x00600000u && p <= tagpu_user_top(); }
 
 /* Wipe a composite's planes to the ColorKey (index 1) and far depth (0). The
    engine keeps building and blitting the composite, and an empty plane makes

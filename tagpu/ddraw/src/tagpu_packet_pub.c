@@ -85,6 +85,7 @@
 #include "dd.h"           /* g_ddraw: the game's own screen, for the roster's on-screen test */
 #include "render_vk.h"     /* vk_render_main: whether the session draws from packets */
 #include "tagpu_engine.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_packet.h"
 #include "tagpu_packet_pub.h"
 #include "tagpu_detour.h"
@@ -122,7 +123,7 @@ static void plog(const char* s)
     tagpu_log(s);
 }
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 static DWORD    s_gameTid;                 /* DllMain's thread: the game loop's */
 static int      s_installed, s_countOnly, s_stress;

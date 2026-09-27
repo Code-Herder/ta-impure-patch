@@ -77,6 +77,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_tracer.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_log.h"
 
 /* ---- engine layout (all verified, see frame-composition.md / this file's header) */
@@ -139,7 +140,7 @@ static unsigned            g_prev_compA = 0, g_prev_compB = 0;
 static int                 g_have_prev  = 0;
 
 /* ---- pointer guard: sim pointers live well above 0x600000 -------------------------- */
-static int ptr_ok(unsigned int p) { return p > 0x00600000u && p < 0x7FFF0000u; }
+static int ptr_ok(unsigned int p) { return p > 0x00600000u && p <= tagpu_user_top(); }
 
 /* ---- hot path: record one event (memory writes only; no CRT) ----------------------- */
 static void tr_record(unsigned char site, unsigned int ret, unsigned int unit,

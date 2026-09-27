@@ -7,6 +7,7 @@
 #include <string.h>
 #include "dd.h"
 #include "tagpu_opt.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_vpwide.h"
 #include "tagpu_detour.h"
 #include "tagpu_zoom.h"
@@ -107,7 +108,7 @@ static void flog(const char* s)
     tagpu_log(s);
 }
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 static int iround(float v) { return (int)(v >= 0.0f ? v + 0.5f : v - 0.5f); }
 

@@ -19,6 +19,7 @@
 #include <string.h>
 #include "dd.h"
 #include "tagpu_opt.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_zoom.h"
 #include "tagpu_menu.h"
 #include "tagpu_detour.h"
@@ -843,7 +844,7 @@ static void zlog(const char* m)
 
 static int ta_ok(const char* ta)
 {
-    return (size_t)ta > 0x600000u && (size_t)ta < 0x7FFF0000u;
+    return (size_t)ta > 0x600000u && (size_t)ta <= tagpu_user_top();
 }
 
 /* Round toward the nearest pixel, negatives included: (int) truncates toward

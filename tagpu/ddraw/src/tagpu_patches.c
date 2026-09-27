@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_patches.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
@@ -528,7 +529,7 @@ enum { CTX_W = 0, CTX_H = 1, CTX_PITCH = 2, CTX_BASE = 3, CTX_CLIP_L = 7,
 
 static int ptr_sane(const void* p)
 {
-    return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u;
+    return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top();
 }
 
 static int floor32(int v)
@@ -1219,7 +1220,7 @@ static int fix_restore_record_owner(void)
 
    Levers, read once at attach: `tagpu_scratch.stress` treats every frame as too small, so
    every writer call regrows it to exactly max(need, 64) pixels and frees the old one, with
-   the old block's two plane pointers set to SCR_POISON first so that a reader still holding
+   the old block's two plane pointers set to the reserved poison region first so that a reader still holding
    the frame faults at any plane access instead of reading bytes the heap has not yet reused
    (a reader that kept a plane pointer itself is not caught); `tagpu_scratch.nogrow` refuses
    every grow, so every oversized writer takes its fallback.
@@ -1235,10 +1236,12 @@ static int fix_restore_record_owner(void)
 #define SCR_MIN_PX    64u
 #define SCR_ROWS_POLY 2048u     /* 0x4C0820, 0x4C0C70, 0x4C1000: 2048-entry span tables */
 #define SCR_ROWS_SPAN 800u      /* 0x4C8760, 0x4C8BB0: 800                              */
-/* the stress lever's freed-frame plane pointers: TotalA.exe is not large-address-aware (PE
-   characteristics 0x10B), so nothing at or above 2 GB is the process's and any plane offset
-   (at most 8 MB) from here faults */
-#define SCR_POISON    ((unsigned char*)0x80000000u)
+/* the stress lever's freed-frame plane pointers: a region RESERVED with no access when the lever
+   is read, twice the largest plane offset (at most 8 MB) long, so any plane access through a
+   poisoned frame faults. Reserved rather than an address above 2 GB, which is only no one's
+   while the exe is not large-address-aware (tagpu_addr.h) -- TA:ESC's exe is. */
+#define SCR_POISON_SPAN (16u << 20)
+static unsigned char* s_scr_poison;
 
 enum { SCR_BUILD, SCR_FRAME, SCR_SHADOW, SCR_BAKE1, SCR_BAKE2 };
 static const char* const SCR_WHO[] = {
@@ -1328,8 +1331,8 @@ static int scratch_hold(unsigned char* ctx, unsigned char* f, unsigned a,
             *(unsigned char**)(g + 0x14) = g + 0x18 + px;
             *(unsigned char**)(ctx + 0x10) = g;
             if (s_scr_stress) {                /* a reader still holding f faults here */
-                *(unsigned char**)(f + 0x10) = SCR_POISON;
-                *(unsigned char**)(f + 0x14) = SCR_POISON;
+                *(unsigned char**)(f + 0x10) = s_scr_poison;
+                *(unsigned char**)(f + 0x14) = s_scr_poison;
             }
             ((void (__cdecl*)(void*))0x004D85A0)(f);
             scratch_log("grown", who, need, rows, a, px, ++s_scr_grows[who]);
@@ -1518,6 +1521,15 @@ static int fix_composite_scratch(void)
             return FIX_STUB;
         }
     s_scr_stress = GetFileAttributesA("tagpu_scratch.stress") != INVALID_FILE_ATTRIBUTES;
+    if (s_scr_stress) {
+        /* no poison, no lever: a freed frame is never pointed at memory that might be mapped */
+        s_scr_poison = VirtualAlloc(NULL, SCR_POISON_SPAN, MEM_RESERVE, PAGE_NOACCESS);
+        if (!s_scr_poison) {
+            s_scr_stress = 0;
+            plog("enginefix: composite scratch lever: tagpu_scratch.stress refused -- no region "
+                 "to poison freed frames with");
+        }
+    }
     s_scr_nogrow = GetFileAttributesA("tagpu_scratch.nogrow") != INVALID_FILE_ATTRIBUTES;
 
     /* the build-state copy's caller: run it, and on a refusal leave the unit draw */

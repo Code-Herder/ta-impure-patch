@@ -42,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_opt.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_terr.h"
 #include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
@@ -96,7 +97,7 @@
 #define TERR_ENC     0.10f                      /* under every other band      */
 #define DEFAULT_KEY  254                        /* see tagpu_terrown.c         */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 static void flog(const char* s)
 {

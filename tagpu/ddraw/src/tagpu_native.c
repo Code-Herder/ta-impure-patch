@@ -68,6 +68,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "tagpu_opt.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_native.h"
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
@@ -134,7 +135,7 @@
    absolute constant survives a taller viewport */
 #define ROW_SLACK 8               /* rows a gathered unit may sit past the sweep */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
 /* THE ENGINE'S CARGO MERGE, AS A SHIFT OF THE CARGO'S md. DISASSEMBLED:
    the blit's cargo loop calls 0x4B90A0(cargo, scratch, dx, dy, bias) with

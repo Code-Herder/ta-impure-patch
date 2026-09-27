@@ -28,6 +28,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_model3do.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_posebake.h"
 #include "tagpu_render3do.h"
 #include "tagpu_packet.h"   /* the piece run the bake keys on */
@@ -46,7 +47,7 @@
 #define PB_MAXVERT 49152         /* vertices one model may bake to           */
 #define PB_MAXNODEV 4096         /* vertices in one piece: a sanity bound on the template's count */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
 static void blog(const char* s)
 {

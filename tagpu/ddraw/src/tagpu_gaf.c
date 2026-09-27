@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_log.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 /* `tagpu_restoreglsl.h` below declares `TAGPU_RGLSL_FRAME` and
    `tagpu_rglsl_tileable`, both of which this file uses. */
 #include "tagpu_gaf.h"
@@ -22,7 +23,7 @@
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
 static void glog(const char* s)
 {

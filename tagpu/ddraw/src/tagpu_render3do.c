@@ -7,6 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_model3do.h"   /* F_COLORTAB: the Model3DOFace layout */
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_render3do.h"
 #include "tagpu_pal.h"
 #include "tagpu_gaf.h"
@@ -19,7 +20,7 @@
    arrive in the packet's PK_PIECE table, and the face offsets it reads are
    tagpu_model3do.h's. */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
 static void rlog(const char* s)
 {

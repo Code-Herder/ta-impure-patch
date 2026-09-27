@@ -152,6 +152,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_order.h"
+#include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_opt.h"
 #include "tagpu_mark.h"
 #include "tagpu_text.h"
@@ -272,7 +273,7 @@
 #define MAXDOT        512            /* dots on one route segment             */
 #define MAXSEG        128            /* segments in one native-res circle     */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
+static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 static void flog(const char* s)
 {
