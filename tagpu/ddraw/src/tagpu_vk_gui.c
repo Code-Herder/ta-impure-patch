@@ -1788,7 +1788,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
     if (!s_arImg) {
         if (!mk_image(d, s_atDim, s_atDim, VK_FORMAT_R8G8B8A8_UNORM,
                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                      VK_IMAGE_USAGE_STORAGE_BIT,
                       &s_arImg, &s_arMem, &s_arView)) {
             /* `mk_image` can fail after the image and the memory were made, so
                hand both back rather than nulling the handles. */
@@ -1971,7 +1971,7 @@ static int ps_images(const TAGPU_VKPASS* d)
                   &s_psSrc, &s_psSrcMem, &s_psSrcView) ||
         !mk_image(d, PS_W, PS_H, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                  VK_IMAGE_USAGE_STORAGE_BIT,
                   &s_psDst, &s_psDstMem, &s_psDstView)) {
         kill_image(d, &s_psSrc, &s_psSrcMem, &s_psSrcView);
         kill_image(d, &s_psDst, &s_psDstMem, &s_psDstView);

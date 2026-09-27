@@ -5,11 +5,11 @@
    The restorer that runs is `tagpu_vk_restore.c` under `tagpu_restore_core.c`.
 
    WHAT THE RESTORER IS, for a reader arriving here first: the unditherer's
-   residual CNN as fragment passes (research/notes/renderers.md 4c), shaders in
-   tagpu_restore_glsl.h. It batches frames into slots, runs FILL, the conv
+   residual CNN as Vulkan compute (research/notes/compute-restorer.md), shaders
+   in tagpu_restore_comp.h. It batches frames into slots, runs FILL, the conv
    layers and OUT for each batch, and paints the result straight into the
    caller's RGBA8 atlas in its bordered cell layout. The work is SLICED: one
-   call per frame issues draws until a GPU-time budget is spent, so a map's
+   call per frame issues dispatches until a GPU-time budget is spent, so a map's
    restore is a few seconds of ordinary frames, not a stall.
 
    JOBS. A job is a destination atlas fed from a source atlas: the terrain's
@@ -25,15 +25,9 @@
    elsewhere, which is how the progressive reveal and the mixed-mode atlases
    both work with no flag texture.
 
-   gamedir files it reads: <model>.w32.bin beside TotalA.exe (unditherer
-   export-weights; full by default), and the options trigger
-   tagpu_restoreglsl.on -- tokens, read at each restorer bring-up
-   (tagpu_rcore_reload):
-     tiny        the 6x24 model (tiny.w32.bin) instead of 12x64
-     fp16        RGBA16F activations (fp32 is the default and the one that
-                 meets the correctness bar; renderers.md 4c Q4)
-     nk=N        output channel-tiles per conv draw (1, 2, 4, 8; default: the
-                 most the device's uniform-block size allows)
+   gamedir files it reads: full.w32.bin beside TotalA.exe (unditherer
+   export-weights), and the options trigger tagpu_restoreglsl.on -- tokens,
+   read at each restorer bring-up (tagpu_rcore_reload):
      budget=MS   GPU milliseconds per frame (default 12)
      log         a line per batch in tagpu.log */
 
@@ -45,7 +39,7 @@
    aligned atlas's cell slack, tagpu_gaf.h `align`; 0 elsewhere). `wrap` =
    tile it (tagpu_rglsl_tileable) -- the caller decides. `key` = the frame's
    colour key index, or -1 for an opaque frame: keyed texels are inpainted
-   before the model and written (0, 0, 0, 0) after (tagpu_restore_glsl.h).
+   before the model and written (0, 0, 0, 0) after (tagpu_restore_comp.h).
 
    IT CARRIES A STRUCT TAG as well as the typedef, and the tag is load-bearing:
    `inc/tagpu_posedraw.h` publishes a list of these to the unit consumer and
@@ -64,7 +58,7 @@ typedef struct TAGPU_RGLSL_FRAME_S {
    are written against. */
 /* classical.is_tileable on palette colours: opposite edges agree within 12
    levels on average, over the three channels. A frame with its colour key
-   `key` on an edge is never tileable (tagpu_restore_glsl.h says why);
+   `key` on an edge is never tileable;
    key = -1 for an opaque frame. */
 /* `pal` is the ART's palette -- the engine's own table (tagpu_pal_engine()),
    never the gamma-scaled one the screen is shown with: the threshold is a raw

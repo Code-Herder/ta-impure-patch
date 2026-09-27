@@ -325,18 +325,18 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     return 1;
 }
 
-/* `usage` IS THE CALLER'S BECAUSE THE RESTORED ATLAS IS A RENDER TARGET.
+/* `usage` IS THE CALLER'S BECAUSE THE RESTORED ATLAS IS WRITTEN BY A SHADER.
    The base atlas is only ever copied into and sampled, but the restored
-   one is what this lane's own restorer PAINTS, and a Vulkan image may only be a colour attachment if it was
-   created saying so. Nothing infers it from the format -- the destination's
-   usage is a promise made at creation and tagpu_vk_restore.h asks for it by
-   name. */
-/* WHAT EACH OF THIS PASS'S IMAGES IS FOR. The restored atlas carries
-   COLOR_ATTACHMENT because this lane's restorer paints into it;
-   it costs nothing when nothing restores, and an image created without it
-   could not be lent to the restorer at all. */
+   one is what this lane's own restorer PAINTS, as a storage image, and a
+   Vulkan image may only be one if it was created saying so. Nothing infers it
+   from the format -- the destination's usage is a promise made at creation and
+   tagpu_vk_restore.h asks for it by name. */
+/* WHAT EACH OF THIS PASS'S IMAGES IS FOR. The restored atlas carries STORAGE
+   because this lane's restorer paints into it; it costs nothing when nothing
+   restores, and an image created without it could not be lent to the
+   restorer at all. */
 #define IMG_SAMPLED  (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
-#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_STORAGE_BIT)
 
 static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
                     VkImageUsageFlags usage,

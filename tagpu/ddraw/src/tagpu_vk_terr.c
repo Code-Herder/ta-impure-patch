@@ -221,16 +221,16 @@ typedef struct {
 } SHARED;
 /* WHAT AN IMAGE HERE IS FOR. Everything this pass makes is uploaded and then
    sampled; the one exception is the restored atlas, which the Vulkan restorer
-   RENDERS INTO under Classic++ `assets=1` -- and which therefore carries
-   COLOR_ATTACHMENT unconditionally rather than only on the frames the lever is
-   on. RGBA8 optimal-tiling colour-attachment support is required of every
-   Vulkan device, so the flag cannot be refused, and paying for it always is
+   WRITES under Classic++ `assets=1` -- and which therefore carries STORAGE
+   unconditionally rather than only on the frames the lever is on. RGBA8
+   optimal-tiling storage-image support is required of every Vulkan device,
+   so the flag cannot be refused, and paying for it always is
    what keeps the image's identity independent of which path filled it: a
    session that flipped the lever would otherwise be asking for a resize of an
    image whose w and h had not changed, which `shared_resize` answers with
    "already right". */
 #define IMG_SAMPLED   (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
-#define IMG_RESTORED  (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+#define IMG_RESTORED  (IMG_SAMPLED | VK_IMAGE_USAGE_STORAGE_BIT)
 static SHARED s_height;                    /* the height grid, R8             */
 /* THE BASE ATLAS, RGBA8 at the tile atlas's size: every texel its index's
    colour through the hand-over's palette -- the engine's table --

@@ -6,19 +6,19 @@
    WHY THIS FILE EXISTS, which is a fact about the tree rather than a taste.
    The restorer is two unrelated jobs: an incremental background SCHEDULER
    (job queues, batch formation, a GPU-time budget driven by a smoothed cost
-   estimate) and a DRAW SEQUENCE. Only the second names an API; the first is
+   estimate) and a DISPATCH SEQUENCE. Only the second names an API; the first is
    called from API-free gather halves (`tagpu_rglsl_tileable` from
    tagpu_terr.c and tagpu_gaf.c), and the queues are what every consumer's
    lazy-restore contract is written against.
 
    WHAT IS ON WHICH SIDE. The core owns everything that does not name an API:
    the weight file, the options, the size-class ladder, `tileable`, the job
-   table and its queues, batch formation, the pass SEQUENCER (fill -> depth x
-   conv -> out, with the group/ping-pong advance), the cost model, the budget
-   arithmetic and every counter and log line. A backend owns device resources
-   and the calls that draw -- and it is told WHICH draw to make rather than
-   working it out, so it cannot get the sequence subtly wrong. The one backend
-   is tagpu_vk_restore.c.
+   table and its queues, batch formation and the slot table, the pass
+   SEQUENCER (fill -> depth x conv bands -> out, with the ping-pong advance),
+   the cost model, the budget arithmetic and every counter and log line. A
+   backend owns device resources and the calls that dispatch -- and it is told
+   WHICH dispatch to make rather than working it out, so it cannot get the
+   sequence subtly wrong. The one backend is tagpu_vk_restore.c.
 
    ONE SCHEDULER PER BACKEND, not one shared. Each backend declares its own
    TAGPU_RSCHED, so a backend's slicing never depends on whether another is
@@ -32,35 +32,45 @@
 #define TAGPU_R_SLOTCOLS  8
 #define TAGPU_R_SLOTROWS  8
 #define TAGPU_R_BATCH     (TAGPU_R_SLOTCOLS * TAGPU_R_SLOTROWS)  /* frames per batch, at most */
-#define TAGPU_R_ACTMAX    512    /* activation side cap, texels                */
-/* terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures 5:
-   every slot is taken, so a seventh consumer raises this */
-#define TAGPU_R_MAXJOBS   6
-#define TAGPU_R_MAXNK     8
+#define TAGPU_R_ACTMAX    512    /* a slot's side cap, texels                  */
+/* terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures 5,
+   and the backend's two self-test probes: every slot is taken, so another
+   consumer raises this */
+#define TAGPU_R_MAXJOBS   8
 #define TAGPU_R_MAXLAYERS 32
+/* THE GRID'S TILING, which is the conv kernel's (tagpu_restore_comp.h CONV): a
+   workgroup covers 16 columns and 8, 16 or 32 rows, so a grid padded to a
+   multiple of 16 wide and 32 high is covered exactly by every variant. */
+#define TAGPU_R_GRIDX     16
+#define TAGPU_R_GRIDY     32
+/* Rows per conv dispatch. A layer is cut into bands so that one dispatch stays
+   short on a slow device and the budget can stop between them; a multiple of
+   TAGPU_R_GRIDY, so every band is whole workgroups. */
+#define TAGPU_R_BAND      64
 
 /* the scheduler, one per backend; its fields are below */
 typedef struct TAGPU_RSCHED_s TAGPU_RSCHED;
 
-/* ---- the model, read from <model>.w32.bin (unditherer/weights.py) ---- */
+/* ---- the model, read from full.w32.bin (unditherer/weights.py) ---- */
 
-/* one layer, in vec4 texels: `kstride/4` is its mat4s per output tile */
+/* one layer, in vec4 texels: output tile k's block starts at offset + k x
+   kstride, the bias first, then a mat4 per (tap, input tile) */
 typedef struct { unsigned offset, jin, kout, kstride; } TAGPU_RLAYER;
 
 typedef struct {
-    int          depth, ch, ntex, kmax;   /* kmax: mat4s in the widest k-block */
+    int          depth, ch, ntex;
     TAGPU_RLAYER layer[TAGPU_R_MAXLAYERS];
-    float*       body;                    /* ntex vec4s, the backend uploads   */
+    float*       body;                    /* ntex vec4s, the backend repacks   */
     char         name[16];
 } TAGPU_RMODEL;
 
 /* ---- the options, from tagpu_restoreglsl.on ---- */
-typedef struct { int tiny, fp16, nk, log; double budget; } TAGPU_ROPT;
+typedef struct { int log; double budget; } TAGPU_ROPT;
 
 /* Re-read the options and the model, from a backend's own init, so that both
-   are picked up once per DEVICE. 0 with the
-   reason in tagpu.log when the weight file is unusable -- Classic++ then stays
-   indexed, which is the shipped fallback and not a failure. */
+   are picked up once per DEVICE. 0 with the reason in tagpu.log when the
+   weight file is unusable -- Classic++ then stays indexed, which is the
+   shipped fallback and not a failure. */
 int                tagpu_rcore_reload(const char* who);
 /* tagpu.log, one line, for a backend that wants the core's own sink */
 void               tagpu_rcore_log(const char* line);
@@ -68,13 +78,6 @@ void               tagpu_rcore_log(const char* line);
 int                tagpu_rcore_ready(void);
 const TAGPU_RMODEL* tagpu_rcore_model(void);
 const TAGPU_ROPT*   tagpu_rcore_opt(void);
-
-/* Settle NK and WMAX from the device's limits: `nk` is the most k-blocks one
-   draw can bind, clamped down to a power of two, and overridden by `nk=N` when
-   that is no larger. 0, with the reason logged, when not even one k-block fits
-   the uniform block -- the backend then cannot restore at all. */
-int tagpu_rcore_pick_nk(TAGPU_RSCHED* s, unsigned maxUniformBlockBytes,
-                        unsigned maxAttachments);
 
 /* ---- a job, as the core sees it ---- */
 
@@ -88,7 +91,7 @@ typedef struct TAGPU_RCORE {
     TAGPU_RQF* q; int qn, qcap;              /* queued, not yet in a batch     */
     /* the batch in flight */
     TAGPU_RQF  bf[TAGPU_R_BATCH]; int bn, bS, bcols, inflight;
-    int    pass, group, srcAct;
+    int    pass, band, srcAct;
     /* the run: from the first frame queued while idle to the queue draining */
     int    running, rframes, rwrap, rbatches, rdraws, rslices;
     unsigned sliceMark;                      /* s_slice + 1 of the last slice it drew in */
@@ -98,56 +101,64 @@ typedef struct TAGPU_RCORE {
     int    tframes, tbatches, tdraws; double tgpuNs; unsigned lastTallySlice;
 } TAGPU_RCORE;
 
-/* ---- the draw the core asks a backend for ---- */
+/* ---- one slot of a batch, as the shaders read it ----
+   tagpu_restore_comp.h's `Slot`, field for field: sixteen ints, so the std430
+   array has no padding and this struct is its bytes. The valid rect (rw, rh)
+   is slot-local from (0, 0); (ax, ay, sw, sh) the frame in the source atlas;
+   `key` its colour key or -1; (dx, dy, border, padR, padB) its cell in the
+   destination. r0..r3 are the record's padding to 64 bytes. */
+typedef struct {
+    int rw, rh, ax, ay, sw, sh, key, dx, dy, border, padR, padB, r0, r1, r2, r3;
+} TAGPU_RSLOT;
+
+/* ---- the dispatch the core asks a backend for ---- */
 enum { TAGPU_RDRAW_FILL, TAGPU_RDRAW_CONV, TAGPU_RDRAW_OUT };
 
 typedef struct {
     int          kind;
     TAGPU_RCORE* job;
-    int          S, TW, TH;            /* slot pitch, and the target extent    */
-    /* The per-slot tables, TAGPU_R_SLOTCOLS x TAGPU_R_SLOTROWS RGBA32F texels,
-       laid out as the shaders index them. Owned by the core and rebuilt on the
-       FILL of each batch, so FILL is where a backend uploads them and the CONV
-       and OUT draws of the same batch see the same contents -- only one batch
-       is ever in flight, so nothing else can write them in between. A
-       backend therefore uploads on FILL and reads the device copy afterwards;
-       the pointers are handed to every kind so that a backend which keeps no
-       device copy could read them on any draw. */
-    const float* rect;                 /* padded w,h at .zw                    */
-    const float* src;                   /* atlas x,y,w,h                        */
-    const float* key;                   /* colour key index at .x, -1 = opaque  */
-    /* OUT: `nv` vertices of 8 floats -- x,y, dx,dy, slotCol,slotRow, w,h */
-    const float* verts; int nv;
-    /* CONV: the layer, the output tiles this draw writes, and the ping-pong */
+    /* THE GRID: `cols` x `cols` slots, `pitch` = S + 1 apart, padded to gw x gh
+       texels (TAGPU_R_GRIDX / _GRIDY). The pitch is one more than the widest
+       rect, so every slot ends in a zero column and a zero row -- the half of
+       the padding rule that keeps a 3x3 tap out of its neighbour's rect. */
+    int          S, cols, pitch, gw, gh;
+    /* The slot table, TAGPU_R_BATCH entries at row x TAGPU_R_SLOTCOLS + col.
+       Owned by the core and rebuilt on the FILL of each batch, so FILL is where
+       a backend uploads it and the CONV and OUT dispatches of the same batch
+       see the same contents -- only one batch is ever in flight. */
+    const TAGPU_RSLOT* slot;
+    int          nframes;                /* frames in the batch: slots 0.. in order */
+    int          srcAct;                 /* CONV / OUT: the ping-pong side read    */
+    /* CONV: layer `layer` (`L`), rows y0 .. y0 + rows of the grid */
+    int          layer, last, y0, rows;
     const TAGPU_RLAYER* L;
-    int          group, n, srcAct, relu;
 } TAGPU_RDRAWREQ;
 
 /* ---- what a backend implements ---- */
 typedef struct {
     const char* name;                        /* log prefix: "restorevk"        */
-    /* 1 when the backend's programs and tables are up: the core counts a step
-       either way, so a pass can tell nothing stepped, but draws nothing */
+    /* 1 when the backend's pipelines and tables are up; the core counts the
+       step either way and dispatches nothing until it is */
     int    (*ready)(void);
-    /* The ping-pong activation arrays at `side` texels square, grown between
-       batches only. THREE ANSWERS, not two:
+    /* The ping-pong activations for a gw x gh grid, grown between batches
+       only. THREE ANSWERS, not two:
          1  ready;
-         0  this device cannot (no float render target) -- the job FAILS;
+         0  this device cannot -- the job FAILS;
         -1  not yet, ask again next slice.
        The third exists for a backend that must RETIRE the allocation it is
        replacing behind a fence rather than freeing it at once: a Vulkan
-       backend's old arrays may still be named by a submitted command buffer,
+       backend's old buffers may still be named by a submitted command buffer,
        and the licensing fact is a slot bitmask reaching zero, which takes a
        few frames. Failing the job for that would be permanent damage from a
        transient condition, and growing anyway would be a use-after-free.
        `form_batch` therefore secures the scratch BEFORE it commits the batch,
        so a -1 leaves the queue exactly as it was. */
-    int    (*act_ensure)(int side);
+    int    (*act_ensure)(int gw, int gh);
     /* release the scratch after an idle spell; 1 = something was actually
        released, which is what the core logs on */
     int    (*act_free)(void);
-    /* one draw. The core has already decided which; the backend binds and
-       draws it and nothing else. 0 = it could not, and the job fails. */
+    /* one dispatch. The core has already decided which; the backend binds and
+       dispatches it and nothing else. 0 = it could not, and the job fails. */
     int    (*draw)(const TAGPU_RDRAWREQ* r);
     /* the slice's timing bracket, only ever called while `timer` is on */
     void   (*slice_begin)(int q);
@@ -157,39 +168,28 @@ typedef struct {
     /* stop timing for good: the core calls this when a result has not come
        back for 300 slices, which means the device does not really time */
     void   (*timer_off)(void);
-    /* the state a slice disturbs and the caller expects back; both are empty
-       in tagpu_vk_restore.c. `slice` is the slice about to run, for a backend
-       that reports first-slice diagnostics. */
-    void   (*state_push)(unsigned slice);
-    void   (*state_pop)(unsigned slice);
-    /* 1 when the backend may draw at all this frame -- the renderer switch
+    /* 1 when the backend may dispatch at all this frame -- the renderer switch
        the jobs pause under. The queues keep filling while it is 0. */
     int    (*may_draw)(void);
-    /* 1 when one more draw of any kind fits what the backend holds PER SLICE.
-       The core asks before every draw and ends the slice on 0; the batch in
-       flight resumes on the next slice, as it does when the budget cuts it.
-       A slice is bounded by GPU time, not by a count, so a per-slice resource
-       of fixed size can only be bounded by the core stopping short of it --
-       tagpu_vk_restore.c's uniform ring is the one there is. A backend must
-       answer 1 at the head of a slice, or no slice would ever draw. */
-    int    (*room)(void);
 } TAGPU_RBACKEND;
 
 /* ---- the scheduler, one instance per backend ---- */
 struct TAGPU_RSCHED_s {
     const TAGPU_RBACKEND* be;
     TAGPU_RCORE  jobs[TAGPU_R_MAXJOBS];
-    int      nk, wmax;
     unsigned slice;                      /* slices issued since the last lost  */
     unsigned calls;                      /* frames stepped, ready or not       */
     int      idle;                       /* consecutive slices with nothing    */
+    /* THE SELF-TEST'S GATE: while it is set only jobs of NEGATIVE prio (the
+       backend's probes) are picked, and every other job queues. The backend
+       sets it before its probes exist and clears it on their verdict. */
+    int      gate;
     /* the budget: double-buffered timing, so nothing ever waits on a result */
     int      qHave[2], qFrame, qStall, timer;
     double   qUnits[2], nsPerUnit;
     TAGPU_RCORE* qJob[2];
-    /* the tables the draw requests point at */
-    float    rect[TAGPU_R_BATCH * 4], src[TAGPU_R_BATCH * 4], key[TAGPU_R_BATCH * 4];
-    float    verts[TAGPU_R_BATCH * 6 * 8];
+    /* the table the dispatch requests point at */
+    TAGPU_RSLOT slot[TAGPU_R_BATCH];
 };
 
 /* A job slot, with the backend's own job hung off `owner`. NULL when the table
@@ -203,6 +203,9 @@ int  tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
                          const TAGPU_RGLSL_FRAME* frames, int count);
 /* Drop everything queued or in flight; the backend clears the destination. */
 void tagpu_rcore_job_drop(TAGPU_RCORE* j);
+/* Every job fails, as the self-test's failure has them do: queues dropped,
+   nothing more dispatched, and each consumer reads `failed` and stays indexed. */
+void tagpu_rcore_fail_all(TAGPU_RSCHED* s);
 /* THE LAYOUT MOVED UNDER THE JOB -- an atlas repack whose cells the consumer
    carries on the device, source and destination alike. `map` rewrites a frame
    to its new rect and answers 1, or answers 0 for a frame whose entry the
@@ -217,9 +220,8 @@ void tagpu_rcore_job_drop(TAGPU_RCORE* j);
 int  tagpu_rcore_job_remap(TAGPU_RCORE* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
                            void* ctx, int* kept, int* requeued, int* dropped);
 
-/* One slice: issue draws for the active job until the budget is spent. The
-   backend's `state_push`/`state_pop` bracket it. Counts the call whether or
-   not it draws -- `tagpu_rglsl_calls` is how a pass learns nothing stepped. */
+/* One slice: issue dispatches for the active job until the budget is spent.
+   Counts the call whether or not it dispatches. */
 void tagpu_rcore_step(TAGPU_RSCHED* s);
 
 /* Everything the backend owned died with its device: forget the jobs without

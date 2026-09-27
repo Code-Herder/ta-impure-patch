@@ -1,16 +1,15 @@
 /* tagpu_restore_core.c -- the Classic++ restorer's scheduler, with no
    rendering API in it. tagpu_restore_core.h says why the module is split this
-   way; research/notes/renderers.md 4c has the decisions the numbers come from,
-   and tools/tascene-restore.js is the same driver in the browser lab.
+   way; research/notes/compute-restorer.md has the decisions the numbers come
+   from.
 
    THE MODEL. unditherer/model.py: 3x3 conv 3->64 + ReLU, ten x (3x3 conv
    64->64 + BatchNorm + ReLU), 3x3 conv 64->3, out = in - net(in), RGB in
    [0,1]. BatchNorm is folded into the weight file (unditherer/weights.py),
-   which lays every layer out as the conv pass indexes it: one std140 block of
-   mat4 per output channel-tile k, bias first, then a mat4 per (tap, input
-   tile). A conv draw binds NK consecutive k-blocks as one uniform range and
-   writes NK output tiles through NK colour attachments; the activations
-   ping-pong between two array textures, one layer per four channels.
+   which lays every layer out in blocks of mat4 per output channel-tile k: the
+   bias first, then a mat4 per (tap, input tile). The backend repacks that
+   into the compute kernel's layout at bring-up; the file is the one format
+   the exporter writes and the CPU reference (tagpu_restore_ref.c) reads.
 
    THE PADDING RULE, the thing that defines the pixels. The unditherer runs a
    tile whose opposite edges agree within 12 levels wrap-padded by 12 to 56x56
@@ -21,22 +20,21 @@
    gutter, which is relu(bias), not 0. FILL wrap-pads inside the rect; OUT
    centre-crops.
 
-   BATCHES, shared with the lab byte for byte (tascene-restore.js
-   batchFrames): a frame's padded edge S is max(w, h) + 2 x depth if it wraps.
-   A job's queue is taken in order; a batch holds frames of one SIZE CLASS up
-   to a square slot grid of min(8, ACT_MAX / class) per side -- then shrunk to
+   BATCHES: a frame's padded edge S is max(w, h) + 2 x depth if it wraps. A
+   job's queue is taken in order; a batch holds frames of one SIZE CLASS up to
+   a square slot grid of min(8, ACT_MAX / class) per side -- then shrunk to
    the smallest square that holds what was taken, since the passes cost by the
-   fragment -- and its slot pitch is its largest S. Every slot has its own
-   rect, so a 30x25 tree and a 63x60 rock share a batch.
+   texel -- and its slot pitch is its largest S plus one. Every slot has its
+   own rect, so a 30x25 tree and a 63x60 rock share a batch.
 
-   SLICING. One call per frame issues draws until an estimate of their GPU time
-   reaches the budget (12 ms by default), the estimate being the previous
-   slice's measured time divided by the work it carried. Draws are the unit: a
-   64-tile batch of the full model is 1 (fill) + ceil(16/NK) x 11 + 1 + 1 (out)
-   = 47 of them at NK=4. Where the device will not time a slice, it is a fixed,
-   conservative draw count instead. No second context, no worker thread: the
-   GPU is the only engine, and a slow one restores slower without stalling
-   anything. */
+   SLICING. One call per frame issues dispatches until an estimate of their
+   GPU time reaches the budget (12 ms by default), the estimate being the
+   previous slice's measured time divided by the work it carried. Dispatches
+   are the unit: a batch is one FILL, then each of the model's layers in
+   bands of TAGPU_R_BAND rows, then one OUT. Where the device will not time a
+   slice, it is a fixed, conservative dispatch count instead. No second
+   queue, no worker thread: the GPU is the only engine, and a slow one
+   restores slower without stalling anything. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -50,12 +48,12 @@
 #define TILEABLE_THR      12.0
 #define OPT_FILE          "tagpu_restoreglsl.on"
 #define DEFAULT_BUDGET_MS 12.0
-#define FIXED_DRAWS       6     /* no timer: draws per slice                   */
+#define FIXED_DRAWS       6     /* no timer: dispatches per slice              */
 #define IDLE_FRAMES       180   /* activations freed after                     */
 #define QUEUE_LOG_FRAMES  300   /* a queue's tally, at most                    */
 #define STALL_GIVEUP      300   /* slices waited on one result before giving up */
 
-/* the size-class ladder: a batch holds one class; tascene-restore.js's twin */
+/* the size-class ladder: a batch holds one class */
 static const int s_classes[] = { 32, 48, 64, 96, 128, 192, 256, 384, 512 };
 #define NCLASSES (int)(sizeof s_classes / sizeof s_classes[0])
 
@@ -108,33 +106,31 @@ static int load_weights(const char* who, const char* model)
     if (depth < 2 || depth > TAGPU_R_MAXLAYERS || ch < 4 || ch > 256 || (ch & 3) || ntex == 0 || ntex > (1u << 24)) {
         rlog_2(who, "weight header out of range"); fclose(f); return 0;
     }
-    s_w.depth = (int)depth; s_w.ch = (int)ch; s_w.ntex = (int)ntex; s_w.kmax = 0;
+    s_w.depth = (int)depth; s_w.ch = (int)ch; s_w.ntex = (int)ntex;
     for (l = 0; l < depth; l++) {
         if (fread(&s_w.layer[l], 1, 16, f) != 16) { rlog_2(who, "weight header truncated"); fclose(f); return 0; }
         {
             const TAGPU_RLAYER* L = &s_w.layer[l];
             /* every product in 64 bits: a corrupt header must not wrap its way past the bound */
             unsigned long long end = (unsigned long long)L->offset + (unsigned long long)L->kout * L->kstride;
-            /* AND BOTH TERMS OF THE BIND OFFSET ARE ALIGNED, which is a bound on
-               a value read from a FILE and therefore belongs here rather than at
-               the bind site. A conv draw binds the weight block at
-               `(offset + group x kstride) x 16` bytes, and Vulkan requires that
-               to be a multiple of the device's minUniformBufferOffsetAlignment,
-               which the spec caps at 256: the reference setup's device reports
-               64 (16 on llvmpipe; measured through winevulkan 2026-09-17).
-               `kstride & 15` below already makes the
-               group term a multiple of 256; `offset & 15` is what makes the
-               base term one. Both shipped models pass it by construction --
-               the exporter lays layers back to back from 0, so every offset is
-               a running sum of `kout x kstride` and therefore a multiple of 16
-               -- so this is a bound on the file, not a fix for the exporter. */
-            if (L->jin == 0 || L->kout == 0 || L->kstride == 0 || (L->kstride & 15) ||
-                (L->offset & 15) ||
-                L->kstride > ntex || L->kout > ntex || end > ntex || L->jin > 64) {
+            /* THE BOUNDS THE REPACK AND THE KERNEL INDEX WITH, on values read
+               from a FILE. A block holds the bias and 9 x jin mat4s, so
+               `kstride` covers 4 + 36 x jin vec4s or the repack would read
+               the next block as this one's weights. Layer l reads what l-1
+               wrote, so its input tiles are the previous layer's output
+               tiles; the first layer reads FILL's one tile (RGB and a zero);
+               the last writes one tile, the kernel's LAST output; and no
+               layer is wider than `ch`, which sizes the activations. */
+            int first = l == 0, last = l + 1 == depth;
+            if (L->jin == 0 || L->kout == 0 || L->kstride == 0 ||
+                (unsigned long long)L->kstride < 4ull + 36ull * L->jin ||
+                L->kstride > ntex || L->kout > ntex || end > ntex ||
+                4u * L->jin > ch || 4u * L->kout > ch ||
+                (first && L->jin != 1) || (last && L->kout != 1) ||
+                (!first && L->jin != s_w.layer[l - 1].kout)) {
                 rlog_2(who, "weight layer table inconsistent"); fclose(f); return 0;
             }
         }
-        if ((int)(s_w.layer[l].kstride / 4) > s_w.kmax) s_w.kmax = (int)(s_w.layer[l].kstride / 4);
     }
     want = (size_t)ntex * 16;
     s_w.body = (float*)malloc(want);
@@ -153,7 +149,7 @@ static void read_options(void)
 {
     HANDLE h;
     char buf[256]; DWORD n = 0;
-    s_opt.tiny = 0; s_opt.fp16 = 0; s_opt.nk = 0; s_opt.log = 0; s_opt.budget = DEFAULT_BUDGET_MS;
+    s_opt.log = 0; s_opt.budget = DEFAULT_BUDGET_MS;
     h = CreateFileA(OPT_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (h == INVALID_HANDLE_VALUE) return;
     if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
@@ -166,10 +162,7 @@ static void read_options(void)
             while (*q && *q > ' ') q++;
             last = (*q == 0);
             *q = 0;
-            if (!lstrcmpiA(p, "tiny")) s_opt.tiny = 1;
-            else if (!lstrcmpiA(p, "fp16")) s_opt.fp16 = 1;
-            else if (!lstrcmpiA(p, "log")) s_opt.log = 1;
-            else if (!strncmp(p, "nk=", 3)) { int k = atoi(p + 3); if (k == 1 || k == 2 || k == 4 || k == 8) s_opt.nk = k; }
+            if (!lstrcmpiA(p, "log")) s_opt.log = 1;
             else if (!strncmp(p, "budget=", 7)) { double v = atof(p + 7); if (v >= 0.5 && v <= 100.0) s_opt.budget = v; }
             if (last) break;
             p = q + 1;
@@ -179,15 +172,14 @@ static void read_options(void)
 }
 
 /* RE-READ BOTH, which the backend does from its own init -- so the options
-   are picked up once per bring-up, not once per process: a `tiny` or `budget=`
-   edited between two bring-ups takes effect. `load_weights` re-reads only when
-   the model NAME changed, so flipping `tiny` reloads and a plain reload does
-   not touch the 4 MB body. */
+   are picked up once per bring-up, not once per process: a `budget=` edited
+   between two bring-ups takes effect. `load_weights` keeps a body it already
+   holds, so a reload does not touch the 4 MB file again. */
 int tagpu_rcore_reload(const char* who)
 {
     read_options();
     s_optRead = 1;
-    s_modelOk = load_weights(who, s_opt.tiny ? "tiny" : "full");
+    s_modelOk = load_weights(who, "full");
     return s_modelOk;
 }
 
@@ -199,34 +191,6 @@ const TAGPU_ROPT* tagpu_rcore_opt(void)
 {
     if (!s_optRead) { read_options(); s_optRead = 1; }
     return &s_opt;
-}
-
-/* THE LIMITS STAY UNSIGNED, as Vulkan reports them. A driver may report
-   UINT32_MAX for a range it does not bound -- AMD's Windows driver does for
-   `maxUniformBufferRange` (MEASURED 2026-09-25, an R9 200 series card) -- and
-   read as an int that is -1, less than one k-block, so the restorer refused
-   the device. The quotient is clamped to TAGPU_R_MAXNK before it is narrowed
-   to an int. */
-int tagpu_rcore_pick_nk(TAGPU_RSCHED* s, unsigned maxUniformBlockBytes, unsigned maxAttachments)
-{
-    char b[200];
-    unsigned kbytes, fit;
-    int nk;
-    if (!s_modelOk) return 0;
-    kbytes = s_w.kmax > 0 ? (unsigned)s_w.kmax * 64u : 0u;
-    fit = kbytes ? maxUniformBlockBytes / kbytes : 0u;
-    if (fit > maxAttachments) fit = maxAttachments;
-    if (fit > TAGPU_R_MAXNK) fit = TAGPU_R_MAXNK;
-    nk = fit >= 8 ? 8 : fit >= 4 ? 4 : fit >= 2 ? 2 : fit >= 1 ? 1 : 0;
-    if (!nk) {
-        _snprintf(b, sizeof b, "%s: uniform block %u < one k-block (%u)",
-                  s->be->name, maxUniformBlockBytes, kbytes);
-        rlog(b);
-        return 0;
-    }
-    if (s_opt.nk && s_opt.nk <= nk) nk = s_opt.nk;
-    s->nk = nk; s->wmax = nk * s_w.kmax;
-    return nk;
 }
 
 /* ---- tileable: classical.is_tileable on palette colours ---- */
@@ -254,8 +218,15 @@ int tagpu_rglsl_tileable(const unsigned char* px, int w, int h, const unsigned c
 /* ---- the jobs ---- */
 void tagpu_rcore_job_drop(TAGPU_RCORE* j)
 {
-    j->qn = 0; j->bn = 0; j->inflight = 0; j->pass = 0; j->group = 0; j->srcAct = 0;
+    j->qn = 0; j->bn = 0; j->inflight = 0; j->pass = 0; j->band = 0; j->srcAct = 0;
     j->running = 0;
+}
+
+void tagpu_rcore_fail_all(TAGPU_RSCHED* s)
+{
+    int i;
+    for (i = 0; i < TAGPU_R_MAXJOBS; i++)
+        if (s->jobs[i].used) { s->jobs[i].failed = 1; tagpu_rcore_job_drop(&s->jobs[i]); }
 }
 
 /* tagpu_restore_core.h. THE ACTIVATIONS NEED NOTHING: they are scratch that
@@ -287,7 +258,7 @@ int tagpu_rcore_job_remap(TAGPU_RCORE* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAM
         memcpy(j->q, j->bf, (size_t)b * sizeof *j->q);
     }
     j->qn = k + b;
-    if (nb > 0) { j->bn = 0; j->inflight = 0; j->pass = 0; j->group = 0; j->srcAct = 0; }
+    if (nb > 0) { j->bn = 0; j->inflight = 0; j->pass = 0; j->band = 0; j->srcAct = 0; }
     *kept = k; *requeued = b;
     return 1;
 }
@@ -382,6 +353,19 @@ int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
     return added;
 }
 
+/* THE GRID of a batch of `cols` x `cols` slots of edge S: the pitch is S + 1
+   (tagpu_restore_core.h, TAGPU_RDRAWREQ), padded to the kernel's tiling */
+static int grid_w(int cols, int S)
+{
+    int g = cols * (S + 1);
+    return (g + TAGPU_R_GRIDX - 1) / TAGPU_R_GRIDX * TAGPU_R_GRIDX;
+}
+static int grid_h(int cols, int S)
+{
+    int g = cols * (S + 1);
+    return (g + TAGPU_R_GRIDY - 1) / TAGPU_R_GRIDY * TAGPU_R_GRIDY;
+}
+
 /* take the next batch off the queue: the head's size class, up to the grid
    that class allows, in queue order; the rest close up behind */
 /* 1 = a batch is in flight, 0 = the job just failed, -1 = the backend needs a
@@ -410,10 +394,10 @@ static int form_batch(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         }
     }
     /* the grid is the smallest square that holds the batch: the passes cost
-       by the fragment, and a queue's two-frame batch must not pay for 64 */
+       by the texel, and a queue's two-frame batch must not pay for 64 */
     for (cols = 1; cols * cols < j->bn; cols++) ;
     /* secure */
-    ok = s->be->act_ensure(cols * S);
+    ok = s->be->act_ensure(grid_w(cols, S), grid_h(cols, S));
     if (ok < 0) { j->bn = 0; return -1; }        /* the queue is as it was */
     if (!ok) { j->failed = 1; tagpu_rcore_job_drop(j); return 0; }
     /* commit: the same predicate, so the same frames */
@@ -423,81 +407,64 @@ static int form_batch(TAGPU_RSCHED* s, TAGPU_RCORE* j)
     }
     j->qn = k;
     j->bS = S; j->bcols = cols;
-    j->pass = 0; j->group = 0; j->srcAct = 0;
+    j->pass = 0; j->band = 0; j->srcAct = 0;
     j->inflight = 1;
     return 1;
 }
 
-/* ONE DRAW of the job's in-flight batch. The core decides WHICH, builds the
-   tables it needs, computes its cost in work units (texels x input tiles x NK)
-   and only then hands it to the backend; the sequencer and the cost model stay
-   here so a second backend cannot disagree with the first about either. */
+/* ONE DISPATCH of the job's in-flight batch. The core decides WHICH, builds
+   the slot table, computes its cost in work units (texels x input tiles x
+   output tiles for a conv band) and only then hands it to the backend; the
+   sequencer and the cost model stay here so a second backend cannot disagree
+   with the first about either. */
 static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
 {
-    int S = j->bS, cols = j->bcols, TW = cols * S, TH = cols * S;
+    int S = j->bS, cols = j->bcols;
     TAGPU_RDRAWREQ r;
     double units;
 
     memset(&r, 0, sizeof r);
-    r.job = j; r.S = S; r.TW = TW; r.TH = TH;
+    r.job = j; r.S = S; r.cols = cols; r.pitch = S + 1;
+    r.gw = grid_w(cols, S); r.gh = grid_h(cols, S);
+    r.slot = s->slot; r.nframes = j->bn;
 
     if (j->pass == 0) {
         int t;
-        memset(s->rect, 0, sizeof s->rect); memset(s->src, 0, sizeof s->src);
-        for (t = 0; t < TAGPU_R_BATCH; t++) {
-            s->key[t * 4] = -1.f;
-            s->key[t * 4 + 1] = s->key[t * 4 + 2] = s->key[t * 4 + 3] = 0.f;
-        }
+        memset(s->slot, 0, sizeof s->slot);
+        for (t = 0; t < TAGPU_R_BATCH; t++) s->slot[t].key = -1;
         for (t = 0; t < j->bn; t++) {
             const TAGPU_RGLSL_FRAME* f = &j->bf[t].f;
+            TAGPU_RSLOT* o = &s->slot[(t / cols) * TAGPU_R_SLOTCOLS + (t % cols)];
             int p = f->wrap ? s_w.depth : 0;
-            int x = (t / cols) * TAGPU_R_SLOTCOLS + (t % cols);   /* the 8x8 table's texel */
-            s->rect[x * 4 + 2] = (float)(f->w + 2 * p); s->rect[x * 4 + 3] = (float)(f->h + 2 * p);
-            s->src[x * 4] = (float)f->ax; s->src[x * 4 + 1] = (float)f->ay;
-            s->src[x * 4 + 2] = (float)f->w; s->src[x * 4 + 3] = (float)f->h;
-            s->key[x * 4] = (float)f->key;
+            o->rw = f->w + 2 * p; o->rh = f->h + 2 * p;
+            o->ax = f->ax; o->ay = f->ay; o->sw = f->w; o->sh = f->h;
+            o->key = f->key;
+            o->dx = f->dx; o->dy = f->dy; o->border = f->border;
+            o->padR = f->padR; o->padB = f->padB;
         }
         r.kind = TAGPU_RDRAW_FILL;
-        r.rect = s->rect; r.src = s->src; r.key = s->key;
         if (!s->be->draw(&r)) { j->failed = 1; tagpu_rcore_job_drop(j); return 0.0; }
-        j->pass = 1; j->group = 0; j->srcAct = 0;
-        units = (double)TW * TH;
+        j->pass = 1; j->band = 0; j->srcAct = 0;
+        units = (double)r.gw * r.gh;
     } else if (j->pass <= s_w.depth) {
         const TAGPU_RLAYER* L = &s_w.layer[j->pass - 1];
-        int n = (int)L->kout - j->group; if (n > s->nk) n = s->nk;
+        int last = j->pass == s_w.depth;
         r.kind = TAGPU_RDRAW_CONV;
-        r.rect = s->rect;
-        r.L = L; r.group = j->group; r.n = n; r.srcAct = j->srcAct;
-        r.relu = j->pass < s_w.depth ? 1 : 0;
+        r.layer = j->pass - 1; r.L = L; r.last = last; r.srcAct = j->srcAct;
+        r.y0 = j->band * TAGPU_R_BAND;
+        r.rows = r.gh - r.y0 < TAGPU_R_BAND ? r.gh - r.y0 : TAGPU_R_BAND;
         if (!s->be->draw(&r)) { j->failed = 1; tagpu_rcore_job_drop(j); return 0.0; }
-        /* the cost is the FULL NK the draw was set up for, not the `n` tiles
-           the tail of a layer actually needs: the estimate has to describe
-           what the GPU was asked to do or the budget drifts on every layer
-           whose kout is not a multiple of NK */
-        units = (double)TW * TH * L->jin * s->nk;
-        j->group += s->nk;
-        if (j->group >= (int)L->kout) { j->group = 0; j->srcAct = 1 - j->srcAct; j->pass++; }
+        /* the last layer's output tile is padded to two (the kernel's LAST
+           computes eight channels), and the cost says what the GPU was asked */
+        units = (double)r.gw * r.rows * L->jin * (last ? 2 : L->kout);
+        j->band++;
+        if (j->band * TAGPU_R_BAND >= r.gh) { j->band = 0; j->srcAct = 1 - j->srcAct; j->pass++; }
     } else {
-        int t, nv = 0;
-        for (t = 0; t < j->bn; t++) {
-            const TAGPU_RGLSL_FRAME* f = &j->bf[t].f;
-            float x0 = (float)(f->dx - f->border), y0 = (float)(f->dy - f->border);
-            float x1 = (float)(f->dx + f->w + f->border + f->padR), y1 = (float)(f->dy + f->h + f->border + f->padB);
-            float sc = (float)(t % cols), sr = (float)(t / cols);
-            float xs[6] = { x0, x1, x0, x1, x1, x0 }, ys[6] = { y0, y0, y1, y0, y1, y1 };
-            int k;
-            for (k = 0; k < 6; k++) {
-                float* o = s->verts + (size_t)nv * 8;
-                o[0] = xs[k]; o[1] = ys[k]; o[2] = (float)f->dx; o[3] = (float)f->dy;
-                o[4] = sc; o[5] = sr; o[6] = (float)f->w; o[7] = (float)f->h;
-                nv++;
-            }
-        }
+        int t;
         r.kind = TAGPU_RDRAW_OUT;
-        r.rect = s->rect; r.src = s->src; r.key = s->key;
-        r.verts = s->verts; r.nv = nv; r.srcAct = j->srcAct;
+        r.srcAct = j->srcAct;
         if (!s->be->draw(&r)) { j->failed = 1; tagpu_rcore_job_drop(j); return 0.0; }
-        units = (double)j->bn * (S + 2) * (S + 2) * s_w.layer[s_w.depth - 1].jin;
+        units = (double)j->bn * (S + 2) * (S + 2);
         j->rbatches++; j->tbatches++;
         for (t = 0; t < j->bn; t++) { j->rframes++; j->tframes++; if (j->bf[t].f.wrap) j->rwrap++; }
         if (s_opt.log) {
@@ -512,16 +479,20 @@ static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
     return units;
 }
 
-/* the job whose batch is in flight, else the lowest prio with a queue */
+/* the job whose batch is in flight, else the lowest prio with a queue. Under
+   the self-test's gate a job of non-negative prio is not a candidate at all. */
 static TAGPU_RCORE* pick_job(TAGPU_RSCHED* s)
 {
     TAGPU_RCORE* best = NULL;
     int i;
-    for (i = 0; i < TAGPU_R_MAXJOBS; i++)
-        if (s->jobs[i].used && !s->jobs[i].failed && s->jobs[i].inflight) return &s->jobs[i];
+    for (i = 0; i < TAGPU_R_MAXJOBS; i++) {
+        TAGPU_RCORE* j = &s->jobs[i];
+        if (j->used && !j->failed && j->inflight && (!s->gate || j->prio < 0)) return j;
+    }
     for (i = 0; i < TAGPU_R_MAXJOBS; i++) {
         TAGPU_RCORE* j = &s->jobs[i];
         if (!j->used || j->failed || j->qn == 0) continue;
+        if (s->gate && j->prio >= 0) continue;
         if (!best || j->prio < best->prio) best = j;
     }
     return best;
@@ -538,15 +509,15 @@ static void job_drained(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         /* fps = frames the game drew while the run lasted (every step call,
            drawn in or not) over the wall; the GPU figure is the slices this
            job started, so its share says how much of the work it timed */
-        _snprintf(b, sizeof b, "%s: %s: done: %d frames (%d wrap-padded) in %d batches, %d draws in %d of %u frames = %.0f ms wall since begin (%.1f fps while restoring); GPU %.0f ms measured over %.0f%% of the work; %dx%d %s NK=%d budget %.0f ms",
+        _snprintf(b, sizeof b, "%s: %s: done: %d frames (%d wrap-padded) in %d batches, %d dispatches in %d of %u frames = %.0f ms wall since begin (%.1f fps while restoring); GPU %.0f ms measured over %.0f%% of the work; %dx%d fp32 budget %.0f ms",
                   s->be->name, j->tag, j->rframes, j->rwrap, j->rbatches, j->rdraws, j->rslices, frames, wall,
                   wall > 0.0 ? 1000.0 * frames / wall : 0.0, j->rgpuNs / 1e6,
                   j->runits > 0.0 ? 100.0 * j->rgpuUnits / j->runits : 0.0,
-                  s_w.depth, s_w.ch, s_opt.fp16 ? "fp16" : "fp32", s->nk, s_opt.budget);
+                  s_w.depth, s_w.ch, s_opt.budget);
         rlog(b);
     } else if (s_opt.log || s->slice - j->lastTallySlice >= QUEUE_LOG_FRAMES) {
         j->lastTallySlice = s->slice;
-        _snprintf(b, sizeof b, "%s: %s: queue drained: %d frames in %d batches this run, %u frames from the first queued to the last painted (%.0f ms, %d slices drawn in); %d frames, %d batches, %d draws so far",
+        _snprintf(b, sizeof b, "%s: %s: queue drained: %d frames in %d batches this run, %u frames from the first queued to the last painted (%.0f ms, %d slices drawn in); %d frames, %d batches, %d dispatches so far",
                   s->be->name, j->tag, j->rframes, j->rbatches, frames, wall, j->rslices,
                   j->tframes, j->tbatches, j->tdraws);
         rlog(b);
@@ -613,17 +584,9 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
     s->idle = 0;
     allowed = (s->timer && s->nsPerUnit > 0.0) ? s_opt.budget * 1e6 / s->nsPerUnit : 0.0;
 
-    s->be->state_push(s->slice);
     q = s->qFrame & 1;
     if (s->timer) { s->be->slice_begin(q); s->qJob[q] = j; }
     do {
-        /* THE SLICE ENDS BEFORE A DRAW THE BACKEND CANNOT HOLD, not at the
-           draw that overflows it: an overflowing draw fails its job, and a
-           failed job latches its lane unrestored (each consumer's
-           `s_rjTried`) until that pass is next torn down.
-           Asked before the batch is formed as well, so a batch is not
-           committed on a slice that cannot draw it. */
-        if (s->be->room && !s->be->room()) break;
         /* every batch boundary re-picks, so a higher-priority job that
            gained work takes the budget as soon as the batch in flight lands */
         if (!j->inflight) {
@@ -647,7 +610,6 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
     } while (1);
     if (s->timer) { s->be->slice_end(q); s->qUnits[q] = spent; s->qHave[q] = 1; s->qFrame++; }
     s->slice++;
-    s->be->state_pop(s->slice);
 }
 
 void tagpu_rcore_lost(TAGPU_RSCHED* s)
@@ -659,5 +621,5 @@ void tagpu_rcore_lost(TAGPU_RSCHED* s)
     }
     s->qHave[0] = s->qHave[1] = 0; s->qJob[0] = s->qJob[1] = NULL;
     s->qFrame = 0; s->qStall = 0; s->nsPerUnit = 0.0;
-    s->slice = 0; s->idle = 0; s->timer = 0;
+    s->slice = 0; s->idle = 0; s->timer = 0; s->gate = 0;
 }

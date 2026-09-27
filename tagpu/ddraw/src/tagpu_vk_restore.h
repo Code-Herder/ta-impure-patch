@@ -1,23 +1,23 @@
 #ifndef TAGPU_VK_RESTORE_H
 #define TAGPU_VK_RESTORE_H
-/* The Classic++ RESTORER, drawn by Vulkan.
+/* The Classic++ RESTORER, computed by Vulkan.
    Contract only; tagpu_vk_restore.c is the backend.
 
    IT IS THE BACKEND OF tagpu_restore_core.c, not a restorer of its own.
    The scheduler -- the job queues, batch formation, the pass sequencer, the
    cost model and the GPU-time budget -- is the core's, and this file
-   implements the thirteen-entry TAGPU_RBACKEND against it. Everything below is therefore
-   about DEVICE RESOURCES and THREE DRAWS, and nothing below decides when to
-   draw.
+   implements the ten-entry TAGPU_RBACKEND against it. Everything below is
+   therefore about DEVICE RESOURCES and FOUR COMPUTE SHADERS, and nothing below
+   decides when to dispatch.
 
    IT IS NOT ONE OF THE FRAME'S PASSES, and tagpu_vk_shadow.c is the precedent
    rather than any of the world passes:
 
-     * it draws into targets of its OWN (the activation arrays) and into the
-       CONSUMER'S atlas image -- never into the swapchain;
-     * so its render passes are its own, begun inside the seam's `prepare`,
-       which is legal there and nowhere else because render passes may not
-       nest and `prepare` runs before vkCmdBeginRenderPass;
+     * it writes buffers of its OWN (the activations) and the CONSUMER'S atlas
+       image -- never the swapchain;
+     * its dispatches are recorded inside the seam's `prepare`, before
+       vkCmdBeginRenderPass, because a dispatch may not be recorded inside a
+       render pass;
      * and IT MUST NOT BE COUNTED IN `ndraw` OR `nclaim`. Those count the
        passes that put pixels in THIS frame, so that two of them cannot
        contaminate one A/B capture. This pass puts none there, and counting it
@@ -27,19 +27,17 @@
 
    WHAT IT IS FED, AND WHY THERE IS NO MIRROR. A job's two surfaces are
    ALREADY on the device for every consumer: the source is the pass's own
-   atlas image (the RGBA base for a world pass, the R8 atlas for the UI) and the destination is the restored twin it already binds
-   (binding 40 in tagpu_vk_feat.c, 42 in tagpu_vk_fx.c). So this pass needs no
-   CPU mirror and no read-back. What the consumer owes is the
-   destination's usage widened to carry COLOR_ATTACHMENT and its view lent
-   here; the palette is the one thing that still crosses as bytes, because it
-   is 1 KB and the engine's own table is the source of truth.
+   atlas image (the RGBA base for a world pass, the R8 atlas for the UI) and
+   the destination is the restored twin it already binds (binding 40 in
+   tagpu_vk_feat.c, 42 in tagpu_vk_fx.c). So this pass needs no CPU mirror and
+   no read-back. What the consumer owes is the destination's usage widened to
+   carry STORAGE and its view lent here; the palette is the one thing that
+   still crosses as bytes, because it is 1 KB and the engine's own table is the
+   source of truth.
 
-   THE PREREQUISITES ARE ASKED OF THE DEVICE, NOT ASSUMED. Four limits and
-   three formats, each refused BY NAME when it does not hold, the way `flipok`
-   already is. They were measured on the reference setup and
-   again through winevulkan, and they all held -- which is exactly why the
-   check is here rather than skipped: a limit that holds on one device is not a
-   property of the port. */
+   THE PREREQUISITES ARE ASKED OF THE DEVICE, NOT ASSUMED. The shaders stay
+   inside Vulkan 1.0's minimums, and what a device can still answer
+   differently is refused BY NAME when it does not hold. */
 
 #include "tagpu_vk_pass.h"
 #include "tagpu_restoreglsl.h"      /* TAGPU_RGLSL_FRAME, the shared frame */
@@ -51,16 +49,14 @@ typedef struct TAGPU_VKRJOB TAGPU_VKRJOB;
    every other entry point here is a no-op until it has returned 1.
 
    The refusals, each named in the log rather than reported as a failure:
-     maxColorAttachments / maxFragmentOutputAttachments < 1   no MRT at all
-     maxUniformBufferRange < one k-block                      no weights fit
-     maxImageArrayLayers   < the model's channel tiles         no activations
-     no usable timestamps                                      fixed slices
-     RGBA32F (or RGBA16F under `fp16`) not colour-attachment+sampled+linear
-     RGBA8 not colour-attachment                               no destination
+     the submitting queue family has no COMPUTE
+     R8G8B8A8_UNORM is not a storage image (the specification requires it)
+     maxStorageBufferRange < the largest activation buffer
+     no usable timestamps                                     fixed slices
    The timestamp one is the only soft refusal: without a GPU timer the core
-   falls back to a fixed draw count per slice, which is slower and safe. Every
-   other one stands the pass down, and Classic++ then stays indexed -- which
-   is the shipped fallback, not a fault. */
+   falls back to a fixed dispatch count per slice, which is slower and safe.
+   Every other one stands the pass down, and Classic++ then draws the
+   original dithered art -- which is the shipped fallback, not a fault. */
 int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 
 /* A job: frames read from `srcView` (srcW x srcH) -- with `srcBase` 1 the
@@ -68,12 +64,13 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
    (the world passes); with 0 an R8 atlas of palette indices read through the
    palette `pal` (256 x R,G,B,pad; snapshotted now), which is the UI's -- painted
    into `dstImg`/`dstView` (RGBA8, dstW x dstH). The destination MUST have been
-   created with VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; it is cleared to alpha 0
+   created with VK_IMAGE_USAGE_STORAGE_BIT, and `dstView` must be an
+   R8G8B8A8_UNORM view of level 0 alone; it is cleared to alpha 0
    here unless `repaint`, which is the palette-moved case that recolours in
    place instead of blanking the world for the length of the job.
    `tag` prefixes the log lines, `prio` orders it against the other jobs
    (terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures
-   5), `oneshot` marks a fixed list whose completion is logged as the
+   5; a negative prio is the backend's own self-test), `oneshot` marks a fixed list whose completion is logged as the
    restore's "done" line.
    NULL, with the reason in tagpu.log, when the model or the device cannot.
    Render thread only, and only between the seam's frames. */
@@ -94,16 +91,16 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
 
    `mips` is the deepest level (1..TAGPU_VK_MAXMIP) and `dim` level 0's square
    size; `attach[i]` and `sample[i]`, for i in 0..mips-1, are views of level
-   i+1 and level i of `dstImg`, each naming EXACTLY ONE LEVEL. That is what
-   makes reducing level i into level i+1 sound with no copy and no second
-   image: the source view cannot reach the level being written, which is the
-   guarantee `levelCount = 1` buys. The destination image needs COLOR_ATTACHMENT usage, as it
-   already does for the OUT pass.
+   i+1 (written, as a storage image) and level i (sampled) of `dstImg`, each
+   naming EXACTLY ONE LEVEL. That is what makes reducing level i into level
+   i+1 sound with no copy and no second image: the source view cannot reach
+   the level being written, which is the guarantee `levelCount = 1` buys. The
+   destination image needs STORAGE usage, as it already does for OUT.
 
-   The levels are then reduced ONCE PER SLICE that painted -- and once over an
-   unpainted twin at the start, because a Vulkan image's levels begin UNDEFINED
-   and the consumer samples the whole chain. The arithmetic is the exact
-   integer (sum + 1) / 4 of gpu-status 2.45 and 2.46.
+   The levels are then reduced ONCE PER SLICE that painted, and not before the
+   first paint: until `job_painted` moves the consumer does not sample the
+   chain. The arithmetic is the exact integer (sum + 1) / 4 of gpu-status 2.45
+   and 2.46.
 
    1 when the chain was registered. 0 leaves the job chainless -- it still
    restores level 0, and the consumer must then decide whether a twin with no
@@ -132,9 +129,9 @@ int  tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j);
 int  tagpu_vk_restore_job_remap(TAGPU_VKRJOB* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
                                 void* ctx, int* kept, int* requeued, int* dropped);
 /* 1 when the destination is a picture a move may carry: made ready by the
-   job's first draw -- cleared, in SHADER_READ_ONLY_OPTIMAL -- and with no mip
+   job's first OUT -- cleared, in SHADER_READ_ONLY_OPTIMAL -- and with no mip
    chain, whose levels a move of level 0 would leave behind. 0 before the first
-   draw, when the job's own clear is still to come. */
+   OUT, when the job's own clear is still to come. */
 int  tagpu_vk_restore_job_dst_live(const TAGPU_VKRJOB* j);
 void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
 
@@ -151,10 +148,10 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
    recorded into the frame's command buffer and read at that slot's next step,
    so nothing waits on the device. */
 
-/* ONE SLICE, from the seam's `prepare` and NOWHERE ELSE: issue draws for the
-   active job until the budget is spent. `cb` must be recording and OUTSIDE any
-   render pass -- this begins its own. `slot` is the frame slot, for the
-   per-slot staging and the timestamp pair.
+/* ONE SLICE, from the seam's `prepare` and NOWHERE ELSE: issue dispatches for
+   the active job until the budget is spent. `cb` must be recording and OUTSIDE
+   any render pass -- a dispatch may not be recorded inside one. `slot` is the
+   frame slot, for the retire's mask and the byte dump.
    Does nothing until `up` has returned 1, and nothing while the renderer
    switch the jobs pause under is off; the queues keep filling either way. */
 void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);

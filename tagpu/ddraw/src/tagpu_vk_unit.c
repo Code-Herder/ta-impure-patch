@@ -1796,13 +1796,13 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     s_arLvlN = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     s_arDim = 0; s_arMips = 0; s_arHave = 0;
-    /* COLOR_ATTACHMENT: the restorer paints level 0 into this image through a
-       render pass and reduces the rest into it the same way, so every level is
-       a colour attachment at some point. The usage flag does not change how
-       the image is sampled. */
+    /* STORAGE: the restorer paints level 0 into this image from a compute
+       shader and reduces the rest into it the same way, so every level is a
+       storage image at some point. The usage flag does not change how the
+       image is sampled. */
     if (!mk_image(d, dim, dim, mips + 1, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                  VK_IMAGE_USAGE_STORAGE_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView))
         /* every out-param is NULL on this path, from EVERY exit of `mk_image`
            and not merely because a `kill_image` ran before this call -- see its

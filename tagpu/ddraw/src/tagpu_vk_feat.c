@@ -348,19 +348,19 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     return 1;
 }
 
-/* `usage` IS THE CALLER'S BECAUSE THE RESTORED TWIN IS A RENDER TARGET. The
-   base atlas is only ever copied into and sampled, but the twin is what this
-   lane's own restorer PAINTS, and a Vulkan image may only be a colour
-   attachment if it was created saying so. Nothing infers it from the format --
+/* `usage` IS THE CALLER'S BECAUSE THE RESTORED TWIN IS WRITTEN BY A SHADER.
+   The base atlas is only ever copied into and sampled, but the twin is what
+   this lane's own restorer PAINTS, as a storage image, and a Vulkan image may
+   only be one if it was created saying so. Nothing infers it from the format --
    the destination's usage is a promise made at creation and tagpu_vk_restore.h
    asks for it by name. */
 /* WHAT EACH OF THIS PASS'S IMAGES IS FOR. The restored twin carries
-   COLOR_ATTACHMENT because this lane's restorer paints into it;
+   STORAGE because this lane's restorer paints into it;
    it costs nothing when nothing restores, and an image created without it
    could not be lent to the restorer at all. It is a transfer source as well,
    because a repack's move carries its cells (`twin_move`). */
 #define IMG_SAMPLED  (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
-#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | \
+#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_STORAGE_BIT | \
                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
 /* the base atlas is also a transfer source, for a repack's move */
 #define IMG_BASE     (IMG_SAMPLED | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)

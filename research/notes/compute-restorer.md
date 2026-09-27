@@ -38,7 +38,7 @@ Against the torch reference, the fp32 kernel differs on 0.0011 % of bytes, by at
 |---|---|
 | D1 | **Two landings.** Landing 1 swaps the backend: fp32 compute for all six jobs (terrain, features, effects, units, UI, pictures) under the existing core, the fragment backend deleted. It is tested on Windows too, sharing the Windows test machine with the mod-compatibility regression work. Landing 2 is the terrain seam fix. |
 | D2 | **A self-test at every launch** runs the same pipelines on a synthetic probe (nothing from the original game) and checks the result against D13's reference. A crash attributed to the restorer records `off` for that device and driver, and the game relaunches at once with a notice. A new driver version gets a fresh try. |
-| D3 | **tiny for terrain, full for everything else** (units, features, effects, UI). Terrain is the volume; tiny (6 layers × 24 channels, 22k MACs per pixel) costs about a tenth of full (12 × 64, 372k). It is gated on a wider terrain A/B first (water, snow, lava and metal maps); any visible loss sends terrain back to full. The switch goes in with landing 2: landing 1 changes no picture. |
+| D3 | **tiny for terrain, full for everything else** (units, features, effects, UI). Terrain is the volume; tiny (6 layers × 24 channels, 22k MACs per pixel) costs about a tenth of full (12 × 64, 372k). It was gated on a wider terrain A/B (D15); **the owner judged the sheet on 2026-09-27: tiny wins** — the numbers are under the table. The switch goes in with landing 2: landing 1 changes no picture. |
 | D4 | **The browser lab's `restore=glsl` lane is dropped.** The lab keeps `restore=pack`. |
 | D5 | **A neighbourhood atlas for terrain:** one restored copy per distinct tile graphic *plus its 8 neighbours*, drawn through a per-cell index. King of the Hill: 2,978 graphics, 69,958 spots, 26,827 keys, 118 MB. Median map 35 MB, Two Continents 193 MB, Seven Islands (the largest) 303 MB, against 14–51 MB for today's per-graphic atlas. A map whose atlas does not fit the GPU's memory budget keeps today's atlas, seams included. |
 | D6 | **The tile-grid lines are left for now** — see the TODO below. |
@@ -51,6 +51,25 @@ Against the torch reference, the fp32 kernel differs on 0.0011 % of bytes, by at
 | D13 | **The self-test's reference is computed on the CPU at launch**, by a plain C version of the network from the weight files actually loaded, on a worker thread while the game starts (about 0.5 s; 1–2 s on an old CPU). It passes when every byte is within one level of it. Nothing has to be kept in step with the weight files, and the build needs no torch. |
 | D14 | **What counts as the restorer crashing:** a crash on the render thread inside a restorer call; the GPU device lost while a frame carrying restorer work is unfinished (today a lost device takes the whole Vulkan renderer down, whoever caused it); the launch self-test failing. Nothing else is blamed. A wrong blame costs only undithering on that driver, and D12's row retries. |
 | D15 | **D3's gate is a sheet the owner judges**, published as an artifact: eight maps picked by terrain type (water, snow, lava, metal, desert, grass, rock, the largest), each with the crop where tiny and full differ most and one ordinary crop, shown dithered, tiny, full and their difference. Every image opens in a lightbox that zooms to 100 % and beyond. The numbers go in this note beside the verdict; a map where the owner sees a loss sends terrain back to full. |
+
+**D3's gate, the numbers the verdict was given on.** Whole maps, restored offline with the
+unditherer (torch fp32, per-tile, as the game restores today); the difference is |tiny − full| per
+byte, in levels of 255:
+
+| map | terrain | mean | 99.9 % within | max | bytes that differ | PSNR (dB) |
+|---|---|---|---|---|---|---|
+| Two Continents | grass | 2.36 | 13 | 48 | 85 % | 38.1 |
+| Brain Coral | water | 2.00 | 11 | 27 | 83 % | 39.6 |
+| Anteer Strait | snow / ice | 2.60 | 13 | 27 | 87 % | 37.4 |
+| Lava Alley | lava | 1.67 | 9 | 35 | 77 % | 41.0 |
+| Core Prime Industrial Area | metal | 1.20 | 7 | 27 | 72 % | 43.8 |
+| Painted Desert | desert | 1.99 | 11 | 36 | 83 % | 39.8 |
+| Comet Catcher | rock | 1.13 | 5 | 12 | 72 % | 44.6 |
+| Seven Islands | the largest | 0.80 | 5 | 24 | 62 % | 47.1 |
+
+Most bytes differ, almost all by one or two levels, which is below what the eye separates when the
+two are flipped at 100 %; the sheet's difference panel amplifies by 16 to show where. Measured cost on
+the reference setup's RTX 4070 (torch, cuDNN): tiny 10.6 ns per pixel, full 65.1.
 
 **When the restorer is off** (the self-test failed, or it crashed on this driver), Classic++ keeps
 running and draws the original dithered art.
