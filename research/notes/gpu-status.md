@@ -19519,20 +19519,26 @@ most 0.0019 % of bytes (the table is in the plan note). The fragment backend, it
 the `fp16`, `nk=` and `tiny` tokens of `tagpu_restoreglsl.on`, and the browser lab's
 `restore=glsl` lane are deleted.
 
-**No engine address is patched or read.** The one thing it does to the process is an
-unhandled-exception filter, installed at the restorer's first bring-up with
-`SetUnhandledExceptionFilter` ahead of TA's own `0x4DA2A0` (MEASURED: the previous filter it
-logs is `004DA2A0`). TA's filter calls no earlier filter, so ours has to run first; it acts only
-when the render thread faults inside one of the backend's public calls and hands every other
-exception to TA's. The engine side is in the [engine map](exe-reverse-engineering.html), *TA's
-crash filter*.
+**No engine address is patched or read.** What it does to the process: an unhandled-exception
+filter, installed at the restorer's first bring-up with `SetUnhandledExceptionFilter` ahead of
+TA's own `0x4DA2A0` (MEASURED: the previous filter it logs is `004DA2A0`). TA's filter calls no
+earlier filter, so ours has to run first; it acts only when the render thread faults inside a
+backend call that builds or dispatches — never in the teardown — and hands every other exception
+to TA's. After a crash it starts TotalA.exe again, and the new process waits at
+`DLL_PROCESS_ATTACH` for the old one to end, because TotalA.exe exits silently while another copy
+holds its single-instance semaphore (`0x49E885`). The engine side is in the
+[engine map](exe-reverse-engineering.html), *TA's crash filter* and *TA's single-instance test*.
+The record is keyed `vendor:device:driver:build`, so a new driver or a new DLL tries again, and
+the crash marker stays on disk until the record it stands for is.
 
 **The seam's part** (`tagpu_vk.c`). Every Vulkan failure that ends the lane (`-2`) notes whether
-it was a lost device or a fence timeout. Before the teardown, such a failure asks the guard, which
-blames the restorer only when a frame carrying restorer work is still unfinished: the backend
-sets a bit for the frame slot whenever its step records anything, and the seam clears it after
-that slot's fence wait. A blamed failure records the device and driver off and relaunches the
-game; any other still takes the Vulkan renderer down as before.
+the device reported itself lost, or a fence or an acquire only timed out; a timeout asks
+`vkDeviceWaitIdle` and counts as lost only when that answers `VK_ERROR_DEVICE_LOST`. A loss asks
+the guard, which blames the restorer only when a frame carrying restorer work is still
+unfinished: the backend sets a bit for the frame slot whenever its step records anything, and the
+seam clears it after that slot's fence wait, and for every slot once the device is proven idle or
+destroyed. A blamed loss records the device off and relaunches the game; any other still takes
+the Vulkan renderer down as before.
 
 **The consumers** (`tagpu_vk_terr.c`, `_feat.c`, `_fx.c`, `_unit.c`, `_gui.c`). Each one's "the
 restorer refused" latch now holds for one restorer epoch; the render options' retry moves the
@@ -19553,7 +19559,8 @@ terrain takes 3.8 s of wall time and 2.55 s of GPU, against the fragment backend
 (§2.94). §2.95's barrier fix belonged to the fragment backend's render passes; compute has none.
 The crash path ran there too: the filter ahead of `004DA2A0`, one relaunch, the record, the notice.
 
-**Not covered.** The effects job on the AMD card (the scene drew no effects). The residuals the
-plan note lists: a relaunch that can deadlock inside a crash
-holding the heap lock (the record is on disk first), and a record kept in memory only when the
-settings store cannot be read.
+**Not covered.** The effects job on the AMD card (the scene drew no effects). The timeout rule
+(no lever makes a fence time out on a live device). The residuals the plan note lists: a relaunch
+that can stop inside a crash holding the heap lock (the marker is on disk first), and a store
+that cannot be written, which leaves the marker standing as the record and the notice showing at
+every launch.

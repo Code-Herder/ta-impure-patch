@@ -1952,6 +1952,23 @@ WinMain sees an exception first and must pass on what is not its own; `tagpu_res
 is installed at the restorer's first bring-up and logs `004DA2A0` as the filter it passes to
 (MEASURED on the reference setup).
 
+### TA's single-instance test — `0x49E877..0x49E8AB` [DISASSEMBLED + MEASURED 2026-09-27]
+
+In WinMain, right after the crash-reporting setup above: `OpenSemaphoreA(0x1F0003
+SEMAPHORE_ALL_ACCESS, FALSE, name)` at `0x49E885` (the IAT slot `0x4FC0AC`, KERNEL32's seventh
+thunk from `0x4FC094`), the name through the pointer at `0x50971C`, which holds `0x507A58`,
+`"Total Annihilation"`. A non-NULL handle means another TotalA.exe runs, and WinMain returns −1
+at once (`0x49E88F`), with no message. Otherwise `CreateSemaphoreA(NULL, 1, 1, name)` at
+`0x49E8AB` (the slot `0x4FC0B0`) creates it, and the process holds it until it ends.
+
+**What this means for us**: a process that starts TotalA.exe again, as the restorer's crash
+relaunch does ([compute-restorer](compute-restorer.html)), must not let the new process reach
+`0x49E885` while the old one still holds the semaphore, or the relaunch silently exits.
+`tagpu_rguard_attach` waits for the old process at `DLL_PROCESS_ATTACH`, which runs before WinMain:
+a terminating process's handles are closed before its process object is signalled, so once the
+wait returns the semaphore is gone. MEASURED on the reference setup: the relaunch logs that it
+waited, and comes up.
+
 ### The unit sync's keys, and the join's pace — `0x4B6BA0`, def `+0x13E`, `0x46D6C0..0x46DEC8` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The key.** The menu-time loader `0x42A8D0` reads each FBI whole (`0x4BB7C0`) and stores

@@ -88,26 +88,43 @@ On the reference setup the CPU reference takes 313–339 ms and the readback mat
 
 - **A crash.** An unhandled-exception filter, installed at the restorer's first bring-up ahead of
   TA's own (`0x4DA2A0`, which writes the crash report and calls no earlier filter). It blames the
-  restorer only while the render thread is inside one of the backend's public calls; everything
-  else goes on to TA's filter. Unhandled only, never vectored: drivers raise and catch
-  first-chance exceptions of their own.
-- **A lost device.** The seam blames the restorer when the device is lost or a frame fence times
-  out while a frame that carried restorer work is unfinished (a per-slot mask, set when a step
-  records anything and cleared after that slot's fence wait).
+  restorer only while the render thread is inside a backend call that builds or dispatches
+  (bring-up, a job's creation, a chain, a step); everything else goes on to TA's filter. The
+  teardown (a job's free, the lane going down) is not guarded: a fault there is the driver
+  freeing objects, and at exit it would relaunch a game the player has just quit. Unhandled only,
+  never vectored: drivers raise and catch first-chance exceptions of their own.
+- **A lost device.** The seam blames the restorer when the device reports itself lost while a
+  frame that carried restorer work is unfinished (a per-slot mask, set when a step records
+  anything, cleared after that slot's fence wait, and cleared for every slot once the device is
+  proven idle or destroyed). A fence wait or an acquire that times out is not a loss by itself —
+  a presentation stall does that too — so the seam asks `vkDeviceWaitIdle` and blames only when
+  it answers `VK_ERROR_DEVICE_LOST`.
 - **Relaunch.** For a crash or a lost device, the process writes `tagpu_restore_crashed.txt`
-  from buffers built at install (nothing on that path allocates), starts `TotalA.exe` again with
-  its own command line and working directory plus `TAGPU_RESTORE_RELAUNCHED=1`, and ends. There is
-  no relaunch when the marker could not be written, and a relaunched process never relaunches.
-- **The record** is one key, `vendor:device:driver` in hex: `restoreoff=` in `impure.cfg`, or
-  `tagpu_restore_off.txt` under `tagpu_defaults.off`. The next process turns the marker into the
-  record and shows the notice. A record naming another device or driver is dropped.
+  from buffers built at install (nothing of ours on that path allocates), starts `TotalA.exe`
+  again with its own command line and working directory plus
+  `TAGPU_RESTORE_RELAUNCHED=<pid>:<creation time>`, and ends. The new process waits at
+  `DLL_PROCESS_ATTACH` until the one that crashed has ended — the pid and its creation time, so a
+  reused pid is not waited on — because TotalA.exe exits silently while another copy holds its
+  single-instance semaphore ([exe map](exe-reverse-engineering.html) `0x49E885`). There is no
+  relaunch when the marker could not be written, and a relaunched process never relaunches.
+- **The record** is one key, `vendor:device:driver:build` — the ids in hex, the build the DLL's
+  commit (`-dirty` from an unclean tree): `restoreoff=` in `impure.cfg`, or
+  `tagpu_restore_off.txt` under `tagpu_defaults.off`. The build is in it so that a DLL which
+  fixes a fault does not inherit the record of the one that had it; a record naming another
+  device, driver or build is dropped and the restorer tried again. The next process turns the
+  marker into the record and shows the notice, and deletes the marker only once the record is on
+  disk (the store's flush): until then the marker is the record, and a launch that dies first
+  reads it again.
 - **The notice** is one message box on its own thread saying what happened and that it is tried
-  again after a driver update, or from the render options.
+  again by itself after a driver or game update, or from the render options.
 - **The render options.** *Undithered assets* has a third stage, **"Off (driver)"**, shown while
   the record names this device. D12 asked for "Off (this driver)"; that text overran the row's
-  three stage lights, so it is shortened. A click on it clears the record, moves an epoch and
-  goes to On. The backend's refusal and every consumer's "the restorer refused" latch hold only for
-  the epoch of their attempt, so all of them ask again; another failure turns it off again.
+  three stage lights, so it is shortened. Picking On while the device is recorded off — from
+  "Off (driver)" or from Off — asks for the record to be cleared; the render thread's next tick
+  clears it and then moves an epoch. The backend's refusal and every consumer's "the restorer
+  refused" latch hold only for the epoch of their attempt, so all of them ask again; another
+  failure turns it off again. Under `tagpu_defaults.off` the row is greyed like the rest of the
+  store's rows, and the file record is cleared by deleting it.
 - **The fault lever** `tagpu_restorefault.on` drives each path: `probe` spoils one byte of the
   self-test's readback, `crash` faults inside FILL, and `lost` has the seam report a device loss
   while restorer work is in flight.
@@ -128,9 +145,12 @@ from the source dumped beside it, with the DLL's key stand-in, and holds the twi
 | UI pictures | 9 | 17 of 2,906,289 | 1 | — |
 
 **The guard**, one launch per path: the self-test passing; `probe` failing it (the notice, the
-row reading "Off (driver)"); the record holding on the next launch; the row's retry passing;
-`crash` and `lost` each relaunching once, with the record and the notice in the new process;
-the file record under `tagpu_defaults.off`; a record naming another driver dropped.
+row reading "Off (driver)"); the record holding on the next launch; the row's retry, both from
+"Off (driver)" and through Off back to On; `crash` and `lost` each relaunching once, the new
+process logging that it waited for the old one, then the record, the notice and the marker's
+deletion once the record was on disk; the file record under `tagpu_defaults.off`; a record
+without a build (`10de:2786:94d50000`) dropped as a new build, and the self-test passing after
+it. The timeout rule has no fault lever and was not exercised.
 
 **The cost**, the same instance and scenario (`feat-forest`, 1024 × 768, vsync off, a private
 display, the RTX 4070), terrain only:
@@ -174,17 +194,20 @@ OUT on a keyed base atlas exactly as the features' job does.
 
 ### Not closed by landing 1
 
-- **The crash filter's relaunch** calls `CreateProcessA`. A crash that holds the heap lock can
-  deadlock it; the marker is written before, so the next launch still has the record.
-- **An unreadable settings store** keeps the record in memory only: at most one crash and one
-  relaunch per launch by hand.
+- **The crash filter's relaunch** calls `CreateFileA` and `CreateProcessA`, which are the
+  system's and may take the process heap's lock. A crash that holds it can stop there; the marker
+  is written first, so the next launch by hand still has the record.
+- **A settings store that cannot be written** never gets the record, so the marker stays on disk
+  as the record: the restorer stays off for that device and the notice shows at every launch
+  until the store can be written. The row's retry lasts for that process.
+- **The timeout rule is not exercised**: no lever makes a fence time out on a live device.
 
 ## Decisions
 
 | # | decision |
 |---|---|
 | D1 | **Two landings.** Landing 1 swaps the backend: fp32 compute for all six jobs (terrain, features, effects, units, UI, pictures) under the existing core, the fragment backend deleted. It is tested on Windows too, sharing the Windows test machine with the mod-compatibility regression work. Landing 2 is the terrain seam fix. |
-| D2 | **A self-test at every launch** runs the same pipelines on a synthetic probe (nothing from the original game) and checks the result against D13's reference. A crash attributed to the restorer records `off` for that device and driver, and the game relaunches at once with a notice. A new driver version gets a fresh try. |
+| D2 | **A self-test at every launch** runs the same pipelines on a synthetic probe (nothing from the original game) and checks the result against D13's reference. A crash attributed to the restorer records `off` for that device and driver, and the game relaunches at once with a notice. A new driver version, or a new build of the DLL, gets a fresh try. |
 | D3 | **tiny for terrain, full for everything else** (units, features, effects, UI). Terrain is the volume; tiny (6 layers × 24 channels, 22k MACs per pixel) costs about a tenth of full (12 × 64, 372k). It was gated on a wider terrain A/B (D15); **the owner judged the sheet on 2026-09-27: tiny wins** — the numbers are under the table. The switch goes in with landing 2: landing 1 changes no picture. |
 | D4 | **The browser lab's `restore=glsl` lane is dropped.** The lab keeps `restore=pack`. |
 | D5 | **A neighbourhood atlas for terrain:** one restored copy per distinct tile graphic *plus its 8 neighbours*, drawn through a per-cell index. King of the Hill: 2,978 graphics, 69,958 spots, 26,827 keys, 118 MB. Median map 35 MB, Two Continents 193 MB, Seven Islands (the largest) 303 MB, against 14–51 MB for today's per-graphic atlas. A map whose atlas does not fit the GPU's memory budget keeps today's atlas, seams included. |
@@ -194,9 +217,9 @@ OUT on a keyed base atlas exactly as the features' job does.
 | D9 | **No disk cache.** The terrain is restored every time a map is played. |
 | D10 | **Whether the atlas fits** is decided before allocating. Its size is exact once the map loads (keys × cell size). The driver's memory-budget query gives the memory still free for the game; a driver without that query counts a quarter of the GPU's device-local memory as free. The atlas fits when it takes at most half of that free memory. An allocation the driver still refuses falls back as well. |
 | D11 | **Settings and the bar for landing 1.** The `fp16`, `nk=` and `tiny` settings are removed; `budget=` and `log` stay. The swap passes when every job is within one level of the torch reference on under 0.01 % of bytes. The terrain A/B that gates D3 runs offline with the unditherer, so the game has no model switch. |
-| D12 | **The notice.** One message box when the restorer turns itself off (it crashed, or the startup check failed), saying what happened and that it is tried again after a driver update. While it stays off, the render options' *Undithered assets* row reads "Off (driver)" (built shorter than the "Off (this driver)" asked for, which did not fit); picking On clears the record and tries once more, and another crash turns it off again. |
+| D12 | **The notice.** One message box when the restorer turns itself off (it crashed, or the startup check failed), saying what happened and that it is tried again after a driver or game update. While it stays off, the render options' *Undithered assets* row reads "Off (driver)" (built shorter than the "Off (this driver)" asked for, which did not fit); picking On clears the record and tries once more, and another crash turns it off again. |
 | D13 | **The self-test's reference is computed on the CPU at launch**, by a plain C version of the network from the weight files actually loaded, on a worker thread while the game starts (about 0.5 s; 1–2 s on an old CPU). It passes when every byte is within one level of it. Nothing has to be kept in step with the weight files, and the build needs no torch. |
-| D14 | **What counts as the restorer crashing:** a crash on the render thread inside a restorer call; the GPU device lost while a frame carrying restorer work is unfinished (today a lost device takes the whole Vulkan renderer down, whoever caused it); the launch self-test failing. Nothing else is blamed. A wrong blame costs only undithering on that driver, and D12's row retries. |
+| D14 | **What counts as the restorer crashing:** a crash on the render thread inside a restorer call; the GPU device lost while a frame carrying restorer work is unfinished (a fence that only times out counts when the device then reports itself lost; today a lost device takes the whole Vulkan renderer down, whoever caused it); the launch self-test failing. Nothing else is blamed. A wrong blame costs only undithering on that driver, and D12's row retries. |
 | D15 | **D3's gate is a sheet the owner judges**, published as an artifact: eight maps picked by terrain type (water, snow, lava, metal, desert, grass, rock, the largest), each with the crop where tiny and full differ most and one ordinary crop, shown dithered, tiny, full and their difference. Every image opens in a lightbox that zooms to 100 % and beyond. The numbers go in this note beside the verdict; a map where the owner sees a loss sends terrain back to full. |
 
 **D3's gate, the numbers the verdict was given on.** Whole maps, restored offline with the

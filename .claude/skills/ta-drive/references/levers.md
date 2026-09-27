@@ -319,11 +319,18 @@ bring-up and a swapchain rebuild add nothing to them.
   N bytes within 0 level(s) of the CPU reference, computed in … ms`, once per device per process. A
   `self-test FAILED` or `could not be run` line means the art stays dithered.
 - **The restorer can be off by record.** `restoreguard:` lines say why: the crash filter installed
-  at the restorer's first bring-up, a record naming this device (`recorded off for …`), a record dropped for a new driver.
+  at the restorer's first bring-up, a record naming this device (`recorded off for …`), a record
+  dropped for a new driver, card or build. The key is `vendor:device:driver:build`, the build being
+  the DLL's commit, so **every rebuild from a new commit drops the record** and tests again.
   The record is `restoreoff=` in the instance's `impure.cfg`, or `tagpu_restore_off.txt` in the
   gamedir under `tagpu_defaults.off`; `tagpu_restore_crashed.txt` is the marker a crash leaves for
-  the relaunch. Delete all three by hand to start clean; the render options' *Undithered assets*
-  row reading "Off (driver)" is the same record, and clicking it retries.
+  the relaunch, deleted once the relaunch has the record on disk (`the crash marker is deleted`).
+  Delete all three by hand to start clean. The render options' *Undithered assets* row reading
+  "Off (driver)" is the same record, and picking On from it or from Off retries; under
+  `tagpu_defaults.off` that row is greyed, so the file goes by hand.
+- **A relaunch logs `this process is a relaunch … it waited for the crashed process to end`**:
+  it holds at attach until the old process is gone, since TotalA.exe exits silently while another
+  copy holds its semaphore. `tacli ls` then shows the new pid; `tacli` commands keep working.
 
 ## The Vulkan lane
 
