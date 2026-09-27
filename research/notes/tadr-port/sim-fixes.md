@@ -130,11 +130,11 @@ faces of `0x45A2EC` are left there.
   player record (`0x454934`), and what a departing host does to the others.
 - TADR's `IsBadReadPtr` finding under Wine (a guard-page violation escapes and kills the process)
   is recorded in the notes, not in CLAUDE.md.
-- **Kill counts across peers (B8): planned 2026-09-26, not decided.** A kill is counted only where
-  the copy of the victim reads finished, and a copy of a unit created finished that is not a builder
-  reads unfinished until the round robin. The recommendation is that the death record carry the
-  owner's build fraction. The plan and the owner's questions are
-  B8's entry at the end of [the landings](#the-landings).
+- **Kill counts across peers (B8): decided and built 2026-09-26, not landed.** A kill is counted
+  only where the copy of the victim reads finished, and a copy starts unfinished until the owner's
+  round robin reaches it. The death now carries the owner's build fraction, and the create the
+  owner's fraction and HP. B8's entry at the end of [the landings](#the-landings) has the decisions,
+  the design as built and the measurements.
 
 ## The landings
 
@@ -1369,207 +1369,172 @@ and where it differs from the plan below:
   floating wreck is raised as a visual residual);
 - the repair rate per call, ARMCOM against ARMCK on an ARMLLT (B1's session).
 
-**B8 — kill counts across peers. PLANNED 2026-09-26, awaiting the owner's decisions below.**
-Nothing is built. The C3 session reported the defect; the disassembly is the engine map's *Who
-counts a kill, and why two peers can disagree*, under the destructor `0x4866D0`.
+**B8 — kill counts across peers. DECIDED 2026-09-26; BUILT 2026-09-26 on its own worktree
+(`worktree-agent-a68f1b8c83d2f4da6`, from main `1fc3a92`), not landed or reviewed.** The C3 session
+reported the defect; the disassembly is the engine map's *Who counts a kill, and why two peers can
+disagree*, under the destructor `0x4866D0`, and the measurement on main is *Kill counts across
+peers — measured for B8* below.
 
 *The defect.* Every peer runs the destructor for every death: the victim's owner from
-`Send_UnitDeath` (mode 1) and every other peer from the `0x0C` case (mode 0). The record carries the
-killer (`rec+7`) and the killer's player (`rec+3`, a DirectPlay id), and they resolve to the same
-unit and player on every peer. The kill is counted under three conditions: the killer is non-NULL,
-the victim's owner `+0xFF` is not the killer's player `+0xF4`, and **the victim's `+0x104` (the
-build fraction left) is exactly 0.0**. That last one is read from each peer's own copy. The same
-read gates three more things:
+`Send_UnitDeath` (mode 1) and every other peer from the `0x0C` case (mode 0). The record's killer
+(`rec+7`) and killer's player (`rec+3`, a DirectPlay id) resolve to the same unit and player on
+every peer. Four decisions read **the victim's `+0x104` (the build fraction left) on this peer's
+own copy**:
 
-- the killer's player's `+0xFC`, the Kills of the F4 box and the post-game screen (`0x4868D3`);
 - the unit kill count `+0xB8` that veterancy reads (`0x4869A7`);
+- the killer's player's `+0xFC`, the Kills of the F4 box and the post-game screen (`0x4868D3`);
 - a reclaim's credit, `(1 − +0x104) × def+0x18A` to the reclaimer (`0x486CBD`);
 - the death explosion, a picture off the owner's peer (`0x486D2F`).
 
-A copy's `+0x104` lags its owner's in one case that matters: **a unit created finished whose type
-has no build list**. `CreateFromNetwork` makes every copy with `+0x104 = 1.0` and HP 0 (`0x486299`
-→ `0x485B27`). For a finished create, the owner then sends a `0x12` that names the unit as its own
-builder (`0x48612A`). The receiver's `0x41B8D0` finishes the copy only when the builder's def has a
-build list (`0x41B8F1..0x41B8FF`), so it refuses the `0x12` for any other type. That copy reads
-unfinished until the owner's round robin reaches its slot: at most N owner ticks, which is 50 s at
-our 1500-unit default and 16.7 s at stock's 500, at 30 ticks a second. A kill of such a unit in
-that window is counted on its owner's peer and on no other.
+A copy starts unfinished at HP 0 whatever its owner's unit is (`CreateFromNetwork` → `0x485A40`
+with `finished = 0`, `0x485B27..0x485B37`). It takes the owner's values only when the owner's round
+robin reaches its slot, up to N owner ticks later (`0x48B4B2`, `0x48B4E3`; measured 26–37 s at
+1500), or from a `0x12`. The owner sends that `0x12` only for a finished create of a type with
+`def+0x22F == 0` (`0x48611A..0x48612A`); a type with a move class (`def+0x22F` 1, which is what
+allocates a mover at `0x4860BB` [INFERRED: every mobile unit]) gets none at all. The receiver takes
+it only for a type with a build list (`0x41B8F1`). So a finished mobile unit — the ARMCK of the
+measurement, a builder — lags like a finished structure without a build list. A kill in the window
+counts on the owner's peer alone.
 
-Units created finished:
+*Stock, not ours — lengthened by ours* (DIS, site by site): every instruction of the chain is stock.
+B3's two stubs on the path (`0x4866E5`, `0x486753`) continue as stock for every index inside the
+array. Ours lengthens the window: N is the per-player limit, three times stock's at 1500, and B5
+gives a late peer the earlier peer's commander copy in a catch-up tick, made unfinished at HP 0,
+where stock had no copy until the round robin made one finished.
 
-- the level load's commanders;
-- ownership changes (capture): `0x488700`, `0x488462`;
-- the Deathmatch respawn;
-- the saved-game restore;
-- `0x41794F`;
-- `tacli`'s scenario applier.
+**The decisions [DECIDED 2026-09-26, the owner].**
 
-C3's measurement fits the case exactly. Its victims were the joiner's scenario-spawned ARMMSTOR,
-VTTGT0 and VTKROG0, none of them a builder. The host's VTLLT1 killed two of them: the host's own
-copy of it stayed at 10 while the joiner's went 0 → 2. C3 read `+0x104 = 0.0` on both copies at a
-time not tied to the kills, which this analysis predicts is after the round robin. The value at
-the kill itself was not read there.
+1. **The fresh copy's state is B8's.** A copy made by `CreateFromNetwork` carries the owner's build
+   state and HP from its creation, riding in B4's tagged create (`0x4A`) and written by the
+   receiver at creation. Every peer's copy agrees with the owner's values from the first tick, and
+   nothing depends on the round robin's phase. A unit still being built is carried at its fraction
+   and then changes only through the round robin and its builder's `0x12`, as stock.
+2. **The death is the tagged 65-byte `0x4C`**, like B4's hits: the owner's exact `+0x104`, written
+   into the copy before the destructor runs.
+3. **`0x4555BA`'s two indices are bounded in B8**, B3's way (local).
 
-**MEASURED 2026-09-26** by the B measurement session: three peers H, J and K, Town & Country, the
-current main build.
+The rest as planned: a simulation fix in the fail-closed table, in both builds, that requires B4
+(the `0x05` receiver it extends) and routes B5's deaths refused during the load through its
+receiver. B8 makes every peer's increments equal, not the totals (*Gaps*).
 
-- Victims killed within about 1 s of their creation, while the remote copies' `+0x104` still read
-  1.0, were counted only on the victim owner's copy of the killer: 4 kills on J, 0 on H and K.
-- Victims that lived 90 s were counted on all three peers: 2 kills each for towers 20 and 21. Their
-  remote `+0x104` had refreshed to 0.0 about 30 s after creation, within N ticks as the round robin
-  predicts; the phase of the slot sets the wait.
+**B8 as built** (`fix_kill_counts` and `fix_built_bounds` in `tagpu_patches.c`, the section *KILL
+COUNTS ACROSS PEERS*).
 
-So the defect is a remote copy's stale `+0x104` in the window after its creation. Every peer
-counts a kill from the victim owner's `0x0C` (or, on the owner, its own death), and counts it iff
-its copy reads 0.0 at that moment.
+- **The death.** `Send_UnitDeath`'s one send (`0x48666D`) goes to `kill_tx_death`: `05 00 4C`, the
+  11-byte record at `m+3`, the victim's `+0x104` as its float bits at `m+14`, `m+18 = 1`. The victim
+  is alive there; the owner's own destructor reads the same field next (`0x486679`). B4's receiver
+  (`hit_rx_chat`, the `0x05` slot `0x455F90`) hands the tag to `kill_rx_death`, which applies the
+  `0x0C`'s own gate (`0x512BC0`, state 6 only). Refused in state 5, the record goes to B5's
+  `ghost_refused_kill` (cancel the held create, or mark the catch-up copy dying). Past the gate, it
+  bounds the victim's index, validates the fraction (a number in [0, 1]: the reclaim credit
+  multiplies by `1 − f`), writes it into a live copy and enters `0x4866D0(rec, 0)` under the return
+  address `0x455428`, as the case `0x45541C` calls it, so B3's stubs count and bound a wire record.
+  A bare `0x0C` is dropped and counted: in the dispatch slot `0x455FAC` in state 6, and at B5's
+  refusal hook `0x45477F` in state 5, which acts on nothing else any more.
+- **The create's state.** `hit_tx_create` writes the unit's `+0x104` bits at `m+30` and HP at
+  `m+34`, `m+36 = 1`, as the `0x4A` leaves. `hit_created`, at `CreateFromNetwork`'s exit for a
+  copy made from a carried `0x09` (live, or B5's replay and catch-up), writes them into the copy as
+  the round robin would: `[+0x9E]+0x10` cleared (`0x48B4A6`), HP (`0x48B4B2`), the fraction with
+  bit 13 of `+0x110` when it changes (`0x48B4D0..0x48B4EC`).
+- **The hold.** Four callers set the new unit's HP or fraction after `0x485F50` returns, and so after
+  its `0x09` has left: the capture `0x488700` (from the `0x14` record or the old unit), the placed
+  units `0x488462` (HP from the record's percentage), the resurrection `0x405104` (created
+  unfinished, then `+0x104 = 0.0` and HP 1 at `0x405219`/`0x405226`) and `tacli`'s scenario applier
+  (`dress_unit`). Each one's create goes through a wrapper that claims a hold for its thread, calls
+  the create on a copy of its eight arguments, and lets go at once if it returns NULL. While a
+  thread holds, the send gate at `0x451DF0`'s entry queues that thread's messages; the caller's
+  flush reads each queued `0x4A`'s unit again and sends the queue in order. The flush sites: the
+  capture `0x488743` (with its record) and `0x488791` (without), the placed unit `0x4884AC`, the
+  resurrection `0x405119` (no unit linked), `0x405155` (no wreck) and `0x405164` (success, carrying
+  the `0.0` and 1 its straight line to `0x405226` writes, past a `0x0F` send at `0x405210` the
+  create must precede), and the applier after `dress_unit`.
+- **The `0x12` bound (local).** The case's first two instructions (`0x4555BA`) go to `kill_s12`:
+  `rec+1` (built) and `rec+3` (builder) each 0 (stock's NULL) or inside the array, else the record
+  drops to `0x455F50`, counted (`b12=`).
+- **Rows.** Twelve sites and eleven compared spans: the raised build installs 252 rows (229 before),
+  the stock-limits build 127. `LIM_MAXSITE` is 320.
 
-In ordinary play the case is a captured non-builder, or a unit re-created by a dirty `0x2C`, killed
-within N ticks.
+**The hold's invariants** (the three conditions set on the design, 2026-09-26):
 
-*What else reads the stale field in the window.* The same copy is also at HP 0 (`CreateFromNetwork`;
-only the round robin writes a copy's HP, `0x48B4B2`). Outside the destructor, `+0x104` is read by the
-draw (a nanoframe) and by local order code that looks at its target. For one, `0x40408E` in the
-order code before the capture order's tick returns 5 only for a target that reads 0.0 [role
-INFERRED]. A peer's own units acting on a fresh remote copy may therefore treat it as unfinished;
-which orders, and how, was not traced.
+1. *No path leaves a hold open.* Every NULL return of `0x485F50` (the jumps to `0x4861BD`, and
+   `0x48605A`) comes before its first call, so a NULL create sent nothing and the wrapper lets go.
+   A unit returned reaches a flush on every path, each span a row of the table with no branch
+   leaving it: past its NULL test, the capture's `je 0x488774` is its only branch (`0x488705..0x488742`,
+   `0x488774..0x488790`), the placed unit's span is straight (`0x488467..0x4884AB`), and the
+   resurrection's two branches (`0x405117`, `0x405153`) end in its three flushes
+   (`0x405109..0x405118`, `0x405141..0x405154`). No direct branch in the image lands inside a
+   replaced site; only `0x405153`'s `jb` enters one, `0x405164`, at its first byte. So no backstop
+   flush is needed, and none is built.
+2. *The bound is derived.* Following every direct call from `0x485F50`, one create sends at most:
+   the `0x09` as its `0x4A` (65 bytes), the `0x12` (5, `0x4560F9`), the `0x11` (4, `0x48B1F3`,
+   `def+0x241` bit 18) and a `0x13` (18, `0x48B1AA` → `0x47F780` → … → `0x47F14C`): **4 messages,
+   92 bytes**, the queue's size. Between the create and its flush nothing sends: the spans are
+   straight code, and the resurrection's calls `0x489690`, `0x4815F0` and `0x421E60` are leaves.
+   Indirect calls on the way are not followed (`0x48B195`, `0x49059A`, `0x4905BC` in the create's
+   own callees [INFERRED: a unit's script calls], and the runtime's under `0x47F780`). A message
+   past the bound sends the whole queue at once, in order, then itself, and is counted (`late=`):
+   nothing is dropped or reordered, and the create is then as stale as stock's.
+3. *Per thread, bounded in time.* An entry is claimed with the thread id by one
+   `InterlockedCompareExchange`, touched only by that thread and released at its flush, in the same
+   call of its caller. The gate queues only the holding thread's messages; no thread flushes or
+   waits on another's. Two threads create: the game thread (the order code's capture `0x4046C5`
+   and resurrection `0x405104` under the unit tick `0x43C334`; a capture the dispatcher's case
+   `0x45577B` takes in its pumps `0x4954C8`, `0x4968CB` and `0x49852E`; the applier) and the loader
+   (the placed units `0x497B40` → `0x488310`, and that case in its pump `0x49727D`). So two entries;
+   a third thread would find none, be counted (`full=`) and send as stock.
 
-*Stock, not ours — lengthened by ours* (DIS, proven site by site):
+**Gaps, stated.**
 
-- **Every instruction in the chain is stock**: the four gates, the copy's 1.0, the self-named
-  `0x12` and its refusal, and the round robin's fraction (`0x48B246..0x48B271` sent,
-  `0x48B4B9..0x48B4E3` received).
-- **B3's two stubs on the path continue as stock for every index inside the array.**
-  `wire_s0c` at `0x4866E5` sets `esi` to the unit; `wire_s0ckill` at `0x486753` sets `eax` to the
-  killer or NULL, exactly as `0x486760..0x486775` computes.
-- **B4 and B5 never touch the `0x12` or the `0x0C`.** B4 carries the `0x09` and `0x0B` and hands a
-  carried `0x09` to `CreateFromNetwork` unchanged, `finished = 0` as stock. It neither sends nor
-  reads a `0x12` or `0x0C`. B5's refusal hook acts on a refused `0x0C` only, and a refused `0x12` is
-  dropped as stock drops it.
-- **No DLL code writes a unit's `+0x104`** except the scenario applier, on units it creates on its
-  own peer (`tagpu_scenario.c` `dress_unit`).
-- **Ours lengthens it twice.**
-  - N is the per-player limit, so the window is three times stock's at 1500.
-  - B5 [INFERRED, not measured] gives a late-loading peer the earlier peer's commander copy in its
-    first catch-up tick. The copy is made through `CreateFromNetwork`, so it is unfinished at HP 0,
-    and the `0x12` that would finish it is refused in state 5 (mask 4, `0x452029`) and not held.
-    That lasts until the round robin reaches the commander's slot. Stock had no copy there at all
-    until the round robin made one, finished and at its HP (`0x48B497`, then `0x48B4B2` and
-    `0x48B4E3`).
+- **The saved-game restore** `0x487080` creates at `0x48718E` and then writes HP (`0x4871B5`) and
+  `+0x104` (`0x48727C`); it is not held. It is reached only from the level load of a saved game
+  (`0x497B29` → `0x432610` → `0x486FD0`) and from itself. Whether a network game can start from a
+  save is not established. Closing it takes more than a fourth hold: between its create and its
+  writes it restores the units its record names through itself (`0x4871DD`, `0x48720D`) and
+  attaches (`0x48AAC0` sends a `0x0A`), so it needs nested holds with a bound per depth, or the
+  state read from the saved record before the create.
+- **A copy the `0x2C` makes** (the dirty create `0x48BA05`, the round robin's `0x48B497`) takes the
+  `0x2C`'s state, as stock; B8 does not touch it.
+- **Totals.** Increments are equal, totals not: a count set on one peer (a scenario's `kills`, a
+  saved game) stays set there, so a two-peer veterancy test sets it on every peer.
+- **A lost `0x0C`**: the copy is removed by the round robin's ghost sweep through `Send_UnitDeath`
+  in mode 1 on this peer's own values, or by `CreateFromNetwork` as an occupant, kind 0.
+- **Other readers of a copy's `+0x104`** (targeting, orders, the draw) were not traced; they now see
+  the owner's value from the create on.
 
-*Class: simulation, fails closed.* The kill count is veterancy's input. Each veterancy effect is
-decided on one peer and travels as an event, so differing counts do not desync state. They do
-apply a different rule to a unit depending on which peer computes, and so does a peer without
-the fix. That is what the same-build contract exists to prevent, and it is the same argument that
-made C3's veterancy fail closed. The credit to a reclaimer's `+0xD4` is its owner's economy. B8
-therefore goes in the limits table, in both builds. It requires B4 armed (the `0x05` receiver it
-extends), as B5 requires B3.
+*Class: simulation, fails closed.* The kill count is veterancy's input and the reclaim credit is its
+owner's economy; a peer without B8 applies different rules on its own copy's value. Every site but
+the `0x12` bound is a row of the table, in both builds.
 
-*Candidate designs.* The invariant each must meet: **every peer evaluates the four gates on the
-same value for the same death**. The owner's value is the only one that is right.
+**MEASURED 2026-09-26** on the built tree, both builds, one scripted run each (a scratch driver,
+not committed: its own X server, three fresh instances — host, the victims' owner J, a bystander
+K — by `tools/mp_lobby.sh` on Town & Country, `scenarios/b4-guns.json` on the host, then two
+scratch scenarios on J: four ARMCK at 40 % health out of range, and four at 40 % at `b4-victims`'
+spot, applied twice; every value read by `tacli peek` on every peer). The same spots as the
+measurement on main below, where victims dead ~1 s after their create added 0 / 4 / 0 kills and
+the towers' copies read 1.0 on both joiners right after their create:
 
-1. **The owner's build fraction rides with the death (wire; recommended).**
-   - The one `0x0C` send, `0x48666D` inside `Send_UnitDeath`, calls a sender that wraps the stock
-     11-byte record in B4's idiom: a tagged `0x05`, 65 bytes, `05 00 4C`. The record goes at `m+3`,
-     the victim's `+0x104` as its exact float bits at `m+14`, then zeros. The sender reads the victim
-     at `rec+1`, which is still alive at that point: the destructor runs after the send, at
-     `0x486679`.
-   - B4's `0x05` receiver gets the tag and mirrors the dispatcher, as for `0x4A`/`0x4B`. It applies
-     the `0x0C` gate from `0x512BC0` (state 6 only).
-     - A tag refused in state 5 goes to B5's cancel and sweep (today `ghost_refused`, reached from
-       `0x45477F` for a bare `0x0C`). Otherwise B5 loses its kill note.
-     - In state 6 it bounds the index as B3 does. The fraction is data: finite and inside
-       [0.0, 1.0], else counted and not written. If the copy is alive, it writes the owner's
-       fraction into the copy's `+0x104`.
-     - It then enters `0x4866D0(rec, 0)` with the return address `0x455428`, so B3's stubs and
-       counters see a wire record.
-   - The copy is destroyed in that same call, so the value lives exactly as long as the reads it
-     exists for. Every function the destructor calls on the way sees the value the owner's
-     destructor saw.
-   - A bare `0x0C` (dispatch slot `0x455FAC`) is dropped and counted, as B4 drops a bare
-     `0x09`/`0x0B`.
-   - This closes all four gates at once, for every way a copy can lag, the dirty create included.
-     The reverse lag is also closed: a builder-type nanoframe captured and self-finished by its
-     `0x12` on a copy while the owner's is still unfinished.
-   - Mixed builds cannot play, as they already cannot since B4. Cost: 65 bytes a death instead of 11.
-2. **A spare bit in the stock record (wire, smaller).**
-   - The severity byte `rec+9` holds 0..100, so bit 7 is free. It would say "finished on the
-     owner". Receivers strip it before stock's two signed reads of that byte (`0x486855`,
-     `0x486D28`) and write the copy's `+0x104` to 0.0 when it is set.
-   - It stays 11 bytes and needs no envelope. It is exact for the three finished tests but **not**
-     for the reclaim credit's fraction.
-   - It adds patch sites inside the destructor, where option 1 adds none.
-3. **No wire: make the copies right.**
-   - Let a `0x12` that names its unit as its own builder finish a non-builder copy, and hold `0x12`s
-     refused in state 5 with B5's queue.
-   - A dirty create (`0x48BA05`) and a `0x12` whose builder copy is gone would still lag until the
-     round robin, so it is **not** safe by construction for the gates.
-   - It is listed because its creation half is the one thing option 1 does not fix: the picture of
-     a fresh copy (next).
+| | raised build, 1500 (214 s wall) | stock-limits build, 250 (152 s wall) |
+|---|---|---|
+| the host's 18 towers and plants, read on every peer at once after the apply | `+0x104` 0.0 and the owner's HP (750, 1230, 3100) on all three | the same |
+| J's four ARMCK at 40 % (the applier writes the HP after the create: a hold) | 0.0 and HP 280 on all three | the same |
+| young victims, round 1 / round 2: kills added to the towers' copies, host / J / K | 4 / 4 / 4 and 4 / 4 / 4, the same towers on every peer | 4 / 4 / 4 and 4 / 4 / 4, the same towers |
+| the host player's Kills (`+0xFC`), each peer's record of it | 8 / 8 / 8 | 8 / 8 / 8 |
 
-*Not closed by any option above, stated so the landing does not claim it:*
+Counters, the same in both builds: the host and K `in=8 same=8` — their copies already read the
+owner's 0.0 at each death, from the create's state — and J `out=8`; `wire: in 0c=8` on both
+receivers, B3's count of the carried deaths as wire records; copies made finished `cr=14`, `20`,
+`32`, none unfinished or invalid; holds `held=18` on the host (the towers' scenario), `12` on J.
+Every alert and drop counter read 0 on every peer (`kills:` bad, bare, late, full, noslot, b12;
+`hits:` bad, bare, over; B3's fourteen drops; `ghost:` over, bad, offthread, unbound, short), and
+no peer wrote an ErrorLog. The install lines read `limits: installed 252 sites` (raised, 229
+before B8) and `the simulation fixes' 127 sites installed` (stock-limits); a single-player start
+of each build reached the main menu with B8 in the table.
 
-- **Totals.** B8 makes every peer's increments equal, not the totals. A count set on one peer
-  stays set there: `tacli`'s scenario `kills` field and a peek-write act on the peer they run on,
-  and a saved game restores each peer's own. For a two-peer veterancy test the harness has to set
-  the count on every peer.
-- **A lost `0x0C`.** The copy is then removed by the round robin's ghost sweep through
-  `Send_UnitDeath` in mode 1 with the copy's own fields: its `+0xF0` is the last attacker this peer
-  saw. Or `CreateFromNetwork` destroys it as an occupant, with kind 0, which counts nothing.
-- **A fresh copy's picture.** A finished non-builder's copy is still unfinished, at HP 0, until the
-  round robin reaches its slot. On the non-owning peers that means a nanoframe with an empty health
-  bar [INFERRED from the draw's `+0x104` test; not seen]. This also covers the late peer's commander
-  after B5. Fixing it is option 3's creation half, or B4's `0x4A` carrying the owner's `+0x104` and
-  HP.
-- **Other readers of a copy's `+0x104`** (targeting, orders and the draw) were not traced for what a
-  lagging copy does to them.
-
-*Adjacent, found on the way:* the `0x12` receiver `0x4555BA` scales both of its indices into the
-unit array with no bound (`0x4555C4..0x4555E2`, `0x4555FB..0x45560C`), and `0x41B8D0` then reads
-`+0x110` through them. B3's census of the receivers did not include it. The other dispatch slots
-were not re-surveyed here.
-
-*Verification plan* (two peers, then three; the round robin's N read from `main+0x37EE6`):
-
-1. **Settle the mechanism on the current main build** (done for the counts by the three-peer
-   measurement above; the scenario form below adds the players' Kills and the reclaim).
-   - The joiner spawns four non-builders in range of the host's tower. Pause at once and peek the
-     host's copies: `+0x104` 1.0 and HP 0 predicted.
-   - Unpause, let the tower kill two, and peek `+0xB8` on both peers: host unchanged, joiner +2
-     predicted.
-   - Repeat with the spawn older than N ticks. Both copies should read 0.0, and both peers count.
-   - Read the players' `+0xFC` alongside.
-2. **The fix, same scenarios.**
-   - Every peer's increments are equal, and so are the players' `+0xFC`.
-   - A new counter of "a `0x4C` whose owner's fraction differs from the copy's" reads the number of
-     such deaths, split into owner-finished-copy-not and the reverse.
-   - Three peers: the bystander counts too.
-3. **The reclaim.** The host's ARMCK reclaims the joiner's freshly spawned ARMMSTOR (kind 5). The
-   host's metal credit is 0 before the fix and the full `(1 − 0) × cost` after.
-4. **The identity.**
-   - A two-peer game where every death is of a unit older than N ticks, or built by a builder: the
-     counts are the same before and after, and the counter reads 0.
-   - Single player: the send has no session, so nothing changes.
-5. **Fail closed.** A corrupted site expectation ends the process through the report. A
-   previous-build peer cannot play, as since B4.
-6. **For the owner's question 1.** On the late peer after B5, measure the earlier peer's commander
-   copy's `+0x104` and HP at the first sample, and look at it drawn.
-
-*Owner's decisions:*
-
-1. **Scope.** Should B8 fix only the death's decisions (the four gates, option 1)? Or should it also
-   fix a fresh copy's build state and HP at creation, so a finished non-builder (and, after B5, a
-   late peer's commander) is not a nanoframe with an empty bar for up to N ticks?
-2. **Wire.** Is a death as a 65-byte `0x4C` envelope, with a bare `0x0C` dropped as B4 drops a bare
-   `0x09`/`0x0B`, acceptable? Or is option 2 preferred: 11 bytes, the reclaim credit left to the
-   copy's fraction?
-3. **The `0x12` receiver's two unbounded indices.** Should they be bounded in B8 (class local, B3's
-   pattern), or in a B3 follow-up that re-surveys every dispatch slot?
-4. **Equal increments, not equal totals.** Is that the contract? A count set on one peer (scenario,
-   saved game) stays different unless the harness sets it everywhere.
-
-**Recommendation:** option 1 as B8, with the `0x12` bounds folded in. The creation-state fix
-should be a separate B8b if the owner wants the picture fixed; by the standing preference for
-cosmetic residuals it should be.
+Not measured: the capture's, the placed units' and the resurrection's holds (no scenario drives
+them); the death's own correction of a lagging copy (`fix=` and `rev=` read 0, because the create's
+state had already made every copy finished; a copy still lags during a build, where the carried
+fraction sets the reclaim credit); a reclaim; the heartbeat line now reads 1974–1992 of its 2040
+bytes, so a long game's `ghost:` tail is cut first.
 
 **Kill counts across peers — measured for B8 (2026-09-26, local main `8d033d1`).** The destructor
 counts a kill (`inc word [attacker+0xB8]`, `0x4869CA`) only when the attacker is non-NULL
@@ -1593,9 +1558,9 @@ its full state (`0x48B3F0`, `[8] ÷ 255`). The towers' own remote copies read 1.
 right after their create and 0.0 later. Every commander's copy read 0.0 on every peer from the
 start. **So a kill counts on every peer once the non-owners' copy of the victim reads 0.0, and
 only on the victim's owner before that.** The victims here come from the scenario applier, which
-creates a unit complete and then writes its `+0x104` locally; how long a factory-built unit's
-copy reads nonzero on the other peers, and so how often the split happens in play, was not
-measured.
+creates a unit finished through `0x485F50` (it writes `+0x104` afterwards only for a scenario's
+`nanoframe`, which these set none of); how long a factory-built unit's copy reads nonzero on the
+other peers, and so how often the split happens in play, was not measured.
 
 ## Open questions
 

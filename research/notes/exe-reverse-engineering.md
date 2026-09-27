@@ -9856,7 +9856,11 @@ owner holds its own value; a copy's value comes from exactly these writers:
     to `0x485A40` at `0x4860A0`). It sends the `0x09` (`0x456050` at `0x486115`), and for a finished
     unit whose def `+0x22F` is 0 it sends a `0x12` **naming the unit as its own builder**
     (`0x4560C0(unit, unit)`, `0x48611A..0x48612A`). So a finished create of a type with no build
-    list is refused on every receiver, and its copies stay `+0x104 = 1.0`, HP 0.
+    list is refused on every receiver, and its copies stay `+0x104 = 1.0`, HP 0. A finished type
+    whose `+0x22F` is not 0 gets **no `0x12` at all**, builder or not: 1 is the value that
+    allocates a mover at `0x4860BB..0x4860ED` [INFERRED: every mobile unit]. Its copies stay
+    unfinished the same way, which is why the ARMCK victims of the measurements below, builders,
+    lagged.
   - The callers passing `finished = 1` (DIS): `0x4977BB` (the level load's commanders), `0x497002`
     (the level load), `0x4653D9` (the Deathmatch respawn), `0x488700` and `0x488462` (ownership
     changes). After the sends, `0x488700` sets the new unit's HP and `+0x104` either from the `0x14`
@@ -9864,6 +9868,31 @@ owner holds its own value; a copy's value comes from exactly these writers:
     `0x488614..0x488623`) or from the old unit (`0x488774..0x48878B`). `0x48718E` (the saved-game restore), `0x41794F` [role not traced], and
     `tacli`'s scenario applier (`tagpu_scenario.c`, `create_units`). The build paths `0x4028EA`,
     `0x403D5B`, `0x405104` and `0x41409B` pass 0.
+  - **Four callers set the new unit's state after the create returns**, so after its `0x09` has
+    left (DIS): `0x488700` as above; `0x488462` (the map's placed units, `0x488310` from the loader
+    at `0x497B40`), HP = `def+0x1FA × (i16)[esi+0x1A] / 100` at `0x48848E..0x4884A5` (the divide is
+    `mul 0x51EB851F; shr edx,5`); the resurrection `0x405104` in the order code `0x404DB0`, which
+    creates unfinished, links the unit to the order (`0x489690`, a leaf), looks the wreck up
+    (`0x4815F0`, `0x421E60`, leaves) and, when it is there (`0x405153`), removes it, sends a `0x0F`
+    in a network game (`0x405210`) and writes `+0x104 = 0.0` and HP 1 (`0x405219`, `0x405226`) —
+    a straight line from `0x405164`; its other paths, no unit linked (`0x405119`) and no wreck
+    (`0x405155`, return 8), leave the unit as created; and the saved-game restore `0x487080`,
+    HP at `0x4871B5` and `+0x104` at `0x48727C`, after it has restored the units its record names
+    through itself (`0x4871DD`, `0x48720D`) and attached (`0x48AAC0`). The restore is reached only
+    from a saved game's load (`0x497B29` → `0x432610` → `0x486FD0`) and from itself.
+  - **What one local create sends** [DISASSEMBLED 2026-09-26, every direct call from `0x485F50`
+    followed]. Every NULL return (the jumps to `0x4861BD` from `0x485F7C`..`0x486043`, and
+    `0x48605A`) comes before its first call (`0x4860A0`), so a NULL create sends nothing. A unit
+    returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
+    `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
+    `+0x241` bit 18) a `0x11` (4, `0x48B1F3`, a local player's unit) and, under its flag 4, a `0x13`
+    (18 bytes, `0x48B1AA` → `0x47F780(unit, 0xF, 0)` → … → `0x47F0C0`, sent at `0x47F14C`).
+    Indirect calls on the way are not followed: `0x48B195` (`call [eax]` in a loop in `0x48B090`),
+    `0x49059A` and `0x4905BC` (`0x490580`, at `0x4861AE`) [INFERRED: a unit's script calls].
+  - **The send `0x451DF0`** (`stdcall(net, msg, len)`, `ret 0xC`, 1 when sent) begins `push ebx;
+    push ebp; mov ebp,[esp+0xC]` (`53 55 8B 6C 24 0C`): six bytes on an instruction boundary. It has
+    57 direct callers and no branch into `0x451DF1..0x451DF5`. It sends only in a network game
+    (`main+0x2A44` bit 0, `0x451EAB`) and from a local player's record (`+0x73` 1 or 2).
   - The owner's completion `0x41B8D0` sends the `0x12` for a local unit (`0x41BA0E..0x41BA26`), so
     a unit built by a builder is finished on every copy when the message lands.
   - `0x12` is refused in net state 5 like `0x09`: `0x451FD0` gives it mask 4 at `0x452029` (and
@@ -9883,24 +9912,50 @@ owner holds its own value; a copy's value comes from exactly these writers:
 `0x489CE0` never finishes a remote copy either. A hit that takes its HP to 0 or below sets pending
 death only for a local owner (`0x489EC6..0x489EEE`); a remote copy is clamped to 0 (`0x489EF1`).
 
-**Consequence:** the kills of a unit that was created finished, is not a builder, and dies within
-N of its owner's ticks are counted only on its owner's peer: the unit kill count, the killer
+**Consequence** (on stock and before B8): the kills of a unit that was created finished — a mobile
+type, which gets no `0x12`, or a structure without a build list, whose `0x12` is refused — and dies
+within N of its owner's ticks are counted only on its owner's peer: the unit kill count, the killer
 player's `+0xFC`, and (for a reclaim) the credit. On every other peer the copy still reads
 `+0x104 = 1.0` and the gates refuse. MEASURED by the C3 session (two peers, 2026-09-26): a host
 VTLLT1's own copy stayed at 10 through two kills of the joiner's scenario-spawned units (ARMMSTOR,
 VTTGT0, VTKROG0: none a builder) while the joiner's copy went 0 → 2. It read `+0x104 = 0.0` on both
 peers' copies at a time not tied to the kills, which this analysis predicts is after the round
-robin; the value at the kill was not read. MEASURED 2026-09-26 by the B measurement session
-(three peers, Town & Country, main):
-
-- Victims killed within about 1 s of their creation, with the remote copies' `+0x104` still 1.0,
-  counted only on the victim owner's peer (4 kills on J, 0 on H and K).
-- Victims that lived 90 s counted on all three peers. Their remote `+0x104` had turned 0.0 about
-  30 s after creation.
+robin; the value at the kill was not read. MEASURED on three peers on main (`tadr-port/sim-fixes.md`,
+*Kill counts across peers — measured for B8*; *The kill count reads this peer's copy of the
+victim*, above): ARMCK dead ~1 s after their create added 0 / 4 / 0 kills to the towers' copies
+(killer's owner / victims' owner / bystander), those dead 40–94 s after it the same on all three;
+the non-owners' copies turned 0.0 at 26–37 s.
 
 Other readers of a unit's `+0x104` see the same stale copy in the window. One is `0x40408E`, which
 returns 5 only for a target at 0.0, in the order code before the capture order's tick [role
 INFERRED]; the draw is another.
+
+**B8's patch** (`fix_kill_counts`, `fix_built_bounds`; [sim-fixes.md](tadr-port/sim-fixes.html)
+B8 has the argument and the measurements). Rows of the fail-closed table unless marked local:
+
+- **The death.** `call 0x451DF0` at `0x48666D` → `kill_tx_death`, the `0x0C`'s length `push 0xB`
+  at `0x486669` compared. A received `0x4C` enters `0x4866D0(rec, 0)` from B4's `0x05` stub with
+  the return address `0x455428` (`jmp 0x455F50`, compared), as the case `0x45541C` calls it. The
+  `0x0C`'s dispatch slot `0x455FAC` → a stub that counts a bare `0x0C` and goes on at `0x455F50`.
+- **The create's state.** Written into a copy at `CreateFromNetwork`'s exit (B4's `0x48634F`
+  stub) as the round robin writes it: `[+0x9E]+0x10 = 0` (`0x48B4A6`; the create's own last store
+  of it is `0x485DF2`), HP (`0x48B4B2`), the fraction and bit 13 of `+0x110` when it differs
+  (`0x48B4D0..0x48B4EC`).
+- **The hold.** The send's entry `0x451DF0` (6 bytes) → the gate, which goes on at `0x451DF6`.
+  The creates `0x488700`, `0x488462` and `0x405104` → one wrapper. The flushes, each running its
+  displaced instructions and going on after them: `0x488743` → `0x48874B` and `0x488791` →
+  `0x488796` (the capture; spans `0x488705..0x488742` and `0x488774..0x488790` compared),
+  `0x4884AC` → `0x4884B4` (the placed unit; span `0x488467..0x4884AB`), `0x405119` → `0x40511E`,
+  `0x405155` → `0x40515A` and `0x405164` → `0x40516A` (the resurrection; spans
+  `0x405109..0x405118`, `0x405141..0x405154`, `0x40515A..0x405163` and its straight line
+  `0x40516A..0x40522E` in three rows from `0x40516A`, `0x4051B9` and `0x405202`). The capture's
+  function `0x488570` has three callers: the order code (`0x4046C5`, under the unit tick
+  `0x43C334`), the dispatcher's case at `0x45577B`, and `0x4933E0` (`0x493486`).
+- **Local: the `0x12` bound.** `0x4555BA`'s first two instructions (10 bytes; the case is entry
+  `0x455FC4` of the table `0x455F84`) → a stub that drops a record whose `rec+1` or `rec+3` is past
+  the array to `0x455F50` and otherwise runs them and goes on at `0x4555C4`.
+- **B5's `0x45477F`** now only counts a bare `0x0C` refused in state 5; a carried one refused
+  there reaches B5's cancel and dying mark through B8's receiver.
 
 ### `0x45AAA0` `FreeObjectState` — the `Object3do` destructor
 
