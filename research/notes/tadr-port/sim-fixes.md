@@ -1338,7 +1338,11 @@ and where it differs from the plan below:
   (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
   `DPSESSION_KEEPALIVE` when `createnewgame` makes them; a lobbied one takes the lobby's flags),
   and a host cannot quit through the UI during the load. The departure argument rests on the
-  construction: the seed reads nothing a departure writes. **A lobbied launch was not run.** The
+  construction: the seed reads nothing a departure writes. The way to exercise a removal is now
+  known: freeze a peer's process, and `TIMEOUT.GUI`'s `REJECT` on another runs the engine's own
+  removal; a host's `REJECT` also drops the player from the session, so a third peer removes it at
+  once (the engine map's *The removal from TIMEOUT.GUI*, measured by C4). A departure during the
+  load has not been run that way. **A lobbied launch was not run.** The
   construction covers it: the seed reads DirectPlay's own record, validated, and every
   `SetSessionDesc` the engine makes, the battle room's included, goes through the one site the
   wrapper replaces. The wrapper's replacement and withholding were measured only at 0: nothing
