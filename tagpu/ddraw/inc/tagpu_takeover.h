@@ -61,7 +61,10 @@
    assumption about the retail exe. WHAT IT DOES NOT COVER: a game-folder module that is not in
    the exe's import table at all, and a PE TLS callback, which the loader calls whatever the entry
    point holds. Both are named where they are found (to_tls_callbacks logs one) and answered by
-   pass 4; no setup of the suite has either (MEASURED 2026-09-27). The 3.9.02 and Escalation
+   pass 4. No module this pass makes inert has either: every one is a recorder, and no recorder
+   carries a TLS directory at all, while the six tdraw/TAESC builds of the fixtures whose callback
+   array is live are loaded only where the exe imports TADR, which this pass skips (MEASURED
+   2026-09-27; to_tls_callbacks says why the two sets must stay disjoint). The 3.9.02 and Escalation
    exes import TDRAW / TAESC and no DDRAW at all (DISASSEMBLED: objdump -p), so there TADR's
    DllMain is what loads Impure and is running while this would write: the pass is skipped and
    says so, and pass 4 is what answers for such a launch. MEASURED on Wine and on Windows (the

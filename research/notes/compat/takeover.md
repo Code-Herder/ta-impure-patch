@@ -110,10 +110,22 @@ is in the exe's import table not at all — pulled in as a dependency of an earl
 module, or by a forwarded export. Such a module is already initialised when this runs, and its
 entry point is made inert anyway; only part 4 answers for it. No setup of the suite has one
 (MEASURED 2026-09-27, `objdump -p` over every fixture's exe and DLLs). Nor does it cover a **PE TLS
-callback**, which the loader calls whatever the entry point says: both `tdraw.dll` builds of the
-fixtures carry a TLS directory (Mayhem RVA `0x6E240`, ProTA `0x81F00`) whose callback array begins
-with NULL, so nothing runs today, and a build that ever carries one is named in the log instead of
-passing for silent.
+callback**, which the loader calls whatever the entry point says. MEASURED 2026-09-27 over the
+fixtures' 18 TADR modules: **no recorder carries a TLS directory at all** (`tplayx`, `eplayx`,
+`zplayx`, the 2006 `Dplayx.dll` — nine of nine), Total Mayhem's and ProTA's `tdraw.dll` carry one
+whose callback array begins with NULL, gammata's carries none, and the **six remaining
+`tdraw`/`TAESC` builds carry two callbacks each** — the C runtime's dynamic-TLS initialisers
+[INFERRED from the `/GS` cookie and the `fs:0x2c` indexing], one gated on `DLL_THREAD_ATTACH` and
+one on `DLL_THREAD_DETACH` / `DLL_PROCESS_DETACH`, so neither does anything at
+`DLL_PROCESS_ATTACH`.
+
+Nothing runs today because the two sets are **disjoint**: every module this pass makes inert is a
+recorder, and every build whose callback array is live is a `tdraw`/`TAESC` loaded only where the
+exe imports TADR — the routes where the pass does not run at all. **They have to stay disjoint,
+and today only the log says so.** An inert entry point means the module's CRT start-up never runs,
+so its TLS index is never allocated, and the `DLL_THREAD_ATTACH` callback would then index another
+module's TLS block and walk what it found there, on every thread the game creates. A module whose
+callback array is live is one to refuse, not one to make inert.
 
 A module is TADR's when its **file** carries `TADemo-MKChat`, the name TADR's builds give their
 chat channel. MEASURED 2026-09-27 over every file of the suite's fixtures — 130 files, 12
@@ -161,17 +173,56 @@ which is the proof the check can see what the game folder cannot show.
 
 ### Part 2 — the exe imports TADR
 
-The 3.9.02 exe (`TDRAW`), Escalation (`TAESC`). TADR's `DllMain` loads `ddraw.dll` first thing,
-so Impure's `DllMain` runs nested inside it, before TADR patches anything: Impure snapshots the
-exe's code, lets TADR's start-up finish, and at the exe's entry point puts back every code byte
-TADR wrote since the snapshot and points the exe's TADR import slots at its own exports. The
-snapshot and the exe file on disk are the same reference here, which is what makes the mod's own
-bytes safe: a mod's exe carries its changes in the file, so they are in the snapshot, and only
-what TADR wrote *after* it is put back. Data-section writes stay unless they land on an Impure
-site (resource paths are data). Not designed in detail yet: TADR's threads and window hooks
-started in its `DllMain`, and the entry point is contested — part 1b makes a TADR module inert
-before the loader calls it, so nothing of the recorder's is at `0x004E6FA0` on the routes that
-pass covers, but on this one TADR is already running when Impure arrives.
+The 3.9.02 exe imports `TDRAW`, Escalation's imports `TAESC`, and neither imports `DDRAW` at all
+(DISASSEMBLED: `objdump -p`), so the loader never loads Impure from the exe — **TADR's `DllMain`
+does**, and Impure's `DllMain` runs nested inside one that has barely started. Everything TADR
+does before that call is four things, the same code in `tadr-dev-ota`'s `tdraw.dll` and in
+Escalation's `TAESC.dll` (DISASSEMBLED): test the reason for `DLL_PROCESS_ATTACH`, write
+`Process Attached.  config=<name>` to its own log, `LoadLibraryA("dplayx.dll")`, then
+`LoadLibraryA("ddraw.dll")` — keeping the handle in a global of its own.
+
+So TADR has patched nothing when Impure arrives, and its start-up is small. MEASURED on all four
+setups, Wine, 2026-09-27:
+
+| | at Impure's `DllMain` | at the first `DirectDraw` call |
+|---|---|---|
+| fail-closed sites differing from stock 3.1 | **1 of 284** — the exe **file's** own path budget (66650 in the 3.9.02 exe, 1114 in Escalation's), not a write of TADR's | the same one |
+| threads | **one**: the exe's main thread, started at `0x004E6FA0` | **three**: that one, the exe's own `0x004E7850`, and **one thread of TADR's** |
+| the game window's procedure | — | the window's and the class's are both the exe's own `0x004B5CC0`: **no TADR subclass** |
+| places of the exe's code leading into TADR | — | 9 to 20 ([the setups](setups.md)) |
+
+That the limits install sees **one** difference and not the seventeen of `mayhem-11.3.0-net`,
+where the same family of `tdraw` runs its limit crack, is the measurement that says TADR's
+patching happens after it has loaded Impure and not before.
+
+Two shapes are open, and one measurement decides between them.
+
+**Repair.** Impure snapshots the exe's code in its nested `DllMain`, lets TADR's start-up finish,
+and at the exe's entry point puts back every code byte that differs from the snapshot and points
+the exe's TADR import slots at its own exports. The snapshot and the exe file on disk are the same
+reference here — which is what makes the mod's own bytes safe: a mod's exe carries its changes in
+the file, so they are in the snapshot, and only what TADR wrote *after* it is put back.
+Data-section writes stay unless they land on an Impure site (resource paths are data). It leaves
+TADR's one thread running, and it rests on TADR writing nothing after the entry point.
+
+**Prevention.** Impure stops the rest of TADR's `DllMain` from running, from inside its own — the
+same family as parts 1a to 1c, and then there is nothing to put back and no thread to leave
+behind. The return address into TADR is on the stack, and it can be identified rather than
+guessed: MEASURED on all four setups, the stack carries exactly **three** frames into the TADR
+module, at the same three offsets on each, and the innermost is the `call` that loaded Impure. The
+instruction is `call esi`, so it names no target — but `LoadLibraryA` is `stdcall`, so its
+argument is still one word above that return address, and the three conditions together (a return
+address inside a game-folder module whose file carries TADR's marker, a `call` in front of it, and
+an argument naming Impure's own file) are not what a coincidence satisfies. What it has to solve:
+TADR's `DllMain` has an SEH frame registered by then, which has to be unwound rather than skipped,
+and its own globals are half-constructed. What it does **not** have to solve, measured: the C
+runtime is already initialised, since the PE entry point is the CRT's start-up and it calls
+`DllMain` after itself.
+
+**The measurement that chooses: does TADR write anything after the exe's entry point?** If it
+does, repair at the entry point is an argument about timing rather than an invariant, and only
+prevention is left. Unmeasured; it needs a build that gets past the refusal on these routes, since
+today the game stops at the first `DirectDraw` call.
 
 ### Part 3 — sites a mod's exe changes belong to the mod
 

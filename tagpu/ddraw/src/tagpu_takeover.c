@@ -335,11 +335,21 @@ static int to_first_local_is_ours(const BYTE* exe, DWORD image, const wchar_t* g
     return 1;           /* the exe imports nothing from the game folder: nothing has run */
 }
 
-/* Whether the module's PE TLS directory names a callback the loader will still call at
-   DLL_PROCESS_ATTACH. Making the entry point inert does not cover one, and this write does not
-   either: it is logged, so a build that ever carries one is visible rather than silently outside
-   the invariant. MEASURED 2026-09-27: both tdraw.dll builds of the fixtures carry a TLS directory
-   (Mayhem RVA 0x6E240, ProTA 0x81F00) whose callback array begins with NULL, so nothing runs. */
+/* Whether the module's PE TLS directory names a callback the loader calls whatever the entry point
+   holds. Making the entry point inert does not cover one, and this write does not either: it is
+   logged, so a build carrying one is visible rather than silently outside the invariant.
+
+   MEASURED 2026-09-27 over the fixtures' 18 TADR modules: no recorder carries a TLS directory at
+   all (tplayx, eplayx, zplayx, the 2006 Dplayx.dll, nine of nine); Total Mayhem's and ProTA's
+   tdraw.dll carry one whose callback array begins with NULL; gammata's carries none; the six
+   remaining tdraw/TAESC builds carry two callbacks each, gated on DLL_THREAD_ATTACH and on
+   DLL_THREAD_DETACH / DLL_PROCESS_DETACH, so neither does anything at DLL_PROCESS_ATTACH. Nothing
+   runs today because the sets are disjoint: the modules made inert here are recorders, and a live
+   callback array is only in a tdraw/TAESC loaded where the exe imports TADR -- where this pass
+   does not run. A LIVE CALLBACK ARRAY IS A MODULE TO REFUSE, NOT ONE TO MAKE INERT: an inert entry
+   point leaves the module's CRT start-up unrun, so its TLS index is never allocated, and the
+   DLL_THREAD_ATTACH callback would index another module's TLS block on every thread the game
+   creates (research/notes/compat/takeover.md, part 1). */
 static int to_tls_callbacks(HMODULE m)
 {
     const IMAGE_NT_HEADERS32* nt = to_nt(m);
