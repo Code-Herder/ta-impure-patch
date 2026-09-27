@@ -3,8 +3,9 @@
 /* tagpu_ufo — write a Total Annihilation HAPI archive (.ufo) at runtime.
 
    WHY THE DLL WRITES ONE AT ALL. The render-options screen is a real TA `.GUI`
-   screen, and `GUI_Load 0x4AA8F0` reaches it as `guis\RENDER.GUI` through the
-   engine's own file layer — so the file has to be somewhere the engine looks.
+   screen, and `GUI_Load 0x4AA8F0` reaches it as `impure\RENDER.GUI` through
+   the engine's own file layer (tagpu_menu.c's `gui_redirect` names the folder)
+   — so the file has to be somewhere the engine looks.
    A NEW name goes in a `.ufo` (file-formats.md §5), the engine globs `*.UFO`
    from the working directory at `InitTAHPIAry 0x41D4C0`, and shipping it from
    the DLL rather than from CI keeps distribution at one `ddraw.dll` and makes
@@ -26,7 +27,7 @@
 typedef struct
 {
     const char*  path;       /* archive-relative, EXACTLY one directory deep:
-                                "guis/render.gui". See the refusal below. */
+                                "impure/render.gui". See the refusal below. */
     const void*  data;
     unsigned     size;
 } TAGPU_UFO_FILE;

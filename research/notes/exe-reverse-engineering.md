@@ -9529,7 +9529,7 @@ at run time, after the exe is mapped. Each mod ships its own `VISUALS.GUI` and `
 that folder. `0x502820` has six references: `0x41AD2C`, `0x42A6FE`, `0x42A752`, `0x42D82A`,
 `0x42D888`, `0x4914C2`. [DISASSEMBLED 2026-09-27; the four exes byte-compared at those offsets]
 
-**`gi+0x9B6` has three readers besides its clear (`0x4AA861`) and its setter:** `GUI_Load`'s
+**`gi+0x9B6` has two readers besides its clear (`0x4AA861`) and its setter (`0x49FBAB`):** `GUI_Load`'s
 `0x4AA989` (`add edi,0x9b6`, then the `strncpy` at `0x4AA99A`) and `0x4A8381`, a per-gadget
 loop in the stage drawer `0x4A81E0` that copies it into its own buffer. **A missing file is
 a fault, never a NULL return:** when the open at `0x4AAA10` returns 0, `0x4AAA17` jumps to

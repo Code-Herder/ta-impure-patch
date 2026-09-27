@@ -172,7 +172,7 @@ static int namecmp(const char* a, const char* b)
     return (unsigned char)*a - (unsigned char)*b;
 }
 
-/* Split "guis/render.gui" into "guis" and "render.gui". 0 unless there is
+/* Split "impure/render.gui" into "impure" and "render.gui". 0 unless there is
    exactly one separator with something on both sides. */
 static int split(const char* path, char* dir, unsigned dcap, const char** base)
 {

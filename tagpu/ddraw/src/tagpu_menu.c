@@ -3151,8 +3151,13 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
    only, the copy is rewritten to GUI_DIR -- the engine's own prefix string is
    never written, so every other file it names, and the mod's gui folder, stay
    the engine's. Game thread only: GUI_Load has no other caller.
-   `s_redirVis` is set before the observer lands and not changed after: the
-   Visuals screens are redirected only where their handlers are in. */
+   A name is redirected only where its file is in the archive and its
+   handlers are armed -- a missing file faults GUI_Load (`0x4AAC43`) and a
+   Visuals screen without its handlers routes Restore and Undo to nothing.
+   So the observer lands only after the archive was written, and `s_redirVis`
+   is raised only once the dialog-build observer is in. Both are set in
+   `tagpu_menu_init`, at DLL_PROCESS_ATTACH on the thread that becomes the
+   game thread, before it can reach any GUI_Load. */
 #define VA_GUI_PATHCOPY 0x004AA99Fu
 static const unsigned char PATHCOPY_STOLEN[7] =
     { 0x8B, 0x94, 0x24, 0x40, 0x02, 0x00, 0x00 };   /* mov edx,[esp+0x240]    */
@@ -3174,10 +3179,9 @@ static int __cdecl gui_redirect(void* esp)
     return 0;
 }
 
-static int gui_redirect_install(int vis)
+static int gui_redirect_install(void)
 {
     if (s_redirected) return 1;
-    s_redirVis = vis;
     s_redirected =
         tagpu_detour_bytes_ok(VA_GUI_PATHCOPY, PATHCOPY_STOLEN, sizeof PATHCOPY_STOLEN) &&
         tagpu_detour_observe(VA_GUI_PATHCOPY, PATHCOPY_STOLEN, sizeof PATHCOPY_STOLEN,
@@ -3258,18 +3262,18 @@ void tagpu_menu_init(void)
     /* THE TWO VISUALS SCREENS LOAD ONLY WITH THEIR HANDLERS. They drop the
        stock toggles and route Restore/Undo to us, so without the dialog-build
        observer (tagpu_menu.off, or an exe whose bytes differ) the engine must
-       keep finding its own files: `gui_redirect` sends it to ours only when
-       `visOk`. And nothing of ours loads without the redirect -- GUI_Load
-       does not return NULL for a file it cannot find, it faults (`0x4AAC43`,
-       a null write, MEASURED on TA:ESC before the redirect existed). */
+       keep finding its own files: `gui_redirect` sends it to ours only once
+       that observer is in. And nothing of ours loads without the redirect,
+       nor the redirect without the archive -- GUI_Load does not return NULL
+       for a file it cannot find, it faults (`0x4AAC43`, a null write,
+       MEASURED on TA:ESC before the redirect existed). */
     visOk = !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
             tagpu_detour_bytes_ok(VA_VIS_BUILD, VIS_BUILD_STOLEN, sizeof VIS_BUILD_STOLEN);
-    redirected = !exists(OFF_FILE) && gui_redirect_install(visOk);
-    visOk = visOk && redirected;
     wrote = tagpu_ufo_write(UFO_FILE, f, visOk ? 6 : 2);
+    redirected = wrote && !exists(OFF_FILE) && gui_redirect_install();
 
-    armed = wrote && redirected &&
+    armed = redirected &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
             tagpu_detour_observe(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN,
                                  before_update, NULL);
@@ -3282,6 +3286,7 @@ void tagpu_menu_init(void)
             tagpu_detour_observe(VA_POSTGUI, POST_STOLEN, sizeof POST_STOLEN,
                                  before_postgui, NULL);
         vis_install();
+        s_redirVis = visOk && s_visArmed;
         /* the store owns the engine's options only where the screens that
            write it are in; the first registry load is still ahead */
         if (s_visArmed) engopt_install();
