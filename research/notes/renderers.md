@@ -986,7 +986,10 @@ keeps its meaning either way ([GPU status](gpu-status.html) §2.83).
 **How it is assembled** [DECIDED 2026-09-09, with the owner]. The governing rule the owner set
 is **use TA's gadget/UI mechanism as much as possible**, and every choice below was taken under it.
 
-1. **`impure-patch.ufo`, written by the DLL at `DLL_PROCESS_ATTACH` if absent.** New names go in
+1. **`impure-patch.ufo`, written by the DLL at every `DLL_PROCESS_ATTACH`.** Its screens sit in
+   `impure/`, a folder no stock or mod archive has, and GUI_Load is pointed there for our names
+   ([GPU status](gpu-status.html) §2.12), so a mod that renames its gui folder cannot hide them.
+   New names go in
    a `.ufo` and overrides go loose — measured, `file-formats.md` §5 — and `RENDER.GUI` plus our
    GAF are new names, so a `.ufo` is the engine's own answer. The DLL writes it rather than CI
    shipping it, so distribution stays **one `ddraw.dll`** and the archive can never drift out of

@@ -105,6 +105,15 @@ The renamed folders match the HPI archives exactly (`unitsE/`, `weaponE/`, `game
 `aE/`). The exe is also flagged **`IMAGE_FILE_LARGE_ADDRESS_AWARE`** (Characteristics `0x012B` vs
 `0x010B`) and has a recomputed PE checksum. [VERIFIED]
 
+**Two of those facts shape Impure beside ESC** [MEASURED 2026-09-27, Wine]. The large-address-aware
+flag puts the heap above 2 GB — the unit array at `0x9FD50020` — so a pointer filter that stops at
+2 GB drops every unit (the DLL's stop at the process's own top, [exe-reverse-engineering](exe-reverse-engineering.html)
+*A large-address-aware exe's heap is above 2 GB*). And `guiE` is the folder `GUI_Load` reads: the
+string at file offset `0x100E20` (VA `0x502820`), where retail has `guis`. `TXESC.ufo` ships ESC's
+own `guiE/VISUALS.GUI` and `VISUALRT.GUI`; Impure's screens load from a folder of their own
+instead (exe-reverse-engineering, *The screen lifecycle*), and replace ESC's Visuals screen as they
+replace the stock one.
+
 Against a 2013-vintage community-patch 3.9.02 exe, ESC's differs by **3,283 bytes in 533 runs**,
 including real instruction-level restructuring. That is *not* ESC-original engine work: ESC's exe
 contains **61 of 69** ProTA patch sites and **112 of 157** Total Mayhem patch sites already applied

@@ -862,7 +862,9 @@ action slots** — the art sets that, not the record.
 
 **That is the stock file; the patch ships its own.** With the settings store owning the
 engine's Visuals options ([renderers](renderers.html) §2.10b), `impure-patch.ufo` carries a
-`guis/visualrt.gui` and an `anims/visualrt.gaf` of its own, and the `.ufo` wins the lookup.
+`impure/visualrt.gui` and an `anims/visualrt.gaf` of its own, and GUI_Load is pointed at that
+folder for this name ([GPU status](gpu-status.html) §2.12, the redirect at `0x4AA99F`), so it
+replaces the stock file and a mod's alike.
 It keeps `GAMMA`, `RESTORE` and `UNDO` under their stock names and at their stock rects —
 `0x45E5E0`'s seeding looks `GAMMA` up with a lookup that is fatal on a miss (`0x4A0200`,
 "Error in GUI layout"), and so does the slider's own callback `0x45BD20` — drops the three

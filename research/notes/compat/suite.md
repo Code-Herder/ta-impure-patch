@@ -44,18 +44,11 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   session in another worktree runs prefixes named exactly like ours
   (`parallel-mp-runs-share-dplay-port`). A setup whose battle room this walk cannot reach a game
   in says so in `no_network_game`, in words and from a run, and plays none: the report's column
-  reads `no mp`. **Escalation's two setups are the ones that do** — its room starts the game on
-  both peers with **no units on either**, resources and HUD up and the camera in the world, so
-  there is nothing to fight and the fight cannot be applied (MEASURED 2026-09-27, four runs).
-  **Why is not established.** The same two setups create 402 of 402 entities in a single-player
-  skirmish, so the engine makes units on that exe with Impure active — but that says nothing about
-  the lobby path, and no run of those folders *without* Impure exists to compare with: with
-  `tagpu_takeover.off` TADR's own limit crack rewrites Impure's sites and the safety net refuses
-  the launch, so the setup cannot reach a battle room that way either. **What it costs**: the
-  per-peer read of the running process in a network game, which is where a recorder's DirectPlay
-  way in would show. On these routes that way in is closed by the redirect of the exe's
-  `EPLAYX` slots and by the recorder's inert entry point, both read in the single-player run —
-  and a two-player game on the same takeover is played by `392+tadr-dev` and `392+tadr-2026.8.6`.
+  reads `no mp`. No setup carries it today. Escalation's two did while its games started with **no
+  units on either peer**; the units were there and the sim ran them, but every pass of the DLL
+  filtered pointers at 2 GB and ESC's exe is large-address-aware, its heap above that
+  ([exe-reverse-engineering](../exe-reverse-engineering.md), *A large-address-aware exe's heap
+  is above 2 GB*). Both now play their network game (MEASURED 2026-09-27).
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
   process started over SSH cannot see the desktop's windows.
@@ -162,4 +155,4 @@ the game folder — a DLL switch. A setup with one checks a mechanism rather tha
 folder, and `content` names three unit types only the mod defines (see above): every setup that
 ships a mod's own content carries one. `mayhem-11.3.0-net` switches the takeover off (`tagpu_takeover.off`) so that the safety
 net has something to catch, and its goal is the net's refusal. `no_network_game` holds a setup out
-of the network stage with its reason, measured (above).
+of the network stage with its reason, measured (above); none does today.

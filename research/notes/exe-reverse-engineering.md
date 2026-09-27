@@ -1758,11 +1758,13 @@ from `0x4B8E00` and at least 64 from a grow. Identical to stock for every unit w
 
 **Levers**, read once at attach. `tagpu_scratch.stress` treats every frame as too small, so every
 writer call regrows it to exactly `max(need, 64)` pixels and frees the old one, after setting the old
-block's two plane pointers to `0x80000000`: a freed block the heap keeps mapped would hand a stale
-reader its old bytes rather than fault. `TotalA.exe` is not large-address-aware (PE characteristics
-`0x10B`), and under Wine everything from `0x7FFE1000` to `0xF3080000` is reserved with no access, so a
-reader still holding the frame faults at any plane offset. A reader that kept a plane pointer of its
-own is not caught. `tagpu_scratch.nogrow` refuses every grow; both together send every writer to its fallback.
+block's two plane pointers to a 16 MB region the lever reserves with no access at attach: a freed
+block the heap keeps mapped would hand a stale reader its old bytes rather than fault, and at twice
+the largest plane offset (8 MB) the region makes one faulting at any offset. It is reserved rather
+than taken from above 2 GB because that span is no one's only while the exe is not
+large-address-aware: retail's is not (PE characteristics `0x10B`), TA:ESC's is (`0x12B`), and there
+the heap is up there (below). With no region the lever is refused and logged. A reader that kept a
+plane pointer of its own is not caught. `tagpu_scratch.nogrow` refuses every grow; both together send every writer to its fallback.
 Each grow and refusal is logged (`enginefix: composite scratch grown|refused (<reason>) for <writer>:
 N px in R rows asked, A held, P now (n so far)`, and `composite scratch merge refused: a WxH cargo at
 (x,y) is past the WxH frame (A held)`), each kind's first 16, then every 1024th.
@@ -2012,6 +2014,19 @@ a terminating process's handles are closed before its process object is signalle
 wait returns the semaphore is gone. MEASURED: on the reference setup the relaunch has logged
 both that it waited and, on another run, that the old process had already ended, and came up
 each time; on the Windows test setup it came up.
+
+### A large-address-aware exe's heap is above 2 GB — the range filters' top [MEASURED 2026-09-27]
+
+The DLL's passes range-test every pointer they take out of engine memory before reading through it
+(`ptr_ok` and its siblings, a filter on a value and never the reason a read is safe). Their upper end
+is **the process's own top, `GetSystemInfo`'s `lpMaximumApplicationAddress`** (`tagpu_addr.h`), not a
+2 GB constant. Retail's exe is not large-address-aware (Characteristics `0x10B`) and gets `0x7FFEFFFF`;
+TA:ESC's sets `IMAGE_FILE_LARGE_ADDRESS_AWARE` (`0x12B`, [deep-ta-esc](deep-ta-esc.html)), gets
+nearly 4 GB under a 64-bit Windows or Wine, and its heap is placed up there: **the unit array began
+at `0x9FD50020`** on a TA:ESC skirmish under Wine, against `0x0E8D0020` on retail. With the constant
+every pass read that array as garbage and skipped every unit — the world drew no units in single
+player or a network game while the sim ran them. The bound on what is read out of those pointers
+(an index against the engine's own count, and so on) is unchanged; only the value filter moved.
 
 ### The unit sync's keys, and the join's pace — `0x4B6BA0`, def `+0x13E`, `0x46D6C0..0x46DEC8` [DISASSEMBLED + MEASURED 2026-09-24]
 
@@ -9503,6 +9518,36 @@ we want honoured must be written before stage 1 and not after.
 `strncpy(dst, dir, 0x100)` then `strcat(dst, "\\")` (`0x503374`). `UIPipelinesInit` calls them
 once at `0x4914CE` and `0x4914E5` with `0x502820 = "guis"` and `0x502E30 = "anims"`, so the
 two prefixes are `guis\` and `anims\`. [VERIFIED 2026-09-09]
+
+**A mod renames the gui folder, so "guis" is retail's value, not the engine's.** The folder is
+the `.data` string at `0x502820` (file offset `0x100E20`), pushed by `0x4914C2`
+(`68 20 28 50 00`) for the setter call at `0x4914CE`. TA:ESC's exe carries `guiE` there, byte
+for byte in place (the anims string at `0x502E30` is unchanged); Total Mayhem's and ProTA's exes
+carry `guis`, and their archives ship `guiM\` and `guiP\` — Mayhem's Patch Loader (`dplayx.dll`)
+lists the change as a patch (`;Change guis reference to guiM`), so there the string is rewritten
+at run time, after the exe is mapped. Each mod ships its own `VISUALS.GUI` and `VISUALRT.GUI` in
+that folder. `0x502820` has six references: `0x41AD2C`, `0x42A6FE`, `0x42A752`, `0x42D82A`,
+`0x42D888`, `0x4914C2`. [DISASSEMBLED 2026-09-27; the four exes byte-compared at those offsets]
+
+**`gi+0x9B6` has three readers besides its clear (`0x4AA861`) and its setter:** `GUI_Load`'s
+`0x4AA989` (`add edi,0x9b6`, then the `strncpy` at `0x4AA99A`) and `0x4A8381`, a per-gadget
+loop in the stage drawer `0x4A81E0` that copies it into its own buffer. **A missing file is
+a fault, never a NULL return:** when the open at `0x4AAA10` returns 0, `0x4AAA17` jumps to
+`0x4AAC2D`, which takes `edi` from a local only the merge path wrote (`[esp+0x10]`,
+`0x4AAA3B`), and `0x4AAC43` writes `[edi+4]` — the in-game menu's crash on TA:ESC before our
+screens were redirected (the crash report's stack held `guiE\RENDER.GUI`). [DISASSEMBLED
+2026-09-27]
+
+**Our redirect, `0x4AA99F`** (`mov edx,[esp+0x240]`, 7 bytes, an observer with no return
+hijack): just after the prefix `strncpy`, `[esp]` is still its destination — the local path
+buffer, `esp+0x38` there (lea'd as `esp+0x30` after one push at `0x4AA994`; `0x4AA9B0`
+addresses it as `esp+0x2C` after the `add esp,0xC`) — and `[esp+0x240]` is the caller's name.
+`tagpu_menu.c`'s `gui_redirect` rewrites that copy to `impure\` for `RENDER.GUI`, and for
+`VISUALS.GUI` / `VISUALRT.GUI` while their handlers are in, so our screens load from a folder
+only our archive has, whatever the gui folder is called. `gi+0x9B6` itself is never written.
+MEASURED 2026-09-27 on TA:ESC under Wine: the front end's Visuals screen, the in-game one and
+the sprocket menu all ours and drawn complete; without the redirect the front end showed
+Escalation's own screen and the sprocket menu faulted.
 
 **`UpdateIngameGUI` is NOT called per frame** [MEASURED 2026-09-09]. All 21 call sites are
 transition and teardown handlers — `0x460630` calls the level teardown `0x491B60` first, and
