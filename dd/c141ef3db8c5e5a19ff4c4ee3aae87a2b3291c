@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high focused range=eab1269..ddc141e findings=3 acted=3 rejected=0 date=2026-09-26 (no code defect; two inexact figures and the x87 invariant, in cc8c12d)
