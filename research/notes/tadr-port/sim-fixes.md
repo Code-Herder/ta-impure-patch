@@ -1531,6 +1531,8 @@ placement does then is stock's.
   has no square and no ghost.
 - The previous build, the same script: the byte stayed `0x0E` and the ID 246 (B6's side
   measurement above).
+- All three again on the branch with main merged in (C3 and B7 included): every verdict passed
+  (202 s, 136 s and 215 s).
 
 ## Open questions
 
