@@ -920,8 +920,9 @@ static VkInstance vk_instance(void)
 
     /* THE ONE OPTIONAL INSTANCE EXTENSION: what the memory-budget query rides
        on (research/notes/compute-restorer.md D10). Asked of the loader and
-       enabled only when offered, so an instance that lacks it is the instance
-       it always was, and the restorer counts a quarter of the heap as free. */
+       enabled only when offered: without it the instance carries the two
+       surface extensions alone, and the restorer counts a quarter of the heap
+       as free. */
     if (eie) {
         uint32_t n = 0, k;
         VkExtensionProperties* ep = NULL;

@@ -2,8 +2,10 @@
 
 **Landing 1 is built** (2026-09-27): the restorer's backend is Vulkan compute, with a self-test at
 every launch and a per-driver record when it fails. It is verified on the reference setup and on
-the Windows test setup's AMD card. **Landing 2** (the terrain seam fix and the tiny model for terrain)
-is planned. fp16 (cooperative matrices) is deferred.
+the Windows test setup's AMD card. **Landing 2 is built** (2026-09-27): the terrain restored with
+its eight neighbours, so a tile's edge is what a restore of the whole map gives there, on the tiny
+model, with the per-tile atlas where the neighbourhood atlas does not fit. fp16 (cooperative
+matrices) is deferred.
 
 The restorer is the learned unditherer Classic++ runs on the game's art ([Classic and Classic++
 renderers](renderers.html), [Undithering screenshots](undither.html)). The API-free core
@@ -66,10 +68,11 @@ shaders are `tagpu_restore_comp.h`, compiled by `tools/spirv-gen.py`:
 ### The launch self-test (D2, D13)
 
 The first bring-up on a device closes the core's gate, so consumers' jobs queue but nothing of
-theirs is dispatched. Two probe jobs (priority −1) then run through the same pipelines: a base
+theirs is dispatched. Three probe jobs (priority −1) then run through the same pipelines: a base
 atlas with a keyed frame (a disc, a strip and lone keyed texels, with right-hand slack) and a
-wrapping frame, restored into a twin with a two-level mip chain; and an R8 atlas with a keyed
-frame (bottom slack) and a wrapping frame. Nothing in the probe comes from the game. While the
+wrapping frame, restored into a twin with a two-level mip chain; an R8 atlas with a keyed
+frame (bottom slack) and a wrapping frame; and, since landing 2, a map of neighbourhood frames on
+tiny (*The self-test* under landing 2). Nothing in the probe comes from the game. While the
 GPU runs it, a worker thread computes the same frames on the CPU from the loaded weights
 (`tagpu_restore_ref.c`). The readback passes when every colour byte is within one level of the
 CPU's and every alpha byte equal, the border and slack rings included, and the mip levels are the
@@ -233,48 +236,152 @@ OUT on a keyed base atlas exactly as the features' job does.
   reaching a second is a device far below anything the self-test has run on.
 - **The timeout rule is not exercised**: no lever makes a fence time out on a live device.
 
-## Landing 2, as designed
+## Landing 2, as built
 
-The terrain seam fix (D5–D10) and tiny for terrain (D3). How the decisions map onto the code:
+The terrain seam fix (D5–D10) and tiny for terrain (D3), built 2026-09-27 on the branch that
+carries landing 1.
 
-- **A model per job.** The core loads both weight files (`full`, `tiny`) and a job names its
-  model; the backend repacks both into one weights buffer, keeps a conv pipeline set per model
-  (tiny's shapes are already compiled by `spirv-gen`), and sizes the activations for the wider.
-  The terrain's jobs are tiny, every other job full. The self-test gains a tiny probe, checked
-  against the CPU reference run with tiny.
-- **A neighbourhood frame.** Today a frame's source is its own tile, wrapped. A neighbourhood
-  frame restores one tile of the map with its eight neighbours around it: FILL reads a window of
-  32 + 2a texels (a = the model's depth + 1: the depth makes the centre exact, the +1 makes the
-  cell's one-texel ring exact too, which then holds real neighbour texels instead of a copy of
-  the edge). The slot carries the centre's cell in the base atlas and the eight neighbours' tile
-  ids (the four spare ints, two ids each); where a neighbour is off the map, the CPU puts the
-  reflected cell's id there and the edge bits flip its texels, which is the mirror border's own
-  rule. OUT writes the 34-texel cell and reads the input colour through the same addressing —
-  the network predicts a residual, so OUT needs the input at the texel, not at the destination
-  coordinate. The window reads the RGBA base atlas the terrain already has; nothing is uploaded
-  per key.
-- **The keys.** One key per distinct (tile, eight neighbours, edge bits) over the map's cells, a
-  32-bit per-cell key index on the CPU. The instance record gains the key's cell in the
-  neighbourhood atlas beside the tile's cell in the base atlas, so the fragment stage samples the
-  restored colour at one and the dithered fallback at the other; a cell whose key is not painted
-  yet (alpha 0) draws dithered (D7).
-- **The atlas is one 2D image**, near square, its side at most `maxImageDimension2D`, in the
-  34-texel cell pitch: 16384 holds 231,361 cells, three times Seven Islands' keys. That replaces
-  the 2D array of the Open list, whose reason was the 64-column layout's height; a map whose keys
-  do not fit one image on a smaller device keeps today's atlas.
-- **Whether it fits** (D10): keys × 34 × 34 × 4 bytes against half of what the driver says is
-  free — `VK_EXT_memory_budget` through `VK_KHR_get_physical_device_properties2` where both are
-  offered, a quarter of the largest device-local heap where not. A refused allocation falls back
-  too. The fallback is today's per-tile atlas and frames, on tiny.
-- **The budget** (D8): two terrain jobs paint the same atlas. The on-screen job (prio 0, the
-  `budget=`) is fed each frame with the keys of the cells on screen that are not queued yet; the
-  trickle job (after every other job, 2 ms) is fed the rest in centre-out order, one batch at a
-  time, so a key scrolled onto the screen waits behind at most one small batch. The core gains a
-  budget per job, and room for the extra jobs.
-- **The bar.** The dumps restored again offline with tiny, per neighbourhood frame, and — the
-  point of the landing — the restored terrain against a whole-map restore of the same map
-  (reflect-padded at its edges): within one level on under 0.01 % of bytes, the tile-line ring
-  included. The tile-grid lines of D6 are the art's and stay.
+### A model per job (D3)
+
+The core loads `full.w32.bin` and `tiny.w32.bin`, and a job names its model (`TAGPU_RM_FULL`,
+`TAGPU_RM_TINY`, `tagpu_restoreglsl.h`): the terrain's job is tiny, every other job full, and a job
+whose model is not loaded runs full. The backend repacks both into one weights buffer, keeps a
+conv pipeline per layer of each model, and sizes the activations for the wider. Both files ship in
+the release folder (`tagpu/release/package.sh`).
+
+### The neighbourhood frame
+
+A neighbourhood frame (`TAGPU_RNBFRAME`, `tagpu_restoreglsl.h`) restores one cell of the map with
+its eight neighbours around it. `f` is the centre — (ax, ay) its tile in the base atlas, (dx, dy)
+its cell in the neighbourhood atlas, `border` 1 — and `nbo[8]` holds each neighbour's tile origin in
+the base atlas (`x | y << 16`, in the order NW N NE W E SW S SE). A neighbour past a side of the map
+is the cell inside reflected across it, with that side's `edge` bit (L 1, R 2, T 4, B 8) telling the
+shader to flip its texels, so texel −1 of the map is texel 0 — the mirror rule the whole-map
+reference pads with. `tagpu_rcore_nb_frame` builds one from a map cell; the terrain's keys and the
+self-test's map are both built by it.
+
+- **The window** is the tile plus `a = depth + border` texels of its neighbours on every side
+  (tiny: 7, a 46-texel slot). The depth makes the centre exact and the border makes the cell's
+  one-texel ring exact too, so the ring holds the network's output over the real neighbours
+  instead of a copy of the edge. `tagpu_rcore_job_add_nbhd` refuses a frame whose window would
+  reach past one neighbour (`a` larger than the tile) or that carries slack: that bound is what
+  the shaders' addressing rests on.
+- **FILL and OUT** read the input through one function, `nbAt` (`tagpu_restore_comp.h`): a window
+  texel is in the centre or in exactly one neighbour, flipped across an edge side. OUT needs it
+  too, because the network predicts a residual, and the input at a ring texel is the neighbour's.
+- **Nothing is uploaded per key.** The window reads the RGBA base atlas the terrain already has.
+
+### The keys and the atlas (D5)
+
+`nb_build` (`tagpu_terr.c`) runs where the restore request is built, on the same fenced read of
+the tile map as the per-tile order (`TILE_MAP` `main+0x1428B`, the dimensions `main+0x14233`/
+`+0x14237`): the map is copied once, every tile id in the copy is bounded by the atlas's tile count
+before any key is made, and each cell's frame, less its destination, is looked up in a hash of the
+keys so far. **A key is one distinct frame** — the centre's origin, the eight neighbours' and the
+edge bits — and the per-cell key index is 32-bit on the CPU. Each key's rank is the Chebyshev
+distance from the screen's centre cell to the nearest cell that uses it, and a counting sort gives
+the centre-out order.
+
+- **The atlas** is one RGBA8 image, near square, one 34-texel cell per key; `s_maxTex` (the
+  device's `maxImageDimension2D`) bounds its side.
+- **The instance record** is eight shorts: the grid cell and the tile's cell in the base atlas with
+  the mirror flags, then the key's cell. The vertex shader takes the restored colour's UV from the
+  key's cell when `uNbhd` is set, and from the tile's otherwise; a key not painted yet has alpha 0
+  and the cell draws dithered (D7).
+
+| map | cells | keys | atlas | memory |
+|---|---|---|---|---|
+| Two Continents | 336 × 400 | 43,658 | 7106 × 7106 | 192 MB |
+| Lava Alley | 295 × 297 | 12,149 | 3774 × 3740 | 53 MB |
+
+D5's estimate for Two Continents was 193 MB.
+
+### Whether it fits (D10)
+
+`tagpu_vk_restore_fits`: the atlas's bytes against half of what the driver says is free —
+`VK_EXT_memory_budget`'s budget less its usage for the largest device-local heap
+(`tagpu_vk_mem_free`), read through `VK_KHR_get_physical_device_properties2`, which the 1.0
+instance enables only when the loader offers it — or, where the query is not offered, a quarter of
+that heap. The log says which rule answered. On the reference setup: 192 MB against half of the
+10,203 MB the driver says is free, of 12,282 MB.
+
+**The per-tile fallback** is landing 1's atlas and frames, on tiny. It is taken when the fit says
+no, when the device refuses the image, when the keys need an image wider than the device allows,
+and when the map names a tile past the atlas. The fault lever drives the first two:
+`tagpu_restorefault.on` holding `nbfit` or `nballoc`.
+
+### The feed (D8)
+
+**One job, fed, not two.** The design had an on-screen job and a trickle job painting the same
+image; two jobs over one destination would each clear it and move its layout on their own
+schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tagpu_vk_terr.c`):
+
+- **Each frame**, the keys of the cells in the frame's records — the cells on screen — that are not
+  queued yet go in, and the job runs at prio 0 with the whole budget.
+- **While none of those is waiting**, the rest of the map follows in centre-out order, topped up to
+  one batch (64 keys) waiting behind the one in flight, at prio 6 — after every other job — with a
+  cap of 2 ms of GPU a slice.
+- **"Waiting" is exact**: every neighbourhood is one size class, so the queue is FIFO, and an
+  on-screen key is still waiting exactly when fewer frames are painted than the place of the last
+  on-screen one queued. A key scrolled onto the screen waits behind at most the two trickle
+  batches, the one in flight and the one queued.
+- **The core** gains a budget per job (`tagpu_rcore_job_budget`): a capped job stops at its cap,
+  counted across the slice, except that its batch in flight runs at the full budget while another
+  job waits behind it; with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 9:
+  the six consumers and three probes.
+- **The dump waits for the feed** (`tagpu_vk_restore_job_feeding`): a queue that drains between
+  feeds is not a finished picture.
+
+On Two Continents at 1024 × 768 on the RTX 4070: the first screen's 479 keys painted 114 ms after
+they were queued, in three slices; the whole map in 19.3–26.3 s (three launches), at the cap. The
+same 43,658 keys handed to one job at the full budget take 1,131 ms of wall time and 414 ms of GPU
+at 38.9 fps. Lava Alley's whole map: 3.2 s. The per-tile fallback, on tiny: 5,062 frames in
+226–258 ms.
+
+### The self-test
+
+The launch self-test gains a third probe job, `probe-nbhd`, on tiny: a 3 × 3 map of 16-texel
+tiles scattered through the probe's 64 × 64 base atlas, every cell of it a neighbourhood frame.
+Its CPU reference is one restore of the whole map, reflect-padded by `depth + border` — the rule the
+frames stand for, not their addressing — so a frame that reads the wrong neighbour or flips the
+wrong way fails it. The self-test passes on the reference setup with 22,696 bytes within 0 levels,
+the CPU reference in 344–385 ms. The same check with the edge bits ignored in the shader fails at
+cell 0.
+
+### The bars
+
+`tools/restore-dumpcheck.py` checks each job with the model its dump names (`# model` in the
+`.idx`). A neighbourhood frame is restored over its window, and its ring is held to the same bar
+as the tile. `--whole-map` rebuilds the map from `tagpu_restore_terr_vk.map` (every cell's tile
+and key, written under `tagpu_restoredump.on`) and the dumped base atlas, restores it in one piece
+(chunked with an apron of the model's depth, which is exact), and holds **every cell**, its ring
+included, to its key's painted cell. Every check passes: at most one level, on under 0.01 % of
+bytes.
+
+| map | check | what | bytes that differ |
+|---|---|---|---|
+| Two Continents | per window | 43,658 keys | 2,585 of 151,405,944 (0.0017 %) |
+| Two Continents | whole map | 134,400 cells | 9,769 of 466,099,200 (0.0021 %) |
+| Lava Alley (a second map in the same launch) | per window | 12,149 keys | 309 of 42,132,732 (0.0007 %) |
+| Lava Alley | whole map | 87,615 cells | 1,949 of 303,848,820 (0.0006 %) |
+| Two Continents, per tile (`nbfit`) | per frame | 5,062 frames | 244 of 15,550,464 (0.0016 %), the ring exact |
+
+`nballoc` took the same per-tile path, and its frame on screen is identical to `nbfit`'s. The
+other jobs at the same build: features and effects 0 bytes, units 1, the UI 6, its pictures
+17, each at most one level.
+
+### Not closed by landing 2
+
+- **The trickle is seconds, not frames.** Two Continents' whole map takes about 20 s at 2 ms of GPU
+  a frame; a cell whose key is not painted yet draws dithered (D7). How long a key scrolled onto
+  the screen waits was not measured; the design bound is the two trickle batches ahead of it.
+- **At the mirrored map edge** (the edge setting of [GPU status](gpu-status.html) §2.90) the
+  half-texel at the fold samples the key's ring, which is now the network's output for the
+  reflected map rather than a copy of the edge texel. Both sides of the fold blend the same pair,
+  so the fold stays continuous; how far that half-texel moved from landing 1's was not measured.
+- **The memory is the design's**: Two Continents' neighbourhood atlas is 192 MB against the
+  per-tile atlas's 23 MB, and it replaces it rather than sitting beside it.
+- **The tile-grid lines** (D6, the TODO below) are the art's and stay.
 
 ## Decisions
 
@@ -321,13 +428,13 @@ running and draws the original dithered art.
 ## Open
 
 Nothing: every question has an answer. These follow from the code and the limits rather than from
-a choice, and landing 2 takes them as given:
+a choice, and landing 2 is built on them:
 
 - **The per-cell index is 32-bit.** Seven Islands' 303 MB atlas is roughly 65,000–69,000 cells of
   34×34 RGBA8, at or past what today's 16-bit `TILE_MAP` can index.
 - **The atlas stays within the device's limits**: in today's 64-column layout Seven Islands would
   be about 35,000 px tall, past the 16384 most devices allow, so the neighbourhood atlas is laid
-  out near square instead (*Landing 2, as designed*).
+  out near square instead (*Landing 2, as built*).
 - **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
   no `rundll32`, both of which antivirus software watches.
 - **The Windows test runs on** the Windows test setup's AMD Radeon R9 200-series card (2816 MB, a

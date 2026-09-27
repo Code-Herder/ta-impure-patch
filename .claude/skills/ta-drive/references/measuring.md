@@ -306,8 +306,11 @@ heuristics, and it answers whether two builds restore the **same bytes** for the
 it restores every frame the `.idx` lists again from the dumped source with the torch model in
 strict fp32 and the DLL's colour-key stand-in, and holds the twin to it — at most one level on
 under 0.01 % of opaque bytes, keyed texels `(0,0,0,0)`, the ring a copy of the edge, the mips the
-exact box average. One line per job, `PASS`/`FAIL`; `--tag terr` for one job, `--json`; exit 0, 1,
-or 2 when nothing was checked. It needs no pack, so it works on any scenario.
+exact box average. Each job is checked with the model its dump names (the terrain's is tiny);
+`--model` overrides that for every job. One line per job, `PASS`/`FAIL`; `--tag terr` for one job,
+`--json`; exit 0, 1, or 2 when nothing was checked. It needs no pack, so it works on any scenario.
+**`--whole-map`** holds every cell of the terrain's map, its ring included, to a restore of the whole
+map in one piece (from the `.map` dump), which is the bar the neighbourhood atlas exists to meet.
 
 ```bash
 tools/tacli arm <i> classicpp.on 'native.on=all wrecks' terr.on feat.on fx.on gui.on \
