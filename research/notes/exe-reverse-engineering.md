@@ -1967,8 +1967,8 @@ relaunch does ([compute-restorer](compute-restorer.html)), must not let the new 
 `tagpu_rguard_attach` waits for the old process at `DLL_PROCESS_ATTACH`, which runs before WinMain:
 a terminating process's handles are closed before its process object is signalled, so once the
 wait returns the semaphore is gone. MEASURED: on the reference setup the relaunch has logged
-both that it waited and, on another run, that the old process had already ended; on the Windows
-test setup the old process had already ended; each time it came up.
+both that it waited and, on another run, that the old process had already ended, and came up
+each time; on the Windows test setup it came up.
 
 ### The unit sync's keys, and the join's pace — `0x4B6BA0`, def `+0x13E`, `0x46D6C0..0x46DEC8` [DISASSEMBLED + MEASURED 2026-09-24]
 

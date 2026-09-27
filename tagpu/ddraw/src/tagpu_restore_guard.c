@@ -463,11 +463,21 @@ int tagpu_rguard_blame_lost(void)
 {
     if (!s_work || !s_installed) return 0;
     tagpu_logf("restoreguard: the device was lost with restorer work unfinished (slots 0x%lx) - "
-               "the restorer is blamed, recorded off for %s, and the game relaunches",
+               "the restorer is blamed and recorded off for %s",
                (unsigned long)s_work, s_key);
     blame(TAGPU_RG_LOST, 0, 0);
-    tagpu_logf("restoreguard: %s", s_relaunched ? "this process is already a relaunch - no second one"
-                                                : "the relaunch could not be made - the marker stands for the next launch");
+    /* NO RELAUNCH, and this process carries on: the Vulkan lane is retried
+       on the same device, and the restorer with it. So the record is made
+       here as well -- the marker is read at the first bring-up only -- and
+       the marker stands until the disk holds it. Not crash context, so the
+       store may allocate. */
+    tagpu_logf("restoreguard: %s - the device is recorded off in this process and the player is told",
+               s_relaunched ? "this process is already a relaunch, so there is no second one"
+                            : "the relaunch could not be made");
+    record_write(s_key);
+    InterlockedExchange(&s_off, 1);
+    s_markPending = 1;
+    notice(TAGPU_RG_LOST);
     return 0;
 }
 

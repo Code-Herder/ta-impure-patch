@@ -3037,7 +3037,9 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
         if (rc == -2) {                /* fatal: the lane cannot carry on */
             /* BEFORE the teardown: when a frame carrying restorer work was
                unfinished, the restorer is blamed, recorded off and the game
-               relaunched, and this does not return */
+               relaunched, and this does not return -- or, where no relaunch
+               can be made, recorded off in this process, so that the lane's
+               retry comes up without it */
             if (s_lostLike == LL_ASK && vkDeviceWaitIdle &&
                 vkDeviceWaitIdle(s_vk.dev) == VK_ERROR_DEVICE_LOST) {
                 vklog("the device, asked after the timeout, reports itself lost");

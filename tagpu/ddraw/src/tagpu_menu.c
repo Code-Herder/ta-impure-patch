@@ -1380,12 +1380,13 @@ void tagpu_menu_present(void)
        retry picked while the Vulkan lane is down for good must still clear
        the record. Before the flush, so that it writes the cleared record. */
     tagpu_rguard_tick();
-    if (!s_installed) return;
     /* THE GPU ROW HAS ITS OWN FLAG: its value is a device NAME, and the name
        is handed to the store on this thread so that no string crosses one
        (tagpu_vk.h). */
-    if (InterlockedExchange(&s_vkDirty, 0))
+    if (s_installed && InterlockedExchange(&s_vkDirty, 0))
         tagpu_vk_gpu_store();
+    /* whether or not the menu is armed: the guard's record is the store's
+       too, and its crash marker goes only once the record is written */
     tagpu_settings_flush();
 }
 

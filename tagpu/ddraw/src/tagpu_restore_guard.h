@@ -94,7 +94,10 @@ void tagpu_rguard_tick(void);
 /* The seam's fatal path, when the device reported itself lost -- directly,
    or when asked after a timeout -- and before it takes the lane down. When a
    frame carrying restorer work was unfinished this records the device off and
-   relaunches the game, and does not return; otherwise 0. A device that hangs
+   relaunches the game, and does not return; where it cannot relaunch (this
+   process is a relaunch, or CreateProcessA failed) it records the device off
+   in this process, tells the player and returns 0, so the lane's retry comes
+   up without the restorer. Otherwise 0. A device that hangs
    and never reports the loss is not blamed: the seam's wait on it does not
    return, and nothing tells that hang from a long presentation stall. */
 int  tagpu_rguard_blame_lost(void);

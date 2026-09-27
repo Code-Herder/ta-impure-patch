@@ -77,9 +77,10 @@ exact box average of the level above; a pass opens the gate.
 
 - **Wrong bytes**: the device and driver are recorded off, every job fails, the notice shows.
 - **Could not run** (the probe could not be built, a probe job failed): the restorer is off with no
-  record until the Vulkan lane next comes down and up (a shell↔game switch, a new window size or
-  swapchain image count), which tests again. A swapchain rebuilt at the same size and image count
-  (a vsync toggle can be one) keeps the lane up and does not.
+  record until the restorer next comes down and up — a shell↔game switch, or a swapchain rebuilt
+  at a new size, image count or format, which takes the passes down — and that tests again. A
+  swapchain rebuilt at the same size, image count and format (a vsync toggle can be one) keeps
+  the passes and does not.
 - A device that passed is not tested again in the same process.
 
 On the reference setup the CPU reference takes 313–339 ms and the readback matches it exactly
@@ -110,6 +111,9 @@ On the reference setup the CPU reference takes 313–339 ms and the readback mat
   reused pid is not waited on — because TotalA.exe exits silently while another copy holds its
   single-instance semaphore ([exe map](exe-reverse-engineering.html) `0x49E885`). There is no
   relaunch when the marker could not be written, and a relaunched process never relaunches.
+  Where a lost device cannot relaunch (a relaunched process, or `CreateProcessA` failing), the
+  process records the device off itself and shows the notice, since it carries on: the lane's
+  retry then comes up without the restorer.
 - **The record** is one key, `vendor:device:driver:build` — the ids in hex, the build the DLL's
   commit (`-dirty` from an unclean tree): `restoreoff=` in `impure.cfg`, or
   `tagpu_restore_off.txt` under `tagpu_defaults.off`. The build is in it so that a DLL which
@@ -160,8 +164,10 @@ file record under `tagpu_defaults.off`; a record without a build (`10de:2786:94d
 as a new build, and the self-test passing after it; a marker from another build dropped with no
 notice. With the store's writes failing (a directory where its temporary file goes): the marker
 stays pending, a second bring-up (into a skirmish) does not convert it again, and the row's retry
-supersedes it — the marker deleted, the self-test passing. The timeout rule has no fault lever
-and was not exercised.
+supersedes it — the marker deleted, the self-test passing. In a relaunched process, a retry
+followed by `lost` again: no second relaunch, the device recorded off in the process, the marker
+deleted once the record was written, and the lane's retry up with the restorer off. The timeout
+rule has no fault lever and was not exercised.
 
 **The cost**, the same instance and scenario (`feat-forest`, 1024 × 768, vsync off, a private
 display, the RTX 4070), terrain only:
@@ -203,8 +209,9 @@ OUT on a keyed base atlas exactly as the features' job does.
   from its own process, and the relaunch logged that it will not relaunch again, turned the marker
   into the record (`crash c0000005`) and raised the notice. No `ErrorLog.txt` was written. With
   the key carrying the build (`1002:6798:0080005b:8e896d4`) the self-test passes (CPU reference
-  716 ms), and on `crash` the relaunch found the old process already ended, recorded the device
-  and deleted the marker once the record was on disk.
+  716 ms), and on `crash` the relaunch recorded the device and deleted the marker once the record
+  was on disk. It logged the old process as already gone, from a build that did not yet tell an
+  ended process from one it could not open; the reference setup has logged both outcomes since.
 
 ### Not closed by landing 1
 
