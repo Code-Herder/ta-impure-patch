@@ -326,7 +326,7 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   game folder — the 2006 recorder, or the Patch Loader whose exports forward to `tplayx.dll` —
   is reached through these slots alone, which is how Impure keeps every *game call* away from
   the recorder (`tagpu_takeover.c`, [GPU status](gpu-status.md) §2.6d). It does not keep the
-  recorder from running: see `0x4E6FA0` below.
+  recorder from running: that is `0x4E6FA0` below, closed at the recorder's own entry point.
 - **`0x4E6FA0`** — the exe's **entry point** (`objdump -f`: `start address 0x004e6fa0`), the C
   runtime start-up whose first bytes are `55 8B EC 6A FF` (`push ebp; mov ebp,esp; push -1`),
   ending in the call to `WinMain`. It runs after every statically linked DLL's `DllMain`, which
@@ -344,9 +344,18 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   `0x417B9B` (where the stock `call 0x4B7900` reaches the chat-command interpreter),
   `0x447D87`, `0x45130F`, `0x480770`, `0x490DF9`, `0x496559` and `0x4965B3`. None is a site of
   Impure's fail-closed table, so §2.6b's net does not fire; the recorder also writes Impure's
-  own value at the three unit-limit sites `0x491640`/`0x491659`/`0x491666`. This is the hole in
-  [the takeover](compat/takeover.md) part 1, and the reason its next landing compares the whole
-  image against the exe file rather than a list of sites.
+  own value at the three unit-limit sites `0x491640`/`0x491659`/`0x491666`. With
+  `tagpu_takeover.off` and the DirectPlay path open as well, the same read finds **24** sites.
+  Impure closes this not at these sites but a step earlier, by making the recorder's own PE entry
+  point inert before the loader calls it, so the splice is never written ([the
+  takeover](compat/takeover.md) part 1); nothing here is a site of Impure's table either way.
+- **`0x4E4708`, `0x4E71A0`, `0x4EADF2`** — three call sites of the same import thunk, stock
+  `FF 15 00 C1 4F 00` (`call [0x4FC100]`), which the Community Patch Loader rewrites to
+  `E8 rel32` followed by `90`: a direct call into the mod's own `win32.dll`, whichever build the
+  mod ships (MEASURED 2026-09-27 out of the live process, Total Mayhem 11.3.0 and ProTA 4.8; the
+  target differs with the DLL's load address). They are the mod's bytes and stay — Impure's
+  reference-image check names them in the log and refuses only what leads into TADR
+  ([the takeover](compat/takeover.md) part 4). Not sites of Impure's table.
 - **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a

@@ -25,15 +25,30 @@ the report.
   | `tplayx.dll` | `0x4F000` | the recorder builds of 2021–2025 (gammata's 2022 pack, Mayhem 11.3.0, ProTA 4.8) |
   | `tplayx.dll` | `0x57000` | the 2026 recorder (TADR's `src/Recorder/dist`) |
 
+- **Whether a DLL is TADR at all**, whatever it is called: its file carries the string
+  `TADemo-MKChat`, the name TADR's builds give their chat channel. MEASURED 2026-09-27 over the
+  suite's 130 fixture files: in all 18 TADR modules — every `tdraw.dll` and its renamed copies
+  (Escalation's `TAESC.dll`), every recorder (`tplayx`, `eplayx`, `zplayx`, the 2006 `Dplayx.dll`)
+  — and in nothing else, including the Patch Loader's `dplayx.dll`, Total Mayhem's and ProTA's own
+  `dplayx.dll`, cnc-ddraw's `ddraw_custom.dll`, the audio DLLs and every mod's `TotalA.exe`.
+  `TA Demo Recorder`, in the 9 recorders only, separates a recorder from a tdraw. This is the test
+  Impure itself uses ([the takeover](takeover.md), part 1), never the file's name.
+
 - **The "TADR engine-limit error" box** is a 2026 TADR refusing beside Impure ([the refusal](tadr-collision.md#2026-tadr-enginelimits-refuses)).
 - **"Total Annihilation: Impure cannot start"** and `log\startup-failure.txt` are Impure
   refusing: the report lists every site that differed. `0x0040EAD6 pathfinding budget` alone
   means an exe with a changed path budget — the 3.9.02 exe (66650) or Escalation's (1114).
-- **`log\tagpu.log`** says `takeover: DPLAYX.dll asked for tdraw.dll … answered with Impure`
-  when the Patch Loader route was taken over: `tdraw.dll` did not start, and there is no
-  `tdrawlog.txt` from this launch. The **recorder** on such a folder still runs, off the exe's
-  entry point ([the takeover](takeover.md), part 1), and leaves nothing in the folder to show
-  it — so a launch with no `tdrawlog.txt` and no recorder log is not a launch with no TADR code.
+- **`log\tagpu.log`**'s `takeover:` lines are the whole story of what TADR was allowed to do.
+  `asked for tdraw.dll … answered with Impure` means the Patch Loader route was taken over, so
+  there is no `tdrawlog.txt` from this launch; `its entry point was made inert` names a TADR module
+  that was loaded and never ran; `the exe's code against its file` closes with how many places of
+  the game's code lead into a TADR module (0 is the goal) and how many into another DLL of the
+  folder (the mod's own, and each is listed with its bytes). Without those lines — an older build,
+  or `tagpu_takeover.off` in the folder — a launch with no `tdrawlog.txt` and no recorder log is
+  *not* a launch with no TADR code: the recorder's entry-point way in leaves nothing in the folder.
+- **"Total Annihilation's code has been changed in memory by TA Demo Recorder"** is the
+  reference-image check: TADR got in by a route the takeover does not cover, and the report lists
+  each site with its bytes and the file's.
 - **"Impure's engine limits and fixes were changed by another program"** is the safety net:
   a patcher that started after Impure rewrote the sites listed, and the game stopped before a
   battle could crash on them.

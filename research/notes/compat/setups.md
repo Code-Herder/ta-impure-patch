@@ -2,58 +2,75 @@
 
 ## Summary
 
-Thirteen setups, each a game folder as a player has it — the retail 3.1 game, what a mod or
-patch install puts next to it, and Impure's `ddraw.dll` — and two checks of the harness. All
-eight of the player's setups that start Impure run Impure, run **no `tdraw.dll`**, and on Wine
-play a two-player network game: the retail exe alone, beside the 2006 recorder, beside files
-nothing loads, and every Patch Loader setup, **Total Mayhem 11.3.0 and ProTA 4.8** among them
-([the takeover](takeover.md), T1 and T1b). The rest are known gaps until the takeover's next
-landings: four refused by Impure on an exe that imports TADR, and one where Impure never loads.
-The 3.9.02 exe, which several of them run, is described at the end.
+Sixteen setups: fourteen game folders as a player has them — the retail 3.1 game, what a mod or
+patch install puts next to it, and Impure's `ddraw.dll` — and two checks of the harness itself.
 
-**The goal is not fully met in any of those eight, and the table below does not show it.**
-TADR's **recorder** still runs wherever one is installed, off the exe's entry point, and patches
-the engine after Impure; the rows read `meets goal` because the goal is judged from the game
-folder, where a recorder that starts that way leaves nothing ([the suite](suite.md), *Whether
-TADR ran*; [the takeover](takeover.md), part 1). Measured on `retail+tadr1`: seven hooked sites
-in the game's code. Every `meets goal` below therefore means "Impure runs, `tdraw.dll` does not",
-and the column is re-measured when the suite reads the running process.
+**Nine of the fourteen meet the goal in full, on both platforms: Impure runs, and none of TADR's
+code runs.** The
+retail exe alone, beside the 2006 recorder, beside a 2026 recorder, beside files nothing loads, all
+three Patch Loader routes, and **Total Mayhem 11.3.0 and ProTA 4.8** as installed. "None of TADR's
+code" is read out of the running game on every peer of every stage — the exe's own code against
+`TotalA.exe` on disk — and not from the game folder, which a recorder that starts off the entry
+point leaves untouched ([the suite](suite.md), *Whether TADR ran*; [the takeover](takeover.md)).
+Each of the nine also fights a 200v200 skirmish and plays a two-player network game on Wine.
+
+The other five are known gaps, each waiting on a takeover landing: four where the exe imports TADR
+instead of Impure (`TDRAW`, `TAESC`) and Impure refuses at `0x0040EAD6`, and gammata's drop-in,
+where Impure never loads at all. The 3.9.02 exe, which several of them run, is described at the end.
 
 ## The table
 
-`tools/compat/setups.json` holds every setup; `fixtures.json` names every third-party file by
-md5 (nothing third-party is in the repository). Measured 2026-09-27 on Wine on the reference
-setup — the battle stage on (a skirmish on Two Continents and `scenarios/200v200.json` for 60 s
-wherever the menu is reached) and the network stage on (two players, 30 s) — and on the Windows
-test box, start-up only, with the DLL at the T1b commit:
+`tools/compat/setups.json` holds every setup; `fixtures.json` names every third-party file by md5
+(nothing third-party is in the repository). Measured 2026-09-27 on the DLL that carries T1c
+(`b5577e8bef6d`), one full run a platform, **11 meeting the goal, 5 known gaps and 0 UNEXPECTED on
+each**: on Wine on the reference setup with the battle stage on (a skirmish on Two Continents and
+`scenarios/200v200.json` for 60 s wherever the menu is reached) and the network stage on (two
+players, 30 s, nine games), and on the Windows test box, start-up only. "*n* runs" is the number
+of changed runs the reference-image comparison found in the exe's one executable section; every
+one of them is Impure's own work unless the row says otherwise, and the count differs a little
+between platforms because the window the engine is given differs.
 
 | setup | what it is | Wine | Windows |
 |---|---|---|---|
-| `retail` | Impure alone on the retail exe (the control) | **meets goal**: battle 402 of 402 applied, network game | **meets goal** |
-| `retail+tadr1` | + the 2006 recorder `Dplayx.dll` | **meets goal**: the recorder is never called — and runs off the entry point, seven hooked sites; network game | **meets goal** |
-| `retail+tadr1-recorder` | the check of the recorder evidence: the same with the takeover off | the recorder runs, as it must | the same |
-| `retail+tadr-files` | + a modern `tdraw.dll` and `tplayx.dll` nothing loads | **meets goal**, network game | not run (T1's Windows run covered it; the T1b DLL has not) |
-| `loader+tadr-ota` | + Patch Loader v1.3.0.0, TADR `dev-dcff5dd` (OTA), its recorder | **meets goal**, network game | **meets goal** |
-| `loader+tadr-tazero` | the TA Zero report: loader, TADR `tazero`, the 2022 recorder | **meets goal**, network game | **meets goal** |
-| `loader+tadr-mayhem` | loader, TADR's current Mayhem build and recorder | **meets goal**, network game | **meets goal** |
-| `392+tadr-dev` | the 3.9.02 exe, TADR `dev-dcff5dd` | `impure-refused` at `0x0040EAD6`; tdraw starts | not run |
-| `392+tadr-2026.8.6` | the 3.9.02 exe, TADR v2026.8.6 | `impure-refused` at `0x0040EAD6`; tdraw starts | not run |
-| `mayhem-11.3.0` | Total Mayhem 11.3.0 as installed | **meets goal**: battle fought, network game | **meets goal** |
-| `prota-4.8` | ProTA 4.8 as installed | **meets goal**: battle fought, network game | **meets goal** |
-| `mayhem-11.3.0-net` | the check of the safety net: Mayhem with the takeover off | refused by the net: 17 of 265 sites | the same |
-| `gammata-ota` | gammata's OTA drop-in | `impure-not-loaded` (`ddraw_custom.dll` runs, and the recorder) | not run |
-| `escalation` | Escalation GOLD 10.2.0 as installed | `impure-refused` at `0x0040EAD6`; tdraw starts | not run |
-| `escalation+tadr-dev` | Escalation with TADR's current Escalation build | `impure-refused` at `0x0040EAD6`; tdraw starts | not run |
+| `retail` | Impure alone on the retail exe (the control) | **meets goal**: 431 runs, 0 into TADR; battle 402 of 402 applied; network game | **meets goal**: 433 runs, 0 into TADR |
+| `retail+tadr1` | + the 2006 recorder `Dplayx.dll` | **meets goal**: its entry point inert, its three DirectPlay slots redirected, 433 runs and **0 into TADR**; network game | **meets goal**: the same, 433 runs, 0 into TADR |
+| `retail+tadr-recorder-ota` | + a 2026 recorder as the exe's own DirectPlay | **meets goal**: 435 runs, 0 into TADR; network game | **meets goal** |
+| `retail+tadr-files` | + a modern `tdraw.dll` and `tplayx.dll` nothing loads | **meets goal**: 432 runs, 0 into TADR; network game | **meets goal** |
+| `loader+tadr-ota` | + Patch Loader v1.3.0.0, TADR `dev-dcff5dd` (OTA), its recorder | **meets goal**: 443 runs, 0 into TADR; network game | **meets goal** |
+| `loader+tadr-tazero` | the TA Zero report: loader, TADR `tazero`, the 2022 recorder | **meets goal**: 441 runs, 0 into TADR; network game | **meets goal** |
+| `loader+tadr-mayhem` | loader, TADR's current Mayhem build and recorder | **meets goal**: 443 runs, 0 into TADR; network game | **meets goal** |
+| `mayhem-11.3.0` | Total Mayhem 11.3.0 as installed | **meets goal**: 566 runs, 0 into TADR and 3 into the mod's own `win32.dll`; battle fought; network game | **meets goal** |
+| `prota-4.8` | ProTA 4.8 as installed | **meets goal**: 520 runs, 0 into TADR and 3 into the mod's own `win32.dll`; battle fought; network game | **meets goal** |
+| `392+tadr-dev` | the 3.9.02 exe, TADR `dev-dcff5dd` | known gap: `impure-refused` at `0x0040EAD6`; tdraw starts — 13 sites lead into TADR | the same, 13 sites |
+| `392+tadr-2026.8.6` | the 3.9.02 exe, TADR v2026.8.6 | known gap: the same refusal; 7 sites lead into TADR | the same, 7 sites |
+| `gammata-ota` | gammata's OTA drop-in | known gap: `impure-not-loaded` (`ddraw_custom.dll` is what its tdraw loads); 29 sites lead into TADR | the same, 10 sites |
+| `escalation` | Escalation GOLD 10.2.0 as installed | known gap: `impure-refused` at `0x0040EAD6`; 8 sites lead into `TAESC.dll` and `eplayx.dll` | the same, 8 sites |
+| `escalation+tadr-dev` | Escalation with TADR's current Escalation build | known gap: the same refusal; 18 sites lead into `TAESC.dll` and `eplayx.dll` | the same, 18 sites |
+| `retail+tadr1-recorder` | **the check that the evidence can fire**: `retail+tadr1` with `tagpu_takeover.off` | the recorder runs, as it must: its log, **and 24 sites** of the game's code leading into it; battle fought | the same, **6 sites** — the six the entry point installs, the other 18 being the DirectPlay path's, which a start-up-only run never reaches |
+| `mayhem-11.3.0-net` | **the check of the safety net**: Mayhem with `tagpu_takeover.off` | refused by the net: 17 of 265 sites rewritten; 8 sites lead into TADR — the exe's two `DirectDrawCreate` calls and the recorder's six | the same, 8 sites |
 
-Before T1b the recorder answered the game's first DirectPlay call, which comes at start-up, in
-every setup that carries one (measured 2026-09-26 from its log); the goal of the time did not
-look for it. After T1b no recorder answers a call — and each still runs off the entry point,
-which its log does not record. The Windows column's "not run" rows are unchanged since the T1
-runs of 2026-09-26, which matched their Wine rows.
+**What the two harness checks buy.** A goal of "no TADR code" is worth nothing from a check that
+cannot see any, so one setup turns the takeover off and must see the recorder: its log *and* 24
+patched sites. The other turns it off on Total Mayhem, whose 2024 TADR writes Impure's own sites
+without reading them, and must be stopped by the safety net before the skirmish that would
+otherwise crash. Both are mechanisms, not players' folders, and neither plays a network game.
+
+**A recorder that starts off the exe's entry point patches six sites** — `0x00417B9B`,
+`0x0045130F`, `0x00480770`, `0x00490DF9`, `0x00496559`, `0x004965B3`, the same six in every setup
+where one runs — and a build that also answers a DirectPlay call patches eighteen more. The
+recorder control shows both halves by platform: 6 on Windows, where the suite stops at the main
+menu, and 24 on Wine, where it fights a battle and plays a network game. That is what the nine
+rows above have none of, and it is why the goal is judged by reading the process: none of it
+leaves a trace in the game folder.
+
+Some rows also report runs that **hold** an address inside one of those modules without an
+instruction that goes there — 18 on `392+tadr-dev`, 19 on `escalation+tadr-dev`, 9 on the recorder
+control's Windows run. Those are coincidences and are counted, never judged
+([the takeover](takeover.md), part 4).
 
 A full Wine run takes about 21 minutes on the reference setup: the single-player runs six at a
-time, about seven minutes, and the eight network games one at a time, about 80 s each, queued
-beside them. The Windows runs take about 45 s a setup, one at a time.
+time, and the nine network games one at a time, about 80 s each, queued beside them. The Windows
+runs take about 45 s a setup, one at a time; there is no battle or network stage there yet.
 
 ## The 3.9.02 exe
 
@@ -75,4 +92,3 @@ resource. The engine changes are 12 code bytes at six sites and 23 data bytes:
 
 Every 3.9.02 feature — the unit limit, the weapon IDs, the megamap, the recorder — comes from
 `tdraw.dll` and `tplayx.dll` at run time, not from the exe.
-

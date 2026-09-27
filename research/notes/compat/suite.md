@@ -18,7 +18,8 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   copies of the registry hives, its own Xvfb display, and the overlay of its fixtures on the
   retail gamedir. The runner watches the display's windows for the whole run (a refusal is a
   box, and a box is the evidence), reads `tdrawlog.txt`, `tagpu.log`, `startup-failure.txt`,
-  `ErrorLog.txt` and the Wine `+loaddll` trace, then fights the battle where the menu came up.
+  `ErrorLog.txt` and the Wine `+loaddll` trace, then fights the battle where the menu came up,
+  and last — while the game is still alive — reads its code out of the process (below).
 - **The network stage** (`wine --mp SECONDS`, 30 by default, 0 for none): for each player's
   setup whose single-player run showed Impure running, a second instance of the same folder
   (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's
@@ -27,18 +28,28 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   watched on both. One network game at a time, queued as the single-player results come in:
   DirectPlay's name server owns UDP 47624 for the whole machine. A holder of that port in one
   of the suite's own prefixes is stale and ended; any other is someone else's game, waited for
-  five minutes and never touched, and then the stage fails as not run.
+  five minutes and never touched, and then the stage fails as not run. "Its own" is the set of
+  prefixes **this run** created, not every `compat-` name: the instance names are fixed, so a
+  session in another worktree runs prefixes named exactly like ours
+  (`parallel-mp-runs-share-dplay-port`).
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
   process started over SSH cannot see the desktop's windows.
+- `selftest`: the hook decode against every shape it claims to decode and one it must leave
+  alone, with no game and no fixtures — eight cases, built from what was measured, including the
+  Patch Loader's own thunk rewrite and a plain immediate that must not fire. It is the only check
+  of `decode_run` that does not need a running game, and both platforms' verdicts rest on it.
 
 A run is **meets goal**, **known gap** (matches `today`) or **UNEXPECTED**; the exit status is
 1 on any UNEXPECTED. The rule: no UNEXPECTED before a release.
 
 ## Whether TADR ran
 
-`tadr_ran` in a setup's goal is judged from what each part of TADR leaves in the game folder,
-on every peer of every stage:
+`tadr_ran` in a setup's goal is judged two ways, on every peer of every stage: from what TADR
+leaves in the game folder, and — since 2026-09-27 — from **reading the running game's own code**.
+The second is what the first cannot give.
+
+**From the game folder.**
 
 - **`tdraw.dll`** writes `tdrawlog.txt` from its `DllMain`: the file at all means it started
   (the result says too whether it installed its engine patches).
@@ -49,22 +60,47 @@ on every peer of every stage:
   ([the takeover](takeover.md), part 1). A demo file is no evidence either way: the 2006
   recorder wrote none in a network game while it ran.
 
-**So this evidence has a hole, and it is the reason the T1b runs read clean.** A recorder that
-takes the entry point leaves nothing in the game folder to find. Closing it needs the running
-process instead of its files: the exe's code compared against the exe file, and any changed byte
-that leads into a game-folder DLL other than Impure's reported. A prototype does this on Wine
-through `/proc/<pid>/mem` (the module extents must come from each module's PE header
-`SizeOfImage`, since the maps show only its header page) and finds six such hooks in
-`retail+tadr1` against none beside the retail exe; Windows needs the same through
-`ReadProcessMemory` from the 32-bit PowerShell. Not in the suite yet — **until it is, a
-`tadr_ran: false` row means "no recorder log and no `tdrawlog.txt`", not "no TADR code".**
+**From the running process** (`exe_hooks`). The exe's executable sections are read out of the live
+game and compared with `TotalA.exe` on disk; every run of changed bytes is decoded for the address
+it leads to (`decode_run`: `E8`/`E9` rel32, `FF 15`/`FF 25` through a pointer, `push imm32; ret`,
+`mov eax,imm32; jmp eax`), and that address is tested against every module loaded from the game
+folder. **A verdict rests on an instruction that transfers control, never on four bytes that
+merely hold an address** -- those are reported as held and not counted, because the bytes are as
+likely to be the middle of an instruction or the displacement of a jump ([the takeover](takeover.md),
+part 4, where both halves of that are measured). A target in a module whose file carries
+`TADemo-MKChat` is TADR's code having run; a target in any other DLL of the folder is a byte the
+mod itself sets and is reported, never counted — the Patch Loader rewrites three of the exe's
+import thunks into direct calls to the mod's `win32.dll`. The decode is deliberately the same set
+of shapes `tagpu_takeover.c` decodes in-process, so the suite and the DLL answer the same
+question and may be compared.
 
-`retail+tadr1-recorder` is the check of the file evidence: the 2006 recorder with the takeover
-switched off, whose goal is `tadr_ran: true`. Measured 2026-09-26, before the recorder's part of
-the takeover existed, every setup carrying a recorder had run it — the 2006 one, the three
-Patch Loader setups, Total Mayhem, ProTA and gammata's — at the game's first DirectPlay call, in
-single player.
+**A goal of `tadr_ran: false` is not met by a comparison that did not happen.** When the read
+fails — no process to read, the exe mapped away from its `ImageBase`, `ptrace_scope` refusing —
+the row says so and reads UNEXPECTED. It is not counted as TADR having run: it is counted as
+unproven, which is the same rule as *a run is only evidence if the watcher saw it*.
 
+- **On Wine** the read is `/proc/<pid>/mem` of the game. Only descendants of the pid the runner
+  started are looked at (`wine TotalA.exe` maps the PE in that process or in a child of it, and a
+  `ptrace_scope` of 1 lets a process read its own descendants and nothing else, so another
+  session's game can never be read). A module's extent is the `SizeOfImage` in its PE header read
+  out of the process, because the maps show a PE image's header page alone. A module of the game
+  folder is found by **where its file really is**, not by the folder's path being a prefix: tacli
+  links the retail install's own files into an instance instead of copying them.
+- **On Windows** `win-watch.ps1` does the reading — `ReadProcessMemory` from the 32-bit
+  PowerShell, since a 64-bit one lists only the exe among a 32-bit game's modules — and **judges
+  nothing**: it emits the changed runs with a little context each side, and the module table with
+  each module's extent and whether its file carries the marker, for the same `decode_run` to
+  decode. Its one gap is the indirect call form, which needs a read at an arbitrary address the
+  watcher does not make. It has run over all sixteen setups (2026-09-27), and the rule above is
+  what it bought: Wine and Windows map a DLL to different addresses, so a coincidence that fires
+  on one machine fires on nothing else, and only a run on the other platform shows it.
+
+`retail+tadr1-recorder` is the check of both kinds of evidence at once: the 2006 recorder with the
+takeover switched off (`tagpu_takeover.off`), whose goal is `tadr_ran: true`. MEASURED 2026-09-27:
+its log appears *and* the process read finds **24 sites** of the game's code leading into the
+recorder's module on Wine, where a battle and a network game let its DirectPlay path run as well,
+and the 6 the entry point alone installs on the Windows box, which stops at the main menu — against
+0 on every setup where the takeover is on.
 
 ## Adding a setup
 

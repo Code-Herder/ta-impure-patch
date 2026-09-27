@@ -32,6 +32,7 @@ tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py clean                       # remove the compat-* Wine instances
+tools/compat/tacompat.py selftest                    # the hook decode, 8 cases, no game needed
 ```
 
 - **Verdicts.** `meets goal` (Impure active, none of TADR's code run); `known gap` (matches
@@ -54,14 +55,25 @@ tools/compat/tacompat.py clean                       # remove the compat-* Wine 
   Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
   `compat-mp-join.json`. One game at a time, queued beside the single-player runs: DirectPlay's
   port is the machine's. The report's column reads `mp ok`, `mp FAILED` or `-` (not played).
-- **Whether TADR ran** (`tadr_ran`), on every peer: `tdrawlog.txt` at all (tdraw started), or
-  `log\TA Demo Recorder Log -<date>.txt` at all — the recorder creates one only when it starts
-  from inside a DirectPlay export, and a `DLL.DirectPlay…` line in it names which.
-  **`tadr_ran: false` does not mean no TADR code.** The recorder's other way in is the jump its
-  `DllMain` splices over the exe's entry point, which writes no log; measured on `retail+tadr1`,
-  seven hooked sites in the game's code. Reading the running process is what shows it — the
-  exe's code against the exe file, any changed byte leading into a game-folder DLL other than
-  Impure's — and the suite does not do that yet (`research/notes/compat/takeover.md`, part 1).
+- **Whether TADR ran** (`tadr_ran`), on every peer, from two kinds of evidence:
+  - **the game folder**: `tdrawlog.txt` at all (tdraw started), or `log\TA Demo Recorder Log
+    -<date>.txt` at all — the recorder creates one only when it starts from inside a DirectPlay
+    export, and a `DLL.DirectPlay…` line in it names which. **This half can never prove the
+    negative**: the recorder's other way in is the jump its `DllMain` splices over the exe's entry
+    point, and it writes no log at all.
+  - **the running game's own code** (`exe_hooks`): the exe's executable sections read out of the
+    live process and compared with `TotalA.exe` on disk, each run of changed bytes decoded for the
+    address an **instruction** in it leads to — four bytes that merely hold an address are reported
+    as held and never counted — and that address tested against every module loaded from the game
+    folder.
+    A target in a module whose file carries `TADemo-MKChat` is TADR's code having run. A target in
+    any other DLL of the folder is the mod's own byte and is reported, never counted — the Patch
+    Loader rewrites three of the exe's import thunks into calls to the mod's `win32.dll`.
+  - **A goal of `tadr_ran: false` is not met by a read that did not happen.** No process to read,
+    the exe mapped away from its `ImageBase`, `ptrace_scope` refusing: the row says so and reads
+    UNEXPECTED, the same rule as *a run is only evidence if the watcher saw it*.
+  - On Windows `win-watch.ps1` does the reading and judges nothing — it dumps the changed runs and
+    the module table for the same decoder.
 - **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>/` (default cache
   `~/.local/share/ta-compat`, outside every repository because results carry absolute
   paths): `summary.txt`, and per setup the tdrawlog, `tagpu.log`, `ErrorLog.txt`,
@@ -74,6 +86,19 @@ the repository. A fixture with a `url` downloads with `fetch`. One marked `manua
 a browser check (Cloudflare on tauniverse.com): download it in Chrome through the
 claude-in-chrome tools (the owner allows it for fixtures), then
 `tacompat.py fetch --import NAME=~/Downloads/<file>` — the import checks every member's md5.
+
+## Anti-virus
+
+Impure rewrites the host exe's code in memory (265 sites, plus detour trampolines) and, since T1c,
+eight bytes over a TADR DLL's PE entry point — a write into a foreign module's image, which is the
+one new shape, and `PAGE_READWRITE` rather than `PAGE_EXECUTE_READWRITE` for that reason.
+**Defender says nothing to any of it** (MEASURED 2026-09-27: all 16 setups on the box, Defender
+with `RealTimeProtectionEnabled`, `AntivirusEnabled`, `AMServiceEnabled` and
+`BehaviorMonitorEnabled` all true — **0** events in
+`Microsoft-Windows-Windows Defender/Operational` over the whole run and 0 in
+`Get-MpThreatDetection`). Read that log again after a Windows session that changes how the DLL
+writes memory, and say in the hand-over what it said. `win-watch.ps1`'s
+`OpenProcess`/`ReadProcessMemory` is harness code and is never shipped.
 
 ## Windows
 
@@ -101,8 +126,10 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
 - `levers`: empty files put in the game folder, a DLL switch. A setup with one checks a mechanism,
   not a player's folder, and plays no network game: `mayhem-11.3.0-net` turns the takeover off
   (`tagpu_takeover.off`) so the safety net has TADR to catch, and its goal is the net's refusal;
-  `retail+tadr1-recorder` turns it off so the recorder answers a DirectPlay call, and its goal is
-  `tadr_ran: true` — the proof that the log evidence can fire at all.
+  `retail+tadr1-recorder` turns it off so the recorder runs and answers a DirectPlay call, and its
+  goal is `tadr_ran: true` — the proof that both kinds of evidence can fire at all (measured
+  2026-09-27: its log, and 24 sites of the game's code leading into the recorder on Wine, 6 on
+  Windows, where a start-up-only run never reaches its DirectPlay path).
 
 Run the new setup before writing its `today` — write down what it did, not what you expect.
 **The commit that makes a setup meet its goal deletes its `today`.**
@@ -131,7 +158,24 @@ Run the new setup before writing its `today` — write down what it did, not wha
   byte-order mark, which the runner strips when it reads them.
 - **A demo file proves nothing about the recorder**: the 2006 one wrote none in a network game
   while it ran. Its log is the evidence — and only of the DirectPlay way in, never of the
-  entry-point one, which leaves the game folder untouched.
+  entry-point one, which leaves the game folder untouched. Reading the process is what covers that.
+- **Where a DLL lands in memory differs between Wine and Windows, and only an instruction is
+  evidence.** Windows mapped the 2006 recorder at `0x020C0000` and Mayhem's at `0x00910000`;
+  Impure's own jump displacements are about `0x020F0000` and its own `mov esi,[esi+0x92]` begins
+  `8B 96 92 00` = `0x0092968B`. Judged as addresses, those refused two installs over 35 of our own
+  patch sites, on Windows only. Hence: a verdict rests on `E8`/`E9`/`FF 15`/`FF 25`/`push;ret`/
+  `mov;jmp`, and a held value is counted and left alone, in the DLL and in `decode_run` alike.
+  **A finding whose site is one of Impure's own patch addresses (the `enginefix`/`limits` lines in
+  `tagpu.log`, give or take one byte for the opcode) is a decode bug, not TADR** — check that
+  before believing a refusal.
+- **A refusal naming a DLL of the game folder may be the mod's own byte, not TADR's.** Impure
+  refuses only for a target inside a module carrying TADR's marker; a `takeover:` log line ending
+  `(not TADR: the mod's own)` is working as intended. If a legitimate mod DLL ever *does* refuse,
+  the marker test is what to look at, never a widening of the rule.
+- **Xvfb killed with SIGKILL leaves `/tmp/.X<n>-lock` behind**, and `free_display` counts a lock as
+  a display in use: a few hundred runs used to exhaust `:180`–`:399` and the next run died with
+  "no free X display number". `stop_xvfb` terminates and removes the lock. If a run dies that way
+  again, look for locks in that range with no live Xvfb before blaming anything else.
 - **The joiner's session list fills when SELGAME opens and on UPDATE, never by itself**: a host
   still busy with its map load is missing from it. The runner presses UPDATE while JOIN is grey,
   as a player would (Total Mayhem needed it one run in three).
