@@ -6,8 +6,8 @@ Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our s
 code, over six landings and the ones found since (B7, B8, B9). The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
 grill that followed [the evidence pass](sim-fixes-evidence.md). **All six landings are landed on local
 main (2026-09-25), each after its review**, and B7, four defects the veterancy survey found, landed
-with section C's C3 on 2026-09-26. B8, kill counts across peers, landed the same day after its
-review. The rules
+with section C's C3 on 2026-09-26. B8, kill counts across peers, and B9, an order disarmed when nobody is left to take it,
+landed the same day after their reviews. The rules
 shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
@@ -1711,7 +1711,8 @@ creates a unit finished through `0x485F50` (it writes `+0x104` afterwards only f
 other peers, and so how often the split happens in play, was not measured.
 
 **B9 — an order disarmed when nobody is left to take it.** Added 2026-09-26 by the owner from B6's
-side measurement, built on its own branch, not landed. Local, both builds, silent at run time. Its
+side measurement; LANDED 2026-09-26 on local main after two reviews at high, every finding acted
+on. Local, both builds, silent at run time. Its
 first build keyed the disarm to the tracked unit's free; the landing review found that a
 regression, since a placement other selected builders could still take would be disarmed with
 the one unit, and it was rebuilt on the click's own test. The owner then extended it from
