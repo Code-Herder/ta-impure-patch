@@ -82,6 +82,7 @@ typedef struct LIMSITE {
     unsigned char ours[LIM_MAXB];
     unsigned char have[LIM_MAXB];   /* what the image held when compared            */
     unsigned char differs;
+    unsigned char unreadable;       /* the page could not be read: `have` means nothing */
     const char*   name;
 } LIMSITE;
 
@@ -9635,7 +9636,8 @@ int tagpu_limits_install(void)
 
     for (i = 0; i < s_nlim; i++) {
         LIMSITE* s = &s_lim[i];
-        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->stock, s->n)) {
+        s->unreadable = !lim_read(s->va, s->have, s->n);
+        if (s->unreadable || memcmp(s->have, s->stock, s->n)) {
             s->differs = 1;
             bad++;
         }
@@ -9755,7 +9757,8 @@ static void lim_verify(void)
     int i;
     for (i = 0; i < s_nlim; i++) {
         LIMSITE* s = &s_lim[i];
-        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->ours, s->n)) {
+        s->unreadable = !lim_read(s->va, s->have, s->n);
+        if (s->unreadable || memcmp(s->have, s->ours, s->n)) {
             s->differs = 1;
             s_limRewritten++;
         }
@@ -9882,7 +9885,7 @@ void tagpu_limits_report(void)
             break;
         }
         lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, 16);
-        lim_hex(have, s->have, s->n, 16);
+        if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, 16);
         _snprintf(line, sizeof line, "0x%08X %s\r\n  want %s\r\n  have %s\r\n",
                   s->va, s->name, want, have);
         line[sizeof line - 1] = 0;
@@ -9895,7 +9898,7 @@ void tagpu_limits_report(void)
         const LIMSITE* s = &s_lim[i];
         if (!s->differs) continue;
         lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, LIM_MAXB);
-        lim_hex(have, s->have, s->n, LIM_MAXB);
+        if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
     }
     {
