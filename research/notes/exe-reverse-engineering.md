@@ -3570,8 +3570,8 @@ Kills are the u16 `unit+0xB8`, zero-extended by every reader; stock's level is `
 | `0x49E468` (7, `xor ecx,ecx; mov eax,0x66666667`) | AutoAim's reload: the slot waits `reload · (100 − 6L) % · (120 − 20·HP/maxHP) %` (`0x49E48D..0x49E4BB`), so a damaged unit reloads slower | `edi` the unit; `ecx` = L at `0x49E48D` |
 | `0x48A324` (14, `cmp word [edi+0xB8],5; jbe 0x48A42D`) | target lead: on past 5 kills (`0x48A332`), off at `0x48A42D`; neither reads the flags | `edi` the unit |
 | `0x49D6EA` (5, `mov eax,0x2AAAAAAB`) | the fire method's spread: the divisor `kills / 12`, applied when above 1 (`0x49D702`, `cmp ebx,1`); `ecx += 0x800` first | `edi` the unit, `ecx` the spread; `ebx` written at `0x49D700` |
-| `0x4043D8` (7, `mov cx,[edx+0xB8]`) | the capture order `0x4042xx` (a state machine on `[order+5]`, jump table `0x404714`; "Capturing" `0x5013B8`, "That unit cannot be captured" `0x501618`, "…a cloud of vapor…" `0x5015E0`): the capture's cost, `min(f(def), 0x708)` scaled by the target's HP (`0x404359..0x4043C7`), times `(10 + L)/10` (`0x4043E8..0x404407`), written once to `[order+0x3A]` as the capture starts | `edx` = `[order+0x16]`, the TARGET; `edi` the cost; `eax` = 10 + L at `0x4043EC` |
-| `0x43869D` (7, `mov cx,[eax+0xB8]`) | `0x438650`, a UNIT RECLAIM's step: `workertime (def +0x1FE) · (k + 5)/5 · the target's maxHP (def +0x1FA) · 15` over the target's cost (`0x4386B9..0x4386D8`), into `[order+0x36]`, the HP the reclaim order deals the target as a kind-5 hit every 15 ticks (`0x40496E..0x404986`, `[order+0x3A]` counting the ticks). Its two callers are the reclaim order (`0x40483D`; "Reclaiming" `0x501388`, "That unit cannot be reclaimed" `0x50164C`) and the build order's reclaim (`0x414C86`) — not capture, which an earlier survey had it as | `eax` the RECLAIMER, `dx` its workertime (`0x438694`); `edx` = the factor at `0x4386B9` |
+| `0x4043D8` (7, `mov cx,[edx+0xB8]`) | the capture order `0x4042xx` (a state machine on `[order+5]`, jump table `0x404714`; "Capturing" `0x5013B8`, "That unit cannot be captured" `0x501618`, "…a cloud of vapor…" `0x5015E0`): the capture's cost, `min(f(def), 0x708)` (the clamp at `0x40438A..0x404396`) scaled by the target's HP (`0x404359..0x4043C7`; at most the clamped base, 1 800, for a target at full HP), times `(10 + L)/10` (`0x4043E8..0x404407`, a 32-bit product that stays below 236 million at the level cap 13 107), written once to `[order+0x3A]` as the capture starts | `edx` = `[order+0x16]`, the TARGET; `edi` the cost; `eax` = 10 + L at `0x4043EC` |
+| `0x43869D` (7, `mov cx,[eax+0xB8]`) | `0x438650`, a UNIT RECLAIM's step: `workertime (def +0x1FE) · (k + 5)/5 · the target's maxHP (def +0x1FA) · 15` over the target's cost (`0x4386B9..0x4386D8`: the four factors multiplied in 32 bits, the product read unsigned by `fild qword` at `0x4386CC` with a zero high dword, so it wraps past 2³² − 1, at a factor of 32 for ARMCOM's 300 on a CORKROG, stock's factor at 155 kills), into `[order+0x36]`, the HP the reclaim order deals the target as a kind-5 hit every 15 ticks (`0x40496E..0x404986`, `[order+0x3A]` counting the ticks). Its two callers are the reclaim order (`0x40483D`; "Reclaiming" `0x501388`, "That unit cannot be reclaimed" `0x50164C`) and the build order's reclaim (`0x414C86`) — not capture, which an earlier survey had it as | `eax` the RECLAIMER, `dx` its workertime (`0x438694`); `edx` = the factor at `0x4386B9` |
 
 **MEASURED on the new build** (C3's fixture: `VT_LAS` deals 100 to every type, the victims are
 unarmed Krogoth clones with 29 918 HP): a keyed shooter at 10 kills and level 10 took 160 a hit,
@@ -3610,7 +3610,8 @@ damage steps through `0x489BB0` every half second, so the target's own taken lev
   result signed (`0x489EBC..0x489EC4`); the paralyser (kind 2, `0x489DFD`) and the heal (kind `0xA`,
   `0x489D6E`) read it with `movzx`. So an amount past 32 767 wraps into a gain.
 - **The 30 000 callers** (kill outright): self-destruct and player defeat `0x402147` and `0x486F94`
-  (`push 0x7530`, kind 3), a dying transport's cargo `0x48680B` (kind 6), and `0x402701`,
+  (`push 0x7530`, kind 3), a dying transport's cargo `0x48680B` (kind 3 or 6:
+  `0x4867DA..0x4867EC` pick 3 when the transport's death byte's high nibble is 3, else 6), and `0x402701`,
   `0x41BC49`, `0x4886A4`, `0x4887D0` (kinds 4 and 9). The disintegrators (`ARM_DISINTEGRATOR`,
   `CORE_DISINTEGRATOR`, default damage 30 000 in `ccdata`, `btdata` and `rev31`) are the only retail
   weapons past 20 000, and their hit is raised by the shooter's level at `0x499DB5`.
@@ -3654,8 +3655,10 @@ sight. Out of sight (`0x4673AF`), **`0x4673B1` reads the attacker's owner**: `mo
   the projectile init `0x49C740` with no attacker) and broadcast as a `0x0D` (`0x49DFF6`); the
   receiver `0x49D270` (from the dispatcher at `0x455433`) builds it again in its meteor branch,
   `0x49D307`, also with no attacker.
-- **`0x49C740(proj, weapon, start, attacker, time, z)`**, stdcall, has eight callers; only those two
-  pass no attacker. It writes the shooter's slot index `+0x62` only for a projectile with an
+- **`0x49C740(proj, weapon, start, target, time, attacker)`**, stdcall (`ret 0x18`), has eight
+  callers; only those two pass no attacker (argument 6, `[esp+0x28]` at `0x49C7A8`; argument 4 is a
+  target position, copied to `+0x28` when not NULL, and `0x49CE4A` and `0x49D064` pass it NULL). It
+  writes `+0x62`, the firing piece, which the shooter's `QueryPrimary`/`QuerySecondary`/`QueryTertiary` script answers (`0x43E1E0`, run with the slot index), only for a projectile with an
   attacker (`0x49C833`); the one reader of `+0x62` is `0x49B7D6`, behind the burst count `+0x60`,
   which is 0 for a stone. `+0x66` is the owner byte, 10 for no attacker.
 - **The damage gate** `0x49A01B..0x49A047` computes a projectile's damage only when its owner's

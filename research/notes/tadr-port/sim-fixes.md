@@ -1341,8 +1341,8 @@ the meteor shower*; the hooks are [gpu-status §2.100](../gpu-status.html).
   stone's damage on every peer, so a stone's hit on a unit was applied once by its owner and once
   more for each other peer. A stone is now computed on the peer that spawned it, as a shot is on the
   firer's: the spawn marks its stone's `+0x62` 0, the receiver's meteor branch 1 (the field is the
-  shooter's slot index, written only for a projectile with a shooter and read only behind a burst
-  count a stone does not have), and the gate sends a received stone where stock sends a remote
+  firing piece the shooter's `Query*` script answers, written only for a projectile with a shooter
+  and read only behind a burst count a stone does not have), and the gate sends a received stone where stock sends a remote
   projectile. The mark lives in the record, so the pool's compaction carries it.
 
 **Measured** on a private Xvfb, each defect first on the build before B7 (C2's tip with the
@@ -1355,7 +1355,7 @@ scenario `kills` column), then on the new one:
   −11 135 = 1 329 + 2 · 26 536 − 65 536, two wrapped hits; on the new build −31 438 = 1 329 − 32 767 at
   the first.
 - **Kill-outright**: the Krogoth with 25 kills survived its self-destruct at 5 918 HP; on the new
-  build it died, and so did a keyed tower at 30 kills (level 25, which no weapon hit can damage),
+  build it died, and so did a keyed tower at 30 kills (level 25, which no hit under 30 000 can damage),
   both counted.
 - **The radar** (`scenarios/b7-radar-hail.json`, `WK Hail T`'s targetable hail, True line of sight,
   unmapped): an access violation at `0x4673B4` reading `0xFF` with `ECX = 0`; the new build runs,
@@ -1374,6 +1374,10 @@ scenario `kills` column), then on the new one:
 - Every peer still runs its own shower, so a network game of N players rains N showers.
 - Kill counts differ between peers in stock (the victim's owner counts a kill of its unit on its
   copy of the killer; the killer's own copy does not). Found by C3's two-peer run; a new question
+  for B.
+- A unit reclaim's step wraps in stock as well: `0x438650` multiplies the workertime, the factor
+  `(kills + 5)/5`, the target's MaxHitPoints and 15 in 32 bits, so ARMCOM reclaiming a CORKROG from
+  155 kills takes a sliver of its step. C3 bounds the keyed factor only; stock's is a new question
   for B.
 
 **Measured alongside a landing** (time-boxed, each with its session):

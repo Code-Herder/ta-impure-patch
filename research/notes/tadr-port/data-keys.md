@@ -116,14 +116,16 @@ kept in the evidence pass.
   and the loader sets the weapon's `noradar` bit so its projectile draws no dot. The hit is applied
   exactly as stock applies it. Display only.
 - **Veterancy: TADR's levels, bounded per effect.** Levels are the count of thresholds at or below
-  the kill count (u16, as stock). Damage taken: up to 25 levels for weapon hits, as TADR documents,
-  so a unit at 25 takes no weapon damage; **a call of 30 000 or more (kill outright: self-destruct,
+  the kill count (u16, as stock). Damage taken: up to 25 levels, as TADR documents, applied where
+  stock applies its own level, to every hit but the heal, so a unit at 25 takes no weapon damage, no
+  paralysis and no unit reclaim's step (TADR's hook sits at the same site); **a call of 30 000 or more (kill outright: self-destruct,
   defeat, a dying transport; and the D-guns) takes no veterancy reduction**, as it takes no armour
   reduction, so it kills every unit, veteran or not (B7's fix of stock, which let a veteran above
   24 000 HP live). Damage dealt: every hit saturated into the HP word's range (B7). Reload: up to
   16 levels, the largest with a positive multiplier. Accuracy: `kills / rate`, 0 = off. The
   capture's cost (`0x4043D8`) and a unit reclaim's step (`0x438650`, which TADR misses), the level
-  capped at stock's own maximum, 13 107. The panel shows "VetN" on
+  capped at stock's own maximum, 13 107, and the reclaim step's factor held to what its 32-bit
+  product holds. The panel shows "VetN" on
   every unit, as TADR. Our C copy of the reload formula in `tagpu_weapons.c` takes the same level.
 - **Transported explosions: carried at death, decided inside the death itself.** A per-slot byte
   set and consumed within one death: carried when the transporter link `+0x86` is set before the
@@ -364,9 +366,12 @@ commit can change.
   loader chain onto it.
 - **Seven sites in the fail-closed table** (`tagpu_patches.c`, `fix_veterancy`), both builds. Each
   runs the engine's own instructions for a type without the key.
-  - Damage taken (`0x489BFA`): L, at most 25 (TADR's documented −4 % a level, so a unit at 25 takes
-    no weapon damage).
-  - Damage dealt (`0x499DB5`): L, unbounded; the HP word's saturation (B7) bounds the hit.
+  - Damage taken (`0x489BFA`): L, at most 25 (TADR's documented −4 % a level). Stock's reduction
+    there covers every hit but the heal (`0xA`) and, since B7, the kill-outright calls, so a unit at
+    25 takes no weapon damage, no paralysis and no unit reclaim's step: it cannot be reclaimed. No
+    known content reaches 25; every list of Escalation's has five thresholds.
+  - Damage dealt (`0x499DB5`): L, at most 32 (`DK_VET_MAX`, the thresholds a list may carry); the HP
+    word's saturation (B7) bounds the hit.
   - Reload (`0x49E468`): L, at most 16. `tagpu_weapons.c`'s own reload for slots past 2 takes the
     same level.
   - Target lead (`0x48A324`): on past the first threshold.
@@ -379,7 +384,15 @@ commit can change.
     reclaims every 15 ticks, by the reclaimer's level: `1 + L` in place of
     stock's `(kills + 5)/5`. Both this and the capture's cost take the level open past the last
     threshold, by the last gap (by the threshold, for a list of one), capped at 13 107, stock's own
-    ceiling.
+    ceiling. The capture's product stays below 236 million at the cap (its base is at most 1 800,
+    `0x404396`). The reclaim step's does not: `0x4386B9..0x4386C3` multiply the workertime, the
+    factor, the target's MaxHitPoints and the 15 ticks in 32 bits and `0x4386CC` reads the product
+    unsigned, so ARMCOM's 300 on a CORKROG wraps at a factor of 32. The answer takes the other three
+    factors (the stub passes `edx`, `[esi+0x1FA]` and `[esp+0x1C]`) and holds the factor to the
+    largest that fits, 1 when even 1 does not (the engine's own product at a recruit's factor).
+    MEASURED (`scenarios/c3-reclaim-bound.json`, VTCOM1 and VTCOM0 at 31 kills on a CORKROG each):
+    on the build before the bound the keyed target lost 30 HP in 16 s against stock's 3 074, the
+    wrapped product; with it, 11 304 per 13 s against 2 544, 4.44 = 31/7, the event logged.
 - **`0x438650` is a unit reclaim, not a capture.** Its callers are the reclaim order (`0x40483D`)
   and the build order's reclaim (`0x414C86`); the evidence pass had it as the capture's time. The
   decision stands for it unchanged: every place stock reads a level reads the keyed type's.

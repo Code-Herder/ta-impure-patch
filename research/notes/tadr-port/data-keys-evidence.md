@@ -1461,7 +1461,9 @@ each stated at its site:**
 - **Accuracy:** `kills / rate` with rate 1…65 535. 0 = off. Anything else is malformed.
 - **The capture's cost and a unit reclaim's step** (`0x4043D8` and `0x438650`): the unbounded level with the last gap. The
   gap is ≥ 1 by the parse rule below. Cap the level at **13 107**, stock's own maximum
-  (65 535 / 5), so no product exceeds what stock already computes.
+  (65 535 / 5). The capture's product stays below 236 million at it; the reclaim step's is a 32-bit
+  product of four factors that wraps well below it (ARMCOM on CORKROG at a factor of 32, stock's
+  included at 155 kills), so C3 holds that factor to what the product holds ([C3, as built](data-keys.md#c3-as-built)).
 - **Display:** local, skip-and-log if its bytes differ (owner question 3).
 
 **Parse at load, reject whole.** 1…32 tokens, each a decimal in 1…65 535, strictly increasing. Any
@@ -1520,7 +1522,8 @@ stock — a kill of another peer's unit is counted on the victim's owner's copy 
 3. **"VetN" on every unit**, as TADR. Display only.
 4. **Both capture formulas, the level capped at 13 107**, decided without asking (the second is a
    unit reclaim's step; the reason holds for it unchanged): it fixes TADR's
-   miss and keeps every product inside what stock already computes.
+   miss; the capture's product stays inside an int at the cap, and the reclaim step's factor is
+   held to what its own product holds.
 
 A malformed list or rate is rejected whole and the type plays stock for that key, with the file,
 the key and the reason logged ([the plan](data-keys.md#bad-values)).

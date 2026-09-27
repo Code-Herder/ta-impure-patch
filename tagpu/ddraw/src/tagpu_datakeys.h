@@ -12,8 +12,9 @@
    0x4B6BA0 records each COB block's length for the mask's bounds. Installed
    at attach for the process, before the fail-closed table, each site
    byte-matched; a mismatch leaves that site untouched, skips the sites that
-   rest on it, logs, and makes the table refuse to install (the veterancy keys
-   it carries are simulation).
+   rest on it and logs. One at the load's start, the loader's entry or its
+   read site also makes the table refuse to install (the veterancy keys the
+   reader carries are simulation); one at the checksum only costs the mask.
 
    The build ghost's piece mask (C1): which pieces a type's ghost hides. By
    default the pieces its COB `Create()` hides before anything else runs; with
@@ -71,7 +72,9 @@ int __stdcall tagpu_datakeys_vet_reload(const char* unit);
 int __stdcall tagpu_datakeys_vet_lead(const char* unit);
 int __stdcall tagpu_datakeys_vet_accuracy(const char* unit);
 int __stdcall tagpu_datakeys_vet_capture_cost(const char* unit);
-int __stdcall tagpu_datakeys_vet_reclaim_step(const char* unit);
+/* the reclaim step also takes the product's other factors, to bound its own */
+int __stdcall tagpu_datakeys_vet_reclaim_step(const char* unit, unsigned workertime,
+                                              unsigned maxhp, unsigned ticks);
 /* the reload level, keyed or stock's min(kills / 5, 5): the extra-weapons
    module's C reload takes the same one */
 int tagpu_datakeys_vet_reload_level(const char* unit);

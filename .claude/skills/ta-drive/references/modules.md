@@ -274,6 +274,7 @@ The same fixture carries veterancy's types: `VTLLT0` (no key), `VTLLT1` (a level
 | scenario | what it shows | how it is driven |
 |---|---|---|
 | `c3-veterancy` | every effect beside its stock control: dealt, taken, reload, lead, spread, the capture's cost, a unit reclaim's step | runs by itself; read HP over time |
+| `c3-reclaim-bound` | a keyed reclaim step held to what its product holds, beside stock's | read the two CORKROGs' HP; the keyed reclaimer starts about a minute in |
 | `c3-kill-lines` | "10 kills - Vet10" and the three other lines | hover each tower (`keys <i> pmove:X,Y`) and crop the bottom bar |
 | `b7-word-outright` | a hit past the HP word; kill-outright on veterans | self-destruct: `click` the unit, then `keys <i> mouse:600,500 ctrl+d` |
 | `b7-dgun` | the retail D-gun past the HP word | `order --unit N --expect ARMCOM --expect-target ARMMSTOR blast unit T` |

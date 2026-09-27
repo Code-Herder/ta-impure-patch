@@ -5600,8 +5600,10 @@ static int fix_weapon_keys(void)
    - 0x4043D8, the capture's cost (`mov cx,[edx+0xB8]`, edx the target): eax = 10 + L,
      on at 0x4043EC, `imul eax,edi`. The stock path keeps eax, 0x66666667.
    - 0x43869D, a unit reclaim's step (`mov cx,[eax+0xB8]`, eax the reclaimer, dx its workertime
-   from 0x438694): edi = the workertime, edx = L + 1, on at 0x4386B9, `imul edi,edx`; nothing
-     from there reads eax or ecx before writing them.
+     from 0x438694, esi the target's def from 0x438658, the ticks between steps at [esp+0x1C],
+     the argument 0x4386C3 multiplies by): the answer takes all four, to hold the factor to
+     what the 32-bit product holds; edi = the workertime, edx = the factor, on at 0x4386B9,
+     `imul edi,edx`; nothing from there reads eax or ecx before writing them.
    No branch lands inside any of the seven (rel8/rel32 scan of .text and every dword of the
    image). */
 static unsigned char* vet_call(unsigned char* p, unsigned char unit_push, const void* fn)
@@ -5634,7 +5636,7 @@ static int fix_veterancy(void)
     unsigned char* cl = fix_code(64);
     unsigned char* ca = fix_code(48);
     unsigned char* ck = fix_code(48);
-    unsigned char* cm = fix_code(48);
+    unsigned char* cm = fix_code(64);
     unsigned char* p;
     unsigned char* j;
     unsigned char now[16];
@@ -5701,10 +5703,17 @@ static int fix_veterancy(void)
     memcpy(p, cost, 7); p += 7;
     wk_jmp(p, 0xE9, 0x004043DFu);
 
-    /* 0x43869D: pushad; push eax; call reclaim; cmp eax,-1; je stock; mov [esp+0x1C],eax;
-       popad; mov edi,edx; mov edx,eax; jmp 0x4386B9; stock: popad; mov cx,[eax+0xB8];
-       jmp 0x4386A4 */
-    p = vet_call(cm, 0x50, (const void*)tagpu_datakeys_vet_reclaim_step);
+    /* 0x43869D: pushad; push [esp+0x3C] (the ticks); push [esi+0x1FA] (the target's
+       MaxHitPoints, which 0x4386BC reads next); push edx; push eax; call reclaim;
+       cmp eax,-1; je stock; mov [esp+0x1C],eax; popad; mov edi,edx; mov edx,eax;
+       jmp 0x4386B9; stock: popad; mov cx,[eax+0xB8]; jmp 0x4386A4 */
+    p = cm;
+    *p++ = 0x60;                                                    /* pushad             */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x3C;             /* push [esp+0x3C]    */
+    *p++ = 0xFF; *p++ = 0xB6; *p++ = 0xFA; *p++ = 0x01; *p++ = 0x00; *p++ = 0x00; /* push [esi+0x1FA] */
+    *p++ = 0x52;                                                    /* push edx           */
+    *p++ = 0x50;                                                    /* push eax           */
+    p = wk_jmp(p, 0xE8, (unsigned int)(size_t)tagpu_datakeys_vet_reclaim_step);
     *p++ = 0x83; *p++ = 0xF8; *p++ = 0xFF;
     *p++ = 0x74; j = p++;
     *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x1C;
@@ -5749,8 +5758,8 @@ static int fix_veterancy(void)
    record carries it to the victim's owner).
 
    KILL-OUTRIGHT [DISASSEMBLED]. The engine's "kill outright" is an amount of 30 000 or more
-   (self-destruct and player defeat 0x402147 0x486F94, a dying transport's cargo 0x48680B, kinds
-   4 and 9); the armour reduction exempts it (0x489BD1, `cmp edi,0x7530; jge`), and the
+   (kind 3 from self-destruct and player defeat 0x402147 0x486F94, 3 or 6 from a dying
+   transport's cargo 0x48680B, kinds 4 and 9 from 0x402701 0x41BC49 0x4886A4 0x4887D0); the armour reduction exempts it (0x489BD1, `cmp edi,0x7530; jge`), and the
    veterancy reduction at 0x489BF3 does not, so a veteran above 24 000 HP survives it (stock's
    level 5 leaves 80 %). THE FIX: a call whose amount is 30 000 or more skips the veterancy
    reduction as it skips the armour one, by the same test of the caller's own amount. That
@@ -5773,8 +5782,9 @@ static int fix_veterancy(void)
    +0x66 is 10, a record no peer marks remote. So every peer computes every stone, on its own
    copy, and the victim's owner applies it once from its own computation and once more for each
    other peer's 0x0B. THE FIX: a stone is computed on the peer that spawned it, as a shot is on
-   the peer that fired it. The mark is the stone's own +0x62, the shooter's slot index, which
-   0x49C740 writes only for a projectile with a shooter (0x49C833) and whose one reader,
+   the peer that fired it. The mark is the stone's own +0x62, the firing piece (the answer of
+   the shooter's QueryPrimary/Secondary/Tertiary script, 0x43E1E0), which 0x49C740 writes
+   only for a projectile with a shooter (0x49C833) and whose one reader,
    0x49B7D6, sits behind a burst count that is 0 for a stone. Both places that build a
    shooterless projectile write it: the spawn (0x49DF7D) 0 and the receiver's meteor branch
    (0x49D307) PJ_RECEIVED. It lives in the record, so the pool's compaction (0x49AEE0) carries
@@ -5802,18 +5812,20 @@ static void __stdcall b7_outright_event(const char* victim)
 }
 
 typedef int (__stdcall *PFN_ProjInit)(char* proj, const char* weapon, const void* start,
-                                      const char* attacker, int time, int z);
+                                      const void* target, int time, const char* attacker);
 #define E_ProjInit ((PFN_ProjInit)0x0049C740u)
 
-static int __stdcall meteor_spawned(char* p, const char* w, const void* s, const char* a, int t, int z)
+static int __stdcall meteor_spawned(char* p, const char* w, const void* s, const void* g, int t,
+                                    const char* a)
 {
-    int r = E_ProjInit(p, w, s, a, t, z);
+    int r = E_ProjInit(p, w, s, g, t, a);
     *(unsigned short*)(p + PJ_ORIGIN) = 0;
     return r;
 }
-static int __stdcall meteor_received(char* p, const char* w, const void* s, const char* a, int t, int z)
+static int __stdcall meteor_received(char* p, const char* w, const void* s, const void* g, int t,
+                                     const char* a)
 {
-    int r = E_ProjInit(p, w, s, a, t, z);
+    int r = E_ProjInit(p, w, s, g, t, a);
     *(unsigned short*)(p + PJ_ORIGIN) = PJ_RECEIVED;
     return r;
 }

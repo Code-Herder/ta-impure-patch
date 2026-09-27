@@ -48,8 +48,9 @@ static int ptr_ok(const void* p) { return tagpu_m3_ptr_ok(p); }
    WHO WRITES AND WHO READS, AND WHY THEY NEVER OVERLAP. The level's unit-data
    load 0x42D2E0 runs the FBI loader on the LOADER thread (LoadGameData_Main
    0x4917D0, called from the loader body 0x497180); the console's one-type
-   reload 0x417490 -> 0x42D1F0 runs it on the GAME thread. The only reader is
-   the game thread, inside an in-play packet fill. The loader thread writes
+   reload 0x417490 -> 0x42D1F0 runs it on the GAME thread. Every reader is on
+   the game thread: the in-play packet fill, the veterancy sites of the
+   simulation and the two kill lines of the unit panels. The loader thread writes
    between a level's teardown and its first in-play draw, which is the same
    ordering every game-thread read of the def array itself rests on (the
    in-play publish point, exe-reverse-engineering.md); the reload is on the
@@ -1093,8 +1094,10 @@ static int weather_weapon(const char* w)
 
 /* GAME thread only, like every hit. s_armed is weather_send's answer from its
    set to the next local apply, which takes it; nothing else can run between
-   them (0x489BB0 reaches 0x489C89 on every path, calling only the arithmetic
-   helper 0x4E43D0 first), and weather_send zeroes it again on return. */
+   them (0x489BB0 reaches 0x489C89 on every path, calling first only the
+   arithmetic helper 0x4E43D0 and the veterancy and B7 answers at 0x489BF3,
+   0x489BFA and 0x489C71, which read a unit and count events and neither make
+   a hit nor touch s_armed), and weather_send zeroes it again on return. */
 static int s_armed;
 static const unsigned char* s_localRec;   /* the record 0x489C89 is applying, or NULL */
 static int s_localWeather;                /* ... and its answer */
@@ -1538,8 +1541,9 @@ static unsigned vet_level(const DkUnit* r, unsigned k)
    on by the last gap (by the one threshold, for a list of one); a unit
    reclaim's step, which TADR leaves stock, takes the same level. The gap is at
    least 1 and the threshold at least 1 by the parse, so neither divides by
-   zero; the level is capped at stock's own ceiling, so no product
-   exceeds one stock already computes. */
+   zero. The level is capped at stock's own ceiling, 13 107: the capture's
+   base is at most 1800 (0x404396), so its product (0x4043EC..0x4043F7) stays
+   below 236 million; the reclaim step's product is bounded by its answer. */
 static unsigned vet_level_open(const DkUnit* r, unsigned k)
 {
     unsigned n = r->vthr_n, top = r->vthr[n - 1], l;
@@ -1556,7 +1560,7 @@ static void vet_event(unsigned* n, const char* what)
     if ((c & (c - 1)) == 0) dlog("veterancy: %s (%u so far)", what, c);
 }
 static unsigned s_evTaken, s_evDealt, s_evReload, s_evLead, s_evAim, s_evCapture, s_evReclaim,
-                s_evLabel;
+                s_evReclaimFit, s_evLabel;
 
 static const DkUnit* vet_keyed(const char* u)
 {
@@ -1649,13 +1653,30 @@ int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
    takes from its target every 15 ticks (0x404981 deals it as a kind-5 hit;
    0x438650's callers are the reclaim order 0x40483D and the build order's
    reclaim 0x414C86), read of the RECLAIMER: L + 1 for 0x4386B9, stock's
-   being (kills + 5) / 5 */
-int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u)
+   being (kills + 5) / 5.
+   THE BOUND: 0x4386B9..0x4386C3 multiply the workertime, this factor, the
+   target's MaxHitPoints (def +0x1FA) and the ticks between steps in 32 bits,
+   and 0x4386CC reads the product unsigned, so a factor past what the product
+   holds wraps the step to a fraction of itself (ARMCOM's 300 on a CORKROG
+   wraps at 32). The factor is held to the largest that fits. A product that
+   does not fit at 1 is the engine's own at a recruit's factor, and the
+   answer is 1. */
+int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u, unsigned workertime,
+                                              unsigned maxhp, unsigned ticks)
 {
     const DkUnit* r = vet_keyed(u);
+    unsigned f, fit;
     if (!r) return -1;
+    f = 1 + vet_level_open(r, kills_of(u));
+    if (workertime && maxhp && ticks) {
+        fit = 0xFFFFFFFFu / workertime / maxhp / ticks;
+        if (f > fit) {
+            f = fit ? fit : 1;
+            vet_event(&s_evReclaimFit, "a keyed reclaimer's step was held to what its product holds");
+        }
+    }
     vet_event(&s_evReclaim, "a keyed reclaimer's level set a unit reclaim's step");
-    return 1 + (int)vet_level_open(r, kills_of(u));
+    return (int)f;
 }
 
 /* the level a hit's victim would take the reduction of, keyed or stock: the
@@ -1744,9 +1765,17 @@ static void vet_panels_install(void)
     }
     a = label_stub(6, (const void*)label_panel, single_panel, 4, 0x0046B331u, 0x0046B358u);
     b = label_stub(7, (const void*)label_dev, single_dev, 2, 0x00467CEEu, 0x00467D0Eu);
-    if (!a || !b || !tagpu_detour_land(VA_PANEL_KILLS, a, 7) || !tagpu_detour_land(VA_DEV_KILLS, b, 7)) {
+    /* both lines or neither: the first is put back when the second fails */
+    if (!a || !b || !tagpu_detour_land(VA_PANEL_KILLS, a, 7)) {
         dlog("veterancy: the panels NOT installed (a stub or a write failed); a veteran's line "
              "reads stock's \"Veteran\"");
+        return;
+    }
+    if (!tagpu_detour_land(VA_DEV_KILLS, b, 7)) {
+        int back = tagpu_detour_write(VA_PANEL_KILLS, PANEL_KILLS_WAS, 7);
+        dlog("veterancy: the panels NOT installed (the write at 0x467CCF failed; 0x46B306 %s); "
+             "a veteran's line reads stock's \"Veteran\"",
+             back ? "put back" : "COULD NOT be put back and names the level");
         return;
     }
     dlog("veterancy: both kill lines name the level, \"VetN\" (0x46B306, 0x467CCF)");
