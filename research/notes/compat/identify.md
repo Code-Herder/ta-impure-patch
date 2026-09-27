@@ -30,8 +30,10 @@ the report.
   refusing: the report lists every site that differed. `0x0040EAD6 pathfinding budget` alone
   means an exe with a changed path budget — the 3.9.02 exe (66650) or Escalation's (1114).
 - **`log\tagpu.log`** says `takeover: DPLAYX.dll asked for tdraw.dll … answered with Impure`
-  when the Patch Loader route was taken over: TADR did not start, and there is no
-  `tdrawlog.txt` from this launch.
+  when the Patch Loader route was taken over: `tdraw.dll` did not start, and there is no
+  `tdrawlog.txt` from this launch. The **recorder** on such a folder still runs, off the exe's
+  entry point ([the takeover](takeover.md), part 1), and leaves nothing in the folder to show
+  it — so a launch with no `tdrawlog.txt` and no recorder log is not a launch with no TADR code.
 - **"Impure's engine limits and fixes were changed by another program"** is the safety net:
   a patcher that started after Impure rewrote the sites listed, and the game stopped before a
   battle could crash on them.

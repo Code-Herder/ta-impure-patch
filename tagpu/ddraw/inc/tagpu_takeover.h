@@ -32,14 +32,7 @@
    TADR's recorder (tplayx.dll; the 2006 build is a dplayx.dll of its own) cannot be kept
    from loading: the Patch Loader's dplayx.dll FORWARDS its DirectPlay exports to tplayx, and
    Windows resolves a forwarder while it binds the exe's imports, before any DllMain runs and
-   without a LoadLibrary call anyone can hook. It can be kept from running: it does nothing
-   until its first DirectPlay export is called -- that call writes its log, loads Windows'
-   DirectPlay and installs its code injections (vendor/TADR/src/Recorder/Dplayx_exports.pas,
-   OnInit -> InitCode.pas, OnInitialize) -- and the exe reaches DirectPlay only through its
-   import table: TotalA.exe 3.1 imports DPLAYX.dll by ordinal 1, 2 and 4 and looks up no
-   DirectPlay name anywhere (DISASSEMBLED: objdump -p, strings), and its first call is
-   DirectPlayLobbyCreateA at start-up (MEASURED 2026-09-26: the recorder's log on every
-   Patch Loader setup of the suite, single player included).
+   without a LoadLibrary call anyone can hook.
 
    tagpu_takeover_dplay_init, from DllMain -- after the loader has bound every import, before
    the exe's entry point: every import descriptor of the exe whose slots lead into a DLL in
@@ -48,6 +41,25 @@
    descriptor as it is and says so. A forwarder loads Windows' own dplayx.dll by its full
    path on its first call -- from the game's code, outside the loader lock -- and passes every
    call on. An exe whose DirectPlay is Windows' own (the retail game alone) is not touched.
+   TotalA.exe 3.1 imports DPLAYX.dll by ordinal 1, 2 and 4 and looks up no DirectPlay name
+   anywhere (DISASSEMBLED: objdump -p, strings), so those three slots are every way the exe
+   has of reaching DirectPlay.
+
+   WHAT THIS DOES NOT DO: keep the recorder from running. It closes the DirectPlay-call path
+   -- the path that writes the recorder's log, loads Windows' DirectPlay and installs its code
+   injections from inside an export (vendor/TADR/src/Recorder/Dplayx_exports.pas, OnInit ->
+   InitCode.pas, OnInitialize(false)). The recorder has a second way in, taken instead: its
+   DllMain splices a jump over the exe's ENTRY POINT 0x004E6FA0 and installs the same code
+   injections there, through OnInitialize(true), with no DirectPlay call and no log
+   (InitCode_CoreExePatching.pas, whose unit initialization runs in the recorder's DllMain;
+   research/notes/deep-tadr.md). MEASURED 2026-09-27, retail+tadr1 on Wine, reading the live
+   process: seven sites of the game's code hold a jump or call into the recorder where the
+   retail control holds stock bytes, and the entry point is stock again by then -- the recorder
+   restores it after running. Impure's safety net does not fire on them (none is one of its
+   sites, and the recorder writes Impure's own 1500 at the three unit-limit sites). So on every
+   Patch Loader setup, and beside the 2006 recorder, TADR's recorder still runs and still
+   patches the engine, after Impure. Closing that is the takeover's open work
+   (research/notes/compat/takeover.md, part 1).
 
    `tagpu_takeover.off` in the game folder turns both off: the suite's harness setups that
    show the safety net (tagpu_patches.c, lim_verify) and the recorder check firing on what

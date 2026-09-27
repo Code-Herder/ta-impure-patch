@@ -190,7 +190,8 @@
       },
       "today": {
         "outcome": "impure-refused",
-        "failure": "0x0040EAD6"
+        "failure": "0x0040EAD6",
+        "tadr_ran": true
       }
     },
     {
@@ -224,7 +225,8 @@
       },
       "today": {
         "outcome": "impure-refused",
-        "failure": "0x0040EAD6"
+        "failure": "0x0040EAD6",
+        "tadr_ran": true
       }
     },
     {
@@ -298,7 +300,8 @@
         "outcome": "impure-not-loaded",
         "loaded": [
           "ddraw_custom.dll"
-        ]
+        ],
+        "tadr_ran": true
       }
     },
     {
@@ -316,7 +319,8 @@
       },
       "today": {
         "outcome": "impure-refused",
-        "failure": "0x0040EAD6"
+        "failure": "0x0040EAD6",
+        "tadr_ran": true
       }
     },
     {
@@ -341,7 +345,8 @@
       },
       "today": {
         "outcome": "impure-refused",
-        "failure": "0x0040EAD6"
+        "failure": "0x0040EAD6",
+        "tadr_ran": true
       }
     }
   ]

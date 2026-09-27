@@ -4,14 +4,20 @@
 
 Thirteen setups, each a game folder as a player has it — the retail 3.1 game, what a mod or
 patch install puts next to it, and Impure's `ddraw.dll` — and two checks of the harness. All
-eight of the player's setups that start Impure meet the goal on Wine and on Windows: Impure
-runs and **none of TADR's code does**, neither `tdraw.dll` nor the recorder — the retail exe
-alone, beside the 2006 recorder, beside files nothing loads, and every Patch Loader setup,
-**Total Mayhem 11.3.0 and ProTA 4.8** among them ([the takeover](takeover.md), T1 and T1b). On
-Wine each also plays a two-player network game with no TADR code on either peer. The rest are
-known gaps until the takeover's next landings: four refused by Impure on an exe that imports
-TADR, and one where Impure never loads. The 3.9.02 exe, which several of them run, is described
-at the end.
+eight of the player's setups that start Impure run Impure, run **no `tdraw.dll`**, and on Wine
+play a two-player network game: the retail exe alone, beside the 2006 recorder, beside files
+nothing loads, and every Patch Loader setup, **Total Mayhem 11.3.0 and ProTA 4.8** among them
+([the takeover](takeover.md), T1 and T1b). The rest are known gaps until the takeover's next
+landings: four refused by Impure on an exe that imports TADR, and one where Impure never loads.
+The 3.9.02 exe, which several of them run, is described at the end.
+
+**The goal is not fully met in any of those eight, and the table below does not show it.**
+TADR's **recorder** still runs wherever one is installed, off the exe's entry point, and patches
+the engine after Impure; the rows read `meets goal` because the goal is judged from the game
+folder, where a recorder that starts that way leaves nothing ([the suite](suite.md), *Whether
+TADR ran*; [the takeover](takeover.md), part 1). Measured on `retail+tadr1`: seven hooked sites
+in the game's code. Every `meets goal` below therefore means "Impure runs, `tdraw.dll` does not",
+and the column is re-measured when the suite reads the running process.
 
 ## The table
 
@@ -24,9 +30,9 @@ test box, start-up only, with the DLL at the T1b commit:
 | setup | what it is | Wine | Windows |
 |---|---|---|---|
 | `retail` | Impure alone on the retail exe (the control) | **meets goal**: battle 402 of 402 applied, network game | **meets goal** |
-| `retail+tadr1` | + the 2006 recorder `Dplayx.dll` | **meets goal**: the recorder loads and is never called; network game | **meets goal** |
+| `retail+tadr1` | + the 2006 recorder `Dplayx.dll` | **meets goal**: the recorder is never called — and runs off the entry point, seven hooked sites; network game | **meets goal** |
 | `retail+tadr1-recorder` | the check of the recorder evidence: the same with the takeover off | the recorder runs, as it must | the same |
-| `retail+tadr-files` | + a modern `tdraw.dll` and `tplayx.dll` nothing loads | **meets goal**, network game | not run |
+| `retail+tadr-files` | + a modern `tdraw.dll` and `tplayx.dll` nothing loads | **meets goal**, network game | not run (T1's Windows run covered it; the T1b DLL has not) |
 | `loader+tadr-ota` | + Patch Loader v1.3.0.0, TADR `dev-dcff5dd` (OTA), its recorder | **meets goal**, network game | **meets goal** |
 | `loader+tadr-tazero` | the TA Zero report: loader, TADR `tazero`, the 2022 recorder | **meets goal**, network game | **meets goal** |
 | `loader+tadr-mayhem` | loader, TADR's current Mayhem build and recorder | **meets goal**, network game | **meets goal** |
@@ -39,10 +45,11 @@ test box, start-up only, with the DLL at the T1b commit:
 | `escalation` | Escalation GOLD 10.2.0 as installed | `impure-refused` at `0x0040EAD6`; tdraw starts | not run |
 | `escalation+tadr-dev` | Escalation with TADR's current Escalation build | `impure-refused` at `0x0040EAD6`; tdraw starts | not run |
 
-Before T1b the recorder ran in every setup that carries one (measured 2026-09-26 from its log),
-at the game's first DirectPlay call, which comes at start-up; the goal of the time did not look
-for it. The Windows column's "not run" rows are unchanged since the T1 runs of 2026-09-26, which
-matched their Wine rows.
+Before T1b the recorder answered the game's first DirectPlay call, which comes at start-up, in
+every setup that carries one (measured 2026-09-26 from its log); the goal of the time did not
+look for it. After T1b no recorder answers a call — and each still runs off the entry point,
+which its log does not record. The Windows column's "not run" rows are unchanged since the T1
+runs of 2026-09-26, which matched their Wine rows.
 
 A full Wine run takes about 21 minutes on the reference setup: the single-player runs six at a
 time, about seven minutes, and the eight network games one at a time, about 80 s each, queued

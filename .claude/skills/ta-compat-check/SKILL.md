@@ -54,10 +54,14 @@ tools/compat/tacompat.py clean                       # remove the compat-* Wine 
   Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
   `compat-mp-join.json`. One game at a time, queued beside the single-player runs: DirectPlay's
   port is the machine's. The report's column reads `mp ok`, `mp FAILED` or `-` (not played).
-- **Whether TADR ran** (`tadr_ran`), on every peer: `tdrawlog.txt` at all (tdraw started), or a
-  `DLL.DirectPlay…` line in `log\TA Demo Recorder Log -<date>.txt` (the recorder answered a
-  DirectPlay call, which is where it starts). The recorder's log without that line is a
-  recorder the takeover kept from running.
+- **Whether TADR ran** (`tadr_ran`), on every peer: `tdrawlog.txt` at all (tdraw started), or
+  `log\TA Demo Recorder Log -<date>.txt` at all — the recorder creates one only when it starts
+  from inside a DirectPlay export, and a `DLL.DirectPlay…` line in it names which.
+  **`tadr_ran: false` does not mean no TADR code.** The recorder's other way in is the jump its
+  `DllMain` splices over the exe's entry point, which writes no log; measured on `retail+tadr1`,
+  seven hooked sites in the game's code. Reading the running process is what shows it — the
+  exe's code against the exe file, any changed byte leading into a game-folder DLL other than
+  Impure's — and the suite does not do that yet (`research/notes/compat/takeover.md`, part 1).
 - **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>/` (default cache
   `~/.local/share/ta-compat`, outside every repository because results carry absolute
   paths): `summary.txt`, and per setup the tdrawlog, `tagpu.log`, `ErrorLog.txt`,
@@ -97,8 +101,8 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
 - `levers`: empty files put in the game folder, a DLL switch. A setup with one checks a mechanism,
   not a player's folder, and plays no network game: `mayhem-11.3.0-net` turns the takeover off
   (`tagpu_takeover.off`) so the safety net has TADR to catch, and its goal is the net's refusal;
-  `retail+tadr1-recorder` turns it off so the recorder runs, and its goal is `tadr_ran: true` —
-  the proof that the recorder check can see a recorder.
+  `retail+tadr1-recorder` turns it off so the recorder answers a DirectPlay call, and its goal is
+  `tadr_ran: true` — the proof that the log evidence can fire at all.
 
 Run the new setup before writing its `today` — write down what it did, not what you expect.
 **The commit that makes a setup meet its goal deletes its `today`.**
@@ -126,7 +130,8 @@ Run the new setup before writing its `today` — write down what it did, not wha
   exe among a 32-bit game's modules. Windows PowerShell 5 writes its UTF-8 files with a
   byte-order mark, which the runner strips when it reads them.
 - **A demo file proves nothing about the recorder**: the 2006 one wrote none in a network game
-  while it ran. Its log's `DLL.DirectPlay` line is the evidence.
+  while it ran. Its log is the evidence — and only of the DirectPlay way in, never of the
+  entry-point one, which leaves the game folder untouched.
 - **The joiner's session list fills when SELGAME opens and on UPDATE, never by itself**: a host
   still busy with its map load is missing from it. The runner presses UPDATE while JOIN is grey,
   as a player would (Total Mayhem needed it one run in three).

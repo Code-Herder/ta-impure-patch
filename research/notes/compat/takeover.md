@@ -10,6 +10,16 @@ crash like [Total Mayhem's](tadr-collision.md). The [suite](suite.md) is the gat
 here is done when its setups meet their goal on Wine and Windows and their `today` entries are
 deleted.
 
+**Where it stands (2026-09-27).** `tdraw.dll` is kept out on the Patch Loader route and the
+safety net is in (T1). **TADR's recorder is not: it still runs, and still patches the engine,
+on every Patch Loader setup and beside the 2006 recorder** — it takes the exe's entry point,
+which T1b's DirectPlay work does not touch (part 1). Both halves of the answer are the shape
+the owner set out on 2026-09-27, and they are the same shape for part 2: **the exe file on disk
+is the reference**, TADR's DLLs run none of their own code, and every launch compares the whole
+exe image against that file and refuses to start when a changed byte leads into a TADR DLL.
+A list of hook sites is not the answer — it is a guess about what TADR does, and the recorder
+finding is what that guess costs.
+
 ## What stays, what goes
 
 **Stays — the mod's content, whoever writes it** (the exe file, the Patch Loader, or a TADR
@@ -63,22 +73,48 @@ per-mod check (below).
    **The recorder** cannot be kept from loading on this route: the loader's `dplayx.dll`
    *forwards* its DirectPlay exports to `tplayx.dll` (`vendor/Total-Annihilation-Patch-Loader/
    exports.def`), and Windows resolves a forwarder while it binds the exe's imports, before any
-   `DllMain` and without a `LoadLibrary` anyone can answer. It can be kept from running. It does
-   nothing until one of its DirectPlay exports is called — that first call writes its log, loads
-   Windows' DirectPlay and installs its code injections (`vendor/TADR/src/Recorder/
-   Dplayx_exports.pas`, `OnInit`) — and TotalA.exe reaches DirectPlay only through three import
-   slots ([the engine map](../exe-reverse-engineering.md), *Where other patchers meet ours*).
-   So Impure's `DllMain`, after every import is bound, points every slot of an import
-   descriptor that leads into a DirectPlay DLL of the game folder at its own forwarders, which
-   load Windows' `dplayx.dll` by its full path on their first call. The same holds for the
-   2006 recorder beside the retail exe, which *is* the game folder's `dplayx.dll`.
+   `DllMain` and without a `LoadLibrary` anyone can answer. **It is not kept from running
+   either, and that is this part's open hole.** T1b closed one of its two ways in: Impure's
+   `DllMain`, after every import is bound, points every slot of an import descriptor that leads
+   into a DirectPlay DLL of the game folder at its own forwarders, which load Windows'
+   `dplayx.dll` by its full path on their first call — so the path that starts the recorder
+   from inside a DirectPlay export (`vendor/TADR/src/Recorder/Dplayx_exports.pas`, `OnInit` →
+   `OnInitialize(false)`: the log, Windows' DirectPlay, then the code injections) is never
+   taken, and TotalA.exe reaches DirectPlay only through those three import slots ([the engine
+   map](../exe-reverse-engineering.md), *Where other patchers meet ours*). The same holds for
+   the 2006 recorder beside the retail exe, which *is* the game folder's `dplayx.dll`.
+
+   The way in that stays open is the **entry point**. The recorder's `DllMain` splices a jump
+   over `0x004E6FA0` and installs the same code injections from there, through
+   `OnInitialize(true)` — no DirectPlay call, and no log, because the log is created only on
+   the other path (`vendor/TADR/src/Recorder/InitCode_CoreExePatching.pas`, whose unit
+   `initialization` runs in `DllMain`, and `InitCode.pas`; [the recorder's
+   page](../deep-tadr.md)). MEASURED 2026-09-27, `retail+tadr1` on Wine, read out of the live
+   process: **seven sites of the game's code hold a jump or call into the recorder** where the
+   retail control holds stock bytes, and `0x004E6FA0` is stock again by then — the recorder
+   restores it after running. The safety net does not fire on them: none is one of Impure's
+   265 sites, and the recorder writes Impure's own value at the three unit-limit sites. Every
+   recorder build the suite carries has this code in its source; only `retail+tadr1` has been
+   read in memory.
+
+   So on every Patch Loader setup, and beside the 2006 recorder, **TADR's recorder still runs
+   and still patches the engine after Impure.** What closes it is the reference-image shape
+   the owner set out (2026-09-27): the exe file on disk is the reference, TADR's DLLs run none
+   of their own code, and every launch compares the whole exe image against the file and
+   refuses to start when a changed byte leads into a TADR DLL — one rule with no list of hook
+   sites in it, since a list is a guess about what TADR does and this finding is the proof.
+   Not designed in code yet.
 2. **The exe imports TADR** — the 3.9.02 exe (`TDRAW`), Escalation (`TAESC`). TADR's `DllMain`
    loads `ddraw.dll` first thing, so Impure's `DllMain` runs nested inside it, before TADR
    patches anything: Impure snapshots the exe's code, lets TADR's start-up finish, and at the
    exe's entry point puts back every code byte TADR wrote since the snapshot and points the
-   exe's TADR import slots at its own exports. Data-section writes stay unless they land on an
-   Impure site (resource paths are data). Not designed in detail yet: TADR's threads and window
-   hooks started in its `DllMain`.
+   exe's TADR import slots at its own exports. The snapshot and the exe file on disk are the
+   same reference here, which is what makes the mod's own bytes safe: a mod's exe carries its
+   changes in the file, so they are in the snapshot, and only what TADR wrote *after* it is put
+   back. Data-section writes stay unless they land on an Impure site (resource paths are data).
+   Not designed in detail yet: TADR's threads and window hooks started in its `DllMain`, and the
+   entry point is contested — the recorder splices a jump over `0x004E6FA0` from its own
+   `DllMain` (part 1), so whatever runs there has to survive sharing it.
 3. **Sites a mod's exe changes belong to the mod.** Impure's fail-closed table compares with
    stock 3.1 today and refuses Escalation's exe at `0x40EAD6`. It will compare with the exe
    file on disk instead: a site the file itself changes is the mod's, and Impure leaves it —
@@ -86,17 +122,21 @@ per-mod check (below).
 4. **The safety net.** At the first `DirectDraw` call — after every DLL's start-up, before the
    first frame — Impure re-reads every site of its fail-closed table. A site someone else has
    rewritten stops the game with a box naming it, instead of letting it crash when a game
-   loads. It sees start-up writes only: a patch made later (a hook TADR installs after
-   `DirectDrawCreate`, the recorder's code injections at its first DirectPlay call) is outside
-   it, which is why parts 1 and 2 keep TADR's code from running at all rather than cleaning up
-   after it.
+   loads. It sees start-up writes only: a hook TADR installs after `DirectDrawCreate` is
+   outside it, which is why parts 1 and 2 keep TADR's code from running at all rather than
+   cleaning up after it. And it sees only **its own** sites, which is the other half of why:
+   the recorder's entry-point injections happen before this call and it does not fire on them,
+   because they land elsewhere in the engine (part 1). Comparing the whole image against the
+   exe file, rather than 265 sites against remembered bytes, is what the owner's reference-image
+   rule asks for.
 
 ## Landings
 
 | landing | parts | setups it moves to the goal |
 |---|---|---|
 | **T1** — landed 2026-09-26 | 4, then 1 (`tdraw.dll`) | none on its own terms: it kept `tdraw.dll` out of `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0` and `prota-4.8`, but their recorder still ran, which the suite's goal did not check until T1b |
-| **T1b** | 1 (the recorder) | `retail+tadr1`, `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8` — no TADR code runs in them, alone or in a network game |
+| **T1b** | 1 (the recorder's DirectPlay path) | none. It keeps the recorder out of the game's DirectPlay, which is what it was measured to do; it does not stop the recorder, which takes the entry point instead (part 1). The six setups it was written for still run TADR's recorder |
+| **T1c** | 1 (the recorder itself) | `retail+tadr1`, `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8` — the reference-image rule of part 1: no TADR code runs in them, alone or in a network game, and a launch where any does refuses to start. Not designed in code yet |
 | **T2** | 3 | none alone; Escalation's exe stops being refused at `0x40EAD6` |
 | **T3** | 2 | `392+tadr-dev`, `392+tadr-2026.8.6`, `escalation`, `escalation+tadr-dev` |
 | **T4** | distribution | `gammata-ota`: its tdraw loads only `ddraw_custom.dll`, so Impure is installed under that name too |

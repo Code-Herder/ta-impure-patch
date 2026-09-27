@@ -2702,18 +2702,30 @@ Microsoft's ordinals or by name — or, if one slot is anything else, none of th
 exe that is `DPLAYX.dll`'s three slots (`0x4FC034`..`0x4FC03C`, the [engine
 map](exe-reverse-engineering.md)); the page is made writable for the write and put back. A
 forwarder loads Windows' `dplayx.dll` by its full path on its first call — from the game's code,
-outside the loader lock — publishes it with a compare-exchange and passes the call on (E_FAIL,
-as a system without DirectPlay answers, if it cannot load). TADR's recorder starts on its first
-DirectPlay call, so it never starts, although the Patch Loader's forwarders have loaded it. The
-log says `takeover: DPLAYX.dll's 3 DirectPlay imports led into tplayx.dll, a DirectPlay DLL in
-the game folder -- pointed at Windows' own, so it does not start`, then, at the first call,
-`the game's DirectPlay is Windows' dplayx.dll`. An exe whose DirectPlay is Windows' own is not
+outside the loader lock — publishes it with a compare-exchange and passes the call on. If it
+cannot load, E_FAIL, which each of the exe's four DirectPlay call sites survives: the enum at
+`0x4CA435` discards the result, the lobby at `0x4CA4D7` tests it and has zeroed its out-pointer
+first, and the creates at `0x4CA667` and `0x4CA922` test it and return (DISASSEMBLED). The log
+says `takeover: DPLAYX.dll's 3 DirectPlay imports led into tplayx.dll, a DirectPlay DLL in the
+game folder -- pointed at Windows' own, so it does not start`, then, at the first call, `the
+game's DirectPlay is Windows' dplayx.dll`. An exe whose DirectPlay is Windows' own is not
 touched. The same lever turns it off. MEASURED 2026-09-27, single player, Wine and Windows: no
 recorder answered a call beside the 2006 recorder, the three Patch Loader setups, Total Mayhem or
 ProTA (its log has no `DLL.DirectPlay` line, or there is none), and with the lever the 2006
 recorder does; and on Wine the suite's two-player game played over Windows' DirectPlay in every
-one of those setups and beside the retail exe alone, with no TADR code on either peer (the full
-run, [the setups](compat/setups.md)).
+one of those setups and beside the retail exe alone (the full run, [the
+setups](compat/setups.md)).
+
+**What this does not do is stop the recorder, and the log line quoted above overstates it.** The
+DirectPlay path is one of its two ways in; the other is the exe's entry point `0x004E6FA0`, over
+which the recorder's own `DllMain` splices a jump, installing the same code injections from there
+with no DirectPlay call and no log ([the engine map](exe-reverse-engineering.md); [the
+takeover](compat/takeover.md), part 1). MEASURED 2026-09-27, `retail+tadr1` on Wine, read out of
+the live process: seven sites of the game's code hold a jump or call into the recorder module
+where the retail control holds stock bytes, and `0x004E6FA0` is stock again by then. §2.6b's net
+does not fire on them — none is one of its sites, and the recorder writes Impure's own 1500 at
+the three unit-limit sites. So the recorder runs, and patches the engine after Impure, on every
+setup that carries one.
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 

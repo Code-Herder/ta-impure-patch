@@ -215,8 +215,16 @@ static FARPROC dp_proc(const char* name)
 
 /* The DirectPlay exports an exe imports, by the ordinals Microsoft's dplayx.dll gives them
    -- the numbers TotalA.exe imports DPLAYX.dll by, which every DirectPlay stand-in exports
-   under too, or the exe would not bind to it. All stdcall; E_FAIL when Windows has no
-   DirectPlay, as a system without it answers. */
+   under too, or the exe would not bind to it. All stdcall.
+
+   E_FAIL when Windows' dplayx.dll cannot be loaded, which the exe survives at each of its
+   four call sites (DISASSEMBLED): the enum at 0x4CA435 discards the result and returns 1
+   anyway; the lobby at 0x4CA4D7 tests it (jl 0x4CA4E0), and zeroes its out-pointer and three
+   fields from the xor at 0x4CA4A0 before calling, so a failure leaves NULL and not a stale
+   interface; the creates at 0x4CA667 and 0x4CA922 test it too (cmp/je 0x4CA66C, jl 0x4CA929)
+   and return without touching what they would have got. Multiplayer is then unavailable;
+   single player reaches the menu, and the exe's first DirectPlay call is the lobby one at
+   start-up. */
 typedef HRESULT (WINAPI* dp_create_fn)(void*, void*, void*);
 typedef HRESULT (WINAPI* dp_enum_fn)(void*, void*);
 typedef HRESULT (WINAPI* dp_lobby_fn)(void*, void*, void*, void*, DWORD);

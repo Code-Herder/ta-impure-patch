@@ -22,7 +22,8 @@ starts a skirmish and fights 200 against 200, because two patchers that both sta
 still collide where the limits are used: `battle-crash` is a crash after the menu. Where
 Impure runs, a second instance of the same folder then joins it in a two-player network game
 over Windows' DirectPlay, one such game at a time (the port is the machine's). Every run, and
-every peer, is read for TADR's code having run (tadr_evidence).
+every peer, is read for TADR's code having run (tadr_evidence) -- from the game folder, which
+does not show a recorder that started off the exe's entry point (see RECORDER_LOG).
 Each setup has a `goal` (Impure active, no TADR code run) and, until the takeover reaches
 it, `today`: the behaviour accepted meanwhile. A run is "meets goal", "known gap" (matches today) or
 UNEXPECTED. Exit status: 1 on anything UNEXPECTED (with --strict, on a known gap too),
@@ -102,10 +103,16 @@ BATTLE_MAP = "Two Continents"          # scenarios/200v200.json's setup.map
 # Whether any of TADR's code ran, from what each part leaves behind. tdraw.dll writes
 # tdrawlog.txt from its DllMain, and says there when it has written its engine patches (the
 # old limit crack, the 2026 EngineLimits). The recorder -- tplayx.dll, or the 2006
-# dplayx.dll -- writes "log\TA Demo Recorder Log -<date>.txt" in the game folder, and a
-# "DLL.DirectPlay..." line in it only from inside one of its DirectPlay exports, which is
-# where it starts: a log with no such line is a recorder that loaded and never ran.
+# dplayx.dll -- creates "log\TA Demo Recorder Log -<date>.txt" only on the path that starts
+# it from inside a DirectPlay export, so such a log written during the run IS the evidence;
+# a "DLL.DirectPlay..." line in it names the export.
+#
+# THIS MISSES THE RECORDER'S OTHER WAY IN, and every tadr_ran: false row is limited by it: a
+# recorder started from the jump its DllMain splices over the exe's entry point writes no log
+# at all (research/notes/compat/takeover.md, part 1). Seeing that needs the running process --
+# the exe's code compared against the exe file -- not the game folder.
 TADR_INSTALLED = re.compile(r"Install Limit Crack|\[EngineLimits\] installed")
+RECORDER_LOG = re.compile(r"Demo Recorder Log", re.I)
 RECORDER_CALLED = re.compile(r"^\s*DLL\.DirectPlay", re.M)
 # The two-player stage: small halves applied one per peer, each as that peer's own units.
 MP_SCENARIOS = ("compat-mp-host", "compat-mp-join")
@@ -371,15 +378,17 @@ def judge(o: dict, exp: dict) -> list:
 
 
 def tadr_evidence(tdrawlog, logs: dict, where="") -> list:
-    """What says TADR's code ran: tdrawlog.txt at all, and a recorder log that an export
-    call wrote into. `logs` maps a log folder file's name to its text."""
+    """What says TADR's code ran: tdrawlog.txt at all, and a recorder log at all -- the
+    recorder creates one only when it starts from a DirectPlay export. `logs` maps a log
+    folder file's name to its text. What this cannot see: see RECORDER_LOG."""
     ev = []
     if tdrawlog is not None:
         ev.append(f"{where}tdraw started (tdrawlog.txt" +
                   (", engine patches installed)" if TADR_INSTALLED.search(tdrawlog) else ")"))
     for name, text in sorted(logs.items()):
-        if RECORDER_CALLED.search(text or ""):
-            ev.append(f"{where}the recorder ran (log\\{name})")
+        if RECORDER_LOG.search(name) or RECORDER_CALLED.search(text or ""):
+            called = ", it answered a call" if RECORDER_CALLED.search(text or "") else ""
+            ev.append(f"{where}the recorder ran (log\\{name}{called})")
     return ev
 
 

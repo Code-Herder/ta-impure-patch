@@ -324,8 +324,29 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   first call is `DirectPlayLobbyCreateA`, at start-up, in single player too (MEASURED
   2026-09-26: the first export call every recorder build logs). A DirectPlay stand-in in the
   game folder — the 2006 recorder, or the Patch Loader whose exports forward to `tplayx.dll` —
-  is reached through these slots alone, which is how Impure keeps the recorder from running
-  (`tagpu_takeover.c`, [GPU status](gpu-status.md) §2.6d).
+  is reached through these slots alone, which is how Impure keeps every *game call* away from
+  the recorder (`tagpu_takeover.c`, [GPU status](gpu-status.md) §2.6d). It does not keep the
+  recorder from running: see `0x4E6FA0` below.
+- **`0x4E6FA0`** — the exe's **entry point** (`objdump -f`: `start address 0x004e6fa0`), the C
+  runtime start-up whose first bytes are `55 8B EC 6A FF` (`push ebp; mov ebp,esp; push -1`),
+  ending in the call to `WinMain`. It runs after every statically linked DLL's `DllMain`, which
+  is what makes it the place a DLL reaches when it wants the loader lock released.
+  **TADR's recorder splices an `E9` jump over it from its own `DllMain`** and installs its code
+  injections there — `SpliceInJump` on this address, then at the entry `UnSpliceJump` and
+  `OnInitialize(OnMainRun=true)`, which skips the log and runs
+  `Do_LoadTime_CodeInjections`/`InstallPlugins`, and on `DLL_PROCESS_DETACH`
+  `UninstallCodeInjections` puts its sites back (`vendor/TADR/src/Recorder/
+  InitCode_CoreExePatching.pas`, the unit `initialization`; `InitCode.pas`; [the recorder's
+  page](deep-tadr.md)). The address is a constant in the recorder's own source, beside
+  `0x004E0FD1` for the Boneyards exe. MEASURED 2026-09-27, `retail+tadr1` on Wine, reading the
+  live process against the exe file: `0x4E6FA0` is back to stock by the time a game is up, and
+  seven sites of the engine hold a jump or call into the recorder module — among them
+  `0x417B9B` (where the stock `call 0x4B7900` reaches the chat-command interpreter),
+  `0x447D87`, `0x45130F`, `0x480770`, `0x490DF9`, `0x496559` and `0x4965B3`. None is a site of
+  Impure's fail-closed table, so §2.6b's net does not fire; the recorder also writes Impure's
+  own value at the three unit-limit sites `0x491640`/`0x491659`/`0x491666`. This is the hole in
+  [the takeover](compat/takeover.md) part 1, and the reason its next landing compares the whole
+  image against the exe file rather than a list of sites.
 - **`0x401064`** — NOP padding in the first code page. The loader writes `1` there as a variable
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a

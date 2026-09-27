@@ -43,13 +43,23 @@ on every peer of every stage:
 - **`tdraw.dll`** writes `tdrawlog.txt` from its `DllMain`: the file at all means it started
   (the result says too whether it installed its engine patches).
 - **The recorder** (`tplayx.dll`, or the 2006 `dplayx.dll`) writes `log\TA Demo Recorder Log
-  -<date>.txt`, and a line `DLL.DirectPlay…` in it only from inside one of its DirectPlay
-  exports, which is where it starts. A log without such a line is a recorder that loaded and
-  never ran — which is what the takeover leaves, since the loader's forwarders load it anyway.
-  A demo file is no evidence either way: the 2006 recorder wrote none in a network game while
-  it ran.
+  -<date>.txt` **only when it starts from inside one of its DirectPlay exports**. Any such log
+  written during the run means it ran; the absence of one does **not** mean it did not, because
+  its other way in — the jump it splices over the exe's entry point — writes no log at all
+  ([the takeover](takeover.md), part 1). A demo file is no evidence either way: the 2006
+  recorder wrote none in a network game while it ran.
 
-`retail+tadr1-recorder` is the check of that evidence: the 2006 recorder with the takeover
+**So this evidence has a hole, and it is the reason the T1b runs read clean.** A recorder that
+takes the entry point leaves nothing in the game folder to find. Closing it needs the running
+process instead of its files: the exe's code compared against the exe file, and any changed byte
+that leads into a game-folder DLL other than Impure's reported. A prototype does this on Wine
+through `/proc/<pid>/mem` (the module extents must come from each module's PE header
+`SizeOfImage`, since the maps show only its header page) and finds six such hooks in
+`retail+tadr1` against none beside the retail exe; Windows needs the same through
+`ReadProcessMemory` from the 32-bit PowerShell. Not in the suite yet — **until it is, a
+`tadr_ran: false` row means "no recorder log and no `tdrawlog.txt`", not "no TADR code".**
+
+`retail+tadr1-recorder` is the check of the file evidence: the 2006 recorder with the takeover
 switched off, whose goal is `tadr_ran: true`. Measured 2026-09-26, before the recorder's part of
 the takeover existed, every setup carrying a recorder had run it — the 2006 one, the three
 Patch Loader setups, Total Mayhem, ProTA and gammata's — at the game's first DirectPlay call, in
