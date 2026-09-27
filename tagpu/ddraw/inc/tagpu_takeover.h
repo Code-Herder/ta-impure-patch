@@ -63,8 +63,12 @@
    that walk is the place of the exe's import descriptor that names it, and the condition is
    exactly "the first descriptor naming this module comes AFTER the descriptor of the module
    whose DllMain we are inside". to_descriptor_of answers both halves against the exe in front of
-   it, over every slot of a descriptor rather than its first, and a module that fails it is left
-   running and said so -- it is not an assumption about the retail exe. On the retail routes the
+   it -- a descriptor names a module by the name the loader bound (a slot is data: Windows'
+   compatibility engine re-points the exe's DirectDrawCreate slot at apphelp.dll on the first
+   start from a new path) or by any slot leading into it (how a forwarder is seen) -- and
+   to_loader_entered adds the loader's own record: a module already on its initialisation-order
+   list is never written. A module that fails either is left running and said so -- it is not an
+   assumption about the retail exe. On the retail routes the
    module we are inside is Impure's own; where the exe imports TADR it is TADR's, and 1d hands
    back its index before it redirects those slots, since a redirected slot no longer names it. WHAT IT DOES NOT COVER: a game-folder module that is not in
    the exe's import table at all, and a PE TLS callback, which the loader calls whatever the entry

@@ -121,7 +121,8 @@ before putting anything private in a script. `win-watch.ps1`'s
 The box and its key are in `$TACOMPAT_CACHE/windows.json` (`--ssh`, `--key`, `--game` set it
 once). **Ask the owner before each Windows session**: it is their desktop, and the game
 windows appear on its screen. The runner refuses while any `TotalA.exe` runs, copies the
-player's folder once (read only), then per setup rebuilds a work folder, starts the game and a
+player's folder once (read only), then per setup rebuilds a work folder **at a path Windows has
+never started the exe from** (the last one renamed, then mirrored), starts the game and a
 window watcher (`tools/compat/win-watch.ps1`) as scheduled tasks in the logged-on session, and
 stops the game before reading its logs. One setup at a time, by design. There is no battle
 stage on Windows yet.
@@ -170,6 +171,11 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - The main window is told from a box by size (≥ 560x400); a mod's window title can be plain
   "Total Annihilation".
 - Wine's message-box traces carry no text: classify by window title and by the logs.
+- **A first launch is not a later one on Windows.** The first start of an exe from a new path
+  gets the compatibility engine's hook on the exe's `DirectDrawCreate` slot (`apphelp.dll`); the
+  next does not. A fixed work folder tests only later launches — which is how v0.3 refused every
+  fresh Total Mayhem install while the suite passed. To reproduce by hand, copy the folder to a
+  new path and start it once.
 - On Windows, SSH cannot see the desktop's windows (every title reads empty); the watcher
   must run as an interactive scheduled task. The game holds `log\tagpu.log` open until it is
   stopped.

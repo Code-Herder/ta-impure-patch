@@ -2741,10 +2741,17 @@ MEASURED 2026-09-27 over the suite's 130 fixture files: in all 18 TADR modules a
 **The invariant**: an entry point is written only while it is one the loader has not called yet.
 The loader maps the whole import graph, then initialises it as a post-order walk in
 import-directory order, and Impure imports nothing from the game folder, so a module's place in
-that walk is the place of the exe's import descriptor that names it. `to_descriptor_of` gives that
-index — the first, and the last, for a module named more than once — and a module is made inert
-only when its **first** descriptor comes after the descriptor of the module Impure is running
-inside. On the retail routes that module is Impure's own, the exe's `DDRAW`, and every TADR module
+that walk is the place of the exe's import descriptor that names it. `to_descriptor_of` gives the
+first such index — a descriptor names a module by its *name* (the module the loader bound it to,
+`GetModuleHandleA`) or by any *slot* leading into it (how a forwarder such as the Patch Loader's
+`dplayx.dll` → `tplayx.dll` is seen) — and a module is made inert only when that descriptor comes
+after the descriptor of the module Impure is running inside, **and** the loader's own
+initialisation-order list (`PEB_LDR_DATA.InInitializationOrderModuleList`, read under the loader
+lock) does not hold it yet. The name is what a first launch needs: Windows' compatibility engine
+re-points the exe's `DirectDrawCreate` slot at `apphelp.dll` on the first start from a new path
+(MEASURED 2026-09-27, Windows 10 19041), and by slot alone Impure then lost its own descriptor and
+the recorder ran — [the takeover note](compat/takeover.md) has the measurement.
+On the retail routes that module is Impure's own, the exe's `DDRAW`, and every TADR module
 in the folder is named later or not named by the exe at all. Where the comparison cannot be made or
 fails, the module is left running and the log says which and why; the image comparison below is
 what answers for that launch. Per module rather than once for the exe, because on the 3.9.02 routes

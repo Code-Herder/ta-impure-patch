@@ -110,13 +110,35 @@ descriptor's subtree. Impure tests that against the exe in front of it and the p
 when it fails — it is not an assumption about the retail exe. The 3.9.02 and Escalation exes import
 `TDRAW` / `TAESC` and **no `DDRAW` at all** (DISASSEMBLED: `objdump -p`), so on those routes TADR's
 `DllMain` is what loads Impure and is running while this would write: the pass is skipped, says so
-in the log, and 1d below is what answers for such a launch. Every slot of a descriptor is looked at, not its first,
-so a descriptor one unbindable slot would have hidden still counts.
+in the log, and 1d below is what answers for such a launch.
 
-**What the invariant does not cover**, and the log would be wrong about: a game-folder module that
-is in the exe's import table not at all — pulled in as a dependency of an earlier descriptor's
-module, or by a forwarded export. Such a module is already initialised when this runs, and its
-entry point is made inert anyway; only part 3 answers for it. No setup of the suite has one
+**A descriptor names a module in two ways, and both count.** By its *name*, when the module loaded
+under that name is this one — the loader's own binding, which nothing written afterwards can change.
+And by a *slot* whose value lies inside the module, which is how a forwarder is seen: the Patch
+Loader's `dplayx.dll` forwards to `tplayx.dll`, so only the `DPLAYX` descriptor's slots lead into the
+recorder. Every slot is looked at, not the first, so one the loader could not bind hides nothing.
+**The name is not optional, because a slot is data anyone in the process can rewrite first.**
+MEASURED 2026-09-27 on Windows 10 19041 beside Total Mayhem 11.3.0: on the **first start of an exe
+from a path Windows has not started it from**, the exe's one `DDRAW` slot (`DirectDrawCreate`,
+`0x4FC02C` in Mayhem's exe) holds `apphelp.dll+0x68B10`, the compatibility engine's hook, when
+Impure's `DllMain` runs. It holds Impure's own on every later start. Found by slot alone, Impure's
+descriptor was "none", 1d was asked instead and found nothing to stop, and the recorder ran: v0.3's
+refusal of a fresh Total Mayhem install, one launch in every new folder. The loader's
+initialisation order was the same on both starts; only the slot differed. The log now names such a
+hook: `takeover: the exe's import of Impure leads into apphelp.dll (…)`.
+
+**The loader's own record is the second, independent half.** A module is made inert only if it is
+also absent from the process's initialisation-order list (`PEB_LDR_DATA.InInitializationOrderModuleList`),
+which both loaders fill *before* a module's TLS callbacks and entry point run. MEASURED 2026-09-27
+from inside Impure's `DllMain`, on Windows 10 19041 and Wine 9.0: both list `DDRAW.dll`, whose entry
+point is running, and neither lists `tplayx.dll`, whose entry point has not been called. The list is
+read under the loader lock this `DllMain` holds and every change to it is made under, so the answer
+stays true until the entry point has been written. Anything that does not read as that list counts
+as "entered": a module is only made inert on a positive answer from both halves.
+
+**What the invariant does not cover**: a game-folder module that is in the exe's import table not
+at all — pulled in as a dependency of an earlier descriptor's module. The descriptor half cannot
+place it, so it is left running and part 3 answers for it. No setup of the suite has one
 (MEASURED 2026-09-27, `objdump -p` over every fixture's exe and DLLs). Nor does it cover a **PE TLS
 callback**, which the loader calls whatever the entry point says. MEASURED 2026-09-27 over the
 fixtures' 18 TADR modules: **no recorder carries a TLS directory at all** (`tplayx`, `eplayx`,

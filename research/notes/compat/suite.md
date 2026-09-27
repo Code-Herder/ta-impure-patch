@@ -52,7 +52,11 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   is above 2 GB*). Both now play their network game (MEASURED 2026-09-27).
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
-  process started over SSH cannot see the desktop's windows.
+  process started over SSH cannot see the desktop's windows. Every setup runs from a work folder
+  at a **path Windows has not started the exe from before**: the first start from a new path is
+  the one Windows' compatibility engine hooks the exe's `DirectDrawCreate` import on, and a folder
+  reused across setups tests only later starts — v0.3 refused every fresh Total Mayhem install
+  while this runner, with one folder, passed ([the takeover](takeover.md), part 1).
 - `selftest`: the hook decode against every shape it claims to decode and every byte pattern it
   must not judge on, with no game and no fixtures — eleven cases, each built from something that
   was measured: the Patch Loader's own thunk rewrite, a plain immediate, the two coincidences that

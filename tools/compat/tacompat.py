@@ -1751,8 +1751,29 @@ def stop_work_games(w: Win, work):
                    f"Wait-Process -Id {int(pid)} -Timeout 30 -ErrorAction SilentlyContinue"], timeout=60)
 
 
+def fresh_work(w: Win) -> str:
+    """The work folder, at a path Windows has never started TotalA.exe from.
+
+    A PLAYER'S FIRST LAUNCH IS NOT A LATER ONE. Windows' compatibility engine hooks the exe's
+    DirectDrawCreate import (apphelp.dll) on the first start of an exe from a path it has not
+    seen, and not on the next -- measured 2026-09-27, and it is what the takeover got wrong in
+    v0.3 on a fresh install while this suite, reusing one folder, passed. So every setup runs
+    from a new path: the last work folder is renamed (instant) and mirrored from base (only what
+    differs is copied), and nothing older is kept."""
+    root = w.path()
+    new = w.path(f"work-{time.strftime('%Y%m%d%H%M%S')}-{time.time_ns() % 1000000:06d}")
+    w.run([f"$old = @(Get-ChildItem -LiteralPath {ps(root)} -Directory | Where-Object "
+           "{ $_.Name -eq 'work' -or $_.Name -like 'work-*' } | Sort-Object LastWriteTime)",
+           "if ($old.Count) { $keep = $old[-1]; $old | Where-Object { $_.FullName -ne "
+           "$keep.FullName } | Remove-Item -Recurse -Force; "
+           f"Rename-Item -LiteralPath $keep.FullName -NewName {ps(ntpath.basename(new))} }}"],
+          timeout=600)
+    w.work = new
+    return new
+
+
 def run_windows_setup(w: Win, setup, watch) -> dict:
-    work, base = w.path("work"), w.path("base")
+    work, base = fresh_work(w), w.path("base")
     w.robocopy(base, work)
     for dest, src in overlay(setup):
         rel = src.relative_to(FIXTURES)
@@ -1901,7 +1922,8 @@ def cmd_windows(args):
             results.append(o)
     finally:
         try:
-            stop_work_games(w, w.path("work"))
+            if getattr(w, "work", None):
+                stop_work_games(w, w.work)
         except Exception:  # noqa: BLE001 -- best effort; the report says what ran
             pass
         for t in (WIN_GAME_TASK, WIN_WATCH_TASK):
