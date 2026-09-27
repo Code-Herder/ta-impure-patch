@@ -2190,21 +2190,26 @@ nothing raised (…); the simulation fixes' N sites installed`. Right before it,
 installers have taken their stubs, `enginefix: the fixes' and limits' stubs take N bytes in P page(s)
 of 4096` (§2.6c).
 
-**The exe file is the reference, and a site the mod's own exe changes belongs to the mod.** The
-comparison is made against the bytes of `TotalA.exe` itself, read through the takeover's mapping of
-it (`tagpu_takeover_file_*`, §2.6d). A site whose bytes in memory differ from the file was
-rewritten by something that ran before Impure, which is what the table refuses over. A site whose
-*file* differs from stock 3.1 is the mod's own build — a mod ships its engine changes in its exe —
-and is refused just the same, because Impure's value there belongs to a fix that argues from the
-stock bytes; the exception is a site marked `lim_file_ok`, where the value stands alone and nothing
-of ours reads it, and there the mod's own bytes are **kept** and nothing is written (`limits: N
-site(s) carry the mod's own value in its exe file and are left alone`). **One site is marked**: the
-pathfinding budget `0x0040EAD6`, a lone dword that Escalation's exe sets to 1114 where stock has
-1333 and the raised build 66650. Baked stock bytes alone cannot tell a rewrite from a mod's own
-value, and comparing against them refused Escalation at its first changed site (MEASURED
-2026-09-27). Where the file cannot be read for a site — no mapping, or an exe loaded away from its
-own `ImageBase` — that site falls back to the stock bytes and the log says how many, since a mod's
-exe then refuses there.
+**The exe file on disk is the reference.** The comparison is made against the bytes of
+`TotalA.exe` itself, read through the takeover's mapping of it (`tagpu_takeover_file_*`, §2.6d,
+opened without `FILE_SHARE_WRITE` as that pass opens it). A site whose bytes in memory differ from
+the file was rewritten by something that ran before Impure, which is what the table refuses over. A
+site whose *file* differs from stock 3.1 is the mod's own build — a mod ships its engine changes in
+its exe — and is refused just the same, because Impure's value there belongs to a fix that argues
+from the stock bytes. The exception is a site marked `lim_file_ok`: the value stands alone (nothing
+of ours reads it, no other site's argument rests on it) **and the site is one Impure raises in the
+first place**, so the difference is accepted and Impure's own value goes in over it (`limits: N
+site(s) hold a value of the mod's own in its exe file, at sites where the value stands alone`).
+**One site is marked**: the pathfinding budget `0x0040EAD6`, a lone dword — stock 1333, the raised
+build 66650, Escalation's exe file 1114. Escalation's own `TAESC.ini` sets
+`AISearchMapEntries=66650`, which its TADR writes over that 1114 at every launch, so the exe's byte
+is the unraised number its runtime replaces and Impure's 66650 is what the mod asks for; it also
+keeps every Impure peer on one budget, so the port's open question about unequal budgets
+(`limits-evidence.md` §6) is not relied on. Baked stock bytes alone cannot tell a rewrite from a
+mod's own value, and comparing against them refused Escalation at its first changed site (MEASURED
+2026-09-27). Where the file cannot be read for a site — no mapping, a writer holding the exe, or an
+exe loaded away from its own `ImageBase` — that site falls back to the stock bytes and the log says
+how many, since a mod's exe then refuses there.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -2751,8 +2756,8 @@ run** (`tagpu_takeover_nested_init`, pass 1d). The 3.9.02 and Escalation exes im
 `ddraw.dll` itself, so Impure's own `DllMain` runs nested inside it with the whole rest of TADR's
 still to come. Stopping that rest is **prevention, not repair**: nothing of TADR's has been
 installed at that moment, so nothing has to be undone, and no build of TADR has to be understood.
-Impure reads its own thread's stack, from its frame up to the stack's top (`VirtualQuery`), and
-finds two things in it:
+Impure reads its own thread's stack, from its frame up to the stack's top (`NT_TIB.StackBase`
+from the TIB, a `VirtualQuery` region only if that cannot be had), and finds two things in it:
 
 - **the slot holding the return address of the `LoadLibrary` that is loading us** — a slot whose
   value lies inside a module of the game folder whose *file* carries TADR's marker, six bytes
@@ -2760,21 +2765,40 @@ finds two things in it:
   `FF /2` with a register and a displacement, `FF D0`..`FF D7`, `FF 10`..`FF 17`), and whose next
   slot up — `LoadLibrary` being `stdcall`, its argument sits directly above its return address —
   points at a string naming Impure's own file, read bounded, ANSI or wide, compared as a basename;
-- **that module's `DllMain` frame** above it: the first slot holding a return address into the
-  same module whose next two slots are the module's own base and `DLL_PROCESS_ATTACH`, which is
-  what the loader pushes. `DllMain`'s `ebp` is the slot below it, and it must hold a saved `ebp`
-  further up the stack; a caller that pops the arguments itself (`83 C4`, which would make
-  `DllMain` `cdecl`) refuses the pass, since the stub returns with `ret 0Ch`.
+- **that module's `DllMain` frame** above it: the **outermost** slot holding a return address into
+  the same module whose next two slots are the module's own base and `DLL_PROCESS_ATTACH`, which
+  is what the loader pushes. Outermost, because a helper the module calls with the same two values
+  in the same places would otherwise be unwound to instead, and `DllMain` is the last of that
+  module's frames on the stack; the entry point above it is called from ntdll, so its return
+  address is not in the module and it never matches. A caller that pops the arguments itself
+  (`83 C4`, `81 C4` or `8D 64 24`, which would make `DllMain` `cdecl`) refuses the pass, since the
+  stub returns with `ret 0Ch`.
+
+**The exit is read out of the function, not guessed at.** The call that entered the frame names it
+— `E8` outright, `FF 15` through a pointer inside the module, anything else refuses — and its first
+instructions are decoded: `push ebp; mov ebp,esp` confirms the frame pointer the stub unwinds to,
+and every `push` of `ebx`, `esi` or `edi` after it is recorded with the stack address it pushed to,
+following the stack adjustments in between. That matters because a stdcall callee owns those three
+registers for its caller: a return that skips its `pop`s hands the caller the callee's working
+values, silently, and only on a build whose caller keeps something live in one of them.
 
 The return address in that first slot is then replaced with a stub Impure generates from those
-values: `mov eax,1`, the frame's own innermost SEH record restored to `fs:0` where it has one (the
-record inside `[ebp-0x40, ebp)` whose `Next` is above `ebp`, so the chain TADR pushed is unwound
-and the loader's is not), `mov esp,<that ebp>`, `pop ebp`, `ret 0Ch`. TADR's `DllMain` therefore
-returns success to the loader the moment `LoadLibrary` hands it Impure. The stub's page is
+values: `mov eax,1`; each recorded register loaded back from the frame by absolute address; `fs:0`
+put back to the first exception record that is **not** below the frame — the value the frame's own
+epilogue would leave, whether or not it registered one itself, since a record below `ebp` belongs
+to this frame or a deeper one and every one of those is gone by the time the stub returns; `mov
+esp,<that ebp>`; `pop ebp`; `ret 0Ch`. TADR's `DllMain` therefore returns success to the loader the
+moment `LoadLibrary` hands it Impure, with every register its caller is owed. The stub's page is
 allocated `PAGE_READWRITE` and then made `PAGE_EXECUTE_READ` — never writable and executable at
-once — and nothing inside TADR's own image is written. Every value is verified before anything is
+once — and nothing inside TADR's own image is written.
+
+**The loader has one call left**: `DLL_PROCESS_DETACH` at process exit, which that module's own
+code would answer by freeing what it never set up. Its entry point is made inert for it, the way
+every other TADR module's is — the loader has already entered it, so nothing is taken from a call
+in flight, and the only call that can still reach it is the detach. Its TLS callbacks are untouched
+either way: the loader ran them before the entry point, so its TLS index exists. Every value is verified before anything is
 changed, and each one that is missing leaves the pass undone with its reason in the log (`takeover:
-the rest of TDRAW.dll's DllMain is left to run -- …`). MEASURED 2026-09-27: it fires on `TDRAW.dll`
+the start-up that loaded Impure was not stopped -- …`). MEASURED 2026-09-27: it fires on `TDRAW.dll`
 (TADR `dev-dcff5dd` and v2026.8.6) and on Escalation's `TAESC.dll`, and the log then reads
 `takeover: TDRAW.dll loaded Impure from its own DllMain, and the rest of that DllMain does not run`.
 The fail-safe is the image comparison at the first DirectDraw call: a launch where this pass did

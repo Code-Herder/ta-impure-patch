@@ -133,7 +133,8 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
   battle's map lands there too.
 - `no_network_game`: why a setup plays none, in words and from a run; its column reads `no mp`.
   Escalation's two carry it — its battle room starts the game on both peers with no units on
-  either, so there is nothing to fight.
+  either, so there is nothing to fight; why is not established, and it costs the per-peer read of
+  the running process in a network game ([the suite](../../../research/notes/compat/suite.md)).
 - `levers`: empty files put in the game folder, a DLL switch. A setup with one checks a mechanism,
   not a player's folder, and plays no network game: `mayhem-11.3.0-net` turns the takeover off
   (`tagpu_takeover.off`) so the safety net has TADR to catch, and its goal is the net's refusal;

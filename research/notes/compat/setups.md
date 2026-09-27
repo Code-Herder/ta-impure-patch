@@ -14,8 +14,8 @@ its own. "None of TADR's code" is read out of the running game on every peer of 
 exe's own code against `TotalA.exe` on disk — and not from the game folder, which a recorder that
 starts off the entry point leaves untouched ([the suite](suite.md), *Whether TADR ran*; [the
 takeover](takeover.md)). Each of the thirteen fights a 200v200 skirmish, and eleven of them play a
-two-player network game on Wine; Escalation's two play none, because its battle room starts a game
-with no units on either peer (*the table*, below).
+two-player network game on Wine; Escalation's two play none, its battle room starting a game with
+no units on either peer, which is measured and not explained ([the suite](suite.md)).
 
 The one known gap left is gammata's drop-in, where Impure never loads at all: its `tdraw.dll` loads
 `ddraw_custom.dll`, so Impure would have to be installed under that name (T3). The 3.9.02 exe,
@@ -48,7 +48,7 @@ and every patch Impure adds adds runs.
 | `392+tadr-dev` | the 3.9.02 exe, TADR `dev-dcff5dd` | **meets goal**: `TDRAW`'s `DllMain` loaded Impure and the rest of it did not run, the recorder's entry point inert, the exe's one `TDRAW` import and its three DirectPlay slots redirected; 441 runs, **0 into TADR**; battle fought; network game | **meets goal**: the same, 439 runs, 0 into TADR |
 | `392+tadr-2026.8.6` | the 3.9.02 exe, TADR v2026.8.6 | **meets goal**: the same, 441 runs and **0 into TADR**; battle fought; network game | **meets goal**: the same, 438 runs, 0 |
 | `gammata-ota` | gammata's OTA drop-in | known gap: `impure-not-loaded` (`ddraw_custom.dll` is what its tdraw loads); 37 places of the game's code lead into TADR, and 4 of the exe's import slots — the other 15 surprising slots lead into `ddraw_custom.dll`, which is cnc-ddraw and not TADR | the same, 10 places |
-| `escalation` | Escalation GOLD 10.2.0 as installed | **meets goal**: `TAESC`'s `DllMain` loaded Impure and the rest of it did not run, the recorder's entry point inert, the exe's one `TAESC` import redirected, and the exe file's own path budget at `0x0040EAD6` kept; 441 runs, **0 into TADR**; battle fought; no network game (its room seats no units) | **meets goal**: the same, 451 runs, 0 into TADR |
+| `escalation` | Escalation GOLD 10.2.0 as installed | **meets goal**: `TAESC`'s `DllMain` loaded Impure and the rest of it did not run, the recorder's entry point inert, the exe's one `TAESC` import redirected, and the exe file's own path budget at `0x0040EAD6` kept; 441 runs, **0 into TADR**; battle fought; no network game (its room starts one with no units on either peer) | **meets goal**: the same, 451 runs, 0 into TADR |
 | `escalation+tadr-dev` | Escalation with TADR's current Escalation build | **meets goal**: the same, with TADR's Escalation build beside it; 442 runs and **0 into TADR**; battle fought; no network game | **meets goal**: the same, 443 runs, 0 |
 | `retail+tadr1-recorder` | **the check that the evidence can fire**: `retail+tadr1` with `tagpu_takeover.off` | the recorder runs, as it must: its log, **and 31 places** of the game leading into it — 28 sites of its code and the exe's 3 DirectPlay slots; battle fought | the same, **6 sites** — the six the entry point installs, the rest being the DirectPlay path's, which a start-up-only run never reaches |
 | `mayhem-11.3.0-net` | **the check of the safety net**: Mayhem with `tagpu_takeover.off` | refused by the net: 17 of 265 sites rewritten; 12 places lead into TADR — the exe's two `DirectDrawCreate` calls, its 3 DirectPlay slots and the recorder's six sites | the same, 8 places |

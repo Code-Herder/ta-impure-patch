@@ -231,10 +231,11 @@ game-folder module whose **file** carries TADR's marker, a `call` in front of it
 naming Impure's own file. A coincidence does not satisfy all three.
 
 **How the rest of that `DllMain` is skipped.** The saved return address of that `LoadLibrary`
-call is replaced with a stub that returns TRUE out of TADR's `DllMain`: `mov eax,1`, `fs:0` put
-back, `mov esp,<ebp>`, `pop ebp`, `ret 0Ch` — the frame's own values baked in as immediates,
-valid for the one return the stub serves. **Nothing of TADR's code is written**; the only write
-outside Impure is one dword of this thread's own stack, and the exe's one import slot below.
+call is replaced with a stub that returns TRUE out of TADR's `DllMain`: `mov eax,1`, the registers
+the frame owes its caller loaded back out of it, `fs:0` put back, `mov esp,<ebp>`, `pop ebp`,
+`ret 0Ch` — the frame's own values baked in as immediates, valid for the one return the stub
+serves. **Nothing of TADR's code is written**; the only write outside Impure is one dword of this
+thread's own stack, the module's entry point (below), and the exe's one import slot.
 
 Its own `DllMain` would have been the tidier resume point, and it is not usable: the branch it
 takes for any reason but `DLL_PROCESS_ATTACH` is **not** a path that returns doing nothing.
@@ -243,17 +244,41 @@ at A is the **`DLL_PROCESS_DETACH` cleanup**, a chain of five calls that would f
 set up, and only B is the epilogue. Resuming at A would have run the detach path; finding B means
 matching a second branch in a third-party binary. The stub needs neither.
 
-What the stub has to get right, and how each part is established rather than assumed: `ebp` is the
-frame word below DllMain's own return address, and the saved `ebp` it points at must itself be a
-stack address further up. The SEH registration is **found**, by walking `fs:0` for the innermost
-record that lies inside the frame and whose `Next` lies outside it — not assumed to be at
-`ebp-0xC`, which is only where the two builds read put it. `ret 0Ch` is the stdcall `DllMain` the
-two arguments on the stack have just confirmed, and a caller that popped them itself (`add esp,
-imm8` at its return address) is refused instead, since then the stub would move its stack.
+What the stub has to get right, and how each part is **read out of the binary** rather than
+assumed — the first landing review found every one of these as a guess, and this is what replaced
+them:
+
+- **Which frame.** The *outermost* frame of that module carrying the loader's argument triple, not
+  the innermost: a helper the module calls with the same two values in the same places would
+  otherwise be the one unwound to. `DllMain` is the last of that module's frames on the stack, and
+  the entry point above it returns into ntdll, so it never matches.
+- **The frame pointer, and the registers.** The call that entered the frame names the function
+  (`E8`, or `FF 15` through a pointer inside the module; anything else refuses), and its prologue
+  is decoded: `push ebp; mov ebp,esp` **confirms** there is a frame pointer to unwind to instead of
+  inferring one from a stack word that looks like an address, and each `push ebx/esi/edi` after it
+  is recorded with the address it pushed to, following the stack adjustments in between. A stdcall
+  callee owns those three registers for its caller, so a return that skips its `pop`s hands the
+  caller the callee's working values — silently, and only on a build that keeps one live.
+- **`fs:0`.** Put back to the **first exception record that is not below the frame**. That is the
+  value the frame's own epilogue would leave whether or not it registered one itself: every record
+  below `ebp` belongs to this frame or a deeper one, and all of those are gone when the stub
+  returns. A window below `ebp` cannot tell "registered none" from "registered one further down"
+  — a `try` past 0x40 bytes of locals sits outside one — and reading the second as the first
+  leaves `fs:0` pointing into stack the loader is about to reuse.
+- **`ret 0Ch`** is the stdcall `DllMain` the two arguments on the stack have just confirmed, and a
+  caller that pops them itself (`add esp,imm8`, `add esp,imm32` or `lea esp,[esp+0Ch]` at its
+  return address) is refused instead, since then the stub would move its stack.
+
+**And the call the loader still has left.** Returning TRUE makes the loader record the module as
+initialised, so it calls that entry point once more at process exit, with `DLL_PROCESS_DETACH` —
+the cleanup disassembled above, freeing what was never set up. The entry point is therefore made
+inert as well, the way every other TADR module's is: the loader has already entered it, so nothing
+is taken from a call in flight, and the only call that can still reach it is the detach. Without
+that, "none of TADR's code runs" would have been false at exit.
 
 **The fail-safe is what makes that acceptable.** If any condition fails to verify — the return
-address, the argument, the branch — **nothing is written and the launch refuses exactly as it does
-today** (part 3). No build can end up worse than it already is, and the suite is what says which
+address, the argument that names our own file, the frame's two arguments, the call that entered it,
+or its prologue — **nothing is written and the launch refuses exactly as it does today** (part 3). No build can end up worse than it already is, and the suite is what says which
 builds are covered.
 
 **The recorder is still made inert on these routes, and that is why they meet their goal rather
@@ -286,10 +311,13 @@ is the rule. The recorder is not replaced: that is its own project ([Open](#open
 fail-safe rather than by a measurement; the name the `LoadLibrary` call passes has to be a string
 **inside a loaded module's image** for the argument to be followed at all — a name built on the
 stack or on the heap is not, and the pass then does nothing (every build measured passes a
-literal); and a **32-bit stack layout** throughout — the frame walk, the `ret 0Ch` and the SEH
-record are all x86, which is what the engine is.
+literal); the prologue walk stops at the first instruction it does not know, so a function that
+saved a register *after* one of those would have that register missed rather than refused (both
+builds read save none at all in the frame the stub unwinds — DISASSEMBLED, `0x1006b590`: `push
+ebp; mov ebp,esp; mov eax,[ebp+0Ch]`); and a **32-bit stack layout** throughout — the frame walk,
+the `ret 0Ch` and the SEH record are all x86, which is what the engine is.
 
-### Part 2 — sites a mod's exe file changes belong to the mod
+### Part 2 — the exe file on disk is the reference
 
 **The reference for Impure's fail-closed table is the exe file on disk**, not the stock 3.1 bytes
 it is built against. Both comparisons are made, in `DllMain`, before anything is written:
@@ -300,12 +328,22 @@ it is built against. Both comparisons are made, in `DllMain`, before anything is
   in its exe. That is refused too, because Impure's value there belongs to a fix whose argument
   rests on what the stock bytes do — **except** at a site marked `lim_file_ok`, where the value
   stands alone: nothing is sized or indexed by it, no stub reads it, no other site's argument
-  depends on it. There the mod's bytes are kept and Impure writes nothing.
+  depends on it, **and the site is one Impure raises in the first place**. There the difference is
+  accepted and Impure's own value goes in over it, exactly as on every other exe.
 
-**One site is marked**: `0x0040EAD6`, the pathfinder's search budget. The 3.9.02 exe sets 66650,
-which is what Impure writes anyway; Escalation's sets **1114**, below stock's 1333 and deliberately
-so, and it is kept. Adding a site to that list is a claim about the site, made in a review, and
-never a way past a refusal.
+**One site is marked**: `0x0040EAD6`, the pathfinder's search budget (stock 1333). The 3.9.02 exe's
+file holds 66650, which is what Impure writes anyway; Escalation's holds **1114** — and *that is
+not the number an Escalation game runs with*. Its own `TAESC.ini` sets `AISearchMapEntries=66650`
+([Escalation](../deep-ta-esc.md)), which TADR writes over the exe's 1114 at every launch, so the
+exe's byte is the unraised value its own runtime replaces and not a setting of the mod's. Impure
+therefore installs 66650 there too, which is
+what the mod asks for, more than stock, and the same budget every other Impure peer has —
+so the unequal-budget question the port's evidence flags as needing a measurement
+([TADR port A](../tadr-port/limits-evidence.md) §6, "worth one MP measurement before it is relied
+on") is not relied on at all. Keeping 1114 would have handed an Escalation player a pathfinder
+below stock's on the strength of that untested inference; the landing review is what caught it.
+Adding a site to that list is a claim about the site, made in a review, and never a way past a
+refusal.
 
 Comparing with the baked stock bytes alone could not tell those two cases apart, and so refused
 every mod's own exe at its first changed site — which is what stopped these four setups from

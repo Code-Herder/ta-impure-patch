@@ -329,7 +329,7 @@
         "tadr_ran": false,
         "tadr_started": true
       },
-      "no_network_game": "its battle room starts a game with no units on either peer -- both load the map and play, resources and HUD up and the camera in the world, with nothing to fight -- so the suite's fight cannot be applied (MEASURED 2026-09-27; the same setup applies 402 of 402 entities in a single-player skirmish, so it is the room's seating and not the engine)"
+      "no_network_game": "its battle room starts a game with no units on either peer: both load the map and play -- resources and HUD up, the camera in the world -- with nothing to fight, so the fight cannot be applied (MEASURED 2026-09-27). WHY is not established: the same setups create 402 of 402 entities in a single-player skirmish, but that says nothing about the lobby path, and there is no run of this folder without Impure to compare with. What it costs: the per-peer read of the running process in a network game"
     },
     {
       "name": "escalation+tadr-dev",
@@ -352,7 +352,7 @@
         "tadr_ran": false,
         "tadr_started": true
       },
-      "no_network_game": "its battle room starts a game with no units on either peer -- both load the map and play, resources and HUD up and the camera in the world, with nothing to fight -- so the suite's fight cannot be applied (MEASURED 2026-09-27; the same setup applies 402 of 402 entities in a single-player skirmish, so it is the room's seating and not the engine)"
+      "no_network_game": "its battle room starts a game with no units on either peer: both load the map and play -- resources and HUD up, the camera in the world -- with nothing to fight, so the fight cannot be applied (MEASURED 2026-09-27). WHY is not established: the same setups create 402 of 402 entities in a single-player skirmish, but that says nothing about the lobby path, and there is no run of this folder without Impure to compare with. What it costs: the per-peer read of the running process in a network game"
     }
   ]
 }

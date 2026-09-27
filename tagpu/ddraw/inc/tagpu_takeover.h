@@ -3,12 +3,19 @@
 /* tagpu_takeover -- TADR's DLLs run none of their own code, and no launch goes ahead with a
    byte of the game's code leading into one (research/notes/compat/takeover.md, part 1).
 
-   THE EXE FILE ON DISK IS THE REFERENCE. Three passes keep TADR's code from running -- one
-   for each way it gets in -- and a fourth compares the whole image against that file and
-   refuses the launch when any of them missed. The first three are a list of the ways in and
-   so a guess about what TADR does; the fourth is not, which is why it is the one that decides.
-   `tagpu_takeover.off` in the game folder turns all four off, for the suite's harness setups
+   THE EXE FILE ON DISK IS THE REFERENCE. Four passes keep TADR's code from running -- one for
+   each way it gets in -- and a fifth compares the whole image against that file and refuses the
+   launch when any of them missed. The first four are a list of the ways in and so a guess about
+   what TADR does; the last is not, which is why it is the one that decides.
+   `tagpu_takeover.off` in the game folder turns all of them off, for the suite's harness setups
    that need TADR running to show the safety net and the recorder check firing.
+
+   The ways in: a LoadLibrary of tdraw by name (1), a module of the game folder the loader
+   initialises (2), the exe's DirectPlay imports bound to a recorder (3), and an exe that imports
+   TADR itself, where TADR's own DllMain is what loads Impure (1d, tagpu_takeover_nested_init:
+   its return address is replaced with a stub that leaves that DllMain with TRUE, so none of its
+   remaining code runs, and the module's entry point is made inert for the loader's detach call
+   at exit). The note's part 1 has the whole argument.
 
    ---- 1. tdraw.dll asked for by name: the LoadLibrary answer ------------------------------
 
@@ -50,24 +57,27 @@
    research/notes/deep-tadr.md). Its exports stay bound, which is why pass 3 is not optional:
    an uninitialised Delphi DLL must never be called.
 
-   THE INVARIANT THIS RESTS ON is that no module of the game folder has been initialised yet,
-   so no entry point written here is one the loader has already called or is calling. The
-   loader maps the whole import graph, then initialises it as a post-order walk in
-   import-directory order; Impure imports nothing from the game folder; so the condition is
-   exactly "the FIRST import descriptor of the exe that leads into the game folder is
-   Impure's", and every other game-folder module is in a later descriptor's subtree.
-   to_first_local_is_ours tests that against the exe in front of it, over every slot of a
-   descriptor rather than its first, and the pass does nothing when it fails -- it is not an
-   assumption about the retail exe. WHAT IT DOES NOT COVER: a game-folder module that is not in
+   THE INVARIANT THIS RESTS ON is that an entry point written here is one the loader has not
+   called yet. The loader maps the whole import graph, then initialises it as a post-order walk
+   in import-directory order; Impure imports nothing from the game folder; so a module's place in
+   that walk is the place of the exe's import descriptor that names it, and the condition is
+   exactly "the first descriptor naming this module comes AFTER the descriptor of the module
+   whose DllMain we are inside". to_descriptor_of answers both halves against the exe in front of
+   it, over every slot of a descriptor rather than its first, and a module that fails it is left
+   running and said so -- it is not an assumption about the retail exe. On the retail routes the
+   module we are inside is Impure's own; where the exe imports TADR it is TADR's, and 1d hands
+   back its index before it redirects those slots, since a redirected slot no longer names it. WHAT IT DOES NOT COVER: a game-folder module that is not in
    the exe's import table at all, and a PE TLS callback, which the loader calls whatever the entry
    point holds. Both are named where they are found (to_tls_callbacks logs one) and answered by
    pass 4. No module this pass makes inert has either: every one is a recorder, and no recorder
    carries a TLS directory at all, while the six tdraw/TAESC builds of the fixtures whose callback
-   array is live are loaded only where the exe imports TADR, which this pass skips (MEASURED
-   2026-09-27; to_tls_callbacks says why the two sets must stay disjoint). The 3.9.02 and Escalation
-   exes import TDRAW / TAESC and no DDRAW at all (DISASSEMBLED: objdump -p), so there TADR's
-   DllMain is what loads Impure and is running while this would write: the pass is skipped and
-   says so, and pass 4 is what answers for such a launch. MEASURED on Wine and on Windows (the
+   array is live are loaded only where the exe imports TADR -- and there the tdraw is the module
+   Impure runs inside, which 1d takes out of this walk by name (MEASURED 2026-09-27;
+   to_tls_callbacks says why the two sets must stay disjoint). The 3.9.02 and Escalation exes
+   import TDRAW / TAESC and no DDRAW at all (DISASSEMBLED: objdump -p): there this pass runs with
+   TADR's module as the one we are inside, so the recorder in a later descriptor is still made
+   inert, and a module whose descriptor is not later is left running for the image comparison to
+   answer for. MEASURED on Wine and on Windows (the
    suite, 2026-09-26): on the retail and Patch Loader exes, which import DDRAW first, Impure's
    limits were installed before TADR's limit crack ran.
 

@@ -87,8 +87,7 @@ typedef struct LIMSITE {
     unsigned char want[LIM_MAXB];   /* what must be there after the install         */
     unsigned char differs;
     unsigned char unreadable;       /* the page could not be read: `have` means nothing */
-    unsigned char fileok;           /* the mod's own value may stand here: lim_file_ok */
-    unsigned char kept;             /* it does, and `want` is the file's bytes         */
+    unsigned char fileok;           /* the file may differ from stock here: lim_file_ok */
     const char*   name;
 } LIMSITE;
 
@@ -101,6 +100,7 @@ static char    s_limNeeds[192];      /* a table fix's required local fix is not 
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
 static int     s_limRewritten;       /* installed, then rewritten by someone else      */
+static unsigned int s_limMarkMissing;/* lim_file_ok named a site the table does not have */
 
 static void lim_add(unsigned int va, int n, const unsigned char* stock,
                     const unsigned char* ours, const char* name)
@@ -148,20 +148,20 @@ static void lim_same(unsigned int va, int n, const unsigned char* stock, const c
     lim_add(va, n, stock, stock, name);
 }
 
-/* A SITE WHERE THE MOD'S OWN EXE MAY DIFFER FROM STOCK 3.1 AND IMPURE LEAVES IT ALONE.
-   The rule for every other site is that the bytes must be the stock 3.1 ones, and a mod's exe
-   that changes one is refused: Impure's value there is part of a fix whose argument rests on
-   what the stock bytes do, and a mod that moved them has changed that argument. A site listed
-   here is one where the value stands alone -- nothing is sized or indexed by it, no stub reads
-   it, no other site's argument depends on it -- so whatever the mod's exe FILE says is kept and
-   Impure writes nothing. Adding one is a claim about that site, checked in a review, never a way
-   past a refusal (research/notes/compat/takeover.md, part 2). */
+/* A SITE WHOSE VALUE STANDS ALONE: the exe file may hold something other than stock 3.1 here
+   without refusing the table, and Impure's own value is installed over it. Marking a site says
+   three things, each of which has to be true of it: nothing of ours reads the value, no other
+   site's argument rests on it, and the site is one Impure raises in the first place -- so what
+   the mod's exe holds is the unraised number its own runtime replaces, not a setting of its own.
+   Anywhere else a file that differs from stock is the mod's change and refuses. Adding one is a
+   claim about that site, checked in a review, never a way past a refusal
+   (research/notes/compat/takeover.md, part 2). */
 static void lim_file_ok(unsigned int va)
 {
     int i;
     for (i = 0; i < s_nlim; i++)
         if (s_lim[i].va == va) { s_lim[i].fileok = 1; return; }
-    s_limOverflow = 1;              /* a marked site that is not in the table is our bug */
+    s_limMarkMissing = va;          /* a marked site that is not in the table is our bug */
 }
 
 /* a fix of the table whose code stub could not be made: nothing of the table is written */
@@ -10379,7 +10379,7 @@ static int lim_overlap(void)
 
 int tagpu_limits_install(void)
 {
-    int i, bad = 0, written, haveFile, noFile = 0, kept = 0, modBad = 0;
+    int i, bad = 0, written, haveFile, noFile = 0, marked = 0, modBad = 0;
     if (s_limState) return s_limState > 0;
 #ifndef TAGPU_LIMITS_STOCK
     lim_sites();
@@ -10388,6 +10388,12 @@ int tagpu_limits_install(void)
                s_fixBytes, s_fixPages);
     if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
+    if (s_limMarkMissing) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- 0x%08X is marked as standing alone and is not in the "
+                   "table; nothing written", s_limMarkMissing);
+        return 0;
+    }
     if (s_limNeeds[0]) {
         s_limState = -1;
         tagpu_logf("limits: FAILED -- %s; nothing written", s_limNeeds);
@@ -10405,9 +10411,10 @@ int tagpu_limits_install(void)
        Impure, which is what this refuses over. A site whose FILE differs from stock 3.1 is the
        MOD'S OWN CHANGE -- a mod ships its engine changes in its exe -- and is refused just the
        same, because Impure's value there belongs to a fix that argues from the stock bytes,
-       EXCEPT where lim_file_ok says the value stands alone: there the mod's bytes are kept and
-       nothing is written. Comparing with baked stock bytes alone could not tell the two apart,
-       and refused every mod's own exe at its first changed site. */
+       EXCEPT where lim_file_ok says the value stands alone: there the difference is accepted and
+       Impure's own value is installed, as it is on every other exe. Comparing with baked stock
+       bytes alone could not tell a rewrite from a mod's own exe, and refused Escalation's at its
+       first changed site. */
     haveFile = tagpu_takeover_file_open();
     for (i = 0; i < s_nlim; i++) {
         LIMSITE* s = &s_lim[i];
@@ -10431,9 +10438,7 @@ int tagpu_limits_install(void)
             modBad++;
             continue;
         }
-        s->kept = 1;                                       /* the mod's own value stands */
-        memcpy(s->want, s->file, s->n);
-        kept++;
+        marked++;                              /* stands alone: ours goes in over it */
     }
     tagpu_takeover_file_close();
     if (noFile)
@@ -10448,12 +10453,11 @@ int tagpu_limits_install(void)
                           : "");
         return 0;
     }
-    if (kept)
-        tagpu_logf("limits: %d site(s) carry the mod's own value in its exe file and are left "
-                   "alone", kept);
+    if (marked)
+        tagpu_logf("limits: %d site(s) hold a value of the mod's own in its exe file, at sites "
+                   "where the value stands alone -- Impure's own goes in over them", marked);
     for (written = 0; written < s_nlim; written++) {
         LIMSITE* s = &s_lim[written];
-        if (s->kept) continue;
         if (!tagpu_detour_write(s->va, s->want, s->n)) break;
     }
     if (written < s_nlim) {
@@ -10461,8 +10465,7 @@ int tagpu_limits_install(void)
            nothing runs meanwhile on a half-changed engine. */
         s_limWriteFail = s_lim[written].va;
         while (written-- > 0)
-            if (!s_lim[written].kept)
-                tagpu_detour_write(s_lim[written].va, s_lim[written].file, s_lim[written].n);
+            tagpu_detour_write(s_lim[written].va, s_lim[written].file, s_lim[written].n);
         s_limState = -1;
         tagpu_logf("limits: FAILED -- the write at 0x%08X was refused; everything written was put back",
                    s_limWriteFail);
@@ -10611,7 +10614,7 @@ void tagpu_limits_report(void)
         why = "Impure installed them, but another program that started after it -- usually "
               "TADR's tdraw.dll, or a copy of it under another name -- rewrote some of those "
               "places, and the game would crash as soon as a battle loads.";
-    else if (s_limNoStub || s_limOverflow || s_limOverlapA)
+    else if (s_limNoStub || s_limOverflow || s_limOverlapA || s_limMarkMissing)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
     else if (s_limNeeds[0])
@@ -10690,7 +10693,11 @@ void tagpu_limits_report(void)
             strncat(text, line, sizeof text - strlen(text) - 1);
             break;
         }
-        lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, 16);
+        /* THE REFERENCE THAT WAS COMPARED, not the bytes this build was written against: at
+           install that is the exe FILE's bytes, and after install the bytes Impure put there.
+           Printing stock 3.1 for a mod's exe names a number nothing ever compared with, and the
+           reader's first question is which of the two conditions fired. */
+        lim_hex(want, s_limRewritten ? s->want : s->file, s->n, 16);
         if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, 16);
         _snprintf(line, sizeof line, "0x%08X %s\r\n  want %s\r\n  have %s\r\n",
                   s->va, s->name, want, have);
@@ -10703,7 +10710,7 @@ void tagpu_limits_report(void)
     for (i = 0; i < s_nlim; i++) {
         const LIMSITE* s = &s_lim[i];
         if (!s->differs) continue;
-        lim_hex(want, s_limRewritten ? s->ours : s->stock, s->n, LIM_MAXB);
+        lim_hex(want, s_limRewritten ? s->want : s->file, s->n, LIM_MAXB);
         if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
     }

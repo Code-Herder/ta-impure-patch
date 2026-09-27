@@ -31,7 +31,8 @@ The short version, measured on the reference setup with the DLL at `main`:
 - **An exe that imports TADR** (the 3.9.02 exe, Escalation): Impure loads nested inside TADR's
   start-up and **stops the rest of it** — the `DllMain` that loaded Impure returns without
   patching anything, the recorder's entry point is made inert before the loader calls it, and the
-  exe's imports from both lead into Impure's own exports. TADR's `DllMain` has written one line to
+  exe's import from the tdraw leads into Impure's own export, and the recorder's DirectPlay slots
+  into Impure's forwarders to Windows' own `dplayx.dll`. TADR's `DllMain` has written one line to
   its own log by the time Impure exists, and that is the whole of what runs
   ([the takeover](takeover.md), 1d).
 - **gammata's drop-in**: its `tdraw.dll` loads `ddraw_custom.dll`, so Impure never loads.

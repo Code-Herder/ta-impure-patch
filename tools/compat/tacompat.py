@@ -119,6 +119,10 @@ TADR_INSTALLED = re.compile(r"Install Limit Crack|\[EngineLimits\] installed")
 # writes this line before LoadLibrary("ddraw.dll") returns, so the game folder cannot come up
 # empty there however completely the takeover stops the rest (setups.json: tadr_started).
 TADR_ONLY_STARTED = re.compile(r"(?:.*: )?tdraw started \(tdrawlog\.txt\)$")
+# ...and what that file may say for it to count as "only started": the one line TADR writes
+# before it loads Impure. Read from the FILE, not from the summary above it -- a build whose
+# DllMain ran on and logged something else produces the same summary string.
+TADR_START_LINE = re.compile(r"^\s*\d+\s+---\s+Process Attached\.\s+config=\S+\s*$")
 RECORDER_LOG = re.compile(r"Demo Recorder Log", re.I)
 RECORDER_CALLED = re.compile(r"^\s*DLL\.DirectPlay", re.M)
 # The two-player stage: small halves applied one per peer, each as that peer's own units.
@@ -355,6 +359,15 @@ def classify(o: dict) -> str:
     return "impure-active" if o["packet_pub"] > 0 else "impure-inactive"
 
 
+def _started_only(tdrawlog) -> bool:
+    """Whether tdrawlog.txt holds nothing but the line TADR writes before it loads Impure.
+    Anything else in it is TADR's code having run after that, which no allowance covers."""
+    if not tdrawlog:
+        return True                      # no file at all: nothing to allow
+    lines = [ln for ln in tdrawlog.splitlines() if ln.strip()]
+    return len(lines) == 1 and bool(TADR_START_LINE.match(lines[0]))
+
+
 def judge(o: dict, exp: dict) -> list:
     """Every way the run differs from what the setup expects (empty: as expected)."""
     miss = []
@@ -375,11 +388,12 @@ def judge(o: dict, exp: dict) -> list:
     if exp["outcome"] == "impure-active" and o.get("menu") is False:
         miss.append("the main menu was never reached")
     ran = o.get("tadr_ran") or []
-    if exp.get("tadr_started"):
+    if exp.get("tadr_started") and _started_only(o.get("tdrawlog")):
         # On the routes where TADR's DllMain is what loads Impure, it has written its first log
         # line before Impure exists. That one line is the whole of it -- no engine patch, no
         # recorder log, and nothing of its code after -- so it is allowed here and nothing else
-        # is: every other piece of evidence still fails the setup.
+        # is: every other piece of evidence still fails the setup, and so does a tdrawlog.txt
+        # that holds anything beyond that line.
         ran = [e for e in ran if not TADR_ONLY_STARTED.match(e)]
     if "tadr_ran" in exp and bool(ran) != exp["tadr_ran"]:
         miss.append("TADR ran: " + "; ".join(ran) if ran else "TADR did not run")
