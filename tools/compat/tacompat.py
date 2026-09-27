@@ -63,6 +63,12 @@ TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
 DPLAY_SRC = Path(os.environ.get("TA_DIRECTPLAY_SRC", Path.home() / ".local/share/ta-directplay"))
 DPLAY_OVERRIDES = "dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n"
+# NO SOUND: nothing the suite checks listens, and a dozen games at once through the owner's
+# speakers is noise. Wine's audio drivers are disabled for the game's process, so it finds no
+# sound device -- the game's own no-device path, which is what a machine without a sound card
+# gets -- and every file of the setup stays exactly as its mod shipped it (a mod's own
+# totala.ini is part of the setup under test, so NoDirectSound is not written into it).
+AUDIO_OFF = "winepulse.drv,winealsa.drv,wineoss.drv=d"
 RETAIL_MD5 = "8e74a1dffa1f5988624c52048f5b20cd"      # TotalA.exe 3.1, pristine/manifest.md5
 PREFIX = "compat-"                                   # every Wine instance this tool owns
 
@@ -417,6 +423,10 @@ def judge(o: dict, exp: dict) -> list:
             # started is not held to it.
             if expected and (h is None or h.get("why")):
                 miss.append(who + hook_note(h))
+    c = o.get("content")
+    if c is not None and (c.get("why") or c.get("missing")):
+        miss.append("the mod's own content is not loaded: " + (c.get("why") or
+                    f"{', '.join(c['missing'])} missing from the engine's {c.get('types', 0)} unit types"))
     if o.get("battle") is not None and not o["battle"].get("ok", False) and exp["outcome"] != "battle-crash":
         miss.append(f"the battle failed: {o['battle'].get('why', '?')}")
     if o.get("mp") is not None and not o["mp"].get("ok", False):
@@ -647,6 +657,35 @@ def new_boxes(display, seen, boxes, t0):
             boxes.append({"title": title, "size": f"{w}x{h}", "t": round(time.time() - t0, 1)})
 
 
+def mod_content(setup, inst) -> "dict | None":
+    """WHETHER THE MOD ITSELF IS RUNNING, not only Impure beside it: the unit types the setup
+    names -- ones only that mod defines -- looked up in the engine's own table of loaded unit
+    types (`tacli units`, which walks the definition table in memory, not any archive path). A
+    loader that never started leaves stock TA with the mod's files lying beside it, and every
+    other check passes that. None where the setup has no content of its own to show."""
+    want = (setup.get("content") or {}).get("units") or []
+    if not want:
+        return None
+    r = tacli("units", inst["name"], "--json", "--limit", "0", timeout=90)
+    try:
+        rows = json.loads(r.stdout)["units"]
+    except (ValueError, KeyError, TypeError):
+        return {"want": want, "why": f"tacli units: {(r.stderr or r.stdout).strip()[:200]}"}
+    have = {str(row.get("name") if isinstance(row, dict) else row).upper() for row in rows}
+    return {"want": want, "types": len(have), "missing": [u for u in want if u.upper() not in have]}
+
+
+def alive_seen(gamedir: Path) -> "int | None":
+    """The newest `units: alive=N` header in the game's tagpu.log: the units in the frame packet,
+    which is what Impure draws and what `tacli roster` lists."""
+    try:
+        text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+    except OSError:
+        return None
+    found = re.findall(r"^units: alive=(\d+)", text, re.M)
+    return int(found[-1]) if found else None
+
+
 def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
     """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
     patchers that both started can still collide in play, where the limits are used.
@@ -693,6 +732,17 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
     if r.returncode != 0:
         return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}"}
     applied = (r.stdout.splitlines() or [""])[0]
+    # THE UNITS ARE SEEN, not only created: the scenario applier counts what the engine made,
+    # and a game whose units exist but that Impure cannot see -- no frame packet entry, so
+    # nothing drawn and nothing in the roster -- passes every other check. The header is
+    # written every half second; at least nine in ten of what was made must be in it.
+    made = re.search(r"\((\d+) units?\b", applied)        # "applied 402 of 402 (401 units + 1 feature)"
+    want = int(made.group(1)) if made else 1
+    time.sleep(4)
+    got = alive_seen(gamedir)
+    if got is None or got < max(1, want * 9 // 10):
+        return {"ok": False, "why": f"Impure sees {got if got is not None else 'no'} unit(s) of "
+                                    f"the {want} the scenario made ({applied})"}
     end = time.time() + seconds
     while time.time() < end:
         time.sleep(2)
@@ -1106,7 +1156,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     inst = setup["_inst"]
     gamedir, prefix = inst["gamedir"], inst["prefix"]
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{display}",
-               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES}", WINEDEBUG="+loaddll")
+               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", WINEDEBUG="+loaddll")
     xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     t0 = time.time()
@@ -1143,6 +1193,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                 first = (r.stdout.splitlines() or [""])[0]
                 if r.returncode == 0 and "MAINMENU" in first:
                     menu = True
+        content = mod_content(setup, inst) if menu and proc.poll() is None else None
         fight = None
         if battle and menu and not boxes and proc.poll() is None:
             fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle)
@@ -1186,7 +1237,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "tdrawlog": read(gamedir / "tdrawlog.txt"),
         "failure": read(gamedir / "log" / "startup-failure.txt"),
         "modules_known": True, "folder_modules": folder_modules,
-        "battle": fight, "hooks": hooks,
+        "battle": fight, "hooks": hooks, "content": content,
         "seconds": round(time.time() - t0, 1),
     }
     logs = other_logs(gamedir / "log", t0)
@@ -1259,7 +1310,7 @@ def free_dplay_port(port, mine: set, wait=300) -> "str | None":
 def start_wine(inst, display):
     """TotalA.exe in the instance's game folder on its own virtual display."""
     env = dict(os.environ, WINEPREFIX=str(inst["prefix"]), DISPLAY=f":{display}",
-               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES}", WINEDEBUG="+loaddll")
+               WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", WINEDEBUG="+loaddll")
     xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,

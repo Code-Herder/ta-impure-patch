@@ -49,7 +49,15 @@ tools/compat/tacompat.py selftest                    # the hook decode, 11 cases
   menu clicks through to a skirmish on Two Continents and applies `scenarios/200v200.json`.
   Collisions between two patchers show where the limits are *used*, not at start-up: Impure
   v0.2.3 beside Total Mayhem 11.3.0 reached the menu and crashed on the first skirmish load, which
-  a start-up-only run passes.
+  a start-up-only run passes. **The units must be seen, not only made**: after the scenario, the
+  newest `units: alive=N` header in `tagpu.log` (the frame packet — what Impure draws and
+  `tacli roster` lists) must hold nine in ten of the units the applier made. A game whose units
+  exist but that Impure cannot see passes everything else.
+- **The mod's own content** (`content` in a setup): at the menu, the unit types it names — ones
+  only that mod defines — must be in the engine's table of loaded types (`tacli units`, a walk of
+  the table in memory). A loader that never started leaves stock TA beside the mod's files.
+- **No sound**: Wine's audio drivers are disabled for every game the suite starts; the game takes
+  its no-device path, and no file of the setup is changed for it.
 - **The network stage** (Wine only, on by default, 30 s): every player's setup whose
   single-player run shows Impure running also plays a two-player game — a second instance of the
   same folder (`compat-<setup>-j`), hosted and joined through the game's own battle room over
@@ -134,6 +142,8 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
   Windows. Also `tdrawlog`, `failure`, `loaded`, `not_loaded` to pin the evidence.
 - `registry_roots`: where a Patch Loader moved the game's registry key (`RegistryPath=`), so the
   battle's map lands there too.
+- `content`: `{"units": [...]}`, three unit types only this mod defines (list the mod's archives'
+  `units*/*.fbi` against retail's) — every setup that ships a mod's own content carries one.
 - `no_network_game`: why a setup plays none, in words and from a run; its column reads `no mp`.
   Escalation's two carry it — its battle room starts the game on both peers with no units on
   either, so there is nothing to fight; why is not established, and it costs the per-peer read of

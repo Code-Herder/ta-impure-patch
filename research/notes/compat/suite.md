@@ -19,7 +19,15 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   retail gamedir. The runner watches the display's windows for the whole run (a refusal is a
   box, and a box is the evidence), reads `tdrawlog.txt`, `tagpu.log`, `startup-failure.txt`,
   `ErrorLog.txt` and the Wine `+loaddll` trace, then fights the battle where the menu came up,
-  and last — while the game is still alive — reads its code out of the process (below).
+  and last — while the game is still alive — reads its code out of the process (below). Two
+  checks hold the claim to what a player sees, not only to Impure being up. **The mod's own
+  content**: at the menu, the unit types a setup's `content` names (ones only that mod defines)
+  must be in the engine's table of loaded types (`tacli units`, a walk of the table in memory,
+  not of any archive path). **The units are seen**: after the battle's scenario, the newest
+  `units: alive=N` header in `tagpu.log` — the frame packet, what Impure draws — must hold nine
+  in ten of the units the applier made. MEASURED 2026-09-27: Escalation made 401 and Impure saw
+  0, which every earlier check had passed. Every game runs with Wine's audio drivers disabled —
+  the no-device path, with no file of the setup changed for it.
 - **The network stage** (`wine --mp SECONDS`, 30 by default, 0 for none): for each player's
   setup whose single-player run showed Impure running, a second instance of the same folder
   (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's
@@ -151,6 +159,7 @@ a run, not from expectation. The commit that makes a setup meet its goal deletes
 A Patch Loader that moves the registry (`RegistryPath=`) needs the setup's `registry_roots`, or
 the battle stage opens on a map the mod does not ship. `levers` are empty files the setup puts in
 the game folder — a DLL switch. A setup with one checks a mechanism rather than a player's
-folder: `mayhem-11.3.0-net` switches the takeover off (`tagpu_takeover.off`) so that the safety
+folder, and `content` names three unit types only the mod defines (see above): every setup that
+ships a mod's own content carries one. `mayhem-11.3.0-net` switches the takeover off (`tagpu_takeover.off`) so that the safety
 net has something to catch, and its goal is the net's refusal. `no_network_game` holds a setup out
 of the network stage with its reason, measured (above).
