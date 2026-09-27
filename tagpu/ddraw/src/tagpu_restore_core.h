@@ -33,7 +33,9 @@
 #define TAGPU_R_SLOTROWS  8
 #define TAGPU_R_BATCH     (TAGPU_R_SLOTCOLS * TAGPU_R_SLOTROWS)  /* frames per batch, at most */
 #define TAGPU_R_ACTMAX    512    /* activation side cap, texels                */
-#define TAGPU_R_MAXJOBS   6      /* terrain 0, features 1, effects 2, units 3, the UI 4 */
+/* terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures 5:
+   every slot is taken, so a seventh consumer raises this */
+#define TAGPU_R_MAXJOBS   6
 #define TAGPU_R_MAXNK     8
 #define TAGPU_R_MAXLAYERS 32
 
