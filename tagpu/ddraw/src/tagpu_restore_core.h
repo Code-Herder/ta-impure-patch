@@ -223,14 +223,9 @@ int  tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
    or when it carries alignment slack. The count actually taken. */
 int  tagpu_rcore_job_add_nbhd(TAGPU_RSCHED* s, TAGPU_RCORE* j,
                               const TAGPU_RNBFRAME* frames, int count);
-/* Map cell (c, r) of a w x h map as a neighbourhood frame into `o`: `org(ctx,
-   x, y)` is cell (x, y)'s tile in the source (x | y << 16), each tile `tw` x
-   `th`, and the frame paints (dx, dy) of the destination with `border`. A
-   neighbour past a side of the map is the cell mirrored back across it, with
-   that side's edge bit. 0 for a cell off the map. */
-int  tagpu_rcore_nb_frame(TAGPU_RNBFRAME* o, int c, int r, int w, int h,
-                          unsigned (*org)(void* ctx, int x, int y), void* ctx,
-                          int tw, int th, int dx, int dy, int border);
+/* tagpu_rcore_nb_frame, which builds a neighbourhood frame from a map, is
+   declared beside the frame's type in tagpu_restoreglsl.h: the consumers that
+   build them include only that. */
 /* Drop everything queued or in flight; the backend clears the destination. */
 void tagpu_rcore_job_drop(TAGPU_RCORE* j);
 /* Every job fails, as the self-test's failure has them do: queues dropped,

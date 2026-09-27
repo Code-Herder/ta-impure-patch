@@ -127,7 +127,7 @@
 #include "tagpu_pal.h"                  /* tagpu_pal_expand */
 #include "spirv/tagpu_terr.spv.h"
 
-#define UBLK_VS  64                        /* std140, the generated header's   */
+#define UBLK_VS  80                        /* std140, the generated header's   */
 #define UBLK_FS  192
 
 /* ---- the entry points ----------------------------------------------------
@@ -277,6 +277,15 @@ static int           s_rjPainted;          /* job_painted at the last report  */
    every `return 0` and `goto refuse` between the two skips it. So the drop is
    keyed here, immediately after the resize, where nothing can return first. */
 static VkImageView   s_rjSrcView;
+/* WHICH LAYOUT THE RESTORED ATLAS TAKES FOR THE STANDING REQUEST: 1 the
+   neighbourhood atlas (the hand-over's `nbFrames`, a cell per key), 0 the
+   per-tile one. Chosen ONCE per request (`s_nbFor` is its serial, `s_nbChosen`
+   that there is a choice) -- whether the atlas fits the device's memory
+   (tagpu_vk_restore_fits, D10) is asked once, so a map does not flip between
+   the two, each flip a restore started over. A device that then refuses the
+   image falls back to per-tile for the rest of the request. */
+static int           s_nbMode, s_nbChosen;
+static unsigned      s_nbFor;
 
 
 /* what `record` was left to draw */
@@ -331,13 +340,12 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
 /* THE CELL COUNT IS ONE OF THEM. It sizes both the
    instance buffer (`ncell * ICOMP * sizeof(short)`) and vkCmdDraw's
    instanceCount, so it belongs under this paragraph's own rule as much as the
-   three above do. tagpu_terr.c clamps its gather to INST_MAX_BYTES / a cell,
-   which is this number -- stated here in the terms this file allocates in, so
-   that neither file has to be read to trust the other. IT MUST NOT BE TIGHTER
+   three above do. tagpu_terr.c clamps its gather to INST_MAX_CELLS, which is
+   this number -- stated here as well, so that neither file has to be read to
+   trust the other. IT MUST NOT BE TIGHTER
    THAN THE PRODUCER'S: a pass that refused a cell count the gather legitimately
    published would drop the terrain from the whole viewport. */
-#define CELL_MAXBYTES (24u * 1024u * 1024u)
-#define CELL_MAX      ((int)(CELL_MAXBYTES / (TAGPU_TERR_ICOMP * sizeof(short))))
+#define CELL_MAX      (3 * 1024 * 1024)
 /* ONE STAGING BUFFER CARRIES BOTH SMALL UPLOADS: the palette (256 x 1 RGBA),
    then the fog grid (cols x rows RG8, a few KB and a different size whenever
    the view walks far enough for the grid to be re-laid). One allocation, two
@@ -754,7 +762,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb[2];
-    VkVertexInputAttributeDescription va[2];
+    VkVertexInputAttributeDescription va[3];
     VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
@@ -819,7 +827,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
 
     /* TWO BINDINGS (item 1). Binding 0 is the unit quad at VERTEX rate -- six
        corners, uploaded once -- and binding 1 is this frame's cell records at
-       INSTANCE rate. */
+       INSTANCE rate, two attributes of four shorts each (tagpu_terr.h). */
     memset(vb, 0, sizeof vb);
     vb[0].binding = 0; vb[0].stride = 2 * sizeof(float);
     vb[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -830,8 +838,10 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     va[0].offset = 0;
     va[1].location = 1; va[1].binding = 1;
     va[1].format = VK_FORMAT_R16G16B16A16_SSCALED; va[1].offset = 0;
+    va[2].location = 2; va[2].binding = 1;
+    va[2].format = VK_FORMAT_R16G16B16A16_SSCALED; va[2].offset = 4 * sizeof(short);
     vi.vertexBindingDescriptionCount = 2; vi.pVertexBindingDescriptions = vb;
-    vi.vertexAttributeDescriptionCount = 2; vi.pVertexAttributeDescriptions = va;
+    vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = va;
 
     /* A LIST: TAGPU_TERR_QUAD is six corners
        in the engine's own vertex order, with the shared edge on (1,0)-(0,1). */
@@ -1162,6 +1172,29 @@ static void refuse_job(const TAGPU_VKPASS* d)
     s_rgbAtlas.have = 0;
 }
 
+/* WHETHER THE STANDING REQUEST TAKES THE NEIGHBOURHOOD ATLAS: published, in
+   bounds, and fitting the device's memory (D10). 0 is the per-tile atlas,
+   which is the fallback and not a fault; said once per request. */
+static int nb_choose(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
+{
+    char why[160];
+    if (!t->nbFrames || t->nbN < 1) return 0;
+    if (t->nbW < 1 || t->nbH < 1 || t->nbW > ATLAS_MAXDIM || t->nbH > ATLAS_MAXDIM) {
+        plog(d, "terr: a %dx%d neighbourhood atlas is outside what this pass carries - "
+                "the terrain restores per tile", t->nbW, t->nbH);
+        return 0;
+    }
+    if (!tagpu_vk_restore_fits(d, (unsigned long long)t->nbW * (unsigned long long)t->nbH * 4ull,
+                               why, sizeof why)) {
+        plog(d, "terr: the %dx%d neighbourhood atlas (%d keys) does not fit: %s - "
+                "the terrain restores per tile", t->nbW, t->nbH, t->nbN, why);
+        return 0;
+    }
+    plog(d, "terr: the terrain restores by neighbourhood - %d keys in a %dx%d atlas: %s",
+         t->nbN, t->nbW, t->nbH, why);
+    return 1;
+}
+
 /* ---- THE RESTORE REQUEST, TAKEN --------------------------------------------
    Called once per `prepare`, AFTER the base atlas's upload and before the
    refusal that asks whether the restored atlas holds a picture. The order is
@@ -1252,9 +1285,13 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         s_rjTried = 1;                     /* the reason is already in the log */
         return;
     }
-    if (!tagpu_vk_restore_job_add(s_rjob, t->restoreFrames, t->restoreN)) {
+    /* THE LIST IN THE LAYOUT THE IMAGE WAS SIZED FOR: `s_nbMode` chose the
+       image's size in this frame's `prepare`, and it cannot change under the
+       request, so the frames and the image agree */
+    if (!(s_nbMode ? tagpu_vk_restore_job_add_nbhd(s_rjob, t->nbFrames, t->nbN)
+                   : tagpu_vk_restore_job_add(s_rjob, t->restoreFrames, t->restoreN))) {
         plog(d, "terr: %d restore frames would not queue - nothing restored here",
-             t->restoreN);
+             s_nbMode ? t->nbN : t->restoreN);
         tagpu_vk_restore_job_free(d, s_rjob);
         s_rjob = NULL;
         s_rjTried = 1;
@@ -1264,8 +1301,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
     s_rjPal = t->palSerial;
     s_rjSrcView = s_base.view;
     s_rjPainted = 0;
-    plog(d, "terr: restoring the tile atlas HERE - %d frames over %dx%d, "
-            "serial %u", t->restoreN, s_rgbAtlas.w, s_rgbAtlas.h,
+    plog(d, "terr: restoring the tile atlas HERE - %d %s over %dx%d, "
+            "serial %u", s_nbMode ? t->nbN : t->restoreN,
+         s_nbMode ? "neighbourhoods" : "tiles", s_rgbAtlas.w, s_rgbAtlas.h,
          t->restoreSerial);
 }
 
@@ -1444,11 +1482,23 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        THE ORDERING IS FORCED: it has to come after the bounds, whose return it
        honours, and before `restore_want`, which needs the destination to
        exist before it can make a job. */
+    if (t.restoreFrames && (!s_nbChosen || s_nbFor != t.restoreSerial)) {
+        s_nbMode = nb_choose(d, &t);
+        s_nbChosen = 1; s_nbFor = t.restoreSerial;
+    }
     if (t.restoreFrames &&
-        !shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasH,
-                       VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED) &&
-        s_rgbAtlas.img)
-        return 0;
+        !shared_resize(d, &s_rgbAtlas, s_nbMode ? t.nbW : t.atlasW, s_nbMode ? t.nbH : t.atlasH,
+                       VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED)) {
+        if (s_rgbAtlas.img) return 0;
+        /* A REFUSED ALLOCATION FALLS BACK (D10): the per-tile atlas, sized on
+           a later frame once the retire of the image this one replaced has
+           cleared -- meanwhile the terrain draws its base atlas */
+        if (s_nbMode) {
+            plog(d, "terr: the device refused the %dx%d neighbourhood atlas - "
+                    "the terrain restores per tile", t.nbW, t.nbH);
+            s_nbMode = 0;
+        }
+    }
     if (!slot_build(d, s)) goto refuse;
     if (!slot_fog(d, s, fogW, fogH)) goto refuse;
     shared_bind(d, slot);
@@ -1536,6 +1586,10 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        atlas on this lane, "the shipped fallback, not a fault"; drawing the base
        atlas is what keeps that promise. */
     restored = t.restored && s_rgbAtlas.view && s_rgbAtlas.have;
+    /* AND THE RECORDS MUST NAME CELLS IN THE IMAGE'S LAYOUT: a neighbourhood
+       atlas is sampled at the key's cell, which a frame whose records carry no
+       keys cannot give -- that frame draws its base atlas instead */
+    if (s_nbMode && !t.nbOn) restored = 0;
     /* SAID ONCE, AND ONLY FOR THE CASE WAITING CANNOT FIX: a request stands and
        this lane has latched a refusal, so the terrain draws the base atlas for
        the rest of the session. The ordinary not-yet-painted frames say nothing --
@@ -1590,6 +1644,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     ub.f[8]  = t.origX;  ub.f[9]  = t.origY;     /* uOrigin      vec2 @32 */
     ub.f[10] = t.tile0X; ub.f[11] = t.tile0Y;    /* uTile0       vec2 @40 */
     ub.f[12] = t.texelW; ub.f[13] = t.texelH;    /* uTexel       vec2 @48 */
+    ub.i[14] = restored && s_nbMode;             /* uNbhd         int @56 */
+    ub.f[16] = t.nbTexelW; ub.f[17] = t.nbTexelH; /* uTexelN     vec2 @64 */
     memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK_VS);
 
     memset(&ub, 0, sizeof ub);
@@ -1774,6 +1830,7 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
        cleared by its `down` for the same reason. */
     s_rjTried = 0;
     s_saidRestored = 0;                 /* ...and so does the line it printed */
+    s_nbChosen = 0; s_nbMode = 0;       /* ...and the layout a new device picks */
     kill_image(d, &s_rgbAtlas.img, &s_rgbAtlas.mem, &s_rgbAtlas.view);
     kill_image(d, &s_rgbAtlas.oldImg, &s_rgbAtlas.oldMem, &s_rgbAtlas.oldView);
     memset(&s_rgbAtlas, 0, sizeof s_rgbAtlas);

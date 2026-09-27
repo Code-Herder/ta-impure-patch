@@ -11,8 +11,14 @@ its queue drains (tagpu_vk_restore.c `dump_step`):
     tagpu_restore_<tag>_vk.base   the source, RGBA8 with alpha 0 where keyed
     tagpu_restore_<tag>_vk.r8     ... or the source as palette indices
     tagpu_restore_<tag>_vk.pal    the job's palette snapshot, 256 x RGBA
-    tagpu_restore_<tag>_vk.idx    `# atlas W H`, then `x y w h key wrap border
-                                  padR padB` per painted frame
+    tagpu_restore_<tag>_vk.idx    `# atlas W H`, `# source W H` (the source's
+                                  own size, which a neighbourhood job's differs
+                                  from), then `x y w h key wrap border
+                                  padR padB` per painted frame, a neighbourhood
+                                  frame's followed by `ax ay edge` and its eight
+                                  neighbours' origins (tagpu_restoreglsl.h)
+    tagpu_restore_terr_vk.map     the terrain's map: every cell's tile and key
+                                  (tagpu_terr.c `nb_build`), for --whole-map
 
 and this restores every listed frame again from that source with
 unditherer/models/<model>.pt in strict fp32 (no TF32), and holds the dump to it.
@@ -33,6 +39,17 @@ WHAT PASSES, per job (research/notes/compute-restorer.md D11):
   on the right and bottom -- a copy of the nearest edge texel, all four bytes;
   and for a `.mips` dump, every reduced level EXACTLY the integer 2x2 box
   average (sum + 1) / 4 of the level above (tagpu_restore_comp.h MIP).
+A NEIGHBOURHOOD frame is restored over its window -- depth + border texels of
+its neighbours on every side, a neighbour past an edge side mirrored -- and its
+ring is the network's output there, held to the same bar as the tile.
+
+--whole-map (the terrain's neighbourhoods; research/notes/compute-restorer.md,
+Landing 2's bar): the map is rebuilt from `.map` and the base atlas, reflect-
+padded (texel -1 is texel 0), restored IN ONE PIECE (chunked with an apron of
+the model's depth, which is exact), and EVERY cell of the map, its one-texel
+ring included, is held to its key's painted cell: the same bar, over every
+cell rather than one per key -- so a key shared by cells whose windows differ
+would show here.
 
 A cell painted twice keeps its last entry; an earlier entry that a later one
 overlaps is not checked, and the count is reported.
@@ -44,6 +61,7 @@ checked.
 import argparse
 import json
 import pathlib
+import struct
 import sys
 
 import numpy as np
@@ -52,9 +70,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 TAGS = ("terr", "feat", "fx", "unit", "gui", "pic")
 
 
+COLS = ("x", "y", "w", "h", "key", "wrap", "border", "padR", "padB")
+
+
 def read_idx(path):
-    """(W, H, entries) of one `.idx`"""
-    W = H = None
+    """(W, H, entries, source W, source H) of one `.idx`"""
+    W = H = SW = SH = None
     ent = []
     for line in path.read_text().splitlines():
         if not line.strip():
@@ -63,14 +84,25 @@ def read_idx(path):
             p = line.split()
             if len(p) == 4 and p[1] == "atlas":
                 W, H = int(p[2]), int(p[3])
+            if len(p) == 4 and p[1] == "source":
+                SW, SH = int(p[2]), int(p[3])
             continue
         v = [int(t) for t in line.split()]
-        if len(v) != 9:
-            raise SystemExit(f"{path}: an entry line has {len(v)} columns, not 9 -- a dump from an older build")
-        ent.append(dict(zip(("x", "y", "w", "h", "key", "wrap", "border", "padR", "padB"), v)))
+        if len(v) == 9:
+            e = dict(zip(COLS, v))
+            e["nb"] = None
+        elif len(v) == 9 + 3 + 16:
+            e = dict(zip(COLS, v[:9]))
+            e["nb"] = dict(ax=v[9], ay=v[10], edge=v[11],
+                           nbo=[(v[12 + 2 * k], v[13 + 2 * k]) for k in range(8)])
+        else:
+            raise SystemExit(f"{path}: an entry line has {len(v)} columns, not 9 or 28 -- a dump from another build")
+        ent.append(e)
     if W is None:
         raise SystemExit(f"{path}: no `# atlas W H` line -- a dump from an older build")
-    return W, H, ent
+    if SW is None:
+        SW, SH = W, H
+    return W, H, ent, SW, SH
 
 
 def last_wins(ent):
@@ -159,17 +191,40 @@ class Model:
             return self.m(x).float().cpu().numpy().transpose(0, 2, 3, 1)
 
 
+def nb_window(e, src_rgb, a):
+    """a neighbourhood frame's input window, (h + 2a) x (w + 2a) x 3 of the
+    source: texel d of the centre's corner is in the centre or one neighbour,
+    mirrored across an `edge` side (tagpu_restore_comp.h nbAt)"""
+    nb, w, h = e["nb"], e["w"], e["h"]
+    O = np.array([nb["nbo"][0], nb["nbo"][1], nb["nbo"][2],
+                  nb["nbo"][3], (nb["ax"], nb["ay"]), nb["nbo"][4],
+                  nb["nbo"][5], nb["nbo"][6], nb["nbo"][7]]).reshape(3, 3, 2)
+
+    def axis(size, lo, hi):
+        d = np.arange(-a, size + a)
+        n = np.where(d < 0, 0, np.where(d < size, 1, 2))
+        l = d - (n - 1) * size
+        flip = ((n == 0) & bool(nb["edge"] & lo)) | ((n == 2) & bool(nb["edge"] & hi))
+        return n, np.where(flip, size - 1 - l, l)
+
+    nx, lx = axis(w, 1, 2)
+    ny, ly = axis(h, 4, 8)
+    ox = O[ny[:, None], nx[None, :], 0] + lx[None, :]
+    oy = O[ny[:, None], nx[None, :], 1] + ly[:, None]
+    return src_rgb[oy, ox]
+
+
 def check_job(pre, model, batch):
     idx = pre.with_suffix(".idx")
-    W, H, ent = read_idx(idx)
+    W, H, ent, SW, SH = read_idx(idx)
     mips = pre.with_suffix(".mips")
     got_all = np.fromfile(mips if mips.exists() else pre.with_suffix(".rgba"), dtype=np.uint8)
     got = got_all[:W * H * 4].reshape(H, W, 4)
     if pre.with_suffix(".base").exists():
-        base = np.fromfile(pre.with_suffix(".base"), dtype=np.uint8).reshape(H, W, 4)
+        base = np.fromfile(pre.with_suffix(".base"), dtype=np.uint8).reshape(SH, SW, 4)
         src_rgb, src_key, kind = base[..., :3], None, "base"
     else:
-        r8 = np.fromfile(pre.with_suffix(".r8"), dtype=np.uint8).reshape(H, W)
+        r8 = np.fromfile(pre.with_suffix(".r8"), dtype=np.uint8).reshape(SH, SW)
         pal = np.fromfile(pre.with_suffix(".pal"), dtype=np.uint8).reshape(256, 4)
         src_rgb, src_key, kind = pal[r8][..., :3], r8, "r8"
     keep, dropped = last_wins(ent)
@@ -177,6 +232,10 @@ def check_job(pre, model, batch):
 
     def frame_in(e):
         x, y, w, h = e["x"], e["y"], e["w"], e["h"]
+        if e["nb"] is not None:
+            a = R + e["border"]
+            return (nb_window(e, src_rgb, a).astype(np.float32) / 255.0,
+                    np.zeros((h + 2 * e["border"], w + 2 * e["border"]), bool), a)
         rgb = src_rgb[y:y + h, x:x + w].astype(np.int64)
         if e["key"] < 0:
             keyed = np.zeros((h, w), bool)
@@ -197,9 +256,8 @@ def check_job(pre, model, batch):
                keyed=0, keyed_bad=0, alpha_bad=0, ring=0, ring_bytes=0, worst=None, worst_n=0)
     groups = {}
     for e in keep:
-        pw = e["w"] + (2 * R if e["wrap"] else 0)
-        ph = e["h"] + (2 * R if e["wrap"] else 0)
-        groups.setdefault((ph, pw), []).append(e)
+        pad = R + e["border"] if e["nb"] is not None else R if e["wrap"] else 0
+        groups.setdefault((e["h"] + 2 * pad, e["w"] + 2 * pad), []).append(e)
     for shape, es in groups.items():
         for b0 in range(0, len(es), batch):
             chunk = es[b0:b0 + batch]
@@ -207,6 +265,11 @@ def check_job(pre, model, batch):
             outs = model.run([i[0] for i in ins])
             for e, (f, keyed, p), o in zip(chunk, ins, outs):
                 x, y, w, h = e["x"], e["y"], e["w"], e["h"]
+                if e["nb"] is not None:
+                    # the cell with its ring, all of it the network's
+                    b = e["border"]
+                    x, y, w, h = x - b, y - b, w + 2 * b, h + 2 * b
+                    p -= b
                 o = o[p:p + h, p:p + w]
                 ref = np.clip(np.floor(o * 255.0 + 0.5), 0, 255).astype(np.int64)
                 g = got[y:y + h, x:x + w].astype(np.int64)
@@ -224,6 +287,9 @@ def check_job(pre, model, batch):
                 acc["keyed_bad"] += int((g[keyed] != 0).any(axis=-1).sum())
                 if n > acc["worst_n"]:
                     acc["worst"], acc["worst_n"] = (x, y, w, h), n
+                if e["nb"] is not None:
+                    acc["nbhd"] = acc.get("nbhd", 0) + 1
+                    continue
                 # the replicated ring: every texel of the cell's quad outside
                 # the frame is its nearest edge texel, clipped to the atlas
                 bd = e["border"]
@@ -259,6 +325,73 @@ def check_job(pre, model, batch):
     return acc
 
 
+def restore_chunked(model, img, core=512):
+    """`img` (H x W x 3 uint8) restored in one piece: chunks of `core` with an
+    apron of the model's depth, clipped at the image's own edge, where the
+    chunk's zero padding then IS the image's -- exact, as the bench measured"""
+    A, H, W = model.depth, img.shape[0], img.shape[1]
+    out = np.empty((H, W, 3), np.uint8)
+    for y0 in range(0, H, core):
+        for x0 in range(0, W, core):
+            y1, x1 = min(H, y0 + core), min(W, x0 + core)
+            iy0, ix0, iy1, ix1 = max(0, y0 - A), max(0, x0 - A), min(H, y1 + A), min(W, x1 + A)
+            o = model.run([img[iy0:iy1, ix0:ix1].astype(np.float32) / 255.0])[0]
+            o = o[y0 - iy0:y0 - iy0 + (y1 - y0), x0 - ix0:x0 - ix0 + (x1 - x0)]
+            out[y0:y1, x0:x1] = np.clip(np.floor(o * 255.0 + 0.5), 0, 255).astype(np.uint8)
+    return out
+
+
+def check_whole_map(gd, model):
+    """every cell of the terrain's map, its ring included, against a restore of
+    the whole map reflect-padded (the module docstring)"""
+    raw = (gd / "tagpu_restore_terr_vk.map").read_bytes()
+    if raw[:4] != b"TNB1":
+        raise SystemExit("tagpu_restore_terr_vk.map: not a TNB1 map dump")
+    W, H, cols, pitch, border, tile, acols = struct.unpack("<7i", raw[4:32])
+    ids = np.frombuffer(raw, np.uint16, W * H, 32).reshape(H, W)
+    keys = np.frombuffer(raw, np.int32, W * H, 32 + 2 * W * H).reshape(H, W)
+    pre = gd / "tagpu_restore_terr_vk.rgba"
+    AW, AH, _, _, _ = read_idx(pre.with_suffix(".idx"))
+    got = np.fromfile(pre, dtype=np.uint8)[:AW * AH * 4].reshape(AH, AW, 4)
+    base = np.fromfile(pre.with_suffix(".base"), dtype=np.uint8)
+    BH = base.size // (4 * acols * pitch)
+    base = base.reshape(BH, acols * pitch, 4)
+    # the map, tile by tile out of the base atlas
+    nt = int(ids.max()) + 1
+    t = np.arange(nt)
+    ty = (t // acols)[:, None] * pitch + border + np.arange(tile)[None, :]
+    tx = (t % acols)[:, None] * pitch + border + np.arange(tile)[None, :]
+    T = base[ty[:, :, None], tx[:, None, :], :3]                 # nt x tile x tile x 3
+    M = T[ids].transpose(0, 2, 1, 3, 4).reshape(H * tile, W * tile, 3)
+    P = model.depth + border
+    Rp = restore_chunked(model, np.pad(M, ((P, P), (P, P), (0, 0)), mode="symmetric"))
+    q = tile + 2 * border
+    acc = dict(cells=W * H, keys=int(keys.max()) + 1, bytes=0, differing=0, max=0, hist=[0] * 256,
+               alpha_bad=0, worst=None, worst_n=0)
+    for cy in range(H):
+        for cx in range(W):
+            k = int(keys[cy, cx])
+            e = Rp[P + cy * tile - border:P + cy * tile - border + q,
+                   P + cx * tile - border:P + cx * tile - border + q].astype(np.int64)
+            gy, gx = (k // cols) * pitch, (k % cols) * pitch
+            g = got[gy:gy + q, gx:gx + q].astype(np.int64)
+            d = np.abs(g[..., :3] - e)
+            n = int((d > 0).sum())
+            acc["bytes"] += d.size
+            acc["differing"] += n
+            if n:
+                acc["max"] = max(acc["max"], int(d.max()))
+                for v, c in zip(*np.unique(d[d > 0], return_counts=True)):
+                    acc["hist"][int(v)] += int(c)
+            acc["alpha_bad"] += int((g[..., 3] != 255).sum())
+            if n > acc["worst_n"]:
+                acc["worst"], acc["worst_n"] = (cx, cy), n
+    acc["pct"] = 100.0 * acc["differing"] / max(1, acc["bytes"])
+    acc["hist"] = acc["hist"][1:acc["max"] + 1]
+    acc["pass"] = acc["max"] <= 1 and acc["pct"] < 0.01 and acc["alpha_bad"] == 0
+    return acc
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("gamedir", help="the instance's game directory holding tagpu_restore_*_vk.*")
@@ -267,9 +400,20 @@ def main():
     ap.add_argument("--device", default="auto")
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--whole-map", action="store_true",
+                    help="the terrain's cells against a whole-map restore (needs the .map dump)")
     a = ap.parse_args()
     gd = pathlib.Path(a.gamedir).expanduser()
     model = Model(a.model, a.device)
+    if a.whole_map:
+        r = check_whole_map(gd, model)
+        if a.json:
+            print(json.dumps(r, indent=1))
+        else:
+            print(f"whole map: {'PASS' if r['pass'] else 'FAIL'}: {r['cells']} cells over {r['keys']} keys, "
+                  f"max {r['max']} level(s), {r['differing']}/{r['bytes']} bytes differ ({r['pct']:.4f}%), "
+                  f"hist {r['hist']}; alpha wrong on {r['alpha_bad']}; worst cell {r['worst']} ({r['worst_n']} bytes)")
+        sys.exit(0 if r["pass"] else 1)
     rep, checked = {}, 0
     for tag in a.tag or TAGS:
         pre = gd / f"tagpu_restore_{tag}_vk.rgba"
@@ -287,7 +431,8 @@ def main():
                 continue
             mp = "".join(f", level {m['level']} {m['bytes_off']} bytes off the box average" for m in r["mips"])
             ov = f" ({r['overlapped']} overlapped, not checked)" if r["overlapped"] else ""
-            print(f"{tag}: {'PASS' if r['pass'] else 'FAIL'}: {r['frames']} frames"
+            nb = f" ({r['nbhd']} neighbourhoods, their rings the network's)" if r.get("nbhd") else ""
+            print(f"{tag}: {'PASS' if r['pass'] else 'FAIL'}: {r['frames']} frames{nb}"
                   f"{ov}, "
                   f"max {r['max']} level(s), {r['differing']}/{r['bytes']} bytes differ ({r['pct']:.4f}%), "
                   f"hist {r['hist']}; {r['keyed']} keyed texels, {r['keyed_bad']} not (0,0,0,0); "

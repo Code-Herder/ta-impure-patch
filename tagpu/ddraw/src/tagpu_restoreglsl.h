@@ -71,6 +71,15 @@ typedef struct {
     unsigned nbo[8];
 } TAGPU_RNBFRAME;
 
+/* Map cell (c, r) of a w x h map as a neighbourhood frame into `o`: `org(ctx,
+   x, y)` is cell (x, y)'s tile in the source (x | y << 16), each tile `tw` x
+   `th`, and the frame paints (dx, dy) of the destination with `border`. A
+   neighbour past a side of the map is the cell mirrored back across it, with
+   that side's edge bit. 0 for a cell off the map. tagpu_restore_core.c. */
+int tagpu_rcore_nb_frame(TAGPU_RNBFRAME* o, int c, int r, int w, int h,
+                         unsigned (*org)(void* ctx, int x, int y), void* ctx,
+                         int tw, int th, int dx, int dy, int border);
+
 /* THE MODEL A JOB RUNS: full for every job but the terrain's, which is tiny
    (research/notes/compute-restorer.md D3). Each is <name>.w32.bin beside
    TotalA.exe; a job whose model is missing runs full. */

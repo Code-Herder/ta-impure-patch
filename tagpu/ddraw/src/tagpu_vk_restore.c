@@ -983,10 +983,10 @@ struct TAGPU_VKRJOB {
     VkDeviceSize   dumpSrcOff, dumpSrcBytes;
     /* EVERY FRAME OUT HAS PAINTED, for the dump's `.idx` -- kept only when
        `tagpu_restoredump.on` was there at `job_new`, so a player's session
-       keeps nothing. The frame records themselves, so a remap moves them with
-       the queue (`job_remap`) and the list always names the cells as they are
-       in the destination now. */
-    TAGPU_RGLSL_FRAME* rec;
+       keeps nothing. The queued records themselves, a neighbourhood's
+       included, so a remap moves them with the queue (`job_remap`) and the
+       list always names the cells as they are in the destination now. */
+    TAGPU_RQF*     rec;
     int            nrec, caprec, recOn;
 };
 static struct TAGPU_VKRJOB s_vjob[TAGPU_R_MAXJOBS];
@@ -1424,12 +1424,12 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
         if (g->recOn) {
             if (g->nrec + r->nframes > g->caprec) {
                 int cap = g->caprec ? g->caprec : 256;
-                TAGPU_RGLSL_FRAME* n;
+                TAGPU_RQF* n;
                 while (cap < g->nrec + r->nframes) cap *= 2;
-                n = (TAGPU_RGLSL_FRAME*)realloc(g->rec, (size_t)cap * sizeof *n);
+                n = (TAGPU_RQF*)realloc(g->rec, (size_t)cap * sizeof *n);
                 if (n) { g->rec = n; g->caprec = cap; }
             }
-            for (t = 0; t < r->nframes && g->nrec < g->caprec; t++) g->rec[g->nrec++] = r->job->bf[t].f;
+            for (t = 0; t < r->nframes && g->nrec < g->caprec; t++) g->rec[g->nrec++] = r->job->bf[t];
         }
     }
     return 1;
@@ -1630,6 +1630,27 @@ int tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, i
     return tagpu_rcore_job_add(&s_sched, j->core, frames, count);
 }
 
+int tagpu_vk_restore_fits(const TAGPU_VKPASS* d, unsigned long long bytes, char* why, int whyLen)
+{
+    VkPhysicalDeviceMemoryProperties mp;
+    unsigned long long heap = 0, freeB;
+    uint32_t i;
+    if (why && whyLen > 0) why[0] = 0;
+    if (!d || !d->pd) return 0;
+    vkGetPhysicalDeviceMemoryProperties(d->pd, &mp);
+    for (i = 0; i < mp.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; i++)
+        if ((mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+            mp.memoryHeaps[i].size > heap)
+            heap = mp.memoryHeaps[i].size;
+    freeB = heap / 4;
+    if (why) {
+        _snprintf(why, whyLen, "%llu MB against half of %llu MB free (a quarter of the %llu MB heap)",
+                  bytes >> 20, freeB >> 20, heap >> 20);
+        why[whyLen - 1] = 0;
+    }
+    return bytes <= freeB / 2;
+}
+
 int tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames, int count)
 {
     if (!j || !j->core) return 0;
@@ -1661,7 +1682,9 @@ int tagpu_vk_restore_job_remap(TAGPU_VKRJOB* j, int (*map)(void* ctx, TAGPU_RGLS
     }
     ok = tagpu_rcore_job_remap(j->core, map, ctx, kept, requeued, dropped);
     if (ok) {
-        for (i = 0; i < j->nrec; i++) if (map(ctx, &j->rec[i])) j->rec[k++] = j->rec[i];
+        /* a neighbourhood is dropped, as the core drops it */
+        for (i = 0; i < j->nrec; i++)
+            if (!j->rec[i].nb && map(ctx, &j->rec[i].f)) j->rec[k++] = j->rec[i];
         j->nrec = k;
     }
     return ok;
@@ -1791,11 +1814,13 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         b[sizeof b - 1] = 0;
         rlog(b);
         /* THE ENTRY LIST AND THE PALETTE, which make the pair self-describing:
-           a `# atlas W H` line, then a line per painted frame, `x y w h key
-           wrap border padR padB` at its destination cell, and the job's
-           palette snapshot as 256 x RGBA -- everything an offline run of the
-           model needs to restore the same cells from the source beside them
-           and to check the ring OUT replicates (tools/restore-dumpcheck.py). */
+           a `# atlas W H` line and a `# source W H` one, then a line per painted frame, `x y w h key
+           wrap border padR padB` at its destination cell -- a neighbourhood's
+           followed by `ax ay edge` and its eight neighbours' origins, `x y`
+           each -- and the job's palette snapshot as 256 x RGBA: everything an
+           offline run of the model needs to restore the same cells from the
+           source beside them and to check the ring OUT paints
+           (tools/restore-dumpcheck.py). */
         {
             char sn[64];
             FILE* sf;
@@ -1804,10 +1829,18 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
             sn[sizeof sn - 1] = 0;
             if (g->recOn && (sf = fopen(sn, "wb")) != NULL) {
                 fprintf(sf, "# atlas %d %d\n", g->dumpW, g->dumpH);
+                fprintf(sf, "# source %d %d\n", g->srcW, g->srcH);
                 for (i = 0; i < g->nrec; i++) {
-                    const TAGPU_RGLSL_FRAME* r = &g->rec[i];
-                    fprintf(sf, "%d %d %d %d %d %d %d %d %d\n", r->dx, r->dy, r->w, r->h,
+                    const TAGPU_RGLSL_FRAME* r = &g->rec[i].f;
+                    int k;
+                    fprintf(sf, "%d %d %d %d %d %d %d %d %d", r->dx, r->dy, r->w, r->h,
                             r->key, r->wrap ? 1 : 0, r->border, r->padR, r->padB);
+                    if (g->rec[i].nb) {
+                        fprintf(sf, " %d %d %d", r->ax, r->ay, g->rec[i].edge);
+                        for (k = 0; k < 8; k++)
+                            fprintf(sf, " %u %u", g->rec[i].nbo[k] & 0xFFFFu, g->rec[i].nbo[k] >> 16);
+                    }
+                    fputc('\n', sf);
                 }
                 fclose(sf);
             }

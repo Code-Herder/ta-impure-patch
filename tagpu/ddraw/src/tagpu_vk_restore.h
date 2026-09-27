@@ -113,6 +113,12 @@ int  tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
 /* Queue frames (copied) behind what is already queued; they restore in order.
    The count taken, 0 if none was. */
 int  tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, int count);
+/* WHETHER AN IMAGE OF `bytes` FITS THE DEVICE (research/notes/compute-restorer.md
+   D10): at most half of the memory the device has free for the game, where a
+   quarter of its largest device-local heap counts as free. `why` says the
+   numbers either way. Asked before a large atlas is allocated; a refused
+   allocation is the caller's to fall back from as well. */
+int  tagpu_vk_restore_fits(const TAGPU_VKPASS* d, unsigned long long bytes, char* why, int whyLen);
 /* Queue neighbourhood frames (tagpu_restoreglsl.h, TAGPU_RNBFRAME): the count
    taken, and tagpu_rcore_job_add_nbhd says which are refused. The job's
    source is the atlas their origins name. */

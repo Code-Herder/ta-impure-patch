@@ -37,9 +37,9 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v);
    viewport, and the widest rect any zoom can ask for is that viewport at
    TAGPU_ZOOM_MIN — so the staging is reserved for exactly that and grows when
    the player changes resolution. Nothing here names a resolution, and no
-   screen is a special case: MEASURED, 1024x768 reserves 83 KB, 2560x1440
-   423 KB, 3840x2160 972 KB and 5120x2880 1746 KB, and each draws its whole
-   view at the zoom floor.
+   screen is a special case: MEASURED, 1024x768 reserves 10672 cells,
+   2560x1440 54208, 3840x2160 124488 and 5120x2880 223568 (16 bytes a cell:
+   167 KB to 3.4 MB), and each draws its whole view at the zoom floor.
 
    The trim fires only if the reservation could not be met — an allocation that
    failed, or a viewport so large the module's own memory guard refuses it. A
@@ -113,14 +113,18 @@ int  tagpu_terr_key(void);
    is the pass's, stated once where the record it pairs with is stated. */
 #define TAGPU_TERR_QUAD  { 0.f,0.f, 1.f,0.f, 0.f,1.f, 1.f,0.f, 1.f,1.f, 0.f,1.f }
 #define TAGPU_TERR_QUADV 6
-/* SHORTS PER INSTANCE: the cell's column and row in this frame's gather grid,
-   then its tile's column and row in the atlas. The vertex shader rebuilds the
-   quad's position, world point and UVs from those four and the uniforms; see
-   the VS in tagpu_terr.c for why every term is exact in float.
+/* SHORTS PER INSTANCE, two attributes of four: the cell's column and row in
+   this frame's gather grid, then its tile's column and row in the atlas; then
+   the cell's NEIGHBOURHOOD KEY's column and row in the neighbourhood atlas
+   (tagpu_terr.c, the keys), and two zeros. The vertex shader rebuilds the
+   quad's position, world point and UVs from those and the uniforms; see the VS
+   in tagpu_terr.c for why every term is exact in float. The key's pair is 0,0
+   on a frame whose hand-over has no neighbourhoods (`nbOn` 0), and the shader
+   does not read it then.
    Unnormalised shorts, so the Vulkan vertex format is SSCALED and not SINT
-   -- the shader's attribute is a `vec4`, and SINT would need an `ivec4`.
+   -- the shader's attributes are `vec4`s, and SINT would need `ivec4`s.
    tagpu_vk_terr.c asks the device for that format rather than assuming it. */
-#define TAGPU_TERR_ICOMP 4
+#define TAGPU_TERR_ICOMP 8
 /* THE MIRROR'S FLAGS, in the tile's column and row (the edge setting,
    `tagpu_terr_gather`). A cell past the map carries the tile of the cell it
    reflects to, TAGPU_TERR_MIRROR in its tile column, and TAGPU_TERR_FLIP in the
@@ -157,6 +161,12 @@ typedef struct TAGPU_TERRHAND {
     float origX, origY;       /* screen px of grid cell (0,0)'s corner  */
     float tile0X, tile0Y;     /* the map cell grid cell (0,0) IS        */
     float texelW, texelH;     /* 1/atlas width, 1/atlas height          */
+    /* 1 when this frame's records carry neighbourhood keys, and then the
+       neighbourhood atlas's texel size: `nbFrames` below is the list those
+       keys' cells are painted from. Whether binding 41 IS that atlas is the
+       consumer's (uNbhd). */
+    int   nbOn;
+    float nbTexelW, nbTexelH;
 
     /* The fragment stage's. `restored` is the Classic++ restored-colour
        branch, `lambert` the `light=` half of the preset, `shadowOn` the
@@ -167,10 +177,10 @@ typedef struct TAGPU_TERRHAND {
 
        IT DOES NOT SET `uRestored` BY ITSELF, and a consumer author should read
        that here rather than assume otherwise. `tagpu_vk_terr.c` ANDs it with
-       its OWN `s_rgbAtlas.view && .have` -- "this lane has an image, and
-       something has painted at least one cell of it" -- and that pair decides
-       both the uniform AND which view binding 42 names, so the flag and the
-       descriptor cannot disagree.
+       its OWN "this lane has the restored image, and something has painted at
+       least one cell of it" -- and that pair decides both the uniform AND
+       which view binding 41 names, so the flag and the descriptor cannot
+       disagree.
        WHETHER THE PAINT HAS LANDED IS THE CONSUMER'S OWN FACT, it must keep
        it, and it must GATE ON IT: this flag is the request, not the result. A
        consumer that took it for the result would sample an image nothing has
@@ -234,6 +244,16 @@ typedef struct TAGPU_TERRHAND {
     const TAGPU_RGLSL_FRAME* restoreFrames;
     int                      restoreN;
     unsigned                 restoreSerial;
+    /* THE NEIGHBOURHOODS, the same request in the seam-correct form
+       (research/notes/compute-restorer.md D5): one frame per key, in the
+       centre-out order, painting the key's 34-texel cell of an `nbW` x `nbH`
+       atlas from the base atlas. Published with `restoreFrames` and under the
+       same serial and lifetime; NULL when the map's keys could not be built or
+       do not fit one image of the device's size, and then `restoreFrames` is
+       the whole request. Whether the device has the memory for it is the
+       consumer's to decide (D10), and the per-tile list is its fallback. */
+    const TAGPU_RNBFRAME*    nbFrames;
+    int                      nbN, nbW, nbH;
     const unsigned char* height;      /* hW x hH R8, or NULL                */
     int                  hW, hH;
     unsigned             heightSerial;
