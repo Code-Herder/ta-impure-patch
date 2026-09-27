@@ -8838,7 +8838,7 @@ static int fix_range_circle(void)
    PATROL 9 (0x419F16), RECLAIM 0xC (0x419F8A), CAPTURE 0xD (0x419FFB). Nothing else writes those
    values (0xA and 0xB have no writer; the setter 0x419BC0 has no caller), and every one of them
    is an order for the selection: none stays armed with nothing selected on purpose.
-   A left click hands the order to the view player's block (record main+0x1B63 + 0x14B *
+   A left click hands the order to the controlled player's block (record main+0x1B63 + 0x14B *
    main+0x2A42, units +0x67 .. +0x6B inclusive). A placement's click, 0x419670, orders each unit
    selected (+0x110 bit 0x10) whose type (+0x92) has +0x241 bit 0x40 (0x419755..0x41976A). A
    command mode's click, 0x48CF30, counts the selected units other than the one under the pointer
@@ -8875,6 +8875,27 @@ static int fix_range_circle(void)
        of the head reaches 0x4995B8 (it holds no ret).
    Both run on the game thread, where the key cancel 0x495F36 and the right-button cancel
    (0x4993AC -> 0x499100) already run, inside the same two functions.
+   NO MENU, NO CANCEL: the frame 0x496790 has three callers -- 0x4995B8 (in play), 0x49842F (the
+   loading screen, after the load's reset wrote the byte to 1 at 0x4917F9) and 0x4996A5 (a
+   network game's end, after 0x491D70(1) at 0x499674 and GUI_Pop 0x4A9660 at 0x499686 have
+   popped the menu stack, possibly to NULL). 0x499100 reads [[main+0x531]+4] at 0x49913B with no
+   test, so order_check returns while main+0x531 is NULL, the guard the engine puts on the same
+   read at 0x491DB3..0x491DBB. The test and the call are on one thread with nothing between.
+   UNDER A MODAL SCREEN, LATER: the engine defers its own menu work on one test, 0x37EBE & 0x865
+   or 0x2BEE & 0xE0 -- 0x491D70(0) only marks the drop pending (0x491D76..0x491DA2) and the frame
+   runs it once the test clears (0x496986..0x4969B4) -- and order_check waits on the same test.
+   Its bits that are named: bit 0 is the options stack (ARMOPT, EXITMENU, YESORNO and the
+   preferences; set at 0x4961C1, 0x49477E, 0x45D002), bit 2 is the chat, TALK.GUI (pushed by
+   0x494050 from the Enter key's case 0x4964FD, the bit at 0x49412C), bit 6 is SHARE.GUI
+   (0x49374F); bits 5 and 11 of the word and the byte's three are not identified. Under such a
+   screen the cancel's 0x49FE60(top, "STOP") searches the modal screen and misses, which would
+   leave the pressed order button drawn with the byte 1; deferred, the disarm lands on the
+   first of the two checks after the test clears. While deferred the byte stays armed as in
+   stock. A single-player game skips the ticks while bit 0 is set (0x496918 jumps to 0x49697B),
+   so no unit dies under the options stack there; a network game (main+0x2A44 bit 0 [INFERRED])
+   keeps ticking (0x4967E7), and so does the chat -- MEASURED 2026-09-26 with
+   tools/b9-under-chat.sh: a unit died under TALK.GUI, the byte stayed armed until the chat
+   closed, then read 1.
    THE CANCEL: 0x499100 with the byte != 1 is the right button's cancel for every order, and
    reads nothing of its message: 0x2CC3 = 1, 0x2CC6 &= ~0x20 (the order kept while a modifier is
    held), then 0x49FE60(menu, "STOP") finds the menu's STOP gadget and 0x4A6A40 resets its radio
@@ -8885,15 +8906,15 @@ static int fix_range_circle(void)
    a unit dying with an order armed is ordinary play. */
 static const unsigned int s_orderMsg[6];        /* 0x499100's message: its cancel never reads it */
 
-/* 1 when a unit of the view player's block would take the armed order; builders_only is the
-   placement's type test */
+/* 1 when a unit of the controlled player's block would take the armed order; builders_only is
+   the placement's type test */
 static int order_anyone(const unsigned char* m, int builders_only)
 {
-    unsigned int view = m[0x2A42];
+    unsigned int player = m[0x2A42];                  /* the controlled player */
     const unsigned char* rec;
     unsigned int begin, end, first, last, defs, ndefs, u;
-    if (view >= 10) return 0;
-    rec   = m + 0x1B63 + view * 0x14Bu;
+    if (player >= 10) return 0;
+    rec   = m + 0x1B63 + player * 0x14Bu;
     begin = *(const unsigned int*)(m + 0x14357);
     end   = *(const unsigned int*)(m + 0x1435B);      /* the array's last slot, inclusive */
     first = *(const unsigned int*)(rec + 0x67);
@@ -8918,7 +8939,9 @@ static void __cdecl order_check(void)
 {
     const unsigned char* m = *(unsigned char* const*)0x00511DE8;
     unsigned char mode;
-    if (!m) return;
+    if (!m || !*(void* const*)(m + 0x531)) return;                  /* no menu to cancel in  */
+    if ((*(const unsigned short*)(m + 0x37EBE) & 0x865) || (m[0x2BEE] & 0xE0))
+        return;                                                     /* a modal screen on top */
     mode = m[0x2CC3];
     if (mode == 0x0E) {
         if (order_anyone(m, 1)) return;
