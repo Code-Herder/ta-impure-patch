@@ -181,7 +181,8 @@ static const CONVV* conv_for(const TAGPU_RLAYER* L, int last)
    to a fixed dispatch count per slice, which is slower and safe. Every other
    one stands the pass down, and Classic++ then draws the original dithered
    art, which is the shipped fallback rather than a fault. */
-static uint64_t act_bytes_max(const TAGPU_RMODEL* w);
+static uint64_t act_bytes_max(void);
+static int      act_ch(void);
 static void probe_arm(void);
 
 static int up_impl(const TAGPU_VKPASS* d)
@@ -208,7 +209,7 @@ static int up_impl(const TAGPU_VKPASS* d)
 
     /* the model and the options, reloaded per DEVICE (tagpu_restore_core.c) */
     if (!tagpu_rcore_reload(LANE)) return refuse_at(ep);
-    w = tagpu_rcore_model();
+    w = tagpu_rcore_model(TAGPU_RM_FULL);
     opt = tagpu_rcore_opt();
 
     memset(&s_dev, 0, sizeof s_dev);
@@ -242,11 +243,11 @@ static int up_impl(const TAGPU_VKPASS* d)
        UINT32_MAX for a range it does not bound (AMD's Windows driver does for
        the uniform range, MEASURED 2026-09-25 on an R9 200 series card), and
        read as an int that is -1. */
-    need = act_bytes_max(w);
+    need = act_bytes_max();
     if ((uint64_t)s_dev.maxSsbo < need) {
         _snprintf(b, sizeof b, LANE ": maxStorageBufferRange %u < the %u-byte activation buffer"
-                               " the %dx%d model needs - the lane cannot restore",
-                  s_dev.maxSsbo, (unsigned)need, w->depth, w->ch);
+                               " the %d-channel model needs - the lane cannot restore",
+                  s_dev.maxSsbo, (unsigned)need, act_ch());
         rlog(b); return refuse_at(ep);
     }
 
@@ -319,15 +320,17 @@ static VkSampler             s_samp;        /* NEAREST, clamp: every sampler her
 static VkDescriptorSetLayout s_dsl, s_dslMip;
 static VkPipelineLayout      s_plo, s_ploMip;
 static VkPipeline            s_pipeFill, s_pipeOut, s_pipeMip;
-static VkPipeline            s_pipeConv[TAGPU_R_MAXLAYERS];     /* per LAYER    */
-static int                   s_convTh[TAGPU_R_MAXLAYERS];       /* its TH       */
+static VkPipeline            s_pipeConv[TAGPU_RM_N][TAGPU_R_MAXLAYERS];  /* per LAYER */
+static int                   s_convTh[TAGPU_RM_N][TAGPU_R_MAXLAYERS];    /* its TH    */
 static VkDescriptorPool      s_dpool;
 static int                   s_built;
 
-/* THE WEIGHTS IN THE KERNEL'S LAYOUT, repacked once from the weight file:
-   per layer, w[wbase + ((tap x CIN + ci) x COUT) / 4 + co4] and the biases at
-   bbase, all in vec4 units of one storage buffer. */
-static int                   s_wbase[TAGPU_R_MAXLAYERS], s_bbase[TAGPU_R_MAXLAYERS];
+/* THE WEIGHTS IN THE KERNEL'S LAYOUT, repacked once from the weight files:
+   per model and layer, w[wbase + ((tap x CIN + ci) x COUT) / 4 + co4] and the
+   biases at bbase, all in vec4 units of ONE storage buffer, the models end to
+   end -- so a job's model is a table lookup at dispatch, not another binding. */
+static int                   s_wbase[TAGPU_RM_N][TAGPU_R_MAXLAYERS];
+static int                   s_bbase[TAGPU_RM_N][TAGPU_R_MAXLAYERS];
 
 /* THE ACTIVATIONS: two storage buffers, the ping-pong, each `s_actCap` texels
    of `ch` fp32 channels. A layer of CIN channels lays its grid out as
@@ -431,7 +434,19 @@ static TAGPU_RSCHED s_sched;                        /* `be` set in build()      
    maximum over the ladder is the 512 class's single slot and the smaller
    classes' eight, 544 x 528 either way; computed rather than written down, so
    a change to the ladder or the tiling moves it. */
-static uint64_t act_bytes_max(const TAGPU_RMODEL* w)
+/* the channels an activation texel holds: the widest model loaded, since
+   the ping-pong is shared by every job whatever it runs */
+static int act_ch(void)
+{
+    int m, ch = 0;
+    for (m = 0; m < TAGPU_RM_N; m++) {
+        const TAGPU_RMODEL* w = tagpu_rcore_model(m);
+        if (w && w->ch > ch) ch = w->ch;
+    }
+    return ch;
+}
+
+static uint64_t act_bytes_max(void)
 {
     static const int cls[] = { 32, 48, 64, 96, 128, 192, 256, 384, 512 };
     uint64_t best = 0;
@@ -445,7 +460,7 @@ static uint64_t act_bytes_max(const TAGPU_RMODEL* w)
         gh = (g + TAGPU_R_GRIDY - 1) / TAGPU_R_GRIDY * TAGPU_R_GRIDY;
         if (gw * gh > best) best = gw * gh;
     }
-    return best * (uint64_t)w->ch * 4u;
+    return best * (uint64_t)act_ch() * 4u;
 }
 
 static uint32_t mem_type(const TAGPU_VKPASS* d, uint32_t bits, VkMemoryPropertyFlags want)
@@ -732,17 +747,17 @@ static void retire_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
    the kernel's [tap][ci][co] vec4 rows. Every index below is bounded by the
    loader: `kstride >= 4 + 36 x jin`, and the block's end within `ntex`. The
    last layer's second output vec4 and every bias past `kout` stay zero, which
-   is the padding of its one tile to eight channels. Returns the vec4 count. */
-static size_t repack(const TAGPU_RMODEL* w, float* out)
+   is the padding of its one tile to eight channels. Model `m` goes at vec4
+   `at`; returns the vec4 offset past it. */
+static size_t repack(int m, const TAGPU_RMODEL* w, float* out, size_t at)
 {
-    size_t at = 0;
     int l;
     for (l = 0; l < w->depth; l++) {
         const TAGPU_RLAYER* L = &w->layer[l];
         int last = l + 1 == w->depth;
         int cin = 4 * (int)L->jin, cout = last ? 8 : 4 * (int)L->kout, co4n = cout / 4;
         int tap, ci, co4, c;
-        s_wbase[l] = (int)at;
+        s_wbase[m][l] = (int)at;
         for (tap = 0; tap < 9; tap++)
             for (ci = 0; ci < cin; ci++)
                 for (co4 = 0; co4 < co4n; co4++) {
@@ -758,7 +773,7 @@ static size_t repack(const TAGPU_RMODEL* w, float* out)
                     }
                 }
         at += (size_t)9 * cin * co4n;
-        s_bbase[l] = (int)at;
+        s_bbase[m][l] = (int)at;
         for (co4 = 0; co4 < co4n; co4++) {
             float* o = out ? out + (at + (size_t)co4) * 4 : NULL;
             if (!o) continue;
@@ -777,27 +792,30 @@ static size_t repack(const TAGPU_RMODEL* w, float* out)
 /* ---- the shared build, on the first job ---- */
 static int build_shared(const TAGPU_VKPASS* d)
 {
-    const TAGPU_RMODEL* w = tagpu_rcore_model();
+    const TAGPU_RMODEL* w;
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     VkDescriptorPoolSize psz[3];
     VkQueryPoolCreateInfo qi = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
     char b[300];
-    int l, ok = 0;
+    int l, m, ok = 0;
 
     if (s_built) return 1;
     if (!tagpu_vk_restore_up(d)) return 0;
     s_sched.be = &s_be;
 
-    /* every layer's variant, found before anything is built */
-    for (l = 0; l < w->depth; l++)
-        if (!conv_for(&w->layer[l], l + 1 == w->depth)) {
-            _snprintf(b, sizeof b, LANE ": no conv shader for layer %d (%u -> %u tiles) of the %dx%d"
-                                   " model - the headers were not regenerated for it",
-                      l, w->layer[l].jin, w->layer[l].kout, w->depth, w->ch);
-            rlog(b);
-            return refuse();
-        }
+    /* every loaded model's every layer's variant, found before anything is built */
+    for (m = 0; m < TAGPU_RM_N; m++) {
+        if (!(w = tagpu_rcore_model(m))) continue;
+        for (l = 0; l < w->depth; l++)
+            if (!conv_for(&w->layer[l], l + 1 == w->depth)) {
+                _snprintf(b, sizeof b, LANE ": no conv shader for layer %d (%u -> %u tiles) of the %s %dx%d"
+                                       " model - the headers were not regenerated for it",
+                          l, w->layer[l].jin, w->layer[l].kout, w->name, w->depth, w->ch);
+                rlog(b);
+                return refuse();
+            }
+    }
 
     /* the sampler: NEAREST and clamp; every read here is a texelFetch */
     sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
@@ -834,24 +852,31 @@ static int build_shared(const TAGPU_VKPASS* d)
     /* ONE PIPELINE PER LAYER, not per shape: the full model's ten middle layers
        then hold ten pipelines of one module. It keeps the dispatch a table
        lookup by layer index, and a pipeline costs a few KB. */
-    for (l = 0; l < w->depth; l++) {
-        const CONVV* v = conv_for(&w->layer[l], l + 1 == w->depth);
-        s_pipeConv[l] = mk_pipe(d, v->spv, v->words, s_plo);
-        s_convTh[l] = v->th;
-        if (!s_pipeConv[l]) goto fail;
+    for (m = 0; m < TAGPU_RM_N; m++) {
+        if (!(w = tagpu_rcore_model(m))) continue;
+        for (l = 0; l < w->depth; l++) {
+            const CONVV* v = conv_for(&w->layer[l], l + 1 == w->depth);
+            s_pipeConv[m][l] = mk_pipe(d, v->spv, v->words, s_plo);
+            s_convTh[m][l] = v->th;
+            if (!s_pipeConv[m][l]) goto fail;
+        }
     }
 
     /* the weights, repacked into a host-visible staging and copied to a
        device-local buffer on the first slice */
     {
-        size_t n = repack(w, NULL);
+        size_t n = 0;
+        for (m = 0; m < TAGPU_RM_N; m++)
+            if ((w = tagpu_rcore_model(m))) n = repack(m, w, NULL, n);
         s_wbytes = (VkDeviceSize)n * 16;
         if (!mk_buffer(d, s_wbytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &s_wbuf, &s_wmem, NULL)) goto fail;
         if (!mk_buffer(d, s_wbytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                        &s_wstage, &s_wstageMem, &s_wstageMap)) goto fail;
-        repack(w, (float*)s_wstageMap);
+        n = 0;
+        for (m = 0; m < TAGPU_RM_N; m++)
+            if ((w = tagpu_rcore_model(m))) n = repack(m, w, (float*)s_wstageMap, n);
         s_wUp = 0;
     }
 
@@ -886,9 +911,11 @@ static int build_shared(const TAGPU_VKPASS* d)
     }
     s_sched.timer = s_qpool ? 1 : 0;
 
-    _snprintf(b, sizeof b, LANE ": built: %dx%d fp32 compute, %u KB of weights, %s",
-              w->depth, w->ch, (unsigned)(s_wbytes >> 10),
-              s_qpool ? "timestamp budget" : "fixed slices");
+    w = tagpu_rcore_model(TAGPU_RM_TINY);
+    _snprintf(b, sizeof b, LANE ": built: fp32 compute, full %dx%d%s%s, %u KB of weights, %s",
+              tagpu_rcore_model(TAGPU_RM_FULL)->depth, tagpu_rcore_model(TAGPU_RM_FULL)->ch,
+              w ? " and tiny" : ", no tiny", w ? "" : " (the terrain runs full)",
+              (unsigned)(s_wbytes >> 10), s_qpool ? "timestamp budget" : "fixed slices");
     rlog(b);
     s_built = 1;
     ok = 1;
@@ -1052,7 +1079,6 @@ static void write_sets(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
    -1 a retire is still in flight and the core should ask again next slice. */
 static int vk_act_ensure(int gw, int gh)
 {
-    const TAGPU_RMODEL* w = tagpu_rcore_model();
     const TAGPU_VKPASS* d = s_d;
     uint64_t texels = (uint64_t)gw * (uint64_t)gh;
     VkDeviceSize bytes;
@@ -1061,7 +1087,7 @@ static int vk_act_ensure(int gw, int gh)
     if (!d || !s_cb || !s_built || gw <= 0 || gh <= 0) return 0;
     if (s_act[0] && s_actCap >= texels) return 1;
     if (s_ret.pending) return -1;               /* the queue is untouched */
-    bytes = (VkDeviceSize)(texels * (uint64_t)w->ch * 4u);
+    bytes = (VkDeviceSize)(texels * (uint64_t)act_ch() * 4u);
     /* bounded by `up`'s check of the largest grid the ladder makes */
     if ((uint64_t)bytes > (uint64_t)s_dev.maxSsbo) return 0;
 
@@ -1075,7 +1101,7 @@ static int vk_act_ensure(int gw, int gh)
     s_actCap = texels; s_actGen++;
     if (tagpu_rcore_opt()->log) {
         char b[160];
-        _snprintf(b, sizeof b, LANE ": activations %dx%d x %d channels (%d MB)", gw, gh, w->ch,
+        _snprintf(b, sizeof b, LANE ": activations %dx%d x %d channels (%d MB)", gw, gh, act_ch(),
                   (int)(2u * (uint64_t)bytes >> 20));
         rlog(b);
     }
@@ -1314,7 +1340,8 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
 {
     struct TAGPU_VKRJOB* g = (struct TAGPU_VKRJOB*)r->job->owner;
     const TAGPU_VKPASS* d = s_d;
-    const TAGPU_RMODEL* w = tagpu_rcore_model();
+    const TAGPU_RMODEL* w = r->job->m;
+    const int m = r->job->model;
     PUSH pc;
 
     if (!d || !s_cb || !g || !s_built) return 0;
@@ -1354,18 +1381,18 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
 
     if (r->kind == TAGPU_RDRAW_CONV) {
         int th;
-        if (r->layer < 0 || r->layer >= w->depth || !s_pipeConv[r->layer]) {
+        if (m < 0 || m >= TAGPU_RM_N || r->layer < 0 || r->layer >= w->depth || !s_pipeConv[m][r->layer]) {
             rlog(LANE ": a conv dispatch for a layer the model does not have");
             return 0;
         }
-        th = s_convTh[r->layer];
+        th = s_convTh[m][r->layer];
         if (r->rows <= 0 || r->rows % th || r->gw % TAGPU_R_GRIDX) {
             rlog(LANE ": a conv band the kernel's tiling does not cover");
             return 0;
         }
         pc.y0 = r->y0;
-        pc.wbase = s_wbase[r->layer]; pc.bbase = s_bbase[r->layer];
-        vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_pipeConv[r->layer]);
+        pc.wbase = s_wbase[m][r->layer]; pc.bbase = s_bbase[m][r->layer];
+        vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_pipeConv[m][r->layer]);
         vkCmdBindDescriptorSets(s_cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_plo, 0, 1,
                                 &g->set[r->srcAct], 0, NULL);
         push(s_plo, &pc);
@@ -1433,7 +1460,7 @@ static void pal_pack(unsigned char* out, const unsigned char* pal)
 }
 
 static TAGPU_VKRJOB* job_new_impl(const TAGPU_VKPASS* d, const char* tag,
-                                  int prio, int oneshot, int repaint,
+                                  int prio, int oneshot, int model, int repaint,
                                   VkImage srcImg, VkImageView srcView,
                                   int srcW, int srcH, int srcBase,
                                   const unsigned char* pal,
@@ -1449,7 +1476,7 @@ static TAGPU_VKRJOB* job_new_impl(const TAGPU_VKPASS* d, const char* tag,
     if (!d || !srcView || !dstImg || !dstView || !pal ||
         srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return NULL;
     if (!build_shared(d)) return NULL;
-    c = tagpu_rcore_job_new(&s_sched, tag, prio, oneshot, NULL);
+    c = tagpu_rcore_job_new(&s_sched, tag, prio, oneshot, model, NULL);
     if (!c) return NULL;
     g = &s_vjob[(int)(c - s_sched.jobs)];
     memset(g, 0, sizeof *g);
@@ -1497,7 +1524,7 @@ fail:
 }
 
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
-                                       int prio, int oneshot, int repaint,
+                                       int prio, int oneshot, int model, int repaint,
                                        VkImage srcImg, VkImageView srcView,
                                        int srcW, int srcH, int srcBase,
                                        const unsigned char* pal,
@@ -1506,7 +1533,7 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
 {
     TAGPU_VKRJOB* j;
     tagpu_rguard_enter();
-    j = job_new_impl(d, tag, prio, oneshot, repaint, srcImg, srcView, srcW, srcH, srcBase,
+    j = job_new_impl(d, tag, prio, oneshot, model, repaint, srcImg, srcView, srcW, srcH, srcBase,
                      pal, dstImg, dstView, dstW, dstH);
     tagpu_rguard_leave();
     return j;
@@ -2142,8 +2169,9 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
     if (s_pipeFill) vkDestroyPipeline(d->dev, s_pipeFill, NULL);
     if (s_pipeOut) vkDestroyPipeline(d->dev, s_pipeOut, NULL);
     if (s_pipeMip) vkDestroyPipeline(d->dev, s_pipeMip, NULL);
-    for (i = 0; i < TAGPU_R_MAXLAYERS; i++)
-        if (s_pipeConv[i]) vkDestroyPipeline(d->dev, s_pipeConv[i], NULL);
+    for (i = 0; i < TAGPU_RM_N * TAGPU_R_MAXLAYERS; i++)
+        if (s_pipeConv[i / TAGPU_R_MAXLAYERS][i % TAGPU_R_MAXLAYERS])
+            vkDestroyPipeline(d->dev, s_pipeConv[i / TAGPU_R_MAXLAYERS][i % TAGPU_R_MAXLAYERS], NULL);
     if (s_plo) vkDestroyPipelineLayout(d->dev, s_plo, NULL);
     if (s_ploMip) vkDestroyPipelineLayout(d->dev, s_ploMip, NULL);
     if (s_dsl) vkDestroyDescriptorSetLayout(d->dev, s_dsl, NULL);
@@ -2393,18 +2421,18 @@ static int probe_start(const TAGPU_VKPASS* d, VkCommandBuffer cb)
     memcpy(s_pr.map + PR_OFF_SRCR, s_pr.probe->r8, sizeof s_pr.probe->r8);
     pr_upload(cb);
 
-    s_pr.job[0] = tagpu_vk_restore_job_new(d, "probe-base", -1, 1, 0, s_pr.img[0], s_pr.view[0],
+    s_pr.job[0] = tagpu_vk_restore_job_new(d, "probe-base", -1, 1, TAGPU_RM_FULL, 0, s_pr.img[0], s_pr.view[0],
                                            PR_DIM, PR_DIM, 1, s_pr.probe->pal,
                                            s_pr.img[2], s_pr.view[2], PR_DIM, PR_DIM);
     if (!s_pr.job[0]) return 0;
     if (!tagpu_vk_restore_job_chain(d, s_pr.job[0], TAGPU_RPROBE_MIPS, PR_DIM, attach, sample)) return 0;
-    s_pr.job[1] = tagpu_vk_restore_job_new(d, "probe-pal", -1, 1, 0, s_pr.img[1], s_pr.view[1],
+    s_pr.job[1] = tagpu_vk_restore_job_new(d, "probe-pal", -1, 1, TAGPU_RM_FULL, 0, s_pr.img[1], s_pr.view[1],
                                            PR_DIM, PR_DIM, 0, s_pr.probe->pal,
                                            s_pr.img[3], s_pr.view[3], PR_DIM, PR_DIM);
     if (!s_pr.job[1]) return 0;
     if (tagpu_vk_restore_job_add(s_pr.job[0], s_pr.probe->fb, TAGPU_RPROBE_NF) != TAGPU_RPROBE_NF ||
         tagpu_vk_restore_job_add(s_pr.job[1], s_pr.probe->fr, TAGPU_RPROBE_NF) != TAGPU_RPROBE_NF) return 0;
-    s_pr.ref = tagpu_rref_test_start(tagpu_rcore_model(), s_pr.probe);
+    s_pr.ref = tagpu_rref_test_start(tagpu_rcore_model(TAGPU_RM_FULL), s_pr.probe);
     return s_pr.ref != NULL;
 }
 

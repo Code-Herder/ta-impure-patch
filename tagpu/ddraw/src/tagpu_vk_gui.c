@@ -1825,7 +1825,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
     if (s_rjKeepGen && s_rjKeepGen == h->restoreGen && s_arHave &&
         h->restoreBlanks == s_rjBlanks) repaint = 1;
     s_rjKeepGen = 0;
-    s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, repaint,
+    s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, TAGPU_RM_FULL, repaint,
                                       s_atImg, s_atView, s_atDim, s_atDim, 0,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
@@ -2279,7 +2279,7 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        it stay DONE, and only the new ones are painted. Before that there is
        nothing to keep, and the job's own clear is what makes the image a
        picture. */
-    s_psJob = tagpu_vk_restore_job_new(d, "pic", 5, 0, s_psDstLive,
+    s_psJob = tagpu_vk_restore_job_new(d, "pic", 5, 0, TAGPU_RM_FULL, s_psDstLive,
                                        s_psSrc, s_psSrcView, PS_W, PS_H, 0, h->pal,
                                        s_psDst, s_psDstView, PS_W, PS_H);
     if (!s_psJob) {

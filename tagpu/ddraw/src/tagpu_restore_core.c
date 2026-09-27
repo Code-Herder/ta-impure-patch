@@ -76,21 +76,30 @@ static double now_ms(void)
     return 1000.0 * (double)c.QuadPart / (double)f.QuadPart;
 }
 
-/* ---- the weight file (unditherer/weights.py) ---- */
-static TAGPU_RMODEL s_w;
+/* ---- the weight files (unditherer/weights.py) ---- */
+static TAGPU_RMODEL s_w[TAGPU_RM_N];
+static int          s_wOk[TAGPU_RM_N];
+static const char* const s_wName[TAGPU_RM_N] = { "full", "tiny" };
+/* what a missing file costs, for its log line */
+static const char* const s_wWithout[TAGPU_RM_N] = {
+    "Classic++ stays indexed", "the terrain restores with full" };
 static TAGPU_ROPT   s_opt;
-static int          s_optRead, s_modelOk;
+static int          s_optRead;
 
-static int load_weights(const char* who, const char* model)
+/* `which`'s file into s_w[which]; 1 when it is usable. A model that fails
+   keeps no body, and its s_wOk says so. */
+static int load_weights(const char* who, int which)
 {
+    TAGPU_RMODEL* w = &s_w[which];
+    const char* model = s_wName[which];
     char path[MAX_PATH_B], b[300];
     FILE* f;
     unsigned char hdr[16];
     unsigned depth, ch, ntex, l;
     size_t want;
 
-    if (s_w.body && !strcmp(s_w.name, model)) return 1;
-    free(s_w.body); s_w.body = NULL;
+    if (w->body && !strcmp(w->name, model)) return 1;
+    free(w->body); w->body = NULL;
     /* beside TotalA.exe, where tacli links it */
     path[0] = 0;
     if (GetModuleFileNameA(NULL, path, sizeof path)) {
@@ -100,17 +109,17 @@ static int load_weights(const char* who, const char* model)
     }
     if (!path[0]) _snprintf(path, sizeof path, "%s.w32.bin", model);
     f = fopen(path, "rb");
-    if (!f) { _snprintf(b, sizeof b, "%s: no %s -- Classic++ stays indexed", who, path); rlog(b); return 0; }
+    if (!f) { _snprintf(b, sizeof b, "%s: no %s -- %s", who, path, s_wWithout[which]); rlog(b); return 0; }
     if (fread(hdr, 1, 16, f) != 16 || memcmp(hdr, "TAW1", 4)) { rlog_2(who, "weight file is not TAW1"); fclose(f); return 0; }
     memcpy(&depth, hdr + 4, 4); memcpy(&ch, hdr + 8, 4); memcpy(&ntex, hdr + 12, 4);
     if (depth < 2 || depth > TAGPU_R_MAXLAYERS || ch < 4 || ch > 256 || (ch & 3) || ntex == 0 || ntex > (1u << 24)) {
         rlog_2(who, "weight header out of range"); fclose(f); return 0;
     }
-    s_w.depth = (int)depth; s_w.ch = (int)ch; s_w.ntex = (int)ntex;
+    w->depth = (int)depth; w->ch = (int)ch; w->ntex = (int)ntex;
     for (l = 0; l < depth; l++) {
-        if (fread(&s_w.layer[l], 1, 16, f) != 16) { rlog_2(who, "weight header truncated"); fclose(f); return 0; }
+        if (fread(&w->layer[l], 1, 16, f) != 16) { rlog_2(who, "weight header truncated"); fclose(f); return 0; }
         {
-            const TAGPU_RLAYER* L = &s_w.layer[l];
+            const TAGPU_RLAYER* L = &w->layer[l];
             /* every product in 64 bits: a corrupt header must not wrap its way past the bound */
             unsigned long long end = (unsigned long long)L->offset + (unsigned long long)L->kout * L->kstride;
             /* THE BOUNDS THE REPACK AND THE KERNEL INDEX WITH, on values read
@@ -127,19 +136,19 @@ static int load_weights(const char* who, const char* model)
                 L->kstride > ntex || L->kout > ntex || end > ntex ||
                 4u * L->jin > ch || 4u * L->kout > ch ||
                 (first && L->jin != 1) || (last && L->kout != 1) ||
-                (!first && L->jin != s_w.layer[l - 1].kout)) {
+                (!first && L->jin != w->layer[l - 1].kout)) {
                 rlog_2(who, "weight layer table inconsistent"); fclose(f); return 0;
             }
         }
     }
     want = (size_t)ntex * 16;
-    s_w.body = (float*)malloc(want);
-    if (!s_w.body || fread(s_w.body, 1, want, f) != want) {
-        rlog_2(who, "weight body truncated"); free(s_w.body); s_w.body = NULL; fclose(f); return 0;
+    w->body = (float*)malloc(want);
+    if (!w->body || fread(w->body, 1, want, f) != want) {
+        rlog_2(who, "weight body truncated"); free(w->body); w->body = NULL; fclose(f); return 0;
     }
     fclose(f);
-    strncpy(s_w.name, model, sizeof s_w.name - 1); s_w.name[sizeof s_w.name - 1] = 0;
-    _snprintf(b, sizeof b, "%s: %s: %dx%d, %d vec4 (%u KB)", who, path, s_w.depth, s_w.ch, s_w.ntex, (unsigned)(want >> 10));
+    strncpy(w->name, model, sizeof w->name - 1); w->name[sizeof w->name - 1] = 0;
+    _snprintf(b, sizeof b, "%s: %s: %dx%d, %d vec4 (%u KB)", who, path, w->depth, w->ch, w->ntex, (unsigned)(want >> 10));
     rlog(b);
     return 1;
 }
@@ -171,21 +180,25 @@ static void read_options(void)
     CloseHandle(h);
 }
 
-/* RE-READ BOTH, which the backend does from its own init -- so the options
+/* RE-READ ALL, which the backend does from its own init -- so the options
    are picked up once per bring-up, not once per process: a `budget=` edited
    between two bring-ups takes effect. `load_weights` keeps a body it already
    holds, so a reload does not touch the 4 MB file again. */
 int tagpu_rcore_reload(const char* who)
 {
+    int m;
     read_options();
     s_optRead = 1;
-    s_modelOk = load_weights(who, "full");
-    return s_modelOk;
+    for (m = 0; m < TAGPU_RM_N; m++) s_wOk[m] = load_weights(who, m);
+    return s_wOk[TAGPU_RM_FULL];
 }
 
-int tagpu_rcore_ready(void) { return s_modelOk; }
+int tagpu_rcore_ready(void) { return s_wOk[TAGPU_RM_FULL]; }
 
-const TAGPU_RMODEL* tagpu_rcore_model(void) { return &s_w; }
+const TAGPU_RMODEL* tagpu_rcore_model(int which)
+{
+    return which >= 0 && which < TAGPU_RM_N && s_wOk[which] ? &s_w[which] : NULL;
+}
 
 const TAGPU_ROPT* tagpu_rcore_opt(void)
 {
@@ -264,7 +277,7 @@ int tagpu_rcore_job_remap(TAGPU_RCORE* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAM
 }
 
 TAGPU_RCORE* tagpu_rcore_job_new(TAGPU_RSCHED* s, const char* tag, int prio,
-                                 int oneshot, void* owner)
+                                 int oneshot, int model, void* owner)
 {
     TAGPU_RCORE* j = NULL;
     int i;
@@ -285,8 +298,14 @@ TAGPU_RCORE* tagpu_rcore_job_new(TAGPU_RSCHED* s, const char* tag, int prio,
     }
     for (i = 0; i < TAGPU_R_MAXJOBS; i++) if (!s->jobs[i].used) { j = &s->jobs[i]; break; }
     if (!j) { _snprintf(b, sizeof b, "%s: no free job slot", s->be->name); rlog(b); return NULL; }
+    if (!tagpu_rcore_model(model)) {
+        _snprintf(b, sizeof b, "%s: %s: model %d is not loaded, so full", s->be->name, tag ? tag : "job", model);
+        rlog(b);
+        model = TAGPU_RM_FULL;
+    }
     memset(j, 0, sizeof *j);
     j->used = 1; j->prio = prio; j->oneshot = oneshot; j->owner = owner;
+    j->model = model; j->m = &s_w[model];
     strncpy(j->tag, tag ? tag : "job", sizeof j->tag - 1);
     j->lastTallySlice = s->slice;
     return j;
@@ -324,7 +343,7 @@ int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
         int S, c;
         if (frames[i].w <= 0 || frames[i].h <= 0) continue;
         p->f = frames[i];
-        S = (p->f.w > p->f.h ? p->f.w : p->f.h) + (p->f.wrap ? 2 * s_w.depth : 0);
+        S = (p->f.w > p->f.h ? p->f.w : p->f.h) + (p->f.wrap ? 2 * j->m->depth : 0);
         if (S > TAGPU_R_ACTMAX && p->f.wrap) { p->f.wrap = 0; S = p->f.w > p->f.h ? p->f.w : p->f.h; }
         if (S > TAGPU_R_ACTMAX) {
             char b[160];
@@ -345,8 +364,8 @@ int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
             char b[200];
             int w = 0;
             for (i = 0; i < j->qn; i++) w += j->q[i].f.wrap ? 1 : 0;
-            _snprintf(b, sizeof b, "%s: %s: job started: %d frames (%d wrap-padded), model %dx%d",
-                      s->be->name, j->tag, j->qn, w, s_w.depth, s_w.ch);
+            _snprintf(b, sizeof b, "%s: %s: job started: %d frames (%d wrap-padded), model %s %dx%d",
+                      s->be->name, j->tag, j->qn, w, j->m->name, j->m->depth, j->m->ch);
             rlog(b);
         }
     }
@@ -435,7 +454,7 @@ static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         for (t = 0; t < j->bn; t++) {
             const TAGPU_RGLSL_FRAME* f = &j->bf[t].f;
             TAGPU_RSLOT* o = &s->slot[(t / cols) * TAGPU_R_SLOTCOLS + (t % cols)];
-            int p = f->wrap ? s_w.depth : 0;
+            int p = f->wrap ? j->m->depth : 0;
             o->rw = f->w + 2 * p; o->rh = f->h + 2 * p;
             o->ax = f->ax; o->ay = f->ay; o->sw = f->w; o->sh = f->h;
             o->key = f->key;
@@ -446,9 +465,9 @@ static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         if (!s->be->draw(&r)) { j->failed = 1; tagpu_rcore_job_drop(j); return 0.0; }
         j->pass = 1; j->band = 0; j->srcAct = 0;
         units = (double)r.gw * r.gh;
-    } else if (j->pass <= s_w.depth) {
-        const TAGPU_RLAYER* L = &s_w.layer[j->pass - 1];
-        int last = j->pass == s_w.depth;
+    } else if (j->pass <= j->m->depth) {
+        const TAGPU_RLAYER* L = &j->m->layer[j->pass - 1];
+        int last = j->pass == j->m->depth;
         r.kind = TAGPU_RDRAW_CONV;
         r.layer = j->pass - 1; r.L = L; r.last = last; r.srcAct = j->srcAct;
         r.y0 = j->band * TAGPU_R_BAND;
@@ -509,11 +528,11 @@ static void job_drained(TAGPU_RSCHED* s, TAGPU_RCORE* j)
         /* fps = frames the game drew while the run lasted (every step call,
            drawn in or not) over the wall; the GPU figure is the slices this
            job started, so its share says how much of the work it timed */
-        _snprintf(b, sizeof b, "%s: %s: done: %d frames (%d wrap-padded) in %d batches, %d dispatches in %d of %u frames = %.0f ms wall since begin (%.1f fps while restoring); GPU %.0f ms measured over %.0f%% of the work; %dx%d fp32 budget %.0f ms",
+        _snprintf(b, sizeof b, "%s: %s: done: %d frames (%d wrap-padded) in %d batches, %d dispatches in %d of %u frames = %.0f ms wall since begin (%.1f fps while restoring); GPU %.0f ms measured over %.0f%% of the work; %s %dx%d fp32 budget %.0f ms",
                   s->be->name, j->tag, j->rframes, j->rwrap, j->rbatches, j->rdraws, j->rslices, frames, wall,
                   wall > 0.0 ? 1000.0 * frames / wall : 0.0, j->rgpuNs / 1e6,
                   j->runits > 0.0 ? 100.0 * j->rgpuUnits / j->runits : 0.0,
-                  s_w.depth, s_w.ch, s_opt.budget);
+                  j->m->name, j->m->depth, j->m->ch, s_opt.budget);
         rlog(b);
     } else if (s_opt.log || s->slice - j->lastTallySlice >= QUEUE_LOG_FRAMES) {
         j->lastTallySlice = s->slice;

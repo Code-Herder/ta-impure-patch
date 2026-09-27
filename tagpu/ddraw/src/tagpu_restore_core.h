@@ -24,8 +24,9 @@
    TAGPU_RSCHED, so a backend's slicing never depends on whether another is
    alive.
 
-   THE MODEL AND THE OPTIONS ARE PROCESS-WIDE: one weight file, one
-   `tagpu_restoreglsl.on`, whatever backends are running. */
+   THE MODELS AND THE OPTIONS ARE PROCESS-WIDE: the weight files, one
+   `tagpu_restoreglsl.on`, whatever backends are running. A job names the model
+   it runs (TAGPU_RM_*). */
 
 #include "tagpu_restoreglsl.h"      /* TAGPU_RGLSL_FRAME, the public contract */
 
@@ -51,7 +52,8 @@
 /* the scheduler, one per backend; its fields are below */
 typedef struct TAGPU_RSCHED_s TAGPU_RSCHED;
 
-/* ---- the model, read from full.w32.bin (unditherer/weights.py) ---- */
+/* ---- the models, read from <name>.w32.bin (unditherer/weights.py); their
+   ids, TAGPU_RM_*, are tagpu_restoreglsl.h's ---- */
 
 /* one layer, in vec4 texels: output tile k's block starts at offset + k x
    kstride, the bias first, then a mat4 per (tap, input tile) */
@@ -67,16 +69,18 @@ typedef struct {
 /* ---- the options, from tagpu_restoreglsl.on ---- */
 typedef struct { int log; double budget; } TAGPU_ROPT;
 
-/* Re-read the options and the model, from a backend's own init, so that both
-   are picked up once per DEVICE. 0 with the reason in tagpu.log when the
-   weight file is unusable -- Classic++ then stays indexed, which is the
-   shipped fallback and not a failure. */
+/* Re-read the options and the models, from a backend's own init, so that all
+   are picked up once per DEVICE. 0 with the reason in tagpu.log when the full
+   model's file is unusable -- Classic++ then stays indexed, which is the
+   shipped fallback and not a failure. tiny is not required: a job that asks
+   for it without it runs full. */
 int                tagpu_rcore_reload(const char* who);
 /* tagpu.log, one line, for a backend that wants the core's own sink */
 void               tagpu_rcore_log(const char* line);
-/* 1 when a model is loaded. Asks for nothing; `reload` is what tries. */
+/* 1 when the full model is loaded. Asks for nothing; `reload` is what tries. */
 int                tagpu_rcore_ready(void);
-const TAGPU_RMODEL* tagpu_rcore_model(void);
+/* model TAGPU_RM_*, NULL when it is not loaded */
+const TAGPU_RMODEL* tagpu_rcore_model(int which);
 const TAGPU_ROPT*   tagpu_rcore_opt(void);
 
 /* ---- a job, as the core sees it ---- */
@@ -86,6 +90,8 @@ typedef struct { TAGPU_RGLSL_FRAME f; short S, cls; } TAGPU_RQF;
 
 typedef struct TAGPU_RCORE {
     int    used, prio, oneshot, failed;
+    int    model;                            /* TAGPU_RM_*, loaded: `m` is it  */
+    const TAGPU_RMODEL* m;
     char   tag[12];
     void*  owner;                            /* the backend's job, opaque here */
     TAGPU_RQF* q; int qn, qcap;              /* queued, not yet in a batch     */
@@ -192,11 +198,12 @@ struct TAGPU_RSCHED_s {
     TAGPU_RSLOT slot[TAGPU_R_BATCH];
 };
 
-/* A job slot, with the backend's own job hung off `owner`. NULL when the table
-   is full or the model is unusable. The backend creates its resources AFTER
-   this returns and calls `tagpu_rcore_job_free` if it cannot. */
+/* A job slot running model `model` (TAGPU_RM_*; one that is not loaded runs
+   full, and says so), with the backend's own job hung off `owner`. NULL when
+   the table is full or the full model is unusable. The backend creates its
+   resources AFTER this returns and calls `tagpu_rcore_job_free` if it cannot. */
 TAGPU_RCORE* tagpu_rcore_job_new(TAGPU_RSCHED* s, const char* tag, int prio,
-                                 int oneshot, void* owner);
+                                 int oneshot, int model, void* owner);
 void tagpu_rcore_job_free(TAGPU_RSCHED* s, TAGPU_RCORE* j);
 /* Queue frames (copied), classed and edge-padded. The count actually taken. */
 int  tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,

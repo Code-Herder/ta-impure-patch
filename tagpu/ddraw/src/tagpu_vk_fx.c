@@ -1017,7 +1017,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
     /* EVERY GENERATION BLANKS, for tagpu_vk_feat.c's reason: nothing the
        restore reads moves in play. */
-    s_rjob = tagpu_vk_restore_job_new(d, "fx", 2, 0, 0,
+    s_rjob = tagpu_vk_restore_job_new(d, "fx", 2, 0, TAGPU_RM_FULL, 0,
                                       s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);

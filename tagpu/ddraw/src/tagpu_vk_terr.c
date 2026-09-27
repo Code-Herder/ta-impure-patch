@@ -1243,7 +1243,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        never pays for it. It latches its verdict, so this is one integer
        compare on every frame after the first. */
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
-    s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, 0,
+    s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, TAGPU_RM_TINY, 0,
                                       s_base.img, s_base.view, s_base.w, s_base.h, 1,
                                       t->pal,
                                       s_rgbAtlas.img, s_rgbAtlas.view,

@@ -998,7 +998,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        factor is applied after it, to the finished world image (tagpu_pal.h) --
        and a move of the table itself is a new job here (`s_rjPal`), so no job
        is a recolour of the last one. */
-    s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, 0,
+    s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, TAGPU_RM_FULL, 0,
                                       s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
