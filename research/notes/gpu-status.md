@@ -19544,8 +19544,16 @@ vsync off, RTX 4070): the terrain in 996 ms of wall time and 389 ms of GPU, agai
 backend's 3,578 and 1,627 ms. The self-test adds two probe jobs at the first bring-up, and a CPU
 reference of 313–339 ms on a worker thread while the game starts.
 
-**Not covered.** The Windows test setup's AMD card; §2.95's fix belonged to the fragment
-backend's render passes, which compute does not have, and the same bytes check is what will show
-the card is right. The residuals the plan note lists: a relaunch that can deadlock inside a crash
+**On the Windows test setup's AMD card** (MEASURED, the plan note has the table): the launch
+self-test failed on its first run there, rightly. FILL wrapped with a float floor division, and
+that driver divides through the reciprocal, so a 6×8 wrapping frame read outside itself (up to 10
+levels off) while an 8×8 one was exact. FILL's modulo is integer arithmetic now. With that, the
+self-test passes and every job that ran is within one level on at most 0.0022 % of bytes; the
+terrain takes 3.8 s of wall time and 2.55 s of GPU, against the fragment backend's 10.6 and 7.0
+(§2.94). §2.95's barrier fix belonged to the fragment backend's render passes; compute has none.
+The crash path ran there too: the filter ahead of `004DA2A0`, one relaunch, the record, the notice.
+
+**Not covered.** The effects job on the AMD card (the scene drew no effects). The residuals the
+plan note lists: a relaunch that can deadlock inside a crash
 holding the heap lock (the record is on disk first), and a record kept in memory only when the
 settings store cannot be read.

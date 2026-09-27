@@ -1,8 +1,8 @@
 # The fp32 compute restorer
 
 **Landing 1 is built** (2026-09-27): the restorer's backend is Vulkan compute, with a self-test at
-every launch and a per-driver record when it fails. It is verified on the reference setup; its
-Windows test is still to run. **Landing 2** (the terrain seam fix and the tiny model for terrain)
+every launch and a per-driver record when it fails. It is verified on the reference setup and on
+the Windows test setup's AMD card. **Landing 2** (the terrain seam fix and the tiny model for terrain)
 is planned. fp16 (cooperative matrices) is deferred.
 
 The restorer is the learned unditherer Classic++ runs on the game's art ([Classic and Classic++
@@ -139,12 +139,40 @@ display, the RTX 4070), terrain only:
 | fragment (main before this landing) | 3,578 ms | 1,627 ms | 39.4 |
 | compute | 996 ms | 389 ms | 42.2 |
 
+### Verified on the Windows test setup
+
+The AMD Radeon R9 200-series card on its Windows driver (`1002:6798:0080005b`), 1920 × 1080,
+`feat-forest`, through a `tacli` remote instance.
+
+- **The self-test caught a real fault on its first run there.** The palette probe's 6×8 wrapping
+  frame was off by up to 10 levels over its whole area, while the 8×8 one was exact: FILL wrapped
+  with a float floor division, and this driver divides through the reciprocal, so `floor(6/6)`
+  could land on 0 and the tap read outside the frame. The restorer turned itself off, recorded
+  the driver and raised the notice (the log's "the player is told"), as designed. FILL's modulo is integer arithmetic now, and the
+  reference setup's bytes did not move.
+
+**With the fix**, the self-test passes (11,032 bytes within 0 levels; the CPU reference in
+876 ms), and the dumps meet D11's bar:
+
+| job | frames | bytes that differ | max |
+|---|---|---|---|
+| terrain | 5,062 | 150 of 15,550,464 (0.0010 %) | 1, ring exact |
+| features | 24 | 0 of 65,088 | 0, 21,694 keyed texels (0,0,0,0) |
+| units | 57 | 1 of 236,544 | 1, mip levels 1 and 2 exact |
+| UI | 3 | 7 of 322,032 (0.0022 %) | 1 |
+| UI pictures | 10 | 21 of 3,872,886 | 1 |
+
+The effects pass drew nothing in that scene, so its job had nothing to restore; it runs FILL and
+OUT on a keyed base atlas exactly as the features' job does.
+
+- **The terrain** restored in 3,846 ms of wall time and 2,551 ms of GPU at 56.4 fps; the fragment
+  backend took 10.6 s and 7.0 s on the same card ([status](gpu-status.html) §2.94).
+- **The guard on Windows**: the filter installed ahead of `004DA2A0`; `crash` relaunched the game
+  from its own process, and the relaunch logged that it will not relaunch again, turned the marker
+  into the record (`crash c0000005`) and raised the notice. No `ErrorLog.txt` was written.
+
 ### Not closed by landing 1
 
-- **The Windows test** (D1) on the AMD R9 200-series card is still to run. The fragment backend's
-  fix for that driver (render-pass dependencies it dropped, [status](gpu-status.html) §2.95) does
-  not apply to compute, which has no render passes; the same bytes check is what shows whether
-  the card is right.
 - **The crash filter's relaunch** calls `CreateProcessA`. A crash that holds the heap lock can
   deadlock it; the marker is written before, so the next launch still has the record.
 - **An unreadable settings store** keeps the record in memory only: at most one crash and one
