@@ -80,7 +80,7 @@ whole fail-closed site table with the stock 3.1 bytes, finds them stock, and wri
 and the fork's `hook_init` points the loader's `LoadLibrary` imports at Impure's. So the
 loader's request for `tdraw.dll` is answered with Impure itself, TADR's `DllMain` never runs,
 and the two calls reach Impure's own export ([the takeover](takeover.md), part 1). At the first
-DirectDraw call Impure reads every site again (part 4): with the takeover switched off, a
+DirectDraw call Impure reads every site again (part 3): with the takeover switched off, a
 pre-2026 TADR's rewrites are what it finds, and the game stops there instead of crashing when
 the first battle loads.
 

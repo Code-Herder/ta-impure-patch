@@ -69,7 +69,7 @@ it leads to (`decode_run`: `E8`/`E9` rel32, `FF 15`/`FF 25` through a pointer, `
 folder. **A verdict rests on an instruction that transfers control, never on four bytes that
 merely hold an address** -- those are reported as held and not counted, because the bytes are as
 likely to be the middle of an instruction or the displacement of a jump ([the takeover](takeover.md),
-part 4, where both halves of that are measured). A target in a module whose file carries
+part 3, where both halves of that are measured). A target in a module whose file carries
 `TADemo-MKChat` is TADR's code having run; a target in any other DLL of the folder is a byte the
 mod itself sets and is reported, never counted — the Patch Loader rewrites three of the exe's
 import thunks into direct calls to the mod's `win32.dll`. One finding a run, and **a TADR target

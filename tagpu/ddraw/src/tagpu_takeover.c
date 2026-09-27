@@ -300,7 +300,7 @@ static int to_inert(HMODULE m)
    descriptor entirely. WHAT IT STILL CANNOT SEE: a game-folder module that is not in the exe's
    import table at all -- pulled in as the dependency of an earlier descriptor's module, or by a
    forwarded export. Such a module is initialised before us and is made inert anyway; the log's
-   "none of its own code runs" would be wrong about it, and part 4 is what answers for it. No
+   "none of its own code runs" would be wrong about it, and part 3 is what answers for it. No
    fixture has one (MEASURED 2026-09-27: objdump -p over every setup's exe and DLLs). */
 static int to_first_local_is_ours(const BYTE* exe, DWORD image, const wchar_t* game)
 {

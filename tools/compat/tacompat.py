@@ -786,7 +786,7 @@ def decode_run(run, read_dword=None) -> list:
     as likely to be the middle of an instruction or the displacement of a jump: `8B 96 92 00`, the
     middle of a `mov esi,[esi+0x92]` of Impure's, reads as 0x0092968B, and Total Mayhem's recorder
     was mapped at 0x00910000 on the Windows box. Every TADR hook measured on any setup is found by
-    its instruction ([the takeover](../../research/notes/compat/takeover.md), part 4)."""
+    its instruction ([the takeover](../../research/notes/compat/takeover.md), part 3)."""
     mem, at, lo, hi = bytes.fromhex(run["mem"]), run["at"], run["lo"], run["hi"]
     out = []
     for s in range(max(at, lo - 5), hi):

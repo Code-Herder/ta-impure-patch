@@ -69,7 +69,7 @@ Some rows also report runs that **hold** an address inside one of those modules 
 instruction that goes there — 18 on `392+tadr-dev` and 19 on `escalation+tadr-dev` on Wine, and on
 Windows a different set entirely, 43 on `loader+tadr-tazero` and 11 on `retail+tadr-files`. Those
 are coincidences: they are counted and never judged, and judging them refused two players' installs
-before the rule was fixed ([the takeover](takeover.md), part 4).
+before the rule was fixed ([the takeover](takeover.md), part 3).
 
 The **import slots** in those counts are the exe's own DirectPlay imports where a recorder answered
 them (3 on the recorder control, 3 on `mayhem-11.3.0-net`) and the `TDRAW`/`TAESC` import on the

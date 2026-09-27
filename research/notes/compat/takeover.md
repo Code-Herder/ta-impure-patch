@@ -14,7 +14,8 @@ deleted.
 2006 recorder beside it, and every Community Patch Loader mod — **none of TADR's code runs, and a
 launch where any of it does refuses to start.** That is T1 (`tdraw.dll` and the safety net), T1b
 (the exe's DirectPlay imports) and T1c (the entry point and the reference image) together; the
-routes where TADR loads Impure are still open (parts 2 and 3, landings T2 to T4).
+routes where TADR loads Impure are open, and one landing closes them: **1d and part 2 together**
+(the decision of 2026-09-27, below).
 
 The shape is the owner's, set out on 2026-09-27: **the exe file on disk is the reference**, TADR's
 DLLs run none of their own code, and every launch compares the whole exe image against that file
@@ -22,6 +23,13 @@ and refuses to start when a changed byte leads into a TADR DLL. A list of hook s
 answer — it is a guess about what TADR does, and the recorder finding is what that guess cost:
 T1b was built on the premise that the recorder does nothing until its first DirectPlay export is
 called, and the recorder takes the exe's entry point instead.
+
+**The routes where TADR loads Impure are answered the same way as the other three** (the decision
+of 2026-09-27): the rest of TADR's `DllMain` does not run, rather than running and having its
+bytes put back afterwards. The measurements behind the choice are in 1d — Impure arrives before
+TADR has written anything, so there is nothing to preserve; TADR's one thread does not exist yet,
+so prevention stops it from ever starting; and nothing of TADR's is written later either, so
+neither design would have needed to chase it.
 
 ## What stays, what goes
 
@@ -34,7 +42,7 @@ build):
   `0x49E9C0`/`0x49E9C9`, which all players must match.
 - **The mod's gameplay patches**: the AI fixes, target acquisition, teleport, reclaim rules,
   `+AI`/`+Control` levels, allied victory — the mod's rules. Where one lands on an Impure site
-  the plan is that the mod's value wins (part 3 does it for the exe file's bytes). Today the
+  the plan is that the mod's value wins (part 2 does it for the exe file's bytes). Today the
   safety net refuses a loader write that leaves other bytes than Impure's on one of its sites;
   it read every site after each of the suite's Patch Loader setups and found none. Measured today: Mayhem's loader writes the path budget at `0x40EAD6` with
   Impure's own value (66 650); Mayhem and ProTA write `B0 01` at `0x4266A5`, beside Impure's
@@ -55,13 +63,14 @@ its demos, TA Forever's replays, its commands and its code injections. Until Imp
 a game played with Impure records no demo. What a mod's content may still need from them is a
 per-mod check (below).
 
-## The four parts
+## The three parts
 
-### Part 1 — Impure loads first
+### Part 1 — none of TADR's code runs
 
-The retail exe, and every Patch Loader mod (Total Mayhem, ProTA, TA Zero). Three passes keep
-TADR's code from running, one for each way it gets in, and part 4 below is the check that
-decides. All four are in `tagpu_takeover.c`, whose header carries the contract;
+**Four passes, one for each way TADR's code gets in**, and part 3 below is the check that
+decides. Three of them are for the routes where Impure loads first — the retail exe, and every
+Patch Loader mod (Total Mayhem, ProTA, TA Zero); the fourth, 1d, is for the routes where TADR
+loads Impure. All are in `tagpu_takeover.c`, whose header carries the contract;
 `tagpu_takeover.off` in the game folder turns all four off, which is how the suite's harness
 setups have TADR to catch.
 
@@ -101,14 +110,13 @@ descriptor's subtree. Impure tests that against the exe in front of it and the p
 when it fails — it is not an assumption about the retail exe. The 3.9.02 and Escalation exes import
 `TDRAW` / `TAESC` and **no `DDRAW` at all** (DISASSEMBLED: `objdump -p`), so on those routes TADR's
 `DllMain` is what loads Impure and is running while this would write: the pass is skipped, says so
-in the log, and part 4 is what answers for such a launch. That is also why part 2 is a separate
-design rather than this pass applied twice. Every slot of a descriptor is looked at, not its first,
+in the log, and 1d below is what answers for such a launch. Every slot of a descriptor is looked at, not its first,
 so a descriptor one unbindable slot would have hidden still counts.
 
 **What the invariant does not cover**, and the log would be wrong about: a game-folder module that
 is in the exe's import table not at all — pulled in as a dependency of an earlier descriptor's
 module, or by a forwarded export. Such a module is already initialised when this runs, and its
-entry point is made inert anyway; only part 4 answers for it. No setup of the suite has one
+entry point is made inert anyway; only part 3 answers for it. No setup of the suite has one
 (MEASURED 2026-09-27, `objdump -p` over every fixture's exe and DLLs). Nor does it cover a **PE TLS
 callback**, which the loader calls whatever the entry point says. MEASURED 2026-09-27 over the
 fixtures' 18 TADR modules: **no recorder carries a TLS directory at all** (`tplayx`, `eplayx`,
@@ -171,94 +179,95 @@ each into the mod's own `win32.dll`, which stay. With `tagpu_takeover.off` the 2
 installs 6 by start-up and **24** once a battle and a network game let its DirectPlay path run,
 which is the proof the check can see what the game folder cannot show.
 
-### Part 2 — the exe imports TADR
+**1d. The exe imports TADR, so TADR's `DllMain` is what loads Impure.** The 3.9.02 exe imports
+`TDRAW`, Escalation's imports `TAESC`, and neither imports `DDRAW` at all (DISASSEMBLED: `objdump
+-p`), so the loader never loads Impure from the exe: TADR's `DllMain` does, with
+`LoadLibraryA("ddraw.dll")`, and Impure's `DllMain` runs nested inside one that has barely started.
+This is the fourth way in, and it is answered like the other three — **the rest of that `DllMain`
+does not run** — rather than by cleaning up after it.
 
-The 3.9.02 exe imports `TDRAW`, Escalation's imports `TAESC`, and neither imports `DDRAW` at all
-(DISASSEMBLED: `objdump -p`), so the loader never loads Impure from the exe — **TADR's `DllMain`
-does**, and Impure's `DllMain` runs nested inside one that has barely started. Everything TADR
-does before that call is four things, the same code in `tadr-dev-ota`'s `tdraw.dll` and in
-Escalation's `TAESC.dll` (DISASSEMBLED): test the reason for `DLL_PROCESS_ATTACH`, write
-`Process Attached.  config=<name>` to its own log, `LoadLibraryA("dplayx.dll")`, then
-`LoadLibraryA("ddraw.dll")` — keeping the handle in a global of its own.
-
-So TADR has patched nothing when Impure arrives, and its start-up is small. MEASURED on all four
-setups, Wine, 2026-09-27:
+Everything TADR does before that call is four things, the same code in `tadr-dev-ota`'s
+`tdraw.dll` and in Escalation's `TAESC.dll` (DISASSEMBLED): test the reason for
+`DLL_PROCESS_ATTACH`, write `Process Attached.  config=<name>` to its own log,
+`LoadLibraryA("dplayx.dll")`, then `LoadLibraryA("ddraw.dll")` — keeping the handle in a global of
+its own. So TADR has patched nothing when Impure arrives. MEASURED on all four setups, Wine,
+2026-09-27:
 
 | | at Impure's `DllMain` | at the first `DirectDraw` call |
 |---|---|---|
+| the exe's code against its file | **0 changed runs** — byte-identical; the only finding is the `TDRAW`/`TAESC` import slot the loader bound | 407 to 436 changed runs, **15** leading into TADR (`392+tadr-dev`), **10** (`escalation`) |
 | fail-closed sites differing from stock 3.1 | **1 of 284** — the exe **file's** own path budget (66650 in the 3.9.02 exe, 1114 in Escalation's), not a write of TADR's | the same one |
 | threads | **one**: the exe's main thread, started at `0x004E6FA0` | **three**: that one, the exe's own `0x004E7850`, and **one thread of TADR's** |
 | the game window's procedure | — | the window's and the class's are both the exe's own `0x004B5CC0`: **no TADR subclass** |
-| places of the exe's code leading into TADR | — | 9 to 20 ([the setups](setups.md)) |
 
 That the limits install sees **one** difference and not the seventeen of `mayhem-11.3.0-net`,
-where the same family of `tdraw` runs its limit crack, is the measurement that says TADR's
-patching happens after it has loaded Impure and not before.
+where the same family of `tdraw` runs its limit crack, is what says TADR's patching happens after
+it has loaded Impure and not before.
 
-Two shapes are open, and one measurement decides between them.
+**TADR writes nothing after its own start-up either.** The same comparison run 27 times a launch —
+in Impure's `DllMain`, at the first `DirectDraw` call, then every two seconds to `t+50s` — gives
+the **identical set** of places leading into TADR every time, compared as a set and not by size.
+The changed runs do grow after the first `DirectDraw` call (407 to 436, 371 to 407): those are
+Impure's own detours arming at first use, and TADR's count does not move. What that does not cover
+is a **network game**, where the recorder's other way in installs eighteen more sites; the battle
+stage did not load in that measurement, since getting past the refusal leaves the engine with
+TADR's writes over Impure's fix sites.
 
-**Repair.** Impure snapshots the exe's code in its nested `DllMain`, lets TADR's start-up finish,
-and at the exe's entry point puts back every code byte that differs from the snapshot and points
-the exe's TADR import slots at its own exports. The snapshot and the exe file on disk are the same
-reference here — which is what makes the mod's own bytes safe: a mod's exe carries its changes in
-the file, so they are in the snapshot, and only what TADR wrote *after* it is put back.
-Data-section writes stay unless they land on an Impure site (resource paths are data). It leaves
-TADR's one thread running, and it rests on TADR writing nothing after the entry point.
+**Why prevention and not repair.** Nothing has to be put back, TADR's one thread never starts, and
+there is no window procedure to restore — none of which is true of a design that lets the start-up
+finish and then reverts its bytes at the exe's entry point. The measurements above are what make
+the choice safe rather than hopeful: Impure arrives before TADR has written anything, so there is
+nothing to preserve, and the C runtime of TADR's module has already run, since the PE entry point
+is the CRT's start-up and it calls `DllMain` after itself.
 
-**Prevention.** Impure stops the rest of TADR's `DllMain` from running, from inside its own — the
-same family as parts 1a to 1c, and then there is nothing to put back and no thread to leave
-behind. The return address into TADR is on the stack, and it can be identified rather than
-guessed: MEASURED on all four setups, the stack carries exactly **three** frames into the TADR
-module, at the same three offsets on each, and the innermost is the `call` that loaded Impure. The
-instruction is `call esi`, so it names no target — but `LoadLibraryA` is `stdcall`, so its
-argument is still one word above that return address, and the three conditions together (a return
-address inside a game-folder module whose file carries TADR's marker, a `call` in front of it, and
-an argument naming Impure's own file) are not what a coincidence satisfies. What it has to solve:
-TADR's `DllMain` has an SEH frame registered by then, which has to be unwound rather than skipped,
-and its own globals are half-constructed. What it does **not** have to solve, measured: the C
-runtime is already initialised, since the PE entry point is the CRT's start-up and it calls
-`DllMain` after itself.
+**How the moment is identified.** The return address into TADR is on the stack. MEASURED on all
+four setups, the stack carries exactly **three** frames into the TADR module, at the same three
+offsets on each, and the innermost is the `call` that loaded Impure. The instruction is `call esi`,
+so it names no target — but `LoadLibraryA` is `stdcall`, so its argument is still one word above
+that return address, and three conditions together settle it: a return address inside a
+game-folder module whose **file** carries TADR's marker, a `call` in front of it, and an argument
+naming Impure's own file. A coincidence does not satisfy all three.
 
-**TADR writes nothing after its own start-up.** MEASURED 2026-09-27 on `392+tadr-dev` and
-`escalation`, Wine: the same comparison run 27 times a launch — in Impure's `DllMain`, at the
-first `DirectDraw` call, and then every two seconds to `t+50s` — and the set of places leading
-into TADR is **identical at every sample**, not merely the same size (15 sites on `392+tadr-dev`,
-10 on `escalation`, compared as a set). The exe's code is byte-identical to its file in Impure's
-`DllMain`: **0 changed runs**, the only TADR finding being the `TDRAW`/`TAESC` import slot the
-loader bound. The total of changed runs does grow from the first `DirectDraw` call to `t+2s` (407
-to 436, and 371 to 407) — those are Impure's own detours arming at first use; TADR's count does not
-move.
+**How the rest of that `DllMain` is skipped: through TADR's own code.** Its `DllMain` opens `cmp
+[ebp+0xC],1 / jne <return>`, so the branch it takes for any reason but `DLL_PROCESS_ATTACH` is a
+path that returns without doing anything — its own epilogue, its own SEH unregistration, its own
+return value. Resuming there from the return address needs no unwind of ours, and the frame is
+intact because the `LoadLibrary` call is in `DllMain`'s own body. Finding that branch means
+decoding a third-party `DllMain`, which is pattern matching and held in both builds read so far, of
+nine.
 
-What that bounds, and what it does not. The samples say TADR's footprint is **complete by the
-first `DirectDraw` call and never grows after it**, over a shell and a battleroom. They do not
-separate the window between the exe's entry point and that call, which is where the recorder's
-entry-point splice runs — a revert at the entry point removes the splice before it runs, so the
-question that matters is only whether something *else* writes later, and nothing does. Not
-covered: a **network game**, where the recorder's other way in (a DirectPlay export) installs
-eighteen more sites; the battle stage did not load in this measurement, since neutralising the
-refusal leaves the engine with TADR's writes over Impure's fix sites.
+**The fail-safe is what makes that acceptable.** If any condition fails to verify — the return
+address, the argument, the branch — **nothing is written and the launch refuses exactly as it does
+today** (part 3). No build can end up worse than it already is, and the suite is what says which
+builds are covered.
 
-So repair at the entry point is not an argument about timing, and both shapes stay open.
-Prevention remains the better of the two on its merits: nothing to put back, and TADR's one thread
-never starts.
+**The one slot left behind.** After this, `tdraw`'s exports must never be called, and the exe's
+imports from it are small enough to name: the 3.9.02 exe imports **one** export from `TDRAW`,
+`DirectDrawCreate` (ordinal 5), which is the export Impure *is*; **three** ordinals (1, 2, 4) from
+`TPLAYX`, the same three DirectPlay ordinals retail imports from `DPLAYX`, which **1c already
+redirects on these routes** (measured: 18 places into TADR become 15); and nine winmm names
+(`waveOutGetVolume`, `auxSetVolume`, `PlaySoundA`, `mciSendStringA`, …) from `TMUSI`, which carries
+no TADR marker, is a winmm wrapper of that distribution, and is left alone with its own start-up.
+Escalation is the same shape (`TAESC`, `EPLAYX`, `EMUSI`). So 1d redirects one import slot and
+reuses 1c for the other three.
 
-**What TADR rewrites of Impure's own work on these routes**, measured the same day: **15 of the
-159** fail-closed sites a `LIMITS=stock` build installs — so on this route the safety net is what
-would stop the launch even once part 3 stops refusing `0x0040EAD6`. Part 3 alone does not make
-these setups playable; part 2 is what does.
+**What a player on these routes gains and loses.** Every 3.9.02 feature — the unit limit, the
+weapon IDs, the megamap, the recorder — comes from `tdraw.dll` and `tplayx.dll` at run time, not
+from the exe, so stopping TADR's code takes them away and Impure's own raised limits
+([TADR port A](../tadr-port/limits-evidence.md)) stand in their place. The exe's own bytes stay, which
+is the rule. The recorder is not replaced: that is its own project ([Open](#open)).
 
-**Part 1c already works here.** With no lever set, the three `TPLAYX`/`EPLAYX` DirectPlay import
-slots of the exe are pointed at Impure's forwarders before the scan sees them: 18 places into TADR
-become 15. The recorder's six entry-point sites and `tdraw`'s own remain, which is part 2's work.
+**Still open in 1d**: TADR's `DllMain` decoded on the seven builds not yet read; and a network game
+on these routes, which no measurement has covered.
 
-### Part 3 — sites a mod's exe changes belong to the mod
+### Part 2 — sites a mod's exe file changes belong to the mod
 
 Impure's fail-closed table compares with stock 3.1 today and refuses Escalation's exe at
 `0x40EAD6`. It will compare with the exe file on disk instead: a site the file itself changes is
 the mod's, and Impure leaves it — or refuses, where another of its patches depends on the stock
 bytes there.
 
-### Part 4 — the reference image, and the safety net behind it
+### Part 3 — the reference image, and the safety net behind it
 
 At the first `DirectDraw` call — after every DLL's start-up and the exe's entry point, before the
 first frame — Impure makes two comparisons, and either stops the game with a box naming what it
@@ -350,12 +359,17 @@ Both refuse through `tagpu_refuse` — the report, `log\startup-failure.txt`, th
 
 | landing | parts | setups it moves to the goal |
 |---|---|---|
-| **T1** — landed 2026-09-26 | 4 (the safety net), then 1a | none on its own terms: it kept `tdraw.dll` out of `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0` and `prota-4.8`, but their recorder still ran, which the suite's goal did not check until T1b |
+| **T1** — landed 2026-09-26 | 3 (the safety net), then 1a | none on its own terms: it kept `tdraw.dll` out of `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0` and `prota-4.8`, but their recorder still ran, which the suite's goal did not check until T1b |
 | **T1b** | 1c | none on its own: it keeps the recorder out of the game's DirectPlay, which is what it was measured to do, and does not stop the recorder, which takes the entry point instead. It is what makes T1c safe, since a recorder that cannot initialise must never be called |
-| **T1c** — landed 2026-09-27 | 1b, 4 | `retail+tadr1`, `retail+tadr-files`, `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8`: no TADR code runs in them, alone or in a network game, read out of the running process on every peer, and a launch where any does refuses to start |
-| **T2** | 3 | none alone; Escalation's exe stops being refused at `0x40EAD6` |
-| **T3** | 2 | `392+tadr-dev`, `392+tadr-2026.8.6`, `escalation`, `escalation+tadr-dev` |
-| **T4** | distribution | `gammata-ota`: its tdraw loads only `ddraw_custom.dll`, so Impure is installed under that name too |
+| **T1c** — landed 2026-09-27 | 1b, 3 | `retail+tadr1`, `retail+tadr-files`, `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8`: no TADR code runs in them, alone or in a network game, read out of the running process on every peer, and a launch where any does refuses to start |
+| **T2** — the next one | 1d **and** part 2, in ONE landing | `392+tadr-dev`, `392+tadr-2026.8.6`, `escalation`, `escalation+tadr-dev` |
+| **T3** | distribution | `gammata-ota`: its tdraw loads only `ddraw_custom.dll`, so Impure is installed under that name too |
+
+**T2 is one landing and not two** because part 2 alone changes nothing a player sees: stop refusing
+the exe file's own path budget and these four launches still refuse, over the 15 of 159 fail-closed
+sites TADR rewrites, one step later. The landing's claim is the one that matters — those four
+setups meet their goal, read out of the running process — so both parts are in it, with one review
+and one suite run.
 
 ## Open
 
@@ -368,7 +382,7 @@ Both refuse through `tagpu_refuse` — the report, `log\startup-failure.txt`, th
   TA Zero.
 - **Multiplayer with players who still run TADR** is not a goal: the mods' battlerooms check the
   version bytes, not the DLLs, so such a game may start and then disagree.
-- **What the reference image cannot see** (part 4): a hook installed by writing a function pointer
+- **What the reference image cannot see** (part 3): a hook installed by writing a function pointer
   into a data section other than an import slot, one whose target is computed at run time, a TADR
   build carrying neither marker string, and anything written after the first `DirectDraw` call. The
   first three are why part 1 stops TADR's code rather than trusting the check; the fourth is what

@@ -10485,7 +10485,7 @@ static void lim_hex(char* out, const unsigned char* b, int n, int max)
     if (n > max) strcat(out, " ...");
 }
 
-/* THE SAFETY NET (research/notes/compat/takeover.md, part 4): every site of the table re-read
+/* THE SAFETY NET (research/notes/compat/takeover.md, part 3): every site of the table re-read
    at the first DirectDraw call, which comes after every DLL's DllMain -- the exe's entry point
    runs after all of them, and its WinMain makes the call. A site that no longer holds our
    bytes was rewritten by a patcher that started after Impure (a pre-2026 TADR's limit crack
