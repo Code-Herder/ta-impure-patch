@@ -286,12 +286,31 @@ prints the override string.
    dplayx waits for a name server that never appears, and `Open` **hangs with no
    error at all**. The trace tell is `fixme:dplaysvr:wmain`. The full string is
    `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n`.
-2. **`dplaysvr.exe` outlives the game and owns UDP 47624 across prefixes.** A
-   stale one from an earlier run makes the next host fail
+2. **`dplaysvr.exe` outlives the game and owns its port across prefixes.** A
+   stale one from an earlier run makes the next host on that port fail
    `Open(DPOPEN_CREATE) = DPERR_GENERIC` — which looks like a prefix problem and
-   isn't. `pkill -x dplaysvr.exe` first. This is precisely why TAF calls
+   isn't. End that one holder first. This is precisely why TAF calls
    `TotalAnnihilationService.freePort47624`; that behaviour now makes sense
    rather than looking like superstition.
+3. **The port is code, not a setting, and it can be moved per prefix.** 47624 is seven
+   immediates, each already in network byte order (`0x08BA` = `htons(47624)`), DISASSEMBLED
+   from the files `dpinstall.sh` installs:
+
+   | file | VA | instruction |
+   |---|---|---|
+   | `dplaysvr.exe` | `0x010022FD`, `0x010023E2` | `push 8BAh` |
+   | `dplaysvr.exe` | `0x01002DE8` | `mov ebx, 8BAh` |
+   | `dpwsockx.dll` | `0x5DF08300` | `mov word [ebp-12h], 8BAh` |
+   | `dpwsockx.dll` | `0x5DF08D8C` | `push 8BAh` |
+   | `dpwsockx.dll` | `0x5DF091C5`, `0x5DF0921D` | `mov word [edi+0Ch]` / `[edi+2], 8BAh` |
+
+   The only other `08 BA` pair in the eight files is the tail of a `call rel32` in `dplayx.dll`.
+   `tools/dpport.py` writes another port into all seven, refusing any file that is not
+   byte-identical to these outside them. The name server listens there and the joiner's
+   transport enumerates there, so peers carrying the same port find each other on
+   `127.0.0.1` and on no other game's server: MEASURED 2026-09-27, `b1h`/`b1j` on 47700 walked
+   into a live game while the compat suite's own game hosted on 47624, and that one passed too.
+   The game's data ports did not collide either.
 
 Where the files came from is its own small saga — see the routes below. They live
 outside the repo at `~/.local/share/ta-directplay/` (Microsoft redistributables,
@@ -445,9 +464,11 @@ November 2024 and no MR for host support was found.
   native DirectPlay into that instance's prefix and appends
   `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n` to
   the hard-coded `ddraw=n,b`; it is sticky per instance, so a single-player
-  instance keeps wine's builtin. `--free-dplay-port` kills a stale `dplaysvr.exe`
-  first and belongs on the **hosting** launch only — the port is owned
-  machine-wide, so doing it while a peer hosts takes that game down too.
+  instance keeps wine's builtin. `--dplay-port N` (sticky) moves that prefix's
+  DirectPlay to port N after every reinstall — one port per game, the same on all
+  its peers, and games on different ports run at once. `--free-dplay-port` ends a
+  stale `dplaysvr.exe` holding the instance's own port, on the **hosting** launch
+  only; servers on other ports are other games and are left alone.
 - **`dpinstall.sh` must not overwrite in place.** tacli clones prefixes with
   `cp -al`, so every instance shares one inode per `system32` file with the
   template; a plain `cp` would have written Microsoft's `dplayx` through the

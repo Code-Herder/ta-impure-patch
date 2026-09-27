@@ -83,8 +83,8 @@ front of wine's builtin (which implements the client half only and cannot create
 go blaming the game, and `research/notes/networking-lobbies.md` has the protocol.
 
 ```bash
-tools/tacli launch h1 --dplay --free-dplay-port     # the host
-tools/tacli launch j1 --dplay                       # a joiner, as many as nine
+tools/tacli launch h1 --dplay --dplay-port 47731 --free-dplay-port   # the host
+tools/tacli launch j1 --dplay --dplay-port 47731                     # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
 tools/mp_leave.sh h1                                 # surrender -> main menu; a host's ends it for all
@@ -92,11 +92,20 @@ tools/mp_leave.sh h1                                 # surrender -> main menu; a
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin.
-- `--free-dplay-port` kills a stale `dplaysvr.exe`. DirectPlay's name server outlives the game that
-  started it and owns UDP 47624 **machine-wide**, so a leftover one makes the next host fail
+- **One DirectPlay port per game, several games at once.** DirectPlay's name server
+  (`dplaysvr.exe`) binds its port for the whole machine, and the TCP/IP transport sends every
+  session enumeration to it, so two games on one port collide however separate their prefixes
+  are — joiners stuck on SELGAME with JOINGAME grey, enumerating the other game's server.
+  `--dplay-port N` patches N into the prefix's copies of both files (`tools/dpport.py`: seven
+  immediates, refused on any build it does not know) after every `--dplay` reinstall. Give all
+  peers of one game the same N and every game a different one; the joiner's address stays
+  `127.0.0.1`. `tacompat.py` takes 47625 upward for its own games, so pick from 47700 up by hand,
+  and check `ss -tulnp 'sport = :N'` is empty first. Default and `--dplay-port 47624`: stock.
+- `--free-dplay-port` kills a stale `dplaysvr.exe` holding the instance's own port. The server
+  outlives the game that started it, so a leftover one makes the next host on that port fail
   `Open(DPOPEN_CREATE) = DPERR_GENERIC`, which looks exactly like a broken prefix. Put it on the
-  **hosting** launch only: doing it while a peer is hosting takes that game down too. Never
-  `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.
+  **hosting** launch only: a peer's game on the same port is that host's. Servers on other ports
+  are left alone, and never `pkill -x dplaysvr.exe` by hand — that takes every game down.
 - After running `dptest` against a prefix, **let it settle** before launching TA there: a wineserver
   still shutting down produced a launch with no process and no `ErrorLog.txt`.
 - **`START` ungreys only when every player is ready, the host included.** Each client lists

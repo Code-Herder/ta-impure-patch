@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import talog  # noqa: E402  the DLL's logs across their rotations (tools/talog.py)
 import taremote  # noqa: E402  remote instances: PowerShell over SSH (tools/taremote.py)
+import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 
 # --------------------------------------------------------------------------- paths
 
@@ -865,20 +866,33 @@ def install_dplay(inst: Instance) -> str:
     return (r.stdout.strip().splitlines() or ["installed native DirectPlay"])[0]
 
 
-def free_dplay_port() -> int:
-    """Kill any stray dplaysvr.exe.
+def dplay_port_holders(port: int) -> list:
+    """PIDs of every process listening on `port`, UDP or TCP."""
+    r = subprocess.run(["ss", "-tulnpH", f"sport = :{port}"],
+                       capture_output=True, text=True)
+    return sorted({int(p) for p in re.findall(r"pid=(\d+)", r.stdout)})
 
-    DirectPlay's name server outlives the game that started it and owns UDP 47624 for
-    the whole machine, not per prefix — so one left over from an earlier run makes the
-    next host fail Open(DPOPEN_CREATE) with DPERR_GENERIC, which looks exactly like a
-    broken prefix and is not. Only ever do this on a hosting launch: doing it while a
-    peer is hosting takes that game down too.
+
+def free_dplay_port(port: int) -> int:
+    """Kill the dplaysvr.exe holding THIS instance's DirectPlay port.
+
+    The name server outlives the game that started it and keeps its port, so one left
+    over from an earlier run makes the next host on that port fail Open(DPOPEN_CREATE)
+    with DPERR_GENERIC, which looks exactly like a broken prefix and is not. Only the
+    holder of `port` goes: a game hosting on another port (`--dplay-port`) is another
+    test's, and is left alone. On a HOSTING launch only -- a peer's own game on the
+    same port is this one's host.
     """
-    before = subprocess.run(["pgrep", "-x", "dplaysvr.exe"],
-                            capture_output=True, text=True).stdout.split()
-    if before:
-        subprocess.run(["pkill", "-x", "dplaysvr.exe"], capture_output=True)
-    return len(before)
+    killed = 0
+    for pid in dplay_port_holders(port):
+        try:
+            if Path(f"/proc/{pid}/comm").read_text().strip() != "dplaysvr.exe":
+                continue
+            os.kill(pid, 15)
+            killed += 1
+        except OSError:
+            continue
+    return killed
 
 
 def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
@@ -1768,12 +1782,25 @@ def _launch(args) -> dict:
     if args.dplay is not None:
         meta["dplay"] = args.dplay
         inst.save_meta(meta)
-    dplay_note = install_dplay(inst) if meta.get("dplay") else None
+    if getattr(args, "dplay_port", None) is not None:
+        meta["dplay_port"] = args.dplay_port
+        inst.save_meta(meta)
+    port = meta.get("dplay_port") or dpport.STOCK
+    dplay_note = None
+    if meta.get("dplay"):
+        # AFTER the install, which puts the stock files back on every launch: the port is
+        # the instance's, re-applied each time like the install itself.
+        dplay_note = install_dplay(inst)
+        try:
+            dpport.set_port(inst.prefix, port)
+        except SystemExit as e:
+            die(str(e))
+        dplay_note += f"; DirectPlay port {port}"
     if args.free_dplay_port:
-        killed = free_dplay_port()
+        killed = free_dplay_port(port)
         dplay_note = ((dplay_note + "; ") if dplay_note else "") + (
-            f"killed {killed} stale dplaysvr.exe (UDP 47624 freed)" if killed
-            else "no stale dplaysvr.exe to kill")
+            f"killed {killed} stale dplaysvr.exe (port {port} freed)" if killed
+            else f"no stale dplaysvr.exe on port {port}")
     if not args.keep_dll:
         deploy_dll(inst)
         link_restorer_files(inst)
@@ -1909,6 +1936,7 @@ def _launch(args) -> dict:
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
             "window_title": meta["window_title"],
             "dplay": bool(meta.get("dplay")), "dplay_note": dplay_note,
+            "dplay_port": (meta.get("dplay_port") or dpport.STOCK) if meta.get("dplay") else None,
             "owndraw_note": owndraw_note, "fxown_note": fxown_note,
             "featown_note": featown_note, "terrown_note": terrown_note,
             "markown_note": markown_note, "defaults": bool(meta.get("defaults")),
@@ -5079,7 +5107,7 @@ def cmd_scenario_load(args):
         vsync=args.vsync,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
-        dplay=None, free_dplay_port=False, title=None,
+        dplay=None, dplay_port=None, free_dplay_port=False, title=None,
         keep_dll=args.keep_dll, defaults=args.defaults, los=los, mapping=mapping, arg=[],
         timeout=args.launch_timeout, no_restore_pointer=False))
     if launched.get("already_running"):
@@ -5307,6 +5335,7 @@ REMOTE_VERBS = ("launch", "stop", "rm", "arm", "keys", "ui", "eye", "scenario lo
 REMOTE_LOCAL_ONLY = (("--window", "window", None), ("--display", "display", None),
                      ("--slot", "slot", None), ("--dplay/--no-dplay", "dplay", None),
                      ("--intro", "intro", False), ("--free-dplay-port", "free_dplay_port", False),
+                     ("--dplay-port", "dplay_port", None),
                      ("--shipped", "shipped", False),
                      ("--no-restore-pointer", "no_restore_pointer", False))
 
@@ -5824,10 +5853,14 @@ def build_parser():
                         "host a session without it)")
     l.add_argument("--no-dplay", dest="dplay", action="store_false",
                    help="back to wine's builtin DirectPlay")
+    l.add_argument("--dplay-port", type=int, default=None, metavar="PORT",
+                   help="multiplayer: DirectPlay's port for this instance (sticky; default "
+                        "47624). Every peer of one game carries the same port, and games on "
+                        "different ports run at once without seeing each other")
     l.add_argument("--free-dplay-port", action="store_true",
-                   help="kill any stale dplaysvr.exe first — do this on the HOSTING "
-                        "launch only; it owns UDP 47624 machine-wide and killing it "
-                        "while a peer hosts takes that game down")
+                   help="kill a stale dplaysvr.exe holding this instance's DirectPlay port "
+                        "first — on the HOSTING launch only; games on other ports are left "
+                        "alone")
     l.add_argument("--defaults", dest="defaults", action="store_true", default=None,
                    help="the shipped configuration: every play pass on with no arm file "
                         "(the DLL's play defaults, tagpu_opt.c), a .off file turning one "

@@ -4,8 +4,9 @@
 #   ./mp_lobby.sh [--map <map>] <host-instance> <join-instance> [<join-instance>...]
 #
 # Two to ten players: the host and one to nine joiners, which join in the order
-# given. Every instance must already be running, launched with --dplay (the host
-# with --free-dplay-port as well); wine's builtin DirectPlay cannot create a
+# given. Every instance must already be running, launched with --dplay and one
+# --dplay-port shared by all of them (the host with --free-dplay-port as well), so
+# games on other ports run beside this one; wine's builtin DirectPlay cannot create a
 # session at all, so without native DirectPlay this script stalls on SELGAME. See
 # research/notes/networking-lobbies.md. A map seats only the player counts its
 # .ota lists (Town & Country takes ten, Two Continents two).
@@ -35,6 +36,21 @@ TACLI="$(cd "$(dirname "$0")" && pwd)/tacli"
 PROVIDER='Internet TCP/IP Connection For DirectPlay'
 
 ui() { "$TACLI" ui "$@"; }
+
+# Every peer must carry the SAME DirectPlay port (tacli launch --dplay-port): the host's name
+# server listens on its own and a joiner enumerates on its own, so a joiner on another port
+# sits on SELGAME with JOINGAME grey, looking exactly like a broken prefix.
+"$TACLI" ls --json | python3 -c '
+import json, sys
+names = sys.argv[1:]
+meta = {m["name"]: m for m in json.load(sys.stdin)}
+ports = {n: (meta.get(n) or {}).get("dplay_port") or 47624 for n in names}
+if len(set(ports.values())) > 1:
+    sys.exit("mp_lobby: the peers are on different DirectPlay ports: "
+             + ", ".join(f"{n} {p}" for n, p in ports.items())
+             + " (tacli launch <inst> --dplay-port N, the same N on every peer)")
+print(f"DirectPlay port {next(iter(ports.values()))} on every peer")
+' "$HOST" "${JOINS[@]}"
 
 # click-then-fill (note 2), and skip when the field already reads what we want:
 # TA remembers the address and the nickname between runs, and `fill` clears with

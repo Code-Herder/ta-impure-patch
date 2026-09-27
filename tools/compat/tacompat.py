@@ -22,7 +22,7 @@ run and read what each party logs. On Wine, a setup that reaches the main menu t
 starts a skirmish and fights 200 against 200, because two patchers that both start can
 still collide where the limits are used: `battle-crash` is a crash after the menu. Where
 Impure runs, a second instance of the same folder then joins it in a two-player network game
-over Windows' DirectPlay, one such game at a time (the port is the machine's). Every run, and
+over Windows' DirectPlay, several at once, each on a DirectPlay port of its own. Every run, and
 every peer, is read for TADR's code having run two ways: from the game folder (tadr_evidence)
 and from the running process (exe_hooks) -- the exe's own code against TotalA.exe on disk, which
 is the only thing that shows a recorder started off the exe's entry point.
@@ -40,6 +40,7 @@ import hashlib
 import json
 import ntpath
 import os
+import queue
 import re
 import shutil
 import struct
@@ -56,6 +57,7 @@ HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
 sys.path.insert(0, str(TREE / "tools"))
 import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
+import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
@@ -127,7 +129,9 @@ RECORDER_LOG = re.compile(r"Demo Recorder Log", re.I)
 RECORDER_CALLED = re.compile(r"^\s*DLL\.DirectPlay", re.M)
 # The two-player stage: small halves applied one per peer, each as that peer's own units.
 MP_SCENARIOS = ("compat-mp-host", "compat-mp-join")
-MP_PORT = 47624                         # DirectPlay's name server: one per machine
+# DirectPlay's name server binds its port for the whole machine, so every network game of a
+# run gets a port of its own from these, patched into both peers' prefixes (tools/dpport.py).
+MP_PORT_BASE = dpport.STOCK + 1
 # An archive the game reads and never writes is linked into a Wine folder, not copied.
 LINKED = {".ufo", ".gp3", ".hpi", ".ccx", ".ufo2"}
 
@@ -1214,9 +1218,9 @@ def mp_eligible(setup) -> bool:
             and not setup.get("no_network_game"))
 
 
-def dplay_holders() -> list:
-    """(pid, WINEPREFIX) of every process listening on DirectPlay's port."""
-    r = subprocess.run(["ss", "-lunpH", f"sport = :{MP_PORT}"], capture_output=True, text=True,
+def dplay_holders(port) -> list:
+    """(pid, WINEPREFIX) of every process listening on `port`, UDP or TCP."""
+    r = subprocess.run(["ss", "-tulnpH", f"sport = :{port}"], capture_output=True, text=True,
                        timeout=10)
     out = []
     for pid in sorted(set(re.findall(r"pid=(\d+)", r.stdout))):
@@ -1229,8 +1233,8 @@ def dplay_holders() -> list:
     return out
 
 
-def free_dplay_port(mine: set, wait=300) -> "str | None":
-    """Make the port free for our host, or say who holds it. A holder in a prefix THIS run
+def free_dplay_port(port, mine: set, wait=300) -> "str | None":
+    """Make `port` free for our host, or say who holds it. A holder in a prefix THIS run
     created is ours and stale, and its wineserver is ended; anything else is someone else's
     game, waited for and never touched. The instance names are fixed, so another worktree's
     session runs prefixes named exactly like ours and only the set we built may be ended
@@ -1238,7 +1242,7 @@ def free_dplay_port(mine: set, wait=300) -> "str | None":
     that will not go is a failure to report, not a loop to sit in."""
     deadline = time.time() + wait
     while True:
-        holders = dplay_holders()
+        holders = dplay_holders(port)
         if not holders:
             return None
         ours = [pf for _, pf in holders if pf and str(Path(pf)) in mine]
@@ -1353,27 +1357,52 @@ def wine_lobby(host, join):
             raise Lobby(f"{inst}: the game never came alive: {(r.stderr or r.stdout).strip()[:200]}")
 
 
-def run_wine_mp(setup, dll, seconds, taken, mine) -> dict:
+CREATES = threading.Lock()       # `tacli create` writes the hive every prefix shares: prepare_wine
+
+
+def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     """Two players, the setup's folder on each, hosted and joined through the game's own
     battle room over Windows' DirectPlay, a small fight between them, then watched. Every
-    peer's folder is read for TADR's evidence, and every peer's process for its code. One
-    game at a time: see free_dplay_port.
+    peer's folder is read for TADR's evidence, and every peer's process for its code.
 
-    The three displays are taken HERE, not when this was queued: a number reserved while the
+    A PORT OF ITS OWN. The game takes a DirectPlay port from `ports` and puts it into both
+    peers' prefixes, so its name server and its joiner's enumeration meet on that port and on
+    no other game's: as many games run at once as `ports` holds, and the port goes back when
+    the game is over. The host peer's single-player run has ended by now (this is queued from
+    its result), and prepare_wine has just installed the joiner's stock DirectPlay, so the
+    patch lands on files no process of the game has open yet.
+
+    The displays are taken HERE, not when this was queued: a number reserved while the
     single-player runs were still going is one no Xvfb held for minutes, and free_display
     counts a stale lock as a display in use."""
     create_display, host_display, join_display = (free_display(taken) for _ in range(3))
     xv = start_xvfb(create_display)
     try:
-        join = prepare_wine(setup, dll, create_display, suffix="-j")
+        with CREATES:
+            join = prepare_wine(setup, dll, create_display, suffix="-j")
     finally:
         stop_xvfb(xv)
     mine.add(str(join["prefix"]))
-    held = free_dplay_port(mine)
-    if held:
-        return {"ok": False, "why": f"could not run: DirectPlay's port {MP_PORT} is held by {held}",
-                "evidence": []}
-    peers = {"host": setup["_inst"], "join": join}
+    port = ports.get()
+    try:
+        for inst in (setup["_inst"], join):
+            dpport.set_port(inst["prefix"], port)
+        held = free_dplay_port(port, mine)
+        if held:
+            return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
+                    "evidence": [], "port": port}
+        out = play_mp(setup["_inst"], join, seconds, host_display, join_display)
+        out["port"] = port
+        return out
+    except SystemExit as e:                     # dpport refused the files: say so, as a result
+        return {"ok": False, "why": f"could not run: {e}", "evidence": [], "port": port}
+    finally:
+        ports.put(port)
+
+
+def play_mp(host, join, seconds, host_display, join_display) -> dict:
+    """The game itself: both peers started, walked into one game, fought, watched, read."""
+    peers = {"host": host, "join": join}
     t0 = time.time()
     games = {}
     boxes, seen, why = [], set(), None
@@ -1496,10 +1525,14 @@ def cmd_wine(args):
     print(f"running {len(ready)} setups, {args.jobs} at a time, {args.watch} s each"
           + (f"; a two-player game of {args.mp} s for each that starts" if args.mp else ""))
     results, mp_futs = [], {}
-    # One network game at a time (DirectPlay's port is the machine's), each queued the
-    # moment its setup's single-player run shows Impure running, beside the other runs.
+    # Each network game is queued the moment its setup's single-player run shows Impure
+    # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each.
+    mp_jobs = max(1, args.mp_jobs)
+    ports = queue.Queue()
+    for k in range(mp_jobs):
+        ports.put(MP_PORT_BASE + k)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=1) as mp_pool:
+            concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
         futs = {pool.submit(run_wine, s, dll, args.watch, displays[s["name"]], args.screens,
                             args.battle): s
                 for s in ready}
@@ -1513,7 +1546,7 @@ def cmd_wine(args):
                 o["mp_skip"] = s["no_network_game"]
             if args.mp and mp_eligible(s) and o["outcome"] == "impure-active" and o.get("menu"):
                 mp_futs[s["name"]] = (s, o, mp_pool.submit(run_wine_mp, s, dll, args.mp,
-                                                           taken, mine))
+                                                           taken, mine, ports))
         for name, (s, o, f) in mp_futs.items():
             try:
                 m = f.result()
@@ -1899,8 +1932,10 @@ def main():
                     help="where the menu is reached, also fight a 200v200 skirmish this long "
                          "(0: start-up only)")
     wi.add_argument("--mp", type=int, default=30, metavar="SECONDS",
-                    help="where Impure runs, also play a two-player network game this long, "
-                         "one game at a time (0: none)")
+                    help="where Impure runs, also play a two-player network game this long "
+                         "(0: none)")
+    wi.add_argument("--mp-jobs", type=int, default=4, metavar="N",
+                    help="network games at once, each on a DirectPlay port of its own")
     wi.set_defaults(fn=cmd_wine)
     wn = sub.add_parser("windows", help="run the setups on a Windows desktop, one at a time")
     wn.add_argument("setups", nargs="*")

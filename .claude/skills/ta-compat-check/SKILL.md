@@ -29,6 +29,7 @@ tools/compat/tacompat.py wine                        # every setup at once, batt
 tools/compat/tacompat.py wine mayhem-11.3.0 prota-4.8   # a few, by name
 tools/compat/tacompat.py wine --battle 0 --mp 0      # start-up only
 tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game
+tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a time (default 4)
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py clean                       # remove the compat-* Wine instances
@@ -53,8 +54,10 @@ tools/compat/tacompat.py selftest                    # the hook decode, 11 cases
   single-player run shows Impure running also plays a two-player game — a second instance of the
   same folder (`compat-<setup>-j`), hosted and joined through the game's own battle room over
   Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
-  `compat-mp-join.json`. One game at a time, queued beside the single-player runs: DirectPlay's
-  port is the machine's. The report's column reads `mp ok`, `mp FAILED` or `-` (not played).
+  `compat-mp-join.json`. Queued beside the single-player runs, `--mp-jobs` (4) at once, each
+  on a DirectPlay port of its own from 47625 up (`tools/dpport.py`): the name server's port is
+  machine-wide, so one port per game is what keeps them apart. The report's column reads
+  `mp ok`, `mp FAILED`, `no mp` or `-` (not played).
 - **Whether TADR ran** (`tadr_ran`), on every peer, from two kinds of evidence:
   - **the game folder**: `tdrawlog.txt` at all (tdraw started), or `log\TA Demo Recorder Log
     -<date>.txt` at all — the recorder creates one only when it starts from inside a DirectPlay

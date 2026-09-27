@@ -463,16 +463,16 @@ under zoom and `wheel.off`: `references/levers.md` §"Camera, viewport and fog".
 ## Multiplayer: two to ten instances in one game
 
 ```bash
-tools/tacli launch h1 --dplay --free-dplay-port     # the host
-tools/tacli launch j1 --dplay                       # a joiner, as many as nine
+tools/tacli launch h1 --dplay --dplay-port 47631 --free-dplay-port   # the host
+tools/tacli launch j1 --dplay --dplay-port 47631                     # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 ```
 
-`--dplay` puts Microsoft's DirectPlay into that instance's prefix (wine's builtin cannot create
-a session); `--free-dplay-port` kills a stale `dplaysvr.exe`, which owns UDP 47624 machine-wide —
-on the **hosting** launch only, and never by hand while another agent's game is hosting.
-`scenario apply` on a peer creates units that peer owns, and TA replicates them. The lobby facts,
-the commander-death trap and how to compare peers: `references/modules.md`.
+`--dplay` installs Microsoft's DirectPlay (wine's cannot host). **Each game gets its own
+`--dplay-port`, the same on all its peers**: the name server binds its port machine-wide, so
+games on one port collide and games on different ports run side by side (`tools/dpport.py`;
+default 47624, sticky). `--free-dplay-port` clears a stale `dplaysvr.exe` on *that* port only,
+on the hosting launch. Lobby facts, commander death, comparing peers: `references/modules.md`.
 
 ## Maintaining this skill
 

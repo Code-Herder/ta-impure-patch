@@ -25,10 +25,13 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's
   own battle room over Windows' DirectPlay (the walk of `tools/mp_lobby.sh`), each side applying
   its half of a small fight (`scenarios/compat-mp-host.json`, `compat-mp-join.json`), then
-  watched on both. One network game at a time, queued as the single-player results come in:
-  DirectPlay's name server owns UDP 47624 for the whole machine. A holder of that port in one
-  of the suite's own prefixes is stale and ended; any other is someone else's game, waited for
-  five minutes and never touched, and then the stage fails as not run. "Its own" is the set of
+  watched on both. Each game is queued as its single-player result comes in, and `--mp-jobs`
+  (4 by default) play at once, **each on a DirectPlay port of its own**: the name server binds
+  its port for the whole machine, so the suite patches a port from 47625 upward into both peers'
+  prefixes (`tools/dpport.py`, the same patch `tacli launch --dplay-port` makes) and the two
+  meet there and on no other game's. A holder of a game's port in one of the suite's own
+  prefixes is stale and ended; any other is someone else's game, waited for five minutes and
+  never touched, and then that game fails as not run. "Its own" is the set of
   prefixes **this run** created, not every `compat-` name: the instance names are fixed, so a
   session in another worktree runs prefixes named exactly like ours
   (`parallel-mp-runs-share-dplay-port`). A setup whose battle room this walk cannot reach a game
