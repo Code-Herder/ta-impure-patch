@@ -123,6 +123,9 @@ faces of `0x45A2EC` are left there.
   no valid char fills `o`. Identical to stock for all 126 retail structures.
 - **Resurrection: a time-boxed measurement, else parked.** If the failure branch fires, the unit is
   finalised as the success path does, touching no grid cell.
+- **A build placement disarmed with its builder (B9, added 2026-09-26 from B6's side
+  measurement):** when the tracked unit ends, a placement armed from its menu is cancelled the
+  way the engine cancels one, silently. Local.
 - **TA's repair rate is the game's rule, not a B defect.** Stock clamps each repairer's HP and
   energy per call to *at most* 1 (`0x41BD87..0x41BDA3`, `min` where the formula reads as `max`).
   It is recorded, and a live check of the per-call rate rides along with a landing.
@@ -1272,16 +1275,16 @@ and where it differs from the plan below:
   from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
   three local fixes rest on the disassembly: none of their inputs is in stock content, and the
   `ShowRanges` cheat could not be typed under injected input.
-- **The side measurement: the tracked unit's death leaves the placement armed** (measured
+- **The side measurement: the tracked unit's death left the placement armed** (measured
   2026-09-26, after the landing, on main `8d033d1` with the play defaults, one run of
   `tools/b6-tracked-death.sh`). A CORCK with CORSOLAR pressed (`main+0x2CC3` = `0x0E`,
   `BuildUnitID` 246, tracked unit 2) died in an LLT's range. The engine then cleared the tracked
   unit and popped the build menu, but `0x2CC3` stayed `0x0E` and `0x2CC4` 246, and the placement
-  square and our build ghost kept drawing at the pointer. Left clicks were swallowed: one on the
-  map placed nothing, one on the CORAK did not select it, and no order reached any unit. So it is
-  a stale placement cursor, UI-local, with no wrong order; the ghost only follows the engine's
-  own square. Resetting the byte at `0x4995EF` is the fix if the owner wants one (the engine
-  map's "The tracked unit's death leaves the placement armed").
+  square and our build ghost kept drawing at the pointer. Both left clicks of the run landed on
+  blocked sites (trees; the CORAK's own cells) and were refused: nothing was placed, the CORAK was
+  not selected, and no order reached any unit. By disassembly a click on a clear site would have
+  handed the build to whatever is selected and ended the placement (`0x498F93..0x498FC0`). It
+  became B9, below.
 - **Not measured:** the engine's removal of a departed host during the load was not exercised: DirectPlay never reported the killed host
   (its seat still held its type and ID 115 s of game time later; the engine's sessions carry no
   `DPSESSION_KEEPALIVE` when `createnewgame` makes them; a lobbied one takes the lobby's flags),
@@ -1335,11 +1338,70 @@ and where it differs from the plan below:
   resurrections of 1×1 and multi-cell wrecks (B1's session) — measured: 0 failures in 847
   (B1's results above);
 - a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6) —
-  measured: the placement stays armed and the ghost draws, no order goes out (B6's results above);
+  measured: the placement stayed armed and the ghost drew (B6's results above), fixed as B9;
 - a departing host in a three-peer game (B5's session; the result goes to group E);
 - a cargo unit killed in a transport over land leaving its wreck in the air (B2's session; a
   floating wreck is raised as a visual residual);
 - the repair rate per call, ARMCOM against ARMCK on an ARMLLT (B1's session).
+
+**B9 — a build placement disarmed with its builder.** Added 2026-09-26 by the owner from B6's
+side measurement, built on its own branch, not landed. Local, both builds, silent at run time.
+
+*The defect (stock, UI).* A build button arms the placement: the order byte `main+0x2CC3` =
+`0x0E` and `BuildUnitID` `main+0x2CC4` (`0x41AB89`, `0x41AB9C`), from the menu of the tracked
+unit `main+0x37E9C`. When that unit ends, the frame check `0x4995C3..0x4995F1` drops the tracked
+unit and pops its menu, and nothing writes the byte. The placement square and our build ghost stay
+on the pointer. Every left press goes to the placement (`0x4993B6` → `0x498F70`): a blocked site
+refuses it, and a clear one hands the build to whatever is selected. Only a right-click, a key, or
+a click on a clear site ends it (`0x498FC0`).
+
+*The fix.* A `jmp` at the unit destructor's store of type 0, `0x486DC7`. When the byte is `0x0E`
+and the unit being freed is the tracked unit's slot, it makes the engine's own cancel writes:
+`0x2CC3` = 1 and `0x2CC6` bit 5 (the order kept while a modifier is held) cleared, as the
+right-click `0x499110`,
+the modifier's release `0x4992FA`, a key's case at `0x495F36` and the placement's own end
+`0x498FC0`
+all do. It also clears `BuildUnitID`, as the load's UI reset does (`0x491805`). It does not play
+the cancels' "STOP" sound, which answers the player's input. Every reader of `0x2CC4`, the
+engine's (`0x419686`, `0x4197DD`) and our packet's, is behind `0x2CC3 == 0x0E`. The disarm logs
+nothing; the one `enginefix:` line at install says ARMED or why it was skipped.
+
+*The invariant: a build placement is armed only while its tracked builder exists.* The proof, by
+disassembly, for every way the tracked unit can end:
+
+- **Death, self-destruct, the owner's defeat:** the unit dies and its slot is freed through the
+  destructor, whose store at `0x486DC7` is the only store of type 0 to a unit slot. The other
+  writers of `+0xA6` (`0x485ED2`, `0x486086`, `0x4862A2`) store a created unit's type.
+- **Given away, captured:** `UNITS_GiveUnit 0x488570`, reached from the capture at `0x4046C5`,
+  creates the unit anew for the receiver (`0x488700`) and kills the old one with 30 000 damage
+  (`0x4887D0`), so the old slot is freed through the same store.
+- **Loaded into a transport:** the unit keeps its slot. The builder still exists, so the
+  invariant holds and the placement is stock's.
+- **A game-state change:** a load resets the byte and the ID (`0x4917D0`, called at `0x497581`),
+  and no in-game code runs between levels.
+- **A slot freed and re-taken inside one frame:** covered by construction. The disarm happens at
+  the free, before any reuse; the frame check, which runs after up to five ticks, never sees such
+  a slot empty.
+
+The selection moving to another unit is not an end. The builder still exists, and what the
+placement does then is stock's.
+
+*Verification* (single player, private Xvfb, one script invocation per run):
+
+- `tools/b6-tracked-death.sh` on the fixed build (196 s): after the CORCK's death the byte read 1,
+  `BuildUnitID` 0 and the tracked unit 0. The ghost's cursor count stood at 2 683 across two
+  heartbeats, and the window picture has no square and no ghost. A left click on the CORAK made it
+  the tracked unit (3, `CORGEN.GUI`). Every verdict passed.
+- `tools/b9-placement-paths.sh` on the fixed build (129 s, the unchanged ends): a right-click
+  cancelled an armed placement (byte 1, the CORCK still tracked), and a left click on a clear site
+  placed a CORSOLAR (in the roster, and framed on the map) and ended it (byte 1). Both ends left
+  `BuildUnitID` at 246: the engine's cancels do not clear it, so B9 clearing it is the load's
+  reset, not the cancels', and harmless because every reader is behind the byte.
+- `B6_DLL=stocklimits tools/b6-tracked-death.sh` (234 s, `ddraw-stocklimits.dll`, the AI's slots
+  at 252–253): the same readings and verdicts, the ghost's count still at 2 760, and the picture
+  has no square and no ghost.
+- The previous build, the same script: the byte stayed `0x0E` and the ID 246 (B6's side
+  measurement above).
 
 ## Open questions
 

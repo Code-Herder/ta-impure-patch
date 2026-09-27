@@ -2,7 +2,8 @@
 # The tracked unit dies with a build order armed — one scripted run, no hand driving.
 #
 #   tools/b6-tracked-death.sh [out-dir]     (instance $B6_INSTANCE, default b6td, on the
-#                                            private Xvfb $B6_DISPLAY, default :142)
+#                                            private Xvfb $B6_DISPLAY, default :142;
+#                                            B6_DLL=stocklimits runs ddraw-stocklimits.dll)
 #
 # Launch scenarios/b6-tracked-death.json with the play defaults (the build ghost is one) ->
 # select the CORCK -> press CORSOLAR (main+0x2CC3 = 0x0E) -> order it into the ARM LLT's range
@@ -10,8 +11,9 @@
 # BuildUnitID 0x2CC4 and the tracked unit 0x37E9C, the top GUI and the ghost's counters ->
 # left-click the map with nothing selected -> left-click the CORAK -> left-click the map
 # again -> read the CORAK's first order node's type -> stop. A window picture at each stage.
-# Prints the wall time it measured. The engine map's "The tracked unit's death leaves the
-# placement armed" has what one run showed.
+# It ends with B9's verdicts: after the death the byte is 1, BuildUnitID 0 and the ghost's
+# cursor count still, and a left click on the CORAK makes it the tracked unit. A build without
+# B9 fails them; that is the defect. Prints the wall time it measured.
 set -u
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 T="$REPO/tools/tacli"
@@ -32,14 +34,21 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
 fi
 "$T" ls --json | python3 -c "import json,sys; sys.exit(not any(r['name']=='$I' for r in json.load(sys.stdin)))" \
   || "$T" create "$I" --display "$D" > /dev/null || fail create
-
-"$T" scenario load "$I" "$REPO/scenarios/b6-tracked-death.json" --defaults --los 0 --restart \
-  > "$OUT/load.txt" 2>&1 || fail "load: $(tail -2 "$OUT/load.txt")"
 info() { "$T" ls --json | python3 -c "
 import json,sys
 for r in json.load(sys.stdin):
     if r['name']=='$I': print(r['$1'] if '$1'!='window' else r['window'][0])"; }
+KEEP=()
+if [ "${B6_DLL:-}" = stocklimits ]; then
+  cp "$REPO/tagpu/ddraw/ddraw-stocklimits.dll" "$(info gamedir)/ddraw.dll" || fail "stock-limits dll"
+  KEEP=(--keep-dll)
+fi
+
+"$T" scenario load "$I" "$REPO/scenarios/b6-tracked-death.json" --defaults --los 0 --restart \
+  "${KEEP[@]}" > "$OUT/load.txt" 2>&1 || fail "load: $(tail -2 "$OUT/load.txt")"
 LOG="$(info gamedir)/log/tagpu.log"
+grep -m1 -o "a build placement disarmed with its tracked builder (0x486DC7) [A-Z]*" "$LOG" \
+  | sed 's/^/  enginefix: /'
 
 val() { "$T" peek "$I" "$1" 2>/dev/null | tail -1 | awk '{print $3}'; }
 state() {
@@ -88,8 +97,12 @@ done
 echo "corck dead at +$(( $(date +%s) - start )) s"
 sleep 1
 state "after death"
+BYTE_DEAD=$(val '*0x511DE8+0x2CC3:1'); ID_DEAD=$(val '*0x511DE8+0x2CC4:2')
 echo "  top gui: $("$T" ui "$I" 2>/dev/null | head -1)"
 ghost
+G1=$(grep '^ghost: curs' "$LOG" | tail -1 | sed -E 's/.*curs=([0-9]+).*/\1/')
+ghost
+G2=$(grep '^ghost: curs' "$LOG" | tail -1 | sed -E 's/.*curs=([0-9]+).*/\1/')
 cap 2-dead
 
 "$T" keys "$I" mouse:600,560 > /dev/null
@@ -102,6 +115,7 @@ ghost
 "$T" click "$I" "$AKX" "$AKY" > /dev/null
 sleep 1
 state "corak clicked"
+TRACKED_AK=$(val '*0x511DE8+0x37E9C:2')
 echo "  top gui: $("$T" ui "$I" 2>/dev/null | head -1)"
 cap 3-corak
 "$T" keys "$I" mouse:600,560 > /dev/null
@@ -118,6 +132,12 @@ else
 fi
 "$T" roster "$I" 2>/dev/null | sed 's/^/  /'
 cap 4-after-click
+
+verdict() { if [ "$2" = "$3" ]; then echo "PASS  $1 ($2)"; else echo "FAIL  $1 (read $2, want $3)"; fi; }
+verdict "order byte after the death" "$BYTE_DEAD" 1
+verdict "BuildUnitID after the death" "$ID_DEAD" 0
+verdict "ghost cursor draws across two heartbeats after the death" "$((G2 - G1))" 0
+verdict "tracked unit after a left click on the CORAK" "$TRACKED_AK" "$AK"
 
 "$T" stop "$I" > /dev/null
 [ -n "$XPID" ] && kill "$XPID"

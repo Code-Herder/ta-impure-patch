@@ -345,7 +345,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the twenty-eight, and why:
+made, or its page cannot be made writable. Each of the twenty-nine, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -377,6 +377,7 @@ made, or its page cannot be made writable. Each of the twenty-eight, and why:
 | the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
+| a build placement disarmed with its tracked builder `0x486DC7` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -6896,22 +6897,38 @@ and only these three sources can be what `0x499027` reads.
 - **The right button cannot execute a command button, by construction** — `0x499100` returns at
   its first test whenever `main+0x2CC3 != 1`, and its order call passes the literal 1.
 
-**The tracked unit's death leaves the placement armed.** The per-frame check at
-`0x4995C3..0x4995F1`, after `GameFrame_InGame 0x496790` (`0x4995B8`), reads the tracked unit
-`main+0x37E9C`; when that slot's `+0xA6` word is 0 (`0x4995E4`) it calls `0x491D70(0)` (`push 0`
-at `0x4995EF`, the call at `0x4995F1`: the 7 bytes a reset of the byte would take over), which
-clears `0x37E9C` and pops the GUI. Nothing on that path writes the order byte
-`main+0x2CC3` or `BuildUnitID` `main+0x2CC4` [DISASSEMBLED]. MEASURED 2026-09-26 with
-`tools/b6-tracked-death.sh` (main `8d033d1`, play defaults, `scenarios/b6-tracked-death.json`):
-a CORCK with CORSOLAR pressed read `0x2CC3` = `0x0E`, `0x2CC4` = 246 and `0x37E9C` = 2; ordered
-into an ARM LLT's range with `tacli order`, it died, and then `0x37E9C` read 0 and the top GUI was
-`CORMAIN2.GUI` while `0x2CC3` stayed `0x0E` and `0x2CC4` 246. The engine's placement square and
-our build ghost kept drawing at the pointer (the ghost's cursor count rose on every heartbeat).
-Because `0x4993B6` sends a left press to `0x498F70` whenever the byte is not 1, a left click on
-the map placed nothing, and a left click on the CORAK did not select it; no order reached any
-unit (the CORAK's first order node stayed type 41). The right button still cancels (`0x499100`
-above) [DISASSEMBLED; not run]. So the symptom is a stale placement cursor that swallows left
-clicks, UI-local.
+**A build placement and its builder (B9).** A build button arms the placement: `0x41AB89` writes
+the order byte `main+0x2CC3` = `0x0E` and `0x41AB9C` `BuildUnitID` `main+0x2CC4`, from the menu
+of the tracked unit `main+0x37E9C`. The engine ends a placement in five places, each writing
+`0x2CC3` = 1 and clearing `0x2CC6` bit 5 (`0x20`, the order kept while a modifier is held; the
+release test is `0x4992D8`) and playing "STOP" (`0x502714`): the right button `0x499110`, the
+modifier's release `0x4992FA`, a key's case of the in-game key switch (`0x495ECD`, table
+`0x496694`) at `0x495F36`, and the placement's own left click on
+a clear site `0x498FC0`, after `0x419670` has issued the build to the selection
+(`0x498F93..0x498FA4`; a press whose record has `+8` bit 2 keeps the placement and sets the flag
+instead, `0x498FB4`). A left click on a blocked site plays the refusal and keeps it (`0x499016`). None of
+them writes `0x2CC4`; the load's UI reset `0x4917D0` (called at `0x497581`) writes both,
+`0x4917F9` and `0x491805`. Every engine reader of `0x2CC4` (`0x419686` in `0x419670`, `0x4197DD`
+in the build cursor `0x4197D0`) runs only with `0x2CC3 == 0x0E`, and every reader of `0x2CC3`
+(`0x469DD8`, `0x469E51`, `0x469EF4`, `0x48D3DB`, `0x491CD2`, `0x491D2F`, `0x495F2D`,
+`0x498F77`, `0x499107`, `0x499238`, `0x499290`, `0x4993B6`) is the UI [DISASSEMBLED].
+
+The per-frame check at `0x4995C3..0x4995F1`, after `GameFrame_InGame 0x496790` (`0x4995B8`),
+reads the tracked unit; when its slot's `+0xA6` word is 0 (`0x4995E4`) it calls `0x491D70(0)`
+(`push 0` at `0x4995EF`, the call at `0x4995F1`), which clears `0x37E9C` and pops the GUI, and
+writes neither byte. **In stock the placement outlives its builder** — MEASURED 2026-09-26 with
+`tools/b6-tracked-death.sh` on main `8d033d1`: after the CORCK's death `0x2CC3` stayed `0x0E`
+and `0x2CC4` 246, and the square and our build ghost stayed on the pointer.
+
+**B9 disarms it at the free.** `0x486DC7`, the unit destructor's `mov word [esi+0xA6],bx`, is
+the only store of type 0 to a unit slot (the other writers, `0x485ED2`, `0x486086`, `0x4862A2`,
+store a created unit's type); give and capture (`UNITS_GiveUnit 0x488570`, from the capture at
+`0x4046C5`) make the unit anew for the receiver (`0x488700`) and kill the old one with 30 000
+damage (`0x4887D0`), so every end of a unit passes it before its slot can be reused. There a stub
+(`fix_placement_builder`, `tagpu_patches.c`) makes the cancel's two writes and clears `0x2CC4`
+when the byte is `0x0E` and `esi` is the tracked unit's slot, runs the stolen store, and rejoins
+at `0x486DCE`. MEASURED on the fixed build (the same script): the byte read 1, `0x2CC4` 0, the
+ghost drew nothing more and the square was gone, and a left click selected the CORAK.
 
 ## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
 
