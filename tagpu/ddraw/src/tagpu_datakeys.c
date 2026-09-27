@@ -1654,13 +1654,15 @@ int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
    0x438650's callers are the reclaim order 0x40483D and the build order's
    reclaim 0x414C86), read of the RECLAIMER: L + 1 for 0x4386B9, stock's
    being (kills + 5) / 5.
-   THE BOUND: 0x4386B9..0x4386C3 multiply the workertime, this factor, the
-   target's MaxHitPoints (def +0x1FA) and the ticks between steps in 32 bits,
-   and 0x4386CC reads the product unsigned, so a factor past what the product
-   holds wraps the step to a fraction of itself (ARMCOM's 300 on a CORKROG
-   wraps at 32). The factor is held to the largest that fits. A product that
-   does not fit at 1 is the engine's own at a recruit's factor, and the
-   answer is 1.
+   THE HOLD: the factor is held to the largest for which the workertime, the
+   factor, the target's MaxHitPoints (def +0x1FA) and the ticks between steps
+   multiply to below 2^32, the product stock's 0x4386B9..0x4386C3 take in 32
+   bits (ARMCOM's 300 on a CORKROG wraps at 32). A product that does not fit
+   at 1 is the engine's own at a recruit's factor, and the answer is 1.
+   B10 (tagpu_patches.c, fix_reclaim_wrap) takes that product in 64 bits in
+   both builds, so the hold no longer prevents a wrap: it caps a keyed
+   veteran's step below its formula. Whether to release it is open for the
+   owner (sim-fixes.md, B10).
    Called with the engine's x87 stack live (tagpu_patches.c, fix_veterancy): integer code only. */
 int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u, unsigned workertime,
                                               unsigned maxhp, unsigned ticks)

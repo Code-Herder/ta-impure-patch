@@ -3,7 +3,7 @@
 ## Summary
 
 Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our stack, as our own
-code, over six landings and the ones found since (B7, B8, B9). The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
+code, over six landings and the ones found since (B7, B8, B9, B10). The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
 grill that followed [the evidence pass](sim-fixes-evidence.md). **All six landings are landed on local
 main (2026-09-25), each after its review**, and B7, four defects the veterancy survey found, landed
 with section C's C3 on 2026-09-26. B8, kill counts across peers, and B9, an order disarmed when nobody is left to take it,
@@ -128,6 +128,10 @@ faces of `0x45A2EC` are left there.
 - **An order disarmed when nobody is left to take it (B9, added 2026-09-26 from B6's side
   measurement):** when no unit is left that the click of an armed build placement or command mode
   would order, the order is ended through the engine's own cancel, silently. Local.
+- **A unit reclaim's step in 64 bits (B10, added 2026-09-26 from C3's survey):** `0x438650`'s
+  product of the workertime, `(kills + 5)/5`, the target's MaxHitPoints and 15 is computed exactly
+  and its quotient clamped, so a veteran reclaimer takes the formula's step instead of a wrapped
+  sliver; every product stock computes correctly gives the same step bit for bit. Simulation.
 - **TA's repair rate is the game's rule, not a B defect.** Stock clamps each repairer's HP and
   energy per call to *at most* 1 (`0x41BD87..0x41BDA3`, `min` where the formula reads as `max`).
   It is recorded, and a live check of the per-call rate rides along with a landing.
@@ -1437,8 +1441,7 @@ scenario `kills` column), then on the new one:
   measured for B8 below.
 - A unit reclaim's step wraps in stock as well: `0x438650` multiplies the workertime, the factor
   `(kills + 5)/5`, the target's MaxHitPoints and 15 in 32 bits, so ARMCOM reclaiming a CORKROG from
-  155 kills takes a sliver of its step. C3 bounds the keyed factor only; stock's is a new question
-  for B.
+  155 kills takes a sliver of its step. C3 bounds the keyed factor only; stock's is B10, below.
 
 **Measured alongside a landing** (time-boxed, each with its session):
 
@@ -1849,6 +1852,81 @@ click's own walk, so B9 matches stock whenever the case arises.
   The options stack stops the ticks in single player (`0x496918`), so no unit dies under it there;
   a network game keeps them running, and that case was not run. The chat is the modal screen
   measured, on the same test.
+
+**B10 — a unit reclaim's step in 64 bits.** Added 2026-09-26 by the owner from C3's survey (the
+*Not covered* list of B7, above), built on its own branch. Simulation, fail closed, both builds.
+
+*The defect [DISASSEMBLED, MEASURED].* `0x438650(reclaimer, target, ticks)`, `ret 0xC`, has two
+callers, the reclaim order (`0x40483D`) and the build order's reclaim (`0x414C86`), both `push 0xF`.
+It sets the HP a unit reclaim takes from its target every 15 ticks: `[order+0x36]`, dealt as a
+kind-5 hit through `0x489BB0` (`0x404981`, `0x414B8D`).
+
+    st0  = max(the target's def +0x18A, 10.0 at 0x4FD2A4)              0x43865F..0x438680
+    edi  = workertime (def +0x1FE, u16) * (kills + 5)/5
+           * the target's MaxHitPoints (def +0x1FA) * ticks            0x4386B9 0x4386BC 0x4386C3
+    step = _ftol(qword(edi, high dword 0) / (st0 * 300.0 at 0x4FD2A8)), at least 1
+                                                                        0x4386C8..0x4386E9
+
+The four factors are multiplied in 32 bits and `0x4386CC`'s `fild qword` reads the product with a
+zero high dword, so it wraps past 2³² − 1. ARMCOM's workertime 300 on a CORKROG (29 918 HP, def
+`+0x18A` 29 489.0) is 134 631 000 a factor, so stock's factor 32, from 155 kills, wraps: the
+product less 2³² is 13 224 704 and the step is 1 where the formula gives 486. A quotient of 2³¹ or
+more would also come back wrong: `_ftol` (`0x4E43A0`, `fistp qword` under chop) returns the
+low dword, which `cmp eax,1; jg` turns into 1 when negative. The census: this is the only multiply
+by a def's `+0x1FA` in the exe; the other ten reads of a def's workertime divide it by 30
+(`0x88888889`, `sar 4`), and `0x42B673` copies it.
+
+*The fix.* Two sites in the fail-closed table, both builds:
+
+- `0x4386B9..0x4386CF` (23 bytes: the three `imul`, the store and the `fild`) jumps to a stub that
+  passes the workertime (`edi`), the factor (`edx`: stock's, or the value C3's keyed stub at
+  `0x43869D` left there), `[esi+0x1FA]` and the ticks (`[esp+0x1C]`) to an x87-free C function.
+  That function computes the product as an unsigned 64-bit value, saturated at `INT64_MAX` so the
+  `fild qword` reads it positive, and writes it into the same qword `[esp+8]`. The stub runs the
+  `fild` and goes on at `0x4386D0`, so the engine's own `fxch`, `fmul` and `fdivp` run unchanged,
+  with the target's cost still in st1.
+- `0x4386D8..0x4386DE` (the `fdivp` and the `call 0x4E43A0`) jumps to a stub that runs the same
+  `fdivp`, clamps st0 to 2147483647.0 (`fcomp`, `fnstsw`, `sahf`: exact, whatever the precision
+  control), calls `0x4E43A0` and goes on at `0x4386DF`.
+
+*The invariant.* For every product below 2³², the step is stock's bit for bit. The qword holds the
+same value with a zero high dword, the x87 operations are the engine's own in its order under its
+control word, and the quotient is below 2³² / 3000, so the clamp never engages. Above that, the
+step is the formula's value, bounded by the saturation and the clamp; B7's saturation of a hit's
+word (`0x489C71`) bounds what it then does to the target. Silent at run time.
+
+*Class.* Simulation, fail closed: the reclaimer's peer computes the step, and the target's HP
+carries it, so a peer without B10 would play stock's rule. C3 put its keyed site `0x43869D` in the
+same table. Nothing overlaps: C3's row is `0x43869D..0x4386A3`, and its keyed path jumps to
+`0x4386B9`, B10's first byte. No branch or absolute pointer in the image lands inside either
+span (every `jcc`/`jmp`/`call`/`loop` target in `.text` and every dword of the file). The raised
+build installs 267 sites (265 before), the stock-limits build 142 (140 before).
+
+*Measured* (`tools/b10-reclaim-wrap.py`, one invocation, 204 s wall; `scenarios/b10-reclaim-wrap.json`
+on Show Down: four ARMCOMs at 0, 150, 155 and 1000 kills, factors 1, 31, 32 and 201, each
+reclaiming a CORKROG; the step is the modal difference between a target's successive HP values,
+compared with the formula computed from values read out of the running game):
+
+| build | 0 kills | 150 | 155 | 1000 |
+|---|---|---|---|---|
+| before B10 (the main checkout's `ddraw.dll`) | 15 | 471 | **1** | **145** |
+| B10, `ddraw.dll` | 15 | 471 | 486 | 3 058 |
+| B10, `ddraw-stocklimits.dll` | 15 | 471 | 486 | 3 058 |
+| the formula, exact | 15 | 471 | 486 | 3 058 |
+| the formula, product modulo 2³² | 15 | 471 | 1 | 145 |
+
+Each run took about 61 s. Both B10 builds logged `enginefix: B10 … in the fail-closed table`, with
+`limits: installed 267 sites` (raised) and `the simulation fixes' 142 sites installed` (stock limits).
+
+*Gaps.*
+- The clamp and the saturation rest on the disassembly, unexercised: no retail content reaches
+  either. With workertime 65 535 at the kill counter's cap (65 535 kills, factor 13 108), a
+  quotient of 2³¹ needs a target of cost 10 or less and 500 HP, and a product of 2⁶³ a MaxHitPoints
+  above 7.1 × 10⁸.
+- **Open, for the owner and section C:** C3's keyed stub holds a keyed type's factor to what a
+  32-bit product holds (*C3, as built* in [the data-keys plan](data-keys.md)). With B10 the product
+  no longer wraps, so the hold now caps a keyed veteran's reclaim below its formula for no reason
+  of its own. Releasing it is C3's code and C3's call.
 
 ## Open questions
 

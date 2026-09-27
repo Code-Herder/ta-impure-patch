@@ -5605,7 +5605,8 @@ static int fix_weapon_keys(void)
      from 0x438694, esi the target's def from 0x438658, the ticks between steps at [esp+0x1C],
      the argument 0x4386C3 multiplies by): the answer takes all four, to hold the factor to
      what the 32-bit product holds; edi = the workertime, edx = the factor, on at 0x4386B9,
-     `imul edi,edx`; nothing from there reads eax or ecx before writing them.
+     stock's `imul edi,edx` or B10's jump (fix_reclaim_wrap), which reads the same two;
+     nothing from there reads eax or ecx before writing them.
    No branch lands inside any of the seven (rel8/rel32 scan of .text and every dword of the
    image). */
 static unsigned char* vet_call(unsigned char* p, unsigned char unit_push, const void* fn)
