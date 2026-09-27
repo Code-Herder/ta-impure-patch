@@ -91,7 +91,10 @@ tools/mp_leave.sh h1                                 # surrender -> main menu; a
 ```
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
-  `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin.
+  `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
+  helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,
+  and one that loads opens a UDP socket on every interface of the machine for UPnP discovery and
+  asks the LAN's router to map each game's ports. The games meet on loopback and need none of it.
 - **One DirectPlay port per game, several games at once.** DirectPlay's name server
   (`dplaysvr.exe`) binds its port for the whole machine, and the TCP/IP transport sends every
   session enumeration to it, so two games on one port collide however separate their prefixes

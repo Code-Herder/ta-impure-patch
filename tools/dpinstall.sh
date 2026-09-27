@@ -17,7 +17,7 @@ PFX="${1:?usage: dpinstall.sh <wineprefix> [src]}"
 SRC="${2:-$HOME/.local/share/ta-directplay}"
 
 FILES="dplayx.dll dpwsockx.dll dpmodemx.dll dpnet.dll dpnhpast.dll dpnhupnp.dll dplaysvr.exe dpnsvr.exe"
-OVERRIDES="dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n"
+OVERRIDES="dplayx,dpmodemx,dpnet,dpwsockx,dplaysvr.exe,dpnsvr.exe=n;dpnhpast,dpnhupnp=d"
 
 [ -d "$PFX/drive_c" ] || { echo "not a wine prefix: $PFX" >&2; exit 1; }
 for f in $FILES; do

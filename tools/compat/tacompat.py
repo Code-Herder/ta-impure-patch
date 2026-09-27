@@ -62,7 +62,14 @@ import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
 DPLAY_SRC = Path(os.environ.get("TA_DIRECTPLAY_SRC", Path.home() / ".local/share/ta-directplay"))
-DPLAY_OVERRIDES = "dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n"
+# NO NAT HELPER. dpwsockx loads dpnhupnp and dpnhpast when they load (DirectPlayNATHelpCreate)
+# and skips them when they do not (0x5DF03C90..0x5DF03CB2, DISASSEMBLED); with one in, every
+# game process opens a UDP socket on each of the machine's interfaces for UPnP discovery,
+# asks the LAN's router to map its ports, and tests every candidate data port against the
+# helper's answer (0x5DF088B1). The suite's games meet on loopback and need none of it -- and a
+# test has no business mapping ports on the router of whoever runs it. dplaysvr.exe, which
+# references them too, is started by the game and inherits this environment.
+DPLAY_OVERRIDES = "dplayx,dpmodemx,dpnet,dpwsockx,dplaysvr.exe,dpnsvr.exe=n;dpnhpast,dpnhupnp=d"
 # NO SOUND, AND A SOUND DEVICE: nothing the suite checks listens, and a dozen games at once
 # through the owner's speakers is noise -- but a game with no device at all is a different game
 # (TA:ESC stops at "No sound driver is available for use."). So Wine is kept off PulseAudio and

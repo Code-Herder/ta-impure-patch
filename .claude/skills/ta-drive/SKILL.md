@@ -468,7 +468,7 @@ tools/tacli launch j1 --dplay --dplay-port 47731                     # a joiner,
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 ```
 
-`--dplay` installs Microsoft's DirectPlay (wine's cannot host). **Each game gets its own
+`--dplay` installs Microsoft's DirectPlay (wine's cannot host), NAT helpers refused. **Each game gets its own
 `--dplay-port`, the same on all its peers**: the name server binds its port machine-wide, so
 games on one port collide and games on different ports run side by side (`tools/dpport.py`;
 default 47624, sticky). `--free-dplay-port` clears a stale `dplaysvr.exe` on *that* port only,

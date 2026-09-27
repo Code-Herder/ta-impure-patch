@@ -215,11 +215,10 @@ Run the new setup before writing its `today` — write down what it did, not wha
   single-player walk stops early when a click lands on `ARMMAIN`/`CORMAIN`: Escalation's Skirmish
   button goes straight into a game, so there is no Start to press.
 - `DPlayHelpWndClass` is DirectPlay's own 1x1 helper window, opened with a session: not a box.
-- **A mod's joiner that lists no session** while the host sits in its battle room and the host's
-  own name server holds the game's port (the report names the holders): seen for Total Mayhem,
-  ProTA and both Escalation setups when several of their network games run at once, never run
-  alone, never for the retail or TADR setups. The cause is not established; re-run the setup alone
-  before blaming the change.
+- **DirectPlay's NAT helpers stay refused** (`dpnhpast,dpnhupnp=d` in `DPLAY_OVERRIDES`). With
+  them in, a mod's joiner in a parallel run sometimes listed no session while the host's own name
+  server held the port; the report names the port's holders if a join ever finds none again
+  ([networking-lobbies](../../../research/notes/networking-lobbies.md) item 4).
 - **A host frozen at CREATE NEW GAME** (the click on Next never returns, no frame after it) was
   seen twice on 2026-09-27 while two `TotalA.exe` of another session were stuck on the machine —
   `<defunct>` in `ps`, with live threads — and not in the eight games after they were killed.

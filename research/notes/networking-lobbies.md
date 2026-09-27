@@ -286,7 +286,7 @@ prints the override string.
    (`programs/dplaysvr/main.c` is `WINE_FIXME("stub:")` + `return 0`), native
    dplayx waits for a name server that never appears, and `Open` **hangs with no
    error at all**. The trace tell is `fixme:dplaysvr:wmain`. The full string is
-   `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n`.
+   `dplayx,dpmodemx,dpnet,dpwsockx,dplaysvr.exe,dpnsvr.exe=n;dpnhpast,dpnhupnp=d`.
 2. **`dplaysvr.exe` outlives the game and owns its port across prefixes.** A
    stale one from an earlier run makes the next host on that port fail
    `Open(DPOPEN_CREATE) = DPERR_GENERIC` — which looks like a prefix problem and
@@ -309,13 +309,38 @@ prints the override string.
    pairs in the eight files bind nothing: the tail of a `call rel32` in `dplayx.dll`, and
    `cmp ax, 8BAh` / `cmp ax, 0BA08h` in the DirectPlay 8 NAT helpers (`dpnhpast.dll`,
    `dpnhupnp.dll`), whose random-port picker steps around 47624 in both byte orders. The data
-   ports do not collide either: `dpwsockx` binds the first free port from 2300 (stream) or 2350
-   (datagram) up to 2400, so two games on one machine take different ones.
+   ports do not collide either (item 4).
    `tools/dpport.py` writes another port into all seven, refusing any file that is not
    byte-identical to these outside them. The name server listens there and the joiner's
    transport enumerates there, so peers carrying the same port find each other on
    `127.0.0.1` and on no other game's server: MEASURED 2026-09-27, `b1h`/`b1j` on 47700 walked
    into a live game while the compat suite's own game hosted on 47624, and that one passed too.
+4. **The rest of what the transport binds, and the NAT helpers we refuse** [DISASSEMBLED from
+   `dpwsockx.dll`, MEASURED 2026-09-27]. `0x5DF08710` creates and binds every game socket:
+   - with no port asked for, it walks from **2300 (stream) or 2350 (datagram)** — 2325 / 2375
+     when `0x5DF040DA` says so — to **2400**, wraps to 2300 and stops back at its start, taking the
+     first port a bind accepts (`0x5DF08882..0x5DF08919`). Those binds carry `SO_REUSEADDR` off and
+     `SO_EXCLUSIVEADDRUSE` on (`0x5DF05330`); the two listeners (`0x5DF08AFA`, `0x5DF08E96`) set
+     `SO_REUSEADDR` after their bind, before `listen(60)` (`0x5DF0539D`).
+   - **Across Wine prefixes the walk holds**: a second prefix binding a UDP or TCP port another
+     holds fails `WSAEADDRINUSE` (10048) under Wine 9.0, MEASURED with a bind test shaped like these.
+     A four-game batch's sockets, logged each second: stream 2300–2305, datagram 2350–2355, the
+     four name servers on their own ports, and only loopback connections.
+   - its own address, in every message it sends, is the first of `gethostbyname(gethostname())`
+     (`0x5DF05693`) — `127.0.1.1` on the reference setup.
+   - **the NAT helpers**: `0x5DF03BBB..0x5DF03CB2` load a helper list — the TCP/IP provider's
+     `NATHelp` registry value, then `dpnhupnp.dll` and `dpnhpast.dll` unless it names them — and
+     skip each one whose `LoadLibraryA` or `DirectPlayNATHelpCreate` fails. A loaded helper opens
+     a UDP socket on **every interface of the machine** (seven on the reference setup: the LAN,
+     Tailscale, the VM and container bridges) for UPnP discovery, asks the LAN's router to map the
+     game's ports, and `0x5DF088B1` tests every candidate data port against it (`0x8015F090`:
+     skip). **Our tools refuse both** (`dpnhpast,dpnhupnp=d`, in the string above): games on one
+     machine meet on loopback, and a test has no business mapping ports on the router. MEASURED:
+     with the helpers in, the compat suite's mod network games failed intermittently when several
+     ran at once — the joiner listed no session after twelve UPDATEs while the host's own name
+     server held the port (0, 1, 2 and 4 of the 4 failing in four runs); with them refused, 25 of 25 passed —
+     three batches of the four mod setups and a full run of all thirteen network games. Why the
+     helper loses the session is not established; refusing it removes the dependence.
 
 Where the files came from is its own small saga — see the routes below. They live
 outside the repo at `~/.local/share/ta-directplay/` (Microsoft redistributables,
@@ -467,7 +492,7 @@ November 2024 and no MR for host support was found.
   a newer wine can coexist with the distro one rather than replacing it.
 - **`tacli` drives this now** (2026-09-02). `tacli launch <inst> --dplay` installs
   native DirectPlay into that instance's prefix and appends
-  `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n` to
+  `dplayx,dpmodemx,dpnet,dpwsockx,dplaysvr.exe,dpnsvr.exe=n;dpnhpast,dpnhupnp=d` to
   the hard-coded `ddraw=n,b`; it is sticky per instance, so a single-player
   instance keeps wine's builtin. `--dplay-port N` (sticky) moves that prefix's
   DirectPlay to port N after every reinstall — one port per game, the same on all

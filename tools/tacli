@@ -73,8 +73,10 @@ INSTANCES = TAGPU / "instances"
 DPLAY_SRC = Path(os.environ.get("TA_DIRECTPLAY_SRC",
                                 Path.home() / ".local/share/ta-directplay"))
 DPLAY_INSTALL = Path(__file__).resolve().parent / "dpinstall.sh"
-DPLAY_OVERRIDES = ("dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,"
-                   "dplaysvr.exe,dpnsvr.exe=n")
+# The NAT helpers are refused (=d): dpwsockx skips a helper that does not load, and with one in,
+# every game asks the LAN's router for port mappings (tools/compat/tacompat.py DPLAY_OVERRIDES).
+DPLAY_OVERRIDES = ("dplayx,dpmodemx,dpnet,dpwsockx,dplaysvr.exe,dpnsvr.exe=n;"
+                   "dpnhpast,dpnhupnp=d")
 
 
 def built_dll() -> Path:
