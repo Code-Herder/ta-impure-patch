@@ -78,7 +78,7 @@ per-mod check (below).
 
 | landing | parts | setups it moves to the goal |
 |---|---|---|
-| **T1** — built | 4, then 1 | `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8` |
+| **T1** — landed 2026-09-26 | 4, then 1 | `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8` |
 | **T2** | 3 | none alone; Escalation's exe stops being refused at `0x40EAD6` |
 | **T3** | 2 | `392+tadr-dev`, `392+tadr-2026.8.6`, `escalation`, `escalation+tadr-dev` |
 | **T4** | distribution | `gammata-ota`: its tdraw loads only `ddraw_custom.dll`, so Impure is installed under that name too |
