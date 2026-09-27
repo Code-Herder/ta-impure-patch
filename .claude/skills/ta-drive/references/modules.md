@@ -341,7 +341,7 @@ sync test.
 | `c4-transport-down` | a keyed passenger's carried death beside an unkeyed control | wait until each passenger's `+0x86` names its ATLAS, then `order --unit N --expect ARMATLAS move pos X 1600` over the AI's tower |
 | `c4-transport-selfd` | a self-destructing transport, with both keys and with one | select the ATLAS, then `keys <i> mouse:600,500 ctrl+d` |
 | `c4-survivor` | a passenger that outlives its transport, then dies on the ground | fly it over the tower as above |
-| `c4-kill-all` | kill-all's local branch, single player | `+kill 1` in the chat, with `cheats` set by the file |
+| `c4-kill-all` | kill-all's local branch, single player | `+kill 1` in the chat, with `cheats` set by the file. The AI flies its own ATLAS about and may unload it: read the pair's positions right before the kill |
 | `c4-mp-host`, `c4-mp-join` | a carried death drawn on the other peer from the death record alone | `mp_lobby.sh --map 'Show Down'`, one file on each peer, fly the joiner's ATLAS to the host's tower |
 | `c4-mp-removal` | a departed player's loaded transports, three peers, one pair in each slot order | apply on one joiner, freeze it, then `REJECT` on a peer. The host's removes the player on the third peer at the same moment, so compare the third's `wire:` `0a` count before and after; after a console `+kill` instead, the third's copies stand until its own `REJECT` |
 

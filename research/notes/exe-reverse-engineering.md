@@ -3955,12 +3955,17 @@ AI towers, and unarmed Krogoth clones (29 918 HP) as the ring.
   with a kind other than 3, so its passenger died of the cargo loop's kind 6, a carried death that
   is not a self-destruct (`TX_BLAST_E`, on both peers), and the host destroyed every copy from those
   deaths. So a graceful leave leaves kill-all's non-local branch nothing to do.
-- **Kill-all's local branch: the blast lands in full.** In a single-player skirmish (both
-  players' records have first dword 1: the human type 1, the AI type 2), the console's `+kill 1`
-  hit the AI's loaded ATLAS and its passenger with 30 000 of kind 3; the reaper destroyed both
-  within a second, and the passenger's carried `TX_BLAST_S` took 222 from each of the player's
-  Krogoths 260 away (29 918 to 29 696). MEASURED 2026-09-27 three times, on C4 before and after its
-  review's fixes; a reading of no damage on 2026-09-26 did not reproduce.
+- **Kill-all's local branch, and an AI that flies its own ATLAS.** In a single-player skirmish
+  (both players' records have first dword 1: the human type 1, the AI type 2), the console's
+  `+kill 1` hits the AI's units with 30 000 of kind 3, and the reaper destroys them within a
+  second. The AI moves its loaded ATLAS about, so where the blast lands varies from run to run.
+  In five runs with the pair still within 150 of its start, the passenger's carried `TX_BLAST_S`
+  took 222 from each of the player's Krogoths 260 away (29 918 to 29 696). In one of them it also
+  downed the player's own ATLAS about 1 000 away, whose passenger then died of the cargo loop's
+  kind 6, carried: `TX_BLAST_E`. In two runs the AI had already unloaded its passenger and flown
+  off; the passenger died uncarried and took stock's blast (about 8 100 from each). Three runs,
+  one of them with an unkeyed control, took nothing, the pair's position not recorded: a blast
+  out of the ring's reach [INFERRED]. MEASURED 2026-09-26 and 2026-09-27.
 - **Kill-all's non-local branch detonates a passenger twice**: once at `0x486F9E`, and again in its
   destructor (`0x486D50`) since the cargo loop's 30 000 left its HP word at or below 0 and so the
   severity above 0. The ATLAS, not hit, detonates once.

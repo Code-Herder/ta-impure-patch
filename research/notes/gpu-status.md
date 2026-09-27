@@ -19480,7 +19480,8 @@ holds 65 536 entries.
 - **A passenger that survives its transport** (`c4-survivor.json`, 32 000 HP against the loop's
   30 000): not marked, and killed later on the ground it took stock's blast.
 - **Kill-all's local branch** (`c4-kill-all.json`, single player, `+kill 1` for the AI): the
-  passenger, marked in the cargo loop, exploded `TX_BLAST_S`, 222 to each ring Krogoth.
+  passenger, marked in the cargo loop, exploded `TX_BLAST_S`, 222 to each ring Krogoth whenever
+  the AI had not flown its ATLAS off before the kill.
 - **Two peers** (`c4-mp-host.json`, `c4-mp-join.json`): the joiner's ATLAS downed by the host's
   tower; the host drew `TX_BLAST_E` from `m[19]` alone, and its received-death and received-`0x0C`
   counts agree.

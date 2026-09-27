@@ -517,7 +517,10 @@ commit can change.
     transport's cargo loop, carried, and both peers drew `TX_BLAST_E`.
   - **Kill-all's local branch** (`c4-kill-all.json`, single player, the console's `+kill 1` for
     the AI): the passenger, marked in the cargo loop, exploded `TX_BLAST_S` and took 222 from each
-    ring Krogoth, on the build before the review's fixes and after them.
+    ring Krogoth, on the build before the review's fixes, after them and merged with B10, whenever
+    the pair was still near its start at the kill. The AI flies its own ATLAS about, so a run can
+    find its passenger unloaded (a stock blast) or its blast out of the ring's reach
+    ([engine map](../exe-reverse-engineering.html), *What the tests measured*, in the C4 section).
   - **Kill-all's non-local branch, three peers** (`c4-mp-removal.json`): with the joiner frozen,
     one peer's `+kill` for it logged both passengers detached inside kill-all and without the
     broadcast; the third peer's copies stayed carried and its `0x0A` count did not move; its own
