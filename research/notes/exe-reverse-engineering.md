@@ -496,6 +496,55 @@ portability. The stopped fresh session's existing main fields were inspected thr
 `[0x511DE8]+0x38A47` = tick 521 and `+0x38A51` = pause byte 1. The temporary publisher and
 consumer probes were removed after the experiment; details and bounds are in the linked note.
 
+### Perspective authority and tick boundary [MEASURED / DISASSEMBLED 2026-09-28]
+
+The [two-peer perspective experiment](tadr-port/demo-recorder-exploration.md#6c-remote-perspectives-require-authoritative-contributions)
+read the active-player slots (indices 0..9) at `main+0x1B63`, stride `0x14B`, restricting the live reads to
+the two participating records. Within each: DPID `+4`, controller byte `+0x73`, LOS pointer
+`+0x7C`, dimensions `+0x80/+0x84`, allocation length `+0x88`, and the 88-byte resource record
+at `+0x8C`. The last field names come from Pascal's `TPlayerResourcesStruct`; the first eight
+floats are energy current/production/expense, metal current/production/expense, and the two
+storage maxima. `tagpu_scenario.c` independently uses `+0x8C/+0x98` for current energy/metal.
+No new disassembly establishing every resource field's ownership was performed.
+
+`main+0x14233/+0x14237` read 672/800; LOS width/height read 336/400, allocation 134,400 bytes.
+The existing allocator map above establishes the in-level lifetime. With both games paused
+(`main+0x38A51 = 1`) and no level transition, the reader requested only chunks within the
+dimension-validated allocation. `main+0x14273`'s MAPPED pointer was read but its contents were
+not copied in this experiment. GameTime `+0x38A47` pairs were 836/838 initially, 1620/1623 after
+movement and on repeat, and 2273/2279 after adding 20 scouts. Matching DPIDs, one remote LOS
+grid differed from its owner in 104 counter bytes, **34 zero/nonzero sight predicates**.
+Each individual grid stayed byte-identical during the repeated paused read. Current resource
+values/storage were present remotely but the measured production/expense fields were zero.
+These are evidence for owner-contributed replay perspectives/statistics, not proof of every
+field's authority or a reconstruction of radar/sonar/detection.
+
+The `0x2C` clock was also rechecked in the pristine binary. Writer `0x48B710` calls the bit
+writer `0x415C10` with 8-bit code `0x2C` at `0x48B72A`, a 16-bit length placeholder at
+`0x48B737`, and **32 bits from `main+0x38A47`** at `0x48B743..0x48B74E`. It stores the same
+counter at `player+0x18` (`0x48B760..0x48B769`). Receiver `0x48B920` reads those 8/16/32 bits
+through `0x415DC0` at `0x48B93F/0x48B94A/0x48B955` and stores the third value at the sender's
+`+0x18` at `0x48B963`. Thus the field Pascal calls a packet sequence is the sender's GameTime,
+not evidence of one shared peer clock. The existing round-robin map was rechecked at
+`0x48B80E..0x48B84C`: a 16-bit terminator precedes `GameTime % main+0x37EE6`.
+
+`0x495490` was read through the loop's end as a potential owned recorder sampling boundary;
+**no hook was installed**. It takes the iteration count from `main+0x38A3B`, increments
+`main+0x38A47` at `0x4954C0`, and conditionally pumps `0x453D40` at `0x4954C8` when its argument
+is nonzero. Per-iteration calls are `0x48AD30` at `0x4954ED` (already Impure's unit-tick hook),
+`0x49B720` at `0x495513`, `0x420F30` at `0x495539`, `0x464F80` at `0x49555F`,
+`0x424050` at `0x495585`, `0x415B30` at `0x49558A`, `0x490C40` at `0x49558F` (already the
+wind hook), `0x437DE0` at `0x495594`, `0x41CA10` at `0x495599`, `0x471EB0` at `0x4955BF`,
+and `0x466580` at `0x4955E5`. The intervening `0x4B6560` calls update timing accumulators in
+`main+0x38D85` at offsets `+0x2C/+0x30/+0x34/+0x44/+0x48/+0x4C`.
+When the argument and `[0x506DBC]` are nonzero, the tail takes player index `main+0x2A42`,
+calls `0x457D30` on that record at `0x49563A`, then `0x4618A0` with context `0x513000` and
+argument 0 at `0x495646`. The loop decrement/back edge is `0x49566C/0x49566D`. Calls to
+`0x428BD0`, `0x428BE0`, `0x428BF0`, `0x463EF0` and `0x482130` at `0x495674..0x495688`
+are **outside** that loop. Their meanings and complete side effects were not traced here.
+An after-loop observer would collapse multiple iterations; a recorder promising every
+transition must either observe inside the loop or capture the corresponding events.
+
 ### Replay player names and unit-block ordering [DISASSEMBLED + MEASURED 2026-09-28]
 
 A native DirectPlay replay-host prototype supplies both DPNAME strings. The join path calls

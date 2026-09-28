@@ -118,3 +118,10 @@ fresh-process unit importer. Ten frames correspond to about one second only in t
 10 Hz collection; the tool groups by count, not elapsed time. Codec timings exclude storage
 IO and game work. See §6b for visible scene-switch latency, fresh-process asset relocation,
 the incomplete state inventory and why these are not complete-world seek measurements.
+
+`perspective-results.json` records the normal-DLL two-peer LOS/resource experiment (§6c).
+The local evidence directory `perspectives/` contains the bounded `tacli peek` reader and
+paused grids. Compare players by DPID rather than each peer's local seat. Counter-byte
+differences and zero/nonzero sight differences are distinct measurements; only the latter
+is the current-sight predicate used for the bit-mask compression numbers. Radar, sonar and
+allied sharing are not covered by those masks.

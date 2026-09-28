@@ -166,6 +166,8 @@ the linked material rather than growing this table into a debug log.
 1. **Capture and playback architecture.** Compare Pascal-style packet reconstruction with
    checkpoint-assisted approaches. Establish what a single participant can capture faithfully,
    and what other players must contribute for perspectives, communication, and statistics.
+   [Live peer comparisons](demo-recorder-exploration.md#6c-remote-perspectives-require-authoritative-contributions)
+   establish that sight and resource production need authoritative contributions.
 2. **Seeking state.** Verify the Pascal jump/resynchronization mechanism rather than assuming
    its file index is a complete world checkpoint. Impure's renderer frame packets likewise
    cannot be assumed to restore the simulation: some content is camera-limited and they are

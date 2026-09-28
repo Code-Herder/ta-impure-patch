@@ -6,7 +6,7 @@
 in [Demo recorder](demo-recorder.md). This page holds technical findings and the experiments
 needed to settle the open architecture decisions. A temporary transport probe has captured a
 live two-player battle, and the captured events have been decoded, compared between peers, and
-benchmarked in independent compressed blocks. **A first solo engine replay has run (§6a); complete-world seeking has not.**
+benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), and remote-perspective comparisons (§6c) have run; complete-world seeking has not.**
 Preparation and checkpoint policy remain undecided; §6 distinguishes measured container results
 from the missing end-to-end evidence.
 
@@ -519,6 +519,66 @@ The probes were removed, the normal DLL rebuilt, and the owned game stopped afte
 Raw images, packets, probe source and DLLs remain local under
 `_local/demo-recorder-exploration/scene/`; no game assets or raw captures are committed.
 
+## 6c. Remote perspectives require authoritative contributions
+
+**MEASURED 2026-09-28**, two native-DirectPlay peers on the reference setup, retail TA 3.1,
+normal Impure DLL from `a044167` engine source (documentation HEAD `9590239`), Wine 9.0,
+Two Continents, 1024×768, Vsync off. No new engine instrumentation was used. `tacli peek`
+read the paused players' LOS buffers in bounded chunks; player records were matched by DPID,
+not local seat number. Both peers call themselves player 0. The LOS dimensions were
+**336×400**, 134,400 bytes per player, matching half the feature-grid dimensions on each axis.
+The buffers remained inside their existing level lifetime; no load/teardown occurred during reads.
+
+| Paused stage | Host / joiner GameTime | Host-owned grid difference between peers | Joiner-owned grid difference between peers |
+|---|---|---:|---:|
+| Two stationary commanders | 836 / 838 | 0 cells | 0 cells |
+| After both commanders moved | 1,620 / 1,623 | 0 cells | 104 counter cells; **34 zero/nonzero cells** |
+| Repeated reads while still paused | 1,620 / 1,623 | 0 cells | Same 104 / 34 cells |
+
+The two rosters agreed on both commanders' world positions and heights after movement:
+host-owned slot 501 at (1301,7663), height 84; joiner-owned slot 1 at (9136,5918), height 79.
+The four LOS buffers were individually byte-identical between the moved and repeated reads.
+Thus waiting while paused did not repair the disagreement. The root cause was not identified;
+this experiment establishes that matching unit positions do **not** establish an identical
+remote sight grid. The renderer's `tagpu_fogwide.c:fogw_build` uses zero/nonzero counters when
+true LOS is active, so the 34-cell subset affects that input. This is not a pixel comparison
+under every lobby visibility mode, nor a test of radar, sonar, cloaking or allied sharing.
+
+The resource record is also incomplete remotely. At each peer's `player+0x8C`, its first eight
+floats read `(1000,25,0,1000,1,0,1000,1000)` for the local commander and
+`(1000,0,0,1000,0,0,1000,1000)` for the remote commander. Using Pascal's
+`TPlayerResourcesStruct` field names, production is **25 energy / 1 metal locally, zero
+remotely**. After adding 20 locally owned ARMPEEP scouts, the host's first three floats were
+approximately `(1000,29,4)`, while its remote copy on the joiner still had zero production and
+expense. The current-resource fields alone cannot supply the requested analysis graphs.
+Other resource totals, transfers and kill/loss accounting still need individual validation.
+
+**Architecture consequence:** capture each player's effective perspective and statistics at
+its controlling peer and include those contributions in every participant's recording. The
+remote structures can help diagnostics or reconstruction, but cannot be the sole authority for
+recorded perspectives. AI contributions belong to the peer controlling that AI. Record both
+source time/sequence and recorder application order; the measured local GameTime counters are
+not identical, even during the same pause. Define that clock mapping before fidelity comparisons.
+
+### Compact sight-mask experiment
+
+The local sight predicate needs one bit per cell, not the counter magnitude. Bit-packing
+134,400 zero/nonzero values gives **16,800 bytes**. Compressing each independent full mask
+with Zstandard level 3 gave **75–78 bytes** for the initial/moved one-commander masks, and
+**195 bytes** for the host's 1,067-cell visible mask after the 20 scouts moved. The same
+34-cell remote sight disagreement remained in that later sample. These are sparse fixtures:
+no full-battle bandwidth rate, worst case or 10-player fan-out measurement is implied.
+
+This supports testing changed tiles/runs plus periodic independent full masks. Preserve every
+visibility transition at the chosen authoritative boundary; camera/cursor interpolation is
+not a way to invent intervening sight states. A complete perspective also needs explored
+terrain, contact/detection state, alliances and the actual LOS mode. The size of a sight mask
+alone is not their combined network or storage budget.
+
+`research/experiments/demo-recorder/perspective-results.json` contains the measurements.
+The bounded read script, grids, rosters and logs remain local under
+`_local/demo-recorder-exploration/perspectives/`. Both owned game instances were stopped.
+
 ## 7. Architecture conclusions and remaining decisions
 
 ### Capture and identities
@@ -544,8 +604,13 @@ lifetimes; the current forwarders do not provide it. The Pascal drone/session co
 protocol examples, not a reusable in-process implementation. Running a separate native
 DirectPlay replay server remains a diagnostic alternative, not the chosen shipping dependency.
 
-Keep sender simulation tick, sender event sequence, capture/application order, and monotonic
-elapsed time as separate concepts. The two peers paused at ticks **3674 and 3683** in this run:
+Keep sender GameTime, sender event sequence, capture/application order, and monotonic
+elapsed time as separate concepts. Disassembly confirms that `0x2C` carries the sender’s
+`main+0x38A47` GameTime (`0x48B743..0x48B74E`), which the receiver stores in that
+player’s `+0x18` (`0x48B963`). It is not a globally synchronized peer clock. The simulation
+loop at `0x495490` may execute multiple iterations before the draw: a latest-frame observer
+cannot promise every transition. The [engine map](../exe-reverse-engineering.md#perspective-authority-and-tick-boundary-measured-disassembled-2026-09-28)
+records its candidate sampling boundary; no recorder hook is installed there. The two peers paused at ticks **3674 and 3683** in this run:
 simultaneous wall-time inspection cannot assume equal tick counters. This does not measure
 a fixed clock offset or prove what equal ticks mean across peers. Define the replay
 clock and application boundary with the continuous-playback oracle before using them for seek
@@ -589,7 +654,7 @@ container timings in §6 cannot settle either. The next work is complete-state c
 
 All peers must contribute data that their normal unit traffic does not convey: camera/zoom,
 cursor and click events, local selections and accepted orders, private/team communication,
-and any visibility/statistics data proved unavailable accurately at another peer. A local
+and authoritative visibility/statistics data: §6c demonstrates disagreement in remote sight and missing remote production values. A local
 file-writing opt-out should mean **do not save my local replay**, while participation still
 provides data needed for other players' one-file recordings; this is a recommendation to make
 explicit in the setting, not a claim that such a setting exists.
@@ -619,9 +684,7 @@ shared protocol but do not remove the need to check matching capabilities.
 The local renderer's fog grid is insufficient for arbitrary player perspectives. Store or
 reconstruct **explored cells, current sight, radar/sonar contacts, cloak/detection and alliance
 sharing** separately. `TAMem/TA_MemoryStructures.pas` names per-player `LOS_MEMORY`, its dimensions
-and length, resource totals, kills and losses; those names are **Pascal source leads**, not a
-newly validated layout or proof that every remote player's values are authoritative. Verify
-ownership, bounds and update cadence before choosing grid deltas versus reconstruction.
+and length, resource totals, kills and losses; those names supplied the field leads. §6c validates the measured LOS dimensions and demonstrates that remote sight and production values are not sufficient authorities. Validate the remaining fields and update cadence before choosing their delta/reconstruction schemes.
 
 Capture in-match chat at the accepted message boundary with its actual audience, and forward
 private/team messages explicitly when the recorder is not an original recipient. Assign event
