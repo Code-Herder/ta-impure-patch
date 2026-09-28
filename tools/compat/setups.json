@@ -309,6 +309,30 @@
       ]
     },
     {
+      "name": "gui-stress",
+      "about": "Total Mayhem 11.3.0 with the UI layer asking itself for a fresh start every 120 presents (reseedstress=120 in tagpu_gui.on): each one re-lays the UI atlas while the frame in flight still says Classic++ colour, and re-creates every surface without colour while colour is valid -- the two one-frame disagreements that used to be answered with another fresh start until the layer composited nothing. Under it the layer must ask for no fresh start of its own and never give up",
+      "add": [
+        {
+          "fixture": "mayhem-11.3.0",
+          "files": "*"
+        }
+      ],
+      "levers": [
+        {
+          "file": "tagpu_gui.on",
+          "text": "reseedstress=120"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "gui_stress": 10
+      },
+      "registry_roots": [
+        "Software\\TotalM"
+      ]
+    },
+    {
       "name": "gammata-ota",
       "about": "gammata's drop-in with Impure's ddraw.dll copied over it: its tdraw.dll loads ddraw_custom.dll (cnc-ddraw), never ddraw.dll",
       "add": [

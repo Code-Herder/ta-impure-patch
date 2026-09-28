@@ -2427,6 +2427,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        that reports them all as the first one stops being evidence. */
     const char* sdWhy = "the presented surface has no twin here";
     int compose = 1;               /* the OPS always run; this gates the quad */
+    int colOn;                     /* `uColOn` for this frame: see below */
     TWIN* pres;
 
     s_drawThis = 0; s_abFrame = 0;
@@ -2497,18 +2498,23 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!behind(d, "ops this landing cannot replay have stopped")) goto refuse;
         return 0;
     }
-    /* CLASSIC++ IS CARRIED, so `colourTwins` is not a stand-down: it IS
-       `uColOn`, exactly as `draw_layer` set it, and it is read where the
-       composite's block is filled. The one thing still refused here is a frame
-       whose twins the drain has given colour while this pass has no restored
-       atlas -- the replay would then write alpha 0 where the ops ask for
-       restored colour, silently and cumulatively. */
+    /* CLASSIC++ IS CARRIED: `colourTwins` is `uColOn`, read where the
+       composite's block is filled. WHILE THIS PASS HOLDS NO RESTORED ATLAS the
+       frame is composited INDEXED rather than not at all. The producer decided
+       `colourTwins` from our answer of the frame before (`tagpu_gui_col_ready`
+       is one frame old by construction), so on the frame a new restore job
+       blanks the atlas it still says colour -- and every restore that is not a
+       repaint does that. Indexed is the art the validity rule itself falls back
+       to for a fade (tagpu_gui_surf.c), never wrong art; compositing nothing
+       here was a black frame, and on screens whose atlas repacks it was every
+       frame. */
+    colOn = h.colourTwins;
     if (h.colourTwins && !s_arHave) {
         if (!s_saidColour) { s_saidColour = 1;
-            plog(d, "gui: the other lane is compositing Classic++ colour and "
-                    "this one has no restored atlas to composite from - nothing "
-                    "composited while that is true"); }
-        compose = 0;
+            plog(d, "gui: the producer says Classic++ colour and this lane has no "
+                    "restored atlas this frame - composited indexed while that is "
+                    "true"); }
+        colOn = 0;
     } else s_saidColour = 0;
     /* EVERY COLOUR TWIN WAS INVALIDATED, and it happened BEFORE this frame's
        ops (`restore_step` runs ahead of the drain), so it is applied before
@@ -2657,19 +2663,21 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         case TAGPU_GUIOP_SPRITE:
             if (o->fw < 1 || o->fh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             if (!h.atlas) { if (!behind_ex(d, "a sprite with no atlas", carries)) goto refuse; return 0; }
-            /* THE PRODUCER SAMPLED THE RESTORED ATLAS AND WE HAVE NONE. Drawing
-               anyway writes alpha 0 where it wrote restored colour, into a twin
-               that keeps it -- so it is a `behind` and not a `compose = 0`.
-               IT SHOULD BE UNREACHABLE AND IS KEPT AS THE BRACE. The producer
-               may only set `TAGPU_GUICOL_ON` while this pass has said
-               `tagpu_gui_col_ready(1)`, which is `s_arHave`, so the two cannot
-               disagree except across the one frame of lag that back-channel
-               has -- and that frame moves the flag the safe way, from off to
-               on. What this catches is the day something else sets the bit. */
-            if ((o->col & TAGPU_GUICOL_ON) && !s_arHave) {
-                if (!behind_ex(d, "a restored sprite and no restored atlas on this lane", carries)) goto refuse;
-                return 0;
-            }
+            /* A RESTORED SPRITE WHILE WE HOLD NO RESTORED ATLAS IS DRAWN INDEXED
+               (the replay below), and that is not a store falling behind. The
+               producer sets `TAGPU_GUICOL_ON` from our `tagpu_gui_col_ready` of
+               the frame before, and a restore job that is not a repaint blanks
+               the atlas on the frame it starts -- so the lag moves the flag
+               from ON to OFF as well, on every atlas re-lay. MEASURED 2026-09-27:
+               refusing such a frame reseeded the producer, whose reseed re-laid
+               the atlas, which started another job: Total Mayhem's skirmish
+               screen on Windows went through 8 of those and then composited
+               nothing for the rest of the session.
+               Drawn indexed, the sprite writes alpha 0 to the colour plane, which
+               the composite reads as "resolve through the palette": dithered art,
+               never wrong art. Our answer drops to 0 with it, the producer's
+               validity follows, and its 0 -> 1 edge asks the engine for the
+               repaint that carries the colour back (`col_ask_repaint`). */
             ndraw++; nquad++;
             break;
         case TAGPU_GUIOP_STRING:
@@ -3340,13 +3348,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    is the difference between drawing indexed and sampling the
                    dummy image as though it were art. */
                 if (o->kind == TAGPU_GUIOP_SPRITE) {
-                    int on = (o->col & TAGPU_GUICOL_ON) != 0;
-                    /* An op that asks to sample a restored atlas we do not
-                       hold cannot be drawn at all -- `prepare` refuses such a
-                       frame above and this is belt to that brace. */
-                    if (on && !s_arHave) {
-                        sdWhy = "a restored sprite and no restored atlas on this lane";
-                        goto standdown; }
+                    /* ON only over an atlas we hold: without one it is drawn
+                       indexed (see the prepare's SPRITE case), and binding 41
+                       then names no restored image, which is the layout
+                       question the claim below is careful about. */
+                    int on = (o->col & TAGPU_GUICOL_ON) != 0 && s_arHave;
                     fq[0] = (int)o->ck; fq[1] = on;     /* uCK, uRestored      */
                     quadv(qv, (float)o->sl, (float)o->st,
                           (float)(o->sl + o->fw), (float)(o->st + o->fh),
@@ -3667,7 +3673,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        both the drain's `col` mark and our colour image -- so this
        is the belt to that brace, and the alternative to it is compositing
        indexed art through a branch that says it is restored. */
-    if (h.colourTwins && !pres->colImg) {
+    if (colOn && !pres->colImg) {
         sdWhy = "the presented twin has colour in the producer's record and none here";
         goto standdown;
     }
@@ -3806,7 +3812,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 80 bytes.
            `inc/spirv/tagpu_gui_surf.spv.h` prints the table this must match --
            read it there, never from here. */
-        ip = (int*)(b + 0);   *ip = (h.colourTwins && pres->colImg) ? 1 : 0;
+        ip = (int*)(b + 0);   *ip = (colOn && pres->colImg) ? 1 : 0;
         ip = (int*)(b + 4);   *ip = shOn;                    /* uSharpOn      */
         ip = (int*)(b + 8);   ip[0] = h.surfW; ip[1] = h.surfH;      /* uSize */
         ip = (int*)(b + 16);  ip[0] = shOn ? h.sharpW : 1;

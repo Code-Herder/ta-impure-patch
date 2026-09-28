@@ -209,9 +209,12 @@ static int    s_colValid = 0;
 /* THE CONSUMER'S ANSWER, one frame old by construction: `tagpu_vk_gui.c` calls
    `tagpu_gui_col_ready` from its own prepare, which runs LATER in the same
    iteration of the render loop than this module's present. Both are the render
-   thread, so this is a plain static and not a handshake. One frame of lag on
-   the way ON, which costs nothing, and none on the way off that matters -- the
-   consumer stands the op down for itself if it ever disagrees. */
+   thread, so this is a plain static and not a handshake. One frame of lag in
+   BOTH directions: on the way ON it costs nothing, and on the way OFF -- a
+   restore job that blanks the consumer's atlas -- the consumer draws that
+   frame's restored sprites indexed and composites it indexed
+   (tagpu_vk_gui.c), then this answer drops and its return asks for the
+   repaint. */
 static int    s_colReady = 0;
 /* ...AND HOW OFTEN THE RESTORE HAS GONE QUIET HAVING PAINTED SOMETHING NEW.
    Each one is a repaint's worth of art that was drawn too early to take the
@@ -266,6 +269,16 @@ static int    s_sharpOn = 0;            /* it exists and may be sampled this fra
    it. */
 static int    s_sharpInk = 0;
 static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
+/* `reseedstress=N`: the harness lever that asks for a fresh start every N
+   presents, through the very call the consumer uses when it falls behind
+   (`tagpu_gui_mirror_reseed`, this thread). A fresh start re-lays the UI atlas,
+   which starts a blanking restore while the frame in flight still says colour,
+   and re-creates every twin without colour while colour is valid: the two
+   disagreements that, answered with another fresh start, looped until the
+   consumer composited nothing (tagpu_vk_gui.c `behind_ex`). Under it the
+   consumer must ask for NONE of its own -- tools/compat's `gui-stress` setup is
+   the check. Never a player's. */
+static unsigned s_stress = 0, s_stressN = 0, s_stressFired = 0;
 static unsigned s_strings = 0;          /* string ops stamped                                          */
 static unsigned s_glyphs = 0;           /* glyph quads drawn                                           */
 static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the engine drew them)      */
@@ -2387,10 +2400,18 @@ static void draw_layer(const TAGPU_FRAME* f)
         s_mHand.vpW = (float)W; s_mHand.vpH = (float)H;
         s_mHand.scaleX = s_k; s_mHand.scaleY = ky;
         s_mHand.sharpOn = s_sharpInk ? 1 : 0;   /* COVERAGE, not existence */
-        /* `s_colValid` is this frame's answer to "may an op say restored"
-           (see its declaration); the consumer reads it as whether the
-           presented twin's colour image may be composited. */
-        s_mHand.colourTwins = s_colValid ? 1 : 0;
+        /* WHETHER THE PRESENTED TWIN'S COLOUR IMAGE MAY BE COMPOSITED: colour
+           valid this frame (`s_colValid`, see its declaration) AND this twin
+           given a colour plane (`t->col`) -- the header's definition, and the
+           consumer's check that its own twin has one (`pres->colImg`). The two
+           records are made by the same op, `TAGPU_GUICOL_DST`, and dropped by
+           the same RESET, so they agree by construction. Validity alone was
+           not that: a surface presented before any sprite gave it colour --
+           every surface right after a reseed -- has no colour plane on either
+           side, and the consumer stood the frame down and asked for another
+           reseed. MEASURED 2026-09-27 on the Wine suite: that reason was most
+           of the fresh starts, and all 8 of Escalation's before it gave up. */
+        s_mHand.colourTwins = (s_colValid && t->col) ? 1 : 0;
         s_mHand.vpX = f->vp_x; s_mHand.vpY = f->vp_y;
         s_mHand.vpW_gl = f->vp_w; s_mHand.vpH_gl = f->vp_h;
         /* the same four numbers derived above, not a second reading of
@@ -2437,6 +2458,12 @@ static void poll(void)
        the layer on every frame. */
     s_nocursor = on && strstr(buf, "nocursor") != NULL;
     {
+        const char* q = on ? strstr(buf, "reseedstress=") : NULL;
+        long n = q ? atol(q + 13) : 0;
+        /* bounded below: a fresh start every present never lets one finish */
+        s_stress = (n >= 10 && n <= 1000000) ? (unsigned)n : 0;
+    }
+    {
         const char* q = on ? strstr(buf, "cursorscale=") : NULL;
         double sc = q ? atof(q + 12) : 1.0;
         if (!(sc >= 0.25) || sc > 8.0) sc = 1.0;
@@ -2463,6 +2490,18 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     /* the atlas alone: the sprite table this module resolves against, and
        whose CPU mirror the hand-over carries */
     if (!atlas_setup()) return;
+    if (s_stress && ++s_stressN >= s_stress) {
+        s_stressN = 0;
+        s_stressFired++;
+        tagpu_gui_mirror_reseed();
+        {
+            char b[96];
+            _snprintf(b, sizeof b, "gui: reseedstress: fresh start %u asked by the harness",
+                      s_stressFired);
+            b[sizeof b - 1] = 0;
+            slog(b);
+        }
+    }
     /* No palette is uploaded here: it crosses to the consuming lane as bytes on
        the hand-over. `restore_step` runs before the drain, so the sprites it
        replays ask one frame's question about whether their texels are

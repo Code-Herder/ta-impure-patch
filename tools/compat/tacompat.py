@@ -350,6 +350,55 @@ def verdict(o, setup, platform):
 
 # ------------------------------------------------------------------------- outcome
 
+# THE UI LAYER'S HEALTH, read from the consumer's own lines (tagpu_vk_gui.c `behind_ex`). A
+# fresh start the consumer asks for is it finding its store out of step with the producer's; the
+# first few frames of a session legitimately ask (the store has seeded nothing yet), and nothing
+# else should. Two reasons were one-frame disagreements answered with a fresh start that caused
+# the next one, until the consumer gave up and composited nothing -- a black screen that no other
+# check here sees, because every other check reads state and gadgets, not pixels (MEASURED
+# 2026-09-27: every Escalation run gave up, Total Mayhem's skirmish screen went black on Windows).
+GUI_ASK = re.compile(r"^vk: gui: the twin store cannot follow the producer \(([^)]*)\)", re.M)
+GUI_GAVE_UP = "fresh starts have not made the twin store able to follow the producer"
+GUI_STARTUP = {"an op names a surface this store never seeded", "the presented surface has no twin here"}
+GUI_STRESS = re.compile(r"^gui: reseedstress: fresh start (\d+) asked by the harness", re.M)
+
+
+def lever_file(lever) -> tuple:
+    """A lever is a file put in the game folder: a name alone for an empty file (an `.off`
+    switch), or {"file": name, "text": contents} for one whose contents are the setting."""
+    if isinstance(lever, dict):
+        return lever["file"], lever.get("text", "")
+    return lever, ""
+
+
+def gui_health(text: str) -> dict:
+    """The consumer's own fresh-start requests by reason, whether it gave up, and how many
+    fresh starts the `reseedstress=` lever asked for."""
+    asks = {}
+    for m in GUI_ASK.finditer(text):
+        asks[m.group(1)] = asks.get(m.group(1), 0) + 1
+    fired = [int(m) for m in GUI_STRESS.findall(text)]
+    return {"asks": asks, "gave_up": GUI_GAVE_UP in text, "stress": max(fired, default=0)}
+
+
+def gui_misses(g: "dict | None", exp: dict) -> list:
+    """The UI layer's part of `judge`: never given up, never out of step past the start-up --
+    and under the stress lever, not out of step at all, with the lever seen to fire."""
+    if g is None or exp["outcome"] != "impure-active":
+        return []
+    miss = []
+    if g["gave_up"]:
+        miss.append("the UI layer gave up following the game and composited nothing (a black screen)")
+    stress = exp.get("gui_stress")
+    bad = {r: n for r, n in g["asks"].items() if stress or r not in GUI_STARTUP}
+    if bad:
+        miss.append("the UI layer asked for fresh starts of its own: " +
+                    ", ".join(f"{n}x {r}" for r, n in sorted(bad.items())))
+    if stress and g["stress"] < stress:
+        miss.append(f"the stress lever asked for {g['stress']} fresh starts, fewer than {stress}")
+    return miss
+
+
 def packet_pub(text: str) -> int:
     """The largest frame-packet count the heartbeat reported: frames Impure drew."""
     return max((int(m) for m in re.findall(r"^packet:\S* pub=(\d+) skip=", text, re.M)), default=0)
@@ -440,6 +489,7 @@ def judge(o: dict, exp: dict) -> list:
         miss.append(f"the battle failed: {o['battle'].get('why', '?')}")
     if o.get("mp") is not None and not o["mp"].get("ok", False):
         miss.append(f"the network game failed: {o['mp'].get('why', '?')}")
+    miss += gui_misses(o.get("gui"), exp)
     return miss
 
 
@@ -647,7 +697,8 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     for leftover in ("ErrorLog.txt", "tdrawlog.txt"):
         (gamedir / leftover).unlink(missing_ok=True)
     for lever in setup.get("levers", []):
-        (gamedir / lever).write_bytes(b"")
+        name, text = lever_file(lever)
+        (gamedir / name).write_bytes(text.encode())
     return {"name": name, "gamedir": gamedir, "prefix": prefix}
 
 
@@ -1267,6 +1318,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     logs = other_logs(gamedir / "log", t0)
     o["tadr_ran"] = tadr_evidence(o["tdrawlog"], logs) + hook_evidence(hooks)
     o["outcome"] = classify(o)
+    o["gui"] = gui_health(tagpu or "")
     files = {"wine.log": wlog, **{f"log-{k}": v for k, v in logs.items()}}
     for k in ("tdrawlog", "failure", "errorlog"):
         if o[k]:
@@ -1800,7 +1852,9 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     w.run([f"Copy-Item -LiteralPath {ps(w.path('dll', 'ddraw.dll'))} -Destination "
            f"{ps(ntpath.join(work, 'ddraw.dll'))} -Force"])
     for lever in setup.get("levers", []):
-        w.run([f"New-Item -ItemType File -Force -Path {ps(ntpath.join(work, lever))} | Out-Null"])
+        name, text = lever_file(lever)
+        w.run([f"Set-Content -LiteralPath {ps(ntpath.join(work, name))} -Value {ps(text)} "
+               f"-NoNewline -Encoding ASCII"])
     out = w.path("results", setup["name"] + ".jsonl")
     logdir = ntpath.join(work, "log")
     # what a recorder or anything else writes into log\ this run, and nothing older
@@ -1869,6 +1923,7 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
     logs = {n.strip(): w.read_b64(ntpath.join(logdir, n.strip())) or "" for n in names if n.strip()}
     o["tadr_ran"] = tadr_evidence(o["tdrawlog"], logs) + hook_evidence(hooks)
     o["outcome"] = classify(o)
+    o["gui"] = gui_health(tagpu or "")
     files = {"watch.jsonl": "\n".join(json.dumps(e) for e in events),
              **{f"log-{k}": v for k, v in logs.items()}}
     for k, fname in (("tdrawlog", "tdrawlog.txt"), ("failure", "startup-failure.txt"),
