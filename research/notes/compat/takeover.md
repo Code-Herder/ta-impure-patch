@@ -368,7 +368,7 @@ it is built against. Both comparisons are made, in `DllMain`, before anything is
   depends on it, **and the site is one Impure raises in the first place**. There the difference is
   accepted and Impure's own value goes in over it, exactly as on every other exe.
 
-**One site is marked**: `0x0040EAD6`, the pathfinder's search budget (stock 1333). The 3.9.02 exe's
+**Three sites are marked.** `0x0040EAD6`, the pathfinder's search budget (stock 1333). The 3.9.02 exe's
 file holds 66650, which is what Impure writes anyway; Escalation's holds **1114** — and *that is
 not the number an Escalation game runs with*. Its own `TAESC.ini` sets `AISearchMapEntries=66650`
 ([Escalation](../deep-ta-esc.md)), which TADR writes over the exe's 1114 at every launch, so the
@@ -379,8 +379,19 @@ so the unequal-budget question the port's evidence flags as needing a measuremen
 ([TADR port A](../tadr-port/limits-evidence.md) §6, "worth one MP measurement before it is relied
 on") is not relied on at all. Keeping 1114 would have handed an Escalation player a pathfinder
 below stock's on the strength of that untested inference; the landing review is what caught it.
+The unit limit's ceiling pair, `0x00491659` (the compare) and `0x00491666` (the clamp-to), stock 500:
+TA Zero Alpha 5's exe file holds **5000** at both, and that is not the number a TA Zero game runs
+with either. TADR writes all three unit-limit sites from its ini's `UnitLimit` at every launch
+(`LimitCrack.cpp`), and TA Zero ships `UnitLimit = 1500` in both of its inis, its 2025 TADR
+accepting 20..1500 — Impure's own value. Every bound Impure puts on the unit array rests on
+`TAGPU_LIM_UNITS`, not on the operand, so a file's number there has nothing to size. Unmarked, the
+pair refused every TA Zero launch at start-up (`tazero-alpha5`, MEASURED 2026-09-28: "2 of 284
+sites differ").
+
 Adding a site to that list is a claim about the site, made in a review, and never a way past a
-refusal.
+refusal. **The refusal report prints the stock bytes** under a site the mod's exe changed, since
+there `want` (the file) and `have` (memory) read the same and the difference that refused is the
+file's from 3.1.
 
 Comparing with the baked stock bytes alone could not tell those two cases apart, and so refused
 every mod's own exe at its first changed site — which is what stopped these four setups from
@@ -484,6 +495,7 @@ Both refuse through `tagpu_refuse` — the report, `log\startup-failure.txt`, th
 | **T1b** | 1c | none on its own: it keeps the recorder out of the game's DirectPlay, which is what it was measured to do, and does not stop the recorder, which takes the entry point instead. It is what makes T1c safe, since a recorder that cannot initialise must never be called |
 | **T1c** — landed 2026-09-27 | 1b, 3 | `retail+tadr1`, `retail+tadr-files`, `loader+tadr-ota`, `loader+tadr-tazero`, `loader+tadr-mayhem`, `mayhem-11.3.0`, `prota-4.8`: no TADR code runs in them, alone or in a network game, read out of the running process on every peer, and a launch where any does refuses to start |
 | **T2** — landed 2026-09-27 | 1d **and** part 2, in ONE landing | `392+tadr-dev`, `392+tadr-2026.8.6`, `escalation`, `escalation+tadr-dev`: Impure runs and none of TADR's code does, read out of the running process — 441 to 442 changed runs and **0 into TADR** on Wine, 438 to 451 and 0 on Windows. All four fight the 200v200 battle; the two 3.9.02 routes also play a two-player network game, and Escalation's play none, its battle room starting a game with no units on either peer ([the suite](suite.md)) |
+| **T2d** — landed 2026-09-28 | part 2: the unit limit's ceiling pair marked | `tazero-alpha5` (new with it, beside `twilight-2.0b98`): TA Zero's exe holds a ceiling of 5000 that its TADR replaces with 1500 at every launch, and every launch refused over it until the pair was marked. TA Twilight needed nothing: its exe is the 3.9.02 shape T2 already answers |
 | **T3** | distribution | `gammata-ota`: its tdraw loads only `ddraw_custom.dll`, so Impure is installed under that name too |
 
 **T2 was one landing and not two** because part 2 alone changes nothing a player sees: stop

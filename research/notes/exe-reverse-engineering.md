@@ -202,6 +202,21 @@ the file before launch for exactly that reason:
   the slot count `main+0x14351` = **15 001**, and 6000 units were created without a refusal.
   The renderer's design point is exactly that game (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`;
   [gpu-status](gpu-status.html) §2.86 and §2.6b).
+* **A mod's exe may carry its own ceiling, and it is not the number the mod plays with.** TA Zero
+  Alpha 5's `TotalA.exe` holds **5000** (`0x1388`) in both the compare `0x491659` and the clamp-to
+  `0x491666`, and 250 at the default `0x491640` [DISASSEMBLED 2026-09-28, md5 `7172e8da…`]. TADR
+  writes all three sites from its ini's `UnitLimit` at every launch (`LimitCrack.cpp`), and TA Zero
+  ships `UnitLimit = 1500` in `TAZero.ini` and in its 2025 build's `tazero.ini.tdraw` (range
+  20..1500), so a TA Zero game runs at 1500. The ceiling pair is marked `lim_file_ok`: Impure
+  installs 1500 over the file's number, as it does over stock's ([the takeover](compat/takeover.html),
+  part 2).
+
+**The FBI `commander` tag is `UnitDef+0x245` bit `0x40000`** [DISASSEMBLED 2026-09-28]. The
+FBI reader pushes the tag's name (`0x5039F0`) at `0x42CB7D`, reads it with `0x4C46C0`, masks it to
+one bit, `shl 0x12`, clears that bit of the dword at `+0x245` and ORs it in, and stores the dword
+back at `0x42CBAB` (`89 85 45 02 00 00`). `tagpu_cat.c` reads it to list a game's living commanders
+for the compat suite; the string's one other reference, `0x431B73`, is outside the FBI reader and
+was not followed.
 
 **Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot
 count `10·N + 1` is computed from (`0x4854EF`, a 16-bit `imul` at `0x4854EA` that wraps past 6553,

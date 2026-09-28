@@ -2,8 +2,8 @@
 
 ## Summary
 
-Players do not install Impure into a clean retail folder. They install it into a TA Zero, Total
-Mayhem, ProTA or Escalation folder that already carries a TADR `tdraw.dll`, a recorder
+Players do not install Impure into a clean retail folder. They install it into a TA Zero, TA Twilight,
+Total Mayhem, ProTA or Escalation folder that already carries a TADR `tdraw.dll`, a recorder
 `tplayx.dll`, the Community Patch Loader as `dplayx.dll`, a modified `TotalA.exe`, or cnc-ddraw
 under two names. This section is the guide to what happens then: the **load routes** that decide
 which DLL runs first (below), [what TADR does beside Impure](tadr-collision.md), the
@@ -28,7 +28,8 @@ The short version, measured on the reference setup with the DLL at `main`:
   ProTA); both are [what TADR does beside Impure](tadr-collision.md), and Impure now stops the
   game at start-up if anything like it gets through — the safety net on its own sites, and the
   whole exe image against the exe file on disk.
-- **An exe that imports TADR** (the 3.9.02 exe, Escalation): Impure loads nested inside TADR's
+- **An exe that imports TADR** (the 3.9.02 exe, Escalation, TA Zero's `ZDRAW`, TA Twilight's
+  3.9.02-shaped exe): Impure loads nested inside TADR's
   start-up and **stops the rest of it** — the `DllMain` that loaded Impure returns without
   patching anything, the recorder's entry point is made inert before the loader calls it, and the
   exe's import from the tdraw leads into Impure's own export, and the recorder's DirectPlay slots
@@ -57,7 +58,7 @@ bytes it finds.
 | retail | `DDRAW`, `DPLAYX` | the exe | Impure's `DllMain`, before the exe's entry point |
 | retail + recorder | `DDRAW`, `DPLAYX` → the 2006 `Dplayx.dll` | the exe | Impure; the recorder's entry point is made inert before the loader calls it, and it is never called |
 | retail + Patch Loader | `DDRAW`, `DPLAYX` → the loader | the exe | Impure, then the loader's presets; its `tdraw.dll` is answered with Impure, its recorder is made inert and never called ([the takeover](takeover.md)) |
-| 3.9.02 / Escalation | `TDRAW` / `TAESC` | `tdraw.dll`'s `DllMain`, `LoadLibrary("ddraw.dll")` | Impure, *inside* tdraw's start-up, and the rest of that start-up does not run; the recorder's entry point is made inert before the loader calls it ([the takeover](takeover.md), 1d) |
+| 3.9.02 / Escalation / TA Zero / TA Twilight | `TDRAW` / `TAESC` / `ZDRAW` | `tdraw.dll`'s `DllMain`, `LoadLibrary("ddraw.dll")` | Impure, *inside* tdraw's start-up, and the rest of that start-up does not run; the recorder's entry point is made inert before the loader calls it ([the takeover](takeover.md), 1d) |
 | gammata's drop-in | `TDRAW` | nobody: tdraw loads `ddraw_custom.dll` | cnc-ddraw |
 
 **The Patch Loader route in detail** (`vendor/Total-Annihilation-Patch-Loader/dllmain.c`, and
@@ -100,7 +101,15 @@ map, which a mod may not ship.
 - **Windows has no battle stage and no network stage**: its rows stop at the main menu, which is
   why a recorder there shows only the six sites its entry point installs. The reading of the game's
   code runs on both platforms; the exe's import slots are read on Wine only ([the suite](suite.md)).
+- **A network game sometimes never starts**: the joiner lists no session after twelve UPDATEs
+  while the host waits in its battle room on its own port — 4 of 41 games in the three full Wine
+  runs of 2026-09-27/28, main's build included, more with more games at once. Wine's NAT helpers
+  are refused already ([the suite](suite.md)); the cause is not found. Until it is, a network row
+  that fails this way is re-run, never read as a verdict on the setup.
 - **The network stage is two players on one machine**, over Windows' DirectPlay on loopback;
   a game between two machines, and one with a player who still runs TADR, are not tested.
-- **TA Zero is covered by its DLL layer only** (the player's files): its archives are not in
-  the fixtures, so its setup cannot reach a TA Zero battle.
+- **TA Twilight's `dsound.dll` proxy is not loaded on Wine**, which prefers its built-in
+  `dsound` to a copy in the game folder; it loads beside Impure only on Windows, where the
+  new setups have not run yet.
+- **TA Zero's map pack is not in the fixtures** (TA Forever installs one): the battle is fought on the
+  retail Two Continents.

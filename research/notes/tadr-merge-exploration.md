@@ -336,6 +336,29 @@ any other id above 20, and none uses a `set` id above 20. Stock content uses ids
 bytecode scan of every script in ESC's eight archives and in the retail ones] The 2013 build answered
 id 68 where 416 answers 75; ESC never uses 68.
 
+**The other mods players run use them too, on fewer units.** The same scan over each mod's main
+archive, as TA Forever installs it ([the suite's fixtures](compat/setups.md)):
+
+| mod | scripts | use 69–75 | which units, which ids |
+|---|---|---|---|
+| Total Mayhem 11.3.0 (`mayhem.gp3`) | 495 | 8 | the moho mines and geothermals, `ARMHERC`, `CORMAT`: 69, 70, 71, 73, 75. Four mines also `get` and `set` id **111** |
+| ProTA 4.8 (`ProTA.gp3`) | 311 | 0 | — |
+| TA Zero Alpha 5 (`TAZ31.gp3`, build 120526) | 269 | 19 | the air constructors, the dropships and the `_ai` factories, all three sides: 70 and 74 only |
+| TA Twilight v2.0 Beta 98 (`rev31.gp3`) | 518 | 10 | the galactic gates `ARMGATE`/`CORGATE`: all seven; the transports `ARMBVALK`, `CORBTRANS`, `ARMTHOVR`, `CORTHOVR` and `ARMMANT`, `ARMTSPD`, `CORSCORPI`, `BUNKER`: 70, 71, 72 |
+
+Id 111 is `SET_CLOAKED` in the recorder's 4.0 `COB_extensions`, which no shipped build registers
+(below); Mayhem ships the 3.9.2.416 recorder, which answers 32 and 69–75 and never hooks `set`
+[INFERRED from its version string: the 416 getter is disassembled in ESC's build], so those four
+mines read 0 and set nothing under TADR as well. None of the mods uses another id above 20.
+
+**Without the getters these scripts run and do nothing.** Stock `get` answers 0 for an id above 20.
+A scan then reads `MIN_ID` = `MAX_ID` = 0 and visits slot 0 alone, every unit reads as not allied
+(74) and not on this machine (75), and 71 and 72 read 0. Escalation's and Twilight's gate
+`Teleport` (one script, the same word offsets in both) skips every slot `74` does not call allied
+(word 2656) before it looks at anything else, so **the gates never teleport**, and the indicator
+pieces id 75 shows never appear. [the bytecode of `armgate.cob` in `TAESC.gp3` and in Twilight's
+`rev31.gp3`; not run in a game]
+
 **How ESC uses them.** Scripts loop `for id = MIN_ID .. MAX_ID` over every unit slot, every 0.5 to 3 s
 per unit. They keep finished units (`73 == 0`), allied or enemy (`74`), other than themselves (`71`),
 then read them with stock `UNIT_XZ` and `UNIT_HEIGHT`. Big Bertha, for example, shortens its reload
@@ -356,9 +379,10 @@ result travels as ordinary unit state. [INFERRED]
 A port is one detour and eight getters, each bounded by construction: the id against the unit array's
 count, the alive bit, and the player index below 10.
 
-**Whether to port it** depends on content. Only ESC-class content calls these ids, and ESC does not
-run on our stack as shipped, because its exe renames the data paths (`unitsE`, `weaponE`, … in
-[deep-ta-esc.md](deep-ta-esc.md)). Whether to run ESC content is an open question for the owner.
+**Whether to port it** is the owner's call. Every mod players run with TADR except ProTA calls these
+ids somewhere, and every one of them now runs on our stack with its own exe and archives, TADR's
+code kept out ([the takeover](compat/takeover.md)): the scripts above are in the games Impure
+already starts, answered 0.
 
 **A stock defect the census found.** `PUSH` (`0x4B13CF..0x4B13D9`) increments the stack index and
 writes with no bound, and a thread record holds 32 stack words ([engine map](exe-reverse-engineering.md),

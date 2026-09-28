@@ -1,6 +1,6 @@
 ---
 name: ta-compat-check
-description: Test a ddraw.dll against the setups players actually run — TADR, the Community Patch Loader, Total Mayhem, ProTA, TA Zero's files, Escalation, gammata's drop-in — on Wine (all at once) and on the Windows test box (one at a time), with tools/compat/tacompat.py. Use before pushing a release tag (required), after any change to the engine limits, a patch site, DllMain or the start-up checks, when a player reports a crash or error box with a mod or TADR installed, or when asked to test the DLL before publishing.
+description: Test a ddraw.dll against the setups players actually run — TADR, the Community Patch Loader, Total Mayhem, ProTA, TA Zero, TA Twilight, Escalation, gammata's drop-in — on Wine (all at once) and on the Windows test box (one at a time), with tools/compat/tacompat.py. Use before pushing a release tag (required), after any change to the engine limits, a patch site, DllMain or the start-up checks, when a player reports a crash or error box with a mod or TADR installed, or when asked to test the DLL before publishing.
 ---
 
 # Testing the DLL beside mods and TADR (tacompat)
@@ -58,6 +58,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, 11 cases
   newest `units: alive=N` header in `tagpu.log` (the frame packet — what Impure draws and
   `tacli roster` lists) must hold nine in ten of the units the applier made. A game whose units
   exist but that Impure cannot see passes everything else.
+- **Every player has a commander**, before the battle's scenario clears the map and on each
+  peer of the network game: `tacli units` reports the engine's living commanders (the FBI
+  `commander` bit) and every owner with a living unit, and every such owner must hold one.
 - **The mod's own content** (`content` in a setup): at the menu, the unit types it names — ones
   only that mod defines — must be in the engine's table of loaded types (`tacli units`, a walk of
   the table in memory). A loader that never started leaves stock TA beside the mod's files.
@@ -103,6 +106,14 @@ the repository. A fixture with a `url` downloads with `fetch`. One marked `manua
 a browser check (Cloudflare on tauniverse.com): download it in Chrome through the
 claude-in-chrome tools (the owner allows it for fixtures), then
 `tacompat.py fetch --import NAME=~/Downloads/<file>` — the import checks every member's md5.
+
+**A mod as players install it is what TA Forever installs.** Its API lists every featured mod's
+packages, in order, with the folder rule for each: `curl -s
+'https://api.taforever.com/data/featuredMod?page%5Bsize%5D=100'`, attribute `installPackage`.
+They sit on plain URLs with no browser check, and the mod's git branch at
+`git.taforever.com/ta-forever/<technicalName>.git` pins the current exe and archives by LFS hash
+— compare those with the packages' before trusting a zip. One fixture per package, and the setup
+layers them in TAF's order (`tazero-alpha5`, `twilight-2.0b98`).
 
 ## Anti-virus
 

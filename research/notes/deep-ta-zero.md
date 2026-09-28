@@ -225,10 +225,16 @@ vocabulary matches the script exactly.
 
 **Gaps, stated plainly:**
 
-- **I could not obtain Alpha 5.** Not on the TAUniverse mirror; `zero.tauniverse.com` and ModDB sit
-  behind Cloudflare challenges my tooling could not pass; the TAUniverse forum is login-walled (not
-  attempted, per instructions); the session's web-search budget was exhausted before this task
-  began. The Alpha 4/5 verdict is an inference from continuity, not direct inspection.
+- **Alpha 5 is obtained, from TA Forever's install packages** (the suite's `tazero-*` fixtures,
+  [the setups](compat/setups.md)): `zero.tauniverse.com` still refuses a scripted fetch, but TAF's
+  API lists the packages on plain URLs. Its `TAZ31.gp3` (build 120526) carries 269 unit FBIs with
+  **no engine shield key** (`ShieldRange`, `Shield`, `teleportmethod`, `dont pass damage`,
+  `multiairtransport`: 0) and ships a BOS source beside every one of its 269 scripts, so the
+  Alpha 4 verdict holds for Alpha 5 [VERIFIED 2026-09-28]. The Alpha 5 exe renames the data
+  folders (`ZUnits`, `ZWeapon`, `ZGameDat`, `ZBuildMenu`, `ZUnitPic`), keeps its settings under
+  `Software\TA Zero`, imports `ZDRAW.dll`/`ZMUSI.dll`/`ZPLAYX.dll`, and holds a unit ceiling of
+  5000 that its TADR replaces with 1500 at every launch ([engine map](exe-reverse-engineering.md),
+  *The per-player unit cap*).
 - **Alpha 4's payload is unextracted.** A Caphyon *Advanced Installer* SFX whose file table is
   plaintext (confirming it ships `TotalA.exe`, `zdraw.dll`, `zplayx.dll`, `zmusi.dll`, `TAZ31.gp3`,
   `TAZero.ini`, `SERVER.EXE`) but whose bodies sit in a proprietary LZMA container with no standard

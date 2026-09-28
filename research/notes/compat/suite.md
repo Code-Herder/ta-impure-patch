@@ -14,6 +14,9 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
 
 - `list` and `fetch`: fixtures with a URL download; the ones behind a browser check are fetched
   in a browser and imported with `fetch --import NAME=PATH`, which checks every member's md5.
+  A mod as players have it is what TA Forever installs: its API
+  (`api.taforever.com/data/featuredMod`, `installPackage`) lists each mod's packages in order on
+  plain URLs, and TA Zero's and TA Twilight's setups layer one fixture per package in that order.
 - `wine`: every setup at once. Each gets its own `tacli` instance (`compat-<setup>`), private
   copies of the registry hives, its own Xvfb display, and the overlay of its fixtures on the
   retail gamedir. The runner watches the display's windows for the whole run (a refusal is a
@@ -67,6 +70,26 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
 A run is **meets goal**, **known gap** (matches `today`) or **UNEXPECTED**; the exit status is
 1 on any UNEXPECTED. The rule: no UNEXPECTED before a release.
 
+**Every player gets a commander, in both games.** Before any scenario touches the map, the
+skirmish reads the engine's own unit array (`tacli units`, the catalogue's `commanders` and
+`unit_owners`, `tagpu_cat.c`): every living unit whose type has the FBI `commander` bit
+(`UnitDef+0x245` bit `0x40000`, [engine map](../exe-reverse-engineering.md)), and every owner
+with a living unit. At a game's start a player's units are its start units, so every owner must
+hold a commander, and there must be two at least. The network game checks the same on **each
+peer**, so a peer that never received the other player's commander fails too. It is not read from
+the roster: that is what Impure draws, and the other player's commander starts under the fog.
+The battle scenario clears the map (`clear_existing`), which is why the check comes first.
+MEASURED 2026-09-28: retail's saved skirmish has three players (ARMCOM, and two CORCOM for the
+AIs); TA Zero's starts a GoK and an Arm commander; each network peer holds both.
+
+**A mod without the stock unit types names its own scenarios.** The battle (`200v200`) and the
+network game's two halves (`compat-mp-host`, `compat-mp-join`) place stock types, which every mod
+the suite runs keeps except TA Zero, whose factions are redesigned from scratch (no `ARMPW`, no
+`ARMCOM`). A setup's `scenarios` names its own for the three roles — `tazero-alpha5` uses
+`compat-battle-tazero` and `compat-mp-host-tazero`/`-join-tazero`, the same fights in TA Zero's
+types. The walk knows the game screen by its in-game panel, `<side>MAIN.GUI`, for any side: TA
+Zero's third is GoK, and a hard-coded `ARMMAIN|CORMAIN` never saw a GoK player's game start.
+
 **The UI layer is part of every verdict.** A run whose Vulkan UI layer gave up following the game
 (it then composites nothing: a black screen) or asked for a fresh start past the start-up is
 UNEXPECTED, read from the layer's own log lines. Every other check here reads state and gadgets, so
@@ -85,10 +108,11 @@ The second is what the first cannot give.
 
 - **`tdraw.dll`** writes `tdrawlog.txt` from its `DllMain`: the file at all means it started
   (the result says too whether it installed its engine patches). **On the routes where TADR's own
-  `DllMain` is what loads Impure** — the 3.9.02 exe, Escalation — it has written that first line
-  before Impure exists, so the file cannot be absent there however completely the takeover stops
-  the rest. Those setups carry `tadr_started` in their goal, which allows that one line and
-  nothing else: an engine patch installed, a recorder log, or any site of the game's code leading
+  `DllMain` is what loads Impure** — the 3.9.02 exe, Escalation, TA Zero, TA Twilight — it has
+  written that first line before Impure exists, so the file cannot be absent there however
+  completely the takeover stops the rest. Those setups carry `tadr_started` in their goal, which
+  allows that one line and nothing else — `<n> --- Process Attached`, followed by `.  config=<name>`
+  in the builds from 2026 and by nothing in TA Zero's 2025 build: an engine patch installed, a recorder log, or any site of the game's code leading
   into TADR still fails them.
 - **The recorder** (`tplayx.dll`, or the 2006 `dplayx.dll`) writes `log\TA Demo Recorder Log
   -<date>.txt` **only when it starts from inside one of its DirectPlay exports**. Any such log
