@@ -6,7 +6,7 @@
 in [Demo recorder](demo-recorder.md). This page holds technical findings and the experiments
 needed to settle the open architecture decisions. A temporary transport probe has captured a
 live two-player battle, and the captured events have been decoded, compared between peers, and
-benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), and remote-perspective comparisons (§6c) have run; complete-world seeking has not.**
+benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), remote-perspective comparisons (§6c), and wider same-level snapshot fidelity (§6d) have run; complete-world seeking has not.**
 Preparation and checkpoint policy remain undecided; §6 distinguishes measured container results
 from the missing end-to-end evidence.
 
@@ -500,9 +500,9 @@ shortcut exists. **No preparation/cache policy is selected by these partial resu
 
 The missing capture inventory remains substantial:
 
-- `fill_world`'s feature anchors and wrecks are camera-reach limited; only unit pose coverage
-  was widened. The map-feature seed is carried until the consumer holds it, not as a complete
-  dynamic feature history in every packet.
+- In this first experiment only unit pose coverage was widened. §6d subsequently widens
+  feature/wreck/effects reach and tests two views, finding additional camera-dependent caches.
+  The production publisher remains camera-limited; the map-feature seed is not dynamic history.
 - Fog packets cover the local camera reach. Other players' current sight/radar/exploration,
   alliance sharing and cloaked contacts need authoritative capture or verified reconstruction.
 - Effect models/sprites and renderer caches have their own asset references and coverage rules.
@@ -607,6 +607,95 @@ alone is not their combined network or storage budget.
 `research/experiments/demo-recorder/perspective-results.json` contains the measurements.
 The bounded read script, grids, rosters and logs remain local under
 `_local/demo-recorder-exploration/perspectives/`. Both owned game instances were stopped.
+
+## 6d. Wider world snapshots and camera-dependent caches
+
+**MEASURED, 2026-09-28 — research-only scene prototype.** The next probe widened the
+feature-anchor scan to the entire 672 × 800 cell map and widened the effects gather, retaining
+the collectors' existing bounds and truncation reporting. This extends §6b's unit-only reach;
+it does not turn renderer packets into a production recording format. The reference setup ran
+Two Continents, `200v200`, 1024×768, Vsync off. Evidence is summarized in
+`research/experiments/demo-recorder/world-results.json`; original packets, images, probe sources
+and DLL remain local research inputs.
+
+Three gaps appeared when comparing a snapshot with the paused live scene at newly visited
+camera positions:
+
+- **Cached body turns depend on prior drawing.** In the first early packet, 316 of 398 units
+  had different live and cached turn triples. Copying all their pieces retained stale headings.
+  The corrected saved copy applies `DrawUnit`'s exact signed, wrapped 16-bit difference test:
+  if any axis differs by at least eight angle units, use all three live turns; otherwise keep
+  the cached triple. It changes the owned copy, not the engine. This is distinct from reading
+  already-composed geometry, which must use the turns that composed it.
+- **Feature animation selectors remained live.** An old anchor referencing a GAF wreck-pool
+  record or animated feature definition did not freeze its appearance. After advancing the
+  battle, the old snapshot lost burning-tree fire: 11,136 changed world pixels in the west view.
+  The probe now resolves body/shadow GAF frames on the publishing game thread, bounds the
+  definition and wreck indices, and carries those immutable asset references with each anchor.
+  Their lifetime is only the current level's existing reclaim fence. Disk playback will need
+  stable content handles instead of those pointers.
+- **Depth-plane existence depends on prior drawing too.** Correcting headings and animation
+  left 2,508 changed pixels around shoreline units in the east view. `fill_unit` records the
+  composite's existing depth-plane flag; a never-drawn unit can lack that composite. The
+  engine's ordinary builder requests depth when `unit+0x114` bit 0 is set or the construction
+  fraction is nonzero. The probe captures that bit and supplies the required depth flag in
+  the saved copy. Forced-depth cargo builds have a separate path and remain untested.
+
+In the final run, 302 of 398 early units had different cached/live headings. Merely visiting the
+two paused views changed 200 units' existing depth flags; the saved copy supplied depth for
+255 units, including ones outside those views. These are camera-cache dependencies, not
+simulation changes. The engine map records the allocation and turn-refresh branches.
+
+### Live fidelity and historical restoration
+
+| State | Tick | Units | Model pieces | 3D wrecks | Packet bytes | Copy time |
+|---|---:|---:|---:|---:|---:|---:|
+| Early | 464 | 398 | 6,071 | 3 | 471,680 | 156.6 µs |
+| Late | 1,559 | 303 | 4,709 | 73 | 385,204 | 131.6 µs |
+
+Both packets reported zero truncation. The early gather included 11 projectiles, 72 explosion
+records, 18 debris records, 3,998 particles and 29 effect models; the late gather included
+15 / 75 / 64 / 429 / 79 respectively. Counts describe captured tables, not proof that every
+entry contributed a visible pixel. Copy times exclude the world gather, file IO and rendering.
+
+For **each** camera (`eye=(1900,850)` and `(3100,850)`), the checked world mask contains
+489,176 pixels: x=128..1023, y=180..735, excluding x=480..659, y=360..409 for the pause banner.
+The higher top cut excludes live attack-message text; HUD, minimap and resources are not part
+of this world oracle. Three grabs per state and view gave identical checked pixels.
+
+- Early snapshot versus paused live scene at the same tick: **0 changed pixels in both views**.
+  Body-turn/depth correction runs only on saved copies, so the live branch does not share that
+  correction. The feature-frame capture is shared by both branches at the same paused tick.
+- Restore the early snapshot after advancing to tick 1,559: **0 changed pixels in both views**.
+  Burning features, units, wrecks and the visible effects returned with the old world image.
+- Positive control, early versus late snapshots: **78,524 west / 191,228 east pixels changed**.
+  This was a substantially changed battle, not two copies of an unchanged scene.
+
+This establishes same-level snapshot fidelity in these views. It does **not** establish a
+portable full-world stream, interpolation through arbitrary times, full-map pixel coverage,
+other players' perspectives, historical audio, terrain mutation, or a 5→45-minute seek.
+Out-of-map mirrored feature animation has another consumer and was outside the on-map test.
+Aircraft, cargo and mod-specific render paths need their own cases.
+
+### Wider capture storage cost
+
+A separate moving sample took 100 packets at nominal 10 Hz over **9.902 seconds**, ticks
+464–765, with 398 down to 378 units and no packet truncation. Zstandard level 3, independent
+ten-frame blocks, exact round trips and 25 timing repetitions:
+
+| Data | Raw bytes / 100 frames | Compressed bytes | Median encode / block | Median decode / block | Max decode / block |
+|---|---:|---:|---:|---:|---:|
+| Widened whole packets | 44,247,268 | 2,545,819 | 2.418 ms | 0.728 ms | 1.346 ms |
+| Units + pieces, runtime keys zeroed | 18,032,476 | 708,326 | 0.803 ms | 0.255 ms | 0.302 ms |
+
+At nominal 10 Hz these extrapolate to **916.5 MB/hour** and **255.0 MB/hour** respectively
+(decimal MB). These are short-workload extrapolations, not measured hour-long recordings.
+The whole packet repeats renderer/UI/static data and retains asset pointers; the unit projection
+omits the other layers. Neither is a proposed shipping schema. Compared with §6b's sparse
+late-battle sample, the busy battle makes a materially larger file: budget decisions must use
+workload ranges. Codec time remains small, but the gather, writer, network contribution, file
+opening and complete seek path have not been measured by this benchmark. Delta encoding,
+static-data separation and lower-rate continuous pose samples remain candidates to measure.
 
 ## 7. Architecture conclusions and remaining decisions
 

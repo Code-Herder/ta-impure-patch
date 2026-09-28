@@ -125,3 +125,14 @@ paused grids. Compare players by DPID rather than each peer's local seat. Counte
 differences and zero/nonzero sight differences are distinct measurements; only the latter
 is the current-sight predicate used for the bit-mask compression numbers. Radar, sonar and
 allied sharing are not covered by those masks.
+
+## Wider world snapshot experiment
+
+`world-results.json` records the follow-up's same-level live/restore image comparisons,
+camera-dependent body/depth cache findings and busy-battle block measurements. The temporary
+probe expands feature anchors with resolved animation-frame references and supplies the saved
+unit copy's draw-time heading/depth requirements. It is removed after measurement. Inputs,
+source variants, DLLs and raw images remain under the main checkout's local research archive
+`_local/demo-recorder-exploration/world/`. See exploration §6d for masks, controls and limits.
+The `scene_blocks.py` unit/piece projection remains applicable because those row/header offsets
+are unchanged; the widened anchor layout is not interpreted by that projection.

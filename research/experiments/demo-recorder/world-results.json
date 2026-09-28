@@ -1,0 +1,401 @@
+{
+  "date": "2026-09-28",
+  "status": "research-only widened scene snapshot; no production recorder or complete replay",
+  "setup": "reference setup: retail TA 3.1, Wine 9.0, Impure 9529c19 with temporary scene probe, 1024x768, Vsync off, Two Continents 200v200 skirmish",
+  "world_mask": {
+    "rectangle": [
+      128,
+      180,
+      1024,
+      736
+    ],
+    "excluded_rectangle": [
+      480,
+      360,
+      660,
+      410
+    ],
+    "pixels_per_view": 489176
+  },
+  "baseline": {
+    "early_tick": 437,
+    "late_tick": 1579,
+    "cached_heading_differs": 316,
+    "units": 398,
+    "historical_restore_different_pixels": {
+      "west": 11136,
+      "east": 0
+    },
+    "finding": "west burning-tree animation continued to use live engine selectors"
+  },
+  "heading_animation_probe": {
+    "live_equality": {
+      "west": {
+        "pixels": 489176,
+        "different": 0,
+        "bounds": null,
+        "fixed-early_control": [
+          0,
+          0
+        ],
+        "fixed-live-early_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 2508,
+        "bounds": [
+          799,
+          476,
+          1019,
+          549
+        ],
+        "fixed-early_control": [
+          0,
+          0
+        ],
+        "fixed-live-early_control": [
+          0,
+          0
+        ]
+      }
+    },
+    "historical_equality": {
+      "west": {
+        "pixels": 489176,
+        "different": 0,
+        "bounds": null,
+        "fixed-early_control": [
+          0,
+          0
+        ],
+        "fixed-restored-early_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 0,
+        "bounds": null,
+        "fixed-early_control": [
+          0,
+          0
+        ],
+        "fixed-restored-early_control": [
+          0,
+          0
+        ]
+      }
+    },
+    "finding": "shoreline clipping still depended on whether composite depth planes had been allocated"
+  },
+  "completed_probe": {
+    "live_equality": {
+      "west": {
+        "pixels": 489176,
+        "different": 0,
+        "bounds": null,
+        "depth-early_control": [
+          0,
+          0
+        ],
+        "depth-live-early_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 0,
+        "bounds": null,
+        "depth-early_control": [
+          0,
+          0
+        ],
+        "depth-live-early_control": [
+          0,
+          0
+        ]
+      }
+    },
+    "historical_equality": {
+      "west": {
+        "pixels": 489176,
+        "different": 0,
+        "bounds": null,
+        "depth-early_control": [
+          0,
+          0
+        ],
+        "depth-restored-early_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 0,
+        "bounds": null,
+        "depth-early_control": [
+          0,
+          0
+        ],
+        "depth-restored-early_control": [
+          0,
+          0
+        ]
+      }
+    },
+    "positive_change": {
+      "west": {
+        "pixels": 489176,
+        "different": 78524,
+        "bounds": [
+          142,
+          180,
+          1023,
+          735
+        ],
+        "depth-early_control": [
+          0,
+          0
+        ],
+        "depth-late_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 191228,
+        "bounds": [
+          128,
+          180,
+          1023,
+          735
+        ],
+        "depth-early_control": [
+          0,
+          0
+        ],
+        "depth-late_control": [
+          0,
+          0
+        ]
+      }
+    },
+    "depth-early": {
+      "tick": 464,
+      "bytes": 471680,
+      "units": 398,
+      "pieces": 6071,
+      "wrecks": 3,
+      "truncation": 0,
+      "sha256": "05527d12015db6017b586fb4a7cbeacf80d62b3ed8b5d9daa465573cc5be1c4e"
+    },
+    "depth-late": {
+      "tick": 1559,
+      "bytes": 385204,
+      "units": 303,
+      "pieces": 4709,
+      "wrecks": 73,
+      "truncation": 0,
+      "sha256": "2bb52e6bf64f90e8abf232014c246ce3682f0a0cb19952626fbbfda479518a2a"
+    },
+    "snapshot_copy_us": [
+      156.6,
+      131.6
+    ]
+  },
+  "cache_findings": {
+    "units": 398,
+    "cached_heading_differs": 302,
+    "depth_flag_changed_on_camera_visit": 200,
+    "snapshot_depth_flags_supplied": 255,
+    "examples": [
+      {
+        "slot": 12,
+        "before_flags": 30,
+        "after_flags": 31,
+        "snapshot_flags": 31,
+        "position": [
+          146276351,
+          5570560,
+          67633151
+        ],
+        "name": "armpw"
+      },
+      {
+        "slot": 25,
+        "before_flags": 30,
+        "after_flags": 31,
+        "snapshot_flags": 31,
+        "position": [
+          128450559,
+          5505024,
+          69730303
+        ],
+        "name": "armpw"
+      },
+      {
+        "slot": 27,
+        "before_flags": 30,
+        "after_flags": 31,
+        "snapshot_flags": 31,
+        "position": [
+          145227775,
+          5505024,
+          61341697
+        ],
+        "name": "armpw"
+      },
+      {
+        "slot": 28,
+        "before_flags": 30,
+        "after_flags": 31,
+        "snapshot_flags": 31,
+        "position": [
+          135790591,
+          5570560,
+          69730303
+        ],
+        "name": "armpw"
+      },
+      {
+        "slot": 29,
+        "before_flags": 30,
+        "after_flags": 31,
+        "snapshot_flags": 31,
+        "position": [
+          141033471,
+          5505024,
+          65536001
+        ],
+        "name": "armpw"
+      }
+    ]
+  },
+  "storage": {
+    "frames": 100,
+    "input_sha256": "a83b03ceb19aa2af22fc2a5e82ce1fc312e183a73b0e43d74ec8859f21d5202b",
+    "full_packet": [
+      {
+        "frames_per_block": 1,
+        "blocks": 100,
+        "raw_bytes": 44247268,
+        "compressed_bytes": 8124430,
+        "largest_raw_block": 584652,
+        "encode_ms_median": 0.5931835000000001,
+        "encode_ms_max": 0.895531,
+        "decode_ms_median": 0.195078,
+        "decode_ms_max": 0.287127,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 10,
+        "blocks": 10,
+        "raw_bytes": 44247268,
+        "compressed_bytes": 2545819,
+        "largest_raw_block": 5430948,
+        "encode_ms_median": 2.4175405,
+        "encode_ms_max": 3.490485,
+        "decode_ms_median": 0.7278325,
+        "decode_ms_max": 1.346316,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 50,
+        "blocks": 2,
+        "raw_bytes": 44247268,
+        "compressed_bytes": 2068261,
+        "largest_raw_block": 23171412,
+        "encode_ms_median": 11.3097695,
+        "encode_ms_max": 12.324555,
+        "decode_ms_median": 3.454085,
+        "decode_ms_max": 4.519094,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 100,
+        "blocks": 1,
+        "raw_bytes": 44247268,
+        "compressed_bytes": 2008161,
+        "largest_raw_block": 44247268,
+        "encode_ms_median": 22.199885,
+        "encode_ms_max": 26.939966,
+        "decode_ms_median": 21.861618,
+        "decode_ms_max": 22.833168,
+        "exact_round_trip": true
+      }
+    ],
+    "unit_piece_projection": [
+      {
+        "frames_per_block": 1,
+        "blocks": 100,
+        "raw_bytes": 18032476,
+        "compressed_bytes": 1420642,
+        "largest_raw_block": 185520,
+        "encode_ms_median": 0.114789,
+        "encode_ms_max": 0.172019,
+        "decode_ms_median": 0.044609,
+        "decode_ms_max": 0.175398,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 10,
+        "blocks": 10,
+        "raw_bytes": 18032476,
+        "compressed_bytes": 708326,
+        "largest_raw_block": 1849656,
+        "encode_ms_median": 0.8031170000000001,
+        "encode_ms_max": 1.030539,
+        "decode_ms_median": 0.254612,
+        "decode_ms_max": 0.302337,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 50,
+        "blocks": 2,
+        "raw_bytes": 18032476,
+        "compressed_bytes": 648587,
+        "largest_raw_block": 9134532,
+        "encode_ms_median": 3.924655,
+        "encode_ms_max": 4.070439,
+        "decode_ms_median": 1.250402,
+        "decode_ms_max": 1.320916,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 100,
+        "blocks": 1,
+        "raw_bytes": 18032476,
+        "compressed_bytes": 641775,
+        "largest_raw_block": 18032476,
+        "encode_ms_median": 7.708592,
+        "encode_ms_max": 8.002069,
+        "decode_ms_median": 2.465025,
+        "decode_ms_max": 2.518765,
+        "exact_round_trip": true
+      }
+    ],
+    "sample_seconds": 9.901895360992057,
+    "ticks": [
+      464,
+      765
+    ],
+    "unit_count_range": [
+      378,
+      398
+    ]
+  },
+  "limits": [
+    "same-level asset pointers; no fresh-process whole-world import",
+    "on-map full visibility only; player fog, radar, UI, stats and communication not covered",
+    "prototype sample observes renderer publications; not guaranteed event-complete capture",
+    "10-second workload and codec-only timings; no match-hour, seek or recording-overhead guarantee",
+    "cargo, aircraft, out-of-map mirrored animations, terrain mutation, mods and maximum limits not covered"
+  ]
+}

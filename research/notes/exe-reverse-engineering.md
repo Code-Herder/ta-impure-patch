@@ -505,6 +505,72 @@ and flags 15 at each state (including the depth-plane flag). The scene probe res
 partial and complete images exactly in the unit crop; see the exploration's construction
 subsection for its deliberately limited claim.
 
+### Replay snapshots and draw-created caches [SOURCE / DISASSEMBLED / MEASURED 2026-09-28]
+
+The wider [recorder scene experiment](tadr-port/demo-recorder-exploration.md#6d-wider-world-snapshots-and-camera-dependent-caches)
+shows why an all-map copy of the renderer's existing fields is insufficient. These reads and
+copy transformations were temporary research probes; no new engine byte patch was installed.
+
+**Body orientation, DIS:** `DrawUnit 0x45AC20` obtains the unit from its second stack argument
+at `0x45AC23`, exits when `unit+0x86` is nonzero (`0x45AC29..0x45AC2F`), and reads Object3do
+from `unit+0x9E` (`0x45AC35`). Its three tests at `0x45AC3D..0x45AC7A` subtract each live
+`unit+0x68/+0x66/+0x64` from cached `o3+0x1C/+0x1A/+0x18` in **16 bits**, sign-extend and take
+the absolute value. Any magnitude at least 8 refreshes **all** three turns: dword at
+`0x45AC82`, final word at `0x45AC90`. The same branch sets dirty `o3+8` at `0x45AC89`, clears
+base-primitive `+0x26` at `0x45AC97`, and conditionally clears `o3+4` when primitive `+0x28`
+bit 1 is set (`0x45AC9B..0x45ACA8`). Dirty is tested at `0x45ACB1`. The base-template copy
+at `0x45ACDD` and piece-cache clears at `0x45ACEA..0x45ACF3` precede child/sibling reset calls
+`0x45ACFE/0x45AD0E → 0x45B030`, compose `0x45AD1D → 0x45B0A0`, and dirty clear `0x45AD28`.
+The cargo chain starts with `unit+0x8A` at `0x45AD2B`; its loop advances via `+0x8E` at
+`0x45AE4A`. Afterward `0x45AE73` calls `0x458810` with the unit's Object3do and the draw
+context `main+0x1437B`. Existing DrawUnit call sites are mapped in the sort-row section.
+
+**MEASURED:** 302 of 398 live units in the final early snapshot had different live/cached
+turn triples. Saved-copy normalization using that exact threshold, with live controls retaining
+the original cached turns, restored the tested ground-unit headings at a newly visited camera.
+This does not change the rule for reconstructing **already-composed** vertex buffers: use the
+turns that actually composed them. Cargo and aircraft equivalence remain untested here.
+
+**Composite allocation, DIS:** `0x458810` reads camera fields `main+0x1431F/+0x14323`
+(`0x45881B/0x458821`), builds its draw-mode value from `unit+0x110` bit 29, `+0x10E` bit 0 or
+`unit`'s vtable `+0x20` (`0x45883C..0x45886C`), and its rebuild condition at
+`0x458870..0x4588F2`. The latter is detailed in the repose section below. On rebuild,
+`0x4588FE..0x45890C` calls `0x4586A0(obj, 0, 1)` and clears cached shadow `o3+0x14`.
+The builder reads `obj+0x0C` (owning unit) at `0x4586B8`, calls bounds builder `0x4581E0`
+at `0x4586C9`, then chooses its allocation:
+
+- nonzero second argument (`0x4586D2..0x4586D4`), `unit+0x114` bit 0
+  (`0x4586D6..0x4586DD`), or a construction fraction unequal to zero
+  (`0x4586DF..0x4586F0`) takes `0x458719 → 0x437BE0`, colour + depth;
+- otherwise `0x458702 → 0x437B50`, colour only.
+
+The comparison constant at `0x4FD4C0` is four zero bytes (**section bytes checked**).
+The returned frame is stored through `obj+0x10`, null-tested at `0x458720`, and receives its
+hotspot at `0x458729/0x458732`. The later `unit+0x110` bit 29 / `main+0x37F06` bit 5 tests
+(`0x45873C/0x45874A`) concern the bake path, not that depth-allocation choice. The existing
+cargo call `0x459670 → 0x4586A0(obj, 1, -1)` forces depth; this experiment did not exercise it.
+No new disassembly of the allocators or bounds builder was needed; their existing map remains
+the source for their internals.
+
+**MEASURED:** visiting the two camera views while paused changed 200 of 398 units' captured
+existing-depth flags. Recording `unit+0x114` bit 0, and supplying depth in the saved copy when
+it or the build fraction required it, removed the shoreline discrepancy. The saved copy
+supplied 255 depth flags, including units outside those views. `tagpu_native.c` uses the flag
+with packet `sea_level` (publisher reads `main+0x1427F`) and owner/local-player/state-sonar
+values for clipping/tinting. This is ordinary-unit evidence, not all cargo or mod variants.
+
+**Animated features, SOURCE:** `tagpu_feat.c:draw_feature` resolves animation from live feature
+or wreck records even with a saved anchor. Definitions have stride `0x100`, static body/shadow
+sequences `+0xAC/+0xB0`, animation states `+0xCC/+0xD8`, and mask `+0xFE`. GAF wreck records
+at `main+0x1420B`, stride `0x30`, instead use states `+0x04/+0x10` and shadow-enable flag
+`+0x2F` bit 2. The probe bounds the definition index by the published feature count and wreck
+index by `WR_COUNT`, resolves `tagpu_gaf_state_frame` / `tagpu_gaf_seq_frame` on the game
+thread, and copies frame references into an expanded 24-byte anchor (normally 16 bytes).
+These asset references live only through the current level/reclaim fence; they are not file
+handles. The separate mirrored-feature consumer also resolves animation live and is not
+covered by this on-map experiment. Whole-map feature/FX capture retains existing collector
+bounds and reported no truncation in the measured packets; no maximum-capacity claim follows.
+
 ### Perspective authority and tick boundary [MEASURED / DISASSEMBLED 2026-09-28]
 
 The [two-peer perspective experiment](tadr-port/demo-recorder-exploration.md#6c-remote-perspectives-require-authoritative-contributions)
@@ -11733,12 +11799,15 @@ rare on an idle machine and clusters into bursts when the game thread is preempt
 and why `Object3do+0x08` is the only usable interlock: it is the one field that is set before
 the first write and cleared after the last.
 
-**The rebuild that leads to it is a different question.** `0x458810`'s dirty test
-(`[esp+0x10]`, built at `0x458870..0x4588F2`) is `drawCount == 0`, plus three structure /
-nanoframe / `unit+0x114` bit0 cases that all also require the composite cache `o3+0x10` to be
-null — it is **not** "the pose changed". A walking unit's composite is rebuilt because something
-else nulls `o3+0x10`, not because this test fires; the repose above runs in `DrawUnit`, before
-`0x458810` is called at all.
+**The rebuild that leads to it is a different question.** `0x458810`'s local rebuild flag
+(`[esp+0x10]`, built at `0x458870..0x4588F2`) is set when `o3+4 == 0`; when a structure
+(`unit+0x110` bit 29) lacks its composite; when `unit+0x114` bit 0 is set and the composite is
+absent; or when a structure has a nonzero construction fraction, state bit 13 set and an
+existing composite with **no depth plane** (`0x45889A..0x4588C1`). That last case does not
+require a null composite. The test is not simply "the pose changed": the repose runs in
+`DrawUnit` before `0x458810`, and cache invalidation can separately force rebuilding.
+The allocation choice is mapped in *Replay snapshots and draw-created caches* above
+[DISASSEMBLED 2026-09-28].
 
 ### `get` and `set` — the twenty value ids (tacob landing 4, 2026-09-07)
 
