@@ -496,6 +496,15 @@ portability. The stopped fresh session's existing main fields were inspected thr
 `[0x511DE8]+0x38A47` = tick 521 and `+0x38A51` = pause byte 1. The temporary publisher and
 consumer probes were removed after the experiment; details and bounds are in the linked note.
 
+The genuine-construction follow-up used the same existing unit-array fields
+`main+0x14357/+0x1435B` to bound slot 3 (stride `0x118`) and read its `+0x104` float and
+`+0x108` HP word. A normal GUI build order created the ARMSOLAR: at GameTime 4308 it had
+fraction 1 / HP 0, at 4429 fraction 0.5911845 / HP 134, and at 4594 fraction 0 / HP 326.
+No fraction write was made by the test. The publisher's packet held all five model pieces
+and flags 15 at each state (including the depth-plane flag). The scene probe restored the
+partial and complete images exactly in the unit crop; see the exploration's construction
+subsection for its deliberately limited claim.
+
 ### Perspective authority and tick boundary [MEASURED / DISASSEMBLED 2026-09-28]
 
 The [two-peer perspective experiment](tadr-port/demo-recorder-exploration.md#6c-remote-perspectives-require-authoritative-contributions)

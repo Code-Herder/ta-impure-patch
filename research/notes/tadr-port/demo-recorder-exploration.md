@@ -519,6 +519,35 @@ The probes were removed, the normal DLL rebuilt, and the owned game stopped afte
 Raw images, packets, probe source and DLLs remain local under
 `_local/demo-recorder-exploration/scene/`; no game assets or raw captures are committed.
 
+### Genuine construction and scene switching
+
+**MEASURED 2026-09-28**, same reference setup and temporary scene probe, a separate Two
+Continents skirmish. An ARMCOM received a normal GUI order to build an ARMSOLAR. No scenario
+or debugger wrote the solar's build fraction. The applier only supplied the commander; the
+engine created the solar and progressed it through construction.
+
+| Captured solar state | GameTime | Fraction remaining | HP | Model pieces | Packet flags |
+|---|---:|---:|---:|---:|---:|
+| Birth | 4,308 | 1.0 | 0 | 5 | 15 |
+| Partially built | 4,429 | 0.5911845 | 134 | 5 | 15 |
+| Complete | 4,594 | 0.0 | 326 | 5 | 15 |
+
+The partial and complete packets were selected alternately four times after completion.
+Each restored solar matched its original image **exactly over 6,800 pixels** (x=575..659,
+y=410..489); the two states themselves differed by 2,724 pixels. The genuine nanoframe
+appearance returned for the partial state, and the completed state did not acquire a false
+construction glow. Command-to-completed-window-grab times were **146.2–165.4 ms**, again
+including capture overhead and with Vsync off. The live pause banner and cursor were outside
+that crop. This checks one real structure's same-level renderer-state restoration; it does
+not establish a production replay regression suite, mobile factory builds or multiplayer
+construction playback. The earlier §6a rapid-spawn engine replay and this scene-state test
+exercise different backends and must not be conflated.
+
+`research/experiments/demo-recorder/construction-results.json` retains the states and image
+comparisons. Local captures and the input script are under
+`_local/demo-recorder-exploration/construction/`. The game was stopped and the ordinary DLL
+restored. No persistent construction/recorder patch was added.
+
 ## 6c. Remote perspectives require authoritative contributions
 
 **MEASURED 2026-09-28**, two native-DirectPlay peers on the reference setup, retail TA 3.1,

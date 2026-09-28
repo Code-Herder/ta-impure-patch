@@ -140,6 +140,11 @@ peers. **That is prior evidence, not proof that recording or seeking is correct.
 also records unmeasured cases and a fallback without carried create state. Add replay-specific
 verification, including rapid spawning, seeking, and genuinely unfinished units.
 
+Prototype evidence now includes [rapid finished-unit spawning in solo engine replay](demo-recorder-exploration.md#6a-first-solo-engine-playback)
+and [restoring a genuinely constructed solar before and after completion](demo-recorder-exploration.md#genuine-construction-and-scene-switching).
+These are research checks of two different backends, not completion of the production
+recorder's construction-state regression coverage.
+
 ## Milestones and feature progress
 
 These are tracking groups, **not a detailed implementation sequence or landing plan**. Reorder
