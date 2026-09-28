@@ -25,9 +25,10 @@ renumbered 2026 recorder are not the target.
 | 74 | `UNIT_ALLIED` | queried unit's owner allied to the caller's owner |
 | 75 | `UNIT_IS_ON_THIS_COMP` | queried unit controlled by a human or AI on this peer |
 
-Argument-zero conventions and invalid-unit results must be verified per getter
-against the shipped handler and its callers before implementation. In particular,
-zero is not a universally safe error value: it can mean player zero or completed
+The shipped 416 handler has no argument-zero self-query convention: all four
+unit-target getters address the supplied ID. The port treats slot zero as invalid,
+returning -1 for 72/73 and 0 for 74/75, as for other invalid/dead IDs. Zero cannot
+be the invalid result of 72/73 because it means player zero or completed
 construction. Ordinary empty slots in a unit scan are not script faults.
 
 ## Accepted decisions
@@ -104,13 +105,13 @@ These are evidence to investigate, not fixes already implemented here.
 | Gate | Required evidence | State |
 |---|---|---|
 | Corpus | resolve the installed content and archive precedence; census extended getters/setters, bytecode validity, stack demand and script starts across all listed mods | independent-archive audit run; effective content and runtime proof pending |
-| API | explicitly execute all eight new getters in-game in at least one real mod setup, using test-only scripts where normal content cannot reach a getter; assert results, not just call counts | Escalation zero-result baseline run; port assertions correctly fail; parity pending |
-| Bounds | highest supported live ID, first out-of-array ID, negative IDs, zero conventions, empty/dead/reused slots, 65535/65536/65537; no aliasing or out-of-allocation access | pending |
-| Capacity | real high-stack scripts, locals/arguments/query returns, signals and nested calls, thread exhaustion, rejection path and bounded allocation lifetime | pending |
-| Features | upgrades, shields, adjacency, gates, transports, constructors/factories and orientation wherever each mod uses them; ProTA/retail regression controls | pending |
-| Multiplayer | two Wine peers for every listed mod, host-owned and joiner-owned units, local-AI ownership, alliance/completion changes, attach/drop and destruction; no duplicate owner actions | pending |
-| Rejection | identical unavailable types across peers, unit/script/reason chat at entry, mismatch handling, and refusal for required/pre-existing units | pending |
-| Save/load | valid old saves and new saves with expanded state, including an upgrade in progress; malformed state refused safely | pending |
+| API | explicitly execute all eight new getters in-game in at least one real mod setup, using test-only scripts where normal content cannot reach a getter; assert results, not just call counts | 84/84 Escalation assertions pass, including nonzero kills and construction; all eight also pass on both peers of each listed mod |
+| Bounds | highest supported live ID, first out-of-array ID, negative IDs, zero conventions, empty/dead/reused slots, 65535/65536/65537; no aliasing or out-of-allocation access | signed/zero/first-out-of-pool/65535–65537 pass live; live skirmish-ceiling ID 6000 passes in a 15001-slot pool; global live ID 15000 and dead/reused transitions remain |
+| Capacity | real high-stack scripts, locals/arguments/query returns, signals and nested calls, thread exhaustion, rejection path and bounded allocation lifetime | real 85-word scripts, local 100, all 100 CALL arguments, refused START with 128 arguments, SIGNAL recovery and full-pool CALL diagnostic pass; complete corpus occupancy remains |
+| Features | upgrades, shields, adjacency, gates, transports, constructors/factories and orientation wherever each mod uses them; ProTA/retail regression controls | real Escalation fusion upgrade completes and survives an in-progress save; remaining feature-specific cases open |
+| Multiplayer | two Wine peers for every listed mod, host-owned and joiner-owned units, local-AI ownership, alliance/completion changes, attach/drop and destruction; no duplicate owner actions | all five mods pass self/remote getter ownership; local-AI getters pass in single player; dynamic feature cases remain |
+| Rejection | identical unavailable types across peers, unit/script/reason chat at entry, mismatch handling, and refusal for required/pre-existing units | matching and host-only/joiner-only malformed content consistently excluded; warning captured on screen; required starting/saved commander refusals pass; mission case remains |
+| Save/load | valid old saves and new saves with expanded state, including an upgrade in progress; malformed state refused safely | native 32-word save, expanded records and real upgrade round trips pass; malformed records covered offline, shipped TADR save fixtures remain |
 | Windows | startup and in-game smoke checks across setups; full Windows multiplayer is deferred | pending |
 | Landing | parallel build, documentation and rendered wiki, dedicated high review, fixes and reruns; local landing only | pending |
 
@@ -231,5 +232,175 @@ completion. Eighteen new offline/tooling tests and 84 existing tacob tests pass.
 4. Integrate validation, consistent type exclusion, diagnostics and saved state.
 5. Run the gates above and document the measured outcomes before review/landing.
 
-No getter, stack expansion, rejection path or save extension is implemented merely
-by accepting this plan.
+## Runtime implementation checkpoint — 2026-09-28
+
+The branch implements the eight getters and a portable checked-bytecode core,
+with engine integration in the existing fail-closed patch table. ID 111 remains
+inactive. Every unit argument is checked as signed 32-bit data before lookup;
+invalid/dead slots, including zero, return -1 for 72/73 and 0 for 74/75.
+Stock unit getters 9–11 are bounded too. The caller's alliance
+row is used, without a visibility filter; controller 1/2 means local human/AI.
+
+The interpreter has eight 128-word records: stride `0x224`, object size `0x1144`,
+busy count at `+0x113C`, model at `+0x1140`. The size accommodates the measured
+85-word relative demand and four native arguments. Validation checks the actual
+file-read allocation before relocation; execution checks each instruction's stack
+access and every wait's piece/axis/child index. START consumes arguments even on a
+full pool; a full-pool CALL stops with a diagnostic instead of waiting on -1.
+The native scheduler and non-call opcode bodies remain in use. The file destructor
+owns metadata removal; the trace's two COB destructor observers replace its old
+pointer probe and age heuristic with lifetime invalidation.
+
+Six earlier corpus findings are valid native terminal paths, not excluded units:
+five death scripts branch to the declared code end, where the original next word
+is zero, and Twilight CMGEO reaches opcode word 1. Stock treats unknown opcodes as
+thread termination. The validator admits the proven trailing zero only; the guard
+takes the stock terminal path without fetching outside the declared code. The
+production validator accepted all independently archived scripts in all five mod
+corpora (550 ESC, 496 Mayhem, 269 Zero, 518 Twilight, 311 ProTA).
+
+**Measured:** both the getter-only DLL and the expanded/guarded runtime DLL passed
+all 16 Escalation self-query assertions (eight getters, human and local AI).
+The latter DLL SHA-256 was
+`bd3d99d2941aeff034a9abd17366902e29b3cc30fb41799c757e740dd70fa499`.
+The actual array held 10001 slots, and neither run found TADR execution.
+The test instances and displays were removed. Eight portable native tests run
+with undefined-behaviour instrumentation; together with the audit/probe tests,
+26 tests passed at this checkpoint.
+
+**Not complete:** highest-live/recycled IDs, complete feature coverage,
+Windows smoke checks, documentation completion and the dedicated landing
+review remain gates. Later measurements below supersede the initial runtime checkpoint;
+the branch is not landed and does not yet establish full mod parity.
+
+### Extended live assertions and save verification
+
+The extended Escalation probe passed **82/82 assertions**, with DLL SHA-256
+`72777168b74c5885d4e1422eed8ba9213ee5eb52731e346a97f4374adceb3123`.
+Both human and local-AI units exercised all eight getters, with independently
+checked nonzero kills (7/8) and construction remaining (50%). A generated function
+used local 100 and a 102-word peak stack and returned its stored value, 9876.
+For getters 72–75, the probe also checked zero, negative values, 65535, 65536,
+65537, INT_MAX and the actual pool's first out-of-range ID. These are live
+single-player assertions, not two-peer or natural mod-feature coverage.
+
+The initial expanded-record save/load run and
+three fix-and-rerun attempts failed in the test driver: first an unacknowledged
+pause, then SAVEGAME absent from TABMENU, then the same menu transition observed
+too early, and finally OPTIONS requested while ARMOPT was active. The last run
+did verify the paused, sleeping records containing local 100 before navigating
+menus, but did not produce a completed round-trip comparison. The captured
+evidence did not establish a serialization failure or success. Following explicit
+approval to continue iterating, a panel-state-driven driver passed the in-game
+round trip: both sleeping records retained local 100, resumed, and the complete
+82-assertion suite passed. Old-format saves and an actual upgrade-in-progress save
+remain unverified. All owned probe instances were cleaned up; the branch has not
+been reviewed or landed.
+
+### Shipped-handler correction and rejection tests
+
+Direct disassembly of ESC's shipped 416 recorder confirms the target contract:
+`0x722F78` is the getter detour, `0x722E6C` the extended dispatch, and
+`0x722FA3..0x722FC9` resolves getter 73's supplied ID and jumps to native
+`0x480A44`. Getter 75 uses `0x723508` (premature Word narrowing, including zero)
+and `0x7235D8` (owner controller through a pointer and an exception handler).
+Neither substitutes the caller for ID zero. The initial port probe's zero-self
+expectations for 73/75 came from newer source and were wrong; its earlier 82/82
+result is not evidence for those two expectations. They are corrected to the
+explicit invalid-slot results above. The corrected live run passed as recorded below.
+
+The malformed ordinary-type probe passed with the match continuing and all
+82 original assertions; the log recorded its entry message. The strengthened
+probe also reads the native chat ring and unavailable bit directly. A malformed
+starting ARMCOM refused the match with its unit name/type, script and local-index
+reason. Existing archived COB paths need a loose test-instance override; putting
+ARMCOM.COB in a new UFO does not replace the shipped one.
+
+Script absence alone is **not** a rejection: native `0x485DFE` constructs a
+scriptless model, and ESC's xARMMLS uses that path. Malformed present files are
+rejected before relocation; valid scriptless content remains available. The
+rejection index resets before the loader starts, build-list appenders filter it,
+and required/saved creation refuses instead of silently skipping the unit.
+Chat uses the local reminder API, split into its 63-character payloads, with
+one rejected type announced every five seconds so a large list is not overwritten
+at entry. This pacing is presentation only, never a safety condition.
+
+### Live verification after the shipped-handler correction
+
+DLL `e9bdfaed59a4e180949cc5b33e5ff97390f0edb2e58ecb33d41594426dace5a9`
+passed **84/84** Escalation assertions, the expanded save/load round trip, and ordinary-type
+quarantine. The test read both native chat lines containing the unit, type, script and reason,
+and the definition's cleared availability bit. A later 84/84 run with DLL
+`c58b6b49fc646587005bd68dbad586d60de250c43c908324ecf3da8a71918d0f` also captured the presented
+window at entry: both warning lines were visible and readable. A 100-argument CALL preserved every argument in order and
+returned argument 99, in addition to the 102-word/local-100 test. The trace keeps per-thread
+latches and orders deferred argument reads against COB destruction; its `H` event records
+new per-record stack peaks above 32. A trace reporting `INCOMPLETE` cannot be a passing oracle.
+
+The generated all-eight-getter test passed on two Wine peers for Escalation, Mayhem,
+Twilight, ProTA and TA Zero: each peer created its own probe, tested self ownership, and scanned for
+a live remote-owned unit whose getter 75 returned zero. These checks do not establish
+attachment or alliance-change behavior. TA Zero uses its own solar model/FBI and the `zunits`
+directory. Identical malformed types were excluded on both Escalation peers. Separate host-only
+and joiner-only malformed COB tests passed with DLL `c58b6b49…`: native checksum synchronization
+removed the incompatible type from **both** definition tables before COB loading. Absence is not
+a set availability bit; the first mismatch test's oracle incorrectly conflated those states.
+Native mismatch removal emits no COB-validator warning because the file never reaches it.
+The initial full compatibility suite ran 19 setups: 17 met their
+goal, gammata remained the known not-loaded gap, and Escalation with the development TADR
+reported a renderer source-twin reseed. All 15 network matches reached play, but that
+renderer finding keeps the compatibility gate open.
+
+The renderer finding was traced to first arming the Vulkan mirror after the producer had
+already drained four operations and created one twin without recording it. The mirror now
+requests a producer reset and withholds operations/frames until that reset is consumed; its
+first delivered history starts with RESET. With DLL `c58b6b49…`, all 19 startup/battle outcomes
+met expectations and 14 network matches passed. The remaining loader/Mayhem match stopped in
+the lobby: a field-centre click left the nickname caret inside existing text and backspace
+could not remove the suffix. The input driver now clears both sides with acknowledged
+backspace/delete progress; its focused regression and all 329 tacli tests pass. A targeted
+loader/Mayhem rerun on the same DLL passed startup, battle and multiplayer. Together the full
+run and targeted rerun cover all 19 expected outcomes and all 15 network matches.
+
+The Windows startup attempt returned no results while another agent was using the Windows
+test machine concurrently. It is not valid evidence for this DLL; further Windows checks
+are deferred until exclusive use is available. No in-game Windows smoke result is claimed.
+
+The isolated `--skirmish-ceiling` probe passed **84/84 assertions** on DLL SHA-256
+`acf809553741a21c9ec3b4fedf401e4d41da175466262a19b6ea7f5f579ba3d6` (same runtime source,
+rebuilt). Native creation filled player three's 1500-unit block, retaining its commander,
+and placed the scripted probe at **ID 6000**. Independent observations found that probe
+alive, owned by player three, with 10 kills and 50% construction remaining; the human probe
+was ID 2 with 7 kills. All eight getters, invalid full-width IDs, local 100, the 102-word
+stack and all 100 CALL arguments passed. The pool contained 15001 slots and TADR execution
+evidence was empty. This proves the four-player skirmish ceiling, **not global live ID 15000**.
+
+The initial fixture used retail settings and observed ESC's unchanged 1000-unit limit;
+correcting it to `TAESC.ini` and `Software\TA Esc` reached 1500 but did not create player
+nine. Skirmish activates only four players, as independently documented by `ball10.json`.
+The fixture now names that scope explicitly; global ID 15000 needs a network fixture.
+The compiled safety-core/probe/audit/display tests total 35 passing tests, the tacli suite
+329, and the compatibility self-test 40. The parallel DLL build and wiki build pass.
+The ta-drive reference check still flags the existing generic `tagpu_<pass>_lines.txt`
+placeholder as two nonexistent readers; no missing tool/scenario paths were reported.
+
+The full-pool fixtures passed on DLL `c58b6b49…`. Seven sleeping children plus their parent
+occupied all eight records; a START with 128 arguments was refused, consumed all arguments,
+then SIGNAL freed the children and all 16 human/local-AI getter checks resumed. A separate
+CALL into the full pool stopped with `CALL cannot obtain a child thread`, naming the script
+and word. Neither path writes past the 128-word allocation or waits on a nonexistent child.
+
+Native-save testing exposed an independent stock load-order defect: the saved unit limit
+was read after allocating the player slot ranges, silently losing AI units when the current
+limit differed. The wrapper now establishes the saved partition before allocation, refusing
+unsupported limits rather than narrowing or remapping IDs. The native-32-word retail save
+restored all three commanders and their live COB records with the raised default using DLL
+`96a536e9b5e7e03866f70cd0f196252f939f815dac816a64c864a4c0cab30471`.
+See the engine map's *A saved game's slot partition must precede allocation* for the control
+test and addresses. A saved ARMCOM whose script was made malformed refused loading with its
+unit/type, script and local-index reason, without substitution. An actual Escalation fusion
+upgrade preserved its script state in a mid-construction save/load, then completed at tick
+15986 and attached to its parent (unit 2). The same run recorded stack peaks of **85** in both
+shipped ARMCRAWL and CORDECI scripts, with no incomplete trace. ARMVCAR's declared 54-word
+Detect routine has no observed normal entry path: Create starts SmokeUnit and track_tracks,
+not Detect. Forcing a test call would not establish that the mod naturally executes it.

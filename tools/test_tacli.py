@@ -23,6 +23,7 @@ import shutil
 import tempfile
 import types
 import unittest
+from unittest.mock import Mock, patch
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -307,6 +308,40 @@ class TextTokens(unittest.TestCase):
     def test_non_ascii_is_refused(self):
         with refuses(self):
             tacli._ui_text_tokens("café")
+
+    def test_fill_acknowledges_clearing_on_both_sides_of_the_caret(self):
+        for caret in (0, 3, 6):
+            with self.subTest(caret=caret):
+                state = dict(text='abcdef', caret=caret, time=0)
+                field = gadget(type='textbox', name='NICKNAME', text=state['text'], maxchars=32)
+
+                def write(inst, tokens):
+                    for key in tokens.split():
+                        at, text = state['caret'], state['text']
+                        if key == 'backspace' and at:
+                            state.update(text=text[:at-1] + text[at:], caret=at-1)
+                        elif key == 'delete':
+                            state['text'] = text[:at] + text[at+1:]
+                        elif key.startswith('char:'):
+                            state.update(text=text[:at] + key[5:] + text[at:], caret=at+1)
+
+                def snap(*args):
+                    return snapshot([dict(field, text=state['text'])])
+
+                def sleep(seconds):
+                    state['time'] += seconds
+
+                args = tacli.build_parser().parse_args(['ui', 'fake', 'fill', 'NICKNAME', 'JOIN'])
+                with patch.object(tacli, 'Instance', return_value=Mock()), \
+                     patch.object(tacli, '_ui_resolve', return_value=(snap(), field)), \
+                     patch.object(tacli, '_ui_click_gadget'), \
+                     patch.object(tacli, '_ui_snapshot', snap), \
+                     patch.object(tacli, '_write_tokens', write), \
+                     patch.object(tacli.time, 'sleep', sleep), \
+                     patch.object(tacli.time, 'time', lambda: state['time']), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    tacli.cmd_ui(args)
+                self.assertEqual(state['text'], 'JOIN')
 
 
 class Batching(unittest.TestCase):

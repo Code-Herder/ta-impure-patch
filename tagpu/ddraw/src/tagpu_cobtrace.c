@@ -1,6 +1,6 @@
 /* tagpu_cobtrace.c — the COB script-call oracle.
 
-   WHAT IT LOGS. One tab-separated line per event on the game thread, written to
+   WHAT IT LOGS. One tab-separated line per COB event, written to
    the sink's cobtrace stream, `log\tagpu_cobtrace.log` (tagpu_log.h): a fresh file
    every run (the previous run's rotates into history), capped and rotated like
    tagpu.log, and written through to the OS per line, so a killed process
@@ -12,10 +12,11 @@
      X  tick unit script source                   a start REFUSED: all eight records busy
      K  tick unit slot script by                  a thread killed by another's `signal`
      D  tick unit slot value                      a `rand` draw, the value the script got
+     H  tick unit slot script pc depth            a new stack peak above 32 words
      #  …                                         comment (the header); parsers skip it
 
    `tick` is the sim tick `*(main+0x38A47)`, the counter tagpu_posedump.on stamps
-   too, so the two join on it. `unit` is the in-game index `*(i16*)(unit+0xA8)`
+   too, so the two join on it. `unit` is the in-game index `*(u16*)(unit+0xA8)`
    (what `tacli roster` prints as idx=), `type` the unit-def name at def+0x20.
    `source` is `E` (the engine called the script through one of its by-name
    entries), `C:<n>` (a script's `start-script`, issued by thread n) or `L:<n>`
@@ -23,15 +24,15 @@
    `args` are the words on the child's stack when it first runs, comma-separated,
    in the order the caller pushed them.
 
-   THE SEAM (all disassembly of the pristine build; the engine map has the full
-   layouts). The COB engine object hangs off unit+0x9A (0x544 bytes, vtable
+   THE SEAM (the engine map has the full disassembled layouts). The COB engine
+   object hangs off unit+0x9A (size and record stride in tagpu_cob_safe.h, vtable
    0x4FD698): +0x08 the loaded .cob (+4 nscripts, +0x18 entry[] word indices,
-   +0x1C name[] pointers, +0x24 code words), +0x1C eight thread records of
-   0xA4 bytes, +0x53C the busy count, +0x540 the posed model whose +0xC is the
+   +0x1C name[] pointers, +0x24 code words), +0x1C eight thread records,
+   then the busy count and the posed model pointer whose +0xC is the
    unit. A record: +0 status (0 free; 0x01xxxxxx running; 0x02xxxxxx blocked,
    bits 20-23 say on what), +4 pc, +8 stack top index (-1 empty), +0x18 the
    child slot a `call-script` waits on, +0x1C signal mask, +0x20 the completion
-   callback object, +0x24 a 32-word stack.
+   callback object, +0x24 the stack (128 words in the raised build, 32 in stock).
 
    Every thread start — the engine's StartScript/QueryScript families and the
    VM's START/CALL opcodes alike — goes through ONE allocator, 0x4B08C0
@@ -45,8 +46,8 @@
    the sim RNG 0x4B6C30 from 0x4B15E0 and pushes lo + result.
 
    The hooks are byte-matched and installed all-or-nothing at DllMain; nothing
-   in the engine is written. Everything runs on the game thread, which is the
-   only thread the engine calls its COB VM from, so the log needs no lock. */
+   in the engine is written. Loader queries and in-play scripts have separate
+   per-thread latches. A lock orders deferred reads against destruction. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -55,6 +56,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_log.h"
+#include "tagpu_cob_safe.h"
 
 #define TA_MAINPP   0x00511DE8u
 #define OFF_TICK    0x38A47
@@ -62,22 +64,26 @@
 #define UDEF(u)     (*(char**)((u) + 0x92))
 
 /* the COB engine object and its records */
-#define COB_VTABLE    0x004FD698u          /* the unit script class; a freed block loses it */
-#define COB_SIZE      0x544
 #define COB_FILE(c)   (*(char**)((c) + 0x08))
+#ifdef TAGPU_LIMITS_STOCK
 #define COB_O3(c)     (*(char**)((c) + 0x540))
 #define COB_REC(c, i) ((c) + 0x1C + (i) * 0xA4)
+#define REC_WORDS     32
+#else
+#define COB_O3(c)     (*(char**)((c) + TAGPU_COB_MODEL_OFFSET))
+#define COB_REC(c, i) ((c) + 0x1C + (i) * TAGPU_COB_RECORD_BYTES)
+#define REC_WORDS     TAGPU_COB_WORDS
+#endif
 #define REC_PC(r)     (*(int*)((r) + 0x04))
 #define REC_SP(r)     (*(int*)((r) + 0x08))
 #define REC_STACK(r)  ((int*)((r) + 0x24))
-#define REC_WORDS     32
 /* the loaded .cob */
 #define SF_NSCRIPTS(s) (*(int*)((s) + 0x04))
 #define SF_ENTRY(s)    (*(int**)((s) + 0x18))
 #define SF_NAMES(s)    (*(char***)((s) + 0x1C))
 #define SF_CODE(s)     (*(int**)((s) + 0x24))
 
-/* the five sites and the bytes they hold in the pristine build */
+/* Event sites and the bytes they hold in the pristine build. */
 #define ALLOC_VA    0x004B08C0u   /* COBEngine_AllocThread: push esi; mov esi,[esp+8]   */
 #define RUN_VA      0x004B0DA0u   /* the thread runner:    sub esp,0x20; push ebx; push ebp */
 #define RET_VA      0x004B19D0u   /* RETURN handler:       mov ecx,[esi+0x20]; test ecx,ecx */
@@ -104,12 +110,64 @@ static unsigned  s_skip;                     /* diagnostic: sites left unhooked 
 enum { SK_ALLOC = 1, SK_RUN = 2, SK_RET = 4, SK_KILL = 8, SK_RAND = 16 };
 
 /* the latched start: allocated, arguments not yet on the record */
-static struct {
+typedef struct {
     int   valid;
     char* cob;
     int   slot, idx, tick, parent, argc;     /* argc < 0: read sp+1 at flush */
     char  src;                               /* 'E', 'C' or 'L' */
-} s_pend;
+} Pending;
+typedef struct {
+    Pending pend;
+    struct { char* cob; int parent, argc, call; } vm;
+} TraceThread;
+static TraceThread s_threads[64];
+static unsigned s_threadCount;
+static DWORD s_tls = TLS_OUT_OF_INDEXES;
+static CRITICAL_SECTION s_lock;
+static unsigned char s_peak[65536][TAGPU_COB_THREADS];
+
+/* The fixed pool lives until process exit, as do the installed hooks. TLS
+   keeps one thread from flushing another's not-yet-copied arguments. */
+static TraceThread* trace_enter(void)
+{
+    TraceThread* thread;
+    if (!s_on) return NULL;
+    EnterCriticalSection(&s_lock);
+    thread = (TraceThread*)TlsGetValue(s_tls);
+    if (!thread && s_threadCount < sizeof s_threads / sizeof s_threads[0]) {
+        thread = &s_threads[s_threadCount++];
+        if (!TlsSetValue(s_tls, thread)) thread = NULL;
+    }
+    if (!thread) {
+        tagpu_log_stream(TLOG_COBTRACE, "# INCOMPLETE: trace thread capacity or TLS unavailable");
+        LeaveCriticalSection(&s_lock);
+    }
+    return thread;
+}
+
+void tagpu_cobtrace_destroy(char* cob)
+{
+    unsigned i;
+    if (!s_on) return;
+    EnterCriticalSection(&s_lock);
+    for (i = 0; i < s_threadCount; ++i) {
+        Pending* pend = &s_threads[i].pend;
+        if (pend->valid && pend->cob == cob) {
+            pend->valid = 0;
+            tagpu_log_stream(TLOG_COBTRACE, "# start dropped: its COB object was destroyed before the next event");
+        }
+    }
+    LeaveCriticalSection(&s_lock);
+}
+
+void tagpu_cobtrace_vm_context(char* cob, int parent, int argc, int call)
+{
+    TraceThread* thread = trace_enter();
+    if (!thread) return;
+    thread->vm.cob = cob; thread->vm.parent = parent;
+    thread->vm.argc = argc; thread->vm.call = call;
+    LeaveCriticalSection(&s_lock);
+}
 
 static void tlog(const char* s)
 {
@@ -129,7 +187,7 @@ static char* cob_unit(char* cob)
     return o3 ? *(char**)(o3 + 0xC) : NULL;
 }
 
-static int unit_index(char* u) { return u ? (int)*(short*)(u + 0xA8) : -1; }
+static int unit_index(char* u) { return u ? (int)*(unsigned short*)(u + 0xA8) : -1; }
 
 static void unit_type(char* u, char* out, int cap)
 {
@@ -161,8 +219,8 @@ static const char* script_name(char* cob, int idx)
     return SF_NAMES(sf)[idx];
 }
 
-/* the script whose body holds pc: entry points are strictly increasing and
-   bodies are contiguous (file-formats.md §2.8), so it is the last entry <= pc */
+/* Nearest preceding entry, not a proof of ownership: scripts can share tails
+   and the entry table need not be sorted. */
 static const char* script_of_pc(char* cob, int pc)
 {
     char* sf = COB_FILE(cob);
@@ -180,51 +238,38 @@ static void emit(const char* line)
     tagpu_log_stream(TLOG_COBTRACE, line);
 }
 
-static void flush_pending(void)
+static void flush_pending(TraceThread* thread)
 {
-    char  line[512], t[40], args[REC_WORDS * 12 + 4];
+    char  line[REC_WORDS * 12 + 512], t[40], args[REC_WORDS * 12 + 4];
     char* rec;
     char* u;
     int   argc, i, n = 0;
-    if (!s_pend.valid) return;
-    s_pend.valid = 0;
-    /* one event can separate the allocation from this flush, and a unit can
-       die inside it: FreeUnitScriptData 0x485E30 frees the 0x544-byte object.
-       A freed block keeps its pages (it is above the small-block threshold)
-       but loses its vtable word to the heap's free-list links, so that word is
-       the check; IsBadReadPtr covers the block being unmapped altogether. */
-    if (IsBadReadPtr(s_pend.cob, COB_SIZE) || *(unsigned*)s_pend.cob != COB_VTABLE) {
-        emit("# start dropped: its COB object was freed before the next event");
-        return;
-    }
-    /* and the deferral is bounded in time: with any unit alive the runner is
-       entered every tick, so a latch older than one tick — or from a previous
-       match, whose counter restarted — belongs to an object that is gone */
-    if (tick() != s_pend.tick && tick() != s_pend.tick + 1) {
-        emit("# start dropped: latched more than one tick ago");
-        return;
-    }
-    rec  = COB_REC(s_pend.cob, s_pend.slot);
-    u    = cob_unit(s_pend.cob);
-    argc = s_pend.argc >= 0 ? s_pend.argc : REC_SP(rec) + 1;
+    Pending* pend = &thread->pend;
+    if (!pend->valid) return;
+    pend->valid = 0;
+    /* Caller holds s_lock. The destructor must acquire it and invalidate every
+       latch before freeing a COB object, so this entire read owns its lifetime. */
+    rec  = COB_REC(pend->cob, pend->slot);
+    u    = cob_unit(pend->cob);
+    argc = pend->argc >= 0 ? pend->argc : REC_SP(rec) + 1;
     if (argc < 0) argc = 0;
     if (argc > REC_WORDS) argc = REC_WORDS;
     args[0] = 0;
     for (i = 0; i < argc; i++)
         n += _snprintf(args + n, sizeof args - (size_t)n, "%s%d", i ? "," : "", REC_STACK(rec)[i]);
     unit_type(u, t, sizeof t);
-    if (s_pend.src == 'E')
+    if (pend->src == 'E')
         _snprintf(line, sizeof line, "S\t%d\t%d\t%s\t%s\t%d\tE\t%s",
-                  s_pend.tick, unit_index(u), t, script_name(s_pend.cob, s_pend.idx), s_pend.slot, args);
+                  pend->tick, unit_index(u), t, script_name(pend->cob, pend->idx), pend->slot, args);
     else
         _snprintf(line, sizeof line, "S\t%d\t%d\t%s\t%s\t%d\t%c:%d\t%s",
-                  s_pend.tick, unit_index(u), t, script_name(s_pend.cob, s_pend.idx), s_pend.slot,
-                  s_pend.src, s_pend.parent, args);
+                  pend->tick, unit_index(u), t, script_name(pend->cob, pend->idx), pend->slot,
+                  pend->src, pend->parent, args);
     line[sizeof line - 1] = 0;
     emit(line);
 }
 
-/* ---- the five hook bodies (game thread) ------------------------------------ */
+/* Event observers. */
 
 /* AllocThread wrapper: cob in ecx, idx on the stack; ret is the caller's return
    address, and vm_rec/vm_slot are the VM's esi/ebp — the running record and
@@ -233,10 +278,16 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
 {
     int   slot;
     char* u;
-    flush_pending();
+    TraceThread* thread = trace_enter();
+    Pending* pend;
+    if (!thread) return s_real_alloc(cob, idx);
+    pend = &thread->pend;
+    flush_pending(thread);
     slot = s_real_alloc(cob, idx);
     u = cob_unit(cob);
-    if (!wanted(u)) return slot;
+    if (!wanted(u)) { LeaveCriticalSection(&s_lock); return slot; }
+    if (slot >= 0 && slot < TAGPU_COB_THREADS && unit_index(u) >= 0)
+        s_peak[unit_index(u)][slot] = 0;
     if (slot < 0) {
         /* -1 for an index the file lacks too (the engine asking for a script
            the unit does not define); only a valid index is a refused start */
@@ -244,37 +295,73 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
         if (sf && idx >= 0 && idx < SF_NSCRIPTS(sf)) {
             char line[200];
             _snprintf(line, sizeof line, "X\t%d\t%d\t%s\t%s", tick(), unit_index(u),
-                      script_name(cob, idx), ret == START_RET ? "C" : ret == CALL_RET ? "L" : "E");
+                      script_name(cob, idx), thread->vm.cob == cob ? (thread->vm.call ? "L" : "C") :
+                      ret == START_RET ? "C" : ret == CALL_RET ? "L" : "E");
             line[sizeof line - 1] = 0;
             emit(line);
         }
+        LeaveCriticalSection(&s_lock);
         return slot;
     }
-    s_pend.valid  = 1;
-    s_pend.cob    = cob;
-    s_pend.slot   = slot;
-    s_pend.idx    = idx;
-    s_pend.tick   = tick();
-    s_pend.src    = 'E';
-    s_pend.parent = -1;
-    s_pend.argc   = -1;
+    pend->valid  = 1;
+    pend->cob    = cob;
+    pend->slot   = slot;
+    pend->idx    = idx;
+    pend->tick   = tick();
+    pend->src    = 'E';
+    pend->parent = -1;
+    pend->argc   = -1;
+    if (thread->vm.cob == cob) {
+        pend->src = thread->vm.call ? 'L' : 'C';
+        pend->parent = thread->vm.parent;
+        pend->argc = thread->vm.argc;
+    }
     if ((ret == START_RET || ret == CALL_RET) && vm_slot >= 0 && vm_slot < 8 &&
         vm_rec == COB_REC(cob, vm_slot)) {
         /* the opcode's inline operands: [pc+1] script index, [pc+2] argument count */
         char* sf = COB_FILE(cob);
         int   pc = REC_PC(vm_rec);
-        s_pend.src    = ret == START_RET ? 'C' : 'L';
-        s_pend.parent = vm_slot;
-        s_pend.argc   = sf ? SF_CODE(sf)[pc + 2] : -1;
+        pend->src    = ret == START_RET ? 'C' : 'L';
+        pend->parent = vm_slot;
+        pend->argc   = sf ? SF_CODE(sf)[pc + 2] : -1;
     }
+    LeaveCriticalSection(&s_lock);
     return slot;
+}
+
+void tagpu_cobtrace_step(char* cob, unsigned slot)
+{
+    char line[512];
+    char* u;
+    char* rec;
+    int index, depth;
+    TraceThread* thread = trace_enter();
+    if (!thread) return;
+    flush_pending(thread);
+    u = cob_unit(cob);
+    index = unit_index(u);
+    if (slot < TAGPU_COB_THREADS && index >= 0 && wanted(u)) {
+        rec = COB_REC(cob, slot);
+        depth = REC_SP(rec) + 1;
+        if (depth > 32 && depth <= REC_WORDS && depth > s_peak[index][slot]) {
+            s_peak[index][slot] = (unsigned char)depth;
+            _snprintf(line, sizeof line, "H\t%d\t%d\t%u\t%s\t%d\t%d",
+                      tick(), index, slot, script_of_pc(cob, REC_PC(rec)), REC_PC(rec), depth);
+            line[sizeof line - 1] = 0;
+            emit(line);
+        }
+    }
+    LeaveCriticalSection(&s_lock);
 }
 
 /* the thread runner's entry: the latched thread is about to take its first step */
 static void __stdcall my_run(char* cob, int slot, int dt)
 {
+    TraceThread* thread = trace_enter();
     (void)cob; (void)slot; (void)dt;
-    flush_pending();
+    if (!thread) return;
+    flush_pending(thread);
+    LeaveCriticalSection(&s_lock);
 }
 
 /* RETURN: esi = the record, ebp = its slot, ecx = the pc of the RETURN word */
@@ -283,9 +370,11 @@ static void __stdcall my_return(char* cob, char* rec, int slot, int pc)
     char  line[200];
     char* u;
     int   sp;
-    flush_pending();
+    TraceThread* thread = trace_enter();
+    if (!thread) return;
+    flush_pending(thread);
     u = cob_unit(cob);
-    if (!wanted(u)) return;
+    if (!wanted(u)) { LeaveCriticalSection(&s_lock); return; }
     sp = REC_SP(rec);
     if (sp >= 0 && sp < REC_WORDS)
         _snprintf(line, sizeof line, "R\t%d\t%d\t%d\t%s\t%d", tick(), unit_index(u), slot,
@@ -295,6 +384,7 @@ static void __stdcall my_return(char* cob, char* rec, int slot, int pc)
                   script_of_pc(cob, pc));
     line[sizeof line - 1] = 0;
     emit(line);
+    LeaveCriticalSection(&s_lock);
 }
 
 /* SIGNAL: ecx = the record being freed, ebx = its slot, [esp+0x34] = the signaller */
@@ -302,13 +392,16 @@ static void __stdcall my_kill(char* cob, char* rec, int slot, int by)
 {
     char  line[200];
     char* u;
-    flush_pending();
+    TraceThread* thread = trace_enter();
+    if (!thread) return;
+    flush_pending(thread);
     u = cob_unit(cob);
-    if (!wanted(u)) return;
+    if (!wanted(u)) { LeaveCriticalSection(&s_lock); return; }
     _snprintf(line, sizeof line, "K\t%d\t%d\t%d\t%s\t%d", tick(), unit_index(u), slot,
               script_of_pc(cob, REC_PC(rec)), by);
     line[sizeof line - 1] = 0;
     emit(line);
+    LeaveCriticalSection(&s_lock);
 }
 
 /* RAND: ebx = lo, ebp = the slot, r = what 0x4B6C30 returned; the script gets lo + r */
@@ -316,12 +409,15 @@ static void __stdcall my_rand(char* cob, int slot, int lo, int r)
 {
     char  line[200];
     char* u;
-    flush_pending();
+    TraceThread* thread = trace_enter();
+    if (!thread) return;
+    flush_pending(thread);
     u = cob_unit(cob);
-    if (!wanted(u)) return;
+    if (!wanted(u)) { LeaveCriticalSection(&s_lock); return; }
     _snprintf(line, sizeof line, "D\t%d\t%d\t%d\t%d", tick(), unit_index(u), slot, lo + r);
     line[sizeof line - 1] = 0;
     emit(line);
+    LeaveCriticalSection(&s_lock);
 }
 
 /* ---- the stubs ------------------------------------------------------------- */
@@ -480,9 +576,25 @@ static void read_filter(void)
     if (!strcmp(s_filter, ",ALL,") || !strcmp(s_filter, ",")) s_filter[0] = 0;
 }
 
+static const unsigned char DESTROY_STOLEN[] = {0x56,0x8B,0xF1,0x8B,0x46,0x14};
+
+static unsigned char* build_destroy_stub(unsigned va)
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char* p = s;
+    if (!s) return NULL;
+    *p++ = 0x60; *p++ = 0x51;
+    p = put_call(p, (const void*)&tagpu_cobtrace_destroy);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 4;
+    *p++ = 0x61;
+    memcpy(p, DESTROY_STOLEN, sizeof DESTROY_STOLEN); p += sizeof DESTROY_STOLEN;
+    *p++ = 0xE9; tagpu_detour_rel(p, va + sizeof DESTROY_STOLEN);
+    return s;
+}
+
 void tagpu_cobtrace_init(void)
 {
-    unsigned char *sa, *sr, *st, *sk, *sd;
+    unsigned char *sa, *sr, *st, *sk, *sd, *df, *db;
     unsigned char  rel[5];
     char           b[640];      /* the header: ~200 bytes of text plus a filter of up to 255 */
     if (GetFileAttributesA(FLAG_FILE) == INVALID_FILE_ATTRIBUTES) return;
@@ -490,21 +602,28 @@ void tagpu_cobtrace_init(void)
         memcmp((void*)RUN_VA,   RUN_STOLEN,   5) != 0 ||
         memcmp((void*)RET_VA,   RET_STOLEN,   5) != 0 ||
         memcmp((void*)KILL_VA,  KILL_STOLEN,  6) != 0 ||
-        memcmp((void*)RAND_SITE, RAND_STOLEN, 5) != 0) {
+        memcmp((void*)RAND_SITE, RAND_STOLEN, 5) != 0 ||
+        memcmp((void*)0x004B06B0u, DESTROY_STOLEN, sizeof DESTROY_STOLEN) != 0 ||
+        memcmp((void*)0x004B06F0u, DESTROY_STOLEN, sizeof DESTROY_STOLEN) != 0) {
         tlog("NOT armed — engine bytes differ at one of 0x4B08C0 / 0x4B0DA0 / 0x4B19D0 / 0x4B1A99 / 0x4B15E0");
         return;
     }
     read_filter();
+    s_tls = TlsAlloc();
+    if (s_tls == TLS_OUT_OF_INDEXES) { tlog("NOT armed: no TLS index"); return; }
+    InitializeCriticalSection(&s_lock);
     s_on = 1;
     _snprintf(b, sizeof b, "# tagpu_cobtrace v1\tfilter=%s\tcolumns: S tick unit type script slot source args… | "
                  "R tick unit slot script value | X tick unit script source | K tick unit slot script by | "
-                 "D tick unit slot value", s_filter[0] ? s_filter : "all");
+                 "D tick unit slot value | H tick unit slot script pc depth", s_filter[0] ? s_filter : "all");
     b[sizeof b - 1] = 0;
     emit(b);
     sa = build_alloc_stub(); sr = build_run_stub(); st = build_ret_stub();
     sk = build_kill_stub();  sd = build_rand_stub();
-    if (!sa || !sr || !st || !sk || !sd) { tlog("NOT armed — no stub memory"); s_on = 0; return; }
-    /* all five, or none: the first four are 5-byte jmps, the RNG site keeps its E8 */
+    df = build_destroy_stub(0x004B06F0u); db = build_destroy_stub(0x004B06B0u);
+    if (!sa || !sr || !st || !sk || !sd || !df || !db) { tlog("NOT armed — no stub memory"); s_on = 0; return; }
+    /* The RNG site keeps its E8; both destructor observers are mandatory even
+       when a diagnostic flag disables one of the event hooks. */
     /* the call-site redirect: a rel32 is relative to the site it is written
        at, not to this buffer — tagpu_detour_rel() would encode it against the
        stack, and the first `rand` would call a wild address */
@@ -530,12 +649,17 @@ void tagpu_cobtrace_init(void)
     if ((!(s_skip & SK_RUN)  && !tagpu_detour_land(RUN_VA, sr, 5)) ||
         (!(s_skip & SK_RET)  && !tagpu_detour_land(RET_VA, st, 5)) ||
         (!(s_skip & SK_KILL) && !tagpu_detour_land(KILL_VA, sk, 6)) ||
-        (!(s_skip & SK_RAND) && !tagpu_detour_write(RAND_SITE, rel, 5))) {
+        (!(s_skip & SK_RAND) && !tagpu_detour_write(RAND_SITE, rel, 5)) ||
+        !tagpu_detour_land(0x004B06F0u, df, sizeof DESTROY_STOLEN) ||
+        !tagpu_detour_land(0x004B06B0u, db, sizeof DESTROY_STOLEN)) {
         /* put the allocator back so a half-armed image never runs */
         tagpu_detour_write(ALLOC_VA, ALLOC_STOLEN, 5);
         tagpu_detour_write(RUN_VA, RUN_STOLEN, 5);
         tagpu_detour_write(RET_VA, RET_STOLEN, 5);
         tagpu_detour_write(KILL_VA, KILL_STOLEN, 6);
+        tagpu_detour_write(RAND_SITE, RAND_STOLEN, 5);
+        tagpu_detour_write(0x004B06F0u, DESTROY_STOLEN, sizeof DESTROY_STOLEN);
+        tagpu_detour_write(0x004B06B0u, DESTROY_STOLEN, sizeof DESTROY_STOLEN);
         tlog("NOT armed — a later site refused the write; every site restored");
         s_on = 0;
         return;
@@ -544,4 +668,3 @@ void tagpu_cobtrace_init(void)
               LOG_FILE ", filter=%s", s_filter[0] ? s_filter : "all");
     tlog(b);
 }
-

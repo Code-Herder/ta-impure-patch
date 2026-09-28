@@ -206,16 +206,17 @@ trace tab prints the same lines:
 | `X` | `tick  unit  script  source` | a start was **refused** — the eight records were all busy (the silent failure); `source` as above without the slot |
 | `K` | `tick  unit  slot  script  by` | a thread killed by another thread's `signal`; `by` = the signalling slot. Its `RETURN` never runs, so no `R` follows |
 | `D` | `tick  unit  slot  value` | a `rand( lo, hi )` draw; `value` = what the script received (`lo + result`) |
-| `#` | free text | the header (version, filter, the columns); a parser skips it |
+| `H` | `tick  unit  slot  script  pc  depth` | a new per-record stack peak above 32 words, through the guarded runtime; allocation resets that record's peak |
+| `#` | free text | the header and diagnostics; `INCOMPLETE` invalidates the trace as a behavioral oracle |
 
-Lines are in event order. An `S` line is written at the first hook event after its
-allocation (the arguments arrive on the record only then), so it can sit after lines of its own
-tick but never after a line of a later one — a parser may still sort on the tick column. The
+Lines are serialized under the trace lock. Each calling thread has its own pending start;
+an `S` line is written at its next hook event, after argument transfer. Native thread ordering
+is not a claim of deterministic cross-thread event ordering. The
 file is created afresh at every attach and flushed per line, so a killed process loses nothing.
 A `# start dropped` line marks the one case a start is not written: the unit died between the
 allocation and the next event (or the match ended), and its COB object is gone. `tick` is the sim tick `*(main+0x38A47)`, which
 `tagpu_posedump.on`'s header line now stamps too (`posedump: tick=N idx=U …`), so the two logs join on `(tick, unit)`; `unit` is the in-game
-index `*(i16*)(unit+0xA8)` — `tacli roster`'s `idx=` — and `type` the unit-def name, the
+index `*(u16*)(unit+0xA8)` — `tacli roster`'s `idx=` — and `type` the unit-def name, the
 identifiers `tacli weapons` already prints. The headless replay writes lines with the same
 fields, and the gate is `diff`. What the trace does **not** carry: the engine's asks for a
 script the unit lacks (only an index of `-1` reaches the allocator), which engine function
@@ -224,9 +225,13 @@ business). Two things the first traces taught about the *arguments*: a `Query*` 
 `Killed`, which `Send_UnitDeath` runs through `QueryScript` with the caller's two locals —
 carries the current values of the caller's out-slots, so `Killed`'s second argument is an
 **uninitialised stack word** (a different number every run) that the replay must treat as
-opaque; and an unwritten local reads whatever the record last held (`CREATE_LOCAL_VAR` only
-bumps the stack index), so a script started with fewer arguments than it creates does not
-read zeros — it reads the previous occupant's stack.
+opaque. In the stock runtime an unwritten local reads whatever the record last held
+(`CREATE_LOCAL_VAR` only bumps the stack index). The guarded runtime clears each record's
+stack at allocation before copying its arguments; an unwritten local therefore reads zero.
+It preserves all 128 possible argument words in the trace. Destructor hooks invalidate
+pending starts before their COB object's memory is freed; a pointer probe is not used as
+the lifetime argument. The per-thread trace pool holds 64 participants for the process lifetime;
+exhaustion or unavailable thread-local storage emits `INCOMPLETE`, not a passing partial trace.
 
 **The nine gate scenarios** — one run each in the real game with both oracles on, replayed by
 `tacob run` with the same director events, the diff must be empty:
@@ -276,7 +281,7 @@ that cost a live run, and each message says which note holds the measurement:
 | `thread-peak` | warning | a static estimate of concurrently live records above eight — per script, itself if it can block plus everything it starts or calls |
 | `query-piece-shown` | warning | the muzzle a `Query*` hands back that neither `Create` nor `0x45AF1B` hides: the flare cone stuck on the hull |
 | `set-ignored` | warning | a `set` retail TA drops — only six of the twenty ids have a case in `0x480B20` |
-| `get-extension` | warning | a value id above 20: the jump table at `0x480AC4` stops there and returns 0. Only TADR's recorder answers more (32 and 69–75), and our stack does not load it |
+| `get-extension` | warning | a value id above 20: the retail jump table at `0x480AC4` stops there and returns 0. This remains a stock-target lint; the guarded COB port implements 32 and 69–75 without loading TADR. Getter 111 remains unsupported |
 | `piece-unknown` | warning | a declared piece the model has no node for, so every move and hide on it moves nothing |
 
 `play-sound` and `map-command` are **compile errors**, not lints: the compiler refuses them and

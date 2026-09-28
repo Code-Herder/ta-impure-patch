@@ -75,13 +75,33 @@ tools/talog.py run tagpu/instances/c1/gamedir --stream tagpu_cobtrace | cut -f1-
 - The file is truncated at every launch and flushed per line, so `tacli stop` loses nothing.
 - `tools/tacob pose-check` reads the pose dump; the dump's fields are what it exists for.
 
-**Extended-getter probe:** `python3 tools/cob_getter_probe.py --out /tmp/cob-getters --expect stock-zero`
+**Extended-getter probe:** `python3 tools/cob_getter_probe.py --out /tmp/cob-getters --expect implemented --extended --roundtrip --quarantine`
 creates its own isolated Escalation setup, adds a generated probe type and calls all eight
 required getters on human-owned and local-AI-owned units. It asserts values from the return
 trace, inspects the live exe for TADR hooks, saves evidence outside the repo and cleans up its
-instance/display. `--expect implemented` checks the intended self-query results and is a red
-test until the port exists. Neither mode covers ID boundaries, non-zero kills/construction or
-two-peer ownership; see `research/notes/tadr-port/cob.md`. The output directory must be new.
+instance/display. `--extended` checks full-width invalid IDs, nonzero kills/construction,
+local 100 and every argument of a 100-argument CALL. `--roundtrip` saves and restores sleeping
+expanded records; `--quarantine` checks type exclusion, native chat and a presented-window
+capture; `--reject-required` expects a required-unit refusal. Separate
+`--thread-exhaustion start|call` fixtures fill all eight records and exercise refused calls
+with a full 128-word argument stack. `--expect stock-zero` is the negative API control.
+`--skirmish-ceiling` fills player three's native block and asserts live ID 6000 in a
+15001-slot pool. It configures ESC's own `TAESC.ini` and `Software\TA Esc` registry root,
+not retail's settings. Skirmish activates only four players; this is not evidence for
+global live ID 15000, which requires a network fixture.
+
+`tools/cob_peer_probe.py SETUP --port N --out DIR` checks self and remote ownership on two
+peers; `--quarantine both|host|join` checks matching malformed files or native mismatch
+exclusion. `tools/cob_feature_probe.py --out DIR` runs a real Escalation fusion upgrade,
+including an in-progress save/load and real high-stack scripts. `tools/cob_legacy_save_probe.py`
+creates a native-32-word save and imports it with the current DLL. See each tool's `--help`
+and `research/notes/tadr-port/cob.md` for measured coverage. Output directories must be new
+and outside the repository; all drivers clean up their owned games/displays.
+
+The trace's `H` event records new per-record stack peaks above 32. Argument lines retain all
+128 possible words. A trace containing `INCOMPLETE` cannot establish behavior: its bounded
+per-thread tracing capacity or thread-local storage was unavailable. Starts and argument
+reads are ordered against the COB destructor; no freed record is read for a delayed trace.
 
 ## Multiplayer: two to ten instances in one game
 

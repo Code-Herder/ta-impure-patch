@@ -1176,6 +1176,7 @@ static void restore_step(void)
    `s_mirLost` counts it. */
 
 static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
+static int       s_mirAwaitReset;
 /* THE ASSET TOKEN THIS RECORD CARRIES, held back until the record is actually
    handed over. `mir_op` succeeding is not delivery: a later op in the same
    drain can exhaust MIR_OPS_MAX/MIR_ARENA_MAX, or a glyph repack or an atlas
@@ -1268,7 +1269,7 @@ static void mir_begin(void)
 /* room for one more op, or abandon the frame */
 static TAGPU_GUIOP* mir_op(void)
 {
-    if (!s_mirRec) return NULL;
+    if (!s_mirRec || s_mirAwaitReset) return NULL;
     if (s_mNOps >= s_mCapOps) {
         unsigned want = s_mCapOps ? s_mCapOps * 2 : 1024;
         TAGPU_GUIOP* n;
@@ -1461,6 +1462,7 @@ static void drain(void)
         switch (o->kind) {
         case PK_FRAME:  s_presented = o->surf; break;
         case PK_RESET:  twins_reset();
+            s_mirAwaitReset = 0;
             { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
             /* AND EVERY RESOLVED ATLAS RECT BEFORE THIS POINT STOPS MATTERING.
                The consumer drops its whole store on this op, so a sprite
@@ -2630,7 +2632,7 @@ static void mir_finish(const TAGPU_FRAME* f)
        A repack between a recorded string and here is the same statement about
        the same frame. Both publish `lost`, which the consumer answers with the
        behind state. */
-    if (!s_mirWant) { s_mHave = 0; return; }
+    if (!s_mirWant || s_mirAwaitReset) { s_mHave = 0; return; }
     /* THE TWO ATLASES THE RECORD CARRIES RESOLVED RECTS INTO, checked the same
        way and for the same reason: a rect is valid only for the generation it
        was read in, and both of these can move in the middle of a present --
@@ -2785,6 +2787,14 @@ void tagpu_gui_mirror_reseed(void)
 
 void tagpu_gui_mirror_want(int on)
 {
+    if (on && !s_mirWant) {
+        /* The drain can already own twins when its consumer first arms.
+           Publish no partial history: the first delivered op must be a
+           producer RESET, followed by that epoch's seeds and draws. */
+        s_mirAwaitReset = 1;
+        g_guiq.why = TAGPU_GUI_WHY_ARM;
+        g_guiq.reseed = 1;
+    }
     if (!on && s_mirWant) {
         /* nothing is kept once nothing asks for it: this is the largest thing
            the module owns after the twins themselves */
@@ -2827,4 +2837,3 @@ int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
     if (s_handAssetTok) { g_guiq.assetAck = s_handAssetTok; s_handAssetTok = 0; }
     return 1;
 }
-

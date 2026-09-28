@@ -253,6 +253,36 @@ after which `0x485502` allocates the array too small). These places write it:
   so that the stub sees the whole value. Each 7-byte `mov word [ecx+off],ax` becomes a `call` to a
   stub that clamps `eax` and stores it, and two NOPs. `eax` and the flags are dead after all three.
 
+**A saved game's slot partition must precede allocation** [DISASSEMBLED and MEASURED
+2026-09-28]. `0x4974E3..0x49757C` restores saved player configuration, but not the unit limit.
+`0x497581` then calls `LoadGameData_Main 0x4917D0`; its call at `0x4918D4` allocates the unit
+pool through `0x4854A0`, including each player's range. Only afterwards does `0x497B29` call
+`0x432610`. That routine selects `Summary` (pointer at `0x503320` names the string at
+`0x503324`), tests `maxunits` (`0x5048F8`), reads it at `0x43263B`, and stores only the
+configured cap at `0x432646`. It does not rebuild the already allocated partition.
+The saved-unit constructor accepts a requested ID only inside its owner's range:
+`0x486026..0x486030` compares the requested slot pointer with the player's begin/end;
+failure returns NULL at `0x4861BD`. The restore loop silently skips that unit.
+
+The raised build wraps the byte-matched call at `0x497581` (`E8 4A A2 FF FF`). On an
+in-progress save it reads the saved limit, rejects missing or out-of-range values, and sets
+both `main+0x37EE6` and `+0x37EEC` before calling the native allocator chain. IDs are not
+remapped: COB stacks may contain them. A `BetweenMissions` key leaves the native new-mission
+path alone. The loader owns the TDF and these writes; play has not started.
+The native thiscall APIs are `0x4B4560(self, section)` (selects or creates a section, returns
+1 when found; updates the current-section index at `*self+8` and resets its item cursor),
+`0x4B48F0(self, key)` (existence), and `0x4B4800(self, key, default)` (integer value).
+The later native readers select their own sections. `0x509348` is the lowercase `summary`
+string used by the loader, and `0x504924` is `BetweenMissions`.
+
+The regression driver `tools/cob_legacy_save_probe.py` made a native 32-word retail save at
+250 units/player. Loading it into the raised default restored only owner 0 before the fix;
+explicitly configuring the loader to 250 restored owners 0, 1 and 3 with identical active
+COB records. The ordering fix restored those same three owners and records with the default
+configuration unchanged (DLL SHA-256
+`96a536e9b5e7e03866f70cd0f196252f939f815dac816a64c864a4c0cab30471`). This establishes retail
+old-record import and the partition bug, not every mod's historical save compatibility.
+
 **A type's own cap, `UnitDef+0x15A` [DISASSEMBLED 2026-09-23].** The unit constructor `0x485F50`
 (`UNITS_CreateUnit`, `(player, type, …)`) checks it before anything else: a type whose `def+0x241`
 bit 23 is clear is refused outright (`0x485FAA`, `je 0x4861BD`, return 0); when the bit is set and
@@ -2143,7 +2173,7 @@ Stock content joins in under 2 s.
 **The def array's order is the order the files were found in.** The loader's list comes from
 `0x4BCA30`: loose files first (the C runtime's find-first, `0x4E7DD0`), then the archives, which
 `0x41D4C0` opens as `rev31.GP3`, `*.CCX`, `*.UFO` and `*.HPI`, each pattern in the order the
-directory lists them (`0x4BC4B0`). Nothing sorts it before the game load (`0x42D4DC`, by name through
+directory lists them (`0x4BC4B0`). Nothing sorts it before the game load (`0x42D533..0x42D610`, by name through
 `0x42DB60`); the menu-time load's end only fills the slot of a type it drops with the last def
 (`0x42B2A3..0x42B2BB`, through `0x42B370`). So two peers with the same files can hold the types in a different order: a
 different file system, a renamed archive, a loose copy of a file.
@@ -10804,6 +10834,15 @@ FBI loader.
   `0x42D722`**; the model — `0x4CB560` open, `0x4CB590` parse, `0x42A140`
   texture-match, stored to `MODEL_PTRS[esi]` at `0x42D7A2` (the section above); and the script —
   `scripts\<name>.COB` (`0x42D8E5`) through `0x4B2450` into **`def+0x18E`** at `0x42D8F4`.
+- **Filtering and sorting precede all COB loads.** `0x42D485` makes the definition array
+  writable; `0x42D493..0x42D510` filters availability bit `def+0x241 & 0x800000`, compacting
+  retained definitions with `0x42B370` at `0x42D4DC..0x42D510`. `0x42D542` stores the reduced
+  count. The sort at `0x42D533..0x42D610` uses name comparator `0x42DB60`, calls `0x432FB0`
+  for up to 16 elements and `0x432D40` plus insertion work for larger arrays. IDs are assigned
+  at `0x42D634` before the per-type load loop. Thus checksum-incompatible types removed by
+  native multiplayer sync never reach COB validation, and rejection indices recorded during
+  COB loading are not subsequently moved by this compaction/sort. [DISASSEMBLED 2026-09-28;
+  MEASURED: host-only and joiner-only malformed COB fixtures absent on both peers.]
 - **`0x42BF40(path, def)`** (`sub esp,0x518`) opens the file (`0x4C2F60`) and finds `[UNITINFO]`
   (`0x4C3410` with `0x503914`); at `0x42BF8C..0x42BF93` it takes **`ebp = def`**
   (`[esp+0x530]`) and **`ecx = the section`** (`[esp+0x14]`), and at `0x42BF97` begins its first
@@ -10978,8 +11017,9 @@ the next section: it is 30, and it is a constant rather than the live tick rate.
 ## The COB engine — mapped by us (tacob landing 2, 2026-09-07)
 
 *Everything here is from `i686-w64-mingw32-objdump -d -M intel` of `pristine/TotalA.exe.pristine`
-unless marked **[LIVE]**. The fork's oracle `tagpu_cobtrace.c` hooks five of these sites and
-writes nothing into the engine; its line contract is [tacob-design](tacob-design.html) §"The
+unless marked **[LIVE]** or explicitly attributed to a mod executable. The fork's oracle
+`tagpu_cobtrace.c` observes the five event sites plus both destructor entries and writes no
+engine data; its line contract is [tacob-design](tacob-design.html) §"The
 trace contract", and `extra-weapons.md` snag 10 is the story that led here. Names marked
 `[INFERRED]` are ours; `COBEngine_*` names come from the community symbol file.*
 
@@ -11737,6 +11777,89 @@ but a *freeze* — the engine's own handler reports `Access Violation … at 014
 attempt and every thread then waits on the wineserver, which is what the first tank runs
 looked like before the site's displacement was fixed.
 
+### COB guarded-runtime integration [DISASSEMBLED + MEASURED 2026-09-28]
+
+The stock layouts above describe the executable. The F port's raised layout and
+its incomplete verification gates are in [the COB note](tadr-port/cob.md).
+`cob_runtime_sites` in `tagpu_patches.c` is the checked patch inventory: allocation
+operand `0x485D74`; 33 model-field operands (the getter's 34th reference lives in
+its trampoline); 12 busy-count operands; six record-iteration strides; and the
+record-index expressions at `0x4B08F0`, `0x4B09B2`, `0x4B0A27`, `0x4B0B25`, and
+`0x4B0C57`. The original `slot*41*4` becomes `slot*137*4`. The runner address
+calculation at `0x4B0DAD` is replaced by a bound and record validation **before**
+the wait-state dispatcher reads piece/axis fields. The first instruction fetch
+and all later fetches pass `0x4B0E5D`; `0x4B0E59` alone misses the first fetch.
+
+START/CALL's old address expressions at `0x4B18CA`, `0x4B18EE`, `0x4B1937`, and
+`0x4B1958` are not executed by the guarded dispatcher. The adapter calls the
+same allocator, copies the bounded arguments in push order, leaves the child's
+SP at -1, inherits its signal mask and advances the parent by three words. CALL
+waits on the child and exits at `0x4B1BE8`; START resumes at `0x4B0E59`. The
+allocator's `0x4B0921` observer initializes its stack/unused wait fields and
+increments the relocated count. Native RETURN and SIGNAL still wake callers.
+
+**File allocation ownership.** `0x4BBE50(path, size_out)` obtains length from its
+already-open archive/file (`0x4BBE9A..0x4BBEC2`), allocates at `0x4BBF3C`, reads
+at `0x4BBF49`, and writes that allocation length to `size_out` at `0x4BBF6A`.
+The read result is tested only for positive length, not exact length: the input
+validator's bound is the allocation, not a claim that the stock reader detects
+short reads. The COB loader's call at `0x4B245C` is intercepted to validate this
+same allocation before relocation. Its subsequent checksum-size query
+(`push path` at `0x4B246F`, call at `0x4B2470`) instead asks for the recorded
+allocation size, avoiding a second-open size mismatch. Checksum call/return
+`0x4B2477`/`0x4B247C` stays intact for the data-keys observer. The script
+destructor frees the blob through `0x4D85A0` at `0x4B26D5`; metadata is unlinked
+before this call. Reload's unit-before-script destruction is documented above.
+
+**Termination, not malformed fallthrough.** Stock `0x4B1B60` clears the current
+record, decrements the count and stops this invocation, without a completion
+callback. Five shipped death scripts branch to exactly code length, where the
+raw following word (entry zero) is zero: ESC ARMGANT (3548), COREVP (4618),
+CORULAB (5424), Twilight CORCRW-OLD (606) and CORCRW (611). Twilight CMGEO reaches
+word 1 at PC 346. These are native unknown-opcode termination, not missing
+return operands. The guarded path accepts the proven zero and reaches the native
+termination handler without fetching beyond declared code.
+
+**Serialization.** `0x4B1EC0(cob, stream)` is the thiscall save method;
+`0x4B2040` is the load method, each `ret 4`. Stream size is `0x4B4BF0`, seek
+`0x4B4C10(stream, offset)`, read `0x4B4C80(stream, buf, n)`, write
+`0x4B4CF0(stream, buf, n)`; all are thiscall, and read/write return byte counts.
+Stock's first `0x528` bytes hold checksum, eight `0xA4` records and busy count.
+They are followed by four bytes per static and 108 per piece. Each piece is
+18 animation words (`animation+4`, excluding its dirty word), three positions
+(`vt+0x14`), three angles (`vt+0x18`), and flags from `vt+0x1C/+0x20/+0x24`.
+Load restores the flags through `vt+8/+0xC/+0x10`, positions/angles through
+`vt+0/+4`, and marks every animation plus `cob+0x18` dirty. Callbacks are always
+cleared on restore. **Negative finding:** the two stores shown as `[esp+0x80]`
+at `0x4B1F8B` and `0x4B1F99` do not overwrite the same flag: the first has a
+pushed argument still on the stack. All three flags have distinct saved words.
+The port replaces both whole methods and does not execute their old frame-copy
+sizes or old count offsets. It imports stock records and writes a versioned
+128-word format. Live tests restored native 32-word commander records, expanded sleeping
+records with local 100, and an Escalation fusion upgrade in progress; the upgrade then completed.
+
+**Transport operands.** `0x481340` and `0x4813B0` are the unit-class ATTACH/DROP
+methods; both originally narrow to a word before unbounded pool addressing.
+ATTACH forwards `(cargo, carrier, piece, flags)` to `0x48AAC0`. Its seven-byte
+`0x0A` message carries u16 unit references and a **byte** piece (`0x48AB36`);
+receiver `0x48AB70` treats piece `0xFF` as hidden cargo (`0x48AC99`), not geometry
+piece 255. The guarded opcode checks full-width IDs and admits piece -1 or a
+validated piece below 255. No new unit/network ID format is introduced.
+
+**Trace lifetime.** Both base destructors, `0x4B06B0` (deleting) and `0x4B06F0`
+(non-deleting, called by `0x485E30`), free animations/statics. Mandatory trace
+observers at their six-byte entries invalidate any deferred start before either
+free. Thus the pending trace no longer relies on `IsBadReadPtr`, a freed block's
+vtable, or a one-tick age heuristic. The new dispatcher supplies START/CALL origin
+to the trace explicitly because those allocator return addresses now lie in the DLL.
+
+**Measured:** the corrected extended Escalation suite passed 84 assertions, including
+nonzero kills, construction and signed/out-of-pool IDs, with native 10001-slot bounds and
+no TADR execution. Real ARMCRAWL and CORDECI scripts reached 85 words. All eight getters
+passed on two peers of each supported mod, including remote-owner getter 75 returning zero.
+Highest-live/recycled IDs and complete feature-specific multiplayer coverage remain open;
+the COB note records the exact builds and tests, including full-pool START/CALL behavior.
+
 ## The registry — every call site, key and value — mapped by us [DISASSEMBLED + MEASURED 2026-09-25]
 
 What the game asks of the registry. It was mapped for the test-mode registry store,
@@ -11807,6 +11930,18 @@ a register once and call through it; the register is given with the load.
    | `0x4B6A00` | write REG_BINARY | 1 (`0x42F960`) |
    | `0x4B6A20` | write a string (REG_SZ, `strlen + 1`) | 7 |
    | `0x4B6A50` | write a dword (`SaveSetting`) | 92 |
+
+   **Escalation GOLD 10.2.0 variant [DISASSEMBLED 2026-09-28]:** the same accessor's
+   `0x4B68B1` still pushes `Software` at `0x509ED0`, but `0x4B68E8` pushes `TA Esc` at
+   `0x509EB8`. The skirmish caller `0x430C3B` still supplies `0x503300`, so the effective
+   key is `HKCU\Software\TA Esc\Total Annihilation\Skirmish`, independent of TADR.
+   `0x50DDF4` also contains the combined root string. The option accessor `0x49F5A0`
+   formats the executable directory with `0x5098A0` at `0x49F5CE`; in this executable
+   that format is `%s\taesc.ini`, not retail's `%s\totala.ini`. Its
+   `GetPrivateProfileIntA` call at `0x49F5F9` reads the `Preferences` section
+   (`0x509894`). A test which edits retail's settings is therefore not configuring ESC.
+   The highest-ID fixture observed the consequence: retail-key/ini edits left the match
+   at 1000 units per player with player nine absent. See [the COB gate](tadr-port/cob.md).
 
    The dword wrappers carry the options: the loader `0x42F9A0` and the saver
    `REGISTRY_SaveSettings 0x430F00` ("The Visuals options the store owns" above). `0x42F980` and
