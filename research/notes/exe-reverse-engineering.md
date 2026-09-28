@@ -1905,6 +1905,23 @@ A builder with 30 entries or fewer, every stock builder, gets stock's exact bloc
 of 30 entries followed by heap bytes, with no fault that load; this build reads 71 (19 stock, the
 40, and 12 download entries), every ID in order, in a block of 128.
 
+### The saved skirmish map — `0x430B82`, the map list `0x434AB0` [DISASSEMBLED + MEASURED 2026-09-27]
+
+At `0x430B82` the options loader reads `SkirmishMap` (string `0x50440C`) from the `Total
+Annihilation` section (`0x5032E8`) through the raw read `0x4B69B0`, 0x100 bytes into
+`[main+0x29A0]+0x11C`. When the value is missing (`test eax,eax; jne 0x430BFE`), it builds the map
+list (`0x434AB0(2)`), calls `0x435D30(0)` and `0x435C30(0x100)` on the list object `main+0x391E9`,
+copies the returned name into `+0x11C` (`0x4E4760`), calls `0x434AB0(0)`, and writes the name back
+with the REG_SZ write `0x4B6A20` (`0x430BF9`). [INFERRED] `0x435D30(0)` selects entry 0 and
+`0x435C30` returns the selected entry's name; the MEASURED fact is the outcome: on Total Mayhem's
+empty `Software\TotalM` key the value saved is the alphabetically first map, "A Plethora of Ponds".
+
+`0x434AB0` enumerates the maps with the pattern `Maps\*.ota` (`0x504A18`, pushed at `0x434CD0`
+before `call 0x4BCA30`); its multiplayer mode names `MULTI MAPS` (`0x504A24`, pushed at `0x434C3F`
+and `0x434CAB`). MEASURED: an `.ota` whose `.tnt` is in no archive is still listed, and the
+SKIRMISH screen then stops on a box naming `Maps\<name>.TNT`. The consequence for mods is in
+[compat/setups.md](compat/setups.md), *Total Mayhem's maps with no terrain*.
+
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader thread) makes one 0xBD-byte record per
