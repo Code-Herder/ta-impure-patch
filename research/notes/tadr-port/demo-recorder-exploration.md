@@ -18,6 +18,102 @@ source, **DIS** means checked against that binary, and **INFERENCE** names a con
 still needs an executable experiment. Existing live measurements are attributed to their notes;
 they are not new recorder measurements.
 
+## Paused handoff and resume point
+
+**Paused on 2026-09-28 to conserve usage; resume only when requested.** Research baseline:
+`26fe1f7`, present on the recorder branch and local main when this checkpoint was made.
+Both checkouts were clean before this handoff documentation change. Production engine sources
+and the owned playback instance's DLL were restored after the experiments. The owned
+`demorpv` and `demorps` instances were stopped at the last experiment cleanup; do not touch
+unrelated instances. No presentation-handoff implementation has been started.
+
+### Saved work and recovery
+
+The durable private evidence root is **`_local/demo-recorder-exploration/` in the main
+checkout**, not a worktree-relative directory. It is intentionally gitignored because the
+fixtures, captures and temporary scripts can contain game data and reference-setup paths.
+`LATEST-CHECKPOINT.txt` names the current checkpoint directory. That directory contains:
+
+- `scratchpad.tar.gz`: complete copies of the identified recorder scratch directories and
+  BAR source research, preserving their scratch-directory names.
+- `scratchpad-manifest.json`: file names, byte lengths and SHA-256 digests; all **1,169 files**
+  were read back from the archive and matched against the source manifest.
+- `SHA256SUMS` and `git-state.txt`: archive integrity and the pre-handoff branch checkpoint.
+- `RESUME.md`: local restoration/build instructions and experiment entry points.
+
+The archive contains 698,059,339 bytes of source files in 320,948,739 compressed bytes.
+Existing evidence folders (`playback`, `scene`, `perspectives`, `construction`, `world`,
+`assets`, `io`, `seek`) remain alongside it. Nothing was deleted from scratch storage.
+Restore into an empty staging directory first and compare with any surviving scratch files;
+do not overwrite newer work. Private scripts retain their original scratch-path dependencies.
+They are trusted-fixture research drivers, not validated production replay parsers.
+
+Public reusable experiments and result summaries remain in
+`research/experiments/demo-recorder/`. The last completed check ran **15 research tests**;
+this archival checkpoint does not claim a new experiment or performance improvement.
+The detailed measured conclusions are in §6a–6g; do not replace those scope limits with
+claims of complete game playback or a measured 45-minute seek.
+
+### Immediate next experiment: cold seek presentation
+
+Start from the saved `demo-seek/final-probe/` sources plus `demo-seek/import.inc` and
+`demo-seek/bank.inc`. The latter keeps generated explosion frames in one immutable bank
+owned until process exit; it refuses a changed bank or level generation. Repeated packet
+replacement must not invalidate addresses borrowed by renderer caches.
+
+The reproducible failure is `demo-seek/cold-transition.mkv` and `cold-analysis.json`:
+**five of 240 captured frames** show an intermediate image rather than the old scene or
+correct destination. Warm transitions showed no intermediate frame at the sampled 60 Hz.
+Deferred asset restoration is the leading explanation, **not yet a queue-correlated proof**.
+The destination file contains ten seconds of sampled states and one isolated later state,
+not a continuous long match.
+
+Proposed, unimplemented direction: retain a dedicated immutable image of the last complete
+world while preparing the destination, then publish only after explicit readiness and
+consumer adoption. Establish image lifetime and Vulkan barrier ordering, including resize,
+level changes and failed restoration. A fixed delay or a few clean-looking frames cannot
+establish correctness. Correlate restoration state with the captured transition before
+claiming a fix.
+
+Relevant source reads: `tagpu_vk.c` prepares consumers before `tagpu_vk_restore_step`, then
+renders/composites the world. `tagpu_vk_restore_job_idle` tests queue/in-flight state but
+is not a complete readiness predicate: feeding, failure and consumers adopting restored
+resources also matter. `tagpu_vk_world.c` owns per-slot color targets and descriptor sets.
+Simply reusing ring-slot images can alternate old generations; descriptor updates must obey
+the current slot's fence, and a held image must survive all GPU readers. These are design
+constraints for the next prototype, not a reviewed implementation.
+
+### Remaining feasibility gates
+
+1. Prove the cold-seek presentation handoff, preserving the old image until a correct target
+   can be displayed.
+2. Establish complete state coverage and stable unit incarnations: aircraft/cargo, terrain,
+   visibility, sound, inspection, statistics and events.
+3. Capture every required tick/message at an ordered owner-thread boundary with an owned
+   immutable queue, bounded backpressure and an asynchronous writer. The renderer's latest
+   published packet can drop intermediate ticks and is not a recorder queue.
+4. Measure recorder off/on overhead and actual multiplayer contributions, including player
+   perspectives, camera/cursor, communication, authority and clock alignment.
+5. Run representative multiplayer lifecycle/content cases: ten slots, AI, mods, slot reuse,
+   disconnects, genuine construction and rapidly spawned completed units.
+6. Measure an actual full-match minute-5 to minute-45 seek, opening/preparation time, file/cache
+   size and live cost together; choose format/checkpoint/preparation policy from those numbers.
+7. Validate compatibility/content manifests and main-menu/browser/control/automation integration.
+
+Keep these as bounded experiments that produce implementation decisions. The user-facing
+feature contract remains in [Demo recorder](demo-recorder.md); pausing does not reduce scope
+or mark feasibility complete. No calendar estimate or completion percentage is established.
+
+### Suggested skills and landing rules
+
+Use `ta-drive` for owned game instances and `ta-capture` for transition evidence. Read the
+current project/private instructions before resuming. Restore probe sources by copying their
+contents and **clean-build**: preserved old timestamps previously allowed an incremental
+build to reuse a normal publisher object. Verify the deployed DLL and probe activation before
+accepting evidence. Archive temporary sources/results and restore normal engine state before
+a docs-only landing. Any production engine change needs the dedicated review and runtime
+verification required by `AGENTS.md`. Local landing does not authorize publishing.
+
 ## 1. What the Pascal recorder actually records
 
 **SRC — `src/Recorder/idplay.pas`.** `TDPlay.Send` and `TDPlay.Receive` wrap DirectPlay, serialize

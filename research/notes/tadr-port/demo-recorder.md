@@ -17,6 +17,21 @@ The shared engineering rules are in [the TADR port overview](overview.md). Recor
 feature of Impure, drawing heavily on the Pascal recorder as prior art. It does not require
 running the original recorder alongside Impure.
 
+## Paused handoff — 2026-09-28
+
+**Paused at the owner's request to conserve usage. Technical exploration is incomplete;
+no production recorder has landed.** The last research milestone is `26fe1f7`: file-backed
+scene playback and crash-prefix restoration work in the sampled fixtures, but cold seeking
+still exposes incomplete destination frames. The product decisions below remain unchanged.
+
+The [technical handoff](demo-recorder-exploration.md#paused-handoff-and-resume-point)
+identifies the saved prototypes, evidence, exact next experiment, and remaining feasibility
+gates. All identified recorder scratch directories and the BAR source research were archived
+in durable private local storage and checked against a per-file SHA-256 manifest. The archive
+includes WIP scripts, temporary probe sources, binaries, logs, captures, and fixtures; these
+are research material, not shipped features. Resume from that checkpoint instead of repeating
+the interview or recreating the experiments.
+
 ## Agreed scope
 
 | Area | Decision |
