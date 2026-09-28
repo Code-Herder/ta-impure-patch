@@ -1,0 +1,301 @@
+{
+  "date": "2026-09-28",
+  "status": "authoritative perspective source experiment, not a contribution protocol benchmark",
+  "setup": "reference setup: retail TA 3.1, Impure a044167 engine source (normal DLL; documentation HEAD 9590239), Wine 9.0, two native DirectPlay peers, Two Continents, 1024x768, Vsync off",
+  "stages": [
+    {
+      "stage": "initial",
+      "host_tick": 836,
+      "join_tick": 838,
+      "grid_width": 336,
+      "grid_height": 400,
+      "peer_differences_by_host_player_order": [
+        {
+          "counter_cells": 0,
+          "visible_cells": 0
+        },
+        {
+          "counter_cells": 0,
+          "visible_cells": 0
+        }
+      ],
+      "host_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          25.0,
+          0.0,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ],
+      "join_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          25.0,
+          0.0,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ]
+    },
+    {
+      "stage": "moved",
+      "host_tick": 1620,
+      "join_tick": 1623,
+      "grid_width": 336,
+      "grid_height": 400,
+      "peer_differences_by_host_player_order": [
+        {
+          "counter_cells": 0,
+          "visible_cells": 0
+        },
+        {
+          "counter_cells": 104,
+          "visible_cells": 34
+        }
+      ],
+      "host_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          25.0,
+          0.0,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ],
+      "join_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          25.0,
+          0.0,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ]
+    },
+    {
+      "stage": "repeated",
+      "host_tick": 1620,
+      "join_tick": 1623,
+      "grid_width": 336,
+      "grid_height": 400,
+      "peer_differences_by_host_player_order": [
+        {
+          "counter_cells": 0,
+          "visible_cells": 0
+        },
+        {
+          "counter_cells": 104,
+          "visible_cells": 34
+        }
+      ],
+      "host_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          25.0,
+          0.0,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ],
+      "join_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          25.0,
+          0.0,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ]
+    },
+    {
+      "stage": "scouts",
+      "host_tick": 2273,
+      "join_tick": 2279,
+      "grid_width": 336,
+      "grid_height": 400,
+      "peer_differences_by_host_player_order": [
+        {
+          "counter_cells": 0,
+          "visible_cells": 0
+        },
+        {
+          "counter_cells": 104,
+          "visible_cells": 34
+        }
+      ],
+      "host_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          29.000015258789062,
+          4.000000476837158,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ],
+      "join_resource_floats_by_local_player_order": [
+        [
+          1000.0,
+          25.0,
+          0.0,
+          1000.0,
+          1.0,
+          0.0,
+          1000.0,
+          1000.0
+        ],
+        [
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          0.0,
+          0.0,
+          1000.0,
+          1000.0
+        ]
+      ]
+    }
+  ],
+  "mask_compression": [
+    {
+      "stage": "initial",
+      "origin": "demorpv",
+      "source_bytes": 134400,
+      "mask_bytes": 16800,
+      "zstd3_bytes": 78,
+      "visible_cells": 213
+    },
+    {
+      "stage": "initial",
+      "origin": "demorps",
+      "source_bytes": 134400,
+      "mask_bytes": 16800,
+      "zstd3_bytes": 75,
+      "visible_cells": 213
+    },
+    {
+      "stage": "moved",
+      "origin": "demorpv",
+      "source_bytes": 134400,
+      "mask_bytes": 16800,
+      "zstd3_bytes": 75,
+      "visible_cells": 212
+    },
+    {
+      "stage": "moved",
+      "origin": "demorps",
+      "source_bytes": 134400,
+      "mask_bytes": 16800,
+      "zstd3_bytes": 75,
+      "visible_cells": 213
+    },
+    {
+      "stage": "scouts",
+      "origin": "demorpv",
+      "source_bytes": 134400,
+      "mask_bytes": 16800,
+      "zstd3_bytes": 195,
+      "visible_cells": 1067
+    },
+    {
+      "stage": "scouts",
+      "origin": "demorps",
+      "source_bytes": 134400,
+      "mask_bytes": 16800,
+      "zstd3_bytes": 75,
+      "visible_cells": 213
+    }
+  ]
+}

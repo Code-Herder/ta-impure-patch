@@ -62,6 +62,14 @@ page records an exception.
 | E. Multiplayer / anti-abuse | start positions, vote-reject, share guard, anti-cheat…; from the recorder, the speed lock, autopause and ready, commander warp, `.take`, several AIs in one game, and whether allies share sight | not planned. Most of it needs the handshake that rule 1 defers; shared sight is the owner's decision | [merge exploration §E](../tadr-merge-exploration.md#e-multiplayer-anti-abuse), [the recorder's](../tadr-merge-exploration.md#e-game-control-unit-transfer-anti-cheat) |
 | F. COB compatibility | the eight required `get` ids (32, 69–75), bounded execution capacity, validation and saved script state for the listed mods; Mayhem's inactive id 111 remains out of scope | **decided 2026-09-28; implementation and testing in progress**, not yet available. Every getter must be explicitly exercised in-game in at least one mod, with feature tests on two Wine peers across the listed mods and Windows smoke checks | [plan and decisions](cob.md), [census](../tadr-merge-exploration.md#f-the-cob-getters) |
 
+## Demo recorder
+
+The [demo recorder](demo-recorder.md) page records the agreed multiplayer recording and solo
+replay features, open architecture and performance decisions, and milestone progress. It is a
+high-level feature record; detailed debugging and implementation evidence belong in separate
+notes. The product decisions are recorded; recorder implementation and seek performance remain
+unverified.
+
 ## Adding a page
 
 Put a `.md` file in `research/notes/tadr-port/`. The wiki lists it in this section without further

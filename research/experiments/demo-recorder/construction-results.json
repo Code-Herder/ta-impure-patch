@@ -1,0 +1,92 @@
+{
+  "date": "2026-09-28",
+  "status": "research-only same-level renderer scene restoration; not production recorder verification",
+  "setup": "reference setup: retail TA 3.1, Wine 9.0, Impure a044167 temporary scene probe, 1024x768, Vsync off, Two Continents skirmish",
+  "construction_origin": "GUI build order accepted by the engine; no build-fraction writes",
+  "states": {
+    "birth": [
+      {
+        "type": "armsolar",
+        "tick": 4308,
+        "slot": 3,
+        "nano": 1.0,
+        "hp": 0,
+        "pieces": 5,
+        "flags": 15
+      }
+    ],
+    "partial": [
+      {
+        "type": "armsolar",
+        "tick": 4429,
+        "slot": 3,
+        "nano": 0.5911844968795776,
+        "hp": 134,
+        "pieces": 5,
+        "flags": 15
+      }
+    ],
+    "finished": [
+      {
+        "type": "armsolar",
+        "tick": 4594,
+        "slot": 3,
+        "nano": 0.0,
+        "hp": 326,
+        "pieces": 5,
+        "flags": 15
+      }
+    ]
+  },
+  "restores": [
+    {
+      "stage": "partial",
+      "request_to_grab_ms": 165.356481,
+      "crop": [
+        575,
+        410,
+        660,
+        490
+      ],
+      "pixels": 6800,
+      "different_pixels": 0
+    },
+    {
+      "stage": "finished",
+      "request_to_grab_ms": 148.059209,
+      "crop": [
+        575,
+        410,
+        660,
+        490
+      ],
+      "pixels": 6800,
+      "different_pixels": 0
+    },
+    {
+      "stage": "partial",
+      "request_to_grab_ms": 147.454332,
+      "crop": [
+        575,
+        410,
+        660,
+        490
+      ],
+      "pixels": 6800,
+      "different_pixels": 0
+    },
+    {
+      "stage": "finished",
+      "request_to_grab_ms": 146.182797,
+      "crop": [
+        575,
+        410,
+        660,
+        490
+      ],
+      "pixels": 6800,
+      "different_pixels": 0
+    }
+  ],
+  "partial_finished_different_pixels": 2724
+}

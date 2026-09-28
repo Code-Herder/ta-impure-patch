@@ -435,6 +435,300 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   (`totala.ini` → `ta.ini`), and `0x40EAD6` (the path budget). The table is in
   [the setups page](compat/setups.md#the-3902-exe).
 
+## Demo recorder exploration: capture and save boundaries [DISASSEMBLED 2026-09-28]
+
+Boundary recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
+Temporary observers measured the three DirectPlay wrappers below in a two-peer game; they
+were removed and the normal DLL rebuilt. No production recorder hook is installed. The
+existing send/receive and save investigations below remain the fuller maps.
+
+| Address | Fact checked and implication |
+|---|---|
+| `0x451DF0` | Message-send entry, `ret 0xC`; reads the main pointer `0x511DE8`, sender/player records, network bit `main+0x2A44`, and branch selector `main+0x299C`. With that selector zero, `[0x506DBC] != 0` calls `0x461990` at `0x451EE0`, `ecx = 0x513000`; otherwise `0x451EFD` calls `0x4C97B0` with destination 0 and context `main+0x14`. The other branch loops player records at stride `0x14B`, using deduplication storage `0x512B90`, and calls `0x451BC0` at `0x451F75`. This entry is already B8's held-send gate, not an unowned recorder hook site. |
+| `0x4C97B0` | `ret 0x14`; after the existing diagnostic call `0x4C9740`, takes the interface at context `+0x4C5`, calls its vtable `+0x68` (`Send`) at `0x4C97F6`, and derives its flags from `0x50A780`. A NULL interface returns `0x887700AA`. The adjacent `0x4C9800` wrapper also calls `+0x68` (at `0x4C9839`), with flag 1; recording only one wrapper would need a coverage argument. |
+| `0x4C9840` | `ret 0xC`; reads the same interface at context `+0x4C5`, passes context `+0x4B5` and `+0x4B9` as the sender/destination output addresses and flag 1, then calls vtable `+0x64` (`Receive`) at `0x4C987E`. The buffer and length pointer come from its other two arguments. These offsets are relative to the network context, not the main block. |
+| `0x4534E0`, `0x453595`, `0x45361F` | Existing bounded-delivery capture in B3, re-read in `tagpu_patches.c:wire_rx_note`: the latter two sites replace the statistics call and preserve the delivered buffer/length in TLS. The pump's moved-buffer fix must remain. See *One receive, one message* below for callers, fields, and prior disassembly; not a newly verified whole-function trace in this pass. |
+| `0x432A38` | TADR `SaveGame_SaveAdditionHook`'s site: retail bytes `A1 E8 1D 51 00`, `mov eax,[0x511DE8]`. Continuation `0x432A3D` takes the stack-local address, reads `main+0x391ED`, and calls `0x48FDF0` at `0x432A48`. The field's object type and the called function's meaning are not established by this slice. |
+| `0x43267D` | TADR `SaveGame_LoadAdditionHook`'s site: retail bytes `8B 15 E8 1D 51 00`, `mov edx,[0x511DE8]`; continuation `0x432683` pushes `esi` and reads the same `main+0x391ED`. Matching splice bytes establish neither checkpoint completeness nor multiplayer restore support. |
+
+Reproduce the disassembly with `i686-w64-mingw32-objdump -d -Mintel
+--start-address=<start> --stop-address=<end> pristine/TotalA.exe.pristine` in the main checkout:
+`0x451DF0..0x451FD0`, `0x4C97B0..0x4C9890`, `0x432A38..0x432A4D`, and
+`0x43267D..0x43268A` (exclusive stops). The untraced enclosing save/load routines remain open;
+their Pascal callers are source evidence, not newly assigned engine names.
+
+The DirectPlay creation forwarders in `tagpu_takeover.c` were also read: they delegate the
+existing import routes documented above (`0x4CA435`, `0x4CA4D7`, `0x4CA667`, `0x4CA922`) and
+do not themselves wrap the returned COM interfaces. The render exchange was read separately:
+its latest-frame contract and camera-limited contents are not an ordered event log or a
+complete replay checkpoint. See the exploration for the source references and remaining gaps.
+
+### Temporary transport observation and construction reads [MEASURED 2026-09-28]
+
+The three observed entry instructions are position-independent five-byte `push imm32`s:
+`0x4C97B0 = 68 E8 B0 50 00`, `0x4C9800 = 68 FC B0 50 00`,
+`0x4C9840 = 68 1C B1 50 00`. The send wrappers' stack arguments are
+`(context, sender, destination, buffer, byte_count)`; the receive wrapper's are
+`(context, buffer, byte_count_pointer)`. These signatures were checked against the disassembly
+above and used by the temporary observer. Receive copying happened only after return value 0
+and with returned length no larger than the original caller-supplied capacity. Sender and
+destination were read from that call's context `+0x4B5/+0x4B9` before returning to its caller.
+The capture retained copied bytes, never an engine buffer pointer.
+
+The measured workload was Two Continents, two native-DirectPlay peers, 900 newly spawned
+artillery units plus two commanders, followed by seven synthetic unfinished units. Both
+send wrappers and the receive wrapper armed. The host/joiner captures hold 1821/1795 records;
+ordered `0x4A/0x4B/0x4C` payloads agree exactly between the originating and receiving peer.
+This is transport evidence, not replay correctness. See the exploration for counts, codec
+measurements, observer limitations and local evidence inputs.
+
+Read through `tacli peek` at `*0x511DE8+0x38A51`: both peers' pause byte was 1; their
+`+0x38A47` ticks were 3674 and 3683. On the receiving peer the unit-array pointers at
+`+0x14357/+0x1435B` differed by 4,200,000 bytes (15,000 strides of `0x118`; the latter
+pointer is the last slot, as the existing publisher map documents). The inspected slots
+68, 69, 70, 71, 78, 79 and 80 are strictly inside that span. Their six bytes at
+`unit+0x104` contain the build fraction remaining followed by the HP word at `+0x108`.
+Six matched the owner's carried create state; slot 79's fraction was 0 rather than the
+owner roster's 0.60, with HP 1076 still matching. A subsequent stock `0x12` with both slot
+words 79 exists in both captures. That message's causal role remains an inference; the
+synthetic scenario first creates a finished lab and then changes its build fraction.
+
+The source-only inventory also re-read the publisher's existing in-play ownership boundary
+(`0x468CF0`, return `0x4969D2`) and its loader handoff; no new behavior at those sites was
+measured. Pascal's `TPlayerStruct` fields `LOS_MEMORY +0x7C`, dimensions `+0x80/+0x84`,
+length `+0x88`, and resources `+0x8C` are candidate leads from `TAMem/TA_MemoryStructures.pas`,
+not a new disassembly or live verification of remote-player visibility/statistics.
+
+### Renderer scene probe [SOURCE + MEASURED 2026-09-28]
+
+The recorder's [direct scene experiment](tadr-port/demo-recorder-exploration.md#6b-direct-scene-playback-and-portable-unit-poses)
+used the existing `tagpu_packet_pub.c:fill_world` ownership boundary, widening only the
+unit-piece capture condition to cover every live unit. No new engine byte patch was added.
+The packet layout was measured with a 32-bit `offsetof`/`sizeof` executable: header 2312 B,
+unit row 100 B, piece row 24 B, wreck row 44 B; tick +16, unit count/offset +1608/+1612,
+piece count/offset +1616/+1620, wreck count/offset +1624/+1628, truncation flags +2300.
+These are **Impure packet offsets**, not offsets in the retail engine.
+
+`TAGPU_PK_UNIT.o3_key` (+20) is an Object3do identity value used by interpolation;
+`TAGPU_PK_PIECE.node` (+20) is a dereferenced model-template pointer. Source reads in
+`tagpu_native.c:pose_accum_body`, `tagpu_lerp.c` and the packet header confirm that copying
+these values to disk cannot establish portability. The unit Object3do is freed by `0x45AAA0`,
+whereas the model template belongs to the level teardown `0x42DB90`; their existing maps and
+the reclaim fence provide the lifetime argument, not the older pointer probes inside the
+consumer. No new disassembly of either destructor was performed in this experiment.
+
+A temporary fresh-process importer retained no recorded asset addresses. It resolved unit
+piece indices against the new level's validated published templates, with matching type/model,
+name, piece count and base piece. All 59 template-piece addresses across the four measured
+types changed, while the checked unit-formation image matched. The reader retained the new
+session's other world/UI layers; it neither restored simulation nor demonstrated full-world
+portability. The stopped fresh session's existing main fields were inspected through `tacli`:
+`[0x511DE8]+0x38A47` = tick 521 and `+0x38A51` = pause byte 1. The temporary publisher and
+consumer probes were removed after the experiment; details and bounds are in the linked note.
+
+The genuine-construction follow-up used the same existing unit-array fields
+`main+0x14357/+0x1435B` to bound slot 3 (stride `0x118`) and read its `+0x104` float and
+`+0x108` HP word. A normal GUI build order created the ARMSOLAR: at GameTime 4308 it had
+fraction 1 / HP 0, at 4429 fraction 0.5911845 / HP 134, and at 4594 fraction 0 / HP 326.
+No fraction write was made by the test. The publisher's packet held all five model pieces
+and flags 15 at each state (including the depth-plane flag). The scene probe restored the
+partial and complete images exactly in the unit crop; see the exploration's construction
+subsection for its deliberately limited claim.
+
+### Replay snapshots and draw-created caches [SOURCE / DISASSEMBLED / MEASURED 2026-09-28]
+
+The wider [recorder scene experiment](tadr-port/demo-recorder-exploration.md#6d-wider-world-snapshots-and-camera-dependent-caches)
+shows why an all-map copy of the renderer's existing fields is insufficient. These reads and
+copy transformations were temporary research probes; no new engine byte patch was installed.
+
+**Body orientation, DIS:** `DrawUnit 0x45AC20` obtains the unit from its second stack argument
+at `0x45AC23`, exits when `unit+0x86` is nonzero (`0x45AC29..0x45AC2F`), and reads Object3do
+from `unit+0x9E` (`0x45AC35`). Its three tests at `0x45AC3D..0x45AC7A` subtract each live
+`unit+0x68/+0x66/+0x64` from cached `o3+0x1C/+0x1A/+0x18` in **16 bits**, sign-extend and take
+the absolute value. Any magnitude at least 8 refreshes **all** three turns: dword at
+`0x45AC82`, final word at `0x45AC90`. The same branch sets dirty `o3+8` at `0x45AC89`, clears
+base-primitive `+0x26` at `0x45AC97`, and conditionally clears `o3+4` when primitive `+0x28`
+bit 1 is set (`0x45AC9B..0x45ACA8`). Dirty is tested at `0x45ACB1`. The base-template copy
+at `0x45ACDD` and piece-cache clears at `0x45ACEA..0x45ACF3` precede child/sibling reset calls
+`0x45ACFE/0x45AD0E → 0x45B030`, compose `0x45AD1D → 0x45B0A0`, and dirty clear `0x45AD28`.
+The cargo chain starts with `unit+0x8A` at `0x45AD2B`; its loop advances via `+0x8E` at
+`0x45AE4A`. Afterward `0x45AE73` calls `0x458810` with the unit's Object3do and the draw
+context `main+0x1437B`. Existing DrawUnit call sites are mapped in the sort-row section.
+
+**MEASURED:** 302 of 398 live units in the final early snapshot had different live/cached
+turn triples. Saved-copy normalization using that exact threshold, with live controls retaining
+the original cached turns, restored the tested ground-unit headings at a newly visited camera.
+This does not change the rule for reconstructing **already-composed** vertex buffers: use the
+turns that actually composed them. Cargo and aircraft equivalence remain untested here.
+
+**Composite allocation, DIS:** `0x458810` reads camera fields `main+0x1431F/+0x14323`
+(`0x45881B/0x458821`), builds its draw-mode value from `unit+0x110` bit 29, `+0x10E` bit 0 or
+`unit`'s vtable `+0x20` (`0x45883C..0x45886C`), and its rebuild condition at
+`0x458870..0x4588F2`. The latter is detailed in the repose section below. On rebuild,
+`0x4588FE..0x45890C` calls `0x4586A0(obj, 0, 1)` and clears cached shadow `o3+0x14`.
+The builder reads `obj+0x0C` (owning unit) at `0x4586B8`, calls bounds builder `0x4581E0`
+at `0x4586C9`, then chooses its allocation:
+
+- nonzero second argument (`0x4586D2..0x4586D4`), `unit+0x114` bit 0
+  (`0x4586D6..0x4586DD`), or a construction fraction unequal to zero
+  (`0x4586DF..0x4586F0`) takes `0x458719 → 0x437BE0`, colour + depth;
+- otherwise `0x458702 → 0x437B50`, colour only.
+
+The comparison constant at `0x4FD4C0` is four zero bytes (**section bytes checked**).
+The returned frame is stored through `obj+0x10`, null-tested at `0x458720`, and receives its
+hotspot at `0x458729/0x458732`. The later `unit+0x110` bit 29 / `main+0x37F06` bit 5 tests
+(`0x45873C/0x45874A`) concern the bake path, not that depth-allocation choice. The existing
+cargo call `0x459670 → 0x4586A0(obj, 1, -1)` forces depth; this experiment did not exercise it.
+No new disassembly of the allocators or bounds builder was needed; their existing map remains
+the source for their internals.
+
+**MEASURED:** visiting the two camera views while paused changed 200 of 398 units' captured
+existing-depth flags. Recording `unit+0x114` bit 0, and supplying depth in the saved copy when
+it or the build fraction required it, removed the shoreline discrepancy. The saved copy
+supplied 255 depth flags, including units outside those views. `tagpu_native.c` uses the flag
+with packet `sea_level` (publisher reads `main+0x1427F`) and owner/local-player/state-sonar
+values for clipping/tinting. This is ordinary-unit evidence, not all cargo or mod variants.
+
+**Animated features, SOURCE:** `tagpu_feat.c:draw_feature` resolves animation from live feature
+or wreck records even with a saved anchor. Definitions have stride `0x100`, static body/shadow
+sequences `+0xAC/+0xB0`, animation states `+0xCC/+0xD8`, and mask `+0xFE`. GAF wreck records
+at `main+0x1420B`, stride `0x30`, instead use states `+0x04/+0x10` and shadow-enable flag
+`+0x2F` bit 2. The probe bounds the definition index by the published feature count and wreck
+index by `WR_COUNT`, resolves `tagpu_gaf_state_frame` / `tagpu_gaf_seq_frame` on the game
+thread, and copies frame references into an expanded 24-byte anchor (normally 16 bytes).
+These asset references live only through the current level/reclaim fence; they are not file
+handles. The separate mirrored-feature consumer also resolves animation live and is not
+covered by this on-map experiment. Whole-map feature/FX capture retains existing collector
+bounds and reported no truncation in the measured packets; no maximum-capacity claim follows.
+
+### Perspective authority and tick boundary [MEASURED / DISASSEMBLED 2026-09-28]
+
+The [two-peer perspective experiment](tadr-port/demo-recorder-exploration.md#6c-remote-perspectives-require-authoritative-contributions)
+read the active-player slots (indices 0..9) at `main+0x1B63`, stride `0x14B`, restricting the live reads to
+the two participating records. Within each: DPID `+4`, controller byte `+0x73`, LOS pointer
+`+0x7C`, dimensions `+0x80/+0x84`, allocation length `+0x88`, and the 88-byte resource record
+at `+0x8C`. The last field names come from Pascal's `TPlayerResourcesStruct`; the first eight
+floats are energy current/production/expense, metal current/production/expense, and the two
+storage maxima. `tagpu_scenario.c` independently uses `+0x8C/+0x98` for current energy/metal.
+No new disassembly establishing every resource field's ownership was performed.
+
+`main+0x14233/+0x14237` read 672/800; LOS width/height read 336/400, allocation 134,400 bytes.
+The existing allocator map above establishes the in-level lifetime. With both games paused
+(`main+0x38A51 = 1`) and no level transition, the reader requested only chunks within the
+dimension-validated allocation. `main+0x14273`'s MAPPED pointer was read but its contents were
+not copied in this experiment. GameTime `+0x38A47` pairs were 836/838 initially, 1620/1623 after
+movement and on repeat, and 2273/2279 after adding 20 scouts. Matching DPIDs, one remote LOS
+grid differed from its owner in 104 counter bytes, **34 zero/nonzero sight predicates**.
+Each individual grid stayed byte-identical during the repeated paused read. Current resource
+values/storage were present remotely but the measured production/expense fields were zero.
+These are evidence for owner-contributed replay perspectives/statistics, not proof of every
+field's authority or a reconstruction of radar/sonar/detection.
+
+The `0x2C` clock was also rechecked in the pristine binary. Writer `0x48B710` calls the bit
+writer `0x415C10` with 8-bit code `0x2C` at `0x48B72A`, a 16-bit length placeholder at
+`0x48B737`, and **32 bits from `main+0x38A47`** at `0x48B743..0x48B74E`. It stores the same
+counter at `player+0x18` (`0x48B760..0x48B769`). Receiver `0x48B920` reads those 8/16/32 bits
+through `0x415DC0` at `0x48B93F/0x48B94A/0x48B955` and stores the third value at the sender's
+`+0x18` at `0x48B963`. Thus the field Pascal calls a packet sequence is the sender's GameTime,
+not evidence of one shared peer clock. The existing round-robin map was rechecked at
+`0x48B80E..0x48B84C`: a 16-bit terminator precedes `GameTime % main+0x37EE6`.
+
+`0x495490` was read through the loop's end as a potential owned recorder sampling boundary;
+**no hook was installed**. It takes the iteration count from `main+0x38A3B`, increments
+`main+0x38A47` at `0x4954C0`, and conditionally pumps `0x453D40` at `0x4954C8` when its argument
+is nonzero. Per-iteration calls are `0x48AD30` at `0x4954ED` (already Impure's unit-tick hook),
+`0x49B720` at `0x495513`, `0x420F30` at `0x495539`, `0x464F80` at `0x49555F`,
+`0x424050` at `0x495585`, `0x415B30` at `0x49558A`, `0x490C40` at `0x49558F` (already the
+wind hook), `0x437DE0` at `0x495594`, `0x41CA10` at `0x495599`, `0x471EB0` at `0x4955BF`,
+and `0x466580` at `0x4955E5`. The intervening `0x4B6560` calls update timing accumulators in
+`main+0x38D85` at offsets `+0x2C/+0x30/+0x34/+0x44/+0x48/+0x4C`.
+When the argument and `[0x506DBC]` are nonzero, the tail takes player index `main+0x2A42`,
+calls `0x457D30` on that record at `0x49563A`, then `0x4618A0` with context `0x513000` and
+argument 0 at `0x495646`. The loop decrement/back edge is `0x49566C/0x49566D`. Calls to
+`0x428BD0`, `0x428BE0`, `0x428BF0`, `0x463EF0` and `0x482130` at `0x495674..0x495688`
+are **outside** that loop. Their meanings and complete side effects were not traced here.
+An after-loop observer would collapse multiple iterations; a recorder promising every
+transition must either observe inside the loop or capture the corresponding events.
+
+### Replay player names and unit-block ordering [DISASSEMBLED + MEASURED 2026-09-28]
+
+A native DirectPlay replay-host prototype supplies both DPNAME strings. The join path calls
+`0x4CA7C0` at `0x450B6F`, reads the returned short-name pointer at `esp+0xDC` (`0x450B7E`)
+and the long-name pointer at `esp+0xE0` (`0x450BA3`), and scans the latter unconditionally at
+`0x450BAD`. A prototype supplying only the short name crashed at that scan with a null
+long-name pointer. Non-null short and long names allow the viewer to reach the lobby.
+The destinations are player `+0x49` and `+0x2B`, respectively.
+
+Unit allocation constructs ten player pointers at `0x48562B..0x48564B`, sorts them, then
+assigns each a contiguous range of `main+0x37EE6` units. It writes the first/last pointers
+at player `+0x67/+0x6B` (`0x4858BD/0x4858E0`), the first/last slot words at `+0x6F/+0x71`,
+and each unit's owner pointer and owner-index byte at `+0x96/+0xFF`
+(`0x485902/0x48590E`). The loop does not omit spectators. A new viewer's DirectPlay ID
+can sort before a recorded player: measured viewer ID 84525577 with drone IDs
+84525579 and 84525580, despite creating twenty temporary players and retaining the lowest two.
+Thus that heuristic does not preserve recorded unit ranges by construction.
+
+All comparisons must use one ordering. The fixed ten-player path starts with the inlined
+network comparison at `0x485676..0x48567E`, then invokes comparator `0x485940` through
+`0x488920`. Further inlined network comparisons are at `0x4857AF..0x4857B7` and
+`0x485847..0x48584F`; they lie on the larger-sort branch, whose initial size test is
+`0x28 > 0x40` and is false for ten players. `0x485940` tests game type through `0x435100`;
+its type-3 branch compares player `+4` IDs at `0x485959..0x485967`, while the other branch
+compares player pointers (`0x48596A..0x485972`). Both return unsigned less-than.
+`0x488920`'s insertion loop relies on the first element already being the minimum: after
+`0x48894C` calls the comparator it shifts backward without a separate lower-bound check.
+Changing its comparator without changing `0x485676` violates that ordering invariant and
+can walk before the array; the isolated probe reproduced that failure. It is not a stock
+engine defect.
+
+A revised isolated probe uses immutable recorded-player ranks at all four network
+comparisons while leaving transport IDs unchanged. It loaded the replay with drone
+85151720 at slot 1, drone 85151721 at slot 1501, and spectator 85151724 at slot 3001
+(unit-array base `0x118A0020`; first pointers `0x118A0138`, `0x119069D8`, `0x1196D278`).
+This is a two-player experiment, not a production ordering patch or ten-player coverage.
+
+Disassembly ranges: `0x450B60..0x450BC0`, `0x48562B..0x485975`, and
+`0x488920..0x488960`, using `objdump -D -Mintel` against the pristine retail binary.
+
+The stock save dialog can be exposed in the isolated network viewer by changing only the
+UI type-3 comparisons at `0x460CF7/0x460D37`; that does not enable a valid restore. A measured
+369-unit spectator save wrote 392,041 bytes, and loading it displayed “Invalid savegame file.”
+The load action `0x492360` opens the selected summary through `0x432520` (`0x4924A7`), reads
+`Gametype` via `0x4B4800` (`0x4924C0`, key string `0x504974`), and accepts only values 1 and 2
+by successive decrements (`0x4924CD..0x4924D3`). Other types branch to `0x492AAD`; the
+error text at `0x509310` is displayed at `0x492AE2`. A later read at `0x49267F..0x492690`
+passes the saved game type to `0x434AB0`. Thus changing only the menu's disabled state is
+insufficient. The temporary restore probe admits exactly type 3 at the rejection branch;
+no claim about complete restored state follows from bypassing that UI validation.
+
+With the type-3 admission probe, loading a fresh 399,676-byte spectator save crashes after
+level teardown at `0x46E167` (`mov eax,[ebp+0x64]`, `ebp == 0`). The stack includes return
+`0x46CA75`: `0x46CA60` loads `main+0x2A30` into `ecx` and calls `0x46E160` at `0x46CA70`
+without a null check. Its caller is `0x42845D`. This is the restriction/sync object identified
+in the unit-cap investigation above. The observed missing object is a restore-lifecycle gap;
+there is no proposed null-skip fix or proof of successful multiplayer restoration.
+Additional slices: `0x46E160..0x46E1D0`, `0x46CA60..0x46CAD0`, `0x428439..0x428478`.
+
+The console save action `0x417430` builds its filename and calls writer `0x4326B0` at
+`0x41747B`; its argument-count test is `0x41743A`. The writer begins a HAPIBANK object via
+`0x4B3620/0x4B3750` and opens the initial account with `0x4B4560` (`0x4326B6..0x4326D3`).
+The measured save starts with `HAPIBANK` and contains `SQSH` chunk markers. This confirms
+container framing only, not a decoded checkpoint schema. Additional disassembly ranges:
+`0x417430..0x417489`, `0x4326B0..0x43274E`, `0x460CC0..0x460D60`,
+`0x492260..0x492730`, and `0x492A20..0x492B05`.
+
+The full writer `0x4326B0..0x432A7F` serializes the game tick at `0x432997..0x4329AC`.
+Its main content calls are `0x4C6F10` (argument from `main+0x142DB`), `0x41D360`,
+`0x4662F0`, `0x4876C0`, `0x484F50`, `0x424890`, `0x484DF0`, `0x484CE0`,
+`0x438180`, and `0x48FDF0` at `0x4329E3..0x432A48`. They are skipped when
+`main+0x391F1` is nonzero (`0x4329B7..0x4329BD`). Their complete transitive state
+coverage is not established by this caller inventory. `0x48FDF0` runs only for game type 1
+(`0x48FE06..0x48FE09`) and invokes vtable slot `+0x10` across two object arrays/counts
+at its receiver `+0/+0x40` and `+0x44/+0x84`; it returns without doing so in a type-3 save.
+The arrays' object meanings remain unestablished. Additional slice: `0x48FDF0..0x48FE59`.
+
+
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
@@ -464,7 +758,7 @@ yardmap string is parsed past its end, the saved-game loader's order fallback wa
 past its table, the stockpile bar divides by a weapon's reload time without testing it, and a
 range circle of radius 1 divides by zero.
 `tagpu_patches.c` (`patch_engine_defects`, then `patch_loader_defects` for the last five)
-patches all of them, twenty-eight fixes, at every attach, in both builds: `ddraw.dll` is a static
+patches all of them at every attach, in both builds: `ddraw.dll` is a static
 import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
 every input the stock code handles correctly.
 
@@ -478,7 +772,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the twenty-nine, and why:
+made, or its page cannot be made writable. Each of the thirty, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -511,6 +805,7 @@ made, or its page cannot be made writable. Each of the twenty-nine, and why:
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
 | an order mode disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
+| maps with no terrain `0x434D87`, `0x430B87` | local | which maps are offered; whether a network peer has the host's map is decided from the terrain file itself, not from this list |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -1953,22 +2248,111 @@ A builder with 30 entries or fewer, every stock builder, gets stock's exact bloc
 of 30 entries followed by heap bytes, with no fault that load; this build reads 71 (19 stock, the
 40, and 12 download entries), every ID in order, in a block of 128.
 
-### The saved skirmish map — `0x430B82`, the map list `0x434AB0` [DISASSEMBLED + MEASURED 2026-09-27]
+### The saved skirmish map `0x430B82` and the map list `0x434BF0` [DISASSEMBLED + MEASURED 2026-09-27..28]
 
-At `0x430B82` the options loader reads `SkirmishMap` (string `0x50440C`) from the `Total
-Annihilation` section (`0x5032E8`) through the raw read `0x4B69B0`, 0x100 bytes into
-`[main+0x29A0]+0x11C`. When the value is missing (`test eax,eax; jne 0x430BFE`), it builds the map
-list (`0x434AB0(2)`), calls `0x435D30(0)` and `0x435C30(0x100)` on the list object `main+0x391E9`,
-copies the returned name into `+0x11C` (`0x4E4760`), calls `0x434AB0(0)`, and writes the name back
-with the REG_SZ write `0x4B6A20` (`0x430BF9`). [INFERRED] `0x435D30(0)` selects entry 0 and
-`0x435C30` returns the selected entry's name; the MEASURED fact is the outcome: on Total Mayhem's
-empty `Software\TotalM` key the value saved is the alphabetically first map, "A Plethora of Ponds".
+**The saved map.** At `0x430B82` the options loader reads `SkirmishMap` (string `0x50440C`) from the
+`Total Annihilation` section (`0x5032E8`) through the raw read `0x4B69B0`, 0x100 bytes into
+`[main+0x29A0]+0x11C`. When the value is missing (`test eax,eax; jne 0x430BFE` at `0x430B87`), it
+makes the list object (`0x434AB0(2)`), calls `0x435D30(0)` and `0x435C30(0x100)` on it
+(`main+0x391E9`), copies the returned name into `+0x11C` (`0x4E4760`), calls `0x434AB0(0)`, and
+writes the name back with the REG_SZ write `0x4B6A20` (`0x430BF9`). [INFERRED] `0x435D30(0)` selects
+entry 0 and `0x435C30` returns the selected entry's name; the MEASURED fact is the outcome: on Total
+Mayhem's empty `Software\TotalM` key the value saved is the alphabetically first map, and with the
+fix below the first map that has terrain ("Acid Foursome", where stock saves "A Plethora of Ponds").
 
-`0x434AB0` enumerates the maps with the pattern `Maps\*.ota` (`0x504A18`, pushed at `0x434CD0`
-before `call 0x4BCA30`); its multiplayer mode names `MULTI MAPS` (`0x504A24`, pushed at `0x434C3F`
-and `0x434CAB`). MEASURED: an `.ota` whose `.tnt` is in no archive is still listed, and the
-SKIRMISH screen then stops on a box naming `Maps\<name>.TNT`. The consequence for mods is in
-[compat/setups.md](compat/setups.md), *Total Mayhem's maps with no terrain*.
+**`0x434AB0(mode)` is not the builder.** It frees the list object at `main+0x391E9` unless it
+already has this mode (`cmp [esi],edi` at `0x434AC8`), allocates a new one of 0xEC4 bytes
+(`0x4B4F10`), stores the mode at `+0`, initialises it through `0x435110`, and stores it or NULL
+(`0x434B64`, `0x434B78`). `0x434B90` frees it and the name buffer below.
+
+**The builder is `0x434BF0`, and there is one.** It is called at `0x435D73`, `0x444F47`,
+`0x444FCC`, `0x47AAF7` and `0x47AB7C`, and by itself at `0x434F29`; MEASURED 2026-09-28, the
+skirmish SELMAP list and the multiplayer battle room's list both changed with the fix at
+`0x434D87`. Its result is a buffer tagged `MULTI MAPS` (`0x504A24`) of NUL-separated names, cached
+at `0x5122D4` with its length at `0x5122DC`, its count at `0x5122E0` and a flag at `0x5122D8`
+(built once, copied to the caller from the cache after that: `0x434C39..0x434C68`). The walk:
+
+- `0x4BCA30("Maps\*.ota", 0, &vec)` (`0x434CD0`, `0x434CE5`) fills a vector of file names,
+  begin `[esp+0x24]`, end `[esp+0x28]`; the count is `(end − begin)/4` (`0x434CFE..0x434D07`).
+- For each (`edi` the index, `esi = edi·4` from `0x434D26`): `0x4290F0(buf, "Maps", name, "OTA")`
+  (`0x434D40`, `buf` at `[esp+0x23C]`), the .ota parsed with `0x4C2F60` on the TDF object at
+  `[esp+0x30]` (`0x434D5A`), and `0x436860(3, tdf, 0)` on the list object (`0x434D7A`; what it
+  tests is not mapped). Either failing takes `je 0x434EA9`.
+- A map kept (`0x434D87..`): its name with the extension cut (`0x4BB0F0`), `0x4E8960`, then
+  `0x4C5740`/`0x4F8A70` (a translated name if there is one), appended to the buffer through the
+  realloc `0x4D84A0` (`0x434E3E`).
+- `0x434EA9`, the loop's tail, reached by both paths: a refused map's `je` from `0x434D61` or
+  `0x434D81`, and a kept one falling through from `0x434EA3`. When `[esp+0x18]` is set (a
+  multiplayer build), the network pump `0x453D40` and `0x4618A0`; then the TDF object's destructor
+  `0x4C2EB0` (`0x434ECB`) and the next name. Its `cmp [esp+0x18],ebp` needs `ebp` = 0: it is 0 at
+  `0x434D61` and `0x434D81`, holds the name's length from `0x434E2A`, and is zeroed again at
+  `0x434EA7`.
+- **Whether a network peer has the host's map is not this list's answer.** `0x448EAE` calls
+  `0x435A20` with the name, which through `0x435DA0` reaches `0x435430(1, "Maps", name, "TNT")` and
+  `0x4BBC40` on the terrain file, stored at `+0xA04`; `0x448EBF` reads it back through `0x4358F0`.
+
+**The file primitives it and the fix use** [DISASSEMBLED 2026-09-28]:
+
+- `0x4290F0(out, dir, name, ext)`, `stdcall`, `ret 0x10`: `0x49F580` returns the `language`
+  value (`0x51FB50`, read from the registry value named at `0x5097E8` by `0x42F980` at
+  `0x49E9F7` and set to "english" when empty, `0x49E9FC..0x49EA27`), so it first tries
+  `"%s-%s\%s"` (`0x503378`) — `Maps-english\name` on an English install — and keeps it if
+  `0x4BB5B0` opens it (closed again with `0x4BB5D0`); otherwise `dir\name`. Either way, with an `ext`, `0x4BB0F0` cuts the name at its last dot and
+  `"." + ext` is appended. It writes `out` with no bound.
+- `0x4BB0F0(s)`, `stdcall`: writes a NUL over the LAST `.` in `s`, if any.
+- `0x4BB2C0(path)` and `0x4BB5B0(path)`, `stdcall`: both call `0x4BB2E0(path, mode)` with the modes
+  `0x50A474` and `0x505F10`; it calls `0x4E4990(path, mode)` first and, when that returns NULL,
+  walks `[0x4B6220()+0x61C]` entries [INFERRED: the loose file, then every archive], returning a
+  handle or NULL. `0x4BB5D0(handle)` closes it. No box appeared while the filtered lists were
+  built, nine NULLs each (MEASURED 2026-09-28, Wine).
+- `0x4C5840(shown)`, `stdcall`, `ret 4`: the reverse of the display-name translation `0x4C5740`,
+  a walk of the table at `0x51FDB8` (built from Translate.tdf by `0x4C54F0`, called once, at
+  `0x49EA33` in WinMain's init `0x49E830`) returning the untranslated name or NULL. The map loader
+  uses it when `Maps\<name>.OTA` does not parse (`0x436114` → `0x43611E`), because a saved or
+  picked name is the list's translated display name.
+- `0x4352D0(name)` is the same question for a campaign, `camps\<name>.TDF` (`0x504A64`,
+  `0x50341C`), with no direct caller.
+
+**A map with no terrain** (MEASURED 2026-09-27): an `.ota` whose `.tnt` is in no archive is listed,
+and on Windows the map's load stops on a box naming `Maps\<name>.TNT` (MEASURED 2026-09-28: the
+SKIRMISH screen opened on "A Plethora of Ponds" with no box, and Start raised it over the loading
+screen; 2026-09-27's player launch reported it at the SKIRMISH screen). Under Wine the same saved
+map opens the SKIRMISH screen with no box (MEASURED 2026-09-28). A picked map's terrain path is
+built by `0x435430(1, "Maps", name, "TNT")` (`0x43605D`, the string `0x504D88`). The consequence for
+mods is in [compat/setups.md](compat/setups.md), *Total Mayhem's maps with no terrain*.
+
+**Patched** (`tagpu_patches.c`, `fix_map_terrain`, local). At `0x434D87` (7 bytes: `mov
+eax,[esp+0x24]; or ecx,-1`) a stub asks whether `0x4290F0(out, "Maps", name, "TNT")` opens through
+`0x4BB5B0`, the name being the one `0x434D92` reads, `[[esp+0x24] + esi]`; without terrain the map
+takes `0x434EA9` with every register as the `je` at `0x434D81` leaves it, and with terrain the two
+stolen instructions run and the walk goes on at `0x434D8E`. At `0x430B87` (6 bytes: `test
+eax,eax; jne 0x430BFE; push 2`) a value that was read is resolved as the loader resolves it —
+the name with `.ota` appended (so `0x4BB0F0` cuts only that) if `Maps\<name>.OTA` opens, else the
+key `0x4C5840` returns — and asked the same question; one without terrain, or with no file and no
+key, goes to `0x430B8D` as a missing value does, and that path writes the replacement to the
+registry (`0x430BF9`). Both names are bounded before the builder, which has no bound of its own:
+under 256 bytes each, with the `language` value's, so `"Maps-<language>\<name>.TNT"` fits the
+stub's 1 024-byte buffer; a name past the bound keeps stock's verdict. A map whose file name has a dot
+before `.ota` (`Map.v2.ota`) is asked about `Map.v2.TNT`, while the loader (the skirmish and
+multiplayer cases 2 and 3 of `0x436844`'s jump table, at `0x4360BF`), handed the list's name
+already cut at its last dot, parses `Maps\Map.OTA` (`0x436103`) and asks for the terrain through
+`0x435430(1, "Maps", name, "TNT")` at `0x436190`, which cuts again (`0x4354F6`): `Maps\Map.TNT`,
+stock's mis-load, which the fix neither causes nor mends. MEASURED 2026-09-28, Total Mayhem
+11.3.0 under Wine, the same instance on main's build and on the fix: the skirmish list 109 → 100
+and the battle room's list 109 → 100, the nine missing being exactly the nine maps with no terrain
+in the install, nothing else changed; a saved "A Plethora of Ponds" became "Acid Foursome"; a pick
+from the filtered list loads. With `language` = german the list read 100 German names, and a
+saved "Das Ashap-Plateau" (not entry 0, which is "Absolut riesig") was kept: the SKIRMISH screen
+showed it, the set-aside counter read 0 and the registry held it at exit. On the Windows 10 test
+box, the same comparison on the fresh-key path: the list 109 → 100 with none of the nine, and
+Start into the game where main's previous build stopped on the box.
+
+**Not closed.** A joining peer that has the host's map's `.ota` but not its terrain loads the
+host's pick by name (`0x448EAE` → `0x435A20` → `0x435DA0`), which this list does not reach, so it
+meets the terrain's absence as stock does [INFERRED: the same box]. And a saved map whose terrain
+is absent at launch (an archive installed only some of the time) is replaced in the registry at
+the options load, where stock kept it and fell back in memory when the SKIRMISH screen could not
+load its `.ota` (`0x47BCD7`).
 
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
@@ -11455,12 +11839,15 @@ rare on an idle machine and clusters into bursts when the game thread is preempt
 and why `Object3do+0x08` is the only usable interlock: it is the one field that is set before
 the first write and cleared after the last.
 
-**The rebuild that leads to it is a different question.** `0x458810`'s dirty test
-(`[esp+0x10]`, built at `0x458870..0x4588F2`) is `drawCount == 0`, plus three structure /
-nanoframe / `unit+0x114` bit0 cases that all also require the composite cache `o3+0x10` to be
-null — it is **not** "the pose changed". A walking unit's composite is rebuilt because something
-else nulls `o3+0x10`, not because this test fires; the repose above runs in `DrawUnit`, before
-`0x458810` is called at all.
+**The rebuild that leads to it is a different question.** `0x458810`'s local rebuild flag
+(`[esp+0x10]`, built at `0x458870..0x4588F2`) is set when `o3+4 == 0`; when a structure
+(`unit+0x110` bit 29) lacks its composite; when `unit+0x114` bit 0 is set and the composite is
+absent; or when a structure has a nonzero construction fraction, state bit 13 set and an
+existing composite with **no depth plane** (`0x45889A..0x4588C1`). That last case does not
+require a null composite. The test is not simply "the pose changed": the repose runs in
+`DrawUnit` before `0x458810`, and cache invalidation can separately force rebuilding.
+The allocation choice is mapped in *Replay snapshots and draw-created caches* above
+[DISASSEMBLED 2026-09-28].
 
 ### `get` and `set` — the twenty value ids (tacob landing 4, 2026-09-07)
 
