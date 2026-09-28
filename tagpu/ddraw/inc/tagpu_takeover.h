@@ -70,8 +70,9 @@
    list is never written. A module that fails either is left running and said so -- it is not an
    assumption about the retail exe. On the retail routes the
    module we are inside is Impure's own; where the exe imports TADR it is TADR's, and 1d hands
-   back its index before it redirects those slots, since a redirected slot no longer names it. WHAT IT DOES NOT COVER: a game-folder module that is not in
-   the exe's import table at all, and a PE TLS callback, which the loader calls whatever the entry
+   back its index before it redirects those slots, while slot and name still agree (when the module
+   it stopped is in no descriptor at all, nothing more is made inert). WHAT IT DOES NOT COVER: a
+   game-folder module that is not in the exe's import table at all, and a PE TLS callback, which the loader calls whatever the entry
    point holds. Both are named where they are found (to_tls_callbacks logs one) and answered by
    pass 4. No module this pass makes inert has either: every one is a recorder, and no recorder
    carries a TLS directory at all, while the six tdraw/TAESC builds of the fixtures whose callback

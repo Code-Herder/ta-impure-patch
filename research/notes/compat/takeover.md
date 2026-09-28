@@ -129,17 +129,32 @@ hook: `takeover: the exe's import of Impure leads into apphelp.dll (…)`.
 
 **The loader's own record is the second, independent half.** A module is made inert only if it is
 also absent from the process's initialisation-order list (`PEB_LDR_DATA.InInitializationOrderModuleList`),
-which both loaders fill *before* a module's TLS callbacks and entry point run. MEASURED 2026-09-27
+which the loader fills *before* a module's TLS callbacks and entry point run. MEASURED 2026-09-27
 from inside Impure's `DllMain`, on Windows 10 19041 and Wine 9.0: both list `DDRAW.dll`, whose entry
-point is running, and neither lists `tplayx.dll`, whose entry point has not been called. The list is
-read under the loader lock this `DllMain` holds and every change to it is made under, so the answer
-stays true until the entry point has been written. Anything that does not read as that list counts
-as "entered": a module is only made inert on a positive answer from both halves.
+point is running, and neither lists `tplayx.dll`, whose entry point has not been called. Wine's
+`process_attach` inserts after the dependencies and before the initialiser; Windows 8 and later
+insert in `LdrpInitializeNode` before the initialisers [INFERRED for every Windows build but the one
+measured]. The list is read under the loader lock this `DllMain` holds, and the loader changes it
+only under that lock (Wine's `loader_section`; Windows' `LdrpLoaderLock` [INFERRED] — the parallel
+loader's workers map and snap, never initialise), so the answer stays true until the entry point has
+been written. **Only a positive answer counts as "not entered"**: the walk has to reach the end of a
+list that holds Impure's own module, which is on it during its own `DllMain` — that is what makes it
+the live list. Anything else counts as entered. A module is made inert only on a positive answer from
+both halves; where 1d stops a module no descriptor names, the descriptor half has nothing to compare
+with and nothing more is made inert.
+
+**Windows 7 and earlier are not measured.** Their loader [INFERRED from ReactOS] lists every static
+import during the import walk, before any initialiser runs, so there every recorder reads as entered,
+is left running, and part 3 refuses the launch — the safe direction, and a refusal rather than a
+recorder that runs.
 
 **What the invariant does not cover**: a game-folder module that is in the exe's import table not
-at all — pulled in as a dependency of an earlier descriptor's module. The descriptor half cannot
-place it, so it is left running and part 3 answers for it. No setup of the suite has one
-(MEASURED 2026-09-27, `objdump -p` over every fixture's exe and DLLs). Nor does it cover a **PE TLS
+at all — pulled in only as a dependency of another module. The descriptor half cannot place it, so
+it is left running and part 3 answers for it. The case the list half closes is the neighbour of
+that one: a module the exe imports at a *later* descriptor that is also a dependency of an
+*earlier* descriptor's module, initialised inside that earlier subtree while its own index still
+reads "not yet". No setup of the suite has either (MEASURED 2026-09-27, `objdump -p` over every
+fixture's exe and DLLs). Nor does it cover a **PE TLS
 callback**, which the loader calls whatever the entry point says. MEASURED 2026-09-27 over the
 fixtures' 18 TADR modules: **no recorder carries a TLS directory at all** (`tplayx`, `eplayx`,
 `zplayx`, the 2006 `Dplayx.dll` — nine of nine), Total Mayhem's and ProTA's `tdraw.dll` carry one

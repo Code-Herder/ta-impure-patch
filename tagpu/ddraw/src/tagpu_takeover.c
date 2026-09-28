@@ -284,7 +284,8 @@ static int to_inert(HMODULE m)
 
 /* The module the loader bound an import descriptor's name to: the one loaded under that name.
    NULL when the name does not end inside the image or nothing of that name is loaded.
-   GetModuleHandleA loads nothing and takes the loader lock this thread already holds. */
+   GetModuleHandleA loads nothing, so it is safe from DllMain: a lookup under a lock the loader
+   takes for lookups (Wine's loader lock, held here already; Windows 10's module table lock). */
 static HMODULE to_descriptor_module(const BYTE* exe, DWORD image, const IMAGE_IMPORT_DESCRIPTOR* d)
 {
     char name[MAX_PATH];
@@ -325,10 +326,11 @@ static HMODULE to_descriptor_module(const BYTE* exe, DWORD image, const IMAGE_IM
 
    EVERY SLOT of a descriptor is looked at, not its first: a slot the loader could not bind is
    left as the file's value, and reading only slot 0 would then miss the descriptor entirely.
-   WHAT IT CANNOT SEE: a module the exe does not import at all -- pulled in as the dependency of
-   an earlier descriptor's module. Such a module may already be initialised; to_loader_entered is
-   what keeps it from being made inert. No fixture has one (MEASURED 2026-09-27: objdump -p over
-   every setup's exe and DLLs). */
+   WHAT IT CANNOT SEE: that a module is also a dependency of an EARLIER descriptor's module. Then
+   the loader initialised it inside that earlier subtree although its own descriptor comes later,
+   and this index says "not yet" -- to_loader_entered is what keeps such a module from being made
+   inert. A module the exe does not import at all gets -1 and is left running. No fixture has
+   either (MEASURED 2026-09-27: objdump -p over every setup's exe and DLLs). */
 static int to_descriptor_of(const BYTE* exe, DWORD image, HMODULE m, DWORD* foreign)
 {
     DWORD at, end;
@@ -354,7 +356,8 @@ static int to_descriptor_of(const BYTE* exe, DWORD image, HMODULE m, DWORD* fore
             return k;                                  /* the first descriptor that names it */
         }
         if (to_descriptor_module(exe, image, d) == m) {
-            if (foreign) *foreign = ((const DWORD*)(exe + d->FirstThunk))[0];
+            if (foreign && d->FirstThunk <= image - sizeof(DWORD))
+                *foreign = ((const DWORD*)(exe + d->FirstThunk))[0];
             return k;
         }
     }
@@ -371,35 +374,52 @@ static __inline DWORD nest_fs(unsigned off)
 }
 
 /* WHETHER THE LOADER HAS BEGUN INITIALISING A MODULE, from its own record: the module is on the
-   process's initialisation-order list, PEB_LDR_DATA.InInitializationOrderModuleList. Both loaders
-   put a module there before its TLS callbacks and its entry point are called, so a module NOT on
+   process's initialisation-order list, PEB_LDR_DATA.InInitializationOrderModuleList. The loader
+   puts a module there before its TLS callbacks and its entry point are called, so a module NOT on
    it is one whose code the loader has not run. MEASURED 2026-09-27 from inside Impure's DllMain
    beside Total Mayhem 11.3.0, on Windows 10 19041 and on Wine 9.0: both list DDRAW.dll (the module
    whose entry point is running) and neither lists tplayx.dll (whose entry point has not been
-   called).
+   called). Wine's process_attach inserts it after the dependencies and before MODULE_InitDLL;
+   Windows 8 and later insert in LdrpInitializeNode before the initialisers [INFERRED for every
+   Windows build but the one measured]. Windows 7 and earlier are not measured and [INFERRED from
+   ReactOS] list every static import during the import walk, before any initialiser: there every
+   recorder reads as entered, is left running, and the image comparison refuses the launch --
+   the safe direction.
 
-   A LIFETIME, NOT A SNAPSHOT: this runs from DllMain, under the loader lock, and the loader makes
-   every change to the list under that lock -- so the answer holds until DllMain returns, which is
-   after the entry point has been written. The 32-bit layout, the same on both loaders: PEB+0x30 in
-   the TIB, PEB_LDR_DATA at PEB+0x0C, the list head at +0x1C, and in LDR_DATA_TABLE_ENTRY the
-   initialisation-order links at +0x10 and DllBase at +0x18. Anything that does not read as that
-   list -- no PEB, no loader data, a link that is NULL, more entries than any process loads --
-   counts as entered, so a module is only ever made inert on a positive answer. */
+   A LIFETIME, NOT A SNAPSHOT: this runs from DllMain, under the loader lock, and the loader
+   changes the list only under that lock (Wine's loader_section; Windows' LdrpLoaderLock
+   [INFERRED], the parallel loader's workers map and snap and never initialise) -- so the answer
+   holds until DllMain returns, which is after the entry point has been written. The 32-bit
+   layout, the same on both loaders: PEB+0x30 in the TIB, PEB_LDR_DATA at PEB+0x0C, the list head
+   at +0x1C, and in LDR_DATA_TABLE_ENTRY the initialisation-order links at +0x10 and DllBase at
+   +0x18.
+
+   ONLY A POSITIVE ANSWER COUNTS AS "NOT ENTERED": the walk must reach the end of a list that holds
+   Impure's own module, which is on it while this DllMain runs (MEASURED above) -- that is what
+   makes it the live list rather than whatever the pointers happen to lead to. No PEB, no loader
+   data, a NULL link, more entries than any process loads, or a list without Impure on it, all
+   count as entered. A module that unlinked itself after running is the case the anchor exists
+   for: absent from a list that is otherwise real, it would read as not entered -- so it must also
+   pass the descriptor half, which it cannot unlink itself from. */
 static int to_loader_entered(HMODULE m)
 {
     const BYTE* peb = (const BYTE*)(size_t)nest_fs(0x30);
     const BYTE* ldr;
     const LIST_ENTRY *head, *e;
     unsigned n = 0;
+    int self = 0;
     if (!peb) return 1;
     ldr = *(const BYTE* const*)(peb + 0x0C);
     if (!ldr) return 1;
     head = (const LIST_ENTRY*)(ldr + 0x1C);
     for (e = head->Flink; e != head; e = e->Flink) {
+        HMODULE base;
         if (!e || ++n > 4096) return 1;
-        if (*(HMODULE const*)((const BYTE*)e - 0x10 + 0x18) == m) return 1;
+        base = *(HMODULE const*)((const BYTE*)e - 0x10 + 0x18);
+        if (base == m) return 1;
+        if (base == g_ddraw_module) self = 1;
     }
-    return 0;
+    return !self;
 }
 
 /* Whether the module's PE TLS directory names a callback the loader calls whatever the entry point
@@ -472,6 +492,15 @@ void tagpu_takeover_tadr_init(void)
     if (kme < 0) {
         inside = tagpu_takeover_nested_init(game, &kme);
         if (!inside) return;        /* 1d said why; part 3 answers for this launch */
+        /* 1d stopped a module no descriptor of the exe names: "later than the module we are
+           inside" means nothing then, and every module would pass it. Both halves, or none. */
+        if (kme < 0) {
+            tagpu_log("takeover: the module 1d stopped is not in the exe's import table, so no "
+                      "module's place in the load order can be compared with it -- nothing more "
+                      "is made inert, and the comparison at the first DirectDraw call answers "
+                      "for this launch");
+            return;
+        }
     }
 
     while ((m = to_next_local(m, game, path))) {
@@ -1125,10 +1154,9 @@ static HMODULE tagpu_takeover_nested_init(const wchar_t* game, int* kme)
                n.seh ? "put back to the record above the frame" : "left as it is (already above "
                "the frame)");
 
-    /* ITS DESCRIPTOR INDEX IS TAKEN NOW, BEFORE THE SLOTS STOP NAMING IT. to_descriptor_of finds
-       a descriptor by a slot whose value lies inside the module, so redirecting those slots two
-       lines below makes the module unfindable and every later comparison against "the descriptor
-       we are inside" meaningless. */
+    /* ITS DESCRIPTOR INDEX IS TAKEN NOW, BEFORE THE SLOTS ARE REDIRECTED. Afterwards those slots
+       lead into Impure, and a slot match would then name that descriptor as Impure's; the name the
+       loader bound still names this module, but the index is taken while both halves agree. */
     if (kme) *kme = (xnt && exe)
         ? to_descriptor_of(exe, xnt->OptionalHeader.SizeOfImage, n.mod, NULL) : -1;
 
