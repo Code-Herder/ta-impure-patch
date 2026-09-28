@@ -1709,6 +1709,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
         if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
         s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
         if (!ret_push(d, s_arImg, s_arMem, s_arView, VK_NULL_HANDLE)) {
+            /* the old-size image stays until the retire takes it, and it is
+               laid out for the old atlas: nothing may sample it meanwhile */
+            s_arHave = 0;
             tagpu_gui_col_ready(0, s_arSettled);
             return;                       /* the retire is full: ask next frame */
         }
@@ -1812,7 +1815,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
     /* THE CONSUMER IS WHAT ASKS THE DEVICE: `up` loads the model off disk, so a
        session that never restores never pays for it. It latches its verdict. */
     if (!tagpu_vk_restore_up(d)) {
-        s_rjTried = 1; tagpu_gui_col_ready(0, s_arSettled); return;
+        s_rjTried = 1; s_arHave = 0; tagpu_gui_col_ready(0, s_arSettled); return;
     }
     /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED, and only when
        nothing was BLANKED since it last looked: `restoreRepaint` describes the
@@ -1832,7 +1835,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
                                       s_atImg, s_atView, s_atDim, s_atDim, 0,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
-    if (!s_rjob) { s_rjTried = 1; tagpu_gui_col_ready(0, s_arSettled); return; }
+    /* the image holds the previous generation's restore, and this
+       generation's rects no longer describe it */
+    if (!s_rjob) { s_rjTried = 1; s_arHave = 0; tagpu_gui_col_ready(0, s_arSettled); return; }
     s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
     s_rjGen = h->restoreGen;
     s_rjBlanks = h->restoreBlanks;
@@ -2234,7 +2239,7 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
         }
     }
     /* THE PALETTE MOVED, AND THE PRODUCER SAYS THE NEW ONE HAS SETTLED
-       (`colourTwins` is its `s_colValid`). A picture a twin pins is
+       (`colValid` is its `s_colValid`). A picture a twin pins is
        restored again against it, repainting in place; every other one goes,
        and is stored again against the new palette when it is next drawn --
        so a level load does not restore the shell's whole map list for
@@ -2245,7 +2250,7 @@ static void pic_step(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        re-arm does the same to every colour twin. The evictions are not about
        room, so they do not count as recent: the pictures drawn again after the
        re-arm are restored and asked a repaint for. */
-    if (s_psPalHave && h->pal && h->colourTwins && memcmp(h->pal, s_psPal, sizeof s_psPal)) {
+    if (s_psPalHave && h->pal && h->colValid && memcmp(h->pal, s_psPal, sizeof s_psPal)) {
         int kept = 0, dropped = 0;
         ps_job_free(d);
         for (i = 0; i < PS_MAX; i++) {
@@ -2502,15 +2507,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         return 0;
     }
     /* CLASSIC++ IS CARRIED: `colourTwins` is `uColOn`, read where the
-       composite's block is filled. WHILE THIS PASS HOLDS NO RESTORED ATLAS the
-       frame is composited INDEXED rather than not at all. The producer decided
-       `colourTwins` from our answer of the frame before (`tagpu_gui_col_ready`
-       is one frame old by construction), so on the frame a new restore job
-       blanks the atlas it still says colour -- and every restore that is not a
-       repaint does that. Indexed is the art the validity rule itself falls back
-       to for a fade (tagpu_gui_surf.c), never wrong art; compositing nothing
-       here was a black frame, and on screens whose atlas repacks it was every
-       frame. */
+       composite's block is filled. It composites the TWINS' colour planes, not
+       the restored atlas, so it needs no atlas this frame -- the one-frame lag
+       of `tagpu_gui_col_ready` on a blanking job is carried by the replay,
+       which draws that frame's restored sprites indexed. The branch below is a
+       brace, not that fix: every `tagpu_gui_col_ready(1)` is `s_arHave` at the
+       end of the previous prepare, so the producer cannot say colour over no
+       atlas unless a teardown ran in between. If it ever does, the frame is
+       composited indexed -- a picture, never a stand-down. */
     colOn = h.colourTwins;
     if (s_arHave) s_saidSprite = 0;
     if (h.colourTwins && !s_arHave) {
@@ -3337,10 +3341,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    `s_colValid` (tagpu_gui_surf.c) a second time, of a module
                    that settled it before the drain -- and the whole hand-over exists
                    because a second derivation is a second thing that can drift.
-                   A frame whose ops say ON and whose restored atlas never
-                   arrived was refused above; this is belt to that brace, and it
-                   is the difference between drawing indexed and sampling the
-                   dummy image as though it were art. */
+                   The one case this pass overrides them is below. */
                 if (o->kind == TAGPU_GUIOP_SPRITE) {
                     /* A RESTORED SPRITE OVER NO RESTORED ATLAS IS DRAWN INDEXED.
                        The producer set `TAGPU_GUICOL_ON` from our answer of the
@@ -3685,10 +3686,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     pres = tw_find(h.presented);
     if (!pres || pres->w != h.surfW || pres->h != h.surfH) goto standdown;
     /* `uColOn` IS THE PRODUCER'S (`colourTwins`) AND THE IMAGE UNDER IT HAS TO
-       BE OURS. The two agree by construction -- `TAGPU_GUICOL_DST` is what made
-       both the drain's `col` mark and our colour image -- so this
-       is the belt to that brace, and the alternative to it is compositing
-       indexed art through a branch that says it is restored. */
+       BE OURS. `TAGPU_GUICOL_DST` made both the drain's `col` mark and our
+       colour image, so they agree while every record reaches this pass; a
+       record never taken is the case that reaches this check (gpu-status.md
+       *Two colour disagreements are neither*), and the alternative to it is
+       compositing a colour image that does not exist. */
     if (colOn && !pres->colImg) {
         sdWhy = "the presented twin has colour in the producer's record and none here";
         goto standdown;
@@ -3697,8 +3699,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* ---- THE SHARP LAYER'S OWN PASS, BELOW THE COMPOSITE GATE, because the
        only thing that ever samples it is the composite: recorded above the
        gate, it would draw and throw away a device-resolution layer on every
-       frame the composite is stood down on -- which is EVERY frame of a
-       Classic++ session, where `colourTwins` clears `compose`.
+       frame the composite is stood down on.
 
        Drawn here because `prepare` is the hook
        outside the seam's render pass and a render pass may not nest -- the same
@@ -3823,8 +3824,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            colour attachment AND the palette-validity rule says it may be read
            this frame. `&& pres->colImg` is not redundant -- `colourTwins` is
            the producer's flag, about ITS table, and a frame where our twin has
-           no colour image would sample the dummy image through a live branch. The two agree by construction and
-           this is what says so out loud. */
+           no colour image would sample the dummy image through a live branch.
+           The stand-down check above has already refused that frame; this
+           keeps the block honest on its own. */
         /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 80 bytes.
            `inc/spirv/tagpu_gui_surf.spv.h` prints the table this must match --
            read it there, never from here. */

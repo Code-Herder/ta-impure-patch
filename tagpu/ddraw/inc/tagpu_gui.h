@@ -411,6 +411,9 @@ typedef struct TAGPU_GUIHAND {
        twin AND the palette-validity rule (gui-renderer.md 3.4) says it may be
        read this frame. */
     int   colourTwins;
+    /* the palette-validity rule alone, whatever is presented: what the
+       consumer's picture store keys a palette rebuild on */
+    int   colValid;
     int   sharpOn;                  /* the sharp layer had COVERAGE this frame
                                        -- not merely that it exists, which it
                                        does on every frame once it is made */

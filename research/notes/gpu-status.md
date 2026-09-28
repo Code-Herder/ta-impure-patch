@@ -6842,13 +6842,27 @@ code once said. They are answered where they arise, never with a fresh start:
   palette. Dithered art, never wrong art; the consumer's answer drops to 0 that frame, the
   producer's validity follows, and its 0 → 1 edge asks the engine for the repaint that brings the
   colour back (`col_ask_repaint`). Logged once per stretch: `gui: a restored sprite arrived while
-  this lane holds no restored atlas - drawn indexed until the repaint`. A frame whose producer still
-  says colour while the lane holds no atlas is composited **indexed** (`uColOn = 0`), not skipped.
+  this lane holds no restored atlas - drawn indexed until the repaint`. That frame's composite needs
+  no atlas: `uColOn` reads the twins' colour planes, which the blanking did not touch. A frame whose
+  producer says colour while the lane holds no atlas at all would be composited **indexed**
+  (`uColOn = 0`) rather than skipped, but that branch is a brace: every `tagpu_gui_col_ready(1)` is
+  `s_arHave` at the end of the previous prepare, so it needs a teardown between present and prepare.
+  Every path in `restore_want` that gives up, or leaves an image laid out for another atlas, clears
+  `s_arHave` before it answers.
 * **`colourTwins` for a twin that has no colour plane.** The header defines it as colour valid
   **and** the presented twin carrying one; the producer published validity alone, so every surface
   presented after a reseed — fresh on both sides, colour on neither — was a stand-down. It is
   `s_colValid && t->col` now. `t->col` and the consumer's `colImg` are made by the same
-  `TAGPU_GUICOL_DST` op and dropped by the same RESET, so the consumer's check holds by construction.
+  `TAGPU_GUICOL_DST` op and dropped by the same RESET, so they agree **as long as every record reaches
+  the consumer**. The picture store's palette rebuild wants validity alone, and reads it as `colValid`.
+
+**Open: a record the consumer never takes.** `mir_begin` drops an untaken record rather than
+publishing it `lost`; one goes untaken when the swapchain acquire returns out-of-date before
+`tagpu_vk_gui_prepare` runs (a window drag, a same-size rebuild). Its ops were applied to the
+producer's table and never to ours: a `DST` there makes the colour disagreement above (one stand-down
+and one fresh start), and ops that only draw into existing twins leave stale art until the engine
+redraws it. Publishing `lost` would ask a fresh start per dropped record, which a drag can make many
+of; the by-construction answer is to carry the untaken ops into the next record, and it is not built.
 
 Answered with a fresh start, each disagreement re-laid the atlas, which started the next job, which
 made the next disagreement: **eight asks, then the capability-gap mute, then nothing composited for

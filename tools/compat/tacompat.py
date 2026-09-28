@@ -372,6 +372,8 @@ def lever_file(lever) -> tuple:
 
 
 GUI_INDEXED = re.compile(r"^vk: gui: a restored sprite arrived while this lane holds no restored atlas", re.M)
+# the producer's repaint budget for one palette generation, spent: what is on screen keeps its indices
+GUI_SPENT = "gui: the restored UI atlas has settled 32 times in one palette generation"
 
 
 def gui_health(text: str) -> dict:
@@ -387,7 +389,8 @@ def gui_health(text: str) -> dict:
         into[m.group(1)] = into.get(m.group(1), 0) + 1
     fired = [int(m) for m in GUI_STRESS.findall(text)]
     return {"asks": asks, "asks_stress": asks_stress, "gave_up": GUI_GAVE_UP in text,
-            "stress": max(fired, default=0), "indexed": len(GUI_INDEXED.findall(text))}
+            "stress": max(fired, default=0), "indexed": len(GUI_INDEXED.findall(text)),
+            "spent": GUI_SPENT in text}
 
 
 def gui_misses(g: "dict | None", exp: dict) -> list:
@@ -411,6 +414,10 @@ def gui_misses(g: "dict | None", exp: dict) -> list:
     # A stress run that never met the race proves nothing: the fallback has to have run.
     if stress and not g["indexed"]:
         miss.append("no restored sprite ever met a blanked atlas, so the race was not exercised")
+    # Every fresh start's indexed frame is answered by a repaint; with the budget spent the
+    # indexed art stays, which is the dithered picture the fix exists to avoid.
+    if stress and g.get("spent"):
+        miss.append("the repaint budget ran out, so indexed art stayed on screen")
     return miss
 
 
@@ -2087,7 +2094,37 @@ def cmd_selftest(args):
               f"{f'   ({held} held, not counted)' if held else ''}")
         bad += got != want
     print(f"decode: {len(DECODE_CASES) - bad} of {len(DECODE_CASES)} as intended")
-    return 1 if bad else 0
+    gbad = 0
+    for name, text, exp, want in GUI_CASES:
+        got = len(gui_misses(gui_health(text), exp))
+        print(f"  {'ok ' if got == want else 'BAD'} {name:26} {got} miss(es)")
+        gbad += got != want
+    print(f"ui health: {len(GUI_CASES) - gbad} of {len(GUI_CASES)} as intended")
+    return 1 if bad or gbad else 0
+
+
+def _ask(why):
+    return f"vk: gui: the twin store cannot follow the producer ({why}) - asking the producer\n"
+
+
+_ACTIVE = {"outcome": "impure-active"}
+_STRESS = {"outcome": "impure-active", "gui_stress": 2}
+_FIRE = "gui: reseedstress: fresh start {} asked by the harness\n"
+_IDX = "vk: gui: a restored sprite arrived while this lane holds no restored atlas - drawn indexed\n"
+# (name, log, expectation, how many misses gui_misses must report)
+GUI_CASES = [
+    ("startup asks only", _ask("the presented surface has no twin here") * 2, _ACTIVE, 0),
+    ("an ask past start-up", _ask("the presented twin has colour in the producer's record "
+                                  "and none here"), _ACTIVE, 1),
+    ("gave up", _ask("x") + "vk: " + GUI_GAVE_UP + " (x)\n", _ACTIVE, 2),
+    ("stress clean", _FIRE.format(1) + _IDX + _FIRE.format(2), _STRESS, 0),
+    ("stress, startup ask after", _FIRE.format(1) + _IDX + _FIRE.format(2) +
+     _ask("the presented surface has no twin here"), _STRESS, 1),
+    ("stress too few fires", _FIRE.format(1) + _IDX, _STRESS, 1),
+    ("stress never indexed", _FIRE.format(1) + _FIRE.format(2), _STRESS, 1),
+    ("stress budget spent", _FIRE.format(1) + _IDX + _FIRE.format(2) + GUI_SPENT + "\n", _STRESS, 1),
+    ("not judged when inactive", _ask("x"), {"outcome": "impure-refused"}, 0),
+]
 
 
 # ------------------------------------------------------------------------- cli

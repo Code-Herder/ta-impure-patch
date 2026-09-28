@@ -201,10 +201,11 @@ static int    s_norestore = 0;          /* `norestore` in the trigger: the A/B l
        frame in it (`tagpu_gui_col_ready`), and the presented palette is still
        the one that image was painted against.
    The third is what keeps this from being a race with the lane that paints:
-   an op that says restored to a consumer holding no restored atlas is a frame
-   the consumer must refuse whole, which would thrash the store for the two
-   seconds a first restore takes. It cannot say restored before the consumer
-   has said it can. */
+   an op that says restored to a consumer holding no restored atlas is drawn
+   indexed there (`tagpu_vk_gui.c`'s replay), so saying it before the consumer
+   has an atlas would fill colour twins with indexed art for the two seconds a
+   first restore takes. It cannot say restored before the consumer has said it
+   can. */
 static int    s_colValid = 0;
 /* THE CONSUMER'S ANSWER, one frame old by construction: `tagpu_vk_gui.c` calls
    `tagpu_gui_col_ready` from its own prepare, which runs LATER in the same
@@ -212,8 +213,8 @@ static int    s_colValid = 0;
    thread, so this is a plain static and not a handshake. One frame of lag in
    BOTH directions: on the way ON it costs nothing, and on the way OFF -- a
    restore job that blanks the consumer's atlas -- the consumer draws that
-   frame's restored sprites indexed and composites it indexed
-   (tagpu_vk_gui.c), then this answer drops and its return asks for the
+   frame's restored sprites indexed (its replay runs after the job starts,
+   tagpu_vk_gui.c), then this answer drops and its return asks for the
    repaint. */
 static int    s_colReady = 0;
 /* ...AND HOW OFTEN THE RESTORE HAS GONE QUIET HAVING PAINTED SOMETHING NEW.
@@ -1119,11 +1120,10 @@ static void restore_step(void)
     if (!tagpu_gaf_atlas_restore_vk(&s_atlas)) { s_colValid = 0; col_valid_edge(0); return; }
     /* the list the consumer keys its picture store on is published from here */
     s_picArm = 1;
-    /* AND THE CONSUMER HAS TO HAVE SOMETHING TO SAMPLE. Saying restored to a
-       consumer with no restored image is a frame it must refuse WHOLE -- the
-       op would write alpha 0 into a twin that keeps it -- so the first two
-       seconds of every level would be the store thrashing instead of the art
-       arriving. */
+    /* AND THE CONSUMER HAS TO HAVE SOMETHING TO SAMPLE. A sprite that says
+       restored to a consumer with no restored image is drawn indexed into its
+       colour twin, so the first two seconds of every level would put indexed
+       art where the restored art belongs. */
     if (!s_colReady) { s_colValid = 0; col_valid_edge(0); return; }
 
     live = tagpu_pal_serial();
@@ -2405,13 +2405,17 @@ static void draw_layer(const TAGPU_FRAME* f)
            given a colour plane (`t->col`) -- the header's definition, and the
            consumer's check that its own twin has one (`pres->colImg`). The two
            records are made by the same op, `TAGPU_GUICOL_DST`, and dropped by
-           the same RESET, so they agree by construction. Validity alone was
+           the same RESET, so they agree whenever every record reaches the
+           consumer; a record it never takes is the exception (`mir_begin`
+           drops it, gpu-status.md *Two colour disagreements are neither*).
+           Validity alone was
            not that: a surface presented before any sprite gave it colour --
            every surface right after a reseed -- has no colour plane on either
            side, and the consumer stood the frame down and asked for another
            reseed. MEASURED 2026-09-27 on the Wine suite: that reason was most
            of the fresh starts, and all 8 of Escalation's before it gave up. */
         s_mHand.colourTwins = (s_colValid && t->col) ? 1 : 0;
+        s_mHand.colValid = s_colValid;
         s_mHand.vpX = f->vp_x; s_mHand.vpY = f->vp_y;
         s_mHand.vpW_gl = f->vp_w; s_mHand.vpH_gl = f->vp_h;
         /* the same four numbers derived above, not a second reading of
@@ -2652,6 +2656,7 @@ static void mir_finish(const TAGPU_FRAME* f)
         s_mHand.presented = 0; s_mHand.surfW = s_mHand.surfH = 0;
         s_mHand.sharpOn = 0;
         s_mHand.colourTwins = 0;
+        s_mHand.colValid = 0;
     }
 
     s_mHand.frame = f->frame_counter;
