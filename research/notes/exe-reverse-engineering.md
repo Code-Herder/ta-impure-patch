@@ -12256,6 +12256,22 @@ calculation at `0x4B0DAD` is replaced by a bound and record validation **before*
 the wait-state dispatcher reads piece/axis fields. The first instruction fetch
 and all later fetches pass `0x4B0E5D`; `0x4B0E59` alone misses the first fetch.
 
+The operand inventory below was checked against retail disassembly. Addresses name the
+four-byte operand, not necessarily the beginning of its instruction. Every operand is
+byte-checked before replacement; the owning functions retain their native call sites.
+
+| Field or loop | Operand addresses | Native operation and raised value |
+|---|---|---|
+| model pointer, reads | `0x480B22`, `0x480C36`, `0x480C56`, `0x480C7F`, `0x480C8C`, `0x480C99`, `0x480CBA`, `0x480CF3`, `0x480D0C`, `0x480D1E`, `0x480D2B`, `0x480D5E`, `0x480D8B`, `0x480D96`, `0x480DB6`, `0x480DDF`, `0x480DF6`, `0x480E20`, `0x480E36`, `0x480E56`, `0x480E76`, `0x480EBD`, `0x480EF4`, `0x480F0C`, `0x480F5B`, `0x48115B`, `0x48124C`, `0x481388`, `0x481397`, `0x4813EE`, `0x481432`, `0x481472` | `mov register,[ecx/esi+0x540]` in the unit COB's model/piece/query/attachment methods; offset becomes `0x1140` |
+| model pointer, initialization | `0x480D46` | `mov [ecx+0x540],eax`; offset becomes `0x1140` |
+| active-record count, reads | `0x4B09CA`, `0x4B0A3F`, `0x4B0B88`, `0x4B0D22`, `0x4B0D6A`, `0x4B19EF`, `0x4B1AA1`, `0x4B1B68` | `mov eax,[edi/ecx+0x53C]` in callback/call/runner/return/signal/termination paths; offset becomes `0x113C` |
+| active-record count, writes | `0x4B0638`, `0x4B19FB`, `0x4B1AAD`, `0x4B1B77` | constructor stores EDX; return/signal/termination store EAX into `+0x53C`; offset becomes `0x113C` |
+| record iteration | `0x4B062F`, `0x4B08DF`, `0x4B0D4C`, `0x4B1A1E`, `0x4B1AD0`, `0x4B1AE8` | constructor/free-slot search/runner cleanup/return/signal advance a record pointer by `0xA4`; stride becomes `0x224` |
+
+Getter 73's native fraction read at `0x480A62` is `fld [esi+0x104]`, reached by
+the construction-query case at `0x480A44`. The guarded replacement reads that same
+field only after resolving the original full-width ID against the live unit pool.
+
 START/CALL's old address expressions at `0x4B18CA`, `0x4B18EE`, `0x4B1937`, and
 `0x4B1958` are not executed by the guarded dispatcher. The adapter calls the
 same allocator, copies the bounded arguments in push order, leaves the child's
