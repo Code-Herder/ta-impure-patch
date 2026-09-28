@@ -8684,41 +8684,63 @@ int tagpu_kills_format(char* buf, unsigned int cap)
 
    THE LIST. The builder walks `Maps\*.ota` (0x4BCA30) and keeps a map when its .ota parses
    (0x4C2F60) and 0x436860 accepts it. 0x434D87 follows that test, and there the map's terrain is
-   asked for too. A map without it takes the builder's own refusal branch 0x434EA9, which frees
-   the parsed .ota and moves to the next name; every register is as the engine's `je` at
-   0x434D81 leaves it, because the stub restores them and branches before the site's first
+   asked for too. A map without it goes where the builder's own refusal goes: 0x434EA9, the loop's
+   tail, which frees the parsed .ota and moves to the next name. Every register is as the
+   engine's `je` at 0x434D81 leaves it (ebp among them, 0 there, which 0x434EA9's compare needs), because the stub restores them and branches before the site's first
    instruction. The name is the one 0x434D92 reads, [[esp+0x24] + esi], esi = index * 4.
 
    THE SAVED MAP. 0x430B87 tests whether the options loader read `SkirmishMap`. A value naming a
    map with no terrain is treated as a missing one, so the engine saves the filtered list's
-   first entry instead, exactly as it does on a fresh key.
+   first entry instead, exactly as it does on a fresh key. The value is the list's DISPLAY
+   name, which a `language` other than english translates (Translate.tdf, through 0x4C5740 at
+   0x434DE9), so it is resolved as the map loader resolves it: `Maps\<value>.OTA` if that
+   exists (the loader's parse, 0x436114), else the untranslated key 0x4C5840 returns (0x43611E),
+   the table it reads (0x51FDB8) having been built in WinMain's init (0x49EA33) before any
+   state handler runs the options loader.
 
    THE QUESTION is the engine's own: the path from 0x4290F0(out, "Maps", name, "TNT"), the
    builder this loop uses for the .ota at 0x434D40, then opened and closed through the archive
-   layer (0x4BB5B0, 0x4BB5D0; loose files first, then every archive), on the thread building
-   the list. CLASS: local. It changes which maps are offered, never a rule of play; a peer
-   without a map's terrain now lacks the map in the battle room, which the engine already
-   handles ("does not have this map"). */
+   layer (0x4BB5B0, 0x4BB5D0), on the thread building the list. CLASS: local. It changes
+   which maps are offered, never a rule of play. Whether a network peer has the host's map is
+   decided from the terrain file itself (0x448EAE -> 0x435A20 -> 0x435430(1, "Maps", name,
+   "TNT") -> 0x4BBC40, read by 0x4358F0 at 0x448EBF), not from this list. */
 typedef char* (__stdcall *MAP_PATH_FN)(char* out, const char* dir, const char* name, const char* ext);
 typedef void* (__stdcall *VFS_OPEN_FN)(const char* path);
 typedef void  (__stdcall *VFS_CLOSE_FN)(void* h);
+typedef const char* (__stdcall *UNTRANSLATE_FN)(const char* shown);
 
 static unsigned int s_mapsNoTerrain;          /* maps left out of the list                  */
 static unsigned int s_savedNoTerrain;         /* saved skirmish maps set aside              */
 
-/* 1 when Maps\<name>.TNT opens; `name` carries an extension, which the builder replaces.
-   0x4290F0 writes with no bound, so the bound is ours: the name and 0x49F580's override
-   folder (0x51FB50) under 256 bytes each keep its longest form, "Maps-<over>\<name>.TNT",
-   inside `path`. A name past the bound answers 1, the stock verdict. */
-static int map_has_terrain(const char* name)
+/* 1 when Maps\<name>.<ext> opens; `name` carries an extension, which the builder replaces.
+   0x4290F0 writes with no bound, so the bound is ours: the name and the `language` value
+   0x49F580 returns (0x51FB50, "english" when the registry has none) under 256 bytes each keep
+   its longest form, "Maps-<language>\<name>.<ext>", inside `path`. A name past the bound
+   answers 1, the stock verdict. */
+static int map_file_opens(const char* name, const char* ext)
 {
     char path[1024];
     void* h;
     if (strnlen(name, 256) >= 256 || strnlen((const char*)0x0051FB50, 256) >= 256) return 1;
-    ((MAP_PATH_FN)0x004290F0)(path, "Maps", name, "TNT");
+    ((MAP_PATH_FN)0x004290F0)(path, "Maps", name, ext);
     h = ((VFS_OPEN_FN)0x004BB5B0)(path);
     if (!h) return 0;
     ((VFS_CLOSE_FN)0x004BB5D0)(h);
+    return 1;
+}
+
+static int map_has_terrain(const char* name)
+{
+    return map_file_opens(name, "TNT");
+}
+
+/* `shown` + ".ota" into `out` (0x100 + 4 bytes); 0 when `shown` has no NUL in 0x100 bytes */
+static int map_file_name(char* out, const char* shown)
+{
+    size_t n = strnlen(shown, 0x100);
+    if (n >= 0x100) return 0;
+    memcpy(out, shown, n);
+    memcpy(out + n, ".ota", 5);
     return 1;
 }
 
@@ -8737,13 +8759,15 @@ static void __cdecl saved_map_terrain(unsigned int* r)
 {
     const char* ta = *(const char* const*)0x00511DE8;
     const char* saved = *(const char* const*)(ta + 0x29A0) + 0x11C;
+    const char* key;
     char name[0x100 + 4];
-    size_t n = strnlen(saved, 0x100);
     r[PR_EAX] = 1;
-    if (n >= 0x100) return;
-    memcpy(name, saved, n);
-    memcpy(name + n, ".ota", 5);
-    r[PR_EAX] = (unsigned int)map_has_terrain(name);
+    if (!map_file_name(name, saved)) return;
+    if (map_file_opens(name, "OTA"))
+        r[PR_EAX] = (unsigned int)map_has_terrain(name);
+    else
+        r[PR_EAX] = (unsigned int)((key = ((UNTRANSLATE_FN)0x004C5840)(saved)) != NULL &&
+                                   map_file_name(name, key) && map_has_terrain(name));
     if (!r[PR_EAX]) s_savedNoTerrain++;
 }
 

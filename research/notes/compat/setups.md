@@ -151,8 +151,10 @@ such a map (every Total Mayhem install that has opened the SKIRMISH screen once)
 saved `SkirmishMap` is asked the same question when the options are read, and a value naming a map
 with no terrain is replaced as a missing one is: by the list's first entry. This is a property of
 the player's install, not of Mayhem, so it applies to every route and every mod whose `.ota` name a
-map that isn't installed. A network player who lacks a map's terrain now lacks the map, which the
-battle room already reports ("does not have this map"). The disassembly is in [the engine
+map that isn't installed. Whether a network player has the host's map is decided from the terrain
+file itself, not from this list, so that is unchanged, and a joining player who has a map's `.ota`
+but not its terrain still meets the host's pick of it as before: **the fix covers what a player
+can pick, not what a host can pick for them.** The disassembly is in [the engine
 map](../exe-reverse-engineering.md), *The saved skirmish map and the map list*.
 
 MEASURED 2026-09-28 under Wine, `mayhem-11.3.0` with "A Plethora of Ponds" saved, main's build and
