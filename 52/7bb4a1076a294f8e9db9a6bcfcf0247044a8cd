@@ -1,0 +1,9 @@
+landing-review: model=claude-opus-5-5 effort=medium reviewers=1 (harness: lobby read-back, private-registry creates, parallel prep) range=main..527bb4a findings=7 acted=7 rejected=0 date=2026-09-28
+- privatise_hives reads the shared inode another wineserver may be rewriting (CONFIRMED, pre-existing window) -> 527bb4a, gap stated in tacli, tacli-design, suite, skill; by-construction fix (a snapshot no wineserver opens) left to the owner: it changes what a private prefix starts from
+- docs called the one traced lobby failure the cause of all earlier ones (CONFIRMED) -> 527bb4a, [INFERRED] + 30 of 30 since
+- the fill mechanism claimed beyond the evidence (CONFIRMED) -> 527bb4a, observation stated, mechanism INFERRED
+- the 'Impure drew nothing' failure dropped its Wine logs; temp files leaked into /tmp (CONFIRMED) -> 527bb4a, kept until the verdict, every temp moved
+- ss failing replaced the Lobby message (CONFIRMED) -> 527bb4a
+- the read-back regex ran past an empty field's line (CONFIRMED, cosmetic) -> 527bb4a
+- --force without the flag recorded private_registry false on a private prefix (CONFIRMED) -> 527bb4a, recorded from the prefix
+- verified: read-back loop and mp_lobby.sh under set -eu, _create order (no Wine before privatise), save_meta atomic, parallel slot scan lenient, SystemExit from prep workers, ports 47625-47630
