@@ -1,0 +1,10 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 (correctness; ordering/lifetime) range=main..f816e2f findings=9 acted=9 rejected=0 date=2026-09-27
+- before_memfree skipped the slot a fallback drop refilled (CONFIRMED, both) -> fc67e24
+- chrome_emit got a SURF* the window sweep can move (CONFIRMED hazard) -> 722b3a1, re-resolved by base
+- retired entries held MAX_SURF slots at a screen switch (PLAUSIBLE) -> 722b3a1, a free no op names drops at once
+- dedup merged identical ops across an OP_FREE (CONFIRMED logic, rare trigger) -> 722b3a1, OP_FREE is a barrier
+- the reset's snapshot loop resolved unpublished ops to the live entry (CONFIRMED, minor) -> 722b3a1, by position
+- a PK_RESET while a panel is open loses the save-under (PLAUSIBLE gap) -> documented in gui-renderer 28, not fixed
+- stale seed-carries-bytes comments, kind-count sizing comments, an annotated gpu-status sentence, 28's wording -> 722b3a1
+- suite: fallback left click could hit the commander walking to the right click's target -> 722b3a1, other point
+- suite: a timeout inside the deselect step aborted the setup's run -> 722b3a1, caught
