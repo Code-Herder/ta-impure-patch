@@ -212,6 +212,9 @@ typedef struct {
 static int              s_state, s_downOwed, s_downPaying;
 static int              s_drawThis, s_abFrame;
 static int              s_saidColour, s_saidSharp, s_saidRoom;
+/* once per stretch without a restored atlas: the evidence that the indexed
+   fallback for a restored sprite ran (tools/compat's `gui-stress` reads it) */
+static int              s_saidSprite;
 
 static TWIN             s_tw[TW_MAX];
 static int              s_ntw;
@@ -2509,6 +2512,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        here was a black frame, and on screens whose atlas repacks it was every
        frame. */
     colOn = h.colourTwins;
+    if (s_arHave) s_saidSprite = 0;
     if (h.colourTwins && !s_arHave) {
         if (!s_saidColour) { s_saidColour = 1;
             plog(d, "gui: the producer says Classic++ colour and this lane has no "
@@ -2663,21 +2667,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         case TAGPU_GUIOP_SPRITE:
             if (o->fw < 1 || o->fh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             if (!h.atlas) { if (!behind_ex(d, "a sprite with no atlas", carries)) goto refuse; return 0; }
-            /* A RESTORED SPRITE WHILE WE HOLD NO RESTORED ATLAS IS DRAWN INDEXED
-               (the replay below), and that is not a store falling behind. The
-               producer sets `TAGPU_GUICOL_ON` from our `tagpu_gui_col_ready` of
-               the frame before, and a restore job that is not a repaint blanks
-               the atlas on the frame it starts -- so the lag moves the flag
-               from ON to OFF as well, on every atlas re-lay. MEASURED 2026-09-27:
-               refusing such a frame reseeded the producer, whose reseed re-laid
-               the atlas, which started another job: Total Mayhem's skirmish
-               screen on Windows went through 8 of those and then composited
-               nothing for the rest of the session.
-               Drawn indexed, the sprite writes alpha 0 to the colour plane, which
-               the composite reads as "resolve through the palette": dithered art,
-               never wrong art. Our answer drops to 0 with it, the producer's
-               validity follows, and its 0 -> 1 edge asks the engine for the
-               repaint that carries the colour back (`col_ask_repaint`). */
+            /* A RESTORED SPRITE WHILE WE HOLD NO RESTORED ATLAS IS DRAWN INDEXED,
+               by the replay below, and is not a store falling behind -- see it
+               there. Not refused here either: `restore_want` runs between this
+               check and the replay, so a test here would not even be the answer
+               the replay acts on. */
             ndraw++; nquad++;
             break;
         case TAGPU_GUIOP_STRING:
@@ -3348,11 +3342,33 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    is the difference between drawing indexed and sampling the
                    dummy image as though it were art. */
                 if (o->kind == TAGPU_GUIOP_SPRITE) {
-                    /* ON only over an atlas we hold: without one it is drawn
-                       indexed (see the prepare's SPRITE case), and binding 41
-                       then names no restored image, which is the layout
-                       question the claim below is careful about. */
-                    int on = (o->col & TAGPU_GUICOL_ON) != 0 && s_arHave;
+                    /* A RESTORED SPRITE OVER NO RESTORED ATLAS IS DRAWN INDEXED.
+                       The producer set `TAGPU_GUICOL_ON` from our answer of the
+                       frame before, and `restore_want` -- earlier in this same
+                       prepare -- blanks the atlas whenever it starts a job that is
+                       not a repaint, which every atlas re-lay does. So the two
+                       disagree for one frame in the ON -> OFF direction, by
+                       construction and not by accident. MEASURED 2026-09-27:
+                       standing such a frame down asked for a fresh start, whose
+                       re-lay started the next job, until the pass gave up and
+                       composited nothing -- Total Mayhem's skirmish screen went
+                       black on Windows, and `gui-stress` reproduces it on Wine (7
+                       asks, then the give-up, on the build without this).
+                       Drawn with `uRestored = 0` the sprite writes alpha 0 to the
+                       colour plane, which the composite resolves through the
+                       palette: dithered art, never wrong art. Our answer drops to
+                       0 on this frame, the producer's validity follows, and its
+                       0 -> 1 edge asks the engine for the repaint that carries the
+                       colour back (`col_ask_repaint`). Binding 41 then names no
+                       restored image -- the layout question the claim below is
+                       careful about. */
+                    int on = (o->col & TAGPU_GUICOL_ON) != 0;
+                    if (on && !s_arHave) {
+                        on = 0;
+                        if (!s_saidSprite) { s_saidSprite = 1;
+                            plog(d, "gui: a restored sprite arrived while this lane holds "
+                                    "no restored atlas - drawn indexed until the repaint"); }
+                    }
                     fq[0] = (int)o->ck; fq[1] = on;     /* uCK, uRestored      */
                     quadv(qv, (float)o->sl, (float)o->st,
                           (float)(o->sl + o->fw), (float)(o->st + o->fh),

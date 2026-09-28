@@ -371,14 +371,23 @@ def lever_file(lever) -> tuple:
     return lever, ""
 
 
+GUI_INDEXED = re.compile(r"^vk: gui: a restored sprite arrived while this lane holds no restored atlas", re.M)
+
+
 def gui_health(text: str) -> dict:
-    """The consumer's own fresh-start requests by reason, whether it gave up, and how many
-    fresh starts the `reseedstress=` lever asked for."""
-    asks = {}
+    """The consumer's own fresh-start requests by reason -- split at the stress lever's first
+    fresh start, since what the session asks before it is the ordinary start-up -- whether it
+    gave up, how many fresh starts the `reseedstress=` lever asked for, and how often a restored
+    sprite was drawn indexed (the fallback the stress exists to exercise)."""
+    first = GUI_STRESS.search(text)
+    cut = first.start() if first else len(text)
+    asks, asks_stress = {}, {}
     for m in GUI_ASK.finditer(text):
-        asks[m.group(1)] = asks.get(m.group(1), 0) + 1
+        into = asks if m.start() < cut else asks_stress
+        into[m.group(1)] = into.get(m.group(1), 0) + 1
     fired = [int(m) for m in GUI_STRESS.findall(text)]
-    return {"asks": asks, "gave_up": GUI_GAVE_UP in text, "stress": max(fired, default=0)}
+    return {"asks": asks, "asks_stress": asks_stress, "gave_up": GUI_GAVE_UP in text,
+            "stress": max(fired, default=0), "indexed": len(GUI_INDEXED.findall(text))}
 
 
 def gui_misses(g: "dict | None", exp: dict) -> list:
@@ -390,12 +399,18 @@ def gui_misses(g: "dict | None", exp: dict) -> list:
     if g["gave_up"]:
         miss.append("the UI layer gave up following the game and composited nothing (a black screen)")
     stress = exp.get("gui_stress")
-    bad = {r: n for r, n in g["asks"].items() if stress or r not in GUI_STARTUP}
+    # Past the start-up nothing may ask; under the lever, nothing at all may, whatever the reason.
+    bad = {r: n for r, n in g["asks"].items() if r not in GUI_STARTUP}
+    for r, n in g.get("asks_stress", {}).items():
+        bad[r] = bad.get(r, 0) + n
     if bad:
         miss.append("the UI layer asked for fresh starts of its own: " +
                     ", ".join(f"{n}x {r}" for r, n in sorted(bad.items())))
     if stress and g["stress"] < stress:
         miss.append(f"the stress lever asked for {g['stress']} fresh starts, fewer than {stress}")
+    # A stress run that never met the race proves nothing: the fallback has to have run.
+    if stress and not g["indexed"]:
+        miss.append("no restored sprite ever met a blanked atlas, so the race was not exercised")
     return miss
 
 
