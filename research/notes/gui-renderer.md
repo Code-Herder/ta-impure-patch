@@ -4624,7 +4624,7 @@ surface holding a snapshot.** The repaint's copy then re-sends the seed and the 
 finds its picture done and fills at once, and the sprites land on top again.
 
 `reseed` is a flag of its own, not a cleared `seeded`: the twins stay alive until the re-seed
-arrives, and `seeded` is what `surf_drop` reads to owe the consumer a `PK_FREE`. A snapshot freed
+arrives, and `seeded` is what `surf_drop` and `OP_FREE` read to owe the consumer a `PK_FREE`. A snapshot freed
 before its re-seed would otherwise leave both twins standing, and a same-size surface landing on
 its base would be seeded over the old backdrop's pixels.
 
@@ -4780,3 +4780,87 @@ with a scratch build forcing it every 600 frames, over the shell tour and 35 s o
   reported by a layer.
 - **A picture the store cannot take stays indexed**, and the log says so once per reason:
   under 12 px, more than 16 tiles, larger than the store, or a store full of bound pictures.
+
+---
+
+## 28. A free is an op: the orders panel that stayed after a deselect  [MEASURED 2026-09-27]
+
+**The symptom.** In Escalation, on the Vulkan lane, deselecting the commander left its orders
+panel on screen — `VISIBLE`, `FIRE AT WILL`, the order buttons — where the engine's own surface
+shows the black below the side-panel art. It stays until something else paints that rect. Stock
+TA shows nothing wrong, and neither did any check: every other test here reads state and
+gadgets, not the UI's pixels.
+
+**The cause is ordering, in the producer.** Escalation's orders panel is `ARMCOM1`, a 128 × 640
+panel at y 128–767. Its teardown ([engine map](exe-reverse-engineering.html), *The teardown's
+restore*) copies the save-under `panel+0xB8` back onto the frame at `0x4A952B` and frees it with
+the very next call, `SurfaceFree 0x4A9537`. The copy was recorded naming the save-under as its
+source; the free then **dropped** the surface's entry on the spot — `PK_FREE` published at once,
+and `ops_forget_base` cleared the source of every recorded op. When `publish` reached the copy at
+the flip, it had no source, fell through to the destination's own bytes as `PK_PIXELS`, and the
+drain drops those by design. So the save-under's restore never reached the twin. Stock TA hides
+it because its side panel covers the same rect [INFERRED: the v0.3 DLL passes the same check on
+retail, 0.06 %].
+
+**The fix keeps the engine's order** (`tagpu_gui_hook.c`, "A FREE IS AN OP"). A game-thread
+free — `SurfaceFree`, and `MEM_Free` on any block a tracked surface lies in — now **retires** the
+entry instead of dropping it: our buffers go, the entry stays marked `dying`, and an `OP_FREE` is
+recorded at the free's place in the window. `publish` walks the window in order, so the copy goes
+out as `PK_COPY` twin to twin while the save-under's twin still exists, and the `OP_FREE` as
+`PK_FREE` after it. `ops_window_reset` removes retired entries once their window is gone,
+freeing any twin whose `OP_FREE` was never reached (a full queue, a stall).
+
+* **The invariant is that nothing reads a retired surface's memory** — the block is the heap's
+  the moment the free returns. What `publish` needs of it is its twin. An asset offer, a movie
+  frame and a box of pixels skip a retired surface, and `pub_surface_bytes` refuses one outright,
+  so a path that forgets costs a fresh start rather than a read. The census, the free observers
+  and the leaves' lookups at record time do not see retired entries (`surf_by_base`, `surf_get`).
+* **A seed reads nothing now.** The drain has always made the twin empty and dropped a seed's
+  payload, so `pub_seed` stopped copying the surface into the arena for nothing — a whole surface
+  per seed. That is also what lets a surface made, drawn and freed inside one window be seeded and
+  drawn in order. A snapshot seed still carries the snapshot, which is ours; retirement frees it.
+* **A new surface on the same base.** Ops before the free name the retired entry, ops after it the
+  new one. `pub_surf` tells them apart by position: walking the window in order, the retired entry
+  whose `OP_FREE` is still ahead is the one an earlier op meant. For the same reason
+  `ops_forget_base` on a live surface clears only the ops after the last `OP_FREE` of its base.
+  If the flip surface itself was re-made on the base of a retired one, its seed waits for the
+  marker, after the free, and that window goes without the viewport's erase.
+* **What still drops at once** is what the table cannot order. An off-thread free has no known
+  place among the window's ops. The same goes for a same-base size change (`surf_get`), the old
+  main offscreen when a new one is made, a flush of the off-thread ring, and a window already at
+  `MAX_OPS`. Each keeps the old behaviour, and a copy out of such a surface is counted.
+
+**Why a box crossed as pixels — `GUI pixels:`.** The producer now logs, every 600 frames
+beside `GUI kinds:`, why each `PK_PIXELS` was published. A non-copy kind is logged under its op
+kind name. A copy is logged by why its source had no twin: `copy-freed` (dropped before the copy
+was published, the bug class above), `copy-untwinned` (never registered), `copy-unseeded`
+(registered, never seeded). **Measured on the fixed build**, Wine, a skirmish plus 20 s of the
+200-a-side battle:
+
+| setup | `GUI pixels:` |
+|---|---|
+| retail | `gaf 67 copy-unseeded 1040` |
+| Escalation | `gaf 2 copy-unseeded 1290` |
+
+`copy-freed` is 0 on both. The `copy-unseeded` traffic in game is one copy, repeated per frame: a
+126 × 126 surface onto another 126 × 126 surface, the minimap's size, whose source no observed op
+ever draws. The `gaf` entries are shell sprites that fell back to their box. One whole-screen
+copy at `SINGLE.GUI` comes from a 640 × 480 surface freed in the same window that no observed op
+drew. It was dropped before this change too, only counted as a freed source; it is
+`copy-unseeded` now. None of these is new, and all of them are the UI layer's work list.
+
+**The tests** (`tools/compat/tacompat.py`, the `ta-compat-check` skill):
+
+* **The side panel after a deselect**, on every setup's battle stage, before the scenario is
+  applied: `ctrl+c` selects the commander, a click on the ground deselects it (right click, or
+  left under the right-click layout, whichever changes the engine's panel), and the side panel
+  below the minimap on screen is compared with the engine's surface (`tacli shot`). **Measured:**
+  the fix 0.12 % of the strip different on Escalation and 0.06 % on retail, which is colour
+  rounding; the v0.3 build **22.5 %** on Escalation. A deselect that changes less than 20 % of
+  the engine's own strip fails as "not exercised".
+* **`copy-freed` fails the UI health check** wherever Impure draws. The other causes are
+  reported and not judged.
+
+**Not covered.** Off-thread frees still drop at once; none of a recorded surface has been seen.
+The minimap copy and the shell's unseeded sources are unchanged. The side-panel check compares
+one strip at 1280 × 1024 after one deselect, not every panel a mod can open.

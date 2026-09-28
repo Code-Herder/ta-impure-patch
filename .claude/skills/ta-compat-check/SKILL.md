@@ -33,14 +33,22 @@ tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a t
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py clean                       # remove the compat-* Wine instances
-tools/compat/tacompat.py selftest                    # the hook decode, 11 cases, no game needed
+tools/compat/tacompat.py selftest                    # the hook decode, the UI and side-panel judges; no game
 ```
 
 - **The UI layer is judged on every setup**, from its own log lines (`gui_health`): a run whose
   layer gave up following the game (`fresh starts have not made …` — it composites nothing, a
   black screen) or asked for a fresh start past the start-up's own (`an op names a surface this
-  store never seeded`, `the presented surface has no twin here`) is UNEXPECTED. Nothing else in
-  the suite looks at pixels, and this is how a black screen fails a run.
+  store never seeded`, `the presented surface has no twin here`) is UNEXPECTED, and so is any
+  `copy-freed` on the last `GUI pixels:` line — a UI copy lost because its source was freed
+  first. The line's other causes are the layer's known work list, reported and not judged.
+- **The side panel after a deselect**, on every battle stage before the scenario: `ctrl+c`
+  selects the commander, a click on the ground deselects it (right, then left if the engine's
+  panel did not change — the right-click layout), and the side panel below the minimap on screen
+  (`import`) is compared with the engine's surface (`tacli shot`). More than 5 % different is
+  UNEXPECTED; a deselect that changed under 20 % of the engine's own strip fails as not
+  exercised. The captures stay in the instance's `gamedir/hudcheck/`, the numbers in
+  `summary.json` under the battle's `hud`. These two are the only checks that look at pixels.
 - **Verdicts.** `meets goal` (Impure active, none of TADR's code run); `known gap` (matches
   the setup's `today`, the behaviour accepted until the takeover reaches it); `UNEXPECTED`
   (neither). Exit 1 on any UNEXPECTED, with `--strict` on a known gap too; exit 2 when nothing

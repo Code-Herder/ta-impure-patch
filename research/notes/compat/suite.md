@@ -75,6 +75,15 @@ The `gui-stress` setup drives the race on purpose, a fresh start every 120 prese
 valid, and passes only if the layer never asks for one of its own and its fallback is seen to run
 ([GPU status](../gpu-status.md), *Two colour disagreements are neither*).
 
+**Two checks read the UI's pixels, or what stood in for them.** The producer's `GUI pixels:` line
+counts every box that crossed as engine pixels — which the layer drops — by cause, and a
+`copy-freed` there is UNEXPECTED: a copy whose source surface was freed before it was published,
+the class of Escalation's stale orders panel ([GUI renderer](../gui-renderer.md) §28). The
+battle stage, before its scenario, selects the commander, deselects it and compares the side
+panel below the minimap on screen with the engine's own surface: over 5 % different is UNEXPECTED,
+and a deselect that did not change the engine's panel fails as not exercised. Measured: v0.3 22.5 %
+on Escalation, the fix 0.12 %, retail 0.06 % on both.
+
 ## Whether TADR ran
 
 `tadr_ran` in a setup's goal is judged two ways, on every peer of every stage: from what TADR
