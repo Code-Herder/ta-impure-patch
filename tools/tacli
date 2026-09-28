@@ -855,7 +855,11 @@ def privatise_hives(inst: Instance):
     """Give the prefix hives of its own: each of the three copied into a new file that
     replaces the hardlink, so the prefix stops sharing the template's inode. Run before any
     Wine process has started in the prefix -- a wineserver rewrites its hive in place when it
-    exits, and until this runs that write lands in every prefix at once."""
+    exits, and until this runs that write lands in every prefix at once.
+    THE GAP: the copy is read from the shared inode, which a wineserver of another,
+    non-private instance may be rewriting at that moment (truncated, then written front to
+    back), and a hive has no end marker to prove a copy whole. Two private prefixes share no
+    file afterwards; what each starts from is only as whole as the template was when read."""
     for hive in ("user.reg", "system.reg", "userdef.reg"):
         p = inst.prefix / hive
         if p.exists():
@@ -1481,9 +1485,10 @@ def _create(inst: Instance, args) -> dict:
     shield = args.shield is not False
     kept_seed = inst.meta().get("registry_seed") if inst.exists else None
     clone_prefix(inst)
-    private = bool(getattr(args, "private_registry", False))
-    if private:
+    if getattr(args, "private_registry", False):
         privatise_hives(inst)
+    # a fact of the prefix, not of this call: `--force` keeps a prefix that is already private
+    private = not (inst.prefix / "user.reg").samefile(TEMPLATE_PREFIX / "user.reg")
     vsync = getattr(args, "vsync", None) or "on"
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
                    shield=shield, window=window, vsync=vsync)

@@ -20,7 +20,9 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
 - `wine`: every setup at once. Each gets its own `tacli` instance (`compat-<setup>`), made with
   `tacli create --private-registry` — registry hives of its own, copied out of the template's
   shared inode before any Wine process runs in the prefix — its own Xvfb display, and the overlay
-  of its fixtures on the retail gamedir. The hives are private because the store `tacli` keeps
+  of its fixtures on the retail gamedir (the copy is read from the shared inode, which another,
+non-private instance's wineserver may be rewriting at that moment: [tacli](../tacli-design.md)
+names the gap). The hives are private because the store `tacli` keeps
   TA's key in is off here (a player's launch, below) and it would not cover a mod's own key
   (`Software\TotalM`, `Software\TA Zero`) or a TADR DLL's writes anyway; and because they are
   private, `--prep-jobs` instances (8) are made at once — 19 in about 50 s. The runner watches the display's windows for the whole run (a refusal is a
@@ -48,12 +50,13 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   meet there and on no other game's. A holder of a game's port in one of the suite's own
   prefixes is stale and ended; any other is someone else's game, waited for five minutes and
   never touched, and then that game fails as not run. **Every text field of the walk is read
-  back before it goes on**, and filled again while it reads anything else: `tacli ui fill` types
-  its characters as one batch just after its click and reports a short field without failing,
-  and under load the characters ahead of the focus are lost. MEASURED 2026-09-28: ProTA's
+  back before it goes on**, and filled again while it reads anything else: `tacli ui fill`
+  reports a short field without failing. MEASURED 2026-09-28, under a full run's load: ProTA's
   joiner's ADDRESS read `1`, its `+winsock` trace shows `inet_addr("1")` and the socket snapshot
-  a SYN to `0.0.0.1` — the "no session listed after twelve UPDATEs" that had failed about one
-  network game in ten. A joiner that still lists nothing records **every game socket on the
+  a SYN to `0.0.0.1` — a "no session listed after twelve UPDATEs", the failure that had cost
+  about one network game in ten. That is the one failure traced; the earlier ones (Mayhem,
+  Escalation, TA Zero) looked the same and were not [INFERRED: the same cause]. With the read
+  back, two full runs since played 30 of 30 network games. A joiner that still lists nothing records **every game socket on the
   machine** with its prefix (`mp-sockets.txt`) and keeps both peers' Wine logs;
   `TACOMPAT_WINEDEBUG=+winsock` adds a trace channel to every game, kept whether it fails or
   not. "Its own" is the set of

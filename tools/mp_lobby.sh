@@ -57,8 +57,8 @@ print(f"DirectPlay port {next(iter(ports.values()))} on every peer")
 # backspaces, which cannot always reach the whole field -- refilling a correct
 # field is how you turn a working screen into "ADDRESS still reads '127.0.0.'".
 # The field is read back after every fill and filled again while it reads anything
-# else: `fill` reports a short field without failing, and under load the characters
-# typed ahead of the focus are lost -- an ADDRESS of "1" dials 0.0.0.1.
+# else: `fill` reports a short field without failing, and under load an ADDRESS was
+# left reading "1", which dials 0.0.0.1.
 field() {
     local cur fills
     for fills in 0 1 2 3; do

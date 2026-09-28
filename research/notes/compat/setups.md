@@ -63,9 +63,9 @@ saved skirmish has three: ARMCOM and two CORCOM), and each peer of the 12 networ
 started held both players'. **Three network games never started** — `mayhem-11.3.0`,
 `escalation`, `tazero-alpha5` — the joiner listing no session after twelve UPDATEs with the
 host in its battle room on its own port; main's own build lost one the same way the night
-before (0 of 13, 1 of 13, 3 of 15 in the three full runs since). The cause was the harness's
-text entry, not the game: a joiner's ADDRESS field left reading `1` ([the suite](suite.md), the
-network stage), fixed by reading every field back. Both Escalation setups also logged one UI-layer fresh start ("a copy names a source
+before (0 of 13, 1 of 13, 3 of 15 in the three full runs since). The one failure traced since
+was the harness's text entry, not the game: a joiner's ADDRESS field left reading `1` ([the
+suite](suite.md), the network stage); with every field read back, two full runs played 30 of 30. Both Escalation setups also logged one UI-layer fresh start ("a copy names a source
 twin this store never made"), as ten Escalation runs since 2026-09-27 have, main's build
 included: the G21f/G21g work's open gap ([GPU status](../gpu-status.md)).
 

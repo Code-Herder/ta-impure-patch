@@ -197,6 +197,8 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - Instances are made with `tacli create --private-registry` — hives of their own before any
   Wine process runs — so `--prep-jobs` (8) are made at once. Without the flag a create's
   wineserver rewrites the hive every prefix shares, and two at once would write it together.
+  The copy itself is read from that shared hive: a tacli instance of yours exiting during the
+  preparation can leave one prefix a torn copy (tacli-design.md, the gap).
 - **A network game that never starts**: read `mp-sockets.txt` (every game socket, with its
   prefix) and the two `mp-*-wine.log` in the setup's results. Re-run the setup with
   `TACOMPAT_WINEDEBUG=+winsock` to trace the sockets — DirectPlay's DLLs are native, so Wine's

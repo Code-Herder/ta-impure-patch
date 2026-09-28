@@ -296,7 +296,11 @@ in-memory copy back when it saves. **`create --private-registry` is the exceptio
 the three hives into files of the prefix's own right after the clone, before any Wine process
 has run in it, and records `private_registry` in `instance.json`. The compat suite makes its
 instances this way, because its games run with the store off and mods write keys of their own;
-and two such creates share no file, so they can run at once.
+and two such creates share no file afterwards, so they can run at once. **The gap**: the copy is
+read from the shared inode, which a wineserver of another, non-private instance may be rewriting
+in place at that moment, and a hive has no end marker to prove the copy whole. Closing it by
+construction means copying from hive files no wineserver ever opens, a snapshot outside every
+prefix — which would also fix what a private prefix starts from at the snapshot's contents.
 
 - **How the DLL finds it.** `gamedir/TotalA.exe` is a symlink into the Steam install, yet
   `GetModuleFileNameW(NULL)` names the gamedir: a launch logs `registry: TEST MODE, entered by the

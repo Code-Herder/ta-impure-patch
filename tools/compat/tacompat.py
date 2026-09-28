@@ -79,9 +79,8 @@ DPLAY_OVERRIDES = "dplayx,dpmodemx,dpnet,dpwsockx,dplaysvr.exe,dpnsvr.exe=n;dpnh
 AUDIO_OFF = "winepulse.drv=d"
 # Wine's trace channels for every game the suite starts: `+loaddll` always (which DLLs a setup
 # really loaded), and TACOMPAT_WINEDEBUG's on top, e.g. `+winsock` to follow DirectPlay's
-# sockets -- its DLLs are native, so Wine's own dplay channels never fire. A game traced this
-# way keeps its Wine log in the results; an untraced one keeps it only when its network game
-# failed.
+# sockets -- its DLLs are native, so Wine's own dplay channels never fire. A network game's
+# two Wine logs go into the results when it is traced or when it failed.
 TRACE = os.environ.get("TACOMPAT_WINEDEBUG", "").strip(",")
 WINEDEBUG = ",".join(filter(None, ("+loaddll", TRACE)))
 ASOUND_NULL = HERE / "asound-null.conf"
@@ -595,9 +594,9 @@ def report(results, platform, dll, started, strict=False, source=None) -> int:
         d.mkdir(exist_ok=True)
         for name, text in r.pop("_files", {}).items():
             (d / name).write_text(text, errors="replace")
-        for name, src in r.pop("_copies", {}).items():
-            if Path(src).exists():      # a kept Wine log is moved: it can be large
-                (shutil.move if name.endswith("wine.log") else shutil.copy2)(src, d / name)
+        for name, src in r.pop("_temps", {}).items():
+            if Path(src).exists():      # the run's own temporary files: moved, not left behind
+                shutil.move(src, d / name)
     (out / "summary.json").write_text(json.dumps(
         {"platform": platform, "dll": str(source or dll), "dll_md5": md5_file(dll),
          "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started)),
@@ -1512,7 +1511,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
                    "errorlog": "ErrorLog.txt"}[k]] = o[k]
     if tagpu:
         files["tagpu.log"] = tagpu
-    o["_files"], o["_copies"] = files, shots
+    o["_files"], o["_temps"] = files, shots
     os.unlink(log.name)
     return o
 
@@ -1537,8 +1536,12 @@ def mp_eligible(setup) -> bool:
 
 def game_sockets() -> str:
     """Every socket a Wine game holds on the machine, with its prefix: what the lobby failure
-    records, so a collision between games is read off the file rather than guessed."""
-    r = subprocess.run(["ss", "-tuanpH"], capture_output=True, text=True, timeout=10)
+    records, so a collision between games is read off the file rather than guessed. A
+    snapshot that cannot be taken says so instead of replacing the failure it describes."""
+    try:
+        r = subprocess.run(["ss", "-tuanpH"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"no snapshot: {e}\n"
     lines = []
     for line in r.stdout.splitlines():
         pids = set(re.findall(r"pid=(\d+)", line))
@@ -1643,14 +1646,15 @@ def lobby_field(inst, name, value):
     """Click, then fill -- an unfocused field takes the text as quickkeys -- and leave a
     field alone that already reads the value (tools/mp_lobby.sh has the story).
 
-    THE FIELD MUST READ THE VALUE BEFORE THE WALK GOES ON. `fill` types the characters as
-    one batch shortly after its click, and reports what the field then holds without
-    failing: under load the characters ahead of the focus are lost, and a joiner's ADDRESS
-    reading "1" dials 0.0.0.1 (MEASURED 2026-09-28, ProTA's joiner: inet_addr("1") in its
-    +winsock trace, a SYN to 0.0.0.1 in the socket snapshot, "no session listed"). So the
-    field is read back after each fill, and filled again while it reads anything else."""
+    THE FIELD MUST READ THE VALUE BEFORE THE WALK GOES ON. `fill` reports what the field
+    holds without failing when it is short, and a joiner's ADDRESS reading "1" dials 0.0.0.1
+    (MEASURED 2026-09-28 under a full run's load, ProTA's joiner: inet_addr("1") in its
+    +winsock trace, a SYN to 0.0.0.1 in the socket snapshot, "no session listed"). Which
+    characters went, and why, is not established [INFERRED: typed before the click's focus
+    took]. So the field is read back after each fill, and filled again while it reads
+    anything else."""
     for fills in range(4):
-        cur = re.search(r"^text\s+(.*)$", lobby_ui(inst, "show", name), re.M)
+        cur = re.search(r"^text[ \t]+(.*)$", lobby_ui(inst, "show", name), re.M)
         got = cur.group(1).strip() if cur else None
         if got == value:
             return
@@ -1696,8 +1700,12 @@ def wine_lobby(host, join, port):
     else:
         # Say who answers the joiner's enumeration: the host's own name server, a stale one of
         # another prefix, or nobody -- three different failures that read the same on screen.
+        try:
+            holders = dplay_holders(port) or "nobody"
+        except (OSError, subprocess.SubprocessError) as e:
+            holders = f"(not read: {e})"
         raise Lobby(f"{join}: no session listed after 12 UPDATEs; DirectPlay port {port} held by "
-                    f"{dplay_holders(port) or 'nobody'}", sockets=game_sockets())
+                    f"{holders}", sockets=game_sockets())
     lobby_ui(join, "click", "JOINGAME", timeout=30)
     lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
     lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
@@ -1823,11 +1831,9 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
                                capture_output=True, timeout=20)
                 shots[f"mp-{role}.png"] = str(shot)
     finally:
-        for role, g in games.items():
-            kept = stop_wine(g, keep=bool(why or TRACE))
-            if kept:
-                shots[f"mp-{role}-wine.log"] = kept
-    out = {"ok": False, "boxes": boxes, "evidence": [], "_files": {}, "_copies": shots}
+        for role, g in games.items():         # kept until the verdict below decides
+            shots[f"mp-{role}-wine.log"] = stop_wine(g, keep=True)
+    out = {"ok": False, "boxes": boxes, "evidence": [], "_files": {}, "_temps": shots}
     if sockets:
         out["_files"]["mp-sockets.txt"] = sockets
     for role, inst in peers.items():
@@ -1849,6 +1855,9 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
         if not why and not out[role]["packet_pub"]:
             why = f"Impure drew nothing on the {role}'s game"
     out["ok"] = why is None
+    if out["ok"] and not TRACE:
+        for role in games:
+            Path(shots.pop(f"mp-{role}-wine.log")).unlink(missing_ok=True)
     out["why"] = why or (f"two players, {scens['host']} and {scens['join']} applied, {seconds} s; "
                          + "; ".join(f"{k}: {v}" for k, v in cmd_seen.items()))
     out["seconds"] = round(time.time() - t0, 1)
@@ -1866,7 +1875,7 @@ def threw(setup, platform, fut) -> dict:
                 "errorlog": None, "tdrawlog": None, "failure": None, "modules_known": False,
                 "folder_modules": [], "battle": None, "hooks": None, "tadr_ran": [],
                 "outcome": "no-result", "why": f"{type(e).__name__}: {e}", "seconds": 0,
-                "_files": {}, "_copies": {}}
+                "_files": {}, "_temps": {}}
 
 
 def cmd_wine(args):
@@ -1926,7 +1935,7 @@ def cmd_wine(args):
             except BaseException as e:
                 m = {"ok": False, "why": f"{type(e).__name__}: {e}", "evidence": []}
             o["_files"].update(m.pop("_files", {}))
-            o["_copies"].update(m.pop("_copies", {}))
+            o["_temps"].update(m.pop("_temps", {}))
             o["tadr_ran"] = o.get("tadr_ran", []) + m["evidence"]
             o["mp"] = m
             verdict(o, s, "wine")
