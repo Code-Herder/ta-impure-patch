@@ -1,0 +1,1 @@
+landing-review: model=GPT-6(exact-variant-unavailable) effort=high range=9f4050f..d5bbe84 findings=0 acted=0 rejected=0 date=2026-09-28; two independent read-only targeted follow-ups verified reload ABI, model bounds, full native destructor and documentation against pristine disassembly
