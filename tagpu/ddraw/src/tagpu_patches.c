@@ -8674,6 +8674,138 @@ int tagpu_kills_format(char* buf, unsigned int cap)
                      s_killCreateAbsent, s_killCreateBad, (unsigned int)s_killHeld);
 }
 
+/* MAPS WITH NO TERRAIN [DISASSEMBLED 2026-09-28]. A map is an .ota (its settings) and a .tnt (its
+   terrain), and a mod can ship the one without the other: Total Mayhem's mayhem.gp3 carries 105
+   .ota and no .tnt, and 9 of them have terrain in no archive of the Steam install. The engine
+   lists a map by its .ota alone, so such a map is listed, can become the saved skirmish map, and
+   the SKIRMISH screen then stops on a box naming Maps\<name>.TNT. Both lists, skirmish and
+   multiplayer, come from one builder, 0x434BF0 (called at 0x435D73, 0x444F47, 0x444FCC, 0x47AAF7,
+   0x47AB7C, and by itself at 0x434F29).
+
+   THE LIST. The builder walks `Maps\*.ota` (0x4BCA30) and keeps a map when its .ota parses
+   (0x4C2F60) and 0x436860 accepts it. 0x434D87 follows that test, and there the map's terrain is
+   asked for too. A map without it goes where the builder's own refusal goes: 0x434EA9, the loop's
+   tail, which frees the parsed .ota and moves to the next name. Every register is as the
+   engine's `je` at 0x434D81 leaves it (ebp among them, 0 there, which 0x434EA9's compare needs), because the stub restores them and branches before the site's first
+   instruction. The name is the one 0x434D92 reads, [[esp+0x24] + esi], esi = index * 4.
+
+   THE SAVED MAP. 0x430B87 tests whether the options loader read `SkirmishMap`. A value naming a
+   map with no terrain is treated as a missing one, so the engine saves the filtered list's
+   first entry instead, exactly as it does on a fresh key. The value is the list's DISPLAY
+   name, which a `language` other than english translates (Translate.tdf, through 0x4C5740 at
+   0x434DE9), so it is resolved as the map loader resolves it: `Maps\<value>.OTA` if that
+   exists (the loader's parse, 0x436114), else the untranslated key 0x4C5840 returns (0x43611E),
+   the table it reads (0x51FDB8) having been built in WinMain's init (0x49EA33) before any
+   state handler runs the options loader.
+
+   THE QUESTION is the engine's own: the path from 0x4290F0(out, "Maps", name, "TNT"), the
+   builder this loop uses for the .ota at 0x434D40, then opened and closed through the archive
+   layer (0x4BB5B0, 0x4BB5D0), on the thread building the list. CLASS: local. It changes
+   which maps are offered, never a rule of play. Whether a network peer has the host's map is
+   decided from the terrain file itself (0x448EAE -> 0x435A20 -> 0x435430(1, "Maps", name,
+   "TNT") -> 0x4BBC40, read by 0x4358F0 at 0x448EBF), not from this list. */
+typedef char* (__stdcall *MAP_PATH_FN)(char* out, const char* dir, const char* name, const char* ext);
+typedef void* (__stdcall *VFS_OPEN_FN)(const char* path);
+typedef void  (__stdcall *VFS_CLOSE_FN)(void* h);
+typedef const char* (__stdcall *UNTRANSLATE_FN)(const char* shown);
+
+static unsigned int s_mapsNoTerrain;          /* maps left out of the list                  */
+static unsigned int s_savedNoTerrain;         /* saved skirmish maps set aside              */
+
+/* 1 when Maps\<name>.<ext> opens; `name` carries an extension, which the builder replaces.
+   0x4290F0 writes with no bound, so the bound is ours: the name and the `language` value
+   0x49F580 returns (0x51FB50, "english" when the registry has none) under 256 bytes each keep
+   its longest form, "Maps-<language>\<name>.<ext>", inside `path`. A name past the bound
+   answers 1, the stock verdict. */
+static int map_file_opens(const char* name, const char* ext)
+{
+    char path[1024];
+    void* h;
+    if (strnlen(name, 256) >= 256 || strnlen((const char*)0x0051FB50, 256) >= 256) return 1;
+    ((MAP_PATH_FN)0x004290F0)(path, "Maps", name, ext);
+    h = ((VFS_OPEN_FN)0x004BB5B0)(path);
+    if (!h) return 0;
+    ((VFS_CLOSE_FN)0x004BB5D0)(h);
+    return 1;
+}
+
+static int map_has_terrain(const char* name)
+{
+    return map_file_opens(name, "TNT");
+}
+
+/* `shown` + ".ota" into `out` (0x100 + 4 bytes); 0 when `shown` has no NUL in 0x100 bytes */
+static int map_file_name(char* out, const char* shown)
+{
+    size_t n = strnlen(shown, 0x100);
+    if (n >= 0x100) return 0;
+    memcpy(out, shown, n);
+    memcpy(out + n, ".ota", 5);
+    return 1;
+}
+
+/* at 0x434D87: the answer goes back in eax, which the site's first instruction overwrites */
+static void __cdecl map_list_terrain(unsigned int* r)
+{
+    const char* const* names = *(const char* const* const*)(size_t)(r[PR_ESP] + 0x24);
+    const char* name = *(const char* const*)((const char*)names + r[PR_ESI]);
+    r[PR_EAX] = (unsigned int)map_has_terrain(name);
+    if (!r[PR_EAX]) s_mapsNoTerrain++;
+}
+
+/* at 0x430B87, a value read: [main+0x29A0]+0x11C, the 0x100 bytes 0x4B69B0 was given. A value
+   with no NUL in them is left to the engine, as stock. */
+static void __cdecl saved_map_terrain(unsigned int* r)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    const char* saved = *(const char* const*)(ta + 0x29A0) + 0x11C;
+    const char* key;
+    char name[0x100 + 4];
+    r[PR_EAX] = 1;
+    if (!map_file_name(name, saved)) return;
+    if (map_file_opens(name, "OTA"))
+        r[PR_EAX] = (unsigned int)map_has_terrain(name);
+    else
+        r[PR_EAX] = (unsigned int)((key = ((UNTRANSLATE_FN)0x004C5840)(saved)) != NULL &&
+                                   map_file_name(name, key) && map_has_terrain(name));
+    if (!r[PR_EAX]) s_savedNoTerrain++;
+}
+
+static int fix_map_terrain(void)
+{
+    FIXSITE site[2] = {
+        /* mov eax,[esp+0x24]; or ecx,-1 */
+        { 0x00434D87, 7, { 0x8B, 0x44, 0x24, 0x24, 0x83, 0xC9, 0xFF }, { 0 } },
+        /* test eax,eax; jne 0x430BFE; push 2 */
+        { 0x00430B87, 6, { 0x85, 0xC0, 0x75, 0x73, 0x6A, 0x02 }, { 0 } },
+    };
+    unsigned char *a, *b, *p, *skip, *missing;
+    if (!fix_match(site, 2)) return FIX_BYTES;
+    if (!(a = fix_code(48)) || !(b = fix_code(48))) return FIX_STUB;
+
+    p = fix_call_regs(a, map_list_terrain);
+    *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax       */
+    *p++ = 0x74; skip = p++;                                /* je skip            */
+    memcpy(p, site[0].was, 7); p += 7;                      /* the site's own two */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00434D8E); p += 4;   /* jmp 0x434D8E       */
+    *skip = (unsigned char)(p - (skip + 1));
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00434EA9); p += 4;   /* skip: 0x434EA9     */
+
+    p = b;
+    *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax       */
+    *p++ = 0x74; missing = p++;                             /* je missing         */
+    p = fix_call_regs(p, saved_map_terrain);
+    *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax       */
+    *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, 0x00430BFE); p += 4;  /* jne 0x430BFE */
+    *missing = (unsigned char)(p - (missing + 1));
+    *p++ = 0x6A; *p++ = 0x02;                               /* missing: push 2    */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00430B8D); p += 4;   /* jmp 0x430B8D       */
+
+    fix_branch(&site[0], 0xE9, a);
+    fix_branch(&site[1], 0xE9, b);
+    return fix_write(site, 2);
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
@@ -8709,6 +8841,7 @@ static void patch_engine_defects(void)
     int kills = fix_kill_counts();
     int built = fix_built_bounds();
     int tx   = fix_transported();
+    int maps = fix_map_terrain();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -8799,6 +8932,15 @@ static void patch_engine_defects(void)
               "a received stone's damage left to its spawner (0x49A01B 0x49DF7D 0x49D307) %s; "
               "the radar's owner test with no attacker (0x4673B1) %s",
               fix_state(word), fix_state(kout), fix_state(once), fix_state(radar));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: maps with no terrain -- left out of the map list (0x434D87) and "
+              "never kept as the saved skirmish map (0x430B87) %s. Maps left out counted at "
+              "0x%08X, saved maps set aside at 0x%08X",
+              fix_state(maps), (unsigned int)(size_t)&s_mapsNoTerrain,
+              (unsigned int)(size_t)&s_savedNoTerrain);
     b[sizeof b - 1] = 0;
     plog(b);
 

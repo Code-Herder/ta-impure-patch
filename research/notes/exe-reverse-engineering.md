@@ -461,7 +461,7 @@ yardmap string is parsed past its end, the saved-game loader's order fallback wa
 past its table, the stockpile bar divides by a weapon's reload time without testing it, and a
 range circle of radius 1 divides by zero.
 `tagpu_patches.c` (`patch_engine_defects`, then `patch_loader_defects` for the last five)
-patches all of them, twenty-eight fixes, at every attach, in both builds: `ddraw.dll` is a static
+patches all of them at every attach, in both builds: `ddraw.dll` is a static
 import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
 every input the stock code handles correctly.
 
@@ -475,7 +475,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the twenty-nine, and why:
+made, or its page cannot be made writable. Each of the thirty, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -508,6 +508,7 @@ made, or its page cannot be made writable. Each of the twenty-nine, and why:
 | the stockpile bar's divide `0x439D41` | local | a HUD draw |
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
 | an order mode disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
+| maps with no terrain `0x434D87`, `0x430B87` | local | which maps are offered; whether a network peer has the host's map is decided from the terrain file itself, not from this list |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -1950,22 +1951,107 @@ A builder with 30 entries or fewer, every stock builder, gets stock's exact bloc
 of 30 entries followed by heap bytes, with no fault that load; this build reads 71 (19 stock, the
 40, and 12 download entries), every ID in order, in a block of 128.
 
-### The saved skirmish map — `0x430B82`, the map list `0x434AB0` [DISASSEMBLED + MEASURED 2026-09-27]
+### The saved skirmish map `0x430B82` and the map list `0x434BF0` [DISASSEMBLED + MEASURED 2026-09-27..28]
 
-At `0x430B82` the options loader reads `SkirmishMap` (string `0x50440C`) from the `Total
-Annihilation` section (`0x5032E8`) through the raw read `0x4B69B0`, 0x100 bytes into
-`[main+0x29A0]+0x11C`. When the value is missing (`test eax,eax; jne 0x430BFE`), it builds the map
-list (`0x434AB0(2)`), calls `0x435D30(0)` and `0x435C30(0x100)` on the list object `main+0x391E9`,
-copies the returned name into `+0x11C` (`0x4E4760`), calls `0x434AB0(0)`, and writes the name back
-with the REG_SZ write `0x4B6A20` (`0x430BF9`). [INFERRED] `0x435D30(0)` selects entry 0 and
-`0x435C30` returns the selected entry's name; the MEASURED fact is the outcome: on Total Mayhem's
-empty `Software\TotalM` key the value saved is the alphabetically first map, "A Plethora of Ponds".
+**The saved map.** At `0x430B82` the options loader reads `SkirmishMap` (string `0x50440C`) from the
+`Total Annihilation` section (`0x5032E8`) through the raw read `0x4B69B0`, 0x100 bytes into
+`[main+0x29A0]+0x11C`. When the value is missing (`test eax,eax; jne 0x430BFE` at `0x430B87`), it
+makes the list object (`0x434AB0(2)`), calls `0x435D30(0)` and `0x435C30(0x100)` on it
+(`main+0x391E9`), copies the returned name into `+0x11C` (`0x4E4760`), calls `0x434AB0(0)`, and
+writes the name back with the REG_SZ write `0x4B6A20` (`0x430BF9`). [INFERRED] `0x435D30(0)` selects
+entry 0 and `0x435C30` returns the selected entry's name; the MEASURED fact is the outcome: on Total
+Mayhem's empty `Software\TotalM` key the value saved is the alphabetically first map, and with the
+fix below the first map that has terrain ("Acid Foursome", where stock saves "A Plethora of Ponds").
 
-`0x434AB0` enumerates the maps with the pattern `Maps\*.ota` (`0x504A18`, pushed at `0x434CD0`
-before `call 0x4BCA30`); its multiplayer mode names `MULTI MAPS` (`0x504A24`, pushed at `0x434C3F`
-and `0x434CAB`). MEASURED: an `.ota` whose `.tnt` is in no archive is still listed, and the
-SKIRMISH screen then stops on a box naming `Maps\<name>.TNT`. The consequence for mods is in
-[compat/setups.md](compat/setups.md), *Total Mayhem's maps with no terrain*.
+**`0x434AB0(mode)` is not the builder.** It frees the list object at `main+0x391E9` unless it
+already has this mode (`cmp [esi],edi` at `0x434AC8`), allocates a new one of 0xEC4 bytes
+(`0x4B4F10`), stores the mode at `+0`, initialises it through `0x435110`, and stores it or NULL
+(`0x434B64`, `0x434B78`). `0x434B90` frees it and the name buffer below.
+
+**The builder is `0x434BF0`, and there is one.** It is called at `0x435D73`, `0x444F47`,
+`0x444FCC`, `0x47AAF7` and `0x47AB7C`, and by itself at `0x434F29`; MEASURED 2026-09-28, the
+skirmish SELMAP list and the multiplayer battle room's list both changed with the fix at
+`0x434D87`. Its result is a buffer tagged `MULTI MAPS` (`0x504A24`) of NUL-separated names, cached
+at `0x5122D4` with its length at `0x5122DC`, its count at `0x5122E0` and a flag at `0x5122D8`
+(built once, copied to the caller from the cache after that: `0x434C39..0x434C68`). The walk:
+
+- `0x4BCA30("Maps\*.ota", 0, &vec)` (`0x434CD0`, `0x434CE5`) fills a vector of file names,
+  begin `[esp+0x24]`, end `[esp+0x28]`; the count is `(end − begin)/4` (`0x434CFE..0x434D07`).
+- For each (`edi` the index, `esi = edi·4` from `0x434D26`): `0x4290F0(buf, "Maps", name, "OTA")`
+  (`0x434D40`, `buf` at `[esp+0x23C]`), the .ota parsed with `0x4C2F60` on the TDF object at
+  `[esp+0x30]` (`0x434D5A`), and `0x436860(3, tdf, 0)` on the list object (`0x434D7A`; what it
+  tests is not mapped). Either failing takes `je 0x434EA9`.
+- A map kept (`0x434D87..`): its name with the extension cut (`0x4BB0F0`), `0x4E8960`, then
+  `0x4C5740`/`0x4F8A70` (a translated name if there is one), appended to the buffer through the
+  realloc `0x4D84A0` (`0x434E3E`).
+- `0x434EA9`, the loop's tail, reached by both paths: a refused map's `je` from `0x434D61` or
+  `0x434D81`, and a kept one falling through from `0x434EA3`. When `[esp+0x18]` is set (a
+  multiplayer build), the network pump `0x453D40` and `0x4618A0`; then the TDF object's destructor
+  `0x4C2EB0` (`0x434ECB`) and the next name. Its `cmp [esp+0x18],ebp` needs `ebp` = 0: it is 0 at
+  `0x434D61` and `0x434D81`, holds the name's length from `0x434E2A`, and is zeroed again at
+  `0x434EA7`.
+- **Whether a network peer has the host's map is not this list's answer.** `0x448EAE` calls
+  `0x435A20` with the name, which through `0x435DA0` reaches `0x435430(1, "Maps", name, "TNT")` and
+  `0x4BBC40` on the terrain file, stored at `+0xA04`; `0x448EBF` reads it back through `0x4358F0`.
+
+**The file primitives it and the fix use** [DISASSEMBLED 2026-09-28]:
+
+- `0x4290F0(out, dir, name, ext)`, `stdcall`, `ret 0x10`: `0x49F580` returns the `language`
+  value (`0x51FB50`, read from the registry value named at `0x5097E8` by `0x42F980` at
+  `0x49E9F7` and set to "english" when empty, `0x49E9FC..0x49EA27`), so it first tries
+  `"%s-%s\%s"` (`0x503378`) — `Maps-english\name` on an English install — and keeps it if
+  `0x4BB5B0` opens it (closed again with `0x4BB5D0`); otherwise `dir\name`. Either way, with an `ext`, `0x4BB0F0` cuts the name at its last dot and
+  `"." + ext` is appended. It writes `out` with no bound.
+- `0x4BB0F0(s)`, `stdcall`: writes a NUL over the LAST `.` in `s`, if any.
+- `0x4BB2C0(path)` and `0x4BB5B0(path)`, `stdcall`: both call `0x4BB2E0(path, mode)` with the modes
+  `0x50A474` and `0x505F10`; it calls `0x4E4990(path, mode)` first and, when that returns NULL,
+  walks `[0x4B6220()+0x61C]` entries [INFERRED: the loose file, then every archive], returning a
+  handle or NULL. `0x4BB5D0(handle)` closes it. No box appeared while the filtered lists were
+  built, nine NULLs each (MEASURED 2026-09-28, Wine).
+- `0x4C5840(shown)`, `stdcall`, `ret 4`: the reverse of the display-name translation `0x4C5740`,
+  a walk of the table at `0x51FDB8` (built from Translate.tdf by `0x4C54F0`, called once, at
+  `0x49EA33` in WinMain's init `0x49E830`) returning the untranslated name or NULL. The map loader
+  uses it when `Maps\<name>.OTA` does not parse (`0x436114` → `0x43611E`), because a saved or
+  picked name is the list's translated display name.
+- `0x4352D0(name)` is the same question for a campaign, `camps\<name>.TDF` (`0x504A64`,
+  `0x50341C`), with no direct caller.
+
+**A map with no terrain** (MEASURED 2026-09-27): an `.ota` whose `.tnt` is in no archive is listed,
+and on Windows the SKIRMISH screen then stops on a box naming `Maps\<name>.TNT`. Under Wine the same
+saved map opens the SKIRMISH screen with no box (MEASURED 2026-09-28). A picked map's terrain path is
+built by `0x435430(1, "Maps", name, "TNT")` (`0x43605D`, the string `0x504D88`). The consequence for
+mods is in [compat/setups.md](compat/setups.md), *Total Mayhem's maps with no terrain*.
+
+**Patched** (`tagpu_patches.c`, `fix_map_terrain`, local). At `0x434D87` (7 bytes: `mov
+eax,[esp+0x24]; or ecx,-1`) a stub asks whether `0x4290F0(out, "Maps", name, "TNT")` opens through
+`0x4BB5B0`, the name being the one `0x434D92` reads, `[[esp+0x24] + esi]`; without terrain the map
+takes `0x434EA9` with every register as the `je` at `0x434D81` leaves it, and with terrain the two
+stolen instructions run and the walk goes on at `0x434D8E`. At `0x430B87` (6 bytes: `test
+eax,eax; jne 0x430BFE; push 2`) a value that was read is resolved as the loader resolves it —
+the name with `.ota` appended (so `0x4BB0F0` cuts only that) if `Maps\<name>.OTA` opens, else the
+key `0x4C5840` returns — and asked the same question; one without terrain, or with no file and no
+key, goes to `0x430B8D` as a missing value does, and that path writes the replacement to the
+registry (`0x430BF9`). Both names are bounded before the builder, which has no bound of its own:
+under 256 bytes each, with the `language` value's, so `"Maps-<language>\<name>.TNT"` fits the
+stub's 1 024-byte buffer; a name past the bound keeps stock's verdict. A map whose file name has a dot
+before `.ota` (`Map.v2.ota`) is asked about `Map.v2.TNT`, while the loader (the skirmish and
+multiplayer cases 2 and 3 of `0x436844`'s jump table, at `0x4360BF`), handed the list's name
+already cut at its last dot, parses `Maps\Map.OTA` (`0x436103`) and asks for the terrain through
+`0x435430(1, "Maps", name, "TNT")` at `0x436190`, which cuts again (`0x4354F6`): `Maps\Map.TNT`,
+stock's mis-load, which the fix neither causes nor mends. MEASURED 2026-09-28, Total Mayhem
+11.3.0 under Wine, the same instance on main's build and on the fix: the skirmish list 109 → 100
+and the battle room's list 109 → 100, the nine missing being exactly the nine maps with no terrain
+in the install, nothing else changed; a saved "A Plethora of Ponds" became "Acid Foursome"; a pick
+from the filtered list loads. With `language` = german the list read 100 German names, and a
+saved "Das Ashap-Plateau" (not entry 0, which is "Absolut riesig") was kept: the SKIRMISH screen
+showed it, the set-aside counter read 0 and the registry held it at exit.
+
+**Not closed.** A joining peer that has the host's map's `.ota` but not its terrain loads the
+host's pick by name (`0x448EAE` → `0x435A20` → `0x435DA0`), which this list does not reach, so it
+meets the terrain's absence as stock does [INFERRED: the same box]. And a saved map whose terrain
+is absent at launch (an archive installed only some of the time) is replaced in the registry at
+the options load, where stock kept it and fell back in memory when the SKIRMISH screen could not
+load its `.ota` (`0x47BCD7`).
 
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
