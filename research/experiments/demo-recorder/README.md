@@ -136,3 +136,20 @@ source variants, DLLs and raw images remain under the main checkout's local rese
 `_local/demo-recorder-exploration/world/`. See exploration §6d for masks, controls and limits.
 The `scene_blocks.py` unit/piece projection remains applicable because those row/header offsets
 are unchanged; the widened anchor layout is not interpreted by that projection.
+
+
+## Portable world asset experiment
+
+`portable-world-results.json` records the fresh-process relocation control, generated explosion
+image dependency, image comparisons and normalized-table compression measurements (§6e).
+The private evidence archive `_local/demo-recorder-exploration/assets/` holds the temporary
+inventory/import sources, DLL, 32-bit layout extraction, recordings and PNGs. Its private
+`portable.py` and `measure-portable.py` are experiment drivers for those inputs, not supported
+file parsers: they use local paths and trusted-input assertions. They are not installed by
+this repository. The generated-frame bank is serialized once, separately from frame tables.
+All old referenced asset-address regions are reserved before fresh engine allocation, making
+address reuse an explicit failed control rather than accidental evidence of portability.
+
+The final filtering run confirms `aniso=1` in both logs, every referenced address changes, and
+both views have three stable grabs. Its nine one-level pixel differences are reported rather
+than rounded to zero. The normal engine sources and DLL are restored after measurement.

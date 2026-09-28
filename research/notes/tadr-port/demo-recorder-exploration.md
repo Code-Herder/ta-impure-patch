@@ -6,7 +6,7 @@
 in [Demo recorder](demo-recorder.md). This page holds technical findings and the experiments
 needed to settle the open architecture decisions. A temporary transport probe has captured a
 live two-player battle, and the captured events have been decoded, compared between peers, and
-benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), remote-perspective comparisons (§6c), and wider same-level snapshot fidelity (§6d) have run; complete-world seeking has not.**
+benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), remote-perspective comparisons (§6c), wider same-level snapshot fidelity (§6d), and fresh-process world-asset relocation (§6e) have run; complete-world seeking has not.**
 Preparation and checkpoint policy remain undecided; §6 distinguishes measured container results
 from the missing end-to-end evidence.
 
@@ -697,6 +697,116 @@ workload ranges. Codec time remains small, but the gather, writer, network contr
 opening and complete seek path have not been measured by this benchmark. Delta encoding,
 static-data separation and lower-rate continuous pose samples remain candidates to measure.
 
+## 6e. Portable world assets and generated explosion frames
+
+**MEASURED, research prototype.** A fresh process on matching content loaded a two-tower
+fixture containing none of the recorded battle's live unit types. The importer reconstructed
+unit poses, wrecks, map-feature anchors, projectiles, explosions, debris, model-effect geometry
+and particles from thirteen serialized tables. Static map/content, palette and lighting tables
+came from the fresh process. The full-map comparison excludes UI, as in §6d; no simulation
+checkpoint, player perspective or statistics reconstruction is implied.
+
+### Content handles and the relocation control
+
+The owner-thread inventory walks loaded animation banks, unit-definition model templates and
+feature-definition templates, rather than finding one live unit of each type. GAF references
+become bank/sequence/frame identities; model-node references become type/piece identities.
+Aliases are canonicalized, runtime Object3do cache keys are erased, and piece offsets become
+indices. All selected pointer fields are replaced with integer asset IDs in the portable file.
+The current-process bridge resolves those IDs to freshly loaded assets before import; that
+bridge deliberately contains current addresses and is **not** the portable file.
+
+The retail workload inventory had **92,772 aliases / 9,283 unique addresses**, covering ten
+animation banks, 279 unit-definition slots and 442 feature definitions. An initial traversal
+mistook 3D feature fields for GAF sequences and crashed. The corrected walk branches on the
+engine's feature discriminator (`definition+0xFE` bit 0); invalid type assumptions are not
+repaired with address probes. The [engine map](../exe-reverse-engineering.md#replay-asset-identities-and-procedural-frames-disassembled-source-measured-2026-09-28)
+records the layouts, call sites, bounds and lifetime limits.
+
+Ordinary relaunches reused all 207 addresses in the first test, so merely launching another
+process was an inadequate relocation control. The stronger control reserves the old assets'
+64 KiB address regions **before engine asset allocation**, using unoccupied reservations only;
+it neither commits their memory nor overwrites existing allocations. With 28 such regions
+reserved, **207/207 asset addresses changed**, and every serialized reference resolved. No live
+recorded unit was required. The final comparison below uses the same control.
+
+### Procedural images are state, not just asset identities
+
+The first cross-process image comparison still differed by **53 west / 18,137 east pixels**
+within each 489,176-pixel mask. Disassembly established a missing dependency: `0x420D20`
+generates explosion-frame pixels using the CRT random stream. Equal sequence/frame identities
+on matching installed content do not imply equal generated images in another process.
+
+The next prototype serializes all **42 generated frames once**, as frame metadata and indexed
+pixels, and imports them into replay-owned storage. It redirects the saved scene's references
+without changing the engine's assets or random generator. The generated stream is **392,454
+raw bytes / 142,632 Zstandard-3 bytes** in the measured recording; this is a per-replay cost,
+not a per-frame cost. Installed game art is still resolved from matching content.
+
+At recorded tick **1852**, the scene contained 313 units, 4,887 pieces, 71 wrecks, 4,945
+anchors, ten projectiles, 50 explosions, 30 debris records and 301 particles. All **200/200**
+referenced assets relocated, with **26/26** address regions reserved. The file was **685,635
+bytes**, including the generated bank and JSON research metadata. The fresh process at tick
+294 imported an **890,880-byte** packet. Three captures per view were stable; differences
+were **4 west / 1,078 east pixels**, with maximum channel difference 16/255 in the east.
+This is a separate workload from the first failed comparison, so the counts do not constitute
+a controlled before/after percentage reduction. Small cross-process rendering differences
+remain a fidelity question; asset resolution alone does not prove pixel equality.
+
+A repeat with **`aniso=1` verified in both game logs** recorded tick **896**: 369 units,
+5,653 pieces, 24 wrecks, 4,913 anchors, 33 projectiles, 178 explosions, 76 debris records
+and 656 particles. The fresh process at tick **717** resolved **224/224** assets at different
+addresses with **28/28** regions reserved. Its file was **726,358 bytes**, and imported packet
+**930,308 bytes**. Three grabs per view were stable. Only **one west / eight east pixels**
+differed, each by **one channel level out of 255**. The captured palette, 8,192-byte shade table
+and 8,192-byte lightening table matched byte-for-byte. These are near-identical tested views,
+not a bit-identical result or coverage of unobserved state.
+
+The default-filter and filter-one captures are different battles, so this does not isolate a
+numerical filtering effect on the same scene. A preceding attempted filter-one run was excluded
+from that claim because its game log still reported the default: it measured 468/297 differing
+pixels, not the intended filter control. The final run verifies the actual setting. Exact
+counts, checksums and comparison controls are in
+`research/experiments/demo-recorder/portable-world-results.json`.
+
+### Space and cost
+
+A separate ten-second moving sample from the tick-1852 recording run used one shared dictionary
+of **619 referenced assets**, rather than repeating names in every snapshot. Its dictionary
+was **33,208 raw / 5,422 compressed bytes**. Thirteen state tables, frame tick and counts,
+with asset IDs and piece indices, totaled **34,880,466 bytes** including frame-length framing.
+The generated bank is counted once separately. These samples do not yet contain the complete
+player-perspective, event, audio or analysis contract.
+
+| Frames per independent block, sampled at 10 Hz | Compressed state bytes for 100 frames | Median encode / decode per block |
+|---|---:|---:|
+| 1 | 6,403,453 | 0.521 / 0.166 ms |
+| 10 | 2,347,978 | 2.124 / 0.667 ms |
+| 50 | 2,025,039 | 11.568 / 3.789 ms |
+| 100 | 1,983,570 | 21.548 / 19.289 ms |
+
+All codec round trips were exact. The ten-frame choice extrapolates to **about 845 MB per
+match-hour** at that workload/rate, plus shared metadata/generated state and the missing
+streams. This is an extrapolation from 100 samples over 9.903 seconds (ticks 447–744), not
+a measured hour or a selected format. Field deltas, less frequent complete states and event
+reconstruction need comparison before accepting this disk cost. Reducing sampling alone must
+not erase short-lived effects or discrete events. Inventory export took about **151 ms** in
+the tick-1852 run, including verbose text and generated-pixel file IO; it is neither full replay
+preparation time nor optimized resolver time. Packet copy time there was **110.2 μs**, excluding
+all-map collection, normalization, compression and IO. No overall recording-overhead claim follows.
+
+### What this closes and what remains
+
+Content-based handles can reconstruct the tested ground battle in a fresh matching-content
+process without live type representatives, including generated frame state. This closes a
+specific portability obstacle for watch-only playback; it does not establish a full visual
+replay or a restorable simulation. The private importer accepts only its own research staging
+artifact and is not a hardened shipping parser. Repeated import/free cycles need a session-owned
+generated bank and atlas generation/lifetime rules; a one-import process cannot prove those.
+The existing full-map collector caps, aircraft/cargo/mirrored-feature gaps, terrain changes,
+visibility, sound, inspection/analysis and ordered capture boundaries remain outside this test.
+No 5→45-minute request-to-correct-frame measurement or preparation/cache policy is settled here.
+
 ## 7. Architecture conclusions and remaining decisions
 
 ### Capture and identities
@@ -748,7 +858,7 @@ seeking, and leaving it need an explicit ownership handoff before another sessio
 | Pascal cursor jump plus round-robin resync | **Reject unchanged.** The source suppresses necessary Impure events and has no world checkpoint. | A different corrected design would have to prove reconstruction, rather than assume later updates repair everything. |
 | Stock multiplayer save or raw process dump | **Not a validated checkpoint shortcut.** Engine and Impure state have different lifetimes and serializers. | Full save/restore inventory, identity/side-table restore, loading/thread ownership, then live state equality and latency. |
 | Packet replay with deliberate semantic checkpoints | **Keep as the preferred next feasibility experiment** because it builds on compact event capture and engine playback. | Continuous engine playback first; then checkpoint completeness and a bounded amount of advance from checkpoint to target. |
-| Direct watch-only state playback | **Prototype validated for unit poses (§6b).** Solo scope permits it; same-level scene switching and fresh-process unit-template relocation work. Complete historical world coverage remains open. | An all-map serialized state representation, portable asset handles, poses/effects, player visibility, inspection state, and measured capture/storage cost. |
+| Direct watch-only state playback | **Unit poses validated (§6b), wider scenes tested (§6d–6e).** Fresh-process asset resolution works for the tested battle; procedural explosion images require recorded state. Complete historical-world fidelity remains open. | An all-map serialized state representation, portable asset handles, poses/effects, player visibility, inspection state, and measured capture/storage cost. |
 
 A checkpoint inventory includes at least roster/ownership/alliances, live units and incarnations,
 HP/build state, transforms and COB execution/poses, orders, transports, projectile and effect
@@ -756,14 +866,14 @@ state, feature destruction/wrecks, resources and statistics, terrain changes, fo
 clocks and randomness, and Impure's state outside the engine heap. An engine-simulation checkpoint
 and a watch-only visual checkpoint have different inventories; do not label one as the other.
 
-The current renderer packet cannot be serialized verbatim: `TAGPU_PK_PIECE.node` is a live
+The shipping renderer packet cannot be serialized verbatim: `TAGPU_PK_PIECE.node` is a live
 per-type pointer, `o3_key` is a runtime cache key, some pieces/effects/anchors are view-limited,
 and the publisher can drop/truncate data for rendering. Convert pointers to content handles,
 copy all required state at its owning boundary, and make completeness explicit before using
 that representation for persistent playback. The fact that the renderer can draw it today
 proves none of these portability properties.
 
-**There is no measured complete-world end-to-end seek result yet.** The unit-scene prototype in §6b is narrower: same-level visible switching and fresh-process pose relocation. In particular, this exploration has not
+**There is no measured complete-world end-to-end seek result yet.** The unit-scene prototype in §6b is narrower: same-level visible switching and fresh-process pose relocation. The wider-scene experiments (§6d–6e) extend that coverage but do not close the full-state gate. In particular, this exploration has not
 established a safe complete engine checkpoint or selected a watch-only replacement. The user's
 subsecond forward-seek requirement and undecided preparation policy remain unchanged. The
 container timings in §6 cannot settle either. The next work is complete-state coverage and request-to-correct-world comparison of the executable prototypes, not more file-offset indexing.
@@ -864,7 +974,8 @@ cost and representative scale/content tests have not run. Marking them complete 
 a lossless captured event stream with a faithfully playable game.
 
 The first **one-file solo continuous playback of a short two-player match** has run (§6a),
-and direct scene switching plus fresh-process unit-pose relocation have run (§6b),
+direct scene switching and fresh-process unit-pose relocation have run (§6b), and wider
+scene/asset portability tests have run (§6d–6e),
 with recorded identities and Impure messages. Establish fixed application-boundary clock/state
 comparisons and start/end lifecycle coverage, then implement the smallest explicit checkpoint inventory and
 compare both seek directions against that baseline. Only those results can choose checkpoint

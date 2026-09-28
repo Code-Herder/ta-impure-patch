@@ -1,0 +1,584 @@
+{
+  "date": "2026-09-28",
+  "status": "research-only portable world tables and generated assets; no production recorder or complete-world seek",
+  "setup": "reference setup: retail TA 3.1, Wine 9.0, Impure d2b6ff3 with temporary scene/asset probes; Two Continents 200v200 recording, two stationary towers in fresh playback process; 1024x768, Vsync off",
+  "mask": {
+    "rectangle": [
+      128,
+      180,
+      1024,
+      736
+    ],
+    "excluded_rectangle": [
+      480,
+      360,
+      660,
+      410
+    ],
+    "pixels_per_view": 489176
+  },
+  "without_generated_state": {
+    "record_tick": 1349,
+    "assets": 207,
+    "changed_addresses": 207,
+    "reserved_regions": 28,
+    "differing_pixels": {
+      "west": 53,
+      "east": 18137
+    },
+    "controls_stable": true
+  },
+  "generated_default_filter": {
+    "record_tick": 1852,
+    "fresh_tick": 294,
+    "reserved_regions": 26,
+    "record_packet_bytes": 379880,
+    "snapshot_copy_us": 110.2,
+    "imported_packet_bytes": 890880,
+    "portable_file": {
+      "bytes": 685635,
+      "metadata": 10383,
+      "state": 675236,
+      "assets": 200,
+      "sha256": "30d88603058c502e0643cdcf55d0e9ccf6f3f5ef754a41ff75bb0f84554826b6"
+    },
+    "relocation": {
+      "assets": 200,
+      "changed_addresses": 200,
+      "bridge_bytes": 675196
+    },
+    "coverage": {
+      "rows": {
+        "units": 313,
+        "pieces": 4887,
+        "wrecks": 71,
+        "anchors": 4945,
+        "proj": 10,
+        "expl": 50,
+        "debris": 30,
+        "fxmodel": 33,
+        "fxshape": 21,
+        "fxface": 94,
+        "fxidx": 357,
+        "fxvert": 265,
+        "part": 301
+      },
+      "inventory_errors": [],
+      "references": {
+        "pieces": {
+          "total": 4887,
+          "unique": 78,
+          "unresolved": []
+        },
+        "anchors": {
+          "total": 9097,
+          "unique": 58,
+          "unresolved": []
+        },
+        "proj": {
+          "total": 9,
+          "unique": 6,
+          "unresolved": []
+        },
+        "expl": {
+          "total": 82,
+          "unique": 31,
+          "unresolved": []
+        },
+        "fxface": {
+          "total": 68,
+          "unique": 14,
+          "unresolved": []
+        },
+        "part": {
+          "total": 301,
+          "unique": 13,
+          "unresolved": []
+        }
+      },
+      "inventory_rows": 92772,
+      "inventory_unique": 9283
+    },
+    "pixels": {
+      "west": {
+        "pixels": 489176,
+        "different": 4,
+        "bounds": [
+          466,
+          478,
+          1022,
+          529
+        ],
+        "recorded_control": [
+          0,
+          0
+        ],
+        "imported_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 1078,
+        "bounds": [
+          128,
+          182,
+          1010,
+          731
+        ],
+        "recorded_control": [
+          0,
+          0
+        ],
+        "imported_control": [
+          0,
+          0
+        ]
+      }
+    }
+  },
+  "second_default_filter": {
+    "record_tick": 885,
+    "fresh_tick": 328,
+    "reserved_regions": 29,
+    "record_packet_bytes": 416940,
+    "snapshot_copy_us": 182.7,
+    "imported_packet_bytes": 927988,
+    "portable_file": {
+      "bytes": 723407,
+      "metadata": 11093,
+      "state": 712298,
+      "assets": 212,
+      "sha256": "4b7b79917b94ded0faef3c9a41596ba870969947137ebbd6f8d3acb68a078aa3"
+    },
+    "relocation": {
+      "assets": 212,
+      "changed_addresses": 212,
+      "bridge_bytes": 712258
+    },
+    "coverage": {
+      "rows": {
+        "units": 372,
+        "pieces": 5683,
+        "wrecks": 23,
+        "anchors": 4909,
+        "proj": 30,
+        "expl": 144,
+        "debris": 43,
+        "fxmodel": 71,
+        "fxshape": 44,
+        "fxface": 229,
+        "fxidx": 890,
+        "fxvert": 608,
+        "part": 576
+      },
+      "inventory_errors": [],
+      "references": {
+        "pieces": {
+          "total": 5683,
+          "unique": 64,
+          "unresolved": []
+        },
+        "anchors": {
+          "total": 9141,
+          "unique": 64,
+          "unresolved": []
+        },
+        "proj": {
+          "total": 25,
+          "unique": 8,
+          "unresolved": []
+        },
+        "expl": {
+          "total": 236,
+          "unique": 41,
+          "unresolved": []
+        },
+        "fxface": {
+          "total": 170,
+          "unique": 23,
+          "unresolved": []
+        },
+        "part": {
+          "total": 576,
+          "unique": 12,
+          "unresolved": []
+        }
+      },
+      "inventory_rows": 92772,
+      "inventory_unique": 9283
+    },
+    "pixels": {
+      "west": {
+        "pixels": 489176,
+        "different": 468,
+        "bounds": [
+          189,
+          196,
+          1022,
+          733
+        ],
+        "recorded_control": [
+          0,
+          0
+        ],
+        "imported_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 297,
+        "bounds": [
+          128,
+          180,
+          1017,
+          632
+        ],
+        "recorded_control": [
+          0,
+          0
+        ],
+        "imported_control": [
+          0,
+          0
+        ]
+      }
+    }
+  },
+  "generated_filter_one": {
+    "record_tick": 896,
+    "fresh_tick": 717,
+    "reserved_regions": 28,
+    "record_packet_bytes": 419292,
+    "snapshot_copy_us": 163.0,
+    "imported_packet_bytes": 930308,
+    "portable_file": {
+      "bytes": 726358,
+      "metadata": 11694,
+      "state": 714648,
+      "assets": 224,
+      "sha256": "1732428c9427bb5f536349f1b4c5e19b75791c9afe633305707bee0031c7ac44"
+    },
+    "relocation": {
+      "assets": 224,
+      "changed_addresses": 224,
+      "bridge_bytes": 714608
+    },
+    "coverage": {
+      "rows": {
+        "units": 369,
+        "pieces": 5653,
+        "wrecks": 24,
+        "anchors": 4913,
+        "proj": 33,
+        "expl": 178,
+        "debris": 76,
+        "fxmodel": 91,
+        "fxshape": 35,
+        "fxface": 187,
+        "fxidx": 723,
+        "fxvert": 710,
+        "part": 656
+      },
+      "inventory_errors": [],
+      "references": {
+        "pieces": {
+          "total": 5653,
+          "unique": 78,
+          "unresolved": []
+        },
+        "anchors": {
+          "total": 9143,
+          "unique": 63,
+          "unresolved": []
+        },
+        "proj": {
+          "total": 29,
+          "unique": 8,
+          "unresolved": []
+        },
+        "expl": {
+          "total": 288,
+          "unique": 46,
+          "unresolved": []
+        },
+        "fxface": {
+          "total": 134,
+          "unique": 18,
+          "unresolved": []
+        },
+        "part": {
+          "total": 656,
+          "unique": 11,
+          "unresolved": []
+        }
+      },
+      "inventory_rows": 92772,
+      "inventory_unique": 9283
+    },
+    "pixels": {
+      "west": {
+        "pixels": 489176,
+        "different": 1,
+        "bounds": [
+          907,
+          705,
+          907,
+          705
+        ],
+        "recorded_control": [
+          0,
+          0
+        ],
+        "imported_control": [
+          0,
+          0
+        ]
+      },
+      "east": {
+        "pixels": 489176,
+        "different": 8,
+        "bounds": [
+          190,
+          191,
+          844,
+          582
+        ],
+        "recorded_control": [
+          0,
+          0
+        ],
+        "imported_control": [
+          0,
+          0
+        ]
+      }
+    }
+  },
+  "static_and_pixel_check": {
+    "lht": {
+      "bytes": [
+        8192,
+        8192
+      ],
+      "equal": true
+    },
+    "shd": {
+      "bytes": [
+        8192,
+        8192
+      ],
+      "equal": true
+    },
+    "palette": {
+      "bytes": 1024,
+      "equal": true
+    },
+    "west": {
+      "max_channel_difference": 1,
+      "differences": [
+        [
+          907,
+          705,
+          [
+            208,
+            208,
+            181
+          ],
+          [
+            208,
+            207,
+            181
+          ]
+        ]
+      ]
+    },
+    "east": {
+      "max_channel_difference": 1,
+      "differences": [
+        [
+          705,
+          191,
+          [
+            255,
+            70,
+            3
+          ],
+          [
+            255,
+            70,
+            2
+          ]
+        ],
+        [
+          190,
+          194,
+          [
+            196,
+            64,
+            13
+          ],
+          [
+            197,
+            64,
+            13
+          ]
+        ],
+        [
+          197,
+          203,
+          [
+            113,
+            39,
+            6
+          ],
+          [
+            114,
+            39,
+            6
+          ]
+        ],
+        [
+          762,
+          212,
+          [
+            147,
+            52,
+            23
+          ],
+          [
+            148,
+            52,
+            23
+          ]
+        ],
+        [
+          377,
+          215,
+          [
+            223,
+            65,
+            4
+          ],
+          [
+            222,
+            65,
+            4
+          ]
+        ],
+        [
+          420,
+          250,
+          [
+            105,
+            71,
+            55
+          ],
+          [
+            104,
+            71,
+            55
+          ]
+        ],
+        [
+          844,
+          517,
+          [
+            255,
+            89,
+            4
+          ],
+          [
+            255,
+            88,
+            4
+          ]
+        ],
+        [
+          245,
+          582,
+          [
+            61,
+            84,
+            95
+          ],
+          [
+            62,
+            84,
+            95
+          ]
+        ]
+      ]
+    }
+  },
+  "storage": {
+    "frames": 100,
+    "assets": 619,
+    "asset_dictionary_bytes": 33208,
+    "asset_dictionary_zstd3": 5422,
+    "generated_raw": 392454,
+    "generated_zstd3": 142632,
+    "input_sha256": "7ef628c0b413c9210d28a65487699935670665f5c141a4311433fd2e76e50f02",
+    "portable_tables": [
+      {
+        "frames_per_block": 1,
+        "blocks": 100,
+        "raw_bytes": 34880466,
+        "compressed_bytes": 6403453,
+        "largest_raw_block": 400434,
+        "encode_ms_median": 0.5207855,
+        "encode_ms_max": 0.90395,
+        "decode_ms_median": 0.16560049999999998,
+        "decode_ms_max": 0.27535,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 10,
+        "blocks": 10,
+        "raw_bytes": 34880466,
+        "compressed_bytes": 2347978,
+        "largest_raw_block": 3956510,
+        "encode_ms_median": 2.124091,
+        "encode_ms_max": 3.795352,
+        "decode_ms_median": 0.6668609999999999,
+        "decode_ms_max": 1.073831,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 50,
+        "blocks": 2,
+        "raw_bytes": 34880466,
+        "compressed_bytes": 2025039,
+        "largest_raw_block": 18546092,
+        "encode_ms_median": 11.568072,
+        "encode_ms_max": 16.23229,
+        "decode_ms_median": 3.7892824999999997,
+        "decode_ms_max": 6.450484,
+        "exact_round_trip": true
+      },
+      {
+        "frames_per_block": 100,
+        "blocks": 1,
+        "raw_bytes": 34880466,
+        "compressed_bytes": 1983570,
+        "largest_raw_block": 34880466,
+        "encode_ms_median": 21.547953,
+        "encode_ms_max": 27.144837,
+        "decode_ms_median": 19.289331,
+        "decode_ms_max": 23.472814,
+        "exact_round_trip": true
+      }
+    ]
+  },
+  "limits": [
+    "different battle samples across filtering runs; not a paired estimate of the filter effect",
+    "final maximum one channel level on nine pixels; not bit-identical images",
+    "full-map ground battle only; no player perspectives, simulation checkpoint, sound or analysis",
+    "one import per fresh process; repeated generated-bank/atlas lifetimes not tested",
+    "prototype uses matching installed content and private trusted-input staging; no shipping parser",
+    "short codec workload, not recording overhead, full-hour size or request-to-present seek latency"
+  ]
+}

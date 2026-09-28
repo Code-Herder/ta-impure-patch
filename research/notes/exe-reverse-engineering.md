@@ -505,6 +505,85 @@ and flags 15 at each state (including the depth-plane flag). The scene probe res
 partial and complete images exactly in the unit crop; see the exploration's construction
 subsection for its deliberately limited claim.
 
+### Replay asset identities and procedural frames [DISASSEMBLED / SOURCE / MEASURED 2026-09-28]
+
+The [portable scene experiment](tadr-port/demo-recorder-exploration.md#6e-portable-world-assets-and-generated-explosion-frames)
+resolves loaded content without requiring a live representative of each recorded unit type.
+These are temporary owner-thread inventory reads, not new production hooks or a general
+validator for hostile game assets.
+
+**Animation-bank cache, DIS:** `0x429700` reads count `main+0x147AB` at `0x42970B` and
+base `main+0x147AF` at `0x429723`. Each `0x44`-byte record contains a name followed by the
+bank pointer at `+0x40`; search calls `0x4F8A70` at `0x42972D`, advances by `0x44` at
+`0x429743`, and checks the engine count at `0x429746`. A miss builds the path through
+`0x4290F0` at `0x42975E`, loads through `0x4B8C60` at `0x429768`, reallocates
+`(count+1)*0x44` bytes through `0x4D84A0` at `0x4297A1`, and publishes the new base at
+`0x4297AF`. It copies the name at `0x4297D1..0x4297EC`, stores the bank at `0x429807`,
+and increments count **after initialization**, at `0x429817`. Cache hits return `+0x40`
+at `0x429840`. This ordering does not authorize unsynchronized reads during reallocation.
+`0x429850` forwards sequence lookup to `0x4B8D40` at `0x42985A`. The effects initializer
+`0x429870` calls this bank accessor at `0x42987E` and stores the bank at `main+0x148F3`
+(`0x42988E`); its named sequences occupy individual fields, not the entire surrounding range.
+
+**Loaded GAF layout, DIS:** `0x4B8C60` calls file loader `0x4BBE50` at `0x4B8C6B`,
+null-checks the result, reads a signed 16-bit sequence count at bank `+4` (`0x4B8C7D`),
+and walks the pointer table at `+0x0C` with stride 4 (`0x4B8C91`). The fixup at
+`0x4B8CA8` converts a sequence offset into a pointer. Each sequence has a 16-bit frame
+count at `+0`, name at `+8`, and frame entries at `+0x28`, stride 8. Named lookup
+`0x4B8D40` compares the requested name to sequence `+8` via `0x4F8A70` at
+`0x4B8D5E..0x4B8D62`, returns the matching pointer at `0x4B8D83`, and returns null
+for an empty bank or no match (`0x4B8D7A/0x4B8D8F`).
+Frame pointers are fixed at `0x4B8CBA`, pixel pointers at frame `+0x10` at `0x4B8CC7`,
+and subframe pointers/pixels at `0x4B8CD2..0x4B8CF5`, using the byte count at frame `+0x0A`.
+These loops use file counts; this inspection does **not** establish bounds validation against
+file allocation size. The prototype indexes already-loaded matching content on its owning
+thread, caps traversals, and identifies frames by bank/sequence ordinal/name/frame index.
+
+**Unit and wreck templates, SOURCE / DIS:** `tagpu_model3do.h` supplies bounded model walks
+from roots in `main+0x14377`, indexed by unit-definition index; definitions at `main+0x1439B`
+have stride `0x249` and names at `+0x20`. Template node identity uses unit name and walk
+ordinal/piece name. Face GAF references use the existing face discriminator and frame/sequence
+resolvers. A feature definition's `+0xFE` bit 0 is a required type discriminator: when clear,
+`+0x98` is the 3D template root; when set, the eight fields `+0xAC..+0xC8` are GAF sequences.
+The 3D creation branch `0x423D96..0x423EDB` reads that root at `0x423EBB`, passes it to
+`0x45A8D0` at `0x423EC2`, and stores the new Object3do at wreck record `+4` at `0x423ECB`.
+It uses the wreck pool `main+0x1420B`, stride `0x30`, and free bookkeeping at `+0x1421B`;
+records receive definition `+0x2C`, tick `+0x26`, position `+8/+0x0C/+0x10` and rotation
+`+0x20/+0x24`. The tile receives definition `+8`, record index `+0x0A`, and flag bit 0
+at `0x423ED9`; the GAF branch begins at `0x423EDD`. **Negative result:** traversing the
+GAF fields of a 3D definition crashed the initial inventory. A pointer sanity check would
+not repair that type error; branching on the engine's discriminator did.
+
+**Generated explosion art is match state, DIS:** level initializer `0x420620` calls
+`0x4B91B0` at `0x42063A` and stores that result at `main+0x1AB9B` (`0x420654`). Its three
+sequence allocations use `0x4D83B0`; frame entries have the GAF `+0x28`, stride-8 layout.
+Calls to frame generator `0x420D20` at `0x4206C7`, `0x420740` and `0x4207BC` fill sequences
+stored at `main+0x1AB8F/+0x1AB93/+0x1AB97` (`0x4206E3/0x42075F/0x4207E2`). With the
+retail values assigned at `0x42065F..0x4206A8` to `0x511F90..0x511FB0`, the sequences have 12, 15 and 15 frames; their
+square side lengths start at 64, 128 and 200 and decrement by 4, 7 and 11 respectively.
+The initializer also writes `main+0x38D74` with 20, 50 and 100; its broader meaning is not
+established here. Existing level-load/teardown call sites and reclaim lifetime are mapped in
+the effects section below.
+
+`0x420D20(side)` calls GAF allocator `0x4B8DA0` at `0x420D49`, sets half-side hotspots at
+frame `+4/+6` (`0x420D5B/0x420D61`), then calls the CRT random function `0x4E4870` **once
+per pixel** at `0x420D99`. Integer helpers `0x4E4400/0x4E4440` scale that output by
+10/32768. The pixel value combines this noise with an elliptical radial distance, using
+double constants at `0x4FD010/+8` and integer conversion helper `0x4E43A0`; their numerical
+values were not needed for the copy experiment. Output palette bytes at `0x420DED/0x420DFD/
+0x420E0B` are `0xFF`, `0x6E`, or the calculated value plus `0x4F`. The loop writes through
+frame `+0x10`, sets key byte `+8` to `0xFF` at `0x420E34`, and returns with `ret 4`.
+`0x4E4870` obtains a state object through `0x4EB0F0`, reads/writes its `+0x14`, updates
+`seed = seed*214013 + 2531011` modulo 2^32, and returns `(seed >> 16) & 0x7FFF`
+(`0x4E4875..0x4E489C`). The helper's internal lifetime was not disassembled here.
+
+**MEASURED:** the 42 generated frames occupy 392,454 bytes in the prototype's pointer-free
+header/pixel stream. Storing their identity alone changes the image after a fresh launch.
+The experiment copies generated pixels into replay-owned memory and redirects only saved-scene
+references; it neither writes the engine's random state nor replaces live engine assets.
+One replay-owned generated-asset bank can serve every snapshot. Repeated import/free cycles
+and atlas key reuse need an explicit lifetime/generation design before production use.
+
 ### Replay snapshots and draw-created caches [SOURCE / DISASSEMBLED / MEASURED 2026-09-28]
 
 The wider [recorder scene experiment](tadr-port/demo-recorder-exploration.md#6d-wider-world-snapshots-and-camera-dependent-caches)
@@ -8448,8 +8527,8 @@ difference decides which of them may cross a thread boundary on its own lifetime
 the fence.
 
 **The effect GAF sequences are a SESSION asset, not a per-level one** [VERIFIED 2026-09-12].
-`0x429870` loads the `"fx"` bank (`0x4290F0(&path, "anims", "fx", "GAF")` → `0x4B8C60`) and
-resolves every named sequence into `main+0x147AB..0x14903` — `"smoke 1"` → `+0x147CF`, the five
+`0x429870` loads the `"fx"` bank through cache accessor `0x429700` and
+resolves named sequences into individual fields — `"smoke 1"` → `+0x147CF`, the five
 rendertype-4 sprite sequences → `+0x147BB..+0x147CB`, the rendertype-5 flare → `+0x147F3`, the
 projectile ground-shadow blob → `+0x1480F`. **Its only caller is `0x49134D`**, inside `0x491200`,
 **whose only caller is `0x49EA62`** inside `0x49E830` — WinMain, reached from the SEH wrapper
