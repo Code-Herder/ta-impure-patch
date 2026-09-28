@@ -475,3 +475,8 @@ failure, not a passing multiplayer result. Launcher failures now retain stderr, 
 and readiness bytes; a separate concurrent twelve-server reservation check passed. A third
 full run on `35693a8e…` uses three simultaneous network games rather than six, and must be
 judged by its actual outcomes. No timing-dependent runtime mitigation was introduced.
+That run's retained readiness bytes established the actual second failure: Xvfb wrote
+the number and newline separately (`b'8'` was the first read). A pipe read is not a message
+boundary. The reader now accumulates through the newline within a 32-byte bound and the
+existing deadline; EOF, oversized or incomplete replies still fail closed. Deterministic
+fragmented-read/EOF/size/timeout tests and the live two-server ownership test pass.

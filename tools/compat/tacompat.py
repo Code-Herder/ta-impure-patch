@@ -650,6 +650,21 @@ def free_display(taken: set) -> int:
     die("no free X display number between :180 and :399")
 
 
+def xvfb_reply(fd):
+    """A pipe read can split the display number from its terminating newline."""
+    answer = b''
+    deadline = time.monotonic() + 10
+    while len(answer) < 32 and b'\n' not in answer:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            break
+        chunk = os.read(fd, 32 - len(answer))
+        if not chunk:
+            break
+        answer += chunk
+    return answer
+
+
 def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
     """Own a server only after its readiness pipe confirms the display it bound.
 
@@ -667,8 +682,7 @@ def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
                              stderr=errors, start_new_session=True)
         os.close(write_fd)
         write_fd = None
-        ready = select.select([read_fd], [], [], 10)[0]
-        answer = os.read(read_fd, 32) if ready else b''
+        answer = xvfb_reply(read_fd)
         if not re.fullmatch(rb'\d+\n', answer):
             errors.seek(0)
             detail = errors.read(8192).decode(errors='replace').strip()

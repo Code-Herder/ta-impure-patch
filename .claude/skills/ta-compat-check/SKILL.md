@@ -252,6 +252,8 @@ Run the new setup before writing its `today` — write down what it did, not wha
   for its owned process and never removes a lock by display number. Suite preparation,
   single-player and multiplayer launches all use automatic reservation; checking for a vacant
   socket earlier cannot reserve a number against another test driver.
+  The readiness reply is newline-framed: pipe reads may split its number from the newline,
+  so the reader accumulates within its byte bound before judging ownership.
 - **"stopped moving at #n on the way to #m" from `tacli ui select` is usually a dropped batch, not a
   separator.** A rapid batch of arrow presses is partly dropped by design and a busy game can
   swallow one whole; Total Mayhem's 106-row map list stopped at #35 on one run and #59 on another,
