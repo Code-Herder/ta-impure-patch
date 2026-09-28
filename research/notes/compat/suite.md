@@ -67,6 +67,14 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
 A run is **meets goal**, **known gap** (matches `today`) or **UNEXPECTED**; the exit status is
 1 on any UNEXPECTED. The rule: no UNEXPECTED before a release.
 
+**The UI layer is part of every verdict.** A run whose Vulkan UI layer gave up following the game
+(it then composites nothing: a black screen) or asked for a fresh start past the start-up is
+UNEXPECTED, read from the layer's own log lines. Every other check here reads state and gadgets, so
+before this a black screen passed: every Escalation run gave up on 2026-09-27 and no row said so.
+The `gui-stress` setup drives the race on purpose, a fresh start every 120 presents while colour is
+valid, and passes only if the layer never asks for one of its own and its fallback is seen to run
+([GPU status](../gpu-status.md), *Two colour disagreements are neither*).
+
 ## Whether TADR ran
 
 `tadr_ran` in a setup's goal is judged two ways, on every peer of every stage: from what TADR

@@ -36,6 +36,11 @@ tools/compat/tacompat.py clean                       # remove the compat-* Wine 
 tools/compat/tacompat.py selftest                    # the hook decode, 11 cases, no game needed
 ```
 
+- **The UI layer is judged on every setup**, from its own log lines (`gui_health`): a run whose
+  layer gave up following the game (`fresh starts have not made …` — it composites nothing, a
+  black screen) or asked for a fresh start past the start-up's own (`an op names a surface this
+  store never seeded`, `the presented surface has no twin here`) is UNEXPECTED. Nothing else in
+  the suite looks at pixels, and this is how a black screen fails a run.
 - **Verdicts.** `meets goal` (Impure active, none of TADR's code run); `known gap` (matches
   the setup's `today`, the behaviour accepted until the takeover reaches it); `UNEXPECTED`
   (neither). Exit 1 on any UNEXPECTED, with `--strict` on a known gap too; exit 2 when nothing
@@ -148,8 +153,12 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
   `units*/*.fbi` against retail's) — every setup that ships a mod's own content carries one.
 - `no_network_game`: why a setup plays none, in words and from a run; its column reads `no mp`.
   No setup carries it today.
-- `levers`: empty files put in the game folder, a DLL switch. A setup with one checks a mechanism,
-  not a player's folder, and plays no network game: `mayhem-11.3.0-net` turns the takeover off
+- `levers`: files put in the game folder — a name for an empty switch file, or
+  `{"file": name, "text": contents}` for a setting. A setup with one checks a mechanism,
+  not a player's folder, and plays no network game: `gui-stress` writes `reseedstress=120` into
+  `tagpu_gui.on`, so the UI layer asks itself for a fresh start every 120 presents, and passes
+  only if the layer never asks for one of its own, never gives up, and its indexed fallback for a
+  restored sprite is seen to run (`gui_stress` in its goal is the minimum number of fresh starts); `mayhem-11.3.0-net` turns the takeover off
   (`tagpu_takeover.off`) so the safety net has TADR to catch, and its goal is the net's refusal;
   `retail+tadr1-recorder` turns it off so the recorder runs and answers a DirectPlay call, and its
   goal is `tadr_ran: true` — the proof that both kinds of evidence can fire at all (measured

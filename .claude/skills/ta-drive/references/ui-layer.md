@@ -67,11 +67,14 @@ Two families of tokens live in `tagpu_gui.on`, and they are read at different ti
 
 | read once, at attach (`tagpu_gui_hook.c`) | read live, on the poll (`tagpu_gui_surf.c`) |
 |---|---|
-| `census`, `log`, `pgm`, `trace`, `norepaint`, `nostring`, `key=`, `probe=` | `off`, `norestore`, `sharptest`, `mmbase`, `nominimap`, `nocursor`, `cursorscale=` |
+| `census`, `log`, `pgm`, `trace`, `norepaint`, `nostring`, `key=`, `probe=` | `off`, `norestore`, `sharptest`, `mmbase`, `nominimap`, `nocursor`, `cursorscale=`, `reseedstress=` |
 
 Arming an attach-time token on a running instance silently does nothing.
 
 - **`norestore`** — the layer without Classic++ art: the UI-only A/B.
+- **`reseedstress=N`** — the harness asks for a fresh start every N presents (N ≥ 10), through
+  the call the consumer uses when it falls behind; each one logs `gui: reseedstress: fresh start
+  K asked by the harness`. The stress behind `tools/compat`'s `gui-stress` setup. Never a player's.
 - **`nostring`** — text stays a box of captured pixels instead of a string op.
 - **`norepaint`** — the layer normally calls the engine's own `GUI_StageUpdateDraw` on the top
   screen when it arms or reseeds, so the shell's art arrives as sprite ops; this turns that off.

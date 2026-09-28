@@ -6828,6 +6828,46 @@ evidence the last fresh start worked and gives the budget back, so a map change 
 a structural condition goes quiet after eight tries and never touches the producer again. A
 capability gap costs the oracle nothing; that is the point of telling it apart from a sync gap.
 
+#### Two colour disagreements are neither
+
+They are not the behind state either. Classic++ colour is decided
+on the producer from `tagpu_gui_col_ready`, the consumer's answer of the **frame before**, so the two
+disagree for one frame whenever that answer moves — in both directions, not only "off to on" as the
+code once said. They are answered where they arise, never with a fresh start:
+
+* **A restored sprite over a blanked atlas.** `restore_want` runs *between* the ops' validation and
+  their replay in `tagpu_vk_gui_prepare`, and every job that is not a repaint blanks the restored
+  atlas the frame it starts — every atlas re-lay. The replay draws such a sprite with
+  `uRestored = 0`: `SPR_FS` writes alpha 0 to the colour plane, which `LAY_FS` resolves through the
+  palette. Dithered art, never wrong art; the consumer's answer drops to 0 that frame, the
+  producer's validity follows, and its 0 → 1 edge asks the engine for the repaint that brings the
+  colour back (`col_ask_repaint`). Logged once per stretch: `gui: a restored sprite arrived while
+  this lane holds no restored atlas - drawn indexed until the repaint`. A frame whose producer still
+  says colour while the lane holds no atlas is composited **indexed** (`uColOn = 0`), not skipped.
+* **`colourTwins` for a twin that has no colour plane.** The header defines it as colour valid
+  **and** the presented twin carrying one; the producer published validity alone, so every surface
+  presented after a reseed — fresh on both sides, colour on neither — was a stand-down. It is
+  `s_colValid && t->col` now. `t->col` and the consumer's `colImg` are made by the same
+  `TAGPU_GUICOL_DST` op and dropped by the same RESET, so the consumer's check holds by construction.
+
+Answered with a fresh start, each disagreement re-laid the atlas, which started the next job, which
+made the next disagreement: **eight asks, then the capability-gap mute, then nothing composited for
+the rest of the session**. MEASURED 2026-09-27: Total Mayhem's skirmish screen on Windows went black
+that way (v0.3 and after); on the Wine suite every Escalation run reached the mute and Total Mayhem
+and ProTA asked 3 to 6 times — invisible to a suite that reads state and gadgets, not pixels. After:
+the only asks left are the start-up's two (`an op names a surface this store never seeded`).
+
+**The check is `gui-stress`** (`tools/compat/setups.json`): Total Mayhem with `reseedstress=120` in
+`tagpu_gui.on`, a harness lever that raises the producer's `reseed` every 120 presents through the
+consumer's own call. Colour is valid before each one (the restore of three frames lands in well
+under the interval), so each one meets both races. It passes only with **no** ask of the consumer's
+own after the lever's first fresh start, no mute, the lever seen to fire at least ten times, and the
+indexed fallback seen at least once — a stress run that never met the race proves nothing.
+MEASURED 2026-09-27 on Wine: the build without the fix asked 7 times (`a restored sprite and no
+restored atlas on this lane`) and gave up; the fix met 22 fresh starts with 22 indexed fallbacks and
+no ask. Every other setup's run fails as well if its UI layer gave up or asked past the start-up
+(`gui_health` in `tacompat.py`).
+
 **"A run of frames that COMPOSITED" is what that said first, and the re-review disproved it out of
 this very page.** `compose` is 0 whenever the sharp layer has coverage — *"every frame with a cursor
 on screen"*, as "Not covered" below already stated — so the refund sat on a branch an ordinary
