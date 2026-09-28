@@ -1608,8 +1608,8 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4C6890` | `SurfaceFill(surface, colour)` | 7 | the whole surface |
 | `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
 | `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)` — return hijacked | 6 | registers the surface, seeds its copy so its build is diffed |
-| `0x4C6AC0` | `SurfaceFree(surface)` | 6 | forgets it |
-| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires every tracked surface inside the block (G18-8): each entry whose base lies in `[block, block + MEM_Size(block))`, the size asked inside the allocator's own critical section (`surf_dies_with`, `mem_block_size`) — a `0x4C69F0` surface's pixels sit at `block+0x30`, a frame's at `block+0x18` or its second plane — and this is the only way an engine allocation dies |
+| `0x4C6AC0` | `SurfaceFree(surface)` | 6 | retires it: the entry stays, marked dying, and an `OP_FREE` holds the free's place in the window, so a copy out of it recorded earlier still publishes twin to twin (§2.104) |
+| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires every tracked surface inside the block (G18-8): each entry whose base lies in `[block, block + MEM_Size(block))`, the size asked inside the allocator's own critical section (`surf_dies_with`, `mem_block_size`) — a `0x4C69F0` surface's pixels sit at `block+0x30`, a frame's at `block+0x18` or its second plane — and this is the only way an engine allocation dies — on the game thread in place, as `SurfaceFree` does (§2.104); an off-thread free is queued and dropped at the next flip |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)` | 10 | a build/redraw event for the log |
 
 **AND ONE OBSERVER THAT IS NOT A LEAF: the list wheel on the GUI pump `0x4A9FD0`** (stolen 5,
@@ -12353,8 +12353,8 @@ than watching one.
 
 #### The gap
 
-A surface whose contents we did not watch arrive can only be published as **`PK_SEED`** — its raw
-bytes — because nothing here knows how they got there
+A surface whose contents we did not watch arrive can only be published as **`PK_SEED`** — an
+empty twin, since its bytes do not cross (§2.104) — because nothing here knows how they got there
 (`tagpu_gui_hook.c`'s `pub_seed`). That is not an edge case: `publish()` seeds *any* surface on
 first touch, and a **reseed** clears `seeded` on every surface at once. Four things ask for one —
 the consumer stalling over, a lost sprite, an arena overflow, and a level boundary — so seeds are
@@ -19875,3 +19875,19 @@ is at prio 0 behind at most two trickle batches and the screen's own keys). At t
 mirrored edge (§2.90) the half-texel at the fold now samples the key's ring, the network's output
 for the reflected map, where it sampled a copy of the edge; the fold stays continuous. The tile-grid
 lines are the art's and stay (the plan's TODO).
+
+### 2.104 A free is an op: the save-under's restore keeps its place (`tagpu_gui_hook.c`, `tagpu_gui_leaves.h`) — 2026-09-27
+
+Escalation's orders panel stayed on screen after a deselect: the panel's teardown copies its
+save-under back onto the frame at `0x4A952B` and frees it with the next call, `0x4A9537`, and the
+producer dropped the surface at the free — `PK_FREE` at once, the copy's source cleared — so the
+copy crossed as `PK_PIXELS` and was dropped. A game-thread free now **retires** the entry: it
+stays, marked dying, an `OP_FREE` is recorded at the free's place, and `publish` emits the copy
+twin to twin and then `PK_FREE`, in the engine's order. Nothing reads a retired surface's memory
+(`pub_surface_bytes` refuses one), and `pub_seed` carries no bytes any more — the drain dropped
+them — so a surface made, drawn and freed in one window is seeded and drawn like any other.
+`GUI pixels:` counts every `PK_PIXELS` by cause; `copy-freed` fails the suite's UI check, and the
+suite's battle stage compares the side panel after a deselect with the engine's surface.
+Measured: Escalation 22.5 % of the strip wrong on v0.3, 0.12 % with the fix; `copy-freed` 0.
+Mechanism, residuals and numbers: [GUI renderer](gui-renderer.html) §28. **Not covered:** an
+off-thread free, a same-base re-make and a full window still drop at once.

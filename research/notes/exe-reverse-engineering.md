@@ -8760,6 +8760,25 @@ branches skip the allocation and are not the redraw path — `0x4A8349` and `0x4
 (`0x4B6700()`/`0x4B6710()` — the screen width and height — against `panel+0x17`/`+0x19`). A panel
 bigger than the screen abandons the whole call.
 
+**The teardown's restore, and why it is a copy out of a surface about to die** [DISASSEMBLED
+2026-09-27 from the pristine exe; MEASURED the same day, [GUI renderer](gui-renderer.html) §28].
+Inside the `test bl,0x2` block (`0x4A950A`):
+
+| at | what |
+|---|---|
+| `0x4A9513` | `eax = panel+0xB8`, the save-under; `0x4A951D` `je 0x4A9542` skips the restore when it is NULL |
+| `0x4A952B` | `0x4C6B70(NULL, panel+0xB8, panel+0x13, panel+0x15)` — the save-under copied back onto the frame (a NULL destination is the primary) at the panel's position |
+| `0x4A9537` | `SurfaceFree 0x4C6AC0(panel+0xB8)` — **the very next call**; `0x4A953C` NULLs the field |
+| `0x4A9549` | `SurfaceFree 0x4C6AC0(panel+0xBC)`; `0x4A955A` NULLs it |
+
+`panel+0x13`/`+0x15` are the panel's x and y: the build path at `0x4A9081`..`0x4A908B` negates
+the same two words for `0x4A9098`'s screen grab. The save-under is what `0x4A90CC` copied out of
+`panel+0xBC` at build time, before a gadget was drawn into it, so the restore puts back the frame
+as it was under the panel. **A surface is read and freed in one breath here**, which is why the
+UI producer keeps a freed surface's twin until its copy is published (`OP_FREE`, the GUI renderer
+§28): dropped at the free, the restore was lost and Escalation's orders panel (`ARMCOM1`, 128 ×
+640 at y 128) stayed on screen after a deselect.
+
 **HOW THAT PAIR WAS MISSED THE FIRST TIME, which is worth more than the pair.** The first
 enumeration looked for early **returns** before the allocation, found one, and did not look for
 **jumps past** it — of which there are three. An early return and a forward jump are the same

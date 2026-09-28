@@ -1472,12 +1472,13 @@ static void drain(void)
             break;
         case PK_SEED:
             /* THE TWIN IS MADE EMPTY, AND THE ENGINE'S BYTES ARE NOT CARRIED.
-               `PK_SEED` publishes a surface's whole contents as the engine has
-               them -- the one op in the stream whose payload is not a
+               A surface's contents as the engine has them are not a
                description of a draw but a COPY of what the 1997 rasteriser
-               composed. Passing it on would put those bytes in a twin and the
+               composed. Carried, they would put those bytes in a twin and the
                twin on the screen, which is precisely the engine pixel the cut
-               removed. So the geometry crosses and the payload does not:
+               removed -- so the producer sends none (`pub_seed`), and a seed
+               that did carry some would still have them dropped here. The
+               geometry crosses and the payload does not:
                `m->alen = 0`, and the consumer's own SEED case already answers
                that exactly right -- `tw_make` then `tw_fresh`, which clears to
                coverage 0, then `if (!o->alen) break`.
@@ -1597,9 +1598,9 @@ static void drain(void)
                The fix is at the PRODUCER, not here: every kind that falls
                through to `as_pixels` in tagpu_gui_hook.c needs a semantic op of
                its own, as `PK_BAR` and `PK_RECT` have. `s_pixDropped` is the
-               work list's size -- measured by area rather than count on the
-               `gui area:` census line, which is what says which kind to do
-               first. Until then those regions simply do not draw, visibly,
+               work list's size -- by cause on the producer's `GUI pixels:`
+               line, and by area rather than count on the `gui area:` census
+               line, which is what says which kind to do first. Until then those regions simply do not draw, visibly,
                which is the whole reason for cutting rather than levering. */
             t = twin_find(o->surf);
             /* THE TINT'S DESTINATION JUST STOPPED MATCHING THE ENGINE'S, and

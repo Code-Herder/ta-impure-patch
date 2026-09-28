@@ -380,6 +380,22 @@ def lever_file(lever) -> tuple:
 GUI_INDEXED = re.compile(r"^vk: gui: a restored sprite arrived while this lane holds no restored atlas", re.M)
 # the producer's repaint budget for one palette generation, spent: what is on screen keeps its indices
 GUI_SPENT = "gui: the restored UI atlas has settled 32 times in one palette generation"
+# WHY A UI BOX CROSSED AS ENGINE PIXELS, which the consumer drops (its `pixdrop=`): the producer's
+# cumulative count by cause, every 600 frames. One cause is a bug and never expected: `copy-freed`,
+# a copy whose source surface was dropped before the copy was published -- the stale orders panel
+# of v0.3. The others are the UI layer's known work list (a draw kind with no op of its own, a
+# source never drawn through an observed leaf) and are reported, not judged.
+GUI_PIXELS = re.compile(r"^GUI pixels: (.*)$", re.M)
+GUI_PIXELS_BUG = {"copy-freed"}
+
+
+def gui_pixels(text: str) -> dict:
+    """The last `GUI pixels:` line as {cause: count}; empty when none was written."""
+    lines = GUI_PIXELS.findall(text)
+    if not lines or lines[-1].strip() == "none":
+        return {}
+    words = lines[-1].split()
+    return {k: int(v) for k, v in zip(words[::2], words[1::2]) if v.isdigit()}
 
 
 def gui_health(text: str) -> dict:
@@ -396,7 +412,7 @@ def gui_health(text: str) -> dict:
     fired = [int(m) for m in GUI_STRESS.findall(text)]
     return {"asks": asks, "asks_stress": asks_stress, "gave_up": GUI_GAVE_UP in text,
             "stress": max(fired, default=0), "indexed": len(GUI_INDEXED.findall(text)),
-            "spent": GUI_SPENT in text}
+            "spent": GUI_SPENT in text, "pixels": gui_pixels(text)}
 
 
 def gui_misses(g: "dict | None", exp: dict) -> list:
@@ -424,6 +440,10 @@ def gui_misses(g: "dict | None", exp: dict) -> list:
     # indexed art stays, which is the dithered picture the fix exists to avoid.
     if stress and g.get("spent"):
         miss.append("the repaint budget ran out, so indexed art stayed on screen")
+    bug = {k: n for k, n in g.get("pixels", {}).items() if k in GUI_PIXELS_BUG and n}
+    if bug:
+        miss.append("UI copies were dropped because their source was freed first: " +
+                    ", ".join(f"{n}x {k}" for k, n in sorted(bug.items())))
     return miss
 
 
@@ -518,6 +538,7 @@ def judge(o: dict, exp: dict) -> list:
     if o.get("mp") is not None and not o["mp"].get("ok", False):
         miss.append(f"the network game failed: {o['mp'].get('why', '?')}")
     miss += gui_misses(o.get("gui"), exp)
+    miss += hud_misses((o.get("battle") or {}).get("hud"), exp)
     return miss
 
 
@@ -822,6 +843,86 @@ def scenarios(setup) -> dict:
     return {**DEFAULT_SCENARIOS, **setup.get("scenarios", {})}
 
 
+# THE SIDE PANEL AFTER A DESELECT, against the engine's own surface. Selecting a unit opens
+# the orders panel over the side panel; deselecting restores what was under it by a copy out
+# of a save-under the engine frees in the same call. The UI layer used to lose that copy and
+# keep the panel on screen (MEASURED 2026-09-27: Escalation, 22.5% of the strip wrong on
+# v0.3; 0.1% with the fix, which is colour rounding). Nothing else here reads pixels of the
+# UI, so a stale region passes every other check.
+HUD_STRIP = (0, 140, 128, 845)      # x, y, w, h: the side panel below the minimap, at 1280x1024
+HUD_FUZZ = "9.4%"                   # a channel off by more than 24 of 255 is a different pixel
+HUD_STALE = 0.05                    # past this, the screen is not showing the engine's panel
+HUD_OPENED = 0.20                   # the selection must change the engine's own strip this much
+
+
+def hud_strip_diff(a: Path, b: Path) -> "float | None":
+    """The share of HUD_STRIP's pixels that differ between two captures, or None when
+    either capture is missing or ImageMagick cannot compare them."""
+    x, y, w, h = HUD_STRIP
+    crop = f"[{w}x{h}+{x}+{y}]"
+    if not (a.exists() and b.exists()):
+        return None
+    r = subprocess.run(["compare", "-metric", "AE", "-fuzz", HUD_FUZZ, f"{a}{crop}", f"{b}{crop}",
+                        "null:"], capture_output=True, text=True, timeout=60)
+    try:
+        return float(r.stderr.split()[0]) / (w * h)
+    except (ValueError, IndexError):
+        return None
+
+
+def hud_deselect(name, display, where: Path) -> dict:
+    """Select the commander (ctrl+c), deselect it, and compare the side panel on screen with
+    the engine's surface. `opened` is how much the deselect changed the engine's own strip --
+    the proof the step exercised anything -- and `stale` the share of the strip where the
+    screen disagrees with the engine after it.
+
+    WHICH CLICK DESELECTS IS THE PLAYER'S SETTING. Under the default layout a right click on
+    the ground deselects and a left click orders a move; under the right-click layout it is
+    the other way round (MEASURED 2026-09-27: Escalation's instance deselects on the right
+    click, retail's gives a move order). So the right click goes first, and when the engine's
+    strip has not changed, a left click on other ground."""
+    where.mkdir(parents=True, exist_ok=True)
+
+    def capture(step):
+        pair = (where / f"{step}-screen.png", where / f"{step}-engine.png")
+        subprocess.run(["import", "-display", f":{display}", "-window", "root", str(pair[0])],
+                       capture_output=True, timeout=30)
+        tacli("shot", name, "-o", str(pair[1]), timeout=30)
+        return pair
+
+    # The left click aims elsewhere: under the right-click layout the right click was a move
+    # order to its own point, and the commander may be standing on it three seconds later.
+    try:
+        tacli("keys", name, "ctrl+c", timeout=20)
+        time.sleep(3)
+        sel = capture("selected")
+        for click in (["--right", name, "700", "600"], [name, "900", "400"]):
+            tacli("click", *click, timeout=20)
+            time.sleep(3)
+            desel = capture("deselected")
+            opened = hud_strip_diff(sel[1], desel[1])
+            if opened is None or opened >= HUD_OPENED:
+                break
+        return {"opened": opened, "stale": hud_strip_diff(*desel), "where": str(where)}
+    except subprocess.TimeoutExpired as e:
+        return {"opened": None, "stale": None, "where": f"{where}: timed out: {e.cmd[:2]}"}
+
+
+def hud_misses(hud: "dict | None", exp: dict) -> list:
+    """The side-panel step's part of `judge`, for a setup where Impure draws."""
+    if hud is None or exp["outcome"] != "impure-active":
+        return []
+    if hud.get("opened") is None or hud.get("stale") is None:
+        return [f"the side panel could not be compared ({hud.get('where')})"]
+    if hud["opened"] < HUD_OPENED:
+        return [f"selecting the commander changed {hud['opened']:.0%} of the engine's side panel, "
+                f"so the deselect check was not exercised"]
+    if hud["stale"] > HUD_STALE:
+        return [f"after a deselect the side panel on screen differs from the engine's at "
+                f"{hud['stale']:.1%} of its pixels ({hud.get('where')})"]
+    return []
+
+
 def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario) -> dict:
     """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
     patchers that both started can still collide in play, where the limits are used.
@@ -864,13 +965,18 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
             break
     else:
         return {"ok": False, "why": "the skirmish never reached the game screen"}
-    # Before the scenario: it clears the map (clear_existing), commanders and all.
+    # Before the scenario: it clears the map (clear_existing), commanders and all. The commander
+    # check comes first, since the side-panel step below selects the commander.
     cmd = commanders(name)
     if not cmd["ok"]:
-        return {"ok": False, "why": "the skirmish started without a commander each: " + cmd["why"]}
+        return {"ok": False, "hud": None,
+                "why": "the skirmish started without a commander each: " + cmd["why"]}
+    # Before the scenario: the start is the one moment the commander is sure to exist and the
+    # view to hold nothing else a right click could land on.
+    hud = hud_deselect(name, display, gamedir / "hudcheck")
     r = tacli("scenario", "apply", name, scenario, timeout=180)
     if r.returncode != 0:
-        return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}"}
+        return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}", "hud": hud}
     applied = (r.stdout.splitlines() or [""])[0]
     # THE UNITS ARE SEEN, not only created: the scenario applier counts what the engine made,
     # and a game whose units exist but that Impure cannot see -- no frame packet entry, so
@@ -878,22 +984,22 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
     # written every half second; at least nine in ten of what was made must be in it.
     made = re.search(r"\((\d+) units?\b", applied)        # "applied 402 of 402 (401 units + 1 feature)"
     if not made:
-        return {"ok": False, "why": f"the applier's count is unreadable, so the units seen cannot be judged ({applied})"}
+        return {"ok": False, "hud": hud, "why": f"the applier's count is unreadable, so the units seen cannot be judged ({applied})"}
     want = int(made.group(1))
     time.sleep(4)
     got = alive_seen(gamedir)
     if got is None or got < max(1, want * 9 // 10):
-        return {"ok": False, "why": f"Impure sees {got if got is not None else 'no'} unit(s) of "
+        return {"ok": False, "hud": hud, "why": f"Impure sees {got if got is not None else 'no'} unit(s) of "
                                     f"the {want} the scenario made ({applied})"}
     end = time.time() + seconds
     while time.time() < end:
         time.sleep(2)
         new_boxes(display, seen, boxes, t0)
         if proc.poll() is not None:
-            return {"ok": False, "why": f"the game exited during the battle ({applied})"}
+            return {"ok": False, "hud": hud, "why": f"the game exited during the battle ({applied})"}
         if boxes or (gamedir / "ErrorLog.txt").exists():
-            return {"ok": False, "why": f"a box or a crash report during the battle ({applied})"}
-    return {"ok": True, "why": f"{cmd['why']}; {applied}"}
+            return {"ok": False, "hud": hud, "why": f"a box or a crash report during the battle ({applied})"}
+    return {"ok": True, "why": f"{cmd['why']}; {applied}", "hud": hud}
 
 
 # ------------------------------------------------------- the running game's own code
@@ -2157,7 +2263,13 @@ def cmd_selftest(args):
         print(f"  {'ok ' if got == want else 'BAD'} {name:26} {got} miss(es)")
         gbad += got != want
     print(f"ui health: {len(GUI_CASES) - gbad} of {len(GUI_CASES)} as intended")
-    return 1 if bad or gbad else 0
+    hbad = 0
+    for name, hud, exp, want in HUD_CASES:
+        got = len(hud_misses(hud, exp))
+        print(f"  {'ok ' if got == want else 'BAD'} {name:26} {got} miss(es)")
+        hbad += got != want
+    print(f"side panel: {len(HUD_CASES) - hbad} of {len(HUD_CASES)} as intended")
+    return 1 if bad or gbad or hbad else 0
 
 
 def _ask(why):
@@ -2181,6 +2293,19 @@ GUI_CASES = [
     ("stress never indexed", _FIRE.format(1) + _FIRE.format(2), _STRESS, 1),
     ("stress budget spent", _FIRE.format(1) + _IDX + _FIRE.format(2) + GUI_SPENT + "\n", _STRESS, 1),
     ("not judged when inactive", _ask("x"), {"outcome": "impure-refused"}, 0),
+    ("pixel drops, known work", "GUI pixels: gaf 60 copy-unseeded 323\n", _ACTIVE, 0),
+    ("pixel drops, freed source", "GUI pixels: gaf 2\nGUI pixels: gaf 3 copy-freed 1\n", _ACTIVE, 1),
+    ("pixel drops, none", "GUI pixels: none\n", _ACTIVE, 0),
+]
+# (name, the step's result, expectation, how many misses hud_misses must report); the numbers
+# are the measured ones: the fix, v0.3, and a selection that did not take
+HUD_CASES = [
+    ("panel follows the engine", {"opened": 0.587, "stale": 0.0012}, _ACTIVE, 0),
+    ("panel stays after deselect", {"opened": 0.587, "stale": 0.225}, _ACTIVE, 1),
+    ("selection never opened", {"opened": 0.001, "stale": 0.0}, _ACTIVE, 1),
+    ("captures missing", {"opened": None, "stale": None}, _ACTIVE, 1),
+    ("step not run", None, _ACTIVE, 0),
+    ("not judged when inactive", {"opened": 0.0, "stale": 0.5}, {"outcome": "impure-inactive"}, 0),
 ]
 
 
