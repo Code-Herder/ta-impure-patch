@@ -67,8 +67,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   `tacli roster` lists) must hold nine in ten of the units the applier made. A game whose units
   exist but that Impure cannot see passes everything else.
 - **Every player has a commander**, before the battle's scenario clears the map and on each
-  peer of the network game: `tacli units` reports the engine's living commanders (the FBI
-  `commander` bit) and every owner with a living unit, and every such owner must hold one.
+  peer of the network game: `tacli units` reports the engine's seats in the game (`players`,
+  from its player records) and its living commanders (the FBI `commander` bit), and every
+  seat must hold one. The lists are empty until the level is in play (`in_play`).
 - **The mod's own content** (`content` in a setup): at the menu, the unit types it names — ones
   only that mod defines — must be in the engine's table of loaded types (`tacli units`, a walk of
   the table in memory). A loader that never started leaves stock TA beside the mod's files.

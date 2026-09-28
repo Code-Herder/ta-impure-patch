@@ -71,16 +71,22 @@ A run is **meets goal**, **known gap** (matches `today`) or **UNEXPECTED**; the 
 1 on any UNEXPECTED. The rule: no UNEXPECTED before a release.
 
 **Every player gets a commander, in both games.** Before any scenario touches the map, the
-skirmish reads the engine's own unit array (`tacli units`, the catalogue's `commanders` and
-`unit_owners`, `tagpu_cat.c`): every living unit whose type has the FBI `commander` bit
-(`UnitDef+0x245` bit `0x40000`, [engine map](../exe-reverse-engineering.md)), and every owner
-with a living unit. At a game's start a player's units are its start units, so every owner must
-hold a commander, and there must be two at least. The network game checks the same on **each
-peer**, so a peer that never received the other player's commander fails too. It is not read from
-the roster: that is what Impure draws, and the other player's commander starts under the fog.
-The battle scenario clears the map (`clear_existing`), which is why the check comes first.
+skirmish asks the engine (`tacli units`, the catalogue's `players` and `commanders`,
+`tagpu_cat.c`) for two lists: every **seat in the game** — a player record whose first dword is
+nonzero and whose type byte `+0x73` is 1, 2 or 3 (local human, local AI, remote), the pair the
+engine itself tests at `0x48664B` — and every living unit whose type has the FBI `commander` bit
+(`UnitDef+0x245` bit `0x40000`, [engine map](../exe-reverse-engineering.md)). Every seat must
+hold a commander, and there must be two seats at least. The seats come from the player records
+and not from the units, because a player the game gave nothing owns no unit to be counted by.
+The network game checks the same on **each peer**, so a peer that never received the other
+player's commander fails too. It is not read from the roster: that is what Impure draws, and the
+other player's commander starts under the fog. The catalogue answers only while a level is in
+play (`in_play`; before that the loader thread may be building the unit array), and the suite
+polls until it does. The battle scenario clears the map (`clear_existing`), which is why the
+check comes first.
 MEASURED 2026-09-28: retail's saved skirmish has three players (ARMCOM, and two CORCOM for the
-AIs); TA Zero's starts a GoK and an Arm commander; each network peer holds both.
+AIs, seats 0, 1 and 3); TA Zero's starts a GoK and an Arm commander; each network peer holds both,
+TA Zero's included.
 
 **A mod without the stock unit types names its own scenarios.** The battle (`200v200`) and the
 network game's two halves (`compat-mp-host`, `compat-mp-join`) place stock types, which every mod
