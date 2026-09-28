@@ -39,8 +39,8 @@ enum {
     PK_ASSET        /* a DECODED ASSET SURFACE, whole: `w`/`h`/`pitch` as a seed,
                        and its bytes follow in the arena. It is NOT `PK_SEED`,
                        and the difference is the whole reason it may cross where
-                       a seed may not: a seed carries what the 1997 rasteriser
-                       COMPOSED, and this carries a surface the engine's LOADER
+                       a seed's bytes may not: those would be what the 1997
+                       rasteriser COMPOSED, and this is a surface the engine's LOADER
                        decoded and that nothing ever draws into -- the same
                        category as the GAF frame bytes a `PK_SPRITE`'s first
                        sight already carries. The producer only ever emits it

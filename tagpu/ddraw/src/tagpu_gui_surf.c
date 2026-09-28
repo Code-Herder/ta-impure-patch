@@ -1472,12 +1472,13 @@ static void drain(void)
             break;
         case PK_SEED:
             /* THE TWIN IS MADE EMPTY, AND THE ENGINE'S BYTES ARE NOT CARRIED.
-               `PK_SEED` publishes a surface's whole contents as the engine has
-               them -- the one op in the stream whose payload is not a
+               A surface's contents as the engine has them are not a
                description of a draw but a COPY of what the 1997 rasteriser
-               composed. Passing it on would put those bytes in a twin and the
+               composed. Carried, they would put those bytes in a twin and the
                twin on the screen, which is precisely the engine pixel the cut
-               removed. So the geometry crosses and the payload does not:
+               removed -- so the producer sends none (`pub_seed`), and a seed
+               that did carry some would still have them dropped here. The
+               geometry crosses and the payload does not:
                `m->alen = 0`, and the consumer's own SEED case already answers
                that exactly right -- `tw_make` then `tw_fresh`, which clears to
                coverage 0, then `if (!o->alen) break`.

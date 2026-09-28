@@ -4807,8 +4807,14 @@ free — `SurfaceFree`, and `MEM_Free` on any block a tracked surface lies in �
 entry instead of dropping it: our buffers go, the entry stays marked `dying`, and an `OP_FREE` is
 recorded at the free's place in the window. `publish` walks the window in order, so the copy goes
 out as `PK_COPY` twin to twin while the save-under's twin still exists, and the `OP_FREE` as
-`PK_FREE` after it. `ops_window_reset` removes retired entries once their window is gone,
-freeing any twin whose `OP_FREE` was never reached (a full queue, a stall).
+`PK_FREE` after it. `ops_window_reset` removes retired entries once their window is gone, and
+frees any twin still seeded — a window that was thrown away or never published. (A `publish`
+that stopped on a full queue owes a `PK_RESET`, which drops every twin anyway.)
+
+* **Only a surface the window's ops name waits.** A free of a surface no op since its base's last
+  free drew on or read drops it at once: there is no order to keep, and its `PK_FREE` precedes
+  every packet of the window. That keeps retirement off the table's 24 slots — a screen switch
+  frees and makes a dozen surfaces in one call, and only the ones a recorded op touched wait.
 
 * **The invariant is that nothing reads a retired surface's memory** — the block is the heap's
   the moment the free returns. What `publish` needs of it is its twin. An asset offer, a movie
@@ -4824,11 +4830,14 @@ freeing any twin whose `OP_FREE` was never reached (a full queue, a stall).
   whose `OP_FREE` is still ahead is the one an earlier op meant. For the same reason
   `ops_forget_base` on a live surface clears only the ops after the last `OP_FREE` of its base.
   If the flip surface itself was re-made on the base of a retired one, its seed waits for the
-  marker, after the free, and that window goes without the viewport's erase.
+  marker, after the free, and that window goes without the viewport's erase. `dedup` treats an
+  `OP_FREE` as a barrier for its base, so two identical draws either side of it — one on each
+  surface — are not merged into one.
 * **What still drops at once** is what the table cannot order. An off-thread free has no known
-  place among the window's ops. The same goes for a same-base size change (`surf_get`), the old
-  main offscreen when a new one is made, a flush of the off-thread ring, and a window already at
-  `MAX_OPS`. Each keeps the old behaviour, and a copy out of such a surface is counted.
+  place among the window's ops. The same goes for a same-base size change (`surf_get`), an old
+  main offscreen whose free was never seen when a new one is made, a flush of the off-thread
+  ring, and a window already at `MAX_OPS`. Each keeps the old behaviour, and a copy out of such a
+  surface is counted.
 
 **Why a box crossed as pixels — `GUI pixels:`.** The producer now logs, every 600 frames
 beside `GUI kinds:`, why each `PK_PIXELS` was published. A non-copy kind is logged under its op
@@ -4862,5 +4871,8 @@ drew. It was dropped before this change too, only counted as a freed source; it 
   reported and not judged.
 
 **Not covered.** Off-thread frees still drop at once; none of a recorded surface has been seen.
+A fresh start (`PK_RESET`) while a panel is open loses its save-under's twin, and nothing draws
+into a save-under again, so that panel's restore is still lost — counted as `copy-unseeded`,
+which the suite does not judge.
 The minimap copy and the shell's unseeded sources are unchanged. The side-panel check compares
 one strip at 1280 × 1024 after one deselect, not every panel a mod can open.

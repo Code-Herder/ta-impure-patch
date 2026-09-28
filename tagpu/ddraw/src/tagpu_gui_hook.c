@@ -171,6 +171,8 @@ typedef struct SURF {
                                          free still resolve to it -- see surf_retire */
     unsigned dieSeq;                  /* order of the retirements, for `pub_surf`    */
     int freedPub;                     /* its `OP_FREE` was reached by `publish`      */
+    int dedupFree;                    /* dedup(): the last `OP_FREE` of this base seen
+                                         so far in the walk, -1 if none            */
 } SURF;
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
@@ -993,6 +995,17 @@ static void ops_forget_base(unsigned base, int retired)
    which is what every free did before retirement existed: the picture may
    lose that frame's copy, and nothing is read that is not there. Returns 1
    then, because the drop swap-removes: slot `i` now holds another entry. */
+/* does an op recorded since the last `OP_FREE` of `base` draw on or read it */
+static int ops_name_base(unsigned base)
+{
+    int k;
+    for (k = s_nops - 1; k >= 0; k--) {
+        const OP* o = &s_ops[k];
+        if (o->kind == OP_FREE) { if (o->base == base) return 0; continue; }
+        if (o->base == base || (o->kind == OP_COPY && o->src == base)) return 1;
+    }
+    return 0;
+}
 static void surf_drop(int i);
 static int surf_retire(int i)
 {
@@ -1000,7 +1013,13 @@ static int surf_retire(int i)
     SURF* d = &s_surf[i];
     OP* o;
     if (d->dying) return 0;
-    if (s_nops >= MAX_OPS) { surf_drop(i); return 1; }
+    /* NO OP OF THE WINDOW NAMES IT (since the last free of its base): there is
+       no order to keep, and dropping it now is exact -- its `PK_FREE` precedes
+       every packet of this window, none of which is about it. This is what
+       keeps retirement off the table's slots: a screen switch frees and makes
+       a dozen surfaces in one call, and only those a recorded op drew on or
+       read need to wait for the flip. */
+    if (s_nops >= MAX_OPS || !ops_name_base(d->base)) { surf_drop(i); return 1; }
     free(d->copy); free(d->mask); free(d->acc);
     d->copy = d->mask = d->acc = NULL;
     d->copyValid = 0;
@@ -1030,16 +1049,19 @@ static SURF* pub_surf(unsigned base)
 }
 
 /* the window is over: every retired entry goes, its twin with it. `publish`
-   freed the twins whose `OP_FREE` it reached; one it did not reach -- a full
-   queue, a stall, no publish at all -- is freed here, after everything the
-   window published, which is still after every op that read it. */
+   freed the twins whose `OP_FREE` it reached and cleared `seeded` with the
+   `PK_FREE`; one still seeded -- a stall, a window thrown away, no publish at
+   all -- is freed here, after everything the window published, which is
+   still after every op that read it. (`publish` stopping on a full queue
+   owes a `PK_RESET` next, which drops every twin; this `PK_FREE` then finds
+   nothing, which the drain allows.) */
 static void surf_retired_sweep(void)
 {
     int i;
     for (i = 0; i < s_nsurf; ) {
         SURF* d = &s_surf[i];
         if (!d->dying) { i++; continue; }
-        if (!d->freedPub && d->seeded && g_gui_draw) {
+        if (d->seeded && g_gui_draw) {
             TAGPU_PUBOP* f = pub_op(PK_FREE, d->base);
             if (f) pub_commit();
         }
@@ -1890,9 +1912,13 @@ static void ops_window_reset(void)
        snapshot goes with the window. By construction rather than by the
        stall being rare: `consumer_stalled` fires on exactly the way out of a
        game, which is when the post-game screen builds. */
+    /* resolved by position, as `publish` resolves (`pub_surf`): an op before
+       an unreached `OP_FREE` drew on the retired surface, which holds no
+       snapshot, and one after it on the live one */
     int k;
     for (k = s_pubReached; k < s_nops; k++) {
-        SURF* sv = surf_by_base(s_ops[k].base);
+        SURF* sv = pub_surf(s_ops[k].base);
+        if (s_ops[k].kind == OP_FREE) { if (sv && sv->dying) sv->freedPub = 1; continue; }
         if (sv && sv->snap) snap_free(sv);
     }
     s_pubReached = 0;
@@ -2310,7 +2336,7 @@ static void dedup(void)
     int i;
     memset(s_dupTab, 0, sizeof s_dupTab);
     /* where the last copy that reads each surface sits in this batch */
-    for (i = 0; i < s_nsurf; i++) s_surf[i].lastCopyFrom = -1;
+    for (i = 0; i < s_nsurf; i++) { s_surf[i].lastCopyFrom = -1; s_surf[i].dedupFree = -1; }
     /* every entry at the base, the retired one with the live: which of them a
        copy read is `publish`'s question, and marking both only keeps more ops */
     for (i = 0; i < s_nops; i++)
@@ -2322,15 +2348,25 @@ static void dedup(void)
         OP* o = &s_ops[i];
         unsigned slot, n;
         o->dup = 0;
-        if (o->kind == OP_FLIP || o->kind == OP_FREE) continue;
+        if (o->kind == OP_FREE) {           /* a barrier for its base: see below */
+            int k;
+            for (k = 0; k < s_nsurf; k++) if (s_surf[k].base == o->base) s_surf[k].dedupFree = i;
+            continue;
+        }
+        if (o->kind == OP_FLIP) continue;
         slot = op_hash(o);
         for (n = 0; n < DUP_PROBE_MAX; n++, slot = (slot + 1) & (DUP_TAB - 1)) {
             if (!s_dupTab[slot]) { s_dupTab[slot] = i + 1; break; }
             if (op_same(&s_ops[s_dupTab[slot] - 1], o)) {
                 int j = s_dupTab[slot] - 1;
                 SURF* d = pub_surf(o->base);
+                SURF* sd = o->kind == OP_COPY ? pub_surf(o->src) : NULL;
                 int lc = d ? d->lastCopyFrom : -1;
-                if (lc < j || lc > i) s_ops[j].dup = 1;      /* no copy read the surface between, or one follows */
+                /* A FREE OF EITHER BASE BETWEEN THEM makes them two surfaces
+                   that share an address, not one op twice: the earlier drew on
+                   (or read) the retired one. */
+                int apart = (d && d->dedupFree > j) || (sd && sd->dedupFree > j);
+                if (!apart && (lc < j || lc > i)) s_ops[j].dup = 1;   /* no copy read the surface between, or one follows */
                 s_dupTab[slot] = i + 1;
                 break;
             }
@@ -3526,7 +3562,13 @@ static int __cdecl before_flip(void* entry_esp)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
-    if (!s_census) { publish(s ? s->base : 0); ops_window_reset(); chrome_emit(s); return hijack; }
+    /* `ops_window_reset` swap-removes retired entries, which can move `s`:
+       the chrome takes the surface by its base again */
+    if (!s_census) {
+        unsigned fb = s ? s->base : 0;
+        publish(fb); ops_window_reset(); chrome_emit(surf_by_base(fb));
+        return hijack;
+    }
     if (s) {
         int vl = 0, vt = 0, vr = -1, vb = -1, sub = 0;
         if (isGame) {
@@ -3679,7 +3721,8 @@ static int __cdecl before_flip(void* entry_esp)
                returns -1 on truncation rather than the length it wanted, so a
                bare `n += _snprintf(...)` makes `n` negative and
                `sizeof ar - (size_t)n` wrap to a size that writes BEFORE the
-               buffer. `ar` is sized past the worst case of sixteen kinds x
+               buffer. `ar` is sized past the worst case of the sixteen kinds
+               `op_add` counts (`OP_FREE` never goes through it) x
                (five-char name + space + ten digits + separator) = 272, and is
                terminated even when no kind had area and the loop never ran at
                all. `full` stops the TEXT while the totals keep accruing, so
@@ -3742,9 +3785,12 @@ static int __cdecl before_flip(void* entry_esp)
             glog(b);
         }
     }
-    publish(s ? s->base : 0);
-    ops_window_reset();
-    chrome_emit(s);
+    {
+        unsigned fb = s ? s->base : 0;
+        publish(fb);
+        ops_window_reset();                  /* can move `s`: see above */
+        chrome_emit(surf_by_base(fb));
+    }
     memset(s_kindCount, 0, sizeof s_kindCount);
     memset(s_kindArea, 0, sizeof s_kindArea);
     s_scaleSem = 0;
@@ -3755,9 +3801,9 @@ static int __cdecl before_flip(void* entry_esp)
 
 /* ---- the engine redraws, instead of us seeding its bytes ----------------
    A surface whose contents we did not watch arrive can only be published as
-   `PK_SEED` -- its raw bytes -- because nothing here knows how they got
-   there, and a reseed (a level boundary, an arena overflow) re-publishes
-   every one of them. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` is the engine's
+   a `PK_SEED` -- an empty twin, since its bytes do not cross -- because
+   nothing here knows how they got there, and a reseed (a level boundary, an
+   arena overflow) re-publishes every one of them. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` is the engine's
    own redraw of the top screen, and every draw it makes runs through the
    leaves, so the panel's chrome arrives as ops that the twin can hold in
    palette space -- OVER the seed, not instead of it: `publish` still seeds
@@ -4128,7 +4174,7 @@ static void repaint_service(void)
     s_repaintOps = (unsigned)(s_nops - n0);
     if (s_log) {
         /* SIZED FOR THE WORST CASE AND THE ACCUMULATOR CANNOT GO NEGATIVE.
-           `OP_NKIND - 1` kinds, sixteen, each at most "scale " (6) plus ten
+           the sixteen kinds `op_add` counts (`OP_FREE` never goes through it), each at most "scale " (6) plus ten
            digits plus a separator, is 272 — hence 288. And mingw's `_snprintf` returns −1 on
            truncation rather than the length it wanted, so `n += _snprintf(...)`
            would make `n` negative and `sizeof kinds - (size_t)n` wrap to a size

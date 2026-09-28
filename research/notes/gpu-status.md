@@ -12353,8 +12353,8 @@ than watching one.
 
 #### The gap
 
-A surface whose contents we did not watch arrive can only be published as **`PK_SEED`** — its raw
-bytes (since 2026-09-27 the seed carries none: the drain had long dropped them, §2.104) — because nothing here knows how they got there
+A surface whose contents we did not watch arrive can only be published as **`PK_SEED`** — an
+empty twin, since its bytes do not cross (§2.104) — because nothing here knows how they got there
 (`tagpu_gui_hook.c`'s `pub_seed`). That is not an edge case: `publish()` seeds *any* surface on
 first touch, and a **reseed** clears `seeded` on every surface at once. Four things ask for one —
 the consumer stalling over, a lost sprite, an arena overflow, and a level boundary — so seeds are

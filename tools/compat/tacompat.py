@@ -838,7 +838,7 @@ def hud_deselect(name, display, where: Path) -> dict:
     the ground deselects and a left click orders a move; under the right-click layout it is
     the other way round (MEASURED 2026-09-27: Escalation's instance deselects on the right
     click, retail's gives a move order). So the right click goes first, and when the engine's
-    strip has not changed, a left click on the same ground."""
+    strip has not changed, a left click on other ground."""
     where.mkdir(parents=True, exist_ok=True)
 
     def capture(step):
@@ -848,17 +848,22 @@ def hud_deselect(name, display, where: Path) -> dict:
         tacli("shot", name, "-o", str(pair[1]), timeout=30)
         return pair
 
-    tacli("keys", name, "ctrl+c", timeout=20)
-    time.sleep(3)
-    sel = capture("selected")
-    for click in (("--right",), ()):
-        tacli("click", *click, name, "700", "600", timeout=20)
+    # The left click aims elsewhere: under the right-click layout the right click was a move
+    # order to its own point, and the commander may be standing on it three seconds later.
+    try:
+        tacli("keys", name, "ctrl+c", timeout=20)
         time.sleep(3)
-        desel = capture("deselected")
-        opened = hud_strip_diff(sel[1], desel[1])
-        if opened is None or opened >= HUD_OPENED:
-            break
-    return {"opened": opened, "stale": hud_strip_diff(*desel), "where": str(where)}
+        sel = capture("selected")
+        for click in (["--right", name, "700", "600"], [name, "900", "400"]):
+            tacli("click", *click, timeout=20)
+            time.sleep(3)
+            desel = capture("deselected")
+            opened = hud_strip_diff(sel[1], desel[1])
+            if opened is None or opened >= HUD_OPENED:
+                break
+        return {"opened": opened, "stale": hud_strip_diff(*desel), "where": str(where)}
+    except subprocess.TimeoutExpired as e:
+        return {"opened": None, "stale": None, "where": f"{where}: timed out: {e.cmd[:2]}"}
 
 
 def hud_misses(hud: "dict | None", exp: dict) -> list:
