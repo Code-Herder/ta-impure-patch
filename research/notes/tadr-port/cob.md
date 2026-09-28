@@ -2,7 +2,10 @@
 
 ## Scope and state
 
-**Decisions accepted 2026-09-28; implementation and verification in progress.**
+**Checkpoint 2026-09-28: stopped at the owner's request; not landed.**
+The core implementation is committed and reviewed on `worktree-tadr_port_cob`.
+Full mod parity is not yet proven. The test runners were stopped; this checkpoint
+does not authorize restarting them or landing a smaller scope.
 The goal is correct gameplay for the versions of Escalation, Total Mayhem, TA Zero,
 Twilight and ProTA in [the compatibility suite](../compat/setups.md), with their
 own content and executables and no TADR code executing. Launching and fighting a
@@ -13,6 +16,112 @@ recorder's eight getters as the missing API. TADR is a behaviour guide; its sour
 is not adopted. The shipped 3.9.2.416 handler, historical source and each mod's
 actual scripts establish the contract. The much larger unreleased 4.0 API and the
 renumbered 2026 recorder are not the target.
+
+## Development and testing checkpoint
+
+The pre-checkpoint branch tip is `ac448bd`; the latest runtime change is
+`96929a8` (required placed campaign units). The worktree was clean when work stopped.
+Nothing from this branch has been landed on local `main` or pushed. Main has advanced
+independently and must be rechecked before a future landing.
+
+Implemented: all eight getters below; full-width unit-ID validation; 128-word
+stacks with eight thread records; guarded execution and argument transfers;
+model-backed piece bounds; whole-type quarantine with entry chat; required
+starting, saved and placed mission-unit refusal; native 32-word save import and
+versioned expanded-state round trips; native reload binding and rejected-script
+cleanup. ID `111` remains inactive. Eight records are the current capacity, not a
+claim that every mod's dynamic thread demand has been proved.
+
+Two independent read-only HIGH reviews found seven defects across the initial and
+follow-up passes. All seven were fixed and cleared. The later campaign-wrapper
+fix also received two HIGH follow-up reviews with no retained finding. Review
+records are attached as `landing-review:` git notes to `5ef6565`, `9f4050f`,
+`d5bbe84` and `96929a8`. A cleared review is not a substitute for the open live gates.
+
+### Completed versus interrupted verification
+
+These results belong to different DLL snapshots; they must not be combined into
+a claim that the latest binary passed the entire matrix.
+
+| Candidate / check | Recorded result |
+|---|---|
+| `35693a8e…`, completed Wine run plus targeted rerun | All 19 expected setup outcomes and all 15 two-peer smoke matches covered **across two runs**. The full run had one Xvfb readiness failure; the corrected `retail+tadr1` rerun had zero unexpected results. Predates the campaign fix. |
+| `861ccf38…`, campaign fix | Malformed required ARMFAV refused with unit/script/reason; intact control reached play with all three Jeffys at slots 1, 2 and 13. |
+| `861ccf38…`, final Wine regression | All 19 startup/battle outcomes observed as expected (including the known gammata inactive gap); 9/15 multiplayer matches completed. Stopped before the remaining six and before a final aggregate report. **Incomplete, not a passing full suite.** |
+| `861ccf38…`, Windows startup/in-game smoke | 4/19 setup verdicts completed: three in-game smoke passes and one intended fail-closed refusal. The fifth setup was interrupted during remote copy. **15 setup verdicts remain incomplete; no full Windows result.** |
+| Offline/build checks before stop | 39 COB tests, 2 GUI-reset tests, 3 compatibility-display tests, 329 tacli tests and 40 compatibility self-tests passed; parallel DLL build passed. Wiki build at `ac448bd` produced 85 pages plus index. These were not rerun merely to save this checkpoint. |
+
+Full SHA-256 identities:
+
+- Prior completed composite Wine coverage:
+  `35693a8e85b908dd35b2d9f04449d1d918bb0a3866962d376beb775b5900526f`.
+- Campaign fix and both interrupted final sessions:
+  `861ccf38eaccf9ceddc9207762d0f92779b85385cd50a4a5dfeafd08b0d1481b`.
+
+The nine completed final Wine multiplayer cases were `retail`, `retail+tadr1`,
+`retail+tadr-recorder-ota`, `retail+tadr-files`, `loader+tadr-ota`,
+`loader+tadr-tazero`, `prota-4.8`, `mayhem-11.3.0` and `loader+tadr-mayhem`.
+The unfinished cases were `392+tadr-dev`, `392+tadr-2026.8.6`, `escalation`,
+`escalation+tadr-dev`, `tazero-alpha5` and `twilight-2.0b98`.
+The runner printed `KeyboardInterrupt` as an unexpected result for `392+tadr-dev`
+after the stop request. That is operator cancellation, not a demonstrated DLL defect.
+
+Windows completed `retail`, `retail+tadr1` and `retail+tadr-recorder-ota` with
+startup and in-game smoke passes. `retail+tadr1-recorder` correctly refused to
+activate; it did not perform an in-game smoke. `retail+tadr-files` did not finish.
+Windows multiplayer remains deferred. Defender's real-time, antivirus, service
+and behavior-monitor statuses were enabled at session start; no detection events
+were found in the checked 20-minute window after stopping. This was an event-log
+check, not a complete threat-history audit.
+
+Both runners and their owned Wine sessions were stopped. The final Windows check
+found zero `TotalA` processes. Some scratch evidence and isolated test folders
+remain; no claim is made that every folder was removed. Neither interrupted run
+produced a final aggregate summary.
+
+### Evidence locations and resumption
+
+Completed compatibility reports are under the suite's configured
+`$TACOMPAT_CACHE/results/20260928-171014-wine` and
+`$TACOMPAT_CACHE/results/20260928-172326-wine`. The former includes the failed
+display launch; the latter is its corrected targeted rerun. Preserve both.
+Other probe output is local scratch evidence, not tracked game assets. Here
+`$COB_EVIDENCE_ROOT` denotes the local parent of the retained probe directories:
+`cob-required-campaign-fixed`, `cob-required-campaign-control`,
+`cob-review-safety`, `cob-review-expanded-roundtrip`, `cob-review-unused-save`,
+`cob-review-reload-ack`, `cob-review-native-rejection-cleanup` and
+`cob-effective-corpus-model-binding`. Locate and preserve these before cleaning
+scratch storage; the reproducible drivers live in `tools/cob_*_probe.py`.
+
+Remaining work, without treating smoke coverage as feature parity:
+
+1. Finish the selected candidate's Wine and Windows regression and retain final
+   reports and binary hashes. A fresh Windows session needs permission and an
+   exclusive-use check; the interrupted session's partial observations are not
+   completion. Do not use a later metadata-only rebuild's hash for the earlier tests.
+2. Exercise the highest global live ID (15000 at the raised limit), and dead/reused
+   slot transitions. Live ID 6000 in a 15001-slot pool is already covered, but is
+   not the highest global-ID case.
+3. Measure dynamic thread occupancy across the effective supported corpus. Safe
+   START/CALL exhaustion behavior is tested; sufficiency of eight records remains open.
+4. Complete real feature cases for upgrades, shields, adjacency, gates, transports,
+   constructors/factories and orientation wherever used, with ProTA/retail controls.
+   One real Escalation fusion upgrade and its mid-upgrade save already pass.
+5. Exercise multiplayer alliance/completion transitions, local-AI ownership,
+   attach/drop/destruction and consistent owner actions. Both-peer getter assertions
+   across all five mods do not establish all of those dynamic behaviors.
+6. Obtain and test valid shipped TADR/mod save fixtures. The implemented native
+   32-word and new expanded formats do not prove compatibility with TADR's
+   conditional 64-record serialization; further implementation may be needed.
+7. Resolve the unanswered landing-scope question: finish the entire agreed matrix
+   before landing, or explicitly split out a verified core landing with parity
+   follow-ups left open. No choice was made before work stopped. Then reconcile
+   advanced main and run the applicable landing gates. Publishing is separate.
+
+The sections below retain the measurements and development history. Statements
+about an earlier implementation slice are historical, not the current feature state.
+
+## Getter contract
 
 | ID | Getter | Intended result |
 |---|---|---|
@@ -112,8 +221,8 @@ These are evidence to investigate, not fixes already implemented here.
 | Multiplayer | two Wine peers for every listed mod, host-owned and joiner-owned units, local-AI ownership, alliance/completion changes, attach/drop and destruction; no duplicate owner actions | all five mods pass self/remote getter ownership; local-AI getters pass in single player; dynamic feature cases remain |
 | Rejection | identical unavailable types across peers, unit/script/reason chat at entry, mismatch handling, and refusal for required/pre-existing units | matching and host-only/joiner-only malformed content consistently excluded; warning captured on screen; required starting/saved commander refusals and placed campaign-unit refusal pass |
 | Save/load | valid old saves and new saves with expanded state, including an upgrade in progress; malformed state refused safely | native 32-word save, expanded records and real upgrade round trips pass; malformed records covered offline, shipped TADR save fixtures remain |
-| Windows | startup and in-game smoke checks across setups; full Windows multiplayer is deferred | pending |
-| Landing | parallel build, documentation and rendered wiki, dedicated high review, fixes and reruns; local landing only | pending |
+| Windows | startup and in-game smoke checks across setups; full Windows multiplayer is deferred | stopped: 4/19 verdicts completed (three smoke passes, one expected refusal), 15 incomplete; see checkpoint |
+| Landing | parallel build, documentation and rendered wiki, dedicated high review, fixes and reruns; local landing only | build/docs/reviews completed; final platform regression and broader gates incomplete; scope decision unresolved; not landed |
 
 Use the real mod content for feature parity and isolated generated scripts for
 complete API and invalid-input coverage. Test overlays must not alter the player's
@@ -454,7 +563,8 @@ The first post-merge compatibility run passed all five mods' battles/network gam
 failed to start retail's multiplayer display: a filesystem vacancy check had not reserved
 that number against another runner. All suite launch paths now let Xvfb reserve the number
 atomically through its readiness pipe. This fixes ownership, not timing; no other runner's
-server or lock is adopted or removed. The corrected full suite is being rerun.
+server or lock is adopted or removed. Subsequent runs and their separate readiness
+failure are recorded below.
 
 The follow-up review of `9f4050f` cleared those five fixes and found two related lifecycle
 omissions: native `+reload` has a separate publication seam, and post-relocation rejection
@@ -473,8 +583,9 @@ The second full Wine run on `08c43e68…` passed all startup/battle cases and 14
 but loader/TA Zero could not start its Xvfb process. This remained a test-infrastructure
 failure, not a passing multiplayer result. Launcher failures now retain stderr, exit status
 and readiness bytes; a separate concurrent twelve-server reservation check passed. A third
-full run on `35693a8e…` uses three simultaneous network games rather than six, and must be
-judged by its actual outcomes. No timing-dependent runtime mitigation was introduced.
+full run on `35693a8e…` used three simultaneous network games rather than six; its
+outcome and targeted rerun are recorded below. No timing-dependent runtime mitigation
+was introduced.
 That run's retained readiness bytes established the actual second failure: Xvfb wrote
 the number and newline separately (`b'8'` was the first read). A pipe read is not a message
 boundary. The reader now accumulates through the newline within a 32-byte bound and the
@@ -503,5 +614,7 @@ neither retained a finding.
 The `35693a8e…` full Wine run plus the corrected `retail+tadr1` rerun covers all 19
 expected setup outcomes and all 15 two-peer smoke matches. The rerun completed with zero
 unexpected results. The campaign-only integration fix changes the DLL to `861ccf38…`;
-a full Wine regression and approved Windows startup/in-game smoke session are running on
-that exact DLL. No Windows result is claimed until those observations complete.
+a full Wine regression and approved Windows startup/in-game smoke session started on
+that exact DLL, then stopped at the owner's request. Wine completed 9/15 network matches;
+Windows completed 4/19 setup verdicts. Neither produced a final aggregate report.
+The checkpoint at the top of this page records the exact partial coverage and open work.
