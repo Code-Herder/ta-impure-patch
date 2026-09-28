@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=5456bfe..ddf7ad9 findings=2 acted=2 rejected=0 date=2026-09-28 -- no code defect; the dotted-name citation pointed into the campaign branch, the German run recorded as a result (1a54552)
