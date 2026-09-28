@@ -1,0 +1,14 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 (engine reads/limits; harness/merge) + 1 re-review range=main..1ab36d8 findings=12 acted=11 rejected=0 date=2026-09-28
+- the commander walk read begin/end during a level load (CONFIRMED, HIGH) -> 41f539d, runs only under the level latch, to the slot count u16 +0x14351
+- the walk skipped the last slot, end being inclusive (CONFIRMED) -> 41f539d, same fix
+- the walk's cap truncated it in the stock-limits build (CONFIRMED) -> 41f539d, same fix
+- gpu-status row overclaimed the walk's bound (CONFIRMED) -> 2137060
+- suite: a seat given no units passed the skirmish check (CONFIRMED) -> 41f539d, seats from the player records
+- setups.md claimed TA Zero's network commander check had run (CONFIRMED) -> 2137060, re-measured 20260928-012232 3/3 incl. TA Zero network
+- suite: unclear messages for a dead tacli / an old DLL (CONFIRMED) -> 41f539d
+- setups.md summary counts stale beside the new setups (CONFIRMED) -> 2137060
+- selftest had no pattern or commander cases (CONFIRMED) -> 41f539d, 11 cases
+- re-review: 0x48664B cited as testing 3 as well (CONFIRMED) -> 1ab36d8
+- re-review: controller 4 (remote AI) not counted as a seat (CONFIRMED) -> 1ab36d8
+- re-review: a foreign-thread teardown leaves the latch set (PLAUSIBLE, never observed) -> documented in code and gpu-status, not changed: the latch is the publisher's, and tdforeign= counts the case every run
+- verified correct: the commander bit 0x42CB7D/0x42CBAB, owner +0xFF byte, type +0xA6, the ceiling pair's lim_file_ok (Impure's value written before any read, nothing sized from the file), lim_mod_change, the merge c8e5123 (both sides kept), IN_GAME_PANEL and TADR_START_LINE against every gui/log
