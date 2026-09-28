@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The compat suite's two-player stage (tools/compat/tacompat.py): the joining peer's half, applied on that peer, where owner 0 is the local player. Thirty units meet the hosting peer's (scenarios/compat-mp-host.json) in the middle of Two Continents, so both peers send each other creates, moves and hits within the stage's thirty seconds. Stock types: a mod that replaces them (TA Zero) names its own halves in the setup's `scenarios`. The commanders stay (clear_existing false).",
+ "description": "The compat suite's two-player stage (tools/compat/tacompat.py, setup tazero-alpha5): the joining peer's half, applied on that peer, where owner 0 is the local player. Thirty units meet the hosting peer's (scenarios/compat-mp-host-tazero.json) in the middle of Two Continents, so both peers send each other creates, moves and hits within the stage's thirty seconds. TA Zero's own types (Grunts), which replace every stock one; the setup names this file in its `scenarios`. The commanders stay (clear_existing false).",
  "seed": 20260927,
  "on_error": "abort",
  "setup": {
@@ -28,7 +28,7 @@
    },
    "composition": [
     {
-     "type": "CORAK",
+     "type": "CORET1ASKBOT",
      "count": 30
     }
    ],

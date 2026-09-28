@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "tagpu_cat.h"
 #include "tagpu_log.h"
+#include "tagpu_limits.h"
 
 #define UNITS_TRIGGER "tagpu_units.trigger"
 #define UNITS_OUT     "tagpu_units.json"
@@ -24,6 +25,9 @@
 #define UD_SIDE      0xA0         /* char Side[8]           "ARM"          */
 #define UD_FOOTX     0x14A        /* short, in map squares                 */
 #define UD_FOOTY     0x14C
+#define UD_BITS2     0x245        /* u32 of FBI boolean bits                  */
+#define UD_COMMANDER 0x40000u     /* `commander`: 0x42CB7D reads it, shl 0x12, 0x42CBAB stores
+                                     it (DISASSEMBLED 2026-09-28)                  */
 
 #define OFF_FCOUNT   0x14253      /* int NumFeatureDefs            */
 #define OFF_FDEFS    0x1426F      /* FeatureDefStruct*             */
@@ -43,6 +47,9 @@
 #define U_TYPE       0x92         /* UnitDefStruct*                */
 #define U_TYPEIDX    0xA6         /* short, index into UnitDef[]   */
 #define U_STATE      0x110        /* alive bit 0x10000000          */
+#define U_OWNER      0xFF         /* u8 player index               */
+/* the unit array's slots at the design point: 10 players x the per-player ceiling + 1 */
+#define CAT_MAX_SLOTS (10u * TAGPU_LIM_UNITS + 1u)
 
 /* Stock TA declares 512 unit types and a few hundred features; TADR-class mods
    raise the ceiling to 16000. Emit generously but never unboundedly — a garbage
@@ -189,6 +196,58 @@ static const char* verify_stride(const char* ta, const char* defs)
     return "no units to check against";
 }
 
+/* Every living commander, as the engine holds it -- not as Impure draws it: the frame packet
+   leaves out what the fog hides, and the other player's commander starts under it. Answers
+   "did the game give every player a commander" for the compat suite.
+   THE BOUNDS, each on a value read from engine memory: the walk stops at the design point's
+   slot count whatever the array's end pointer says (every writer of the per-player limit is
+   held to TAGPU_LIM_UNITS, so the array holds at most 10 x that + 1); a unit's type is its
+   index (+0xA6) checked against the count the table walk above used, never its +0x92
+   pointer; the owner (+0xFF) is reported only below 10. Game thread, like the level
+   teardown, so the array cannot be freed under the walk (tagpu_reclaim.c). */
+static void write_commanders(FILE* out, const char* ta, const char* defs, unsigned count)
+{
+    const char* begin_u = *(const char* const*)(ta + OFF_BEGIN);
+    const char* end_u   = *(const char* const*)(ta + OFF_END);
+    const char* u;
+    unsigned slots = 0, found = 0, owners = 0, k;
+
+    fprintf(out, ",\"commanders\":[");
+    if (defs && readable(begin_u, UNIT_STRIDE) && end_u > begin_u)
+    {
+        for (u = begin_u; u + UNIT_STRIDE <= end_u && slots < CAT_MAX_SLOTS;
+             u += UNIT_STRIDE, slots++)
+        {
+            const char* rec;
+            int idx;
+            unsigned owner;
+
+            if (!readable(u, UNIT_STRIDE) || !(*(const unsigned*)(u + U_STATE) & 0x10000000u))
+                continue;
+            owner = *(const unsigned char*)(u + U_OWNER);
+            if (owner >= 10)
+                continue;
+            owners |= 1u << owner;
+            idx = *(const short*)(u + U_TYPEIDX);
+            if (idx < 0 || (unsigned)idx >= count)
+                continue;
+            rec = defs + (size_t)idx * UD_STRIDE;
+            if (!readable(rec, UD_STRIDE) || !(*(const unsigned*)(rec + UD_BITS2) & UD_COMMANDER))
+                continue;
+            fprintf(out, "%s{\"owner\":%u", found ? "," : "", owner);
+            jfield_str(out, "type", rec + UD_NAME, 0x20);
+            fprintf(out, "}");
+            found++;
+        }
+    }
+    /* every owner with a living unit of any type: at a game's start, the players */
+    fprintf(out, "],\"unit_owners\":[");
+    for (k = 0, found = 0; k < 10; k++)
+        if (owners & (1u << k))
+            fprintf(out, "%s%u", found++ ? "," : "", k);
+    fprintf(out, "]");
+}
+
 static void write_units(const TAGPU_FRAME* f)
 {
     char* ta = *(char**)TA_MAINPP;
@@ -239,6 +298,7 @@ static void write_units(const TAGPU_FRAME* f)
     }
 
     fprintf(out, "],\"count\":%u", emitted);
+    write_commanders(out, ta, defs, count);
     finish(out, UNITS_TMP, UNITS_OUT);
 }
 

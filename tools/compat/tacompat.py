@@ -139,11 +139,17 @@ TADR_ONLY_STARTED = re.compile(r"(?:.*: )?tdraw started \(tdrawlog\.txt\)$")
 # ...and what that file may say for it to count as "only started": the one line TADR writes
 # before it loads Impure. Read from the FILE, not from the summary above it -- a build whose
 # DllMain ran on and logged something else produces the same summary string.
-TADR_START_LINE = re.compile(r"^\s*\d+\s+---\s+Process Attached\.\s+config=\S+\s*$")
+TADR_START_LINE = re.compile(r"^\s*\d+\s+---\s+Process Attached(?:\.\s+config=\S+)?\s*$")
 RECORDER_LOG = re.compile(r"Demo Recorder Log", re.I)
 RECORDER_CALLED = re.compile(r"^\s*DLL\.DirectPlay", re.M)
 # The two-player stage: small halves applied one per peer, each as that peer's own units.
 MP_SCENARIOS = ("compat-mp-host", "compat-mp-join")
+# The battle and the two halves place stock unit types. A mod that replaces the factions (TA
+# Zero has no ARMPW) names its own in the setup's `scenarios`, the same three roles.
+DEFAULT_SCENARIOS = {"battle": "200v200", "host": MP_SCENARIOS[0], "join": MP_SCENARIOS[1]}
+# Each side's in-game panel is <side>MAIN.GUI, and a mod may add sides: TA Zero's third is GOK.
+# MAINMENU starts with MAIN, so the front end never matches.
+IN_GAME_PANEL = re.compile(r"\b[A-Z]+MAIN\d*\b")
 # DirectPlay's name server binds its port for the whole machine, so every network game of a
 # run gets a port of its own from these, patched into both peers' prefixes (tools/dpport.py).
 MP_PORT_BASE = dpport.STOCK + 1
@@ -751,6 +757,37 @@ def new_boxes(display, seen, boxes, t0):
             boxes.append({"title": title, "size": f"{w}x{h}", "t": round(time.time() - t0, 1)})
 
 
+def commanders(name, players=2, wait=40) -> dict:
+    """EVERY PLAYER GOT A COMMANDER: the living units whose type has `commander` set, as the
+    engine holds them (`tacli units`, the catalogue's `commanders`: unit array and UnitDef bit,
+    tagpu_cat.c) -- not the roster, which is what Impure draws and leaves out what the fog
+    hides, where the other player's commander starts. Taken before any scenario, when a
+    player's units are its start units, so every owner with a living unit (`unit_owners`) must
+    hold a commander, and there must be at least `players` of them. Polled for `wait` s, since
+    a game's first units appear a moment after its screen."""
+    end = time.time() + wait
+    while True:
+        r = tacli("units", name, "--json", "--limit", "0", timeout=90)
+        try:
+            snap = json.loads(r.stdout)
+            got, units = snap["commanders"], set(snap["unit_owners"])
+        except (ValueError, KeyError, TypeError):
+            return {"ok": False, "why": f"no commander list from tacli units: "
+                                        f"{(r.stderr or r.stdout).strip()[:160]}", "commanders": []}
+        owners = {c["owner"] for c in got}
+        ok = len(units) >= players and units <= owners
+        if ok or time.time() >= end:
+            break
+        time.sleep(3)
+    shown = ", ".join(f"{c['type']} own={c['owner']}" for c in got) or "none"
+    if ok:
+        return {"ok": True, "commanders": got, "why": f"commanders: {shown}"}
+    lacking = sorted(units - owners)
+    why = (f"owners {lacking} have units and no commander" if lacking
+           else f"{len(units)} player(s) with units, {players} expected")
+    return {"ok": False, "commanders": got, "why": f"commanders: {shown} -- {why}"}
+
+
 def mod_content(setup, inst) -> "dict | None":
     """WHETHER THE MOD ITSELF IS RUNNING, not only Impure beside it: the unit types the setup
     names -- ones only that mod defines -- looked up in the engine's own table of loaded unit
@@ -780,7 +817,12 @@ def alive_seen(gamedir: Path) -> "int | None":
     return int(found[-1]) if found else None
 
 
-def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
+def scenarios(setup) -> dict:
+    """The scenarios this setup's battle and network game apply, by role."""
+    return {**DEFAULT_SCENARIOS, **setup.get("scenarios", {})}
+
+
+def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario) -> dict:
     """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
     patchers that both started can still collide in play, where the limits are used.
     The menus are driven by tacli's gadget layer and the units placed by its scenario
@@ -794,8 +836,8 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
     # setups, whose battle stage no run had ever reached before the takeover let them start).
     in_game = False
     for gadget in ("SINGLE", "Skirmish", "Start"):
-        if in_game or re.search(r"ARMMAIN|CORMAIN",
-                                (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]):
+        if in_game or IN_GAME_PANEL.search(
+                (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]):
             break
         end, last = time.time() + 45, ""
         while True:
@@ -806,7 +848,7 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
             # The click landed on the game screen: this mod's front end needed fewer of them
             # than stock's (Escalation's Skirmish goes straight into a game, so there is no
             # Start to press), and the walk is done.
-            if re.search(r"on (ARM|COR)MAIN", last):
+            if re.search(r"on " + IN_GAME_PANEL.pattern, last):
                 in_game = True
                 break
             if time.time() >= end or not re.search(r"no active gui|is not on|no gadget", last):
@@ -818,11 +860,15 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
         if proc.poll() is not None:
             return {"ok": False, "why": "the game exited while loading the skirmish"}
         first = (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]
-        if re.search(r"ARMMAIN|CORMAIN", first):
+        if IN_GAME_PANEL.search(first):
             break
     else:
         return {"ok": False, "why": "the skirmish never reached the game screen"}
-    r = tacli("scenario", "apply", name, "200v200", timeout=180)
+    # Before the scenario: it clears the map (clear_existing), commanders and all.
+    cmd = commanders(name)
+    if not cmd["ok"]:
+        return {"ok": False, "why": "the skirmish started without a commander each: " + cmd["why"]}
+    r = tacli("scenario", "apply", name, scenario, timeout=180)
     if r.returncode != 0:
         return {"ok": False, "why": f"scenario apply: {(r.stderr or r.stdout).strip()[:200]}"}
     applied = (r.stdout.splitlines() or [""])[0]
@@ -847,7 +893,7 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds) -> dict:
             return {"ok": False, "why": f"the game exited during the battle ({applied})"}
         if boxes or (gamedir / "ErrorLog.txt").exists():
             return {"ok": False, "why": f"a box or a crash report during the battle ({applied})"}
-    return {"ok": True, "why": applied}
+    return {"ok": True, "why": f"{cmd['why']}; {applied}"}
 
 
 # ------------------------------------------------------- the running game's own code
@@ -1293,7 +1339,8 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         content = mod_content(setup, inst) if menu and proc.poll() is None else None
         fight = None
         if battle and menu and not boxes and proc.poll() is None:
-            fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle)
+            fight = wine_battle(inst, proc, display, gamedir, seen, boxes, t0, battle,
+                                scenarios(setup)["battle"])
         # The last moment the game is alive: its own code, read from outside (exe_hooks).
         # A game that refused or crashed leaves no process to read, and no claim either.
         hooks = exe_hooks(proc.pid, gamedir) if proc.poll() is None else None
@@ -1504,12 +1551,20 @@ def wine_lobby(host, join, port):
     try:
         lobby_ui(host, "click", "START", timeout=30)
     except Lobby as e:
-        if not re.search(r"no active gui|ARMMAIN|CORMAIN", str(e)):
+        if not re.search(r"no active gui", str(e)) and not IN_GAME_PANEL.search(str(e)):
             raise
     for inst in (host, join):
         r = tacli("wait", inst, "alive=[1-9]", "--timeout", "150", timeout=200)
         if r.returncode != 0:
             raise Lobby(f"{inst}: the game never came alive: {(r.stderr or r.stdout).strip()[:200]}")
+    # Each peer must hold BOTH commanders: its own, and the other's as the network sent it.
+    seen = {}
+    for inst in (host, join):
+        cmd = commanders(inst)
+        if not cmd["ok"]:
+            raise Lobby(f"{inst}: the game started without both commanders: {cmd['why']}")
+        seen[inst] = cmd["why"]
+    return seen
 
 
 CREATES = threading.Lock()       # `tacli create` writes the hive every prefix shares: prepare_wine
@@ -1546,7 +1601,8 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
         if held:
             return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
                     "evidence": [], "port": port}
-        out = play_mp(setup["_inst"], join, seconds, host_display, join_display, port)
+        out = play_mp(setup["_inst"], join, seconds, host_display, join_display, port,
+                      scenarios(setup))
         out["port"] = port
         return out
     except SystemExit as e:                     # dpport refused the files: say so, as a result
@@ -1555,13 +1611,13 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
         ports.put(port)
 
 
-def play_mp(host, join, seconds, host_display, join_display, port) -> dict:
+def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dict:
     """The game itself: both peers started, walked into one game, fought, watched, read."""
     peers = {"host": host, "join": join}
     t0 = time.time()
     games = {}
     boxes, seen, why = [], set(), None
-    shots, hooks = {}, {}
+    shots, hooks, cmd_seen = {}, {}, {}
     try:
         try:
             games["host"] = start_wine(peers["host"], host_display)
@@ -1581,8 +1637,8 @@ def play_mp(host, join, seconds, host_display, join_display, port) -> dict:
                 raise Lobby(f"a box before the menu: {boxes[0]['title']}")
             if len(menus) < 2:
                 raise Lobby(f"the main menu never came up on {', '.join(sorted(set(games) - menus))}")
-            wine_lobby(peers["host"]["name"], peers["join"]["name"], port)
-            for role, scen in zip(("host", "join"), MP_SCENARIOS):
+            cmd_seen = wine_lobby(peers["host"]["name"], peers["join"]["name"], port)
+            for role, scen in ((r, scens[r]) for r in ("host", "join")):
                 r = tacli("scenario", "apply", peers[role]["name"], scen, timeout=180)
                 if r.returncode != 0:
                     raise Lobby(f"{role}: scenario apply {scen}: {(r.stderr or r.stdout).strip()[:200]}")
@@ -1634,7 +1690,8 @@ def play_mp(host, join, seconds, host_display, join_display, port) -> dict:
         if not why and not out[role]["packet_pub"]:
             why = f"Impure drew nothing on the {role}'s game"
     out["ok"] = why is None
-    out["why"] = why or f"two players, {MP_SCENARIOS[0]} and {MP_SCENARIOS[1]} applied, {seconds} s"
+    out["why"] = why or (f"two players, {scens['host']} and {scens['join']} applied, {seconds} s; "
+                         + "; ".join(f"{k}: {v}" for k, v in cmd_seen.items()))
     out["seconds"] = round(time.time() - t0, 1)
     return out
 

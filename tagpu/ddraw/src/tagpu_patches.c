@@ -10125,6 +10125,14 @@ static void lim_sites(void)
     lim_dword(0x00491640, 250, TAGPU_LIM_UNITS, "unit limit default");
     lim_dword(0x00491659, 500, TAGPU_LIM_UNITS, "unit limit ceiling test");
     lim_dword(0x00491666, 500, TAGPU_LIM_UNITS, "unit limit ceiling");
+    /* The ceiling pair stands alone: Impure's own value goes in over whatever the exe file
+       holds, before any code reads it, and every bound above rests on TAGPU_LIM_UNITS, not on
+       the file. A mod's number here is the one its own runtime replaces: TA Zero Alpha 5's exe
+       holds 5000 at both (DISASSEMBLED), and TADR writes all three sites from its ini's
+       UnitLimit at every launch (LimitCrack.cpp), which TA Zero ships as 1500 in TAZero.ini
+       and in its 2025 build's tazero.ini.tdraw, the latter's range 20..1500. */
+    lim_file_ok(0x00491659);
+    lim_file_ok(0x00491666);
     {
         /* the two `maxunits` keys stock stores unclamped: a saved game's [Summary]
            (0x432610, which writes the per-player limit) and the map's own .ota
@@ -10168,9 +10176,10 @@ static void lim_sites(void)
        the per-tick 0x40EB70, which shares it among the players; nothing is sized or indexed
        by it, so the raise costs time, not memory. */
     lim_dword(0x0040EAD6, 1333, TAGPU_LIM_PATH, "pathfinding budget");
-    /* Nothing is sized or indexed by it and no stub reads it, so a mod's own value stands:
-       the 3.9.02 exe sets 66650, which is what Impure writes anyway, and Escalation's sets
-       1114, below stock, deliberately. */
+    /* Nothing is sized or indexed by it and no stub reads it, so a mod's number in its exe
+       file is replaced like stock's: the 3.9.02 exe holds 66650, which is what Impure writes
+       anyway, and Escalation's holds 1114, which its TADR replaces with TAESC.ini's
+       AISearchMapEntries=66650 at every launch (compat/takeover.md, part 2). */
     lim_file_ok(0x0040EAD6);
 
     /* ---- particles: two ceilings. Every emitter (0x470F00..0x472F00) takes its layer's
@@ -10565,6 +10574,13 @@ static void lim_hex(char* out, const unsigned char* b, int n, int max)
     if (n > max) strcat(out, " ...");
 }
 
+/* 1 when a differing site was refused as the mod's own change: memory holds what the file
+   holds, and the file is not stock 3.1 */
+static int lim_mod_change(const LIMSITE* s)
+{
+    return !s->unreadable && !memcmp(s->have, s->file, s->n) && memcmp(s->file, s->stock, s->n);
+}
+
 /* THE SAFETY NET (research/notes/compat/takeover.md, part 3): every site of the table re-read
    at the first DirectDraw call, which comes after every DLL's DllMain -- the exe's entry point
    runs after all of them, and its WinMain makes the call. A site that no longer holds our
@@ -10715,6 +10731,14 @@ void tagpu_limits_report(void)
                   s->va, s->name, want, have);
         line[sizeof line - 1] = 0;
         strncat(text, line, sizeof text - strlen(text) - 1);
+        /* the mod's own change: memory matches the file, so want and have read the same, and
+           the difference that refused is the file's from stock 3.1 */
+        if (!s_limRewritten && lim_mod_change(s)) {
+            lim_hex(want, s->stock, s->n, 16);
+            _snprintf(line, sizeof line, "  stock %s (the exe file differs from 3.1 here)\r\n", want);
+            line[sizeof line - 1] = 0;
+            strncat(text, line, sizeof text - strlen(text) - 1);
+        }
     }
 
     /* every differing site goes to the log, not only the twelve the box has room for */
@@ -10725,6 +10749,10 @@ void tagpu_limits_report(void)
         lim_hex(want, s_limRewritten ? s->want : s->file, s->n, LIM_MAXB);
         if (s->unreadable) strcpy(have, "(unreadable)"); else lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
+        if (!s_limRewritten && lim_mod_change(s)) {
+            lim_hex(want, s->stock, s->n, LIM_MAXB);
+            tagpu_logf("limits:     stock %s: the exe file differs from 3.1 here", want);
+        }
     }
     tagpu_refuse(text);
 }

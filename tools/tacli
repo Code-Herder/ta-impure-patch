@@ -3701,9 +3701,16 @@ def _cat_report(args, inst: Instance, kind: str, key: str, snap: dict, rows):
            "declared": snap.get("declared"), "note": note,
            "stride_check": snap.get("stride_check"),
            "cache": str(_cat_path(inst))}
+    if "commanders" in snap:
+        # every living unit whose type has `commander` set, fog or not: {owner, type}; and
+        # every owner with a living unit at all
+        res["commanders"] = snap["commanders"]
+        res["unit_owners"] = snap.get("unit_owners", [])
     if args.json:
         out(res, True)
         return
+    if res.get("commanders"):
+        print("commanders: " + ", ".join(f"{c['type']} own={c['owner']}" for c in res["commanders"]))
     if not rows:
         print(f"no {kind} yet{': ' + note if note else ''} — "
               f"the tables fill when a game loads")

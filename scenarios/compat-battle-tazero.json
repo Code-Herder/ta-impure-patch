@@ -1,0 +1,113 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The compat suite's battle for TA Zero (tools/compat/tacompat.py, setup tazero-alpha5): scenarios/200v200.json with TA Zero's own types, which replace every stock one -- 150 Marines and 50 Scorpions against 200 Grunts on the Two Continents plateau, the ARM commander held behind them",
+  "seed": 20260901,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "arm_wave",
+      "owner": 0,
+      "at": [
+        2200,
+        1200
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 20,
+        "spacing": 40,
+        "jitter": 6
+      },
+      "composition": [
+        {
+          "type": "ARMT1INFKBOT",
+          "count": 150
+        },
+        {
+          "type": "ARMT1ASTANK",
+          "count": 50
+        }
+      ],
+      "facing": 90,
+      "orders": [
+        {
+          "cmd": "attack",
+          "to": [
+            3800,
+            1200
+          ]
+        }
+      ]
+    },
+    {
+      "id": "core_wave",
+      "owner": 1,
+      "at": [
+        3800,
+        1200
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 20,
+        "spacing": 40,
+        "jitter": 6
+      },
+      "composition": [
+        {
+          "type": "CORET1ASKBOT",
+          "count": 200
+        }
+      ],
+      "facing": 270,
+      "orders": [
+        {
+          "cmd": "attack",
+          "to": [
+            2200,
+            1200
+          ]
+        }
+      ]
+    }
+  ],
+  "units": [
+    {
+      "id": "hero",
+      "type": "ARMCOMMANDER",
+      "owner": 0,
+      "pos": [
+        2000,
+        1200
+      ],
+      "facing": 90,
+      "health": 60,
+      "stance": "hold"
+    }
+  ],
+  "camera": {
+    "center_on": "hero"
+  }
+}

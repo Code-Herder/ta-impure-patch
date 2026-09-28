@@ -221,6 +221,176 @@
         "wgmus.ini": "14fcf8f9b3281eff1fa226efb644d634",
         "win32.dll": "db359e64607c86a7de2048e83a46f89c"
       }
+    },
+    "tademoz": {
+      "about": "TA Forever's TA Zero drop-in: the recorder's demo unit archive, TADEMOZ.ufo (the first package of TAF's tazero install)",
+      "url": "https://content.taforever.com/featured_mod_dropins/TADEMOZ.zip",
+      "archive": "TADEMOZ.zip",
+      "md5": "fa48509b9959f0dd781a26396904c74c",
+      "files": {
+        "TADEMOZ.ufo": "4bd28e2c51b7698575e3c1bb58792ab0"
+      }
+    },
+    "tazero-base": {
+      "about": "TA Zero Base (2019-12-14): a ready TA Zero folder -- the exe's Zero-named DLLs zdraw.dll (TADR), zmusi.dll and zplayx.dll (the recorder), audiere.dll, TA_Features_2013.ccx, the ZIcon set. Its tamus/ music is left out: 80 MB the exe only plays",
+      "url": "https://sjc1.vultrobjects.com/mods/tazero/TA_Zero_Base.zip",
+      "archive": "TA_Zero_Base.zip",
+      "md5": "016fdf4921b04ac7059b2fd76ff24c12",
+      "strip": "TA Zero/",
+      "files": {
+        "audiere.dll": "14fdbcf78f39553202d382d9082dc9cb",
+        "online.dll": "769b8a84c7485913d4cea738f50e7064",
+        "TA_Features_2013.ccx": "f5ba87350ac60cd0b4e31476a55a0e55",
+        "zdraw.dll": "a5555ca671aedc042376c4db91181b4b",
+        "ZIcon/AIRCONS.PCX": "4f449669130832446c2ea39499292da9",
+        "ZIcon/AIRCRAFTCOMBAT.PCX": "4f449669130832446c2ea39499292da9",
+        "ZIcon/ARM.pcx": "296a463f7532d584fcfbac85460cb234",
+        "ZIcon/BUILDING.PCX": "dbe074b61817dbdc54232a2f3dc9670d",
+        "ZIcon/CONS.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "ZIcon/CORE.pcx": "8c803553e7a311c177246006e294b9bc",
+        "ZIcon/FACTORY.PCX": "a9cdfaffb78c8952b26f5c0234481433",
+        "ZIcon/GOK.pcx": "b3ab7742aed8ab18150e146283da2934",
+        "ZIcon/iconcfg.ini": "422dad72f026f7f62bf72a731d02bcd1",
+        "ZIcon/MOBILECOMBAT.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "ZIcon/NONE.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "ZIcon/NUKEICON.pcx": "e6e11b40752826abebd5bf300a9220f6",
+        "ZIcon/smallcircle.pcx": "0b7246a5c084e587c62866ddff154867",
+        "ZIcon/UNKNOWN.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "zmusi.dll": "3f88d6150c7d9fa543134f89ce8b27d7",
+        "zplayx.dll": "646ed63fb3fc896d254d073de6e200b1"
+      }
+    },
+    "tazero-alpha5": {
+      "about": "TA Zero Alpha 5 (2024-12-24), the files TAF installs from it: its own TotalA.exe, which imports ZDRAW.dll, ZMUSI.dll and ZPLAYX.dll and keeps its settings under Software\\TA Zero; TAZ31.gp3; TAZero.ini. The 'TA Zero Alpha 5 Fixes' folder is not installed",
+      "url": "https://sjc1.vultrobjects.com/mods/tazero/TA_Zero_Alpha_5.zip",
+      "archive": "TA_Zero_Alpha_5.zip",
+      "md5": "272567b23c7f9924f66d4a93c1b6980e",
+      "files": {
+        "TA Zero Readme.txt": "d42651e3d53ef161d11bed3cc939b045",
+        "TAZ31.gp3": "35955bc96754e3af8adacbb5029c3bf0",
+        "TAZero.ini": "0a6f445869baab2b2c5e1e8a48b751ff",
+        "TotalA.exe": "7172e8da068b6f93dabbcae22c5e4bcd"
+      }
+    },
+    "tazero-taz31-120526": {
+      "about": "TA Zero's TAZ31.gp3 build 120526, the one TAF's tazero branch carries today (sha256 53c70267...), on top of Alpha 5's",
+      "url": "https://sjc1.vultrobjects.com/mods/tazero/TAZ31_120526_2103.zip",
+      "archive": "TAZ31_120526_2103.zip",
+      "md5": "342178908ff03253b1b5a600417c01e3",
+      "files": {
+        "Changelog.txt": "ffd00fc006e53c658f83a6d2411a60d4",
+        "TAZ31.gp3": "9105a177442c2b3b86063c15e435fb24"
+      }
+    },
+    "tadr-2025.4.24-zero": {
+      "about": "TADR 2025.4.24, TA Zero build, as TAF installs it last: zdraw.dll (loads ddraw.dll, so Impure), with cnc-ddraw's ddraw.ini and its tdraw.txt",
+      "url": "https://content.taforever.com/featured_mod_dropins/tdraw-2025.4.24-Zero.zip",
+      "archive": "tdraw-2025.4.24-Zero.zip",
+      "md5": "272faa764c68a6397855087c373fa0b9",
+      "files": {
+        "ddraw.ini": "e88e9b5e05d18f16bfc7e55ae5fe89fb",
+        "tazero.ini.tdraw": "0cbbf2e67a6158474ecd7c144866472d",
+        "tdraw.txt": "efa1513009c43727d9de6ccae9cc1cf1",
+        "zdraw.dll": "7f80edbe30fa1c9c551ca0506b7ace22"
+      }
+    },
+    "twilight-dropin-b91": {
+      "about": "TA Twilight's drop-in, Beta 91 (TAF's first tatw package): the 3.9.02-shaped TotalA.exe importing TDRAW, TMUSI and TPLAYX; tdraw.dll, tplayx.dll, cnc-ddraw as ddraw.dll and ddraw_custom.dll, aqrit's pdraw.dll, a dsound.dll proxy the exe loads, TA_Features_2013.ccx, and zero-length files that blank retail's ccdata.ccx and seven .ufo. The unit guide is left out, as TAF leaves it",
+      "url": "https://sjc1.vultrobjects.com/mods/tatw/TAT%20Drop%20in%20b91.zip",
+      "archive": "TAT Drop in b91.zip",
+      "md5": "5f3dac4c9c610a3ccc95b613eb57b61a",
+      "files": {
+        "afark.ufo": "d41d8cd98f00b204e9800998ecf8427e",
+        "aflea.ufo": "d41d8cd98f00b204e9800998ecf8427e",
+        "aqrit.cfg": "5bc01159531dad911a5bc4d18c3c2323",
+        "ascarab.ufo": "d41d8cd98f00b204e9800998ecf8427e",
+        "audiere.dll": "14fdbcf78f39553202d382d9082dc9cb",
+        "Beta 91 Changes Summary.txt": "0bf9f5a216d094f38f626445cbb1ffc0",
+        "ccdata.ccx": "d41d8cd98f00b204e9800998ecf8427e",
+        "ChatMacro.ini": "b591d63ab6dd6abf1dcae771a789a0d2",
+        "cnc-ddraw config.exe": "14d595c758d4f0f568e518cec0205354",
+        "cormabm.ufo": "d41d8cd98f00b204e9800998ecf8427e",
+        "cornecro.ufo": "d41d8cd98f00b204e9800998ecf8427e",
+        "corplas.ufo": "d41d8cd98f00b204e9800998ecf8427e",
+        "ddraw.dll": "448b879e977c12436f3661b61b462696",
+        "ddraw.ini": "517f244a5dc1d601c913885974742f06",
+        "ddraw_custom.dll": "f859a8f66b25b456d5a35d460e88a1fa",
+        "dsound.dll": "bc92ab934176d12272f8e65e45e3a80a",
+        "Icon/AIRCONS.PCX": "4f449669130832446c2ea39499292da9",
+        "Icon/AIRCRAFTCOMBAT.PCX": "4f449669130832446c2ea39499292da9",
+        "Icon/ARM.pcx": "296a463f7532d584fcfbac85460cb234",
+        "Icon/BUILDING.PCX": "dbe074b61817dbdc54232a2f3dc9670d",
+        "Icon/CONS.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "Icon/CORE.pcx": "8c803553e7a311c177246006e294b9bc",
+        "Icon/FACTORY.PCX": "a9cdfaffb78c8952b26f5c0234481433",
+        "Icon/GOK.pcx": "b3ab7742aed8ab18150e146283da2934",
+        "Icon/iconcfg.ini": "422dad72f026f7f62bf72a731d02bcd1",
+        "Icon/MOBILECOMBAT.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "Icon/NONE.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "Icon/NUKEICON.pcx": "4c1c8ef84a7c86f72b9bba4121d27eed",
+        "Icon/smallcircle.pcx": "0b7246a5c084e587c62866ddff154867",
+        "Icon/UNKNOWN.PCX": "b98abd18d9ea6cecadda6abb9b176d2a",
+        "LICENSE": "2ce0ddc167025ca826915e89feb0da1c",
+        "pdraw.dll": "644094f37c9f5a868e6c21c861d278fb",
+        "rev31.gp3": "37a479850016a8a9bc2ce863832229b0",
+        "Settings.ini": "03c622c3c9ce5089ee29331118ea4410",
+        "Shaders/crt/crt-lottes-fast-no-warp-bilinear.glsl": "988397be0e247977fd702203b7083bbf",
+        "Shaders/cubic/catmull-rom-bilinear.glsl": "2f13e6e0a92ae530f2cde09d112a23fd",
+        "Shaders/interpolation/bilinear.glsl": "a58a6636be0158aaa7f15242b1e5d342",
+        "Shaders/interpolation/catmull-rom-bilinear.glsl": "0541c32b0250092fd3a00ae348a26221",
+        "Shaders/interpolation/jinc2-dedither.glsl": "3bac8babebd6c32c8bd4dbf1ce80dd87",
+        "Shaders/interpolation/lanczos2-sharp.glsl": "d8439d03c9df441948b8eadb23f9684b",
+        "Shaders/nearest-neighbor.glsl": "a58a6636be0158aaa7f15242b1e5d342",
+        "Shaders/readme.txt": "a7cdaa93d78fc9c96e5947acb2fa4458",
+        "Shaders/scanlines/scanline.glsl": "b35f694972d7c451aad1cba86e8648c8",
+        "Shaders/shader-package.zip": "6a44aea2766d696e6865f19666b59b81",
+        "Shaders/sharpen/fast-sharpen.glsl": "6d8ebc431a62b646e2d9258b2c1e5af4",
+        "Shaders/windowed/lanczos2-sharp.glsl": "d8439d03c9df441948b8eadb23f9684b",
+        "Shaders/xbr/xbr-lv2-noblend.glsl": "102dc15ff4738722ecdd731c434b7720",
+        "Shaders/xbrz/xbrz-freescale.glsl": "09803cb732c5fde620a8ac8639d3c085",
+        "TA.ini": "b1c9ac045405d96b22dbadda39b04c24",
+        "TA_Ais_2013.ccx": "0f4b75625eea077f8701f9397daa9efc",
+        "TA_Features_2013.ccx": "f5ba87350ac60cd0b4e31476a55a0e55",
+        "TADEMO.UFO": "ae0175992bd77a703fbfc1d8b737f08a",
+        "TADemo/SERVER.EXE": "f335f8eb36aa618ac2adf041b8c9a6b4",
+        "TADemo/unitid.txt": "7afda9ee92e02fa0ff250b77155004d8",
+        "TAT-v2.0-Beta-Changelog.txt": "955d6609cb4a7debe871b121b15d846e",
+        "tdraw.dll": "cd2fed496addb4fec8dfe16f1dbdec95",
+        "tdraw.txt": "378400c7df1fdfa61c3ddaaa61b2a3d3",
+        "tmusi.dll": "3f88d6150c7d9fa543134f89ce8b27d7",
+        "TotalA.exe": "e1b7eb67a4b27519a841083a25577f04",
+        "totala.ini": "cdfe511c1f99f9c4e721578329e9af12",
+        "tplayx.dll": "8e95239efd0323f21d0eb589a9445a26"
+      }
+    },
+    "twilight-2.0b98": {
+      "about": "TA Twilight v2.0 Beta 98, TAF's second tatw package: rev31.gp3 (the mod), TotalA.exe (the drop-in's, byte-identical), TADR v2026.6.8's tdraw.dll and totala.ini (byte-identical to tadr-v2026.6.8-full's), TA.ini",
+      "url": "https://sjc1.vultrobjects.com/mods/tatw/TAT-v2.0%20Beta%2098.zip",
+      "archive": "TAT-v2.0 Beta 98.zip",
+      "md5": "c8d862208182a7659eb83e993a9fc5f9",
+      "files": {
+        "Beta 98 Changes Summary.txt": "51724a1413d6e4ab81781c2d87f50020",
+        "LICENSE": "2ce0ddc167025ca826915e89feb0da1c",
+        "rev31.gp3": "fdd5f504367a5d95391b585541e77ab3",
+        "TA.ini": "d72ac7ec422c69ca21b05b8e18c4b573",
+        "TAT-v2.0-Beta-Changelog.txt": "7edbdf1cca82db355eebea7831816fcf",
+        "tdraw.dll": "c8ba0c6cce7d86c53fb0d86252b0c755",
+        "tdraw.txt": "49c691a12562de6ec5d759c104bcdb18",
+        "TotalA.exe": "e1b7eb67a4b27519a841083a25577f04",
+        "totala.ini": "8b614a50e2f7aa7c169ef74804284387"
+      }
+    },
+    "tadr-v2026.6.8-full": {
+      "about": "TADR v2026.6.8 'full' build, TAF's third tatw package, which re-installs the tdraw.dll Beta 98 already carries -- the one Twilight's branch pins (sha256 b60b173a...); it loads ddraw.dll",
+      "url": "https://github.com/tanvanman/TADR/releases/download/v2026.6.8/tdraw-full.zip",
+      "archive": "tdraw-full-v2026.6.8.zip",
+      "md5": "667d442875a5274ca942819825a5a677",
+      "files": {
+        "LICENSE": "2ce0ddc167025ca826915e89feb0da1c",
+        "tdraw.dll": "c8ba0c6cce7d86c53fb0d86252b0c755",
+        "tdraw.txt": "49c691a12562de6ec5d759c104bcdb18",
+        "totala.ini": "8b614a50e2f7aa7c169ef74804284387"
+      }
     }
   }
 }

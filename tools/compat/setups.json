@@ -1,5 +1,5 @@
 {
-  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and none of TADR's code run -- 'tadr_ran' false, judged two ways on every peer: nothing of TADR's in the game folder (no tdrawlog.txt, no recorder log) AND no site of the game's own code leading into a TADR module, read out of the running process -- in single player and, on Wine, in a two-player network game. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'tadr_started' allows the one thing the routes where TADR's DllMain loads Impure cannot avoid -- its first log line, written before Impure exists -- and nothing else: no engine patch, no recorder log, and no site of the game's code leading into TADR. 'no_network_game' says why a setup plays no two-player game, in words, measured: the walk of the battle room does not reach a game there. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder. 'content' names unit types only that mod defines; at the menu they must be in the engine's own table of loaded types, which shows the mod itself is running, not only Impure beside it.",
+  "about": "The game folders tacompat runs: each is the retail 3.1 game as a player has it, plus what a mod or patch install puts next to it (fixtures.json), plus the ddraw.dll under test. 'add' entries apply in order: 'files' is a list of names, '*' for the whole fixture, or {\"name in the folder\": \"name in the fixture\"}. 'goal' is what the setup should do: Impure active with the mod's own exe and files as the player has them, and none of TADR's code run -- 'tadr_ran' false, judged two ways on every peer: nothing of TADR's in the game folder (no tdrawlog.txt, no recorder log) AND no site of the game's own code leading into a TADR module, read out of the running process -- in single player and, on Wine, in a two-player network game. 'today', where present, is the behaviour accepted until the takeover of TADR and the loaders reaches that setup (a KNOWN GAP); the commit that makes a setup meet its goal deletes its 'today'. The wiki's Compatibility section (research/notes/compat/) explains every route and outcome. 'tadr_started' allows the one thing the routes where TADR's DllMain loads Impure cannot avoid -- its first log line, written before Impure exists -- and nothing else: no engine patch, no recorder log, and no site of the game's code leading into TADR. 'no_network_game' says why a setup plays no two-player game, in words, measured: the walk of the battle room does not reach a game there. 'levers' are empty files the setup puts in the game folder, a DLL switch; a setup with one is a check of the harness or of a safety net, not a player's folder. 'scenarios' names the battle and the network game's two halves ({\"battle\", \"host\", \"join\"}) for a mod that replaces the stock unit types, which the default ones (200v200, compat-mp-host, compat-mp-join) place. 'content' names unit types only that mod defines; at the menu they must be in the engine's own table of loaded types, which shows the mod itself is running, not only Impure beside it.",
   "setups": [
     {
       "name": "retail",
@@ -127,7 +127,7 @@
     },
     {
       "name": "loader+tadr-tazero",
-      "about": "a player's TA Zero install: the Patch Loader, TADR's tazero tdraw.dll and the 2022 community-patch recorder",
+      "about": "TADR's tazero build on the Community Patch route: the Patch Loader, the tazero tdraw.dll and the 2022 community-patch recorder (the DLL layer only; TA Zero as players install it has its own exe, setup tazero-alpha5)",
       "add": [
         {
           "fixture": "patchloader-1.3.0.0",
@@ -401,6 +401,82 @@
           "ARMAAA",
           "ARMAABOAT",
           "ALL_L2"
+        ]
+      }
+    },
+    {
+      "name": "tazero-alpha5",
+      "about": "TA Zero Alpha 5 as TA Forever installs it, with Impure's ddraw.dll copied over the folder's: its own exe imports ZDRAW.dll (TADR 2025.4.24 under Zero's name) and ZPLAYX.dll (the recorder), and ZDRAW's DllMain loads Impure from inside its start-up; the exe keeps its settings under Software\\TA Zero",
+      "add": [
+        {
+          "fixture": "tademoz",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-base",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-alpha5",
+          "files": "*"
+        },
+        {
+          "fixture": "tazero-taz31-120526",
+          "files": "*"
+        },
+        {
+          "fixture": "tadr-2025.4.24-zero",
+          "files": "*"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "tadr_started": true
+      },
+      "registry_roots": [
+        "Software\\TA Zero"
+      ],
+      "content": {
+        "units": [
+          "GOKCOMMANDER",
+          "GOKT1AAHOVER",
+          "GOKT1AIRPAD"
+        ]
+      },
+      "scenarios": {
+        "battle": "compat-battle-tazero",
+        "host": "compat-mp-host-tazero",
+        "join": "compat-mp-join-tazero"
+      }
+    },
+    {
+      "name": "twilight-2.0b98",
+      "about": "TA Twilight v2.0 Beta 98 as TA Forever installs it, with Impure's ddraw.dll copied over the folder's cnc-ddraw: the 3.9.02-shaped exe imports TDRAW.dll (TADR v2026.6.8) and TPLAYX.dll, and TDRAW's DllMain loads Impure from inside its start-up; the drop-in's dsound.dll proxy loads beside it",
+      "add": [
+        {
+          "fixture": "twilight-dropin-b91",
+          "files": "*"
+        },
+        {
+          "fixture": "twilight-2.0b98",
+          "files": "*"
+        },
+        {
+          "fixture": "tadr-v2026.6.8-full",
+          "files": "*"
+        }
+      ],
+      "goal": {
+        "outcome": "impure-active",
+        "tadr_ran": false,
+        "tadr_started": true
+      },
+      "content": {
+        "units": [
+          "AAFUS",
+          "ARMANTAR",
+          "ARMBANTH"
         ]
       }
     }
