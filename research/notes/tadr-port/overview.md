@@ -62,6 +62,14 @@ page records an exception.
 | E. Multiplayer / anti-abuse | start positions, vote-reject, share guard, anti-cheat…; from the recorder, the speed lock, autopause and ready, commander warp, `.take`, several AIs in one game, and whether allies share sight | not planned. Most of it needs the handshake that rule 1 defers; shared sight is the owner's decision | [merge exploration §E](../tadr-merge-exploration.md#e-multiplayer-anti-abuse), [the recorder's](../tadr-merge-exploration.md#e-game-control-unit-transfer-anti-cheat) |
 | F. COB extensions | the recorder's eight `get` ids (32, 69–75), the only non-stock script ids real content uses: 289 of Escalation's 548 scripts, and a few in Total Mayhem (8), TA Zero (19) and TA Twilight (10); none in ProTA | not planned, the owner's call. Every one of those mods runs on Impure today with the ids answered 0, so the scripts run and do nothing: Escalation's and Twilight's galactic gates never teleport | [merge exploration §F](../tadr-merge-exploration.md#f-the-cob-getters) |
 
+## Demo recorder
+
+The [demo recorder](demo-recorder.md) page records the agreed multiplayer recording and solo
+replay features, open architecture and performance decisions, and milestone progress. It is a
+high-level feature record; detailed debugging and implementation evidence belong in separate
+notes. The product decisions are recorded; recorder implementation and seek performance remain
+unverified.
+
 ## Adding a page
 
 Put a `.md` file in `research/notes/tadr-port/`. The wiki lists it in this section without further
