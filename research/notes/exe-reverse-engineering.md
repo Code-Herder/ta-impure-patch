@@ -611,8 +611,9 @@ frame `+0x10`, sets key byte `+8` to `0xFF` at `0x420E34`, and returns with `ret
 header/pixel stream. Storing their identity alone changes the image after a fresh launch.
 The experiment copies generated pixels into replay-owned memory and redirects only saved-scene
 references; it neither writes the engine's random state nor replaces live engine assets.
-One replay-owned generated-asset bank can serve every snapshot. Repeated import/free cycles
-and atlas key reuse need an explicit lifetime/generation design before production use.
+One replay-owned generated-asset bank can serve every snapshot. The [file-backed scene test](tadr-port/demo-recorder-exploration.md#6g-file-backed-scene-seeking-and-rendered-prefix-recovery)
+verifies repeated packet replacement while one immutable bank stays alive until process exit.
+Changing/freeing the bank and atlas key reuse still need a production lifetime/generation design.
 
 ### Replay snapshots and draw-created caches [SOURCE / DISASSEMBLED / MEASURED 2026-09-28]
 

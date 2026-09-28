@@ -17,6 +17,21 @@ The shared engineering rules are in [the TADR port overview](overview.md). Recor
 feature of Impure, drawing heavily on the Pascal recorder as prior art. It does not require
 running the original recorder alongside Impure.
 
+## Paused handoff — 2026-09-28
+
+**Paused at the owner's request to conserve usage. Technical exploration is incomplete;
+no production recorder has landed.** The last research milestone is `26fe1f7`: file-backed
+scene playback and crash-prefix restoration work in the sampled fixtures, but cold seeking
+still exposes incomplete destination frames. The product decisions below remain unchanged.
+
+The [technical handoff](demo-recorder-exploration.md#paused-handoff-and-resume-point)
+identifies the saved prototypes, evidence, exact next experiment, and remaining feasibility
+gates. All identified recorder scratch directories and the BAR source research were archived
+in durable private local storage and checked against a per-file SHA-256 manifest. The archive
+includes WIP scripts, temporary probe sources, binaries, logs, captures, and fixtures; these
+are research material, not shipped features. Resume from that checkpoint instead of repeating
+the interview or recreating the experiments.
+
 ## Agreed scope
 
 | Area | Decision |
@@ -154,7 +169,7 @@ milestone is marked complete by this design interview.
 | Milestone | High-level completion criterion | Current state |
 |---|---|---|
 | Product contract | Scope, viewer features, storage policy, and explicit open decisions recorded here | **Decisions recorded, 2026-09-28** |
-| Feasibility and format | Demonstrate capture/playback fidelity and compare seek approaches with measured time, space, and overhead; choose the format and preparation policy from those results | **In progress — solo engine replay, sampled scene portability and container crash-prefix recovery demonstrated. Complete capture/seek coverage, overhead, format and preparation policy remain open. [Technical evidence](demo-recorder-exploration.md)** |
+| Feasibility and format | Demonstrate capture/playback fidelity and compare seek approaches with measured time, space, and overhead; choose the format and preparation policy from those results | **In progress — solo engine replay, file-backed scene seeking and rendered crash-prefix recovery prototyped. Cold seeks expose intermediate frames; seamless presentation, complete coverage, overhead, format and preparation policy remain open. [Technical evidence](demo-recorder-exploration.md)** |
 | Recording and basic playback | Automatic multiplayer capture, one-file solo playback, lifecycle/completeness handling, content/version checks, pause and speed control | **Planned** |
 | Seeking and recovery | Forward-seek target measured, backward seek usable, playable crash-truncated files, correct restored state and visibility | **Planned** |
 | Player perspectives | Full/player visibility, free/follow camera, cursor/click/selection/order overlays, and in-match communication | **Planned** |
