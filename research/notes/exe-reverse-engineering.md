@@ -12286,6 +12286,21 @@ word 1 at PC 346. These are native unknown-opcode termination, not missing
 return operands. The guarded path accepts the proven zero and reaches the native
 termination handler without fetching beyond declared code.
 
+**Required mission units and the held-create wrapper.** The placed-unit loader
+`0x488310` resolves each mission name through `0x488A50` at `0x48839B`; this bounded
+binary search compares names at `def+0x20` and does not test availability. Placement
+calls `0x485F50` at `0x488462` and skips NULL results at `0x48846B`. The creator's
+five pushes at `0x485F50..0x485F63` put its immediate caller at site-ESP+20 at the
+availability test `0x485FA0`. That is not necessarily the mission's caller:
+`fix_kill_counts` routes `0x488462` through its held-create wrapper, which copies
+eight arguments and makes another call. `kill_hold_site` therefore checks the
+original `0x488467` return address and its type argument (`regs[PR_RET+2]`) before
+arming the hold. Rejection-table indexing remains bounded by `TAGPU_LIM_TYPES`;
+capture and resurrection keep their existing behavior. A malformed ARMFAV in the
+first Arm campaign initially let play begin with 31 instead of 34 units, omitting
+all three Jeffys. With the wrapper check, loading refuses with the unit, script
+and reason before any of those placed units can be silently dropped.
+
 **Serialization.** `0x4B1EC0(cob, stream)` is the thiscall save method;
 `0x4B2040` is the load method, each `ret 4`. Stream size is `0x4B4BF0`, seek
 `0x4B4C10(stream, offset)`, read `0x4B4C80(stream, buf, n)`, write

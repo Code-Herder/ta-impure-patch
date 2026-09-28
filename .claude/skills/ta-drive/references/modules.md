@@ -107,6 +107,8 @@ including an in-progress save/load and real high-stack scripts. `tools/cob_legac
 creates a native-32-word save and imports it with the current DLL. See each tool's `--help`
 and `research/notes/tadr-port/cob.md` for measured coverage. Output directories must be new
 and outside the repository; all drivers clean up their owned games/displays.
+`tools/cob_mission_probe.py --out DIR` checks refusal for a malformed placed ARMFAV in the
+first Arm campaign; `--control` leaves scripts intact and requires all three placed Jeffys.
 
 The trace's `H` event records new per-record stack peaks above 32. Argument lines retain all
 128 possible words. A trace containing `INCOMPLETE` cannot establish behavior: its bounded

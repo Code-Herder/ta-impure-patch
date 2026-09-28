@@ -19926,6 +19926,7 @@ and unrecoverable execution faults refuse with diagnostics.
 | `0x42D8F4`, `0x42D299`, `0x43E0B0` | bind initial/reloaded scripts to model storage; bound the native SweetSpot result consumer |
 | `0x497581` | saved unit partition established before native `0x4917D0` allocates the level |
 | `0x42DA58`, `0x42BEC3`, `0x485FA0`, `0x485D64` | filter rejected types from build lists and guard creation, including required/saved units |
+| existing held-create wrapper at `0x488462` | check required mission types before the wrapper hides the native caller behind its own frame; no new patch site or engine-state field |
 | `0x497F5E`, `0x49842F`, `0x496A4F` | reuse load reset/in-play ordering; deliver local chat through `0x46BC70` after native frame work |
 | `0x4B06B0`, `0x4B06F0` | optional trace invalidates deferred starts at both COB destructor entries before free |
 

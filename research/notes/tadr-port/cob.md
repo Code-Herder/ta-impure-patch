@@ -110,7 +110,7 @@ These are evidence to investigate, not fixes already implemented here.
 | Capacity | real high-stack scripts, locals/arguments/query returns, signals and nested calls, thread exhaustion, rejection path and bounded allocation lifetime | real 85-word scripts, local 100, all 100 CALL arguments, refused START with 128 arguments, SIGNAL recovery and full-pool CALL diagnostic pass; complete corpus occupancy remains |
 | Features | upgrades, shields, adjacency, gates, transports, constructors/factories and orientation wherever each mod uses them; ProTA/retail regression controls | real Escalation fusion upgrade completes and survives an in-progress save; remaining feature-specific cases open |
 | Multiplayer | two Wine peers for every listed mod, host-owned and joiner-owned units, local-AI ownership, alliance/completion changes, attach/drop and destruction; no duplicate owner actions | all five mods pass self/remote getter ownership; local-AI getters pass in single player; dynamic feature cases remain |
-| Rejection | identical unavailable types across peers, unit/script/reason chat at entry, mismatch handling, and refusal for required/pre-existing units | matching and host-only/joiner-only malformed content consistently excluded; warning captured on screen; required starting/saved commander refusals pass; mission case remains |
+| Rejection | identical unavailable types across peers, unit/script/reason chat at entry, mismatch handling, and refusal for required/pre-existing units | matching and host-only/joiner-only malformed content consistently excluded; warning captured on screen; required starting/saved commander refusals and placed campaign-unit refusal pass |
 | Save/load | valid old saves and new saves with expanded state, including an upgrade in progress; malformed state refused safely | native 32-word save, expanded records and real upgrade round trips pass; malformed records covered offline, shipped TADR save fixtures remain |
 | Windows | startup and in-game smoke checks across setups; full Windows multiplayer is deferred | pending |
 | Landing | parallel build, documentation and rendered wiki, dedicated high review, fixes and reruns; local landing only | pending |
@@ -480,3 +480,18 @@ the number and newline separately (`b'8'` was the first read). A pipe read is no
 boundary. The reader now accumulates through the newline within a 32-byte bound and the
 existing deadline; EOF, oversized or incomplete replies still fail closed. Deterministic
 fragmented-read/EOF/size/timeout tests and the live two-server ownership test pass.
+
+### Required campaign units
+
+The live campaign fixture exposed an integration defect that the starting-commander tests
+did not reach. `fix_kill_counts` already wraps the mission's create call, so checking only
+the immediate return address inside `UNITS_Create` missed that origin. A malformed ARMFAV
+was announced and excluded but the first Arm mission continued with 31 instead of 34 units,
+silently dropping its three Jeffys. `kill_hold_site` now checks the original mission caller
+and bounded rejection entry before creating another call frame. No scheduling or timeout
+is part of the fix. DLL
+`861ccf38eaccf9ceddc9207762d0f92779b85385cd50a4a5dfeafd08b0d1481b`
+refuses that mission with `ARMFAV (Jeffy)`, `ARMFAV.COB` and the invalid-local reason.
+The first fixture selected ARMCOM, but this mission starts with its commander off-planet;
+that was not a valid required-at-entry test. `tools/cob_mission_probe.py` uses the observed
+placed type and retains each acknowledged campaign screen in its external evidence.

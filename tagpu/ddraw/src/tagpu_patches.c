@@ -29,6 +29,7 @@ static void plog(const char* s)
 
 #ifndef TAGPU_LIMITS_STOCK
 static int cob_type_rejected(unsigned type);
+static void cob_required(unsigned type);
 static void cob_level_reset(void);
 static void cob_level_enter(void);
 #endif
@@ -8375,7 +8376,15 @@ static void __cdecl kill_flush_resurrected(unsigned int* regs)
 
 static void __cdecl kill_hold_site(unsigned int* regs)
 {
+#ifndef TAGPU_LIMITS_STOCK
+    /* The held-create wrapper owns a second call frame. Check mission placement
+       while its original caller and type argument still name the native site;
+       UNITS_Create sees this wrapper's return address, not 0x488467. */
+    if (regs[PR_RET] == 0x00488467u)
+        cob_required(regs[PR_RET + 2] & 0xFFFFu);
+#else
     (void)regs;
+#endif
     kill_hold_arm();
 }
 
@@ -10271,7 +10280,8 @@ static unsigned __cdecl cob_create_check(unsigned* regs)
     const char* def;
     if (!type || type >= count || count > TAGPU_LIM_TYPES) return 0x004861BDu;
     if (cob_type_rejected(type)) {
-        /* Saved restore, mission placement, and both starting commanders.
+        /* Saved restore and starting commanders. Mission placement is checked
+           in its held-create wrapper, which owns a second return address.
            Ordinary construction returns NULL, just like an unavailable type. */
         if (caller == 0x00487193u || caller == 0x00488467u ||
             caller == 0x00497007u || caller == 0x004977C0u || caller == 0x004653DEu)
