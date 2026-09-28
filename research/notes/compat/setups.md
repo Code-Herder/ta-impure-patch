@@ -161,7 +161,14 @@ MEASURED 2026-09-28 under Wine, `mayhem-11.3.0` with "A Plethora of Ponds" saved
 the fix side by side: the skirmish list went from 109 maps to 100 and the battle room's from 109 to
 100, the nine left out being exactly the nine above; the saved map became "Acid Foursome" where
 main's kept "A Plethora of Ponds"; a map picked from the filtered list loads. Under Wine that saved
-map raises no box on either build, so **the box itself was not re-run on Windows**.
+map raises no box on either build.
+
+MEASURED 2026-09-28 on the Windows 10 test box, a `tacli remote` instance of `mayhem-11.3.0`
+(test mode refuses the create of `Software\TotalM`, so the game read no saved map and took the
+fresh-key path): with main's previous build the SKIRMISH screen opened on "A Plethora of Ponds"
+with no box, and **Start stopped the load on the box** `Maps\A Plethora of Ponds.TNT`; the map list
+held 109 maps, the nine among them. With the fix the screen opened on a map with terrain, Start
+went into the game, and the list held 100, none of the nine.
 
 ## The 3.9.02 exe
 

@@ -2133,8 +2133,10 @@ at `0x5122D4` with its length at `0x5122DC`, its count at `0x5122E0` and a flag 
   `0x50341C`), with no direct caller.
 
 **A map with no terrain** (MEASURED 2026-09-27): an `.ota` whose `.tnt` is in no archive is listed,
-and on Windows the SKIRMISH screen then stops on a box naming `Maps\<name>.TNT`. Under Wine the same
-saved map opens the SKIRMISH screen with no box (MEASURED 2026-09-28). A picked map's terrain path is
+and on Windows the map's load stops on a box naming `Maps\<name>.TNT` (MEASURED 2026-09-28: the
+SKIRMISH screen opened on "A Plethora of Ponds" with no box, and Start raised it over the loading
+screen; 2026-09-27's player launch reported it at the SKIRMISH screen). Under Wine the same saved
+map opens the SKIRMISH screen with no box (MEASURED 2026-09-28). A picked map's terrain path is
 built by `0x435430(1, "Maps", name, "TNT")` (`0x43605D`, the string `0x504D88`). The consequence for
 mods is in [compat/setups.md](compat/setups.md), *Total Mayhem's maps with no terrain*.
 
@@ -2160,7 +2162,9 @@ and the battle room's list 109 → 100, the nine missing being exactly the nine 
 in the install, nothing else changed; a saved "A Plethora of Ponds" became "Acid Foursome"; a pick
 from the filtered list loads. With `language` = german the list read 100 German names, and a
 saved "Das Ashap-Plateau" (not entry 0, which is "Absolut riesig") was kept: the SKIRMISH screen
-showed it, the set-aside counter read 0 and the registry held it at exit.
+showed it, the set-aside counter read 0 and the registry held it at exit. On the Windows 10 test
+box, the same comparison on the fresh-key path: the list 109 → 100 with none of the nine, and
+Start into the game where main's previous build stopped on the box.
 
 **Not closed.** A joining peer that has the host's map's `.ota` but not its terrain loads the
 host's pick by name (`0x448EAE` → `0x435A20` → `0x435DA0`), which this list does not reach, so it
