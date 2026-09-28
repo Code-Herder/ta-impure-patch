@@ -12233,6 +12233,46 @@ receiver `0x48AB70` treats piece `0xFF` as hidden cargo (`0x48AC99`), not geomet
 piece 255. The guarded opcode checks full-width IDs and admits piece -1 or a
 validated piece below 255. No new unit/network ID format is introduced.
 
+**The two piece counts are not interchangeable.** Disassembly of `0x42D6C2..0x42D8FA`
+shows the definition loader publishing its model template in `main+0x14377[type]`
+at `0x42D79C..0x42D7A2`, before reading its COB at `0x42D8EF`. The checked hook at
+`0x42D8F4` bounds EBP's definition index against `main+0x1438F`, binds the validated
+script to that template's node count, then performs the original `def+0x18E` store.
+`0x45AE80(root)` is stdcall (`ret 4`); it counts the root and recursively follows
+child `+0x30` and sibling `+0x2C`. `0x45A950` uses the same traversal, allocates
+`34 + 54*N` bytes at `0x45A97F..0x45A98F`, and stores the posed count at model+0.
+The name-ordering loop at `0x45A9CD..0x45AA57` walks COB declarations but skips
+ordinals at or above the posed count (`0x45A9E8`); it never enlarges the model.
+
+Negative finding: native model getters/setters such as `0x480C30`, `0x480C50`
+and `0x480C7B` do not independently bound the piece. Native save/load also iterate
+the COB-declared count, including unused excess names. The port permits those
+names but bounds reachable operands, waits, getters 7/8 and ATTACH by the actual
+model. It retains the declared-size save layout, writes zero padding for excess
+names, and restores only backed rows. The native animation constructor zeros all
+declared rows at `0x4B0783..0x4B0791`; restore also zeroes excess animation rows,
+so the native animation stepper's dirty-row gate `0x4B1C49..0x4B1C54` cannot
+dereference a missing piece. COB destruction at `0x486D8A` precedes model destruction
+at `0x486D9E`; interpreter/save callbacks hold that owning-thread lifetime.
+Measured in the installed Escalation assets: CORTSAR declares 110 pieces over a
+109-node model; its unused final `height` declaration must not exclude the unit.
+
+**Query-result consumer.** The `SweetSpot` call at `0x43E3E4` receives local 0
+through `0x4B0CEA`, then forwards it at `0x43E3F4` to `0x43E0B0(unit, out, piece)`
+(stdcall, `ret 12`). Unlike `0x43DEF0`'s ordinary position query, `0x43E0D1..0x43E0E4`
+indexes the posed model without a bound. A checked seven-byte entry detour now
+validates the full signed result against model+0 before calling the original body.
+Its trampoline replays `sub esp,8; mov eax,[esp+0x14]` and resumes at `0x43E0B7`.
+A generated `SweetSpot` returning piece `0x100000` was driven through real targeting:
+the script-specific diagnostic refused the game, with no crash report.
+
+**Nonterminal native operations and division.** `0x10009000` dispatches to
+`0x4B1153`: two stack pops, one inline piece, vtable+0x28, then PC+=2.
+`0x1000A000` dispatches to `0x4B1185`: one inline piece, no pops, vtable+0x2C,
+then PC+=2. Neither is native unknown-op termination. `0x4B1510` executes signed
+`idiv ebx`; both divisor zero and INT_MIN/-1 must be refused before that instruction.
+The production-core tests cover those cases and the two nonterminal instruction shapes.
+
 **Trace lifetime.** Both base destructors, `0x4B06B0` (deleting) and `0x4B06F0`
 (non-deleting, called by `0x485E30`), free animations/statics. Mandatory trace
 observers at their six-byte entries invalidate any deferred start before either

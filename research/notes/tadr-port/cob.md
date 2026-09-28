@@ -104,7 +104,7 @@ These are evidence to investigate, not fixes already implemented here.
 
 | Gate | Required evidence | State |
 |---|---|---|
-| Corpus | resolve the installed content and archive precedence; census extended getters/setters, bytecode validity, stack demand and script starts across all listed mods | independent-archive audit run; effective content and runtime proof pending |
+| Corpus | resolve the installed content and archive precedence; census extended getters/setters, bytecode validity, stack demand and script starts across all listed mods | effective native-loader census run across all five mods; model binding exposes malformed bundled ZZZ in four setups; complete dynamic occupancy proof remains |
 | API | explicitly execute all eight new getters in-game in at least one real mod setup, using test-only scripts where normal content cannot reach a getter; assert results, not just call counts | 84/84 Escalation assertions pass, including nonzero kills and construction; all eight also pass on both peers of each listed mod |
 | Bounds | highest supported live ID, first out-of-array ID, negative IDs, zero conventions, empty/dead/reused slots, 65535/65536/65537; no aliasing or out-of-allocation access | signed/zero/first-out-of-pool/65535–65537 pass live; live skirmish-ceiling ID 6000 passes in a 15001-slot pool; global live ID 15000 and dead/reused transitions remain |
 | Capacity | real high-stack scripts, locals/arguments/query returns, signals and nested calls, thread exhaustion, rejection path and bounded allocation lifetime | real 85-word scripts, local 100, all 100 CALL arguments, refused START with 128 arguments, SIGNAL recovery and full-pool CALL diagnostic pass; complete corpus occupancy remains |
@@ -353,8 +353,8 @@ renderer finding keeps the compatibility gate open.
 
 The renderer finding was traced to first arming the Vulkan mirror after the producer had
 already drained four operations and created one twin without recording it. The mirror now
-requests a producer reset and withholds operations/frames until that reset is consumed; its
-first delivered history starts with RESET. With DLL `c58b6b49…`, all 19 startup/battle outcomes
+requests a producer reset and withholds operations/frames until that reset is recorded;
+the later review below strengthens this to actual delivery. With DLL `c58b6b49…`, all 19 startup/battle outcomes
 met expectations and 14 network matches passed. The remaining loader/Mayhem match stopped in
 the lobby: a field-centre click left the nickname caret inside existing text and backspace
 could not remove the suffix. The input driver now clears both sides with acknowledged
@@ -404,3 +404,54 @@ upgrade preserved its script state in a mid-construction save/load, then complet
 shipped ARMCRAWL and CORDECI scripts, with no incomplete trace. ARMVCAR's declared 54-word
 Detect routine has no observed normal entry path: Create starts SmokeUnit and track_tracks,
 not Detect. Forcing a test call would not establish that the mod naturally executes it.
+
+### Dedicated review and model-backed pieces
+
+Two read-only HIGH reviews of `main...5ef6565` found five actionable defects: piece bounds
+against declarations rather than models; an unchecked SweetSpot result consumer; missing
+zero-divisor rejection; two native instructions treated as terminal; and GUI reset debt
+cleared on recording rather than delivery. All were independently checked against the
+source/disassembly. The fixes bind reachable accesses to model storage, bound the query
+consumer, correct the opcode shapes and divide guard, and retain reset debt through lost
+or skipped handovers. The engine map records each address and lifetime argument.
+
+The first model-bound experiment rejected every declaration count larger than the model.
+The installed corpus disproved that policy: CORTSAR has 110 declarations over 109 nodes,
+with an unused final `height`. The bound now applies to reachable accesses, not unused names;
+save/load retain declared-size rows but never access a model for the excess rows.
+
+`tools/cob_corpus_probe.py` pauses an owned game and reads the scripts the **native loader
+actually selected**, without guessing archive precedence. Relocated programs are converted
+to canonical COBs in memory for analysis; only hashes and metadata are saved outside the repo.
+Baseline DLL `62081b63…` observed:
+
+| Setup | Definitions | Distinct loaded programs | Relative peak words |
+|---|---:|---:|---:|
+| Escalation | 549 | 540 | 85 |
+| Mayhem | 506 | 482 | 28 |
+| Zero | 270 | 250 | 13 |
+| Twilight | 505 | 450 | 23 |
+| ProTA | 317 | 288 | 22 |
+
+On DLL `08c43e68ccefc1093491d1f9d04b92b89ba3219d85366813cc882dfe145e0b2a`,
+Escalation retains all its loaded programs. Each of the other four setups excludes exactly
+the bundled `ZZZ` script: its four declarations include reachable piece 3 over a three-node
+model. This is a real malformed-content quarantine, not a passing zero-exclusion result;
+the strict corpus driver's exit status remains nonzero. The type and reason are logged and
+announced at entry. The normal units with unused excess declarations (including CORTSAR,
+ARMMANT, ARMTSPD, CORAMPH and CORSILO) remain admitted. Their admission alone is not proof
+of every gameplay behavior. Runtime thread occupancy and the feature gates above remain open.
+
+On that same DLL the expanded save/load probe passed 84/84 assertions. Generated live
+fixtures in `tools/cob_safety_probe.py` confirmed a divide-by-zero diagnostic, whole-type
+exclusion/chat for a reachable excess piece, and a SweetSpot-result diagnostic during real
+targeting, each without a crash report. The native-opcode fixture executes both instructions
+and returns 9876 from the following code. A separate `--unused-model-pieces --extended
+--roundtrip` fixture declares 4096 pieces over the solar model and passes all 84 assertions
+after saving/restoring sleeping 101-word records. Both also ran on DLL `08c43e68…`.
+
+The first post-merge compatibility run passed all five mods' battles/network games but
+failed to start retail's multiplayer display: a filesystem vacancy check had not reserved
+that number against another runner. All suite launch paths now let Xvfb reserve the number
+atomically through its readiness pipe. This fixes ownership, not timing; no other runner's
+server or lock is adopted or removed. The corrected full suite is being rerun.

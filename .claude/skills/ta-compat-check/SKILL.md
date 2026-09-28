@@ -249,7 +249,9 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - **Each run owns its X server process.** Automatic displays use Xvfb's `-displayfd` allocation
   and ready acknowledgement; an explicit display is accepted only if the process started by
   this invocation owns it. A failed claim must not adopt another run's server. Cleanup waits
-  for its owned process and never removes a lock by display number.
+  for its owned process and never removes a lock by display number. Suite preparation,
+  single-player and multiplayer launches all use automatic reservation; checking for a vacant
+  socket earlier cannot reserve a number against another test driver.
 - **"stopped moving at #n on the way to #m" from `tacli ui select` is usually a dropped batch, not a
   separator.** A rapid batch of arrow presses is partly dropped by design and a busy game can
   swallow one whole; Total Mayhem's 106-row map list stopped at #35 on one run and #59 on another,

@@ -2029,7 +2029,9 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 
 **COB port additions, verification in progress:** the loader clears rejected types' availability
 bit `UnitDef+0x241 & 0x800000`, leaving their identity intact; creation/build-list guards prevent
-their use. Before allocating a saved level, the saved `Summary/maxunits` is validated and written
+their use. The model-binding seam publishes a validated script (or NULL for a rejected one)
+at `UnitDef+0x18E`. Save/load access only model-backed pieces and zero excess animation rows.
+Before allocating a saved level, the saved `Summary/maxunits` is validated and written
 to `main+0x37EE6/+0x37EEC` so the restored IDs keep their original player partition. On the engine's
 script-executing thread, the guarded adapter owns eight 128-word records (`cob+0x1C`, stride
 `0x224`), busy count `+0x113C`, and relocated model pointer `+0x1140`; it initializes stacks,
@@ -19921,6 +19923,7 @@ and unrecoverable execution faults refuse with diagnostics.
 | `0x4B245C`, `0x4B246F..0x4B2475`, `0x4B26D5` | validate the actual file allocation before relocation, checksum that same allocation, unlink metadata before free |
 | `cob_runtime_sites` | checked object size/model/count/record-stride operands; `0x4B0921` initializes allocated records; `0x4B0DAD` guards wait-state access and `0x4B0E5D` every instruction fetch |
 | `0x4B1EC0`, `0x4B2040` | replace complete save/load methods; validate the complete input before exposing restored state |
+| `0x42D8F4`, `0x43E0B0` | bind reachable piece accesses to the loaded model allocation; bound the native SweetSpot result consumer |
 | `0x497581` | saved unit partition established before native `0x4917D0` allocates the level |
 | `0x42DA58`, `0x42BEC3`, `0x485FA0`, `0x485D64` | filter rejected types from build lists and guard creation, including required/saved units |
 | `0x497F5E`, `0x49842F`, `0x496A4F` | reuse load reset/in-play ordering; deliver local chat through `0x46BC70` after native frame work |
@@ -19931,8 +19934,12 @@ new stack peaks (`H`); capacity failures invalidate its evidence with `INCOMPLET
 no engine state. The allocation/runner/return/signal/random observers in §2.4 remain its seams.
 
 **GUI first-arm ordering.** `tagpu_gui_mirror_want` requests a producer reset on its rising edge.
-The render-thread mirror withholds operations and publication until its drain consumes that
-reset, so its first delivered operation is RESET. This is an ordering invariant, not a delay.
+The render-thread mirror withholds operations and publication until its drain records that
+reset. Reset debt remains until `tagpu_gui_handover` delivers the complete, non-lost record.
+If allocation/atlas invalidation loses it, or swapchain acquisition skips its delivery, the
+next drain requests another reset and withholds suffix history. `tagpu_gui_reset.h` carries
+that render-owned state machine; its compiled tests exercise lost, skipped and successful
+delivery. The first delivered non-lost history starts with RESET, by ordering rather than delay.
 Measured during the compatibility investigation: first arming could previously follow four
 already-drained operations and one unrecorded twin. After the change, all 19 Wine startup/battle
 outcomes met expectations; all 15 network cases passed, with the loader/Mayhem case rerun after

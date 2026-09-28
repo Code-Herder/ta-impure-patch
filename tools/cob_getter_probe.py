@@ -99,8 +99,10 @@ def probe_cob(pieces, extended=False, roundtrip=False, thread_exhaustion=None):
 
 
 def fixture(archive, extended=False, roundtrip=False, quarantine=False, thread_exhaustion=None,
-            skirmish_ceiling=False):
+            skirmish_ceiling=False, unused_model_pieces=False):
     original = cob_audit.tacob.read_cob(archive.read("scripts/armsolar.cob"))
+    if unused_model_pieces:
+        original.pieces += [f'unused{i}' for i in range(4096 - len(original.pieces))]
     fbi = archive.read("unitse/armsolar.fbi").decode("latin-1")
     fbi, changed = re.subn(r"(?im)(\bUnitName\s*=\s*)[^;]+;", rf"\g<1>{TYPE};", fbi)
     if changed != 1:
@@ -349,7 +351,7 @@ def save_roundtrip(name, game, inst, units, out):
 
 
 def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, thread_exhaustion=None,
-        skirmish_ceiling=False):
+        skirmish_ceiling=False, unused_model_pieces=False):
     setup = compat.pick_setups(["escalation"])[0]
     problems = [p for entry in setup["add"] for p in compat.fixture_problems(entry["fixture"])]
     if problems:
@@ -368,7 +370,8 @@ def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, threa
         inst = compat.prepare_wine(setup, dll, display)
         archive = hpipack.Archive(compat.FIXTURES / "escalation-gold-10.2.0/TAESC.gp3")
         (inst["gamedir"] / "cob-getter-probe.ufo").write_bytes(
-            fixture(archive, extended, roundtrip, quarantine, thread_exhaustion, skirmish_ceiling))
+            fixture(archive, extended, roundtrip, quarantine, thread_exhaustion,
+                    skirmish_ceiling, unused_model_pieces))
         if skirmish_ceiling:
             configure_skirmish_ceiling(inst)
         if quarantine == 'commander':
@@ -558,6 +561,7 @@ def main():
     parser.add_argument("--reject-required", action="store_true", help="require a malformed starting commander to refuse the match")
     parser.add_argument('--thread-exhaustion', choices=('start', 'call'), help='exercise the eight-record limit with a 128-word argument stack')
     parser.add_argument('--skirmish-ceiling', action='store_true', help='fill player three to reach native slot 6000 and run extended getter checks; global slot 15000 requires multiplayer')
+    parser.add_argument('--unused-model-pieces', action='store_true', help='declare 4096 pieces over the solar model without accessing the excess; exercise safe save padding with --roundtrip')
     args = parser.parse_args()
     output = args.out.resolve()
     for root in (compat.TREE, compat.main_checkout()):
@@ -570,7 +574,7 @@ def main():
         parser.error('--extended requires the guarded implementation')
     rejection = 'commander' if args.reject_required else args.quarantine
     report = run(output, args.expect, args.dll.resolve(), args.extended, args.roundtrip, rejection,
-                 args.thread_exhaustion, args.skirmish_ceiling)
+                 args.thread_exhaustion, args.skirmish_ceiling, args.unused_model_pieces)
     summary = {k: v for k, v in report.items() if k not in ('hooks', 'checks', 'chat_lines')}
     summary['checks_passed'] = sum(c['ok'] for c in report.get('checks', []))
     summary['checks_failed'] = [c for c in report.get('checks', []) if not c['ok']]

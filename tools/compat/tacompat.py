@@ -1433,10 +1433,11 @@ def hook_note(h) -> str:
 def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     inst = setup["_inst"]
     gamedir, prefix = inst["gamedir"], inst["prefix"]
+    xv = start_xvfb()
+    display = xv.tacompat_display
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{display}",
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
-    xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     t0 = time.time()
     proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=log,
@@ -1619,12 +1620,16 @@ def free_dplay_port(port, mine: set, wait=300) -> "str | None":
 
 def start_wine(inst, display, *, display_server=None):
     """TotalA.exe in the instance's game folder on its own virtual display."""
+    if display_server is None:
+        xv = start_xvfb()
+        display = xv.tacompat_display
+    else:
+        xv = display_server
+        if getattr(xv, 'tacompat_display', None) != display or xv.poll() is not None:
+            raise RuntimeError('the supplied display server does not own this display')
     env = dict(os.environ, WINEPREFIX=str(inst["prefix"]), DISPLAY=f":{display}",
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
-    xv = display_server if display_server is not None else start_xvfb(display)
-    if getattr(xv, 'tacompat_display', None) != display or xv.poll() is not None:
-        raise RuntimeError('the supplied display server does not own this display')
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -1767,11 +1772,10 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     its result), and prepare_wine has just installed the joiner's stock DirectPlay, so the
     patch lands on files no process of the game has open yet.
 
-    The displays are taken HERE, not when this was queued: a number reserved while the
-    single-player runs were still going is one no Xvfb held for minutes, and free_display
-    counts a stale lock as a display in use."""
-    create_display, host_display, join_display = (free_display(taken) for _ in range(3))
-    xv = start_xvfb(create_display)
+    Xvfb reserves each display atomically when its server starts. An earlier
+    filesystem vacancy check cannot reserve it against another test driver."""
+    xv = start_xvfb()
+    create_display = xv.tacompat_display
     try:
         join = prepare_wine(setup, dll, create_display, suffix="-j")
     finally:
@@ -1785,7 +1789,7 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
         if held:
             return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
                     "evidence": [], "port": port}
-        out = play_mp(setup["_inst"], join, seconds, host_display, join_display, port,
+        out = play_mp(setup["_inst"], join, seconds, None, None, port,
                       scenarios(setup))
         out["port"] = port
         return out
@@ -1914,8 +1918,8 @@ def cmd_wine(args):
         die("nothing to run")
     started = time.time()
     taken = set()
-    create_display = free_display(taken)
-    xv = start_xvfb(create_display)
+    xv = start_xvfb()
+    create_display = xv.tacompat_display
     try:
         print(f"preparing {len(ready)} setups, {args.prep_jobs} at a time")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.prep_jobs)) as prep:
@@ -1923,7 +1927,6 @@ def cmd_wine(args):
                 s["_inst"] = inst
     finally:
         stop_xvfb(xv)
-    displays = {s["name"]: free_display(taken) for s in ready}
     # Every prefix this run made, for free_dplay_port: the only ones it may end.
     mine = {str(s["_inst"]["prefix"]) for s in ready}
     print(f"running {len(ready)} setups, {args.jobs} at a time, {args.watch} s each"
@@ -1937,7 +1940,7 @@ def cmd_wine(args):
         ports.put(MP_PORT_BASE + k)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
-        futs = {pool.submit(run_wine, s, dll, args.watch, displays[s["name"]], args.screens,
+        futs = {pool.submit(run_wine, s, dll, args.watch, None, args.screens,
                             args.battle): s
                 for s in ready}
         for f in concurrent.futures.as_completed(futs):

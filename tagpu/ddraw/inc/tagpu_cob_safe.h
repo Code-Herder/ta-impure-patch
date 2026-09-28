@@ -25,7 +25,7 @@ typedef struct TagpuCobProgram {
     const uint32_t *code, *entries;
     const char **names;
     unsigned char *starts;
-    uint32_t words, scripts, pieces, statics;
+    uint32_t words, scripts, pieces, statics, model_pieces;
     int terminal_zero;
 } TagpuCobProgram;
 
@@ -33,6 +33,7 @@ typedef struct TagpuCobProgram {
    relocation is allowed after validation; code and entries remain immutable. */
 TagpuCobProgram* tagpu_cob_program(const void* blob, size_t size, char* reason, size_t capacity);
 void tagpu_cob_program_free(TagpuCobProgram* program);
+int tagpu_cob_bind_model(TagpuCobProgram* program, uint32_t pieces, char* reason, size_t capacity);
 int tagpu_cob_id_valid(int32_t id, uint32_t slots);
 int32_t tagpu_cob_build_left(float remaining);
 /* 1: execute, 2: stock's terminal-opcode path, 0: fault with a diagnostic. */

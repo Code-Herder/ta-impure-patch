@@ -31,6 +31,7 @@ class RuntimeTests(unittest.TestCase):
         cls.lib.tagpu_cob_program.argtypes = [C.c_void_p, C.c_size_t, C.c_void_p, C.c_size_t]
         cls.lib.tagpu_cob_program.restype = C.c_void_p
         cls.lib.tagpu_cob_program_free.argtypes = [C.c_void_p]
+        cls.lib.tagpu_cob_bind_model.argtypes = [C.c_void_p, C.c_uint32, C.c_void_p, C.c_size_t]
         cls.lib.tagpu_cob_check_step.argtypes = [C.c_void_p, C.POINTER(Record), C.c_void_p, C.c_size_t]
         cls.lib.tagpu_cob_save_records.argtypes = [C.c_void_p, C.c_uint32, C.POINTER(Record),
                                                   C.c_void_p, C.c_size_t, C.c_void_p, C.c_size_t]
@@ -110,6 +111,52 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(self.lib.tagpu_cob_check_step(program, C.byref(rec), reason, len(reason)), 0)
         finally:
             self.lib.tagpu_cob_program_free(program)
+
+    def test_native_division_faults_are_rejected_before_idiv(self):
+        self.check_steps([0x10034000, 0x10065000], (), [
+            ([123, 0], 0, "division by zero"),
+            ([-2147483648, -1], 0, "division overflow"),
+            ([123, -1], 1, ""),
+            ([-2147483648, 1], 1, ""),
+        ])
+
+    def test_model_binding_allows_unused_names_but_not_reachable_accesses(self):
+        for piece, valid in ((0, True), (1, False)):
+            data = C.create_string_buffer(self.blob([0x10005000, piece, 0x10065000], ['base', 'unused']))
+            reason = C.create_string_buffer(256)
+            program = self.lib.tagpu_cob_program(data, len(data) - 1, reason, len(reason))
+            self.assertTrue(program, reason.value)
+            try:
+                self.assertEqual(bool(self.lib.tagpu_cob_bind_model(program, 1, reason, len(reason))), valid)
+                if not valid:
+                    self.assertIn(b'model allocation', reason.value)
+            finally:
+                self.lib.tagpu_cob_program_free(program)
+
+    def check_steps(self, code, pieces, cases):
+        data = C.create_string_buffer(self.blob(code, pieces))
+        reason = C.create_string_buffer(256)
+        program = self.lib.tagpu_cob_program(data, len(data) - 1, reason, len(reason))
+        self.assertTrue(program, reason.value)
+        try:
+            for stack, expected, message in cases:
+                with self.subTest(code=code, stack=stack):
+                    reason.value = b""
+                    rec = Record(status=0x01000000, sp=len(stack) - 1)
+                    rec.stack[:len(stack)] = stack
+                    self.assertEqual(self.lib.tagpu_cob_check_step(
+                        program, C.byref(rec), reason, len(reason)), expected)
+                    self.assertIn(message, reason.value.decode())
+        finally:
+            self.lib.tagpu_cob_program_free(program)
+
+    def test_native_vtable_piece_operations_continue_and_bound_their_operands(self):
+        self.check_steps([0x10009000, 0, 0x10065000], ["base"], [
+            ([1], 0, "underflow"), ([1, 2], 1, "")])
+        self.check_steps([0x1000a000, 0, 0x10065000], ["base"], [([], 1, "")])
+        for opcode in (0x10009000, 0x1000a000):
+            self.assertFalse(self.validate(self.blob([opcode, 1, 0x10065000], ["base"]))[0])
+            self.assertFalse(self.validate(self.blob([opcode, 0, 0x10005000, 2], ["base"]))[0])
 
     def test_expanded_save_round_trip_and_old_save_import_are_transactional(self):
         import struct

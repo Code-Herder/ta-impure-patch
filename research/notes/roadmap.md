@@ -3749,7 +3749,9 @@ entry chat, and compatible saved-state import. ID 111 is deferred. The API asser
 two-peer ownership probes, real Escalation high-stack scripts and an upgrade/save round trip
 pass. Remaining gates include highest-live/recycled IDs, broader mod-specific features and
 dynamic multiplayer cases, shipped-mod saved fixtures, Windows smoke tests and the dedicated
-high review. Generic compatibility battles do not establish feature parity.
+high-review fix verification. The effective loaded corpus has been audited; the model-backed
+piece guard exposes malformed bundled ZZZ content in four setups while admitting unused
+extra declarations in normal units. Generic compatibility battles do not establish feature parity.
 
 ## Hardware portability: depth, lines, and a remote Windows test (G21)  [LANDED 2026-09-25]
 

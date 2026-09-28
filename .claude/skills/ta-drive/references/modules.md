@@ -89,6 +89,14 @@ with a full 128-word argument stack. `--expect stock-zero` is the negative API c
 15001-slot pool. It configures ESC's own `TAESC.ini` and `Software\TA Esc` registry root,
 not retail's settings. Skirmish activates only four players; this is not evidence for
 global live ID 15000, which requires a network fixture.
+`--unused-model-pieces --extended --roundtrip` keeps 4096 declarations over the solar model
+without accessing the excess and checks that saving/restoring still runs the getter suite.
+
+`tools/cob_corpus_probe.py SETUP... --out DIR` audits effective native-loader choices in
+paused isolated games and preserves metadata/hashes, not game scripts. A nonzero exit reports
+quarantined types, including malformed content bundled with a setup; it is not silently
+waived. `tools/cob_safety_probe.py divide piece sweetspot native-ops --out DIR` drives
+diagnostic refusal, model-bound type exclusion and native instruction continuation.
 
 `tools/cob_peer_probe.py SETUP --port N --out DIR` checks self and remote ownership on two
 peers; `--quarantine both|host|join` checks matching malformed files or native mismatch

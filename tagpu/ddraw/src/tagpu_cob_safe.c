@@ -47,8 +47,10 @@ static CobOp shape(uint32_t word)
     case 0x10004000: case 0x1000b000: case 0x1000c000:
         o.length = 3; o.need = 1; o.piece = o.axis = 1; break;
     case 0x10005000: case 0x10006000: case 0x10007000: case 0x10008000:
-    case 0x1000d000: case 0x1000e000:
+    case 0x1000a000: case 0x1000d000: case 0x1000e000:
         o.length = 2; o.piece = 1; break;
+    case 0x10009000:
+        o.length = 2; o.need = 2; o.piece = 1; break;
     case 0x1000f000: case 0x10071000:
         o.length = 2; o.need = 1; o.piece = 1; break;
     case 0x10011000: case 0x10012000:
@@ -84,7 +86,7 @@ static const char* operands(const TagpuCobProgram* p, uint32_t pc, CobOp o)
     if (pc >= p->words || o.length > p->words - pc) return "instruction extends past code";
     if (o.length == 1) return NULL;
     a = p->code[pc + 1];
-    if (o.piece && a >= p->pieces) return "piece index exceeds piece allocation";
+    if (o.piece && a >= p->model_pieces) return "piece index exceeds model allocation";
     if (o.axis && p->code[pc + 2] >= 3) return "axis is outside X/Y/Z";
     if (o.kind == 0x10021000 || o.kind == 0x10023000) {
         selector = p->code[pc] & 7;
@@ -152,6 +154,19 @@ static int fault(char* reason, size_t capacity, const char* text)
     return 0;
 }
 
+int tagpu_cob_bind_model(TagpuCobProgram* p, uint32_t pieces, char* reason, size_t capacity)
+{
+    uint32_t pc;
+    p->model_pieces = pieces < p->pieces ? pieces : p->pieces;
+    for (pc = 0; pc < p->words; ++pc) {
+        const char* error;
+        if (p->starts[pc] != 1) continue;
+        error = operands(p, pc, shape(p->code[pc]));
+        if (error) return fault(reason, capacity, error);
+    }
+    return 1;
+}
+
 int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
                            char* reason, size_t capacity)
 {
@@ -163,7 +178,7 @@ int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
     switch (r->status) {
     case 0x01000000: case 0x02400000: break;
     case 0x02100000: case 0x02200000:
-        if ((uint32_t)r->piece >= p->pieces || (uint32_t)r->axis >= 3)
+        if ((uint32_t)r->piece >= p->model_pieces || (uint32_t)r->axis >= 3)
             return fault(reason, capacity, "animation wait exceeds piece allocation");
         break;
     case 0x02800000:
@@ -194,8 +209,11 @@ int tagpu_cob_check_step(const TagpuCobProgram* p, const TagpuCobRecord* r,
     if ((unsigned)(r->sp + 1) < need) return fault(reason, capacity, "operand stack underflow");
     if ((unsigned)(r->sp + 1) - need + o.put > TAGPU_COB_WORDS)
         return fault(reason, capacity, "operand stack capacity exceeded");
-    if (o.kind == 0x10034000 && r->stack[r->sp - 1] == INT32_MIN && r->stack[r->sp] == -1)
-        return fault(reason, capacity, "integer division overflow");
+    if (o.kind == 0x10034000) {
+        if (!r->stack[r->sp]) return fault(reason, capacity, "integer division by zero");
+        if (r->stack[r->sp - 1] == INT32_MIN && r->stack[r->sp] == -1)
+            return fault(reason, capacity, "integer division overflow");
+    }
     return 1;
 }
 
@@ -305,6 +323,7 @@ TagpuCobProgram* tagpu_cob_program(const void* data, size_t size, char* reason, 
     p = (TagpuCobProgram*)calloc(1, sizeof *p);
     if (!p) goto bad;
     p->scripts = h[1]; p->pieces = h[2]; p->words = h[3]; p->statics = h[4];
+    p->model_pieces = p->pieces;
     p->entries = (const uint32_t*)(blob + h[6]);
     p->code = (const uint32_t*)(blob + h[9]);
     p->starts = (unsigned char*)calloc((size_t)p->words + 1, 1);

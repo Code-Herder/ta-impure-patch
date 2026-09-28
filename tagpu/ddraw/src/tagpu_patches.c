@@ -10395,6 +10395,49 @@ static void __cdecl cob_free_blob(void* blob)
     ((void (__cdecl*)(void*))0x004D85A0u)(blob);
 }
 
+static unsigned __cdecl cob_loaded_model_check(unsigned* regs)
+{
+    char* ta = *(char**)0x00511DE8u;
+    char* def = (char*)(size_t)regs[PR_EBP];
+    void* blob = (void*)(size_t)regs[PR_EAX];
+    const char* base = *(const char**)(ta + 0x1439B);
+    unsigned count = *(unsigned*)(ta + 0x1438F);
+    uintptr_t delta = (uintptr_t)def - (uintptr_t)base;
+    CobFile* f;
+    if (!base || count > TAGPU_LIM_TYPES || delta % 0x249u || delta / 0x249u >= count)
+        cob_fault("unknown", 0, "loaded unit definition exceeds its allocation");
+    if (blob) {
+        char reason[256];
+        const char* root = (*(const char***)(ta + 0x14377))[delta / 0x249u];
+        unsigned pieces = root ? ((unsigned (__stdcall*)(const char*))0x0045AE80u)(root) : 0;
+        EnterCriticalSection(&s_cobLock);
+        f = cob_find(blob);
+        if (!f) cob_fault("unknown", 0, "loaded script allocation is not validated");
+        /* DISASSEMBLED: 0x42D79C publishes this template before the COB load.
+           0x45A950 uses this same node count to allocate 34 + 54*N bytes;
+           0x45A9E8 skips excess COB names, it does not enlarge that allocation.
+           Unused excess names are legal; reachable accesses must fit. */
+        if (!tagpu_cob_bind_model(f->program, pieces, reason, sizeof reason)) {
+            cob_reject_file(f->name, reason);
+            LeaveCriticalSection(&s_cobLock);
+            cob_free_blob(blob);
+            blob = NULL;
+        } else LeaveCriticalSection(&s_cobLock);
+    }
+    *(void**)(def + 0x18E) = blob;
+    regs[PR_EAX] = (unsigned)(size_t)blob;
+    return 0x0042D8FAu;
+}
+
+static void cob_model_bound(char* cob, const CobFile* f)
+{
+    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+    /* The unit owns its posed model until after COB destruction (0x486D8A,
+       then 0x486D9E). Interpreter and save callbacks run on that owning thread. */
+    if (!model || f->program->model_pieces > model[0])
+        cob_fault(f->name, 0, "COB piece count exceeds the posed model allocation");
+}
+
 static TagpuCobRecord* cob_record(char* cob, unsigned slot)
 {
     if (slot >= TAGPU_COB_THREADS) cob_fault("unknown", 0, "thread index exceeds its allocation");
@@ -10421,6 +10464,7 @@ static unsigned __cdecl cob_run_enter(unsigned* regs)
         EnterCriticalSection(&s_cobLock);
         f = cob_find(*(void**)(cob + 8));
         if (!f) cob_fault("unknown", record->pc, "script allocation is not validated");
+        cob_model_bound(cob, f);
         if (!tagpu_cob_check_record(f->program, record, reason, sizeof reason))
             cob_fault(f->name, record->pc, reason);
         LeaveCriticalSection(&s_cobLock);
@@ -10462,7 +10506,7 @@ static unsigned __cdecl cob_run_step(unsigned* regs)
             int piece = record->stack[record->sp - 1];
             /* The transport packet has one byte for the piece. 0xFF means
                hidden cargo (0x48AC99), not piece 255 of a larger model. */
-            if (piece != -1 && (piece < 0 || piece >= 255 || (unsigned)piece >= f->program->pieces))
+            if (piece != -1 && (piece < 0 || piece >= 255 || (unsigned)piece >= f->program->model_pieces))
                 cob_fault(f->name, record->pc, "attachment piece exceeds its model or wire representation");
         }
         if (!cob_live_unit(*(char**)0x00511DE8u, id)) {
@@ -10534,7 +10578,22 @@ static CobFile* cob_owned_file(char* cob)
     /* The engine owns this script until every unit of its type is destroyed;
        notably +reload destroys those units before 0x42D275 frees the script. */
     if (!f) cob_fault("unknown", 0, "script allocation is not validated");
+    cob_model_bound(cob, f);
     return f;
+}
+
+typedef void (__stdcall *CobNativePieceCenter)(char*, void*, int);
+static CobNativePieceCenter s_cobNativePieceCenter;
+
+static void __stdcall cob_piece_center(char* unit, void* output, int piece)
+{
+    const unsigned* model = *(const unsigned**)(unit + 0x9E);
+    if (piece < 0 || !model || (unsigned)piece >= model[0]) {
+        char* cob = *(char**)(unit + 0x9A);
+        CobFile* f = cob ? cob_owned_file(cob) : NULL;
+        cob_fault(f ? f->name : "unknown", 0, "SweetSpot piece exceeds the posed model allocation");
+    }
+    s_cobNativePieceCenter(unit, output, piece);
 }
 
 static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
@@ -10543,7 +10602,7 @@ static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
     TagpuCobProgram* program = f->program;
     unsigned statics = program->statics * 4u;
     unsigned size = TAGPU_COB_SAVE_BYTES + statics + program->pieces * 108u;
-    unsigned char* data = (unsigned char*)malloc(size);
+    unsigned char* data = (unsigned char*)calloc(1, size);
     unsigned* pieces;
     unsigned i, axis;
     void** vtable = *(void***)cob;
@@ -10554,7 +10613,9 @@ static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
         cob_fault(f->name, 0, reason);
     if (statics) memcpy(data + TAGPU_COB_SAVE_BYTES, *(void**)(cob + 16), statics);
     pieces = (unsigned*)(data + TAGPU_COB_SAVE_BYTES + statics);
-    for (i = 0; i < program->pieces; ++i) {
+    /* Keep the declared-size wire layout, but never ask the model for unused
+       excess declarations. Their save rows remain canonical zero padding. */
+    for (i = 0; i < program->model_pieces; ++i) {
         unsigned* saved = pieces + i * 27u;
         const unsigned* animation = *(const unsigned**)(cob + 20) + i * 19u;
         memcpy(saved, animation + 1, 18u * 4u);
@@ -10594,14 +10655,19 @@ static int __attribute__((thiscall)) cob_load(char* cob, void* stream)
                                 records, &busy, reason, sizeof reason))
         cob_fault(f->name, 0, reason);
     pieces = (unsigned*)(data + records_size + statics);
-    for (i = 0; i < program->pieces; ++i)
+    for (i = 0; i < program->model_pieces; ++i)
         for (axis = 0; axis < 3; ++axis)
             if (pieces[i * 27u + 24u + axis] > 1u)
                 cob_fault(f->name, 0, "saved piece flag is not boolean");
     memcpy(cob_record(cob, 0), records, sizeof records);
     *(unsigned*)(cob + TAGPU_COB_COUNT_OFFSET) = busy;
     if (statics) memcpy(*(void**)(cob + 16), data + records_size, statics);
-    for (i = 0; i < program->pieces; ++i) {
+    /* The constructor zeroes every animation row (0x4B0783..0x4B0791).
+       Leave excess declarations inert, including when importing a native save
+       whose unchecked model getter serialized bytes beyond the posed model. */
+    for (i = program->model_pieces; i < program->pieces; ++i)
+        memset(*(unsigned**)(cob + 20) + i * 19u, 0, 19u * sizeof(unsigned));
+    for (i = 0; i < program->model_pieces; ++i) {
         unsigned* saved = pieces + i * 27u;
         unsigned* animation = *(unsigned**)(cob + 20) + i * 19u;
         animation[0] = 1;
@@ -10648,10 +10714,13 @@ static void cob_runtime_sites(void)
     static const unsigned char create_check[] = {0xF7,0x80,0x41,2,0,0,0,0,0x80,0,
                                                 0x0F,0x84,0x0D,2,0,0};
     static const unsigned char model_check[] = {0x8B,0x88,0x8E,1,0,0};
+    static const unsigned char loaded_model[] = {0x89,0x85,0x8E,1,0,0};
+    static const unsigned char piece_center[] = {0x83,0xEC,8,0x8B,0x44,0x24,0x14};
     static const unsigned char chat_frame[] = {0xE8,0xFC,0x21,0xF9,0xFF};
     static const unsigned char path = 0x57, blob = 0x56;
     unsigned i, factor = TAGPU_COB_RECORD_BYTES / 4;
     unsigned char now[12];
+    unsigned char* original;
     InitializeCriticalSection(&s_cobLock);
     lim_dword(0x00485D74u, 0x544, TAGPU_COB_OBJECT_BYTES, "COB object allocation");
     for (i = 0; i < sizeof model / sizeof *model; ++i)
@@ -10681,6 +10750,16 @@ static void cob_runtime_sites(void)
     lim_branch(0x004B2040u, sizeof load_entry, load_entry, 0xE9, (unsigned)(size_t)cob_load, "COB bounded old and new saved records");
     cob_guard_site(0x00485FA0u, sizeof create_check, create_check, cob_create_check, "COB rejected required-unit guard");
     cob_guard_site(0x00485D64u, sizeof model_check, model_check, cob_model_check, "COB rejected model creation guard");
+    cob_guard_site(0x0042D8F4u, sizeof loaded_model, loaded_model, cob_loaded_model_check, "COB model allocation bound");
+    original = lim_code(sizeof piece_center + 5);
+    if (original) {
+        memcpy(original, piece_center, sizeof piece_center);
+        original[sizeof piece_center] = 0xE9;
+        tagpu_detour_rel(original + sizeof piece_center + 1, 0x0043E0B7u);
+        s_cobNativePieceCenter = (CobNativePieceCenter)(void*)original;
+        lim_branch(0x0043E0B0u, sizeof piece_center, piece_center, 0xE9,
+                   (unsigned)(size_t)cob_piece_center, "COB bounded SweetSpot piece");
+    }
     lim_branch(0x00496A4Fu, sizeof chat_frame, chat_frame, 0xE8, (unsigned)(size_t)cob_chat_frame, "COB entry diagnostics");
 }
 
@@ -10728,7 +10807,8 @@ static int __attribute__((thiscall)) cob_get(char* cob, int key, int a, int b, i
     if (key >= 9 && key <= 11 && !cob_live_unit(ta, a)) return 0;
     if (key == 7 || key == 8) {
         const unsigned* file = *(const unsigned**)(cob + 8);
-        if (a < 0 || !file || (unsigned)a >= file[2]) return 0;
+        const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+        if (a < 0 || !file || !model || (unsigned)a >= file[2] || (unsigned)a >= model[0]) return 0;
     }
     if (key != 32 && (key < 69 || key > 75))
         return s_cobNativeGet(cob, key, a, b, c, d);

@@ -133,7 +133,7 @@ def run(out, dll, seconds):
         inst = compat.prepare_wine(setup, dll, display)
         for resource in ('Metal', 'Energy'):
             subprocess.run(['wine', 'reg', 'add',
-                            r'HKCU\Software\Cavedog Entertainment\Total Annihilation\Skirmish',
+                            r'HKCU\Software\TA Esc\Total Annihilation\Skirmish',
                             '/v', 'Player0' + resource, '/t', 'REG_DWORD', '/d', '1000000', '/f'],
                            env=dict(os.environ, WINEPREFIX=str(inst['prefix'])),
                            capture_output=True, check=True, timeout=120)
