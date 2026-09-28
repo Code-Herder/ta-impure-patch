@@ -1,0 +1,1 @@
+landing-review: model=GPT-6(exact-variant-unavailable) effort=high range=5ef6565..9f4050f findings=2 acted=2 rejected=0 date=2026-09-28; two independent read-only reviewers; reload publication and native checksum metadata cleanup fixed in d5bbe84
