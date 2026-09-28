@@ -2007,14 +2007,17 @@ key, goes to `0x430B8D` as a missing value does, and that path writes the replac
 registry (`0x430BF9`). Both names are bounded before the builder, which has no bound of its own:
 under 256 bytes each, with the `language` value's, so `"Maps-<language>\<name>.TNT"` fits the
 stub's 1 024-byte buffer; a name past the bound keeps stock's verdict. A map whose file name has a dot
-before `.ota` (`Map.v2.ota`) is asked about `Map.v2.TNT`, while the loader, handed the list's name
-already cut at its last dot, cuts it again and opens `Maps\Map.TNT` (`0x435F91`): stock's
-mis-load, which the fix neither causes nor mends. MEASURED 2026-09-28, Total Mayhem
+before `.ota` (`Map.v2.ota`) is asked about `Map.v2.TNT`, while the loader (the skirmish and
+multiplayer cases 2 and 3 of `0x436844`'s jump table, at `0x4360BF`), handed the list's name
+already cut at its last dot, parses `Maps\Map.OTA` (`0x436103`) and asks for the terrain through
+`0x435430(1, "Maps", name, "TNT")` at `0x436190`, which cuts again (`0x4354F6`): `Maps\Map.TNT`,
+stock's mis-load, which the fix neither causes nor mends. MEASURED 2026-09-28, Total Mayhem
 11.3.0 under Wine, the same instance on main's build and on the fix: the skirmish list 109 → 100
 and the battle room's list 109 → 100, the nine missing being exactly the nine maps with no terrain
 in the install, nothing else changed; a saved "A Plethora of Ponds" became "Acid Foursome"; a pick
-from the filtered list loads. A translated saved name (a `language` other than english) was not
-run.
+from the filtered list loads. With `language` = german the list read 100 German names, and a
+saved "Das Ashap-Plateau" (not entry 0, which is "Absolut riesig") was kept: the SKIRMISH screen
+showed it, the set-aside counter read 0 and the registry held it at exit.
 
 **Not closed.** A joining peer that has the host's map's `.ota` but not its terrain loads the
 host's pick by name (`0x448EAE` → `0x435A20` → `0x435DA0`), which this list does not reach, so it
