@@ -216,8 +216,9 @@ FBI reader pushes the tag's name (`0x5039F0`) at `0x42CB7D`, reads it with `0x4C
 one bit, `shl 0x12`, clears that bit of the dword at `+0x245` and ORs it in, and stores the dword
 back at `0x42CBAB` (`89 85 45 02 00 00`). `tagpu_cat.c` reads it to list a game's living commanders
 for the compat suite, beside the seats in the game: a player record (`main+0x1B63`, stride `0x14B`)
-with a nonzero first dword and a type byte `+0x73` of 1, 2 or 3, the pair `0x48664B..0x486660`
-tests (`cmp dword [eax],ebp`, then `mov cl,[eax+0x73]` against 1 and 2); the string's one other reference, `0x431B73`, is outside the FBI reader and
+with a nonzero first dword and a controller byte `+0x73` of 1 to 4 — local human, local AI,
+remote human, remote AI. `0x48664B..0x486660` tests the dword and then 1 and 2 for a local player
+(`cmp dword [eax],ebp`, `mov cl,[eax+0x73]`); `0x489C99` compares 3 and `0x428446` compares 4; the string's one other reference, `0x431B73`, is outside the FBI reader and
 was not followed.
 
 **Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot

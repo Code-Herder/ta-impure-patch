@@ -73,8 +73,7 @@ A run is **meets goal**, **known gap** (matches `today`) or **UNEXPECTED**; the 
 **Every player gets a commander, in both games.** Before any scenario touches the map, the
 skirmish asks the engine (`tacli units`, the catalogue's `players` and `commanders`,
 `tagpu_cat.c`) for two lists: every **seat in the game** — a player record whose first dword is
-nonzero and whose type byte `+0x73` is 1, 2 or 3 (local human, local AI, remote), the pair the
-engine itself tests at `0x48664B` — and every living unit whose type has the FBI `commander` bit
+nonzero and whose controller byte `+0x73` is 1 to 4 (local or remote, human or AI) — and every living unit whose type has the FBI `commander` bit
 (`UnitDef+0x245` bit `0x40000`, [engine map](../exe-reverse-engineering.md)). Every seat must
 hold a commander, and there must be two seats at least. The seats come from the player records
 and not from the units, because a player the game gave nothing owns no unit to be counted by.

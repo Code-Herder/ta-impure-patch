@@ -50,8 +50,9 @@
 #define U_OWNER      0xFF         /* u8 player index               */
 #define OFF_USLOTS   0x14351      /* u16 the array's slot count, stored at 0x4854EF */
 /* the ten seats, inline in main: a seat is in the game when its first dword is nonzero and
-   its type byte +0x73 is 1 (local human), 2 (local AI) or 3 (remote); 0x48664B..0x486660 tests
-   exactly that pair (DISASSEMBLED) */
+   its controller byte +0x73 is 1 (local human), 2 (local AI), 3 (remote human) or 4 (remote
+   AI). DISASSEMBLED: 0x48664B tests the dword and then 1 and 2 for a local player, 0x489C99
+   compares 3 and 0x428446 compares 4 (tadr-port/sim-fixes-evidence.md) */
 #define OFF_PLAYERS  0x1B63
 #define PLAYER_STRIDE 0x14B
 #define PL_TYPE      0x73
@@ -214,7 +215,10 @@ static const char* verify_stride(const char* ta, const char* defs)
    the loader thread can be building the array, and `begin` and `end` are then an unsynchronised
    pair (cross-thread-engine-reads.md §5). The teardown frees the array and nulls `begin` on the
    game thread, which is this one (tagpu_triggers_frame), and its post hook clears the latch on
-   the same call stack, so no walk runs between the free and the clear.
+   the same call stack, so no walk runs between the free and the clear. The one gap: a
+   teardown entered on another thread would leave the latch set into the next load, because
+   the level end declines to act off the game thread; none has been observed, and every run
+   counts them (`tdforeign=`, tagpu_packet_pub.c).
    THE BOUNDS, each on a value read from engine memory: the walk runs to the array's own slot
    count (u16 +0x14351, what 0x4854A0 allocated for), never to `end`; a unit's type is its index
    (+0xA6) checked against the def count the table walk above used, never its +0x92 pointer;
@@ -267,7 +271,7 @@ static void write_commanders(FILE* out, const char* ta, const char* defs, unsign
     {
         const char* pl = ta + OFF_PLAYERS + (size_t)k * PLAYER_STRIDE;
         const unsigned char type = *(const unsigned char*)(pl + PL_TYPE);
-        if (*(const unsigned*)pl && type >= 1 && type <= 3)
+        if (*(const unsigned*)pl && type >= 1 && type <= 4)
             fprintf(out, "%s%u", found++ ? "," : "", k);
     }
     fprintf(out, "]");
