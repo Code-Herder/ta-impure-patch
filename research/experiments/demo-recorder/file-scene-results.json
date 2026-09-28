@@ -1,0 +1,597 @@
+{
+  "date": "2026-09-28",
+  "setup": "reference setup: retail TA 3.1, Wine 9.0, Impure a65b0f3 with temporary full-scene importer and immutable generated-frame bank; fresh Two Continents two-tower process, 1024x768, Vsync off, aniso=4",
+  "scope": "file-based replay of sampled visual world states; not continuous complete-game playback or a 45-minute seek",
+  "file": {
+    "blocks": 12,
+    "bytes": 2566129,
+    "encode_write_ms": 30.110877,
+    "data_index_fsync_ms": 1.433732,
+    "footer_write_fsync_ms": 0.487087,
+    "assets": 634,
+    "frames": 101,
+    "ticks": [
+      447,
+      450,
+      453,
+      456,
+      459,
+      462,
+      465,
+      468,
+      471,
+      474,
+      477,
+      480,
+      483,
+      486,
+      489,
+      492,
+      495,
+      498,
+      501,
+      504,
+      507,
+      510,
+      513,
+      516,
+      519,
+      522,
+      525,
+      528,
+      531,
+      534,
+      537,
+      540,
+      543,
+      546,
+      549,
+      552,
+      555,
+      558,
+      561,
+      564,
+      567,
+      570,
+      573,
+      576,
+      579,
+      582,
+      585,
+      588,
+      591,
+      594,
+      597,
+      600,
+      603,
+      606,
+      609,
+      612,
+      615,
+      618,
+      621,
+      624,
+      627,
+      630,
+      633,
+      636,
+      639,
+      642,
+      645,
+      648,
+      651,
+      654,
+      657,
+      660,
+      663,
+      666,
+      669,
+      672,
+      675,
+      678,
+      681,
+      684,
+      687,
+      690,
+      693,
+      696,
+      699,
+      702,
+      705,
+      708,
+      711,
+      714,
+      717,
+      720,
+      723,
+      726,
+      729,
+      732,
+      735,
+      738,
+      741,
+      744,
+      1852
+    ],
+    "metadata_bytes": 437304
+  },
+  "first_import": {
+    "index": 100,
+    "tick": 1852,
+    "prepare_ms": 4.937482,
+    "ack_ms": 8.799191,
+    "request_to_grab_ms": 203.972509,
+    "open_ms": 143.951671,
+    "assets": 634,
+    "changed": 634
+  },
+  "warm_seeks": {
+    "open_ms": 159.066535,
+    "assets": 634,
+    "changed_addresses": 634,
+    "views": {
+      "west-0": {
+        "baseline_differences": [
+          0,
+          0
+        ]
+      },
+      "west-50": {
+        "baseline_differences": [
+          0,
+          0
+        ]
+      },
+      "west-99": {
+        "baseline_differences": [
+          0,
+          0
+        ]
+      },
+      "west-100": {
+        "baseline_differences": [
+          0,
+          0
+        ]
+      },
+      "west_positive_change": 79371,
+      "east-0": {
+        "baseline_differences": [
+          7949,
+          0
+        ]
+      },
+      "east-50": {
+        "baseline_differences": [
+          0,
+          0
+        ]
+      },
+      "east-99": {
+        "baseline_differences": [
+          0,
+          0
+        ]
+      },
+      "east-100": {
+        "baseline_differences": [
+          2043,
+          0
+        ]
+      },
+      "east_positive_change": 225825
+    },
+    "seeks": [
+      {
+        "index": 0,
+        "tick": 447,
+        "prepare_ms": 5.831078,
+        "ack_ms": 9.456178,
+        "request_to_grab_ms": 203.045391,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 100,
+        "tick": 1852,
+        "prepare_ms": 3.221872,
+        "ack_ms": 7.08982,
+        "request_to_grab_ms": 216.928863,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 50,
+        "tick": 597,
+        "prepare_ms": 5.992316,
+        "ack_ms": 9.848925,
+        "request_to_grab_ms": 206.088453,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 99,
+        "tick": 744,
+        "prepare_ms": 6.420875,
+        "ack_ms": 10.414452,
+        "request_to_grab_ms": 227.639334,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 0,
+        "tick": 447,
+        "prepare_ms": 5.793268,
+        "ack_ms": 9.602346,
+        "request_to_grab_ms": 232.274367,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 99,
+        "tick": 744,
+        "prepare_ms": 6.247925,
+        "ack_ms": 12.314472,
+        "request_to_grab_ms": 204.460513,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 100,
+        "tick": 1852,
+        "prepare_ms": 3.945828,
+        "ack_ms": 8.546492,
+        "request_to_grab_ms": 214.766115,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 0,
+        "tick": 447,
+        "prepare_ms": 6.221605,
+        "ack_ms": 12.408571,
+        "request_to_grab_ms": 196.582906,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 50,
+        "tick": 597,
+        "prepare_ms": 7.489618,
+        "ack_ms": 12.401451,
+        "request_to_grab_ms": 210.830377,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 100,
+        "tick": 1852,
+        "prepare_ms": 3.946578,
+        "ack_ms": 11.112148,
+        "request_to_grab_ms": 209.521294,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 99,
+        "tick": 744,
+        "prepare_ms": 5.4023,
+        "ack_ms": 8.90668,
+        "request_to_grab_ms": 224.711679,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 50,
+        "tick": 597,
+        "prepare_ms": 6.131975,
+        "ack_ms": 10.146883,
+        "request_to_grab_ms": 217.35732,
+        "different_pixels": 0,
+        "view": "west"
+      },
+      {
+        "index": 0,
+        "tick": 447,
+        "prepare_ms": 6.039836,
+        "ack_ms": 11.078328,
+        "request_to_grab_ms": 226.867667,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 100,
+        "tick": 1852,
+        "prepare_ms": 4.635384,
+        "ack_ms": 10.053914,
+        "request_to_grab_ms": 234.491285,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 50,
+        "tick": 597,
+        "prepare_ms": 5.594859,
+        "ack_ms": 9.325598,
+        "request_to_grab_ms": 228.417199,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 99,
+        "tick": 744,
+        "prepare_ms": 5.233041,
+        "ack_ms": 10.669831,
+        "request_to_grab_ms": 224.515731,
+        "different_pixels": 1,
+        "view": "east"
+      },
+      {
+        "index": 0,
+        "tick": 447,
+        "prepare_ms": 5.685678,
+        "ack_ms": 9.719276,
+        "request_to_grab_ms": 228.13514,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 99,
+        "tick": 744,
+        "prepare_ms": 6.048196,
+        "ack_ms": 10.965649,
+        "request_to_grab_ms": 237.807576,
+        "different_pixels": 1,
+        "view": "east"
+      },
+      {
+        "index": 100,
+        "tick": 1852,
+        "prepare_ms": 4.741073,
+        "ack_ms": 11.851054,
+        "request_to_grab_ms": 232.877664,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 0,
+        "tick": 447,
+        "prepare_ms": 5.857608,
+        "ack_ms": 9.861795,
+        "request_to_grab_ms": 224.438241,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 50,
+        "tick": 597,
+        "prepare_ms": 6.626093,
+        "ack_ms": 12.152923,
+        "request_to_grab_ms": 232.863944,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 100,
+        "tick": 1852,
+        "prepare_ms": 4.026897,
+        "ack_ms": 9.772975,
+        "request_to_grab_ms": 229.80677,
+        "different_pixels": 0,
+        "view": "east"
+      },
+      {
+        "index": 99,
+        "tick": 744,
+        "prepare_ms": 5.918977,
+        "ack_ms": 11.385707,
+        "request_to_grab_ms": 220.015766,
+        "different_pixels": 1,
+        "view": "east"
+      },
+      {
+        "index": 50,
+        "tick": 597,
+        "prepare_ms": 6.843592,
+        "ack_ms": 10.82747,
+        "request_to_grab_ms": 207.321196,
+        "different_pixels": 0,
+        "view": "east"
+      }
+    ]
+  },
+  "timing_summary": {
+    "prepare_ms": {
+      "median": 5.844343,
+      "max": 7.489618
+    },
+    "ack_ms": {
+      "median": 10.2806675,
+      "max": 12.408571
+    },
+    "request_to_grab_ms": {
+      "median": 224.476986,
+      "max": 237.807576
+    }
+  },
+  "warm_film": {
+    "frames": 240,
+    "exact": 240,
+    "within_one_level": 240,
+    "transient_frames": [],
+    "runs": [
+      {
+        "first": 0,
+        "last": 30,
+        "label": "100"
+      },
+      {
+        "first": 31,
+        "last": 42,
+        "label": "37"
+      },
+      {
+        "first": 43,
+        "last": 52,
+        "label": "100"
+      },
+      {
+        "first": 53,
+        "last": 65,
+        "label": "0"
+      },
+      {
+        "first": 66,
+        "last": 77,
+        "label": "37"
+      },
+      {
+        "first": 78,
+        "last": 88,
+        "label": "100"
+      },
+      {
+        "first": 89,
+        "last": 239,
+        "label": "37"
+      }
+    ]
+  },
+  "cold_film": {
+    "frames": 240,
+    "exact": 235,
+    "within_one_level": 235,
+    "transient_frames": [
+      {
+        "frame": 11,
+        "nearest": "old",
+        "strong_differences": 10943,
+        "different_pixels": 10943,
+        "max_channel_difference": 254
+      },
+      {
+        "frame": 12,
+        "nearest": "target",
+        "strong_differences": 46143,
+        "different_pixels": 49224,
+        "max_channel_difference": 144
+      },
+      {
+        "frame": 13,
+        "nearest": "target",
+        "strong_differences": 39175,
+        "different_pixels": 41676,
+        "max_channel_difference": 144
+      },
+      {
+        "frame": 14,
+        "nearest": "target",
+        "strong_differences": 39175,
+        "different_pixels": 41676,
+        "max_channel_difference": 144
+      },
+      {
+        "frame": 15,
+        "nearest": "target",
+        "strong_differences": 164,
+        "different_pixels": 169,
+        "max_channel_difference": 31
+      }
+    ],
+    "runs": [
+      {
+        "first": 0,
+        "last": 10,
+        "label": "old"
+      },
+      {
+        "first": 11,
+        "last": 15,
+        "label": "transient"
+      },
+      {
+        "first": 16,
+        "last": 239,
+        "label": "target"
+      }
+    ]
+  },
+  "cold_timing": {
+    "index": 100,
+    "tick": 1852,
+    "prepare_ms": 2.799747,
+    "ack_ms": 5.878544,
+    "open_ms": 112.751106,
+    "assets": 634,
+    "changed_addresses": 634,
+    "capture_finished_ms": [
+      194.814975,
+      348.864551,
+      507.190277,
+      668.114909
+    ],
+    "capture_different_pixels": [
+      41676,
+      0,
+      0,
+      0
+    ]
+  },
+  "truncated_prefix": {
+    "index": 99,
+    "tick": 744,
+    "prepare_ms": 5.184285,
+    "ack_ms": 8.29466,
+    "request_to_grab_ms": 176.219767,
+    "recovery_open_ms": 101.433399,
+    "verified_blocks": 11,
+    "cut_bytes": 2537997,
+    "partial_tail_bytes": 27943,
+    "verified_end": 2510054,
+    "different_pixels": 0,
+    "missing_target_refused": true,
+    "corrupt_target_refused": true,
+    "refused_different_pixels": 0
+  },
+  "terminated_writer_prefix": {
+    "index": 99,
+    "tick": 744,
+    "prepare_ms": 4.90472,
+    "ack_ms": 8.220126,
+    "request_to_grab_ms": 164.160434,
+    "recovery_open_ms": 108.3075,
+    "verified_blocks": 11,
+    "verified_end": 2510054,
+    "file_bytes": 2538013,
+    "writer_exit": 99,
+    "writer_api": "Win32 TerminateProcess under Wine",
+    "different_pixels": 0
+  },
+  "import_refusals": [
+    {
+      "kind": "different_bank",
+      "refused": true,
+      "different_pixels": 0
+    },
+    {
+      "kind": "wrong_map",
+      "refused": true,
+      "different_pixels": 0
+    },
+    {
+      "kind": "short_table",
+      "refused": true,
+      "different_pixels": 0
+    }
+  ],
+  "file_sha256": "f95cc23216f2b82332ff374885ff88f0a41acfc24f496acd0d52c4c6f0829326",
+  "limits": [
+    "101 captured states: ticks 447..744 sampled every three ticks, then isolated tick 1852; the gap is not recorded continuous playback",
+    "world-only image mask excludes UI and pause label",
+    "warm comparisons: 21/24 exact; remaining three differ at one pixel by one channel level",
+    "60 Hz capture can miss shorter transitions; cold capture observed five bad frames",
+    "request-to-grab is an upper bound including screenshot overhead, not a GPU present timestamp",
+    "single owned generated bank per process; switching bank or level is refused",
+    "no record-on/off overhead, remote perspectives, audio, maximum-scale or mod coverage"
+  ]
+}

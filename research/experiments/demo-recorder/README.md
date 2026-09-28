@@ -182,3 +182,19 @@ samples, phase plans and crash files are retained locally under
 `_local/demo-recorder-exploration/io/`. The large repeated capacity file is disposable after
 its exact size and full decoded hash are verified. See exploration §6f for the measured costs
 and distinction between metadata access, verified block access, and full-prefix recovery.
+
+
+## File-to-renderer scene seeks
+
+`file-scene-results.json` joins the disk container to the temporary world importer (§6g).
+The private `_local/demo-recorder-exploration/seek/` archive contains its one-file recording,
+normalized-frame hashes, importer/immutable-bank source, reader driver, images and 60 Hz videos.
+It includes an actual Win32-terminated writer's output restored into the game, as well as
+missing/corrupt-target refusals. The 101 states comprise ten seconds of samples plus one
+later isolated scene; they are not a continuously recorded full match.
+
+The warm movie matches requested scene images throughout. The cold movie has five transient
+frames and fails the seamless-presentation requirement. No hidden preparation/readiness gate
+is claimed. These private drivers use assertions and local paths; the public format/parser
+and production renderer integration are still to be designed. The temporary engine edits
+are removed after measurement, with the normal DLL rebuilt.

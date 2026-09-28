@@ -7,7 +7,8 @@ in [Demo recorder](demo-recorder.md). This page holds technical findings and the
 needed to settle the open architecture decisions. A temporary transport probe has captured a
 live two-player battle, and the captured events have been decoded, compared between peers, and
 benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), remote-perspective comparisons (§6c), wider same-level snapshot fidelity (§6d), and fresh-process world-asset relocation (§6e) have run; complete-world seeking has not.**
-Disk/index access and acknowledged process-crash prefix recovery are measured in §6f.
+Disk/index access and acknowledged process-crash prefix recovery are measured in §6f;
+file-backed scene seeking and rendered prefix recovery run in §6g, which also exposes a cold-cache presentation failure.
 Preparation and checkpoint policy remain undecided; §6 distinguishes measured container results
 from the missing end-to-end evidence.
 
@@ -803,7 +804,8 @@ process without live type representatives, including generated frame state. This
 specific portability obstacle for watch-only playback; it does not establish a full visual
 replay or a restorable simulation. The private importer accepts only its own research staging
 artifact and is not a hardened shipping parser. Repeated import/free cycles need a session-owned
-generated bank and atlas generation/lifetime rules; a one-import process cannot prove those.
+generated bank and atlas generation/lifetime rules. §6g verifies packet replacement with a
+retained bank; changing/freeing that bank remains outside the experiment.
 The existing full-map collector caps, aircraft/cargo/mirrored-feature gaps, terrain changes,
 visibility, sound, inspection/analysis and ordered capture boundaries remain outside this test.
 No 5→45-minute request-to-correct-frame measurement or preparation/cache policy is settled here.
@@ -895,6 +897,118 @@ storage, match lifecycle/completion semantics or playable crash recovery. The us
 preparation/cache policy and subsecond request-to-correct-world target still need the complete
 playback pipeline measured on actual matches.
 
+## 6g. File-backed scene seeking and rendered prefix recovery
+
+**MEASURED, watch-only prototype.** The verified disk reader now feeds the scene importer.
+A **2,566,129-byte** experimental file contains one metadata/generated-frame block, ten blocks
+of ten scenes, one final scene block, and an index/footer. The shared dictionary names **634
+assets**. Its 101 states are ticks **447–744 at three-tick intervals**, followed by the separate
+sample at **1852** from the same recording process. The intervening gap is **not recorded
+continuous playback**. No full-match, 5→45-minute, player-perspective or simulation-restore
+claim follows from this sequence.
+
+The viewer is a fresh matching-content two-tower process, with none of the recorded unit
+types alive. Reserving 30 old address regions changes **634/634** asset addresses. The reader
+verifies index/block bounds, CRCs and the expected normalized-frame hash, relocates handles,
+and atomically replaces its private bridge file before issuing an import command. This
+Python-to-DLL staging path is a measurement tool, not a proposed shipping architecture.
+`research/experiments/demo-recorder/file-scene-results.json` contains the results.
+
+### Repeated replacement and the generated bank lifetime
+
+The first importer stored generated GAF headers inside each replaceable packet. That ownership
+cannot safely support a renderer atlas keyed by frame address after that packet is freed.
+The new probe owns **one immutable generated bank until process exit**: 42 frames, 392,656
+bytes of header/pixels, plus a 392,282-byte serialized copy used to compare subsequent imports.
+Both are bounded by the input size/count checks. Replacement packets borrow its stable frame
+addresses. The importing render thread is its sole owner; a different bank or level is refused.
+Each process logged one bank allocation despite repeated packet replacements. Unit and wreck
+opaque cache keys use disjoint namespaces; they remain renderer keys, not recorded incarnation
+identities.
+
+This verifies replacement within one replay bank. It does not implement changing replay files,
+level teardown, cancellation, lifetime-safe bank reclamation or hostile-file validation. The
+private prototype's assertions and current-process bridge must not become the public parser.
+
+### Repeated forward/backward scene comparisons
+
+On the same two camera views and 489,176-pixel mask per view used in §6d, repeat requests chose
+frames 0, 50, 99 and 100 in both directions. **21 of 24 captures were exact** against their
+settled references. The other three were frame 99 in the east view: the same single pixel at
+`(128,362)` differed by one channel level. The reference scenes themselves visibly differ:
+frame 0 versus 100 changes **79,371 west / 225,825 east pixels**. This rules out a test that
+kept displaying one scene while reporting successful imports.
+
+| Timed part of the 24 requests | Median | Maximum |
+|---|---:|---:|
+| Verified disk-block decode, frame extraction and relocation | 5.844 ms | 7.490 ms |
+| Request through importer acknowledgement | 10.281 ms | 12.409 ms |
+| Request through completed window grab | 224.477 ms | 237.808 ms |
+
+The last row includes ImageMagick capture overhead and is an **upper bound**, not a GPU
+presentation timestamp. Metadata/dictionary opening was measured separately (143.952 ms for
+the first import); that includes parsing the verbose research asset inventory and excludes
+loading the game/map/content. The first west-view import of frame 100 matched its original
+recording image exactly. Static world scenes are covered; UI and the paused label are excluded.
+
+A four-second, lossless, **60 fps** warm-cache video captured six changes between frames 100,
+37 and 0. **All 240 captured frames exactly match one of the requested settled scenes**;
+no intermediate image was observed. Capture at 60 Hz cannot rule out a shorter transient
+between captured frames.
+
+### Cold-cache seeking fails the seamless requirement
+
+The warm result does not generalize to first use. Initial reference grabs already showed
+**7,949 pixels** changing before frame 0's east view settled, and **2,043 pixels** before
+frame 100's east view settled. A clean fresh-process video then isolated first use of frame
+100 in the east view:
+
+- frames 0–10 show the old scene;
+- frames **11–15** show an intermediate appearance, matching neither old nor target;
+- frames 16–239 match the settled target exactly.
+
+The worst transient differs from the target by 49,224 pixels (46,143 differ by more than one
+channel level). A window grab completed 194.815 ms after the request still contains 41,676
+wrong pixels; grabs completed at 348.865, 507.190 and 668.115 ms match the settled target.
+Those completion times include capture processing; they do not timestamp when each image was
+sampled. **Five observed transient frames are enough to fail seamless presentation**, even
+though the target becomes usable well within a second on this short sample.
+
+The renderer's deferred restoration is the leading explanation, supported by the changing
+texture appearance and source structure; this run does not correlate each video frame with
+individual restorer queues. `tagpu_vk.c` prepares every pass and then steps the restorer before
+drawing the world. `tagpu_vk_restore_job_idle` checks queued/in-flight core work, while the
+separate `feeding` state says a consumer still has frames to supply. Consumer descriptor/twin
+selection also happens during prepare, before that frame's restoration step. A readiness rule
+must therefore cover feeding, completed restoration and the consumer's adoption of the finished
+image; a failed job must not be treated as ready merely because its queue emptied. A delay or
+repeated screenshot is not that invariant. **Next gate:** prepare the target
+while retaining the prior presented image, then publish only when those dependencies are ready.
+The current prototype does not yet implement that handoff.
+
+### A terminated writer's last verified scene renders correctly
+
+The Win32 worker from §6f writes this scene file and acknowledges the **partial body of its
+last scene block**, then executes `TerminateProcess(..., 99)` under Wine. Its file contains
+**2,538,013 bytes**; recovery verifies **11 blocks through byte 2,510,054** (metadata and the
+first 100 scenes). The last available scene is frame 99, tick **744**. Opening/recovering and
+resolving its context took **108.308 ms** in this run; requesting that state through the
+completed window grab took **164.160 ms**. The rendered scene differs by **zero pixels** from
+the same state read from the intact file.
+
+A separately truncated-tail file gave the same last scene. Asking for its missing frame 100
+was refused. A corrupted middle target was rejected before staging, with the prior image
+unchanged. The DLL separately refused a different generated bank, a wrong map dimension and
+a short table; each left the prior scene unchanged at zero differing pixels. These are
+specific measured failure paths, not a complete malformed-input campaign or a production
+recovery UI. The filesystem's survival of the worker termination is process-crash evidence;
+no power-loss or native Windows storage experiment is implied.
+
+This closes file-to-renderer seeking and playable **sampled-scene** prefix recovery within the
+tested inventory. Complete-world/state coverage, cold presentation readiness, authoritative
+perspectives/events, live capture/writer overhead, long actual matches and mod/scale coverage
+remain required before selecting the final format and preparation policy.
+
 ## 7. Architecture conclusions and remaining decisions
 
 ### Capture and identities
@@ -961,7 +1075,7 @@ copy all required state at its owning boundary, and make completeness explicit b
 that representation for persistent playback. The fact that the renderer can draw it today
 proves none of these portability properties.
 
-**There is no measured complete-world end-to-end seek result yet.** The unit-scene prototype in §6b is narrower: same-level visible switching and fresh-process pose relocation. The wider-scene experiments (§6d–6e) extend that coverage but do not close the full-state gate. In particular, this exploration has not
+**There is no measured complete-world end-to-end seek result yet.** The unit-scene prototype in §6b is narrower: same-level visible switching and fresh-process pose relocation. The wider-scene experiments (§6d–6g) extend that coverage through file-backed scene seeks and rendered prefix recovery, but do not close the full-state gate or the cold presentation gap. In particular, this exploration has not
 established a safe complete engine checkpoint or selected a watch-only replacement. The user's
 subsecond forward-seek requirement and undecided preparation policy remain unchanged. The
 container timings in §6 cannot settle either. The next work is complete-state coverage and request-to-correct-world comparison of the executable prototypes, not more file-offset indexing.
@@ -1059,7 +1173,8 @@ The source/protocol investigation and transport/container experiments now supply
 prototype direction. **The whole feasibility milestone is not complete:** full-state Impure
 playback fidelity, complete restore/seek, complete remote perspectives, playable recovery, live off/on
 cost and representative scale/content tests remain incomplete. Container IO and process-crash
-prefix recovery have run (§6f); they do not prove game-state recovery. Marking them complete would confuse
+prefix recovery have run (§6f), and recovered visual scenes render correctly (§6g);
+neither proves the complete game-state contract. Marking them complete would confuse
 a lossless captured event stream with a faithfully playable game.
 
 The first **one-file solo continuous playback of a short two-player match** has run (§6a),
