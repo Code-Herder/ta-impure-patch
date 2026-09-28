@@ -2,9 +2,9 @@
 #define TAGPU_PACKET_PUB_H
 /* tagpu_packet_pub.h — the frame packet exchange, PRODUCER side.
 
-   Included only by publisher files: tagpu_packet_pub.c (the observer and the
-   fill), tagpu_reclaim.c (the out-of-game packet from its teardown post hook)
-   and tagpu_markown.c (the font copy at hook 8). A render-thread file that
+   Included only by game-thread files: the publisher itself, tagpu_packet_pub.c
+   (the observer and the fill), and the ones that publish into it or gate on
+   its level latch. A render-thread file that
    includes this header is on the wrong side of the split and the build rule
    (tools/thread-split-check.sh) treats the include like an engine read. */
 #include "tagpu_packet.h"

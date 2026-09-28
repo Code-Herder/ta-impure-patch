@@ -779,34 +779,44 @@ def new_boxes(display, seen, boxes, t0):
 
 
 def commanders(name, players=2, wait=40) -> dict:
-    """EVERY PLAYER GOT A COMMANDER: the living units whose type has `commander` set, as the
-    engine holds them (`tacli units`, the catalogue's `commanders`: unit array and UnitDef bit,
-    tagpu_cat.c) -- not the roster, which is what Impure draws and leaves out what the fog
-    hides, where the other player's commander starts. Taken before any scenario, when a
-    player's units are its start units, so every owner with a living unit (`unit_owners`) must
-    hold a commander, and there must be at least `players` of them. Polled for `wait` s, since
-    a game's first units appear a moment after its screen."""
+    """EVERY PLAYER GOT A COMMANDER: every seat in the game (`players` in the catalogue, the
+    engine's player records) holds a living unit whose type has `commander` set, as the engine
+    holds them (`tacli units`: unit array and UnitDef bit, tagpu_cat.c) -- not the roster, which
+    is what Impure draws and leaves out what the fog hides, where the other player's commander
+    starts. The seats come from the engine and not from the units, because a player the game
+    gave nothing owns no unit to be counted by. `players` is the fewest seats the game may
+    have: two, for a skirmish or a network game. Polled for `wait` s, since a game's first
+    units appear a moment after its screen."""
     end = time.time() + wait
     while True:
         r = tacli("units", name, "--json", "--limit", "0", timeout=90)
         try:
             snap = json.loads(r.stdout)
-            got, units = snap["commanders"], set(snap["unit_owners"])
-        except (ValueError, KeyError, TypeError):
-            return {"ok": False, "why": f"no commander list from tacli units: "
-                                        f"{(r.stderr or r.stdout).strip()[:160]}", "commanders": []}
-        owners = {c["owner"] for c in got}
-        ok = len(units) >= players and units <= owners
+        except ValueError:
+            return {"ok": False, "commanders": [],
+                    "why": f"tacli units failed: {(r.stderr or r.stdout).strip()[:160]}"}
+        if "players" not in snap:
+            return {"ok": False, "commanders": [],
+                    "why": "the DLL reports no seats or commanders (tagpu_cat.c older than the check)"}
+        ok, why = commander_verdict(snap, players)
         if ok or time.time() >= end:
             break
         time.sleep(3)
-    shown = ", ".join(f"{c['type']} own={c['owner']}" for c in got) or "none"
-    if ok:
-        return {"ok": True, "commanders": got, "why": f"commanders: {shown}"}
-    lacking = sorted(units - owners)
-    why = (f"owners {lacking} have units and no commander" if lacking
-           else f"{len(units)} player(s) with units, {players} expected")
-    return {"ok": False, "commanders": got, "why": f"commanders: {shown} -- {why}"}
+    return {"ok": ok, "commanders": snap["commanders"], "why": why}
+
+
+def commander_verdict(snap, players) -> tuple:
+    """(ok, why) of one catalogue: every seat holds a commander, and there are `players` seats."""
+    got, seats = snap["commanders"], set(snap["players"])
+    owners = {c["owner"] for c in got}
+    shown = "commanders: " + (", ".join(f"{c['type']} own={c['owner']}" for c in got) or "none")
+    if len(seats) >= players and seats <= owners:
+        return True, shown
+    lacking = sorted(seats - owners)
+    why = (f"seats {lacking} have no commander" if lacking
+           else "not in play yet" if not snap.get("in_play")
+           else f"{len(seats)} seat(s) in the game, {players} expected")
+    return False, f"{shown} -- {why}"
 
 
 def mod_content(setup, inst) -> "dict | None":
@@ -2269,7 +2279,40 @@ def cmd_selftest(args):
         print(f"  {'ok ' if got == want else 'BAD'} {name:26} {got} miss(es)")
         hbad += got != want
     print(f"side panel: {len(HUD_CASES) - hbad} of {len(HUD_CASES)} as intended")
-    return 1 if bad or gbad or hbad else 0
+    rbad = 0
+    for name, pattern, text, want in MATCH_CASES:
+        got = bool(pattern.search(text))
+        print(f"  {'ok ' if got == want else 'BAD'} {name:26} {'matches' if got else 'no match'}")
+        rbad += got != want
+    for name, snap, want in COMMANDER_CASES:
+        got, why = commander_verdict(snap, 2)
+        print(f"  {'ok ' if got == want else 'BAD'} {name:26} {why}")
+        rbad += got != want
+    total = len(MATCH_CASES) + len(COMMANDER_CASES)
+    print(f"patterns and commanders: {total - rbad} of {total} as intended")
+    return 1 if bad or gbad or hbad or rbad else 0
+
+
+# (name, pattern, text, whether it must match)
+MATCH_CASES = [
+    ("panel ARMMAIN2", IN_GAME_PANEL, "gui ARMMAIN2.GUI", True),
+    ("panel GOKMAIN", IN_GAME_PANEL, "under: GOKMAIN", True),
+    ("panel not MAINMENU", IN_GAME_PANEL, "gui MAINMENU.GUI", False),
+    ("panel not SELGAME", IN_GAME_PANEL, "compat-tazero-alpha5: ui click START: no gadget", False),
+    ("TADR start, config", TADR_START_LINE, " 12 --- Process Attached.  config=TAESC.ini", True),
+    ("TADR start, bare", TADR_START_LINE, " 36 --- Process Attached", True),
+    ("TADR start, other line", TADR_START_LINE, " 37 --- Process Detached", False),
+]
+_CMD = lambda owners, seats, in_play=True: {
+    "in_play": in_play, "players": seats, "unit_owners": owners,
+    "commanders": [{"owner": o, "type": "ARMCOM"} for o in owners]}
+# (name, catalogue, whether commander_verdict passes it)
+COMMANDER_CASES = [
+    ("three seats, three", _CMD([0, 1, 3], [0, 1, 3]), True),
+    ("a seat given nothing", _CMD([0, 1], [0, 1, 3]), False),
+    ("one seat", _CMD([0], [0]), False),
+    ("before play", _CMD([], [], in_play=False), False),
+]
 
 
 def _ask(why):

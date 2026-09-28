@@ -3702,10 +3702,13 @@ def _cat_report(args, inst: Instance, kind: str, key: str, snap: dict, rows):
            "stride_check": snap.get("stride_check"),
            "cache": str(_cat_path(inst))}
     if "commanders" in snap:
-        # every living unit whose type has `commander` set, fog or not: {owner, type}; and
-        # every owner with a living unit at all
+        # every living unit whose type has `commander` set, fog or not: {owner, type}; every
+        # owner with a living unit at all; every seat in the game. All three are empty until a
+        # level is in play (`in_play`).
+        res["in_play"] = snap.get("in_play")
         res["commanders"] = snap["commanders"]
         res["unit_owners"] = snap.get("unit_owners", [])
+        res["players"] = snap.get("players", [])
     if args.json:
         out(res, True)
         return

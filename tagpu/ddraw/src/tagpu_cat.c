@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include "tagpu_cat.h"
 #include "tagpu_log.h"
-#include "tagpu_limits.h"
+#include "tagpu_packet_pub.h"
 
 #define UNITS_TRIGGER "tagpu_units.trigger"
 #define UNITS_OUT     "tagpu_units.json"
@@ -48,8 +48,13 @@
 #define U_TYPEIDX    0xA6         /* short, index into UnitDef[]   */
 #define U_STATE      0x110        /* alive bit 0x10000000          */
 #define U_OWNER      0xFF         /* u8 player index               */
-/* the unit array's slots at the design point: 10 players x the per-player ceiling + 1 */
-#define CAT_MAX_SLOTS (10u * TAGPU_LIM_UNITS + 1u)
+#define OFF_USLOTS   0x14351      /* u16 the array's slot count, stored at 0x4854EF */
+/* the ten seats, inline in main: a seat is in the game when its first dword is nonzero and
+   its type byte +0x73 is 1 (local human), 2 (local AI) or 3 (remote); 0x48664B..0x486660 tests
+   exactly that pair (DISASSEMBLED) */
+#define OFF_PLAYERS  0x1B63
+#define PLAYER_STRIDE 0x14B
+#define PL_TYPE      0x73
 
 /* Stock TA declares 512 unit types and a few hundred features; TADR-class mods
    raise the ceiling to 16000. Emit generously but never unboundedly — a garbage
@@ -169,23 +174,27 @@ static void finish(FILE* f, const char* tmp, const char* out)
    so rather than claiming a proof nobody ran. */
 static const char* verify_stride(const char* ta, const char* defs)
 {
-    char* begin_u = *(char**)(ta + OFF_BEGIN);
-    char* end_u   = *(char**)(ta + OFF_END);
-    char* u;
+    const char* begin_u;
+    unsigned slots, i;
 
-    if (!readable(begin_u, UNIT_STRIDE) || end_u <= begin_u)
+    if (!tagpu_packet_pub_level_open())
+        return "no units to check against";
+    begin_u = *(const char* const*)(ta + OFF_BEGIN);
+    slots   = *(const unsigned short*)(ta + OFF_USLOTS);
+    if (!readable(begin_u, UNIT_STRIDE))
         return "no units to check against";
 
-    for (u = begin_u; u + UNIT_STRIDE <= end_u; u += UNIT_STRIDE)
+    for (i = 0; i < slots; i++)
     {
+        const char* u = begin_u + (size_t)i * UNIT_STRIDE;
         const char* type;
         int idx;
 
-        if (!readable(u, UNIT_STRIDE) || !(*(unsigned*)(u + U_STATE) & 0x10000000u))
+        if (!readable(u, UNIT_STRIDE) || !(*(const unsigned*)(u + U_STATE) & 0x10000000u))
             continue;
 
-        type = *(const char**)(u + U_TYPE);
-        idx  = *(short*)(u + U_TYPEIDX);
+        type = *(const char* const*)(u + U_TYPE);
+        idx  = *(const short*)(u + U_TYPEIDX);
 
         if (idx < 0 || !readable(type, UD_STRIDE))
             continue;
@@ -197,27 +206,33 @@ static const char* verify_stride(const char* ta, const char* defs)
 }
 
 /* Every living commander, as the engine holds it -- not as Impure draws it: the frame packet
-   leaves out what the fog hides, and the other player's commander starts under it. Answers
-   "did the game give every player a commander" for the compat suite.
-   THE BOUNDS, each on a value read from engine memory: the walk stops at the design point's
-   slot count whatever the array's end pointer says (every writer of the per-player limit is
-   held to TAGPU_LIM_UNITS, so the array holds at most 10 x that + 1); a unit's type is its
-   index (+0xA6) checked against the count the table walk above used, never its +0x92
-   pointer; the owner (+0xFF) is reported only below 10. Game thread, like the level
-   teardown, so the array cannot be freed under the walk (tagpu_reclaim.c). */
+   leaves out what the fog hides, and the other player's commander starts under it -- and every
+   seat in the game, so the compat suite can ask "did every player get a commander".
+   THE ORDERING the walk stands on: it runs only while a level is in play
+   (tagpu_packet_pub_level_open, set on the game thread at the level's first in-play draw, after
+   the loader thread's last store, and cleared by the teardown's post hook). Outside that window
+   the loader thread can be building the array, and `begin` and `end` are then an unsynchronised
+   pair (cross-thread-engine-reads.md §5). The teardown frees the array and nulls `begin` on the
+   game thread, which is this one (tagpu_triggers_frame), and its post hook clears the latch on
+   the same call stack, so no walk runs between the free and the clear.
+   THE BOUNDS, each on a value read from engine memory: the walk runs to the array's own slot
+   count (u16 +0x14351, what 0x4854A0 allocated for), never to `end`; a unit's type is its index
+   (+0xA6) checked against the def count the table walk above used, never its +0x92 pointer;
+   the owner (+0xFF) is used only below 10. */
 static void write_commanders(FILE* out, const char* ta, const char* defs, unsigned count)
 {
-    const char* begin_u = *(const char* const*)(ta + OFF_BEGIN);
-    const char* end_u   = *(const char* const*)(ta + OFF_END);
-    const char* u;
-    unsigned slots = 0, found = 0, owners = 0, k;
+    const char* begin_u;
+    unsigned slots, i, found = 0, owners = 0, k;
+    const int in_play = tagpu_packet_pub_level_open();
 
-    fprintf(out, ",\"commanders\":[");
-    if (defs && readable(begin_u, UNIT_STRIDE) && end_u > begin_u)
+    fprintf(out, ",\"in_play\":%s,\"commanders\":[", in_play ? "true" : "false");
+    begin_u = *(const char* const*)(ta + OFF_BEGIN);
+    slots   = *(const unsigned short*)(ta + OFF_USLOTS);
+    if (in_play && defs && readable(begin_u, UNIT_STRIDE))
     {
-        for (u = begin_u; u + UNIT_STRIDE <= end_u && slots < CAT_MAX_SLOTS;
-             u += UNIT_STRIDE, slots++)
+        for (i = 0; i < slots; i++)
         {
+            const char* u = begin_u + (size_t)i * UNIT_STRIDE;
             const char* rec;
             int idx;
             unsigned owner;
@@ -240,11 +255,21 @@ static void write_commanders(FILE* out, const char* ta, const char* defs, unsign
             found++;
         }
     }
-    /* every owner with a living unit of any type: at a game's start, the players */
+    /* every owner with a living unit of any type */
     fprintf(out, "],\"unit_owners\":[");
     for (k = 0, found = 0; k < 10; k++)
         if (owners & (1u << k))
             fprintf(out, "%s%u", found++ ? "," : "", k);
+    /* every seat in the game, units or none: a player the game gave nothing is here and not
+       above. The records are inline in main, a fixed array. */
+    fprintf(out, "],\"players\":[");
+    for (k = 0, found = 0; in_play && k < 10; k++)
+    {
+        const char* pl = ta + OFF_PLAYERS + (size_t)k * PLAYER_STRIDE;
+        const unsigned char type = *(const unsigned char*)(pl + PL_TYPE);
+        if (*(const unsigned*)pl && type >= 1 && type <= 3)
+            fprintf(out, "%s%u", found++ ? "," : "", k);
+    }
     fprintf(out, "]");
 }
 
