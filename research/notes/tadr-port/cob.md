@@ -495,3 +495,13 @@ refuses that mission with `ARMFAV (Jeffy)`, `ARMFAV.COB` and the invalid-local r
 The first fixture selected ARMCOM, but this mission starts with its commander off-planet;
 that was not a valid required-at-entry test. `tools/cob_mission_probe.py` uses the observed
 placed type and retains each acknowledged campaign screen in its external evidence.
+The intact-script control on that DLL reached play and observed all three Jeffys at
+slots 1, 2 and 13. Two independent HIGH follow-up reviews verified the wrapper's original
+return/type argument, bounded locked lookup and unchanged capture/resurrection behavior;
+neither retained a finding.
+
+The `35693a8e…` full Wine run plus the corrected `retail+tadr1` rerun covers all 19
+expected setup outcomes and all 15 two-peer smoke matches. The rerun completed with zero
+unexpected results. The campaign-only integration fix changes the DLL to `861ccf38…`;
+a full Wine regression and approved Windows startup/in-game smoke session are running on
+that exact DLL. No Windows result is claimed until those observations complete.
