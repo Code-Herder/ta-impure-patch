@@ -119,7 +119,7 @@ about 45 s a setup, one at a time; there is no battle or network stage there yet
 
 ## Total Mayhem's maps with no terrain
 
-**What a player sees.** A fresh Total Mayhem 11.3.0 on the Steam install shows a box naming
+**What a player saw** before the fix. A fresh Total Mayhem 11.3.0 on the Steam install shows a box naming
 `Maps\A Plethora of Ponds.TNT` when the SKIRMISH screen opens, and the game goes no further.
 MEASURED 2026-09-27 on Windows 10, with Impure: the box's text was read from the live window.
 
@@ -143,16 +143,23 @@ from the same key. The folder to answer it was built on Windows on 2026-09-27 an
 SKIRMISH screen. The suite does not see any of this: its battle stage writes `Two Continents` into
 the setup's `registry_roots` before the game starts, and the Windows runner has no battle stage.
 
-**The fix to build: leave a map out of the list when its terrain is missing.** When the list builder
-(`0x434AB0`, which enumerates `Maps\*.ota`) adds a map, it would first check that `Maps\<name>.TNT`
-opens through the game's own archive layer, and skip the map if it does not. This fixes both ways
-the box is reached, because a map that is not listed can be neither the saved default nor a pick
-from the list. Checking only the saved name when the SKIRMISH screen opens would fix the first and
-leave the other 8 maps as boxes. This is a property of the player's install, not of Mayhem, so it
-applies to every route and every mod whose `.ota` reference a map that isn't installed. What is not
-mapped yet: the entry the builder appends per `.ota`, the archive layer's open call to test with,
-and whether the multiplayer map list is built by the same function (`0x434AB0`'s other modes,
-`MULTI MAPS` at `0x504A24`).
+**The fix: a map with no terrain is left out of the list, and never kept as the saved map.** The
+one list builder, `0x434BF0` — the skirmish list and the multiplayer battle room's alike — now asks,
+for each map it would keep, whether `Maps\<name>.TNT` opens through the game's own archive layer,
+and leaves the map out when it does not. That alone would leave a player whose key already names
+such a map (every Total Mayhem install that has opened the SKIRMISH screen once) on the box, so the
+saved `SkirmishMap` is asked the same question when the options are read, and a value naming a map
+with no terrain is replaced as a missing one is: by the list's first entry. This is a property of
+the player's install, not of Mayhem, so it applies to every route and every mod whose `.ota` name a
+map that isn't installed. A network player who lacks a map's terrain now lacks the map, which the
+battle room already reports ("does not have this map"). The disassembly is in [the engine
+map](../exe-reverse-engineering.md), *The saved skirmish map and the map list*.
+
+MEASURED 2026-09-28 under Wine, `mayhem-11.3.0` with "A Plethora of Ponds" saved, main's build and
+the fix side by side: the skirmish list went from 109 maps to 100 and the battle room's from 109 to
+100, the nine left out being exactly the nine above; the saved map became "Acid Foursome" where
+main's kept "A Plethora of Ponds"; a map picked from the filtered list loads. Under Wine that saved
+map raises no box on either build, so **the box itself was not re-run on Windows**.
 
 ## The 3.9.02 exe
 
