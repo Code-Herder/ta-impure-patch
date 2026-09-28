@@ -63,8 +63,9 @@ saved skirmish has three: ARMCOM and two CORCOM), and each peer of the 12 networ
 started held both players'. **Three network games never started** — `mayhem-11.3.0`,
 `escalation`, `tazero-alpha5` — the joiner listing no session after twelve UPDATEs with the
 host in its battle room on its own port; main's own build lost one the same way the night
-before (0 of 13, 1 of 13, 3 of 15 in the three full runs since), so it is open and not this
-landing's. Both Escalation setups also logged one UI-layer fresh start ("a copy names a source
+before (0 of 13, 1 of 13, 3 of 15 in the three full runs since). The cause was the harness's
+text entry, not the game: a joiner's ADDRESS field left reading `1` ([the suite](suite.md), the
+network stage), fixed by reading every field back. Both Escalation setups also logged one UI-layer fresh start ("a copy names a source
 twin this store never made"), as ten Escalation runs since 2026-09-27 have, main's build
 included: the G21f/G21g work's open gap ([GPU status](../gpu-status.md)).
 
@@ -103,9 +104,11 @@ the exe's own DirectPlay imports where a recorder answered them (3 on the record
 imports `TDRAW`/`TAESC` that slot leads into **Impure** and so is not surprising at all, which is
 the landing. They are read on Wine only; the Windows column's places are sites of code alone.
 
-A full Wine run takes about 24 minutes of runs on the reference setup — the single-player six at a
-time, the nine network games one at a time, about 80 s each, queued beside them — plus about 16
-minutes to build the sixteen instances first, since each is created fresh. The Windows runs take
+A full Wine run takes about 10 minutes on the reference setup (572 s, 2026-09-28, 19 setups and 15
+network games): about 50 s to make the instances, eight at a time, then the single-player runs six
+at a time with the network games queued beside them, six at a time. The six battles are what hold
+the machine at its limits — a load of 28 on 32 cores, and GPU memory near its 12 GB, which each
+game's restorer sizes its atlas against (half of what is free) at any count. The Windows runs take
 about 45 s a setup, one at a time; there is no battle or network stage there yet.
 
 ## Total Mayhem's maps with no terrain

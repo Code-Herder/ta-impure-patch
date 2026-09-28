@@ -101,11 +101,6 @@ map, which a mod may not ship.
 - **Windows has no battle stage and no network stage**: its rows stop at the main menu, which is
   why a recorder there shows only the six sites its entry point installs. The reading of the game's
   code runs on both platforms; the exe's import slots are read on Wine only ([the suite](suite.md)).
-- **A network game sometimes never starts**: the joiner lists no session after twelve UPDATEs
-  while the host waits in its battle room on its own port — 4 of 41 games in the three full Wine
-  runs of 2026-09-27/28, main's build included, more with more games at once. Wine's NAT helpers
-  are refused already ([the suite](suite.md)); the cause is not found. Until it is, a network row
-  that fails this way is re-run, never read as a verdict on the setup.
 - **The network stage is two players on one machine**, over Windows' DirectPlay on loopback;
   a game between two machines, and one with a player who still runs TADR, are not tested.
 - **TA Twilight's `dsound.dll` proxy is not loaded on Wine**, which prefers its built-in

@@ -17,9 +17,13 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   A mod as players have it is what TA Forever installs: its API
   (`api.taforever.com/data/featuredMod`, `installPackage`) lists each mod's packages in order on
   plain URLs, and TA Zero's and TA Twilight's setups layer one fixture per package in that order.
-- `wine`: every setup at once. Each gets its own `tacli` instance (`compat-<setup>`), private
-  copies of the registry hives, its own Xvfb display, and the overlay of its fixtures on the
-  retail gamedir. The runner watches the display's windows for the whole run (a refusal is a
+- `wine`: every setup at once. Each gets its own `tacli` instance (`compat-<setup>`), made with
+  `tacli create --private-registry` — registry hives of its own, copied out of the template's
+  shared inode before any Wine process runs in the prefix — its own Xvfb display, and the overlay
+  of its fixtures on the retail gamedir. The hives are private because the store `tacli` keeps
+  TA's key in is off here (a player's launch, below) and it would not cover a mod's own key
+  (`Software\TotalM`, `Software\TA Zero`) or a TADR DLL's writes anyway; and because they are
+  private, `--prep-jobs` instances (8) are made at once — 19 in about 50 s. The runner watches the display's windows for the whole run (a refusal is a
   box, and a box is the evidence), reads `tdrawlog.txt`, `tagpu.log`, `startup-failure.txt`,
   `ErrorLog.txt` and the Wine `+loaddll` trace, then fights the battle where the menu came up,
   and last — while the game is still alive — reads its code out of the process (below). Two
@@ -38,12 +42,21 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   own battle room over Windows' DirectPlay (the walk of `tools/mp_lobby.sh`), each side applying
   its half of a small fight (`scenarios/compat-mp-host.json`, `compat-mp-join.json`), then
   watched on both. Each game is queued as its single-player result comes in, and `--mp-jobs`
-  (4 by default) play at once, **each on a DirectPlay port of its own**: the name server binds
+  (6 by default) play at once, **each on a DirectPlay port of its own**: the name server binds
   its port for the whole machine, so the suite patches a port from 47625 upward into both peers'
   prefixes (`tools/dpport.py`, the same patch `tacli launch --dplay-port` makes) and the two
   meet there and on no other game's. A holder of a game's port in one of the suite's own
   prefixes is stale and ended; any other is someone else's game, waited for five minutes and
-  never touched, and then that game fails as not run. "Its own" is the set of
+  never touched, and then that game fails as not run. **Every text field of the walk is read
+  back before it goes on**, and filled again while it reads anything else: `tacli ui fill` types
+  its characters as one batch just after its click and reports a short field without failing,
+  and under load the characters ahead of the focus are lost. MEASURED 2026-09-28: ProTA's
+  joiner's ADDRESS read `1`, its `+winsock` trace shows `inet_addr("1")` and the socket snapshot
+  a SYN to `0.0.0.1` — the "no session listed after twelve UPDATEs" that had failed about one
+  network game in ten. A joiner that still lists nothing records **every game socket on the
+  machine** with its prefix (`mp-sockets.txt`) and keeps both peers' Wine logs;
+  `TACOMPAT_WINEDEBUG=+winsock` adds a trace channel to every game, kept whether it fails or
+  not. "Its own" is the set of
   prefixes **this run** created, not every `compat-` name: the instance names are fixed, so a
   session in another worktree runs prefixes named exactly like ours
   (`parallel-mp-runs-share-dplay-port`). A setup whose battle room this walk cannot reach a game

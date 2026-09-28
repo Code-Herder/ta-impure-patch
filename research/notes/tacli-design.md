@@ -292,7 +292,11 @@ temporary file [MEASURED 2026-09-26: the file's mtime moved at each wineserver's
 link count, 392, grew only with the three instances made, to 395; the reason in wine's source,
 `server/registry.c`'s `save_branch` writing a file with several links directly, is INFERRED]. A
 value written there by one instance is every instance's, and each wineserver saves its whole
-in-memory copy back when it saves.
+in-memory copy back when it saves. **`create --private-registry` is the exception**: it copies
+the three hives into files of the prefix's own right after the clone, before any Wine process
+has run in it, and records `private_registry` in `instance.json`. The compat suite makes its
+instances this way, because its games run with the store off and mods write keys of their own;
+and two such creates share no file, so they can run at once.
 
 - **How the DLL finds it.** `gamedir/TotalA.exe` is a symlink into the Steam install, yet
   `GetModuleFileNameW(NULL)` names the gamedir: a launch logs `registry: TEST MODE, entered by the

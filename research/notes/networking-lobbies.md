@@ -340,7 +340,10 @@ prints the override string.
      ran at once — the joiner listed no session after twelve UPDATEs while the host's own name
      server held the port (0, 1, 2 and 4 of the 4 failing in four runs); with them refused, 25 of 25 passed —
      three batches of the four mod setups and a full run of all thirteen network games. Why the
-     helper loses the session is not established; refusing it removes the dependence.
+     helper loses the session is not established; refusing it removes the dependence. The
+     failures left after the refusal, about one game in ten, were not DirectPlay's: the suite's
+     text entry left a joiner's ADDRESS reading `1`, and it dialled `0.0.0.1` (MEASURED
+     2026-09-28 with a `+winsock` trace and a socket snapshot; [the suite](compat/suite.md)).
 
 Where the files came from is its own small saga — see the routes below. They live
 outside the repo at `~/.local/share/ta-directplay/` (Microsoft redistributables,

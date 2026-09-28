@@ -29,7 +29,7 @@ tools/compat/tacompat.py wine                        # every setup at once, batt
 tools/compat/tacompat.py wine mayhem-11.3.0 prota-4.8   # a few, by name
 tools/compat/tacompat.py wine --battle 0 --mp 0      # start-up only
 tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game
-tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a time (default 4)
+tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a time (default 6)
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py clean                       # remove the compat-* Wine instances
@@ -80,7 +80,7 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   single-player run shows Impure running also plays a two-player game — a second instance of the
   same folder (`compat-<setup>-j`), hosted and joined through the game's own battle room over
   Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
-  `compat-mp-join.json`. Queued beside the single-player runs, `--mp-jobs` (4) at once, each
+  `compat-mp-join.json`. Queued beside the single-player runs, `--mp-jobs` (6) at once, each
   on a DirectPlay port of its own from 47625 up (`tools/dpport.py`): the name server's port is
   machine-wide, so one port per game is what keeps them apart. The report's column reads
   `mp ok`, `mp FAILED`, `no mp` or `-` (not played).
@@ -194,8 +194,13 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - **A run tests the DLL as it was when the run started**: it is copied once, and every instance,
   joiner and upload is made from that copy, whose hash the report names. Rebuilding during a run
   is safe; it tests nothing new until the next run.
-- Instances are created **one at a time**: `tacli create` writes the registry hive every
-  prefix shares. Each instance then gets private copies of the hives before anything runs.
+- Instances are made with `tacli create --private-registry` — hives of their own before any
+  Wine process runs — so `--prep-jobs` (8) are made at once. Without the flag a create's
+  wineserver rewrites the hive every prefix shares, and two at once would write it together.
+- **A network game that never starts**: read `mp-sockets.txt` (every game socket, with its
+  prefix) and the two `mp-*-wine.log` in the setup's results. Re-run the setup with
+  `TACOMPAT_WINEDEBUG=+winsock` to trace the sockets — DirectPlay's DLLs are native, so Wine's
+  own dplay channels never fire.
 - The DLL refuses a `tacli-state` folder without the `-xtacli-test` token (registry test
   mode), so the runner renames it; the mods' exes are not launched through `tacli launch`.
 - A Patch Loader that moves the registry (`RegistryPath=TotalM`, `ProTA`) starts with a fresh
