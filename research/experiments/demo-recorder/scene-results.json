@@ -1,0 +1,305 @@
+{
+  "status": "research-only: unit scene restore; not complete replay seeking",
+  "date": "2026-09-28",
+  "setup": "reference setup: Ryzen 9 7950X, Wine 9.0, retail TA 3.1, Impure a044167 with temporary renderer scene probes, 1024x768, Two Continents 200v200 scenario",
+  "snapshots": [
+    {
+      "tick": 33,
+      "units": 401,
+      "pieces": 6116,
+      "wrecks": 1,
+      "raw_bytes": 293752,
+      "copy_us": 100.7
+    },
+    {
+      "tick": 1181,
+      "units": 354,
+      "pieces": 5432,
+      "wrecks": 39,
+      "raw_bytes": 309224,
+      "copy_us": 99.8
+    }
+  ],
+  "same_level": {
+    "original_restore_crop_pixels": 498176,
+    "original_restore_different_pixels": 73,
+    "early_late_different_pixels": 192389,
+    "vsync_off_command_ack_ms": [
+      11.63831,
+      11.358731,
+      14.681905,
+      3.484951,
+      19.285171,
+      14.675494,
+      17.685789,
+      4.604326,
+      7.956489,
+      1.227163,
+      2.341228,
+      2.343648,
+      1.219164,
+      2.343148,
+      3.423112,
+      7.943619,
+      1.226374,
+      4.207918,
+      1.233464,
+      2.348478
+    ],
+    "present_observations": [
+      {
+        "slot": 0,
+        "observed_ms": 184.552073,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          0,
+          116676
+        ]
+      },
+      {
+        "slot": 1,
+        "observed_ms": 169.592343,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          116676,
+          0
+        ]
+      },
+      {
+        "slot": 0,
+        "observed_ms": 174.582124,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          0,
+          116676
+        ]
+      },
+      {
+        "slot": 1,
+        "observed_ms": 175.696446,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          116676,
+          0
+        ]
+      },
+      {
+        "slot": 0,
+        "observed_ms": 183.190351,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          0,
+          116676
+        ]
+      },
+      {
+        "slot": 1,
+        "observed_ms": 175.139181,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          116676,
+          0
+        ]
+      },
+      {
+        "slot": 0,
+        "observed_ms": 175.394008,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          0,
+          116676
+        ]
+      },
+      {
+        "slot": 1,
+        "observed_ms": 175.610637,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          116676,
+          0
+        ]
+      },
+      {
+        "slot": 0,
+        "observed_ms": 177.744515,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          0,
+          116676
+        ]
+      },
+      {
+        "slot": 1,
+        "observed_ms": 174.345324,
+        "grabs": 1,
+        "reference_difference_pixels": [
+          116676,
+          0
+        ]
+      }
+    ]
+  },
+  "fresh_process": {
+    "template_relocations": [
+      {
+        "type": 34,
+        "pieces": 15,
+        "addresses_changed": 15
+      },
+      {
+        "type": 95,
+        "pieces": 15,
+        "addresses_changed": 15
+      },
+      {
+        "type": 98,
+        "pieces": 13,
+        "addresses_changed": 13
+      },
+      {
+        "type": 144,
+        "pieces": 16,
+        "addresses_changed": 16
+      }
+    ],
+    "world_crop_differences": 50208,
+    "world_crop_pixels": 477857,
+    "other_layers_remain_live": true,
+    "unit_formation_comparison": {
+      "rect": [
+        128,
+        180,
+        850,
+        550
+      ],
+      "excluded_rects": [
+        [
+          493,
+          360,
+          648,
+          405
+        ],
+        [
+          700,
+          0,
+          1024,
+          330
+        ]
+      ],
+      "pixels": 237665,
+      "differences": 0
+    }
+  },
+  "moving_sample": {
+    "frames": 100,
+    "elapsed_seconds": 9.902102206,
+    "tick_start": 5979,
+    "tick_end": 6276,
+    "units": 150,
+    "truncated_frames": 0,
+    "blocks": {
+      "frames": 100,
+      "input_sha256": "916b1e766632e7c239dc78bffd978dd8cf3cbb72eea9c6a744292385b70674f1",
+      "full_packet": [
+        {
+          "frames_per_block": 1,
+          "blocks": 100,
+          "raw_bytes": 19274008,
+          "compressed_bytes": 3333509,
+          "largest_raw_block": 194848,
+          "encode_ms_median": 0.23086849999999998,
+          "encode_ms_max": 0.497147,
+          "decode_ms_median": 0.081439,
+          "decode_ms_max": 0.221159,
+          "exact_round_trip": true
+        },
+        {
+          "frames_per_block": 10,
+          "blocks": 10,
+          "raw_bytes": 19274008,
+          "compressed_bytes": 834653,
+          "largest_raw_block": 1938488,
+          "encode_ms_median": 0.957549,
+          "encode_ms_max": 1.342342,
+          "decode_ms_median": 0.2652285,
+          "decode_ms_max": 0.616527,
+          "exact_round_trip": true
+        },
+        {
+          "frames_per_block": 50,
+          "blocks": 2,
+          "raw_bytes": 19274008,
+          "compressed_bytes": 605267,
+          "largest_raw_block": 9641508,
+          "encode_ms_median": 4.1044705,
+          "encode_ms_max": 4.258455,
+          "decode_ms_median": 1.156133,
+          "decode_ms_max": 1.199953,
+          "exact_round_trip": true
+        },
+        {
+          "frames_per_block": 100,
+          "blocks": 1,
+          "raw_bytes": 19274008,
+          "compressed_bytes": 575819,
+          "largest_raw_block": 19274008,
+          "encode_ms_median": 8.278441,
+          "encode_ms_max": 8.731487,
+          "decode_ms_median": 2.429436,
+          "decode_ms_max": 2.686774,
+          "exact_round_trip": true
+        }
+      ],
+      "unit_piece_projection": [
+        {
+          "frames_per_block": 1,
+          "blocks": 100,
+          "raw_bytes": 6923200,
+          "compressed_bytes": 601191,
+          "largest_raw_block": 69232,
+          "encode_ms_median": 0.04286,
+          "encode_ms_max": 0.063819,
+          "decode_ms_median": 0.0182195,
+          "decode_ms_max": 0.03427,
+          "exact_round_trip": true
+        },
+        {
+          "frames_per_block": 10,
+          "blocks": 10,
+          "raw_bytes": 6923200,
+          "compressed_bytes": 177372,
+          "largest_raw_block": 692320,
+          "encode_ms_median": 0.2055435,
+          "encode_ms_max": 0.241238,
+          "decode_ms_median": 0.06901499999999999,
+          "decode_ms_max": 0.085479,
+          "exact_round_trip": true
+        },
+        {
+          "frames_per_block": 50,
+          "blocks": 2,
+          "raw_bytes": 6923200,
+          "compressed_bytes": 138694,
+          "largest_raw_block": 3461600,
+          "encode_ms_median": 0.9247045,
+          "encode_ms_max": 0.971504,
+          "decode_ms_median": 0.2842835,
+          "decode_ms_max": 0.308118,
+          "exact_round_trip": true
+        },
+        {
+          "frames_per_block": 100,
+          "blocks": 1,
+          "raw_bytes": 6923200,
+          "compressed_bytes": 133596,
+          "largest_raw_block": 6923200,
+          "encode_ms_median": 1.833309,
+          "encode_ms_max": 1.882259,
+          "decode_ms_median": 0.580837,
+          "decode_ms_max": 0.605396,
+          "exact_round_trip": true
+        }
+      ]
+    }
+  }
+}

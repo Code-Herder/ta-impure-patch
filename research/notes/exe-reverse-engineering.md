@@ -469,6 +469,33 @@ measured. Pascal's `TPlayerStruct` fields `LOS_MEMORY +0x7C`, dimensions `+0x80/
 length `+0x88`, and resources `+0x8C` are candidate leads from `TAMem/TA_MemoryStructures.pas`,
 not a new disassembly or live verification of remote-player visibility/statistics.
 
+### Renderer scene probe [SOURCE + MEASURED 2026-09-28]
+
+The recorder's [direct scene experiment](tadr-port/demo-recorder-exploration.md#6b-direct-scene-playback-and-portable-unit-poses)
+used the existing `tagpu_packet_pub.c:fill_world` ownership boundary, widening only the
+unit-piece capture condition to cover every live unit. No new engine byte patch was added.
+The packet layout was measured with a 32-bit `offsetof`/`sizeof` executable: header 2312 B,
+unit row 100 B, piece row 24 B, wreck row 44 B; tick +16, unit count/offset +1608/+1612,
+piece count/offset +1616/+1620, wreck count/offset +1624/+1628, truncation flags +2300.
+These are **Impure packet offsets**, not offsets in the retail engine.
+
+`TAGPU_PK_UNIT.o3_key` (+20) is an Object3do identity value used by interpolation;
+`TAGPU_PK_PIECE.node` (+20) is a dereferenced model-template pointer. Source reads in
+`tagpu_native.c:pose_accum_body`, `tagpu_lerp.c` and the packet header confirm that copying
+these values to disk cannot establish portability. The unit Object3do is freed by `0x45AAA0`,
+whereas the model template belongs to the level teardown `0x42DB90`; their existing maps and
+the reclaim fence provide the lifetime argument, not the older pointer probes inside the
+consumer. No new disassembly of either destructor was performed in this experiment.
+
+A temporary fresh-process importer retained no recorded asset addresses. It resolved unit
+piece indices against the new level's validated published templates, with matching type/model,
+name, piece count and base piece. All 59 template-piece addresses across the four measured
+types changed, while the checked unit-formation image matched. The reader retained the new
+session's other world/UI layers; it neither restored simulation nor demonstrated full-world
+portability. The stopped fresh session's existing main fields were inspected through `tacli`:
+`[0x511DE8]+0x38A47` = tick 521 and `+0x38A51` = pause byte 1. The temporary publisher and
+consumer probes were removed after the experiment; details and bounds are in the linked note.
+
 ### Replay player names and unit-block ordering [DISASSEMBLED + MEASURED 2026-09-28]
 
 A native DirectPlay replay-host prototype supplies both DPNAME strings. The join path calls

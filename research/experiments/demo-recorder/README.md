@@ -102,3 +102,19 @@ world; no saved-game file is a validated checkpoint here.
 reported in §6a against the original peers. It uses the original receiver's height for each
 unit, because the observed owner-local heights differ. `--unit-limit` defaults to the sample's
 1500. `playback-results.json` retains the measured runs and explicit unverified scope.
+
+## Renderer-state experiment
+
+`scene_blocks.py DIRECTORY` measures independent Zstandard blocks of the temporary scene
+probe's `.bin` captures. Use the shared venv. The measured moving input is the local
+`_local/demo-recorder-exploration/scene/samples-moving-10hz/` directory; its ordered combined
+SHA-256 is stored in `scene-results.json`. The parser intentionally accepts only the measured
+32-bit packet layout and packets no larger than 8 MiB. It refuses truncation and out-of-range
+tables. This is an offline compression workload, not a general packet parser.
+
+The unit/piece projection removes runtime address entropy for the size comparison but retains
+other renderer-specific fields. It is neither a portable replay format nor the separate
+fresh-process unit importer. Ten frames correspond to about one second only in the measured
+10 Hz collection; the tool groups by count, not elapsed time. Codec timings exclude storage
+IO and game work. See §6b for visible scene-switch latency, fresh-process asset relocation,
+the incomplete state inventory and why these are not complete-world seek measurements.

@@ -392,6 +392,133 @@ side state. Skipping the null dereference would not establish those invariants. 
 restore, checkpoint-creation timing, or restore-latency result is claimed. The file sizes are
 one diagnostic save each; they are not estimates for a complete replay checkpoint.
 
+## 6b. Direct scene playback and portable unit poses
+
+**MEASURED 2026-09-28**, reference setup: Ryzen 9 7950X, Wine 9.0, retail TA 3.1,
+Impure `a044167` plus temporary probes, 1024×768, Two Continents `200v200` scenario.
+This is a renderer-facing alternative to restoring the simulation, not an engine checkpoint.
+`research/experiments/demo-recorder/scene-results.json` retains the measurements;
+`scene_blocks.py` reproduces the block-compression comparison on local captures.
+
+### Same-level restore and camera movement
+
+A temporary publisher change captured **every live unit's model pieces**, including units
+outside the camera reach. A render-thread probe copied validated published packets into three
+owned slots, invalidating them at level end or a changed level generation. Selecting a slot
+kept camera commands live and disabled pose interpolation from the live world. The existing
+level/template reclamation fence still supplied the template lifetime. No engine simulation
+state was restored, and these raw packets are not portable files.
+
+| Snapshot | Tick | Units | Pieces including wreck | Wrecks | Raw bytes | Allocation + copy |
+|---|---:|---:|---:|---:|---:|---:|
+| Early formation | 33 | 401 | 6,116 | 1 | 293,752 | 100.7 µs |
+| Later battle | 1,181 | 354 | 5,432 | 39 | 309,224 | 99.8 µs |
+
+Both reported no truncation. The first snapshot contains all **6,115 unit pieces** plus one
+wreck piece. Returning to it after the later battle restored the old formation. A world crop
+of 498,176 pixels differed from its earlier image by 73 pixels, all at the clipped right edge;
+its difference from the later battle was 192,389 pixels. The 73-pixel cause is not established,
+so this comparison is not bit exact. Moving the camera while holding the early snapshot
+revealed the captured off-screen formation. This verifies unit-pose coverage in that view,
+not historical terrain, effects or fog everywhere on the map.
+
+With Vsync on, command-file-to-selection acknowledgements were mostly about one second.
+The slow presentation cadence existed before the snapshot selection; no cause was established.
+Turning Vsync off through the isolated instance's render-options UI reduced 20 selection
+acknowledgements to **1.22–19.29 ms**. This is selection latency, not GPU presentation latency.
+
+A separate presented-image check alternated the two snapshots ten times, with Vsync off.
+Three consecutive reference images per destination were identical in the checked crop;
+the destinations differed by 116,676 pixels. Each first window grab after the command matched
+the destination exactly there. **Command write through completed capture took 169.6–184.6 ms**,
+an upper bound including the screenshot process and readback. The crop was x=128..999,
+y=180..735 with the live pause banner excluded. The render-options panel remained open at the
+upper right in both references; the changed formation was visible outside it. This proves
+visible same-level scene switching in this fixture, not a cold file seek or the 5→45-minute
+requirement. It also leaves Vsync-mode coverage open.
+
+### Fresh-process unit-pose relocation
+
+A second temporary reader imported just the early snapshot's **401 units and 6,115 poses**
+from a 186,876-byte local file. That file zeroed both runtime keys (`unit.o3_key` and
+`piece.node`), stored piece indices instead of packet offsets, and retained numeric type/model
+IDs and names. On a fresh process and freshly loaded matching scenario, the reader matched
+live templates by type/model, name, piece count and base piece, then supplied the **new
+session's** template pointers. Missing templates and invalid table ranges were refused.
+The existing level fence covered those pointers; the old process's addresses were never used.
+
+All **59 template-piece addresses across the four unit types** differed between processes.
+The old formation nevertheless rendered identically over a checked **237,665-pixel** area:
+x=128..849, y=180..549, excluding the pause banner and the old render-options panel.
+The full world crop did not match (50,208 differing pixels): the new session retained its own
+other layers, including visible fire, and the old reference retained the options panel.
+This is a positive portability result for unit poses, **not a complete world restore**.
+The probe depends on those types already having live template representatives; shipping
+playback needs content-table resolution even for a type with no live units. Its fixed compiler
+layout and missing content manifest are also research limitations, not a proposed file schema.
+
+### Independent-block storage measurements
+
+A moving sample captured 100 packets at nominal 10 Hz over 9.902 seconds, ticks 5,979–6,276,
+with 150 surviving units and no packet truncation. This is a short late-battle workload,
+not a 400-unit fight or a representative match-hour. A prior attempted 10 Hz collection under
+Vsync on actually sampled about 1 Hz; a paused control advanced only three ticks. Neither is
+substituted for the moving sample below.
+
+Zstandard level 3, independent blocks, 25 timing repetitions, exact byte round trips:
+
+| Captured data | Frames per block | Compressed bytes / 100 frames | Median encode / block | Median decode / block |
+|---|---:|---:|---:|---:|
+| Whole renderer packet | 1 | 3,333,509 | 0.231 ms | 0.081 ms |
+| Whole renderer packet | 10 (nominal 1 s) | 834,653 | 0.958 ms | 0.265 ms |
+| Whole renderer packet | 100 (nominal 10 s) | 575,819 | 8.278 ms | 2.429 ms |
+| Units + pieces, runtime keys zeroed | 1 | 601,191 | 0.043 ms | 0.018 ms |
+| Units + pieces, runtime keys zeroed | 10 (nominal 1 s) | 177,372 | 0.206 ms | 0.069 ms |
+| Units + pieces, runtime keys zeroed | 100 (nominal 10 s) | 133,596 | 1.833 ms | 0.581 ms |
+
+For one-second blocks, maximum observed decode was **0.617 ms** for whole packets and
+**0.0855 ms** for the unit/piece projection. The projection is a compression estimate, not the
+fresh-process import format: it still contains original packet-relative piece offsets and
+other renderer-only fields. Both comparisons exclude disk, format framing/index overhead,
+asset loading, rendering and complete-state validation.
+
+At the nominal 10 Hz rate, the one-second-block byte counts extrapolate to **300.5 MB/hour**
+for whole packets or **63.9 MB/hour** for the unit/piece projection (decimal MB). These are
+arithmetic extrapolations of this short sample, not measured hour-long replay sizes. The latter
+omits effects, world changes, visibility, communications, statistics and presentation data.
+Long blocks improve compression but are unnecessary for cheap codec-level random access here.
+Recording only changes, separating static type data and quantizing/interpolating continuous
+poses remain space-saving candidates; their fidelity and rate are not established by this run.
+
+### What this settles, and what it does not
+
+Direct unit-state playback can restore the old formation, move the camera, and resolve poses
+against newly loaded assets without restoring COB execution or running the historical battle.
+That makes watch-only state playback a credible seek architecture. The next comparison should
+exercise that path alongside deliberate simulation checkpoints rather than assume a stock-save
+shortcut exists. **No preparation/cache policy is selected by these partial results.**
+
+The missing capture inventory remains substantial:
+
+- `fill_world`'s feature anchors and wrecks are camera-reach limited; only unit pose coverage
+  was widened. The map-feature seed is carried until the consumer holds it, not as a complete
+  dynamic feature history in every packet.
+- Fog packets cover the local camera reach. Other players' current sight/radar/exploration,
+  alliance sharing and cloaked contacts need authoritative capture or verified reconstruction.
+- Effect models/sprites and renderer caches have their own asset references and coverage rules.
+  Restoring unit poses says nothing about effect continuity, historical audio or terrain changes.
+- Selection/inspection, resources, statistics, communication and minimap/UI remained live.
+  A replay backend must supply their historical values explicitly.
+- The exchange is latest-frame-wins and may truncate layers. A recorder must have its own
+  loss/completeness contract; silently inheriting renderer drops is unacceptable.
+- Pose samples need incarnation-aware identities and interpolation rules. Discrete events
+  cannot be recovered from interpolation, and recorded simulation ticks must stay separate
+  from the viewer's live engine tick.
+
+The probes were removed, the normal DLL rebuilt, and the owned game stopped after capture.
+Raw images, packets, probe source and DLLs remain local under
+`_local/demo-recorder-exploration/scene/`; no game assets or raw captures are committed.
+
 ## 7. Architecture conclusions and remaining decisions
 
 ### Capture and identities
@@ -438,7 +565,7 @@ seeking, and leaving it need an explicit ownership handoff before another sessio
 | Pascal cursor jump plus round-robin resync | **Reject unchanged.** The source suppresses necessary Impure events and has no world checkpoint. | A different corrected design would have to prove reconstruction, rather than assume later updates repair everything. |
 | Stock multiplayer save or raw process dump | **Not a validated checkpoint shortcut.** Engine and Impure state have different lifetimes and serializers. | Full save/restore inventory, identity/side-table restore, loading/thread ownership, then live state equality and latency. |
 | Packet replay with deliberate semantic checkpoints | **Keep as the preferred next feasibility experiment** because it builds on compact event capture and engine playback. | Continuous engine playback first; then checkpoint completeness and a bounded amount of advance from checkpoint to target. |
-| Direct watch-only state playback | **Keep as an alternative if engine checkpoints fail.** Solo scope permits it, but current render packets are incomplete and contain runtime asset pointers. | An all-map serialized state representation, portable asset handles, poses/effects, player visibility, inspection state, and measured capture/storage cost. |
+| Direct watch-only state playback | **Prototype validated for unit poses (§6b).** Solo scope permits it; same-level scene switching and fresh-process unit-template relocation work. Complete historical world coverage remains open. | An all-map serialized state representation, portable asset handles, poses/effects, player visibility, inspection state, and measured capture/storage cost. |
 
 A checkpoint inventory includes at least roster/ownership/alliances, live units and incarnations,
 HP/build state, transforms and COB execution/poses, orders, transports, projectile and effect
@@ -453,11 +580,10 @@ copy all required state at its owning boundary, and make completeness explicit b
 that representation for persistent playback. The fact that the renderer can draw it today
 proves none of these portability properties.
 
-**There is no measured end-to-end seek result yet.** In particular, this exploration has not
+**There is no measured complete-world end-to-end seek result yet.** The unit-scene prototype in §6b is narrower: same-level visible switching and fresh-process pose relocation. In particular, this exploration has not
 established a safe complete engine checkpoint or selected a watch-only replacement. The user's
 subsecond forward-seek requirement and undecided preparation policy remain unchanged. The
-container timings in §6 cannot settle either. The next work is an executable replay backend
-and checkpoint prototype, not more file-offset indexing.
+container timings in §6 cannot settle either. The next work is complete-state coverage and request-to-correct-world comparison of the executable prototypes, not more file-offset indexing.
 
 ### Perspective data and network budget
 
@@ -557,6 +683,7 @@ cost and representative scale/content tests have not run. Marking them complete 
 a lossless captured event stream with a faithfully playable game.
 
 The first **one-file solo continuous playback of a short two-player match** has run (§6a),
+and direct scene switching plus fresh-process unit-pose relocation have run (§6b),
 with recorded identities and Impure messages. Establish fixed application-boundary clock/state
 comparisons and start/end lifecycle coverage, then implement the smallest explicit checkpoint inventory and
 compare both seek directions against that baseline. Only those results can choose checkpoint
