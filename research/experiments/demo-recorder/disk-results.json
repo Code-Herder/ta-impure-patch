@@ -1,0 +1,579 @@
+{
+  "date": "2026-09-28",
+  "setup": "reference setup: Ryzen 9 7950X, x86-64 Linux, local NVMe filesystem, Python shared project venv; no game process in this benchmark",
+  "scope": "opaque normalized world-table samples, repeated for disk capacity; not a 45-minute recorded game, game seek or live capture-overhead test",
+  "input_frames": 100,
+  "input_frame_bytes": 34880066,
+  "input_sha256": "7ef628c0b413c9210d28a65487699935670665f5c141a4311433fd2e76e50f02",
+  "frames_per_block": 10,
+  "repetitions": 270,
+  "nominal_samples": 27000,
+  "data_index": {
+    "write": {
+      "blocks": 2700,
+      "bytes": 634053999,
+      "encode_write_ms": 9065.051487,
+      "data_index_fsync_ms": 29.425587,
+      "footer_write_fsync_ms": 0.530017
+    },
+    "metadata_open": {
+      "n": 25,
+      "median_ms": 0.271308,
+      "p99_ms": 0.673246,
+      "max_ms": 0.673246
+    },
+    "cached_indexed_read": {
+      "n": 100,
+      "median_ms": 1.153219,
+      "p99_ms": 2.412809,
+      "max_ms": 2.412809
+    },
+    "advisory_eviction_read": {
+      "n": 20,
+      "median_ms": 1.846526,
+      "p99_ms": 3.065315,
+      "max_ms": 3.065315
+    },
+    "verified_full_scan_ms": 8931.710718,
+    "recovered": {
+      "blocks": 2700,
+      "verified_end": 634040476,
+      "complete": true,
+      "sha256": "52a8e16cd476df35aeed6ec7b42b0474cd7a00c2496a5190b4adf0d8a205a534"
+    }
+  },
+  "crash_cases": [
+    {
+      "phase": "partial_file_header",
+      "file_bytes": 8,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 0,
+        "complete": false,
+        "sha256": null
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "file_header",
+      "file_bytes": 16,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_0_partial_header",
+      "file_bytes": 23,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_0_header",
+      "file_bytes": 48,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_0_partial_body",
+      "file_bytes": 27693,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_0_complete",
+      "file_bytes": 55339,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_1_partial_header",
+      "file_bytes": 55346,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_1_header",
+      "file_bytes": 55371,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_1_partial_body",
+      "file_bytes": 83036,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_1_complete",
+      "file_bytes": 110701,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_2_partial_header",
+      "file_bytes": 110708,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_2_header",
+      "file_bytes": 110733,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_2_partial_body",
+      "file_bytes": 138388,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "block_2_complete",
+      "file_bytes": 166043,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "partial_index",
+      "file_bytes": 166078,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "index_complete",
+      "file_bytes": 166114,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "data_index_synced",
+      "file_bytes": 166114,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "partial_footer",
+      "file_bytes": 166126,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "footer_complete",
+      "file_bytes": 166138,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": true,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    },
+    {
+      "phase": "footer_synced",
+      "file_bytes": 166138,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": true,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "POSIX"
+    }
+  ],
+  "limits": [
+    "POSIX SIGKILL and Win32 TerminateProcess under Wine only; OS stayed running",
+    "no power interruption or native Windows storage validation",
+    "POSIX_FADV_DONTNEED is advisory, not proof of a cold device/cache",
+    "no game-state semantic decoding, asset resolution or request-to-present measurement",
+    "metadata-open timing verifies index only; individual accessed blocks are checked on read",
+    "three real frame payloads used for crash boundaries; large-file source frames repeat"
+  ],
+  "win32_wine_crash_cases": [
+    {
+      "phase": "partial_file_header",
+      "file_bytes": 8,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 0,
+        "complete": false,
+        "sha256": null
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "file_header",
+      "file_bytes": 16,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_0_partial_header",
+      "file_bytes": 23,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_0_header",
+      "file_bytes": 48,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_0_partial_body",
+      "file_bytes": 27693,
+      "recovered": {
+        "blocks": 0,
+        "verified_end": 16,
+        "complete": false,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_0_complete",
+      "file_bytes": 55339,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_1_partial_header",
+      "file_bytes": 55346,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_1_header",
+      "file_bytes": 55371,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_1_partial_body",
+      "file_bytes": 83036,
+      "recovered": {
+        "blocks": 1,
+        "verified_end": 55339,
+        "complete": false,
+        "sha256": "7686352f6da356722278cee2b05cf49f4502d735e57c3e930349010502a4e06b"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_1_complete",
+      "file_bytes": 110701,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_2_partial_header",
+      "file_bytes": 110708,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_2_header",
+      "file_bytes": 110733,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_2_partial_body",
+      "file_bytes": 138388,
+      "recovered": {
+        "blocks": 2,
+        "verified_end": 110701,
+        "complete": false,
+        "sha256": "378ac17f6fa411fe9fdbf012b94a082c17d7a9d80a5020d9f26be2f9eda3e594"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "block_2_complete",
+      "file_bytes": 166043,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "partial_index",
+      "file_bytes": 166078,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "index_complete",
+      "file_bytes": 166114,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "data_index_synced",
+      "file_bytes": 166114,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "partial_footer",
+      "file_bytes": 166126,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": false,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "footer_complete",
+      "file_bytes": 166138,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": true,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    },
+    {
+      "phase": "footer_synced",
+      "file_bytes": 166138,
+      "recovered": {
+        "blocks": 3,
+        "verified_end": 166043,
+        "complete": true,
+        "sha256": "72f45665897fe1cd9d97604924f039aa185399fadbdb713562c4e2876afe04d2"
+      },
+      "killed_after_ack": true,
+      "exact_prefix": true,
+      "worker": "Win32-under-Wine"
+    }
+  ],
+  "capacity_file_sha256": "ae1d50467135c0b6f0849807a4eecd8c2d5d2a58e5f59bfb223b016d718012da",
+  "capacity_file_retained": false
+}

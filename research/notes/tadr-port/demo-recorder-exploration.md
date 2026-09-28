@@ -7,6 +7,7 @@ in [Demo recorder](demo-recorder.md). This page holds technical findings and the
 needed to settle the open architecture decisions. A temporary transport probe has captured a
 live two-player battle, and the captured events have been decoded, compared between peers, and
 benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), remote-perspective comparisons (§6c), wider same-level snapshot fidelity (§6d), and fresh-process world-asset relocation (§6e) have run; complete-world seeking has not.**
+Disk/index access and acknowledged process-crash prefix recovery are measured in §6f.
 Preparation and checkpoint policy remain undecided; §6 distinguishes measured container results
 from the missing end-to-end evidence.
 
@@ -807,6 +808,93 @@ The existing full-map collector caps, aircraft/cargo/mirrored-feature gaps, terr
 visibility, sound, inspection/analysis and ordered capture boundaries remain outside this test.
 No 5→45-minute request-to-correct-frame measurement or preparation/cache policy is settled here.
 
+## 6f. Disk access, index validation and process-crash recovery
+
+**MEASURED, disposable IO prototype.** `disk_blocks.py`, `disk_crash.py` and
+`disk_writer_win.c` under `research/experiments/demo-recorder/` test the container separately
+from game-state decoding. Inputs are the 100 pointer-normalized world-table samples used in
+§6e, with frame-length prefixes and ten frames per block. The capacity run repeats those ten
+blocks **270 times**: 27,000 samples, equivalent in sample count to 45 minutes at 10 Hz.
+**This is not a recorded 45-minute game or a 5→45-minute game seek.** The payloads retain
+the original short sample's tick values and are opaque to this reader.
+
+Reference setup: Ryzen 9 7950X, x86-64 Linux, local NVMe storage, project Python environment;
+the Win32 helper ran under Wine 9.0 in an owned idle prefix. No game process was measured.
+Exact results and input hash are in `research/experiments/demo-recorder/disk-results.json`.
+
+### Indexed file and measured access costs
+
+The experimental file has a versioned header, independently compressed bounded data blocks,
+a final compressed index, and a checksummed footer locating that index. Block headers carry
+stored/raw lengths, sequence number, kind, body CRC and header CRC. Raw/stored lengths are
+limited to 8 MiB before decompression; referenced offsets and index ordering are checked.
+Unknown kinds fail verification. CRC detects accidental corruption, not authenticity; no
+hostile replay bytes are passed to the game by this experiment.
+
+The writer appends data and index, synchronizes them, then writes and synchronizes the footer.
+The POSIX path also synchronizes the containing directory. Files are created exclusively and
+existing files are refused. No in-place completion-bit update or filename rename is involved.
+An interrupted footer leaves the verified data prefix available but incomplete.
+
+| Operation on 2,700 blocks / 634,053,999 bytes | Measurement |
+|---|---:|
+| Encode and write data/index | 9,065.05 ms total |
+| Data/index `fsync` | 29.43 ms |
+| Footer write and `fsync` | 0.53 ms |
+| Metadata/index open, 25 samples | 0.271 ms median; 0.673 ms maximum |
+| Indexed read + decompress + body CRC, 100 samples | 1.153 ms median; 2.413 ms maximum |
+| Same read after advisory cache eviction, 20 samples | 1.847 ms median; 3.065 ms maximum |
+| Full sequential verification, decode and hash | 8,931.71 ms |
+
+The final index and footer consume **13,523 bytes**. Reads select the first, last, one-ninth
+and halfway blocks, repeatedly, and compare every decoded byte to its source. Full recovery
+checks all 2,700 blocks and the concatenated decoded SHA-256. `POSIX_FADV_DONTNEED` is
+**advisory**, so those measurements are not a proven cold-device benchmark. Timings exclude
+source-frame normalization, asset resolution, state application, GPU upload and presentation.
+The bulk writer is not paced like a recording and does not measure live game overhead.
+
+### Acknowledged process termination
+
+The parent and writer exchange an acknowledgement/token at every write phase. The writer
+cannot advance to another phase without the parent's next token. At the chosen phase the
+parent kills the POSIX worker with `SIGKILL`, or asks the Win32 worker to call
+`TerminateProcess(GetCurrentProcess(), 99)`. These terminate owned research processes only;
+no timing delay is used as evidence that the target write finished.
+
+**20/20 POSIX cases and 20/20 Win32-under-Wine cases recovered the exact expected prefix.**
+The Win32 worker uses `CreateFile(CREATE_NEW)`, `WriteFile` and `FlushFileBuffers`, not Python
+file writes. Both exercise a partial/full file header; partial/full block headers and bodies
+for three recorded state payloads; partial/full index; synchronized data/index; and
+partial/full/synchronized footer. Every accepted payload hash equals its source prefix.
+A partial second or third block leaves one or two verified blocks respectively. A complete
+index with no complete footer leaves three verified blocks and **incomplete** status. A full
+valid footer following the data/index synchronization reports complete, including when the
+process is terminated before its final footer synchronization: the OS remains running and
+those written bytes are still readable. That case makes no claim about surviving power loss.
+
+The seven new unit tests additionally cover every truncation of a small complete file,
+corruption in a middle block with intact later blocks, oversized declarations, unknown block
+kinds, malformed index ordering/identity, exact indexed reads and overwrite refusal. All
+**15 research tests pass**, including the existing protocol/container tests. None establishes
+that an opaque recovered state payload is itself a playable scene.
+
+### Consequences and remaining boundary
+
+**Recommendation:** keep normal open inexpensive by validating bounded metadata/index first,
+then verify each required block before applying it. Label any background whole-file verification
+separately. A valid footer/index is not proof that every data block is intact: the middle-block
+corruption test deliberately opens its unaffected index, then rejects that block on read.
+Crash recovery scans contiguous verified blocks and stops at the first fault; it must not jump
+over a corrupt interval and present a continuous history. The measured 8.93-second scan explains
+why whole-file verification should not silently become mandatory preparation on every normal open.
+
+This establishes feasible disk indexing and **process-crash prefix recovery for the research
+container**, including the Win32 API path under Wine. It does not settle final block duration,
+queue pressure/backpressure, live writer/flush overhead, power-loss durability, native Windows
+storage, match lifecycle/completion semantics or playable crash recovery. The user-facing
+preparation/cache policy and subsecond request-to-correct-world target still need the complete
+playback pipeline measured on actual matches.
+
 ## 7. Architecture conclusions and remaining decisions
 
 ### Capture and identities
@@ -969,8 +1057,9 @@ request-to-present time and correctness together.
 
 The source/protocol investigation and transport/container experiments now supply a concrete
 prototype direction. **The whole feasibility milestone is not complete:** full-state Impure
-playback fidelity, complete restore/seek, remote perspectives, real IO recovery, live off/on
-cost and representative scale/content tests have not run. Marking them complete would confuse
+playback fidelity, complete restore/seek, complete remote perspectives, playable recovery, live off/on
+cost and representative scale/content tests remain incomplete. Container IO and process-crash
+prefix recovery have run (§6f); they do not prove game-state recovery. Marking them complete would confuse
 a lossless captured event stream with a faithfully playable game.
 
 The first **one-file solo continuous playback of a short two-player match** has run (§6a),

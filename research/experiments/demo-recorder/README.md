@@ -153,3 +153,32 @@ address reuse an explicit failed control rather than accidental evidence of port
 The final filtering run confirms `aniso=1` in both logs, every referenced address changes, and
 both views have three stable grabs. Its nine one-level pixel differences are reported rather
 than rounded to zero. The normal engine sources and DLL are restored after measurement.
+
+
+## Disk index and process-crash experiment
+
+`disk_blocks.py` consumes private normalized scene samples as opaque bytes, groups ten per
+block, and repeats them for capacity measurements. It creates a new file exclusively, writes
+independent Zstandard/CRC blocks and an index/footer, measures indexed reads, then verifies
+the entire file. Metadata-only open does not verify every data block. The sample count can
+represent 45 minutes at 10 Hz; the repeated inputs do **not** represent a 45-minute game.
+
+`disk_crash.py` stops an owned writer at acknowledged boundaries and verifies the resulting
+on-disk prefix. The default worker uses POSIX writes and `SIGKILL`. With `--windows-exe` and
+an owned idle `--prefix`, it uses `disk_writer_win.c` through Wine, exercising `WriteFile`,
+`FlushFileBuffers` and `TerminateProcess`. The prefix must map `Z:` to `/`. Neither route
+simulates a power failure or validates native Windows storage or playable game recovery.
+
+```bash
+"$REPO/.venv-undither/bin/python" "$WORKTREE/research/experiments/demo-recorder/disk_blocks.py"   "$EVIDENCE/frames" "$EVIDENCE/capacity.bin"
+"$REPO/.venv-undither/bin/python" "$WORKTREE/research/experiments/demo-recorder/disk_crash.py"   "$EVIDENCE/frames" "$EVIDENCE/new-posix-cases"
+i686-w64-mingw32-gcc -O2 -Wall -Wextra   "$WORKTREE/research/experiments/demo-recorder/disk_writer_win.c" -o "$EVIDENCE/writer.exe"
+"$REPO/.venv-undither/bin/python" "$WORKTREE/research/experiments/demo-recorder/disk_crash.py"   "$EVIDENCE/frames" "$EVIDENCE/new-wine-cases"   --windows-exe "$EVIDENCE/writer.exe" --prefix "$OWNED_PREFIX"
+```
+
+Set `EVIDENCE` to a private writable directory containing the normalized `frames/*.bin` and
+`OWNED_PREFIX` to the isolated idle test prefix. Results are in `disk-results.json`; source
+samples, phase plans and crash files are retained locally under
+`_local/demo-recorder-exploration/io/`. The large repeated capacity file is disposable after
+its exact size and full decoded hash are verified. See exploration §6f for the measured costs
+and distinction between metadata access, verified block access, and full-prefix recovery.

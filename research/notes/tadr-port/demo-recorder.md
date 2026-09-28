@@ -154,7 +154,7 @@ milestone is marked complete by this design interview.
 | Milestone | High-level completion criterion | Current state |
 |---|---|---|
 | Product contract | Scope, viewer features, storage policy, and explicit open decisions recorded here | **Decisions recorded, 2026-09-28** |
-| Feasibility and format | Demonstrate capture/playback fidelity and compare seek approaches with measured time, space, and overhead; choose the format and preparation policy from those results | **In progress — solo engine replay and near-identical fresh-process playback of sampled ground battles demonstrated. Complete capture/seek coverage, overhead, format and preparation policy remain open. [Technical evidence](demo-recorder-exploration.md)** |
+| Feasibility and format | Demonstrate capture/playback fidelity and compare seek approaches with measured time, space, and overhead; choose the format and preparation policy from those results | **In progress — solo engine replay, sampled scene portability and container crash-prefix recovery demonstrated. Complete capture/seek coverage, overhead, format and preparation policy remain open. [Technical evidence](demo-recorder-exploration.md)** |
 | Recording and basic playback | Automatic multiplayer capture, one-file solo playback, lifecycle/completeness handling, content/version checks, pause and speed control | **Planned** |
 | Seeking and recovery | Forward-seek target measured, backward seek usable, playable crash-truncated files, correct restored state and visibility | **Planned** |
 | Player perspectives | Full/player visibility, free/follow camera, cursor/click/selection/order overlays, and in-match communication | **Planned** |
