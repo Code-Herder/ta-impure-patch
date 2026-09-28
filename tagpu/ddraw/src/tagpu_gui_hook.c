@@ -991,15 +991,16 @@ static void ops_forget_base(unsigned base, int retired)
 
    With no room in the window for the `OP_FREE` the entry is dropped at once,
    which is what every free did before retirement existed: the picture may
-   lose that frame's copy, and nothing is read that is not there. */
+   lose that frame's copy, and nothing is read that is not there. Returns 1
+   then, because the drop swap-removes: slot `i` now holds another entry. */
 static void surf_drop(int i);
-static void surf_retire(int i)
+static int surf_retire(int i)
 {
     static unsigned s_dieSeq = 0;
     SURF* d = &s_surf[i];
     OP* o;
-    if (d->dying) return;
-    if (s_nops >= MAX_OPS) { surf_drop(i); return; }
+    if (d->dying) return 0;
+    if (s_nops >= MAX_OPS) { surf_drop(i); return 1; }
     free(d->copy); free(d->mask); free(d->acc);
     d->copy = d->mask = d->acc = NULL;
     d->copyValid = 0;
@@ -1010,6 +1011,7 @@ static void surf_retire(int i)
     memset(o, 0, sizeof *o);
     o->kind = OP_FREE; o->base = d->base;
     o->l = 0; o->t = 0; o->r = -1; o->b = -1;
+    return 0;
 }
 
 /* the entry an op's base names AT THAT OP'S PLACE in the window -- `publish`

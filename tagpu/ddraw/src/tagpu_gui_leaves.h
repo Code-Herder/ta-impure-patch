@@ -761,15 +761,15 @@ static int __cdecl before_memfree(void* e)
     if (!p) return 0;
     size = mem_block_size(p);             /* now: the block is still the caller's */
     if (!on_game_thread()) { surf_free_offthread(p, size); return 0; }
-    for (i = 0; i < s_nsurf; i++) {
-        if (s_surf[i].dying || !surf_dies_with(&s_surf[i], p, size)) continue;
+    for (i = 0; i < s_nsurf; ) {
+        if (s_surf[i].dying || !surf_dies_with(&s_surf[i], p, size)) { i++; continue; }
         if (s_trace) {
             char b[220];
             _snprintf(b, sizeof b, "gui trace: MEM_Free surface %08X %dx%d from %08X",
                       s_surf[i].base, s_surf[i].w, s_surf[i].h, ARG(e, 0));
             glog(b);
         }
-        surf_retire(i);                   /* in place: the entry stays, dying */
+        if (!surf_retire(i)) i++;         /* in place, dying; a drop re-tests slot i */
     }
     return 0;
 }
