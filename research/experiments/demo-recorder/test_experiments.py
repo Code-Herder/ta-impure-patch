@@ -5,9 +5,18 @@ import zlib
 
 from blocks import HEADER, LIMIT, RECORD, encode, read_block, recover
 from trace import decode, split
+from replay_host import wire
 
 
 class DecodeTests(unittest.TestCase):
+    def test_replay_wire_preserves_binary_and_batched_messages(self):
+        messages = [b'\x08', b'\x19\0\x01',
+                    b'\x05\0J' + bytes(range(62)),
+                    b'\x2c' + struct.pack('<HI', 11, 1234) + bytes(4)]
+        for payload in [*messages, b''.join(messages)]:
+            self.assertEqual(decode(wire(payload)), payload)
+        self.assertEqual(list(split(decode(wire(b''.join(messages))))), messages)
+
     def test_binary_chat_envelope_is_not_trimmed(self):
         message = bytes([5, 0, 74]) + bytes(range(1, 35)) + bytes(28)
         plain = bytearray(b'\x03\0\0' + struct.pack('<I', 42) + message)

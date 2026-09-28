@@ -469,6 +469,85 @@ measured. Pascal's `TPlayerStruct` fields `LOS_MEMORY +0x7C`, dimensions `+0x80/
 length `+0x88`, and resources `+0x8C` are candidate leads from `TAMem/TA_MemoryStructures.pas`,
 not a new disassembly or live verification of remote-player visibility/statistics.
 
+### Replay player names and unit-block ordering [DISASSEMBLED + MEASURED 2026-09-28]
+
+A native DirectPlay replay-host prototype supplies both DPNAME strings. The join path calls
+`0x4CA7C0` at `0x450B6F`, reads the returned short-name pointer at `esp+0xDC` (`0x450B7E`)
+and the long-name pointer at `esp+0xE0` (`0x450BA3`), and scans the latter unconditionally at
+`0x450BAD`. A prototype supplying only the short name crashed at that scan with a null
+long-name pointer. Non-null short and long names allow the viewer to reach the lobby.
+The destinations are player `+0x49` and `+0x2B`, respectively.
+
+Unit allocation constructs ten player pointers at `0x48562B..0x48564B`, sorts them, then
+assigns each a contiguous range of `main+0x37EE6` units. It writes the first/last pointers
+at player `+0x67/+0x6B` (`0x4858BD/0x4858E0`), the first/last slot words at `+0x6F/+0x71`,
+and each unit's owner pointer and owner-index byte at `+0x96/+0xFF`
+(`0x485902/0x48590E`). The loop does not omit spectators. A new viewer's DirectPlay ID
+can sort before a recorded player: measured viewer ID 84525577 with drone IDs
+84525579 and 84525580, despite creating twenty temporary players and retaining the lowest two.
+Thus that heuristic does not preserve recorded unit ranges by construction.
+
+All comparisons must use one ordering. The fixed ten-player path starts with the inlined
+network comparison at `0x485676..0x48567E`, then invokes comparator `0x485940` through
+`0x488920`. Further inlined network comparisons are at `0x4857AF..0x4857B7` and
+`0x485847..0x48584F`; they lie on the larger-sort branch, whose initial size test is
+`0x28 > 0x40` and is false for ten players. `0x485940` tests game type through `0x435100`;
+its type-3 branch compares player `+4` IDs at `0x485959..0x485967`, while the other branch
+compares player pointers (`0x48596A..0x485972`). Both return unsigned less-than.
+`0x488920`'s insertion loop relies on the first element already being the minimum: after
+`0x48894C` calls the comparator it shifts backward without a separate lower-bound check.
+Changing its comparator without changing `0x485676` violates that ordering invariant and
+can walk before the array; the isolated probe reproduced that failure. It is not a stock
+engine defect.
+
+A revised isolated probe uses immutable recorded-player ranks at all four network
+comparisons while leaving transport IDs unchanged. It loaded the replay with drone
+85151720 at slot 1, drone 85151721 at slot 1501, and spectator 85151724 at slot 3001
+(unit-array base `0x118A0020`; first pointers `0x118A0138`, `0x119069D8`, `0x1196D278`).
+This is a two-player experiment, not a production ordering patch or ten-player coverage.
+
+Disassembly ranges: `0x450B60..0x450BC0`, `0x48562B..0x485975`, and
+`0x488920..0x488960`, using `objdump -D -Mintel` against the pristine retail binary.
+
+The stock save dialog can be exposed in the isolated network viewer by changing only the
+UI type-3 comparisons at `0x460CF7/0x460D37`; that does not enable a valid restore. A measured
+369-unit spectator save wrote 392,041 bytes, and loading it displayed “Invalid savegame file.”
+The load action `0x492360` opens the selected summary through `0x432520` (`0x4924A7`), reads
+`Gametype` via `0x4B4800` (`0x4924C0`, key string `0x504974`), and accepts only values 1 and 2
+by successive decrements (`0x4924CD..0x4924D3`). Other types branch to `0x492AAD`; the
+error text at `0x509310` is displayed at `0x492AE2`. A later read at `0x49267F..0x492690`
+passes the saved game type to `0x434AB0`. Thus changing only the menu's disabled state is
+insufficient. The temporary restore probe admits exactly type 3 at the rejection branch;
+no claim about complete restored state follows from bypassing that UI validation.
+
+With the type-3 admission probe, loading a fresh 399,676-byte spectator save crashes after
+level teardown at `0x46E167` (`mov eax,[ebp+0x64]`, `ebp == 0`). The stack includes return
+`0x46CA75`: `0x46CA60` loads `main+0x2A30` into `ecx` and calls `0x46E160` at `0x46CA70`
+without a null check. Its caller is `0x42845D`. This is the restriction/sync object identified
+in the unit-cap investigation above. The observed missing object is a restore-lifecycle gap;
+there is no proposed null-skip fix or proof of successful multiplayer restoration.
+Additional slices: `0x46E160..0x46E1D0`, `0x46CA60..0x46CAD0`, `0x428439..0x428478`.
+
+The console save action `0x417430` builds its filename and calls writer `0x4326B0` at
+`0x41747B`; its argument-count test is `0x41743A`. The writer begins a HAPIBANK object via
+`0x4B3620/0x4B3750` and opens the initial account with `0x4B4560` (`0x4326B6..0x4326D3`).
+The measured save starts with `HAPIBANK` and contains `SQSH` chunk markers. This confirms
+container framing only, not a decoded checkpoint schema. Additional disassembly ranges:
+`0x417430..0x417489`, `0x4326B0..0x43274E`, `0x460CC0..0x460D60`,
+`0x492260..0x492730`, and `0x492A20..0x492B05`.
+
+The full writer `0x4326B0..0x432A7F` serializes the game tick at `0x432997..0x4329AC`.
+Its main content calls are `0x4C6F10` (argument from `main+0x142DB`), `0x41D360`,
+`0x4662F0`, `0x4876C0`, `0x484F50`, `0x424890`, `0x484DF0`, `0x484CE0`,
+`0x438180`, and `0x48FDF0` at `0x4329E3..0x432A48`. They are skipped when
+`main+0x391F1` is nonzero (`0x4329B7..0x4329BD`). Their complete transitive state
+coverage is not established by this caller inventory. `0x48FDF0` runs only for game type 1
+(`0x48FE06..0x48FE09`) and invokes vtable slot `+0x10` across two object arrays/counts
+at its receiver `+0/+0x40` and `+0x44/+0x84`; it returns without doing so in a type-3 save.
+The arrays' object meanings remain unestablished. Additional slice: `0x48FDF0..0x48FE59`.
+
+
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the

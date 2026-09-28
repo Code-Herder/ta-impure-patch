@@ -2,11 +2,11 @@
 
 ## Status and evidence boundary
 
-**Source/disassembly investigation and first executable experiments, 2026-09-28.** The product contract and feature progress live
+**Source/disassembly investigation and executable replay experiments, 2026-09-28.** The product contract and feature progress live
 in [Demo recorder](demo-recorder.md). This page holds technical findings and the experiments
 needed to settle the open architecture decisions. A temporary transport probe has captured a
 live two-player battle, and the captured events have been decoded, compared between peers, and
-benchmarked in independent compressed blocks. **No engine replay or world seek has run.**
+benchmarked in independent compressed blocks. **A first solo engine replay has run (§6a); complete-world seeking has not.**
 Preparation and checkpoint policy remain undecided; §6 distinguishes measured container results
 from the missing end-to-end evidence.
 
@@ -124,7 +124,7 @@ publications while the consumer holds an unread frame. That is appropriate for d
 contract. Queue exhaustion must not silently turn a recording labeled complete into one with
 missing events. Disk writes cannot become a wait in the simulation/render handshake.
 
-These remain candidate production boundaries; §6 reports the temporary transport observation. No recorder hook remains in the production source. Detailed verified addresses are retained
+These remain candidate production boundaries; §6 reports the temporary transport observation. The temporary capture observer is not part of the production patch. Detailed verified addresses are retained
 in the [engine map](../exe-reverse-engineering.md#demo-recorder-exploration-capture-and-save-boundaries-disassembled-2026-09-28).
 
 ## 4. Two apparent checkpoint shortcuts are unproven
@@ -314,6 +314,84 @@ The probe's timed record-fill region measured p50 **0.4 µs**, p99 **16.8 / 16.9
 reservation, publication, and final timing read. Page faults and competing work can affect it.
 It therefore cannot be reported as recorder overhead or substituted for a proper off/on test.
 
+## 6a. First solo engine playback
+
+**MEASURED 2026-09-28, same reference setup and captured two-player match as §6.**
+A research-only native DirectPlay host (`dplay_bridge.c`, driven by `replay_host.py`) creates
+two recorded-player identities, negotiates the roster/map and all 278 unit types, then sends
+one participant's captured gameplay messages to a third, spectator-only Impure instance.
+No Pascal recorder/server binary is loaded. The prototype borrows the Pascal server handshake;
+it is not an integrated replay UI or a final playback backend.
+
+The viewer needs stable recorded unit-block ordering independently of newly assigned network
+IDs. An isolated, byte-checked probe changes the allocation comparisons to use immutable
+recorded-player ranks. Actual transport IDs remain unchanged; the driver also translates the
+killer ID in Impure's carried-death envelope. The [engine map](../exe-reverse-engineering.md#replay-player-names-and-unit-block-ordering-disassembled-measured-2026-09-28)
+records the four comparison sites and the invariant the sort requires. This probe is not a
+production patch; failure to initialize it must prevent treating a run as valid.
+
+### Baseline result
+
+- All **902 initial units** appeared, including the rapid 900-unit scenario burst, with the
+  two recorded ranges starting at slots **1 and 1501**; the spectator's range starts at 3001.
+- The driver sent **16,095 logical gameplay events**. Measured from the viewer's first outgoing
+  unit-update packet, feeding the stream took **123.692 seconds** at nominal 1× pacing.
+  This excludes lobby setup and loading. Launch message to first viewer update was **1.830 s**.
+- At the recorded pause, the viewer contained **369 units**: exactly the same surviving slots,
+  type names, and integer map X/Y positions as both original peers' final rosters.
+- Every unit's integer height matched its **original receiving peer**. Relative to its controlling
+  peer, 70 host-owned and 76 joiner-owned units differ in height. This demonstrates agreement
+  with the observed network representation, not exact reproduction of all owner-local state.
+- All seven fraction/HP samples from §6 match the original receiving peer **byte for byte**,
+  including the fixture lab's subsequent completion. The roster reports zero construction
+  fraction for the finished burst units; an inspected rendered battle frame shows finished
+  units without construction glow. Genuine construction and seek restoration remain untested.
+- The final viewer tick was **3709**, versus **3674/3683** in the original paused peers. The
+  prototype starts wall-time pacing at the viewer's first update and does not align source
+  simulation/application clocks. This is an explicit unresolved timing difference, not a
+  fidelity pass for animation, projectile phase, fog, scripts, or time-dependent statistics.
+
+The driver currently uses two human players, wall-time scheduling, native loopback DirectPlay,
+and a hand-driven spectator lobby. It counts unit acknowledgements without implementing the
+final content-fingerprint contract. Completion of this sample establishes an executable
+packet-playback baseline and exact checks for the fields above. It does **not** establish
+full-state equivalence, pause/speed UX, compatibility, crash recovery, or a seek result.
+
+### Accelerated catch-up and stock-save probe
+
+The same stream was fed at a requested 100× rate. An initial bridge implementation drained
+one command per millisecond loop and took **16.557 s** to submit the stream. Draining up to
+128 commands per iteration removed that harness bottleneck: the second run submitted all
+16,095 events in **1.240 s**. The engine reached its recorded pause at tick **51**; the earlier
+run paused at tick **536**. The driver's submission timer does not include the engine's last
+queued receive, and the query loop was not synchronized precisely enough to report a
+request-to-correct-frame percentile.
+
+Both accelerated runs ended with the same **369 surviving slots, types, map coordinates and
+heights** as the 1× baseline. All **369 six-byte HP/construction-fraction samples** also matched
+byte for byte. The revised ordering probe worked with a viewer ID below both recorded IDs
+in the first accelerated run (85455649 versus 85455651/85455652).
+
+These results demonstrate rapid packet catch-up for this sample's final unit state. They do
+not prove simulation-clock fidelity: 51 ticks cannot reproduce the 1× run's 3709 ticks of
+local simulation, and no equality check covers projectiles, scripts, fog, effects, or wrecks.
+Nor can 1.240 seconds for two minutes of events predict a five-to-forty-five-minute jump.
+Do not use it to approve the subsecond seek target or a preparation/cache policy.
+
+The isolated viewer also tested the stock save/load path with the multiplayer UI restriction
+removed. A 369-unit spectator save produced **392,041 bytes**. Stock load rejected it with
+“Invalid savegame file”: the loader explicitly accepts game types 1 and 2. A further probe
+admitted exactly type 3. A fresh save from the batched run was **399,676 bytes**, but its load
+crashed after level teardown, before a restored world was available. Disassembly and the crash
+stack identify `0x46CA60` reading the absent restriction/sync object at `main+0x2A30`, then
+calling `0x46E160`, which dereferences `this+0x64` at `0x46E167` with `this == NULL`.
+
+**Conclusion: stock save plus UI patches is not a usable checkpoint backend.** It would need
+an explicit session/content/restriction-object lifetime and restore inventory, plus Impure's
+side state. Skipping the null dereference would not establish those invariants. No successful
+restore, checkpoint-creation timing, or restore-latency result is claimed. The file sizes are
+one diagnostic save each; they are not estimates for a complete replay checkpoint.
+
 ## 7. Architecture conclusions and remaining decisions
 
 ### Capture and identities
@@ -473,14 +551,14 @@ request-to-present time and correctness together.
 ## Next implementation gate and honest stopping boundary
 
 The source/protocol investigation and transport/container experiments now supply a concrete
-prototype direction. **The whole feasibility milestone is not complete:** continuous Impure
-engine playback, complete restore/seek, remote perspectives, real IO recovery, live off/on
+prototype direction. **The whole feasibility milestone is not complete:** full-state Impure
+playback fidelity, complete restore/seek, remote perspectives, real IO recovery, live off/on
 cost and representative scale/content tests have not run. Marking them complete would confuse
 a lossless captured event stream with a faithfully playable game.
 
-The next executable unit is **one-file solo continuous playback of a short two-player match**,
-with recorded identities, Impure messages, start/end lifecycle, and an observed-state comparison
-at fixed application boundaries. Then implement the smallest explicit checkpoint inventory and
+The first **one-file solo continuous playback of a short two-player match** has run (§6a),
+with recorded identities and Impure messages. Establish fixed application-boundary clock/state
+comparisons and start/end lifecycle coverage, then implement the smallest explicit checkpoint inventory and
 compare both seek directions against that baseline. Only those results can choose checkpoint
 frequency, preparation policy and final format. Keep the full watch-only-state alternative if
 engine restore cannot satisfy the required invariant and latency.

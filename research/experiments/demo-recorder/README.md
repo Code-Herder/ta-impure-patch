@@ -1,7 +1,9 @@
 # Demo recorder research tools
 
 These inspect the 2026-09-28 transport experiment and measure a disposable block container.
-They do not record a game, implement replay, establish a checkpoint, or measure game seeking.
+The offline tools do not establish game seeking. The separate research replay host can feed
+one captured two-player match into an isolated Impure spectator; it is not a shipping recorder
+or a complete-state checkpoint implementation.
 The source and evidence report is `research/notes/tadr-port/demo-recorder-exploration.md`.
 `results.json` contains the reference setup, counts, ordered payload comparisons, and timings.
 
@@ -61,3 +63,42 @@ The times exclude disk and game/renderer work. Its 32-byte header, 16-byte event
 
 The truncation/corruption tests use synthetic data written by the tests. They prove bounded
 parsing and prefix recovery in this container, not file durability or playable crash recovery.
+
+
+## Isolated engine playback prototype
+
+`dplay_bridge.c` is a bounded stdin/stdout native DirectPlay transport bridge; `replay_host.py`
+implements the two-player TA lobby/launch handshake and preserves the captured binary gameplay
+messages. Compile the bridge with:
+
+```bash
+i686-w64-mingw32-gcc -O2 -Wall -Wextra dplay_bridge.c -lole32 -luuid -o bridge.exe
+```
+ Use only an owned isolated native-DirectPlay prefix, with a unique
+port also assigned to the viewer. The Python driver's `--help` lists the paths.
+
+The viewer must be a spectator on matching content. Its unit-block ordering must match the
+recorded players independently of new DirectPlay IDs. Without `--order-file` the driver rejects
+a viewer whose ID would sort ahead of either drone. With `--order-file` it writes immutable
+recorded-player ranks for the **separate temporary allocation-order probe**: verify the viewer's
+arming log and resulting slot ranges before trusting any comparison. That probe is retained
+locally, not installed by these scripts and not part of the production patch. An order file
+alone cannot change the engine.
+
+`--speed` scales wall-time event submission, not simulation ticks. `playback-eof` means the
+Python driver submitted its final command, not that the engine has applied it. Observe the
+engine's pause/state separately. The driver omits lobby/control messages after start, translates
+Impure carried-death killer IDs, and does not implement the final content fingerprint, tick
+alignment, crash recovery, ten-player/AI support, perspectives, or seeking. See §6a of the
+exploration note for exact passed fields and unresolved fidelity limits.
+
+The native bridge batches at most 128 queued sends and 128 receives per loop. The FIFO is bounded;
+all DirectPlay calls stay on one thread. It does not silently drop queue entries to improve a
+benchmark. Isolated save/load probes are independent of this bridge and failed to restore a
+world; no saved-game file is a validated checkpoint here.
+
+
+`compare_replay.py HOST_LOG JOIN_LOG REPLAY_ROSTER_JSON` checks the final roster fields
+reported in §6a against the original peers. It uses the original receiver's height for each
+unit, because the observed owner-local heights differ. `--unit-limit` defaults to the sample's
+1500. `playback-results.json` retains the measured runs and explicit unverified scope.
