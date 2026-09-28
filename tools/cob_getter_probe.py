@@ -178,6 +178,53 @@ def command(*args, timeout=60):
     return result.stdout
 
 
+def reload_probe(name, inst, game, archive, extended, roundtrip, unused_model_pieces, out):
+    """A unique unreachable tail proves the native reload actually took place."""
+    original = cob_audit.tacob.read_cob(archive.read('scripts/armsolar.cob'))
+    pieces = original.pieces
+    if unused_model_pieces:
+        pieces += [f'unused{i}' for i in range(4096 - len(pieces))]
+    cob = cob_audit.tacob.read_cob(probe_cob(pieces, extended, roundtrip))
+    marker = 0x1b00b1e5
+    cob.code.append(marker)
+    scripts = inst['gamedir'] / 'scripts'
+    scripts.mkdir(exist_ok=True)
+    (scripts / (TYPE + '.cob')).write_bytes(cob_audit.tacob.write_cob(cob))
+    command('switches', name, 'cheats=on')
+    command('keys', name, 'shift', 'return')
+    command('shot', name, '-o', str(out / 'reload-open.png'))
+    text = '+reload ' + TYPE.lower()
+    for start in range(0, len(text), 4):
+        tokens = ['space' if c == ' ' else 'char:' + c for c in text[start:start + 4]]
+        command('keys', name, 'shift', *tokens)
+        command('shot', name, '-o', str(out / f'reload-typed-{start}.png'))
+    command('keys', name, 'shift', 'return')
+    hooks = compat.exe_hooks(game['proc'].pid, inst['gamedir'])
+    if hooks.get('why') or compat.hook_evidence(hooks):
+        raise RuntimeError('reload requires confirmed Impure-only runtime')
+    deadline = time.monotonic() + 15
+    with open(f"/proc/{hooks['pid']}/mem", 'rb') as memory:
+        def word(address):
+            memory.seek(address)
+            return struct.unpack('<I', memory.read(4))[0]
+        while time.monotonic() < deadline:
+            main = word(0x511DE8)
+            count, base = word(main + 0x1438F), word(main + 0x1439B)
+            if not 0 < count <= 16384:
+                raise RuntimeError('reload definition count exceeds allocation')
+            for index in range(1, count):
+                definition = base + index * 0x249
+                memory.seek(definition + 32)
+                if memory.read(32).split(b'\0')[0].upper() != TYPE.encode():
+                    continue
+                pointer = word(definition + 0x18E)
+                words = word(pointer + 12) if pointer else 0
+                if words == len(cob.code) and word(word(pointer + 36) + (words - 1) * 4) == marker:
+                    return dict(observed=True, words=words, pieces=len(pieces))
+            time.sleep(.1)
+    raise RuntimeError('native reload did not publish the marked script')
+
+
 def skirmish_ceiling_scenario():
     """Keep the native commander; fill its last player's remaining 1499 slots."""
     units = [dict(id='human', type=TYPE, owner=0, pos=[2600, 1200], kills=7, nanoframe=50)]
@@ -351,7 +398,7 @@ def save_roundtrip(name, game, inst, units, out):
 
 
 def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, thread_exhaustion=None,
-        skirmish_ceiling=False, unused_model_pieces=False):
+        skirmish_ceiling=False, unused_model_pieces=False, reload=False):
     setup = compat.pick_setups(["escalation"])[0]
     problems = [p for entry in setup["add"] for p in compat.fixture_problems(entry["fixture"])]
     if problems:
@@ -405,6 +452,9 @@ def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, threa
             return report
         if quarantine == 'commander':
             raise RuntimeError('match started despite a rejected starting commander')
+        if reload:
+            print('Reloading the generated script through native chat', flush=True)
+            report['reload'] = reload_probe(name, inst, game, archive, extended, roundtrip, unused_model_pieces, out)
         if quarantine is True:
             deadline = time.monotonic() + 15
             while 'cob: entry message:' not in talog.run_text(inst['gamedir']):
@@ -562,6 +612,7 @@ def main():
     parser.add_argument('--thread-exhaustion', choices=('start', 'call'), help='exercise the eight-record limit with a 128-word argument stack')
     parser.add_argument('--skirmish-ceiling', action='store_true', help='fill player three to reach native slot 6000 and run extended getter checks; global slot 15000 requires multiplayer')
     parser.add_argument('--unused-model-pieces', action='store_true', help='declare 4096 pieces over the solar model without accessing the excess; exercise safe save padding with --roundtrip')
+    parser.add_argument('--reload', action='store_true', help='native +reload before creation; verify a marked script was loaded before getter/save assertions')
     args = parser.parse_args()
     output = args.out.resolve()
     for root in (compat.TREE, compat.main_checkout()):
@@ -574,7 +625,7 @@ def main():
         parser.error('--extended requires the guarded implementation')
     rejection = 'commander' if args.reject_required else args.quarantine
     report = run(output, args.expect, args.dll.resolve(), args.extended, args.roundtrip, rejection,
-                 args.thread_exhaustion, args.skirmish_ceiling, args.unused_model_pieces)
+                 args.thread_exhaustion, args.skirmish_ceiling, args.unused_model_pieces, args.reload)
     summary = {k: v for k, v in report.items() if k not in ('hooks', 'checks', 'chat_lines')}
     summary['checks_passed'] = sum(c['ok'] for c in report.get('checks', []))
     summary['checks_failed'] = [c for c in report.get('checks', []) if not c['ok']]

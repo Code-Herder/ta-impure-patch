@@ -12238,6 +12238,11 @@ shows the definition loader publishing its model template in `main+0x14377[type]
 at `0x42D79C..0x42D7A2`, before reading its COB at `0x42D8EF`. The checked hook at
 `0x42D8F4` bounds EBP's definition index against `main+0x1438F`, binds the validated
 script to that template's node count, then performs the original `def+0x18E` store.
+Native `+reload` uses a separate loader call at `0x42D294` and store at `0x42D299`
+(ESI owns the definition, not EBP). That store has the same binding guard and resumes
+at `0x42D29F`; otherwise valid unused excess declarations would lose their model bound.
+`0x42D224` requires the availability bit before reload, so a quarantined type remains
+unavailable until a fresh level load rather than being rehabilitated by this command.
 `0x45AE80(root)` is stdcall (`ret 4`); it counts the root and recursively follows
 child `+0x30` and sibling `+0x2C`. `0x45A950` uses the same traversal, allocates
 `34 + 54*N` bytes at `0x45A97F..0x45A98F`, and stores the posed count at model+0.
@@ -12265,6 +12270,17 @@ validates the full signed result against model+0 before calling the original bod
 Its trampoline replays `sub esp,8; mov eax,[esp+0x14]` and resumes at `0x43E0B7`.
 A generated `SweetSpot` returning piece `0x100000` was driven through real targeting:
 the script-specific diagnostic refused the game, with no crash report.
+
+**Post-load rejection owns native metadata too.** `0x4B2499` registers the blob pointer
+and checksum in the native tree rooted at `0x51FBC0` before relocation finishes.
+Disassembly of `0x4B2850..0x4B2895` identifies its header pointer at tree+4, root at
+header+4, child links at node+0/+8, key at node+0xC, and nil sentinel at `0x51FBBC`.
+The script destructor `0x4B2540` removes the registration before its final free
+at `0x4B26D5`. Model rejection occurs after registration, so it calls that whole
+stdcall destructor, not the blob-free wrapper directly. Direct freeing retained a
+stale pointer key/checksum and leaked the native tree node; no use-after-free through
+that tree was established. Malformed input rejected before relocation has not yet
+been registered and still uses the raw allocator's free.
 
 **Nonterminal native operations and division.** `0x10009000` dispatches to
 `0x4B1153`: two stack pops, one inline piece, vtable+0x28, then PC+=2.

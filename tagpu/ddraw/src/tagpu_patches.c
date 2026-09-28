@@ -10395,11 +10395,9 @@ static void __cdecl cob_free_blob(void* blob)
     ((void (__cdecl*)(void*))0x004D85A0u)(blob);
 }
 
-static unsigned __cdecl cob_loaded_model_check(unsigned* regs)
+static void* cob_bind_loaded_model(char* def, void* blob)
 {
     char* ta = *(char**)0x00511DE8u;
-    char* def = (char*)(size_t)regs[PR_EBP];
-    void* blob = (void*)(size_t)regs[PR_EAX];
     const char* base = *(const char**)(ta + 0x1439B);
     unsigned count = *(unsigned*)(ta + 0x1438F);
     uintptr_t delta = (uintptr_t)def - (uintptr_t)base;
@@ -10420,13 +10418,29 @@ static unsigned __cdecl cob_loaded_model_check(unsigned* regs)
         if (!tagpu_cob_bind_model(f->program, pieces, reason, sizeof reason)) {
             cob_reject_file(f->name, reason);
             LeaveCriticalSection(&s_cobLock);
-            cob_free_blob(blob);
+            /* Relocation already registered this blob in the native checksum
+               tree (0x4B2499); its destructor removes that entry before the
+               hooked blob free. A direct free would leave a stale tree key. */
+            ((void (__stdcall*)(void*))0x004B2540u)(blob);
             blob = NULL;
         } else LeaveCriticalSection(&s_cobLock);
     }
     *(void**)(def + 0x18E) = blob;
-    regs[PR_EAX] = (unsigned)(size_t)blob;
+    return blob;
+}
+
+static unsigned __cdecl cob_loaded_model_check(unsigned* regs)
+{
+    regs[PR_EAX] = (unsigned)(size_t)cob_bind_loaded_model(
+        (char*)(size_t)regs[PR_EBP], (void*)(size_t)regs[PR_EAX]);
     return 0x0042D8FAu;
+}
+
+static unsigned __cdecl cob_reloaded_model_check(unsigned* regs)
+{
+    regs[PR_EAX] = (unsigned)(size_t)cob_bind_loaded_model(
+        (char*)(size_t)regs[PR_ESI], (void*)(size_t)regs[PR_EAX]);
+    return 0x0042D29Fu;
 }
 
 static void cob_model_bound(char* cob, const CobFile* f)
@@ -10715,6 +10729,7 @@ static void cob_runtime_sites(void)
                                                 0x0F,0x84,0x0D,2,0,0};
     static const unsigned char model_check[] = {0x8B,0x88,0x8E,1,0,0};
     static const unsigned char loaded_model[] = {0x89,0x85,0x8E,1,0,0};
+    static const unsigned char reloaded_model[] = {0x89,0x86,0x8E,1,0,0};
     static const unsigned char piece_center[] = {0x83,0xEC,8,0x8B,0x44,0x24,0x14};
     static const unsigned char chat_frame[] = {0xE8,0xFC,0x21,0xF9,0xFF};
     static const unsigned char path = 0x57, blob = 0x56;
@@ -10751,6 +10766,7 @@ static void cob_runtime_sites(void)
     cob_guard_site(0x00485FA0u, sizeof create_check, create_check, cob_create_check, "COB rejected required-unit guard");
     cob_guard_site(0x00485D64u, sizeof model_check, model_check, cob_model_check, "COB rejected model creation guard");
     cob_guard_site(0x0042D8F4u, sizeof loaded_model, loaded_model, cob_loaded_model_check, "COB model allocation bound");
+    cob_guard_site(0x0042D299u, sizeof reloaded_model, reloaded_model, cob_reloaded_model_check, "COB reloaded model allocation bound");
     original = lim_code(sizeof piece_center + 5);
     if (original) {
         memcpy(original, piece_center, sizeof piece_center);

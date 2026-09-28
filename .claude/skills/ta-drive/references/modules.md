@@ -91,6 +91,8 @@ not retail's settings. Skirmish activates only four players; this is not evidenc
 global live ID 15000, which requires a network fixture.
 `--unused-model-pieces --extended --roundtrip` keeps 4096 declarations over the solar model
 without accessing the excess and checks that saving/restoring still runs the getter suite.
+Adding `--reload` loads a marked replacement through native chat before creating the probes;
+the driver observes its unique code tail, then applies the same getter/save assertions.
 
 `tools/cob_corpus_probe.py SETUP... --out DIR` audits effective native-loader choices in
 paused isolated games and preserves metadata/hashes, not game scripts. A nonzero exit reports

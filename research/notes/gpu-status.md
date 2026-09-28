@@ -19923,7 +19923,7 @@ and unrecoverable execution faults refuse with diagnostics.
 | `0x4B245C`, `0x4B246F..0x4B2475`, `0x4B26D5` | validate the actual file allocation before relocation, checksum that same allocation, unlink metadata before free |
 | `cob_runtime_sites` | checked object size/model/count/record-stride operands; `0x4B0921` initializes allocated records; `0x4B0DAD` guards wait-state access and `0x4B0E5D` every instruction fetch |
 | `0x4B1EC0`, `0x4B2040` | replace complete save/load methods; validate the complete input before exposing restored state |
-| `0x42D8F4`, `0x43E0B0` | bind reachable piece accesses to the loaded model allocation; bound the native SweetSpot result consumer |
+| `0x42D8F4`, `0x42D299`, `0x43E0B0` | bind initial/reloaded scripts to model storage; bound the native SweetSpot result consumer |
 | `0x497581` | saved unit partition established before native `0x4917D0` allocates the level |
 | `0x42DA58`, `0x42BEC3`, `0x485FA0`, `0x485D64` | filter rejected types from build lists and guard creation, including required/saved units |
 | `0x497F5E`, `0x49842F`, `0x496A4F` | reuse load reset/in-play ordering; deliver local chat through `0x46BC70` after native frame work |

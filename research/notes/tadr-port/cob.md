@@ -455,3 +455,23 @@ failed to start retail's multiplayer display: a filesystem vacancy check had not
 that number against another runner. All suite launch paths now let Xvfb reserve the number
 atomically through its readiness pipe. This fixes ownership, not timing; no other runner's
 server or lock is adopted or removed. The corrected full suite is being rerun.
+
+The follow-up review of `9f4050f` cleared those five fixes and found two related lifecycle
+omissions: native `+reload` has a separate publication seam, and post-relocation rejection
+must remove the engine's checksum-tree node through its full script destructor. Both were
+verified in disassembly and corrected. DLL
+`35693a8e85b908dd35b2d9f04449d1d918bb0a3866962d376beb775b5900526f`
+then passed an acknowledged native reload, creation and expanded save/load with 4096 piece
+declarations, all 84 getter assertions passing. A unique unreachable tail in the replacement
+script (1015 words) was observed after reload, so an ignored chat command cannot pass this gate.
+The first input attempt was not acknowledged; separating typed batches with actual engine
+frame captures made the entered command observable and the reload succeeded.
+The malformed reachable-piece fixture also passed on this DLL: it disabled the type,
+reported it on entry, and completed cleanup without a crash through the native destructor.
+
+The second full Wine run on `08c43e68…` passed all startup/battle cases and 14 network games,
+but loader/TA Zero could not start its Xvfb process. This remained a test-infrastructure
+failure, not a passing multiplayer result. Launcher failures now retain stderr, exit status
+and readiness bytes; a separate concurrent twelve-server reservation check passed. A third
+full run on `35693a8e…` uses three simultaneous network games rather than six, and must be
+judged by its actual outcomes. No timing-dependent runtime mitigation was introduced.

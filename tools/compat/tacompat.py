@@ -657,19 +657,23 @@ def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
     acknowledgement: it may belong to another runner whose server outlives ours.
     """
     read_fd, write_fd = os.pipe()
+    errors = tempfile.TemporaryFile()
     p = None
     try:
         argv = ['Xvfb'] + ([f':{n}'] if n is not None else [])
         p = subprocess.Popen(argv + ['-displayfd', str(write_fd), '-screen', '0',
                                     '1280x1024x24', '-nolisten', 'tcp'],
                              pass_fds=(write_fd,), stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+                             stderr=errors, start_new_session=True)
         os.close(write_fd)
         write_fd = None
         ready = select.select([read_fd], [], [], 10)[0]
         answer = os.read(read_fd, 32) if ready else b''
         if not re.fullmatch(rb'\d+\n', answer):
-            raise RuntimeError(f'Xvfb did not acknowledge display {n}')
+            errors.seek(0)
+            detail = errors.read(8192).decode(errors='replace').strip()
+            raise RuntimeError(f'Xvfb did not acknowledge display {n}; '
+                               f'exit={p.poll()}, ready={answer!r}: {detail}')
         number = int(answer)
         if (n is not None and number != n) or p.poll() is not None:
             raise RuntimeError(f'Xvfb did not own display {n}')
@@ -680,6 +684,7 @@ def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
             stop_xvfb(p)
         raise
     finally:
+        errors.close()
         os.close(read_fd)
         if write_fd is not None:
             os.close(write_fd)
