@@ -162,6 +162,9 @@ Run the new setup before writing its `today` — write down what it did, not wha
 ## Traps
 
 - **Never run two `tacompat.py wine` at once**: the instance names are fixed (`compat-<setup>`).
+- **A run tests the DLL as it was when the run started**: it is copied once, and every instance,
+  joiner and upload is made from that copy, whose hash the report names. Rebuilding during a run
+  is safe; it tests nothing new until the next run.
 - Instances are created **one at a time**: `tacli create` writes the registry hive every
   prefix shares. Each instance then gets private copies of the hives before anything runs.
 - The DLL refuses a `tacli-state` folder without the `-xtacli-test` token (registry test

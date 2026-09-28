@@ -469,7 +469,19 @@ def other_logs(folder: Path, since: float) -> dict:
     return out
 
 
-def report(results, platform, dll, started, strict=False) -> int:
+def snapshot_dll(dll: Path) -> Path:
+    """The DLL under test, copied once, before anything runs.
+
+    EVERY COPY A RUN MAKES COMES FROM THIS ONE FILE, and the report names its hash. A run is
+    long and the DLL is rebuilt beside it: the network stage's joiner instance copies the DLL
+    well after the start, and the report used to hash the path when it finished -- so a rebuild
+    mid-run produced a run of two builds, reported as a third."""
+    snap = Path(tempfile.mkdtemp(prefix="tacompat-dll-")) / "ddraw.dll"
+    shutil.copy2(dll, snap)
+    return snap
+
+
+def report(results, platform, dll, started, strict=False, source=None) -> int:
     out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}"
     out.mkdir(parents=True, exist_ok=True)
     for r in results:
@@ -481,7 +493,7 @@ def report(results, platform, dll, started, strict=False) -> int:
             if Path(src).exists():
                 shutil.copy2(src, d / name)
     (out / "summary.json").write_text(json.dumps(
-        {"platform": platform, "dll": str(dll), "dll_md5": md5_file(dll),
+        {"platform": platform, "dll": str(source or dll), "dll_md5": md5_file(dll),
          "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started)),
          "results": results}, indent=2) + "\n")
     n = {v: sum(r["verdict"] == v for r in results) for v in ("meets goal", "known gap", "UNEXPECTED")}
@@ -1568,9 +1580,10 @@ def threw(setup, platform, fut) -> dict:
 
 
 def cmd_wine(args):
-    dll = Path(args.dll).resolve()
-    if not dll.is_file():
-        die(f"no DLL at {dll} (build it: make -C tagpu/ddraw -j$(nproc))")
+    source = Path(args.dll).resolve()
+    if not source.is_file():
+        die(f"no DLL at {source} (build it: make -C tagpu/ddraw -j$(nproc))")
+    dll = snapshot_dll(source)
     setups = pick_setups(args.setups)
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
     skipped = [s["name"] for s in setups if s not in ready]
@@ -1628,7 +1641,9 @@ def cmd_wine(args):
             verdict(o, s, "wine")
             print(f"  {name}: network game {'ok' if m['ok'] else 'FAILED: ' + m['why']} ({o['verdict']})")
     results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
-    return report(results, "wine", dll, started, args.strict)
+    rc = report(results, "wine", dll, started, args.strict, source)
+    shutil.rmtree(dll.parent, ignore_errors=True)
+    return rc
 
 
 def cmd_clean(args):
@@ -1880,9 +1895,10 @@ def windows_cfg(args) -> dict:
 
 
 def cmd_windows(args):
-    dll = Path(args.dll).resolve()
-    if not dll.is_file():
-        die(f"no DLL at {dll}")
+    source = Path(args.dll).resolve()
+    if not source.is_file():
+        die(f"no DLL at {source}")
+    dll = snapshot_dll(source)
     cfg = windows_cfg(args)
     setups = pick_setups(args.setups)
     ready = [s for s in setups if not any(fixture_problems(a["fixture"]) for a in s["add"])]
@@ -1932,7 +1948,9 @@ def cmd_windows(args):
             except Exception:  # noqa: BLE001 -- the report matters more than the tidy-up
                 pass
         w.s.close()
-    return report(results, "windows", dll, started, args.strict)
+    rc = report(results, "windows", dll, started, args.strict, source)
+    shutil.rmtree(dll.parent, ignore_errors=True)
+    return rc
 
 
 # ------------------------------------------------------------------------- the decode, checked
