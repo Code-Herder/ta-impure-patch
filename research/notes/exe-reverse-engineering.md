@@ -407,9 +407,10 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
 
 ## Demo recorder exploration: capture and save boundaries [DISASSEMBLED 2026-09-28]
 
-Read-only recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
-No new hooks installed. The existing send/receive and save investigations below remain the
-fuller maps; this table retains the boundaries examined for recorder suitability.
+Boundary recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
+Temporary observers measured the three DirectPlay wrappers below in a two-peer game; they
+were removed and the normal DLL rebuilt. No production recorder hook is installed. The
+existing send/receive and save investigations below remain the fuller maps.
 
 | Address | Fact checked and implication |
 |---|---|
@@ -431,6 +432,42 @@ existing import routes documented above (`0x4CA435`, `0x4CA4D7`, `0x4CA667`, `0x
 do not themselves wrap the returned COM interfaces. The render exchange was read separately:
 its latest-frame contract and camera-limited contents are not an ordered event log or a
 complete replay checkpoint. See the exploration for the source references and remaining gaps.
+
+### Temporary transport observation and construction reads [MEASURED 2026-09-28]
+
+The three observed entry instructions are position-independent five-byte `push imm32`s:
+`0x4C97B0 = 68 E8 B0 50 00`, `0x4C9800 = 68 FC B0 50 00`,
+`0x4C9840 = 68 1C B1 50 00`. The send wrappers' stack arguments are
+`(context, sender, destination, buffer, byte_count)`; the receive wrapper's are
+`(context, buffer, byte_count_pointer)`. These signatures were checked against the disassembly
+above and used by the temporary observer. Receive copying happened only after return value 0
+and with returned length no larger than the original caller-supplied capacity. Sender and
+destination were read from that call's context `+0x4B5/+0x4B9` before returning to its caller.
+The capture retained copied bytes, never an engine buffer pointer.
+
+The measured workload was Two Continents, two native-DirectPlay peers, 900 newly spawned
+artillery units plus two commanders, followed by seven synthetic unfinished units. Both
+send wrappers and the receive wrapper armed. The host/joiner captures hold 1821/1795 records;
+ordered `0x4A/0x4B/0x4C` payloads agree exactly between the originating and receiving peer.
+This is transport evidence, not replay correctness. See the exploration for counts, codec
+measurements, observer limitations and local evidence inputs.
+
+Read through `tacli peek` at `*0x511DE8+0x38A51`: both peers' pause byte was 1; their
+`+0x38A47` ticks were 3674 and 3683. On the receiving peer the unit-array pointers at
+`+0x14357/+0x1435B` differed by 4,200,000 bytes (15,000 strides of `0x118`; the latter
+pointer is the last slot, as the existing publisher map documents). The inspected slots
+68, 69, 70, 71, 78, 79 and 80 are strictly inside that span. Their six bytes at
+`unit+0x104` contain the build fraction remaining followed by the HP word at `+0x108`.
+Six matched the owner's carried create state; slot 79's fraction was 0 rather than the
+owner roster's 0.60, with HP 1076 still matching. A subsequent stock `0x12` with both slot
+words 79 exists in both captures. That message's causal role remains an inference; the
+synthetic scenario first creates a finished lab and then changes its build fraction.
+
+The source-only inventory also re-read the publisher's existing in-play ownership boundary
+(`0x468CF0`, return `0x4969D2`) and its loader handoff; no new behavior at those sites was
+measured. Pascal's `TPlayerStruct` fields `LOS_MEMORY +0x7C`, dimensions `+0x80/+0x84`,
+length `+0x88`, and resources `+0x8C` are candidate leads from `TAMem/TA_MemoryStructures.pas`,
+not a new disassembly or live verification of remote-player visibility/statistics.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
