@@ -2,10 +2,10 @@
 
 ## Scope and state
 
-**Checkpoint 2026-09-28: stopped at the owner's request; not landed.**
-The core implementation is committed and reviewed on `worktree-tadr_port_cob`.
-Full mod parity is not yet proven. The test runners were stopped; this checkpoint
-does not authorize restarting them or landing a smaller scope.
+**Core landed on local `main` 2026-09-28; mod feature parity is still open.**
+The owner chose to land the verified core rather than hold it for the whole matrix.
+What the landing carries and how it was verified are in
+[the landing](#the-landing); the parity gates it leaves open are listed there too.
 The goal is correct gameplay for the versions of Escalation, Total Mayhem, TA Zero,
 Twilight and ProTA in [the compatibility suite](../compat/setups.md), with their
 own content and executables and no TADR code executing. Launching and fighting a
@@ -17,12 +17,11 @@ is not adopted. The shipped 3.9.2.416 handler, historical source and each mod's
 actual scripts establish the contract. The much larger unreleased 4.0 API and the
 renumbered 2026 recorder are not the target.
 
-## Development and testing checkpoint
+## The landing
 
-The pre-checkpoint branch tip is `ac448bd`; the latest runtime change is
-`96929a8` (required placed campaign units). The worktree was clean when work stopped.
-Nothing from this branch has been landed on local `main` or pushed. Main has advanced
-independently and must be rechecked before a future landing.
+The latest runtime change is `96929a8` (required placed campaign units); everything
+after it is documentation and the compatibility harness's Xvfb readiness reader.
+Main was merged in at `23cd2d0` (documentation only, no conflict).
 
 Implemented: all eight getters below; full-width unit-ID validation; 128-word
 stacks with eight thread records; guarded execution and argument transfers;
@@ -38,10 +37,28 @@ fix also received two HIGH follow-up reviews with no retained finding. Review
 records are attached as `landing-review:` git notes to `5ef6565`, `9f4050f`,
 `d5bbe84` and `96929a8`. A cleared review is not a substitute for the open live gates.
 
-### Completed versus interrupted verification
+### Landing verification
 
-These results belong to different DLL snapshots; they must not be combined into
-a claim that the latest binary passed the entire matrix.
+One complete Wine run on the landing DLL, built from `23cd2d0` (SHA-256
+`47168b92e8581b911304dad2b29674d8fdf66cb3bf046bb554b562eb233d1551`, md5
+`0a65c00965ee…`), `tacompat.py wine --mp-jobs 4`, 642 s: 18 of 19 setups meet the
+goal, `gammata-ota` is its known inactive gap, **0 UNEXPECTED**, and all 15
+two-peer network games completed (`mp ok`), all in the same run. Report:
+`$TACOMPAT_CACHE/results/20260928-192306-wine`. On the same tree the parallel DLL
+build, 537 tool tests (`python -m unittest discover -s tools`: the 39 COB, GUI-reset,
+compatibility-display, dpport, tacli, ta3do and tacob tests) and the compatibility
+self-test passed. The documentation commits after `23cd2d0` change only the commit
+string the DLL embeds (`inc/git.h`), not its code; the hashes above are the tested
+binary's, not a later rebuild's.
+
+**Windows was not rerun for the landing.** The last Windows result is the
+interrupted `861ccf38…` session below (4/19 verdicts). A Windows session needs the
+owner's permission and is not a landing gate; it is required before a release tag.
+
+### Earlier, partial verification
+
+These results belong to earlier DLL snapshots; they must not be combined into
+a claim that any one binary passed the entire matrix.
 
 | Candidate / check | Recorded result |
 |---|---|
@@ -81,10 +98,10 @@ produced a final aggregate summary.
 
 ### Evidence locations and resumption
 
-Completed compatibility reports are under the suite's configured
-`$TACOMPAT_CACHE/results/20260928-171014-wine` and
-`$TACOMPAT_CACHE/results/20260928-172326-wine`. The former includes the failed
-display launch; the latter is its corrected targeted rerun. Preserve both.
+Compatibility reports are under the suite's configured `$TACOMPAT_CACHE/results/`:
+`20260928-192306-wine` is the landing DLL's complete run; `20260928-171014-wine`
+and `20260928-172326-wine` are the earlier `35693a8e…` run, with its failed display
+launch, and its corrected targeted rerun. Preserve all three.
 Other probe output is local scratch evidence, not tracked game assets. Here
 `$COB_EVIDENCE_ROOT` denotes the local parent of the retained probe directories:
 `cob-required-campaign-fixed`, `cob-required-campaign-control`,
@@ -93,12 +110,12 @@ Other probe output is local scratch evidence, not tracked game assets. Here
 `cob-effective-corpus-model-binding`. Locate and preserve these before cleaning
 scratch storage; the reproducible drivers live in `tools/cob_*_probe.py`.
 
-Remaining work, without treating smoke coverage as feature parity:
+Open after the landing, without treating smoke coverage as feature parity:
 
-1. Finish the selected candidate's Wine and Windows regression and retain final
-   reports and binary hashes. A fresh Windows session needs permission and an
+1. The Windows startup/in-game smoke across all setups on a landed DLL, with its
+   report and binary hash. A fresh Windows session needs permission and an
    exclusive-use check; the interrupted session's partial observations are not
-   completion. Do not use a later metadata-only rebuild's hash for the earlier tests.
+   completion. Required before a release tag.
 2. Exercise the highest global live ID (15000 at the raised limit), and dead/reused
    slot transitions. Live ID 6000 in a 15001-slot pool is already covered, but is
    not the highest global-ID case.
@@ -113,10 +130,8 @@ Remaining work, without treating smoke coverage as feature parity:
 6. Obtain and test valid shipped TADR/mod save fixtures. The implemented native
    32-word and new expanded formats do not prove compatibility with TADR's
    conditional 64-record serialization; further implementation may be needed.
-7. Resolve the unanswered landing-scope question: finish the entire agreed matrix
-   before landing, or explicitly split out a verified core landing with parity
-   follow-ups left open. No choice was made before work stopped. Then reconcile
-   advanced main and run the applicable landing gates. Publishing is separate.
+
+Publishing is separate from the landing.
 
 The sections below retain the measurements and development history. Statements
 about an earlier implementation slice are historical, not the current feature state.
@@ -221,8 +236,8 @@ These are evidence to investigate, not fixes already implemented here.
 | Multiplayer | two Wine peers for every listed mod, host-owned and joiner-owned units, local-AI ownership, alliance/completion changes, attach/drop and destruction; no duplicate owner actions | all five mods pass self/remote getter ownership; local-AI getters pass in single player; dynamic feature cases remain |
 | Rejection | identical unavailable types across peers, unit/script/reason chat at entry, mismatch handling, and refusal for required/pre-existing units | matching and host-only/joiner-only malformed content consistently excluded; warning captured on screen; required starting/saved commander refusals and placed campaign-unit refusal pass |
 | Save/load | valid old saves and new saves with expanded state, including an upgrade in progress; malformed state refused safely | native 32-word save, expanded records and real upgrade round trips pass; malformed records covered offline, shipped TADR save fixtures remain |
-| Windows | startup and in-game smoke checks across setups; full Windows multiplayer is deferred | stopped: 4/19 verdicts completed (three smoke passes, one expected refusal), 15 incomplete; see checkpoint |
-| Landing | parallel build, documentation and rendered wiki, dedicated high review, fixes and reruns; local landing only | build/docs/reviews completed; final platform regression and broader gates incomplete; scope decision unresolved; not landed |
+| Windows | startup and in-game smoke checks across setups; full Windows multiplayer is deferred | open: the last session (an earlier DLL) completed 4/19 verdicts — three smoke passes, one expected refusal; not rerun for the landing |
+| Landing | parallel build, documentation and rendered wiki, dedicated high review, fixes and reruns; local landing only | landed on local `main` 2026-09-28 after a complete Wine run on the landing DLL (0 UNEXPECTED, 15/15 network games); the parity gates above stay open |
 
 Use the real mod content for feature parity and isolated generated scripts for
 complete API and invalid-input coverage. Test overlays must not alter the player's
@@ -379,8 +394,8 @@ with undefined-behaviour instrumentation; together with the audit/probe tests,
 
 **Not complete:** highest-live/recycled IDs, complete feature coverage,
 Windows smoke checks, documentation completion and the dedicated landing
-review remain gates. Later measurements below supersede the initial runtime checkpoint;
-the branch is not landed and does not yet establish full mod parity.
+review remained gates at that point. Later measurements below supersede the initial
+runtime checkpoint.
 
 ### Extended live assertions and save verification
 
@@ -617,4 +632,4 @@ unexpected results. The campaign-only integration fix changes the DLL to `861ccf
 a full Wine regression and approved Windows startup/in-game smoke session started on
 that exact DLL, then stopped at the owner's request. Wine completed 9/15 network matches;
 Windows completed 4/19 setup verdicts. Neither produced a final aggregate report.
-The checkpoint at the top of this page records the exact partial coverage and open work.
+[The landing](#the-landing) records the complete run on the landing DLL that followed, and the open work.

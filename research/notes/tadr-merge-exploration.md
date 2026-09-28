@@ -385,7 +385,8 @@ interpreter capacity, validation and saved state; it is not just this entry hook
 The eight getters, safe execution capacity and saved script state are in scope; id 111 is not.
 Every mod players run with TADR except ProTA calls these ids somewhere, and every one of them
 now runs on our stack with its own exe and archives, TADR's code kept out
-([the takeover](compat/takeover.md)). Until F is implemented, those scripts still receive 0.
+([the takeover](compat/takeover.md)). F's core has landed, so those scripts now receive the
+getters' values; feature parity across the mods is still being verified ([F's gates](tadr-port/cob.md#verification-gates)).
 
 **A stock defect the census found.** `PUSH` (`0x4B13CF..0x4B13D9`) increments the stack index and
 writes with no bound, and a thread record holds 32 stack words ([engine map](exe-reverse-engineering.md),

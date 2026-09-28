@@ -3743,13 +3743,15 @@ kept (the flying pieces' byte ring is the one place it cannot).
 
 ### F — COB compatibility for the supported mods
 
-**In progress, not landed.** [The accepted decisions and verification gates](tadr-port/cob.html)
-cover eight required getters (32, 69–75), bounded 128-word records, whole-type rejection with
-entry chat, and compatible saved-state import. ID 111 is deferred. The API assertions, all-five-mod
-two-peer ownership probes, real Escalation high-stack scripts and an upgrade/save round trip
-pass. Remaining gates include highest-live/recycled IDs, broader mod-specific features and
-dynamic multiplayer cases, shipped-mod saved fixtures, Windows smoke tests and the dedicated
-high-review fix verification. The effective loaded corpus has been audited; the model-backed
+**Core landed on local main 2026-09-28; mod feature parity open.**
+[The accepted decisions and verification gates](tadr-port/cob.html) cover eight required
+getters (32, 69–75), bounded 128-word records, whole-type rejection with entry chat, and
+compatible saved-state import. ID 111 is deferred. The API assertions, all-five-mod two-peer
+ownership probes, real Escalation high-stack scripts and an upgrade/save round trip pass, and
+the landing DLL ran the full Wine compatibility suite with nothing unexpected and every network
+game completed. **Not covered by the landing:** highest-live/recycled IDs, dynamic thread
+occupancy across the corpus, broader mod-specific features and dynamic multiplayer cases,
+shipped-mod saved fixtures, and the Windows smoke checks. The effective loaded corpus has been audited; the model-backed
 piece guard exposes malformed bundled ZZZ content in four setups while admitting unused
 extra declarations in normal units. Generic compatibility battles do not establish feature parity.
 
