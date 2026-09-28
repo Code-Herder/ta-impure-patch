@@ -405,6 +405,33 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   (`totala.ini` → `ta.ini`), and `0x40EAD6` (the path budget). The table is in
   [the setups page](compat/setups.md#the-3902-exe).
 
+## Demo recorder exploration: capture and save boundaries [DISASSEMBLED 2026-09-28]
+
+Read-only recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
+No new hooks installed. The existing send/receive and save investigations below remain the
+fuller maps; this table retains the boundaries examined for recorder suitability.
+
+| Address | Fact checked and implication |
+|---|---|
+| `0x451DF0` | Message-send entry, `ret 0xC`; reads the main pointer `0x511DE8`, sender/player records, network bit `main+0x2A44`, and branch selector `main+0x299C`. With that selector zero, `[0x506DBC] != 0` calls `0x461990` at `0x451EE0`, `ecx = 0x513000`; otherwise `0x451EFD` calls `0x4C97B0` with destination 0 and context `main+0x14`. The other branch loops player records at stride `0x14B`, using deduplication storage `0x512B90`, and calls `0x451BC0` at `0x451F75`. This entry is already B8's held-send gate, not an unowned recorder hook site. |
+| `0x4C97B0` | `ret 0x14`; after the existing diagnostic call `0x4C9740`, takes the interface at context `+0x4C5`, calls its vtable `+0x68` (`Send`) at `0x4C97F6`, and derives its flags from `0x50A780`. A NULL interface returns `0x887700AA`. The adjacent `0x4C9800` wrapper also calls `+0x68` (at `0x4C9839`), with flag 1; recording only one wrapper would need a coverage argument. |
+| `0x4C9840` | `ret 0xC`; reads the same interface at context `+0x4C5`, passes context `+0x4B5` and `+0x4B9` as the sender/destination output addresses and flag 1, then calls vtable `+0x64` (`Receive`) at `0x4C987E`. The buffer and length pointer come from its other two arguments. These offsets are relative to the network context, not the main block. |
+| `0x4534E0`, `0x453595`, `0x45361F` | Existing bounded-delivery capture in B3, re-read in `tagpu_patches.c:wire_rx_note`: the latter two sites replace the statistics call and preserve the delivered buffer/length in TLS. The pump's moved-buffer fix must remain. See *One receive, one message* below for callers, fields, and prior disassembly; not a newly verified whole-function trace in this pass. |
+| `0x432A38` | TADR `SaveGame_SaveAdditionHook`'s site: retail bytes `A1 E8 1D 51 00`, `mov eax,[0x511DE8]`. Continuation `0x432A3D` takes the stack-local address, reads `main+0x391ED`, and calls `0x48FDF0` at `0x432A48`. The field's object type and the called function's meaning are not established by this slice. |
+| `0x43267D` | TADR `SaveGame_LoadAdditionHook`'s site: retail bytes `8B 15 E8 1D 51 00`, `mov edx,[0x511DE8]`; continuation `0x432683` pushes `esi` and reads the same `main+0x391ED`. Matching splice bytes establish neither checkpoint completeness nor multiplayer restore support. |
+
+Reproduce the disassembly with `i686-w64-mingw32-objdump -d -Mintel
+--start-address=<start> --stop-address=<end> pristine/TotalA.exe.pristine` in the main checkout:
+`0x451DF0..0x451FD0`, `0x4C97B0..0x4C9890`, `0x432A38..0x432A4D`, and
+`0x43267D..0x43268A` (exclusive stops). The untraced enclosing save/load routines remain open;
+their Pascal callers are source evidence, not newly assigned engine names.
+
+The DirectPlay creation forwarders in `tagpu_takeover.c` were also read: they delegate the
+existing import routes documented above (`0x4CA435`, `0x4CA4D7`, `0x4CA667`, `0x4CA922`) and
+do not themselves wrap the returned COM interfaces. The render exchange was read separately:
+its latest-frame contract and camera-limited contents are not an ordered event log or a
+complete replay checkpoint. See the exploration for the source references and remaining gaps.
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the

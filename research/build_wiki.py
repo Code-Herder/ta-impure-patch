@@ -131,6 +131,7 @@ PAGES = [
 
     ("tadr-port/overview",        "The port",                  "TADR port"),
     ("tadr-port/demo-recorder",   "Demo recorder",             "TADR port"),
+    ("tadr-port/demo-recorder-exploration", "Demo recorder — exploration", "TADR port"),
     ("tadr-merge-exploration",    "TADR merge exploration",    "TADR port"),
     ("tadr-port/raised-limits",   "A. Raised ceilings — plan", "TADR port"),
     ("tadr-port/limits-evidence", "A. Raised ceilings — evidence", "TADR port"),
