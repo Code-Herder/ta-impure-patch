@@ -77,6 +77,13 @@ DPLAY_OVERRIDES = "dplayx,dpmodemx,dpnet,dpwsockx,dplaysvr.exe,dpnsvr.exe=n;dpnh
 # game plays, the samples go nowhere, and no file of the setup changes (a mod's own totala.ini is
 # part of the setup under test, so NoDirectSound is not written into it).
 AUDIO_OFF = "winepulse.drv=d"
+# Wine's trace channels for every game the suite starts: `+loaddll` always (which DLLs a setup
+# really loaded), and TACOMPAT_WINEDEBUG's on top, e.g. `+winsock` to follow DirectPlay's
+# sockets -- its DLLs are native, so Wine's own dplay channels never fire. A game traced this
+# way keeps its Wine log in the results; an untraced one keeps it only when its network game
+# failed.
+TRACE = os.environ.get("TACOMPAT_WINEDEBUG", "").strip(",")
+WINEDEBUG = ",".join(filter(None, ("+loaddll", TRACE)))
 ASOUND_NULL = HERE / "asound-null.conf"
 RETAIL_MD5 = "8e74a1dffa1f5988624c52048f5b20cd"      # TotalA.exe 3.1, pristine/manifest.md5
 PREFIX = "compat-"                                   # every Wine instance this tool owns
@@ -589,8 +596,8 @@ def report(results, platform, dll, started, strict=False, source=None) -> int:
         for name, text in r.pop("_files", {}).items():
             (d / name).write_text(text, errors="replace")
         for name, src in r.pop("_copies", {}).items():
-            if Path(src).exists():
-                shutil.copy2(src, d / name)
+            if Path(src).exists():      # a kept Wine log is moved: it can be large
+                (shutil.move if name.endswith("wine.log") else shutil.copy2)(src, d / name)
     (out / "summary.json").write_text(json.dumps(
         {"platform": platform, "dll": str(source or dll), "dll_md5": md5_file(dll),
          "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started)),
@@ -690,14 +697,13 @@ def inst_name(setup_name: str, suffix="") -> str:
 def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     """A fresh tacli instance holding the setup's folder.
 
-    Its registry is made PRIVATE: `tacli create` clones the prefix with hardlinks, so
-    every instance's user.reg is one inode, and TA, TADR and the Patch Loader all write
-    the registry. So the hives are copied into new files, but only after the wineserver
-    that `create` started (for Wine's own settings) has exited: it rewrites the shared
-    hive when it goes (tacli-shared-registry-inode). Creates therefore run one at a time."""
+    Its registry is PRIVATE (`create --private-registry`): a cloned prefix's hives are
+    otherwise one inode with every other instance's, and TA, TADR and the Patch Loader all
+    write the registry. tacli unlinks them before any Wine process runs in the prefix, so no
+    two prepares share a file and any number run at once."""
     name = inst_name(setup["name"], suffix)
     tacli("rm", name, "--force")
-    r = tacli("create", name, "--display", f":{display}", "--res", "1024x768")
+    r = tacli("create", name, "--display", f":{display}", "--res", "1024x768", "--private-registry")
     if r.returncode != 0:
         die(f"tacli create {name}: {(r.stderr or r.stdout).strip()}")
     try:
@@ -705,21 +711,16 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     except (OSError, ValueError) as e:
         die(f"{name}: tacli made no readable instance.json ({e})")
     gamedir, prefix = Path(meta["gamedir"]), Path(meta["prefix"])
+    if not meta.get("private_registry"):
+        die(f"{name}: tacli made the prefix without registry hives of its own")
     env = dict(os.environ, WINEPREFIX=str(prefix))
-    subprocess.run(["wineserver", "-w"], env=env, timeout=60)
-    for hive in ("user.reg", "system.reg", "userdef.reg"):
-        p = prefix / hive
-        if p.exists():
-            tmp = p.with_suffix(".compat-tmp")
-            shutil.copy2(p, tmp)
-            os.replace(tmp, p)
     if DPLAY_SRC.is_dir():
         subprocess.run(["bash", str(DPINSTALL), str(prefix), str(DPLAY_SRC)],
                        capture_output=True, check=True)
     # The skirmish map the battle is built for (scenarios/200v200.json). The SKIRMISH
     # screen loads the saved map's preview the moment it opens, so a map the setup lacks
     # is a box before any gadget can pick another. A mod whose loader moves the registry
-    # (Mayhem: Software\TotalM) names its root in the setup. The hives are private by now.
+    # (Mayhem: Software\TotalM) names its root in the setup.
     for root in ["Software\\Cavedog Entertainment"] + setup.get("registry_roots", []):
         subprocess.run(["wine", "reg", "add", f"HKCU\\{root}\\Total Annihilation", "/v", "SkirmishMap",
                         "/t", "REG_SZ", "/d", BATTLE_MAP, "/f"], env=env, capture_output=True, timeout=120)
@@ -1415,7 +1416,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     gamedir, prefix = inst["gamedir"], inst["prefix"]
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{display}",
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
-               ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG="+loaddll")
+               ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
     xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     t0 = time.time()
@@ -1519,7 +1520,11 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
 # ------------------------------------------------------------------------- Wine, two players
 
 class Lobby(Exception):
-    """A step of the two-player start that did not happen, in words."""
+    """A step of the two-player start that did not happen, in words; `sockets`, when the step
+    was about the network, is every game socket on the machine at that moment."""
+    def __init__(self, msg, sockets=None):
+        super().__init__(msg)
+        self.sockets = sockets
 
 
 def mp_eligible(setup) -> bool:
@@ -1528,6 +1533,27 @@ def mp_eligible(setup) -> bool:
     in says so in `no_network_game` -- with what it does instead, measured."""
     return (setup["goal"]["outcome"] == "impure-active" and not setup.get("levers")
             and not setup.get("no_network_game"))
+
+
+def game_sockets() -> str:
+    """Every socket a Wine game holds on the machine, with its prefix: what the lobby failure
+    records, so a collision between games is read off the file rather than guessed."""
+    r = subprocess.run(["ss", "-tuanpH"], capture_output=True, text=True, timeout=10)
+    lines = []
+    for line in r.stdout.splitlines():
+        pids = set(re.findall(r"pid=(\d+)", line))
+        tags = []
+        for pid in sorted(pids):
+            try:
+                env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            pf = next((e[11:].decode(errors="replace") for e in env if e.startswith(b"WINEPREFIX=")), "")
+            if pf:
+                tags.append(f"{pid}:{Path(pf).parent.name}")
+        if tags:
+            lines.append(f"{' '.join(line.split()[:6])}  {' '.join(tags)}")
+    return "\n".join(lines) + "\n"
 
 
 def dplay_holders(port) -> list:
@@ -1572,7 +1598,7 @@ def start_wine(inst, display):
     """TotalA.exe in the instance's game folder on its own virtual display."""
     env = dict(os.environ, WINEPREFIX=str(inst["prefix"]), DISPLAY=f":{display}",
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
-               ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG="+loaddll")
+               ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
     xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,
@@ -1581,7 +1607,9 @@ def start_wine(inst, display):
     return {"inst": inst, "display": display, "env": env, "xv": xv, "log": log, "proc": proc}
 
 
-def stop_wine(g):
+def stop_wine(g, keep=False):
+    """Stop the game and its prefix's server; its Wine log goes, unless `keep` -- then the
+    path is returned, and the report moves the file into the results."""
     subprocess.run(["wineserver", "-k"], env=g["env"], capture_output=True, timeout=30)
     try:
         g["proc"].wait(timeout=15)
@@ -1589,7 +1617,10 @@ def stop_wine(g):
         g["proc"].kill()
     stop_xvfb(g["xv"])
     g["log"].close()
+    if keep:
+        return g["log"].name
     os.unlink(g["log"].name)
+    return None
 
 
 def lobby_ui(inst, *argv, timeout=40) -> str:
@@ -1610,12 +1641,23 @@ def lobby_ui(inst, *argv, timeout=40) -> str:
 
 def lobby_field(inst, name, value):
     """Click, then fill -- an unfocused field takes the text as quickkeys -- and leave a
-    field alone that already reads the value (tools/mp_lobby.sh has the story)."""
-    cur = re.search(r"^text\s+(.*)$", lobby_ui(inst, "show", name), re.M)
-    if cur and cur.group(1).strip() == value:
-        return
-    lobby_ui(inst, "click", name)
-    lobby_ui(inst, "fill", name, value)
+    field alone that already reads the value (tools/mp_lobby.sh has the story).
+
+    THE FIELD MUST READ THE VALUE BEFORE THE WALK GOES ON. `fill` types the characters as
+    one batch shortly after its click, and reports what the field then holds without
+    failing: under load the characters ahead of the focus are lost, and a joiner's ADDRESS
+    reading "1" dials 0.0.0.1 (MEASURED 2026-09-28, ProTA's joiner: inet_addr("1") in its
+    +winsock trace, a SYN to 0.0.0.1 in the socket snapshot, "no session listed"). So the
+    field is read back after each fill, and filled again while it reads anything else."""
+    for fills in range(4):
+        cur = re.search(r"^text\s+(.*)$", lobby_ui(inst, "show", name), re.M)
+        got = cur.group(1).strip() if cur else None
+        if got == value:
+            return
+        if fills == 3:
+            raise Lobby(f"{inst}: {name} reads {got!r} after three fills of {value!r}")
+        lobby_ui(inst, "click", name)
+        lobby_ui(inst, "fill", name, value)
 
 
 def lobby_to_selgame(inst, nick):
@@ -1655,7 +1697,7 @@ def wine_lobby(host, join, port):
         # Say who answers the joiner's enumeration: the host's own name server, a stale one of
         # another prefix, or nobody -- three different failures that read the same on screen.
         raise Lobby(f"{join}: no session listed after 12 UPDATEs; DirectPlay port {port} held by "
-                    f"{dplay_holders(port) or 'nobody'}")
+                    f"{dplay_holders(port) or 'nobody'}", sockets=game_sockets())
     lobby_ui(join, "click", "JOINGAME", timeout=30)
     lobby_ui(join, "wait", "--gui", "LOUNGE2", timeout=30)
     lobby_ui(join, "click", "READY0", timeout=20)     # each client lists itself as row 0
@@ -1683,9 +1725,6 @@ def wine_lobby(host, join, port):
     return seen
 
 
-CREATES = threading.Lock()       # `tacli create` writes the hive every prefix shares: prepare_wine
-
-
 def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     """Two players, the setup's folder on each, hosted and joined through the game's own
     battle room over Windows' DirectPlay, a small fight between them, then watched. Every
@@ -1704,8 +1743,7 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     create_display, host_display, join_display = (free_display(taken) for _ in range(3))
     xv = start_xvfb(create_display)
     try:
-        with CREATES:
-            join = prepare_wine(setup, dll, create_display, suffix="-j")
+        join = prepare_wine(setup, dll, create_display, suffix="-j")
     finally:
         stop_xvfb(xv)
     mine.add(str(join["prefix"]))
@@ -1733,7 +1771,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
     t0 = time.time()
     games = {}
     boxes, seen, why = [], set(), None
-    shots, hooks, cmd_seen = {}, {}, {}
+    shots, hooks, cmd_seen, sockets = {}, {}, {}, None
     try:
         try:
             games["host"] = start_wine(peers["host"], host_display)
@@ -1777,6 +1815,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
         # worth more than the traceback.
         except (Lobby, subprocess.SubprocessError, OSError, SystemExit) as e:
             why = f"{type(e).__name__}: {e}" if not isinstance(e, Lobby) else str(e)
+            sockets = getattr(e, "sockets", None)
         if why:                         # what each screen showed when the step failed
             for role, g in games.items():
                 shot = Path(g["log"].name).with_suffix(f".mp-{role}.png")
@@ -1784,9 +1823,13 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens) -> dic
                                capture_output=True, timeout=20)
                 shots[f"mp-{role}.png"] = str(shot)
     finally:
-        for g in games.values():
-            stop_wine(g)
+        for role, g in games.items():
+            kept = stop_wine(g, keep=bool(why or TRACE))
+            if kept:
+                shots[f"mp-{role}-wine.log"] = kept
     out = {"ok": False, "boxes": boxes, "evidence": [], "_files": {}, "_copies": shots}
+    if sockets:
+        out["_files"]["mp-sockets.txt"] = sockets
     for role, inst in peers.items():
         gd = inst["gamedir"]
         tlog = gd / "log" / "tagpu.log"
@@ -1843,9 +1886,10 @@ def cmd_wine(args):
     create_display = free_display(taken)
     xv = start_xvfb(create_display)
     try:
-        for s in ready:                     # one at a time: see prepare_wine
-            print(f"preparing {s['name']}")
-            s["_inst"] = prepare_wine(s, dll, create_display)
+        print(f"preparing {len(ready)} setups, {args.prep_jobs} at a time")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.prep_jobs)) as prep:
+            for s, inst in zip(ready, prep.map(lambda s: prepare_wine(s, dll, create_display), ready)):
+                s["_inst"] = inst
     finally:
         stop_xvfb(xv)
     displays = {s["name"]: free_display(taken) for s in ready}
@@ -2366,6 +2410,8 @@ def main():
     wi.add_argument("setups", nargs="*")
     wi.add_argument("--dll", default=str(default_dll), help="the ddraw.dll under test (this tree's build)")
     wi.add_argument("--jobs", "-j", type=int, default=6)
+    wi.add_argument("--prep-jobs", type=int, default=8, metavar="N",
+                    help="instances prepared at once (each has registry hives of its own)")
     wi.add_argument("--watch", type=int, default=45, help="seconds each setup is watched")
     wi.add_argument("--screens", action="store_true", help="keep a picture of every run's display")
     wi.add_argument("--strict", action="store_true", help="a known gap fails the run too")
@@ -2375,7 +2421,11 @@ def main():
     wi.add_argument("--mp", type=int, default=30, metavar="SECONDS",
                     help="where Impure runs, also play a two-player network game this long "
                          "(0: none)")
-    wi.add_argument("--mp-jobs", type=int, default=4, metavar="N",
+    # MEASURED 2026-09-28, full runs: 4 at once 633 s, 6 at once 572 s, 0 UNEXPECTED each; the
+    # six battles are what hold the reference setup at its limits (load 28 of 32 cores), and
+    # GPU memory reaches ~11 of 12 GB at any count, each game's restorer sizing its atlas to
+    # half of what is free (ta-vulkan-compute-restorer, D10).
+    wi.add_argument("--mp-jobs", type=int, default=6, metavar="N",
                     help="network games at once, each on a DirectPlay port of its own")
     wi.set_defaults(fn=cmd_wine)
     wn = sub.add_parser("windows", help="run the setups on a Windows desktop, one at a time")

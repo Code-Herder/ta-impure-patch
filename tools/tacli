@@ -851,6 +851,19 @@ def clone_prefix(inst: Instance):
         die(f"prefix clone failed: {r.stderr.strip()}")
 
 
+def privatise_hives(inst: Instance):
+    """Give the prefix hives of its own: each of the three copied into a new file that
+    replaces the hardlink, so the prefix stops sharing the template's inode. Run before any
+    Wine process has started in the prefix -- a wineserver rewrites its hive in place when it
+    exits, and until this runs that write lands in every prefix at once."""
+    for hive in ("user.reg", "system.reg", "userdef.reg"):
+        p = inst.prefix / hive
+        if p.exists():
+            tmp = p.with_name(hive + ".private-tmp")
+            shutil.copy2(p, tmp)
+            os.replace(tmp, p)
+
+
 def install_dplay(inst: Instance) -> str:
     """Drop Microsoft's DirectPlay into this prefix (idempotent).
 
@@ -1468,6 +1481,9 @@ def _create(inst: Instance, args) -> dict:
     shield = args.shield is not False
     kept_seed = inst.meta().get("registry_seed") if inst.exists else None
     clone_prefix(inst)
+    private = bool(getattr(args, "private_registry", False))
+    if private:
+        privatise_hives(inst)
     vsync = getattr(args, "vsync", None) or "on"
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
                    shield=shield, window=window, vsync=vsync)
@@ -1486,6 +1502,7 @@ def _create(inst: Instance, args) -> dict:
         "display": display,
         "gamedir": str(inst.gamedir),
         "prefix": str(inst.prefix),
+        "private_registry": private,
     }
     inst.save_meta(meta)
     apply_prefix_settings(inst)
@@ -5852,6 +5869,10 @@ def build_parser():
     c.add_argument("--no-shield", dest="shield", action="store_false", default=None,
                    help="let hardware keyboard/mouse reach the game (default: blocked)")
     c.add_argument("--force", action="store_true")
+    c.add_argument("--private-registry", action="store_true",
+                   help="give the prefix registry hives of its own instead of the template's "
+                        "shared inode, before any Wine process runs in it: its Wine keys and "
+                        "anything a mod writes stay its own, and creates can run at once")
     c.set_defaults(func=cmd_create)
 
     l = sub.add_parser("launch", help="start an instance (creating it if needed)")

@@ -3213,6 +3213,18 @@ class LocalRegistry(unittest.TestCase):
         self.assertEqual(self.ta_writes(), [])
         self.assertEqual(self.hive.read_bytes(), before)
 
+    def test_private_registry_leaves_the_shared_hive_before_wine_runs(self):
+        self.assertEqual(self.main("create", "shared")[0], 0)
+        code, _, err = self.main("create", "own", "--private-registry")
+        self.assertEqual(code, 0, err)
+        shared = tacli.Instance("shared").prefix / "user.reg"
+        own = tacli.Instance("own").prefix / "user.reg"
+        self.assertTrue(shared.samefile(self.hive))
+        self.assertFalse(own.samefile(self.hive))
+        self.assertEqual(own.read_bytes(), self.hive.read_bytes())
+        self.assertTrue(json.loads((tacli.INSTANCES / "own" / "instance.json").read_text())
+                        ["private_registry"])
+
     def test_the_first_launch_of_an_instance_without_a_store_seeds_it(self):
         self.assertEqual(self.main("create", "l1")[0], 0)
         (tacli.INSTANCES / "l1" / "gamedir" / "tacli-state" / "registry.txt").unlink()

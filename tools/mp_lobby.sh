@@ -56,12 +56,18 @@ print(f"DirectPlay port {next(iter(ports.values()))} on every peer")
 # TA remembers the address and the nickname between runs, and `fill` clears with
 # backspaces, which cannot always reach the whole field -- refilling a correct
 # field is how you turn a working screen into "ADDRESS still reads '127.0.0.'".
+# The field is read back after every fill and filled again while it reads anything
+# else: `fill` reports a short field without failing, and under load the characters
+# typed ahead of the focus are lost -- an ADDRESS of "1" dials 0.0.0.1.
 field() {
-    local cur
-    cur=$(ui "$1" show "$2" 2>/dev/null | sed -n 's/^text  *//p')
-    if [ "${cur:-}" = "$3" ]; then echo "$2 already reads '$3'"; return 0; fi
-    ui "$1" click "$2" >/dev/null
-    ui "$1" fill "$2" "$3"
+    local cur fills
+    for fills in 0 1 2 3; do
+        cur=$(ui "$1" show "$2" 2>/dev/null | sed -n 's/^text  *//p')
+        if [ "${cur:-}" = "$3" ]; then echo "$2 reads '$3'"; return 0; fi
+        [ "$fills" = 3 ] && { echo "$2 reads '${cur:-}' after three fills of '$3'" >&2; return 1; }
+        ui "$1" click "$2" >/dev/null
+        ui "$1" fill "$2" "$3" >/dev/null
+    done
 }
 
 to_selgame() {   # <instance> -- main menu through the provider screen to SELGAME
