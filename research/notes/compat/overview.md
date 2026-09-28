@@ -104,7 +104,7 @@ map, which a mod may not ship.
 - **The network stage is two players on one machine**, over Windows' DirectPlay on loopback;
   a game between two machines, and one with a player who still runs TADR, are not tested.
 - **TA Twilight's `dsound.dll` proxy is not loaded on Wine**, which prefers its built-in
-  `dsound` to a copy in the game folder; it loads beside Impure only on Windows, where the
-  new setups have not run yet.
+  `dsound` to a copy in the game folder, so the Wine row does not test it. On Windows it loads
+  beside Impure, and no site of the game's code leads into it (MEASURED 2026-09-28).
 - **TA Zero's map pack is not in the fixtures** (TA Forever installs one): the battle is fought on the
   retail Two Continents.

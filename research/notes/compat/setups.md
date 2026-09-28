@@ -6,17 +6,19 @@ Nineteen setups: sixteen game folders as a player has them — the retail 3.1 ga
 patch install puts next to it, and Impure's `ddraw.dll` — and three checks of the harness itself
 (`retail+tadr1-recorder`, `mayhem-11.3.0-net`, `gui-stress`).
 
-**Thirteen of the fourteen that both platforms have run meet the goal in full: Impure runs, and none of
-TADR's code runs.** The retail exe alone, beside the 2006 recorder, beside a 2026 recorder, beside
+**Fifteen of the sixteen player setups meet the goal in full, on both platforms: Impure runs, and
+none of TADR's code runs.** The retail exe alone, beside the 2006 recorder, beside a 2026 recorder, beside
 files nothing loads, all three Patch Loader routes, **Total Mayhem 11.3.0 and ProTA 4.8** as
 installed, and — since the T2 landing — the four routes whose exe imports TADR instead of
 DirectDraw: the 3.9.02 exe with two builds of TADR, and **Escalation GOLD 10.2.0** with and without
 its own. **TA Zero Alpha 5 and TA Twilight v2.0 Beta 98**, as TA Forever installs them, take the same
-route and meet the goal on Wine as well (2026-09-28, below); Windows has not run them yet. "None of TADR's code" is read out of the running game on every peer of every stage — the
+route and meet the goal as well (2026-09-28, below: Wine with the battle and network stages,
+Windows at start-up, as every Windows row is). "None of TADR's code" is read out of the running game on every peer of every stage — the
 exe's own code against `TotalA.exe` on disk — and not from the game folder, which a recorder that
 starts off the entry point leaves untouched ([the suite](suite.md), *Whether TADR ran*; [the
-takeover](takeover.md)). Each of the thirteen fights a 200v200 skirmish, and eleven of them play a
-two-player network game on Wine: every player's setup whose single-player run shows Impure running.
+takeover](takeover.md)). Each of the fifteen fights a skirmish on Wine — 200 against 200, TA
+Zero's in its own units — and plays a two-player network game there: every player's setup whose
+single-player run shows Impure running.
 
 The one known gap left is gammata's drop-in, where Impure never loads at all: its `tdraw.dll` loads
 `ddraw_custom.dll`, so Impure would have to be installed under that name (T3). The 3.9.02 exe,
@@ -51,8 +53,8 @@ and every patch Impure adds adds runs.
 | `gammata-ota` | gammata's OTA drop-in | known gap: `impure-not-loaded` (`ddraw_custom.dll` is what its tdraw loads); 37 places of the game's code lead into TADR, and 4 of the exe's import slots — the other 15 surprising slots lead into `ddraw_custom.dll`, which is cnc-ddraw and not TADR | the same, 10 places |
 | `escalation` | Escalation GOLD 10.2.0 as installed | **meets goal**: `TAESC`'s `DllMain` loaded Impure and the rest of it did not run, the recorder's entry point inert, the exe's one `TAESC` import redirected, and the exe file's own path budget at `0x0040EAD6` kept; 441 runs, **0 into TADR**; battle fought; network game played | **meets goal**: the same, 451 runs, 0 into TADR |
 | `escalation+tadr-dev` | Escalation with TADR's current Escalation build | **meets goal**: the same, with TADR's Escalation build beside it; 442 runs and **0 into TADR**; battle fought; network game played | **meets goal**: the same, 443 runs, 0 |
-| `tazero-alpha5` | TA Zero Alpha 5 as TA Forever installs it: its exe imports `ZDRAW` (TADR 2025.4.24) and `ZPLAYX` | **meets goal** (2026-09-28): `ZDRAW`'s `DllMain` loaded Impure and the rest of it did not run; the exe file's unit ceiling of 5000 replaced with 1500 ([the takeover](takeover.md), part 2); 442 runs, **0 into TADR**; GoK and Arm commanders; its own battle (`compat-battle-tazero`) fought; network game played, each peer holding both GoK commanders | not run |
-| `twilight-2.0b98` | TA Twilight v2.0 Beta 98 as TA Forever installs it: the 3.9.02-shaped exe, TADR v2026.6.8 | **meets goal** (2026-09-28): the 3.9.02 route; 443 runs, **0 into TADR**; battle fought; network game played. Its `dsound.dll` proxy is Wine's built-in here | not run |
+| `tazero-alpha5` | TA Zero Alpha 5 as TA Forever installs it: its exe imports `ZDRAW` (TADR 2025.4.24) and `ZPLAYX` | **meets goal** (2026-09-28): `ZDRAW`'s `DllMain` loaded Impure and the rest of it did not run; the exe file's unit ceiling of 5000 replaced with 1500 ([the takeover](takeover.md), part 2); 442 runs, **0 into TADR**; GoK and Arm commanders; its own battle (`compat-battle-tazero`) fought; network game played, each peer holding both GoK commanders | **meets goal** (2026-09-28): the same, 448 runs, 0 into TADR |
+| `twilight-2.0b98` | TA Twilight v2.0 Beta 98 as TA Forever installs it: the 3.9.02-shaped exe, TADR v2026.6.8 | **meets goal** (2026-09-28): the 3.9.02 route; 443 runs, **0 into TADR**; battle fought; network game played. Its `dsound.dll` proxy is Wine's built-in here | **meets goal** (2026-09-28): the same, 441 runs, 0 into TADR; its `DSOUND.dll` proxy loaded from the folder, and no site of the game's code leads into it |
 | `retail+tadr1-recorder` | **the check that the evidence can fire**: `retail+tadr1` with `tagpu_takeover.off` | the recorder runs, as it must: its log, **and 31 places** of the game leading into it — 28 sites of its code and the exe's 3 DirectPlay slots; battle fought | the same, **6 sites** — the six the entry point installs, the rest being the DirectPlay path's, which a start-up-only run never reaches |
 | `mayhem-11.3.0-net` | **the check of the safety net**: Mayhem with `tagpu_takeover.off` | refused by the net: 17 of 265 sites rewritten; 12 places lead into TADR — the exe's two `DirectDrawCreate` calls, its 3 DirectPlay slots and the recorder's six sites | the same, 8 places |
 
@@ -75,6 +77,10 @@ the network stage: **3 meeting the goal, 0 UNEXPECTED**. Retail's skirmish seats
 (ARMCOM, CORCOM, CORCOM, owners 0, 1 and 3), TA Zero's a GoK and an Arm commander, and every
 network peer held both players' commanders — TA Zero's the first network game of that setup the
 check has seen.
+
+**On Windows, 2026-09-28** (`4f90a409f918`, the build on local main, 165 s): both new setups
+**meet the goal** — `ZDRAW`'s and TADR v2026.6.8's `DllMain` loaded Impure, their start line the
+only trace of TADR, 448 and 441 changed runs of the game's code with none into TADR, and no box.
 
 **What the two harness checks buy.** A goal of "no TADR code" is worth nothing from a check that
 cannot see any, so one setup turns the takeover off and must see the recorder: its log *and* 31
