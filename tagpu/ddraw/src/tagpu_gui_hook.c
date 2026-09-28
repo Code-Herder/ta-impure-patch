@@ -114,7 +114,7 @@ static void glog(const char* s)
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
 /* ---- the surfaces we have seen (game thread only) ---------------------- */
-static void ops_forget_base(unsigned base);       /* below, with the ring */
+static void ops_forget_base(unsigned base, int retired);   /* below, with the ring */
 /* ONE SPRITE DRAWN ONTO A SNAPSHOT SURFACE (see `snap_take`), kept so the
    surface can be rebuilt after a reset: the published sprite's fields, and its
    decoded plane COPIED OUT of `s_gafBuf` -- our own bytes, so a replay reads
@@ -144,7 +144,8 @@ typedef struct SURF {
     int reseed;                       /* a snapshot's seed is owed again: set by
                                          `repaint_arm`, cleared by a seed and by
                                          `snap_free`. Apart from `seeded`, which
-                                         `surf_drop` reads as "the twin exists" */
+                                         `surf_drop` and `OP_FREE` read as "the
+                                         twin exists" */
     int lastCopyFrom;                 /* dedup(): position in the batch of the last
                                          COPY that read this surface, -1 if none  */
     int isOffscreen;                  /* created with the tag "OFFSCREEN" (0x5091D4): THE
@@ -163,6 +164,13 @@ typedef struct SURF {
                                          cut allows and ops we observed.          */
     OVL* ovl;                         /* the sprites drawn onto `snap` since, in order */
     int novl;
+    int dying;                        /* RETIRED: the engine freed it and an `OP_FREE`
+                                         holds its place in the window. Its memory is
+                                         the heap's now and nothing reads it; the entry
+                                         stays only so the ops recorded before the
+                                         free still resolve to it -- see surf_retire */
+    unsigned dieSeq;                  /* order of the retirements, for `pub_surf`    */
+    int freedPub;                     /* its `OP_FREE` was reached by `publish`      */
 } SURF;
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
@@ -245,7 +253,7 @@ static unsigned s_chromeEmits = 0, s_chromeRefused = 0;
 
 static TAGPU_PUBOP* pub_op(int kind, unsigned surf);   /* below */
 static void pub_commit(void);
-static void ops_forget_base(unsigned base);
+static void ops_forget_base(unsigned base, int retired);
 extern volatile int g_gui_draw;
 
 /* the snapshot and its sprites, gone together: `ovl` means nothing without
@@ -265,7 +273,9 @@ static int seed_due(const SURF* s)
     return !s->seeded || s->reseed;
 }
 
-/* forget a surface: its buffers, its recorded boxes, and the twin */
+/* forget a surface NOW: its buffers, its recorded boxes, and the twin. For
+   what the table cannot order -- an off-thread free, a same-base re-make, a
+   full window; a game-thread free is `surf_retire`'s, which keeps its place. */
 static void surf_drop(int i)
 {
     if (s_surf[i].seeded && g_gui_draw) {
@@ -274,7 +284,7 @@ static void surf_drop(int i)
     }
     free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
     snap_free(&s_surf[i]);
-    ops_forget_base(s_surf[i].base);
+    ops_forget_base(s_surf[i].base, s_surf[i].dying);
     s_surf[i] = s_surf[--s_nsurf];
 }
 
@@ -293,7 +303,7 @@ static void surf_drop_offscreens(unsigned keepBase)
 {
     int i;
     for (i = 0; i < s_nsurf; ) {
-        if (s_surf[i].base != keepBase && s_surf[i].isOffscreen) surf_drop(i);
+        if (s_surf[i].base != keepBase && s_surf[i].isOffscreen && !s_surf[i].dying) surf_drop(i);
         else i++;
     }
 }
@@ -354,6 +364,12 @@ static int surf_dies_with(const SURF* s, unsigned p, unsigned size)
    (`0x4D85B0` takes a critical section at `0x4D85C2`), so this is not a
    theoretical path even though no off-thread free of a recorded surface has
    yet been observed.
+
+   DROPPED, NOT RETIRED (`surf_retire`): where such a free falls among the
+   window's ops is not known on the game thread, so it cannot be given a place
+   in the window. A copy recorded out of the surface earlier loses its source
+   and is counted as `copy-freed` on `GUI pixels:`, which is what would say
+   this path had started to matter.
 
    EVERY OFF-THREAD FREE IS PUSHED, unfiltered, and that is deliberate. The
    obvious optimisation — scan the table off-thread and push only on a match —
@@ -426,7 +442,7 @@ static void surf_drain_freeq(void)              /* game thread only */
             if (!p) { flush = 1; break; }        /* claimed, not yet stored  */
             size = (unsigned)InterlockedExchangeAdd(&s_freeqSz[k & (FREEQ - 1)], 0);
             for (i = 0; i < s_nsurf; )          /* swap-remove: re-test slot i */
-                if (surf_dies_with(&s_surf[i], p, size)) surf_drop(i); else i++;
+                if (!s_surf[i].dying && surf_dies_with(&s_surf[i], p, size)) surf_drop(i); else i++;
         }
         /* did a producer lap the window while we were walking it? */
         if (!flush && (unsigned long)InterlockedExchangeAdd(&s_freeqN, 0)
@@ -444,7 +460,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
     int i;
     if (!base || w <= 0 || h <= 0 || pitch <= 0 || w > 4096 || h > 4096 || pitch > 8192) return NULL;
     for (i = 0; i < s_nsurf; i++)
-        if (s_surf[i].base == base) {
+        if (s_surf[i].base == base && !s_surf[i].dying) {   /* a retired one is not this surface */
             if (s_surf[i].w != w || s_surf[i].h != h || s_surf[i].pitch != pitch) {
                 /* the object was re-allocated over the same bytes: start over.
                    The ops already recorded against the base carry the OLD
@@ -454,7 +470,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
                    through SurfaceFree 0x4C6AC0, so before_free never sees it —
                    and the next publish would find a box past the new surface
                    and call it an overflow (MEASURED 2026-09-07, one per switch) */
-                ops_forget_base(base);
+                ops_forget_base(base, 0);
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
                 s_surf[i].seeded = 0;          /* the twin is the old size: re-make it */
@@ -519,10 +535,12 @@ static SURF* surf_of_ctx(const int* ctx)
    Keeping them as two kinds means `GUI kinds:` counts them apart, so the ratio
    is read rather than guessed. */
 /* `OP_MOVIE` is not a leaf's: `before_flip` records it for the movie's own
-   flip, whose box holds a Smacker frame -- see `movie_frame`. */
+   flip, whose box holds a Smacker frame -- see `movie_frame`. `OP_FREE` is not
+   a leaf's either: `surf_retire` records it where the engine freed a surface,
+   and its box is empty. */
 enum { OP_GAF = 1, OP_GAFA, OP_GAFB, OP_GAFD, OP_SCALE, OP_TEXT, OP_LINE, OP_BAR, OP_RECT, OP_FRAME, OP_FILL, OP_COPY,
-       OP_FLIP, OP_FOCUS, OP_DIAG, OP_MOVIE, OP_NKIND };
-static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag", "movie" };
+       OP_FLIP, OP_FOCUS, OP_DIAG, OP_MOVIE, OP_FREE, OP_NKIND };
+static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag", "movie", "free" };
 typedef struct OP {
     unsigned base; short l, t, r, b; unsigned char kind;
     /* what the publisher needs beyond the box (gui-renderer.md 3.6) */
@@ -555,6 +573,10 @@ typedef struct OP {
        window flag, because an op record is not guaranteed to exist (see the
        `PK_CLEAR` emit in `publish`). */
     unsigned char world;
+    /* copy: `ops_forget_base` cleared `src` because the source was dropped
+       before `publish` reached this op -- the kind `GUI pixels:` names
+       `copy-freed`, the one the retirement (`surf_retire`) exists to prevent */
+    unsigned char srcGone;
     /* text: the string is copied into a game-thread scratch AT OBSERVE
        TIME, not read again at publish. The argument routinely points at a
        caller's stack temp, which is gone by the flip — the same reason a
@@ -918,16 +940,119 @@ static int      s_nops = 0;
    surface's name. Clearing it makes the source unresolvable instead, and an
    unresolved source falls through to the box's own bytes, which is the honest
    answer. */
-static void ops_forget_base(unsigned base)
+static void ops_forget_base(unsigned base, int retired)
 {
-    int k;
-    for (k = 0; k < s_nops; k++) {
+    int k, from = 0;
+    /* A LIVE SURFACE'S OPS ARE THE ONES AFTER THE LAST `OP_FREE` OF ITS BASE:
+       those before it drew on or read a retired entry (`surf_retire`), which
+       keeps them until its window is published. A retired entry being dropped
+       outright takes every op of the base. */
+    if (!retired)
+        for (k = s_nops - 1; k >= 0; k--)
+            if (s_ops[k].kind == OP_FREE && s_ops[k].base == base) { from = k + 1; break; }
+    for (k = from; k < s_nops; k++) {
         if (s_ops[k].base == base) s_ops[k].base = 0;
-        if (s_ops[k].src  == base) s_ops[k].src  = 0;
+        if (s_ops[k].src  == base) { s_ops[k].src = 0; s_ops[k].srcGone = 1; }
+    }
+}
+
+/* ---- A FREE IS AN OP: THE ENGINE'S ORDER, KEPT -------------------------
+   The engine reads a surface and frees it in one breath. A panel's teardown
+   copies its save-under (`panel+0xB8`) back onto the offscreen at `0x4A952B`
+   and frees it with the very next call, `0x4A9537` (DISASSEMBLED); the copy
+   was recorded naming the save-under as its source. Dropping the entry at the
+   free would forget that source before `publish` reached the copy, and the
+   copy would cross as the destination's own bytes -- a `PK_PIXELS`, which the
+   drain drops by design -- so the panel's rect keeps whatever the twin last
+   showed: the orders panel of a deselected unit, standing on screen.
+
+   So a game-thread free RETIRES the entry instead: the buffers that are ours
+   go now, the entry stays marked `dying`, and an `OP_FREE` is recorded at the
+   free's place in the window. `publish` then walks the window in the engine's
+   order -- the copy goes out as `PK_COPY` twin to twin while the twin still
+   exists, and the `OP_FREE` as `PK_FREE` after it -- and `ops_window_reset`
+   removes the entry once the window is gone.
+
+   THE INVARIANT: NOTHING READS A DYING SURFACE'S MEMORY. The block is the
+   heap's the moment this returns. What `publish` needs of a dying surface is
+   its TWIN, which is ours and outlives it until the `PK_FREE` in queue order;
+   a seed reads no engine byte (`pub_seed`), so a dying surface is seeded and
+   drawn like any other, and every path that does read -- an asset offer, a
+   movie frame, a box of pixels -- skips a dying surface (`pub_surface_bytes`
+   refuses one outright). The census, the free observers and the lookups the
+   leaves make at record time do not see it (`surf_by_base`, `surf_get`).
+
+   A NEW SURFACE MAY LAND ON THE SAME BASE before the flip, and that is why
+   the entry is not simply kept under its base: ops recorded before the free
+   name the dying entry and ops recorded after it name the new one. `pub_surf`
+   is the lookup that tells them apart by position -- walking the window in
+   order, the dying entry whose `OP_FREE` has not been reached yet is the one
+   an op before that free drew on or read.
+
+   With no room in the window for the `OP_FREE` the entry is dropped at once,
+   which is what every free did before retirement existed: the picture may
+   lose that frame's copy, and nothing is read that is not there. */
+static void surf_drop(int i);
+static void surf_retire(int i)
+{
+    static unsigned s_dieSeq = 0;
+    SURF* d = &s_surf[i];
+    OP* o;
+    if (d->dying) return;
+    if (s_nops >= MAX_OPS) { surf_drop(i); return; }
+    free(d->copy); free(d->mask); free(d->acc);
+    d->copy = d->mask = d->acc = NULL;
+    d->copyValid = 0;
+    snap_free(d);
+    d->isAsset = 0; d->assetTok = 0;
+    d->dying = 1; d->dieSeq = ++s_dieSeq; d->freedPub = 0;
+    o = &s_ops[s_nops++];
+    memset(o, 0, sizeof *o);
+    o->kind = OP_FREE; o->base = d->base;
+    o->l = 0; o->t = 0; o->r = -1; o->b = -1;
+}
+
+/* the entry an op's base names AT THAT OP'S PLACE in the window -- `publish`
+   only, which walks it in order: a dying entry whose `OP_FREE` is still ahead
+   (the earliest retired, when one base died twice), else the live one. */
+static SURF* surf_by_base(unsigned base);
+static SURF* pub_surf(unsigned base)
+{
+    SURF* best = NULL;
+    int i;
+    for (i = 0; i < s_nsurf; i++) {
+        SURF* d = &s_surf[i];
+        if (d->base == base && d->dying && !d->freedPub && (!best || d->dieSeq < best->dieSeq)) best = d;
+    }
+    return best ? best : surf_by_base(base);
+}
+
+/* the window is over: every retired entry goes, its twin with it. `publish`
+   freed the twins whose `OP_FREE` it reached; one it did not reach -- a full
+   queue, a stall, no publish at all -- is freed here, after everything the
+   window published, which is still after every op that read it. */
+static void surf_retired_sweep(void)
+{
+    int i;
+    for (i = 0; i < s_nsurf; ) {
+        SURF* d = &s_surf[i];
+        if (!d->dying) { i++; continue; }
+        if (!d->freedPub && d->seeded && g_gui_draw) {
+            TAGPU_PUBOP* f = pub_op(PK_FREE, d->base);
+            if (f) pub_commit();
+        }
+        s_surf[i] = s_surf[--s_nsurf];
     }
 }
 static unsigned s_kindCount[OP_NKIND];
 static unsigned s_kindTotal[OP_NKIND];          /* cumulative, for the heartbeat */
+/* WHY A BOX CROSSED AS `PK_PIXELS`, which the drain drops (`pixdrop=` on the
+   consumer's line): by op kind, and a copy by why its source had no twin --
+   dropped before the copy was published (`copy-freed`, the bug class the
+   retirement closes: never expected), never registered (`copy-untwinned`), or
+   registered and not seeded (`copy-unseeded`). Cumulative, on `GUI pixels:`. */
+enum { PIX_COPY_FREED = OP_NKIND, PIX_COPY_UNTWINNED, PIX_COPY_UNSEEDED, PIX_NWHY };
+static unsigned s_pixWhy[PIX_NWHY];
 static unsigned s_nullCtx[OP_NKIND];        /* ops whose ctx was NULL/unknown */
 /* THE AREA EACH KIND COVERS, beside the count, because the count cannot answer
    the question the rebuild asks. `publish` gives six kinds a SEMANTIC op --
@@ -1394,7 +1519,10 @@ static int pub_surface_bytes(SURF* s, int l, int t, int r, int b, TAGPU_PUBOP* o
     unsigned w = (unsigned)(r - l + 1), hh = (unsigned)(b - t + 1);
     unsigned char* dst;
     int y;
-    if (!ptr_ok(cur) || l < 0 || t < 0 || r >= s->w || b >= s->h || l > r || t > b) {
+    /* A RETIRED SURFACE'S BLOCK IS THE HEAP'S (`surf_retire`). Every caller
+       skips one first; this is the invariant in the one place every engine
+       read passes, so a caller that forgets costs a fresh start, not a read. */
+    if (s->dying || !ptr_ok(cur) || l < 0 || t < 0 || r >= s->w || b >= s->h || l > r || t > b) {
         /* a box recorded against a surface that has since changed size (or a
            base we cannot read): the batch stops here and the next publish
            starts fresh — never a silent drop that leaves a twin stale */
@@ -1494,6 +1622,13 @@ static void ovl_add(SURF* s, const OP* op)
     s->novl++;
 }
 
+/* THE GEOMETRY, NOT THE BYTES: the drain makes the twin empty and drops a
+   seed's payload by design (`tagpu_gui_surf.c`, `PK_SEED`: the engine's
+   composed pixels do not cross), so reading them here would be a whole
+   surface of engine memory copied for nothing. Reading none is also what
+   lets a RETIRED surface be seeded (`surf_retire`): one made, drawn and freed
+   inside a single window -- a screen transition's full-screen scratch -- has
+   its twin made, drawn and copied out of in order like any other. */
 static int pub_seed(SURF* s)
 {
     TAGPU_PUBOP* o;
@@ -1502,7 +1637,6 @@ static int pub_seed(SURF* s)
     if (!o) return 0;
     o->w = s->w; o->h = s->h; o->pitch = s->pitch;
     o->l = 0; o->t = 0; o->r = (short)(s->w - 1); o->b = (short)(s->h - 1);
-    if (!pub_surface_bytes(s, 0, 0, s->w - 1, s->h - 1, o)) return 0;
     pub_commit();
     s->seeded = 1; s->reseed = 0;
     return 1;
@@ -1761,6 +1895,7 @@ static void ops_window_reset(void)
     }
     s_pubReached = 0;
     s_nops = 0;
+    surf_retired_sweep();              /* no op names a retired entry any more */
     s_winGameFlip = 0;
     s_strUsed = 0;
     s_glyUsed = 0;
@@ -2076,10 +2211,11 @@ static void text_capture(OP* o, const unsigned char* f, const unsigned char* str
     if (s_glyUsed > g_guiq.glyhigh) g_guiq.glyhigh = s_glyUsed;
 }
 
+/* the LIVE entry at a base: a retired one (`surf_retire`) is `pub_surf`'s */
 static SURF* surf_by_base(unsigned base)
 {
     int i;
-    for (i = 0; i < s_nsurf; i++) if (s_surf[i].base == base) return &s_surf[i];
+    for (i = 0; i < s_nsurf; i++) if (s_surf[i].base == base && !s_surf[i].dying) return &s_surf[i];
     return NULL;
 }
 
@@ -2173,19 +2309,24 @@ static void dedup(void)
     memset(s_dupTab, 0, sizeof s_dupTab);
     /* where the last copy that reads each surface sits in this batch */
     for (i = 0; i < s_nsurf; i++) s_surf[i].lastCopyFrom = -1;
+    /* every entry at the base, the retired one with the live: which of them a
+       copy read is `publish`'s question, and marking both only keeps more ops */
     for (i = 0; i < s_nops; i++)
-        if (s_ops[i].kind == OP_COPY) { SURF* src = surf_by_base(s_ops[i].src); if (src) src->lastCopyFrom = i; }
+        if (s_ops[i].kind == OP_COPY) {
+            int k;
+            for (k = 0; k < s_nsurf; k++) if (s_surf[k].base == s_ops[i].src) s_surf[k].lastCopyFrom = i;
+        }
     for (i = 0; i < s_nops; i++) {
         OP* o = &s_ops[i];
         unsigned slot, n;
         o->dup = 0;
-        if (o->kind == OP_FLIP) continue;
+        if (o->kind == OP_FLIP || o->kind == OP_FREE) continue;
         slot = op_hash(o);
         for (n = 0; n < DUP_PROBE_MAX; n++, slot = (slot + 1) & (DUP_TAB - 1)) {
             if (!s_dupTab[slot]) { s_dupTab[slot] = i + 1; break; }
             if (op_same(&s_ops[s_dupTab[slot] - 1], o)) {
                 int j = s_dupTab[slot] - 1;
-                SURF* d = surf_by_base(o->base);
+                SURF* d = pub_surf(o->base);
                 int lc = d ? d->lastCopyFrom : -1;
                 if (lc < j || lc > i) s_ops[j].dup = 1;      /* no copy read the surface between, or one follows */
                 s_dupTab[slot] = i + 1;
@@ -2245,6 +2386,7 @@ static int consumer_stalled(void)
     return 1;
 }
 
+static const char* top_screen_name(void);
 static void publish(unsigned flipSurf)
 {
     /* the panel re-emit runs at the flip's RETURN, where the flip surface is no
@@ -2370,6 +2512,12 @@ static void publish(unsigned flipSurf)
         if (W > 0 && H > 0) { vl = L; vt = T; vr = L + W - 1; vb = T + H - 1; }
     }
     fs = surf_by_base(flipSurf);
+    /* A RETIRED SURFACE AT THE FLIP'S BASE STILL OWES ITS FREE (the offscreen
+       freed and re-made on the same block in one window): a seed here would
+       reach the consumer BEFORE that `PK_FREE`, which would then drop the new
+       twin. The new surface seeds at its first op or at the marker, both after
+       the free, and this window goes without the viewport's erase. */
+    if (fs && pub_surf(flipSurf) != fs) fs = NULL;
     if (fs && seed_due(fs) && !pub_seed(fs)) return;
     /* ---- THE VIEWPORT'S ERASE -------------------------------------------
        What the viewport region holds BEFORE this window's draws, which is why
@@ -2414,14 +2562,26 @@ static void publish(unsigned flipSurf)
         OP* op = &s_ops[i];
         SURF* s;
         TAGPU_PUBOP* o;
+        int pixWhy;
+        /* THE ENGINE'S FREE, AT ITS PLACE: every op before it that drew on or
+           read the surface has been published, none after it names it
+           (`surf_retire`). A twin never seeded has nothing to free. */
+        if (op->kind == OP_FREE) {
+            s = pub_surf(op->base);
+            if (s && s->dying) {
+                if (s->seeded) { o = pub_op(PK_FREE, s->base); if (!o) return; pub_commit(); s->seeded = 0; }
+                s->freedPub = 1;
+            }
+            continue;
+        }
         if (op->kind == OP_FLIP) {
-            s = surf_by_base(op->base);
+            s = pub_surf(op->base);
             if (s && seed_due(s) && !pub_seed(s)) return;
             o = pub_op(PK_FRAME, op->base); if (!o) return; pub_commit();
             continue;
         }
         if (op->dup) continue;
-        s = surf_by_base(op->base);
+        s = pub_surf(op->base);
         if (!s) continue;
         if (s_probeX >= 0 && s->base == flipSurf && op->l <= s_probeX && s_probeX <= op->r && op->t <= s_probeY && s_probeY <= op->b) {
             char b[300];
@@ -2476,11 +2636,14 @@ static void publish(unsigned flipSurf)
            no sub-frame ops) was dropped the same way and draws nothing either
            way. */
         if ((op->kind == OP_GAF || op->kind == OP_GAFA || op->kind == OP_GAFB) && op->fsub) continue;
+        /* a retired destination seeds too: `pub_seed` reads no engine byte,
+           and `surf_retire` freed its snapshot, the one seed that carries any */
         if (seed_due(s) && !pub_seed(s)) return;
         /* THE MOVIE FRAME'S BYTES, READ NOW -- which is the movie's own flip,
            because `before_flip` publishes a movie flip in the call that
            recorded it and clears the window on every path that does not. */
         if (op->kind == OP_MOVIE) {
+            if (s->dying) continue;                 /* its bytes are the heap's */
             o = pub_op(PK_MOVIE, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
@@ -2814,6 +2977,7 @@ static void publish(unsigned flipSurf)
             continue;
         }
     as_pixels:
+        pixWhy = op->kind;
         if (op->kind == OP_COPY) {
             SURF* src;
             /* AN IDENTITY SELF-COPY IS NOT AN OP. The engine blits a surface
@@ -2826,7 +2990,7 @@ static void publish(unsigned flipSurf)
                and leave the window black until the next screen. Not publishing it
                is exact: no twin byte differs from what the copy would leave. */
             if (op->src == s->base && op->sl == op->l && op->st == op->t) continue;
-            src = surf_by_base(op->src);
+            src = pub_surf(op->src);
             /* THE ASSET'S BYTES, ONCE, AND AHEAD OF THE COPY THAT NEEDS THEM.
                Not at `after_alloc`, where the surface is still blank and the
                loader has not run; not as a `PK_SEED`, whose payload the drain
@@ -2837,12 +3001,13 @@ static void publish(unsigned flipSurf)
                THE LIFETIME ARGUMENT IS `before_memfree`'s, and it is cited here
                rather than left implied: `0x4D85A0` is the sole caller of the
                allocator's free, the observer at its entry is this module's
-               destructor for the object, a game-thread free drops the entry
-               inline, and an off-thread free goes through the ring
-               `surf_drain_freeq()` empties at the top of every `before_flip` --
-               before the census or the publisher reads a single base. That
-               covers an asset SOURCE exactly as it covers a seed's destination:
-               the same `surf_dies_with`. The `ptr_ok` in
+               destructor for the object, a game-thread free retires the entry
+               inline (`surf_retire`: an offer below excludes a retired source,
+               and `pub_surface_bytes` refuses one), and an off-thread free goes
+               through the ring `surf_drain_freeq()` empties at the top of every
+               `before_flip` -- before the census or the publisher reads a single
+               base. That covers an asset SOURCE exactly as it covers a box's
+               destination: the same `surf_dies_with`. The `ptr_ok` in
                `pub_surface_bytes` is a value filter and is NOT this argument.
 
                "IMMUTABLE" IS TOO STRONG, so it is not claimed. What `op_add`
@@ -2872,7 +3037,7 @@ static void publish(unsigned flipSurf)
                spurious one goes unacked -- because nothing but the echo retires
                an offer. (A try count would be a ~1.2 s timeout standing in for a
                state, and 240 x 300 KB is ~72 MB.) */
-            if (src && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
+            if (src && !src->dying && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
                 g_guiq.mirArmed &&
                 src->assetTries < TAGPU_GUI_ASSET_TRIES) {
                 /* THE TOKEN IS STAMPED ON THE OP AND ADOPTED BY THE SURFACE
@@ -2901,7 +3066,10 @@ static void publish(unsigned flipSurf)
                it: after a reset nothing draws into the post-game backdrop again,
                but the engine's repaint copies it onto the frame every time, and
                this is the one place that learns it is needed. */
-            if (src && seed_due(src) && src->snap && !pub_seed(src)) return;
+            if (src && !src->dying && seed_due(src) && src->snap && !pub_seed(src)) return;
+            /* A RETIRED SOURCE STILL HAS ITS TWIN: its `PK_FREE` is behind this
+               in the queue, so the consumer samples the twin before dropping it.
+               This is the copy retirement exists for. */
             if (src && src->seeded) {
                 o = pub_op(PK_COPY, s->base); if (!o) return;
                 o->src = op->src; o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
@@ -2923,13 +3091,16 @@ static void publish(unsigned flipSurf)
                re-offered as soon as `mirArmed` reads 1, because nothing here
                retires an offer. */
             if (src && src->isAsset && !src->seeded) continue;
+            pixWhy = !src ? (op->srcGone ? PIX_COPY_FREED : PIX_COPY_UNTWINNED) : PIX_COPY_UNSEEDED;
         }
         /* everything else — and a copy from a source we do not twin — is its
-           box's bytes as they stand now */
+           box's bytes as they stand now: never a retired surface's */
+        if (s->dying) continue;
         o = pub_op(PK_PIXELS, s->base); if (!o) return;
         o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
         if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
         pub_commit();
+        s_pixWhy[pixWhy]++;
     }
     /* the loop also stops on an overflow an op before `i` raised */
     s_pubReached = i;
@@ -3387,6 +3558,7 @@ static int __cdecl before_flip(void* entry_esp)
         for (i = 0; i < s_nsurf; i++) {
             unsigned c2, u2;
             if (s && s_surf[i].base == s->base) continue;
+            if (s_surf[i].dying) continue;          /* the heap's: see surf_retire */
             census_surface(&s_surf[i], 0, 0, 0, 0, 0, 0, &c2, &u2);
             if (u2 == (unsigned)-1) {
                 if (s_log) {
@@ -3802,7 +3974,7 @@ static void panel_emit(const char* ctrls, int n0)
     pbase = (unsigned)psurf[CTX_BASE];
     if (!pbase) { s_panelPend = 0; s_panelRefused++; return; }
     for (i = n0; i < s_nops; i++)
-        if (s_ops[i].base == pbase) { filled = 1; break; }
+        if (s_ops[i].base == pbase && s_ops[i].kind != OP_FREE) { filled = 1; break; }
     if (!filled) return;                             /* keep the debt */
     surf_of_ctx(psurf);                              /* the source is a surface too */
     copy_record(fs, NULL, psurf,
@@ -4663,6 +4835,25 @@ void tagpu_gui_flush(unsigned int frame_counter)
             ops[n] = 0;
             if (!n) _snprintf(ops, sizeof ops, "none");
             _snprintf(b, sizeof b, "GUI kinds: %s", ops);
+            b[sizeof b - 1] = 0;
+            glog(b);
+        }
+        {
+            /* the `pixdrop=` work list by cause: `s_pixWhy` */
+            static const char* const WHY_COPY[3] = { "copy-freed", "copy-untwinned", "copy-unseeded" };
+            int k, n = 0, w;
+            char px[400];
+            for (k = 1; k < PIX_NWHY; k++) {
+                if (!s_pixWhy[k]) continue;
+                w = _snprintf(px + n, sizeof px - (size_t)n, "%s%s %u", n ? " " : "",
+                              k < OP_NKIND ? OP_NAME[k] : WHY_COPY[k - OP_NKIND], s_pixWhy[k]);
+                if (w < 0) break;
+                n += w;
+                if (n >= (int)sizeof px) { n = (int)sizeof px - 1; break; }
+            }
+            px[n] = 0;
+            if (!n) _snprintf(px, sizeof px, "none");
+            _snprintf(b, sizeof b, "GUI pixels: %s", px);
             b[sizeof b - 1] = 0;
             glog(b);
         }

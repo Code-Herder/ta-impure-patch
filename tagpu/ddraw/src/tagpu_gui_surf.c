@@ -1597,9 +1597,9 @@ static void drain(void)
                The fix is at the PRODUCER, not here: every kind that falls
                through to `as_pixels` in tagpu_gui_hook.c needs a semantic op of
                its own, as `PK_BAR` and `PK_RECT` have. `s_pixDropped` is the
-               work list's size -- measured by area rather than count on the
-               `gui area:` census line, which is what says which kind to do
-               first. Until then those regions simply do not draw, visibly,
+               work list's size -- by cause on the producer's `GUI pixels:`
+               line, and by area rather than count on the `gui area:` census
+               line, which is what says which kind to do first. Until then those regions simply do not draw, visibly,
                which is the whole reason for cutting rather than levering. */
             t = twin_find(o->surf);
             /* THE TINT'S DESTINATION JUST STOPPED MATCHING THE ENGINE'S, and

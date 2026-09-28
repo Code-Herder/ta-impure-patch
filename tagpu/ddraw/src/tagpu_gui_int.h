@@ -15,7 +15,7 @@
 enum {
     PK_FRAME = 1,   /* a flip: `surf` is the presented surface                */
     PK_RESET,       /* forget every twin (TAGPU_GUI_WHY_*: re-arm, overflow)  */
-    PK_SEED,        /* `surf` w x h: its bytes follow in the arena            */
+    PK_SEED,        /* `surf` w x h: the twin, made empty; nothing follows     */
     PK_FREE,        /* `surf` is gone                                          */
     PK_CLEAR,       /* transparent over the box (the viewport's key fill)     */
     PK_SPRITE,      /* a plain keyed GAF blit: frame identity, first sight carries its bytes */

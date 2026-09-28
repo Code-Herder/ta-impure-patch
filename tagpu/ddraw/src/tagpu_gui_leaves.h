@@ -199,7 +199,7 @@ static int __cdecl before_text(void* e)
         if (off) w += font[off];
     }
     n = i;                                       /* the bytes the blitter reads */
-    for (i = 0; i < s_nsurf; i++) if (s_surf[i].base == (unsigned)(size_t)base) { s = &s_surf[i]; break; }
+    s = surf_by_base((unsigned)(size_t)base);
     op_add(OP_TEXT, s, x, top, x + w - 1, top + rows - 1);
     /* The STRING, not the box's bytes. Copied here, on the game thread,
        because the argument is routinely a caller's stack temp and publish runs
@@ -694,14 +694,19 @@ static int __cdecl before_fill(void* e)
     return 0;
 }
 
-/* ---- 0x4C6AC0 SurfaceFree(surface) stdcall ret 4: forget it ------------- */
+/* ---- 0x4C6AC0 SurfaceFree(surface) stdcall ret 4: retire it -----------
+   Retired, not dropped: a copy out of it recorded earlier in the window --
+   the save-under a panel's teardown restores at 0x4A952B, the call before
+   its SurfaceFree at 0x4A9537 -- still has to publish from its twin
+   (`surf_retire`). The MEM_Free this calls at 0x4C6ACF then finds no live
+   entry. */
 static int __cdecl before_free(void* e)
 {
     const int* obj = (const int*)(size_t)ARG(e, 1);
     int i;
     if (!on_game_thread() || !ptr_ok(obj)) return 0;
     for (i = 0; i < s_nsurf; i++)
-        if (s_surf[i].base == (unsigned)obj[CTX_BASE]) { surf_drop(i); break; }
+        if (s_surf[i].base == (unsigned)obj[CTX_BASE] && !s_surf[i].dying) { surf_retire(i); break; }
     return 0;
 }
 
@@ -721,8 +726,10 @@ static int __cdecl before_free(void* e)
    anything in the engine call it, SurfaceFree 0x4C6AC0 included (0x4C6ACF).
    So an observer at its entry is the surface's destructor, and on the game
    thread — the thread the flip and therefore the publisher run on — nothing
-   of ours can run between the drop here and the release, by ordering rather
-   than by luck.
+   of ours can read the block between the retirement here and the release,
+   by ordering rather than by luck: a retired entry keeps its place in the
+   window for the ops recorded before the free, and no path reads its
+   memory again (`surf_retire`).
 
    The two paths we NAME are not enough on their own: SurfaceFree
    (before_free) and the main offscreen's re-create (surf_drop_offscreens, at
@@ -738,7 +745,7 @@ static int __cdecl before_free(void* e)
    to become a different, live surface and leave the freed one standing, which
    is the very fault this observer exists to remove. So an off-thread free
    pushes the block pointer into `surf_free_offthread`'s ring, unfiltered and
-   without reading the table at all, and the game thread retires the entry at
+   without reading the table at all, and the game thread drops the entry at
    the top of the next flip, before the census or the publisher read a base.
    Filtering there would not be an optimisation but a hole: MEM_Free fires once
    per block, so a filter that misses queues nothing and nobody ever re-checks.
@@ -746,7 +753,7 @@ static int __cdecl before_free(void* e)
    is the engine's own and was never ours to close.
 
    The observer sits at the ENTRY of 0x4D85A0, before the allocator's own
-   critical section, so the CRT `free()` that surf_drop calls inverts no lock. */
+   critical section, so the CRT `free()` that surf_retire calls inverts no lock. */
 static int __cdecl before_memfree(void* e)
 {
     unsigned p = ARG(e, 1), size;
@@ -754,15 +761,15 @@ static int __cdecl before_memfree(void* e)
     if (!p) return 0;
     size = mem_block_size(p);             /* now: the block is still the caller's */
     if (!on_game_thread()) { surf_free_offthread(p, size); return 0; }
-    for (i = 0; i < s_nsurf; ) {          /* swap-remove: re-test slot i */
-        if (!surf_dies_with(&s_surf[i], p, size)) { i++; continue; }
+    for (i = 0; i < s_nsurf; i++) {
+        if (s_surf[i].dying || !surf_dies_with(&s_surf[i], p, size)) continue;
         if (s_trace) {
             char b[220];
             _snprintf(b, sizeof b, "gui trace: MEM_Free surface %08X %dx%d from %08X",
                       s_surf[i].base, s_surf[i].w, s_surf[i].h, ARG(e, 0));
             glog(b);
         }
-        surf_drop(i);
+        surf_retire(i);                   /* in place: the entry stays, dying */
     }
     return 0;
 }
