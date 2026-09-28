@@ -376,13 +376,16 @@ result travels as ordinary unit state. [INFERRED]
 - `MAX_ID`-inclusive loops may touch one slot past the array.
 - Every scan reads every unit on the map, regardless of fog.
 
-A port is one detour and eight getters, each bounded by construction: the id against the unit array's
-count, the alive bit, and the player index below 10.
+The getter entry is one detour and eight handlers. Safety requires validating the original
+full-width id against the unit array's count before narrowing, the alive bit and player index,
+and the lifetime of every dereferenced object. Complete mod compatibility also needs safe
+interpreter capacity, validation and saved state; it is not just this entry hook.
 
-**Whether to port it** is the owner's call. Every mod players run with TADR except ProTA calls these
-ids somewhere, and every one of them now runs on our stack with its own exe and archives, TADR's
-code kept out ([the takeover](compat/takeover.md)): the scripts above are in the games Impure
-already starts, answered 0.
+**The port is approved** (2026-09-28): [group F's decisions and gates](tadr-port/cob.md).
+The eight getters, safe execution capacity and saved script state are in scope; id 111 is not.
+Every mod players run with TADR except ProTA calls these ids somewhere, and every one of them
+now runs on our stack with its own exe and archives, TADR's code kept out
+([the takeover](compat/takeover.md)). Until F is implemented, those scripts still receive 0.
 
 **A stock defect the census found.** `PUSH` (`0x4B13CF..0x4B13D9`) increments the stack index and
 writes with no bound, and a thread record holds 32 stack words ([engine map](exe-reverse-engineering.md),

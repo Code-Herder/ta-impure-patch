@@ -11433,6 +11433,21 @@ never hooks `set` ([merge exploration §F](tadr-merge-exploration.md#f-the-cob-g
 Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
 `EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
 
+**Live control, 2026-09-28:** the generated getter probe in the complete Escalation
+10.2.0 setup, with Impure and no TADR getter hooks, executed ids 32 and 69–75 on a
+human-owned unit and a local-AI-owned unit: all 16 returned zero through this handler.
+Two fresh Wine skirmishes on the reference setup read `u16 main+0x14351` as **10001**
+via `main = *(u32*)0x511DE8`; the probe units occupied slots 2 and 1002. A raised
+capacity does not make every match allocate 15001 slots. The future `MAX_ID` getter
+must return this match's last valid index, 10000, rather than the capacity maximum.
+The test, its failing port assertions and remaining gaps are in
+[group F](tadr-port/cob.md#all-eight-getters-called-in-real-escalation).
+The repeated baseline additionally read the fixed unit array at `main+0x14357`,
+stride `0x118`, after bounding each ordinal by that count: `+0xA8` matched the unit
+ID, `+0xFF` read owners 0 and 1, `u16 +0xB8` read zero kills, `float +0x104` read
+zero construction remaining, and `u32 +0x110` had bit 28 set on both. These are
+probe precondition checks, not evidence for a non-zero getter result.
+
 **GET — the jump table is `0x480AC4`, indexed by `id − 1`** (20 dwords; out of range →
 `0x480ABB`, `xor eax,eax`).
 

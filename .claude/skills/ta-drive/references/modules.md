@@ -75,6 +75,14 @@ tools/talog.py run tagpu/instances/c1/gamedir --stream tagpu_cobtrace | cut -f1-
 - The file is truncated at every launch and flushed per line, so `tacli stop` loses nothing.
 - `tools/tacob pose-check` reads the pose dump; the dump's fields are what it exists for.
 
+**Extended-getter probe:** `python3 tools/cob_getter_probe.py --out /tmp/cob-getters --expect stock-zero`
+creates its own isolated Escalation setup, adds a generated probe type and calls all eight
+required getters on human-owned and local-AI-owned units. It asserts values from the return
+trace, inspects the live exe for TADR hooks, saves evidence outside the repo and cleans up its
+instance/display. `--expect implemented` checks the intended self-query results and is a red
+test until the port exists. Neither mode covers ID boundaries, non-zero kills/construction or
+two-peer ownership; see `research/notes/tadr-port/cob.md`. The output directory must be new.
+
 ## Multiplayer: two to ten instances in one game
 
 Works over loopback on the stock wine these instances use, with Microsoft's own DirectPlay in
