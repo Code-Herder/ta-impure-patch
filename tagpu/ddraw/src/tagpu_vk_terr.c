@@ -661,7 +661,7 @@ static int shared_resize(const TAGPU_VKPASS* d, SHARED* sh, int w, int h,
      * no SUBMITTED command buffer can still name it through this slot, because
        that slot's submit is done;
      * no FUTURE one will, because `record` runs only when `prepare` returned 1,
-       and every such `prepare` calls `shared_bind` first.
+       and every such `prepare` calls `shared_bind` before it returns.
 
    So when the last bit clears, the old image is unreferenced by construction,
    whatever the frame rate, whatever the driver, and whatever this pass decided

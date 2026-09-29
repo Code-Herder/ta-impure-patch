@@ -17735,7 +17735,7 @@ paints, under the allowance.
   read the tile atlas at the neighbourhood atlas's key cells, one frame of the wrong tiles
   (measured on the reference setup: one frame, ~7 after the first world frame of every load).
   So no descriptor names an image in a layout it is not in — all of Classic, where no job runs,
-  included — and in every pass the flag and the binding come from the same `s_arHave`.
+  included — and in every pass the flag and the binding come from the same painted-flag (`s_arHave`; the terrain's is `s_rgbAtlas.have`).
 
 **MEASURED 2026-09-24 — what play sends.** The setup:
 
