@@ -1538,8 +1538,8 @@ distinct; acted on eight, all re-verified against the code or the disassembly fi
 - **The glyph observer measured past `'\n'`**, where `0x4CCF60` stops (`0x4CCFA0`); the
   engine map said so and the code did not.
 - **The sprite identity was two addresses** the shell reuses after freeing a popped screen's
-  art; it now carries a hash of the whole plane (§30), read at publish time under the same
-  guard as the first-sight decode.
+  art; it now carries a hash of the whole plane (§30), read on the game thread at the blit under
+  the same guard as the first-sight decode.
 - **The observer stubs did not preserve EFLAGS** around `before` and `after`; no engine caller
   of the observed functions reads flags after the call (checked at every `call 0x4C69F0` and
   `call 0x4C63A0`), but "byte-identical" now holds for the flags too.
@@ -5030,8 +5030,10 @@ one, four bytes to a step, into the hash (`hash_run`). What was in the sample is
 so a different picture at a recycled address is a different key except by chance in 2^-32. The
 seen table and the atlas needed no change: a changed picture is a new key and takes the
 first-sight decode. Cost, MEASURED on the game thread with a timing probe over the shell and a
-skirmish: 0.55–0.59 µs per blit on average (2 160 pixels a call), no frame over 16 K pixels in
-the run — about 0.1 ms a frame in play, not a change anyone sees.
+skirmish: 0.55–0.59 µs per blit on average (2 160 pixels a call), and no frame over 16 K pixels
+in the run. That is the measured range, not a bound: at the measured ~3.7 bytes a nanosecond a
+640×640 raw plane would take about 0.1 ms per blit [INFERRED from that rate], and an RLE plane
+pays two `IsBadReadPtr` calls per row on top, which was not measured.
 
 **What this leaves open.**
 
@@ -5039,12 +5041,22 @@ the run — about 0.1 ms a frame in play, not a change anyone sees.
   probability 2^-32 per pair; the level-boundary drop (`publish_window`, "THE LEVEL BOUNDARY")
   bounds it to one level. Widening the key is a change to the op and to the atlas match.
 - **The extent read.** `frame_key` now reads `w*h` bytes (`tagpu_gaf_frame_sane` bounds each side
-  to 512) on every blit instead of 64 on every blit. The first-sight decode already read the same
+  to `TAGPU_GAF_DECMAX`, 640, so up to 409 600 bytes) on every blit instead of 64 on every blit. The first-sight decode already read the same
   extent once per new frame, so the exposure is the one `gaf_capture`'s comment ("AND IT DOES NOT
   BOUND THE EXTENT") and `gpu-status.md` (landing 7, "the extent half") name, taken more often,
   not a new kind. The lifetime argument is
   unchanged: the read runs in the `before_` detour on the blit leaf, earlier than the engine's
-  blit and its free.
+  blit and its free. One caller runs outside any engine call: `chrome_emit` re-emits the panel
+  and bars through `gaf_record(NULL, …)` and rests on its own two gates, a level on screen and
+  no teardown in flight (its comment, "TWO GATES").
+- **A plane the engine rewrites in place gets an atlas entry per distinct content.** That is
+  the property that makes the key exact, and the UI atlas holds 4096 entries and drops them all
+  when it fills (§26 measured 131 picks filling it when a preview was keyed that way). No plain
+  GAF blit in the code rewrites its plane often: SELMAP's preview goes through
+  `GAF_DrawTransformed`, the scaled path, which discards this key. A walk of 51 picks down the
+  map list, the frame rewritten on every pick, ended at 158 of 4096 entries with 4 full resets,
+  against 151 and 4 on the build before this change (resets and lost sprites were 8 and 3 597
+  there, 6 and 4 941 here: the same order, so that churn predates this change).
 - **No automated seam.** The comparison above is a script over a hand-launched instance. The
   compat suite's `tazero-alpha5` run has the instance but no step that flips the build menu and
   compares the window with the engine's frame.

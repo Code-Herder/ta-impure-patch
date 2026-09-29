@@ -1898,8 +1898,8 @@ static int pub_shade(unsigned need)
    art and hands the same addresses to the next screen's: the same key would
    then name different pixels. So the key also carries a hash of the WHOLE
    plane -- every byte of a raw plane, every row of an RLE one -- and the
-   hotspot, read here at publish time under the same guard the first-sight
-   decode uses.
+   hotspot, read here, on the game thread, at the blit -- not at `publish` --
+   under the same guard the first-sight decode uses.
 
    THE HASH COVERS EVERYTHING, NOT A PREFIX, BECAUSE A PREFIX COLLIDES BY
    CONSTRUCTION. A build menu's 64x64 raw button pictures share the frame and
@@ -1910,7 +1910,7 @@ static int pub_shade(unsigned need)
    different planes, 24 collisions in a run of a few page flips).
 
    The extent is `w*h` bytes at most, and `tagpu_gaf_frame_sane` bounds `w`
-   and `h` to 512. NULL = the plane cannot be read now: the caller publishes
+   and `h` to `TAGPU_GAF_DECMAX` (640). NULL = the plane cannot be read now: the caller publishes
    the box's bytes instead, as it does when the decode fails. */
 static unsigned hash_run(unsigned hh, const unsigned char* p, unsigned n)
 {
@@ -1988,7 +1988,7 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
    **AND IT DOES NOT BOUND THE EXTENT.** The engine reads the CLIPPED sub-rect;
    `tagpu_gaf_decode` reads all `w*h`, or every RLE row. So a header whose `w`/
    `h` exceed the plane the loader actually allocated is not covered by anything
-   above -- only by `tagpu_gaf_frame_sane`, which is a SHAPE test (w,h <= 512),
+   above -- only by `tagpu_gaf_frame_sane`, which is a SHAPE test (w,h <= `TAGPU_GAF_DECMAX`, 640),
    and the decoder's own `IsBadReadPtr`, which this file says everywhere is not
    a safety argument. Named, not fixed: bounding it needs the plane's
    allocated length, and the plane is not a block start, so `MEM_Size` cannot

@@ -10318,10 +10318,11 @@ layer is a new reader on the other thread):
   ([GL UI renderer](gui-renderer.html) §3.7). A torn read here costs one frame of a
   misplaced exemption, nothing else.
 
-**Read on the game thread at publish, guarded** (`IsBadReadPtr`, like the first-sight decode):
+**Read on the game thread at the blit, guarded** (`IsBadReadPtr`, like the first-sight decode):
 the whole of a GAF frame's pixel plane — every byte of a raw one, every `[len][data]` row of an
-RLE one — goes into the sprite's identity beside the header and plane addresses, because the shell frees a popped screen's art and the heap hands the same addresses to the
-next screen's (the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
+RLE one — goes into the sprite's identity beside the header and plane addresses, because the
+shell frees a popped screen's art and the heap hands the same addresses to the next screen's
+(the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
 `0x4CCFA0`) is honoured by the glyph observer's width since the same review.
 
 ### The screen lifecycle: loading, pushing, keeping on top [VERIFIED 2026-09-09, Phase F G18]
