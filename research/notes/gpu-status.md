@@ -2342,7 +2342,8 @@ and interceptor: every feature hit reaches the host at its full ID; the host's i
 caught 11 of the joiner's rockets 250 and 3322, one low byte and one target, and the joiner
 detonated the right rocket each time, 6 through stock's `0x0E` and 5 through the companion.
 Paused once the fire stopped, the peers held the same units at the same health and the same
-feature cells. The extra-weapons module stays armed beside the raise.
+feature cells. The extra-weapons module installs beside the raise: both are rows of the one table,
+which refuses overlapping sites.
 
 **Sounds: 32, through the store, not a site.** `mixingbuffers` in `impure.cfg` (renderers.md
 2.10b) is 32 by default and one of 8, 16, 24 or 32. `tagpu_menu.c`'s `eng_push_mixing` writes it
@@ -2496,6 +2497,7 @@ engine defects we patch".
 | `0x4386B9`, `0x4386D8` | the unit reclaim's step `0x438650`: its product (workertime · `(kills + 5)/5` · the target's MaxHitPoints · 15), taken in 32 bits and read as an unsigned qword by `0x4386CC`'s `fild`, and its quotient's `_ftol` (`0x4E43A0`), which returns the low dword | two rows of the fail-closed table (B10, simulation, both builds): 23 bytes at `0x4386B9` become a `jmp` to a stub that calls the x87-free `b10_reclaim_product` under `pushad` (the product in 64 bits, saturated at `INT64_MAX`, into the same qword `[esp+8]`), runs the `fild` and goes on at `0x4386D0`; 7 bytes at `0x4386D8` become a `jmp` to the same `fdivp`, a clamp of st0 to 2147483647.0, the `call 0x4E43A0` and `0x4386DF`. Stock's step for every product below 2³², bit for bit; C3's keyed stub `0x43869D` is untouched and jumps to `0x4386B9`; silent at run time |
 | **the weapon keys (TADR section C, landing C2, simulation):** `0x42E310` (the weapon load's entry), `0x49ABB0` (the can-engage test's entry), `0x43F1D4` (the order action's unit branch), `0x49B9EB` (the guidance's water test), `0x49E1FD` (AutoAim's fire gate); the store is filled at A′3's ID site `0x42E468` | not a defect: TADR's weapon keys `nottoair`, `nottounderwater`, `surfacefire`, `notoverwater` and `notoverland`, which the stock loader never reads | every row in the fail-closed table, both builds; each site runs the engine's own instructions for a weapon whose key byte is 0, so stock content runs stock's bytes. §2.97 has the whole landing |
 | **transported explosions (TADR section C, landing C4, simulation):** `0x49B017` (the death explosion's pick), `0x48664B` (`Send_UnitDeath`, its record complete), `0x486679` (its call of the destructor), `0x4867CB` (the destructor's detach of its own unit when carried), `0x486810` and `0x48681D` (the destructor's cargo loop: a passenger, and its detach), `0x486F10` (kill-all's entry), `0x42B019` (the menu-time loader's store of `CRC_weapons`); B4's `0x4C` branch (`doDeath`) calls the destructor through the same wrap | not a defect: TADR's unit keys `TransportedExplodeAs` and `TransportedSelfDestructAs`, which the stock loader never reads; and two stock broadcasts inside kill-all for a departed player (the `0x0A` of each of the destructor's detaches), which let the first peer to remove a player decide the others' pictures of its passengers | every row in the fail-closed table, both builds; a type without the keys gets stock's pick, and a unit's sync value changes only for a type with a key naming a loaded weapon. §2.101 has the whole landing |
+| **the extra weapons (`tagpu_weapons.c`, simulation, always on):** 19 entry hooks (`UNITS_StartWeaponsScripts` `0x49E070`, `AutoAim` `0x49E1A0`, the name helpers `0x43E2E0` `0x43E240` `0x43E1E0`, retaliation `0x406F80`, acquisition `0x4089A0`, the slot helpers `0x4897E0` `0x4898B0` `0x489800` `0x48A060` `0x48A0A0` `0x48A0F0` `0x48A160` `0x48A190`, `0x49ADF0`, `0x49AA80`, `0x49D120`, the def copy `0x42B370`), 21 splices (the loader `0x42CEF2`, the CRC fold `0x42B004`, the `0x0D` receiver's slot `0x49D364`, the fire-name and slot-index decodes, the target finder and position, the attack-ground order `0x4039BE`) and 4 byte patches; the record observers on `0x42D2E0` and `0x42BF40` are not rows | not a defect: `Weapon4..N` for a unit type, capacity 16, where stock has three | every row in the fail-closed table, both builds (`fix_extra_weapons`), and the launch is refused without the observers; a stock unit runs stock code through the hooks' trampolines, and a stock type's CRC is the retail one. The site list with each one's purpose: [extra weapons](extra-weapons.html), *Implementation* |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -2957,7 +2959,7 @@ way back to the racing build). Design, proof and the object catalogue:
 Every pass is armed by a file beside `TotalA.exe`, `tagpu_<x>.on`, whose contents are its tokens.
 **With no file at all, the play set is on.** A pass that is also a menu row (only
 `tagpu_classicpp.on`, the Renderer row) asks the settings store in between: its own `.on`/`.off`
-first, then `impure.cfg`, then this table ([renderers](renderers.html) §2.10b). `tagpu_opt.c` answers two questions for the seventeen files below — *is the pass on*
+first, then `impure.cfg`, then this table ([renderers](renderers.html) §2.10b). `tagpu_opt.c` answers two questions for the fifteen files below — *is the pass on*
 (`tagpu_opt_on`) and *what are its tokens* (`tagpu_opt_read`) — and every reader of those files,
 at attach and on its per-frame poll, asks it instead of the file system. Nothing else changed:
 the parsers, the polls, the `*own` install-at-attach rule.
@@ -2965,21 +2967,24 @@ the parsers, the polls, the `*own` install-at-attach rule.
 | file | default tokens | only with |
 |---|---|---|
 | `tagpu_native.on` | `all wrecks` | |
-| `tagpu_owndraw.on` | `all` | `native` |
 | `tagpu_terr.on`, `tagpu_terrown.on` | | `terrown` with `terr` |
-| `tagpu_feat.on`, `tagpu_featown.on` | | `featown` with `feat` |
-| `tagpu_fx.on`, `tagpu_sfx.on`, `tagpu_fxown.on` | | `fxown` with `fx` or `sfx` |
+| `tagpu_feat.on` | | |
+| `tagpu_fx.on`, `tagpu_sfx.on` | | |
 | `tagpu_mark.on`, `tagpu_markown.on`, `tagpu_order.on` | | `markown` with `mark` |
 | `tagpu_ghost.on` | | `native` |
 | `tagpu_zoom.on`, `tagpu_vpwide.on` | | `vpwide` with `zoom` |
-| `tagpu_gui.on`, `tagpu_classicpp.on`, `tagpu_weapons.on` | | |
+| `tagpu_mirror.on`, `tagpu_gui.on`, `tagpu_classicpp.on` | | |
+
+Nothing on it changes the simulation: the extra weapons are always on, in the fail-closed table
+([extra weapons](extra-weapons.html), *Layer 1*). `tagpu_owndraw`, `tagpu_featown` and
+`tagpu_fxown` are not on it either: each stops the engine drawing something, which holes the
+reference frame the golden source is taken from (`tagpu_opt.c` has the argument and the numbers).
 
 The rules, in precedence: a `tagpu_<x>.on` that exists wins, tokens and all, as ever; a
 `tagpu_<x>.off` (and no `.on`) turns a default-on pass off; `tagpu_defaults.off` turns the table
 off — every pass opt-in again. The *only with* column is the pairing `tacli launch` makes when it
-auto-arms the `*own` half: every skip `owndraw` makes stands aside for a pass of ours, the native
-pass above all (it never skips a unit's rasterise — `tagpu_owndraw_classify`), so `native.off`
-takes `owndraw` with it, and `zoom.off` takes `vpwide`, because the repair `vpwide` carries is what
+auto-arms the `*own` half, and the same rule for the two rows that depend on another: `native.off`
+takes `ghost` with it, and `zoom.off` takes `vpwide`, because the repair `vpwide` carries is what
 the zoom cannot go live without (§2.3b). Everything off the table — the instrumentation triggers,
 the knob files `tagpu_restoreglsl.on` / `tagpu_classicpp.cfg` (and `tagpu_hires.on`, read by nothing since the replacement pipeline's deletion), the `.off`
 levers of §2.7 and the render passes — reads its file exactly as before. The module is stateless
@@ -19386,7 +19391,7 @@ the engine's own instructions.
 
 | site | what it decides |
 |---|---|
-| `0x49ABB0`, entry, 7 bytes | The can-engage verdict, for every one of its 11 callers: acquisition, retaliation, the attack cursor (`0x43E59E`), the order handlers. `wk_check` calls stock's body (or, for a slot past 2 while the extra-weapons module is armed, that module's C verdict) and filters the answer by the slot's weapon. `surfacefire` first: a water weapon's refusal of a target that is not flying becomes stock's own range test. Then `nottoair` refuses a flying target and `nottounderwater` a target whose top is at or below the sea. One function, so no order between the keys can loop. This module is the entry's only owner. |
+| `0x49ABB0`, entry, 7 bytes | The can-engage verdict, for every one of its 11 callers: acquisition, retaliation, the attack cursor (`0x43E59E`), the order handlers. `wk_check` calls stock's body (or, for a slot past 2, the extra-weapons module's C verdict) and filters the answer by the slot's weapon. `surfacefire` first: a water weapon's refusal of a target that is not flying becomes stock's own range test. Then `nottoair` refuses a flying target and `nottounderwater` a target whose top is at or below the sea. One function, so no order between the keys can loop. This module is the entry's only owner. |
 | `0x43F1D4`, 6 bytes | The order action `0x43F0E0`'s unit branch, the right-click's order. Stock's decisions in stock's order, each key mirrored where stock tests its counterpart: `nottoair` beside `toairweapon`, `nottounderwater` in the submerged test (weapon 0 and slot 1), `surfacefire` at the hover's water refusal. Refuse `0x4401DC`, no action `0x43F26C`, or on `0x43F27A` with `edx` the target's def. |
 | `0x49B9EB`, 7 bytes | The self-propelled flight's water test: a `surfacefire` projectile above the sea steers (`0x49BA16`) instead of falling. |
 | `0x49E1FD`, 6 bytes | AutoAim's fire gate, after the slot's per-tick target read `0x49E1E1`. `notoverwater`/`notoverland` hold the slot for the tick by the ground under the firer (off the map, not gated), so a dead target is still dropped every tick. A `nottoair` slot holding a flying unit drops it through `ClearTarget 0x48A0F0`. |

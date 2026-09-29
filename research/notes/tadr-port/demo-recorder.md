@@ -343,8 +343,9 @@ check that raises false alarms on ordinary changes.
   that `nomapweaponalert` keeps quiet for harmless hits (`s_quiet`). The private class is only for
   diagnostics nobody sees.
 - **Extra weapons is always on and fails closed**, like every other simulation feature, so a
-  recording carries no arming dimension and tests run the same simulation as players. Its on/off
-  switch and its silent disarm go; that is a small landing of its own.
+  recording carries no arming dimension and tests run the same simulation as players. Done
+  2026-09-29: the switch and the silent disarm are gone, and the module's 44 sites are rows of the
+  fail-closed table ([extra weapons](../extra-weapons.md), *Layer 1*).
 
 ## Correctness requirement: false construction glow
 

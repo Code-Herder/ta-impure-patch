@@ -252,7 +252,7 @@ commit can change.
   `fix_weapon_keys`), both builds. Each runs the engine's own instructions for a weapon without a
   key.
   - `0x49ABB0`, the can-engage test's entry, now this module's alone: stock's body (or the
-    extra-weapons module's C verdict for a slot past 2 while it is armed), then one filter by the
+    extra-weapons module's C verdict for a slot past 2), then one filter by the
     slot's weapon. `surfacefire` turns a water weapon's refusal of a target that is not flying into
     stock's own range test; `nottoair` refuses a flying target (`+0x110 & 3 == 2`);
     `nottounderwater` a target whose top (`+0x70` + def `+0x170`) is at or below the sea. The

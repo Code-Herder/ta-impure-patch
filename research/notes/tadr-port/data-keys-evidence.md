@@ -296,10 +296,10 @@ identity for untagged weapons.
 #### Overlap
 
 `my_CheckUnitWeapon` (slots ≥ 3) re-implements `0x49ABB0` in C, so the filter must run there too.
-When the module is armed it owns `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TADR's inner site
-`0x49AD07` would never be reached for slots ≥ 3. **As built (C2):** the weapon keys own the entry
-in both builds, and the extra-weapons module no longer hooks it: the keys' detour asks that
-module's C verdict for a slot past 2 while it is armed.
+When this was read the module owned `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TADR's inner
+site `0x49AD07` would never be reached for slots ≥ 3. **As built (C2):** the weapon keys own the
+entry in both builds, and the extra-weapons module does not hook it: the keys' detour asks that
+module's C verdict for a slot past 2.
 
 #### Proposed our-design
 
@@ -1302,7 +1302,7 @@ is needed for keys that name another file's content** (§3).
 
 - `tagpu_weapons.c` already reads FBI keys: at the game-start loader, `cb_loader` at `0x42CEF2`
   (weapon4..N), and at menu time, `cb_crc_weapons` at `0x42B004`, which folds them into
-  `CRC_weapons` **only while the module is armed**.
+  `CRC_weapons` for a type that declares any.
 - It keys `g_def[]` by def index, and `def_rec()` answers NULL when the stored def pointer differs.
   The pointer alone cannot tell two games apart (the def array can come back at the same address, and
   the loader skips a slot with no FBI), so the records are also emptied at the unit-data load's
@@ -1313,8 +1313,8 @@ is needed for keys that name another file's content** (§3).
 
 #### Proposed our-design
 
-- **One always-on module owns the unit keys** (not the extra-weapons module, which is armed per
-  game).
+- **One always-on module owns the unit keys** (not the extra-weapons module, which was armed
+  per game when this was designed and has been always on too since 2026-09-29).
 - **Reader: `0x42BF97`,** byte-checked and failing closed. It is a different site from
   `tagpu_weapons`' `0x42CEF2`, so no bytes are shared.
 - **Records:** for every def the loader visits, write a fixed-size POD record. Write one **whether
@@ -1584,7 +1584,7 @@ desync. Fail closed.
 
 #### Overlap
 
-- `tagpu_weapons`' `cb_crc_weapons` folds at `0x42B004` when armed. The fold proposed here goes to
+- `tagpu_weapons`' `cb_crc_weapons` folds at `0x42B004`. The fold proposed here goes to
   `0x42B019` (§1).
 - The destructor is B4's territory (the incarnation check on `0x0C`) and B3's (the bound on its
   indices). Our reads come after both.

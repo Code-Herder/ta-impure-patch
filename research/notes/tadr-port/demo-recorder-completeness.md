@@ -15,8 +15,9 @@ the build check, which must also close the [open items](#open-items).
 ## The problem
 
 Impure's simulation grows fast. The fail-closed patch-site table held 156 sites on 2026-09-25, 284
-on 2026-09-27 and 358 with the COB core on 2026-09-28 (MEASURED, instance logs); extra weapons' 46
-sites and the data keys' 15 install outside it. Much of the new state is invisible to a comparison
+on 2026-09-27, 358 with the COB core on 2026-09-28 and 402 on 2026-09-29, when the extra weapons'
+44 sites joined it (MEASURED, instance logs); the extra weapons' two record observers and the data
+keys' 15 sites install outside it. Much of the new state is invisible to a comparison
 of engine records: 14 of Impure's own tables with simulation meaning (`g_side`, `tagpu_weapons.c`;
 `s_quiet`, `tagpu_datakeys.c`; `s_windState`, `tagpu_patches.c`; …), four wire tags of its own
 (`0x49`–`0x4C`) and seven engine fields put to another use. Serializers already miss some of it:

@@ -3294,8 +3294,8 @@ the raised build the raise's own rows, *Weapon IDs* in *The raised effect pools*
   1)·0x118, and the engine's own sweep `0x48BD00` steps with `add eax,0x118` at `0x48BD22` and
   loops `jbe` to it at `0x48BD38`); a message past it is dropped through `0x49D55D`. The slot byte `+0x23`, which
   `0x49D366..0x49D384` turns into the shooter's slot at `+4 + slot·0x1C` and writes through, is
-  held to the shooter's three slots without the extra-weapons module; with it, the module's
-  splice at `0x49D364` bounds the slot by the unit's own count.
+  unbounded in stock; the extra-weapons module's splice at `0x49D364`, a row of the same table,
+  bounds it by the unit's own count.
 - `0x424575`: the weapon's sender takes the byte from the weapon's pointer and marks a hit whose
   byte is `0xFD`..`0xFF` with bit 11 of x (`0x800`), which no reachable cell uses. The receiver, the
   dispatch table's `0x0F` slot `0x455FB8` pointed at our stub, which continues at `0x455F50`, reads
@@ -9633,7 +9633,7 @@ reached as follows:
   weapon 4000 hits its target, 31 a hit, through a projectile whose weapon pointer is the static's
   record 4000, and the weapon borrows the model of the stock weapon it copies, drawn in flight; the
   weapons with no `ID=` and with 5000 are skipped with their log lines and their towers stay
-  unarmed; the extra-weapons module stays armed. Two peers, the joiner firing at the host's
+  unarmed; the extra-weapons module was installed beside them. Two peers, the joiner firing at the host's
   wrecks and units: the host decoded every feature hit at its full ID, 3581, 3582, 3583, 3322
   and 4000, and told 250's and 3322's hits on one cell apart (both send the byte `0xFA`); the
   host's interceptor, ID 3000, caught 11 of the joiner's rockets, 250 and 3322 aimed at one point,
@@ -12046,7 +12046,7 @@ FBI loader.
   **MEASURED 2026-09-25**: `+reload ppllt` with SoftwareDebugMode `0x2` set re-ran the FBI loader
   (`tagpu_datakeys`' reader logged it a second time), no crash. The console kills every unit of
   the type first (`0x486E80`, *Built-in cheat/console command surface*), so the units that run
-  the new COB are all created after it. **MEASURED 2026-09-25** with `tagpu_weapons` armed: after
+  the new COB are all created after it. **MEASURED 2026-09-25** with the extra-weapons module installed: after
   `+reload armllt10`, two `ARMLLT10`s spawned into the same game re-asked their per-type piece
   caches (`AimFromWeaponN`/`QueryWeaponN` = pieces 2 and 1 on slots 3–9, as before the reload)
   and launched from slots 0, 3 and 4; `violation`, `mismatch` and `cob_full` stayed 0. Again with
@@ -12072,7 +12072,7 @@ FBI loader.
   (called at `0x42D57D` and by itself, `0x432F54` / `0x432F64`) and `0x432FB0` (called at
   `0x42D573` and `0x42D590`); and the insertion pass `0x42D599..0x42D60E` (`0x42D5CD`,
   `0x42D5FF`, through a stack temp). **MEASURED 2026-09-25**: two skirmishes in one
-  process with `tagpu_weapons.on`: the second load logged 284 records emptied before its loader
+  process: the second load logged 284 records emptied before its loader
   wrote ARMLLT10's ten weapons, and the towers fired slots 3–9 in the second game
   (`violation=0 mismatch=0`).
 
