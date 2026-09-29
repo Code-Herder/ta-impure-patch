@@ -33,8 +33,8 @@ and the units that carry them. Spawned by scenarios/c2-weapon-keys.json, not bui
     WKFHLNW   ARMFHLT, ARMFHLT_LASER + notoverwater          on the water: never fires
     WKFHLNL   ARMFHLT, ARMFHLT_LASER + notoverland           on the water: fires as stock
     WKLLT5    ARMLLT, Weapon1 and Weapon4 WK_LAS_1 (the laser, no key, damage 1, so a target
-              lives), Weapon5 the nottoair laser: the extra-weapons module's slots (tacli arm
-              <i> weapons.on), COB from cobclone
+              lives), Weapon5 the nottoair laser: the extra-weapons module's slots, COB
+              from cobclone
     WKSUB     ARMSUB with no weapon: a submerged target that does not shoot back
     WKSHSF    ARMSH, a hovercraft, with WK_TORP_SF: the order cursor's surfacefire mirror
     WKSHTP    ARMSH with COAX_TORPEDO: its control

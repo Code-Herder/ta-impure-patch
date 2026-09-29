@@ -2271,8 +2271,9 @@ static int __cdecl wpn_loader_id(unsigned int* regs)
    (main+0x1435B, inclusive: the engine's sweep 0x48BD00 steps at 0x48BD22 and runs `jbe` to
    it); a packet past it is dropped through the receiver's exit 0x49D55D. The slot byte keeps
    its low nibble for the read after this one: stock's 0x49D366 takes the shooter's slot at
-   +4 + slot * 0x1C, three of them, so without the extra-weapons module a slot past 2 is dropped
-   too; with it, the module's splice there bounds the slot by the unit's own count. */
+   +4 + slot * 0x1C, three of them, and the extra-weapons module's splice there (0x49D364, a
+   site of this table) bounds the slot by the unit's own count; for a live shooter the B3 test
+   below drops a slot past that count first. */
 static int __cdecl wpn_rx_fired(unsigned int* regs)
 {
     unsigned char* pkt = (unsigned char*)(size_t)regs[PR_EAX];
@@ -2298,11 +2299,6 @@ static int __cdecl wpn_rx_fired(unsigned int* regs)
         if (shooter > max || target > max) {
             wpn_note("a weapon-fired message names a unit past the array; dropped",
                      shooter > target ? shooter : target, max);
-            return 0;
-        }
-        if (pkt[0x23] > 2 && !tagpu_weapons_armed()) {
-            wpn_note("a weapon-fired message names a slot past the unit's three; dropped",
-                     pkt[0x23], shooter);
             return 0;
         }
         /* B3: the diverged-shooter drop (sim-fixes.md B3; evidence §8). Stock branches
@@ -5491,7 +5487,7 @@ static int fix_los_local(void)
    - 0x49ABB0, the can-engage test's entry (`mov eax,[esp+0xC]; sub esp,0xC`), stdcall
      (unit, target, idx), `ret 0xC`, 11 callers: wk_check takes its place with the same
      signature, asks stock's body through a trampoline (or the extra-weapons module's for a
-     slot past 2 while it is armed) and filters the verdict by the slot's weapon. It is the
+     slot past 2) and filters the verdict by the slot's weapon. It is the
      entry's one owner: the extra-weapons module does not hook it, and asks its own
      verdicts through it.
    - 0x43F1D4, the order action's unit branch (`mov eax,[edi+0x110]`; reached only from
@@ -5513,7 +5509,7 @@ static int __stdcall wk_check(char* u, char* t, unsigned int idx)
     unsigned int i = idx & 0xFF;
     const char* w = NULL;
     int v;
-    if (i >= 3 && tagpu_weapons_armed()) {
+    if (i >= 3) {
         v = tagpu_weapons_check_slot(u, t, idx);
         w = tagpu_weapons_slot_weapon(u, i);
     } else {
@@ -5801,6 +5797,31 @@ static int fix_veterancy(void)
     VET_SITE(0x004043D8u, 7,  cost,   ck, "veterancy: the capture's cost");
     VET_SITE(0x0043869Du, 7,  rcl,    cm, "veterancy: a unit reclaim's step");
 #undef VET_SITE
+    return FIX_TABLE;
+}
+
+/* ===== THE EXTRA WEAPONS ==================================================================
+   The 1..N weapons module (tagpu_weapons.c; research/notes/extra-weapons.md), always on.
+   CLASS: simulation, both builds -- a build without it plays three weapons a unit where this
+   one plays the FBI's Weapon4..N, so its 19 entry hooks, 21 splices and 4 byte patches are
+   sites of this table, compared with the exe file and written with the rest or not at all.
+   The module makes its own trampolines and stubs, and its two record observers, on the
+   unit-data load 0x42D2E0 and the FBI loader 0x42BF40, land here first through the shared
+   primitive, chained onto the unit-key reader's (fix_veterancy, above): the module's records
+   must never outlive their load, so without the observers the table refuses. The weapon keys'
+   0x49ABB0 (wk_check) and the 0x0D receiver (wpn_rx_fired) call into the module for a slot
+   past 2; they are sites of this table too, so they are installed exactly when it is. */
+static int fix_extra_weapons(void)
+{
+    static TagpuWpnSite s[TAGPU_WPN_SITES];
+    int n = tagpu_weapons_sites(s), k;
+    if (n == TAGPU_WPN_OBSERVERS) {
+        lim_needs("extra weapons (a simulation change)",
+                  "the record observer on the unit-data load and the FBI loader", "not installed");
+        return FIX_TABLE;
+    }
+    if (n != TAGPU_WPN_SITES) { lim_no_stub(); return FIX_TABLE; }
+    for (k = 0; k < n; k++) lim_add(s[k].va, s[k].n, s[k].stock, s[k].ours, s[k].name);
     return FIX_TABLE;
 }
 
@@ -8863,6 +8884,7 @@ static void patch_engine_defects(void)
     int pview = fix_projectile_view();
     int wkey = fix_weapon_keys();
     int vet  = fix_veterancy();
+    int xw   = fix_extra_weapons();   /* after veterancy: its observers chain onto the unit keys' */
     int rclm = fix_reclaim_wrap();
     int word = fix_hit_word();
     int kout = fix_kill_outright();
@@ -8947,6 +8969,13 @@ static void patch_engine_defects(void)
               "0x49E468; lead 0x48A324; spread 0x49D6EA; the capture's cost 0x4043D8; a unit "
               "reclaim's step 0x43869D) %s",
               fix_state(vet));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: extra weapons -- Weapon4..N a unit type (%d sites: 19 entry hooks, 21 "
+              "splices, 4 byte patches; the record observers 0x42D2E0 0x42BF40) %s",
+              TAGPU_WPN_SITES, fix_state(xw));
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -11588,8 +11617,8 @@ void tagpu_limits_report(void)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
     else if (s_limNeeds[0])
-        why = "One of Impure's network fixes could not be installed on this TotalA.exe (the "
-              "log says why), and a fix that keeps every player's game the same relies on it.";
+        why = "Part of Impure could not be installed on this TotalA.exe (the log says why), and "
+              "a change that keeps every player's game the same relies on it.";
     else if (s_limWriteFail)
         why = "Windows refused to let Impure change the game's code in memory.";
     else if (strcmp(known, "none"))
