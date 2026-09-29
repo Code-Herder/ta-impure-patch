@@ -177,10 +177,68 @@ typedef struct SURF {
     int freedPub;                     /* its `OP_FREE` was reached by `publish`      */
     int dedupFree;                    /* dedup(): the last `OP_FREE` of this base seen
                                          so far in the walk, -1 if none            */
+    int lslot;                        /* its slot in `s_liveBase`, for as long as it
+                                         is in the table; NOT its table index, which
+                                         a swap-remove changes                     */
 } SURF;
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
 static int  s_nsurf = 0;
+
+/* ---- THE LIVE-BASE MIRROR: HOW ANOTHER THREAD ASKS "DOES THIS FREE NAME A
+   TRACKED SURFACE?"
+
+   `s_surf` is the game thread's alone (`surf_drop` swap-removes, `surf_get`
+   memsets the tail), so a walk from another thread can read a slot mid-move and
+   miss an entry that is still there. `s_liveBase` is a second table any thread
+   may read. Each entry owns one STABLE slot (`SURF::lslot`), written by exactly
+   two events, once each and atomically: registration (`surf_get`, 0 -> base,
+   before it returns) and removal (`surf_drop`, `surf_retired_sweep`, base -> 0).
+   Nothing moves, so a reader visiting the slots in any order sees every base
+   registered before it began and not yet removed, whatever the game thread does
+   meanwhile.
+
+   THE GAP THAT LEAVES is a base registered after the reader began, the reader
+   being a free of the block that base points into. The game thread registers a
+   base when it first draws on the surface or reads its memory, and the engine
+   orders that against the free of the same block: a thread freeing a block
+   another is still drawing into is a use-after-free of the engine's own, which
+   no filter of ours could catch. Where the engine orders them, our slot write
+   precedes the draw in program order and x86 does not reorder stores, so the
+   freeing thread sees it before it sees what the engine ordered the two by.
+
+   THE BOUND: one slot per table entry, and an entry takes its slot before it is
+   in the table, so a full mirror refuses a registration the way a full table
+   does. */
+static volatile LONG s_liveBase[MAX_SURF];
+
+static int live_add(SURF* s)               /* game thread; 0 = no slot */
+{
+    int k;
+    for (k = 0; k < MAX_SURF; k++)
+        if (!s_liveBase[k]) {
+            s->lslot = k;
+            InterlockedExchange(&s_liveBase[k], (LONG)s->base);
+            return 1;
+        }
+    return 0;
+}
+static void live_del(const SURF* s)        /* game thread; before the entry leaves the table */
+{
+    if (s->lslot >= 0 && s->lslot < MAX_SURF) InterlockedExchange(&s_liveBase[s->lslot], 0);
+}
+/* any thread: does a tracked base lie in the block [p, p + size)? Unsigned, so
+   a base below `p` is huge and fails the compare -- the same test as
+   `surf_dies_with`. */
+static int live_hit(unsigned p, unsigned size)
+{
+    int k;
+    for (k = 0; k < MAX_SURF; k++) {
+        unsigned b = (unsigned)s_liveBase[k];
+        if (b && b - p < size) return 1;
+    }
+    return 0;
+}
 /* ---- THE HUD CHROME: the one producer the engine never re-offers ---------
    The side panel, top bar and bottom bar are painted by 0x467D70, called once
    per mode switch from 0x49842A and never again. Every other op producer can be
@@ -291,6 +349,7 @@ static void surf_drop(int i)
     free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
     snap_free(&s_surf[i]);
     ops_forget_base(s_surf[i].base, s_surf[i].dying);
+    live_del(&s_surf[i]);
     s_surf[i] = s_surf[--s_nsurf];
 }
 
@@ -360,29 +419,23 @@ static int surf_dies_with(const SURF* s, unsigned p, unsigned size)
 }
 
 /* ---- blocks freed on a thread that is not the game thread ---------------
-   The table is the game thread's alone — `surf_drop` swap-removes and
-   `surf_get` memsets the tail — so an observer that fires on another thread
-   must not walk it: it would read a slot mid-move, mark the wrong entry and
-   leave the right one standing, which is the crash this whole mechanism exists
-   to stop. It leaves the block pointer here instead, and the game thread
-   retires the entry at the top of the next flip, BEFORE the census or the
-   publisher read any base. The engine's allocator is genuinely multi-threaded
-   (`0x4D85B0` takes a critical section at `0x4D85C2`), so this is not a
-   theoretical path even though no off-thread free of a recorded surface has
-   yet been observed.
+   The table is the game thread's alone, so an observer that fires on another
+   thread does not walk it. It asks `live_hit`, the mirror above, whether the
+   block holds a tracked base, and only a block that does is left here; the game
+   thread retires the entry at the top of the next flip, BEFORE the census or
+   the publisher read any base. The engine's allocator is genuinely
+   multi-threaded (`0x4D85B0` takes a critical section at `0x4D85C2`), and the
+   loader thread frees tens of thousands of blocks in one level load (33 842,
+   MEASURED 2026-09-12) -- none of them a tracked surface, which is why the
+   filter matters: every block pushed unfiltered overran this ring between two
+   flips of the loading screen and the overrun retired the whole table, and the
+   loading screen's own draws with it.
 
    DROPPED, NOT RETIRED (`surf_retire`): where such a free falls among the
    window's ops is not known on the game thread, so it cannot be given a place
    in the window. A copy recorded out of the surface earlier loses its source
    and is counted as `copy-freed` on `GUI pixels:`, which is what would say
    this path had started to matter.
-
-   EVERY OFF-THREAD FREE IS PUSHED, unfiltered, and that is deliberate. The
-   obvious optimisation — scan the table off-thread and push only on a match —
-   is NOT safe: `MEM_Free` fires once per block, so a scan that races a
-   swap-remove and misses (the moved entry lands in a slot the scan has already
-   passed) queues nothing, the game thread never hears about it, and the entry
-   stands for ever. A filter would be load-bearing, not an optimisation.
 
    THE DRAIN ONLY EVER READS A QUIESCENT RING. A producer claims a slot with
    `s_freeqN`, stores into it, and only THEN bumps `s_freeqIn`; the consumer
@@ -398,16 +451,10 @@ static int surf_dies_with(const SURF* s, unsigned p, unsigned size)
    The three ways are a push in flight, more than FREEQ claimed since the last
    drain, and a producer lapping the window while we walk it (the head is
    re-read against where the walk STARTED, which is the comparison that catches
-   a claim at index >= from + FREEQ).
-
-   WHAT IT COSTS, MEASURED 2026-09-12 over a load and four minutes of play:
-   33 842 off-thread frees, EVERY ONE of them during the level load — the
-   loader thread, created at 0x4982CA — and not one in the 236 000 flips of
-   play that followed. Three flushes, all in the load. So in play this
-   mechanism is inert, and its cost is three re-seeds while a map is loading.
-   That is also why the ring exists rather than "any off-thread free flushes":
-   at 33 842 frees spread over a load, an unconditional flush would re-seed
-   every surface on most of the load's flips. */
+   a claim at index >= from + FREEQ). All three need frees of TRACKED blocks, so
+   in practice they need a second thread to free a surface, and `flush=` on the
+   heartbeat says when one did. The cost of that flush is a window of ops and
+   one reseed. */
 #define FREEQ 256
 static volatile LONG s_freeqN;                  /* claimed, ever — any thread   */
 static volatile LONG s_freeqIn;                 /* STORED, ever — any thread    */
@@ -492,6 +539,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
     s_surf[s_nsurf].base = base; s_surf[s_nsurf].w = w; s_surf[s_nsurf].h = h;
     s_surf[s_nsurf].pitch = pitch;
     s_surf[s_nsurf].bl = s_surf[s_nsurf].bt = 0x7FFF; s_surf[s_nsurf].br = s_surf[s_nsurf].bb = -1;
+    if (!live_add(&s_surf[s_nsurf])) return NULL;
     return &s_surf[s_nsurf++];
 }
 
@@ -1069,6 +1117,7 @@ static void surf_retired_sweep(void)
             TAGPU_PUBOP* f = pub_op(PK_FREE, d->base);
             if (f) pub_commit();
         }
+        live_del(d);
         s_surf[i] = s_surf[--s_nsurf];
     }
 }
