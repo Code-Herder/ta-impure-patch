@@ -395,6 +395,9 @@ than dressed up as a passing one.
    and re-offers on the next, disarmed-read-as-armed spends one offer nobody acks. Nothing but the
    echo retires an offer, so it cannot lose the asset. Measured: sends per shell session fell from
    **49 to 9**, and 21-22 sends to 3 acks over a five-screen walk, converging and then stopping.
+   An armed lane that is merely *slow* was still re-offered at the engine's pace, several offers
+   to a window, until the arena filled: an offer is now also held back while its previous one is
+   still in the queue (§29).
 
    **The first version of this fix saved no bytes at all, and the second review caught the claim
    rather than the code.** Skipping the offer leaves `seeded` at 0, so the very same `OP_COPY` fell

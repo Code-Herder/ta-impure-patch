@@ -157,6 +157,8 @@ typedef struct SURF {
     int assetSent;                    /* the consumer ACKED this surface's current token */
     unsigned assetTok;                /* the token of the offer in flight, 0 = none    */
     unsigned assetTries;              /* offers made; bounded by TAGPU_GUI_ASSET_TRIES  */
+    unsigned assetQ;                  /* the queue index of that offer's op: no second
+                                         offer while the consumer has not taken it    */
     unsigned char* snap;              /* the LOADER's bytes, taken by `snap_take` as
                                          the first op revoked an unsent asset claim;
                                          NULL = none. With `ovl` it is what the
@@ -1582,6 +1584,7 @@ static int      s_pubBatch = 0;        /* inside `publish`: commits are staged  
    it has taken, in `drain` and in the layer-off discard), so the order of the
    two stores in `pub_flush` is not load-bearing. */
 static unsigned s_aHead = 0;
+static unsigned s_winPeakBytes, s_winPeakOps;  /* the largest window since the last census line */
 static unsigned pub_head(void) { return g_guiq.qHead + s_qStaged; }
 static void pub_flush(void)
 {
@@ -3201,8 +3204,20 @@ static void publish_window(unsigned flipSurf)
                spurious one goes unacked -- because nothing but the echo retires
                an offer. (A try count would be a ~1.2 s timeout standing in for a
                state, and 240 x 300 KB is ~72 MB.) */
+            /* AND NEVER TWO IN THE QUEUE. An offer the consumer has not taken
+               yet cannot have been lost, so a second one is pure arena: the
+               echo comes back a present or more after the drain, and a copy
+               from this source can come every window, several to a window.
+               Re-offering on each filled the 16 MB arena with one backdrop
+               under a slow consumer (MEASURED 2026-09-28, a Wine suite host
+               in the multiplayer menus: 11 510 offers, 7 acked, 212 no-room
+               stalls, each reseed restarting the count). Waiting for the
+               tail to pass the last offer's op bounds the offers in flight
+               to one per asset surface, and paces a re-offer by the consumer
+               rather than by the engine. */
             if (src && !src->dying && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
                 g_guiq.mirArmed &&
+                (!src->assetTok || (int)(g_guiq.qTail - src->assetQ) > 0) &&
                 src->assetTries < TAGPU_GUI_ASSET_TRIES) {
                 /* THE TOKEN IS STAMPED ON THE OP AND ADOPTED BY THE SURFACE
                    ONLY ONCE THE OFFER IS COMMITTED. Writing `src->assetTok`
@@ -3222,6 +3237,7 @@ static void publish_window(unsigned flipSurf)
                 if (!pub_surface_bytes(src, 0, 0, src->w - 1, src->h - 1, a)) return;
                 pub_commit();
                 src->assetTok = tok;
+                src->assetQ = pub_head() - 1;
                 src->assetTries++;
                 src->seeded = 1;          /* the copy below may now name it */
                 s_assetSends++;
@@ -3273,8 +3289,14 @@ static void publish_window(unsigned flipSurf)
 /* One window, made visible in one store: see `pub_flush`. */
 static void publish(unsigned flipSurf)
 {
+    unsigned bytes0 = s_pubBytes, ops0 = s_pubOps;
     s_pubBatch = 1;
     publish_window(flipSurf);
+    /* THE BOUND THE DESIGN RESTS ON, WITNESSED: a window must fit whole
+       (`pub_flush`), so the largest one attempted is logged as `winpeak=` --
+       a cut window counts, since what it tried is what has to fit */
+    if (s_pubBytes - bytes0 > s_winPeakBytes) s_winPeakBytes = s_pubBytes - bytes0;
+    if (s_pubOps - ops0 > s_winPeakOps) s_winPeakOps = s_pubOps - ops0;
     s_pubBatch = 0;
     if (s_pubOverflow) {                   /* cut short: see `pub_flush` */
         s_qStaged = 0; s_aHead = g_guiq.aHead;
@@ -4994,12 +5016,12 @@ void tagpu_gui_flush(unsigned int frame_counter)
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Forty
-           `%u`s at ten digits and three `%d` at eleven, plus 224 literals, is
-           658 bytes, under the 700 of `b`. The observed line is ~300; the gap is
+        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Forty-two
+           `%u`s at ten digits and three `%d` at eleven, plus 234 literals, is
+           688 bytes with the terminator, under the 700 of `b`. The observed line is ~300; the gap is
            entirely how long the session has run. COUNT IT AGAIN when you add a
            group. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u box=%u/%u/%u wheel=%u/%u/%u/%u",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u box=%u/%u/%u wheel=%u/%u/%u/%u winpeak=%u/%u",
                   s_flips, s_opsTotal, s_opsDropped,
                   s_worldOps, s_worldDropped, s_phaseLive, s_fillClipped, s_vpClears,
                   s_changedTotal, s_unexplTotal, s_nsurf,
@@ -5008,8 +5030,10 @@ void tagpu_gui_flush(unsigned int frame_counter)
                   s_assetSends, s_assetAcked, s_assetRevoked, s_assetDrift,
                   s_tints, s_lhtCopies, s_focusRowBad, s_tintNoTable,
                   s_boxes, s_boxRow0, s_boxNoTable,
-                  s_lwNotches, s_lwRows, s_lwMiss, (unsigned)s_lwFull);
+                  s_lwNotches, s_lwRows, s_lwMiss, (unsigned)s_lwFull,
+                  s_winPeakBytes, s_winPeakOps);
         glog(b);
+        s_winPeakBytes = 0; s_winPeakOps = 0;
         {
             /* THE SAME GUARD AS THE OTHER THREE IN THIS FILE: mingw's
                `_snprintf` returns -1 on truncation, so a bare `n +=` makes `n`
