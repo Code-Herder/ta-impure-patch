@@ -9,10 +9,11 @@
 # checked on every build, in the same place and for the same reason as spirv-check.sh:
 #
 #   1. THE FILE IS VALID AND THE HEADER IS ITS OWN. The generator re-reads the file, validates
-#      every row, renders the header and compares it with the committed one, whose SHA-256 of the
-#      file says which side moved. An exclusion added to the file without regenerating, or to
-#      the header without the file, fails the build.
-#   2. THE HEADER COMPILES AS C, since nothing that includes it may yet use every row.
+#      every row, renders the header and compares it with the committed one, whose SHA-256s of
+#      the file and of the generator say which side moved. An exclusion added to the file without
+#      regenerating, or to the header without the file, fails the build.
+#   2. THE HEADER COMPILES AS C WITH NO WARNING, since nothing that includes it may yet use every
+#      row: a value that does not fit its field is an error, not a truncation.
 #
 # NEEDS python3 and the cross compiler, which every build that runs the Makefile already has.
 set -uo pipefail
@@ -28,7 +29,7 @@ python3 "$here/replay-layout-gen.py" --check || exit $?
 
 h="$ddraw/inc/tagpu_replay_layout.h"
 # -Wno-unused: this translation unit uses none of the table, which is the point of checking it here.
-if ! "$cc" -fsyntax-only -Wall -Wno-unused -x c "$h" 2>&1; then
+if ! "$cc" -fsyntax-only -Wall -Werror -Wno-unused -x c "$h" 2>&1; then
     echo "replay-layout-check: $h does not compile" >&2
     exit 1
 fi

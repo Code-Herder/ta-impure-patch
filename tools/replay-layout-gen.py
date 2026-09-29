@@ -22,17 +22,20 @@ THE FILE, tab-separated, `#` comments and blank lines ignored, one row per field
   class     id:<table>     a pointer, recorded and compared as its target's ID
             object         a pointer to an engine object recorded by a record of its own, which
                            the row's name names
+                           (both are dwords: four bytes, no mask)
             cache          not recorded; the engine recomputes it from recorded state, and it is
                            compared after that recompute
             timer          not recorded; on a clock a replay does not reproduce
             drop           not recorded and not restored: the viewing machine's own state
-  name      a short name, used in the harness's failure lines
+  name      a short name, unique within its record, used in the harness's failure lines
   writers   the engine code that writes the field: comma-separated addresses in .text
   evidence  how each fact was established (DISASSEMBLED, MEASURED, [INFERRED]) and where
 
 Checked here, so a malformed row fails the build by line: known records, classes and ID tables,
-the field inside its record, the mask inside the field, no bit in two rows, rows in record and
-offset order, and every writer an address inside the executable's .text.
+the field inside its record, the mask inside the field, a pointer row four bytes wide with no
+mask, no bit in two rows, rows in record and offset order, names unique within a record, and
+every writer an address inside the executable's .text. The header carries the SHA-256 of the
+file and of this script, so a stale header says which of the two moved.
 """
 import argparse
 import hashlib
@@ -57,8 +60,8 @@ ID_TABLES = {
     "player": "(pointer - (main+0x1B63)) / 0x14B, eleven records",
     "bucket": "(pointer - *(main+0x1429F)) / 10; NULL, off-map *(main+0x142B7): own IDs",
 }
-# The executable's .text (the pristine TotalA.exe's section table).
-TEXT_BEGIN, TEXT_END = 0x401000, 0x4FBA00
+# The executable's .text: its virtual address and size in the pristine TotalA.exe's section table.
+TEXT_BEGIN, TEXT_END = 0x401000, 0x4FB92A
 COLUMNS = ("record", "offset", "size", "mask", "class", "name", "writers", "evidence")
 
 
@@ -95,13 +98,15 @@ def parse(text):
             maskv = int(mask, 16)
             if maskv == 0 or maskv & ~full:
                 raise Invalid(f"line {n}: mask {mask} is empty or wider than {size} bytes")
-        kind, _, target = cls.partition(":")
+        kind, colon, target = cls.partition(":")
         if kind not in CLASSES:
             raise Invalid(f"line {n}: class {cls!r} is not one of {', '.join(CLASSES)}")
         if kind == "id" and target not in ID_TABLES:
             raise Invalid(f"line {n}: id table {target!r} is not one of {', '.join(ID_TABLES)}")
-        if kind != "id" and target:
-            raise Invalid(f"line {n}: class {kind} takes no target")
+        if kind != "id" and colon:
+            raise Invalid(f"line {n}: class {kind} takes no table")
+        if kind in ("id", "object") and (size != 4 or mask != "-"):
+            raise Invalid(f"line {n}: an {kind} row is a pointer: size 4, mask -")
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.+-]*", name):
             raise Invalid(f"line {n}: name {name!r} must be one word")
         vas = [w.strip() for w in writers.split(",")]
@@ -114,6 +119,11 @@ def parse(text):
                          target=target, name=name))
     if not rows:
         raise Invalid("no rows")
+    names = {}
+    for r in rows:
+        prev = names.setdefault((r["record"], r["name"]), r["line"])
+        if prev != r["line"]:
+            raise Invalid(f"line {r['line']}: {r['record']} name {r['name']!r} is also line {prev}")
     order = [(list(RECORDS).index(r["record"]), r["offset"]) for r in rows]
     for a, b, r in zip(order, order[1:], rows[1:]):
         if b < a:
@@ -131,8 +141,9 @@ def parse(text):
     return rows
 
 
-def render(tsv_bytes, rows):
+def render(tsv_bytes, gen_bytes, rows):
     digest = hashlib.sha256(tsv_bytes).hexdigest()
+    gen_digest = hashlib.sha256(gen_bytes).hexdigest()
     out = [
         "/* tagpu_replay_layout.h -- GENERATED from tagpu/ddraw/replay-layout.tsv by",
         "   tools/replay-layout-gen.py, which says what each class means. Edit the file and",
@@ -141,6 +152,7 @@ def render(tsv_bytes, rows):
         "#define TAGPU_REPLAY_LAYOUT_H",
         "",
         f'#define TAGPU_REPLAY_LAYOUT_SHA256 "{digest}"',
+        f'#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "{gen_digest}"',
         "",
         "enum { " + ", ".join(f"RL_{r.upper()}" for r in RECORDS) + " };",
         "enum { " + ", ".join(f"RL_{c.upper()}" for c in CLASSES) + " };",
@@ -153,8 +165,8 @@ def render(tsv_bytes, rows):
         "};",
         "",
         "typedef struct ReplayLayoutRow {",
-        "    unsigned char  record, cls, target, size;",
-        "    unsigned short offset;",
+        "    unsigned char  record, cls, target;",
+        "    unsigned short offset, size;",
         "    unsigned int   mask;      /* over the field as a little-endian integer; 0 = every byte */",
         "    const char*    name;",
         "} ReplayLayoutRow;",
@@ -164,8 +176,8 @@ def render(tsv_bytes, rows):
     for r in rows:
         target = f"RL_T_{r['target'].upper()}" if r["kind"] == "id" else "RL_T_NONE"
         mask = 0 if r["mask"] is None or r["mask"] == (1 << (8 * r["size"])) - 1 else r["mask"]
-        out.append(f"    {{ RL_{r['record'].upper()}, RL_{r['kind'].upper()}, {target}, {r['size']}, "
-                   f"{r['offset']:#05x}, {mask:#x}u, \"{r['name']}\" }},")
+        out.append(f"    {{ RL_{r['record'].upper()}, RL_{r['kind'].upper()}, {target}, "
+                   f"{r['offset']:#05x}, {r['size']}, {mask:#x}u, \"{r['name']}\" }},")
     out += ["};", "", "#endif", ""]
     return "\n".join(out)
 
@@ -184,7 +196,8 @@ def main():
     except (Invalid, UnicodeDecodeError) as e:
         print(f"replay-layout: {os.path.relpath(TSV, DDRAW)}: {e}", file=sys.stderr)
         return 1
-    text = render(tsv, rows)
+    gen = open(os.path.abspath(__file__), "rb").read()
+    text = render(tsv, gen, rows)
     if not a.check:
         with open(HEADER, "w", newline="\n") as f:
             f.write(text)
@@ -198,10 +211,13 @@ def main():
         return 1
     if have == text:
         return 0
-    want_hash = re.search(r'SHA256 "([0-9a-f]+)"', text).group(1)
-    got = re.search(r'SHA256 "([0-9a-f]+)"', have)
-    if not got or got.group(1) != want_hash:
+    def stamp(name, header):
+        m = re.search(name + r' "([0-9a-f]+)"', header)
+        return m.group(1) if m else None
+    if stamp("LAYOUT_SHA256", have) != stamp("LAYOUT_SHA256", text):
         why = "replay-layout.tsv changed since the header was generated"
+    elif stamp("GEN_SHA256", have) != stamp("GEN_SHA256", text):
+        why = "tools/replay-layout-gen.py changed since the header was generated"
     else:
         why = "the header was edited by hand"
     print(f"replay-layout: inc/tagpu_replay_layout.h is stale ({why}) -- run tools/replay-layout-gen.py",
