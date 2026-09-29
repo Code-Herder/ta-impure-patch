@@ -8442,6 +8442,14 @@ calls the flip itself. The scenario applier's tick stub lands its `jmp` AT `0x49
 scenario is being applied (`tagpu_scenario.c`, stolen `A1 E8 1D 51 00`): that changes the bytes
 there, not the return address the call pushed, so the gate holds with it installed.
 
+**A paused frame still reaches `0x4969D2`** [DISASSEMBLED 2026-09-28; no paused apply measured
+live]. In `0x496790` the pause tests skip only the tick: the single-player test at
+`0x496920..0x496926` (`IsGamePaused`, `main+0x38A51`) jumps over the tick calls `0x495230` and
+`0x495490` to `0x496969`, and the network branch's test of the same byte at `0x4968AA..0x4968B0`
+also lands at `0x496969`. Every path from there reaches `0x4969CB` and the draw call `0x4969CD`, so
+the scenario applier's stub runs on paused frames too, and its watchdog's "or a paused one" does
+not describe a cause.
+
 **THE SHELL HAS NO DRAWGAMESCREEN CALL, SO IT HAS NO RETURN ADDRESS TO GATE ON — and the flip
 cannot stand in for one [VERIFIED 2026-09-13].** `tagpu_gui_hook` already observes `0x4C63A0`
 with an `after` (it hijacks the return to close its census), and `tagpu_detour_observe` refuses
