@@ -69,9 +69,10 @@ skirmish and multiplayer games: state recording, puppet-mode playback, live rewi
 any recorded moment and forked timelines, with the open decisions and milestone progress. It is a
 high-level feature record; detailed debugging and implementation evidence belong in separate
 notes. The product decisions are recorded, and the feasibility experiments are done; the first
-landing of the [completeness design](demo-recorder-completeness.md) is built (every writable
-static of the four simulation files is declared, and the build refuses one that is not). The
-recorder itself and seek performance remain unverified.
+step of the [completeness design](demo-recorder-completeness.md) is built (every writable static
+of the four simulation files is declared, and the build refuses one that is not; the bytes of the
+engine's unit and player records that are not recorded as values are listed in one exclusion file
+the build checks). The recorder itself and seek performance remain unverified.
 
 ## Adding a page
 

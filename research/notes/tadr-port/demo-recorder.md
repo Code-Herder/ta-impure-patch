@@ -18,10 +18,11 @@ The shared engineering rules are in [the TADR port overview](overview.md). Recor
 feature of Impure; it does not require running the original recorder alongside Impure.
 
 **No production recorder has landed.** The three feasibility experiments under
-[Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the first landing of
-the completeness mechanism: every writable static of the four simulation files is declared, and
-the build refuses one that is not; the design lists the state that is still outside it. The
-exclusion file is next, then the skirmish slice. Every decision of the
+[Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the completeness
+mechanism's first step: every writable static of the four simulation files is declared, and the
+build refuses one that is not; the bytes of the engine's unit and player records that are not
+recorded as values are listed in one exclusion file the build checks; the design lists the state
+that is still outside both. The skirmish slice is next. Every decision of the
 [completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)
 holds the desk research behind this design: how the engine treats remote players, what a rebuild
 must carry, per-player state, and the size estimate. The [packet-era exploration](demo-recorder-exploration.md)
@@ -376,7 +377,7 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 | Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Planned** |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
-| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check are built (2026-09-29, [completeness design](demo-recorder-completeness.md#impures-own-state-declared-where-it-is-defined)); the exclusion file, the harness and self-verification are not |
+| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check, and the exclusion file with its check, are built (2026-09-29, [completeness design](demo-recorder-completeness.md#option-b-declare-and-measure)); the harness and self-verification are not |
 
 All three experiments passed: the watch path stands, and a takeover needs no loading screen. The
 disk budget for ten players with 1,500 units is at risk and comes back for a decision once a real

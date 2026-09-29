@@ -181,14 +181,16 @@ Run the build in the foreground, both variants: **ddraw.dll** — `make -C tagpu
 — and the stock-limits comparison build, `make -C tagpu/ddraw -j$(nproc) LIMITS=stock`. The
 simulation files differ between the two by `#ifdef`, and each build checks only its own objects.
 
-Each build runs two source checks before it links: `tools/thread-split-check.sh` (no engine
-address outside the files `thread-split.allow` lists) and `tools/sim-state-check.sh` (every
+Each build runs its source checks before it links, among them `tools/thread-split-check.sh` (no
+engine address outside the files `thread-split.allow` lists), `tools/sim-state-check.sh` (every
 writable static of a `sim` file declared, and its memory, TLS, page changes and levers taken
-through the wrappers — CLAUDE.md *Simulation changes stay replayable*). A finding of either is the
-change's own failure, fixed like a compiler error: declare the static with its true class, route
-the call through the wrapper. Marking a file `presentation`, or choosing TRANSIENT or PRIVATE for
-memory the simulation reads, to make the check pass is a loosening, and loosening is the owner's
-decision.
+through the wrappers — CLAUDE.md *Simulation changes stay replayable*) and
+`tools/replay-layout-check.sh` (`tagpu/ddraw/replay-layout.tsv` valid, and the header generated
+from it current). A finding of any is the change's own failure, fixed like a compiler error:
+declare the static with its true class, route the call through the wrapper, regenerate the
+header. Marking a file `presentation`, choosing TRANSIENT or PRIVATE for memory the simulation
+reads, or adding a row to `replay-layout.tsv`, to make a check or the harness pass is a
+loosening, and loosening is the owner's decision.
 
 Treat new warnings from changed files as worth reporting even when the build succeeds.
 

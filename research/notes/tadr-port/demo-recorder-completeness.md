@@ -3,9 +3,12 @@
 ## Status
 
 How the state recorder stays complete as Impure's simulation changes. **The declarations and
-their build check are built** (the [build order](#build-order)'s first landing, 2026-09-29): every
-writable static of the four simulation files is declared, and the link refuses one that is not.
-The exclusion file, the replay harness and self-verification are designed, not built. The owner
+their build check, and the exclusion file with its check, are built** (the
+[build order](#build-order)'s first step, two landings, 2026-09-29): every writable static of the
+four simulation files is declared, and the link refuses one that is not; the bytes of the engine's
+unit and player records that are not recorded as values are listed in one file, and the build
+refuses a header that does not match it. The replay harness and self-verification are designed,
+not built. The owner
 chose **option B, declare and measure**, on 2026-09-29, after a design panel (four designs, two
 judges) over the code as it stood; the product decisions it serves are on the
 [product page](demo-recorder.md#completeness-and-verification), and the engine facts it rests on
@@ -36,12 +39,63 @@ and **a replay shows what the game showed**.
 ### Engine records: recorded whole by default
 
 The unit records (stride `0x118`) and the player records (stride `0x14B`) are recorded whole. One
-exclusion file, `tagpu/ddraw/replay-layout.tsv`, lists the bytes not recorded as values: pointers
-(recorded as target IDs), caches, timers and takeover drops. Each row names its engine writers; it
-starts from what the saver `0x4876C0` writes, and the build hash-checks it the way `spirv-check.sh`
-checks shaders, so a change to it is a visible diff the owner approves. Only the unit and player
-layouts are fixed by the retail executable: Impure's COB landing grew the engine's COB object from
-`0x544` to `0x1144` bytes (`0x485D73`), and several pools now live in the DLL.
+exclusion file, `tagpu/ddraw/replay-layout.tsv`, lists the bytes not recorded as values, one row
+per field or bit range, each with a class, its engine writers and the evidence:
+
+| Class | Meaning | Rows |
+|---|---|---|
+| `id:<table>` | a pointer, recorded and compared as its target's ID in `unit`, `type`, `weapon`, `player` or `bucket`; the ID is the pointer's offset in its table, never a field of the target, so a pointer to a dead unit keeps its ID | 13 |
+| `object` | a pointer to an engine object recorded by a record of its own (the mover, the order lists, the COB object, the model, the AI, the sight counters…) | 10 |
+| `cache` | not recorded; the engine recomputes it from recorded state, and it is compared after that recompute | 2 |
+| `timer` | not recorded; on a clock a replay does not reproduce | 4 |
+| `drop` | not recorded and not restored: the viewing machine's own state | 11 |
+
+The rows start from the stock savers, the engine's own inventory of a record: the unit saver
+`0x4876C0` and the player saver `0x4662F0`. A byte a saver writes raw is a value unless shown
+otherwise; a byte it skips or converts needed a class. Every field, its writers and the evidence are
+in the engine map, [*The unit and player records, byte by byte*](../exe-reverse-engineering.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
+`tools/replay-layout-gen.py` validates the file (known records, classes and tables, the field
+inside its record, no bit in two rows, rows in order, every writer inside the executable's `.text`)
+and generates `inc/tagpu_replay_layout.h`, which carries the file's SHA-256; the link runs
+`tools/replay-layout-check.sh`, which re-derives the header and fails when the file changed without
+it or the header was edited by hand, as `spirv-check.sh` does for shaders. A change to what is
+excluded is therefore always a visible diff of the file, and each row is a loosening the owner
+approves. Only the unit and player layouts are fixed by the retail executable: Impure's COB landing
+grew the engine's COB object from `0x544` to `0x1144` bytes (`0x485D73`), and several pools now
+live in the DLL.
+
+**What restoring these records needs**, found while building the file; each is for the applier
+the skirmish slice brings:
+
+- **Caches are recomputed by the applier.** A paused frame runs neither the per-tick sight stamp
+  `0x4827B0` nor the radar pass `0x467440`, so the applier calls what recomputes a cache before the
+  comparison reads it. The reference chain `+0xA2` is rebuilt by linking every restored reference
+  through `0x489690`, the air orders' payload references included. The player's sight grid
+  geometry `+0x80..+0x8B` is never written: its length bounds `0x4816A0`'s fill of this process's
+  grid.
+- **The order of two lists is state.** `+0x8E` is the carrier's chain while `+0x86` is set and the
+  sort bucket's list otherwise, and the simulation reads both in order (RepairPatrol's pick by the
+  simulation RNG, the unloads' head). The applier rebuilds each bucket's head from `+0x82` and
+  `+0x8E`: the head is the member no other member points to.
+- **Some values go through engine functions, never a raw write:** the sight stamp `+0xF8`,
+  `+0x7A`, `+0x7C` through the unstamp `0x481D50` and the stamp `0x482270`, since the counters
+  hold what the old values stamped; `+0x10E` through `0x48B090` (*Decisions taken*, getter 75).
+- **A running COB thread points into the unit array**: AutoAim hands the `Aim` script
+  `&slot+0x4` as its completion callback, so a recorded COB state translates that pointer as a
+  unit and a weapon slot.
+- **The weapon slot's def pointer is an ID, resolved by the applier.** The stock restore instead
+  writes the saved weapon ID into the shared weapon def (`0x487628`).
+- **Ten player records, not eleven.** The engine builds and resets eleven; the eleventh is what an
+  index of 10 (no player) reads, and nothing records or writes it. Slot 0 of the unit array has a
+  NULL owner and is never a unit.
+
+**Gaps stated, not closed.** The hover wave: a unit whose def has `+0x241` bit 12 (`canhover`) and
+neither bit 19 nor bit 20 takes its altitude and tilt from a wave on the wall clock (`0x48A490`,
+through `0x4B6340`), so a replay cannot recompute them and two peers of a network game compute
+different values. The recording carries `+0x64`, `+0x68` and `+0x70` as values, which costs size for
+every such unit on every tick; moving the wave onto GameTime would remove both the cost and the
+stock nondeterminism, and is a simulation change of its own. No network game was measured for the
+file: the player rows' network fields rest on the disassembly alone.
 
 The main block and the executable's `.data` (which holds the simulation RNG's seed, `0x51FC88`) are
 captured, applied only through a positive list, and classified by the harness's null twin (below),
@@ -307,8 +361,9 @@ rests on.
      simulation files classified once, with no exemption list, the diagnostics among them moved into
      one struct per feature; layouts for the tables that carry pointers or IDs; the CLAUDE.md
      section, less its replay gate.
-   - **The exclusion file**, `replay-layout.tsv`, from what the saver `0x4876C0` writes, with its
-     build hash.
+   - **The exclusion file — built 2026-09-29.** `replay-layout.tsv`, 40 rows from what the savers
+     `0x4876C0` and `0x4662F0` write, the header generated from it, and
+     `tools/replay-layout-check.sh` before the link.
 2. **With the skirmish slice:** capture at `0x4954ED` and the recording header's lever list (the
    registry's list), with the recorder that uses them; self-verification over units, players and
    declared tables; root and sink counting; the main block and `.data` with the null twin; puppet
@@ -351,6 +406,7 @@ writes on puppets, and every loosening.
 | 2026-09-29 | **Install-time plumbing is a fifth class, `SIM_INSTALL`**, declared beside its definition like everything else: never recorded or restored; the harness hashes the class after install and fails by name when a game changes any of it. Locks get their own declaration (`SIM_LOCK`) and are the only part left out of that hash. Rejected: moving the plumbing out of the simulation files. |
 | 2026-09-29 | **Four files are simulation code**: `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c` and `tagpu_cobtrace.c` are `sim`; every other file on `thread-split.allow` is `presentation`. |
 | 2026-09-29 | **Step 1 is two landings.** The first brings the declarations, the wrappers, the build check and the CLAUDE.md section; the second, the exclusion file. Capture at `0x4954ED` and the recording header's lever list move to the skirmish slice, with the recorder that uses them; the CLAUDE.md replay gate and the landing command's Step 4b land with the harness. |
+| 2026-09-29 | **The exclusion file's drop and timer rows are approved.** A player record's own network session and clocks are neither recorded as values nor compared: the transport ID `+0x04`, the host's number `+0x0C`, the message count `+0x10`, the load progress `+0x20`, the session flags `+0x21` and the controller as the local peer sees it `+0x73`, and the join time `+0x08`, the ping `+0x14`, the peer's GameTime `+0x18` and the last receive `+0x1C`. The recording header carries the transport ID and the recorded controller as the player's key, and a puppet host stamps `+0x18` itself. The viewer's own state is dropped — unit `+0x110` bits 4 (selected), 6–7, 8–10 (the viewed player's contact) and 22–25 (the build menu's page), and the player's DisplayTimer `+0xF8` — so a replay or a takeover shows the replay viewer's own selection, menus and perspective, the radar pass recomputing the contact bits for whoever is viewed. Rejected: recording the session fields, which differ legitimately between every peer and replay machine, and recording the contact bits, which would pin a replay to the recording viewer's radar picture. |
 
 ## Open items
 

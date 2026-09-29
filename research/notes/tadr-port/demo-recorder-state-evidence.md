@@ -450,8 +450,9 @@ eye to the command apply at the next in-play draw.
 - **Untraced** (T15): rally inheritance (`0x41B8D0` copies no order). Adopting an existing
   nanoframe into an order is measured (*Rebuild, takeover and rewind, measured*, below).
   **Carried units** (T18): `+0x86` carrier, `+0x8A` first passenger, `+0x8E` next, `+0xF9` attach
-  point, written by `0x48AAC0`; the grid's cell code writes `+0x8E` and `+0x82` too (engine map,
-  *Driving and rebuilding puppets*).
+  point, written by the attach `0x48AB70`, which `0x48AAC0` calls. `+0x8E` is the carrier's chain
+  while `+0x86` is set and the sort bucket's list otherwise, and the order of both reaches the
+  simulation (engine map, *The unit and player records, byte by byte*).
 - **Stock AIs adopt applier-created units** and re-plan within seconds (MEASURED, T26: a keepalive
   CORCOM walked off and built a CORFMKR, [smooth motion](../smooth-motion.md), gate 4); whether an
   AI overrides a written order at once is unmeasured.
@@ -462,9 +463,9 @@ eye to the command apply at the next in-play draw.
 |---|---|
 | Set by the applier | type, owner, position, altitude, heading, HP, build fraction, `+0xF6`/`+0xF7`, stance, kills |
 | Settable by a known engine call | orders (`0x43AFC0`, `0x43ADC0`), factory queues (`0x43B0B0`, `0x419B00`), carry links (`0x48AAC0`), layer and slot (create arguments 7, 8), the state byte `+0x10E` with its activation, armoured and cloak bits (`0x48B090`, which stores the whole byte at `0x48B0D8`, not in the record; cloak is bit 2, L14), squad membership `+0xAC` (`0x480250`) |
-| Rewritten by the engine | sight height `+0xF8` (every create or move), `+0xF5` (hits, the create) |
-| Restored only by the save load | the full turn, three weapon slots at `unit+0x4` (stride 0x1C: target, reload, stockpile), last attacker `+0xF0`, the rest of `+0x110`, COB state (`0x4B2040`), the mover (`0x43DE30`) |
-| Unknown | the path (the move object's velocity `+0x8..+0x10`, speed `+0x20`, `+0x24`, time stamp `+0x2A` and its layer and bit 2 at `+0x2E` are read: engine map, *Driving and rebuilding puppets*), fire state (not located; [INFERRED] `+0x110 & 0x300000`), per-unit AI state |
+| Rewritten by the engine | the sight parameter `+0xF8` (every create or move; a height only in ray-fan mode, where a unit in the same cell whose height moved by 5 or less keeps it), `+0xF5` (hits, the create) |
+| Restored only by the save load | the full turn, three weapon slots at `unit+0x4` (stride 0x1C: target, aim flag, weapon, reload, aim angles, stockpile, flags), last attacker `+0xF0`, the rest of `+0x110` (the move and fire states are bits 18–19 and 20–21: Standing_MoveOrder `0x4030EF`, Standing_FireOrder `0x403123`), COB state (`0x4B2040`), the mover (`0x43DE30`); the fields: engine map, *The unit and player records, byte by byte* |
+| Unknown | the path (the move object's velocity `+0x8..+0x10`, speed `+0x20`, `+0x24`, time stamp `+0x2A` and its layer and bit 2 at `+0x2E` are read: engine map, *Driving and rebuilding puppets*), per-unit AI state |
 
 ### The savegame as the engine's checklist
 
@@ -626,7 +627,7 @@ difficulty 0 and 70 % at 1 (L24).
   counter per 32-wu cell (half the feature grid), bumped per stamping unit (`0x482270`); a create
   stamps (`0x482AC0`), a death removes (`0x486845`, only while LosType bit 1 is set,
   `0x486838..0x486842`), and every alive unit of every type-1–3 player is re-stamped each tick
-  (`0x4827B0`, `0x465046..0x465063`) from its cell and height byte `+0xF8`.
+  (`0x4827B0`, `0x465046..0x465063`) from its cell and `+0xF8`, a height only in ray-fan mode.
 - **LosType** `main+0x14281` (L10, L11): bit 0 mapping, bit 1 true LOS, bit 2 ray fan, bit 3 fog
   current; only True restricts sight ([line of sight](../line-of-sight.md)). It changes mid-match: a
   defeated controlled player in a network game becomes a watcher with bits 0–1 cleared and
@@ -648,10 +649,12 @@ difficulty 0 and 70 % at 1 (L24).
 
 ### Alliances, sharing, options and statistics
 
-- **Identity and alliances** (L17–L19): the DPID at `+4`; `+0x146` is the record's own index; each
-  peer is its own player 0, so indices differ between peers, and network blocks follow DPID order.
-  `AllyFlagAry` `+0x108..+0x111` is directional, indexed by the other record's `+0x146`; `AllyTeam`
-  is `+0x13F`.
+- **Identity and alliances** (L17–L19): the transport ID at `+4`, the DPID in a network game and
+  the seat in a skirmish (MEASURED: equal to `+0x146` in every active record of 96 PRS1 snapshots;
+  engine map, *The unit and player records, byte by byte*); `+0x146` is the record's own index;
+  each peer is its own player 0, so indices differ between peers, and network blocks follow DPID
+  order. `AllyFlagAry` `+0x108..+0x112`, eleven bytes, is directional, indexed by the other
+  record's `+0x146`, with its mirror at `+0x113`; `AllyTeam` is `+0x13F`.
 - **Sharing** (DIS; player M2, M3): `PlayerInfo+0x97` holds ShareMetal `0x2`, ShareEnergy `0x4`,
   ShareMapping `0x20` and ShareRadar `0x40`, toggled by level-1 chat commands from the table
   `0x501EB8..0x501F0C`, whose ShareAll `0x419090` flips all four (not in the record). ShareLOS `0x08` has a toggle,
@@ -701,9 +704,8 @@ bit 0 (while the commander lives), then units, then current; a type-3 record kee
 as the pass skips it (MEASURED, §2 *Rebuild, takeover and rewind, measured*). Sight is recomputed from the written positions every tick (`0x4816A0(0)` at
 once after a seek), close to what the player saw but not identical (§6c); the explored map is stored
 while bit 0 is on and written back after every `0x4816A0(1)`, and LosType is recorded as it changes.
-A perspective's radar comes from pointing `main+0x2A43` at it. Players are keyed by DPID in a
-network recording; a skirmish record's `+4` has never been read, so a skirmish may need the seat
-index as its key. Alliances are kept as directed pairs plus `AllyTeam`; share bits, limits, totals,
+A perspective's radar comes from pointing `main+0x2A43` at it. Players are keyed by the transport
+ID `+4`, a DPID in a network recording and the seat in a skirmish. Alliances are kept as directed pairs plus `AllyTeam`; share bits, limits, totals,
 kills, losses, `+0x140/+0x144` and the watcher bit are restored, since ENDMSN, elimination and the
 economy gates read them. The engine's one difficulty matches the product page. Presentation is each
 machine's own contribution, sampled at a tick boundary with its source tick and merged through a
@@ -711,8 +713,7 @@ defined clock mapping. HP, build state, kills and height are exact only at the o
 machine's copy of other players' units is a receiver's copy; whether owners send them is open
 ([product page](demo-recorder.md#open-decisions-and-evidence-needed), other players' units).
 
-**Open:** the 12 → 50 reading; a seatless viewer's radar and fog; the cause of §6c's 34 cells;
-the `+4` DPIDs of skirmish records.
+**Open:** the 12 → 50 reading; a seatless viewer's radar and fog; the cause of §6c's 34 cells.
 
 ## 4. Size estimate
 
