@@ -12,6 +12,11 @@ unsigned char* tagpu_detour_stub(void)
                                         PAGE_EXECUTE_READWRITE);
 }
 
+void tagpu_detour_stub_free(unsigned char* stub)
+{
+    if (stub) VirtualFree(stub, 0, MEM_RELEASE);
+}
+
 void tagpu_detour_rel(unsigned char* p, unsigned int target)
 {
     int32_t rel = (int32_t)(target - ((unsigned int)(size_t)p + 4));

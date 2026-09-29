@@ -38,6 +38,8 @@
 #include "delay_imports.h"
 #include "keyboard.h"
 #include "tagpu_log.h"
+#include "tagpu_addr.h"
+#include "tagpu_simreg.h"
 #include "tagpu_regstore.h"
 #include "tagpu_restore_guard.h"
 
@@ -62,6 +64,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
     case DLL_PROCESS_ATTACH:
     {
         g_ddraw_module = hDll;
+
+        /* tagpu: the top of the address space, the upper end of every pointer range filter
+           (tagpu_addr.h) -- before anything of ours that could read a pointer. */
+        tagpu_addr_init();
 
         delay_imports_init();
 
@@ -250,6 +256,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            0x4B15E0), byte-matched, all-or-nothing, disjoint from every detour
            above; reads only, writes tagpu_cobtrace.log on the game thread. */
         tagpu_cobtrace_init();
+
+        /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
+           module above has installed, so its line counts every declaration, lists every lever
+           read and closes the list: a lever or TLS index taken later is logged by name. */
+        tagpu_simreg_attach();
 
         /* tagpu: deferred reclamation of the engine's Object3do (the render
            thread's cross-thread use-after-free, thread-safe-destruction.md).

@@ -111,7 +111,14 @@ spirv:
 log-check:
 	../../tools/log-check.sh .
 
-$(TARGET): $(OBJS) | thread-split spirv log-check
+# THE SIMULATION-STATE RULE (inc/tagpu_simreg.h): every writable static of a file marked `sim`
+# in thread-split.allow is declared, and no `sim` object allocates, takes a TLS index, changes a
+# page or names a lever itself. It reads the objects this link uses, so it runs in the link's own
+# recipe, after every object is built: as an order-only prerequisite it would race the compiler.
+# A failure leaves no DLL, and the allow list and the script are prerequisites so that a change
+# to either runs it again.
+$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh | thread-split spirv log-check
+	../../tools/sim-state-check.sh . $(OBJEXT)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
 # THE SINK'S STRESS TEST (tests/logtest.c, driven by tests/logtest.py under Wine): the

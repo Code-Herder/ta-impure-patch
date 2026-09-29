@@ -20,6 +20,7 @@
 #include "tagpu_datakeys.h"
 #include "tagpu_cob_safe.h"
 #include "tagpu_cobtrace.h"
+#include "tagpu_simreg.h"
 #include "git.h"
 
 static void plog(const char* s)
@@ -38,16 +39,8 @@ static void cob_level_enter(void);
    0 if the byte didn't match (wrong build) or protection change failed. */
 static int patch_byte(unsigned int addr, unsigned char expect, unsigned char val)
 {
-    unsigned char* p = (unsigned char*)addr;
-    DWORD old;
-    int ok;
-    if (!VirtualProtect(p, 1, PAGE_EXECUTE_READWRITE, &old))
-        return 0;
-    ok = (*p == expect);
-    if (ok)
-        *p = val;
-    VirtualProtect(p, 1, old, &old);
-    return ok;
+    if (*(const unsigned char*)(size_t)addr != expect) return 0;
+    return tagpu_detour_write(addr, &val, 1);
 }
 
 /* Write `n` bytes at absolute `addr` iff they currently hold `expect`. Returns 1 on
@@ -55,19 +48,8 @@ static int patch_byte(unsigned int addr, unsigned char expect, unsigned char val
 static int patch_bytes(unsigned int addr, const unsigned char* expect,
                        const unsigned char* val, unsigned int n)
 {
-    unsigned char* p = (unsigned char*)addr;
-    DWORD old;
-    unsigned int i;
-    int ok = 1;
-    if (!VirtualProtect(p, n, PAGE_EXECUTE_READWRITE, &old))
-        return 0;
-    for (i = 0; i < n; i++)
-        if (p[i] != expect[i]) { ok = 0; break; }
-    if (ok)
-        for (i = 0; i < n; i++)
-            p[i] = val[i];
-    VirtualProtect(p, n, old, &old);
-    return ok;
+    if (memcmp((const void*)(size_t)addr, expect, n) != 0) return 0;
+    return tagpu_detour_write(addr, val, (int)n);
 }
 
 /* ===== THE FAIL-CLOSED SITE TABLE ======================================================
@@ -102,15 +84,26 @@ typedef struct LIMSITE {
 } LIMSITE;
 
 static LIMSITE s_lim[LIM_MAXSITE];
+SIM_VAR(s_lim, SIM_INSTALL);
 static int     s_nlim;
+SIM_VAR(s_nlim, SIM_INSTALL);
 static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
+SIM_VAR(s_limState, SIM_INSTALL);
 static int     s_limOverflow;        /* the table itself was too small: our bug      */
+SIM_VAR(s_limOverflow, SIM_INSTALL);
 static int     s_limNoStub;          /* a code stub could not be made                */
+SIM_VAR(s_limNoStub, SIM_INSTALL);
 static char    s_limNeeds[192];      /* a table fix's required local fix is not armed */
+SIM_VAR(s_limNeeds, SIM_INSTALL);
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
+SIM_VAR(s_limWriteFail, SIM_INSTALL);
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
+SIM_VAR(s_limOverlapA, SIM_INSTALL);
+SIM_VAR(s_limOverlapB, SIM_INSTALL);
 static int     s_limRewritten;       /* installed, then rewritten by someone else      */
+SIM_VAR(s_limRewritten, SIM_INSTALL);
 static unsigned int s_limMarkMissing;/* lim_file_ok named a site the table does not have */
+SIM_VAR(s_limMarkMissing, SIM_INSTALL);
 
 static void lim_add(unsigned int va, int n, const unsigned char* stock,
                     const unsigned char* ours, const char* name)
@@ -383,7 +376,7 @@ static int fix_sort_buffer_end(void)
         memcpy(now + 1, &rel, 4);
     }
     if (!tagpu_detour_write(0x00469807, now, sizeof now)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return FIX_PROTECT;
     }
     return FIX_ARMED;
@@ -443,7 +436,7 @@ static int fix_feature_null_plot(void)
     *p++ = 0x66; *p++ = 0x8B; *p++ = 0x41; *p++ = 0x08;     /* mov ax,[ecx+8]   */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00421E68); p += 4;   /* jmp 0x421E68     */
     if (!tagpu_detour_land(0x00421E60, s, 8)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return FIX_PROTECT;
     }
     return FIX_ARMED;
@@ -683,7 +676,7 @@ static int fix_terrain_window(void)
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00484061); p += 4;   /* jmp 0x484061     */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x004843AC); p += 4;   /* drawn: epilogue  */
     if (!tagpu_detour_land(0x00484057, s, (int)sizeof was)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return FIX_PROTECT;
     }
     return FIX_ARMED;
@@ -914,7 +907,7 @@ static void __stdcall features_restore_under_mask(void* tdf)
             break;
         }
     }
-    bits = why ? NULL : (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n + 7) / 8);
+    bits = why ? NULL : (unsigned char*)tagpu_sim_scratch((n + 7) / 8);
     if (!why && !bits) why = "no memory for the bitmap";
     if (why) {
         restore(tdf);
@@ -961,7 +954,7 @@ static void __stdcall features_restore_under_mask(void* tdf)
     }
     b[sizeof b - 1] = 0;
     plog(b);
-    HeapFree(GetProcessHeap(), 0, bits);
+    tagpu_sim_scratch_free(bits);
 }
 
 /* CLASS: simulation, fail closed. Without it a loaded game silently lacks the border's
@@ -1251,6 +1244,7 @@ static int fix_restore_record_owner(void)
    while the exe is not large-address-aware (tagpu_addr.h) -- TA:ESC's exe is. */
 #define SCR_POISON_SPAN (16u << 20)
 static unsigned char* s_scr_poison;
+SIM_GUARD(s_scr_poison);
 
 enum { SCR_BUILD, SCR_FRAME, SCR_SHADOW, SCR_BAKE1, SCR_BAKE2 };
 static const char* const SCR_WHO[] = {
@@ -1263,9 +1257,15 @@ enum { SCR_EDI = 0, SCR_ESI = 1, SCR_EBP = 2, SCR_EBX = 4, SCR_EDX = 5, SCR_ECX 
        SCR_SITE = 8 };
 
 static int s_scr_stress, s_scr_nogrow;
+SIM_VAR(s_scr_stress, SIM_INSTALL);
+SIM_VAR(s_scr_nogrow, SIM_INSTALL);
 static volatile unsigned char s_scr_refused;     /* the build-state copy's answer, GAME THREAD */
-static unsigned s_scr_grows[5], s_scr_refusals[5], s_scr_layout;   /* by writer */
-static unsigned s_scr_merge_refusals;
+SIM_VAR(s_scr_refused, SIM_TRANSIENT);
+static struct {
+    unsigned grows[5], refusals[5], layout;   /* by writer */
+    unsigned merge_refusals;
+} s_scrDiag;
+SIM_VAR(s_scrDiag, SIM_PRIVATE);
 
 /* A, or 0 when the frame is not in 0x4B8E00's layout */
 static unsigned scratch_area(const unsigned char* f)
@@ -1344,12 +1344,12 @@ static int scratch_hold(unsigned char* ctx, unsigned char* f, unsigned a,
                 *(unsigned char**)(f + 0x14) = s_scr_poison + SCR_POISON_SPAN / 2;
             }
             ((void (__cdecl*)(void*))0x004D85A0)(f);
-            scratch_log("grown", who, need, rows, a, px, ++s_scr_grows[who]);
+            scratch_log("grown", who, need, rows, a, px, ++s_scrDiag.grows[who]);
             return 1;
         }
         why = "refused (the allocator has no block)";
     }
-    scratch_log(why, who, need, rows, a, a, ++s_scr_refusals[who]);
+    scratch_log(why, who, need, rows, a, a, ++s_scrDiag.refusals[who]);
     return 0;
 }
 
@@ -1358,7 +1358,7 @@ static unsigned char* scratch_frame(unsigned char* ctx, unsigned* a)
 {
     unsigned char* f = ptr_sane(ctx) ? *(unsigned char**)(ctx + 0x10) : NULL;
     *a = scratch_area(f);
-    if (!*a && s_scr_layout++ == 0)
+    if (!*a && s_scrDiag.layout++ == 0)
         plog("enginefix: composite scratch at ctx+0x10 is not in 0x4B8E00's layout; "
              "its writers are left to stock");
     return f;
@@ -1459,7 +1459,7 @@ static void __stdcall scratch_merge(const unsigned char* src, unsigned char* dst
         if (x0 >= 0 && y0 >= 0 &&
             ((unsigned long long)dw * dh > a ||
              (unsigned)x0 + sw > dw || (unsigned)y0 + sh > dh)) {
-            unsigned n = ++s_scr_merge_refusals;
+            unsigned n = ++s_scrDiag.merge_refusals;
             if (n <= 16 || !(n & 1023)) {
                 char b[224];
                 _snprintf(b, sizeof b, "enginefix: composite scratch merge refused: a %ux%u cargo "
@@ -1526,20 +1526,20 @@ static int fix_composite_scratch(void)
             return FIX_BYTES;
     for (i = 0; i < n; i++)
         if (!(site[i].stub = tagpu_detour_stub())) {
-            while (i-- > 0) VirtualFree(site[i].stub, 0, MEM_RELEASE);
+            while (i-- > 0) tagpu_detour_stub_free(site[i].stub);
             return FIX_STUB;
         }
-    s_scr_stress = GetFileAttributesA("tagpu_scratch.stress") != INVALID_FILE_ATTRIBUTES;
+    s_scr_stress = tagpu_sim_lever("tagpu_scratch.stress");
     if (s_scr_stress) {
         /* no poison, no lever: a freed frame is never pointed at memory that might be mapped */
-        s_scr_poison = VirtualAlloc(NULL, SCR_POISON_SPAN, MEM_RESERVE, PAGE_NOACCESS);
+        s_scr_poison = (unsigned char*)SIM_ALLOC(s_scr_poison, SCR_POISON_SPAN);
         if (!s_scr_poison) {
             s_scr_stress = 0;
             plog("enginefix: composite scratch lever: tagpu_scratch.stress refused -- no region "
                  "to poison freed frames with");
         }
     }
-    s_scr_nogrow = GetFileAttributesA("tagpu_scratch.nogrow") != INVALID_FILE_ATTRIBUTES;
+    s_scr_nogrow = tagpu_sim_lever("tagpu_scratch.nogrow");
 
     /* the build-state copy's caller: run it, and on a refusal leave the unit draw */
     p = site[0].stub;
@@ -1589,7 +1589,7 @@ static int fix_composite_scratch(void)
     }
     if (done < n) {
         while (done-- > 0) tagpu_detour_write(site[done].va, site[done].was, site[done].n);
-        for (i = 0; i < n; i++) VirtualFree(site[i].stub, 0, MEM_RELEASE);
+        for (i = 0; i < n; i++) tagpu_detour_stub_free(site[i].stub);
         return FIX_PROTECT;
     }
     if (s_scr_stress || s_scr_nogrow)
@@ -1642,9 +1642,13 @@ typedef struct FIXSITE { unsigned int va; int n; unsigned char was[20]; unsigned
    (patch_engine_defects) and then, in the raised build, the limits' weapon sites (lim_sites ->
    wpn_build); tagpu_limits_install reports the total once both have. */
 static unsigned char* s_fixCode;              /* the page stubs are placed in now             */
+SIM_CODE(s_fixCode);
 static unsigned int   s_fixCodeUsed;          /* its bytes taken                              */
+SIM_VAR(s_fixCodeUsed, SIM_INSTALL);
 static unsigned int   s_fixPages;             /* pages made                                   */
+SIM_VAR(s_fixPages, SIM_INSTALL);
 static unsigned int   s_fixBytes;             /* bytes taken over every page                  */
+SIM_VAR(s_fixBytes, SIM_INSTALL);
 
 static unsigned char* fix_code(unsigned int n)
 {
@@ -1652,8 +1656,7 @@ static unsigned char* fix_code(unsigned int n)
     unsigned char* p;
     if (!n || take > 0x1000u) return NULL;
     if (!s_fixCode || s_fixCodeUsed + n > 0x1000u) {
-        unsigned char* page = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
-                                                           PAGE_EXECUTE_READWRITE);
+        unsigned char* page = (unsigned char*)SIM_ALLOC(s_fixCode, 0x1000);
         if (!page) return NULL;
         s_fixCode = page;
         s_fixCodeUsed = 0;
@@ -1873,7 +1876,9 @@ static int fix_build_list(void)
    reader matches, where stock's held whatever the heap did; so does the count of a file with no
    sections or one that did not open. */
 static unsigned int s_dlRoom;                 /* records the block has room for, LOADER THREAD */
+SIM_VAR(s_dlRoom, SIM_TRANSIENT);
 static unsigned int s_dlFiles;                /* the files' own records, 0x42DCF0's file count  */
+SIM_VAR(s_dlFiles, SIM_TRANSIENT);
 
 /* 0x42DD74 asks for files * 0xBD bytes */
 static void* __cdecl dl_alloc(const char* name, unsigned int size)
@@ -1958,6 +1963,7 @@ static int fix_download_records(void)
    (0x42B2F6), and a game load's end with the types in play (0x42D542). The log, the dump and the exit stay
    the engine's. Nothing here allocates: the text is a static and wsprintfA writes it. */
 static char s_oomText[320];
+SIM_VAR(s_oomText, SIM_TRANSIENT);
 
 static void __cdecl oom_text(void)
 {
@@ -2038,9 +2044,13 @@ static int fix_oom_message(void)
 #define KEYTAB (4 * TAGPU_LIM_TYPES)
 typedef char keytab_is_pow2[(KEYTAB & (KEYTAB - 1)) == 0 ? 1 : -1];   /* key_slot's wrap */
 static unsigned int   s_keyVal[KEYTAB];
+SIM_VAR(s_keyVal, SIM_TRANSIENT);
 static unsigned char  s_keyUse[KEYTAB];         /* 1 some type's key, 2 claimed by one type  */
+SIM_VAR(s_keyUse, SIM_TRANSIENT);
 static unsigned short s_keyOrder[TAGPU_LIM_TYPES];
+SIM_VAR(s_keyOrder, SIM_TRANSIENT);
 static const char*    s_keyDefs;                /* key_order's array, GAME THREAD             */
+SIM_VAR(s_keyDefs, SIM_TRANSIENT);
 
 static unsigned int key_slot(unsigned int key)
 {
@@ -2215,23 +2225,29 @@ static struct {
     unsigned char rec[TAGPU_LIM_WEAPONS][WPN_REC];
     unsigned char tail[0x80 + 0x100 - WPN_REC];
 } s_wpn;
+    SIM_ENGINE(s_wpn, SIM_CONTENT);
 #define s_weapons s_wpn.rec
 #endif
 static DWORD         s_wpnGameTid;        /* DllMain's thread, which is the game loop's      */
-static volatile LONG s_wpnNotes;
+SIM_VAR(s_wpnGameTid, SIM_INSTALL);
+/* The weapon IDs' log budgets, and B3's 0x0D counts: the diverged-0x0D drops and the checks
+   run and passed on a live shooter (evidence the bound ran), incremented in wpn_rx_fired below
+   and reported by the wire-robustness block further down (its own enginefix line), in both
+   builds. */
+static struct {
+    volatile LONG notes;
+    volatile LONG chatNotes;      /* its own budget: out of play a companion drops by design,
+                                     and must not use up the malformed messages' notes */
+    unsigned int  drops0D, in0D;
+} s_wpnDiag;
+SIM_VAR(s_wpnDiag, SIM_PRIVATE);
 
 static void wpn_note_in(volatile LONG* budget, const char* what, unsigned int a, unsigned int b)
 {
     if (InterlockedIncrement(budget) <= 32)
         tagpu_logf("enginefix: weapon IDs: %s (%u, %u)", what, a, b);
 }
-#define wpn_note(what, a, b) wpn_note_in(&s_wpnNotes, (what), (a), (b))
-
-/* B3's diverged-0x0D drop counter, incremented in wpn_rx_fired below and reported by
-   the wire-robustness block further down (its own enginefix line). It is defined here so the
-   0x0D fix that owns wpn_rx_fired keeps counting it whichever build is compiled. The
-   accepted count is the check run and passed on a live shooter: evidence the bound ran. */
-static unsigned int s_wireWpnxDrops, s_wireIn0D;
+#define wpn_note(what, a, b) wpn_note_in(&s_wpnDiag.notes, (what), (a), (b))
 
 /* In place of `mov edx,[main]` at 0x42E468, after the loader read `ID` into eax (-1 when the
    section has none) and the section's name into edi. edx is the base the loader's own
@@ -2318,12 +2334,12 @@ static int __cdecl wpn_rx_fired(unsigned int* regs)
             if ((*(const unsigned int*)(shooter_u + 0x110)) & 0x10000000) {
                 char* sw = tagpu_weapons_slot_weapon(shooter_u, pkt[0x23]);
                 if (sw != w) {
-                    s_wireWpnxDrops++;
+                    s_wpnDiag.drops0D++;
                     wpn_note("a weapon-fired message whose shooter slot holds another weapon; dropped",
                              id, pkt[0x23]);
                     return 0;
                 }
-                s_wireIn0D++;
+                s_wpnDiag.in0D++;
             }
         }
     }
@@ -2519,9 +2535,7 @@ static int __cdecl wpn_rx_intercept(unsigned int* regs)
    fires in that frame and another peer catches before the frame ends. Stock's 0x0E has no
    such gate; the dispatcher passes it in net state 6 only (mask 4, 0x45200B and
    0x454762..0x45478B). Drops are logged. */
-static volatile LONG s_wpnChatNotes;     /* its own budget: out of play a companion drops by design,
-                                            and must not use up the malformed messages' notes */
-#define wpn_chat_note(what, a, b) wpn_note_in(&s_wpnChatNotes, (what), (a), (b))
+#define wpn_chat_note(what, a, b) wpn_note_in(&s_wpnDiag.chatNotes, (what), (a), (b))
 
 static int __cdecl wpn_rx_chat(unsigned int* regs)
 {
@@ -2758,6 +2772,7 @@ static int fix_weapon_ids(void)
 {
 #ifdef TAGPU_LIMITS_STOCK
     static WPNSITES w;
+    SIM_VAR(w, SIM_INSTALL);
     int k;
     if (!wpn_build(&w)) {
         if (w.over) s_limOverflow = 1;
@@ -2874,57 +2889,71 @@ static int wire_block_ok(const char* first, const char* last, const char* begin,
    (fix_ghost_commander): the receivers that key on the case's return treat both alike */
 static int ghost_is_09_return(unsigned int ret);
 
-/* The B4/B5 oracle counters (§10), observe-only. morph = a create onto a live slot whose type
-   changes. dcreate = CreateFromNetwork called by the 0x2C dirty list (returning to 0x48BA05):
-   a dirty entry whose type is not its slot's, the unit made from the entry rather than from its
-   own 0x09 — into an empty slot, the ghost commander's mechanism (§2). rcreate = the same from
-   the round robin (returning to 0x48B49C). ghost = the engine's own ghost sweep firing (a
-   round-robin type 0 over an occupied slot). */
-static unsigned int s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost;
-/* CreateFromNetwork's own refusal, for B5: when the create's player has no block
-   ([rec+0x67] == 0) the jne at 0x486229 falls through to 0x48622B, which returns 0; counted per
-   caller. noarr = wire_s09 found no unit array to bound against */
-static unsigned int s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr;
-/* drop counters, per message */
-static unsigned int s_wire09, s_wire09Blk, s_wire0A, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C;
-static unsigned int s_wire2CLen, s_wire2CStale, s_wire2CNoCopy;
-/* a 0x2C reference past the array, made no unit: the move payload's target, the carrier */
-static unsigned int s_wire2CTarget, s_wire2CCarrier;
-/* the splitter's stops and the pump's re-pointed message pointer run on whichever thread pumps */
-static volatile LONG s_wireSplit, s_wirePump;
-/* records accepted off the wire, per receiver: evidence each bound ran on real traffic (the
-   same role as the line-of-sight own-row counters). 0x0B and 0x0C count only the dispatcher's
-   call (return 0x455417 / 0x455428), not the local kill and damage paths that share the
-   function; 0x0A has only the dispatcher's stub to count at; 0x2C counts messages, dirty
-   entries, dirty creates and round-robin entries. */
-static unsigned int s_wireIn09, s_wireIn0A, s_wireIn0B, s_wireIn0C;
-static unsigned int s_wireIn2C, s_wireIn2CDirty, s_wireIn2CCreate, s_wireIn2CRR;
-/* the sender-block rule: a wire 0x09's slot lies in the block of its TRANSPORT sender, the
-   dispatcher's edi (its player record, the one the 0x2C and 0x0D cases pass), which
-   CreateFromNetwork saves with its last push (0x4861EC), so it is [esp+0] at 0x4861F7. The
-   sender is bounded as one of the ten records at main+0x1B63, stride 0x14B (the loop at
-   0x406E05 counts ten); the pump names record ten, one past them, for a sender it cannot
-   find (0x453E14). argdiff counts a create whose player argument is not the sender. */
-static unsigned int s_wireArgDiff, s_wireSendSeen;
+/* the wire's diagnostics */
+static struct {
+    /* The B4/B5 oracle counters (§10), observe-only. morph = a create onto a live slot whose
+       type changes. dcreate = CreateFromNetwork called by the 0x2C dirty list (returning to
+       0x48BA05): a dirty entry whose type is not its slot's, the unit made from the entry
+       rather than from its own 0x09 — into an empty slot, the ghost commander's mechanism
+       (§2). rcreate = the same from the round robin (returning to 0x48B49C). ghost = the
+       engine's own ghost sweep firing (a round-robin type 0 over an occupied slot). */
+    unsigned int morph, dcreate, rcreate, ghost;
+    /* CreateFromNetwork's own refusal, for B5: when the create's player has no block
+       ([rec+0x67] == 0) the jne at 0x486229 falls through to 0x48622B, which returns 0;
+       counted per caller. noArr = wire_s09 found no unit array to bound against */
+    unsigned int noBlk09, noBlkDirty, noBlkRR, noArr;
+    /* drop counters, per message */
+    unsigned int drop09, drop09Blk, drop0A, drop0C, drop0Ckill, drop0B, drop2C;
+    unsigned int drop2CLen, drop2CStale, drop2CNoCopy;
+    /* a 0x2C reference past the array, made no unit: the move payload's target, the carrier */
+    unsigned int drop2CTarget, drop2CCarrier;
+    /* the splitter's stops and the pump's re-pointed message pointer run on whichever thread
+       pumps */
+    volatile LONG split, pump;
+    /* records accepted off the wire, per receiver: evidence each bound ran on real traffic
+       (the same role as the line-of-sight own-row counters). 0x0B and 0x0C count only the
+       dispatcher's call (return 0x455417 / 0x455428), not the local kill and damage paths
+       that share the function; 0x0A has only the dispatcher's stub to count at; 0x2C counts
+       messages, dirty entries, dirty creates and round-robin entries. */
+    unsigned int in09, in0A, in0B, in0C;
+    unsigned int in2C, in2CDirty, in2CCreate, in2CRR;
+    /* the sender-block rule: a wire 0x09's slot lies in the block of its TRANSPORT sender,
+       the dispatcher's edi (its player record, the one the 0x2C and 0x0D cases pass), which
+       CreateFromNetwork saves with its last push (0x4861EC), so it is [esp+0] at 0x4861F7.
+       The sender is bounded as one of the ten records at main+0x1B63, stride 0x14B (the loop
+       at 0x406E05 counts ten); the pump names record ten, one past them, for a sender it
+       cannot find (0x453E14). argDiff counts a create whose player argument is not the
+       sender. */
+    unsigned int argDiff, sendSeen;
+    volatile LONG notes;          /* wire_drop's log budget */
+} s_wireDiag;
+SIM_VAR(s_wireDiag, SIM_PRIVATE);
 /* the type carried from the type check to the after-create check (game thread only) */
 static int s_wire_2c_type, s_wire_rr_type;
+SIM_VAR(s_wire_2c_type, SIM_TRANSIENT);
+SIM_VAR(s_wire_rr_type, SIM_TRANSIENT);
 /* the 0x2C being parsed: its reader's address and its end in bits (game thread only). A check
    whose reader is not this one stops, so a nested or stale parse cannot borrow the bound. */
 static const unsigned char* s_wire2cRd;
+SIM_VAR(s_wire2cRd, SIM_TRANSIENT);
 static unsigned long long   s_wire2cEnd;
+SIM_VAR(s_wire2cEnd, SIM_TRANSIENT);
 static const unsigned char* s_wire2cCopy;
+SIM_VAR(s_wire2cCopy, SIM_TRANSIENT);
 /* the stop path's zero dword: a misframed 0x2C reader points here so its flag bit reads 0 */
 static const unsigned int s_wireZero;
 /* the receive's buffer and delivered length, per thread (see wire_rx_note) */
 static DWORD s_wireTlsBuf = TLS_OUT_OF_INDEXES, s_wireTlsLen = TLS_OUT_OF_INDEXES;
+SIM_TLS(s_wireTlsBuf, SIM_TRANSIENT);
+SIM_TLS(s_wireTlsLen, SIM_TRANSIENT);
 /* each thread's copy buffer for the 0x2C parse (see wire_s2c_copy) */
 static DWORD s_wireTlsCopy = TLS_OUT_OF_INDEXES;
+SIM_TLS(s_wireTlsCopy, SIM_TRANSIENT);
 
-static volatile LONG s_wireNotes;
 static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigned int b)
 {
     (*c)++;
-    if (InterlockedIncrement(&s_wireNotes) <= 64)
+    if (InterlockedIncrement(&s_wireDiag.notes) <= 64)
         tagpu_logf("enginefix: wire robustness: %s (%u, %u)", what, a, b);
 }
 
@@ -2961,7 +2990,7 @@ static int __cdecl wire_rx_note(unsigned int* r)
     TlsSetValue(s_wireTlsBuf, buf);
     TlsSetValue(s_wireTlsLen, (void*)(size_t)r[PR_RET + 2]);
     if (buf && r[PR_RET + 5] == 0x00453D99u && r[PR_RET + 10] != (unsigned int)(size_t)buf) {
-        if (InterlockedIncrement(&s_wirePump) <= 16)
+        if (InterlockedIncrement(&s_wireDiag.pump) <= 16)
             tagpu_logf("enginefix: wire robustness: the receive buffer moved to %p (capacity %u) "
                        "inside a pump call; its message pointer follows (code %u, %u bytes)",
                        buf, *(const unsigned int*)(ta + 0x2A34), r[PR_RET + 1] & 0xFFu,
@@ -3012,17 +3041,16 @@ static int __cdecl wire_s2c_copy(unsigned int* r)
     s_wire2cRd = 0;
     s_wire2cCopy = 0;
     if (!pkt || pkt != buf) {
-        wire_drop(&s_wire2CStale, "a 0x2C is not the message the receive delivered; dropped",
+        wire_drop(&s_wireDiag.drop2CStale, "a 0x2C is not the message the receive delivered; dropped",
                   0, len);
         return 0;
     }
     if (len >= 3u && *(const unsigned short*)(pkt + 1) < len) len = *(const unsigned short*)(pkt + 1);
     if (len > WIRE_2C_MAX) len = WIRE_2C_MAX;
     if (!copy) {
-        copy = (unsigned char*)VirtualAlloc(NULL, WIRE_2C_COPY, MEM_COMMIT | MEM_RESERVE,
-                                            PAGE_READWRITE);
+        copy = (unsigned char*)SIM_ALLOC(s_wireTlsCopy, WIRE_2C_COPY);
         if (!copy) {
-            wire_drop(&s_wire2CNoCopy, "no copy buffer for a 0x2C; dropped", len, 0);
+            wire_drop(&s_wireDiag.drop2CNoCopy, "no copy buffer for a 0x2C; dropped", len, 0);
             return 0;
         }
         TlsSetValue(s_wireTlsCopy, copy);
@@ -3045,7 +3073,7 @@ static int __cdecl wire_s2c_copy(unsigned int* r)
 static int wire_split(unsigned int code, unsigned int len)
 {
     if (wire_split_ok(code, len)) return 1;
-    if (InterlockedIncrement(&s_wireSplit) <= 16)
+    if (InterlockedIncrement(&s_wireDiag.split) <= 16)
         tagpu_logf("enginefix: wire robustness: a packet's message of code %u has length %u, too "
                    "short to advance; the packet's split ends there", code, len);
     return 0;
@@ -3071,16 +3099,16 @@ static int wire_2c_len(const unsigned char* rd, unsigned int need, const char* w
 {
     unsigned long long pos;
     if (rd != s_wire2cRd) {
-        wire_drop(&s_wire2CLen, "a 0x2C check found another reader; stream stopped", 0, 0);
+        wire_drop(&s_wireDiag.drop2CLen, "a 0x2C check found another reader; stream stopped", 0, 0);
         return 0;
     }
     pos = wire_pos(rd);
     if (!wire_bits_ok(pos, need, s_wire2cEnd)) {
-        if (InterlockedIncrement(&s_wireNotes) <= 64)
+        if (InterlockedIncrement(&s_wireDiag.notes) <= 64)
             tagpu_logf("enginefix: wire robustness: a 0x2C runs past its own length at %s "
                        "(bit %u + %u of %u); stream stopped", where, (unsigned int)pos, need,
                        (unsigned int)s_wire2cEnd);
-        s_wire2CLen++;
+        s_wireDiag.drop2CLen++;
         return 0;
     }
     return 1;
@@ -3107,16 +3135,16 @@ static int __cdecl wire_s09(unsigned int* r)
     const char* first;
     const char* last;
     unsigned int max, count, idx, type;
-    if (!ta || !rec) { s_wireNoArr++; return 0; }
+    if (!ta || !rec) { s_wireDiag.noArr++; return 0; }
     first = *(const char* const*)(ta + 0x14357);
     last  = *(const char* const*)(ta + 0x1435B);
-    if (!first || last < first) { s_wireNoArr++; return 0; }
+    if (!first || last < first) { s_wireDiag.noArr++; return 0; }
     max   = (unsigned int)(last - first) / 0x118;
     count = *(const unsigned int*)(ta + 0x1438F);
     idx   = *(const unsigned short*)(rec + 3);
     type  = *(const unsigned short*)(rec + 1);
     if (!wire_index_ok(idx, max) || !wire_type_ok(type, count)) {
-        wire_drop(&s_wire09, "a unit-create names a unit past the array or a bad type; dropped",
+        wire_drop(&s_wireDiag.drop09, "a unit-create names a unit past the array or a bad type; dropped",
                   idx, type);
         return 0;
     }
@@ -3136,36 +3164,36 @@ static int __cdecl wire_s09(unsigned int* r)
                 sl = *(const char* const*)(snd + 0x6B);
             }
             if (si >= 10 || !sf || !sl || slot < sf || slot > sl) {
-                wire_drop(&s_wire09Blk, "a unit-create from a sender whose block does not hold "
+                wire_drop(&s_wireDiag.drop09Blk, "a unit-create from a sender whose block does not hold "
                           "the unit; dropped", si, idx);
                 return 0;
             }
-            s_wireIn09++;
-            if (r[PR_EDX] != si * 0x14B) s_wireArgDiff++;
-            if (!(s_wireSendSeen & (1u << si))) {
-                s_wireSendSeen |= 1u << si;
+            s_wireDiag.in09++;
+            if (r[PR_EDX] != si * 0x14B) s_wireDiag.argDiff++;
+            if (!(s_wireDiag.sendSeen & (1u << si))) {
+                s_wireDiag.sendSeen |= 1u << si;
                 tagpu_logf("enginefix: wire robustness: 0x09 from sender %u (type %u, '%.30s'), "
                            "player arg %u, slot %u, sender block %u..%u", si,
                            (unsigned int)*(const unsigned char*)(snd + 0x73), snd + 0x2B,
                            r[PR_EDX] / 0x14B, idx, (unsigned int)(sf - first) / 0x118,
                            (unsigned int)(sl - first) / 0x118);
             }
-            if (noblk) s_wireNoBlk09++;
+            if (noblk) s_wireDiag.noBlk09++;
         } else if (ret == 0x0048BA05u) {
-            s_wireDCreate++;
-            if (noblk) s_wireNoBlkDirty++;
+            s_wireDiag.dcreate++;
+            if (noblk) s_wireDiag.noBlkDirty++;
         } else if (ret == 0x0048B49Cu) {
-            s_wireRCreate++;
-            if (noblk) s_wireNoBlkRR++;
+            s_wireDiag.rcreate++;
+            if (noblk) s_wireDiag.noBlkRR++;
         }
-        if (noblk && InterlockedIncrement(&s_wireNotes) <= 64)
+        if (noblk && InterlockedIncrement(&s_wireDiag.notes) <= 64)
             tagpu_logf("enginefix: wire robustness: CreateFromNetwork refuses a create for player "
                        "%u, which has no block (from %08X, slot %u, type %u)",
                        r[PR_EDX] / 0x14B, ret, idx, type);
         if ((*(const unsigned int*)(slot + 0x110) & 0x10000000u) &&
             *(const unsigned short*)(slot + 0xA6) &&
             *(const unsigned short*)(slot + 0xA6) != (unsigned short)type)
-            s_wireMorph++;
+            s_wireDiag.morph++;
         r[PR_ESI] = (unsigned int)(size_t)slot;
         *(unsigned int*)(sp + 0x20) = r[PR_EDX];   /* stock's mov [esp+0x20],edx at 0x4861FE */
     }
@@ -3193,10 +3221,10 @@ static int __cdecl wire_s0c(unsigned int* r)
     max = (unsigned int)(last - first) / 0x118;
     idx = *(const unsigned short*)(rec + 1);
     if (!wire_index_ok(idx, max)) {
-        wire_drop(&s_wire0C, "a unit-destroy names a unit past the array; dropped", idx, max);
+        wire_drop(&s_wireDiag.drop0C, "a unit-destroy names a unit past the array; dropped", idx, max);
         return 0;
     }
-    if (tx_dtor_caller(WPN_ESP_JMP(r) + 0x78) == 0x00455428u) s_wireIn0C++;
+    if (tx_dtor_caller(WPN_ESP_JMP(r) + 0x78) == 0x00455428u) s_wireDiag.in0C++;
     r[PR_ESI] = (unsigned int)(size_t)((char*)first + (size_t)idx * 0x118);
     return 1;
 }
@@ -3218,7 +3246,7 @@ static int __cdecl wire_s0ckill(unsigned int* r)
             if (kidx == 0) {
                 r[PR_EAX] = 0;
             } else if (!wire_killer_ok(kidx, max)) {
-                wire_drop(&s_wire0Ckill, "a unit-destroy names a killer past the array; made NULL",
+                wire_drop(&s_wireDiag.drop0Ckill, "a unit-destroy names a killer past the array; made NULL",
                           kidx, max);
                 r[PR_EAX] = 0;
             } else {
@@ -3246,11 +3274,11 @@ static int __cdecl wire_s0b(unsigned int* r)
     vidx = *(const unsigned short*)(rec + 1);
     aidx = *(const unsigned short*)(rec + 3);
     if (vidx > max || aidx > max) {
-        wire_drop(&s_wire0B, "a damage message names a unit past the array; dropped",
+        wire_drop(&s_wireDiag.drop0B, "a damage message names a unit past the array; dropped",
                   vidx > aidx ? vidx : aidx, max);
         return 0;
     }
-    if (*(const unsigned int*)(WPN_ESP_JMP(r) + 0x0C) == 0x00455417u) s_wireIn0B++;
+    if (*(const unsigned int*)(WPN_ESP_JMP(r) + 0x0C) == 0x00455417u) s_wireDiag.in0B++;
     r[PR_ESI] = vidx ? (unsigned int)(size_t)((char*)first + (size_t)vidx * 0x118) : 0;
     r[PR_EBX] = aidx ? (unsigned int)(size_t)((char*)first + (size_t)aidx * 0x118) : 0;
     return 1;
@@ -3278,11 +3306,11 @@ static int __cdecl wire_s0a(unsigned int* r)
     child  = *(const unsigned short*)(rec + 1);
     parent = *(const unsigned short*)(rec + 3);
     if (!wire_attach_ok(child, parent, max)) {
-        wire_drop(&s_wire0A, "an attach names no child or a unit past the array; dropped",
+        wire_drop(&s_wireDiag.drop0A, "an attach names no child or a unit past the array; dropped",
                   child, parent);
         return 0;
     }
-    s_wireIn0A++;
+    s_wireDiag.in0A++;
     return 1;
 }
 
@@ -3316,11 +3344,11 @@ static int __cdecl wire_s2c_entry(unsigned int* r)
     bfirst = *(const char* const*)(pr + 0x67);
     blast  = *(const char* const*)(pr + 0x6B);
     if (!wire_block_ok(bfirst, blast, arr_first, arr_last, n)) {
-        wire_drop(&s_wire2C, "a 0x2C names a player whose block is not a valid slot run; dropped",
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C names a player whose block is not a valid slot run; dropped",
                   0, n);
         return 0;
     }
-    s_wireIn2C++;
+    s_wireDiag.in2C++;
     return 1;
 }
 
@@ -3342,11 +3370,11 @@ static int __cdecl wire_s2c_delta(unsigned int* r)
     n = *(const unsigned short*)(ta + 0x37EE6);
     delta = (int)(short)(unsigned short)(r[PR_EAX] & 0xFFFF);
     if (!bfirst || !wire_delta_ok(delta, (int)n)) {
-        wire_drop(&s_wire2C, "a 0x2C dirty entry's slot delta is out of range; stream stopped",
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C dirty entry's slot delta is out of range; stream stopped",
                   (unsigned int)delta, n);
         return 0;
     }
-    s_wireIn2CDirty++;
+    s_wireDiag.in2CDirty++;
     r[PR_ESI] = (unsigned int)(size_t)(bfirst + (size_t)delta * 0x118);
     r[PR_EAX] = (unsigned int)(size_t)ta;
     return 1;
@@ -3368,19 +3396,19 @@ static int __cdecl wire_s2c_type(unsigned int* r)
     count = *(const unsigned int*)(ta + 0x1438F);
     type  = r[PR_EAX] & 0xFFFF;
     if (!wire_type_ok(type, count)) {
-        wire_drop(&s_wire2C, "a 0x2C dirty entry's type is out of range; stream stopped",
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C dirty entry's type is out of range; stream stopped",
                   type, count);
         return 0;
     }
     defs = *(const char* const*)(ta + 0x1439B);
     if (!defs || *(const unsigned char*)(defs + (size_t)type * 0x249 + 0x22F) != 1) {
-        wire_drop(&s_wire2C, "a 0x2C dirty entry's type has no move class; stream stopped",
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C dirty entry's type has no move class; stream stopped",
                   type, count);
         return 0;
     }
     s_wire_2c_type = (int)type;
     if (*(const unsigned short*)(slot + 0xA6) == (unsigned short)type) return 2;
-    s_wireIn2CCreate++;
+    s_wireDiag.in2CCreate++;
     return 1;
 }
 
@@ -3394,13 +3422,13 @@ static int __cdecl wire_s2c_after(unsigned int* r)
     char* slot = (char*)(size_t)r[PR_ESI];
     const char* obj;
     if (!slot || *(const unsigned short*)(slot + 0xA6) != (unsigned short)s_wire_2c_type) {
-        wire_drop(&s_wire2C, "a 0x2C dirty create did not take; stream stopped",
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C dirty create did not take; stream stopped",
                   (unsigned int)s_wire_2c_type, 0);
         return 0;
     }
     obj = *(const char* const*)slot;
     if (!obj || !*(const char* const*)obj) {
-        wire_drop(&s_wire2C, "a 0x2C dirty unit has no mover object; stream stopped", 0, 0);
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C dirty unit has no mover object; stream stopped", 0, 0);
         return 0;
     }
     r[PR_EAX] = (unsigned int)(size_t)(sp + 0x10);
@@ -3449,16 +3477,16 @@ static int __cdecl wire_s2c_rr(unsigned int* r)
     count = *(const unsigned int*)(ta + 0x1438F);
     type  = r[PR_EAX] & 0xFFFF;
     if (type == 0) {
-        if (slot && *(const unsigned short*)(slot + 0xA6)) s_wireGhost++;
-        s_wireIn2CRR++;
+        if (slot && *(const unsigned short*)(slot + 0xA6)) s_wireDiag.ghost++;
+        s_wireDiag.in2CRR++;
         return 1;
     }
     if (!wire_type_ok(type, count)) {
-        wire_drop(&s_wire2C, "a 0x2C round-robin type is out of range; entry stopped", type, count);
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C round-robin type is out of range; entry stopped", type, count);
         return 0;
     }
     s_wire_rr_type = (int)type;
-    s_wireIn2CRR++;
+    s_wireDiag.in2CRR++;
     return 2;
 }
 
@@ -3471,13 +3499,13 @@ static int __cdecl wire_s2c_rr_after(unsigned int* r)
     char* slot = (char*)(size_t)r[PR_EDI];
     const char* obj;
     if (!slot || *(const unsigned short*)(slot + 0xA6) != (unsigned short)s_wire_rr_type) {
-        wire_drop(&s_wire2C, "a 0x2C round-robin create did not take; entry stopped",
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C round-robin create did not take; entry stopped",
                   (unsigned int)s_wire_rr_type, 0);
         return 0;
     }
     obj = *(const char* const*)(slot + 0x9E);
     if (!obj) {
-        wire_drop(&s_wire2C, "a 0x2C round-robin unit has no model object; entry stopped", 0, 0);
+        wire_drop(&s_wireDiag.drop2C, "a 0x2C round-robin unit has no model object; entry stopped", 0, 0);
         return 0;
     }
     r[PR_EAX] = (unsigned int)(size_t)obj;
@@ -3498,7 +3526,7 @@ static int __cdecl wire_2c_target(unsigned int* r)
     const char* first = wire_units(ta, &max);
     keep = wire_ref_idx(idx, max);
     if (keep != idx)
-        wire_drop(&s_wire2CTarget, "a 0x2C move payload names a target past the array; no target",
+        wire_drop(&s_wireDiag.drop2CTarget, "a 0x2C move payload names a target past the array; no target",
                   idx, max);
     r[PR_EAX] = keep ? (unsigned int)(size_t)(first + (size_t)keep * 0x118) : 0u;
     r[PR_ECX] = idx * 35u;
@@ -3521,7 +3549,7 @@ static int __cdecl wire_2c_carrier(unsigned int* r)
     wire_units(ta, &max);
     keep = wire_ref_idx(idx, max);
     if (keep != idx)
-        wire_drop(&s_wire2CCarrier, "a 0x2C round robin names a carrier past the array; no "
+        wire_drop(&s_wireDiag.drop2CCarrier, "a 0x2C round robin names a carrier past the array; no "
                   "carrier", idx, max);
     word = (unsigned short)keep;
     memcpy(WPN_ESP_JMP(r) + 0x17, &word, sizeof word);
@@ -3617,6 +3645,7 @@ static unsigned char* wire_emit_stop(unsigned char* p)
 typedef struct WIRESPAN { unsigned int va; int n; const unsigned char* stock; } WIRESPAN;
 
 static unsigned int s_wireStubBytes;
+SIM_VAR(s_wireStubBytes, SIM_INSTALL);
 
 static unsigned char* wire_code(unsigned int n)
 {
@@ -3718,11 +3747,8 @@ static int fix_wire_bounds(void)
             return FIX_BYTES;
         }
 
-    if (s_wireTlsBuf == TLS_OUT_OF_INDEXES) s_wireTlsBuf = TlsAlloc();
-    if (s_wireTlsLen == TLS_OUT_OF_INDEXES) s_wireTlsLen = TlsAlloc();
-    if (s_wireTlsCopy == TLS_OUT_OF_INDEXES) s_wireTlsCopy = TlsAlloc();
-    if (s_wireTlsBuf == TLS_OUT_OF_INDEXES || s_wireTlsLen == TLS_OUT_OF_INDEXES ||
-        s_wireTlsCopy == TLS_OUT_OF_INDEXES)
+    if (!SIM_TLS_ALLOC(s_wireTlsBuf) || !SIM_TLS_ALLOC(s_wireTlsLen) ||
+        !SIM_TLS_ALLOC(s_wireTlsCopy))
         return FIX_STUB;
 
     if (!(stop = wire_code(WIRE_STOP_LEN)) || !(a09 = wire_code(WIRE_EMIT2_LEN)) ||
@@ -3798,14 +3824,14 @@ int tagpu_wire_format(char* buf, unsigned int cap)
                      " 0d=%u split=%u target=%u carrier=%u"
                      " morph=%u dcreate=%u rcreate=%u ghost=%u argdiff=%u pump=%u"
                      " noblock 09=%u dirty=%u rr=%u noarr=%u",
-                     s_wireIn09, s_wireIn0A, s_wireIn0B, s_wireIn0C, s_wireIn0D, s_wireIn2C,
-                     s_wireIn2CDirty, s_wireIn2CCreate, s_wireIn2CRR,
-                     s_wire09, s_wire09Blk, s_wire0A, s_wire0B, s_wire0C, s_wire0Ckill, s_wire2C,
-                     s_wire2CLen, s_wire2CStale, s_wire2CNoCopy, s_wireWpnxDrops,
-                     (unsigned int)s_wireSplit, s_wire2CTarget, s_wire2CCarrier,
-                     s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost, s_wireArgDiff,
-                     (unsigned int)s_wirePump,
-                     s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr);
+                     s_wireDiag.in09, s_wireDiag.in0A, s_wireDiag.in0B, s_wireDiag.in0C, s_wpnDiag.in0D, s_wireDiag.in2C,
+                     s_wireDiag.in2CDirty, s_wireDiag.in2CCreate, s_wireDiag.in2CRR,
+                     s_wireDiag.drop09, s_wireDiag.drop09Blk, s_wireDiag.drop0A, s_wireDiag.drop0B, s_wireDiag.drop0C, s_wireDiag.drop0Ckill, s_wireDiag.drop2C,
+                     s_wireDiag.drop2CLen, s_wireDiag.drop2CStale, s_wireDiag.drop2CNoCopy, s_wpnDiag.drops0D,
+                     (unsigned int)s_wireDiag.split, s_wireDiag.drop2CTarget, s_wireDiag.drop2CCarrier,
+                     s_wireDiag.morph, s_wireDiag.dcreate, s_wireDiag.rcreate, s_wireDiag.ghost, s_wireDiag.argDiff,
+                     (unsigned int)s_wireDiag.pump,
+                     s_wireDiag.noBlk09, s_wireDiag.noBlkDirty, s_wireDiag.noBlkRR, s_wireDiag.noArr);
 }
 
 /* tagpu_wirecheck.on: a unit test of the C predicates on boundary values (0, the last valid
@@ -3950,11 +3976,15 @@ typedef struct DMGSEEN {
 } DMGSEEN;
 
 static DWORD s_dmgTls = TLS_OUT_OF_INDEXES;
+SIM_TLS(s_dmgTls, SIM_TRANSIENT);
 /* peekable counters (their addresses are in the enginefix line), any thread */
-static volatile LONG s_dmgUnitRepeats;  /* a victim past stock's 20 found again   */
-static volatile LONG s_dmgFeatRepeats;  /* an anchor past stock's 64 found again  */
-static volatile LONG s_dmgRefused;      /* a pointer outside its array            */
-static volatile LONG s_dmgUnframed;     /* a list block run outside the wrapper   */
+static struct {
+    volatile LONG unitRepeats;  /* a victim past stock's 20 found again   */
+    volatile LONG featRepeats;  /* an anchor past stock's 64 found again  */
+    volatile LONG refused;      /* a pointer outside its array            */
+    volatile LONG unframed;     /* a list block run outside the wrapper   */
+} s_dmgDiag;
+SIM_VAR(s_dmgDiag, SIM_PRIVATE);
 static const char s_dmgTag[] = "tagpu damage seen-set";
 
 static void dmg_set_init(DMGSET* t)
@@ -4010,9 +4040,9 @@ static int dmg_set_seen(DMGSET* t, unsigned int value, unsigned int stock_cap, v
 static DMGSEEN* dmg_frame(void)
 {
     DMGSEEN* f = (DMGSEEN*)TlsGetValue(s_dmgTls);
-    if (!f && InterlockedIncrement(&s_dmgUnframed) == 1)
+    if (!f && InterlockedIncrement(&s_dmgDiag.unframed) == 1)
         tagpu_logf("enginefix: area damage's victim list ran outside its wrapper; its victims are "
-                   "not deduplicated (counted at 0x%08X)", (unsigned int)(size_t)&s_dmgUnframed);
+                   "not deduplicated (counted at 0x%08X)", (unsigned int)(size_t)&s_dmgDiag.unframed);
     return f;
 }
 
@@ -4029,14 +4059,14 @@ static int __stdcall dmg_unit_seen(const char* unit)
     if (!f) return 0;
     begin = ta ? *(const char* const*)(ta + 0x14357) : NULL;
     count = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
-    if (!begin || unit < begin) { InterlockedIncrement(&s_dmgRefused); return 1; }
+    if (!begin || unit < begin) { InterlockedIncrement(&s_dmgDiag.refused); return 1; }
     off = (size_t)(unit - begin);
     if (off % DMG_UNIT_STRIDE || off / DMG_UNIT_STRIDE >= count) {
-        InterlockedIncrement(&s_dmgRefused);
+        InterlockedIncrement(&s_dmgDiag.refused);
         return 1;
     }
     return dmg_set_seen(&f->unit, (unsigned int)(off / DMG_UNIT_STRIDE), DMG_UNIT_CAP,
-                        &s_dmgUnitRepeats);
+                        &s_dmgDiag.unitRepeats);
 }
 
 /* In place of 0x49A5CE..0x49A614, the anchor cell at [esp+0x10]: 1 = seen, skip it (0x49A62B);
@@ -4053,13 +4083,13 @@ static int __stdcall dmg_feature_seen(const unsigned char* cell)
     grid = ta ? *(const unsigned char* const*)(ta + 0x14287) : NULL;
     cells = ta ? (unsigned long long)*(const unsigned int*)(ta + 0x14233) *
                  *(const unsigned int*)(ta + 0x14237) : 0;
-    if (!grid || cell < grid) { InterlockedIncrement(&s_dmgRefused); return 1; }
+    if (!grid || cell < grid) { InterlockedIncrement(&s_dmgDiag.refused); return 1; }
     off = (size_t)(cell - grid);
     if (off % DMG_CELL || off / DMG_CELL >= cells || off / DMG_CELL >= DMG_KEY_PAST - 1u) {
-        InterlockedIncrement(&s_dmgRefused);
+        InterlockedIncrement(&s_dmgDiag.refused);
         return 1;
     }
-    return dmg_set_seen(&f->feat, (unsigned int)(off / DMG_CELL), DMG_FEAT_CAP, &s_dmgFeatRepeats);
+    return dmg_set_seen(&f->feat, (unsigned int)(off / DMG_CELL), DMG_FEAT_CAP, &s_dmgDiag.featRepeats);
 }
 
 /* In place of both `call 0x49A120`. The engine's eax is handed back: 0x499EB0 and 0x49A0C0
@@ -4108,8 +4138,7 @@ static int fix_victim_caps(void)
     unsigned int rel;
 
     /* the frames' thread-local slot; without one the table is not written, as for a stub */
-    if (s_dmgTls == TLS_OUT_OF_INDEXES) s_dmgTls = TlsAlloc();
-    if (s_dmgTls == TLS_OUT_OF_INDEXES) { lim_no_stub(); return FIX_TABLE; }
+    if (!SIM_TLS_ALLOC(s_dmgTls)) { lim_no_stub(); return FIX_TABLE; }
 
     /* 0x49A262: push esi; call dmg_unit_seen; test eax,eax; jnz 0x49A415; jmp 0x49A2AA. The
        registers the loop keeps -- ebx the projectile, esi the unit, edi the cell -- are the
@@ -4236,10 +4265,17 @@ static int fix_victim_caps(void)
 #define AIR_SLOTS 65536u               /* a cell's unit slot is a u16                      */
 
 static CRITICAL_SECTION s_airLock;
+SIM_LOCK(s_airLock);
+/* each entry is a unit slot; the order is the order area damage serves aircraft in */
+static const SimField air_pool_layout[] = { SIM_FIELD_AT(0, 2, SIMF_ID, SIM_ID_UNIT_SLOT), SIM_FIELD_END };
 static unsigned short   s_airPool[AIR_SLOTS];
 static unsigned char    s_airIn[AIR_SLOTS];  /* 1 iff the slot is in s_airPool[0, s_airN)   */
+SIM_ROWS(s_airIn, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
 static unsigned int     s_airN;
-static volatile LONG    s_airServed;         /* aircraft handed to the engine, any thread   */
+SIM_VAR(s_airN, SIM_STATE);
+SIM_ROWS_LIVE(s_airPool, SIM_STATE, SIM_ID_NONE, s_airN, air_pool_layout);
+static struct { volatile LONG served; } s_airDiag;  /* aircraft handed to the engine, any thread */
+SIM_VAR(s_airDiag, SIM_PRIVATE);
 
 /* the unit array, or NULL; *count its slots */
 static const unsigned char* air_array(const char** main_out, unsigned int* count)
@@ -4291,7 +4327,7 @@ static const unsigned char* __stdcall air_next(void)
         unsigned int slot = f->air.idx[f->air.next++];
         const unsigned char* u = air_unit(slot, &f->air);
         if (u && !dmg_set_has(&f->unit, slot)) {
-            InterlockedIncrement(&s_airServed);
+            InterlockedIncrement(&s_airDiag.served);
             return u;
         }
     }
@@ -4494,12 +4530,13 @@ static int fix_stacked_air(void)
    weaponvelocity 0). The floor also changes the pitch solver's input (0x49A890, handed w+0x68
    at 0x49D608), but only for such a weapon, which stock faults on the moment it fires.
    CLASS: local. A peer without it faults on the shot, which is not a silent divergence. */
-static volatile unsigned int s_flakFallbacks;   /* peekable, GAME THREAD */
+static struct { volatile unsigned int fallbacks; } s_flakDiag;   /* peekable, GAME THREAD */
+SIM_VAR(s_flakDiag, SIM_PRIVATE);
 
 static void __cdecl flak_fallback(const unsigned char* slot)
 {
     const char* w = *(const char* const*)(slot + 0x0C);
-    unsigned int n = ++s_flakFallbacks;
+    unsigned int n = ++s_flakDiag.fallbacks;
     if (n <= 8 || !(n & (n - 1u)))
         tagpu_logf("enginefix: flak: a burnblow shot at pitch 0x%04X has no horizontal speed; "
                    "%.32s flies its weapontimer (%u so far)", *(const unsigned short*)(slot + 0x18),
@@ -4750,7 +4787,7 @@ static int fix_last_cell(void)
    with the player from [esp+8] before either exit.
    THE INVARIANT: the grid is read only at a column and a row inside it -- the same unsigned
    bounds as stock, now applied to the row actually used. Exact whenever stock's row is inside.
-   THE ORACLE: every stub counts, per function, the times it takes the own row (s_losOwnRow) --
+   THE ORACLE: every stub counts, per function, the times it takes the own row (s_losDiag.ownRow) --
    the one path only the fix runs, so a count above zero is that function's stub at work.
    CLASS: simulation, fail closed (what is acquired, the order resolved); the local reads are
    fix_los_local's. */
@@ -4771,16 +4808,17 @@ static const unsigned int s_losFn[LOS_NFN] = {
    which thread calls the engine's draw and sound code. It counts the row taken, not a read or a
    stamp made: where the column is bounded after the row, as at the sight emitter (0x48265B), a
    counted row can still be refused by its column, and nothing is read or stamped. */
-static volatile LONG s_losOwnRow[LOS_NFN];
+static struct { volatile LONG ownRow[LOS_NFN]; } s_losDiag;
+SIM_VAR(s_losDiag, SIM_PRIVATE);
 
-/* pushfd; lock inc dword [&s_losOwnRow[fn]]; popfd -- the count, with the flags kept. The hand
+/* pushfd; lock inc dword [&s_losDiag.ownRow[fn]]; popfd -- the count, with the flags kept. The hand
    stubs' literal rel8s (stubAB .. stubO, the projectile pass's stub) jump over it, so they are
    written for this length, and a different one fails the build here. */
 #define LOS_COUNT_LEN 9
 typedef char los_count_len_is_the_hand_stubs[(LOS_COUNT_LEN == 9) ? 1 : -1];
 static int los_count(unsigned char* a, int fn)
 {
-    unsigned int at = (unsigned int)(size_t)&s_losOwnRow[fn];
+    unsigned int at = (unsigned int)(size_t)&s_losDiag.ownRow[fn];
     a[0] = 0x9C;
     a[1] = 0xF0; a[2] = 0xFF; a[3] = 0x05;
     memcpy(a + 4, &at, 4);
@@ -5503,6 +5541,7 @@ static int fix_los_local(void)
      loop's own counter). Held: on to the next slot 0x49E541; dropped: the aiming bit
      cleared first, as stock clears it at 0x49E1EA for a lost target. */
 static int (__stdcall *s_wkCheckStock)(char* unit, char* target, unsigned int idx);
+SIM_VAR(s_wkCheckStock, SIM_INSTALL);
 
 static int __stdcall wk_check(char* u, char* t, unsigned int idx)
 {
@@ -5814,6 +5853,7 @@ static int fix_veterancy(void)
 static int fix_extra_weapons(void)
 {
     static TagpuWpnSite s[TAGPU_WPN_SITES];
+    SIM_VAR(s, SIM_INSTALL);
     int n = tagpu_weapons_sites(s), k;
     if (n == TAGPU_WPN_OBSERVERS) {
         lim_needs("extra weapons (a simulation change)",
@@ -5997,20 +6037,21 @@ static int fix_reclaim_wrap(void)
 #define PJ_ORIGIN    0x62
 #define PJ_RECEIVED  1
 
-static unsigned int s_b7Word, s_b7Outright, s_b7Radar, s_b7Copies;
+static struct { unsigned int word, outright, radar, copies; } s_b7Diag;
+SIM_VAR(s_b7Diag, SIM_PRIVATE);
 
 static void b7_event(unsigned int* n, const char* what)
 {
     unsigned int c = ++*n;
     if ((c & (c - 1)) == 0) tagpu_logf("enginefix: %s (%u so far)", what, c);
 }
-static void __stdcall b7_word_event(void) { b7_event(&s_b7Word, "a hit's amount saturated into its word"); }
-static void __stdcall b7_radar_event(void) { b7_event(&s_b7Radar, "the radar's owner test met a projectile with no attacker"); }
-static void __stdcall b7_copy_event(void) { b7_event(&s_b7Copies, "a received meteor's damage left to its spawner"); }
+static void __stdcall b7_word_event(void) { b7_event(&s_b7Diag.word, "a hit's amount saturated into its word"); }
+static void __stdcall b7_radar_event(void) { b7_event(&s_b7Diag.radar, "the radar's owner test met a projectile with no attacker"); }
+static void __stdcall b7_copy_event(void) { b7_event(&s_b7Diag.copies, "a received meteor's damage left to its spawner"); }
 static void __stdcall b7_outright_event(const char* victim)
 {
     if (tagpu_datakeys_vet_taken_level(victim))
-        b7_event(&s_b7Outright, "a kill-outright call on a veteran dealt its full amount");
+        b7_event(&s_b7Diag.outright, "a kill-outright call on a veteran dealt its full amount");
 }
 
 typedef int (__stdcall *PFN_ProjInit)(char* proj, const char* weapon, const void* start,
@@ -6166,7 +6207,7 @@ static int fix_radar_owner(void)
     *j2 = (unsigned char)(p - (j2 + 1));
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00467406);                   /* skip               */
     if (!tagpu_detour_land(0x004673B1, s, (int)sizeof was)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return FIX_PROTECT;
     }
     return FIX_ARMED;
@@ -6209,7 +6250,18 @@ static int fix_radar_owner(void)
 static void kill_state_read(unsigned char* m, unsigned int idx);
 static void kill_apply_state(char* slot, const unsigned char* rec);
 static int kill_rx_death(unsigned int* regs, const char* ta, const unsigned char* m);
-static volatile LONG s_killBare0C;
+/* counters for the heartbeat's kills: section; the LONGs are written from both pumping threads
+   during a load (the refused deaths) or from any thread that holds, the rest by the thread
+   that runs the tick */
+static struct {
+    volatile LONG bare0C;
+    unsigned int  out, in, badFrac, deadCopy, noSlot;
+    unsigned int  same, turned, turnedBack, swept;
+    unsigned int  createDone, createNano, createAbsent, createBad;
+    unsigned int  drop12;
+    volatile LONG refused, held, holdLate, holdFull, notes;
+} s_killDiag;
+SIM_VAR(s_killDiag, SIM_PRIVATE);
 /* C4's destructor wrap, in the TRANSPORTED EXPLOSIONS section below: the 0x4C's destructor
    call goes through it */
 static unsigned char* tx_wrap_code(void);
@@ -6250,27 +6302,50 @@ struct hit_tab {
     unsigned int* freed;      /* GameTime of the slot's last free + 1; 0 never       */
     unsigned int* local;      /* local GameTime at the create: the test oracle       */
 };
+/* three columns of n entries in the table's own block, one entry a unit slot */
+static const SimField hit_layout[] = {
+    SIM_FIELD(struct hit_tab, n, SIMF_COUNT, SIM_ID_NONE),
+    SIM_COLUMN(struct hit_tab, stamp, SIM_ID_UNIT_SLOT),
+    SIM_COLUMN(struct hit_tab, freed, SIM_ID_UNIT_SLOT),
+    SIM_COLUMN(struct hit_tab, local, SIM_ID_UNIT_SLOT),
+    SIM_FIELD_END
+};
 static struct hit_tab* volatile s_hit;
-static unsigned int s_hitTables;
-
+SIM_BLOCK(s_hit, SIM_STATE, SIM_ID_NONE, 1, hit_layout);
 /* counters for the heartbeat's hits: section; u32, one writer thread */
-static unsigned int s_hitOutCreate, s_hitOutHit, s_hitOutBytes, s_hitStockBytes, s_hitTxUnknown;
-static unsigned int s_hitInCreate, s_hitInHit, s_hitStateRefused, s_hitMalformed;
-static unsigned int s_hitApplyOwner, s_hitRefuseOwner, s_hitDead;
-static unsigned int s_hitApplyBy, s_hitUndecidedBy, s_hitRefuseBy;
-static unsigned int s_hitBare09, s_hitBare0B;
-static unsigned int s_hitHeld, s_hitFallback, s_hitHoldFail, s_hitRetry;
-static unsigned int s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown;
-static unsigned int s_hitYoungOwner, s_hitYoungBy, s_hitDelayed, s_hitDelayOverflow;
+static struct {
+    unsigned int tables;
+    unsigned int outCreate, outHit, outBytes, stockBytes, txUnknown;
+    unsigned int inCreate, inHit, stateRefused, malformed;
+    unsigned int applyOwner, refuseOwner, dead;
+    unsigned int applyBy, undecidedBy, refuseBy;
+    unsigned int bare09, bare0B;
+    unsigned int held, fallback, holdFail, retry;
+    unsigned int createExact, createLB, createUnknown;
+    unsigned int youngOwner, youngBy, delayed, delayOverflow;
+    unsigned int takeNotes;       /* the lever's creation trace, capped */
+} s_hitDiag;
+SIM_VAR(s_hitDiag, SIM_PRIVATE);
 
 /* TEST LEVER tagpu_dmgdelay.on=K: every outgoing hit waits until GameTime has advanced K
    ticks and leaves at the next send opportunity (an outgoing hit, an incoming companion on the
    game thread). 0 is off. The oracle it feeds, per receiver: a hit applied to a unit whose
    local create is younger than K ticks. */
 static unsigned int s_hitDelayK;
+SIM_VAR(s_hitDelayK, SIM_INSTALL);
 static struct { unsigned int net, due; unsigned char m[HIT_MSG]; } s_hitDelay[HIT_DELAY_MAX];
+/* a ring from s_hitDelayHead: the destination's DirectPlay ID, and the stock 0x0B at m+3 whose
+   victim and attacker are unit slots (exe-reverse-engineering.md, "The hit") */
+static const SimField hit_delay_layout[] = {
+    SIM_FIELD(__typeof__(s_hitDelay[0]), net, SIMF_ID, SIM_ID_DPLAY),
+    SIM_FIELD_AT(offsetof(__typeof__(s_hitDelay[0]), m) + 4, 2, SIMF_ID, SIM_ID_UNIT_SLOT),
+    SIM_FIELD_AT(offsetof(__typeof__(s_hitDelay[0]), m) + 6, 2, SIMF_ID, SIM_ID_UNIT_SLOT),
+    SIM_FIELD_END
+};
+SIM_ROWS(s_hitDelay, SIM_STATE, SIM_ID_NONE, hit_delay_layout);
 static unsigned int s_hitDelayHead, s_hitDelayCount;
-static unsigned int s_hitTakeNotes;          /* the lever's creation trace, capped */
+SIM_VAR(s_hitDelayHead, SIM_STATE);
+SIM_VAR(s_hitDelayCount, SIM_STATE);
 
 /* ---- the pure rules; tagpu_wirecheck.on exercises them on boundary values ------------------ */
 
@@ -6359,14 +6434,13 @@ static struct hit_tab* hit_tab_new(unsigned int n)
     unsigned int room = HIT_ROOM_MIN;
     struct hit_tab* t;
     while (room < n) room *= 2u;
-    t = (struct hit_tab*)VirtualAlloc(NULL, sizeof *t + 3u * room * sizeof(unsigned int),
-                                      MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    t = (struct hit_tab*)SIM_ALLOC(s_hit, sizeof *t + 3u * room * sizeof(unsigned int));
     if (!t) hit_no_memory(room);
     t->room  = room;
     t->stamp = (unsigned int*)(t + 1);
     t->freed = t->stamp + room;
     t->local = t->freed + room;
-    s_hitTables++;
+    s_hitDiag.tables++;
     return t;
 }
 
@@ -6420,10 +6494,10 @@ static int __cdecl hit_take(unsigned int* r)
                 oldest = t->freed[j];
             }
         }
-        if (take) s_hitHeld++;
-        else if (older) { take = older; s_hitFallback++; }
+        if (take) s_hitDiag.held++;
+        else if (older) { take = older; s_hitDiag.fallback++; }
         else {
-            s_hitHoldFail++;
+            s_hitDiag.holdFail++;
             r[PR_ESI] = r[PR_EBP];
             return 0;
         }
@@ -6432,9 +6506,9 @@ static int __cdecl hit_take(unsigned int* r)
     }
     t->stamp[idx] = hit_next_birth(t->stamp[idx], now);
     t->local[idx] = now;
-    if (s_hitDelayK && s_hitTakeNotes < 20000u) {
+    if (s_hitDelayK && s_hitDiag.takeNotes < 20000u) {
         unsigned int stock = idx;
-        s_hitTakeNotes++;
+        s_hitDiag.takeNotes++;
         hit_slot_index(t, ta, first, &stock);
         tagpu_logf("enginefix: stale hits: take %u (first-free %u) at %u", idx, stock, now);
     }
@@ -6492,12 +6566,12 @@ static void __cdecl hit_created(unsigned int* r)
     if (!hit_slot_index(t, ta, slot, &idx)) return;
     if (ghost_is_09_return(ret) && (rec[3] | (unsigned int)rec[4] << 8) == idx) {
         memcpy(&stamp, rec + 23, 4);
-        s_hitCreateExact++;
+        s_hitDiag.createExact++;
         kill_apply_state((char*)slot, rec);
     } else if ((ret == 0x0048BA05u || ret == 0x0048B49Cu) && hit_2c_bound(ta, slot, &stamp)) {
-        s_hitCreateLB++;
+        s_hitDiag.createLB++;
     } else {
-        s_hitCreateUnknown++;
+        s_hitDiag.createUnknown++;
     }
     t->stamp[idx] = stamp;
     t->local[idx] = HIT_GAMETIME(ta);
@@ -6518,9 +6592,9 @@ static int __stdcall hit_tx_create(unsigned int net, const unsigned char* msg, u
     memcpy(m + 3, msg, len < 23u ? len : 23u);
     memcpy(m + 26, &birth, 4);
     kill_state_read(m, idx);
-    s_hitOutCreate++;
-    s_hitOutBytes += HIT_MSG;
-    s_hitStockBytes += len;
+    s_hitDiag.outCreate++;
+    s_hitDiag.outBytes += HIT_MSG;
+    s_hitDiag.stockBytes += len;
     return HIT_SEND(net, m, sizeof m);
 }
 
@@ -6538,10 +6612,10 @@ static int __stdcall hit_tx_hit(unsigned int net, const unsigned char* msg, unsi
     m[2] = HIT_TAG_HIT;
     memcpy(m + 3, msg, len < 9u ? len : 9u);
     memcpy(m + 12, &stamp, 4);
-    if (stamp == HIT_UNKNOWN) s_hitTxUnknown++;
-    s_hitOutHit++;
-    s_hitOutBytes += HIT_MSG;
-    s_hitStockBytes += len;
+    if (stamp == HIT_UNKNOWN) s_hitDiag.txUnknown++;
+    s_hitDiag.outHit++;
+    s_hitDiag.outBytes += HIT_MSG;
+    s_hitDiag.stockBytes += len;
     if (s_hitDelayK && ta) {
         unsigned int now = HIT_GAMETIME(ta);
         hit_delay_flush(now);
@@ -6551,10 +6625,10 @@ static int __stdcall hit_tx_hit(unsigned int net, const unsigned char* msg, unsi
             s_hitDelay[q].due = now + s_hitDelayK;
             memcpy(s_hitDelay[q].m, m, sizeof m);
             s_hitDelayCount++;
-            s_hitDelayed++;
+            s_hitDiag.delayed++;
             return 1;
         }
-        s_hitDelayOverflow++;
+        s_hitDiag.delayOverflow++;
     }
     return HIT_SEND(net, m, sizeof m);
 }
@@ -6580,7 +6654,7 @@ static int hit_young(const struct hit_tab* t, const char* ta, unsigned int idx)
    replay and catch-up creates enter here too, with the create the gate refused. */
 static const unsigned char* hit_rx_create_armed(const unsigned char* m)
 {
-    s_hitInCreate++;
+    s_hitDiag.inCreate++;
     return m + 3;
 }
 
@@ -6589,8 +6663,8 @@ static const unsigned char* hit_rx_create_armed(const unsigned char* m)
    regs[PR_EAX], where popad puts it in eax */
 static int hit_rx_create(unsigned int* regs, const char* ta, const unsigned char* m)
 {
-    if (m[3] != 0x09) { s_hitMalformed++; return 1; }
-    if (!hit_gate(ta, 0x09)) { s_hitStateRefused++; return 1; }
+    if (m[3] != 0x09) { s_hitDiag.malformed++; return 1; }
+    if (!hit_gate(ta, 0x09)) { s_hitDiag.stateRefused++; return 1; }
     regs[PR_EAX] = (unsigned int)(size_t)hit_rx_create_armed(m);
     return 2;
 }
@@ -6603,9 +6677,9 @@ static int hit_rx_hit(unsigned int* regs, const char* ta, const unsigned char* m
     const char* slot;
     const char* pl;
     unsigned int vidx, stamp, flags;
-    if (m[3] != 0x0B) { s_hitMalformed++; return 1; }
-    if (!hit_gate(ta, 0x0B)) { s_hitStateRefused++; return 1; }
-    s_hitInHit++;
+    if (m[3] != 0x0B) { s_hitDiag.malformed++; return 1; }
+    if (!hit_gate(ta, 0x0B)) { s_hitDiag.stateRefused++; return 1; }
+    s_hitDiag.inHit++;
     if (s_hitDelayK && GetCurrentThreadId() == s_wpnGameTid) hit_delay_flush(HIT_GAMETIME(ta));
     regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
     vidx = m[4] | (unsigned int)m[5] << 8;
@@ -6618,19 +6692,19 @@ static int hit_rx_hit(unsigned int* regs, const char* ta, const unsigned char* m
         return 3;
     slot = first + (size_t)vidx * 0x118;
     flags = *(const unsigned int*)(slot + 0x110);
-    if (!(flags & 0x10000000u) || (flags & 0x4000u)) { s_hitDead++; return 3; }   /* 0x489D45 */
+    if (!(flags & 0x10000000u) || (flags & 0x4000u)) { s_hitDiag.dead++; return 3; }   /* 0x489D45 */
     pl = *(const char* const*)(slot + 0x96);
     if (pl && *(const unsigned int*)pl && (pl[0x73] == 1 || pl[0x73] == 2)) {     /* 0x489EC6 */
-        if (!hit_owner_accepts(t->stamp[vidx], stamp)) { s_hitRefuseOwner++; return 1; }
-        s_hitApplyOwner++;
-        if (hit_young(t, ta, vidx)) s_hitYoungOwner++;
+        if (!hit_owner_accepts(t->stamp[vidx], stamp)) { s_hitDiag.refuseOwner++; return 1; }
+        s_hitDiag.applyOwner++;
+        if (hit_young(t, ta, vidx)) s_hitDiag.youngOwner++;
     } else {
         switch (hit_bystander_rule(t->stamp[vidx], stamp)) {
-        case HIT_BY_STALE: s_hitRefuseBy++; return 1;
-        case HIT_BY_SAME:  s_hitApplyBy++; break;
-        default:           s_hitUndecidedBy++; break;
+        case HIT_BY_STALE: s_hitDiag.refuseBy++; return 1;
+        case HIT_BY_SAME:  s_hitDiag.applyBy++; break;
+        default:           s_hitDiag.undecidedBy++; break;
         }
-        if (hit_young(t, ta, vidx)) s_hitYoungBy++;
+        if (hit_young(t, ta, vidx)) s_hitDiag.youngBy++;
     }
     return 3;
 }
@@ -6664,14 +6738,15 @@ static int __cdecl hit_rx_chat(unsigned int* regs)
 /* ---- stubs, in B4's own page ------------------------------------------------------------- */
 
 static unsigned char* s_hitCode;
+SIM_CODE(s_hitCode);
 static unsigned int   s_hitCodeUsed;
+SIM_VAR(s_hitCodeUsed, SIM_INSTALL);
 
 static unsigned char* hit_code(unsigned int n)
 {
     unsigned char* p;
     if (!s_hitCode)
-        s_hitCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
-                                                 PAGE_EXECUTE_READWRITE);
+        s_hitCode = (unsigned char*)SIM_ALLOC(s_hitCode, 0x1000);
     if (!s_hitCode || s_hitCodeUsed + n > 0x1000) return NULL;
     p = s_hitCode + s_hitCodeUsed;
     s_hitCodeUsed += (n + 15u) & ~15u;
@@ -6752,12 +6827,9 @@ static void hit_selfcheck(void)
 
 static void hit_read_lever(void)
 {
-    FILE* f = fopen("tagpu_dmgdelay.on", "rb");
-    char b[16] = { 0 };
+    char b[16];
     unsigned int k;
-    if (!f) return;
-    fread(b, 1, sizeof b - 1, f);
-    fclose(f);
+    if (tagpu_sim_lever_read("tagpu_dmgdelay.on", b, sizeof b) < 0) return;
     k = (unsigned int)strtoul(b, NULL, 10);
     s_hitDelayK = k ? (k > 3600u ? 3600u : k) : 30u;
     tagpu_logf("enginefix: stale hits: TEST LEVER tagpu_dmgdelay.on -- every outgoing hit is "
@@ -6783,7 +6855,7 @@ static int fix_stale_hits(void)
                   *p, *doCreate, *doHit, *doDeath, *jCreate, *jHit, *jDeath, *jNone;
 
     hit_read_lever();
-    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) hit_selfcheck();
+    if (tagpu_sim_lever("tagpu_wirecheck.on")) hit_selfcheck();
 
     if (!(aTake = hit_code(64)) || !(aFree = hit_code(32)) || !(aExit = hit_code(32)) ||
         !(aAlloc = hit_code(32)) || !(aChat = hit_code(96)) || !(aBare09 = hit_code(16)) ||
@@ -6859,10 +6931,10 @@ static int fix_stale_hits(void)
 
     /* a bare 0x09 / 0x0B: counted, and the loop goes on */
     p = aBare09;
-    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitBare09);
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitDiag.bare09);
     hit_jmp(p, 0xE9, 0x00455F50);
     p = aBare0B;
-    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitBare0B);
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitDiag.bare0B);
     hit_jmp(p, 0xE9, 0x00455F50);
 
     /* 0x4653DE, after the Deathmatch respawn's create 0x4653D9, whose unit it uses at 0x465414
@@ -6885,7 +6957,7 @@ static int fix_stale_hits(void)
     *p++ = 0x8B; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x34;  /* mov edi,[esp+0x34] */
     p = hit_jmp(p, 0xE9, 0x004653E6);
     *jNone = (unsigned char)(p - (jNone + 1));
-    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitRetry);          /* inc [s_hitRetry] */
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitDiag.retry);          /* inc [s_hitDiag.retry] */
     hit_jmp(p, 0xE9, 0x004654FB);
 
     hit_site(0x00486036, 10, take, 0xE9, aTake, "stale hits: the hold, first-free's free test");
@@ -6923,14 +6995,14 @@ int tagpu_hits_format(char* buf, unsigned int cap)
                      " in 09=%u 0b=%u owner=%u/%u by=%u/%u/%u dead=%u gate=%u"
                      " copy exact=%u bound=%u unk=%u held=%u fallback=%u"
                      " holdfail=%u retry=%u delay=%u q=%u",
-                     s_hitMalformed, s_hitBare09, s_hitBare0B, s_hitDelayOverflow,
-                     s_hitYoungOwner, s_hitYoungBy,
-                     t ? t->n : 0u, s_hitTables, s_hitOutCreate, s_hitOutHit, s_hitOutBytes,
-                     s_hitStockBytes, s_hitTxUnknown, s_hitInCreate, s_hitInHit, s_hitApplyOwner,
-                     s_hitRefuseOwner, s_hitApplyBy, s_hitUndecidedBy, s_hitRefuseBy, s_hitDead,
-                     s_hitStateRefused,
-                     s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown, s_hitHeld,
-                     s_hitFallback, s_hitHoldFail, s_hitRetry, s_hitDelayK, s_hitDelayed);
+                     s_hitDiag.malformed, s_hitDiag.bare09, s_hitDiag.bare0B, s_hitDiag.delayOverflow,
+                     s_hitDiag.youngOwner, s_hitDiag.youngBy,
+                     t ? t->n : 0u, s_hitDiag.tables, s_hitDiag.outCreate, s_hitDiag.outHit, s_hitDiag.outBytes,
+                     s_hitDiag.stockBytes, s_hitDiag.txUnknown, s_hitDiag.inCreate, s_hitDiag.inHit, s_hitDiag.applyOwner,
+                     s_hitDiag.refuseOwner, s_hitDiag.applyBy, s_hitDiag.undecidedBy, s_hitDiag.refuseBy, s_hitDiag.dead,
+                     s_hitDiag.stateRefused,
+                     s_hitDiag.createExact, s_hitDiag.createLB, s_hitDiag.createUnknown, s_hitDiag.held,
+                     s_hitDiag.fallback, s_hitDiag.holdFail, s_hitDiag.retry, s_hitDelayK, s_hitDiag.delayed);
 }
 
 /* ===== GHOST COMMANDER: THE CREATES REFUSED DURING THE LOAD, AND THE DIRTY CREATE'S POSITION ===
@@ -7022,26 +7094,45 @@ typedef struct { unsigned int idx, k, birth; } GHOSTDONE;
 typedef void* (__stdcall* GHOSTCALL)(unsigned int arg, const unsigned char* rec, const char* sender);
 
 static CRITICAL_SECTION s_ghostLock;        /* the queue: whichever thread pumps, then the drain */
+SIM_LOCK(s_ghostLock);
 static GHOSTREC     s_ghostQ[GHOST_SENDERS][GHOST_DEPTH];
+SIM_VAR(s_ghostQ, SIM_TRANSIENT);
 static unsigned int s_ghostN[GHOST_SENDERS];
+SIM_VAR(s_ghostN, SIM_TRANSIENT);
 static int          s_ghostPhase;           /* 1 once this level's first drain has run          */
+SIM_VAR(s_ghostPhase, SIM_STATE);
 static GHOSTREC     s_ghostTake[GHOST_SENDERS][GHOST_DEPTH];   /* the drain's copy, game thread */
+SIM_VAR(s_ghostTake, SIM_TRANSIENT);
+static const SimField ghost_done_layout[] = {
+    SIM_FIELD(GHOSTDONE, idx, SIMF_ID, SIM_ID_UNIT_SLOT),
+    SIM_FIELD(GHOSTDONE, k, SIMF_ID, SIM_ID_PLAYER),
+    SIM_FIELD_END
+};
 static GHOSTDONE    s_ghostDone[GHOST_DONE];    /* the drain's and the catch-up ticks' copies */
 static unsigned int s_ghostDoneN;
+SIM_VAR(s_ghostDoneN, SIM_STATE);
+SIM_ROWS_LIVE(s_ghostDone, SIM_STATE, SIM_ID_NONE, s_ghostDoneN, ghost_done_layout);
 static DWORD        s_ghostGameTid;         /* DllMain's thread, which runs the main loop       */
+SIM_VAR(s_ghostGameTid, SIM_INSTALL);
 static int          s_ghostOff;             /* TEST LEVER tagpu_ghostq.off                      */
+SIM_VAR(s_ghostOff, SIM_INSTALL);
 static unsigned int s_ghostRet;             /* the replay stub's return into CreateFromNetwork  */
+SIM_VAR(s_ghostRet, SIM_INSTALL);
 static GHOSTCALL    s_ghostCall;
+SIM_VAR(s_ghostCall, SIM_INSTALL);
 
 /* counters for the heartbeat's ghost: section; u32. q, over, killed and nokill are written
    under the lock, the rest on the game thread. */
-static unsigned int s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostKilled, s_ghostNoKill;
-static unsigned int s_ghostReplayed, s_ghostNow, s_ghostSwept, s_ghostUntracked;
-static unsigned int s_ghostInactive, s_ghostStale, s_ghostBad, s_ghostCleared;
-static unsigned int s_ghostOffThread, s_ghostLevels;
-static unsigned int s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff;
-static unsigned int s_ghostPosUnbound, s_ghostPosShort;
-static volatile LONG s_ghostNotes;
+static struct {
+    unsigned int  queued, overflow, deep, killed, noKill;
+    unsigned int  replayed, now, swept, untracked;
+    unsigned int  inactive, stale, bad, cleared;
+    unsigned int  offThread, levels;
+    unsigned int  posGround, posAir, posNone, posOff;
+    unsigned int  posUnbound, posShort;
+    volatile LONG notes;
+} s_ghostDiag;
+SIM_VAR(s_ghostDiag, SIM_PRIVATE);
 
 static int ghost_is_09_return(unsigned int ret)
 {
@@ -7186,7 +7277,7 @@ static int ghost_local_owner(const char* ta, const char* slot)
 static void ghost_made(unsigned int idx, unsigned int k, unsigned int birth)
 {
     GHOSTDONE* d;
-    if (s_ghostDoneN >= GHOST_DONE) { s_ghostUntracked++; return; }
+    if (s_ghostDoneN >= GHOST_DONE) { s_ghostDiag.untracked++; return; }
     d = &s_ghostDone[s_ghostDoneN++];
     d->idx = idx;
     d->k = k;
@@ -7217,20 +7308,20 @@ static int ghost_take(unsigned int* regs, const char* ta, const unsigned char* m
             q->arg = arg;
             q->dpid = *(const unsigned int*)(snd + 4);
             q->dead = 0;
-            s_ghostQueued++;
-            if (s_ghostN[k] > s_ghostDeep) s_ghostDeep = s_ghostN[k];
+            s_ghostDiag.queued++;
+            if (s_ghostN[k] > s_ghostDiag.deep) s_ghostDiag.deep = s_ghostN[k];
         } else {
-            s_ghostOverflow++;
+            s_ghostDiag.overflow++;
         }
     }
     LeaveCriticalSection(&s_ghostLock);
     if (!now) return 1;
     /* after the drain only the game thread pumps (0x4954C8, 0x4968CB) */
-    if (GetCurrentThreadId() != s_ghostGameTid) { s_ghostOffThread++; return 0; }
+    if (GetCurrentThreadId() != s_ghostGameTid) { s_ghostDiag.offThread++; return 0; }
     memcpy(&birth, m + 26, 4);
     ghost_made(m[6] | (unsigned int)m[7] << 8, k, birth);
-    s_ghostNow++;
-    if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+    s_ghostDiag.now++;
+    if (InterlockedIncrement(&s_ghostDiag.notes) <= GHOST_NOTES)
         tagpu_logf("enginefix: ghost commander: created slot %u from sender %u (birth %u, type %u) "
                    "at GameTime %u, in a catch-up tick", m[6] | (unsigned int)m[7] << 8, k,
                    birth, m[4] | (unsigned int)m[5] << 8, HIT_GAMETIME(ta));
@@ -7288,20 +7379,20 @@ static int ghost_refused_kill(unsigned int* regs, const unsigned char* m, const 
     i = ghost_cancel(s_ghostQ[k], s_ghostN[k], idx);
     if (i >= 0) {
         s_ghostQ[k][i].dead = 1;
-        s_ghostKilled++;
+        s_ghostDiag.killed++;
     }
     late = s_ghostPhase;
     LeaveCriticalSection(&s_ghostLock);
     if (i >= 0) return 0;
     if (late && GetCurrentThreadId() == s_ghostGameTid && ghost_sweep(ta, k, idx, frac)) {
-        s_ghostSwept++;
-        if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+        s_ghostDiag.swept++;
+        if (InterlockedIncrement(&s_ghostDiag.notes) <= GHOST_NOTES)
             tagpu_logf("enginefix: ghost commander: slot %u from sender %u killed during the "
                        "catch-up ticks; its copy made before state 6 marked dying", idx, k);
         return 1;
     }
     EnterCriticalSection(&s_ghostLock);
-    s_ghostNoKill++;
+    s_ghostDiag.noKill++;
     LeaveCriticalSection(&s_ghostLock);
     return 0;
 }
@@ -7312,7 +7403,7 @@ static int ghost_refused_kill(unsigned int* regs, const unsigned char* m, const 
 static void __cdecl ghost_refused(unsigned int* regs)
 {
     const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
-    if (m && m[0] == 0x0C) InterlockedIncrement(&s_killBare0C);
+    if (m && m[0] == 0x0C) InterlockedIncrement(&s_killDiag.bare0C);
 }
 
 /* In place of 0x497F5E, the load state's first call (bit 0 of main+0x38D75 clear), on the game
@@ -7333,7 +7424,7 @@ static void __cdecl ghost_reset(unsigned int* regs)
     s_ghostDoneN = 0;
     LeaveCriticalSection(&s_ghostLock);
     if (left) {
-        s_ghostCleared += left;
+        s_ghostDiag.cleared += left;
         tagpu_logf("enginefix: ghost commander: %u held creates from a load that never reached "
                    "play, cleared", left);
     }
@@ -7359,9 +7450,9 @@ static void __cdecl ghost_replay(unsigned int* regs)
     }
     s_ghostPhase = 1;
     LeaveCriticalSection(&s_ghostLock);
-    s_ghostLevels++;
+    s_ghostDiag.levels++;
     if (!ta || GetCurrentThreadId() != s_ghostGameTid) {
-        s_ghostOffThread += total;
+        s_ghostDiag.offThread += total;
         tagpu_logf("enginefix: ghost commander: the in-play entry ran off the game thread; %u "
                    "held creates dropped", total);
         return;
@@ -7372,7 +7463,7 @@ static void __cdecl ghost_replay(unsigned int* regs)
     first = *(const char* const*)(ta + 0x14357);
     last  = *(const char* const*)(ta + 0x1435B);
     if (first && last >= first) max = (unsigned int)(last - first) / 0x118;
-    before = s_ghostInactive + s_ghostStale + s_ghostBad;
+    before = s_ghostDiag.inactive + s_ghostDiag.stale + s_ghostDiag.bad;
     for (k = 0; k < GHOST_SENDERS; k++)
         for (i = 0; i < n[k]; i++) {
             const GHOSTREC* q = &s_ghostTake[k][i];
@@ -7380,20 +7471,20 @@ static void __cdecl ghost_replay(unsigned int* regs)
             const char* slot;
             memcpy(&birth, q->m + 26, 4);
             if (q->dead) { dead++; continue; }                     /* counted as killed */
-            if (!ghost_sender_active(ta, k, q->dpid)) { s_ghostInactive++; continue; }
-            if (idx == 0u || idx > max || !t || idx >= t->n) { s_ghostBad++; continue; }
+            if (!ghost_sender_active(ta, k, q->dpid)) { s_ghostDiag.inactive++; continue; }
+            if (idx == 0u || idx > max || !t || idx >= t->n) { s_ghostDiag.bad++; continue; }
             slot = first + (size_t)idx * 0x118;
             if (*(const unsigned short*)(slot + 0xA6) &&
                 (ghost_local_owner(ta, slot) || !ghost_newer(1, t->stamp[idx], birth))) {
-                s_ghostStale++;
+                s_ghostDiag.stale++;
                 continue;
             }
             /* the whole carried message: 0x48634F reads the birth 23 bytes into the record */
             s_ghostCall(q->arg, hit_rx_create_armed(q->m), ta + 0x1B63 + k * 0x14B);
             ghost_made(idx, k, birth);
-            s_ghostReplayed++;
+            s_ghostDiag.replayed++;
             done++;
-            if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+            if (InterlockedIncrement(&s_ghostDiag.notes) <= GHOST_NOTES)
                 tagpu_logf("enginefix: ghost commander: replayed slot %u from sender %u (birth %u, "
                            "type %u) at GameTime %u, before the first tick; the slot now holds "
                            "type %u", idx, k, birth, q->m[4] | (unsigned int)q->m[5] << 8,
@@ -7402,8 +7493,8 @@ static void __cdecl ghost_replay(unsigned int* regs)
     tagpu_logf("enginefix: ghost commander: before the first tick (GameTime %u), %u held creates: "
                "%u replayed, %u killed while held, %u not (inactive %u, stale %u, bad %u in "
                "total)", HIT_GAMETIME(ta), total, done, dead,
-               s_ghostInactive + s_ghostStale + s_ghostBad - before, s_ghostInactive,
-               s_ghostStale, s_ghostBad);
+               s_ghostDiag.inactive + s_ghostDiag.stale + s_ghostDiag.bad - before, s_ghostDiag.inactive,
+               s_ghostDiag.stale, s_ghostDiag.bad);
 }
 
 /* In place of the dirty create's `call 0x4861D0` at 0x48BA00, entered by a call so that
@@ -7430,7 +7521,7 @@ static void __cdecl ghost_position(unsigned int* r)
     GHOSTBITS b;
     unsigned long long pos, avail;
     int kind, x = 0, z = 0;
-    if (!ta || !rec || k >= GHOST_SENDERS || !rd[0]) { s_ghostPosNone++; return; }
+    if (!ta || !rec || k >= GHOST_SENDERS || !rd[0]) { s_ghostDiag.posNone++; return; }
     pl = (const unsigned char*)ta + 0x1B63 + k * 0x14B;
     type  = rec[1] | (unsigned int)rec[2] << 8;
     count = *(const unsigned int*)(ta + 0x1438F);
@@ -7438,27 +7529,27 @@ static void __cdecl ghost_position(unsigned int* r)
     /* 0x43DC48..0x43DC57: only a remote player's unit gets a proxy; 0x4862CF: only a def
        with a move class gets a move object at all */
     if (!*(const unsigned int*)pl || pl[0x73] != 3 || !defs || type == 0u || type >= count) {
-        s_ghostPosNone++;
+        s_ghostDiag.posNone++;
         return;
     }
     def = defs + (size_t)type * 0x249;
-    if (*(const unsigned char*)(def + 0x22F) != 1) { s_ghostPosNone++; return; }
+    if (*(const unsigned char*)(def + 0x22F) != 1) { s_ghostDiag.posNone++; return; }
     if ((const unsigned char*)rd != s_wire2cRd || !s_wire2cCopy ||
         (const unsigned char*)(size_t)rd[0] != s_wire2cCopy) {
-        s_ghostPosUnbound++;
+        s_ghostDiag.posUnbound++;
         return;
     }
     b.data = (const unsigned int*)(size_t)rd[0];
     b.word = rd[1];
     b.bit  = rd[2];
-    if (b.bit >= 32u) { s_ghostPosNone++; return; }
+    if (b.bit >= 32u) { s_ghostDiag.posNone++; return; }
     pos   = wire_pos((const unsigned char*)rd);
     avail = pos < s_wire2cEnd ? s_wire2cEnd - pos : 0u;
     kind = ghost_payload_pos(b, avail, (*(const unsigned int*)(def + 0x241) >> 11) & 1u, &x, &z,
                              &x16, &y16, &z16);
     if (kind == GHOST_POS_SHORT) {
-        s_ghostPosShort++;
-        if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+        s_ghostDiag.posShort++;
+        if (InterlockedIncrement(&s_ghostDiag.notes) <= GHOST_NOTES)
             tagpu_logf("enginefix: ghost commander: dirty create slot %u: reading its move "
                        "payload's position would pass the message's end (bit %u of %u); stock's "
                        "record kept",
@@ -7466,10 +7557,10 @@ static void __cdecl ghost_position(unsigned int* r)
                        (unsigned int)s_wire2cEnd);
         return;
     }
-    if (kind == GHOST_POS_NONE) { s_ghostPosNone++; return; }
+    if (kind == GHOST_POS_NONE) { s_ghostDiag.posNone++; return; }
     if (!ghost_on_map(x, z, *(const unsigned int*)(ta + 0x14233),
                       *(const unsigned int*)(ta + 0x14237))) {
-        s_ghostPosOff++;
+        s_ghostDiag.posOff++;
         return;
     }
     memcpy(&sx, rec + 5, 4);
@@ -7479,11 +7570,11 @@ static void __cdecl ghost_position(unsigned int* r)
     if (kind == GHOST_POS_AIR) {
         /* y up to 0x1FF px, the ceiling the goal point 0x44E3C0 clamps its y to (0x44E4F1) */
         if (y16 <= 0x01FF0000u) memcpy(rec + 9, &y16, 4);
-        s_ghostPosAir++;
+        s_ghostDiag.posAir++;
     } else {
-        s_ghostPosGround++;
+        s_ghostDiag.posGround++;
     }
-    if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+    if (InterlockedIncrement(&s_ghostDiag.notes) <= GHOST_NOTES)
         tagpu_logf("enginefix: ghost commander: dirty create slot %u type %u at (%d, %d) from its "
                    "%s payload; stock's record had (%d, %d)", rec[3] | (unsigned int)rec[4] << 8,
                    type, x, z, kind == GHOST_POS_AIR ? "air" : "ground", (int)sx >> 16,
@@ -7493,14 +7584,15 @@ static void __cdecl ghost_position(unsigned int* r)
 /* ---- stubs, in B5's own page ------------------------------------------------------------- */
 
 static unsigned char* s_ghostCode;
+SIM_CODE(s_ghostCode);
 static unsigned int   s_ghostCodeUsed;
+SIM_VAR(s_ghostCodeUsed, SIM_INSTALL);
 
 static unsigned char* ghost_code(unsigned int n)
 {
     unsigned char* p;
     if (!s_ghostCode)
-        s_ghostCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
-                                                   PAGE_EXECUTE_READWRITE);
+        s_ghostCode = (unsigned char*)SIM_ALLOC(s_ghostCode, 0x1000);
     if (!s_ghostCode || s_ghostCodeUsed + n > 0x1000) return NULL;
     p = s_ghostCode + s_ghostCodeUsed;
     s_ghostCodeUsed += (n + 15u) & ~15u;
@@ -7598,11 +7690,11 @@ static int fix_ghost_commander(int wire)
 
     InitializeCriticalSection(&s_ghostLock);
     s_ghostGameTid = GetCurrentThreadId();
-    s_ghostOff = GetFileAttributesA("tagpu_ghostq.off") != INVALID_FILE_ATTRIBUTES;
+    s_ghostOff = tagpu_sim_lever("tagpu_ghostq.off");
     if (s_ghostOff)
         tagpu_logf("enginefix: ghost commander: TEST LEVER tagpu_ghostq.off -- nothing is held; "
                    "the dirty create's position still applies");
-    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) ghost_selfcheck();
+    if (tagpu_sim_lever("tagpu_wirecheck.on")) ghost_selfcheck();
     if (wire != FIX_ARMED) {
         lim_needs("the ghost commander (a simulation fix)", "wire robustness", fix_state(wire));
         return FIX_TABLE;
@@ -7744,15 +7836,24 @@ static int fix_ghost_commander(int wire)
    with ExplodeAs's damage. Every site is a row of the fail-closed table. */
 
 static unsigned char  s_txCarried[65536];    /* the running destructor call's decision        */
+SIM_VAR(s_txCarried, SIM_TRANSIENT);
 static unsigned int   s_txMark[65536];       /* a dying passenger's birth stamp + 1, 0 = none */
+SIM_ROWS(s_txMark, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
 static unsigned int   s_txKillMark[65536];   /* the token of the kill-all that detached it    */
+SIM_ROWS(s_txKillMark, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
 static volatile LONG  s_txKillGen;           /* the last token drawn                          */
+SIM_VAR(s_txKillGen, SIM_STATE);
 static DWORD          s_txKillTls = TLS_OUT_OF_INDEXES;  /* the thread's kill-all token, 0 none */
+SIM_TLS(s_txKillTls, SIM_TRANSIENT);
 typedef int (__stdcall *PFN_KillAll)(unsigned int player);
 static PFN_KillAll    s_txKillTramp;         /* kill-all's first ten bytes, then 0x486F1A     */
-static unsigned int   s_txDecided, s_txMarked, s_txKillMarked, s_txPicked, s_txReceived;
-static unsigned int   s_txDetachedHere;
+SIM_VAR(s_txKillTramp, SIM_INSTALL);
+static struct {
+    unsigned int decided, marked, killMarked, picked, received, detachedHere;
+} s_txDiag;
+SIM_VAR(s_txDiag, SIM_PRIVATE);
 static unsigned int   s_txWrapRet;           /* tx_wrap's return point inside the destructor  */
+SIM_VAR(s_txWrapRet, SIM_INSTALL);
 
 static void tx_reset(void)
 {
@@ -7797,7 +7898,7 @@ static void __stdcall tx_arm(const char* unit, const unsigned char* rec)
                   tx_mark_held(idx);
     s_txMark[idx] = 0;
     s_txCarried[idx] = (unsigned char)carried;
-    if (carried) tx_event(&s_txDecided, "a keyed death decided carried:", tx_name(unit), NULL);
+    if (carried) tx_event(&s_txDiag.decided, "a keyed death decided carried:", tx_name(unit), NULL);
 }
 
 /* 0x486810: the cargo loop's passenger (the transport's +0x8A), just hit by 0x48680B */
@@ -7809,12 +7910,12 @@ static void __stdcall tx_cargo(const char* passenger)
     if (!hit_slot_index(t, ta, passenger, &idx) || !tagpu_datakeys_tx_keyed(passenger)) return;
     if ((*(const unsigned int*)(passenger + 0x110) & 0x4000u) && !(t->stamp[idx] & HIT_LB)) {
         s_txMark[idx] = t->stamp[idx] + 1u;
-        tx_event(&s_txMarked, "a dying keyed passenger marked", NULL, NULL);
+        tx_event(&s_txDiag.marked, "a dying keyed passenger marked", NULL, NULL);
     }
     tok = tx_kill_token();
     if (tok && s_txKillMark[idx] != tok) {
         s_txKillMark[idx] = tok;
-        tx_event(&s_txKillMarked, "a keyed passenger detached inside kill-all", NULL, NULL);
+        tx_event(&s_txDiag.killMarked, "a keyed passenger detached inside kill-all", NULL, NULL);
     }
 }
 
@@ -7848,7 +7949,7 @@ static int __stdcall tx_detach(const char* child, const char* dying)
     rec[5] = 0xFF;
     rec[6] = 1;
     E_Attach(rec);
-    tx_event(&s_txDetachedHere, "a departed player's passenger detached here, not broadcast",
+    tx_event(&s_txDiag.detachedHere, "a departed player's passenger detached here, not broadcast",
              NULL, NULL);
     return 1;
 }
@@ -7864,7 +7965,7 @@ static const char* __stdcall tx_pick(const char* unit, int selfd)
     if (!carried && hit_slot_index(t, ta, unit, &idx))
         carried = s_txCarried[idx] || (s_txKillMark[idx] && s_txKillMark[idx] == tx_kill_token());
     if (!carried || !(w = tagpu_datakeys_tx_weapon(unit, selfd))) return NULL;
-    tx_event(&s_txPicked, selfd ? "a carried self-destruct:" : "a carried death:",
+    tx_event(&s_txDiag.picked, selfd ? "a carried self-destruct:" : "a carried death:",
              tx_name(unit), w);
     return w;
 }
@@ -7895,6 +7996,7 @@ static int __stdcall tx_kill_all(unsigned int player)
 static unsigned char* tx_wrap_code(void)
 {
     static unsigned char* wrap;
+    SIM_VAR(wrap, SIM_INSTALL);
     unsigned char* p;
     if (wrap || !(p = fix_code(48))) return wrap;
     wrap = p;
@@ -7927,7 +8029,7 @@ static unsigned int tx_dtor_caller(const unsigned char* ret)
 static void tx_rx_death(const unsigned char* m)
 {
     s_txCarried[m[4] | (unsigned int)m[5] << 8] = (unsigned char)(m[19] == 1);
-    if (m[19] == 1) tx_event(&s_txReceived, "a carried death received", NULL, NULL);
+    if (m[19] == 1) tx_event(&s_txDiag.received, "a carried death received", NULL, NULL);
 }
 
 /* A carried 0x4C refused in state 5 whose copy ghost_refused_kill has marked dying, on the
@@ -7940,7 +8042,7 @@ static void tx_rx_swept(const unsigned char* m)
     unsigned int idx = m[4] | (unsigned int)m[5] << 8;
     if (m[19] != 1 || !t || idx >= t->n || (t->stamp[idx] & HIT_LB)) return;
     s_txMark[idx] = t->stamp[idx] + 1u;
-    tx_event(&s_txMarked, "a carried death refused while loading, its copy marked", NULL, NULL);
+    tx_event(&s_txDiag.marked, "a carried death refused while loading, its copy marked", NULL, NULL);
 }
 
 /* The sites. Each stub's registers are the site's own [DISASSEMBLED]:
@@ -7999,9 +8101,8 @@ static int fix_transported(void)
         lim_needs("transported explosions (a simulation fix)", "the unit-key reader", "not installed");
         return FIX_TABLE;
     }
-    if (s_txKillTls == TLS_OUT_OF_INDEXES) s_txKillTls = TlsAlloc();
     if (!aPick || !aArm || !aWrap || !aCarg || !aKill || !aFold || !aDet ||
-        s_txKillTls == TLS_OUT_OF_INDEXES) {
+        !SIM_TLS_ALLOC(s_txKillTls)) {
         lim_no_stub();
         return FIX_TABLE;
     }
@@ -8117,12 +8218,12 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
                      " | ghost:%s over=%u bad=%u offthread=%u unbound=%u short=%u q=%u deep=%u"
                      " replay=%u now=%u killed=%u swept=%u nokill=%u untracked=%u inactive=%u"
                      " stale=%u cleared=%u levels=%u pos ground=%u air=%u none=%u off=%u",
-                     s_ghostOff ? " LEVER-OFF" : "", s_ghostOverflow, s_ghostBad,
-                     s_ghostOffThread, s_ghostPosUnbound, s_ghostPosShort, s_ghostQueued,
-                     s_ghostDeep, s_ghostReplayed, s_ghostNow, s_ghostKilled, s_ghostSwept,
-                     s_ghostNoKill, s_ghostUntracked, s_ghostInactive, s_ghostStale,
-                     s_ghostCleared, s_ghostLevels, s_ghostPosGround, s_ghostPosAir,
-                     s_ghostPosNone, s_ghostPosOff);
+                     s_ghostOff ? " LEVER-OFF" : "", s_ghostDiag.overflow, s_ghostDiag.bad,
+                     s_ghostDiag.offThread, s_ghostDiag.posUnbound, s_ghostDiag.posShort, s_ghostDiag.queued,
+                     s_ghostDiag.deep, s_ghostDiag.replayed, s_ghostDiag.now, s_ghostDiag.killed, s_ghostDiag.swept,
+                     s_ghostDiag.noKill, s_ghostDiag.untracked, s_ghostDiag.inactive, s_ghostDiag.stale,
+                     s_ghostDiag.cleared, s_ghostDiag.levels, s_ghostDiag.posGround, s_ghostDiag.posAir,
+                     s_ghostDiag.posNone, s_ghostDiag.posOff);
 }
 
 /* ===== KILL COUNTS ACROSS PEERS: THE OWNER'S BUILD STATE AT THE CREATE AND AT THE DEATH ======
@@ -8254,15 +8355,7 @@ struct kill_hold {
     unsigned char bytes[KILL_Q_BYTES];
 };
 static struct kill_hold s_killHold[KILL_HOLDS];
-
-/* counters for the heartbeat's kills: section; the LONGs are written from both pumping threads
-   during a load (the refused deaths) or from any thread that holds, the rest by the thread
-   that runs the tick */
-static unsigned int s_killOut, s_killIn, s_killBadFrac, s_killDeadCopy, s_killNoSlot;
-static unsigned int s_killSame, s_killTurned, s_killTurnedBack, s_killSwept;
-static unsigned int s_killCreateDone, s_killCreateNano, s_killCreateAbsent, s_killCreateBad;
-static unsigned int s_kill12Drop;
-static volatile LONG s_killRefused, s_killHeld, s_killHoldLate, s_killHoldFull, s_killNotes;
+SIM_VAR(s_killHold, SIM_TRANSIENT);
 
 /* slot idx of the unit array, or NULL for 0 or past it (B3's bound, wire_index_ok) */
 static char* kill_slot(const char* ta, unsigned int idx)
@@ -8287,7 +8380,7 @@ static void kill_state_read(unsigned char* m, unsigned int idx)
 {
     const char* slot = kill_slot(*(const char* const*)0x00511DE8, idx);
     unsigned int fbits;
-    if (!slot) { s_killNoSlot++; return; }
+    if (!slot) { s_killDiag.noSlot++; return; }
     memcpy(&fbits, slot + 0x104, 4);
     kill_state_put(m, fbits, *(const unsigned short*)(slot + 0x108));
 }
@@ -8334,18 +8427,18 @@ static void kill_hold_arm(void)
     struct kill_hold* h = kill_hold_mine();
     int i;
     if (h) {
-        InterlockedIncrement(&s_killHoldLate);
+        InterlockedIncrement(&s_killDiag.holdLate);
         kill_flush(h, KILL_ABSENT, 0, 0);
     }
     for (i = 0; i < KILL_HOLDS; i++) {
         if (InterlockedCompareExchange(&s_killHold[i].tid, me, 0) == 0) {
             s_killHold[i].n = s_killHold[i].used = 0;
             s_killHold[i].flushing = 0;
-            InterlockedIncrement(&s_killHeld);
+            InterlockedIncrement(&s_killDiag.held);
             return;
         }
     }
-    InterlockedIncrement(&s_killHoldFull);
+    InterlockedIncrement(&s_killDiag.holdFull);
 }
 
 /* In place of the send 0x451DF0's first three instructions, on every thread and for every
@@ -8363,7 +8456,7 @@ static int __cdecl kill_send_gate(unsigned int* regs)
     msg = *(const unsigned char* const*)(sp + 8);
     len = *(const unsigned int*)(sp + 12);
     if (!msg || !len || len > KILL_Q_BYTES - h->used || h->n >= KILL_Q_N) {
-        InterlockedIncrement(&s_killHoldLate);
+        InterlockedIncrement(&s_killDiag.holdLate);
         kill_flush(h, KILL_ABSENT, 0, 0);
         return 0;
     }
@@ -8430,11 +8523,11 @@ static void kill_apply_state(char* slot, const unsigned char* rec)
     unsigned int fbits;
     float f;
     char* ob;
-    if (rec[33] == 0) { s_killCreateAbsent++; return; }
-    if (rec[33] != 1) { s_killCreateBad++; return; }
+    if (rec[33] == 0) { s_killDiag.createAbsent++; return; }
+    if (rec[33] != 1) { s_killDiag.createBad++; return; }
     memcpy(&fbits, rec + 27, 4);
     memcpy(&f, &fbits, 4);
-    if (!(f >= 0.0f && f <= 1.0f)) { s_killCreateBad++; return; }
+    if (!(f >= 0.0f && f <= 1.0f)) { s_killDiag.createBad++; return; }
     ob = *(char* const*)(slot + 0x9E);
     if (ob) *(unsigned int*)(ob + 0x10) = 0;
     *(unsigned short*)(slot + 0x108) = (unsigned short)(rec[31] | (unsigned int)rec[32] << 8);
@@ -8442,8 +8535,8 @@ static void kill_apply_state(char* slot, const unsigned char* rec)
         memcpy(slot + 0x104, &fbits, 4);
         *(unsigned int*)(slot + 0x110) |= 0x2000u;
     }
-    if (f == 0.0f) s_killCreateDone++;
-    else s_killCreateNano++;
+    if (f == 0.0f) s_killDiag.createDone++;
+    else s_killDiag.createNano++;
 }
 
 /* In place of Send_UnitDeath's `call 0x451DF0` (0x48666D), with its signature: the 0x0C,
@@ -8461,12 +8554,12 @@ static int __stdcall kill_tx_death(unsigned int net, const unsigned char* msg, u
         memcpy(m + 14, slot + 0x104, 4);
         m[18] = 1;
     } else {
-        s_killNoSlot++;
+        s_killDiag.noSlot++;
     }
     m[19] = s_txCarried[msg[1] | (unsigned int)msg[2] << 8];   /* tx_arm's, at 0x48664B */
-    s_killOut++;
-    s_hitOutBytes += HIT_MSG;
-    s_hitStockBytes += len;
+    s_killDiag.out++;
+    s_hitDiag.outBytes += HIT_MSG;
+    s_hitDiag.stockBytes += len;
     return HIT_SEND(net, m, sizeof m);
 }
 
@@ -8482,30 +8575,30 @@ static int kill_rx_death(unsigned int* regs, const char* ta, const unsigned char
     unsigned int fbits;
     float f;
     int ok;
-    if (m[3] != 0x0C) { s_hitMalformed++; return 1; }
+    if (m[3] != 0x0C) { s_hitDiag.malformed++; return 1; }
     memcpy(&fbits, m + 14, 4);
     memcpy(&f, &fbits, 4);
     ok = m[18] == 1 && f >= 0.0f && f <= 1.0f;
     if (!hit_gate(ta, 0x0C)) {
-        InterlockedIncrement(&s_killRefused);
+        InterlockedIncrement(&s_killDiag.refused);
         if (*(const unsigned int*)(ta + 0x391F1) == 5u &&
             ghost_refused_kill(regs, m + 3, ok ? m + 14 : NULL)) {
-            if (ok) s_killSwept++;
-            else s_killBadFrac++;
+            if (ok) s_killDiag.swept++;
+            else s_killDiag.badFrac++;
             tx_rx_swept(m);
         }
         return 1;
     }
-    s_killIn++;
+    s_killDiag.in++;
     regs[PR_EAX] = (unsigned int)(size_t)(m + 3);
     tx_rx_death(m);
     slot = kill_slot(ta, m[4] | (unsigned int)m[5] << 8);
     if (!slot) return 4;
-    if (!ok) { s_killBadFrac++; return 4; }
-    if (!(*(const unsigned int*)(slot + 0x110) & 0x10000000u)) { s_killDeadCopy++; return 4; }
-    if (*(const float*)(slot + 0x104) == f) s_killSame++;
-    else if (f == 0.0f) s_killTurned++;
-    else s_killTurnedBack++;
+    if (!ok) { s_killDiag.badFrac++; return 4; }
+    if (!(*(const unsigned int*)(slot + 0x110) & 0x10000000u)) { s_killDiag.deadCopy++; return 4; }
+    if (*(const float*)(slot + 0x104) == f) s_killDiag.same++;
+    else if (f == 0.0f) s_killDiag.turned++;
+    else s_killDiag.turnedBack++;
     memcpy(slot + 0x104, &fbits, 4);
     return 4;
 }
@@ -8601,7 +8694,7 @@ static int fix_kill_counts(void)
 
     /* a bare 0x0C: counted, and the loop goes on */
     p = aBare;
-    *p++ = 0xF0; *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, (const void*)&s_killBare0C);
+    *p++ = 0xF0; *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, (const void*)&s_killDiag.bare0C);
     hit_jmp(p, 0xE9, 0x00455F50);
 
     /* in place of a caller's `call 0x485F50`: hold, the create on a copy of its eight
@@ -8678,8 +8771,8 @@ static int __cdecl kill_s12(unsigned int* r)
     built   = *(const unsigned short*)(rec + 1);
     builder = *(const unsigned short*)(rec + 3);
     if (wire_killer_ok(built, max) && wire_killer_ok(builder, max)) return 1;
-    s_kill12Drop++;
-    if (InterlockedIncrement(&s_killNotes) <= 16)
+    s_killDiag.drop12++;
+    if (InterlockedIncrement(&s_killDiag.notes) <= 16)
         tagpu_logf("enginefix: kill counts: a 0x12 names a unit past the array (built %u, "
                    "builder %u, last %u); dropped", built, builder, max);
     return 0;
@@ -8722,11 +8815,11 @@ typedef char kills_line_fits[(5 * (sizeof KILLS_FMT - 1) < TAGPU_KILLS_LINE) ? 1
 int tagpu_kills_format(char* buf, unsigned int cap)
 {
     return _snprintf(buf, cap, KILLS_FMT,
-                     s_killBadFrac, (unsigned int)s_killBare0C, (unsigned int)s_killHoldLate,
-                     (unsigned int)s_killHoldFull, s_killNoSlot, s_kill12Drop, s_killOut, s_killIn,
-                     (unsigned int)s_killRefused, s_killSwept, s_killSame, s_killTurned,
-                     s_killTurnedBack, s_killDeadCopy, s_killCreateDone, s_killCreateNano,
-                     s_killCreateAbsent, s_killCreateBad, (unsigned int)s_killHeld);
+                     s_killDiag.badFrac, (unsigned int)s_killDiag.bare0C, (unsigned int)s_killDiag.holdLate,
+                     (unsigned int)s_killDiag.holdFull, s_killDiag.noSlot, s_killDiag.drop12, s_killDiag.out, s_killDiag.in,
+                     (unsigned int)s_killDiag.refused, s_killDiag.swept, s_killDiag.same, s_killDiag.turned,
+                     s_killDiag.turnedBack, s_killDiag.deadCopy, s_killDiag.createDone, s_killDiag.createNano,
+                     s_killDiag.createAbsent, s_killDiag.createBad, (unsigned int)s_killDiag.held);
 }
 
 /* MAPS WITH NO TERRAIN [DISASSEMBLED 2026-09-28]. A map is an .ota (its settings) and a .tnt (its
@@ -8764,8 +8857,11 @@ typedef void* (__stdcall *VFS_OPEN_FN)(const char* path);
 typedef void  (__stdcall *VFS_CLOSE_FN)(void* h);
 typedef const char* (__stdcall *UNTRANSLATE_FN)(const char* shown);
 
-static unsigned int s_mapsNoTerrain;          /* maps left out of the list                  */
-static unsigned int s_savedNoTerrain;         /* saved skirmish maps set aside              */
+static struct {
+    unsigned int noTerrain;                   /* maps left out of the list                  */
+    unsigned int savedNoTerrain;              /* saved skirmish maps set aside              */
+} s_mapsDiag;
+SIM_VAR(s_mapsDiag, SIM_PRIVATE);
 
 /* 1 when Maps\<name>.<ext> opens; `name` carries an extension, which the builder replaces.
    0x4290F0 writes with no bound, so the bound is ours: the name and the `language` value
@@ -8805,7 +8901,7 @@ static void __cdecl map_list_terrain(unsigned int* r)
     const char* const* names = *(const char* const* const*)(size_t)(r[PR_ESP] + 0x24);
     const char* name = *(const char* const*)((const char*)names + r[PR_ESI]);
     r[PR_EAX] = (unsigned int)map_has_terrain(name);
-    if (!r[PR_EAX]) s_mapsNoTerrain++;
+    if (!r[PR_EAX]) s_mapsDiag.noTerrain++;
 }
 
 /* at 0x430B87, a value read: [main+0x29A0]+0x11C, the 0x100 bytes 0x4B69B0 was given. A value
@@ -8823,7 +8919,7 @@ static void __cdecl saved_map_terrain(unsigned int* r)
     else
         r[PR_EAX] = (unsigned int)((key = ((UNTRANSLATE_FN)0x004C5840)(saved)) != NULL &&
                                    map_file_name(name, key) && map_has_terrain(name));
-    if (!r[PR_EAX]) s_savedNoTerrain++;
+    if (!r[PR_EAX]) s_mapsDiag.savedNoTerrain++;
 }
 
 static int fix_map_terrain(void)
@@ -8901,7 +8997,7 @@ static void patch_engine_defects(void)
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
-    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES)
+    if (tagpu_sim_lever("tagpu_wirecheck.on"))
         wire_selfcheck();
 
     _snprintf(b, sizeof b,
@@ -8925,9 +9021,9 @@ static void patch_engine_defects(void)
               fix_state(sfb), fix_state(rro), fix_state(scr), fix_state(list), fix_state(dl),
               fix_state(oom), fix_state(keys), fix_state(wpn), fix_state(caps), fix_state(flak),
               fix_state(edge),
-              (unsigned int)(size_t)&s_dmgUnitRepeats, (unsigned int)(size_t)&s_dmgFeatRepeats,
-              (unsigned int)(size_t)&s_dmgRefused, (unsigned int)(size_t)&s_dmgUnframed,
-              (unsigned int)(size_t)&s_flakFallbacks);
+              (unsigned int)(size_t)&s_dmgDiag.unitRepeats, (unsigned int)(size_t)&s_dmgDiag.featRepeats,
+              (unsigned int)(size_t)&s_dmgDiag.refused, (unsigned int)(size_t)&s_dmgDiag.unframed,
+              (unsigned int)(size_t)&s_flakDiag.fallbacks);
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -8944,7 +9040,7 @@ static void patch_engine_defects(void)
               "0x474674 0x4746BB 0x47551E 0x47556C; sound 0x47F431 0x47F476) %s; the projectile pass (0x49BEE8) %s. Own row "
               "taken at 0x%08X, one LONG per function:%s",
               fix_state(los), fix_state(losl), fix_state(pview),
-              (unsigned int)(size_t)s_losOwnRow, fn);
+              (unsigned int)(size_t)s_losDiag.ownRow, fn);
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -8952,7 +9048,7 @@ static void patch_engine_defects(void)
               "enginefix: stacked aircraft served to area damage after its walk (0x49A664 "
               "0x49A415; the pool: the stamp 0x47CF98, the unit tick's call 0x4954ED) %s. "
               "Aircraft served, counted at 0x%08X",
-              fix_state(air), (unsigned int)(size_t)&s_airServed);
+              fix_state(air), (unsigned int)(size_t)&s_airDiag.served);
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -9002,8 +9098,8 @@ static void patch_engine_defects(void)
               "enginefix: maps with no terrain -- left out of the map list (0x434D87) and "
               "never kept as the saved skirmish map (0x430B87) %s. Maps left out counted at "
               "0x%08X, saved maps set aside at 0x%08X",
-              fix_state(maps), (unsigned int)(size_t)&s_mapsNoTerrain,
-              (unsigned int)(size_t)&s_savedNoTerrain);
+              fix_state(maps), (unsigned int)(size_t)&s_mapsDiag.noTerrain,
+              (unsigned int)(size_t)&s_mapsDiag.savedNoTerrain);
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -9182,22 +9278,31 @@ static void patch_engine_defects(void)
        it has seen that bit (0x498342): the handshake every value of the load rests on.
    CLASS: simulation, fail closed. A peer without it draws another wind. */
 static unsigned long long s_windState;          /* loader thread writes, then GAME THREAD   */
-static volatile LONG s_windLevels;              /* level loads seeded, peekable              */
+SIM_VAR(s_windState, SIM_STATE);
+/* the wind's diagnostics, peekable */
+static struct {
+    volatile LONG levels;                       /* level loads seeded                        */
+    DWORD         descSize;                     /* the refused answer's dwSize, or 0         */
+    volatile LONG fromCopy;                     /* network loads seeded from the copy        */
+    /* the SetSessionDesc site 0x4C9903, any thread that reaches it */
+    volatile LONG setCalls;                     /* calls made, with DirectPlay's GUID        */
+    volatile LONG setDiffered;                  /* of those, the engine's GUID was another   */
+    volatile LONG setWithheld;                  /* no valid answer: no call made             */
+    volatile LONG mapOnly;                      /* network loads with no session             */
+} s_windDiag;
+SIM_VAR(s_windDiag, SIM_PRIVATE);
 
 enum { WIND_NONE, WIND_DPLAY, WIND_COPY };        /* where this load's GUID came from */
 
 /* the GAME THREAD writes these at 0x4982CA; the loader thread that call creates reads them */
 static GUID    s_windSession;                   /* the GUID the network seed takes           */
+SIM_VAR(s_windSession, SIM_TRANSIENT);
 static int     s_windSource;                    /* WIND_*                                    */
+SIM_VAR(s_windSource, SIM_TRANSIENT);
 static GUID    s_windEngineCopy;                /* main+0x479 as the capture found it        */
+SIM_VAR(s_windEngineCopy, SIM_TRANSIENT);
 static HRESULT s_windSessionHr;                 /* GetSessionDesc's answer when refused      */
-static DWORD   s_windDescSize;                  /* the refused answer's dwSize, or 0         */
-static volatile LONG s_windFromCopy;            /* network loads seeded from the copy, peekable */
-
-/* the SetSessionDesc site 0x4C9903, any thread that reaches it; peekable */
-static volatile LONG s_windSetCalls;            /* calls made, with DirectPlay's GUID        */
-static volatile LONG s_windSetDiffered;         /* of those, the engine's GUID was another   */
-static volatile LONG s_windSetWithheld;         /* no valid answer: no call made             */
+SIM_VAR(s_windSessionHr, SIM_TRANSIENT);
 
 static unsigned int wind_next(void)
 {
@@ -9206,8 +9311,6 @@ static unsigned int wind_next(void)
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
     return (unsigned int)((z ^ (z >> 31)) >> 32);
 }
-
-static volatile LONG s_windMapOnly;             /* network loads with no session, peekable   */
 
 static int wind_guid_null(const GUID* g)
 {
@@ -9230,7 +9333,7 @@ static int wind_dplay_guid(IDirectPlay2A* dp, GUID* out, HRESULT* hr, DWORD* dwS
     *dwSize = 0;
     *hr = IDirectPlay2_GetSessionDesc(dp, buf, &size);
     if (*hr == DPERR_BUFFERTOOSMALL && size > sizeof local) {
-        buf = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+        buf = (unsigned char*)tagpu_sim_scratch(size);
         *hr = buf ? IDirectPlay2_GetSessionDesc(dp, buf, &size) : E_OUTOFMEMORY;
     }
     if (SUCCEEDED(*hr)) {
@@ -9242,7 +9345,7 @@ static int wind_dplay_guid(IDirectPlay2A* dp, GUID* out, HRESULT* hr, DWORD* dwS
             ok = 1;
         }
     }
-    if (buf && buf != local.b) HeapFree(GetProcessHeap(), 0, buf);
+    if (buf != local.b) tagpu_sim_scratch_free(buf);
     return ok;
 }
 
@@ -9253,11 +9356,11 @@ static void __cdecl wind_session_capture(void)
     const char* ta = *(const char* const*)(size_t)B6_MAIN;
     IDirectPlay2A* dp;
     s_windSource = WIND_NONE;
-    s_windDescSize = 0;
+    s_windDiag.descSize = 0;
     s_windSessionHr = DPERR_UNINITIALIZED;
     memcpy(&s_windEngineCopy, ta + B6_DESC_GUID, sizeof s_windEngineCopy);
     memcpy(&dp, ta + B6_DPLAY, sizeof dp);
-    if (dp && wind_dplay_guid(dp, &s_windSession, &s_windSessionHr, &s_windDescSize))
+    if (dp && wind_dplay_guid(dp, &s_windSession, &s_windSessionHr, &s_windDiag.descSize))
         s_windSource = WIND_DPLAY;
     else if (!wind_guid_null(&s_windEngineCopy)) {
         memcpy(&s_windSession, &s_windEngineCopy, sizeof(GUID));
@@ -9274,15 +9377,15 @@ static HRESULT __stdcall wind_set_session_desc(IDirectPlay2A* dp, const DPSESSIO
     HRESULT hr;
     DWORD dwSize;
     if (!wind_dplay_guid(dp, &now, &hr, &dwSize)) {
-        InterlockedIncrement(&s_windSetWithheld);
+        InterlockedIncrement(&s_windDiag.setWithheld);
         return FAILED(hr) ? hr : DPERR_GENERIC;
     }
     memcpy(&mine, engine, sizeof mine);
     if (memcmp(&mine.guidInstance, &now, sizeof now) != 0) {
         memcpy(&mine.guidInstance, &now, sizeof now);
-        InterlockedIncrement(&s_windSetDiffered);
+        InterlockedIncrement(&s_windDiag.setDiffered);
     }
-    InterlockedIncrement(&s_windSetCalls);
+    InterlockedIncrement(&s_windDiag.setCalls);
     return IDirectPlay2_SetSessionDesc(dp, &mine, 0);          /* stock's flags, 0x4C98FD */
 }
 
@@ -9330,7 +9433,7 @@ static void __cdecl wind_seed(void)
     char stem[48];
     int mode;
     unsigned int map;
-    LONG level = InterlockedIncrement(&s_windLevels);
+    LONG level = InterlockedIncrement(&s_windDiag.levels);
     /* GameingState is not NULL here: the loader body dereferenced it at 0x4971CD, as `this`
        for 0x435100, on the only path into 0x4917D0 (0x497CA1 -> 0x497581) */
     memcpy(&gs, ta + B6_TNT, sizeof gs);
@@ -9349,25 +9452,25 @@ static void __cdecl wind_seed(void)
                        (unsigned int)(s_windState >> 32), (unsigned int)s_windState,
                        memcmp(&s_windEngineCopy, &s_windSession, sizeof(GUID)) ? "differs:"
                                                                                 : "agrees:",
-                       copy, (long)s_windSetCalls, (long)s_windSetDiffered,
-                       (long)s_windSetWithheld);
+                       copy, (long)s_windDiag.setCalls, (long)s_windDiag.setDiffered,
+                       (long)s_windDiag.setWithheld);
         } else if (s_windSource == WIND_COPY) {
-            LONG n = InterlockedIncrement(&s_windFromCopy);
+            LONG n = InterlockedIncrement(&s_windDiag.fromCopy);
             s_windState = wind_session_seed(&s_windSession, map);
             tagpu_logf("enginefix: wind: level %ld is a network game and DirectPlay's answer was "
                        "refused (0x%08lX, dwSize %lu): seeded from the engine's copy main+0x479 "
                        "%s and the map \"%s\" (0x%08X): seed 0x%08X%08X (%ld so far)",
                        (long)level, (unsigned long)s_windSessionHr,
-                       (unsigned long)s_windDescSize, guid, stem, map,
+                       (unsigned long)s_windDiag.descSize, guid, stem, map,
                        (unsigned int)(s_windState >> 32), (unsigned int)s_windState, (long)n);
         } else {
-            LONG n = InterlockedIncrement(&s_windMapOnly);
+            LONG n = InterlockedIncrement(&s_windDiag.mapOnly);
             s_windState = map;
             tagpu_logf("enginefix: wind: level %ld is a network game with no session: "
                        "DirectPlay's answer refused (0x%08lX, dwSize %lu) and the engine's copy "
                        "null; seeded from the map \"%s\" (0x%08X) alone (%ld so far)",
                        (long)level, (unsigned long)s_windSessionHr,
-                       (unsigned long)s_windDescSize, stem, map, (long)n);
+                       (unsigned long)s_windDiag.descSize, stem, map, (long)n);
         }
     } else {
         LARGE_INTEGER c;
@@ -9495,7 +9598,8 @@ static int fix_wind(void)
    its NUL, all 126 retail yardmaps among them.
    CLASS: simulation, fail closed. A player without it builds by the bytes of its own stack. */
 #define YARD_BUF 0x400
-static volatile LONG s_yardFilled;              /* defs filled past their string, peekable   */
+static struct { volatile LONG filled; } s_yardDiag;   /* defs filled past their string, peekable */
+SIM_VAR(s_yardDiag, SIM_PRIVATE);
 
 static int yard_code(char c)
 {
@@ -9543,7 +9647,7 @@ static void __cdecl yard_parse(unsigned int* regs)
         if (p + 1 < end && p[1] != 0) p++;         /* the last char before the NUL repeats   */
     }
     if (past) {
-        LONG n = InterlockedIncrement(&s_yardFilled);
+        LONG n = InterlockedIncrement(&s_yardDiag.filled);
         if (n <= 32 || !(n & (n - 1)))
             tagpu_logf("enginefix: yardmaps: %.32s: %d of its %d cells lie past its YardMap "
                        "string and take 0x%02X (%ld so far)", (const char*)def, past, cells,
@@ -9826,10 +9930,10 @@ static void patch_loader_defects(void)
                "made over another GUID and withheld at 0x%08X 0x%08X 0x%08X, network levels "
                "seeded from the map alone at 0x%08X, yardmaps filled past their string at 0x%08X",
                fix_state(wind), fix_state(yard), fix_state(save), fix_state(bar),
-               fix_state(ring), fix_state(plc), (unsigned int)(size_t)&s_windLevels,
-               (unsigned int)(size_t)&s_windFromCopy, (unsigned int)(size_t)&s_windSetCalls,
-               (unsigned int)(size_t)&s_windSetDiffered, (unsigned int)(size_t)&s_windSetWithheld,
-               (unsigned int)(size_t)&s_windMapOnly, (unsigned int)(size_t)&s_yardFilled);
+               fix_state(ring), fix_state(plc), (unsigned int)(size_t)&s_windDiag.levels,
+               (unsigned int)(size_t)&s_windDiag.fromCopy, (unsigned int)(size_t)&s_windDiag.setCalls,
+               (unsigned int)(size_t)&s_windDiag.setDiffered, (unsigned int)(size_t)&s_windDiag.setWithheld,
+               (unsigned int)(size_t)&s_windDiag.mapOnly, (unsigned int)(size_t)&s_yardDiag.filled);
 }
 
 void tagpu_apply_patches(void)
@@ -9871,7 +9975,7 @@ void tagpu_apply_patches(void)
        readers of 0x37EFA (0x499046 / 0x499162 / 0x499352 / 0x499567) misses it:
        0x499046's arm is guarded by the cursor index, so leaving the
        interface-type compares untouched does not leave the button untouched. */
-    if (GetFileAttributesA("tagpu_curs.off") != INVALID_FILE_ATTRIBUTES) {
+    if (tagpu_sim_lever("tagpu_curs.off")) {
         plog("curs: contextual cursors left to the engine (tagpu_curs.off)");
     } else {
         static const unsigned char je_expect[6] = { 0x0F, 0x84, 0xF0, 0x05, 0x00, 0x00 };
@@ -10000,10 +10104,15 @@ static struct {
     int           count;
     unsigned char rec[TAGPU_LIM_EXPL][EXPL_REC];
 } s_expl;
+SIM_ENGINE(s_expl, SIM_STATE);
 static void*         s_psys[TAGPU_LIM_PSYS];
+SIM_ENGINE(s_psys, SIM_STATE);
 static unsigned char s_aux[TAGPU_LIM_AUX][AUX_REC];
+SIM_ENGINE(s_aux, SIM_STATE);
 static unsigned char s_auxVert[TAGPU_LIM_AUX][AUX_VERTS];
+SIM_ENGINE(s_auxVert, SIM_STATE);
 static unsigned char s_auxFace[TAGPU_LIM_AUX][AUX_FACES];
+SIM_ENGINE(s_auxFace, SIM_STATE);
 
 static void put32(unsigned char* p, unsigned int v) { memcpy(p, &v, 4); }
 static unsigned int get32(const unsigned char* p) { unsigned int v; memcpy(&v, p, 4); return v; }
@@ -10122,14 +10231,15 @@ static unsigned char* lim_maxunits_stub(unsigned int off)
 /* ONE PAGE FOR THE STUBS OF THE UNIT-TYPE RAISE, carved in order: seventeen small stubs do
    not need seventeen 64 KB reservations of the address space a 16 383-type mod is short of. */
 static unsigned char* s_limCode;
+SIM_CODE(s_limCode);
 static unsigned int   s_limCodeUsed;
+SIM_VAR(s_limCodeUsed, SIM_INSTALL);
 
 static unsigned char* lim_code(unsigned int n)
 {
     unsigned char* p;
     if (!s_limCode)
-        s_limCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
-                                                 PAGE_EXECUTE_READWRITE);
+        s_limCode = (unsigned char*)SIM_ALLOC(s_limCode, 0x1000);
     if (!s_limCode || s_limCodeUsed + n > 0x1000) { s_limNoStub = 1; return NULL; }
     p = s_limCode + s_limCodeUsed;
     s_limCodeUsed += (n + 15u) & ~15u;
@@ -10159,6 +10269,7 @@ static unsigned char* lim_emit(unsigned char* p, const unsigned char* op, int n,
 
 typedef int (__attribute__((thiscall)) *CobNativeGet)(char*, int, int, int, int, int);
 static CobNativeGet s_cobNativeGet;
+SIM_VAR(s_cobNativeGet, SIM_INSTALL);
 static char* cob_live_unit(char* ta, int id);
 
 typedef struct CobFile {
@@ -10169,15 +10280,20 @@ typedef struct CobFile {
     char name[128];
 } CobFile;
 static CobFile* s_cobFiles[256];
+SIM_ROWS(s_cobFiles, SIM_CONTENT, SIM_ID_NONE, tagpu_sim_owned);
 static CRITICAL_SECTION s_cobLock;
+SIM_LOCK(s_cobLock);
 
 typedef struct CobRejected {
     char unit[33], display[33], script[128], reason[256];
     int announced;
 } CobRejected;
 static CobRejected* s_cobRejected[TAGPU_LIM_TYPES];
+SIM_ROWS(s_cobRejected, SIM_STATE, SIM_ID_UNIT_TYPE, tagpu_sim_owned);
 static int s_cobInPlay;
+SIM_VAR(s_cobInPlay, SIM_STATE);
 static DWORD s_cobNextChat;
+SIM_VAR_L(s_cobNextChat, SIM_STATE, tagpu_sim_local);
 
 static void __cdecl cob_load_game_data(void)
 {
@@ -10231,7 +10347,7 @@ static void cob_level_reset(void)
     unsigned i;
     EnterCriticalSection(&s_cobLock);
     for (i = 0; i < TAGPU_LIM_TYPES; ++i) {
-        free(s_cobRejected[i]);
+        SIM_FREE(s_cobRejected, s_cobRejected[i]);
         s_cobRejected[i] = NULL;
     }
     s_cobInPlay = 0;
@@ -10263,14 +10379,14 @@ static void cob_reject_file(const char* script, const char* reason)
         char* def = defs + i * 0x249u;
         CobRejected* bad;
         if (_strnicmp(def + 32, unit, 32)) continue;
-        bad = (CobRejected*)calloc(1, sizeof *bad);
+        bad = (CobRejected*)SIM_ALLOC(s_cobRejected, sizeof *bad);
         if (!bad) cob_fault(script, 0, "rejection diagnostic allocation failed");
         snprintf(bad->unit, sizeof bad->unit, "%.32s", def + 32);
         snprintf(bad->display, sizeof bad->display, "%.32s", def);
         snprintf(bad->script, sizeof bad->script, "%s", script);
         snprintf(bad->reason, sizeof bad->reason, "%s", reason);
         EnterCriticalSection(&s_cobLock);
-        free(s_cobRejected[i]);
+        SIM_FREE(s_cobRejected, s_cobRejected[i]);
         s_cobRejected[i] = bad;
         /* This is the same availability bit UNITS_Create tests at 0x485FA0.
            Keep the def itself so required/saved units still resolve by name. */
@@ -10390,7 +10506,7 @@ static void* __stdcall cob_read(const char* path, unsigned* ignored)
     /* The native model constructor explicitly supports scriptless types
        (0x485DFE). Absence is not proof of a malformed script. */
     if (!blob) return NULL;
-    f = (CobFile*)calloc(1, sizeof *f);
+    f = (CobFile*)SIM_ALLOC(s_cobFiles, sizeof *f);
     if (!f) cob_fault(name ? name + 1 : path, 0, "COB metadata allocation failed");
     f->blob = blob; f->size = size;
     snprintf(f->name, sizeof f->name, "%s", name ? name + 1 : path);
@@ -10398,7 +10514,7 @@ static void* __stdcall cob_read(const char* path, unsigned* ignored)
     if (!f->program) {
         cob_reject_file(f->name, reason);
         ((void (__cdecl*)(void*))0x004D85A0u)(blob);
-        free(f);
+        SIM_FREE(s_cobFiles, f);
         return NULL;
     }
     bucket = ((uintptr_t)blob >> 4) & 255u;
@@ -10430,7 +10546,7 @@ static void __cdecl cob_free_blob(void* blob)
     f = *link;
     if (f) *link = f->next;
     tagpu_cob_program_free(f ? f->program : NULL);
-    free(f);
+    SIM_FREE(s_cobFiles, f);
     LeaveCriticalSection(&s_cobLock);
     ((void (__cdecl*)(void*))0x004D85A0u)(blob);
 }
@@ -10638,6 +10754,7 @@ static CobFile* cob_owned_file(char* cob)
 
 typedef void (__stdcall *CobNativePieceCenter)(char*, void*, int);
 static CobNativePieceCenter s_cobNativePieceCenter;
+SIM_VAR(s_cobNativePieceCenter, SIM_INSTALL);
 
 static void __stdcall cob_piece_center(char* unit, void* output, int piece)
 {
@@ -10656,7 +10773,7 @@ static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
     TagpuCobProgram* program = f->program;
     unsigned statics = program->statics * 4u;
     unsigned size = TAGPU_COB_SAVE_BYTES + statics + program->pieces * 108u;
-    unsigned char* data = (unsigned char*)calloc(1, size);
+    unsigned char* data = (unsigned char*)tagpu_sim_scratch(size);
     unsigned* pieces;
     unsigned i, axis;
     void** vtable = *(void***)cob;
@@ -10681,7 +10798,7 @@ static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
     }
     ((CobSeek)0x004B4C10u)(stream, 0);
     i = ((CobStreamIO)0x004B4CF0u)(stream, data, size);
-    free(data);
+    tagpu_sim_scratch_free(data);
     if (i != size) cob_fault(f->name, 0, "saved script write was incomplete");
     return 1;
 }
@@ -10700,7 +10817,7 @@ static int __attribute__((thiscall)) cob_load(char* cob, void* stream)
     if (size < tail || (size - tail != 0x528u && size - tail != TAGPU_COB_SAVE_BYTES))
         cob_fault(f->name, 0, "saved script size does not match its validated allocation");
     records_size = size - tail;
-    data = (unsigned char*)malloc(size);
+    data = (unsigned char*)tagpu_sim_scratch(size);
     if (!data) cob_fault(f->name, 0, "saved script allocation failed");
     ((CobSeek)0x004B4C10u)(stream, 0);
     if (((CobStreamIO)0x004B4C80u)(stream, data, size) != size)
@@ -10733,7 +10850,7 @@ static int __attribute__((thiscall)) cob_load(char* cob, void* stream)
         }
     }
     *(unsigned*)(cob + 24) = 1;
-    free(data);
+    tagpu_sim_scratch_free(data);
     return 1;
 }
 
@@ -10925,6 +11042,7 @@ static void cob_get_sites(void)
 static void __cdecl lim_types_refused(unsigned int slots)
 {
     static char text[2048];
+    SIM_VAR(text, SIM_TRANSIENT);
     _snprintf(text, sizeof text,
         "This game's files hold %u unit types, and Total Annihilation: Impure plays at most "
         "%u, so the game will now close.\r\n"
@@ -11306,6 +11424,7 @@ static void lim_sites(void)
        sites both builds carry, since they rewrite the same lookups */
     {
         static WPNSITES w;
+        SIM_VAR(w, SIM_INSTALL);
         if (!wpn_build(&w)) { s_limOverflow = w.over; s_limNoStub = !w.over; return; }
         for (k = 0; k < w.n; k++) lim_add(w.s[k].va, w.s[k].n, w.s[k].was, w.s[k].now, w.name[k]);
     }
@@ -11581,6 +11700,9 @@ void tagpu_limits_report(void)
 {
     static char text[8192];
     static LONG once, verified;
+    SIM_VAR(text, SIM_TRANSIENT);
+    SIM_VAR(once, SIM_INSTALL);
+    SIM_VAR(verified, SIM_INSTALL);
     char exe[MAX_PATH], md5[33] = "unknown", line[768], want[3 * LIM_MAXB + 8],
          have[3 * LIM_MAXB + 8];
     const char* base;

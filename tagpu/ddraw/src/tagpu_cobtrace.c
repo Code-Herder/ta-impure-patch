@@ -56,6 +56,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_log.h"
+#include "tagpu_simreg.h"
 #include "tagpu_cob_safe.h"
 
 #define TA_MAINPP   0x00511DE8u
@@ -98,15 +99,18 @@ static const unsigned char RET_STOLEN[5]   = { 0x8B, 0x4E, 0x20, 0x85, 0xC9 };
 static const unsigned char KILL_STOLEN[6]  = { 0xC7, 0x01, 0x00, 0x00, 0x00, 0x00 };
 static const unsigned char RAND_STOLEN[5]  = { 0xE8, 0x4B, 0x56, 0x00, 0x00 };
 
-#define FLAG_FILE "tagpu_cobtrace.on"
 #define LOG_FILE  "log\\tagpu_cobtrace.log"
 
 typedef int (__thiscall *PFN_Alloc)(void* cob, int idx);
 
 static int       s_on;                       /* armed: emit() writes */
+SIM_VAR(s_on, SIM_INSTALL);
 static PFN_Alloc s_real_alloc;               /* the stolen prologue + jmp back */
+SIM_VAR(s_real_alloc, SIM_INSTALL);
 static char      s_filter[256];              /* upper-cased, comma-separated, or "" */
+SIM_VAR(s_filter, SIM_INSTALL);
 static unsigned  s_skip;                     /* diagnostic: sites left unhooked (bit per site) */
+SIM_VAR(s_skip, SIM_INSTALL);
 enum { SK_ALLOC = 1, SK_RUN = 2, SK_RET = 4, SK_KILL = 8, SK_RAND = 16 };
 
 /* the latched start: allocated, arguments not yet on the record */
@@ -120,11 +124,17 @@ typedef struct {
     Pending pend;
     struct { char* cob; int parent, argc, call; } vm;
 } TraceThread;
-static TraceThread s_threads[64];
-static unsigned s_threadCount;
-static DWORD s_tls = TLS_OUT_OF_INDEXES;
+/* the oracle's records: nothing in the simulation reads them */
+static struct {
+    TraceThread   threads[64];
+    unsigned      threadCount;
+    unsigned char peak[65536][TAGPU_COB_THREADS];
+} s_traceDiag;
+SIM_VAR(s_traceDiag, SIM_PRIVATE);
+static DWORD s_tls = TLS_OUT_OF_INDEXES;     /* the slot: this thread's s_traceDiag.threads entry */
+SIM_TLS(s_tls, SIM_PRIVATE);
 static CRITICAL_SECTION s_lock;
-static unsigned char s_peak[65536][TAGPU_COB_THREADS];
+SIM_LOCK(s_lock);
 
 /* The fixed pool lives until process exit, as do the installed hooks. TLS
    keeps one thread from flushing another's not-yet-copied arguments. */
@@ -134,8 +144,8 @@ static TraceThread* trace_enter(void)
     if (!s_on) return NULL;
     EnterCriticalSection(&s_lock);
     thread = (TraceThread*)TlsGetValue(s_tls);
-    if (!thread && s_threadCount < sizeof s_threads / sizeof s_threads[0]) {
-        thread = &s_threads[s_threadCount++];
+    if (!thread && s_traceDiag.threadCount < sizeof s_traceDiag.threads / sizeof s_traceDiag.threads[0]) {
+        thread = &s_traceDiag.threads[s_traceDiag.threadCount++];
         if (!TlsSetValue(s_tls, thread)) thread = NULL;
     }
     if (!thread) {
@@ -150,8 +160,8 @@ void tagpu_cobtrace_destroy(char* cob)
     unsigned i;
     if (!s_on) return;
     EnterCriticalSection(&s_lock);
-    for (i = 0; i < s_threadCount; ++i) {
-        Pending* pend = &s_threads[i].pend;
+    for (i = 0; i < s_traceDiag.threadCount; ++i) {
+        Pending* pend = &s_traceDiag.threads[i].pend;
         if (pend->valid && pend->cob == cob) {
             pend->valid = 0;
             tagpu_log_stream(TLOG_COBTRACE, "# start dropped: its COB object was destroyed before the next event");
@@ -287,7 +297,7 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
     u = cob_unit(cob);
     if (!wanted(u)) { LeaveCriticalSection(&s_lock); return slot; }
     if (slot >= 0 && slot < TAGPU_COB_THREADS && unit_index(u) >= 0)
-        s_peak[unit_index(u)][slot] = 0;
+        s_traceDiag.peak[unit_index(u)][slot] = 0;
     if (slot < 0) {
         /* -1 for an index the file lacks too (the engine asking for a script
            the unit does not define); only a valid index is a refused start */
@@ -343,8 +353,8 @@ void tagpu_cobtrace_step(char* cob, unsigned slot)
     if (slot < TAGPU_COB_THREADS && index >= 0 && wanted(u)) {
         rec = COB_REC(cob, slot);
         depth = REC_SP(rec) + 1;
-        if (depth > 32 && depth <= REC_WORDS && depth > s_peak[index][slot]) {
-            s_peak[index][slot] = (unsigned char)depth;
+        if (depth > 32 && depth <= REC_WORDS && depth > s_traceDiag.peak[index][slot]) {
+            s_traceDiag.peak[index][slot] = (unsigned char)depth;
             _snprintf(line, sizeof line, "H\t%d\t%d\t%u\t%s\t%d\t%d",
                       tick(), index, slot, script_of_pc(cob, REC_PC(rec)), REC_PC(rec), depth);
             line[sizeof line - 1] = 0;
@@ -535,17 +545,12 @@ static unsigned char* build_rand_stub(void)
 
 /* ---- install --------------------------------------------------------------- */
 
-static void read_filter(void)
+/* the lever's text, n bytes of it */
+static void read_filter(char* raw, int n)
 {
-    char  raw[240];
-    FILE* f = fopen(FLAG_FILE, "rb");
-    int   n = 0, i, j = 0;
+    int i, j = 0;
     s_filter[0] = 0;
-    if (!f) return;
-    n = (int)fread(raw, 1, sizeof raw - 1, f);
-    fclose(f);
     if (n <= 0) return;
-    raw[n] = 0;
     /* `-alloc -run -ret -kill -rand`: leave that site unhooked (bisection aid;
        the trace is then partial and says so in its header — and with -run the
        S line's arguments may already have been stepped over by the thread) */
@@ -597,7 +602,9 @@ void tagpu_cobtrace_init(void)
     unsigned char *sa, *sr, *st, *sk, *sd, *df, *db;
     unsigned char  rel[5];
     char           b[640];      /* the header: ~200 bytes of text plus a filter of up to 255 */
-    if (GetFileAttributesA(FLAG_FILE) == INVALID_FILE_ATTRIBUTES) return;
+    char           raw[240];
+    int            n = tagpu_sim_lever_read("tagpu_cobtrace.on", raw, sizeof raw);
+    if (n < 0) return;
     if (memcmp((void*)ALLOC_VA, ALLOC_STOLEN, 5) != 0 ||
         memcmp((void*)RUN_VA,   RUN_STOLEN,   5) != 0 ||
         memcmp((void*)RET_VA,   RET_STOLEN,   5) != 0 ||
@@ -608,9 +615,8 @@ void tagpu_cobtrace_init(void)
         tlog("NOT armed — engine bytes differ at one of 0x4B08C0 / 0x4B0DA0 / 0x4B19D0 / 0x4B1A99 / 0x4B15E0");
         return;
     }
-    read_filter();
-    s_tls = TlsAlloc();
-    if (s_tls == TLS_OUT_OF_INDEXES) { tlog("NOT armed: no TLS index"); return; }
+    read_filter(raw, n);
+    if (!SIM_TLS_ALLOC(s_tls)) { tlog("NOT armed: no TLS index"); return; }
     InitializeCriticalSection(&s_lock);
     s_on = 1;
     _snprintf(b, sizeof b, "# tagpu_cobtrace v1\tfilter=%s\tcolumns: S tick unit type script slot source args… | "
@@ -664,7 +670,7 @@ void tagpu_cobtrace_init(void)
         s_on = 0;
         return;
     }
-    _snprintf(b, sizeof b, "ARMED (" FLAG_FILE " present): 0x4B08C0 0x4B0DA0 0x4B19D0 0x4B1A99 + the call at 0x4B15E0 -> "
+    _snprintf(b, sizeof b, "ARMED (tagpu_cobtrace.on present): 0x4B08C0 0x4B0DA0 0x4B19D0 0x4B1A99 + the call at 0x4B15E0 -> "
               LOG_FILE ", filter=%s", s_filter[0] ? s_filter : "all");
     tlog(b);
 }

@@ -9,7 +9,8 @@
 # address, (b) include inc/tagpu_engine.h, (c) probe with IsBad*Ptr, or (d) add an
 # offset to the engine's main pointer. Everything else under src/ and inc/ is checked
 # with its comments stripped, and one hit fails the build. The list is DEFAULT-DENY,
-# each line carrying its file's class and its argument; it only shrinks, one line per
+# each line carrying its file's class, its scope (sim or presentation, which
+# tools/sim-state-check.sh reads) and its argument; it only shrinks, one line per
 # converted file, so a conversion's diff shows what left the render thread. Adding a
 # line is the owner's decision, made in a review, never a session's fix for a red build.
 #
@@ -70,17 +71,23 @@ scan() {   # $1 = file; prints "line: TAG: text" for every hit, comments strippe
         }' "$1"
 }
 
-# the allow-list: path, class, then the argument after `#`
+# the allow-list: path, class, scope (tools/sim-state-check.sh reads it), then the argument
+# after `#`
 declare -A ALLOWED
 if [ -f "$ALLOW" ]; then
     while IFS= read -r line; do
-        line="${line%%#*}"; line="$(echo "$line" | xargs 2>/dev/null)"
-        [ -z "$line" ] && continue
-        path="${line%% *}"; class="${line#* }"
-        case "$class" in
+        line="${line%%#*}"
+        read -r path class scope extra <<< "$line"
+        [ -z "${path:-}" ] && continue
+        case "${class:-}" in
             publisher|session-reader|fenced|tooling|pure-engine-code|engine-map|to-convert:*) ;;
-            *) echo "thread-split: $ALLOW: unknown class '$class' for $path" >&2; exit 2 ;;
+            *) echo "thread-split: $ALLOW: unknown class '${class:-}' for $path" >&2; exit 2 ;;
         esac
+        case "${scope:-}" in
+            sim|presentation) ;;
+            *) echo "thread-split: $ALLOW: $path needs a scope after its class, sim or presentation (not '${scope:-}')" >&2; exit 2 ;;
+        esac
+        [ -z "${extra:-}" ] || { echo "thread-split: $ALLOW: $path has a word past its scope: '$extra'" >&2; exit 2; }
         [ -e "$path" ] || { echo "thread-split: $ALLOW names a file that does not exist: $path" >&2; exit 2; }
         ALLOWED["$path"]="$class"
     done < "$ALLOW"
