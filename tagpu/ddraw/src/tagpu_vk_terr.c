@@ -1670,7 +1670,6 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
     if (!slot_build(d, s)) goto refuse;
     if (!slot_fog(d, s, fogW, fogH)) goto refuse;
-    shared_bind(d, slot);
 
     ibytes = (VkDeviceSize)t.ncell * TAGPU_TERR_ICOMP * sizeof(short);
     if (!slot_inst(d, s, ibytes)) goto refuse;
@@ -1734,6 +1733,14 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        after the uploads for the reason stated at `restore_want`, and before
        the `restored` computation below, which is what its `have` feeds. */
     restore_want(d, &t);
+
+    /* THE SET IS WRITTEN AFTER `restore_want` AND BEFORE `restored` IS USED,
+       because `s_rgbAtlas.have` is what both of them read and `restore_want` is
+       what moves it. Bound earlier, the frame on which the first cell is painted
+       would say `uRestored` and `uNbhd` -- the neighbourhood layout's cell
+       coordinates -- while binding 41 still named the base atlas, and the shader
+       would read the tile atlas at keys' cells: one frame of the wrong tiles. */
+    shared_bind(d, slot);
 
     /* WHETHER THE SHADER SAMPLES THE RESTORED ATLAS IS THIS LANE'S OWN FACT,
        NOT THE PRODUCER'S REQUEST. `t.restored` says a restore request STANDS

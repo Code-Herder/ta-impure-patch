@@ -17729,8 +17729,12 @@ paints, under the allowance.
   says exactly that. The feature and effects passes bind their twin (40, 42) for the slot in
   hand on every prepare that draws, after the flag, only when `s_arView && s_arHave`, and the
   base atlas's view otherwise (`twin_bind`); `atlas_build` starts the binding on the base view.
-  The units' `bind_main` (41) and the terrain's `shared_bind` (41) keep the same rule. So no
-  descriptor names an image in a layout it is not in — all of Classic, where no job runs,
+  The units' `bind_main` (41) and the terrain's `shared_bind` (41) keep the same rule; the
+  terrain's runs after its `restore_want` in `prepare`, because the frame on which the first cell
+  is painted is the one where an earlier bind and the flag would disagree — the shader would
+  read the tile atlas at the neighbourhood atlas's key cells, one frame of the wrong tiles
+  (measured on the reference setup: one frame, ~7 after the first world frame of every load).
+  So no descriptor names an image in a layout it is not in — all of Classic, where no job runs,
   included — and in every pass the flag and the binding come from the same `s_arHave`.
 
 **MEASURED 2026-09-24 — what play sends.** The setup:
