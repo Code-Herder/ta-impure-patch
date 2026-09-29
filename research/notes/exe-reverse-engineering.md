@@ -1082,6 +1082,112 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   `0x46489D..0x4648A5`), so a puppet also draws less often than the live game did.
 
 
+### Seating a level: the SKIRMISH Start, the seat fill, the start commanders and the two end tests [DISASSEMBLED + MEASURED 2026-09-29]
+
+How a skirmish fills its player records before the loader runs, what the loader creates for each
+seat, and the two tests that end a level. Read and measured for the demo recorder's puppet host;
+the measured runs and what they mean for the design are in the
+[state design evidence](tadr-port/demo-recorder-state-evidence.md#the-puppet-host-measured).
+
+- **The SKIRMISH screen's Start branch** (`0x47AED2..0x47B0BC`, game thread; `ebx` = 1 from
+  `0x47AEEB`) sets the player count, the word `main+0x2A3C`, to the AI entries plus one
+  (`0x47AF39..0x47AF58`); reads the map's `.ota` through `0x435A20` with the name at
+  `[main+0x29A0]+0x11C` (`0x47AF77`; a failure shows the string at `0x50842C`); refuses unless one
+  of the first `main+0x38D81` settings entries is an AI (controller 2, `0x47AFB7`) and one a human
+  (controller 1, `0x47AFD6`), and unless the count is within the map's player maximum `0x437300`
+  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls `0x479760` (`0x47B035`, string `0x5083C8` on a
+  nonzero answer) [role not traced]; recounts `+0x2A3C` as the AI plus human entries
+  (`0x47B04C..0x47B08B`); then calls the seat fill `0x47A760` (`0x47B092`), `0x41DA30`, `0x430F00`,
+  stores 2 at `main+0x2BC0` and changes state through `0x491C80(0x14)` (`0x47B097..0x47B0B0`). The
+  loader thread comes after it.
+- **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
+  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group, `+0xC` metal, `+0x10` energy,
+  `+0x14` the colour (read by the fill and the seat setup below). Past them, the loader's type-2
+  branch (`0x4973C1..0x497457`) copies `+0x108` into `ActiveCommanderDeath` `main+0x37EF6` and bit 0
+  of `+0x10C`, `+0x110` and `+0x114` into bits 0, 1 and 2 of the LosType word `main+0x14281`, the
+  bits the `Mapping`, `LOS` and `LOSType` console commands toggle; `+0x118` nonzero means fixed
+  start positions (`0x49790E`); `+0x11C` is the map name.
+- **The seat fill `0x47A760`** (no arguments, plain `ret`; callers `0x47B092` Start, `0x499825` in
+  the restart path `0x4997A0`, which tears the level down and re-reads the map first, and
+  `0x49757C` in the loader's saved-game path) walks settings entries 0 to `main+0x38D81` − 1, the
+  SKIRMISH screen's seat count: 4 by default (`0x4307EA`; also stored at `0x4307CF` and
+  `0x4307DD`, and raised by the saved-game path to the number of controller-1/2 entries,
+  `0x497542..0x497576`). **That count is why a skirmish seats four players.** Controller 1 copies the
+  entry's colour and side into PlayerInfo `+0x96`/`+0x95`, calls `0x464290(seat, 1)` and stores the
+  seat in `main+0x2A43` and `main+0x2A42` (`0x47A798..0x47A7DE`); controller 2 does the same with
+  type 2 and leaves those two bytes; anything else calls `0x464290(seat, 0)`. Then a human or AI
+  record is marked allied (`+0x108 + j` = 1, `0x47A890`) to every active entry j with the same `+8`
+  group other than group 5 (`0x47A83C..0x47A89E`).
+- **The seat activation `0x464290(seat, type)`** (stdcall, `ret 8`; callers `0x47A7C7` and
+  `0x47A81E` in the fill, `0x450C29` [network, not traced], and `0x496DC2`/`0x496DCB` in `0x496DB0`,
+  which seats 0 as type 1 and 1 as type 2 and sets `+0x2A3C` to 2 [role not traced]) zeroes the
+  record's five 11-byte blocks at `+0x108`, `+0x113`, `+0x11E`, `+0x129` and `+0x134`
+  (`0x4642BC..0x464329`); stores `+0x73` = type and, for any type but 3, PlayerInfo `+0x94`
+  (`0x46432C..0x46433A`, as `0x463C60` does); sets its own bytes `+0x108 + seat` and
+  `+0x113 + seat`, `+0x74` = 0 without a free, `+0x146`, `+0x147` and `+0x148` = seat, the first
+  dword = 1, `+0x13F` = 5, `+4` = seat, `+0xC` = 0 and `+0x22` = 0, and clears PlayerInfo `+0x9B`
+  bit `0x20` (`0x464340..0x46438C`); for type 1 or 2 it sets PlayerInfo `+0x99`
+  (`0x46439D..0x4643BC`); it names the record by game type and type (`0x4643C3..0x464494`) and
+  copies the name `+0x2B` to `+0x49` (`0x464497..0x4644B8`). It takes any type as given: type 3 for
+  all ten records gives records that the level init, the unit tick and the players phase accept
+  (MEASURED, below).
+- **The players reset `0x4644D0`** zeroes all ten records except their PlayerInfo pointer `+0x27`
+  (`0x4644D7..0x46450F`), sets `main+0x2A42` and `+0x2A43` to 0, and gives every record its own
+  alliance bytes and a default name (`0x464511..0x4645C3`) [callers not traced]. A record the fill
+  does not reach keeps a zero first dword, which every loop over the players skips.
+- **The loader creates a commander for every seat of type 1, 2 or 3.** After the level init
+  (`0x497581`), a new skirmish (`0x435100` = 2 and no saved game at `main+0x38D6B`,
+  `0x4978DA..0x497902`) calls the seat setup `0x496EE0(seat, start)` for each active record with
+  `+0x73` 1–3 and `+0x146` ≠ 10: at start position = seat when `[main+0x29A0]+0x118` is set
+  (`0x497918..0x497972`), otherwise at a position from a list shuffled with `0x4E4870`
+  [INFERRED: the CRT `rand`] (`0x497979..0x497ADC`). `0x465E30` follows (`0x497ADE`).
+- **The seat setup `0x496EE0(seat, start)`** (stdcall, `ret 8`; its only calls `0x497963` and
+  `0x497ACD`) copies the entry's side and colour into PlayerInfo `+0x95`/`+0x96`
+  (`0x496F08..0x496F3C`), sets `+0x149` bit 0 (`0x496F5D`) and the base storage `+0xDC`/`+0xE0` to
+  max(entry `+0x10`/`+0xC`, 200) (`0x496F64..0x496F97`), takes the map's start position through
+  `0x437320(&pos, start)` (`0x496FA9`; a failure formats the string at `0x509534` and shows it
+  through `0x4B6290`, `0x497009..0x497021`), the side's commander type through `0x488B10`
+  (`0x496FDC`), and creates it with `0x485F50(seat, type, pos, 1, 1, 0)` (`0x497002`); for the
+  controlled player `main+0x2A42` it moves the camera onto it (`0x41C4C0`, `0x497038..0x497060`).
+  A type-3 owner's create takes a proxy mover (`0x43DC00`, *Replay state design* above).
+- **The two end tests** are methods of the objective object `[main+0x391ED]`, run on the controlled
+  player's 30-tick pass of the players phase (`0x4650C9` and `0x4650E1` in a campaign, `0x46516D`
+  and `0x46586F` otherwise; `0x4576C5` calls victory too [network, not traced]). Both answer 0
+  while the object's `+0x88` is 0 (`0x490239`, `0x49036B`). In a skirmish **victory `0x490230`**
+  answers 1 when every other record that the controlled player's `+0x108 + i` does not mark allied
+  has no live unit, the word `+0x144` (`0x4902A3..0x4902E3`), and **defeat `0x490360`** answers 1
+  when the controlled player's `+0x144` is 0 (`0x4903F0..0x490414`, a network game alike), or,
+  while `[0x511DE4]` is set, once GameTime passes a timer it draws at 9000 ticks or more
+  (`0x49037C..0x4903C9`) [the flag's role not traced]; a campaign runs its objective list. Outside
+  a campaign defeat is tested first (`0x46516D`) and victory only when defeat answers 0 or the
+  controlled player carries the watcher bit (`0x465154`, `0x465174` → `0x465864`). **Neither
+  reads a record's type**, so a type-3 controlled player loses and wins like a local one (MEASURED,
+  below). A firing test counts `main+0x39239` down over the passes and then sets the game-over bits
+  of `main+0x3923B` (*The Deathmatch respawn*, below).
+- **Arming and disarming the objective.** The `.ota` reader `0x435DA0` destroys the old object
+  (`0x48DFB0`, then the free `0x4B4F20`, `0x435DBC..0x435DCE`), allocates a new `0x8C`-byte one
+  (`0x435DD6..0x435DDB`), arms it through `0x48DF90` (`0x435DE9`; `+0x88` = 1, `+0x40` = `+0x84` =
+  0) and stores it at `main+0x391ED` (`0x435DFB`); `0x48DF90` has no other caller. `0x4904B0`
+  (thiscall, `mov [ecx+0x88],0; ret`) disarms it; its callers are the `Kill` console command after
+  it has killed every unit (`0x4164CD`, and `0x4164EF` on the command's other arm) and `0x488547`,
+  when `[main+0x391E9]+0xDB0` counts nothing [INFERRED: a campaign mission without objectives]. A
+  skirmish reads the `.ota` in Start's branch (`0x47AF77`), before the seat fill, and its loader
+  branch reads it no more; the network loader does (`0x4972D6`), as do the restart path (`0x499820`)
+  and the saved-game loader (`0x4927A5`). **A disarm made in the seat fill therefore holds for the
+  whole skirmish level.**
+- **MEASURED 2026-09-29** (a temporary probe build, not landed; Wine, a private display, Core Prime
+  Industrial Area, ten start positions): after the stock fill, `0x464290(s, 3)` for s = 0..9 with the
+  entries 4–9 given a side and colour, `+0x2A3C` = 10 and `main+0x2A42` = `+0x2A43` = 0 loaded a
+  level whose ten records read active, type 3, `+0x146` = s, blocks in seat order (slots
+  `1 + 1500·s`, 1500 each), no `+0x74` and no `0x5119C0` object, and a sight grid each; the loader
+  created ten commanders at ten start positions. With every unit dead, seat 0's included, the level
+  went to ENDMSN reading **DEFEAT**, and with every unit of seats 1–9 dead and seat 0's alive,
+  **VICTORY**, both with ten rows; with the
+  objective disarmed through `0x4904B0`, in play or in the seat fill, neither came, and a level with
+  no unit at all ran on (68 s measured) and took new units. With `ActiveCommanderDeath` set to 1, a
+  type-3 commander's death cleared its `+0x149` bit 0 and killed nothing else: the kill-all is for a
+  local owner only (*`Send_UnitDeath 0x4864B0`*, below, `0x48667E..0x4866B3`).
+
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 

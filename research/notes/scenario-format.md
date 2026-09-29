@@ -157,6 +157,11 @@ unit names by scanning the live definition table. This design follows its recipe
 - **A skirmish seats four players.** MEASURED 2026-09-24: ten named in `setup.players` on Core
   Prime Industrial Area, a ten-player map, and the engine refused every unit of slots 4–9 as
   `player slot N is not in this game`. Ten players are a network game (`tools/mp_lobby.sh`).
+  The four is the SKIRMISH screen's seat count `main+0x38D81`, which the seat fill walks (engine
+  map, *Seating a level*): a demo-recorder probe that activated records 4–9 through the engine's
+  own seat activation had the applier accept slots 4, 5 and 9 (MEASURED 2026-09-29,
+  [the puppet host](tadr-port/demo-recorder-state-evidence.md#the-puppet-host-measured)). Nothing
+  shipped does that.
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are
@@ -898,3 +903,8 @@ situation snapshot for a savegame.
    `UnitLimit=500` in `totala.ini`, where `MaxUnitNumberPerPlayer` reads 500 and the unit
    array grows to match. So the field is not the live limit under any setting reached so
    far; phase D's launch path made the question sharper rather than answering it.
+8. **`clear_existing` never reaches the unit array's last slot.** `snapshot_existing` in
+   `tagpu_scenario.c` walks while `u + 0x118 <= end`, reading `main+0x1435B` as one past the
+   array, but it is the last slot itself (inclusive, `0x4855D6`; engine map), so a unit there is
+   not cleared. That slot is the last of seat 9's block, used only once a tenth player's block is
+   full. Found 2026-09-29, not fixed.
