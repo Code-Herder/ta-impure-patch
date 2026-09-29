@@ -21,7 +21,8 @@ differs is the setup around it.
 on**: its sites are in the fail-closed table, so every launch has it, `--defaults` or not, and
 stock units run the untouched engine code (`research/notes/extra-weapons.md`). The launch log
 says `weapons: 44 sites to the fail-closed table`, and the table's `limits: installed N sites`
-line says they went in; an exe that differs at one of them is refused at start, the site named.
+line (`the simulation fixes' N sites installed` in the stock-limits build) says they went in; an
+exe that differs at one of them is refused at start, the site named.
 
 ```bash
 tools/tacli launch w1; tools/tacli stop w1          # create the instance dir
