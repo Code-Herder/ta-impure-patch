@@ -1,7 +1,8 @@
 # Modules with their own workflow
 
 Extra weapons, the COB trace, multiplayer, many unit types, weapons past 256, the new data keys,
-the render-options screen with its GPU row, and a remote Windows machine. Each is driven through `tacli`; what
+the render-options screen with its GPU row, a remote Windows machine, and a mod whose exe loads
+Impure from its own ddraw proxy. Each is driven through `tacli`; what
 differs is the setup around it.
 
 1. [Extra weapons](#extra-weapons)
@@ -12,6 +13,7 @@ differs is the setup around it.
 6. [The new data keys: the key fixtures](#the-new-data-keys-the-key-fixtures)
 7. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
 8. [A remote Windows machine](#a-remote-windows-machine)
+9. [A mod that loads Impure from its own proxy](#a-mod-that-loads-impure-from-its-own-proxy)
 
 ## Extra weapons
 
@@ -565,3 +567,21 @@ tools/tacli rm w1                                 # deletes the test folder and 
   every line after a skipped one run nothing. Add remote operations there, through that
   function, never as a hand-written script. How the link, the routing, the store and the task
   work: `research/notes/tacli-design.md`, "Remote instances".
+
+## A mod that loads Impure from its own proxy
+
+TA Zero and TA Twilight ship an exe that imports the mod's own ddraw proxy, which loads Impure
+from inside its start-up. **`tacli launch` cannot start them**: it adds `-xtacli-test` and creates
+`tacli-state/`, and the DLL then refuses the launch because `win32.dll`, a static import of the
+exe, is not loaded at attach. Drive them the way the compat suite does:
+
+1. Build the instance from the suite's folder: `tacli create <n> --private-registry --display <d>`,
+   then `rsync -a` the suite's `compat-<setup>/gamedir/` over it, leaving out `tacli-state`, `log`
+   and `tagpu_*`.
+2. Move the `gamedir/tacli-state` folder aside (the suite gives it an `.off` suffix; a launch
+   recreates it, so do it after the last `tacli launch`), and copy the tree's `ddraw.dll` over the gamedir's.
+3. Start `wine TotalA.exe` in the gamedir with `WINEPREFIX` set to the instance's canonical
+   `prefix` path — `tacli` finds the game by that exact string, so a path containing `..`
+   reads as "not running" — `WINEDLLOVERRIDES=ddraw=n,b` and `DISPLAY`.
+4. `tacli ui`, `click`, `roster`, `shot` and `stop` then answer as for any instance; the play
+   defaults are on because no `tagpu_defaults.off` exists. The window is the display's size.

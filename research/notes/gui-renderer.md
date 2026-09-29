@@ -1538,8 +1538,8 @@ distinct; acted on eight, all re-verified against the code or the disassembly fi
 - **The glyph observer measured past `'\n'`**, where `0x4CCF60` stops (`0x4CCFA0`); the
   engine map said so and the code did not.
 - **The sprite identity was two addresses** the shell reuses after freeing a popped screen's
-  art; it now carries a hash of the plane's first bytes, read at publish time under the same
-  guard as the first-sight decode.
+  art; it now carries a hash of the whole plane (§30), read on the game thread at the blit under
+  the same guard as the first-sight decode.
 - **The observer stubs did not preserve EFLAGS** around `before` and `after`; no engine caller
   of the observed functions reads flags after the call (checked at every `call 0x4C69F0` and
   `call 0x4C63A0`), but "byte-identical" now holds for the flags too.
@@ -4980,3 +4980,91 @@ repaint of the screen, glow included; the consumer replays every window since it
 Coalescing those repaints is the lever. Main's DLL loops on this screen, so there is no
 baseline for it there.
 
+
+## 30. A sprite identity that named a prefix: the build menu that showed the last page  [MEASURED 2026-09-29]
+
+**The symptom** (the owner, TA Zero's GoK commander): after a few structures and a few turns of
+the build menu's pages, the buttons show the wrong pictures. It never happened with the stock
+`ddraw.dll`, so it was either the UI layer or a feature of the mod's own exe that we broke.
+
+**The reproduction, and why it is the UI layer.** TA Zero Alpha 5 as the compat suite builds it
+(the `tazero-alpha5` setup), on a private Xvfb display with the reference setup's GPU presenting, launched by hand
+as a player does (`tacli launch` refuses TA Zero, below). A skirmish as GoK, the commander
+selected, `tacli ui click GOKNEXT` to flip `GoKCommander1.GUI` ↔ `GoKCommander2.GUI`, and after
+each flip the presented window (`import -window`) compared with `tacli shot`, the engine's own
+frame, cell by cell over the 2×6 grid of 64-px buttons (normalised correlation of the luma).
+The engine's frame turned every page correctly; the window did not:
+
+| | flip 1 | flip 2 | flip 3 |
+|---|---|---|---|
+| engine frame | page 2 | page 1 | page 2 |
+| presented window, before | cells at correlation −0.04…0.31 | 0.99–1.00 | −0.04…0.31 again |
+| presented window, after | 0.98–1.00 | 0.99–1.00 | 0.98–1.00 |
+
+Which cells were wrong depended on the page order and on what was drawn first; the ones that
+were right were the pictures whose top row differed [INFERRED from how the key was built]. Building structures was not needed.
+
+**The cause: `frame_key` hashed the first 64 bytes of the plane.** The UI atlas and the
+producer's seen table key a GAF sprite on `(frame address, plane address, fw, fh, fkey)`, and
+`fkey` was an FNV hash of the plane's first 64 bytes plus the hotspot, added so that a popped
+screen's art freed and re-allocated at the same addresses would not match the old entry. A raw
+plane's first 64 bytes is its top row. The build menu's pictures are raw 64×64 frames, and a
+page flip loads the next page's pictures into the same frame and plane addresses as the last
+page's. Two different buildings whose top rows agree therefore produced the same key, the atlas
+answered with the entry it held, and the twin drew the previous page's picture. The probe (a
+table of every identity seen and the FNV of the whole plane behind it; logged when one identity
+came back with a different whole-plane hash) printed, for one identity in one run:
+
+```
+COLLISION fr=0B673F98 pix=0B670F98 key=39F9EB7D 64x64 comp=0 old=E7F37015 new=601459C6
+COLLISION fr=0B673F98 pix=0B670F98 key=39F9EB7D 64x64 comp=0 old=601459C6 new=E7F37015
+```
+
+24 collisions in a run of a few page flips, all `64x64 comp=0`, and none once the key covers
+the whole plane. It is the same class as SELMAP's map preview in §26 (a hash of the plane's head
+made every wide map one atlas entry), which was closed for `PK_PLANE` by keying that one by
+content.
+
+**The fix.** `frame_key` folds every byte of a raw plane and every `[len][data]` row of an RLE
+one, four bytes to a step, into the hash (`hash_run`). What was in the sample is now in the key,
+so a different picture at a recycled address is a different key except by chance in 2^-32. The
+seen table and the atlas needed no change: a changed picture is a new key and takes the
+first-sight decode. Cost, MEASURED on the game thread with a timing probe over the shell and a
+skirmish: 0.55–0.59 µs per blit on average (2 160 pixels a call), and no frame over 16 K pixels
+in the run. That is the measured range, not a bound: at the measured ~3.7 bytes a nanosecond a
+640×640 raw plane would take about 0.1 ms per blit [INFERRED from that rate], and an RLE plane
+pays two `IsBadReadPtr` calls per row on top, which was not measured.
+
+**What this leaves open.**
+
+- **The key is still 32 bits.** A different picture at the same addresses collides with
+  probability 2^-32 per pair; the level-boundary drop (`publish_window`, "THE LEVEL BOUNDARY")
+  bounds it to one level. Widening the key is a change to the op and to the atlas match.
+- **The extent read.** `frame_key` now reads `w*h` bytes (`tagpu_gaf_frame_sane` bounds each side
+  to `TAGPU_GAF_DECMAX`, 640, so up to 409 600 bytes) on every blit instead of 64 on every blit. The first-sight decode already read the same
+  extent once per new frame, so the exposure is the one `gaf_capture`'s comment ("AND IT DOES NOT
+  BOUND THE EXTENT") and `gpu-status.md` (landing 7, "the extent half") name, taken more often,
+  not a new kind. The lifetime argument is
+  unchanged: the read runs in the `before_` detour on the blit leaf, earlier than the engine's
+  blit and its free. One caller runs outside any engine call: `chrome_emit` re-emits the panel
+  and bars through `gaf_record(NULL, …)` and rests on its own two gates, a level on screen and
+  no teardown in flight (its comment, "TWO GATES").
+- **A plane the engine rewrites in place gets an atlas entry per distinct content.** That is
+  the property that makes the key exact, and the UI atlas holds 4096 entries and drops them all
+  when it fills (§26 measured 131 picks filling it when a preview was keyed that way). No plain
+  GAF blit in the code rewrites its plane often: SELMAP's preview goes through
+  `GAF_DrawTransformed`, the scaled path, which discards this key. A walk of 51 picks down the
+  map list, the frame rewritten on every pick, ended at 158 of 4096 entries with 4 full resets,
+  against 151 and 4 on the build before this change (resets and lost sprites were 8 and 3 597
+  there, 6 and 4 941 here: the same order, so that churn predates this change).
+- **No automated seam.** The comparison above is a script over a hand-launched instance. The
+  compat suite's `tazero-alpha5` run has the instance but no step that flips the build menu and
+  compares the window with the engine's frame.
+
+**Driving TA Zero.** `tacli launch` cannot start a setup whose exe loads Impure from inside its
+own ddraw proxy: it adds `-xtacli-test` and creates `tacli-state/`, and the DLL then refuses to
+run because `win32.dll`, a static import of the exe, is not loaded at attach. The way in is the
+suite's: rename `tacli-state` to `tacli-state.off`, start `wine TotalA.exe` in the gamedir with
+`WINEPREFIX=<the instance's canonical prefix path>` (`tacli` finds the game by that exact
+string, so a path with `..` in it is not found), `WINEDLLOVERRIDES=ddraw=n,b` and `DISPLAY` set,
+and `tacli ui`, `click`, `roster` and `shot` then answer as usual.

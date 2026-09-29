@@ -1677,8 +1677,8 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   flips/s on `MAINMENU` — and without this the queue overflowed into a reseed storm).
   Excluded, on the return address: the unit composite blit, the cursor code, the flip's own
   blits (engine map, "What the twin layer excludes, tests and reads"). Three rules from the
-  landing review: a sprite's identity is the frame's addresses **plus a hash of its plane's
-  first bytes** (a popped screen's art is freed and the heap reuses the addresses); the batch
+  landing review: a sprite's identity is the frame's addresses **plus a hash of its whole
+  plane** (a popped screen's art is freed and the heap reuses the addresses); the batch
   dedup **never moves a write past a copy that read it** — an earlier duplicate is dropped only
   when no `0x4C6B70` reading its surface lies between the two, or one follows the survivor
   (a per-surface epoch bumped by every copy was tried first and re-created the shell's reseed
@@ -7998,8 +7998,8 @@ same bytes at publish before it, over memory that might *also* have been freed. 
 the lifetime half and leaves the extent half exactly where it was. Bounding it needs the plane's
 allocated length, and the plane is not a block start, so `MEM_Size` cannot answer it either.
 
-**It also fixes a wrong-art case the generation could not see.** The key is a hash of the plane's
-first bytes precisely because the shell hands a freed screen's addresses to the next screen's art.
+**It also fixes a wrong-art case the generation could not see.** The key is a hash of the plane
+precisely because the shell hands a freed screen's addresses to the next screen's art.
 Taken at publish time, that hash read whatever the address held *then* — so art freed and replaced
 inside one census window hashed the **new** content under the **old** op, and the consumer matched
 a key naming pixels the op never drew. Taken in the observer, it is a hash of the bytes the engine
@@ -8022,8 +8022,9 @@ lane.** `tagpu_gui_surf.c`'s UI atlas matches entries on `(o->frame, o->pix, fw,
 frame's **address** and its content hash — and its only resets are `twins_reset`, the atlas
 filling, and a GL context loss. **None of those is a level boundary.** The engine frees a level's
 GAF banks and the next level's loader may hand a new frame an old one's address; `frame_key`
-hashes only the plane's first 64 bytes plus the hotspot, so **UI art whose first RLE row is one
-transparent run can collide by CONSTRUCTION**, not by 2^-32 luck — and then `atlas_find` hits the
+hashed only the plane's first 64 bytes plus the hotspot then (the whole plane since
+[gui-renderer](gui-renderer.html) §30), so **UI art whose first RLE row is one
+transparent run collided by CONSTRUCTION**, not by 2^-32 luck — and then `atlas_find` hits the
 old entry and the twin draws the previous level's texels, with no counter moving.
 
 **The gate this landing removed was never the cover for that**, which is worth saying plainly
