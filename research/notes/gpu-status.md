@@ -11277,7 +11277,7 @@ means reimplementing selection, box-select, build placement and every cursor mod
 ### 3.2 Smaller, known, and cheap to close
 
 - **A unit's team colour is its owner's logo colour, read by the publisher.** The engine takes it
-  from the owner's player record, `PlayerInfo+0x96` (`exe-reverse-engineering.md` §`0x459B25`);
+  from the owner's player record, `PlayerInfo+0x96` (`exe-reverse-engineering.md`, the unit face rule at `0x459B0F`);
   `PK_UNIT.logo` carries that byte (bounded: owner < 10, the PlayerInfo pointer range-checked),
   the unit pass keys the bake's material on it, and the build ghost keys on `local_logo`. The
   colour is the player's choice and not the slot: a skirmish that gives slot 0 colour 4 and slot 1
@@ -11288,8 +11288,12 @@ means reimplementing selection, box-select, build placement and every cursor mod
   **Not re-measured:** a two-peer network game. Each peer's `PlayerStruct[owner]` is its own
   copy, and the engine reads the same copy, so both should agree with the engine's frame; the
   earlier observation that every peer drew its units in player 0's colour was of the slot-indexed
-  lookup this replaces. Wreck (feature) models keep frame 0. When the logo does not validate the
-  unit falls back to its owner id.
+  lookup this replaces. Wreck (feature) models keep frame 0. When the logo does not validate (an owner
+  or PlayerInfo that is not one of the ten, or a byte past the ten colours) the unit falls back to
+  its owner id. **A divergence from the engine:** a colour at or past a sequence's frame count
+  makes the engine paint nothing (`0x4B7F30` returns 0), and `face_texframe` clamps to the last
+  frame instead [unmeasured whether any stock sequence has fewer than ten frames for a model
+  that is drawn; the ARMCOM torso's `glow` has 8].
 
 - **Nothing in this repository has ever been measured on a Windows GL driver, and the first run
   on one found two bugs — 2026-09-10.** `renderer=openglcore` fell back to GDI on a real ICD

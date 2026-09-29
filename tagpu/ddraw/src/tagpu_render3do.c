@@ -349,11 +349,17 @@ static int face_colour(const char* fa)
     return s;
 }
 
-/* Resolve a face's texture GAFFrame for rendering: plain textures live at
-   +0x10; the team-colour path at +0x18 is a GAF sequence whose frame k is
-   the pointer at `seq + 0x28 + 8k` (0x4B7F30's read, tagpu_gaf_seq_entry),
-   one separately painted frame per team colour. The frame taken is `owner`,
-   clamped to the sequence. Returns NULL for untextured faces. */
+/* Resolve a face's texture GAFFrame for rendering, by the face's flags as
+   the unit rasteriser reads them (0x459B0F..0x459B86): plain textures live at
+   +0x10; a face with FF_ANIM takes its frame from the GAF sequence at +0x18,
+   whose frame k is the pointer at `seq + 0x28 + 8k` (0x4B7F30's read,
+   tagpu_gaf_seq_entry). With FF_TEAM the frame is the team colour `owner` --
+   one separately painted frame per colour -- and without it frame 0 (the
+   engine takes the animation state's current frame when its caller says so;
+   nothing animates on a unit model that has been seen). A colour at or past
+   the sequence's count makes the engine paint nothing; this clamps to the
+   last frame, so a sequence of fewer than ten frames shows its last colour
+   where the engine leaves a hole. Returns NULL for untextured faces. */
 static const char* face_texframe(const char* fa, int owner)
 {
     unsigned tp = *(const unsigned*)(fa + 0x10);
@@ -365,11 +371,13 @@ static const char* face_texframe(const char* fa, int owner)
             *(const unsigned char*)(g + 0x09) == 0) return g;
     }
     unsigned ap = *(const unsigned*)(fa + 0x18);
-    if (ptr_ok((void*)(size_t)ap) && !IsBadReadPtr((void*)(size_t)ap, 0x2C)) {
+    if ((*(const unsigned*)(fa + F_FLAGS) & FF_ANIM) &&
+        ptr_ok((void*)(size_t)ap) && !IsBadReadPtr((void*)(size_t)ap, 0x2C)) {
         const char* an = (const char*)(size_t)ap;
         const int nfr = tagpu_gaf_seq_nframes(an);
         if (nfr > 0 && nfr <= 64) {
-            const int k = owner < 0 ? 0 : (owner >= nfr ? nfr - 1 : owner);
+            const int team = (*(const unsigned*)(fa + F_FLAGS) & FF_TEAM) ? owner : 0;
+            const int k = team < 0 ? 0 : (team >= nfr ? nfr - 1 : team);
             const void* fr;
             if (tagpu_gaf_seq_entry(an, k, &fr) == 1 && ptr_ok(fr)) return (const char*)fr;
         }

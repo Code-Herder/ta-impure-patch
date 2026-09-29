@@ -208,7 +208,7 @@ static const unsigned char* feat_frame0(const char* def)
     int nf = *(const unsigned short*)(seq + SEQ_NFRAMES);
     if (nf <= 0 || nf > 512) return 0;
     const unsigned char* tab = *(const unsigned char* const*)(seq + SEQ_FRAMES);
-    const unsigned char* g = frame_sane(tab);            /* inline frame 0 */
+    const unsigned char* g = frame_sane(tab);            /* frame 0 */
     if (!g && tab && !IsBadReadPtr(tab, 4))              /* or a pointer table */
         g = frame_sane(*(const unsigned char* const*)tab);
     return g;

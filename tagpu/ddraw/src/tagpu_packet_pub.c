@@ -472,15 +472,20 @@ static void shd_snapshot(void)
    a unit. The id is bounded by the ten PlayerStructs the engine keeps, and the
    PlayerInfo is the game's own allocation, which 0x45861C reads for every such
    face on every frame. The byte is DATA: the consumer bounds it against the
-   sequence's frame count (tagpu_gaf_seq_entry). -1 when the id or the pointer
-   does not validate. DISASSEMBLED (0x459B34..0x459B58). */
+   sequence's frame count. A byte past the ten team colours (logos.gaf carries
+   ten frames per entry) is not a colour and reads as -1, which keeps the
+   bake's material key to eleven values however the byte is corrupted. -1
+   also when the id or the pointer does not validate. DISASSEMBLED
+   (0x459B34..0x459B58). */
 static int player_logo(const char* ta, unsigned id)
 {
     const char* pi;
+    unsigned b;
     if (id >= PLAYER_COUNT) return -1;
     pi = *(const char* const*)(ta + OFF_PLAYERS + id * PLAYER_STRIDE + PL_INFO);
     if (!ptr_ok(pi)) return -1;
-    return *(const unsigned char*)(pi + PI_LOGO);
+    b = *(const unsigned char*)(pi + PI_LOGO);
+    return b < PLAYER_COUNT ? (int)b : -1;
 }
 
 /* One live unit's entry. `ta` and `u` are the game thread's own; every value

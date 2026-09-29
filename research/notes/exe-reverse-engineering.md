@@ -2683,7 +2683,7 @@ drops the back ones.
   the file's.
 - Flag bit 0 (`face+0x1C`) → `0x4C1000(frame, verts, face+0x04 count, face+0x00 colour)`; else a
   face of other than 4 vertices is skipped (`0x459B1A`); else `0x4C8760(frame, texture, verts, 0)`
-  with the texture the flags name (`0x459B25..0x459B86`, DISASSEMBLED): **flag bit 1 clear** — the
+  with the texture the flags name (`0x459B0F..0x459B86`, DISASSEMBLED): **flag bit 1 clear** — the
   `GAFFrame` at `face+0x10`. **Bit 1 set and bit 2 set** — the team-coloured face:
   `0x4B7F30(face+0x18, PlayerInfo[id]+0x96)`, the sequence's frame for the id's **logo colour**,
   with `PlayerInfo[id]` = `*(main + id*0x14B + 0x1B8A)` (`0x459B34..0x459B58`; `id` is a stack
@@ -2691,7 +2691,7 @@ drops the back ones.
   same rule is coded a second time at `0x458603..0x45862E` (the PlayerInfo load is `0x45861C`),
   where `id` is masked to a byte first (`and eax,0xFF` at `0x458603`) and the bit-1-set,
   bit-2-clear case tests a stack argument, `[esp+0x3F84]`, in place of `ebx`. **Bit 1
-  set, bit 2 clear** — `0x4B7F30(face+0x18, 0)` when `ebx` is non-zero (`ebx` is not traced), else
+  set, bit 2 clear** — `0x4B7F30(face+0x18, 0)` when `ebx` is non-zero (`ebx` = the stack argument `[esp+0x5F24]`, loaded at `0x459B08`; its meaning is not traced), else
   `0x4B7EE0(&face+0x10)`, the animation state's current frame. The colour is the **player's chosen
   colour, not the slot**: a skirmish with slot 0 on colour 4 and slot 1 on colour 0 draws the
   slot-1 badge in colour 0 [MEASURED 2026-09-29, retail, players' logo bytes 4/0/2/7, engine
