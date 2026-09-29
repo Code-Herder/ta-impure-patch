@@ -11145,11 +11145,14 @@ live table (`0x4AC7FF..0x4AC88F`: `|ΔR|+|ΔG|+|ΔB|`, minimum seeded at `0x9896
 tested at `0x4288DC`) gates a blank-and-present: non-zero makes `main+0x37E1B` the back buffer
 (`0x4C69A0`, `0x4288F5`), fills it (`0x4C6890`, `0x4288FC`) and flips (`0x4C63A0`, `0x428901`);
 zero, as here, skips all three [DISASSEMBLED 2026-09-29; no flip returning to `0x428906` runs
-inside a load, MEASURED the same day]. It then loads the PCX (`0x429290`, `0x4289DE`) into a
-ten-deep most-recent-first cache of decoded backgrounds (records of 0x28 bytes from `0x5120B8`,
+inside a load, MEASURED the same day]. It looks the name up in a ten-deep most-recent-first
+cache of decoded backgrounds (`0x428912..0x428954`; a hit moves the record to the front and
+skips the load, `0x428956..0x4289BC`) and on a miss loads the PCX (`0x429290`, `0x4289DE`) into
+it, unless `main+0x391F1` is 6 (`0x4289F1`, no insertion) (records of 0x28 bytes from `0x5120B8`,
 the surface at `+0`, the name at `+4`; the oldest is `SurfaceFree`d and its name `MEM_Free`d at
-`0x428A04`), and with no GUI screen on top (`main+0x531` zero, tested at `0x428A7F`) stores the
-surface in **`main+0x11EB`** (`0x428AB2`) and its name at `main+0x11EF`; with one on top it hands
+`0x428A04`), and with no GUI screen on top (`main+0x531` zero, tested at `0x428A7F`) and its fourth
+argument zero (`0x428A70`) stores the surface in **`main+0x11EB`** (`0x428AB2`) and its name at
+`main+0x11EF` (`0x428AB0`, when the name is non-null); with one on top it hands
 the surface to `0x4AB290(GUIInfo, surface)` instead and stores nothing. 42 callers, the shell's
 `FrontendX` background among them (`0x478F19`). The surface is a `0x4C69F0` object tagged
 `"bitmaps\loadgame2bg.PCX"`, 640×480 [MEASURED 2026-09-29, `gui trace: alloc`]. How the picture

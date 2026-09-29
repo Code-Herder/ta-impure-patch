@@ -5123,12 +5123,15 @@ used to rule out — "a scan that races a swap-remove misses" — is sound once 
 that nothing moves. `s_liveBase` mirrors the tracked bases in stable slots, one per table entry
 (`SURF::lslot`), written only at registration (0 → base, before `surf_get` returns) and removal
 (base → 0, before the swap-remove). A reader on any thread sees every base registered before it
-began and not yet removed; a base registered after it began belongs to a block the engine is
-still drawing into while another thread frees it, which the unfiltered ring did not protect
-against either. `before_memfree` calls `live_hit(p, size)` for a free off the game thread and
+began and not yet removed. A base registered after it began, inside a block being freed, is
+missed: the old drain tested the table at drain time and would have dropped it, the filter
+decides at free time. That needs the game thread to register a stale pointer into a freed
+block, which a free on the game thread has always allowed too. A retired entry gives its slot
+back at retirement (its block is the heap's; a recycled small block over that base would
+otherwise hit on every loader free). `before_memfree` calls `live_hit(p, size)` for a free off the game thread and
 pushes only on a hit. The drain, the ring's quiescence rule and the flush stay as they were: the
-flush is now the answer to 256 frees of TRACKED blocks between two flips, which no play has ever
-produced. The engine facts are in the engine map (*`MEM_Free 0x4D85A0`*). Files:
+flush is now the answer to 256 frees of TRACKED blocks between two flips (a conservative
+fallback, so its frequency is not what makes it correct). The engine facts are in the engine map (*`MEM_Free 0x4D85A0`*). Files:
 `tagpu_gui_hook.c` (the mirror, the two removal sites, the registration) and `tagpu_gui_leaves.h`
 (`before_memfree`).
 

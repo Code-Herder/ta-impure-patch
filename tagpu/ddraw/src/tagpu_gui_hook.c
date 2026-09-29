@@ -204,12 +204,20 @@ static int  s_nsurf = 0;
    orders that against the free of the same block: a thread freeing a block
    another is still drawing into is a use-after-free of the engine's own, which
    no filter of ours could catch. Where the engine orders them, our slot write
-   precedes the draw in program order and x86 does not reorder stores, so the
-   freeing thread sees it before it sees what the engine ordered the two by.
+   precedes the draw in program order, and x86 keeps stores in order (the
+   writer's) and loads in order (the reader's `volatile` reads), so the freeing
+   thread sees it before it sees what the engine ordered the two by.
 
    THE BOUND: one slot per table entry, and an entry takes its slot before it is
    in the table, so a full mirror refuses a registration the way a full table
-   does. */
+   does. A retired (dying) entry gives its slot back at retirement: its block is
+   already the heap's.
+
+   WHAT IT NO LONGER DOES: the drain used to test the table at drain time, so an
+   entry registered after a free began, but before the drain, inside that block
+   was dropped too. The filter decides at free time, so that entry stands. Only a
+   game-thread registration of a stale pointer into a block freed meanwhile makes
+   one, and a free on the game thread has always had the same exposure. */
 static volatile LONG s_liveBase[MAX_SURF];
 
 static int live_add(SURF* s)               /* game thread; 0 = no slot */
@@ -426,10 +434,9 @@ static int surf_dies_with(const SURF* s, unsigned p, unsigned size)
    the publisher read any base. The engine's allocator is genuinely
    multi-threaded (`0x4D85B0` takes a critical section at `0x4D85C2`), and the
    loader thread frees tens of thousands of blocks in one level load (33 842,
-   MEASURED 2026-09-12) -- none of them a tracked surface, which is why the
-   filter matters: every block pushed unfiltered overran this ring between two
-   flips of the loading screen and the overrun retired the whole table, and the
-   loading screen's own draws with it.
+   MEASURED 2026-09-12; 33 191 on 2026-09-29, when none of them lay in a tracked
+   surface's block), so an unfiltered push overruns this ring between two flips
+   of the loading screen and the overrun retires the whole table.
 
    DROPPED, NOT RETIRED (`surf_retire`): where such a free falls among the
    window's ops is not known on the game thread, so it cannot be given a place
@@ -1077,6 +1084,11 @@ static int surf_retire(int i)
     d->copyValid = 0;
     snap_free(d);
     d->isAsset = 0; d->assetTok = 0; d->assetTokPrev = 0;
+    /* THE BLOCK IS THE HEAP'S NOW, so no free of it is news: the mirror lets go
+       of the slot here (`live_del` ignores -1, which the sweep's own call then
+       meets), or a small block the heap recycles over this base would be a hit
+       on every free the loader makes of it and the drain ignores dying entries. */
+    live_del(d); d->lslot = -1;
     d->dying = 1; d->dieSeq = ++s_dieSeq; d->freedPub = 0;
     o = &s_ops[s_nops++];
     memset(o, 0, sizeof *o);

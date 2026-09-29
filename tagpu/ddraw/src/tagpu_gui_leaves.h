@@ -749,12 +749,11 @@ static int __cdecl before_free(void* e)
    ring only when it names one; the game thread drops the entry at the top of
    the next flip, before the census or the publisher read a base. The filter
    is sound because MEM_Free fires once per block and the mirror cannot miss a
-   base registered before the free began, which is all a surface the engine
-   frees after drawing on it can be. Pushing every free instead overran the
-   ring during a level load (the loader thread frees tens of thousands of
-   blocks) and the overrun retired the whole table, the loading screen's draws
-   with it. The residual window — one thread freeing a surface another is
-   drawing into — is the engine's own and was never ours to close.
+   base registered before the free began. The loader thread frees tens of
+   thousands of blocks in a level load, so a push per free overruns the ring and
+   the overrun retires the whole table, the loading screen's draws with it. The
+   residual window — one thread freeing a surface another is drawing into — is
+   the engine's own and was never ours to close.
 
    The observer sits at the ENTRY of 0x4D85A0, before the allocator's own
    critical section, so the CRT `free()` that surf_retire calls inverts no lock. */
