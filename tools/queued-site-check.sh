@@ -6,7 +6,7 @@
 #
 # scenarios/queued-site.json: two CORCK (A above B) on open ground. Every step arms CORSOLAR
 # (5x5 cells) and reads main+0x2CC6 bit 6, the cursor's green (1) or red (0), with the pointer on
-# a site that overlaps or does not overlap one already queued.
+# a site that overlaps or does not overlap one already queued. Seven checks (step 2 only places).
 #   1  clear ground, no queue                                  green   (the baseline)
 #   2  Shift held, A places a site at P (mode stays armed)
 #   3  Shift held, A hovers 40 px from P (overlap)             red     (its own queued site)

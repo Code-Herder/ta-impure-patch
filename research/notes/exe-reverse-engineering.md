@@ -6711,8 +6711,8 @@ That word is written by the stamp `0x47CC30` of a unit that exists, into the cel
 (bit 2 instead when the unit's `+0x10F` has bit 2; `0x47CD8E..0x47CD9D`). **A site that is queued and not
 yet built stamps nothing**, so a second site over it reads green, is ordered and fails when the first
 is built. The yardmap chars are `.`=`00` `c`=`2D` `o`=`2F` `C`=`35` `O`=`2B` `w`=`37` `y`=`29` `Y`=`31` `f`=`6F`
-`G`=`8F` (the table under *A yardmap parsed past its string*): `c`, `o`, `C`, `w`, `Y` and `f` stamp, `O`
-and `y` only test, `.` does neither.
+`G`=`8F` (the table under *A yardmap parsed past its string*): `c`, `o`, `C`, `w`, `f` and `G` stamp and
+test, `O` only tests, `.`, `y` and `Y` do neither.
 
 What a click orders, for the queue's sake. `0x419670` orders each unit of the controlled player's block
 (`main+0x2A42`) that is selected (`+0x110` bit 4) and whose def has `+0x241` bit 6, with the action name
@@ -6737,9 +6737,11 @@ rectangle for), a non-zero build type (`+0x36`) and x, z above 0. A unit the cli
 block with its own orders the click removes: without Shift the ones lacking flag 4, with Shift the one
 within 16 units, so re-placing a plan and Shift-clicking a site to remove it work as in stock. Allies'
 and enemies' plans, dead (`+0x110` bit 28 clear) and excluded (bit 14) units are not read. **MEASURED**
-with `tools/queued-site-check.sh` (two CORCK, CORSOLAR, Wine, private Xvfb; 8 of 8 as expected): green on
+with `tools/queued-site-check.sh` (two CORCK, CORSOLAR, Wine, private Xvfb; 7 of 7 as expected): green on
 open ground; with Shift and a site queued, red 40 px over it, green 140 px away and 8 px away; without
 Shift green over the selected builder's own plan, red over an unselected builder's.
+The refusal holds in fog too: stock's test reads a cell's unit word only where the player can see (`0x47D366`,
+the LOS and mapped grids), and this reads the player's own plans, which the player knows.
 **Gaps:** the alternate stamp mask (`+0x10F` bit 2) is not read, since the unit does not exist yet; the AI's
 site tests (`0x40A4CD`, no player) and orders that do not come from the cursor — `tacli order`, scenarios,
 a peer's packets — are stock's, so they can still queue over each other, and the second fails at build

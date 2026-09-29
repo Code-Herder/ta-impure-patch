@@ -9977,10 +9977,10 @@ static int qs_footprint(const unsigned char* d, const unsigned char** yard, int*
     return *fx > 0 && *fz > 0 && ptr_sane(*yard);
 }
 
-/* The footprint's first cell, 0x4197D0's rounding of a 16.16 centre */
+/* The footprint's first cell, 0x4197D0's rounding of a 16.16 centre (an arithmetic shift, as its sar) */
 static int qs_origin(int centre, int foot)
 {
-    return (int)(((unsigned)centre - ((unsigned)foot << 19) + 0x80000u) >> 20);
+    return (int)((unsigned)centre - ((unsigned)foot << 19) + 0x80000u) >> 20;
 }
 
 /* 1 when a cell of both rectangles is one a built unit of one would stamp and the other's test refuses */
