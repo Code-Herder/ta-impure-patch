@@ -1771,9 +1771,10 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   while the shell already flips ~5 000 times a second and the game frame publishes ~150 KB of
   box bytes per 5 ms cadence, so the 16 MB arena is half a second of backlog. The publisher
   therefore **drops its batch** when the tail has not moved for 250 ms with work queued, or
-  when the backlog is past half the arena or a quarter of the ring (`stalls=` counts the
+  when its last publish found no room in the ring or the arena (`stalls=` counts the
   episodes), and publishes again — one reset, every surface re-seeded — once the consumer has
-  caught up. (The drain also skipped every op published before a GL context change up to the
+  caught up. A backlog that still fits is not a stall: a half-arena rule looped on SKIRMISH
+  on the Windows test box, 147 reseeds a minute ([gui-renderer §29](gui-renderer.html)). (The drain also skipped every op published before a GL context change up to the
   producer's next reset, `skipped=`; with no GL context that path went, §2.85.) MEASURED
   2026-09-07: before, every game → shell switch cost 38 `arena-full` overflows, 39 resets and
   705 lost sprites; after, one reset (`stall-over`), no overflow, none lost, and the game's own

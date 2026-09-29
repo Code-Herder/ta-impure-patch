@@ -1721,10 +1721,13 @@ read from the code and then from the reset reasons once they were logged:
 
 - **The stall guard** (`consumer_stalled()`, game thread, at every publish): the batch is dropped
   — nothing queued, no counter but `stalls=` moves, once per episode — when the tail has not
-  moved for 250 ms with work queued, *or* when the backlog is past half the arena or a quarter
-  of the ring; publishing resumes, with one reseed (`stall-over`), once the queue is empty or
-  the backlog under the low-water marks. A long render hitch (the terrain atlas at a map's first
-  frame, a screenshot) counts as a stall and costs one reseed, which is the cheap side.
+  moved for 250 ms with work queued, *or* when the last publish found no room in the ring or the
+  arena (`s_pubNoRoom`); publishing resumes, with one reseed (`stall-over`), once the queue is
+  empty or the backlog under the low-water marks. A long render hitch (the terrain atlas at a
+  map's first frame, a screenshot) counts as a stall and costs one reseed, which is the cheap
+  side. **A backlog that still fits is not a stall** — the rule used to fire at half the arena or
+  a quarter of the ring, and that is what looped on SKIRMISH (§29). Under `log` each stall names
+  its rule: `gui: stall #n: idle | no-room (queued= arena= tail idle N ms)`.
 - **The offscreen's identity**: a surface created with the tag `"OFFSCREEN"` (`0x5091D4`, the
   five sites) retires every other entry so tagged — the engine has one at a time — and a
   same-base size change forgets the ring's boxes on that base. The census also probes a
@@ -4876,3 +4879,62 @@ into a save-under again, so that panel's restore is still lost — counted as `c
 which the suite does not judge.
 The minimap copy and the shell's unseeded sources are unchanged. The side-panel check compares
 one strip at 1280 × 1024 after one deselect, not every panel a mod can open.
+
+## 29. A backlog that fits is not a stall: the SKIRMISH reseed loop  [MEASURED 2026-09-28]
+
+**The symptom** (the owner, Escalation on the Windows test box — an R9 200, fullscreen
+1920×1080): on the first visit to SKIRMISH the focused button's glow flickered, sometimes at a
+steady rate and sometimes in stutters, and the shell was sluggish. Wine on the reference setup
+never showed it.
+
+**The cause, from the box's own log.** The shell sat at 60 fps on the main menu for six minutes
+with `resets=4 stalls=2` (both stalls during the restorer's start-up). At the entry to
+SKIRMISH it fell to **13.3 fps** and `stalls` and `resets` began to climb together, ~150 per 300
+frames: **147 reseeds a minute, every one `stall-over`**, each followed by `atlas reset
+(restart)` and a full UI-atlas restore. With `log` and a `gui: stall` line naming the rule, all
+of them were the backlog rule — `backlog (queued=2261 arena=8601600/16777216 tail idle 70 ms)`
+for the first, `queued=12429 arena=9006966` in the loop — never the 250 ms idle rule. The
+queue was empty by the time each reseed ran (`queued=0 arena=0`), so the consumer was alive and
+draining throughout.
+
+It is a loop that feeds itself, not a slow card: the restorer's own probes on that box measured
+8 ms of GPU work and ~25 fps while restoring. Entering SKIRMISH ships ~9 MB of first-sight art in
+one burst; one 70 ms consumer frame left it in the arena at the producer's next check, past the
+old half-arena mark. The reseed then clears the producer's first-sight tables and the consumer's
+UI atlas, so all of that art crosses again — past half the arena again — while the consumer is
+rebuilding the atlas and slow again. The census interval that contained the loop published
+**2.74 GB** of bytes; the intervals on the main menu before it, after start-up, none.
+
+**The fix: the backlog rule is gone.** A stall is now a consumer that took nothing for 250 ms
+with work queued, or a publish that found **no room** (`pub_op` or `pub_bytes` refused for the
+ring or the arena — `s_pubNoRoom`, a game-thread flag, because `g_guiq.why` is also written by
+the consumer's own reseed requests). Both end the same way as before: publish nothing until the
+consumer has drained to the low-water marks, then one reseed. The G15d exit path this rule was
+written for (§12: a crawling consumer while the game frame publishes ~150 KB per 5 ms) is
+still covered — it now waits at a full arena rather than a half one — and the loop is impossible
+by capacity: a reseed only follows a drain to under 2 MB, so a second one needs the reseed's own
+payload to fill the 16 MB arena, which the ~9 MB SKIRMISH burst does not. A box outside its
+surface (`box-outside-surface`) is not a question of room and still resets at once.
+
+**Measured on the box after the fix** (the same folder recipe, the same path to SKIRMISH, pointer
+sweeps injected): one stall in the run — `idle`, 252 ms, during the restorer's start-up — one
+`stall-over` reseed, `resets=3 overflows=0` from there to the end, 3 atlas resets in all.
+
+**Also in this landing: a window is published whole.** `pub_commit` made each op visible to the
+drain as it was written, so a present could land between a gadget's repaint and the glow over
+it and show the gadget without its glow for a frame. Commits inside `publish` are now staged
+(`s_qStaged`) and `pub_flush` moves `qHead` over them behind one barrier on every exit of
+`publish`, overflow exits included; a commit outside it (`surf_drop`, `surf_retired_sweep`)
+flushes at once, and nothing is ever staged when one runs, so the queue stays FIFO. Every window
+ends at a flip (`before_flip` records `OP_FLIP` and then publishes), so a drain now stops at a
+frame boundary of the engine's. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
+window. The drain's own 20 000-op budget can still stop inside a window, when more than
+20 000 ops are queued at once.
+
+**Not closed here.** SKIRMISH on the Windows box runs at **30 fps**, with vsync on, against
+60 on Wine. The shell flips ~8 000 times a second there and every 5 ms window carries a whole
+repaint of the screen, glow included; the consumer replays every window since its last present
+— ~5 000 ops a present on the box, ~1 500 on Wine — though each repaint overwrites the last.
+Coalescing those repaints is the lever. Main's DLL loops on this screen, so there is no
+baseline for it there.
+
