@@ -6697,8 +6697,54 @@ return ok
 So the square's centre is within **8 world px** of the world point on each axis, at every zoom:
 that is the snap, and at 7.7× it is up to 62 screen px. Measured at 1920×1080 on `ARMSOLAR`
 (5×5 cells), the pointer's engine point at world x 1940: corners `1904..1984`, centre 1944. `0x47D2E0` is the site
-test *[INFERRED]* from its result landing in the green bit; `0x47C780` / `0x47D820` are the
+test (disassembled, *A queued site is taken ground*, below); `0x47C780` / `0x47D820` are the
 placement altitude for a valid and a blocked site *[INFERRED]* — neither was disassembled.
+
+**A queued site is taken ground — `0x47D2E0`, the stamp `0x47CC30` and the click's orders
+[DISASSEMBLED 2026-09-29; MEASURED the same day].** The build cursor asks `0x47D2E0` (stdcall
+`(def, cell, 0, player)`, `ret 0x10`, the call at `0x4198C6`) and shows its answer as `main+0x2CC6`
+bit 6; a click on red plays `notoktobuild` (`0x509650`) and orders nothing (`0x498F86` →
+`0x499016`), on green `0x419670` issues the order. The test walks the footprint's cells and, per cell,
+takes the def's yardmap byte (`def+0x14E`, `fx·fz` bytes, row-major): a byte with bit 2 or 4 whose
+cell's unit word (`+0x00`) is non-zero and not the caller's own id refuses the site (`0x47D54C..0x47D561`).
+That word is written by the stamp `0x47CC30` of a unit that exists, into the cells whose byte has bit 4
+(bit 2 instead when the unit's `+0x10F` has bit 2; `0x47CD8E..0x47CD9D`). **A site that is queued and not
+yet built stamps nothing**, so a second site over it reads green, is ordered and fails when the first
+is built. The yardmap chars are `.`=`00` `c`=`2D` `o`=`2F` `C`=`35` `O`=`2B` `w`=`37` `y`=`29` `Y`=`31` `f`=`6F`
+`G`=`8F` (the table under *A yardmap parsed past its string*): `c`, `o`, `C`, `w`, `Y` and `f` stamp, `O`
+and `y` only test, `.` does neither.
+
+What a click orders, for the queue's sake. `0x419670` orders each unit of the controlled player's block
+(`main+0x2A42`) that is selected (`+0x110` bit 4) and whose def has `+0x241` bit 6, with the action name
+`MOBILEBUILD` (`0x502654`) or, when the def's `+0x241` bit 11 is set, `VTOL_MOBILEBUILD` (`0x502640`),
+through `0x438760` and `0x43AFC0`; the position is `((2·cx + fx) << 19, alt << 16, (2·cz + fz) << 19)`
+with `cx`, `cz` the footprint's first cell. `0x43AFC0` with Shift (the click's `+8` bit 2, the mouse
+message's `MK_SHIFT`) first scans the unit's `+0x5C` list for a node of the same action whose x and z lie
+within ±`0x100000` (16 world units) of the new position (`0x43B00F..0x43B029`) and, on a match,
+destroys it instead of adding one; without Shift `0x43ADC0` destroys every order of the unit whose flags
+`+0x42` lack bit 4. The descriptors (`0x4FC6E8` family, `+0x0C` mask, `+0x11` flags): MobileBuild mask `0x13`
+flags `0x100508`, VTOL_MobileBuild `0x03` / `0x100508`, HelpBuild `0x18` / `0x100208`, BuildingBuild `0x00` /
+`0x10010C` (bit 4 set: a factory's queue survives the wipe), BuildWeapon `0x00` / `0x0C0140`. A factory's or
+a mobile factory's queue is count nodes made with a NULL position, which `0x43A0C0` zeroes (`0x43A14E`).
+`0x4C1B80(0xF9)` (stdcall, `ret 4`) is `GetKeyState(VK_SHIFT)` through the table at `0x4C1C48` (`0x4C1BB5`),
+the modifier test of the order mode's release (`0x4992E6`) and of the menu's ±5.
+
+**The fix** (`build_site_test`, `tagpu_patches.c`, local): the call at `0x4198C6` goes to a wrapper that
+runs stock's test and answers no when the footprint shares a cell with a queued site of the controlled
+player's units — one yardmap byte with bit 4, the other with bit 2 or 4, both directions since either
+site may be built first — a site being a node whose descriptor mask has bit 0 (the one `0x438C00` draws a
+rectangle for), a non-zero build type (`+0x36`) and x, z above 0. A unit the click would order does not
+block with its own orders the click removes: without Shift the ones lacking flag 4, with Shift the one
+within 16 units, so re-placing a plan and Shift-clicking a site to remove it work as in stock. Allies'
+and enemies' plans, dead (`+0x110` bit 28 clear) and excluded (bit 14) units are not read. **MEASURED**
+with `tools/queued-site-check.sh` (two CORCK, CORSOLAR, Wine, private Xvfb; 8 of 8 as expected): green on
+open ground; with Shift and a site queued, red 40 px over it, green 140 px away and 8 px away; without
+Shift green over the selected builder's own plan, red over an unselected builder's.
+**Gaps:** the alternate stamp mask (`+0x10F` bit 2) is not read, since the unit does not exist yet; the AI's
+site tests (`0x40A4CD`, no player) and orders that do not come from the cursor — `tacli order`, scenarios,
+a peer's packets — are stock's, so they can still queue over each other, and the second fails at build
+time as before; the plans of a unit in a network game that is not the controlled player's are not
+looked at (allies and enemies, by design).
 
 **`0x46A530 DrawUnitSelectBoxRect` has NO ModelId test — a negative result that cost a landing
 review to establish [BINARY-VERIFIED 2026-09-10].** Its only early-out is the `SelBoxes` option
