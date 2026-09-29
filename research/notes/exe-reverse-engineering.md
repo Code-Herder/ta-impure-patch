@@ -8634,7 +8634,9 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
 - **`MEM_Free 0x4D85A0(p)` is the one way any engine allocation dies** [VERIFIED 2026-09-12].
   It is a two-line wrapper (`mov eax,[esp+4]; push eax; call 0x4D85B0; add esp,4; ret`,
   prologue `8B 44 24 04 50` — five relocatable bytes, which is what makes it detourable), and
-  **`0x4D85B0` has exactly one caller: this**. 363 sites call `0x4D85A0`, `SurfaceFree
+  **`0x4D85B0` has exactly one caller: this**, and it is thread-safe: it takes the allocator's
+  critical section (`0x4DA780`, then `EnterCriticalSection` through `ds:0x4FC198` at `0x4D85C2`
+  [DISASSEMBLED 2026-09-29]) before it touches the heap. 363 sites call `0x4D85A0`, `SurfaceFree
   0x4C6AC0` among them (`0x4C6ACF`). Its partner is `MEM_Alloc 0x4D83B0(tag, size)` →
   `0x4D83C0`, which ignores the tag in the shipping build and goes to `0x4DACF0(size, 0)` or
   `0x4E8890(size)`.
