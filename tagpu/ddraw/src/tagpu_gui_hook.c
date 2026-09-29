@@ -29,7 +29,8 @@
 
    THREADS. Everything in this file runs on the GAME thread, inside the
    engine's own calls; the render thread only reads a few counters in
-   tagpu_gui_flush(). The op ring and the surface table are therefore plain
+   tagpu_gui_flush() and advances the census sequence the window peak restarts
+   from. The op ring and the surface table are therefore plain
    statics with no locking, and an observer that fires on any other thread
    (tagpu_text.c rasterises through the glyph blitter on the render thread)
    records nothing: the game thread is the one the flip runs on. */
@@ -156,6 +157,7 @@ typedef struct SURF {
                                          a composition. `op_add` clears it; see PK_ASSET  */
     int assetSent;                    /* the consumer ACKED this surface's current token */
     unsigned assetTok;                /* the token of the offer in flight, 0 = none    */
+    unsigned assetTokPrev;            /* the offer before it, whose echo may still come */
     unsigned assetTries;              /* offers made; bounded by TAGPU_GUI_ASSET_TRIES  */
     unsigned assetQ;                  /* the queue index of that offer's op: no second
                                          offer while the consumer has not taken it    */
@@ -478,7 +480,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
                 s_surf[i].seeded = 0;          /* the twin is the old size: re-make it */
-                s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0;
+                s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0; s_surf[i].assetTokPrev = 0;
                 free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
                 s_surf[i].copy = s_surf[i].mask = s_surf[i].acc = NULL;
                 snap_free(&s_surf[i]);
@@ -1026,7 +1028,7 @@ static int surf_retire(int i)
     d->copy = d->mask = d->acc = NULL;
     d->copyValid = 0;
     snap_free(d);
-    d->isAsset = 0; d->assetTok = 0;
+    d->isAsset = 0; d->assetTok = 0; d->assetTokPrev = 0;
     d->dying = 1; d->dieSeq = ++s_dieSeq; d->freedPub = 0;
     o = &s_ops[s_nops++];
     memset(o, 0, sizeof *o);
@@ -1584,8 +1586,21 @@ static int      s_pubBatch = 0;        /* inside `publish`: commits are staged  
    it has taken, in `drain` and in the layer-off discard), so the order of the
    two stores in `pub_flush` is not load-bearing. */
 static unsigned s_aHead = 0;
-static unsigned s_winPeakBytes, s_winPeakOps;  /* the largest window since the last census line */
+/* THE LARGEST WINDOW SINCE THE LAST CENSUS LINE. The game thread is their one
+   writer: the census on the render thread only reads them and advances
+   `s_censusSeq`, and the next window restarts the peak when it sees that move.
+   Payload bytes: a write that wraps the arena also loses the tail it skips. */
+static unsigned s_winPeakBytes, s_winPeakOps;
+static volatile unsigned s_censusSeq;
+
 static unsigned pub_head(void) { return g_guiq.qHead + s_qStaged; }
+/* the surface's last offer op is still waiting in the queue (or in the window
+   being staged). A stale tail reads as "still queued": it only delays. */
+static int asset_offer_queued(const SURF* s)
+{
+    unsigned tail = g_guiq.qTail;
+    return s->assetQ - tail < pub_head() - tail;
+}
 static void pub_flush(void)
 {
     if (!s_qStaged) { s_aHead = g_guiq.aHead; return; }
@@ -2612,7 +2627,7 @@ static void publish_window(unsigned flipSurf)
            reason. */
         for (i = 0; i < s_nsurf; i++) {
             s_surf[i].seeded = 0;
-            s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0;
+            s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0; s_surf[i].assetTokPrev = 0;
         }
         /* `assetTok` GOES WITH THEM, and clearing it is what retires every echo
            still in flight: the next offer issues a NEW token, and a token that
@@ -3193,9 +3208,19 @@ static void publish_window(unsigned flipSurf)
                panel debt taught), and the token is what makes the echo mean this
                offer rather than some earlier surface that happened to occupy the
                same block. `assetTok == 0` is "no offer in flight" and must never
-               match the initial `assetAck` of 0. */
+               match the initial `assetAck` of 0.
+
+               THE PREVIOUS OFFER'S ECHO COUNTS TOO. The drain moves the tail
+               past an offer and the hand-over publishes its echo later in the
+               same render iteration, so a window can see the offer taken and
+               make the next one before that echo lands. Both carry this
+               surface's same bytes. No older echo can still come: a new offer
+               is made only after the previous one was taken, so it is taken by
+               a later drain, and `mir_begin` at the start of that drain has
+               already published or dropped every echo before it. */
             if (src && src->isAsset && !src->assetSent && src->assetTok &&
-                g_guiq.assetAck == src->assetTok) { src->assetSent = 1; s_assetAcked++; }
+                (g_guiq.assetAck == src->assetTok ||
+                 (src->assetTokPrev && g_guiq.assetAck == src->assetTokPrev))) { src->assetSent = 1; s_assetAcked++; }
             /* AND ONLY WHILE SOMETHING IS LISTENING. `mirArmed` is the
                consumer's own arm state, not a timer: an unarmed lane drops the
                payload in `mir_bytes` without a word, so composing the offer at
@@ -3205,19 +3230,20 @@ static void publish_window(unsigned flipSurf)
                an offer. (A try count would be a ~1.2 s timeout standing in for a
                state, and 240 x 300 KB is ~72 MB.) */
             /* AND NEVER TWO IN THE QUEUE. An offer the consumer has not taken
-               yet cannot have been lost, so a second one is pure arena: the
-               echo comes back a present or more after the drain, and a copy
-               from this source can come every window, several to a window.
+               yet cannot have been lost, so a second one is pure arena, and a
+               copy from this source can come every window, several to a window.
                Re-offering on each filled the 16 MB arena with one backdrop
                under a slow consumer (MEASURED 2026-09-28, a Wine suite host
                in the multiplayer menus: 11 510 offers, 7 acked, 212 no-room
                stalls, each reseed restarting the count). Waiting for the
-               tail to pass the last offer's op bounds the offers in flight
-               to one per asset surface, and paces a re-offer by the consumer
-               rather than by the engine. */
+               tail to pass the last offer's op bounds the offers queued to
+               one per asset surface, and paces a re-offer by the consumer
+               rather than by the engine. "Still queued" is the op's index
+               inside [tail, head) -- a range test rather than a signed
+               difference, so it holds however far the indices have run. */
             if (src && !src->dying && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
                 g_guiq.mirArmed &&
-                (!src->assetTok || (int)(g_guiq.qTail - src->assetQ) > 0) &&
+                (!src->assetTok || !asset_offer_queued(src)) &&
                 src->assetTries < TAGPU_GUI_ASSET_TRIES) {
                 /* THE TOKEN IS STAMPED ON THE OP AND ADOPTED BY THE SURFACE
                    ONLY ONCE THE OFFER IS COMMITTED. Writing `src->assetTok`
@@ -3236,6 +3262,7 @@ static void publish_window(unsigned flipSurf)
                 a->r = (short)(src->w - 1); a->b = (short)(src->h - 1);
                 if (!pub_surface_bytes(src, 0, 0, src->w - 1, src->h - 1, a)) return;
                 pub_commit();
+                src->assetTokPrev = src->assetTok;
                 src->assetTok = tok;
                 src->assetQ = pub_head() - 1;
                 src->assetTries++;
@@ -3289,7 +3316,9 @@ static void publish_window(unsigned flipSurf)
 /* One window, made visible in one store: see `pub_flush`. */
 static void publish(unsigned flipSurf)
 {
+    static unsigned s_peakSeq;
     unsigned bytes0 = s_pubBytes, ops0 = s_pubOps;
+    if (s_peakSeq != s_censusSeq) { s_peakSeq = s_censusSeq; s_winPeakBytes = 0; s_winPeakOps = 0; }
     s_pubBatch = 1;
     publish_window(flipSurf);
     /* THE BOUND THE DESIGN RESTS ON, WITNESSED: a window must fit whole
@@ -5004,14 +5033,14 @@ void tagpu_gui_flush(unsigned int frame_counter)
     /* mingw's `_snprintf` does not NUL-terminate on truncation, and `glog`
        hands the result to `fprintf("%s")`, so an undersized buffer is an
        out-of-bounds READ, not a tidy cut. */
-    char b[700];        /* 658 worst case, COUNTED OUT OF THE FORMAT STRING rather
-                           than adjusted by eye: 224 literal characters, 40 `%u` at
+    char b[700];        /* 688 worst case, COUNTED OUT OF THE FORMAT STRING rather
+                           than adjusted by eye: 234 literal characters, 42 `%u` at
                            ten digits, and THREE `%d` at eleven (`world=…/%d`,
                            `surfaces=%d`, `draw=%d`) plus the NUL. A conversion is
                            sized by its TYPE, not by the values you expect in it:
                            `s_phaseLive` only ever holds 0 or 1 and still counts
                            eleven. The `asset=` and `tint=` groups are FOUR fields
-                           each, `wheel=` four too, `box=` three. */
+                           each, `wheel=` four too, `box=` three, `winpeak=` two. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
@@ -5033,7 +5062,7 @@ void tagpu_gui_flush(unsigned int frame_counter)
                   s_lwNotches, s_lwRows, s_lwMiss, (unsigned)s_lwFull,
                   s_winPeakBytes, s_winPeakOps);
         glog(b);
-        s_winPeakBytes = 0; s_winPeakOps = 0;
+        s_censusSeq++;
         {
             /* THE SAME GUARD AS THE OTHER THREE IN THIS FILE: mingw's
                `_snprintf` returns -1 on truncation, so a bare `n +=` makes `n`

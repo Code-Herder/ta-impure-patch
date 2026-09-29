@@ -852,7 +852,7 @@ static void* __cdecl after_alloc(unsigned int* regs)
        read now -- the surface is blank at this point (see the seed below) and
        the loader has not run -- they cross at the first copy that reads it. */
     if (s) { s->isAsset = tag_is_shell_bg(tag); s->assetSent = 0;
-             s->assetTries = 0; s->assetTok = 0;     /* all four, as everywhere else */
+             s->assetTries = 0; s->assetTok = 0; s->assetTokPrev = 0;  /* all five, as everywhere else */
              snap_free(s); }   /* a new allocation: the old bytes are not this one's */
     if (s && s_trace) {
         char b[200];

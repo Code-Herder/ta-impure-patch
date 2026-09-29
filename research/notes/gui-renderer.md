@@ -4949,7 +4949,8 @@ therefore free bytes under an op not yet taken. **One window must fit whole** in
 and arena it started with — the consumer cannot free room from a window it cannot see yet;
 per-op visibility never lifted that bound, it only let a drain that happened to run mid-publish
 free room by chance. The census line's `winpeak=bytes/ops` is the largest window published
-since the last census. MEASURED: **843 KB and 1 344 ops at most** over four Wine suite rows with
+since the last census, in payload bytes (a write that wraps the arena also loses the tail it
+skips, at most one write's length). MEASURED: **843 KB and 1 344 ops at most** over four Wine suite rows with
 their two-player games (retail, TA Zero, Twilight, Mayhem under the loader), against a 16 MB arena
 and a 65 536-op ring; in game at 3840×2160 with hudscale off (Xvfb), `reseedstress=120`, 14
 forced reseeds gave `stalls=0 overflows=0`. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
@@ -4964,8 +4965,12 @@ window, until the consumer's echo came back or 240 tries ran out; 240 × 300 KB 
 so a consumer ~50 windows behind filled the arena with copies of one backdrop, and each reseed
 restarted the count. An offer is now also held back while its previous one is still in the queue
 (`assetQ`, the offer op's index, against `qTail`): an offer the consumer has not taken cannot
-have been lost, so the offers in flight are bounded to one per asset surface and a re-offer is
-paced by the consumer, not by the engine. MEASURED on the same four rows after it: 3–6 resets
+have been lost, so the offers queued are bounded to one per asset surface and a re-offer is
+paced by the consumer, not by the engine. The echo of the offer *before* the current one is
+accepted too: the drain moves the tail past an offer before the hand-over publishes its echo,
+so a window can make the next offer in between, and without it convergence would depend on
+not landing there. No older echo can still arrive, because `mir_begin` publishes or drops every
+pending echo at the start of the drain that takes the newer offer. MEASURED on the same four rows after it: 3–6 resets
 per game, `overflows=0`, one stall in twelve logs, offers ≈ acks (`asset=10/9`).
 
 **Not closed here.** SKIRMISH on the Windows box runs at **30 fps**, with vsync on, against
