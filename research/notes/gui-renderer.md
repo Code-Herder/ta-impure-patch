@@ -4918,7 +4918,8 @@ still covered — it now waits at a full arena rather than a half one, so the st
 exit click lasts about twice as long (~0.5 s) — and the loop is bounded: a stall's reseed follows a
 drain to the low-water marks, so the next stall needs the reseed plus whatever the engine draws
 meanwhile to fill the ring or the arena from there, more than ~14 MB or ~61 000 ops before the
-consumer drains again; the SKIRMISH burst is ~9 MB. It is a bound and not a guarantee: a
+consumer drains again; the SKIRMISH burst is ~9 MB, and no window measured so far passes 1 MB
+(below). It is a bound and not a guarantee: a
 consumer presenting fewer times a second than the engine's op rate over the drain's 20 000-op
 budget (~7.5 a second at the box's ~150 000 ops a second) falls behind for good, which is the
 crawl the rule exists for, and the level boundary and the consumer's own requests reseed without
@@ -4947,11 +4948,25 @@ in `drain` and now also in the layer-off discard, which used to set `aTail = aHe
 therefore free bytes under an op not yet taken. **One window must fit whole** in the free ring
 and arena it started with — the consumer cannot free room from a window it cannot see yet;
 per-op visibility never lifted that bound, it only let a drain that happened to run mid-publish
-free room by chance. MEASURED against it, the worst case at hand: in game at 3840×2160 with
-hudscale off (Xvfb), `reseedstress=120`, 14 forced reseeds — `stalls=0 overflows=0`, no
-`no-room`, the arena at most 13 KB full at a reset. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
+free room by chance. The census line's `winpeak=bytes/ops` is the largest window published
+since the last census. MEASURED: **843 KB and 1 344 ops at most** over four Wine suite rows with
+their two-player games (retail, TA Zero, Twilight, Mayhem under the loader), against a 16 MB arena
+and a 65 536-op ring; in game at 3840×2160 with hudscale off (Xvfb), `reseedstress=120`, 14
+forced reseeds gave `stalls=0 overflows=0`. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
 window. The drain's own 20 000-op budget can still stop inside a window, when more than
 20 000 ops are queued at once.
+
+**The same loop through the other door: an asset offered every window.** With the backlog rule
+gone, the suite's two-player games still looped, now through `no-room` — a host in the
+multiplayer menus with **212 stalls and `asset=11510/7`**: 11 510 `PK_ASSET` offers, 7 acked,
+3.5 GB published. An unacked asset was re-offered at every `PK_COPY` from it, several to a
+window, until the consumer's echo came back or 240 tries ran out; 240 × 300 KB is four arenas,
+so a consumer ~50 windows behind filled the arena with copies of one backdrop, and each reseed
+restarted the count. An offer is now also held back while its previous one is still in the queue
+(`assetQ`, the offer op's index, against `qTail`): an offer the consumer has not taken cannot
+have been lost, so the offers in flight are bounded to one per asset surface and a re-offer is
+paced by the consumer, not by the engine. MEASURED on the same four rows after it: 3–6 resets
+per game, `overflows=0`, one stall in twelve logs, offers ≈ acks (`asset=10/9`).
 
 **Not closed here.** SKIRMISH on the Windows box runs at **30 fps**, with vsync on, against
 60 on Wine. The shell flips ~8 000 times a second there and every 5 ms window carries a whole
