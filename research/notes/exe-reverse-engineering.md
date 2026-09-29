@@ -3118,7 +3118,7 @@ each time; on the Windows test setup it came up.
 The DLL's passes range-test every pointer they take out of engine memory before reading through it
 (`ptr_ok` and its siblings, a filter on a value and never the reason a read is safe). Their upper end
 is **the process's own top, `GetSystemInfo`'s `lpMaximumApplicationAddress`** (`tagpu_addr.h`), not a
-2 GB constant. Retail's exe is not large-address-aware (Characteristics `0x10B`) and gets `0x7FFEFFFF`;
+2 GB constant; it is taken once, first thing in DllMain (`tagpu_addr_init`), and never written again. Retail's exe is not large-address-aware (Characteristics `0x10B`) and gets `0x7FFEFFFF`;
 TA:ESC's sets `IMAGE_FILE_LARGE_ADDRESS_AWARE` (`0x12B`, [deep-ta-esc](deep-ta-esc.html)), gets
 nearly 4 GB under a 64-bit Windows or Wine, and its heap is placed up there: **the unit array began
 at `0x9FD50020`** on a TA:ESC skirmish under Wine, against `0x0E8D0020` on retail. With the constant

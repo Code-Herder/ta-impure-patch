@@ -2,15 +2,18 @@
 
 ## Status
 
-**Design, not implementation.** How the state recorder stays complete as Impure's simulation
-changes. The owner chose **option B, declare and measure**, on 2026-09-29, after a design panel
-(four designs, two judges) over the code as it stood; the product decisions it serves are on the
+How the state recorder stays complete as Impure's simulation changes. **The declarations and
+their build check are built** (the [build order](#build-order)'s first landing, 2026-09-29): every
+writable static of the four simulation files is declared, and the link refuses one that is not.
+The exclusion file, the replay harness and self-verification are designed, not built. The owner
+chose **option B, declare and measure**, on 2026-09-29, after a design panel (four designs, two
+judges) over the code as it stood; the product decisions it serves are on the
 [product page](demo-recorder.md#completeness-and-verification), and the engine facts it rests on
 are in the [state design evidence](demo-recorder-state-evidence.md). Addresses below come from that
 panel's readers and were checked against the pristine binary by its judges unless marked
-[INFERRED]. Every decision is taken ([below](#decisions-taken)). The CLAUDE.md section below is
-adopted with the mechanism: it goes into CLAUDE.md in the landing that brings the declarations and
-the build check, which must also close the [open items](#open-items).
+[INFERRED]. Every decision is taken ([below](#decisions-taken)). The rules are in CLAUDE.md
+(*Simulation changes stay replayable*), less the replay gate, which lands with the harness
+([below](#the-claudemd-section-and-landing-gate)).
 
 ## The problem
 
@@ -46,59 +49,130 @@ so presentation bytes such as the option word never trip anything.
 
 ### Impure's own state: declared where it is defined
 
-In a source file marked `sim` (a word added to its `thread-split.allow` line; files marked
-`presentation` are out of scope), every table, static variable and thread-local slot carries a
-one-line declaration next to its definition. The proposed shape:
+Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Four
+are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c` and `tagpu_cobtrace.c` — and
+every other listed file is `presentation`, out of scope; only a source file can be `sim`, since a
+header's statics belong to the objects that include it. In a `sim` file every writable static,
+heap table and TLS slot carries a one-line declaration on the line after its definition
+(`tagpu/ddraw/inc/tagpu_simreg.h`):
 
 ```c
-/* inc/tagpu_simreg.h (proposed) */
-typedef enum { KEY_NONE, KEY_UNIT_SLOT, KEY_UNIT_TYPE, KEY_PLAYER, KEY_WEAPON } SimKey;
-typedef enum { SIM_STATE,     /* recorded, restored, verified                */
-               SIM_CONTENT,   /* rebuilt from game data at load; hashed      */
-               SIM_TRANSIENT, /* empty whenever a snapshot is taken          */
-               SIM_PRIVATE    /* diagnostics the simulation never reads      */
-} SimClass;
-
-typedef struct SimDesc {
-    const char*     name;     /* "tagpu_datakeys.c:s_quiet": names every failure  */
-    void*           addr;     /* the array, or &pointer for a heap table          */
-    const unsigned* rows;     /* live row count (NULL = fixed)                    */
-    unsigned        stride;   /* bytes per row                                    */
-    SimKey          key;      /* what a row index means: how to remap at takeover */
-    SimClass        cls;
-    const struct SimField* layout; /* optional: which bytes are IDs               */
-} SimDesc;
-
-#define SIM_DECLARE(var, cls, key, stride, rowsptr) \
-    static const SimDesc simdir_##var \
-    __attribute__((used, section(".rdata$simreg$m"))) = \
-    { __FILE__ ":" #var, (void*)&var, rowsptr, stride, key, cls, 0 }
-
-/* in use */
 static unsigned char s_quiet[DK_QUIET_SLOTS];
-SIM_DECLARE(s_quiet, SIM_STATE, KEY_UNIT_SLOT, 1, NULL);
+SIM_ROWS(s_quiet, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
+
+static WSlot* g_side;             /* [rows][WPN_SIDE] */
+static u32    g_side_rows;
+SIM_HEAP(g_side, SIM_STATE, SIM_ID_UNIT_SLOT, WPN_SIDE * sizeof(WSlot), g_side_rows, side_layout);
 ```
 
-The descriptors land in one linker section, which MinGW's default script sorts by name
-(`.rdata$simreg$a` … `$z`; the panel confirmed the ordering in a scratch link), so the recorder
-walks one list of all simulation state with no central file to edit. A declared `SIM_STATE` table is
-recorded, carried in the self-check slice with its unit or player, dumped by the harness and written
-back at a takeover, remapped through its key, with no code of its own. `SIM_CONTENT` is hashed on its
-value fields; `SIM_TRANSIENT` is asserted empty at snapshots; counters the simulation never reads go
-in one `SIM_PRIVATE` struct per module.
+Each declaration is a descriptor (its name `__FILE__ ":" var`, line, address, row size, row count,
+live-count pointer, class, key, flags and layout) and a pointer to it in the linker section
+`.rdata$simreg$m`. MinGW's linker sorts `.rdata$*` by name, so the markers `tagpu_simreg.c` puts in
+`$a` and `$z` bracket every declaration: the recorder walks one list of all simulation state and no
+central file names any of it. The walk runs once, in DllMain after the last simulation module has
+installed (`tagpu_simreg_attach`): it checks each declaration's shape and logs one `simreg:` line
+with the count by class, the number of levers read and the name of each one set.
 
-- **Heap and thread-local tables** come only from a wrapper, `tagpu_simtab_alloc`, which registers
-  what it creates.
-- **Tables store IDs, not addresses**, or declare which bytes are IDs. Today `g_side`'s rows hold a
-  COB thread handle and a `WeaponStruct*`, and `DkUnit` holds `def`, `pp` and a per-process serial;
-  these get IDs or a layout.
-- **The build check**, `tools/sim-state-check.sh`, lists each `sim` object's writable symbols with
-  `nm` and requires a `simdir_` twin for each (a name match, since GCC relocates file statics
-  against the section symbol); `malloc`, `VirtualAlloc` and `TlsAlloc` outside the wrapper are
-  refused. It must depend on `$(OBJS)`: as an order-only prerequisite it would race the compiler.
-  A failure names the object and the symbol.
-- **One hole:** state Impure keeps inside engine-allocated objects (the grown COB object) is not a
-  DLL variable. It needs a layout declaration, which only the harness can catch missing.
+**The classes.** When unsure, `SIM_STATE`: a wrong STATE costs recording bytes, a wrong other class
+costs a replay that silently differs.
+
+| Class | What it holds | What the recorder does |
+|---|---|---|
+| `SIM_STATE` | what the simulation reads and a game changes, and display state that follows from simulation events | records it, restores it, verifies it; a table is carried in the self-check slice with its unit or player and remapped through its key at a takeover, with no code of its own |
+| `SIM_CONTENT` | derived only from game data when it loads, constant until that data loads again | rebuilds it, does not record it; hashes it to catch a mismatch |
+| `SIM_TRANSIENT` | nothing carried from one tick to the next: at every tick boundary each byte is back at its value from load (an empty queue, a free hold, a cleared flag) or is written before anything reads it (a scratch buffer) | the harness resets it to its value from load at a snapshot, as a fresh process holds it, and the round trip must still match |
+| `SIM_PRIVATE` | diagnostics the simulation never reads, in one struct per feature (`s_hitDiag`, `g_diag`, …), so every use says so | ignores it |
+| `SIM_INSTALL` | what Impure writes while installing — in DllMain, and in the start-up checks at the first DirectDraw call — and never during a game: trampolines, code pages, site tables, TLS indices, levers, locks | the harness hashes it after install and fails by name when a game changes it; locks (`SIM_LOCK`) are left out of that hash |
+
+Neither "empty at every snapshot" nor "never read by a later tick" fits both kinds of transient
+memory: a scratch buffer keeps its last bytes after the call that used it, and a free hold's zero
+thread ID is read by every send that asks whether it holds one (`s_killHold`). Both hold what a
+fresh process seeking to that tick holds, the value from load, so that is what the harness
+writes. A queue left non-empty across a tick then fails the round trip, and so does scratch read
+before it is written, whenever its stale bytes differ from the load's.
+
+**The forms:** one row (`SIM_VAR`, and `SIM_VAR_L` with a layout); a static array (`SIM_ROWS`),
+or its live prefix (`SIM_ROWS_LIVE`, counted by an `unsigned`); a pointer to rows `SIM_ALLOC` made
+(`SIM_HEAP`, counted, and `SIM_BLOCK`, a fixed number); an engine pool the raised limits moved into
+the DLL (`SIM_ENGINE`, in the engine's own record layout, so its bytes are described with the
+engine records, not by a layout here); a TLS index whose class is the slot's content (`SIM_TLS`);
+and three install forms, `SIM_LOCK`, `SIM_CODE` (executable memory an installer builds) and
+`SIM_GUARD` (a reserved region no access may touch). The compiler checks what it can: a
+`SIM_ROWS` of a pointer, a `SIM_HEAP` of an array, or a count that is not `unsigned` does not build.
+
+**The key** says what a row index means, so a takeover can move rows with their units: none, unit
+slot, unit type, player, weapon, or a DirectPlay player ID (the session's, not the recording's).
+
+**Tables store IDs, not addresses, or declare their layout.** A row whose bytes are not all plain
+values names the others: an ID (`SIMF_ID`); the address of what an ID names (`SIMF_ADDR`, a def or
+a weapon record, whose ID is the value; with no key, other process memory that is never a value); a
+block the row owns (`SIMF_OWNED`, allocated through its table); a process-local value (`SIMF_LOCAL`,
+a serial or a clock); a struct-of-arrays column and its count (`SIMF_COLUMN`, `SIMF_COUNT`); the
+engine's weapon target (`SIMF_TARGET`, a unit slot when the second u16 is `0x8000`, else a ground
+point); and a field whose address the engine holds (`SIMF_PINNED`). The last is the extra weapons'
+side slots: a running aim script's thread record points at the slot's callback object, so the
+recorder writes those rows in place and never moves one while a script may run
+([extra weapons](../extra-weapons.md)). `DkUnit` declares `def` an address of its unit type, `pp`
+an owned block and `serial` process-local.
+
+**Everything else comes through the wrappers.** Memory belongs to a declaration: `SIM_ALLOC` and
+`SIM_FREE` take it from `VirtualAlloc` for a table, a TLS slot's buffer or code (executable), as a
+reservation with no access for a guard, and from the process heap for a block a row owns; a
+declaration that owns no memory gets NULL and a `simreg: FAILED` line naming it. Scratch that a
+call frees before it returns comes from `tagpu_sim_scratch`. TLS indices come from
+`SIM_TLS_ALLOC`, page changes from `tagpu_detour_write` and stubs from `tagpu_detour_stub` (freed by
+`tagpu_detour_stub_free`). A lever — a file in the game folder whose presence changes what the
+simulation runs — is read through `tagpu_sim_lever` or `tagpu_sim_lever_read` while Impure
+installs. The registry keeps one entry per name with its value, however many installers ask
+(three ask for `tagpu_wirecheck.on`). Three things log FAILED by name: a lever read after install,
+a lever that reads two ways while installing, and a 33rd lever past the list's 32. A file that
+tooling reads or writes is named inside `SIM_TOOL_FILE`.
+
+**The build check**, `tools/sim-state-check.sh`, runs in the link recipe of `ddraw.dll` in both
+builds, on the objects about to be linked, and fails the link naming the file and the symbol:
+
+- **UNDECLARED**: a writable static (`nm` classes `b B d D C`) with no `simreg_` twin of the same
+  name, counted (two function-local statics named `top` need two declarations; GCC's `.N` suffixes
+  are stripped). It is a name match because GCC relocates file statics against the section symbol,
+  so nothing pairs them by address.
+- **STALE**: a declaration of something that is not a writable static of that object.
+- **IMPORT**: a call to an allocator, `TlsAlloc`/`TlsFree`, `FlsAlloc`/`FlsFree`, `VirtualProtect`
+  or `GetProcAddress` (which would reach the same functions around the list).
+- **LEVER**: a string literal that is a whole `tagpu_` file name anywhere but directly inside
+  `tagpu_sim_lever(`, `tagpu_sim_lever_read(` or `SIM_TOOL_FILE(`, with comments and `#include`
+  lines removed first.
+
+It exits 0 clean, 1 on an offender and 2 when it could not run (no `nm`, a missing object, a
+header marked `sim`, and the like). **Verified 2026-09-29:** a probe object carrying one of each offender fails with
+each named, the counted `top` included, while the wrapped lever beside them passes; the three
+could-not-run cases exit 2; an undeclared static added to `tagpu_cobtrace.c` stops the link. Clean,
+it reports **170 declarations in the raised build and 154 in the stock-limits build**, and a running
+game's attach line agrees (MEASURED 2026-09-29, on Wine, in all 18 of the compatibility suite's
+setups that load Impure and on the ten-laser tower fixture):
+
+```
+simreg: 170 declarations (30 state, 5 content, 38 transient, 19 private, 78 install; 4 locks, 6 TLS indices, 3 heap tables, 6 code or guard pointers, 6 engine pools, 15 layouts), 0 malformed; levers: 7 read
+```
+
+The stock-limits build reads 154 (22 state, 3 content, 37 transient, 19 private, 73 install), with
+no engine pools, since it raises no limit.
+
+**What the check does not prove**, by construction of its rules, and so what the review and later
+the harness have to:
+
+- that a declaration's class is right;
+- state kept in a file not marked `sim`, or in memory a `presentation` module allocates;
+- a lever named through a macro, a string built at run time or a header;
+- state Impure keeps inside engine-allocated objects (the grown COB object), which is not a DLL
+  variable and needs a layout declaration that only the harness can catch missing;
+- the contents of a block a row owns: the COB file records (`s_cobFiles`) chain through pointers
+  and hold a program that `tagpu_cob_safe.c` allocates outside the wrappers. They are content,
+  rebuilt when the scripts load, but no layout describes them;
+- `s_cob`, the data keys' script cache, places its rows by a hash of the script's address, so the
+  same content sits in other rows in another process: its content hash has to be taken over the
+  rows as a set, or the table keyed by an ID;
+- the engine pools the DLL holds (`SIM_ENGINE`) are declared, but their record layouts are not yet
+  written anywhere the recorder reads.
 
 ### Events
 
@@ -162,7 +236,8 @@ and declared tables. Recorded bytes must match within the recording's quantum, c
 recompute, pointers as target IDs; only the takeover-drop list may differ. Anything else fails by
 name, for example `restore@18231 unit[ARMCOM id 312] +0x108 hp 3120→3100 RECORDED`.
 
-**No vacuous passes:** declared tables are overwritten with `0xA5` before the rebuild; one restore
+**No vacuous passes:** declared state tables are overwritten with `0xA5` before the rebuild, and
+transient memory is reset to its values from load; one restore
 per run puts units into different slots; a fresh process seeking to the same tick must match dump A,
 and so must forward and backward seeks; a **null twin** pauses for the same time under scripted
 camera and menu input without rebuilding, and the bytes that change there are presentation and are
@@ -201,62 +276,42 @@ rests on.
 
 ## Build order
 
-1. **Before the first self-verification slice:** the exclusion file with its build hash; the `sim`
-   and `presentation` words in `thread-split.allow` (with `thread-split-check.sh` taught to read a
-   second word, since today it fails on `publisher sim`); the declarations and the build check, with
-   every existing static in the simulation files classified once and no exemption list (324
-   writable statics and 6 TLS slots on 2026-09-29, MEASURED with `nm`); IDs or layouts for the
-   pointer-carrying tables; the recording header's lever list; capture at `0x4954ED`. The CLAUDE.md
-   section below lands in the same landing.
-2. **With the skirmish slice:** self-verification over units, players and declared tables; root and
-   sink counting; the main block and `.data` with the null twin; puppet dispositions and fixtures;
-   the one-writer rule and getter 75 per seat; the nano spray's recording and playback; the landing
-   run and the nightly tier with its timer.
+1. **Before the first self-verification slice**, two landings:
+   - **The declarations and the build check — built 2026-09-29.** The scope words in
+     `thread-split.allow` (`thread-split-check.sh` reads the third column); `tagpu_simreg.h` and its
+     wrappers; `tools/sim-state-check.sh` in the link recipe; every existing static of the four
+     simulation files classified once, with no exemption list, the diagnostics among them moved into
+     one struct per feature; layouts for the tables that carry pointers or IDs; the CLAUDE.md
+     section, less its replay gate.
+   - **The exclusion file**, `replay-layout.tsv`, from what the saver `0x4876C0` writes, with its
+     build hash.
+2. **With the skirmish slice:** capture at `0x4954ED` and the recording header's lever list (the
+   registry's list), with the recorder that uses them; self-verification over units, players and
+   declared tables; root and sink counting; the main block and `.data` with the null twin; puppet
+   dispositions and fixtures; the one-writer rule and getter 75 per seat; the nano spray's recording
+   and playback; the landing run and the nightly tier with its timer, and with the harness the
+   CLAUDE.md replay gate and the landing command's Step 4b.
 3. **Later:** multiplayer dumps, `limits-tier2`, and a check that every changed executable byte lies
    inside a range some installer published.
 
 ## The CLAUDE.md section and landing gate
 
-Adopted with the mechanism (decision 4): it goes into CLAUDE.md in the landing that brings the
-declarations and the build check (build order, step 1), revised for decisions 1–3:
+The section is in CLAUDE.md (*Simulation changes stay replayable*) since the declarations landed,
+and CLAUDE.md is its only copy. Two parts wait for the harness, since until it exists they could
+not run and every simulation landing would stop at escalation reason 3:
 
-```markdown
-## Simulation changes stay replayable
+- the bullet **"A landing that changes simulation code** runs the replay fixtures of the features
+  it changes (recorded, restored in place with the round trip, replayed on puppets) and records a
+  `replay-roundtrip:` note. A change whose feature names no fixture fails by name. The broad tier
+  runs nightly on `main` and before every `v*` tag.";
+- the landing command's **Step 4b**, requiring a current `replay-roundtrip:` note on `main..HEAD`,
+  from the fixtures of the changed features, whenever the diff changes simulation code, the
+  layout, the recorder or a fixture (three attempts, then escalation reason 3 if a game cannot
+  start).
 
-The recorder keeps every byte of the engine's unit and player records except what
-`tagpu/ddraw/replay-layout.tsv` excludes, plus all simulation state Impure declares. A
-simulation change needs no recorder change unless `make` or the replay harness names one.
-
-- **Declare state where you define it.** In a file marked `sim` in `thread-split.allow`,
-  every static, heap table and TLS slot is `SIM_STATE`, `SIM_CONTENT`, `SIM_TRANSIENT`, or
-  lives in the module's `SIM_PRIVATE` struct. Memory, TLS, page protection and levers come
-  through the wrappers. When unsure, use `SIM_STATE`.
-- **Store IDs, not addresses**, or declare the table's layout.
-- **Start effects through an engine root**, never a direct sink call. Each simulation
-  feature states its puppet behaviour and names its fixture beside its code.
-- **An effect only the owner's machine produces** is recorded where the engine produces it,
-  credited to its unit by an engine invariant, and replayed through the same function —
-  never imitated.
-- **On a puppet the recorder is the only writer** of the state the recording carries: COB's
-  engine writes are inert in puppet mode, and a new path that writes engine state on a
-  puppet is a bug the harness names.
-- **A replay shows what the game showed**: display state that follows from simulation
-  events is `SIM_STATE`, not `SIM_PRIVATE`.
-- **Loosening is the owner's decision**: an exclusion, a `presentation` file, TRANSIENT or
-  PRIVATE on memory the simulation reads, an expected-absent event, a tolerance. A
-  difference the harness names is a bug in the change, never grounds for an exclusion.
-- **A landing that changes simulation code** runs the replay fixtures of the features it
-  changes (recorded, restored in place with the round trip, replayed on puppets) and
-  records a `replay-roundtrip:` note. A change whose feature names no fixture fails by name.
-  The broad tier runs nightly on `main` and before every `v*` tag.
-```
-
-The landing command gains the build check in Step 3; a Step 4b requiring a current
-`replay-roundtrip:` note on `main..HEAD`, from the fixtures of the changed features, whenever the
-diff changes simulation code, the layout, the recorder or a fixture (three attempts, then
-escalation reason 3 if a game cannot start); and three items in the Step 5 review brief: each new
-class checked against the code, new direct sink calls and new engine writes on puppets, and every
-loosening.
+The landing command already carries the rest: its Step 3 build runs the check, and its Step 5
+brief asks for each new class checked against the code, new direct sink calls and new engine
+writes on puppets, and every loosening.
 
 ## Decisions taken
 
@@ -269,23 +324,22 @@ loosening.
 | 2026-09-29 | **Getter 75 answers on a puppet what the recording machine answered, per seat.** The recording keeps one bit per player, *simulated on the recording machine*, and in puppet mode getter 75 answers that bit for the queried unit's owner. Puppets therefore show the owner-only indicators the recording machine showed, drawn by the mods' own scripts. Two rules come with it, needed whatever 75 answers. **One writer in puppet mode:** COB's SET, ATTACH and DROP change no engine state on a puppet, and the recorder alone writes `+0x10E`, `+0x10F` and the carry links; it applies `+0x10E` through `0x48B090` so each recorded change starts its scripts once. **Takeover flips the seats, then re-creates the units:** only a create gives fresh COB, and Create's first step reads 75. Rejected: accepting 0, which silently drops Escalation's and Twilight's owner-only indicators (375 branches), and replaying per call, since no invariant pairs a recorded call with a puppet call. |
 | 2026-09-29 | **Each landing runs the replay fixtures of the features it changes; the broad tier runs nightly and at every tag.** A landing that changes simulation code runs only the fixtures its changed features name beside their code, each recorded, restored in place with the round trip and replayed on puppets; a change whose feature names no fixture fails the landing by name. The broad tier (the skirmishes, the network games, restores at random ticks, the limits tiers) runs nightly on `main`, from a timer built with the harness, and before every `v*` tag beside the compatibility suite. Always-on self-verification names any mismatch in every recording in between. Rejected: the full tier on every landing that touches a simulation file (10–15 min of most of the reference setup, a third of them not simulation work), and the tier only when a landing declares new state (code-only changes such as B9 wait a day, and until the mechanism exists "declares new state" is a judgement). |
 | 2026-09-29 | **The CLAUDE.md section and landing gate are adopted with the mechanism**, in the landing that brings the declarations and the build check, which classifies every existing static once, with no exemption list. Adopted now, the gate could not run (no harness: every simulation landing would stop at escalation reason 3), half the rules would have nothing to write against, and the `sim` word would break today's build. The draft is revised for decisions 1–3. Rejected: review-checked shape rules until then, which nothing enforces. |
+| 2026-09-29 | **Install-time plumbing is a fifth class, `SIM_INSTALL`**, declared beside its definition like everything else: never recorded or restored; the harness hashes the class after install and fails by name when a game changes any of it. Locks get their own declaration (`SIM_LOCK`) and are the only part left out of that hash. Rejected: moving the plumbing out of the simulation files. |
+| 2026-09-29 | **Four files are simulation code**: `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c` and `tagpu_cobtrace.c` are `sim`; every other file on `thread-split.allow` is `presentation`. |
+| 2026-09-29 | **Step 1 is two landings.** The first brings the declarations, the wrappers, the build check and the CLAUDE.md section; the second, the exclusion file. Capture at `0x4954ED` and the recording header's lever list move to the skirmish slice, with the recorder that uses them; the CLAUDE.md replay gate and the landing command's Step 4b land with the harness. |
 
 ## Open items
 
-For the landing that brings the declarations and the build check, unless noted:
+Both for the skirmish slice:
 
-1. **A home for install-time plumbing.** About 49 of the simulation files' statics are written once
-   at install and never by the simulation: 25 trampolines, 14 stub and code-page variables, 4 locks
-   and 6 TLS index variables [counted from names and types, 2026-09-29]. They fit none of the four
-   classes: a fifth `install` class, or moving them out of the simulation files.
-2. **Does `0x48B090` play a sound?** A change of `+0x10E` bits 0 and 2 calls `0x47F780`, which
+1. **Does `0x48B090` play a sound?** A change of `+0x10E` bits 0 and 2 calls `0x47F780`, which
    queues a status line through `0x47FAD0`. Neither calls the sound entry `0x47F0C0` directly, the
    deeper calls of `0x47FD70` are not traced, and a source comment in `tagpu_patches.c` claims the
    chain. The answer decides whether a recorded `+0x10E` change applied on a puppet duplicates a
-   recorded sound (the skirmish slice).
-3. **Applying a recorded YARD_OPEN.** The live owner already passed `0x47D970`'s refusal, so the
+   recorded sound.
+2. **Applying a recorded YARD_OPEN.** The live owner already passed `0x47D970`'s refusal, so the
    applier bypasses it and restamps as `0x47DAC0` does (`0x47C790`, `0x440A40`); neither function has
-   been read (the skirmish slice).
+   been read.
 
 Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
 machine's view, so other players' owner-only indicators, which that machine never showed, are

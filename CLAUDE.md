@@ -56,6 +56,35 @@ sit behind a bound already — but none of them should be cited as the reason a 
 safe, and any of them touched by new work gets the argument above or a note saying why
 it cannot.
 
+## Simulation changes stay replayable
+
+The demo recorder keeps every byte of the engine's unit and player records except what one
+exclusion file excludes, plus all simulation state Impure declares. A simulation change needs no
+recorder change unless `make` or the replay harness names one. The classes, the wrappers and what
+the build check cannot prove: `research/notes/tadr-port/demo-recorder-completeness.md`.
+
+- **Declare state where you define it.** In a file marked `sim` in `thread-split.allow`, every
+  writable static, heap table and TLS slot is declared on the line after its definition with
+  `inc/tagpu_simreg.h`: `SIM_STATE`, `SIM_CONTENT`, `SIM_TRANSIENT`, `SIM_INSTALL`, or a field of
+  its feature's `SIM_PRIVATE` struct. Memory, TLS, page changes and levers come through the
+  wrappers. When unsure, use `SIM_STATE`. The link refuses an undeclared static, a stale
+  declaration, a raw allocator, TLS or page call, and a lever read outside the wrappers, and
+  names each.
+- **Store IDs, not addresses**, or declare the table's layout.
+- **Start effects through an engine root**, never a direct sink call. Each simulation
+  feature states its puppet behaviour and names its fixture beside its code.
+- **An effect only the owner's machine produces** is recorded where the engine produces it,
+  credited to its unit by an engine invariant, and replayed through the same function —
+  never imitated.
+- **On a puppet the recorder is the only writer** of the state the recording carries: COB's
+  engine writes are inert in puppet mode, and a new path that writes engine state on a
+  puppet is a bug the harness names.
+- **A replay shows what the game showed**: display state that follows from simulation
+  events is `SIM_STATE`, not `SIM_PRIVATE`.
+- **Loosening is the owner's decision**: an exclusion, a `presentation` file, TRANSIENT or
+  PRIVATE on memory the simulation reads, an expected-absent event, a tolerance. A
+  difference the harness names is a bug in the change, never grounds for an exclusion.
+
 ## Land it yourself — what actually requires a human
 
 **The default is to keep going.** A landing is meant to be driven to `main` without a human in

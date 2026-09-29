@@ -18,8 +18,9 @@ The shared engineering rules are in [the TADR port overview](overview.md). Recor
 feature of Impure; it does not require running the original recorder alongside Impure.
 
 **No production recorder has landed.** The three feasibility experiments under
-[Milestones](#milestones-and-delivery-order) are done (2026-09-29), and the skirmish slice is next.
-Every decision of the
+[Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the first landing of
+the completeness mechanism: every piece of simulation state Impure keeps is declared, and the build
+refuses one that is not. The exclusion file is next, then the skirmish slice. Every decision of the
 [completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)
 holds the desk research behind this design: how the engine treats remote players, what a rebuild
 must carry, per-player state, and the size estimate. The [packet-era exploration](demo-recorder-exploration.md)
@@ -321,18 +322,18 @@ check that raises false alarms on ordinary changes.
   `main` and before every release tag.
 - **Impure's own state is declared where it is defined** (option B of the
   [completeness design](demo-recorder-completeness.md), chosen 2026-09-29). Engine unit and player records are recorded whole by default, apart from
-  one exclusion file the owner controls, which the build hash-checks. These rules go into the
-  project's CLAUDE.md with the mechanism, in the landing that brings the declarations and the
-  build check. In a source file marked as
-  simulation code, every table, static variable and thread-local slot carries a one-line
+  one exclusion file the owner controls, which the build hash-checks. The rules are in the
+  project's CLAUDE.md since the declarations landed (2026-09-29). In the four source files marked
+  as simulation code, every table, static variable and thread-local slot carries a one-line
   declaration next to its definition: its class (recorded state; content rebuilt from game data
-  and hashed; transient, empty at every snapshot; or private diagnostics) and what a row index
-  means (unit slot, unit type, player, weapon). The declarations land in one linker section that
-  the recorder walks, so a declared table is recorded, checked and compared with no code of its
-  own. Heap tables come from one allocation wrapper. Tables store IDs, not addresses, or declare
-  which bytes are IDs. A build check refuses an undeclared table or variable in a simulation file
-  and names it. State Impure keeps inside engine-allocated objects needs a layout declaration,
-  which only the harness can catch missing.
+  and hashed; transient, carrying nothing from one tick to the next; private diagnostics; or install-time
+  plumbing, checked unchanged during a game) and what a row index means (unit slot, unit type,
+  player, weapon). The declarations land in one linker section that the recorder walks, so a
+  declared table is recorded, checked and compared with no code of its own. Memory, thread-local
+  slots, code changes and switch files come through the registry's wrappers. Tables store IDs,
+  not addresses, or declare which bytes are IDs. A build check refuses an undeclared table or
+  variable in a simulation file and names it. State Impure keeps inside engine-allocated objects
+  needs a layout declaration, which only the harness can catch missing.
 - **Event counts** are taken where events start (creates, deaths, shots, script starts) and where
   their effects are produced (explosions, particles, sounds), and compared by the harness. New
   effects start through an engine entry point, never a direct call to where effects are produced.
@@ -374,7 +375,7 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 | Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Planned** |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
-| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones; not yet built** |
+| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check are built (2026-09-29, [completeness design](demo-recorder-completeness.md#impures-own-state-declared-where-it-is-defined)); the exclusion file, the harness and self-verification are not |
 
 All three experiments passed: the watch path stands, and a takeover needs no loading screen. The
 disk budget for ten players with 1,500 units is at risk and comes back for a decision once a real
@@ -384,10 +385,9 @@ evidence, and keep remaining gaps visible.
 ## Open decisions and evidence needed
 
 1. **The completeness mechanism's open items.** Every decision is taken
-   ([decisions taken](demo-recorder-completeness.md#decisions-taken)); three
-   [open items](demo-recorder-completeness.md#open-items) remain for the landings that build it: a
-   home for install-time plumbing, whether a recorded activation plays a second sound, and applying
-   a recorded yard change.
+   ([decisions taken](demo-recorder-completeness.md#decisions-taken)); two
+   [open items](demo-recorder-completeness.md#open-items) remain for the skirmish slice: whether a
+   recorded activation plays a second sound, and applying a recorded yard change.
 2. **Measured size.** The disk budget rests on an estimate built from measured per-unit costs:
    about 2.4–3.3 compressed bytes per changed unit per sample, about 10–11 bytes per unit in a
    full-precision snapshot. Its largest unknown is the fraction of units that change per sample over a real

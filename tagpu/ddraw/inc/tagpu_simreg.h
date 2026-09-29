@@ -21,11 +21,15 @@
                     verified. Display state that follows from simulation events is STATE too.
      SIM_CONTENT    derived only from game data when it loads, constant until that data loads
                     again: rebuilt, not recorded, hashed to catch a mismatch.
-     SIM_TRANSIENT  holds nothing at a tick boundary that a later tick reads (bytes may be stale;
-                    the harness overwrites them at a snapshot to prove nothing reads them).
+     SIM_TRANSIENT  carries nothing from one tick to the next: at every tick boundary each byte
+                    is back at its value from load (an empty queue, a free hold, a cleared flag)
+                    or is written before anything reads it (a scratch buffer). The harness resets
+                    it to its value from load at a snapshot, as a fresh process holds it, and the
+                    round trip must still match.
      SIM_PRIVATE    diagnostics the simulation never reads: counters, log throttles, oracles.
                     A module keeps them in one struct per feature, so every use says so.
-     SIM_INSTALL    written while Impure installs and never during a game: trampolines, code
+     SIM_INSTALL    written while Impure installs -- in DllMain, and in the start-up checks at
+                    the first DirectDraw call -- and never during a game: trampolines, code
                     pages, site tables, TLS indices, levers. Hashed after install; a change
                     in a game fails the harness by name. Locks are INSTALL and left out of
                     that hash (SIM_LOCK).
@@ -202,8 +206,9 @@ int tagpu_sim_tls(const SimDesc* d);
 #define SIM_TLS_ALLOC(var) tagpu_sim_tls(&simdir_##var)
 
 /* A lever: a file in the game's folder whose presence changes what the simulation runs, read
-   while Impure installs. 1 when it exists. The registry lists every lever read, with its
-   value, in its attach line; a lever read after install is logged by name. */
+   while Impure installs. 1 when it exists. The registry keeps one entry per lever with its
+   value, and its attach line counts them and names each one set; a lever read after install,
+   or read two ways while installing, is logged by name. */
 int tagpu_sim_lever(const char* file);
 /* A lever with a value: up to cap-1 bytes of it, NUL-ended; the count, or -1 when absent. */
 int tagpu_sim_lever_read(const char* file, char* buf, int cap);

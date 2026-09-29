@@ -3803,7 +3803,10 @@ log line naming an address reads nothing; the include is detected before the str
 `src/*.c`, `src/*.h`, `src/*/*.c` and `inc/*.h` minus the third-party GL and D3D headers. The
 list started FULL — **42 files** after the merge with main (its `tagpu_hud.c` joined as a
 publisher), each with its class (`publisher`, `session-reader`, `fenced`, `tooling`,
-`pure-engine-code`, `engine-map`, `to-convert:N`) and its argument — and only shrinks. Verified:
+`pure-engine-code`, `engine-map`, `to-convert:N`), its scope (`sim` for the four files whose
+simulation state is declared and checked by `tools/sim-state-check.sh`, `presentation` for the
+rest: [completeness design](tadr-port/demo-recorder-completeness.md)) and its argument — and only
+shrinks. Verified:
 a planted `*(int*)(*(char**)0x00511DE8u + 0x38A47)` in `tagpu_fps.c` (and again in `tagpu_cfg.c`)
 fails `make`; removed, it passes. **What a text rule cannot catch, said plainly:** a main pointer
 under a new name plus a macro offset, an address assembled from split macros, an address that

@@ -258,8 +258,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_cobtrace_init();
 
         /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
-           module above has installed, so its line counts every declaration, lists every lever
-           read and closes the list: a lever or TLS index taken later is logged by name. */
+           module above has installed, so its line counts every declaration and every lever
+           read, and closes the list: a lever or TLS index taken later is logged by name. */
         tagpu_simreg_attach();
 
         /* tagpu: deferred reclamation of the engine's Object3do (the render
