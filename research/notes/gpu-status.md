@@ -11285,10 +11285,11 @@ means reimplementing selection, box-select, build placement and every cursor mod
   colours 4/0/2/7, ours against the engine's frame]. The table read through `face_texframe` is the
   sequence's `{GAFFrame*, u32}` pairs; before 2026-09-29 it was stepped at 0x18 from frame 0,
   so every colour but the first fell back to a flat blue face (TA Zero, every unit blue).
-  **Not re-measured:** a two-peer network game. Each peer's `PlayerStruct[owner]` is its own
-  copy, and the engine reads the same copy, so both should agree with the engine's frame; the
-  earlier observation that every peer drew its units in player 0's colour was of the slot-indexed
-  lookup this replaces. Wreck (feature) models keep frame 0. When the logo does not validate (an owner
+  A two-peer network game agrees too [MEASURED 2026-09-29, retail, Two Continents, host on colour
+  3 and joiner on colour 1]: each peer reads colours 3 and 1 from its own `PlayerInfo` records,
+  and its own structures, the other player's commander and the other player's replicated
+  structures all draw in the engine's colours. The earlier observation that every peer drew its
+  units in player 0's colour was of the slot-indexed lookup this replaces. Wreck (feature) models keep frame 0. When the logo does not validate (an owner
   or PlayerInfo that is not one of the ten, or a byte past the ten colours) the unit falls back to
   its owner id. **A divergence from the engine:** a colour at or past a sequence's frame count
   makes the engine paint nothing (`0x4B7F30` returns 0), and `face_texframe` clamps to the last
