@@ -1262,8 +1262,12 @@ and our `my_FindIntercept`, and the minimap ring with them.
 jammers. TADR exempts every ally (strict ally test when following another player's POV).
 
 **What stock does (DIS).**
-- `0x467440` runs once per sim step, inside the player loop `0x464F80`, for the player equal to
-  `main+0x2A43` (`0x465565`).
+- `0x467440` runs inside the player loop `0x464F80`, in its periodic block, which runs once every
+  30 ticks per player (`player+0xF0` against GameTime `main+0x38A47`, then `+0xF0 += 0x1E`,
+  `0x46507D..0x465092`), and there only for the player equal to `main+0x2A43` (`0x465565`; its
+  one call, `0x46556D`). Before the 30-tick gate, and so every tick, sit the per-unit sight emits
+  (`0x4827B0`, `0x465053`) and, for that same player only (`0x465065..0x465070`), the radar
+  rebuild `0x466DC0` (`0x465072`).
 - Pass 1 sets or clears `unit+0x110` bits 8–10 for every unit (`0x46749F..0x4674F9`). Pass 2
   stamps radar and sonar through `0x47E890`.
 - Pass 3 (`0x4675DC..0x46766C`): for every live unit whose owner `+0xFF` differs from the view

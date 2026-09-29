@@ -132,8 +132,9 @@ unit names by scanning the live definition table. This design follows its recipe
   wreck gets reclaimed), never a group.
 - **Only the LAST order of a list takes effect today.** The applier issues each with
   `shift = 0`, and `ORDERS_NewMainOrder2Unit`'s allocator walks the unit's order list and
-  destroys every entry lacking flag bit `0x4` before linking the new one
-  (`0x43ADC0`, `0x43AE02..0x43AE59`) — so a list is a replacement, not a queue.
+  destroys every entry lacking flag bit `0x4` before linking the new one, when the new order's
+  own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at
+  `0x43AE0E..0x43AE12`; a move order's evidently do) — so a list is a replacement, not a queue.
   [BINARY-VERIFIED 2026-09-04, found by the landing review; no shipped fixture uses more than
   one order per entity, so nothing depends on it yet.] Making the array a real queue means
   passing `shift = 1` for the second and later orders, and that path is the one whose
@@ -331,7 +332,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
 | place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] |
 | order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and `NULL` means this unit cannot take that order. Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
-| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking (`0x43ADC0`, `0x43AE02..0x43AE59`), so only the last order per entity survives. [BINARY-VERIFIED] |
+| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking, when the new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at `0x43AE0E..0x43AE12`), so only the last order per entity survives. [BINARY-VERIFIED] |
 | remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. Park `ActiveCommanderDeath` at 0 across the sweep — see below. |
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
@@ -731,7 +732,9 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   being right, not a bug — but the first version reported it as a silent 30-second CLI
   timeout. There is now a 600-frame watchdog in the present path that gives up and says
   *"the game's main loop never reached the apply point — apply needs a running game, not
-  the menus, the mission-end screen or a paused one"*.
+  the menus, the mission-end screen or a paused one"*. The pause clause is contradicted by the
+  disassembly recorded in the watchdog comment in `tagpu_scenario.c` (a pause skips only the
+  tick; the frame still reaches the apply point), and a paused apply has not been measured.
 - **Order positions are 16.16 in the 3-D convention `{x, altitude, depth}`** — the same
   language `UNITS_CreateUnit` speaks. This line used to say the opposite ("whole world units
   in the screen convention, stored verbatim — measured"), and the measurement behind it was a
@@ -765,13 +768,24 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   be set at launch, which phase D then found. The offsets are
   right (confirmed against a live read: `PlayerStruct` stride `0x14B` at `main+0x1B63`,
   `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, storage at `+0xA4`/`+0xA8`) and the write
-  lands — the result's `players.wrote` shows the figure back. But TA recomputes storage
-  from the units a player owns and clamps the level to it every simulation tick: 4321
-  against 50 storage read 50 again within a second, and so did 12. The applier still
-  writes, and reports `requested` / `wrote` / `now`; the compiler warns whenever a file
-  asks, so `validate` says it before anything runs; and the shipped example dropped the
-  two keys rather than advertise a knob the engine overrules. Setting resources for real
-  is a launch-time problem — and phase D solved it; see below.
+  lands — the result's `players.wrote` shows the figure back. But TA's economy pass
+  `0x401360`, which runs once every 30 ticks for each local player (`0x46507D..0x465092`,
+  `0x465539..0x46555A`), recomputes storage from the units a player owns and clamps the level
+  to it (`0x401AB3..0x401B27`) [DISASSEMBLED]: 4321 against 50 storage read 50 again within a
+  second. So did 12, which the clamp does not explain: the pass carries the level forward —
+  the old level plus production (`0x401A1D`, `0x401A25`), less expense (`0x401A4D..0x401AB1`)
+  — rather than overwriting it, so why 12 rose to 50 is open. A candidate for the storage of
+  50 [INFERRED, unmeasured]: `clear_existing` kills the commanders, a commander's death clears
+  player `+0x149` bit 0 (`0x486512..0x48651F`), and without that bit the pass stops adding the
+  launch-time base storage `+0xDC`/`+0xE0` (`0x401941`, `0x401988..0x4019AA`). Every setter of
+  the bit but the saved-game loader (`0x466200`, which restores it) makes that storage at least
+  200: the skirmish seat setup (`0x496F5D`), the network setup (`0x4977D8`), `0x496E90`
+  (`0x496EA1`), whose callers are `0x465F42` and the Deathmatch respawn (`0x46540F`), and
+  `0x497080` (`0x497114`), which nothing calls. The applier still writes, and reports
+  `requested` / `wrote` / `now`; the compiler warns whenever a file asks, so `validate` says
+  it before anything runs; and the shipped example dropped the two keys rather than advertise
+  a knob the engine overrules. Setting resources for real is a launch-time problem — and
+  phase D solved it; see below.
 
 **D — `scenario load` end to end. BUILT 2026-09-01.** `cmd_scenario_load` composes the
 verbs that already worked: launch carrying `setup`'s launch half, the shell path by gadget
@@ -831,7 +845,9 @@ line reading `Wreckage M:564` and `Rocko: Under Attack`. The `shootall` A/B is *
   reads `3000/3000`, and it is still 3000 half a minute later. So phase C's finding was
   right and incomplete: the engine recomputes storage from owned units *in a running
   game*, which is why the applier's write evaporates, but at game start the skirmish
-  setting establishes both and nothing takes it away. `setup.players[].metal/energy` now
+  setting establishes both, and the storage lasts while the commander lives: its death
+  clears `+0x149` bit 0 (`0x486518`), after which the economy pass stops adding the base
+  storage `+0xDC`/`+0xE0` the setting wrote (`0x401941`). `setup.players[].metal/energy` now
   works through `load`, `--player` grew the two fields
   (`N:controller[:side[:color[:metal[:energy]]]]`), and the compiler's warning fires for
   every verb *except* the one that can honour it. Details and the whole key:

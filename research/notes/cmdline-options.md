@@ -173,8 +173,9 @@ nothing, because of (2).
 skirmish: `Player0Metal = 5000` gives `fCurrentMetal` 5000 *and* `fMaxMetalStorage`
 5000, and both still read 5000 half a minute later — TA does not clamp them back to
 what the player's units would hold. That is precisely why the same write into a
-*running* game does not stick: there the engine recomputes storage from owned units
-every tick and clamps the level to it (`scenario-format.md`, phases C and D). Starting
+*running* game does not stick: there the engine's economy pass `0x401360`, once every
+30 ticks for each local player, recomputes storage from owned units and clamps the level
+to it (`scenario-format.md`, phases C and D). Starting
 resources are a launch-time setting or nothing.
 
 `tacli launch --player N:controller[:side[:color[:metal[:energy]]]]` writes them, and an
