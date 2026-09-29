@@ -630,8 +630,10 @@ attacker-less weapon-kind hit is a meteor, a death explosion or a fire. MEASURED
 
 **The detonation.** `0x499EB0(proj, unit)` plays the explosion and sound, then damages only when the
 projectile's owner record `main+0x1B63 + 331·[proj+0x66]` is empty or not a remote player
-(`[+0x73] ≠ 3`, `0x49A01B..0x49A047`). For a meteor that record is index 10, `main+0x2851`, the
-331 bytes after `Players[10]` (INF what they hold at run time; see *not established*). Then an area
+(`[+0x73] ≠ 3`, `0x49A01B..0x49A047`). For a meteor that record is index 10, `main+0x2851`: the
+eleventh player record, which the engine builds and zeroes with the ten seats at every level and
+never saves (engine map, *The unit and player records, byte by byte*; what it holds in play is
+under *not established*). Then an area
 of effect above 16, or no direct-hit unit, goes to area damage `0x49A120` (`0x49A0A9`); otherwise the
 direct hit `0x499CD0(proj, unit, 1.0)` and the shooter's bookkeeping `0x406F50`, a no-op with no
 attacker (`0x406F54..0x406F59`).
@@ -1046,7 +1048,10 @@ section as its evidence.
 ### What this part did not establish
 
 - **What `main+0x2851` holds in play** (the owner record of index 10), and so which peers compute a
-  meteor's damage. Settle: peek it in a single-player and a two-peer game with a meteor map.
+  meteor's damage. It is the eleventh player record: the constructor loop builds it and the
+  players reset `0x4644D0` zeroes it with the others (DIS), so its `+0x73` starts every level at 0,
+  and no writer of its `+0x73` was traced. Settle: peek it in a single-player and a two-peer game
+  with a meteor map.
 - **Whether a meteor hit arrives once or once per peer** at the victim's owner (above).
 - **That nothing in the simulation reads the notification queue or its next-time table.** Settle:
   a reference scan of `[0x51E68C]` and `0x5086E0..0x5086FF`.

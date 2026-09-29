@@ -642,7 +642,9 @@ difficulty 0 and 70 % at 1 (L24).
 - **Radar and sonar** (L15, L16 corrected) are one set of bits per unit (`+0x110` bits 8–10) for the
   viewed player only, set by `0x467440` on that player's 30-tick pass: own units, allies whose owner
   shares radar (`PlayerInfo+0x97` bit `0x40`, `0x4674BA..0x4674D9`), everything for a watcher; then
-  jammers clear them. The minimap radar picture `0x466DC0` is redrawn every tick. ShareMapping has
+  jammers clear them. They are simulation input as well: the acquisition scan `0x40AA40` reads
+  bits 8 and 9 every 30 ticks for every local seat (engine map, *The unit and player records, byte
+  by byte*). The minimap radar picture `0x466DC0` is redrawn every tick. ShareMapping has
   no stock reader beyond its chat toggles; ShareLOS has neither a reader nor a reachable toggle.
 - MEASURED (§6c; L9): one remote sight grid differed from its owner's in 34 zero/nonzero cells while
   the positions matched. The cause is unknown.

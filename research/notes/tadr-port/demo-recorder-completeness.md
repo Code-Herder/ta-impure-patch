@@ -48,7 +48,7 @@ per field or bit range, each with a class, its engine writers and the evidence:
 | `object` | a pointer to an engine object recorded by a record of its own (the mover, the order lists, the COB object, the model, the AI, the sight counters…) | 10 |
 | `cache` | not recorded; the engine recomputes it from recorded state, and it is compared after that recompute | 2 |
 | `timer` | not recorded; on a clock a replay does not reproduce | 4 |
-| `drop` | not recorded and not restored: the viewing machine's own state | 11 |
+| `drop` | not recorded and not restored: the viewing machine's own state | 10 |
 
 The rows start from the stock savers, the engine's own inventory of a record: the unit saver
 `0x4876C0` and the player saver `0x4662F0`. A byte a saver writes raw is a value unless shown
@@ -69,7 +69,8 @@ the skirmish slice brings:
 
 - **Caches are recomputed by the applier.** A paused frame runs neither the per-tick sight stamp
   `0x4827B0` nor the radar pass `0x467440`, so the applier calls what recomputes a cache before the
-  comparison reads it. The reference chain `+0xA2` is rebuilt by linking every restored reference
+  comparison reads it — never the radar pass, whose results (`+0x110` bits 8–10 and 12, `+0xB0`)
+  are recorded values the simulation reads between its passes. The reference chain `+0xA2` is rebuilt by linking every restored reference
   through `0x489690`, the air orders' payload references included. The player's sight grid
   geometry `+0x80..+0x8B` is never written: its length bounds `0x4816A0`'s fill of this process's
   grid.
@@ -88,6 +89,25 @@ the skirmish slice brings:
 - **Ten player records, not eleven.** The engine builds and resets eleven; the eleventh is what an
   index of 10 (no player) reads, and nothing records or writes it. Slot 0 of the unit array has a
   NULL owner and is never a unit.
+- **Players are keyed by the transport ID `+0x04`**, which the applier keeps distinct between
+  active records, translating a recorded one through the recording's key: the death path turns the
+  killer's player index into a transport ID and back (`0x44FFD0`, `0x44FE40`) into unit `+0xF4`.
+  The controller `+0x73` changes in play (the console's AI toggle `0x4161F0` flips 1 and 2, a leave
+  writes 0), so the recording carries each change, while a puppet host holds 3 for every puppet.
+- **A seek sets the viewer's DisplayTimer `+0xF8` to GameTime**, as the level init does: the draw
+  path raises it by 30 whenever GameTime has passed it and then refreshes the resource bar, so
+  after a rewind it would stay ahead and the bar would freeze until GameTime caught up.
+- **Other writers on a replay host**, for the puppet dispositions the skirmish slice decides (on a
+  puppet the recorder is the only writer): the radar pass writes bits 8–10 and clears bit 12 on
+  every live unit on the viewed player's pass (`0x4674B6`); the scoreboard `0x4948E0` compacts the
+  ranks `+0x148` from the draw path while it is shown; and the receive timeout `0x453C20` reads
+  every active type-3 record's `+0x1C` against the wall clock (experiment 1's puppets ran for
+  minutes and were never dropped; whether a skirmish reaches it is not established). The
+  recording carries the recording viewer's contact bits, so showing another perspective's radar
+  in playback is decided there too.
+- **Order nodes carry draw-path state**, for their own layout: the order-queue draw `0x439740`
+  (DrawGameScreen → `0x48CC30` → `0x439B30`) writes a node's `+0x32`/`+0x34` and `+0x42` bit 21
+  for a selected unit's queue, depending on the selection and on bit 9.
 
 **Gaps stated, not closed.** The hover wave: a unit whose def has `+0x241` bit 12 (`canhover`) and
 neither bit 19 nor bit 20 takes its altitude and tilt from a wave on the wall clock (`0x48A490`,
@@ -361,7 +381,7 @@ rests on.
      simulation files classified once, with no exemption list, the diagnostics among them moved into
      one struct per feature; layouts for the tables that carry pointers or IDs; the CLAUDE.md
      section, less its replay gate.
-   - **The exclusion file — built 2026-09-29.** `replay-layout.tsv`, 40 rows from what the savers
+   - **The exclusion file — built 2026-09-29.** `replay-layout.tsv`, 39 rows from what the savers
      `0x4876C0` and `0x4662F0` write, the header generated from it, and
      `tools/replay-layout-check.sh` before the link.
 2. **With the skirmish slice:** capture at `0x4954ED` and the recording header's lever list (the
@@ -406,7 +426,7 @@ writes on puppets, and every loosening.
 | 2026-09-29 | **Install-time plumbing is a fifth class, `SIM_INSTALL`**, declared beside its definition like everything else: never recorded or restored; the harness hashes the class after install and fails by name when a game changes any of it. Locks get their own declaration (`SIM_LOCK`) and are the only part left out of that hash. Rejected: moving the plumbing out of the simulation files. |
 | 2026-09-29 | **Four files are simulation code**: `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c` and `tagpu_cobtrace.c` are `sim`; every other file on `thread-split.allow` is `presentation`. |
 | 2026-09-29 | **Step 1 is two landings.** The first brings the declarations, the wrappers, the build check and the CLAUDE.md section; the second, the exclusion file. Capture at `0x4954ED` and the recording header's lever list move to the skirmish slice, with the recorder that uses them; the CLAUDE.md replay gate and the landing command's Step 4b land with the harness. |
-| 2026-09-29 | **The exclusion file's drop and timer rows are approved.** A player record's own network session and clocks are neither recorded as values nor compared: the transport ID `+0x04`, the host's number `+0x0C`, the message count `+0x10`, the load progress `+0x20`, the session flags `+0x21` and the controller as the local peer sees it `+0x73`, and the join time `+0x08`, the ping `+0x14`, the peer's GameTime `+0x18` and the last receive `+0x1C`. The recording header carries the transport ID and the recorded controller as the player's key, and a puppet host stamps `+0x18` itself. The viewer's own state is dropped — unit `+0x110` bits 4 (selected), 6–7, 8–10 (the viewed player's contact) and 22–25 (the build menu's page), and the player's DisplayTimer `+0xF8` — so a replay or a takeover shows the replay viewer's own selection, menus and perspective, the radar pass recomputing the contact bits for whoever is viewed. Rejected: recording the session fields, which differ legitimately between every peer and replay machine, and recording the contact bits, which would pin a replay to the recording viewer's radar picture. |
+| 2026-09-29 | **The exclusion file's drop and timer rows are approved.** A player record's own network session and clocks are neither recorded as values nor compared: the transport ID `+0x04`, the host's number `+0x0C`, the message count `+0x10`, the load progress `+0x20`, the session flags `+0x21` and the controller as the local peer sees it `+0x73`, and the join time `+0x08`, the ping `+0x14`, the peer's GameTime `+0x18` and the last receive `+0x1C`. The recording carries the transport ID as the player's key and each change of the recorded controller, and a puppet host stamps `+0x18` itself. The viewer's own state is dropped — unit `+0x110` bits 4 (selected), 6–7 (two marks) and 22–25 (the build menu's page), and the player's DisplayTimer `+0xF8` — so a replay or a takeover shows the replay viewer's own selection and menus. **The viewed player's contact bits 8–10 are recorded**: the acquisition scan `0x40AA40` reads them every 30 ticks for every local seat, and between the radar pass's runs they are history, so a takeover restores what the recording's AI saw; a replay shows the recording viewer's radar picture. Rejected: recording the session fields, which differ legitimately between every peer and replay machine, and dropping the contact bits, after which a takeover resumes with different target lists. |
 
 ## Open items
 

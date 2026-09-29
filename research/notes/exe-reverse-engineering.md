@@ -1494,9 +1494,9 @@ table, never a field of the target, so a pointer to a dead unit keeps its ID.
   `0x4885F3`; −1 a tick, `0x48AE0D`), read by the "usable" gates.
 - **`+0x10A`**, the water state 0–4, written only by `0x43DB50` in the movement pass: 0 off layers
   1 and 2; 4 above the sea; at or below it, 1 when less than 5 below, then 2 when `+0x70` + def
-  `+0x22C` is the sea level and 3 when `+0x70` + def `+0x170` is below it; **none of these keeps
-  the old value** (`0x43DB6B`, `0x43DB78`), so the state is hysteresis, not a function of the
-  altitude.
+  `+0x22C` is the sea level and 3 when `+0x70` + def `+0x170` is below it; **when none of these
+  holds, the old value stays** (`0x43DB6B`, `0x43DB78`), so the state is hysteresis, not a
+  function of the altitude.
 - **`+0x10E`**, the activation bits: 0 at create (`0x485B7F`), the saved value in a restore
   (`0x4872D9`), and otherwise written through `0x48B090(unit, mask, on)` (45 call sites), where a
   change of bit 0 starts COB `Activate` or `Deactivate` (`0x48B0EE..`).
@@ -1509,10 +1509,10 @@ table, never a field of the target, so a pointer to a dead unit keeps its ID.
 |---|---|---|---|---|
 | 0–1 | 99.6 / 0.4 % | the layer | create `0x485B6D`, `0x486103`; relink `0x43DA3B`; `0x48AA94`; round robin `0x48B6B3` | |
 | 2–3 | 37 / 0.1 % | the walk class | `0x43DB3D` | |
-| 4 | 0 | selected | the selection code, keyed to `main+0x2A42` or `+0x2A43` (the layout's row lists it); cleared by the sweep `0x48D846`, the unit tick `0x48AE59`, the give `0x4885FD`, the destructor | |
+| 4 | 0 | selected | the selection code, keyed to `main+0x2A42` or `+0x2A43` (the layout's row lists it); cleared by the sweeps `0x48BD00` and `0x48D846`, the unit tick `0x48AE59`, the give `0x4885FD`, the destructor | |
 | 5 | 100 % | selectable | every create; MakeSelectable `0x401CD0`; console `Selectable` `0x41648B`; cleared by the mission loader (`0x487E6E`) and the destructor | the "usable" gates |
-| 6–7 | 0 | two marks | `0x48C36F` (in `0x48C320`, no caller), `0x48C621`, `0x48C965`, `0x48D5F6`, `0x48D61A`; cleared by the sweep | none found |
-| 8–10 | 84 / 24 / 0 % | the viewed player's contact with the unit | the radar pass `0x467440` (`0x4674F9`, `0x467814`) and its callbacks `0x467840`, `0x467960`, `0x467980`; create `0x485C48` | |
+| 6–7 | 0 | two marks | `0x48C36F` (in `0x48C320`, no caller), `0x48C621`, `0x48C965`, `0x48D5F6`, `0x48D61A`; cleared by the sweeps in `0x48BD00`, `0x48C030`, `0x48D220`, `0x48D630` and `0x48D790` | the next-unit cycle `0x48D4D0` only (`0x48D511`, `0x48D56D`; from `0x4964D2`) |
+| 8–10 | 84 / 24 / 0 % | the viewed player's contact with the unit | the radar pass `0x467440` (`0x4674F9`, `0x467814`) and its callbacks `0x467840`, `0x467960`, `0x467980`; create `0x485C48` | **the simulation**: the acquisition scan `0x40AA40`, every 30 ticks for every local seat (`0x40B2C0` from the players phase, `0x465037`), tests bit 8 (`0x40AB3F`) and bit 9 through `0x465AC0` (`0x40AB11`, `0x465B38`), filling the lists weapon targeting falls back to; the draw path too (the unit blit `0x459724`, the order-queue draw `0x439740`) |
 | 11 | 0 | cloak on | Cloak_On `0x403091`, Cloak_Off `0x4030C1`; create = def `+0x241` bit 4 (`0x485CCF`) | the economy pass `0x4017E1` |
 | 12 | 0 | an enemy near | the radar pass: cleared on every live unit (`0x4674B6`), set with `+0xB0` = GameTime + 90 for a type-1/2 owner's unit whose def has `+0x245` bit 13 when `0x40B0D0(owner, pos, def+0x208)` finds an enemy (`0x4676E8`) | the economy pass `0x4017ED` only |
 | 13 | 1.2 % | set at completion | `0x41B93D`, `0x41BC32`, `0x41BCA4`, round robin `0x48B4EC`; nothing clears it | none found |
@@ -1550,7 +1550,7 @@ It is the only wall-clock value found in the unit simulation: every GetTickCount
 QueryPerformanceCounter flow was followed to its stores.
 
 **The player record: eleven of them.** The constructor loop (`0x41D97E`, `ebx` = 11, each through
-`0x463BE0`) and the reset `0x4644D0` (`add edx,0x14B; cmp edx,0xCEE; jle`, `0x464502`) cover
+`0x463BE0`) and the reset `0x4644D0` (`add edx,0x14B; cmp edx,0xCEE; jle`, `0x4644FC..0x46450F`) cover
 eleven records from `main+0x1B63`; the saver, the loader (`jl` at `0x46656F`, `0x4662DA`), the
 players phase `0x464F80` and the DPID lookup `0x44FE40` loop ten. Index 10 is every "no player"
 value — a free record's `+0x146`, `+0xF4` with no attacker, `0x44FE40`'s miss, a meteor's owner —
@@ -1572,13 +1572,13 @@ loader is `0x466050`.
 | offset | what | writers | readers, notes |
 |---|---|---|---|
 | `+0x00` | in use | ctor, reset `0x4645C3`, activation `0x464364`, removal `0x452E67` | every player loop skips 0 |
-| `+0x04` | the transport ID: the DPID in a network game, the seat in a skirmish, −1 free | reset `0x4646AA`, activation `0x464381`, join `0x450C39`, `0x447C7E`, removal `0x452E6D` | the dispatcher routes on it (`0x453DF3`, `0x453E5A`); MEASURED = `+0x146` = the slot in every active skirmish record |
+| `+0x04` | the transport ID: the DPID in a network game, the seat in a skirmish, −1 free | reset `0x4646AA`, activation `0x464381`, join `0x450C39`, `0x447C7E` (in `0x447B10`), removal `0x452E6D` | the dispatcher routes on it (`0x453DF3`, `0x453E5A`); the death path turns the killer's player index into it and back (`0x44FFD0` at `0x486625`, `0x44FE40` at `0x486782`, into unit `+0xF4`); MEASURED = `+0x146` = the slot in every active skirmish record |
 | `+0x08` | join time, `0x4B6340()` | `0x451356` | `0x447CAB` calls the leave `0x453010` once more than 30 have passed |
 | `+0x0C` | a number the host assigns | dispatcher `0x455DD3`, `0x455F41`; `0x4505F0`, `0x4506F6`; activation, removal | `0x4532B7` removes the records that share a leaving human's [INFERRED: the machine that hosts them] |
 | `+0x10` | messages in this receive pass | zeroed for all at each dispatcher call (`0x453D78`), `0x45485C` | |
-| `+0x14` | ping, a `0x4B6340` difference | `0x456743` | |
+| `+0x14` | ping: GetTickCount (`0x45671B`, raw milliseconds) less the message's stamp | `0x456743` | |
 | `+0x18` | the owner peer's GameTime | the `0x2C` sender `0x48B769`, receiver `0x48B963` | the pacing `0x495230` takes the lowest over active type-3 records with units alive (`0x4952CF..0x495303`) |
-| `+0x1C` | last receive, `0x4B6340()` | `0x454856`, join `0x450C41` | the timeouts `0x453C20`, `0x453839` |
+| `+0x1C` | last receive, `0x4B6340()` | `0x454856`, join `0x450C41` | the timeouts `0x453C20`, `0x453839`; `0x453C20`, from the dispatcher's tail (`0x455F64`), reads every active type-3 record's (`0x453C85`) unless SoftwareDebugMode `main+0x37F2F` bit 0 is set, and only restamps its clock while `main+0x38A51` bit 0 is |
 | `+0x20` | load progress | `0x456E6E` | the load wait `0x497CE0` only |
 | `+0x21` | session flags | reset (bit 0, `0x4646A4`), `0x45134B` and `0x42818E` (bit 1) | `0x451345`, the network level setup `0x49723B` |
 | `+0x22` | leave reason | `0x453010`; cleared by the activation, the join, `0x41F932`, `0x443FA7` | |
@@ -1587,7 +1587,7 @@ loader is `0x466050`.
 | `+0x2B`, `+0x49` | names, 30 bytes each | reset, activation, join, dispatcher | MEASURED: the bytes after the NUL are kept |
 | `+0x67`/`+0x6B` | the unit block's first and last unit, inclusive | `0x4858BD`, `0x4858E0` in `0x4854A0` only | MEASURED begin + 0x118·`+0x6F`/`+0x71` in all 960 records, 500 units a player |
 | `+0x6F`/`+0x71` | the block's first and last slot | `0x4858ED`, `0x4858F8` | |
-| `+0x73` | the controller as the local peer sees it: 1 and 2 local, 3 remote | ctor, reset, activation `0x464332`, `0x463C60`, `0x465FB0`, loader | the economy pass and the `0x28` send take 1 and 2 only; 3 gets no AI object and is the pacing's lag source |
+| `+0x73` | the controller as the local peer sees it: 1 and 2 local, 3 remote | ctor, reset, activation `0x464332`, the join (3, `0x450B16`), `0x465FB0`, loader; in play through `0x463C60`: the console's AI toggle `0x4161F0` flips 1 and 2, a leave writes 0 (`0x45401B`, `0x454054`) | the economy pass and the `0x28` send take 1 and 2 only; 3 gets no AI object and is the pacing's lag source |
 | `+0x74` | the AI object | init `0x4648C1` (not for an active type 3); activation 0 without a free; reset; teardown | the players phase (`0x46502A`) |
 | `+0x78` | control groups, 10 × 0x20 | `0x480190`, `0x4801F0` | kept by `0x480250(unit, group)` from unit `+0xAC`; the restore rebuilds it (`0x487270`) |
 | `+0x7C..+0x88` | sight counters; the grid's width, height and length | init `0x464849..0x46487B`; teardown | `0x4827B0`, `0x4816A0` |
@@ -1596,7 +1596,7 @@ loader is `0x466050`.
 | `+0xEC` | a 0x34-byte resource accumulator | init `0x4647D7` | |
 | `+0xF0` | UpdateTime, the 30-tick pass | init `0x464715`; the players phase adds 30 (`0x465092`) | |
 | `+0xF4` | WinLoseTime | init, loader | the saver only |
-| `+0xF8` | DisplayTimer | init `0x464765`, loader, DrawGameScreen `0x468F87` | a write on the draw path, for the viewed record only |
+| `+0xF8` | DisplayTimer, a GameTime deadline | init `0x464765` (GameTime), loader, DrawGameScreen `0x468F87` | a write on the draw path, for the viewed record only: 30 is added while it is below GameTime, and then the resource bar's rates refresh (`0x468F73..0x468F9A`) |
 | `+0xFC`/`+0xFE` | kills, losses | the destructor `0x4868C1`, `0x486906`, `0x486A33`; the `0x28` receiver | |
 | `+0x100`/`+0x102` | −1 at init | `0x464817`, `0x46481E` | no reader found |
 | `+0x104`/`+0x106` | commander kills, losses | the destructor `0x486981`, `0x486996`, `0x486A8C` | the lead ranking in mode 2 |
@@ -1606,17 +1606,17 @@ loader is `0x466050`.
 | `+0x140`/`+0x144` | units created, alive | the creates, the destructor | "out" = none alive of some created |
 | `+0x146` | own index, 10 when free | ctor, reset, activation, the lobby's renumbering | copied into unit `+0xFF` |
 | `+0x147` | start position | activation, `0x45517B`, `0x456C96` | the network level setup |
-| `+0x148` | scoreboard rank | activation, the destructor, `0x494E27` | |
+| `+0x148` | scoreboard rank | activation, the destructor; the scoreboard `0x4948E0` (`0x494E27`), whose one caller is DrawGameScreen (`0x469F65`), compacts the ranks while the scoreboard is shown (`[0x51F2D8]` > 0, `0x494986`) | the destructor's lead message (`0x486B2D..0x486C17`) |
 | `+0x149` | bit 0: base storage counts | the level setups, the loader; cleared at init and when the commander dies (`0x486518`) | the economy pass (`0x401941`); no writer of bits 1–15 |
 
 **Negative results.**
 
-- **No caller found:** the create variants `0x485E50` and `0x485E90`, the bucket move `0x47CB60`,
-  `0x48C320` (sets `+0x110` bit 6), `0x497080`, and the lobby's out-of-line record swaps `0x4453A0`
-  and `0x445450`.
+- **No caller found:** the create variants `0x485E50` and `0x485E90`, the order-list append
+  `0x43B730`, the bucket move `0x47CB60`, `0x48C320` (sets `+0x110` bit 6), `0x497080`, and the
+  lobby's out-of-line record swaps `0x4453A0` and `0x445450`.
 - **No writer found** but the fill or the reset: unit `+0xB4` and `+0x10F` bits 4–7; player
   `+0x23..+0x26` and `+0x149` bits 1–15. **No reader found:** unit `+0xB4`, `+0x100`, the slots'
-  `+0x10`, `+0x110` bits 6, 7 and 13; player `+0x100`/`+0x102`.
+  `+0x10`, `+0x110` bit 13; player `+0x100`/`+0x102`.
 - **The heap dummy unit** `0x421F20` allocates 0x118 bytes at `main+0x1420F` for the feature
   drawing (`0x46A721`); three references in all, outside the array, never an attacker, target or
   chain member.
