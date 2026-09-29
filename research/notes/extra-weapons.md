@@ -196,8 +196,8 @@ weapon. There is no reason to prefer this over a count.
 `CAP` is a compile-time capacity (16 fits the 5 bits available if the index is
 kept in the state byte; 32 if bits 5–7 are proven free); `def->count` is what
 the loader found. All loops become `for (i = 0; i < count; i++)`; `count` is
-stock 3 for every unit whose FBI has no `Weapon4`, so **stock units run exactly
-the stock loops** — that is the regression guard.
+stock 3 for every unit whose FBI names no weapon past `Weapon3`, so **stock units
+run exactly the stock loops** — that is the regression guard.
 
 Two ways to carry the index once it no longer fits two bits, both local to
 code we already detour:
@@ -261,8 +261,9 @@ without it wrote none of the module's bytes.
 
 ### Layer 2 — stock units run stock code
 
-A unit type whose FBI has no `Weapon4` key behaves exactly as it does in the retail
-game, down to the tick. Two mechanisms:
+A unit type whose FBI names no weapon past `Weapon3` (no non-empty `Weapon4`..`Weapon16`:
+the loader takes each on its own, so `Weapon5` alone makes a five-slot type) behaves
+exactly as it does in the retail game, down to the tick. Two mechanisms:
 
 - **Replaced functions take a trampoline back for `count <= 3`.** The entry
   detour on `AutoAim`, `UNITS_StartWeaponsScripts`, the three name helpers and

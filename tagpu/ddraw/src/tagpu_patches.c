@@ -5817,7 +5817,8 @@ static int fix_extra_weapons(void)
     int n = tagpu_weapons_sites(s), k;
     if (n == TAGPU_WPN_OBSERVERS) {
         lim_needs("extra weapons (a simulation change)",
-                  "the record observer on the unit-data load and the FBI loader", "not installed");
+                  "the record observer on the unit-data load and the FBI loader",
+                  "not installed: an entry's bytes differ");
         return FIX_TABLE;
     }
     if (n != TAGPU_WPN_SITES) { lim_no_stub(); return FIX_TABLE; }

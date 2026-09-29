@@ -64,8 +64,8 @@ typedef struct TagpuWpnSite {
    every trampoline and stub, then each of its sites into out[0..TAGPU_WPN_SITES).
    Writes none of those sites itself. Returns TAGPU_WPN_SITES, or one of the two
    failures below with the reason logged; on either, the table refuses. */
-#define TAGPU_WPN_OWN        (-1) /* its memory, a stub or its site list: our side */
-#define TAGPU_WPN_OBSERVERS  (-2) /* the record observers could not be installed    */
+#define TAGPU_WPN_OWN        (-1) /* its memory, a stub, an observer's landing or its site list: our side */
+#define TAGPU_WPN_OBSERVERS  (-2) /* an entry the record observers need holds other bytes: the exe's side */
 int  tagpu_weapons_sites(TagpuWpnSite* out);
 
 void tagpu_weapons_frame(unsigned int frame);  /* overlay: oracle trigger, every 5th frame */

@@ -1608,7 +1608,7 @@ static u8* build_stub(const Splice* s)
 /* One site for the table: the stock bytes it compares and, in their place, a
    jmp to `target` NOP-padded to the stolen length, or `repl` for a byte patch.
    The table keeps the name's pointer for the process, hence the static store. */
-static char g_site_name[TAGPU_WPN_SITES][40];
+static char g_site_name[TAGPU_WPN_SITES][64];
 
 static int site_out(TagpuWpnSite* s, u32 k, u32 va, u8 len, const u8* stock,
                     const char* kind, const char* name, const void* target, const u8* repl)
@@ -1656,7 +1656,7 @@ int tagpu_weapons_sites(TagpuWpnSite* out)
     { wlog("NOT INSTALLED: the unit-data load's or the FBI loader's entry bytes differ"); return TAGPU_WPN_OBSERVERS; }
     if (!tagpu_detour_observe(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD, cb_unit_load, NULL) ||
         !tagpu_detour_observe(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER, cb_fbi_load, NULL))
-    { wlog("NOT INSTALLED: the unit-data load's or the FBI loader's entry could not be observed"); return TAGPU_WPN_OBSERVERS; }
+    { wlog("NOT INSTALLED: the unit-data load's or the FBI loader's entry could not be observed"); return TAGPU_WPN_OWN; }
 
     /* Every trampoline and stub is made before the table sees any site, and
        the table writes all of them or none. */

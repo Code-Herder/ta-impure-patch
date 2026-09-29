@@ -935,7 +935,7 @@ computes identical shared state. **Rule 7:** stock content carries no key, so no
   15 001-slot design point.
 - **Extra weapons:** slots 3..N live in the module's rows (`g_side`, `slot_ptr`), and the module
   sets their counter itself with the same formula (`tagpu_weapons.c`, the port of the fire path).
-  The publisher asks the module for them when it is armed.
+  The publisher asks the module for them.
 - **The GDI lane** (`renderer=gdi`) is the engine's own drawing: no reload bar there (section B's
   rule for that lane).
 

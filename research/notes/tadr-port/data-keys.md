@@ -109,7 +109,7 @@ kept in the evidence pass.
   B4's two-tick hold keeps its meaning. Off the map the weapon is not gated, as TADR.
 - **Every weapon flag also applies to slots 3..N.** `tagpu_weapons.c` runs those slots in C (its
   verdict `tagpu_weapons_check_slot`, `my_AutoAim`). The weapon keys own `0x49ABB0`'s entry in
-  both builds, armed or not, and ask that verdict for a slot past 2.
+  both builds and ask that verdict for a slot past 2.
 - **`nomapweaponalert`: a silence, not a deletion.** For a hit with no attacker, a weapon kind, and
   the level's meteor weapon carrying the key with default damage 0: no "Under Attack"
   (its one site `0x4071D8`, and `my_Retaliate`), no alarm, no blink of the hit unit's minimap dot,

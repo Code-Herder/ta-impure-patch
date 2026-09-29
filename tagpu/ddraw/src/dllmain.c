@@ -25,7 +25,6 @@
 #include "tagpu_settings.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
-#include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_cobtrace.h"
