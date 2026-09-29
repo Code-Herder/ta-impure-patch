@@ -1896,15 +1896,38 @@ static int pub_shade(unsigned need)
 /* THE SPRITE IDENTITY. The atlas and the seen table key a frame on its
    header and pixel-plane addresses, and the shell frees a popped screen's
    art and hands the same addresses to the next screen's: the same key would
-   then name different pixels. So the key also carries a hash of the plane's
-   first bytes (the row lengths and data of the first rows, up to 64 bytes),
-   read here at publish time under the same guard the first-sight decode
-   uses. NULL = the plane cannot be read now: the caller publishes the box's
-   bytes instead, as it does when the decode fails. */
+   then name different pixels. So the key also carries a hash of the WHOLE
+   plane -- every byte of a raw plane, every row of an RLE one -- and the
+   hotspot, read here at publish time under the same guard the first-sight
+   decode uses.
+
+   THE HASH COVERS EVERYTHING, NOT A PREFIX, BECAUSE A PREFIX COLLIDES BY
+   CONSTRUCTION. A build menu's 64x64 raw button pictures share the frame and
+   plane addresses of the page before them, and a raw plane's first 64 bytes
+   is its top ROW: two different buildings start with the same 64 bytes, so
+   the atlas matched the previous page's entry and the twin drew the previous
+   page's picture (MEASURED 2026-09-29 in TA Zero's GoK commander: one identity, three
+   different planes, 24 collisions in a run of a few page flips).
+
+   The extent is `w*h` bytes at most, and `tagpu_gaf_frame_sane` bounds `w`
+   and `h` to 512. NULL = the plane cannot be read now: the caller publishes
+   the box's bytes instead, as it does when the decode fails. */
+static unsigned hash_run(unsigned hh, const unsigned char* p, unsigned n)
+{
+    for (; n >= 4; n -= 4, p += 4) {
+        unsigned w;
+        memcpy(&w, p, 4);
+        hh = (hh ^ w) * 0x9E3779B1u;
+        hh ^= hh >> 15;
+    }
+    for (; n; n--, p++) hh = (hh ^ *p) * 16777619u;
+    return hh;
+}
+
 static const void* frame_key(const unsigned char* fr, const void* pix, int w, int h)
 {
     const unsigned char* px = (const unsigned char*)pix;
-    unsigned hh = 2166136261u, i, n = 0;
+    unsigned hh = 2166136261u;
     /* `fr` IS CHECKED, as every other caller of the GAF resolvers in this
        tree -- tagpu_fx.c, tagpu_feat.c, tagpu_render3do.c, tagpu_gui_surf.c --
        puts the header through `tagpu_gaf_frame_sane` first. It is a BOUND on a
@@ -1915,18 +1938,18 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
     if (!tagpu_gaf_frame_sane(fr)) return NULL;
     if (!ptr_ok(px)) return NULL;
     if (fr[0x09] == 0) {                             /* raw: w*h bytes exist */
-        n = (unsigned)w * (unsigned)h; if (n > 64) n = 64;
+        unsigned n = (unsigned)w * (unsigned)h;
         if (IsBadReadPtr(px, n)) return NULL;
-        for (i = 0; i < n; i++) hh = (hh ^ px[i]) * 16777619u;
+        hh = hash_run(hh, px, n);
     } else {                                         /* RLE: [len][data] per row */
         const unsigned char* q = px;
         int row;
-        for (row = 0; row < h && n < 64; row++) {
-            unsigned len, k;
+        for (row = 0; row < h; row++) {
+            unsigned len;
             if (IsBadReadPtr(q, 2)) return NULL;
             len = *(const unsigned short*)q;
             if (len > 8192 || IsBadReadPtr(q, 2 + len)) return NULL;
-            for (k = 0; k < 2 + len && n < 64; k++, n++) hh = (hh ^ q[k]) * 16777619u;
+            hh = hash_run(hh, q, 2 + len);
             q += 2 + len;
         }
     }
@@ -1976,8 +1999,8 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
    `frame`/`pix` survive in the op as the consumer's atlas KEY, a value compared
    against a table and never followed.
 
-   IT ALSO CLOSES A WRONG-ART CASE. The key is a hash of the plane's first
-   bytes precisely because the shell hands a freed screen's addresses to the
+   IT ALSO CLOSES A WRONG-ART CASE. The key is a hash of the plane
+   precisely because the shell hands a freed screen's addresses to the
    next screen's art. Taken at publish time, that hash would be read from
    whatever the address held THEN -- so art freed and replaced inside one
    census window would hash the NEW content under the OLD op, and the consumer
@@ -2589,10 +2612,10 @@ static void publish_window(unsigned flipSurf)
        resets are `twins_reset` and the atlas filling. NEITHER of those is a
        level boundary. The engine frees a level's GAF banks
        and the next level's loader may hand a new frame an old one's address;
-       `frame_key` hashes only the plane's first 64 bytes plus the hotspot, so
-       UI art whose first RLE row is one transparent run can collide by
-       CONSTRUCTION rather than by 2^-32 luck, and then `atlas_find` hits the
-       old entry and the twin draws the previous level's texels.
+       `frame_key` hashes the whole plane plus the hotspot, so a different
+       picture at a recycled address collides only by 2^-32 luck, and then
+       `atlas_find` hits the old entry and the twin draws the previous level's
+       texels. The drop below bounds that luck to one level.
 
        A REFUSAL OF OPS AT THE BOUNDARY WOULD NOT COVER THIS: entries already
        sitting in the consumer's atlas from the previous level survive any
