@@ -18,9 +18,9 @@ The shared engineering rules are in [the TADR port overview](overview.md). Recor
 feature of Impure; it does not require running the original recorder alongside Impure.
 
 **No production recorder has landed.** The next work is the three feasibility experiments under
-[Milestones](#milestones-and-delivery-order); the next decisions are the four open ones in the
-[completeness design](demo-recorder-completeness.md#open-decisions), starting with effects only a
-unit's own machine produces. The [state design evidence](demo-recorder-state-evidence.md)
+[Milestones](#milestones-and-delivery-order); the next decisions are the two open ones in the
+[completeness design](demo-recorder-completeness.md#open-decisions), starting with how much replay
+testing a simulation landing waits for. The [state design evidence](demo-recorder-state-evidence.md)
 holds the desk research behind this design: how the engine treats remote players, what a rebuild
 must carry, per-player state, and the size estimate. The [packet-era exploration](demo-recorder-exploration.md)
 holds the earlier design's experiments and lists which of its findings still apply.
@@ -349,11 +349,11 @@ evidence, and keep remaining gaps visible.
 
 ## Open decisions and evidence needed
 
-1. **The completeness mechanism's details.** Option B is chosen; four decisions remain, listed with
-   recommendations in the [completeness design](demo-recorder-completeness.md#open-decisions):
-   effects puppets cannot produce, a COB getter that answers differently on puppets, how much
-   harness time a simulation landing may take, and when to adopt its CLAUDE.md section and landing
-   gate.
+1. **The completeness mechanism's details.** Option B is chosen, and so are the answers for effects
+   puppets cannot produce and for COB getter 75
+   ([decisions taken](demo-recorder-completeness.md#decisions-taken)). Two decisions remain, listed
+   in the [completeness design](demo-recorder-completeness.md#open-decisions): how much harness
+   time a simulation landing may take, and when to adopt its CLAUDE.md section and landing gate.
 2. **Measured size.** The disk budget rests on an estimate built from measured per-unit costs:
    about 2.4–3.3 compressed bytes per changed unit per sample, about 10–11 bytes per unit in a
    full-precision snapshot. Its largest unknown is the fraction of units that change per sample over a real

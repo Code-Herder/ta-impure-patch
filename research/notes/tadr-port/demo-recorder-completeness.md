@@ -8,7 +8,7 @@ changes. The owner chose **option B, declare and measure**, on 2026-09-29, after
 [product page](demo-recorder.md#completeness-and-verification), and the engine facts it rests on
 are in the [state design evidence](demo-recorder-state-evidence.md). Addresses below come from that
 panel's readers and were checked against the pristine binary by its judges unless marked
-[INFERRED]. Four decisions are still open ([below](#open-decisions)); the proposed CLAUDE.md text
+[INFERRED]. Two decisions are still open ([below](#open-decisions)); the proposed CLAUDE.md text
 is a draft until the owner adopts it.
 
 ## The problem
@@ -213,19 +213,12 @@ direct sink calls, and every loosening.
 | 2026-09-29 | **Option B, declare and measure.** The panel rejected a static-first registry with a lint over raw writes as brittle, and a single simulation API as too large a migration before the recorder exists; a measure-only design leaves the "remember to register" gap the owner ruled out. |
 | 2026-09-29 | **Extra weapons is always on and fails closed**, like every other simulation feature; its switch and silent disarm go, so recordings carry no arming dimension. |
 | 2026-09-29 | **`s_quiet` is recorded, and a replay shows what the game showed**: display state that follows from simulation events is recorded whenever the live game displayed it. |
+| 2026-09-29 | **Effects only the owner's machine produces are recorded where the engine produces them and replayed through the same function.** The first case is the nano spray: two emitters (`0x4720D0`, reverse `0x472200`) called from 17 sites in 15 order handlers, which run only through the main-list order controller in a local owner's unit tick (DIS). Each emission is credited to the unit whose `QueryNanoPiece` (`0x43E400`) produced its start point: the handler's unit, or the repairing pad in `SelfRepair`. It is recorded as that unit's spray state: direction, target box, and the ticks it sprayed on. Playback calls the same emitter for the puppet, taking the start point from the puppet's own `0x43E400` and bounding the box to the map. An emission that no such query precedes is a named failure. Any other effect the harness finds missing on puppets gets the same treatment, never an imitation. Rejected: deriving sprays from recorded orders (15 handlers, each gated differently, wrong in a stalled economy) and accepting the gap. |
+| 2026-09-29 | **Getter 75 answers on a puppet what the recording machine answered, per seat.** The recording keeps one bit per player, *simulated on the recording machine*, and in puppet mode getter 75 answers that bit for the queried unit's owner. Puppets therefore show the owner-only indicators the recording machine showed, drawn by the mods' own scripts. Two rules come with it, needed whatever 75 answers. **One writer in puppet mode:** COB's SET, ATTACH and DROP change no engine state on a puppet, and the recorder alone writes `+0x10E`, `+0x10F` and the carry links; it applies `+0x10E` through `0x48B090` so each recorded change starts its scripts once. **Takeover flips the seats, then re-creates the units:** only a create gives fresh COB, and Create's first step reads 75. Rejected: accepting 0, which silently drops Escalation's and Twilight's owner-only indicators (375 branches), and replaying per call, since no invariant pairs a recorded call with a puppet call. |
 
 ## Open decisions
 
-1. **Effects only a unit's own machine produces.** Puppets skip the engine's order handlers, and
-   the nano spray comes from them (repair, reclaim and capture effects [INFERRED] too).
-   Recommendation: **presentation roots**, in which Impure calls the engine's own emitter for each
-   builder the recording shows building, repairing or reclaiming, from the recorded order list and
-   target; the harness's per-caller sink counts name any effect puppets still miss, which then gets
-   a root or the owner's approval as expected-absent. Alternatives: record every emission (exact,
-   heavy) or accept the gap.
-2. **A COB getter that answers differently on puppets.** Getter 75 tests the player's `+0x73` for 1
-   or 2, so it answers 0 on puppets: replay the recorded answer, or accept it.
-3. **Harness time per simulation landing.** The landing tier holds most of the reference setup for
+1. **Harness time per simulation landing.** The landing tier holds most of the reference setup for
    10–15 minutes: accept that, or run only the nightly when a landing declares nothing new.
-4. **The CLAUDE.md section and landing gate above:** adopt the rule now, so new simulation code
+2. **The CLAUDE.md section and landing gate above:** adopt the rule now, so new simulation code
    is written declaration-ready, or together with the mechanism in the first slice.
