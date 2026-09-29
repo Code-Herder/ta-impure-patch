@@ -1262,8 +1262,12 @@ and our `my_FindIntercept`, and the minimap ring with them.
 jammers. TADR exempts every ally (strict ally test when following another player's POV).
 
 **What stock does (DIS).**
-- `0x467440` runs once per sim step, inside the player loop `0x464F80`, for the player equal to
-  `main+0x2A43` (`0x465565`).
+- `0x467440` runs inside the player loop `0x464F80`, in its periodic block, which runs once every
+  30 ticks per player (`player+0xF0` against GameTime `main+0x38A47`, then `+0xF0 += 0x1E`,
+  `0x46507D..0x465092`), and there only for the player equal to `main+0x2A43` (`0x465565`; its
+  one call, `0x46556D`). Before the 30-tick gate, and so every tick, sit the per-unit sight emits
+  (`0x4827B0`, `0x465053`) and, for that same player only (`0x465065..0x465070`), the radar
+  rebuild `0x466DC0` (`0x465072`).
 - Pass 1 sets or clears `unit+0x110` bits 8–10 for every unit (`0x46749F..0x4674F9`). Pass 2
   stamps radar and sonar through `0x47E890`.
 - Pass 3 (`0x4675DC..0x46766C`): for every live unit whose owner `+0xFF` differs from the view
@@ -1674,7 +1678,7 @@ orders **another** unit re-enters that unit's handler, nested — stock is reent
 record at `0x4FD288` (handler `0x439EA0`, empty name), then the three static tables through
 `0x43BC90`: 22 at `0x4FC6E8` (Standby … Resurrect `0x404DB0` … RepairUnitNoMove), 22 at `0x4FCA18`
 (the VTOL set) and 23 at `0x4FC490` (Stop … QPatrol). Each append re-sorts by name (comparator
-`0x43C020`, strcmp on `+0x15`), so index 0 is "Ready". No other function writes
+`0x43C020`, the case-insensitive `_stricmp 0x4F8A70` on `+0x15`), so index 0 is "Ready". No other function writes
 `0x512344`/`0x512348`, directly or through the vector helpers `0x43C360`/`0x43C390`/`0x43C3A0`
 (called only from those two); the destructor `0x438480` frees it at exit.
 
@@ -1689,7 +1693,7 @@ record at `0x4FD288` (handler `0x439EA0`, empty name), then the three static tab
 - `0x438B90` (set type), from `0x4031B1` (`0x43F0E0`'s result) and `0x40624C` (a lookup of
   `VTOL_MOVE`);
 - the save loader `0x43A420` at `0x43A60A`. Its by-name branch (`<key>_name`, `0x43C6B0` then
-  strcmp) gives the index or 0. **Its fallback, taken when the record has no name, walks the table
+  `_stricmp`) gives the index or 0. **Its fallback, taken when the record has no name, walks the table
   `jbe` — inclusive of `end` (`0x43A58B..0x43A58D`)** — counting records whose `+0x14` bit 0 is
   clear. A stored index it does not meet leaves `cl` at 69, or 68 if the phantom record past the
   end matched, and that byte becomes the order's type: **a wild dispatch on the first tick. A

@@ -64,8 +64,9 @@ page records an exception.
 
 ## Demo recorder
 
-The [demo recorder](demo-recorder.md) page records the agreed multiplayer recording and solo
-replay features, open architecture and performance decisions, and milestone progress. It is a
+The [demo recorder](demo-recorder.md) page records the agreed recording and replay features for
+skirmish and multiplayer games: state recording, puppet-mode playback, live rewind, takeover from
+any recorded moment and forked timelines, with the open decisions and milestone progress. It is a
 high-level feature record; detailed debugging and implementation evidence belong in separate
 notes. The product decisions are recorded; recorder implementation and seek performance remain
 unverified.

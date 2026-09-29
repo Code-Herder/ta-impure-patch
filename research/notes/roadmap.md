@@ -2164,10 +2164,12 @@ integer triples rather than a lerp of geometry.
 skirmish starts at GameSpeed 20 — 60 ticks a second, not 30**; the "30 a second" the `+clock`
 cheat implies is the GameSpeed-10 rate ([engine map](exe-reverse-engineering.html) §"The simulation
 clock"). (2) The COB `sleep` divisor is a constant 30 (`[[0x51FBD0]+0xE8]`) and does **not** follow
-GameSpeed, so a raised speed simply plays every animation faster. (3)
-`ORDERS_NewMainOrder2Unit 0x43AFC0` **replaces** the main order rather than queueing it and drops
-one within ±16 wu of the standing one, so a scenario's list of move legs collapses to its last —
-which is why the new fixture patrols.
+GameSpeed, so a raised speed simply plays every animation faster. (3) The scenario applier issues
+every order with `shift = 0`, and on that path `ORDERS_NewMainOrder2Unit 0x43AFC0` goes straight to
+the allocator `0x43ADC0` (`0x43AFD4..0x43AFDA`), which for a move destroys the unit's standing
+orders before linking the new one (`0x43AE02..0x43AE59`; the exact conditions are in smooth-motion
+§7g). So a scenario's list of move legs collapses to its last — which is why the new fixture
+patrols.
 
 **Not shipped, and the taste question is open**: the lever is off by default and absent from
 `tagpu_opt.c`'s play-default table, so only the file arms it.

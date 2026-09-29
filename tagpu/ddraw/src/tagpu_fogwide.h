@@ -38,9 +38,9 @@
    terrain pass off, still has the grid. On the GDI lane nothing reads it and
    neither runs. Both read the LOS and MAPPED maps inside an in-play draw,
    after the level load that allocates them and before the teardown, on the
-   thread that runs that teardown: the teardown frees MAPPED, and the LOS
-   counters live on until the next load frees them (the lifetimes are spelled
-   out at `wide_tick`). Every index into them is bounded by the maps' own
+   thread that runs that teardown: the teardown frees both, the LOS counters
+   first (`0x464A00` at `0x491BA9`, then MAPPED through `0x483DD0` at
+   `0x491BB3`; the lifetimes are spelled out at `wide_tick`). Every index into them is bounded by the maps' own
    dimensions, as the engine's own loop bounds it.
 
    WHAT IT COVERS. The window is sized for the WIDEST view the zoom levers can

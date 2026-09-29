@@ -589,11 +589,15 @@ that costs 2.33 µs is the right thing to measure before tuning it. **It was tak
 `scenarios/walk-lerp.json` is new and exists because the gate-C fixture cannot answer this:
 its orders come from the shell, so two runs are several ticks out of phase and every trace differs
 for reasons that have nothing to do with the code. The new fixture carries its order, and it has to
-be a **patrol** — `ORDERS_NewMainOrder2Unit 0x43AFC0` *replaces* the main order rather than
-queueing it, and drops one whose target is within ±16 wu of the standing one (the tolerance test at
-`0x43B006`), so a list of six move legs collapses to its last, which is the start point, and the
+be a **patrol** — the applier issues every order with `shift = 0`, on which
+`ORDERS_NewMainOrder2Unit 0x43AFC0` goes straight to the allocator (`0x43AFD4..0x43AFDA`), and the
+allocator `0x43ADC0`, when the new order's own flags `+0x42` lack `0x40` (`0x43AE0E..0x43AE12`),
+destroys every standing order that lacks flag `0x4` before linking the new one
+(`0x43AE02..0x43AE59`) [DISASSEMBLED]; a move order's flags evidently lack `0x40` [INFERRED from
+the run below]. So a list of six move legs collapses to its last, which is the start point, and the
 unit never takes a step. That was measured the slow way: six orders "issued, 0 failed" and a
-commander that stood still for 55 seconds.
+commander that stood still for 55 seconds. The ±16 wu duplicate test at `0x43B006` plays no part:
+it is on the `shift != 0` path only.
 
 **The sim is deterministic, and that was established before it was relied on**: two runs of the
 same build and the same lever produced **1084 COB events, byte-identical once the tick column is

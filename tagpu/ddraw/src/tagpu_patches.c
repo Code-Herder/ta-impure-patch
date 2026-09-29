@@ -10789,9 +10789,17 @@ static void cob_runtime_sites(void)
     lim_branch(0x00496A4Fu, sizeof chat_frame, chat_frame, 0xE8, (unsigned)(size_t)cob_chat_frame, "COB entry diagnostics");
 }
 
-/* Interpreter callbacks execute on the game thread. The unit pool remains
-   allocated throughout that call; no callback or engine mutation intervenes
-   between the bound, the live-slot test and the fields read below. */
+/* Interpreter callbacks run on the game thread in play, and on the loader thread
+   for Create's first slice while the level load creates units (every create runs
+   Create with run-now set, 0x485DE6). The unit array is allocated by the level
+   init 0x4854A0 before the first create and freed only by the teardown 0x485980,
+   so every slot below the count is engine memory for the whole call on either
+   thread. During a network load the other thread's pump can remove a player and
+   kill its units, so a slot can die while it is read; the answer is then stale
+   for that one call. Nothing read here can index outside what the engine owns:
+   the id is bounded by the count, and the owner byte +0xFF, bounded below 10
+   here, is stored only by the level init (0x485880, 0x48590E), so a caller may
+   read it again. */
 static char* cob_live_unit(char* ta, int id)
 {
     unsigned slots;

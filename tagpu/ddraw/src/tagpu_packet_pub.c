@@ -2159,14 +2159,14 @@ static void fog_rec_after(const char* ta)
    build forms is bounded by the maps' own dimensions (tagpu_fogwide.c,
    fogw_source). The local player's LOS counters are allocated by `0x464700`,
    which `0x464990` calls for each active player at `0x4919C8`, inside the
-   level load `LoadGameData_Main 0x4917D0` on the loader thread, and freed by
-   the same `0x464700` at the NEXT level's load; the teardown cascade
-   `0x491B60` does not free them. MAPPED is allocated at `0x483CF6` in the
-   map load and freed at `0x483E70`, by the map-free routine `0x483DD0` in
-   that teardown [DISASSEMBLED 2026-09-24; exe-reverse-engineering.md, "The
-   two routines that bracket a level"]. This `after` runs on the in-play
-   gate, after the load and before the teardown, on the thread that runs the
-   teardown -- the argument every table this publisher copies stands on.
+   level load `LoadGameData_Main 0x4917D0` on the loader thread, and freed in
+   the teardown cascade `0x491B60` by `0x464A00` (`0x491BA9`). MAPPED is
+   allocated at `0x483CF6` in the map load and freed at `0x483E70`, by the
+   map-free routine `0x483DD0` later in that teardown (`0x491BB3`)
+   [DISASSEMBLED 2026-09-28; exe-reverse-engineering.md, "The two routines
+   that bracket a level"]. This `after` runs on the in-play gate, after the
+   load and before the teardown, on the thread that runs the teardown -- the
+   argument every table this publisher copies stands on.
 
    `rebuilt` IS "the LOS state moved in this draw" (s_fogStale). The engine's
    `0x4848E0` runs on every in-play draw (its call at `0x469D8E` is gated on

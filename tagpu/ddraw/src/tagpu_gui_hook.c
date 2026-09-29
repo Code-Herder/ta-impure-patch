@@ -4282,8 +4282,9 @@ static void panel_emit(const char* ctrls, int n0)
    toggled between two constants would deadlock on every debt whose constant
    happened to be the live byte -- which is 0x00 for player 0 on every other
    reset. `x ^ 0xFF` cannot equal x, and every engine writer of the field
-   stores 0..10 (`0x463C05` the constant 10, `0x4453F0`/`0x445565`/`0x44A8F6`
-   a compacted index or 10, `0x46434D` a setup index -- DISASSEMBLED), so the
+   stores 0..10 (`0x463C05` the constant 10, `0x44541C`/`0x445565`/`0x44A8F6`
+   the record's own slot or 10, `0x46434D` the slot `0x464290` is called for
+   -- DISASSEMBLED), so the
    poison, 0xF5..0xFF, is a value the block cannot compute even if the field
    moved between the poke and the draw. The debt clears as soon as the memo
    stops reading back as our poison -- which is the engine having written its

@@ -241,8 +241,13 @@ static unsigned g_frame;                          /* stamped by the present path
 static unsigned g_armed_at;                       /* frame the arena went ARMED   */
 
 /* How long the present path waits for Game_MainLoopTick to reach the detour.
-   It never does at the menus, on the mission-end screen, or while the game is
-   paused — and a silent CLI timeout tells nobody which of those it was. */
+   It never does at the menus or on the mission-end screen, and a silent CLI
+   timeout tells nobody which of those it was. A pause does not stop it, by the
+   disassembly: the pause test (0x496920..0x496926) jumps over only the
+   scheduler 0x495230 and the tick 0x495490, a network game's paused branch
+   (0x4968AA..0x4968B0) rejoins at 0x496969, and every path through the frame
+   callback 0x496790 falls through to the draw call at 0x4969CD and so to
+   0x4969D2. No apply on a paused frame has been measured live. */
 #define SCN_ARM_FRAMES 600u
 
 /* ------------------------------------------------------------------ utilities */
@@ -1296,10 +1301,12 @@ static void apply_switches(char* ta)
 
 /* Player resources are the one thing in the schema the apply point cannot make
    stick. The write lands — the offsets are confirmed against a live read — but
-   TA recomputes storage from the units a player owns and refills current from
-   production every simulation tick, so both fields are back to the engine's own
-   numbers before the next frame. Measured 2026-09-01: asking for 4321 metal
-   against 50 storage, and even for 12 against the same 50, both read 50 again.
+   TA's economy pass 0x401360, once every 30 ticks for each local player,
+   recomputes storage from the units a player owns and clamps current to it;
+   current itself is carried forward (plus production, less expense), not
+   refilled [DISASSEMBLED]. Measured 2026-09-01: asking for 4321 metal against 50
+   storage, and even for 12 against the same 50, both read 50 again. The clamp
+   explains the 4321 only; the 12 is open (scenario-format.md, phase C).
 
    So the write stays (it is free, and correct where the engine has no opinion),
    and the result reports the read-back from the SAME tick beside a second read

@@ -408,7 +408,7 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a
   refcounted string passed by value. It binary-searches the sorted array
-  `[0x51E6B4, 0x51E6B8)` of 8-byte `{name, mask}` entries with `strcmp 0x4F8A70`. On a name it does
+  `[0x51E6B4, 0x51E6B8)` of 8-byte `{name, mask}` entries with `_stricmp 0x4F8A70`, which is case-insensitive (it folds A–Z before comparing, `0x4F8A9A..0x4F8AB6`). On a name it does
   not hold it allocates the 0x40-byte mask (`push 0x40; call 0x4B4F10` at `0x488CC2`, the
   site Impure widens for 16 384 types), clears 16 dwords (`0x488CD2`), inserts through
   `0x488FB0` (`this` = `0x51E6B0`), then releases its two strings through `0x4C9390` and returns
@@ -690,7 +690,15 @@ the two participating records. Within each: DPID `+4`, controller byte `+0x73`, 
 at `+0x8C`. The last field names come from Pascal's `TPlayerResourcesStruct`; the first eight
 floats are energy current/production/expense, metal current/production/expense, and the two
 storage maxima. `tagpu_scenario.c` independently uses `+0x8C/+0x98` for current energy/metal.
-No new disassembly establishing every resource field's ownership was performed.
+The economy pass `0x401360` and the save's Players loader `0x466050` (its key names in brackets)
+confirm the layout [DISASSEMBLED 2026-09-28]: floats energy current/production/expense
+`+0x8C/+0x90/+0x94` and metal `+0x98/+0x9C/+0xA0`, storage maxima energy/metal `+0xA4/+0xA8`;
+doubles energy/metal produced `+0xAC/+0xB4`, consumed `+0xBC/+0xC4` and wasted `+0xCC/+0xD4`
+(`TotalEnergyProduced` … `MetalWasted`); floats base storage `+0xDC/+0xE0`
+(`PlayerEnergyStorage`, `PlayerMetalStorage`). After it: share limits metal/energy `+0xE4/+0xE8`,
+the `0x34`-byte shared-resources record `+0xEC`, the 30-tick pass time `+0xF0`, kills `+0xFC`,
+losses `+0xFE`, units created `+0x140` (dword) and alive `+0x144` (word), and the base-storage
+flag `+0x149` bit 0 (*Replay state design*, below).
 
 `main+0x14233/+0x14237` read 672/800; LOS width/height read 336/400, allocation 134,400 bytes.
 The existing allocator map above establishes the in-level lifetime. With both games paused
@@ -784,7 +792,10 @@ no claim about complete restored state follows from bypassing that UI validation
 With the type-3 admission probe, loading a fresh 399,676-byte spectator save crashes after
 level teardown at `0x46E167` (`mov eax,[ebp+0x64]`, `ebp == 0`). The stack includes return
 `0x46CA75`: `0x46CA60` loads `main+0x2A30` into `ecx` and calls `0x46E160` at `0x46CA70`
-without a null check. Its caller is `0x42845D`. This is the restriction/sync object identified
+without a null check. Its callers are `0x428345`, `0x4283BC` and `0x42845D` (E8 scan, no stored
+pointer), cases of the menu state machine's switch on `main+0x2BBF` (`0x4282D5..0x4282EB`);
+`0x42845D` ends the case `0x428439..0x42845B`, which first resets every type-4 record (remote AI)
+to 0 through `0x463C60(0)`. This is the restriction/sync object identified
 in the unit-cap investigation above. The observed missing object is a restore-lifecycle gap;
 there is no proposed null-skip fix or proof of successful multiplayer restoration.
 Additional slices: `0x46E160..0x46E1D0`, `0x46CA60..0x46CAD0`, `0x428439..0x428478`.
@@ -806,6 +817,269 @@ coverage is not established by this caller inventory. `0x48FDF0` runs only for g
 (`0x48FE06..0x48FE09`) and invokes vtable slot `+0x10` across two object arrays/counts
 at its receiver `+0/+0x40` and `+0x44/+0x84`; it returns without doing so in a type-3 save.
 The arrays' object meanings remain unestablished. Additional slice: `0x48FDF0..0x48FE59`.
+
+### Replay state design: remote-player gates, rebuild paths and player state [DISASSEMBLED 2026-09-28]
+
+The engine facts the state-based replay design rests on: what the engine runs and skips for a
+remote (type-3) player, which stock paths rebuild units, orders and queues in place, and where
+per-player and perspective state lives. The reasoning, the design consequences and the open
+experiments are in the [state design evidence](tadr-port/demo-recorder-state-evidence.md):
+[puppet mode](tadr-port/demo-recorder-state-evidence.md#1-puppet-mode-how-the-engine-treats-a-remote-player),
+[rebuild and takeover](tadr-port/demo-recorder-state-evidence.md#2-rebuild-and-takeover-inventory),
+[player and perspective state](tadr-port/demo-recorder-state-evidence.md#3-player-and-perspective-state)
+and [the size estimate](tadr-port/demo-recorder-state-evidence.md#4-size-estimate).
+
+| Address | What it is | The fact |
+|---|---|---|
+| `0x463C60` | the controller-type setter, `thiscall(type)`, `ret 4` | Stores `+0x73` and, for any type but 3, PlayerInfo `+0x94` too (`0x463C60..0x463C75`). Fifteen callers (E8 scan): the `AI` command (`0x4162F4`, `0x4162FE`), the type-4 reset `0x42844F` (above), the seat removal `0x452E62`, and `0x4453E6`, `0x44552E`, `0x447C79`, `0x447CC2`, `0x447CFA`, `0x44833D`, `0x44A8BF`, `0x45125E`, `0x451442`, `0x45401B`, `0x454054` [roles not traced]. DIS |
+| `0x416280` | `AI`, the chat command `{0x5018E0 "AI", 0x416280, 4}` at `0x501FD0` (run level 4) | Takes a seat below 10 (`0x4B73E0`, `0x416293..0x4162A0`) whose record is active (first dword ≠ 0) with `+0x73` 1–3 and `+0x146` ≠ 10; type 1 becomes 2 (`0x4162F4`), types 2 and 3 become 1 (`0x4162FE`). It touches no unit, mover or AI object. DIS |
+| `0x48AD30` | the unit tick, over each record's block `[+0x67, +0x6B]` | Ticks only active records with `+0x73` 1–3 and `+0x146` ≠ 10 (`0x48AD6C..0x48AD9C`): a type-4 record's units are never ticked. Every ticked unit runs `0x437910` (`0x48ADC4`), `DoScriptsNow(1)` when `+0x9A` is set (`0x48ADDF..0x48ADEB`), its countdowns `+0xFA`/`+0xFB` and 30-tick health percentage `+0xF6`/`+0xF7`, and the pending-death reaper (`+0x110` bit 14 → `0x4864B0(unit, +0xF5)`, `0x48AFB9..0x48AFD1`). `AutoAim 0x49E1A0` needs the block owner's record (`edi`, `0x48AD73`) active and of type 1 or 2 (`0x48ADC9..0x48ADDA`). Only a unit whose owner `+0x96` is of type 1 or 2 (`0x48AEB5..0x48AECD`) runs the kind-`0xB` hit every 30 ticks at or below the sea level `main+0x1427F` for a def without `+0x241` bit 12 (`0x48AED3..0x48AF32`) [INFERRED: water damage], `0x41BD10` every 8 ticks while HP is below def `+0x1FA` and def `+0x200` is set (`0x48AF37..0x48AF92`) [INFERRED: regeneration], `0x43B7C0`, `0x43BAD0` and the movement pass `0x43DD20` + `0x48A870` (`0x48AFA3..0x48AFB0`). After the block's units, the `0x2C` sender `0x48B710` runs for an active type-1/2 record in a network game (`0x48AFE4..0x48B003`). DIS |
+| `0x464F80` | the players phase, once a tick (`0x49555F`) and once from the loader body `0x497180` on the loader thread (`0x497C10`) | The unit tick's record gate (`0x464FCE..0x465024`). Every tick, per record: `0x408C40` on `+0x74` when set (`0x46502A..0x465031`), `0x40B2C0(i)`, i the record's slot (the loop index, pushed at `0x465036`), and the sight emit `0x4827B0` for each alive unit (`0x465046..0x465063`); for the viewed player `main+0x2A43`, the minimap rebuild `0x466DC0` (`0x465065..0x465072`). On the record's 30-tick pass (`0x46507D..0x465092`) the viewed player's record also runs the radar pass `0x467440` (its one call, `0x46556D`) and `0x466C20` (`0x465572`), and in a network game every fourth such pass (counter `0x51E53C`) sends its `0x28` through `0x4573D0(rec, 0, 0)` (`0x4655A1`). The economy pass and the network defeat: *The Deathmatch respawn*, below. DIS |
+| `0x408C40` | the tick of the `+0x74` AI object (`0x3D` bytes; its constructor `0x408CB0` stores the record at `obj+0`, `0x408CBB`, and its `+0x146` at `obj+4`) | Plans only when that record is active with `+0x73` = 2 (`0x408C45..0x408C50`): `0x408830` every 30 calls (countdown `obj+5`), the ten slots at `obj+0x11` when due, then `0x4089A0(1)`; any other type runs only `0x4089A0(0)` (`0x408CA7`). A seat flipped 2 → 3 keeps its object, dormant, and a flip back to 2 revives it. DIS |
+| `0x40B320` / `0x40B2C0` / `0x40B390` | the second per-seat object, in the array `0x5119C0` | `0x40B320(idx)` allocates `0x10D` bytes, constructs them with `0x409160` and stores the pointer at `0x5119C0[idx]` (`0x40B340`); `0x40B390(idx)` frees it. `0x40B2C0(idx)` returns when `0x5119C0[idx]` is NULL (`0x40B2CC`); otherwise, once 30 ticks have passed since the GameTime it keeps at `obj+0xED` (`0x40B2D6..0x40B2E5`), it runs the acquisition `0x40AA40`, draws the sim RNG `0x4B6C30(0x1E)` (`0x40B301`) and calls `0x409730` when the draw is 0 (`0x40B30C`): a seat with this object draws the shared sim RNG once per 30 ticks. The player init `0x464700` builds it beside `+0x74` for every seat but an active type 3, and the teardown's `0x464A00` frees both (*The LOS counters and MAPPED both end in the teardown, the counters first*, below). The init and the teardown index `0x5119C0` by `+0x146` (`0x4648C6..0x4648CD`, `0x464A48..0x464A4F`) and the players phase by the slot (`0x465036`): the same object while `+0x146` equals the slot [INFERRED that it does for every ticked record: its writers store the slot or 10, *Which bytes are read back and which are not*, below]. DIS |
+| `0x485E50` | a mover install that nothing calls (no E8/E9 caller, no stored pointer) | `0x4B4F10(0x2F)`, `0x43DC00(unit)` (`0x485E66`), stored at `unit+0` (`0x485E6F`), `unit+0x66` = def `+0x210`, `ret 4`; it does not free the old mover. `0x43DC00`'s other call sites are the two creates (`0x4860D5`, `0x4862E9`) and the dead `0x485E90` (`0x485F29`), and `0x43DD10` frees a mover from the destructor only (`0x486DB1`): no stock path swaps a live unit's mover, whose class the owner's `+0x73` chose at the create. DIS |
+| `0x48BA28..0x48BA5C` | the `0x2C` receiver's block sweep | After the dirty list, every unit of the sender's block `[+0x67, +0x6B]` with `+0x110` bit 28 (alive) and a mover runs `0x43DD20` (`0x48BA46`) and `0x48A870` (`0x48BA4C`), once per message: a remote unit's mover steps, and its walk scripts start, only when its owner's `0x2C` arrives (*The move object*, below). DIS |
+| `0x455F84` entries `0x455FB0`, `0x455FB4`, `0x455FC0`, `0x455FC4`, `0x455FC8` | the event cases `0x0D` `0x45542D`, `0x0E` `0x45543D`, `0x11` `0x45555B`, `0x12` `0x4555BA`, `0x13` `0x45561A` | Plain calls of stock functions. `0x0D` → `0x49D270(sender, msg)`, which never reads its sender and rebuilds the shot through `0x49C740` (`0x49D307`, `0x49D4FC`), `0x49CDE0` (`0x49D44E`), `0x49CC20` (`0x49D479`) or `0x49C9C0` (`0x49D558`), the holders of the `Fire*` starts (`0x49CB94`, `0x49CD4F`, `0x49CF73`); its retarget search under `msg+0x1A` bit 0 skips projectiles whose owner `+0x66` is `main+0x2A42` (`0x49D3D8..0x49D3E1`). `0x0E` → `0x49AF90`, which never reads its sender. `0x11`: an alive test (`0x455585`), then `0x48B090(mask, 1)` and `(~mask, 0)`. `0x12` → `0x41B8D0(builder, built)` (below). `0x13`: with `msg+1` set `0x47F0C0([+2], 0)`, else the positional `0x47F300([+2], &msg[6], 0)`. DIS |
+| `0x4554EE..0x455556` | the `0x10` script-start case (entry `0x455FBC`) | The message is `{0x10, u16 unit, i16 script, u8 argc, 4 × i32}`, `0x16` bytes. Unit 0 is taken as NULL and then read at `0x455518`, a fault; the unit index has no other bound (`0x4554FF..0x455516`). After the alive test it calls `0x4B0B00(unit+0x9A, script, 0, 0, argc, a0..a3)` (`0x455551`) with no null test of `+0x9A`, so the script steps at the unit's next `DoScriptsNow`. The script index is bounded there: `0x4B0B00`'s `COBEngine_AllocThread 0x4B08C0` (`0x4B0B08`) returns −1 below 0 or at or above the script count `[[cob+8]+4]` (`0x4B08C5..0x4B08D0`), and then nothing starts (`0x4B0B0D..0x4B0B22`). The senders `0x456190` (called at `0x438632`, `0x43A258`), `0x456200` (`0x411403`, `0x49E3A6`; the index through `0x4B07C0`) and `0x456290` (`0x4385D7`) send only with `main+0x2A44` bit 0 (`0x456198`, `0x45621E`, `0x456298`). DIS |
+| `0x4573D0(rec, target, flag)` (`ret 0xC`) / `0x457540` | the `0x28` resource message, sent and received (case `0x4558FE`, entry `0x45601C`) | Sent only for an active type-1/2 record with `+0x22` = 0 (`0x4573DA..0x4573F7`): 58 bytes, `[1]` the flag, `+0xFC`/`+0xFE`/`+0x104`/`+0x106`, current metal `[0x12]` and energy `[0x16]`, storage `+0xA8` `[0x1A]` and `+0xA4` `[0x1E]`, and the six totals as floats (`0x4573FD..0x45749C`), never production or expense. A NULL target sends to every active type-3 record whose PlayerInfo `+0x94` is 1 and `+0x22` is 0 (`0x4574CA..0x45752B`). The receiver needs a sender whose `+0x22` is 0, skips the writes when any active local record's byte `+0x129 + sender` is set, writes those fields (`0x4575B7..0x457637`) and answers a set flag with a `0x29`. DIS |
+| `0x464C60(from, to, amount, send)` (`ret 0x10`) | the metal transfer | Returns at once when either index is 10 (`0x464C67..0x464C77`). With `send` ≠ 0 it caps the amount at the sender's current metal (`0x464C87..0x464CB6`); whatever `send` is, it returns when the amount is then 0 (`0x464CBA..0x464CC9`). With `send` ≠ 0 it takes the amount through `0x401260` (`0x464CF4`; current −= amount, the `+0xEC` record's `+0x1C` += amount). In every case it adds the amount to the recipient's `+0xEC` record `+0x18`, which the economy pass folds in; a type-2 recipient gets 50 % at difficulty 0 and 70 % at 1 (`0x464D3C`; −0.5 at `0x4FD548`, −0.7 at `0x4FD540`). With `send` ≠ 0 it then sends through `0x457050` (`0x464D85`). The network case `0x4558D6` passes 0 (`0x4558CA`), so a received transfer credits the recipient and debits nobody on the receiving peer: the debit happens on the sender's peer only. The auto-share `0x457E78` passes 1 (`0x457E73`). Callers `0x416C8D`, `0x4558D6`, `0x457E78`, `0x49362C`. DIS |
+| `0x457D30` | the auto-share, called from the tick loop for `main+0x2A42` (`0x49563A`, its one call) | Needs `main+0x2A44` bit 0 and runs every 60 ticks; with PlayerInfo `+0x97` bit `0x2` and current metal above `+0xE4` it gives metal through `0x464C60` (`0x457E78`), with bit `0x4` and energy above `+0xE8` energy through `0x464B30` (`0x457F96`). DIS |
+| `0x418CD0`, `0x418D90`, `0x418E50`, `0x418FD0`, `0x419090`, `0x419340`, `0x419400` | the share commands of the level-1 table `0x501D38` (entries `0x501EB8..0x501F0C`) | ShareMetal, ShareEnergy, ShareMapping and ShareRadar toggle bit `0x2`, `0x4`, `0x20` and `0x40` of the controlled player's PlayerInfo `+0x97` (`0x418D3E`, `0x418DFE`, `0x418EBE`, `0x41903E`), ShareAll all four, each then calling `0x450F90`; `0x418F10` toggles `0x08` (`0x418F7E`) and nothing references it. SetShareMetal and SetShareEnergy write `+0xE4` (`0x4193C5`) and `+0xE8` (`0x419485`). The auto-share reads `0x2` and `0x4`, the radar pass `0x40`; a reader of `0x20` or `0x08` is open. DIS |
+| `0x467440` | the radar pass, for the viewed player `main+0x2A43` | Pass 1 (`0x4674A7..0x4674F9`) sets `+0x110` bits 8–9 on the viewer's own units, on allied units whose owner shares radar (`AllyFlagAry[viewer]`, `0x4674C5`; PlayerInfo `+0x97 & 0x40`, `0x4674D2`) and on every unit when the viewer has the watcher bit (PlayerInfo `+0x9B & 0x40`, `0x4674E4`), and clears bits 8–10 of the rest. Its one call is `0x46556D`, on the viewed player's 30-tick pass. DIS |
+| PlayerInfo, `[player+0x27]` | the `0xB9`-byte block the record's constructor `0x463BE0` allocates | `+0x94` (written by `0x463C60`, read by the `0x28` send), `+0x95` side (read at `0x48692A`), `+0x96` colour (an index into `[main+0x148DB] + i·8 + 0x28`, `0x467C0E..0x467C24`), `+0x97` the share bits, `+0x9B` bit `0x40` the watcher bit (set by the network defeat at `0x46569D`, at `0x427F40`, `0x42814A` and `0x443BF3` on the controlled player `main+0x2A42`, and at `0x447F0E` on an active type-1 record; cleared at `0x4439D3` and `0x443C41` on the controlled player and at `0x447E8E` [the callers of these not traced; the word's other stores not checked for this bit]; read at `0x465154`, `0x4674E4`, `0x41DD43` among others). The Players loader restores `+0x95` (`Side`) and `+0x96` (`Logo`). DIS |
+| `0x4816A0(arg)` `Game_SetLOSState` | the sight rebuild | Nine callers: `LOSType` `0x4166B1` (arg 0, after writing LosType bit 2), `LOS` `0x416D76` (0, bit 1), `Mapping` `0x416DA6` (1, bit 0), `NowISee` `0x41755E` (1, bits 0 and 1 cleared), the Deathmatch respawn `0x4654EF` (1), the network defeat `0x4656CE` (1), a screenshot routine (`0x495B61`, `0x495E58`) and the level load `0x497AE5` (1). With arg ≠ 0 it refills the whole explored map `*(main+0x14273)` (`0x4816A7..0x4816FB`); it refills each type-1–3 record's sight grid (`0x481707..0x481767`), re-emits the units under LosType bit 1 (`0x48177C..0x481836`), clears LosType bit 3 (`0x481911`) and calls `0x466C20` and `0x466DC0`. DIS |
+| `0x484FA0` | the saved game's `Mapping` loader | Accepts the section only at the explored map's own size, `w·h/2` bytes of `main+0x14233`·`main+0x14237` (`0x484FCD..0x484FE6`), and reads it straight into `*(main+0x14273)` (`0x484FE8..0x484FF7`). DIS |
+| `0x466050` | the saved game's `Players` loader | Reads `Human Player` into `main+0x2A42` and `+0x2A43`, `GameTime` (`0x1C` bytes) into `main+0x38A37`, and per `Player%i` `Energy`/`Metal` into `+0x8C`/`+0x98`, the six totals, `PlayerEnergyStorage`/`PlayerMetalStorage` into `+0xDC`/`+0xE0`, `AddPlayerStorage` into `+0x149` bit 0 (`0x4661E7..0x466200`), `Kills`/`Losses` into `+0xFC`/`+0xFE`, `UpdateTime`/`WinLoseTime`/`DisplayTimer` into `+0xF0`/`+0xF4`/`+0xF8`, `Logo`/`Side` into PlayerInfo `+0x96`/`+0x95` and `Alliances`, 11 bytes, into `+0x108`; a missing `Player%i` sets `+0x73` = 0 (`0x4662C3`). It restores no production, expense, `+0x104`/`+0x106` or `+0x140`/`+0x144`. DIS |
+| `+0x149` bit 0 | the base-storage flag (`AddPlayerStorage`) | Every instruction with that displacement, and `main+0x1CAC` at `0x497114`: the one test, `0x401941` in the economy pass; the sets by `0x496E90` (`0x496EA1`; callers `0x465F42`, `0x46540F`), by the skirmish seat setup `0x496EE0` (`0x496F5D`), at `0x497114` in `0x497080` (no E8/E9 caller, no stored pointer) and by the network setup after the commander's create (`0x4977D8`), each storing max(value, 200) into `+0xDC`/`+0xE0`; the clears by the player init (`0x4647EF`) and a commander's death (`0x486518`); the Players loader (`0x4661E7..0x466200`) and the saver (`0x466487`). No create sets it. DIS |
+| `0x41DC20` | the post-game table, called by the teardown at `0x491B8B`, before `0x464A00` frees the records' objects | Takes the win flag `main+0x391AF` from `main+0x3923B` bit 4. A record with `+0x22` = 0 gets a row when it is active, of type 1–3, `+0x146` ≠ 10 and without the watcher bit, or has created units (`+0x140` ≠ 0) (`0x41DD13..0x41DD5B`): the name `+0x2B`, kills `+0xFC`, losses `+0xFE`, the produced `+0xAC`/`+0xB4` and wasted `+0xCC`/`+0xD4` totals as integers and a score (`[main+0x391E9]` `+0xD58`, `+0xD54`), into rows at `main+0x38DD9`, with column maxima at `main+0x3918F..+0x391A7`. ENDMSN shows the live records as the teardown finds them. DIS |
+| `0x43B0B0(action, unit, type, amount)` (`ret 0x10`) | a factory queue as count nodes | For amount > 0 it adds to the last node of the list the action's descriptor picks (`+0x60` for its flag `0x40000` in `*(0x512344)`, stride `0x19`, else `+0x5C`) when that node's action byte `+4` and `+0x36` match (`0x43B102..0x43B10C`, into `+0x3A`), and otherwise appends through `0x43ADC0(action, 1, unit, 0, 0, type, amount)` (`0x43B116..0x43B120`); for amount ≤ 0 it subtracts from the last matching node, destroying a node it empties and carrying the rest to the next match (`0x43B12C..0x43B1DC`). A queue A, B, A is three nodes. Its only callers are `0x419B8C` and `0x419BA8`. DIS |
+| `0x419B00(name, unit, amount)` (`ret 0xC`) | the build-menu queue call (callers `0x41AC3C`, `0x40865E`, `0x4087C4`) | Plays `addbuild` or `subbuild` (`0x47F1A0`) when the unit's `+0xFF` is the viewed player (`0x419B10..0x419B33`). `MAKENUKE` and `MAKEANTI` queue `BUILDWEAPON` with type 0 (`0x419B97..0x419BA8`); any other name is resolved to a type (`0x488B10`; an unknown one queues nothing) and queued as `MOBILEBUILD` for a unit with a mover, else `BUILDINGBUILD` (`0x419B6B..0x419B8C`), the action resolved by name through `0x438760`. The click at `0x41ABFA..0x41AC3C` passes ±1, or ±5 with SHIFT (`0x4C1B80(0xF9)`). DIS |
+| `0x402640(unit, order, event)` (`ret 0xC`) | the `BuildingBuild` order's handler (action `0x0C`), its pointer at `0x4FC55C` (record `0x4FC558`; *The nano spray*, below) | Event bit `0x2` is tested first (`0x402647..0x40264D`). With a target `+0x16` it credits the target def's `+0x18A` × `(1.0 − target+0x104)`, truncated to an integer by `0x4E43A0` (`0x40267E`), to the unit's `+0xD4`; a type-2 owner (`unit+0xEC`) gets 50 % at difficulty 0 and 70 % at 1 (`0x402687..0x4026E3`; −0.5 at `0x4FC6E0`, −0.7 at `0x4FC6D8`). It then calls `0x41B8D0(unit, target)` (`0x4026EE`) and `0x489BB0(unit, target, 0x7530, 9, 0)` (`0x402701`). With or without a target it calls `0x48B090(9, 0)` (`0x40270C`) and `0x41C150(unit)` (`0x402712`) and returns 5. Event bit `0x8` ("Construction stopped", `0x501340`) decrements the node's count `+0x3A` (`0x40272A..0x402751`). Otherwise it dispatches on the state `order+5` through `0x402B5C`: state 0 needs `+0x110` bit 29 (`0x40277B..0x402785`) and keeps the unit activated (`0x48B090(1, 1)`) while `+0x3A` > 0, deactivating it and returning 5 at 0 (`0x40278B..0x4027B3`); state 4 (`0x402B07..0x402B39`) completes one unit: `0x41B8D0(unit, order+0x16)`, the target link cleared, `+0x3A` decremented. The unit in progress is the order's target `+0x16`. DIS |
+| `0x41B8D0(builder, built)` | the build completion (callers `0x4026EE`, `0x402B25`, `0x41BCBF`, `0x4555F1`, `0x455610`) | Calls only `0x4AB060`, `0x49FA90`, `0x48AAC0`, `0x48B090`, `0x4199B0` (which sums queue counts through `0x439D80`) and `0x4560C0`, and links no order to the built unit: how a built unit takes a factory's rally orders is open. DIS |
+
+Described where they live: the resource layout (*Perspective authority and tick boundary*, above);
+the economy pass `0x401360` and the network defeat `0x465643` (*The Deathmatch respawn*); the load
+barrier's network-only path (*The load state `0x497F40`*); the movement pass `0x43DD20` and the
+movers' steps (*The move object `0x43DC00`*); the stamp's eviction of a type-3 incumbent (*Slot B*);
+the player init `0x464700` and the teardown's `0x464A00` (*The LOS counters are allocated in the
+level load and nowhere else* and the paragraph after it); the order links (*The order module*); the
+save's per-unit sections (*A saved game's unit records*); what a create skips without `finished`
+(*What one local create sends*); the dispatcher's sender test (*A sender, as the dispatcher sees
+it*); and the send's network and local-record gates (*The send `0x451DF0`*).
+
+### The nano spray: two emitters, fifteen order handlers [DISASSEMBLED 2026-09-29]
+
+What the recorder's rule for owner-only effects rests on (*Decisions taken* in the
+[completeness note](tadr-port/demo-recorder-completeness.md#decisions-taken)): the nanolathe
+spray is made by two emitters, called only from fifteen order handlers, which run only on the
+machine that simulates the unit. Established by whole-image scans (E8, E9, Jcc and absolute
+dwords at every byte offset) and recursive descent from each handler. The particle object, its
+layer and its draw are in [effects §7](effects.md).
+
+**The emitters** are `0x4720D0(point3, box6, layer)` and `0x472200(box6, point3, layer)`,
+stdcall, `ret 0xC`, 297-byte bodies that differ only in which argument they expand: the forward
+one copies its point into a degenerate box (`0x4720D3..0x472108`) and initialises the particle
+from the point to the box; the reverse one expands its second argument and initialises from the
+box to the point (`0x472203..0x4722A9`). Neither makes a particle while the byte `0x51E608` is
+nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is empty
+(`0x472126`). The object's vtable is `0x4FD5B8`. Its init, slot `+0x18` = `0x473B50`, copies the
+two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
+(`0x473D50`, called at `0x473D39`). The spawn draws the CRT `rand 0x4E4870`, never the sim RNG
+`0x4B6C30`, so an emission changes no simulation state. `0x4732E0` appends the object to the
+layer's vector at `[main+0x38D77] + layer·16`; a layer already holding more than 400 (`0x190`)
+entries destroys its oldest first. Neither entry has an absolute reference; the 17 callers, all
+passing layer 6, are the handlers below.
+
+**The handlers.** Each is referenced once, at its `.rdata` record's `+4`, and runs only from the
+heap copy (*`0x512344` — the order-descriptor array*). The action is the record's rank there
+[INFERRED from the comparator and the registrations; not read live]. The spray starts at
+`0x43E400` of the order's owner `order+0xE`, except in SelfRepair, where it starts at the
+repairer `order+0x16`: that order belongs to the aircraft being repaired, and VTOL_Landing
+`0x4118E0` makes it with the landing pad as its target (`0x411EBF..0x411EE1`, the only reference
+to "SELFREPAIR", `0x411ECF`).
+
+| Handler | Order (action) | Emits at | Box | Emits when | Runs every |
+|---|---|---|---|---|---|
+| `0x402430` | SelfRepair (`0x28`) | `0x4025AE` | A of the aircraft | the step `0x41BD10` at `0x402518` returned 1 | tick |
+| `0x402640` | BuildingBuild (`0x0C`) | `0x402ABD` | A of the nanoframe `order+0x16` | `0x41BA60` at `0x402A09` returned 1 | tick |
+| `0x403A20` | MobileBuild (`0x19`) | `0x403ECC` | B of the target | `0x41BA60` at `0x403E43` | tick |
+| `0x403F70` | HelpBuild (`0x17`) | `0x4041C2` | B | `0x41BA60` at `0x404139` | tick |
+| `0x413D80` | VTOL_MobileBuild (`0x36`) | `0x4142B6` | B | `0x41BA60` at `0x414235` | tick |
+| `0x414380` | VTOL_HelpBuild (`0x33`) | `0x4146D7` | B | `0x41BA60` at `0x414656` | tick |
+| `0x405300` | RepairUnit (`0x23`) | `0x4056D1` | A of the target | `0x41BD10` at `0x40561A` | tick |
+| `0x405740` | RepairUnitNoMove (`0x24`) | `0x4058F6` | A | `0x41BD10` at `0x40583F` | tick |
+| `0x414E70` | VTOL_RepairUnit (`0x3D`) | `0x4151EC` | A | state 2 with event bit `0x40` clear, the target's `+0x110 & 3` = 1 and `& 0xC` = 0, and its HP below the def's `+0x1FA`; `0x41BD10`'s result at `0x41513D` is never tested | tick |
+| `0x404DB0` | Resurrect (`0x25`) | `0x40509D` | F | state 4, the feature still present, the countdown `order+0x3A` nonzero before its decrement | tick |
+| `0x404270` | Capture (`0x0E`) | `0x404676` | A of the target | state 4, `order+0x36` below `order+0x3A` | 2 ticks |
+| `0x404730` | ReclaimUnit (`0x21`) | `0x404A4E` | A | in range, and `0x489960` at `0x404961` | 2 ticks |
+| `0x414A80` | VTOL_ReclaimUnit (`0x3B`) | `0x414C43` | A | in range, and `0x489960` at `0x414B6D` | 2 ticks |
+| `0x404AD0` | Reclaim (`0x20`) | `0x404D3B` and `0x404D4C`, the same arguments | F | the feature present, the countdown `order+0x36` above 15 after −2 | 2 ticks |
+| `0x414770` | VTOL_Reclaim (`0x3A`) | `0x414A20` and `0x414A31` | F | the same, above 30 | 2 ticks |
+
+The first ten sites call the forward emitter, the last seven the reverse one. With P the
+target's position `+0x6A/+0x6E/+0x72` and D its def's dwords `+0x15E..+0x172`, box A is
+`{Px+D15E, Py, Pz+D166, Px+D16A, Py+D16E, Pz+D172}`, B is A with the lower y `Py+D162`, and F is
+the feature's: the grid words `0x421DA0` wrote, shifted by 20, the feature def's footprint
+`+0x94`/`+0x96` and height `+0xFA`, and the ground height `0x485070`. `0x43E400` is called 15
+times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9`).
+
+- **Where a handler can emit.** Handlers are called at exactly three places, each with
+  `(order+0xE, order, events)` and the raw type byte as the index: `0x43B87C` in the main-list
+  controller `0x43B7C0`, which runs the head of `unit+0x5C`, re-reads it after every call and
+  passes the fired events `(order+0x4E | unit+0xBA) & order+6`; `0x43BB21` in `0x43BAD0`, which
+  walks the sub list `+0x60` and passes 0; and `0x43A21A` in the order node's destructor
+  `0x43A1F0`, which passes 2. The two controllers have one caller each, `0x48AF98` and `0x48AF9E`
+  in the unit tick, behind the gate that the unit's owner record be active and of type 1 or 2
+  (`0x48AEB5..0x48AECD`). None of the fifteen records has flag `0x40000`, so these orders always
+  live on the main list and only `0x43B87C` runs them: **an emission happens only in the unit
+  tick on the game thread, for a unit whose owner is a local seat (type 1 or 2).**
+- **The destructor cannot emit.** `0x43A1F0` has twelve callers (`0x4384E4`, `0x439EF3`,
+  `0x439F5F`, `0x439FC9`, `0x43AE47`, `0x43AEB8`, `0x43B075`, `0x43B1C9`, `0x43B93B`, `0x43BA5B`,
+  `0x43BBE6`, `0x43BC49`) and no vtable entry; it calls the handler only when `order+6` has bit
+  `0x02` (`0x43A1F5..0x43A200`). BuildingBuild, MobileBuild, HelpBuild, VTOL_MobileBuild and
+  VTOL_HelpBuild return on event 2 before their emitter, and they are the only handlers that set
+  that bit; the other ten would reach their emitter on event 2, and never set it.
+- **What the destructor does instead.** BuildingBuild's event-2 cleanup (`0x402653..0x402723`)
+  credits `unit+0xD4`, calls `0x41B8D0(builder, nanoframe)` and deals the unfinished nanoframe
+  `0x489BB0(builder, nanoframe, 30000, 9, 0)` (`0x402701`), then `0x48B090` and `0x41C150`; the
+  other four build handlers call `0x41C110`. The destructor itself starts COB `StopBuilding` on
+  the owner when `order+0x42` has bit `0x400000` (`0x43A21E..0x43A25D`; `0x438590` sets the bit
+  after starting `StartBuilding`, `0x4385F0` clears it) and broadcasts it (`0x43A258`). All of
+  this runs wherever the destructor runs: unit death, player commands, the AI's orders, an attach,
+  the level teardown, and `0x43AFC0` with shift 0, which reaches `0x43ADC0` with queue 0 and
+  destroys the unit's main-list nodes without flag 4 (`0x43AE0A..0x43AE59`). So a new order given
+  to a factory mid-build kills its nanoframe.
+- **Handler calls nest.** BuildingBuild, MobileBuild and VTOL_MobileBuild send `getbuilt` to the
+  new nanoframe through `0x43ADC0` (`0x4029A5`, `0x403DC5`, `0x4140F3`), which destroys that
+  unit's leading nodes with flag `0x4000`; an attach, `0x48AAC0` → `0x48AB70` → `0x4384A0`, clears
+  the child's main list. Attribution by a single "current unit" set around `0x43B87C` would be
+  wrong; each call's own first argument, kept as a stack, is not.
+- **Cadence.** `0x43B7C0` runs once per unit per tick. The build and repair states, SelfRepair
+  and Resurrect re-arm with `0x439E80(order, 1)`, capture and the reclaims with
+  `0x439E80(order, 2)`. At a factory's unit turnover the states chain inside one controller call
+  (state 3 returns 1, state 4 returns 0, state 0 with units left returns 1, state 2 creates the
+  next nanoframe and returns 1), so two emissions in one tick are possible [the chain DIS; how
+  often INFERRED]. VTOL_MobileBuild's state 3 falls into state 4's build code (`0x414143 jmp
+  0x414149`), so a VTOL builder steps and sprays from both.
+- **The steps.** `0x41BA60(builder, target, work)` returns 1 only for work > 0 when the request
+  `0x4011C0` on the builder's ledger `+0xBC` succeeds; it then raises the target's HP `+0x108`
+  toward the def's `+0x1FA`, lowers its remaining fraction `+0x104` and sets `+0x110` bit
+  `0x2000`. It returns 0 when `+0x104` is already 0.0, when work is 0, when the request fails
+  (nothing applied), and on the unbuild path (work < 0, from `0x41BCD0`, which GetBuilt calls at
+  `0x402F6B`), which applies progress in reverse. `0x41BD10(repairer, target, work)` returns 0
+  at or above the target def's max HP (`0x41BD33`); otherwise it caps both the HP to add and the
+  energy to ask at 1 a call (`0x41BD87..0x41BDA3`), asks `0x401180` on the repairer's ledger and,
+  when that succeeds, applies `0x489BB0(repairer, target, hp, 0xA, 0)` and returns 1. `0x489960`
+  (thiscall, `ret 4`, writes nothing) is an eligibility test, not a step: the reclaimer's def
+  `+0x245` bit `0x400`, the target's `+0x110 & 3` ≠ 2 and its def's `+0x245` bit `0x1000` clear
+  (`0x489960..0x48999E`). ReclaimUnit's progress is a kind-5 hit `0x489BB0` once `order+0x3A`
+  reaches 15 (it grows by 2 a call), and it does not gate the spray.
+- **The ledger** `unit+0xBC` is 0x34 bytes: an energy group at `+0` and a metal group at `+0x18`,
+  each {produced, requested, granted, unpaid debt, last produced, last requested} [names
+  INFERRED], and the owner record at `+0x30` (`0x401070`). `0x4011C0(e, m)` (thiscall on the
+  ledger, `ret 8`) always adds the request to `+0x04`/`+0x1C`, returns 0 while either debt
+  `+0x0C`/`+0x24` is above 0.0, and otherwise adds it to the granted `+0x08`/`+0x20` and returns 1;
+  it never reads stored resources. The economy pass settles the debts (`0x401877..0x401B99`), for
+  type-1/2 records only, so a stalled owner's builders fail every request until a later pass pays.
+  For the eight step-gated sites, "sprayed this tick" is therefore "the step returned 1 this
+  tick"; VTOL_RepairUnit, capture, the reclaims and resurrect spray with no resource condition
+  while their state gates hold.
+- **Other writes around the spray.** The handlers stamp the unit's `+0xB0` with GameTime + 150
+  (the repairs: `0x4024E1`, `0x4055E9`, `0x40580E`), + 300 (MobileBuild `0x403EE2`, HelpBuild
+  `0x4041D8`, Reclaim `0x404CAC`, Resurrect `0x4050B7`, VTOL_Reclaim `0x414991`) or + 900 (Capture
+  `0x404692`, ReclaimUnit `0x4049A3`); the shot path `0x49C740` stamps + 600. Its reader is not
+  traced.
+- **`0x43E400(unit, out)`** (stdcall, `ret 8`) runs COB `QueryNanoPiece` (`0x5052D4`) through
+  `0x4B0BC0` on `unit+0x9A` (`0x43E427`) with the piece preset to 0, turns the piece into a
+  model-space point with `0x43DEF0` (`0x43E437`) and adds the unit's `+0x6A/+0x6E/+0x72`. It writes
+  only `out` (`0x43E458..0x43E45D`) and the query's own COB thread record. With no script, all
+  eight thread records busy, a null `+0x9E` or a piece out of range, the point is the unit's
+  origin. The query runs where the handler runs, on the owner's machine [INFERRED: a script that
+  alternates pieces through a static answers differently on a puppet].
+
+### COB on a puppet: getter 75, the writers COB reaches, fresh COB [DISASSEMBLED + SOURCE 2026-09-29]
+
+What decision 2 of the [completeness note](tadr-port/demo-recorder-completeness.md#decisions-taken)
+rests on. A puppet's units run their COB as a live remote copy's do: the unit tick admits type-3
+records and runs `DoScriptsNow(1)` for every unit with `+0x9A` (`0x48ADDF..0x48ADEB`), while
+AutoAim and the local block (orders, movement, regeneration) run only for types 1 and 2
+(`0x48ADC9..0x48ADDA`, `0x48AEB5..0x48AECD`). What the supported mods do with getter 75 is in the
+[state design evidence](tadr-port/demo-recorder-state-evidence.md).
+
+- **Getter 75 is the only machine-dependent getter.** Impure's `cob_get` (the E9 at `0x480770`,
+  `tagpu_patches.c`) answers 1 exactly when the queried unit's owner record has `+0x73` of 1 or 2,
+  the engine's own "simulated here" test (AutoAim `0x48ADCE`, the local block `0x48AEC4`, the
+  `0x11` sender `0x48B1C0`); unlike those gates it does not test that the record is active. It
+  bounds the id by `u16 main+0x14351` and requires the live bit, `+0xA8` = id and the owner byte
+  `+0xFF` below 10. `+0xFF` is stored only by the level init `0x4854A0` (`0x485880`, `0x48590E`):
+  no other byte store reaches it, and the word stores at `+0xFE` are to player records, feature
+  defs and a parser, never a unit. No getter, stock or Impure's, reads the controlled or viewed
+  player, the network bit, the game type, GameTime or the sim RNG; the only player-record bytes
+  any reads are `+0x73` (75) and the alliance row `+0x108` (74). On a puppet every seat is type 3,
+  so 75 answers 0 for every unit, as every live peer does for a unit it does not simulate
+  (MEASURED on two Wine peers in all five supported mods, [cob.md](tadr-port/cob.md)).
+- **Where getters run.** Inside the runner `0x4B0DA0`: `GET_UNIT_VALUE` calls `vt+0x44` at
+  `0x4B160F`, `GET` at `0x4B1678`. The runner is reached from `DoScriptsNow 0x4B0D60` (the unit
+  tick, `0x48ADEB`), from a start with run-now set (`0x4B09D9` in `0x4B0940`, `0x4B0B97` in
+  `0x4B0B00`) and from the synchronous query `0x4B0C40` (`0x4B0CE1`). Every create runs Create
+  with run-now set (`0x485D40`: `push 1` at `0x485DDD`, the call at `0x485DE6`; called from
+  `0x4860A6` in the create `0x485F50` and `0x4862BE` in CreateFromNetwork `0x4861D0`), so Create's
+  first slice, and any getter in it, runs inside the create: on the game thread in play, and on
+  the loader thread while the level load creates units (`0x497963`, `0x497ACD`, `0x4977BB`,
+  `0x497B29`, `0x497B40` in the loader body `0x497180`).
+- **The COB-to-engine writers.** SET, `vt+0x40` = `0x480B20`, maps `id − 1` through the byte
+  table `0x480C18`: ACTIVATION → `0x48B090(unit, 1, v)` (`0x480B52`); INBUILDSTANCE, BUSY and
+  BUGGER_OFF → `+0x10F` bits 0, 1 and 3; YARD_OPEN → `0x47DAC0(unit, v)` (`0x480BAE`); ARMORED →
+  `0x48B090(unit, 2, v)` (`0x480BEC`); every id, known or not, sets `+0xBA` bit 2. ATTACH,
+  `vt+0x38` = `0x481340`, and DROP, `vt+0x3C` = `0x4813B0`, call `0x48AAC0` (`0x4813A6`,
+  `0x481422`), which has no owner test: it sends a `0x0A` from the DirectPlay id `0x44FDB0`
+  returns (the first active type-1/2 record) and applies it locally through `0x48AB70`
+  (`0x48AB58`, `0x48AB62`). EXPLODE, `vt+0x34` = `0x481140`, without flag `0x20` draws the sim RNG
+  six times and spawns debris `0x421620` (`0x48116F..0x4811B9`, `0x48123C`); its flag bits 8..13
+  add explosions through `0x420A30`. EMIT_SFX, `vt+0x30` = `0x480EB0`, emits particles only, and
+  only when the unit is in the viewed player's sight (`0x465AC0`, `0x480EC5..0x480EEC`).
+  PLAY_SOUND `0x10072000` kills its own thread (`0x4B1B60`).
+- **`0x48B090(mask, value)`** (thiscall on the unit, `ret 8`) stores the new `+0x10E` and returns
+  at once when the byte did not change (`0x48B0D6..0x48B0DE`). A change starts Activate or
+  Deactivate (bit 0) or StartBuilding or StopBuilding (bit 3) with run-now clear (`0x48B106`,
+  `0x48B12B`, `0x48B14E`, `0x48B169`), calls `0x47F780` for bits 0 and 2, then `0x41C110`, and
+  sends `0x11` only for an active owner of type 1 or 2 (`0x48B1B5..0x48B1F3`). `0x47F780(unit,
+  kind, 0)` acts only for a live unit of the viewed player and queues a status line through
+  `0x47FAD0` (table `0x5086E8`). Whether it reaches the sound entry `0x47F0C0` is open: no direct
+  call was found, and `0x47F0C0`'s callers are `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`.
+- **A remote copy takes `+0x10E` only through `0x48B090`**, called twice (set the byte's bits,
+  clear the rest) by the `0x11` receiver (`0x4555A1`, `0x4555B0`) and the round robin
+  (`0x48B4F6..0x48B519`). Neither carries `+0x10F`, so a remote copy's `+0x10F` comes only from
+  its own COB.
+- **COB never reaches the script-start broadcasters.** `0x456190`, `0x456200` and `0x456290` send
+  a `0x10` and start nothing locally. Their only callers are five engine sites, each right after
+  the matching local start: `0x4385D7` (StartBuilding, in `0x438590`), `0x438632` (StopBuilding,
+  in `0x4385F0`), `0x43A258` (StopBuilding, in the order destructor), `0x411403` (BeginTransport)
+  and `0x49E3A6` (the Aim scripts, in AutoAim). START (`0x4B18BB`) and CALL (`0x4B1928`) call only
+  the allocator `0x4B08C0`, which calls nothing, and so does Impure's guarded step that replaces
+  them: a start a script issues is never broadcast, and runs again on each copy from its parent.
+- **Stock runs COB queries on remote units** in three places, with no owner gate: the `0x0D`
+  receiver `0x49D270` on the branch where the weapon def's `+0x111` bit 5 is clear (the shooter
+  from `msg+0x21`, through `0x49C740` to `Query<w>` at `0x43E227`, beside the `Fire*` and
+  `RockUnit` starts); CreateFromNetwork `0x4861D0` → `0x49E070` (`Query<w>`, `AimFrom<w>` and the
+  start of `SetMaxReloadTime`), reached when a `0x2C` finds a slot of another type (`0x48BA00`),
+  from the round robin (`0x48B497`) and from the dispatcher (`0x4553E4`); and the Killed query
+  `0x4865C3` in `Send_UnitDeath 0x4864B0`, reached by the reaper `0x48AFD1`, CreateFromNetwork's
+  replacement `0x486244` and kill-all `0x486FB4`. Every other query site is local-only.
+- **Only a create gives fresh COB.** `0x485D40` has three callers: `0x4860A6` (the create
+  `0x485F50`), `0x4862BE` (CreateFromNetwork) and `0x485EFE` (in the uncalled `0x485E90`). The
+  destructor frees the old object through `[vt+0x50](1)` = `0x485E30` (`0x486D86..0x486D8D`), and
+  the mover install `0x485E50` touches only the mover and the heading. A seat flipped in place
+  keeps its units' COB threads and statics, and a thread keeps the branch it took on a getter-75
+  answer until it tests again. A create reads `+0x73` twice: Create's first slice (getter 75) and
+  `0x43DC00`'s mover choice (`0x43DC48..0x43DC53`: proxy movers `0x490940`/`0x44F570`, local
+  movers `0x4907E0`/`0x44F010`).
+- **The sim RNG is per machine.** COB RAND pushes `lo + 0x4B6C30(hi − lo + 1)`
+  (`0x4B15BD..0x4B15F2`). `0x4B6C30` steps Park–Miller on `0x51FC88`, which the loader body seeds
+  once per level from `QueryPerformanceCounter` (`0x49718C..0x49719D`, stored as
+  `(seed ^ 0x66E29572) | 1` at `0x4B6CAB`); `0x51FC88`'s only stores are `0x4B6C87` and
+  `0x4B6CAB`. A type-3 seat has no `0x5119C0` object (the player init skips it,
+  `0x46489D..0x4648A5`), so a puppet also draws less often than the live game did.
 
 
 
@@ -1001,7 +1275,9 @@ the sender's block.
 **The `0x2C` stream.** `0x48B920` reads `[8] code, [16] size, [32] GameTime` (the bit reader
 `0x415DC0(nbits)`, thiscall `ret 4`, ecx the reader `{u32* buf, u32 dword_idx, u32 bit_idx}`), then a
 dirty list of `[16] delta, [typeBits] type` (typeBits `main+0x14393`) and the move class's payload
-(capped 0x200 bytes at `0x48B7F6`), a `[16] 0xFFFF` terminator, and one round-robin full-state entry
+(the writer ends the list once the message holds 0x200 bytes, a test made after each entry is
+written, `0x48B7E5..0x48B7FB`, so the last entry, the terminator and the round-robin entry can take a
+message past 0x200), a `[16] 0xFFFF` terminator, and one round-robin full-state entry
 for slot `GameTime % N` (`0x48B3F0`). A dirty entry whose type differs from its slot creates the unit
 (`0x48BA00 → 0x4861D0`, returning to `0x48BA05`); the round robin creates at `0x48B497` (returning
 to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves the mover `[esi]` at
@@ -1211,7 +1487,8 @@ at `0x48605D` (`test esi,esi`), the take, which writes the type at `0x486086`; a
 `0x486040`, the step: `test dx,dx` ends a requested index there (`jne 0x4861BD`, which returns NULL
 like `0x486053`), and otherwise the next slot is tried while it is at most `[player+0x6B]`
 (`0x486049..0x486051`). Its arg 8 is a requested index: then only that slot is
-tried. All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
+tried, and only when it lies inside the owner's block `[+0x67, +0x6B]` (`0x486026..0x486030`, NULL
+otherwise). All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
 index. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
 (`0x485F7C`), a type without def `+0x241` bit `0x800000` (`0x485FAA`) and a type at its own
 limit, def `+0x15A` (`0x485FE4`). **Its callers and NULL**: the four factory and build callers
@@ -1233,9 +1510,16 @@ decrements, and on reaching −1 it fires (`0x4651A4`). A fire with `ActiveComma
 (`main+0x37EF6`) at 2 creates a unit of a type named in the side's record (`0x488B10`)
 [INFERRED: the side's commander] for the controlled player at a free place: up to 9999 random
 points (`0x465236`), each tested over a 3 × 3 block of cells (`0x47DB70`); at any other value it
-goes to `0x465643`, which sets the player's options bit `0x40` (`0x46569D`, the bit `0x465154`
-tests, so the path stops) or the game-over bits of `main+0x3923B` (`0x46582E`) [INFERRED: the
-player is out]. Mode 2 is "Deathmatch" (the in-game options label, `0x45F279`), reachable from the
+goes to `0x465643`. That acts only in a network game (`0x435100` = 3, `0x465643..0x465651`), for
+a record whose `+0x22` is 0, and when the seat `0x456850` names has PlayerInfo `+0x9B` bit `0x80`
+or `0x457BC0` answers above 0 (`0x465657..0x465694`); it sets the player's PlayerInfo `+0x9B` bit
+`0x40` (`0x46569D`, the bit `0x465154` tests, so the path stops; the radar pass shows a viewer with
+it every unit, `0x4674E4`). For the controlled player it then clears LosType bits 0 and 1
+(`0x4656B5`, `0x4656C5`), calls `0x4816A0(1)` (`0x4656CE`) and `0x450F90`, and shows "You're out!
+Continue Watching?" (`0x507318`, pushed at `0x465763`) when `0x457BC0` answers 0, else the
+hosting-AI watch notice (`0x507338`, `0x4657FE`) when `0x457CB0` answers above 0. A record that
+fails any of the three tests goes to the game-over bits of `main+0x3923B` (`0x46582E`). Mode 2 is
+"Deathmatch" (the in-game options label, `0x45F279`), reachable from the
 multiplayer battle room, whose button cycles 0 → 1 → 2 → 0 (`0x448504..0x448546`, the options
 word's bits 11–12), and not from the skirmish screen, whose toggle is `xor [options+0x108],1`
 (`0x47B690`). **The countdown's readers and writers**: set to `0xFFFF` at a level's entry
@@ -1244,9 +1528,22 @@ bits of `main+0x3923B` at their fire, `0x4650F3..0x465118` (a campaign, behind `
 `0x465881..0x4658A6` (behind `0x490230`, campaign or not); a copy after the loop
 (`0x4655E8..0x465610`, a network game whose `ActiveCommanderDeath` is not 2, behind `0x457CB0`)
 [INFERRED: the end of a network game]; and **`0x46554F`**, on every
-player's pass, which calls `0x401360(player)` for a local player only while the countdown is below
-0 and `main+0x3923B` bit 2 is clear — `0x401360` zeroes the player's `+0xA4`/`+0xA8` and adds up
-each live unit's production [INFERRED: the economy's per-pass sum]. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
+player's 30-tick pass, before the economy pass `0x401360(player)` at `0x46555A`, its only call (no
+stored pointer). The call is made for a record with a nonzero first dword, `+0x73` 1–3 and `+0x146`
+≠ 10 (`0x465508..0x465523`), not for one with no live units that has created some (`+0x144` = 0,
+`+0x140` ≠ 0; `0x465525..0x465537`), for `+0x73` 1 or 2 only (`0x465539..0x46553F`), while
+`main+0x3923B` bit 2 is clear (`0x465546`) and while the countdown is below 0 (`0x46554F`).
+`0x401360` zeroes the storage maxima `+0xA4`/`+0xA8` (`0x40137D`, `0x401383`) and re-sums them
+from each live, finished unit's (`+0x104` = 0.0, `0x4016C5..0x4016D6`) def `+0x1E2` (energy) and
+`+0x1E6` (metal) (`0x4017A1..0x4017C5`), folds in
+the `+0xEC` record (`0x40190E..0x40193D`), adds the base storage `+0xDC`/`+0xE0` only while
+`+0x149` bit 0 is set (`0x401941`, `0x401988..0x4019AA`), writes production and expense
+`+0x90`/`+0x94`/`+0x9C`/`+0xA0` and adds them to the totals `+0xAC`/`+0xBC`/`+0xB4`/`+0xC4`
+(`0x4019C6..0x401A3D`), adds production to current (`0x401A1D`, `0x401A25`), subtracts the
+consumption up to what there is, keeping the fraction met per resource (`0x401A4D..0x401AB1`), and
+clamps `+0x8C`/`+0x98` to storage, the excess into wasted `+0xCC`/`+0xD4`
+(`0x401AB3..0x401B27`). A type-2 player's income is scaled there by the difficulty
+`main+0x37EEE` (behind `0x401435`, eight reads `0x401441..0x40175E`). The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
 records in DPID order in a network game**: `0x485842` sorts the ten record pointers on `+4` when
 `0x435100` answers 3 (otherwise on the pointer itself), and `0x4858BD` gives the k-th of the sorted
 list the block `1 + k·N` (`+0x67`, and its last slot at `+0x6B`, `0x4858E0`), so record k owns
@@ -1337,8 +1634,8 @@ of the table after the generic state store `0x490B3D`). Its flags are the word `
 |---|---|---|---|
 | 0 (`1`) | `0x49832D`, the first call | `0x49847E` (with `+0x38D6F..+0x38D76`) | the load has started |
 | 1 (`2`) | `0x497C62`, the loader's **last store** before it returns | `0x49847E` | the loader is done |
-| 2 (`4`) | `0x4975CA`, the loader after the level init | `0x49855D` (and `0x49686E` in the frame function), the game thread | this peer has loaded |
-| 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x49847E` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time |
+| 2 (`4`) | `0x4975CA`, the loader after the level init, in a network game only (`0x435100` = 3 at `0x4975AB..0x4975B3`; any other type goes to `0x4978DA`) | `0x49855D` (and `0x49686E` in the frame function), the game thread | this peer has loaded |
+| 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x49847E` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time, on the same network-only path as bit 2 |
 
 **Who passes the barrier last** [MEASURED 2026-09-26, three peers, Town & Country]. A peer frozen
 (SIGSTOP) at the barrier with bit 2 set holds every other peer at bit 2 too (`0x0005` on both
@@ -1447,6 +1744,19 @@ local ones. `[vt+0x1C]` says whether the unit is dirty, `[vt+0x20]` writes its p
 | `0x4FD9B0` | local air mover | `0x4908B0` | `0x4908C0` | `0x44EFD0` |
 | `0x4FD9E0` | remote air proxy | never | nothing | `0x490A10` |
 
+The step `[vt+0x08]` is what the movement pass `0x43DD20` (thiscall on the move object, the unit
+as its argument, `ret 4`) calls first, at `0x43DD28`, before `0x43D290` (def `+0x241` bit 11) or
+`0x43CD20`, then `0x43D6D0`, `0x43DA70` (the `StartMoving`/`StopMoving` and `MoveRate*` starts,
+`0x43DAF2`, `0x43DB27`) and `0x43DB50`. The steps are `0x44EFB0` for the base and the remote ground
+proxy — a bare `ret` — `0x44F1A0` for the local ground mover, `0x490690` for the air base and the
+remote air proxy, and `0x490880` for the local air mover (the vtables' `+8` dwords).
+`0x43DD20`'s only callers are the unit tick's `0x48AFAA`, for a local owner, and the `0x2C`
+receiver's block sweep `0x48BA46`, so a remote unit steps only when its owner's `0x2C` arrives
+[DISASSEMBLED 2026-09-28]. The local ground mover is dirty (`0x44F480`) while its `+0x64` bit 3 is
+set or its `+0x64` bit 2 differs from the move object's `+0x2E` bit 2; the path writers set bit 3
+(`0x44F0B3`, `0x44F0F1`, `0x44F142`, `0x44F235`, `0x44F441`), and the payload writer `0x44F4A0`
+clears it and copies bit 2 once it has written (`0x44F54A..0x44F55C`).
+
 **The payloads, and where a position lands.** The bit reader is `0x415DC0` (`{dwords, word, bit}`,
 least significant bit first; a read that ends on a word boundary still loads the next dword, masked
 to nothing), the writer `0x415C10`.
@@ -1470,7 +1780,7 @@ to nothing), the writer `0x415C10`.
   (`0x44F650`, its `[vt+0x0C]`) [INFERRED: as the unit's path].
 - **Air** (`0x4908C0` → `0x490A10`): a 2-bit selector, the sub-object's type (`[vt+0x08]`) 2 → 1,
   3 → 2, none → 0; then that sub-object's own payload (`[vt+0x28]`), then 2 bits of the move object's
-  `+0x2E`. The proxy's `0x490690` (its `[vt+0x08]`) [INFERRED: the per-tick step] asks the sub-object for its point (`[vt+0x20]`, at
+  `+0x2E`. The proxy's step `0x490690` (its `[vt+0x08]`, above) asks the sub-object for its point (`[vt+0x20]`, at
   `0x4906B8`) into its own `+0xC` — the point the unit is steered to (`0x490650`, its `[vt+0x10]`,
   hands out `+0xC` and the velocity `+0x18`).
   - selector 2, type 3 (`0x2C` bytes, vtable `0x4FD3F8`; `0x44E930` → `0x44E9C0`): one flag bit, x,
@@ -3423,7 +3733,7 @@ build:
 ### The saved-game loader's order fallback — `0x43A58D` [DISASSEMBLED 2026-09-25]
 
 **The walk.** The order loader `0x43A420` has one caller, `0x487594`. It takes an order's type
-from its `<key>_name` (`0x43C6B0`, then a `strcmp` against the table). A name not found goes to
+from its `<key>_name` (`0x43C6B0`, then a case-insensitive `_stricmp 0x4F8A70` against the table). A name not found goes to
 `0x43A552`, "Ready", with `dl` = 0. A record without the name falls back to its stored index. It
 walks the order table `0x512344` counting records whose `+0x14` bit 0 is clear
 (`0x43A556..0x43A58F`).
@@ -3681,12 +3991,15 @@ within 2 s.
 
 ### Stacked aircraft in area damage — `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` [DISASSEMBLED + MEASURED 2026-09-25]
 
-**Slot B.** The stamp `0x47CC30` files a unit by `+0x110 & 3`: 1 in slot A `[cell+0]`, 2 (airborne)
+**Slot B.** The stamp `0x47CC30` tests `+0x110` bit 29 first (`0x47CD5A`): with it set, the unit
+takes slot A `[cell+0]` of the cells its def's yardmap `+0x14E` names (read at `0x47CD82`).
+Otherwise it files the unit by `+0x110 & 3` (`0x47CEBC..0x47CEC2`): 1 in slot A, 2 (airborne)
 in slot B `[cell+2]` through `0x47CF98` (`cmp eax,2; jne 0x47D0D5`, the stamping continuing at
-`0x47CFA1 test edi,edi`); any other value stamps no cell. For each cell of the footprint
+`0x47CFA1 test edi,edi`); any other value stamps no cell. All three paths contest a held cell the
+same way, the slot-A ones at `0x47CDD5` and `0x47CF0B`, slot B's as follows. For each cell of the footprint
 (`0x47CFB3..0x47D042`) an empty slot B takes the unit. A held one is contested at `0x47CFDA`: when
 the incumbent's player record (`+0x96`, dereferenced unconditionally) has a non-zero first dword
-(`0x47CFE0 cmp dword [ecx],0`) and a `+0x73` of 3 [INFERRED: remote], the newcomer takes the cell (`0x47D010..0x47D03A`); otherwise the incumbent keeps it
+(`0x47CFE0 cmp dword [ecx],0`) and a `+0x73` of 3 (remote human), the newcomer takes the cell (`0x47D010..0x47D03A`); otherwise the incumbent keeps it
 (`0x47CFEB..0x47D00E`). Either way the unit left without the cell gets `+0x110` bit 27
 (`0x8000000`) and the holder bit 26 (`0x4000000`). Area damage reads only the two slots of each
 cell (above), and so does the direct-hit test `0x49B090`, so an aircraft no in-rect slot names is
@@ -4278,11 +4591,24 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
 - **A saved game's unit records.** The saver `0x4876C0(file)` has one caller, `0x432A01` in the
   game's save routine, and walks the unit array from `main+0x14357` to `main+0x1435B` in `0x118`
   steps, saving every unit with `+0x110` bit 28 (alive; `0x487701`): one record of `0xB8` bytes
-  built at `[esp+0x18]` and written whole by `0x4B4CF0` (`0x487A9E`), then the count. The restore
+  built at `[esp+0x18]` and written whole by `0x4B4CF0` (`0x487A9E`), then the count. Before each
+  record it writes the unit's COB state under `Script%i` (`0x508C24`; `0x4B1EC0` on `+0x9A`,
+  `0x487711..0x48773D`), each order of `+0x5C` and then of `+0x60` under `u%04xm%04x` (`0x508C30`;
+  `0x43A970`, `0x487742..0x4877C2`), the mover through `0x43DD70` when `unit+0` is set
+  (`0x4877C4..0x4877CD`) and the `+0xBC` sub-object through `0x4010B0` (`0x4877D2..0x4877DA`).
+  `0x43A970` writes an order's record, then its action name and, for a MobileBuild,
+  VTOL_MobileBuild or BuildingBuild order, the type name of `+0x36` when that is in
+  `[1, UNITINFOCount)` (`0x43AAF3..0x43ABD4`) [DISASSEMBLED 2026-09-28]. The restore
   `0x487080(id, file)` (`ret 8`) returns at once when the unit at that id is already alive
   (`0x4870C3`); otherwise it reads records by index into its own `[esp+0x18]` (`0x4B4C80` at
   `0x48711D`, refusing any length but `0xB8`) until the id word `+0x21` matches, and creates the
-  unit (`0x485F50`). Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
+  unit (`0x485F50`). After the create it restores the `+0xBC` sub-object (`0x401110`, `0x487530`),
+  the mover when the record's flag `+0x27` is set (`0x43DE30`, `0x487541`), the record's `+0x23`
+  orders — each built by `0x43A420` into a fresh `0x56`-byte node (`0x48757A..0x487594`) and linked
+  at the tail of `+0x60` when it carries `0x40000`, else of `+0x5C` (`0x48759D..0x4875B8`), outside
+  `0x43ADC0`'s rules — then `0x4388B0` on the `+0x5C` head, which hands its `+0x52` to the mover
+  class's `[vt+4]` (`0x4875C4..0x4875CB`), and the COB state (`0x4B2040`, `0x487600`)
+  [DISASSEMBLED 2026-09-28]. Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
   (at `0x48705B`; itself at `0x432672` in the game-load routine `0x432610`, on the LOADER thread),
   its own recursion for the ids at `+0x89` and `+0x8B` (`0x4871DD`, `0x48720D`), and the order
   restore `0x43A420` (called at `0x487594`) with its helpers `0x44DE80` and `0x44E7D0` (`0x43A5ED`,
@@ -4564,7 +4890,8 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   own `REJECT` (MEASURED once, 2026-09-27); after the host's console `+kill` instead, the third
   peer's copies stood until its own `REJECT`.
 - **The removal runs on whichever thread pumps.** The pump `0x453D40` holds no lock across its
-  dispatch: it tests `main+0x2A44` bit 0, zeroes ten dwords and calls the receive `0x4534E0`
+  dispatch: it tests `main+0x2A44` bit 0 (clear, it returns 0 at once, `0x453D4B..0x453D5C`, so
+  outside a network session no message case runs), zeroes ten dwords and calls the receive `0x4534E0`
   (`0x453D40..0x453D94`), and the cases run on the caller's thread. During a network
   load the loader (`0x49727D`) and the game thread's load loop (`0x49852E`) both run it, and the
   leave case (`0x4550B8..0x4550D5`) tests only the seat record and bits 0 and 1 of
@@ -4919,7 +5246,9 @@ know, for each field the render thread reads, whether it changes per tick, per m
 
 **The two routines that bracket a level.** The teardown cascade `0x491B60` (the one
 `tagpu_reclaim` wraps) frees in this order: `0x485980` the unit array (call at `0x491B95`),
-`0x471DE0` the particle layer table (`0x491B9A`), `0x466AA0` the minimap surfaces (`0x491BAE`),
+`0x471DE0` the particle layer table (`0x491B9A`), `0x464A00` the players' LOS counters, AI
+objects and `+0xEC` records (`0x491BA9` [DISASSEMBLED 2026-09-28]), `0x466AA0` the minimap
+surfaces (`0x491BAE`),
 `0x483DD0` the map (`0x491BB3` — it reaches the feature teardown `0x422170` and frees the tile
 set, tile map, feature map, wreck records and fog descriptor), `0x42DB90` the model templates
 (`0x491C21`), `0x499A80` the projectile array (`0x491C30`). The level load — `LoadGameData_Main
@@ -4940,13 +5269,32 @@ calls `0x4648E0`. `0x464700` frees the block's old buffer (`0x464855`, `0x4B4F20
 rounded size at `+0x88`), stores the pointer at `+0x7C` (`0x46487B`) and zeroes it (`rep stos`
 at `0x46488F`). The image holds one direct call of each (`0x4919C8` for `0x464990`, `0x4649B1`
 for `0x464700`) and no other reference to either address; a call through a table or a register
-is not excluded by that search.
+is not excluded by that search. Before the counters `0x464700` stamps `+0xF0`/`+0xF4`/`+0xF8`
+with GameTime (`0x46470C..0x464765`); zeroes current, production, expense and storage
+`+0x8C..+0xA8`, the six totals and the share limits `+0xE4`/`+0xE8` (`0x46473F..0x4647C5`),
+leaving the base storage `+0xDC`/`+0xE0`; allocates the `0x34`-byte `+0xEC` record when there is
+none (`0x4647CD..0x4647D7`) and resets it through `0x401070(+0x146)` (`0x4647EA`, which zeroes
+its `0x34` bytes and stores at `+0x30` a pointer to the player record of that index,
+`main+0x1B63 + idx·0x14B` (`0x40109B..0x4010A3`), the owner record that `0x464C60` (`0x464D2E`)
+and `0x401260` read back; `0x401070`'s other caller, `0x485D0A`, does the same for a unit's
+`+0xBC` record); clears `+0x149` bit 0 (`0x4647EF`); and zeroes
+`+0xFC`/`+0xFE`/`+0x104`/`+0x106`, setting `+0x100`/`+0x102` to −1 (`0x4647FB..0x46481E`). After
+them it calls `0x480190(player)` (`0x464898`) and, for every record but an active type 3
+(`0x46489D..0x4648A5`), builds the two per-seat AI objects: `0x3D` bytes through `0x408CB0` into
+`+0x74` (`0x4648A7..0x4648C1`) and `0x40B320(+0x146)` (`0x4648CD`) [DISASSEMBLED 2026-09-28]. A
+seat that is to get resources, sight and those objects needs its `+0x73` before `0x464990` runs.
 
-**The LOS counters and MAPPED end at different points** [DISASSEMBLED 2026-09-24, the pristine
-build]. MAPPED (`main+0x14273`) is allocated at `0x483CF6` in `LoadMap` and freed at `0x483E70`
-(`0x4D85A0` on `[main+0x14273]`) by the map-free routine `0x483DD0`, inside the teardown. The
-teardown does **not** free the LOS counters: the block is freed by `0x464700` itself at
-`0x464855`, at the next level's load, and by the player record's destructor. The constructor
+**The LOS counters and MAPPED both end in the teardown, the counters first** [DISASSEMBLED
+2026-09-24 (MAPPED) and 2026-09-28 (the counters), the pristine build]. MAPPED (`main+0x14273`) is allocated at `0x483CF6` in `LoadMap`
+and freed at `0x483E70` (`0x4D85A0` on `[main+0x14273]`) by the map-free routine `0x483DD0`,
+inside the teardown. The teardown frees the LOS counters first: `0x464A00`, whose one caller is
+`0x491BA9` in `0x491B60` (before `0x466AA0` and `0x483DD0`), walks the eleven records
+`main+0x1B63..+0x2851` and for each frees `+0x7C` (`0x464A2D`) and zeroes
+`+0x7C`/`+0x80`/`+0x84`/`+0x88` (`0x464A24..0x464A38`), calls `0x4801F0(record)`, frees the AI
+objects when `+0x74` is set (`0x40B390(+0x146)`, then `0x408F10` and the free, `+0x74` zeroed at
+`0x464A6B`), and frees and nulls `+0xEC` (`0x464A6E..0x464A7E`) [DISASSEMBLED 2026-09-28].
+`0x464700` frees whatever `+0x7C` holds at the next level's load (`0x464855`), and the player
+record's destructor frees it too. The constructor
 `0x463BE0` zeroes `[this]`, `+0x73`, `+0x80`/`+0x84`/`+0x88` and `+0x7C`, and allocates `0xB9`
 bytes into `+0x27` (zeroed with `rep stos`); it is called at `0x41D98B`, a loop of eleven (`ebx =
 0xB`) over the records from `main+0x1B63` at stride `0x14B`, and at `0x454436` on a stack-local
@@ -4954,8 +5302,8 @@ record at `[esp+0x2E0]`. The destructor `0x463C40` frees `[this+0x27]` and `[thi
 `0x4B4F20` and nulls neither; its two calls, `0x454538` and `0x454607`, destroy that stack-local
 record, whose `+0x7C` the constructor zeroed and `0x464700` (whose one caller walks `main`'s
 records) never fills. So the local player's counters, which the builder `0x4843C0` and
-`tagpu_fogwide` read (`0x4843F0`, the block at `main+0x1B63+id*0x14B+0x7C`), live from one level's
-load to the next, and MAPPED from the map load to the teardown: every in-play draw falls inside
+`tagpu_fogwide` read (`0x4843F0`, the block at `main+0x1B63+id*0x14B+0x7C`), live from the level's
+load to its teardown, and MAPPED from the map load to the teardown: every in-play draw falls inside
 both. `tagpu_fogwide` reads them from inside every in-play draw, at the fog site or, on the
 Vulkan renderer, in the publisher's `after` (gpu-status §2.3e).
 
@@ -5570,8 +5918,10 @@ search to run is `grep 37e3f`, unanchored.* It is a display memo, not sim state.
 `PlayerAryIndex` *[INFERRED name]*; it read **0x00** for player 0 (MEASURED 2026-09-23, the memo
 read back after a draw). p is used unbounded. **Every writer of `+0x146` stores 0..10**
 [DISASSEMBLED 2026-09-23, two landing reviewers independently]: `0x463C05` the constant 10 (the
-player constructor), `0x4453F0` / `0x445565` / `0x44A8F6` a compacted index of the active
-players or 10 for an absent one, `0x46434D` a setup index (with `+0x147`/`+0x148`) — so 10 is
+player constructor), `0x44541C` / `0x445565` / `0x44A8F6` the record's own slot or 10 for an
+absent one (each loop counts every record, `inc ebx` at `0x44543C`, `0x445585`, `0x44A916`, and
+stores at `0x445426`, `0x44556F`, `0x44A900` [DISASSEMBLED 2026-09-28]), `0x46434D` the slot
+`0x464290` is called for (with `+0x147`/`+0x148`) — so 10 is
 "no player", and a byte outside 0..10 is one the block never computes. Bytes 1..4 ARE read
 from it — `flds 0x79(%esp)` at `0x468E7B`, before byte 0 is written — and are the displayed
 number's animation state: `0x468E83`/`0x468E90` convert the old and new values and `0x468E9F`/
@@ -6160,19 +6510,34 @@ disagreements — `git log` "Three things the live bring-up found".]
 
 `0x512344` begin, `0x512348` end, `0x51234C` capacity: a vector of **25-byte** records, all
 three zeroed by the constructor at `0x438450` and freed at `0x438480` through `0x4B4F20`. A
-lookup by name walks it with `strcmp 0x4F8A70` against the pointer at `record+0x15`
+lookup by name walks it with `_stricmp 0x4F8A70`, case-insensitive, against the pointer at `record+0x15`
 (`0x4387A9`, `0x4387E4`), which is what fixes both the stride and that last field.
+
+**How it is filled** [DISASSEMBLED 2026-09-29]. `0x43C050`, called once from `0x491200`
+(`0x49136E`), appends the record at `0x4FD288` (empty name, status "Ready", handler `0x439EA0`,
+which returns 5) and then runs the three registrations `0x43BC90(src, count)`, in this order
+(`0x43C325..0x43C334`): `0x4FC6E8` (22 records, called at `0x406BF7`), `0x4FCA18` (22,
+`0x415B27`) and `0x4FC490` (23, `0x403187`). After every append the whole vector is re-sorted by
+name with the comparator `0x43C020`, `_stricmp(a+0x15, b+0x15) < 0`. The 68 records and their case-folded names are fixed for the
+process, so **an order's type byte `+4` is its record's rank in that sorted vector**, not its
+position in `.rdata`: `BuildingBuild` is `0x0C` only because the compare folds case (under a
+case-sensitive compare `BuildWeapon` would come first). The engine reads only these heap copies;
+rewriting a handler dword in `.rdata` after `0x43C050` has run changes nothing.
 
 | Offset | What | Read at |
 | --- | --- | --- |
-| `+0x00..0x0B` | unread by any of the marker paths | — |
+| `+0x00` | `char*` status text ("Ready", "Nanolathing", "Repairing"…); `0x439DF0` returns it, record 0 when a unit has no order | `0x439E13` |
+| `+0x04` | the order's handler, `stdcall(unit, order, events)`, `ret 0xC` — called only from the three dispatch sites (*The nano spray* in the replay section) | `0x43A21A`, `0x43B87C`, `0x43BB21` |
 | `+0x08` | the target-sprite drawer's own address, **never read in this build** | — |
 | `+0x0C` | u32 marker-capability mask (bits per the table above) | `0x439B7D` etc. |
 | `+0x10` | u8 `cursor_ary` index; 0 = this order type draws no sprite | `0x4397F3`, `0x439965` |
-| `+0x15` | `char*` name, for the console lookup | `0x4387A9` |
+| `+0x11` | u32 flags, copied into a new node's `+0x42` (`0x43A18F`); bit `0x40000` puts the order on the sub list `+0x60`, else the main list `+0x5C` (`0x43AC6A`, `0x43ACBA`, `0x43AD19`) | `0x43A17C`, `0x438B9A`, `0x439E34`, `0x43B0C0`, `0x43B149` |
+| `+0x14` | the flags' top byte, read alone | `0x43A56D` |
+| `+0x15` | `char*` name, for the console lookup, the saved game's `<key>_name` and the sort | `0x4387A9` |
 
-The engine indexes this with the raw type byte and no bound at all. With a live end pointer
-in `0x512348` the bound costs two loads, so ours takes it.
+The engine indexes this with the raw type byte and no bound at all, here and at the three
+handler dispatches. With a live end pointer in `0x512348` the bound costs two loads, so ours
+takes it.
 
 ### `0x438C00` — the build-site footprint rect
 
@@ -6654,8 +7019,9 @@ function — so the two can hold different values, and code that reproduces eith
 loop has to use the byte that loop uses.
 
 **`+0x2A42` is the controlled player and `+0x2A43` the viewed one** [DISASSEMBLED 2026-09-25]. The
-two writers are the cheat commands in the table at `0x501D80`: `+Control N` (`0x416AB0`, run level 4)
-writes N to both bytes (`0x416B25`, `0x416B38`), and `+View N` (`0x416B50`, run level 2) writes only
+two writers are cheat commands: `+Control N` (`0x416AB0`, run level 4, entry `0x501FDC` of the
+table `0x501FD0`) writes N to both bytes (`0x416B25`, `0x416B38`), and `+View N` (`0x416B50`, run
+level 2, entry `0x501F60` of the table `0x501F48`) writes only
 `+0x2A43` (`0x416BC1`). The LOS bit test at `0x43EBF4` shifts by `+0x2A43` (`0x43EBE5`). So `+0x2A42`
 is the player whose units the order driver and the selection use, and `+0x2A43` the player whose line
 of sight, fog and bars the screen shows. TADR names them the same way (`tamem.h`:
@@ -6986,11 +7352,22 @@ head to unlink from when the matched order's flag word `+0x42` has `0x40000` (th
 *unlink* head — the walk itself started unconditionally at `+0x5C`), `0x43B05B..0x43B05E`
 unlinks it, `0x43B075 call 0x43A1F0` destructs it, `0x43B07B call 0x4B4F20` frees it, and
 `0x43B087 ret 0x1C` returns **without creating anything**. That is TA's shift-click-a-waypoint-
-to-remove-it behaviour, not a merge.
+to-remove-it behaviour, not a merge. A node matches on its action byte `+4` (`0x43AFF2`), on its
+target `+0x16` only when a target is passed (`0x43AFF7..0x43AFFE`), and on the ±16 wu position test
+below only when a position is passed (`0x43B000`); with no match the seven arguments go unchanged
+to `0x43ADC0` (`0x43B08A..0x43B09D`), which links the order without the wipe below
+[DISASSEMBLED 2026-09-28].
 
-**And `0x43ADC0` wipes the queue on the way in.** `0x43AE02..0x43AE59` walks `unit+0x5C` and
-destroys every existing order that lacks flag bit `0x4` before linking the new one — so with
-`shift = 0` an order REPLACES the unit's orders rather than queueing. The applier's `orders`
+**And `0x43ADC0` wipes the queue on the way in when `shift = 0`.** Only with its `shift`
+argument 0 (`0x43AE02..0x43AE08`) and a new order whose flags `+0x42` lack `0x40` (`0x43AE0E`),
+`0x43AE14..0x43AE59` walks `unit+0x5C` and destroys every existing order that lacks flag bit `0x4`
+before linking the new one — so with `shift = 0` an order REPLACES the unit's orders rather than
+queueing, and with `shift ≠ 0` the wipe is skipped. The link [DISASSEMBLED 2026-09-28,
+`0x43AE5B..0x43AFB1`]: a new order without `0x40000` first drops the leading `+0x5C` orders that
+carry `0x4000`; it gets `0x1`, and `0x2000` when `shift = 0`; an order with `0x20` or `0x40000` goes
+to the head of its list (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`;
+any other goes right after the `+0x5C` order carrying `0x1000`, taking that mark from it, or to the
+tail when none carries it. The applier's `orders`
 array therefore only ever takes effect in its last element; recorded in
 [scenario format](scenario-format.html).
 
@@ -7044,7 +7421,7 @@ so not on ours) [BINARY-VERIFIED]:
 43b01a  sub ebp,[esi+0x2a]     ; minus Pos.Z
 43b01d  add ebp,0x100000
 43b023  cmp ebp,0x200000
-43b029  jbe 0x43b034           ; near enough -> merge
+43b029  jbe 0x43b034           ; near enough -> the match (cancel)
 ```
 
 A tolerance of **±0x100000, which is ±16.0 in 16.16 — one map cell**. In whole world units it
@@ -7064,13 +7441,16 @@ now loops its lane; it had looked like a separate defect and was not.
 **Negative results.** `0x43A1F0` (the order destructor, called at `0x43B075`) and `0x4B4F20`
 (the free, `0x43B07B`) were not chased further. Three bits of the order flag word
 `unit_order+0x42` appear and none is named: `0x40000` picks the `+0x60` unlink head
-(`0x43B034`), `0x10000` is OR-ed in at `0x43B068` when the cancelled order is not the one the
-caller passed, and `0x4` exempts an order from `0x43ADC0`'s wipe. `0x41074A` reads
+(`0x43B034`), `0x10000` is OR-ed in at `0x43B068` when the cancelled order is not the head of
+`unit+0x5C` (the head is kept in the fifth argument's slot, stored at `0x43AFE8`), as `0x43ADC0`'s
+wipe does for every order it destroys but the old head (`0x43AE34..0x43AE3A`), and `0x4` exempts
+an order from `0x43ADC0`'s wipe. `0x41074A` reads
 `order+0x22`/`+0x2A`/`+0x26` and tests each against zero — an "is the position set" check, in
 that order, which is itself consistent with 0 and 2 being the ground plane; what the caller
 does with the answer was not chased. `0x43B0B0` is a **different** function
 that also calls `0x43ADC0` — do not read the `call 0x43adc0` at `0x43B09D` and the one at
-`0x43B120` as the same site.
+`0x43B120` as the same site. It keeps a factory's queue as count nodes (*Replay state design*,
+in the demo recorder section).
 
 ## `0x458DD0` — the blit-time build-state effect — mapped by us
 
@@ -8290,6 +8670,14 @@ HotUnits cull `0x48BAE0`) and `0x495E66` (`DrawGameScreen(1, 1)`, once, at the e
 calls the flip itself. The scenario applier's tick stub lands its `jmp` AT `0x4969D2` while a
 scenario is being applied (`tagpu_scenario.c`, stolen `A1 E8 1D 51 00`): that changes the bytes
 there, not the return address the call pushed, so the gate holds with it installed.
+
+**A paused frame still reaches `0x4969D2`** [DISASSEMBLED 2026-09-28; no paused apply measured
+live]. In `0x496790` the pause tests skip only the tick: the single-player test at
+`0x496920..0x496926` (`IsGamePaused`, `main+0x38A51`) jumps over the tick calls `0x495230` and
+`0x495490` to `0x496969`, and the network branch's test of the same byte at `0x4968AA..0x4968B0`
+also lands at `0x496969`. Every path from there reaches `0x4969CB` and the draw call `0x4969CD`, so
+the scenario applier's stub runs on paused frames too, and its watchdog's "or a paused one" does
+not describe a cause.
 
 **THE SHELL HAS NO DRAWGAMESCREEN CALL, SO IT HAS NO RETURN ADDRESS TO GATE ON — and the flip
 cannot stand in for one [VERIFIED 2026-09-13].** `tagpu_gui_hook` already observes `0x4C63A0`
@@ -10969,7 +11357,7 @@ alive bit (`[esi+0x110] & 0x10000000`) and skips a dead unit. The tail runs, in 
 | **`0x486DCE`** | `and ebp,0xEFFFFFFF` → `[esi+0x110]` | **the alive bit `0x10000000` cleared — after the free** |
 | `0x486DE8` | `and al,0xCF` → `[esi+0x110]` | bits 4 and 5 (selected …) cleared |
 | `0x486DF6` | `mov [esi+0x92],[main+0x1439B]` | the type def reset to a default |
-| `0x486DFC` | `dec word [player+0x144]` | the owner's unit count |
+| `0x486DFC` | `dec word [player+0x144]` | the owner's live-unit count, which both creates increment with the dword `+0x140` (`0x486187`/`0x48619C`, `0x486322`/`0x486338`) |
 
 So a reader that gates on the alive bit sees the object freed while the bit still reads set
 (measured live: dead units logged `st=80284101` with `unit+0x9E` already null). Re-reading
@@ -11017,7 +11405,7 @@ selects the stats through the jump table `0x486E64` (`0x486880..0x486892`, index
 |---|---|---|
 | 1 (a weapon), 6 (a dying transport's cargo) | `0x4868B3` | losses, then kills |
 | 5 (the unit reclaim, `0x404981` and `0x414B8D`) | `0x486899` | as 1, after refusing `+0xF4` of 10 or equal to `+0xFF` |
-| 3 (self-destruct, defeat) | `0x4869F5` | the victim player's losses only (`0x486A33`) |
+| 3 (self-destruct, defeat) | `0x4869F5` | the victim player's losses only (`0x486A33`), and its `+0x106` for a unit of its side's commander type (`0x486A6F..0x486A8C`); nothing when the controlled player's byte `+0x129` + the victim owner's `+0x146` is set (`0x486A03..0x486A31`) [DISASSEMBLED 2026-09-28] |
 | 2, 4 (ownership change), 7..11, 0 | `0x486A98` | nothing |
 
 On the counting path:
@@ -11025,7 +11413,7 @@ On the counting path:
 - `0x4868C1`: the victim's player `+0xFE` (losses) + 1, ungated.
 - `0x4868C8..0x486906`: the killer's player `+0xFC` (kills: `main + idx·0x14B + 0x1C5F`) + 1. Gated on
   `+0xF4 ≠ 10`, **the unit's `+0x104 == 0.0` (`0x4868D3`)**, and `+0xFF ≠ +0xF4`.
-- `0x486915..0x486996`: `strcmp 0x4F8A70` compares the unit's type name with a name at `main+0x37F5F`
+- `0x486915..0x486996`: `_stricmp 0x4F8A70` compares, case-insensitively, the unit's type name with a name at `main+0x37F5F`
   indexed by its player's side [INFERRED: the side's commander]. On a match, the killer's player
   `+0x104` + 1 (`0x486981`) and the victim's player `+0x106` + 1 (`0x486996`).
 - `0x48699D..0x4869CA`: **the unit kill count** — the killer's `+0xB8` + 1, gated on `+0xF0` non-NULL,
@@ -11077,15 +11465,19 @@ owner holds its own value; a copy's value comes from exactly these writers:
     a straight line from `0x405164`; its other paths, no unit linked (`0x405119`, the fall-through of
     the test of the order's link `+0x16` at `0x405117`, before its own `0x47F780` at `0x405121`) and no wreck
     (`0x405155`, return 8), leave the unit as created; and the saved-game restore `0x487080`,
-    HP at `0x4871B5` and `+0x104` at `0x48727C`, after it has restored the units its record names
-    through itself (`0x4871DD`, `0x48720D`) and attached (`0x48AAC0`). The restore is reached only
+    HP at `0x4871B5`, straight after the create, and `+0x104` at `0x48727C`, after it has restored
+    the units its record names through itself (`0x4871DD`, `0x48720D`) and attached (`0x48AAC0`). The restore is reached only
     from a saved game's load (`0x497B29` → `0x432610` → `0x486FD0`) and from itself.
   - **What one local create sends** [DISASSEMBLED 2026-09-26, every direct call from `0x485F50`
     followed]. Every NULL return (the jumps to `0x4861BD` from `0x485F7C`..`0x486043`, and
     `0x48605A`) comes before its first call (`0x4860A0`), so a NULL create sends nothing. A unit
     returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
     `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
-    `+0x241` bit 18) a `0x13` and a `0x11`. The create calls it as `0x48B090(1, 1)`, which newly sets
+    `+0x241` bit 18) a `0x13` and a `0x11`. The `0x12`, that activation and a def with `+0x241`
+    bit 24's `+0xF5 = 7` and `+0x110` bit 14 (`0x48614D..0x486171`) all sit behind `finished`
+    (`test edi,edi` at `0x48611A`, else to `0x486177`); every create runs the sight stamp
+    `0x482AC0` (`0x486178`) and counts `+0x144` and `+0x140` (`0x486187`, `0x48619C`)
+    [DISASSEMBLED 2026-09-28]. The create calls `0x48B090` as `0x48B090(1, 1)`, which newly sets
     bit 0 only, so of its per-bit paths only bit 0's runs: the unit's `Activate` script started
     by name through `0x4B0940` (`0x48B106`, the name at `0x501280`) and a `0x13` (18 bytes, `0x48B110` → `0x47F780(unit, 3, 0)` → … →
     `0x47F0C0`, sent at `0x47F14C`); its bit-2 path (`0x48B16E..0x48B1AA`, a `0x13` at `0x48B1AA`
@@ -11618,11 +12010,11 @@ the name table; `0x4B07C0 Name2Index` is the standalone copy):
 | VA | Convention | What | Callers (`E8` scan) |
 |---|---|---|---|
 | `0x4B0A70` `COBEngine_StartScript` | `thiscall(cob, name, cb, runNow, argc, a0, a1, a2, a3)`, `ret 0x20` | name → index → `0x4B0B00` | 21: `0x406834` `0x4069BF` `0x4113EF` `0x437902` `0x43795E` `0x43798A` `0x43DBE8` `0x486877` `0x489898` `0x489948` `0x489F43` `0x489F8E` `0x48A149` `0x48A2E0` `0x499C5C` `0x49CBEB` `0x49CDA6` `0x49CFCA` `0x49E186` (`UNITS_StartWeaponsScripts`) `0x49E31C` `0x49E386` (`AutoAim`) |
-| `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the network dispatcher's neighbourhood — the `0x10 UNIT_START_SCRIPT` packet carries this index `[INFERRED]`) `0x4B0AEE` |
+| `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the `0x10` message's case `0x4554EE..0x455556`, dispatch entry `0x455FBC`, which passes the message's script index) `0x4B0AEE` |
 | `0x4B0940` | `thiscall(cob, name, cb, runNow)`, `ret 0xC` | no-argument start, same shape; refused → returns 0 *without* calling the callback | 15: `0x40F433` `0x41148D` `0x411794` `0x411DA1` `0x411E2B` `0x43DAF2` `0x43DB27` `0x485DE6` (`Create`) `0x48B106` `0x48B12B` `0x48B14E` `0x48B169` (`UNITS_SetStateMask`) `0x49CB94` `0x49CD4F` `0x49CF73` (the fire paths) |
-| `0x4B0BC0` `COBEngine_QueryScript` | `thiscall(cob, name, p0, p1, p2, p3)`, `ret 0x14` | → `0x4B0C40` | 14: `0x4027FB` `0x4113B1` `0x41189C` `0x411A35` `0x411AA6` `0x411BF5` `0x411CF1` `0x43E227` `0x43E291` (`UNITS_QueryWeaponPosition`) `0x43E32C` `0x43E370` `0x43E3E4` `0x43E427` (`UNITS_CallAimScripts`) `0x4865C3` |
+| `0x4B0BC0` `COBEngine_QueryScript` | `thiscall(cob, name, p0, p1, p2, p3)`, `ret 0x14` | → `0x4B0C40` | 14: `0x4027FB` `0x4113B1` `0x41189C` `0x411A35` `0x411AA6` `0x411BF5` `0x411CF1` `0x43E227` `0x43E291` (`UNITS_QueryWeaponPosition`) `0x43E32C` `0x43E370` `0x43E3E4` `0x43E427` (`0x43E400`, `QueryNanoPiece`) `0x4865C3` |
 | `0x4B0C40` | `thiscall(cob, idx, p0..p3)` | alloc; **refused → returns 0 leaving `*p0..*p3` untouched** (the silent failure); else callback `0`, pushes `*p0..*p3` (`0` for a null pointer), **sp = 3**, runs that thread now (`0x4B0DA0(cob, slot, 0)`), then copies `stack[0..3]` back through the non-null pointers — a `Query*` script answers by assigning its parameter | `0x4B0C2F` |
-| `0x4B0D60` `COBEngine_DoScriptsNow` | `thiscall(cob, dt)` | runs the eight records, then `0x4B1C00(cob, dt)` | **one**: `0x48ADEB`, in the per-unit tick function, immediately after `AutoAim 0x49E1A0` (called when `unit+0x73 ∈ {1, 2}`), **with `dt = 1`** — so `+0x0C` counts ticks |
+| `0x4B0D60` `COBEngine_DoScriptsNow` | `thiscall(cob, dt)` | runs the eight records, then `0x4B1C00(cob, dt)` | **one**: `0x48ADEB`, in the per-unit tick function, immediately after `AutoAim 0x49E1A0` (called when the block owner's player record, `edi` from `0x48AD73`, is active with `+0x73 ∈ {1, 2}`, `0x48ADC9..0x48ADD7`), **with `dt = 1`** — so `+0x0C` counts ticks |
 | `0x4B0D20` | `thiscall(cob, cb)` | clears a matching callback pointer in every busy record | **no callers** |
 | `0x4B1C00` | `thiscall(cob, dt)` | the animation stepper: returns at once when `dt == 0` or `cob+0x18 == 0`; else walks `+0x14` and advances every MOVE/TURN/SPIN | `0x4B09E8` `0x4B0A5F` `0x4B0BA6` `0x4B0D88` |
 
@@ -11765,11 +12157,15 @@ indexed by `(weaponbits >> 2) & 3`, which is why the stock engine stops at three
 **Where each of those sits in the frame** matters as much as `runNow`, because a run-later start
 issued before the unit's own `DoScriptsNow` still takes its first step in the same tick. The
 per-unit tick function (it ends at `0x48B080`) runs, in order: `0x437910` (`0x48ADC4`),
-`AutoAim 0x49E1A0` (`0x48ADDA`, only when `unit+0x73 ∈ {1,2}`), **`DoScriptsNow(1)`
-(`0x48ADEB`)**, then `0x489BB0`, `0x41BD10`, `0x43B7C0`, `0x43BAD0`, **the movement pass
-`0x43DD20` (`0x48AFAA`)**, `0x48A870`, `0x4864B0`, `0x48B710`. `0x43DD20` calls `0x43DA70` and
-`0x43DB50`, which hold the `StartMoving`/`StopMoving`/`MoveRate*` sites — so **those land after
-the unit's own script tick**, while the weapon and aim traffic lands before it.
+`AutoAim 0x49E1A0` (`0x48ADDA`, only when the block owner's player record — `edi`, from
+`0x48AD73` — is active with `+0x73 ∈ {1,2}`, `0x48ADC9..0x48ADD7`), **`DoScriptsNow(1)`
+(`0x48ADEB`)**, then, for a unit whose owner `+0x96` is of type 1 or 2 (`0x48AEB5..0x48AECD`),
+`0x489BB0`, `0x41BD10`, `0x43B7C0`, `0x43BAD0`, **the movement pass `0x43DD20` (`0x48AFAA`)** and
+`0x48A870`; then `0x4864B0` for a unit pending death, and after the block's units `0x48B710`
+(*Replay state design* has the gates). `0x43DD20` calls `0x43DA70`, which holds the
+`StartMoving`/`StopMoving` (`0x43DAF2`) and `MoveRate1..3` (`0x43DB27`) starts, and `0x43DB50`
+(`setSFXoccupy`, `0x43DBE8`) — so **those land after the unit's own script tick**, while the weapon
+and aim traffic lands before it.
 `UNITS_SetStateMask` (`Activate`/`Deactivate`, `0x48B090` — landing 3 wrote `0x48B0A0`, which is
 0x10 past its entry; `tools/ta_symbols.txt:284`) is *not* in that function; measured,
 its starts land after `DoScriptsNow` too (the fighter, gunship and bomber fixtures each start
@@ -11934,18 +12330,21 @@ The allocation choice is mapped in *Replay snapshots and draw-created caches* ab
 **`0x480B20`**. Both are `thiscall(cob, id, a, b, c, d)` / `thiscall(cob, id, value)` and both
 open with `lea eax,[ecx-1]; cmp eax,0x13; ja` — so **the value ids really are 1..20** and
 anything else returns 0 / does nothing. `esi` is the unit, taken as `[[cob+0x540]+0x0C]`.
-TADR's recorder takes over `get` with a jump at `0x480770` and answers ids 32 and 69–75 as well; it
-never hooks `set` ([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)).
+Impure's `cob_get` takes over `get` with a jump at `0x480770`, installed through the fail-closed
+limits table, and answers ids 32 and 69–75 as well, as TADR's recorder does
+([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)); `set` is stock. What 75
+answers on a puppet is in *COB on a puppet*, in the replay section.
 Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
 `EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
 
-**Live control, 2026-09-28:** the generated getter probe in the complete Escalation
-10.2.0 setup, with Impure and no TADR getter hooks, executed ids 32 and 69–75 on a
-human-owned unit and a local-AI-owned unit: all 16 returned zero through this handler.
+**Live control of the stock handler, 2026-09-28:** the generated getter probe in the
+complete Escalation 10.2.0 setup, before Impure's jump existed and with no TADR getter hooks,
+executed ids 32 and 69–75 on a human-owned unit and a local-AI-owned unit: all 16 returned
+zero through this handler.
 Two fresh Wine skirmishes on the reference setup read `u16 main+0x14351` as **10001**
 via `main = *(u32*)0x511DE8`; the probe units occupied slots 2 and 1002. A raised
-capacity does not make every match allocate 15001 slots. The future `MAX_ID` getter
-must return this match's last valid index, 10000, rather than the capacity maximum.
+capacity does not make every match allocate 15001 slots. Getter 70 (`MAX_ID`) returns
+this match's last valid index, the count − 1 (10000 here), not the capacity maximum.
 The test, its failing port assertions and remaining gaps are in
 [group F](tadr-port/cob.md#all-eight-getters-called-in-real-escalation).
 The repeated baseline additionally read the fixed unit array at `main+0x14357`,

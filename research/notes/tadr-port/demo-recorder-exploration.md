@@ -1,5 +1,10 @@
 # Demo recorder — technical exploration
 
+**This page records the packet-era exploration.** On 2026-09-28 the design changed to state
+recording, with puppet-mode playback and rebuild-based seeking and takeover. The decisions are on
+the [product page](demo-recorder.md); [Redesign and resume point](#redesign-and-resume-point)
+lists which findings below still apply and which are shelved.
+
 ## Status and evidence boundary
 
 **Source/disassembly investigation and executable replay experiments, 2026-09-28.** The product contract and feature progress live
@@ -9,8 +14,8 @@ live two-player battle, and the captured events have been decoded, compared betw
 benchmarked in independent compressed blocks. **Solo engine replay (§6a), direct unit-scene playback (§6b), remote-perspective comparisons (§6c), wider same-level snapshot fidelity (§6d), and fresh-process world-asset relocation (§6e) have run; complete-world seeking has not.**
 Disk/index access and acknowledged process-crash prefix recovery are measured in §6f;
 file-backed scene seeking and rendered prefix recovery run in §6g, which also exposes a cold-cache presentation failure.
-Preparation and checkpoint policy remain undecided; §6 distinguishes measured container results
-from the missing end-to-end evidence.
+The state design settles preparation on the [product page](demo-recorder.md) (none); §6
+distinguishes measured container results from the missing end-to-end evidence.
 
 Sources inspected: TADR's gitignored source checkout at `dcff5dd`, Impure's worktree at
 `2430903`, and `pristine/TotalA.exe.pristine` in the main checkout. **SRC** means directly read
@@ -18,101 +23,92 @@ source, **DIS** means checked against that binary, and **INFERENCE** names a con
 still needs an executable experiment. Existing live measurements are attributed to their notes;
 they are not new recorder measurements.
 
-## Paused handoff and resume point
+## Redesign and resume point
 
-**Paused on 2026-09-28 to conserve usage; resume only when requested.** Research baseline:
-`26fe1f7`, present on the recorder branch and local main when this checkpoint was made.
-Both checkouts were clean before this handoff documentation change. Production engine sources
-and the owned playback instance's DLL were restored after the experiments. The owned
-`demorpv` and `demorps` instances were stopped at the last experiment cleanup; do not touch
-unrelated instances. No presentation-handoff implementation has been started.
+**The design changed direction on 2026-09-28.** A second design interview replaced packet
+recording with **state recording**. Watching drives the recorded players' units in
+**puppet mode**, and seeking and takeover **rebuild** the world from recorded state. The
+[product page](demo-recorder.md) holds the decisions and the three feasibility experiments that
+come next. This page remains the record of the packet-era experiments; the desk research for the
+state design is in the [state design evidence](demo-recorder-state-evidence.md).
 
-### Saved work and recovery
+### What still applies
 
-The durable private evidence root is **`_local/demo-recorder-exploration/` in the main
-checkout**, not a worktree-relative directory. It is intentionally gitignored because the
-fixtures, captures and temporary scripts can contain game data and reference-setup paths.
-`LATEST-CHECKPOINT.txt` names the current checkpoint directory. That directory contains:
+- **Owner authority (§6c).** Another peer's copy of a player's production reads zero, so each
+  machine contributes its own players' production and expense, queues and presentation data, and
+  everything for the AIs it hosts. Sight is not contributed: puppet mode recomputes it, and §6c's
+  34-cell difference is the fidelity that accepts.
+- **The file container and crash recovery (§6f).** Independently compressed blocks, the index and
+  footer, bounded validation, and process-crash prefix recovery, including the Win32 path under
+  Wine.
+- **Seek presentation (§6g and below).** Hold the old image until the destination is complete.
+  A puppet-mode seek changes the world the renderer restores, so the readiness question below
+  applies to it unchanged.
+- **Identities and clocks (§7).** Key a unit incarnation by owner, slot and birth, and keep the
+  sender's tick, event sequence and application order as separate concepts.
+- **Message semantics (§1–§3).** The Pascal recorder's records (§1), Impure's `0x05` tags (§2)
+  and the capture boundaries (§3), for the event stream and the multiplayer contributions.
+- **The construction-state findings (§6, §6b)**, as prior evidence for the construction-glow
+  requirement.
 
-- `scratchpad.tar.gz`: complete copies of the identified recorder scratch directories and
-  BAR source research, preserving their scratch-directory names.
-- `scratchpad-manifest.json`: file names, byte lengths and SHA-256 digests; all **1,169 files**
-  were read back from the archive and matched against the source manifest.
-- `SHA256SUMS` and `git-state.txt`: archive integrity and the pre-handoff branch checkpoint.
-- `RESUME.md`: local restoration/build instructions and experiment entry points.
+### What is shelved
 
-The archive contains 698,059,339 bytes of source files in 320,948,739 compressed bytes.
-Existing evidence folders (`playback`, `scene`, `perspectives`, `construction`, `world`,
-`assets`, `io`, `seek`) remain alongside it. Nothing was deleted from scratch storage.
-Restore into an empty staging directory first and compare with any surviving scratch files;
-do not overwrite newer work. Private scripts retain their original scratch-path dependencies.
-They are trusted-fixture research drivers, not validated production replay parsers.
+- **Packet playback (§6a):** feeding captured packets through a native DirectPlay host with drone
+  players, and the recorded-rank unit-ordering probe.
+- **Renderer-scene playback as the watch path (§6b, §6d, §6e, §6g):** pose-level snapshots,
+  portable asset handles and the generated explosion-frame bank. Puppet mode replaced it: the
+  engine animates and draws, its own interface keeps working, and the same world serves takeover.
+  On §6d's busy battle these streams extrapolated to 255–916 MB per hour at 10 Hz, against
+  22.8 MB per hour for a changed-only unit stream.
+- **The architecture comparison (§5)**, which the decision supersedes.
+- **§7's packet-replay recommendations:** the in-process replay transport, packet replay with
+  checkpoints as the preferred next experiment, and contributing each player's authoritative
+  visibility.
+- **The open preparation policy:** the product page settles it, with no preparation step.
 
-Public reusable experiments and result summaries remain in
-`research/experiments/demo-recorder/`. The last completed check ran **15 research tests**;
-this archival checkpoint does not claim a new experiment or performance improvement.
-The detailed measured conclusions are in §6a–6g; do not replace those scope limits with
-claims of complete game playback or a measured 45-minute seek.
+### Saved work
 
-### Immediate next experiment: cold seek presentation
+The private evidence root is **`_local/demo-recorder-exploration/` in the main checkout**, not a
+worktree-relative directory. It is gitignored because the fixtures, captures and temporary scripts
+can contain game data and reference-setup paths. `LATEST-CHECKPOINT.txt` names the checkpoint
+directory, which holds `scratchpad.tar.gz` (the recorder scratch directories and the BAR source
+research), `scratchpad-manifest.json` (names, lengths and SHA-256 of all **1,169 files**, each
+read back from the archive and matched), `SHA256SUMS`, `git-state.txt`, and `RESUME.md` (restore
+and build instructions and experiment entry points). The evidence folders `playback`, `scene`,
+`perspectives`, `construction`, `world`, `assets`, `io` and `seek` sit beside it. Restore into an
+empty staging directory and compare with any surviving scratch files rather than overwriting
+newer work. The private scripts are trusted-fixture research drivers, not validated parsers.
 
-Start from the saved `demo-seek/final-probe/` sources plus `demo-seek/import.inc` and
-`demo-seek/bank.inc`. The latter keeps generated explosion frames in one immutable bank
-owned until process exit; it refuses a changed bank or level generation. Repeated packet
-replacement must not invalidate addresses borrowed by renderer caches.
+`state-design-2026-09-28/` beside the checkpoint holds the state design's research record
+(README.md there).
 
-The reproducible failure is `demo-seek/cold-transition.mkv` and `cold-analysis.json`:
-**five of 240 captured frames** show an intermediate image rather than the old scene or
-correct destination. Warm transitions showed no intermediate frame at the sampled 60 Hz.
+Public experiments and result summaries are in `research/experiments/demo-recorder/`; its
+**15 research tests** passed at the last check.
+
+A probe restored from the archive must be **clean-built**: preserved old timestamps once let an
+incremental build reuse a normal object. Verify the deployed DLL and the probe's activation before
+accepting evidence.
+
+### Seek presentation: the open readiness question
+
+The reproducible failure is `demo-seek/cold-transition.mkv` and `cold-analysis.json` in the
+archive: **five of 240 captured frames** showed an intermediate image rather than the old scene or
+the correct destination. Warm transitions showed no intermediate frame at the sampled 60 Hz.
 Deferred asset restoration is the leading explanation, **not yet a queue-correlated proof**.
-The destination file contains ten seconds of sampled states and one isolated later state,
-not a continuous long match.
 
-Proposed, unimplemented direction: retain a dedicated immutable image of the last complete
-world while preparing the destination, then publish only after explicit readiness and
-consumer adoption. Establish image lifetime and Vulkan barrier ordering, including resize,
-level changes and failed restoration. A fixed delay or a few clean-looking frames cannot
-establish correctness. Correlate restoration state with the captured transition before
-claiming a fix.
+The proposed direction, not implemented: retain an immutable image of the last complete world
+while the destination is prepared, then publish only after explicit readiness and consumer
+adoption. Establish the image's lifetime and Vulkan barrier ordering, including resize, level
+changes and failed restoration. A fixed delay or a few clean-looking frames cannot establish
+correctness.
 
 Relevant source reads: `tagpu_vk.c` prepares consumers before `tagpu_vk_restore_step`, then
-renders/composites the world. `tagpu_vk_restore_job_idle` tests queue/in-flight state but
-is not a complete readiness predicate: feeding, failure and consumers adopting restored
-resources also matter. `tagpu_vk_world.c` owns per-slot color targets and descriptor sets.
-Simply reusing ring-slot images can alternate old generations; descriptor updates must obey
-the current slot's fence, and a held image must survive all GPU readers. These are design
-constraints for the next prototype, not a reviewed implementation.
-
-### Remaining feasibility gates
-
-1. Prove the cold-seek presentation handoff, preserving the old image until a correct target
-   can be displayed.
-2. Establish complete state coverage and stable unit incarnations: aircraft/cargo, terrain,
-   visibility, sound, inspection, statistics and events.
-3. Capture every required tick/message at an ordered owner-thread boundary with an owned
-   immutable queue, bounded backpressure and an asynchronous writer. The renderer's latest
-   published packet can drop intermediate ticks and is not a recorder queue.
-4. Measure recorder off/on overhead and actual multiplayer contributions, including player
-   perspectives, camera/cursor, communication, authority and clock alignment.
-5. Run representative multiplayer lifecycle/content cases: ten slots, AI, mods, slot reuse,
-   disconnects, genuine construction and rapidly spawned completed units.
-6. Measure an actual full-match minute-5 to minute-45 seek, opening/preparation time, file/cache
-   size and live cost together; choose format/checkpoint/preparation policy from those numbers.
-7. Validate compatibility/content manifests and main-menu/browser/control/automation integration.
-
-Keep these as bounded experiments that produce implementation decisions. The user-facing
-feature contract remains in [Demo recorder](demo-recorder.md); pausing does not reduce scope
-or mark feasibility complete. No calendar estimate or completion percentage is established.
-
-### Suggested skills and landing rules
-
-Use `ta-drive` for owned game instances and `ta-capture` for transition evidence. Read the
-current project/private instructions before resuming. Restore probe sources by copying their
-contents and **clean-build**: preserved old timestamps previously allowed an incremental
-build to reuse a normal publisher object. Verify the deployed DLL and probe activation before
-accepting evidence. Archive temporary sources/results and restore normal engine state before
-a docs-only landing. Any production engine change needs the dedicated review and runtime
-verification required by `AGENTS.md`. Local landing does not authorize publishing.
+renders and composites the world. `tagpu_vk_restore_job_idle` tests queue and in-flight state but
+is not a complete readiness predicate: feeding, failure and consumers adopting restored resources
+also matter. `tagpu_vk_world.c` owns per-slot colour targets and descriptor sets. Reusing
+ring-slot images can alternate old generations; descriptor updates must obey the current slot's
+fence, and a held image must survive all GPU readers. These are design constraints, not a
+reviewed implementation.
 
 ## 1. What the Pascal recorder actually records
 
@@ -1264,6 +1260,10 @@ perspective are ready. Expose the same session operations through `tacli` so aut
 request-to-present time and correctness together.
 
 ## Next implementation gate and honest stopping boundary
+
+**Superseded by the redesign:** the state design's next experiments are on the
+[product page](demo-recorder.md#milestones-and-delivery-order). This section keeps the packet-era
+plan as it stood.
 
 The source/protocol investigation and transport/container experiments now supply a concrete
 prototype direction. **The whole feasibility milestone is not complete:** full-state Impure
