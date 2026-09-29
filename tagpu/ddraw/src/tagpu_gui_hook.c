@@ -1534,8 +1534,32 @@ static int seen_frame(const void* f, const void* p, int add)
    its way out, whichever of its exits it takes -- the overflow exits included,
    so what they publish is exactly what they published before, only in one
    store. Every window ends at a flip (`before_flip` records the `OP_FLIP`
-   marker and then publishes), so a drain now always stops at a frame boundary
-   of the engine's.
+   marker and then publishes), so a drain stops at a frame boundary of the
+   engine's -- except where the drain's own 20 000-op budget runs out.
+
+   A WINDOW CUT SHORT IS NOT PUBLISHED AT ALL. `s_pubOverflow` set by the end
+   of `publish_window` means the window was cut (no room, or a box outside its
+   surface), and a reseed always follows one: the stall rule waits for the
+   drain and then reseeds, or the next publish resets at once. That reseed
+   clears every record the cut window's ops set on their way out -- `seeded`,
+   the asset tokens, the first-sight tables, the glyphs, the shade table -- so
+   dropping the staged ops loses nothing the reset does not re-send, and the
+   consumer keeps presenting its last whole frame until it arrives instead of
+   half of this one. Their arena bytes are skipped rather than handed back:
+   `aTail` passes them as soon as the consumer drains a later op.
+
+   THE LAYER-OFF DISCARD (`tagpu_gui_present`, render thread) sets `aTail`
+   to `aHead`, which now runs ahead over a whole window of staged bytes rather
+   than one op's. Nothing publishes while the layer is off, so those bytes
+   stay intact; if it comes back on at the next present the staged ops drain
+   and move `aTail` back, which only shrinks the producer's room.
+
+   A WINDOW MUST FIT WHOLE. The consumer cannot free room from a window it
+   cannot see yet, so one window's bytes must fit in the arena's free space as
+   it stood when the window began; one that cannot refuses, and the stall rule
+   waits and reseeds (`consumer_stalled`). Per-op visibility did not lift that
+   bound -- it only let a drain that happened to run mid-publish free room by
+   chance. gui-renderer.md §29 has the largest window measured.
 
    A commit OUTSIDE `publish` (`surf_drop`, `surf_retired_sweep`) flushes at
    once, as it always did. Nothing is staged when one runs -- a publish never
@@ -2449,10 +2473,14 @@ static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
    at every one, the focus glow flashing with them and the shell at 13 fps
    (MEASURED 2026-09-28, `gui: stall #n: backlog (queued=12429 arena=9006966
    ... tail idle 74 ms)`). Waiting for a publish that actually found no room
-   makes that loop impossible by capacity rather than by speed: a reseed only
-   ever follows a drain to the low-water marks, so the next one needs the
-   reseed alone to fill the 16 MB arena from under 2 MB -- which the ~9 MB
-   SKIRMISH burst does not. */
+   bounds it: a stall's reseed follows a drain to the low-water marks, so the
+   next stall needs the reseed and whatever the engine draws meanwhile to fill
+   the ring or the arena from there -- more than ~14 MB or ~61 000 ops before
+   the consumer drains again, which the ~9 MB SKIRMISH burst is not. A consumer
+   that presents fewer times a second than the engine's op rate over the
+   drain's 20 000-op budget still falls behind for good; that is the crawl this
+   rule exists for. On the exit path the wait now starts at a full arena, so
+   the stale UI after the exit click lasts about twice as long (~0.5 s). */
 static unsigned arena_used(void)
 {
     unsigned head = g_guiq.aHead, tail = g_guiq.aTail;     /* offsets, wrapping */
@@ -2465,8 +2493,10 @@ static void stall_log(const char* rule, unsigned queued, unsigned used, LONGLONG
 {
     char b[160];
     if (!s_log) return;
+    /* `idle` is measured from the last publish that saw the tail move, and
+       there is none before the first -- 0 then rather than a stamp of 0 */
     _snprintf(b, sizeof b, "gui: stall #%u: %s (queued=%u arena=%u/%u tail idle %u ms)", g_guiq.stalls, rule,
-              queued, used, TAGPU_GUI_ASIZE, fq ? (unsigned)(idle * 1000 / fq) : 0u);
+              queued, used, TAGPU_GUI_ASIZE, fq && idle > 0 && idle < fq * 3600 ? (unsigned)(idle * 1000 / fq) : 0u);
     b[sizeof b - 1] = 0;
     glog(b);
 }
@@ -3229,6 +3259,7 @@ static void publish(unsigned flipSurf)
     s_pubBatch = 1;
     publish_window(flipSurf);
     s_pubBatch = 0;
+    if (s_pubOverflow) s_qStaged = 0;      /* cut short: see `pub_flush` */
     pub_flush();
 }
 

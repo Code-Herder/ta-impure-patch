@@ -4911,10 +4911,16 @@ ring or the arena — `s_pubNoRoom`, a game-thread flag, because `g_guiq.why` is
 the consumer's own reseed requests). Both end the same way as before: publish nothing until the
 consumer has drained to the low-water marks, then one reseed. The G15d exit path this rule was
 written for (§12: a crawling consumer while the game frame publishes ~150 KB per 5 ms) is
-still covered — it now waits at a full arena rather than a half one — and the loop is impossible
-by capacity: a reseed only follows a drain to under 2 MB, so a second one needs the reseed's own
-payload to fill the 16 MB arena, which the ~9 MB SKIRMISH burst does not. A box outside its
-surface (`box-outside-surface`) is not a question of room and still resets at once.
+still covered — it now waits at a full arena rather than a half one, so the stale UI after the
+exit click lasts about twice as long (~0.5 s) — and the loop is bounded: a stall's reseed follows a
+drain to the low-water marks, so the next stall needs the reseed plus whatever the engine draws
+meanwhile to fill the ring or the arena from there, more than ~14 MB or ~61 000 ops before the
+consumer drains again; the SKIRMISH burst is ~9 MB. It is a bound and not a guarantee: a
+consumer presenting fewer times a second than the engine's op rate over the drain's 20 000-op
+budget (~7.5 a second at the box's ~150 000 ops a second) falls behind for good, which is the
+crawl the rule exists for, and the level boundary and the consumer's own requests reseed without
+a drain. A box outside its surface (`box-outside-surface`) is not a question of room and still
+resets at once.
 
 **Measured on the box after the fix** (the same folder recipe, the same path to SKIRMISH, pointer
 sweeps injected): one stall in the run — `idle`, 252 ms, during the restorer's start-up — one
@@ -4927,7 +4933,12 @@ it and show the gadget without its glow for a frame. Commits inside `publish` ar
 `publish`, overflow exits included; a commit outside it (`surf_drop`, `surf_retired_sweep`)
 flushes at once, and nothing is ever staged when one runs, so the queue stays FIFO. Every window
 ends at a flip (`before_flip` records `OP_FLIP` and then publishes), so a drain now stops at a
-frame boundary of the engine's. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
+frame boundary of the engine's. A window cut short (no room, or a box outside its surface) is not
+published at all: a reseed always follows one and re-sends everything the cut ops had marked sent,
+and the consumer keeps its last whole frame until then. **One window must fit whole** in the free
+ring and arena it started with — the consumer cannot free room from a window it cannot see yet;
+per-op visibility never lifted that bound, it only let a drain that happened to run mid-publish
+free room by chance. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
 window. The drain's own 20 000-op budget can still stop inside a window, when more than
 20 000 ops are queued at once.
 
