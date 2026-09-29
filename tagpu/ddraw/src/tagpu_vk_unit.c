@@ -2110,7 +2110,7 @@ static void vs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r,
     b->f[14] = r->anchor[2]; b->f[15] = r->anchor[3];  /* uAnchor     vec4 @48 */
     b->f[16] = r->enc;                                 /* uEnc       float @64 */
     b->f[17] = r->mdBias;                              /* uMdBias    float @68 */
-    b->f[18] = h->shd[0]; b->f[19] = h->shd[1];        /* uShd        vec2 @72 */
+    b->f[18] = h->shNeutral; b->f[19] = r->lit ? 1.0f : 0.0f; /* uShd vec2 @72 */
     b->f[20] = r->cast[0]; b->f[21] = r->cast[1];
     b->f[22] = r->cast[2];                             /* uCast       vec3 @80 */
     b->i[23] = 0;                                      /* uDepthPass   int @92 */

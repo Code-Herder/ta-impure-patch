@@ -12,9 +12,12 @@
      depth key         encBase + clamp((2y - z)/256, +-1.8)
      world             wx0 + sx-part, wz0 + sy-part   (what the fog samples)
      height            y                              (what the waterline clips)
-     shade             the rest normal through the piece's rotation, flipped
-                       toward SH_V, dotted with SH_L and quantised onto the
-                       32-row SHD ramp
+     shade             a structure's vertex normal (the mean of its faces',
+                       tagpu_posebake.c `piece_vnormals`) through the piece's
+                       rotation, dotted with the engine's light and truncated
+                       onto the 32-row SHD ramp -- 0x45A2B6..0x45A2EC. A vertex
+                       stage output, interpolated across the face as the
+                       engine's scanline does
 
    THREE RANGES IN THE BAKE, TWO OF THEM THIS PROGRAM'S, `uRange`. The bake
    lays the body, the slant and the wire down in one buffer, so a range is a
@@ -331,7 +334,7 @@ int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; ret
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"     /* rest position, model units    */
-    "layout(location=1) in vec3 aNrm;\n"     /* rest normal of its own face   */
+    "layout(location=1) in vec3 aNrm;\n"     /* rest normal of the VERTEX     */
     "layout(location=2) in float aPiece;\n"
     "layout(location=3) in float aGF;\n"     /* TAGPU_PBF_SHADED              */
     "layout(location=4) in vec2 aUV;\n"
@@ -362,7 +365,7 @@ static const char* VS =
     "uniform vec4 uAnchor;\n"                /* ax, ay, world x, world z      */
     "uniform float uEnc;\n"                  /* the row's depth key base      */
     "uniform float uMdBias;\n"               /* cargo vs parent, md units     */
-    "uniform vec2 uShd;\n"                   /* shNeutral, shDir              */
+    "uniform vec2 uShd;\n"                   /* shNeutral, lit (1 = engine-shaded) */
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv  */
     "uniform int uDepthPass;\n"
     "uniform mat4 uShadowMat;\n"
@@ -373,14 +376,17 @@ static const char* VS =
     "uniform int uRowBase;\n"
     "uniform int uFlagBase;\n"
     "uniform int uVisBase;\n"
-    "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     /* the line test's two inputs, which only WVS turns on (tagpu_native.c FS) */
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
-    /* tagpu_native.c's SH_V and SH_L, the engine's shading basis */
+    /* SH_V is tagpu_native.c's: the way a normal faces the viewer, which only
+       the Classic++ lighting term reads. SH_L is the ENGINE's light, the three
+       floats at 0x5065F8 -- not normalised -- and the 5.0 the vertex loop scales
+       the dot by is the float at 0x4FD4CC (0x45A2BD..0x45A2E1). */
     "const vec3 SH_V = vec3(0.0, 0.8944, -0.4472);\n"
-    "const vec3 SH_L = vec3(-0.35, 0.80, -0.49);\n"
+    "const vec3 SH_L = vec3(-0.8, 1.0, 0.25);\n"
     "void main(){\n"
     "  int pi = int(aPiece + 0.5);\n"
     /* EVERY INDEX INTO `uPose` IS CLAMPED TO THE BOUND RANGE, so no vertex can
@@ -449,28 +455,37 @@ static const char* VS =
        +-1.8 band into a neighbour's. */
     "  float md = clamp((2.0 * m.y - m.z) / 256.0 + uMdBias, -1.8, 1.8);\n"
     "  float enc = uEnc + md;\n"
-    /* the shade. The rest normal is unit length and the piece transform is a
-       composition of rotations, so the posed normal is unit length too — but
-       normalise anyway rather than rest the quantisation on that, since a
-       length that drifted would move the whole face a row. The flip toward
-       SH_V is not baked because it depends on the POSED direction, which is
-       what the piece matrix decides. */
+    /* THE SHADE, and it is the engine's only for a LIT unit (uShd.y: the
+       structure bit and the Shading option, tagpu_native.c). The sprite builder
+       sends a structure through 0x459C70 and everything else through the plain
+       rasteriser (0x45873C, 0x45874A), so every other unit stays on the neutral
+       row, whose multiplier is exactly 1.0.
+
+       For a lit unit each vertex takes `ftol(dot(N, L) * 5.0) & 0x1F`: N the
+       vertex's own normal (a mean of unit vectors, not renormalised, rotated
+       by the piece), the truncation toward zero of GLSL's int() (the helper at
+       0x4E43A0 sets the FPU to truncate), and the mask WRAPS a negative value
+       onto the table's top rows, so a dot just under zero is a bright row
+       and one between -0.2 and 0.2 is row 0. That wrap is the engine's own
+       picture and is reproduced, not clamped. A piece whose shade flag is clear
+       (COB dont-shade) takes the engine's default row 15.
+
+       The row leaves this stage as a float and the fragment stage floors the
+       interpolated value, which is what the engine's span loop does with its
+       16.16 intensity (0x4C81A4..0x4C81BD). The flip toward SH_V below is for
+       the Classic++ lighting term alone: the engine does not flip. */
     "  float shade = uShd.x / 31.0;\n"
     "  vec3 un = vec3(0.0, 1.0, 0.0);\n"
     "  bool pShaded = uPose[clamp(uFlagBase + (pi >> 2), 0, pl)][pi & 3] > 0.5;\n"
-    "  if (aGF >= 0.5 && pShaded) {\n"
+    "  if (aGF >= 0.5) {\n"
     "    vec3 n = vec3(dot(uPose[pb].xyz, aNrm), dot(uPose[pb+1].xyz, aNrm),\n"
     "                  dot(uPose[pb+2].xyz, aNrm));\n"
-    "    if (dot(n, SH_V) < 0.0) n = -n;\n"
-    "    float nl = length(n);\n"
-    "    if (nl > 1e-6) {\n"
-    "      float I = dot(n, SH_L) / nl;\n"
-    "      float rr = clamp(uShd.x + uShd.y * floor(I * 12.0 + 0.5), 0.0, 31.0);\n"
-    "      shade = rr / 31.0;\n"
-    /* Classic++ lights the fragment from the same outward normal the row is
-       quantised from, carried in MAP space (3DO z points north, hence the
-       flip) */
-    "      un = vec3(n.x / nl, n.y / nl, -n.z / nl);\n"
+    "    if (uShd.y > 0.5)\n"
+    "      shade = pShaded ? float(int(dot(n, SH_L) * 5.0) & 31) / 31.0 : 15.0 / 31.0;\n"
+    "    if (pShaded) {\n"
+    "      if (dot(n, SH_V) < 0.0) n = -n;\n"
+    "      float nl = length(n);\n"
+    "      if (nl > 1e-6) un = vec3(n.x / nl, n.y / nl, -n.z / nl);\n"
     "    }\n"
     "  }\n"
     "  vec2 p = (p0 + uOffset - uZoomC) * uZoom + uZoomC;\n"
@@ -541,7 +556,7 @@ static const char* FXVS =
     "uniform int uRowBase;\n"             /* this model's first run, in vec4 */
     "uniform int uFlagBase;\n"
     "uniform int uVisBase;\n"
-    "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
@@ -617,7 +632,7 @@ static const char* WVS =
     "uniform int uRowBase;\n"             /* this unit's first wire record  */
     "uniform int uFlagBase;\n"
     "uniform int uVisBase;\n"
-    "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
@@ -760,7 +775,7 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.zoom = v->zoom;
     s_pub.zoomCx = v->zoomC[0]; s_pub.zoomCy = v->zoomC[1];
     s_pub.depthScale = v->depthScale;
-    s_pub.shd[0] = (float)v->shNeutral; s_pub.shd[1] = (float)v->shDir;
+    s_pub.shNeutral = (float)v->shNeutral;
 
     /* `restored` IS SET BELOW, AFTER THE ARM: it asks whether the published
        list is armed, and asking that before the arm on the same beat would
@@ -910,6 +925,7 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
        for a placement cursor. */
     r->shKind = u->ghost ? TAGPU_PDSH_NONE : u->shKind;
     r->shOffY = u->shOffY;
+    r->lit = u->lit;
     if (r->shKind == TAGPU_PDSH_SLANT) {
         r->shFirst = g->first[TAGPU_PB_SLANT];
         r->shCount = g->count[TAGPU_PB_SLANT];

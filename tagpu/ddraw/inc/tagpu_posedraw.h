@@ -67,7 +67,7 @@ typedef struct {
     float scafP[4];             /* vpL, vpT, vw, vh                           */
     float fogOrg[2], fogDim[2];
     float sun[3], amb, norm;    /* the units' sun, ambient, 1/unitLevel       */
-    int   shNeutral, shDir;     /* the engine's SHD rows                      */
+    int   shNeutral;            /* the engine's neutral SHD row (unshaded)    */
 } TAGPU_PDVIEW;
 
 typedef struct {
@@ -134,6 +134,13 @@ typedef struct {
        sx+0x85 against the body's sx+0x80) and is the consumer's. */
     int   shKind;
     float shOffY;
+    /* THE UNIT IS SHADED BY THE ENGINE'S LIT RASTERISER 0x459C70, decided by
+       tagpu_native.c and carried: the structure bit (`unit+0x110 & 0x20000000`)
+       AND the option word's Shading bit (`main+0x37F06` bit 5), which are what
+       the sprite builder tests at 0x45873C and 0x45874A. A mobile unit is never
+       lit -- the engine bakes it through the plain rasteriser 0x459830 -- so it
+       draws on the neutral row whatever the option says. */
+    int   lit;
 } TAGPU_PDUNIT;
 
 /* ONE EFFECTS MODEL, as the effects gather rasterised it: runs
@@ -295,6 +302,7 @@ typedef struct TAGPU_PDUREC {
     int   shKind;                     /* TAGPU_PDSH_*                         */
     int   shFirst, shCount;           /* the range that kind draws            */
     float shOffY;                     /* the ground shift, frame px           */
+    int   lit;                        /* TAGPU_PDUNIT.lit                     */
     int   npose;                      /* pieces the pose arena carries        */
     unsigned rowOff;                  /* first of npose*3 vec4 in `rows`      */
     unsigned flagOff;                 /* first of npose floats in flags/vis   */
@@ -348,7 +356,7 @@ typedef struct TAGPU_PDHAND {
        buffer the Vulkan pass fills. uOffset is (0, 0) for a body draw, which
        is why it is not here. */
     float gw, gh, zoom, zoomCx, zoomCy, depthScale;
-    float shd[2];                     /* uShd: shNeutral, shDir              */
+    float shNeutral;                  /* uShd.x; uShd.y is the record's `lit` */
 
     /* THE FRAGMENT STAGE'S, as `_begin` left it. uLambert IS PUBLISHED AS
        ZERO: tagpu_posedraw.c never sets it, so the Classic++ lambert lights a
