@@ -353,7 +353,7 @@ mines read 0 and set nothing under TADR as well. None of the mods uses another i
 
 **Without the getters these scripts run and do nothing.** Stock `get` answers 0 for an id above 20.
 A scan then reads `MIN_ID` = `MAX_ID` = 0 and visits slot 0 alone, every unit reads as not allied
-(74) and not on this machine (75), and 71 and 72 read 0. Escalation's and Twilight's gate
+(74) and not local to the player (75), and 71 and 72 read 0. Escalation's and Twilight's gate
 `Teleport` (one script, the same word offsets in both) skips every slot `74` does not call allied
 (word 2656) before it looks at anything else, so **the gates never teleport**, and the indicator
 pieces id 75 shows never appear. [the bytecode of `armgate.cob` in `TAESC.gp3` and in Twilight's
