@@ -1678,7 +1678,7 @@ orders **another** unit re-enters that unit's handler, nested — stock is reent
 record at `0x4FD288` (handler `0x439EA0`, empty name), then the three static tables through
 `0x43BC90`: 22 at `0x4FC6E8` (Standby … Resurrect `0x404DB0` … RepairUnitNoMove), 22 at `0x4FCA18`
 (the VTOL set) and 23 at `0x4FC490` (Stop … QPatrol). Each append re-sorts by name (comparator
-`0x43C020`, strcmp on `+0x15`), so index 0 is "Ready". No other function writes
+`0x43C020`, the case-insensitive `_stricmp 0x4F8A70` on `+0x15`), so index 0 is "Ready". No other function writes
 `0x512344`/`0x512348`, directly or through the vector helpers `0x43C360`/`0x43C390`/`0x43C3A0`
 (called only from those two); the destructor `0x438480` frees it at exit.
 
@@ -1693,7 +1693,7 @@ record at `0x4FD288` (handler `0x439EA0`, empty name), then the three static tab
 - `0x438B90` (set type), from `0x4031B1` (`0x43F0E0`'s result) and `0x40624C` (a lookup of
   `VTOL_MOVE`);
 - the save loader `0x43A420` at `0x43A60A`. Its by-name branch (`<key>_name`, `0x43C6B0` then
-  strcmp) gives the index or 0. **Its fallback, taken when the record has no name, walks the table
+  `_stricmp`) gives the index or 0. **Its fallback, taken when the record has no name, walks the table
   `jbe` — inclusive of `end` (`0x43A58B..0x43A58D`)** — counting records whose `+0x14` bit 0 is
   clear. A stored index it does not meet leaves `cl` at 69, or 68 if the phantom record past the
   end matched, and that byte becomes the order's type: **a wild dispatch on the first tick. A

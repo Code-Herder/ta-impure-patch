@@ -400,7 +400,7 @@ builder→site line).
 | `EmitSfx_Unk5 0x472AB0(pos, layer)` = **fire** | fire | `0x421550` only (debris on fire: `sys+0x28` bit 0) |
 | `0x472330(…, layer)` | fire | `0x481010/0x48102F` |
 | `EmitSfx_Bubbles 0x472530(…, layer)`, `0x472430(…, layer)` | wake / bubbles | `0x481102`; `0x48104C/69/86/A3` (the ship movement code) |
-| `EmitSfx_NanoParticles 0x4720D0(pos6, to, layer)` / `…Reverse 0x472200` | nanolathe | nine sites in `0x402ABD..0x4151EC` (build) / seven in `0x404676..0x414C43` (reclaim) |
+| `EmitSfx_NanoParticles 0x4720D0(point3, box6, layer)` / `…Reverse 0x472200(box6, point3, layer)` | nanolathe | ten sites in `0x4025AE..0x4151EC` (build, help, the repairs, SelfRepair, resurrect; the spray runs point → box) / seven in `0x404676..0x414C43` (capture, reclaim unit, reclaim feature; box → point), every one in an order handler and passing layer 6 (*The nano spray* in the engine map) |
 | `EmitSfx_Teleport 0x471FD0`, `0x472630` | flare sprite | `0x406B9F`; `0x48644B`, `ShowExplodeGaf 0x420AE1` |
 
 The layer is **an argument of the emitter** (GraySmoke reads it back from `[esp+0x14]`

@@ -125,9 +125,9 @@ area damage through `0x49A0C0`; `0x4244B0` damages features locally outside a ne
   destructor frees a mover (`0x486DA9..0x486DBF`), and a slot's owner is fixed by its block at level
   init (`0x485902`). One unreferenced routine, `0x485E50`, is a complete install (`0x4B4F10(0x2F)`,
   `0x43DC00(unit)`, store at `unit+0`) that also resets the heading `+0x66` to BuildAngle
-  `def+0x210` and leaves the old mover alone (puppet M3). Freeing the old mover first as the
-  destructor does (`0x43DD10`, then `0x4B4F20`), flipping `+0x73` before the call and writing the
-  heading back after it make a stock-shaped in-place swap. Untested.
+  `def+0x210` and leaves the old mover alone (puppet M3). The takeover does not swap movers in
+  place: it makes the seat local and then re-creates the units, which gives each a mover of the
+  new type and fresh COB (*COB and owner-only effects on a puppet*, below).
 - **The `AI` command only flips the byte** (P27): `{"AI", 0x416280, 4}` at `0x501FD0` (run level 4)
   calls `0x463C60(2)` on a type-1 seat and `0x463C60(1)` on types 2 and 3 (`0x4162CF..0x416303`).
 - **The `+0x74` object** (0x3D bytes, `0x408CB0`), ticked by `0x408C40` (`0x46502A..0x465031`),
@@ -166,15 +166,54 @@ does not do (it refused every unit of slots 4–9: [scenario format](../scenario
 MEASURED 2026-09-24).
 Impure drives motion (round-robin-style writes with walk scripts as recorded script starts, or the
 movement pass on fed proxies) and calls the stock receivers in-process with bounded indices; a
-skirmish recorder hooks engine functions, as messages exist only in network games. Takeover in place
-needs a `+0x73` flip, `0x485E50`-shaped mover swaps and both per-player objects, with no stock
-precedent; re-creating at the recorded slots follows the save restore.
+skirmish recorder hooks engine functions, as messages exist only in network games. A takeover
+flips `+0x73` first, builds both per-player objects, and then re-creates the units at their recorded
+slots, as the save restore does; a flip in place would leave every unit's COB on the branches it
+took as a remote copy (below).
 
 **Open:** records 4–9 active in a type-2 level; a level whose seats are all type 3, with
 `main+0x2A42`/`+0x2A43` naming a type-3 record
 (the seatless viewer, also open in the [data-keys evidence](data-keys-evidence.md)); commanders for
-type-3 seats; what `0x48A870` does; the acquisition's effect on a puppeted seat's weapons; a remote
-builder's nano stream; defeat, victory and ENDMSN with type-3 seats in a type-2 level.
+type-3 seats; what `0x48A870` does; the acquisition's effect on a puppeted seat's weapons; defeat,
+victory and ENDMSN with type-3 seats in a type-2 level.
+
+### COB and owner-only effects on a puppet
+
+DIS unless marked; the engine facts are in the engine map's *The nano spray* and *COB on a puppet*
+([engine map](../exe-reverse-engineering.md)), and the decisions they led to in the
+[completeness design](demo-recorder-completeness.md#decisions-taken).
+
+- **A puppet never sprays by itself.** The nano spray's two emitters are called from 17 sites in
+  15 order handlers, which run only through the main-list order controller in the unit tick of a
+  unit whose owner is type 1 or 2, and never from the order destructor. A remote builder's copy
+  shows no spray in a live network game either. The recorder records each spray where the engine
+  makes it and replays it through the same emitter (decision 1).
+- **Getter 75 is the one COB answer that depends on the machine.** Impure's getter answers 1
+  when the queried unit's owner is type 1 or 2, so a puppet, whose seats are all type 3, answers 0
+  for every unit, as a live peer does for units it does not simulate (MEASURED on two Wine peers in
+  all five supported mods, [cob.md](cob.md)).
+- **How the supported mods use it** (the compatibility suite's mod archives, their COB bytecode
+  scanned statically, 2026-09-29): 494 call sites in 200 scripts, Escalation 470, Total Mayhem 14,
+  TA Twilight 10; TA Zero, ProTA and the retail scripts have none. Every site feeds a single
+  branch that skips a block unless the unit is simulated here; none has an else arm. **375
+  branches are owner-only presentation** (indicator pieces in 170 Escalation `Detect` scripts,
+  factory exit arrows, transport and gate indicators) and **119 are owner-only engine actions**
+  (ATTACH and DROP for module absorption, transports and gate teleports; SET ACTIVATION, BUSY,
+  INBUILDSTANCE and YARD_OPEN; debris EXPLODE). ATTACH and DROP send a `0x0A` from every peer
+  that runs them, which is why the mods gate them [INFERRED].
+- **Unguarded COB also writes engine state on every copy.** Scripts that never test 75 set
+  `+0x10E` and `+0x10F` bits on remote copies in every mod and in retail, and attach or drop units
+  in every mod (for example SET ARMORED in 389 Escalation scripts and ACTIVATION in 164; the
+  retail scripts set INBUILDSTANCE in 49 and YARD_OPEN in 21, and never attach) [counted
+  statically]. On a puppet those fields would
+  have two writers, the scripts and the recording, and every disagreement would restart
+  Activate or Deactivate: hence the one-writer rule (decision 2).
+- **A flip in place keeps each unit's COB.** Only a create gives fresh COB, and Create's first
+  slice reads 75 inside the create. Escalation starts a one-shot `Upgrade` script from Create in
+  eight factory types, and it returns at once when 75 answers 0: after an in-place flip those
+  factories would never upgrade again [INFERRED from the scripts]. A fresh create also resets
+  what a mod keeps in COB statics and piece visibility, such as Total Mayhem's upgraded metal
+  extractor's look [INFERRED from the scripts].
 
 ## 2. Rebuild and takeover inventory
 
@@ -237,6 +276,12 @@ eye to the command apply at the next in-play draw.
   `0x41ABFA..0x41AC3C`) and two AI sites. The factory handler `0x402640` builds while the head count
   is positive and decrements it per completion (`0x402B07..0x402B39`); the unit in progress is a
   nanoframe linked through `+0x16`.
+- **Destroying an order node has side effects** (DIS; engine map, *The nano spray*). The
+  destructor `0x43A1F0` runs the order's handler with event 2 when `node+6` has bit `0x02`, and
+  BuildingBuild's cleanup then deals the unfinished nanoframe 30,000 (`0x402701`); it starts
+  `StopBuilding` when `+0x42` has bit `0x400000`. So the applier's shift-0 order to a factory
+  mid-build kills its nanoframe. A puppet's order nodes are therefore written with neither bit,
+  so that replacing them runs no handler and starts no script [INFERRED from the destructor].
 - **Untraced** (T15): rally inheritance (`0x41B8D0` copies no order) and adopting an existing
   nanoframe into an order. **Carried units** (T18): `+0x86` carrier, `+0x8A` first passenger,
   `+0x8E` next, `+0xF9` attach point, written by `0x48AAC0`.
@@ -512,8 +557,8 @@ recorded.
 | 2 | **Motion driver**: direct round-robin-style writes against fed proxies, before the unit tick; walk scripts, footprints, sight | motion fidelity, the recorded fields | (1) |
 | 3 | **Events in-process, bounded**: `0x4B0B00`, `0x49D270`, `0x49AF90`, `0x489CE0`, `0x4866D0(rec, 0)`, `0x41B8D0`, `0x48B090`, `0x47F300` | playback fidelity, §4's event term | (1), (3) |
 | 4 | **1,500-unit rebuild in play**: argument-8 creates, B4's hold, a paused apply, timed against the 1 s seek and 2 s takeover | seek and takeover feasibility | (2) |
-| 5 | **Seat to AI without a reload**: the mover swap, the `+0x74` and `0x5119C0` objects; does the AI keep, override or re-plan orders? | takeover without a loading screen, or its fallback back for a decision | (2) |
-| 6 | **Live rewind**: live seats flipped to 3; what their kept `+0x74` objects and local movers do | rewind in a live skirmish | (1), (2) |
+| 5 | **Seat to AI without a reload**: flip the seat, build the `+0x74` and `0x5119C0` objects, then re-create its units at their recorded slots (fresh COB, a local mover); does the AI keep, override or re-plan orders? Does an Escalation factory's one-shot `Upgrade` run in the fork? | takeover without a loading screen, or its fallback back for a decision | (2) |
+| 6 | **Live rewind**: live seats flipped to 3; what their kept `+0x74` objects and local movers do (getter 75 keeps answering the recorded bit, 1 for every skirmish seat, so running scripts stay on their branch) | rewind in a live skirmish | (1), (2) |
 | 7 | **Queues**: direct `0x43ADC0` appends, `0x43B0B0`/`0x419B00` by name, rally, nanoframe adoption | queue fidelity at a takeover | (2) |
 | 8 | **Resources** through `+0xDC/+0xE0` and `+0x149`; residual divergence from fire spread, feature damage, meteors and grid claims | resources at a takeover; puppet drift | (2), (3) |
 | 9 | **A real hour**: AI, structures, air, orders, camera, and the recorder's game-thread cost | *f*, the disk budget, the 0.5 ms per tick budget | (3) |

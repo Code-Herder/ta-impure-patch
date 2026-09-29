@@ -408,7 +408,7 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   (`patch_setbyte`), the handshake by which `tdraw.dll` knows the proxy is active.
 - **`0x488C50`** — the unit-category name map's lookup-or-insert, `ret 4`, its argument a
   refcounted string passed by value. It binary-searches the sorted array
-  `[0x51E6B4, 0x51E6B8)` of 8-byte `{name, mask}` entries with `strcmp 0x4F8A70`. On a name it does
+  `[0x51E6B4, 0x51E6B8)` of 8-byte `{name, mask}` entries with `_stricmp 0x4F8A70`, which is case-insensitive (it folds A–Z before comparing, `0x4F8A9A..0x4F8AB6`). On a name it does
   not hold it allocates the 0x40-byte mask (`push 0x40; call 0x4B4F10` at `0x488CC2`, the
   site Impure widens for 16 384 types), clears 16 dwords (`0x488CD2`), inserts through
   `0x488FB0` (`this` = `0x51E6B0`), then releases its two strings through `0x4C9390` and returns
@@ -854,7 +854,7 @@ and [the size estimate](tadr-port/demo-recorder-state-evidence.md#4-size-estimat
 | `0x41DC20` | the post-game table, called by the teardown at `0x491B8B`, before `0x464A00` frees the records' objects | Takes the win flag `main+0x391AF` from `main+0x3923B` bit 4. A record with `+0x22` = 0 gets a row when it is active, of type 1–3, `+0x146` ≠ 10 and without the watcher bit, or has created units (`+0x140` ≠ 0) (`0x41DD13..0x41DD5B`): the name `+0x2B`, kills `+0xFC`, losses `+0xFE`, the produced `+0xAC`/`+0xB4` and wasted `+0xCC`/`+0xD4` totals as integers and a score (`[main+0x391E9]` `+0xD58`, `+0xD54`), into rows at `main+0x38DD9`, with column maxima at `main+0x3918F..+0x391A7`. ENDMSN shows the live records as the teardown finds them. DIS |
 | `0x43B0B0(action, unit, type, amount)` (`ret 0x10`) | a factory queue as count nodes | For amount > 0 it adds to the last node of the list the action's descriptor picks (`+0x60` for its flag `0x40000` in `*(0x512344)`, stride `0x19`, else `+0x5C`) when that node's action byte `+4` and `+0x36` match (`0x43B102..0x43B10C`, into `+0x3A`), and otherwise appends through `0x43ADC0(action, 1, unit, 0, 0, type, amount)` (`0x43B116..0x43B120`); for amount ≤ 0 it subtracts from the last matching node, destroying a node it empties and carrying the rest to the next match (`0x43B12C..0x43B1DC`). A queue A, B, A is three nodes. Its only callers are `0x419B8C` and `0x419BA8`. DIS |
 | `0x419B00(name, unit, amount)` (`ret 0xC`) | the build-menu queue call (callers `0x41AC3C`, `0x40865E`, `0x4087C4`) | Plays `addbuild` or `subbuild` (`0x47F1A0`) when the unit's `+0xFF` is the viewed player (`0x419B10..0x419B33`). `MAKENUKE` and `MAKEANTI` queue `BUILDWEAPON` with type 0 (`0x419B97..0x419BA8`); any other name is resolved to a type (`0x488B10`; an unknown one queues nothing) and queued as `MOBILEBUILD` for a unit with a mover, else `BUILDINGBUILD` (`0x419B6B..0x419B8C`), the action resolved by name through `0x438760`. The click at `0x41ABFA..0x41AC3C` passes ±1, or ±5 with SHIFT (`0x4C1B80(0xF9)`). DIS |
-| `0x402640(unit, order, event)` (`ret 0xC`) | an order handler, its pointer at `0x4FC55C` [INFERRED: a factory's build order] | Event bit `0x2` is tested first (`0x402647..0x40264D`). With a target `+0x16` it credits the target def's `+0x18A` × `(1.0 − target+0x104)`, truncated to an integer by `0x4E43A0` (`0x40267E`), to the unit's `+0xD4`; a type-2 owner (`unit+0xEC`) gets 50 % at difficulty 0 and 70 % at 1 (`0x402687..0x4026E3`; −0.5 at `0x4FC6E0`, −0.7 at `0x4FC6D8`). It then calls `0x41B8D0(unit, target)` (`0x4026EE`) and `0x489BB0(unit, target, 0x7530, 9, 0)` (`0x402701`). With or without a target it calls `0x48B090(9, 0)` (`0x40270C`) and `0x41C150(unit)` (`0x402712`) and returns 5. Event bit `0x8` ("Construction stopped", `0x501340`) decrements the node's count `+0x3A` (`0x40272A..0x402751`). Otherwise it dispatches on the state `order+5` through `0x402B5C`: state 0 needs `+0x110` bit 29 (`0x40277B..0x402785`) and keeps the unit activated (`0x48B090(1, 1)`) while `+0x3A` > 0, deactivating it and returning 5 at 0 (`0x40278B..0x4027B3`); state 4 (`0x402B07..0x402B39`) completes one unit: `0x41B8D0(unit, order+0x16)`, the target link cleared, `+0x3A` decremented. The unit in progress is the order's target `+0x16`. DIS |
+| `0x402640(unit, order, event)` (`ret 0xC`) | the `BuildingBuild` order's handler (action `0x0C`), its pointer at `0x4FC55C` (record `0x4FC558`; *The nano spray*, below) | Event bit `0x2` is tested first (`0x402647..0x40264D`). With a target `+0x16` it credits the target def's `+0x18A` × `(1.0 − target+0x104)`, truncated to an integer by `0x4E43A0` (`0x40267E`), to the unit's `+0xD4`; a type-2 owner (`unit+0xEC`) gets 50 % at difficulty 0 and 70 % at 1 (`0x402687..0x4026E3`; −0.5 at `0x4FC6E0`, −0.7 at `0x4FC6D8`). It then calls `0x41B8D0(unit, target)` (`0x4026EE`) and `0x489BB0(unit, target, 0x7530, 9, 0)` (`0x402701`). With or without a target it calls `0x48B090(9, 0)` (`0x40270C`) and `0x41C150(unit)` (`0x402712`) and returns 5. Event bit `0x8` ("Construction stopped", `0x501340`) decrements the node's count `+0x3A` (`0x40272A..0x402751`). Otherwise it dispatches on the state `order+5` through `0x402B5C`: state 0 needs `+0x110` bit 29 (`0x40277B..0x402785`) and keeps the unit activated (`0x48B090(1, 1)`) while `+0x3A` > 0, deactivating it and returning 5 at 0 (`0x40278B..0x4027B3`); state 4 (`0x402B07..0x402B39`) completes one unit: `0x41B8D0(unit, order+0x16)`, the target link cleared, `+0x3A` decremented. The unit in progress is the order's target `+0x16`. DIS |
 | `0x41B8D0(builder, built)` | the build completion (callers `0x4026EE`, `0x402B25`, `0x41BCBF`, `0x4555F1`, `0x455610`) | Calls only `0x4AB060`, `0x49FA90`, `0x48AAC0`, `0x48B090`, `0x4199B0` (which sums queue counts through `0x439D80`) and `0x4560C0`, and links no order to the built unit: how a built unit takes a factory's rally orders is open. DIS |
 
 Described where they live: the resource layout (*Perspective authority and tick boundary*, above);
@@ -866,6 +866,220 @@ level load and nowhere else* and the paragraph after it); the order links (*The 
 save's per-unit sections (*A saved game's unit records*); what a create skips without `finished`
 (*What one local create sends*); the dispatcher's sender test (*A sender, as the dispatcher sees
 it*); and the send's network and local-record gates (*The send `0x451DF0`*).
+
+### The nano spray: two emitters, fifteen order handlers [DISASSEMBLED 2026-09-29]
+
+What the recorder's rule for owner-only effects rests on (*Decisions taken* in the
+[completeness note](tadr-port/demo-recorder-completeness.md#decisions-taken)): the nanolathe
+spray is made by two emitters, called only from fifteen order handlers, which run only on the
+machine that simulates the unit. Established by whole-image scans (E8, E9, Jcc and absolute
+dwords at every byte offset) and recursive descent from each handler. The particle object, its
+layer and its draw are in [effects §7](effects.md).
+
+**The emitters** are `0x4720D0(point3, box6, layer)` and `0x472200(box6, point3, layer)`,
+stdcall, `ret 0xC`, 297-byte bodies that differ only in which argument they expand: the forward
+one copies its point into a degenerate box (`0x4720D3..0x472108`) and initialises the particle
+from the point to the box; the reverse one expands its second argument and initialises from the
+box to the point (`0x472203..0x4722A9`). Neither makes a particle while the byte `0x51E608` is
+nonzero (`0x472112..0x47211D`) or when the pool `0x470EB0(0x51E610, 0x4C)` is empty
+(`0x472126`). The object's vtable is `0x4FD5B8`. Its init, slot `+0x18` = `0x473B50`, copies the
+two boxes to `obj+0x1C` and `obj+0x34`, sets its end tick to GameTime + 1 and spawns at once
+(`0x473D50`, called at `0x473D39`). The spawn draws the CRT `rand 0x4E4870`, never the sim RNG
+`0x4B6C30`, so an emission changes no simulation state. `0x4732E0` appends the object to the
+layer's vector at `[main+0x38D77] + layer·16`; a layer already holding more than 400 (`0x190`)
+entries destroys its oldest first. Neither entry has an absolute reference; the 17 callers, all
+passing layer 6, are the handlers below.
+
+**The handlers.** Each is referenced once, at its `.rdata` record's `+4`, and runs only from the
+heap copy (*`0x512344` — the order-descriptor array*). The action is the record's rank there
+[INFERRED from the comparator and the registrations; not read live]. The spray starts at
+`0x43E400` of the order's owner `order+0xE`, except in SelfRepair, where it starts at the
+repairer `order+0x16`: that order belongs to the aircraft being repaired, and VTOL_Landing
+`0x4118E0` makes it with the landing pad as its target (`0x411EBF..0x411EE1`, the only reference
+to "SELFREPAIR", `0x411ECF`).
+
+| Handler | Order (action) | Emits at | Box | Emits when | Runs every |
+|---|---|---|---|---|---|
+| `0x402430` | SelfRepair (`0x28`) | `0x4025AE` | A of the aircraft | the step `0x41BD10` at `0x402518` returned 1 | tick |
+| `0x402640` | BuildingBuild (`0x0C`) | `0x402ABD` | A of the nanoframe `order+0x16` | `0x41BA60` at `0x402A09` returned 1 | tick |
+| `0x403A20` | MobileBuild (`0x19`) | `0x403ECC` | B of the target | `0x41BA60` at `0x403E43` | tick |
+| `0x403F70` | HelpBuild (`0x17`) | `0x4041C2` | B | `0x41BA60` at `0x404139` | tick |
+| `0x413D80` | VTOL_MobileBuild (`0x36`) | `0x4142B6` | B | `0x41BA60` at `0x414235` | tick |
+| `0x414380` | VTOL_HelpBuild (`0x33`) | `0x4146D7` | B | `0x41BA60` at `0x414656` | tick |
+| `0x405300` | RepairUnit (`0x23`) | `0x4056D1` | A of the target | `0x41BD10` at `0x40561A` | tick |
+| `0x405740` | RepairUnitNoMove (`0x24`) | `0x4058F6` | A | `0x41BD10` at `0x40583F` | tick |
+| `0x414E70` | VTOL_RepairUnit (`0x3D`) | `0x4151EC` | A | state 2 with event bit `0x40` clear, the target's `+0x110 & 3` = 1 and `& 0xC` = 0, and its HP below the def's `+0x1FA`; `0x41BD10`'s result at `0x41513D` is never tested | tick |
+| `0x404DB0` | Resurrect (`0x25`) | `0x40509D` | F | state 4, the feature still present, the countdown `order+0x3A` nonzero before its decrement | tick |
+| `0x404270` | Capture (`0x0E`) | `0x404676` | A of the target | state 4, `order+0x36` below `order+0x3A` | 2 ticks |
+| `0x404730` | ReclaimUnit (`0x21`) | `0x404A4E` | A | in range, and `0x489960` at `0x404961` | 2 ticks |
+| `0x414A80` | VTOL_ReclaimUnit (`0x3B`) | `0x414C43` | A | in range, and `0x489960` at `0x414B6D` | 2 ticks |
+| `0x404AD0` | Reclaim (`0x20`) | `0x404D3B` and `0x404D4C`, the same arguments | F | the feature present, the countdown `order+0x36` above 15 after −2 | 2 ticks |
+| `0x414770` | VTOL_Reclaim (`0x3A`) | `0x414A20` and `0x414A31` | F | the same, above 30 | 2 ticks |
+
+The first ten sites call the forward emitter, the last seven the reverse one. With P the
+target's position `+0x6A/+0x6E/+0x72` and D its def's dwords `+0x15E..+0x172`, box A is
+`{Px+D15E, Py, Pz+D166, Px+D16A, Py+D16E, Pz+D172}`, B is A with the lower y `Py+D162`, and F is
+the feature's: the grid words `0x421DA0` wrote, shifted by 20, the feature def's footprint
+`+0x94`/`+0x96` and height `+0xFA`, and the ground height `0x485070`. `0x43E400` is called 15
+times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9`).
+
+- **Where a handler can emit.** Handlers are called at exactly three places, each with
+  `(order+0xE, order, events)` and the raw type byte as the index: `0x43B87C` in the main-list
+  controller `0x43B7C0`, which runs the head of `unit+0x5C`, re-reads it after every call and
+  passes the fired events `(order+0x4E | unit+0xBA) & order+6`; `0x43BB21` in `0x43BAD0`, which
+  walks the sub list `+0x60` and passes 0; and `0x43A21A` in the order node's destructor
+  `0x43A1F0`, which passes 2. The two controllers have one caller each, `0x48AF98` and `0x48AF9E`
+  in the unit tick, behind the gate that the unit's owner record be active and of type 1 or 2
+  (`0x48AEB5..0x48AECD`). None of the fifteen records has flag `0x40000`, so these orders always
+  live on the main list and only `0x43B87C` runs them: **an emission happens only in the unit
+  tick on the game thread, for a unit whose owner is a local seat (type 1 or 2).**
+- **The destructor cannot emit.** `0x43A1F0` has twelve callers (`0x4384E4`, `0x439EF3`,
+  `0x439F5F`, `0x439FC9`, `0x43AE47`, `0x43AEB8`, `0x43B075`, `0x43B1C9`, `0x43B93B`, `0x43BA5B`,
+  `0x43BBE6`, `0x43BC49`) and no vtable entry; it calls the handler only when `order+6` has bit
+  `0x02` (`0x43A1F5..0x43A200`). BuildingBuild, MobileBuild, HelpBuild, VTOL_MobileBuild and
+  VTOL_HelpBuild return on event 2 before their emitter, and they are the only handlers that set
+  that bit; the other ten would reach their emitter on event 2, and never set it.
+- **What the destructor does instead.** BuildingBuild's event-2 cleanup (`0x402653..0x402723`)
+  credits `unit+0xD4`, calls `0x41B8D0(builder, nanoframe)` and deals the unfinished nanoframe
+  `0x489BB0(builder, nanoframe, 30000, 9, 0)` (`0x402701`), then `0x48B090` and `0x41C150`; the
+  other four build handlers call `0x41C110`. The destructor itself starts COB `StopBuilding` on
+  the owner when `order+0x42` has bit `0x400000` (`0x43A21E..0x43A25D`; `0x438590` sets the bit
+  after starting `StartBuilding`, `0x4385F0` clears it) and broadcasts it (`0x43A258`). All of
+  this runs wherever the destructor runs: unit death, player commands, the AI's orders, an attach,
+  the level teardown, and `0x43AFC0` with shift 0, which reaches `0x43ADC0` with queue 0 and
+  destroys the unit's main-list nodes without flag 4 (`0x43AE0A..0x43AE59`). So a new order given
+  to a factory mid-build kills its nanoframe.
+- **Handler calls nest.** BuildingBuild, MobileBuild and VTOL_MobileBuild send `getbuilt` to the
+  new nanoframe through `0x43ADC0` (`0x4029A5`, `0x403DC5`, `0x4140F3`), which destroys that
+  unit's leading nodes with flag `0x4000`; an attach, `0x48AAC0` → `0x48AB70` → `0x4384A0`, clears
+  the child's main list. Attribution by a single "current unit" set around `0x43B87C` would be
+  wrong; each call's own first argument, kept as a stack, is not.
+- **Cadence.** `0x43B7C0` runs once per unit per tick. The build and repair states, SelfRepair
+  and Resurrect re-arm with `0x439E80(order, 1)`, capture and the reclaims with
+  `0x439E80(order, 2)`. At a factory's unit turnover the states chain inside one controller call
+  (state 3 returns 1, state 4 returns 0, state 0 with units left returns 1, state 2 creates the
+  next nanoframe and returns 1), so two emissions in one tick are possible [the chain DIS; how
+  often INFERRED]. VTOL_MobileBuild's state 3 falls into state 4's build code (`0x414143 jmp
+  0x414149`), so a VTOL builder steps and sprays from both.
+- **The steps.** `0x41BA60(builder, target, work)` returns 1 only for work > 0 when the request
+  `0x4011C0` on the builder's ledger `+0xBC` succeeds; it then raises the target's HP `+0x108`
+  toward the def's `+0x1FA`, lowers its remaining fraction `+0x104` and sets `+0x110` bit
+  `0x2000`. It returns 0 when `+0x104` is already 0.0, when work is 0, when the request fails
+  (nothing applied), and on the unbuild path (work < 0, from `0x41BCD0`, which GetBuilt calls at
+  `0x402F6B`), which applies progress in reverse. `0x41BD10(repairer, target, work)` returns 0
+  at or above the target def's max HP (`0x41BD33`); otherwise it caps both the HP to add and the
+  energy to ask at 1 a call (`0x41BD87..0x41BDA3`), asks `0x401180` on the repairer's ledger and,
+  when that succeeds, applies `0x489BB0(repairer, target, hp, 0xA, 0)` and returns 1. `0x489960`
+  (thiscall, `ret 4`, writes nothing) is an eligibility test, not a step: the reclaimer's def
+  `+0x245` bit `0x400`, the target's `+0x110 & 3` ≠ 2 and its def's `+0x245` bit `0x1000` clear
+  (`0x489960..0x48999E`). ReclaimUnit's progress is a kind-5 hit `0x489BB0` once `order+0x3A`
+  reaches 15 (it grows by 2 a call), and it does not gate the spray.
+- **The ledger** `unit+0xBC` is 0x34 bytes: an energy group at `+0` and a metal group at `+0x18`,
+  each {produced, requested, granted, unpaid debt, last produced, last requested} [names
+  INFERRED], and the owner record at `+0x30` (`0x401070`). `0x4011C0(e, m)` (thiscall on the
+  ledger, `ret 8`) always adds the request to `+0x04`/`+0x1C`, returns 0 while either debt
+  `+0x0C`/`+0x24` is above 0.0, and otherwise adds it to the granted `+0x08`/`+0x20` and returns 1;
+  it never reads stored resources. The economy pass settles the debts (`0x401877..0x401B99`), for
+  type-1/2 records only, so a stalled owner's builders fail every request until a later pass pays.
+  For the eight step-gated sites, "sprayed this tick" is therefore "the step returned 1 this
+  tick"; VTOL_RepairUnit, capture, the reclaims and resurrect spray with no resource condition
+  while their state gates hold.
+- **Other writes around the spray.** The handlers stamp the unit's `+0xB0` with GameTime + 150
+  (the repairs: `0x4024E1`, `0x4055E9`, `0x40580E`), + 300 (MobileBuild `0x403EE2`, HelpBuild
+  `0x4041D8`, Reclaim `0x404CAC`, Resurrect `0x4050B7`, VTOL_Reclaim `0x414991`) or + 900 (Capture
+  `0x404692`, ReclaimUnit `0x4049A3`); the shot path `0x49C740` stamps + 600. Its reader is not
+  traced.
+- **`0x43E400(unit, out)`** (stdcall, `ret 8`) runs COB `QueryNanoPiece` (`0x5052D4`) through
+  `0x4B0BC0` on `unit+0x9A` (`0x43E427`) with the piece preset to 0, turns the piece into a
+  model-space point with `0x43DEF0` (`0x43E437`) and adds the unit's `+0x6A/+0x6E/+0x72`. It writes
+  only `out` (`0x43E458..0x43E45D`) and the query's own COB thread record. With no script, all
+  eight thread records busy, a null `+0x9E` or a piece out of range, the point is the unit's
+  origin. The query runs where the handler runs, on the owner's machine [INFERRED: a script that
+  alternates pieces through a static answers differently on a puppet].
+
+### COB on a puppet: getter 75, the writers COB reaches, fresh COB [DISASSEMBLED + SOURCE 2026-09-29]
+
+What decision 2 of the [completeness note](tadr-port/demo-recorder-completeness.md#decisions-taken)
+rests on. A puppet's units run their COB as a live remote copy's do: the unit tick admits type-3
+records and runs `DoScriptsNow(1)` for every unit with `+0x9A` (`0x48ADDF..0x48ADEB`), while
+AutoAim and the local block (orders, movement, regeneration) run only for types 1 and 2
+(`0x48ADC9..0x48ADDA`, `0x48AEB5..0x48AECD`). What the supported mods do with getter 75 is in the
+[state design evidence](tadr-port/demo-recorder-state-evidence.md).
+
+- **Getter 75 is the only machine-dependent getter.** Impure's `cob_get` (the E9 at `0x480770`,
+  `tagpu_patches.c`) answers 1 exactly when the queried unit's owner record has `+0x73` of 1 or 2,
+  the engine's own "simulated here" test (AutoAim `0x48ADCE`, the local block `0x48AEC4`, the
+  `0x11` sender `0x48B1C0`); unlike those gates it does not test that the record is active. It
+  bounds the id by `u16 main+0x14351` and requires the live bit, `+0xA8` = id and the owner byte
+  `+0xFF` below 10. `+0xFF` is stored only by the level init `0x4854A0` (`0x485880`, `0x48590E`):
+  no other byte store reaches it, and the word stores at `+0xFE` are to player records, feature
+  defs and a parser, never a unit. No getter, stock or Impure's, reads the controlled or viewed
+  player, the network bit, the game type, GameTime or the sim RNG; the only player-record bytes
+  any reads are `+0x73` (75) and the alliance row `+0x108` (74). On a puppet every seat is type 3,
+  so 75 answers 0 for every unit, as every live peer does for a unit it does not simulate
+  (MEASURED on two Wine peers in all five supported mods, [cob.md](tadr-port/cob.md)).
+- **Where getters run.** Inside the runner `0x4B0DA0`: `GET_UNIT_VALUE` calls `vt+0x44` at
+  `0x4B160F`, `GET` at `0x4B1678`. The runner is reached from `DoScriptsNow 0x4B0D60` (the unit
+  tick, `0x48ADEB`), from a start with run-now set (`0x4B09D9` in `0x4B0940`, `0x4B0B97` in
+  `0x4B0B00`) and from the synchronous query `0x4B0C40` (`0x4B0CE1`). Every create runs Create
+  with run-now set (`0x485D40`: `push 1` at `0x485DDD`, the call at `0x485DE6`; called from
+  `0x4860A6` in the create `0x485F50` and `0x4862BE` in CreateFromNetwork `0x4861D0`), so Create's
+  first slice, and any getter in it, runs inside the create: on the game thread in play, and on
+  the loader thread while the level load creates units (`0x497963`, `0x497ACD`, `0x4977BB`,
+  `0x497B29`, `0x497B40` in the loader body `0x497180`).
+- **The COB-to-engine writers.** SET, `vt+0x40` = `0x480B20`, maps `id − 1` through the byte
+  table `0x480C18`: ACTIVATION → `0x48B090(unit, 1, v)` (`0x480B52`); INBUILDSTANCE, BUSY and
+  BUGGER_OFF → `+0x10F` bits 0, 1 and 3; YARD_OPEN → `0x47DAC0(unit, v)` (`0x480BAE`); ARMORED →
+  `0x48B090(unit, 2, v)` (`0x480BEC`); every id, known or not, sets `+0xBA` bit 2. ATTACH,
+  `vt+0x38` = `0x481340`, and DROP, `vt+0x3C` = `0x4813B0`, call `0x48AAC0` (`0x4813A6`,
+  `0x481422`), which has no owner test: it sends a `0x0A` from the DirectPlay id `0x44FDB0`
+  returns (the first active type-1/2 record) and applies it locally through `0x48AB70`
+  (`0x48AB58`, `0x48AB62`). EXPLODE, `vt+0x34` = `0x481140`, without flag `0x20` draws the sim RNG
+  six times and spawns debris `0x421620` (`0x48116F..0x4811B9`, `0x48123C`); its flag bits 8..13
+  add explosions through `0x420A30`. EMIT_SFX, `vt+0x30` = `0x480EB0`, emits particles only, and
+  only when the unit is in the viewed player's sight (`0x465AC0`, `0x480EC5..0x480EEC`).
+  PLAY_SOUND `0x10072000` kills its own thread (`0x4B1B60`).
+- **`0x48B090(mask, value)`** (thiscall on the unit, `ret 8`) stores the new `+0x10E` and returns
+  at once when the byte did not change (`0x48B0D6..0x48B0DE`). A change starts Activate or
+  Deactivate (bit 0) or StartBuilding or StopBuilding (bit 3) with run-now clear (`0x48B106`,
+  `0x48B12B`, `0x48B14E`, `0x48B169`), calls `0x47F780` for bits 0 and 2, then `0x41C110`, and
+  sends `0x11` only for an active owner of type 1 or 2 (`0x48B1B5..0x48B1F3`). `0x47F780(unit,
+  kind, 0)` acts only for a live unit of the viewed player and queues a status line through
+  `0x47FAD0` (table `0x5086E8`). Whether it reaches the sound entry `0x47F0C0` is open: no direct
+  call was found, and `0x47F0C0`'s callers are `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`.
+- **A remote copy takes `+0x10E` only through `0x48B090`**, called twice (set the byte's bits,
+  clear the rest) by the `0x11` receiver (`0x4555A1`, `0x4555B0`) and the round robin
+  (`0x48B4F6..0x48B519`). Neither carries `+0x10F`, so a remote copy's `+0x10F` comes only from
+  its own COB.
+- **COB never reaches the script-start broadcasters.** `0x456190`, `0x456200` and `0x456290` send
+  a `0x10` and start nothing locally. Their only callers are five engine sites, each right after
+  the matching local start: `0x4385D7` (StartBuilding, in `0x438590`), `0x438632` (StopBuilding,
+  in `0x4385F0`), `0x43A258` (StopBuilding, in the order destructor), `0x411403` (BeginTransport)
+  and `0x49E3A6` (the Aim scripts, in AutoAim). START (`0x4B18BB`) and CALL (`0x4B1928`) call only
+  the allocator `0x4B08C0`, which calls nothing, and so does Impure's guarded step that replaces
+  them: a start a script issues is never broadcast, and runs again on each copy from its parent.
+- **Stock runs COB queries on remote units** in three places, with no owner gate: the `0x0D`
+  receiver `0x49D270` on the branch where the weapon def's `+0x111` bit 5 is clear (the shooter
+  from `msg+0x21`, through `0x49C740` to `Query<w>` at `0x43E227`, beside the `Fire*` and
+  `RockUnit` starts); CreateFromNetwork `0x4861D0` → `0x49E070` (`Query<w>`, `AimFrom<w>` and the
+  start of `SetMaxReloadTime`), reached when a `0x2C` finds a slot of another type (`0x48BA00`),
+  from the round robin (`0x48B497`) and from the dispatcher (`0x4553E4`); and the Killed query
+  `0x4865C3` in `Send_UnitDeath 0x4864B0`, reached by the reaper `0x48AFD1`, CreateFromNetwork's
+  replacement `0x486244` and kill-all `0x486FB4`. Every other query site is local-only.
+- **Only a create gives fresh COB.** `0x485D40` has three callers: `0x4860A6` (the create
+  `0x485F50`), `0x4862BE` (CreateFromNetwork) and `0x485EFE` (in the uncalled `0x485E90`). The
+  destructor frees the old object through `[vt+0x50](1)` = `0x485E30` (`0x486D86..0x486D8D`), and
+  the mover install `0x485E50` touches only the mover and the heading. A seat flipped in place
+  keeps its units' COB threads and statics, and a thread keeps the branch it took on a getter-75
+  answer until it tests again. A create reads `+0x73` twice: Create's first slice (getter 75) and
+  `0x43DC00`'s mover choice (`0x43DC48..0x43DC53`: proxy movers `0x490940`/`0x44F570`, local
+  movers `0x4907E0`/`0x44F010`).
+- **The sim RNG is per machine.** COB RAND pushes `lo + 0x4B6C30(hi − lo + 1)`
+  (`0x4B15BD..0x4B15F2`). `0x4B6C30` steps Park–Miller on `0x51FC88`, which the loader body seeds
+  once per level from `QueryPerformanceCounter` (`0x49718C..0x49719D`, stored as
+  `(seed ^ 0x66E29572) | 1` at `0x4B6CAB`); `0x51FC88`'s only stores are `0x4B6C87` and
+  `0x4B6CAB`. A type-3 seat has no `0x5119C0` object (the player init skips it,
+  `0x46489D..0x4648A5`), so a puppet also draws less often than the live game did.
 
 
 
@@ -3519,7 +3733,7 @@ build:
 ### The saved-game loader's order fallback — `0x43A58D` [DISASSEMBLED 2026-09-25]
 
 **The walk.** The order loader `0x43A420` has one caller, `0x487594`. It takes an order's type
-from its `<key>_name` (`0x43C6B0`, then a `strcmp` against the table). A name not found goes to
+from its `<key>_name` (`0x43C6B0`, then a case-insensitive `_stricmp 0x4F8A70` against the table). A name not found goes to
 `0x43A552`, "Ready", with `dl` = 0. A record without the name falls back to its stored index. It
 walks the order table `0x512344` counting records whose `+0x14` bit 0 is clear
 (`0x43A556..0x43A58F`).
@@ -6296,19 +6510,34 @@ disagreements — `git log` "Three things the live bring-up found".]
 
 `0x512344` begin, `0x512348` end, `0x51234C` capacity: a vector of **25-byte** records, all
 three zeroed by the constructor at `0x438450` and freed at `0x438480` through `0x4B4F20`. A
-lookup by name walks it with `strcmp 0x4F8A70` against the pointer at `record+0x15`
+lookup by name walks it with `_stricmp 0x4F8A70`, case-insensitive, against the pointer at `record+0x15`
 (`0x4387A9`, `0x4387E4`), which is what fixes both the stride and that last field.
+
+**How it is filled** [DISASSEMBLED 2026-09-29]. `0x43C050`, called once from `0x491200`
+(`0x49136E`), appends the record at `0x4FD288` (empty name, status "Ready", handler `0x439EA0`,
+which returns 5) and then runs the three registrations `0x43BC90(src, count)`, in this order
+(`0x43C325..0x43C334`): `0x4FC6E8` (22 records, called at `0x406BF7`), `0x4FCA18` (22,
+`0x415B27`) and `0x4FC490` (23, `0x403187`). After every append the whole vector is re-sorted by
+name with the comparator `0x43C020`, `_stricmp(a+0x15, b+0x15) < 0`. The 68 records and their case-folded names are fixed for the
+process, so **an order's type byte `+4` is its record's rank in that sorted vector**, not its
+position in `.rdata`: `BuildingBuild` is `0x0C` only because the compare folds case (under a
+case-sensitive compare `BuildWeapon` would come first). The engine reads only these heap copies;
+rewriting a handler dword in `.rdata` after `0x43C050` has run changes nothing.
 
 | Offset | What | Read at |
 | --- | --- | --- |
-| `+0x00..0x0B` | unread by any of the marker paths | — |
+| `+0x00` | `char*` status text ("Ready", "Nanolathing", "Repairing"…); `0x439DF0` returns it, record 0 when a unit has no order | `0x439E13` |
+| `+0x04` | the order's handler, `stdcall(unit, order, events)`, `ret 0xC` — called only from the three dispatch sites (*The nano spray* in the replay section) | `0x43A21A`, `0x43B87C`, `0x43BB21` |
 | `+0x08` | the target-sprite drawer's own address, **never read in this build** | — |
 | `+0x0C` | u32 marker-capability mask (bits per the table above) | `0x439B7D` etc. |
 | `+0x10` | u8 `cursor_ary` index; 0 = this order type draws no sprite | `0x4397F3`, `0x439965` |
-| `+0x15` | `char*` name, for the console lookup | `0x4387A9` |
+| `+0x11` | u32 flags, copied into a new node's `+0x42` (`0x43A18F`); bit `0x40000` puts the order on the sub list `+0x60`, else the main list `+0x5C` (`0x43AC6A`, `0x43ACBA`, `0x43AD19`) | `0x43A17C`, `0x438B9A`, `0x439E34`, `0x43B0C0`, `0x43B149` |
+| `+0x14` | the flags' top byte, read alone | `0x43A56D` |
+| `+0x15` | `char*` name, for the console lookup, the saved game's `<key>_name` and the sort | `0x4387A9` |
 
-The engine indexes this with the raw type byte and no bound at all. With a live end pointer
-in `0x512348` the bound costs two loads, so ours takes it.
+The engine indexes this with the raw type byte and no bound at all, here and at the three
+handler dispatches. With a live end pointer in `0x512348` the bound costs two loads, so ours
+takes it.
 
 ### `0x438C00` — the build-site footprint rect
 
@@ -11185,7 +11414,7 @@ On the counting path:
 - `0x4868C1`: the victim's player `+0xFE` (losses) + 1, ungated.
 - `0x4868C8..0x486906`: the killer's player `+0xFC` (kills: `main + idx·0x14B + 0x1C5F`) + 1. Gated on
   `+0xF4 ≠ 10`, **the unit's `+0x104 == 0.0` (`0x4868D3`)**, and `+0xFF ≠ +0xF4`.
-- `0x486915..0x486996`: `strcmp 0x4F8A70` compares the unit's type name with a name at `main+0x37F5F`
+- `0x486915..0x486996`: `_stricmp 0x4F8A70` compares, case-insensitively, the unit's type name with a name at `main+0x37F5F`
   indexed by its player's side [INFERRED: the side's commander]. On a match, the killer's player
   `+0x104` + 1 (`0x486981`) and the victim's player `+0x106` + 1 (`0x486996`).
 - `0x48699D..0x4869CA`: **the unit kill count** — the killer's `+0xB8` + 1, gated on `+0xF0` non-NULL,
@@ -11784,7 +12013,7 @@ the name table; `0x4B07C0 Name2Index` is the standalone copy):
 | `0x4B0A70` `COBEngine_StartScript` | `thiscall(cob, name, cb, runNow, argc, a0, a1, a2, a3)`, `ret 0x20` | name → index → `0x4B0B00` | 21: `0x406834` `0x4069BF` `0x4113EF` `0x437902` `0x43795E` `0x43798A` `0x43DBE8` `0x486877` `0x489898` `0x489948` `0x489F43` `0x489F8E` `0x48A149` `0x48A2E0` `0x499C5C` `0x49CBEB` `0x49CDA6` `0x49CFCA` `0x49E186` (`UNITS_StartWeaponsScripts`) `0x49E31C` `0x49E386` (`AutoAim`) |
 | `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the `0x10` message's case `0x4554EE..0x455556`, dispatch entry `0x455FBC`, which passes the message's script index) `0x4B0AEE` |
 | `0x4B0940` | `thiscall(cob, name, cb, runNow)`, `ret 0xC` | no-argument start, same shape; refused → returns 0 *without* calling the callback | 15: `0x40F433` `0x41148D` `0x411794` `0x411DA1` `0x411E2B` `0x43DAF2` `0x43DB27` `0x485DE6` (`Create`) `0x48B106` `0x48B12B` `0x48B14E` `0x48B169` (`UNITS_SetStateMask`) `0x49CB94` `0x49CD4F` `0x49CF73` (the fire paths) |
-| `0x4B0BC0` `COBEngine_QueryScript` | `thiscall(cob, name, p0, p1, p2, p3)`, `ret 0x14` | → `0x4B0C40` | 14: `0x4027FB` `0x4113B1` `0x41189C` `0x411A35` `0x411AA6` `0x411BF5` `0x411CF1` `0x43E227` `0x43E291` (`UNITS_QueryWeaponPosition`) `0x43E32C` `0x43E370` `0x43E3E4` `0x43E427` (`UNITS_CallAimScripts`) `0x4865C3` |
+| `0x4B0BC0` `COBEngine_QueryScript` | `thiscall(cob, name, p0, p1, p2, p3)`, `ret 0x14` | → `0x4B0C40` | 14: `0x4027FB` `0x4113B1` `0x41189C` `0x411A35` `0x411AA6` `0x411BF5` `0x411CF1` `0x43E227` `0x43E291` (`UNITS_QueryWeaponPosition`) `0x43E32C` `0x43E370` `0x43E3E4` `0x43E427` (`0x43E400`, `QueryNanoPiece`) `0x4865C3` |
 | `0x4B0C40` | `thiscall(cob, idx, p0..p3)` | alloc; **refused → returns 0 leaving `*p0..*p3` untouched** (the silent failure); else callback `0`, pushes `*p0..*p3` (`0` for a null pointer), **sp = 3**, runs that thread now (`0x4B0DA0(cob, slot, 0)`), then copies `stack[0..3]` back through the non-null pointers — a `Query*` script answers by assigning its parameter | `0x4B0C2F` |
 | `0x4B0D60` `COBEngine_DoScriptsNow` | `thiscall(cob, dt)` | runs the eight records, then `0x4B1C00(cob, dt)` | **one**: `0x48ADEB`, in the per-unit tick function, immediately after `AutoAim 0x49E1A0` (called when the block owner's player record, `edi` from `0x48AD73`, is active with `+0x73 ∈ {1, 2}`, `0x48ADC9..0x48ADD7`), **with `dt = 1`** — so `+0x0C` counts ticks |
 | `0x4B0D20` | `thiscall(cob, cb)` | clears a matching callback pointer in every busy record | **no callers** |
@@ -12102,18 +12331,21 @@ The allocation choice is mapped in *Replay snapshots and draw-created caches* ab
 **`0x480B20`**. Both are `thiscall(cob, id, a, b, c, d)` / `thiscall(cob, id, value)` and both
 open with `lea eax,[ecx-1]; cmp eax,0x13; ja` — so **the value ids really are 1..20** and
 anything else returns 0 / does nothing. `esi` is the unit, taken as `[[cob+0x540]+0x0C]`.
-TADR's recorder takes over `get` with a jump at `0x480770` and answers ids 32 and 69–75 as well; it
-never hooks `set` ([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)).
+Impure's `cob_get` takes over `get` with a jump at `0x480770`, installed through the fail-closed
+limits table, and answers ids 32 and 69–75 as well, as TADR's recorder does
+([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)); `set` is stock. What 75
+answers on a puppet is in *COB on a puppet*, in the replay section.
 Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
 `EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
 
-**Live control, 2026-09-28:** the generated getter probe in the complete Escalation
-10.2.0 setup, with Impure and no TADR getter hooks, executed ids 32 and 69–75 on a
-human-owned unit and a local-AI-owned unit: all 16 returned zero through this handler.
+**Live control of the stock handler, 2026-09-28:** the generated getter probe in the
+complete Escalation 10.2.0 setup, before Impure's jump existed and with no TADR getter hooks,
+executed ids 32 and 69–75 on a human-owned unit and a local-AI-owned unit: all 16 returned
+zero through this handler.
 Two fresh Wine skirmishes on the reference setup read `u16 main+0x14351` as **10001**
 via `main = *(u32*)0x511DE8`; the probe units occupied slots 2 and 1002. A raised
-capacity does not make every match allocate 15001 slots. The future `MAX_ID` getter
-must return this match's last valid index, 10000, rather than the capacity maximum.
+capacity does not make every match allocate 15001 slots. Getter 70 (`MAX_ID`) returns
+this match's last valid index, the count − 1 (10000 here), not the capacity maximum.
 The test, its failing port assertions and remaining gaps are in
 [group F](tadr-port/cob.md#all-eight-getters-called-in-real-escalation).
 The repeated baseline additionally read the fixed unit array at `main+0x14357`,

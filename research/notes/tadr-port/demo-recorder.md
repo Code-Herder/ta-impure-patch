@@ -18,9 +18,8 @@ The shared engineering rules are in [the TADR port overview](overview.md). Recor
 feature of Impure; it does not require running the original recorder alongside Impure.
 
 **No production recorder has landed.** The next work is the three feasibility experiments under
-[Milestones](#milestones-and-delivery-order); the next decisions are the two open ones in the
-[completeness design](demo-recorder-completeness.md#open-decisions), starting with how much replay
-testing a simulation landing waits for. The [state design evidence](demo-recorder-state-evidence.md)
+[Milestones](#milestones-and-delivery-order). Every decision of the
+[completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)
 holds the desk research behind this design: how the engine treats remote players, what a rebuild
 must carry, per-player state, and the size estimate. The [packet-era exploration](demo-recorder-exploration.md)
 holds the earlier design's experiments and lists which of its findings still apply.
@@ -66,11 +65,23 @@ milestone.
   The engine's own interface (unit information, the resource bar, the minimap, fog, the order
   markers) shows the recorded values. Animations and effects are close to the original, not
   pixel-exact.
+  - **The recorder is the only writer** of the state it records: the units' own scripts still
+    run, but in puppet mode they change no engine state (their activation, flags and transport
+    links come from the recording).
+  - **Owner-only presentation shows as the recording machine showed it.** Mods such as
+    Escalation draw indicators only for units their machine simulates (COB getter 75); a puppet
+    answers that question as the recording machine did, per player. In a multiplayer recording
+    that is the recording player's view: other players' own indicators were never on that machine.
+  - **Effects only the owner's machine produces**, such as the nano spray, are recorded where the
+    engine produced them, tied to their unit, and replayed through the same engine function.
 - **Rebuild for seeking and takeover.** A seek reconstructs the state at the target from the
   nearest full snapshot and the recorded changes, then rebuilds the puppet world in place. A
-  takeover performs the same rebuild under local ownership: units with their state, order
+  takeover performs the same rebuild under local ownership: **the seats become local first, and
+  the units are then re-created**, because only a create gives a unit fresh scripts and a mod's
+  scripts test ownership as they start. The rebuild carries units with their state, order
   queues and factory queues, player resources and sight. **Dropped at a takeover:** shots in
-  flight, unit script state and AI internal state; weapon reload and targets, each unit's current
+  flight, unit script state (so what a mod keeps in its scripts, such as an upgraded look,
+  resets [INFERRED from the scripts]) and AI internal state; weapon reload and targets, each unit's current
   movement path (units re-path from their orders) and the AI's squad state beyond each unit's
   membership (which an engine call can set) are also lost unless each is given its own writer. The [scenario applier](../scenario-format.md) is the existing rebuild
   machinery, and the stock AI already adopts units the applier creates for an AI seat (measured:
@@ -289,10 +300,15 @@ check that raises false alarms on ordinary changes.
   is missing or different is a named failure. It also compares puppet playback with the recording,
   checks that seeking to one moment from different starting points gives the same world, and
   compares event counts taken where the engine creates effects, sounds and script starts, which
-  catches events that leave no state behind.
+  catches events that leave no state behind. **A landing that changes simulation code runs the
+  fixtures of the features it changes**, each recorded, restored in place and replayed; a change
+  whose feature names no fixture fails the landing by name. The broad tier runs nightly on
+  `main` and before every release tag.
 - **Impure's own state is declared where it is defined** (option B of the
   [completeness design](demo-recorder-completeness.md), chosen 2026-09-29). Engine unit and player records are recorded whole by default, apart from
-  one exclusion file the owner controls, which the build hash-checks. In a source file marked as
+  one exclusion file the owner controls, which the build hash-checks. These rules go into the
+  project's CLAUDE.md with the mechanism, in the landing that brings the declarations and the
+  build check. In a source file marked as
   simulation code, every table, static variable and thread-local slot carries a one-line
   declaration next to its definition: its class (recorded state; content rebuilt from game data
   and hashed; transient, empty at every snapshot; or private diagnostics) and what a row index
@@ -305,6 +321,8 @@ check that raises false alarms on ordinary changes.
 - **Event counts** are taken where events start (creates, deaths, shots, script starts) and where
   their effects are produced (explosions, particles, sounds), and compared by the harness. New
   effects start through an engine entry point, never a direct call to where effects are produced.
+  An effect only the owner's machine produces is recorded at its source and tied to its unit by an
+  engine invariant, never imitated; an emission the recorder cannot tie is a named failure.
 - **A replay shows what the game showed.** Display state that follows from simulation events is
   recorded whenever the live game displayed it, for example the part of a unit's minimap blink
   that `nomapweaponalert` keeps quiet for harmless hits (`s_quiet`). The private class is only for
@@ -336,7 +354,7 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 | Milestone | High-level completion criterion | Current state |
 |---|---|---|
 | Product contract | Scope, architecture, viewer features, storage policy and open decisions recorded here | **Decisions recorded, 2026-09-28** |
-| Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Next.** Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
+| Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Next.** Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
 | Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Planned** |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
@@ -349,11 +367,11 @@ evidence, and keep remaining gaps visible.
 
 ## Open decisions and evidence needed
 
-1. **The completeness mechanism's details.** Option B is chosen, and so are the answers for effects
-   puppets cannot produce and for COB getter 75
-   ([decisions taken](demo-recorder-completeness.md#decisions-taken)). Two decisions remain, listed
-   in the [completeness design](demo-recorder-completeness.md#open-decisions): how much harness
-   time a simulation landing may take, and when to adopt its CLAUDE.md section and landing gate.
+1. **The completeness mechanism's open items.** Every decision is taken
+   ([decisions taken](demo-recorder-completeness.md#decisions-taken)); three
+   [open items](demo-recorder-completeness.md#open-items) remain for the landings that build it: a
+   home for install-time plumbing, whether a recorded activation plays a second sound, and applying
+   a recorded yard change.
 2. **Measured size.** The disk budget rests on an estimate built from measured per-unit costs:
    about 2.4–3.3 compressed bytes per changed unit per sample, about 10–11 bytes per unit in a
    full-precision snapshot. Its largest unknown is the fraction of units that change per sample over a real

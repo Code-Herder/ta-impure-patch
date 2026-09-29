@@ -8,8 +8,9 @@ changes. The owner chose **option B, declare and measure**, on 2026-09-29, after
 [product page](demo-recorder.md#completeness-and-verification), and the engine facts it rests on
 are in the [state design evidence](demo-recorder-state-evidence.md). Addresses below come from that
 panel's readers and were checked against the pristine binary by its judges unless marked
-[INFERRED]. Two decisions are still open ([below](#open-decisions)); the proposed CLAUDE.md text
-is a draft until the owner adopts it.
+[INFERRED]. Every decision is taken ([below](#decisions-taken)). The CLAUDE.md section below is
+adopted with the mechanism: it goes into CLAUDE.md in the landing that brings the declarations and
+the build check, which must also close the [open items](#open-items).
 
 ## The problem
 
@@ -112,6 +113,28 @@ Each simulation feature declares its **puppet disposition** (runs on puppets, ow
 independent) and names a **fixture** that exercises it. Owner-only must be enforced in code, since
 puppets run COB (`0x48AD82..0x48ADEB`).
 
+**Effects only the owner's machine produces** are recorded where the engine produces them and
+replayed through the same function. The nano spray is the first: its two emitters are called only
+from order handlers in a local owner's unit tick, so a puppet never sprays by itself. The recorder
+wraps the three handler call sites, so every handler call carries its unit, and hooks the two
+emitters. Each emission is credited to the unit whose `QueryNanoPiece` (`0x43E400`) produced its
+start point, and recorded as that unit's spray state: direction, target box, and the ticks it
+sprayed on. An emission that no such query precedes is a named failure: it fails the harness, and a
+player's recording logs and counts it. Playback calls the same emitter for the puppet, with the
+start point from the puppet's own `0x43E400` and the recorded box bounded to the map first. The
+engine facts are in the engine map's *The nano spray*
+([engine map](../exe-reverse-engineering.md)).
+
+**COB on a puppet has one writer.** In puppet mode COB's SET, ATTACH and DROP change no engine
+state, and the recorder alone writes `+0x10E`, `+0x10F` and the carry links; it applies `+0x10E`
+through `0x48B090`, which returns early on an unchanged byte, so each recorded change starts its
+scripts once. Script starts are recorded only at the five broadcaster call sites: a start a script
+issues never reaches them and runs again on the puppet from its parent, so recording it anywhere
+else would double it. For the same reason a puppet's order nodes never carry `+0x42` bit
+`0x400000`, whose destruction would start a second `StopBuilding` [INFERRED from the destructor,
+`0x43A21E..0x43A25D`]. Getter 75 answers the recording machine's bit for the queried unit's seat.
+The engine facts are in the engine map's *COB on a puppet*.
+
 ### Always-on self-verification
 
 At each tick boundary the game thread copies a rotating slice of the real state (for example 50
@@ -144,9 +167,12 @@ camera and menu input without rebuilding, and the bytes that change there are pr
 masked.
 
 **Also asserted:** puppet playback (equal root counts; sink counts by caller within a band, less an
-owner-approved list of events expected to be absent); a 60-second takeover judged like the
-compatibility suite's battle; zero self-verification corrections; the cost and size budgets; and
-UNCOVERED, which fails a tier when a declared table, root, sink or feature is reached by no run.
+owner-approved list of events expected to be absent); no COB-originated engine write on a puppet
+(`0x48B090` from `0x480B52`/`0x480BEC`, `0x47DAC0` from `0x480BAE`, `0x48AAC0` from `0x4813A6`/`0x481422`),
+each named by unit and opcode; no emission without its `QueryNanoPiece`; a 60-second takeover judged
+like the compatibility suite's battle; zero self-verification corrections; the cost and size
+budgets; and UNCOVERED, which fails a tier when a declared table, root, sink or feature is reached
+by no run.
 
 **Multiplayer:** never rebuild in place on a live peer, whose creates would broadcast. Every peer
 pauses and dumps, and each recording is later seeked from a fresh process and compared with its own
@@ -154,9 +180,16 @@ peer's dump.
 
 | Tier | Runs | Time [INFERRED from the compatibility suite: 572 s at six games] | When |
 |---|---|---|---|
-| Landing | fixtures of the touched features; a 1v1 with AI; a four-AI skirmish with air, sea, transports and structures; a two-peer game; three restores and one slot-shuffled restore per skirmish | 10–15 min | simulation landings |
-| Nightly | every fixture; `limits-tier1` (4 × 1,500 = 6,000 units) with 20 restores; each compatibility setup; a game loaded from a save; a four-peer game; a four-player AI hour for the budgets | about 90 min | nightly on `main` |
-| Release | the nightly on the release DLL, plus `limits-tier2`: 10 peers, 15,000 units | about 30 min more | before every `v*` tag |
+| Landing | the fixtures of the features the diff changes, each recorded, restored in place with the round trip and replayed on puppets; the set comes from the features' declarations beside the changed code, not from a list | a few scripted games, each at most 10 min | every landing that changes simulation code; a change whose feature names no fixture fails the landing by name |
+| Nightly | every fixture; a 1v1 with AI; a four-AI skirmish with air, sea, transports and structures, with three restores and one slot-shuffled restore; a two-peer and a four-peer game; `limits-tier1` (4 × 1,500 = 6,000 units) with 20 restores; each compatibility setup; a game loaded from a save; a four-player AI hour for the budgets | about 90 min | nightly on `main`, from a timer on the reference setup built with the harness |
+| Release | the nightly on the release DLL, plus `limits-tier2`: 10 peers, 15,000 units | about 30 min more | before every `v*` tag, beside the compatibility suite |
+
+The landing run is scoped to the change because the broad tier holds about 28 of 32 cores and 11
+of 12 GB of VRAM on the reference setup while it runs, and 38 landings touched the simulation files
+in three weeks, 34 of them in one week at up to 10 a day (MEASURED 2026-09-29 from `main`'s reflog);
+about a third of that week's were not simulation work but edits to the mixed `tagpu_patches.c`
+[judged from their subjects and diffs]. Cross-feature breakage is caught the next night or at the
+tag, and always-on self-verification names any mismatch in every recording in between.
 
 Ten players exist only as a network game: a stock skirmish seats four (MEASURED,
 [scenario format](../scenario-format.md)). Replaying ten-player games needs feasibility
@@ -165,17 +198,23 @@ experiment 1.
 ## Build order
 
 1. **Before the first self-verification slice:** the exclusion file with its build hash; the `sim`
-   and `presentation` words in `thread-split.allow`; the declarations and the build check; IDs or
-   layouts for the pointer-carrying tables; the recording header's lever list; capture at `0x4954ED`.
+   and `presentation` words in `thread-split.allow` (with `thread-split-check.sh` taught to read a
+   second word, since today it fails on `publisher sim`); the declarations and the build check, with
+   every existing static in the simulation files classified once and no exemption list (324
+   writable statics and 6 TLS slots on 2026-09-29, MEASURED with `nm`); IDs or layouts for the
+   pointer-carrying tables; the recording header's lever list; capture at `0x4954ED`. The CLAUDE.md
+   section below lands in the same landing.
 2. **With the skirmish slice:** self-verification over units, players and declared tables; root and
    sink counting; the main block and `.data` with the null twin; puppet dispositions and fixtures;
-   the landing and nightly tiers.
+   the one-writer rule and getter 75 per seat; the nano spray's recording and playback; the landing
+   run and the nightly tier with its timer.
 3. **Later:** multiplayer dumps, `limits-tier2`, and a check that every changed executable byte lies
    inside a range some installer published.
 
-## Draft CLAUDE.md section and landing gate
+## The CLAUDE.md section and landing gate
 
-Not adopted yet (open decision 4). The draft:
+Adopted with the mechanism (decision 4): it goes into CLAUDE.md in the landing that brings the
+declarations and the build check (build order, step 1), revised for decisions 1–3:
 
 ```markdown
 ## Simulation changes stay replayable
@@ -190,21 +229,30 @@ simulation change needs no recorder change unless `make` or the replay harness n
   through the wrappers. When unsure, use `SIM_STATE`.
 - **Store IDs, not addresses**, or declare the table's layout.
 - **Start effects through an engine root**, never a direct sink call. Each simulation
-  feature states its puppet behaviour and names its fixture.
+  feature states its puppet behaviour and names its fixture beside its code.
+- **An effect only the owner's machine produces** is recorded where the engine produces it,
+  credited to its unit by an engine invariant, and replayed through the same function —
+  never imitated.
+- **On a puppet the recorder is the only writer** of the state the recording carries: COB's
+  engine writes are inert in puppet mode, and a new path that writes engine state on a
+  puppet is a bug the harness names.
 - **A replay shows what the game showed**: display state that follows from simulation
   events is `SIM_STATE`, not `SIM_PRIVATE`.
 - **Loosening is the owner's decision**: an exclusion, a `presentation` file, TRANSIENT or
   PRIVATE on memory the simulation reads, an expected-absent event, a tolerance. A
   difference the harness names is a bug in the change, never grounds for an exclusion.
-- **A landing that touches a `sim` file, the layout, the recorder or a fixture** passes
-  `make -C tagpu/ddraw replay-test` and records a `replay-roundtrip:` note.
+- **A landing that changes simulation code** runs the replay fixtures of the features it
+  changes (recorded, restored in place with the round trip, replayed on puppets) and
+  records a `replay-roundtrip:` note. A change whose feature names no fixture fails by name.
+  The broad tier runs nightly on `main` and before every `v*` tag.
 ```
 
-The landing command would gain the build check in Step 3; a Step 4b requiring a current
-`replay-roundtrip:` note on `main..HEAD` whenever the diff names a `sim` file, the layout, the
-recorder or a fixture (three attempts at the landing tier, then escalation reason 3 if a game cannot
-start); and three items in the Step 5 review brief: each new class checked against the code, new
-direct sink calls, and every loosening.
+The landing command gains the build check in Step 3; a Step 4b requiring a current
+`replay-roundtrip:` note on `main..HEAD`, from the fixtures of the changed features, whenever the
+diff changes simulation code, the layout, the recorder or a fixture (three attempts, then
+escalation reason 3 if a game cannot start); and three items in the Step 5 review brief: each new
+class checked against the code, new direct sink calls and new engine writes on puppets, and every
+loosening.
 
 ## Decisions taken
 
@@ -215,10 +263,28 @@ direct sink calls, and every loosening.
 | 2026-09-29 | **`s_quiet` is recorded, and a replay shows what the game showed**: display state that follows from simulation events is recorded whenever the live game displayed it. |
 | 2026-09-29 | **Effects only the owner's machine produces are recorded where the engine produces them and replayed through the same function.** The first case is the nano spray: two emitters (`0x4720D0`, reverse `0x472200`) called from 17 sites in 15 order handlers, which run only through the main-list order controller in a local owner's unit tick (DIS). Each emission is credited to the unit whose `QueryNanoPiece` (`0x43E400`) produced its start point: the handler's unit, or the repairing pad in `SelfRepair`. It is recorded as that unit's spray state: direction, target box, and the ticks it sprayed on. Playback calls the same emitter for the puppet, taking the start point from the puppet's own `0x43E400` and bounding the box to the map. An emission that no such query precedes is a named failure. Any other effect the harness finds missing on puppets gets the same treatment, never an imitation. Rejected: deriving sprays from recorded orders (15 handlers, each gated differently, wrong in a stalled economy) and accepting the gap. |
 | 2026-09-29 | **Getter 75 answers on a puppet what the recording machine answered, per seat.** The recording keeps one bit per player, *simulated on the recording machine*, and in puppet mode getter 75 answers that bit for the queried unit's owner. Puppets therefore show the owner-only indicators the recording machine showed, drawn by the mods' own scripts. Two rules come with it, needed whatever 75 answers. **One writer in puppet mode:** COB's SET, ATTACH and DROP change no engine state on a puppet, and the recorder alone writes `+0x10E`, `+0x10F` and the carry links; it applies `+0x10E` through `0x48B090` so each recorded change starts its scripts once. **Takeover flips the seats, then re-creates the units:** only a create gives fresh COB, and Create's first step reads 75. Rejected: accepting 0, which silently drops Escalation's and Twilight's owner-only indicators (375 branches), and replaying per call, since no invariant pairs a recorded call with a puppet call. |
+| 2026-09-29 | **Each landing runs the replay fixtures of the features it changes; the broad tier runs nightly and at every tag.** A landing that changes simulation code runs only the fixtures its changed features name beside their code, each recorded, restored in place with the round trip and replayed on puppets; a change whose feature names no fixture fails the landing by name. The broad tier (the skirmishes, the network games, restores at random ticks, the limits tiers) runs nightly on `main`, from a timer built with the harness, and before every `v*` tag beside the compatibility suite. Always-on self-verification names any mismatch in every recording in between. Rejected: the full tier on every landing that touches a simulation file (10–15 min of most of the reference setup, a third of them not simulation work), and the tier only when a landing declares new state (code-only changes such as B9 wait a day, and until the mechanism exists "declares new state" is a judgement). |
+| 2026-09-29 | **The CLAUDE.md section and landing gate are adopted with the mechanism**, in the landing that brings the declarations and the build check, which classifies every existing static once, with no exemption list. Adopted now, the gate could not run (no harness: every simulation landing would stop at escalation reason 3), half the rules would have nothing to write against, and the `sim` word would break today's build. The draft is revised for decisions 1–3. Rejected: review-checked shape rules until then, which nothing enforces. |
 
-## Open decisions
+## Open items
 
-1. **Harness time per simulation landing.** The landing tier holds most of the reference setup for
-   10–15 minutes: accept that, or run only the nightly when a landing declares nothing new.
-2. **The CLAUDE.md section and landing gate above:** adopt the rule now, so new simulation code
-   is written declaration-ready, or together with the mechanism in the first slice.
+For the landing that brings the declarations and the build check, unless noted:
+
+1. **A home for install-time plumbing.** About 49 of the simulation files' statics are written once
+   at install and never by the simulation: 25 trampolines, 14 stub and code-page variables, 4 locks
+   and 6 TLS index variables [counted from names and types, 2026-09-29]. They fit none of the four
+   classes: a fifth `install` class, or moving them out of the simulation files.
+2. **Does `0x48B090` play a sound?** A change of `+0x10E` bits 0 and 2 calls `0x47F780`, which
+   queues a status line through `0x47FAD0`. Neither calls the sound entry `0x47F0C0` directly, the
+   deeper calls of `0x47FD70` are not traced, and a source comment in `tagpu_patches.c` claims the
+   chain. The answer decides whether a recorded `+0x10E` change applied on a puppet duplicates a
+   recorded sound (the skirmish slice).
+3. **Applying a recorded YARD_OPEN.** The live owner already passed `0x47D970`'s refusal, so the
+   applier bypasses it and restamps as `0x47DAC0` does (`0x47C790`, `0x440A40`); neither function has
+   been read (the skirmish slice).
+
+Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
+machine's view, so other players' owner-only indicators, which that machine never showed, are
+absent. And a takeover's fresh COB resets what a mod keeps in COB statics and piece visibility
+(for example Mayhem's upgraded metal extractor looks un-upgraded after a fork, while its attached
+module and `+0x10E` are restored) [INFERRED from the scripts].

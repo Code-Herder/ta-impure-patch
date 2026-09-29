@@ -1191,7 +1191,7 @@ clock text.
 | `main+0x37F2F` | display/debug word: **bit2 = SelBoxes** (default on), bit3 TreeDeath, bit4 NoShake |
 | `main+0x38A47` | GameTime (marker animation clock) |
 | `main+0x391BF` | ShowRanges toggle |
-| `0x512344` | → order/script handler table, **end at `0x512348`, capacity `0x51234C`** (ctor `0x438450`, dtor `0x438480`), stride 0x19: +0x8 the target-sprite drawer's own address (never read), +0xC marker mask (bits per §3.2), +0x10 cursor_ary index, +0x15 `char*` name (`strcmp` at `0x4387A9`) |
+| `0x512344` | → order/script handler table, **end at `0x512348`, capacity `0x51234C`** (ctor `0x438450`, dtor `0x438480`), stride 0x19: +0x8 the target-sprite drawer's own address (never read), +0xC marker mask (bits per §3.2), +0x10 cursor_ary index, +0x15 `char*` name (`_stricmp 0x4F8A70`, case-insensitive, at `0x4387A9`) |
 | `PlayerStruct+0x67/+0x6B` | first/last unit ptr (order-marker walk, and the selected-unit walk in `CorretCursor_InGame 0x48D220`); `+0x146` player id |
 | UnitStruct | +0x5C order list head; +0x64 rotation; +0x6A/6E/72 pos (16.16); +0x92 UnitType; +0x96 owner PlayerStruct*; +0xA6 UnitID (type); +0xA8 UnitInGameIndex; +0xAC squad digit; +0x108 Health (s16); +0x10E cloak flags; +0x110 stateMask (0x10 selected, 0x10000000 alive) |
 | UnitDefStruct | +0x156 CANBUILD_ptr; +0x15E..0x172 footprint extents; +0x178 size (circle radius); +0x1FA maxHP (read as u32); +0x202..0x218 ranges; +0x220 ExplodeAs; +0x241 UnitTypeMask_0 (bit28 kamikaze [INFERRED]) |
