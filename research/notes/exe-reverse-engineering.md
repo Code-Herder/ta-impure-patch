@@ -1188,6 +1188,142 @@ the measured runs and what they mean for the design are in the
   type-3 commander's death cleared its `+0x149` bit 0 and killed nothing else: the kill-all is for a
   local owner only (*`Send_UnitDeath 0x4864B0`*, below, `0x48667E..0x4866B3`).
 
+### Driving and rebuilding puppets: pacing, the movement pass's parts, the mover's layer, adoption and the event senders [DISASSEMBLED + MEASURED 2026-09-29]
+
+What a puppet host must do every tick, what a rebuild in play runs into, and what a skirmish
+recorder needs from the event senders. Read and measured for the demo recorder's experiments 2 and
+3 with a temporary probe build (not landed; Wine, a private display); the runs and what they mean
+for the design are in the state design evidence,
+[*Recording and replay, measured*](tadr-port/demo-recorder-state-evidence.md#recording-and-replay-measured)
+and [*Rebuild, takeover and rewind, measured*](tadr-port/demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured).
+
+- **The pacing gate `0x495230`** decides how many ticks a frame runs, in both branches of the frame
+  function (`0x4967F3` in a network game; `0x496928` otherwise, skipped while `main+0x37EBE` bit 0
+  or the pause bit `main+0x38A51` bit 0 is set). Among the active records with type `+0x73` = 3 and
+  a live count `+0x144` above 0 it takes the smallest `+0x18` below GameTime
+  (`0x4952CF..0x495303`) and stores that record at `main+0x511` and the lag at `main+0x515`
+  (`0x49530D`). From a lag of `0x384` (900) ticks it clamps the lag at `0xE10` (3600), scales the
+  due ticks by (3600 − lag) × 1/2700 (`0x4FDA30`), floored at 0.01 (`0x4FDA38`), and sets
+  `main+0x38A51` bit 1 (`0x49535C`); below 900 it clears that bit (`0x495367`). The due ticks go
+  to `main+0x38A3B`, at most 5 (`0x4953F5`). **A puppet host therefore stamps every active type-3
+  record's `+0x18` with GameTime each tick** [INFERRED: in a network game `+0x18` is the time last
+  heard from that player]. MEASURED: seats flipped to 3 in a live skirmish with `+0x18` = 0 ran
+  3 ticks in about 8 s (GameTime 9596 → 9599); with the stamp, 30.0 ticks/s.
+- **The elimination message `0x47BD70(player)`** (stdcall, `ret 4`) formats one of three texts
+  (`0x507B88`, chosen by `0x4E4870() % 3`) with the player's side (`0x5072D8` "Core" or
+  `0x5072E0`) and sends it through `0x463CA0(buf, 4, 0, player+0x146)`. The destructor decrements
+  the owner's live count `+0x144` (`0x486DFC`) and at zero calls, by game type `0x435100`,
+  `0x450380(owner+4)` in a network game (`0x486E32`) or `0x47BD70(owner)` in a skirmish
+  (`0x486E54`). A rebuild's clear takes every seat through zero, so each would announce an
+  elimination. MEASURED: the probe retargeted `0x486E54` to a filter that drops the call while
+  its own rebuild runs, a flag of the game thread: 20 of 20 suppressed over the rewind runs, none
+  let through.
+- **The movement pass's parts.** `0x43DD20` (*The move object `0x43DC00`*, below) calls the class
+  step `[vt+0x08]`, then `0x43D290` (def `+0x241` bit 11) or `0x43CD20`, then `0x43D6D0`,
+  `0x43DA70` and `0x43DB50`, each thiscall on the move object with the unit as its argument,
+  `ret 4`:
+  - **`0x43CD20`**, the ground step, asks the class `[vt+0x14]` whether it has a course. The remote
+    ground proxy's is `0x44F5B0`, which answers proxy `+0x18` ≥ 2, the fed path count. Answered 0,
+    it stores 0 at the move object's `+0x24` and calls `0x43CC20(unit, −def+0x19A)`
+    (`0x43CD31..0x43CD52`), which adds that to the speed `+0x20`, floored at 0
+    (`0x43CC2D..0x43CC3B`) [the rest of `0x43CC20` not read]. **An unfed proxy therefore brakes
+    every step.**
+  - **`0x43D290`**, the air step: unless the move object's layer `+0x2E & 3` is 2 it zeroes the
+    velocity `+0x8..+0x10`, the speed `+0x20` and `+0x24` and returns (`0x43D297..0x43D2BD`); on
+    layer 2 it asks `[vt+0x10]` and integrates the velocity (`0x43D2C0..`) [not read further].
+  - **`0x43D6D0`**, the placement. A carried unit (`+0x86` set) is put at its carrier's attach
+    point (`0x43E060` by `+0xF9`; for def `+0x241` bit 19 not below the sea level `main+0x1427F`
+    less the waterline def `+0x22C`, `0x43D712..0x43D75A`) through `0x48A9F0(unit, pos, move
+    object +0x2E & 3)` (`0x43D775`), turned from `0x43E180` (`0x43D78E..0x43D7A1`), given its
+    carrier's speed and velocity or zeroes (`0x43D7AB..0x43D7E8`), and `+0x110` bit 16 is cleared
+    (`0x43D7EB`). Otherwise the new position is the position plus the velocity and **the layer is
+    the move object's** `+0x2E & 3` (`0x43D7FF..0x43D839`); unchanged position and layer do
+    nothing (`0x43D83D..0x43D854`), else it stamps `+0x2A` with GameTime (`0x43D85A..0x43D865`),
+    moves the unit and writes `+0x2E` bit 2 = (`0x47DB70` answered 0) (`0x43D912..0x43D92C`)
+    [INFERRED: the footprint could not take the cells; the rest not read].
+  - **`0x43DA70`**, the walk scripts: the class is 0 while the move object's `+0x2E` bit 2 is set,
+    while the unit is carried, or while the speed `+0x20` and the word `+0x24` are both 0; else 1
+    up to def `+0x1AE`, 2 up to def `+0x1B2`, 3 above (`0x43DA70..0x43DABD`). A class different
+    from `+0x110` bits 2–3 starts `StopMoving` (class 0), or `StartMoving` when bits 2–3 were 0,
+    then `MoveRate1`–`MoveRate3` by class (`0x43DAD1..0x43DB27`), and stores it
+    (`0x43DB2C..0x43DB3D`).
+  - **`0x43DB50`**, the water state: 0 off layers 1 and 2, otherwise 1–4 from the altitude `+0x70`
+    against the sea level, def `+0x22C` and def `+0x170` (`0x43DB65..0x43DBC7`); a change starts
+    `setSFXoccupy` with it (`0x43DBE8`) and stores it at `+0x10A`.
+- **The move object's layer and bit 2 have their own writers.** `0x43D210` (thiscall on the move
+  object (unit, layer), `ret 8`) does nothing for the layer it already has; for layer 1 it zeroes
+  the velocity and speed, calls `0x43D0D0` and clears state-byte bit 0 through
+  `0x48B090(unit, 1, 0)`, for any other layer sets it (`0x48B090(unit, 1, 1)`, starting
+  `Activate`); then it stores the layer in `+0x2E` bits 0–1 (`0x43D210..0x43D28C`). Its callers
+  are nineteen sites in order handlers between `0x40F23F` and `0x415863` and the remote air
+  proxy's reader `0x490A10` (`0x490A8C`). The constructor `0x43DC00` sets layer 1 and clears bits
+  1–2 (`0x43DC25..0x43DC2F`), the detach writes the layer bits (`0x48ACE3..0x48ACF0`), and
+  `0x43DD70` restores the byte from a copy (`0x43DEC8..0x43DEDA`). MEASURED: a replayed aircraft whose
+  `+0x110` layer was written 2 read layer 1 after the pass and sat on the ground, 74–212 wu below
+  the recording; with the move object's layer written too, it flew within 2.5 wu.
+- **The altitude fix-up `0x48A870(unit)`** runs when `+0x110` bit 16 is set or def `+0x241` has
+  `0x1000`, and clears bit 16; it acts only on a unit with a mover on layer 1. With def `+0x241`
+  bit 20 the altitude becomes, with bit 12 also set, the larger of the terrain height
+  (`0x485070(pos)`) and the sea level less the waterline def `+0x22C`, else the terrain height;
+  with bit 19, the sea level less the waterline; otherwise `0x48A490(unit)` [not read].
+- **The round robin's position write** (`0x48B5CA..0x48B6F9`, in `0x48B3F0`): x, altitude and y
+  read as 32-bit values and three 16-bit turns (`0x415DC0`); the footprint cell from `+0x7E`/`+0x80`
+  (`0x48B619..0x48B648`). The same cell and layer write the position alone
+  (`0x48B64B..0x48B682`); otherwise `0x47D0E0(unit)` releases the cells, the position, the cell
+  `+0x76` and the layer in `+0x110` bits 0–1 are written, `0x47CC30(unit)` claims and `0x4827B0(unit)`
+  stamps sight (`0x48B684..0x48B6BF`). Then `+0x110` bit 16 is set, the turns written to
+  `+0x64..+0x69` and the move object's `+0x20` (`0x48B6C4..0x48B6F9`). The probe's player wrote
+  positions by this recipe.
+- **MobileBuild `0x403A20`** (stdcall (unit, node, events), `ret 0xC`): event bit 3 →
+  `0x47F780(unit, 7)` and `0x41C110`, answer 8; bit 1 → `0x41C110`, answer 5; otherwise by the
+  state `node+5` through `0x403F5C` = {`0x403A8D`, `0x403B45`, `0x403DF5`, `0x403E0C`,
+  `0x403F2D`}. State 0 snaps the site to the footprint (def `+0x14A`) into `+0x22`/`+0x2A`, clears
+  `+0x3E`, calls `0x438AD0`, sets node `+6` = `0xE0` and answers 1; state 2 calls
+  `0x438700(unit, node, 10)`; state 3 (`0x403E0C..0x403F2A`) builds the frame at `node+0x16` at
+  def `+0x1FE` / 30 per call through `0x41BA60(builder, node+0x16, rate)`, sprays when that
+  answers nonzero (`0x43E400`, `0x4720D0` to the frame's corners from def `+0x15E`/`+0x16A`),
+  stamps the builder's `+0xB0` = GameTime + 300, and answers 1 while the frame's `+0x104` is 0,
+  else re-arms with `0x439E80(node, 1)`, sets node `+6` bits `0xA` and answers 2; state 4 calls
+  `0x47F780(unit, 8, 0x501530)` and answers 5. `0x439E80(n)` (thiscall on a node, `ret 4`) sets
+  node `+6` bit 0 and node `+0xA` = GameTime + n.
+- **Adopting a frame.** A re-created BuildingBuild or MobileBuild node gets no target, as the order
+  add stores none. The probe set the node's reference at `+0x12` to the recorded frame through
+  `0x489690` (the reference set, *The unit references inside a `0x2C`*, below; its unit is the
+  node's target `+0x16`) and the state `node+5` to 3. MEASURED: the factory and the builder went on
+  building the frames they had, and without adoption the frame was destroyed within 13 s.
+- **A node's owned object `+0x52`** is deleted by the order destructor through its vtable slot 0,
+  `call [[+0x52]](1)`, and the field cleared (`0x43A288..0x43A2A4`). MEASURED: a rebuild that copied
+  `+0x52` from a snapshot deleted a stale object and faulted at `0x43A2A2`; a rebuild writes
+  recorded values into fresh nodes and never an engine pointer.
+- **Action bytes met** (an order's type byte `+4` is its rank in the name-sorted descriptor vector,
+  *`0x512344` — the order-descriptor array*, below): 6 Attack_Chase (`0x4034A0`), 11 BeCarried
+  (`0x402FC0`), 12 BuildingBuild (`0x402640`), 19 GetBuilt (`0x402DA0`), 25 MobileBuild
+  (`0x403A20`), 26 Move_Ground (`0x4031D0`), 30 QMove (`0x403160`), 34 RepairPatrol (`0x405980`),
+  41 Standby (`0x405FE0`), 46 Suppress (`0x4038A0`), 55 VTOL_Move (`0x40FA20`), 56 VTOL_Patrol
+  (`0x410E70`). A lab's rally is a QMove on its main list.
+- **The event senders test the network bit.** 37 sites test `main+0x2A44` bit 0 (`test byte
+  [reg+0x2a44], 1`). In a skirmish the probe saw only Impure's own wrapped deaths and creates
+  (`0x05`) and `0x0A`, `0x11` and `0x12` sent: the `0x11` sender in `0x48B090` tests the owner's type (1 or 2,
+  `0x48B1B5..0x48B1F3`), not the bit. Releasing eleven of the tests — seven in the weapon code
+  (near `je` at `0x49D7A7`, `0x49DA99`, `0x49DC6B`, `0x49DE2C`, `0x499ABF`; short `je` at
+  `0x49DFB6`, `0x499BAF`) and the four `0x10` senders' (short `jne` at `0x45619F`, `0x456225`,
+  `0x45629F`, and `0x456135` in `0x456110`, a fourth sender with no E8 caller that starts a script
+  by name through `0x4B07C0` with no arguments) — made a skirmish send its shots `0x0D`, script
+  starts `0x10` and `0x0F` (MEASURED: 1,731, 5,751 and 3 in a 60 s battle of 1,432 units). The
+  `0x0E` send at `0x49A7A8` was not found behind such a test [its function not traced to the
+  start], and no `0x0E` was seen.
+- **What the replayed messages carry.** `0x0D` names its target at `msg+0x1F` and its shooter at
+  `msg+0x21` (the sender writes them from `+0xA8` at `0x49D802..0x49D81D`); `0x0C` its victim at
+  `+1` and killer at `+7`, `0x10` its unit at `+1` (*The network receivers take a unit index
+  straight off the wire*, below, for the receivers' own bounds); `0x0F` carries a subcode at
+  `+1`: `0xFD`, `0xFE`, `0xFF` → `0x4244B0`, `0x423550`, `0x4233A0` (case `0x45544D`).
+  MEASURED: fed through `0x4866D0(msg, 0)`, `0x49D270(0, msg)` and `0x4B0B00` with every index
+  bounded by the player, a battle's 84–130 deaths, 1,566–1,731 shots and 5,751–6,019 script starts
+  ran with none refused and no fault, and the live set matched the recording at every checkpoint.
+- **The grid also writes `+0x8E` and `+0x82`** (`0x47CB26`, `0x47CBB0`, `0x47CBB9`, `0x47CC13`,
+  `0x47CD1C`, `0x47CD25` among others), beside the attach's next passenger `+0x8E` (`0x48AC7C`,
+  cleared at `0x48ACBC`).
+
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
@@ -1858,7 +1994,8 @@ proxy — a bare `ret` — `0x44F1A0` for the local ground mover, `0x490690` for
 remote air proxy, and `0x490880` for the local air mover (the vtables' `+8` dwords).
 `0x43DD20`'s only callers are the unit tick's `0x48AFAA`, for a local owner, and the `0x2C`
 receiver's block sweep `0x48BA46`, so a remote unit steps only when its owner's `0x2C` arrives
-[DISASSEMBLED 2026-09-28]. The local ground mover is dirty (`0x44F480`) while its `+0x64` bit 3 is
+[DISASSEMBLED 2026-09-28]. What each part does, and why an unfed proxy brakes: *Driving and
+rebuilding puppets*, above. The local ground mover is dirty (`0x44F480`) while its `+0x64` bit 3 is
 set or its `+0x64` bit 2 differs from the move object's `+0x2E` bit 2; the path writers set bit 3
 (`0x44F0B3`, `0x44F0F1`, `0x44F142`, `0x44F235`, `0x44F441`), and the payload writer `0x44F4A0`
 clears it and copies bit 2 once it has written (`0x44F54A..0x44F55C`).
@@ -8777,8 +8914,9 @@ calls the flip itself. The scenario applier's tick stub lands its `jmp` AT `0x49
 scenario is being applied (`tagpu_scenario.c`, stolen `A1 E8 1D 51 00`): that changes the bytes
 there, not the return address the call pushed, so the gate holds with it installed.
 
-**A paused frame still reaches `0x4969D2`** [DISASSEMBLED 2026-09-28; no paused apply measured
-live]. In `0x496790` the pause tests skip only the tick: the single-player test at
+**A paused frame still reaches `0x4969D2`** [DISASSEMBLED 2026-09-28; MEASURED 2026-09-29: the
+demo-recorder probe rebuilt 838 units there on a paused frame, *Driving and rebuilding puppets*,
+above]. In `0x496790` the pause tests skip only the tick: the single-player test at
 `0x496920..0x496926` (`IsGamePaused`, `main+0x38A51`) jumps over the tick calls `0x495230` and
 `0x495490` to `0x496969`, and the network branch's test of the same byte at `0x4968AA..0x4968B0`
 also lands at `0x496969`. Every path from there reaches `0x4969CB` and the draw call `0x4969CD`, so

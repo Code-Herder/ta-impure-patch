@@ -143,8 +143,9 @@ recorder's own copy of the world. At 50 units a tick, 1,500 units are checked wi
 mismatch writes the true values into the recording as a correction, names the field in the file's
 metadata and logs one line per field; in the harness it fails the test. Capture happens at the
 unit-tick call `0x4954ED` (B2's stub) and is diffed on the writer thread. Copying 1,500 unit
-records takes about 6.5 µs on a host benchmark [INFERRED for the game; feasibility experiment 3
-measures it].
+records takes about 6.5 µs on a host benchmark [INFERRED for the game]. Feasibility experiment 3's
+probe read and compared all 1,432 units of a battle every tick in 0.094–0.123 ms on average
+(MEASURED, [evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)).
 
 ## The replay test harness
 
@@ -192,8 +193,10 @@ about a third of that week's were not simulation work but edits to the mixed `ta
 tag, and always-on self-verification names any mismatch in every recording in between.
 
 Ten players exist only as a network game: a stock skirmish seats four (MEASURED,
-[scenario format](../scenario-format.md)). Replaying ten-player games needs feasibility
-experiment 1.
+[scenario format](../scenario-format.md)). Feasibility experiment 1 seated ten puppet players in a
+skirmish level (MEASURED 2026-09-29,
+[evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)), which ten-player replay
+rests on.
 
 ## Build order
 
