@@ -53,7 +53,7 @@ CLASSES = ("id", "object", "cache", "timer", "drop")
 ID_TABLES = {
     "unit": "the slot: (pointer - the unit array's begin) / 0x118",
     "type": "(pointer - *(main+0x1439B)) / 0x249, the unit-type definitions",
-    "weapon": "the index in the weapon definitions, stride 0x115",
+    "weapon": "(pointer - the weapon array's base) / 0x115, not the ID byte +0x10A, which holds IDs below 256 only",
     "player": "(pointer - (main+0x1B63)) / 0x14B, eleven records",
     "bucket": "(pointer - *(main+0x1429F)) / 10; NULL, off-map *(main+0x142B7): own IDs",
 }

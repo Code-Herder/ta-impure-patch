@@ -12,7 +12,7 @@ enum {              /* an id row's table: the ID is the pointer's offset in it *
     RL_T_NONE,
     RL_T_UNIT,     /* the slot: (pointer - the unit array's begin) / 0x118 */
     RL_T_TYPE,     /* (pointer - *(main+0x1439B)) / 0x249, the unit-type definitions */
-    RL_T_WEAPON,   /* the index in the weapon definitions, stride 0x115 */
+    RL_T_WEAPON,   /* (pointer - the weapon array's base) / 0x115, not the ID byte +0x10A, which holds IDs below 256 only */
     RL_T_PLAYER,   /* (pointer - (main+0x1B63)) / 0x14B, eleven records */
     RL_T_BUCKET,   /* (pointer - *(main+0x1429F)) / 10; NULL, off-map *(main+0x142B7): own IDs */
 };
