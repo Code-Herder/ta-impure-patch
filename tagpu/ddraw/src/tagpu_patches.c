@@ -2904,7 +2904,7 @@ static struct {
     unsigned int noBlk09, noBlkDirty, noBlkRR, noArr;
     /* drop counters, per message */
     unsigned int drop09, drop09Blk, drop0A, drop0C, drop0Ckill, drop0B, drop2C;
-    unsigned int drop2CLen, drop2CStale, drop2CNoCopy;
+    unsigned int drop2CLen, drop2CStale;
     /* a 0x2C reference past the array, made no unit: the move payload's target, the carrier */
     unsigned int drop2CTarget, drop2CCarrier;
     /* the splitter's stops and the pump's re-pointed message pointer run on whichever thread
@@ -2946,9 +2946,6 @@ static const unsigned int s_wireZero;
 static DWORD s_wireTlsBuf = TLS_OUT_OF_INDEXES, s_wireTlsLen = TLS_OUT_OF_INDEXES;
 SIM_TLS(s_wireTlsBuf, SIM_TRANSIENT);
 SIM_TLS(s_wireTlsLen, SIM_TRANSIENT);
-/* each thread's copy buffer for the 0x2C parse (see wire_s2c_copy) */
-static DWORD s_wireTlsCopy = TLS_OUT_OF_INDEXES;
-SIM_TLS(s_wireTlsCopy, SIM_TRANSIENT);
 
 static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigned int b)
 {
@@ -3023,9 +3020,14 @@ enum {
 };
 typedef char wire_2c_pad_covers[(WIRE_2C_PAD >= (WIRE_2C_OVER_BITS + 7) / 8 + 3 + 8) ? 1 : -1];
 
+/* the 0x2C being parsed, with WIRE_2C_PAD zero bytes after it: written whole by the copy before
+   the parse reads it, on the game thread only (THREADS above) */
+static unsigned char s_wire2cBuf[WIRE_2C_COPY];
+SIM_VAR(s_wire2cBuf, SIM_TRANSIENT);
+
 /* 0x2C, the receiver's first instruction after its pushes, branch at 0x48B92B (before the
    header's reads). eax = the message. Copies it -- the receive's delivered length, and the
-   size field when that is smaller, so at most 0xFFFF bytes -- into this thread's buffer,
+   size field when that is smaller, so at most 0xFFFF bytes -- into s_wire2cBuf,
    zeroes WIRE_2C_PAD bytes after it, and hands the copy back in eax, which stock's
    0x48B933 stores as the reader's buffer. Every read of the parse is then inside memory we
    own, whatever the message says. A message that is not the buffer the receive described,
@@ -3037,7 +3039,7 @@ static int __cdecl wire_s2c_copy(unsigned int* r)
     const unsigned char* pkt = (const unsigned char*)(size_t)r[PR_EAX];
     const unsigned char* buf = (const unsigned char*)TlsGetValue(s_wireTlsBuf);
     unsigned int len = (unsigned int)(size_t)TlsGetValue(s_wireTlsLen);
-    unsigned char* copy = (unsigned char*)TlsGetValue(s_wireTlsCopy);
+    unsigned char* copy = s_wire2cBuf;
     s_wire2cRd = 0;
     s_wire2cCopy = 0;
     if (!pkt || pkt != buf) {
@@ -3047,14 +3049,6 @@ static int __cdecl wire_s2c_copy(unsigned int* r)
     }
     if (len >= 3u && *(const unsigned short*)(pkt + 1) < len) len = *(const unsigned short*)(pkt + 1);
     if (len > WIRE_2C_MAX) len = WIRE_2C_MAX;
-    if (!copy) {
-        copy = (unsigned char*)SIM_ALLOC(s_wireTlsCopy, WIRE_2C_COPY);
-        if (!copy) {
-            wire_drop(&s_wireDiag.drop2CNoCopy, "no copy buffer for a 0x2C; dropped", len, 0);
-            return 0;
-        }
-        TlsSetValue(s_wireTlsCopy, copy);
-    }
     memcpy(copy, pkt, len);
     memset(copy + len, 0, WIRE_2C_PAD);
     s_wire2cRd   = WPN_ESP_JMP(r) + 0x10;
@@ -3747,8 +3741,7 @@ static int fix_wire_bounds(void)
             return FIX_BYTES;
         }
 
-    if (!SIM_TLS_ALLOC(s_wireTlsBuf) || !SIM_TLS_ALLOC(s_wireTlsLen) ||
-        !SIM_TLS_ALLOC(s_wireTlsCopy))
+    if (!SIM_TLS_ALLOC(s_wireTlsBuf) || !SIM_TLS_ALLOC(s_wireTlsLen))
         return FIX_STUB;
 
     if (!(stop = wire_code(WIRE_STOP_LEN)) || !(a09 = wire_code(WIRE_EMIT2_LEN)) ||
@@ -3820,14 +3813,14 @@ int tagpu_wire_format(char* buf, unsigned int cap)
 {
     return _snprintf(buf, cap,
                      " | wire: in 09=%u 0a=%u 0b=%u 0c=%u 0d=%u 2c=%u dirty=%u create=%u rr=%u"
-                     " drop 09=%u blk=%u 0a=%u 0b=%u 0c=%u kill=%u 2c=%u len=%u stale=%u nocopy=%u"
+                     " drop 09=%u blk=%u 0a=%u 0b=%u 0c=%u kill=%u 2c=%u len=%u stale=%u"
                      " 0d=%u split=%u target=%u carrier=%u"
                      " morph=%u dcreate=%u rcreate=%u ghost=%u argdiff=%u pump=%u"
                      " noblock 09=%u dirty=%u rr=%u noarr=%u",
                      s_wireDiag.in09, s_wireDiag.in0A, s_wireDiag.in0B, s_wireDiag.in0C, s_wpnDiag.in0D, s_wireDiag.in2C,
                      s_wireDiag.in2CDirty, s_wireDiag.in2CCreate, s_wireDiag.in2CRR,
                      s_wireDiag.drop09, s_wireDiag.drop09Blk, s_wireDiag.drop0A, s_wireDiag.drop0B, s_wireDiag.drop0C, s_wireDiag.drop0Ckill, s_wireDiag.drop2C,
-                     s_wireDiag.drop2CLen, s_wireDiag.drop2CStale, s_wireDiag.drop2CNoCopy, s_wpnDiag.drops0D,
+                     s_wireDiag.drop2CLen, s_wireDiag.drop2CStale, s_wpnDiag.drops0D,
                      (unsigned int)s_wireDiag.split, s_wireDiag.drop2CTarget, s_wireDiag.drop2CCarrier,
                      s_wireDiag.morph, s_wireDiag.dcreate, s_wireDiag.rcreate, s_wireDiag.ghost, s_wireDiag.argDiff,
                      (unsigned int)s_wireDiag.pump,
@@ -6302,9 +6295,11 @@ struct hit_tab {
     unsigned int* freed;      /* GameTime of the slot's last free + 1; 0 never       */
     unsigned int* local;      /* local GameTime at the create: the test oracle       */
 };
-/* three columns of n entries in the table's own block, one entry a unit slot */
+/* three columns of n entries in the table's own block, one entry a unit slot; `room` is the
+   block this process allocated, so a restore never carries it into another block */
 static const SimField hit_layout[] = {
     SIM_FIELD(struct hit_tab, n, SIMF_COUNT, SIM_ID_NONE),
+    SIM_FIELD(struct hit_tab, room, SIMF_LOCAL, SIM_ID_NONE),
     SIM_COLUMN(struct hit_tab, stamp, SIM_ID_UNIT_SLOT),
     SIM_COLUMN(struct hit_tab, freed, SIM_ID_UNIT_SLOT),
     SIM_COLUMN(struct hit_tab, local, SIM_ID_UNIT_SLOT),
@@ -10347,7 +10342,7 @@ static void cob_level_reset(void)
     unsigned i;
     EnterCriticalSection(&s_cobLock);
     for (i = 0; i < TAGPU_LIM_TYPES; ++i) {
-        SIM_FREE(s_cobRejected, s_cobRejected[i]);
+        SIM_FREE_OWNED(s_cobRejected, s_cobRejected[i]);
         s_cobRejected[i] = NULL;
     }
     s_cobInPlay = 0;
@@ -10379,14 +10374,14 @@ static void cob_reject_file(const char* script, const char* reason)
         char* def = defs + i * 0x249u;
         CobRejected* bad;
         if (_strnicmp(def + 32, unit, 32)) continue;
-        bad = (CobRejected*)SIM_ALLOC(s_cobRejected, sizeof *bad);
+        bad = (CobRejected*)SIM_ALLOC_OWNED(s_cobRejected, sizeof *bad);
         if (!bad) cob_fault(script, 0, "rejection diagnostic allocation failed");
         snprintf(bad->unit, sizeof bad->unit, "%.32s", def + 32);
         snprintf(bad->display, sizeof bad->display, "%.32s", def);
         snprintf(bad->script, sizeof bad->script, "%s", script);
         snprintf(bad->reason, sizeof bad->reason, "%s", reason);
         EnterCriticalSection(&s_cobLock);
-        SIM_FREE(s_cobRejected, s_cobRejected[i]);
+        SIM_FREE_OWNED(s_cobRejected, s_cobRejected[i]);
         s_cobRejected[i] = bad;
         /* This is the same availability bit UNITS_Create tests at 0x485FA0.
            Keep the def itself so required/saved units still resolve by name. */
@@ -10506,7 +10501,7 @@ static void* __stdcall cob_read(const char* path, unsigned* ignored)
     /* The native model constructor explicitly supports scriptless types
        (0x485DFE). Absence is not proof of a malformed script. */
     if (!blob) return NULL;
-    f = (CobFile*)SIM_ALLOC(s_cobFiles, sizeof *f);
+    f = (CobFile*)SIM_ALLOC_OWNED(s_cobFiles, sizeof *f);
     if (!f) cob_fault(name ? name + 1 : path, 0, "COB metadata allocation failed");
     f->blob = blob; f->size = size;
     snprintf(f->name, sizeof f->name, "%s", name ? name + 1 : path);
@@ -10514,7 +10509,7 @@ static void* __stdcall cob_read(const char* path, unsigned* ignored)
     if (!f->program) {
         cob_reject_file(f->name, reason);
         ((void (__cdecl*)(void*))0x004D85A0u)(blob);
-        SIM_FREE(s_cobFiles, f);
+        SIM_FREE_OWNED(s_cobFiles, f);
         return NULL;
     }
     bucket = ((uintptr_t)blob >> 4) & 255u;
@@ -10546,7 +10541,7 @@ static void __cdecl cob_free_blob(void* blob)
     f = *link;
     if (f) *link = f->next;
     tagpu_cob_program_free(f ? f->program : NULL);
-    SIM_FREE(s_cobFiles, f);
+    SIM_FREE_OWNED(s_cobFiles, f);
     LeaveCriticalSection(&s_cobLock);
     ((void (__cdecl*)(void*))0x004D85A0u)(blob);
 }

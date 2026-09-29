@@ -410,20 +410,19 @@ acted on in `18667b4`). What was done, and where it deviates from the plan above
   pumps. On the transport a `0x2C`'s length **is** its `[16]` size field: the splitter `0x463790`
   reads it (`0x4639E5`) and queues the message only when it fits the packet (`0x46393E`); a raw
   receive has no splitter, so the length is the smaller of the two, at most 0xFFFF. The receiver's
-  entry copies that many bytes into this thread's buffer (0xFFFF + 48 bytes, allocated at the
-  thread's first `0x2C`; none → the message is dropped, `nocopy`), zeroes the 48 after them, and
-  hands the copy to stock's `0x48B933` as the reader's buffer. **Every read of the parse is then
+  entry copies that many bytes into one static buffer of 0xFFFF + 48 bytes (the receiver runs on the
+  game thread only, by the dispatcher's gate, like every `0x2C` static), zeroes the 48 after them,
+  and hands the copy to stock's `0x48B933` as the reader's buffer. **Every read of the parse is then
   inside memory we own, whatever the message says**, and a message that ends inside an entry reads
   zeros for that one entry before the next check stops the stream. Before each read the stubs
-  precede, the position plus the read's width must fit the length: the header and first delta at
-  the entry, each dirty type at the delta stub, the flag bit (and, when it is set, the round-robin
-  type) at `0x48BA5E`, and the round-robin entry at `0x48B40E`; the end is keyed by the reader's
-  address, and the entry checks the reader holds the copy. A `0x2C` that is not the buffer the
-  receive described is dropped (`stale`). The copy changes nothing for a well-formed message:
-  nothing reads the reader after the handler returns (the dispatcher's case `0x4553EE` jumps to the
-  pump's back edge `0x455F50`, the reader is a local of `0x48B920`'s frame), and nothing advances
-  by it — each message is its own receive, and the splitter advances by the size it reads from the
-  packet itself.
+  precede, the position plus the read's width must fit the length: the header and first delta at the
+  entry, each dirty type at the delta stub, the flag bit (and, when it is set, the round-robin type)
+  at `0x48BA5E`, and the round-robin entry at `0x48B40E`; the end is keyed by the reader's address,
+  and the entry checks the reader holds the copy. A `0x2C` that is not the buffer the receive
+  described is dropped (`stale`). The copy changes nothing for a well-formed message: nothing reads
+  the reader after the handler returns (the dispatcher's case `0x4553EE` jumps to the pump's back
+  edge `0x455F50`, the reader is a local of `0x48B920`'s frame), and nothing advances by it — each
+  message is its own receive, and the splitter advances by the size it reads from the packet itself.
 - **The padding's size, by disassembly of every path past the last check.** Two stretches are read
   by engine code whose width depends on the data, and neither loops on data it reads. A dirty
   entry's move-class payload `[vt+0x24]` is followed by the next delta (16) at `0x48BA19` before the
@@ -539,8 +538,8 @@ acted on in `18667b4`). What was done, and where it deviates from the plan above
   dirty create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
   dispatcher's call (return `0x455417`/`0x455428`), not the local damage and kill paths that share
   the function; `0x0A`'s stub sits on the dispatcher's path alone; `0x0D` counts a live shooter
-  whose slot weapon matched. Drops: `09 blk 0a 0b 0c kill 2c len stale nocopy 0d split target
-  carrier`; `pump` counts a re-pointed pump pointer.
+  whose slot weapon matched. Drops: `09 blk 0a 0b 0c kill 2c len stale 0d split target carrier`;
+  `pump` counts a re-pointed pump pointer.
 - **The B4/B5 oracles**: `morph` (a create onto a live slot whose type changes), `dcreate`
   (`CreateFromNetwork` called by the dirty list, returning to `0x48BA05`: a dirty entry whose type is
   not its slot's, the unit made from the entry rather than from its own `0x09` — into an empty slot,

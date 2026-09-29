@@ -107,7 +107,7 @@ SIM_VAR(s_diag, SIM_PRIVATE);
 
 static void unit_clear(DkUnit* r)
 {
-    SIM_FREE(s_unit, r->pp);
+    SIM_FREE_OWNED(s_unit, r->pp);
     r->pp = NULL; r->pp_n = 0;
     r->vthr_n = 0; r->vrate_on = 0; r->vrate = 0;
     r->txw[0] = r->txw[1] = 0;
@@ -444,7 +444,7 @@ static void __cdecl fbi_at_read(const unsigned int* regs)
         return;
     }
     if (n == 0) { dlog("%s: PreviewPieces= names no piece; ignored", nm); return; }
-    r->pp = (char*)SIM_ALLOC(s_unit, len);
+    r->pp = (char*)SIM_ALLOC_OWNED(s_unit, len);
     if (!r->pp) { dlog("%s: PreviewPieces= could not be stored (out of memory); ignored", nm); return; }
     memcpy(r->pp, names, len);
     r->pp_n = (unsigned)n;

@@ -3,17 +3,18 @@
 /* tagpu_simreg -- the simulation-state registry (research/notes/tadr-port/demo-recorder-completeness.md).
 
    A source file marked `sim` in thread-split.allow declares every writable static, heap table
-   and TLS slot it has, on the line after its definition, with one of the macros below. Each
-   declaration is a SimDesc in the linker section `.rdata$simreg$m`, which the linker sorts
-   between this module's `$a` and `$z` markers, so the recorder walks one list of all simulation
-   state and no central file names any of it.
+   and TLS slot it has, beside its definition, with one of the macros below. Each declaration is
+   a SimDesc in the linker section `.rdata$simreg$m`, which the linker sorts between this
+   module's `$a` and `$z` markers, so the recorder walks one list of all simulation state and no
+   central file names any of it.
 
    The rule is enforced at build time by tools/sim-state-check.sh, on the objects being linked:
    a writable static of a `sim` object with no declaration, a declaration of something that is
-   not a writable static, a `sim` object that calls an allocator, TlsAlloc, VirtualProtect or
-   GetProcAddress itself, and a lever file named outside tagpu_sim_lever each fail the build by
-   name. So memory, TLS slots, page changes and levers come through here or through
-   tagpu_detour.h (code memory and engine code writes).
+   not a writable static, a `sim` object that imports a listed allocator, TLS, page or
+   process-memory call or GetProcAddress, and a lever file named outside tagpu_sim_lever each
+   fail the build by name; the script's header lists what those rules cannot see. So memory,
+   TLS slots, our own page changes and levers come through here or through tagpu_detour.h (code
+   memory and engine code writes). The walk at attach refuses two declarations of one byte.
 
    THE CLASSES. When unsure, SIM_STATE: a wrong STATE costs recording bytes, a wrong other class
    costs a replay that silently differs.
@@ -57,7 +58,7 @@ typedef enum SimFieldKind {
     SIMF_ID,        /* a value naming `id`: remapped with it, never compared across a remap   */
     SIMF_ADDR,      /* the address of what `id` names (a def, a weapon record): its ID is the
                        value; SIM_ID_NONE = other engine or process memory, never a value      */
-    SIMF_OWNED,     /* the address of a block this row owns (SIM_ALLOC through its table)      */
+    SIMF_OWNED,     /* the address of a block this row owns (SIM_ALLOC_OWNED of its table)    */
     SIMF_LOCAL,     /* meaningful only in this process: a serial, a clock, a generation       */
     SIMF_COUNT,     /* how many elements each SIMF_COLUMN of this row holds                   */
     SIMF_COLUMN,    /* the address of an array of elements `step` bytes apart, one per `id`,
@@ -187,14 +188,22 @@ extern const SimField tagpu_sim_owned[];
 #define SIM_GUARD(var) \
     SIM__ENTRY(var, .stride = sizeof(var), .nrows = 1, .cls = SIM_INSTALL, .flags = SIMD_GUARD)
 
-/* Memory that belongs to a declaration: a heap table's rows (SIM_HEAP, SIM_BLOCK), a TLS slot's
-   buffer (SIM_TLS), a block a row owns (a layout with SIMF_OWNED), code (SIM_CODE), a guard
-   (SIM_GUARD). Tables, slot buffers and code come zeroed from VirtualAlloc, owned blocks from
-   the process heap; NULL on failure, or when the declaration owns no memory (logged by name). */
+/* Memory a declaration's variable points at: a heap table's rows (SIM_HEAP, SIM_BLOCK), a TLS
+   slot's buffer (SIM_TLS), code (SIM_CODE), a guard (SIM_GUARD). Zeroed from VirtualAlloc, code
+   executable and a guard only reserved; NULL on failure, or for any other declaration (logged
+   by name). */
 void* tagpu_sim_alloc(const SimDesc* d, size_t bytes);
 void  tagpu_sim_free(const SimDesc* d, void* p);
 #define SIM_ALLOC(var, bytes) tagpu_sim_alloc(&simdir_##var, (bytes))
 #define SIM_FREE(var, p)      tagpu_sim_free(&simdir_##var, (p))
+
+/* A block one of a declaration's rows owns (its layout names an SIMF_OWNED field): zeroed from
+   the process heap. A separate call, so that a heap table whose rows own blocks takes each from
+   the right place; NULL on failure, or when the layout names no owned field (logged by name). */
+void* tagpu_sim_alloc_owned(const SimDesc* d, size_t bytes);
+void  tagpu_sim_free_owned(const SimDesc* d, void* p);
+#define SIM_ALLOC_OWNED(var, bytes) tagpu_sim_alloc_owned(&simdir_##var, (bytes))
+#define SIM_FREE_OWNED(var, p)      tagpu_sim_free_owned(&simdir_##var, (p))
 
 /* Zeroed scratch that the call taking it frees before it returns: it holds nothing a tick
    boundary can see, so it needs no declaration. */
@@ -205,10 +214,11 @@ void  tagpu_sim_scratch_free(void* p);
 int tagpu_sim_tls(const SimDesc* d);
 #define SIM_TLS_ALLOC(var) tagpu_sim_tls(&simdir_##var)
 
-/* A lever: a file in the game's folder whose presence changes what the simulation runs, read
-   while Impure installs. 1 when it exists. The registry keeps one entry per lever with its
-   value, and its attach line counts them and names each one set; a lever read after install,
-   or read two ways while installing, is logged by name. */
+/* A lever: a file in the game's folder whose presence, or text, changes what the simulation
+   runs, read while Impure installs. 1 when it exists. The registry keeps one entry per lever:
+   whether it exists and, when its text is read, the text; its attach line counts the levers and
+   names each one set, with the start of its text. A lever read after install, or read two ways
+   while installing (present and absent, or two texts), is logged by name. */
 int tagpu_sim_lever(const char* file);
 /* A lever with a value: up to cap-1 bytes of it, NUL-ended; the count, or -1 when absent. */
 int tagpu_sim_lever_read(const char* file, char* buf, int cap);

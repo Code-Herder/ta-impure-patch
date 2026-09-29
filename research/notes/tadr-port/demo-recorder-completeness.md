@@ -53,7 +53,7 @@ Every source file on `thread-split.allow` carries a scope word: `sim` or `presen
 are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c` and `tagpu_cobtrace.c` — and
 every other listed file is `presentation`, out of scope; only a source file can be `sim`, since a
 header's statics belong to the objects that include it. In a `sim` file every writable static,
-heap table and TLS slot carries a one-line declaration on the line after its definition
+heap table and TLS slot carries a one-line declaration beside its definition
 (`tagpu/ddraw/inc/tagpu_simreg.h`):
 
 ```c
@@ -70,8 +70,9 @@ live-count pointer, class, key, flags and layout) and a pointer to it in the lin
 `.rdata$simreg$m`. MinGW's linker sorts `.rdata$*` by name, so the markers `tagpu_simreg.c` puts in
 `$a` and `$z` bracket every declaration: the recorder walks one list of all simulation state and no
 central file names any of it. The walk runs once, in DllMain after the last simulation module has
-installed (`tagpu_simreg_attach`): it checks each declaration's shape and logs one `simreg:` line
-with the count by class, the number of levers read and the name of each one set.
+installed (`tagpu_simreg_attach`): it checks each declaration's shape, refuses two declarations
+of one byte, and logs one `simreg:` line with the count by class, the number of levers read and
+the name of each one set, with the start of its text when a reader read it.
 
 **The classes.** When unsure, `SIM_STATE`: a wrong STATE costs recording bytes, a wrong other class
 costs a replay that silently differs.
@@ -115,62 +116,85 @@ recorder writes those rows in place and never moves one while a script may run
 ([extra weapons](../extra-weapons.md)). `DkUnit` declares `def` an address of its unit type, `pp`
 an owned block and `serial` process-local.
 
-**Everything else comes through the wrappers.** Memory belongs to a declaration: `SIM_ALLOC` and
-`SIM_FREE` take it from `VirtualAlloc` for a table, a TLS slot's buffer or code (executable), as a
-reservation with no access for a guard, and from the process heap for a block a row owns; a
-declaration that owns no memory gets NULL and a `simreg: FAILED` line naming it. Scratch that a
-call frees before it returns comes from `tagpu_sim_scratch`. TLS indices come from
+**Everything else comes through the wrappers.** Memory belongs to a declaration. `SIM_ALLOC` and
+`SIM_FREE` serve the memory its variable points at, from `VirtualAlloc`: a heap table's rows, a
+TLS slot's buffer, code (executable) and a guard (reserved with no access). `SIM_ALLOC_OWNED` and
+`SIM_FREE_OWNED` serve a block one of its rows owns, from the process heap. They are separate
+calls so that a heap table whose rows own blocks takes each from the right place; a call the
+declaration does not own memory for gets NULL and a `simreg: FAILED` line naming it. Scratch that
+a call frees before it returns comes from `tagpu_sim_scratch`. TLS indices come from
 `SIM_TLS_ALLOC`, page changes from `tagpu_detour_write` and stubs from `tagpu_detour_stub` (freed by
-`tagpu_detour_stub_free`). A lever — a file in the game folder whose presence changes what the
-simulation runs — is read through `tagpu_sim_lever` or `tagpu_sim_lever_read` while Impure
-installs. The registry keeps one entry per name with its value, however many installers ask
-(three ask for `tagpu_wirecheck.on`). Three things log FAILED by name: a lever read after install,
-a lever that reads two ways while installing, and a 33rd lever past the list's 32. A file that
+`tagpu_detour_stub_free`). A lever — a file in the game folder whose presence or text changes
+what the simulation runs — is read through `tagpu_sim_lever` or `tagpu_sim_lever_read` while
+Impure installs. The registry keeps one entry per name, however many installers ask (three ask
+for `tagpu_wirecheck.on`): whether it exists and, when a reader read its text, that text, its
+length and a hash of it, so `tagpu_dmgdelay.on` reading `5` and reading `60` are two settings.
+Four things log FAILED by name: a lever read after install, a lever found present and absent
+while installing, one read with two texts, and a 33rd lever past the list's 32. A file that
 tooling reads or writes is named inside `SIM_TOOL_FILE`.
 
-**The build check**, `tools/sim-state-check.sh`, runs in the link recipe of `ddraw.dll` in both
-builds, on the objects about to be linked, and fails the link naming the file and the symbol:
+**The build check**, `tools/sim-state-check.sh`, runs in the link recipe of whichever build is
+linking, on the objects about to be linked, and fails before the link, naming the file and the
+symbol; the landing gate builds both variants, since the simulation files differ between them by
+`#ifdef`:
 
 - **UNDECLARED**: a writable static (`nm` classes `b B d D C`) with no `simreg_` twin of the same
   name, counted (two function-local statics named `top` need two declarations; GCC's `.N` suffixes
   are stripped). It is a name match because GCC relocates file statics against the section symbol,
   so nothing pairs them by address.
 - **STALE**: a declaration of something that is not a writable static of that object.
-- **IMPORT**: a call to an allocator, `TlsAlloc`/`TlsFree`, `FlsAlloc`/`FlsFree`, `VirtualProtect`
-  or `GetProcAddress` (which would reach the same functions around the list).
+- **IMPORT**: a call to a function on its refused list: the C runtime's allocators and string
+  duplicates, the Win32 heap, global, local, COM task and virtual memory, the native API under
+  them, TLS and fiber-local slots, page protection, file mappings, `WriteProcessMemory`, and
+  `GetProcAddress`, which would reach any of them around the list.
 - **LEVER**: a string literal that is a whole `tagpu_` file name anywhere but directly inside
   `tagpu_sim_lever(`, `tagpu_sim_lever_read(` or `SIM_TOOL_FILE(`, with comments and `#include`
   lines removed first.
 
 It exits 0 clean, 1 on an offender and 2 when it could not run (no `nm`, a missing object, a
 header marked `sim`, and the like). **Verified 2026-09-29:** a probe object carrying one of each offender fails with
-each named, the counted `top` included, while the wrapped lever beside them passes; the three
-could-not-run cases exit 2; an undeclared static added to `tagpu_cobtrace.c` stops the link. Clean,
+each named, the counted `top` included, while the wrapped lever beside them passes; a second probe
+calling `_recalloc`, `_wcsdup`, `CoTaskMemAlloc`, `MapViewOfFile` and `WriteProcessMemory` fails
+on all five; the three could-not-run cases exit 2; an undeclared static added to
+`tagpu_cobtrace.c` stops the link. The registry's own refusals were run under Wine against a test
+program: a lever read with a second text, a table allocation on a declaration that only owns
+blocks, an owned block from a table whose rows own none, a variable declared twice and a lever
+read after install each log their FAILED line, and the duplicate counts as malformed. Clean,
 it reports **170 declarations in the raised build and 154 in the stock-limits build**, and a running
 game's attach line agrees (MEASURED 2026-09-29, on Wine, in all 18 of the compatibility suite's
-setups that load Impure and on the ten-laser tower fixture):
+setups that load Impure):
 
 ```
-simreg: 170 declarations (30 state, 5 content, 38 transient, 19 private, 78 install; 4 locks, 6 TLS indices, 3 heap tables, 6 code or guard pointers, 6 engine pools, 15 layouts), 0 malformed; levers: 7 read
+simreg: 170 declarations (30 state, 5 content, 38 transient, 19 private, 78 install; 4 locks, 5 TLS indices, 3 heap tables, 6 code or guard pointers, 6 engine pools, 15 layouts), 0 malformed; levers: 7 read
 ```
 
-The stock-limits build reads 154 (22 state, 3 content, 37 transient, 19 private, 73 install), with
-no engine pools, since it raises no limit.
+The stock-limits build reads 154 (22 state, 3 content, 37 transient, 19 private, 73 install; 3
+locks, 5 TLS indices, 5 code or guard pointers, 12 layouts), with no engine pools, since it raises no
+limit (MEASURED 2026-09-29, on Wine).
 
 **What the check does not prove**, by construction of its rules, and so what the review and later
 the harness have to:
 
-- that a declaration's class is right;
+- that a declaration's class is right, or that a `SIM_TOOL_FILE` name is only tooling's: each is a
+  claim the code makes;
 - state kept in a file not marked `sim`, or in memory a `presentation` module allocates;
 - a lever named through a macro, a string built at run time or a header;
+- an allocator or page change the refused list does not name, or one reached through the engine:
+  its own helpers or import slots called by address. The one such use is the engine's own
+  protocol for its write-protected def array, which `sync_keys_unique` follows as the engine's
+  writers do (open with `0x4D8780`, seal with `0x4D8710`; engine map, *The engine write-protects
+  the def array*);
+- a variable declared twice, which can hide an undeclared namesake from the count by name; the
+  walk at attach refuses two declarations of one byte instead, so a run shows it;
 - state Impure keeps inside engine-allocated objects (the grown COB object), which is not a DLL
   variable and needs a layout declaration that only the harness can catch missing;
 - the contents of a block a row owns: the COB file records (`s_cobFiles`) chain through pointers
   and hold a program that `tagpu_cob_safe.c` allocates outside the wrappers. They are content,
   rebuilt when the scripts load, but no layout describes them;
-- `s_cob`, the data keys' script cache, places its rows by a hash of the script's address, so the
-  same content sits in other rows in another process: its content hash has to be taken over the
-  rows as a set, or the table keyed by an ID;
+- two content tables place their rows by a hash of a script's address — `s_cob`, the data keys'
+  script cache, and `s_cobFiles`, the COB file records' buckets — so the same content sits in
+  other rows in another process: their content hash has to be taken over the rows as a set, or
+  the tables keyed by an ID;
 - the engine pools the DLL holds (`SIM_ENGINE`) are declared, but their record layouts are not yet
   written anywhere the recorder reads.
 

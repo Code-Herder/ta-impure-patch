@@ -11,19 +11,29 @@
 #               suffixes are stripped). A name match, because GCC relocates file statics against
 #               the section symbol, so nothing pairs them by address.
 #   STALE       a declaration whose variable is not a writable static of that object.
-#   IMPORT      a call to an allocator, TlsAlloc/TlsFree, VirtualProtect or GetProcAddress: memory,
-#               TLS indices and page changes come through tagpu_simreg.h and tagpu_detour.h, and
-#               GetProcAddress would reach the same functions around this list.
+#   IMPORT      a call to a function on the REFUSED list below: the C and Win32 allocators, TLS and
+#               fiber-local slots, page protection, file mappings, another process's memory, and
+#               GetProcAddress, which would reach any of them around the list. Memory, TLS
+#               indices and page changes come through tagpu_simreg.h and tagpu_detour.h.
 #   LEVER       (the source, comments and #include lines removed) a string literal that is a whole
 #               `tagpu_` file name anywhere but directly inside tagpu_sim_lever(,
 #               tagpu_sim_lever_read( or SIM_TOOL_FILE(.
 #
-# Not proven, by construction of these rules: that a declaration's class is right (the review's
-# job, and the replay harness's); state kept by a file that is not marked `sim`, or in memory a
-# presentation module allocates; a lever named through a macro, a built string or a header.
+# Not proven, by construction of these rules, and so the review's to check and later the replay
+# harness's:
+#   - that a declaration's class is right, and that a SIM_TOOL_FILE is only tooling's -- each is
+#     a claim the code makes, like a class;
+#   - state kept by a file that is not marked `sim`, or in memory a presentation module or
+#     tagpu_cob_safe.c allocates;
+#   - a lever named through a macro, a string built at run time or a header;
+#   - an allocator or page change the REFUSED list does not name, or one reached through the
+#     engine: its own helpers or import slots by address (the def array's open and seal,
+#     0x4D8780 and 0x4D8710, are the one use, and the engine's own protocol for that array);
+#   - a variable declared twice, which can hide an undeclared namesake from the count by name;
+#     the registry's walk at attach refuses two declarations of one byte instead.
 #
 # Runs inside the link recipe of tagpu/ddraw/Makefile, so it reads the objects the DLL is linked
-# from, after all of them are built, in both builds.
+# from, after all of them are built, whenever either build links (the landing gate builds both).
 set -u
 DIR="${1:?usage: sim-state-check.sh <tagpu/ddraw> <object suffix>}"
 EXT="${2:?usage: sim-state-check.sh <tagpu/ddraw> <object suffix>}"
@@ -34,7 +44,14 @@ command -v "$NM" >/dev/null 2>&1 || { echo "sim-state: $NM is required" >&2; exi
 command -v perl >/dev/null 2>&1 || { echo "sim-state: perl is required" >&2; exit 2; }
 [ -f "$ALLOW" ] || { echo "sim-state: missing $ALLOW" >&2; exit 2; }
 
-REFUSED='malloc|calloc|realloc|free|_aligned_malloc|_aligned_realloc|_aligned_free|_strdup|strdup|HeapAlloc|HeapReAlloc|HeapFree|HeapCreate|GlobalAlloc|GlobalReAlloc|GlobalFree|LocalAlloc|LocalReAlloc|LocalFree|VirtualAlloc|VirtualAllocEx|VirtualFree|VirtualFreeEx|VirtualProtect|VirtualProtectEx|TlsAlloc|TlsFree|FlsAlloc|FlsFree|GetProcAddress'
+# The C runtime's allocators, the Win32 heap, global, local and virtual memory, the native API
+# under them, TLS and fiber-local slots, page protection, file mappings, another process's memory.
+REFUSED='malloc|calloc|realloc|free|_recalloc|_expand|_aligned_malloc|_aligned_realloc|_aligned_recalloc|_aligned_offset_malloc|_aligned_free|_malloca|_freea|_strdup|strdup|_strndup|strndup|_wcsdup|wcsdup|asprintf|vasprintf|__mingw_asprintf|__mingw_vasprintf|'
+REFUSED+='HeapAlloc|HeapReAlloc|HeapFree|HeapCreate|HeapDestroy|GlobalAlloc|GlobalReAlloc|GlobalFree|LocalAlloc|LocalReAlloc|LocalFree|CoTaskMemAlloc|CoTaskMemRealloc|CoTaskMemFree|'
+REFUSED+='VirtualAlloc|VirtualAllocEx|VirtualAllocExNuma|VirtualAlloc2|VirtualFree|VirtualFreeEx|VirtualProtect|VirtualProtectEx|'
+REFUSED+='RtlAllocateHeap|RtlReAllocateHeap|RtlFreeHeap|NtAllocateVirtualMemory|NtFreeVirtualMemory|NtProtectVirtualMemory|ZwAllocateVirtualMemory|ZwFreeVirtualMemory|ZwProtectVirtualMemory|'
+REFUSED+='CreateFileMappingA|CreateFileMappingW|MapViewOfFile|MapViewOfFileEx|UnmapViewOfFile|WriteProcessMemory|'
+REFUSED+='TlsAlloc|TlsFree|FlsAlloc|FlsFree|GetProcAddress'
 
 files=()
 while IFS= read -r line; do

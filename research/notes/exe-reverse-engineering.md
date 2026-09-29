@@ -1542,7 +1542,8 @@ zero dword and jumps to the engine's own end-of-list `0x48BA28`. The `0x2C` is p
 at `0x48B92B` (eax = the message, loaded at `0x48B923`, stored as the reader's buffer at `0x48B933`;
 `0x48B933..0x48B93E` sets the reader `{buffer, word 0, bit 0}` at `[esp+0x14..0x1C]`, with `push 8` taken)
 the message's length — the receive's delivered length, kept per thread at the two statistics calls,
-and the size field, the smaller — is copied into a per-thread DLL buffer followed by 48 zero bytes,
+and the size field, the smaller — is copied into one static DLL buffer (the receiver runs on the
+game thread only, by the dispatcher's gate) followed by 48 zero bytes,
 and eax is the copy. The reader is then bounded by that length before each read the stubs precede:
 the entry (header and first delta), the delta (the type read next), `0x48BA5E` (the flag bit read
 directly at `0x48BA71`, and when set the round-robin type read `0x48B409`) and `0x48B40E`. Past the

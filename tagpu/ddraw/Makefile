@@ -115,8 +115,9 @@ log-check:
 # in thread-split.allow is declared, and no `sim` object allocates, takes a TLS index, changes a
 # page or names a lever itself. It reads the objects this link uses, so it runs in the link's own
 # recipe, after every object is built: as an order-only prerequisite it would race the compiler.
-# A failure leaves no DLL, and the allow list and the script are prerequisites so that a change
-# to either runs it again.
+# A failure stops the build before the link, so the DLL on disk is still the last one that
+# passed; the allow list and the script are prerequisites so that a change to either runs it
+# again.
 $(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh | thread-split spirv log-check
 	../../tools/sim-state-check.sh . $(OBJEXT)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)

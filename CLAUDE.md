@@ -64,12 +64,12 @@ recorder change unless `make` or the replay harness names one. The classes, the 
 the build check cannot prove: `research/notes/tadr-port/demo-recorder-completeness.md`.
 
 - **Declare state where you define it.** In a file marked `sim` in `thread-split.allow`, every
-  writable static, heap table and TLS slot is declared on the line after its definition with
+  writable static, heap table and TLS slot is declared beside its definition with
   `inc/tagpu_simreg.h`: `SIM_STATE`, `SIM_CONTENT`, `SIM_TRANSIENT`, `SIM_INSTALL`, or a field of
   its feature's `SIM_PRIVATE` struct. Memory, TLS, page changes and levers come through the
-  wrappers. When unsure, use `SIM_STATE`. The link refuses an undeclared static, a stale
-  declaration, a raw allocator, TLS or page call, and a lever read outside the wrappers, and
-  names each.
+  wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
+  see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
+  named outside the wrappers — and names each; its header lists what it cannot see.
 - **Store IDs, not addresses**, or declare the table's layout.
 - **Start effects through an engine root**, never a direct sink call. Each simulation
   feature states its puppet behaviour and names its fixture beside its code.

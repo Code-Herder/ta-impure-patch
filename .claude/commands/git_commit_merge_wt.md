@@ -177,9 +177,11 @@ There is no test suite; the gate is that the DLL compiles cleanly.
 - **Skip entirely only if nothing changed**: if Step 1 committed nothing AND Step 2 merged nothing AND `git log main..HEAD` is empty, there is nothing new to gate.
 - **Skip when the landing changes no file under `tagpu/ddraw/**`** (`git diff --name-only main...HEAD`). Call out the skip in the summary.
 
-Run the build in the foreground: **ddraw.dll** — `make -C tagpu/ddraw -j$(nproc)`.
+Run the build in the foreground, both variants: **ddraw.dll** — `make -C tagpu/ddraw -j$(nproc)`
+— and the stock-limits comparison build, `make -C tagpu/ddraw -j$(nproc) LIMITS=stock`. The
+simulation files differ between the two by `#ifdef`, and each build checks only its own objects.
 
-The build runs two source checks before it links: `tools/thread-split-check.sh` (no engine
+Each build runs two source checks before it links: `tools/thread-split-check.sh` (no engine
 address outside the files `thread-split.allow` lists) and `tools/sim-state-check.sh` (every
 writable static of a `sim` file declared, and its memory, TLS, page changes and levers taken
 through the wrappers — CLAUDE.md *Simulation changes stay replayable*). A finding of either is the

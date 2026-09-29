@@ -19,8 +19,9 @@ feature of Impure; it does not require running the original recorder alongside I
 
 **No production recorder has landed.** The three feasibility experiments under
 [Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the first landing of
-the completeness mechanism: every piece of simulation state Impure keeps is declared, and the build
-refuses one that is not. The exclusion file is next, then the skirmish slice. Every decision of the
+the completeness mechanism: every writable static of the four simulation files is declared, and
+the build refuses one that is not; the design lists the state that is still outside it. The
+exclusion file is next, then the skirmish slice. Every decision of the
 [completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)
 holds the desk research behind this design: how the engine treats remote players, what a rebuild
 must carry, per-player state, and the size estimate. The [packet-era exploration](demo-recorder-exploration.md)
