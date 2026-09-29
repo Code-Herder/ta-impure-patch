@@ -1,0 +1,1 @@
+landing-review: model=claude-general-purpose effort=medium range=main..049fb1b1 findings=0 acted=0 rejected=0 date=2026-09-29 (two wording nits fixed in the following docs commit)
