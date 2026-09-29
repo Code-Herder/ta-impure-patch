@@ -1773,9 +1773,10 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   while the shell already flips ~5 000 times a second and the game frame publishes ~150 KB of
   box bytes per 5 ms cadence, so the 16 MB arena is half a second of backlog. The publisher
   therefore **drops its batch** when the tail has not moved for 250 ms with work queued, or
-  when the backlog is past half the arena or a quarter of the ring (`stalls=` counts the
+  when its last publish found no room in the ring or the arena (`stalls=` counts the
   episodes), and publishes again — one reset, every surface re-seeded — once the consumer has
-  caught up. (The drain also skipped every op published before a GL context change up to the
+  caught up. A backlog that still fits is not a stall: a half-arena rule looped on SKIRMISH
+  on the Windows test box, 147 reseeds a minute ([gui-renderer §29](gui-renderer.html)). (The drain also skipped every op published before a GL context change up to the
   producer's next reset, `skipped=`; with no GL context that path went, §2.85.) MEASURED
   2026-09-07: before, every game → shell switch cost 38 `arena-full` overflows, 39 resets and
   705 lost sprites; after, one reset (`stall-over`), no overflow, none lost, and the game's own
@@ -2014,7 +2015,7 @@ flood it.
 | `0x459200` | composite sprite → screen blit | `tracer` |
 | `0x469A05` / `0x469BA8` | the two `DrawUnit` return sites | `tracer` |
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
-| `0x4B08C0` `0x4B0DA0` `0x4B19D0` `0x4B1A99` + the `E8` at `0x4B15E0` | the COB engine's thread allocator (5 stolen, wrapped: the original runs through the stolen prologue, then the start is latched), the thread runner's entry (5), the `RETURN` handler mid-function (5), the `signal` kill mid-function (6), and the `rand` handler's call into the sim RNG `0x4B6C30` (call-site redirect that calls it itself) | `cobtrace` (`tagpu_cobtrace.on`, its contents a unit-type filter) — the COB script-call oracle for tacob: S/R/X/K/D lines to `tagpu_cobtrace.log`, stamped with the sim tick `main+0x38A47`; reads only, game thread only; all five or none. `tagpu_posedump.on`'s header line now carries `tick=` and `idx=` so the two logs join, and since 2026-09-08 `body=` (the cached triple the compose folds) and `live=` (`unit+0x68/+0x66/+0x64`) beside it, both in axis order — [exe-reverse-engineering](exe-reverse-engineering.html) §"The COB engine", [tacob-design](tacob-design.html) §"The trace contract" |
+| `0x4B08C0` `0x4B0DA0` `0x4B19D0` `0x4B1A99` + the `E8` at `0x4B15E0`; destructors `0x4B06B0`, `0x4B06F0` | thread allocator and runner (5 stolen each), `RETURN` (5), signal kill (6), RNG call redirect, and destructor observers | `cobtrace` (`tagpu_cobtrace.on`, a unit-type filter) — S/R/X/K/D and guarded-runtime H stack-peak events in `tagpu_cobtrace.log`, stamped with sim tick `main+0x38A47`. It observes loader and game threads through bounded per-thread latches; the destructor lock invalidates deferred reads before freeing. No engine data is written. Event hooks and both lifetime hooks are byte-checked; failed installation restores them. `INCOMPLETE` invalidates a trace as an oracle. The pose dump joins on `tick=` and `idx=`, with `body=` and `live=` triples in axis order — [engine map](exe-reverse-engineering.html) §"The COB engine", [trace contract](tacob-design.html) |
 | — | `tagpu_posecrc.on`: one line per unit per SIM TICK carrying `in=` a CRC32 of every byte `posed_pose` reads and `out=` a CRC32 of every byte it writes, plus `raced=`. **The only oracle that watches the matrices the unit pass hands the GPU** — `posedump` dumps the *engine's* fields and `tacob pose-check` diffs tacob's reconstruction of them. It is joined on the INPUT, never on the tick, so two runs need no tick-for-tick determinism: `posed_pose` is a pure function of its input, so a shared `in` must carry the same `out`. The input is hashed on **both sides** of the pose loop and the sample is dropped and counted when the game thread moved a field under it (§2.9's residual, measured at 0–0.33%) — [smooth motion](smooth-motion.html) §7e | `tagpu_native.c`, no engine address |
 | — | `tagpu_shadowdump.on`: the Classic++ shadow map written once as a 16-bit PGM, `tagpu_shadow.pgm` (near = small), with its matrix on the `shadow: dumped` log line — the lab's `debug=shadow` for the game; how a caster's silhouette in light space is checked instead of guessed (G14i) | `tagpu_shadow.c`, no engine address |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched. **`NewMainOrder2Unit` takes 16.16 in `{x, altitude, depth}`**, the same convention as `CreateUnit`; we passed whole units in `{x, depth, altitude}` until 2026-09-04 and every ordered unit walked to the map origin — [exe-reverse-engineering](exe-reverse-engineering.html) §"The order module" |
@@ -2028,6 +2029,19 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 `screenshot.c`'s filenames still see the unsuffixed name.
 
 ### 2.5 State we read, and the fields we write
+
+**COB port additions, verification in progress:** the loader clears rejected types' availability
+bit `UnitDef+0x241 & 0x800000`, leaving their identity intact; creation/build-list guards prevent
+their use. The model-binding seam publishes a validated script (or NULL for a rejected one)
+at `UnitDef+0x18E`. Save/load access only model-backed pieces and zero excess animation rows.
+Before allocating a saved level, the saved `Summary/maxunits` is validated and written
+to `main+0x37EE6/+0x37EEC` so the restored IDs keep their original player partition. On the engine's
+script-executing thread, the guarded adapter owns eight 128-word records (`cob+0x1C`, stride
+`0x224`), busy count `+0x113C`, and relocated model pointer `+0x1140`; it initializes stacks,
+transfers bounded child arguments, and restores validated records/statics/animation and piece
+state on load. These are simulation writes, not renderer-owned state. Local entry chat uses
+the engine's reminder API. The detailed lifetime, ordering and patch inventory are in §2.105
+and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integration-disassembled-measured-2026-09-28).
 
 | Where | What |
 |---|---|
@@ -19895,3 +19909,42 @@ suite's battle stage compares the side panel after a deselect with the engine's 
 Measured: Escalation 22.5 % of the strip wrong on v0.3, 0.12 % with the fix; `copy-freed` 0.
 Mechanism, residuals and numbers: [GUI renderer](gui-renderer.html) §28. **Not covered:** an
 off-thread free, a same-base re-make and a full window still drop at once.
+
+### 2.105 Guarded COB compatibility (`tagpu_patches.c`, `tagpu_cob_safe.c`) — in progress
+
+The [COB decision and evidence note](tadr-port/cob.html) is the verification ledger; this branch
+does not yet claim complete mod parity. Required getters 32 and 69–75 use full signed-ID checks
+against the match's pool before addressing a live record. ID 111 remains native/inactive.
+The portable core bounds file allocations, instruction/entry operands, 128-word stacks,
+eight-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
+in use; unsupported types are unavailable with an entry warning, while required-unit creation
+and unrecoverable execution faults refuse with diagnostics.
+
+| VA / inventory | Mechanism |
+|---|---|
+| `0x480770` | six-byte getter detour, retaining the native fallback and relocating its model operand |
+| `0x4B245C`, `0x4B246F..0x4B2475`, `0x4B26D5` | validate the actual file allocation before relocation, checksum that same allocation, unlink metadata before free |
+| `cob_runtime_sites` | checked object size/model/count/record-stride operands; `0x4B0921` initializes allocated records; `0x4B0DAD` guards wait-state access and `0x4B0E5D` every instruction fetch |
+| `0x4B1EC0`, `0x4B2040` | replace complete save/load methods; validate the complete input before exposing restored state |
+| `0x42D8F4`, `0x42D299`, `0x43E0B0` | bind initial/reloaded scripts to model storage; bound the native SweetSpot result consumer |
+| `0x497581` | saved unit partition established before native `0x4917D0` allocates the level |
+| `0x42DA58`, `0x42BEC3`, `0x485FA0`, `0x485D64` | filter rejected types from build lists and guard creation, including required/saved units |
+| existing held-create wrapper at `0x488462` | check required mission types before the wrapper hides the native caller behind its own frame; no new patch site or engine-state field |
+| `0x497F5E`, `0x49842F`, `0x496A4F` | reuse load reset/in-play ordering; deliver local chat through `0x46BC70` after native frame work |
+| `0x4B06B0`, `0x4B06F0` | optional trace invalidates deferred starts at both COB destructor entries before free |
+
+The trace keeps a lock-ordered per-thread pending start, logs every transferred argument and
+new stack peaks (`H`); capacity failures invalidate its evidence with `INCOMPLETE`. It writes
+no engine state. The allocation/runner/return/signal/random observers in §2.4 remain its seams.
+
+**GUI first-arm ordering.** `tagpu_gui_mirror_want` requests a producer reset on its rising edge.
+The render-thread mirror withholds operations and publication until its drain records that
+reset. Reset debt remains until `tagpu_gui_handover` delivers the complete, non-lost record.
+If allocation/atlas invalidation loses it, or swapchain acquisition skips its delivery, the
+next drain requests another reset and withholds suffix history. `tagpu_gui_reset.h` carries
+that render-owned state machine; its compiled tests exercise lost, skipped and successful
+delivery. The first delivered non-lost history starts with RESET, by ordering rather than delay.
+Measured during the compatibility investigation: first arming could previously follow four
+already-drained operations and one unrecorded twin. After the change, all 19 Wine startup/battle
+outcomes met expectations; all 15 network cases passed, with the loader/Mayhem case rerun after
+an independent nickname-clearing defect in the driver was fixed. Windows testing remains open.

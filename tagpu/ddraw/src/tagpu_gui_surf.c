@@ -63,6 +63,7 @@
    small to cross an 8-bit value: that identity is the gate, not a hope. */
 
 #include <windows.h>
+#include "tagpu_gui_reset.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1176,6 +1177,7 @@ static void restore_step(void)
    `s_mirLost` counts it. */
 
 static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
+static TagpuGuiReset s_mirReset;
 /* THE ASSET TOKEN THIS RECORD CARRIES, held back until the record is actually
    handed over. `mir_op` succeeding is not delivery: a later op in the same
    drain can exhaust MIR_OPS_MAX/MIR_ARENA_MAX, or a glyph repack or an atlas
@@ -1248,6 +1250,10 @@ static void mir_finish(const TAGPU_FRAME* f);   /* defined below draw_layer,
 
 static void mir_begin(void)
 {
+    if (tagpu_gui_reset_begin(&s_mirReset)) {
+        g_guiq.why = TAGPU_GUI_WHY_ARM;
+        g_guiq.reseed = 1;
+    }
     s_mNOps = 0; s_mALen = 0; s_mOther = 0; s_mLayer = 0;
     s_mStrAny = 0; s_mStrGen = 0;
     s_mAtAny = 0; s_mAtGen = 0;
@@ -1268,7 +1274,7 @@ static void mir_begin(void)
 /* room for one more op, or abandon the frame */
 static TAGPU_GUIOP* mir_op(void)
 {
-    if (!s_mirRec) return NULL;
+    if (!s_mirRec || !tagpu_gui_reset_ready(&s_mirReset)) return NULL;
     if (s_mNOps >= s_mCapOps) {
         unsigned want = s_mCapOps ? s_mCapOps * 2 : 1024;
         TAGPU_GUIOP* n;
@@ -1461,6 +1467,7 @@ static void drain(void)
         switch (o->kind) {
         case PK_FRAME:  s_presented = o->surf; break;
         case PK_RESET:  twins_reset();
+            tagpu_gui_reset_record(&s_mirReset);
             { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
             /* AND EVERY RESOLVED ATLAS RECT BEFORE THIS POINT STOPS MATTERING.
                The consumer drops its whole store on this op, so a sprite
@@ -2488,8 +2495,19 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     if (!tagpu_gui_installed() || !f) return;
     poll();
     if (!s_on) {
-        /* off: nothing is published, but drain whatever was */
-        g_guiq.qTail = g_guiq.qHead; g_guiq.aTail = g_guiq.aHead;
+        /* off: nothing is published, but drain whatever was -- freeing the
+           arena behind the ops taken, as `drain` does, and never to `aHead`:
+           that word can run ahead of `qHead` for a window the producer is
+           still making visible, and bytes freed under an op not yet taken
+           could be handed out again before it is read. */
+        unsigned tail = g_guiq.qTail, head = g_guiq.qHead;
+        while (tail != head) {
+            const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
+            if (o->alen) g_guiq.aTail = o->aoff + o->alen;
+            tail++;
+        }
+        MemoryBarrier();
+        g_guiq.qTail = tail;
         return;
     }
     /* the atlas alone: the sprite table this module resolves against, and
@@ -2630,7 +2648,7 @@ static void mir_finish(const TAGPU_FRAME* f)
        A repack between a recorded string and here is the same statement about
        the same frame. Both publish `lost`, which the consumer answers with the
        behind state. */
-    if (!s_mirWant) { s_mHave = 0; return; }
+    if (!s_mirWant || !tagpu_gui_reset_ready(&s_mirReset)) { s_mHave = 0; return; }
     /* THE TWO ATLASES THE RECORD CARRIES RESOLVED RECTS INTO, checked the same
        way and for the same reason: a rect is valid only for the generation it
        was read in, and both of these can move in the middle of a present --
@@ -2785,6 +2803,14 @@ void tagpu_gui_mirror_reseed(void)
 
 void tagpu_gui_mirror_want(int on)
 {
+    if (on && !s_mirWant) {
+        /* The drain can already own twins when its consumer first arms.
+           Publish no partial history: the first delivered op must be a
+           producer RESET, followed by that epoch's seeds and draws. */
+        tagpu_gui_reset_arm(&s_mirReset);
+        g_guiq.why = TAGPU_GUI_WHY_ARM;
+        g_guiq.reseed = 1;
+    }
     if (!on && s_mirWant) {
         /* nothing is kept once nothing asks for it: this is the largest thing
            the module owns after the twins themselves */
@@ -2817,6 +2843,7 @@ int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
     if (s_mFrame != now) return 0;
     *out = s_mHand;
     s_mTaken = 1;
+    tagpu_gui_reset_deliver(&s_mirReset, out->lost);
     /* THE ASSET ECHO, AND THIS IS THE ONE PLACE IT IS TRUE BY DEFINITION. The
        producer reads `assetAck` to decide an offer is done with; publishing it
        in the same statement sequence that hands the record out makes "acked"
@@ -2827,4 +2854,3 @@ int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
     if (s_handAssetTok) { g_guiq.assetAck = s_handAssetTok; s_handAssetTok = 0; }
     return 1;
 }
-

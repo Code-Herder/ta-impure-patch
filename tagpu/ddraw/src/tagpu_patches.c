@@ -18,12 +18,21 @@
 #include "tagpu_regstore.h"
 #include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
+#include "tagpu_cob_safe.h"
+#include "tagpu_cobtrace.h"
 #include "git.h"
 
 static void plog(const char* s)
 {
     tagpu_log(s);
 }
+
+#ifndef TAGPU_LIMITS_STOCK
+static int cob_type_rejected(unsigned type);
+static void cob_required(unsigned type);
+static void cob_level_reset(void);
+static void cob_level_enter(void);
+#endif
 
 /* Write `val` at absolute `addr` iff it currently holds `expect`. Returns 1 on patch,
    0 if the byte didn't match (wrong build) or protection change failed. */
@@ -75,7 +84,7 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
    first static import), so no game exists yet and no engine thread executes these bytes
    while they change. Nothing here is ever put back: the patches last for the process. */
 
-#define LIM_MAXSITE  320
+#define LIM_MAXSITE  512
 #define LIM_MAXB     80    /* a whole replaced block, so the check covers what the stub stands for */
 
 typedef struct LIMSITE {
@@ -1755,6 +1764,9 @@ static void __cdecl bl_shared_append(unsigned int* regs)
 {
     unsigned short** list = (unsigned short**)((unsigned char*)(regs + PR_RET + 1) + 0x14);
     unsigned int n = regs[PR_EBX];
+#ifndef TAGPU_LIMITS_STOCK
+    if (cob_type_rejected(regs[PR_EAX] & 0xFFFFu)) return;
+#endif
     bl_append(list, n, (unsigned short)regs[PR_EAX], (const char*)0x00503EF0);
     regs[PR_EBX] = n + 1u;
     regs[PR_EBP] = (unsigned int)(size_t)(*list + n + 1u);
@@ -1783,6 +1795,13 @@ static void __cdecl bl_download_append(unsigned int* regs)
     unsigned int* hdr = (unsigned int*)(size_t)regs[PR_EBP];
     unsigned int n = hdr[0];
     unsigned short* list = (unsigned short*)(size_t)hdr[1];
+#ifndef TAGPU_LIMITS_STOCK
+    if (cob_type_rejected(regs[PR_EAX] & 0xFFFFu)) {
+        regs[PR_EAX] = regs[PR_ECX] = n;
+        regs[PR_EDX] = (unsigned int)(size_t)list;
+        return;
+    }
+#endif
     bl_append(&list, n, (unsigned short)regs[PR_EAX], "CANBUILD");
     hdr[1] = (unsigned int)(size_t)list;
     hdr[0] = n + 1u;
@@ -7280,6 +7299,9 @@ static void __cdecl ghost_reset(unsigned int* regs)
 {
     unsigned int k, left = 0;
     (void)regs;
+#ifndef TAGPU_LIMITS_STOCK
+    cob_level_reset();
+#endif
     EnterCriticalSection(&s_ghostLock);
     for (k = 0; k < GHOST_SENDERS; k++) {
         left += s_ghostN[k];
@@ -7322,6 +7344,9 @@ static void __cdecl ghost_replay(unsigned int* regs)
                    "held creates dropped", total);
         return;
     }
+#ifndef TAGPU_LIMITS_STOCK
+    cob_level_enter();
+#endif
     first = *(const char* const*)(ta + 0x14357);
     last  = *(const char* const*)(ta + 0x1435B);
     if (first && last >= first) max = (unsigned int)(last - first) / 0x118;
@@ -8351,7 +8376,15 @@ static void __cdecl kill_flush_resurrected(unsigned int* regs)
 
 static void __cdecl kill_hold_site(unsigned int* regs)
 {
+#ifndef TAGPU_LIMITS_STOCK
+    /* The held-create wrapper owns a second call frame. Check mission placement
+       while its original caller and type argument still name the native site;
+       UNITS_Create sees this wrapper's return address, not 0x488467. */
+    if (regs[PR_RET] == 0x00488467u)
+        cob_required(regs[PR_RET + 2] & 0xFFFFu);
+#else
     (void)regs;
+#endif
     kill_hold_arm();
 }
 
@@ -10094,6 +10127,757 @@ static unsigned char* lim_emit(unsigned char* p, const unsigned char* op, int n,
     return p + n + 4;
 }
 
+typedef int (__attribute__((thiscall)) *CobNativeGet)(char*, int, int, int, int, int);
+static CobNativeGet s_cobNativeGet;
+static char* cob_live_unit(char* ta, int id);
+
+typedef struct CobFile {
+    struct CobFile* next;
+    void* blob;
+    unsigned size;
+    TagpuCobProgram* program;
+    char name[128];
+} CobFile;
+static CobFile* s_cobFiles[256];
+static CRITICAL_SECTION s_cobLock;
+
+typedef struct CobRejected {
+    char unit[33], display[33], script[128], reason[256];
+    int announced;
+} CobRejected;
+static CobRejected* s_cobRejected[TAGPU_LIM_TYPES];
+static int s_cobInPlay;
+static DWORD s_cobNextChat;
+
+static void __cdecl cob_load_game_data(void)
+{
+    typedef int (__attribute__((thiscall)) *TdfSelect)(void*, const char*);
+    typedef int (__attribute__((thiscall)) *TdfInt)(void*, const char*, int);
+    char* ta = *(char**)0x00511DE8u;
+    void* save = *(void**)(ta + 0x38D6B);
+    TdfSelect select = (TdfSelect)0x004B4560u;
+    TdfSelect has = (TdfSelect)0x004B48F0u;
+    TdfInt integer = (TdfInt)0x004B4800u;
+    if (save && select(save, "Summary") && !has(save, "BetweenMissions")) {
+        int limit = integer(save, "maxunits", 0);
+        if (limit < TAGPU_LIM_UNITS_MIN || limit > TAGPU_LIM_UNITS)
+            tagpu_refuse("Cannot load this saved game: its per-player unit limit is "
+                         "missing or outside the supported range. No units have been restored.");
+        /* DISASSEMBLED: 0x497581 precedes every per-level allocation in
+           0x4917D0. Stock reads this key only at 0x43263B, after the unit
+           pool and player ranges exist, so saved IDs can fall outside their
+           owner's range (0x486026..0x486030). Use the saved partition before
+           allocating it; never remap IDs that COB stacks may also contain. */
+        *(unsigned short*)(ta + 0x37EE6) = (unsigned short)limit;
+        *(unsigned short*)(ta + 0x37EEC) = (unsigned short)limit;
+    }
+    ((void (__cdecl*)(void))0x004917D0u)();
+}
+
+static void cob_fault(const char* name, unsigned pc, const char* why)
+{
+    char report[640];
+    snprintf(report, sizeof report,
+             "A unit script cannot continue safely. The game has stopped.\n\n"
+             "Script: %.127s\nWord: %u\nReason: %.255s", name, pc, why);
+    tagpu_refuse(report);
+    TerminateProcess(GetCurrentProcess(), 3);
+}
+
+static int cob_type_rejected(unsigned type)
+{
+    int rejected;
+    if (type >= TAGPU_LIM_TYPES) return 1;
+    EnterCriticalSection(&s_cobLock);
+    rejected = s_cobRejected[type] != NULL;
+    LeaveCriticalSection(&s_cobLock);
+    return rejected;
+}
+
+/* Called before the loader thread is created, at the existing load reset.
+   Indices belong to one level only; no rejection survives its type reindexing. */
+static void cob_level_reset(void)
+{
+    unsigned i;
+    EnterCriticalSection(&s_cobLock);
+    for (i = 0; i < TAGPU_LIM_TYPES; ++i) {
+        free(s_cobRejected[i]);
+        s_cobRejected[i] = NULL;
+    }
+    s_cobInPlay = 0;
+    s_cobNextChat = 0;
+    LeaveCriticalSection(&s_cobLock);
+}
+
+static void cob_level_enter(void)
+{
+    EnterCriticalSection(&s_cobLock);
+    s_cobInPlay = 1;
+    LeaveCriticalSection(&s_cobLock);
+}
+
+static void cob_reject_file(const char* script, const char* reason)
+{
+    char* ta = *(char**)0x00511DE8u;
+    char* defs;
+    char unit[33];
+    unsigned count, i;
+    const char* dot = strrchr(script, '.');
+    size_t n = dot ? (size_t)(dot - script) : strlen(script);
+    if (!ta || n > 32) cob_fault(script, 0, reason);
+    memcpy(unit, script, n); unit[n] = 0;
+    count = *(unsigned*)(ta + 0x1438F);
+    defs = *(char**)(ta + 0x1439B);
+    if (!defs || count > TAGPU_LIM_TYPES) cob_fault(script, 0, "unit definition allocation is invalid");
+    for (i = 1; i < count; ++i) {
+        char* def = defs + i * 0x249u;
+        CobRejected* bad;
+        if (_strnicmp(def + 32, unit, 32)) continue;
+        bad = (CobRejected*)calloc(1, sizeof *bad);
+        if (!bad) cob_fault(script, 0, "rejection diagnostic allocation failed");
+        snprintf(bad->unit, sizeof bad->unit, "%.32s", def + 32);
+        snprintf(bad->display, sizeof bad->display, "%.32s", def);
+        snprintf(bad->script, sizeof bad->script, "%s", script);
+        snprintf(bad->reason, sizeof bad->reason, "%s", reason);
+        EnterCriticalSection(&s_cobLock);
+        free(s_cobRejected[i]);
+        s_cobRejected[i] = bad;
+        /* This is the same availability bit UNITS_Create tests at 0x485FA0.
+           Keep the def itself so required/saved units still resolve by name. */
+        *(unsigned*)(def + 0x241) &= ~0x800000u;
+        LeaveCriticalSection(&s_cobLock);
+        tagpu_logf("cob: disabled unit %s (%s), type %u, script %s: %s",
+                   bad->unit, bad->display, i, bad->script, bad->reason);
+        return;
+    }
+    cob_fault(script, 0, "invalid script has no owning unit definition");
+}
+
+static void cob_required(unsigned type)
+{
+    char report[640];
+    CobRejected* bad;
+    EnterCriticalSection(&s_cobLock);
+    bad = type < TAGPU_LIM_TYPES ? s_cobRejected[type] : NULL;
+    if (bad) {
+        snprintf(report, sizeof report, "Cannot create a required or saved unit.\n\n"
+                 "Unit: %s (%s), type %u\nScript: %s\nReason: %s\n\n"
+                 "No unit has been substituted. This game cannot continue.",
+                 bad->unit, bad->display, type, bad->script, bad->reason);
+        LeaveCriticalSection(&s_cobLock);
+        tagpu_refuse(report);
+        return;
+    }
+    LeaveCriticalSection(&s_cobLock);
+}
+
+static unsigned __cdecl cob_create_check(unsigned* regs)
+{
+    char* ta = *(char**)0x00511DE8u;
+    unsigned type = regs[PR_ESI] & 0xFFFFu;
+    unsigned caller = *(unsigned*)(WPN_ESP_JMP(regs) + 20);
+    unsigned count = ta ? *(unsigned*)(ta + 0x1438F) : 0;
+    const char* def;
+    if (!type || type >= count || count > TAGPU_LIM_TYPES) return 0x004861BDu;
+    if (cob_type_rejected(type)) {
+        /* Saved restore and starting commanders. Mission placement is checked
+           in its held-create wrapper, which owns a second return address.
+           Ordinary construction returns NULL, just like an unavailable type. */
+        if (caller == 0x00487193u || caller == 0x00488467u ||
+            caller == 0x00497007u || caller == 0x004977C0u || caller == 0x004653DEu)
+            cob_required(type);
+        return 0x004861BDu;
+    }
+    def = *(const char* const*)(ta + 0x1439B) + type * 0x249u;
+    return (*(const unsigned*)(def + 0x241) & 0x800000u) ? 0x00485FB0u : 0x004861BDu;
+}
+
+static unsigned __cdecl cob_model_check(unsigned* regs)
+{
+    const char* unit = (const char*)(size_t)regs[PR_ESI];
+    const char* def = (const char*)(size_t)regs[PR_EAX];
+    /* The model constructor also serves network/recreate paths which bypass
+       UNITS_Create. None may leave a live unit with its required COB missing. */
+    cob_required(*(const unsigned short*)(unit + 0xA6));
+    regs[PR_ECX] = *(const unsigned*)(def + 0x18E);
+    return 0x00485D6Au;
+}
+
+static unsigned __cdecl cob_chat_frame(void)
+{
+    unsigned result = ((unsigned (__cdecl*)(void))0x00428C50u)();
+    unsigned i;
+    CobRejected bad;
+    char message[576], line[64];
+    size_t offset, length;
+    DWORD now = GetTickCount();
+    int found = 0;
+    EnterCriticalSection(&s_cobLock);
+    if (s_cobInPlay && (!s_cobNextChat || (LONG)(now - s_cobNextChat) >= 0)) {
+        for (i = 1; i < TAGPU_LIM_TYPES; ++i) {
+            if (s_cobRejected[i] && !s_cobRejected[i]->announced) {
+                bad = *s_cobRejected[i];
+                s_cobRejected[i]->announced = 1;
+                s_cobNextChat = now + 5000;
+                found = 1;
+                break;
+            }
+        }
+    }
+    LeaveCriticalSection(&s_cobLock);
+    if (!found) return result;
+    snprintf(message, sizeof message, "COB: %s (%s), type %u disabled. Script %s: %s",
+             bad.unit, bad.display, i, bad.script, bad.reason);
+    tagpu_logf("cob: entry message: %s", message);
+    /* NewChatText (0x463CA0) owns 64 bytes per line, including NUL. ShowReminder
+       copies them locally; no network packet and no pointer outlives this call. */
+    length = strlen(message);
+    for (offset = 0; offset < length; offset += 63) {
+        snprintf(line, sizeof line, "%.63s", message + offset);
+        ((void (__stdcall*)(const char*, int))0x0046BC70u)(line, 0);
+    }
+    return result;
+}
+
+/* Metadata follows the engine's script allocation, not a reusable pointer key.
+   The destructor hook removes it before the engine frees the blob. Validation
+   sees the byte count returned by the SAME file read, before relocation. */
+static CobFile* cob_find(const void* blob)
+{
+    CobFile* f = s_cobFiles[((uintptr_t)blob >> 4) & 255u];
+    while (f && f->blob != blob) f = f->next;
+    return f;
+}
+
+static void* __stdcall cob_read(const char* path, unsigned* ignored)
+{
+    unsigned size = 0, bucket;
+    void* blob = ((void* (__stdcall*)(const char*, unsigned*))0x004BBE50u)(path, &size);
+    CobFile* f;
+    char reason[256];
+    const char* name = strrchr(path, '\\');
+    (void)ignored;
+    /* The native model constructor explicitly supports scriptless types
+       (0x485DFE). Absence is not proof of a malformed script. */
+    if (!blob) return NULL;
+    f = (CobFile*)calloc(1, sizeof *f);
+    if (!f) cob_fault(name ? name + 1 : path, 0, "COB metadata allocation failed");
+    f->blob = blob; f->size = size;
+    snprintf(f->name, sizeof f->name, "%s", name ? name + 1 : path);
+    f->program = tagpu_cob_program(blob, size, reason, sizeof reason);
+    if (!f->program) {
+        cob_reject_file(f->name, reason);
+        ((void (__cdecl*)(void*))0x004D85A0u)(blob);
+        free(f);
+        return NULL;
+    }
+    bucket = ((uintptr_t)blob >> 4) & 255u;
+    EnterCriticalSection(&s_cobLock);
+    f->next = s_cobFiles[bucket]; s_cobFiles[bucket] = f;
+    LeaveCriticalSection(&s_cobLock);
+    return blob;
+}
+
+static unsigned __stdcall cob_read_size(void* blob)
+{
+    CobFile* f;
+    unsigned size;
+    EnterCriticalSection(&s_cobLock);
+    f = cob_find(blob);
+    size = f ? f->size : 0;
+    LeaveCriticalSection(&s_cobLock);
+    if (!f) cob_fault("unknown", 0, "script allocation has no validated byte count");
+    return size;
+}
+
+static void __cdecl cob_free_blob(void* blob)
+{
+    CobFile** link;
+    CobFile* f;
+    EnterCriticalSection(&s_cobLock);
+    link = &s_cobFiles[((uintptr_t)blob >> 4) & 255u];
+    while (*link && (*link)->blob != blob) link = &(*link)->next;
+    f = *link;
+    if (f) *link = f->next;
+    tagpu_cob_program_free(f ? f->program : NULL);
+    free(f);
+    LeaveCriticalSection(&s_cobLock);
+    ((void (__cdecl*)(void*))0x004D85A0u)(blob);
+}
+
+static void* cob_bind_loaded_model(char* def, void* blob)
+{
+    char* ta = *(char**)0x00511DE8u;
+    const char* base = *(const char**)(ta + 0x1439B);
+    unsigned count = *(unsigned*)(ta + 0x1438F);
+    uintptr_t delta = (uintptr_t)def - (uintptr_t)base;
+    CobFile* f;
+    if (!base || count > TAGPU_LIM_TYPES || delta % 0x249u || delta / 0x249u >= count)
+        cob_fault("unknown", 0, "loaded unit definition exceeds its allocation");
+    if (blob) {
+        char reason[256];
+        const char* root = (*(const char***)(ta + 0x14377))[delta / 0x249u];
+        unsigned pieces = root ? ((unsigned (__stdcall*)(const char*))0x0045AE80u)(root) : 0;
+        EnterCriticalSection(&s_cobLock);
+        f = cob_find(blob);
+        if (!f) cob_fault("unknown", 0, "loaded script allocation is not validated");
+        /* DISASSEMBLED: 0x42D79C publishes this template before the COB load.
+           0x45A950 uses this same node count to allocate 34 + 54*N bytes;
+           0x45A9E8 skips excess COB names, it does not enlarge that allocation.
+           Unused excess names are legal; reachable accesses must fit. */
+        if (!tagpu_cob_bind_model(f->program, pieces, reason, sizeof reason)) {
+            cob_reject_file(f->name, reason);
+            LeaveCriticalSection(&s_cobLock);
+            /* Relocation already registered this blob in the native checksum
+               tree (0x4B2499); its destructor removes that entry before the
+               hooked blob free. A direct free would leave a stale tree key. */
+            ((void (__stdcall*)(void*))0x004B2540u)(blob);
+            blob = NULL;
+        } else LeaveCriticalSection(&s_cobLock);
+    }
+    *(void**)(def + 0x18E) = blob;
+    return blob;
+}
+
+static unsigned __cdecl cob_loaded_model_check(unsigned* regs)
+{
+    regs[PR_EAX] = (unsigned)(size_t)cob_bind_loaded_model(
+        (char*)(size_t)regs[PR_EBP], (void*)(size_t)regs[PR_EAX]);
+    return 0x0042D8FAu;
+}
+
+static unsigned __cdecl cob_reloaded_model_check(unsigned* regs)
+{
+    regs[PR_EAX] = (unsigned)(size_t)cob_bind_loaded_model(
+        (char*)(size_t)regs[PR_ESI], (void*)(size_t)regs[PR_EAX]);
+    return 0x0042D29Fu;
+}
+
+static void cob_model_bound(char* cob, const CobFile* f)
+{
+    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+    /* The unit owns its posed model until after COB destruction (0x486D8A,
+       then 0x486D9E). Interpreter and save callbacks run on that owning thread. */
+    if (!model || f->program->model_pieces > model[0])
+        cob_fault(f->name, 0, "COB piece count exceeds the posed model allocation");
+}
+
+static TagpuCobRecord* cob_record(char* cob, unsigned slot)
+{
+    if (slot >= TAGPU_COB_THREADS) cob_fault("unknown", 0, "thread index exceeds its allocation");
+    return (TagpuCobRecord*)(cob + 28 + slot * TAGPU_COB_RECORD_BYTES);
+}
+
+static unsigned __cdecl cob_allocated(unsigned* regs)
+{
+    char* cob = (char*)(size_t)regs[PR_ECX];
+    TagpuCobRecord* record = cob_record(cob, regs[PR_EAX]);
+    record->sleep = record->piece = record->axis = record->child = 0;
+    memset(record->stack, 0, sizeof record->stack);
+    ++*(unsigned*)(cob + TAGPU_COB_COUNT_OFFSET);
+    return 0x004B0927u;
+}
+
+static unsigned __cdecl cob_run_enter(unsigned* regs)
+{
+    char* cob = (char*)(size_t)regs[PR_EDI];
+    TagpuCobRecord* record = cob_record(cob, regs[PR_EBP]);
+    CobFile* f;
+    char reason[256];
+    if (record->status) {
+        EnterCriticalSection(&s_cobLock);
+        f = cob_find(*(void**)(cob + 8));
+        if (!f) cob_fault("unknown", record->pc, "script allocation is not validated");
+        cob_model_bound(cob, f);
+        if (!tagpu_cob_check_record(f->program, record, reason, sizeof reason))
+            cob_fault(f->name, record->pc, reason);
+        LeaveCriticalSection(&s_cobLock);
+    }
+    regs[PR_ECX] = regs[PR_EBP] * (TAGPU_COB_RECORD_BYTES / 4);
+    return 0x004B0DB5u;
+}
+
+static unsigned __cdecl cob_run_step(unsigned* regs)
+{
+    char* cob = (char*)(size_t)regs[PR_EDI];
+    TagpuCobRecord* record = cob_record(cob, regs[PR_EBP]);
+    CobFile* f;
+    char reason[256];
+    unsigned kind, argc = 0, script = 0;
+    int checked;
+    if ((void*)record != (void*)(size_t)regs[PR_ESI])
+        cob_fault("unknown", 0, "interpreter record does not match its bounded slot");
+    EnterCriticalSection(&s_cobLock);
+    f = cob_find(*(void**)(cob + 8));
+    if (!f) cob_fault("unknown", record->pc, "script allocation is not validated");
+    checked = tagpu_cob_check_step(f->program, record, reason, sizeof reason);
+    if (!checked) cob_fault(f->name, record->pc, reason);
+    if (checked == 2) {
+        LeaveCriticalSection(&s_cobLock);
+        return 0x004B1B60u;
+    }
+    kind = f->program->code[record->pc] & 0x100ff000u;
+    if (kind == 0x10061000u || kind == 0x10062000u) {
+        script = f->program->code[record->pc + 1];
+        argc = f->program->code[record->pc + 2];
+    }
+    LeaveCriticalSection(&s_cobLock);
+    tagpu_cobtrace_step(cob, regs[PR_EBP]);
+    if (kind == 0x10083000u || kind == 0x10084000u) {
+        int words = kind == 0x10083000u ? 3 : 1;
+        int id = record->stack[record->sp + 1 - words];
+        if (words == 3) {
+            int piece = record->stack[record->sp - 1];
+            /* The transport packet has one byte for the piece. 0xFF means
+               hidden cargo (0x48AC99), not piece 255 of a larger model. */
+            if (piece != -1 && (piece < 0 || piece >= 255 || (unsigned)piece >= f->program->model_pieces))
+                cob_fault(f->name, record->pc, "attachment piece exceeds its model or wire representation");
+        }
+        if (!cob_live_unit(*(char**)0x00511DE8u, id)) {
+            record->sp -= words;
+            ++record->pc;
+            return 0x004B0E59u;
+        }
+    }
+    if (kind == 0x10061000u || kind == 0x10062000u) {
+        typedef int (__attribute__((thiscall)) *Allocate)(char*, unsigned);
+        int slot;
+        tagpu_cobtrace_vm_context(cob, (int)regs[PR_EBP], (int)argc, kind == 0x10062000u);
+        slot = ((Allocate)0x004B08C0u)(cob, script);
+        tagpu_cobtrace_vm_context(NULL, 0, 0, 0);
+        if (slot >= 0) {
+            TagpuCobRecord* child = cob_record(cob, (unsigned)slot);
+            memcpy(child->stack, record->stack + record->sp + 1 - argc, argc * sizeof(int32_t));
+            child->mask = record->mask;
+        } else if (kind == 0x10062000u) {
+            cob_fault(f->name, record->pc, "CALL cannot obtain a child thread");
+        }
+        /* START consumes its arguments even if all records are occupied. CALL
+           never creates stock's unresolvable wait on child slot -1. */
+        record->sp -= (int32_t)argc;
+        record->pc += 3;
+        if (kind == 0x10062000u) {
+            record->child = slot;
+            record->status = 0x02800000u;
+            return 0x004B1BE8u;
+        }
+        return 0x004B0E59u;
+    }
+    regs[PR_EDX] = *(unsigned*)(cob + 8);
+    regs[PR_ECX] = record->pc;
+    return 0x004B0E63u;
+}
+
+static void cob_guard_site(unsigned va, unsigned n, const unsigned char* stock,
+                           unsigned (__cdecl *check)(unsigned*), const char* name)
+{
+    unsigned char* code = lim_code(32);
+    unsigned char* p = code;
+    if (!code) return;
+    *p++ = 0x60; *p++ = 0x54;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)check); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 4;
+    /* POPAD ignores its saved-ESP cell; use that cell for the continuation,
+       then jump indirectly without destroying any of the restored registers. */
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x0C;
+    *p++ = 0x61;
+    *p++ = 0xFF; *p++ = 0x64; *p++ = 0x24; *p++ = 0xEC;
+    lim_branch(va, (int)n, stock, 0xE9, (unsigned)(size_t)code, name);
+}
+
+typedef unsigned (__attribute__((thiscall)) *CobStreamIO)(void*, void*, unsigned);
+typedef void (__attribute__((thiscall)) *CobSeek)(void*, unsigned);
+typedef unsigned (__attribute__((thiscall)) *CobLength)(void*);
+typedef int (__attribute__((thiscall)) *CobPieceGet)(char*, unsigned);
+typedef int (__attribute__((thiscall)) *CobAxisGet)(char*, unsigned, unsigned);
+typedef void (__attribute__((thiscall)) *CobPieceSet)(char*, unsigned, int);
+typedef void (__attribute__((thiscall)) *CobAxisSet)(char*, unsigned, unsigned, int);
+
+static CobFile* cob_owned_file(char* cob)
+{
+    CobFile* f;
+    EnterCriticalSection(&s_cobLock);
+    f = cob_find(*(void**)(cob + 8));
+    LeaveCriticalSection(&s_cobLock);
+    /* The engine owns this script until every unit of its type is destroyed;
+       notably +reload destroys those units before 0x42D275 frees the script. */
+    if (!f) cob_fault("unknown", 0, "script allocation is not validated");
+    cob_model_bound(cob, f);
+    return f;
+}
+
+typedef void (__stdcall *CobNativePieceCenter)(char*, void*, int);
+static CobNativePieceCenter s_cobNativePieceCenter;
+
+static void __stdcall cob_piece_center(char* unit, void* output, int piece)
+{
+    const unsigned* model = *(const unsigned**)(unit + 0x9E);
+    if (piece < 0 || !model || (unsigned)piece >= model[0]) {
+        char* cob = *(char**)(unit + 0x9A);
+        CobFile* f = cob ? cob_owned_file(cob) : NULL;
+        cob_fault(f ? f->name : "unknown", 0, "SweetSpot piece exceeds the posed model allocation");
+    }
+    s_cobNativePieceCenter(unit, output, piece);
+}
+
+static int __attribute__((thiscall)) cob_save(char* cob, void* stream)
+{
+    CobFile* f = cob_owned_file(cob);
+    TagpuCobProgram* program = f->program;
+    unsigned statics = program->statics * 4u;
+    unsigned size = TAGPU_COB_SAVE_BYTES + statics + program->pieces * 108u;
+    unsigned char* data = (unsigned char*)calloc(1, size);
+    unsigned* pieces;
+    unsigned i, axis;
+    void** vtable = *(void***)cob;
+    char reason[256];
+    if (!data) cob_fault(f->name, 0, "saved script allocation failed");
+    if (!tagpu_cob_save_records(program, *(unsigned*)(cob + 12), cob_record(cob, 0),
+                                data, TAGPU_COB_SAVE_BYTES, reason, sizeof reason))
+        cob_fault(f->name, 0, reason);
+    if (statics) memcpy(data + TAGPU_COB_SAVE_BYTES, *(void**)(cob + 16), statics);
+    pieces = (unsigned*)(data + TAGPU_COB_SAVE_BYTES + statics);
+    /* Keep the declared-size wire layout, but never ask the model for unused
+       excess declarations. Their save rows remain canonical zero padding. */
+    for (i = 0; i < program->model_pieces; ++i) {
+        unsigned* saved = pieces + i * 27u;
+        const unsigned* animation = *(const unsigned**)(cob + 20) + i * 19u;
+        memcpy(saved, animation + 1, 18u * 4u);
+        for (axis = 0; axis < 3; ++axis) {
+            saved[18 + axis] = ((CobAxisGet)vtable[5])(cob, i, axis);
+            saved[21 + axis] = ((CobAxisGet)vtable[6])(cob, i, axis);
+            saved[24 + axis] = ((CobPieceGet)vtable[7 + axis])(cob, i);
+        }
+    }
+    ((CobSeek)0x004B4C10u)(stream, 0);
+    i = ((CobStreamIO)0x004B4CF0u)(stream, data, size);
+    free(data);
+    if (i != size) cob_fault(f->name, 0, "saved script write was incomplete");
+    return 1;
+}
+
+static int __attribute__((thiscall)) cob_load(char* cob, void* stream)
+{
+    CobFile* f = cob_owned_file(cob);
+    TagpuCobProgram* program = f->program;
+    unsigned statics = program->statics * 4u, tail = statics + program->pieces * 108u;
+    unsigned size = ((CobLength)0x004B4BF0u)(stream), records_size, busy, i, axis;
+    unsigned char* data;
+    unsigned* pieces;
+    TagpuCobRecord records[TAGPU_COB_THREADS];
+    void** vtable = *(void***)cob;
+    char reason[256];
+    if (size < tail || (size - tail != 0x528u && size - tail != TAGPU_COB_SAVE_BYTES))
+        cob_fault(f->name, 0, "saved script size does not match its validated allocation");
+    records_size = size - tail;
+    data = (unsigned char*)malloc(size);
+    if (!data) cob_fault(f->name, 0, "saved script allocation failed");
+    ((CobSeek)0x004B4C10u)(stream, 0);
+    if (((CobStreamIO)0x004B4C80u)(stream, data, size) != size)
+        cob_fault(f->name, 0, "saved script read was incomplete");
+    if (!tagpu_cob_load_records(program, *(unsigned*)(cob + 12), data, records_size,
+                                records, &busy, reason, sizeof reason))
+        cob_fault(f->name, 0, reason);
+    pieces = (unsigned*)(data + records_size + statics);
+    for (i = 0; i < program->model_pieces; ++i)
+        for (axis = 0; axis < 3; ++axis)
+            if (pieces[i * 27u + 24u + axis] > 1u)
+                cob_fault(f->name, 0, "saved piece flag is not boolean");
+    memcpy(cob_record(cob, 0), records, sizeof records);
+    *(unsigned*)(cob + TAGPU_COB_COUNT_OFFSET) = busy;
+    if (statics) memcpy(*(void**)(cob + 16), data + records_size, statics);
+    /* The constructor zeroes every animation row (0x4B0783..0x4B0791).
+       Leave excess declarations inert, including when importing a native save
+       whose unchecked model getter serialized bytes beyond the posed model. */
+    for (i = program->model_pieces; i < program->pieces; ++i)
+        memset(*(unsigned**)(cob + 20) + i * 19u, 0, 19u * sizeof(unsigned));
+    for (i = 0; i < program->model_pieces; ++i) {
+        unsigned* saved = pieces + i * 27u;
+        unsigned* animation = *(unsigned**)(cob + 20) + i * 19u;
+        animation[0] = 1;
+        memcpy(animation + 1, saved, 18u * 4u);
+        for (axis = 0; axis < 3; ++axis) {
+            ((CobPieceSet)vtable[2 + axis])(cob, i, (int)saved[24 + axis]);
+            ((CobAxisSet)vtable[0])(cob, i, axis, (int)saved[18 + axis]);
+            ((CobAxisSet)vtable[1])(cob, i, axis, (int)saved[21 + axis]);
+        }
+    }
+    *(unsigned*)(cob + 24) = 1;
+    free(data);
+    return 1;
+}
+
+static void cob_runtime_sites(void)
+{
+    static const unsigned model[] = {
+        0x480B22,0x480C36,0x480C56,0x480C7F,0x480C8C,0x480C99,
+        0x480CBA,0x480CF3,0x480D0C,0x480D1E,0x480D2B,0x480D46,
+        0x480D5E,0x480D8B,0x480D96,0x480DB6,0x480DDF,0x480DF6,
+        0x480E20,0x480E36,0x480E56,0x480E76,0x480EBD,0x480EF4,
+        0x480F0C,0x480F5B,0x48115B,0x48124C,0x481388,0x481397,
+        0x4813EE,0x481432,0x481472
+    };
+    static const unsigned count[] = {
+        0x4B0638,0x4B09CA,0x4B0A3F,0x4B0B88,0x4B0D22,0x4B0D6A,
+        0x4B19EF,0x4B19FB,0x4B1AA1,0x4B1AAD,0x4B1B68,0x4B1B77
+    };
+    static const unsigned stride[] = {0x4B062F,0x4B08DF,0x4B0D4C,0x4B1A1E,0x4B1AD0,0x4B1AE8};
+    static const unsigned char alloc[] = {0x8D,0x14,0x80,0x8D,0x14,0xD0};
+    static const unsigned char callback[] = {0x8D,0x0C,0x80,0x8D,0x14,0xC8};
+    static const unsigned char start[] = {0x8D,0x0C,0x80,0x56,0x8D,0x14,0xC8};
+    static const unsigned char query[] = {0x8D,0x0C,0x80,0x56,0x55,0x8B,0x6C,0x24,0x14,0x8D,0x14,0xC8};
+    static const unsigned char multiply[] = {0x69,0xD0}; /* imul edx,eax,imm32 */
+    static const unsigned char entered[] = {0x8D,0x44,0xAD,0,0x8D,0x4C,0xC5,0};
+    static const unsigned char step[] = {0x8B,0x57,8,0x8B,0x4E,4};
+    static const unsigned char allocated[] = {0xFF,0x81,0x3C,5,0,0};
+    static const unsigned char read[] = {0xE8,0xEF,0x99,0,0};
+    static const unsigned char size[] = {0xE8,0xCB,0x97,0,0};
+    static const unsigned char release[] = {0xE8,0xC6,0x5E,2,0};
+    static const unsigned char save_entry[] = {0x81,0xEC,0x9C,5,0,0};
+    static const unsigned char load_entry[] = {0x81,0xEC,0x38,5,0,0};
+    static const unsigned char create_check[] = {0xF7,0x80,0x41,2,0,0,0,0,0x80,0,
+                                                0x0F,0x84,0x0D,2,0,0};
+    static const unsigned char model_check[] = {0x8B,0x88,0x8E,1,0,0};
+    static const unsigned char loaded_model[] = {0x89,0x85,0x8E,1,0,0};
+    static const unsigned char reloaded_model[] = {0x89,0x86,0x8E,1,0,0};
+    static const unsigned char piece_center[] = {0x83,0xEC,8,0x8B,0x44,0x24,0x14};
+    static const unsigned char chat_frame[] = {0xE8,0xFC,0x21,0xF9,0xFF};
+    static const unsigned char path = 0x57, blob = 0x56;
+    unsigned i, factor = TAGPU_COB_RECORD_BYTES / 4;
+    unsigned char now[12];
+    unsigned char* original;
+    InitializeCriticalSection(&s_cobLock);
+    lim_dword(0x00485D74u, 0x544, TAGPU_COB_OBJECT_BYTES, "COB object allocation");
+    for (i = 0; i < sizeof model / sizeof *model; ++i)
+        lim_dword(model[i], 0x540, TAGPU_COB_MODEL_OFFSET, "COB model field");
+    for (i = 0; i < sizeof count / sizeof *count; ++i)
+        lim_dword(count[i], 0x53C, TAGPU_COB_COUNT_OFFSET, "COB active-thread count");
+    for (i = 0; i < sizeof stride / sizeof *stride; ++i)
+        lim_dword(stride[i], 0xA4, TAGPU_COB_RECORD_BYTES, "COB record iteration stride");
+    lim_op(0x004B08F0u, sizeof alloc, alloc, multiply, sizeof multiply, factor, "COB allocated record address");
+    lim_op(0x004B09B2u, sizeof callback, callback, multiply, sizeof multiply, factor, "COB named callback record");
+    lim_op(0x004B0A27u, sizeof callback, callback, multiply, sizeof multiply, factor, "COB indexed callback record");
+    now[0] = 0x56;
+    memcpy(now + 1, multiply, sizeof multiply); memcpy(now + 3, &factor, 4);
+    lim_add(0x004B0B25u, sizeof start, start, now, "COB native call record");
+    now[0] = 0x56; now[1] = 0x55;
+    memcpy(now + 2, query + 5, 4);
+    memcpy(now + 6, multiply, sizeof multiply); memcpy(now + 8, &factor, 4);
+    lim_add(0x004B0C57u, sizeof query, query, now, "COB query record");
+    cob_guard_site(0x004B0921u, sizeof allocated, allocated, cob_allocated, "COB initialized stack allocation");
+    cob_guard_site(0x004B0DADu, sizeof entered, entered, cob_run_enter, "COB bounded interpreter entry");
+    cob_guard_site(0x004B0E5Du, sizeof step, step, cob_run_step, "COB bounded opcode execution");
+    lim_branch(0x004B245Cu, sizeof read, read, 0xE8, (unsigned)(size_t)cob_read, "COB validated file read");
+    lim_add(0x004B246Fu, 1, &path, &blob, "COB checksum uses its own allocation size");
+    lim_branch(0x004B2470u, sizeof size, size, 0xE8, (unsigned)(size_t)cob_read_size, "COB allocation size");
+    lim_branch(0x004B26D5u, sizeof release, release, 0xE8, (unsigned)(size_t)cob_free_blob, "COB metadata destruction");
+    lim_branch(0x004B1EC0u, sizeof save_entry, save_entry, 0xE9, (unsigned)(size_t)cob_save, "COB expanded saved records");
+    lim_branch(0x004B2040u, sizeof load_entry, load_entry, 0xE9, (unsigned)(size_t)cob_load, "COB bounded old and new saved records");
+    cob_guard_site(0x00485FA0u, sizeof create_check, create_check, cob_create_check, "COB rejected required-unit guard");
+    cob_guard_site(0x00485D64u, sizeof model_check, model_check, cob_model_check, "COB rejected model creation guard");
+    cob_guard_site(0x0042D8F4u, sizeof loaded_model, loaded_model, cob_loaded_model_check, "COB model allocation bound");
+    cob_guard_site(0x0042D299u, sizeof reloaded_model, reloaded_model, cob_reloaded_model_check, "COB reloaded model allocation bound");
+    original = lim_code(sizeof piece_center + 5);
+    if (original) {
+        memcpy(original, piece_center, sizeof piece_center);
+        original[sizeof piece_center] = 0xE9;
+        tagpu_detour_rel(original + sizeof piece_center + 1, 0x0043E0B7u);
+        s_cobNativePieceCenter = (CobNativePieceCenter)(void*)original;
+        lim_branch(0x0043E0B0u, sizeof piece_center, piece_center, 0xE9,
+                   (unsigned)(size_t)cob_piece_center, "COB bounded SweetSpot piece");
+    }
+    lim_branch(0x00496A4Fu, sizeof chat_frame, chat_frame, 0xE8, (unsigned)(size_t)cob_chat_frame, "COB entry diagnostics");
+}
+
+/* Interpreter callbacks execute on the game thread. The unit pool remains
+   allocated throughout that call; no callback or engine mutation intervenes
+   between the bound, the live-slot test and the fields read below. */
+static char* cob_live_unit(char* ta, int id)
+{
+    unsigned slots;
+    char* base;
+    char* unit;
+    if (!ta) return NULL;
+    slots = *(const unsigned short*)(ta + 0x14351);
+    if (!tagpu_cob_id_valid(id, slots)) return NULL;
+    base = *(char**)(ta + 0x14357);
+    if (!base) return NULL;
+    unit = base + (unsigned)id * 0x118u;
+    if (!(*(const unsigned int*)(unit + 0x110) & 0x10000000u) ||
+        *(const unsigned short*)(unit + 0xA8) != id ||
+        (unsigned char)unit[0xFF] >= 10u) return NULL;
+    return unit;
+}
+
+static char* cob_caller(char* ta, char* cob)
+{
+    char* model = *(char**)(cob + TAGPU_COB_MODEL_OFFSET);
+    char* unit;
+    char* base;
+    uintptr_t delta;
+    if (!ta || !model) return NULL;
+    unit = *(char**)(model + 0xC);
+    base = *(char**)(ta + 0x14357);
+    if (!base || (uintptr_t)unit < (uintptr_t)base) return NULL;
+    delta = (uintptr_t)unit - (uintptr_t)base;
+    if (delta % 0x118u || delta / 0x118u > INT_MAX) return NULL;
+    return cob_live_unit(ta, (int)(delta / 0x118u));
+}
+
+static int __attribute__((thiscall)) cob_get(char* cob, int key, int a, int b, int c, int d)
+{
+    char* ta = *(char**)0x00511DE8u;
+    char* caller;
+    char* target;
+    unsigned owner;
+    if (key >= 9 && key <= 11 && !cob_live_unit(ta, a)) return 0;
+    if (key == 7 || key == 8) {
+        const unsigned* file = *(const unsigned**)(cob + 8);
+        const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+        if (a < 0 || !file || !model || (unsigned)a >= file[2] || (unsigned)a >= model[0]) return 0;
+    }
+    if (key != 32 && (key < 69 || key > 75))
+        return s_cobNativeGet(cob, key, a, b, c, d);
+    if (key == 69) return 1;
+    if (key == 70) {
+        unsigned slots = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
+        return slots ? (int)slots - 1 : 0;
+    }
+    caller = cob_caller(ta, cob);
+    if (key == 32) return caller ? *(const unsigned short*)(caller + 0xB8) * 100 : 0;
+    if (key == 71) return caller ? *(const unsigned short*)(caller + 0xA8) : 0;
+    target = cob_live_unit(ta, a);
+    if (!target) return key == 72 || key == 73 ? -1 : 0;
+    owner = (unsigned char)target[0xFF];
+    if (key == 72) return (int)owner;
+    if (key == 73) return tagpu_cob_build_left(*(const float*)(target + 0x104));
+    if (key == 74) {
+        unsigned own;
+        if (!caller) return 0;
+        own = (unsigned char)caller[0xFF];
+        return ta[0x1B63u + own * 0x14Bu + 0x108u + owner] != 0;
+    }
+    owner = (unsigned char)ta[0x1B63u + owner * 0x14Bu + 0x73u];
+    return owner == 1 || owner == 2;
+}
+
+static void cob_get_sites(void)
+{
+    static const unsigned char entry[] = {0x8B,0x81,0x40,0x05,0,0};
+    unsigned char* original = lim_code(sizeof entry + 5);
+    if (!original) return;
+    memcpy(original, entry, sizeof entry);
+    {
+        unsigned model_offset = TAGPU_COB_MODEL_OFFSET;
+        memcpy(original + 2, &model_offset, sizeof model_offset);
+    }
+    original[sizeof entry] = 0xE9;
+    tagpu_detour_rel(original + sizeof entry + 1, 0x00480776u);
+    s_cobNativeGet = (CobNativeGet)(void*)original;
+    lim_branch(0x00480770u, sizeof entry, entry, 0xE9,
+               (unsigned int)(size_t)&cob_get, "COB bounded unit getters");
+}
+
 /* A MOD WITH MORE UNIT TYPES THAN THE MASKS HOLD. Called from the menu-time count (0x42AA65),
    on the main thread, before the def array is allocated: nothing has been loaded that a
    half-run game could use, and every later count comes from this array (the game load compacts
@@ -10155,6 +10939,14 @@ static void lim_sites(void)
     int k;
 
     if (!probe || !seqtab || !saveMax || !missionMax) { s_limNoStub = 1; return; }
+
+    cob_get_sites();
+    cob_runtime_sites();
+    {
+        static const unsigned char load[5] = { 0xE8, 0x4A, 0xA2, 0xFF, 0xFF };
+        lim_branch(0x00497581u, 5, load, 0xE8, (unsigned)(size_t)cob_load_game_data,
+                   "saved unit partition before allocation");
+    }
 
     /* ---- projectiles: allocated per game by 0x499A30, refused past the cap at ten sites */
     lim_dword(0x00499A32, 300 * PROJ_REC, TAGPU_LIM_PROJ * PROJ_REC, "projectile pool bytes");

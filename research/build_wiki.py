@@ -142,6 +142,7 @@ PAGES = [
     ("tadr-port/sim-fixes-evidence", "B. Simulation bug fixes — evidence", "TADR port"),
     ("tadr-port/data-keys",       "C. New data keys — plan",   "TADR port"),
     ("tadr-port/data-keys-evidence", "C. New data keys — evidence", "TADR port"),
+    ("tadr-port/cob",             "F. COB compatibility — plan", "TADR port"),
 
     ("compat/overview",           "Overview & load routes",    "Compatibility"),
     ("compat/takeover",           "The takeover (plan)",       "Compatibility"),

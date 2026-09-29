@@ -2448,12 +2448,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        must still clear this slot's bit or the retire stalls for ever. */
     ret_slot_done(d, slot);
 
-    /* ASK FOR THE MIRROR, and keep asking. The drain copies nothing until
-       something wants it, and it runs EARLIER in this same iteration of
-       render_vk.c's loop than we do -- so the first frame this pass runs, the
-       answer is always "nothing handed over", and the one after it is the first
-       with a record. One frame of warm-up, once, and it costs an unarmed
-       session nothing at all. */
+    /* The drain runs earlier in this render iteration. Arming requests a
+       producer RESET; the first hand-over starts at that reset, not at an
+       arbitrary suffix of a twin's drawing history. */
     tagpu_gui_mirror_want(1);
 
     if (!tagpu_gui_handover(&h, d->frame)) {

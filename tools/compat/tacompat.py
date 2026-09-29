@@ -42,6 +42,7 @@ import ntpath
 import os
 import queue
 import re
+import select
 import shutil
 import struct
 import subprocess
@@ -50,6 +51,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -541,6 +543,8 @@ def judge(o: dict, exp: dict) -> list:
                     f"{', '.join(c['missing'])} missing from the engine's {c.get('types', 0)} unit types"))
     if o.get("battle") is not None and not o["battle"].get("ok", False) and exp["outcome"] != "battle-crash":
         miss.append(f"the battle failed: {o['battle'].get('why', '?')}")
+    if o.get("smoke") is not None and not o["smoke"].get("ok", False):
+        miss.append(f"the Windows in-game smoke failed: {o['smoke'].get('why', '?')}")
     if o.get("mp") is not None and not o["mp"].get("ok", False):
         miss.append(f"the network game failed: {o['mp'].get('why', '?')}")
     miss += gui_misses(o.get("gui"), exp)
@@ -646,37 +650,72 @@ def free_display(taken: set) -> int:
     die("no free X display number between :180 and :399")
 
 
-def start_xvfb(n: int) -> subprocess.Popen:
-    p = subprocess.Popen(["Xvfb", f":{n}", "-screen", "0", "1280x1024x24", "-nolisten", "tcp"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
-    p.tacompat_display = n
-    for _ in range(100):
-        if Path(f"/tmp/.X11-unix/X{n}").exists():
-            return p
-        time.sleep(0.05)
-    stop_xvfb(p)
-    die(f"Xvfb :{n} did not start")
+def xvfb_reply(fd):
+    """A pipe read can split the display number from its terminating newline."""
+    answer = b''
+    deadline = time.monotonic() + 10
+    while len(answer) < 32 and b'\n' not in answer:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            break
+        chunk = os.read(fd, 32 - len(answer))
+        if not chunk:
+            break
+        answer += chunk
+    return answer
+
+
+def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
+    """Own a server only after its readiness pipe confirms the display it bound.
+
+    With no number, Xvfb reserves one atomically. An existing socket is not an
+    acknowledgement: it may belong to another runner whose server outlives ours.
+    """
+    read_fd, write_fd = os.pipe()
+    errors = tempfile.TemporaryFile()
+    p = None
+    try:
+        argv = ['Xvfb'] + ([f':{n}'] if n is not None else [])
+        p = subprocess.Popen(argv + ['-displayfd', str(write_fd), '-screen', '0',
+                                    '1280x1024x24', '-nolisten', 'tcp'],
+                             pass_fds=(write_fd,), stdout=subprocess.DEVNULL,
+                             stderr=errors, start_new_session=True)
+        os.close(write_fd)
+        write_fd = None
+        answer = xvfb_reply(read_fd)
+        if not re.fullmatch(rb'\d+\n', answer):
+            errors.seek(0)
+            detail = errors.read(8192).decode(errors='replace').strip()
+            raise RuntimeError(f'Xvfb did not acknowledge display {n}; '
+                               f'exit={p.poll()}, ready={answer!r}: {detail}')
+        number = int(answer)
+        if (n is not None and number != n) or p.poll() is not None:
+            raise RuntimeError(f'Xvfb did not own display {n}')
+        p.tacompat_display = number
+        return p
+    except BaseException:
+        if p:
+            stop_xvfb(p)
+        raise
+    finally:
+        errors.close()
+        os.close(read_fd)
+        if write_fd is not None:
+            os.close(write_fd)
 
 
 def stop_xvfb(p: subprocess.Popen):
-    """Stop an Xvfb this runner started and take its display number back. SIGTERM, not
-    SIGKILL: a killed Xvfb leaves /tmp/.X<n>-lock behind, free_display counts a lock as a
-    display in use, and a few hundred runs exhaust :180 to :399. The lock is removed here
-    too -- Xvfb does not always get to it -- and only for a display this runner owns."""
-    n = getattr(p, "tacompat_display", None)
+    """Stop only our process. Xvfb releases its own socket and lock on SIGTERM.
+
+    Never unlink by display number: another server may have reserved that number
+    after this process exited. A forced kill can leave a stale lock for diagnosis.
+    """
     p.terminate()
     try:
         p.wait(timeout=10)
     except subprocess.TimeoutExpired:
         p.kill()
         p.wait()
-    if n is not None:
-        for stale in (Path(f"/tmp/.X{n}-lock"), Path(f"/tmp/.X11-unix/X{n}")):
-            try:
-                stale.unlink()
-            except OSError:
-                pass
 
 
 def inst_name(setup_name: str, suffix="") -> str:
@@ -849,7 +888,7 @@ def alive_seen(gamedir: Path) -> "int | None":
 
 
 def scenarios(setup) -> dict:
-    """The scenarios this setup's battle and network game apply, by role."""
+    """The scenarios a setup's battle and network game apply, by role."""
     return {**DEFAULT_SCENARIOS, **setup.get("scenarios", {})}
 
 
@@ -1413,10 +1452,11 @@ def hook_note(h) -> str:
 def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     inst = setup["_inst"]
     gamedir, prefix = inst["gamedir"], inst["prefix"]
+    xv = start_xvfb()
+    display = xv.tacompat_display
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{display}",
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
-    xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     t0 = time.time()
     proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=log,
@@ -1597,12 +1637,18 @@ def free_dplay_port(port, mine: set, wait=300) -> "str | None":
         time.sleep(2 if ours else 5)
 
 
-def start_wine(inst, display):
+def start_wine(inst, display, *, display_server=None):
     """TotalA.exe in the instance's game folder on its own virtual display."""
+    if display_server is None:
+        xv = start_xvfb()
+        display = xv.tacompat_display
+    else:
+        xv = display_server
+        if getattr(xv, 'tacompat_display', None) != display or xv.poll() is not None:
+            raise RuntimeError('the supplied display server does not own this display')
     env = dict(os.environ, WINEPREFIX=str(inst["prefix"]), DISPLAY=f":{display}",
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
-    xv = start_xvfb(display)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
     proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -1745,11 +1791,10 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
     its result), and prepare_wine has just installed the joiner's stock DirectPlay, so the
     patch lands on files no process of the game has open yet.
 
-    The displays are taken HERE, not when this was queued: a number reserved while the
-    single-player runs were still going is one no Xvfb held for minutes, and free_display
-    counts a stale lock as a display in use."""
-    create_display, host_display, join_display = (free_display(taken) for _ in range(3))
-    xv = start_xvfb(create_display)
+    Xvfb reserves each display atomically when its server starts. An earlier
+    filesystem vacancy check cannot reserve it against another test driver."""
+    xv = start_xvfb()
+    create_display = xv.tacompat_display
     try:
         join = prepare_wine(setup, dll, create_display, suffix="-j")
     finally:
@@ -1763,7 +1808,7 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports) -> dict:
         if held:
             return {"ok": False, "why": f"could not run: DirectPlay's port {port} is held by {held}",
                     "evidence": [], "port": port}
-        out = play_mp(setup["_inst"], join, seconds, host_display, join_display, port,
+        out = play_mp(setup["_inst"], join, seconds, None, None, port,
                       scenarios(setup))
         out["port"] = port
         return out
@@ -1892,8 +1937,8 @@ def cmd_wine(args):
         die("nothing to run")
     started = time.time()
     taken = set()
-    create_display = free_display(taken)
-    xv = start_xvfb(create_display)
+    xv = start_xvfb()
+    create_display = xv.tacompat_display
     try:
         print(f"preparing {len(ready)} setups, {args.prep_jobs} at a time")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.prep_jobs)) as prep:
@@ -1901,7 +1946,6 @@ def cmd_wine(args):
                 s["_inst"] = inst
     finally:
         stop_xvfb(xv)
-    displays = {s["name"]: free_display(taken) for s in ready}
     # Every prefix this run made, for free_dplay_port: the only ones it may end.
     mine = {str(s["_inst"]["prefix"]) for s in ready}
     print(f"running {len(ready)} setups, {args.jobs} at a time, {args.watch} s each"
@@ -1915,7 +1959,7 @@ def cmd_wine(args):
         ports.put(MP_PORT_BASE + k)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
-        futs = {pool.submit(run_wine, s, dll, args.watch, displays[s["name"]], args.screens,
+        futs = {pool.submit(run_wine, s, dll, args.watch, None, args.screens,
                             args.battle): s
                 for s in ready}
         for f in concurrent.futures.as_completed(futs):
@@ -2197,6 +2241,158 @@ def windows_cfg(args) -> dict:
     return cfg
 
 
+def windows_smoke(w: Win, setup, seconds):
+    """A second, registry-isolated copy, driven through tacli's remote workflow."""
+    name = 'compatwin-' + uuid.uuid4().hex[:12]
+    result = dict(ok=False)
+    files = {}
+    rem = None
+    watch_out = None
+
+    def checked(*args, timeout=180):
+        r = tacli(*args, timeout=timeout)
+        if r.returncode:
+            raise RuntimeError((r.stderr or r.stdout).strip())
+        return r.stdout
+
+    def reply(kind, contents=''):
+        path = rem.root / ('tagpu_' + kind + '.json')
+        before = path.stat().st_mtime_ns if path.exists() else 0
+        (rem.root / ('tagpu_' + kind + '.trigger')).write_text(contents)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if path.exists() and path.stat().st_mtime_ns > before:
+                return json.loads(path.read_text())
+            if not rem.pid():
+                raise RuntimeError('game exited while awaiting ' + kind)
+            time.sleep(.2)
+        raise RuntimeError('no acknowledged engine reply for ' + kind)
+
+    def roster():
+        log = json.loads(checked('log', name, '-n', '10000', '--json'))['lines']
+        rows = []
+        for line in reversed(log):
+            if re.match(r'\s*u\d+\s+\S+\s+own=', line):
+                rows.append(line.strip())
+            elif rows and line.startswith('units:'):
+                break
+        return rows
+
+    try:
+        args = ['remote', 'add', name, '--ssh', w.cfg['ssh'], '--from', w.work,
+                '--to', w.path('smoke-' + name), '--json']
+        if w.cfg.get('key'):
+            args += ['--key', w.cfg['key']]
+        checked(*args, timeout=900)
+        meta = json.loads((INSTANCES / name / 'instance.json').read_text())
+        rem = taremote.Remote(meta['remote'])
+        scenario = scenarios(setup)['battle']
+        expanded = json.loads(checked('scenario', 'expand', scenario, '--json'))
+        settings = expanded['setup']
+        launch = ['launch', name, '--keep-dll', '--defaults', '--res', '1024x768',
+                  '--map', settings['map'], '--unit-limit', str(settings['unit_limit']),
+                  '--los', '0', '--mapping', '1', '--json']
+        controllers = {'off': 0, 'human': 1, 'ai': 2}
+        sides = {'arm': 0, 'core': 1}
+        for p in settings['players']:
+            fields = [p['slot'], controllers[p['controller']], sides.get(p['side'], 0), p['color']]
+            launch += ['--player', ':'.join(str(n) for n in fields)]
+        checked(*launch, timeout=180)
+        for gadget in ('SINGLE', 'Skirmish', 'Start'):
+            deadline = time.monotonic() + 90
+            while True:
+                ui = checked('ui', name)
+                if IN_GAME_PANEL.search((ui.splitlines() or [''])[0]):
+                    break
+                r = tacli('ui', name, 'click', gadget, timeout=60)
+                if r.returncode == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(r.stderr or r.stdout)
+                time.sleep(1)
+        deadline = time.monotonic() + 90
+        while not IN_GAME_PANEL.search((checked('ui', name).splitlines() or [''])[0]):
+            if time.monotonic() >= deadline:
+                raise RuntimeError('skirmish did not enter play')
+            time.sleep(1)
+        catalogue = reply('units')
+        ok, why = commander_verdict(catalogue, 2)
+        if not ok:
+            raise RuntimeError(why)
+        result['commanders'] = why
+        want = (setup.get('content') or {}).get('units', [])
+        have = {u['name'].upper() for u in catalogue['units']}
+        result['content'] = dict(want=want, missing=[u for u in want if u.upper() not in have])
+        applied = reply('scenario', checked('scenario', 'expand', scenario, '--wire'))
+        if not applied.get('ok'):
+            raise RuntimeError('scenario rejected: ' + json.dumps(applied))
+        result['applied'] = applied
+        deadline = time.monotonic() + 20
+        before = roster()
+        while len(before) < 10 and time.monotonic() < deadline:
+            time.sleep(1)
+            before = roster()
+        if len(before) < 10:
+            raise RuntimeError('in-game roster contains fewer than ten scenario units')
+        watch_out = w.path('results', name + '.jsonl')
+        w.task(WIN_WATCH_TASK, w.powershell32,
+               f'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File {w.path("watch.ps1")} '
+               f'-Folder {rem.folder} -Seconds {seconds} -Out {watch_out}', w.root)
+        deadline = time.monotonic() + seconds + 45
+        events = []
+        while time.monotonic() < deadline:
+            text = w.read_b64(watch_out) or ''
+            events = [json.loads(line) for line in text.splitlines() if line.startswith('{')]
+            if any(e.get('done') for e in events):
+                break
+            if not rem.pid():
+                raise RuntimeError('game exited during the in-game smoke')
+            time.sleep(3)
+        if not any(e.get('done') for e in events):
+            raise RuntimeError('in-game watcher did not finish')
+        after = roster()
+        if before == after:
+            raise RuntimeError('scenario roster did not change during play')
+        result['roster_before'] = len(before)
+        result['roster_after'] = len(after)
+        hooks = next((win_hooks(e) for e in reversed(events) if e.get('code')), None)
+        result['hooks'] = hooks
+        if not hooks or hooks.get('why') or hook_evidence(hooks):
+            raise RuntimeError('in-game code observation missing or reports TADR execution')
+        if any(e.get('class') == '#32770' or e.get('werfault') for e in events):
+            raise RuntimeError('in-game watcher saw a dialog or crash')
+        checked('stop', name)
+        log = w.read_b64(ntpath.join(rem.folder, 'log', 'tagpu.log')) or ''
+        files['smoke-tagpu.log'] = log
+        files['smoke-watch.jsonl'] = '\n'.join(json.dumps(e) for e in events)
+        result['gui'] = gui_health(log)
+        if gui_misses(result['gui'], setup['goal']):
+            raise RuntimeError('; '.join(gui_misses(result['gui'], setup['goal'])))
+        for leaf in ('ErrorLog.txt', 'log\\startup-failure.txt'):
+            if w.read_b64(ntpath.join(rem.folder, leaf)):
+                raise RuntimeError(f'in-game smoke produced {leaf}')
+        if result['content'] and (result['content'].get('why') or result['content'].get('missing')):
+            raise RuntimeError('mod-specific content is missing in game')
+        result['ok'] = True
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
+        result['why'] = str(exc)
+    finally:
+        if (INSTANCES / name / 'instance.json').exists():
+            tacli('stop', name, timeout=60)
+            if rem:
+                try:
+                    files['smoke-tagpu.log'] = w.read_b64(ntpath.join(rem.folder, 'log', 'tagpu.log')) or ''
+                    files['smoke-startup-failure.txt'] = w.read_b64(ntpath.join(rem.folder, 'log', 'startup-failure.txt')) or ''
+                    if watch_out:
+                        files['smoke-watch.jsonl'] = w.read_b64(watch_out) or ''
+                except taremote.RemoteError as exc:
+                    result.update(ok=False, evidence_error=str(exc))
+            removed = tacli('rm', name, '--force', timeout=300)
+            if removed.returncode:
+                result.update(ok=False, cleanup_error=(removed.stderr or removed.stdout).strip())
+    return result, files
+
+
 def cmd_windows(args):
     source = Path(args.dll).resolve()
     if not source.is_file():
@@ -2236,6 +2432,9 @@ def cmd_windows(args):
         for s in ready:
             print(f"  {s['name']} ...", end="", flush=True)
             o = run_windows_setup(w, s, args.watch)
+            if args.smoke and o['outcome'] == 'impure-active':
+                o['smoke'], smoke_files = windows_smoke(w, s, args.smoke)
+                o['_files'].update(smoke_files)
             verdict(o, s, "windows")
             print(f" {o['outcome']} ({o['verdict']})")
             results.append(o)
@@ -2444,6 +2643,7 @@ def main():
     wn.add_argument("--key", help="the SSH private key")
     wn.add_argument("--game", help="the player's retail 3.1 folder on the machine; only read")
     wn.add_argument("--watch", type=int, default=40)
+    wn.add_argument("--smoke", type=int, default=0, help="seconds of isolated in-game testing after startup")
     wn.add_argument("--strict", action="store_true", help="a known gap fails the run too")
     wn.set_defaults(fn=cmd_windows)
     sub.add_parser("clean", help="remove the Wine instances").set_defaults(fn=cmd_clean)

@@ -3542,24 +3542,27 @@ def cmd_ui(args):
         # is a key token, and the shield holds a key down for 150 ms because TA
         # *polls* the keyboard — so a batch of five overlapping presses is one edge
         # and deletes one character. Send one, wait for the field to actually get
-        # shorter, repeat; a backspace that never lands is the real failure and the
-        # only thing worth dying on.
+        # shorter, repeat. A click can place the caret inside existing text: after
+        # backspace consumes the left side, delete must consume the right side.
+        # Neither key is evidence of progress until the field acknowledges it.
         left = len(g.get("text") or "")
         while left:
-            _write_tokens(inst, "backspace")
-            deadline, was = time.time() + 3.0, left
-            while time.time() < deadline:
-                time.sleep(0.15)
-                now = _ui_match(_ui_snapshot(inst), g["name"])
-                if len(now) != 1:
-                    left = 0
-                    break
-                left = len(now[0].get("text") or "")
+            was = left
+            for key in ("backspace", "delete"):
+                _write_tokens(inst, key)
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    time.sleep(0.15)
+                    now = _ui_match(_ui_snapshot(inst), g["name"])
+                    if len(now) != 1:
+                        die(f'{g["name"]} disappeared while clearing its text')
+                    left = len(now[0].get("text") or "")
+                    if left < was:
+                        break
                 if left < was:
                     break
             if left >= was:
-                die(f'{g["name"]} still reads {was} characters after a backspace '
-                    "— the caret is not where backspace can reach the whole field")
+                die(f'{g["name"]} still reads {was} characters after backspace and delete')
         if tokens:
             _write_tokens(inst, " ".join(tokens))
         time.sleep(0.3)

@@ -32,7 +32,7 @@
     },
     {
       "name": "retail+tadr1-recorder",
-      "about": "the check that the evidence can fire at all: the 2006 recorder with the takeover switched off (tagpu_takeover.off) runs, answers the exe's DirectPlay and hooks the engine, and the suite must see both -- its log, and the sites of the game's code that lead into it, read out of the running process. Without this a 'tadr_ran: false' elsewhere could be a check that cannot see anything",
+      "about": "positive evidence control: with the takeover switched off, the 2006 recorder hooks the engine. Its rewrite of the guarded COB getter at 0x480770 must be detected and refused before a battle; the suite must also observe that TADR ran",
       "add": [
         {
           "fixture": "tadr-1.0.0.545",
@@ -46,8 +46,9 @@
         "tagpu_takeover.off"
       ],
       "goal": {
-        "outcome": "impure-active",
-        "tadr_ran": true
+        "outcome": "impure-refused",
+        "tadr_ran": true,
+        "failure": "0x00480770 COB bounded unit getters"
       }
     },
     {

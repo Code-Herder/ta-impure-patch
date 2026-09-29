@@ -82,11 +82,22 @@ check has seen.
 **meet the goal** — `ZDRAW`'s and TADR v2026.6.8's `DllMain` loaded Impure, their start line the
 only trace of TADR, 448 and 441 changed runs of the game's code with none into TADR, and no box.
 
-**What the two harness checks buy.** A goal of "no TADR code" is worth nothing from a check that
-cannot see any, so one setup turns the takeover off and must see the recorder: its log *and* 31
-patched places. The other turns it off on Total Mayhem, whose 2024 TADR writes Impure's own sites
-without reading them, and must be stopped by the safety net before the skirmish that would
-otherwise crash. Both are mechanisms, not players' folders, and neither plays a network game.
+**What the two takeover-off harness checks buy.** A goal of "no TADR code" is worth nothing
+from a check that cannot see any. The recorder control disables the takeover and requires
+positive recorder evidence. With the guarded COB port, its foreign patch at `0x480770` must
+also refuse Impure's mandatory getter hook before play. The Mayhem control disables the
+takeover beside a TADR which writes Impure's own sites without reading them, and must be
+stopped by the safety net. Both are mechanisms, not players' folders, and neither plays a
+network game. The older measurements above describe the recorder control before the COB
+getter became mandatory; its current expectation is `impure-refused`, not a battle.
+
+**COB-port branch, Wine, 2026-09-28** (DLL SHA-256 `c58b6b49…`): all 19 startup/battle outcomes
+met expectations. Fourteen network matches passed in the full run; loader/Mayhem's lobby
+text-entry failure was corrected and that setup passed startup, battle and multiplayer in
+a targeted rerun on the same DLL. Together these cover all 15 network matches. This is not
+new Windows evidence: that attempt overlapped another agent's use of the Windows test
+machine and returned no valid result. The branch's in-game Windows smoke gate remains open.
+Feature-level COB coverage and remaining gates are in [the COB port](../tadr-port/cob.md).
 
 **A recorder that starts off the exe's entry point patches six sites** — `0x00417B9B`,
 `0x0045130F`, `0x00480770`, `0x00490DF9`, `0x00496559`, `0x004965B3`, the same six in every setup

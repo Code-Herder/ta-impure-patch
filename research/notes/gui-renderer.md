@@ -395,6 +395,9 @@ than dressed up as a passing one.
    and re-offers on the next, disarmed-read-as-armed spends one offer nobody acks. Nothing but the
    echo retires an offer, so it cannot lose the asset. Measured: sends per shell session fell from
    **49 to 9**, and 21-22 sends to 3 acks over a five-screen walk, converging and then stopping.
+   An armed lane that is merely *slow* was still re-offered at the engine's pace, several offers
+   to a window, until the arena filled: an offer is now also held back while its previous one is
+   still in the queue (§29).
 
    **The first version of this fix saved no bytes at all, and the second review caught the claim
    rather than the code.** Skipping the offer leaves `seeded` at 0, so the very same `OP_COPY` fell
@@ -1721,10 +1724,13 @@ read from the code and then from the reset reasons once they were logged:
 
 - **The stall guard** (`consumer_stalled()`, game thread, at every publish): the batch is dropped
   — nothing queued, no counter but `stalls=` moves, once per episode — when the tail has not
-  moved for 250 ms with work queued, *or* when the backlog is past half the arena or a quarter
-  of the ring; publishing resumes, with one reseed (`stall-over`), once the queue is empty or
-  the backlog under the low-water marks. A long render hitch (the terrain atlas at a map's first
-  frame, a screenshot) counts as a stall and costs one reseed, which is the cheap side.
+  moved for 250 ms with work queued, *or* when the last publish found no room in the ring or the
+  arena (`s_pubNoRoom`); publishing resumes, with one reseed (`stall-over`), once the queue is
+  empty or the backlog under the low-water marks. A long render hitch (the terrain atlas at a
+  map's first frame, a screenshot) counts as a stall and costs one reseed, which is the cheap
+  side. **A backlog that still fits is not a stall** — the rule used to fire at half the arena or
+  a quarter of the ring, and that is what looped on SKIRMISH (§29). Under `log` each stall names
+  its rule: `gui: stall #n: idle | no-room (queued= arena= tail idle N ms)`.
 - **The offscreen's identity**: a surface created with the tag `"OFFSCREEN"` (`0x5091D4`, the
   five sites) retires every other entry so tagged — the engine has one at a time — and a
   same-base size change forgets the ring's boxes on that base. The census also probes a
@@ -4876,3 +4882,101 @@ into a save-under again, so that panel's restore is still lost — counted as `c
 which the suite does not judge.
 The minimap copy and the shell's unseeded sources are unchanged. The side-panel check compares
 one strip at 1280 × 1024 after one deselect, not every panel a mod can open.
+
+## 29. A backlog that fits is not a stall: the SKIRMISH reseed loop  [MEASURED 2026-09-28]
+
+**The symptom** (the owner, Escalation on the Windows test box — an R9 200, fullscreen
+1920×1080): on the first visit to SKIRMISH the focused button's glow flickered, sometimes at a
+steady rate and sometimes in stutters, and the shell was sluggish. Wine on the reference setup
+never showed it.
+
+**The cause, from the box's own log.** The shell sat at 60 fps on the main menu for six minutes
+with `resets=4 stalls=2` (both stalls during the restorer's start-up). At the entry to
+SKIRMISH it fell to **13.3 fps** and `stalls` and `resets` began to climb together, ~150 per 300
+frames: **147 reseeds a minute, every one `stall-over`**, each followed by `atlas reset
+(restart)` and a full UI-atlas restore. With `log` and a `gui: stall` line naming the rule, all
+of them were the backlog rule — `backlog (queued=2261 arena=8601600/16777216 tail idle 70 ms)`
+for the first, `queued=12429 arena=9006966` in the loop — never the 250 ms idle rule. The
+queue was empty by the time each reseed ran (`queued=0 arena=0`), so the consumer was alive and
+draining throughout.
+
+It is a loop that feeds itself, not a slow card: the restorer's own probes on that box measured
+8 ms of GPU work and ~25 fps while restoring. Entering SKIRMISH ships ~9 MB of first-sight art in
+one burst; one 70 ms consumer frame left it in the arena at the producer's next check, past the
+old half-arena mark. The reseed then clears the producer's first-sight tables and the consumer's
+UI atlas, so all of that art crosses again — past half the arena again — while the consumer is
+rebuilding the atlas and slow again. The census interval that contained the loop published
+**2.74 GB** of bytes; the intervals on the main menu before it, after start-up, none.
+
+**The fix: the backlog rule is gone.** A stall is now a consumer that took nothing for 250 ms
+with work queued, or a publish that found **no room** (`pub_op` or `pub_bytes` refused for the
+ring or the arena — `s_pubNoRoom`, a game-thread flag, because `g_guiq.why` is also written by
+the consumer's own reseed requests). Both end the same way as before: publish nothing until the
+consumer has drained to the low-water marks, then one reseed. The G15d exit path this rule was
+written for (§12: a crawling consumer while the game frame publishes ~150 KB per 5 ms) is
+still covered — it now waits at a full arena rather than a half one, so the stale UI after the
+exit click lasts about twice as long (~0.5 s) — and the loop is bounded: a stall's reseed follows a
+drain to the low-water marks, so the next stall needs the reseed plus whatever the engine draws
+meanwhile to fill the ring or the arena from there, more than ~14 MB or ~61 000 ops before the
+consumer drains again; the SKIRMISH burst is ~9 MB, and no window measured so far passes 1 MB
+(below). It is a bound and not a guarantee: a
+consumer presenting fewer times a second than the engine's op rate over the drain's 20 000-op
+budget (~7.5 a second at the box's ~150 000 ops a second) falls behind for good, which is the
+crawl the rule exists for, and the level boundary and the consumer's own requests reseed without
+a drain. A box outside its surface (`box-outside-surface`) is not a question of room and still
+resets at once.
+
+**Measured on the box after the fix** (the same folder recipe, the same path to SKIRMISH, pointer
+sweeps injected): one stall in the run — `idle`, 252 ms, during the restorer's start-up — one
+`stall-over` reseed, `resets=3 overflows=0` from there to the end, 3 atlas resets in all.
+
+**Also in this landing: a window is published whole.** `pub_commit` made each op visible to the
+drain as it was written, so a present could land between a gadget's repaint and the glow over
+it and show the gadget without its glow for a frame. Commits inside `publish` are now staged
+(`s_qStaged`) and `pub_flush` moves `qHead` over them behind one barrier on every exit of
+`publish`, overflow exits included; a commit outside it (`surf_drop`, `surf_retired_sweep`)
+flushes at once, and nothing is ever staged when one runs, so the queue stays FIFO. Every window
+ends at a flip (`before_flip` records `OP_FLIP` and then publishes), so a drain now stops at a
+frame boundary of the engine's. A window cut short (no room, or a box outside its surface) is not
+published at all: a reseed always follows one and re-sends everything the cut ops had marked sent,
+and the consumer keeps its last whole frame until then. **The arena head is staged with the ops**
+(`s_aHead`; `g_guiq.aHead` catches up in `pub_flush`), so a dropped window's bytes go back with it
+— dropping the ops alone would have left their bytes held until some later op with bytes drained,
+and a reseed could then start into an arena full of nothing and be cut in turn. The movie's
+pacing state is put back the same way. The consumer frees the arena only behind ops it has taken,
+in `drain` and now also in the layer-off discard, which used to set `aTail = aHead` and could
+therefore free bytes under an op not yet taken. **One window must fit whole** in the free ring
+and arena it started with — the consumer cannot free room from a window it cannot see yet;
+per-op visibility never lifted that bound, it only let a drain that happened to run mid-publish
+free room by chance. The census line's `winpeak=bytes/ops` is the largest window published
+since the last census, in payload bytes (a write that wraps the arena also loses the tail it
+skips, at most one write's length). MEASURED: **843 KB and 1 344 ops at most** over four Wine suite rows with
+their two-player games (retail, TA Zero, Twilight, Mayhem under the loader), against a 16 MB arena
+and a 65 536-op ring; in game at 3840×2160 with hudscale off (Xvfb), `reseedstress=120`, 14
+forced reseeds gave `stalls=0 overflows=0`. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
+window. The drain's own 20 000-op budget can still stop inside a window, when more than
+20 000 ops are queued at once.
+
+**The same loop through the other door: an asset offered every window.** With the backlog rule
+gone, the suite's two-player games still looped, now through `no-room` — a host in the
+multiplayer menus with **212 stalls and `asset=11510/7`**: 11 510 `PK_ASSET` offers, 7 acked,
+3.5 GB published. An unacked asset was re-offered at every `PK_COPY` from it, several to a
+window, until the consumer's echo came back or 240 tries ran out; 240 × 300 KB is four arenas,
+so a consumer ~50 windows behind filled the arena with copies of one backdrop, and each reseed
+restarted the count. An offer is now also held back while its previous one is still in the queue
+(`assetQ`, the offer op's index, against `qTail`): an offer the consumer has not taken cannot
+have been lost, so the offers queued are bounded to one per asset surface and a re-offer is
+paced by the consumer, not by the engine. The echo of the offer *before* the current one is
+accepted too: the drain moves the tail past an offer before the hand-over publishes its echo,
+so a window can make the next offer in between, and without it convergence would depend on
+not landing there. No older echo can still arrive, because `mir_begin` publishes or drops every
+pending echo at the start of the drain that takes the newer offer. MEASURED on the same four rows after it: 3–6 resets
+per game, `overflows=0`, one stall in twelve logs, offers ≈ acks (`asset=10/9`).
+
+**Not closed here.** SKIRMISH on the Windows box runs at **30 fps**, with vsync on, against
+60 on Wine. The shell flips ~8 000 times a second there and every 5 ms window carries a whole
+repaint of the screen, glow included; the consumer replays every window since its last present
+— ~5 000 ops a present on the box, ~1 500 on Wine — though each repaint overwrites the last.
+Coalescing those repaints is the lever. Main's DLL loops on this screen, so there is no
+baseline for it there.
+

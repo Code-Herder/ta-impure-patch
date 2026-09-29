@@ -32,6 +32,7 @@ tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game
 tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a time (default 6)
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
+tools/compat/tacompat.py windows --smoke 30          # also play an isolated in-game smoke
 tools/compat/tacompat.py clean                       # remove the compat-* Wine instances
 tools/compat/tacompat.py selftest                    # the hook decode, the UI and side-panel judges; no game
 ```
@@ -149,8 +150,12 @@ windows appear on its screen. The runner refuses while any `TotalA.exe` runs, co
 player's folder once (read only), then per setup rebuilds a work folder **at a path Windows has
 never started the exe from** (the last one renamed, then mirrored), starts the game and a
 window watcher (`tools/compat/win-watch.ps1`) as scheduled tasks in the logged-on session, and
-stops the game before reading its logs. One setup at a time, by design. There is no battle
-stage on Windows yet.
+stops the game before reading its logs. One setup at a time, by design. `--smoke SECONDS`
+adds an in-game test for every Impure-active setup in a second unique folder, using tacli's
+remote registry isolation. It checks commanders and mod content, applies the battle scenario,
+requires the rendered roster to change, and runs the same window/code watcher during play.
+It checks UI health and crash/refusal logs, then removes its own remote instance. Windows
+multiplayer and the Wine suite's pixel-diff HUD gate are not part of this smoke.
 
 ## Adding a setup
 
@@ -180,10 +185,10 @@ fixture (`files`: name → md5), then a setup in `tools/compat/setups.json`:
   only if the layer never asks for one of its own, never gives up, and its indexed fallback for a
   restored sprite is seen to run (`gui_stress` in its goal is the minimum number of fresh starts); `mayhem-11.3.0-net` turns the takeover off
   (`tagpu_takeover.off`) so the safety net has TADR to catch, and its goal is the net's refusal;
-  `retail+tadr1-recorder` turns it off so the recorder runs and answers a DirectPlay call, and its
-  goal is `tadr_ran: true` — the proof that both kinds of evidence can fire at all (measured
-  2026-09-27: its log, and 24 sites of the game's code leading into the recorder on Wine, 6 on
-  Windows, where a start-up-only run never reaches its DirectPlay path).
+  `retail+tadr1-recorder` turns it off so the recorder runs before Impure's guarded COB patch
+  installation. Its goal is `impure-refused`, `tadr_ran: true`, with the failure naming
+  `0x00480770 COB bounded unit getters`: the foreign getter detour must not be overwritten.
+  This is a positive safety control, not a supported way to run both implementations together.
 
 Run the new setup before writing its `today` — write down what it did, not what you expect.
 **The commit that makes a setup meet its goal deletes its `today`.**
@@ -241,10 +246,14 @@ Run the new setup before writing its `today` — write down what it did, not wha
   refuses only for a target inside a module carrying TADR's marker; a `takeover:` log line ending
   `(not TADR: the mod's own)` is working as intended. If a legitimate mod DLL ever *does* refuse,
   the marker test is what to look at, never a widening of the rule.
-- **Xvfb killed with SIGKILL leaves `/tmp/.X<n>-lock` behind**, and `free_display` counts a lock as
-  a display in use: a few hundred runs used to exhaust `:180`–`:399` and the next run died with
-  "no free X display number". `stop_xvfb` terminates and removes the lock. If a run dies that way
-  again, look for locks in that range with no live Xvfb before blaming anything else.
+- **Each run owns its X server process.** Automatic displays use Xvfb's `-displayfd` allocation
+  and ready acknowledgement; an explicit display is accepted only if the process started by
+  this invocation owns it. A failed claim must not adopt another run's server. Cleanup waits
+  for its owned process and never removes a lock by display number. Suite preparation,
+  single-player and multiplayer launches all use automatic reservation; checking for a vacant
+  socket earlier cannot reserve a number against another test driver.
+  The readiness reply is newline-framed: pipe reads may split its number from the newline,
+  so the reader accumulates within its byte bound before judging ownership.
 - **"stopped moving at #n on the way to #m" from `tacli ui select` is usually a dropped batch, not a
   separator.** A rapid batch of arrow presses is partly dropped by design and a busy game can
   swallow one whole; Total Mayhem's 106-row map list stopped at #35 on one run and #59 on another,
