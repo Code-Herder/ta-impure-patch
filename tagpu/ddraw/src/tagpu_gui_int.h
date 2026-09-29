@@ -362,10 +362,13 @@ enum {
 
 extern TAGPU_GUIQ g_guiq;                    /* owned by tagpu_gui_hook.c      */
 
-/* the producer's view of the arena: room for `len` bytes ahead of the consumer */
-static __inline int tagpu_guiq_arena_room(const TAGPU_GUIQ* q, unsigned len, unsigned* at)
+/* the producer's view of the arena: room for `len` bytes at `head` ahead of the
+   consumer. `head` is the producer's own, which runs ahead of `q->aHead` over
+   the bytes of a window it has not published yet (tagpu_gui_hook.c,
+   `pub_flush`). */
+static __inline int tagpu_guiq_arena_room(const TAGPU_GUIQ* q, unsigned head, unsigned len, unsigned* at)
 {
-    unsigned head = q->aHead, tail = q->aTail;
+    unsigned tail = q->aTail;
     if (len >= TAGPU_GUI_ASIZE) return 0;
     if (head >= tail) {
         if (TAGPU_GUI_ASIZE - head >= len) { *at = head; return 1; }

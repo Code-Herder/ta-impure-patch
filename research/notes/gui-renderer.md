@@ -4935,10 +4935,18 @@ flushes at once, and nothing is ever staged when one runs, so the queue stays FI
 ends at a flip (`before_flip` records `OP_FLIP` and then publishes), so a drain now stops at a
 frame boundary of the engine's. A window cut short (no room, or a box outside its surface) is not
 published at all: a reseed always follows one and re-sends everything the cut ops had marked sent,
-and the consumer keeps its last whole frame until then. **One window must fit whole** in the free
-ring and arena it started with — the consumer cannot free room from a window it cannot see yet;
+and the consumer keeps its last whole frame until then. **The arena head is staged with the ops**
+(`s_aHead`; `g_guiq.aHead` catches up in `pub_flush`), so a dropped window's bytes go back with it
+— dropping the ops alone would have left their bytes held until some later op with bytes drained,
+and a reseed could then start into an arena full of nothing and be cut in turn. The movie's
+pacing state is put back the same way. The consumer frees the arena only behind ops it has taken,
+in `drain` and now also in the layer-off discard, which used to set `aTail = aHead` and could
+therefore free bytes under an op not yet taken. **One window must fit whole** in the free ring
+and arena it started with — the consumer cannot free room from a window it cannot see yet;
 per-op visibility never lifted that bound, it only let a drain that happened to run mid-publish
-free room by chance. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
+free room by chance. MEASURED against it, the worst case at hand: in game at 3840×2160 with
+hudscale off (Xvfb), `reseedstress=120`, 14 forced reseeds — `stalls=0 overflows=0`, no
+`no-room`, the arena at most 13 KB full at a reset. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
 window. The drain's own 20 000-op budget can still stop inside a window, when more than
 20 000 ops are queued at once.
 

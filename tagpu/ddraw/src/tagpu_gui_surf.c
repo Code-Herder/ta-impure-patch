@@ -2495,8 +2495,19 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     if (!tagpu_gui_installed() || !f) return;
     poll();
     if (!s_on) {
-        /* off: nothing is published, but drain whatever was */
-        g_guiq.qTail = g_guiq.qHead; g_guiq.aTail = g_guiq.aHead;
+        /* off: nothing is published, but drain whatever was -- freeing the
+           arena behind the ops taken, as `drain` does, and never to `aHead`:
+           that word can run ahead of `qHead` for a window the producer is
+           still making visible, and bytes freed under an op not yet taken
+           could be handed out again before it is read. */
+        unsigned tail = g_guiq.qTail, head = g_guiq.qHead;
+        while (tail != head) {
+            const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
+            if (o->alen) g_guiq.aTail = o->aoff + o->alen;
+            tail++;
+        }
+        MemoryBarrier();
+        g_guiq.qTail = tail;
         return;
     }
     /* the atlas alone: the sprite table this module resolves against, and

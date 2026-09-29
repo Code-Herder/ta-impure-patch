@@ -1488,6 +1488,20 @@ static int      s_movieQueued = 0;
 /* the palette the newest carried frame was decoded under, and the one the
    frame of this op window was -- adopted only once its op is committed */
 static unsigned char s_moviePal[1024], s_moviePalRec[1024];
+/* THE PACING STATE AS IT STOOD BEFORE THIS WINDOW'S FIRST MOVIE FRAME, put back
+   if the window is dropped (`publish`): a frame that never crossed must not be
+   the one `movie_frame` waits behind, nor lend its palette to the next. */
+static unsigned s_movieQSave[2];
+static int      s_movieQueuedSave, s_movieSaved;
+static unsigned char s_moviePalSave[1024];
+static void movie_mark(void)
+{
+    if (s_movieSaved) return;
+    s_movieSaved = 1;
+    s_movieQSave[0] = s_movieQ[0]; s_movieQSave[1] = s_movieQ[1];
+    s_movieQueuedSave = s_movieQueued;
+    memcpy(s_moviePalSave, s_moviePal, sizeof s_moviePalSave);
+}
 
 /* sprite frames whose bytes were already published (open addressing) */
 #define SEEN_N 8192
@@ -1545,21 +1559,15 @@ static int seen_frame(const void* f, const void* p, int add)
    the asset tokens, the first-sight tables, the glyphs, the shade table -- so
    dropping the staged ops loses nothing the reset does not re-send, and the
    consumer keeps presenting its last whole frame until it arrives instead of
-   half of this one. Their arena bytes are skipped rather than handed back:
-   `aTail` passes them as soon as the consumer drains a later op.
-
-   THE LAYER-OFF DISCARD (`tagpu_gui_present`, render thread) sets `aTail`
-   to `aHead`, which now runs ahead over a whole window of staged bytes rather
-   than one op's. Nothing publishes while the layer is off, so those bytes
-   stay intact; if it comes back on at the next present the staged ops drain
-   and move `aTail` back, which only shrinks the producer's room.
+   half of this one. Their arena bytes go back with them (`s_aHead`, below),
+   and so does the movie's pacing state (`movie_mark`).
 
    A WINDOW MUST FIT WHOLE. The consumer cannot free room from a window it
    cannot see yet, so one window's bytes must fit in the arena's free space as
    it stood when the window began; one that cannot refuses, and the stall rule
    waits and reseeds (`consumer_stalled`). Per-op visibility did not lift that
    bound -- it only let a drain that happened to run mid-publish free room by
-   chance. gui-renderer.md §29 has the largest window measured.
+   chance. gui-renderer.md §29 has what was measured against it.
 
    A commit OUTSIDE `publish` (`surf_drop`, `surf_retired_sweep`) flushes at
    once, as it always did. Nothing is staged when one runs -- a publish never
@@ -1567,12 +1575,20 @@ static int seen_frame(const void* f, const void* p, int add)
    were written. */
 static unsigned s_qStaged = 0;         /* committed ops `qHead` does not yet cover */
 static int      s_pubBatch = 0;        /* inside `publish`: commits are staged      */
+/* THE ARENA HEAD IS STAGED WITH THE OPS. `s_aHead` is where the next bytes go;
+   `g_guiq.aHead` catches up in `pub_flush`, and a dropped window puts
+   `s_aHead` back, so the bytes of ops that never crossed are never held.
+   The consumer does not use `aHead` to free anything (it frees behind the ops
+   it has taken, in `drain` and in the layer-off discard), so the order of the
+   two stores in `pub_flush` is not load-bearing. */
+static unsigned s_aHead = 0;
 static unsigned pub_head(void) { return g_guiq.qHead + s_qStaged; }
 static void pub_flush(void)
 {
-    if (!s_qStaged) return;
+    if (!s_qStaged) { s_aHead = g_guiq.aHead; return; }
     MemoryBarrier();
     g_guiq.qHead += s_qStaged;
+    g_guiq.aHead = s_aHead;
     s_qStaged = 0;
 }
 static TAGPU_PUBOP* pub_op(int kind, unsigned surf)
@@ -1595,9 +1611,9 @@ static void pub_commit(void)
 static unsigned char* pub_bytes(TAGPU_PUBOP* o, unsigned len)
 {
     unsigned at;
-    if (!tagpu_guiq_arena_room(&g_guiq, len, &at)) { s_pubOverflow = 1; s_pubNoRoom = 1; g_guiq.why = TAGPU_GUI_WHY_ARENA; return NULL; }
+    if (!tagpu_guiq_arena_room(&g_guiq, s_aHead, len, &at)) { s_pubOverflow = 1; s_pubNoRoom = 1; g_guiq.why = TAGPU_GUI_WHY_ARENA; return NULL; }
     o->aoff = at; o->alen = len;
-    g_guiq.aHead = at + len;
+    s_aHead = at + len;
     s_pubBytes += len;
     return s_arena + at;
 }
@@ -2483,7 +2499,7 @@ static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
    the stale UI after the exit click lasts about twice as long (~0.5 s). */
 static unsigned arena_used(void)
 {
-    unsigned head = g_guiq.aHead, tail = g_guiq.aTail;     /* offsets, wrapping */
+    unsigned head = s_aHead, tail = g_guiq.aTail;          /* offsets, wrapping */
     return head >= tail ? head - tail : TAGPU_GUI_ASIZE - (tail - head);
 }
 /* WHICH RULE DECLARED THE CONSUMER STALLED, and on what numbers -- the reset
@@ -2795,6 +2811,7 @@ static void publish_window(unsigned flipSurf)
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
             pub_commit();
+            movie_mark();
             s_movieQ[1] = s_movieQ[0]; s_movieQ[0] = pub_head();
             if (s_movieQueued < 2) s_movieQueued++;
             memcpy(s_moviePal, s_moviePalRec, sizeof s_moviePal);
@@ -3259,7 +3276,15 @@ static void publish(unsigned flipSurf)
     s_pubBatch = 1;
     publish_window(flipSurf);
     s_pubBatch = 0;
-    if (s_pubOverflow) s_qStaged = 0;      /* cut short: see `pub_flush` */
+    if (s_pubOverflow) {                   /* cut short: see `pub_flush` */
+        s_qStaged = 0; s_aHead = g_guiq.aHead;
+        if (s_movieSaved) {
+            s_movieQ[0] = s_movieQSave[0]; s_movieQ[1] = s_movieQSave[1];
+            s_movieQueued = s_movieQueuedSave;
+            memcpy(s_moviePal, s_moviePalSave, sizeof s_moviePal);
+        }
+    }
+    s_movieSaved = 0;
     pub_flush();
 }
 
