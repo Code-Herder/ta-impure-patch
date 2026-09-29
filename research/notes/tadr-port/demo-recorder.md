@@ -74,6 +74,9 @@ milestone.
     that is the recording player's view: other players' own indicators were never on that machine.
   - **Effects only the owner's machine produces**, such as the nano spray, are recorded where the
     engine produced them, tied to their unit, and replayed through the same engine function.
+  - **The recording decides when the game ends.** The engine's own victory and defeat tests would
+    end a watched game the moment a player's units ran out, so puppet mode switches them off for
+    the level, and every unit, the commanders included, comes from the recording.
 - **Rebuild for seeking and takeover.** A seek reconstructs the state at the target from the
   nearest full snapshot and the recorded changes, then rebuilds the puppet world in place. A
   takeover performs the same rebuild under local ownership: **the seats become local first, and
@@ -141,9 +144,11 @@ other players; a multiplayer game is rewound from its finished recording.
 - **An unfinished recording** (a crash, or leaving early) opens in the Replays browser like any
   other: fork from any point or play on from its end. There is no separate "Continue" feature.
 - **More than four players.** A stock skirmish seats four players (measured: it refused every
-  unit of seats 4–9, [scenario format](../scenario-format.md)), so hosting a larger recording in
-  puppet mode, and forking it into a single-player game, depend on the first feasibility
-  experiment seating up to ten players without a network session.
+  unit of seats 4–9, [scenario format](../scenario-format.md)); the four is its screen's seat
+  count, and the first feasibility experiment seated ten puppet players in a skirmish level
+  (measured, [evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). Forking a
+  larger recording into a single-player game still depends on the second experiment, which turns
+  a puppet seat into a working AI.
 - **Not in the first version:** resuming with more than one human.
 
 ## Recording lifecycle and storage
@@ -354,15 +359,15 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 | Milestone | High-level completion criterion | Current state |
 |---|---|---|
 | Product contract | Scope, architecture, viewer features, storage policy and open decisions recorded here | **Decisions recorded, 2026-09-28** |
-| Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Next.** Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
+| Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **(1) done, 2026-09-29:** a skirmish level holds ten puppet players, 4–9 included, with the viewer on a puppet seat; the units stay inert, and the level ends only by the recording once its victory and defeat tests are switched off ([evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). **(2) and (3) next.** Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
 | Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Planned** |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
 | Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones; not yet built** |
 
-If the puppet-host experiment fails, the watch path comes back for a decision before either slice
-is built; the shelved packet playback and renderer-scene playback are the only known alternatives. If a takeover cannot build its AI seats without reloading the level, the fallback is a
-takeover behind a loading screen, and that comes back for a decision too. For a completed milestone, add a short statement of delivered behavior and a link to its
+The puppet-host experiment passed, so the watch path stands. If a takeover cannot build its AI
+seats without reloading the level, the fallback is a takeover behind a loading screen, and that
+comes back for a decision. For a completed milestone, add a short statement of delivered behavior and a link to its
 evidence, and keep remaining gaps visible.
 
 ## Open decisions and evidence needed

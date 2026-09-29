@@ -1056,7 +1056,10 @@ section as its evidence.
   a restored game). Settle: a write watch on one slot's `+0x14` through a game save and load.
 - **What the info panel draws from its reload snapshot.** Not needed for either design.
 - **Whether `0x2A43` can name a player whose units this peer does not own** (a spectator or a
-  replay), where the reload counters would not be live.
+  replay), where the reload counters would not be live. Partly answered: a skirmish level whose
+  ten seats are all type 3, with `0x2A42` and `0x2A43` naming one of them, loads, draws and plays
+  (MEASURED 2026-09-29, [the puppet host](demo-recorder-state-evidence.md#the-puppet-host-measured));
+  the reload counters on such a view were not looked at.
 
 ---
 

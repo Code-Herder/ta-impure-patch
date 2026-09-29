@@ -12,7 +12,8 @@ takeover, per-player state, size) were each re-checked by an independent verifie
 cited line, disassembled every address again and re-ran every script. Only confirmed claims are
 kept, stated as corrected where the verifier found an overreach; the verifiers' own findings were
 disassembled again before use, and the few DIS claims read for this page alone are marked *not in
-the record*. None of it is an experiment: see [§5](#5-open-experiments).
+the record*. Apart from [*The puppet host, measured*](#the-puppet-host-measured) (experiment 1,
+2026-09-29), none of it is an experiment: see [§5](#5-open-experiments).
 
 **Tags:** DIS disassembled; SRC read in source; MEASURED a live measurement, cited to the note that
 made it; [INFERRED] a consequence not yet shown. `main` is `*(0x511DE8)`, a player record is
@@ -118,6 +119,66 @@ area damage through `0x49A0C0`; `0x4244B0` damages features locally outside a ne
   bit 0, allocates `+0xEC`, sizes the sight grid `+0x7C` and, for all but an active type 3, builds
   the two per-player objects below (`0x46489D..0x4648CD`).
 
+### The puppet host, measured
+
+Experiment 1, 2026-09-29, MEASURED unless marked. **The record** is
+`_local/demo-recorder-exploration/puppet-host-2026-09-29/` (main checkout, gitignored; `README.md`
+there): the probe's diff and DLL, the scenarios, five runs' logs and the pictures. The engine facts
+behind it are the engine map's *Seating a level*
+([engine map](../exe-reverse-engineering.md)).
+
+- **The probe.** A temporary build, never landed, retargeted the SKIRMISH Start's call of the seat
+  fill (`0x47B092`) and, after the stock fill, called the engine's seat activation
+  `0x464290(s, 3)` for s = 0..9, gave settings entries 4–9 a side and colour, and set the player
+  count `main+0x2A3C` to 10 and `main+0x2A42` = `+0x2A43` = 0, so the viewer names seat 0, a
+  type-3 record. All of it on the game thread, before the loader thread exists. Commands at the
+  scenario applier's tick site killed a seat's units or its commander, set
+  `ActiveCommanderDeath`, disarmed the objective and dumped every record. Five runs (A1–A5) under
+  Wine on a private display, on Core Prime Industrial Area (ten start positions), each started by
+  `tacli scenario load` and under ten minutes.
+- **Ten type-3 seats load and play.** Every record read active, type 3, `+0x146` = its slot, its
+  block in seat order (slots `1 + 1500·s`, 1500 each), no `+0x74` and no `0x5119C0` object, and a
+  sight grid of its own. The stock loader created ten commanders at ten start positions, and seat 0
+  as controlled and viewed player gave an ordinary in-play screen: the camera on its commander,
+  health bars on its units, no error and no fault.
+- **Seats 4–9 take units.** Once the records were active, `tacli scenario apply` created units for
+  seats 4, 5 and 9 with none refused (11 of 11, then 14 of 14). The four-seat limit a skirmish
+  shows is its screen's seat count, not the engine's.
+- **Puppets are inert.** Over 550 ticks (about 18 s) the twelve units the dumps list (the
+  commander and first two others of seats 0, 1, 4 and 5) kept their positions and HP exactly, and
+  two pictures 20 s apart were identical to the pixel (0 of 786,432 differ): enemy ARMPWs and
+  CORAKs 40 wu apart never fired, and seat 4's three ARMPWs, given a move order through the
+  applier (3 issued, 0 failed), never moved. On high ground all fifteen units on screen drew; in a
+  low pit at altitude 0, seat 1's CORAKs did not draw beside seat 0's own units [INFERRED:
+  submerged enemy units, hidden as stock hides them].
+- **The stock tests end the level.** With every unit dead, seat 0's included (the load's default
+  `clear_existing` killed the ten commanders), the level went to ENDMSN reading **DEFEAT** within
+  seconds, defeat being tested first; with every unit of seats 1–9 dead and seat 0's alive, to
+  **VICTORY** within 6 s. Both tables had ten rows, one per type-3 seat. The tests read the live
+  count `+0x144`, never the type.
+- **Disarmed, the level never ends by itself.** The objective object disarmed by the engine's own
+  `0x4904B0` (the method the `Kill` console command calls after killing every unit), in play (A4)
+  or in the seat fill at Start (A5): no end came with every seat at zero units for 16 s, and a
+  level whose start commanders were skipped ran 68 s with no unit at all and then took 14 new
+  ones. The `.ota` read that arms a new objective object runs in Start's branch before the seat
+  fill, and a skirmish's loader does not read it again, so a disarm made in the seat fill holds for
+  the whole level (DIS, engine map).
+- **The start commanders can be left out.** Skipping the seat setup `0x496EE0` for the puppet seats
+  (its two calls on the loader thread, `0x497963` and `0x497ACD`) loaded a level with no unit at
+  all. The setup also writes each seat's side and colour into PlayerInfo and its storage flag and
+  base storage, which a puppet host writes from the recording instead.
+- **A puppet commander's death kills nothing else.** With `ActiveCommanderDeath` set to 1, seat 1's
+  commander's death cleared its `+0x149` bit 0 and left its three CORAKs alive, as
+  `Send_UnitDeath` runs its kill-all for a type-1 or type-2 owner only (`0x48667E..0x4866B3`, DIS).
+
+**What it settles.** Puppet mode exists. The puppet host is a skirmish (type 2) level whose
+recorded seats the engine's own seat activation makes type 3 at Start, with the objective
+disarmed in the same place and the start commanders left out; the viewer borrows a seat's index
+for `+0x2A42` and `+0x2A43`, and the recording, not the engine, ends a watched game. Not measured
+here: motion (experiment 2), the event receivers (experiment 3), radar and fog for the viewer
+(§3), and what the viewer's own input may do to the seat it borrows: the applier's orders reached
+the puppets and changed nothing, but the interface's were not tried.
+
 ### Movers, AI objects and takeover
 
 - **No stock path swaps a live unit's mover** (P26). `0x43DC00` is called by the local create
@@ -163,7 +224,8 @@ with no DirectPlay, DPID sort or load barrier (nor, [INFERRED], the battle room'
 object), and seating each player at its recorded rank with the recorded N reproduces the blocks.
 A recording of more than four players also needs records 4–9 made active, which a stock skirmish
 does not do (it refused every unit of slots 4–9: [scenario format](../scenario-format.md),
-MEASURED 2026-09-24).
+MEASURED 2026-09-24) and the seat activation `0x464290` does (MEASURED 2026-09-29, *The puppet host,
+measured*, above, which also disarms the level's end tests and leaves out the start commanders).
 Impure drives motion (round-robin-style writes with walk scripts as recorded script starts, or the
 movement pass on fed proxies) and calls the stock receivers in-process with bounded indices; a
 skirmish recorder hooks engine functions, as messages exist only in network games. A takeover
@@ -171,11 +233,13 @@ flips `+0x73` first, builds both per-player objects, and then re-creates the uni
 slots, as the save restore does; a flip in place would leave every unit's COB on the branches it
 took as a remote copy (below).
 
-**Open:** records 4–9 active in a type-2 level; a level whose seats are all type 3, with
-`main+0x2A42`/`+0x2A43` naming a type-3 record
-(the seatless viewer, also open in the [data-keys evidence](data-keys-evidence.md)); commanders for
-type-3 seats; what `0x48A870` does; the acquisition's effect on a puppeted seat's weapons; defeat,
-victory and ENDMSN with type-3 seats in a type-2 level.
+**Open:** what `0x48A870` does (experiment 2), and what the viewer's own input may do to the seat
+it borrows. Settled by *The puppet host, measured* (above): records 4–9 active in a type-2 level; a
+level whose seats are all type 3 with `main+0x2A42`/`+0x2A43` naming a type-3 record (the seatless
+viewer; the [data-keys evidence](data-keys-evidence.md) asked the same of `0x2A43`); commanders for
+type-3 seats (the loader makes them, and they can be left out); the acquisition on a puppeted seat
+(no object, no AutoAim: nothing fired); defeat, victory and ENDMSN (the stock tests, disarmed by
+`0x4904B0`).
 
 ### COB and owner-only effects on a puppet
 
@@ -553,7 +617,7 @@ recorded.
 
 | # | Experiment | Settles | Feeds |
 |---|---|---|---|
-| 1 | **Puppet host**: a type-2 level with the recorded seats, 4–9 included, active and set to 3 before `0x464990`, and a viewer with no seat; commanders, defeat and ENDMSN with type-3 seats | whether puppet mode exists | (1) |
+| 1 | **Puppet host**: a type-2 level with the recorded seats, 4–9 included, active and set to 3 before `0x464990`, and a viewer with no seat; commanders, defeat and ENDMSN with type-3 seats | whether puppet mode exists: **it does** (MEASURED 2026-09-29, [§1](#the-puppet-host-measured)) | (1) |
 | 2 | **Motion driver**: direct round-robin-style writes against fed proxies, before the unit tick; walk scripts, footprints, sight | motion fidelity, the recorded fields | (1) |
 | 3 | **Events in-process, bounded**: `0x4B0B00`, `0x49D270`, `0x49AF90`, `0x489CE0`, `0x4866D0(rec, 0)`, `0x41B8D0`, `0x48B090`, `0x47F300` | playback fidelity, §4's event term | (1), (3) |
 | 4 | **1,500-unit rebuild in play**: argument-8 creates, B4's hold, a paused apply, timed against the 1 s seek and 2 s takeover | seek and takeover feasibility | (2) |
