@@ -72,7 +72,8 @@ notes. The product decisions are recorded, and the feasibility experiments are d
 step of the [completeness design](demo-recorder-completeness.md) is built (every writable static
 of the four simulation files is declared, and the build refuses one that is not; the bytes of the
 engine's unit and player records that are not recorded as values are listed in one exclusion file
-the build checks). The recorder itself and seek performance remain unverified.
+the build checks). The [skirmish slice](demo-recorder-skirmish-slice.md) is planned as five landings,
+the recorder first. The recorder itself and seek performance remain unverified.
 
 ## Adding a page
 

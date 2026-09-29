@@ -385,7 +385,7 @@ rests on.
    - **The exclusion file — built 2026-09-29.** `replay-layout.tsv`, 39 rows from what the savers
      `0x4876C0` and `0x4662F0` write, the header generated from it, and
      `tools/replay-layout-check.sh` before the link.
-2. **With the skirmish slice:** capture at `0x4954ED` and the recording header's lever list (the
+2. **With the skirmish slice** ([its plan](demo-recorder-skirmish-slice.md) cuts it into five landings): capture at `0x4954ED` and the recording header's lever list (the
    registry's list), with the recorder that uses them; self-verification over units, players and
    declared tables; root and sink counting; the main block and `.data` with the null twin; puppet
    dispositions and fixtures; the one-writer rule and getter 75 per seat; the nano spray's recording
