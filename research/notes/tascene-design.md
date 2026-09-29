@@ -507,7 +507,7 @@ Two unit-level gaps the A/B exposed, neither a placement error:
   `worldZ − h/2` projection are both right.
 - **Our commander is visibly brighter than the engine's.** Team colour is a
   **GAF frame table**, not a palette-band remap: a multi-frame entry carries one
-  *separately painted* frame per player and the engine draws `frame[owner]`
+  *separately painted* frame per player and the engine draws `frame[player colour]`
   (file-formats.md §3, live-verified). tascene takes frame 0 for every entry.
   The suspect is named there: **ARMCOM's torso takes its owner colour from
   `glow` — 8 frames, in `armbldg.gaf`** — and `glow` is exactly the entry whose

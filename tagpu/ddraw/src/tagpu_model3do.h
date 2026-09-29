@@ -72,9 +72,10 @@
                                /* byte (`mov al,[esp+0x14080]` @0x4C0678)      */
 #define F_VCOUNT     0x04
 #define F_INDICES    0x0C
-/* THE EFFECTS DRAWS' FACE WORDS (0x46BAE0 and 0x4211D0, DISASSEMBLED). The
-   unit rasteriser does not read +0x1C the same way; these are the two draws
-   that decide a face by it. */
+/* THE FACE WORDS (0x46BAE0, 0x4211D0 and the unit rasteriser at
+   0x459B0F..0x459B86, DISASSEMBLED). The unit rasteriser reads +0x1C bits 0-2
+   as the effects draws do; a piece's logo colour there is the owner's
+   PlayerInfo+0x96 and in the debris draw the unit it flew off's. */
 #define F_TEXFRAME   0x10      /* GAFFrame* when F_FLAGS bit 1 is clear; when */
                                /* set, the u16 frame index of an anim state   */
                                /* {u16 frame @0, seq @+8} (0x4B7EE0)          */
@@ -83,7 +84,7 @@
 #define F_FLAGS      0x1C      /* bit 0 flat fill (any vertex count), else    */
                                /* only a 4-vertex face is drawn, textured;    */
                                /* bit 1 the frame comes from the sequence;    */
-                               /* bit 2 (debris only) indexed by the owner's  */
+                               /* bit 2 with bit 1: indexed by the owner's    */
                                /* logo colour through 0x4B7F30                */
 #define FF_FLAT      0x1u
 #define FF_ANIM      0x2u

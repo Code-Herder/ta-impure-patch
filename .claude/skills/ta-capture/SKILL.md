@@ -18,14 +18,15 @@ There are two things to capture, and one tool for each:
   frame — UI, and the flat key fill inside the world viewport — so it is the right tool for
   reading the UI, the shell or a dialog, and the wrong one for judging what a pass drew.
 
-  **On a screen presented exactly ONCE — a loading screen — treat it as unproven.** The
-  trigger is polled at the flip's ENTRY, before the engine copies back buffer → primary, so
-  the poll only ARMS and the capture happens on the trigger family's NEXT pass, one flip
-  later (`screenshot.h` has the two hosts that were tried for it and why both were worse).
-  That costs one pass of latency, bounded by the family's 16 ms gate — and it means a screen
-  that never gets a second flip may never be captured. The single-present case has **not been
-  measured**: a 120-shot sweep through a `scenario load` caught nine distinct live frames and
-  never the loading screen itself.
+  **A loading screen is the window grab's, not this one's.** The loading frame flips once per
+  200 ms for the length of the load (three flips in a Wine load of a skirmish), and the trigger is
+  polled at the flip's ENTRY, before the engine copies back buffer → primary, so it only ARMS
+  and the capture happens on the trigger family's NEXT pass, one flip later (`screenshot.h` has
+  the two hosts that were tried for it and why both were worse). That is one 200 ms frame of
+  latency, and a 120-shot sweep through a `scenario load` caught nine distinct live frames and
+  never the loading screen itself. To see the load, loop `import -window 0x<client>` from just
+  before the click on Start (`tacli ui <i> click Start`), keep each PNG's timestamp, and
+  compare by ImageMagick signature; a load on Wine is about 1.2 s and its frames are 640×480.
 * **the window, grabbed by its client id** — the presented frame, our passes included. One
   frame is `import -window 0x<client>` on the instance's display; video is ffmpeg x11grab
   `-window_id` (rule 5). There is no in-process capture of the presented frame that a `tacli`

@@ -212,8 +212,11 @@ tools/mp_leave.sh h1                                 # surrender -> main menu; a
   `unbound=0 short=0`). Its ground position is point 0 of the owner's path — a straight move's
   origin until the unit is within 5 px of its goal — so it lands on the host's commander only
   while that one has just set off.
-- **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
-  is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
+- **A unit's colour is its owner's logo colour on every peer**, not its slot: each peer lists itself
+  as player 0, so a slot-indexed colour would draw everyone's own units alike. Check a colour by
+  reading `PlayerInfo+0x96` of both players on each peer (the lobby's `LOGO0` gadget cycles the
+  host's colour) and comparing the window with `tacli shot`; the two peers' windows overlap on one
+  display, so raise the one to capture (`xdotool windowraise` on a private Xvfb only).
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP
   Connection For DirectPlay* **by name, never by row number** — it is row 0 under wine's builtin
   DirectPlay and row 3 under the native one.

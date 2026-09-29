@@ -422,7 +422,7 @@ Four facts the plan rests on:
     feature, effect and unit twins have no trigger.
   - [GPU status](gpu-status.html)' paragraph on `tagpu_rglsl_job_repalette` describes a mechanism
     that no longer exists.
-- **Team colour is a texture choice** (`frame[owner]`, `tagpu_render3do.c`), not a palette remap,
+- **Team colour is a texture choice** (`frame[logo colour]`, `tagpu_render3do.c`), not a palette remap,
   so it survives a full-colour atlas unchanged. The same holds for **translucency**: features'
   `MODE_ALPHA`, cloak and the build ghost are already RGB blends.
 

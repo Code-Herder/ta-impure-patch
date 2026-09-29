@@ -505,7 +505,7 @@ The recorder's [direct scene experiment](tadr-port/demo-recorder-exploration.md#
 used the existing `tagpu_packet_pub.c:fill_world` ownership boundary, widening only the
 unit-piece capture condition to cover every live unit. No new engine byte patch was added.
 The packet layout was measured with a 32-bit `offsetof`/`sizeof` executable: header 2312 B,
-unit row 100 B, piece row 24 B, wreck row 44 B; tick +16, unit count/offset +1608/+1612,
+unit row 100 B (104 B since the unit row gained the owner's logo colour, 2026-09-29; the header stays 2312 B, the colour of the local player taking the minimap group's spare byte), piece row 24 B, wreck row 44 B; tick +16, unit count/offset +1608/+1612,
 piece count/offset +1616/+1620, wreck count/offset +1624/+1628, truncation flags +2300.
 These are **Impure packet offsets**, not offsets in the retail engine.
 
@@ -2820,7 +2820,22 @@ drops the back ones.
   the file's.
 - Flag bit 0 (`face+0x1C`) → `0x4C1000(frame, verts, face+0x04 count, face+0x00 colour)`; else a
   face of other than 4 vertices is skipped (`0x459B1A`); else `0x4C8760(frame, texture, verts, 0)`
-  with the texture `face+0x10`, or through `0x4B7F30` / `0x4B7EE0` when flag bit 1 is set.
+  with the texture the flags name (`0x459B0F..0x459B86`, DISASSEMBLED): **flag bit 1 clear** — the
+  `GAFFrame` at `face+0x10`. **Bit 1 set and bit 2 set** — the team-coloured face:
+  `0x4B7F30(face+0x18, PlayerInfo[id]+0x96)`, the sequence's frame for the id's **logo colour**,
+  with `PlayerInfo[id]` = `*(main + id*0x14B + 0x1B8A)` (`0x459B34..0x459B58`; `id` is a stack
+  argument of this routine, `[esp+0x5F20]` — [INFERRED] the unit's owner byte `unit+0xFF`). The
+  same rule is coded a second time at `0x458603..0x45862E` (the PlayerInfo load is `0x45861C`),
+  where `id` is masked to a byte first (`and eax,0xFF` at `0x458603`) and the bit-1-set,
+  bit-2-clear case tests a stack argument, `[esp+0x3F84]`, in place of `ebx`. **Bit 1
+  set, bit 2 clear** — `0x4B7F30(face+0x18, 0)` when `ebx` is non-zero (`ebx` = the stack argument `[esp+0x5F24]`, loaded at `0x459B08`; its meaning is not traced), else
+  `0x4B7EE0(&face+0x10)`, the animation state's current frame. The colour is the **player's chosen
+  colour, not the slot**: a skirmish with slot 0 on colour 4 and slot 1 on colour 0 draws the
+  slot-1 badge in colour 0 [MEASURED 2026-09-29, retail, players' logo bytes 4/0/2/7, engine
+  frame vs ours]. A logo at or past the sequence's count makes `0x4B7F30` return 0, and
+  `0x4C8760` paints nothing for a NULL frame. In TA Zero's `ArmT1Solar` the team faces carry
+  flags `6`, `face+0x10 = 0x000A0000`, `face+0x14 = 1`, `face+0x18` a 10-frame sequence [MEASURED
+  2026-09-29].
 
 **What modellers did with it.** Two faces over the same vertices, wound apart, make a panel with a
 different skin on each side, and only the side facing the camera is ever painted. Of the 608 stock
@@ -8771,7 +8786,9 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
 - **`MEM_Free 0x4D85A0(p)` is the one way any engine allocation dies** [VERIFIED 2026-09-12].
   It is a two-line wrapper (`mov eax,[esp+4]; push eax; call 0x4D85B0; add esp,4; ret`,
   prologue `8B 44 24 04 50` — five relocatable bytes, which is what makes it detourable), and
-  **`0x4D85B0` has exactly one caller: this**. 363 sites call `0x4D85A0`, `SurfaceFree
+  **`0x4D85B0` has exactly one caller: this**, and it is thread-safe: it takes the allocator's
+  critical section (`0x4DA780`, then `EnterCriticalSection` through `ds:0x4FC198` at `0x4D85C2`
+  [DISASSEMBLED 2026-09-29]) before it touches the heap. 363 sites call `0x4D85A0`, `SurfaceFree
   0x4C6AC0` among them (`0x4C6ACF`). Its partner is `MEM_Alloc 0x4D83B0(tag, size)` →
   `0x4D83C0`, which ignores the tag in the shipping build and goes to `0x4DACF0(size, 0)` or
   `0x4E8890(size)`.
@@ -8792,6 +8809,12 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
   publisher reads `s->base` at the flip, and what makes that safe is that the table entry
   cannot outlive the block. MEASURED in game (2026-09-12): **~10 500 calls a second**.
+  **The loader thread makes most of them**: 33 191 frees on threads other than the game thread in
+  one Two Continents load (MEASURED 2026-09-29, two counters at the observer; 33 842 was the
+  2026-09-12 figure), and not one of those blocks held a tracked surface's base. The thread that
+  frees a block is not the thread that draws into it, so an observer that fires off the game
+  thread asks a mirror of the tracked bases instead of the table (`live_hit`,
+  [GUI renderer](gui-renderer.html) §31).
 - **A drawing destination lies inside one block, at an offset that depends on what made it,**
   and the context over it does not say which (every builder writes the same `+0x2C` flags):
   - `0x4C69F0` surfaces: the pixels at `block + 0x30`.
@@ -9243,7 +9266,7 @@ design and the measurements). Nothing here is patched; `fxown`'s detours on `0x4
 | `0x420C53..0x420C68` | the explosion pass's body draw, after the anchor passed `0x4B6720(main+0x37E27, …)`: `+0x00` non-zero → `0x46BAE0(ctx, pos, body, +0x4C)`. DISASSEMBLED |
 | `0x49C0FA..0x49C11A` | rendertype 1's triple: the projectile's `+0x34` words with `0x8000` added to the second and third; `0x49C127` draws the weapon's `+0x74` node. `0x49C12C..0x49C185`: the thrust flame, the node's `+0x30` child, while `+0x46` (death) is after the tick, with `+0x64` as its first word when the weapon's `+0x111` has bit 21. `0x49C477`: rendertype 6 passes the words as they are. `0x49C252`: rendertype 3 passes `[esp+0x38]`, a local nothing in `0x49BE60` writes. DISASSEMBLED |
 | `0x4B7EE0` | the anim-state frame: `state+8` is the sequence, tested first — a NULL sequence returns 0 (`0x4B7EE6..0x4B7EEB`), which `0x4C7580` then draws nothing for; otherwise `*(seq + 0x28 + 8·frame)` with the `u16` at `state+0` **unbounded**. `ret 4`. DISASSEMBLED |
-| `0x4B7F30` | the sequence frame by index, `stdcall (seq, idx)`, `ret 8`: `0 ≤ idx < u16 *seq`, else 0. It reads the count **before** its NULL test on `seq`. DISASSEMBLED |
+| `0x4B7F30` | the sequence frame by index, `stdcall (seq, idx)`, `ret 8`: `0 ≤ idx < u16 *seq`, else 0; the frame is **`*(u32*)(seq + idx*8 + 0x28)`** — the table at `seq+0x28` is `{GAFFrame*, u32}` pairs, stride 8, and each `GAFFrame` header is followed by its own pixel plane (a frame's `+0x10` points at `frame+0x18` for an uncompressed frame). It reads the count **before** its NULL test on `seq`. DISASSEMBLED; the layout MEASURED 2026-09-29 (TA Zero, `ArmT1Solar` team sequence: frame 0 16x16 uncompressed at `f`, pixels at `f+0x18`) |
 | `0x4C0310` → `0x4C0330` | **the flat fill**, `stdcall (ctx, xy[], n, colour)`, `ret 0x10`, any vertex count; fills in the colour word's LOW BYTE (`mov al,[esp+0x14080]` at `0x4C0678`). The chains and the clip are `0x4C7580`'s without the texture coordinates. `0x4C0330..0x4C06D1`, DISASSEMBLED |
 | `0x4C7580` | **`GAF_DrawTransformed`** (its vertex roles, the half-open span and the `uv == NULL` window are in *`GAF_DrawTransformed 0x4C7580`* above). The walk, `0x4C7580..0x4C7A1C`: the FIRST vertex at the strict least y is the top and the first at the strict greatest y the bottom; the left chain runs backwards (`cur − 1`, wrapping to `n − 1`), the right forwards. An edge is skipped when it ends at or above the clip's top or does not go down; x starts at `(xa << 16) + 0xFFFF`, `dx = ((xb − xa) << 16) / dy` and the texture steps by the same **truncating** `idiv`; a clipped top advances all three in ONE multiply; each covered scanline appends one 40-byte row to that side's buffer, and the fill reads the buffers BY POSITION, row `i` at `max(ymin, T) + i`. All of it wraps at 32 bits and shifts arithmetically. DISASSEMBLED; the transcription reproduces the engine's pixels, MEASURED below |
 | `0x4C7310` | the textured span, `0x4C7310..0x4C74E5`: `du = (uR − uL) / (xR − xL)` from the UNCLIPPED width, a left clip advancing u and v by one multiply, `xR` cut to the clip's right, a fill only when `xR − xL > 0`, one texel per pixel **copied whatever its value — the frame's key colour included** (`mov dl,[edi+ebx]` / `mov [esi-1],dl` at `0x4C74C7`..`0x4C74CE`, no compare between them; re-read 2026-09-26 for the GUI's quad stamps, which is why a `GAF_DrawTransformed` stamp crosses to the Vulkan lane as a box of indices and not as a keyed sprite). The texel's address by the frame's width (`0x4C73BD`, table `0x4C7500` into `0x4C74E8`): 8 inline; 16, 32, 64 and 128 through `0x4CD962`, `0x4CD91E`, `0x4CD8DA`, `0x4CD896`, which mask `v` shifted by `log2 w` and add `u` before the shift; any other width `(v >> 16)·w + (u >> 16)`. DISASSEMBLED |
@@ -11379,12 +11402,68 @@ live table (`0x4AC7FF..0x4AC88F`: `|ΔR|+|ΔG|+|ΔB|`, minimum seeded at `0x9896
 `guipal` is the GUI's logical palette and touches the live table not at all**; `MEM_Free(data)`;
 `0x4B6340()` → `main+0x38A37`. Then, the viewport rect written (`0x4981C9..0x498237`),
 **`0x4288D0("loadgame2bg", 0, 0, 0)`** at `0x49823D` — `ret 0x10`, and not the palette init
-[resolution](resolution.html) §2.2 called it: it makes `main+0x37E1B` the back buffer
-(`0x4C69A0`), fills it, flips, and loads the PCX (`0x429290`) into a ten-deep most-recent-first
-cache of decoded backgrounds (records of 0x28 bytes from `0x5120B8`, the surface at `+0`, the
-name at `+4`; the oldest is `SurfaceFree`d and its name `MEM_Free`d at `0x428A04`). 42 callers,
-the shell's `FrontendX` background among them (`0x478F19`). How the picture then reaches the
-frame is the census's finding in [GL UI renderer](gui-renderer.html) §12.
+[resolution](resolution.html) §2.2 called it. Its second argument (`[esp+0x38]` at `0x4288D3`,
+tested at `0x4288DC`) gates a blank-and-present: non-zero makes `main+0x37E1B` the back buffer
+(`0x4C69A0`, `0x4288F5`), fills it (`0x4C6890`, `0x4288FC`) and flips (`0x4C63A0`, `0x428901`);
+zero, as here, skips all three [DISASSEMBLED 2026-09-29; no flip returning to `0x428906` runs
+inside a load, MEASURED the same day]. It looks the name up in a ten-deep most-recent-first
+cache of decoded backgrounds (`0x428912..0x428954`; a hit moves the record to the front and
+skips the load, `0x428956..0x4289BC`) and on a miss loads the PCX (`0x429290`, `0x4289DE`) into
+it, unless `main+0x391F1` is 6 (`0x4289F1`, no insertion) (records of 0x28 bytes from `0x5120B8`,
+the surface at `+0`, the name at `+4`; the oldest is `SurfaceFree`d and its name `MEM_Free`d at
+`0x428A04`), and with no GUI screen on top (`main+0x531` zero, tested at `0x428A7F`) and its fourth
+argument zero (`0x428A70`) stores the surface in **`main+0x11EB`** (`0x428AB2`) and its name at
+`main+0x11EF` (`0x428AB0`, when the name is non-null); with one on top it hands
+the surface to `0x4AB290(GUIInfo, surface)` instead and stores nothing. 42 callers, the shell's
+`FrontendX` background among them (`0x478F19`). The surface is a `0x4C69F0` object tagged
+`"bitmaps\loadgame2bg.PCX"`, 640×480 [MEASURED 2026-09-29, `gui trace: alloc`]. How the picture
+then reaches the frame is *The loading frame*, below.
+
+### The loading frame — what the game thread draws while the loader thread runs [DISASSEMBLED + MEASURED 2026-09-29]
+
+*Read with `i686-w64-mingw32-objdump -d -M intel` on `pristine/TotalA.exe.pristine`; the flips and
+the ops recorded on the Vulkan lane's UI layer are a Two Continents skirmish on Wine, one load.*
+
+The game-entry handler `0x497F40` runs the first-call path once and then, on every later call,
+the poll path `0x498340`; while the loader thread has not set bit 1 of `main+0x38D75`
+(`0x497C62`), that is the loading frame `0x4984DD..0x498CB2` (*The level load runs on a LOADER
+THREAD*, above, has the flag word). **The game thread flips five times in one load**, told apart
+by the return address the flip sees:
+
+| return | call site | what it presents |
+|---|---|---|
+| `0x498025` | `0x498020`, `call 0x4257A0`, after the GUI stack is popped empty (`GUI_Pop 0x4A9660` in the loops at `0x497F6A` and `0x498008`) | one black frame, at the start of the load |
+| `0x498CB2`, once per poll call (3 in this load) | `0x498CAD` | **the loading frame** |
+| `0x49835D` | `0x498358`, `call 0x4257A0` | one black frame, once the loader is done and the in-play entry is next |
+
+**`0x4257A0` is blank-and-present**: `SetBackBuffer(main+0x37E1B)` (`0x4C69A0`, `0x4257AC`),
+`SurfaceFill(0, 0)` (`0x4C6890`, `0x4257B5`), then **`jmp 0x4C63A0`** (`0x4257BA`) — a tail call,
+which is why the flip's return address is its caller's. Its other callers include `0x491C60`
+and the post-game path of `0x499200` (the state-handler table, above).
+
+**The frame.** `0x4C69A0(main+0x37E1B)` (`0x4985A5`), then `GetContext 0x4C5E70(&ctx)`
+(`0x4985AF`); a zero answer jumps to `0x498CB2`, so a failed context skips the drawing **and the
+flip**, and only the sleep runs. `SetFont 0x4C1420(main+0x391F9)` (`0x49860A`). The backdrop is
+`0x4C6B70(&ctx, [main+0x11EB], 0, 0)` (`0x498623`, args read off the pushes at
+`0x498615..0x498622`): the PCX surface `0x4288D0` stored, copied whole. Then the labels, the six
+bars, and the caption. Every draw ends at `0x4C5FA0(&ctx)` (`0x498CA8`), the flip (`0x498CAD`),
+and **`push 0xC8; call 0x4B6B50` (`0x498CB2`, `0x498CB7`) — a 200 ms sleep per frame**, whatever
+the symbol table's name `SleepBatch100ms` says (the measured spacing of the three flips was 202
+and 201 ms).
+
+**What the UI layer records for one frame** [MEASURED, `gui.on=log`, 76 ops on the offscreen,
+the same count on each of the three]: one `copy` of the whole 640×480, glyph blits for the
+caption (at y 460..473, the map name) and for each label (x 90, one row per bar), and per bar row
+a one-pixel-wide `bar` at x 205 and a `gaf` box `(205, y)..(555, y+20)` — the segmented bar
+picture — at **y = 135, 177, 218, 262, 304, 347**, which the picture shows as Textures, Terrain,
+Units, Animation, 3D Data and Explosions (the labels are translation keys, `0x4C5740`). The first frame's label glyphs arrived as `gaf`
+blits and the second's as `gafb` (the shaded blit `0x4B8310`, which `DrawText 0x4A50E0` takes with
+a non-zero shade), and one bar row drew its picture twice in the frames dumped [which row, and why,
+not identified]. Read and not examined: `0x498C8F..0x498C9E` (with `GetGameingType == 3` the frame
+calls `0x497CE0(&ctx)` and `0x456DE0()` before the context is released), the timing block
+`0x4985CC..0x4985FB` (`0x4B6340`, a byte table at `0x51E6C8` decremented by 2 per tick), the
+caption arm `0x498647..0x49872A`, and the font-colour latch `0x498757..0x4987B4`
+(`SetFontColor 0x4C13A0` with an index from the GUI LUT at `main+0xDCB`).
 
 ### The Visuals options the store owns [DISASSEMBLED + MEASURED 2026-09-23]
 

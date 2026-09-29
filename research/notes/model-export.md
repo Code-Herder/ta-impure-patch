@@ -202,7 +202,7 @@ Both found by reading real archives; the note tags them `[CLAIMED]`, and the cla
    histogram of those three frames]
    **Superseded, and the framing here was wrong too:** file-formats §3 has since established
    that team colour is a **frame table**, not a band — an entry carries one separately painted
-   frame per player and the engine draws `frame[owner]`. "105–110" is **player 0's ramp seen
+   frame per player and the engine draws `frame[player colour]`. "105–110" is **player 0's ramp seen
    through frame 0**; frame 1 runs 202–204, frame 2 runs 80–83, and so on. Nothing rewrites a
    band. [VERIFIED — per-frame histogram of every `logos.gaf` entry]
 
@@ -224,7 +224,7 @@ of ARMPW matches `unitpics/armpw.pcx` in silhouette, camo, grey arms and dark le
   network. On ARMPW that is 13 of the 41 textured faces' worth of frames, against 40 flat ones.
 - **No owner colour.** A static exporter has to pick a frame and `ta3do` picks frame 0, so
   every unit renders in **player 0's ramp** regardless of side. The small addition is
-  `--owner N` selecting `frame[owner]` (clamped) for multi-frame entries at atlas-build time —
+  `--owner N` selecting `frame[player colour]` (clamped) for multi-frame entries at atlas-build time —
   **not** a palette rewrite: an earlier revision of this page proposed rewriting 105–110, which
   followed from the band model that file-formats §3 disproved. 263 of the 608 stock models name
   at least one team-colour entry, and the engine keys on the entry being multi-frame rather

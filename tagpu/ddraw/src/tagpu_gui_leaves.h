@@ -743,14 +743,17 @@ static int __cdecl before_free(void* e)
    THE TABLE: `surf_drop` swap-removes and `surf_get` memsets the tail, so a
    scan racing those reads a slot mid-move — it can mark a slot that is about
    to become a different, live surface and leave the freed one standing, which
-   is the very fault this observer exists to remove. So an off-thread free
-   pushes the block pointer into `surf_free_offthread`'s ring, unfiltered and
-   without reading the table at all, and the game thread drops the entry at
-   the top of the next flip, before the census or the publisher read a base.
-   Filtering there would not be an optimisation but a hole: MEM_Free fires once
-   per block, so a filter that misses queues nothing and nobody ever re-checks.
-   The residual window — one thread freeing a surface another is drawing into —
-   is the engine's own and was never ours to close.
+   is the very fault this observer exists to remove. So an off-thread free asks
+   `live_hit`, the mirror of the tracked bases whose slots never move
+   (tagpu_gui_hook.c), and pushes the block pointer into `surf_free_offthread`'s
+   ring only when it names one; the game thread drops the entry at the top of
+   the next flip, before the census or the publisher read a base. The filter
+   is sound because MEM_Free fires once per block and the mirror cannot miss a
+   base registered before the free began. The loader thread frees tens of
+   thousands of blocks in a level load, so a push per free overruns the ring and
+   the overrun retires the whole table, the loading screen's draws with it. The
+   residual window — one thread freeing a surface another is drawing into — is
+   the engine's own and was never ours to close.
 
    The observer sits at the ENTRY of 0x4D85A0, before the allocator's own
    critical section, so the CRT `free()` that surf_retire calls inverts no lock. */
@@ -760,7 +763,7 @@ static int __cdecl before_memfree(void* e)
     int i;
     if (!p) return 0;
     size = mem_block_size(p);             /* now: the block is still the caller's */
-    if (!on_game_thread()) { surf_free_offthread(p, size); return 0; }
+    if (!on_game_thread()) { if (live_hit(p, size)) surf_free_offthread(p, size); return 0; }
     for (i = 0; i < s_nsurf; ) {
         if (s_surf[i].dying || !surf_dies_with(&s_surf[i], p, size)) { i++; continue; }
         if (s_trace) {

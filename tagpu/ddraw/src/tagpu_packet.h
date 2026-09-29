@@ -83,7 +83,7 @@ typedef struct TAGPU_PK_GLYPH {
    the thread that owns them, which is what closes the audit's open hazard
    (cross-thread-engine-reads.md §5 row 2: the unsynchronised begin/end pair). */
 
-/* 100 B, one per LIVE unit, in engine slot order. The table's CAPACITY is the
+/* 104 B, one per LIVE unit, in engine slot order. The table's CAPACITY is the
    engine's own slot count (`unit_slots` above), so a unit is never cut: the
    engine allocates slots in per-player blocks and a walk stopped short would
    drop the highest-numbered players entirely (the plan's §5 card). */
@@ -127,12 +127,19 @@ typedef struct TAGPU_PK_UNIT {
     uint8_t  cloak;          /* unit+0x10E, bit2 = actively cloaked             */
     uint8_t  flags;          /* TAGPU_PK_U_* below                              */
     uint8_t  ground_h;       /* the feature cell's height byte under the anchor */
+    uint8_t  logo;           /* PlayerInfo+0x96 of the owner: the frame of a
+                                team-coloured face (0x45861C). It is the
+                                player's chosen colour and is NOT the owner id;
+                                TAGPU_PK_LOGO_NONE when the read did not
+                                validate                                        */
+    uint8_t  pad_[3];
     char     name[16];       /* UnitDef+0x20 UnitName, LOWERCASED and NUL-padded:
                                 what the roster and scaffold log lines print.
                                 16 is the FBI
                                 field's own width; a longer name is truncated    */
 } TAGPU_PK_UNIT;
 
+#define TAGPU_PK_LOGO_NONE    0xFFu  /* PK_UNIT.logo / PACKET.local_logo: no colour read */
 #define TAGPU_PK_U_DEPTHPLANE 0x01u  /* the composite has a depth plane (path B) */
 #define TAGPU_PK_U_NATIVE     0x02u  /* tagpu_native_owns_unit() said yes, on the
                                         GAME thread, with the def in hand        */
@@ -851,7 +858,10 @@ typedef struct TAGPU_PACKET {
                                          (its composite pointer is non-NULL) —
                                          the render half's "in a game" gate      */
     uint8_t  mm_viewcol;              /* main+0xDD9, the view box's palette index */
-    uint8_t  mm_pad[2];
+    uint8_t  local_logo;              /* the logo colour of local_player, as
+                                         PK_UNIT.logo is the owner's: the build
+                                         ghost's team frame                     */
+    uint8_t  mm_pad;
     int32_t  mmpic_w, mmpic_h;        /* the decoded minimap picture, in the
                                          LEVEL'S FIRST in-play packet only       */
     uint32_t mmpic_off, mmpic_len;    /* mmpic_w * mmpic_h palette indices       */

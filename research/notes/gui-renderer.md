@@ -1752,13 +1752,16 @@ read from the code and then from the reset reasons once they were logged:
   "menu fades" of the corpus are the campaign glamour screen's palette stepper, which nothing a
   skirmish does reaches — whatever runs it, each step is a `SetEntries` the twin's palette
   texture is re-uploaded from at the next present.
-- **The loading screen is presented once.** Game entry paints `loadgame2bg` (`0x4288D0`, not the
-  palette init the resolution page called it) and flips; nothing presents again until the map
-  is loaded and the mode switches — a shot asked for during the load blocks until the game's
-  first frame. So the walk arms both capture triggers *before* clicking `Start`, and the fork's
-  surface-shot trigger is now polled every present like the GL one (it was every eighth, and
-  that frame is one). The world is then waited for after the mode switch, because the overlay's
-  `units:` line keeps reporting the dead game's array from the shell.
+- **The loading screen is presented every 200 ms, not once** [CORRECTED 2026-09-29]. Game entry
+  blanks the surface and presents it (`0x4257A0`), and the poll loop that follows draws the
+  loading frame (`loadgame2bg`, six bars, a caption) and flips once per call, sleeping 200 ms
+  between (exe map, *The loading frame*); this section's own census counts 9 flips in it. What
+  was once true is that a shot trigger armed for the load catches at most one of them, so the
+  walk arms both capture triggers *before* clicking `Start`, and the fork's surface-shot trigger
+  is polled every present like the GL one (it was every eighth). The world is then waited for
+  after the mode switch, because the overlay's `units:` line keeps reporting the dead game's
+  array from the shell. On the Vulkan lane the loading frames are carried by the op stream like
+  any other screen, which §31 is about.
 
 ### Measured
 
@@ -3722,11 +3725,10 @@ corrected, and the write the scan could not find is LoadMap's, through a base at
 
 #### Still open
 
-- **The loading screen is unmeasured.** The surface is already the game's mode when it is
-  drawn (sampled: 640×480 through the shell, 1920×1080 from the loading screen on), so the
-  map is live there — but `glshot` returns the *previous* frame's GL buffer during a load, so
-  90 samples across two entries caught no loading frame at all. Whether its edges are
-  magnified for those few seconds is not known. Cosmetic either way.
+- **The loading screen's GL-era questions are history.** The surface is 640×480 through the
+  loading frame and the game's mode after it (the engine forces 640×480 at `0x498025..0x498108`);
+  `glshot` returned the *previous* frame's GL buffer during a load, so the GL walk never caught one.
+  On the Vulkan lane the loading frames are measured in §31.
 - **`tacli`'s own device-space inverse does not know about HUD scale.** `tacli click --device`
   and `ui click --device` convert with `k` alone, so at `s > 1` they aim at the unmagnified
   place. Every `--device` measurement above was aimed by hand. `uiwalk.py`'s per-stop hit
@@ -5068,3 +5070,97 @@ suite's: rename `tacli-state` to `tacli-state.off`, start `wine TotalA.exe` in t
 `WINEPREFIX=<the instance's canonical prefix path>` (`tacli` finds the game by that exact
 string, so a path with `..` in it is not found), `WINEDLLOVERRIDES=ddraw=n,b` and `DISPLAY` set,
 and `tacli ui`, `click`, `roster` and `shot` then answer as usual.
+
+## 31. The loading screen was wiped at every flip: the free ring  [MEASURED 2026-09-29]
+
+**The report** (the owner, on a Windows machine, where the load is slower): the loading screen
+shows briefly and the window goes black until the game is in. The bars never move. Wine showed the
+same thing once looked at at the rate of the present: a window grab from the click on Start
+(`import -window`, one PNG every 15–100 ms) is the SKIRMISH screen, then black with the layer's
+own cursor (a 13×19 blob at (314,231)) for the whole load, then a 1024×768 black for about half a
+second while the window and the swapchain change size, then the world. **The loading screen is
+never on the window**, on a machine whose load takes 1.2 s.
+
+**What the engine draws** is in the engine map (*The loading frame*): a black present, then one
+frame per 200 ms — the PCX backdrop copied whole, a caption, six labelled bars — and a black
+present again. It is ordinary drawing through the layer's leaves, so it should arrive as ops like
+the shell's screens. The census under `gui.on=log census` said the opposite: one line at the start
+of the load, `(no gui) surface … changed=232152 unexplained=232152 … ops_on_it=0`, which is the
+backdrop's PCX surface being filled by the loader (an asset, unexplained by design), and nothing else.
+
+**The cause.** The layer's table of tracked surfaces (`s_surf`) is the game thread's alone, so
+`before_memfree`, the destructor observer on `MEM_Free 0x4D85A0`, does not walk it from another
+thread: it pushed every off-thread free, unfiltered, into a 256-slot ring that the game thread drains
+at the top of each flip. The loader thread frees a great many blocks — **33 191 in this load**
+(counted at the observer) — and the loading frame flips only every 200 ms, so every drain found
+far more than 256. A ring that overruns retires the WHOLE table (`surf_drain_freeq`'s flush,
+`flush=` on the heartbeat), and retiring an entry forgets its ops, so the window that had just been
+recorded, all 76 ops of it, became ops on base 0 and nothing was published. Dumping the window at
+each loading flip showed it directly:
+
+```
+flip #1 (0x498CB2)  nops=76   op0 copy base=0A75CF48 …   op75 gaf base=0A75CF48
+  (a probe in ops_forget_base, called from surf_drop: five bases, the offscreen among them)
+flip #2 (0x498CB2)  nops=76   op0 copy base=00000000 …   op75 gaf base=00000000
+```
+
+Only the first loading frame's window reached the queue, because the loader thread had only just
+started and fewer than 256 blocks had been freed; every later one was wiped before it was
+published. That first frame is what the report calls "shows briefly" [INFERRED: on Wine the window
+grab did not catch it either, so it may be there for less than a present]. The heartbeat of that run
+read `flush=3`. The GL lane never showed
+the fault, because the engine's own frame was composited under the layer and carried the loading
+screen; the clean cut ([GPU status](gpu-status.html) §2.81) made the twins the only picture and the
+flush visible.
+
+**The test that it is the flush.** With the flush a no-op (a throwaway build), the same load put
+two distinct loading frames on the window, byte-identical (ImageMagick signature) to the GDI lane's
+second and third frames of its own load, bars and labels included. It is not a fix: with the flush
+gone a real free of a tracked surface off the game thread would leave a dangling entry.
+
+**The fix: the ring only receives frees that name a tracked surface.** The filter the ring's comment
+used to rule out — "a scan that races a swap-remove misses" — is sound once the scan reads a table
+that nothing moves. `s_liveBase` mirrors the tracked bases in stable slots, one per table entry
+(`SURF::lslot`), written only at registration (0 → base, before `surf_get` returns) and removal
+(base → 0, before the swap-remove). A reader on any thread sees every base registered before it
+began and not yet removed. A base registered after it began, inside a block being freed, is
+missed: the old drain tested the table at drain time and would have dropped it, the filter
+decides at free time. That needs the game thread to register a stale pointer into a freed
+block, which a free on the game thread has always allowed too. A retired entry gives its slot
+back at retirement (its block is the heap's; a recycled small block over that base would
+otherwise hit on every loader free). `before_memfree` calls `live_hit(p, size)` for a free off the game thread and
+pushes only on a hit. The drain, the ring's quiescence rule and the flush stay as they were: the
+flush is now the answer to 256 frees of TRACKED blocks between two flips (a conservative
+fallback, so its frequency is not what makes it correct). The engine facts are in the engine map (*`MEM_Free 0x4D85A0`*). Files:
+`tagpu_gui_hook.c` (the mirror, the two removal sites, the registration) and `tagpu_gui_leaves.h`
+(`before_memfree`).
+
+**MEASURED** (Wine, a Two Continents skirmish, 1024×768, a private Xvfb with the reference setup's
+GPU presenting; a window grab in a loop from the click on Start, each frame compared by ImageMagick
+signature):
+
+| | before | after |
+|---|---|---|
+| the window during the load | black plus the cursor, all of it | the loading screen, 2–4 distinct frames a load, the bars advancing (Textures, Terrain, Units, …) |
+| off-thread frees at the observer / naming a tracked surface | — | 33 191 / 0 |
+| `flush=` after one load | 3 | 0, and 0 after three more game → shell → game cycles |
+| `overflows` / `stalls` after those cycles | — | 0 / 2 (one per mode switch, as before) |
+| loading frames against the GDI lane's three (`compare -metric AE`, nearest of the three) | — | one frame 0 pixels apart, the rest 12–210: the bar's state and the hourglass cursor differ between two loads, so this bounds the picture and is not a pixel oracle |
+| the black after the loading screen | the same | the same: about 0.55 s (the window resizes to 1024×768, the swapchain is rebuilt, the first world frame draws) |
+
+A load slowed to about a second longer (the game pinned to one core beside four spinning shells)
+gave four distinct loading frames and `flush=0`.
+
+**What this leaves open.**
+
+- **Not run on Windows**, the platform of the report. The mechanism does not depend on the
+  platform (the loader thread's frees and the 200 ms sleep are the engine's), so the same
+  wipe is the reading of "shows briefly, then black" there [INFERRED]; nothing here ran on it.
+- **The black between the loading screen and the world stays.** The engine presents a blank
+  frame itself (`0x4257A0` at `0x498358`), then `SetDisplayMode` stops the render thread and
+  starts one on the new size. It is the stock game's transition, not a loss of ours.
+- **A tracked surface freed off the game thread is still dropped, not retired** (the ring's
+  comment); nothing produces one.
+- **The mirror's ordering argument is about x86** (stores are not reordered), which is the only
+  target.
+
