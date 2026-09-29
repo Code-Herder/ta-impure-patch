@@ -1628,13 +1628,15 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
         gm = NULL;
     }
     if (gm) s_ghostMasked++;
-    /* owner = the human whose cursor this is: the material's team-coloured
-       frames, so the ghost shows the model exactly as the player's built
-       unit will look. ghost=1 keys the bake APART from the units' entries:
+    /* the human whose cursor this is, by the colour they play: the material's
+       team-coloured frames, so the ghost shows the model exactly as the
+       player's built unit will look. ghost=1 keys the bake APART from the units' entries:
        this run walks the template tree in ITS order, which is not the prim
        order a live unit's packet run carries, so sharing a slot would pose a
        placed building's parts with the wrong pieces' matrices. */
-    if (!tagpu_posebake_unit(s_pc, np, pk->local_player, 1, &bg, &bm) ||
+    if (!tagpu_posebake_unit(s_pc, np,
+                             pk->local_logo != TAGPU_PK_LOGO_NONE ? pk->local_logo : pk->local_player,
+                             1, &bg, &bm) ||
         bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return 0; }
     /* THE HEADING THE BUILDING WILL ACTUALLY STAND AT, NOT THE MODEL'S REST
        ONE. A ghost posed at rest is half a turn away from every structure the
@@ -2364,7 +2366,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                      const TAGPU_PK_PIECE* pc; int nparts; unsigned basePiece;
                      const unsigned short* bturn;
                      float ax, ay, wx0, wz0, wy, gnd, gy;
-                     int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
+                     int rel, owner, team, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float mdBias;
                      float waterT, digT; int waterMode;
                      int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
@@ -2440,6 +2442,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             sy < evpT - TAGPU_GATHER_MARGIN || sy > evpT + evh + TAGPU_GATHER_MARGIN)
             continue;
         int owner = pu->owner;
+        /* the frame of a team-coloured face: the owner's chosen colour, which
+           is the slot number only in a game that never picked another */
+        int team = pu->logo != TAGPU_PK_LOGO_NONE ? pu->logo : owner;
         int cloaked = (pu->cloak & 4) != 0;
         if (cloaked && owner != watched) continue;    /* enemies never see cloak */
         /* fog gate at the anchor tile: engine draws nothing there */
@@ -2575,7 +2580,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             n2->gy = gy;
         }
         n2->rel = (wy >> 4) - r0;
-        n2->owner = owner; n2->cloaked = cloaked;
+        n2->owner = owner; n2->team = team; n2->cloaked = cloaked;
     }
 
     /* A CARGO UNIT IS PART OF ITS PARENT'S SPRITE -- a unit being built in a
@@ -2685,7 +2690,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->wy = (float)rz; n2->gnd = (float)rz;
                 n2->gy = ay;        /* no ground line of its own: no shift    */
                 n2->rel = (ry >> 4) - r0;
-                n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
+                n2->owner = 0; n2->team = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
                 n2->mdBias = 0.0f;
                 n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
                 n2->slant = 0;
@@ -3030,7 +3035,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if ((unsigned)npd >= pduCap) continue;
             const TAGPU_PBGEOM* bg; const TAGPU_PBMAT* bm;
             if (!pdReady) continue;
-            if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].owner, 0, &bg, &bm) ||
+            if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].team, 0, &bg, &bm) ||
                 bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) {
                 continue;
             }

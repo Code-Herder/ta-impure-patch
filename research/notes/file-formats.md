@@ -719,7 +719,7 @@ RGBA via the palette (treat `Background` index as alpha 0), and upload as a text
 of a unit's texture GAFs is convenient).
 
 **Team colour is a frame table, not a palette remap.** An entry with several frames carries one
-**separately painted** frame per player, and the engine draws `frame[owner]` (clamped) — live-
+**separately painted** frame per player, and the engine draws the frame of the owner's logo colour (`PlayerInfo+0x96`) — live-
 verified in a 4-AI skirmish, [gpu-render3do](gpu-render3do.html). `logos.gaf`'s `colorsmd` runs
 palette **105–107** in frame 0, 202–204 in frame 1, 80–83 in frame 2, 166–168 in frame 3 and so
 on for all ten player colours, so the "indices 105–110" of an earlier revision of this note was
@@ -917,7 +917,7 @@ Tools: **TA3D** map loader; **"Annihilator"/"TA Map Editor"**; Spring map conver
    flat shading. Decide winding once and set cull face accordingly.
 5. **Resolve textures (§3).** For each primitive: `pTextureName==0` → flat material from the
    `PaletteEntry` palette color; else sample the named GAF frame, expanded palette→RGBA
-   (transparency index → alpha 0; a multi-frame entry is team colour — pick `frame[owner]`,
+   (transparency index → alpha 0; a multi-frame entry is team colour — pick the frame of the player colour,
    §3). Batch into an atlas per unit.
 6. **Build the scene graph.** One node per 3DO piece; local matrix from `*FromParent` (+
    runtime `PrimitiveStruct.*Pos/*Turn` if animating). Upload interleaved vertex buffers

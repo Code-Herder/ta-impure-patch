@@ -1741,7 +1741,7 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
 - **The frame order needs no restructuring.** Terrain, features and units are gathered before
   any pass renders; a depth pre-pass over the frame's unit buffer slots in before the terrain
   render with no frame lag **[SOURCE `tagpu_native_frame`]**.
-- **Team colour is per-owner GAF frames** (`frame[owner]` from the anim's inline table,
+- **Team colour is per-owner GAF frames** (`frame[logo colour]` from the sequence's `{frame*, u32}` pairs,
   `tagpu_render3do.c face_texframe`). Every variant is a frame in `textures/*.gaf` and is
   restored at load like any other; nothing to enumerate separately.
 - **The composite over the top bar** and the wndproc interception are established, §2.10.

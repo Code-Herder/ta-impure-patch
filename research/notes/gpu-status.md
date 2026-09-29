@@ -4036,7 +4036,7 @@ Object3do ([cross-thread engine reads](cross-thread-engine-reads.html) §5 row 2
 
 | site | what we do there | thread |
 |---|---|---|
-| `DrawGameScreen 0x468CF0`, the observer's **`after`** | the packet grew four tables. `PK_UNIT` (100 B) one per LIVE unit, the walk bounded by the engine's own SLOT COUNT (`u16 main+0x14351`) rather than by the `begin`/`end` pair, and the table sized to that count so no player is ever cut; `PK_PIECE` (24 B) the COB move and turn triples and the flags, plus the TYPE's template node; `PK_WRECK` (44 B) the husks the anchors name, each carrying the ANCHOR TILE it was found on rather than its own position, because that is what the grid walk it replaced filtered on; `PK_ANCHOR` (16 B) the feature cells of the widest zoom rect with the six height bytes the engine's 2×2 projection average and the Classic++ ground gradient need. The header grew with them: the GUI colour table, the dispatched mouse point, the build cursor's corners, the two mode bytes, the option byte, the feature sweep, the two array COUNTS the fenced passes bound by, and the engine's 32×256 shade table — the per-map BASES are read live instead, because the teardown nulls them and a held copy would not know. Every offset and every bound: [engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies" | game |
+| `DrawGameScreen 0x468CF0`, the observer's **`after`** | the packet grew four tables. `PK_UNIT` (104 B; 100 B before the owner's logo colour was added) one per LIVE unit, the walk bounded by the engine's own SLOT COUNT (`u16 main+0x14351`) rather than by the `begin`/`end` pair, and the table sized to that count so no player is ever cut; `PK_PIECE` (24 B) the COB move and turn triples and the flags, plus the TYPE's template node; `PK_WRECK` (44 B) the husks the anchors name, each carrying the ANCHOR TILE it was found on rather than its own position, because that is what the grid walk it replaced filtered on; `PK_ANCHOR` (16 B) the feature cells of the widest zoom rect with the six height bytes the engine's 2×2 projection average and the Classic++ ground gradient need. The header grew with them: the GUI colour table, the dispatched mouse point, the build cursor's corners, the two mode bytes, the option byte, the feature sweep, the two array COUNTS the fenced passes bound by, and the engine's 32×256 shade table — the per-map BASES are read live instead, because the teardown nulls them and a held copy would not know. Every offset and every bound: [engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies" | game |
 | the same `after` | `tagpu_native_owns_unit()` is asked here, once per unit, with the def in hand — the answer crosses as one flag bit, so the unit pass, the marker pass and the composite wipe act on ONE answer instead of three threads' reads of the same bytes | game |
 | the order-marker snapshot `0x469BFC` | every unit pointer a record carried becomes an ARRAY SLOT, and every def and weapon field the drawing needs becomes a number in the record: the nine labelled ranges, the three live weapon ranges and their AoE and attack runs, the build def's five footprint extents, the kamikaze set, the cursor sprite's GAF sequence | game |
 | `tagpu_packet.c`'s acquire | **the rotation**: the frame instance holds THREE slots (READ, PREV and a SPARE) rather than two, so a packet of the same tick replaces READ and keeps PREV, and the pair the pose blend runs over always spans two distinct ticks. The choice is made AFTER the exchange out of records this thread owns — the two-slot alternative would have to peek at a slot the producer may be refilling | render |
@@ -4626,8 +4626,9 @@ and the COB length (`0x4B6BA0`) for the `Create()` mask.
   piece's own rest point, which is `posed_pose`'s output for a unit holding every piece at rest
   with that body turn (see the heading bullet below) — into render-thread scratch. One ghost = one
   bake lookup, one `glDrawArrays`, no pose arena. `fog=0` so it never fog-dims, like the square;
-  no shadow, no nanoframe wire, no waterline. The material is owner 0, so the ghost shows the
-  player's own team colour — exactly what the built unit will look like. An earlier cut tinted
+  no shadow, no nanoframe wire, no waterline. The material is keyed on the local player's logo colour
+  (`local_logo`), so the ghost shows the player's own team colour — exactly what the built unit
+  will look like. An earlier cut tinted
   it green/red (`uGhostTint`); the owner dropped the tint (2026-09-12): translucency alone, the
   existing `uAlpha` blend the cloak already rides.
 - **THE PIECES THE FINISHED BUILDING HIDES, THE GHOST HIDES** (TADR section C, landing C1,
@@ -11275,15 +11276,20 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
-- **In a network game every peer draws its own units in player 0's colour** [MEASURED
-  2026-09-23, two peers]. The engine takes a unit's team colour from its owner's player record,
-  `player+0x96` (the frame index into `main+0x148DB`, `exe-reverse-engineering.md` §`0x467C00`).
-  `face_texframe` in `tagpu_render3do.c` picks the team frame by the owner byte `unit+0xFF`
-  itself, and that byte is the LOCAL player index: each peer is player 0 on its own screen. In
-  single player the two agree (you are player 0 and colour 0), which is why it never showed. The
-  engine's own frame is right on both peers. Closing it: the publisher reads `player+0x96` for each
-  unit's owner (bounded: owner < 10) into the packet, and the unit pass keys the team frame and the
-  bake's material on that colour instead of on the owner.
+- **A unit's team colour is its owner's logo colour, read by the publisher.** The engine takes it
+  from the owner's player record, `PlayerInfo+0x96` (`exe-reverse-engineering.md` §`0x459B25`);
+  `PK_UNIT.logo` carries that byte (bounded: owner < 10, the PlayerInfo pointer range-checked),
+  the unit pass keys the bake's material on it, and the build ghost keys on `local_logo`. The
+  colour is the player's choice and not the slot: a skirmish that gives slot 0 colour 4 and slot 1
+  colour 0 draws the same colours as the engine [MEASURED 2026-09-29, retail, four players on
+  colours 4/0/2/7, ours against the engine's frame]. The table read through `face_texframe` is the
+  sequence's `{GAFFrame*, u32}` pairs; before 2026-09-29 it was stepped at 0x18 from frame 0,
+  so every colour but the first fell back to a flat blue face (TA Zero, every unit blue).
+  **Not re-measured:** a two-peer network game. Each peer's `PlayerStruct[owner]` is its own
+  copy, and the engine reads the same copy, so both should agree with the engine's frame; the
+  earlier observation that every peer drew its units in player 0's colour was of the slot-indexed
+  lookup this replaces. Wreck (feature) models keep frame 0. When the logo does not validate the
+  unit falls back to its owner id.
 
 - **Nothing in this repository has ever been measured on a Windows GL driver, and the first run
   on one found two bugs — 2026-09-10.** `renderer=openglcore` fell back to GDI on a real ICD

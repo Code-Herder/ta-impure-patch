@@ -66,7 +66,7 @@
 #define GF_COMPRESSED 0x09
 #define GF_PTRCOLOR  0x10
 #define SEQ_NFRAMES  0x00      /* GAF anim entry: u16 frame count               */
-#define SEQ_FRAMES   0x28      /* -> inline GAFFrame[] table, stride 0x18       */
+#define SEQ_FRAMES   0x28      /* {GAFFrame*, u32}[] pairs, stride 8            */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p <= tagpu_user_top(); }
 
@@ -197,9 +197,10 @@ static const unsigned char* frame_sane(const unsigned char* g)
 }
 
 /* Resolve a feature def's static body GAF frame 0 (engine:
-   GAF_SequenceIndex2Frame(*(def+0xAC), 0)). Layout per Phase B RE: anim entry
-   +0x00 u16 nframes, +0x28 -> frame table (inline GAFFrame[] stride 0x18; we
-   also tolerate a pointer table). NULL if unreadable. */
+   GAF_SequenceIndex2Frame(*(def+0xAC), 0)). Anim entry +0x00 u16 nframes,
+   +0x28 the {GAFFrame*, u32} pairs (0x4B7F30): the first pointer IS frame 0.
+   The pointer-table fallback below reads that pointer's target as a second
+   pointer. NULL if unreadable. */
 static const unsigned char* feat_frame0(const char* def)
 {
     const char* seq = *(const char* const*)(def + FD_BODYSEQ);

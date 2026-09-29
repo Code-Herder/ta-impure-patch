@@ -46,8 +46,8 @@ step for a real palettiser or — the endgame — bypassing the 8bpp composite e
 | Case | Field state (live armcom) | Colour source |
 |---|---|---|
 | Flat-coloured face | `pColorTable` = small int? (none seen on armcom) | treat `1 < v < 255` at `+0x00` as a literal palette index |
-| **Plain textured** (arms, legs, head…) | `+0x08` **zeroed** after resolution; **`+0x10` → inline `GAFFrame[]`** (stride 0x18, one per anim frame; texture frames use **ColorKey 9**, `PtrDepth` garbage) | sample frame 0's 8bpp plane (we probe centre + 4 quarter texels, skip ColorKey) |
-| **Team-colour textured** (torso) | `+0x10` = non-pointer scalar (`0x00060000`), `+0x14` = 1, **`+0x18` → GAF anim entry** `{u16 nFrames; u16; u32; char name[32]; ptr @+0x28 → inline GAFFrame[] table}` (armcom torso: 8 frames, entry name reads "glow") | sample the table's frame 0 (per-player frame selection TODO) |
+| **Plain textured** (arms, legs, head…) | `+0x08` **zeroed** after resolution; **`+0x10` → a `GAFFrame`** (texture frames use **ColorKey 9**, `PtrDepth` garbage) | sample frame 0's 8bpp plane (we probe centre + 4 quarter texels, skip ColorKey) |
+| **Team-colour textured** (torso) | `+0x10` = non-pointer scalar (`0x00060000`), `+0x14` = 1, **`+0x18` → GAF anim entry** `{u16 nFrames; u16; u32; char name[32]; {GAFFrame*, u32}[nFrames] from +0x28}` (armcom torso: 8 frames, entry name reads "glow") | frame `k` of the sequence, where `k` is the owner's logo colour (`PlayerInfo+0x96`) and frame `k` is the pointer at `seq + 0x28 + 8k` — see the table layout below |
 | **Nothing resolved** (`ground` footprint quad, some interior faces) | `+0x00` = 0, `+0x10` = 0, `+0x18` = junk | **draw nothing** — the engine skips these too; painting them was the "green slab" bug |
 
 Two hard-won gotchas:
@@ -57,8 +57,14 @@ Two hard-won gotchas:
   run crashed exactly there. Never dereference it; and note a fault report at a
   `0x7B4xxxxx` address is not necessarily wine's kernelbase — **our fork DLL loaded at
   `0x7B4D0000`** in that session (`+loaddll` is the arbiter).
-- **GAF anim frame tables are inline arrays of `GAFFrame` records** (stride 0x18), not
-  arrays of pointers — `*(entry+0x28)` is already the first frame's address.
+- **A GAF sequence's frame table is an array of 8-byte `{GAFFrame*, u32}` pairs at `seq+0x28`**,
+  and each frame's header is followed by its own pixel plane, so the frames are *not* a
+  contiguous `GAFFrame[]`. `*(seq+0x28)` is the first pair's pointer, which is frame 0's address,
+  and that is the only frame a stride-0x18 step lands on (frame 1 at `+0x18` is frame 0's pixels).
+  The engine's `0x4B7F30(seq, idx)` reads `[seq + idx*8 + 0x28]` after `0 <= idx < u16 [seq]`
+  (DISASSEMBLED); `tagpu_gaf_seq_entry` is that read. [MEASURED 2026-09-29, TA Zero
+  `ArmT1Solar`: sequence of 10 frames, frame 0 a 16x16 uncompressed frame whose pixel plane
+  starts at `frame+0x18`.]
 
 ## Sequencing & integration
 
@@ -89,8 +95,7 @@ All landed live the same session:
   (`v0..v3 -> (0,0)(1,0)(1,1)(0,1)`); the fragment shader discards texels equal to the
   texture's own ColorKey (9 for unit textures), which is what makes the transparent
   'ground'-quad style faces disappear exactly as in the engine. Team-colour faces pick
-  `frameTable[owner]` (clamped; owner 0 verified blue — other colours pending a visible
-  non-P0 unit).
+  the sequence's frame for the owner's logo colour (clamped).
 - **Own depth plane** via MRT: a second `R8` attachment receives `modelY + 0x32`, read
   back and written over the composite's depth plane. The engine's formula was pinned
   empirically with the harness: its depth plane over the commander spans 49..89 for
@@ -119,7 +124,7 @@ All landed live the same session:
 2. ~~**Team colour verify**~~ — DONE: a 4-AI permanent-LOS skirmish (registry-preset, sim
    at +10 via TA's own speed keys) put the white AI's ARM commander on screen: white team
    badge on exactly the faces that are blue on ours, red trim on CORE structures —
-   `frame[owner]` is the right mapping (shot in the roadmap gallery).
+   the badge is white on exactly the faces that are blue on ours (shot in the roadmap gallery). That run predates the table layout below: it indexed the sequence by the owner at a stride of 0x18 and passed for the frames it could reach. [OPEN — why the white badge showed then is not explained; the layout below is the measured one.]
 3. ~~**Animated pose test**~~ — DONE in the same run: the white commander was captured
    mid-stride between build sites; walking/turning units render correctly from the
    engine-posed vertex buffers (which stay fresh — own-the-draw keeps the engine's repose).

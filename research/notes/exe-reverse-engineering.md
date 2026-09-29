@@ -505,7 +505,7 @@ The recorder's [direct scene experiment](tadr-port/demo-recorder-exploration.md#
 used the existing `tagpu_packet_pub.c:fill_world` ownership boundary, widening only the
 unit-piece capture condition to cover every live unit. No new engine byte patch was added.
 The packet layout was measured with a 32-bit `offsetof`/`sizeof` executable: header 2312 B,
-unit row 100 B, piece row 24 B, wreck row 44 B; tick +16, unit count/offset +1608/+1612,
+unit row 100 B (104 B since the unit row gained the owner's logo colour, 2026-09-29; the header stays 2312 B, the colour of the local player taking the minimap group's spare byte), piece row 24 B, wreck row 44 B; tick +16, unit count/offset +1608/+1612,
 piece count/offset +1616/+1620, wreck count/offset +1624/+1628, truncation flags +2300.
 These are **Impure packet offsets**, not offsets in the retail engine.
 
@@ -2683,7 +2683,19 @@ drops the back ones.
   the file's.
 - Flag bit 0 (`face+0x1C`) → `0x4C1000(frame, verts, face+0x04 count, face+0x00 colour)`; else a
   face of other than 4 vertices is skipped (`0x459B1A`); else `0x4C8760(frame, texture, verts, 0)`
-  with the texture `face+0x10`, or through `0x4B7F30` / `0x4B7EE0` when flag bit 1 is set.
+  with the texture the flags name (`0x459B25..0x459B86`, DISASSEMBLED): **flag bit 1 clear** — the
+  `GAFFrame` at `face+0x10`. **Bit 1 set and bit 2 set** — the team-coloured face:
+  `0x4B7F30(face+0x18, PlayerInfo[id]+0x96)`, the sequence's frame for the id's **logo colour**,
+  with `PlayerInfo[id]` = `*(main + id*0x14B + 0x1B8A)` (`0x459B34..0x459B58`; `id` is a stack
+  argument of this routine, `[esp+0x5F20]` — [INFERRED] the unit's owner byte `unit+0xFF`). **Bit 1
+  set, bit 2 clear** — `0x4B7F30(face+0x18, 0)` when `ebx` is non-zero (`ebx` is not traced), else
+  `0x4B7EE0(&face+0x10)`, the animation state's current frame. The colour is the **player's chosen
+  colour, not the slot**: a skirmish with slot 0 on colour 4 and slot 1 on colour 0 draws the
+  slot-1 badge in colour 0 [MEASURED 2026-09-29, retail, players' logo bytes 4/0/2/7, engine
+  frame vs ours]. A logo at or past the sequence's count makes `0x4B7F30` return 0, and
+  `0x4C8760` paints nothing for a NULL frame. In TA Zero's `ArmT1Solar` the team faces carry
+  flags `6`, `face+0x10 = 0x000A0000`, `face+0x14 = 1`, `face+0x18` a 10-frame sequence [MEASURED
+  2026-09-29].
 
 **What modellers did with it.** Two faces over the same vertices, wound apart, make a panel with a
 different skin on each side, and only the side facing the camera is ever painted. Of the 608 stock
@@ -9113,7 +9125,7 @@ design and the measurements). Nothing here is patched; `fxown`'s detours on `0x4
 | `0x420C53..0x420C68` | the explosion pass's body draw, after the anchor passed `0x4B6720(main+0x37E27, …)`: `+0x00` non-zero → `0x46BAE0(ctx, pos, body, +0x4C)`. DISASSEMBLED |
 | `0x49C0FA..0x49C11A` | rendertype 1's triple: the projectile's `+0x34` words with `0x8000` added to the second and third; `0x49C127` draws the weapon's `+0x74` node. `0x49C12C..0x49C185`: the thrust flame, the node's `+0x30` child, while `+0x46` (death) is after the tick, with `+0x64` as its first word when the weapon's `+0x111` has bit 21. `0x49C477`: rendertype 6 passes the words as they are. `0x49C252`: rendertype 3 passes `[esp+0x38]`, a local nothing in `0x49BE60` writes. DISASSEMBLED |
 | `0x4B7EE0` | the anim-state frame: `state+8` is the sequence, tested first — a NULL sequence returns 0 (`0x4B7EE6..0x4B7EEB`), which `0x4C7580` then draws nothing for; otherwise `*(seq + 0x28 + 8·frame)` with the `u16` at `state+0` **unbounded**. `ret 4`. DISASSEMBLED |
-| `0x4B7F30` | the sequence frame by index, `stdcall (seq, idx)`, `ret 8`: `0 ≤ idx < u16 *seq`, else 0. It reads the count **before** its NULL test on `seq`. DISASSEMBLED |
+| `0x4B7F30` | the sequence frame by index, `stdcall (seq, idx)`, `ret 8`: `0 ≤ idx < u16 *seq`, else 0; the frame is **`*(u32*)(seq + idx*8 + 0x28)`** — the table at `seq+0x28` is `{GAFFrame*, u32}` pairs, stride 8, and each `GAFFrame` header is followed by its own pixel plane (a frame's `+0x10` points at `frame+0x18` for an uncompressed frame). It reads the count **before** its NULL test on `seq`. DISASSEMBLED; the layout MEASURED 2026-09-29 (TA Zero, `ArmT1Solar` team sequence: frame 0 16x16 uncompressed at `f`, pixels at `f+0x18`) |
 | `0x4C0310` → `0x4C0330` | **the flat fill**, `stdcall (ctx, xy[], n, colour)`, `ret 0x10`, any vertex count; fills in the colour word's LOW BYTE (`mov al,[esp+0x14080]` at `0x4C0678`). The chains and the clip are `0x4C7580`'s without the texture coordinates. `0x4C0330..0x4C06D1`, DISASSEMBLED |
 | `0x4C7580` | **`GAF_DrawTransformed`** (its vertex roles, the half-open span and the `uv == NULL` window are in *`GAF_DrawTransformed 0x4C7580`* above). The walk, `0x4C7580..0x4C7A1C`: the FIRST vertex at the strict least y is the top and the first at the strict greatest y the bottom; the left chain runs backwards (`cur − 1`, wrapping to `n − 1`), the right forwards. An edge is skipped when it ends at or above the clip's top or does not go down; x starts at `(xa << 16) + 0xFFFF`, `dx = ((xb − xa) << 16) / dy` and the texture steps by the same **truncating** `idiv`; a clipped top advances all three in ONE multiply; each covered scanline appends one 40-byte row to that side's buffer, and the fill reads the buffers BY POSITION, row `i` at `max(ymin, T) + i`. All of it wraps at 32 bits and shifts arithmetically. DISASSEMBLED; the transcription reproduces the engine's pixels, MEASURED below |
 | `0x4C7310` | the textured span, `0x4C7310..0x4C74E5`: `du = (uR − uL) / (xR − xL)` from the UNCLIPPED width, a left clip advancing u and v by one multiply, `xR` cut to the clip's right, a fill only when `xR − xL > 0`, one texel per pixel **copied whatever its value — the frame's key colour included** (`mov dl,[edi+ebx]` / `mov [esi-1],dl` at `0x4C74C7`..`0x4C74CE`, no compare between them; re-read 2026-09-26 for the GUI's quad stamps, which is why a `GAF_DrawTransformed` stamp crosses to the Vulkan lane as a box of indices and not as a keyed sprite). The texel's address by the frame's width (`0x4C73BD`, table `0x4C7500` into `0x4C74E8`): 8 inline; 16, 32, 64 and 128 through `0x4CD962`, `0x4CD91E`, `0x4CD8DA`, `0x4CD896`, which mask `v` shifted by `log2 w` and add `u` before the shift; any other width `(v >> 16)·w + (u >> 16)`. DISASSEMBLED |

@@ -350,7 +350,7 @@ typedef char pk_maxpiece_agrees[(TAGPU_PK_MAXPIECE == TAGPU_PBMAXPIECE) ? 1 : -1
    that game is at least the one the installed unit limit allows */
 typedef char pk_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
 typedef char pk_limit_design[(10u * TAGPU_LIM_UNITS + 1u <= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
-typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 100) ? 1 : -1];
+typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 104) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
@@ -467,6 +467,22 @@ static void shd_snapshot(void)
     s_shdPtr = t; s_shdOk = 1; s_cShdCopies++;
 }
 
+/* THE LOGO COLOUR OF PLAYER `id`: PlayerInfo (`main+0x1B63+0x27+id*0x14B`)
+   `+0x96`, the frame index 0x45861C hands 0x4B7F30 for a team-coloured face of
+   a unit. The id is bounded by the ten PlayerStructs the engine keeps, and the
+   PlayerInfo is the game's own allocation, which 0x45861C reads for every such
+   face on every frame. The byte is DATA: the consumer bounds it against the
+   sequence's frame count (tagpu_gaf_seq_entry). -1 when the id or the pointer
+   does not validate. DISASSEMBLED (0x459B34..0x459B58). */
+static int player_logo(const char* ta, unsigned id)
+{
+    const char* pi;
+    if (id >= PLAYER_COUNT) return -1;
+    pi = *(const char* const*)(ta + OFF_PLAYERS + id * PLAYER_STRIDE + PL_INFO);
+    if (!ptr_ok(pi)) return -1;
+    return *(const unsigned char*)(pi + PI_LOGO);
+}
+
 /* One live unit's entry. `ta` and `u` are the game thread's own; every value
    that leaves here is either a copy of a field or an index this function has
    already bounded. */
@@ -487,6 +503,10 @@ static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
     e->id          = RDU16(u, U_INDEX);
     e->model_id    = RDU16(u, U_MODELID);
     e->owner       = RDU8(u, U_OWNER);
+    {
+        const int lg = player_logo(ta, e->owner);
+        e->logo = lg < 0 ? TAGPU_PK_LOGO_NONE : (unsigned char)lg;
+    }
     e->cloak       = RDU8(u, U_CLOAKF);
     e->health      = RDI16(u, U_HEALTH);
     e->squad       = RDU32(u, U_SQUAD);
@@ -2651,6 +2671,10 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->ui_gates   = RDU8(ta, OFF_UIGATES);
     p->load_flags = RDU16(ta, OFF_LOADFLAGS);
     p->local_player = RDU8(ta, OFF_LOCALPLAYER);
+    {
+        const int lg = player_logo(ta, p->local_player);
+        p->local_logo = lg < 0 ? TAGPU_PK_LOGO_NONE : (unsigned char)lg;
+    }
     p->watched      = RDU8(ta, OFF_WATCHED);
     p->sea_level    = RDU8(ta, OFF_SEALEVEL);
     p->paused       = RDU8(ta, OFF_GAMEPAUSED) & 1u;

@@ -341,22 +341,19 @@ static int face_colour(const char* fa)
     if (s < 0) {
         unsigned ap = *(const unsigned*)(fa + 0x18);
         if (ptr_ok((void*)(size_t)ap) && !IsBadReadPtr((void*)(size_t)ap, 0x2C)) {
-            const char* an = (const char*)(size_t)ap;
-            int nfr = *(const unsigned short*)(an + 0x00);
-            const unsigned* tab = *(const unsigned* const*)(an + 0x28);
-            /* the table is an INLINE GAFFrame[] (stride 0x18), not ptrs */
-            if (nfr > 0 && nfr <= 64)
-                s = gaf_sample((unsigned)(size_t)tab);
+            const void* fr;
+            if (tagpu_gaf_seq_entry((const char*)(size_t)ap, 0, &fr) == 1)
+                s = gaf_sample((unsigned)(size_t)fr);
         }
     }
     return s;
 }
 
 /* Resolve a face's texture GAFFrame for rendering: plain textures live at
-   +0x10 (inline GAFFrame[]); the team-colour path at +0x18 is a GAF anim
-   entry whose +0x28 is an inline frame table — pick frame[owner] there
-   (clamped), pending confirmation of the exact player->frame mapping.
-   Returns NULL for untextured faces. */
+   +0x10; the team-colour path at +0x18 is a GAF sequence whose frame k is
+   the pointer at `seq + 0x28 + 8k` (0x4B7F30's read, tagpu_gaf_seq_entry),
+   one separately painted frame per team colour. The frame taken is `owner`,
+   clamped to the sequence. Returns NULL for untextured faces. */
 static const char* face_texframe(const char* fa, int owner)
 {
     unsigned tp = *(const unsigned*)(fa + 0x10);
@@ -370,11 +367,11 @@ static const char* face_texframe(const char* fa, int owner)
     unsigned ap = *(const unsigned*)(fa + 0x18);
     if (ptr_ok((void*)(size_t)ap) && !IsBadReadPtr((void*)(size_t)ap, 0x2C)) {
         const char* an = (const char*)(size_t)ap;
-        int nfr = *(const unsigned short*)(an + 0x00);
-        const char* tab = *(const char* const*)(an + 0x28);
-        if (nfr > 0 && nfr <= 64 && ptr_ok(tab)) {
-            int k = owner < 0 ? 0 : (owner >= nfr ? nfr - 1 : owner);
-            return tab + k * 0x18;                /* inline GAFFrame[] */
+        const int nfr = tagpu_gaf_seq_nframes(an);
+        if (nfr > 0 && nfr <= 64) {
+            const int k = owner < 0 ? 0 : (owner >= nfr ? nfr - 1 : owner);
+            const void* fr;
+            if (tagpu_gaf_seq_entry(an, k, &fr) == 1 && ptr_ok(fr)) return (const char*)fr;
         }
     }
     return NULL;
