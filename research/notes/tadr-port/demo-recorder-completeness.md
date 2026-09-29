@@ -114,7 +114,8 @@ neither bit 19 nor bit 20 takes its altitude and tilt from a wave on the wall cl
 through `0x4B6340`), so a replay cannot recompute them and two peers of a network game compute
 different values. The recording carries `+0x64`, `+0x68` and `+0x70` as values, which costs size for
 every such unit on every tick; moving the wave onto GameTime would remove both the cost and the
-stock nondeterminism, and is a simulation change of its own. No network game was measured for the
+stock nondeterminism, and is a simulation change of its own, a TODO in
+[section B's items](sim-fixes.md#the-items). No network game was measured for the
 file: the player rows' network fields rest on the disassembly alone.
 
 The main block and the executable's `.data` (which holds the simulation RNG's seed, `0x51FC88`) are
