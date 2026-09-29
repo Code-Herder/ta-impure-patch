@@ -888,7 +888,7 @@ def alive_seen(gamedir: Path) -> "int | None":
 
 
 def scenarios(setup) -> dict:
-    """The scenarios this setup's battle and network game apply, by role."""
+    """The scenarios a setup's battle and network game apply, by role."""
     return {**DEFAULT_SCENARIOS, **setup.get("scenarios", {})}
 
 
