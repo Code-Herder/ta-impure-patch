@@ -371,7 +371,10 @@ walk scripts from the written speed, draws shots and deaths through its own rece
 recorded field comes out exact. The motion driver is the round robin's position recipe plus the
 movement pass's presentation parts, fed the move object's speed, layer and bit 2; no proxy is fed
 a path. **Open:** the carrier link and the rest of the carried units' state in playback, sounds and
-the nano spray in playback, and a real hour.
+the nano spray in playback, and a real hour. Footprints and sight were written by the recipe (the
+grid release and claim `0x47D0E0`/`0x47CC30`, the sight stamp `0x4827B0`) but never compared:
+every run had permanent line of sight, and neither the grid nor a player's sight is in a
+snapshot.
 
 ## 2. Rebuild and takeover inventory
 
@@ -823,7 +826,7 @@ an hour at the same rate costs:
 - **The battle is the heaviest case, not an hour.** 68 % of its unit-ticks changed, and its events
   alone (shots and script starts) were about 14 MB/h as recorded.
 - **Against the budgets.** The four-AI game fits inside the 10 and 25 MB/h budgets. A 1,432-unit
-  battle sustained for an hour would be 1.6–5 times the 100 MB/h budget for ten players with
+  battle sustained for an hour would be 1.6–6.4 times the 100 MB/h budget for ten players with
   1,500 units. No real hour of that size has been recorded, so whether an average one fits is
   still open.
 
@@ -837,7 +840,7 @@ recorded.
 | # | Experiment | Settles | Feeds |
 |---|---|---|---|
 | 1 | **Puppet host**: a type-2 level with the recorded seats, 4–9 included, active and set to 3 before `0x464990`, and a viewer with no seat; commanders, defeat and ENDMSN with type-3 seats | whether puppet mode exists: **it does** (MEASURED 2026-09-29, [§1](#the-puppet-host-measured)) | (1) |
-| 2 | **Motion driver**: direct round-robin-style writes against fed proxies, before the unit tick; walk scripts, footprints, sight | motion fidelity, the recorded fields: **exact at every checkpoint of a 1,432-unit battle** with the movement pass's presentation parts and the move object's speed, layer and bit 2 written; no proxy is fed (MEASURED 2026-09-29, [§1](#recording-and-replay-measured)) | (1) |
+| 2 | **Motion driver**: direct round-robin-style writes against fed proxies, before the unit tick; walk scripts, footprints, sight | motion fidelity, the recorded fields: **exact at every checkpoint of a 1,432-unit battle** with the movement pass's presentation parts and the move object's speed, layer and bit 2 written; no proxy is fed; footprints and sight written but not compared (MEASURED 2026-09-29, [§1](#recording-and-replay-measured)) | (1) |
 | 3 | **Events in-process, bounded**: `0x4B0B00`, `0x49D270`, `0x49AF90`, `0x489CE0`, `0x4866D0(rec, 0)`, `0x41B8D0`, `0x48B090`, `0x47F300` | playback fidelity, §4's event term: **deaths, shots and script starts replayed through `0x4866D0`, `0x49D270` and `0x4B0B00`, none refused, the live sets exact**; `0x48B090` writes the state byte; `0x49AF90`, `0x489CE0`, `0x41B8D0` and `0x47F300` were not fed (MEASURED, [§1](#recording-and-replay-measured)) | (1), (3) |
 | 4 | **1,500-unit rebuild in play**: argument-8 creates, B4's hold, a paused apply, timed against the 1 s seek and 2 s takeover | seek and takeover feasibility: **11–47 ms for 1,227–1,432 units, paused or not** (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
 | 5 | **Seat to AI without a reload**: flip the seat, build the `+0x74` and `0x5119C0` objects, then re-create its units at their recorded slots (fresh COB, a local mover); does the AI keep, override or re-plan orders? Does an Escalation factory's one-shot `Upgrade` run in the fork? | takeover without a loading screen: **0.8–1.2 ms per seat; the AI plans, builds and fights**; `Upgrade` not run (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
