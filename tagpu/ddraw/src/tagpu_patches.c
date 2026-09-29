@@ -151,6 +151,7 @@ static void lim_same(unsigned int va, int n, const unsigned char* stock, const c
     lim_add(va, n, stock, stock, name);
 }
 
+#ifndef TAGPU_LIMITS_STOCK
 /* A SITE WHOSE VALUE STANDS ALONE: the exe file may hold something other than stock 3.1 here
    without refusing the table, and Impure's own value is installed over it. Marking a site says
    three things, each of which has to be true of it: nothing of ours reads the value, no other
@@ -166,6 +167,7 @@ static void lim_file_ok(unsigned int va)
         if (s_lim[i].va == va) { s_lim[i].fileok = 1; return; }
     s_limMarkMissing = va;          /* a marked site that is not in the table is our bug */
 }
+#endif
 
 /* a fix of the table whose code stub could not be made: nothing of the table is written */
 static void lim_no_stub(void)
