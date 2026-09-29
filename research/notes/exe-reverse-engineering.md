@@ -2687,7 +2687,10 @@ drops the back ones.
   `GAFFrame` at `face+0x10`. **Bit 1 set and bit 2 set** — the team-coloured face:
   `0x4B7F30(face+0x18, PlayerInfo[id]+0x96)`, the sequence's frame for the id's **logo colour**,
   with `PlayerInfo[id]` = `*(main + id*0x14B + 0x1B8A)` (`0x459B34..0x459B58`; `id` is a stack
-  argument of this routine, `[esp+0x5F20]` — [INFERRED] the unit's owner byte `unit+0xFF`). **Bit 1
+  argument of this routine, `[esp+0x5F20]` — [INFERRED] the unit's owner byte `unit+0xFF`). The
+  same rule is coded a second time at `0x458603..0x45862E` (the PlayerInfo load is `0x45861C`),
+  where `id` is masked to a byte first (`and eax,0xFF` at `0x458603`) and the bit-1-set,
+  bit-2-clear case tests a stack argument, `[esp+0x3F84]`, in place of `ebx`. **Bit 1
   set, bit 2 clear** — `0x4B7F30(face+0x18, 0)` when `ebx` is non-zero (`ebx` is not traced), else
   `0x4B7EE0(&face+0x10)`, the animation state's current frame. The colour is the **player's chosen
   colour, not the slot**: a skirmish with slot 0 on colour 4 and slot 1 on colour 0 draws the
