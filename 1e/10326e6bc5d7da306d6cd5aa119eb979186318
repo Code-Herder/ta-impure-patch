@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=0a34734..1e10326 findings=0 acted=0 rejected=0 date=2026-09-28 — no defect; suggestion: the 'one window must fit whole' bound was unmeasured — acted in d35c434 (winpeak= census field; measured 843 KB / 1 344 ops peak, gui-renderer §29).
