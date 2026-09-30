@@ -1045,8 +1045,11 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   `0x48B12B`, `0x48B14E`, `0x48B169`), calls `0x47F780` for bits 0 and 2, then `0x41C110`, and
   sends `0x11` only for an active owner of type 1 or 2 (`0x48B1B5..0x48B1F3`). `0x47F780(unit,
   kind, 0)` acts only for a live unit of the viewed player and queues a status line through
-  `0x47FAD0` (table `0x5086E8`). Whether it reaches the sound entry `0x47F0C0` is open: no direct
-  call was found, and `0x47F0C0`'s callers are `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`.
+  `0x47FAD0` (table `0x5086E8`). It never reaches the sound entry `0x47F0C0`, whose callers are
+  `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`: the queue's consumer `0x47F680`, called once
+  per main-loop pass (`0x4999A6`), plays a reply through `0x47FD70` and `0x4D0640` by file name and
+  sends nothing. Bit 0 queues reply kind 3 or 4 (`0x48B110`, `0x48B135`), bit 2 kind 14 or 15
+  (`0x48B178`, `0x48B1AA`).
 - **A remote copy takes `+0x10E` only through `0x48B090`**, called twice (set the byte's bits,
   clear the rest) by the `0x11` receiver (`0x4555A1`, `0x4555B0`) and the round robin
   (`0x48B4F6..0x48B519`). Neither carries `+0x10F`, so a remote copy's `+0x10F` comes only from
@@ -1058,6 +1061,11 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   and `0x49E3A6` (the Aim scripts, in AutoAim). START (`0x4B18BB`) and CALL (`0x4B1928`) call only
   the allocator `0x4B08C0`, which calls nothing, and so does Impure's guarded step that replaces
   them: a start a script issues is never broadcast, and runs again on each copy from its parent.
+  Since those five sites are the broadcasters' only callers, a start the engine makes anywhere else
+  is shown only by the machine that runs the code making it: `HitByWeapon` (`0x489F43`) and
+  `TakeDamage` (`0x489F8E`) where the hit `0x489CE0` is applied, and `TransportPickup` (`0x406834`)
+  and `TransportDrop` (`0x4069BF`) through `0x4B0A70` and `EndTransport` (`0x40F433`, `0x41148D`,
+  `0x411794`, `0x411DA1`, `0x411E2B`) through `0x4B0940`, in the transport orders.
 - **Stock runs COB queries on remote units** in three places, with no owner gate: the `0x0D`
   receiver `0x49D270` on the branch where the weapon def's `+0x111` bit 5 is clear (the shooter
   from `msg+0x21`, through `0x49C740` to `Query<w>` at `0x43E227`, beside the `Fire*` and
@@ -1398,8 +1406,10 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   count; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
   at init.
 
-**The pointer fields**, each a row of the layout. An ID is always the pointer's offset in its
-table, never a field of the target, so a pointer to a dead unit keeps its ID.
+**The pointer fields**, each a row of the layout. An ID is one more than the pointer's row in its
+table, never a field of the target, so NULL's is 0 and a pointer to a dead unit keeps its ID. It is
+the recording's name for the row, not the engine's index: `+0x92`'s ID is one more than the type
+index `+0xA6` holds.
 
 - **`+0x00`, the mover** (0x2F bytes, constructor `0x43DC00`, destructor `0x43DD10`), made by the
   creates `0x485F50` and `0x4861D0` only when def `+0x22F` is 1 (`0x4860BB`, `0x4862CF`), freed
@@ -1515,7 +1525,7 @@ table, never a field of the target, so a pointer to a dead unit keeps its ID.
 | 8–10 | 84 / 24 / 0 % | the viewed player's contact with the unit | the radar pass `0x467440` (`0x4674F9`, `0x467814`) and its callbacks `0x467840`, `0x467960`, `0x467980`; create `0x485C48` | **the simulation**: the acquisition scan `0x40AA40`, every 30 ticks for every local seat (`0x40B2C0` from the players phase, `0x465037`), tests bit 8 (`0x40AB3F`) and bit 9 through `0x465AC0` (`0x40AB11`, `0x465B38`), filling the lists weapon targeting falls back to; the draw path too (the unit blit `0x459724`, the order-queue draw `0x439740`) |
 | 11 | 0 | cloak on | Cloak_On `0x403091`, Cloak_Off `0x4030C1`; create = def `+0x241` bit 4 (`0x485CCF`) | the economy pass `0x4017E1` |
 | 12 | 0 | an enemy near | the radar pass: cleared on every live unit (`0x4674B6`), set with `+0xB0` = GameTime + 90 for a type-1/2 owner's unit whose def has `+0x245` bit 13 when `0x40B0D0(owner, pos, def+0x208)` finds an enemy (`0x4676E8`) | the economy pass `0x4017ED` only |
-| 13 | 1.2 % | set at completion | `0x41B93D`, `0x41BC32`, `0x41BCA4`, round robin `0x48B4EC`; nothing clears it | none found |
+| 13 | 1.2 % | set while building and at completion: the build step sets it after writing HP (`0x41BC32`, `0x41BCA4`) | `0x41B93D`, `0x41BC32`, `0x41BCA4`, round robin `0x48B4EC`; nothing clears it | none found |
 | 14 | 0.0 % | dying | the hit `0x489EE5`, `0x41BA08`, `0x486171`, kill-all `0x486FAE`, round robin `0x48B42F`, debug key `0x495794`; cleared at create `0x485A9E` | the reaper `0x48AFB9`, about 19 "not dying" tests |
 | 15 | 0 | a mission's unit | `0x488482` (record byte `+0x23` bit 7); cleared by MakeSelectable | the AI (`0x4071F0`, `0x4089A0`, `0x40AA40`, `0x40B7B0`) |
 | 16 | 0.6 % | the altitude fix-up is due | the movers `0x43CC07`, `0x43CFE4`, `0x43D57F`, `0x43D8D3`, `0x43D9FA`, `0x43DA53`; `0x48AAB1`; round robin `0x48B6D8`; create; cleared by `0x43D7EB` and the fix-up `0x48A8A2` | `0x48A870` |
@@ -1587,7 +1597,7 @@ loader is `0x466050`.
 | `+0x2B`, `+0x49` | names, 30 bytes each | reset, activation, join, dispatcher | MEASURED: the bytes after the NUL are kept |
 | `+0x67`/`+0x6B` | the unit block's first and last unit, inclusive | `0x4858BD`, `0x4858E0` in `0x4854A0` only | MEASURED begin + 0x118·`+0x6F`/`+0x71` in all 960 records, 500 units a player |
 | `+0x6F`/`+0x71` | the block's first and last slot | `0x4858ED`, `0x4858F8` | |
-| `+0x73` | the controller as the local peer sees it: 1 and 2 local, 3 remote | ctor, reset, activation `0x464332`, the join (3, `0x450B16`), `0x465FB0`, loader; in play through `0x463C60`: the console's AI toggle `0x4161F0` flips 1 and 2, a leave writes 0 (`0x45401B`, `0x454054`) | the economy pass and the `0x28` send take 1 and 2 only; 3 gets no AI object and is the pacing's lag source |
+| `+0x73` | the controller as the local peer sees it: 1 and 2 local, 3 remote | ctor, reset, activation `0x464332`, the join (3, `0x450B16`), `0x465FB0`, loader; in play through `0x463C60`: the console's AI toggle `0x416280` flips 1 and 2, a leave writes 0 (`0x45401B`, `0x454054`) | the economy pass and the `0x28` send take 1 and 2 only; 3 gets no AI object and is the pacing's lag source |
 | `+0x74` | the AI object | init `0x4648C1` (not for an active type 3); activation 0 without a free; reset; teardown | the players phase (`0x46502A`) |
 | `+0x78` | control groups, 10 × 0x20 | `0x480190`, `0x4801F0` | kept by `0x480250(unit, group)` from unit `+0xAC`; the restore rebuilds it (`0x487270`) |
 | `+0x7C..+0x88` | sight counters; the grid's width, height and length | init `0x464849..0x46487B`; teardown | `0x4827B0`, `0x4816A0` |
@@ -1622,6 +1632,65 @@ loader is `0x466050`.
   chain member.
 - **Clocks in the unit record:** the one wall-clock value is the hover wave; the one GameTime stamp
   is `+0xB0`. The countdowns (`+0xFA`, `+0xFB`, the reload) count simulation ticks.
+
+### The demo recorder's capture: where it runs and what it reads [DISASSEMBLED + MEASURED 2026-09-29]
+
+S1 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder)
+(`tagpu_recorder.c`) reads the engine and writes none of it. It runs first in B2's stub on the sim
+step `0x495490`'s call of the unit tick (`0x4954ED`,
+[*Stacked aircraft in area damage*](#stacked-aircraft-in-area-damage-0x49a664-0x49a415-0x47cf98-0x4954ed-disassembled-measured-2026-09-25)),
+after the step's GameTime increment (`0x4954C0`), so it sees the world between two iterations. The
+step's network pump (`0x453D40` at `0x4954C8`) runs only for a nonzero argument (`test edi,edi` at
+`0x4954BE`, `je 0x4954ED` at `0x4954C6`): the frame function `0x496790` passes 1 in a network game
+(`main+0x2A44` bit 0, tested at `0x4967E7`; `push ebx` at `0x49680B`) and 0 otherwise, a skirmish
+among them (`push 0` at `0x49693C`, after the pause test at `0x496920`), so no pump runs before a
+recorded capture.
+
+| What | Where | The bound, and what else is established |
+|---|---|---|
+| the game mode | `[main+0x391E9]+0`, what `0x435100` (`mov eax,[ecx]`) returns | 2 in a skirmish, and in a skirmish loaded from a save: MEASURED, a skirmish saved at GameTime 1846 and loaded from the in-game menu read 2, and its first iteration was 1847 |
+| GameTime | `main+0x38A47` | a recording ends if it goes back without a teardown |
+| the unit array | begin `main+0x14357`, its last slot `main+0x1435B` (inclusive), `u16` slots `main+0x14351` | used only when last = begin + (slots − 1)·`0x118`; it lives from the level load `0x4854A0` to the teardown's first free, `0x485980` called at `0x491B95`, and the recording ends on entry to the teardown |
+| a unit's liveness and type | `+0x110` bit 28; `+0x92` | a slot whose type changes is recorded whole |
+| the unit types | `*(main+0x1439B)`, `main+0x1438F` of them, stride `0x249`, UnitName `+0x20` (`0x20` bytes) | the header's fingerprint, and the bound of a type ID |
+| units each | `u16 main+0x37EE6` | the header |
+| the players | ten records from `main+0x1B63`, stride `0x14B`: `+0x27` PlayerInfo (`+0x95` side, `+0x96` logo), `+0x2B` the name (`0x1E` bytes), `+0x73` the controller | PlayerInfo lives as long as the process: the constructor `0x463BE0` allocates it for main's eleven records (the loop at `0x41D98B`), the reset keeps it (`0x464508`), and the destructor `0x463C40` runs only on a stack-local record (`0x454538`, `0x454607`) — [*The per-map arrays*](#the-per-map-arrays-who-allocates-who-frees-and-in-what-order-mapped-by-us) |
+| the sort buckets | `*(main+0x1429F)`, `main+0x142A3` columns × `main+0x142A7` rows (LoadMap, `0x482C84..0x482CA6`), and the off-map bucket `*(main+0x142B7)` | an id row's table; one past the last bucket is an index (stock forms it at the east edge), and the off-map bucket has an ID of its own. `0x412834` compares a unit's `+0x82` with it: `mov edx,[0x511DE8]` (`0x412828`), `mov ecx,[esi+0x82]` (`0x41282E`), `cmp ecx,[edx+0x142B7]`, `jne 0x412849` DISASSEMBLED |
+| the map's name | `GameingState +0x204`, the TNT path | the file's name, read to `MAX_PATH` bytes: inside the object, whose fields run past `+0xDBC` (the list `0x423160` walks) |
+
+**A load from the in-game menu runs the teardown before the saved level loads, and the loaded game
+starts paused** [MEASURED 2026-09-29]: at the load's click the recording in progress ended through
+`tagpu_reclaim`'s wrap of `0x491B60`, at GameTime 1846; after the load `main+0x38A51` read 1 and
+GameTime stayed 1846 until a pause key, and no iteration ran, so a capture at `0x4954ED` sees
+nothing of a paused game.
+
+**The process's exit** [DISASSEMBLED 2026-09-29, and MEASURED the same day], read for the
+recorder's exit wait (`tagpu_recorder.h`, *The exit*). The CRT's entry `0x4E6FA0` calls WinMain
+`0x49EDA0` at `0x4E70ED` and hands its result to `exit` `0x4E4600` at `0x4E70F6`. `exit` is
+`doexit(code, 0, 0)` and `_exit` `0x4E4620` is `doexit(code, 1, 0)` [names INFERRED]. `doexit`
+`0x4E4660` first takes the CRT's exit lock, `_lock(13)` (`0x4E4720` calls `0x4EAC60` at
+`0x4E4663`), and releases it only on the path that returns to its caller (`0x4E4730` at
+`0x4E46F4`, for `0x4E4640` and `0x4E4650`), so the lock is held across `ExitProcess`. For `exit`
+it runs the atexit table (`0x52B654`/`0x52B658`) and both terminator tables; for `_exit` the `jne`
+at `0x4E469E` skips the atexit table and the first terminator table (`0x50106C`..`0x501074`). Then
+it calls `ExitProcess` through the IAT slot `0x4FC100` at `0x4E4708` — or, re-entered once
+`_C_Exit_Done` (`0x529F0C`) is 1, `TerminateProcess` (`0x4FC210`) at `0x4E467E`. The game calls
+`exit` itself at `0x417AF7`, `0x444381` and `0x4B62B3` (`0x4B6290`, after its message box), and
+`_exit` at `0x49E811` (the out-of-memory handler `0x49E700`) and `0x4DA0D1`; the entry's exception
+path calls `_exit` at `0x4E7119`. The CRT's fatal paths leave through the same slot: `_amsg_exit`
+`0x4E7150` [INFERRED name], 15 callers, calls `[0x50DF10]`, which holds `_exit`, with 255, and
+`0x4E7180`, called at `0x4E7002` and `0x4E7015`, calls `ExitProcess(255)` at `0x4E71A0`. Nothing
+reaches `0x4EADE0` (`FatalAppExitA`, `0x4FC27C`, then `ExitProcess(255)` at `0x4EADF2`) or the jump
+thunk `0x4FB12E`: no call, jump or stored address names either. The in-game
+exit to Windows is `0x491C60`: `0x4257A0`, `0x451B60`, the teardown `0x491B60` at `0x491C6A`, then
+`0x4B6230(0)` at `0x491C71`, which with a zero argument shows no message box (`MessageBoxA`,
+`0x4FC300`, at `0x4B626D` is skipped) and posts `WM_DESTROY` to the game's window
+(`PostMessageA`, `0x4FC2D0`, at `0x4B6282`). The exit menu's handler `0x4605C0` (stored at
+`0x4607D2`) calls it at `0x460626` when `[0x512FF8]` is 2, after setting bit 2 of
+`main+0x3923B`. So the teardown ends a recording before any of the exit runs, and the exe's
+`ExitProcess` slot is the one the fork's hook takes. MEASURED: a skirmish left by `EXITGAME` in a
+scratch build whose writer held three seconds before finishing: the recording ended at the
+teardown, the exit logged its wait for the one file, and the file was complete.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
@@ -4664,7 +4733,7 @@ records them), distance test, falloff and damage with no arithmetic of ours:
 | `0x49A664` | the 11 bytes above | `push [ebp+0xC]; push [ebp+8]; call air_first`; a unit → `esi`, `[esp+0x10] = 2`, `jmp 0x49A24E`; none → the 11 bytes and `jmp 0x49A66F` |
 | `0x49A415` | the 18 bytes above | a selector below 2 steps exactly as stock (the flags `jle` reads are stock's: `inc`, `cmp`, then a `mov`) and leaves for `0x49A214` or `0x49A427`; at 2, `call air_next` and `0x49A24E` again, or the 11 bytes and `0x49A66F` |
 | `0x47CF98` | `cmp eax,2; jne 0x47D0D5` | the same test, then `pushad; push esi; call air_note; add esp,4; popad; jmp 0x47CFA1` |
-| `0x4954ED` | `call 0x48AD30` | `call` to `pushfd; pushad; call air_rebuild; popad; popfd; jmp 0x48AD30`, which returns to `0x4954F2` |
+| `0x4954ED` | `call 0x48AD30` | `call` to `pushfd; pushad; call tagpu_rec_capture; call air_rebuild; popad; popfd; jmp 0x48AD30`, which returns to `0x4954F2`: the demo recorder's capture first ([above](#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)) |
 
 `air_first` builds the call's candidate list, in the frame B1's wrapper `dmg_area` already holds
 (32 slots inline, then a block from `0x4D83B0` freed when the call returns), from a pool of airborne
@@ -5191,8 +5260,8 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   on-screen list `main+0x1435F`, count `+0x14367`), owned by `main+0x2A43`, `+0x110` bit 28 set and
   bit 14 clear; then `0x47FAD0` on the queue `[0x51E68C]`. The queue: 8 entries of 17 bytes
   (`+0` index, `+4` GameTime, `+8` unit, `+0xC` text, `+0x10` priority), count `+0x99`, an index
-  already queued refused. The consumer `0x47FCA0` hands entry 0 to `0x47FD70` and removes it in
-  the same call. The per-index next time `0x5086EC + 24·index` (`0x50871C` for "Under Attack") is
+  already queued refused. The consumer is `0x47F680`, called once per main-loop pass (`0x4999A6`),
+  which plays an entry through `0x47FD70`; `0x47FCA0`, which also calls `0x47FD70`, has no caller. The per-index next time `0x5086EC + 24·index` (`0x50871C` for "Under Attack") is
   written at `0x47FEFD` only when the entry's sound plays. MEASURED: with sound off it stays 0
   while the text repeats.
 - **`+0xFA`, the recently-hit byte: its every writer** — the hit (`0x467954`), the unit tick's
@@ -12212,16 +12281,19 @@ owner holds its own value; a copy's value comes from exactly these writers:
     `0x48605A`) comes before its first call (`0x4860A0`), so a NULL create sends nothing. A unit
     returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
     `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
-    `+0x241` bit 18) a `0x13` and a `0x11`. The `0x12`, that activation and a def with `+0x241`
+    `+0x241` bit 18) a `0x11`. The `0x12`, that activation and a def with `+0x241`
     bit 24's `+0xF5 = 7` and `+0x110` bit 14 (`0x48614D..0x486171`) all sit behind `finished`
     (`test edi,edi` at `0x48611A`, else to `0x486177`); every create runs the sight stamp
     `0x482AC0` (`0x486178`) and counts `+0x144` and `+0x140` (`0x486187`, `0x48619C`)
     [DISASSEMBLED 2026-09-28]. The create calls `0x48B090` as `0x48B090(1, 1)`, which newly sets
     bit 0 only, so of its per-bit paths only bit 0's runs: the unit's `Activate` script started
-    by name through `0x4B0940` (`0x48B106`, the name at `0x501280`) and a `0x13` (18 bytes, `0x48B110` → `0x47F780(unit, 3, 0)` → … →
-    `0x47F0C0`, sent at `0x47F14C`); its bit-2 path (`0x48B16E..0x48B1AA`, a `0x13` at `0x48B1AA`
-    and the `call [eax]` loop at `0x48B195`) is not reached. Then the `0x11` (4, `0x48B1F3`, a local
-    player's unit). **So a create's direct calls send at most 4 messages, 92 bytes.** Not followed:
+    by name through `0x4B0940` (`0x48B106`, the name at `0x501280`) and reply kind 3 queued
+    (`0x48B110` → `0x47F780(unit, 3, 0)`), which sends nothing; its bit-2 path
+    (`0x48B16E..0x48B1AA`, reply kinds 14 and 15 and the `call [eax]` loop at `0x48B195`) is not
+    reached. Then the `0x11` (4, `0x48B1F3`, a local player's unit). **So a create's direct calls
+    send at most three messages**: 32 bytes in stock, and 74 in Impure's build, where the `0x09`
+    goes as B8's 65-byte `0x4A`. B8's queue holds four messages and 92 bytes, a bound that counted
+    a `0x13` this path never sends. Not followed:
     the COB interpreter a started script runs in (`0x4B0DA0`, 19 callbacks, and `0x4B1C00`, 4), and
     `0x49059A` and `0x4905BC` (`0x490580`, at `0x4861AE`) [INFERRED: a unit's script calls]. A
     Create or Activate script can send a `0x13`, `0x11` or `0x0A` through the host vtable `0x4FD698`

@@ -520,8 +520,11 @@ int tagpu_datakeys_units_install(void)
 static void alert_install(void);
 static void vet_panels_install(void);
 
+static void ghost_install(void);
+
 void tagpu_datakeys_init(void)
 {
+    ghost_install();
     alert_install();
     vet_panels_install();
     tagpu_datakeys_units_install();
@@ -791,8 +794,19 @@ static const SimField ghost_layout[] = {
     SIM_FIELD(DkGhost, cob, SIMF_ADDR, SIM_ID_NONE),
     SIM_FIELD_END
 };
-static DkGhost s_ghost[TAGPU_LIM_TYPES];
-SIM_ROWS(s_ghost, SIM_STATE, SIM_ID_UNIT_TYPE, ghost_layout);
+/* A heap block of TAGPU_LIM_TYPES rows, taken by tagpu_datakeys_init and never freed: a heap
+   table's pages are write-watched, so the demo recorder images only the ones written rather than
+   comparing 852 KB every iteration (tagpu_recorder.c). */
+static DkGhost* s_ghost;
+SIM_BLOCK(s_ghost, SIM_STATE, SIM_ID_UNIT_TYPE, TAGPU_LIM_TYPES, ghost_layout);
+
+static void ghost_install(void)
+{
+    s_ghost = (DkGhost*)SIM_ALLOC(s_ghost, TAGPU_LIM_TYPES * sizeof *s_ghost);
+    if (!s_ghost)
+        dlog("ghost masks NOT kept: no memory for their memo; every ghost shows every piece its "
+             "list keeps");
+}
 
 static void ghost_compute(const char* def, const char* root, const char* cob, unsigned cobsz,
                           const DkUnit* rec, DkGhost* g)
@@ -859,7 +873,7 @@ int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out)
     unsigned n, gen, serial = 0;
     DkGhost* g;
 
-    if (!ptr_ok(ta) || !type || type >= TAGPU_LIM_TYPES) return 0;
+    if (!s_ghost || !ptr_ok(ta) || !type || type >= TAGPU_LIM_TYPES) return 0;
     n = *(const unsigned*)(ta + OFF_UDEFCOUNT);
     if (type >= n) return 0;                          /* the bound every model id takes */
     base  = *(const char* const*)(ta + OFF_UNITDEFS);

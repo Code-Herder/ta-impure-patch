@@ -49,7 +49,9 @@ void* tagpu_sim_alloc(const SimDesc* d, size_t bytes)
         return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (d->flags & SIMD_GUARD)
         return VirtualAlloc(NULL, bytes, MEM_RESERVE, PAGE_NOACCESS);
-    if (d->flags & (SIMD_HEAP | SIMD_TLS))
+    if (d->flags & SIMD_HEAP)               /* the recorder asks which pages were written */
+        return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE);
+    if (d->flags & SIMD_TLS)
         return VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     sim_fail(d, "allocates, but is declared as no heap table, TLS slot, code or guard");
     return NULL;
@@ -205,7 +207,40 @@ static void lever_show(char* out, size_t cap, unsigned i)
     out[j] = 0;
 }
 
+unsigned tagpu_simreg_levers(void)
+{
+    return s_closed ? (s_levers < SIM_LEVERS ? s_levers : SIM_LEVERS) : 0;
+}
+
+const char* tagpu_simreg_lever_at(unsigned i, int* set, const char** text, int* len)
+{
+    if (i >= tagpu_simreg_levers()) return NULL;
+    *set = s_lever[i].set;
+    *text = s_lever[i].len >= 0 ? s_lever[i].text : NULL;
+    *len = s_lever[i].len;
+    return s_lever[i].file;
+}
+
 /* ---- the walk ------------------------------------------------------------------------------ */
+
+/* The declarations the attach walk accepted, in the list's order: a recording names a table by
+   its index here, and its header maps each index to the declaration's name. Written once, by the
+   attach walk on DllMain's thread, before any game thread exists. */
+#define SIM_MAXDECL 1024
+#define SIM_STR_(x) #x
+#define SIM_STR(x)  SIM_STR_(x)
+static const SimDesc* s_ok[SIM_MAXDECL];
+static unsigned       s_nok;
+
+unsigned tagpu_simreg_count(void)
+{
+    return s_closed ? s_nok : 0;
+}
+
+const SimDesc* tagpu_simreg_at(unsigned i)
+{
+    return i < tagpu_simreg_count() ? s_ok[i] : NULL;
+}
 
 /* NULL when the declaration's shape is one the recorder can walk, else what is wrong with it */
 static const char* sim_shape(const SimDesc* d)
@@ -286,6 +321,13 @@ void tagpu_simreg_attach(void)
             if (why) sim_fail(d, why);
             else tagpu_logf("simreg: FAILED %s (declared at line %u) declares memory that %s "
                             "(line %u) declares", d->name, d->line, twin->name, twin->line);
+            continue;
+        }
+        if (s_nok < SIM_MAXDECL) {
+            s_ok[s_nok++] = d;
+        } else {
+            bad++;
+            sim_fail(d, "is past the recorder's list of " SIM_STR(SIM_MAXDECL) " declarations");
             continue;
         }
         cls[d->cls]++;

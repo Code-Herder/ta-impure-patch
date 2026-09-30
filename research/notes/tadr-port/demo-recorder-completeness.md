@@ -44,7 +44,7 @@ per field or bit range, each with a class, its engine writers and the evidence:
 
 | Class | Meaning | Rows |
 |---|---|---|
-| `id:<table>` | a pointer, recorded and compared as its target's ID in `unit`, `type`, `weapon`, `player` or `bucket`; the ID is the pointer's offset in its table, never a field of the target, so a pointer to a dead unit keeps its ID | 13 |
+| `id:<table>` | a pointer, recorded and compared as its target's ID in `unit`, `type`, `weapon`, `player` or `bucket`; the ID is one more than the pointer's row in its table (so `NULL` is 0), never a field of the target, so a pointer to a dead unit keeps its ID | 13 |
 | `object` | a pointer to an engine object recorded by a record of its own (the mover, the order lists, the COB object, the model, the AI, the sight counters…) | 10 |
 | `cache` | not recorded; the engine recomputes it from recorded state, and it is compared after that recompute | 2 |
 | `timer` | not recorded; on a clock a replay does not reproduce | 4 |
@@ -92,7 +92,7 @@ the skirmish slice brings:
 - **Players are keyed by the transport ID `+0x04`**, which the applier keeps distinct between
   active records, translating a recorded one through the recording's key: the death path turns the
   killer's player index into a transport ID and back (`0x44FFD0`, `0x44FE40`) into unit `+0xF4`.
-  The controller `+0x73` changes in play (the console's AI toggle `0x4161F0` flips 1 and 2, a leave
+  The controller `+0x73` changes in play (the console's AI toggle `0x416280` flips 1 and 2, a leave
   writes 0), so the recording carries each change, while a puppet host holds 3 for every puppet.
 - **A seek sets the viewer's DisplayTimer `+0xF8` to GameTime**, as the level init does: the draw
   path raises it by 30 whenever GameTime has passed it and then refreshes the resource bar, so
@@ -100,11 +100,11 @@ the skirmish slice brings:
 - **Other writers on a replay host**, for the puppet dispositions the skirmish slice decides (on a
   puppet the recorder is the only writer): the radar pass writes bits 8–10 and clears bit 12 on
   every live unit on the viewed player's pass (`0x4674B6`); the scoreboard `0x4948E0` compacts the
-  ranks `+0x148` from the draw path while it is shown; and the receive timeout `0x453C20` reads
-  every active type-3 record's `+0x1C` against the wall clock (experiment 1's puppets ran for
-  minutes and were never dropped; whether a skirmish reaches it is not established). The
-  recording carries the recording viewer's contact bits, so showing another perspective's radar
-  in playback is decided there too.
+  ranks `+0x148` from the draw path while it is shown. The receive timeout `0x453C20`, which reads
+  every active type-3 record's `+0x1C` against the wall clock, is never reached in a skirmish: its
+  one caller `0x455F64` is inside the network pump `0x453D40`, which returns at once unless
+  `main+0x2A44` bit 0 is set (`0x453D4B`). On a puppet host the engine computes the contact bits
+  for the viewed player (*Decisions taken*, 2026-09-30).
 - **Order nodes carry draw-path state**, for their own layout: the order-queue draw `0x439740`
   (DrawGameScreen → `0x48CC30` → `0x439B30`) writes a node's `+0x32`/`+0x34` and `+0x42` bit 21
   for a selected unit's queue, depending on the selection and on bit 9.
@@ -180,8 +180,11 @@ and three install forms, `SIM_LOCK`, `SIM_CODE` (executable memory an installer 
 slot, unit type, player, weapon, or a DirectPlay player ID (the session's, not the recording's).
 
 **Tables store IDs, not addresses, or declare their layout.** A row whose bytes are not all plain
-values names the others: an ID (`SIMF_ID`); the address of what an ID names (`SIMF_ADDR`, a def or
-a weapon record, whose ID is the value; with no key, other process memory that is never a value); a
+values names the others: the engine's own index of something (`SIMF_ID`, a slot, a type index, a
+player index or a weapon ID), recorded as it is; the address of what such an index names
+(`SIMF_ADDR`, a def or a weapon record), recorded as the target's ID, one more than its row, so
+never equal to the engine's index for the same target; with no key, other process memory that is
+never a value; a
 block the row owns (`SIMF_OWNED`, allocated through its table); a process-local value (`SIMF_LOCAL`,
 a serial or a clock); a struct-of-arrays column and its count (`SIMF_COLUMN`, `SIMF_COUNT`); the
 engine's weapon target (`SIMF_TARGET`, a unit slot when the second u16 is `0x8000`, else a ground
@@ -193,7 +196,10 @@ an owned block and `serial` process-local.
 
 **Everything else comes through the wrappers.** Memory belongs to a declaration. `SIM_ALLOC` and
 `SIM_FREE` serve the memory its variable points at, from `VirtualAlloc`: a heap table's rows, a
-TLS slot's buffer, code (executable) and a guard (reserved with no access). `SIM_ALLOC_OWNED` and
+TLS slot's buffer, code (executable) and a guard (reserved with no access). A heap table's pages
+are write-watched (`MEM_WRITE_WATCH`), so the recorder images only the rows on pages written since
+its last capture; a large table is best declared on the heap for that reason
+([the skirmish slice](demo-recorder-skirmish-slice.md#the-capture)). `SIM_ALLOC_OWNED` and
 `SIM_FREE_OWNED` serve a block one of its rows owns, from the process heap. They are separate
 calls so that a heap table whose rows own blocks takes each from the right place; a call the
 declaration does not own memory for gets NULL and a `simreg: FAILED` line naming it. Scratch that
@@ -302,24 +308,29 @@ engine facts are in the engine map's *The nano spray*
 **COB on a puppet has one writer.** In puppet mode COB's SET, ATTACH and DROP change no engine
 state, and the recorder alone writes `+0x10E`, `+0x10F` and the carry links; it applies `+0x10E`
 through `0x48B090`, which returns early on an unchanged byte, so each recorded change starts its
-scripts once. Script starts are recorded only at the five broadcaster call sites: a start a script
-issues never reaches them and runs again on the puppet from its parent, so recording it anywhere
-else would double it. For the same reason a puppet's order nodes never carry `+0x42` bit
-`0x400000`, whose destruction would start a second `StopBuilding` [INFERRED from the destructor,
-`0x43A21E..0x43A25D`]. Getter 75 answers the recording machine's bit for the queried unit's seat.
+scripts once. Script starts are recorded at the five broadcaster call sites, and where the engine
+starts a script that only the owner's machine does: `HitByWeapon` (`0x489F43`) and `TakeDamage`
+(`0x489F8E`) in the hit, which a replay host never applies, `TransportPickup` (`0x406834`),
+`TransportDrop` (`0x4069BF`) and `EndTransport` in the transport orders, and `TargetCleared`. A start a script issues reaches neither and runs again on the puppet
+from its parent, so recording it would double it. For the same reason a puppet's order nodes are
+held disarmed, so that destroying one runs no owner code: `+0x06` bit 1 clear (the handler's own
+call), `+0x42` bit `0x400000` clear (a second `StopBuilding`, `0x43A21E..0x43A25D`), `+0x52` NULL
+(the handler's owned object), and `+0x42` bit `0x10000` set, without which the destructor resets the
+unit's weapon targets through `0x489800` (`0x43A2AB..0x43A2B9`): the `puppet0` and `puppet1` rows of
+2026-09-30. Getter 75 answers the recording machine's bit for the queried unit's seat.
 The engine facts are in the engine map's *COB on a puppet*.
 
 ### Always-on self-verification
 
-At each tick boundary the game thread copies a rotating slice of the real state (for example 50
-unit records, one player record and their declared rows); the writer thread compares it with the
-recorder's own copy of the world. At 50 units a tick, 1,500 units are checked within 30 ticks. A
-mismatch writes the true values into the recording as a correction, names the field in the file's
-metadata and logs one line per field; in the harness it fails the test. Capture happens at the
-unit-tick call `0x4954ED` (B2's stub) and is diffed on the writer thread. Copying 1,500 unit
-records takes about 6.5 µs on a host benchmark [INFERRED for the game]. Feasibility experiment 3's
-probe read and compared all 1,432 units of a battle every tick in 0.094–0.123 ms on average
-(MEASURED, [evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)).
+At each tick boundary the game thread copies a rotating slice of the real state — the next
+thirtieth of the unit slots, one player record and 16 KB of declared rows — and the writer thread
+compares it with the recorder's own copy of the world, so every unit slot is checked within 30
+ticks. A mismatch writes the true values into the recording as a correction, counted by record,
+table and offset in the file's end block, and the first sixteen are logged; in the harness it fails
+the test. Capture happens at the unit-tick call `0x4954ED` (B2's stub) and is compared on the writer
+thread. S1's capture, which includes this slice, costs about 80 µs a tick in a four-player game and
+235–251 µs in a battle of 1,200 to 1,400 units (MEASURED,
+[the skirmish slice](demo-recorder-skirmish-slice.md#measured)).
 
 ## The replay test harness
 
@@ -385,9 +396,9 @@ rests on.
    - **The exclusion file — built 2026-09-29.** `replay-layout.tsv`, 39 rows from what the savers
      `0x4876C0` and `0x4662F0` write, the header generated from it, and
      `tools/replay-layout-check.sh` before the link.
-2. **With the skirmish slice:** capture at `0x4954ED` and the recording header's lever list (the
-   registry's list), with the recorder that uses them; self-verification over units, players and
-   declared tables; root and sink counting; the main block and `.data` with the null twin; puppet
+2. **With the skirmish slice** ([its plan](demo-recorder-skirmish-slice.md) cuts it into five landings): capture at `0x4954ED` and the recording header's lever list (the
+   registry's list), with the recorder that uses them, and self-verification over units, players and
+   declared tables — **S1, landed 2026-09-29**; root and sink counting; the main block and `.data` with the null twin; puppet
    dispositions and fixtures; the one-writer rule and getter 75 per seat; the nano spray's recording
    and playback; the landing run and the nightly tier with its timer, and with the harness the
    CLAUDE.md replay gate and the landing command's Step 4b.
@@ -428,19 +439,26 @@ writes on puppets, and every loosening.
 | 2026-09-29 | **Four files are simulation code**: `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c` and `tagpu_cobtrace.c` are `sim`; every other file on `thread-split.allow` is `presentation`. |
 | 2026-09-29 | **Step 1 is two landings.** The first brings the declarations, the wrappers, the build check and the CLAUDE.md section; the second, the exclusion file. Capture at `0x4954ED` and the recording header's lever list move to the skirmish slice, with the recorder that uses them; the CLAUDE.md replay gate and the landing command's Step 4b land with the harness. |
 | 2026-09-29 | **The exclusion file's drop and timer rows are approved.** A player record's own network session and clocks are neither recorded as values nor compared: the transport ID `+0x04`, the host's number `+0x0C`, the message count `+0x10`, the load progress `+0x20`, the session flags `+0x21` and the controller as the local peer sees it `+0x73`, and the join time `+0x08`, the ping `+0x14`, the peer's GameTime `+0x18` and the last receive `+0x1C`. The recording carries the transport ID as the player's key and each change of the recorded controller, and a puppet host stamps `+0x18` itself. The viewer's own state is dropped — unit `+0x110` bits 4 (selected), 6–7 (two marks) and 22–25 (the build menu's page), and the player's DisplayTimer `+0xF8` — so a replay or a takeover shows the replay viewer's own selection and menus. **The viewed player's contact bits 8–10 are recorded**: the acquisition scan `0x40AA40` reads them every 30 ticks for every local seat, and between the radar pass's runs they are history, so a takeover restores what the recording's AI saw; a replay shows the recording viewer's radar picture. Rejected: recording the session fields, which differ legitimately between every peer and replay machine, and dropping the contact bits, after which a takeover resumes with different target lists. |
+| 2026-09-30 | **The mover's and the order node's rows are approved, with the class `puppet0`/`puppet1`**, for the skirmish slice's S2a: the mover's class object `+0x00` and `+0x2E` bits 3–7 `drop`, its movement class `+0x04` `cache`; the order node's list unit `+0x0E` and reference links `+0x1A`/`+0x1E` `cache`, and the draw's last-seen cache `+0x32`, `+0x34` and `+0x42` bit 21 `drop`. A `puppet0`/`puppet1` field is recorded and compared off a puppet, held at 0 or set on a puppet, and restored by a takeover: the node's `+0x06` bit 1, `+0x42` bit 22 and `+0x52` held 0, and `+0x42` bit 16 held set, so destroying a puppet's node only unlinks and frees it. |
+| 2026-09-30 | **On a puppet host the engine computes the contact bits for the viewed player**: the host's radar pass runs for `+0x2A43`, the recorded bits are kept for a takeover and compared when the recording viewer's perspective is shown. This amends 2026-09-29's "a replay shows the recording viewer's radar picture": that perspective shows it, computed by the engine from the same inputs, and every other perspective shows its own player's radar, as the product page has it. Rejected: skipping the host's radar pass and writing the recorded bits, which shows the recording viewer's radar in every perspective, full visibility included. |
 
 ## Open items
 
-Both for the skirmish slice:
+For the skirmish slice:
 
-1. **Does `0x48B090` play a sound?** A change of `+0x10E` bits 0 and 2 calls `0x47F780`, which
-   queues a status line through `0x47FAD0`. Neither calls the sound entry `0x47F0C0` directly, the
-   deeper calls of `0x47FD70` are not traced, and a source comment in `tagpu_patches.c` claims the
-   chain. The answer decides whether a recorded `+0x10E` change applied on a puppet duplicates a
-   recorded sound.
-2. **Applying a recorded YARD_OPEN.** The live owner already passed `0x47D970`'s refusal, so the
-   applier bypasses it and restamps as `0x47DAC0` does (`0x47C790`, `0x440A40`); neither function has
-   been read.
+1. **Applying a recorded YARD_OPEN.** The live owner already passed `0x47D970`'s refusal, so the
+   applier bypasses it and restamps as `0x47DAC0` does (`0x47C790`, `0x440A40`). Read for S2's plan,
+   applied in S2b; until S3 records the footprint grid, which unit holds a contested cell can
+   differ from the recording.
+
+Answered while planning S2 (2026-09-30): **`0x48B090` plays unit replies, never a network sound.**
+A change of `+0x10E` bit 0 queues reply kind 3 or 4 and of bit 2 kind 14 or 15 through `0x47F780`
+(`0x48B110`, `0x48B135`, `0x48B178`, `0x48B1AA`), for the viewed player's live units only. The queue's
+consumer `0x47F680`, called once per main-loop pass (`0x4999A6`), plays a reply through `0x47FD70`
+and `0x4D0640` by file name. Nothing on that path calls the sound entry `0x47F0C0`, whose four callers
+are `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`, so no `0x13` is sent. S2 records the replies
+and makes the engine's own reply calls inert on a puppet host, so a recorded `+0x10E` change applied
+there plays nothing twice.
 
 Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
 machine's view, so other players' owner-only indicators, which that machine never showed, are

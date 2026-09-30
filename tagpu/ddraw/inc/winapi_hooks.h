@@ -84,6 +84,7 @@ BOOL WINAPI fake_GetDiskFreeSpaceA(
     LPDWORD lpTotalNumberOfClusters);
 
 DWORD WINAPI fake_GetVersion(void);
+VOID WINAPI fake_ExitProcess(UINT uExitCode);
 BOOL WINAPI fake_GetVersionExA(LPOSVERSIONINFOA lpVersionInformation);
 
 HWND WINAPI fake_CreateWindowExA(

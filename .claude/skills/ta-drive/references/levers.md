@@ -402,6 +402,7 @@ that map's size.
 | `tracer.on` | the unit-draw tracer (installs at attach) |
 | `spxlog.on` | the sub-pixel anchor filmstrip log |
 | `gui_census.trigger` | with `gui.on=census pgm`: writes the accumulated residual mask to `tagpu_gui_census.pgm` |
+| `recorder.on` | the demo recorder records a skirmish to `gamedir/replays/`; looked for at each level's first iteration, so arm it before the level starts (`references/modules.md`) |
 | `tagpu_<pass>.ab` | the one-frame capture (`references/measuring.md`) |
 | `dmgdelay.on=K` | **test only, never on a player's instance**: every hit this peer sends leaves K ticks late (default 30, at most 3600), so a hit lands after its victim's slot has been reused; logs `enginefix: stale hits: TEST LEVER …` and a `take <slot> (first-free <slot>) at <GameTime>` line per local create. Arm it on the attacking peer (`references/modules.md`, *Stale hits*) |
 | `ghostq.off` | **test only**: the ghost-commander queue holds and notes nothing, so a create refused during the load waits for the round robin as on stock; the dirty create's position still applies, which is how that half is measured alone. Logs `enginefix: ghost commander: TEST LEVER …` |

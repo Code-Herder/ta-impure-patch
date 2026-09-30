@@ -445,10 +445,14 @@ eye to the command apply at the next in-play draw.
   destructor `0x43A1F0` runs the order's handler with event 2 when `node+6` has bit `0x02`, and
   BuildingBuild's cleanup then deals the unfinished nanoframe 30,000 (`0x402701`); it starts
   `StopBuilding` when `+0x42` has bit `0x400000`. So the applier's shift-0 order to a factory
-  mid-build kills its nanoframe. A puppet's order nodes are therefore written with neither bit,
-  so that replacing them runs no handler and starts no script [INFERRED from the destructor].
-- **Untraced** (T15): rally inheritance (`0x41B8D0` copies no order). Adopting an existing
-  nanoframe into an order is measured (*Rebuild, takeover and rewind, measured*, below).
+  mid-build kills its nanoframe. And when `+0x42` lacks bit `0x10000`, it resets the unit's weapon
+  targets through `0x489800` (`0x43A2AB..0x43A2B9`). A puppet's order nodes are therefore held with
+  neither of the first two bits, `+0x52` NULL and bit `0x10000` set, so that replacing them runs no
+  handler, starts no script and resets no target (the skirmish slice's `puppet0`/`puppet1` rows).
+- **Rally inheritance** (T15) is the new unit's GetBuilt handler `0x402DA0`, not `0x41B8D0`: once
+  the unit is complete and has a mover, it walks its builder's main list (`0x402E01`) and queues
+  each `QMove` and `QPatrol` there on itself through `0x43ADC0` (`0x402E5E`) (DIS). Adopting an
+  existing nanoframe into an order is measured (*Rebuild, takeover and rewind, measured*, below).
   **Carried units** (T18): `+0x86` carrier, `+0x8A` first passenger, `+0x8E` next, `+0xF9` attach
   point, written by the attach `0x48AB70`, which `0x48AAC0` calls. `+0x8E` is the carrier's chain
   while `+0x86` is set and the sort bucket's list otherwise, and the order of both reaches the
@@ -490,7 +494,7 @@ recording needs a slot remap from its DPID-ordered blocks. Weapon state, the mov
 path and any squad state beyond membership are lost unless each gets a writer; cloak and squad
 membership have one (`0x48B090`, `0x480250`).
 
-**Open:** rally inheritance; the rest of the move object's layout (its path); the applier's caps
+**Open:** the rest of the move object's layout (its path); the applier's caps
 (`tagpu_scenario.c:139-145`); clearing a loaded transport [INFERRED: the passengers, hit first,
 die with a nonzero severity]. Settled by *Rebuild, takeover and rewind, measured* (below): live
 queue writing (`0x43ADC0` with shift 0 then 1, `0x419B00` by name, at the apply point); nanoframe
@@ -848,7 +852,7 @@ recorded.
 | 4 | **1,500-unit rebuild in play**: argument-8 creates, B4's hold, a paused apply, timed against the 1 s seek and 2 s takeover | seek and takeover feasibility: **11–47 ms for 1,227–1,432 units, paused or not** (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
 | 5 | **Seat to AI without a reload**: flip the seat, build the `+0x74` and `0x5119C0` objects, then re-create its units at their recorded slots (fresh COB, a local mover); does the AI keep, override or re-plan orders? Does an Escalation factory's one-shot `Upgrade` run in the fork? | takeover without a loading screen: **0.8–1.2 ms per seat; the AI plans, builds and fights**; `Upgrade` not run (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
 | 6 | **Live rewind**: live seats flipped to 3; what their kept `+0x74` objects and local movers do (getter 75 keeps answering the recorded bit, 1 for every skirmish seat, so running scripts stay on their branch) | rewind in a live skirmish: **works, with flip-then-create and the pacing stamp**; features and wrecks not rebuilt (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (1), (2) |
-| 7 | **Queues**: direct `0x43ADC0` appends, `0x43B0B0`/`0x419B00` by name, rally, nanoframe adoption | queue fidelity at a takeover: **queues, the rally and builds in progress continue**, their frames adopted; rally inheritance open (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
+| 7 | **Queues**: direct `0x43ADC0` appends, `0x43B0B0`/`0x419B00` by name, rally, nanoframe adoption | queue fidelity at a takeover: **queues, the rally and builds in progress continue**, their frames adopted (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)); a new unit inherits the rally in its GetBuilt handler `0x402DA0` (DIS) | (2) |
 | 8 | **Resources** through `+0xDC/+0xE0` and `+0x149`; residual divergence from fire spread, feature damage, meteors and grid claims | resources at a takeover: **restored**; puppet drift not measured (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2), (3) |
 | 9 | **A real hour**: AI, structures, air, orders, camera, and the recorder's game-thread cost | *f*, the disk budget, the 0.5 ms per tick budget: **no hour yet**. An 8-minute AI game and four 1,432-unit battles: 0.094–0.123 ms per tick, worst 0.87 ms; size in [§4](#4-size-estimate) (MEASURED, [§1](#recording-and-replay-measured)) | (3) |
 

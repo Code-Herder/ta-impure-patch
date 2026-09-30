@@ -5,11 +5,11 @@
 #define TAGPU_REPLAY_LAYOUT_H
 
 #define TAGPU_REPLAY_LAYOUT_SHA256 "4d740e0b4171507bdd5a5b24b616048cd619401df0e1874c8d46a3c6f6b9e0bd"
-#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "1ee5eb2974729007567e331254ba86970e8ff5704c33a60f4ddb1aa0fa8dd310"
+#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "d59f7f7421611ef5bff748f8b65b97dbeac5beaa610de3bbd8cb2af599ce5aa9"
 
 enum { RL_UNIT, RL_PLAYER };
 enum { RL_ID, RL_OBJECT, RL_CACHE, RL_TIMER, RL_DROP };
-enum {              /* an id row's table: the ID is the pointer's offset in it */
+enum {              /* an id row's table and the row its pointer names; the recorded ID is one more */
     RL_T_NONE,
     RL_T_UNIT,     /* the slot: (pointer - the unit array's begin) / 0x118 */
     RL_T_TYPE,     /* (pointer - *(main+0x1439B)) / 0x249, the unit-type definitions */

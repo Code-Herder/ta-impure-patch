@@ -21,6 +21,7 @@
 #include "tagpu_cob_safe.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_simreg.h"
+#include "tagpu_recorder.h"
 #include "git.h"
 
 static void plog(const char* s)
@@ -4431,7 +4432,7 @@ static int fix_stacked_air(void)
     unsigned char *t, *s, *m, *k, *p;
 
     InitializeCriticalSection(&s_airLock);
-    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(16);
+    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(24);
     if (!t || !s || !m || !k) { lim_no_stub(); return FIX_TABLE; }
 
     /* the walk's end: push [ebp+0xC]; push [ebp+8]; call air_first; test eax,eax; jz tail;
@@ -4481,11 +4482,15 @@ static int fix_stacked_air(void)
     *p++ = 0x61;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x0047CFA1); p += 4;
 
-    /* the unit tick's call: pushfd; pushad; call air_rebuild; popad; popfd; jmp 0x48AD30 --
-       the return address the site's call pushed stays on top, so 0x48AD30 returns to 0x4954F2 */
+    /* the unit tick's call: pushfd; pushad; call tagpu_rec_capture; call air_rebuild; popad;
+       popfd; jmp 0x48AD30 -- the return address the site's call pushed stays on top, so
+       0x48AD30 returns to 0x4954F2. The demo recorder's capture comes first: it records the
+       world between two iterations (tagpu_recorder.c), and the pool it records is the one the
+       last iteration left, which air_rebuild then derives again from the units it records. */
     p = k;
     *p++ = 0x9C;
     *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_rec_capture); p += 4;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_rebuild); p += 4;
     *p++ = 0x61;
     *p++ = 0x9D;
@@ -4498,7 +4503,7 @@ static int fix_stacked_air(void)
     lim_branch(0x0047CF98, sizeof stamp, stamp, 0xE9, (unsigned int)(size_t)m,
                "stacked aircraft: the stamp's airborne path joins the pool");
     lim_branch(0x004954ED, sizeof tick, tick, 0xE8, (unsigned int)(size_t)k,
-               "stacked aircraft: the pool rebuilt before the unit tick");
+               "stacked aircraft: the pool rebuilt before the unit tick, after the recorder's capture");
     return FIX_TABLE;
 }
 
@@ -6423,6 +6428,7 @@ static void hit_no_memory(unsigned int room)
     MessageBoxA(NULL, "Total Annihilation: Impure ran out of memory while starting the level, "
                 "so the game will now close.", "Total Annihilation: Impure",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    tagpu_rec_exit();   /* the fork's own ExitProcess does not pass through its hook */
     ExitProcess(1);
 }
 
@@ -7834,10 +7840,14 @@ static int fix_ghost_commander(int wire)
 
 static unsigned char  s_txCarried[65536];    /* the running destructor call's decision        */
 SIM_VAR(s_txCarried, SIM_TRANSIENT);
-static unsigned int   s_txMark[65536];       /* a dying passenger's birth stamp + 1, 0 = none */
-SIM_ROWS(s_txMark, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
-static unsigned int   s_txKillMark[65536];   /* the token of the kill-all that detached it    */
-SIM_ROWS(s_txKillMark, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
+/* The two mark tables are heap blocks of TX_ROWS entries, taken by fix_transported and never
+   freed: a heap table's pages are write-watched, so the demo recorder images only the ones
+   written rather than comparing 512 KB every iteration (tagpu_recorder.c). */
+#define TX_ROWS 65536
+static unsigned int*  s_txMark;              /* a dying passenger's birth stamp + 1, 0 = none */
+SIM_BLOCK(s_txMark, SIM_STATE, SIM_ID_UNIT_SLOT, TX_ROWS, NULL);
+static unsigned int*  s_txKillMark;          /* the token of the kill-all that detached it    */
+SIM_BLOCK(s_txKillMark, SIM_STATE, SIM_ID_UNIT_SLOT, TX_ROWS, NULL);
 static volatile LONG  s_txKillGen;           /* the last token drawn                          */
 SIM_VAR(s_txKillGen, SIM_STATE);
 static DWORD          s_txKillTls = TLS_OUT_OF_INDEXES;  /* the thread's kill-all token, 0 none */
@@ -7852,9 +7862,10 @@ SIM_VAR(s_txDiag, SIM_PRIVATE);
 static unsigned int   s_txWrapRet;           /* tx_wrap's return point inside the destructor  */
 SIM_VAR(s_txWrapRet, SIM_INSTALL);
 
+/* B4's hit_reset calls this at every level's unit-array allocation, installed or not */
 static void tx_reset(void)
 {
-    memset(s_txMark, 0, sizeof s_txMark);
+    if (s_txMark) memset(s_txMark, 0, TX_ROWS * sizeof *s_txMark);
 }
 
 static void tx_event(unsigned int* n, const char* what, const char* unit, const char* weapon)
@@ -8037,7 +8048,9 @@ static void tx_rx_swept(const unsigned char* m)
 {
     const struct hit_tab* t = s_hit;
     unsigned int idx = m[4] | (unsigned int)m[5] << 8;
-    if (m[19] != 1 || !t || idx >= t->n || (t->stamp[idx] & HIT_LB)) return;
+    /* B4's receiver runs whether or not fix_transported installed, and only its install
+       allocates the marks: a peer without it has no mark to keep */
+    if (m[19] != 1 || !t || !s_txMark || idx >= t->n || (t->stamp[idx] & HIT_LB)) return;
     s_txMark[idx] = t->stamp[idx] + 1u;
     tx_event(&s_txDiag.marked, "a carried death refused while loading, its copy marked", NULL, NULL);
 }
@@ -8100,6 +8113,15 @@ static int fix_transported(void)
     }
     if (!aPick || !aArm || !aWrap || !aCarg || !aKill || !aFold || !aDet ||
         !SIM_TLS_ALLOC(s_txKillTls)) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    s_txMark = (unsigned int*)SIM_ALLOC(s_txMark, TX_ROWS * sizeof *s_txMark);
+    s_txKillMark = (unsigned int*)SIM_ALLOC(s_txKillMark, TX_ROWS * sizeof *s_txKillMark);
+    if (!s_txMark || !s_txKillMark) {
+        SIM_FREE(s_txMark, s_txMark);
+        SIM_FREE(s_txKillMark, s_txKillMark);
+        s_txMark = s_txKillMark = NULL;
         lim_no_stub();
         return FIX_TABLE;
     }
@@ -11219,6 +11241,7 @@ static void __cdecl lim_types_refused(unsigned int slots)
                (unsigned int)TAGPU_LIM_TYPES - 1u);
     MessageBoxA(NULL, text, "Total Annihilation: Impure cannot load these units",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    tagpu_rec_exit();   /* the fork's own ExitProcess does not pass through its hook */
     ExitProcess(1);
 }
 
