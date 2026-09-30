@@ -44,7 +44,7 @@ per field or bit range, each with a class, its engine writers and the evidence:
 
 | Class | Meaning | Rows |
 |---|---|---|
-| `id:<table>` | a pointer, recorded and compared as its target's ID in `unit`, `type`, `weapon`, `player` or `bucket`; the ID is the pointer's offset in its table, never a field of the target, so a pointer to a dead unit keeps its ID | 13 |
+| `id:<table>` | a pointer, recorded and compared as its target's ID in `unit`, `type`, `weapon`, `player` or `bucket`; the ID is one more than the pointer's row in its table (so `NULL` is 0), never a field of the target, so a pointer to a dead unit keeps its ID | 13 |
 | `object` | a pointer to an engine object recorded by a record of its own (the mover, the order lists, the COB object, the model, the AI, the sight counters…) | 10 |
 | `cache` | not recorded; the engine recomputes it from recorded state, and it is compared after that recompute | 2 |
 | `timer` | not recorded; on a clock a replay does not reproduce | 4 |

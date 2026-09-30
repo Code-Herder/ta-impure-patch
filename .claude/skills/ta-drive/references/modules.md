@@ -599,8 +599,11 @@ exe, is not loaded at attach. Drive them the way the compat suite does:
 **Every skirmish is recorded**, from its first iteration to the level's end, to
 `gamedir/replays/<date> <time> <map>.imprec`; there is no switch. The log says
 `recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
-the corrections, which must be 0. A game killed mid-way leaves a file without an end block that
-reads to its last complete block.
+the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
+Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,
+or closing the window after the level's end (`recorder: the exit waits for …`) — so that file is
+complete. A game killed mid-way, or whose window is closed mid-game, leaves a file without an end
+block that reads to its last complete block.
 
 - **Read one** with `tools/replay/tarec.py`: `info` (the header, the blocks, how it ended),
   `check` (the stream rebuilt and compared with every snapshot in the file) and
@@ -611,6 +614,7 @@ reads to its last complete block.
   live world at that GameTime; `tarec compare` rebuilds the recording to the same GameTime and
   requires it byte for byte. A paused game runs no iterations, so it takes no dump.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
-  human seat no unit is a defeat, and the level's end closes the recording as complete.
+  human seat no unit is a defeat, and the level's end ends the recording, complete once the
+  writer's `closed` line is in the log.
 - The file format is `tagpu/ddraw/inc/tagpu_recfmt.h`; what is recorded and what is not:
   `research/notes/tadr-port/demo-recorder-skirmish-slice.md`.

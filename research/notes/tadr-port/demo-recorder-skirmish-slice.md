@@ -41,20 +41,22 @@ from a save is mode 2 too (run 3). A unit slot is live while bit 28 of its `+0x1
 
 An image has the record's shape, and `inc/tagpu_replay_layout.h` — generated from the exclusion file
 the owner controls — is all that shapes it. A byte of a value field is copied. An `id:<table>` row
-holds its target's ID in place of the pointer, by the table's offset rule; `NULL`, a pointer outside
-its table and the off-map sort bucket get IDs of their own (`REC_ID_NULL`, `REC_ID_BAD`,
-`REC_ID_OFFMAP`), the second counted and its first eight logged. The bytes of `object`, `cache`,
-`timer` and `drop` rows are zero. A declared table's image follows its layout the same way: an
-`SIMF_ADDR` field with an ID table holds the ID, and an address with none, an `SIMF_LOCAL` value and
-the `SIMF_OWNED` and `SIMF_COLUMN` pointers are zero.
+holds its target's ID in place of the pointer: one more than the pointer's row in that table, by
+the table's offset rule, so `NULL` is 0. A pointer outside its table and the off-map sort bucket get
+IDs of their own (`REC_ID_BAD`, `REC_ID_OFFMAP`), the first counted and its first eight logged. The
+bytes of `object`, `cache`, `timer` and `drop` rows are zero. A declared table's image follows its
+layout the same way: an `SIMF_ADDR` field with an ID table holds the ID, and an address with none,
+an `SIMF_LOCAL` value and the `SIMF_OWNED` and `SIMF_COLUMN` pointers are zero. So a record of zeros
+images to zeros, and a row of zeros costs the ring nothing.
 
 ### The capture
 
 `tagpu_recorder.c` runs first in B2's stub at the sim step's call of the unit tick, `0x4954ED`,
 which then rebuilds the air pool and jumps to the tick. GameTime has just been incremented
-(`0x4954C0`) and the network pumped (`0x4954C8`), and every phase of the previous iteration has run,
-so the capture sees the world between two iterations, on the thread that owns it. It names engine
-memory only to read it, each read bounded by the engine's own count
+(`0x4954C0`) and every phase of the previous iteration has run, so the capture sees the world
+between two iterations, on the thread that owns it. A skirmish calls the step with 0 (`0x49693C`),
+so the network pump inside it (`0x4954C8`) does not run: only a network game pumps there. It
+names engine memory only to read it, each read bounded by the engine's own count
 ([the engine map](../exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)).
 What it writes is its own: its shadows, the ring and the harness's dump.
 
@@ -74,15 +76,16 @@ It images only what may have changed, and puts only the changes into the ring:
   `GetWriteWatch` answers and resets in one call. During play only the game thread writes these
   tables, the thread the capture runs on, so no write falls between the answer and the reset. Every
   row is imaged at the first capture, when a heap table moves or `GetWriteWatch` refuses it, and
-  when a table's count takes rows in; a row of zeros takes the zero row's image, computed once at
-  the start.
+  when a table's count takes rows in; a row of zeros is passed over without imaging, its image
+  being zeros, like the shadow it is compared with.
 
 The largest declared tables are heap tables for this reason: the build ghost's memo `s_ghost`
 (16,384 rows of 52 bytes) and the transported explosions' marks `s_txMark` and `s_txKillMark`
 (65,536 entries each). As static arrays their 1.3 MB was compared every iteration. Each is allocated
 when its module installs and never freed, and every path that can run without that module tests it
 for NULL. A capture that imaged every row of every table each iteration cost 3.6 ms; write-watched
-heap tables, the byte comparisons and the zero row bring it to about 80 µs in a four-player game.
+heap tables, the byte comparisons and passing rows of zeros over bring it to about 80 µs in a
+four-player game.
 
 ### Self-verification
 
@@ -149,6 +152,19 @@ recorder does not start. The end record is the capture's last access to the ring
 finishes the file, frees the ring and exits. Each recording owns its ring and its writer, so a level
 that starts while the previous file is still being finished takes a new pair.
 
+A recording that has ended is complete once its writer has closed the file, and **the process's
+exit waits for that**: the in-game menu's exit to Windows runs the teardown and then posts
+`WM_DESTROY`, and the game leaves a moment later through the CRT's `ExitProcess`
+([the engine map](../exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
+which would kill a writer still writing its last block. The fork hooks `ExitProcess` in the IATs of
+the exe and of the DLLs in its folder, and its own exit on closing the window calls the same wait,
+`tagpu_rec_exit`: it waits for the writer of every recording that has ended, each of which sets an
+event once its file is closed. A writer never waits for another thread, so the wait ends when the
+files do. A recording still in progress at the exit — the window closed mid-game — has no end to
+wait for, and its file reads to its last block, incomplete. A recording takes one of eight slots
+for its event at its start and does not start without one, so its end always has a place to hand
+it to.
+
 Besides the teardown, a recording ends marked incomplete when the ring is full, the file cannot be
 written, a table's growth finds no memory, the unit array moves or changes size or GameTime goes
 back without a teardown, or the game stops being a skirmish; the rest of that level is not recorded. A load from
@@ -168,6 +184,8 @@ iterations to record.
   records and the file's blocks, shared by both files and mirrored by the tool.
 - B2's stub at `0x4954ED` (`tagpu_patches.c`) calls the capture before the air pool's rebuild, and
   `tagpu_reclaim.c`'s teardown wrap calls the recorder's end first.
+- The exit's wait: `fake_ExitProcess` (`winapi_hooks.c`, in `hook.c`'s kernel32 list, local
+  modules only) and the fork's `SC_CLOSE` exit (`wndproc.c`) call `tagpu_rec_exit` first.
 - `tagpu_simreg`: a walk of the declarations and of the levers for the recorder, and
   `MEM_WRITE_WATCH` on every heap table `SIM_ALLOC` takes.
 - `tools/replay/tarec.py`: reads a recording — `info` (the header, the blocks and how it ended),
@@ -183,7 +201,9 @@ store's only writer is its menu (`tagpu_settings.h`), so the setting comes with 
 ### Verified by
 
 Scripted games on Wine, on a private X display, in the raised build unless stated; each recording
-read back with `tarec info`, `check` and, where the run took dumps, `compare`:
+read back with `tarec info`, `check` and, where the run took dumps, `compare`. Runs 1 to 5 ran on
+S1 as the landing review read it; runs 6 to 8 and the last row on the build that lands, which
+changed every ID by one, and so every image, and added the exit's wait:
 
 | run | the game | what it showed |
 |---|---|---|
@@ -193,30 +213,53 @@ read back with `tarec info`, `check` and, where the run took dumps, `compare`:
 | 4 | run 1's game, the process killed with SIGKILL two minutes in | the file said incomplete and read to GameTime 3601, its four snapshots equal to the stream; copies cut inside a payload and inside a block header, and one with a torn block header, read to the block before the damage |
 | 5 | run 1's game in a scratch build, not landed, that flips one byte of the writer's copy of a unit, a player and a declared table at GameTime 1000 | each correction named in the log and in the end block: the player at GameTime 1001, the unit at 1018, `g_def` row 0 `+0x8` at 1032; the dumps equal |
 | — | run 1's game for 90 s in the stock-limits build | 22 tables, every dump equal, no correction |
+| 6 | run 1's game left a minute in by the in-game menu's `EXIT`, `EXITGAME` and yes, in a scratch build, not landed, whose writer holds three seconds before finishing | the recording ended at the teardown; the exit logged that it waited for one file, the writer closed it, and the process went: the file complete, its dump equal, no correction |
+| 7 | run 1's game ended by a defeat a minute in, and its window closed at once (`WM_DELETE_WINDOW`, which Wine turns into `SC_CLOSE`), in the same scratch build | the same: the exit waited for the file, complete, its dump equal |
+| 8 | run 6 in the landing build | the writer had closed the file before the exit came, so nothing waited: complete, its dump equal |
+| — | run 2's battle once, and run 1's game for 90 s in the stock-limits build, both in the landing build | no correction and every dump equal: 1,099 to 1,404 live units at the battle's dumps; 22 tables in the stock-limits build |
 
 ### Measured
 
 The capture's cost per iteration, by `QueryPerformanceCounter` around it, on the reference setup
-under Wine:
+under Wine, in the build that lands:
 
 | game | the first iteration | the rest, on average | the rest, at worst |
 |---|---|---|---|
-| run 1, up to 64 live units | 4.3 ms | 78 µs | 760 µs |
-| run 2, 1,171 to 1,407 live units | 4.5 and 4.8 ms | 251 and 235 µs | 583 and 610 µs |
+| run 1's game, a minute (runs 6 to 8), up to 14 live units | 2.3 to 2.9 ms | 84 to 91 µs | 204 to 552 µs |
+| run 2's battle, twice, 1,099 to 1,404 live units at the dumps | 2.5 and 2.7 ms | 255 and 247 µs | 1.16 and 1.48 ms |
+| run 1's game in the stock-limits build, 90 s | 0.6 ms | 90 µs | 373 µs |
+
+S1 as the review read it measured the same rest: 78 µs on average over run 1's eight minutes (at
+worst 760 µs), and 251 and 235 µs in two battles (at worst 583 and 610 µs). Its first iterations
+took 4.3 to 4.8 ms: `NULL`'s ID was `0xFFFFFFFF`, so a row of zeros with an address in its layout
+imaged to something else, and every such row went into the ring. The first iteration images every row of every table, the
+extra weapons' 16,384 unit-type rows of 140 bytes among them; a row of zeros now costs it a
+comparison and nothing in the ring. In the stock-limits build, whose unit-type tables are 512 rows,
+it costs 0.6 ms.
 
 The product page's budget is 0.5 ms on average and 1 ms at worst with 1,500 units. The average
-meets it. The worst did not once: an earlier battle run of the same game measured one iteration of
-2.3 ms, whose cause was not found, and a timing probe over a third run saw none above 0.7 ms. The
-first iteration images every row of every table, the extra weapons' 16,384 unit-type rows of 140
-bytes among them, and puts into the ring only the rows that are not zero; in the stock-limits build,
-whose unit-type tables are 512 rows, it costs 0.6 ms.
+meets it. The worst did not in three battle runs of five: 2.3 ms in a run while S1 was being
+built, and 1.16 and 1.48 ms in the two above. The log names the costliest iteration's GameTime and
+what it put into the ring, and the 1.48 ms one put 26 KB, an ordinary battle iteration (the battle
+averages about 20 KB), so the time was not the capture's own work. The cause is not found; the
+writer's wake signal, a round trip to the wineserver under Wine that falls on about one battle
+iteration in fifty, is a candidate, and the reference setup was running other work.
+
+One cost falls outside the timer. Under Wine a write watch is a page protection, so after each
+reset the simulation's first write to a watched page takes a fault in the engine's own code; a
+scratch program measured 4.2 µs a fault under Wine 9.0 on the reference setup, 5.2 µs with three
+other threads busy. The log counts those pages after the first iteration: 393 and 269 in the two
+battles' 3,839 iterations, at most 3 in one, so under 20 µs in the worst iteration and about half
+a microsecond on average; 6 to 9 in the four-AI games.
 
 Size, the exact stream with every value at every tick: run 1's file is 2.0 MB for 8.1 minutes,
 14.8 MB an hour at that rate — its stream deflated 3.4:1 to 1.7 MB, and its 16 snapshots, mostly
 zero rows, add 0.26 MB — against the budget's 25 MB for a four-player game, which a longer game with
-more units would pass. The two-minute battles came to 18.5 and 19.8 MB a minute (the stream deflates
-about 2:1 there), 1.1 to 1.2 GB an hour if sustained, against the budget's 100 MB for ten players
-with 1,500 units. In every run the ring held at most 1.2 MB of its 16 MB.
+more units would pass. The two-minute battles came to 18.5 and 19.8 MB a minute in the reviewed
+S1 and 20.3 and 17.7 MB a minute in the landing build (the stream deflates about 2:1 there),
+1.1 to 1.2 GB an hour if sustained, against the budget's 100 MB for ten players with 1,500 units.
+The ring held at most 645 KB of its 16 MB in the battles and 177 KB in the one-minute games; in
+the reviewed S1 the first iteration's rows of zeros alone put about 1.2 MB into it.
 
 ### Gaps S1 leaves
 
@@ -230,7 +273,11 @@ with 1,500 units. In every run the ring held at most 1.2 MB of its 16 MB.
   `freed` and `local`, one entry per unit slot, whose row alone is recorded).
 - **The header** has no game options and no fingerprint of the weapon definitions. Alliances are
   values of the player records, so the stream carries them.
-- **The worst iteration** met the 1 ms budget in two battle runs of three (*Measured*).
+- **The worst iteration** met the 1 ms budget in two battle runs of five, and its cause is not
+  found (*Measured*).
+- **The recorder's memory** is not measured. It is bounded by construction — the 16 MB ring, and
+  shadows and a copy sized by the unit array and the declared tables, fixed at the start but for the
+  side table's one growth — against the product page's starting point of about 64 MB.
 - **Events** (shots, script starts, sounds, the nano spray): S2.
 - **Features, wrecks, the main block and `.data`**: S3.
 - **Network games** are not recorded: the multiplayer slice.

@@ -1629,8 +1629,12 @@ S1 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-reco
 (`tagpu_recorder.c`) reads the engine and writes none of it. It runs first in B2's stub on the sim
 step `0x495490`'s call of the unit tick (`0x4954ED`,
 [*Stacked aircraft in area damage*](#stacked-aircraft-in-area-damage-0x49a664-0x49a415-0x47cf98-0x4954ed-disassembled-measured-2026-09-25)),
-after the step's GameTime increment (`0x4954C0`) and network pump (`0x4954C8`), so it sees the
-world between two iterations.
+after the step's GameTime increment (`0x4954C0`), so it sees the world between two iterations. The
+step's network pump (`0x453D40` at `0x4954C8`) runs only for a nonzero argument (`test edi,edi` at
+`0x4954BE`, `je 0x4954ED` at `0x4954C6`): the frame function `0x496790` passes 1 in a network game
+(`main+0x2A44` bit 0, tested at `0x4967E7`; `push ebx` at `0x49680B`) and 0 otherwise, a skirmish
+among them (`push 0` at `0x49693C`, after the pause test at `0x496920`), so no pump runs before a
+recorded capture.
 
 | What | Where | The bound, and what else is established |
 |---|---|---|
@@ -1649,6 +1653,25 @@ starts paused** [MEASURED 2026-09-29]: at the load's click the recording in prog
 `tagpu_reclaim`'s wrap of `0x491B60`, at GameTime 1846; after the load `main+0x38A51` read 1 and
 GameTime stayed 1846 until a pause key, and no iteration ran, so a capture at `0x4954ED` sees
 nothing of a paused game.
+
+**The process's exit** [DISASSEMBLED 2026-09-29, and MEASURED the same day], read for the
+recorder's exit wait (`tagpu_recorder.h`, *The exit*). The CRT's entry `0x4E6FA0` calls WinMain
+`0x49EDA0` at `0x4E70ED` and hands its result to `exit` `0x4E4600` at `0x4E70F6`; `exit`, and
+`_exit` `0x4E4620` on the entry's exception path (`0x4E7119`), run `doexit` `0x4E4660`, which runs
+the atexit table (`0x52B654`/`0x52B658`) and the terminators and then calls `ExitProcess` through the
+IAT slot `0x4FC100` at `0x4E4708` — or, re-entered once `_C_Exit_Done` (`0x529F0C`) is 1,
+`TerminateProcess` (`0x4FC210`) at `0x4E467E`. The CRT's two fatal paths leave through the same
+slot: `0x4E7180` (`ExitProcess(255)` at `0x4E71A0`) and `0x4EADE0` (`FatalAppExitA`, `0x4FC27C`,
+then `ExitProcess(255)` at `0x4EADF2`); the jump thunk `0x4FB12E` has no direct caller. The in-game
+exit to Windows is `0x491C60`: `0x4257A0`, `0x451B60`, the teardown `0x491B60` at `0x491C6A`, then
+`0x4B6230(0)` at `0x491C71`, which with a zero argument shows no message box (`MessageBoxA`,
+`0x4FC300`, at `0x4B626D` is skipped) and posts `WM_DESTROY` to the game's window
+(`PostMessageA`, `0x4FC2D0`, at `0x4B6282`). The exit menu's handler `0x4605C0` (stored at
+`0x4607D2`) calls it at `0x460626` when `[0x512FF8]` is 2, after setting bit 2 of
+`main+0x3923B`. So the teardown ends a recording before any of the exit runs, and the exe's
+`ExitProcess` slot is the one the fork's hook takes. MEASURED: a skirmish left by `EXITGAME` in a
+scratch build whose writer held three seconds before finishing: the recording ended at the
+teardown, the exit logged its wait for the one file, and the file was complete.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 

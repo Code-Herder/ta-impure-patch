@@ -2915,7 +2915,11 @@ skirmish is recorded to `replays\<date> <time> <map>.imprec`, and `tools/replay/
 recording back. No site of its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls
 `tagpu_rec_capture` before the air pool's rebuild, on the game thread, and `tagpu_reclaim`'s
 teardown wrap (§2.7) calls `tagpu_rec_level_end` first, before the cascade frees the unit array.
-A recording does not start without that wrap, since nothing else would end it.
+A recording does not start without that wrap, since nothing else would end it. **One Win32 hook**:
+`ExitProcess` in the fork's kernel32 list (`hook.c`, the exe and the DLLs of its folder only), whose
+`fake_ExitProcess` (`winapi_hooks.c`) calls `tagpu_rec_exit` first, as the fork's own `SC_CLOSE` exit
+does (`wndproc.c`): the process's exit waits until the file of every recording that has ended is
+closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
 
 **Fields we write: none.** It reads the unit array, the ten player records, the unit types, the
 sort buckets, GameTime, the game mode and the map's path, each bounded by the engine's own count
@@ -2925,9 +2929,12 @@ and every `SIM_STATE` table Impure declares. The writer thread reads no engine m
 
 **Three simulation tables moved to the heap for it**, so their pages are write-watched: the build
 ghost's memo `s_ghost` (`tagpu_datakeys.c`) and the transported explosions' marks `s_txMark` and
-`s_txKillMark` (`tagpu_patches.c`). Each is allocated when its module installs and never freed; a
-failed allocation leaves its feature uninstalled, and the paths that run without that feature —
-the ghost mask, B4's refused-kill receiver, the level's reset — test for NULL.
+`s_txKillMark` (`tagpu_patches.c`). Each is allocated when its module installs and never freed.
+If the memo cannot be allocated, the ghost masks are not kept and every ghost shows every piece.
+If a mark table cannot be, the transported explosions fail the way a stub that cannot be made
+does: the fail-closed table writes none of its rows, and the process ends with its failure report
+at the first DirectDraw call (`limits: FAILED`). The paths that do not rest on the memo or the
+marks being there — the ghost mask, B4's refused-kill receiver, the level's reset — test for NULL.
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 
