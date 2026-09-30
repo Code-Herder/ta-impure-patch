@@ -10,7 +10,10 @@ each a finished unit verified by running it. **S1, the recorder, landed on 2026-
 skirmish is recorded to a file when `tagpu_recorder.on` asks for it, and `tools/replay/tarec.py`
 reads a recording back. **S2, watching, is two landings.** S2a landed on 2026-09-30: a recording
 carries every mover, order list and PlayerInfo, and the events, each checked against the engine
-(*S2a, verified and measured*). **S2b, watching, is next.**
+(*S2a, verified and measured*). S2b landed on 2026-09-30: `tacli replay play` plays a recording
+back on puppets, showing everything or one recorded player's view, and every recorded value is
+equal to the recording at every checkpoint (*S2b, verified and measured*). **S3, seeking, is
+next.**
 
 ## How the slice is cut
 
@@ -20,7 +23,7 @@ Each landing adds one capability that can be verified by itself, and the ones af
 |---|---|---|
 | **S1 — the recorder** | the capture at `0x4954ED`, the writer thread, the file, self-verification, and a tool that reads a recording back | self-verification over whole games; the file read back to the tick of a dump and compared with the dump byte for byte; the cost and the size measured |
 | **S2a — what watching needs, recorded** | the objects a unit record points at (the mover, the order lists) and PlayerInfo, events at their roots, the nano spray, the header's game options, seats and weapon fingerprint | S1's checks over the new records; the events checked against the images |
-| **S2b — watching** | the puppet host, playback, the one-writer rule, getter 75 per seat, `tacli replay play` | a recording played on puppets and compared with the recording at checkpoints; root counts equal and sink counts within a band |
+| **S2b — watching** | the puppet host, playback, the one-writer rule, getter 75 per seat, `tacli replay play` | a recording played on puppets and compared with the recording at checkpoints, in full visibility and from the recording viewer's perspective with its radar picture; each event kind counted as played or not |
 | **S3 — seeking** | the rebuild in place from a snapshot, features and wrecks, the main block and `.data`, the replay harness and its restore round trip, the CLAUDE.md replay gate and the landing command's Step 4b, the nightly tier | the round trip, with its rules against a vacuous pass; seek times against the target |
 | **S4 — rewind, takeover and forks** | the timeline in a live skirmish, Back to now, Play from here, forks in the file, the takeover from a recording | the harness's takeover run, judged like the compatibility suite's battle; the fork rules |
 | **S5 — the browser and the controls** | the Replays browser, the timeline bar, perspectives, camera follow, the overlays, the recording switch in the settings screen | the browser and the controls driven through `tacli ui`, with pictures |
@@ -456,63 +459,137 @@ none changed in play. **The ring** held at most 1,059 KB of its 16 MB in the bat
 
 ### S2b — watching
 
+Built as planned, but for what *As built* marks. The engine facts are
+[the engine map](../exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-pass-4-disassembled-measured-2026-09-30)'s,
+the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module writes
+[GPU status](../gpu-status.md) §2.6f.
+
 - **Opening a recording** goes through the engine's own SKIRMISH Start.
-  `tacli replay play <instance> <recording>` writes the instance's skirmish settings from the
-  header, copies the recording into `replays\`, writes the request file `tagpu_replay.play`, and
-  clicks Start. Four sites are installed with the others, inert unless a request armed the level:
-  - **The seat fill's call `0x47B092`.** It validates the request before any write: the format, the
-    layout's hash, a skirmish, no network, the map's settings name, the seats and the unit
-    definitions. Then it seats each recorded player as type 3 through `0x464290`, restores their
-    PlayerInfo and alliance rows, seats the viewer, and disarms the victory and defeat tests
-    (`0x4904B0`). On a failure the log names the reason and a normal skirmish starts.
+  `tacli replay play <instance> <recording> [--perspective RECORD]` writes the instance's skirmish
+  settings from the header, copies the recording into `replays\`, writes the request file
+  `tagpu_replay.play` (`play <name> [<record>]`), and clicks Start. Four sites are installed with
+  the others, inert unless a request armed the level:
+  - **The seat fill's call `0x47B092`.** It validates the request before any write: every puppet
+    gate and the teardown wrap in, the format, the layout's hash, a skirmish, no network, the map's
+    settings name, two to nine seats, the unit limit and the view. Then it seats each recorded
+    player as type 3 through `0x464290` with its side, logo, name and alliance row, seats the
+    viewer, points `+0x2A43` at the view, and disarms the victory and defeat tests (`0x4904B0`).
+    On a failure the log names the reason and a normal skirmish starts. A recording from another
+    build plays, and the log names both builds (D8).
   - **The settings persist's call `0x47B09C`.** It applies the recording's game options after
     `0x430F00` has written the player's own to the registry. The teardown restores them.
   - **The start units' calls `0x497963` and `0x497ACD`**, skipped.
-  - **The applier's step at `0x4954ED`**, B2's stub. It checks what needs the loaded level, then
-    applies.
-- **The viewer's seat** is the lowest record the recording does not seat: type 3, with the watcher
+  - **The first step**, at B2's stub `0x4954ED`: the level's counts, map, unit and weapon data and
+    first GameTime against the header; then the start units through the create, the first image,
+    the wind's seed and V's sight.
+- **The viewer's seat** V is the lowest record the recording does not seat: type 3, with the watcher
   bit, holding `+0x2A42` for the whole level.
   - Every path that selects or orders walks the controlled player's units, of which this seat has
     none, so the viewer cannot select or order a puppet unit.
-  - Four gates cover the rest: typed commands (`0x417B50`, every one refused), the debug keys
-    (`0x4965E1`), the resource transfer (`0x464C60`) and saving (`0x4326B0`).
+  - Four gates cover the rest of the viewer's input: typed commands (`0x417B50`, every one
+    refused), the debug keys (`0x4956C0`), the resource transfer (`0x464C60`) and saving
+    (`0x4326B0`).
   - A recording that seats all ten records leaves no seat for the viewer, and is refused by name.
-  - Full visibility fills the viewer's own sight. A perspective sets `+0x2A43` to a recorded seat.
-- **The applier** runs each step on the game thread: image T's records, then E_T's events in
-  recorded order. Every value is bounded before it becomes an index or a pointer. The completeness
-  note's *What restoring these records needs* is its checklist.
-  - **Units are placed with the engine's set-position `0x48A9F0`** at the recorded position. Then
-    the walk-class and occupancy parts `0x43DA70` and `0x43DB50` run, which start the walk and
-    occupy scripts. `+0x110` bits 2–3 and `+0x10A` are written only by those parts, and compared.
-    The placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a puppet: they
-    would add the recorded velocity to the recorded position a second time, and fit the recorded
-    altitude to the terrain.
+- **What the viewer sees.** Without `--perspective`, everything: V's sight counters are filled, V's
+  bit is set in every cell of the explored map, and the radar pass marks every unit for a watcher.
+  With `--perspective N`, `+0x2A43` is record N and the host's own radar pass computes N's radar
+  picture, the recording's own where the recording showed N (`tarec info` names the recording's
+  viewed player). V's sight is filled either way, so switching the perspective is `+0x2A43` and
+  LosType bit 3 alone, for S5's selector.
+- **The step.** B2's stub calls the host's unit tick, then the replay: the events of step T in
+  recorded order, then the image of T+1, the world the recording machine's unit tick and the rest
+  of its iteration T left. The rest of the host's iteration then reads what the recording
+  machine's read. *As built:* the plan put the image before the host's unit tick, which left the
+  sight stamps of 15–20 of 1,413 units a tick behind at every dump.
+- **The apply** runs each step on the game thread. Every value is bounded before it becomes an
+  index or a pointer. The completeness note's *What restoring these records needs* is its
+  checklist.
+  - **Units are placed with the engine's set-position `0x48A9F0`** at the recorded position and
+    the altitude the movement pass had before its fix-up. Then the walk-class and occupancy parts
+    `0x43DA70` and `0x43DB50` run, which start the walk and occupy scripts, and the fix-up's values
+    go in. `+0x110` bits 2–3 and `+0x10A` are written only by those parts, and compared. The
+    placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a puppet.
+  - **Players**: every record but V's, raw under the exclusion file, but the players phase's
+    30-tick deadline `+0xF0`, which the host keeps (*as built*: written, it arrived already
+    advanced, and the host never ran the viewed player's radar pass; the host note §2.3). Every
+    seat's `+0x18` is GameTime each step, for the pacing gate.
   - **Carry links** follow the recorded chains through the engine's attach `0x48AB70`, bounded
     first. They are never written raw.
-  - **Order lists** are reconciled against their images through the engine's constructor,
-    reference set, linker and destructor.
-  - **Events are replayed through the functions that made them:**
-    - a death through `0x4866D0` in the receiver's mode, after the victim's record is written;
-    - a create through `0x485F50`, into the recorded slot;
-    - a shot through the receiver `0x49D270`;
-    - a script start through `0x4B0B00`, with at most four arguments;
-    - a reply through `0x47F780`, whose own viewer test plays the watched seat's.
+  - **Order lists** are reconciled node by node against their images through the engine's
+    constructor `0x43A0C0`, linker `0x43AD10`, reference set `0x489690` and destructor
+    `0x43A1F0`, with every node's puppet rows held.
+  - **Events are replayed through the functions that made them:** a create through `0x485F50`
+    into the recorded slot; a death through C4's wrap of the destructor, after the victim's
+    recorded fields; a shot through the receiver `0x49D270`; a script start through `0x4B0B00`,
+    `0x4B0A70` or `0x4B0940`; a build done through `0x41B8D0`; a state change through `0x48B090`;
+    a reply through `0x47F780` or `0x47F850`, whose own viewer test plays the watched seat's; a
+    nano spray through `0x4720D0` or `0x472200`. What a create nests is recorded before the create
+    and finds no unit; the replayed create makes it again. Each event is counted as played or not,
+    and the log names the classes of those not played.
   - **A recorded YARD_OPEN** is applied after the positions, through the re-claim `0x47C790` and
     the passability refresh `0x440A40`.
-- **The recording is the only writer.** On a puppet host:
-  - damage the host computes for a puppet is refused at the hit `0x489CE0`, at B3's existing drop;
-  - the reaper `0x48AFD1` skips puppets;
-  - the host's own meteor shower does not run;
-  - the engine's own reply calls are inert;
-  - Impure's per-slot hooks (B4's stamps, C4's marks) skip puppet slots;
+  - **The wind** is seeded once, from the recording's first image, so every draw after it is the
+    recording's.
+- **The recording is the only writer.** On a puppet host, twelve prologue gates
+  (`tagpu_puppet.c`), with the viewer's four above:
+  - damage is refused at the apply `0x489CE0`, where every hit lands, for a puppet's unit
+    (*as built*: the plan put it at B3's drop);
+  - `Send_UnitDeath 0x4864B0` is refused for a puppet's unit, so bit 14 is written raw and a dying
+    unit lives until its recorded death (*as built*: the plan had the reaper skip puppets);
+  - COB's SET, ATTACH and DROP and the two replies are refused for a puppet's unit, except inside
+    the replay's own create and reply;
+  - the host's meteor shower does not run;
   - every order node on a puppet is held disarmed (`puppet0`, `puppet1`).
-- **Getter 75** answers, for each puppet seat, the recording machine's bit. The answer comes from
-  a per-seat table rebuilt from the header at the seat fill, and declared `SIM_CONTENT` in a new
-  `sim` module. The recorder refuses to record a puppet host.
-- **Verified by:** a recorded skirmish played on puppets under Wine and compared with the recording
-  at checkpoints: every recorded value identical but the approved rows, the root counts equal, and
-  the sink counts within a band. It is played once in full visibility, and once from the recording
-  viewer's perspective, where the radar picture is compared too.
+  - *As built:* Impure's per-slot hooks, B4's stamps and C4's marks, run on puppets unchanged,
+    where the plan had them skip puppet slots. Each writes from the slot, GameTime and its own
+    previous value, at the creates and deaths the replay makes at their recorded points, so its
+    table agrees with the recording's; S2b writes no declared table but the wind's, and a hook
+    that skipped puppets would have left its table differing.
+- **Getter 75** answers, for each puppet seat, the recording machine's bit, from a per-seat table
+  built from the header at the seat fill, declared `SIM_CONTENT` in `tagpu_puppet.c`, and changed
+  at a recorded controller change. The recorder refuses to record a puppet host.
+- **The dumps and the comparison.** `dump <name>` in `tagpu_replay.trigger` writes the live world
+  with a header naming its tables, and `tools/replay/tarec.py compare --puppet` compares it with
+  the recording read back to its GameTime: every unit, player and order list image and every
+  declared table, paired by name, since each build numbers its tables in its own order; less the
+  contact bits, V's record, the controllers and the viewer, and with the contact bits when the
+  dump's viewed player is the recording's.
+
+#### S2b, verified and measured
+
+On the reference setup under Wine, 2026-09-30, a dump every 8 or 12 seconds of play, each compared
+with the recording read back to its GameTime (`tarec.py compare --puppet`):
+
+- **The 1,432-unit battle** on Town & Country (3,810 iterations), recorded by an earlier build of
+  this landing, so also a recording played by another build (D8). In full visibility, and from
+  record 0, the recording's own viewer: every one of the nine dumps inside the recording equal
+  (GameTime 384 to 3,712, 1,413 live units down to 1), units, players, order lists and every
+  declared table, and from record 0 the radar picture too. The events played kind by kind: 1,430
+  creates, 1,433 deaths, 7,175 shots, 19,051 broadcast starts, 19,341 of 19,600 owner-only starts,
+  1 build done, 37 of 62 state bytes, 16,780 of 16,805 replies and 459 sprays; not played, 25 state
+  bytes and their 25 replies nested in a create, which the replayed create makes again, and 259
+  TargetCleared starts nested in a death, which the destructor's order purge starts on the unit it
+  destroys and a puppet's held nodes do not. Refused on puppets: 252 `Send_UnitDeath` calls, the
+  reaper's on units the recording marked dying [INFERRED: its other callers need a network game or
+  a type-1/2 owner], 26 SETs, 37 replies and 3,809 meteor showers, one an iteration; no hit reached the apply, since a puppet's shots do no damage by the impact's owner
+  gate (B7).
+- **The transport game** on Town & Country (3,090 iterations: two Atlases loading, dropping and
+  reloading Peewees), recorded by the landing build, whose recorder took its replies through the
+  reply gates: `tarec check` clean, and in full visibility and from record 0 every one of the ten
+  dumps inside it equal (GameTime 288 to 2,880), the radar picture too from record 0. Every event
+  played but one state byte and its reply, nested in a create; refused, 6 SETs, 7 replies and
+  3,089 meteor showers.
+- **The stock-limits build** recording a four-AI game on Core Prime Industrial Area (2,010
+  iterations, 0 corrections, `tarec check` clean) and playing it in both views: every one of the six
+  dumps inside it equal, the radar picture too from record 0; refused, 16 SETs, 8 replies and 2,009
+  meteor showers.
+
+**What the checkpoints caught.** From record 0 the host at first showed a radar picture of its
+own: every unit had the bits its create gives it, bit 9 on record 0's 352 and nothing on the other
+1,061, where the recording had bit 8 on all of them. The host had never run the viewed player's
+30-tick pass, whose deadline the apply wrote already advanced; it now leaves that deadline to the
+host (the host note §2.3). And the dumps named their tables by index, so a recording from another
+build compared the wrong tables; a dump now carries a header naming them.
 
 ### Decided 2026-09-30
 
@@ -543,6 +620,10 @@ none changed in play. **The ring** held at most 1,059 KB of its 16 MB in the bat
   handler, so its trees do not burn or fall and nothing is reclaimed].
 - **The path a mover's class object holds.** A takeover plans a new one from the orders (S4).
 - **Recordings that seat all ten records.**
+- **The declared tables are compared, not written**, but for the wind's generator, seeded at the
+  first step. B4's stamps and C4's marks agree because their hooks run on puppets as they ran
+  there; S3's restore writes the tables.
+- **The playback's own cost** is not measured.
 
 ## S3 to S5
 

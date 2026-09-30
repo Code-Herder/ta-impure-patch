@@ -1788,6 +1788,144 @@ done):
 
 Neither game intercepted a projectile, so the interception event has not been seen in a recording.
 
+### The puppet host: its gates, the 30-tick deadline and pass 4 [DISASSEMBLED + MEASURED 2026-09-30]
+
+S2b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watching) (`tagpu_replay.c`,
+`tagpu_puppet.c`) plays a recording on a level whose recorded seats are type 3. The research is
+[the host note](tadr-port/demo-recorder-s2-host.md), which also says where the build departed from
+it. Everything here runs on the game thread.
+
+**The step.** B2's stub at `0x4954ED` calls the unit tick `0x48AD30` and then `tagpu_replay_step`:
+the events of step T in recorded order, then the image of T+1
+([the events note](tadr-port/demo-recorder-s2-events.md) §1.0). The rest of the iteration then runs
+on the recording's world.
+
+**Player `+0xF0`, the players phase's 30-tick deadline.** `0x464700` sets it, `+0xF4` and `+0xF8`
+to GameTime at the level load (`0x464715`, `0x464727`, `0x464765`), for each record with a nonzero
+type (`0x464990`: `0x46499E..0x4649B1`). In the players phase `0x464F80`, a record whose `+0xF0`
+has reached GameTime (`0x46507D..0x465089`) gets `+0xF0 += 30` (`0x46508F`) and its 30-tick block:
+for the controlled record (`0x46509D`) the end tests and the respawn; the economy `0x401360` for
+types 1 and 2 (`0x465539..0x46555A`); for the viewed record (`0x465565`) the radar pass `0x467440`
+and the minimap fog composite `0x466C20` (`0x46556D`, `0x465572`); and in game type 3, every fourth
+pass, `0x4573D0` (`0x465583..0x4655A1`). The viewed record's minimap rebuild `0x466DC0` runs every
+tick, before the deadline test (`0x465065..0x465072`). The one other writer is the saved game's
+loader `0x466050` (`0x46623F`; its one caller `0x43264E`). A puppet host keeps `+0xF0` itself: the
+applied image carries it already advanced, which kept the radar pass from ever running for a
+recorded perspective (the host note §2.3).
+
+**Pass 4 of the radar pass** (`0x46770D..0x46782F`). For each live unit (`+0x110` bit 28) without
+bit 8 yet (`0x467722`) and without `+0x10E` bit 2 (`0x46772E`), the viewed record sees the unit's
+cell `(x >> 5, (z − altitude/2) >> 5)` of the integer position words, bounded by the record's
+`+0x80`/`+0x84` (`0x467786..0x467790`, `0x4677CC..0x4677D6`): under true LOS (LosType bit 1,
+`0x46775D..0x467769`) when the record's sight counter there is nonzero, otherwise when the record's
+bit is set in the explored map's u16 there (`0x4677EF..0x467808`); a unit it sees gets bit 8
+(`0x46780E..0x467814`). The create writes the bits a unit has before any pass
+(`0x485C1E..0x485C48`): bits 8–9 cleared, bit 9 set when the owner is the viewed record. MEASURED
+2026-09-30: a host that never ran the pass for record 0 showed exactly that on all 1,413 units of the
+battle recording, whose own dumps had bit 8 on every unit under LosType 4 (the explored map filled
+by `0x4816A0` since bit 0 is clear).
+
+**`Send_UnitDeath 0x4864B0(unit, …)`**, `ret 8`: its callers are the reaper `0x48AFD1`, the kill-all
+`0x486EB2`, `0x486EF8` and `0x486FB4`, CreateFromNetwork's occupant `0x486244`, and the teardown's
+destroy-all `0x485980` (`0x4859A8`), whose one caller is `0x491B95` in the teardown `0x491B60`.
+Impure's scenario tooling calls it as `UNITS_KillUnit`.
+
+**The apply `0x489CE0(rec)`**, `ret 4`: its direct callers are the sender's local apply `0x489C89`
+and the pump's `0x0B` case `0x455412`. The sender forwards to a type-3 owner through `0x451DF0`
+(`0x489CB9`), which sends only with the network bit (`0x451EAB`).
+
+**The COB writers are methods of the unit script class** (vtable `0x4FD698`, written at `0x485D8D`
+in `0x485D40`): ATTACH `+0x38` = `0x481340`, DROP `+0x3C` = `0x4813B0` and SET `+0x40` = `0x480B20`,
+called by the VM at `0x4B1BB4`, `0x4B1B8D` and `0x4B1BD2`; the table holds the exe's only
+references to them. SET begins `mov eax,[ecx+0x540]` — the model field, whose `+0xC` is the unit
+(`0x480B2B`) — then `mov ecx,[esp+4]` and `push esi` at `0x480B26`. The raised limits move the
+model field and rewrite that first displacement (`0x480B22`, `tagpu_patches.c` `cob_runtime_sites`),
+so a hook of SET goes at `0x480B26`, where ECX is still the object and nothing is pushed.
+
+**Typed commands `0x417B50(line, mask)`**, `ret 8`: the chat send `0x493E36` tests the result's bit 1
+(`0x493E3E`), and the key handler `0x496393` ignores it.
+
+**The gates** (`tagpu_puppet.c`): each byte-matched against these bytes before any lands, all or
+none, and no branch in the exe lands inside a stolen range. A gate returns at once, EAX 0, on a
+level that plays a recording, and otherwise runs the stolen bytes and goes on:
+
+| Site | Stolen bytes | `ret` | Refused when |
+|---|---|---|---|
+| `0x489CE0`, the apply | `53 56 8B 15 E8 1D 51 00` | 4 | the victim, the `u16` at `rec+1` bounded by the unit array, is a puppet seat's unit |
+| `0x4864B0`, Send_UnitDeath | `83 EC 10 53 55` | 8 | the unit is a puppet seat's |
+| `0x480B26`, inside SET | `8B 4C 24 04 56` | 8 | the script's unit is a puppet seat's, outside the replay's own create and reply |
+| `0x481340`, ATTACH | `8B 44 24 04 56` | 0xC | the same |
+| `0x4813B0`, DROP | `8B 44 24 04 56` | 4 | the same |
+| `0x47F780` and `0x47F850`, the replies | `8B 0D E8 1D 51 00` and `57 8B 7C 24 08` | 0xC | the unit is a puppet seat's, outside the replay's own create and reply |
+| `0x437DE0`, the meteor shower | `8B 0D E8 1D 51 00` | 0 | always |
+| `0x417B50`, typed commands | `81 EC D4 00 00 00` | 8 | always |
+| `0x4956C0`, the debug keys (one caller, `0x4965E1`) | `8B 44 24 04 53` | 4 | always |
+| `0x464C60`, the resource transfer | `8B 44 24 04 53` | 0x10 | always |
+| `0x4326B0`, the save | `81 EC 04 01 00 00` | 0xC | always |
+
+**What else the apply rests on** [DISASSEMBLED 2026-09-30]:
+
+- **The level start `0x465E30`** runs over all ten records (`edi` `0xD5C..0xD84`, `0x465E41`,
+  `0x465F87`), with no activity test, and in a skirmish (game type 2, `0x465E77`) writes each
+  record's `+0x8C` and `+0x98` from its skirmish settings entry's `+0x10` and `+0xC`
+  (`0x465EF5..0x465F1A`). So the records neither machine seats hold values from the two machines'
+  menus, and the apply writes every record but V's.
+- **The destructor's order purge** (`0x4867A1`: `0x439EB0(unit, 1)`) sets `+0x42` bit 16 on every
+  order node but the head (`0x439EE6`) before it tears each down through `0x43A1F0` and frees it
+  (`0x439EF3`, `0x439EF9`). The teardown `0x43A1F0` starts TargetCleared through
+  `0x489800(unit, 3)` (`0x43A2B9`) unless the node's `+0x42` bit 16 is set (`0x43A2AB`), after
+  zeroing the owned object `+0x52` (`0x43A2A4`). A puppet's nodes are held with bit 16 set, so a
+  replayed death starts no TargetCleared; the recording carries the head's own, recorded right
+  after its death.
+- **The order linker `0x43AD10(unit, node)`** is stdcall, `ret 8` (`0x43AD45`).
+- **The restamp `0x47CC30` leaves a carried unit in no bucket**: when `+0x86` is set
+  (`0x47CCDF..0x47CCE7`) it writes only `+0x82` (`0x47CD25`) and skips the unlink and the relink,
+  so a set-position on a cargo keeps its chain.
+
+**The facts `tagpu_replay.c` cites besides** [DISASSEMBLED 2026-09-30]:
+
+- **Opening.** The Start calls the settings persist `0x430F00` at `0x47B09C`, after the seat fill
+  (`0x47B092`). The loader builds LosType bits 0–2 from the skirmish settings into `main+0x14281`
+  (`0x4973E0..0x497450`), and its crash handler is `0x497CAB`. `0x4816A0` fills each type-1–3
+  record's sight counters, `+0x88` bytes at `+0x7C` (`0x481734..0x481767`), and the explored map,
+  `(W·H·2) >> 2` bytes (`0x4816B5..0x4816D2`).
+- **Order nodes.** `+0x42` bit 21 (`0x200000`, loaded at `0x439768`) is set with the target's
+  last-seen place in `+0x32`/`+0x34` (`0x4397AF..0x4397C5`). A descriptor's marker mask `+0xC`
+  bit 0 draws the build site (`0x439B87`). The constructor `0x43A0C0` writes the vtable `0x4FD2CC`
+  (`0x43A0DA`) and then `0x4FD2C8` (`0x43A131`), which every constructed node keeps.
+- **The placement part `0x43D6D0`** adds the vertical velocity to the altitude
+  (`0x43D80D..0x43D813`), after the x (`0x43D80B`).
+- **The footprint.** The create copies the def's `+0x14A` into the unit's `+0x7E`, the footprint's
+  width and height (`0x485AA4..0x485AAA`); the refusal `0x47D970` reads its cell x and z at `+0x76`
+  (`0x47D98E`); YARD_OPEN reads the def's yardmap, a byte a footprint cell at `[def+0x14E]`
+  (`0x47DA3D..0x47DA51`), and sets `+0x110` bit 27, the re-claim owed (`0x47DAEC`); the re-claim
+  `0x47C790` sets bit 26 on the incumbent of a cell it contests (`0x47C828..0x47C89C`).
+- **The events.** The build done `0x41B8D0` tests both units, and each one's `+0x110` bit 28, before
+  it writes (`0x41B8D6..0x41B917`). The `0x10` receiver's case calls the start with the unit's COB
+  `+0x9A` and the message's arguments (`0x455528..0x455551`). The nano emitters index the ten
+  16-byte particle layers at `[main+0x38D77]` with their layer word, unbounded
+  (`0x47217C..0x472188`). The shot receiver `0x49D270` reads the shooter's mover's speed `+0x20`
+  (`0x49D50F`). The notice function `0x47FAD0` indexes its table `0x5086D8`, 8-byte rows, by the
+  kind, unbounded (`0x47FBA4`, `0x47FBB1`, `0x47FC33`). The create `0x485F50` indexes the owner's
+  record unbounded (`0x485F5C..0x485F78`); a nonzero slot argument is taken exactly and an
+  occupied one refused (`0x486002..0x486043`), and 0 takes the first free (`0x486036`).
+- **The attach `0x48AB70(rec)`.** The parent's `u16` is at `rec+1`, 0 to detach (`0x48AB7D`); the
+  piece at `rec+5` goes to the child's `+0xF9` (`0x48AC63..0x48AC68`), and the layer at `rec+6`
+  into bits 0–1 of the child's mover's `+0x2E` (`0x48ACE3..0x48ACF0`, the mover `[unit+0]` at
+  `0x48ACE1`). A
+  child already carried is first unlinked from its carrier's chain (`+0x86`, `+0x8E`;
+  `0x48AC23..0x48AC53`), and an attach pushes it at the front of the new one (`0x48AC7C..0x48AC82`).
+  The order purge `0x4384A0` runs only for a child whose owner's record is active and of type 1 or
+  2, attached to a parent whose def's `+0x241` bit 9 is clear (`0x48ACF3..0x48AD1F`). The child is
+  then deselected: `0x48C9B0`, whose one call is `0x48AD25`, tests its `+0x110` bit 4.
+
+The recorder's observers on the two replies chain onto their gates, so they see only the replies
+the gates let through. MEASURED 2026-09-30, the 1,432-unit battle in full visibility: 252
+Send_UnitDeath calls, 26 SETs, 37 replies and 3,809 meteor showers refused, and no hit, ATTACH or
+DROP. A puppet's shots do no damage by the impact's owner gate (B7), and the reaper is the one
+caller of Send_UnitDeath that runs on a skirmish host [INFERRED from the callers' conditions: the
+kill-all needs a type-1/2 owner, CreateFromNetwork a network game].
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the

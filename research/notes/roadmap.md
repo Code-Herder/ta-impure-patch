@@ -3858,9 +3858,12 @@ not load TADR, we will replace it" (the owner, 2026-09-26).
 
 **Next:** T3 — gammata's drop-in, the one known gap left: its `tdraw.dll` loads
 `ddraw_custom.dll`, so Impure has to be installed under that name too, which is a distribution
-question rather than a takeover one. Then Impure's own replacement for the recorder — demos, TA
-Forever's replays, its in-game commands. Until it exists, a game played with Impure records no
-demo.
+question rather than a takeover one. Impure's own replacement for the recorder — demos, TA
+Forever's replays, its in-game commands — has its own plan, [the demo recorder](tadr-port/demo-recorder.html):
+a skirmish is recorded when `tagpu_recorder.on` asks for it, and `tacli replay play` plays a
+recording back on puppets (its skirmish slice, S1 to S2b, 2026-09-29 and 30). Seeking, rewind,
+the in-game controls and network games are its later landings; until then a network game played
+with Impure records no demo.
 
 ## The restorer as compute (2026-09-27)
 

@@ -2927,7 +2927,8 @@ recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-ski
 all before any lands; no recording starts without them. Fifteen observers run a handler and then
 the stolen bytes: the create's success exit `0x4861B3`, the destructor `0x4866D0`, the build done
 `0x41B8D0`, the state setter `0x48B090`, the broadcast starts `0x456190`, `0x456290` and
-`0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850`, `QueryNanoPiece` `0x43E400`,
+`0x456218` (inside `0x456200`), the replies `0x47F780` and `0x47F850` (chained onto the puppet
+gates there, §2.6f), `QueryNanoPiece` `0x43E400`,
 the nano emitters `0x4720D0` and `0x472200`, and the order dispatch at `0x43A216`, `0x43B878` and
 `0x43BB1D`. Thirteen `call`s of the COB starts `0x4B0A70` and `0x4B0940` (HitByWeapon, TakeDamage,
 TransportPickup, TransportDrop, TargetCleared, EndTransport) go through a stub that records and
@@ -2954,6 +2955,54 @@ If a mark table cannot be, the transported explosions fail the way a stub that c
 does: the fail-closed table writes none of its rows, and the process ends with its failure report
 at the first DirectDraw call (`limits: FAILED`). The paths that do not rest on the memo or the
 marks being there — the ghost mask, B4's refused-kill receiver, the level's reset — test for NULL.
+
+### 2.6f Watching a recording (`tagpu_replay.c`, `tagpu_puppet.c`, `tagpu_recreader.c`, on request)
+
+S2b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watching).
+`tacli replay play <instance> <recording> [--perspective RECORD]` asks the next SKIRMISH Start,
+through the request file `tagpu_replay.play`, for the recording's map with every recorded player
+seated as a type-3 record the recording drives, a puppet, and the viewer in a seat V of their own.
+The level then plays the recording: each step, after the host's own unit tick, the replay plays
+that step's recorded events through the engine functions that made them and writes the recorded
+world of the next. Without `--perspective` it shows everything (V's full visibility); with it, that
+recorded player's view, radar picture included. The engine facts are
+[the engine map](exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-pass-4-disassembled-measured-2026-09-30)'s.
+
+**Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
+without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
+`0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`. The step runs from B2's stub at
+`0x4954ED` (§2.6c), after the unit tick. **Twelve prologue gates** (`tagpu_puppet.c`,
+`tagpu_detour_gate`), landed at `DllMain` before the recorder's observers, refuse on a puppet level:
+the apply `0x489CE0` and `Send_UnitDeath 0x4864B0` for a puppet's unit; COB's SET (at `0x480B26`,
+its second instruction), ATTACH `0x481340`, DROP `0x4813B0` and the two replies `0x47F780` and
+`0x47F850` for a puppet's unit, outside the replay's own create and reply; and always the meteor
+shower `0x437DE0`, typed commands `0x417B50`, the debug keys `0x4956C0`, the resource transfer
+`0x464C60` and the save `0x4326B0`. On any other level a gate reads only the mode byte. A recording
+plays only when all twelve are in, and the teardown wrap too (§2.7), which ends the puppet level
+before the cascade destroys its units.
+
+**Fields we write**, on the game thread, on a puppet level only:
+
+- at the seat fill: each seat's record through `0x464290(seat, 3)`, then PlayerInfo `+0x95` and
+  `+0x96`, the name at `+0x2B` and `+0x49`, and the alliance row `+0x108..+0x112`; V's through
+  `0x464290(V, 3)`, with PlayerInfo `+0x9B` bit 6 (the watcher bit) and the recording viewer's
+  side at `+0x95`; `0x464290(r, 0)` for a record the stock fill activated that the recording does
+  not seat; `main+0x2A42` = V, `main+0x2A43` = the view, `main+0x2A3C` = the recorded player
+  count; the objective disarmed (`0x4904B0`);
+- the skirmish settings, which the recording's options replace after `0x430F00` has persisted the
+  player's; the teardown puts the player's back;
+- each step: every unit's record and mover under `replay-layout.tsv`'s classes, positions through
+  `0x48A9F0` with `0x43DA70` and `0x43DB50`, carry links through `0x48AB70`, order lists through
+  `0x43A0C0`, `0x43A1F0`, `0x43AD10` and `0x489690`, a yard's change through `0x47C790` and
+  `0x440A40`; every player record but V's under the same classes, but `+0xF0`, the 30-tick
+  deadline the host's players phase keeps; and each seat's `+0x18` = GameTime;
+- the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
+  `0x4B0940`, `0x41B8D0`, `0x48B090`, `0x47F780`, `0x47F850`, `0x4720D0` and `0x472200`;
+- at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit in every
+  cell of the explored map `[main+0x14273]`, `main+0x14281` bit 3 cleared, and `s_windState`
+  seeded from the recording's first image.
+
+The recorder refuses a puppet level. `tagpu_recreader.c` reads the file and names no engine memory.
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 

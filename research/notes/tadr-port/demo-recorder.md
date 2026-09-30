@@ -17,7 +17,7 @@ techniques from accepted requirements.
 The shared engineering rules are in [the TADR port overview](overview.md). Recording is a new
 feature of Impure; it does not require running the original recorder alongside Impure.
 
-**The recorder has landed; nothing can watch a recording yet.** The three feasibility experiments
+**A skirmish can be recorded and watched; seeking, rewind and the in-game controls are next.** The three feasibility experiments
 under [Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the completeness
 mechanism's first step: every writable static of the four simulation files is declared, and the
 build refuses one that is not; the bytes of the engine's unit and player records that are not
@@ -25,8 +25,11 @@ recorded as values are listed in one exclusion file the build checks; the design
 that is still outside both. The skirmish slice's first landing, the recorder, records a skirmish
 to a file when asked and checks the file against the game as it goes
 ([S1](demo-recorder-skirmish-slice.md#s1-the-recorder), 2026-09-29), and since S2a (2026-09-30) a
-recording also carries every mover, order list and PlayerInfo and the engine's events; watching
-is next. Recording
+recording also carries every mover, order list and PlayerInfo and the engine's events. Since
+[S2b](demo-recorder-skirmish-slice.md#s2b-watching) (2026-09-30) `tacli replay play` plays a
+recording back on puppets, showing everything or one recorded player's view, and every recorded
+value is equal to the recording at every checkpoint; the Replays browser and the timeline are S5's.
+Recording
 every game waits for the reduced stream, since the exact stream the recorder writes is too large
 for that. Every decision of the
 [completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)

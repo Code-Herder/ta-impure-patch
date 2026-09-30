@@ -114,9 +114,17 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
 
 ### 1.0 Rules for every row
 
-- **Ordering.** Every event carries the step T and a sequence number in engine order. The host
-  applies image T at its 0x4954ED, then replays E_T in recorded order. Section 1.9 covers the
-  one refinement this needs: the victim's record for deaths.
+- **Ordering.** Every event carries the step T and a sequence number in engine order. As built
+  (S2b), the host's step at 0x4954ED runs its own unit tick 0x48AD30 first, and then the replay:
+  E_T in recorded order, then image T+1. E_T is what the recording machine's unit tick T made
+  from image T, which the host holds; image T+1 is the world that unit tick and the rest of
+  iteration T left. The rest of the host's iteration then reads what the recording machine's
+  read, and the players phase re-stamps sight from the unit tick's positions. Image T before the
+  host's unit tick, the desk order, left the stamps `+0x7A`/`+0x7C`/`+0xF8` of 15–20 of 1,413
+  battle units one tick behind at every dump [MEASURED 2026-09-30]. What the rest of the
+  iteration keeps a clock for, it keeps on the host: the players phase's 30-tick deadline
+  ([the host note](demo-recorder-s2-host.md) §2.3). Section 1.9 covers the one refinement this
+  needs: the victim's record for deaths.
 - **IDs.** Units are named by recorder IDs (from 1, never the engine's index: commit
   `84b5fae7`).
   - Playback maps each ID to a slot before any call.
@@ -132,6 +140,12 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
   - Each nested pair below is inert on its second run by an engine test.
   - The one pair that is not (StopBuilding from the order-node teardown) is closed by a rule on
     the puppet's order nodes (§1.3).
+  - As built (S2b), a root recorded at its entry is played before what it nests, which follows it
+    in the recording and is played as its own event; the puppet gates keep the replayed root's
+    own nested COB writes and replies inert (`tagpu_puppet.c`, *The replay's own calls*). The
+    create is recorded at its exit, after what it nests (the state byte, the Create script's
+    first slice with its SETs, their replies), so those find no unit when played and are counted
+    as not played; the replayed create makes them again, with the gates open around it.
 
 ### 1.1 Create — root `0x485F50`
 

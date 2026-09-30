@@ -2,7 +2,7 @@
 
 ## Status
 
-**Desk research, 2026-09-30**, for the [skirmish slice](demo-recorder-skirmish-slice.md)'s S2, with the owner's decisions in that note's *Decided 2026-09-30*. S2b builds the puppet host on this page; S2a records what its header and applier need.
+**Desk research, 2026-09-30**, for the [skirmish slice](demo-recorder-skirmish-slice.md)'s S2, with the owner's decisions in that note's *Decided 2026-09-30*. S2a records what its header and applier need. **S2b built the puppet host on this page**, and where the build departed from it or proved it wrong, the section now says what was built and why: the radar pass's 30-tick deadline (§2.3), the damage gate at the apply rather than the sender (§2.6), the reaper and bit 14 (§2.7), the explored map's size (§2.9), and the wind (row 13).
 
 It covers five tasks:
 
@@ -123,6 +123,12 @@ V is the lowest record index in 0–9 that the recording does not seat. A skirmi
 
 - **No start unit.** The loader creates none, because the start-unit sites skip every record on a puppet host (§6.4).
 - **No apply and no comparison.** The applier never writes V's record and the playback comparison skips it. S1 records all ten records every iteration (`REC_PLAYERS` = 10, `cap_players`), and V's recorded image is an empty record, so applying it would un-seat the viewer.
+- **The records no one sits in are applied like the seats.** Every record but V's is written raw
+  under the exclusion file, not only the recorded seats: the level start `0x465E30` writes the start
+  energy and metal (`+0x8C`/`+0x98`) of all ten records from the skirmish settings
+  (`0x465EF5..0x465F1A`), and the host's settings for an unseated record are its own menu's, not
+  the recording's [DISASSEMBLED; MEASURED: in the battle, records 5–9 differed at `+0x8C` and
+  `+0x98` until the apply wrote them].
 - **No pacing stamp needed.** The pacing gate `0x495230` takes the smallest `+0x18` among active type-3 records whose live count `+0x144` is above 0 (`0x4952CF..0x495303`, engine map). V never has a unit, so it never holds the host back.
 
 **V's block.** V has an empty unit block of its own. The level init gives contiguous ranges of `main+0x37EE6` slots to all ten records, active or not:
@@ -244,7 +250,7 @@ The disposition keys:
 | 4 | The players phase `0x464F80`, per active type-1–3 record with `+0x146` ≠ 10 | Yes, for every puppet seat and V | See the rows below | as below |
 | 4a | `0x408C40` (AI) | Only when `+0x74` is set, and type 3 has NULL (`0x46434A`) | — | UNREACHABLE |
 | 4b | `0x40B2C0(i)` | Returns for a NULL `0x5119C0[i]` [DISASSEMBLED earlier; the engine map says type 3 has no `0x5119C0` object] | — | UNREACHABLE |
-| 4c | Sight re-stamp `0x4827B0` of every live unit in the block (`0x465046..0x465063`) | Yes | Unit `+0xF8`/`+0x7A`/`+0x7C` and the owner's counters | AGREEING. Re-derived from applied positions; the applier writes these only through the position recipe. |
+| 4c | Sight re-stamp `0x4827B0` of every live unit in the block (`0x465046..0x465063`) | Yes | Unit `+0xF8`/`+0x7A`/`+0x7C` and the owner's counters | AGREEING, because the apply runs after the unit tick and before this phase ([the events note](demo-recorder-s2-events.html) §1.0): the stamp reads image T+1's positions, as the recording machine's read the positions its own tick left. The applier writes these only through the position recipe. |
 | 4d | The 30-tick gate: `+0xF0 += 30` (`0x465077..0x465092`) | Yes | Player `+0xF0` (recorded) | AGREEING |
 | 4e | The end tests (`0x46516D`/`0x46586F`) and the Deathmatch respawn (`0x4651B2..0x4654EF`, which creates a unit for `+0x2A42` through `0x485F50` at `0x4653D9`) | For `+0x2A42` = V | Victory, defeat, a unit | Disarmed by `0x4904B0` in the seat fill; the respawn is behind the defeat test (`0x465174`) [MEASURED in the engine map] |
 | 4f | The economy `0x401360` | No: types 1/2 only (`0x465539..0x46553F`) | — | UNREACHABLE |
@@ -257,12 +263,12 @@ The disposition keys:
 | 5e | **The reaper** (`0x48AFB9..0x48AFD1`): bit 14 → `Send_UnitDeath 0x4864B0(unit, +0xF5)` | **Yes, for every owner** | A death | §2.7 |
 | 6 | Area damage from projectile impacts | Owner gate `0x49A01B..0x49A047` (B7-patched): damage only when the projectile's owner record is empty or not remote. Puppet shots are type 3, so no damage; owner 10 computes. | Unit HP | Covered by the sink gate (§2.6) |
 | 7 | **The fire spread** `0x4239C0` (features `0x424050` at `0x424463`) | **Yes** (sim RNG `0x4233A0`) | `0x49A0C0(weapon, pos)` at `0x423BE0` builds a zeroed projectile with owner 10 (`0x49A0EB`) and calls area damage `0x49A120` **directly** (`0x49A109`), bypassing the owner gate | The sink gate stops the unit damage; the burning itself is feature state (S3). **D5** |
-| 8 | **The meteor shower** `0x437DE0` (`0x495594`, no host test) | **Yes** (sim RNG) | Stones of owner 10 compute damage (B7: `+0x62` = 0 when spawned) | **SKIP** the shower on a puppet host; the recording's stones come as events. **D5** |
+| 8 | **The meteor shower** `0x437DE0` (`0x495594`, no host test) | **Yes** (sim RNG) | Stones of owner 10 compute damage (B7: `+0x62` = 0 when spawned) | **SKIP** the shower on a puppet host; the recording's stones come as events. **D5**. Built as a gate at `0x437DE0`'s entry, whose one caller is `0x495594`. |
 | 9 | **The destructor's cargo loop** in `0x4866D0` (`0x4867D0..0x48682A`) | **Yes**, whenever the applier replays a carrier's death through the destructor | For each carried unit: `0x489BB0(+0xF0, cargo, 30000, 3 or 6, 0)`, then `0x48AAC0(cargo, 0, −1, 1)` (unload: carry links) | The sink gate stops the damage. The unload writes recorded carry links, so the apply orders the carried units' fate before the carrier's death, and the loop then finds `+0x8A` empty. Shared with the carried-units research. |
 | 10 | Kill-all on a commander's death `0x486F10` (`0x4866B3`) | **No**: only for an active type-1/2 owner (`0x48669A..0x4866A3`) | — | UNREACHABLE [MEASURED in the engine map] |
-| 11 | The hit sender `0x489BB0(attacker, victim, amount, type, x)` | Via rows 6, 7 and 9 | Applies **locally for every owner** (`0x489C89` → `0x489CE0`), then forwards to a type-3 owner (`0x489C8E..0x489CC4`); `ret 0x14` | **The sink gate** (§2.6) |
+| 11 | The hit sender `0x489BB0(attacker, victim, amount, type, x)` | Via rows 6, 7 and 9 | Applies **locally for every owner** (`0x489C89` → `0x489CE0`), then forwards to a type-3 owner (`0x489C8E..0x489CC4`) through `0x451DF0`, which sends nothing without the network bit (`0x451EAB`); `ret 0x14` | **The sink gate**, at the apply (§2.6) |
 | 12 | AI: AutoAim, loop 4 of the radar pass | No: types 1/2 | — | UNREACHABLE |
-| 13 | The wind `0x490C40` | Yes | Main-block wind fields. Impure's draws at `0x490C5A` come from `s_windState` (`tagpu_patches.c` ~9199–9300, `SIM_VAR(s_windState, SIM_STATE)`). | AGREEING. The fields agree when the applier writes `s_windState` at each boundary and the main-block fields started equal (main block: S3). |
+| 13 | The wind `0x490C40` | Yes | Main-block wind fields. Impure's draws at `0x490C5A` come from `s_windState` (`tagpu_patches.c` ~9199–9300, `SIM_VAR(s_windState, SIM_STATE)`). | AGREEING. S2b seeds `s_windState` once, at the first step, from the recording's first image (`wind_seed`, found by its name in the header), so every draw after it is the recording's; the table then compares equal at every dump. The main-block fields are S3's. |
 | 14 | `0x415B30` (the GAF sequences), `0x466580` (radar blink), `0x471EB0` (particles), `0x41CA10` (camera), `0x463EF0` (chat lines `+0x2A40`) | Yes | Display and animation (main block) | DISPLAY |
 | 15 | `0x482130` sight-record expiry through `0x481D50` | Yes | Main-block sight records | AGREEING [INFERRED; S3] |
 | 16 | The destructor's rank update (`0x486B2D..0x486C17`) and kill counts, for applied deaths | Yes | `+0x148`, kills | AGREEING |
@@ -283,6 +289,8 @@ Loop 1 also clears bit 12 on every unit on every pass, and bit 12 is recorded. L
 - The radar pass computes them for the chosen perspective.
 - The applier keeps the recorded bits in its model for takeover and forks, and does not write them live.
 - The playback comparison masks them.
+
+**The pass runs only if the host keeps the 30-tick deadline itself.** The pass is called from the viewed record's 30-tick block (`0x46556D`, with the minimap fog `0x466C20` after it), which runs when the record's `+0xF0` has reached GameTime (`0x46507D..0x465089`) and then adds 30 (`0x46508F`). The applied image of T+1 carries `+0xF0` as the recording machine's players phase of T left it, already advanced, so a host that wrote it would never find a seat's pass due, and never ran the radar pass for a recorded perspective: every unit kept the bits its create gave it (`0x485C2C..0x485C48`: bits 8–9 cleared, bit 9 set when the owner is the viewed record). MEASURED 2026-09-30: from the battle recording's viewer, record 0, every one of 1,413 units lacked bit 8 at every dump. S2b therefore leaves `+0xF0` to the host's players phase and compares it: both machines' deadlines start at the load's GameTime (`0x464700`) and step by 30 whenever GameTime reaches them, and the host plays one recorded iteration a GameTime. The only other writer, `0x466050`, is the saved game's loader (its one caller `0x43264E`). V's own pass always ran, since V's record is not applied.
 
 What this buys: full visibility and every perspective show the engine's own radar picture. The recording viewer's perspective shows the same picture the recording machine did, whenever the host's inputs match. Those inputs are positions, alliances, radar and jammer units, and PlayerInfo share bits, and PlayerInfo is not recorded (§6.6) [INFERRED].
 
@@ -317,11 +325,11 @@ The seat fill refuses a request while the bit is set, so a puppet host is a skir
 
 ### 2.6 Damage: one sink gate
 
-**The gate.** At the entry of the hit sender `0x489BB0`, on a puppet host, return (`ret 0x14`) when the victim (the second argument) is a unit of a puppet seat: `victim+0xFF` < 10 and `seat[victim+0xFF]`.
+**The gate, as built.** At the entry of the apply `0x489CE0(rec)` (`ret 4`), on a puppet host, return when the record's victim, the `u16` at `rec+1`, names a unit of a puppet seat: bounded first to `1..(last−first)/0x118` of the unit array, then its `+0xFF` < 10 and `seat[+0xFF]`. The desk design put it at the entry of the sender `0x489BB0`; the apply is where every hit lands, the sender's included (`0x489C89`), and the only other direct caller is the pump's `0x0B` case (`0x455412`), with Impure's own stubs that jump to it (B4's companion). The sender's forward to a type-3 owner sends nothing in a skirmish (`0x451DF0` tests the network bit at `0x451EAB`).
 
 **The invariant.** On a puppet host no computed hit lands on a puppet.
 
-**Coverage.** Every caller of `0x489BB0` [DISASSEMBLED]:
+**Coverage.** Every caller of `0x489BB0`, which reaches the apply through `0x489C89` [DISASSEMBLED]:
 
 - order handlers: `0x402147`, `0x402701`, `0x404981` and `0x414B8D`;
 - `0x41BC49` in `0x41BA60`, and `0x41BDC7` in `0x41BD10`, both reached from order handlers and the local block;
@@ -349,6 +357,8 @@ So the recorded bit 14, written raw by the reconcile, kills the puppet at its ne
 - **(b)** A proof that the reaper route plus the "gone" records never doubles a death.
 
 The host's constraint: **bit 14 is a death trigger on puppets**, so the reconcile must not write it unless the plan chooses (b).
+
+**As built (S2b): route (a), with the trigger removed instead of the bit.** Deaths are replayed at their recorded point through the destructor (C4's wrap, `tagpu_tx_replay_death`), and bit 14 is written raw like any value. The reaper's `Send_UnitDeath 0x4864B0(unit, …)` (`ret 8`) is refused at its entry for a puppet's unit, so a unit the recording marks dying lives until its recorded death, in the step it died in there. MEASURED 2026-09-30 on the 1,432-unit battle: 252 reaper calls refused, every dump equal, bit 14 included. The gate covers every caller: the reaper `0x48AFD1`, the kill-all `0x486EB2`, `0x486EF8` and `0x486FB4`, CreateFromNetwork's occupant `0x486244`, and the scenario tooling's `UNITS_KillUnit`. The last, the teardown's destroy-all `0x485980` (`0x4859A8`, called at `0x491B95`), runs after the teardown wrap has ended the puppet mode, so it destroys every unit as ever.
 
 ### 2.8 The footprint contest inverts on a puppet host [NEW consequence]
 
@@ -379,8 +389,8 @@ The fills run at the host's first sim step, after the loader's `0x4816A0(1)` at 
 2. V's sight counters: fill the `[rec_V+0x88]` bytes at `[rec_V+0x7C]` with 1.
    - This is the value `0x4816A0` writes into every type-1–3 record's counters when true LOS is off (`0x481734..0x481767`: u8 cells, the length at `+0x88`).
    - Bound: the length the engine computed at load. It is the `sightgeom` row, class `cache`, which "bounds 0x4816A0's fill".
-3. The explored map `[main+0x14273]`: set bit `1 << V` in each of the W·H u16 cells.
-   - W = `+0x14233` and H = `+0x14237`: the bound `0x4816A0` uses at `0x4816B5..0x4816C8`.
+3. The explored map `[main+0x14273]`: set bit `1 << V` in each of its u16 cells.
+   - The map is `(W·H·2) >> 2` bytes, W·H/4 cells, with W = `+0x14233` and H = `+0x14237`: the size the allocation (`0x483CF6..0x483CFF`) and `0x4816A0`'s fill (`0x4816B5..0x4816D2`) use, and the saved game's loader `0x484FA0` accepts.
 4. Clear LosType bit 3 so the draw rebuilds the fog grid. `0x4848E0` builds it from `+0x2A43`'s counters when bit 3 is clear.
 
 **Why none of this is recorded state.**
@@ -479,7 +489,7 @@ A later takeover to an AI seat needs that script.
 
 **The display commands.** Among the refused commands are harmless display ones: `Clock`, `Gamma`, `ScreenChat`, `ShowRanges`, `Shadow` and similar. Allowing them would take a list. **D4** recommends refusing all.
 
-**2. The debug keys: gate the call `0x4956C0` at `0x4965E1`.**
+**2. The debug keys: gate `0x4956C0(key)` (`ret 4`), whose one caller is `0x4965E1`.**
 
 - It is reached only when `main+0x3923B` bit 1 is set. That is the SoftwareDebugMode word `tacli switches` writes.
 - `0x495749..0x495794` sets bit 14 (dying) on the unit under the cursor.
