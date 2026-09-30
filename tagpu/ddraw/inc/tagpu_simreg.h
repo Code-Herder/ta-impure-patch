@@ -189,9 +189,10 @@ extern const SimField tagpu_sim_owned[];
     SIM__ENTRY(var, .stride = sizeof(var), .nrows = 1, .cls = SIM_INSTALL, .flags = SIMD_GUARD)
 
 /* Memory a declaration's variable points at: a heap table's rows (SIM_HEAP, SIM_BLOCK), a TLS
-   slot's buffer (SIM_TLS), code (SIM_CODE), a guard (SIM_GUARD). Zeroed from VirtualAlloc, code
-   executable and a guard only reserved; NULL on failure, or for any other declaration (logged
-   by name). */
+   slot's buffer (SIM_TLS), code (SIM_CODE), a guard (SIM_GUARD). Zeroed from VirtualAlloc, a heap
+   table's pages write-watched (MEM_WRITE_WATCH: the demo recorder asks which were written, and
+   images only those), code executable and a guard only reserved; NULL on failure, or for any
+   other declaration (logged by name). */
 void* tagpu_sim_alloc(const SimDesc* d, size_t bytes);
 void  tagpu_sim_free(const SimDesc* d, void* p);
 #define SIM_ALLOC(var, bytes) tagpu_sim_alloc(&simdir_##var, (bytes))
@@ -229,5 +230,15 @@ int tagpu_sim_lever_read(const char* file, char* buf, int cap);
 /* Walks the registry once every simulation module has installed (DllMain): checks each
    declaration's shape, closes the lever list and logs one summary line. */
 void tagpu_simreg_attach(void);
+
+/* The recorder's view, valid once the attach walk has run (0 and NULL before it): the
+   declarations it accepted, in the list's order -- the index is a recording's name for a table,
+   its header maps each index to the declaration's name -- and the levers read while installing,
+   each with its file name, whether it was present and the start of its text (NULL when only its
+   presence was read). */
+unsigned       tagpu_simreg_count(void);
+const SimDesc* tagpu_simreg_at(unsigned i);
+unsigned       tagpu_simreg_levers(void);
+const char*    tagpu_simreg_lever_at(unsigned i, int* set, const char** text, int* len);
 
 #endif
