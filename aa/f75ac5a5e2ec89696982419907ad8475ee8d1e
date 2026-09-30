@@ -1,0 +1,1 @@
+landing-review: medium, read-only agent on 6b65d48f..aaf75ac5 — no HIGH; 2 MED doc overclaims (solar residual, exactness only with a horizontal edge pair), 1 LOW five interpolants, ptr_ok, aliasing, comment: all acted on in the next commit
