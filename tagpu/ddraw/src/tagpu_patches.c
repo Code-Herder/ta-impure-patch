@@ -22,6 +22,8 @@
 #include "tagpu_cobtrace.h"
 #include "tagpu_simreg.h"
 #include "tagpu_recorder.h"
+#include "tagpu_puppet.h"
+#include "tagpu_replay.h"
 #include "git.h"
 
 static void plog(const char* s)
@@ -4454,7 +4456,7 @@ static int fix_stacked_air(void)
     unsigned char *t, *s, *m, *k, *p;
 
     InitializeCriticalSection(&s_airLock);
-    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(24);
+    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(32);
     if (!t || !s || !m || !k) { lim_no_stub(); return FIX_TABLE; }
 
     /* the walk's end: push [ebp+0xC]; push [ebp+8]; call air_first; test eax,eax; jz tail;
@@ -4504,15 +4506,19 @@ static int fix_stacked_air(void)
     *p++ = 0x61;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x0047CFA1); p += 4;
 
-    /* the unit tick's call: pushfd; pushad; call tagpu_rec_capture; call air_rebuild; popad;
-       popfd; jmp 0x48AD30 -- the return address the site's call pushed stays on top, so
-       0x48AD30 returns to 0x4954F2. The demo recorder's capture comes first: it records the
-       world between two iterations (tagpu_recorder.c), and the pool it records is the one the
-       last iteration left, which air_rebuild then derives again from the units it records. */
+    /* the unit tick's call: pushfd; pushad; call tagpu_rec_capture; call tagpu_replay_step;
+       call air_rebuild; popad; popfd; jmp 0x48AD30 -- the return address the site's call pushed
+       stays on top, so 0x48AD30 returns to 0x4954F2. The demo recorder's capture comes first: it
+       records the world between two iterations (tagpu_recorder.c), and the pool it records is the
+       one the last iteration left, which air_rebuild then derives again from the units it
+       records. On a level that plays a recording the capture does nothing and the replay's step
+       writes the recorded world (tagpu_replay.c), so air_rebuild derives the pool from the units
+       it wrote. */
     p = k;
     *p++ = 0x9C;
     *p++ = 0x60;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_rec_capture); p += 4;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_replay_step); p += 4;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_rebuild); p += 4;
     *p++ = 0x61;
     *p++ = 0x9D;
@@ -11222,6 +11228,9 @@ static int __attribute__((thiscall)) cob_get(char* cob, int key, int a, int b, i
         own = (unsigned char)caller[0xFF];
         return ta[0x1B63u + own * 0x14Bu + 0x108u + owner] != 0;
     }
+    /* a puppet seat's unit answers what the recording machine's did (tagpu_puppet.h); `owner` is
+       below 10 by cob_live_unit */
+    if (tagpu_puppet_seat(owner)) return tagpu_puppet_local(owner);
     owner = (unsigned char)ta[0x1B63u + owner * 0x14Bu + 0x73u];
     return owner == 1 || owner == 2;
 }

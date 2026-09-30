@@ -65,6 +65,7 @@
 #include "dd.h"                            /* g_ddraw.gui_thread_id: the game thread */
 #include "tagpu_log.h"
 #include "tagpu_recorder.h"
+#include "tagpu_replay.h"
 
 #define FREEOBJ_VA    0x0045AAA0u          /* FreeObjectState: stdcall, 1 arg, ret 4      */
 #define FREEOBJ_RESUME (FREEOBJ_VA + 5u)
@@ -308,10 +309,12 @@ static void __cdecl reclaim_teardown_pre(void)
        in the fork. */
     char b[320];
 
-    /* The demo recorder's recording ends here, before the cascade frees the unit array it reads.
-       Its capture runs on the game thread too, and the teardown is entered only from the
-       engine's state handlers on that thread, so the two never overlap. */
+    /* The demo recorder's recording ends here, before the cascade frees the unit array it reads,
+       and so does a level that plays a recording (tagpu_replay.c). Their steps run on the game
+       thread too, and the teardown is entered only from the engine's state handlers on that
+       thread, so the two never overlap. */
     tagpu_rec_level_end();
+    tagpu_replay_level_end();
 
     /* THE BASELINE HAS TO BE KNOWN BEFORE A MISMATCH MEANS ANYTHING. `gui_thread_id`
        is set from GetWindowThreadProcessId when the window is created (dd.c) and

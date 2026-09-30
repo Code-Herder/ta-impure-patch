@@ -62,6 +62,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_detour.h"
 #include "tagpu_patches.h"
+#include "tagpu_puppet.h"
 #include "crc32.h"
 #include "git.h"
 
@@ -650,6 +651,22 @@ static unsigned names_hash(const char* base, unsigned n, unsigned stride, unsign
     return h;
 }
 
+void tagpu_rec_map_stem(const char* ta, char* out, size_t cap) { map_stem(ta, out, cap); }
+
+void tagpu_rec_defs_print(const char* ta, unsigned* n, unsigned* hash)
+{
+    const char* defs = *(const char* const*)(ta + OFF_UDEFS);
+    *n = *(const unsigned*)(ta + OFF_UCOUNT);
+    *hash = defs ? names_hash(defs + UD_NAME, *n, UD_STRIDE, UD_NAMELEN) : 0;
+}
+
+void tagpu_rec_weapons_print(unsigned* n, unsigned* hash)
+{
+    const char* w0 = tagpu_limits_weapon0();
+    *n = w0 ? (unsigned)tagpu_limits_weapon_slots() : 0;
+    *hash = w0 ? names_hash(w0, *n, WPN_STRIDE, WPN_NAMELEN) : 0;
+}
+
 static void header_build(const Level* L, int tick, const char* map, const FILETIME* now, Tlv* t)
 {
     unsigned i, n;
@@ -667,8 +684,7 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
     tlv_u32(t, RT_UNITS_EACH, *(const unsigned short*)(ta + OFF_EACH));
     {
         unsigned d[2];
-        d[0] = L->ndefs;
-        d[1] = L->defs ? names_hash(L->defs + UD_NAME, L->ndefs, UD_STRIDE, UD_NAMELEN) : 0;
+        tagpu_rec_defs_print(ta, &d[0], &d[1]);
         tlv(t, RT_UNITDEFS, d, 8);
     }
     for (i = 0; i < REC_PLAYERS; i++) {
@@ -720,10 +736,8 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
     }
     if (set) tlv(t, RT_SETTINGS_MAP, set + 0x11C, (unsigned)bounded_len(set + 0x11C, 64));
     {
-        const char* w0 = tagpu_limits_weapon0();
         unsigned d[2];
-        d[0] = w0 ? (unsigned)tagpu_limits_weapon_slots() : 0;
-        d[1] = w0 ? names_hash(w0, d[0], WPN_STRIDE, WPN_NAMELEN) : 0;
+        tagpu_rec_weapons_print(&d[0], &d[1]);
         tlv(t, RT_WEAPONS, d, 8);
     }
 }
@@ -2254,7 +2268,9 @@ void __cdecl tagpu_rec_capture(void)
            freed, and without the wrap nothing would. It starts only when REC_ON asks. */
         s_state = ST_DONE;
         if (mode == MODE_SKIRMISH) {
-            if (!tagpu_opt_on(REC_ON))
+            if (tagpu_puppet_on())
+                tagpu_logf("recorder: not recording: this level plays a recording");
+            else if (!tagpu_opt_on(REC_ON))
                 tagpu_logf("recorder: not recording: %s is absent", REC_ON);
             else if (!tagpu_reclaim_level_tracked())
                 tagpu_logf("recorder: not recording: the teardown wrap is not in (tagpu_reclaim.c), "

@@ -28,6 +28,7 @@
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_recorder.h"
+#include "tagpu_replay.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
@@ -279,6 +280,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            let the fire functions build the 0x0D the recorder takes, and change no simulation
            state (tagpu_recorder.c, *The events*). */
         tagpu_rec_init();
+
+        /* tagpu: playing a recording back (tagpu_replay.c): four call sites of the SKIRMISH
+           Start and the loader -- the seat fill, the settings persist and the two start-unit
+           calls -- byte-matched and installed only whole. Each is inert unless
+           tagpu_replay.play asked for the level; the replay's step rides B2's stub. */
+        tagpu_replay_init();
 
         /* tagpu: HUD scale (Phase F, gui-renderer.md 22) -- the in-game HUD
            magnified inside the player's Screen Size, with the world viewport

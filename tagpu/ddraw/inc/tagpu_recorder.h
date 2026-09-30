@@ -34,6 +34,15 @@ void tagpu_rec_shot(const unsigned char* pkt, int meteor);
 void tagpu_rec_intercept(const unsigned char* point, unsigned weapon);
 void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc, int a0);
 
+/* What a recording's header says about the game it was made in, computed as the header computes
+   it, so that playback (tagpu_replay.c) compares like with like: the map's stem from GameingState's
+   TNT path (RT_MAP); the unit-type definitions' count and the FNV-1a of their names (RT_UNITDEFS);
+   the weapon array's slots and the FNV-1a of their names (RT_WEAPONS, 0 and 0 before the array
+   exists). Game thread, `ta` the main block. */
+void tagpu_rec_map_stem(const char* ta, char* out, size_t cap);
+void tagpu_rec_defs_print(const char* ta, unsigned* n, unsigned* hash);
+void tagpu_rec_weapons_print(unsigned* n, unsigned* hash);
+
 /* THE EXIT waits for the files of the recordings that have ended: a recording is complete once
    its writer has closed the file, and ExitProcess would kill a writer still writing its last
    block. Every orderly exit calls this first, on whatever thread exits: the exe's CRT, and each

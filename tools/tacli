@@ -1050,6 +1050,8 @@ def regstore_values(sound: bool, res=None, args=None) -> list:
             vals.append(("", "SkirmishLineOfSight", "REG_DWORD", args.los))
         if args.mapping is not None:
             vals.append(("", "SkirmishMapping", "REG_DWORD", args.mapping))
+        if getattr(args, "skirmish_players", None):
+            vals.append(("", "NumSkirmishPlayers", "REG_DWORD", args.skirmish_players))
     return vals
 
 
@@ -1900,7 +1902,8 @@ def _launch(args) -> dict:
     for stale in ("tagpu_scenario.trigger", "tagpu_scenario.json",
                   "tagpu_switches.trigger", "tagpu_switches.json",
                   "tagpu_units.trigger", "tagpu_features.trigger",
-                  "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt"):
+                  "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt",
+                  "tagpu_replay.play"):
         (inst.gamedir / stale).unlink(missing_ok=True)
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
         log.unlink()
@@ -5242,6 +5245,111 @@ def cmd_scenario_load(args):
         sys.exit(1)
 
 
+# --------------------------------------------------------------------- replay
+#
+# Playing a demo recording back on puppets (research/notes/tadr-port/
+# demo-recorder-s2-host.md §6.5). The DLL does the seating: this verb gives the
+# SKIRMISH Start the settings the recording was made with, puts the recording and
+# the request where the seat fill looks for them (tagpu_replay.c), clicks Start,
+# and reports the DLL's verdict. Local instances only.
+
+REPLAY_REQUEST = "tagpu_replay.play"
+REPLAY_RX = re.compile(r"replay: (playing|not playing)\b(.*)")
+REPLAY_SEATS_MAX = 9    # the viewer needs a record of its own (decision D2)
+
+
+def _tarec():
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "replay"))
+    import tarec  # noqa: E402  the recording's reader (tools/replay/tarec.py)
+    return tarec
+
+
+def cmd_replay_play(args):
+    """A recording -> a level of puppets that plays it, in one command."""
+    inst = Instance(args.name)
+    if inst.remote:
+        die(f"{args.name} is remote: `replay play` plays on a local instance")
+    tarec = _tarec()
+    try:
+        h, _blocks, _stop_why = tarec.load(args.recording)
+    except (OSError, tarec.Unreadable) as e:
+        die(f"{args.recording}: {e}")
+    seats = sorted(h["players"], key=lambda p: p["index"])
+    if h.get("mode") != 2:
+        die(f"{args.recording} is not a skirmish's (mode {h.get('mode')})")
+    if not 2 <= len(seats) <= REPLAY_SEATS_MAX:
+        die(f"{args.recording} seats {len(seats)} players: a replay plays 2 to "
+            f"{REPLAY_SEATS_MAX}, since the viewer takes a record of its own")
+    if any(p["controller"] not in (1, 2) for p in seats):
+        die(f"{args.recording} has a seat that was neither human nor AI")
+    smap = h.get("settings_map")
+    if not smap:
+        die(f"{args.recording} does not name its map as the skirmish settings did")
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", Path(args.recording).stem)[:60] or "replay"
+
+    if inst.running():
+        if not args.restart:
+            die(f"{args.name} is already running (replay play --restart stops it first)")
+        _stop(inst)
+    # every entry up to the highest seat is written, the ones the recording leaves empty
+    # as off, so the stock seat fill activates exactly the recorded seats
+    count = seats[-1]["index"] + 1
+    by = {p["index"]: p for p in seats}
+    players = [f"{i}:{by[i]['controller']}:{by[i]['side']}:{by[i]['logo']}" if i in by
+               else f"{i}:0" for i in range(count)]
+    launched = _launch(argparse.Namespace(
+        name=args.name, json=True, force=False, res=tuple(args.res) if args.res else None,
+        map=smap, vsync=args.vsync, unit_limit=None, player=players,
+        skirmish_players=count, display=args.display, slot=None, sound=None, intro=False,
+        shield=None, dplay=None, dplay_port=None, free_dplay_port=False, title=None,
+        keep_dll=args.keep_dll, defaults=args.defaults, los=None, mapping=None, arg=[],
+        timeout=args.launch_timeout, no_restore_pointer=False))
+    if launched.get("already_running"):
+        die(f"{args.name} is still running after being stopped "
+            f"(tacli stop {args.name} --hard)")
+    replays = inst.gamedir / "replays"
+    replays.mkdir(exist_ok=True)
+    shutil.copyfile(args.recording, replays / f"{name}.imprec")
+    request = inst.gamedir / REPLAY_REQUEST
+    steps = [f"launched, {len(seats)} seats on {smap}"]
+    verdict = None
+    try:
+        _scn_wait_shell(inst, args.launch_timeout)
+        cursor = _log_cursor(inst)
+        request.write_text(f"play {name}\n")
+        for i, selector in enumerate(SCN_MENU_PATH):
+            last = i == len(SCN_MENU_PATH) - 1
+            before, g = _ui_resolve(inst, selector, SCN_MENU_TIMEOUT, wait=True)
+            _after, how = _ui_click_gadget(inst, g, before, settle=not last)
+            steps.append(f"clicked {_ui_label(g)} on {before.get('gui')}"
+                         + (f" — {how}" if how else ""))
+        deadline = time.time() + args.load_timeout
+        while verdict is None:
+            if not inst.running():
+                die(f"{args.name} exited while the replay loaded (tacli log {args.name} -n 40)")
+            for line in cursor.text(advance=True).splitlines():
+                m = REPLAY_RX.search(line)
+                if m:
+                    verdict = (m.group(1), line[m.start():].strip())
+                    break
+            if verdict is None:
+                if time.time() >= deadline:
+                    die(f"no `replay: playing` in {args.load_timeout:g}s "
+                        f"(tacli log {args.name} -g replay)")
+                time.sleep(0.5)
+    finally:
+        # a request the Start never read would make the next skirmish a replay
+        request.unlink(missing_ok=True)
+    steps.append(verdict[1])
+    res = {"name": args.name, "recording": str(args.recording), "as": name,
+           "playing": verdict[0] == "playing", "steps": steps, "pid": launched.get("pid"),
+           "window": launched.get("window")}
+    out(res, args.json, human="\n".join([f"{name}: on {args.name}"] +
+                                        [f"  {s}" for s in steps]))
+    if not res["playing"]:
+        sys.exit(1)
+
+
 # ------------------------------------------------------------------- switches
 #
 # SoftwareDebugMode, a u16 at TAdynmemStruct+0x37F2F, name-keyed to its bits. A
@@ -6242,6 +6350,32 @@ def build_parser():
     sp = add_scenario("dump", "(phase E — not built yet)")
     sp.add_argument("rest", nargs="*")
     sp.set_defaults(func=cmd_scenario_todo, cmd_todo="dump")
+
+    rp = sub.add_parser("replay", help="play a demo recording back on puppets")
+    add_common(rp)
+    rpv = rp.add_subparsers(dest="verb", required=True)
+    rpp = rpv.add_parser("play", help="launch a skirmish that plays the recording")
+    add_common(rpp)
+    rpp.add_argument("name", help="the instance to launch")
+    rpp.add_argument("recording", help="an .imprec file")
+    rpp.add_argument("--res", type=res_type, help="the window's size")
+    rpp.add_argument("--vsync", choices=("on", "off"), default=None,
+                     help="vsync for the launch (impure.cfg); sticky per instance")
+    rpp.add_argument("--display", default=None, help="X display")
+    rpp.add_argument("--defaults", dest="defaults", action="store_true", default=None,
+                     help="the shipped configuration (as `scenario load --defaults`)")
+    rpp.add_argument("--no-defaults", dest="defaults", action="store_false",
+                     help="back to arm files only (sticky too)")
+    rpp.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
+    rpp.add_argument("--restart", action="store_true",
+                     help="stop the instance first if it is already running")
+    rpp.add_argument("--launch-timeout", type=float, default=SCN_LAUNCH_TIMEOUT,
+                     help=f"seconds to wait for the window and the shell "
+                          f"(default {SCN_LAUNCH_TIMEOUT:g})")
+    rpp.add_argument("--load-timeout", type=float, default=SCN_LOAD_TIMEOUT,
+                     help=f"seconds to wait for the DLL's verdict after Start "
+                          f"(default {SCN_LOAD_TIMEOUT:g})")
+    rpp.set_defaults(func=cmd_replay_play)
 
     rm = sub.add_parser("rm", help="delete an instance")
     add_common(rm)
