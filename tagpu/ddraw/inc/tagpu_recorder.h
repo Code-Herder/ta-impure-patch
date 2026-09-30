@@ -3,7 +3,8 @@
 /* tagpu_recorder -- the demo recorder (research/notes/tadr-port/demo-recorder-skirmish-slice.md).
    tagpu_recorder.c is the capture, on the game thread. tagpu_recwriter.c is the writer thread; it
    reads no engine memory, and since it is not on thread-split.allow the build refuses an engine
-   address in it. The records that pass between them are tagpu_recfmt.h's. */
+   address in it. The records that pass between them are tagpu_recfmt.h's. A skirmish is recorded
+   only while tagpu_recorder.on is in the game's folder at the level's first iteration. */
 
 #include <windows.h>
 

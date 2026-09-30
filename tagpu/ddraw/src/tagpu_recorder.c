@@ -36,6 +36,7 @@
 #include "tagpu_limits.h"
 #include "tagpu_log.h"
 #include "tagpu_reclaim.h"
+#include "tagpu_opt.h"
 #include "crc32.h"
 #include "git.h"
 
@@ -1322,6 +1323,12 @@ static void dump_poll(const Level* L, int tick)
 
 /* ---- the entry points ----------------------------------------------------------------------- */
 
+/* A level is recorded only while this file is in the game's folder at its first iteration
+   (`tacli arm <instance> recorder.on`): the exact stream is too large to write for every game
+   (demo-recorder-skirmish-slice.md, *Measured*). It decides whether a game is recorded, not what
+   the simulation runs, so it is not a simulation lever and not in the header's lever list. */
+#define REC_ON "tagpu_recorder.on"
+
 static void rec_stop(unsigned reason)
 {
     rec_end(s_rec, reason);
@@ -1346,10 +1353,12 @@ void __cdecl tagpu_rec_capture(void)
     if (s_state == ST_IDLE) {
         /* A recording starts at a level's first iteration or not at all, and only when its end is
            certain: the teardown wrap ends it (tagpu_rec_level_end), before the unit array is
-           freed, and without the wrap nothing would. */
+           freed, and without the wrap nothing would. It starts only when REC_ON asks. */
         s_state = ST_DONE;
         if (mode == MODE_SKIRMISH) {
-            if (!tagpu_reclaim_level_tracked())
+            if (!tagpu_opt_on(REC_ON))
+                tagpu_logf("recorder: not recording: %s is absent", REC_ON);
+            else if (!tagpu_reclaim_level_tracked())
                 tagpu_logf("recorder: not recording: the teardown wrap is not in (tagpu_reclaim.c), "
                            "so nothing would end a recording");
             else if (!tagpu_simreg_count())
