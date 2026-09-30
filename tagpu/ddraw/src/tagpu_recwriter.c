@@ -596,6 +596,7 @@ static DWORD WINAPI writer_main(void* arg)
 {
     RecRing* g = (RecRing*)arg;
     Writer* w = (Writer*)calloc(1, sizeof *w);
+    HANDLE done = g->done;
     unsigned r = 0;
     int stop = 0;
     if (w) {
@@ -643,6 +644,8 @@ static DWORD WINAPI writer_main(void* arg)
     VirtualFree(g->buf, 0, MEM_RELEASE);
     CloseHandle(g->wake);
     HeapFree(GetProcessHeap(), 0, g);
+    SetEvent(done);        /* the file is closed: the exit may go on (tagpu_recorder.h, *The exit*) */
+    CloseHandle(done);
     return 0;
 }
 

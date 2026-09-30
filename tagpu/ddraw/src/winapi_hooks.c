@@ -26,6 +26,7 @@
 #include "ddpalette.h"
 #include "palette.h"
 #include "tagpu_shield.h"
+#include "tagpu_recorder.h"
 
 
 /* THE ENGINE IS TOLD THE TRUTH ABOUT WHERE THE POINTER IS, at every zoom.
@@ -2001,6 +2002,14 @@ BOOL WINAPI fake_GetVersionExA(LPOSVERSIONINFOA info)
     }
 
     return real_GetVersionExA(info);
+}
+
+/* tagpu: the files of the recordings that have ended are finished before the process goes
+   (tagpu_recorder.h, *The exit*) */
+VOID WINAPI fake_ExitProcess(UINT uExitCode)
+{
+    tagpu_rec_exit();
+    real_ExitProcess(uExitCode);
 }
 
 BOOL WINAPI fake_DestroyWindow(HWND hWnd)

@@ -3,12 +3,12 @@
 
    WHERE IT RUNS. B2's stub at the sim step's call of the unit tick (0x4954ED, the only call of
    0x48AD30) calls tagpu_rec_capture before anything else: GameTime has just been incremented
-   (0x4954C0) and the network pumped (0x4954C8), and every phase of the previous iteration has run.
-   So a capture sees the world between two iterations, on the thread that owns it. During play the
+   (0x4954C0) and every phase of the previous iteration has run, so a capture sees the world
+   between two iterations, on the thread that owns it. A skirmish, the only game recorded, calls
+   the step with 0 (0x49693C), so the step's network pump (0x4954C8) does not run. During play the
    game thread is the only writer of the engine records and of every SIM_STATE table the capture
    reads: the loader thread's writes end before the in-play entry (0x497F40 reads the loader's
-   last store, bit 1 of main+0x38D75, before the first iteration), and the network's arrive
-   through the pump, on this thread.
+   last store, bit 1 of main+0x38D75, before the first iteration).
 
    WHAT IT READS, AND WHY EACH READ IS IN BOUNDS.
    - The unit array [begin, begin + nslots * 0x118): nslots is the engine's own count
@@ -20,8 +20,9 @@
      prefix clamped to them, a heap table's counted rows. Their shadows are taken at the start,
      and grown once for a heap table that grows (table_grow).
    - The unit-type definitions' names, once, for the header: UNITINFOCount of them.
-   An id row's pointer is never dereferenced: its ID is its offset in its table, by arithmetic,
-   and a pointer outside the table becomes REC_ID_BAD, counted and logged.
+   An id row's pointer is never dereferenced: its ID is one more than its row in its table, by
+   arithmetic (tagpu_recfmt.h), and a pointer outside the table becomes REC_ID_BAD, counted and
+   logged.
 
    WHAT IT WRITES: its own memory -- the shadow images, the ring and the dump file. Nothing the
    simulation reads. */
@@ -159,13 +160,14 @@ static int level_read(char* ta, Level* L)
 static unsigned s_bad;                   /* pointers outside their tables, this recording      */
 static unsigned s_badlog;                /* of them, the ones logged                           */
 
+/* a row's ID: one more than its index, so NULL's ID is 0 (tagpu_recfmt.h) */
 static unsigned id_in(const char* p, const char* base, unsigned stride, unsigned n)
 {
     size_t off;
     if (!base || p < base) return REC_ID_BAD;
     off = (size_t)(p - base);
     if (off % stride || off / stride >= n) return REC_ID_BAD;
-    return (unsigned)(off / stride);
+    return (unsigned)(off / stride) + 1;
 }
 
 /* The ID of `p` in the table the exclusion file names; never a dereference. */
@@ -180,7 +182,7 @@ static unsigned id_of(const Level* L, unsigned table, const char* p)
     case RL_T_PLAYER: id = id_in(p, L->ta + OFF_PLAYERS, PL_STRIDE, PL_ALL); break;
     case RL_T_WEAPON:
         w = tagpu_limits_weapon_index(p);
-        id = w < 0 ? REC_ID_BAD : (unsigned)w;
+        id = w < 0 ? REC_ID_BAD : (unsigned)w + 1;
         break;
     case RL_T_BUCKET:
         /* one past the last bucket included: stock forms it for a footprint 0 wide at the east
@@ -196,6 +198,7 @@ static unsigned id_of(const Level* L, unsigned table, const char* p)
 
 static unsigned id_of_sim(const Level* L, unsigned simid, const char* p)
 {
+    if (!p) return REC_ID_NULL;
     switch (simid) {
     case SIM_ID_UNIT_SLOT: return id_of(L, RL_T_UNIT, p);
     case SIM_ID_UNIT_TYPE: return id_of(L, RL_T_TYPE, p);
@@ -281,7 +284,9 @@ static const unsigned char* table_rows(const SimDesc* d, unsigned* bytes)
 
 /* One row's image: its values, the IDs of the addresses its layout names, zero for the rest. Every
    field lies inside the row: the registry's attach walk refuses a declaration with a field past its
-   row's end, and only the declarations it accepted reach the recorder. */
+   row's end, and only the declarations it accepted reach the recorder. A row of zeros images to
+   zeros, its addresses being NULL, whose ID is 0 (tagpu_recfmt.h): row_emit passes such a row
+   over without imaging it, and the rotating check images every row it checks. */
 static void row_image(const Level* L, const SimDesc* d, const unsigned char* row,
                       unsigned char* img)
 {
@@ -369,14 +374,15 @@ typedef struct Table {
     int            unwatched;   /* GetWriteWatch refused it: diffed whole each time     */
     int            overcount;   /* its count has said more than its allocation holds    */
     int            zero;        /* its layout zeroes every byte: its image is all zero  */
-    const unsigned char* zimg;  /* the image of a row of zeros (s_zero without a layout) */
 } Table;
 
 static int table_grow(Table* tb, unsigned bytes);
 
 typedef struct Rec {
     RecRing*       ring;
-    HANDLE         wake;        /* the capture's own duplicate of the ring's event       */
+    HANDLE         wake;        /* the capture's own duplicates of the ring's events     */
+    HANDLE         done;
+    int            fin;         /* the slot of s_fin its end hands `done` to            */
     unsigned       signalled;   /* w at the last signal                                 */
     unsigned       w;           /* bytes written, published or not                      */
     unsigned       high;        /* the most bytes the ring has held                     */
@@ -394,6 +400,9 @@ typedef struct Rec {
     unsigned       vslot, vplayer, vtab, voff;   /* where the rotating check is         */
     unsigned       iterations;                   /* captured, and their cost in QPC ticks: */
     LONGLONG       cost, cost_max, cost_first;   /* the first images everything             */
+    unsigned       pages, pages_now, pages_max;  /* heap-table pages written, as GetWriteWatch
+                                                    counts them: after the first iteration,
+                                                    in this one and in one at most         */
 } Rec;
 
 enum { ST_IDLE, ST_RECORDING, ST_DONE };        /* DONE: the rest of this level is not recorded */
@@ -580,6 +589,63 @@ static void header_tables(const Rec* r, Tlv* t)
     }
 }
 
+/* ---- the files still being finished --------------------------------------------------------- */
+
+/* The `done` events of the recordings that have ended, which the exit waits for (tagpu_recorder.h,
+   *The exit*). A recording takes a slot at its start and hands its event to it at its end, so an
+   end always finds its slot: one recording is in progress at a time, and only its end fills a
+   slot. The game thread takes and fills slots; tagpu_rec_exit may run on any thread, so the
+   slots are read and written under s_fin_lock, which nothing holds across a wait. Once the exit
+   has taken them, nothing closes their handles and no recording starts. */
+#define REC_FINISHING 8
+static HANDLE        s_fin[REC_FINISHING];
+static volatile LONG s_fin_lock;
+static int           s_fin_exiting;
+
+static void fin_lock(void)
+{
+    while (InterlockedExchange(&s_fin_lock, 1)) Sleep(0);
+}
+
+static void fin_unlock(void)
+{
+    InterlockedExchange(&s_fin_lock, 0);
+}
+
+/* A free slot, after closing the events of the files already finished: -1 while the exit runs, or
+   while REC_FINISHING files are still being written. */
+static int fin_take(void)
+{
+    int i, slot = -1;
+    fin_lock();
+    for (i = 0; i < REC_FINISHING && !s_fin_exiting; i++) {
+        if (s_fin[i] && WaitForSingleObject(s_fin[i], 0) == WAIT_OBJECT_0) {
+            CloseHandle(s_fin[i]);
+            s_fin[i] = NULL;
+        }
+        if (!s_fin[i] && slot < 0) slot = i;
+    }
+    fin_unlock();
+    return slot;
+}
+
+void tagpu_rec_exit(void)
+{
+    HANDLE h[REC_FINISHING];
+    DWORD n = 0;
+    int i;
+    fin_lock();
+    s_fin_exiting = 1;
+    for (i = 0; i < REC_FINISHING; i++)
+        if (s_fin[i] && WaitForSingleObject(s_fin[i], 0) != WAIT_OBJECT_0) h[n++] = s_fin[i];
+    fin_unlock();
+    if (!n) return;
+    tagpu_logf("recorder: the exit waits for %lu recording file%s to be finished", n,
+               n == 1 ? "" : "s");
+    WaitForMultipleObjects(n, h, TRUE, INFINITE);
+    tagpu_logf("recorder: the recording files are finished");
+}
+
 /* ---- the start and the end ------------------------------------------------------------------ */
 
 static void rec_free(Rec* r)
@@ -590,8 +656,6 @@ static void rec_free(Rec* r)
         if (r->tab[i].shadow) VirtualFree(r->tab[i].shadow, 0, MEM_RELEASE);
         if (r->tab[i].raw) VirtualFree(r->tab[i].raw, 0, MEM_RELEASE);
         if (r->tab[i].pages) HeapFree(GetProcessHeap(), 0, r->tab[i].pages);
-        if (r->tab[i].zimg && r->tab[i].zimg != s_zero)
-            HeapFree(GetProcessHeap(), 0, (void*)r->tab[i].zimg);
     }
     if (r->tab) HeapFree(GetProcessHeap(), 0, r->tab);
     if (r->rowbuf) HeapFree(GetProcessHeap(), 0, r->rowbuf);
@@ -599,6 +663,7 @@ static void rec_free(Rec* r)
     if (r->uraw) VirtualFree(r->uraw, 0, MEM_RELEASE);
     if (r->ulive) HeapFree(GetProcessHeap(), 0, r->ulive);
     if (r->wake) CloseHandle(r->wake);
+    if (r->done) CloseHandle(r->done);
     HeapFree(GetProcessHeap(), 0, r);
 }
 
@@ -607,7 +672,18 @@ static void ring_free(RecRing* g)
     if (!g) return;
     if (g->buf) VirtualFree(g->buf, 0, MEM_RELEASE);
     if (g->wake) CloseHandle(g->wake);
+    if (g->done) CloseHandle(g->done);
     HeapFree(GetProcessHeap(), 0, g);
+}
+
+/* the capture's own duplicate of one of the ring's events, or NULL */
+static HANDLE dup_event(HANDLE e)
+{
+    HANDLE d = NULL;
+    if (e && !DuplicateHandle(GetCurrentProcess(), e, GetCurrentProcess(), &d, 0, FALSE,
+                              DUPLICATE_SAME_ACCESS))
+        d = NULL;
+    return d;
 }
 
 /* Everything a recording will need, taken now: the capture allocates nothing after this. */
@@ -630,12 +706,18 @@ static Rec* rec_start(const Level* L, int tick)
                    "recording", wide->name, wide->stride, SPAN_MAX);
         goto fail;
     }
+    r->fin = fin_take();
+    if (r->fin < 0) {
+        tagpu_logf("recorder: not recording: the process is exiting, or %u earlier recordings' "
+                   "files are still being written", REC_FINISHING);
+        goto fail;
+    }
     g->buf = (unsigned char*)VirtualAlloc(NULL, REC_RING_BYTES, MEM_COMMIT | MEM_RESERVE,
                                           PAGE_READWRITE);
     g->wake = CreateEventA(NULL, FALSE, FALSE, NULL);
-    if (g->wake && !DuplicateHandle(GetCurrentProcess(), g->wake, GetCurrentProcess(), &r->wake,
-                                    0, FALSE, DUPLICATE_SAME_ACCESS))
-        r->wake = NULL;
+    g->done = CreateEventA(NULL, TRUE, FALSE, NULL);
+    r->wake = dup_event(g->wake);
+    r->done = dup_event(g->done);
     r->ring = g;
     r->begin = L->begin;
     r->nslots = L->nslots;
@@ -647,7 +729,8 @@ static Rec* rec_start(const Level* L, int tick)
                                            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     r->ulive = (unsigned char*)HeapAlloc(heap, HEAP_ZERO_MEMORY, L->nslots);
     r->tab = (Table*)HeapAlloc(heap, HEAP_ZERO_MEMORY, (n ? n : 1) * sizeof *r->tab);
-    if (!g->buf || !g->wake || !r->wake || !r->ushadow || !r->uraw || !r->ulive || !r->tab)
+    if (!g->buf || !g->wake || !r->wake || !g->done || !r->done || !r->ushadow || !r->uraw ||
+        !r->ulive || !r->tab)
         goto fail;
     for (i = 0; i < n; i++) {
         const SimDesc* d = tagpu_simreg_at(i);
@@ -663,13 +746,6 @@ static Rec* rec_start(const Level* L, int tick)
         tb->d = d;
         tb->index = i;
         tb->zero = image_zero(d);
-        tb->zimg = s_zero;
-        if (d->layout) {
-            unsigned char* z = (unsigned char*)HeapAlloc(heap, 0, d->stride);
-            if (!z) goto fail;
-            row_image(L, d, s_zero, z);
-            tb->zimg = z;
-        }
         table_rows(d, &bytes);
         /* the rows a declaration states, or for a heap table that counts its own, what it holds
            now: cap_tables grows the room when that table grows */
@@ -711,8 +787,9 @@ fail:
 }
 
 /* The capture's last act on a recording: RK_END, published; the ring is the writer's from here
-   (the hand-over, tagpu_recorder.h). What an unfinished iteration wrote is dropped unpublished,
-   and the ring's reserve holds the end whatever the published part left. */
+   (the hand-over, tagpu_recorder.h), and the writer's `done` goes to the exit's list. What an
+   unfinished iteration wrote is dropped unpublished, and the ring's reserve holds the end whatever
+   the published part left. */
 static void rec_end(Rec* r, unsigned reason)
 {
     unsigned char b[12], * at;
@@ -738,14 +815,22 @@ static void rec_end(Rec* r, unsigned reason)
     InterlockedExchange(&r->ring->wpub, (LONG)r->w);    /* the last access to the ring */
     r->ring = NULL;
     SetEvent(r->wake);
+    fin_lock();
+    if (!s_fin_exiting) {
+        s_fin[r->fin] = r->done;
+        r->done = NULL;
+    }
+    fin_unlock();
     {
         LARGE_INTEGER f;
         QueryPerformanceFrequency(&f);
         tagpu_logf("recorder: %u iterations captured: the first in %u us, the rest in %u us on "
-                   "average and %u us at most", r->iterations,
+                   "average and %u us at most; after the first, the simulation wrote %u "
+                   "write-watched pages, at most %u in one iteration", r->iterations,
                    (unsigned)(r->cost_first * 1000000 / f.QuadPart),
                    r->iterations > 1 ? (unsigned)(r->cost * 1000000 / f.QuadPart
-                   / (r->iterations - 1)) : 0, (unsigned)(r->cost_max * 1000000 / f.QuadPart));
+                   / (r->iterations - 1)) : 0, (unsigned)(r->cost_max * 1000000 / f.QuadPart),
+                   r->pages, r->pages_max);
     }
     tagpu_logf("recorder: ended after GameTime %d: %s; %u id rows outside their tables", r->tick,
                reason == REC_END_TEARDOWN ? "the level ended" :
@@ -893,19 +978,23 @@ static unsigned heap_limit(const unsigned char* base)
 }
 
 /* One row: its image against the shadow, and the image's changed runs into the ring, bridging
-   unchanged gaps of up to SPAN_GAP bytes. */
+   unchanged gaps of up to SPAN_GAP bytes. With a raw copy, the image is taken from the copy, so
+   it is the image of exactly the bytes the next capture compares with. */
 static int row_emit(Rec* r, const Level* L, Table* tb, unsigned row)
 {
     const SimDesc* d = tb->d;
     const unsigned char* src = tb->base + (size_t)row * d->stride;
-    const unsigned char* img = tb->zimg;
+    const unsigned char* img = s_zero;
     unsigned char* sh = tb->shadow + (size_t)row * d->stride;
     unsigned i = 0, off0 = row * d->stride;
+    if (tb->raw) {
+        memcpy(tb->raw + off0, src, d->stride);
+        src = tb->raw + off0;
+    }
     if (diff_from(src, s_zero, 0, d->stride) < d->stride) {
         row_image(L, d, src, r->rowbuf);
         img = r->rowbuf;
     }
-    if (tb->raw) memcpy(tb->raw + off0, src, d->stride);
     if (!memcmp(img, sh, d->stride)) return 1;
     while (i < d->stride) {
         unsigned a, b, gap;
@@ -943,7 +1032,8 @@ static int rows_moved(Rec* r, const Level* L, Table* tb, const unsigned char* wa
 
 /* Every row, when a table's copies say nothing about it: the first capture, a heap table that
    moved or that GetWriteWatch refuses. A table without a layout is its own image, so its shadow
-   is the copy to compare with; a row of zeros takes the zero row's image without imaging. */
+   is the copy to compare with. A row of zeros images to zeros without imaging, so against a
+   shadow still zero nothing of it goes into the ring. */
 static int table_whole(Rec* r, const Level* L, Table* tb, unsigned rows)
 {
     return tb->d->layout ? rows_emit(r, L, tb, 0, rows) : rows_moved(r, L, tb, tb->shadow, rows);
@@ -1011,6 +1101,7 @@ static int cap_table(Rec* r, const Level* L, Table* tb)
             tb->unwatched = 1;
             return table_whole(r, L, tb, rows) ? 1 : 0;
         }
+        r->pages_now += (unsigned)n;
         if (whole) return table_whole(r, L, tb, rows) ? 1 : 0;
         for (k = 0; k < n; k++) {
             unsigned lo = (unsigned)((const unsigned char*)tb->pages[k] - base);
@@ -1031,6 +1122,7 @@ static int cap_table(Rec* r, const Level* L, Table* tb)
 static int cap_tables(Rec* r, const Level* L)
 {
     unsigned t;
+    r->pages_now = 0;
     for (t = 0; t < r->ntab; t++) {
         int k = cap_table(r, L, &r->tab[t]);
         if (k <= 0) return k;
@@ -1297,6 +1389,8 @@ void __cdecl tagpu_rec_capture(void)
     } else {
         r->cost += t1.QuadPart - t0.QuadPart;
         if (t1.QuadPart - t0.QuadPart > r->cost_max) r->cost_max = t1.QuadPart - t0.QuadPart;
+        r->pages += r->pages_now;
+        if (r->pages_now > r->pages_max) r->pages_max = r->pages_now;
     }
     r->tick = tick;
     r->first = 0;

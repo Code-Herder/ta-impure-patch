@@ -19,6 +19,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 #include "tagpu_hud.h"
+#include "tagpu_recorder.h"
 #include "fps_limiter.h"
 
 
@@ -649,6 +650,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             if (g_config.terminate_process)
                 g_config.terminate_process = 2;
 
+            tagpu_rec_exit();   /* tagpu: this exit is ours, so the ExitProcess hook does not see it */
             ExitProcess(0);
             //_exit(0);
         }

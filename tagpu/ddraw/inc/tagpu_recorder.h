@@ -12,8 +12,20 @@
 void __cdecl tagpu_rec_capture(void);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
-   cascade frees the unit array: the recording in progress ends, complete. */
+   cascade frees the unit array: the recording in progress ends, complete once its writer has
+   closed the file. */
 void tagpu_rec_level_end(void);
+
+/* THE EXIT waits for the files of the recordings that have ended: a recording is complete once
+   its writer has closed the file, and ExitProcess would kill a writer still writing its last
+   block. Every normal exit calls this first -- the exe's CRT, and each DLL of its folder, through
+   the fork's ExitProcess hook (hook.c, winapi_hooks.c), and the fork's own exit on SC_CLOSE
+   (wndproc.c) -- on whatever thread exits. A recording still in progress has no end to finish, so
+   nothing waits for it and its file reads to its last block, incomplete. The wait ends when the
+   files do: a writer never waits for another thread and takes no lock the exiting thread holds.
+   (A DLL exiting from inside its DllMain holds the loader lock, which a writer thread still
+   starting needs; neither the exe nor the fork exits there.) */
+void tagpu_rec_exit(void);
 
 /* THE RING, one per recording, between its capture and its writer. The capture writes records
    past `wpub` and then publishes them by moving `wpub` (InterlockedExchange, so every byte it
@@ -51,12 +63,15 @@ typedef struct RecRing {
     volatile LONG  wend;               /* the `wpub` that publishes RK_END ...                 */
     volatile LONG  ended;              /* ... valid once this is 1                             */
     HANDLE         wake;               /* auto-reset; the writer's handle                      */
+    HANDLE         done;               /* manual-reset; the writer's handle, set once the file
+                                          is closed: *The exit* waits on the capture's own    */
     char           path[MAX_PATH];     /* the recording's file, named by the capture           */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer
-   owns the ring's lifetime and frees the buffer, its handle of the event and the ring by the
-   hand-over above. 0 when no thread could be started, and the ring is still the caller's. */
+   owns the ring's lifetime and frees the buffer, its handles of the events and the ring by the
+   hand-over above, and sets `done` last. 0 when no thread could be started, and the ring is still
+   the caller's. */
 int tagpu_recwriter_start(RecRing* ring);
 
 #endif

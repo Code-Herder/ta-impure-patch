@@ -10,7 +10,11 @@
    target's ID where the exclusion file (replay-layout.tsv) names an id row, and zero where it names
    any other class. A declared table's image follows its layout the same way. Unit and player
    images are whole dwords (a player's last dword is padded with zero); a delta names the dwords
-   that changed. Everything is little-endian. */
+   that changed. Everything is little-endian.
+
+   AN ID is one more than the target's row in its table, so NULL's is 0 and a record of zeros
+   images to zeros: the rows a table gains are zero on both sides (RK_TABLE_SIZE), and a row of
+   zeros needs no span. The IDs below are the rest that are not rows. */
 
 #include <stdint.h>
 
@@ -28,8 +32,8 @@
 
 _Static_assert(REC_UNIT_BYTES % 4 == 0, "a unit image is whole dwords");
 
-/* what an id row holds besides a table index */
-#define REC_ID_NULL       0xFFFFFFFFu
+/* what an id row holds besides a row's ID */
+#define REC_ID_NULL       0u
 #define REC_ID_BAD        0xFFFFFFFEu   /* a pointer outside its table: counted and logged        */
 #define REC_ID_OFFMAP     0xFFFFFFFDu   /* the sort's off-map bucket, *(main+0x142B7)              */
 
