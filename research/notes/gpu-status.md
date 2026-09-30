@@ -19991,7 +19991,7 @@ carries.
   attributes (locations 10–12), on every vertex of the face; any other face repeats its own.
 - **The vertex stage**: for a unit whose `uShd.y` is 1 it rotates the vertex normal by the piece
   and takes `int(dot(n, (−0.8, 1.0, 0.25)) · 5.0) & 31`, a piece with its shade flag clear taking
-  row 15, and does the same for the four corner normals into the flat `vShQ`. Every other unit takes
+  row 15, and a row of 0 taken as 5 (below), and does the same for the four corner normals into the flat `vShQ`. Every other unit takes
   the neutral row. The vertex's own row leaves the stage as a smooth `vShade`.
 - **The fragment stage** blends the four corners' rows bilinearly over the quad's own frame — the
   `(s, t)` `taQuadST` already solves for the texture — where the face has one (`vQR.x >= 0`), else it
@@ -20009,6 +20009,18 @@ carries.
 - `shDir`, `tagpu_r3d_shade_dir` and the old `neutral + dir · round(12 · N·SH_L)` quantiser are gone,
   and with them the face flip toward `SH_V` for the shade (the flip stays for the Classic++ lighting
   term's normal, which the game does not use).
+
+**Row 0 is taken as row 5 — the one departure from the engine.** The stock `PALETTE.SHD` maps
+every colour on row 0 to black, so a face whose corners compute 0 draws solid black: the solar's
+opened right wing and the right half of its body. TADR fixes the same defect with a hook on
+`0x45A2EC` that replaces a computed 0 by `ShadingZeroFallbackLevel`, default 5
+([sim-fixes evidence](tadr-port/sim-fixes-evidence.html) Part 4 §5); the pass does the same, with
+the level fixed at 5, and keeps every other row, the wrap to 27–31 included. The owner chose it
+from a side-by-side of the stock rows, this, a monotonic ramp, flat, per-pixel and self-shadowed
+variants. The GDI lane stays stock, so it still draws those faces black. **Measured**, Classic
+preset, paused at tick 137, share of pixels at luminance under 2 and mean luminance: the solar's
+body right half 46 % / 16.6 → 1 % / 23.4, its right wing 49 % / 22.1 → 1 % / 26.4. Rows 1–4
+(multipliers 0.06–0.27) are not touched, so a face near the wrap is still very dark.
 
 **Measured**, on Xvfb against the GDI backend on the same scene, dry ground, paused at ticks 125–136,
 shadows off, the Classic preset (`assets=0 light=0`); mean absolute luminance difference from the

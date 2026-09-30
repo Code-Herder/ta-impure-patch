@@ -44,7 +44,7 @@ where it matters.
 | `OrderDispatchGuard`, `MultiplayerPlayerLostGuard`, `UnitIDOutRange`, `GUIErrorLength`, the crash rings | diagnostics, dead or no-op | not in B · Parts 1, 3, 4 |
 | the download-menu zeroing, the composite clamp | stock defects we already fix (A′2, L7) | done · Part 4 §1–2 |
 | the cargo-detach "Option A/B" | **not** a defect; porting it would add one | not in B · Part 4 §2d |
-| black model faces `0x45A2EC` | stock draw defect | moot on Vulkan; the GDI lane stays stock · Part 4 §5 |
+| black model faces `0x45A2EC` | stock draw defect | ported to the Vulkan unit pass (row 0 → 5); the GDI lane stays stock · Part 4 §5 |
 
 ---
 
@@ -1874,7 +1874,7 @@ would settle it. Every address below was re-read in the disassembly; none is cop
 | 7 | Long-path crash (v2025.12.6, the fix is `25a649d`) and the >1024-character log `int 29` | **No**: both are TADR's own `_vsnprintf_s` in its logger | TADR-internal | n/a | Moot. Our tree calls no `_s` CRT function |
 | 8 | Print-screen crash (`5d25b80`) | **No**: TADR's own surface wrapper never reset `lpBackLockOn` | TADR-internal | n/a | Moot |
 | 9 | `GUIErrorLength` (four byte writes) | **No-op on 3.1**: every target byte is already `0x80` | UI | n/a | Do not port. An unbounded copy nearby is noted |
-| 10 | `ShadingFix` `0x45A2EC` | **Yes**, cosmetic: shade row 0 is black, and a negative dot product wraps to rows 27–31 | draw only | A value remap, so yes, but it changes the look | **Moot on Vulkan**: our unit pass picks rows by its own rule. It matters on the GDI lane only |
+| 10 | `ShadingFix` `0x45A2EC` | **Yes**, cosmetic: shade row 0 is black, and a negative dot product wraps to rows 27–31 | draw only | A value remap, so yes, but it changes the look | **Ported to the Vulkan unit pass** (row 0 becomes 5, every other row the engine's); the GDI lane stays stock |
 | 11 | `WindSpeedSync` `0x490C5A` | **Yes, in multiplayer**: each peer gets a different wind, in both timing and value | **sim** (wind-generator energy); multiplayer fairness | **Partly**: TADR's generator is static per process, so the second game desyncs if one peer restarted. TADR's own OTA config ships it **off** | **Port our own version**: a per-game generator seeded from a value every peer shares |
 | 12 | `LosTypeShouldBeACheatCode` data byte `0x501DF4` | **Yes**: `+lostype` toggles terrain-blocking line of sight at normal command level | E (anti-cheat), sim-adjacent | Yes: a one-byte data patch | Port with group E, as that byte (`1 → 2`), failing closed |
 | 13 | `Save/RestorePlayerColor` `0x454927` / `0x45493C` | **Yes**: message `0x20` overwrites a remote player's whole 0xB9-byte info record, in game too | E (anti-abuse) | **Partial**: it restores the colour only | Defer to E. Our design would refuse the in-game copy |
@@ -2171,13 +2171,12 @@ records this). So:
 
 **Class.** Draw only. It touches no simulation state.
 
-**Under our renderer.** Not ported, and not needed for parity. The unit pass reproduces the
-engine's row for a structure under Shading (`ftol(5 · N·L) & 0x1F` per vertex, interpolated,
-[GPU status](../gpu-status.html) §2.106), so the black row 0 and the wrap to 27..31 reach the
-screen on Vulkan exactly as on the GDI lane (the solar's black roof panel is one).
-
-**Recommendation.** Do not port. Both lanes show the engine's own picture; the wrap to 27..31 is
-the larger artefact, and the owner keeps the GDI lane stock (decided below).
+**Under our renderer.** Ported to the Vulkan unit pass, as TADR has it: the unit pass computes the
+engine's row for a structure under Shading (`ftol(5 · N·L) & 0x1F` per vertex, spread over the
+quad, [GPU status](../gpu-status.html) §2.106) and takes a row of 0 as 5. The wrap to 27..31 is
+kept. The owner chose this over the stock rows (the solar's opened wing drew solid black) and over
+a monotonic ramp, from a side-by-side of the variants. The GDI lane stays stock, so the two lanes
+differ on exactly the faces whose row is 0.
 
 ### 6. The rest of the constructor
 
@@ -2367,5 +2366,5 @@ Registration is in `src/Recorder/Plugins.pas:52-104`. Features and limits are le
 1. **Wind (§6a).** Ported, reset at every level load, one path in single player and in network games ([the plan, B6](sim-fixes.md#the-landings)).
 2. **`+lostype` (§6b)** and 3. **the `0x20` overwrite (§6c)** go to group E.
 4. **The password hook (§3)** stays parked: neither reproduced nor proven.
-5. **`ShadingFix` (§5).** The GDI lane stays stock.
+5. **`ShadingFix` (§5).** Ported to the Vulkan unit pass; the GDI lane stays stock.
 6. **`IsBadReadPtr` under Wine (§2c).** Recorded in the notes (here and the engine map), not in CLAUDE.md.

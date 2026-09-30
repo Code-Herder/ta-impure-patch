@@ -395,7 +395,11 @@ static const char* VS =
     "vec3 shRot(int pb, vec3 v){\n"
     "  return vec3(dot(uPose[pb].xyz, v), dot(uPose[pb+1].xyz, v), dot(uPose[pb+2].xyz, v));\n"
     "}\n"
-    "float shRow(vec3 n){ return float(int(dot(n, SH_L) * 5.0) & 31) / 31.0; }\n"
+    /* a row of 0 becomes 5: see THE SHADE below */
+    "float shRow(vec3 n){\n"
+    "  int r = int(dot(n, SH_L) * 5.0) & 31;\n"
+    "  return float(r == 0 ? 5 : r) / 31.0;\n"
+    "}\n"
     "void main(){\n"
     "  int pi = int(aPiece + 0.5);\n"
     /* EVERY INDEX INTO `uPose` IS CLAMPED TO THE BOUND RANGE, so no vertex can
@@ -475,9 +479,14 @@ static const char* VS =
        by the piece), the truncation toward zero of GLSL's int() (the helper at
        0x4E43A0 sets the FPU to truncate), and the mask WRAPS a negative value
        onto the table's top rows, so a dot just under zero is a bright row
-       and one between -0.2 and 0.2 is row 0. That wrap is the engine's own
-       picture and is reproduced, not clamped. A piece whose shade flag is clear
-       (COB dont-shade) takes the engine's default row 15.
+       and one between -0.2 and 0.2 is row 0. The wrap is the engine's own
+       picture and is reproduced, not clamped, except for row 0 itself: the
+       stock PALETTE.SHD maps every colour on it to black, so a face whose
+       corners compute 0 draws solid black (a solar's opened wing). Row 0 is
+       taken as row 5, which is TADR's fix for the same defect (ShadingFix.cpp,
+       a hook on 0x45A2EC with ShadingZeroFallbackLevel at its default 5); every
+       other row stays the engine's. A piece whose shade flag is clear (COB
+       dont-shade) takes the engine's default row 15.
 
        The engine's rasteriser carries those rows down a quad's two edge chains
        and across each row (0x4C8BB0), so a quad's shade is the BILINEAR blend of
