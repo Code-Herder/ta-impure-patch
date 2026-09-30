@@ -400,6 +400,8 @@ typedef struct Rec {
     unsigned       vslot, vplayer, vtab, voff;   /* where the rotating check is         */
     unsigned       iterations;                   /* captured, and their cost in QPC ticks: */
     LONGLONG       cost, cost_max, cost_first;   /* the first images everything             */
+    int            max_tick;                     /* the costliest one's GameTime and bytes */
+    unsigned       max_bytes;
     unsigned       pages, pages_now, pages_max;  /* heap-table pages written, as GetWriteWatch
                                                     counts them: after the first iteration,
                                                     in this one and in one at most         */
@@ -825,12 +827,12 @@ static void rec_end(Rec* r, unsigned reason)
         LARGE_INTEGER f;
         QueryPerformanceFrequency(&f);
         tagpu_logf("recorder: %u iterations captured: the first in %u us, the rest in %u us on "
-                   "average and %u us at most; after the first, the simulation wrote %u "
-                   "write-watched pages, at most %u in one iteration", r->iterations,
-                   (unsigned)(r->cost_first * 1000000 / f.QuadPart),
+                   "average and %u us at most (GameTime %d, %u bytes into the ring); after the "
+                   "first, the simulation wrote %u write-watched pages, at most %u in one "
+                   "iteration", r->iterations, (unsigned)(r->cost_first * 1000000 / f.QuadPart),
                    r->iterations > 1 ? (unsigned)(r->cost * 1000000 / f.QuadPart
                    / (r->iterations - 1)) : 0, (unsigned)(r->cost_max * 1000000 / f.QuadPart),
-                   r->pages, r->pages_max);
+                   r->max_tick, r->max_bytes, r->pages, r->pages_max);
     }
     tagpu_logf("recorder: ended after GameTime %d: %s; %u id rows outside their tables", r->tick,
                reason == REC_END_TEARDOWN ? "the level ended" :
@@ -1388,7 +1390,11 @@ void __cdecl tagpu_rec_capture(void)
         r->cost_first = t1.QuadPart - t0.QuadPart;
     } else {
         r->cost += t1.QuadPart - t0.QuadPart;
-        if (t1.QuadPart - t0.QuadPart > r->cost_max) r->cost_max = t1.QuadPart - t0.QuadPart;
+        if (t1.QuadPart - t0.QuadPart > r->cost_max) {
+            r->cost_max = t1.QuadPart - t0.QuadPart;
+            r->max_tick = tick;
+            r->max_bytes = r->w - w0;
+        }
         r->pages += r->pages_now;
         if (r->pages_now > r->pages_max) r->pages_max = r->pages_now;
     }
