@@ -1,8 +1,8 @@
 # Modules with their own workflow
 
 Extra weapons, the COB trace, multiplayer, many unit types, weapons past 256, the new data keys,
-the render-options screen with its GPU row, a remote Windows machine, and a mod whose exe loads
-Impure from its own ddraw proxy. Each is driven through `tacli`; what
+the render-options screen with its GPU row, a remote Windows machine, a mod whose exe loads
+Impure from its own ddraw proxy, and the demo recorder. Each is driven through `tacli`; what
 differs is the setup around it.
 
 1. [Extra weapons](#extra-weapons)
@@ -14,6 +14,7 @@ differs is the setup around it.
 7. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
 8. [A remote Windows machine](#a-remote-windows-machine)
 9. [A mod that loads Impure from its own proxy](#a-mod-that-loads-impure-from-its-own-proxy)
+10. [The demo recorder: recordings and dumps](#the-demo-recorder-recordings-and-dumps)
 
 ## Extra weapons
 
@@ -382,7 +383,8 @@ The same fixture carries veterancy's types: `VTLLT0` (no key), `VTLLT1` (a level
 - **A meteor shower centres anywhere on the map**, so a test under one needs a small map; the hail
   maps are Show Down's terrain.
 - **Saving and loading in game**: Tab, `ui <i> click SAVEGAME`, `click GAMENAME`,
-  `fill GAMENAME <name>`, then `click LOAD` (the save screen's button is named LOAD). Loading is
+  `fill GAMENAME <name>`, then `click LOAD` (the save screen's button is named LOAD). The field
+  keeps only the first letter a `fill` types, so name the save with one letter. Loading is
   Tab, `click LOADGAME`, `select GAMES <name>`, `click LOAD`. **A loaded game starts paused**
   (`keys <i> pause` once), the menu pauses the game while it is open, and **the unit array's base
   moves at a load**: re-read `*0x511DE8+0x14357` before peeking a unit.
@@ -591,3 +593,24 @@ exe, is not loaded at attach. Drive them the way the compat suite does:
    reads as "not running" — `WINEDLLOVERRIDES=ddraw=n,b` and `DISPLAY`.
 4. `tacli ui`, `click`, `roster`, `shot` and `stop` then answer as for any instance; the play
    defaults are on because no `tagpu_defaults.off` exists. The window is the display's size.
+
+## The demo recorder: recordings and dumps
+
+**Every skirmish is recorded**, from its first iteration to the level's end, to
+`gamedir/replays/<date> <time> <map>.imprec`; there is no switch. The log says
+`recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
+the corrections, which must be 0. A game killed mid-way leaves a file without an end block that
+reads to its last complete block.
+
+- **Read one** with `tools/replay/tarec.py`: `info` (the header, the blocks, how it ended),
+  `check` (the stream rebuilt and compared with every snapshot in the file) and
+  `compare FILE DUMP…`. Exit 0 when every check holds, 1 when one fails, 2 when a file cannot
+  be read.
+- **A dump**: write `dump <name>` (letters, digits, `-`, `_`) to `gamedir/tagpu_replay.trigger`.
+  The capture looks for the file every 32 iterations and writes `replays/dump-<name>.bin`, the
+  live world at that GameTime; `tarec compare` rebuilds the recording to the same GameTime and
+  requires it byte for byte. A paused game runs no iterations, so it takes no dump.
+- **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
+  human seat no unit is a defeat, and the level's end closes the recording as complete.
+- The file format is `tagpu/ddraw/inc/tagpu_recfmt.h`; what is recorded and what is not:
+  `research/notes/tadr-port/demo-recorder-skirmish-slice.md`.

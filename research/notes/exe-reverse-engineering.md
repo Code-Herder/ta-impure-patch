@@ -1623,6 +1623,33 @@ loader is `0x466050`.
 - **Clocks in the unit record:** the one wall-clock value is the hover wave; the one GameTime stamp
   is `+0xB0`. The countdowns (`+0xFA`, `+0xFB`, the reload) count simulation ticks.
 
+### The demo recorder's capture: where it runs and what it reads [DISASSEMBLED + MEASURED 2026-09-29]
+
+S1 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder)
+(`tagpu_recorder.c`) reads the engine and writes none of it. It runs first in B2's stub on the sim
+step `0x495490`'s call of the unit tick (`0x4954ED`,
+[*Stacked aircraft in area damage*](#stacked-aircraft-in-area-damage-0x49a664-0x49a415-0x47cf98-0x4954ed-disassembled-measured-2026-09-25)),
+after the step's GameTime increment (`0x4954C0`) and network pump (`0x4954C8`), so it sees the
+world between two iterations.
+
+| What | Where | The bound, and what else is established |
+|---|---|---|
+| the game mode | `[main+0x391E9]+0`, what `0x435100` (`mov eax,[ecx]`) returns | 2 in a skirmish, and in a skirmish loaded from a save: MEASURED, a skirmish saved at GameTime 1846 and loaded from the in-game menu read 2, and its first iteration was 1847 |
+| GameTime | `main+0x38A47` | a recording ends if it goes back without a teardown |
+| the unit array | begin `main+0x14357`, its last slot `main+0x1435B` (inclusive), `u16` slots `main+0x14351` | used only when last = begin + (slots − 1)·`0x118`; it lives from the level load `0x4854A0` to the teardown's first free, `0x485980` called at `0x491B95`, and the recording ends on entry to the teardown |
+| a unit's liveness and type | `+0x110` bit 28; `+0x92` | a slot whose type changes is recorded whole |
+| the unit types | `*(main+0x1439B)`, `main+0x1438F` of them, stride `0x249`, UnitName `+0x20` (`0x20` bytes) | the header's fingerprint, and the bound of a type ID |
+| units each | `u16 main+0x37EE6` | the header |
+| the players | ten records from `main+0x1B63`, stride `0x14B`: `+0x27` PlayerInfo (`+0x95` side, `+0x96` logo), `+0x2B` the name (`0x1E` bytes), `+0x73` the controller | PlayerInfo lives as long as the process: the constructor `0x463BE0` allocates it for main's eleven records (the loop at `0x41D98B`), the reset keeps it (`0x464508`), and the destructor `0x463C40` runs only on a stack-local record (`0x454538`, `0x454607`) — [*The per-map arrays*](#the-per-map-arrays-who-allocates-who-frees-and-in-what-order-mapped-by-us) |
+| the sort buckets | `*(main+0x1429F)`, `main+0x142A3` columns × `main+0x142A7` rows (LoadMap, `0x482C84..0x482CA6`), and the off-map bucket `*(main+0x142B7)` | an id row's table; one past the last bucket is an index (stock forms it at the east edge), and the off-map bucket has an ID of its own. `0x412834` compares a unit's `+0x82` with it: `mov edx,[0x511DE8]` (`0x412828`), `mov ecx,[esi+0x82]` (`0x41282E`), `cmp ecx,[edx+0x142B7]`, `jne 0x412849` DISASSEMBLED |
+| the map's name | `GameingState +0x204`, the TNT path | the file's name, read to `MAX_PATH` bytes: inside the object, whose fields run past `+0xDBC` (the list `0x423160` walks) |
+
+**A load from the in-game menu runs the teardown before the saved level loads, and the loaded game
+starts paused** [MEASURED 2026-09-29]: at the load's click the recording in progress ended through
+`tagpu_reclaim`'s wrap of `0x491B60`, at GameTime 1846; after the load `main+0x38A51` read 1 and
+GameTime stayed 1846 until a pause key, and no iteration ran, so a capture at `0x4954ED` sees
+nothing of a paused game.
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
@@ -4604,7 +4631,7 @@ records them), distance test, falloff and damage with no arithmetic of ours:
 | `0x49A664` | the 11 bytes above | `push [ebp+0xC]; push [ebp+8]; call air_first`; a unit → `esi`, `[esp+0x10] = 2`, `jmp 0x49A24E`; none → the 11 bytes and `jmp 0x49A66F` |
 | `0x49A415` | the 18 bytes above | a selector below 2 steps exactly as stock (the flags `jle` reads are stock's: `inc`, `cmp`, then a `mov`) and leaves for `0x49A214` or `0x49A427`; at 2, `call air_next` and `0x49A24E` again, or the 11 bytes and `0x49A66F` |
 | `0x47CF98` | `cmp eax,2; jne 0x47D0D5` | the same test, then `pushad; push esi; call air_note; add esp,4; popad; jmp 0x47CFA1` |
-| `0x4954ED` | `call 0x48AD30` | `call` to `pushfd; pushad; call air_rebuild; popad; popfd; jmp 0x48AD30`, which returns to `0x4954F2` |
+| `0x4954ED` | `call 0x48AD30` | `call` to `pushfd; pushad; call tagpu_rec_capture; call air_rebuild; popad; popfd; jmp 0x48AD30`, which returns to `0x4954F2`: the demo recorder's capture first ([above](#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)) |
 
 `air_first` builds the call's candidate list, in the frame B1's wrapper `dmg_area` already holds
 (32 slots inline, then a block from `0x4D83B0` freed when the call returns), from a pool of airborne

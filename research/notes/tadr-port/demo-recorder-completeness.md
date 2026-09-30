@@ -193,7 +193,10 @@ an owned block and `serial` process-local.
 
 **Everything else comes through the wrappers.** Memory belongs to a declaration. `SIM_ALLOC` and
 `SIM_FREE` serve the memory its variable points at, from `VirtualAlloc`: a heap table's rows, a
-TLS slot's buffer, code (executable) and a guard (reserved with no access). `SIM_ALLOC_OWNED` and
+TLS slot's buffer, code (executable) and a guard (reserved with no access). A heap table's pages
+are write-watched (`MEM_WRITE_WATCH`), so the recorder images only the rows on pages written since
+its last capture; a large table is best declared on the heap for that reason
+([the skirmish slice](demo-recorder-skirmish-slice.md#the-capture)). `SIM_ALLOC_OWNED` and
 `SIM_FREE_OWNED` serve a block one of its rows owns, from the process heap. They are separate
 calls so that a heap table whose rows own blocks takes each from the right place; a call the
 declaration does not own memory for gets NULL and a `simreg: FAILED` line naming it. Scratch that
@@ -311,15 +314,15 @@ The engine facts are in the engine map's *COB on a puppet*.
 
 ### Always-on self-verification
 
-At each tick boundary the game thread copies a rotating slice of the real state (for example 50
-unit records, one player record and their declared rows); the writer thread compares it with the
-recorder's own copy of the world. At 50 units a tick, 1,500 units are checked within 30 ticks. A
-mismatch writes the true values into the recording as a correction, names the field in the file's
-metadata and logs one line per field; in the harness it fails the test. Capture happens at the
-unit-tick call `0x4954ED` (B2's stub) and is diffed on the writer thread. Copying 1,500 unit
-records takes about 6.5 µs on a host benchmark [INFERRED for the game]. Feasibility experiment 3's
-probe read and compared all 1,432 units of a battle every tick in 0.094–0.123 ms on average
-(MEASURED, [evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)).
+At each tick boundary the game thread copies a rotating slice of the real state — the next
+thirtieth of the unit slots, one player record and 16 KB of declared rows — and the writer thread
+compares it with the recorder's own copy of the world, so every unit slot is checked within 30
+ticks. A mismatch writes the true values into the recording as a correction, counted by record,
+table and offset in the file's end block, and the first sixteen are logged; in the harness it fails
+the test. Capture happens at the unit-tick call `0x4954ED` (B2's stub) and is compared on the writer
+thread. S1's capture, which includes this slice, costs about 80 µs a tick in a four-player game and
+235–251 µs in a battle of 1,200 to 1,400 units (MEASURED,
+[the skirmish slice](demo-recorder-skirmish-slice.md#measured)).
 
 ## The replay test harness
 
@@ -386,8 +389,8 @@ rests on.
      `0x4876C0` and `0x4662F0` write, the header generated from it, and
      `tools/replay-layout-check.sh` before the link.
 2. **With the skirmish slice** ([its plan](demo-recorder-skirmish-slice.md) cuts it into five landings): capture at `0x4954ED` and the recording header's lever list (the
-   registry's list), with the recorder that uses them; self-verification over units, players and
-   declared tables; root and sink counting; the main block and `.data` with the null twin; puppet
+   registry's list), with the recorder that uses them, and self-verification over units, players and
+   declared tables — **S1, landed 2026-09-29**; root and sink counting; the main block and `.data` with the null twin; puppet
    dispositions and fixtures; the one-writer rule and getter 75 per seat; the nano spray's recording
    and playback; the landing run and the nightly tier with its timer, and with the harness the
    CLAUDE.md replay gate and the landing command's Step 4b.
