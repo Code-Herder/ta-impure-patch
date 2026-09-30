@@ -17449,8 +17449,8 @@ untextured face, the nanoframe band ramp, an effect's line, a marker — or the 
 and is looked up in `uPal`, the same unscaled table.
 
 - **Units: the face-shade multiplier.** The vertex stage computes the row the engine's lit rasteriser
-  would (§2.106: `ftol(5 · N·L) & 0x1F` per vertex, for a structure under the Shading option, and
-  the neutral row for everything else); the fragment multiplies RGB by `k[row]` and
+  would (§2.106: `ftol(5 · N·L) & 0x1F` per vertex, row 0 taken as 5, for a structure under the
+  Shading option, and the neutral row for everything else); the fragment multiplies RGB by `k[row]` and
   clamps to 1 — not on a nanoframe band, which the engine paints over the shaded index — then the
   lambert (exactly 1.0 under `light=0`). `k` is built once per process by `tagpu_render3do.c`
   `shade_k_build` from the packet's SHD and the engine's table: per row, the least-squares slope
@@ -20066,7 +20066,8 @@ The kbot lab and the vehicle plant are left out: they animate continuously, and 
 two runs on one pose (a run paused at tick 136 has the lab turned against the reference), so their
 figures measure the pose, not the shade. The solar's figure is the selection box the engine draws
 around it in the reference frame. Its black is the better measure — the share of pixels below
-luminance 14, engine Shading-on frame against the pass:
+luminance 14, engine Shading-on frame against the pass. Both tables were measured before row 0
+was taken as row 5 (above), with the engine's rows unaltered:
 
 | solar region | engine, Shading off | engine, Shading on | per-triangle rows | per-quad rows |
 |---|---|---|---|---|
@@ -20074,11 +20075,12 @@ luminance 14, engine Shading-on frame against the pass:
 | body, right half | 13 % | 54 % | 69 % | 64 % |
 | right wing | 15 % | 46 % | 51 % | 51 % |
 
-The body's and the wing's black is the engine's: its Shading-on frame has it. The pass's mask
-overlaps the engine's over most of both, and the pass is still blacker (body +10 points, wing
-+5): the mask shows the excess mostly as one-pixel strips along the edges, where the reference
-draws its selection bracket and the cast shadow falls, which is not shown to be all of it. What
-per-quad rows remove is the black the pass added to the trapezoid. Mobile units: mean luminance of a flash 74.8
+With the engine's rows the body's and the wing's black is the engine's: its Shading-on frame
+has it, and the pass's mask overlaps it over most of both, a little blacker (body +10 points,
+wing +5, mostly one-pixel strips along the edges where the reference has its selection bracket
+and the cast shadow). What per-quad rows remove is the black the pass added to the trapezoid.
+With row 0 taken as 5 the pass is deliberately lighter than the engine there: about 1 % pure
+black where the engine's frame has 45 %. Mobile units: mean luminance of a flash 74.8
 (engine 75.0, before 83.4) and a peewee 67.4 (67.5, before 68.7). The option gates it: with the bit
 clear (`main+0x37F06` reads `0x03`) the pass matches the engine's Shading-off frame (air plant 16.2
 against 41.1 for the on frame), set (`0x23`) it matches the on frame.
@@ -20091,10 +20093,10 @@ against 41.1 for the on frame), set (`0x23`) it matches the on frame.
   steps across horizontal rows, linearly in screen `x`; the blend's `s · t` term is quadratic along
   a horizontal line unless one edge pair is horizontal, so a tilted parallelogram whose corner
   rows do not satisfy `c0 + c2 = c1 + c3` (rows 0, 30, 0, 1) shades differently.
-- **The solar is still blacker than the engine's, by 10 points on the body's right half and 5 on
-  the wing** (table above). The mask shows the excess mostly as one-pixel strips at the edges,
-  where the reference frame has its selection bracket and the shadow, but that is not shown to
-  account for all of it, and the whole-solar luminance error barely moved (40.1 to 39.4).
+- **The departure is on purpose and not bounded to row 0.** A face with a row-0 vertex or
+  corner draws lighter than the engine's, and the blend spreads that across the face, through
+  rows 1–4 and the wrap; the solar's whole-solar luminance error against the engine's frame was
+  not re-measured after it.
 - **Faces the engine reads garbage for.** A face with fewer than three or more than 32 vertices adds
   nothing to the sums here; a zero-length cross is `(0,1,0)` here and a NaN in the engine. The posed
   vertices are 16.16 integers in the engine and floats here, so a product within rounding of an

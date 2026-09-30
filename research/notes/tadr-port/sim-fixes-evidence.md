@@ -2175,8 +2175,8 @@ records this). So:
 engine's row for a structure under Shading (`ftol(5 · N·L) & 0x1F` per vertex, spread over the
 quad, [GPU status](../gpu-status.html) §2.106) and takes a row of 0 as 5. The wrap to 27..31 is
 kept. The owner chose this over the stock rows (the solar's opened wing drew solid black) and over
-a monotonic ramp, from a side-by-side of the variants. The GDI lane stays stock, so the two lanes
-differ on exactly the faces whose row is 0.
+a monotonic ramp, from a side-by-side of the variants. The GDI lane stays stock, so the change is
+confined to faces with a row-0 vertex or corner, and spreads across them through the blend.
 
 ### 6. The rest of the constructor
 

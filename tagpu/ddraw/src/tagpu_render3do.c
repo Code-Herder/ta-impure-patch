@@ -66,8 +66,8 @@ static const TAGPU_GAFENT* atlas_get(const char* g)
 
 /* ---- the engine's 32 shade rows ----
    The vertex stage of a LIT unit (a structure, under the Shading option) computes
-   the row the engine's rasteriser would -- `ftol(5 * N.L) & 0x1F` per vertex,
-   interpolated across the face (tagpu_posedraw.c) -- and every other unit takes
+   the row the engine's rasteriser would -- `ftol(5 * N.L) & 0x1F` per vertex, a
+   row of 0 taken as 5, interpolated across the face (tagpu_posedraw.c) -- and every other unit takes
    the neutral row; `s_shNeutral` is the row of the engine's table that leaves a
    colour as it is. Without the engine's table the rows are our own ramp, factor
    0.60 + 0.025*row, so row 16 is EXACT 1.0. */

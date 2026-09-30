@@ -15,7 +15,8 @@
      shade             a structure's vertex normal (the mean of its faces',
                        tagpu_posebake.c `piece_vnormals`) through the piece's
                        rotation, dotted with the engine's light and truncated
-                       onto the 32-row SHD ramp -- 0x45A2B6..0x45A2EC. A vertex
+                       onto the 32-row SHD ramp -- 0x45A2B6..0x45A2EC, row 0
+                       taken as 5 (THE SHADE, below). A vertex
                        stage output, interpolated across the face as the
                        engine's scanline does
 
