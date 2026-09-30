@@ -453,7 +453,8 @@ static int options_restore(char* ta)
 
 /* THE PLAYER'S SETTINGS. From S-b to the teardown the live settings hold the recording's options,
    and the settings save 0x430F00 writes their fields to the registry (the difficulty at 0x4311D1,
-   the settings' +0x108..+0x118 at 0x4314F6..0x43157E). Of its 27 callers the in-game Options' OK
+   the settings' +0x108..+0x118 at 0x430F80 and 0x4314F6..0x43157E). Of its 27 callers the in-game
+   Options' OK
    (0x45FD5F) and the damage-bars key (0x496077) run during a playback; the loader's (0x497FF6) is
    skipped for a skirmish, whose mode is 2 (0x497FEC..0x497FF4). The level reads the difficulty
    throughout (0x41BBBD, 0x4654AF, 0x486CE6), so the recording's options stay in until the
@@ -465,10 +466,11 @@ static int options_restore(char* ta)
    settings (0x4973C6..0x49790E), and the loader's last act sets the load word's bit 1 (0x497C5F),
    which the game thread reads before the level runs (0x498342), so no loader read follows the
    first step. A save before it, which no known path makes, writes the recording's options, and
-   the teardown then saves once more with the player's back. The saves of a playback run on the
-   game thread: of the 27 callers the loader's is the only one on the loader thread, and a
-   skirmish skips it. The save calls nothing that calls it again (0x4B6A20, 0x4B6A50, 0x4CF220,
-   0x4CFFF0, 0x4D0040 and imports), so one return address is in flight at a time. */
+   the teardown then saves once more with the player's back. No call of the save is on the loader
+   thread: the loader's own (0x497FF6) is in the game thread's load state 0x497F40, which starts
+   the loader thread only after it (0x4982C5..0x4982CA). The save calls nothing that calls it
+   again (0x4B6A20, 0x4B6A50, 0x4CF220, 0x4CFFF0, 0x4D0040 and imports), so one return address
+   is in flight at a time. */
 static void* s_saveRet;
 
 /* the live options and s_opt's, each put in the other's place */
@@ -1333,9 +1335,11 @@ static void states_put(const Lv* L, const RecWorld* W)
    hold what the level start 0x465E30 gave all ten from the skirmish menu's entries (their energy
    and metal, 0x465EF5..0x465F1A), and which no loop over the players reads while inactive. An
    image goes in only with each name ended inside its field, since the engine copies a name to
-   its end (0x49395F..0x493977, into a list of 0x1E bytes a player); and a PlayerInfo image only
-   with its side and colour within this game's counts, which the engine indexes its tables with
-   unbounded (validate). */
+   its end (0x49395F..0x493977, into a list of 0x1E bytes a player); and a seat's PlayerInfo image
+   only with its side and colour within this game's counts, which the engine indexes its tables
+   with unbounded (validate). The other records' go in as recorded: the engine itself leaves
+   colours outside its count in the records it does not seat (0xFF from the battleroom, 0x45133E;
+   the record's index from the reset, 0x46461E). */
 static void players_put(const Lv* L, const RecWorld* W)
 {
     unsigned p;
@@ -1355,7 +1359,7 @@ static void players_put(const Lv* L, const RecWorld* W)
         put_masked(rec, W->player[p], s_praw, 0, REC_PLAYER_BYTES);
         memcpy(&info, rec + PL_INFO, 4);
         if (!info) continue;
-        if (img[INFO_SIDE] >= L->sides || img[INFO_LOGO] >= L->colours) {
+        if (tagpu_puppet_seat(p) && (img[INFO_SIDE] >= L->sides || img[INFO_LOGO] >= L->colours)) {
             s_st.bad_ids++;
             note("replay: GameTime %u: record %u's side %u or colour %u is not one of this game's; "
                  "its PlayerInfo is left", L->now, p, img[INFO_SIDE], img[INFO_LOGO]);
@@ -2022,21 +2026,25 @@ void tagpu_replay_level_end(void)
 }
 
 /* THE VIEWER'S SEAT. V is a record the playback seats for itself, and the only one whose PlayerInfo
-   the recording does not describe: seat_level sets its watcher bit (+0x9B bit 6) and its side.
-   Neither the seat activation nor the reset clears the bit (they clear bit 5 at 0x464378, bits 4
-   and 5 at 0x464600 and 0x4646C2), so a later level that seats V's record would start with it set
-   [the word's other writers, in the battleroom's 0x443xxx..0x449xxx, are not traced]. It must hold
-   until the teardown has built the post-game table, which leaves watchers out (0x41DD43, called at
-   0x491B8B), so V's PlayerInfo goes back as the Start's fill left it once 0x491B60 has returned
-   (tagpu_reclaim.c's post hook), on the thread that ran tagpu_replay_level_end. The pointer taken
-   at the seat fill is still V's then: main's PlayerInfo blocks are made once by 0x463BE0 and never
-   freed (the destructor 0x463C40 runs only on stack-local records; replay-layout.tsv, `info`). The
-   results screen reads a listed player's colour from its PlayerInfo (0x41E5CD..0x41E5DC), and V is
-   never listed. A Start always reaches the teardown or ends the process (tagpu_puppet.h). The
-   seats' PlayerInfo stays as the recording's last image left it, as an ordinary game leaves its
-   own, every side and colour in it one of this game's (players_put); the next Start's fill writes
-   both for every seat it activates (0x47A79F..0x47A7C1 for a player, 0x47A7F2..0x47A813 for an
-   AI). */
+   the recording does not describe: seat_level sets its watcher bit (+0x9B bit 6) and its side. The
+   seat activation clears only bit 5 (0x464378); the front end's reset 0x4644D0 zeroes every
+   PlayerInfo (0x46458B..0x464598), but only from its three calls (0x42734F, 0x427D73, 0x4518AC),
+   and a surrender to the main menu reaches none of them (MEASURED 2026-09-30: record 0's name still
+   in place at the menu). So V's PlayerInfo goes back as the Start's fill left it, whatever path
+   follows, once 0x491B60 has returned (tagpu_reclaim.c's post hook), on the thread that ran
+   tagpu_replay_level_end: the bit must hold until the teardown has built the post-game table, which
+   leaves watchers out (0x41DD43, called at 0x491B8B). The pointer taken at the seat fill is still
+   V's then: main's PlayerInfo blocks are made once by 0x463BE0 and never freed (the destructor
+   0x463C40 runs only on stack-local records; replay-layout.tsv, `info`). Afterwards the results
+   screen reads a listed player's colour (0x41E5CD..0x41E5DC), and V is never listed; it reads the
+   controlled player's watcher bit, V's, only while the win flag main+0x391AF is set
+   (0x41F347..0x41F35B), which the post-game table copies from main+0x3923B bit 4
+   (0x41DC2E..0x41DC3C), and on a puppet level nothing sets that bit: +IWin's 0x416A0A is a typed
+   command, and the players phase's 0x4658C0 follows the objective's test (0x46586F), which is
+   disarmed. A Start always reaches the teardown or ends the process (tagpu_puppet.h). The seats'
+   PlayerInfo stays as the recording's last image left it, as an ordinary game leaves its own, every
+   seat's side and colour one of this game's (players_put); the next Start's fill writes both for
+   every seat it activates (0x47A79F..0x47A7C1 for a player, 0x47A7F2..0x47A813 for an AI). */
 void tagpu_replay_level_after(void)
 {
     if (s_vinfo.at) memcpy(s_vinfo.at, s_vinfo.was, REC_INFO_BYTES);

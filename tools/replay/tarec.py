@@ -204,9 +204,14 @@ class World:
         self.tables = {ix: bytearray() for ix in tables}
         self.tick = None
         self.corrections = 0
+        self.pend = None        # (slot, list, total, next) of an order list still owed records
 
     def apply(self, kind, b):
-        """One record; an event changes nothing here and is returned as (kind, body)."""
+        """One record; an event changes nothing here and is returned as (kind, body). An order
+        list's records come together and in order, as the DLL's reader has them
+        (tagpu_recreader.c, list_record)."""
+        if self.pend is not None and kind != RK_ORDERS:
+            raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
         if kind == RK_TICK:
             self.tick = struct.unpack_from("<I", b)[0]
         elif kind == RK_UNIT:
@@ -242,6 +247,12 @@ class World:
         elif kind == RK_ORDERS:
             slot, lst, total, first = struct.unpack_from("<HBxHH", b)
             key = (slot, lst)
+            k = (len(b) - 8) // REC_ORDER_IMAGE
+            if first == 0 and self.pend is not None:
+                raise Unreadable(f"slot {slot}'s order list begun inside slot {self.pend[0]}'s")
+            if first != 0 and self.pend != (slot, lst, total, first):
+                raise Unreadable(f"an order list record for slot {slot} out of order")
+            self.pend = (slot, lst, total, first + k) if first + k < total else None
             if first == 0:
                 if total:
                     self.lists[key] = bytearray(total * REC_ORDER_IMAGE)
@@ -265,6 +276,12 @@ class World:
         else:
             raise Unreadable(f"record kind {kind} in a block")
         return None
+
+    def whole(self):
+        """An iteration, a snapshot or a dump ends with no order list owed records."""
+        if self.pend is not None:
+            raise Unreadable(f"slot {self.pend[0]}'s order list cut short at the end of its "
+                             f"iteration")
 
     @staticmethod
     def _delta(img, bits, dwords, vals):
@@ -343,6 +360,7 @@ def snapshot_world(payload, slots, tables):
     w = World(slots, tables)
     for kind, b in records(payload):
         w.apply(kind, b)
+    w.whole()
     return w
 
 
@@ -366,12 +384,14 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
             continue
         for rk, b in records(payload):
             if rk == RK_TICK and want is not None and w.tick is not None and w.tick >= want:
+                w.whole()
                 return w
             if rk == RK_TICK and on_record:
                 on_record(w, None, b)
             w.apply(rk, b)
             if on_record:
                 on_record(w, rk, b)
+        w.whole()               # a stream block ends where an iteration does
     return w
 
 
