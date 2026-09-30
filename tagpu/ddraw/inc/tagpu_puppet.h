@@ -4,8 +4,8 @@
    (research/notes/tadr-port/demo-recorder-s2-host.md; the slice note's S2b). Such a level seats
    every recorded player as a type-3 record that the recording drives, a puppet seat, and the
    viewer's own seat V beside them; tagpu_replay.c seats them and applies the recording. This
-   module holds whether this level is a puppet level, which records are puppet seats, and what
-   getter 75 answers for each.
+   module holds whether this level is a puppet level, which records are puppet seats, what
+   getter 75 answers for each, and the gates that keep the recording the only writer.
 
    THE TABLE is SIM_CONTENT (decision D3): derived from the recording's header at the seat fill,
    constant for the level, and never recorded or restored. The seat fill writes it on the game
@@ -15,6 +15,8 @@
    always reaches the teardown: after the seat fill, the Start branch runs straight to the loading
    state (0x47B097..0x47B0B0), and the loader has one exit (0x497C6C), or the process ends at its
    crash handler (0x497CAB). */
+
+#include <stddef.h>
 
 #define PUPPET_PLAYERS 10   /* the records a level seats (REC_PLAYERS)                        */
 
@@ -36,5 +38,17 @@ void tagpu_puppet_end(void);
 /* A recorded controller change (RK_CONTROLLER), at the step that applies it: the seat's getter-75
    answer follows the recording machine's controller. */
 void tagpu_puppet_set_local(unsigned player, int local);
+
+/* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
+   a puppet level, or take the viewer's own input to it, refuse on one. DllMain's attach lands them
+   all, before the recorder's observers, which chain onto the two reply gates; a level plays a
+   recording only when every gate is in. */
+void tagpu_puppet_init(void);
+int tagpu_puppet_gates_in(void);
+/* The replay's own create and reply, bracketed on the game thread: the unit gates let through
+   what they nest (tagpu_puppet.c, *The replay's own calls*). */
+void tagpu_puppet_open(int open);
+/* the calls each gate refused this level, as one line for the replay's log */
+void tagpu_puppet_refusals(char* out, size_t cap);
 
 #endif

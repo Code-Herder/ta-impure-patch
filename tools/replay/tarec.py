@@ -13,7 +13,8 @@
                                              the same for dumps a playing of FILE took, less what
                                              a puppet host keeps as its own (puppet_view), with
                                              the order nodes' puppet rows as it holds them
-                                             (puppet_hold)
+                                             (puppet_hold); the radar picture is compared too
+                                             where the dump's viewed player is the recording's
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -21,7 +22,10 @@ THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change 
 here, and REC_FORMAT says which. A recording is REC_MAGIC, then blocks; a block is a 32-byte header
 and its payload, zlib-deflated unless the block is stored, each checked by a CRC-32. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
-read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC and one stored snapshot.
+read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
+format, the build and the tables, and one stored snapshot. A table is paired with the recording's
+by its name: each build numbers its tables in its own registry order, and a recording may be played
+by another build than the one that made it.
 
 Standard library only.
 """
@@ -270,8 +274,9 @@ class World:
                 img[4 * i:4 * i + 4] = vals[4 * k:4 * k + 4]
                 k += 1
 
-    def differences(self, other, names, limit=20):
-        """Lines naming each difference, the first `limit` of them, and their count."""
+    def differences(self, other, names, other_names=None, limit=20):
+        """Lines naming each difference, the first `limit` of them, and their count. `names` are
+        this world's tables and `other_names` the other's, when another build numbered them."""
         out, n = [], 0
 
         def note(line):
@@ -308,9 +313,20 @@ class World:
                 note(f"player {p}'s controller: recording {self.ctl[p]}, dump {other.ctl[p]}")
         if self.view != other.view:
             note(f"the controlled and viewed players: recording {self.view}, dump {other.view}")
-        for ix in sorted(set(self.tables) | set(other.tables)):
-            a, b = self.tables.get(ix, bytearray()), other.tables.get(ix, bytearray())
-            name = names.get(ix, {}).get("name", f"table {ix}")
+        def by_name(w, tabs):
+            return {tabs.get(ix, {}).get("name", f"table {ix}"): (tabs.get(ix, {}).get("stride"), t)
+                    for ix, t in w.tables.items()}
+
+        mine = by_name(self, names)
+        theirs = by_name(other, names if other_names is None else other_names)
+        for name in sorted(set(mine) | set(theirs)):
+            if name not in mine or name not in theirs:
+                note(f"{name}: declared by the {'recording' if name in mine else 'dump'}'s build only")
+                continue
+            (sa, a), (sb, b) = mine[name], theirs[name]
+            if sa != sb:
+                note(f"{name}: rows of {sa} bytes in the recording, {sb} in the dump")
+                continue
             if len(a) != len(b):
                 note(f"{name}: {len(a)} bytes in the recording, {len(b)} in the dump")
                 continue
@@ -565,13 +581,16 @@ def viewer_of(h):
     return min(i for i in range(REC_PLAYERS) if i not in seated)
 
 
-def puppet_view(w, viewer):
+def puppet_view(w, viewer, radar=False):
     """A world less what a puppet host keeps as its own (demo-recorder-s2-host.md §1.1, §2.3): the
-    contact bits +0x110 8-10 and 12, which its radar pass computes for its own view (D1); the
-    viewer's record V; and the controllers and the controlled and viewed players, which are the
-    host's seating."""
+    contact bits +0x110 8-10 and 12, which its radar pass computes for its own view (D1) -- bit 12
+    only, with `radar`, when the host views the player the recording viewed, whose radar picture
+    it computes from the same inputs, and loop 4 of the pass, which sets bit 12, runs only for a
+    type 1 or 2 owner; the viewer's record V; and the controllers and the controlled and viewed
+    players, which are the host's seating."""
+    mask = 0x1000 if radar else 0x1700
     for img in w.units.values():
-        struct.pack_into("<I", img, U_STATE, struct.unpack_from("<I", img, U_STATE)[0] & ~0x1700)
+        struct.pack_into("<I", img, U_STATE, struct.unpack_from("<I", img, U_STATE)[0] & ~mask)
     w.players[viewer] = bytearray(REC_PLAYER_IMAGE)
     w.ctl = [0] * REC_PLAYERS
     w.view = [0, 0]
@@ -611,20 +630,24 @@ def cmd_compare(path, dumps, puppet=False):
     held = puppet_rows() if puppet else None
     for d in dumps:
         dbl, dstop = blocks(d)
-        if len(dbl) != 1 or dbl[0][0] != RB_SNAPSHOT:
-            raise Unreadable(f"{d}: not a dump (one snapshot block)")
-        dw = snapshot_world(dbl[0][3], h["slots"], h["tables"])
+        if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
+            raise Unreadable(f"{d}: not a dump (a header and one snapshot block)")
+        dh = header(dbl[0][3])
+        dw = snapshot_world(dbl[1][3], h["slots"], dh["tables"])
         w = stream_to(h, bl, want=dw.tick)
         if w.tick != dw.tick:
             print(f"{d}: GameTime {dw.tick}, but the recording reads to {w.tick}")
             status = 1
             continue
+        radar = False
         if puppet:
-            puppet_view(w, viewer_of(h))
-            puppet_view(dw, viewer_of(h))
+            radar = dw.view[1] == w.view[1]
+            puppet_view(w, viewer_of(h), radar)
+            puppet_view(dw, viewer_of(h), radar)
             puppet_hold(w, held)
-        lines, n = w.differences(dw, h["tables"])
-        print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units: "
+        lines, n = w.differences(dw, h["tables"], dh["tables"])
+        print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units"
+              + (", the radar picture too" if radar else "") + ": "
               + ("EQUAL" if not n else f"{n} DIFFERENCES"))
         for line in lines:
             print("  " + line)

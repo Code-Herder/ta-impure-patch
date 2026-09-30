@@ -742,23 +742,28 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
     }
 }
 
+/* One RT_TABLE: the registry index the stream's table records carry, and what the declaration
+   is. The index is this build's registry order, which another build numbers otherwise, so a
+   reader pairs two builds' tables by name. */
+static void table_entry(Tlv* t, unsigned index, const SimDesc* d)
+{
+    unsigned char b[12 + 128];
+    unsigned short ix = (unsigned short)index, fl = d->flags;
+    unsigned n = (unsigned)bounded_len(d->name, 128);
+    memcpy(b, &ix, 2);
+    b[2] = d->cls;
+    b[3] = d->key;
+    memcpy(b + 4, &d->stride, 4);
+    memcpy(b + 8, &fl, 2);
+    b[10] = b[11] = 0;
+    memcpy(b + 12, d->name, n);
+    tlv(t, RT_TABLE, b, 12 + n);
+}
+
 static void header_tables(const Rec* r, Tlv* t)
 {
     unsigned i;
-    for (i = 0; i < r->ntab; i++) {
-        const SimDesc* d = r->tab[i].d;
-        unsigned char b[12 + 128];
-        unsigned short ix = (unsigned short)r->tab[i].index, fl = d->flags;
-        unsigned n = (unsigned)bounded_len(d->name, 128);
-        memcpy(b, &ix, 2);
-        b[2] = d->cls;
-        b[3] = d->key;
-        memcpy(b + 4, &d->stride, 4);
-        memcpy(b + 8, &fl, 2);
-        b[10] = b[11] = 0;
-        memcpy(b + 12, d->name, n);
-        tlv(t, RT_TABLE, b, 12 + n);
-    }
+    for (i = 0; i < r->ntab; i++) table_entry(t, r->tab[i].index, r->tab[i].d);
 }
 
 /* ---- the files still being finished --------------------------------------------------------- */
@@ -1576,18 +1581,37 @@ static void dump_olist(unsigned slot, unsigned list, const unsigned char* img, u
 }
 
 /* The live world's images as a stored RB_SNAPSHOT: what the recording must read back to at this
-   GameTime. Written on the game thread, which is tooling's price: a dump is the harness's. */
+   GameTime. Before it, a stored RB_HEADER with the format, the build and the tables, so that a
+   dump taken by another build than the recording's (a playing, D8) is read with its own table
+   names. Written on the game thread, which is tooling's price: a dump is the harness's. */
 static void dump_write(const Level* L, int tick, const char* name)
 {
     char path[MAX_PATH];
     RecBlock b;
     unsigned slot, i, img[IMG_DWORDS], n = tagpu_simreg_count();
     static unsigned char rb[SPAN_MAX];
+    static unsigned char hb[HEADER_MAX];
+    Tlv t;
+    long at;
     const SimDesc* wide = table_too_wide();
     unsigned char* lists;
     if (wide) {
         tagpu_logf("recorder: dump %s refused: %s has rows past %u bytes", name, wide->name,
                    SPAN_MAX);
+        return;
+    }
+    t.b = hb;
+    t.n = 0;
+    t.cap = sizeof hb;
+    t.full = 0;
+    tlv_u32(&t, RT_FORMAT, REC_FORMAT);
+    tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
+    for (i = 0; i < n; i++) {
+        const SimDesc* d = tagpu_simreg_at(i);
+        if (d && table_recorded(d)) table_entry(&t, i, d);
+    }
+    if (t.full) {
+        tagpu_logf("recorder: dump %s refused: its header does not fit in %u bytes", name, t.cap);
         return;
     }
     lists = (unsigned char*)VirtualAlloc(NULL, ORD_SCRATCH, MEM_COMMIT | MEM_RESERVE,
@@ -1602,6 +1626,17 @@ static void dump_write(const Level* L, int tick, const char* name)
         return;
     }
     fwrite(REC_MAGIC, 1, 8, s_dump);
+    memset(&b, 0, sizeof b);
+    b.magic = REC_BLOCK_MAGIC;
+    b.kind = RB_HEADER;
+    b.flags = RBF_STORED;
+    b.first = b.last = (uint32_t)tick;
+    b.raw = b.packed = t.n;
+    b.crc_body = (uint32_t)Crc32_ComputeBuf(0, hb, t.n);
+    b.crc_head = (uint32_t)Crc32_ComputeBuf(0, &b, 28);
+    fwrite(&b, sizeof b, 1, s_dump);
+    fwrite(hb, 1, t.n, s_dump);
+    at = ftell(s_dump);
     memset(&b, 0, sizeof b);
     fwrite(&b, sizeof b, 1, s_dump);                  /* rewritten once the body is known */
     s_dump_raw = 0;
@@ -1667,7 +1702,7 @@ static void dump_write(const Level* L, int tick, const char* name)
     b.raw = b.packed = s_dump_raw;
     b.crc_body = (uint32_t)s_dump_crc;
     b.crc_head = (uint32_t)Crc32_ComputeBuf(0, &b, 28);
-    fseek(s_dump, 8, SEEK_SET);
+    fseek(s_dump, at, SEEK_SET);
     fwrite(&b, sizeof b, 1, s_dump);
     fclose(s_dump);
     s_dump = NULL;

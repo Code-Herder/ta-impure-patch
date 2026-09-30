@@ -29,6 +29,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_recorder.h"
 #include "tagpu_replay.h"
+#include "tagpu_puppet.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
@@ -252,6 +253,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            targeting keys' engine sites are in tagpu_patches.c. */
         tagpu_datakeys_init();
 
+        /* tagpu: the puppet host's gates (tagpu_puppet.c): twelve engine functions -- the damage
+           apply, Send_UnitDeath, COB's SET, ATTACH and DROP, the two replies, the meteor shower,
+           typed commands, the debug keys, the resource transfer and the save -- each refused on
+           a level that plays a recording, and inert on every other. Byte-matched, disjoint from
+           every detour above. MUST run before tagpu_rec_init(): the recorder's observers on the
+           two replies chain onto these gates. A recording plays only when all twelve are in. */
+        tagpu_puppet_init();
+
         /* tagpu: the COB script-call oracle. No-op unless
            "tagpu_cobtrace.on" exists; five sites inside the COB engine
            (0x4B08C0, 0x4B0DA0, 0x4B19D0, 0x4B1A99 and the RNG call at
@@ -275,7 +284,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         /* tagpu: the demo recorder's event hooks (tagpu_recorder.c, *The events*): fifteen
            observers, the five fire functions' network tests and thirteen calls of the COB starts
-           by name, byte-matched, disjoint from every detour above, installed only whole. Each
+           by name, byte-matched, installed only whole, and disjoint from every detour above but
+           the puppet gates on the two replies, onto which those two observers chain. Each
            records only while a skirmish is recorded (tagpu_recorder.on); the network tests then
            let the fire functions build the 0x0D the recorder takes, and change no simulation
            state (tagpu_recorder.c, *The events*). */

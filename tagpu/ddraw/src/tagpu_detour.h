@@ -80,4 +80,16 @@ typedef int   (__cdecl *tagpu_detour_before_fn)(void* entry_esp);
 typedef void* (__cdecl *tagpu_detour_after_fn)(unsigned int* regs);
 int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
                          tagpu_detour_before_fn before, tagpu_detour_after_fn after);
+
+/* Prologue gate: every call asks `pred(entry_esp)`, which sees the frame as an observer's
+   `before` does -- [0] the return address, [1] the first stack argument, the pushad frame just
+   below (ECX at entry_esp - 0x0C) -- with every register and the flags kept around it. Nonzero:
+   the function returns at once, `ret retn` with EAX 0. Zero: the stolen bytes run and control
+   resumes at va + nst. `va` is the entry or a later instruction boundary reached only from the
+   entry with nothing pushed yet, so that `ret retn` unwinds the call. The site must hold
+   `stolen` and no stub yet; the gate is recorded, so an observer installed after it chains onto
+   it and sees only the calls it lets through. `nst` 5..16, on an instruction boundary. 1 on
+   success. */
+int tagpu_detour_gate(unsigned int va, const unsigned char* stolen, int nst,
+                      tagpu_detour_before_fn pred, unsigned char retn);
 #endif

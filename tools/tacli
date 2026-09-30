@@ -5285,6 +5285,9 @@ def cmd_replay_play(args):
     smap = h.get("settings_map")
     if not smap:
         die(f"{args.recording} does not name its map as the skirmish settings did")
+    if args.perspective is not None and args.perspective not in {p["index"] for p in seats}:
+        die(f"--perspective {args.perspective}: {args.recording} seats records "
+            f"{', '.join(str(p['index']) for p in seats)}")
     name = re.sub(r"[^A-Za-z0-9_-]", "_", Path(args.recording).stem)[:60] or "replay"
 
     if inst.running():
@@ -5316,7 +5319,9 @@ def cmd_replay_play(args):
     try:
         _scn_wait_shell(inst, args.launch_timeout)
         cursor = _log_cursor(inst)
-        request.write_text(f"play {name}\n")
+        request.write_text(f"play {name}"
+                           + (f" {args.perspective}" if args.perspective is not None else "")
+                           + "\n")
         for i, selector in enumerate(SCN_MENU_PATH):
             last = i == len(SCN_MENU_PATH) - 1
             before, g = _ui_resolve(inst, selector, SCN_MENU_TIMEOUT, wait=True)
@@ -6369,6 +6374,9 @@ def build_parser():
     rpp.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     rpp.add_argument("--restart", action="store_true",
                      help="stop the instance first if it is already running")
+    rpp.add_argument("--perspective", type=int, default=None, metavar="RECORD",
+                     help="show that recorded player's view rather than the whole battlefield "
+                          "(`tarec info` names the recording's own viewed player)")
     rpp.add_argument("--launch-timeout", type=float, default=SCN_LAUNCH_TIMEOUT,
                      help=f"seconds to wait for the window and the shell "
                           f"(default {SCN_LAUNCH_TIMEOUT:g})")

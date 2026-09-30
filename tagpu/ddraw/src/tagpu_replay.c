@@ -1,16 +1,19 @@
 /* tagpu_replay.c -- playing a demo recording back on puppets (tagpu_replay.h;
    research/notes/tadr-port/demo-recorder-s2-host.md, which this file cites by section).
 
-   OPENING (§6). The request file names a recording, and the SKIRMISH Start reads it. Four call
-   sites turn the level that Start loads into a puppet level, each inert unless the request was
-   accepted:
+   OPENING (§6). The request file, `play <name> [<record>]`, names a recording and optionally the
+   recorded player whose view the level shows; without one it shows everything, V's full
+   visibility (§2.9). The SKIRMISH Start reads it. Four call sites turn the level that Start loads
+   into a puppet level, each inert unless the request was accepted:
    - S-a, the Start's call of the seat fill (0x47B092). The stock fill runs first. Then the
-     request is validated before anything is written: the recording's format and exclusion file,
-     a skirmish, no network, the map the Start has just read, the seats and the unit limit. On
-     success every recorded seat becomes a type-3 record with its recorded side, logo,
-     name and alliance row, the viewer's own seat V is seated beside them (§1.1), the objective's
-     victory and defeat tests are disarmed (0x4904B0), and the puppet table is built. On any
-     failure the log says why, and the Start goes on as the skirmish its settings describe.
+     request is validated before anything is written: every puppet gate in (tagpu_puppet.c) and
+     the teardown wrap in (tagpu_reclaim.c), which ends the puppet level before its units are
+     destroyed; the recording's format and exclusion file, a skirmish, no network, the map the
+     Start has just read, the seats, the unit limit and the view. On success every recorded seat
+     becomes a type-3 record with its recorded side, logo, name and alliance row, the viewer's
+     own seat V is seated beside them (§1.1) and +0x2A43 names the view, the objective's victory
+     and defeat tests are disarmed (0x4904B0), and the puppet table is built. On any failure the
+     log says why, and the Start goes on as the skirmish its settings describe.
    - S-b, the Start's call of the settings persist 0x430F00 (0x47B09C). After the persist has
      written the player's own settings to the registry, the recording's options go into the
      settings the loader copies from. The teardown puts the player's back.
@@ -18,7 +21,8 @@
      the start units: skipped on a puppet level.
    - S-d, the first step: what needs the loaded level is checked -- its counts, its map, the unit
      and weapon data, its first GameTime. On a mismatch nothing is ever applied and the level
-     stays empty, which the viewer sees and the log explains.
+     stays empty, which the viewer sees and the log explains. Otherwise the start units are made,
+     the first image goes in, the wind is seeded and V's sight is filled (THE APPLY).
    The teardown (S-e) ends the replay, and the recorder refuses a puppet level (S-f).
 
    WHAT IT READS AND WRITES. Everything here runs on the game thread: the Start handler and the
@@ -39,6 +43,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_puppet.h"
+#include "tagpu_reclaim.h"
 #include "tagpu_limits.h"
 #include "tagpu_patches.h"
 #include "tagpu_simreg.h"
@@ -60,6 +65,8 @@
 #define INFO_FLAGS     0x9B
 #define INFO_WATCHER   0x40         /* the watcher bit, as the network watcher switch sets it
                                        (0x46569D)                                                */
+#define PL_SIGHT       0x7C         /* u8* the sight counters, one a cell ...                     */
+#define PL_SIGHTLEN    0x88         /* ... and their bytes (0x4816A0's fill, 0x481734..0x481767)  */
 #define OFF_NPLAYERS   0x2A3C       /* u16: the player count                                      */
 #define OFF_CONTROLLED 0x2A42       /* u8: the player the local game commands                     */
 #define OFF_VIEWED     0x2A43       /* u8: the player whose view it draws                        */
@@ -79,6 +86,10 @@
 #define OFF_DIFFICULTY 0x37EEE      /* u32 (0x401441)                                             */
 #define OFF_NSLOTS     0x14351      /* u16: the unit array's slots                                */
 #define OFF_GAMETIME   0x38A47
+#define OFF_MAPPED     0x14273      /* u16* the explored map, a bit a player (0x4845A9); its bytes
+                                       are ([+0x14233]·[+0x14237]·2) >> 2 (0x483CF6, 0x4816B5)   */
+#define OFF_LOSTYPE    0x14281      /* u16: bit 3 clear makes the draw rebuild the fog grid from
+                                       the viewed player's sight (0x4848F2)                      */
 #define MODE_SKIRMISH  2
 
 /* 0x464290(seat, type): the seat activation (stdcall, `ret 8`; seat and type are read as bytes) */
@@ -94,6 +105,7 @@ typedef void (__thiscall* PFN_Disarm)(void* objective);
 static RecReader* s_rd;             /* the recording this level plays                             */
 static char       s_name[NAME_MAX_];
 static unsigned   s_viewer;         /* V                                                          */
+static unsigned   s_view;           /* the viewed player: V for full visibility, or a seat         */
 static int        s_first;          /* the first step's checks are still to come                  */
 static int        s_dead;           /* they failed: nothing is applied this level                 */
 static int        s_over;           /* the recording has nothing more to apply                    */
@@ -126,14 +138,16 @@ static void replay_close(void)
 
 /* ---- S-a: the request and the seat fill ----------------------------------------------------- */
 
-/* The request's name: 1 read, 0 no request, -1 not understood (`why`). The file is gone
-   afterwards whatever it held: one reader, one time (§6.3). */
-static int request_read(char* name, unsigned cap, char* why, unsigned whycap)
+/* The request, `play <name>` or `play <name> <seat>`: the recording's name, and the seat whose
+   view to show, or -1 for full visibility. 1 read, 0 no request, -1 not understood (`why`). The
+   file is gone afterwards whatever it held: one reader, one time (§6.3). */
+static int request_read(char* name, unsigned cap, int* view, char* why, unsigned whycap)
 {
     char line[128], got[NAME_MAX_];
     FILE* f;
     size_t n = 0;
-    unsigned i;
+    unsigned i, seat;
+    int k;
     if (GetFileAttributesA(REQUEST) == INVALID_FILE_ATTRIBUTES) return 0;
     f = fopen(REQUEST, "rb");
     if (f) {
@@ -142,10 +156,12 @@ static int request_read(char* name, unsigned cap, char* why, unsigned whycap)
     }
     line[n] = 0;
     DeleteFileA(REQUEST);
-    if (sscanf(line, "play %63s", got) != 1) {
-        snprintf(why, whycap, "%s is not `play <name>`", REQUEST);
+    k = sscanf(line, "play %63s %u", got, &seat);
+    if (k < 1) {
+        snprintf(why, whycap, "%s is not `play <name> [<seat>]`", REQUEST);
         return -1;
     }
+    *view = k == 2 ? (int)(seat < REC_PLAYERS ? seat : REC_PLAYERS) : -1;
     for (i = 0; got[i]; i++)
         if (!((got[i] >= 'a' && got[i] <= 'z') || (got[i] >= 'A' && got[i] <= 'Z') ||
               (got[i] >= '0' && got[i] <= '9') || got[i] == '-' || got[i] == '_')) {
@@ -192,6 +208,15 @@ static int validate(const char* ta, const RecHeader* h, char* why, unsigned cap,
     }
     if (h->mode != MODE_SKIRMISH) {
         snprintf(why, cap, "it is not a skirmish (mode %u)", h->mode);
+        return 0;
+    }
+    if (!tagpu_puppet_gates_in()) {
+        snprintf(why, cap, "the puppet gates are not in (tagpu_puppet.c)");
+        return 0;
+    }
+    if (!tagpu_reclaim_level_tracked()) {
+        snprintf(why, cap, "the teardown wrap is not in (tagpu_reclaim.c), so nothing would end "
+                 "the puppet level before its units are destroyed");
         return 0;
     }
     if (ta[OFF_NETWORK] & 1) {
@@ -255,8 +280,8 @@ static void name_put(char* dst, const char* name)
     memcpy(dst, name, n);
 }
 
-/* §6.4's seating, after validate */
-static void seat_level(char* ta, const RecHeader* h, unsigned v)
+/* §6.4's seating, after validate; `view` the viewed player, V or a recorded seat (§2.9) */
+static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
 {
     unsigned char seatv[REC_PLAYERS] = { 0 }, localv[REC_PLAYERS] = { 0 };
     unsigned char* info;
@@ -293,7 +318,7 @@ static void seat_level(char* ta, const RecHeader* h, unsigned v)
         if (!seatv[i] && (c == 1 || c == 2)) E_ActivateSeat(i, 0);
     }
     ta[OFF_CONTROLLED] = (char)v;
-    ta[OFF_VIEWED] = (char)v;
+    ta[OFF_VIEWED] = (char)view;
     *(unsigned short*)(ta + OFF_NPLAYERS) = (unsigned short)h->nplayers;
     objective = *(void**)(ta + OFF_OBJECTIVE);
     if (objective) E_Disarm(objective);
@@ -304,11 +329,11 @@ static void __cdecl replay_fill(void)
 {
     char* ta = ta_main();
     char name[NAME_MAX_], path[MAX_PATH], why[200];
-    unsigned v = 0;
-    int k;
+    unsigned v = 0, i;
+    int k, view = -1;
     replay_close();
     tagpu_puppet_end();
-    k = request_read(name, sizeof name, why, sizeof why);
+    k = request_read(name, sizeof name, &view, why, sizeof why);
     if (!k) return;
     if (k < 0) {
         tagpu_logf("replay: not playing: %s", why);
@@ -325,7 +350,16 @@ static void __cdecl replay_fill(void)
         replay_close();
         return;
     }
-    seat_level(ta, recr_header(s_rd), v);
+    for (i = 0; view >= 0 && i < recr_header(s_rd)->nseats; i++)
+        if (recr_header(s_rd)->seats[i].index == (unsigned)view) break;
+    if (view >= 0 && i == recr_header(s_rd)->nseats) {
+        tagpu_logf("replay: not playing %s: the request's view names record %d, which the "
+                   "recording does not seat", name, view);
+        replay_close();
+        return;
+    }
+    s_view = view >= 0 ? (unsigned)view : v;
+    seat_level(ta, recr_header(s_rd), v, s_view);
     snprintf(s_name, sizeof s_name, "%s", name);
     s_viewer = v;
     s_first = 1;
@@ -406,9 +440,10 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    the world of image T, which the host holds -- and then the image of T+1, the world that unit
    tick and the rest of iteration T left there (demo-recorder-s2-events.md §1.0). The rest of the
    host's iteration then reads what it read on the recording machine: the players phase re-stamps
-   every unit's sight from the positions the unit tick left (0x4827B0, 0x465046..0x465063), and the
-   30-tick passes see the values they saw. At the next step's capture point the host holds image
-   T+1, which is where a dump (`dump <name>` in tagpu_replay.trigger) is taken and compared.
+   every unit's sight from the positions the unit tick left (0x4827B0, 0x465046..0x465063), and a
+   seat's 30-tick pass runs at the GameTime it ran at there (A PLAYER'S IMAGE). At the next step's
+   capture point the host holds image T+1, which is where a dump (`dump <name>` in
+   tagpu_replay.trigger) is taken and compared.
    The first step makes the units the level started with -- recorded as images, with no create
    before them -- through the create, as the loader made them, writes image T before the events
    of T, and seeds the wind from image T (wind_seed).
@@ -431,12 +466,21 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    Never written: the position, cell, layer, sight stamp, walk class and water state, which the
    engine functions above write; what the create and the level init wrote (the type and its index,
    the slot, the owner); the carry links and the attach piece (0x48AB70's); the state byte
-   (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); +0x110 bit 14, which the reaper acts
-   on, and the create's bits 28-31; and the contact bits 8-10 and 12, which the host's radar pass
-   computes for its own view (D1). The harness compares them all but the contact bits
-   (tools/replay/tarec.py compare --puppet).
+   (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); the create's +0x110 bits 28-31; and
+   the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1). The
+   harness compares them all but the contact bits (tools/replay/tarec.py compare --puppet), and
+   bits 8-10 too when the host shows the recording's own viewed player. +0x110 bit 14, dying, is
+   a value like the rest: the reaper's Send_UnitDeath is refused for a puppet (tagpu_puppet.c),
+   so a unit the recording marks dying lives until its recorded death, in the step it died in
+   there.
 
-   A PLAYER'S IMAGE is written raw under the same exclusions, every record's but V's. Each step
+   A PLAYER'S IMAGE is written raw under the same exclusions, every record's but V's, and but
+   +0xF0, the players phase's 30-tick deadline (0x46507D..0x465092). Image T+1 carries it as the
+   recording machine's phase of T left it, already advanced, so written it would keep the host's
+   phase from ever finding a seat's pass due -- and the viewed record's radar pass 0x467440 and
+   minimap fog 0x466C20 run only in that pass (0x46556D, 0x465572). Both machines' deadlines start
+   at the load's GameTime (0x464700) and step by 30 whenever GameTime reaches them, and the host
+   plays one recorded iteration a GameTime, so the host's own agrees; it is compared. Each step
    every seat's +0x18 is GameTime: the pacing gate 0x495230 runs ticks only as far as the
    smallest +0x18 of a type-3 record with a live unit.
 
@@ -452,6 +496,7 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define OFF_UCOUNT     0x1438F      /* UNITINFOCount                                               */
 #define PL_NETID       0x04         /* the seat activation sets it to the seat (0x464290)          */
 #define PL_PACE        0x18         /* the pacing gate's stamp (0x4952CF..0x495303)                */
+#define PL_PASS        0xF0         /* the players phase's 30-tick deadline, the host's own        */
 #define PL_BLOCKFIRST  0x67         /* the record's first and last unit, inclusive                 */
 #define PL_BLOCKLAST   0x6B
 #define U_ALT          0x6E
@@ -505,8 +550,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define OFF_FXLAYERS   0x38D77      /* the particle layer table, FX_LAYERS of 16 bytes (0x471D90)  */
 #define FX_LAYERS      10
 /* +0x110 bits no raw write touches: the layer and the walk class (0-3), the contact bits (8-10,
-   12), dying (14), the fix-up's bit (16, step 3), carried (17), and the create's 28-31 */
-#define U_ENGINE_BITS  0xF003570Fu
+   12), the fix-up's bit (16, step 3), carried (17), and the create's 28-31 */
+#define U_ENGINE_BITS  0xF003170Fu
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
 
 /* 0x485F50(owner, type, x, altitude, z, finished, layer, slot): the create (stdcall, `ret 0x20`);
@@ -656,6 +701,7 @@ static void masks_init(void)
     m_field(s_raw2, U_STATE, 4, 0x10000u, 1);
     m_bytes(s_raw2, REC_MOVER_AT + 0x26, 8, 1);
     m_field(s_state, U_STATE, 4, ~U_ENGINE_BITS, 1);
+    m_bytes(s_praw, PL_PASS, 4, 0);
     m_bytes(s_oraw, 0, 4, 0);               /* the vtables, the constructor's                  */
     m_bytes(s_oraw, ORD_REF, 4, 0);
     s_masks = 1;
@@ -840,7 +886,9 @@ static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const
              L->now, *(const unsigned short*)(unit_at(L, slot) + U_TYPEIX));
         return 0;
     }
+    tagpu_puppet_open(1);           /* what it nests is the recording's (THE OTHER EVENTS) */
     u = E_Create(owner, type, pos[0], pos[1], pos[2], finished, layer, slot);
+    tagpu_puppet_open(0);
     if (u != unit_at(L, slot)) {
         s_st.refused++;
         note("replay: the create of slot %u gave %s %u", slot, u ? "slot" : "nothing,",
@@ -1436,12 +1484,17 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len)
    live here is not played. Two kinds of event meet that by design, and counts_log's played and
    not-played counts are how a run shows no other does:
    - those a create makes before its exit records it: its state byte, set through 0x48B090
-     (0x486148), and the notice that setter makes (kind 3): the replayed create makes both again;
+     (0x486148), the SETs of its Create script's first slice, which 0x485D40 runs at once, and the
+     replies they make: the replayed create makes them again, with the puppet gates open around
+     it (make, tagpu_puppet_open);
    - those a death makes after its record: the destructor's order purge (0x4867A1 -> 0x439EB0)
      tears the dying unit's nodes down, and a node's destructor starts its TargetCleared unless
      +0x42 bit 16 is set (0x43A2AB..0x43A2B9) and broadcasts its StopBuilding when bit 22 is
      (0x43A21E..0x43A25D). A puppet's nodes hold bit 16 set and bit 22 clear (orders_put), so its
-     replayed death makes neither, on a unit that is no longer live. */
+     replayed death makes neither, on a unit that is no longer live.
+   A reply is played with the gates open too. Every other reply the host would make about a
+   puppet's unit is refused (tagpu_puppet.c) -- the one inside a replayed state change above all,
+   whose recorded reply follows it -- so each recorded reply is heard once. */
 
 /* the live unit an event's ID names, or NULL */
 static char* live_unit(const Lv* L, uint32_t id)
@@ -1593,7 +1646,9 @@ static int ev_reply(const Lv* L, const unsigned char* b, unsigned len)
     if (!(u = live_unit(L, id)) || kind >= REPLY_KINDS || b[8] > 1) return 0;
     memcpy(text, b + 12, len - 12);
     text[len - 12] = 0;
+    tagpu_puppet_open(1);
     (b[8] ? E_Reply1 : E_Reply0)(u, kind, b[9] ? text : NULL);
+    tagpu_puppet_open(0);
     return 1;
 }
 
@@ -1660,6 +1715,32 @@ static void images_put(const Lv* L, const RecWorld* W)
     orders_put(L, W);
 }
 
+/* FULL VISIBILITY (demo-recorder-s2-host.md §2.9), at the first step, once the loader's sight
+   rebuild 0x4816A0(1) (0x497AE5) has filled every seat's: V's sight counters all 1, the value
+   that rebuild writes when true LOS is off, and V's bit in every cell of the explored map, each
+   within the engine's own size of it -- the counters' byte count at +0x88, and the map's bytes as
+   0x483CF6 allocates them and 0x4816A0 fills them. V owns no unit, so no stamp ever takes a
+   count or a bit away, and the level shows everything while V is viewed: a perspective is only
+   the viewed player (s_view). Then the draw rebuilds its fog grid from the viewed player's sight
+   (LosType bit 3 clear, on the game thread, as the camera's own clears are). */
+static void sight_fill(char* ta, unsigned v)
+{
+    char* rec = player_rec(ta, v);
+    unsigned char* cnt;
+    unsigned char* mapped;
+    uint32_t len, w, h, n, b;
+    memcpy(&cnt, rec + PL_SIGHT, 4);
+    memcpy(&len, rec + PL_SIGHTLEN, 4);
+    if (cnt) memset(cnt, 1, len);
+    memcpy(&mapped, ta + OFF_MAPPED, 4);
+    memcpy(&w, ta + OFF_GRIDW, 4);
+    memcpy(&h, ta + OFF_GRIDH, 4);
+    n = (w * h * 2u) >> 2;
+    if (mapped)
+        for (b = v >= 8; b < n; b += 2) mapped[b] |= (unsigned char)(1u << (v & 7));
+    *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
+}
+
 /* The wind's generator state from the recording's first image (tagpu_wind_state_set), for the
    host to draw the recording's wind from: the table the header names as the host declares it */
 static void wind_seed(const RecWorld* W)
@@ -1685,7 +1766,7 @@ static void counts_log(const char* when, unsigned now)
         "create", "death", "shot", "intercept", "start", "named start", "built", "state", "reply",
         "spray"
     };
-    char ev[400];
+    char ev[400], gates[300];
     unsigned k, n = 0;
     ev[0] = 0;
     for (k = 0; k < EV_KINDS && n < sizeof ev; k++)
@@ -1699,6 +1780,8 @@ static void counts_log(const char* when, unsigned now)
                s_st.bad_ids, s_st.links, s_st.unlinked, s_st.obuilt, s_st.ofreed, s_st.orefused,
                s_st.yards, s_st.yrefused);
     tagpu_logf("replay: %s: events played/not played: %s", s_name, ev);
+    tagpu_puppet_refusals(gates, sizeof gates);
+    tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
 }
 
 /* The next iteration into the world; 0 when there is none, and the playing stops. */
@@ -1731,6 +1814,7 @@ static void play(const Lv* L, int first)
         level_units(L, W);
         images_put(L, W);
         wind_seed(W);
+        sight_fill(L->ta, s_viewer);
     }
     /* The world holds iteration k: its images went in at the step before k, its events are
        step k's. An iteration of an earlier GameTime is played late rather than dropped, since its
@@ -1750,7 +1834,7 @@ static void play(const Lv* L, int first)
 void __cdecl tagpu_replay_step(void)
 {
     char* ta;
-    char why[200];
+    char why[200], shown[32];
     Lv L;
     int first = 0;
     if (!tagpu_puppet_on() || !s_rd || s_dead) return;
@@ -1763,8 +1847,10 @@ void __cdecl tagpu_replay_step(void)
             tagpu_logf("replay: not playing %s: %s; the level stays empty", s_name, why);
             return;
         }
-        tagpu_logf("replay: playing %s: %u seats, the viewer at record %u, from GameTime %u",
-                   s_name, recr_header(s_rd)->nseats, s_viewer, recr_header(s_rd)->start);
+        if (s_view == s_viewer) snprintf(shown, sizeof shown, "full visibility");
+        else snprintf(shown, sizeof shown, "the view of record %u", s_view);
+        tagpu_logf("replay: playing %s: %u seats, the viewer at record %u, from GameTime %u, %s",
+                   s_name, recr_header(s_rd)->nseats, s_viewer, recr_header(s_rd)->start, shown);
         first = 1;
     }
     if (!s_over && !level_of(ta, &L)) {

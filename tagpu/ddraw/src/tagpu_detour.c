@@ -171,6 +171,36 @@ int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst
     return land_and_record(va, s, so, nst);
 }
 
+int tagpu_detour_gate(unsigned int va, const unsigned char* stolen, int nst,
+                      tagpu_detour_before_fn pred, unsigned char retn)
+{
+    unsigned char* s;
+    unsigned char* p;
+    int so;
+    if (!pred || nst < 5 || nst > 16 || tagpu_detour_landed(va, NULL, NULL) ||
+        memcmp((const void*)(size_t)va, stolen, (size_t)nst) != 0)
+        return 0;
+    if (!(s = p = tagpu_detour_stub())) return 0;
+    /* the frame as tagpu_detour_observe builds it, so `pred` reads it with the same offsets */
+    *p++ = 0x9C;                                       /* pushfd               */
+    *p++ = 0x60;                                       /* pushad               */
+    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;/* lea eax,[esp+0x24]   */
+    *p++ = 0x50;                                       /* push eax  (entry esp)*/
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)pred); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;             /* add esp,4            */
+    *p++ = 0x85; *p++ = 0xC0;                          /* test eax,eax         */
+    *p++ = 0x61;                                       /* popad (ZF kept)      */
+    *p++ = 0x74; *p++ = 0x06;                          /* jz run (+6)          */
+    *p++ = 0x9D;                                       /* popfd                */
+    *p++ = 0x33; *p++ = 0xC0;                          /* xor eax,eax          */
+    *p++ = 0xC2; *p++ = retn; *p++ = 0x00;             /* ret n                */
+    *p++ = 0x9D;                                       /* run: popfd           */
+    so = (int)(p - s);
+    memcpy(p, stolen, (size_t)nst); p += nst;
+    *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
+    return land_and_record(va, s, so, nst);
+}
+
 int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
                          tagpu_detour_before_fn before, tagpu_detour_after_fn after)
 {
