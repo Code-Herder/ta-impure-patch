@@ -27,8 +27,11 @@
      a list reached from a live unit holds live nodes. The vtable test on each node (0x4FD2C8) is
      a sanity filter on the value, and a failure ends the recording (REC_END_ORDERS) rather than
      reading on; so does a list past REC_ORDERS_MAX nodes. A node's owned object (+0x52) is read
-     once, for its vtable: the node owns it (0x4388D0 installs it and deletes the one before, the
-     node's destructor deletes it), so it is live while the node holds it.
+     once, for its vtable: the node owns it (its installers 0x4388D0, 0x438930, 0x438A00 and
+     0x438AD0 delete the one before, the node's destructor deletes it), so it is live while the
+     node holds it -- for a unit of a type 1 or 2 owner, as every unit of a skirmish is. A type-3
+     owner's air proxy (vtable 0x4FD9E0), to which each install hands the object (slot 1,
+     0x44EF90), deletes it itself (0x490A10, and its destructor 0x4909A0).
    - The ten player records, in the main block, and their PlayerInfo blocks: 0xB9 bytes the
      constructor allocates (0x463BE0, called at 0x41D98B for main's eleven) and nothing frees in
      main's records -- the destructor 0x463C40 runs only on a stack-local record (0x454538,
@@ -59,7 +62,6 @@
 #include "tagpu_opt.h"
 #include "tagpu_detour.h"
 #include "tagpu_patches.h"
-#include "tagpu_cob_safe.h"
 #include "crc32.h"
 #include "git.h"
 
@@ -94,7 +96,6 @@
 #define OFF_CONTROLLED 0x2A42       /* u8: the player the local game commands                      */
 #define OFF_VIEWED     0x2A43       /* u8: the player whose view it draws                         */
 #define OFF_NPLAYERS   0x2A3C       /* u16: the player count the SKIRMISH screen set (0x47AF39)     */
-#define OFF_NET        0x2A44       /* bit 0: a network game                                      */
 #define OFF_LOSTYPE    0x14281      /* u16: bits 0-2 the options; bit 3 is the fog grid's own      */
 #define OFF_CMDRDEATH  0x37EF6      /* u32: ActiveCommanderDeath                                  */
 #define OFF_DIFFICULTY 0x37EEE      /* u32 (0x401441)                                             */
@@ -114,11 +115,6 @@
 #define ORD_FLAGS      0x42
 #define ORD_SUBLIST    0x40000u     /* the node belongs on the sub list (the linkers)              */
 #define ORD_NEXT       0x4A
-#ifdef TAGPU_LIMITS_STOCK
-#define COB_MODEL      0x540        /* the COB object's model; the model's +0xC is its unit        */
-#else
-#define COB_MODEL      TAGPU_COB_MODEL_OFFSET
-#endif
 
 #define VERIFY_ROUND   30           /* iterations in which every unit slot is checked once        */
 #define VERIFY_TABLE   16384        /* bytes of declared rows checked each iteration, at least a row */
@@ -965,10 +961,11 @@ fail:
 }
 
 /* The capture's last act on a recording: RK_END, published; the ring is the writer's from here
-   (the hand-over, tagpu_recorder.h), and the writer's `done` goes to the exit's list. What an
-   unfinished iteration wrote is dropped unpublished, and so are the events of a step whose
-   iteration never followed; the ring's reserve holds the end whatever the published part left.
-   The event hooks are off before this runs (s_tid). */
+   (the hand-over, tagpu_recorder.h), and the writer's `done` goes to the exit's list. What was
+   never published is dropped: an unfinished iteration's records, and a step's events when the
+   recording ends before the next capture's checks pass (a step's events are published by that
+   capture, before its images, and by the teardown's end). The ring's reserve holds the end
+   whatever the published part left. The event hooks are off before this runs (s_tid). */
 static void rec_end(Rec* r, unsigned reason)
 {
     unsigned char b[20], * at;
@@ -1702,7 +1699,9 @@ static void dump_poll(const Level* L, int tick)
    network tests of the five fire functions, released while a skirmish is recorded so that they
    build their 0x0D. Between the test and the send each block writes only the packet on its own
    stack, and calls only the send -- which wpn_tx_fired skips when there is no network -- and,
-   for the meteor, 0x44FDB0, which reads a netid (demo-recorder-s2-events.md §1.4).
+   for the meteor, 0x44FDB0, which reads a netid (demo-recorder-s2-events.md §1.4). Four of them
+   also run the extra weapons' slot-index splice, which writes no simulation state
+   (tagpu_weapons.c, cb_slot_index, says why).
 
    Only the recording's game thread records (s_tid). An event that does not fit in the ring marks
    the step's events incomplete: the next capture ends the recording (REC_END_RING) without

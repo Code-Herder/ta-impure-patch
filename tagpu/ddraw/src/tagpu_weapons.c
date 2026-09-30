@@ -1228,6 +1228,13 @@ static int derived_index(char* unit, WSlot* slot)
     return i;
 }
 
+/* Also runs inside four of the fire functions' network blocks (0x49D7D9, 0x49DAD5, 0x49DCA4,
+   0x49DE73), which the demo recorder releases while a skirmish is recorded, so it must write no
+   simulation state: a recorded game would otherwise differ from an unrecorded one. derived_index
+   writes only g_diag (SIM_PRIVATE). The side table side_row can build, for a slot from 3 up, is
+   already built for the current unit array: the splice the same fire call runs before the test
+   (0x49D6A3, 0x49D9D4, 0x49DB8D, 0x49DD78) takes the same two registers, which nothing writes in
+   between, and the array moves only at a level load. */
 static int __cdecl cb_slot_index(char* unit, WSlot* slot)
 {
     return derived_index(unit, slot);

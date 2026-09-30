@@ -389,15 +389,15 @@ puppet host and verifies it against the recording.
 
 #### S2a, verified and measured
 
-On the reference setup under Wine, 2026-09-30, in three scripted games: an eight-minute skirmish of
+On the reference setup under Wine, 2026-09-30, in four scripted games: an eight-minute skirmish of
 four AIs on Core Prime Industrial Area (14,610 iterations), run 2's two-minute battle of 1,432 units
-on Town & Country (3,840), and a three-minute skirmish of four AIs in the stock-limits build
-(5,610). In each:
+on Town & Country (3,840), and in the stock-limits build a three-minute skirmish of four AIs
+(5,610) and a one-minute run of the battle (2,010). In each:
 
 - no correction: the self-verification now covers every mover, order list and PlayerInfo;
 - every dump EQUAL to the recording read back to its tick (three a game: 16, 27 and 42 live units in
-  the eight-minute game, 1,400, 1,309 and 1,206 in the battle, 14, 19 and 27 in the stock-limits
-  game), and every snapshot equal to the
+  the eight-minute game, 1,400, 1,309 and 1,206 in the battle, 14, 19 and 27 and 1,412, 1,409
+  and 1,400 in the stock-limits games), and every snapshot equal to the
   stream;
 - every change between two images explained by the step's events (`tarec.py check`): no appearance
   without its create, no disappearance without its death, no `+0x10E` change without its state
@@ -408,13 +408,16 @@ on Town & Country (3,840), and a three-minute skirmish of four AIs in the stock-
 The events of the battle: 1,430 creates, 1,433 deaths, 7,780 shots, 20,632 broadcast starts,
 21,873 owner-only starts, 61 state bytes, 16,415 replies and 24 sprays; of the eight-minute game,
 48 creates, 51 deaths, 84 broadcast starts, 48 builds done, 56 state bytes, 170 replies and 16,601
-sprays. No game intercepted a projectile.
+sprays. The stock-limits battle recorded 568 shots and 3,464 owner-only starts, so the released
+network tests and the shot callouts run in that build too. No game intercepted a projectile.
 
 **The capture's cost** grew with what it reads. In the battle it took 475 µs an iteration on
 average (S1: 247 and 255) and 1.15 ms at worst, in the 37th iteration, while the scenario's 1,432
 units were being placed (710 KB into the ring); in the eight-minute game 144 µs on average and
-455 µs at worst, and in the stock-limits game 96 µs and 365 µs. The product page's budget is 0.5 ms on average and 1 ms at worst with 1,500 units:
-the average meets it with little room, and the worst does not.
+455 µs at worst, and in the stock-limits game 96 µs and 365 µs. The stock-limits battle's one
+minute, with 1,400 to 1,412 units alive throughout, took 528 µs on average and 1.57 ms at worst.
+The product page's budget is 0.5 ms on average and 1 ms at worst with 1,500 units: the battles'
+averages sit at it (475 and 528 µs), and their worst iterations pass it.
 
 **The size.** The battle came to 60.4 MB for two minutes, 30 MB a minute (S1: 17.7 to 20.3). Its
 stream is 38 KB an iteration before deflating (S1: 20 KB): the order lists 4.1 KB, the events 0.7
@@ -434,13 +437,22 @@ none changed in play. **The ring** held at most 1,059 KB of its 16 MB in the bat
 #### What S2a leaves
 
 - **An interception** has not been recorded by a game: none of the three had an interceptor.
-- **The capture's worst iteration** passes the 1 ms budget in the battle's setup, and its average
-  is within 5 % of the 0.5 ms budget.
+- **The capture's cost** in a battle is at the 0.5 ms average budget (475 and 528 µs) and past the
+  1 ms worst (1.15 and 1.57 ms). S1 took about half as long; what S2a's reads cost is not broken
+  down. A one-minute game of eleven units on the landing build had one iteration of 2.6 ms that
+  put 18 KB into the ring: S1's worst iteration, whose cause is not found (*Measured*).
 - **The size**, 30 MB a minute in the battle: the representation (the product page's open
   decision 2).
 - **The game options change in play** through the typed commands `LOSType` (`0x416690`), `LOS`
   (`0x416D50`) and `Mapping` (`0x416D80`): the header records them at the start, and the LosType
   word lives in the main block, which is S3's.
+- **A seek from a snapshot** takes the events of the step after it from the stream block before
+  it: the writer writes the snapshot at T after the block that ends with step T's events
+  (`tagpu_recfmt.h`, `RB_SNAPSHOT`). S3 builds the seek.
+- **An order node's owned object outlives the node's hold only for a type-3 owner**: that owner's
+  air proxy (vtable `0x4FD9E0`) deletes the object an install hands it (`0x490A10`). A skirmish has
+  no type-3 owner, and a puppet holds `+0x52` at 0 (`puppet0`), so it matters to the takeover (S4)
+  and to the multiplayer slice, whose remote units have type-3 owners.
 
 ### S2b — watching
 

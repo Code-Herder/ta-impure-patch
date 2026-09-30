@@ -204,7 +204,8 @@ other players; a multiplayer game is rewound from its finished recording.
   landed recorder, 0.24–0.26 ms on average with 1,100 to 1,400 units, at worst 0.58 to 2.3 ms
   across five battle runs, the worst over 1 ms in three of them for a cause not yet found
   ([S1, *Measured*](demo-recorder-skirmish-slice.md#measured)); with S2a's movers, lists and
-  events, 0.48 ms on average with 1,200 to 1,400 units and 1.15 ms at worst
+  events, 0.48 and 0.53 ms on average in two battles of 1,200 to 1,412 units, and 1.15 and 1.57 ms
+  at worst
   ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured yet.
 - **Require matching installed map/mod content.** Record identities and fingerprints, check them
   before playback, and identify missing or mismatched content clearly. Do not bundle a copy of

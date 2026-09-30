@@ -2447,7 +2447,8 @@ static int __cdecl wpn_model_reuse(unsigned int* regs)
 /* In place of the five `call 0x451DF0` that send a 0x0D, the packet its second argument. A fire
    function builds the packet only under the network bit, or while a skirmish is recorded, when
    tagpu_recorder.c releases its test (0x49D7A0, 0x49DA92, 0x49DC64, 0x49DE25, 0x49DFAF); between
-   the test and this send it writes nothing but the packet on its stack. In the raised build the
+   the test and this send it writes nothing but the packet on its stack, and runs the extra
+   weapons' slot-index splice, which writes no simulation state (tagpu_weapons.c, cb_slot_index). In the raised build the
    weapon is the slot's (+0xC) in the four unit senders: the slot is esi at 0x49D859, 0x49DB4D
    and 0x49DD27, and ebx at 0x49DEEE. The meteor's (0x49DFF6) is its function's argument, at the
    send's esp+0x40; that sender leaves +0x1A..+0x23 as the stack held them, so they are

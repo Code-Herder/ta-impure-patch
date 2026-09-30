@@ -276,7 +276,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            observers, the five fire functions' network tests and thirteen calls of the COB starts
            by name, byte-matched, disjoint from every detour above, installed only whole. Each
            records only while a skirmish is recorded (tagpu_recorder.on); the network tests then
-           let the fire functions build the 0x0D the recorder takes, and change nothing else. */
+           let the fire functions build the 0x0D the recorder takes, and change no simulation
+           state (tagpu_recorder.c, *The events*). */
         tagpu_rec_init();
 
         /* tagpu: HUD scale (Phase F, gui-renderer.md 22) -- the in-game HUD

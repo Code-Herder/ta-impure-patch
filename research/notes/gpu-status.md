@@ -2934,7 +2934,7 @@ TransportPickup, TransportDrop, TargetCleared, EndTransport) go through a stub t
 then jumps to the function. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
 `0x49DC64`, `0x49DE25`, `0x49DFAF`) are released while a skirmish is recorded, so that each builds
 its `0x0D` on its own stack; the extra weapons' `wpn_tx_fired` hands it over at the send and skips
-the send when there is no network (§2.6b). That release is the only change to what the engine
+the send when there is no network (§2.6b); four of the released blocks also run the extra weapons' slot-index splice, which writes no simulation state (`cb_slot_index` says why). That release is the only change to what the engine
 does. The shots and the interceptions come through the extra weapons' callouts, and the extra
 weapons' own TargetCleared through `tagpu_rec_start_named`. Addresses, registers and what each
 hook reads: [the engine map](exe-reverse-engineering.md#the-demo-recorders-event-sites-disassembled-measured-2026-09-30).

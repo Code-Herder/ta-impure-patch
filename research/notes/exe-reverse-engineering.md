@@ -1758,7 +1758,11 @@ records it itself (`tagpu_rec_start_named`). BeginTransport is broadcast (`0x411
 skirmish is recorded, each test's stub leaves the zero flag clear, so the block builds its packet;
 between the test and the send each block writes only the packet on its own stack and calls only the
 send (the meteor's also `0x44FDB0`, which reads a netid; [the events note](tadr-port/demo-recorder-s2-events.md)
-§1.4). The five sends (`0x49D859`, `0x49DB4D`, `0x49DD27`, `0x49DEEE`, `0x49DFF6`) are already the
+§1.4). That is the retail code. In Impure's image four of the blocks also run the extra weapons'
+slot-index splice (`0x49D7D9`, `0x49DAD5`, `0x49DCA4`, `0x49DE73`), which writes no simulation
+state: it counts `SIM_PRIVATE` diagnostics, and the side table it can build for a slot from 3 up is
+already built by the splice the same fire call runs before the test (`0x49D6A3`, `0x49D9D4`,
+`0x49DB8D`, `0x49DD78`), which takes the same two registers, unwritten in between. The five sends (`0x49D859`, `0x49DB4D`, `0x49DD27`, `0x49DEEE`, `0x49DFF6`) are already the
 extra weapons' `wpn_tx_fired`, which hands the packet to the recorder and skips the send when there
 is no network. This is the one place the recorder changes what the engine does, and it changes
 nothing a skirmish keeps: the packet is the fire function's own stack.
@@ -1778,7 +1782,8 @@ done):
 - the two-minute battle of 1,432 units on Town & Country, 3,840 iterations: 1,430 creates, 1,433
   deaths, 7,780 shots, 20,632 broadcast starts, 21,873 owner-only starts, 61 state bytes, 16,415
   replies and 24 sprays, every change explained, none off the game thread and none uncredited;
-- a three-minute skirmish of four AIs in the stock-limits build, 5,610 iterations: every change
+- in the stock-limits build, a three-minute skirmish of four AIs (5,610 iterations) and a
+  one-minute run of the battle (2,010: 568 shots and 3,464 owner-only starts), every change
   explained, with all 33 sites in.
 
 Neither game intercepted a projectile, so the interception event has not been seen in a recording.

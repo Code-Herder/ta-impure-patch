@@ -174,7 +174,9 @@ enum RecBlockKind {
                           RK_UNIT per live unit with the RK_ORDERS of its lists that are not
                           empty, an RK_PLAYER and an RK_CONTROLLER per player, an RK_VIEWER, and
                           an RK_TABLE_SIZE and its spans per declared table. A dump is one of
-                          these, stored                                                         */
+                          these, stored. It follows the stream block that ends with the events
+                          of the step after `last`, so a reader that starts from it takes those
+                          from the block before                                                 */
     RB_END             /* entries (RecTag): how the recording ended                              */
 };
 #define RBF_STORED 1u

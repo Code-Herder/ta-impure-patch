@@ -363,7 +363,9 @@ The step T tick, in order: the network pump 0x453D40 (network only), then these 
     nothing but the send and, for the meteor, 0x44FDB0, which reads the first active local
     player's netid.
   - So releasing the test while recording changes nothing but the packet's existence. This was
-    checked for every non-stack write and call in the five blocks.
+    checked for every non-stack write and call in the five blocks of the retail exe. Impure's
+    image adds the extra weapons' slot-index splice to four of them, which writes no simulation
+    state (the engine map, *The demo recorder's event sites*).
 - **Capture:** release the five tests while recording. The recorder takes the packet at the send.
   - In the raised build the five `call 0x451DF0` are `wpn_tx_fired`'s sites
     (`tagpu_patches.c:2706–2745`). It writes the 12-bit weapon ID (`+0x19` and the high nibble

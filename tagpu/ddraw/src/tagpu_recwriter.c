@@ -519,8 +519,9 @@ static void snapshot(Writer* w)
     w->snap_tick = w->tick;
 }
 
-/* The iteration at `w->tick` is complete: its stream block may end here, and a snapshot may
-   follow it. */
+/* The iteration at `w->tick` is complete, the events of the step after it included: its stream
+   block may end here, and a snapshot of the copy at `w->tick` may follow it. That snapshot comes
+   after those events, so a reader that starts from it takes them from the block before. */
 static void iteration_done(Writer* w)
 {
     w->sticks++;
