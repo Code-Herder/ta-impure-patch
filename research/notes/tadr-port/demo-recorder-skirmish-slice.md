@@ -6,8 +6,9 @@ The [product page](demo-recorder.md#milestones-and-delivery-order)'s second mile
 2026-09-29: recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser
 and `tacli` automation, with the verification the
 [completeness design](demo-recorder-completeness.md#build-order) lists as its step 2. Five landings,
-each a finished unit verified by running it. **S1, the recorder, landed on 2026-09-29**: every
-skirmish is recorded to a file, and `tools/replay/tarec.py` reads a recording back. S2 is next.
+each a finished unit verified by running it. **S1, the recorder, landed on 2026-09-29**: a
+skirmish is recorded to a file when `tagpu_recorder.on` asks for it, and `tools/replay/tarec.py`
+reads a recording back. S2 is next.
 
 ## How the slice is cut
 
@@ -24,7 +25,11 @@ Each landing adds one capability that can be verified by itself, and the ones af
 **S1 and S2 record every value exactly, at every tick.** That is what makes their checks exact. The
 product page's stream — ten samples a second in whole world units, interpolated in playback — is a
 landing of its own after S2, once playback can show its error; S1 measures the exact stream's size
-so that the gap to the budget is known before then.
+so that the gap to the budget is known before then. Until that landing a skirmish is recorded only
+when asked, by the file `tagpu_recorder.on` in the game's folder, because the exact stream is too
+large to write for every game (*Measured*). That landing turns recording on for every skirmish and
+retires the file, and it packs the stream tighter as well: a scratch repacking of the exact stream
+measured about 2.5 times smaller (*Measured*).
 
 ## S1 — the recorder
 
@@ -145,10 +150,13 @@ incomplete.
 
 ### Its lifetime
 
-A recording starts at the first capture of a skirmish level, and only when its end is certain:
-`tagpu_reclaim`'s wrap of the teardown `0x491B60` tells the recorder on the game thread, on entry,
-before the cascade frees the unit array (`0x485980`, called at `0x491B95`), and without the wrap the
-recorder does not start. The end record is the capture's last access to the ring; the writer then
+A recording starts at the first capture of a skirmish level, and only when it is asked for and
+its end is certain. `tagpu_recorder.on` in the game's folder asks for it: the recorder looks for the
+file once, at that capture, so it has to be there before the level starts, and removing it changes
+the next level, not this one. The end is certain because `tagpu_reclaim`'s wrap of the teardown
+`0x491B60` tells the recorder on the game thread, on entry, before the cascade frees the unit array
+(`0x485980`, called at `0x491B95`), and without the wrap the recorder does not start. The end
+record is the capture's last access to the ring; the writer then
 finishes the file, frees the ring and exits. Each recording owns its ring and its writer, so a level
 that starts while the previous file is still being finished takes a new pair.
 
@@ -195,15 +203,20 @@ iterations to record.
   finds it first writes the live world's images to `replays\dump-<name>.bin`, a stored snapshot of
   the state that capture records.
 
-S1 has no switch: every skirmish is recorded. The product's opt-out is a setting, and the settings
-store's only writer is its menu (`tagpu_settings.h`), so the setting comes with its menu row in S5.
+The switch is a file, not a setting: `tagpu_recorder.on`, read with `tagpu_opt_on`, which
+`tacli arm <instance> recorder.on` writes. It decides whether a game is recorded, not what the
+simulation runs, so it is not a simulation lever and the header's lever list does not name it. The
+product's opt-out is a setting, and the settings store's only writer is its menu
+(`tagpu_settings.h`), so the setting comes with its menu row in S5.
 
 ### Verified by
 
 Scripted games on Wine, on a private X display, in the raised build unless stated; each recording
 read back with `tarec info`, `check` and, where the run took dumps, `compare`. Runs 1 to 5 ran on
-S1 as the landing review read it; runs 6 to 8 and the last row on the build that lands, which
-changed every ID by one, and so every image, and added the exit's wait:
+S1 as the landing review read it. Runs 6 to 8 and the row after them ran on the build that lands
+but for the file that asks for a recording, which changes only whether one starts; that build
+changed every ID by one, and so every image, and added the exit's wait. Run 9 ran on the build
+that lands:
 
 | run | the game | what it showed |
 |---|---|---|
@@ -217,6 +230,7 @@ changed every ID by one, and so every image, and added the exit's wait:
 | 7 | run 1's game ended by a defeat a minute in, and its window closed at once (`WM_DELETE_WINDOW`, which Wine turns into `SC_CLOSE`), in the same scratch build | the same: the exit waited for the file, complete, its dump equal |
 | 8 | run 6 in the landing build | the writer had closed the file before the exit came, so nothing waited: complete, its dump equal |
 | — | run 2's battle once, and run 1's game for 90 s in the stock-limits build, both in the landing build | no correction and every dump equal: 1,099 to 1,404 live units at the battle's dumps; 22 tables in the stock-limits build |
+| 9 | run 1's game without `tagpu_recorder.on`, then with it and left a minute in by the in-game menu | without it, `recorder: not recording: tagpu_recorder.on is absent` and no file; with it, recorded from GameTime 1 and complete at the teardown after 1,964 iterations, both snapshots equal to the stream, the dump equal, no correction |
 
 ### Measured
 
@@ -261,6 +275,13 @@ S1 and 20.3 and 17.7 MB a minute in the landing build (the stream deflates about
 The ring held at most 645 KB of its 16 MB in the battles and 177 KB in the one-minute games; in
 the reviewed S1 the first iteration's rows of zeros alone put about 1.2 MB into it.
 
+A scratch repacking of the landing build's battle — one record an iteration rather than one a
+unit, each value stored as its difference from the unit's last, and each field's differences stored
+together — deflated to 13.8 MB, against 34.5 MB for the same stream as written: 2.5 times smaller,
+6.5 MB a minute. The differences are most of that: one record an iteration alone gains 1.2 times.
+Run 1's eight-minute stream, recorded by the reviewed S1, came out 2.7 times smaller. The repacked
+stream was not decoded back, so this measures what the representation gains, not a format.
+
 ### Gaps S1 leaves
 
 - **The objects a record points at** — the mover, the order lists, the COB object, the model, the AI
@@ -300,8 +321,6 @@ theirs. Rules S2 inherits from the notes:
 
 - **Where recordings live and what they are called** (`replays\`, `.imprec`): chosen for S1, and
   shown by the browser in S5.
-- **A release cut between S1 and S5** would write a recording of every skirmish, with no switch and
-  nothing that can open it yet, at the exact stream's size (*Measured*).
 - **The stream's quantization, the snapshot interval and the crash promise** are the product page's
   open decisions 2, 3 and 5; the landings above measure what each needs.
 - **`s_ghost`, the build ghost's piece masks,** is declared `SIM_STATE`, so it is recorded, though

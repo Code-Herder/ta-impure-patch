@@ -22,9 +22,11 @@ under [Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so
 mechanism's first step: every writable static of the four simulation files is declared, and the
 build refuses one that is not; the bytes of the engine's unit and player records that are not
 recorded as values are listed in one exclusion file the build checks; the design lists the state
-that is still outside both. The skirmish slice's first landing, the recorder, records every skirmish
-to a file and checks the file against the game as it goes
-([S1](demo-recorder-skirmish-slice.md#s1-the-recorder), 2026-09-29); watching is next. Every decision of the
+that is still outside both. The skirmish slice's first landing, the recorder, records a skirmish
+to a file when asked and checks the file against the game as it goes
+([S1](demo-recorder-skirmish-slice.md#s1-the-recorder), 2026-09-29); watching is next. Recording
+every game waits for the reduced stream, since the exact stream the recorder writes is too large
+for that. Every decision of the
 [completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)
 holds the desk research behind this design: how the engine treats remote players, what a rebuild
 must carry, per-player state, and the size estimate. The [packet-era exploration](demo-recorder-exploration.md)
@@ -379,7 +381,7 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 |---|---|---|
 | Product contract | Scope, architecture, viewer features, storage policy and open decisions recorded here | **Decisions recorded, 2026-09-28** |
 | Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Done, 2026-09-29.** **(1)** A skirmish level holds ten puppet players, 4–9 included, with the viewer on a puppet seat; the units stay inert, and the level ends only by the recording once its victory and defeat tests are switched off ([evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). **(2)** A rebuild of 1,227–1,432 units in play takes 11–47 ms, paused or not; a puppet seat becomes a working AI in about 1 ms without a reload, the seat made local before its units are re-created; order and factory queues and builds in progress continue ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)). **(3)** A recorded 1,432-unit battle replays with every recorded unit value identical at every checkpoint, walking included; the recorder costs about 0.1 ms per tick; a battle of that size sustained for an hour would exceed the 100 MB budget ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)). Not yet shown: features, wrecks and projectiles in a rebuild; footprints, sight, sounds and the nano spray in playback; a real hour. Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
-| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Five landings, the first landed 2026-09-29** ([the plan](demo-recorder-skirmish-slice.md)): the recorder with its self-verification, which records every skirmish with no correction and reads back equal to the game at every dump; watching is next |
+| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Five landings, the first landed 2026-09-29** ([the plan](demo-recorder-skirmish-slice.md)): the recorder with its self-verification: a skirmish recorded on request, with no correction, reads back equal to the game at every dump; watching is next |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
 | Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check, and the exclusion file with its check, are built (2026-09-29, [completeness design](demo-recorder-completeness.md#option-b-declare-and-measure)), and every recording verifies itself as it is made ([S1](demo-recorder-skirmish-slice.md#self-verification)); the harness is not built |
@@ -412,7 +414,11 @@ evidence, and keep remaining gaps visible.
    160–390 MB per hour sustained, or 500–640 MB if each unit's speed is recorded as it changes.
    So the ten-player budget holds only if
    an average hour at that size is far quieter than a battle. Recording the walk class instead of
-   the speed is the obvious saving, not yet measured.
+   the speed is the obvious saving, not yet measured. **The exact stream**, every value at every
+   tick, which the skirmish slice's recorder writes: about 15 MB an hour for four AIs and 18–20 MB
+   a minute in a 1,400-unit battle, which a scratch lossless repacking made about 2.5 times smaller
+   ([measured](demo-recorder-skirmish-slice.md#measured)). Until the reduced stream lands, a
+   skirmish is recorded only on request.
 3. **Snapshot interval**, chosen by measurement against the seek target and the disk budget.
 4. **Playback speed presets.**
 5. **Crash durability boundary**, and its wording for a process crash versus a power loss.

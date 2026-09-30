@@ -596,8 +596,10 @@ exe, is not loaded at attach. Drive them the way the compat suite does:
 
 ## The demo recorder: recordings and dumps
 
-**Every skirmish is recorded**, from its first iteration to the level's end, to
-`gamedir/replays/<date> <time> <map>.imprec`; there is no switch. The log says
+**A skirmish is recorded while `tagpu_recorder.on` is in the game folder** — `tacli arm <i>
+recorder.on` before the level starts, since the recorder looks for it at each level's first
+iteration — from that iteration to the level's end, to `gamedir/replays/<date> <time> <map>.imprec`.
+Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. The log says
 `recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
 Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,

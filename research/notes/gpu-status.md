@@ -2908,11 +2908,12 @@ operand at offsets 2 to 5. Pass 3 also asks a DLL's **file** whether it exports 
 rather than asking the loaded module: `GetProcAddress` on a forwarded export loads and initialises
 the target, and every Patch Loader's `dplayx.dll` forwards all nine of its exports to `tplayx`.
 
-### 2.6e The demo recorder's capture (`tagpu_recorder.c`, `tagpu_recwriter.c`, every skirmish)
+### 2.6e The demo recorder's capture (`tagpu_recorder.c`, `tagpu_recwriter.c`, a skirmish on request)
 
-S1 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): every
-skirmish is recorded to `replays\<date> <time> <map>.imprec`, and `tools/replay/tarec.py` reads a
-recording back. No site of its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls
+S1 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
+is recorded to `replays\<date> <time> <map>.imprec` when `tagpu_recorder.on` is in the game's folder
+at the level's first iteration, and `tools/replay/tarec.py` reads a recording back. No site of its
+own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls
 `tagpu_rec_capture` before the air pool's rebuild, on the game thread, and `tagpu_reclaim`'s
 teardown wrap (§2.7) calls `tagpu_rec_level_end` first, before the cascade frees the unit array.
 A recording does not start without that wrap, since nothing else would end it. **One Win32 hook**:
