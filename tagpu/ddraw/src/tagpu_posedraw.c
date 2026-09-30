@@ -57,13 +57,12 @@
    65536 = 2^23, where the float32 spacing is still 0.5 and `+ 0.5` is exact);
    the largest stock model is an order of magnitude inside that.
 
-   THE ONE KNOWN INEXACTNESS is not here but in the bake: the degeneracy test
-   belongs on the ENGINE's posed vertices, rounded into 16.16 at every axis and
-   every level of the tree, and the bake takes it on the rest vertices
-   (tagpu_posebake.c, "THE ONE PLACE THIS IS NOT EXACT"). A face of any real
-   area gives the same answer; a near-degenerate one can take the neutral SHD
-   row where the posed vertices give a shaded one. Gate B is told to look for
-   exactly that — a whole face one row off, rather than an edge flip.
+   THE ONE KNOWN INEXACTNESS is not here but in the bake: the engine takes a
+   structure's vertex normals from its posed vertices, rounded into 16.16 at
+   every axis and every level of the tree, and the bake takes them from the
+   rest vertices (tagpu_posebake.c `piece_vnormals`). A product `5 * N.L`
+   within rounding of an integer can land a whole SHD row off. Gate B is told to
+   look for exactly that — a whole face one row off, rather than an edge flip.
 
    THE POSE LIVES IN ONE STORAGE BUFFER PER FRAME, which is what takes the
    piece cap out of the design (gpu-posing.md decision 7). Every posed unit's
@@ -473,7 +472,10 @@ static const char* VS =
        The row leaves this stage as a float and the fragment stage floors the
        interpolated value, which is what the engine's span loop does with its
        16.16 intensity (0x4C81A4..0x4C81BD). The flip toward SH_V below is for
-       the Classic++ lighting term alone: the engine does not flip. */
+       the Classic++ lighting term alone: the engine does not flip. `un` is the
+       VERTEX's smoothed normal, not its face's, and `vNrm` is flat: a lambert
+       from it would light unit facets from the provoking vertex's mean. Nothing
+       reads it while `uLambert` is published as 0. */
     "  float shade = uShd.x / 31.0;\n"
     "  vec3 un = vec3(0.0, 1.0, 0.0);\n"
     "  bool pShaded = uPose[clamp(uFlagBase + (pi >> 2), 0, pl)][pi & 3] > 0.5;\n"

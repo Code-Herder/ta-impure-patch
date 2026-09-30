@@ -2171,13 +2171,13 @@ records this). So:
 
 **Class.** Draw only. It touches no simulation state.
 
-**Under our renderer.** Moot on Vulkan. Our unit pass picks its own row, `neutral + dir ·
-round(12 · N·SH_L)` clamped to 0..31 (`tagpu_render3do.c:66`, `tagpu_posedraw.c`), and shades by
-the fitted multipliers `k[row]`. So neither the black row nor the wrap reaches the screen. It still
-shows on the GDI lane (the engine's own frame).
+**Under our renderer.** Not ported, and not needed for parity. The unit pass reproduces the
+engine's row for a structure under Shading (`ftol(5 · N·L) & 0x1F` per vertex, interpolated,
+[GPU status](../gpu-status.html) §2.106), so the black row 0 and the wrap to 27..31 reach the
+screen on Vulkan exactly as on the GDI lane (the solar's black roof panel is one).
 
-**Recommendation.** Do not port. On the GDI lane the wrap to 27..31 is the larger artefact; the
-owner keeps that lane stock (decided below).
+**Recommendation.** Do not port. Both lanes show the engine's own picture; the wrap to 27..31 is
+the larger artefact, and the owner keeps the GDI lane stock (decided below).
 
 ### 6. The rest of the constructor
 

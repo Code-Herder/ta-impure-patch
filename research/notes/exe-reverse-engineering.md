@@ -3091,7 +3091,10 @@ colour n-gon `0x4C0C70` (`0x45A3BA`) and the scanline core `0x4C8020` (`0x4C9095
 callers either. **MEASURED** with the GDI backend (`tagpu_gdi.on`), Shading on against off, paused,
 the same scene: 0 changed pixels on a peewee, thud, flash, stump, raider, hawk and a commander, and
 1 692 / 4 706 / 4 192 / 3 642 / 308 on a solar, a kbot lab, a vehicle plant, an air plant and a
-laser tower. **A mobile unit is never shaded.**
+laser tower. **A mobile unit is never shaded.** `0x459C70` also tests `main+0x37F06` bit 1 at
+`0x459C82..0x459C8E`: set, it takes the doubled-coordinate scratch path at `0x459C94..0x459D55` (the
+2× supersample bake, [build state](build-state.html) §2 and §4), clear it goes on at `0x459D57`. That
+gate is independent of the Shading bit and of the intensity below.
 
 **The arithmetic** (`0x459F79..0x45A2F3`). Per piece, over its own vertex list:
 

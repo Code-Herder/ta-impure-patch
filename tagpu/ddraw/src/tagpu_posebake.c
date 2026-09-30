@@ -252,6 +252,10 @@ static void piece_vnormals(const char* n, const int* rv, int nvert)
     const char* faces = *(const char* const*)(n + N_FACES);
     int j, k;
     for (k = 0; k < nvert; k++) { s_vn[k][0] = s_vn[k][1] = s_vn[k][2] = 0.0f; s_vnCnt[k] = 0; }
+    /* pb_walk's own bound on the face list, taken again because these are
+       re-reads of engine memory: a piece it would not walk sums nothing */
+    if (nface <= 0 || nface > 512 || !ptr_ok(faces) ||
+        IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) return;
     for (j = (*(const int*)(n + N_SELPRIM) != -1) ? 1 : 0; j < nface; j++) {
         const char* fa = faces + j * FACE_STRIDE;
         const int fvc = *(const int*)(fa + F_VCOUNT);
@@ -287,7 +291,9 @@ static void piece_vnormals(const char* n, const int* rv, int nvert)
         if (s_vnCnt[k] > 0) {
             const float inv = 1.0f / (float)s_vnCnt[k];
             s_vn[k][0] *= inv; s_vn[k][1] *= inv; s_vn[k][2] *= inv;
-        } else { s_vn[k][0] = 0.0f; s_vn[k][1] = 1.0f; s_vn[k][2] = 0.0f; }
+        }
+        /* a vertex no face names keeps the engine's zeroed sum, whose row is 0
+           (0x459F0A..0x459F15; the divide at 0x45A1FF skips a count of 0) */
     }
 }
 
