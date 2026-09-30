@@ -246,6 +246,15 @@ static int   s_vnCnt[PB_MAXNODEV];
 
 typedef struct { int nv; int over; int vnPiece; } PBGEOMCTX;
 
+/* a normal component in [-1, 1] as the GPU's SNORM16: the vertex format
+   divides by 32767, so 32767 is exactly 1.0 */
+static short snorm16(float x)
+{
+    if (!(x > -1.0f)) return -32767;
+    if (!(x < 1.0f)) return 32767;
+    return (short)(x * 32767.0f + (x < 0.0f ? -0.5f : 0.5f));
+}
+
 static void piece_vnormals(const char* n, const int* rv, int nvert)
 {
     const int nface = *(const int*)(n + N_FCOUNT);
@@ -303,8 +312,10 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
 {
     PBGEOMCTX* c = (PBGEOMCTX*)vctx;
     float V[3][3];
+    const float* cn4[4];
+    int haveQ = 0;
     int t, r;
-    (void)fa; (void)fvc; (void)slot;
+    (void)slot;
     if (c->over) return;
     if (c->nv + n > PB_MAXVERT) { c->over = 1; return; }
     for (t = 0; t < n; t++)
@@ -321,8 +332,24 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
         piece_vnormals(nd, rv, nvert);
         c->vnPiece = p;
     }
+    /* A QUAD'S FOUR CORNER NORMALS, in the face's own index order, ride on
+       every vertex of the face: the fragment stage blends the four corners'
+       intensities over the quad's frame (quad_frame), which is how the engine's
+       row-by-row rasteriser spreads them, where two triangles would each take a
+       plane through three. Any other face carries its own vertex's normal four
+       times, and the fragment stage does not read them. The fourth corner is
+       bounded here: the walk bounds only the three the triangle names. */
+    if (range == TAGPU_PB_BODY && fvc == 4) {
+        const unsigned short* fi = *(const unsigned short* const*)(fa + F_INDICES);
+        if (fi && fi[0] < nvert && fi[1] < nvert && fi[2] < nvert && fi[3] < nvert) {
+            for (t = 0; t < 4; t++) cn4[t] = s_vn[fi[t]];
+            haveQ = 1;
+        }
+    }
     for (t = 0; t < n; t++) {
         float* o = s_scratchG + (size_t)(c->nv + t) * TAGPU_PB_GEOMST;
+        short* q = (short*)(o + 8);
+        int k;
         o[0] = V[t][0]; o[1] = V[t][1]; o[2] = V[t][2];
         if (range == TAGPU_PB_BODY) {
             o[3] = s_vn[vi[t]][0]; o[4] = s_vn[vi[t]][1]; o[5] = s_vn[vi[t]][2];
@@ -332,6 +359,12 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
             o[7] = 0.0f;
         }
         o[6] = (float)p;
+        for (k = 0; k < 4; k++) {
+            const float* src = haveQ ? cn4[k] : &o[3];
+            q[k * 3 + 0] = snorm16(src[0]);
+            q[k * 3 + 1] = snorm16(src[1]);
+            q[k * 3 + 2] = snorm16(src[2]);
+        }
     }
     c->nv += n;
 }

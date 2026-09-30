@@ -3116,6 +3116,17 @@ gate is independent of the Shading bit and of the intensity below.
    `shadeTable[(i >> 16)·256 + texel]` per pixel (`0x4C8175..0x4C81C6`, the table at
    `*(prog+0xC4)`). It is Gouraud, and a face between vertices at rows 31 and 3 sweeps through all
    of them.
+5. **A quad's rows are spread along its edges, not across a plane** [DISASSEMBLED 2026-09-29]. The
+   textured quad `0x4C8BB0` walks the two edge chains from the top vertex (the table in the next
+   section) and at every scanline writes four interpolants, each `(v1 − v0) << 16 / dy` per edge, into
+   a `0x28`-byte row entry: `x`, the texel `u` and `v` (from the caller's coordinate pairs), and the
+   vertex record's `+0x08` and `+0x0C` (`0x4C8D5E..0x4C8E93`, `0x4C8F16..0x4C9048`). The scanline core
+   `0x4C8020` steps them across the row, and reads row `+0x20/+0x24` — the vertex record's `+0x0C`,
+   the intensity — as the shade row (`0x4C812B`, `0x4C81A7`); row `+0x18/+0x1C`, from the record's
+   `+0x08`, is compared with the fetched texel at `0x4C8187` and not traced further. So a quad whose
+   corners hold rows 0, 30, 0, 1 blends all four corners, where two triangles each take a plane
+   through three: split on the wrong diagonal, one of them is rows 0, 0, 1 and draws black.
+   A face the colour n-gon `0x4C0C70` draws (an untextured face) is not read here.
 
 **The light is fixed.** `0x4597F0(x, y, z)` stores three ints × 0.01 at `0x5065F8`; its only caller,
 `0x4166E9`, is inside the chat command `Light` (`0x4166C0`, `0x500FFC`), which reads the three from

@@ -336,6 +336,12 @@ static const char* VS =
     "layout(location=1) in vec3 aNrm;\n"     /* rest normal of the VERTEX     */
     "layout(location=2) in float aPiece;\n"
     "layout(location=3) in float aGF;\n"     /* TAGPU_PBF_SHADED              */
+    /* a quad's four corner normals, twelve SNORM16 in the face's index order
+       (tagpu_posebake.h): c0 = A.xyz, c1 = (A.w, B.xy), c2 = (B.zw, C.x),
+       c3 = C.yzw */
+    "layout(location=10) in vec4 aCA;\n"
+    "layout(location=11) in vec4 aCB;\n"
+    "layout(location=12) in vec4 aCC;\n"
     "layout(location=4) in vec2 aUV;\n"
     "layout(location=5) in vec2 aFC;\n"      /* flat idx/255, tex ck/255      */
     "layout(location=6) in float aSkip;\n"
@@ -375,7 +381,7 @@ static const char* VS =
     "uniform int uRowBase;\n"
     "uniform int uFlagBase;\n"
     "uniform int uVisBase;\n"
-    "out vec2 vUV; flat out vec2 vFC; out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     /* the line test's two inputs, which only WVS turns on (tagpu_native.c FS) */
     "flat out vec4 vLine; flat out int vLineOn;\n"
@@ -386,6 +392,10 @@ static const char* VS =
        the dot by is the float at 0x4FD4CC (0x45A2BD..0x45A2E1). */
     "const vec3 SH_V = vec3(0.0, 0.8944, -0.4472);\n"
     "const vec3 SH_L = vec3(-0.8, 1.0, 0.25);\n"
+    "vec3 shRot(int pb, vec3 v){\n"
+    "  return vec3(dot(uPose[pb].xyz, v), dot(uPose[pb+1].xyz, v), dot(uPose[pb+2].xyz, v));\n"
+    "}\n"
+    "float shRow(vec3 n){ return float(int(dot(n, SH_L) * 5.0) & 31) / 31.0; }\n"
     "void main(){\n"
     "  int pi = int(aPiece + 0.5);\n"
     /* EVERY INDEX INTO `uPose` IS CLAMPED TO THE BOUND RANGE, so no vertex can
@@ -415,7 +425,7 @@ static const char* VS =
     "  float pvis = uPose[clamp(uVisBase + (pi >> 2), 0, pl)][pi & 3];\n"
     "  if (aSkip > 0.5 || (uRange == 1 && pvis < 2.5)) {\n"
     "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
-    "    vUV = vec2(0.0); vFC = vec2(0.0); vShade = 0.0; vWorld = vec2(0.0);\n"
+    "    vUV = vec2(0.0); vFC = vec2(0.0); vShade = 0.0; vShQ = vec4(0.0); vWorld = vec2(0.0);\n"
     "    vEnc = 0.0; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0); vShW = vec3(0.0);\n"
     "    return;\n"
     "  }\n"
@@ -469,21 +479,36 @@ static const char* VS =
        picture and is reproduced, not clamped. A piece whose shade flag is clear
        (COB dont-shade) takes the engine's default row 15.
 
-       The row leaves this stage as a float and the fragment stage floors the
-       interpolated value, which is what the engine's span loop does with its
-       16.16 intensity (0x4C81A4..0x4C81BD). The flip toward SH_V below is for
-       the Classic++ lighting term alone: the engine does not flip. `un` is the
+       The engine's rasteriser carries those rows down a quad's two edge chains
+       and across each row (0x4C8BB0), so a quad's shade is the BILINEAR blend of
+       its four corners' rows, not a plane through three: with rows 0, 30, 0, 1
+       (a solar's opened panel) a triangle split on the wrong diagonal is one
+       whole triangle of rows 0, 0, 1. `vShQ` is the four corners' rows in the
+       face's index order, and the fragment stage blends them over the quad's own
+       frame (tagpu_native.c). `vShade` is this vertex's row, for the faces that
+       have no frame. Both leave this stage as floats and the fragment stage
+       floors the blend, which is what the span loop does with its 16.16
+       intensity (0x4C81A4..0x4C81BD). The flip toward SH_V below is for the
+       Classic++ lighting term alone: the engine does not flip. `un` is the
        VERTEX's smoothed normal, not its face's, and `vNrm` is flat: a lambert
        from it would light unit facets from the provoking vertex's mean. Nothing
        reads it while `uLambert` is published as 0. */
     "  float shade = uShd.x / 31.0;\n"
+    "  vShQ = vec4(shade);\n"
     "  vec3 un = vec3(0.0, 1.0, 0.0);\n"
     "  bool pShaded = uPose[clamp(uFlagBase + (pi >> 2), 0, pl)][pi & 3] > 0.5;\n"
     "  if (aGF >= 0.5) {\n"
-    "    vec3 n = vec3(dot(uPose[pb].xyz, aNrm), dot(uPose[pb+1].xyz, aNrm),\n"
-    "                  dot(uPose[pb+2].xyz, aNrm));\n"
-    "    if (uShd.y > 0.5)\n"
-    "      shade = pShaded ? float(int(dot(n, SH_L) * 5.0) & 31) / 31.0 : 15.0 / 31.0;\n"
+    "    vec3 n = shRot(pb, aNrm);\n"
+    "    if (uShd.y > 0.5) {\n"
+    "      if (pShaded) {\n"
+    "        shade = shRow(n);\n"
+    "        vShQ = vec4(shRow(shRot(pb, aCA.xyz)), shRow(shRot(pb, vec3(aCA.w, aCB.xy))),\n"
+    "                    shRow(shRot(pb, vec3(aCB.zw, aCC.x))), shRow(shRot(pb, aCC.yzw)));\n"
+    "      } else {\n"
+    "        shade = 15.0 / 31.0;\n"
+    "        vShQ = vec4(shade);\n"
+    "      }\n"
+    "    }\n"
     "    if (pShaded) {\n"
     "      if (dot(n, SH_V) < 0.0) n = -n;\n"
     "      float nl = length(n);\n"
@@ -558,7 +583,7 @@ static const char* FXVS =
     "uniform int uRowBase;\n"             /* this model's first run, in vec4 */
     "uniform int uFlagBase;\n"
     "uniform int uVisBase;\n"
-    "out vec2 vUV; flat out vec2 vFC; out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
@@ -580,7 +605,7 @@ static const char* FXVS =
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = r1.xy; vFC = vec2(r1.z, -1.0);\n"
-    "  vShade = uShd.x / 31.0;\n"
+    "  vShade = uShd.x / 31.0; vShQ = vec4(vShade);\n"
     "  vWorld = uAnchor.zw;\n"
     "  vEnc = uEnc; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0);\n"
     "  vShW = vec3(uAnchor.z, uCast.y, uAnchor.w + uCast.x * 0.5);\n"
@@ -634,7 +659,7 @@ static const char* WVS =
     "uniform int uRowBase;\n"             /* this unit's first wire record  */
     "uniform int uFlagBase;\n"
     "uniform int uVisBase;\n"
-    "out vec2 vUV; flat out vec2 vFC; out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
@@ -656,7 +681,7 @@ static const char* WVS =
     /* the wire's colour is per UNIT (the nanoframe's animated blue), on the
        flat path, on the neutral SHD row the bake gives every wire vertex */
     "  vUV = vec2(-1.0); vFC = vec2(uWire, -1.0);\n"
-    "  vShade = uShd.x / 31.0;\n"
+    "  vShade = uShd.x / 31.0; vShQ = vec4(vShade);\n"
     "  vWorld = uAnchor.zw + mix(r2.xy, r2.zw, t);\n"
     "  vEnc = enc; vVY = vy; vNrm = vec3(0.0, 1.0, 0.0);\n"
     "  vShW = vec3(vWorld.x, uCast.y + uCast.z * vy, vWorld.y + (uCast.x + vy) * 0.5);\n"

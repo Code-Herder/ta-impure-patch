@@ -3253,7 +3253,7 @@ byte-identical to what it was.
 
 | | |
 |---|---|
-| **the geometry buffer**, per type | rest position, the rest normal of the vertex's own triangle, the piece index and a flags word — 8 floats — with body triangles, slant triangles and wire lines laid down as three ranges of one buffer. Keyed on primitive 0's node pointer plus the level and GL generations |
+| **the geometry buffer**, per type | rest position, the mean normal of the vertex, the piece index, a flags word and a quad's four corner normals as twelve SNORM16 (§2.106) — 14 floats — with body triangles, slant triangles and wire lines laid down as three ranges of one buffer. Keyed on primitive 0's node pointer plus the level and GL generations |
 | **the material stream**, per (type, owner, atlas generation) | UV, flat colour, colour key and a **skip** flag — 5 floats. The two buffers always hold the **same** vertex count: a face the engine paints nothing for is baked and collapsed by its flag rather than dropped, which is what lets either be rebuilt without the other |
 | **the topology**, per type | the parent array and the accumulated rest offsets, so `pose_accum_body`'s per-unit sibling scan stops being a per-frame cost. Cached now, consumed in step 5 |
 | **invalidated by** | the level generation (the frame packet's `level_gen`), the GL generation, the **atlas** generation — new, `TAGPU_GAFATLAS.gen`, bumped by every `atlas_reset` and `atlas_lost` because every UV moves — and the owner, which is in the key |
@@ -19986,12 +19986,21 @@ carries.
 - **The bake** (`piece_vnormals`, once per model): per piece, each face's normal from its first
   three vertex indices, added to every vertex the face names, divided by the count and not
   renormalised, face 0 left out under a selection primitive. The geometry stream's normal slot holds
-  that vertex normal; the slant and the wire keep a level normal.
+  that vertex normal; the slant and the wire keep a level normal. A four-corner face also carries
+  its four corners' normals in the face's index order, twelve SNORM16 in the vertex's last three
+  attributes (locations 10–12), on every vertex of the face; any other face repeats its own.
 - **The vertex stage**: for a unit whose `uShd.y` is 1 it rotates the vertex normal by the piece
   and takes `int(dot(n, (−0.8, 1.0, 0.25)) · 5.0) & 31`, a piece with its shade flag clear taking
-  row 15. Every other unit takes the neutral row. The row leaves the stage as a smooth `vShade`.
-- **The fragment stage** floors the interpolated value and looks up `k[row]` (`vShade` is smooth in
-  every vertex stage that feeds `tagpu_native::FS`).
+  row 15, and does the same for the four corner normals into the flat `vShQ`. Every other unit takes
+  the neutral row. The vertex's own row leaves the stage as a smooth `vShade`.
+- **The fragment stage** blends the four corners' rows bilinearly over the quad's own frame — the
+  `(s, t)` `taQuadST` already solves for the texture — where the face has one (`vQR.x >= 0`), else it
+  takes the smooth `vShade`; it floors the result and looks up `k[row]`. The engine spreads a quad's
+  rows along its two edges and across each row (engine map, *The unit shade* 5), which the blend
+  reproduces for a trapezoid or parallelogram and approximates on any other quad. Two triangles
+  each take a plane through three corners, and on a face with rows 0, 30, 0, 1 — a solar's opened
+  panel — one of them is rows 0, 0, 1: a black half-panel the engine does not draw. Every vertex
+  stage that feeds `tagpu_native::FS` writes `vShQ`.
 - **Who is lit** (`TAGPU_PDUNIT.lit`, `tagpu_native.c`): the structure bit **and** the option word's
   Shading bit (`pk->gfx_opt & 0x20`) — the engine's two tests. A mobile unit, a wreck and an effect
   are not lit. A build ghost is lit as the finished building would be **[INFERRED]**: the engine
@@ -20000,27 +20009,42 @@ carries.
   and with them the face flip toward `SH_V` for the shade (the flip stays for the Classic++ lighting
   term's normal, which the game does not use).
 
-**Measured**, on Xvfb against the GDI backend on the same scene, dry ground, paused at ticks 125–135,
+**Measured**, on Xvfb against the GDI backend on the same scene, dry ground, paused at ticks 125–136,
 shadows off, the Classic preset (`assets=0 light=0`); mean absolute luminance difference from the
 engine's Shading-on frame over the pixels the engine's toggle changes:
 
-| structure | before | after | engine Shading off, for reference |
-|---|---|---|---|
-| kbot lab | 39.8 | 16.6 | 33.8 |
-| vehicle plant | 36.0 | 17.6 | 41.4 |
-| air plant | 40.1 | 22.7 | 47.1 |
-| laser tower | 56.4 | 19.3 | 52.2 |
-| solar | 49.9 | 40.1 | 36.1 |
+| structure | Shading not modelled | per-triangle rows | per-quad rows | engine Shading off, for reference |
+|---|---|---|---|---|
+| air plant | 40.1 | 22.7 | 22.3 | 47.1 |
+| laser tower | 56.4 | 19.3 | 15.5 | 52.2 |
+| solar | 49.9 | 40.1 | 39.4 | 36.1 |
 
-The solar's figure is the selection box the engine draws around it in the reference frame; its
-black roof panel, which only the engine's Shading-on frame has, is reproduced. Mobile units: mean
-luminance of a flash 74.8 (engine 75.0, before 83.4) and a peewee 67.4 (67.5, before 68.7). The
-option gates it: with the bit clear (`main+0x37F06` reads `0x03`) the pass matches the engine's
-Shading-off frame (air plant 16.2 against 41.1 for the on frame), set (`0x23`) it matches the on frame.
+The kbot lab and the vehicle plant are left out: they animate continuously, and a pause cannot land
+two runs on one pose (a run paused at tick 136 has the lab turned against the reference), so their
+figures measure the pose, not the shade. The solar's figure is the selection box the engine draws
+around it in the reference frame. Its black is the better measure — the share of pixels below
+luminance 14, engine Shading-on frame against the pass:
+
+| solar region | engine, Shading off | engine, Shading on | per-triangle rows | per-quad rows |
+|---|---|---|---|---|
+| top trapezoid | 17 % | 23 % | 29 % | 23 % |
+| body, right half | 13 % | 54 % | 69 % | 64 % |
+| right wing | 15 % | 46 % | 51 % | 51 % |
+
+The body's and the wing's black is the engine's: its Shading-on frame has it, and the pass's mask
+agrees with the engine's over the interior of both (what is left is a one-pixel strip along the
+edges, where the reference draws its selection bracket and the cast shadow falls). What per-quad rows
+remove is the black the pass added to the trapezoid. Mobile units: mean luminance of a flash 74.8
+(engine 75.0, before 83.4) and a peewee 67.4 (67.5, before 68.7). The option gates it: with the bit
+clear (`main+0x37F06` reads `0x03`) the pass matches the engine's Shading-off frame (air plant 16.2
+against 41.1 for the on frame), set (`0x23`) it matches the on frame.
 
 **Not covered.**
-- **Interpolation on a quad.** The engine interpolates along each span between the quad's edges; the
-  pass interpolates across two triangles, which differ on a quad that is not a parallelogram.
+- **Faces without a frame.** A textured quad that is not convex in its own frame, a quad with no
+  texture and every face of more than four corners keep two-triangle (fan) interpolation, where the
+  engine walks their edges; the untextured n-gon `0x4C0C70` is not disassembled.
+- **The blend is the engine's only for a trapezoid or a parallelogram.** The engine's rows are
+  horizontal on the screen and the frame's lines are not, so on any other quad the two spreads differ.
 - **Faces the engine reads garbage for.** A face with fewer than three or more than 32 vertices adds
   nothing to the sums here; a zero-length cross is `(0,1,0)` here and a NaN in the engine. The posed
   vertices are 16.16 integers in the engine and floats here, so a product within rounding of an

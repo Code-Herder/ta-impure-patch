@@ -36,7 +36,14 @@
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE, and the field offsets */
 #include "tagpu_packet.h"        /* the bound on one frame's posed objects */
 
-#define TAGPU_PB_GEOMST  8      /* floats per geometry vertex */
+/* floats per geometry vertex:
+     0-2  position          the rest vertex
+     3-5  normal            the engine's mean normal of THIS vertex (body), level (slant, wire)
+     6    piece             the pose index
+     7    flags             TAGPU_PBF_*
+     8-13 corner normals    twelve SNORM16 -- a quad's four corners in the face's index
+                            order, xyz each; any other face repeats this vertex's four times */
+#define TAGPU_PB_GEOMST  14
 /* floats per material vertex:
      0-1  uv                the atlas corner this fan slot takes
      2-3  flat index, key   (flat idx/255, -1) or (0, tex ck/255)

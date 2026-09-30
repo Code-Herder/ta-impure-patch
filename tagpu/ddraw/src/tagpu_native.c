@@ -370,7 +370,7 @@ static const char* VS =
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
     "uniform float uDepthScale;\n"           /* > every key in use this frame  */
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv   */
-    "out vec2 vUV; flat out vec2 vFC; out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
@@ -381,7 +381,7 @@ static const char* VS =
     "  vec2 p = (aPos.xy + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
-    "  vUV = aUV; vFC = aFC; vShade = aShade; vWorld = aWorld; vEnc = aPos.z;\n"
+    "  vUV = aUV; vFC = aFC; vShade = aShade; vShQ = vec4(aShade); vWorld = aWorld; vEnc = aPos.z;\n"
     "  vVY = aVY; vNrm = aNrm;\n"
     /* Classic++ shadows: the vertex's SHADOW-SPACE point, derived here rather
        than carried (renderers.md 2.11): real z = projected z + (altitude +
@@ -394,7 +394,7 @@ static const char* VS =
     "}\n";
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; flat in vec2 vFC; in float vShade; in vec2 vWorld;\n"
+    "in vec2 vUV; flat in vec2 vFC; in float vShade; flat in vec4 vShQ; in vec2 vWorld;\n"
     "in float vEnc; in float vVY; flat in vec3 vNrm; in vec3 vShW;\n"
     "flat in vec4 vLine; flat in int vLineOn;\n"
     "in vec2 vQH; flat in vec2 vQAB; flat in vec4 vQR;\n"
@@ -473,8 +473,13 @@ static const char* FS =
        key would not. */
     "  vec2 hX = dFdx(vQH), hY = dFdy(vQH);\n"
     "  vec2 uv = vUV, uvX = dFdx(vUV), uvY = dFdy(vUV);\n"
+    /* the unit shade's row (tagpu_posedraw.c on the engine's quad rasteriser):
+       a face with a frame blends its four corners' rows over the frame, any
+       other keeps its triangle's interpolated one */
+    "  float shd = vShade;\n"
     "  if (vQR.x >= 0.0) {\n"
     "    vec2 st = clamp(taQuadST(vQH, vQAB), 0.0, 1.0);\n"
+    "    shd = mix(mix(vShQ.x, vShQ.y, st.x), mix(vShQ.w, vShQ.z, st.x), st.y);\n"
     "    vec2 g = vQAB - 1.0, span = vQR.zw - vQR.xy;\n"
     "    float jd = 1.0 + st.x * g.y + st.y * g.x;\n"
     "    mat2 Ji = mat2(1.0 + st.x * g.y, -st.y * g.y,\n"
@@ -554,7 +559,7 @@ static const char* FS =
     "  vec3 rgb = (t.a > 0.5 && !band) ? t.rgb / t.a\n"
     "      : (band || vUV.x < 0.0) ? texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb : base;\n"
     "  if (!band)\n"
-    "    rgb = min(rgb * texelFetch(uShadeK, ivec2(min(int(floor(vShade * 31.0 + 0.001)), 31), 0), 0).r, vec3(1.0));\n"
+    "    rgb = min(rgb * texelFetch(uShadeK, ivec2(min(int(floor(shd * 31.0 + 0.001)), 31), 0), 0).r, vec3(1.0));\n"
     "  rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */

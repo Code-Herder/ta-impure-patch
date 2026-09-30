@@ -353,7 +353,8 @@ each bound does when it is reached, at that scale:
 ### Per type, built once (the geometry buffer)
 
 One walk of the `Model3DONode` tree produces, per vertex: the **rest position**, the **rest
-normal** of its face, the **piece index**, the face-corner slot (the fan mapping an *n*-gon's
+normal** of the vertex (the mean of its faces'), the **piece index**, a quad's four corner normals
+(twelve SNORM16, so the fragment stage can blend the four corners' shade rows), the face-corner slot (the fan mapping an *n*-gon's
 corner onto a quad's UVs, `slot[t] * 4 / fvc`), and a degeneracy flag. Three ranges are laid
 down in the same buffer:
 
@@ -418,7 +419,9 @@ transforms rigidly with that piece's matrix, and so does the mean of a vertex's 
 bake averages them at rest (`piece_vnormals`, the engine's own per-vertex mean, [engine
 map](exe-reverse-engineering.html) *The unit shade*), and the vertex stage rotates the result, dots it
 with the engine's light and truncates it onto the 32-row SHD ramp, for a structure under the Shading
-option and for nothing else ([GPU status](gpu-status.html) §2.106). **One thing that is NOT exact:**
+option and for nothing else ([GPU status](gpu-status.html) §2.106). A textured quad's four corners' rows
+are blended over the quad's own frame in the fragment stage, as the engine's edge walk spreads them,
+where two triangles would each take a plane through three. **One thing that is NOT exact:**
 the engine takes its normals from the posed vertices, which the compose has rounded into 16.16 at
 every axis and every level of the tree, while the bake takes them from the rest vertices. A product
 `5 · N·L` within rounding of an integer can land a whole SHD row off. The Classic++ outward normal
