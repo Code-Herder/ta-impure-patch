@@ -33,5 +33,8 @@ const volatile unsigned char* tagpu_puppet_flag(void);
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
                         const unsigned char local[PUPPET_PLAYERS]);
 void tagpu_puppet_end(void);
+/* A recorded controller change (RK_CONTROLLER), at the step that applies it: the seat's getter-75
+   answer follows the recording machine's controller. */
+void tagpu_puppet_set_local(unsigned player, int local);
 
 #endif

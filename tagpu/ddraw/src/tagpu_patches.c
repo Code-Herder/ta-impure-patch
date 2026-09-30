@@ -4506,23 +4506,32 @@ static int fix_stacked_air(void)
     *p++ = 0x61;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x0047CFA1); p += 4;
 
-    /* the unit tick's call: pushfd; pushad; call tagpu_rec_capture; call tagpu_replay_step;
-       call air_rebuild; popad; popfd; jmp 0x48AD30 -- the return address the site's call pushed
-       stays on top, so 0x48AD30 returns to 0x4954F2. The demo recorder's capture comes first: it
-       records the world between two iterations (tagpu_recorder.c), and the pool it records is the
-       one the last iteration left, which air_rebuild then derives again from the units it
-       records. On a level that plays a recording the capture does nothing and the replay's step
-       writes the recorded world (tagpu_replay.c), so air_rebuild derives the pool from the units
-       it wrote. */
+    /* the unit tick's call: pushfd; pushad; call tagpu_rec_capture; call air_rebuild; popad;
+       popfd; call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret -- the
+       unit tick takes no argument and returns with a plain `ret` (0x48B080), and the site pushes
+       nothing before its call, so calling it from here is the site's own call; every register the
+       step after it uses (ebx, the loop's count) is kept. The demo recorder's capture comes
+       first: it records the world between two iterations (tagpu_recorder.c), and the pool it
+       records is the one the last iteration left, which air_rebuild then derives again from the
+       units it records. On a level that plays a recording the capture records nothing, and the
+       replay's step runs after the unit tick: it writes the world the recording machine's unit
+       tick left, so the rest of the iteration -- the players phase's sight stamps above all --
+       reads what it read there (tagpu_replay.c), and air_rebuild derives the next pool from the
+       units it wrote. */
     p = k;
     *p++ = 0x9C;
     *p++ = 0x60;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_rec_capture); p += 4;
-    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_replay_step); p += 4;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_rebuild); p += 4;
     *p++ = 0x61;
     *p++ = 0x9D;
-    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048AD30); p += 4;
+    *p++ = 0xE8; tagpu_detour_rel(p, 0x0048AD30); p += 4;
+    *p++ = 0x9C;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_replay_step); p += 4;
+    *p++ = 0x61;
+    *p++ = 0x9D;
+    *p++ = 0xC3;
 
     lim_branch(0x0049A664, sizeof tail, tail, 0xE9, (unsigned int)(size_t)t,
                "stacked aircraft: served at the end of area damage's walk");
@@ -4531,7 +4540,8 @@ static int fix_stacked_air(void)
     lim_branch(0x0047CF98, sizeof stamp, stamp, 0xE9, (unsigned int)(size_t)m,
                "stacked aircraft: the stamp's airborne path joins the pool");
     lim_branch(0x004954ED, sizeof tick, tick, 0xE8, (unsigned int)(size_t)k,
-               "stacked aircraft: the pool rebuilt before the unit tick, after the recorder's capture");
+               "stacked aircraft: the pool rebuilt before the unit tick, after the recorder's capture; "
+               "the replay's step after it");
     return FIX_TABLE;
 }
 
@@ -8074,6 +8084,16 @@ static void tx_rx_death(const unsigned char* m)
 {
     s_txCarried[m[4] | (unsigned int)m[5] << 8] = (unsigned char)(m[19] == 1);
     if (m[19] == 1) tx_event(&s_txDiag.received, "a carried death received", NULL, NULL);
+}
+
+int tagpu_tx_replay_death(const unsigned char* rec, int carried)
+{
+    typedef void (__stdcall *PFN_Wrap)(const unsigned char* rec, unsigned mode);
+    unsigned char* wrap = tx_wrap_code();
+    if (!wrap) return 0;
+    s_txCarried[rec[1] | (unsigned int)rec[2] << 8] = (unsigned char)(carried == 1);
+    ((PFN_Wrap)(void*)wrap)(rec, 0);
+    return 1;
 }
 
 /* A carried 0x4C refused in state 5 whose copy ghost_refused_kill has marked dying, on the

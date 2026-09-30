@@ -9,6 +9,9 @@
                                              the events that explain it
   tools/replay/tarec.py compare FILE DUMP... rebuild the world to each dump's GameTime and require
                                              it to equal the dump, byte for byte
+  tools/replay/tarec.py compare --puppet FILE DUMP...
+                                             the same for dumps a playing of FILE took, less what
+                                             a puppet host keeps as its own (puppet_view)
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -40,6 +43,7 @@ REC_PLAYER_BITS = (REC_PLAYER_DWORDS + 7) // 8
 REC_UNIT_DELTA_HEAD = (2 + REC_UNIT_BITS + 3) & ~3
 REC_PLAYER_DELTA_HEAD = (2 + REC_PLAYER_BITS + 3) & ~3
 U_TYPE, U_BUILT, U_STATEBYTE = 0x92, 0x104, 0x10E   # the image's type ID, build fraction, state
+U_STATE = 0x110
 
 (RK_PAD, RK_TICK, RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE, RK_PLAYER, RK_PLAYER_DELTA, RK_TABLE_SIZE,
  RK_TABLE_SPAN, RK_CORRECT, RK_VERIFY_UNIT, RK_VERIFY_PLAYER, RK_VERIFY_TABLE, RK_HEADER,
@@ -552,7 +556,26 @@ def cmd_check(path):
     return 1 if bad or w.corrections or ec.n else 0
 
 
-def cmd_compare(path, dumps):
+def viewer_of(h):
+    """V, the record a playing seats the viewer in: the lowest the recording does not seat
+    (tagpu_replay.c, validate)."""
+    seated = {p["index"] for p in h["players"]}
+    return min(i for i in range(REC_PLAYERS) if i not in seated)
+
+
+def puppet_view(w, viewer):
+    """A world less what a puppet host keeps as its own (demo-recorder-s2-host.md §1.1, §2.3): the
+    contact bits +0x110 8-10 and 12, which its radar pass computes for its own view (D1); the
+    viewer's record V; and the controllers and the controlled and viewed players, which are the
+    host's seating."""
+    for img in w.units.values():
+        struct.pack_into("<I", img, U_STATE, struct.unpack_from("<I", img, U_STATE)[0] & ~0x1700)
+    w.players[viewer] = bytearray(REC_PLAYER_IMAGE)
+    w.ctl = [0] * REC_PLAYERS
+    w.view = [0, 0]
+
+
+def cmd_compare(path, dumps, puppet=False):
     h, bl, stop = load(path)
     status = 0
     for d in dumps:
@@ -565,6 +588,9 @@ def cmd_compare(path, dumps):
             print(f"{d}: GameTime {dw.tick}, but the recording reads to {w.tick}")
             status = 1
             continue
+        if puppet:
+            puppet_view(w, viewer_of(h))
+            puppet_view(dw, viewer_of(h))
         lines, n = w.differences(dw, h["tables"])
         print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units: "
               + ("EQUAL" if not n else f"{n} DIFFERENCES"))
@@ -576,6 +602,9 @@ def cmd_compare(path, dumps):
 
 
 def main(argv):
+    puppet = argv[2:3] == ["--puppet"] and argv[1] == "compare"
+    if puppet:
+        argv = argv[:2] + argv[3:]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare") or \
             (argv[1] == "compare" and len(argv) < 4):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
@@ -585,7 +614,7 @@ def main(argv):
             return cmd_info(argv[2])
         if argv[1] == "check":
             return cmd_check(argv[2])
-        return cmd_compare(argv[2], argv[3:])
+        return cmd_compare(argv[2], argv[3:], puppet)
     except (Unreadable, OSError, zlib.error, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)
         return 2

@@ -12,8 +12,8 @@
    installed all or none. Without them a request is never read. */
 void tagpu_replay_init(void);
 
-/* B2's stub at the sim step's unit-tick call (0x4954ED), after the recorder's capture, on the
-   game thread between two iterations. */
+/* B2's stub at the sim step's unit-tick call (0x4954ED), after the unit tick returns and before
+   the rest of the iteration, on the game thread. */
 void __cdecl tagpu_replay_step(void);
 
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the level's replay

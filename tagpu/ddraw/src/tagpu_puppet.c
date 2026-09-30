@@ -25,6 +25,11 @@ int tagpu_puppet_local(unsigned player)
 
 const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
 
+void tagpu_puppet_set_local(unsigned player, int local)
+{
+    if (player < PUPPET_PLAYERS && s_pup.seat[player]) s_pup.local[player] = local ? 1 : 0;
+}
+
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
                         const unsigned char local[PUPPET_PLAYERS])
 {

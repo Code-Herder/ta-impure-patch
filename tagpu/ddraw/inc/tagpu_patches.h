@@ -39,4 +39,12 @@ void tagpu_kill_flush(void);
    the decision tx_wrap armed for this call, or a mark of the kill-all this thread is running.
    The game thread, inside the destructor's entry. */
 int tagpu_tx_carried(const char* unit);
+
+/* A recorded death replayed on a puppet (tagpu_replay.c): the destructor 0x4866D0(rec, 0) entered
+   as every destructor call of this build is, through tx_wrap, with C4's decision for the call
+   armed from the recording (`carried`), as the 0x4C's receiver arms it. `rec` is the destructor's
+   record: +1 the unit's slot (u16), +3 the killer's netid, +7 the killer's slot (u16), +9 the
+   severity, +0xA the corpse and death kind. The game thread, between two iterations. 0 when the
+   wrap could not be built, and nothing was called. */
+int tagpu_tx_replay_death(const unsigned char* rec, int carried);
 #endif
