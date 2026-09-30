@@ -180,8 +180,11 @@ and three install forms, `SIM_LOCK`, `SIM_CODE` (executable memory an installer 
 slot, unit type, player, weapon, or a DirectPlay player ID (the session's, not the recording's).
 
 **Tables store IDs, not addresses, or declare their layout.** A row whose bytes are not all plain
-values names the others: an ID (`SIMF_ID`); the address of what an ID names (`SIMF_ADDR`, a def or
-a weapon record, whose ID is the value; with no key, other process memory that is never a value); a
+values names the others: the engine's own index of something (`SIMF_ID`, a slot, a type index, a
+player index or a weapon ID), recorded as it is; the address of what such an index names
+(`SIMF_ADDR`, a def or a weapon record), recorded as the target's ID, one more than its row, so
+never equal to the engine's index for the same target; with no key, other process memory that is
+never a value; a
 block the row owns (`SIMF_OWNED`, allocated through its table); a process-local value (`SIMF_LOCAL`,
 a serial or a clock); a struct-of-arrays column and its count (`SIMF_COLUMN`, `SIMF_COUNT`); the
 engine's weapon target (`SIMF_TARGET`, a unit slot when the second u16 is `0x8000`, else a ground

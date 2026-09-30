@@ -165,9 +165,12 @@ exit waits for that**: the in-game menu's exit to Windows runs the teardown and 
 `WM_DESTROY`, and the game leaves a moment later through the CRT's `ExitProcess`
 ([the engine map](../exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
 which would kill a writer still writing its last block. The fork hooks `ExitProcess` in the IATs of
-the exe and of the DLLs in its folder, and its own exit on closing the window calls the same wait,
-`tagpu_rec_exit`: it waits for the writer of every recording that has ended, each of which sets an
-event once its file is closed. A writer never waits for another thread, so the wait ends when the
+the exe and of the DLLs in its folder, and its own exits, which that hook does not reach, call the
+same wait, `tagpu_rec_exit`, before theirs: closing the window, `tagpu_refuse` (a saved game it
+cannot load, a unit script that cannot continue) and the out-of-memory and unit-type refusals. It
+waits for the writer of every recording that has ended, each of which sets an event once its file
+is closed. A crash exit calls `TerminateProcess` and does not wait, since the crashed thread may
+hold a lock a writer needs. A writer never waits for another thread, so the wait ends when the
 files do. A recording still in progress at the exit — the window closed mid-game — has no end to
 wait for, and its file reads to its last block, incomplete. A recording takes one of eight slots
 for its event at its start and does not start without one, so its end always has a place to hand
@@ -193,7 +196,8 @@ iterations to record.
 - B2's stub at `0x4954ED` (`tagpu_patches.c`) calls the capture before the air pool's rebuild, and
   `tagpu_reclaim.c`'s teardown wrap calls the recorder's end first.
 - The exit's wait: `fake_ExitProcess` (`winapi_hooks.c`, in `hook.c`'s kernel32 list, local
-  modules only) and the fork's `SC_CLOSE` exit (`wndproc.c`) call `tagpu_rec_exit` first.
+  modules only) and the fork's own exits — `SC_CLOSE` (`wndproc.c`), `tagpu_refuse.c`, and
+  `hit_no_memory` and `lim_types_refused` (`tagpu_patches.c`) — call `tagpu_rec_exit` first.
 - `tagpu_simreg`: a walk of the declarations and of the levers for the recorder, and
   `MEM_WRITE_WATCH` on every heap table `SIM_ALLOC` takes.
 - `tools/replay/tarec.py`: reads a recording — `info` (the header, the blocks and how it ended),
@@ -215,8 +219,8 @@ Scripted games on Wine, on a private X display, in the raised build unless state
 read back with `tarec info`, `check` and, where the run took dumps, `compare`. Runs 1 to 5 ran on
 S1 as the landing review read it. Runs 6 to 8 and the row after them ran on the build that lands
 but for the file that asks for a recording, which changes only whether one starts; that build
-changed every ID by one, and so every image, and added the exit's wait. Run 9 ran on the build
-that lands:
+changed every ID by one, and so every image, and added the exit's wait. Runs 9 and 10 ran on the
+build that lands, run 10 with the two scratch changes its row names:
 
 | run | the game | what it showed |
 |---|---|---|
@@ -229,8 +233,9 @@ that lands:
 | 6 | run 1's game left a minute in by the in-game menu's `EXIT`, `EXITGAME` and yes, in a scratch build, not landed, whose writer holds three seconds before finishing | the recording ended at the teardown; the exit logged that it waited for one file, the writer closed it, and the process went: the file complete, its dump equal, no correction |
 | 7 | run 1's game ended by a defeat a minute in, and its window closed at once (`WM_DELETE_WINDOW`, which Wine turns into `SC_CLOSE`), in the same scratch build | the same: the exit waited for the file, complete, its dump equal |
 | 8 | run 6 in the landing build | the writer had closed the file before the exit came, so nothing waited: complete, its dump equal |
-| — | run 2's battle once, and run 1's game for 90 s in the stock-limits build, both in the landing build | no correction and every dump equal: 1,099 to 1,404 live units at the battle's dumps; 22 tables in the stock-limits build |
+| — | run 2's battle twice, and run 1's game for 90 s in the stock-limits build, all in the landing build | no correction and every dump equal: 1,099 to 1,404 live units at the battles' dumps; 22 tables in the stock-limits build |
 | 9 | run 1's game without `tagpu_recorder.on`, then with it and left a minute in by the in-game menu | without it, `recorder: not recording: tagpu_recorder.on is absent` and no file; with it, recorded from GameTime 1 and complete at the teardown after 1,964 iterations, both snapshots equal to the stream, the dump equal, no correction |
+| 10 | run 1's game ended by a defeat a minute in, and at once a refusal through `tagpu_refuse`, in a scratch build, not landed, whose writer holds fifteen seconds and whose frame hook refuses when a trigger file appears | the refusal came a second after the level's end and its box was closed a second later; the exit logged that it waited for one file, the writer closed it when its hold ran out, and the process went: the file complete after 2,130 iterations, its dump equal, no correction |
 
 ### Measured
 
@@ -254,10 +259,12 @@ it costs 0.6 ms.
 The product page's budget is 0.5 ms on average and 1 ms at worst with 1,500 units. The average
 meets it. The worst did not in three battle runs of five: 2.3 ms in a run while S1 was being
 built, and 1.16 and 1.48 ms in the two above. The log names the costliest iteration's GameTime and
-what it put into the ring, and the 1.48 ms one put 26 KB, an ordinary battle iteration (the battle
-averages about 20 KB), so the time was not the capture's own work. The cause is not found; the
-writer's wake signal, a round trip to the wineserver under Wine that falls on about one battle
-iteration in fifty, is a candidate, and the reference setup was running other work.
+what it put into the ring, and the 1.48 ms one put 26 KB, about half what an average battle
+iteration puts there: the stream averages 20 KB an iteration (75,590 KB over 3,840), and the
+rotating check adds at least 18 KB and about 30 KB on average at the battle's 1,100 to 1,400 live
+units, so the time was not the capture's own work. The cause is not found; the writer's wake
+signal, a round trip to the wineserver under Wine that falls on about one battle iteration in
+twenty, is a candidate, and the reference setup was running other work.
 
 One cost falls outside the timer. Under Wine a write watch is a page protection, so after each
 reset the simulation's first write to a watched page takes a fault in the engine's own code; a

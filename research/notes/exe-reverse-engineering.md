@@ -1398,8 +1398,10 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   count; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
   at init.
 
-**The pointer fields**, each a row of the layout. An ID is always the pointer's offset in its
-table, never a field of the target, so a pointer to a dead unit keeps its ID.
+**The pointer fields**, each a row of the layout. An ID is one more than the pointer's row in its
+table, never a field of the target, so NULL's is 0 and a pointer to a dead unit keeps its ID. It is
+the recording's name for the row, not the engine's index: `+0x92`'s ID is one more than the type
+index `+0xA6` holds.
 
 - **`+0x00`, the mover** (0x2F bytes, constructor `0x43DC00`, destructor `0x43DD10`), made by the
   creates `0x485F50` and `0x4861D0` only when def `+0x22F` is 1 (`0x4860BB`, `0x4862CF`), freed
@@ -1656,13 +1658,22 @@ nothing of a paused game.
 
 **The process's exit** [DISASSEMBLED 2026-09-29, and MEASURED the same day], read for the
 recorder's exit wait (`tagpu_recorder.h`, *The exit*). The CRT's entry `0x4E6FA0` calls WinMain
-`0x49EDA0` at `0x4E70ED` and hands its result to `exit` `0x4E4600` at `0x4E70F6`; `exit`, and
-`_exit` `0x4E4620` on the entry's exception path (`0x4E7119`), run `doexit` `0x4E4660`, which runs
-the atexit table (`0x52B654`/`0x52B658`) and the terminators and then calls `ExitProcess` through the
-IAT slot `0x4FC100` at `0x4E4708` — or, re-entered once `_C_Exit_Done` (`0x529F0C`) is 1,
-`TerminateProcess` (`0x4FC210`) at `0x4E467E`. The CRT's two fatal paths leave through the same
-slot: `0x4E7180` (`ExitProcess(255)` at `0x4E71A0`) and `0x4EADE0` (`FatalAppExitA`, `0x4FC27C`,
-then `ExitProcess(255)` at `0x4EADF2`); the jump thunk `0x4FB12E` has no direct caller. The in-game
+`0x49EDA0` at `0x4E70ED` and hands its result to `exit` `0x4E4600` at `0x4E70F6`. `exit` is
+`doexit(code, 0, 0)` and `_exit` `0x4E4620` is `doexit(code, 1, 0)` [names INFERRED]. `doexit`
+`0x4E4660` first takes the CRT's exit lock, `_lock(13)` (`0x4E4720` calls `0x4EAC60` at
+`0x4E4663`), and releases it only on the path that returns to its caller (`0x4E4730` at
+`0x4E46F4`, for `0x4E4640` and `0x4E4650`), so the lock is held across `ExitProcess`. For `exit`
+it runs the atexit table (`0x52B654`/`0x52B658`) and both terminator tables; for `_exit` the `jne`
+at `0x4E469E` skips the atexit table and the first terminator table (`0x50106C`..`0x501074`). Then
+it calls `ExitProcess` through the IAT slot `0x4FC100` at `0x4E4708` — or, re-entered once
+`_C_Exit_Done` (`0x529F0C`) is 1, `TerminateProcess` (`0x4FC210`) at `0x4E467E`. The game calls
+`exit` itself at `0x417AF7`, `0x444381` and `0x4B62B3` (`0x4B6290`, after its message box), and
+`_exit` at `0x49E811` (the out-of-memory handler `0x49E700`) and `0x4DA0D1`; the entry's exception
+path calls `_exit` at `0x4E7119`. The CRT's fatal paths leave through the same slot: `_amsg_exit`
+`0x4E7150` [INFERRED name], 15 callers, calls `[0x50DF10]`, which holds `_exit`, with 255, and
+`0x4E7180`, called at `0x4E7002` and `0x4E7015`, calls `ExitProcess(255)` at `0x4E71A0`. Nothing
+reaches `0x4EADE0` (`FatalAppExitA`, `0x4FC27C`, then `ExitProcess(255)` at `0x4EADF2`) or the jump
+thunk `0x4FB12E`: no call, jump or stored address names either. The in-game
 exit to Windows is `0x491C60`: `0x4257A0`, `0x451B60`, the teardown `0x491B60` at `0x491C6A`, then
 `0x4B6230(0)` at `0x491C71`, which with a zero argument shows no message box (`MessageBoxA`,
 `0x4FC300`, at `0x4B626D` is skipped) and posts `WM_DESTROY` to the game's window

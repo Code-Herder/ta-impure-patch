@@ -2918,9 +2918,10 @@ own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls
 teardown wrap (§2.7) calls `tagpu_rec_level_end` first, before the cascade frees the unit array.
 A recording does not start without that wrap, since nothing else would end it. **One Win32 hook**:
 `ExitProcess` in the fork's kernel32 list (`hook.c`, the exe and the DLLs of its folder only), whose
-`fake_ExitProcess` (`winapi_hooks.c`) calls `tagpu_rec_exit` first, as the fork's own `SC_CLOSE` exit
-does (`wndproc.c`): the process's exit waits until the file of every recording that has ended is
-closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
+`fake_ExitProcess` (`winapi_hooks.c`) calls `tagpu_rec_exit` first, as the fork's own exits do,
+which the hook does not reach (`SC_CLOSE` in `wndproc.c`, `tagpu_refuse`, and the out-of-memory
+and unit-type refusals in `tagpu_patches.c`): the process's exit waits until the file of every
+recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
 
 **Fields we write: none.** It reads the unit array, the ten player records, the unit types, the
 sort buckets, GameTime, the game mode and the map's path, each bounded by the engine's own count
