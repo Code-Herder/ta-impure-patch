@@ -512,6 +512,18 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     }
 }
 
+/* An iteration is whole only when no order list it began is still owed chunks: list_record
+   sets the list's count from its first chunk, so a list cut short would leave the rest of its
+   nodes unwritten. 1, or -1 with `why`. */
+static int iteration_done(const RecReader* r, char* why, unsigned cap)
+{
+    if (r->pend.next < r->pend.total) {
+        snprintf(why, cap, "an order list cut short in the block before byte %llu", r->off);
+        return -1;
+    }
+    return 1;
+}
+
 int recr_tick(RecReader* r, char* why, unsigned cap)
 {
     RecWorld* w = &r->w;
@@ -528,7 +540,7 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
             RecBlock blk;
             int k;
             /* a stream block ends where an iteration does (tagpu_recwriter.c, iteration_done) */
-            if (began) return 1;
+            if (began) return iteration_done(r, why, cap);
             if (r->ended) {
                 snprintf(why, cap, "%s", r->end);
                 return 0;
@@ -562,7 +574,8 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
         }
         b = r->raw + r->at + 4;
         if (hd.kind == RK_TICK) {
-            if (began) return 1;            /* the next iteration's: left for the next call */
+            /* the next iteration's: left for the next call */
+            if (began) return iteration_done(r, why, cap);
             if (hd.len != 4 || r->pend.next < r->pend.total) {
                 snprintf(why, cap, "a malformed tick in the block before byte %llu", r->off);
                 return -1;

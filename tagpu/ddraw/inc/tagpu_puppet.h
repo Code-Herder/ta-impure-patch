@@ -35,9 +35,6 @@ const volatile unsigned char* tagpu_puppet_flag(void);
 void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
                         const unsigned char local[PUPPET_PLAYERS]);
 void tagpu_puppet_end(void);
-/* A recorded controller change (RK_CONTROLLER), at the step that applies it: the seat's getter-75
-   answer follows the recording machine's controller. */
-void tagpu_puppet_set_local(unsigned player, int local);
 
 /* THE GATES (tagpu_puppet.c): the engine functions that would write what a recording carries on
    a puppet level, or take the viewer's own input to it, refuse on one. DllMain's attach lands them

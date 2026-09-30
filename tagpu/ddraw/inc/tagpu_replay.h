@@ -8,8 +8,9 @@
    module applies the recording to them, iteration by iteration. */
 
 /* DllMain's attach: the Start's calls of the seat fill (0x47B092) and of the settings persist
-   (0x47B09C), and the loader's two start-unit calls (0x497963, 0x497ACD), byte-matched and
-   installed all or none. Without them a request is never read. */
+   (0x47B09C), the loader's two start-unit calls (0x497963, 0x497ACD) and an observer on the
+   settings save (0x430F00), byte-matched and installed all or none. Without them a request is
+   never read. */
 void tagpu_replay_init(void);
 
 /* B2's stub at the sim step's unit-tick call (0x4954ED), after the unit tick returns and before
@@ -19,5 +20,9 @@ void __cdecl tagpu_replay_step(void);
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the level's replay
    ends, the skirmish settings get back what the player had, and the puppet table is cleared. */
 void tagpu_replay_level_end(void);
+
+/* tagpu_reclaim's teardown wrap, once 0x491B60 has returned, on the thread that entered it: V's
+   PlayerInfo gets back what the Start's fill left in it. */
+void tagpu_replay_level_after(void);
 
 #endif

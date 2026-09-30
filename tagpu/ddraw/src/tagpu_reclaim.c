@@ -389,6 +389,10 @@ static void __cdecl reclaim_teardown_pre(void)
    so the stub's call returns and this hook is reached. */
 static void __cdecl reclaim_teardown_post(void)
 {
+    /* after the cascade's post-game table, which a level that played a recording needs V left
+       out of (tagpu_replay.c, THE VIEWER'S SEAT) */
+    tagpu_replay_level_after();
+
     /* THE TEMPLATES THE CASCADE JUST QUEUED GO BACK HERE, and the argument is a
        fact rather than a window. When the pre hook returned with the reader
        idle it had already published s_teardown, so every pass_begin since has

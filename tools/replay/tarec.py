@@ -578,7 +578,11 @@ def viewer_of(h):
     """V, the record a playing seats the viewer in: the lowest the recording does not seat
     (tagpu_replay.c, validate)."""
     seated = {p["index"] for p in h["players"]}
-    return min(i for i in range(REC_PLAYERS) if i not in seated)
+    free = [i for i in range(REC_PLAYERS) if i not in seated]
+    if not free:
+        raise Unreadable("the recording seats all ten records, so a playing has no seat for the "
+                         "viewer and refuses it")
+    return free[0]
 
 
 def puppet_view(w, viewer, radar=False):
