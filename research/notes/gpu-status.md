@@ -2970,7 +2970,10 @@ recorded player's view, radar picture included. The engine facts are
 
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
-`0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`. The step runs from B2's stub at
+`0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the
+settings save `0x430F00`** (`tagpu_detour_observe`, stolen `A1 E8 1D 51 00`, a `before` and an
+`after`), inert unless a recording's options are in. The teardown wrap's post hook (§2.7) calls
+`tagpu_replay_level_after` once `0x491B60` has returned. The step runs from B2's stub at
 `0x4954ED` (§2.6c), after the unit tick. **Twelve prologue gates** (`tagpu_puppet.c`,
 `tagpu_detour_gate`), landed at `DllMain` before the recorder's observers, refuse on a puppet level:
 the apply `0x489CE0` and `Send_UnitDeath 0x4864B0` for a puppet's unit; COB's SET (at `0x480B26`,
@@ -2989,18 +2992,23 @@ before the cascade destroys its units.
   side at `+0x95`; `0x464290(r, 0)` for a record the stock fill activated that the recording does
   not seat; `main+0x2A42` = V, `main+0x2A43` = the view, `main+0x2A3C` = the recorded player
   count; the objective disarmed (`0x4904B0`);
-- the skirmish settings, which the recording's options replace after `0x430F00` has persisted the
-  player's; the teardown puts the player's back;
+- the skirmish settings (`+0x108..+0x11B`), `main+0x37EEE` and `main+0x37EEC`, which the
+  recording's options replace after `0x430F00` has persisted the player's; the teardown puts the
+  player's back. Every save from the level's first step exchanges the two on entry and again on
+  return, so the registry receives the player's; after a save before it, which no known path
+  makes, the teardown saves once more through `0x430F00`;
 - each step: every unit's record and mover under `replay-layout.tsv`'s classes, positions through
   `0x48A9F0` with `0x43DA70` and `0x43DB50`, carry links through `0x48AB70`, order lists through
   `0x43A0C0`, `0x43A1F0`, `0x43AD10` and `0x489690`, a yard's change through `0x47C790` and
   `0x440A40`; every player record but V's under the same classes, but `+0xF0`, the 30-tick
-  deadline the host's players phase keeps; and each seat's `+0x18` = GameTime;
+  deadline the host's players phase keeps, and only with both names ended inside their fields and
+  a PlayerInfo's side and colour within this game's counts; and each seat's `+0x18` = GameTime;
 - the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
   `0x4B0940`, `0x41B8D0`, `0x48B090`, `0x47F780`, `0x47F850`, `0x4720D0` and `0x472200`;
 - at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit in every
   cell of the explored map `[main+0x14273]`, `main+0x14281` bit 3 cleared, and `s_windState`
-  seeded from the recording's first image.
+  seeded from the recording's first image;
+- after the teardown: V's PlayerInfo, all `0xB9` bytes, as the Start's fill left them.
 
 The recorder refuses a puppet level. `tagpu_recreader.c` reads the file and names no engine memory.
 
@@ -3900,7 +3908,7 @@ log line naming an address reads nothing; the include is detected before the str
 `src/*.c`, `src/*.h`, `src/*/*.c` and `inc/*.h` minus the third-party GL and D3D headers. The
 list started FULL — **42 files** after the merge with main (its `tagpu_hud.c` joined as a
 publisher), each with its class (`publisher`, `session-reader`, `fenced`, `tooling`,
-`pure-engine-code`, `engine-map`, `to-convert:N`), its scope (`sim` for the four files whose
+`pure-engine-code`, `engine-map`, `to-convert:N`), its scope (`sim` for the five files whose
 simulation state is declared and checked by `tools/sim-state-check.sh`, `presentation` for the
 rest: [completeness design](tadr-port/demo-recorder-completeness.md)) and its argument — and only
 shrinks. Verified:

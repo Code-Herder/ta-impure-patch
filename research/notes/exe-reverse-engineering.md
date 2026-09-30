@@ -1926,6 +1926,62 @@ DROP. A puppet's shots do no damage by the impact's owner gate (B7), and the rea
 caller of Send_UnitDeath that runs on a skirmish host [INFERRED from the callers' conditions: the
 kill-all needs a type-1/2 owner, CreateFromNetwork a network game].
 
+**What the playback's bounds and its settings observer rest on** [DISASSEMBLED 2026-09-30]:
+
+- **The settings save `0x430F00`** (`REGISTRY_SaveSettings`) takes no argument, begins
+  `A1 E8 1D 51 00` (`mov eax,[0x511DE8]`), nothing jumps into its first five bytes, and it returns
+  at `0x43173F` with what its last `0x4B6A50` returned (`0x431734`): the DWORD writer's result,
+  which `0x4B6880` leaves in EDI (1 on the paths at `0x4B693E` and `0x4B696B`) [its meaning
+  INFERRED]. It writes `main+0x37EEE` (`0x4311D1`), and the skirmish settings `+0x108`
+  `SkirmishCommanderDeath`, `+0x10C` `SkirmishMapping`, `+0x110` `SkirmishLineOfSight`, `+0x114`
+  `SkirmishLOSType` and `+0x118` `SkirmishLocation` (`0x4314F6..0x43157E`), then `+0x228`
+  `SkirmishDifficulty` (`0x4315A0`), `SkirmishMap` and `Player%dController` (`0x4315C9`,
+  `0x4315F6`). Its callees are `0x4B6A20`, `0x4B6A50` (58 calls), `0x4CF220`, `0x4CFFF0`,
+  `0x4D0040` and imports (`call ebx` is `[0x4FC2E8]`, `0x4315E9`), none of which reaches it again.
+- **What its 27 callers do with EAX.** Sixteen are in typed-command handlers (`0x416420` to
+  `0x4173E0`, named by the 12-byte rows of the command tables `0x501D38`, `0x501F48` and
+  `0x501FD0`, which `0x4195A7..0x4195D8` register through `0x4B7760`); fourteen of those call it
+  last (`call 0x430F00; ret 4`) and so return its EAX [what the dispatch does with it: not
+  traced], and `0x416D6F` and `0x416D9F` call `0x4816A0` after it. The battleroom's three (`0x446246`, `0x44626C`, `0x4462FC`, in a handler at `0x4461D0` that no
+  direct call or pointer in the image names [OPEN]) and `0x477C92` (`0x477CAC..0x477CB0`) return
+  it too; `0x426E80`'s (`0x426F65`) reaches `0x496BB5`, which overwrites it; the rest overwrite or
+  ignore it. A save that is skipped therefore changes what GUI handlers report to their callers,
+  which is why the playback observes it (`tagpu_detour_observe`) instead of gating it.
+  MEASURED 2026-09-30, the reference setup, Wine: Options' OK during a playback reached the save,
+  and a build without the observer wrote the recording's `SkirmishCommanderDeath` 0 and
+  `SkirmishLocation` 1 over the player's 1 and 0.
+- **The in-game key switch** at `0x495ECD` indexes the byte table `0x496694` with the key code
+  less 9, at most `0xEF` (`0x495EB7..0x495EBF`). Codes `0x21`, `0x23` and `0x2A` reach `0x496058`,
+  which flips `main+0x37F06` bit 0 and saves (`0x496077`). MEASURED: an injected `VK_END` does not
+  reach it, the word stayed `0x3F` [INFERRED: the table's codes are the engine's own, as Ctrl+A's
+  `0xAA`, not virtual keys].
+- **A list sized by the player count.** At `0x4938B0..0x4938CC` a function whose entry is not
+  established allocates `main+0x2A3C` × `0x1E` bytes (the u16 count at `0x4938B7`, the allocator
+  `0x4D83B0`) and walks the ten records (`0x4938FF..0x4939BA`): active (`[rec+0]`), of type 1, 2
+  or 3 but not 1 (`0x493915..0x493922`, `0x493945`), `+0x146` not `0xA`, `+0x144` nonzero or
+  `+0x140` zero, and not a watcher (`0x49394C`). Each one's name at `+0x2B` is copied to its NUL,
+  packed (`0x493955..0x493977`), and its `+0x4` into a second array. A count below the records it
+  takes, or a name of `0x1E` bytes or more, runs past the list.
+- **Sides and colours are indexed unbounded**: PlayerInfo `+0x95` into the side table
+  `main+0x37F5F`, `0x232` bytes a side (`0x48692A..0x486943`), and `+0x96` into
+  `[main+0x148DB]` (`0x467C18..0x467C24`, every frame). The engine's own bounds are
+  `0x4B7F30`'s `0 <= i <` the u16 count at the colour sequence's `+0` (`0x4B7F36..0x4B7F46`), and
+  the lobby's clamp of a side at or above the dword `main+0x37F39` to 0 (`0x447EC0..0x447ECE`).
+  `main+0x148DB` is loaded at start-up from `0x4B8D40` (`0x431911`).
+- **The seat fill `0x47A760`**, per settings entry (`[main+0x29A0]`, `0x18` bytes, the count
+  `main+0x38D81`): type 1 writes the entry's colour (`+0x14`) and side (`+4`) to PlayerInfo `+0x96`
+  and `+0x95` (`0x47A79F..0x47A7C1`), calls `0x464290(i, 1)` and sets `main+0x2A43` and `+0x2A42`
+  to `i` (`0x47A7D2`, `0x47A7DE`); type 2 writes the same two (`0x47A7F2..0x47A813`) and calls
+  `0x464290(i, 2)`; any other `0x464290(i, 0)` (`0x47A81B`).
+- **The watcher bit**, PlayerInfo word `+0x9B` bit 6: neither the seat activation nor the reset
+  clears it (they clear bit 5 at `0x464378`, bits 4 and 5 at `0x464600` and `0x4646C2`); the
+  word's other writers, in the battleroom's `0x443xxx..0x449xxx`, are not traced. The post-game
+  table `0x41DC20` leaves a watcher out (`0x41DD43`) and copies a listed player's name with
+  `strncpy(dst, rec + 0x2B, 0x1E)` (`0x41DD61..0x41DD6B`); the results screen reads a listed
+  player's colour from its PlayerInfo (`0x41E5CD..0x41E5DC`). MEASURED 2026-09-30: V (record 4)
+  held `0x54` there during a playback and 0 once the level was surrendered to the main menu, with
+  the playback's restore after the teardown.
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the

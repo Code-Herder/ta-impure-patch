@@ -5,7 +5,7 @@
 How the state recorder stays complete as Impure's simulation changes. **The declarations and
 their build check, and the exclusion file with its check, are built** (the
 [build order](#build-order)'s first step, two landings, 2026-09-29): every writable static of the
-four simulation files is declared, and the link refuses one that is not; the bytes of the engine's
+simulation files is declared, and the link refuses one that is not; the bytes of the engine's
 unit and player records that are not recorded as values are listed in one file, and the build
 refuses a header that does not match it. The replay harness and self-verification are designed,
 not built. The owner
@@ -124,9 +124,9 @@ so presentation bytes such as the option word never trip anything.
 
 ### Impure's own state: declared where it is defined
 
-Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Four
-are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c` and `tagpu_cobtrace.c` — and
-every other listed file is `presentation`, out of scope; only a source file can be `sim`, since a
+Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Five
+are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c`, `tagpu_cobtrace.c` and
+`tagpu_puppet.c` — and every other listed file is `presentation`, out of scope; only a source file can be `sim`, since a
 header's statics belong to the objects that include it. In a `sim` file every writable static,
 heap table and TLS slot carries a one-line declaration beside its definition
 (`tagpu/ddraw/inc/tagpu_simreg.h`):

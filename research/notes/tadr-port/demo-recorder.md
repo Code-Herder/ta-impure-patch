@@ -19,7 +19,7 @@ feature of Impure; it does not require running the original recorder alongside I
 
 **A skirmish can be recorded and watched; seeking, rewind and the in-game controls are next.** The three feasibility experiments
 under [Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the completeness
-mechanism's first step: every writable static of the four simulation files is declared, and the
+mechanism's first step: every writable static of the simulation files is declared, and the
 build refuses one that is not; the bytes of the engine's unit and player records that are not
 recorded as values are listed in one exclusion file the build checks; the design lists the state
 that is still outside both. The skirmish slice's first landing, the recorder, records a skirmish

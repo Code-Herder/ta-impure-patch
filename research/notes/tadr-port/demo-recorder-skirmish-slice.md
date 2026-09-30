@@ -471,19 +471,27 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   the others, inert unless a request armed the level:
   - **The seat fill's call `0x47B092`.** It validates the request before any write: every puppet
     gate and the teardown wrap in, the format, the layout's hash, a skirmish, no network, the map's
-    settings name, two to nine seats, the unit limit and the view. Then it seats each recorded
+    settings name, two to nine seats, as many players as seats, each seat's side and colour within
+    this game's counts, the unit limit and the view. Then it seats each recorded
     player as type 3 through `0x464290` with its side, logo, name and alliance row, seats the
     viewer, points `+0x2A43` at the view, and disarms the victory and defeat tests (`0x4904B0`).
     On a failure the log names the reason and a normal skirmish starts. A recording from another
     build plays, and the log names both builds (D8).
   - **The settings persist's call `0x47B09C`.** It applies the recording's game options after
-    `0x430F00` has written the player's own to the registry. The teardown restores them.
+    `0x430F00` has written the player's own to the registry. The teardown restores them. From the
+    level's first step, when the loader has read them, an observer on `0x430F00` puts the player's
+    options in for the length of every save, so a save made during the playback (Options' OK at
+    `0x45FD5F`, the console toggles) writes the player's, and the save runs and returns unchanged.
+    A save before the first step, which no known path makes, writes the recording's, and the
+    teardown then saves again.
   - **The start units' calls `0x497963` and `0x497ACD`**, skipped.
   - **The first step**, at B2's stub `0x4954ED`: the level's counts, map, unit and weapon data and
     first GameTime against the header; then the start units through the create, the first image,
     the wind's seed and V's sight.
 - **The viewer's seat** V is the lowest record the recording does not seat: type 3, with the watcher
-  bit, holding `+0x2A42` for the whole level.
+  bit, holding `+0x2A42` for the whole level. Its PlayerInfo goes back as the Start's fill left it
+  once the teardown `0x491B60` has returned, after the post-game table has left the watcher out:
+  neither the seat activation nor the reset clears the watcher bit.
   - Every path that selects or orders walks the controlled player's units, of which this seat has
     none, so the viewer cannot select or order a puppet unit.
   - Four gates cover the rest of the viewer's input: typed commands (`0x417B50`, every one
@@ -511,8 +519,13 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     placement part `0x43D6D0` and the altitude fix-up `0x48A870` never run on a puppet.
   - **Players**: every record but V's, raw under the exclusion file, but the players phase's
     30-tick deadline `+0xF0`, which the host keeps (*as built*: written, it arrived already
-    advanced, and the host never ran the viewed player's radar pass; the host note §2.3). Every
-    seat's `+0x18` is GameTime each step, for the pacing gate.
+    advanced, and the host never ran the viewed player's radar pass; the host note §2.3). An image
+    goes in only with both names ended inside their 0x1E-byte fields, and a PlayerInfo image only
+    with its side and colour within this game's counts; the engine copies a name to its end and
+    indexes its side and colour tables unbounded. Every seat's `+0x18` is GameTime each step, for
+    the pacing gate.
+  - **A unit's `+0x110`** takes the image's bits less the engine's and less the exclusion file's
+    rows, so the viewer's selection, marks and build page are the viewer's own.
   - **Carry links** follow the recorded chains through the engine's attach `0x48AB70`, bounded
     first. They are never written raw.
   - **Order lists** are reconciled node by node against their images through the engine's
@@ -546,8 +559,8 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     table agrees with the recording's; S2b writes no declared table but the wind's, and a hook
     that skipped puppets would have left its table differing.
 - **Getter 75** answers, for each puppet seat, the recording machine's bit, from a per-seat table
-  built from the header at the seat fill, declared `SIM_CONTENT` in `tagpu_puppet.c`, and changed
-  at a recorded controller change. The recorder refuses to record a puppet host.
+  built from the header at the seat fill, declared `SIM_CONTENT` in `tagpu_puppet.c` and constant
+  for the level. The recorder refuses to record a puppet host.
 - **The dumps and the comparison.** `dump <name>` in `tagpu_replay.trigger` writes the live world
   with a header naming its tables, and `tools/replay/tarec.py compare --puppet` compares it with
   the recording read back to its GameTime: every unit, player and order list image and every
@@ -584,6 +597,16 @@ with the recording read back to its GameTime (`tarec.py compare --puppet`):
   dumps inside it equal, the radar picture too from record 0; refused, 16 SETs, 8 replies and 2,009
   meteor showers.
 
+**The landing review's fixes**, verified the same day. The battle again, in both views: every one
+of the four dumps inside it equal (GameTime 800 to 3,200), the radar picture too from record 0, and
+the same counts as above. The transport game with the player's registry set apart from the
+recording's options (commander death 1 and start location 0 against the recording's 0 and 1): after
+Options' OK during the playback the registry held the player's values, where a build without the
+observer wrote the recording's (the same clicks, the store rewritten with 0 and 1); V's watcher bit
+was set during the playback and clear after surrendering to the main menu (`+0x9B` 0x54, then 0).
+The reader's check of an order list cut short at an iteration's end was verified by reading only:
+no malformed file was built for it.
+
 **What the checkpoints caught.** From record 0 the host at first showed a radar picture of its
 own: every unit had the bits its create gives it, bit 9 on record 0's 352 and nothing on the other
 1,061, where the recording had bit 8 on all of them. The host had never run the viewed player's
@@ -611,6 +634,11 @@ build compared the wrong tables; a dump now carries a header naming them.
   viewer's radar picture": that perspective still shows it, computed by the engine from the same
   inputs, and every other perspective shows its own player's radar, as the product page has it.
 
+- **`tagpu_replay.c` is `presentation`, `tagpu_puppet.c` `sim` and `tagpu_recreader.c`
+  unlisted** (the owner, "two files"). The replay writes engine state only through the
+  engine's functions and the recorded images, and keeps no simulation state of its own; the puppet
+  table and the gates' own-calls flag are `tagpu_puppet.c`'s, declared there.
+
 ### What S2 leaves
 
 - **Selecting a puppet unit**, its order markers and a factory's queue: S5's perspectives and
@@ -624,6 +652,10 @@ build compared the wrong tables; a dump now carries a header naming them.
   first step. B4's stamps and C4's marks agree because their hooks run on puppets as they ran
   there; S3's restore writes the tables.
 - **The playback's own cost** is not measured.
+- **The replay's statics are outside the simulation-state check**, `tagpu_replay.c` being
+  `presentation`: a takeover (S4) that resumes play from a playback has to account for them.
+- **A network recording's controller changes** are not followed: getter 75 answers the header's
+  controllers for the whole level, which a skirmish never changes.
 
 ## S3 to S5
 
