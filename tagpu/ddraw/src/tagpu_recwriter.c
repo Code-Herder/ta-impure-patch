@@ -1,5 +1,6 @@
 /* tagpu_recwriter.c -- the demo recorder's writer thread
-   (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S1; the records are tagpu_recfmt.h's).
+   (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S1 and S2a; the records are
+   tagpu_recfmt.h's).
 
    It reads no engine memory. Everything it knows arrives through the ring (tagpu_recorder.h), and
    this file is not on thread-split.allow, so the build refuses an engine address here. It keeps a
@@ -9,9 +10,11 @@
    of the copy every SNAPSHOT_TICKS, and the end.
 
    A record is checked against the copy's bounds before it is applied: a slot, a player, a table
-   index, an offset and a length. One that fails is a fault in the capture, not in the game: it
-   abandons the file (the ring's `failed`, which ends the recording at the next capture) and is
-   logged. The writer then only waits for the hand-over, and parses nothing more. */
+   index, an offset and a length, and an event's length. One that fails is a fault in the capture,
+   not in the game: it abandons the file (the ring's `failed`, which ends the recording at the next
+   capture) and is logged. The writer then only waits for the hand-over, and parses nothing more.
+   The events pass into the stream as they came: the copy is the images', and an event changes
+   none of it. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,9 +31,16 @@
 #define SPAN_CHUNK     0x7000        /* the most bytes one of a snapshot's spans carries            */
 #define CORR_MAX       256           /* distinct (kind, table, offset) correction counters          */
 #define CORR_LOG       16            /* corrections logged, a recording                             */
-#define UNIT_LIVE_OFF  REC_UNIT_BYTES /* a correction counter's offset for a unit's liveness        */
+#define UNIT_LIVE_OFF  REC_UNIT_IMAGE /* a correction counter's offset for a unit's liveness        */
 
 typedef struct Buf { unsigned char* p; size_t n, cap; int oom; } Buf;
+
+/* an order list's images, in order */
+typedef struct WList { unsigned n, cap; unsigned char* img; } WList;
+
+/* A list whose RK_ORDERS (or RK_VERIFY_ORDERS) records have begun: the next ones must be its own,
+   `first` ascending, until all `total` nodes have come. */
+typedef struct Pending { unsigned kind, slot, list, total, next; } Pending;
 
 typedef struct WTable {
     unsigned       index;       /* the registry's, as the records name it */
@@ -52,9 +62,13 @@ typedef struct Writer {
     unsigned       nslots;      /* the copy                                         */
     unsigned char* units;
     unsigned char* live;
+    WList*         lists;       /* nslots * 2: main, then sub                       */
     unsigned       players[REC_PLAYERS][REC_PLAYER_DWORDS];
+    unsigned char  ctl[REC_PLAYERS], view[2];
     WTable         tab[REC_TABLE_MAX];
     unsigned       ntab;
+    Pending        pend;        /* pend.total > pend.next while a list is arriving  */
+    unsigned char* vlist;       /* a verified list, as it arrives                   */
 
     Buf            stream;      /* the stream block being built, whole iterations   */
     unsigned       sfirst;      /* its first GameTime                               */
@@ -68,7 +82,7 @@ typedef struct Writer {
     Corr           corr[CORR_MAX];
     unsigned       ncorr, corr_more, logged;
 
-    unsigned       end_reason, bad_ids, ring_high;
+    unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited;
     unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
 } Writer;
 
@@ -241,6 +255,11 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         memcpy(&n, b + at + 2, 2);
         if (at + 4 + n > len) return 0;
         if (tag == RT_SLOTS && n == 4) memcpy(&w->nslots, b + at + 4, 4);
+        if (tag == RT_PLAYER && n >= 2 && b[at + 4] < REC_PLAYERS) w->ctl[b[at + 4]] = b[at + 5];
+        if (tag == RT_OPTIONS && n == 20) {
+            w->view[0] = b[at + 4 + 18];
+            w->view[1] = b[at + 4 + 19];
+        }
         if (tag == RT_TABLE && n >= 12) {
             WTable* t;
             unsigned short ix;
@@ -259,10 +278,15 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         at += (4 + n + 3) & ~3u;
     }
     if (w->nslots < 2 || w->nslots > 0xFFFF) return 0;
-    w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_BYTES,
+    w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     w->live = (unsigned char*)calloc(w->nslots, 1);
-    if (!w->units || !w->live) { fail(w, "no memory for the copy"); return 1; }
+    w->lists = (WList*)calloc((size_t)w->nslots * 2, sizeof *w->lists);
+    w->vlist = (unsigned char*)malloc((size_t)REC_ORDERS_MAX * REC_ORDER_IMAGE);
+    if (!w->units || !w->live || !w->lists || !w->vlist) {
+        fail(w, "no memory for the copy");
+        return 1;
+    }
     if (!file_open(w)) return 1;
     put(w, REC_MAGIC, 8);
     block(w, RB_HEADER, 0, 0, b, len, 0);
@@ -300,16 +324,53 @@ static void corr_log(Writer* w, const char* what, unsigned id, unsigned off, uns
                "built 0x%08X", w->tick, what, id, off, live, built);
 }
 
+static void list_clear(Writer* w, unsigned slot)
+{
+    w->lists[slot * 2].n = 0;
+    w->lists[slot * 2 + 1].n = 0;
+}
+
+static int list_resize(WList* l, unsigned n)
+{
+    if (n > l->cap) {
+        unsigned char* q = (unsigned char*)realloc(l->img, (size_t)n * REC_ORDER_IMAGE);
+        if (!q) return 0;
+        l->img = q;
+        l->cap = n;
+    }
+    l->n = n;
+    return 1;
+}
+
+/* a list's records, as the capture's olist_put makes them */
+static void list_put(Buf* b, unsigned kind, unsigned slot, unsigned list, const unsigned char* img,
+                     unsigned n)
+{
+    unsigned first = 0;
+    do {
+        unsigned char pre[8];
+        unsigned short s = (unsigned short)slot, len = (unsigned short)n, f = (unsigned short)first;
+        unsigned k = n - first < REC_ORDERS_CHUNK ? n - first : REC_ORDERS_CHUNK;
+        memcpy(pre, &s, 2);
+        pre[2] = (unsigned char)list;
+        pre[3] = 0;
+        memcpy(pre + 4, &len, 2);
+        memcpy(pre + 6, &f, 2);
+        buf_rec(b, kind, pre, 8, img + (size_t)first * REC_ORDER_IMAGE, k * REC_ORDER_IMAGE);
+        first += k;
+    } while (first < n);
+}
+
 static void verify_unit(Writer* w, unsigned slot, unsigned live, const unsigned char* img)
 {
-    unsigned char* have = w->units + (size_t)slot * REC_UNIT_BYTES;
+    unsigned char* have = w->units + (size_t)slot * REC_UNIT_IMAGE;
     unsigned short pre[2] = { (unsigned short)slot, 0 };
     unsigned corr0 = 0, i;
     if (live != w->live[slot]) {
         corr_count(w, RK_UNIT, 0, UNIT_LIVE_OFF);
         corr_log(w, "unit", slot, UNIT_LIVE_OFF, w->live[slot], live);
-    } else if (live && memcmp(have, img, REC_UNIT_BYTES)) {
-        for (i = 0; i < REC_UNIT_BYTES; i += 4) {
+    } else if (live && memcmp(have, img, REC_UNIT_IMAGE)) {
+        for (i = 0; i < REC_UNIT_IMAGE; i += 4) {
             unsigned a, b;
             memcpy(&a, have + i, 4);
             memcpy(&b, img + i, 4);
@@ -322,12 +383,39 @@ static void verify_unit(Writer* w, unsigned slot, unsigned live, const unsigned 
     }
     buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
     if (live) {
-        memcpy(have, img, REC_UNIT_BYTES);
-        buf_rec(&w->stream, RK_UNIT, pre, 4, img, REC_UNIT_BYTES);
+        memcpy(have, img, REC_UNIT_IMAGE);
+        buf_rec(&w->stream, RK_UNIT, pre, 4, img, REC_UNIT_IMAGE);
     } else {
         buf_rec(&w->stream, RK_UNIT_GONE, pre, 4, NULL, 0);
+        list_clear(w, slot);
     }
     w->live[slot] = (unsigned char)live;
+}
+
+/* A verified list has come whole: the copy's must equal it, node by node and in length. A
+   difference is corrected by the whole list, as the capture sends one. */
+static void verify_list(Writer* w, unsigned slot, unsigned list, const unsigned char* img,
+                        unsigned n)
+{
+    WList* l = &w->lists[slot * 2 + list];
+    unsigned corr0 = 0, i, k = n < l->n ? n : l->n;
+    if (n == l->n && (!n || !memcmp(l->img, img, (size_t)n * REC_ORDER_IMAGE))) return;
+    if (n != l->n) {
+        corr_count(w, RK_ORDERS, list, REC_ORDERS_LENGTH);
+        corr_log(w, list ? "sub list" : "main list", slot, REC_ORDERS_LENGTH, l->n, n);
+    }
+    for (i = 0; i < k * REC_ORDER_IMAGE; i += 4) {
+        unsigned a, b;
+        memcpy(&a, l->img + i, 4);
+        memcpy(&b, img + i, 4);
+        if (a == b) continue;
+        corr_count(w, RK_ORDERS, list, i % REC_ORDER_IMAGE);
+        corr_log(w, list ? "sub list" : "main list", slot, i, a, b);
+    }
+    if (!list_resize(l, n)) { fail(w, "no memory for an order list's copy"); return; }
+    memcpy(l->img, img, (size_t)n * REC_ORDER_IMAGE);
+    buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
+    list_put(&w->stream, RK_ORDERS, slot, list, img, n);
 }
 
 static void verify_player(Writer* w, unsigned i, const unsigned char* img)
@@ -389,12 +477,28 @@ static void snapshot(Writer* w)
     buf_rec(b, RK_TICK, &w->tick, 4, NULL, 0);
     for (s = 1; s < w->nslots; s++) {
         unsigned short pre[2] = { (unsigned short)s, 0 };
-        if (w->live[s])
-            buf_rec(b, RK_UNIT, pre, 4, w->units + (size_t)s * REC_UNIT_BYTES, REC_UNIT_BYTES);
+        unsigned k;
+        if (!w->live[s]) continue;
+        buf_rec(b, RK_UNIT, pre, 4, w->units + (size_t)s * REC_UNIT_IMAGE, REC_UNIT_IMAGE);
+        for (k = 0; k < 2; k++)
+            if (w->lists[s * 2 + k].n)
+                list_put(b, RK_ORDERS, s, k, w->lists[s * 2 + k].img, w->lists[s * 2 + k].n);
     }
     for (i = 0; i < REC_PLAYERS; i++) {
         unsigned short pre[2] = { (unsigned short)i, 0 };
+        unsigned char v[4];
         buf_rec(b, RK_PLAYER, pre, 4, w->players[i], REC_PLAYER_DWORDS * 4);
+        v[0] = (unsigned char)i;
+        v[1] = w->ctl[i];
+        v[2] = v[3] = 0;
+        buf_rec(b, RK_CONTROLLER, v, 4, NULL, 0);
+    }
+    {
+        unsigned char v[4];
+        v[0] = w->view[0];
+        v[1] = w->view[1];
+        v[2] = v[3] = 0;
+        buf_rec(b, RK_VIEWER, v, 4, NULL, 0);
     }
     for (i = 0; i < w->ntab; i++) {
         WTable* t = &w->tab[i];
@@ -430,6 +534,67 @@ static void iteration_done(Writer* w)
 
 /* ---- one record ----------------------------------------------------------------------------- */
 
+/* An RK_ORDERS or RK_VERIFY_ORDERS: u16 slot, u8 list, u8 0, u16 the list's nodes, u16 the first
+   one here, then whole node images. The first record of a list starts it, and the rest must be its
+   own, in order, until every node has come. 0 when malformed. */
+static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
+{
+    unsigned short slot, total, first;
+    unsigned list, k;
+    if (len < 8 || (len - 8) % REC_ORDER_IMAGE) return 0;
+    memcpy(&slot, b, 2);
+    memcpy(&total, b + 4, 2);
+    memcpy(&first, b + 6, 2);
+    list = b[2];
+    k = (len - 8) / REC_ORDER_IMAGE;
+    if (list > 1 || b[3] || !slot_ok(w, slot) || !w->live[slot] || total > REC_ORDERS_MAX ||
+        k > REC_ORDERS_CHUNK || first + k > total || (total && !k))
+        return 0;
+    if (!first) {
+        if (w->pend.next < w->pend.total) return 0;
+        w->pend.kind = kind;
+        w->pend.slot = slot;
+        w->pend.list = list;
+        w->pend.total = total;
+        w->pend.next = 0;
+        if (kind == RK_ORDERS && !list_resize(&w->lists[slot * 2 + list], total)) {
+            fail(w, "no memory for an order list's copy");
+            return 1;
+        }
+    } else if (w->pend.kind != kind || w->pend.slot != slot || w->pend.list != list ||
+               w->pend.total != total || w->pend.next != first) {
+        return 0;
+    }
+    w->pend.next = first + k;
+    if (kind == RK_ORDERS) {
+        memcpy(w->lists[slot * 2 + list].img + (size_t)first * REC_ORDER_IMAGE, b + 8,
+               (size_t)k * REC_ORDER_IMAGE);
+        buf_rec(&w->stream, kind, b, len, NULL, 0);
+    } else {
+        memcpy(w->vlist + (size_t)first * REC_ORDER_IMAGE, b + 8, (size_t)k * REC_ORDER_IMAGE);
+        if (w->pend.next == total) verify_list(w, slot, list, w->vlist, total);
+    }
+    return 1;
+}
+
+/* an event's length: fixed, or a fixed part and at most `var` bytes more */
+static int event_len(unsigned kind, unsigned len)
+{
+    switch (kind) {
+    case RK_EV_CREATE:      return len == 24;
+    case RK_EV_DEATH:       return len == 12 + REC_UNIT_IMAGE;
+    case RK_EV_SHOT:        return len == 36;
+    case RK_EV_INTERCEPT:   return len == 16;
+    case RK_EV_START:       return len == 28;
+    case RK_EV_START_NAMED: return len >= 24 && len <= 24 + REC_NAME_MAX;
+    case RK_EV_BUILT:       return len == 8;
+    case RK_EV_STATE:       return len == 8;
+    case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
+    case RK_EV_SPRAY:       return len == 48;
+    default:                return 0;
+    }
+}
+
 /* 1 applied, 0 malformed */
 static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
 {
@@ -441,6 +606,8 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         w->header = 1;
         return header_apply(w, b, len);
     }
+    /* a list that has begun is followed by the rest of it and nothing else */
+    if (w->pend.next < w->pend.total && kind != w->pend.kind) return 0;
     if (len >= 2) memcpy(&id, b, 2);
     switch (kind) {
     case RK_TICK:
@@ -455,30 +622,33 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         buf_rec(&w->stream, RK_TICK, b, 4, NULL, 0);
         return 1;
     case RK_UNIT:
-        if (len != 4 + REC_UNIT_BYTES || !slot_ok(w, id)) return 0;
-        memcpy(w->units + (size_t)id * REC_UNIT_BYTES, b + 4, REC_UNIT_BYTES);
+        if (len != 4 + REC_UNIT_IMAGE || !slot_ok(w, id)) return 0;
+        memcpy(w->units + (size_t)id * REC_UNIT_IMAGE, b + 4, REC_UNIT_IMAGE);
         w->live[id] = 1;
         break;
     case RK_UNIT_DELTA:
-        if (len < 12 || !slot_ok(w, id) || !w->live[id] ||
-            !delta_count(b + 2, REC_UNIT_BITS, REC_UNIT_DWORDS, &n) || len != 12 + 4 * n)
+        if (len < REC_UNIT_DELTA_HEAD || !slot_ok(w, id) || !w->live[id] ||
+            !delta_count(b + 2, REC_UNIT_BITS, REC_UNIT_DWORDS, &n) ||
+            len != REC_UNIT_DELTA_HEAD + 4 * n)
             return 0;
-        delta_apply((unsigned*)(w->units + (size_t)id * REC_UNIT_BYTES), b + 2, REC_UNIT_DWORDS,
-                    b + 12);
+        delta_apply((unsigned*)(w->units + (size_t)id * REC_UNIT_IMAGE), b + 2, REC_UNIT_DWORDS,
+                    b + REC_UNIT_DELTA_HEAD);
         break;
     case RK_UNIT_GONE:
         if (len != 4 || !slot_ok(w, id)) return 0;
         w->live[id] = 0;
+        list_clear(w, id);
         break;
     case RK_PLAYER:
         if (len != 4 + REC_PLAYER_DWORDS * 4 || id >= REC_PLAYERS) return 0;
         memcpy(w->players[id], b + 4, REC_PLAYER_DWORDS * 4);
         break;
     case RK_PLAYER_DELTA:
-        if (len < 16 || id >= REC_PLAYERS ||
-            !delta_count(b + 2, REC_PLAYER_BITS, REC_PLAYER_DWORDS, &n) || len != 16 + 4 * n)
+        if (len < REC_PLAYER_DELTA_HEAD || id >= REC_PLAYERS ||
+            !delta_count(b + 2, REC_PLAYER_BITS, REC_PLAYER_DWORDS, &n) ||
+            len != REC_PLAYER_DELTA_HEAD + 4 * n)
             return 0;
-        delta_apply(w->players[id], b + 2, REC_PLAYER_DWORDS, b + 16);
+        delta_apply(w->players[id], b + 2, REC_PLAYER_DWORDS, b + REC_PLAYER_DELTA_HEAD);
         break;
     case RK_TABLE_SIZE:
         if (len != 8 || !(t = table_of(w, id))) return 0;
@@ -493,11 +663,23 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         if (off > t->size || n > t->size - off) return 0;
         memcpy(t->img + off, b + 8, n);
         break;
+    case RK_ORDERS:
+    case RK_VERIFY_ORDERS:
+        return list_record(w, kind, b, len);
+    case RK_CONTROLLER:
+        if (len != 4 || b[0] >= REC_PLAYERS || b[2] || b[3]) return 0;
+        w->ctl[b[0]] = b[1];
+        break;
+    case RK_VIEWER:
+        if (len != 4 || b[2] || b[3]) return 0;
+        w->view[0] = b[0];
+        w->view[1] = b[1];
+        break;
     case RK_VERIFY_UNIT: {
         unsigned short live;
         if (len < 4 || !slot_ok(w, id)) return 0;
         memcpy(&live, b + 2, 2);
-        if (live > 1 || len != (live ? 4 + REC_UNIT_BYTES : 4)) return 0;
+        if (live > 1 || len != (live ? 4 + REC_UNIT_IMAGE : 4)) return 0;
         verify_unit(w, id, live, b + 4);
         return 1;
     }
@@ -513,15 +695,20 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         verify_table(w, t, off, b + 8, n);
         return 1;
     case RK_END:
-        if (len != 12) return 0;
+        if (len != 20) return 0;
         memcpy(&id, b, 2);
         w->end_reason = id;
         memcpy(&w->bad_ids, b + 4, 4);
         memcpy(&w->ring_high, b + 8, 4);
+        memcpy(&w->off_thread, b + 12, 4);
+        memcpy(&w->uncredited, b + 16, 4);
         if (w->ticked) iteration_done(w);
         return 1;
-    default:                         /* RK_CORRECT and RK_HEADER are never in the ring after it */
-        return 0;
+    default:
+        /* the events: nothing of the copy; RK_CORRECT and RK_HEADER are never in the ring after
+           the first record */
+        if (!w->ticked || !event_len(kind, len)) return 0;
+        break;
     }
     buf_rec(&w->stream, kind, b, len, NULL, 0);
     return 1;
@@ -570,6 +757,8 @@ static void finish(Writer* w)
         }
         tlv_u32(&e, RT_BAD_IDS, w->bad_ids);
         tlv_u32(&e, RT_RING_HIGH, w->ring_high);
+        tlv_u32(&e, RT_OFF_THREAD, w->off_thread);
+        tlv_u32(&e, RT_UNCREDITED, w->uncredited);
         if (e.oom) fail(w, "no memory for the end block");
         else block(w, RB_END, w->tick, w->tick, e.p, e.n, 0);
     }
@@ -587,6 +776,9 @@ static void finish(Writer* w)
     free(w->snap.p);
     for (i = 0; i < w->ntab; i++) free(w->tab[i].img);
     if (w->units) VirtualFree(w->units, 0, MEM_RELEASE);
+    for (i = 0; w->lists && i < w->nslots * 2; i++) free(w->lists[i].img);
+    free(w->lists);
+    free(w->vlist);
     free(w->live);
 }
 

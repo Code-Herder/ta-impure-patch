@@ -17,6 +17,23 @@ void __cdecl tagpu_rec_capture(void);
    closed the file. */
 void tagpu_rec_level_end(void);
 
+/* DllMain's attach: the event hooks (tagpu_recorder.c, *The events*), all or none. Without them
+   no skirmish is recorded. */
+void tagpu_rec_init(void);
+
+/* The callouts of the events whose sites belong to other modules, on the game thread; each is
+   inert unless a skirmish is being recorded.
+   - tagpu_rec_shot: a fire function's 0x0D packet at its send (wpn_tx_fired), `meteor` for the
+     meteor spawn's, whose sender leaves +0x1A..+0x23 as the stack held them.
+   - tagpu_rec_intercept: area damage's 0x0E, from its target point (three dwords) and the
+     weapon's index (wpn_tx_intercept).
+   - tagpu_rec_start_named: a start of the script `name` on `unit` that only the owner's machine
+     makes, as the engine's own sites of it are recorded (tagpu_weapons.c's TargetCleared of
+     the slots from 3 up): `now` is the start's third argument, `a0` its one argument. */
+void tagpu_rec_shot(const unsigned char* pkt, int meteor);
+void tagpu_rec_intercept(const unsigned char* point, unsigned weapon);
+void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc, int a0);
+
 /* THE EXIT waits for the files of the recordings that have ended: a recording is complete once
    its writer has closed the file, and ExitProcess would kill a writer still writing its last
    block. Every orderly exit calls this first, on whatever thread exits: the exe's CRT, and each
@@ -48,7 +65,7 @@ void tagpu_rec_exit(void);
    capture signals the writer through a duplicate of `wake` that it owns and closes itself, so its
    signal after that store never touches memory or a handle the writer frees. */
 #define REC_RING_BYTES    (16u << 20)
-#define REC_RING_RESERVE  32u          /* an RK_END (16 bytes) after an RK_PAD of up to 12 */
+#define REC_RING_RESERVE  48u          /* an RK_END (24 bytes) after an RK_PAD of up to 20 */
 
 /* WAKING THE WRITER. The capture signals `wake` at the start, once REC_WAKE_BYTES have been
    published since its last signal, and at the end; the writer also wakes every

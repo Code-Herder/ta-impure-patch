@@ -17,6 +17,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_simreg.h"
+#include "tagpu_recorder.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -599,6 +600,7 @@ static void clear_target_body(char* u, int idx)
         s->target = 0;
         s->spot   = 0x8000;
         E_Name2Index(UCOB(u), S_STARTBUILDING);
+        tagpu_rec_start_named(u, S_TARGETCLEARED, 0, 1, idx);
         E_StartScript(UCOB(u), S_TARGETCLEARED, 0, 0, 1, idx, 0, 0, 0);
     }
 }

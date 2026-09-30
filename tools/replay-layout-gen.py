@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""The replay layout: which bytes of the engine's unit and player records the demo recorder does
-not record as plain values (research/notes/tadr-port/demo-recorder-completeness.md).
+"""The replay layout: which bytes of the engine records a demo recording carries it does not record
+as plain values (research/notes/tadr-port/demo-recorder-completeness.md).
 
   tools/replay-layout-gen.py            regenerate tagpu/ddraw/inc/tagpu_replay_layout.h
   tools/replay-layout-gen.py --check    exit 0 current, 1 stale or invalid, 2 could not run
 
-THE ONE COPY is tagpu/ddraw/replay-layout.tsv. Every byte of a unit or player record that no row
-of it covers is recorded whole and must replay exactly, so a row is a loosening, and adding one is
+THE ONE COPY is tagpu/ddraw/replay-layout.tsv. Every byte of a carried record that no row of it
+covers is recorded whole and must replay exactly, so a row is a loosening, and adding one is
 the owner's decision (CLAUDE.md, *Simulation changes stay replayable*). The recorder compiles the
 table from the generated header; the build re-derives the header from the file and fails when the
 two disagree, so a change to what is excluded is always a visible diff of the file, and the header
@@ -14,7 +14,8 @@ cannot be edited around it.
 
 THE FILE, tab-separated, `#` comments and blank lines ignored, one row per field or bit range:
 
-  record    unit (stride 0x118) or player (stride 0x14B)
+  record    unit (0x118 bytes), player (0x14B), mover (0x2F: a unit's movement state),
+            order (0x56: a node of a unit's order lists) or info (0xB9: a player's PlayerInfo)
   offset    the field's first byte, hex
   size      its width in bytes, decimal
   mask      `-` for every bit, or a hex mask over the field read as a little-endian integer
@@ -27,6 +28,11 @@ THE FILE, tab-separated, `#` comments and blank lines ignored, one row per field
                            compared after that recompute
             timer          not recorded; on a clock a replay does not reproduce
             drop           not recorded and not restored: the viewing machine's own state
+            puppet0        recorded and compared, but held at 0 on a puppet host, and restored by
+                           a takeover: owner state that would run owner code on a puppet
+            puppet1        the same, held set on a puppet host
+                           (either takes a table, `puppet0:<table>`, for a pointer recorded as
+                           its ID: a dword, no mask)
   name      a short name, unique within its record, used in the harness's failure lines
   writers   the engine code that writes the field: comma-separated addresses in .text
   evidence  how each fact was established (DISASSEMBLED, MEASURED, [INFERRED]) and where
@@ -49,8 +55,8 @@ TSV = os.path.join(DDRAW, "replay-layout.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_layout.h")
 
 # The records the retail executable fixes, and their strides.
-RECORDS = {"unit": 0x118, "player": 0x14B}
-CLASSES = ("id", "object", "cache", "timer", "drop")
+RECORDS = {"unit": 0x118, "player": 0x14B, "mover": 0x2F, "order": 0x56, "info": 0xB9}
+CLASSES = ("id", "object", "cache", "timer", "drop", "puppet0", "puppet1")
 # The tables an id row may name. Every ID is taken from the pointer by its offset in the table,
 # never from a field of the target, so a pointer to a dead unit or an empty slot keeps its ID.
 ID_TABLES = {
@@ -59,6 +65,7 @@ ID_TABLES = {
     "weapon": "(pointer - the weapon array's base) / 0x115, not the ID byte +0x10A, which holds IDs below 256 only",
     "player": "(pointer - (main+0x1B63)) / 0x14B, eleven records",
     "bucket": "(pointer - *(main+0x1429F)) / 10; NULL, off-map *(main+0x142B7): own IDs",
+    "owned": "not a row: the class code of an order node's own object, by its vtable (the restore's table 0x43A918): 0x4FD3B8 2, 0x4FD3F8 3, 0x4FD328 4, 0x4FD358 5, 0x4FD388 6",
 }
 # The executable's .text: its virtual address and size in the pristine TotalA.exe's section table.
 TEXT_BEGIN, TEXT_END = 0x401000, 0x4FB92A
@@ -101,12 +108,12 @@ def parse(text):
         kind, colon, target = cls.partition(":")
         if kind not in CLASSES:
             raise Invalid(f"line {n}: class {cls!r} is not one of {', '.join(CLASSES)}")
-        if kind == "id" and target not in ID_TABLES:
+        if (kind == "id" or colon) and target not in ID_TABLES:
             raise Invalid(f"line {n}: id table {target!r} is not one of {', '.join(ID_TABLES)}")
-        if kind != "id" and colon:
+        if colon and kind not in ("id", "puppet0", "puppet1"):
             raise Invalid(f"line {n}: class {kind} takes no table")
-        if kind in ("id", "object") and (size != 4 or mask != "-"):
-            raise Invalid(f"line {n}: an {kind} row is a pointer: size 4, mask -")
+        if (kind in ("id", "object") or colon) and (size != 4 or mask != "-"):
+            raise Invalid(f"line {n}: {cls} is a pointer: size 4, mask -")
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.+-]*", name):
             raise Invalid(f"line {n}: name {name!r} must be one word")
         vas = [w.strip() for w in writers.split(",")]
@@ -156,7 +163,7 @@ def render(tsv_bytes, gen_bytes, rows):
         "",
         "enum { " + ", ".join(f"RL_{r.upper()}" for r in RECORDS) + " };",
         "enum { " + ", ".join(f"RL_{c.upper()}" for c in CLASSES) + " };",
-        "enum {              /* an id row's table and the row its pointer names; the recorded ID is one more */",
+        "enum {              /* an id row's table and what its pointer names; a row's ID is one more than the row */",
         "    RL_T_NONE,",
     ]
     for t, how in ID_TABLES.items():
@@ -174,12 +181,33 @@ def render(tsv_bytes, gen_bytes, rows):
         "static const ReplayLayoutRow tagpu_replay_layout[] = {",
     ]
     for r in rows:
-        target = f"RL_T_{r['target'].upper()}" if r["kind"] == "id" else "RL_T_NONE"
+        target = f"RL_T_{r['target'].upper()}" if r["target"] else "RL_T_NONE"
         mask = 0 if r["mask"] is None or r["mask"] == (1 << (8 * r["size"])) - 1 else r["mask"]
         out.append(f"    {{ RL_{r['record'].upper()}, RL_{r['kind'].upper()}, {target}, "
-                   f"{r['offset']:#05x}, {r['size']}, {mask:#x}u, \"{r['name']}\" }},")
+                   f"{r['offset']:#05x}, {r['size']}, {mask_c(mask)}, \"{r['name']}\" }},")
     out += ["};", "", "#endif", ""]
     return "\n".join(out)
+
+
+def mask_c(m):
+    """A mask as C: each run of set bits shifted into place. A run's value is 2^k - 1, never
+    between 0x400000 and 0x52FFFF, so no literal of the header reads as an engine address to
+    tools/thread-split-check.sh (bit 22 alone is 0x400000)."""
+    runs = []
+    shift = 0
+    while m:
+        if not m & 1:
+            m >>= 1
+            shift += 1
+            continue
+        n = 0
+        while m >> n & 1:
+            n += 1
+        run = (1 << n) - 1
+        runs.append(f"(0x{run:x}u << {shift})" if shift else f"0x{run:x}u")
+        m >>= n
+        shift += n
+    return " | ".join(runs) if runs else "0x0u"
 
 
 def main():

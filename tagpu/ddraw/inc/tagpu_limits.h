@@ -89,9 +89,10 @@ const char* tagpu_limits_expl_pool(const char* ta);
 /* The weapon array: Weapons[0], the no-weapon entry, and a weapon's slot, which is its ID.
    Records are 0x115 bytes. The engine's own array (main+0x2CF3) when the raise is not
    installed, and NULL before the engine allocates its main block. The index is -1 for a
-   pointer that is not a record of the array. */
+   pointer that is not a record of the array; the slots are the array's records. */
 char* tagpu_limits_weapon0(void);
 int   tagpu_limits_weapon_index(const void* weapon);
+int   tagpu_limits_weapon_slots(void);
 
 /* The flying-piece slots, [begin, end): pointers to particle systems, NULL = free. */
 const void* const* tagpu_limits_psys_begin(void);

@@ -2192,8 +2192,9 @@ static int fix_sync_keys(void)
 
    BOTH BUILDS carry the loader's bound (a weapon whose ID is outside the array is skipped and
    logged), the 0x0D receiver's bound on its shooter and target indexes (u16 * 0x118 into the
-   unit array, unbounded in stock), the 0x0F hit flag, and the 0x0F receiver's refusal of
-   a cell off the map (stock reads through 0x481550's NULL). The stock build installs them as
+   unit array, unbounded in stock), the 0x0F hit flag, the 0x0F receiver's refusal of
+   a cell off the map (stock reads through 0x481550's NULL), and the 0x0D sends and 0x0E reads
+   where the demo recorder takes shots and interceptions. The stock build installs them as
    one fix; the raised build installs them with the raise, all or nothing. */
 
 #define WPN_REC        0x115
@@ -2441,14 +2442,22 @@ static int __cdecl wpn_model_reuse(unsigned int* regs)
     return 0;
 }
 
-/* In place of the five `call 0x451DF0` that send a 0x0D, the packet its second argument. The
+#endif
+
+/* In place of the five `call 0x451DF0` that send a 0x0D, the packet its second argument. A fire
+   function builds the packet only under the network bit, or while a skirmish is recorded, when
+   tagpu_recorder.c releases its test (0x49D7A0, 0x49DA92, 0x49DC64, 0x49DE25, 0x49DFAF); between
+   the test and this send it writes nothing but the packet on its stack. In the raised build the
    weapon is the slot's (+0xC) in the four unit senders: the slot is esi at 0x49D859, 0x49DB4D
    and 0x49DD27, and ebx at 0x49DEEE. The meteor's (0x49DFF6) is its function's argument, at the
    send's esp+0x40; that sender leaves +0x1A..+0x23 as the stack held them, so they are
-   cleared. */
+   cleared. The recorder then takes the packet, and 0 skips the send when there is no network:
+   a skirmish reaches this site only while it is recorded, and stock sends it nothing. */
 static int __cdecl wpn_tx_fired(unsigned int which, unsigned int* regs)
 {
     unsigned char* pkt = (unsigned char*)(size_t)regs[PR_RET + 2];
+    const char* ta = *(const char* const*)0x00511DE8;
+#ifndef TAGPU_LIMITS_STOCK
     const char* w;
     int i;
     if (which < 4) {
@@ -2462,14 +2471,18 @@ static int __cdecl wpn_tx_fired(unsigned int which, unsigned int* regs)
         pkt[0x19] = (unsigned char)i;
         pkt[0x23] = (unsigned char)((pkt[0x23] & 0x0F) | ((i >> 8) << 4));
     }
-    return 1;
+#endif
+    tagpu_rec_shot(pkt, which == 4);
+    return ta && (*(const unsigned char*)(ta + 0x2A44) & 1);
 }
 
 /* In place of the 0x0E sender's two ID-byte reads in area damage 0x49A120: 0x49A78C (the weapon
    in edx, the byte into al) and 0x49A7CD (eax, into cl). The packet is at the site's esp+0x58
-   with its target point written. From 256 up the companion goes out here, through the send
-   and the net handle the stock message would use (esi +0x52 -> +0x96 -> +4, the reads stock
-   makes next), and the type byte is cleared so the send that follows is skipped. */
+   with its target point written. The recorder takes each interception here with its weapon's
+   index. The stock build reads the byte as stock does. In the raised build, from 256 up the
+   companion goes out here, through the send and the net handle the stock message would use
+   (esi +0x52 -> +0x96 -> +4, the reads stock makes next), and the type byte is cleared so the
+   send that follows is skipped. */
 static int __cdecl wpn_tx_intercept(unsigned int which, unsigned int* regs)
 {
     unsigned char* pkt = WPN_ESP_CALL(regs) + 0x58;
@@ -2477,6 +2490,9 @@ static int __cdecl wpn_tx_intercept(unsigned int which, unsigned int* regs)
     unsigned int* out = &regs[which ? PR_ECX : PR_EAX];
     int i = tagpu_limits_weapon_index(w);
     unsigned int byte;
+#ifdef TAGPU_LIMITS_STOCK
+    byte = *(const unsigned char*)(w + WPN_BYTE);
+#else
     if (i < 0) byte = *(const unsigned char*)(w + WPN_BYTE);
     else if (i < 256) byte = (unsigned int)i;
     else {
@@ -2493,10 +2509,13 @@ static int __cdecl wpn_tx_intercept(unsigned int which, unsigned int* regs)
         pkt[0] = 0;
         byte = 0;
     }
+#endif
+    tagpu_rec_intercept(pkt + 1, i >= 0 ? (unsigned int)i : byte);
     *out = (*out & ~0xFFu) | byte;
     return 0;
 }
 
+#ifndef TAGPU_LIMITS_STOCK
 /* In place of the 0x0E sender's two `call 0x451DF0` (0x49A7A8, 0x49A7E9): 0 skips the send. */
 static int __cdecl wpn_tx_intercept_send(unsigned int which, unsigned int* regs)
 {
@@ -2696,19 +2715,10 @@ static int wpn_build(WPNSITES* t)
         /* mov [ebp+0x74],esi; lea edi,[esp+0x40]; lea edx,[ebp+0x80]; jmp 0x42ED7B, the copy */
         static const unsigned char storeOurs[15] = { 0x89, 0x75, 0x74, 0x8D, 0x7C, 0x24, 0x40,
                                                      0x8D, 0x95, 0x80, 0x00, 0x00, 0x00, 0xEB, 0x26 };
-        static const unsigned char icptRead[2][6] = {
-            { 0x8A, 0x82, 0x0A, 0x01, 0x00, 0x00 }, { 0x8A, 0x88, 0x0A, 0x01, 0x00, 0x00 } };
         static const unsigned char icptSend[2][5] = {
             { 0xE8, 0x43, 0x76, 0xFB, 0xFF }, { 0xE8, 0x02, 0x76, 0xFB, 0xFF } };
         static const unsigned char icptCmp[11] = { 0x8B, 0x1E, 0x8A, 0x9B, 0x0A, 0x01, 0x00, 0x00,
                                                    0x3A, 0x5F, 0x0D };
-        static const struct { unsigned int va; unsigned char was[5]; } fired[5] = {
-            { 0x0049D859, { 0xE8, 0x92, 0x45, 0xFB, 0xFF } },
-            { 0x0049DB4D, { 0xE8, 0x9E, 0x42, 0xFB, 0xFF } },
-            { 0x0049DD27, { 0xE8, 0xC4, 0x40, 0xFB, 0xFF } },
-            { 0x0049DEEE, { 0xE8, 0xFD, 0x3E, 0xFB, 0xFF } },
-            { 0x0049DFF6, { 0xE8, 0xF5, 0x3D, 0xFB, 0xFF } },
-        };
         const unsigned int less = (unsigned int)(size_t)s_weapons - WPN_MAIN;
         const unsigned int bound = TAGPU_LIM_WEAPONS * WPN_REC;
         unsigned char* p;
@@ -2739,19 +2749,6 @@ static int wpn_build(WPNSITES* t)
         fix_branch(wpn_site(t, 0x0042EC99, 6, idByte, "weapon model, an earlier one's"), 0xE9, a);
         memcpy(wpn_site(t, 0x0042ED46, 15, store, "weapon model, the store")->now, storeOurs, 15);
 
-        for (k = 0; k < 5; k++) {
-            if (!(a = fix_code(32))) return 0;
-            wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_fired, k, 0), 0x00451DF0, 0x0C);
-            fix_branch(wpn_site(t, fired[k].va, 5, fired[k].was, "0x0D sender, the ID's high bits"),
-                       0xE8, a);
-        }
-
-        for (k = 0; k < 2; k++) {
-            if (!(a = fix_code(32))) return 0;
-            *wpn_call(a, (const void*)wpn_tx_intercept, k, 0) = 0xC3;
-            fix_branch(wpn_site(t, k ? 0x0049A7CD : 0x0049A78C, 6, icptRead[k],
-                                "0x0E sender, the ID"), 0xE8, a);
-        }
         if (!(a = fix_code(32))) return 0;
         wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_intercept_send, 0, 0), 0x00451DF0, 0x0C);
         for (k = 0; k < 2; k++)
@@ -2765,6 +2762,30 @@ static int wpn_build(WPNSITES* t)
         /* the 0x05 receiver is B4's in both builds: hit_rx_chat hands this tag to wpn_rx_chat */
     }
 #endif
+    {
+        static const struct { unsigned int va; unsigned char was[5]; } fired[5] = {
+            { 0x0049D859, { 0xE8, 0x92, 0x45, 0xFB, 0xFF } },
+            { 0x0049DB4D, { 0xE8, 0x9E, 0x42, 0xFB, 0xFF } },
+            { 0x0049DD27, { 0xE8, 0xC4, 0x40, 0xFB, 0xFF } },
+            { 0x0049DEEE, { 0xE8, 0xFD, 0x3E, 0xFB, 0xFF } },
+            { 0x0049DFF6, { 0xE8, 0xF5, 0x3D, 0xFB, 0xFF } },
+        };
+        static const unsigned char icptRead[2][6] = {
+            { 0x8A, 0x82, 0x0A, 0x01, 0x00, 0x00 }, { 0x8A, 0x88, 0x0A, 0x01, 0x00, 0x00 } };
+        int k;
+        for (k = 0; k < 5; k++) {
+            if (!(a = fix_code(32))) return 0;
+            wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_fired, k, 0), 0x00451DF0, 0x0C);
+            fix_branch(wpn_site(t, fired[k].va, 5, fired[k].was, "0x0D sender, the ID and the recorder"),
+                       0xE8, a);
+        }
+        for (k = 0; k < 2; k++) {
+            if (!(a = fix_code(32))) return 0;
+            *wpn_call(a, (const void*)wpn_tx_intercept, k, 0) = 0xC3;
+            fix_branch(wpn_site(t, k ? 0x0049A7CD : 0x0049A78C, 6, icptRead[k],
+                                "0x0E sender, the ID and the recorder"), 0xE8, a);
+        }
+    }
     return !t->over;
 }
 
@@ -7978,6 +7999,14 @@ static const char* __stdcall tx_pick(const char* unit, int selfd)
     return w;
 }
 
+int tagpu_tx_carried(const char* unit)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int idx;
+    return hit_slot_index(s_hit, ta, unit, &idx) &&
+           (s_txCarried[idx] || (s_txKillMark[idx] && s_txKillMark[idx] == tx_kill_token()));
+}
+
 /* 0x486F10, kill-all(player), stdcall ret 4, entered by the site's jump with kill-all's own
    frame: the outermost call on a thread draws the token its detaches are marked with (never 0,
    the "none" of the TLS slot); a nested one runs under its caller's. */
@@ -8319,10 +8348,11 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
      leaving it -- and tacli's applier on both of its own [DISASSEMBLED].
    - The queue's bound is what one create's DIRECT calls send [DISASSEMBLED, every direct call
      followed from 0x485F50]: the 0x09 as its 0x4A (65 bytes, 0x486115), the 0x12 (5,
-     0x48612A, a finished type with def+0x22F 0), the 0x13 (18: 0x48B090(1, 1) newly sets bit 0
-     only, so its one reachable sound is 0x48B110 -> 0x47F780(unit, 3, 0) -> 0x47F0C0, sent at
-     0x47F14C; its bit-2 path 0x48B16E..0x48B1AA is not reached) and the 0x11 (4, 0x48B1F3,
-     def+0x241 bit 18), so 4 messages and 92 bytes. Nothing between the create and its flush
+     0x48612A, a finished type with def+0x22F 0) and the 0x11 (4, 0x48B1F3, def+0x241 bit 18),
+     so 3 messages and 74 bytes. 0x48B090(1, 1)'s reply 0x47F780(unit, 3, 0) (0x48B110) only
+     queues a notice, which 0x47F680 plays later by its file name, so none of them sends a 0x13;
+     the queue's room for a fourth message of up to 18 bytes keeps one script's send in order
+     with them. Nothing between the create and its flush
      sends: the spans are straight code, and the resurrection's calls 0x489690, 0x4815F0 and
      0x421E60 are leaves. A unit's scripts are not covered: the COB interpreter 0x4B0DA0 (19
      callbacks) and 0x4B1C00 (4) are not followed, nor the create's indirect calls 0x49059A and
@@ -8363,8 +8393,8 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
    0x05 receiver that it extends. The 0x12's index bound (fix_built_bounds) is local. */
 
 #define KILL_HOLDS    2                     /* the threads that create: the game's and the loader */
-#define KILL_Q_N      4                     /* what one create sends: 0x09, 0x12, 0x11, 0x13     */
-#define KILL_Q_BYTES  92                    /* 65 + 5 + 4 + 18                                   */
+#define KILL_Q_N      4                     /* the 0x09, 0x12 and 0x11 one create sends, and one */
+#define KILL_Q_BYTES  92                    /* 65 + 5 + 4, and 18 for that one                   */
 
 struct kill_hold {
     volatile LONG tid;                      /* the holding thread, 0 when free                  */
@@ -11795,6 +11825,8 @@ int tagpu_limits_weapon_index(const void* weapon)
     if (d % WPN_REC || d / WPN_REC >= (size_t)wpn_slots()) return -1;
     return (int)(d / WPN_REC);
 }
+
+int tagpu_limits_weapon_slots(void) { return wpn_slots(); }
 
 /* ---- the report ------------------------------------------------------------------------
    Shown once, at the first DirectDraw call rather than in DllMain: a MessageBox under the

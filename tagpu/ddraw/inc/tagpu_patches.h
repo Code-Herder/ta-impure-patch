@@ -33,4 +33,10 @@ int tagpu_kills_format(char* buf, unsigned int cap);
    which sends them with the unit's state as it is then (sim-fixes.md B8). */
 void tagpu_kill_hold(void);
 void tagpu_kill_flush(void);
+
+/* The demo recorder's view of a destructor call about to run on `unit`: 1 when the transported
+   blast will treat it as carried (sim-fixes.md C4) though its carrier link is gone by then --
+   the decision tx_wrap armed for this call, or a mark of the kill-all this thread is running.
+   The game thread, inside the destructor's entry. */
+int tagpu_tx_carried(const char* unit);
 #endif

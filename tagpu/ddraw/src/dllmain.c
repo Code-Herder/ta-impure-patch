@@ -27,6 +27,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
+#include "tagpu_recorder.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
@@ -270,6 +271,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            `tagpu_reclaim.off` disables. Changes only WHEN a freed block
            returns to the heap; the sim reads nothing different. */
         tagpu_reclaim_init();
+
+        /* tagpu: the demo recorder's event hooks (tagpu_recorder.c, *The events*): fifteen
+           observers, the five fire functions' network tests and thirteen calls of the COB starts
+           by name, byte-matched, disjoint from every detour above, installed only whole. Each
+           records only while a skirmish is recorded (tagpu_recorder.on); the network tests then
+           let the fire functions build the 0x0D the recorder takes, and change nothing else. */
+        tagpu_rec_init();
 
         /* tagpu: HUD scale (Phase F, gui-renderer.md 22) -- the in-game HUD
            magnified inside the player's Screen Size, with the world viewport

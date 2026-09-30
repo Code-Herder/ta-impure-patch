@@ -54,9 +54,12 @@ int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n)
    site the first one owns instead of overwriting its jmp: the observer
    (tagpu_detour_observe) hooks the earlier stub's copy of the stolen bytes.
    fxown holds CopyGafToContext 0x4B7F90 and the UI census needs to watch it —
-   that is the case this exists for. */
+   that is the case this exists for. A site the registry has no room for is
+   refused before anything lands: landed but unrecorded, a later module would
+   overwrite its jmp instead of chaining. */
+#define LANDED_MAX 256
 typedef struct LANDED { unsigned va; unsigned char* stub; int stolenOff; int nst; int hijacks; } LANDED;
-static LANDED s_landed[64];
+static LANDED s_landed[LANDED_MAX];
 static int    s_nlanded = 0;
 
 /* A stub is recorded as a site's owner only once it is reachable: after its
@@ -66,16 +69,15 @@ static int    s_nlanded = 0;
 static void detour_record(unsigned int va, unsigned char* stub, int stolenOff, int nst,
                           int hijacks)
 {
-    if (s_nlanded < (int)(sizeof s_landed / sizeof s_landed[0])) {
-        s_landed[s_nlanded].va = va; s_landed[s_nlanded].stub = stub;
-        s_landed[s_nlanded].stolenOff = stolenOff; s_landed[s_nlanded].nst = nst;
-        s_landed[s_nlanded].hijacks = hijacks;
-        s_nlanded++;
-    }
+    s_landed[s_nlanded].va = va; s_landed[s_nlanded].stub = stub;
+    s_landed[s_nlanded].stolenOff = stolenOff; s_landed[s_nlanded].nst = nst;
+    s_landed[s_nlanded].hijacks = hijacks;
+    s_nlanded++;
 }
 
 static int land_and_record(unsigned int va, unsigned char* stub, int stolenOff, int nst)
 {
+    if (s_nlanded >= LANDED_MAX) { tagpu_detour_stub_free(stub); return 0; }
     if (!tagpu_detour_land(va, stub, nst)) return 0;
     detour_record(va, stub, stolenOff, nst, 0);
     return 1;
@@ -178,6 +180,7 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
     unsigned char* prev;
     int prevOff = 0, prevN = 0, so;
     if (!s || !before || nst < 5 || nst > 16) return 0;
+    if (s_nlanded >= LANDED_MAX) { tagpu_detour_stub_free(s); return 0; }
     prev = tagpu_detour_landed(va, &prevOff, &prevN);
     if (prev && (prevN != nst || memcmp(prev + prevOff, stolen, (size_t)nst) != 0)) return 0;
     /* THE CHAIN RULE: an observer that hijacks the return must be the LAST on

@@ -1,23 +1,25 @@
-# replay-layout.tsv -- the bytes of the engine's unit and player records that the demo recorder
-# does not record as plain values (research/notes/tadr-port/demo-recorder-completeness.md). Every
-# other byte of a record is recorded whole and must replay exactly, so each row is a loosening, and
-# adding one is the owner's decision (CLAUDE.md, *Simulation changes stay replayable*).
+# replay-layout.tsv -- the bytes of the engine records a demo recording carries that it does not
+# record as plain values (research/notes/tadr-port/demo-recorder-completeness.md): the unit and
+# player records, a unit's mover and order nodes, and a player's PlayerInfo. Every other byte of a
+# record is recorded whole and must replay exactly, so each row is a loosening, and adding one is
+# the owner's decision (CLAUDE.md, *Simulation changes stay replayable*).
 # tools/replay-layout-gen.py says what the columns and classes mean and generates
 # inc/tagpu_replay_layout.h from this file; the build fails when the two disagree.
 #
 # The rows start from the stock savers, the engine's own inventory of a record: 0x4876C0 writes a
-# unit's 0xB8-byte save record and 0x4662F0 a player's keys. The engine map's *The unit and player
+# unit's 0xB8-byte save record, 0x43DD70 its mover, 0x43A970 each order node and 0x4662F0 a
+# player's keys. The engine map's *The unit and player
 # records, byte by byte* has every field, its writers and the evidence; `writers` names function
 # entries. The level load's fill 0x4854A0 zeroes every unit record and the players' reset
 # 0x4644D0 every player record; neither is repeated in the rows.
 #
 # record	offset	size	mask	class	name	writers	evidence
-unit	0x000	4	-	object	mover	0x485F50,0x4861D0,0x4866D0	DISASSEMBLED: the 0x2F-byte mover (constructor 0x43DC00), made by the creates when the type's def+0x22F is 1 and freed and nulled by the destructor (0x486DBF); the saver writes it through 0x43DD70, the restore through 0x43DE30
+unit	0x000	4	-	object	mover	0x485F50,0x4861D0,0x4866D0	DISASSEMBLED: the 0x2F-byte mover (constructor 0x43DC00), made by the creates when the type's def+0x22F is 1 and freed and nulled by the destructor (0x486DBF), so it lives exactly as long as its unit; the saver writes it through 0x43DD70, the restore through 0x43DE30. Recorded by the mover record, as the tail of the unit's image, whose dword here is 1 when the unit has one
 unit	0x010	4	-	id:weapon	weapon1	0x49E070	DISASSEMBLED: weapon slot 1 (slots at +0x04, stride 0x1C) holds the def's weapon1 *(def+0x1EE), set once by 0x49E070 from the creates; the saver writes the weapon's ID byte [ptr]+0x10A
 unit	0x02C	4	-	id:weapon	weapon2	0x49E070	DISASSEMBLED: weapon slot 2 (slots at +0x04, stride 0x1C) holds the def's weapon2 *(def+0x1F2), set once by 0x49E070 from the creates; the saver writes the weapon's ID byte [ptr]+0x10A
 unit	0x048	4	-	id:weapon	weapon3	0x49E070	DISASSEMBLED: weapon slot 3 (slots at +0x04, stride 0x1C) holds the def's weapon3 *(def+0x1F6), set once by 0x49E070 from the creates; the saver writes the weapon's ID byte [ptr]+0x10A
-unit	0x05C	4	-	object	orders	0x439EB0,0x439F80,0x43A020,0x43AC60,0x43ACB0,0x43AD10,0x43ADC0,0x43AFC0,0x43B0B0,0x43B1F0,0x43B400,0x43B730,0x43B7C0,0x43BAD0,0x487080	DISASSEMBLED: the head of the order list, written through its address by the list functions and the restore (0x48754F); the saver writes each order through 0x43A970
-unit	0x060	4	-	object	suborders	0x4384A0,0x439EB0,0x439F80,0x43A020,0x43AC60,0x43ACB0,0x43AD10,0x43ADC0,0x43AFC0,0x43B0B0,0x43B1F0,0x43B400,0x43B730,0x43B7C0,0x43BAD0,0x487080	DISASSEMBLED: the second order list, for orders whose descriptor carries 0x40000 (BuildWeapon, SelfDestruct); MEASURED NULL in all 65 996 PRS1 records
+unit	0x05C	4	-	object	orders	0x4384A0,0x439EB0,0x439F80,0x43A020,0x43AC60,0x43ACB0,0x43AD10,0x43ADC0,0x43AFC0,0x43B0B0,0x43B1F0,0x43B400,0x43B730,0x43B7C0,0x43BAD0,0x487080	DISASSEMBLED: the head of the order list, written through its address by the list functions and the restore (0x48754F); the saver writes each order through 0x43A970. Recorded by the order record: the list as its nodes' images, in order
+unit	0x060	4	-	object	suborders	0x4384A0,0x439EB0,0x439F80,0x43A020,0x43AC60,0x43ACB0,0x43AD10,0x43ADC0,0x43AFC0,0x43B0B0,0x43B1F0,0x43B400,0x43B730,0x43B7C0,0x43BAD0,0x487080	DISASSEMBLED: the second order list, for orders whose descriptor carries 0x40000 (BuildWeapon, SelfDestruct); MEASURED NULL in all 65 996 PRS1 records. Recorded by the order record, as the main list is
 unit	0x082	4	-	id:bucket	bucket	0x47CBD0,0x47CC30	DISASSEMBLED: the sort bucket, chosen by the restamp 0x47CC30 from the position at that moment and nulled at death by 0x47CBD0; MEASURED not a function of the position (7.0 % of 65 934 units sat in a neighbouring bucket)
 unit	0x086	4	-	id:unit	carrier	0x48AB70	DISASSEMBLED: the carrier, set and cleared by the attach 0x48AB70 (0x48AC70, 0x48ACD2)
 unit	0x08A	4	-	id:unit	cargo	0x48AB70	DISASSEMBLED: the first carried unit; the attach pushes at the front (0x48AC82) and the unloads take the head (0x406960, 0x4115C7)
@@ -41,7 +43,7 @@ player	0x018	4	-	timer	peertime	0x48B710,0x48B920	DISASSEMBLED: the owner peer's
 player	0x01C	4	-	timer	lastrecv	0x450A10,0x453D40	DISASSEMBLED: GetTickCount through 0x4B6340 at each receive (0x454856), read by the timeouts 0x453C20, 0x453839
 player	0x020	1	-	drop	loadpct	0x456DE0	DISASSEMBLED: load progress, read only by the load wait 0x497CE0
 player	0x021	1	-	drop	session	0x426E80,0x451220,0x4644D0	DISASSEMBLED: session flags each machine sets on its own record, read only by 0x451345 and the network level setup 0x49723B
-player	0x027	4	-	object	info	0x463BE0,0x4644D0	DISASSEMBLED: the 0xB9-byte PlayerInfo, allocated by the constructor 0x463BE0 and kept across the reset; the saver writes its +0x95 (Side) and +0x96 (Logo)
+player	0x027	4	-	object	info	0x463BE0,0x4644D0	DISASSEMBLED: the 0xB9-byte PlayerInfo, allocated by the constructor 0x463BE0 and kept across the reset, and never freed for main's eleven records (the destructor 0x463C40 runs only on stack-local ones, 0x454538, 0x454607); the saver writes its +0x95 (Side) and +0x96 (Logo). Recorded by the info record, as the tail of the player's image, whose dword here is 1 when the record has one
 player	0x067	4	-	id:unit	blockfirst	0x4854A0	DISASSEMBLED: the first slot of the player's block, set at level load (0x4858BD); MEASURED begin + 0x118 * [+0x6F] in all 960 PRS1 records
 player	0x06B	4	-	id:unit	blocklast	0x4854A0	DISASSEMBLED: the last slot of the player's block, inclusive (0x4858E0); MEASURED begin + 0x118 * [+0x71]
 player	0x073	1	-	drop	controller	0x450A10,0x463BE0,0x463C60,0x464290,0x4644D0,0x465FB0,0x466050	DISASSEMBLED: the controller as the local peer sees it (2 local AI, 3 remote, 1 local human [INFERRED]); it changes mid-game (the console's AI toggle 0x4161F0 flips 1 and 2 through 0x463C60, a leave writes 0), so the recording carries each change; a puppet host holds 3 for every puppet
@@ -51,3 +53,18 @@ player	0x07C	4	-	object	sight	0x463C40,0x464700,0x464A00	DISASSEMBLED: the sight
 player	0x080	12	-	cache	sightgeom	0x464700,0x464A00	DISASSEMBLED: the sight grid's width, height and length, computed at level load from main+0x14233 and +0x14237; the length bounds 0x4816A0's fill of this process's grid, so it is never written
 player	0x0EC	4	-	object	accumulator	0x464700,0x464A00	DISASSEMBLED: a 0x34-byte resource accumulator (init 0x401070) whose +0x30 points back to the player
 player	0x0F8	4	-	drop	displaytimer	0x464700,0x466050,0x468CF0	DISASSEMBLED: DisplayTimer, a GameTime deadline: DrawGameScreen 0x468CF0 adds 30 while it is below GameTime and then refreshes the resource bar's rates (0x468F73..0x468F87), for the viewed record only; a seek sets it to GameTime, as the init does (0x464765)
+mover	0x000	4	-	drop	course	0x43DC00	DISASSEMBLED: the movement class object, chosen once by the constructor from the owner's +0x73 as the local game sees it and def+0x241 bit 11 (0x43DC48..0x43DD08): a local ground (0x44F010) or air (0x4907E0) class, or for a type-3 owner a ground (0x44F570) or air (0x490940) proxy, so a puppet host holds a proxy where the recording machine held a local class; freed by 0x43DD10 in the destructor (0x486DB1); the stock save skips it
+mover	0x004	4	-	cache	moveclass	0x43DC00	DISASSEMBLED: *(def+0x1B6), the type's movement class, an entry of the static table 0x512358..0x512758 (0x20 each) that the type loader resolves through 0x440420 (0x42CD0C, 0x42CD29); written only by the constructor (0x43DC45), so the create recomputes it from the recorded type; read by the pathfinder (0x40E63F, 0x40ED4A); the stock save skips it
+mover	0x02E	1	0xF8	drop	spare	0x485F50,0x4861D0	DISASSEMBLED: what the allocator left in the 0x2F-byte block the creates allocate (0x4860C6, 0x4862DA; MEM_Alloc 0x4B4F10, not zeroed): the constructor keeps them (0x43DC25..0x43DC2F), every writer of the byte masks them out (0x43D27D, 0x43D91C, 0x43DED3, 0x48ACE9, 0x44F605), and nothing reads them
+order	0x006	4	0x2	puppet0	ondestroy	0x43A0C0,0x43A420,0x402640,0x403A20,0x4111B0,0x411F50,0x412710	DISASSEMBLED: when set, the node's destructor 0x43A1F0 calls the order's handler with event 2 (0x43A1F5..0x43A21A), owner code: BuildingBuild's event 2 deals its unfinished frame 30 000 (0x402701). The stores found that set it are in BuildingBuild (0x4028B5, 0x402922, 0x402AE6), MobileBuild (0x403F0C), VTOL_Pickup (0x411464), AirStrike (0x412526, 0x4125BB) and AirToGround (0x412CE3); the handlers' other stores of the mask were not audited bit by bit
+order	0x00E	4	-	cache	owner	0x43A0C0,0x43A420,0x43AC60,0x43ACB0,0x43AD10,0x4384A0	DISASSEMBLED: the unit whose list holds the node, stored by the linkers (0x43AD3A, 0x438564); the playback's linker writes it
+order	0x016	4	-	id:unit	target	0x489540,0x4895C0,0x489600,0x489650,0x489690,0x489740	DISASSEMBLED: the unit reference's target, set through 0x489690 (which refuses NULL or a unit with +0xA6 = 0) and cleared at the target's death (0x489740 from 0x486D75)
+order	0x01A	4	-	cache	refnext	0x489540,0x4895C0,0x489600,0x489650,0x489690	DISASSEMBLED: the next reference in the target's +0xA2 chain, rebuilt when the target is set through 0x489690; the chain's order changes nothing, both of its walkers only OR a bit into the owners' +0x4E (0x489740, 0x4897B0)
+order	0x01E	4	-	cache	refowner	0x43A0C0,0x43A420	DISASSEMBLED: the reference's owner, the node itself (0x43A137, 0x43A44F)
+order	0x032	2	-	drop	seenx	0x439740,0x43A0C0,0x43A420	DISASSEMBLED: the sprite resolver's last-seen x of the target under the viewing player's sight (0x4397AF), read only by 0x439740: the viewing machine's own state
+order	0x034	2	-	drop	seenz	0x439740,0x43A0C0,0x43A420	DISASSEMBLED: the last-seen z (0x4397BC), as seenx
+order	0x042	4	0x10000	puppet1	keeptargets	0x4384A0,0x439EB0,0x439F80,0x43ADC0,0x43AFC0,0x43B0B0,0x43B7C0,0x43BAD0	DISASSEMBLED: when clear, the node's destructor runs 0x489800(owner, 3) (0x43A2AB..0x43A2B9), which resets the weapon slots' targets and starts TargetCleared, owner code; set on removal for a node that is not the head (13 sites, 0x4384D7..0x43BC3C) and by six descriptors (flags 0x10060)
+order	0x042	4	0x200000	drop	seen	0x439740,0x43A0C0,0x43A420	DISASSEMBLED: seenx and seenz are valid (0x4397C5), the viewing machine's own state as they are
+order	0x042	4	0x400000	puppet0	stopbuilding	0x438590,0x4385F0,0x43A1F0,0x43A0C0,0x43A420	DISASSEMBLED: set by 0x438590 after it starts StartBuilding (0x4385E3); the node's destructor then starts and broadcasts StopBuilding (0x43A21E..0x43A25D), owner code
+order	0x04A	4	-	object	next	0x4384A0,0x439EB0,0x439F80,0x43AC60,0x43ACB0,0x43AD10,0x43ADC0,0x43AFC0,0x43B0B0,0x43B7C0,0x43BAD0	DISASSEMBLED: the next node of the list; the list's image records the nodes in order
+order	0x052	4	-	puppet0:owned	owned	0x4388D0,0x43A0C0,0x43A1F0,0x43A420	DISASSEMBLED: the handler's own object, installed by 0x4388D0 and deleted by the node's destructor (0x43A264..0x43A2A2) or the next install, so it lives while the node holds it; recorded as its class code, the saver's own record of it (0x43A970); MEASURED: a copied pointer faulted at 0x43A2A2
