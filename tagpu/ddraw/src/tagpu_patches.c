@@ -9859,31 +9859,46 @@ static int fix_range_circle(void)
    a unit dying with an order armed is ordinary play. */
 static const unsigned int s_orderMsg[6];        /* 0x499100's message: its cancel never reads it */
 
+/* The controlled player's units, first..last inclusive, both on the unit array's own slots;
+   0 when the record is not a player's or the range is not the array's. */
+static int player_units(const unsigned char* m, unsigned int* first, unsigned int* last)
+{
+    unsigned int player = m[0x2A42];                  /* the controlled player */
+    const unsigned char* rec;
+    unsigned int begin, end;
+    if (player >= 10) return 0;
+    rec    = m + 0x1B63 + player * 0x14Bu;
+    begin  = *(const unsigned int*)(m + 0x14357);
+    end    = *(const unsigned int*)(m + 0x1435B);     /* the array's last slot, inclusive */
+    *first = *(const unsigned int*)(rec + 0x67);
+    *last  = *(const unsigned int*)(rec + 0x6B);
+    return !(*first < begin || *last > end || *first > *last ||
+             (*first - begin) % 0x118u || (*last - begin) % 0x118u);
+}
+
+/* The UnitDef a unit's +0x92 names, or NULL unless it is a slot of the def array. */
+static const unsigned char* unit_def(const unsigned char* m, const unsigned char* unit)
+{
+    unsigned int defs  = *(const unsigned int*)(m + 0x1439B);
+    unsigned int ndefs = *(const unsigned int*)(m + 0x1438F);      /* UNITINFOCount */
+    unsigned int def   = *(const unsigned int*)(unit + 0x92);
+    if (def < defs || (def - defs) % 0x249u || (def - defs) / 0x249u >= ndefs) return NULL;
+    return (const unsigned char*)(size_t)def;
+}
+
 /* 1 when a unit of the controlled player's block would take the armed order; builders_only is
    the placement's type test */
 static int order_anyone(const unsigned char* m, int builders_only)
 {
-    unsigned int player = m[0x2A42];                  /* the controlled player */
-    const unsigned char* rec;
-    unsigned int begin, end, first, last, defs, ndefs, u;
-    if (player >= 10) return 0;
-    rec   = m + 0x1B63 + player * 0x14Bu;
-    begin = *(const unsigned int*)(m + 0x14357);
-    end   = *(const unsigned int*)(m + 0x1435B);      /* the array's last slot, inclusive */
-    first = *(const unsigned int*)(rec + 0x67);
-    last  = *(const unsigned int*)(rec + 0x6B);
-    if (first < begin || last > end || first > last ||
-        (first - begin) % 0x118u || (last - begin) % 0x118u) return 0;
-    defs  = *(const unsigned int*)(m + 0x1439B);
-    ndefs = *(const unsigned int*)(m + 0x1438F);      /* UNITINFOCount */
+    unsigned int first, last, u;
+    if (!player_units(m, &first, &last)) return 0;
     for (u = first; u <= last; u += 0x118u) {
         const unsigned char* unit = (const unsigned char*)(size_t)u;
-        unsigned int def;
+        const unsigned char* def;
         if (!(unit[0x110] & 0x10)) continue;
         if (!builders_only) return 1;
-        def = *(const unsigned int*)(unit + 0x92);
-        if (def < defs || (def - defs) % 0x249u || (def - defs) / 0x249u >= ndefs) continue;
-        if (((const unsigned char*)(size_t)def)[0x241] & 0x40) return 1;
+        def = unit_def(m, unit);
+        if (def && (def[0x241] & 0x40)) return 1;
     }
     return 0;
 }
@@ -9931,6 +9946,150 @@ static int fix_order_anyone(void)
     return fix_write(site, 2);
 }
 
+/* A QUEUED SITE IS TAKEN GROUND. [DISASSEMBLED] The build cursor 0x4197D0 asks the site test
+   0x47D2E0 (stdcall (def, cell, 0, player), ret 0x10; the call is 0x4198C6) whether the
+   footprint fits, and shows the answer as main+0x2CC6 bit 6: green, or red -- and a click on red
+   plays "notok" and orders nothing (0x498F86, 0x499016). The test refuses a cell whose yardmap
+   byte has bit 2 or 4 and whose unit word (+0x00) already names another unit (0x47D54C..0x47D561).
+   That word is written by the stamp 0x47CC30 of a unit that EXISTS, into the cells whose yardmap
+   byte has bit 4 (0x47CD8E..0x47CD9D; bit 2 instead when +0x10F has bit 2). A site queued and not
+   yet built stamps nothing, so a second site over it reads green, is ordered, and its order fails
+   when the first is built.
+
+   THE FIX asks the same question of the queue. build_site_test runs stock's test and, when it
+   says yes, says no if the footprint shares a cell with a queued site of the controlled player's
+   units where one yardmap has bit 4 and the other bit 2 or 4 -- the stamp's and the test's own
+   bits, in both directions because either site may be built first. A QUEUED SITE is an order whose
+   descriptor (*0x512344, stride 0x19) has capability bit 0, the one 0x438C00 draws a rectangle
+   for, with a build type (+0x36) and a ground position (+0x22, +0x2A above 0: a factory's count
+   node is made with a NULL position, which 0x43A0C0 zeroes). Its cell is 0x4197D0's own formula
+   over the node's position and its type's footprint (def +0x14A, +0x14C).
+   What the click does with the selected builders' own orders is left out of the test, as the
+   click would leave it: without Shift 0x43ADC0 destroys a unit's orders that lack flag 4
+   (+0x42), so those do not block; with Shift 0x43AFC0 cancels a unit's order within 16 world
+   units of the new position (0x43B00F..0x43B029), so that one does not block, and Shift-clicking
+   a queued site still removes it. A unit is one the click orders when it is selected (+0x110
+   bit 4) and its def has +0x241 bit 6, 0x419755..0x41976A's test. Allies' and enemies' plans are
+   not looked at, nor are units that are not alive (+0x110 bit 28) or are excluded (bit 14): the
+   engine's own marker driver's set.
+
+   THE INVARIANT: this only ever turns a yes into a no, so it cannot order what stock refuses, and
+   it changes what the cursor shows, never what a peer simulates -- CLASS: local. The AI's calls
+   of the site test (0x40A4CD) and orders that do not come from the cursor are stock's.
+   Every read is bounded first: the units against the array's own slots (player_units), each
+   def index against UNITINFOCount (unit_def, qs_def), a node's type byte against the
+   descriptor array's length, a yardmap only for a def the parser gave one (BMcode +0x22F = 0,
+   0x42CF30) and only within its footprint. A node is read on the game thread, which is the one
+   thread that links, unlinks and frees order nodes (the order code runs in unit ticks and click
+   handlers), from the build cursor, which runs between those; the list is walked at most
+   QS_NODES nodes a unit. Identity on a game with no queued site. */
+#define QS_NODES 65536u
+
+typedef unsigned (__stdcall *site_test_fn)(const void* def, unsigned cell, unsigned zero, void* player);
+typedef int (__stdcall *key_query_fn)(int key);
+
+/* a def's footprint in cells and its yardmap, or 0 when it has none to read */
+static int qs_footprint(const unsigned char* d, const unsigned char** yard, int* fx, int* fz)
+{
+    if (!ptr_sane(d) || d[0x22F]) return 0;
+    *fx   = *(const short*)(d + 0x14A);
+    *fz   = *(const short*)(d + 0x14C);
+    *yard = *(const unsigned char* const*)(d + 0x14E);
+    return *fx > 0 && *fz > 0 && ptr_sane(*yard);
+}
+
+/* The footprint's first cell, 0x4197D0's rounding of a 16.16 centre (an arithmetic shift, as its sar) */
+static int qs_origin(int centre, int foot)
+{
+    return (int)((unsigned)centre - ((unsigned)foot << 19) + 0x80000u) >> 20;
+}
+
+/* 1 when a cell of both rectangles is one a built unit of one would stamp and the other's test refuses */
+static int qs_clash(int ax, int az, int afx, int afz, const unsigned char* ay,
+                    int bx, int bz, int bfx, int bfz, const unsigned char* by)
+{
+    int x0 = ax > bx ? ax : bx, x1 = ax + afx < bx + bfx ? ax + afx : bx + bfx;
+    int z0 = az > bz ? az : bz, z1 = az + afz < bz + bfz ? az + afz : bz + bfz;
+    int x, z;
+    for (z = z0; z < z1; z++)
+        for (x = x0; x < x1; x++) {
+            unsigned char a = ay[(z - az) * afx + (x - ax)];
+            unsigned char b = by[(z - bz) * bfx + (x - bx)];
+            if (((a & 4) && (b & 6)) || ((b & 4) && (a & 6))) return 1;
+        }
+    return 0;
+}
+
+static const unsigned char* qs_desc(unsigned type)
+{
+    const unsigned char* beg = *(const unsigned char* const*)0x00512344;
+    const unsigned char* end = *(const unsigned char* const*)0x00512348;
+    if (!ptr_sane(beg) || !ptr_sane(end) || end <= beg) return NULL;
+    return type < (size_t)(end - beg) / 0x19u ? beg + (size_t)type * 0x19u : NULL;
+}
+
+static int qs_taken(const unsigned char* m, const unsigned char* def, unsigned cell)
+{
+    const unsigned char* yard;
+    int fx, fz, cx, cz, shift;
+    unsigned int first, last, u, defs, ndefs;
+    int nx, nz;
+    if (!qs_footprint(def, &yard, &fx, &fz) || !player_units(m, &first, &last)) return 0;
+    cx = (short)(cell & 0xFFFFu);
+    cz = (short)(cell >> 16);
+    nx = (int)((unsigned)(2 * cx + fx) << 19);          /* the order's position, 0x419670 */
+    nz = (int)((unsigned)(2 * cz + fz) << 19);
+    shift = ((key_query_fn)0x004C1B80)(0xF9) != 0;
+    defs  = *(const unsigned int*)(m + 0x1439B);
+    ndefs = *(const unsigned int*)(m + 0x1438F);
+    for (u = first; u <= last; u += 0x118u) {
+        const unsigned char* unit = (const unsigned char*)(size_t)u;
+        const unsigned char* udef;
+        const unsigned char* node;
+        unsigned int state = *(const unsigned int*)(unit + 0x110);
+        unsigned int n;
+        int ordered;
+        if (!(state & 0x10000000u) || (state & 0x4000u)) continue;
+        udef    = unit_def(m, unit);
+        ordered = (state & 0x10u) && udef && (udef[0x241] & 0x40);
+        node    = *(const unsigned char* const*)(unit + 0x5C);
+        for (n = 0; n < QS_NODES && ptr_sane(node); n++, node = *(const unsigned char* const*)(node + 0x4A)) {
+            const unsigned char* desc = qs_desc(node[4]);
+            unsigned type = *(const unsigned short*)(node + 0x36);
+            int x = *(const int*)(node + 0x22), z = *(const int*)(node + 0x2A);
+            const unsigned char* oyard;
+            int ofx, ofz;
+            if (!desc || !(*(const unsigned int*)(desc + 0x0C) & 1) || !type || x <= 0 || z <= 0)
+                continue;
+            if (ordered && !shift && !(*(const unsigned int*)(node + 0x42) & 4)) continue;
+            if (ordered && shift && ((unsigned)x - (unsigned)nx + 0x100000u) <= 0x200000u &&
+                ((unsigned)z - (unsigned)nz + 0x100000u) <= 0x200000u) continue;
+            if (type >= ndefs || !defs) continue;
+            if (!qs_footprint((const unsigned char*)(size_t)defs + (size_t)type * 0x249u,
+                              &oyard, &ofx, &ofz)) continue;
+            if (qs_clash(cx, cz, fx, fz, yard, qs_origin(x, ofx), qs_origin(z, ofz), ofx, ofz, oyard))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static unsigned __stdcall build_site_test(const void* def, unsigned cell, unsigned zero, void* player)
+{
+    unsigned ok = ((site_test_fn)0x0047D2E0)(def, cell, zero, player);
+    const unsigned char* m = *(const unsigned char* const*)0x00511DE8;
+    if ((ok & 1) && m && qs_taken(m, (const unsigned char*)def, cell)) return 0;
+    return ok;
+}
+
+static int fix_queued_site(void)
+{
+    FIXSITE site = { 0x004198C6, 5, { 0xE8, 0x15, 0x3A, 0x06, 0x00 }, { 0 } };  /* call 0x47D2E0 */
+    if (!fix_match(&site, 1)) return FIX_BYTES;
+    fix_branch(&site, 0xE8, (const void*)build_site_test);
+    return fix_write(&site, 1);
+}
+
 static void patch_loader_defects(void)
 {
     int wind = fix_wind();
@@ -9939,16 +10098,17 @@ static void patch_loader_defects(void)
     int bar  = fix_stockpile_bar();
     int ring = fix_range_circle();
     int plc  = fix_order_anyone();
+    int qsit = fix_queued_site();
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
                "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
                "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "
                "radius 1 (0x438EDE) %s; an order mode disarmed with nobody to order "
-               "(0x49697B 0x499226) %s. Counters: levels seeded at 0x%08X, network levels "
+               "(0x49697B 0x499226) %s; a build site refused over another queued site (0x4198C6) %s. Counters: levels seeded at 0x%08X, network levels "
                "seeded from the engine's session copy at 0x%08X, SetSessionDesc calls made, "
                "made over another GUID and withheld at 0x%08X 0x%08X 0x%08X, network levels "
                "seeded from the map alone at 0x%08X, yardmaps filled past their string at 0x%08X",
                fix_state(wind), fix_state(yard), fix_state(save), fix_state(bar),
-               fix_state(ring), fix_state(plc), (unsigned int)(size_t)&s_windDiag.levels,
+               fix_state(ring), fix_state(plc), fix_state(qsit), (unsigned int)(size_t)&s_windDiag.levels,
                (unsigned int)(size_t)&s_windDiag.fromCopy, (unsigned int)(size_t)&s_windDiag.setCalls,
                (unsigned int)(size_t)&s_windDiag.setDiffered, (unsigned int)(size_t)&s_windDiag.setWithheld,
                (unsigned int)(size_t)&s_windDiag.mapOnly, (unsigned int)(size_t)&s_yardDiag.filled);
