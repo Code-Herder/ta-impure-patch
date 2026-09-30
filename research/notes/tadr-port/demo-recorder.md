@@ -17,8 +17,12 @@ techniques from accepted requirements.
 The shared engineering rules are in [the TADR port overview](overview.md). Recording is a new
 feature of Impure; it does not require running the original recorder alongside Impure.
 
-**No production recorder has landed.** The next work is the three feasibility experiments under
-[Milestones](#milestones-and-delivery-order). Every decision of the
+**No production recorder has landed.** The three feasibility experiments under
+[Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the completeness
+mechanism's first step: every writable static of the four simulation files is declared, and the
+build refuses one that is not; the bytes of the engine's unit and player records that are not
+recorded as values are listed in one exclusion file the build checks; the design lists the state
+that is still outside both. The skirmish slice is next. Every decision of the
 [completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)
 holds the desk research behind this design: how the engine treats remote players, what a rebuild
 must carry, per-player state, and the size estimate. The [packet-era exploration](demo-recorder-exploration.md)
@@ -74,6 +78,9 @@ milestone.
     that is the recording player's view: other players' own indicators were never on that machine.
   - **Effects only the owner's machine produces**, such as the nano spray, are recorded where the
     engine produced them, tied to their unit, and replayed through the same engine function.
+  - **Shown to work at 1,432 units** (measured): a recorded battle replayed with every recorded
+    unit value identical at every checkpoint, walking included, while the engine drew the shots,
+    deaths and wrecks itself ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)). Sounds and the nano spray are not yet checked.
   - **The recording decides when the game ends.** The engine's own victory and defeat tests would
     end a watched game the moment a player's units ran out, so puppet mode switches them off for
     the level, and every unit, the commanders included, comes from the recording.
@@ -95,7 +102,8 @@ milestone.
   order; factory queues; resources (a write made during play does not stick: the 30-tick economy
   pass re-sums storage and clamps current to it, and one measured case is still unexplained);
   transport links; recorded slot indices; and turning a puppet seat into a working AI without
-  reloading the level.
+  reloading the level. A probe outside the applier closed each of these gaps except features and
+  wrecks, a takeover without a reload included ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)).
 - **Snapshots cost the game thread nothing.** The writer thread keeps its own copy of the world,
   updated from the change stream, and writes full snapshots from that copy. This relies on the
   change stream being complete, which playback requires anyway.
@@ -146,9 +154,9 @@ other players; a multiplayer game is rewound from its finished recording.
 - **More than four players.** A stock skirmish seats four players (measured: it refused every
   unit of seats 4–9, [scenario format](../scenario-format.md)); the four is its screen's seat
   count, and the first feasibility experiment seated ten puppet players in a skirmish level
-  (measured, [evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). Forking a
-  larger recording into a single-player game still depends on the second experiment, which turns
-  a puppet seat into a working AI.
+  (measured, [evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). The second
+  experiment turned puppet seats into working AIs without a reload ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)), seats 0–3;
+  a fork of more than four players takes the same path for seats 4–9, not yet run.
 - **Not in the first version:** resuming with more than one human.
 
 ## Recording lifecycle and storage
@@ -173,7 +181,9 @@ other players; a multiplayer game is rewound from its finished recording.
   recorded ten times a second in whole world units with 8-bit headings and interpolated during
   playback; snapshots, which takeover uses, keep full precision. Precision rises only if the
   fidelity check shows visible error. These targets rest on an estimate, not a measurement
-  ([open decisions](#open-decisions-and-evidence-needed)); a real hour-long four-player game with AI and structures is measured before
+  ([open decisions](#open-decisions-and-evidence-needed)). So far an eight-minute four-AI game
+  measured about 5–7 MB per hour, and a 1,432-unit battle would reach 160–640 MB if sustained for
+  an hour ([evidence](demo-recorder-state-evidence.md#4-size-estimate)). A real hour-long four-player game with AI and structures is measured before
   the format is frozen, and if the targets cannot be met the numbers come back for a decision.
 - **Preserve a playable portion after a crash.** The exact durability boundary remains to be
   designed and verified; a process crash and a power loss are separate promises.
@@ -183,7 +193,8 @@ other players; a multiplayer game is rewound from its finished recording.
   for the recorder:** if the writer falls behind, the disk fills or a write fails, recording
   stops at the last complete block, marks itself incomplete and says so in one line. The
   recorder's memory has a fixed ceiling; about 64 MB is the starting point, to be confirmed by
-  measurement.
+  measurement. A probe's recorder measured 0.09–0.12 ms per tick on average and at most 0.87 ms
+  with 1,432 units ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)).
 - **Require matching installed map/mod content.** Record identities and fingerprints, check them
   before playback, and identify missing or mismatched content clearly. Do not bundle a copy of
   the map and mod into every replay.
@@ -208,7 +219,9 @@ other players; a multiplayer game is rewound from its finished recording.
 | Results | Show results and future event markers openly. **No spoiler filtering.** |
 | Automation | Expose replay launch, seeking, takeover and forks through `tacli` for automated verification. |
 
-The seek and takeover times are **unmeasured targets**. If a rebuild at 1,500 units cannot meet
+The seek and takeover times are targets. A rebuild of 1,227–1,432 units in play measured
+11–47 ms, and a seat's takeover about 1 ms ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)); reading and decoding a snapshot,
+which a real seek adds, is not measured yet. If a rebuild at 1,500 units cannot meet
 them, the measurements come back for a decision; the targets are never relaxed silently. The
 snapshot interval is chosen by measurement to meet them.
 
@@ -311,18 +324,18 @@ check that raises false alarms on ordinary changes.
   `main` and before every release tag.
 - **Impure's own state is declared where it is defined** (option B of the
   [completeness design](demo-recorder-completeness.md), chosen 2026-09-29). Engine unit and player records are recorded whole by default, apart from
-  one exclusion file the owner controls, which the build hash-checks. These rules go into the
-  project's CLAUDE.md with the mechanism, in the landing that brings the declarations and the
-  build check. In a source file marked as
-  simulation code, every table, static variable and thread-local slot carries a one-line
+  one exclusion file the owner controls, which the build hash-checks. The rules are in the
+  project's CLAUDE.md since the declarations landed (2026-09-29). In the four source files marked
+  as simulation code, every table, static variable and thread-local slot carries a one-line
   declaration next to its definition: its class (recorded state; content rebuilt from game data
-  and hashed; transient, empty at every snapshot; or private diagnostics) and what a row index
-  means (unit slot, unit type, player, weapon). The declarations land in one linker section that
-  the recorder walks, so a declared table is recorded, checked and compared with no code of its
-  own. Heap tables come from one allocation wrapper. Tables store IDs, not addresses, or declare
-  which bytes are IDs. A build check refuses an undeclared table or variable in a simulation file
-  and names it. State Impure keeps inside engine-allocated objects needs a layout declaration,
-  which only the harness can catch missing.
+  and hashed; transient, carrying nothing from one tick to the next; private diagnostics; or install-time
+  plumbing, checked unchanged during a game) and what a row index means (unit slot, unit type,
+  player, weapon). The declarations land in one linker section that the recorder walks, so a
+  declared table is recorded, checked and compared with no code of its own. Memory, thread-local
+  slots, code changes and switch files come through the registry's wrappers. Tables store IDs,
+  not addresses, or declare which bytes are IDs. A build check refuses an undeclared table or
+  variable in a simulation file and names it. State Impure keeps inside engine-allocated objects
+  needs a layout declaration, which only the harness can catch missing.
 - **Event counts** are taken where events start (creates, deaths, shots, script starts) and where
   their effects are produced (explosions, particles, sounds), and compared by the harness. New
   effects start through an engine entry point, never a direct call to where effects are produced.
@@ -333,8 +346,9 @@ check that raises false alarms on ordinary changes.
   that `nomapweaponalert` keeps quiet for harmless hits (`s_quiet`). The private class is only for
   diagnostics nobody sees.
 - **Extra weapons is always on and fails closed**, like every other simulation feature, so a
-  recording carries no arming dimension and tests run the same simulation as players. Its on/off
-  switch and its silent disarm go; that is a small landing of its own.
+  recording carries no arming dimension and tests run the same simulation as players. Done
+  2026-09-29: the switch and the silent disarm are gone, and the module's 44 sites are rows of the
+  fail-closed table ([extra weapons](../extra-weapons.md), *Layer 1*).
 
 ## Correctness requirement: false construction glow
 
@@ -359,24 +373,23 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 | Milestone | High-level completion criterion | Current state |
 |---|---|---|
 | Product contract | Scope, architecture, viewer features, storage policy and open decisions recorded here | **Decisions recorded, 2026-09-28** |
-| Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **(1) done, 2026-09-29:** a skirmish level holds ten puppet players, 4–9 included, with the viewer on a puppet seat; the units stay inert, and the level ends only by the recording once its victory and defeat tests are switched off ([evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). **(2) and (3) next.** Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
+| Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Done, 2026-09-29.** **(1)** A skirmish level holds ten puppet players, 4–9 included, with the viewer on a puppet seat; the units stay inert, and the level ends only by the recording once its victory and defeat tests are switched off ([evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). **(2)** A rebuild of 1,227–1,432 units in play takes 11–47 ms, paused or not; a puppet seat becomes a working AI in about 1 ms without a reload, the seat made local before its units are re-created; order and factory queues and builds in progress continue ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)). **(3)** A recorded 1,432-unit battle replays with every recorded unit value identical at every checkpoint, walking included; the recorder costs about 0.1 ms per tick; a battle of that size sustained for an hour would exceed the 100 MB budget ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)). Not yet shown: features, wrecks and projectiles in a rebuild; footprints, sight, sounds and the nano spray in playback; a real hour. Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
 | Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Planned** |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
-| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones; not yet built** |
+| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check, and the exclusion file with its check, are built (2026-09-29, [completeness design](demo-recorder-completeness.md#option-b-declare-and-measure)); the harness and self-verification are not |
 
-The puppet-host experiment passed, so the watch path stands. If a takeover cannot build its AI
-seats without reloading the level, the fallback is a takeover behind a loading screen, and that
-comes back for a decision. For a completed milestone, add a short statement of delivered behavior and a link to its
+All three experiments passed: the watch path stands, and a takeover needs no loading screen. The
+disk budget for ten players with 1,500 units is at risk and comes back for a decision once a real
+hour is measured (open decision 2). For a completed milestone, add a short statement of delivered behavior and a link to its
 evidence, and keep remaining gaps visible.
 
 ## Open decisions and evidence needed
 
 1. **The completeness mechanism's open items.** Every decision is taken
-   ([decisions taken](demo-recorder-completeness.md#decisions-taken)); three
-   [open items](demo-recorder-completeness.md#open-items) remain for the landings that build it: a
-   home for install-time plumbing, whether a recorded activation plays a second sound, and applying
-   a recorded yard change.
+   ([decisions taken](demo-recorder-completeness.md#decisions-taken)); two
+   [open items](demo-recorder-completeness.md#open-items) remain for the skirmish slice: whether a
+   recorded activation plays a second sound, and applying a recorded yard change.
 2. **Measured size.** The disk budget rests on an estimate built from measured per-unit costs:
    about 2.4–3.3 compressed bytes per changed unit per sample, about 10–11 bytes per unit in a
    full-precision snapshot. Its largest unknown is the fraction of units that change per sample over a real
@@ -387,7 +400,14 @@ evidence, and keep remaining gaps visible.
    1v1 target has only a static-battle estimate, about 3.5–6.5 MB per hour (up to 9.4 with the
    explored map stored), and a moving 1v1 is not estimated. Recording at 5 Hz
    instead of 10 Hz saves only about 38 % of the unit-state stream, about a fifth of the whole
-   estimate, so the rate is chosen for smoothness.
+   estimate, so the rate is chosen for smoothness. **Measured since** (a probe's recordings,
+   re-encoded within 0.25–2 world units, no general compression; [evidence](demo-recorder-state-evidence.md#4-size-estimate)):
+   an eight-minute game of four AIs with up to 92 units comes to about 5–6 MB per hour (6–7 MB
+   with each unit's speed recorded). A 1,432-unit battle, every unit fighting, would come to
+   160–390 MB per hour sustained, or 500–640 MB if each unit's speed is recorded as it changes.
+   So the ten-player budget holds only if
+   an average hour at that size is far quieter than a battle. Recording the walk class instead of
+   the speed is the obvious saving, not yet measured.
 3. **Snapshot interval**, chosen by measurement against the seek target and the disk budget.
 4. **Playback speed presets.**
 5. **Crash durability boundary**, and its wording for a process crash versus a power loss.

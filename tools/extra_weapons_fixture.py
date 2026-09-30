@@ -18,8 +18,8 @@ content that exercises every slot the engine module can drive.
     tools/extra_weapons_fixture.py            # writes scenarios/content/wpn-test.ufo
     TA_GAMEDIR=/path/to/steam/TA tools/extra_weapons_fixture.py
 
-Then `tacli arm <inst> weapons.on`, copy the .ufo into the instance's gamedir
-(a symlink will do) and `tacli scenario load <inst> wpn-llt10 --restart`.
+Then copy the .ufo into the instance's gamedir (a symlink will do) and
+`tacli scenario load <inst> wpn-llt10 --restart`.
 """
 
 import os

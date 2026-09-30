@@ -2334,10 +2334,9 @@ def cmd_peek(args):
 def cmd_weapons(args):
     """Dump every weapon slot of the requested units (tagpu_weapons.trigger).
 
-    The A/B oracle for the extra-weapons module (research/notes/extra-weapons.md):
-    the fork reads the engine's own slot records — the three inline ones and, when
-    the module is armed and the type has more, its side slots — and writes them
-    as JSON. Works armed or not, so an unarmed instance is the control.
+    The oracle of the extra-weapons module (research/notes/extra-weapons.md): the
+    fork reads the engine's own slot records — the three inline ones and, when the
+    type has more, the module's side slots — and writes them as JSON.
     """
     inst = Instance(args.name)
     if not inst.running():
@@ -2368,7 +2367,7 @@ def cmd_weapons(args):
                     if w is not None)
     # AimFromWeaponN,QueryWeaponN per extended slot, as the type caches them (-1 = unasked).
     pieces = " ".join(f"{t}({pc})" for t, (_, _, _, pc) in sorted(types.items()) if pc)
-    head = (f"frame={data.get('frame')} armed={data.get('armed')} cap={data.get('cap')} "
+    head = (f"frame={data.get('frame')} cap={data.get('cap')} "
             f"units={len(data.get('units', []))}\nhits: {hits}\nfires by slot: {fires or '-'}"
             + (f"\ntype CRCs: {crcs}" if crcs else "")
             + (f"\npieces (aimfrom,query from slot 3): {pieces}" if pieces else ""))

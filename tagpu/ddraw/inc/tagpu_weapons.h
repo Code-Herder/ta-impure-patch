@@ -11,13 +11,15 @@
    live in a side table owned by this DLL, keyed by the unit's array index.
 
    THE FIRST MODULE THAT CHANGES THE SIMULATION. The renderer's rule ("hooks
-   read-only over sim") does not apply here, so the module lives behind its own
-   gate and never shares state with the render passes.
+   read-only over sim") does not apply here, so the module never shares state
+   with the render passes.
 
-   OFF BY DEFAULT. Nothing is patched unless `tagpu_weapons.on` exists next to
-   the exe at DLL attach. Arming is all-or-nothing: every site's bytes are
-   verified before the first write, and one mismatch leaves the whole image
-   untouched (`weapons: disarmed (...)` in tagpu.log).
+   ALWAYS ON, AND FAIL-CLOSED LIKE EVERY OTHER SIMULATION CHANGE. Its sites are
+   sites of the fail-closed table (tagpu_patches.c, fix_extra_weapons): compared
+   with the exe file together with the rest of the table, written with it or not
+   at all, and re-read at the first DirectDraw call; a site that differs ends the
+   launch with the table's report. There is no switch, so every build plays the
+   same simulation and a recording carries no arming state.
 
    Stock units run stock code. Every replaced engine function is entered through
    a C wrapper that trampolines to the untouched original for units whose type
@@ -39,19 +41,37 @@
    in the oracle: `ground`, `cob_full` (must stay 0) and `hold_fire`. Slots 0-2
    keep the engine's own behaviour untouched in both cases.
 
-   The read-only oracle works armed or not: drop `tagpu_weapons.trigger` next to
-   the exe (one engine unit index per line, or `all`) and the module writes
-   `tagpu_weapons.json` — every slot of every requested unit (state byte, weapon,
-   target, reload, heading, pitch, stock, aim result, COB thread) plus the arming
-   state and the C-path hit counters. `tacli weapons <name>` is the CLI half. */
+   The read-only oracle: drop `tagpu_weapons.trigger` next to the exe (one engine
+   unit index per line, or `all`) and the module writes `tagpu_weapons.json` —
+   every slot of every requested unit (state byte, weapon, target, reload,
+   heading, pitch, stock, aim result, COB thread) plus the C-path hit counters.
+   `tacli weapons <name>` is the CLI half. */
 
-void tagpu_weapons_init(void);                 /* DllMain: arm if the flag file exists */
+/* One site of the module as the fail-closed table takes it: the retail bytes
+   the table compares, and the bytes it writes in their place. */
+#define TAGPU_WPN_SITES     44    /* 19 entry hooks, 21 splices, 4 byte patches */
+#define TAGPU_WPN_SITE_MAX  18    /* the longest site: the splice at 0x49DCA4   */
+typedef struct TagpuWpnSite {
+    unsigned int         va;
+    int                  n;
+    const unsigned char* stock;
+    unsigned char        ours[TAGPU_WPN_SITE_MAX];
+    const char*          name;
+} TagpuWpnSite;
+
+/* DllMain, from fix_extra_weapons, before the table is compared: the module's
+   memory, the script names, the two record observers (0x42D2E0, 0x42BF40) and
+   every trampoline and stub, then each of its sites into out[0..TAGPU_WPN_SITES).
+   Writes none of those sites itself. Returns TAGPU_WPN_SITES, or one of the two
+   failures below with the reason logged; on either, the table refuses. */
+#define TAGPU_WPN_OWN        (-1) /* its memory, a stub, an observer's landing or its site list: our side */
+#define TAGPU_WPN_OBSERVERS  (-2) /* an entry the record observers need holds other bytes: the exe's side */
+int  tagpu_weapons_sites(TagpuWpnSite* out);
+
 void tagpu_weapons_frame(unsigned int frame);  /* overlay: oracle trigger, every 5th frame */
-int  tagpu_weapons_armed(void);                /* the splices are installed, 0x49D364's with them */
 
 /* GAME thread, for the weapon keys' detour on 0x49ABB0 (tagpu_patches.c):
-   the can-engage verdict of slot idx >= 3. Called only while the module is
-   armed. */
+   the can-engage verdict of slot idx >= 3. */
 int   tagpu_weapons_check_slot(char* unit, char* target, unsigned idx);
 /* A slot's weapon pointer for the 0x0D wire check and the weapon keys, or NULL
    when the slot is past the unit's own count. No clamp and no engine write;

@@ -296,10 +296,10 @@ identity for untagged weapons.
 #### Overlap
 
 `my_CheckUnitWeapon` (slots ≥ 3) re-implements `0x49ABB0` in C, so the filter must run there too.
-When the module is armed it owns `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TADR's inner site
-`0x49AD07` would never be reached for slots ≥ 3. **As built (C2):** the weapon keys own the entry
-in both builds, and the extra-weapons module no longer hooks it: the keys' detour asks that
-module's C verdict for a slot past 2 while it is armed.
+When this was read the module owned `0x49ABB0`'s entry (7 bytes, `X_CHECK`), and TADR's inner
+site `0x49AD07` would never be reached for slots ≥ 3. **As built (C2):** the weapon keys own the
+entry in both builds, and the extra-weapons module does not hook it: the keys' detour asks that
+module's C verdict for a slot past 2.
 
 #### Proposed our-design
 
@@ -630,8 +630,10 @@ attacker-less weapon-kind hit is a meteor, a death explosion or a fire. MEASURED
 
 **The detonation.** `0x499EB0(proj, unit)` plays the explosion and sound, then damages only when the
 projectile's owner record `main+0x1B63 + 331·[proj+0x66]` is empty or not a remote player
-(`[+0x73] ≠ 3`, `0x49A01B..0x49A047`). For a meteor that record is index 10, `main+0x2851`, the
-331 bytes after `Players[10]` (INF what they hold at run time; see *not established*). Then an area
+(`[+0x73] ≠ 3`, `0x49A01B..0x49A047`). For a meteor that record is index 10, `main+0x2851`: the
+eleventh player record, which the engine builds and zeroes with the ten seats at every level and
+never saves (engine map, *The unit and player records, byte by byte*; what it holds in play is
+under *not established*). Then an area
 of effect above 16, or no direct-hit unit, goes to area damage `0x49A120` (`0x49A0A9`); otherwise the
 direct hit `0x499CD0(proj, unit, 1.0)` and the shooter's bookkeeping `0x406F50`, a no-op with no
 attacker (`0x406F54..0x406F59`).
@@ -935,7 +937,7 @@ computes identical shared state. **Rule 7:** stock content carries no key, so no
   15 001-slot design point.
 - **Extra weapons:** slots 3..N live in the module's rows (`g_side`, `slot_ptr`), and the module
   sets their counter itself with the same formula (`tagpu_weapons.c`, the port of the fire path).
-  The publisher asks the module for them when it is armed.
+  The publisher asks the module for them.
 - **The GDI lane** (`renderer=gdi`) is the engine's own drawing: no reload bar there (section B's
   rule for that lane).
 
@@ -1046,7 +1048,10 @@ section as its evidence.
 ### What this part did not establish
 
 - **What `main+0x2851` holds in play** (the owner record of index 10), and so which peers compute a
-  meteor's damage. Settle: peek it in a single-player and a two-peer game with a meteor map.
+  meteor's damage. It is the eleventh player record: the constructor loop builds it and the
+  players reset `0x4644D0` zeroes it with the others (DIS), so its `+0x73` starts every level at 0,
+  and no writer of its `+0x73` was traced. Settle: peek it in a single-player and a two-peer game
+  with a meteor map.
 - **Whether a meteor hit arrives once or once per peer** at the victim's owner (above).
 - **That nothing in the simulation reads the notification queue or its next-time table.** Settle:
   a reference scan of `[0x51E68C]` and `0x5086E0..0x5086FF`.
@@ -1302,7 +1307,7 @@ is needed for keys that name another file's content** (§3).
 
 - `tagpu_weapons.c` already reads FBI keys: at the game-start loader, `cb_loader` at `0x42CEF2`
   (weapon4..N), and at menu time, `cb_crc_weapons` at `0x42B004`, which folds them into
-  `CRC_weapons` **only while the module is armed**.
+  `CRC_weapons` for a type that declares any.
 - It keys `g_def[]` by def index, and `def_rec()` answers NULL when the stored def pointer differs.
   The pointer alone cannot tell two games apart (the def array can come back at the same address, and
   the loader skips a slot with no FBI), so the records are also emptied at the unit-data load's
@@ -1313,8 +1318,8 @@ is needed for keys that name another file's content** (§3).
 
 #### Proposed our-design
 
-- **One always-on module owns the unit keys** (not the extra-weapons module, which is armed per
-  game).
+- **One always-on module owns the unit keys** (not the extra-weapons module, which was armed
+  per game when this was designed and has been always on too since 2026-09-29).
 - **Reader: `0x42BF97`,** byte-checked and failing closed. It is a different site from
   `tagpu_weapons`' `0x42CEF2`, so no bytes are shared.
 - **Records:** for every def the loader visits, write a fixed-size POD record. Write one **whether
@@ -1584,7 +1589,7 @@ desync. Fail closed.
 
 #### Overlap
 
-- `tagpu_weapons`' `cb_crc_weapons` folds at `0x42B004` when armed. The fold proposed here goes to
+- `tagpu_weapons`' `cb_crc_weapons` folds at `0x42B004`. The fold proposed here goes to
   `0x42B019` (§1).
 - The destructor is B4's territory (the incarnation check on `0x0C`) and B3's (the bound on its
   indices). Our reads come after both.

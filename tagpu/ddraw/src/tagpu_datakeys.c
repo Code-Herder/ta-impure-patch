@@ -13,6 +13,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_limits.h"
 #include "tagpu_log.h"
+#include "tagpu_simreg.h"
 #include "tagpu_model3do.h"
 #include "tagpu_packet_pub.h"
 
@@ -79,12 +80,34 @@ typedef struct DkUnit {
                                loaded weapon (stock's for that death)         */
 } DkUnit;
 
+/* A row is FBI content. `def` is the address the row was written for, `serial` a number this
+   process draws at every write (the ghost masks' cache key), `pp` the parsed PreviewPieces=. */
+static const SimField unit_layout[] = {
+    SIM_FIELD(DkUnit, def, SIMF_ADDR, SIM_ID_UNIT_TYPE),
+    SIM_FIELD(DkUnit, serial, SIMF_LOCAL, SIM_ID_NONE),
+    SIM_FIELD(DkUnit, pp, SIMF_OWNED, SIM_ID_NONE),
+    SIM_FIELD_END
+};
 static DkUnit   s_unit[TAGPU_LIM_TYPES];
+SIM_ROWS(s_unit, SIM_CONTENT, SIM_ID_UNIT_TYPE, unit_layout);
 static unsigned s_serial;
+SIM_VAR_L(s_serial, SIM_STATE, tagpu_sim_local);
+
+/* the module's diagnostics: event counts and log-once flags, which nothing in the simulation
+   reads */
+static struct {
+    int      cobFullLogged, defOutsideLogged;
+    unsigned wkeyed, wread;
+    unsigned evAir, evUnder, evSurface, evOrder, evSteer, evSuppress, evDrop;
+    unsigned evSilenced, evQuietHit, evBlink, evNoRadar;
+    unsigned evTaken, evDealt, evReload, evLead, evAim, evCapture, evReclaim, evReclaimFit, evLabel;
+    unsigned txFolded;
+} s_diag;
+SIM_VAR(s_diag, SIM_PRIVATE);
 
 static void unit_clear(DkUnit* r)
 {
-    free(r->pp);
+    SIM_FREE_OWNED(s_unit, r->pp);
     r->pp = NULL; r->pp_n = 0;
     r->vthr_n = 0; r->vrate_on = 0; r->vrate = 0;
     r->txw[0] = r->txw[1] = 0;
@@ -109,7 +132,10 @@ static void unit_clear(DkUnit* r)
 #define DK_COB_SLOTS (TAGPU_LIM_TYPES * 2)
 typedef char dk_cob_slots_pow2[(DK_COB_SLOTS & (DK_COB_SLOTS - 1)) == 0 ? 1 : -1];
 typedef struct DkCob { const char* cob; unsigned size; } DkCob;
+/* Content, placed by a hash of the script's address: the addresses are this process's. */
+static const SimField cob_layout[] = { SIM_FIELD(DkCob, cob, SIMF_ADDR, SIM_ID_NONE), SIM_FIELD_END };
 static DkCob s_cob[DK_COB_SLOTS];
+SIM_ROWS(s_cob, SIM_CONTENT, SIM_ID_NONE, cob_layout);
 
 static unsigned cob_hash(const char* cob)
 {
@@ -124,9 +150,9 @@ static void cob_put(const char* cob, unsigned size)
         DkCob* e = &s_cob[(h + i) & (DK_COB_SLOTS - 1)];
         if (!e->cob || e->cob == cob) { e->cob = cob; e->size = size; return; }
     }
-    {
-        static int once;
-        if (!once) { once = 1; dlog("COB lengths: the table is full; a script loaded now gets no mask (logged once)"); }
+    if (!s_diag.cobFullLogged) {
+        s_diag.cobFullLogged = 1;
+        dlog("COB lengths: the table is full; a script loaded now gets no mask (logged once)");
     }
 }
 
@@ -192,8 +218,10 @@ static int __cdecl fbi_begin(void* esp)
     unsigned slot;
     DkUnit* r;
     if (!def_slot(def, &slot)) {
-        static int once;
-        if (!once) { once = 1; dlog("FBI loader: a def outside the def array's slots, skipped (logged once)"); }
+        if (!s_diag.defOutsideLogged) {
+            s_diag.defOutsideLogged = 1;
+            dlog("FBI loader: a def outside the def array's slots, skipped (logged once)");
+        }
         return 0;
     }
     r = &s_unit[slot];
@@ -416,7 +444,7 @@ static void __cdecl fbi_at_read(const unsigned int* regs)
         return;
     }
     if (n == 0) { dlog("%s: PreviewPieces= names no piece; ignored", nm); return; }
-    r->pp = (char*)malloc(len);
+    r->pp = (char*)SIM_ALLOC_OWNED(s_unit, len);
     if (!r->pp) { dlog("%s: PreviewPieces= could not be stored (out of memory); ignored", nm); return; }
     memcpy(r->pp, names, len);
     r->pp_n = (unsigned)n;
@@ -439,7 +467,7 @@ static int fbi_install(void)
     memcpy(p, FBI_STOLEN, sizeof FBI_STOLEN); p += sizeof FBI_STOLEN;
     *p++ = 0xE9; tagpu_detour_rel(p, VA_FBI_READ + (unsigned)sizeof FBI_STOLEN); p += 4;
     if (!tagpu_detour_land(VA_FBI_READ, s, (int)sizeof FBI_STOLEN)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return 0;
     }
     return 1;
@@ -460,6 +488,7 @@ static int observe(unsigned va, const unsigned char* stolen, int n, tagpu_detour
    would play stock veterancy for keyed types. Asked again, it answers what
    the first call did. */
 static int s_unitsState;                    /* 0 not tried, 1 armed, -1 not */
+SIM_VAR(s_unitsState, SIM_INSTALL);
 
 int tagpu_datakeys_units_install(void)
 {
@@ -694,6 +723,8 @@ static int create_mask(const char* root, const char* cob, unsigned size,
 {
     static unsigned    hid[DK_MAX_COBPIECES / 32];
     static const char* prim[TAGPU_PBMAXPIECE];
+    SIM_VAR(hid, SIM_TRANSIENT);
+    SIM_VAR(prim, SIM_TRANSIENT);
     const char*        hnode[TAGPU_PBMAXPIECE];
     const char* const* pnames;
     int ncob, nprim, k, g, nh = 0, upto = -1;
@@ -751,12 +782,23 @@ typedef struct DkGhost {
     uint32_t       bits[8];
 } DkGhost;
 
+/* A memo of content, keyed by this process's level generation and def serial, which compares
+   the model root and the script by address and never follows them. */
+static const SimField ghost_layout[] = {
+    SIM_FIELD(DkGhost, gen, SIMF_LOCAL, SIM_ID_NONE),
+    SIM_FIELD(DkGhost, serial, SIMF_LOCAL, SIM_ID_NONE),
+    SIM_FIELD(DkGhost, root, SIMF_ADDR, SIM_ID_NONE),
+    SIM_FIELD(DkGhost, cob, SIMF_ADDR, SIM_ID_NONE),
+    SIM_FIELD_END
+};
 static DkGhost s_ghost[TAGPU_LIM_TYPES];
+SIM_ROWS(s_ghost, SIM_STATE, SIM_ID_UNIT_TYPE, ghost_layout);
 
 static void ghost_compute(const char* def, const char* root, const char* cob, unsigned cobsz,
                           const DkUnit* rec, DkGhost* g)
 {
     static const char* walk[TAGPU_PBMAXPIECE];
+    SIM_VAR(walk, SIM_TRANSIENT);
     int np, g_i, nhid = 0, r;
     memset(g->bits, 0, sizeof g->bits);
     g->any = 0; g->np = 0;
@@ -864,7 +906,7 @@ int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out)
    the ordering every game-thread read of the weapon array itself rests on.
    The render thread never reads it. */
 static unsigned char s_wkey[TAGPU_LIM_WEAPONS];
-static unsigned      s_wkeyed, s_wread;
+SIM_ROWS(s_wkey, SIM_CONTENT, SIM_ID_WEAPON, NULL);
 
 typedef int (__thiscall *PFN_TdfGetInt)(void* sec, const char* key, int dflt);
 #define E_TdfGetInt   ((PFN_TdfGetInt)0x004C46C0u)   /* atoi of the value, `ret 8` */
@@ -887,10 +929,10 @@ static void quiet_clear(void);
 
 void __cdecl tagpu_datakeys_weapons_clear(void)
 {
-    if (s_wkeyed) dlog("weapon keys: emptied; the load before read %u weapon(s), %u with a key",
-                       s_wread, s_wkeyed);
+    if (s_diag.wkeyed) dlog("weapon keys: emptied; the load before read %u weapon(s), %u with a key",
+                       s_diag.wread, s_diag.wkeyed);
     memset(s_wkey, 0, sizeof s_wkey);
-    s_wkeyed = s_wread = 0;
+    s_diag.wkeyed = s_diag.wread = 0;
     quiet_clear();
 }
 
@@ -905,7 +947,7 @@ void tagpu_datakeys_weapon_read(int id, void* sec, const char* name)
 {
     unsigned k = 0;
     if (id < 0 || id >= TAGPU_LIM_WEAPONS || !sec) return;
-    s_wread++;
+    s_diag.wread++;
     if (tdf_flag(sec, "nottoair"))        k |= TAGPU_WK_NOTTOAIR;
     if (tdf_flag(sec, "nottounderwater")) k |= TAGPU_WK_NOTTOUNDERWATER;
     if (tdf_flag(sec, "surfacefire"))     k |= TAGPU_WK_SURFACEFIRE;
@@ -914,7 +956,7 @@ void tagpu_datakeys_weapon_read(int id, void* sec, const char* name)
     if (tdf_flag(sec, "nomapweaponalert")) k |= TAGPU_WK_NOMAPALERT;
     s_wkey[id] = (unsigned char)k;
     if (!k) return;
-    s_wkeyed++;
+    s_diag.wkeyed++;
     dlog("weapon keys: %.32s (ID %d):%s%s%s%s%s%s", name, id,
          k & TAGPU_WK_NOTTOAIR ? " nottoair" : "",
          k & TAGPU_WK_NOTTOUNDERWATER ? " nottounderwater" : "",
@@ -935,7 +977,6 @@ static void wk_event(unsigned* n, const char* what)
     unsigned c = ++*n;
     if ((c & (c - 1)) == 0) dlog("weapon keys: %s (%u so far)", what, c);
 }
-static unsigned s_evAir, s_evUnder, s_evSurface, s_evOrder, s_evSteer, s_evSuppress, s_evDrop;
 
 static unsigned sea_level(void)
 {
@@ -978,15 +1019,15 @@ int tagpu_datakeys_engage(char* u, char* t, const char* w, int v)
     air = flying(t);
     if (!v && (k & TAGPU_WK_SURFACEFIRE) && (wflags(w) & WF_WATER) && !air) {
         v = in_range(u, t, w);
-        if (v) wk_event(&s_evSurface, "surfacefire engaged a surface target");
+        if (v) wk_event(&s_diag.evSurface, "surfacefire engaged a surface target");
     }
     if (v && (k & TAGPU_WK_NOTTOAIR) && air) {
         v = 0;
-        wk_event(&s_evAir, "nottoair refused a flying target");
+        wk_event(&s_diag.evAir, "nottoair refused a flying target");
     }
     if (v && (k & TAGPU_WK_NOTTOUNDERWATER) && unit_top(t) <= (int)sea_level()) {
         v = 0;
-        wk_event(&s_evUnder, "nottounderwater refused a submerged target");
+        wk_event(&s_diag.evUnder, "nottounderwater refused a submerged target");
     }
     return v;
 }
@@ -1011,7 +1052,7 @@ int __stdcall tagpu_datakeys_order(char* s, char* t)
     if (!(k0 & (TAGPU_WK_NOTTOAIR | TAGPU_WK_NOTTOUNDERWATER | TAGPU_WK_SURFACEFIRE)) &&
         !(k1 & TAGPU_WK_NOTTOUNDERWATER))
         return 0;
-    wk_event(&s_evOrder, "an order onto a unit decided with a key");
+    wk_event(&s_diag.evOrder, "an order onto a unit decided with a key");
     air = flying(t);
     f0 = wflags(w0);
     if (!air && (f0 & WF_TOAIR)) return 1;
@@ -1034,7 +1075,7 @@ int __stdcall tagpu_datakeys_order(char* s, char* t)
 int __stdcall tagpu_datakeys_steer(const char* w)
 {
     if (!(tagpu_datakeys_wkey(w) & TAGPU_WK_SURFACEFIRE)) return 0;
-    wk_event(&s_evSteer, "a surfacefire projectile steered above the sea");
+    wk_event(&s_diag.evSteer, "a surfacefire projectile steered above the sea");
     return 1;
 }
 
@@ -1058,7 +1099,7 @@ int tagpu_datakeys_fire_gate(char* u, int idx, const char* w, const void* slot)
         if (h != -1) {
             int water = h <= (int)sea_level();
             if (water ? (k & TAGPU_WK_NOTOVERWATER) : (k & TAGPU_WK_NOTOVERLAND)) {
-                wk_event(&s_evSuppress, "a slot held its fire over the terrain its key names");
+                wk_event(&s_diag.evSuppress, "a slot held its fire over the terrain its key names");
                 return 1;
             }
         }
@@ -1073,7 +1114,7 @@ int tagpu_datakeys_fire_gate(char* u, int idx, const char* w, const void* slot)
             tgt <= (unsigned)(last - first) / UNIT_STRIDE &&
             flying(first + (size_t)tgt * UNIT_STRIDE)) {
             E_ClearTarget(u, idx);
-            wk_event(&s_evDrop, "nottoair dropped a held target that is flying");
+            wk_event(&s_diag.evDrop, "nottoair dropped a held target that is flying");
             return 2;
         }
     }
@@ -1132,9 +1173,13 @@ static int weather_weapon(const char* w)
    0x489BFA and 0x489C71, which read a unit and count events and neither make
    a hit nor touch s_armed), and weather_send zeroes it again on return. */
 static int s_armed;
+SIM_VAR(s_armed, SIM_TRANSIENT);
 static const unsigned char* s_localRec;   /* the record 0x489C89 is applying, or NULL */
+SIM_VAR(s_localRec, SIM_TRANSIENT);
 static int s_localWeather;                /* ... and its answer */
+SIM_VAR(s_localWeather, SIM_TRANSIENT);
 static int s_localOn;                     /* both local sites landed */
+SIM_VAR(s_localOn, SIM_INSTALL);
 
 static int harmless_weather(const unsigned char* rec)
 {
@@ -1179,7 +1224,6 @@ static int __stdcall local_apply(const unsigned char* rec)
     return r;
 }
 
-static unsigned s_evSilenced, s_evQuietHit, s_evBlink, s_evNoRadar;
 
 /* --- the notification ------------------------------------------------------
    0x406F80(attacker, victim, amount), `ret 0xC`, has one caller, 0x489DA2, and
@@ -1195,7 +1239,9 @@ typedef int (__stdcall *PFN_Notify)(char* unit, int kind, int arg);
 #define E_Notify ((PFN_Notify)0x0047F850u)
 
 static int s_hitQuiet;
+SIM_VAR(s_hitQuiet, SIM_TRANSIENT);
 static int s_alertOn;     /* both sites landed; set at attach, before the engine runs */
+SIM_VAR(s_alertOn, SIM_INSTALL);
 
 static int __stdcall hit_frame(const unsigned char* rec, char* attacker, char* victim, int amount)
 {
@@ -1209,7 +1255,7 @@ static int __stdcall hit_frame(const unsigned char* rec, char* attacker, char* v
 int __stdcall tagpu_datakeys_alert(char* unit, int kind, int arg)
 {
     if (kind == 2 && s_alertOn && s_hitQuiet) {
-        wk_event(&s_evSilenced, "nomapweaponalert silenced an under-attack notification");
+        wk_event(&s_diag.evSilenced, "nomapweaponalert silenced an under-attack notification");
         return 0;
     }
     return E_Notify(unit, kind, arg);
@@ -1235,6 +1281,7 @@ int __stdcall tagpu_datakeys_alert(char* unit, int kind, int arg)
    by the table. */
 #define DK_QUIET_SLOTS (10 * TAGPU_LIM_UNITS + 1)
 static unsigned char s_quiet[DK_QUIET_SLOTS];
+SIM_ROWS(s_quiet, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
 
 static void quiet_clear(void) { memset(s_quiet, 0, sizeof s_quiet); }
 
@@ -1266,7 +1313,7 @@ static char* __stdcall hit_mark(const unsigned char* rec, char* victim)
         if (loud > HIT_FA) loud = HIT_FA;
         if (harmless_weather(rec)) {
             s_quiet[s] = (unsigned char)(HIT_FA - loud);
-            wk_event(&s_evQuietHit, "a harmless weather hit applied (nomapweaponalert)");
+            wk_event(&s_diag.evQuietHit, "a harmless weather hit applied (nomapweaponalert)");
         } else {
             s_quiet[s] = 0;
         }
@@ -1281,7 +1328,7 @@ static int __stdcall blink_quiet(const char* u)
     if (s < 0) return 0;
     fa = *(const unsigned char*)(u + 0xFA);
     if (!fa || fa > s_quiet[s]) return 0;
-    wk_event(&s_evBlink, "a minimap dot held still after a harmless weather hit");
+    wk_event(&s_diag.evBlink, "a minimap dot held still after a harmless weather hit");
     return 1;
 }
 
@@ -1333,7 +1380,7 @@ static int __cdecl weapon_closed(void* esp)
     }
     if (!(f & WF_NORADAR)) {
         *(unsigned*)(w + 0x111) = f | WF_NORADAR;
-        wk_event(&s_evNoRadar, "a nomapweaponalert meteor weapon draws no minimap dot");
+        wk_event(&s_diag.evNoRadar, "a nomapweaponalert meteor weapon draws no minimap dot");
     }
     return 0;
 }
@@ -1404,7 +1451,7 @@ static int blink_install(void)
     *j2 = (unsigned char)(p - (j2 + 1));
     *p++ = 0xE9; tagpu_detour_rel(p, VA_BLINK_BACK);
     if (!tagpu_detour_land(VA_BLINK, s, (int)sizeof BLINK_WAS)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return 0;
     }
     return 1;
@@ -1427,7 +1474,7 @@ static int save_install(void)
     unsigned d = 0xCB + 12;                         /* record +0xB3, under three pushes */
     if (!site_is(VA_SAVE_WORD, SAVE_WORD_WAS, 8) || !site_is(VA_REST_FA, REST_FA_WAS, 6)) return 0;
     if (!(r = tagpu_detour_stub())) return 0;
-    if (!(s = tagpu_detour_stub())) { VirtualFree(r, 0, MEM_RELEASE); return 0; }
+    if (!(s = tagpu_detour_stub())) { tagpu_detour_stub_free(r); return 0; }
     p = r;
     memcpy(p, REST_FA_WAS, sizeof REST_FA_WAS); p += sizeof REST_FA_WAS; /* mov [esi+0xFA],dl */
     *p++ = 0x50; *p++ = 0x51; *p++ = 0x52;          /* push eax, ecx, edx   */
@@ -1446,12 +1493,12 @@ static int save_install(void)
     memcpy(p, SAVE_WORD_WAS, sizeof SAVE_WORD_WAS); p += sizeof SAVE_WORD_WAS; /* mov [esp+0xCA],ax */
     *p++ = 0xE9; tagpu_detour_rel(p, VA_SAVE_WORD_BACK);
     if (!tagpu_detour_land(VA_REST_FA, r, (int)sizeof REST_FA_WAS)) {
-        VirtualFree(r, 0, MEM_RELEASE);
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(r);
+        tagpu_detour_stub_free(s);
         return 0;
     }
     if (!tagpu_detour_land(VA_SAVE_WORD, s, (int)sizeof SAVE_WORD_WAS)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return 0;
     }
     return 1;
@@ -1476,7 +1523,7 @@ static int local_install(void)
     *p++ = 0x50;                                    /* push eax             */
     *p++ = 0xE9; tagpu_detour_rel(p, (unsigned)(size_t)weather_send);
     if (!call_to(VA_SEND_CALL, s)) {
-        VirtualFree(s, 0, MEM_RELEASE);
+        tagpu_detour_stub_free(s);
         return 0;
     }
     if (!call_to(VA_APPLY_CALL, (const void*)local_apply)) return 0;
@@ -1592,8 +1639,6 @@ static void vet_event(unsigned* n, const char* what)
     unsigned c = ++*n;
     if ((c & (c - 1)) == 0) dlog("veterancy: %s (%u so far)", what, c);
 }
-static unsigned s_evTaken, s_evDealt, s_evReload, s_evLead, s_evAim, s_evCapture, s_evReclaim,
-                s_evReclaimFit, s_evLabel;
 
 static const DkUnit* vet_keyed(const char* u)
 {
@@ -1617,7 +1662,7 @@ int __stdcall tagpu_datakeys_vet_taken(const char* u)
 {
     const DkUnit* r = vet_keyed(u);
     if (!r) return -1;
-    vet_event(&s_evTaken, "a keyed type's level set the damage it took");
+    vet_event(&s_diag.evTaken, "a keyed type's level set the damage it took");
     return (int)taken_level(r, kills_of(u));
 }
 
@@ -1628,7 +1673,7 @@ int __stdcall tagpu_datakeys_vet_dealt(const char* u)
 {
     const DkUnit* r = vet_keyed(u);
     if (!r) return -1;
-    vet_event(&s_evDealt, "a keyed type's level set the damage it dealt");
+    vet_event(&s_diag.evDealt, "a keyed type's level set the damage it dealt");
     return (int)vet_level(r, kills_of(u));
 }
 
@@ -1639,7 +1684,7 @@ int __stdcall tagpu_datakeys_vet_reload(const char* u)
     unsigned l;
     if (!r) return -1;
     l = vet_level(r, kills_of(u));
-    vet_event(&s_evReload, "a keyed type's level set a reload");
+    vet_event(&s_diag.evReload, "a keyed type's level set a reload");
     return (int)(l > DK_VET_RELOAD ? DK_VET_RELOAD : l);
 }
 
@@ -1656,7 +1701,7 @@ int __stdcall tagpu_datakeys_vet_lead(const char* u)
 {
     const DkUnit* r = vet_keyed(u);
     if (!r) return -1;
-    vet_event(&s_evLead, "a keyed type's first threshold decided its target lead");
+    vet_event(&s_diag.evLead, "a keyed type's first threshold decided its target lead");
     return kills_of(u) > r->vthr[0] ? 1 : 0;
 }
 
@@ -1668,7 +1713,7 @@ int __stdcall tagpu_datakeys_vet_accuracy(const char* u)
 {
     const DkUnit* r = vet_row(u);
     if (!r || !r->vrate_on) return -1;
-    vet_event(&s_evAim, "a keyed type's rate set its spread");
+    vet_event(&s_diag.evAim, "a keyed type's rate set its spread");
     return r->vrate ? (int)(kills_of(u) / r->vrate) : 0;
 }
 
@@ -1678,7 +1723,7 @@ int __stdcall tagpu_datakeys_vet_capture_cost(const char* u)
 {
     const DkUnit* r = vet_keyed(u);
     if (!r) return -1;
-    vet_event(&s_evCapture, "a keyed target's level set a capture's cost");
+    vet_event(&s_diag.evCapture, "a keyed target's level set a capture's cost");
     return 10 + (int)vet_level_open(r, kills_of(u));
 }
 
@@ -1707,10 +1752,10 @@ int __stdcall tagpu_datakeys_vet_reclaim_step(const char* u, unsigned workertime
         fit = 0xFFFFFFFFu / workertime / maxhp / ticks;
         if (f > fit) {
             f = fit ? fit : 1;
-            vet_event(&s_evReclaimFit, "a keyed reclaimer's step was held to what its product holds");
+            vet_event(&s_diag.evReclaimFit, "a keyed reclaimer's step was held to what its product holds");
         }
     }
-    vet_event(&s_evReclaim, "a keyed reclaimer's level set a unit reclaim's step");
+    vet_event(&s_diag.evReclaim, "a keyed reclaimer's level set a unit reclaim's step");
     return (int)f;
 }
 
@@ -1733,6 +1778,8 @@ unsigned tagpu_datakeys_vet_taken_level(const char* u)
    draw, and each site has its own buffer, used by the sprintf that follows
    the site before anything else runs. */
 static char s_labelPanel[16], s_labelDev[16];
+SIM_VAR(s_labelPanel, SIM_TRANSIENT);
+SIM_VAR(s_labelDev, SIM_TRANSIENT);
 
 static const char* vet_label(const char* u, char* buf)
 {
@@ -1741,7 +1788,7 @@ static const char* vet_label(const char* u, char* buf)
     if (!l) return NULL;
     _snprintf(buf, 16, "Vet%u", l);
     buf[15] = 0;
-    vet_event(&s_evLabel, "a panel named a veteran's level");
+    vet_event(&s_diag.evLabel, "a panel named a veteran's level");
     return buf;
 }
 
@@ -1885,8 +1932,6 @@ static int wtdf_crc(const char* name, unsigned* crc)
     return 0;
 }
 
-static unsigned s_txFolded;
-
 unsigned __stdcall tagpu_datakeys_tx_fold(unsigned crc, void* tdf)
 {
     static const unsigned mix[2] = { 0x7F4A7C15u, 0x94D049BBu };
@@ -1901,7 +1946,7 @@ unsigned __stdcall tagpu_datakeys_tx_fold(unsigned crc, void* tdf)
         folded = 1;
     }
     if (folded) {
-        n = ++s_txFolded;
+        n = ++s_diag.txFolded;
         if ((n & (n - 1)) == 0) dlog("transported: a type's keys folded into its sync (%u so far)", n);
     }
     return crc;

@@ -16,6 +16,8 @@
 
 /* RWX scratch for one stub, or NULL */
 unsigned char* tagpu_detour_stub(void);
+/* gives back a stub that was never landed (an installer's failure path); NULL is a no-op */
+void tagpu_detour_stub_free(unsigned char* stub);
 /* write a rel32 at p so that a preceding E8/E9 opcode reaches `target` */
 void tagpu_detour_rel(unsigned char* p, unsigned int target);
 /* `cmp byte [flag], 0` (7 bytes); returns the new cursor */

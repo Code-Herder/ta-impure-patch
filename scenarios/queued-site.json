@@ -1,0 +1,65 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Queued build sites over one another: two full-health CORCK builders side by side on open ground (Two Continents SW) and nothing hostile in reach. Select one, arm CORSOLAR, hover the same 5x5 footprint over its own queued site or the other builder's, and read the cursor's green/red bit (main+0x2CC6 bit 6).",
+ "seed": 20260926,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "core",
+    "color": 1,
+    "metal": 5000,
+    "energy": 5000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "arm",
+    "color": 0
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "a",
+   "type": "CORCK",
+   "owner": 0,
+   "pos": [
+    560,
+    7700
+   ]
+  },
+  {
+   "id": "b",
+   "type": "CORCK",
+   "owner": 0,
+   "pos": [
+    560,
+    7800
+   ]
+  },
+  {
+   "id": "ai_keepalive",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    1400,
+    7300
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   700,
+   7700
+  ]
+ }
+}

@@ -14,19 +14,13 @@
    read that as garbage and every pass skipped every unit.
 
    The filters stay what CLAUDE.md allows them to be: a cheap test of a VALUE, never the reason a
-   read is safe. Every caller computes the same number, so two threads racing the first call
-   store the same aligned word. */
+   read is safe. The number is taken once, first thing at attach (tagpu_addr_init, DllMain),
+   before any thread or hook of ours exists, and never written again. */
+extern size_t tagpu_user_top_bound;
+void tagpu_addr_init(void);
 static __inline size_t tagpu_user_top(void)
 {
-    static volatile size_t top;
-    size_t t = top;
-    if (!t) {
-        SYSTEM_INFO si;
-        GetSystemInfo(&si);
-        t = (size_t)si.lpMaximumApplicationAddress;
-        top = t;
-    }
-    return t;
+    return tagpu_user_top_bound;
 }
 
 #endif

@@ -42,8 +42,9 @@ static int store_mirror(void)
     return v != 0;
 }
 
-/* The table: the ta-drive skill's default arm set, Classic++ and the extra weapons.
-   Order is the order the log line lists them in. */
+/* The table: the ta-drive skill's default arm set and Classic++. Order is the order
+   the log line lists them in. Nothing that changes the simulation is here: the extra
+   weapons are always on, in the fail-closed table (tagpu_weapons.h). */
 /* THREE OF THE `*own` LEVERS ARE NOT PLAY DEFAULTS, AND THE REASON IS THE
    REFERENCE FRAME. `tagpu_featown`, `tagpu_fxown` and `tagpu_owndraw` stop the
    ENGINE drawing something, so that ours can stand in its place.
@@ -131,7 +132,6 @@ static const Def s_defs[] = {
        which is the A/B. */
     { "tagpu_gui.on",       "", 0, 0 },                     /* the UI: panel, bars, minimap, cursor, shell */
     { "tagpu_classicpp.on", "", 0, 0, store_classicpp },    /* restored true colour, lit, shadowed */
-    { "tagpu_weapons.on",   "", 0, 0 },                     /* 0..N weapons per unit               */
     /* HUD SCALE IS NOT A PLAY DEFAULT because nobody has decided it: it
        changes the look of every screen at every resolution, the top bar's
        right-hand half goes off-screen at any scale above 100 %, and whether

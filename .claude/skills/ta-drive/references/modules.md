@@ -17,13 +17,15 @@ differs is the setup around it.
 
 ## Extra weapons
 
-`tagpu_weapons.c` lifts "three weapons per unit" to `Weapon4..N` (capacity 16). It is a play
-default under `--defaults`; on a `tacli` instance it is **off unless armed before launch**, and
-stock units run the untouched engine code either way (`research/notes/extra-weapons.md`).
+`tagpu_weapons.c` lifts "three weapons per unit" to `Weapon4..N` (capacity 16). It is **always
+on**: its sites are in the fail-closed table, so every launch has it, `--defaults` or not, and
+stock units run the untouched engine code (`research/notes/extra-weapons.md`). The launch log
+says `weapons: 44 sites to the fail-closed table`, and the table's `limits: installed N sites`
+line (`the simulation fixes' N sites installed` in the stock-limits build) says they went in; an
+exe that differs at one of them is refused at start, the site named.
 
 ```bash
 tools/tacli launch w1; tools/tacli stop w1          # create the instance dir
-tools/tacli arm w1 weapons.on                        # must exist at DLL attach
 tools/extra_weapons_fixture.py                       # builds scenarios/content/wpn-test.ufo (gitignored)
 ln -s $PWD/scenarios/content/wpn-test.ufo tagpu/instances/w1/gamedir/   # the test units
 rm -f tagpu/instances/w1/catalogue.json              # cached type list is now stale
@@ -33,13 +35,14 @@ tools/tacli log w1 -g "weapons: (unit-data|loader|reload|VIOL|MISM)"   # each lo
 ```
 
 - **`tacli weapons <inst> [idx…]` is the oracle**: per slot the state byte, weapon, target,
-  reload, heading, pitch, stock, aim result and COB thread, plus `armed`, the C-path hit counters,
+  reload, heading, pitch, stock, aim result and COB thread, plus the C-path hit counters,
   projectile launches per slot, and each extended type's cached `AimFromWeaponN,QueryWeaponN`
-  pieces from slot 3 on (`-1` = not asked yet). It works **unarmed** too — that instance is your control. With
-  stock content and the module armed, every counter but `loader`/`stock_splice` must read 0 and
-  `mismatch`/`violation` must be 0; that is the regression check.
-- It also prints each unit type's `CRC_weapons` and `CRC_all`, the unit-sync values. Armed and
-  unarmed differ for exactly the types carrying `Weapon4+`. In a multiplayer game TA **disables**
+  pieces from slot 3 on (`-1` = not asked yet). With stock content every counter but
+  `loader`/`stock_splice` must read 0 and `mismatch`/`violation` must be 0; that is the
+  regression check.
+- It also prints each unit type's `CRC_weapons` and `CRC_all`, the unit-sync values. A build
+  without the module (the retail game) differs for exactly the types carrying `Weapon4+`. In a
+  multiplayer game TA **disables**
   a type the peers disagree about (it vanishes from `tacli units` on both sides) and starts
   anyway, silently.
 - **Content goes in a `.ufo`, never as loose files** (the engine finds a loose `units/*.fbi` and

@@ -25,7 +25,6 @@
 #include "tagpu_settings.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
-#include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_cobtrace.h"
@@ -39,6 +38,8 @@
 #include "delay_imports.h"
 #include "keyboard.h"
 #include "tagpu_log.h"
+#include "tagpu_addr.h"
+#include "tagpu_simreg.h"
 #include "tagpu_regstore.h"
 #include "tagpu_restore_guard.h"
 
@@ -63,6 +64,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
     case DLL_PROCESS_ATTACH:
     {
         g_ddraw_module = hDll;
+
+        /* tagpu: the top of the address space, the upper end of every pointer range filter
+           (tagpu_addr.h) -- before anything of ours that could read a pointer. */
+        tagpu_addr_init();
 
         delay_imports_init();
 
@@ -115,11 +120,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            (e.g. skip the DirectX startup warning). Exe on disk stays pristine. */
         tagpu_apply_patches();
 
-        /* tagpu: the raised engine limits and the simulation fixes (tagpu_limits.h) --
-           all sites or none, before the exe's own startup code. After
-           tagpu_apply_patches, which puts the fixes' sites in the table. A failure is
-           reported, and the process ended, at the first DirectDraw call, outside the
-           loader lock. */
+        /* tagpu: the raised engine limits, the simulation fixes (tagpu_limits.h) and
+           the extra weapons (tagpu_weapons.h) -- all sites or none, before the exe's
+           own startup code. After tagpu_apply_patches, which puts the fixes' sites
+           and the extra weapons' in the table. A failure is reported, and the
+           process ended, at the first DirectDraw call, outside the loader lock. */
         tagpu_limits_install();
 
         /* tagpu: the play defaults (tagpu_opt.h): the passes below that say
@@ -224,12 +229,6 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            view is live. MUST run after tagpu_zoom_init(). */
         tagpu_vpwide_init();
 
-        /* tagpu: 1..N weapons per unit — the first module that changes the
-           simulation, in its own file behind its own gate. No-op unless
-           "tagpu_weapons.on" exists; every site byte-matched, all-or-nothing;
-           stock units trampoline to the untouched engine functions. */
-        tagpu_weapons_init();
-
         /* tagpu: TADR section C's data keys (tagpu_datakeys.h). Always on,
            each site byte-matched; a mismatch skips that site and those
            resting on it, and logs.
@@ -238,9 +237,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            checksum 0x4B6BA0. The fail-closed table has already installed them
            (tagpu_patches.c, fix_veterancy: the reader carries the veterancy
            keys), so the call here answers what that one did, and the
-           extra-weapons module's own observers on 0x42D2E0 and 0x42BF40 chain
-           onto them above; the extra-weapons loader site is 0x42CEF2. They
-           read and write nothing into the engine.
+           extra-weapons module's own observers on 0x42D2E0 and 0x42BF40 are
+           chained onto them there (fix_extra_weapons, right after); the
+           extra-weapons loader site is 0x42CEF2. They read and write nothing
+           into the engine.
            nomapweaponalert: the damage function's send 0x499E37 and the
            local apply 0x489C89, the calls at 0x489DA2 (0x406F80, which the
            extra-weapons module hooks at its entry, so the call reaches it
@@ -256,6 +256,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            0x4B15E0), byte-matched, all-or-nothing, disjoint from every detour
            above; reads only, writes tagpu_cobtrace.log on the game thread. */
         tagpu_cobtrace_init();
+
+        /* tagpu: the simulation-state registry (tagpu_simreg.h) -- after the last simulation
+           module above has installed, so its line counts every declaration and every lever
+           read, and closes the list: a lever or TLS index taken later is logged by name. */
+        tagpu_simreg_attach();
 
         /* tagpu: deferred reclamation of the engine's Object3do (the render
            thread's cross-thread use-after-free, thread-safe-destruction.md).

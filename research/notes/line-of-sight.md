@@ -25,7 +25,8 @@ what it looked like.*
    see"* list, not the world.
 5. **Retaliation is NOT.** `FUN_00406F80` points every weapon slot at whoever just
    damaged the unit with no visibility test anywhere in the function. That is why ships
-   shoot into fog, and it is stock — a plain `CORBATS` on an unarmed instance does it.
+   shoot into fog, and it is stock — a plain `CORBATS` does it with no module code in
+   the way (§Measured).
 6. **Only one of SKIRMISH's three LOS stages actually fogs units.** `Permanent` (0) and
    `Circular` (2) both leave the whole LOS map lit; only `True` (1) restricts.
 
@@ -210,11 +211,12 @@ that target then sticks.
 
 `scenarios/warlordex-vs-fleet.json` at `--los 1`, sampling slot targets against distance:
 
-- **WarlordEx** (armed, seven slots): targets at 274, 385, 445, 457, 482, 499, 676, 715,
+- **WarlordEx** (seven slots, with the extra-weapons module): targets at 274, 385, 445, 457, 482, 499, 676, 715,
   **728** world units, against a 256-unit LOS. Stock slots 0/1 and extended slots 3–6
   behaved identically.
-- **Control — stock `CORBATS`, unarmed instance, no module code at all**: targets at
-  **287 and 299**, same 256-unit LOS. So this is the engine, not `tagpu_weapons.c`.
+- **Control — stock `CORBATS` with the module switched off, no module code at all** (it had
+  a switch until 2026-09-29): targets at **287 and 299**, same 256-unit LOS. So this is the
+  engine, not `tagpu_weapons.c`.
 - **Acquisition control** (`scenarios/los-acquire-probe.json` — four Skeeters parked at
   420 and 700, no orders, so nothing ever damages the ship): **no target at all** while
   they sit there, though all four are inside the 810 laser range. Every target it did
@@ -242,7 +244,6 @@ Retaliation is the whole difference between those two runs.
 
 ```bash
 tools/tacli launch fog1 --res 1024x768 && tools/tacli stop fog1
-tools/tacli arm fog1 weapons.on
 ln -s $PWD/scenarios/content/warlordex.ufo tagpu/instances/fog1/gamedir/
 rm -f tagpu/instances/fog1/catalogue.json
 

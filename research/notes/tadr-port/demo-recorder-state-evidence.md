@@ -2,7 +2,8 @@
 
 ## Status and evidence boundary
 
-**Desk research, 2026-09-28: no game was run and nothing was implemented for this page.** It is the
+**Desk research, 2026-09-28, and three feasibility experiments, 2026-09-29.** Nothing on this page
+is implemented: the experiments ran temporary probe builds that never landed. It is the
 evidence behind the state-based design on the [product page](demo-recorder.md), beside the
 packet-era [exploration](demo-recorder-exploration.md), read from the
 [engine map](../exe-reverse-engineering.md), the notes, Impure's and TADR's sources (`vendor/TADR`,
@@ -12,8 +13,10 @@ takeover, per-player state, size) were each re-checked by an independent verifie
 cited line, disassembled every address again and re-ran every script. Only confirmed claims are
 kept, stated as corrected where the verifier found an overreach; the verifiers' own findings were
 disassembled again before use, and the few DIS claims read for this page alone are marked *not in
-the record*. Apart from [*The puppet host, measured*](#the-puppet-host-measured) (experiment 1,
-2026-09-29), none of it is an experiment: see [§5](#5-open-experiments).
+the record*. The experiments are [*The puppet host, measured*](#the-puppet-host-measured)
+(experiment 1), [*Recording and replay, measured*](#recording-and-replay-measured) (experiment 3)
+and [*Rebuild, takeover and rewind, measured*](#rebuild-takeover-and-rewind-measured) (experiment
+2), all 2026-09-29; the rest is desk research ([§5](#5-open-experiments)).
 
 **Tags:** DIS disassembled; SRC read in source; MEASURED a live measurement, cited to the note that
 made it; [INFERRED] a consequence not yet shown. `main` is `*(0x511DE8)`, a player record is
@@ -226,15 +229,17 @@ A recording of more than four players also needs records 4–9 made active, whic
 does not do (it refused every unit of slots 4–9: [scenario format](../scenario-format.md),
 MEASURED 2026-09-24) and the seat activation `0x464290` does (MEASURED 2026-09-29, *The puppet host,
 measured*, above, which also disarms the level's end tests and leaves out the start commanders).
-Impure drives motion (round-robin-style writes with walk scripts as recorded script starts, or the
-movement pass on fed proxies) and calls the stock receivers in-process with bounded indices; a
-skirmish recorder hooks engine functions, as messages exist only in network games. A takeover
+Impure drives motion with the round robin's position writes and the movement pass's presentation
+parts, feeding the move object's speed, layer and bit 2, so the engine starts the walk scripts
+itself, and calls the stock receivers in-process with bounded indices (MEASURED, *Recording and
+replay, measured*, below); a skirmish recorder hooks engine functions and releases the senders'
+network-bit tests, as a skirmish sends almost no messages. A takeover
 flips `+0x73` first, builds both per-player objects, and then re-creates the units at their recorded
 slots, as the save restore does; a flip in place would leave every unit's COB on the branches it
 took as a remote copy (below).
 
-**Open:** what `0x48A870` does (experiment 2), and what the viewer's own input may do to the seat
-it borrows. Settled by *The puppet host, measured* (above): records 4–9 active in a type-2 level; a
+**Open:** what the viewer's own input may do to the seat it borrows. `0x48A870` is the altitude
+fix-up (engine map, *Driving and rebuilding puppets*). Settled by *The puppet host, measured* (above): records 4–9 active in a type-2 level; a
 level whose seats are all type 3 with `main+0x2A42`/`+0x2A43` naming a type-3 record (the seatless
 viewer; the [data-keys evidence](data-keys-evidence.md) asked the same of `0x2A43`); commanders for
 type-3 seats (the loader makes them, and they can be left out); the acquisition on a puppeted seat
@@ -279,6 +284,98 @@ DIS unless marked; the engine facts are in the engine map's *The nano spray* and
   what a mod keeps in COB statics and piece visibility, such as Total Mayhem's upgraded metal
   extractor's look [INFERRED from the scripts].
 
+### Recording and replay, measured
+
+Experiment 3, 2026-09-29, MEASURED unless marked. **The record** is
+`_local/demo-recorder-exploration/rebuild-takeover-2026-09-29/` (main checkout, gitignored;
+`README.md` there): the probe's diff and DLL, the fixtures, the scripts, and every run's log,
+snapshots, streams and pictures. The engine facts behind it are the engine map's *Driving and
+rebuilding puppets* ([engine map](../exe-reverse-engineering.md)).
+
+- **The probe.** A temporary build (never landed) recorded a skirmish on the game thread at the
+  scenario tick site. Each tick it compared every live unit with a shadow copy and wrote what had
+  changed: position and altitude, the three turn words, HP, build fraction, state byte, the
+  `+0x110` bits `0x3C0013` (the layer among them), kills, carrier, and the move object's speed
+  `+0x20` and `+0x2E` bit 2. It also wrote creates, deaths, order lists, each player's resources,
+  and the engine's own event messages, taken at the send `0x451DF0` behind B8's hook.
+- **The player.** It loaded the recording's start snapshot and stream into a level whose seats were
+  all type 3 (the puppet host, above, the viewer on seat 0) and rebuilt the start state (1,432
+  units in 11 ms). Each tick it then did four things:
+    - applied the records up to the recording's tick;
+    - wrote positions by the round robin's recipe (release the cells, write, claim, stamp sight);
+    - called the stock receivers for deaths `0x4866D0(msg, 0)`, shots `0x49D270(0, msg)` and script
+      starts `0x4B0B00`, each index bounded first;
+    - stepped the movement pass for every unit with a mover.
+- **The runs.** Wine on a private display, each game under ten minutes:
+    - an 8-minute game of four stock AIs with a unit-less viewer (4 → 92 units, three aircraft, no
+      combat);
+    - four battles of 1,432 units on Town & Country, 60 s each and the first 120 s (84–405
+      deaths). Two of them were recorded with a snapshot every 450 ticks, and every recording was
+      replayed to the same ticks.
+- **A skirmish sends almost no events.** As shipped it sends Impure's own wrapped deaths and
+  creates, and `0x0A`, `0x11` and `0x12`: the shot and script-start senders test the network bit
+  (engine map). With eleven of those tests released:
+    - a 60-s battle sent 1,731 shots `0x0D` (36 B each), 5,751 script starts `0x10` (22 B), 104
+      wrapped deaths (65 B) and 3 `0x0F`;
+    - the AI game sent 110 script starts, 143 `0x11`, 95 `0x12`, 85 wrapped creates and 49 `0x0A`.
+- **The replay matches the recording.**
+    - **The fourth battle** replayed 84 deaths, 1,566 shots and 5,823 script starts. At each of its
+      four checkpoints (1,417, 1,411, 1,388 and 1,351 units) the live set and every recorded field
+      of every unit equalled the recording's snapshot: position, altitude, the three turn words,
+      HP, build fraction, state byte, kills, owner and type. So did the layer, and the walk class
+      (`+0x110` bits 2–3) of all 606, 677, 618 and 335 moving units.
+    - **The AI game** (14 → 92 units, eight checkpoints) had the same live set and the same fields
+      except where noted below. The stream reduced to a checkpoint equalled the recording's own
+      snapshot, so the recorder lost nothing it carried.
+    - **The pictures** at a pinned camera show the same scene, with wrecks, explosions and smoke in
+      place. 0.7–4.4 % of pixels differ, mostly the message lines (the recording's local "Under
+      attack" notices against the replay's "taken the lead") and effect timing.
+- **What the player needed**, each found by a run that failed:
+    1. **Step only the movement pass's presentation parts.** The stock pass `0x43DD20` brakes an
+       unfed proxy every step (`0x43CD20`: the ground proxy's `[vt+0x14]` answers 0), so walk
+       scripts stopped. None of the 23 units walking at the AI game's checkpoints walked in the
+       replay. The pass also moves each unit by its velocity after the write: in battle 2 a third of
+       the units stood about 0.8 of their own last step off (median), up to 454 wu. Calling
+       `0x43D6D0`, `0x43DA70` and `0x43DB50` directly, without `0x43CD20` and the air step
+       `0x43D290`, removed both and roughly halved the player's cost.
+    2. **Write the move object's layer along with the unit's.** `0x43D6D0` takes a unit's layer from
+       its move object's `+0x2E`, so aircraft whose unit alone had layer 2 were put back on layer 1
+       and grounded, 74–212 wu below the recording. With both written they flew within 2.5 wu. A
+       layer that changes without the position (an aircraft landing at a standstill) is written on
+       its own too; without that, three aircraft stayed on layer 2 after landing.
+    3. **Record the move object's `+0x2E` bit 2.** `0x43DA70` answers class 0 while it is set,
+       whatever the speed. In the battle's crowd 340–591 units pushed with no walk animation in the
+       recording but walked in the replay, until the bit was recorded. It is one bit, and the
+       network's ground payload carries the same one.
+    4. **Build order nodes fresh** (*Rebuild, takeover and rewind, measured*, below).
+- **Not reproduced by the probe's player:**
+    - **Carried units.** The carrier link was not applied, so frames inside a factory sat 1–4 wu off
+      the pad, one of them 65 wu.
+    - **Aircraft in the AI game,** replayed with the whole pass, stood up to 6 wu and 3.5° off. The
+      battles' fighters, replayed with the parts, matched.
+    - **Features and wrecks** came from the engine's own replayed deaths, not from the recording.
+    - **Sounds and the nano spray** were not compared.
+- **Cost.**
+    - **Recorder.** At 1,432 units, 0.094–0.123 ms per tick on average; after the first frame the
+      worst was 0.36–0.87 ms, and no frame took over 1 ms in battles 3 and 4. The first frame,
+      which writes every unit's create, took 8.2 ms in battles 1 and 2 and under 0.9 ms in battles
+      3 and 4 [the difference is not explained]. The AI game cost 0.013–0.016 ms on average,
+      0.23 ms at worst; the send hook 1.3–1.7 µs per message.
+    - **Player.** At 1,432 units, 0.10–0.15 ms per frame with the parts (worst 0.62–0.84 ms), and
+      0.22 ms (worst 2.3 ms) with the whole pass; 0.012 ms in the AI game.
+    - **Snapshot.** Capturing 1,352 units took 2.5 ms.
+    - **Size:** [§4](#4-size-estimate).
+
+**What it settles.** Puppet playback of recorded state works at 1,432 units. The engine runs the
+walk scripts from the written speed, draws shots and deaths through its own receivers, and every
+recorded field comes out exact. The motion driver is the round robin's position recipe plus the
+movement pass's presentation parts, fed the move object's speed, layer and bit 2; no proxy is fed
+a path. **Open:** the carrier link and the rest of the carried units' state in playback, sounds and
+the nano spray in playback, and a real hour. Footprints and sight were written by the recipe (the
+grid release and claim `0x47D0E0`/`0x47CC30`, the sight stamp `0x4827B0`) but never compared:
+every run had permanent line of sight, and neither the grid nor a player's sight is in a
+snapshot.
+
 ## 2. Rebuild and takeover inventory
 
 ### The scenario applier today
@@ -294,7 +391,9 @@ the frame hook (`place_camera`, `tagpu_scenario.c:2107-2150`, called at `:2305`)
 eye to the command apply at the next in-play draw.
 
 - **A paused frame reaches it** (DIS): the pause tests skip only the tick (`0x496920..0x496926`,
-  network `0x4968AA..0x4968B0`), and every path reaches the draw and `0x4969D2`. Unmeasured live.
+  network `0x4968AA..0x4968B0`), and every path reaches the draw and `0x4969D2`. MEASURED live:
+  a rebuild of 838 units ran there on a paused frame (*Rebuild, takeover and rewind, measured*,
+  below).
 - **`dress_unit`** (`tagpu_scenario.c:1350-1398`; T2) writes the heading in whole degrees, stance,
   nanoframe and health in 1 % steps, and kills, at whole-unit positions. A recording needs 16.16
   positions, the full turn, the exact HP and fraction, the layer and the slot.
@@ -320,7 +419,9 @@ eye to the command apply at the next in-play draw.
 - **MEASURED** (T6, corrected): 402 creates and 400 orders in one visit, 0.2 s of CLI round trip, no
   visible stall (`scenario-format.md:751-753`); `scenario load` from a stopped instance to that
   200v200 state in 6.4 s, launch and level load included ([scenario format](../scenario-format.md),
-  phase D). Nothing above 402 units has been timed.
+  phase D). The rebuild probe created 1,308–1,432 units in one visit, 9–12 ms of creates
+  (*Rebuild, takeover and rewind, measured*, below); the applier itself has not been timed above
+  402.
 
 ### Orders and factory queues
 
@@ -346,9 +447,12 @@ eye to the command apply at the next in-play draw.
   `StopBuilding` when `+0x42` has bit `0x400000`. So the applier's shift-0 order to a factory
   mid-build kills its nanoframe. A puppet's order nodes are therefore written with neither bit,
   so that replacing them runs no handler and starts no script [INFERRED from the destructor].
-- **Untraced** (T15): rally inheritance (`0x41B8D0` copies no order) and adopting an existing
-  nanoframe into an order. **Carried units** (T18): `+0x86` carrier, `+0x8A` first passenger,
-  `+0x8E` next, `+0xF9` attach point, written by `0x48AAC0`.
+- **Untraced** (T15): rally inheritance (`0x41B8D0` copies no order). Adopting an existing
+  nanoframe into an order is measured (*Rebuild, takeover and rewind, measured*, below).
+  **Carried units** (T18): `+0x86` carrier, `+0x8A` first passenger, `+0x8E` next, `+0xF9` attach
+  point, written by the attach `0x48AB70`, which `0x48AAC0` calls. `+0x8E` is the carrier's chain
+  while `+0x86` is set and the sort bucket's list otherwise, and the order of both reaches the
+  simulation (engine map, *The unit and player records, byte by byte*).
 - **Stock AIs adopt applier-created units** and re-plan within seconds (MEASURED, T26: a keepalive
   CORCOM walked off and built a CORFMKR, [smooth motion](../smooth-motion.md), gate 4); whether an
   AI overrides a written order at once is unmeasured.
@@ -359,9 +463,9 @@ eye to the command apply at the next in-play draw.
 |---|---|
 | Set by the applier | type, owner, position, altitude, heading, HP, build fraction, `+0xF6`/`+0xF7`, stance, kills |
 | Settable by a known engine call | orders (`0x43AFC0`, `0x43ADC0`), factory queues (`0x43B0B0`, `0x419B00`), carry links (`0x48AAC0`), layer and slot (create arguments 7, 8), the state byte `+0x10E` with its activation, armoured and cloak bits (`0x48B090`, which stores the whole byte at `0x48B0D8`, not in the record; cloak is bit 2, L14), squad membership `+0xAC` (`0x480250`) |
-| Rewritten by the engine | sight height `+0xF8` (every create or move), `+0xF5` (hits, the create) |
-| Restored only by the save load | the full turn, three weapon slots at `unit+0x4` (stride 0x1C: target, reload, stockpile), last attacker `+0xF0`, the rest of `+0x110`, COB state (`0x4B2040`), the mover (`0x43DE30`) |
-| Unknown | velocity and path (the mover's 0x2F-byte layout), fire state (not located; [INFERRED] `+0x110 & 0x300000`), per-unit AI state |
+| Rewritten by the engine | the sight parameter `+0xF8` (every create or move; a height only in ray-fan mode, where a unit in the same cell whose height moved by 5 or less keeps it), `+0xF5` (hits, the create) |
+| Restored only by the save load | the full turn, three weapon slots at `unit+0x4` (stride 0x1C: target, aim flag, weapon, reload, aim angles, stockpile, flags), last attacker `+0xF0`, the rest of `+0x110` (the move and fire states are bits 18–19 and 20–21: Standing_MoveOrder `0x4030EF`, Standing_FireOrder `0x403123`), COB state (`0x4B2040`), the mover (`0x43DE30`); the fields: engine map, *The unit and player records, byte by byte* |
+| Unknown | the path (the move object's velocity `+0x8..+0x10`, speed `+0x20`, `+0x24`, time stamp `+0x2A` and its layer and bit 2 at `+0x2E` are read: engine map, *Driving and rebuilding puppets*), per-unit AI state |
 
 ### The savegame as the engine's checklist
 
@@ -386,10 +490,99 @@ recording needs a slot remap from its DPID-ordered blocks. Weapon state, the mov
 path and any squad state beyond membership are lost unless each gets a writer; cloak and squad
 membership have one (`0x48B090`, `0x480250`).
 
-**Open:** live queue writing (shift 1, `0x43ADC0`, `0x43B0B0` at the apply point); rally
-inheritance; nanoframe adoption; the mover's layout; airborne creates; apply time up to 1,500 units
-and the applier's caps (`tagpu_scenario.c:139-145`); clearing a loaded transport [INFERRED: the
-passengers, hit first, die with a nonzero severity]; a paused apply, live.
+**Open:** rally inheritance; the rest of the move object's layout (its path); the applier's caps
+(`tagpu_scenario.c:139-145`); clearing a loaded transport [INFERRED: the passengers, hit first,
+die with a nonzero severity]. Settled by *Rebuild, takeover and rewind, measured* (below): live
+queue writing (`0x43ADC0` with shift 0 then 1, `0x419B00` by name, at the apply point); nanoframe
+adoption; airborne creates (argument 7 with the move object's layer written, *Recording and replay,
+measured*, §1); a rebuild's time up to 1,432 units; a paused apply, live.
+
+### Rebuild, takeover and rewind, measured
+
+Experiment 2, 2026-09-29, MEASURED unless marked; the record and the engine facts are those of
+§1's *Recording and replay, measured*.
+
+**The probe** captured every live unit (the raw slot and its order nodes) and the ten player
+records into a snapshot, and rebuilt from one at the tick site in seven steps:
+
+1. **kill**: unfinished units first, then carried ones, then the rest, with
+   `ActiveCommanderDeath` parked and the elimination announcements suppressed;
+2. **create** each unit at its recorded slot (`0x485F50` argument 8) with its full position,
+   layer and build state;
+3. **dress** it: turn, HP, build fraction and kills;
+4. **state byte**, through `0x48B090`;
+5. **orders**: each list rebuilt through `0x43ADC0` from recorded values, adopting the frames in
+   progress;
+6. **carry links**, through `0x48AAC0`;
+7. **players**: each player's resources.
+
+A takeover built the seat's `+0x74` object (`0x4B4F10(0x3D)` and `0x408CB0`) and acquisition
+record (`0x40B320`), set the type through `0x463C60` and rebuilt that seat's units.
+
+**A rebuild is 20–90 times inside the targets**, 1 s for a seek and 2 s for a takeover. No
+rebuild refused a slot, and the kill dominated:
+
+| Rebuild | Units | Time |
+|---|---|---|
+| in play | 1,308 killed and re-created | 25.5 ms |
+| while paused | 838 | 29.5 ms |
+| a rewind | 1,202 → 1,314 | 34.6 ms (kill 22.0, create 12.4) |
+| back to now | → 1,227 | 23.5 ms |
+| a fork resumed (the worst) | 1,314 → 1,314 | 46.9 ms (kill 38.6) |
+| a replay's start state into an empty level | 1,432 | 11 ms |
+
+- **A seat becomes an AI without a reload,** in 0.8–1.2 ms for 38–42 units. After it:
+    - the AIs planned and built (MobileBuild, GetBuilt), made 38 → 44 units and fought (38 → 22
+      alive);
+    - the economy pass recomputed storage (10,200);
+    - a seat taken over as human (type 1) took orders through `tacli order`;
+    - Escalation's one-shot `Upgrade` was not run.
+- **The seat becomes local first.** Rebuilt while the seats were still puppets and flipped
+  afterwards, the ground units kept their proxies: 4 of 1,176 moved more than 8 wu over the next
+  21 s, all four of one type. Flipped under pause and then rebuilt, 896 of 1,151 moved over the
+  same span. That is decision 2's order: flip, then create.
+- **Live rewind in a skirmish.** Every seat was flipped to 3 and the world rebuilt from 10 s
+  earlier:
+    - the rewound units stood inert (0 of 1,314 moved in the next 11 s);
+    - without the pacing stamp GameTime advanced 3 ticks in about 8 s (engine map, *Driving and
+      rebuilding puppets*);
+    - back to now and a resumed fork both took flip-then-create;
+    - 20 of 20 elimination announcements were suppressed across the clears;
+    - features, wrecks and projectiles were not rebuilt.
+- **Queues and jobs in flight continue.** Through a takeover as human, all of these carried on:
+    - a lab's queue of count nodes (ARMPW 5, ARMHAM 3, ARMPW 2);
+    - its rally, a QMove on its main list;
+    - the unit it was building (adopted);
+    - a builder's MobileBuild pair, the first frame half built (adopted).
+
+    Without adoption the frame was destroyed within 13 s. The one residual: a frame in a lab comes
+    back BeCarried then GetBuilt, where the recording had GetBuilt then BeCarried; it still
+    completes.
+
+- **Resources.** The players step and the probe's resource command wrote base storage
+  `+0xDC/+0xE0`, `+0x149` bit 0 and current. On a local seat the economy pass then recomputed
+  storage; a type-3 seat kept the written values (energy 10,000 against storage 0, unchanged over
+  the run). Puppet drift from fire, features and meteors was not measured.
+- **A rebuild writes values, never engine pointers.** The first rebuild copied each order node's
+  owned object `+0x52` from the snapshot, and the order destructor faulted at `0x43A2A2` deleting
+  a stale one (engine map).
+
+**What it settles.**
+
+- Seek and takeover rebuilds sit far inside their targets at 1,300–1,400 units, and the kill is
+  most of their cost.
+- A takeover needs no reload: the seat becomes local, gets its two objects and has its units
+  re-created, in that order.
+- Queues and builds in progress survive a takeover once their frames are adopted.
+
+**Open:**
+
+- features, wrecks and projectiles in a rebuild;
+- the move object in a rebuild [INFERRED: a rebuilt aircraft needs its layer written, as in
+  playback];
+- the BeCarried order;
+- Escalation's `Upgrade`;
+- puppet drift.
 
 ## 3. Player and perspective state
 
@@ -434,7 +627,7 @@ difficulty 0 and 70 % at 1 (L24).
   counter per 32-wu cell (half the feature grid), bumped per stamping unit (`0x482270`); a create
   stamps (`0x482AC0`), a death removes (`0x486845`, only while LosType bit 1 is set,
   `0x486838..0x486842`), and every alive unit of every type-1–3 player is re-stamped each tick
-  (`0x4827B0`, `0x465046..0x465063`) from its cell and height byte `+0xF8`.
+  (`0x4827B0`, `0x465046..0x465063`) from its cell and `+0xF8`, a height only in ray-fan mode.
 - **LosType** `main+0x14281` (L10, L11): bit 0 mapping, bit 1 true LOS, bit 2 ray fan, bit 3 fog
   current; only True restricts sight ([line of sight](../line-of-sight.md)). It changes mid-match: a
   defeated controlled player in a network game becomes a watcher with bits 0–1 cleared and
@@ -449,17 +642,21 @@ difficulty 0 and 70 % at 1 (L24).
 - **Radar and sonar** (L15, L16 corrected) are one set of bits per unit (`+0x110` bits 8–10) for the
   viewed player only, set by `0x467440` on that player's 30-tick pass: own units, allies whose owner
   shares radar (`PlayerInfo+0x97` bit `0x40`, `0x4674BA..0x4674D9`), everything for a watcher; then
-  jammers clear them. The minimap radar picture `0x466DC0` is redrawn every tick. ShareMapping has
+  jammers clear them. They are simulation input as well: the acquisition scan `0x40AA40` reads
+  bits 8 and 9 every 30 ticks for every local seat (engine map, *The unit and player records, byte
+  by byte*). The minimap radar picture `0x466DC0` is redrawn every tick. ShareMapping has
   no stock reader beyond its chat toggles; ShareLOS has neither a reader nor a reachable toggle.
 - MEASURED (§6c; L9): one remote sight grid differed from its owner's in 34 zero/nonzero cells while
   the positions matched. The cause is unknown.
 
 ### Alliances, sharing, options and statistics
 
-- **Identity and alliances** (L17–L19): the DPID at `+4`; `+0x146` is the record's own index; each
-  peer is its own player 0, so indices differ between peers, and network blocks follow DPID order.
-  `AllyFlagAry` `+0x108..+0x111` is directional, indexed by the other record's `+0x146`; `AllyTeam`
-  is `+0x13F`.
+- **Identity and alliances** (L17–L19): the transport ID at `+4`, the DPID in a network game and
+  the seat in a skirmish (MEASURED: equal to `+0x146` in every active record of 96 PRS1 snapshots;
+  engine map, *The unit and player records, byte by byte*); `+0x146` is the record's own index;
+  each peer is its own player 0, so indices differ between peers, and network blocks follow DPID
+  order. `AllyFlagAry` `+0x108..+0x112`, eleven bytes, is directional, indexed by the other
+  record's `+0x146`, with its mirror at `+0x113`; `AllyTeam` is `+0x13F`.
 - **Sharing** (DIS; player M2, M3): `PlayerInfo+0x97` holds ShareMetal `0x2`, ShareEnergy `0x4`,
   ShareMapping `0x20` and ShareRadar `0x40`, toggled by level-1 chat commands from the table
   `0x501EB8..0x501F0C`, whose ShareAll `0x419090` flips all four (not in the record). ShareLOS `0x08` has a toggle,
@@ -506,12 +703,11 @@ units' heights differed from their controlling peer (P25).
 **What §3 means for the design.** Resources come from the owner's machine: production and expense
 for its players, everything for the AIs it hosts. A takeover restores base storage with `+0x149`
 bit 0 (while the commander lives), then units, then current; a type-3 record keeps written values,
-as the pass skips it. Sight is recomputed from the written positions every tick (`0x4816A0(0)` at
+as the pass skips it (MEASURED, §2 *Rebuild, takeover and rewind, measured*). Sight is recomputed from the written positions every tick (`0x4816A0(0)` at
 once after a seek), close to what the player saw but not identical (§6c); the explored map is stored
 while bit 0 is on and written back after every `0x4816A0(1)`, and LosType is recorded as it changes.
-A perspective's radar comes from pointing `main+0x2A43` at it. Players are keyed by DPID in a
-network recording; a skirmish record's `+4` has never been read, so a skirmish may need the seat
-index as its key. Alliances are kept as directed pairs plus `AllyTeam`; share bits, limits, totals,
+A perspective's radar comes from pointing `main+0x2A43` at it. Players are keyed by the transport
+ID `+4`, a DPID in a network recording and the seat in a skirmish. Alliances are kept as directed pairs plus `AllyTeam`; share bits, limits, totals,
 kills, losses, `+0x140/+0x144` and the watcher bit are restored, since ENDMSN, elimination and the
 economy gates read them. The engine's one difficulty matches the product page. Presentation is each
 machine's own contribution, sampled at a tick boundary with its source tick and merged through a
@@ -519,8 +715,7 @@ defined clock mapping. HP, build state, kills and height are exact only at the o
 machine's copy of other players' units is a receiver's copy; whether owners send them is open
 ([product page](demo-recorder.md#open-decisions-and-evidence-needed), other players' units).
 
-**Open:** the 12 → 50 reading; a seatless viewer's radar and fog; the cause of §6c's 34 cells;
-the `+4` DPIDs of skirmish records.
+**Open:** the 12 → 50 reading; a seatless viewer's radar and fog; the cause of §6c's 34 cells.
 
 ## 4. Size estimate
 
@@ -606,7 +801,37 @@ static battle; neither figure is an average hour.
 ([exploration](demo-recorder-exploration.md#wider-capture-storage-cost)); on §6b's, 5.3 against 63.9
 and 300.5. §6e's 845 MB/h portable tables come from a different sample (ticks 447–744 of the
 tick-1,852 run). The saving holds only if puppet mode regenerates piece poses, effects and
-projectiles from the engine's own scripts, which is not yet shown.
+projectiles from the engine's own scripts: shown for walk scripts, shots and deaths at 1,432 units
+(§1 *Recording and replay, measured*), not for sounds or the nano spray.
+
+**Measured, 2026-09-29** (§1 *Recording and replay, measured*; the scripts in its record). The
+probe's stream holds every change at full precision, uncompressed:
+
+- a 1,432-unit battle (battles 2–4): 35.6–38.2 MB per minute, 12.6–13.7 MB with xz;
+- the 8-minute AI game: 2.0 MB, 0.77 MB with xz.
+
+A tolerance sampler re-encodes the continuous values. A value is kept when linear interpolation
+from the last kept sample would miss a skipped tick by more than ε (a heading, by more than the
+angle shown), or after a maximum gap; positions are stored as 1/16-wu deltas. Discrete values,
+events, creates, deaths, orders and resources are counted as recorded. With no general compression,
+an hour at the same rate costs:
+
+| MB per hour | every change | ε 0.25 wu, 1° | ε 1 wu, 2° | ε 2 wu, 4° |
+|---|---|---|---|---|
+| Battle 4: 1,432 units, 61 s, 84 deaths; the speed left out | 1,714 | 392 | 198 | 162 |
+| The same, the recorded speed kept as a sampled value | 1,714 | 643 | 517 | 500 |
+| The AI game: four AIs, up to 92 units, 8 min; the speed left out | 14.8 | 6.2 | 5.4 | 5.3 |
+| The same, the recorded speed kept | 14.8 | 7.1 | 6.5 | 6.4 |
+
+- **The speed is the most expensive term.** It changed 363,231 times in the battle's minute. The
+  player needs only what `0x43DA70` derives from it, the walk class (2 bits, rarely changing): a
+  cheaper record [INFERRED, not measured].
+- **The battle is the heaviest case, not an hour.** 68 % of its unit-ticks changed, and its events
+  alone (shots and script starts) were about 14 MB/h as recorded.
+- **Against the budgets.** The four-AI game fits inside the 10 and 25 MB/h budgets. A 1,432-unit
+  battle sustained for an hour would be 1.6–6.4 times the 100 MB/h budget for ten players with
+  1,500 units. No real hour of that size has been recorded, so whether an average one fits is
+  still open.
 
 ## 5. Open experiments
 
@@ -618,14 +843,14 @@ recorded.
 | # | Experiment | Settles | Feeds |
 |---|---|---|---|
 | 1 | **Puppet host**: a type-2 level with the recorded seats, 4–9 included, active and set to 3 before `0x464990`, and a viewer with no seat; commanders, defeat and ENDMSN with type-3 seats | whether puppet mode exists: **it does** (MEASURED 2026-09-29, [§1](#the-puppet-host-measured)) | (1) |
-| 2 | **Motion driver**: direct round-robin-style writes against fed proxies, before the unit tick; walk scripts, footprints, sight | motion fidelity, the recorded fields | (1) |
-| 3 | **Events in-process, bounded**: `0x4B0B00`, `0x49D270`, `0x49AF90`, `0x489CE0`, `0x4866D0(rec, 0)`, `0x41B8D0`, `0x48B090`, `0x47F300` | playback fidelity, §4's event term | (1), (3) |
-| 4 | **1,500-unit rebuild in play**: argument-8 creates, B4's hold, a paused apply, timed against the 1 s seek and 2 s takeover | seek and takeover feasibility | (2) |
-| 5 | **Seat to AI without a reload**: flip the seat, build the `+0x74` and `0x5119C0` objects, then re-create its units at their recorded slots (fresh COB, a local mover); does the AI keep, override or re-plan orders? Does an Escalation factory's one-shot `Upgrade` run in the fork? | takeover without a loading screen, or its fallback back for a decision | (2) |
-| 6 | **Live rewind**: live seats flipped to 3; what their kept `+0x74` objects and local movers do (getter 75 keeps answering the recorded bit, 1 for every skirmish seat, so running scripts stay on their branch) | rewind in a live skirmish | (1), (2) |
-| 7 | **Queues**: direct `0x43ADC0` appends, `0x43B0B0`/`0x419B00` by name, rally, nanoframe adoption | queue fidelity at a takeover | (2) |
-| 8 | **Resources** through `+0xDC/+0xE0` and `+0x149`; residual divergence from fire spread, feature damage, meteors and grid claims | resources at a takeover; puppet drift | (2), (3) |
-| 9 | **A real hour**: AI, structures, air, orders, camera, and the recorder's game-thread cost | *f*, the disk budget, the 0.5 ms per tick budget | (3) |
+| 2 | **Motion driver**: direct round-robin-style writes against fed proxies, before the unit tick; walk scripts, footprints, sight | motion fidelity, the recorded fields: **exact at every checkpoint of a 1,432-unit battle** with the movement pass's presentation parts and the move object's speed, layer and bit 2 written; no proxy is fed; footprints and sight written but not compared (MEASURED 2026-09-29, [§1](#recording-and-replay-measured)) | (1) |
+| 3 | **Events in-process, bounded**: `0x4B0B00`, `0x49D270`, `0x49AF90`, `0x489CE0`, `0x4866D0(rec, 0)`, `0x41B8D0`, `0x48B090`, `0x47F300` | playback fidelity, §4's event term: **deaths, shots and script starts replayed through `0x4866D0`, `0x49D270` and `0x4B0B00`, none refused, the live sets exact**; `0x48B090` writes the state byte; `0x49AF90`, `0x489CE0`, `0x41B8D0` and `0x47F300` were not fed (MEASURED, [§1](#recording-and-replay-measured)) | (1), (3) |
+| 4 | **1,500-unit rebuild in play**: argument-8 creates, B4's hold, a paused apply, timed against the 1 s seek and 2 s takeover | seek and takeover feasibility: **11–47 ms for 1,227–1,432 units, paused or not** (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
+| 5 | **Seat to AI without a reload**: flip the seat, build the `+0x74` and `0x5119C0` objects, then re-create its units at their recorded slots (fresh COB, a local mover); does the AI keep, override or re-plan orders? Does an Escalation factory's one-shot `Upgrade` run in the fork? | takeover without a loading screen: **0.8–1.2 ms per seat; the AI plans, builds and fights**; `Upgrade` not run (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
+| 6 | **Live rewind**: live seats flipped to 3; what their kept `+0x74` objects and local movers do (getter 75 keeps answering the recorded bit, 1 for every skirmish seat, so running scripts stay on their branch) | rewind in a live skirmish: **works, with flip-then-create and the pacing stamp**; features and wrecks not rebuilt (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (1), (2) |
+| 7 | **Queues**: direct `0x43ADC0` appends, `0x43B0B0`/`0x419B00` by name, rally, nanoframe adoption | queue fidelity at a takeover: **queues, the rally and builds in progress continue**, their frames adopted; rally inheritance open (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2) |
+| 8 | **Resources** through `+0xDC/+0xE0` and `+0x149`; residual divergence from fire spread, feature damage, meteors and grid claims | resources at a takeover: **restored**; puppet drift not measured (MEASURED, [§2](#rebuild-takeover-and-rewind-measured)) | (2), (3) |
+| 9 | **A real hour**: AI, structures, air, orders, camera, and the recorder's game-thread cost | *f*, the disk budget, the 0.5 ms per tick budget: **no hour yet**. An 8-minute AI game and four 1,432-unit battles: 0.094–0.123 ms per tick, worst 0.87 ms; size in [§4](#4-size-estimate) (MEASURED, [§1](#recording-and-replay-measured)) | (3) |
 
 ## 6. Corrections made to other notes
 
@@ -662,13 +887,15 @@ The same change corrects these statements elsewhere; the correct facts, all DIS:
 - **The watchdog comment** in `tagpu_scenario.c`, which counted a pause among the states that never
   reach the apply point: a pause skips only the tick (`0x496920..0x496926`; a network game's paused
   branch `0x4968AA..0x4968B0` rejoins at `0x496969`), and every path through the frame `0x496790`
-  reaches the draw call at `0x4969CD` and so `0x4969D2`. No paused apply has been measured live.
+  reaches the draw call at `0x4969CD` and so `0x4969D2`. A paused apply was measured live on
+  2026-09-29 (§2 *Rebuild, takeover and rewind, measured*).
 
 **Still stale:** the watchdog's own message in `tagpu_scenario.c`, *"apply needs a running game, not
 the menus, the mission-end screen or a paused one"*, which [scenario format](../scenario-format.md)
 quotes (phase C, *What the live runs corrected*). By the disassembly above a pause does not keep the
-frame from the apply point, so "or a paused one" is wrong; the message is a string in code, and
-settling it takes that code change and a paused apply measured live. Likewise `tools/tacli`'s
+frame from the apply point, so "or a paused one" is wrong, and a paused apply is now measured
+live (§2 *Rebuild, takeover and rewind, measured*); the message is a string in code, left for a
+code change. Likewise `tools/tacli`'s
 warning when `apply` is asked for resources, and the comment above its player keys, still say the
 engine recomputes storage "every tick"; it is the 30-tick economy pass. Both are code text, left
 for a code change.

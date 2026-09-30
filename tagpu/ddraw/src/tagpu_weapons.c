@@ -1,7 +1,8 @@
 /* tagpu_weapons.c — 1..N weapons per unit. Contract: inc/tagpu_weapons.h.
    Mechanism, site inventory and assertions: research/notes/extra-weapons.md.
    Every VA below is for the pristine TotalA.exe 3.1 (md5 8e74a1df…); every
-   patched site is byte-matched before anything is written. */
+   patched site is a site of the fail-closed table (tagpu_patches.c,
+   fix_extra_weapons), byte-matched with the rest before anything is written. */
 
 #pragma GCC optimize("no-strict-aliasing")
 
@@ -11,11 +12,11 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include "tagpu_weapons.h"
-#include "tagpu_opt.h"
 #include "tagpu_log.h"
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
 #include "tagpu_datakeys.h"
+#include "tagpu_simreg.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -31,9 +32,8 @@ typedef int            i32;
 #define WPN_CAP      16          /* compile-time capacity: slots 0..15        */
 #define WPN_SIDE     (WPN_CAP - 3)
 #define WPN_MAXDEFS  TAGPU_LIM_TYPES   /* one record per unit-type slot the build plays */
-#define WPN_FLAG     "tagpu_weapons.on"
-#define WPN_TRIGGER  "tagpu_weapons.trigger"
-#define WPN_JSON     "tagpu_weapons.json"
+#define WPN_TRIGGER  SIM_TOOL_FILE("tagpu_weapons.trigger")
+#define WPN_JSON     SIM_TOOL_FILE("tagpu_weapons.json")
 
 #define TA_MAINPP        0x00511DE8u   /* TAdynmemStruct**                     */
 #define OFF_UNITS_BEGIN  0x14357       /* UnitStruct* BeginUnitsArray_p        */
@@ -101,16 +101,45 @@ typedef struct WDef {             /* per unit type: what the FBI said beyond wea
    2. State, logging, hit counters
    ========================================================================= */
 
-static int    g_armed;
+/* A def record is FBI content, and its piece caches are filled the first time a slot of the
+   type aims, during play: a filled cache skips a COB query that can fail at the eight-thread
+   cap, so the record is state. */
+static const SimField def_layout[] = {
+    SIM_FIELD(WDef, def, SIMF_ADDR, SIM_ID_UNIT_TYPE),
+    SIM_FIELD_ARRAY(WDef, w, SIMF_ADDR, SIM_ID_WEAPON),
+    SIM_FIELD_ARRAY(WDef, mask, SIMF_ADDR, SIM_ID_NONE),   /* the engine's category masks */
+    SIM_FIELD_END
+};
+/* A side slot is the engine's 28-byte slot. A running aim script's thread record +0x20 holds the
+   address of +0x04, the callback object whose RETURN writes the aim result +0x08
+   (exe-reverse-engineering.md, the slots' "COB thread handle"). */
+static const SimField side_layout[] = {
+    { offsetof(WSlot, target), 4, WPN_SIDE, sizeof(WSlot), SIMF_TARGET, SIM_ID_UNIT_SLOT },
+    { offsetof(WSlot, thread), 8, WPN_SIDE, sizeof(WSlot), SIMF_PINNED, SIM_ID_NONE },
+    SIM_FIELD_EACH(WSlot, weapon, WPN_SIDE, SIMF_ADDR, SIM_ID_WEAPON),
+    SIM_FIELD_END
+};
+
 static WDef*  g_def;              /* [WPN_MAXDEFS], indexed by def array index  */
+SIM_BLOCK(g_def, SIM_STATE, SIM_ID_UNIT_TYPE, WPN_MAXDEFS, def_layout);
 static WSlot* g_side;             /* [rows][WPN_SIDE]                            */
 static u32    g_side_rows;
+SIM_HEAP(g_side, SIM_STATE, SIM_ID_UNIT_SLOT, WPN_SIDE * sizeof(WSlot), g_side_rows, side_layout);
+SIM_VAR(g_side_rows, SIM_STATE);
 static char*  g_side_begin;       /* the unit array the rows were sized for      */
+SIM_VAR_L(g_side_begin, SIM_STATE, tagpu_sim_addr);
 static char*  g_side_end;
+SIM_VAR_L(g_side_end, SIM_STATE, tagpu_sim_addr);
 static u8*    g_pool;             /* RWX pool for trampolines and stubs          */
+SIM_CODE(g_pool);
 static u32    g_pool_used;
+SIM_VAR(g_pool_used, SIM_INSTALL);
 static char   g_name_aim[WPN_CAP][24], g_name_fire[WPN_CAP][24],
               g_name_query[WPN_CAP][24], g_name_aimfrom[WPN_CAP][24];
+SIM_VAR(g_name_aim, SIM_INSTALL);
+SIM_VAR(g_name_fire, SIM_INSTALL);
+SIM_VAR(g_name_query, SIM_INSTALL);
+SIM_VAR(g_name_aimfrom, SIM_INSTALL);
 
 enum { H_START, H_AUTOAIM, H_NAMES, H_RETALIATE, H_ACQUIRE, H_HELPERS, H_SPLICE,
        H_LOADER, H_VIOLATION, H_STOCKSPLICE, H_MISMATCH, H_GROUND, H_COBFULL,
@@ -132,9 +161,14 @@ static const char* const HIT_NAMES[H__N] =
    counts the times the pointer-derived index disagreed with the engine's own
    2-bit field there — the live form of "the stub computes what the engine
    computed" (assertion 3). It must stay 0. */
-static u32 g_hits[H__N];
-static u32 g_fires[WPN_CAP];     /* projectile launches per slot index (one fire-name lookup each) */
-#define HIT(h) (g_hits[h]++)
+/* the oracle's counters and its dump: nothing in the simulation reads them */
+static struct {
+    u32  hits[H__N];
+    u32  fires[WPN_CAP];         /* projectile launches per slot index (one fire-name lookup each) */
+    char dump[1 << 20];          /* the oracle's JSON, built whole before it is written            */
+} g_diag;
+SIM_VAR(g_diag, SIM_PRIVATE);
+#define HIT(h) (g_diag.hits[h]++)
 
 static void wlog(const char* fmt, ...)
 {
@@ -234,10 +268,9 @@ static WSlot* side_row(const char* unit)
     if (begin != g_side_begin || end != g_side_end || !g_side)
     {
         u32 rows = (u32)(end - begin) / UNIT_STRIDE + 1;
-        WSlot* n = (WSlot*)VirtualAlloc(NULL, (size_t)rows * WPN_SIDE * sizeof(WSlot),
-                                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!n) { wlog("side table: VirtualAlloc(%u rows) failed", rows); return 0; }
-        if (g_side) VirtualFree(g_side, 0, MEM_RELEASE);
+        WSlot* n = (WSlot*)SIM_ALLOC(g_side, (size_t)rows * WPN_SIDE * sizeof(WSlot));
+        if (!n) { wlog("side table: no memory for %u rows", rows); return 0; }
+        SIM_FREE(g_side, g_side);
         g_side = n; g_side_rows = rows; g_side_begin = begin; g_side_end = end;
         wlog("side table: %u rows x %d slots (%u KB) for units %p..%p",
              rows, WPN_SIDE, (u32)(rows * WPN_SIDE * sizeof(WSlot) / 1024), begin, end);
@@ -273,7 +306,7 @@ static WSlot* slot_ptr(char* unit, int i)
     if (i >= wpn_count(unit) || i >= WPN_CAP)
     {
         HIT(H_VIOLATION);
-        if (g_hits[H_VIOLATION] <= 20)
+        if (g_diag.hits[H_VIOLATION] <= 20)
             wlog("VIOLATION slot_ptr(unit %p type %.12s, idx %d, count %d) — clamped to slot 0",
                  unit, UDEF(unit) + 0x20, i, wpn_count(unit));
         return (WSlot*)(unit + 4);
@@ -298,7 +331,7 @@ static int slot_index(char* unit, WSlot* slot)
     if (row && slot >= row && slot < row + WPN_SIDE)
         return 3 + (int)(slot - row);
     HIT(H_VIOLATION);
-    if (g_hits[H_VIOLATION] <= 20)
+    if (g_diag.hits[H_VIOLATION] <= 20)
         wlog("VIOLATION slot_index(unit %p, slot %p) — not a slot of this unit; 0 returned", unit, slot);
     return 0;
 }
@@ -307,16 +340,14 @@ static int slot_index(char* unit, WSlot* slot)
    pointer, or NULL when the slot is out of the unit's range — no clamp, no
    VIOLATION. It writes no engine state; past slot 2 it goes through side_row, which
    builds or rebuilds the module's own side table when the unit array has moved
-   (VirtualAlloc, VirtualFree of the old one, a log line), as every other side-row
-   read does. A NULL answer only makes the receiver drop the packet.
-   Armed or not: with the module disarmed a unit has three slots, so idx 0..2
-   answer from the inline slots and idx >= 3 answers NULL. */
+   (a new table, the old one freed, a log line), as every other side-row
+   read does. A NULL answer only makes the receiver drop the packet. */
 char* tagpu_weapons_slot_weapon(char* unit, unsigned idx)
 {
     WSlot* row;
     if (!unit) return 0;
     if (idx < 3u) return ((WSlot*)(unit + 4 + idx * SLOT_STRIDE))->weapon;
-    if (!g_armed || idx >= (unsigned)wpn_count(unit) || idx >= WPN_CAP) return 0;
+    if (idx >= (unsigned)wpn_count(unit) || idx >= WPN_CAP) return 0;
     row = side_row(unit);
     if (!row) return 0;
     return row[idx - 3].weapon;
@@ -450,6 +481,26 @@ static PFN_TargetUnit   o_TargetUnit;
 static PFN_Intercept    o_Intercept;
 static PFN_Traj         o_Traj;
 static PFN_DefCopy      o_DefCopy;
+/* the trampolines: built at install, never written again */
+SIM_VAR(o_StartWeapons, SIM_INSTALL);
+SIM_VAR(o_AutoAim, SIM_INSTALL);
+SIM_VAR(o_CallAim, SIM_INSTALL);
+SIM_VAR(o_QueryPos, SIM_INSTALL);
+SIM_VAR(o_QueryPiece, SIM_INSTALL);
+SIM_VAR(o_Retaliate, SIM_INSTALL);
+SIM_VAR(o_Acquire, SIM_INSTALL);
+SIM_VAR(o_FirstWeapon, SIM_INSTALL);
+SIM_VAR(o_ClearTargetN, SIM_INSTALL);
+SIM_VAR(o_EnableSlotN, SIM_INSTALL);
+SIM_VAR(o_SetTarget, SIM_INSTALL);
+SIM_VAR(o_SetGround, SIM_INSTALL);
+SIM_VAR(o_ClearTarget, SIM_INSTALL);
+SIM_VAR(o_ClearTargetQuiet, SIM_INSTALL);
+SIM_VAR(o_Range, SIM_INSTALL);
+SIM_VAR(o_TargetUnit, SIM_INSTALL);
+SIM_VAR(o_Intercept, SIM_INSTALL);
+SIM_VAR(o_Traj, SIM_INSTALL);
+SIM_VAR(o_DefCopy, SIM_INSTALL);
 
 /* =========================================================================
    7. The C ports — entered only for extended units / slots >= 3
@@ -668,7 +719,7 @@ static int dist2_hi(int dx, int dz)
 /* 0x49ABB0 UnitAutoAim_CheckUnitWeapon(unit, target, idx), for a slot past 2:
    can weapon idx engage target. The entry of 0x49ABB0 belongs to the weapon
    keys' detour in the fail-closed table (tagpu_patches.c, fix_weapon_keys),
-   which calls this for idx >= 3 while the module is armed and filters the
+   which calls this for idx >= 3 and filters the
    answer by the slot's weapon keys; every verdict of the module's own C paths
    is asked through 0x49ABB0 itself (E_CheckUnitWeapon), so it is filtered
    the same way. */
@@ -1167,7 +1218,7 @@ static int derived_index(char* unit, WSlot* slot)
         if (((slot->state >> 2) & 3) != i)
         {
             HIT(H_MISMATCH);
-            if (g_hits[H_MISMATCH] <= 20)
+            if (g_diag.hits[H_MISMATCH] <= 20)
                 wlog("MISMATCH derived slot index %d vs state byte 0x%02X (unit %p %.12s)",
                      i, slot->state, unit, UDEF(unit) + 0x20);
         }
@@ -1183,7 +1234,7 @@ static int __cdecl cb_slot_index(char* unit, WSlot* slot)
 static const char* __cdecl cb_fire_name(char* unit, WSlot* slot)
 {
     int i = derived_index(unit, slot);
-    g_fires[i]++;
+    g_diag.fires[i]++;
     return fire_name(i);
 }
 
@@ -1257,7 +1308,7 @@ static WSlot* __cdecl cb_recv_slot(char* unit, u8* pkt)
         if (idx >= (u32)wpn_count(unit))
         {
             HIT(H_VIOLATION);
-            if (g_hits[H_VIOLATION] <= 20)
+            if (g_diag.hits[H_VIOLATION] <= 20)
                 wlog("VIOLATION WEAPON_FIRED WeapIdx %u for %.12s (count %d) — clamped to 0",
                      idx, UDEF(unit) + 0x20, wpn_count(unit));
             return (WSlot*)(unit + 4);
@@ -1332,12 +1383,14 @@ static u32 weapon_tdf_crc(const char* name)
    explodeas and selfdestructas into CRC_weapons and is about to read it back for
    its last XOR. Fold weapon4..N in the same way and in the same place.
 
-   This is the whole mismatched-peer guard. Without it an armed build and a stock
-   build compute an identical CRC for a type they simulate differently, and the
-   lobby has nothing to disagree about — while an unarmed receiver handling a
-   0x0D WEAPON_FIRED packet with WeapIdx >= 3 indexes past its three inline slots
-   into UnitOrders. With it, two armed peers still agree (same names, same TDFs)
-   and an unarmed peer differs on exactly the types that carry extra weapons.
+   This is the whole mismatched-peer guard. Without it a build with this module
+   and a build without it (the retail game, or any other) compute an identical
+   CRC for a type they simulate differently, and the lobby has nothing to
+   disagree about — while a receiver without the module handling a 0x0D
+   WEAPON_FIRED packet with WeapIdx >= 3 indexes past its three inline slots
+   into UnitOrders. With it, two peers with the module still agree (same names,
+   same TDFs) and a peer without it differs on exactly the types that carry
+   extra weapons.
 
    `ctx` is the unit's own UNITINFO TDF context, the one the engine passes to
    0x4C4630 for weapon1..3 four instructions earlier. */
@@ -1345,7 +1398,7 @@ static void __cdecl cb_crc_weapons(char* def, void* ctx)
 {
     char key[16];
     int  n, folded = 0;
-    if (!g_armed || (size_t)def < 0x600000u || !ctx) return;
+    if ((size_t)def < 0x600000u || !ctx) return;
     for (n = 4; n <= WPN_CAP; n++)
     {
         char* val;
@@ -1356,12 +1409,12 @@ static void __cdecl cb_crc_weapons(char* def, void* ctx)
         /* Mix the slot number in, unlike the stock folds. XOR is self-inverse and
            the extra slots are variable in number, so folding the bare weapon CRC
            would let two slots holding the SAME weapon cancel each other out — a
-           unit with weapon4=weapon5=X would compute the stock CRC and match an
-           unarmed peer exactly where it must not. The same goes for a name no TDF
-           defines: its CRC is 0, but the armed side still gives it a slot, so the
-           term has to be nonzero anyway. Rotate-and-offset by n makes every slot
-           contribute distinctly while two armed peers with the same FBI still
-           agree bit for bit. */
+           unit with weapon4=weapon5=X would compute the stock CRC and match a
+           peer without the module exactly where it must not. The same goes for a
+           name no TDF defines: its CRC is 0, but this module still gives it a
+           slot, so the term has to be nonzero anyway. Rotate-and-offset by n
+           makes every slot contribute distinctly while two peers with the module
+           and the same FBI still agree bit for bit. */
         c = weapon_tdf_crc(val) ^ ((u32)n * 0x9E3779B9u);
         c = (c << n) | (c >> (32 - n));            /* n is 4..16: never 0 or 32 */
         *(u32*)(def + DEF_CRC_WPN) ^= c;
@@ -1378,7 +1431,7 @@ static void __cdecl cb_crc_weapons(char* def, void* ctx)
 }
 
 /* =========================================================================
-   9. x86 emitter, site tables, all-or-nothing install
+   9. x86 emitter and site tables
    ========================================================================= */
 
 typedef struct Emit { u8* p; } Emit;
@@ -1555,21 +1608,9 @@ static const Patch PATCHES[] = {
 #define N_SPLICES (sizeof SPLICES / sizeof SPLICES[0])
 #define N_PATCHES (sizeof PATCHES / sizeof PATCHES[0])
 
-static int verify_all(void)
-{
-    u32 i;
-    int ok = 1;
-    for (i = 0; i < N_HOOKS; i++)
-        if (memcmp((void*)HOOKS[i].addr, HOOKS[i].expect, HOOKS[i].len) != 0)
-        { wlog("disarmed: hook %s @0x%08X bytes differ", HOOKS[i].name, HOOKS[i].addr); ok = 0; }
-    for (i = 0; i < N_SPLICES; i++)
-        if (memcmp((void*)SPLICES[i].addr, SPLICES[i].expect, SPLICES[i].len) != 0)
-        { wlog("disarmed: splice %s @0x%08X bytes differ", SPLICES[i].name, SPLICES[i].addr); ok = 0; }
-    for (i = 0; i < N_PATCHES; i++)
-        if (memcmp((void*)PATCHES[i].addr, PATCHES[i].expect, PATCHES[i].len) != 0)
-        { wlog("disarmed: patch %s @0x%08X bytes differ", PATCHES[i].name, PATCHES[i].addr); ok = 0; }
-    return ok;
-}
+/* The header's count is the tables' own: a site added here without
+   TAGPU_WPN_SITES does not build. */
+typedef char wpn_sites_match_the_header[(N_HOOKS + N_SPLICES + N_PATCHES == TAGPU_WPN_SITES) ? 1 : -1];
 
 static u8* pool_take(u32 n)
 {
@@ -1581,14 +1622,16 @@ static u8* pool_take(u32 n)
     return p;
 }
 
-static void build_trampoline(const Hook* h)
+static u8* build_trampoline(const Hook* h)
 {
     Emit e;
     u8* t = pool_take(h->len + 5);
+    if (!t) return 0;
     e.p = t;
     ebytes(&e, h->expect, h->len);
     ejmp(&e, h->addr + h->len);
     *h->tramp = t;
+    return t;
 }
 
 static u8* build_stub(const Splice* s)
@@ -1596,6 +1639,7 @@ static u8* build_stub(const Splice* s)
     Emit e;
     u8*  stub = pool_take(64 + s->extra_len);
     int  i, pushed = 0;
+    if (!stub) return 0;
     e.p = stub;
     e8(&e, 0x60);                                   /* pushad */
     e8(&e, 0x9C);                                   /* pushfd */
@@ -1616,85 +1660,84 @@ static u8* build_stub(const Splice* s)
     return stub;
 }
 
-static int write_jump(u32 addr, u8 len, const u8* target_or_bytes, int is_jump)
+/* One site for the table: the stock bytes it compares and, in their place, a
+   jmp to `target` NOP-padded to the stolen length, or `repl` for a byte patch.
+   The table keeps the name's pointer for the process, hence the static store. */
+static char g_site_name[TAGPU_WPN_SITES][64];
+SIM_VAR(g_site_name, SIM_INSTALL);
+
+static int site_out(TagpuWpnSite* s, u32 k, u32 va, u8 len, const u8* stock,
+                    const char* kind, const char* name, const void* target, const u8* repl)
 {
-    DWORD old;
-    u8*   p = (u8*)addr;
-    if (!VirtualProtect(p, len, PAGE_EXECUTE_READWRITE, &old)) return 0;
-    if (is_jump)
-    {
-        u32 rel = (u32)target_or_bytes - (addr + 5);
-        p[0] = 0xE9;
-        memcpy(p + 1, &rel, 4);
-        if (len > 5) memset(p + 5, 0x90, len - 5);
-    }
+    if (k >= TAGPU_WPN_SITES || len > TAGPU_WPN_SITE_MAX || (!repl && len < 5)) return 0;
+    s->va    = va;
+    s->n     = len;
+    s->stock = stock;
+    _snprintf(g_site_name[k], sizeof g_site_name[k], "extra weapons: %s %s", kind, name);
+    g_site_name[k][sizeof g_site_name[k] - 1] = 0;
+    s->name  = g_site_name[k];
+    if (repl)
+        memcpy(s->ours, repl, len);
     else
-        memcpy(p, target_or_bytes, len);
-    VirtualProtect(p, len, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), p, len);
-    return 1;
-}
-
-static int install(void)
-{
-    u32 i;
-    u8* stubs[N_SPLICES];
-
-    if (!verify_all()) return 0;
-
-    g_pool = (u8*)VirtualAlloc(NULL, 0x4000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    g_def  = (WDef*)VirtualAlloc(NULL, sizeof(WDef) * WPN_MAXDEFS, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!g_pool || !g_def) { wlog("disarmed: VirtualAlloc failed"); return 0; }
-
-    /* THE RECORDS' LIFETIME FIRST, and nothing else without it: a sim module
-       whose records could outlive their game or their script fails closed.
-       Both sites are matched before either lands, and both land before any
-       other write. A byte mismatch leaves the image as it found it; the
-       second observer failing to land after the first did leaves the first
-       in place, and it touches only the module's own table. */
-    if (!tagpu_detour_bytes_ok(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD) ||
-        !tagpu_detour_bytes_ok(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER))
-    { wlog("disarmed: the unit-data load's or the FBI loader's entry bytes differ"); return 0; }
-    if (!tagpu_detour_observe(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD, cb_unit_load, NULL) ||
-        !tagpu_detour_observe(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER, cb_fbi_load, NULL))
-    { wlog("disarmed: the unit-data load's or the FBI loader's entry could not be observed"); return 0; }
-
-    for (i = 0; i < N_HOOKS; i++) build_trampoline(&HOOKS[i]);
-    for (i = 0; i < N_SPLICES; i++)
     {
-        stubs[i] = build_stub(&SPLICES[i]);
-        if (!stubs[i]) { wlog("disarmed: stub pool exhausted"); return 0; }
+        u32 rel = (u32)target - (va + 5);
+        memset(s->ours, 0x90, len);
+        s->ours[0] = 0xE9;
+        memcpy(s->ours + 1, &rel, 4);
     }
-    /* Every stub and trampoline exists; now the writes, which cannot fail on a
-       page that memcmp just read (VirtualProtect on the image is the only
-       error path and it is checked). */
-    for (i = 0; i < N_HOOKS; i++)
-        if (!write_jump(HOOKS[i].addr, HOOKS[i].len, (const u8*)HOOKS[i].repl, 1))
-        { wlog("VirtualProtect failed at hook %s — image partially patched!", HOOKS[i].name); return 0; }
-    for (i = 0; i < N_SPLICES; i++)
-        if (!write_jump(SPLICES[i].addr, SPLICES[i].len, stubs[i], 1))
-        { wlog("VirtualProtect failed at splice %s — image partially patched!", SPLICES[i].name); return 0; }
-    for (i = 0; i < N_PATCHES; i++)
-        if (!write_jump(PATCHES[i].addr, PATCHES[i].len, PATCHES[i].repl, 0))
-        { wlog("VirtualProtect failed at patch %s — image partially patched!", PATCHES[i].name); return 0; }
     return 1;
 }
 
 /* =========================================================================
-   10. Init and the oracle
+   10. The sites, handed to the fail-closed table, and the oracle
    ========================================================================= */
 
-void tagpu_weapons_init(void)
+int tagpu_weapons_sites(TagpuWpnSite* out)
 {
+    u32 i, k = 0;
+
     build_names();
-    if (!tagpu_opt_on(WPN_FLAG))
+    g_pool = (u8*)SIM_ALLOC(g_pool, 0x4000);
+    g_def  = (WDef*)SIM_ALLOC(g_def, sizeof(WDef) * WPN_MAXDEFS);
+    if (!g_pool || !g_def) { wlog("NOT INSTALLED: no memory for the code pool or the def records"); return TAGPU_WPN_OWN; }
+
+    /* THE RECORDS' LIFETIME FIRST, and nothing else without it: a sim module
+       whose records could outlive their game or their script fails closed.
+       Both entries are matched before either observer lands, and both land
+       before the table compares anything; without them the table refuses
+       (fix_extra_weapons). The second failing to land after the first did
+       leaves the first in place, and it touches only the module's own table. */
+    if (!tagpu_detour_bytes_ok(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD) ||
+        !tagpu_detour_bytes_ok(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER))
+    { wlog("NOT INSTALLED: the unit-data load's or the FBI loader's entry bytes differ"); return TAGPU_WPN_OBSERVERS; }
+    if (!tagpu_detour_observe(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD, cb_unit_load, NULL) ||
+        !tagpu_detour_observe(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER, cb_fbi_load, NULL))
+    { wlog("NOT INSTALLED: the unit-data load's or the FBI loader's entry could not be observed"); return TAGPU_WPN_OWN; }
+
+    /* Every trampoline and stub is made before the table sees any site, and
+       the table writes all of them or none. */
+    for (i = 0; i < N_HOOKS; i++, k++)
+        if (!build_trampoline(&HOOKS[i]) ||
+            !site_out(&out[k], k, HOOKS[i].addr, HOOKS[i].len, HOOKS[i].expect, "hook", HOOKS[i].name,
+                      HOOKS[i].repl, NULL))
+        { wlog("NOT INSTALLED: hook %s could not be made", HOOKS[i].name); return TAGPU_WPN_OWN; }
+    for (i = 0; i < N_SPLICES; i++, k++)
     {
-        /* off: not one byte of the image is touched (assertion 1) */
-        return;
+        u8* stub = build_stub(&SPLICES[i]);
+        if (!stub ||
+            !site_out(&out[k], k, SPLICES[i].addr, SPLICES[i].len, SPLICES[i].expect, "splice", SPLICES[i].name,
+                      stub, NULL))
+        { wlog("NOT INSTALLED: splice %s could not be made", SPLICES[i].name); return TAGPU_WPN_OWN; }
     }
-    g_armed = install();
-    wlog("%s (" WPN_FLAG " or the play default): cap=%d, %u entry hooks, %u splices, %u byte patches, pool %u bytes",
-         g_armed ? "ARMED" : "DISARMED", WPN_CAP, (u32)N_HOOKS, (u32)N_SPLICES, (u32)N_PATCHES, g_pool_used);
+    for (i = 0; i < N_PATCHES; i++, k++)
+        if (!site_out(&out[k], k, PATCHES[i].addr, PATCHES[i].len, PATCHES[i].expect, "patch", PATCHES[i].name,
+                      NULL, PATCHES[i].repl))
+        { wlog("NOT INSTALLED: patch %s could not be made", PATCHES[i].name); return TAGPU_WPN_OWN; }
+
+    wlog("%u sites to the fail-closed table (%u entry hooks, %u splices, %u byte patches), cap=%d, "
+         "pool %u bytes; the limits line says whether the table went in",
+         k, (u32)N_HOOKS, (u32)N_SPLICES, (u32)N_PATCHES, WPN_CAP, g_pool_used);
+    return (int)k;
 }
 
 /* ---- oracle: tagpu_weapons.trigger -> tagpu_weapons.json -------------------- */
@@ -1762,8 +1805,8 @@ static void dump_unit(Out* o, char* u, int first)
 
 static void oracle(const char* spec, unsigned frame)
 {
-    static char buf[1 << 20];
-    Out   o = { buf, buf + sizeof buf - 1 };
+    char* buf = g_diag.dump;
+    Out   o = { buf, buf + sizeof g_diag.dump - 1 };
     char* ta = TA();
     int   want_all = 0, wanted[256], nwanted = 0, i, first = 1;
     const char* p;
@@ -1778,10 +1821,10 @@ static void oracle(const char* spec, unsigned frame)
         p++;
     }
 
-    oput(&o, "{\"frame\":%u,\"armed\":%s,\"cap\":%d,\"hits\":{", frame, g_armed ? "true" : "false", WPN_CAP);
-    for (i = 0; i < H__N; i++) oput(&o, "%s\"%s\":%u", i ? "," : "", HIT_NAMES[i], g_hits[i]);
+    oput(&o, "{\"frame\":%u,\"cap\":%d,\"hits\":{", frame, WPN_CAP);
+    for (i = 0; i < H__N; i++) oput(&o, "%s\"%s\":%u", i ? "," : "", HIT_NAMES[i], g_diag.hits[i]);
     oput(&o, "},\"fires\":[");
-    for (i = 0; i < WPN_CAP; i++) oput(&o, "%s%u", i ? "," : "", g_fires[i]);
+    for (i = 0; i < WPN_CAP; i++) oput(&o, "%s%u", i ? "," : "", g_diag.fires[i]);
     oput(&o, "],\"units\":[");
     if ((size_t)ta >= 0x600000u)
     {
@@ -1811,11 +1854,6 @@ static void oracle(const char* spec, unsigned frame)
     fwrite(buf, 1, (size_t)(o.p - buf), f);
     fclose(f);
     MoveFileExA(WPN_JSON ".tmp", WPN_JSON, MOVEFILE_REPLACE_EXISTING);
-}
-
-int tagpu_weapons_armed(void)
-{
-    return g_armed;
 }
 
 void tagpu_weapons_frame(unsigned int frame)

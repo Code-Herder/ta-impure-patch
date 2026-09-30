@@ -43,8 +43,8 @@ One unit, one archive: drop `warlordex.ufo` in the game directory and the
 Warlord's longer sibling appears in the advanced shipyard. Nothing outside the
 archive is touched, and deleting it removes the unit.
 
-Then, as with `extra_weapons_fixture.py`: `tacli arm <inst> weapons.on`, drop the
-.ufo in the instance gamedir, and spawn CORBATSX.
+Then, as with `extra_weapons_fixture.py`: drop the .ufo in the instance gamedir,
+and spawn CORBATSX.
 """
 
 import os

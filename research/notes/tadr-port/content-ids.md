@@ -270,9 +270,8 @@ and `0x0F` do not change.
   mod with a weapon 253 or 255, which stock merely desyncs.
 - **The `0x0D` receiver bounds the shooter and target indexes** at `+0x21` and `+0x1F`: each a
   `u16` scaled by 0x118 into the unit array, with no bound in stock. Its slot byte at `+0x23`
-  indexes the shooter's three slots (`0x49D366`), unbounded too: without the extra-weapons
-  module a slot past 2 is dropped, and with it the module's splice there bounds it by the
-  unit's own count.
+  indexes the shooter's three slots (`0x49D366`), unbounded too: the extra-weapons module's
+  splice there (`0x49D364`, a row of the same table) bounds it by the unit's own count.
 - **The `0x0F` receiver refuses a cell outside the map.** Stock goes on to read through the NULL
   that `0x481550` returns for one (`0x4244CF`).
 

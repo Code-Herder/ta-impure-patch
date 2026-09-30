@@ -49,7 +49,6 @@ the arm files count. A dependency turns off with its parent.
 | `mirror.on` | | the store's `edge` key decides it (below) |
 | `gui.on` | | |
 | `classicpp.on` | | |
-| `weapons.on` | | |
 
 Not on the defaults, and why: `owndraw`, `featown`, `fxown` stop the engine drawing what our pass
 draws and so hole the golden source (`tacli` still auto-arms them when the pass is armed, because
@@ -387,7 +386,6 @@ that map's size.
 | `menu.off` | attach | the render-options screen off (`references/modules.md`) |
 | `hud.on`, `hud.off` | attach | HUD scale (`references/ui-layer.md`) |
 | `gui.on`, `gui.off` | attach + live | the UI layer (`references/ui-layer.md`) |
-| `weapons.on` | attach | extra weapons (`references/modules.md`) |
 | `tagpu_nowarp.on`, `tagpu_title.txt`, `tagpu_defaults.off`, `tagpu_shield.on`, `tagpu_keys.txt`, the `*.trigger` files | | tacli's own plumbing: the pointer-warp suppression, the window title, the defaults opt-out, the firewall, the injected tokens, the on-demand verbs |
 
 ## Instruments

@@ -196,8 +196,8 @@ weapon. There is no reason to prefer this over a count.
 `CAP` is a compile-time capacity (16 fits the 5 bits available if the index is
 kept in the state byte; 32 if bits 5–7 are proven free); `def->count` is what
 the loader found. All loops become `for (i = 0; i < count; i++)`; `count` is
-stock 3 for every unit whose FBI has no `Weapon4`, so **stock units run exactly
-the stock loops** — that is the regression guard.
+stock 3 for every unit whose FBI names no weapon past `Weapon3`, so **stock units
+run exactly the stock loops** — that is the regression guard.
 
 Two ways to carry the index once it no longer fits two bits, both local to
 code we already detour:
@@ -235,31 +235,35 @@ Go with (1).
   receiver detour has to read the index at the shifted offset. Our stack is
   standalone, so this is a note, not a blocker.
 
-## Making it optional
+## Always on, and harmless to content that does not use it
 
-Three layers. Layer 2 is the one that carries the design weight, and it is
-the one that rests on claims that have only been read off decompiles so far;
-the checklist in the next section is what turns those claims into facts.
+Three layers. Layer 2 carries the design weight; its claims were read off
+decompiles first, and the checklist in the next section, with §Assertions —
+status, is what turns them into facts.
 
-### Layer 1 — arming, off by default
+### Layer 1 — always on, in the fail-closed table
 
-A flag file `tagpu_weapons.on` next to the exe, checked once at
-`DLL_PROCESS_ATTACH`, the same convention as `tagpu_suppress.on` and
-`tagpu_tracer.on`. Absent: the module returns before touching memory, and the
-process is byte-identical to an unpatched one. Present: the module installs.
-Because each `tacli` instance owns its own game directory, the switch is per
-launch and per instance; it cannot be toggled mid-game, because the detours
-and side tables are installed at attach and live state accumulates in them.
+The module has no switch. Its 44 sites are rows of the fail-closed table that holds the
+other changes to the simulation (`tagpu_patches.c`, `fix_extra_weapons`, in both builds). At attach
+the table compares every site with the exe **file**, writes all of them or puts back what it
+wrote, and on any mismatch writes nothing and refuses the launch: the report at the first
+DirectDraw call names the site, as in `0x0049D7EB extra weapons: patch cb0.d.and / want 24 07
+/ have 24 07 / stock 24 03 (the exe file differs from 3.1 here)`. A half-patched engine is
+worse than an unpatched one, and a refused launch is better than either.
 
-Arming is **all-or-nothing**: every site is byte-match guarded, all sites are
-checked *before* the first write, and a single mismatch leaves every site
-untouched and logs `weapons: disarmed (site 0x…, expected … got …)`. A
-half-patched engine is worse than an unpatched one.
+A switch would be a dimension: every recording, replay and network game would have to carry
+which way it was set, because a build with the module and a build without it are different
+games for exactly the types that declare `Weapon4+` (§Multiplayer below). The demo recorder
+rests on there being no such dimension ([demo recorder](tadr-port/demo-recorder.md),
+*Completeness and verification*). The measurements in this note that compare a process *without* the module are
+older than that: until 2026-09-29 the module had a flag file, `tagpu_weapons.on`, and a process
+without it wrote none of the module's bytes.
 
 ### Layer 2 — stock units run stock code
 
-With the module armed, a unit type whose FBI has no `Weapon4` key must behave
-exactly as it does today, down to the tick. Two mechanisms:
+A unit type whose FBI names no weapon past `Weapon3` (no non-empty `Weapon4`..`Weapon16`:
+the loader takes each on its own, so `Weapon5` alone makes a five-slot type) behaves
+exactly as it does in the retail game, down to the tick. Two mechanisms:
 
 - **Replaced functions take a trampoline back for `count <= 3`.** The entry
   detour on `AutoAim`, `UNITS_StartWeaponsScripts`, the three name helpers and
@@ -287,15 +291,16 @@ exactly as it does today, down to the tick. Two mechanisms:
   writes `i & 3` there for compatibility and never reads it back; the real
   index is derived from the slot pointer.
 
-Consequence, and the property that makes the switch safe: **armed plus stock
-content is tick-identical to unarmed.** That is a testable claim about
+Consequence, and the property that makes always-on safe: **stock content is
+tick-identical with the module and without it.** That is a testable claim about
 replays and multiplayer, and it is tested, not assumed (assertions 3 and 4).
 
 ### Layer 3 — content lives apart
 
-The N-weapon unit ships as its own archive or loose `units/` files. Patch on,
-content absent: nothing changes. Content present, patch off: the stock loader
-ignores unknown FBI keys and the unit has its first three weapons.
+The N-weapon unit ships as its own archive or loose `units/` files. Content
+absent: nothing changes. Content present on a build without the module (the
+retail game): the stock loader ignores unknown FBI keys and the unit has its
+first three weapons.
 
 ### Multiplayer: who computes what, and the guard
 
@@ -303,11 +308,12 @@ From `FUN_0048AD30` [DECOMPILE], `AutoAim` runs only for units owned by a local
 human or local AI (`player + 0x73 ∈ {1, 2}`). Remote units' weapons are driven
 by two packets: `0x10 UNIT_START_SCRIPT`, which carries the COB **method index**
 (`FUN_00456200` looks the name up first), and `0x0D WEAPON_FIRED`, whose
-`WeapIdx` is a full byte at `+0x23`. So two armed peers with identical COB
-files (already a unit-sync requirement) agree on which script a fired packet
+`WeapIdx` is a full byte at `+0x23`. So two peers with the module and identical
+COB files (already a unit-sync requirement) agree on which script a fired packet
 means, and the receiver indexes the side slot for `WeapIdx ≥ 3`.
 
-The guard for **mismatched** peers is the unit-sync handshake, and it now exists.
+The guard against a peer **without** the module (the retail game, or any build
+that does not fold the extra weapons) is the unit-sync handshake.
 `CRC_weapons` (`def + 0x146`) is XOR-folded into `CRC_all` (`+0x142`) by
 `UnitInfo_CalcScriptCRC` (`0x42A610`) before the first sub-2 `0x1A UNIT_DATA`
 packet [CORPUS]. `CRC_weapons` itself is built by `FUN_0042A8D0` — and the survey
@@ -325,25 +331,25 @@ from the first file that has the section.
 the def and `[esp+0x1c]` is that unit's own `UNITINFO` TDF context, so the callback
 has everything the engine has; it XORs its terms in first and the stolen
 instruction then picks them up. It fires only for a type that actually declares
-`weapon4+`, so stock content is bit-identical armed or not.
+`weapon4+`, so a stock type's CRC is the retail one.
 
 The per-slot term is **not** the bare weapon CRC. XOR is self-inverse and the
 extra slots vary in number, so folding the bare CRC lets two slots holding the
 *same* weapon cancel out — a `weapon4 = weapon5 = ARM_LIGHTLASER` unit would
-compute the stock CRC and match an unarmed peer exactly where it must not. A name
-no TDF defines has CRC 0 and would vanish the same way while still costing the
-armed side a slot. So each occupied slot contributes
+compute the stock CRC and match a peer without the module exactly where it must
+not. A name no TDF defines has CRC 0 and would vanish the same way while the unit
+still has the slot on our side. So each occupied slot contributes
 `rotl(crc ^ n * 0x9E3779B9, n)` for slot number `n` (4..16, so the rotate is never
-0 or 32). Two armed peers with the same FBI still agree bit for bit.
+0 or 32). Two peers with the module and the same FBI still agree bit for bit.
 
 Measured (`tacli weapons` reports `crc_weapons` / `crc_all` per type):
 
-| Type | armed | unarmed |
+| Type | with the module | without |
 |---|---|---|
 | `ARMLLT10` (ten lasers) | `0x0D3E3F4D` | `0x2AE2553D` |
 | `ARMCOM`, `CORSOLAR`, … (stock) | unchanged | unchanged |
 
-The armed value is *predicted* by the formula from the unarmed one and
+The value with the module is *predicted* by the formula from the one without and
 `ARM_LIGHTLASER`'s TDF CRC (`0x8E326773`), which is how the fold was verified
 without a second fixture.
 
@@ -352,9 +358,9 @@ without a second fixture.
 
 | host `mp1` | joiner `mp2` | unit types in the game | `ARMLLT10` |
 |---|---|---|---|
-| unarmed | unarmed | 281 | present |
-| armed | armed | 281 | present |
-| **armed** | **unarmed** | **279** | **gone from both peers** |
+| without | without | 281 | present |
+| with the module | with the module | 281 | present |
+| **with the module** | **without** | **279** | **gone from both peers** |
 
 TA **disables exactly the mismatched unit types and starts the game anyway** —
 neither "refuse to start" nor "warn only". The two `.ufo` types disappear from the
@@ -368,42 +374,43 @@ errors on N units!" text is not in the binary — the only sync-related strings 
 `+syncerr`, `SYNCHING` and `Synchronization complete` — and no GUI file produced
 one either. The mismatch is silent; the *effect* is the unit type going away.
 
-**That closes assertion 15 without a guard of our own.** The failure mode was an
-unarmed receiver handling `WeapIdx ≥ 3` and indexing past its three slots into
-`UnitOrders`. It cannot arise: in a mismatched game no unit of an extended type
-can exist, on either side, so no `0x0D` packet can name a slot beyond 2. The
-module's receiver clamp stays as belt-and-braces.
+**That closes assertion 15 without a guard of our own.** The failure mode was a
+receiver without the module handling `WeapIdx ≥ 3` and indexing past its three
+slots into `UnitOrders`. It cannot arise: in a mismatched game no unit of an
+extended type can exist, on either side, so no `0x0D` packet can name a slot
+beyond 2. On our side the module's receiver splice bounds the slot by the unit's
+own count whatever the peer sends.
 
 ## Assertions that must hold before this ships
 
-Each row is a claim made above from static reading. None is proven live yet.
-The A/B harness is the existing one: the same JSON scenario
+Each row is a claim made above from static reading; §Assertions — status below
+says which are proven. The A/B harness is the existing one: the same JSON scenario
 (`scenarios/shootall-ab.json`, `scenarios/200v200.json`) in two `tacli`
-instances, armed and unarmed, with periodic roster dumps compared.
+instances, with the module and without it, with periodic roster dumps compared.
 
 | # | Assertion | Why it matters | How to verify |
 |---|---|---|---|
-| 1 | Unarmed (no flag file): not one byte of the image is written | the switch is real | at attach and at first frame, checksum every page the module would touch and compare with the pristine file bytes; `tagpu.log` says `weapons: disarmed` |
-| 2 | Arming is all-or-nothing | a half-patched engine corrupts silently | debug build with one site's expected bytes deliberately wrong: module reports disarmed and every other site is still pristine |
-| 3 | Armed + stock content: the sim is tick-identical to unarmed | layer 2's whole point; replay and MP safety | A/B scenario run; diff roster dumps (position, HP, kills, reload, target) at fixed ticks; any drift is a bug in a mid-function stub |
-| 4 | Armed + stock content: the C re-implementations are never entered | same | hit counters in every C path stay 0 across a full stock skirmish, AI included |
+| 1 | Every launch has the whole module: it installs, or the launch is refused | no game runs with the module half there or missing, so no recording or peer has to say which | a launch with the play defaults off logs the module's sites and the table's full count; the module's own failures (its pool, its observers) take the table's refusal |
+| 2 | The install is all-or-nothing | a half-patched engine corrupts silently | an exe with one site's bytes changed: the launch is refused, the report names the site, and no site is written |
+| 3 | Stock content: the sim is tick-identical with the module and without it | layer 2's whole point; replay and MP safety | A/B scenario run; diff roster dumps (position, HP, kills, reload, target) at fixed ticks; any drift is a bug in a mid-function stub |
+| 4 | Stock content: the C re-implementations are never entered | same | hit counters in every C path stay 0 across a full stock skirmish, AI included |
 | 5 | Trampolines are correct for every replaced function | wrong stolen-byte length = crash on the fast path | disassembly check that no relocated instruction is IP-relative (a `jmp`/`call` in the first 5 bytes) — `DisasmWindow.java` on each entry |
 | 6 | An N-weapon unit fires all N, each through its own `Aim/Fire/Query/AimFrom` script | the feature | test unit with `Weapon4..N`; log script starts per slot and projectile spawns per weapon type |
-| 7 | Remote peer: `0x10` arrives as method index and `0x0D` `WeapIdx ≥ 3` lands in the side slot | MP correctness between armed peers | two armed `tacli` instances in a LAN game; receiver-side log of `WeapIdx` and the slot it resolved to |
-| 8 | Mismatched peers: the sync handshake singles out exactly the `Weapon4` unit types, and nothing else | the optionality guard | one armed, one unarmed instance in one game; compare `tacli units` counts and the per-type `crc_weapons` on both sides |
+| 7 | Remote peer: `0x10` arrives as method index and `0x0D` `WeapIdx ≥ 3` lands in the side slot | MP correctness between peers with the module | two `tacli` instances in a LAN game; receiver-side log of `WeapIdx` and the slot it resolved to |
+| 8 | Mismatched peers: the sync handshake singles out exactly the `Weapon4` unit types, and nothing else | the guard against a peer without the module | one instance with the module and one without, in one game; compare `tacli units` counts and the per-type `crc_weapons` on both sides |
 | 9 | What TA does on a unit CRC mismatch (refuse start / disable unit / warn only) | decides whether we need our own guard | same test, then attempt to start; if it starts, build the extra guard before anything else |
 | 10 | `AutoAim` is never executed for remote-owned units | confirms the ownership model the MP story rests on | log owner state in the `AutoAim` wrapper during the LAN game; remote units must never appear |
 | 11 | Save then load with an N-weapon unit: no crash, side slots are re-initialised | known gap is benign | save mid-fight, load, confirm weapons 4..N resume (the load path must reset side slots; the savegame loader does not call `UNITS_StartWeaponsScripts`) |
 | 12 | Give/share an N-weapon unit: no crash | known gap is benign | share the unit in the LAN game; stock beyond slot 3 may be lost, nothing else |
 | 13 | No caller passes `idx ≥ count` for a stock unit | guards the four order-state-machine regions Ghidra has no function bodies for | `SlotPtr` asserts `idx < count` and logs violations; run a long AI skirmish and a unit-heavy scenario |
-| 14 | The mid-function stubs cost nothing measurable | ~25 splices on per-tick paths | tick rate of `200v200.json` armed vs unarmed |
-| 15 | Unarmed peers never receive `WeapIdx ≥ 3` | the corruption case | only true if 8/9 give a real guard; otherwise our own guard must make it true |
+| 14 | The mid-function stubs cost nothing measurable | ~25 splices on per-tick paths | tick rate of `200v200.json` with the module and without it |
+| 15 | Peers without the module never receive `WeapIdx ≥ 3` | the corruption case | only true if 8/9 give a real guard; otherwise our own guard must make it true |
 
 ## Cost and risk summary
 
 | Work item | Fixed 4 | Dynamic |
 |---|---|---|
-| Arming gate, all-or-nothing install, `count <= 3` trampolines | ✔ | ✔ |
+| All-or-nothing install, `count <= 3` trampolines | ✔ | ✔ |
 | Def + unit side tables, create-time reset | ✔ | ✔ |
 | FBI loader detour (`weaponN`, `wN_badTargetCategory`) | ✔ | ✔ |
 | Re-implement `UNITS_StartWeaponsScripts`, `AutoAim` | ✔ | ✔ |
@@ -435,8 +442,8 @@ skirmish.
    selected unit (state byte, reload, target) — confirms the slot layout live
    and is the A/B oracle for assertions 3 and 4 from then on.
 2. **Names first**: replace the three stack-array helpers and re-point the two
-   tables at DLL-side tables with `CAP` entries, behind the flag file and the
-   all-or-nothing install. Assertions 1–5 pass before anything else is added.
+   tables at DLL-side tables with `CAP` entries, behind the all-or-nothing
+   install. Assertions 1–5 pass before anything else is added.
 3. **Storage + loops**: side tables, create-time reset, loader detour, the
    loop rewrites, slot-address detours. Test with a stock unit given a
    `Weapon4=` in a loose `units/*.fbi` override and a COB with `AimWeapon4` —
@@ -464,23 +471,24 @@ All in `tools/ghidra-scripts/`, run with the usual headless form
 
 Option B as decided (per-type count from `Weapon4..N`, capacity 16), as the
 module `tagpu/ddraw/src/tagpu_weapons.c` (contract in
-`inc/tagpu_weapons.h`), initialised from `DllMain` after the render passes.
-Everything below was measured on the pristine 3.1 build under wine with `tacli`.
+`inc/tagpu_weapons.h`), whose sites the fail-closed table installs at attach,
+before the exe's own startup code. Everything below was measured on the pristine
+3.1 build under wine with `tacli`.
 
 ### Shape
 
 | Piece | What it is |
 |---|---|
-| Gate | `tagpu_weapons.on` next to the exe at attach; absent = not one byte written (the oracle still works). `tacli arm <inst> weapons.on` before launch. |
-| Install | 19 entry hooks, 21 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. A failure after the match leaves what was written before it: the stub pool running out leaves only the two entry observers, which touch only the module's own table; a `VirtualProtect` failing in the write loops (logged `image partially patched!`, never observed on the image's own `.text`) leaves every hook and splice written before it, and because the `loader` splice is written before the `crc` one and `cb_crc_weapons` folds only while armed, extended records can then fill with the sync fold off. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used); the two entry observers' stubs come from the shared `tagpu_detour_stub`. |
-| Entry hooks (trampoline for stock) | `UNITS_StartWeaponsScripts`, `AutoAim`, the three name helpers, retaliation `0x406F80`, acquisition `0x4089A0` (per *batch*: the original runs unless a unit in the cursor's batch is extended), `0x4897E0`, `0x4898B0`, `0x489800` (an index helper the survey missed — the allocator's per-slot "enable"), `0x48A060/0A0/0F0/160`, `0x49ADF0`, `0x48A190`, `Trajectory3` (also missed by the survey: it reads `unit+0x10+idx*0x1C`), `0x49D120`, and the def copy `0x42B370` (keeps the side record with the type it describes). Two observers, not trampolines: the unit-data load's entry `0x42D2E0` and the FBI loader's entry `0x42BF40`, through the shared `tagpu_detour_observe` so `tagpu_datakeys.c`'s observers on the same entries chain onto them; landed before any other write, and the module disarms without them. **Not `CheckUnitWeapon` `0x49ABB0`**: its entry is the weapon keys' (TADR section C, landing C2, in the fail-closed table), which asks this module's `tagpu_weapons_check_slot` for a slot past 2 while it is armed and filters every slot's verdict by the weapon's keys; the module's own calls (retaliation, acquisition) go through the engine's entry, so they are filtered too. |
-| Splices | loader `0x42CEF2` (reads `weaponN` / `wN_badTargetCategory`), unit-info CRC `0x42B004` (folds `weapon4..N` into `CRC_weapons`), `WEAPON_FIRED` receiver `0x49D364` (clamps `WeapIdx >= count` to slot 0 and logs), the three `FireProjectile_*` name lookups, eleven `state>>2&3` decodes in the four fire callbacks, two in the target finder `0x40B7B0`, one in the target-position helper `0x48A1E0`. |
+| Install | Always on, in both builds. `tagpu_weapons_sites` builds every stub and trampoline and hands the 44 sites (19 entry hooks, 21 mid-function splices, 4 in-place byte patches), stock bytes and ours, to the fail-closed table (`fix_extra_weapons` in `tagpu_patches.c`, registered right after the unit keys). The table compares every site with the exe file, writes all of them or puts back what it wrote, and refuses the launch on any mismatch, naming the site in the report; the module's own failures refuse it too: its pool not allocated or a site not built is `lim_no_stub`, an observer not installed is `lim_needs`. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1760 bytes used); the two entry observers' stubs come from the shared `tagpu_detour_stub`. The log says `weapons: 44 sites to the fail-closed table (19 entry hooks, 21 splices, 4 byte patches), cap=16, pool 1760 bytes; …`, then `enginefix: extra weapons -- …`, and the `limits:` line says whether the table went in (**MEASURED 2026-09-29**, raised build, `tagpu_defaults.off` present: `limits: installed 402 sites`; the stock-limits build: `the simulation fixes' 203 sites installed`, and the ten-laser tower fired slots 0 and 3–8 in its first seconds with `violation` = `mismatch` = `cob_full` = 0; an exe whose `cb0.d.and` byte was changed in the file refused with `1 of 402 sites differ, nothing written`). Beside the mods (**MEASURED 2026-09-29**, the Wine compat suite, 19 setups, 0 UNEXPECTED): every setup that loads Impure installed the 44 sites; with TADR let run (`tagpu_takeover.off`), Total Mayhem's rewrites 18 of the 402 rows and the retail recorder's one, the COB getter row, none of them the module's. |
+| Entry hooks (trampoline for stock) | `UNITS_StartWeaponsScripts`, `AutoAim`, the three name helpers, retaliation `0x406F80`, acquisition `0x4089A0` (per *batch*: the original runs unless a unit in the cursor's batch is extended), `0x4897E0`, `0x4898B0`, `0x489800` (an index helper the survey missed — the allocator's per-slot "enable"), `0x48A060/0A0/0F0/160`, `0x49ADF0`, `0x48A190`, `Trajectory3` (also missed by the survey: it reads `unit+0x10+idx*0x1C`), `0x49D120`, and the def copy `0x42B370` (keeps the side record with the type it describes). Two observers, not trampolines and not table rows: the unit-data load's entry `0x42D2E0` and the FBI loader's entry `0x42BF40`, through the shared `tagpu_detour_observe`, chained onto `tagpu_datakeys.c`'s observers on the same entries (the unit keys' reader is registered first, so its callback runs first); installed while the module registers its sites, and the table refuses the launch without them. **Not `CheckUnitWeapon` `0x49ABB0`**: its entry is the weapon keys' (TADR section C, landing C2, in the fail-closed table), which asks this module's `tagpu_weapons_check_slot` for a slot past 2 and filters every slot's verdict by the weapon's keys; the module's own calls (retaliation, acquisition) go through the engine's entry, so they are filtered too. |
+| Splices | loader `0x42CEF2` (reads `weaponN` / `wN_badTargetCategory`), unit-info CRC `0x42B004` (folds `weapon4..N` into `CRC_weapons`), `WEAPON_FIRED` receiver `0x49D364` (clamps `WeapIdx >= count` to slot 0 and logs), the three `FireProjectile_*` name lookups, eleven `state>>2&3` decodes in the four fire callbacks, two in the target finder `0x40B7B0`, one in the target-position helper `0x48A1E0`, and the attack-ground order `0x4039BE` (in `0x4038A0`: every side slot gets the spot, snag 9). |
 | Byte patches | the three `FireProjectile_*` heading loads (`mov si,[ebp+ecx*4+0x1a]` → `mov si,[edi+0x16]`, the slot pointer is in a register) and one `and al,3` after a spliced decode. |
 | Side tables | def records keyed by def array index (the game-start loader compacts the array, numbers it, *then* runs the FBI loader per final slot, so the index is stable; the record also stores the def pointer and answers "stock" on a mismatch). The pointer check alone cannot tell two games apart — the def array can come back at the same address, and the FBI loader skips a slot with no file or leaves one whose file does not open — so every record is emptied at the unit-data load's entry (`0x42D2E0`, logged as `unit-data load: N def record(s) of the last load emptied`), before the load's def copies and its FBI loop, and a slot this load did not write reads as stock. The piece caches (the COB's `AimFromWeaponN` / `QueryWeaponN` answers) are forgotten at every entry to the FBI loader, because a `Reload` replaces the COB even when its FBI fails to open; the console kills every unit of the type before it reloads (`0x486E80`, engine map), so the answers asked again only ever serve units created after the reload (measured 2026-09-25: the same pieces, 2 and 1, on every extended slot, and new towers launching from them — once with the FBI opening, when the loader splice rewrites the record anyway, and once with a loose `units/ARMLLT10.fbi` holding no `[UNITINFO]`, when only the entry observer resets them: the log reads `reload: ARMLLT10 (def #72) forgets its piece caches (slot 3 held 2,1)`, no second `loader:` line follows, and the record keeps its ten weapons and its CRC); unit side rows `[units][13]` sized from the live unit array and reset by the module's own `StartWeaponsScripts` at creation (which every create path, savegame load included, goes through). |
 | Slot index | derived from pointers (`SlotIndex(unit, slot)`); the 2-bit field still holds `i & 3`. |
 | Section C's weapon keys | For slots past 2 the module runs the engine's decisions in C, so the keys reach them there ([data keys, C2](tadr-port/data-keys.html#c2-as-built)). The verdict comes through `0x49ABB0`'s entry (above). The C AutoAim loop asks `tagpu_datakeys_fire_gate` after the slot's per-tick target read, as the engine's loop does at `0x49E1FD`: `notoverwater`/`notoverland` hold the slot, and `nottoair` drops a flying target. Retaliation's "Under Attack" (`0x47F850(victim, 2, 0)`, stock's `0x4071D8`) goes through `tagpu_datakeys_alert`, which `nomapweaponalert` silences for harmless weather. Measured on `WKLLT5` (slots 1 and 4 an unkeyed laser, slot 5 a `nottoair` one): slots 0 and 3 target a hovering aircraft, and slot 4 never does. |
 | Names | slots 0–2 use the engine's own strings and tables; 3+ are `AimWeaponN` / `FireWeaponN` / `QueryWeaponN` / `AimFromWeaponN` (1-based). |
-| Oracle | `tagpu_weapons.trigger` → `tagpu_weapons.json`; `tacli weapons <inst> [idx…]` prints every slot of every unit (state, weapon, target, reload, heading, pitch, stock, aim result, thread), the arming state, the C-path hit counters, projectile launches per slot, and a `pieces` line: each extended type's cached `AimFromWeaponN,QueryWeaponN` pieces from slot 3 on (`-1` = not asked yet). Works unarmed, which makes the unarmed instance the control. Four counters are diagnostics rather than coverage: `violation` and `mismatch` must stay 0 (assertions 3 and 13), `cob_full` must stay 0 (snag 10 — nonzero means the unit ran out of COB threads and some slot is aiming from piece 0), and `hold_fire` counts shots declined because the barrel had not slewed on target yet, which is working as intended. |
+| Oracle | `tagpu_weapons.trigger` → `tagpu_weapons.json`; `tacli weapons <inst> [idx…]` prints every slot of every unit (state, weapon, target, reload, heading, pitch, stock, aim result, thread), the C-path hit counters, projectile launches per slot, and a `pieces` line: each extended type's cached `AimFromWeaponN,QueryWeaponN` pieces from slot 3 on (`-1` = not asked yet). Four counters are diagnostics rather than coverage: `violation` and `mismatch` must stay 0 (assertions 3 and 13), `cob_full` must stay 0 (snag 10 — nonzero means the unit ran out of COB threads and some slot is aiming from piece 0), and `hold_fire` counts shots declined because the barrel had not slewed on target yet, which is working as intended. |
+| Simulation state | Declared in the registry the demo recorder walks (`inc/tagpu_simreg.h`, [completeness design](tadr-port/demo-recorder-completeness.md)). The def records `g_def` are state keyed by unit type, since their piece caches fill during play, with the def and weapon pointers named as addresses. The side slots `g_side` are state keyed by unit slot, with each slot's target (a unit slot or a ground point), its weapon pointer and its COB callback object named; a running aim script's thread record points at that object, so a restore writes the rows in place and never moves them. The stub pool is install-time code, the trampolines and name pointers install-time values, and the hit counters and the oracle's dump one private struct. The trigger and the dump are tool files, not levers. |
 
 ### Content tooling (no COB compiler needed)
 
@@ -799,21 +807,21 @@ are unaffected" above is about the lateral-offset gate only.
 
 | # | Status | Evidence |
 |---|---|---|
-| 1 | **holds** | unarmed launches log nothing and leave every site pristine (the install path is never entered); the oracle reads the stock slots exactly as the note's layout says (states `0x12/0x14/0x18`, weapon in slot 0, thread preset `0x4FD6F0`). |
-| 2 | by construction, not exercised | `verify_all()` runs over all 45 sites before any write; a deliberate-mismatch debug run is still to do. |
-| 3 | **holds (live)** | armed + stock content through two `shootall` fights and an AI game: `stock_splice` = 8410 stub executions on the stock path, `mismatch` = 0 (the pointer-derived index agreed with the engine's 2-bit field every time), no crash across ~25 000 frames. A roster diff at fixed ticks between the armed and unarmed instances was not done (the two instances are not tick-aligned); the stub equivalence is proven directly instead. |
+| 1 | **holds (live, 2026-09-29)** | a bare `tacli` launch with the play defaults off (`tagpu_defaults.off` present) logged the module's 44 sites and `limits: installed 402 sites`, and a ten-laser tower then fired slots 0 and 3–9 (`fires by slot: 0=4 3=2 4=4 5=2 6=1 7=3 8=3 9=1`, `violation` = `mismatch` = `cob_full` = 0). No file or setting reaches the install, and each of the module's own failures returns the table's refusal (`fix_extra_weapons`). The oracle reads the stock slots exactly as the note's layout says (states `0x12/0x14/0x18`, weapon in slot 0, thread preset `0x4FD6F0`). |
+| 2 | **holds (live, 2026-09-29)** | an instance whose own copy of the exe had file offset `0x9CBEC` changed from `03` to `07` — inside the `cb0.d.and` site at `0x49D7EB`, stock `and al,3` (`24 03`), which the module turns into two `nop`s — refused to start: `result: 1 of 402 sites differ, nothing written`, and the report's line `0x0049D7EB extra weapons: patch cb0.d.and / want 24 07 / have 24 07 / stock 24 03 (the exe file differs from 3.1 here)` (at install `want` is the file's bytes: memory matched the file, and the file is what differs from 3.1). |
+| 3 | **holds (live)** | the module + stock content through two `shootall` fights and an AI game: `stock_splice` = 8410 stub executions on the stock path, `mismatch` = 0 (the pointer-derived index agreed with the engine's 2-bit field every time), no crash across ~25 000 frames. A roster diff at fixed ticks between an instance with the module and one without was not done (the two instances are not tick-aligned); the stub equivalence is proven directly instead. |
 | 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice ground hold_fire`) stays 0 with stock content; only `loader` moves, once per unit type. |
 | 5 | **holds** | all 20 stolen prologues checked by hand against objdump for IP-relative code (none); every trampoline was executed on the stock path. |
 | 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. **Qualified 2026-09-02**: that holds for towers. A *walking* ARMPW4 acquires in slot 3 and launches nothing, held by our own `barrel_on_target()` gate — see §Per-weapon behaviour on slots 4..N. Read this row as proven for turreted units and open for kbots. |
-| 7 | **holds (live)** | two armed instances in one loopback game (`tools/mp_lobby.sh`). The host spawned an `ARMLLT10`, which replicated to the joiner through TA's own create packet, and both peers then reported the *same* `fires by slot: 0=12 3=1 4=12 5=1 6=12 7=1 8=2`. The joiner's launches came only from `0x0D WEAPON_FIRED` — it owns nothing there and its `autoaim` counter is 0 — so `WeapIdx >= 3` resolved to the right side slot every time. `violation` = `mismatch` = 0 on both, no sync error. |
-| 8 | **holds (live)** | armed host + unarmed joiner: the engine's type table drops from 281 to **279** on *both* peers and `ARMLLT10`/`ARMPW4` are gone, while every stock type keeps its CRC (`ARMCOM` `0x9E542B67`, `CORSOLAR` `0x0E040BA1`, identical armed or not). Controls: both-unarmed and both-armed games each keep all 281. Exactly the mismatched types, nothing else. |
+| 7 | **holds (live)** | two instances with the module in one loopback game (`tools/mp_lobby.sh`). The host spawned an `ARMLLT10`, which replicated to the joiner through TA's own create packet, and both peers then reported the *same* `fires by slot: 0=12 3=1 4=12 5=1 6=12 7=1 8=2`. The joiner's launches came only from `0x0D WEAPON_FIRED` — it owns nothing there and its `autoaim` counter is 0 — so `WeapIdx >= 3` resolved to the right side slot every time. `violation` = `mismatch` = 0 on both, no sync error. |
+| 8 | **holds (live)** | a host with the module + a joiner without it: the engine's type table drops from 281 to **279** on *both* peers and `ARMLLT10`/`ARMPW4` are gone, while every stock type keeps its CRC (`ARMCOM` `0x9E542B67`, `CORSOLAR` `0x0E040BA1`, identical with the module or without). Controls: a game with the module on neither peer and one with it on both each keep all 281. Exactly the mismatched types, nothing else. |
 | 9 | **answered (live)**: TA **disables the unit type and starts the game** | not "refuse to start", not "warn only" — the type simply does not exist in that game, so it cannot be built or spawned (`scenario apply` is refused by the engine's own catalogue). The lobby prints nothing: `OUTPUT` is empty on both peers and no message box appears. |
-| 10 | **holds (live)** | in the two-armed game the joiner's `autoaim` counter stayed 0 while the host's ran to 2038, with a live enemy tower in the world — `AutoAim` never runs for a remote-owned unit. |
-| 15 | **holds (live), and for a stronger reason than planned** | an unarmed peer cannot receive `WeapIdx >= 3` at all, because assertion 9's answer removes the extended type from the game before it starts. The receiver clamp remains as a second line. |
+| 10 | **holds (live)** | in the game with the module on both peers the joiner's `autoaim` counter stayed 0 while the host's ran to 2038, with a live enemy tower in the world — `AutoAim` never runs for a remote-owned unit. |
+| 15 | **holds (live), and for a stronger reason than planned** | a peer without the module cannot receive `WeapIdx >= 3` at all, because assertion 9's answer removes the extended type from the game before it starts. The receiver clamp remains as a second line. |
 | 11 | holds by construction | savegame load creates units through `UNITS_Create` → the module's `StartWeaponsScripts` → side rows reset; not exercised live. |
 | 12 | not exercised | give-unit needs a LAN game; the game now exists (`tools/mp_lobby.sh`) but the give was not driven. |
 | 13 | **holds so far** | `violation` = 0 in every run (AI skirmish, both fights, the extended scenarios). |
-| 14 | not measured | no tick-rate comparison yet. |
+| 14 | not measured | no tick-rate comparison yet; with the module always on, the control is a build without it. |
 
 ### Multiplayer — what blocked it, how it was unblocked, and what it measured
 
@@ -824,7 +832,7 @@ covers what the extra-weapons work needs from it, what stopped the test, and
 what removed the obstacle on 2026-09-02.
 
 Every multiplayer assertion (7 remote fire packets, 8/9 the unit-CRC handshake, 10
-`AutoAim` ownership, 12 give-unit, 15 unarmed peers) needs two `tacli` instances in
+`AutoAim` ownership, 12 give-unit, 15 peers without the module) needs two `tacli` instances in
 one TCP/IP game over loopback. **That game now runs**: `tools/mp_lobby.sh [--map <map>]
 <host> <join>…` drives the instances from the main menu into one live game in a
 single command, and the assertions above are answered from it. The history below is
@@ -902,7 +910,7 @@ kept because the two dead ends in it are expensive to re-derive.
    of five overlapping presses is a single edge and deletes one character. `tacli ui
    fill` now does that itself.
 8. **What the games measured** is in §"Multiplayer: who computes what, and the guard"
-   above and in the assertion-status table: two armed peers stay in lockstep across
+   above and in the assertion-status table: two peers with the module stay in lockstep across
    ten-slot fire packets, and a mismatched pair loses exactly the extended unit types
    before the game starts. `scenario apply` on the host also replicates its units to
    the joiner through TA's own create packet, which is what makes a scripted

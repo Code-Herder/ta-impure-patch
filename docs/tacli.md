@@ -56,7 +56,7 @@ The vocabulary is TA's: `move attack guard repair patrol reclaim capture load un
 
 **The input shield.** On by default. The game ignores the real keyboard and mouse, so an agent's game can run next to you without your typing landing in it, and its injected input never reaches your desktop. `tacli shield t1 off` hands the game over when you want to play the situation yourself.
 
-**The patch's features, per instance.** Every feature of the Impure Patch is a trigger file in the game directory, and `tacli arm` writes them for one instance: the render passes, the zoom, Classic++, the UI layer, the extra weapons, the COB trace. Arm a pass before the launch you want it in.
+**The patch's features, per instance.** Every feature of the Impure Patch is a trigger file in the game directory, and `tacli arm` writes them for one instance: the render passes, the zoom, Classic++, the UI layer, the COB trace. Arm a pass before the launch you want it in. The extra weapons are not among them: they are always on.
 
 ```bash
 tools/tacli arm t1 'native.on=all wrecks' terr.on feat.on fx.on sfx.on mark.on zoom.on vpwide.on gui.on

@@ -597,19 +597,20 @@ between peers. What it relies on from the network model, and what is still open:
   The wire format already carries a full byte, so ten weapons need no packet change;
   the receiver (`0x49D270`) is spliced to resolve `WeapIdx >= 3` into the side slot and
   clamps anything beyond the unit's count.
-- An **unarmed** peer receiving `WeapIdx >= 3` would index past its three inline slots
-  into `UnitOrders`. The guard is the unit-sync CRC handshake (`CRC_weapons`,
-  `def+0x146`, folded into `CRC_all`), which the module now extends to `weapon4..N`.
-- **Tested 2026-09-02, in three two-instance games over loopback.** Two armed peers
-  stay in lockstep: the host spawned a ten-laser tower, it replicated to the joiner
+- A peer **without** the module (the retail game, or any build that does not fold the
+  extra weapons) receiving `WeapIdx >= 3` would index past its three inline slots into
+  `UnitOrders`. The guard is the unit-sync CRC handshake (`CRC_weapons`, `def+0x146`,
+  folded into `CRC_all`), which the module extends to `weapon4..N`.
+- **Tested 2026-09-02, in three two-instance games over loopback.** Two peers with the
+  module stay in lockstep: the host spawned a ten-laser tower, it replicated to the joiner
   through TA's own create packet, and both peers reported the same
   `fires by slot: 0=12 3=1 4=12 5=1 6=12 7=1 8=2` — the joiner's launches coming
   purely from `0x0D WEAPON_FIRED`, since it owns nothing there and never ran
-  `AutoAim`. An armed host against an **unarmed** joiner loses exactly the extended
-  unit types: the engine's type table drops from 281 to 279 on *both* sides and the
-  game starts, silently. So a mismatched peer can never see a `WeapIdx >= 3` packet,
-  because no unit of that type exists in the game. Both controls (both-armed and
-  both-unarmed) keep all 281. Full detail and the CRC formula are in
+  `AutoAim`. A host with the module against a joiner **without** it (switched off: until
+  2026-09-29 it had a switch) loses exactly the extended unit types: the engine's type
+  table drops from 281 to 279 on *both* sides and the game starts, silently. So a mismatched peer can never see a `WeapIdx >= 3` packet,
+  because no unit of that type exists in the game. Both controls (the module on both
+  peers, and on neither) keep all 281. Full detail and the CRC formula are in
   [extra-weapons](extra-weapons.md#multiplayer-who-computes-what-and-the-guard).
 - **How to run it**: `tools/mp_lobby.sh [--map <map>] <host-instance> <join-instance>…` (up
   to nine joiners), with every instance launched `--dplay` (the host also `--free-dplay-port`). wine's

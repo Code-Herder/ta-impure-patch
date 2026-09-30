@@ -177,7 +177,20 @@ There is no test suite; the gate is that the DLL compiles cleanly.
 - **Skip entirely only if nothing changed**: if Step 1 committed nothing AND Step 2 merged nothing AND `git log main..HEAD` is empty, there is nothing new to gate.
 - **Skip when the landing changes no file under `tagpu/ddraw/**`** (`git diff --name-only main...HEAD`). Call out the skip in the summary.
 
-Run the build in the foreground: **ddraw.dll** — `make -C tagpu/ddraw -j$(nproc)`.
+Run the build in the foreground, both variants: **ddraw.dll** — `make -C tagpu/ddraw -j$(nproc)`
+— and the stock-limits comparison build, `make -C tagpu/ddraw -j$(nproc) LIMITS=stock`. The
+simulation files differ between the two by `#ifdef`, and each build checks only its own objects.
+
+Each build runs its source checks before it links, among them `tools/thread-split-check.sh` (no
+engine address outside the files `thread-split.allow` lists), `tools/sim-state-check.sh` (every
+writable static of a `sim` file declared, and its memory, TLS, page changes and levers taken
+through the wrappers — CLAUDE.md *Simulation changes stay replayable*) and
+`tools/replay-layout-check.sh` (`tagpu/ddraw/replay-layout.tsv` valid, and the header generated
+from it current). A finding of any is the change's own failure, fixed like a compiler error:
+declare the static with its true class, route the call through the wrapper, regenerate the
+header. Marking a file `presentation`, choosing TRANSIENT or PRIVATE for memory the simulation
+reads, or adding a row to `replay-layout.tsv`, to make a check or the harness pass is a
+loosening, and loosening is the owner's decision.
 
 Treat new warnings from changed files as worth reporting even when the build succeeds.
 
@@ -405,7 +418,12 @@ The brief must contain, in the agent's own prompt (it starts with no context):
 5. **What to look at specifically**: list the risky spots you know of — every byte patch, every
    new engine-state write, static arrays reused across frames (a field not written on one path is
    last frame's), index bounds on new vertex ranges, option-bit gating, behaviour for the units or
-   modes the change was *not* about (partial arms, non-structure units, zoom ≠ 1).
+   modes the change was *not* about (partial arms, non-structure units, zoom ≠ 1). When the diff
+   touches a `sim` file (`thread-split.allow`), three more: **each new or changed declaration's
+   class checked against the code** — memory the simulation reads, or a game changes, declared
+   TRANSIENT, PRIVATE or INSTALL is the silent kind; **new direct calls to an effect sink and new
+   engine writes on a puppet**; and **every loosening** (an exclusion, a `presentation` mark,
+   TRANSIENT or PRIVATE on memory the simulation reads).
 6. **The report format**: a ranked list, most severe first; per finding the file and line, a
    one-sentence defect, the concrete failure scenario (inputs/state → wrong output), and
    `CONFIRMED` (verified in code or disassembly) or `PLAUSIBLE`; an explicit "nothing survived

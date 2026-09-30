@@ -71,7 +71,7 @@ DEPS     := $(filter %.d, $(OBJS:.o=.d))
 # `clean` removes both builds' objects, whichever LIMITS it is run with.
 ALLOBJS  := $(foreach e, .o .stock.o, $(addsuffix $(e), $(basename $(SRCS))))
 
-.PHONY: clean all thread-split spirv log-check logtest
+.PHONY: clean all thread-split spirv log-check replay-layout logtest
 all: $(TARGET)
 
 %.o: %.rc
@@ -111,7 +111,23 @@ spirv:
 log-check:
 	../../tools/log-check.sh .
 
-$(TARGET): $(OBJS) | thread-split spirv log-check
+# THE REPLAY LAYOUT (tools/replay-layout-gen.py): replay-layout.tsv lists the bytes of the
+# engine's unit and player records the demo recorder does not record as values, and
+# inc/tagpu_replay_layout.h is generated from it and committed. The build re-derives the header
+# and fails when the two disagree, so an exclusion is always a visible diff of the file. Same
+# placement as the rules above.
+replay-layout:
+	../../tools/replay-layout-check.sh .
+
+# THE SIMULATION-STATE RULE (inc/tagpu_simreg.h): every writable static of a file marked `sim`
+# in thread-split.allow is declared, and no `sim` object allocates, takes a TLS index, changes a
+# page or names a lever itself. It reads the objects this link uses, so it runs in the link's own
+# recipe, after every object is built: as an order-only prerequisite it would race the compiler.
+# A failure stops the build before the link, so the DLL on disk is still the last one that
+# passed; the allow list and the script are prerequisites so that a change to either runs it
+# again.
+$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh | thread-split spirv log-check replay-layout
+	../../tools/sim-state-check.sh . $(OBJEXT)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
 # THE SINK'S STRESS TEST (tests/logtest.c, driven by tests/logtest.py under Wine): the
