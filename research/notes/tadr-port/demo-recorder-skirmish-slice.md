@@ -481,7 +481,8 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     `0x430F00` has written the player's own to the registry. The teardown restores them. From the
     level's first step, when the loader has read them, an observer on `0x430F00` puts the player's
     options in for the length of every save, so a save made during the playback (Options' OK at
-    `0x45FD5F`, the console toggles) writes the player's, and the save runs and returns unchanged.
+    `0x45FD5F`, the damage-bars key at `0x496077`) writes the player's, and the save runs and
+    returns unchanged.
     A save before the first step, which no known path makes, writes the recording's, and the
     teardown then saves again.
   - **The start units' calls `0x497963` and `0x497ACD`**, skipped.
@@ -491,7 +492,8 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
 - **The viewer's seat** V is the lowest record the recording does not seat: type 3, with the watcher
   bit, holding `+0x2A42` for the whole level. Its PlayerInfo goes back as the Start's fill left it
   once the teardown `0x491B60` has returned, after the post-game table has left the watcher out:
-  neither the seat activation nor the reset clears the watcher bit.
+  the seat activation does not clear the watcher bit, and a surrender to the main menu passes no
+  reset (MEASURED).
   - Every path that selects or orders walks the controlled player's units, of which this seat has
     none, so the viewer cannot select or order a puppet unit.
   - Four gates cover the rest of the viewer's input: typed commands (`0x417B50`, every one
@@ -520,9 +522,10 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
   - **Players**: every record but V's, raw under the exclusion file, but the players phase's
     30-tick deadline `+0xF0`, which the host keeps (*as built*: written, it arrived already
     advanced, and the host never ran the viewed player's radar pass; the host note §2.3). An image
-    goes in only with both names ended inside their 0x1E-byte fields, and a PlayerInfo image only
-    with its side and colour within this game's counts; the engine copies a name to its end and
-    indexes its side and colour tables unbounded. Every seat's `+0x18` is GameTime each step, for
+    goes in only with both names ended inside their 0x1E-byte fields, and a seat's PlayerInfo image
+    only with its side and colour within this game's counts; the engine copies a name to its end and
+    indexes a seat's side and colour tables unbounded, and itself leaves colours outside its count
+    in the records it does not seat. Every seat's `+0x18` is GameTime each step, for
     the pacing gate.
   - **A unit's `+0x110`** takes the image's bits less the engine's and less the exclusion file's
     rows, so the viewer's selection, marks and build page are the viewer's own.
@@ -603,7 +606,8 @@ the same counts as above. The transport game with the player's registry set apar
 recording's options (commander death 1 and start location 0 against the recording's 0 and 1): after
 Options' OK during the playback the registry held the player's values, where a build without the
 observer wrote the recording's (the same clicks, the store rewritten with 0 and 1); V's watcher bit
-was set during the playback and clear after surrendering to the main menu (`+0x9B` 0x54, then 0).
+was set during the playback (`+0x9B` 0x54), and a build that logged the restore showed it put back 0
+after the teardown of a surrender to the main menu, a path that runs no reset of the records.
 The reader's check of an order list cut short at an iteration's end was verified by reading only:
 no malformed file was built for it.
 
@@ -655,7 +659,8 @@ build compared the wrong tables; a dump now carries a header naming them.
 - **The replay's statics are outside the simulation-state check**, `tagpu_replay.c` being
   `presentation`: a takeover (S4) that resumes play from a playback has to account for them.
 - **A network recording's controller changes** are not followed: getter 75 answers the header's
-  controllers for the whole level, which a skirmish never changes.
+  controllers for the whole level. In a skirmish the one in-play change, the console's AI toggle,
+  flips types 1 and 2, which getter 75 answers alike ([the host note](demo-recorder-s2-host.md)).
 
 ## S3 to S5
 

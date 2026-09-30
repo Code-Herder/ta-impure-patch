@@ -3002,7 +3002,7 @@ before the cascade destroys its units.
   `0x43A0C0`, `0x43A1F0`, `0x43AD10` and `0x489690`, a yard's change through `0x47C790` and
   `0x440A40`; every player record but V's under the same classes, but `+0xF0`, the 30-tick
   deadline the host's players phase keeps, and only with both names ended inside their fields and
-  a PlayerInfo's side and colour within this game's counts; and each seat's `+0x18` = GameTime;
+  a seat's PlayerInfo side and colour within this game's counts; and each seat's `+0x18` = GameTime;
 - the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
   `0x4B0940`, `0x41B8D0`, `0x48B090`, `0x47F780`, `0x47F850`, `0x4720D0` and `0x472200`;
 - at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit in every
