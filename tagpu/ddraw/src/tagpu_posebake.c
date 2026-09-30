@@ -341,14 +341,14 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
        bounded here: the walk bounds only the three the triangle names. */
     if (range == TAGPU_PB_BODY && fvc == 4) {
         const unsigned short* fi = *(const unsigned short* const*)(fa + F_INDICES);
-        if (fi && fi[0] < nvert && fi[1] < nvert && fi[2] < nvert && fi[3] < nvert) {
+        if (ptr_ok(fi) && fi[0] < nvert && fi[1] < nvert && fi[2] < nvert && fi[3] < nvert) {
             for (t = 0; t < 4; t++) cn4[t] = s_vn[fi[t]];
             haveQ = 1;
         }
     }
     for (t = 0; t < n; t++) {
         float* o = s_scratchG + (size_t)(c->nv + t) * TAGPU_PB_GEOMST;
-        short* q = (short*)(o + 8);
+        short q[12];
         int k;
         o[0] = V[t][0]; o[1] = V[t][1]; o[2] = V[t][2];
         if (range == TAGPU_PB_BODY) {
@@ -365,6 +365,7 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
             q[k * 3 + 1] = snorm16(src[1]);
             q[k * 3 + 2] = snorm16(src[2]);
         }
+        memcpy(o + 8, q, sizeof q);
     }
     c->nv += n;
 }

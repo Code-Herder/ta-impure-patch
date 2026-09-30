@@ -473,7 +473,7 @@ static const char* FS =
        key would not. */
     "  vec2 hX = dFdx(vQH), hY = dFdy(vQH);\n"
     "  vec2 uv = vUV, uvX = dFdx(vUV), uvY = dFdy(vUV);\n"
-    /* the unit shade's row (tagpu_posedraw.c on the engine's quad rasteriser):
+    /* the unit shade's row (see tagpu_posedraw.c, and the engine's quad rasteriser it follows):
        a face with a frame blends its four corners' rows over the frame, any
        other keeps its triangle's interpolated one */
     "  float shd = vShade;\n"

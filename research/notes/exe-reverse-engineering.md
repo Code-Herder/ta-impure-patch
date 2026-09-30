@@ -3118,9 +3118,10 @@ gate is independent of the Shading bit and of the intensity below.
    of them.
 5. **A quad's rows are spread along its edges, not across a plane** [DISASSEMBLED 2026-09-29]. The
    textured quad `0x4C8BB0` walks the two edge chains from the top vertex (the table in the next
-   section) and at every scanline writes four interpolants, each `(v1 − v0) << 16 / dy` per edge, into
-   a `0x28`-byte row entry: `x`, the texel `u` and `v` (from the caller's coordinate pairs), and the
-   vertex record's `+0x08` and `+0x0C` (`0x4C8D5E..0x4C8E93`, `0x4C8F16..0x4C9048`). The scanline core
+   section) and at every scanline writes five interpolants, each `(v1 − v0) << 16 / dy` per edge, into
+   a `0x28`-byte row entry (five left/right pairs): `x`, the texel `u` and `v` (from the caller's
+   coordinate pairs), and the vertex record's `+0x08` and `+0x0C` (`0x4C8D5E..0x4C8E93`,
+   `0x4C8F16..0x4C9048`). The scanline core
    `0x4C8020` steps them across the row, and reads row `+0x20/+0x24` — the vertex record's `+0x0C`,
    the intensity — as the shade row (`0x4C812B`, `0x4C81A7`); row `+0x18/+0x1C`, from the record's
    `+0x08`, is compared with the fetched texel at `0x4C8187` and not traced further. So a quad whose

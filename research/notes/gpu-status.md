@@ -19997,7 +19997,8 @@ carries.
   `(s, t)` `taQuadST` already solves for the texture — where the face has one (`vQR.x >= 0`), else it
   takes the smooth `vShade`; it floors the result and looks up `k[row]`. The engine spreads a quad's
   rows along its two edges and across each row (engine map, *The unit shade* 5), which the blend
-  reproduces for a trapezoid or parallelogram and approximates on any other quad. Two triangles
+  reproduces exactly when one pair of the quad's opposite edges is horizontal on the screen and
+  approximates on any other quad. Two triangles
   each take a plane through three corners, and on a face with rows 0, 30, 0, 1 — a solar's opened
   panel — one of them is rows 0, 0, 1: a black half-panel the engine does not draw. Every vertex
   stage that feeds `tagpu_native::FS` writes `vShQ`.
@@ -20031,10 +20032,11 @@ luminance 14, engine Shading-on frame against the pass:
 | body, right half | 13 % | 54 % | 69 % | 64 % |
 | right wing | 15 % | 46 % | 51 % | 51 % |
 
-The body's and the wing's black is the engine's: its Shading-on frame has it, and the pass's mask
-agrees with the engine's over the interior of both (what is left is a one-pixel strip along the
-edges, where the reference draws its selection bracket and the cast shadow falls). What per-quad rows
-remove is the black the pass added to the trapezoid. Mobile units: mean luminance of a flash 74.8
+The body's and the wing's black is the engine's: its Shading-on frame has it. The pass's mask
+overlaps the engine's over most of both, and the pass is still blacker (body +10 points, wing
++5): the mask shows the excess mostly as one-pixel strips along the edges, where the reference
+draws its selection bracket and the cast shadow falls, which is not shown to be all of it. What
+per-quad rows remove is the black the pass added to the trapezoid. Mobile units: mean luminance of a flash 74.8
 (engine 75.0, before 83.4) and a peewee 67.4 (67.5, before 68.7). The option gates it: with the bit
 clear (`main+0x37F06` reads `0x03`) the pass matches the engine's Shading-off frame (air plant 16.2
 against 41.1 for the on frame), set (`0x23`) it matches the on frame.
@@ -20043,8 +20045,14 @@ against 41.1 for the on frame), set (`0x23`) it matches the on frame.
 - **Faces without a frame.** A textured quad that is not convex in its own frame, a quad with no
   texture and every face of more than four corners keep two-triangle (fan) interpolation, where the
   engine walks their edges; the untextured n-gon `0x4C0C70` is not disassembled.
-- **The blend is the engine's only for a trapezoid or a parallelogram.** The engine's rows are
-  horizontal on the screen and the frame's lines are not, so on any other quad the two spreads differ.
+- **The blend is the engine's only where a pair of opposite edges is horizontal.** The engine
+  steps across horizontal rows, linearly in screen `x`; the blend's `s · t` term is quadratic along
+  a horizontal line unless one edge pair is horizontal, so a tilted parallelogram whose corner
+  rows do not satisfy `c0 + c2 = c1 + c3` (rows 0, 30, 0, 1) shades differently.
+- **The solar is still blacker than the engine's, by 10 points on the body's right half and 5 on
+  the wing** (table above). The mask shows the excess mostly as one-pixel strips at the edges,
+  where the reference frame has its selection bracket and the shadow, but that is not shown to
+  account for all of it, and the whole-solar luminance error barely moved (40.1 to 39.4).
 - **Faces the engine reads garbage for.** A face with fewer than three or more than 32 vertices adds
   nothing to the sums here; a zero-length cross is `(0,1,0)` here and a NaN in the engine. The posed
   vertices are 16.16 integers in the engine and floats here, so a product within rounding of an
