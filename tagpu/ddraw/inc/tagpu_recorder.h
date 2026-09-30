@@ -19,13 +19,18 @@ void tagpu_rec_level_end(void);
 
 /* THE EXIT waits for the files of the recordings that have ended: a recording is complete once
    its writer has closed the file, and ExitProcess would kill a writer still writing its last
-   block. Every normal exit calls this first -- the exe's CRT, and each DLL of its folder, through
-   the fork's ExitProcess hook (hook.c, winapi_hooks.c), and the fork's own exit on SC_CLOSE
-   (wndproc.c) -- on whatever thread exits. A recording still in progress has no end to finish, so
-   nothing waits for it and its file reads to its last block, incomplete. The wait ends when the
-   files do: a writer never waits for another thread and takes no lock the exiting thread holds.
-   (A DLL exiting from inside its DllMain holds the loader lock, which a writer thread still
-   starting needs; neither the exe nor the fork exits there.) */
+   block. Every orderly exit calls this first, on whatever thread exits: the exe's CRT, and each
+   DLL of its folder, through the fork's ExitProcess hook (hook.c, winapi_hooks.c); the fork's own
+   exits, which the hook does not reach, call it themselves -- SC_CLOSE (wndproc.c), tagpu_refuse,
+   and the out-of-memory and unit-type refusals (tagpu_patches.c). A crash exit calls
+   TerminateProcess and does not wait: the crashed thread may hold a lock a writer needs. A
+   recording still in progress has no end to finish, so nothing waits for it and its file reads to
+   its last block, incomplete. The wait ends when the files do: a writer never waits for another
+   thread and takes no lock the exiting thread holds -- the exe's CRT holds its exit lock across
+   ExitProcess, and a writer never enters the exe's CRT. An exit from inside a DllMain holds the
+   loader lock, which a writer thread still starting needs, so no exit that waits runs there: the
+   fork's exits in its DllMain (the registry store's refusal at attach, the terminate at detach)
+   do not call this, and at attach no recording has ended, so there is nothing to wait for. */
 void tagpu_rec_exit(void);
 
 /* THE RING, one per recording, between its capture and its writer. The capture writes records

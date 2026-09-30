@@ -56,8 +56,10 @@ typedef enum SimId {
 
 typedef enum SimFieldKind {
     SIMF_ID,        /* a value naming `id`: remapped with it, never compared across a remap   */
-    SIMF_ADDR,      /* the address of what `id` names (a def, a weapon record): its ID is the
-                       value; SIM_ID_NONE = other engine or process memory, never a value      */
+    SIMF_ADDR,      /* the address of what `id` names (a def, a weapon record): the recording
+                       holds the target's ID, one more than its row (tagpu_recfmt.h), where a
+                       SIMF_ID holds the engine's index; SIM_ID_NONE = other engine or process
+                       memory, never a value                                                 */
     SIMF_OWNED,     /* the address of a block this row owns (SIM_ALLOC_OWNED of its table)    */
     SIMF_LOCAL,     /* meaningful only in this process: a serial, a clock, a generation       */
     SIMF_COUNT,     /* how many elements each SIMF_COLUMN of this row holds                   */

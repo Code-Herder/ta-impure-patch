@@ -6428,6 +6428,7 @@ static void hit_no_memory(unsigned int room)
     MessageBoxA(NULL, "Total Annihilation: Impure ran out of memory while starting the level, "
                 "so the game will now close.", "Total Annihilation: Impure",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    tagpu_rec_exit();   /* the fork's own ExitProcess does not pass through its hook */
     ExitProcess(1);
 }
 
@@ -11240,6 +11241,7 @@ static void __cdecl lim_types_refused(unsigned int slots)
                (unsigned int)TAGPU_LIM_TYPES - 1u);
     MessageBoxA(NULL, text, "Total Annihilation: Impure cannot load these units",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    tagpu_rec_exit();   /* the fork's own ExitProcess does not pass through its hook */
     ExitProcess(1);
 }
 

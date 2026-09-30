@@ -14,7 +14,11 @@
 
    AN ID is one more than the target's row in its table, so NULL's is 0 and a record of zeros
    images to zeros: the rows a table gains are zero on both sides (RK_TABLE_SIZE), and a row of
-   zeros needs no span. The IDs below are the rest that are not rows. */
+   zeros needs no span. The IDs below are the rest that are not rows. An ID is the recording's
+   name for a row, never the engine's own index, which the records also carry as plain values: a
+   unit image holds its type's ID at +0x92 and the engine's type index, one less, at +0xA6, and
+   a SIMF_ID or SIMF_TARGET field of a declared table holds the engine's index or slot as it is
+   (tagpu_simreg.h). */
 
 #include <stdint.h>
 

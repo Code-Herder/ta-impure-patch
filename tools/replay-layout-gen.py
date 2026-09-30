@@ -156,7 +156,7 @@ def render(tsv_bytes, gen_bytes, rows):
         "",
         "enum { " + ", ".join(f"RL_{r.upper()}" for r in RECORDS) + " };",
         "enum { " + ", ".join(f"RL_{c.upper()}" for c in CLASSES) + " };",
-        "enum {              /* an id row's table: the ID is the pointer's offset in it */",
+        "enum {              /* an id row's table and the row its pointer names; the recorded ID is one more */",
         "    RL_T_NONE,",
     ]
     for t, how in ID_TABLES.items():

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_log.h"
+#include "tagpu_recorder.h"
 #include "tagpu_refuse.h"
 
 void tagpu_refuse(const char* text)
@@ -28,5 +29,6 @@ void tagpu_refuse(const char* text)
     tagpu_log(text);
     MessageBoxA(NULL, text, "Total Annihilation: Impure cannot start",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    tagpu_rec_exit();   /* the fork's own ExitProcess does not pass through its hook */
     ExitProcess(ERROR_BAD_EXE_FORMAT);
 }

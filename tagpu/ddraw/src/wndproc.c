@@ -650,7 +650,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             if (g_config.terminate_process)
                 g_config.terminate_process = 2;
 
-            tagpu_rec_exit();   /* tagpu: this exit is ours, so the ExitProcess hook does not see it */
+            tagpu_rec_exit();   /* tagpu: the fork's own ExitProcess does not pass through its hook */
             ExitProcess(0);
             //_exit(0);
         }
