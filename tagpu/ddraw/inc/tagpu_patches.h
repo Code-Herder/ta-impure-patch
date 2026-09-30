@@ -47,4 +47,17 @@ int tagpu_tx_carried(const char* unit);
    severity, +0xA the corpse and death kind. The game thread, between two iterations. 0 when the
    wrap could not be built, and nothing was called. */
 int tagpu_tx_replay_death(const unsigned char* rec, int carried);
+
+/* A recorded interception replayed on a puppet (tagpu_replay.c): the first projectile of the pool
+   whose target point is `point` (three dwords) and whose weapon's index is `weapon` detonates
+   (0x499EB0), as 0x49AF90 matches a 0x0E. Only on the game thread in play (the in-play handler at
+   main+0x391F5). 1 when one detonated. */
+int tagpu_wpn_replay_intercept(const unsigned char* point, unsigned int weapon);
+
+/* The wind's generator state, for a level that plays a recording (tagpu_replay.c): the name its
+   declaration has in a recording's header, and the state to draw from. The replay's first step
+   sets the state the recording's first image holds, on the game thread, before that tick's wind
+   draw (0x49558F): the draws are then the recording's (tagpu_patches.c, *The playback's seed*). */
+const char* tagpu_wind_state_name(void);
+void tagpu_wind_state_set(unsigned long long state);
 #endif

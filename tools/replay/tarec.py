@@ -11,7 +11,9 @@
                                              it to equal the dump, byte for byte
   tools/replay/tarec.py compare --puppet FILE DUMP...
                                              the same for dumps a playing of FILE took, less what
-                                             a puppet host keeps as its own (puppet_view)
+                                             a puppet host keeps as its own (puppet_view), with
+                                             the order nodes' puppet rows as it holds them
+                                             (puppet_hold)
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -575,9 +577,38 @@ def puppet_view(w, viewer):
     w.view = [0, 0]
 
 
+def puppet_rows():
+    """The order node's puppet rows, from the exclusion file through its own parser
+    (tools/replay-layout-gen.py): (offset, size, mask, held set) for each."""
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "replay_layout_gen", os.path.join(here, "..", "replay-layout-gen.py"))
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    with open(os.path.join(here, "..", "..", "tagpu", "ddraw", "replay-layout.tsv"),
+              encoding="utf-8") as f:
+        rows = gen.parse(f.read())
+    return [(r["offset"], r["size"], r["mask"], r["kind"] == "puppet1") for r in rows
+            if r["record"] == "order" and r["kind"] in ("puppet0", "puppet1")]
+
+
+def puppet_hold(w, rows):
+    """The recording's order nodes as a puppet host holds them (the slice note's *Decided
+    2026-09-30*): each puppet row at 0 (puppet0) or set (puppet1). Applied to the recording only,
+    so the compare checks that the host holds them."""
+    for img in w.lists.values():
+        for at in range(0, len(img), REC_ORDER_IMAGE):
+            for off, size, mask, held in rows:
+                v = int.from_bytes(img[at + off:at + off + size], "little")
+                v = v | mask if held else v & ~mask
+                img[at + off:at + off + size] = v.to_bytes(size, "little")
+
+
 def cmd_compare(path, dumps, puppet=False):
     h, bl, stop = load(path)
     status = 0
+    held = puppet_rows() if puppet else None
     for d in dumps:
         dbl, dstop = blocks(d)
         if len(dbl) != 1 or dbl[0][0] != RB_SNAPSHOT:
@@ -591,6 +622,7 @@ def cmd_compare(path, dumps, puppet=False):
         if puppet:
             puppet_view(w, viewer_of(h))
             puppet_view(dw, viewer_of(h))
+            puppet_hold(w, held)
         lines, n = w.differences(dw, h["tables"])
         print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units: "
               + ("EQUAL" if not n else f"{n} DIFFERENCES"))

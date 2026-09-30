@@ -2518,6 +2518,24 @@ static int __cdecl wpn_tx_intercept(unsigned int which, unsigned int* regs)
     return 0;
 }
 
+/* 0x49AF90's match: the first projectile of the pool whose target point is `point` (12 bytes) and
+   whose weapon's index is `id`, or NULL. The game thread in play, with the pool there: the pool's
+   count is bounded by the pool's allocation. */
+static char* wpn_intercepted(const char* ta, const unsigned char* point, unsigned int id)
+{
+    char* pool = *(char* const*)(ta + 0x141F7);
+    int count = *(const int*)(ta + 0x141F3), i;
+    if (!pool) return NULL;
+    if (count > TAGPU_LIM_PROJ) count = TAGPU_LIM_PROJ;
+    for (i = 0; i < count; i++) {
+        char* p = pool + i * 0x6B;
+        if (!memcmp(p + 0x28, point, 12) &&
+            tagpu_limits_weapon_index(*(const char* const*)p) == (int)id)
+            return p;
+    }
+    return NULL;
+}
+
 #ifndef TAGPU_LIMITS_STOCK
 /* In place of the 0x0E sender's two `call 0x451DF0` (0x49A7A8, 0x49A7E9): 0 skips the send. */
 static int __cdecl wpn_tx_intercept_send(unsigned int which, unsigned int* regs)
@@ -2566,9 +2584,8 @@ static int __cdecl wpn_rx_chat(unsigned int* regs)
 {
     const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
     const char* ta = *(const char* const*)0x00511DE8;
-    char* pool;
+    char* p;
     unsigned int id;
-    int count, i;
     if (m[1] != 0 || m[2] != WPN_CHAT_TAG) return 0;
     id = m[15] | (unsigned int)m[16] << 8;
     if (!ta || *(const unsigned int*)(ta + 0x391F5) != 0x00499200u ||
@@ -2581,21 +2598,26 @@ static int __cdecl wpn_rx_chat(unsigned int* regs)
         wpn_chat_note("a companion names a weapon outside 256..4095; dropped", id, 0);
         return 0;
     }
-    count = *(const int*)(ta + 0x141F3);
-    pool = *(char* const*)(ta + 0x141F7);
-    if (!pool) { wpn_chat_note("a companion arrived with no projectile pool; dropped", id, 0); return 0; }
-    if (count > TAGPU_LIM_PROJ) count = TAGPU_LIM_PROJ;
-    for (i = 0; i < count; i++) {
-        char* p = pool + i * 0x6B;
-        if (!memcmp(p + 0x28, m + 3, 12) &&
-            tagpu_limits_weapon_index(*(const char* const*)p) == (int)id) {
-            E_DETONATE(p);
-            break;
-        }
+    if (!*(char* const*)(ta + 0x141F7)) {
+        wpn_chat_note("a companion arrived with no projectile pool; dropped", id, 0);
+        return 0;
     }
+    if ((p = wpn_intercepted(ta, m + 3, id)) != NULL) E_DETONATE(p);
     return 0;
 }
 #endif
+
+int tagpu_wpn_replay_intercept(const unsigned char* point, unsigned int weapon)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    char* p;
+    if (!ta || *(const unsigned int*)(ta + 0x391F5) != 0x00499200u ||
+        GetCurrentThreadId() != s_wpnGameTid || weapon >= TAGPU_LIM_WEAPONS)
+        return 0;
+    if (!(p = wpn_intercepted(ta, point, weapon))) return 0;
+    E_DETONATE(p);
+    return 1;
+}
 
 /* pushad; push esp; [push which;] call fn; add esp; test eax,eax (cmp eax,1 when `one`); popad.
    The flags survive popad for the branch after it. */
@@ -9379,6 +9401,17 @@ static GUID    s_windEngineCopy;                /* main+0x479 as the capture fou
 SIM_VAR(s_windEngineCopy, SIM_TRANSIENT);
 static HRESULT s_windSessionHr;                 /* GetSessionDesc's answer when refused      */
 SIM_VAR(s_windSessionHr, SIM_TRANSIENT);
+
+/* THE PLAYBACK'S SEED. A level that plays a recording draws the recording's wind, as a peer draws
+   its session's: the replay's first step sets the state the recording's first image holds, on the
+   game thread after that tick's unit tick and before its draw (0x49558F). The image is taken at
+   the start of the level's first tick (0x4954ED), after the load's seed and before any draw, the
+   load's call drawing nothing; the host's load leaves next = 0 as the recording machine's did. So
+   both draw from the same state at the same GameTimes, and THE INVARIANT makes every draw after it
+   the recording's. */
+const char* tagpu_wind_state_name(void) { return simdir_s_windState.name; }
+
+void tagpu_wind_state_set(unsigned long long state) { s_windState = state; }
 
 static unsigned int wind_next(void)
 {
