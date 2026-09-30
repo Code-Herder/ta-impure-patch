@@ -1045,8 +1045,11 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   `0x48B12B`, `0x48B14E`, `0x48B169`), calls `0x47F780` for bits 0 and 2, then `0x41C110`, and
   sends `0x11` only for an active owner of type 1 or 2 (`0x48B1B5..0x48B1F3`). `0x47F780(unit,
   kind, 0)` acts only for a live unit of the viewed player and queues a status line through
-  `0x47FAD0` (table `0x5086E8`). Whether it reaches the sound entry `0x47F0C0` is open: no direct
-  call was found, and `0x47F0C0`'s callers are `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`.
+  `0x47FAD0` (table `0x5086E8`). It never reaches the sound entry `0x47F0C0`, whose callers are
+  `0x45562D`, `0x47F1FA`, `0x47F274` and `0x47F31A`: the queue's consumer `0x47F680`, called once
+  per main-loop pass (`0x4999A6`), plays a reply through `0x47FD70` and `0x4D0640` by file name and
+  sends nothing. Bit 0 queues reply kind 3 or 4 (`0x48B110`, `0x48B135`), bit 2 kind 14 or 15
+  (`0x48B178`, `0x48B1AA`).
 - **A remote copy takes `+0x10E` only through `0x48B090`**, called twice (set the byte's bits,
   clear the rest) by the `0x11` receiver (`0x4555A1`, `0x4555B0`) and the round robin
   (`0x48B4F6..0x48B519`). Neither carries `+0x10F`, so a remote copy's `+0x10F` comes only from
@@ -1058,6 +1061,11 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
   and `0x49E3A6` (the Aim scripts, in AutoAim). START (`0x4B18BB`) and CALL (`0x4B1928`) call only
   the allocator `0x4B08C0`, which calls nothing, and so does Impure's guarded step that replaces
   them: a start a script issues is never broadcast, and runs again on each copy from its parent.
+  Since those five sites are the broadcasters' only callers, a start the engine makes anywhere else
+  is shown only by the machine that runs the code making it: `HitByWeapon` (`0x489F43`) and
+  `TakeDamage` (`0x489F8E`) where the hit `0x489CE0` is applied, and `TransportPickup` (`0x406834`)
+  and `TransportDrop` (`0x4069BF`) through `0x4B0A70` and `EndTransport` (`0x40F433`, `0x41148D`,
+  `0x411794`, `0x411DA1`, `0x411E2B`) through `0x4B0940`, in the transport orders.
 - **Stock runs COB queries on remote units** in three places, with no owner gate: the `0x0D`
   receiver `0x49D270` on the branch where the weapon def's `+0x111` bit 5 is clear (the shooter
   from `msg+0x21`, through `0x49C740` to `Query<w>` at `0x43E227`, beside the `Fire*` and
@@ -1517,7 +1525,7 @@ index `+0xA6` holds.
 | 8–10 | 84 / 24 / 0 % | the viewed player's contact with the unit | the radar pass `0x467440` (`0x4674F9`, `0x467814`) and its callbacks `0x467840`, `0x467960`, `0x467980`; create `0x485C48` | **the simulation**: the acquisition scan `0x40AA40`, every 30 ticks for every local seat (`0x40B2C0` from the players phase, `0x465037`), tests bit 8 (`0x40AB3F`) and bit 9 through `0x465AC0` (`0x40AB11`, `0x465B38`), filling the lists weapon targeting falls back to; the draw path too (the unit blit `0x459724`, the order-queue draw `0x439740`) |
 | 11 | 0 | cloak on | Cloak_On `0x403091`, Cloak_Off `0x4030C1`; create = def `+0x241` bit 4 (`0x485CCF`) | the economy pass `0x4017E1` |
 | 12 | 0 | an enemy near | the radar pass: cleared on every live unit (`0x4674B6`), set with `+0xB0` = GameTime + 90 for a type-1/2 owner's unit whose def has `+0x245` bit 13 when `0x40B0D0(owner, pos, def+0x208)` finds an enemy (`0x4676E8`) | the economy pass `0x4017ED` only |
-| 13 | 1.2 % | set at completion | `0x41B93D`, `0x41BC32`, `0x41BCA4`, round robin `0x48B4EC`; nothing clears it | none found |
+| 13 | 1.2 % | set while building and at completion: the build step sets it after writing HP (`0x41BC32`, `0x41BCA4`) | `0x41B93D`, `0x41BC32`, `0x41BCA4`, round robin `0x48B4EC`; nothing clears it | none found |
 | 14 | 0.0 % | dying | the hit `0x489EE5`, `0x41BA08`, `0x486171`, kill-all `0x486FAE`, round robin `0x48B42F`, debug key `0x495794`; cleared at create `0x485A9E` | the reaper `0x48AFB9`, about 19 "not dying" tests |
 | 15 | 0 | a mission's unit | `0x488482` (record byte `+0x23` bit 7); cleared by MakeSelectable | the AI (`0x4071F0`, `0x4089A0`, `0x40AA40`, `0x40B7B0`) |
 | 16 | 0.6 % | the altitude fix-up is due | the movers `0x43CC07`, `0x43CFE4`, `0x43D57F`, `0x43D8D3`, `0x43D9FA`, `0x43DA53`; `0x48AAB1`; round robin `0x48B6D8`; create; cleared by `0x43D7EB` and the fix-up `0x48A8A2` | `0x48A870` |
@@ -1589,7 +1597,7 @@ loader is `0x466050`.
 | `+0x2B`, `+0x49` | names, 30 bytes each | reset, activation, join, dispatcher | MEASURED: the bytes after the NUL are kept |
 | `+0x67`/`+0x6B` | the unit block's first and last unit, inclusive | `0x4858BD`, `0x4858E0` in `0x4854A0` only | MEASURED begin + 0x118·`+0x6F`/`+0x71` in all 960 records, 500 units a player |
 | `+0x6F`/`+0x71` | the block's first and last slot | `0x4858ED`, `0x4858F8` | |
-| `+0x73` | the controller as the local peer sees it: 1 and 2 local, 3 remote | ctor, reset, activation `0x464332`, the join (3, `0x450B16`), `0x465FB0`, loader; in play through `0x463C60`: the console's AI toggle `0x4161F0` flips 1 and 2, a leave writes 0 (`0x45401B`, `0x454054`) | the economy pass and the `0x28` send take 1 and 2 only; 3 gets no AI object and is the pacing's lag source |
+| `+0x73` | the controller as the local peer sees it: 1 and 2 local, 3 remote | ctor, reset, activation `0x464332`, the join (3, `0x450B16`), `0x465FB0`, loader; in play through `0x463C60`: the console's AI toggle `0x416280` flips 1 and 2, a leave writes 0 (`0x45401B`, `0x454054`) | the economy pass and the `0x28` send take 1 and 2 only; 3 gets no AI object and is the pacing's lag source |
 | `+0x74` | the AI object | init `0x4648C1` (not for an active type 3); activation 0 without a free; reset; teardown | the players phase (`0x46502A`) |
 | `+0x78` | control groups, 10 × 0x20 | `0x480190`, `0x4801F0` | kept by `0x480250(unit, group)` from unit `+0xAC`; the restore rebuilds it (`0x487270`) |
 | `+0x7C..+0x88` | sight counters; the grid's width, height and length | init `0x464849..0x46487B`; teardown | `0x4827B0`, `0x4816A0` |
@@ -5192,8 +5200,8 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   on-screen list `main+0x1435F`, count `+0x14367`), owned by `main+0x2A43`, `+0x110` bit 28 set and
   bit 14 clear; then `0x47FAD0` on the queue `[0x51E68C]`. The queue: 8 entries of 17 bytes
   (`+0` index, `+4` GameTime, `+8` unit, `+0xC` text, `+0x10` priority), count `+0x99`, an index
-  already queued refused. The consumer `0x47FCA0` hands entry 0 to `0x47FD70` and removes it in
-  the same call. The per-index next time `0x5086EC + 24·index` (`0x50871C` for "Under Attack") is
+  already queued refused. The consumer is `0x47F680`, called once per main-loop pass (`0x4999A6`),
+  which plays an entry through `0x47FD70`; `0x47FCA0`, which also calls `0x47FD70`, has no caller. The per-index next time `0x5086EC + 24·index` (`0x50871C` for "Under Attack") is
   written at `0x47FEFD` only when the entry's sound plays. MEASURED: with sound off it stays 0
   while the text repeats.
 - **`+0xFA`, the recently-hit byte: its every writer** — the hit (`0x467954`), the unit tick's
@@ -12213,16 +12221,19 @@ owner holds its own value; a copy's value comes from exactly these writers:
     `0x48605A`) comes before its first call (`0x4860A0`), so a NULL create sends nothing. A unit
     returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
     `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
-    `+0x241` bit 18) a `0x13` and a `0x11`. The `0x12`, that activation and a def with `+0x241`
+    `+0x241` bit 18) a `0x11`. The `0x12`, that activation and a def with `+0x241`
     bit 24's `+0xF5 = 7` and `+0x110` bit 14 (`0x48614D..0x486171`) all sit behind `finished`
     (`test edi,edi` at `0x48611A`, else to `0x486177`); every create runs the sight stamp
     `0x482AC0` (`0x486178`) and counts `+0x144` and `+0x140` (`0x486187`, `0x48619C`)
     [DISASSEMBLED 2026-09-28]. The create calls `0x48B090` as `0x48B090(1, 1)`, which newly sets
     bit 0 only, so of its per-bit paths only bit 0's runs: the unit's `Activate` script started
-    by name through `0x4B0940` (`0x48B106`, the name at `0x501280`) and a `0x13` (18 bytes, `0x48B110` → `0x47F780(unit, 3, 0)` → … →
-    `0x47F0C0`, sent at `0x47F14C`); its bit-2 path (`0x48B16E..0x48B1AA`, a `0x13` at `0x48B1AA`
-    and the `call [eax]` loop at `0x48B195`) is not reached. Then the `0x11` (4, `0x48B1F3`, a local
-    player's unit). **So a create's direct calls send at most 4 messages, 92 bytes.** Not followed:
+    by name through `0x4B0940` (`0x48B106`, the name at `0x501280`) and reply kind 3 queued
+    (`0x48B110` → `0x47F780(unit, 3, 0)`), which sends nothing; its bit-2 path
+    (`0x48B16E..0x48B1AA`, reply kinds 14 and 15 and the `call [eax]` loop at `0x48B195`) is not
+    reached. Then the `0x11` (4, `0x48B1F3`, a local player's unit). **So a create's direct calls
+    send at most three messages**: 32 bytes in stock, and 74 in Impure's build, where the `0x09`
+    goes as B8's 65-byte `0x4A`. B8's queue holds four messages and 92 bytes, a bound that counted
+    a `0x13` this path never sends. Not followed:
     the COB interpreter a started script runs in (`0x4B0DA0`, 19 callbacks, and `0x4B1C00`, 4), and
     `0x49059A` and `0x4905BC` (`0x490580`, at `0x4861AE`) [INFERRED: a unit's script calls]. A
     Create or Activate script can send a `0x13`, `0x11` or `0x0A` through the host vtable `0x4FD698`

@@ -1605,9 +1605,10 @@ The create, `0x4A` (B4's `hit_tx_create` and `hit_created`; B8's bytes are `kill
 2. *The bound is derived, for the create's direct calls.* Following every direct call from
    `0x485F50`, one create sends at most: the `0x09` as its `0x4A` (65 bytes), the `0x12` (5,
    `0x4560F9`), and through `0x48B090(1, 1)` — which newly sets bit 0 only, so only bit 0's path
-   runs — the unit's `Activate` script started (`0x48B106`) and a `0x13` (18, `0x48B110` →
-   `0x47F780(unit, 3, 0)` → … → `0x47F14C`), then the `0x11` (4, `0x48B1F3`, `def+0x241` bit 18):
-   **4 messages, 92 bytes**, the queue's size. The bit-2 path (`0x48B16E..0x48B1AA`, with the
+   runs — the unit's `Activate` script started (`0x48B106`) and reply kind 3 queued (`0x48B110` →
+   `0x47F780(unit, 3, 0)`), which sends nothing (the engine map's *COB on a puppet*), then the
+   `0x11` (4, `0x48B1F3`, `def+0x241` bit 18): **3 messages, 74 bytes**. The queue holds 4 and 92,
+   a bound that counted a `0x13` the path never sends. The bit-2 path (`0x48B16E..0x48B1AA`, with the
    `call [eax]` at `0x48B195`) is not reached. Between the create and its flush nothing sends: the
    spans are straight code, and the resurrection's calls `0x489690`, `0x4815F0` and `0x421E60` are
    leaves. **The bound does not cover a unit's scripts**: the COB interpreter (`0x4B0DA0`, 19
