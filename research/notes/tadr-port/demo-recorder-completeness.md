@@ -398,7 +398,8 @@ rests on.
      `tools/replay-layout-check.sh` before the link.
 2. **With the skirmish slice** ([its plan](demo-recorder-skirmish-slice.md) cuts it into five landings): capture at `0x4954ED` and the recording header's lever list (the
    registry's list), with the recorder that uses them, and self-verification over units, players and
-   declared tables — **S1, landed 2026-09-29**; root and sink counting; the main block and `.data` with the null twin; puppet
+   declared tables — **S1, landed 2026-09-29**; the mover, the order lists, PlayerInfo and the
+   events at their roots — **S2a, landed 2026-09-30**; root and sink counting; the main block and `.data` with the null twin; puppet
    dispositions and fixtures; the one-writer rule and getter 75 per seat; the nano spray's recording
    and playback; the landing run and the nightly tier with its timer, and with the harness the
    CLAUDE.md replay gate and the landing command's Step 4b.

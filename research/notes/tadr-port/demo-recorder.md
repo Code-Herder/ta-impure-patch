@@ -24,7 +24,9 @@ build refuses one that is not; the bytes of the engine's unit and player records
 recorded as values are listed in one exclusion file the build checks; the design lists the state
 that is still outside both. The skirmish slice's first landing, the recorder, records a skirmish
 to a file when asked and checks the file against the game as it goes
-([S1](demo-recorder-skirmish-slice.md#s1-the-recorder), 2026-09-29); watching is next. Recording
+([S1](demo-recorder-skirmish-slice.md#s1-the-recorder), 2026-09-29), and since S2a (2026-09-30) a
+recording also carries every mover, order list and PlayerInfo and the engine's events; watching
+is next. Recording
 every game waits for the reduced stream, since the exact stream the recorder writes is too large
 for that. Every decision of the
 [completeness design](demo-recorder-completeness.md#decisions-taken) is taken. The [state design evidence](demo-recorder-state-evidence.md)
@@ -201,7 +203,9 @@ other players; a multiplayer game is rewound from its finished recording.
   with 1,432 units ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)); the
   landed recorder, 0.24–0.26 ms on average with 1,100 to 1,400 units, at worst 0.58 to 2.3 ms
   across five battle runs, the worst over 1 ms in three of them for a cause not yet found
-  ([S1, *Measured*](demo-recorder-skirmish-slice.md#measured)). Its memory is not measured yet.
+  ([S1, *Measured*](demo-recorder-skirmish-slice.md#measured)); with S2a's movers, lists and
+  events, 0.48 ms on average with 1,200 to 1,400 units and 1.15 ms at worst
+  ([S2a](demo-recorder-skirmish-slice.md#s2a-verified-and-measured)). Its memory is not measured yet.
 - **Require matching installed map/mod content.** Record identities and fingerprints, check them
   before playback, and identify missing or mismatched content clearly. Do not bundle a copy of
   the map and mod into every replay.

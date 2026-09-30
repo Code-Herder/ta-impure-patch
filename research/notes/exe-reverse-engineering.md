@@ -1692,6 +1692,97 @@ exit to Windows is `0x491C60`: `0x4257A0`, `0x451B60`, the teardown `0x491B60` a
 scratch build whose writer held three seconds before finishing: the recording ended at the
 teardown, the exit logged its wait for the one file, and the file was complete.
 
+### The demo recorder's event sites [DISASSEMBLED + MEASURED 2026-09-30]
+
+S2a of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2a-what-watching-needs-recorded)
+(`tagpu_recorder.c`, *The events*) records what the engine does in a step that the images after it
+cannot say, where the engine does it and in the order it does it; the research is
+[the events note](tadr-port/demo-recorder-s2-events.md). `tagpu_rec_init`, at DllMain's attach,
+byte-matches every site and builds every stub before any lands; no recording starts without all of
+them (`recorder: 33 event sites in`: fifteen observers, five network tests, thirteen call sites).
+Each hook reads only a recording's game thread; a call from another thread is refused and counted
+(`RK_END`'s off-thread count). An observer's handler sees the site's `esp` as `E` and the
+registers `pushad` saved under it (EDI at `E−0x24` up to EAX at `E−0x08`), so at a function's
+entry its first argument is at `E+4`. The events of step T are appended after image T and
+published by the next capture, at `0x4954ED`, which ends the recording (`REC_END_RING`) instead if
+one did not fit.
+
+| Site | What it is | What the hook reads |
+|---|---|---|
+| `0x4861B3` (`mov eax,esi; pop edi; pop esi; pop ebp`) | the create `0x485F50`'s success exit; the NULL exits (`0x4861BD`, `0x48605A`) are not observed | `esi`, the unit in the slot it took. Five registers are still pushed (`0x4861B5..0x4861B9`, then `ret 0x20`), so the arguments start at `E+0x18`. The first, the owner, is overwritten at `0x485F9C` (`mov [esp+0x18],eax`, the unit type), so the owner is the unit's own `+0x96`; the type is the word at `E+0x1C` (`mov dx,[esp+0x1C]`, `0x486079`), the position the three dwords at `E+0x20`, `finished` the dword at `E+0x2C` (`0x486075`), and `layer` at `E+0x30`, of which the create keeps bits 0–1 (`0x4860F1`). The events of the calls the create makes (its state byte through `0x48B090(1, 1)`, its scripts) come before the create's own |
+| `0x4866D0` (9 bytes) | the destructor `(rec, mode)`'s entry | the record: the victim's `u16` at `+1`, the killer's netid at `+3`, the killer's `u16` at `+7`, the severity at `+9`, the kind at `+0xA`. A call the destructor would make inert (B3's bound at `0x4866E5`, the alive test at `0x486706`) is not recorded; a killer of 0 is none (`0x48675A`). The killer's player by `0x44FE40`'s rule (below); C4's carried decision (`tagpu_tx_carried`); the victim's image as the destructor finds it |
+| `0x41B8D0` (6 bytes) | the build done `(builder, built)`, `ret 8` | both arguments. Its five callers are listed at the table's `0x41B8D0` row above; the build step `0x41BA60` calls it at `0x41BCBF` when the built unit's `+0x104` compares equal to 0.0 (`0x41BCAA..0x41BCBB`), so every build that finishes in play passes here |
+| `0x48B090` (5 bytes) | the state setter `(mask, value)`, `ecx` the unit, `ret 8` | the byte `+0x10E` as the setter will leave it (`0x48B09A..0x48B0D4`), recorded only when it changes, since the setter returns at once otherwise (`0x48B0DE`) |
+| `0x456190`, `0x456290` (5 bytes each) | the broadcast starts `(unit, idx)` and `(unit, idx, argc, a0..a3)` | the arguments as the `0x10` carries them |
+| `0x456218` (6 bytes) | inside the broadcast start by name `0x456200(unit, name, argc, a0..a3)`, after `0x4B07C0` has turned the name into the index (`0x456213`) | `esi` the unit (`0x456208`), `eax` the index, the arguments at `E+0x28` (the function's `sub esp,0x18; push esi`) |
+| `0x47F780` (6 bytes), `0x47F850` (5 bytes) | the unit replies `(unit, kind, text)`, before their viewer tests (`0x47F850` tests first that the unit is off screen, `0x48BCB0` at `0x47F856`) | every player's reply, the text copied only to its end. `0x47F7E0`, between them, is never called: no call, jump or stored address names it, and its address occurs nowhere in the image |
+| `0x43E400` (8 bytes) | `QueryNanoPiece` `(unit, out)` | the unit and the out pointer, for the spray's credit (below) |
+| `0x4720D0`, `0x472200` (7 bytes each) | the nano emitters `(point, box, layer)` and `(box, point, layer)` | the point, the box and the layer, credited to a unit |
+| `0x43A216`, `0x43B878`, `0x43BB1D` (8 bytes each) | the order dispatch: the order's `mov`, its `push`, and the `call [reg+4]` 4 bytes on (`0x43A21A`, `0x43B87C`, `0x43BB21`), the only ways into a handler ([*The nano spray*](#the-nano-spray-two-emitters-fifteen-order-handlers-disassembled-2026-09-29)) | nothing: they forget the last query |
+
+**`0x44FE40(netid)`**, `ret 4`, read and not hooked: −1 is player 10, none (`0x44FE47`,
+`0x44FE9B`); otherwise the first of the ten seats whose controller `+0x73` is nonzero and whose
+`+4` is the netid (`0x44FE5C..0x44FE99`), and 10 when no seat matches. The death's killer is named
+by the same rule.
+
+**The nano credit.** Each of the fifteen handlers that spray asks `0x43E400` for the point first,
+into a buffer on its own stack, and passes that buffer to the emitter as the point. A spray is
+credited to the unit of the last query whose out pointer is its point, and the dispatch sites
+forget the last query, so a query cannot credit another call's spray. A spray with no such query is
+recorded with ID 0 and counted.
+
+**The script starts only the owner's machine makes** — `call`s of `0x4B0A70(name, p2, now, argc,
+a0..a3)` or `0x4B0940(name, p2, now)`, thiscall on the unit's COB object, which each site loads
+with `mov ecx,[reg+0x9A]` just before. `0x4B0A70` turns the name into the index and calls
+`0x4B0B00(idx, p2, now, …)` (`0x4B0AEE`): `p2` is an object whose first method it calls with 0 when
+the script is missing (`0x4B0B11..0x4B0B1D`), and 0 at every site below; `now` nonzero runs the
+script at once (`0x4B0B7E..0x4B0B84`). Each `call` is redirected to a stub that records the start,
+after checking that the unit's `+0x9A` is the `ecx` loaded (a mismatch is counted as a bad ID), and
+then jumps to the function as the call would:
+
+| Script | The `call` (the `mov`), the unit's register |
+|---|---|
+| HitByWeapon, TakeDamage (the hit `0x489CE0`) | `0x489F43` (`0x489F2C`) `esi`; `0x489F8E` (`0x489F76`) `esi` |
+| TransportPickup, TransportDrop | `0x406834` (`0x406823`) `edi`; `0x4069BF` (`0x4069A6`) `edi` |
+| TargetCleared, in `0x489800`, `0x4898B0`, `0x48A0F0` and `0x48A1E0` | `0x489898` (`0x489880`), `0x489948` (`0x489930`), `0x48A149` (`0x48A131`), `0x48A2E0` (`0x48A2C8`), all `edi` |
+| EndTransport, through `0x4B0940` | `0x40F433` (`0x40F424`) `ebp`; `0x41148D` (`0x411480`) `esi`; `0x411794` (`0x411785`) `ebx`; `0x411DA1` (`0x411D92`) `ebx`; `0x411E2B` (`0x411E1E`) `ebp` |
+
+The extra weapons' TargetCleared, for the slots from 3 up, is started by `tagpu_weapons.c`, which
+records it itself (`tagpu_rec_start_named`). BeginTransport is broadcast (`0x411403` calls
+`0x456200`), so the broadcasters record it.
+
+**Shots: the five network tests.** A fire function builds its `0x0D` only under the network bit:
+`test byte [reg+0x2A44],1` then a `je` past the build and the send, at `0x49D7A0` (`ecx`, to
+`0x49D85E`), `0x49DA92` (`edx`, to `0x49DB52`), `0x49DC64` (`eax`, to `0x49DD2E`), `0x49DE25`
+(`ecx`, to `0x49DEF3`) and `0x49DFAF` (`edx`, the short `je` to `0x49DFFB`, the meteor's). While a
+skirmish is recorded, each test's stub leaves the zero flag clear, so the block builds its packet;
+between the test and the send each block writes only the packet on its own stack and calls only the
+send (the meteor's also `0x44FDB0`, which reads a netid; [the events note](tadr-port/demo-recorder-s2-events.md)
+§1.4). The five sends (`0x49D859`, `0x49DB4D`, `0x49DD27`, `0x49DEEE`, `0x49DFF6`) are already the
+extra weapons' `wpn_tx_fired`, which hands the packet to the recorder and skips the send when there
+is no network. This is the one place the recorder changes what the engine does, and it changes
+nothing a skirmish keeps: the packet is the fire function's own stack.
+
+**Interceptions** need no release: area damage `0x49A120` builds its two `0x0E` with no network
+test, and the extra weapons' reads of the weapon's ID byte (`0x49A78C`, `0x49A7CD`,
+`wpn_tx_intercept`) hand the recorder the target point and the weapon's index.
+
+MEASURED 2026-09-30, format 2 (`tools/replay/tarec.py check`, which reads every step's events
+against the images around it: an appearance needs a create, a disappearance a death, a slot made
+again both, a change of `+0x10E` a state event with the new byte, and `+0x104` falling to 0 a build
+done):
+
+- an eight-minute skirmish of four AIs on Core Prime Industrial Area, 14,610 iterations: 48
+  creates, 51 deaths, 84 broadcast starts, 48 builds done, 56 state bytes, 170 replies and 16,601
+  sprays, every change explained, no event off the game thread and no spray uncredited;
+- the two-minute battle of 1,432 units on Town & Country, 3,840 iterations: 1,430 creates, 1,433
+  deaths, 7,780 shots, 20,632 broadcast starts, 21,873 owner-only starts, 61 state bytes, 16,415
+  replies and 24 sprays, every change explained, none off the game thread and none uncredited;
+- a three-minute skirmish of four AIs in the stock-limits build, 5,610 iterations: every change
+  explained, with all 33 sites in.
+
+Neither game intercepted a projectile, so the interception event has not been seen in a recording.
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the

@@ -8,8 +8,9 @@ and `tacli` automation, with the verification the
 [completeness design](demo-recorder-completeness.md#build-order) lists as its step 2. Six landings,
 each a finished unit verified by running it. **S1, the recorder, landed on 2026-09-29**: a
 skirmish is recorded to a file when `tagpu_recorder.on` asks for it, and `tools/replay/tarec.py`
-reads a recording back. **S2, watching, is planned** (2026-09-30) as two landings, S2a and S2b;
-S2a is next.
+reads a recording back. **S2, watching, is two landings.** S2a landed on 2026-09-30: a recording
+carries every mover, order list and PlayerInfo, and the events, each checked against the engine
+(*S2a, verified and measured*). **S2b, watching, is next.**
 
 ## How the slice is cut
 
@@ -316,8 +317,9 @@ stream was not decoded back, so this measures what the representation gains, not
 
 ## S2 — watching
 
-Planned 2026-09-30 from four research tracks: the mover and carried units, the order lists, the
-events, and the puppet host. Their evidence lands with S2a. S2 is two landings. **S2a** records
+Planned 2026-09-30 from four research tracks, whose evidence landed with S2a:
+[the mover and carried units](demo-recorder-s2-movers.md), [the order lists](demo-recorder-s2-orders.md),
+[the events](demo-recorder-s2-events.md) and [the puppet host](demo-recorder-s2-host.md). S2 is two landings. **S2a** records
 everything watching needs and verifies it against the engine; **S2b** plays a recording on a
 puppet host and verifies it against the recording.
 
@@ -332,11 +334,10 @@ puppet host and verifies it against the recording.
   - `+0x04`, the movement class, `cache`: written only by the constructor, from the unit's type;
   - `+0x2E` bits 3–7, `drop`: allocator leftovers that every writer masks out and nothing reads.
 
-  Estimated at +10 to +13 KB a battle iteration on the stream's 20 KB, not measured. Most of it is
-  the moved-at stamp `+0x2A`, which holds GameTime on every tick a unit moves, then the speed and the
-  velocity.
-- **The order lists.** Each unit's main list `+0x5C` and sub list `+0x60`, recorded as value images
-  and delta-coded against the recorder's own previous image. A node image holds the action, state,
+  It adds about 14 KB to a battle iteration (*S2a, verified and measured*): the moved-at stamp
+  `+0x2A` holds GameTime on every tick a unit moves, and the speed and the velocity change with it.
+- **The order lists.** Each unit's main list `+0x5C` and sub list `+0x60`, recorded as value images,
+  a list whole whenever its image differs from the recorder's own previous one. A node image holds the action, state,
   events, deadline, the target as an ID, position, leash, the three parameters, flags, issue time,
   fired events, and the owned object's class code. A node's address is not recorded: playback
   rebuilds a puppet's lists from values. The node's rows:
@@ -385,6 +386,61 @@ puppet host and verifies it against the recording.
     unit that disappears its death, every `+0x10E` change its state event, and every finished build
     its build done;
   - the cost and the size, measured again.
+
+#### S2a, verified and measured
+
+On the reference setup under Wine, 2026-09-30, in three scripted games: an eight-minute skirmish of
+four AIs on Core Prime Industrial Area (14,610 iterations), run 2's two-minute battle of 1,432 units
+on Town & Country (3,840), and a three-minute skirmish of four AIs in the stock-limits build
+(5,610). In each:
+
+- no correction: the self-verification now covers every mover, order list and PlayerInfo;
+- every dump EQUAL to the recording read back to its tick (three a game: 16, 27 and 42 live units in
+  the eight-minute game, 1,400, 1,309 and 1,206 in the battle, 14, 19 and 27 in the stock-limits
+  game), and every snapshot equal to the
+  stream;
+- every change between two images explained by the step's events (`tarec.py check`): no appearance
+  without its create, no disappearance without its death, no `+0x10E` change without its state
+  event, no build finished without its build done;
+- no ID outside its table, no event refused off the game thread, no nano spray uncredited, and no
+  order node whose owner or list flag disagreed with the list holding it.
+
+The events of the battle: 1,430 creates, 1,433 deaths, 7,780 shots, 20,632 broadcast starts,
+21,873 owner-only starts, 61 state bytes, 16,415 replies and 24 sprays; of the eight-minute game,
+48 creates, 51 deaths, 84 broadcast starts, 48 builds done, 56 state bytes, 170 replies and 16,601
+sprays. No game intercepted a projectile.
+
+**The capture's cost** grew with what it reads. In the battle it took 475 µs an iteration on
+average (S1: 247 and 255) and 1.15 ms at worst, in the 37th iteration, while the scenario's 1,432
+units were being placed (710 KB into the ring); in the eight-minute game 144 µs on average and
+455 µs at worst, and in the stock-limits game 96 µs and 365 µs. The product page's budget is 0.5 ms on average and 1 ms at worst with 1,500 units:
+the average meets it with little room, and the worst does not.
+
+**The size.** The battle came to 60.4 MB for two minutes, 30 MB a minute (S1: 17.7 to 20.3). Its
+stream is 38 KB an iteration before deflating (S1: 20 KB): the order lists 4.1 KB, the events 0.7
+KB, and the rest, about 14 KB, the mover tail [INFERRED: the growth the lists and the events leave;
+PlayerInfo changed in no iteration after the first]. The eight-minute game came to 1.34 MB, whose
+order lists are two thirds of the stream before deflating (6.7 of 10 MB) and deflate away: the
+stream deflates 8:1. A list goes whole whenever a node changes, and the build and repair states,
+self-repair, resurrection, capture and the reclaims re-arm their node's deadline `+0x0A` every tick
+(`0x439E80`), so such a list goes
+every tick. A delta of a list's dwords would gain little: the lists are about a tenth of the battle's
+stream, and deflating removes their repetition in the smaller game. What the size needs is the
+representation's change S1 measured (2.5 times smaller), the product page's open decision 2.
+
+**PlayerInfo** is cheap: at most five of its `0xB9` bytes are nonzero in a seat of the battle, and
+none changed in play. **The ring** held at most 1,059 KB of its 16 MB in the battle (S1: 645 KB).
+
+#### What S2a leaves
+
+- **An interception** has not been recorded by a game: none of the three had an interceptor.
+- **The capture's worst iteration** passes the 1 ms budget in the battle's setup, and its average
+  is within 5 % of the 0.5 ms budget.
+- **The size**, 30 MB a minute in the battle: the representation (the product page's open
+  decision 2).
+- **The game options change in play** through the typed commands `LOSType` (`0x416690`), `LOS`
+  (`0x416D50`) and `Mapping` (`0x416D80`): the header records them at the start, and the LosType
+  word lives in the main block, which is S3's.
 
 ### S2b — watching
 
