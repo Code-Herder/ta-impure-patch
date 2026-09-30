@@ -20,8 +20,8 @@
    drift in the half of the pipeline this pass does not change. The vertex
    shader is where a unit's geometry is made: the piece transform, the
    engine's projection, the depth key, the world x/z the fog samples, the
-   model height the waterline clips on, and the shade quantised off the baked
-   rest normal.
+   model height the waterline clips on, and the shade a structure's baked
+   vertex normal gives (the engine's lit rasteriser's row).
 
    ALL THREE RANGES. The vertex shader's `uRange` selects the body or the
    structure-shadow SLANT (its own projection, its own integer snap, its own

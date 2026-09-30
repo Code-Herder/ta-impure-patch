@@ -414,18 +414,16 @@ projection (`sx = ax + x`, `sy = ay + (−z − y/2)`), the depth key
 waterline clips on, and the **shade**.
 
 The shade is the interesting one. Every face of a 3DO belongs to **one** piece, so its normal
-transforms rigidly with that piece's matrix — bake the rest normal, transform it as
-`tagpu_hires_draw` already transforms `aNrm`, then do the flip toward `SH_V`, the normalise, the
-dot with `SH_L` and the quantise `clamp(shNeutral + shDir·floor(I·12 + 0.5), 0, 31)` in the
-shader. **One thing that is NOT exact, found by the step-4 review:** `emit_node` takes its
-degeneracy test `nl > 1e-6` on the **engine's** posed vertices, which the compose has rounded into
-16.16 at every axis and every level of the tree, while the bake takes it on the rest vertices. A
-face of any real area gives the same answer; a near-degenerate one can land on the other side and
-take the neutral row where the CPU path takes a shaded one, or the reverse. That is a whole face
-one SHD row off — which §5 already names as Gate B's tell for decision 8, so Gate B should now be
-read as testing this specifically rather than only the quantisation. The Classic++ outward normal comes off the same vector. **[mine]** — the alternative is a
-per-face CPU shade uploaded per unit per frame, which keeps a streaming buffer the design is
-trying to lose.
+transforms rigidly with that piece's matrix, and so does the mean of a vertex's face normals. The
+bake averages them at rest (`piece_vnormals`, the engine's own per-vertex mean, [engine
+map](exe-reverse-engineering.html) *The unit shade*), and the vertex stage rotates the result, dots it
+with the engine's light and truncates it onto the 32-row SHD ramp, for a structure under the Shading
+option and for nothing else ([GPU status](gpu-status.html) §2.106). **One thing that is NOT exact:**
+the engine takes its normals from the posed vertices, which the compose has rounded into 16.16 at
+every axis and every level of the tree, while the bake takes them from the rest vertices. A product
+`5 · N·L` within rounding of an integer can land a whole SHD row off. The Classic++ outward normal
+comes off the same vector. **[mine]** — the alternative is a per-face CPU shade uploaded per unit per
+frame, which keeps a streaming buffer the design is trying to lose.
 
 `emit_slant`'s snap stays the engine's: `xi = v[0] >> 16`, `q = yi >> 2`, on the posed 16.16
 value. 16.16 values are exactly representable in float32 while `|model unit| < 256`

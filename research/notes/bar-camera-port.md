@@ -452,9 +452,9 @@ One pipeline, two presets. The Renderer row keeps Classic / Classic++ / Custom, 
 | sampling | `NEAREST` | as today (units trilinear, 4× anisotropic) |
 | Gamma | **once, on the finished world image** [DECIDED 2026-09-23] | the same |
 
-**The face-shade multiplier [DECIDED 2026-09-23: an RGB multiplier].** The vertex stage keeps
-choosing a shade row exactly as it does now:
-`row = clamp(neutral + dir · round(12 · N·SH_L), 0, 31)` (`tagpu_posedraw.c`). The fragment then
+**The face-shade multiplier [DECIDED 2026-09-23: an RGB multiplier].** The vertex stage chooses
+the shade row the engine's lit rasteriser would (`ftol(5 · N·L) & 0x1F`, structures only; the
+neutral row for everything else, [GPU status](gpu-status.html) §2.106). The fragment then
 multiplies RGB by `k[row]` instead of remapping the index through the row, and clamps to 1.
 
 `k` is 32 floats, built once from the engine's own SHD table, which the packet already carries

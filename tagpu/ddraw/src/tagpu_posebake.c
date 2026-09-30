@@ -228,10 +228,18 @@ static int pb_walk(const char* const* nd, int nparts, int range,
    rotated vectors is the rotation of their mean, so the mean is taken here at
    rest and the shader only rotates it.
 
-   PB_SHADE_SIGN is the winding's side: the engine's edge and cross helpers
-   (0x4B6F00, 0x4B6F70) were not decoded, so the sign is fitted against the
-   engine's own frame (tagpu_gdi.on, Shading on vs off, solar / lab / plants). */
-#define PB_SHADE_SIGN 1.0f
+   THE BOUNDS are pb_walk's own, on the same template pieces in the same call:
+   the piece's vertex count is at most PB_MAXNODEV (pb_walk skips a node past
+   it), every index is checked against that count before it addresses
+   `s_vn`, and the template's lifetime is the bake's (the level generation
+   latched per frame, tagpu_posebake_frame).
+
+   PB_SHADE_SIGN is which side of the winding the engine's normal points to:
+   -1 against (V1-V0)x(V2-V0), MEASURED against the engine's own frames
+   (tagpu_gdi.on, Shading on vs off, four structures: mean luminance error
+   17-23 with -1, 36-56 with +1). The cross helpers' sign (0x4B6F00, 0x4B6F70)
+   is not decoded. */
+#define PB_SHADE_SIGN -1.0f
 
 static float s_vn[PB_MAXNODEV][3];
 static int   s_vnCnt[PB_MAXNODEV];

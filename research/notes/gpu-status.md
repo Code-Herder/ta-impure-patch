@@ -17409,8 +17409,9 @@ terms; then the grey band. A palette index reaches a shader only as a flat colou
 untextured face, the nanoframe band ramp, an effect's line, a marker — or the unexplored black,
 and is looked up in `uPal`, the same unscaled table.
 
-- **Units: the face-shade multiplier.** The vertex stage chooses a row as it always has,
-  `clamp(neutral + dir · round(12 · N·SH_L), 0, 31)`; the fragment multiplies RGB by `k[row]` and
+- **Units: the face-shade multiplier.** The vertex stage computes the row the engine's lit rasteriser
+  would (§2.106: `ftol(5 · N·L) & 0x1F` per vertex, for a structure under the Shading option, and
+  the neutral row for everything else); the fragment multiplies RGB by `k[row]` and
   clamps to 1 — not on a nanoframe band, which the engine paints over the shaded index — then the
   lambert (exactly 1.0 under `light=0`). `k` is built once per process by `tagpu_render3do.c`
   `shade_k_build` from the packet's SHD and the engine's table: per row, the least-squares slope
@@ -19964,3 +19965,65 @@ Measured during the compatibility investigation: first arming could previously f
 already-drained operations and one unrecorded twin. After the change, all 19 Wine startup/battle
 outcomes met expectations; all 15 network cases passed, with the loader/Mayhem case rerun after
 an independent nickname-clearing defect in the driver was fixed. Windows testing remains open.
+
+### 2.106 Structures are shaded as the engine's lit rasteriser shades them (`tagpu_posebake.c` `piece_vnormals`, `tagpu_posedraw.c` VS, `tagpu_native.c`)
+
+**What it is.** The engine shades a structure with a per-vertex intensity interpolated across each
+face, and shades nothing else ([engine map](exe-reverse-engineering.html), *The unit shade*). The
+unit pass does the same. No hook, no engine read or write beyond the option word the packet already
+carries.
+
+**How.**
+- **The bake** (`piece_vnormals`, once per model): per piece, each face's normal from its first
+  three vertex indices, added to every vertex the face names, divided by the count and not
+  renormalised, face 0 left out under a selection primitive. The geometry stream's normal slot holds
+  that vertex normal; the slant and the wire keep a level normal.
+- **The vertex stage**: for a unit whose `uShd.y` is 1 it rotates the vertex normal by the piece
+  and takes `int(dot(n, (−0.8, 1.0, 0.25)) · 5.0) & 31`, a piece with its shade flag clear taking
+  row 15. Every other unit takes the neutral row. The row leaves the stage as a smooth `vShade`.
+- **The fragment stage** floors the interpolated value and looks up `k[row]` (`vShade` is smooth in
+  every vertex stage that feeds `tagpu_native::FS`).
+- **Who is lit** (`TAGPU_PDUNIT.lit`, `tagpu_native.c`): the structure bit **and** the option word's
+  Shading bit (`pk->gfx_opt & 0x20`) — the engine's two tests. A mobile unit, a wreck and an effect
+  are not lit. A build ghost is lit as the finished building would be **[INFERRED]**: the engine
+  draws no model at the placement cursor to compare with.
+- `shDir`, `tagpu_r3d_shade_dir` and the old `neutral + dir · round(12 · N·SH_L)` quantiser are gone,
+  and with them the face flip toward `SH_V` for the shade (the flip stays for the Classic++ lighting
+  term's normal, which the game does not use).
+
+**Measured**, on Xvfb against the GDI backend on the same scene, dry ground, paused at ticks 125–135,
+shadows off, the Classic preset (`assets=0 light=0`); mean absolute luminance difference from the
+engine's Shading-on frame over the pixels the engine's toggle changes:
+
+| structure | before | after | engine Shading off, for reference |
+|---|---|---|---|
+| kbot lab | 39.8 | 16.6 | 33.8 |
+| vehicle plant | 36.0 | 17.6 | 41.4 |
+| air plant | 40.1 | 22.7 | 47.1 |
+| laser tower | 56.4 | 19.3 | 52.2 |
+| solar | 49.9 | 40.1 | 36.1 |
+
+The solar's figure is the selection box the engine draws around it in the reference frame; its
+black roof panel, which only the engine's Shading-on frame has, is reproduced. Mobile units: mean
+luminance of a flash 74.8 (engine 75.0, before 83.4) and a peewee 67.4 (67.5, before 68.7). The
+option gates it: with the bit clear (`main+0x37F06` reads `0x03`) the pass matches the engine's
+Shading-off frame (air plant 16.2 against 41.1 for the on frame), set (`0x23`) it matches the on frame.
+
+**Not covered.**
+- **Interpolation on a quad.** The engine interpolates along each span between the quad's edges; the
+  pass interpolates across two triangles, which differ on a quad that is not a parallelogram.
+- **Faces the engine reads garbage for.** A face with fewer than three or more than 32 vertices adds
+  nothing to the sums here; a zero-length cross is `(0,1,0)` here and a NaN in the engine. The posed
+  vertices are 16.16 integers in the engine and floats here, so a product within rounding of an
+  integer can land a row off.
+- **The winding's sign was fitted** against the GDI frames, not decoded (`PB_SHADE_SIGN`).
+- No shaded structure was compared while zoomed (GDI does not zoom), while cloaked, under
+  construction, or in a network game, and the lab (`tools/tascene`) keeps its own unit light.
+- The lab's kbot-lab pixel counts are pose-dependent: the lab and the vehicle plant animate, and two
+  runs paused a few ticks apart differ in body pixels.
+
+**Traps the measurement found.** The `shadow-lab` fixture puts its lab under water (altitude 63, sea
+level 75): do not use it for shading. `tacli arm <i> 'classicpp.cfg=shadows=0'` before a `--defaults`
+launch clears the engine's shadow bits in the settings store, and removing it later does not restore
+them. The store owns `Shading` under `--defaults`, so a registry value does not gate it there: arm the
+passes by hand (`tacli arm` the default set) to test the option.

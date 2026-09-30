@@ -2644,6 +2644,51 @@ refused) and at `0x459D1D` without it. No stock unit is near: the tallest 1× fr
 (`cordev1`, [limits-evidence §10](tadr-port/limits-evidence.md#10-composite-buffer-6002-12802-0x458195)).
 Drawing such a frame in bands of at most 800 rows at those call sites would close it.
 
+### The unit shade: the lit rasteriser `0x459C70` shades structures only [DISASSEMBLED, MEASURED 2026-09-29]
+
+**Who gets it.** The sprite builder chooses the rasteriser at `0x45873C..0x45874A`: `unit+0x110 &
+0x20000000` (the structure bit) **and** `main+0x37F06` bit 5 (the
+registry's `Shading`) pick `0x459C70`, everything else the plain `0x459830`. `0x459C70` has one
+caller, `0x458765` (a scan of `.text` for every `call`/`jmp` to it, and no raw pointer to it
+anywhere in the image). Its lit callees — the textured quad `0x4C8BB0` (called at `0x45A39C`), the
+colour n-gon `0x4C0C70` (`0x45A3BA`) and the scanline core `0x4C8020` (`0x4C9095`) — have no other
+callers either. **MEASURED** with the GDI backend (`tagpu_gdi.on`), Shading on against off, paused,
+the same scene: 0 changed pixels on a peewee, thud, flash, stump, raider, hawk and a commander, and
+1 692 / 4 706 / 4 192 / 3 642 / 308 on a solar, a kbot lab, a vehicle plant, an air plant and a
+laser tower. **A mobile unit is never shaded.**
+
+**The arithmetic** (`0x459F79..0x45A2F3`). Per piece, over its own vertex list:
+
+1. Each face's normal comes from its **first three** vertex indices only (`0x459F7F..0x45A02B`); a
+   face that repeats an index gets `(0,1,0)` (`0x45A0FD`, `0x45A101`). The edge helper `0x4B6F00`
+   returns `arg2 − arg1`, `0x4B6F70` is the cross product and `0x4B6FF0` normalises with no test for
+   a zero length (a NaN then reaches every vertex the face names).
+2. Each face's normal is added to **every vertex the face names**, with a count per vertex
+   (`0x45A177..0x45A1D7`), skipping face 0 when the piece has a selection primitive (`node+0xC !=
+   −1`, `0x45A136..0x45A150`), and each vertex's sum is divided by its count (`0x45A1FD..0x45A22A`). It is
+   **not renormalised**: a vertex between differing faces has a normal shorter than 1.
+3. `intensity = ftol(dot(N, L) · 5.0) & 0x1F` when the piece's shade flag (`piece+0x28` bit 2, COB
+   `shade`/`dont-shade`) is set, else `0xF` (`0x45A2A5..0x45A2F3`). `L = (−0.8, 1.0, 0.25)` at
+   `0x5065F8` (**not normalised**), the scale is the float 5.0 at `0x4FD4CC`. `ftol` `0x4E43A0` sets
+   the FPU control word's rounding to truncate (`or ah, 0xC`, `fistp`), so it truncates toward zero.
+   **The mask wraps**: −1 is row 31, −5 row 27, and any product in (−1, 1) is row 0, which is black
+   in the stock `PALETTE.SHD` (multiplier 0.000).
+4. The rasteriser interpolates the vertex intensities across each span in 16.16 and reads
+   `shadeTable[(i >> 16)·256 + texel]` per pixel (`0x4C8175..0x4C81C6`, the table at
+   `*(prog+0xC4)`). It is Gouraud, and a face between vertices at rows 31 and 3 sweeps through all
+   of them.
+
+**The light is fixed.** `0x4597F0(x, y, z)` stores three ints × 0.01 at `0x5065F8`; its only caller,
+`0x4166E9`, is inside the chat command `Light` (`0x4166C0`, `0x500FFC`), which reads the three from
+what the player types. Nothing reads a map for it.
+
+**The winding's side was fitted, not decoded.** The cross helpers' by-value struct arguments were
+not followed through to the sign. Against the GDI frames the engine's normal is
+`−(V1 − V0) × (V2 − V0)` of the piece's rest vertices: with the other sign flat top faces come out
+black where the engine draws them bright (a vehicle plant's wings, 55 against 36 mean luminance
+error), with this one four structures drop to 17–23 (from 36–56). The wrap then reproduces the
+solar's black roof panel, which the engine draws with Shading on and not off.
+
 ### The rasterisers paint only faces that run clockwise on screen [DISASSEMBLED 2026-09-26]
 
 There is no back-face test anywhere in the unit draw: no normal, no cross product, no flag. The

@@ -10,8 +10,8 @@
    THE SPLIT (gpu-posing.md decision 4) is between what a type owns and what a
    type-plus-owner owns:
 
-     GEOMETRY, per type — rest position, the rest normal of the vertex's own
-       triangle, its piece index, and a flags word. Static: it survives a team
+     GEOMETRY, per type — rest position, the engine's vertex normal (the mean
+       of the vertex's faces' normals, at rest), its piece index, and a flags word. Static: it survives a team
        change and an atlas recycle, and it dies only with the LEVEL or when the
        cache evicts it.
      MATERIAL, per (type, owner, atlas generation) — the UV, the flat colour
@@ -75,7 +75,7 @@
 #define TAGPU_PB_KEEPMAT  1024
 
 /* geometry vertex flags (float, bit-tested in the shader as an int) */
-#define TAGPU_PBF_SHADED 1      /* body face with a usable rest normal        */
+#define TAGPU_PBF_SHADED 1      /* body vertex: carries the engine's normal   */
 
 enum { TAGPU_PB_BODY = 0, TAGPU_PB_SLANT, TAGPU_PB_WIRE, TAGPU_PB_NRANGE };
 
