@@ -179,7 +179,7 @@
 #define WIRE_REC_F 12
 
 /* the two vertex bindings, which are the bake's two streams */
-#define GEOM_STRIDE (TAGPU_PB_GEOMST * 4)  /* 32 */
+#define GEOM_STRIDE (TAGPU_PB_GEOMST * 4)  /* 56 */
 #define MAT_STRIDE  (TAGPU_PB_MATST * 4)   /* 52 */
 
 /* the fog grid is RG8 and the widest the wide-fog builder produces is well
@@ -1057,9 +1057,10 @@ static int build_layouts(const TAGPU_VKPASS* d)
 }
 
 /* The two vertex bindings, which are the bake's two streams (GEOM_STRIDE,
-   MAT_STRIDE), and the ten attributes at the locations the shaders declare
-   (tagpu_posebake.h spells the material stream's floats). */
-#define NATTR 10
+   MAT_STRIDE), and the thirteen attributes at the locations the shaders declare
+   (tagpu_posebake.h spells both streams' floats). Locations 10-12 are the
+   geometry stream's twelve SNORM16 corner normals, four to an attribute. */
+#define NATTR 13
 static void vertex_layout(VkVertexInputBindingDescription* vb,
                           VkVertexInputAttributeDescription* va,
                           VkPipelineVertexInputStateCreateInfo* vi)
@@ -1078,6 +1079,9 @@ static void vertex_layout(VkVertexInputBindingDescription* vb,
     va[7].location = 7; va[7].binding = 1; va[7].format = VK_FORMAT_R32G32_SFLOAT;    va[7].offset = 20;
     va[8].location = 8; va[8].binding = 1; va[8].format = VK_FORMAT_R32G32_SFLOAT;    va[8].offset = 28;
     va[9].location = 9; va[9].binding = 1; va[9].format = VK_FORMAT_R32G32B32A32_SFLOAT; va[9].offset = 36;
+    va[10].location = 10; va[10].binding = 0; va[10].format = VK_FORMAT_R16G16B16A16_SNORM; va[10].offset = 32;
+    va[11].location = 11; va[11].binding = 0; va[11].format = VK_FORMAT_R16G16B16A16_SNORM; va[11].offset = 40;
+    va[12].location = 12; va[12].binding = 0; va[12].format = VK_FORMAT_R16G16B16A16_SNORM; va[12].offset = 48;
     vi->sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi->pNext = NULL; vi->flags = 0;
     vi->vertexBindingDescriptionCount = 2;   vi->pVertexBindingDescriptions = vb;
@@ -2110,7 +2114,7 @@ static void vs_body(UBLK* b, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r,
     b->f[14] = r->anchor[2]; b->f[15] = r->anchor[3];  /* uAnchor     vec4 @48 */
     b->f[16] = r->enc;                                 /* uEnc       float @64 */
     b->f[17] = r->mdBias;                              /* uMdBias    float @68 */
-    b->f[18] = h->shd[0]; b->f[19] = h->shd[1];        /* uShd        vec2 @72 */
+    b->f[18] = h->shNeutral; b->f[19] = r->lit ? 1.0f : 0.0f; /* uShd vec2 @72 */
     b->f[20] = r->cast[0]; b->f[21] = r->cast[1];
     b->f[22] = r->cast[2];                             /* uCast       vec3 @80 */
     b->i[23] = 0;                                      /* uDepthPass   int @92 */

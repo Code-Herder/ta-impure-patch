@@ -29,7 +29,6 @@ void tagpu_r3d_atlas_recycle(void);
    globals itself. */
 void tagpu_r3d_shade_want(const unsigned char* shd);
 int tagpu_r3d_shade_neutral(void);
-int tagpu_r3d_shade_dir(void);
 /* The atlas rect of a unit texture frame, painting it on first sight: 1 with
    `uv` and `ck` set; 0 when there is none (the face draws flat, as the
    engine's rasteriser would); -1 when its paint was DEFERRED past the

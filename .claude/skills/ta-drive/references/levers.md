@@ -300,6 +300,11 @@ bring-up and a swapchain rebuild add nothing to them.
   where it is the one live row. `main+0x37F06` reads `0x3E` on and `0x22` off; peek it before a
   shot: the word is kept in the instance's registry, so a shadows-off an earlier run of the
   instance left shows up in its control launch.
+  **Arming `classicpp.cfg=shadows=0` before a `--defaults` launch makes the store clear those bits**
+  (the word reads `0x23`), and removing the cfg later does not bring them back: launch with the key
+  at its default and switch shadows off live. `Shading` (bit 5) is the store's under `--defaults`
+  too, so a registry value does not gate it there; arm the passes by hand (the default arm set in
+  `SKILL.md`) to test the option, and peek the word to confirm.
 - `sun=off` is exactly `light=0`. `light=0` leaves a unit **unshaded**, not Classic-shaded (the
   engine's per-face shade row is the Classic branch's). `assets=0 light=0 shadows=0` is the one
   Classic++ state that is a Classic frame.

@@ -370,7 +370,7 @@ static const char* VS =
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
     "uniform float uDepthScale;\n"           /* > every key in use this frame  */
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv   */
-    "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vFC; out float vShade; flat out vec4 vShQ; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     "flat out vec4 vLine; flat out int vLineOn;\n"
     "out vec2 vQH; flat out vec2 vQAB; flat out vec4 vQR;\n"
@@ -381,7 +381,7 @@ static const char* VS =
     "  vec2 p = (aPos.xy + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
-    "  vUV = aUV; vFC = aFC; vShade = aShade; vWorld = aWorld; vEnc = aPos.z;\n"
+    "  vUV = aUV; vFC = aFC; vShade = aShade; vShQ = vec4(aShade); vWorld = aWorld; vEnc = aPos.z;\n"
     "  vVY = aVY; vNrm = aNrm;\n"
     /* Classic++ shadows: the vertex's SHADOW-SPACE point, derived here rather
        than carried (renderers.md 2.11): real z = projected z + (altitude +
@@ -394,7 +394,7 @@ static const char* VS =
     "}\n";
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; flat in vec2 vFC; flat in float vShade; in vec2 vWorld;\n"
+    "in vec2 vUV; flat in vec2 vFC; in float vShade; flat in vec4 vShQ; in vec2 vWorld;\n"
     "in float vEnc; in float vVY; flat in vec3 vNrm; in vec3 vShW;\n"
     "flat in vec4 vLine; flat in int vLineOn;\n"
     "in vec2 vQH; flat in vec2 vQAB; flat in vec4 vQR;\n"
@@ -473,8 +473,13 @@ static const char* FS =
        key would not. */
     "  vec2 hX = dFdx(vQH), hY = dFdy(vQH);\n"
     "  vec2 uv = vUV, uvX = dFdx(vUV), uvY = dFdy(vUV);\n"
+    /* the unit shade's row (see tagpu_posedraw.c, and the engine's quad rasteriser it follows):
+       a face with a frame blends its four corners' rows over the frame, any
+       other keeps its triangle's interpolated one */
+    "  float shd = vShade;\n"
     "  if (vQR.x >= 0.0) {\n"
     "    vec2 st = clamp(taQuadST(vQH, vQAB), 0.0, 1.0);\n"
+    "    shd = mix(mix(vShQ.x, vShQ.y, st.x), mix(vShQ.w, vShQ.z, st.x), st.y);\n"
     "    vec2 g = vQAB - 1.0, span = vQR.zw - vQR.xy;\n"
     "    float jd = 1.0 + st.x * g.y + st.y * g.x;\n"
     "    mat2 Ji = mat2(1.0 + st.x * g.y, -st.y * g.y,\n"
@@ -554,7 +559,7 @@ static const char* FS =
     "  vec3 rgb = (t.a > 0.5 && !band) ? t.rgb / t.a\n"
     "      : (band || vUV.x < 0.0) ? texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb : base;\n"
     "  if (!band)\n"
-    "    rgb = min(rgb * texelFetch(uShadeK, ivec2(int(vShade * 31.0 + 0.5), 0), 0).r, vec3(1.0));\n"
+    "    rgb = min(rgb * texelFetch(uShadeK, ivec2(min(int(floor(shd * 31.0 + 0.001)), 31), 0), 0).r, vec3(1.0));\n"
     "  rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */
@@ -1723,6 +1728,10 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     q.nanoOn = 0;
     q.cast[0] = 0.0f; q.cast[1] = 0.0f; q.cast[2] = 1.0f;
     q.ghost = 1;                              /* a preview, not a unit: TAGPU_PDUNIT */
+    /* a build ghost is a preview of a STRUCTURE, so it takes the finished
+       building's shade under the same option [INFERRED: the engine draws no
+       model at the placement cursor to compare against] */
+    q.lit = (pk->gfx_opt & 0x20u) != 0;
     /* AND IT IS NOT IN THE DEPTH MAP, WHICH THIS FIELD SAYS. The depth loop
        runs earlier in the frame and over the real units only; a ghost is drawn
        here, after it, with depth writes off. Left 0 by the memset above,
@@ -2366,7 +2375,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                      const TAGPU_PK_PIECE* pc; int nparts; unsigned basePiece;
                      const unsigned short* bturn;
                      float ax, ay, wx0, wz0, wy, gnd, gy;
-                     int rel, owner, team, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
+                     int rel, owner, team, cloaked, air, feat, sel, shadow, slant, lit; unsigned yaw;
                      float mdBias;
                      float waterT, digT; int waterMode;
                      int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
@@ -2473,7 +2482,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->wy = fz; n2->gnd = fz;          /* the ground under it, refined below */
         n2->yaw = pu->rot[1];
-        n2->shadow = 0; n2->slant = 0;
+        n2->shadow = 0; n2->slant = 0; n2->lit = 0;
         /* build state: the engine's own staging for a unit under construction
            (build-state.md), shared with the composite path so the two cannot
            drift. The blit-time effect that would otherwise draw this at the 1x
@@ -2503,6 +2512,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    0x4592C8), path B tests digger before the structure bit
                    (0x4594D0) and clips a silhouette inline */
                 n2->slant = (st & ST_STRUCT) != 0 && !(mask & UD_DIGGER);
+                /* THE ENGINE'S LIT RASTERISER: 0x459C70 bakes a unit only when
+                   the structure bit is set AND the option word's Shading bit
+                   (bit 5) is (0x45873C, 0x45874A); everything else bakes plain,
+                   with no shade. A digger structure is still a structure here --
+                   the digger test decides the shadow branch, not this one. */
+                n2->lit = (st & ST_STRUCT) != 0 && (pk->gfx_opt & 0x20u) != 0;
                 if (n2->slant) {
                     /* Nothing about the engine's own slant enters here: no
                        composite shows it. This field feeds
@@ -2694,6 +2709,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->mdBias = 0.0f;
                 n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
                 n2->slant = 0;
+                n2->lit = 0;        /* a wreck is a feature: no lit rasteriser */
                 /* units[] is static and only nu resets per frame, so a field
                    left unwritten here is last frame's, and every field a wreck
                    does not set has to be cleared here rather than assumed. */
@@ -2880,7 +2896,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         pv.amb = L->amb;
         pv.norm = 1.0f / L->unitLevel;
         pv.shNeutral = tagpu_r3d_shade_neutral();
-        pv.shDir = tagpu_r3d_shade_dir();
         s_pv = pv;
         /* the build ghost's dependency, made checkable: its pass may only draw
            in a frame this ran (see ghost_record) */
@@ -3099,6 +3114,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 q->nanoC[2] = units[i].nanoC[2];
                 q->nanoWire = units[i].nanoWire;
                 q->cast[0] = 0.0f; q->cast[1] = 0.0f; q->cast[2] = 1.0f;
+                q->lit = units[i].lit;
                 /* THE HARD SHADOW. `units[i].shadow` already carries the
                    engine's per-unit refusals -- noshadow, canhover|floater for
                    a mobile, the model-0-under-water skip for a structure, and

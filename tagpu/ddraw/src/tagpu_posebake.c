@@ -214,52 +214,158 @@ static int pb_walk(const char* const* nd, int nparts, int range,
 }
 
 /* ---- the geometry bake -------------------------------------------------- */
-typedef struct { int nv; int over; } PBGEOMCTX;
+
+/* THE ENGINE'S VERTEX NORMAL, per piece: 0x459C70 (the lit rasteriser) walks a
+   piece's faces, takes each face's normal from its FIRST THREE vertex indices
+   (a face repeating an index gets (0,1,0)), adds it to every vertex the face
+   names, and divides each vertex's sum by its count -- no renormalisation, so a
+   vertex between differing faces has a normal shorter than 1
+   (0x45A0A0..0x45A22C, DISASSEMBLED; exe-reverse-engineering.md "The unit
+   shade"). Face 0 is left out of the sums when the piece carries a selection
+   primitive, as it is left out of the raster (0x45A13D).
+
+   A rigid transform carries the rest normal to the posed one, and the mean of
+   rotated vectors is the rotation of their mean, so the mean is taken here at
+   rest and the shader only rotates it.
+
+   THE BOUNDS are pb_walk's own, on the same template pieces in the same call:
+   the piece's vertex count is at most PB_MAXNODEV (pb_walk skips a node past
+   it), every index is checked against that count before it addresses
+   `s_vn`, and the template's lifetime is the bake's (the level generation
+   latched per frame, tagpu_posebake_frame).
+
+   PB_SHADE_SIGN is which side of the winding the engine's normal points to:
+   -1 against (V1-V0)x(V2-V0), MEASURED against the engine's own frames
+   (tagpu_gdi.on, Shading on vs off, four structures: mean luminance error
+   17-23 with -1, 36-56 with +1). The cross helpers' sign (0x4B6F00, 0x4B6F70)
+   is not decoded. */
+#define PB_SHADE_SIGN -1.0f
+
+static float s_vn[PB_MAXNODEV][3];
+static int   s_vnCnt[PB_MAXNODEV];
+
+typedef struct { int nv; int over; int vnPiece; } PBGEOMCTX;
+
+/* a normal component in [-1, 1] as the GPU's SNORM16: the vertex format
+   divides by 32767, so 32767 is exactly 1.0 */
+static short snorm16(float x)
+{
+    if (!(x > -1.0f)) return -32767;
+    if (!(x < 1.0f)) return 32767;
+    return (short)(x * 32767.0f + (x < 0.0f ? -0.5f : 0.5f));
+}
+
+static void piece_vnormals(const char* n, const int* rv, int nvert)
+{
+    const int nface = *(const int*)(n + N_FCOUNT);
+    const char* faces = *(const char* const*)(n + N_FACES);
+    int j, k;
+    for (k = 0; k < nvert; k++) { s_vn[k][0] = s_vn[k][1] = s_vn[k][2] = 0.0f; s_vnCnt[k] = 0; }
+    /* pb_walk's own bound on the face list, taken again because these are
+       re-reads of engine memory: a piece it would not walk sums nothing */
+    if (nface <= 0 || nface > 512 || !ptr_ok(faces) ||
+        IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) return;
+    for (j = (*(const int*)(n + N_SELPRIM) != -1) ? 1 : 0; j < nface; j++) {
+        const char* fa = faces + j * FACE_STRIDE;
+        const int fvc = *(const int*)(fa + F_VCOUNT);
+        const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
+        float f[3] = { 0.0f, 1.0f, 0.0f };
+        int bad = 0;
+        /* pb_walk's own bounds: a face outside them is not walked, so it is not
+           summed either */
+        if (fvc < 3 || fvc > 32 || !ptr_ok(idx) || IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
+        for (k = 0; k < fvc; k++) if (idx[k] >= nvert) bad = 1;
+        if (bad) continue;
+        if (idx[0] != idx[1] && idx[1] != idx[2] && idx[2] != idx[0]) {
+            const int* a = rv + idx[0] * 3, *b = rv + idx[1] * 3, *c = rv + idx[2] * 3;
+            float e1[3], e2[3], x, y, z, nl;
+            for (k = 0; k < 3; k++) {
+                e1[k] = (float)b[k] / 65536.0f - (float)a[k] / 65536.0f;
+                e2[k] = (float)c[k] / 65536.0f - (float)a[k] / 65536.0f;
+            }
+            x = e1[1]*e2[2] - e1[2]*e2[1];
+            y = e1[2]*e2[0] - e1[0]*e2[2];
+            z = e1[0]*e2[1] - e1[1]*e2[0];
+            nl = sqrtf(x*x + y*y + z*z);
+            /* a zero-length cross is a NaN in the engine and poisons every vertex
+               the face names; (0,1,0) is the degenerate face's own value */
+            if (nl > 1e-6f) { f[0] = PB_SHADE_SIGN * x / nl; f[1] = PB_SHADE_SIGN * y / nl; f[2] = PB_SHADE_SIGN * z / nl; }
+        }
+        for (k = 0; k < fvc; k++) {
+            s_vn[idx[k]][0] += f[0]; s_vn[idx[k]][1] += f[1]; s_vn[idx[k]][2] += f[2];
+            s_vnCnt[idx[k]]++;
+        }
+    }
+    for (k = 0; k < nvert; k++) {
+        if (s_vnCnt[k] > 0) {
+            const float inv = 1.0f / (float)s_vnCnt[k];
+            s_vn[k][0] *= inv; s_vn[k][1] *= inv; s_vn[k][2] *= inv;
+        }
+        /* a vertex no face names keeps the engine's zeroed sum, whose row is 0
+           (0x459F0A..0x459F15; the divide at 0x45A1FF skips a count of 0) */
+    }
+}
 
 static void geom_emit(void* vctx, int range, int p, const char* nd,
                       const int* rv, int nvert, const char* fa, int fvc,
                       const unsigned short* vi, const int* slot, int n)
 {
     PBGEOMCTX* c = (PBGEOMCTX*)vctx;
-    float V[3][3], nx = 0.0f, ny = 1.0f, nz = 0.0f;
-    int shaded = 0, t, r;
-    (void)nd; (void)nvert; (void)fa; (void)fvc; (void)slot;
+    float V[3][3];
+    const float* cn4[4];
+    int haveQ = 0;
+    int t, r;
+    (void)slot;
     if (c->over) return;
     if (c->nv + n > PB_MAXVERT) { c->over = 1; return; }
     for (t = 0; t < n; t++)
         for (r = 0; r < 3; r++)
             V[t][r] = (float)rv[vi[t] * 3 + r] / 65536.0f;
-    /* THE REST NORMAL, and why it may be baked at all: every face of a 3DO
-       belongs to ONE piece, and a piece's transform is built by rotating basis
-       vectors (`piece_local`) and composing those, so it is rigid. A rigid
-       transform carries the rest normal to the posed normal and preserves its
-       length — so a degeneracy test on the posed normal gives the same answer
-       here, and the shader has only to transform, flip
-       toward SH_V and normalise. The flip is NOT baked: it depends on the posed
-       direction, which is what the piece matrix decides. */
-    /* THE ONE PLACE THIS IS NOT EXACT. The ENGINE's posed vertices are rounded
-       into 16.16 at every axis and every level of the tree (`fistp`, 0x4B7173),
-       and the bake computes `nl` from the rest vertices. For a face of any real
-       area the two agree, but a NEAR-DEGENERATE one can land on the other side
-       of `nl > 1e-6` from the posed one and take the neutral row where the posed
-       vertices give a shaded one, or the reverse. That is a whole face one SHD
-       row off, which is what Gate B is told to look for. */
-    if (range == TAGPU_PB_BODY) {
-        float e1x = V[1][0]-V[0][0], e1y = V[1][1]-V[0][1], e1z = V[1][2]-V[0][2];
-        float e2x = V[2][0]-V[0][0], e2y = V[2][1]-V[0][1], e2z = V[2][2]-V[0][2];
-        float ax = e1y*e2z - e1z*e2y, ay = e1z*e2x - e1x*e2z, az = e1x*e2y - e1y*e2x;
-        float nl = sqrtf(ax*ax + ay*ay + az*az);
-        if (nl > 1e-6f) { nx = ax/nl; ny = ay/nl; nz = az/nl; shaded = 1; }
-        else            { nx = 0.0f; ny = 1.0f; nz = 0.0f; }
+    /* THE BODY'S NORMAL IS THE VERTEX'S, not the face's: the engine shades a
+       structure per vertex and interpolates across the face (piece_vnormals).
+       The table is per piece and the walk is piece by piece, so it is rebuilt
+       when the piece changes. Every body corner is `shaded`: whether a piece
+       shades at all is the piece's own flag, read in the shader off the pose. The
+       slant and the wire are drawn on the neutral row with a level normal,
+       exactly as emit_slant_at and emit_wire write them. */
+    if (range == TAGPU_PB_BODY && c->vnPiece != p) {
+        piece_vnormals(nd, rv, nvert);
+        c->vnPiece = p;
     }
-    /* the slant and the wire are drawn on the neutral SHD row with a level
-       normal, exactly as emit_slant_at and emit_wire write them */
+    /* A QUAD'S FOUR CORNER NORMALS, in the face's own index order, ride on
+       every vertex of the face: the fragment stage blends the four corners'
+       intensities over the quad's frame (quad_frame), which is how the engine's
+       row-by-row rasteriser spreads them, where two triangles would each take a
+       plane through three. Any other face carries its own vertex's normal four
+       times, and the fragment stage does not read them. The fourth corner is
+       bounded here: the walk bounds only the three the triangle names. */
+    if (range == TAGPU_PB_BODY && fvc == 4) {
+        const unsigned short* fi = *(const unsigned short* const*)(fa + F_INDICES);
+        if (ptr_ok(fi) && fi[0] < nvert && fi[1] < nvert && fi[2] < nvert && fi[3] < nvert) {
+            for (t = 0; t < 4; t++) cn4[t] = s_vn[fi[t]];
+            haveQ = 1;
+        }
+    }
     for (t = 0; t < n; t++) {
         float* o = s_scratchG + (size_t)(c->nv + t) * TAGPU_PB_GEOMST;
+        short q[12];
+        int k;
         o[0] = V[t][0]; o[1] = V[t][1]; o[2] = V[t][2];
-        o[3] = nx; o[4] = ny; o[5] = nz;
+        if (range == TAGPU_PB_BODY) {
+            o[3] = s_vn[vi[t]][0]; o[4] = s_vn[vi[t]][1]; o[5] = s_vn[vi[t]][2];
+            o[7] = (float)TAGPU_PBF_SHADED;
+        } else {
+            o[3] = 0.0f; o[4] = 1.0f; o[5] = 0.0f;
+            o[7] = 0.0f;
+        }
         o[6] = (float)p;
-        o[7] = shaded ? (float)TAGPU_PBF_SHADED : 0.0f;
+        for (k = 0; k < 4; k++) {
+            const float* src = haveQ ? cn4[k] : &o[3];
+            q[k * 3 + 0] = snorm16(src[0]);
+            q[k * 3 + 1] = snorm16(src[1]);
+            q[k * 3 + 2] = snorm16(src[2]);
+        }
+        memcpy(o + 8, q, sizeof q);
     }
     c->nv += n;
 }
@@ -415,7 +521,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     unsigned char* topo;
     int r, slot;
     char b[192];
-    c.nv = 0; c.over = 0; st.badNode = 0; st.oddFace = 0;
+    c.nv = 0; c.over = 0; c.vnPiece = -1; st.badNode = 0; st.oddFace = 0;
     slot = geom_slot();
     if (slot < 0) { say_full("geometry"); return NULL; }
     g = &s_geom[slot];

@@ -64,12 +64,13 @@ static const TAGPU_GAFENT* atlas_get(const char* g)
     return tagpu_gaf_atlas_get(&s_atlas, f);
 }
 
-/* ---- per-face directional shading: the engine's 32 shade rows ----
-   The vertex stage chooses a row per face, `neutral + dir * round(12 * N.SH_L)`
-   clamped to 0..31 (tagpu_posedraw.c), the way the engine's rasteriser picks a
-   PALETTE.SHD row; `s_shNeutral` and `s_shDir` are that table's calibration.
-   Without the engine's table the rows are our own ramp, factor 0.60 +
-   0.025*row, so row 16 is EXACT 1.0. */
+/* ---- the engine's 32 shade rows ----
+   The vertex stage of a LIT unit (a structure, under the Shading option) computes
+   the row the engine's rasteriser would -- `ftol(5 * N.L) & 0x1F` per vertex, a
+   row of 0 taken as 5, interpolated across the face (tagpu_posedraw.c) -- and every other unit takes
+   the neutral row; `s_shNeutral` is the row of the engine's table that leaves a
+   colour as it is. Without the engine's table the rows are our own ramp, factor
+   0.60 + 0.025*row, so row 16 is EXACT 1.0. */
 #define SH_ROWS    32
 #define SH_NEUTRAL 16
 /* WHAT THE CALIBRATION IS BUILT FROM, AND THE KEY THAT REBUILDS IT: the
@@ -86,7 +87,6 @@ static unsigned char s_shd[SH_ROWS * 256];
 static int           s_haveShd;
 static unsigned      s_shadePal;
 static int s_shNeutral = SH_NEUTRAL;   /* the row that leaves a colour as it is */
-static int s_shDir     = 1;            /* +1 = higher row is brighter           */
 
 /* THE FACE-SHADE MULTIPLIER (bar-camera-port.md 2.2): a shade row in full
    colour. The fragment multiplies its RGB by k[row] and clamps, in both
@@ -158,33 +158,25 @@ static void shade_build(const unsigned char* shd)
        build-state.md). It arrives in the frame packet, copied by the game
        thread, so the render thread never dereferences the graphics globals
        for it. Calibrate rather than assume: neutral = the row with
-       the most identity entries, direction from end-row luminance. Fall back
+       the most identity entries. Fall back
        to our computed ramp when the packet carried none. */
     if (shd) {
         int bestr = -1, bestn = -1;
-        long lum0 = 0, lum31 = 0;
         for (r = 0; r < SH_ROWS; r++) {
             int n = 0;
             for (i = 0; i < 256; i++) n += (shd[r*256 + i] == i);
             if (n > bestn) { bestn = n; bestr = r; }
         }
-        for (i = 0; i < 256; i++) {
-            const unsigned char* c0 = pal + (size_t)shd[0*256 + i]  * 4;
-            const unsigned char* c1 = pal + (size_t)shd[31*256 + i] * 4;
-            lum0  += c0[0] + c0[1] + c0[2];
-            lum31 += c1[0] + c1[1] + c1[2];
-        }
         s_shNeutral = bestr;
-        s_shDir     = (lum31 >= lum0) ? 1 : -1;
         s_shadeBuilt = 1;
         s_shadePal = tagpu_pal_engine_serial();
         shade_k_build(shd, pal);
         { char b[96]; _snprintf(b, sizeof b,
-            "r3d shade: engine SHD table (neutral=%d id=%d/256 dir=%d)",
-            s_shNeutral, bestn, s_shDir); rlog(b); }
+            "r3d shade: engine SHD table (neutral=%d id=%d/256)",
+            s_shNeutral, bestn); rlog(b); }
         return;
     }
-    s_shNeutral = SH_NEUTRAL; s_shDir = 1;
+    s_shNeutral = SH_NEUTRAL;
     s_shadeBuilt = 1;
     s_shadePal = tagpu_pal_engine_serial();
     shade_k_build(NULL, NULL);
@@ -553,7 +545,6 @@ const float* tagpu_r3d_shade_k(void)
 }
 
 int tagpu_r3d_shade_neutral(void) { return s_shNeutral; }
-int tagpu_r3d_shade_dir(void)     { return s_shDir; }
 int tagpu_r3d_atlas_uv(const char* g, float uv[4], float* ck)
 {
     if (s_state != 1) return 0;

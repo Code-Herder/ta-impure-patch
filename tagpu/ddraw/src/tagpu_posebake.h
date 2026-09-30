@@ -10,8 +10,8 @@
    THE SPLIT (gpu-posing.md decision 4) is between what a type owns and what a
    type-plus-owner owns:
 
-     GEOMETRY, per type — rest position, the rest normal of the vertex's own
-       triangle, its piece index, and a flags word. Static: it survives a team
+     GEOMETRY, per type — rest position, the engine's vertex normal (the mean
+       of the vertex's faces' normals, at rest), its piece index, and a flags word. Static: it survives a team
        change and an atlas recycle, and it dies only with the LEVEL or when the
        cache evicts it.
      MATERIAL, per (type, owner, atlas generation) — the UV, the flat colour
@@ -36,7 +36,14 @@
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE, and the field offsets */
 #include "tagpu_packet.h"        /* the bound on one frame's posed objects */
 
-#define TAGPU_PB_GEOMST  8      /* floats per geometry vertex */
+/* floats per geometry vertex:
+     0-2  position          the rest vertex
+     3-5  normal            the engine's mean normal of THIS vertex (body), level (slant, wire)
+     6    piece             the pose index
+     7    flags             TAGPU_PBF_*
+     8-13 corner normals    twelve SNORM16 -- a quad's four corners in the face's index
+                            order, xyz each; any other face repeats this vertex's four times */
+#define TAGPU_PB_GEOMST  14
 /* floats per material vertex:
      0-1  uv                the atlas corner this fan slot takes
      2-3  flat index, key   (flat idx/255, -1) or (0, tex ck/255)
@@ -75,7 +82,7 @@
 #define TAGPU_PB_KEEPMAT  1024
 
 /* geometry vertex flags (float, bit-tested in the shader as an int) */
-#define TAGPU_PBF_SHADED 1      /* body face with a usable rest normal        */
+#define TAGPU_PBF_SHADED 1      /* body vertex: carries the engine's normal   */
 
 enum { TAGPU_PB_BODY = 0, TAGPU_PB_SLANT, TAGPU_PB_WIRE, TAGPU_PB_NRANGE };
 
