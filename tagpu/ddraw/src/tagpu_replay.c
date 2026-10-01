@@ -78,6 +78,8 @@
 #define PL_SIGHT       0x7C         /* u8* the sight counters, one a cell ...                     */
 #define PL_SIGHTLEN    0x88         /* ... and their bytes (0x4816A0's fill, 0x481734..0x481767)  */
 #define PL_MAPBIT      0x146        /* u8: the record's bit in an explored-map entry (0x48194B)   */
+#define PL_ENERGY      0x8C         /* float: the energy the level start gives (0x465F04) ...     */
+#define PL_METAL       0x98         /* ... and the metal (0x465F1A)                               */
 #define OFF_NPLAYERS   0x2A3C       /* u16: the player count                                      */
 #define OFF_CONTROLLED 0x2A42       /* u8: the player the local game commands                     */
 #define OFF_VIEWED     0x2A43       /* u8: the player whose view it draws                        */
@@ -4087,6 +4089,14 @@ static void play(const Lv* L, int first)
         images_put(L, W);
         wind_seed(W);
         sight_fill(L->ta, s_viewer);
+        /* V owns nothing, so its energy and metal are 0. The level start 0x465E30 reads them from
+           V's skirmish settings entry, which the SKIRMISH screen does not fill (0x465EF5..0x465F1A;
+           MEASURED 1365/16385 and 11/10 in three processes). Nothing writes them afterwards on a
+           puppet host: the economy 0x401360 runs only for a type-1 or type-2 record
+           (0x465539..0x46555A). So every host of a recording holds the same V. The first step
+           follows the loader's last act (THE PLAYER'S SETTINGS), so the level start has run. */
+        memset(player_rec(L->ta, s_viewer) + PL_ENERGY, 0, 4);
+        memset(player_rec(L->ta, s_viewer) + PL_METAL, 0, 4);
     }
     /* The world holds iteration k: its images went in at the step before k, its events are
        step k's. An iteration of an earlier GameTime is played late rather than dropped, since its
