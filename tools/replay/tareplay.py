@@ -388,6 +388,56 @@ def step(w, kind, arg):
         raise CouldNotRun(f"a step of kind {kind!r}")
 
 
+def twin(w, log):
+    """The null twin (tarec images-gate): the live game paused, frame dump ln1; then what the
+    viewer does without changing the game -- the arrow keys a second each way, one wheel notch in
+    and out at the map's centre, the in-game menu (Tab) opened and closed, the cursor over the
+    map and over the panel -- and frame dump ln2. GameTime must not move between them; the
+    game is unpaused after."""
+    tacli("keys", w.name, "pause")
+    nap(1.5)
+    g1 = w.gametime()
+    nap(1.0)
+    if w.gametime() != g1:
+        raise CouldNotRun("the twin: the game did not pause")
+    for name in ("ln1",):
+        n = len(log.lines)
+        w.trigger(f"dump {name} now")
+        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
+            raise CouldNotRun(f"the twin: frame dump {name} not taken in 30 s")
+    for key in ("up", "down", "left", "right"):
+        tacli("keys", w.name, f"down:{key}")
+        nap(1.0)
+        tacli("keys", w.name, f"up:{key}")
+        nap(0.3)
+    tacli("keys", w.name, "pmove:512,384")
+    nap(0.3)
+    tacli("keys", w.name, "wheel:+1")
+    nap(0.8)
+    tacli("keys", w.name, "wheel:-1")
+    nap(0.8)
+    tacli("keys", w.name, "tab")
+    nap(1.0)
+    tacli("keys", w.name, "tab")
+    nap(1.0)
+    tacli("keys", w.name, "pmove:700,500")
+    nap(0.5)
+    tacli("keys", w.name, "pmove:60,300")
+    nap(0.5)
+    n = len(log.lines)
+    w.trigger("dump ln2 now")
+    if not log.wait(r"recorder: frame dump ln2 at GameTime", 30, n):
+        raise CouldNotRun("the twin: frame dump ln2 not taken in 30 s")
+    if w.gametime() != g1:
+        raise CouldNotRun("the twin: GameTime moved between its dumps")
+    tacli("keys", w.name, "pause")
+    nap(1.5)
+    if w.gametime() == g1:
+        nap(2.0)
+        if w.gametime() == g1:
+            raise CouldNotRun("the twin: the game did not unpause")
+
+
 def live(w, fx, Ts, out):
     """L: the fixture recorded, dumps l<T1> and l<Tlast>; returns the recording's path."""
     fix = fx["fix"]
@@ -405,6 +455,7 @@ def live(w, fx, Ts, out):
     for name, T in zip(names, (Ts[0], Ts[-1])):
         arm_dump(w, log, name, T)
     steps = sorted(fix.get("steps", []), key=lambda s: s[0])
+    twinned = False
     # a frozen game or a level that ends early stops here: four times the end's real time
     deadline = time.time() + 120 + 4 * fix["end"] / 30
     while True:
@@ -415,6 +466,10 @@ def live(w, fx, Ts, out):
         while steps and steps[0][0] <= g:
             _, kind, arg = steps.pop(0)
             step(w, kind, arg)
+        if not twinned and g > Ts[-1] + 5:
+            wait_dumps(log, names[1:], 30)
+            twin(w, log)
+            twinned = True
         if g >= fix["end"] and not steps:
             break
         log.read()
@@ -508,8 +563,7 @@ def checks(fx):
         rc, o = tarec_run(*args)
         res.append((label, PASS if rc == 0 else FAIL if rc == 1 else UNRUN,
                     last(o) if rc == 0 else o.strip()))
-        if rc == 0:
-            fx["passed"] += list(files)
+        fx["passed" if rc == 0 else "held"] += list(files)
 
     for n in (f"l{Ts[0]}", f"l{Ts[-1]}"):
         d = out / "L" / f"dump-{n}.bin"
@@ -525,6 +579,30 @@ def checks(fx):
         for n, note in names:
             d = out / proc / f"dump-{n}.bin"
             compare(f"{proc} {n}{note}", "compare", "--puppet", rec, d, files=[d])
+    l1, lT = out / "L" / f"dump-l{Ts[0]}.bin", out / "L" / f"dump-l{Ts[-1]}.bin"
+    p1, pT = out / "P" / f"dump-p{Ts[0]}.bin", out / "P" / f"dump-p{Ts[-1]}.bin"
+    n1, n2 = out / "L" / "dump-ln1.bin", out / "L" / "dump-ln2.bin"
+    r1, q1 = out / "R" / f"dump-r{Ts[0]}.bin", out / "Q" / f"dump-q{Ts[0]}.bin"
+    if ran.get("P") == "ran":
+        compare(f"counts, L against P over [{Ts[0]}, {Ts[-1]})", "compare-counts", rec, l1, lT,
+                p1, pT, files=[l1, lT, p1, pT])
+    if all(ran.get(k) == "ran" for k in "PRQ"):
+        compare(f"the images gate at {Ts[0]}", "images-gate", rec, l1, lT, n1, n2, p1, pT, r1, q1,
+                files=[l1, lT, n1, n2, p1, pT, r1, q1])
+    for proc, d in (("L", lT), ("P", pT)):
+        if ran.get(proc) == "ran":
+            compare(f"{proc} {d.stem[5:]}: the address scan", "scan", rec, d, files=[d])
+    for proc, d in (("R", out / "R" / f"dump-rt{Ts[-1]}c.bin"), ("Q", q1)):
+        if ran.get(proc) != "ran":
+            continue
+        if not d.exists():
+            res.append((f"{proc}: COB engine writes on a puppet", UNRUN, f"no {d.name}"))
+            continue
+        rc, o = tarec_run("counts", rec, d)
+        writes = [ln.strip() for ln in o.splitlines() if "COB write" in ln and not ln.endswith(": 0")]
+        res.append((f"{proc}: COB engine writes on a puppet",
+                    UNRUN if rc else FAIL if writes else PASS,
+                    o.strip() if rc else "; ".join(writes) if writes else f"none ({d.name})"))
     if ran.get("R") == "ran":
         for T in Ts[1:]:
             line = fx["rt"].get(f"rt{T}", "")
@@ -556,7 +634,8 @@ class Run:
                                   f"{' LIMITS=stock' if fix.get('dll') == 'stock' else ''})")
             Ts = gametimes(name, fix["end"], h)
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
-                             "problems": [], "rt": {}, "passed": [], "procs": {}}
+                             "problems": [], "rt": {}, "passed": [], "held": [],
+                             "procs": {}}
             say(f"{name}: T1 {Ts[0]}, round trips {Ts[1]} {Ts[2]} {Ts[3]}, Tlast {Ts[3]}")
             self.put((name, "L"))
 
@@ -655,7 +734,8 @@ def report(run, keep):
             if f"rt{T}" in fx["rt"]:
                 lines.append(f"         {fx['rt'][f'rt{T}']}")
         if not keep:
-            for f in fx["passed"]:
+            # a dump any check did not pass on stays, whatever else passed on it
+            for f in set(map(str, fx["passed"])) - set(map(str, fx["held"])):
                 Path(f).unlink(missing_ok=True)
     text = "\n".join(lines).replace(f"{run.out}/", "") + "\n"
     print(text, end="")

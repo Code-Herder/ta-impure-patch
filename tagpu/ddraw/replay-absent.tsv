@@ -1,0 +1,16 @@
+# replay-absent.tsv -- what tools/replay/tarec.py compare-counts accepts between a live game and
+# its playing: a sink's count on a puppet host that differs from the recording machine's.
+# demo-recorder-completeness.md, *Also asserted*. Every row is a loosening and the owner's
+# decision (CLAUDE.md, *Loosening is the owner's decision*); a difference compare-counts names is
+# a bug in the change, never grounds for a row.
+#
+# band	0
+#   a sink's count may differ by this much, live against puppet, in every (site, caller, aux) key
+#
+# Columns, tab-separated: site caller aux side reason decided
+#   site    the sink's VA, 0x hex
+#   caller  the return address, 0x hex, dll+0x<offset> inside Impure's DLL, or * for any
+#   aux     the key's aux, 0x hex, a script's name in quotes, or * for any
+#   side    absent (the puppet counts fewer) or extra (more)
+#   reason  why, with its evidence
+#   decided the date the owner decided it

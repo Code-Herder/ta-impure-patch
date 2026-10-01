@@ -49,6 +49,14 @@ void tagpu_puppet_open(int open);
 /* A seek's rebuild, bracketed on the game thread (tagpu_replay.c, seek_run): while it runs the
    skirmish elimination 0x47BD70 is refused, since the rebuild's kills are not the recording's */
 void tagpu_puppet_rebuild(int on);
+/* 1 while a seek's rebuild runs: the recorder's counts leave its calls out */
+int tagpu_puppet_rebuilding(void);
+/* COB's engine writes on a puppet this level, by write site (tagpu_puppet.c, THE COB WRITES ON A
+   PUPPET): each site's return address in va[k] and its count in n[k]; the sites, or 0 when the
+   observers are not in */
+#define TAGPU_PUPPET_COB_SITES 5
+unsigned tagpu_puppet_cob_writes(unsigned va[TAGPU_PUPPET_COB_SITES],
+                                 unsigned n[TAGPU_PUPPET_COB_SITES]);
 /* the calls each gate refused this level, as one line for the replay's log */
 void tagpu_puppet_refusals(char* out, size_t cap);
 

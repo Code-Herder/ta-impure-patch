@@ -27,6 +27,22 @@
                                              the same player viewed (a seek in a fresh process
                                              and one in a running playback) equal in every
                                              record, the players' sight counters included
+  tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
+  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
+                                             a live game's counts against a playing's, each the
+                                             change between its two dumps: roots per site
+                                             exactly, sinks per (site, caller, aux) within
+                                             replay-absent.tsv's band less its rows, and no COB
+                                             engine write on the puppet
+  tools/replay/tarec.py images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1
+                                             the null twin: every bit of the two images no row
+                                             covers where the live game and a playing or the
+                                             seek differ at T1, classified presentation,
+                                             host-variant or load-constant, or a FAIL
+  tools/replay/tarec.py scan FILE DUMP       every plain value of the dump's tables, unit,
+                                             player and projectile images and globals image
+                                             that lies inside the main block, an engine pool or
+                                             Impure's DLL: an address recorded as a value
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -50,9 +66,11 @@ in every snapshot and in every dump, and as runs of changed bytes between.
 Standard library only.
 """
 import os
+import re
 import struct
 import sys
 import zlib
+from pathlib import Path
 
 REC_FORMAT = 4
 REC_MAGIC = b"IMPREC\r\n"
@@ -98,7 +116,9 @@ def mapped_bytes(w, h):
  RK_EV_BUILT, RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY, RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DRAW,
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
- RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT) = range(48)
+ RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
+ RK_COUNT_NAME) = range(50)
+REC_COUNT_DLL = 0x80000000           # RK_COUNTS: a caller inside Impure's DLL, as its offset
 RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list",
             RK_GLOBALS: "globals image", RK_PROJ: "projectile record",
             RK_PROJ_HEAD: "projectile count (+0x0) and extent (+0x4)"}
@@ -118,7 +138,7 @@ RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
- RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME) = range(1, 21)
+ RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME, RT_DLL, RT_FIELDS) = range(1, 23)
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED) = range(32, 41)
 
@@ -253,6 +273,11 @@ def header(payload):
         elif tag == RT_GLOBALS: h["globals"] = b.decode("latin-1")
         elif tag == RT_PROJECTILES: h["projectiles"] = u32
         elif tag == RT_FRAME: h["frame"] = u32
+        elif tag == RT_DLL: h["dll"] = struct.unpack_from("<II", b)
+        elif tag == RT_FIELDS:
+            ix, n = struct.unpack_from("<HH", b)
+            h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
+                                              for k in range(n)]
     if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     return h
@@ -299,6 +324,9 @@ class World:
         self.mnext = 0                  # RK_MAPPED's next offset: len(mapped) once it is whole
         self.images = {}                # a dump's main block (0) and .data (1)
         self.sight = {}                 # a dump's sight counters, by player record
+        self.counts = None              # a dump's counts: {(site, caller, aux): n}
+        self.cmeta = None               # their (overflow, sinks counted, counting)
+        self.cnames = {}                # the scripts' names by their FNV-1a
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
         self.units = {}                                  # slot -> bytearray image, live only
@@ -493,6 +521,19 @@ class World:
             if p >= REC_PLAYERS or len(b) <= 8 or off != len(cnt):
                 raise Unreadable(f"record {p}'s sight counters out of order at +0x{off:X}")
             cnt += b[8:]
+        elif kind == RK_COUNTS:
+            over, sinks, on, n = struct.unpack_from("<IIII", b)
+            if len(b) != 16 + 16 * n or (self.cmeta and self.cmeta != (over, sinks, on)):
+                raise Unreadable("a counts record cut short or disagreeing with the last")
+            self.cmeta = (over, sinks, on)
+            if self.counts is None:
+                self.counts = {}
+            for i in range(n):
+                va, caller, aux, c = struct.unpack_from("<IIII", b, 16 + 16 * i)
+                self.counts[(va, caller, aux)] = self.counts.get((va, caller, aux), 0) + c
+        elif kind == RK_COUNT_NAME:
+            aux = struct.unpack_from("<I", b)[0]
+            self.cnames.setdefault(aux, b[4:].split(b"\0")[0].decode("latin-1"))
         elif kind == RK_IMAGE:
             which, off = b[0], struct.unpack_from("<I", b, 4)[0]
             size = (REC_MAIN_BYTES, REC_DATA_BYTES)[which] if which < 2 else 0
@@ -1248,6 +1289,137 @@ def cmd_compare_dumps(path, a_path, b_path):
     return 1 if n else 0
 
 
+# THE COUNTS (tagpu_recorder.c, THE COUNTS): what compare-counts compares
+COUNT_ROOTS = {
+    0x4861B3: "the create 0x485F50 (its exit)", 0x4866D0: "the destructor 0x4866D0",
+    0x41B8D0: "build done 0x41B8D0", 0x48B090: "the state setter 0x48B090 (a change)",
+    0x47F780: "the reply 0x47F780", 0x47F850: "the reply 0x47F850",
+    0x4720D0: "the nano emitter 0x4720D0", 0x472200: "the nano emitter 0x472200",
+    0x424050: "the feature tick 0x424050", 0x423C50: "the feature spawn 0x423C50",
+    0x4246B0: "the feature destroy 0x4246B0", 0x423550: "the feature death 0x423550",
+    0x4233A0: "the feature burn 0x4233A0", 0x4244B0: "the feature damage 0x4244B0",
+    0x423710: "the feature swap 0x423710"}
+# in the recorder's CNT_SINKS order: bit k of the sinks counted
+COUNT_SINKS = [0x420A30, 0x470EB0, 0x4B08C0, 0x47F0C0, 0x47F1A0, 0x47F210, 0x47F300, 0x49C740,
+               0x49CDE0, 0x49CC20, 0x49C9C0]
+COB_WRITES = {0x480B57: "SET ACTIVATION", 0x480BF1: "SET ARMORED", 0x480BB3: "SET YARD_OPEN",
+              0x4813AB: "ATTACH", 0x481427: "DROP"}
+
+
+def counts_of(path, h):
+    """A dump's GameTime, counts, (overflow, sinks counted, counting) and script names."""
+    _, w = dump_world(path, h)
+    if w.counts is None:
+        raise Unreadable(f"{path}: a dump without counts (RK_COUNTS): built before S3c-2")
+    return w.tick, w.counts, w.cmeta, w.cnames
+
+
+def caller_text(c):
+    return f"dll+0x{c & ~REC_COUNT_DLL:X}" if c & REC_COUNT_DLL else f"0x{c:06X}"
+
+
+def absent_rows(path):
+    """replay-absent.tsv: the band and the rows, each (site, caller, aux, side)."""
+    band, rows = 0, []
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        m = re.match(r"#\s*band\t(\d+)\s*$", line)
+        if m:
+            band = int(m.group(1))
+        if not line or line.startswith("#"):
+            continue
+        f = line.split("\t")
+        if len(f) < 6 or f[3] not in ("absent", "extra"):
+            raise Unreadable(f"{path}: a row without six fields or with side {f[3:4]}: {line}")
+        rows.append((int(f[0], 16), f[1], f[2], f[3]))
+    return band, rows
+
+
+def absent_covers(rows, site, caller, aux, name, side):
+    for rs, rc, ra, rside in rows:
+        if rs != site or rside != side:
+            continue
+        if rc != "*" and rc != caller_text(caller) and rc.lower() != f"0x{caller:x}":
+            continue
+        if ra != "*" and ra != f'"{name}"' and ra.lower() != f"0x{aux:x}":
+            continue
+        return True
+    return False
+
+
+def cmd_compare_counts(path, la, lb, pa, pb, absent):
+    """The counts of a live game (L, dumps la and lb) against a playing's (P, pa and pb), each as
+    the change between its two dumps: every root per site exactly; every sink per (site, caller,
+    aux) within replay-absent.tsv's band, less its rows; and no COB engine write on the puppet.
+    Both dumps of a pair are taken at a capture point before that step's replay step, so both
+    windows hold the steps [first GameTime, second GameTime)."""
+    h = header_only(path)
+    (ta, ca, ma, na), (tb, cb, mb, nb) = counts_of(la, h), counts_of(lb, h)
+    (tpa, cpa, mpa, npa), (tpb, cpb, mpb, npb) = counts_of(pa, h), counts_of(pb, h)
+    names = {**na, **nb, **npa, **npb}
+    if (ta, tb) != (tpa, tpb) or ta >= tb:
+        print(f"the windows differ: live [{ta}, {tb}), puppet [{tpa}, {tpb})")
+        return 2
+    bad = [p for p, m in ((la, ma), (lb, mb), (pa, mpa), (pb, mpb)) if not m[2]]
+    if bad:
+        print("counted nothing (the level neither recorded nor played): " + ", ".join(bad))
+        return 2
+    lines, unrun = [], []
+    for p, m in ((la, ma), (lb, mb), (pa, mpa), (pb, mpb)):
+        if m[0]:
+            lines.append(f"{p}: {m[0]} keys found no row (the table full)")
+    sinks = ma[1] & mb[1] & mpa[1] & mpb[1]
+    for k, va in enumerate(COUNT_SINKS):
+        if not sinks >> k & 1:
+            unrun.append(f"sink 0x{va:06X}: not counted in every process")
+    band, rows = absent_rows(absent)
+    live = {k: cb.get(k, 0) - ca.get(k, 0) for k in set(ca) | set(cb)}
+    pup = {k: cpb.get(k, 0) - cpa.get(k, 0) for k in set(cpa) | set(cpb)}
+    for va, what in COUNT_ROOTS.items():
+        a = sum(n for (s, _, _), n in live.items() if s == va)
+        b = sum(n for (s, _, _), n in pup.items() if s == va)
+        if a != b:
+            lines.append(f"root {what}: live {a}, puppet {b}")
+    nsink = 0
+    for key in sorted(k for k in set(live) | set(pup) if k[0] in COUNT_SINKS):
+        site, caller, aux = key
+        if not sinks >> COUNT_SINKS.index(site) & 1:
+            continue
+        a, b = live.get(key, 0), pup.get(key, 0)
+        nsink += 1
+        if abs(a - b) <= band:
+            continue
+        name = names.get(aux, "")
+        if absent_covers(rows, site, caller, aux, name, "absent" if b < a else "extra"):
+            continue
+        label = f' "{name}"' if name else (f" aux 0x{aux:X}" if aux else "")
+        lines.append(f"sink 0x{site:06X} from {caller_text(caller)}{label}: live {a}, puppet {b}")
+    for va, what in COB_WRITES.items():
+        n = sum(c for (s, _, _), c in cpb.items() if s == va)
+        if n:
+            lines.append(f"COB engine write on a puppet, {what}: {n} since the level began")
+    print(f"counts, live {la}..{lb} against puppet {pa}..{pb}, GameTime [{ta}, {tb}): "
+          f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band}, {len(rows)} rows: "
+          + ("EQUAL" if not lines else f"{len(lines)} DIFFERENCES"))
+    for line in lines + unrun:
+        print("  " + line)
+    return 1 if lines else 2 if unrun else 0
+
+
+def cmd_counts(path, dump):
+    """A dump's counts, by site."""
+    t, c, m, names = counts_of(dump, header_only(path))
+    print(f"{dump}: GameTime {t}: {len(c)} keys, {m[0]} found no row, sinks counted "
+          f"0x{m[1]:X}, counting {m[2]}")
+    for (site, caller, aux), n in sorted(c.items()):
+        kind = ("root" if site in COUNT_ROOTS else "sink" if site in COUNT_SINKS else
+                "COB write" if site in COB_WRITES else "site")
+        name = names.get(aux)
+        print(f"  {kind} 0x{site:06X} from {caller_text(caller)}"
+              + (f' "{name}"' if name else f" aux 0x{aux:X}" if aux else "") + f": {n}")
+    return 0
+
+
 def cmd_images(a_path, b_path):
     """The differing bytes no row of replay-globals.tsv covers, as runs, grouped by IMAGE_MAP. A
     byte is reported when it differs in a bit no row names."""
@@ -1294,14 +1466,248 @@ def cmd_images(a_path, b_path):
     return 0
 
 
+def image_group(which, at):
+    best = None
+    for lo, hi, label in IMAGE_MAP[which]:
+        if lo <= at < hi and (best is None or hi - lo < best[1] - best[0]):
+            best = (lo, hi, label)
+    return best[2] if best else "not mapped"
+
+
+GATE_CLASSES = ("presentation", "host-variant", "load-constant", "FAIL")
+
+
+def cmd_images_gate(path, live, twin, playing, second, seek):
+    """THE IMAGES GATE (the null twin): every bit of the main block and .data that no row of
+    replay-globals.tsv covers and where the live game at T1 differs from the playing at T1 or from
+    the fresh seek to T1 is, in this order:
+      presentation   the paused twin's two dumps differ there (the live game, paused, then the
+                     camera, the zoom, the menu and the cursor moved): the viewer's own
+      host-variant   two playings on one host differ there (P against R at T1)
+      load-constant  unchanged across [T1, Tlast] on the recording machine and on the puppet host
+      FAIL           anything else, labelled by who wrote it in play.
+    A bit equal at both ends of [T1, Tlast] on each machine counts as unwritten in play: the window
+    cannot see a write that was undone inside it. Exit 1 on any FAIL."""
+    h = header_only(path)
+    (l1, lT), (n1, n2), (p1, pT) = live, twin, playing
+    got = {}
+    for name, d in (("l1", l1), ("lT", lT), ("n1", n1), ("n2", n2), ("p1", p1), ("pT", pT),
+                    ("r1", second), ("q1", seek)):
+        got[name] = dump_images(d)
+    frames = [header(blocks(d)[0][0][3]).get("frame") for d in (n1, n2)]
+    if frames[0] is None or frames[0] != frames[1]:
+        print(f"the twin's dumps are not two frame dumps of one GameTime: {frames}")
+        return 2
+    t1 = {got[k][0] for k in ("l1", "p1", "r1", "q1")}
+    if len(t1) != 1 or got["lT"][0] != got["pT"][0]:
+        print("the dumps are not at T1 and Tlast alike: " +
+              ", ".join(f"{k} {got[k][0]}" for k in got))
+        return 2
+    if len({got[k][1] for k in got}) != 1:
+        print("the dumps were made with different replay-globals.tsv")
+        return 2
+    gen, rows, slots, digest = globals_list(got["l1"][1])
+    cov = gen.coverage(rows)
+    im = {k: v[2] for k, v in got.items()}
+    tally, fails = {}, []
+    for which, where in ((0, "main"), (1, "data")):
+        L1, LT, N1, N2 = im["l1"][which], im["lT"][which], im["n1"][which], im["n2"][which]
+        P1, PT, R1, Q1 = im["p1"][which], im["pT"][which], im["r1"][which], im["q1"][which]
+        for i in range(len(L1)):
+            free = ~cov.get((where, i), 0) & 0xFF
+            bits = ((L1[i] ^ P1[i]) | (L1[i] ^ Q1[i])) & free
+            if not bits:
+                continue
+            pres = bits & (N1[i] ^ N2[i])
+            host = bits & ~pres & (P1[i] ^ R1[i])
+            const = bits & ~pres & ~host & ~((L1[i] ^ LT[i]) | (P1[i] ^ PT[i])) & 0xFF
+            fail = bits & ~pres & ~host & ~const
+            group = image_group(which, i)
+            t = tally.setdefault((which, group), [0, 0, 0, 0])
+            for k, m in enumerate((pres, host, const, fail)):
+                if m:
+                    t[k] += 1
+            if fail:
+                lw, pw = (L1[i] ^ LT[i]) & fail, (P1[i] ^ PT[i]) & fail
+                if lw and not pw:
+                    why = "written during play on the recording machine only"
+                elif pw and not lw:
+                    why = "written on the puppet host only"
+                elif not (L1[i] ^ P1[i]) & fail:
+                    why = "the seek leaves it otherwise"
+                else:
+                    why = "both write it, differently"
+                fails.append((which, i, group, why, L1[i], P1[i], Q1[i]))
+    print(f"the images gate at GameTime {got['l1'][0]} (window to {got['lT'][0]}): "
+          + ("PASS" if not fails else f"{len(fails)} bytes FAIL"))
+    for (which, group), t in sorted(tally.items()):
+        print(f"  {'main' if which == 0 else '.data'} {group}: "
+              + ", ".join(f"{c} {n}" for c, n in zip(GATE_CLASSES, t) if n))
+    runs = []
+    for f in fails:
+        if runs and runs[-1][0][:2] == (f[0], f[1] - len(runs[-1])) and runs[-1][0][3] == f[3]:
+            runs[-1].append(f)
+        else:
+            runs.append([f])
+    for r in runs[:200]:
+        which, at, group, why = r[0][:4]
+        name = f"main+0x{at:X}" if which == 0 else f"0x{REC_DATA_BEGIN + at:06X}"
+        hexs = lambda k: bytes(x[k] for x in r).hex()
+        print(f"  FAIL {name}, {len(r)} byte{'s' if len(r) != 1 else ''} ({group}): {why}: live "
+              f"{hexs(4)}, playing {hexs(5)}, seek {hexs(6)}")
+    if len(runs) > 200:
+        print(f"  ... and {len(runs) - 200} runs more")
+    return 1 if fails else 0
+
+
+# SIMF kinds whose bytes a recorded table's image does not hold as a plain value
+SIMF_ID, SIMF_ADDR, SIMF_OWNED, SIMF_LOCAL, SIMF_COUNT, SIMF_COLUMN, SIMF_TARGET, SIMF_PINNED = \
+    range(8)
+SCAN_NOT_PLAIN = (SIMF_ID, SIMF_ADDR, SIMF_OWNED, SIMF_LOCAL, SIMF_COLUMN)
+# the image records' places in their image (tagpu_recfmt.h)
+SCAN_AT = {"unit": ("unit", 0), "mover": ("unit", 0x118), "player": ("player", 0),
+           "info": ("player", 0x14C), "proj": ("proj", 0)}
+
+
+def scan_ranges(h, img):
+    """The address ranges a plain value must not fall in, from a dump's own images: (lo, hi, what)."""
+    main_img, data = img[0], img[1]
+    d32 = lambda at: struct.unpack_from("<I", data, at - REC_DATA_BEGIN)[0]
+    m32 = lambda off: struct.unpack_from("<I", main_img, off)[0]
+    base = d32(0x511DE8)
+    r = [(base, base + REC_MAIN_BYTES, "the main block", 1)]
+    first, last = m32(0x14357), m32(0x1435B)
+    if first and last >= first:
+        r.append((first, last + 0x118, "the unit array", 0x118))
+    defs, ndefs = m32(0x1439B), m32(0x1438F)
+    if defs and ndefs < 0x10000:
+        r.append((defs, defs + ndefs * 0x249, "the unit defs", 0x249))
+    proj = m32(0x141F7)
+    if proj and "projectiles" in h:
+        r.append((proj, proj + h["projectiles"] * 0x6B, "the projectile pool", 0x6B))
+    gw, gh = m32(0x14233), m32(0x14237)
+    grid = m32(0x14287)
+    if grid and gw < 0x10000 and gh < 0x10000:
+        r.append((grid, grid + gw * gh * REC_CELL_BYTES, "the feature grid", REC_CELL_BYTES))
+    wrecks = m32(0x1420B)
+    if wrecks and "features" in h:
+        r.append((wrecks, wrecks + h["features"][2] * REC_WRECK_BYTES, "the wreck pool",
+                  REC_WRECK_BYTES))
+    mapped = m32(0x14273)
+    if mapped and gw < 0x10000 and gh < 0x10000:
+        r.append((mapped, mapped + mapped_bytes(gw, gh), "the explored map", 2))
+    if "dll" in h:
+        r.append((h["dll"][0], h["dll"][0] + h["dll"][1], "Impure's DLL", 1))
+    return [x for x in r if x[0] < x[1]]
+
+
+def scan_hit(ranges, v):
+    """Where `v` points, or None. Into a pool of records only at a record's start, which is where
+    the engine's pointers to its records point: a 16.16 world position lies inside the heap's
+    ranges far more often than at a record's first byte."""
+    for lo, hi, what, stride in ranges:
+        if lo <= v < hi:
+            if stride > 1:
+                return None if (v - lo) % stride else f"at {what}'s row {(v - lo) // stride}"
+            return f"inside {what} (+0x{v - lo:X})"
+    return None
+
+
+def plain_dwords(size, excluded):
+    """The aligned dwords of an image `size` bytes long that hold no excluded byte."""
+    return [at for at in range(0, size - 3, 4) if not any(b in excluded for b in range(at, at + 4))]
+
+
+def cmd_scan(path, dump):
+    """THE ADDRESS-SHAPED-VALUE SCAN: a plain value in a dump that lies inside the main block, the
+    unit array, the unit defs, the projectile pool, the feature grid, the wreck pool, the explored
+    map or Impure's DLL is an address recorded as a value -- a recorded table's fields but its ID,
+    ADDR, OWNED, LOCAL and COLUMN ones (each aligned dword of a table without a layout), the
+    unit, player and projectile images' bytes no replay-layout.tsv row names, and the globals
+    image. A value that merely looks like one fails too: the line says where it points."""
+    h = header_only(path)
+    dh, w = dump_world(dump, h)
+    tick, _, img = dump_images(dump)
+    ranges = scan_ranges(dh, img)
+    lines = []
+    for ix, t in sorted(w.tables.items()):
+        info = dh["tables"].get(ix, {})
+        stride, name = info.get("stride"), info.get("name", f"table {ix}")
+        if not stride:
+            continue
+        excluded = set()
+        for off, size, rep, step, kind, _ in dh.get("fields", {}).get(ix, []):
+            if kind in SCAN_NOT_PLAIN:
+                for k in range(rep or 1):
+                    excluded.update(range(off + k * step, off + k * step + size))
+        dw = plain_dwords(stride, excluded)
+        for r in range(len(t) // stride):
+            for at in dw:
+                v = struct.unpack_from("<I", t, r * stride + at)[0]
+                hit = v and scan_hit(ranges, v)
+                if hit:
+                    lines.append(f"table {name} row {r} +0x{at:02X} holds 0x{v:08X}, {hit}")
+    gen = _generator("replay-layout-gen")
+    with open(gen.TSV, encoding="utf-8") as f:
+        lrows = gen.parse(f.read())
+    excl = {"unit": set(), "player": set(), "proj": set()}
+    report = []
+    for r in lrows:
+        if r["record"] in SCAN_AT:
+            img_name, at = SCAN_AT[r["record"]]
+            excl[img_name].update(range(at + r["offset"], at + r["offset"] + r["size"]))
+    for what, recs, size in (("unit", w.units, REC_UNIT_IMAGE),
+                             ("player", dict(enumerate(w.players)), REC_PLAYER_IMAGE),
+                             ("projectile", {i: w.proj[i * REC_PROJ_IMAGE:(i + 1) * REC_PROJ_IMAGE]
+                                             for i in range((w.phead[1] if w.phead else 0))},
+                              REC_PROJ_IMAGE)):
+        dw = plain_dwords(size, excl["proj" if what == "projectile" else what])
+        for k, b in sorted(recs.items()):
+            for at in dw:
+                if at + 4 > len(b):
+                    continue
+                v = struct.unpack_from("<I", b, at)[0]
+                hit = v and scan_hit(ranges, v)
+                if hit:
+                    report.append(f"{what} {k} +0x{at:03X} holds 0x{v:08X}, {hit}")
+    if w.globals is not None:
+        gnames = known_names(h) or {}
+        for i in range(0, len(w.globals) - 3, 4):
+            v = struct.unpack_from("<I", w.globals, i)[0]
+            hit = v and scan_hit(ranges, v)
+            if hit:
+                lines.append(f"globals {gnames.get(i // 4, f'dword {i // 4}')} holds 0x{v:08X}, {hit}")
+    print(f"{dump}: GameTime {tick}: {len(ranges)} address ranges: "
+          + ("no address recorded as a value" if not lines else
+             f"{len(lines)} VALUES THAT ARE ADDRESSES")
+          + f"; {len(report)} engine-record values that point somewhere (reported)")
+    for line in lines[:100]:
+        print("  " + line + ": an address recorded as a value")
+    if len(lines) > 100:
+        print(f"  ... and {len(lines) - 100} more")
+    # The engine's records are reported, not failed: their plain rows hold 16.16 world positions,
+    # which land on a record's start in the heap's ranges by chance (MEASURED: 1 to 6 a dump of the
+    # battle), and replay-layout.tsv's rows are their audited pointers.
+    for line in report[:20]:
+        print("  (report) " + line)
+    return 1 if lines else 0
+
+
 def main(argv):
     puppet = argv[2:3] == ["--puppet"] and argv[1:2] == ["compare"]
     images = argv[2:3] == ["--images"] and argv[1:2] == ["compare"]
     if puppet or images:
         argv = argv[:2] + argv[3:]
-    if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps") or \
+    absent = None
+    if argv[1:2] == ["compare-counts"] and len(argv) == 9 and argv[7] == "--absent":
+        absent, argv = argv[8], argv[:7]
+    if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
+                                        "compare-counts", "images-gate", "scan") or \
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
-            (argv[1] == "compare-dumps" and len(argv) != 5):
+            (argv[1] == "compare-dumps" and len(argv) != 5) or \
+            (argv[1] in ("counts", "scan") and len(argv) != 4) or \
+            (argv[1] == "images-gate" and len(argv) != 11) or \
+            (argv[1] == "compare-counts" and len(argv) != 7):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
     try:
@@ -1313,6 +1719,16 @@ def main(argv):
             return cmd_images(argv[2], argv[3])
         if argv[1] == "compare-dumps":
             return cmd_compare_dumps(argv[2], argv[3], argv[4])
+        if argv[1] == "images-gate":
+            return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
+                                   (argv[7], argv[8]), argv[9], argv[10])
+        if argv[1] == "scan":
+            return cmd_scan(argv[2], argv[3])
+        if argv[1] == "counts":
+            return cmd_counts(argv[2], argv[3])
+        if argv[1] == "compare-counts":
+            return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
+                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"))
         return cmd_compare(argv[2], argv[3:], puppet)
     except (Unreadable, OSError, zlib.error, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)

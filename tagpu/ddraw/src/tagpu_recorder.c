@@ -843,6 +843,30 @@ static void table_entry(Tlv* t, unsigned index, const SimDesc* d, unsigned lhash
     tlv(t, RT_TABLE, b, 16 + n);
 }
 
+static unsigned s_dllBase, s_dllSize;   /* Impure's DLL: its base and SizeOfImage (cnt_sinks_init) */
+
+/* RT_FIELDS: a recorded table's layout, for `tarec scan`; nothing for a table without one */
+static void table_fields(Tlv* t, unsigned index, const SimDesc* d)
+{
+    unsigned char b[4 + 12 * 64];
+    unsigned short ix = (unsigned short)index, n = 0;
+    const SimField* f;
+    for (f = d->layout; f && f->size && n < 64; f++, n++) {
+        unsigned char* e = b + 4 + 12 * n;
+        memcpy(e, &f->off, 2);
+        memcpy(e + 2, &f->size, 2);
+        memcpy(e + 4, &f->repeat, 2);
+        memcpy(e + 6, &f->step, 2);
+        e[8] = f->kind;
+        e[9] = f->id;
+        e[10] = e[11] = 0;
+    }
+    if (!n) return;
+    memcpy(b, &ix, 2);
+    memcpy(b + 2, &n, 2);
+    tlv(t, RT_FIELDS, b, 4 + 12u * n);
+}
+
 static void header_tables(const Rec* r, Tlv* t)
 {
     unsigned i;
@@ -2065,6 +2089,8 @@ static void dump_images(const char* ta)
    build, the globals list's hash and the tables, so that a dump taken by another build than the
    recording's (a playing, D8) is read with its own table names. Written on the game thread, which
    is tooling's price: a dump is the harness's. */
+static void dump_counts(void);
+
 static int dump_write(const Level* L, int tick, const char* name, int frame)
 {
     char path[MAX_PATH];
@@ -2089,9 +2115,16 @@ static int dump_write(const Level* L, int tick, const char* name, int frame)
     tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
     tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
     if (frame >= 0) tlv_u32(&t, RT_FRAME, (unsigned)frame);
+    {
+        unsigned v[2] = { s_dllBase, s_dllSize };
+        tlv(&t, RT_DLL, v, 8);
+    }
     for (i = 0; i < n; i++) {
         const SimDesc* d = tagpu_simreg_at(i);
-        if (d && table_recorded(d)) table_entry(&t, i, d, tagpu_simreg_layout_hash(d));
+        if (d && table_recorded(d)) {
+            table_entry(&t, i, d, tagpu_simreg_layout_hash(d));
+            table_fields(&t, i, d);
+        }
     }
     if (t.full) {
         tagpu_logf("recorder: dump %s refused: its header does not fit in %u bytes", name, t.cap);
@@ -2189,6 +2222,7 @@ static int dump_write(const Level* L, int tick, const char* name, int frame)
     }
     dump_sight(L->ta);
     dump_images(L->ta);
+    dump_counts();
     b.magic = REC_BLOCK_MAGIC;
     b.kind = RB_SNAPSHOT;
     b.flags = RBF_STORED;
@@ -2349,6 +2383,79 @@ static unsigned ev_unit(const Rec* r, const char* p)
 #define ARG(E, off) (*(const unsigned*)((const unsigned char*)(E) + (off)))
 #define PTR(v) ((const char*)(size_t)(v))
 
+/* THE COUNTS, for the harness's compare-counts (demo-recorder-completeness.md, *Also asserted*):
+   how often each engine root, sink and observed site ran in a level that records or plays a
+   recording, keyed (site, caller, aux), so that a live game and its playings can be compared call
+   for call. A site is its VA (a root's or an observer's entry, a COB write's return address); the
+   caller the return address, or 0 where the site is not a function's entry; aux what tells calls
+   of one site apart (a sink's pool, a script's name hashed). A caller inside this DLL is
+   (offset | REC_COUNT_DLL), which does not depend on where the DLL loaded.
+
+   Counted on the level's game thread only (s_cnt.tid, set at its first capture point), never
+   while a seek rebuilds (tagpu_puppet_rebuilding: its kills and creates are not the recording's),
+   and reset at each level's first capture point. Open addressing in CNT_ROWS rows; a key that
+   finds none is counted in `overflow`, which fails the comparison by name. Presentation state:
+   nothing the simulation reads. */
+#define CNT_ROWS  4096
+#define CNT_NAMES 512
+typedef struct { unsigned va, caller, aux, n; } CntRow;
+static struct {
+    DWORD    tid;
+    Level    L;                         /* the level's unit array, for bounding a unit        */
+    unsigned rows, overflow;            /* rows used; keys that found none                    */
+    CntRow   row[CNT_ROWS];
+    unsigned nnames;
+    struct { unsigned aux; char name[REC_COUNT_NAME]; } name[CNT_NAMES];
+} s_cnt;
+static unsigned s_cntSinks;             /* the sinks whose observer is in, bit k of CNT_SINKS  */
+
+static unsigned cnt_caller(unsigned ret)
+{
+    return ret - s_dllBase < s_dllSize ? (ret - s_dllBase) | REC_COUNT_DLL : ret;
+}
+
+/* 1 when this call is counted: the level's game thread, no seek rebuilding */
+static int cnt_on(void)
+{
+    return s_cnt.tid && s_cnt.tid == GetCurrentThreadId() && !tagpu_puppet_rebuilding();
+}
+
+static void cnt_add(unsigned va, unsigned caller, unsigned aux)
+{
+    unsigned h = (va * 0x9E3779B1u) ^ (caller * 0x85EBCA77u) ^ (aux * 0xC2B2AE3Du), k;
+    for (k = 0; k < CNT_ROWS; k++) {
+        CntRow* c = &s_cnt.row[(h + k) & (CNT_ROWS - 1)];
+        if (!c->n) {
+            c->va = va;
+            c->caller = caller;
+            c->aux = aux;
+            c->n = 1;
+            s_cnt.rows++;
+            return;
+        }
+        if (c->va == va && c->caller == caller && c->aux == aux) {
+            c->n++;
+            return;
+        }
+    }
+    s_cnt.overflow++;
+}
+
+static void cnt(unsigned va, unsigned caller, unsigned aux)
+{
+    if (cnt_on()) cnt_add(va, caller, aux);
+}
+
+/* the counts' state at a level's first capture point: counting when it records or plays */
+static void cnt_start(const Level* L, int counting)
+{
+    memset(&s_cnt, 0, sizeof s_cnt);
+    if (!counting) return;
+    s_cnt.L = *L;
+    s_cnt.tid = GetCurrentThreadId();
+}
+
+
 /* The create 0x485F50's success exit 0x4861B3 (`mov eax,esi`): esi is the unit it made, in the
    slot it actually took -- B4's hit_take may move a first-free create past its first choice. The
    function has pushed five registers, so its arguments start at +0x18; the first, the owner, is
@@ -2357,11 +2464,12 @@ static unsigned ev_unit(const Rec* r, const char* p)
    it, from the unit tick (0x48AFAA) and the 0x2C receiver (0x48BA46) through 0x43DD20. */
 static int __cdecl ev_create(void* E)
 {
-    Rec* r = ev_rec();
+    Rec* r;
     const char* unit;
     unsigned id, owner, v;
     unsigned char b[28];
-    if (!r) return 0;
+    cnt(0x004861B3u, 0, 0);
+    if (!(r = ev_rec())) return 0;
     unit = PTR(REG_ESI(E));
     if (!(id = ev_unit(r, unit))) return 0;
     owner = id_of(&r->L, RL_T_PLAYER, *(const char* const*)(unit + U_OWNER));
@@ -2405,14 +2513,16 @@ static int death_enter(Rec* r, void* E, unsigned id);
 
 static int __cdecl ev_death(void* E)
 {
-    Rec* r = ev_rec();
-    const unsigned char* msg;
+    Rec* r;
+    const unsigned char* msg = (const unsigned char*)PTR(ARG(E, 4));
     unsigned short slot, ks;
     unsigned id, kid;
     unsigned char b[12 + REC_UNIT_IMAGE];
-    if (!r) return 0;
-    msg = (const unsigned char*)PTR(ARG(E, 4));
     memcpy(&slot, msg + 1, 2);
+    /* the destructor's own alive test (0x486706) on a slot bounded first */
+    if (cnt_on() && slot && slot < s_cnt.L.nslots && unit_live(&s_cnt.L, slot))
+        cnt_add(0x004866D0u, ARG(E, 0), 0);
+    if (!(r = ev_rec())) return 0;
     if (!slot || slot >= r->L.nslots || !unit_live(&r->L, slot)) return 0;
     if (!death_room(r)) return 0;
     memcpy(&ks, msg + 7, 2);
@@ -2493,6 +2603,7 @@ static void ev_start(const char* unit, unsigned idx, unsigned argc, const unsign
 /* 0x456190(unit, idx): no arguments */
 static int __cdecl ev_start_idx(void* E)
 {
+    cnt(0x00456190u, ARG(E, 0), 0);
     ev_start(PTR(ARG(E, 4)), ARG(E, 8), 0, NULL);
     return 0;
 }
@@ -2500,6 +2611,7 @@ static int __cdecl ev_start_idx(void* E)
 /* 0x456290(unit, idx, argc, a0..a3) */
 static int __cdecl ev_start_args(void* E)
 {
+    cnt(0x00456290u, ARG(E, 0), 0);
     ev_start(PTR(ARG(E, 4)), ARG(E, 8), ARG(E, 0xC), (const unsigned char*)E + 0x10);
     return 0;
 }
@@ -2509,6 +2621,7 @@ static int __cdecl ev_start_args(void* E)
    (`sub esp,0x18; push esi`) */
 static int __cdecl ev_start_named_bc(void* E)
 {
+    cnt(0x00456218u, 0, 0);
     ev_start(PTR(REG_ESI(E)), REG_EAX(E), ARG(E, 0x28), (const unsigned char*)E + 0x2C);
     return 0;
 }
@@ -2517,9 +2630,10 @@ static int __cdecl ev_start_named_bc(void* E)
    inert, so every call is recorded as made. */
 static int __cdecl ev_built(void* E)
 {
-    Rec* r = ev_rec();
+    Rec* r;
     unsigned b[2];
-    if (!r) return 0;
+    cnt(0x0041B8D0u, ARG(E, 0), 0);
+    if (!(r = ev_rec())) return 0;
     b[0] = id_of(&r->L, RL_T_UNIT, PTR(ARG(E, 4)));
     b[1] = id_of(&r->L, RL_T_UNIT, PTR(ARG(E, 8)));
     if (b[0] == REC_ID_BAD || b[1] == REC_ID_BAD) return 0;
@@ -2532,12 +2646,18 @@ static int __cdecl ev_built(void* E)
    does not (0x48B0DE). */
 static int __cdecl ev_state(void* E)
 {
-    Rec* r = ev_rec();
-    const char* unit;
+    Rec* r;
+    const char* unit = PTR(REG_ECX(E));
     unsigned id;
     unsigned char was, now, b[8];
-    if (!r) return 0;
-    unit = PTR(REG_ECX(E));
+    /* only a call that changes the byte, by the setter's own test (0x48B09A..0x48B0DE): a replayed
+       root's nested call and its replayed event both reach it, and the second returns early */
+    if (cnt_on() && id_of(&s_cnt.L, RL_T_UNIT, unit) - 1u < s_cnt.L.nslots) {
+        was = (unsigned char)unit[U_STATEBYTE];
+        now = ARG(E, 8) ? (unsigned char)(was | ARG(E, 4)) : (unsigned char)(was & ~ARG(E, 4));
+        if (now != was) cnt_add(0x0048B090u, ARG(E, 0), 0);
+    }
+    if (!(r = ev_rec())) return 0;
     if (!(id = ev_unit(r, unit))) return 0;
     was = (unsigned char)unit[U_STATEBYTE];
     now = ARG(E, 8) ? (unsigned char)(was | ARG(E, 4)) : (unsigned char)(was & ~ARG(E, 4));
@@ -2573,8 +2693,8 @@ static void ev_reply(void* E, unsigned root)
     ev_put(r, RK_EV_REPLY, b, 12 + n);
 }
 
-static int __cdecl ev_reply0(void* E) { ev_reply(E, 0); return 0; }
-static int __cdecl ev_reply1(void* E) { ev_reply(E, 1); return 0; }
+static int __cdecl ev_reply0(void* E) { cnt(0x0047F780u, ARG(E, 0), 0); ev_reply(E, 0); return 0; }
+static int __cdecl ev_reply1(void* E) { cnt(0x0047F850u, ARG(E, 0), 0); ev_reply(E, 1); return 0; }
 
 /* A start of a script by name that only the owner's machine makes: the unit, the start's third
    argument (nonzero runs it at once, 0x4B0B84), its arguments and the name. */
@@ -2635,10 +2755,11 @@ static const StartSite START_SITES[] = {
 static int __cdecl ev_start_site(void* E, unsigned site)
 {
     const StartSite* st = &START_SITES[site];
-    Rec* r = ev_rec();
+    Rec* r;
     const char* unit;
     unsigned id;
-    if (!r) return 0;
+    cnt(st->call, 0, 0);
+    if (!(r = ev_rec())) return 0;
     unit = PTR(((const unsigned*)((const unsigned char*)E - 0x24))[st->reg]);
     if (!(id = ev_unit(r, unit))) return 0;
     if (*(const unsigned*)(unit + U_COB) != REG_ECX(E)) {
@@ -2662,6 +2783,7 @@ static const void* s_nano_out;
 
 static int __cdecl ev_nano_query(void* E)
 {
+    cnt(0x0043E400u, ARG(E, 0), 0);
     if (ev_rec()) {
         s_nano_unit = PTR(ARG(E, 4));
         s_nano_out = PTR(ARG(E, 8));
@@ -2676,6 +2798,9 @@ static int __cdecl ev_nano_handler(void* E)
     if (ev_rec()) s_nano_unit = NULL, s_nano_out = NULL;
     return 0;
 }
+static int __cdecl ev_nano_h0(void* E) { cnt(0x0043A216u, 0, 0); return ev_nano_handler(E); }
+static int __cdecl ev_nano_h1(void* E) { cnt(0x0043B878u, 0, 0); return ev_nano_handler(E); }
+static int __cdecl ev_nano_h2(void* E) { cnt(0x0043BB1Du, 0, 0); return ev_nano_handler(E); }
 
 static void ev_spray(void* E, unsigned reverse)
 {
@@ -2695,8 +2820,8 @@ static void ev_spray(void* E, unsigned reverse)
     ev_put(r, RK_EV_SPRAY, b, sizeof b);
 }
 
-static int __cdecl ev_spray0(void* E) { ev_spray(E, 0); return 0; }
-static int __cdecl ev_spray1(void* E) { ev_spray(E, 1); return 0; }
+static int __cdecl ev_spray0(void* E) { cnt(0x004720D0u, ARG(E, 0), 0); ev_spray(E, 0); return 0; }
+static int __cdecl ev_spray1(void* E) { cnt(0x00472200u, ARG(E, 0), 0); ev_spray(E, 1); return 0; }
 
 /* ---- the features --------------------------------------------------------------------------- */
 
@@ -3378,13 +3503,21 @@ static void __stdcall rec_blast(char* unit, unsigned selfd)
     tagpu_replay_blast(unit);
 }
 
-static int __cdecl ob_tick(void* E) { return feat_enter(E, FR_TICK); }
-static int __cdecl ob_spawn(void* E) { return feat_enter(E, FR_SPAWN); }
-static int __cdecl ob_destroy(void* E) { return feat_enter(E, FR_DESTROY); }
-static int __cdecl ob_die(void* E) { return feat_enter(E, FR_DIE); }
-static int __cdecl ob_burn(void* E) { return feat_enter(E, FR_BURN); }
-static int __cdecl ob_damage(void* E) { return feat_enter(E, FR_DAMAGE); }
-static int __cdecl ob_swap(void* E) { return feat_enter(E, FR_SWAP); }
+/* the feature functions' entries, by RecRoot, for the counts */
+static const unsigned FEAT_VA[FR_ROOTS] = { 0x00424050u, 0x00423C50u, 0x004246B0u, 0x00423550u,
+                                            0x004233A0u, 0x004244B0u, 0x00423710u };
+static int feat_counted(void* E, unsigned root)
+{
+    cnt(FEAT_VA[root], ARG(E, 0), 0);
+    return feat_enter(E, root);
+}
+static int __cdecl ob_tick(void* E) { return feat_counted(E, FR_TICK); }
+static int __cdecl ob_spawn(void* E) { return feat_counted(E, FR_SPAWN); }
+static int __cdecl ob_destroy(void* E) { return feat_counted(E, FR_DESTROY); }
+static int __cdecl ob_die(void* E) { return feat_counted(E, FR_DIE); }
+static int __cdecl ob_burn(void* E) { return feat_counted(E, FR_BURN); }
+static int __cdecl ob_damage(void* E) { return feat_counted(E, FR_DAMAGE); }
+static int __cdecl ob_swap(void* E) { return feat_counted(E, FR_SWAP); }
 
 /* the stamp, the clear and the re-claim, each (unit): the unit's footprint, a cell wider. On a
    puppet level, where nothing records, the call's grid writes are undone at its return instead
@@ -3401,6 +3534,9 @@ static int __cdecl ob_foot(void* E)
     }
     return tagpu_puppet_foot_enter(u, ARG(E, 0));
 }
+static int __cdecl ob_stamp(void* E) { cnt(0x0047CC30u, ARG(E, 0), 0); return ob_foot(E); }
+static int __cdecl ob_clear(void* E) { cnt(0x0047D0E0u, ARG(E, 0), 0); return ob_foot(E); }
+static int __cdecl ob_reclaim(void* E) { cnt(0x0047C790u, ARG(E, 0), 0); return ob_foot(E); }
 
 static void* __cdecl foot_leave(unsigned* regs)
 {
@@ -3502,9 +3638,9 @@ static const ObserveSite OBSERVE_SITES[] = {
     { 0x0043E400u, 8, { 0x83, 0xEC, 0x10, 0x56, 0x8B, 0x74, 0x24, 0x18 }, ev_nano_query, NULL },
     { 0x004720D0u, 7, { 0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x1C }, ev_spray0, NULL },
     { 0x00472200u, 7, { 0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x20 }, ev_spray1, NULL },
-    { 0x0043A216u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_handler, NULL },
-    { 0x0043B878u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_handler, NULL },
-    { 0x0043BB1Du, 8, { 0x8B, 0x56, 0x0E, 0x52, 0xFF, 0x54, 0x08, 0x04 }, ev_nano_handler, NULL },
+    { 0x0043A216u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_h0, NULL },
+    { 0x0043B878u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_h1, NULL },
+    { 0x0043BB1Du, 8, { 0x8B, 0x56, 0x0E, 0x52, 0xFF, 0x54, 0x08, 0x04 }, ev_nano_h2, NULL },
     /* the features: the seven onto the puppet gates (tagpu_puppet.c), whose bytes they match */
     { 0x00424050u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ob_tick, feat_leave },
     { 0x00423C50u, 5, { 0x83, 0xEC, 0x28, 0x53, 0x55 }, ob_spawn, feat_leave },
@@ -3513,12 +3649,150 @@ static const ObserveSite OBSERVE_SITES[] = {
     { 0x004233A0u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_burn, feat_leave },
     { 0x004244B0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ob_damage, feat_leave },
     { 0x00423710u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_swap, feat_leave },
-    { 0x0047CC30u, 5, { 0x83, 0xEC, 0x18, 0x53, 0x55 }, ob_foot, foot_leave },
-    { 0x0047D0E0u, 10, { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, ob_foot,
+    { 0x0047CC30u, 5, { 0x83, 0xEC, 0x18, 0x53, 0x55 }, ob_stamp, foot_leave },
+    { 0x0047D0E0u, 10, { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, ob_clear,
       foot_leave },
-    { 0x0047C790u, 7, { 0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10 }, ob_foot, foot_leave },
+    { 0x0047C790u, 7, { 0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10 }, ob_reclaim, foot_leave },
 };
 #define OBSERVE_SITE_COUNT (sizeof OBSERVE_SITES / sizeof OBSERVE_SITES[0])
+
+/* THE SINKS, counted only: where an effect leaves the simulation for the screen or the speakers,
+   or a script thread or a pool slot is taken -- what a replay must reach through the engine's own
+   roots (CLAUDE.md, *Simulation changes stay replayable*). Each observer reads its return address
+   and, for two, an aux; it changes nothing. */
+static int __cdecl sink_count(void* E, unsigned va, unsigned aux)
+{
+    if (cnt_on()) cnt_add(va, cnt_caller(ARG(E, 0)), aux);
+    return 0;
+}
+
+static void cnt_name(unsigned aux, const char* name, unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < s_cnt.nnames; i++)
+        if (s_cnt.name[i].aux == aux) return;
+    if (s_cnt.nnames >= CNT_NAMES) return;
+    s_cnt.name[s_cnt.nnames].aux = aux;
+    memcpy(s_cnt.name[s_cnt.nnames].name, name, n);
+    s_cnt.name[s_cnt.nnames].name[n] = 0;
+    s_cnt.nnames++;
+}
+
+/* 0x4B08C0(cob, idx), thiscall, the COB thread allocation: aux is FNV-1a of the script's name.
+   The engine's own reads, no further, on the unit's live COB object inside the engine's call on
+   it: idx bounded by the header's count as the function bounds it (0x4B08C5..0x4B08D0), the name
+   at [[hdr+0x1C] + 4 idx] as Name2Index reads it (0x4B07C0..0x4B07D3), to its NUL, at most 31 bytes. */
+static int __cdecl sink_cob(void* E)
+{
+    const char* cob = PTR(REG_ECX(E));
+    const char* hdr;
+    const char* name;
+    int idx = (int)ARG(E, 4);
+    unsigned h = 0x811C9DC5u, n = 0;
+    if (!cnt_on()) return 0;
+    if (cob && (hdr = *(const char* const*)(cob + 8)) != NULL && idx >= 0 &&
+        idx < *(const int*)(hdr + 4) &&
+        (name = (*(const char* const* const*)(hdr + 0x1C))[idx]) != NULL) {
+        while (n < REC_COUNT_NAME - 1 && name[n]) h = (h ^ (unsigned char)name[n++]) * 0x01000193u;
+        cnt_name(h, name, n);
+    } else {
+        h = 0;
+    }
+    cnt_add(0x004B08C0u, cnt_caller(ARG(E, 0)), h);
+    return 0;
+}
+
+static int __cdecl sink_420A30(void* E) { return sink_count(E, 0x00420A30u, 0); }
+static int __cdecl sink_470EB0(void* E) { return sink_count(E, 0x00470EB0u, REG_ECX(E)); }
+static int __cdecl sink_47F0C0(void* E) { return sink_count(E, 0x0047F0C0u, 0); }
+static int __cdecl sink_47F1A0(void* E) { return sink_count(E, 0x0047F1A0u, 0); }
+static int __cdecl sink_47F210(void* E) { return sink_count(E, 0x0047F210u, 0); }
+static int __cdecl sink_47F300(void* E) { return sink_count(E, 0x0047F300u, 0); }
+static int __cdecl sink_49C740(void* E) { return sink_count(E, 0x0049C740u, 0); }
+static int __cdecl sink_49CDE0(void* E) { return sink_count(E, 0x0049CDE0u, 0); }
+static int __cdecl sink_49CC20(void* E) { return sink_count(E, 0x0049CC20u, 0); }
+static int __cdecl sink_49C9C0(void* E) { return sink_count(E, 0x0049C9C0u, 0); }
+
+/* the sinks' entries [DISASSEMBLED]: the particle spawn 0x420A30; the pool slot 0x470EB0, ecx the
+   pool; the COB thread 0x4B08C0; the sound entries 0x47F0C0, 0x47F1A0, 0x47F210 (an entry: 0x47F200's
+   `ret 8` at 0x47F202, then padding to 0x47F20F) and 0x47F300; the projectile init 0x49C740 and
+   the three shot paths 0x49CDE0, 0x49CC20, 0x49C9C0 */
+static const ObserveSite CNT_SINKS[] = {
+    { 0x00420A30u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_420A30, NULL },
+    { 0x00470EB0u, 7, { 0x8B, 0x51, 0x20, 0x56, 0x8B, 0x71, 0x1C }, sink_470EB0, NULL },
+    { 0x004B08C0u, 5, { 0x56, 0x8B, 0x74, 0x24, 0x08 }, sink_cob, NULL },
+    { 0x0047F0C0u, 7, { 0x8B, 0x4C, 0x24, 0x04, 0x83, 0xEC, 0x14 }, sink_47F0C0, NULL },
+    { 0x0047F1A0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_47F1A0, NULL },
+    { 0x0047F210u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_47F210, NULL },
+    { 0x0047F300u, 5, { 0xA1, 0x94, 0xE6, 0x51, 0x00 }, sink_47F300, NULL },
+    { 0x0049C740u, 5, { 0x53, 0x8B, 0x5C, 0x24, 0x10 }, sink_49C740, NULL },
+    { 0x0049CDE0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_49CDE0, NULL },
+    { 0x0049CC20u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_49CC20, NULL },
+    { 0x0049C9C0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_49C9C0, NULL },
+};
+#define CNT_SINK_COUNT (sizeof CNT_SINKS / sizeof CNT_SINKS[0])
+
+/* each sink alone: one whose bytes are another's is left out, named, and its bit stays clear,
+   which tarec reads as a site it cannot compare */
+static void cnt_sinks_init(void)
+{
+    MEMORY_BASIC_INFORMATION mb;
+    unsigned i, in = 0;
+    if (VirtualQuery((const void*)cnt_sinks_init, &mb, sizeof mb)) {
+        const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)mb.AllocationBase;
+        const IMAGE_NT_HEADERS* nt = (const IMAGE_NT_HEADERS*)((const char*)dos + dos->e_lfanew);
+        s_dllBase = (unsigned)(size_t)dos;
+        s_dllSize = nt->OptionalHeader.SizeOfImage;
+    }
+    for (i = 0; i < CNT_SINK_COUNT; i++) {
+        const ObserveSite* o = &CNT_SINKS[i];
+        if (!tagpu_detour_bytes_ok(o->va, o->stolen, o->n) ||
+            !tagpu_detour_observe(o->va, o->stolen, o->n, o->fn, NULL)) {
+            tagpu_logf("recorder: the sink 0x%06X holds other bytes or refused its observer: its "
+                       "counts are left out", o->va);
+            continue;
+        }
+        s_cntSinks |= 1u << i;
+        in++;
+    }
+    tagpu_logf("recorder: %u of %u sinks counted", in, (unsigned)CNT_SINK_COUNT);
+}
+
+/* the counts (THE COUNTS), the puppet's COB writes among them, and the names of the scripts */
+static void dump_counts(void)
+{
+    static unsigned body[4 + REC_COUNTS_CHUNK * 4];
+    unsigned i, k = 0, cob[TAGPU_PUPPET_COB_SITES], cobva[TAGPU_PUPPET_COB_SITES];
+    unsigned ncob = tagpu_puppet_cob_writes(cobva, cob);
+    body[0] = s_cnt.overflow;
+    body[1] = s_cntSinks;
+    body[2] = s_cnt.tid != 0;
+    /* the rows, REC_COUNTS_CHUNK a record; the last record may hold none */
+    for (i = 0; i < CNT_ROWS + ncob; i++) {
+        unsigned* row = &body[4 + 4 * k];
+        if (i < CNT_ROWS) {
+            if (!s_cnt.row[i].n) continue;
+            memcpy(row, &s_cnt.row[i], 16);
+        } else {
+            row[0] = cobva[i - CNT_ROWS];
+            row[1] = row[2] = 0;
+            row[3] = cob[i - CNT_ROWS];
+        }
+        if (++k == REC_COUNTS_CHUNK) {
+            body[3] = k;
+            dump_rec(RK_COUNTS, body, 16 + 16 * k, NULL, 0);
+            k = 0;
+        }
+    }
+    body[3] = k;
+    dump_rec(RK_COUNTS, body, 16 + 16 * k, NULL, 0);
+    for (i = 0; i < s_cnt.nnames; i++) {
+        unsigned char b[4 + REC_COUNT_NAME];
+        memcpy(b, &s_cnt.name[i].aux, 4);
+        memcpy(b + 4, s_cnt.name[i].name, REC_COUNT_NAME);
+        dump_rec(RK_COUNT_NAME, b, sizeof b, NULL, 0);
+    }
+}
 
 /* the fire functions' network tests, `test byte [reg+0x2A44],1` then a je */
 static const unsigned NET_TESTS[5] = { 0x0049D7A0u, 0x0049DA92u, 0x0049DC64u, 0x0049DE25u,
@@ -3676,6 +3950,7 @@ void tagpu_rec_init(void)
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
                (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_SITES + 1));
+    cnt_sinks_init();
     return;
 
 landfail:
@@ -3723,6 +3998,8 @@ void __cdecl tagpu_rec_capture(void)
            certain: the teardown wrap ends it (tagpu_rec_level_end), before the unit array is
            freed, and without the wrap nothing would. It starts only when REC_ON asks. */
         s_state = ST_DONE;
+        cnt_start(&L, mode == MODE_SKIRMISH && s_sites &&
+                      (tagpu_puppet_on() || tagpu_opt_on(REC_ON)));
         if (mode == MODE_SKIRMISH) {
             if (tagpu_puppet_on())
                 tagpu_logf("recorder: not recording: this level plays a recording");
@@ -3820,6 +4097,7 @@ void tagpu_rec_level_end(void)
     }
     s_narmed = k;
     s_tid = 0;
+    s_cnt.tid = 0;
     if (s_state == ST_RECORDING && s_rec) {
         if (!s_rec->ev_full) ring_publish(s_rec, 0);
         rec_end(s_rec, s_rec->ev_full ? REC_END_RING : REC_END_TEARDOWN);
