@@ -5388,11 +5388,10 @@ def cmd_replay_play(args):
 def _replay_playing(inst: Instance):
     """The name the instance's current level plays, or None and why not. The log of this run
     decides: the last verdict is a `replay: playing` and no line that ends its level follows it --
-    a level that left the unit array it began with, or the level's teardown. The replay's own
-    teardown line is logged only while the recording is still being played, so the teardown is
-    known by tagpu_reclaim.c's line, which every teardown logs. A playback that played to its end
-    or could not be read on still takes a seek: the DLL's trigger tests only that the level plays
-    a recording, and the seek positions the reader from its index."""
+    a level that left the unit array it began with, or the level's teardown, which the DLL logs
+    whether or not the recording had ended before it. A playback that played to its end or could
+    not be read on still takes a seek: the DLL's trigger tests only that the level plays a
+    recording, and the seek positions the reader from its index."""
     if not inst.running():
         return None, f"{inst.name} is not running"
     lines = talog.run_text(inst.gamedir).splitlines()
@@ -5404,8 +5403,7 @@ def _replay_playing(inst: Instance):
         if not p:
             return None, f"its last replay did not play: {lines[i][m.start():].strip()}"
         name = re.escape(p.group(1))
-        ended = re.compile(rf"replay: {name} (stops at|at its level's end,) GameTime"
-                           rf"|reclaim: level teardown ")
+        ended = re.compile(rf"replay: {name} (stops at|at its level's end,) GameTime")
         for line in lines[i + 1:]:
             e = ended.search(line)
             if e:

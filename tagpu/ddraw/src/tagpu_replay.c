@@ -3298,7 +3298,9 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
 #define FD_SIGHTH      0x170        /* ... and its height, u8 (0x4820AE, 0x4820DB)                 */
 #define OFF_SEALEVEL   0x1427F      /* u8: a sight record's y is raised to (it + 1) << 16          */
 #define OFF_CIRCLES    0x1485B      /* the circle frames' table: its u16 count first, and 0x4B7F30
-                                       returns NULL for an index at or past it (0x4B7F44)        */
+                                       returns NULL for an index at or past it (0x4B7F44); it
+                                       reads the count at 0x4B7F41 before its NULL test at
+                                       0x4B7F48..0x4B7F4A, so a NULL table bounds nothing       */
 #define LOS_TRUE       0x2u         /* LosType bit 1: units stamp the counters                    */
 #define LOS_FAN        0x4u         /* LosType bit 2: the ray fan; clear, the circle              */
 #define SIGHT_REC      0x24
@@ -3365,10 +3367,11 @@ static void sight_rec(const char* ta, char* u, unsigned char* rec)
      0x482757, 0x486838..0x486842), so the three are written alone.
      THE BOUND, first: in the circle the image's radius index must be below the frame table's
      count, since 0x4B7F30 returns NULL past it and both the stamp and the removal dereference the
-     answer untested (0x4824ED..0x4824F1, 0x481FCD..0x481FD1). A refused unit keeps the three R8
-     left, which describe its own stamp, and is counted. The walks bound the words themselves
-     (0x4822F8/0x482304, 0x481DD8, the circle's frame clipped at 0x4824F5..0x482547), and every
-     byte is a height the emitter can store (0x4825EA..0x4825F2). */
+     answer untested (0x4824ED..0x4824F1, 0x481FCD..0x481FD1); a NULL table refuses every unit in
+     the circle (OFF_CIRCLES). A refused unit keeps the three R8 left, which describe its own
+     stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
+     the circle's frame clipped at 0x4824F5..0x482547), and every byte is a height the emitter
+     can store (0x4825EA..0x4825F2). */
 static void seek_unit_books(const Lv* L, const RecWorld* W)
 {
     unsigned slot;
@@ -4085,8 +4088,13 @@ void tagpu_replay_level_end(void)
     char* ta = ta_main();
     int stale = s_opt.stale;
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */
+    /* both cases log `replay: <name> at its level's end, GameTime <t>`, the line tacli's
+       `replay seek` takes as the end of the level a playback was on */
     if (s_rd && !s_dead && !s_over)
         counts_log("its level's end", ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
+    else if (s_rd && !s_dead)
+        tagpu_logf("replay: %s at its level's end, GameTime %u: the recording had ended before it",
+                   s_name, ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
     replay_close();
     tagpu_puppet_end();
 }
