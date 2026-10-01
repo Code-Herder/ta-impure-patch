@@ -21,6 +21,10 @@ void __cdecl tagpu_rec_capture(void);
    one must be for a GameTime after the level's now, and the level's end drops it. 0 when refused,
    logged. Game thread. */
 int tagpu_rec_dump_arm(const char* name, unsigned at);
+/* A frame dump: taken at once, between two steps on the game thread (the replay's frame visit),
+   with RT_FRAME = GameTime. Two frame dumps of one RT_FRAME saw no step between them: GameTime rises
+   once a step (0x4954C0). 1 written; 0 with a line when no level is in play or the name is bad. */
+int tagpu_rec_dump_now(const char* name);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
    cascade frees the unit array: the recording in progress ends, complete once its writer has

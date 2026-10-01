@@ -118,7 +118,7 @@ RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
- RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES) = range(1, 20)
+ RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME) = range(1, 21)
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED) = range(32, 41)
 
@@ -252,6 +252,7 @@ def header(payload):
         elif tag == RT_FEATURES: h["features"] = struct.unpack_from("<IIIII", b)
         elif tag == RT_GLOBALS: h["globals"] = b.decode("latin-1")
         elif tag == RT_PROJECTILES: h["projectiles"] = u32
+        elif tag == RT_FRAME: h["frame"] = u32
     if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     return h
@@ -1059,6 +1060,11 @@ def cmd_compare(path, dumps, puppet=False):
     gnames = globals_names(gslots) if puppet else known_names(h)
     for d in dumps:
         dh, dw = dump_world(d, h)
+        if "frame" in dh:
+            # a frame dump holds iteration g+1 less GameTime itself: no capture point's image
+            print(f"{d}: a frame dump at GameTime {dh['frame']}: compare it with compare-dumps")
+            status = 2
+            continue
         w = stream_to(h, bl, want=dw.tick)
         if w.tick != dw.tick:
             print(f"{d}: GameTime {dw.tick}, but the recording reads to {w.tick}")
@@ -1187,11 +1193,15 @@ def cmd_compare_dumps(path, a_path, b_path):
     h = header_only(path)
     ah, a = dump_world(a_path, h)
     bh, b = dump_world(b_path, h)
-    if a.tick != b.tick:
-        print(f"{a_path} is at GameTime {a.tick}, {b_path} at {b.tick}")
+    if a.tick != b.tick or ah.get("frame") != bh.get("frame"):
+        print(f"{a_path} is at GameTime {a.tick}, {b_path} at {b.tick}"
+              + ("" if ah.get("frame") == bh.get("frame") else
+                 ": one is a frame dump and the other is not, or their frames differ"))
         return 1
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
-    print(f"{a_path} against {b_path}: GameTime {a.tick}: "
+    when = (f"frame dump at GameTime {ah['frame']} (iteration {a.tick})" if "frame" in ah
+            else f"GameTime {a.tick}")
+    print(f"{a_path} against {b_path}: {when}: "
           + ("EQUAL" if not n else f"{n} DIFFERENCES") + " (A is the first, B the second)")
     for line in lines:
         print("  " + line.replace("the recording", "A").replace("recording", "A")

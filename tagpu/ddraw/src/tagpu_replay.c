@@ -4162,6 +4162,8 @@ static void seek_run(char* ta)
      exactly, on any level in play, whatever the speed or pauses (the recorder's table of armed
      dumps). A playing host's speed keys change nothing, so stepping to T by keys is timing; the
      capture point is where every dump is taken, and the DLL takes it at T.
+   - `dump <name> now`: a frame dump (tagpu_rec_dump_now), taken at once, here, between two steps;
+     two of one GameTime saw no step between them.
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
      point of T. */
@@ -4207,6 +4209,10 @@ static void trigger_read(void)
         }
         if (!strncmp(line + end, " at ", 4) && u32_word(line + end + 4, &T) && T) {
             tagpu_rec_dump_arm(name, T);
+            return;
+        }
+        if (!strcmp(line + end, " now")) {
+            tagpu_rec_dump_now(name);
             return;
         }
     }
