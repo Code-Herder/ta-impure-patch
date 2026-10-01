@@ -249,6 +249,64 @@ int tagpu_simreg_recorded(const SimDesc* d)
            !(d->flags & (SIMD_ENGINE | SIMD_TLS | SIMD_LOCK | SIMD_CODE | SIMD_GUARD));
 }
 
+static int transient_static(const SimDesc* d)
+{
+    return d->cls == SIM_TRANSIENT && d->nrows &&
+           !(d->flags & (SIMD_TLS | SIMD_HEAP | SIMD_ENGINE));
+}
+
+static unsigned char* s_tsaved;      /* the declarations' bytes in s_ok order (HeapAlloc)        */
+static size_t         s_tbytes;
+
+void tagpu_simreg_transient_save(void)
+{
+    unsigned i;
+    size_t n = 0, at = 0;
+    for (i = 0; i < tagpu_simreg_count(); i++)
+        if (transient_static(s_ok[i])) n += (size_t)s_ok[i]->stride * s_ok[i]->nrows;
+    if (s_tsaved) HeapFree(GetProcessHeap(), 0, s_tsaved);
+    s_tsaved = n ? (unsigned char*)HeapAlloc(GetProcessHeap(), 0, n) : NULL;
+    s_tbytes = s_tsaved ? n : 0;
+    if (!s_tsaved) return;
+    for (i = 0; i < tagpu_simreg_count(); i++) {
+        size_t k;
+        if (!transient_static(s_ok[i])) continue;
+        k = (size_t)s_ok[i]->stride * s_ok[i]->nrows;
+        memcpy(s_tsaved + at, s_ok[i]->addr, k);
+        at += k;
+    }
+}
+
+unsigned tagpu_simreg_transient_reset(char* names, unsigned cap)
+{
+    unsigned i, total = 0, named = 0;
+    size_t at = 0, len = 0;
+    if (cap) names[0] = 0;
+    if (!s_tsaved) return 0;
+    for (i = 0; i < tagpu_simreg_count(); i++) {
+        const SimDesc* d = s_ok[i];
+        unsigned char* p;
+        size_t k, b;
+        unsigned diff = 0;
+        if (!transient_static(d)) continue;
+        k = (size_t)d->stride * d->nrows;
+        if (at + k > s_tbytes) break;
+        p = (unsigned char*)d->addr;
+        for (b = 0; b < k; b++) diff += p[b] != s_tsaved[at + b];
+        if (diff) {
+            memcpy(p, s_tsaved + at, k);
+            total += diff;
+            if (named++ < 8 && cap > len + 1) {
+                int w = snprintf(names + len, cap - len, "%s%s: %u bytes", len ? ", " : "",
+                                 d->name, diff);
+                if (w > 0) len = len + (size_t)w < cap ? len + (size_t)w : cap - 1;
+            }
+        }
+        at += k;
+    }
+    return total;
+}
+
 unsigned tagpu_simreg_layout_hash(const SimDesc* d)
 {
     const SimField* f;

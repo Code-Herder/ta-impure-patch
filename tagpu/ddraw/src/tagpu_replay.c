@@ -177,7 +177,14 @@ static struct {
     int      pending;               /* a seek waits for the next frame visit after the first step */
     unsigned T;
     char     dump[40];              /* a dump to take at its capture point, or ""                 */
+    int      poison;                /* R12 poisons the tables first (THE POISON CHECK)            */
 } s_seek;
+#define RT_ARMED 4
+static struct {
+    unsigned n;
+    struct { char name[37]; unsigned T; } a[RT_ARMED];
+    int      tsaved;                /* the TRANSIENT declarations saved for this playing          */
+} s_rt;                             /* the armed round trips (THE ROUND TRIP)                     */
 static struct {
     int            saved;
     int            played;          /* the level's first step has run (THE PLAYER'S SETTINGS)     */
@@ -213,6 +220,7 @@ static void replay_close(void)
     s_tin.n = 0;
     s_tin.overflow = 0;
     memset(&s_gst, 0, sizeof s_gst);
+    memset(&s_rt, 0, sizeof s_rt);
     memset(s_made, 0, sizeof s_made);
     memset(&s_seek, 0, sizeof s_seek);
     s_frame_tick = ~0u;
@@ -3248,6 +3256,8 @@ static struct {
     unsigned sdropped;
     unsigned water, states, stamps, brefused;
     TabCounts tab;
+    unsigned poisoned, residue;     /* tables poisoned, bytes the write left at the poison        */
+    char     rnames[160];           /* the first tables with residue                              */
     int      pool, effects;
 } s_sk;                             /* one seek's counts, for its second line                    */
 
@@ -3938,6 +3948,144 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
     }
 }
 
+/* THE POISON CHECK, for the replay's round trip (`roundtrip <name> at <T>`): does the seek write
+   every byte of every table this build records, or does one keep the host's value? R12 copies
+   every declaration tagpu_simreg_recorded accepts aside -- not only those the recording pairs --
+   and sets every byte its layout does not keep (table_keep), in every host row, to 0xA5; then the
+   write; then a byte still 0xA5 where the recording's own byte is not (or, in a table the
+   recording does not carry, where the host's was not) is residue: named, counted and put back from
+   the copy. A byte the recording itself holds as 0xA5 is never residue, so in a table the
+   recording carries the test has no false hit. An ordering: copy, fill, write and check run back
+   to back inside R12, under the air pool's lock, on the game thread, with no engine or simulation
+   code between them, and every residue byte is put back before the lock is left, so no 0xA5
+   outlives R12. Poisoning before R1 would let the kills' and creates' hooks read 0xA5 from their
+   own tables. */
+typedef struct {
+    const SimDesc*        d;
+    unsigned char*        base;
+    size_t                bytes;    /* the host's rows when filled                                */
+    size_t                at;       /* its copy in s_pz.saved                                     */
+    const RecTable*       t;        /* the recording's image, NULL when it carries none          */
+} Poisoned;
+static struct {
+    Poisoned*      p;
+    unsigned       n;
+    unsigned char* saved;
+    unsigned       lines;
+} s_pz;
+
+static unsigned char* tab_base(const SimDesc* d, size_t* bytes)
+{
+    unsigned char* base = (d->flags & SIMD_HEAP) ? *(unsigned char**)d->addr
+                                                 : (unsigned char*)d->addr;
+    *bytes = !base ? 0 : !d->nrows ? (size_t)*d->rows * d->stride : (size_t)d->nrows * d->stride;
+    return base;
+}
+
+/* the declarations and a copy of their host rows; 0 with a line when there is no memory */
+static int poison_begin(void)
+{
+    unsigned i, n = tagpu_simreg_count();
+    size_t total = 0, at = 0;
+    memset(&s_pz, 0, sizeof s_pz);
+    s_pz.p = (Poisoned*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n ? n : 1) * sizeof *s_pz.p);
+    if (!s_pz.p) goto none;
+    for (i = 0; i < n; i++) {
+        const SimDesc* d = tagpu_simreg_at(i);
+        Poisoned* q = &s_pz.p[s_pz.n];
+        if (!d || !tagpu_simreg_recorded(d)) continue;
+        q->d = d;
+        q->base = tab_base(d, &q->bytes);
+        if (!q->base || !q->bytes) continue;
+        q->at = total;
+        total += q->bytes;
+        s_pz.n++;
+    }
+    s_pz.saved = (unsigned char*)HeapAlloc(GetProcessHeap(), 0, total ? total : 1);
+    if (!s_pz.saved) goto none;
+    for (i = 0; i < s_pz.n; i++) {
+        memcpy(s_pz.saved + at, s_pz.p[i].base, s_pz.p[i].bytes);
+        at += s_pz.p[i].bytes;
+    }
+    return 1;
+none:
+    tagpu_logf("replay: %s: the round trip's poison check skipped: no memory", s_name);
+    if (s_pz.p) HeapFree(GetProcessHeap(), 0, s_pz.p);
+    memset(&s_pz, 0, sizeof s_pz);
+    return 0;
+}
+
+static void poison_fill(void)
+{
+    unsigned i;
+    size_t r, b;
+    for (i = 0; i < s_pz.n; i++) {
+        Poisoned* q = &s_pz.p[i];
+        unsigned char* keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                                        q->d->stride);
+        if (!keep) continue;
+        table_keep(q->d, keep);
+        for (r = 0; r + q->d->stride <= q->bytes; r += q->d->stride)
+            for (b = 0; b < q->d->stride; b++)
+                if (!keep[b]) q->base[r + b] = 0xA5;
+        HeapFree(GetProcessHeap(), 0, keep);
+    }
+    s_sk.poisoned = s_pz.n;
+}
+
+/* the recording's image of a declaration it pairs */
+static void poison_image(const SimDesc* d, const RecTable* t)
+{
+    unsigned i;
+    for (i = 0; i < s_pz.n; i++)
+        if (s_pz.p[i].d == d) s_pz.p[i].t = t;
+}
+
+static void poison_check(void)
+{
+    unsigned i;
+    for (i = 0; i < s_pz.n; i++) {
+        Poisoned* q = &s_pz.p[i];
+        const unsigned char* was = s_pz.saved + q->at;
+        size_t b, run = 0;
+        unsigned found = 0;
+        for (b = 0; b <= q->bytes; b++) {
+            int left = 0;
+            if (b < q->bytes && q->base[b] == 0xA5) {
+                unsigned char want = q->t && b < q->t->size ? q->t->img[b] : was[b];
+                left = want != 0xA5;
+            }
+            if (left) {
+                if (!run++) found++;
+                q->base[b] = was[b];
+                s_sk.residue++;
+                continue;
+            }
+            if (run && s_pz.lines < 16) {
+                size_t at = b - run;
+                s_pz.lines++;
+                tagpu_logf("replay: %s: round trip %u: %s row %u +0x%X: %u bytes not written by the "
+                           "seek", s_name, s_seek.T, q->d->name, (unsigned)(at / q->d->stride),
+                           (unsigned)(at % q->d->stride), (unsigned)run);
+            }
+            run = 0;
+        }
+        if (found) {
+            TabCounts n;
+            memcpy(n.names, s_sk.rnames, sizeof n.names);
+            tab_name(&n, q->d->name);
+            memcpy(s_sk.rnames, n.names, sizeof s_sk.rnames);
+        }
+    }
+}
+
+static void poison_end(void)
+{
+    HeapFree(GetProcessHeap(), 0, s_pz.saved);
+    HeapFree(GetProcessHeap(), 0, s_pz.p);
+    memset(&s_pz, 0, sizeof s_pz);
+}
+
 /* Every table the recording carries into the declaration it pairs with, or skipped (named once a
    playback, or by each seek); then each sim file that owns an invariant its layouts cannot express
    re-establishes it, before anything runs. The air pool's lock is held over the writes
@@ -3952,7 +4100,10 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek)
 {
     const RecHeader* h = recr_header(s_rd);
     unsigned i;
+    int poison;
     tagpu_patches_restore_begin();
+    poison = seek && s_seek.poison && poison_begin();
+    if (poison) poison_fill();
     for (i = 0; i < h->ntab && i < W->ntab; i++) {
         const char* why = NULL;
         const SimDesc* d = table_pair(&h->tab[i], &why);
@@ -3962,11 +4113,14 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek)
                 tagpu_logf("replay: %s: the tables skipped %s: %s", s_name, h->tab[i].name, why);
             continue;
         }
+        if (poison) poison_image(d, &W->tab[i]);
         table_put(L, d, &W->tab[i], c);
     }
     s_gst.tnamed = 1;
+    if (poison) poison_check();
     c->repaired += tagpu_patches_restored();
     c->repaired += tagpu_weapons_restored();
+    if (poison) poison_end();
 }
 
 /* R12 */
@@ -4020,7 +4174,7 @@ static unsigned sk_ms(LONGLONG ticks, LONGLONG hz)
 }
 
 /* THE SEEK's steps, R0-R17, in their order */
-static void seek_run(char* ta)
+static int seek_run(char* ta)
 {
     RecWorld* W = recr_world(s_rd);
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0;
@@ -4034,7 +4188,7 @@ static void seek_run(char* ta)
     if (!level_of(ta, &L)) {
         tagpu_logf("replay: %s: seek to %u refused: the level's unit array or features are not "
                    "the ones the counts describe", s_name, T);
-        return;
+        return 0;
     }
     h = L.now;
     QueryPerformanceFrequency(&hz);
@@ -4043,7 +4197,7 @@ static void seek_run(char* ta)
     if (k <= 0) {
         tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
         if (k < 0) sk_back(&L, prev);
-        return;
+        return 0;
     }
     QueryPerformanceCounter(&t1);
     memset(&s_sk, 0, sizeof s_sk);
@@ -4051,7 +4205,7 @@ static void seek_run(char* ta)
     if (!sk_bound(&L, W, &nheads, why, sizeof why)) {
         tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
         sk_back(&L, prev);
-        return;
+        return 0;
     }
     /* R1: the rebuild's kills are not the recording's eliminations */
     tagpu_puppet_rebuild(1);
@@ -4147,6 +4301,7 @@ static void seek_run(char* ta)
                s_sk.tab.written, s_sk.tab.skipped, s_sk.tab.kept, s_sk.tab.repaired,
                s_sk.pool ? "written" : "REFUSED", W->proj_hw,
                s_sk.effects ? "cleared" : "NOT cleared");
+    return 1;
 }
 
 /* ---- the frame visit ------------------------------------------------------------------------ */
@@ -4164,6 +4319,8 @@ static void seek_run(char* ta)
      capture point is where every dump is taken, and the DLL takes it at T.
    - `dump <name> now`: a frame dump (tagpu_rec_dump_now), taken at once, here, between two steps;
      two of one GameTime saw no step between them.
+   - `roundtrip <name> at <T>`, T >= 2, the name 1 to 36 letters, digits, - and _: on a level
+     that plays a recording, the round trip at the frame visit after step T-1 (THE ROUND TRIP).
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
      point of T. */
@@ -4180,6 +4337,8 @@ static int u32_word(const char* p, unsigned* v)
     *v = (unsigned)x;
     return 1;
 }
+
+static void rt_arm(const char* name, unsigned T);
 
 static void trigger_read(void)
 {
@@ -4216,6 +4375,11 @@ static void trigger_read(void)
             return;
         }
     }
+    if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
+        u32_word(line + end + 4, &T)) {
+        rt_arm(name, T);
+        return;
+    }
     if (!strncmp(line, "seek ", 5) && seek_words(line + 5, &T, dump, sizeof dump)) {
         if (!tagpu_puppet_on() || !s_rd || s_dead) {
             tagpu_logf("replay: seek to %u refused: this level plays no recording", T);
@@ -4227,6 +4391,87 @@ static void trigger_read(void)
         return;
     }
     tagpu_logf("replay: %s: not understood: %s", TRIGGER, line);
+}
+
+/* THE ROUND TRIP: a playing's state at the frame visit after step T-1 against a rebuild to T in
+   place with nothing between them, so a difference is the seek's, by construction. Run right
+   after that visit's recorded_put, which made A's tables the recording's (THE TABLES) and so the
+   poison check's comparison exact: a frame dump <name>-a; the TRANSIENT declarations put back to
+   the values saved at the playing's first frame visit (tagpu_simreg.h); the seek to T with the
+   poison check; a frame dump <name>-b; one line. tarec compare-dumps A B must be EQUAL. One the
+   host passes is dropped with a line: a frame can run several steps, and the harness re-arms. */
+static void rt_arm(const char* name, unsigned T)
+{
+    size_t i, n = strlen(name);
+    if (!tagpu_puppet_on() || !s_rd || s_dead) {
+        tagpu_logf("replay: round trip %s refused: this level plays no recording", name);
+        return;
+    }
+    if (!n || n > 36 || T < 2) {
+        tagpu_logf("replay: round trip %s at %u refused: a name of 1 to 36 characters and a "
+                   "GameTime of 2 or more, please", name, T);
+        return;
+    }
+    for (i = 0; i < n; i++)
+        if (!((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= 'A' && name[i] <= 'Z') ||
+              (name[i] >= '0' && name[i] <= '9') || name[i] == '-' || name[i] == '_')) {
+            tagpu_logf("replay: round trip %s refused: the name is not letters, digits, - and _",
+                       name);
+            return;
+        }
+    if (s_rt.n == RT_ARMED) {
+        tagpu_logf("replay: round trip %s refused: %u are armed already", name, RT_ARMED);
+        return;
+    }
+    memcpy(s_rt.a[s_rt.n].name, name, n + 1);
+    s_rt.a[s_rt.n].T = T;
+    s_rt.n++;
+    tagpu_logf("replay: %s: round trip %s armed for GameTime %u", s_name, name, T);
+}
+
+/* the armed round trips at the frame visit whose next iteration is `next` */
+static void rt_due(char* ta, unsigned next)
+{
+    unsigned i, k = 0;
+    for (i = 0; i < s_rt.n; i++) {
+        char a[48], b[48], tnames[200];
+        unsigned T = s_rt.a[i].T, treset;
+        LARGE_INTEGER hz, t0, t1;
+        int ok;
+        if (T > next) {
+            s_rt.a[k++] = s_rt.a[i];
+            continue;
+        }
+        if (T < next) {
+            tagpu_logf("replay: %s: round trip %s at %u not run: the level is at GameTime %u",
+                       s_name, s_rt.a[i].name, T, next - 1);
+            continue;
+        }
+        snprintf(a, sizeof a, "%s-a", s_rt.a[i].name);
+        snprintf(b, sizeof b, "%s-b", s_rt.a[i].name);
+        tagpu_rec_dump_now(a);
+        treset = tagpu_simreg_transient_reset(tnames, sizeof tnames);
+        s_seek.T = T;
+        s_seek.dump[0] = 0;
+        s_seek.poison = 1;
+        QueryPerformanceFrequency(&hz);
+        QueryPerformanceCounter(&t0);
+        ok = seek_run(ta);
+        QueryPerformanceCounter(&t1);
+        s_seek.poison = 0;
+        if (!ok) {
+            tagpu_logf("replay: %s: round trip %s at %u: the seek refused (above); no dump B",
+                       s_name, s_rt.a[i].name, T);
+            continue;
+        }
+        tagpu_rec_dump_now(b);
+        tagpu_logf("replay: %s: round trip %s at %u: TRANSIENT %u bytes reset (%s); %u tables "
+                   "poisoned, residue %u (%s); seek %u ms", s_name, s_rt.a[i].name, T, treset,
+                   tnames[0] ? tnames : "none", s_sk.poisoned, s_sk.residue,
+                   s_sk.rnames[0] ? s_sk.rnames : "none", sk_ms(t1.QuadPart - t0.QuadPart,
+                   hz.QuadPart));
+    }
+    s_rt.n = k;
 }
 
 /* THE FRAME VISIT, before the in-play draw call 0x4969CD, on the game thread, between two sim
@@ -4253,6 +4498,11 @@ static void __cdecl tagpu_replay_frame(void)
     if (now == s_frame_tick || W->tick != now + 1 || !level_of(ta, &L)) return;
     s_frame_tick = now;
     recorded_put(&L, W);
+    if (!s_rt.tsaved) {
+        tagpu_simreg_transient_save();
+        s_rt.tsaved = 1;
+    }
+    if (s_rt.n) rt_due(ta, now + 1);
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */

@@ -258,4 +258,13 @@ unsigned       tagpu_simreg_layout_hash(const SimDesc* d);
    recording's header names. */
 int            tagpu_simreg_recorded(const SimDesc* d);
 
+/* The static SIM_TRANSIENT declarations (not SIMD_TLS, SIMD_HEAP or SIMD_ENGINE), stride x nrows
+   bytes each, saved at a tick boundary and put back for the replay's round trip, on the game
+   thread. The reset returns the bytes that differed and names up to 8 declarations in `names`
+   ("<name>: <k> bytes"): at a tick boundary every byte of one is at its value from load or written
+   before it is read (SIM_TRANSIENT above), so the reset changes nothing the simulation reads unless
+   a declaration is misclassified, which the round trip's continuation dump names. */
+void           tagpu_simreg_transient_save(void);
+unsigned       tagpu_simreg_transient_reset(char* names, unsigned cap);
+
 #endif
