@@ -3924,7 +3924,7 @@ static void seek_run(char* ta)
     tagpu_puppet_rebuild(0);
     s_over = 0;
     s_frame_tick = T - 1;
-    if (dump[0]) tagpu_rec_dump_arm(dump);
+    if (dump[0]) tagpu_rec_dump_arm(dump, 0);
     QueryPerformanceCounter(&t2);
     tagpu_logf("replay: %s: at GameTime %u, sought from GameTime %u in %u ms (read %u, rebuild "
                "%u); units %u killed, %u made, %u refused", s_name, T, h,
@@ -3955,9 +3955,27 @@ static void seek_run(char* ta)
 /* The trigger: one line, the file deleted whatever it held.
    - `dump <name>`: a dump armed for the recorder's next capture point (tagpu_rec_dump_arm), on any
      level in play, live or playing; while paused that is the first tick after the pause.
+   - `dump <name> at <T>`, T a decimal u32 other than 0: a dump armed for the capture point of GameTime T
+     exactly, on any level in play, whatever the speed or pauses (the recorder's table of armed
+     dumps). A playing host's speed keys change nothing, so stepping to T by keys is timing; the
+     capture point is where every dump is taken, and the DLL takes it at T.
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
      point of T. */
+/* `p` is a decimal u32 and nothing after it: 1 with its value */
+static int u32_word(const char* p, unsigned* v)
+{
+    unsigned long long x = 0;
+    unsigned k = 0;
+    while (p[k] >= '0' && p[k] <= '9') {
+        x = x * 10 + (unsigned)(p[k] - '0');
+        if (++k > 10 || x > 0xFFFFFFFFull) return 0;
+    }
+    if (!k || p[k]) return 0;
+    *v = (unsigned)x;
+    return 1;
+}
+
 static void trigger_read(void)
 {
     static DWORD s_looked;
@@ -3979,9 +3997,15 @@ static void trigger_read(void)
     DeleteFileA(TRIGGER);
     while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
         line[--n] = 0;
-    if (sscanf(line, "dump %39s%n", name, &end) == 1 && !line[end]) {
-        tagpu_rec_dump_arm(name);
-        return;
+    if (sscanf(line, "dump %39s%n", name, &end) == 1) {
+        if (!line[end]) {
+            tagpu_rec_dump_arm(name, 0);
+            return;
+        }
+        if (!strncmp(line + end, " at ", 4) && u32_word(line + end + 4, &T) && T) {
+            tagpu_rec_dump_arm(name, T);
+            return;
+        }
     }
     if (!strncmp(line, "seek ", 5) && seek_words(line + 5, &T, dump, sizeof dump)) {
         if (!tagpu_puppet_on() || !s_rd || s_dead) {

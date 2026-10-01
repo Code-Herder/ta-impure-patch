@@ -1921,7 +1921,18 @@ static int cap_mapped(Rec* r, const Level* L)
 static FILE*         s_dump;
 static unsigned      s_dump_raw;
 static unsigned long s_dump_crc;
-static char          s_dump_name[40];       /* the dump the next capture point takes, or ""  */
+/* A dump armed for GameTime T is taken at the capture point of T, where the world holds iteration T
+   (on a puppet host, after the replay's capture-point write), so its GameTime is exact by
+   construction, whatever the game's speed or pauses. The table is the game thread's alone: the
+   frame visit arms (tagpu_replay.c, the trigger), the capture point takes, the teardown wrap
+   clears. It is bounded by its 8 entries, and each name by its 39 characters. */
+#define DUMP_ARMED 8                        /* dumps armed at once; the trigger arms one a line */
+#define DUMP_NAME  40
+static struct {
+    char     name[DUMP_NAME];
+    unsigned at;                            /* 0: the next capture point                        */
+} s_armed[DUMP_ARMED];
+static unsigned s_narmed;
 static void dump_features(const Level* L, const char* name);
 
 #define DUMP_BODY_MAX 0xFFFFu       /* a record's body length is its header's u16                 */
@@ -2194,12 +2205,13 @@ static void dump_write(const Level* L, int tick, const char* name)
                "body past 0xFFFF bytes not written", name, tick, path, s_dump_raw, s_dump_long);
 }
 
-int tagpu_rec_dump_arm(const char* name)
+int tagpu_rec_dump_arm(const char* name, unsigned at)
 {
-    size_t i, n = bounded_len(name, sizeof s_dump_name);
-    if (!n || n == sizeof s_dump_name) {
-        tagpu_logf("recorder: dump: a name of 1 to %u characters, please",
-                   (unsigned)sizeof s_dump_name - 1);
+    const char* ta = ta_main();
+    size_t i, n = bounded_len(name, DUMP_NAME);
+    unsigned now;
+    if (!n || n == DUMP_NAME) {
+        tagpu_logf("recorder: dump: a name of 1 to %u characters, please", DUMP_NAME - 1);
         return 0;
     }
     for (i = 0; i < n; i++)
@@ -2208,9 +2220,49 @@ int tagpu_rec_dump_arm(const char* name)
             tagpu_logf("recorder: dump: the name %.*s is not letters, digits, - and _", (int)n, name);
             return 0;
         }
-    memcpy(s_dump_name, name, n);
-    s_dump_name[n] = 0;
+    if (s_narmed == DUMP_ARMED) {
+        tagpu_logf("recorder: dump %s refused: %u dumps are armed already", name, DUMP_ARMED);
+        return 0;
+    }
+    for (i = 0; i < s_narmed; i++)
+        if (!strcmp(s_armed[i].name, name)) {
+            /* two dumps of one name would write one file */
+            tagpu_logf("recorder: dump %s refused: a dump of that name is armed already", name);
+            return 0;
+        }
+    if (at) {
+        /* the next capture point is GameTime now + 1 */
+        now = ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0;
+        if (!ta || at <= now) {
+            tagpu_logf("recorder: dump %s at GameTime %u refused: the level is at GameTime %u",
+                       name, at, now);
+            return 0;
+        }
+    }
+    memcpy(s_armed[s_narmed].name, name, n);
+    s_armed[s_narmed].name[n] = 0;
+    s_armed[s_narmed].at = at;
+    s_narmed++;
+    if (at) tagpu_logf("recorder: dump %s armed for GameTime %u", name, at);
     return 1;
+}
+
+/* the armed dumps at the capture point of `tick`, in arm order: an untimed one or one for this
+   GameTime taken, one for an earlier GameTime dropped (a forward seek passed it), the rest kept */
+static void dumps_take(const Level* L, int tick)
+{
+    unsigned i, k = 0;
+    for (i = 0; i < s_narmed; i++) {
+        if (!s_armed[i].at || s_armed[i].at == (unsigned)tick) {
+            dump_write(L, tick, s_armed[i].name);
+        } else if (s_armed[i].at < (unsigned)tick) {
+            tagpu_logf("recorder: dump %s for GameTime %u not taken: the level is at GameTime %d",
+                       s_armed[i].name, s_armed[i].at, tick);
+        } else {
+            s_armed[k++] = s_armed[i];
+        }
+    }
+    s_narmed = k;
 }
 
 /* ---- the events ----------------------------------------------------------------------------- */
@@ -3666,10 +3718,7 @@ void __cdecl tagpu_rec_capture(void)
             }
         }
     }
-    if (s_dump_name[0]) {
-        dump_write(&L, tick, s_dump_name);
-        s_dump_name[0] = 0;
-    }
+    dumps_take(&L, tick);
     if (s_state != ST_RECORDING) return;
 
     r = s_rec;
@@ -3728,6 +3777,17 @@ void __cdecl tagpu_rec_capture(void)
 /* The level's last step has run, so its events end its iteration, unless one of them did not fit. */
 void tagpu_rec_level_end(void)
 {
+    unsigned i, k = 0;
+    /* a timed dump does not outlive its level, whose GameTime the next level starts again; an
+       untimed one is taken at the next level's first capture point */
+    for (i = 0; i < s_narmed; i++) {
+        if (s_armed[i].at)
+            tagpu_logf("recorder: dump %s for GameTime %u not taken: the level ended",
+                       s_armed[i].name, s_armed[i].at);
+        else
+            s_armed[k++] = s_armed[i];
+    }
+    s_narmed = k;
     s_tid = 0;
     if (s_state == ST_RECORDING && s_rec) {
         if (!s_rec->ev_full) ring_publish(s_rec, 0);

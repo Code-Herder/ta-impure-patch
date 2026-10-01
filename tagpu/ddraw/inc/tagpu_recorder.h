@@ -14,11 +14,13 @@
 void __cdecl tagpu_rec_capture(void);
 
 /* Arms the harness's dump `name` -- 1 to 39 letters, digits, '-' and '_' -- which tagpu_rec_capture
-   takes at its next call, the capture point, on any level in play, recorded or playing (the
-   replay's frame visit arms it from the trigger's `dump <name>`, tagpu_replay.c): the
-   level's images as a stored snapshot and the main block and .data whole, in
-   replays\dump-<name>.bin. 0 when the name is refused, logged. Game thread. */
-int tagpu_rec_dump_arm(const char* name);
+   takes at the capture point of GameTime `at`, or at its next call when `at` is 0, on any level in
+   play, recorded or playing (the replay's frame visit arms it from the trigger's `dump <name>
+   [at <T>]`, tagpu_replay.c): the level's images as a stored snapshot and the main block and
+   .data whole, in replays\dump-<name>.bin. At most 8 are armed at once, each name once; a timed
+   one must be for a GameTime after the level's now, and the level's end drops it. 0 when refused,
+   logged. Game thread. */
+int tagpu_rec_dump_arm(const char* name, unsigned at);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
    cascade frees the unit array: the recording in progress ends, complete once its writer has
