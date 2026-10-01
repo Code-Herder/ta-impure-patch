@@ -2965,7 +2965,7 @@ each is a sink:
 **The step's phases**, two call-site redirects in the fail-closed table (`fix_step_phases`,
 `tagpu_patches.c`; the log line `enginefix: the step's phases for the demo recorder and its replay
 (0x495513 0x495539)`): the step's calls of the projectile tick `0x49B720` at `0x495513` and of the
-falling records `0x420F30` at `0x495539` call stubs that call `tagpu_rec_phase` (1, then 2), the
+explosion tick `0x420F30` at `0x495539` call stubs that call `tagpu_rec_phase` (1, then 2), the
 engine's function, then `tagpu_replay_phase`, keeping every register and the flags. The recorder
 stamps each feature root with the phase it was made in; `tagpu_rec_capture` sets the phase back to 0.
 Off a puppet level `tagpu_replay_phase` returns at once.
@@ -3049,7 +3049,7 @@ after the gates; without them the dumps carry no COB-write counts) on the state 
 returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, `0x4813AB`,
 `0x481427`) on a puppet's unit, the unit bounded as a slot of the array first; the first 16 are
 logged. The gates make them zero; the observers prove it. **The step's phases** (§2.6e) call
-`tagpu_replay_phase` after the host's projectile tick and after its falling records.
+`tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
 **Fields we write**, on the game thread, on a puppet level only:
 
@@ -3075,13 +3075,16 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
 - the features' changes, through the feature tick and the six feature functions with the
   recorded arguments, bounded by the level's grid, defs and weapons, each at the phase of the step
   the recording machine made it in: a unit-tick root at the replay step, a projectile-tick root
-  once the host's projectile tick has returned, a later one once its falling records have
-  returned (`tagpu_replay_phase`, held in a store of 8,192 events and 2 MB; past it the step's
-  remaining roots go in at the replay step); the draws those calls make
+  once the host's projectile tick has returned, a later one once its explosion tick has
+  returned, each followed by the events its bracket holds (`tagpu_replay_phase`, held in a store
+  of 8,192 events and 2 MB; past it the held roots and the step's remaining ones go in at the
+  replay step, in recorded order, and the step's feature images with them); the draws those calls make
   at the six RNG calls answered from the recording instead of `0x4B6C30`; and a replayed death's
   explosion's calls made inside the host's destructor, from the recorder's stub at `0x486D50`;
 - each step, before the host's projectile tick: the next image's cells' unit slots, each only
-  when it names a unit alive on the host, since the projectile's collision test reads them;
+  when it names a unit alive on the host, since the projectile's collision test reads them; their
+  previous values put back just before the feature tick's root, whose reproduction test reads
+  them (`0x424189`) and which the recording machine ran on the iteration's slots;
 - each step, after its late phase's roots (at the replay step for an iteration played late):
   every cell of the feature grid and every record of the wreck pool the recording
   changed, values only under `replay-layout.tsv`'s classes (a cell's def, record and anchor links,

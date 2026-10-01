@@ -475,7 +475,7 @@ cannot see an address recorded as a value; the scan looks for one instead.
 - With S3c-3, UNCOVERED, which fails a tier when a declared table, root, sink or feature is reached
   by no run.
 - **A feature root is made at its phase of the step.** The recorder stamps each feature root with
-  where in the step it was made — the unit tick, the projectile tick, or from the falling records
+  where in the step it was made — the unit tick, the projectile tick, or from the explosion tick
   on — and a puppet host makes it at the same point of its own step, so the host's projectiles meet
   the features the recording machine's met. The cells' unit slots of the next image go in before
   the host's projectile tick for the same reason. A simulation change that makes feature roots in a

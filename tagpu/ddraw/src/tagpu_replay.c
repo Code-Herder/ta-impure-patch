@@ -132,6 +132,8 @@ static unsigned   s_view;           /* the viewed player: V for full visibility,
 static int        s_first;          /* the first step's checks are still to come                  */
 static int        s_dead;           /* they failed: nothing is applied this level                 */
 static int        s_over;           /* the recording has nothing more to apply                    */
+static int        s_endlog;         /* its counts wait for the last step's phases (THE PHASES)    */
+static unsigned   s_endat;          /* ... and the GameTime it ended at                           */
 static unsigned   s_notes;          /* the level's anomalies logged                               */
 #define EV_KINDS (RK_EV_SPRAY - RK_EV_CREATE + 1)
 static struct {
@@ -209,16 +211,21 @@ static unsigned colour_count(const char* ta)
     return seq ? *seq : 0;
 }
 
+static void pend_reset(void);
+static void counts_log(const char* when, unsigned now);
+
 static void replay_close(void)
 {
     recr_close(s_rd);
     s_rd = NULL;
     s_first = s_dead = s_over = 0;
+    s_endlog = 0;
     s_notes = 0;
     memset(&s_st, 0, sizeof s_st);
     memset(&s_fst, 0, sizeof s_fst);
     s_tin.n = 0;
     s_tin.overflow = 0;
+    pend_reset();
     memset(&s_gst, 0, sizeof s_gst);
     memset(&s_rt, 0, sizeof s_rt);
     memset(s_made, 0, sizeof s_made);
@@ -2555,21 +2562,28 @@ void tagpu_replay_blast(const char* unit)
 
 /* THE PHASES. The recording machine made each feature root at some point of its step 0x495490
    (REC_PHASE_*, recorded with the root): in the unit tick, in the projectile tick 0x49B720 -- an
-   impact's damage burning or felling a tree -- or from the falling records 0x420F30 on, the
+   impact's damage burning or felling a tree -- or from the explosion tick 0x420F30 on, the
    feature tick 0x424050 among them. The host's projectile tick tests each projectile against the
    cell it is in, the feature there and its height (0x49B090 -> 0x49B2DC..0x49B3CD), so a root
    made before it takes away a tree the recording machine's projectiles still met: MEASURED in
    forest-circle 2026-10-01, every impact the host missed (23 of 134) had the tree in the
    recording machine's cell and its successor in the host's. So a root goes in at its own phase:
    the unit tick's at the replay step, in recorded order with the step's other events; the
-   projectile tick's once the host's projectile tick has returned; the rest once its falling
-   records have returned, and the step's feature images after them, since they are the world
+   projectile tick's once the host's projectile tick has returned; the rest once its explosion
+   tick has returned, and the step's feature images after them, since they are the world
    after every root of the step (THE TICK'S INPUT). Roots inside a death's bracket go with the
    death, at the replay step. The deferred brackets are copied, since the iteration is read on
    before the projectile tick runs; past the store's room the step's remaining roots go in at
-   the replay step, in order, as before. */
+   the replay step, in recorded order, the ones already held first.
+   The cells' unit slots of the next image go in early (slots_put), for the host's projectile
+   tick; the feature tick, a root of the late phase, reads them too (its reproduction tests the
+   source cell's unit slot, 0x424189), and the recording machine's tick saw the iteration's slots
+   and its input, not the next image's. So each early slot's previous bytes are kept, and put back
+   just before the tick root, whose input then goes in over them (THE TICK'S INPUT); features_put
+   writes the next image's afterwards. A cell past the store's room is not written early. */
 #define PEND_EVENTS 8192
 #define PEND_BYTES  (2u << 20)
+#define PEND_SLOTS  16384
 static struct {
     Lv            L;                /* the level of the step the store holds                     */
     unsigned      n, used;          /* events and bytes held                                      */
@@ -2577,13 +2591,39 @@ static struct {
     int           images;           /* the step's feature images wait for the late phase          */
     int           full;             /* the store refused a bracket: none deferred until the step  */
     unsigned      deferred, over;   /* brackets deferred, steps whose store was full              */
+    unsigned      nslots;           /* cells slots_put wrote early                                */
+    int           restored;         /* their previous slots are back for the tick                 */
     RecEvent      ev[PEND_EVENTS];
     unsigned char b[PEND_BYTES];
+    struct { char* cell; unsigned char was[4]; } slot[PEND_SLOTS];
 } s_pend;
 static RecWorld s_pendW;            /* only ev and nev: what root_play reads of a world           */
 
-/* the bracket opening at `i` into the store; 0 when it does not fit */
-static int pend_add(const RecWorld* W, unsigned i)
+/* one event that is neither a root nor a death's, as the step plays it */
+static void ev_play(const Lv* L, const RecEvent* e)
+{
+    const unsigned char* b = e->b;
+    unsigned n = e->len, k = e->kind;
+    int done;
+    switch (k) {
+    case RK_EV_CREATE:      done = ev_create(L, b, n); break;
+    case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
+    case RK_EV_INTERCEPT:   done = ev_intercept(L, b, n); break;
+    case RK_EV_START:       done = ev_start(L, b, n); break;
+    case RK_EV_START_NAMED: done = ev_start_named(L, b, n); break;
+    case RK_EV_BUILT:       done = ev_built(L, b, n); break;
+    case RK_EV_STATE:       done = ev_state(L, b, n); break;
+    case RK_EV_REPLY:       done = ev_reply(L, b, n); break;
+    case RK_EV_SPRAY:       done = ev_spray(L, b, n); break;
+    default:                return;     /* a bracket's draws, the tick's cells, a root's end */
+    }
+    if (done) s_st.played[k - RK_EV_CREATE]++;
+    else s_st.skipped[k - RK_EV_CREATE]++;
+}
+
+/* the bracket opening at `i` into the store; its RK_EV_FEATURE_END's index, 0 when it does not
+   fit */
+static unsigned pend_add(const RecWorld* W, unsigned i)
 {
     unsigned end, j, bytes = 0, n;
     for (end = i + 1; end < W->nev && W->ev[end].kind != RK_EV_FEATURE_END; end++) {}
@@ -2600,10 +2640,20 @@ static int pend_add(const RecWorld* W, unsigned i)
         s_pend.used += W->ev[j].len;
     }
     s_pend.deferred++;
-    return 1;
+    return end;
 }
 
-/* the held roots of phases up to `phase`, in recorded order */
+/* the early slots' previous bytes back, once a step, before the feature tick reads them */
+static void slots_restore(void)
+{
+    unsigned i;
+    if (s_pend.restored) return;
+    s_pend.restored = 1;
+    for (i = s_pend.nslots; i-- > 0;) memcpy(s_pend.slot[i].cell, s_pend.slot[i].was, 4);
+}
+
+/* the held brackets of phases up to `phase`, in recorded order: each root, then the events its
+   bracket holds, as the step plays them */
 static void pend_play(unsigned phase)
 {
     s_pendW.ev = s_pend.ev;
@@ -2612,7 +2662,10 @@ static void pend_play(unsigned phase)
         const RecEvent* e = &s_pend.ev[s_pend.next];
         if (e->kind == RK_EV_FEATURE) {
             if (e->b[1] > phase) return;
+            if (e->b[0] == FR_TICK) slots_restore();
             root_play(&s_pend.L, &s_pendW, s_pend.next);
+        } else {
+            ev_play(&s_pend.L, e);
         }
         s_pend.next++;
     }
@@ -2622,9 +2675,19 @@ static void pend_clear(void)
 {
     s_pend.n = s_pend.used = s_pend.next = 0;
     s_pend.images = s_pend.full = 0;
+    s_pend.nslots = 0;
+    s_pend.restored = 0;
 }
 
-/* Whatever a step left held, in order, its images after: a step whose phases did not run */
+/* the store empty and its counts zero, for the next playing */
+static void pend_reset(void)
+{
+    pend_clear();
+    s_pend.deferred = s_pend.over = 0;
+}
+
+/* Whatever a step left held, in order, its images after: a step whose phases did not run. A
+   recording that ended in that step logs its counts now, with every call it made. */
 static void pend_finish(void)
 {
     if (s_pend.next < s_pend.n || s_pend.images) {
@@ -2632,6 +2695,10 @@ static void pend_finish(void)
         if (s_pend.images && s_rd) features_put(&s_pend.L, recr_world(s_rd));
     }
     pend_clear();
+    if (s_endlog) {
+        s_endlog = 0;
+        counts_log("the recording's end", s_endat);
+    }
 }
 
 void __cdecl tagpu_replay_phase(unsigned phase)
@@ -2644,38 +2711,36 @@ void __cdecl tagpu_replay_phase(unsigned phase)
 /* The step's events in recorded order; with `defer`, the roots of a later phase into the store */
 static void events_put(const Lv* L, const RecWorld* W, int defer)
 {
-    unsigned i, deaths = 0;
+    unsigned i, end, deaths = 0;
     if (defer) s_pend.L = *L;
     for (i = 0; i < W->nev; i++) {
-        const unsigned char* b = W->ev[i].b;
-        unsigned n = W->ev[i].len, k = W->ev[i].kind;
-        int done;
+        unsigned k = W->ev[i].kind;
         switch (k) {
-        case RK_EV_CREATE:      done = ev_create(L, b, n); break;
-        case RK_EV_DEATH:       done = death_play(L, W, i); deaths++; break;
-        case RK_EV_DEATH_END:   deaths--; continue;
+        case RK_EV_DEATH:
+            if (death_play(L, W, i)) s_st.played[k - RK_EV_CREATE]++;
+            else s_st.skipped[k - RK_EV_CREATE]++;
+            deaths++;
+            break;
+        case RK_EV_DEATH_END:
+            deaths--;
+            break;
         case RK_EV_FEATURE:
-            if (deaths) continue;
-            if (defer && !s_pend.full && b[1] > REC_PHASE_UNITS) {
-                if (pend_add(W, i)) continue;
+            if (deaths) break;
+            if (defer && !s_pend.full && W->ev[i].b[1] > REC_PHASE_UNITS) {
+                if ((end = pend_add(W, i)) != 0) {
+                    i = end;            /* the bracket's events go with its root */
+                    break;
+                }
                 s_pend.full = 1;
                 s_pend.over++;
                 pend_play(REC_PHASE_LATE);  /* the held ones first: the order stays recorded */
             }
             root_play(L, W, i);
-            continue;
-        case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
-        case RK_EV_INTERCEPT:   done = ev_intercept(L, b, n); break;
-        case RK_EV_START:       done = ev_start(L, b, n); break;
-        case RK_EV_START_NAMED: done = ev_start_named(L, b, n); break;
-        case RK_EV_BUILT:       done = ev_built(L, b, n); break;
-        case RK_EV_STATE:       done = ev_state(L, b, n); break;
-        case RK_EV_REPLY:       done = ev_reply(L, b, n); break;
-        case RK_EV_SPRAY:       done = ev_spray(L, b, n); break;
-        default:                continue;   /* a bracket's draws, the tick's cells, a root's end */
+            break;
+        default:
+            ev_play(L, &W->ev[i]);
+            break;
         }
-        if (done) s_st.played[k - RK_EV_CREATE]++;
-        else s_st.skipped[k - RK_EV_CREATE]++;
     }
 }
 
@@ -2692,8 +2757,9 @@ static void pace(char* ta, unsigned now)
    projectile tick tests a projectile against the units the cell names (0x49B1C7..0x49B275), which
    on the recording machine its unit tick had just moved. A slot is a value only the images
    write (THE UNIT SLOTS AND THE YARD BIT), bounded and alive as cell_put takes it, and
-   independent of the cell's feature, so it goes in whatever the cell's structure; features_put
-   writes the same values again with the rest. */
+   independent of the cell's feature, so it goes in whatever the cell's structure, and stays in a
+   cell whose structure features_put then finds different and leaves alone. Each cell's previous
+   slots are kept for the feature tick (THE PHASES). */
 static void slots_put(const Lv* L, const RecWorld* W)
 {
     unsigned i, k, j;
@@ -2708,8 +2774,11 @@ static void slots_put(const Lv* L, const RecWorld* W)
             if (!c) continue;
             memcpy(slot, img, 4);
             if (slot[0] >= L->nslots || slot[1] >= L->nslots ||
-                (slot[0] && !host_live(L, slot[0])) || (slot[1] && !host_live(L, slot[1])))
+                (slot[0] && !host_live(L, slot[0])) || (slot[1] && !host_live(L, slot[1])) ||
+                s_pend.nslots == PEND_SLOTS)
                 continue;
+            s_pend.slot[s_pend.nslots].cell = c;
+            memcpy(s_pend.slot[s_pend.nslots++].was, c, 4);
             for (j = 0; j < 4; j++)
                 c[j] = (char)(((unsigned char)c[j] & ~s_cval[j]) | (img[j] & s_cval[j]));
         }
@@ -3403,8 +3472,6 @@ static unsigned char  s_taken[0x10000];    /* R9's first pass took it out of its
 static char*          s_ubucket[0x10000];  /* its recorded bucket, resolved                      */
 static unsigned short s_uheads[0x10000];   /* the heads of U's chains                            */
 static unsigned char  s_fseen[TAGPU_LIM_WRECKS];   /* a wreck record on a list already          */
-
-static void counts_log(const char* when, unsigned now);
 
 /* A recorded bucket ID as the host's bucket: the off-map bucket, or a bucket below the
    allocation's count -- taken no larger than the count LoadMap computes from the columns and
@@ -4766,7 +4833,8 @@ static int iteration_read(const Lv* L)
     if (k == 0) tagpu_logf("replay: %s played to its end at GameTime %u: %s", s_name, L->now, why);
     else tagpu_logf("replay: %s cannot be read on from GameTime %u: %s; the units stop here",
                     s_name, L->now, why);
-    counts_log("the recording's end", L->now);
+    s_endlog = 1;
+    s_endat = L->now;
     return 0;
 }
 
@@ -4823,7 +4891,7 @@ static void play(const Lv* L, int first)
         events_put(L, W, now);
         s_st.steps++;
         if (!iteration_read(L)) break;
-        images_put(L, W, now);
+        images_put(L, W, now && !s_pend.full);
     }
 }
 
@@ -4871,6 +4939,10 @@ void tagpu_replay_level_end(void)
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */
     /* both cases log `replay: <name> at its level's end, GameTime <t>`, the line tacli's
        `replay seek` takes as the end of the level a playback was on */
+    if (s_endlog) {                     /* the level ended inside the recording's last step */
+        s_endlog = 0;
+        counts_log("the recording's end", s_endat);
+    }
     if (s_rd && !s_dead && !s_over)
         counts_log("its level's end", ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
     else if (s_rd && !s_dead)

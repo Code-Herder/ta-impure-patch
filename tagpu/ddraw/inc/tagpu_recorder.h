@@ -14,7 +14,7 @@
 void __cdecl tagpu_rec_capture(void);
 
 /* The step's phase, on the game thread: the stubs on the step's calls of the projectile tick
-   (0x495513) and of the falling records (0x495539) call this with 1 and 2 before each call, and
+   (0x495513) and of the explosion tick (0x495539) call this with 1 and 2 before each call, and
    tagpu_rec_capture sets it back to 0. A feature root records the phase it was made in, so that a
    replay makes it at the same point of its own step (tagpu_replay_phase). */
 void __cdecl tagpu_rec_phase(unsigned phase);

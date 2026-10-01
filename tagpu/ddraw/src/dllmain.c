@@ -259,7 +259,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            and the six feature functions -- each refused on a level that plays a recording, and
            inert on every other. Byte-matched, disjoint from every detour above. MUST run before
            tagpu_rec_init(): the recorder's observers on the two replies and on the seven feature
-           entries chain onto these gates. A recording plays only when all nineteen are in. */
+           entries chain onto these gates. A recording plays only when all nineteen are in. Then
+           three observers counting COB's engine writes while a recording plays (the state setter
+           0x48B090, 0x47DAC0, 0x48AAC0), installed whole or not at all. */
         tagpu_puppet_init();
 
         /* tagpu: the COB script-call oracle. No-op unless
@@ -288,7 +290,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            calls of the COB starts by name, the feature code's six calls of the simulation RNG and
            the destructor's explosion call, byte-matched, installed only whole, and disjoint from
            every detour above but the puppet gates on the two replies and the seven feature
-           entries, onto which those observers chain. Each records only while a skirmish is
+           entries and the puppet's COB-write observer on 0x48B090, onto which those observers
+           chain. Then the counts' 21 sink observers, each on its own: a sink whose bytes differ
+           is left out of the counts and logged -- 0x4B08C0 when tagpu_cobtrace.on has armed the
+           oracle there. Each records only while a skirmish is
            recorded (tagpu_recorder.on); the network tests then let the fire functions build the
            0x0D the recorder takes, and change no simulation state. On a level that plays a
            recording the draws answer from it, the explosion plays its feature calls, and the

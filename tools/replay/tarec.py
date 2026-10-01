@@ -129,6 +129,7 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_DEATH: "death", RK_EV_SHOT: "shot",
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
           RK_EV_DEATH_END: "death's end"}
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP = range(7)
+REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12)     # an RK_EV_FEATURE's arguments after its site
 FS_SITES = 6
 
@@ -351,11 +352,11 @@ class World:
         a death's holds its explosion's feature calls and may hold deaths; a draw is inside one."""
         if kind == RK_EV_FEATURE:
             if self.fbracket or (b[0] == FR_TICK and self.deaths) or b[0] >= len(ROOT_ARGS) or \
-                    len(b) != 8 + ROOT_ARGS[b[0]]:
+                    b[1] > REC_PHASE_LATE or b[2] or b[3] or len(b) != 8 + ROOT_ARGS[b[0]]:
                 raise Unreadable("a malformed feature call")
             self.fbracket = b[0] + 1
         elif kind == RK_EV_FEATURE_END:
-            if len(b) != 8 or self.fbracket != b[0] + 1:
+            if len(b) != 8 or self.fbracket != b[0] + 1 or b[1] or b[2] or b[3]:
                 raise Unreadable("a feature call's end with no call open")
             self.fbracket = 0
         elif kind == RK_EV_DEATH:

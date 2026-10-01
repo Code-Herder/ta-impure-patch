@@ -2745,13 +2745,13 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   features, which wait for the step's late phase (next bullet).
 - **The step's phases, at `0x495513` and `0x495539`** (`tagpu_patches.c`, `fix_step_phases`, in the
   fail-closed table): the step's calls of the projectile tick `0x49B720` (`E8 08 62 00 00`) and of
-  the falling records `0x420F30` (`E8 F2 B9 F8 FF`) each call a stub `pushfd; pushad; push phase;
+  the explosion tick `0x420F30` (`E8 F2 B9 F8 FF`) each call a stub `pushfd; pushad; push phase;
   call tagpu_rec_phase; add esp,4; popad; popfd; call <callee>; pushfd; pushad; push phase; call
   tagpu_replay_phase; add esp,4; popad; popfd; ret`, phase 1 and 2. Both callees take no argument
   and end in a plain `ret` (`0x49BE5C`, `0x421147`), and the site pushes nothing before either call
   and reloads what it uses after it (`mov edx,[0x511DE8]` at `0x495518` and `0x49553E`), so the
   stub's call is the site's own. The recorder notes the phase a feature root is made in (0 from
-  the capture to the projectile tick, 1 inside it, 2 from the falling records to the step's end,
+  the capture to the projectile tick, 1 inside it, 2 from the explosion tick to the step's end,
   the feature tick `0x424050` included); a puppet host makes each recorded root at its own phase
   ([*the counts and the step's phases*](#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01)).
 - **The callers: two**, both in the in-play frame callback `0x496790` (a scan of `.text` for `E8`/`E9`

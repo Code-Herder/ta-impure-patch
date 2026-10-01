@@ -3732,8 +3732,9 @@ static int __cdecl sink_472AB0(void* E) { return sink_count(E, 0x00472AB0u, 0); 
 static int __cdecl sink_472C50(void* E) { return sink_count(E, 0x00472C50u, 0); }
 
 /* the sinks' entries [DISASSEMBLED]: the particle spawn 0x420A30; the COB thread 0x4B08C0; the
-   sound entries 0x47F0C0, 0x47F1A0, 0x47F210 (an entry: 0x47F200's `ret 8` at 0x47F202, then
-   padding to 0x47F20F) and 0x47F300; the projectile init 0x49C740 and the three shot paths
+   sound entries 0x47F0C0, 0x47F1A0, 0x47F210 (an entry: 0x47F1A0 ends with its `ret 8` at
+   0x47F202, then padding to 0x47F20F) and 0x47F300; 0x47F210 and 0x47F300 call 0x47F0C0 too
+   (returning to 0x47F279, 0x47F31F), so one sound is counted under both keys, on both machines; the projectile init 0x49C740 and the three shot paths
    0x49CDE0, 0x49CC20, 0x49C9C0; the impact 0x499EB0; and the ten particle emitters with a caller
    besides the two nano emitters (roots above), keyed by their callers: each makes exactly one pool
    allocation 0x470EB0 a call while the console's SFX byte 0x51E608 is clear (the only branch

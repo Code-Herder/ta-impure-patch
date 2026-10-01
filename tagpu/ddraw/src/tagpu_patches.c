@@ -4578,14 +4578,17 @@ static int fix_stacked_air(void)
 }
 
 /* THE STEP'S PHASES. The step 0x495490 calls the projectile tick 0x49B720 at 0x495513 and the
-   falling records 0x420F30 at 0x495539, each with no argument, each returning with a plain `ret`
+   explosion tick 0x420F30 at 0x495539, each with no argument, each returning with a plain `ret`
    (0x49BE5C, 0x421147) [DISASSEMBLED]. Each call goes through a stub: pushfd; pushad; push phase;
    call tagpu_rec_phase; add esp,4; popad; popfd; call the function; pushfd; pushad; push phase;
    call tagpu_replay_phase; add esp,4; popad; popfd; ret. The recorder notes the phase a feature
    root is made in, and on a level that plays a recording the replay makes the recording's roots
    of that phase once the host's own call has returned (tagpu_replay.c, THE PHASES); elsewhere
    both return at once. The site pushes nothing before either call and reloads what it uses after
-   it (0x495518, 0x49553E), and the stub keeps every register and the flags. */
+   it (0x495518, 0x49553E), and the stub keeps every register and the flags.
+   CLASS: in the fail-closed table. Its absence changes no shared state of a live game, but a
+   playing on a host without it would hold its later-phase roots a whole step and a recording
+   made without it would carry every root as the unit tick's, so neither may run without it. */
 static int fix_step_phases(void)
 {
     static const unsigned char proj[5] = { 0xE8, 0x08, 0x62, 0x00, 0x00 };   /* call 0x49B720 */
@@ -4620,7 +4623,7 @@ static int fix_step_phases(void)
     lim_branch(0x00495513, sizeof proj, proj, 0xE8, (unsigned int)(size_t)k[0],
                "the step's phases: the projectile tick's call");
     lim_branch(0x00495539, sizeof fall, fall, 0xE8, (unsigned int)(size_t)k[1],
-               "the step's phases: the falling records' call");
+               "the step's phases: the explosion tick's call");
     return FIX_TABLE;
 }
 

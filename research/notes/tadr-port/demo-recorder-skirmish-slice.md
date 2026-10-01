@@ -1588,18 +1588,22 @@ machine's impact felled or its feature tick burned later in the same step was go
 host's projectiles reached it, and those projectiles flew on (MEASURED below). Now the recorder
 stamps each root with its phase (`RK_EV_FEATURE`'s second byte, `REC_PHASE_UNITS`, `_PROJ`,
 `_LATE`; the writer and the reader refuse a value above `_LATE`), set by stubs on the step's calls
-of the projectile tick (`0x495513`) and of the falling records (`0x495539`) and reset at each
+of the projectile tick (`0x495513`) and of the explosion tick (`0x495539`) and reset at each
 capture. A playing defers a later phase's roots into a store (8,192 events, 2 MB; the bracket
-copied, since the reader moves on) and makes them in recorded order once the host's own call of
-that phase has returned (`tagpu_replay_phase`, *THE PHASES*); the step's feature images follow the
+copied, since the reader moves on) and makes them once the host's own call of that phase has
+returned, each root followed by the events its bracket holds, in recorded order (`tagpu_replay_phase`, *THE PHASES*); the step's feature images follow the
 late phase, since they are the world after every root of the step. Roots inside a death's bracket
 go with the death. A step whose phases did not run is finished, in order, at the next replay step
-or seek; past the store's room the step's remaining roots go in at the replay step, as before; an
-iteration played late goes in whole. **The cells' unit slots** of the next image go in at the
+or seek; past the store's room the held roots and the step's remaining ones go in at the replay
+step, in recorded order, and the step's feature images with them; an iteration played late goes
+in whole. **The cells' unit slots** of the next image go in at the
 replay step, ahead of the deferred features: the host's projectile tick tests the units a cell
 names, which the recording machine's unit tick had just moved. A slot goes in only when it names a
-unit alive on the host, as the feature write takes it; the feature write later puts the same
-values.
+unit alive on the host, as the feature write takes it, and it stays in a cell whose structure the
+feature write finds different and leaves alone. The feature tick, a late root, reads the slots
+too — its reproduction tests the source cell's unit slot (`0x424189`) — and the recording machine's
+tick saw the iteration's, so each early slot's previous bytes are kept and put back just before
+the tick's root, whose input then goes in over them.
 
 **The images gate and the null twin.** `replay-globals.tsv`'s header prose becomes `leave` rows
 (carried `leave`, puppet `-`; `replay-globals-gen.py` accepts them and generates nothing), with
@@ -1686,6 +1690,15 @@ ten minutes or less.
 - **The forest fixtures' live games can end early.** The skirmish wind and the simulation RNG are
   seeded from the performance counter in every run, so a forest fire burns differently each time
   [INFERRED] and the level can end before Tlast, which leaves the fixture's later checks unrun.
+- **Events outside a deferred bracket carry no phase.** A top-level event the recording made after
+  the unit tick — a COB start from an impact's damage, a death from a typed kill-all — goes in at
+  the replay step, before the host's projectile tick, and a death's own feature roots go with it,
+  so a tree such a death fells is gone before the host's projectiles meet it: the lost impacts'
+  class, not seen in the fixtures. A death must go in before the next image's units, which go in at
+  the replay step; giving every event its phase is a format change.
+- **Within one phase the recording's roots go in after the host's whole call**, so a projectile
+  later in the same projectile tick still meets a tree an earlier impact felled on the recording
+  machine [INFERRED: battle-los's 510 against 511, inside the band].
 - **O15** — the COB guard's stop (`CORMSHIP.COB`) — still reaches naval fixtures' round-trip
   processes on some runs; it has a landing of its own.
 - **The scan's residual**: a random word of the globals image can still land in the main block
