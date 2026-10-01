@@ -3861,7 +3861,8 @@ not load TADR, we will replace it" (the owner, 2026-09-26).
 question rather than a takeover one. Impure's own replacement for the recorder — demos, TA
 Forever's replays, its in-game commands — has its own plan, [the demo recorder](tadr-port/demo-recorder.html):
 a skirmish is recorded when `tagpu_recorder.on` asks for it, and `tacli replay play` plays a
-recording back on puppets (its skirmish slice, S1 to S2b, 2026-09-29 and 30). Seeking, rewind,
+recording back on puppets, units, features and wrecks (its skirmish slice, S1 to S3a, 2026-09-29
+and 30). Seeking, rewind,
 the in-game controls and network games are its later landings; until then a network game played
 with Impure records no demo.
 

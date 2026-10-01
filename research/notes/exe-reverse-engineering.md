@@ -1862,6 +1862,13 @@ level that plays a recording, and otherwise runs the stolen bytes and goes on:
 | `0x4956C0`, the debug keys (one caller, `0x4965E1`) | `8B 44 24 04 53` | 4 | always |
 | `0x464C60`, the resource transfer | `8B 44 24 04 53` | 0x10 | always |
 | `0x4326B0`, the save | `81 EC 04 01 00 00` | 0xC | always |
+| `0x424050`, the feature tick | `A1 E8 1D 51 00` | 0 | from the level's first step, outside the replay's own calls ([the features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)) |
+| `0x423C50`, the spawn | `83 EC 28 53 55` | 0x14 | the same |
+| `0x4246B0`, the destroy | `53 8B 0D E8 1D 51 00` | 8 | the same |
+| `0x423550`, FeatureDie | `83 EC 08 53 55` | 0xC | the same |
+| `0x4233A0`, the burn | `8B 44 24 08 8B 4C 24 04` | 0xC | the same |
+| `0x4244B0`, the damage | `8B 0D E8 1D 51 00` | 0x10 | the same |
+| `0x423710`, the swap | `8B 44 24 08 8B 4C 24 04` | 0xC | the same |
 
 **What else the apply rests on** [DISASSEMBLED 2026-09-30]:
 
@@ -1995,6 +2002,205 @@ kill-all needs a type-1/2 owner, CreateFromNetwork a network game].
   MEASURED 2026-09-30: a surrender to the main menu runs no reset (record 0's name was still in
   place at the menu); V (record 4) held `0x54` during a playback, and a build that logged the
   playback's restore showed it put back 0 after the teardown.
+
+### The demo recorder's features: the grid, the wreck pool and the calls that change them [DISASSEMBLED + MEASURED 2026-09-30]
+
+S3a of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s3a-features-and-wrecks)
+records the feature grid and the wreck pool every iteration, and each call into the feature code
+that no other call contains, so that a replay can make the same call to the same end
+(`tagpu_recorder.c`, *The features*; `tagpu_replay.c`, the feature section). This is what that
+rests on. [The wreck pool](#the-wreck-pool-and-a-feature-paid-for-and-left-standing) has the pool's
+functions and their behaviour on a full pool.
+
+**The cell**, 13 bytes, row-major from `[main+0x14287]`, `W = [main+0x14233]` columns by
+`H = [main+0x14237]` rows (`0x481550`):
+
+| Offset | What |
+|---|---|
+| `+0x00`, `+0x02` | slot A and slot B, unit indices: the stamp `0x47CC30` files a unit by `+0x110 & 3`, 1 in A and 2 (airborne) in B, and a building's yard cells in A |
+| `+0x04`..`+0x07` | the height, the 2×2 maximum and minimum, the metal |
+| `+0x08` | the feature def: `0xFFFF` none, `0xFFFE` a footprint cell, `0xFFFD` the border, `0xFFFC` void. Every feature function treats a def from `0xFFFB` up as no feature (`0x4240ED`, `0x4244D3`, `0x4246EC`) |
+| `+0x0A`, `+0x0B` | a footprint cell's rows and columns back to its anchor: the anchor is the cell less `(rows × W + columns)` cells (the destroy, `0x4246C6..0x4246E6`). An anchor whose flags have bit 0 set: its record's index. A GAF anchor without one: the damage it has taken, a `u16` (the damage, `0x42463F..0x424666`) |
+| `+0x0C` | flags: bit 0 the anchor holds a record; bit 1 the yard mark, set by the stamp (`0x47CE32`) and cleared by the clear (`0x47D17C`); bit 2 the draw's, cleared and set again on every cell it draws, every frame (`0x4698A4..0x4698B0`, `0x469936`); bits 3–6 the feature's owner, 10 for none (the spawn, `0x423EF1..0x423F07`) |
+
+**The pool's start.** The level load `0x421F20` allocates the pool (`0x18000` bytes in stock,
+`0x421F29`), zeroes it, links every record to its neighbours, next `i + 1` and prev `i − 1`, with
+−1 at both ends (`0x421F5F..0x421F94`), and sets the active and settled heads to −1 and the free
+head to 0 (`0x421F54..0x421F5A`).
+
+**The feature tick `0x424050`**, one caller (`0x495585`), after the unit tick, the projectiles,
+the explosions and the players phase, in this order:
+
+1. **The idle states.** For each def whose byte at `+0xFE` has bit 1 set, it steps the two
+   sequence states at `+0xCC` and `+0xD8` with `0x4B8B90` (`0x424074..0x4240A1`). Only the draw
+   reads them [INFERRED: no simulation read of `+0xCC..+0xE3` was found].
+2. **The cursor** `main+0x14257`, a cell index, is decremented; when it goes below 0 it is set to
+   `W × H − 1` and the step ends there (`0x4240A3..0x4240D2`).
+3. **Reproduction.** When the cursor's cell holds a def below `0xFFFB` whose anchor holds no record
+   (a GAF feature at rest), it draws `0x4B6C30(100)` (`0x424113`), and when the draw is below the
+   def's `+0xFC` it picks a cell near the cursor: the column is `cursor % W` and the row is
+   `cursor / H` (`0x424137`, `0x424142`) — **the row divides by the height, not the width**, so on
+   a map that is not square it picks a cell in the wrong row. Each coordinate then moves by
+   `0x4B6C30(n) − n/2`, `n` the def's `+0xFD` (`0x424159`, `0x424167`). The spawn
+   `0x423C50(cell, def, 0, 0, 10)` (`0x4241A3`) runs when that cell is on the map, the cursor's
+   cell's slot A is 0 (`0x424189`) and the chosen cell's def is `0xFFFF`. No stock feature has a
+   nonzero `+0xFC`, so none reproduces, but the first draw is made for every GAF feature at rest
+   the cursor passes.
+4. **The active list**, every tick. A 3DO record (`+0xFE` bit 0 clear) with a velocity adds it to
+   its position (`0x424230..0x424250`); then on the ground (`0x485140`) it stops there, velocity
+   zeroed; below the sea level `main+0x1427F` it sinks, `+0x14` 0, `+0x18` `−0x2CCC`, `+0x1C` 0;
+   otherwise it falls by the gravity `main+0x14263` (`0x424253..0x4242B0`). One without a velocity
+   moves to the settled list (`0x4242B8..0x4242C0`). A GAF record, while burning (`+0x2F` bit 0) and
+   on every third tick (`GameTime % 3`, `0x4241AE..0x4241CB`), makes its smoke, which draws the
+   CRT's `rand` (`0x4E4870`, `0x424345`, `0x424379`) and calls the emitter `0x472810`
+   (`0x4243CF`) — presentation; its sequences step (`0x4B8B90`: `0x4243DC`, `0x4243EB`,
+   `0x42446E`, `0x42447D`); a burn ends with the destroy `0x42442F` and the burnt feature's spawn
+   `0x424443`, the spread `0x4239C0` runs when the countdown `+0x2E` runs out (`0x424463`), and the
+   swap `0x423710` when a death or reclaim sequence has ended (`0x424495`).
+
+**The simulation RNG in the feature code** — the six calls of `0x4B6C30(n)` the recorder takes
+(`RK_EV_DRAW`, the site's number in brackets):
+
+| Call | Where | What it decides |
+|---|---|---|
+| `0x4234C2` (0) | the burn `0x4233A0` | the countdown `+0x2E`: `draw(FeatureDef +0xE8 / 2) + FeatureDef +0xE8 / 2` (`0x4234B8..0x4234DE`) |
+| `0x423A38` (1) | the spread `0x4239C0`, the neighbours | `draw(100)` below the neighbour's `+0xFB`, when its `+0xFE` bit 4 is set: `0x4233A0(x, z, 0)` (`0x423A4D`) |
+| `0x423B40` (2) | the spread, down the wind | the same test (`0x423B55`) |
+| `0x424113` (3) | the tick, reproduction | `draw(100)` below `+0xFC` |
+| `0x424159`, `0x424167` (4, 5) | the tick, reproduction | the column's and the row's offsets |
+
+**The damage `0x4244B0(cell, x, z, weapon)`**, `ret 0x10`, callers the area damage `0x49A120`
+(`0x49A626`) and the network handler (`0x455496`):
+
+- it returns at once unless bit 3 of `SoftwareDebugMode` (`main+0x37F2F`) is **set**
+  (`0x4244C2`), and that bit is set in a normal skirmish (MEASURED 2026-09-30: `0x000C`). So the
+  bit the cheat table calls `invulnfeatures` makes features *vulnerable* when set;
+- it skips a def whose word at `+0xFE` has bit 9 set (`0x4244F9`), the indestructible bit the
+  destroy tests as `+0xFF` bit 1 (`0x424715`);
+- in a network game (`0x435100` = 3), a player without `+0x97` bit 0 sends a `0x0F` with the
+  weapon's ID byte to the host and returns (`0x424515..0x424581`);
+- a flamable def (`+0xFE` bit 4) hit by a firestarter weapon (`+0x10B` nonzero) and holding no
+  record burns: `0x4233A0(x, z, 0)` (`0x4245C6`);
+- a 3DO feature's record takes the weapon's `+0xD4` damage into `+0x26` when the record's anchor
+  is `(x, z)` (`0x4245F2..0x424613`); a GAF feature holding a record takes none (`0x4245D8`); a
+  GAF feature at rest adds it to the cell's `+0x0A` (`0x424666`); either dies at the def's `+0xEA`:
+  `FeatureDie(x, z, 0)` (`0x424628`, `0x42465A`).
+
+It uses its `x` and `z` arguments for the burn and FeatureDie, and FeatureDie never checks that
+`0x481550` found a cell (`0x423568..0x42358D`), so the cell and the two coordinates must name the
+same place. A replay bounds all three.
+
+**What each returns** (the recorder's `RK_EV_FEATURE_END`): the spawn and the swap a record's
+address, or 0; the destroy 0 when the cell is no feature after its footprint is followed back
+(`0x4246F2`) or the def is indestructible and `force` is 0 (`0x42471E`), and 1 when it removed
+the feature (`0x42482A`); FeatureDie, the burn and the damage end in their network sends (`0x451DF0`,
+`0x451BC0`), so what they leave in `eax` is not a result.
+
+**Every caller** of the seven functions (MEASURED over `.text`, `call` and `jmp`, and over the
+image for a stored address):
+
+| Function | Called from |
+|---|---|
+| the tick `0x424050` | `0x495585` |
+| the spawn `0x423C50` | the console's feature command `0x4163D0` (`0x416412`, stored at file offset `0x100724`); the schema `0x423254`; the swap (`0x4237A3`, `0x4237BE`); the tick (`0x4241A3`, `0x424443`); the saved game's load `0x424C00` (`0x424FBF`, `0x425050`, `0x425180`); LoadMap (`0x483A7E`, `0x483ADE`, `0x483B38`); the corpse `0x486360` (`0x4863F9`, `0x486434`), whose one caller is the destructor (`0x486D6F`) |
+| the destroy `0x4246B0` | the resurrect (`0x40519E`); a debug key (`0x4163C8`); the swap (`0x423792`, `0x4237B1`); the spawn's footprint (`0x423D6A`); the tick (`0x42442F`); the clear of every feature `0x424840` (`0x42487A`), itself called only by a debug key (`0x416390`) |
+| FeatureDie `0x423550` | the reclaim (`0x423965`); the damage (`0x424628`, `0x42465A`); the saved game's load (`0x42507E`, `0x42509D`); the network handler (`0x4554B0`, `0x4554E4`) |
+| the burn `0x4233A0` | the spread (`0x423A4D`, `0x423B55`); the damage (`0x4245C6`); the saved game's load (`0x4250BB`); the network handler (`0x4554CA`) |
+| the damage `0x4244B0` | the network handler (`0x455496`); the area damage (`0x49A626`) |
+| the swap `0x423710` | FeatureDie (`0x4236F2`); the tick (`0x424495`) |
+
+`0x423BF0(record)`, which destroys a record's anchor and spawns the def's `+0xF6` there, has no
+caller and no stored address anywhere in the image.
+
+**A unit's death and the feature code.** The destructor `0x4866D0` explodes the unit
+(`0x49B000(unit, selfd)`, `ret 8`, at `0x486D50`; it builds the blast on its stack from the unit's
+ExplodeAs `+0x220` or SelfDestructAs `+0x224` and calls `0x499EB0`), and only then spawns its corpse
+(`0x486360` at `0x486D6F`); nothing between the two touches a feature (`0x486D55..0x486D6E` reads
+the death record). The explosion's damage is computed only on the owner's peer: the owner gate
+`0x49A01B..0x49A047` passes by an explosion whose owner's player record has `+0x73` = 3, which
+then is a sound and a picture; otherwise the area damage `0x49A120` damages the features in the
+blast at `0x49A626`. The corpse is made on every peer. `0x49B000`'s other caller is kill-all
+`0x486F10` at `0x486F9E`, outside the destructor. Deaths do not nest: the cargo loop's hit
+(`0x48680B`, `0x489BB0` → `0x489CE0`) marks a passenger dying (`+0x110` bit 14, `0x489EE2`), and
+the unit tick's reaper destroys it later (`0x48AFD1`); no feature function and nothing the
+destructor calls calls the destructor (its callers are `0x486679`, Send_UnitDeath, and the `0x0C`
+case `0x455423`; Send_UnitDeath's are `0x4859A8`, `0x486244`, kill-all's three and the reaper).
+
+**The footprint writers.** The stamp `0x47CC30(unit)`, the clear `0x47D0E0(unit)` and the re-claim
+`0x47C790(unit)`, `ret 4` each, write a cell's unit slots and yard bit only inside the unit's
+footprint, the cell `+0x76`, `+0x78` by the size `+0x7E`, `+0x80` (i16 each; the size is the def's
+`+0x14A`, written by the create at `0x485AA4..0x485AAA` and the saved game's load at `0x487257`):
+the stamp at `0x47CD31..0x47D03A`, the clear at `0x47D105..0x47D23B`, the re-claim at
+`0x47C7C9..0x47CA8E` (a structure's footprint through its yardmap, any other unit's first cell). The stamp files the unit in a sort bucket (`+0x82`, `+0x8E` and the
+bucket's head): a footprint that leaves the grid in the bucket at `[main+0x142B7]`, writing no cell
+(`0x47CC5E..0x47CCA3`, `0x47D073..0x47D0CF`), any other in its position's (`0x47CCA9..0x47CD25`).
+A structure (`+0x110` bit 29) is stamped into slot A through its yardmap with the yard bit, the
+incumbent of a contested cell and the structure marked in `+0x110` bits 26 and 27 by whether the
+incumbent's owner record is type 3 (`0x47CDCA..0x47CE1D`), and the stamp ends by recomputing the
+cells' 2×2 height extremes `+0x05`, `+0x06` around the footprint (`0x483210`, from the heights
+`+0x04` alone) and the passability (`0x440A40`); any other unit goes into slot A or B by `+0x110 & 3`
+and nothing is called. The clear empties the slots that hold the unit by the same branches, a
+structure's with its yard bits and then `0x483210` (`0x47D1DF`), and nothing for a unit in the
+off-grid bucket (`0x47D0F7..0x47D0FF`); it tests nothing about the footprint's place. The re-claim
+does not test the cell `0x481550` returns (`0x47C7D3`). **The clear nests the re-claim**: for a
+unit with `+0x110` bit 26 it walks the buckets around (`0x47D2B9..0x47D2C4`, the walk `0x47E5C0`,
+which calls `[cb]` at `0x47E69F` and `0x47E6EC`) with the callback object at `0x4FD660`, whose
+function `0x47ED30` re-claims each unit it is handed (`0x47ED35`); MEASURED 2026-09-30, the
+battle's playback called a writer inside another 1,200 times, the first of them this way. Nothing else nests: the three are called only directly (none is
+stored as a pointer in the image), no direct path from one reaches another, and `0x4FD660` is passed
+only by the clear, the saved game's `0x47DB20` (`0x47DB4B`, one caller `0x487698`) and `0x47CAC0`,
+which nothing calls. The set-position `0x48A9F0` calls the clear and then the stamp (`0x48AA6B`,
+`0x48AA9A`). **An aircraft's slot B follows its position by an iteration** in
+play: on a puppet host that placed the image's units through the set-position, one cell's slot B
+held the unit the recording put there an iteration later (MEASURED 2026-09-30, the battle, GameTime
+1280: the recording's unit 854, the host's 858), so the puppet host undoes the three writers' grid
+writes (`tagpu_puppet.c`, *The footprint writers*).
+
+**Hazards in stock, recorded rather than fixed:**
+
+- a corpse takes over the velocity its record's last tenant left, since a record is not cleared
+  when it is freed: `0x486360` spawns a corpse on ground above the sea level `main+0x1427F` at
+  `0x486434` and writes no velocity, and one below it at `0x4863F9` and then writes `+0x18` and
+  `+0x1C` (`0x486416`, `0x48641D`, unless the unit def's `+0x241` bit 24 is set), leaving `+0x14`
+  [DISASSEMBLED, not measured];
+- reproduction's row divides by the height (above);
+- a burn ends when its sequence does (the first state's sequence at `+0x0C` cleared,
+  `0x4243F0`): the destroy `0x42442F` with `force` 0, then the spawn of the def's `+0xF6`. An
+  indestructible def is refused by both (`0x42471E`, and the spawn's own clear), so an
+  indestructible feature that burned would keep its record on the active list, retried every tick.
+  The damage does not burn one (`0x4244F9`) but the spread's burn does not test the bit
+  [DISASSEMBLED, not measured]; no stock feature is both flamable and indestructible (131 and 678
+  of them, the install's feature TDFs, 2026-09-30).
+
+**The observers** (`tagpu_recorder.c`, the install; the stub's contract is the event sites'):
+
+| Entry | The bytes it takes (pristine) | Recorded |
+|---|---|---|
+| the tick `0x424050` | `A1 E8 1D 51 00` | a root; its bracket carries the cells that changed since the images |
+| the spawn `0x423C50` | `83 EC 28 53 55` | the cell as `(x, z)`, the def, `v`, which of `pos` and `turn` it was given, and both |
+| the destroy `0x4246B0` | `53 8B 0D E8 1D 51 00` | the cell, `force` |
+| FeatureDie `0x423550` | `83 EC 08 53 55` | `(x, z, reclaimed)` |
+| the burn `0x4233A0` | `8B 44 24 08 8B 4C 24 04` | `(x, z, flag)` |
+| the damage `0x4244B0` | `8B 0D E8 1D 51 00` | the cell, `x`, `z`, the weapon's ID |
+| the swap `0x423710` | `8B 44 24 08 8B 4C 24 04` | `(x, z, reclaimed)` |
+| the stamp `0x47CC30` | `83 EC 18 53 55` | nothing: they mark the unit's footprint |
+| the clear `0x47D0E0` | `83 EC 08 53 8B 1D E8 1D 51 00` | |
+| the re-claim `0x47C790` | `53 55 56 8B 74 24 10` | |
+
+The six draws are `call`s redirected to stubs of 13 bytes (`push [esp+4]; push site; call
+feat_draw; ret 4`), which call `0x4B6C30` themselves unless a replay has armed the draw. The
+destructor's explosion call `0x486D50` (`E8`, to `0x49B000`) is redirected the same way (`push
+[esp+8]` twice; `call rec_blast; ret 8`): a frame while recording, inside which the area damage's
+feature calls are roots, and on a replay's host the place the recording's are made.
+
+MEASURED 2026-09-30, format 3, `scenarios/s3a-forest-fire.json` (two groups of fire-starting units
+in the densest forest of Two Continents, a construction kbot reclaiming a wreck; 4,710 iterations):
+`recorder: 50 event sites in`; 73 damage roots from `0x49A626` outside any death and 23 inside the
+explosions of 7 of the 23 deaths, a reclaim's FeatureDie from `0x423965` and the scenario's own
+spawn; 295 draws, all from the burn (76), the spread (161 to the neighbours, 2 down the wind) and
+reproduction (56); 0 cells changed that no observer had marked. On a puppet host every root was
+made, every draw taken as recorded, no cell or record left for its structure, and every dump equal
+to the recording (*S3a, verified and measured* in the slice note).
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
@@ -3223,11 +3429,11 @@ record exactly once.
 | `0x423550` `FeatureDie(x, y, reclaimed)` | stdcall, `ret 0xC`. Resolves a multi-cell feature's anchor and writes it back over its own `x`/`y` (`0x423580`). A 3DO feature, or a GAF one with no sequence for the event (FeatureDef `+0xC4/+0xC8` reclaim, `+0xBC/+0xC0` death), goes to `0x4236EF`: `push ebx/ebp/esi; call 0x423710`. Otherwise a cell already marked (flags bit 0) returns, and the rest takes a record, stores the def (`+0x2C`), `reclaimed` as bit 1 of `+0x2F`, x/y (`+0x28`/`+0x2A`) and the sequences, and marks the cell (`+0x0A` = the record, flags bit 0) | **pool empty: `0x42361D` sets `eax = count`, `0x423651` `jge 0x4236F7` returns having done nothing** — the fork's engine fix retargets that jge to a stub that reloads `x`/`y` from the arguments and jumps to `0x4236EF` |
 | `0x423710` the swap `(x, y, reclaimed)` | stdcall, `ret 0xC`. A non-anchor cell (def `≥ 0xFFFB`) returns at once. The successor is FeatureDef `+0xF8` (`featurereclamate`) when `reclaimed`, else `+0xF4` (`featuredead`); a marked cell's record bit 1 overrides to `+0xF8`. Then `FEATURES_Destroy 0x4246B0` with force 0 and `0x423C50` for the successor. Force 0 refuses an indestructible def (FeatureDef `+0xFF` bit 1, `0x42471E`), and `0x423C50`'s own clear then refuses too (`0x423D71`), so **an indestructible feature is left as it was**. Two callers: `0x4236F2` (FeatureDie's no-sequence path) and `0x424495` (a sequence that has ended, in `0x424050`) | frees the record through `0x4246B0` |
 | `0x423C50` `SpawnFeatureOnMap(plot, def, pos, turn, v)` | clears the footprint with `0x4246B0` on every occupied cell, then a 3DO def takes a record | **pool empty: `0x423DB9`/`0x423DDF` return 0 with nothing created** — a unit dies without a corpse, and the footprint was already cleared |
-| `0x4233A0` `(x, y, flag)`, a feature starting to burn [INFERRED from the 0xFE event and FeatureDef `+0xB4`] | returns if the def has no `+0xB4` sequence or the cell is marked | pool empty: `0x42340D`/`0x423439` return — the feature does not burn |
+| `0x4233A0` `(x, y, flag)`, the burn: starts the feature's burn sequence, FeatureDef `+0xB4`, and draws its spread countdown `+0x2E` (`0x4234C2`; [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)) | returns if the def has no `+0xB4` sequence or the cell is marked | pool empty: `0x42340D`/`0x423439` return — the feature does not burn |
 | `0x4232A0` | a bare allocator: returns the free head, or the count for "none" | no `E8` caller |
-| `0x424050` | the records' update, one caller `0x495585` [the game tick, INFERRED]; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`) | — |
+| `0x424050` | the feature tick, one caller `0x495585` in the game tick; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`); the whole of it: [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30) | — |
 | `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A GAF feature whose cell is marked returns 0 before anything is paid (`0x423892` the cell's flags bit 0, `0x423898` the def's `+0xFE` bit 0) — **but stock tests the targeted cell, and `FeatureDie` marks only the anchor**, so a reclaim that lands on any other cell of a multi-cell feature while its sequence plays is paid again; the fork's engine fix makes `0x423892` test the anchor ([below](#the-reclaim-paid-twice)). Pays FeatureDef `+0xEC` **energy** (`0x4238FF`, or `0x4238EF` on a branch that scales it by one of two constants chosen by `main+0x37EEE`, for a player whose `+0x73` is 2 [INFERRED: a computer player, by difficulty]) and `+0xF0` **metal** (`0x42395B`, both branches; the order is TADR's `FeatureDefStruct` and our `tagpu_cat.c`, and MEASURED: `Building15` reads energy 0, metal 2900, and pays 2900 metal), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
-| `0x4244B0`, a feature taking damage [INFERRED; callers `0x49A626` (a projectile's impact) and the network handler] | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD` | — |
+| `0x4244B0(cell, x, y, weapon)`, a feature taking damage; callers `0x49A626` (the area damage) and the network handler | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD`; [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30) | — |
 | `0x424C00` the save-game loader's feature half (one caller, `0x43265A` in the game-load routine `0x432610`, which the border fix wraps: "A saved game's features on the map's border") | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | on a full pool an `Animating` record's GAF spawn still succeeds and takes no record, leaving `+0x0A` at 0 (`0x423EE9`); `FeatureDie` finds none (`0x42361B` → `0x42364C` → `0x423651`), and in stock the write lands on record 0, which on a full pool is live. A `3D` record refused on a full pool (`0x423DDF`/`0x423DE7`) writes through a word no spawn wrote — record 0 on the zeroed grid a load gets. Both patched ("A saved feature's state and the wreck record its cell names"). A save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
 | `0x455xxx` the feature event handler | subtype `0xFF` → `FeatureDie(x, y, 1)` (`0x4554B0`), `0xFE` → `0x4233A0(x, y, 1)` (`0x4554CA`), `0xFD` → `FeatureDie(x, y, 0)` (`0x4554E4`) | the receiver's own pool decides |
 

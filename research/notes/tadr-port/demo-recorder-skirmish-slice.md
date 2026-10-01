@@ -13,7 +13,9 @@ carries every mover, order list and PlayerInfo, and the events, each checked aga
 (*S2a, verified and measured*). S2b landed on 2026-09-30: `tacli replay play` plays a recording
 back on puppets, showing everything or one recorded player's view, and every recorded value is
 equal to the recording at every checkpoint (*S2b, verified and measured*). **S3, seeking, is
-next.**
+three landings** (*S3 — seeking*). S3a landed on 2026-09-30: a recording carries the feature grid
+and the wreck pool, and every change to them is replayed through the function that made it
+(*S3a, verified and measured*). S3b, the globals and seeking, is next.
 
 ## How the slice is cut
 
@@ -662,7 +664,216 @@ build compared the wrong tables; a dump now carries a header naming them.
   controllers for the whole level. In a skirmish the one in-play change, the console's AI toggle,
   flips types 1 and 2, which getter 75 answers alike ([the host note](demo-recorder-s2-host.md)).
 
-## S3 to S5
+## S3 — seeking
+
+Planned 2026-09-30, once S2 was in, from two passes over the disassembly: the feature grid and the
+wreck pool with every root that changes them, and the main block and `.data` with what the
+simulation reads across iterations. Their facts go into the engine map with the landing that uses
+them.
+
+### How S3 is cut
+
+Three landings, as S2 was two, each a finished unit verified by running it:
+
+| Landing | Delivers | Verified by |
+|---|---|---|
+| **S3a — features and wrecks** | the map grid's cells and the wreck pool recorded every iteration, with the events at their roots; their changes replayed on puppets through the functions that made them | S1's and S2b's checks with the features in them: every dump equal to the recording, live and on puppets; the capture's cost and size |
+| **S3b — the globals, and seeking** | the main block's and `.data`'s simulation fields (a positive list) and the projectiles recorded, and both whole in every snapshot; the rebuild in place from a snapshot on a puppet host; `tacli replay seek` | a fresh process seeking to a dump's GameTime is equal to that dump; forward and backward seeks; seek times against the target |
+| **S3c — the round trip and the harness** | the restore on a live skirmish, the rules against a vacuous pass and the null twin, `tools/replay/tareplay.py` with its fixtures and tiers, the CLAUDE.md replay gate, the landing command's Step 4b, the nightly tier | the round trip over the fixtures, none passing vacuously |
+
+### S3a — features and wrecks
+
+A recording carries the feature grid and the wreck pool, every call that changed them, and the
+simulation RNG's draws those calls made; playback makes each change through the function that made
+it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)'s.
+
+**What the engine keeps.**
+
+- **The grid**, `[main+0x14287]`: `W = [main+0x14233]` by `H = [main+0x14237]` cells of 13 bytes,
+  row-major (`0x481550`), made per level by LoadMap (`0x48399D`) and freed at `0x483E7E`. It holds
+  the features and the units' footprints together: the two unit slots, the height, the metal, the
+  feature's def, an anchor's record or a footprint cell's way back to its anchor, and the flags.
+- **The wreck pool**, `*(main+0x1420B)`: 2,048 records of `0x30` bytes in stock, 8,192 raised, on
+  three lists linked by signed 16-bit indices: active `main+0x14213`, settled `+0x14217`, free
+  `+0x1421B`. A record holds a 3DO feature for its whole life — a corpse, a heap — and a GAF feature
+  while its burn, death or reclaim sequence plays. A free record's bytes are simulation input: a
+  corpse starts with the velocity its record's last tenant left.
+- **The writers.** A search of `.text` for every operand naming the grid, the pool, its heads or the
+  cursor, and of every caller of the cell getters and the feature functions, finds in play: the
+  features' bytes written by the spawn `0x423C50`, the destroy `0x4246B0`, FeatureDie `0x423550`,
+  the burn `0x4233A0`, the damage `0x4244B0` and the swap `0x423710`, and the draw's flag bit 2;
+  the unit slots and the yard bit by the stamp `0x47CC30`, the clear `0x47D0E0` and the re-claim
+  `0x47C790`; the pool by those, the list move `0x4232F0`, the feature tick `0x424050` and the
+  corpse `0x486360`.
+- **The feature tick `0x424050`**, once an iteration at `0x495585`, after the unit tick, the
+  projectiles, the explosions and the players phase, makes the features' only random decisions, at
+  six calls of the simulation RNG `0x4B6C30`: reproduction, which draws for every GAF feature at
+  rest its cursor passes (no stock feature reproduces), and the fire's spread and a burn's length.
+  The rest is deterministic: the 3DO physics, the sequences' steps, a burn's end and a death's or
+  reclaim's. Its smoke draws the CRT's `rand` and is presentation.
+- **A death's explosion damages features on the owner's machine alone.** The owner gate
+  `0x49A01B..0x49A047` passes by an explosion whose owner is a type-3 player, a picture; the corpse
+  is made on every machine, after the explosion (`0x486D50`, then `0x486D6F`).
+
+**What it records.**
+
+- **The grid**, each cell's 13 bytes less the draw's bit 2: every cell at the level's first capture,
+  handed to the writer whole through the ring (`RK_GRID`), then each cell that changed. The ten
+  writers are observed at their entries, and each marks the cells it can write, a cell wider each
+  way — a def's footprint at the spawn, the feature's at the destroy, FeatureDie, the burn, the
+  damage and the swap, the unit's at the stamp, the clear and the re-claim — and the capture
+  compares the marked cells with its copy. A rotating sweep compares a 64th of the grid each
+  iteration as well: a changed cell that no writer marked is recorded when it finds it, late, and
+  counted in the end record, which names a writer the search missed. Comparing the whole grid every
+  iteration would be 7 MB on Two Continents, and a write watch would see the draw rewrite bit 2 on
+  every drawn cell every frame.
+- **The wreck pool**, compared whole each iteration (7 µs in stock and 26 µs raised, both copies
+  cold, a scratch program on the reference setup): each record that changed, laid out by its def.
+  A 3DO record's model instance is recorded as nothing (the replayed spawn makes its own), a GAF
+  record's two sequence pointers as which of the def's sequences each is, and the rest raw. With it,
+  the lists' three heads and the reproduction cursor, when any changed.
+- **The calls that change them, at their roots.** A feature function called outside every other
+  one is recorded at its entry with its arguments and the call's site, and at its return with its
+  result where it has one (a record for the spawn and the swap, 0 or 1 for the destroy). The
+  feature tick is a root at every call, and carries the cells that changed since the iteration's
+  images, since reproduction reads a unit slot (`0x424189`). The six draws are recorded inside the
+  root that made them. **A death is a bracket** from the destructor's entry to its return; the
+  calls the destructor makes itself — the corpse — are its own and not recorded, and its explosion
+  (`0x486D50`, redirected to a stub) is a frame inside which the area damage's calls are roots.
+- **The header** carries `W`, `H`, the pool's size and the feature defs' count with a hash of their
+  names; a capture that finds the grid, the pool or the count changed ends the recording
+  (`INCOMPLETE: the features were not the ones it began with`). **Snapshots** carry every cell, every
+  record that is not all zero, and the heads.
+
+**Playback.**
+
+- **The host decides nothing about features.** Seven more gates in `tagpu_puppet.c` refuse the
+  feature tick and the six feature functions on a puppet level from its first step (before it the
+  loader places the map's features through the spawn); each names the first call it refuses. A
+  puppet's shots and deaths damage no feature by themselves (the owner gate), and its order
+  handlers do not run.
+- **Each root is made through its function where the recording made it**, with its arguments
+  bounded — a cell by the grid, a def by the defs, a weapon by the weapons; FeatureDie and the
+  damage index the grid with their `x` and `z` and never test the cell they get — and its draws
+  armed, so the six calls take the recording's values while their site and argument agree. The
+  tick's cells go in before the tick. **A death** is replayed as S2b replays it, with the feature
+  gates open, so the host's destructor makes the corpse, and the roots its explosion made are made
+  when the host's destructor has made its explosion, before the corpse. A result that differs, a
+  draw not taken as recorded, a root out of bounds and a death whose explosion the host did not make
+  are counted and the first named.
+- **Then the images**: a cell's and a record's values go in raw; their structure — a cell's def,
+  whether it holds a record and the record or its way back to the anchor, a record's links, anchor,
+  def, flags and sequences, the lists' heads — is compared and never written, since only the
+  engine's functions keep the grid, the pool and its lists consistent with each other. A value that
+  indexes is bounded before it goes in: a unit slot by the unit array, a sequence frame by the
+  sequence's own count (as `0x4B8B30` bounds it), the cursor by the grid's cells.
+- **The unit slots and the yard bit come from the images alone.** The stamp, the clear and the
+  re-claim still run on the host — for S2b's placements through the set-position `0x48A9F0`, the
+  creates and deaths, and the host's own unit tick — because the stamp also files the unit in its
+  sort bucket, which no image writes. Each call's writes to the grid are undone at its return: the
+  recorder's observer at its entry hands the unit to `tagpu_puppet.c`, which saves the footprint,
+  a cell wider each way, and puts the slots and the yard bit back. The three write only inside the
+  footprint; the clear nests re-claims through its bucket walk's callback, so the saved frames are
+  a stack, two deep in play. A deeper call or a footprint wider than 64 cells either way is counted
+  and named. Without it the host's slots ran an iteration ahead of
+  the recording's: an aircraft's recorded slot follows its position by an iteration, and the
+  placement stamps it at the image's position. A recording plays only when the recorder's hooks
+  are in, since the draws, the explosions and this undo are taken there.
+
+**The comparison.** A dump carries the grid, the pool, its heads and the cursor, and
+`tarec.py compare` compares them byte for byte less bit 2, live and with `--puppet`.
+
+**Loosened, as the owner agreed on 2026-09-30:** four rows in `replay-layout.tsv` (the cell's draw
+bit, the 3DO record's model instance, the GAF record's two sequence pointers as IDs), and two
+things not recorded: the animating defs' idle phases (`FeatureDef +0xCC..+0xE3`, which the tick
+steps and only the draw reads [INFERRED]) and the movement classes' passability, which is derived
+from the grid and is not refreshed for cells an image writes (puppets do not pathfind).
+
+**Not the stock save's shape.** The save `0x424890` and its load `0x424C00` carry what a new game
+needs to look the same, not what makes it continue the same: no record indices, list order,
+velocities, frame timers, the shadow sequence's frame, the countdown or the cursor.
+
+#### S3a, verified and measured
+
+MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
+
+- **The fixture**, `scenarios/s3a-forest-fire.json`: six Rocko and two Zeus against six A.K. and
+  four Storm in the densest forest of Two Continents, and a construction kbot reclaiming a
+  laboratory wreck behind them, recorded for 4,710 iterations and ended by a scenario that clears
+  the map. The recording: 4,808 feature roots — 4,710 ticks, 73 weapon impacts' damage outside a
+  death and 23 inside the explosions of 7 of the 23 deaths, the reclaim's FeatureDie and the
+  scenario's own spawn — and 295 draws (the burn's 76, the spread's 163, reproduction's 56); 0 cells
+  changed that no writer had marked. `tarec.py check` explains every change of every step, the five
+  snapshots equal the stream, and three dumps taken live are equal to the recording.
+- **Played on puppets** (`tacli replay play`, full visibility) on the landing build, seven dumps at
+  GameTime 640 to 4,576 are equal to the recording (`tarec.py compare --puppet`): the grid, the
+  pool, its heads and the cursor, with the units. Every root was made and returned what it had,
+  every draw was taken as recorded, every death's explosion made its calls, no cell or record was
+  left for its structure or a value out of bounds, and all 2,295 footprint writes were undone. The
+  host's own feature tick was refused 4,709 times and no other feature call was.
+- **The first build diverged there**, at the first death whose explosion burnt a tree (GameTime
+  1,379): it replayed a death's feature calls by replaying the death, and on the host the owner
+  gate makes a puppet's explosion a picture. The explosion's calls are now roots.
+- **The cost**, the same run: the capture took 135 µs an iteration on average and 351 µs at most,
+  the first 10.5 ms. The stream was 10,209 KB raw and 1,302 KB deflated; 7,077 KB of it is cells,
+  almost all the first iteration's whole grid, and 1,260 KB wreck records, a burning feature's
+  record changing every tick. The five snapshots were 55 MB raw, each with every cell, and the
+  file 4.1 MB.
+- **S2b's three games again**, recorded with the features and played on puppets: the 1,432-unit
+  battle on Town & Country (3,810 iterations: 5,749 feature roots, 106 draws, 1,432 deaths), the
+  carry links (3,090 iterations) and the four-AI game in the stock-limits build (2,010
+  iterations, the 2,048-record pool). Every check is clean, no cell changed that no writer had
+  marked, and every dump is equal on puppets, five, six and five. The battle's first playback
+  found one cell's slot B an iteration ahead of the recording, the cause of the footprint
+  writers' undo (*Playback*); its next found 1,200 of them called inside a clear. With the undo
+  stacked, the battle's playback undid 315,067 footprint writes and missed none.
+- **The cost in the battle**: 569 µs an iteration on average and 2.21 ms at worst (GameTime
+  3,305, 111 KB into the ring), against S2a's 475 µs and 1.15 ms; in the carry-links game 123 and
+  324 µs, in the stock-limits game 118 and 642 µs. The battle came to 68.8 MB for two minutes
+  (S2a: 60.4): its moving units' footprint cells are 33 MB of its 177 MB stream before deflating.
+
+#### What S3a leaves
+
+- **The capture's cost in a battle** grew further past the product page's budget of 0.5 ms on
+  average and 1 ms at worst: 569 µs and 2.21 ms (S2a: 475 µs and 1.15 ms). The pool's comparison
+  is 26 µs of it; the rest of the features' share is not broken down.
+
+- **Every snapshot carries every cell**, 7 MB raw on Two Continents and 21 MB on Seven Islands;
+  deflated, the fixture's five snapshots came to about 2.8 MB of its 4.1. S3b's seeking decides
+  whether a snapshot needs them all.
+- **Passability** is not refreshed for the cells an image writes (above).
+- **A reproducing feature** would replay as recorded, reproduction's row bug included (the engine
+  map); stock has none.
+- **An indestructible feature that burned** would keep its record active for ever, in the
+  recording and in its replay alike; stock has none (the engine map).
+
+### S3b — the globals, and seeking
+
+Planned in detail when S3a is in. From the research:
+
+- **The positive list**, each field read by the simulation in a later iteration: GameTime
+  `main+0x38A47`; the wind `main+0x37EC4..+0x37EE5` less `+0x37EC8`, with Impure's generator; the
+  game end's countdown `main+0x39239` and flags `+0x3923B`; LosType bits 0–2 `main+0x14281`; the
+  simulation RNG's seed `0x51FC88`; the meteor state (`0x5122E8`, `0x512318`, `0x51231C`,
+  `0x512320`, `0x51232C`, `0x512330`, `0x512334`); the pathfinder's budget `0x5119E8..0x511A3B`;
+  `0x51E6C4`; and `0x51E684`/`0x51E688`.
+- **The projectiles**: the count `main+0x141F3` and the pool `*(main+0x141F7)`, `0x6B` bytes a record.
+- **Both images whole in every snapshot**, for S3c's null twin: the main block (`0x3924D` bytes,
+  allocated once by `0x41D920`) and `.data` (`0x501000..0x52B65C`).
+- **The rebuild** on a puppet host, at the step: experiment 2's order, with S2b's appliers for every
+  value, S3a's features, the positive list and the declared tables, and the projectiles,
+  explosions and particles of the moment before cleared.
+- **What a rebuild cannot restore**: the AI, pathfinder and objective objects, which live on the
+  heap outside both images; and where the CRT's `rand` stands, which depends on how many frames were
+  drawn, so the meteor shower (six draws in `0x437DE0`) and `0x490360`'s timer are not reproducible
+  even between two stock peers.
+
+### S3c — the round trip and the harness
+
+Planned in detail when S3b is in: the [completeness note](demo-recorder-completeness.md#the-replay-test-harness)'s
+harness, as decided on 2026-09-29.
+
+## S4 and S5
 
 Each is planned in detail when the landing before it is in. The table above is their scope; the
 [completeness note](demo-recorder-completeness.md)'s [open items](demo-recorder-completeness.md#open-items)

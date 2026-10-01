@@ -285,7 +285,7 @@ Bits [VERIFIED, `tamem.h:1862-1876`]:
 | `drop` | `0x1` | |
 | `cheats` | `0x2` | `CheatsEnabled` — try this first if a `+` command appears inert |
 | `selboxes` | `0x4` | |
-| `invulnfeatures` | `0x8` | |
+| `invulnfeatures` | `0x8` | **The reverse of its name**: features take damage only while it is set — the damage `0x4244B0` returns at once without it (`0x4244C2`) — and it is set in a normal game (MEASURED 2026-09-30: `0x000C` in a skirmish launched with `--defaults`). So `"invulnfeatures": false` makes features invulnerable |
 | `noshake` | `0x10` | **Screen shake off — valuable for `ta-capture` frame comparison** |
 | `clock` | `0x40` | |
 | `doubleshot` | `0x80` | |
