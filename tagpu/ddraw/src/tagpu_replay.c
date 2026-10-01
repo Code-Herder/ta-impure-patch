@@ -3876,23 +3876,29 @@ static unsigned table_keep(const SimDesc* d, unsigned char* keep)
    the host's memory and a heap table is never reallocated here. A count variable is written only
    as its table allows: never a heap table's (its block is sized by it), a live prefix's only within
    the array. */
+/* a count variable the write leaves as the host holds it: never a heap table's (its block is sized
+   by it), a live prefix's only within the array */
+static int count_kept(const SimDesc* d, const RecTable* t)
+{
+    const SimDesc* owner = (!(d->flags & SIMD_HEAP) && d->nrows == 1 && !d->rows)
+                               ? count_owner(d) : NULL;
+    uint32_t v;
+    if (!owner) return 0;
+    memcpy(&v, t->img, t->size < 4 ? 0 : 4);
+    return !owner->nrows || t->size < 4 || v > owner->nrows;
+}
+
 static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCounts* c)
 {
     unsigned char* base = (d->flags & SIMD_HEAP) ? *(unsigned char**)d->addr
                                                  : (unsigned char*)d->addr;
     unsigned host = !base ? 0 : !d->nrows ? *d->rows * d->stride : d->nrows * d->stride;
     unsigned rows = (t->size < host ? t->size : host) / d->stride, r, b, nkeep = 0, changed = 0;
-    const SimDesc* owner = (!(d->flags & SIMD_HEAP) && d->nrows == 1 && !d->rows)
-                               ? count_owner(d) : NULL;
     unsigned char* keep;
     const SimField* f;
-    if (owner) {
-        uint32_t v;
-        memcpy(&v, t->img, 4);
-        if (!owner->nrows || t->size < 4 || v > owner->nrows) {
-            c->kept++;
-            return;
-        }
+    if (count_kept(d, t)) {
+        c->kept++;
+        return;
     }
     keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, d->stride);
     if (!keep) {
@@ -4041,19 +4047,38 @@ static void poison_image(const SimDesc* d, const RecTable* t)
         if (s_pz.p[i].d == d) s_pz.p[i].t = t;
 }
 
+/* The bytes the write must have covered: those its layout does not keep (table_keep: those were
+   never poisoned), in the rows it writes -- a live prefix's rows below its count after the write,
+   no more rows than the recording carries -- of a declaration whose value it does not keep whole
+   (count_kept). A poisoned byte outside them is put back silently: a dead row past a count, or a
+   row the recording does not carry, which the seek's line counts with the values kept. */
 static void poison_check(void)
 {
     unsigned i;
     for (i = 0; i < s_pz.n; i++) {
         Poisoned* q = &s_pz.p[i];
         const unsigned char* was = s_pz.saved + q->at;
-        size_t b, run = 0;
+        unsigned char* keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                                        q->d->stride);
+        size_t b, run = 0, rows = q->bytes / q->d->stride;
         unsigned found = 0;
+        if (!keep) {
+            memcpy(q->base, was, q->bytes);
+            continue;
+        }
+        table_keep(q->d, keep);
+        if (q->d->nrows && q->d->rows && *q->d->rows < rows) rows = *q->d->rows;
+        if (q->t && q->t->size / q->d->stride < rows) rows = q->t->size / q->d->stride;
+        if (q->t && count_kept(q->d, q->t)) rows = 0;
         for (b = 0; b <= q->bytes; b++) {
             int left = 0;
-            if (b < q->bytes && q->base[b] == 0xA5) {
-                unsigned char want = q->t && b < q->t->size ? q->t->img[b] : was[b];
-                left = want != 0xA5;
+            if (b < q->bytes && !keep[b % q->d->stride] && q->base[b] == 0xA5) {
+                if (b / q->d->stride >= rows) {
+                    q->base[b] = was[b];
+                } else {
+                    unsigned char want = q->t ? q->t->img[b] : was[b];
+                    left = want != 0xA5;
+                }
             }
             if (left) {
                 if (!run++) found++;
@@ -4070,6 +4095,7 @@ static void poison_check(void)
             }
             run = 0;
         }
+        HeapFree(GetProcessHeap(), 0, keep);
         if (found) {
             TabCounts n;
             memcpy(n.names, s_sk.rnames, sizeof n.names);
