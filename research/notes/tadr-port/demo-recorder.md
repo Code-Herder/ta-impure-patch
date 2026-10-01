@@ -242,7 +242,10 @@ other players; a multiplayer game is rewound from its finished recording.
 
 The seek and takeover times are targets. A rebuild of 1,227–1,432 units in play measured
 11–47 ms, and a seat's takeover about 1 ms ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)); a real seek also reads the
-recording to its target, and reports both times (the [slice note](demo-recorder-skirmish-slice.md#s3b-verified-and-measured)). If a rebuild at 1,500 units cannot meet
+recording to its target, and reports both times. MEASURED 2026-10-01 in a battle of 1,095 to 1,407 units
+in play: 27–33 ms to a target just after a snapshot and up to 605 ms to one just before the next,
+reading forward from the snapshot being most of it; every seek of S3b's verification took 5 to
+611 ms (the [slice note](demo-recorder-skirmish-slice.md#s3b-verified-and-measured)). If a rebuild at 1,500 units cannot meet
 them, the measurements come back for a decision; the targets are never relaxed silently. The
 snapshot interval is chosen by measurement to meet them.
 

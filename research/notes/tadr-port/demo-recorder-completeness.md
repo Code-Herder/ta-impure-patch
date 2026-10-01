@@ -279,6 +279,19 @@ definition row's count and pointers, each cached piece). Each names the reader i
 Between two seeks the tables hold what the host's own code writes, which differs from the
 recording where that writer is gated on a puppet host (`s_quiet`); S3c sorts each table's writers.
 
+**What playback leaves to the host's engine, and where that stops holding.** Playback's own masks
+(`masks_init`, `tagpu_replay.c`; the recording carries the bytes) leave a few engine bytes the host
+derives from the same history as the recording machine — a unit's water state `+0x10A` and its sight
+stamp's fields `+0x7A`, `+0x7C`, `+0xF8`, and the state byte `+0x10E`, which the state events carry
+— to the host, which writes them itself. Three things cut that history, and in each the replay sets
+them from the recording rather than masking more: a seek (R8b: all three, the stamp through the
+engine's removal and stamp so the sight counters stay exact); a create in a slot dead at T (the
+create event carries the water state its unit took from its slot); and a unit the recording machine
+made after its players phase, which the host meets one step early (`books_put`, at every capture
+point, counting each write it explains as `made` and noting any other). An unexplained write is a
+finding, never grounds for a mask ([the slice
+note](demo-recorder-skirmish-slice.md#s3b-the-globals-and-seeking)).
+
 **What the check does not prove**, by construction of its rules, and so what the review and later
 the harness have to:
 
@@ -363,7 +376,10 @@ thread. S1's capture, which includes this slice, costs about 80 µs a tick in a 
 `tools/replay/tareplay.py` reuses the compatibility suite's instance preparation, job pools, one
 DirectPlay port per game and 0/1/2 exit codes. The trigger `tagpu_replay.trigger` is read on the
 game thread by the replay's frame visit, before the in-play draw and on paused frames too; it knows
-`dump` and `seek` (S3b), and the harness adds `restore` and `play`.
+`dump <name>` (the next capture point), `dump <name> at <T>` (the capture point of GameTime T
+exactly, whatever the speed or pauses, which is how the harness takes a dump at a given tick on a
+puppet host, whose speed keys change nothing) and `seek <T> [dump <name>]` (S3b), and the harness
+adds `restore` and `play`.
 
 **The restore round trip**, at seeded random ticks of a scripted game: pause and take dump A;
 rebuild in place from the recording; let one paused frame recompute; take dump B and compare. The

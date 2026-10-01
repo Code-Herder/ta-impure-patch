@@ -392,6 +392,7 @@ The fills run at the host's first sim step, after the loader's `0x4816A0(1)` at 
 3. The explored map `[main+0x14273]`: set bit `1 << V` in each of its u16 cells.
    - The map is `(W·H·2) >> 2` bytes, W·H/4 cells, with W = `+0x14233` and H = `+0x14237`: the size the allocation (`0x483CF6..0x483CFF`) and `0x4816A0`'s fill (`0x4816B5..0x4816D2`) use, and the saved game's loader `0x484FA0` accepts.
 4. Clear LosType bit 3 so the draw rebuilds the fog grid. `0x4848E0` builds it from `+0x2A43`'s counters when bit 3 is clear.
+5. Ask for the minimap's fog and composite it: `main+0x142F1` |= 4, then `0x466C20`, as the sight rebuild `0x4816A0` does (`0x481905`, `0x48191A`). The composite reads the viewed record's counters only when bit 2 asks, and the engine asks only for the viewed player's own units' stamps, explored-map sets and removals; V owns no unit, so without this V's minimap keeps the loader's composite of the mode's base counters, shaded everywhere under true LOS (MEASURED, [S3b](demo-recorder-skirmish-slice.md#s3b-verified-and-measured)). The replay's `sight_fill` does steps 2–5, at the first step, after a recorded LosType change and at a seek.
 
 **Why none of this is recorded state.**
 
@@ -970,7 +971,7 @@ Taken 2026-09-30: D1 by the owner as recommended (the slice note's *Decided 2026
 - **When UNITINFO is loaded**, before or after the Start's seat fill. This decides where the unit-defs check goes.
 - **Where GameingState `+0x204` (the TNT path) is written.** It is not in the `.ota` reader `0x435DA0`, so the TNT-stem check sits at S-d.
 - **Readers of `+0x2A3C`** beyond the radar pass's "fewer than 2". Also `0x479760`'s test (the engine map: role not traced).
-- **The draw `0x46A16B`**: what a watcher skips; the resource bar is [INFERRED]. Also which HUD elements read `+0x2A42` and would show V's zero resources.
+- **The draw `0x46A16B`**: what a watcher skips [the controlled player's resource bar, INFERRED]. The resource bar itself reads the viewed record (`main+0x2A43`, `0x468E4B`) and clamps what it shows to the storages `+0xA4`/`+0xA8` (`0x468F14..0x468F6C`), which the player init zeroes (`0x46478F`, `0x464795`): so in V's view it shows 0 whatever V's record holds. V's record itself held what the level start `0x465E30` read from V's skirmish settings entry, which the SKIRMISH screen does not fill (MEASURED 1365/16385 and 11/10); the replay zeroes V's energy and metal at the first step since S3b. Which other HUD elements read `+0x2A42` is open.
 - **The explored map** is monotonic (set only) [INFERRED].
 - **The death route** (§2.7) belongs to the events research. So does whether recorded hits are replayed at all.
 - **The cargo loop's order** (§2.2 row 9) is shared with the carried-units research. It is not established whether a mod's unit survives 30 000 damage.

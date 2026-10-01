@@ -2951,7 +2951,8 @@ hook reads: [the engine map](exe-reverse-engineering.md#the-demo-recorders-event
 **Fields we write: none.** It reads the unit array with each unit's mover and order lists, the ten
 player records with their PlayerInfo, the controlled and viewed players, the unit types, the
 sort buckets, GameTime, the game mode and the map's path, the feature grid, the wreck pool, its
-heads and the reproduction cursor, and the feature defs, each bounded by the engine's own count
+heads and the reproduction cursor, the feature defs, and at the create's exit the new unit's water
+state `+0x10A` (the create writes none of it), each bounded by the engine's own count
 ([the engine map](exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
 and every `SIM_STATE` table Impure declares; and, for S3b, every field of the positive list
 `replay-globals.tsv` (main-block offsets checked against the block's `0x3924D` bytes and `.data`
@@ -3065,21 +3066,32 @@ units.
   the records up to the recording's written extent, their IDs resolved and bounded, and zeros up to
   the host's own extent (a refused write empties the pool and clears `main+0x142F7` when it points
   into it); and the explored map with V's bit kept set, LosType bit 3 cleared when it changed;
+  and, before the `write` rows, each live unit's water state `+0x10A` (bounded by its enum) and
+  sight stamp's fields `+0x7A`, `+0x7C`, `+0xF8` (through the removal `0x482090` and the stamp
+  `0x482270`, a circle's radius index bounded by the frame table's count) where they differ from
+  the recording's (`books_put`);
+- at each create: the new unit's water state `+0x10A`, from the create event, bounded by its enum;
+- after each step's images: the cells the feature tick's input wrote, again from the next
+  iteration's world through the same cell write (the whole grid after an overflow);
 - at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit
   (`[V+0x146]`) in every entry of the explored map `[main+0x14273]`, `main+0x14281` bit 3 cleared,
-  and `s_windState` seeded from the recording's first image;
+  then `main+0x142F1` bit 2 and the minimap's fog composite `0x466C20` (also after each LosType
+  change and at a seek); V's energy `+0x8C` and metal `+0x98` = 0; and `s_windState` seeded from the
+  recording's first image;
 - at a seek, on the frame visit, in this order: the projectile count 0 (and `main+0x142F7` when it
   points into the pool); every unit killed through C4's wrap of the destructor `0x4866D0` with
   severity and corpse 0; every temporary sight record's `+0x1C` zeroed, then `0x482130`; LosType
   bits 0–2 and `0x4816A0`; GameTime `main+0x38A47` = T − 1; every unit of iteration T made through
-  `0x485F50` and written by the appliers above; each unit's bucket through the unlink `0x47CB00`
+  `0x485F50` and written by the appliers above; each unit's water state, its state byte through the
+  setter `0x48B090` and its sight stamp through `0x482090` and `0x482270`, from T's image; each unit's bucket through the unlink `0x47CB00`
   (`+0x82` then NULL) and the move `0x47CB60`, and a carried unit's `+0x82`; every cell of the
   feature grid and every wreck record whole, the three heads and the cursor, the host's 3DO model
   instances freed through `0x45AAA0` and made through `0x45A8D0` into `+0x04`; the particles
   destroyed through their own `[vt+0](1)` and removed from the ten layers, the explosion count
   zeroed, the debris records re-initialised and the flying-piece slots zeroed
   (`tagpu_effects_clear`, both builds); the declared tables and the sim files' restores; the
-  globals, the pool and the explored map as above; V's sight; every seat's `+0xF0` from the image
+  globals, the pool and the explored map as above; V's sight with the minimap's composite; the
+  viewed record's radar pass `0x467440` once (contact bits `+0x110` 8–10 and 12); every seat's `+0xF0` from the image
   and V's to the next multiple of 30, every record's `+0xF8` = GameTime, the notices `0x47EE30` and
   the chat lines `0x463C80`; and every seat's `+0x18`;
 - after the teardown: V's PlayerInfo, all `0xB9` bytes, as the Start's fill left them.

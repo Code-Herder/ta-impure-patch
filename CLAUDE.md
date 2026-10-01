@@ -58,10 +58,11 @@ it cannot.
 
 ## Simulation changes stay replayable
 
-The demo recorder keeps every byte of the engine's unit and player records except what one
-exclusion file, `tagpu/ddraw/replay-layout.tsv`, excludes, plus all simulation state Impure
-declares. A simulation change needs no recorder change unless `make` or the replay harness names
-one. The classes, the wrappers and what the build check cannot prove:
+The demo recorder keeps every byte of the engine's unit and player records and of its projectile
+pool except what one exclusion file, `tagpu/ddraw/replay-layout.tsv`, excludes; every field of the
+main block and `.data` that one positive list, `tagpu/ddraw/replay-globals.tsv`, names; the
+explored map; and all simulation state Impure declares. A simulation change needs no recorder
+change unless `make` or the replay harness names one. The classes, the wrappers and what the build check cannot prove:
 `research/notes/tadr-port/demo-recorder-completeness.md`.
 
 - **Declare state where you define it.** In a file marked `sim` in `thread-split.allow`, every

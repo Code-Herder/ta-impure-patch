@@ -2505,6 +2505,181 @@ for good. The seek drops them by setting every `+0x1C` to 0 and calling `0x48213
   silences nothing by flag — it plays no sound because the kills make no explosion and the
   elimination is gated.
 
+**The unit fields playback leaves to the host's engine.** Playback writes a unit's record from the
+image, less the bytes the host derives from the same history as the recording machine. A seek cuts
+that history, and so does a create in a slot whose last tenant was the host's own, so the replay
+sets these from the recording there (the slice note's *R8b* and *the units' bookkeeping*).
+[DISASSEMBLED unless marked]
+
+- **The water state `+0x10A`**, a dword read and stored whole by `0x43DB50` (`0x43DB6B`, `0x43DBED`),
+  its only reader and writer (every `+0x10a]` operand in the text was read: the other 17 are a weapon
+  def's, below). `0x43DB50` takes the unit as its one stack argument (`[esp+0x10]` after three
+  pushes, `0x43DB58`) and returns with `ret 4` (`0x43DBF7`). Its one caller passes the mover in
+  `ecx` as well (`0x43DD62..0x43DD65`: `push edi; mov ecx,esi; call`), and it overwrites `ecx`
+  before reading it (`xor ecx,ecx`, `0x43DB5C`), so the thiscall and the stdcall shapes are one
+  call. Only for walk class 1 or 2 (`+0x110 & 3`) does it compare the height `+0x70` with the sea
+  level byte `main+0x1427F`; any other class gets 0 (`0x43DB75..0x43DB86`). Above the sea it gives
+  4; within 5 below it, 1; `def+0x22C` plus the height at the sea, 2; `def+0x170` plus the height
+  below it, 3 (`0x43DB88..0x43DBC7`, each later test overriding). When no test fires the old value
+  stays (the band `0x43DB78..0x43DBCC`), so the value is history. On a change it starts the unit's
+  COB `setSFXoccupy` with the new value through `0x4B0A70` (`0x43DBD0..0x43DBE8`; the name at
+  `.data 0x505248`). Its one caller is the movement pass `0x43DD20` (`0x43DD65`), called from the
+  unit tick (`0x48AFAA`, inside the owner-type-1/2 block, so never for a puppet host's seats) and
+  from the `0x2C` receiver `0x48B920` (`0x48BA46`, network games only). **The create stores no byte
+  of `+0x10A..+0x10D`** (every store in `0x485A40..0x4861BA` read), so a unit starts with the dword
+  its slot's last tenant left and keeps it while it stays in the band.
+- **A weapon def's `+0x10A..+0x10E`**: a byte the packets carry, which looks like the weapon's ID
+  [INFERRED from that use: `0x49AFCB` compares a projectile's weapon's with a packet byte, `0x49D7E5`
+  and `0x49DAD8` store it in the `0x0D` packet, `0x40954D` reads it through the unit def's weapon at
+  `+0x1EE`], then rendertype, color, color2 and soundtrigger (the TDF parser `0x42E74C..0x42E788`).
+  Its one write, `0x487628`, loops over a unit's three weapon slots (stride `0x1C`) and writes each
+  slot's def. Six readers (`0x409682`, `0x409940`, `0x49DCAB`, `0x49DE6D`, `0x49DFA9`, `0x49E0C2`)
+  were classified as weapon reads by that pattern, not traced one by one [INFERRED].
+- **The state byte `+0x10E`**: the create sets only bit 0, when `def+0x241` bit 18 is set, through
+  the setter (`0x48612F..0x486148`); every other change comes from the setter `0x48B090(mask, on)`
+  (thiscall, `ret 8`), which starts the unit's Activate (`0x48B101`), Deactivate (`0x48B126`),
+  StartBuilding (`0x48B149`) and StopBuilding (`0x48B164`) and sends at `0x48B1F3`.
+- **The sight stamp's fields** `+0x7A`, `+0x7C` (i16) and `+0xF8` (u8) (the walk itself: *The sight
+  emitter*, under *Line of sight at the map's edge* below). Under LosType bit 1
+  the engine keeps one invariant: in the ray fan a unit's byte is non-zero exactly when its fields
+  describe a stamp it made, and in the circle its fields always do. The create's stamp `0x482AC0`
+  (`0x486178`, `0x486312`) has two branches: in the ray fan it zeroes the byte (`0x482B44`) and
+  emits through `0x4825B0` (`0x482B5E`); in the circle it stores the fields and stamps through
+  `0x482270`, then `0x481930` (`0x482B6C..0x482C08`), with no early return and no removal. Without
+  bit 1 it writes nothing (`0x482B3E` → `0x482C0D`). Every record the ray-fan emitter `0x4825B0` is
+  given has y raised to the sea level plus one by a signed compare, so the height it stores inside
+  the grid is at least 1 (`0x48266E`). Its five callers: the sight rebuild `0x4816A0` (`0x481836`;
+  the raise `0x481800..0x481804`), the move wrapper `0x4827B0` (`0x482824`; `0x482817..0x48281B`),
+  the create's `0x482AC0` (`0x482B5E`; `0x482B2A..0x482B2E`), the temporary-record maker `0x482910`
+  (`0x4829F4`; `0x4829AC..0x4829B0`) and `0x482830` (`0x482868`), which nothing calls. The removal's
+  builder **`0x482090(unit)`** (stdcall `ret 4`; one caller, the destructor at `0x486845`) raises
+  the same way (`0x4820F7..0x4820FB`) and builds the record exactly as `0x4827B0` does
+  (`0x482093..0x4820FB` ≡ `0x4827B3..0x48281B`), then calls the removal `0x481D50`. Its `+4` and
+  `+0xC` are the **addresses** of `+0x7A` and `+0xF8` (`lea` at `0x48209D`, `0x4820BA`). The stamp
+  **`0x482270(rec)`** (stdcall, `ret 4` at `0x48259E`) and the removal read only the record's `+0`,
+  `+4`, `+8` and `+0xC` (the owner, the stored words, the def's `+0x202` and `+0x170`, the stored
+  byte), so a removal walks exactly the cells its stamp walked. The stamp writes only the owner's
+  counters (`0x4823A0`, `0x48247F`, `0x482587`) and, for the viewed player's units, clears LosType
+  bit 3 and sets `main+0x142F1` bit 2 (`0x482283..0x4822A1`); it sets no explored bit. In the circle
+  both look the radius up through `0x4B7F30`, which reads the frame table's count at `0x4B7F41`
+  before its NULL test of the table at `0x4B7F48..0x4B7F4A` and answers NULL for an index at or past
+  the count; its two sight callers, the stamp (`0x4824E8`) and the removal (`0x481FC8`), dereference
+  the answer untested (`0x4824ED..0x4824F1`, `0x481FCD..0x481FD1`).
+- **The players phase emits every live unit's sight, every step** (`0x46503C..0x465063`): for each
+  record with `+0x00` non-NULL, `+0x73` 1–3 and `+0x146` ≠ 10 it walks the units `[+0x67, +0x6B]` at
+  stride `0x118` and calls `0x4827B0` (`0x465053`) for each one with `+0x110` bit 28. The move
+  wrapper's other callers: the set-position **`0x48A9F0`** at `0x48AAA0`, only on a change of cell
+  or layer — with the footprint cell `+0x76/+0x78` and the layer `+0x110 & 3` unchanged
+  (`0x48AA35..0x48AA56`) it stores the position alone (`0x48AA58..0x48AA68`), otherwise it clears
+  through `0x47D0E0`, stores, claims through `0x47CC30` and emits — and both paths set `+0x110` bit
+  16 (`0x48AAA5..0x48AAB1`); `0x43DA59`, in the movement pass's placement `0x43D6D0`, behind the
+  owner-type-1/2 gate, for an uncarried unit whose cell or layer changed and whose move was not
+  refused; `0x48B6BF`, in the `0x2C` round robin `0x48B3F0`, network games only; and `0x464DBF`, in
+  `0x464DA0`, a copy of the players phase's loop that nothing references (rel32 calls and jumps,
+  rel8 and `0F 8x` branches and stored dwords all scanned).
+- **A built order node's target.** The constructor `0x43A0C0` sets the reference through `0x4895C0`
+  (`0x43A0E3`), copies the action descriptor's flags into `+0x42` (`0x43A18F..0x43A196`) and, when
+  they lack bit 9 (`0x200`), clears the reference again with `0x489690(NULL)` (`0x43A1B6..0x43A1C1`);
+  the handlers set such a node's target afterwards, through `0x489690`. MEASURED: action `0x19`'s
+  node in the stock fixture names a nanoframe with bit 9 clear.
+
+**Who makes a unit, and in which phase of a step** (facts batch F; every caller of the create
+`0x485F50` found by a byte scan for rel32 calls and jumps and stored dwords: eleven calls, no jump, no
+stored pointer). A step is `0x495490`'s iteration: GameTime, the pump, the capture point `0x4954ED`,
+the players phase `0x49555F`, the rest; then the frame callback `0x496790` runs the keys `0x495E90`
+(`0x496971`), the draw call `0x4969CD` and Impure's scenario applier at `0x4969D2`, and IdleTick's GUI
+dispatch `0x4A9FD0` (`0x499992`) runs between frames.
+
+| Call site | In | Phase |
+|---|---|---|
+| `0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B` | the order handlers BuildingBuild `0x402640`, MobileBuild `0x403A20`, Resurrect `0x404DB0`, VTOL_MobileBuild `0x413D80` | the unit tick, through the order controllers `0x43B7C0`/`0x43BAD0` (`0x48AF98`, `0x48AF9E`), inside the owner-type-1/2 block; the order destructor's dispatch `0x43A21A` cannot reach a create |
+| `0x488700` | GiveUnit `0x488570`, when the receiver's `+0x73` is 1 or 2 (`0x4886B3..0x4886C5`) | from Capture `0x404270` (`0x4046C5`, the unit tick); from the pump's `0x14` case (`0x45577B`, network only); **from the SHARE dialog**: its handler `0x4934B0` (stored at `0x493759`; the gadget SHARUNIT, `0x493663..0x493673`) → `0x4933E0` → `0x493486`, in IdleTick's GUI dispatch, between steps |
+| `0x41794F` | the console's fallback `0x417890` (pushed at `0x4195DF`), which makes a unit by its typed name | a typed command between steps; run only at level 4 (`0x4B79DD..0x4B79F5`), which the keys and the chat pass only under SoftwareDebugMode bit 2, `main+0x37F2F` (`0x496380..0x496393`) |
+| `0x4653D9` | the Deathmatch respawn, in the players phase | **after its owner's emit loop**, then `0x4816A0(1)` (`0x4654EF`); needs ActiveCommanderDeath 2, which the skirmish screen cannot set, and is skipped for a watcher (`0x465154`) |
+| `0x48718E`, `0x488462`, `0x497002`, `0x4977BB` | the saved game's unit restore, the campaign's placed units, the seat setup, the loader body | the loader |
+
+The unit init `0x485A40` has three callers: the create (`0x4860A0`), CreateFromNetwork `0x4861D0`
+(`0x4862B8`; its own callers `0x4553E4`, `0x48B497`, `0x48BA00` are reached only through the pump,
+which returns without `main+0x2A44` bit 0, `0x453D4B..0x453D5C`) and `0x485EF8`, in `0x485E90`, which
+nothing references. So **in a skirmish a unit is made after the players phase of a step only by the
+SHARE give, the console's fallback under SoftwareDebugMode bit 2, and Impure's scenario applier**;
+over direct calls, the rest of the tick after `0x49555F` reaches no create. Not established: whether a
+stock skirmish's SHARE dialog lists an AI ally (the code accepts any active type-1–3 record without
+the watcher bit, `0x49357B..0x4935FA`; not run).
+
+**A unit's COB object lives exactly as long as the unit.** `0x485D40` (callers the create `0x4860A6`,
+CreateFromNetwork `0x4862BE`, and `0x485EFE` in the unreferenced `0x485E90`) allocates `0x544` bytes
+(`0x485D73`), runs the base constructor `0x4B0610`, which zeroes the eight thread records' status
+words at stride `0xA4` from `+0x1C` and the running count `+0x53C`, and stores the object at `+0x9A`
+(`0x485D9F`); the destructor deletes it through `[vt+0x50](1)` (`0x486D8A`) and nulls `+0x9A`
+(`0x486D8D`). No thread record outlives its unit, so a seek's kills and creates leak none.
+
+**A unit's control group across its death and a create.** The destructor calls `0x480250(unit, −1)`
+(`0x4867AC..0x4867AF`), so a slot whose unit died holds `+0xAC` = −1. The unit init calls
+`0x480250(unit, 0)` (`0x485D20..0x485D29`, `ebx` 0): the setter removes the unit from the vector its
+old `+0xAC` names only after finding it there (`0x480258..0x4802C2`), then appends it to group 0 and
+stores `+0xAC` = 0, so every create starts in group 0 whatever its slot held. **The destructor's
+elimination**: at its owner's last unit it makes two game-type tests (`0x486E12..0x486E54`), the
+network elimination `0x450380` for type 3 (`0x486E32`) and the skirmish one `0x47BD70` for type 2
+(`0x486E54`).
+
+**The radar pass `0x467440` and the minimap's fog composite `0x466C20`**, the viewed record's 30-tick
+pass (`0x46556D`, `0x465572`, in the viewed record's iteration of the players phase, `cmp
+bl,[main+0x2A43]` at `0x465565`, behind the deadline `0x46507D..0x465092`). The players phase is
+called at `0x49555F`, after the unit tick's call `0x4954ED`, so on a puppet host the pass of step k
+sees the replay's step k.
+
+- **The radar pass** (no argument, plain `ret` at `0x467836`) runs only when `main+0x2A3C` ≥ 2
+  (`0x46744D`). Its first loop clears bit 12 of every live unit (`0x4674AE`) and sets bits 8–9 in
+  three cases — the owner is the viewed player (`0x4674B4`); the owner is allied and its PlayerInfo
+  has `+0x97` bit 6 (`0x4674C5..0x4674D9`); the viewed record's PlayerInfo has the watcher bit,
+  `+0x9B` bit 6 (`0x4674DB..0x4674EB`), so in a watcher's view every live unit — and clears bits
+  8–10 otherwise (`0x4674EF`). Its later loops add the viewed player's radar picture through the
+  unit walk `0x47E890` (a visitor's first virtual method per unit, the list through `+0x8E`), whose
+  three visitors `0x467840`, `0x467960`, `0x467980` (vtable slots `0x4FD55C`, `0x4FD558`,
+  `0x4FD554`) store `+0x110` alone; its fourth loop writes `+0xB0` and bit 12 only for a type-1 or
+  type-2 owner. **It writes nothing in `main+0x142F1`**: the `or byte [..+0x142F1],2` at `0x46742F`,
+  just before it, is the last instruction of the radar rebuild `0x466DC0` (`ret` at
+  `0x46743D`), which the players phase calls for the viewed record every step (`0x465072`) and the
+  sight rebuild after its composite (`0x48191F`).
+- **The composite** (no argument, plain `ret` at `0x466DB1`) runs only when `main+0x142F1` bit 2
+  asks, and clears the bit (`0x466C29..0x466C44`, the one instruction that clears it). It rebuilds
+  the fogged image `+0x142DF` from the unshaded base `+0x142E3`, the explored map and the viewed
+  record's counters (`0x466D01..0x466D44`): an entry without the viewed bit gets the unexplored
+  colour, an explored entry whose counter is 0 the shaded one, any other the terrain's. It reads the
+  counters `+0x7C` with no NULL test (`0x466D22..0x466D25`). Then it sets bit 1, DrawMinimap's
+  redraw flag (`0x466DA4`). Its two callers are the pass (`0x465572`) and the sight rebuild just
+  after `0x4816A0` sets the bit itself (`0x481905`, `0x48191A`).
+- **`main+0x142F1`**: bit 2 has five setters, each an `or ...,4` — the stamp `0x482270` (`0x4822A1`),
+  the explored-map setter `0x481930` (`0x481D3B`) and the removal `0x481D50` (`0x481D81`), each for
+  the viewed player's units only, the minimap set-up (`0x466A6E`) and the sight rebuild
+  (`0x481905`). A player who owns no unit, as a watcher, therefore never asks after the last
+  rebuild. Bit 1 is set by the composite (`0x466DA4`), the radar rebuild (`0x46742F`) and the camera
+  module's eye writers, and cleared by DrawMinimap `0x466B00` (`0x466B16`; its one caller
+  `0x46961F`); bit 0 is the radar blink's toggle (`0x4665A3..0x4665BB`). Every reader of the word is
+  minimap code: display state.
+- **The images' lifetime**: made by the minimap set-up `0x4669B0` (one caller, the level init's
+  `0x4919C3`), freed by `0x466AA0` (one caller, the teardown's `0x491BAE`); nothing reads them off
+  the game thread (the frame packet copies them in the in-play draw's `after`).
+
+**The sight counters' lifetime.** The player init `0x464700` (one caller, `0x4649B1`) allocates
+`[rec+0x88]` bytes and stores the block at `+0x7C` with its length (`0x46486F..0x46487B`); the
+level's teardown `0x464A00` (one caller, `0x491BA9`) frees every record's block and stores NULL and 0
+(`0x464A24..0x464A38`). So a record outside a level reads as NULL/0, and nothing frees the block
+while the game thread reads it.
+
+**The level start `0x465E30` and a watcher's resources.** Called from the loader body (`0x497ADE`,
+`0x497C15`), it sets each record's energy `+0x8C` and metal `+0x98`, unless `main+0x38D6B` is set
+(`0x465E56..0x465E5E`), by game type (`0x435100`): type 1, GameingState's own table
+(`0x465F22..0x465F6C`); type 2, the skirmish, `(float)` of the settings' ints at `settings + 0x18·i +
+0x10` and `+ 0xC` (`0x465EF5..0x465F1A`, `settings` = `*(main+0x29A0)`); type 3, 100 × the
+PlayerInfo words `+0xA1` and `+0xA3` (`0x465E80..0x465EED`). The SKIRMISH screen does not fill a
+watcher's entry: MEASURED 1365/16385 and 11/10 in V's pair in three processes. The economy `0x401360`
+runs only for a type-1 or type-2 record (`0x465539..0x46555A`), so nothing changes a type-3 record's
+pair afterwards. **The resource bar shows the viewed record clamped to its storages**: it reads
+`main+0x2A43`'s record (`0x468E4B`) and clamps to `+0xA4`/`+0xA8` (`0x468F14..0x468F6C`), which the
+player init zeroes (`0x46478F`, `0x464795`); so a watcher's bar shows 0 whatever its record holds.
+
 **The frame visit's site, `0x4969CD`** (`push ebx; push ebx` at `0x4969CB`, `call 0x468CF0`), the
 in-play frame callback `0x496790`'s draw call. The pause test `0x496920..0x496926` (`IsGamePaused`
 `main+0x38A51`) jumps over only the scheduler `0x495230` and the tick `0x495490`, to `0x496969`, and
@@ -6944,7 +7119,7 @@ standing instrument — not of the call graph, which stops at a function pointer
 | `main+0x1420B` | wreck records, stride `0x30`, **a fixed pool for the level: 2048 in stock, 8192 under the raised limits** ([The wreck pool](#the-wreck-pool-and-a-feature-paid-for-and-left-standing)) | `0x421F20`, through `esi = main+0x141FB`: `MEM_Alloc(0x18000)` at `0x421F29`/`0x421F39`, pointer into `[esi+0x10]` at `0x421F47`, `rep stos` of `0x6000` dwords, then a doubly-linked free list threaded through every record — `0x421F5F..0x421F7E` steps `eax` by `0x30` from 0 to `0x18000` writing `u16 [rec+0x00] = i+1` (next) and `u16 [rec+0x02] = i−1` (prev), so **`0x18000 / 0x30` = 2048 records, 0..2047**; `0x421F8D` terminates the prev chain at record 0 and `0x421F94` the next chain at `+0x17FD0` = record 2047. `[esi+0x18]`/`[esi+0x1C]` (`main+0x14213`/`+0x14217`) are two live-list heads, both −1; `[esi+0x20]` (`+0x1421B`) the free head, 0. The four size constants (`0x421F2A`, `0x421F41`, `0x421F7A`, `0x421F97`) are limits-table sites | `0x4221F1`→`0x4221F8` frees it and `0x422214` **nulls** it, inside the feature teardown, after `0x42219A`'s loop has walked both live lists calling `FreeObjectState 0x45AAA0` on each record's `+0x04` |
 | `main+0x141F7` / `+0x141F3` | projectile array / live count, stride `0x6B` | `0x499A30`: `MEM_Alloc(0x7D64)` = **300 slots** (the `push` operand at `0x499A32`; 3000 under the raised limits), pointer at `0x499A49`, count zeroed at `0x499A6A`; the count is rewritten by the sim at 13 sites (`0x49AF76` … `0x49DF3F`) | `0x499A80`: `MEM_Free`, nulled at `0x499A9A` |
 | `main+0x38D77` | particle layer table, 10 × `{…, begin, end}` | `0x471D90`, pointer at `0x471DCB`; each layer's vector and every object's sub-vector grow **mid-play** (`0x4732E0`) | `0x471DE0`, nulled at `0x471E97` |
-| `main+0x142DB` / `+0x142DF` / `+0x142E3` | minimap composite / fogged base / scaled map (8bpp offscreens) | the minimap build: `0x4669DA`, `0x466A05`, `0x46682E` | `0x466AA0`: `0x466AF5`, `0x466AE9`, `0x466ADD` |
+| `main+0x142DB` / `+0x142DF` / `+0x142E3` | minimap composite / fogged base / scaled map (8bpp offscreens) | the minimap build `0x4669B0` (one caller, the level init's `0x4919C3`): `0x4669DA`, `0x466A05`, `0x46682E` (in `0x466780`, its first call); the fog composite `0x466C20` rewrites `+0x142DF` in place | `0x466AA0` (one caller, the teardown's `0x491BAE`): `0x466AF5`, `0x466AE9`, `0x466ADD` |
 | `main+0x37E37` / `+0x37E3B` | view W / H | `0x49821D` / `0x498237` (the view-size setter), plus the fork's `tagpu_vpwide` from the render thread | — |
 
 The map-free routine also nulls `+0x141FB`, `+0x141FF`, `+0x14203`, `+0x14273`, `+0x14293` and
@@ -9384,13 +9559,15 @@ and `+0x1C6`, **blit the sprite at `0x4C2732` into the private context `[obj+0x1
 screen), and store `+0x1B6/+0x1BA`.
 
 **IT IS A THREAD ENTRY'S CALLEE, NOT A PER-FRAME UPDATE.** Its one caller is `0x4C2A0D`, inside
-`0x4C2990` — and `0x4C2990` is never `call`ed anywhere, because it is *started*:
-`0x4C2A8B` pushes it as the entry point, with a 0x8000 stack and the object as its argument, to
-`0x4B6B20` at `0x4C2A9A` (a three-argument forwarder to `0x4E77D0` — `_beginthread`). The handle
-is stored at `[obj+0x1CA]` and `[obj+0x1CE]` is set to **1** at `0x4C2AAE` on success, cleared at
-`0x4C2C72`. So `+0x1CE` means **"the mouse thread is running"**; this page previously called it
-"an engine display-mode word, not ours to flip" and `tagpu_engine.h` called it "the cursor's hide
-counter". Anything of ours that runs at this site runs **on that thread**, not on the game thread.
+`0x4C2990` — and `0x4C2990` is never `call`ed anywhere, because it is *started*: the cursor init
+`0x4C2BD0` (one caller, the graphics init `0x4B5980` at `0x4B5A67`) zeroes `[obj+0x1CE]` (`0x4C2C72`),
+pushes `0x4C2990` as the entry point with a 0x8000 stack and the object as its argument
+(`0x4C2C80..0x4C2C86`) to `0x4B6B20` at `0x4C2C91` (a three-argument forwarder to `0x4E77D0` —
+`_beginthread`), stores the handle at `[obj+0x1CA]` (`0x4C2C98`) and sets `[obj+0x1CE]` to **1**
+on success (`0x4C2CA0`). The restart `0x4C2A80` (`0x4C2A8B`, `0x4C2A9A`, `0x4C2AAE`) has the same
+shape and no caller. So `+0x1CE` means **"the mouse thread is running"**, and it is running from
+the graphics init to the process's exit ([the mouse thread](#the-engines-mouse-thread-0x4c2990-and-totalas-other-threads-during-play-disassembled-measured-2026-10-01)).
+Anything of ours that runs at this site runs **on that thread**, not on the game thread.
 
 **THE PREVIOUS PASS'S IDENTIFICATION WAS NOT EVIDENCE.** It rested on the hotspot "fingerprint"
 corrected above, which does not exist, and on counters that were gated behind
@@ -10199,30 +10376,128 @@ The bytes, disassembled from the pristine exe:
 |---|---|---|
 | `0x4C63CC` | `bf 4e 49 41 4d` | `mov edi,0x4D41494E` — the tag `'MAIN'` (first char in the high byte) |
 | `0x4C63D2` | `68 e8 a4 52 00` | `push 0x52A4E8` — the lock object |
-| `0x4C63D7` | `ff d5` | `call ebp` — acquire (indirect; the callee is not identified here) |
+| `0x4C63D7` | `ff d5` | `call ebp` — acquire: `InterlockedExchange` (`ebp` loaded from the IAT slot `0x4FC174` at `0x4C63C0`) |
 | `0x4C63DD` | `39 3d ec a4 52 00` | `cmp ds:0x52A4EC,edi` — the current-owner tag against ours |
 | `0x4C6641` | `68 e8 a4 52 00` | release, part 1: `push 0x52A4E8` — the same object |
 | `0x4C6646` | `c7 05 ec a4 52 00 00 00 00 00` | release, part 2: `mov ds:0x52A4EC,0x0` — the owner tag cleared |
 | `0x4C29C8` | `bf 53 55 4f 4d` | `mov edi,0x4D4F5553` — the tag `'MOUS'` |
 | `0x4C29CE` | `68 e8 a4 52 00` | `push 0x52A4E8` — **the same object** |
-| `0x4C29D3` | `ff d3` | `call ebx` — acquire, around the mouse thread's own `call 0x4C25E0` |
+| `0x4C29D3` | `ff d3` | `call ebx` — acquire, `InterlockedExchange` again (`ebx` from `0x4FC174` at `0x4C29BB`), around the mouse thread's own `call 0x4C25E0` |
 
-So `0x52A4E8` is the lock and `0x52A4EC` holds the owner's four-character tag, zeroed on
+So `0x52A4E8` is the lock word and `0x52A4EC` holds the owner's four-character tag, zeroed on
 release. Both tags pack the first character in the most significant byte, which is consistent
-across the two and is the evidence for reading them as `'MAIN'` and `'MOUS'` at all.
-**[INFERRED, from the shape rather than from the callee]** that acquiring is mutually exclusive:
-the acquire is an indirect call this note has not resolved, so what is *verified* is the object,
-the tags, the compare and the release — not the callee's semantics.
+across the two and is the evidence for reading them as `'MAIN'` and `'MOUS'` at all. **The
+protocol** (DISASSEMBLED 2026-10-01, both sides): `InterlockedExchange(0x52A4E8, tag)`; an old value
+of 0 means the lock is taken, and the taker stores its tag in `0x52A4EC` (`0x4C63F1`, `0x4C29F2`);
+an owner tag equal to its own means it already holds it; otherwise it waits on the event
+`*(0x52A4F0)` with `WaitForSingleObject(…, INFINITE)` and exchanges again. Release clears the tag,
+exchanges 0 into the word and sets the event (the mouse thread's `0x4C2A16..0x4C2A2B`). So **the
+owner is the tag word**: the lock word holds the last exchanger's tag, which can be a waiter's while
+another thread holds the lock.
 
 **Why it matters.** `+0x1B6/+0x1BA` have two writers — the flip's cursor draw `0x4C67C0`
 (`0x4C683C`/`0x4C684E`) and `0x4C25E0` at `0x4C284C`/`0x4C2852`, the mouse thread's body, which
-loops every ~1 ms and is up precisely in the shell. Anything reading that pair as two plain
+loops about every 33 ms for the whole process, play included. Anything reading that pair as two plain
 dwords is racing the mouse thread unless it is inside the flip's hold, which spans `0x4C67C0`
 and runs to `0x4C6641`. `tagpu_packet_pub.c`'s shell cursor channel is inside it (and since
 2026-09-23 reads neither word — the packet carries `+0x1B2` alone); its landing
 (2026-09-13) shipped with a different and insufficient argument — "read the position *this* draw
 wrote" — which rules out only the game thread's own previous draw. Corrected 2026-09-14. **A
 future reader of these words outside the flip does not inherit this ordering.**
+
+### The engine's mouse thread `0x4C2990`, and TotalA's other threads during play [DISASSEMBLED + MEASURED 2026-10-01]
+
+Found while the demo recorder's dumps were checked: 2 of 16 stock-fixture dumps summed bytes that
+differed from the file, because the dump wrote a buffer and then read it again for its CRC while
+another thread wrote some of its bytes (the slice note's *S3b, verified and measured*). This is
+that thread, and the inventory that shows it is the only one. Each "no caller" below is a byte scan
+of the whole image for rel32 calls and jumps to the address and for the address as a stored dword.
+
+**The mouse thread runs from the graphics init to the process's exit.** WinMain `0x49E830` builds the
+graphics globals' `+0x202` word with `or ah,2` at `0x49E936`, unconditionally, and calls the graphics
+init `0x4B5980` once (`0x49E977`) with the globals block `0x51F320`, a static in `.data` (`push
+0x51F320` at `0x49E8ED`), which it stores in `0x51FBD0` (`0x4B5990`; MEASURED: the dumps' `.data`
+holds `0x51F320` there). The init turns that bit into the mode argument of the cursor init
+`0x4C2BD0` (`0x4B5A3A..0x4B5A67`), whose mode-1 branch starts `0x4C2990` through `0x4B6B20` at
+`0x4C2C91` and sets `+0x1CE` = 1 (`0x4C2CA0`). Nothing stops it: the stop routine `0x4C2AC0` (it sets
+`+0x1D6` and waits) and the restart `0x4C2A80` have no caller and no stored address.
+
+**Its loop, `0x4C2990..0x4C2A74`**: `SetThreadPriority(GetCurrentThread(), 2)`, THREAD_PRIORITY_HIGHEST
+(`0x4C2990..0x4C2999`); then each iteration takes the deadline `GetTickCount() + 0x21`
+(`0x4C29C1..0x4C29C5`, IAT `0x4FC0DC`), acquires the tagged lock `0x52A4E8` with the tag `'MOUS'`
+(`InterlockedExchange`, IAT `0x4FC174`, `0x4C29BB`, `0x4C29D3`; the protocol is *The tagged lock at
+`0x52A4E8`* above) and stores the owner tag `0x52A4EC` (`0x4C29F2`), draws the cursor when `+0x1B2`
+is non-zero (`0x4C2A02..0x4C2A0D`), releases unless it already held the lock (tag 0 at `0x4C2A1C`,
+`InterlockedExchange(0x52A4E8, 0)` at `0x4C2A22`, `SetEvent([0x52A4F0])` through IAT `0x4FC170`), and
+sleeps to the deadline, at least 1 ms (`0x4C2A31..0x4C2A4A`, `Sleep` at IAT `0x4FC0E0`) — **about
+every 33 ms**, while `+0x1D6` is 0 (`0x4C2A50..0x4C2A5C`).
+
+**Its draw `0x4C25E0(globals)`**, under the lock, returns early when `+0x1D2` is 0 (`0x4C25E8`) or
+when the context acquire `0x4C5FF0` answers 0 (`0x4C25FB`; with GDI mode `+0x44` it copies `+0x50`,
+otherwise it locks the primary surface `[+0x88]` through the DirectDraw vtable's `+0x64`). Past them
+it stores four `.data` words of the globals block: the cursor's position from `GetCursorPos`,
+`+0x196`/`+0x19A` = `0x51F4B6`/`0x51F4BA` (`0x4C2624`, `0x4C262A`), and its drawn position, the
+position less the hotspot, `+0x1B6`/`+0x1BA` = `0x51F4D6`/`0x51F4DA` (`0x4C284C`, `0x4C2852`). The
+game thread writes the same two pairs (WM_MOUSEMOVE; the flip's cursor draw `0x4C67C0`). MEASURED in
+all 403 saved dumps that carry `.data`: `+0x1CE` = 1, `+0x1D2` = 1 and `+0x1B2` ≠ 0, so the draw runs
+in play. Its closure over direct calls (17 functions) names no address of the main block, the explored
+map or the sight counters, and its only absolute `.data` stores are the two tag writes; the
+back-buffer lock's stores in `0x4C5E70`/`0x4C5FA0` are reached only for a NULL context, which the
+mouse thread never passes.
+
+**What it writes during play, then**: the lock word `0x52A4E8` and its owner tag `0x52A4EC`, each twice
+an iteration (`'MOUS'` and 0), and the cursor's two positions when the pointer moves. MEASURED: each
+of the two dumps whose sum differed from its file sums right with those 8 lock bytes in the lock's
+other state and nothing else changed (one held `'MOUS','MOUS'`, the other `0,0`), and the lock was
+held in the file image of 1 of 416 dumps. None of these bytes is recorded (`replay-globals.tsv` names
+them under what it leaves out), so two dumps of one GameTime can differ there.
+
+**`.data` around the locks.** `0x52A4E8..0x52A4FF` holds two tagged locks: the first (word
+`0x52A4E8`, tag `0x52A4EC`, event `0x52A4F0`), which the mouse thread takes and so does game-thread
+code, among it the flip `0x4C63A0`, `0x4B5510`, `0x4BA200`, the cursor-sprite setter `0x4C2B20` and
+`0x4CBAB0`,
+and a second (tag `0x52A4F4`, event `0x52A4F8`, word `0x52A4FC`) used only by `0x4D0F60` and
+`0x4D1480`. The two events are the only `CreateEventA` sites (`0x4C22C3`, `0x4D0A03`). Around them,
+`0x52A41C..0x52A4E0` and `0x52A508..` are read by C runtime functions, and `0x52A4E4` and
+`0x52A500..0x52A505` are static-initialisation guards (`0x463BA0`, `0x4E4140`).
+
+**TotalA's other threads.** `CreateThread` has three call sites (`0x4DA27A`, `0x4E616E`, `0x4E780C`;
+*Thread creation* above):
+
+- **The debug helper's message pump `0x4DA2C0` never starts.** WinMain calls its init `0x4DA1D0` with
+  flag 8 (`push 0x8` at `0x49E83A`), which skips the `CreateThread` at `0x4DA27A`; the init's other
+  caller, `0x4DA3E5` in `0x4DA3E0`, is itself never referenced.
+- **`_threadstartex` `0x4E61A0` serves one thread**, the DirectPlay lobby join `0x451770`, started from
+  `0x4516F5` (`_beginthreadex` `0x4E6120`) by `0x451640`, which waits for it up to 40 s. It writes the
+  network object at `main+0x14` (`0x4C9A70`'s stores), during a lobby-launched join only, before any
+  level [INFERRED: after the 40 s time-out it can still be inside DirectPlay].
+- **The `_beginthread` wrapper `0x4E77D0`** (through `0x4B6B20`) starts the loader (`0x4982CA`) and
+  the mouse thread (`0x4C2C91`; and the restart's `0x4C2A9A`, never run). The loader's body ends with
+  `0x497C62` and its thread with `_endthread` `0x4E7900`, which frees the thread's CRT block under the
+  heap lock and calls `ExitThread`: once per load, not during play. (*The in-play publish point*
+  below measured the loader thread alive at four teardowns; the disassembly shows no path that keeps
+  it alive past `0x497C6C`, so that was a later load's loader or one still between there and
+  `ExitThread` [INFERRED; not re-measured].)
+- **The C runtime's heap lock** is lock 9, the critical section `0x529FC8` through `_locktable`
+  `0x50DF60`, taken by `malloc`/`free`/`calloc` (`0x4E8890`, `0x4E8820`, `0x4E8EA0`); in play no thread
+  but the game thread calls them (the mouse thread's closure holds no CRT function, and Impure's
+  threads use their own C runtime).
+- **Callbacks** handed out: the DirectPlay enumerations (lobby only, synchronous), `EnumWindows`, the
+  window procedure (the window's thread, the game thread), the crash filter `0x4DA2A0`, and two
+  `SetTimer`s with a NULL TIMERPROC in the debug helper's never-made window; `signal()` `0x4E68C0`,
+  which would install a console handler, has no caller. Nothing is handed to DirectSound or winmm.
+
+**Impure code that runs on the mouse thread** (SRC): `fake_GetCursorPos` (`winapi_hooks.c`), the
+primary surface's Lock and Unlock (`ddsurface.c`; their critical section is the render thread's too,
+so the thread's hold can wait for the renderer [INFERRED]), and the two observers chained on the sprite
+blit `0x4B7F90` — `tagpu_fxown.c`'s leaf detour, which reads a DLL byte, and the UI census, which returns
+at once off the game thread (`on_game_thread()`). None stores into engine memory.
+
+**So during play no thread but the game thread writes the main block, the explored map or the sight
+counters** (DISASSEMBLED inventory; MEASURED by the two sums, in which nothing else had changed).
+**Not established**: how long the mouse thread holds its lock per iteration; what Wine's own
+DirectPlay and DirectSound threads write [INFERRED: nothing of TotalA's, which hands them no buffer of
+its images].
 
 ### The in-play publish point, the loader thread and the load flags `main+0x38D75` [VERIFIED by disassembly 2026-09-12; the order MEASURED the same day]
 

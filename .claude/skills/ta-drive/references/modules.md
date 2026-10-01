@@ -619,7 +619,12 @@ block that reads to its last complete block.
   it, and takes the dump at the next tick: `replays/dump-<name>.bin`, the live world at that
   GameTime, logged as `recorder: dump <name> at GameTime <t> -> <path>`; `tarec compare` rebuilds
   the recording to the same GameTime and requires it byte for byte. A paused game takes it at the
-  first tick after the pause.
+  first tick after the pause. **`dump <name> at <T>`** takes it at GameTime T exactly, whatever the
+  speed or pauses — the way to dump a playing at a given tick, since a puppet host's speed keys
+  change nothing and stepping by keys lands on T only sometimes. Write one line, wait for
+  `recorder: dump <name> armed for GameTime <T>` (the game deletes the file when it reads it), then
+  the next; up to 8 at once. `… refused: the level is at GameTime <t>` means T has passed, and
+  `… not taken: …` that a forward seek or the level's end passed it.
 - **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
   recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
 - **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward
@@ -628,8 +633,8 @@ block that reads to its last complete block.
   `replay: <name>: at GameTime <T>, sought from GameTime <h> in <ms> ms (read <ms>, rebuild <ms>)`
   or `replay: <name>: seek to <T> refused: <why>`, and exits 0 when it arrived, 1 when it was
   refused, timed out or nothing was playing, 2 on a usage error. A playback that has played to its
-  end counts as not playing. By hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the
-  same on a playing level.
+  end still seeks; a level that has ended does not (`replay: <name> at its level's end, …`). By
+  hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the same on a playing level.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.
