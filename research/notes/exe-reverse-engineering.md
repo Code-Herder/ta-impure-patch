@@ -1825,8 +1825,9 @@ bit is set in the explored map's u16 there (`0x4677EF..0x467808`); a unit it see
 battle recording, whose own dumps had bit 8 on every unit under LosType 4 (the explored map filled
 by `0x4816A0` since bit 0 is clear).
 
-**`Send_UnitDeath 0x4864B0(unit, …)`**, `ret 8`: its callers are the reaper `0x48AFD1`, the kill-all
-`0x486EB2`, `0x486EF8` and `0x486FB4`, CreateFromNetwork's occupant `0x486244`, and the teardown's
+**`Send_UnitDeath 0x4864B0(unit, …)`**, `ret 8`: its callers are the reaper `0x48AFD1`, the
+console's kills of a type's units `0x486E80` (`0x486EB2`) and of every unit `0x486ED0` (`0x486EF8`),
+kill-all `0x486F10` (`0x486FB4`), CreateFromNetwork's occupant `0x486244`, and the teardown's
 destroy-all `0x485980` (`0x4859A8`), whose one caller is `0x491B95` in the teardown `0x491B60`.
 Impure's scenario tooling calls it as `UNITS_KillUnit`.
 
@@ -2035,7 +2036,8 @@ the explosions and the players phase, in this order:
    sequence states at `+0xCC` and `+0xD8` with `0x4B8B90` (`0x424074..0x4240A1`). Only the draw
    reads them [INFERRED: no simulation read of `+0xCC..+0xE3` was found].
 2. **The cursor** `main+0x14257`, a cell index, is decremented; when it goes below 0 it is set to
-   `W × H − 1` and the step ends there (`0x4240A3..0x4240D2`).
+   `W × H − 1` and reproduction is skipped for that tick (`0x4240A3..0x4240D2`, a jump to the list
+   walk at `0x4241A8`).
 3. **Reproduction.** When the cursor's cell holds a def below `0xFFFB` whose anchor holds no record
    (a GAF feature at rest), it draws `0x4B6C30(100)` (`0x424113`), and when the draw is below the
    def's `+0xFC` it picks a cell near the cursor: the column is `cursor % W` and the row is
@@ -2090,8 +2092,9 @@ It uses its `x` and `z` arguments for the burn and FeatureDie, and FeatureDie ne
 `0x481550` found a cell (`0x423568..0x42358D`), so the cell and the two coordinates must name the
 same place. A replay bounds all three.
 
-**What each returns** (the recorder's `RK_EV_FEATURE_END`): the spawn and the swap a record's
-address, or 0; the destroy 0 when the cell is no feature after its footprint is followed back
+**What each returns** (the recorder's `RK_EV_FEATURE_END`): the spawn a record's address, or 0;
+the swap its spawn's (`0x4237BE`), 0 for no cell, and for a cell holding no feature the cell's
+address with the def in its low half (`0x423734` → `0x4237C3`), which is no result; the destroy 0 when the cell is no feature after its footprint is followed back
 (`0x4246F2`) or the def is indestructible and `force` is 0 (`0x42471E`), and 1 when it removed
 the feature (`0x42482A`); FeatureDie, the burn and the damage end in their network sends (`0x451DF0`,
 `0x451BC0`), so what they leave in `eax` is not a result.
@@ -2124,7 +2127,9 @@ blast at `0x49A626`. The corpse is made on every peer. `0x49B000`'s other caller
 (`0x48680B`, `0x489BB0` → `0x489CE0`) marks a passenger dying (`+0x110` bit 14, `0x489EE2`), and
 the unit tick's reaper destroys it later (`0x48AFD1`); no feature function and nothing the
 destructor calls calls the destructor (its callers are `0x486679`, Send_UnitDeath, and the `0x0C`
-case `0x455423`; Send_UnitDeath's are `0x4859A8`, `0x486244`, kill-all's three and the reaper).
+case `0x455423`; Send_UnitDeath's are `0x4859A8`, `0x486244`, the console's kill of every unit of
+a type `0x486E80` (`0x486EB2`, one caller `0x4174B8`) and of every unit `0x486ED0` (`0x486EF8`, one
+caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
 
 **The footprint writers.** The stamp `0x47CC30(unit)`, the clear `0x47D0E0(unit)` and the re-claim
 `0x47C790(unit)`, `ret 4` each, write a cell's unit slots and yard bit only inside the unit's
@@ -2155,6 +2160,25 @@ play: on a puppet host that placed the image's units through the set-position, o
 held the unit the recording put there an iteration later (MEASURED 2026-09-30, the battle, GameTime
 1280: the recording's unit 854, the host's 858), so the puppet host undoes the three writers' grid
 writes (`tagpu_puppet.c`, *The footprint writers*).
+
+**A cell's slot names a live unit.** The destructor takes the unit off the grid at `0x48682D`
+(`0x47CBD0`: the clear, then the unlink from its bucket, one caller) before it clears the alive bit,
+`+0x110` bit 28, at `0x486DCE`; so between iterations a slot names a unit with bit 28 set. The
+stamp's contest dereferences the incumbent's owner `+0x96` with no NULL test (`0x47CDCA`): a unit
+holds one from its create (`0x485887`, `0x485902`; the other writers are `0x4AA004` and `0x4AA882`)
+and the destructor leaves it, but a slot no unit has taken holds NULL there. The replay writes a
+cell's slots only when each names a unit alive on the host (`cell_put`).
+
+**A GAF record's two sequence states**, `+0x04..+0x0F` and `+0x10..+0x1B` (a `u16` frame, a `u16`
+timer, a `u8` loop flag, the sequence at `+8`, written by `0x4B8B30`): the first is always in use,
+the second — the shadow — only while `+0x2F` bit 2 is set. The burn and FeatureDie set the bit
+exactly when they write the state and clear it otherwise (`0x42348E..0x423498`,
+`0x4236B5..0x4236BF`); the tick steps the state (`0x4243E1`, `0x424473`) and the draw draws it
+(`0x46A6E8`, behind the shadows option `[main+0x37F06]` bit 4 as well) only behind it. While it is
+clear `+0x18` holds whatever the record's last tenant left: a corpse that was sinking leaves its
+velocity `−0x2CCC` there (`0x424292`). The recorder images the pointer as no sequence while the bit
+is clear (`REC_WRECK_SHADOW`, `tagpu_recfmt.h`), and the replay reads a sequence's count only
+through the def's own field.
 
 **Hazards in stock, recorded rather than fixed:**
 
@@ -2187,7 +2211,7 @@ writes (`tagpu_puppet.c`, *The footprint writers*).
 | the clear `0x47D0E0` | `83 EC 08 53 8B 1D E8 1D 51 00` | |
 | the re-claim `0x47C790` | `53 55 56 8B 74 24 10` | |
 
-The six draws are `call`s redirected to stubs of 13 bytes (`push [esp+4]; push site; call
+The six draws are `call`s redirected to stubs of 17 bytes (`push [esp+4]; push site; call
 feat_draw; ret 4`), which call `0x4B6C30` themselves unless a replay has armed the draw. The
 destructor's explosion call `0x486D50` (`E8`, to `0x49B000`) is redirected the same way (`push
 [esp+8]` twice; `call rec_blast; ret 8`): a frame while recording, inside which the area damage's

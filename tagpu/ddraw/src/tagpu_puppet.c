@@ -56,7 +56,8 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
    - Send_UnitDeath 0x4864B0(unit, kind), `ret 8`: the unit tick's reaper (0x48AFD1) calls it for
      every owner once +0x110 bit 14 is set, and the recording writes that bit (tagpu_replay.c,
      THE APPLY); a puppet dies through its recorded death, replayed through the destructor
-     0x4866D0 itself. Its other callers -- the kill-all's (0x486EB2, 0x486EF8, 0x486FB4), the
+     0x4866D0 itself. Its other callers -- the console's kills of a type's units and of every unit
+     (0x486EB2, 0x486EF8) and kill-all's (0x486FB4), the
      occupant CreateFromNetwork destroys (0x486244) and tooling's kills -- are refused for a puppet
      too. The teardown's walk over every unit (0x485980 at 0x491B95) comes after its wrap's entry
      has ended the mode (tagpu_reclaim.c), so it destroys every unit as ever.

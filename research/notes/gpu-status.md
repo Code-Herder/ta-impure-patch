@@ -3024,8 +3024,8 @@ units.
   explosion's calls made inside the host's destructor, from the recorder's stub at `0x486D50`;
 - each step: every cell of the feature grid and every record of the wreck pool the recording
   changed, values only under `replay-layout.tsv`'s classes (a cell's def, record and anchor links,
-  and a record's links, anchor, def, flags and sequences are compared, never written), and the
-  reproduction cursor `main+0x14257` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30));
+  and a record's links, anchor, def, flags and sequences are compared, never written; a cell's
+  unit slots go in only when each names a unit alive on the host), and the reproduction cursor `main+0x14257` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30));
 - at every return of the stamp `0x47CC30`, the clear `0x47D0E0` and the re-claim `0x47C790`, the
   unit slots `+0x00`, `+0x02` and the yard bit `+0x0C` bit 1 of the unit's footprint cells, a cell
   wider each way, put back as they were at the call's entry (`tagpu_puppet.c`, *The footprint

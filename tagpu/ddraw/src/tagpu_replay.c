@@ -2004,7 +2004,13 @@ static int cell_put(const Lv* L, char* c, const unsigned char* img, unsigned x, 
         return 0;
     }
     memcpy(slot, img, 4);
-    if (slot[0] >= L->nslots || slot[1] >= L->nslots) {
+    /* a slot is a unit the engine follows from the cell: the stamp's contest dereferences the
+       incumbent's owner at +0x96 with no NULL test (0x47CDCA), which a slot no unit has taken
+       holds as NULL. A recorded slot names a live unit, the destructor taking the unit off the
+       grid (0x48682D) before it clears the alive bit (0x486DCE), so a slot goes in bounded and
+       alive */
+    if (slot[0] >= L->nslots || slot[1] >= L->nslots ||
+        (slot[0] && !host_live(L, slot[0])) || (slot[1] && !host_live(L, slot[1]))) {
         s_fst.cbad++;
         return 0;
     }
@@ -2037,17 +2043,21 @@ static void wreck_put(const Lv* L, unsigned i, const unsigned char* img)
     const char* d;
     const unsigned char* m;
     int gaf;
+    uint32_t id[2] = { REC_ID_NULL, REC_ID_NULL };
     unsigned k;
     memcpy(&def, img + REC_WRECK_DEF, 2);
     d = fdef_of(L, def);
     gaf = d && (d[FD_MASK] & 1);
     m = gaf ? s_wgval : s_w3val;
+    if (gaf) {                       /* the IDs as the recorder takes them (REC_WRECK_SHADOW) */
+        id[0] = seq_id(d, *(const uint32_t*)(w + REC_WRECK_SEQ));
+        if (w[REC_WRECK_FLAGS] & REC_WRECK_SHADOW)
+            id[1] = seq_id(d, *(const uint32_t*)(w + REC_WRECK_SEQ2));
+    }
     if (memcmp(w, img, 4) || memcmp(w + REC_WRECK_ANCHOR, img + REC_WRECK_ANCHOR, 6) ||
         w[REC_WRECK_FLAGS] != (char)img[REC_WRECK_FLAGS] ||
-        (gaf && (seq_id(d, *(const uint32_t*)(w + REC_WRECK_SEQ)) !=
-                     *(const uint32_t*)(img + REC_WRECK_SEQ) ||
-                 seq_id(d, *(const uint32_t*)(w + REC_WRECK_SEQ2)) !=
-                     *(const uint32_t*)(img + REC_WRECK_SEQ2)))) {
+        (gaf && (id[0] != *(const uint32_t*)(img + REC_WRECK_SEQ) ||
+                 id[1] != *(const uint32_t*)(img + REC_WRECK_SEQ2)))) {
         if (!s_fst.wstruct++)
             note("replay: GameTime %u: wreck record %u differs from the recording in its links, "
                  "anchor, def, flags or sequences: its structure is the engine's, and it is left "
@@ -2055,12 +2065,17 @@ static void wreck_put(const Lv* L, unsigned i, const unsigned char* img)
         return;
     }
     if (gaf) {
+        /* A state's frame is bounded by its sequence's count, and the count is read through the
+           def's own field that the ID names, never through the record: a record's pointer is
+           whatever its last tenant left until a state is in use (REC_WRECK_SHADOW). */
         static const unsigned char state[2] = { WR_STATE1, WR_STATE2 };
         for (k = 0; k < 2; k++) {
-            const uint16_t* seq = *(const uint16_t* const*)(w + state[k] + 8);
+            const uint16_t* seq;
             uint16_t frame;
+            if (id[k] < 1 || id[k] > REC_SEQ_FIELDS) continue;
+            seq = *(const uint16_t* const*)(d + REC_SEQ_FIRST + 4 * (id[k] - 1));
             memcpy(&frame, img + state[k], 2);
-            if (seq && frame >= *seq) {
+            if (frame >= *seq) {
                 s_fst.wbad++;
                 return;
             }

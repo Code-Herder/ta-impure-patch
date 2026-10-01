@@ -730,14 +730,17 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
 - **The wreck pool**, compared whole each iteration (7 µs in stock and 26 µs raised, both copies
   cold, a scratch program on the reference setup): each record that changed, laid out by its def.
   A 3DO record's model instance is recorded as nothing (the replayed spawn makes its own), a GAF
-  record's two sequence pointers as which of the def's sequences each is, and the rest raw. With it,
+  record's two sequence pointers as which of the def's sequences each is — the second, the shadow,
+  only while the record uses it (`+0x2F` bit 2) and as none otherwise, since until then it holds
+  what the record's last tenant left — and the rest raw. With it,
   the lists' three heads and the reproduction cursor, when any changed.
 - **The calls that change them, at their roots.** A feature function called outside every other
   one is recorded at its entry with its arguments and the call's site, and at its return with its
   result where it has one (a record for the spawn and the swap, 0 or 1 for the destroy). The
   feature tick is a root at every call, and carries the cells that changed since the iteration's
   images, since reproduction reads a unit slot (`0x424189`). The six draws are recorded inside the
-  root that made them. **A death is a bracket** from the destructor's entry to its return; the
+  root that made them. **A death is a bracket** from the destructor's entry to its return (one the
+  capture's frame stack has no room for is not recorded, and ends the recording); the
   calls the destructor makes itself — the corpse — are its own and not recorded, and its explosion
   (`0x486D50`, redirected to a stub) is a frame inside which the area damage's calls are roots.
 - **The header** carries `W`, `H`, the pool's size and the feature defs' count with a hash of their
@@ -765,8 +768,11 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
   whether it holds a record and the record or its way back to the anchor, a record's links, anchor,
   def, flags and sequences, the lists' heads — is compared and never written, since only the
   engine's functions keep the grid, the pool and its lists consistent with each other. A value that
-  indexes is bounded before it goes in: a unit slot by the unit array, a sequence frame by the
-  sequence's own count (as `0x4B8B30` bounds it), the cursor by the grid's cells.
+  indexes is bounded before it goes in: a unit slot by the unit array and by its unit being alive
+  on the host, since the stamp's contest follows a slot to its unit's owner with no test
+  (`0x47CDCA`); a sequence frame by the sequence's own count (as `0x4B8B30` bounds it), read
+  through the def's field the recorded ID names and never through the record; the cursor by the
+  grid's cells.
 - **The unit slots and the yard bit come from the images alone.** The stamp, the clear and the
   re-claim still run on the host — for S2b's placements through the set-position `0x48A9F0`, the
   creates and deaths, and the host's own unit tick — because the stamp also files the unit in its
@@ -784,7 +790,8 @@ it. The engine facts are [the engine map](../exe-reverse-engineering.md#the-demo
 `tarec.py compare` compares them byte for byte less bit 2, live and with `--puppet`.
 
 **Loosened, as the owner agreed on 2026-09-30:** four rows in `replay-layout.tsv` (the cell's draw
-bit, the 3DO record's model instance, the GAF record's two sequence pointers as IDs), and two
+bit, the 3DO record's model instance, the GAF record's two sequence pointers as IDs; the second is
+none while the record does not use it, when the engine does not read it), and two
 things not recorded: the animating defs' idle phases (`FeatureDef +0xCC..+0xE3`, which the tick
 steps and only the draw reads [INFERRED]) and the movement classes' passability, which is derived
 from the grid and is not refreshed for cells an image writes (puppets do not pathfind).
@@ -796,6 +803,13 @@ velocities, frame timers, the shadow sequence's frame, the countdown or the curs
 #### S3a, verified and measured
 
 MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
+
+- **After the landing review's fixes** (the layout's hash changed, so every fixture was recorded
+  again): the forest fire, the battle, the carry links, a naval battle (`scenarios/naval-push.json`,
+  213 deaths, 42,649 wreck records written) and the stock-limits game each recorded and played on
+  puppets; every live and puppet dump EQUAL, 0 cells and 0 records left for their structure or
+  for a bad value, every footprint write undone. The battle's capture: 564 µs on average, 1.64 ms
+  at worst.
 
 - **The fixture**, `scenarios/s3a-forest-fire.json`: six Rocko and two Zeus against six A.K. and
   four Storm in the densest forest of Two Continents, and a construction kbot reclaiming a

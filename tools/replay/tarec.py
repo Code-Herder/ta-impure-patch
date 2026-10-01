@@ -88,7 +88,8 @@ END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full
                5: "INCOMPLETE: the level changed without a teardown",
                6: "INCOMPLETE: the game stopped being a skirmish",
                7: "INCOMPLETE: an order list could not be recorded",
-               8: "INCOMPLETE: the features were not the ones it began with"}
+               8: "INCOMPLETE: the features were not the ones it began with, or their calls "
+                  "nested deeper than the capture tracks"}
 
 
 class Unreadable(Exception):

@@ -65,6 +65,13 @@
 #define REC_WRECK_ANCHOR  0x28    /* u16 x, u16 z: the cell the record belongs to                 */
 #define REC_WRECK_DEF     0x2C    /* u16: the def, whose FeatureDef +0xFE bit 0 says GAF          */
 #define REC_WRECK_FLAGS   0x2F
+#define REC_WRECK_SHADOW  0x04    /* REC_WRECK_FLAGS bit 2: the second state is in use. The burn
+                                     and FeatureDie set it exactly when they write that state
+                                     (0x42348E, 0x4236B5) and clear it otherwise; the tick
+                                     (0x4243E1, 0x424473) and the draw (0x46A6E8) read the state
+                                     behind it alone. While it is clear, REC_WRECK_SEQ2 holds what
+                                     the record's last tenant left -- a sinking 3DO corpse's
+                                     velocity (0x424292) -- and images as REC_ID_NULL         */
 #define REC_SEQ_FIRST     0xAC    /* the FeatureDef's GAF sequence pointers, a dword each: a
                                      sequence's ID is its field's (offset - 0xAC) / 4 + 1     */
 #define REC_SEQ_FIELDS    8

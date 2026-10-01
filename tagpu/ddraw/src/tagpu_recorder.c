@@ -1085,7 +1085,7 @@ static void rec_end(Rec* r, unsigned reason)
                reason == REC_END_LEVEL    ? "INCOMPLETE, the level changed without a teardown" :
                reason == REC_END_ORDERS   ? "INCOMPLETE, an order list could not be recorded" :
                reason == REC_END_FEATURES ? "INCOMPLETE, the features are not the ones it began "
-                                            "with" :
+                                            "with, or their calls nested deeper than it tracks" :
                                             "INCOMPLETE, the game stopped being a skirmish", s_bad,
                off, r->uncredited, r->oodd);
     feat_log(r);
@@ -1889,6 +1889,7 @@ static unsigned player_of_netid(const char* ta, unsigned netid)
    the array none too. The image is the victim's as the destructor finds it: the reaper runs after
    the unit's own movement step, so the iteration's image is a step early for the wreck and the
    blast. */
+static int death_room(Rec* r);
 static int death_enter(Rec* r, void* E, unsigned id);
 
 static int __cdecl ev_death(void* E)
@@ -1902,6 +1903,7 @@ static int __cdecl ev_death(void* E)
     msg = (const unsigned char*)PTR(ARG(E, 4));
     memcpy(&slot, msg + 1, 2);
     if (!slot || slot >= r->L.nslots || !unit_live(&r->L, slot)) return 0;
+    if (!death_room(r)) return 0;
     memcpy(&ks, msg + 7, 2);
     id = slot + 1u;
     kid = ks && ks < r->L.nslots ? ks + 1u : 0;
@@ -2348,7 +2350,8 @@ static void wreck_image(const Feat* f, const unsigned char* defs, const unsigned
     }
     for (k = 0; k < REC_WRECK_BYTES; k++) img[k] = raw[k] & s_wgmask[k];
     for (k = 0; k < s_nwgids; k++) {
-        unsigned id = seq_id(d, *(const unsigned*)(raw + s_wgids[k]));
+        unsigned id = s_wgids[k] == REC_WRECK_SEQ2 && !(raw[REC_WRECK_FLAGS] & REC_WRECK_SHADOW)
+                    ? REC_ID_NULL : seq_id(d, *(const unsigned*)(raw + s_wgids[k]));
         memcpy(img + s_wgids[k], &id, 4);
     }
 }
@@ -2791,8 +2794,11 @@ static void* __cdecl feat_leave(unsigned* regs)
     if (fr->recorded && (r = ev_rec()) != NULL && r->feat) {
         unsigned char b[8];
         unsigned v = regs[7];
-        /* 0x423C50 and 0x423710 hand back the record they took, 0x4246B0 a 0 or 1 (0x4246F2,
-           0x42471E, 0x42482A); the others end on a network send's or a field's value */
+        /* 0x423C50 hands back the record it took or 0, and 0x423710 its spawn's, or 0 for no
+           cell, or a value that is no record for a cell holding no feature (0x423734 ->
+           0x4237C3), which wreck_id makes REC_ID_BAD on both machines; 0x4246B0 a 0 or 1
+           (0x4246F2, 0x42471E, 0x42482A); the others end on a network send's or a field's
+           value */
         if (fr->root == FR_SPAWN || fr->root == FR_SWAP) v = wreck_id(r->feat, v);
         else if (fr->root != FR_DESTROY) v = 0;
         b[0] = fr->root;
@@ -2803,18 +2809,23 @@ static void* __cdecl feat_leave(unsigned* regs)
     return (void*)(size_t)fr->ret;
 }
 
+/* Whether the stack has room for a death's frame, asked before its RK_EV_DEATH goes in, so that no
+   death is published without the bracket that closes it. Without room the next capture ends the
+   recording. */
+static int death_room(Rec* r)
+{
+    if (s_fdepth < FDEPTH_MAX) return 1;
+    r->feat->broken = 1;
+    return 0;
+}
+
 /* The destructor's entry, once its RK_EV_DEATH is in: the death is a frame, so the feature calls
    it makes itself are its own (*The features*, A UNIT'S DEATH). Nothing about the grid is marked
    here: each call it makes marks its own. */
 static int death_enter(Rec* r, void* E, unsigned id)
 {
-    FFrame* fr;
-    if (!r->feat) return 0;
-    if (s_fdepth >= FDEPTH_MAX) {
-        r->feat->broken = 1;
-        return 0;
-    }
-    fr = &s_fstack[s_fdepth++];
+    FFrame* fr = &s_fstack[s_fdepth++];
+    (void)r;
     fr->ret = ARG(E, 0);
     fr->id = id;
     fr->root = FR_DEATH;
