@@ -3749,11 +3749,13 @@ static int __cdecl before_cursor(void* entry_esp)
            THE DRAWN POSITION +0x1B6/+0x1BA IS NOT READ HERE, and a hook that
            wants it needs the engine's lock: those words have a SECOND writer —
            0x4C284C and 0x4C2852, inside 0x4C25E0, the body of the engine's
-           mouse thread, which loops every ~1 ms and is up precisely in the
-           shell. The engine serialises the two: the flip takes its tagged
-           mutex at 0x52A4E8 before anything else (0x4C63CC `mov edi,'MAIN'`,
-           `push 0x52A4E8`, `call ebp` at 0x4C63D7) and holds it across
-           0x4C67C0 and this hijack, releasing only at 0x4C6641; the mouse
+           mouse thread, which loops about every 33 ms (GetTickCount() + 0x21
+           at 0x4C29C5, then Sleep to it) for the whole process, play
+           included: nothing calls its stop 0x4C2AC0. The engine serialises the
+           two: the flip takes its tagged mutex at 0x52A4E8 before anything else
+           (0x4C63CC `mov edi,'MAIN'`, `push 0x52A4E8`, `call ebp` at 0x4C63D7)
+           and holds it across 0x4C67C0 and this hijack, releasing only at
+           0x4C6641; the mouse
            thread takes the SAME lock around its own draw (0x4C29C8
            `mov edi,'MOUS'`, `push 0x52A4E8`, `call ebx` at 0x4C29D3).
            Verified by disassembly 2026-09-14. A read made inside this hijack

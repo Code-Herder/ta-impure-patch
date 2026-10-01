@@ -1929,11 +1929,16 @@ static unsigned      s_dump_long;           /* this dump's records refused for a
 static unsigned char s_dump_stage[4 + DUMP_BODY_MAX + 3];
 
 /* One read. The main block, .data, the explored map and the sight counters are read in place, and
-   another thread can write some of their bytes while the dump runs (MEASURED 2026-10-01: 2 of 16
-   stock-fixture dumps summed bytes that differed from the file). So each record is copied once
+   another thread writes .data while the dump runs: the engine's mouse thread 0x4C2990 takes and
+   releases the tagged lock 0x52A4E8, with its owner tag 0x52A4EC, about every 33 ms and writes the
+   cursor's position (0x51F4B6, 0x51F4BA, 0x51F4D6, 0x51F4DA) under it (DISASSEMBLED
+   0x4C2990..0x4C2A74; MEASURED 2026-10-01: each of the 2 of 16 stock-fixture dumps whose sum
+   differed from the file sums right with those 8 lock bytes in the lock's other state, and with
+   nothing else changed). So each record is copied once
    into s_dump_stage, and the file and the sum both read that copy. The dump runs on the game
-   thread alone, which nothing else shares the buffer with. What the copy holds of a field another
-   thread is writing is whichever value it read. THE BOUND: the buffer holds the longest body the
+   thread alone, which nothing else shares the buffer with. What the copy holds of those bytes is
+   whichever value it read, so two dumps of one GameTime can differ there; the recording carries
+   none of them (replay-globals.tsv). THE BOUND: the buffer holds the longest body the
    header's u16 can name, and a longer one is refused and counted rather than truncated by the
    cast; the longest written today is an RK_ORDERS, 8 + 512 * 0x58 = 0xB008 bytes. */
 static void dump_rec(unsigned kind, const void* pre, unsigned npre, const void* pay, unsigned npay)

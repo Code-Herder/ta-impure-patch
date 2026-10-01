@@ -25,8 +25,14 @@
 #   +0x38A4D), the profiler (+0x38D85..); in .data the GAF and animation state
 #   (0x511A58..0x511DC8), chat (0x511FB8), the network object (0x513000..), the DLL entry points
 #   (0x51E548..0x51E594), the profile (0x51E710), the scoreboard (0x51E810, 0x51F2C8), the timers
-#   (0x51FBE0..0x51FC84), file, sound and C runtime state (0x51FE00.., 0x526FF0.., 0x52A4EC..)
-#   and per-call scratch (0x501774, 0x51E6A0..0x51E6AC, 0x50A400..0x50A420).
+#   (0x51FBE0..0x51FC84), file, sound and C runtime state (0x51FE00.., 0x526FF0.., 0x52A500..),
+#   the engine's two tagged locks (0x52A4E8..0x52A4FF), the cursor's position and drawn
+#   position (0x51F4B6, 0x51F4BA, 0x51F4D6, 0x51F4DA) and per-call scratch (0x501774,
+#   0x51E6A0..0x51E6AC, 0x50A400..0x50A420). The first lock (its word 0x52A4E8 and owner tag
+#   0x52A4EC) and the cursor's two positions are written off the game thread as well, by the
+#   engine's mouse thread 0x4C2990, about every 33 ms for the whole process (DISASSEMBLED
+#   0x4C2990..0x4C2A74; exe-reverse-engineering.md, the mouse thread), so two dumps of one
+#   GameTime can differ there.
 # - the level's constants, which a fresh process loading the same map and options reproduces: the
 #   wind's minimum and maximum (+0x1425B, +0x1425F), gravity +0x14263, the sea level +0x1427F, the
 #   map's size (+0x14233, +0x14237), the unit limit +0x37EE6, the difficulty +0x37EEE,

@@ -1146,10 +1146,15 @@ IMAGE_MAP = {
                            "the objective's timer"),
         (0x1D548, 0x1D598, "DLL entry points"),
         (0x1D810, 0x1D814, "an object"),
+        (0x1E4B6, 0x1E4BE, "the cursor's position: the mouse thread 0x4C2990 writes it"),
+        (0x1E4D6, 0x1E4DE, "the cursor's drawn position: the mouse thread 0x4C2990 writes it"),
         (0x1EB50, 0x1EBD4, "a registry value, checksums, the graphics globals' pointer"),
         (0x1EBE0, 0x1EC88, "timers"),
         (0x1EC88, 0x1EC8C, "the simulation RNG"),
-        (0x279A4, 0x2A65C, "the C runtime")],
+        (0x279A4, 0x2A65C, "the C runtime"),
+        (0x294E8, 0x294F4, "a tagged lock, its owner's tag and its event: the game thread and the "
+                           "mouse thread 0x4C2990 take it"),
+        (0x294F4, 0x29500, "a second tagged lock: tag, event, word (0x4D0F60, 0x4D1480)")],
 }
 
 
