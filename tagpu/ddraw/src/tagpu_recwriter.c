@@ -113,6 +113,9 @@ typedef struct Writer {
     unsigned char* proj;        /* their images                                           */
     unsigned       pcount, phw; /* the count and the written extent, once sent:          */
     int            phead_in;    /*   records [phw, ncap) are zero                         */
+    unsigned char* mapped;      /* the explored map, REC_MAPPED_BYTES of the grid          */
+    unsigned       mbytes;
+    unsigned       mnext;       /* RK_MAPPED's next offset: mbytes once the map is whole  */
 
     unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited, unobserved;
     unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
@@ -325,7 +328,9 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
     w->vlist = (unsigned char*)malloc((size_t)REC_ORDERS_MAX * REC_ORDER_IMAGE);
     w->pool = (unsigned char*)calloc(w->npool, REC_WRECK_BYTES);
     w->proj = (unsigned char*)calloc(w->ncap, REC_PROJ_IMAGE);
-    if (!w->units || !w->live || !w->lists || !w->vlist || !w->pool || !w->proj) {
+    w->mbytes = REC_MAPPED_BYTES(w->gw, w->gh);
+    w->mapped = (unsigned char*)malloc(w->mbytes);
+    if (!w->units || !w->live || !w->lists || !w->vlist || !w->pool || !w->proj || !w->mapped) {
         fail(w, "no memory for the copy");
         return 1;
     }
@@ -692,6 +697,13 @@ static void snapshot(Writer* w)
             buf_rec(b, RK_PROJ, pre, 4, w->proj + (size_t)i * REC_PROJ_IMAGE, REC_PROJ_IMAGE);
         }
     }
+    if (w->mnext == w->mbytes) {
+        unsigned off;
+        for (off = 0; off < w->mbytes; off += REC_MAPPED_CHUNK) {
+            unsigned n = w->mbytes - off < REC_MAPPED_CHUNK ? w->mbytes - off : REC_MAPPED_CHUNK;
+            buf_rec(b, RK_MAPPED, &off, 4, w->mapped + off, n);
+        }
+    }
     if (b->oom) { fail(w, "no memory for a snapshot"); return; }
     block(w, RB_SNAPSHOT, w->tick, w->tick, b->p, b->n, 1);
     w->snap_tick = w->tick;
@@ -856,8 +868,25 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
     return 1;
 }
 
-/* The globals and the pool's records, all taken at a capture point: outside every bracket. 1
-   applied, 0 malformed. */
+/* An RK_MAPPED_RUNS's runs, checked whole before `apply` writes any into `map`: 1 well formed. */
+static int mapped_runs(unsigned char* map, unsigned bytes, const unsigned char* b, unsigned len,
+                       int apply)
+{
+    unsigned at = 0, v[2];
+    if (!len || len > REC_MAPPED_RUNS) return 0;
+    if (apply && !mapped_runs(map, bytes, b, len, 0)) return 0;
+    while (at < len) {
+        if (len - at < 8) return 0;
+        memcpy(v, b + at, 8);
+        if (!v[1] || v[1] > len - at - 8 || v[0] > bytes || v[1] > bytes - v[0]) return 0;
+        if (apply) memcpy(map + v[0], b + at + 8, v[1]);
+        at += (8 + v[1] + 3) & ~3u;
+    }
+    return 1;
+}
+
+/* The globals, the pool's records and the explored map, all taken at a capture point: outside
+   every bracket. 1 applied, 0 malformed. */
 static int globals_proj_record(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
 {
     unsigned short ix = 0;
@@ -894,6 +923,17 @@ static int globals_proj_record(Writer* w, unsigned kind, const unsigned char* b,
             return 0;
         delta_apply((unsigned*)(w->proj + (size_t)ix * REC_PROJ_IMAGE), b + 2, REC_PROJ_DWORDS,
                     b + REC_PROJ_DELTA_HEAD);
+        break;
+    case RK_MAPPED:
+        /* the map whole, in order from offset 0, once (cap_mapped) */
+        if (len < 5 || len > 4 + REC_MAPPED_CHUNK) return 0;
+        memcpy(v, b, 4);
+        if (v[0] != w->mnext || len - 4 > w->mbytes - v[0]) return 0;
+        memcpy(w->mapped + v[0], b + 4, len - 4);
+        w->mnext += len - 4;
+        break;
+    case RK_MAPPED_RUNS:
+        if (w->mnext != w->mbytes || !mapped_runs(w->mapped, w->mbytes, b, len, 1)) return 0;
         break;
     case RK_VERIFY_GLOBALS:
         if (len != sizeof w->globals || !w->globals_in) return 0;
@@ -1040,6 +1080,8 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_PROJ_DELTA:
     case RK_VERIFY_GLOBALS:
     case RK_VERIFY_PROJ:
+    case RK_MAPPED:
+    case RK_MAPPED_RUNS:
         return globals_proj_record(w, kind, b, len);
     default:
         /* the events: nothing of the copy; RK_CORRECT and RK_HEADER are never in the ring after
@@ -1120,6 +1162,7 @@ static void finish(Writer* w)
     free(w->live);
     free(w->pool);
     free(w->proj);
+    free(w->mapped);
     free(w->base);
 }
 

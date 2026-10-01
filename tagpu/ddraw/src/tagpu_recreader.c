@@ -51,6 +51,7 @@ struct RecReader {
     int                has_base;
     int                globals_in;  /* an RK_GLOBALS has come, so a delta has an image to change */
     int                proj_in;     /* an RK_PROJ_HEAD has come, so records below hw may come  */
+    unsigned           mnext;       /* the next RK_MAPPED's offset                            */
     RecIndexEntry*     idx;         /* every block after the header, to the first torn one or
                                        the end block; built at the first seek                  */
     unsigned           nidx;
@@ -66,7 +67,8 @@ static const char* const END_REASONS[] = {
     "INCOMPLETE: an order list could not be recorded",
     "INCOMPLETE: the features were not the ones it began with",
     "INCOMPLETE: the projectile pool was not the one it began with, or its count was past its "
-    "records"
+    "records",
+    "INCOMPLETE: the explored map was not the one it began with"
 };
 
 /* ---- blocks --------------------------------------------------------------------------------- */
@@ -423,6 +425,9 @@ static void world_reset(RecReader* r, int from_base)
     memset(w->proj, 0, (size_t)r->h.proj_cap * REC_PROJ_IMAGE);
     w->nproj = 0;
     w->proj_hw = 0;
+    memset(w->mapped, 0, w->mapped_bytes);
+    w->mapped_whole = 0;
+    r->mnext = 0;
     w->tick = 0;
     w->corrections = 0;
     r->ntouched = 0;
@@ -453,8 +458,10 @@ static int world_init(RecReader* r, char* why, unsigned cap)
                                            PAGE_READWRITE);
     w->pool = (unsigned char*)calloc(r->h.wrecks, REC_WRECK_BYTES);
     w->proj = (unsigned char*)calloc(r->h.proj_cap, REC_PROJ_IMAGE);
+    w->mapped_bytes = REC_MAPPED_BYTES(r->h.grid_w, r->h.grid_h);
+    w->mapped = (unsigned char*)malloc(w->mapped_bytes ? w->mapped_bytes : 1);
     if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
-        !r->base || !w->pool || !w->proj) {
+        !r->base || !w->pool || !w->proj || !w->mapped) {
         snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
                  r->h.grid_w, r->h.grid_h);
         return 0;
@@ -780,6 +787,33 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
         delta_apply((uint32_t*)(w->proj + (size_t)id * REC_PROJ_IMAGE), b + 2, REC_PROJ_DWORDS,
                     b + REC_PROJ_DELTA_HEAD);
         return 1;
+    case RK_MAPPED: {
+        /* the map whole, from offset 0 in order, once a recording and once a snapshot */
+        unsigned off;
+        if (len < 5 || len > 4 + REC_MAPPED_CHUNK) return 0;
+        memcpy(&off, b, 4);
+        if (off != r->mnext || len - 4 > w->mapped_bytes - off) return 0;
+        memcpy(w->mapped + off, b + 4, len - 4);
+        r->mnext += len - 4;
+        w->mapped_whole = r->mnext == w->mapped_bytes;
+        return 1;
+    }
+    case RK_MAPPED_RUNS: {
+        /* every run checked before any is applied, so a malformed record changes nothing */
+        unsigned at, v[2], pass;
+        if (!w->mapped_whole || !len || len > REC_MAPPED_RUNS) return 0;
+        for (pass = 0; pass < 2; pass++) {
+            for (at = 0; at < len; at += (8 + v[1] + 3) & ~3u) {
+                if (len - at < 8) return 0;
+                memcpy(v, b + at, 8);
+                if (!v[1] || v[1] > len - at - 8 || v[0] > w->mapped_bytes ||
+                    v[1] > w->mapped_bytes - v[0])
+                    return 0;
+                if (pass) memcpy(w->mapped + v[0], b + at + 8, v[1]);
+            }
+        }
+        return 1;
+    }
     case RK_CORRECT:
         if (len != 4) return 0;
         w->corrections++;
@@ -791,9 +825,15 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
 
 /* An iteration is whole only when no order list it began is still owed chunks -- list_record
    sets the list's count from its first chunk, so a list cut short would leave the rest of its
-   nodes unwritten -- and no feature bracket is still open. 1, or -1 with `why`. */
+   nodes unwritten -- no feature bracket is still open, and the explored map is whole: the first
+   iteration and every snapshot carry it whole (cap_mapped). 1, or -1 with `why`. */
 static int iteration_done(const RecReader* r, char* why, unsigned cap)
 {
+    if (!r->w.mapped_whole) {
+        snprintf(why, cap, "an iteration without the explored map whole, before byte %llu",
+                 r->off);
+        return -1;
+    }
     if (r->pend.next < r->pend.total) {
         snprintf(why, cap, "an order list cut short in the block before byte %llu", r->off);
         return -1;
@@ -1143,6 +1183,7 @@ void recr_close(RecReader* r)
     free(r->w.feat);
     free(r->w.pool);
     free(r->w.proj);
+    free(r->w.mapped);
     free(r->touched);
     free(r->idx);
     if (r->w.unit) VirtualFree(r->w.unit, 0, MEM_RELEASE);

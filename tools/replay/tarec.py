@@ -13,7 +13,8 @@
                                              the same for dumps a playing of FILE took, less what
                                              a puppet host keeps as its own (puppet_view), with
                                              the order nodes' puppet rows as it holds them
-                                             (puppet_hold) and the globals' `hold` rows masked;
+                                             (puppet_hold), the globals' `hold` rows and the
+                                             viewer's bit of the explored map masked;
                                              the radar picture is compared too where the dump's
                                              viewed player is the recording's
   tools/replay/tarec.py compare --images DUMP OTHERDUMP
@@ -37,7 +38,8 @@ recording's by its name: each build numbers its tables in its own registry order
 may be played by another build than the one that made it. The header gives each table's layout
 hash as well (`info` shows it), which the replay's seek compares with its own declaration's. The
 globals image is replay-globals.tsv's fields, read through tools/replay-globals-gen.py where a
-command needs their names or classes.
+command needs their names or classes. The explored map is carried whole at the first iteration,
+in every snapshot and in every dump, and as runs of changed bytes between.
 
 Standard library only.
 """
@@ -73,6 +75,15 @@ REC_PROJ_DELTA_HEAD = (2 + REC_PROJ_BITS + 3) & ~3
 REC_MAIN_BYTES = 0x3924D                  # the main block, from main
 REC_DATA_BEGIN, REC_DATA_BYTES = 0x501000, 0x2A65C   # .data
 REC_IMAGE_CHUNK = 0x8000
+REC_MAPPED_CHUNK = 0x8000
+REC_MAPPED_RUNS = 0x7000
+PL_MAPBIT = 0x146                         # a player record's bit in the explored map (0x48194B)
+
+
+def mapped_bytes(w, h):
+    """The explored map's bytes for a grid of w x h cells, in LoadMap's 32-bit arithmetic."""
+    return ((w * h * 2) & 0xFFFFFFFF) >> 2
+
 
 (RK_PAD, RK_TICK, RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE, RK_PLAYER, RK_PLAYER_DELTA, RK_TABLE_SIZE,
  RK_TABLE_SPAN, RK_CORRECT, RK_VERIFY_UNIT, RK_VERIFY_PLAYER, RK_VERIFY_TABLE, RK_HEADER,
@@ -81,7 +92,7 @@ REC_IMAGE_CHUNK = 0x8000
  RK_EV_BUILT, RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY, RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DRAW,
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
- RK_VERIFY_PROJ, RK_IMAGE) = range(45)
+ RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS) = range(47)
 RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list",
             RK_GLOBALS: "globals image", RK_PROJ: "projectile record",
             RK_PROJ_HEAD: "projectile count (+0x0) and extent (+0x4)"}
@@ -114,7 +125,8 @@ END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full
                8: "INCOMPLETE: the features were not the ones it began with, or their calls "
                   "nested deeper than the capture tracks",
                9: "INCOMPLETE: the projectile pool was not the one it began with, or its count "
-                  "was past its records"}
+                  "was past its records",
+               10: "INCOMPLETE: the explored map was not the one it began with"}
 
 
 class Unreadable(Exception):
@@ -254,6 +266,8 @@ class World:
         self.globals = None             # the globals image, once sent
         self.proj = bytearray(self.ncap * REC_PROJ_IMAGE)              # the projectile pool's
         self.phead = None               # (count, hw), once sent: records [hw, ncap) are zero
+        self.mapped = bytearray(mapped_bytes(self.gw, self.gh))    # the explored map
+        self.mnext = 0                  # RK_MAPPED's next offset: len(mapped) once it is whole
         self.images = {}                # a dump's main block (0) and .data (1)
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
@@ -424,6 +438,25 @@ class World:
                 rec = bytearray(img)
                 self._delta(rec, b[2:2 + REC_PROJ_BITS], REC_PROJ_DWORDS, b[REC_PROJ_DELTA_HEAD:])
                 img[:] = rec
+        elif kind == RK_MAPPED:
+            off = struct.unpack_from("<I", b)[0]
+            if len(b) < 5 or off != self.mnext or off + len(b) - 4 > len(self.mapped):
+                raise Unreadable(f"an explored map record at +0x{off:X}, out of order or past "
+                                 f"its {len(self.mapped)} bytes")
+            self.mapped[off:off + len(b) - 4] = b[4:]
+            self.mnext += len(b) - 4
+        elif kind == RK_MAPPED_RUNS:
+            if self.mnext != len(self.mapped):
+                raise Unreadable("explored map runs before the map is whole")
+            at = 0
+            while at < len(b):
+                if len(b) - at < 8:
+                    raise Unreadable("an explored map run cut short")
+                off, n = struct.unpack_from("<II", b, at)
+                if not n or n > len(b) - at - 8 or off + n > len(self.mapped):
+                    raise Unreadable(f"an explored map run at +0x{off:X} past the map")
+                self.mapped[off:off + n] = b[at + 8:at + 8 + n]
+                at += (8 + n + 3) & ~3
         elif kind == RK_IMAGE:
             which, off = b[0], struct.unpack_from("<I", b, 4)[0]
             size = (REC_MAIN_BYTES, REC_DATA_BYTES)[which] if which < 2 else 0
@@ -437,9 +470,12 @@ class World:
             raise Unreadable(f"record kind {kind} in a block")
         return None
 
-    def whole(self):
-        """An iteration, a snapshot or a dump ends with no order list owed records and no feature
-        call or death open."""
+    def whole(self, stream=False):
+        """An iteration, a snapshot or a dump ends with no order list owed records, no feature
+        call or death open and the explored map whole or, but in the stream, absent."""
+        if self.mnext != len(self.mapped) and (stream or self.mnext):
+            raise Unreadable(f"an iteration with {self.mnext} of the explored map's "
+                             f"{len(self.mapped)} bytes")
         if self.pend is not None:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short at the end of its "
                              f"iteration")
@@ -541,6 +577,16 @@ class World:
                 a, b = self.proj[at:at + REC_PROJ_IMAGE], other.proj[at:at + REC_PROJ_IMAGE]
                 if a != b:
                     dwords(f"projectile {at // REC_PROJ_IMAGE}", a, b)
+        if len(self.mapped) != len(other.mapped):
+            pass                        # the grid's sizes differ, named above
+        elif (self.mnext == len(self.mapped)) != (other.mnext == len(other.mapped)):
+            note(f"the explored map: in {'the recording' if self.mnext else 'the dump'} only")
+        else:
+            for i in range(0, len(self.mapped) - 1, 2):
+                a, b = self.mapped[i:i + 2], other.mapped[i:i + 2]
+                if a != b:
+                    note(f"explored map entry {i // 2} (+0x{i:X}): recording {a.hex()}, "
+                         f"dump {b.hex()}")
         mine = by_name(self, names)
         theirs = by_name(other, names if other_names is None else other_names)
         for name in sorted(set(mine) | set(theirs)):
@@ -595,17 +641,17 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
             continue
         for rk, b in records(payload):
             if rk == RK_TICK and w.tick is not None and w.base is None:
-                w.whole()
+                w.whole(True)
                 w.base = bytes(w.grid)
             if rk == RK_TICK and want is not None and w.tick is not None and w.tick >= want:
-                w.whole()
+                w.whole(True)
                 return w
             if rk == RK_TICK and on_record:
                 on_record(w, None, b)
             w.apply(rk, b)
             if on_record:
                 on_record(w, rk, b)
-        w.whole()               # a stream block ends where an iteration does
+        w.whole(True)           # a stream block ends where an iteration does
     return w
 
 
@@ -756,13 +802,14 @@ def cmd_info(path):
         for rk, b in records(payload):
             if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK,
                                       RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ,
-                                      RK_PROJ_DELTA):
+                                      RK_PROJ_DELTA, RK_MAPPED, RK_MAPPED_RUNS):
                 ev[rk] = ev.get(rk, 0) + 1
                 evb[rk] = evb.get(rk, 0) + 4 + ((len(b) + 3) & ~3)
     names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer",
              RK_CELLS: "run of cells", RK_WRECK: "wreck record", RK_GLOBALS: "globals image",
              RK_GLOBALS_DELTA: "globals delta", RK_PROJ_HEAD: "projectile head",
-             RK_PROJ: "projectile record", RK_PROJ_DELTA: "projectile delta"}
+             RK_PROJ: "projectile record", RK_PROJ_DELTA: "projectile delta",
+             RK_MAPPED: "explored map record", RK_MAPPED_RUNS: "explored map runs"}
     print("  records: " + (", ".join(f"{ev[k]} {names[k]} ({evb[k] >> 10} KB)" for k in sorted(ev))
                            or "no order lists, seats or events"))
     ends = [b for b in bl if b[0] == RB_END]
@@ -837,6 +884,16 @@ def viewer_of(h):
         raise Unreadable("the recording seats all ten records, so a playing has no seat for the "
                          "viewer and refuses it")
     return free[0]
+
+
+def mapped_hold(w, bit):
+    """The explored map less the viewer's bit, which a puppet host keeps set in every entry
+    (tagpu_replay.c, recorded_put): masked on both sides of a puppet compare."""
+    if bit >= 16:
+        return
+    for i in range(0, len(w.mapped) - 1, 2):
+        v = struct.unpack_from("<H", w.mapped, i)[0] & ~(1 << bit)
+        struct.pack_into("<H", w.mapped, i, v)
 
 
 def puppet_view(w, viewer, radar=False):
@@ -958,6 +1015,10 @@ def cmd_compare(path, dumps, puppet=False):
         radar = False
         if puppet:
             radar = dw.view[1] == w.view[1]
+            # V's bit is the host's record's, as recorded_put takes it (the dump is the host's)
+            bit = dw.players[viewer_of(h)][PL_MAPBIT]
+            mapped_hold(w, bit)
+            mapped_hold(dw, bit)
             puppet_view(w, viewer_of(h), radar)
             puppet_view(dw, viewer_of(h), radar)
             puppet_hold(w, held)

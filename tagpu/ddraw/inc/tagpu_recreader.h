@@ -74,7 +74,7 @@ typedef struct RecEvent { unsigned kind, len; const unsigned char* b; } RecEvent
 
 /* The recorded world at the end of one iteration's images: every live slot's image and lists,
    the ten players, the controllers and the viewer, the declared tables, the features, the
-   globals and the projectile pool. */
+   globals, the projectile pool and the explored map. */
 typedef struct RecWorld {
     unsigned       slots;       /* slots 1 .. slots - 1 hold units, as the engine's array     */
     unsigned       tick;        /* the GameTime of the images it holds                        */
@@ -103,6 +103,9 @@ typedef struct RecWorld {
                                    [proj_hw, proj_cap) are zero, as on the recording machine   */
     unsigned       nproj;       /* the pool's count, main+0x141F3                             */
     unsigned       proj_hw;     /* its written extent                                         */
+    unsigned char* mapped;      /* [mapped_bytes] the explored map *(main+0x14273)            */
+    unsigned       mapped_bytes;   /* REC_MAPPED_BYTES of the header's grid                   */
+    int            mapped_whole;   /* its RK_MAPPED records have all come                     */
     unsigned       corrections; /* RK_CORRECTs read: the recording machine's own repairs      */
 } RecWorld;
 

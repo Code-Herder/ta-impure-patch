@@ -111,6 +111,10 @@
 #define OFF_NPROJ      0x141F3      /* u32: the projectile pool's count                           */
 #define OFF_PROJ       0x141F7      /* the projectile pool: TAGPU_LIM_PROJ records of 0x6B bytes   */
 #define DATA_BEGIN     0x00501000u  /* .data, REC_DATA_BYTES from here (the section header)        */
+#define OFF_MAPPED     0x14273      /* the explored map, REC_MAPPED_BYTES of the grid's columns
+                                       and rows (LoadMap 0x483CF6..0x483D25)                    */
+#define OFF_GRID_W     0x14233      /* the feature grid's columns and rows, i32                   */
+#define OFF_GRID_H     0x14237
 #define MODE_SKIRMISH  2
 #define U_MOVER        0x00         /* the mover, a record of its own (the image's tail)           */
 #define U_ORDERS       0x5C         /* the order lists' heads: the main list and the sub list      */
@@ -563,6 +567,13 @@ typedef struct Rec {
     unsigned       jcount, jhw; /* the count and the written extent the ring last carried  */
     unsigned       vproj;       /* the next record the rotating check images              */
     unsigned       jimages;     /* records the stream carried, whole or as a delta        */
+    const unsigned char* mmap;  /* the explored map the recording began with (*The explored
+                                   map*), mbytes of it                                     */
+    unsigned       mbytes;
+    unsigned char* mshadow;     /* its bytes as the ring last carried them                */
+    unsigned       mruns;       /* RK_MAPPED_RUNS the stream carried                       */
+    unsigned long long mrun_bytes;   /* and the map's bytes in them                        */
+    unsigned char  mrunbuf[REC_MAPPED_RUNS];    /* an RK_MAPPED_RUNS as it is built          */
 } Rec;
 
 static void olist_drop(Rec* r, unsigned slot);
@@ -572,6 +583,8 @@ static int cap_features(Rec* r, const Level* L);
 static unsigned fdefs_hash(const char* ta, unsigned n);
 static unsigned feat_unobserved(const Rec* r);
 static void feat_log(const Rec* r);
+static void dump_rec(unsigned kind, const void* pre, unsigned npre, const void* pay, unsigned npay);
+static unsigned mapped_bytes(const char* ta);
 
 enum { ST_IDLE, ST_RECORDING, ST_DONE };        /* DONE: the rest of this level is not recorded */
 static Rec*     s_rec;
@@ -912,6 +925,7 @@ static void rec_free(Rec* r)
     feat_free(r->feat);
     if (r->jraw) VirtualFree(r->jraw, 0, MEM_RELEASE);
     if (r->jshadow) VirtualFree(r->jshadow, 0, MEM_RELEASE);
+    if (r->mshadow) VirtualFree(r->mshadow, 0, MEM_RELEASE);
     if (r->wake) CloseHandle(r->wake);
     if (r->done) CloseHandle(r->done);
     HeapFree(GetProcessHeap(), 0, r);
@@ -1005,6 +1019,15 @@ static Rec* rec_start(const Level* L, int tick)
     r->jshadow = (unsigned char*)VirtualAlloc(NULL, (size_t)TAGPU_LIM_PROJ * REC_PROJ_IMAGE,
                                               MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!r->jraw || !r->jshadow) goto fail;
+    r->mmap = *(const unsigned char* const*)(L->ta + OFF_MAPPED);
+    r->mbytes = mapped_bytes(L->ta);
+    if (!r->mmap || !r->mbytes) {
+        tagpu_logf("recorder: FAILED the level has no explored map: not recording");
+        goto fail;
+    }
+    r->mshadow = (unsigned char*)VirtualAlloc(NULL, r->mbytes, MEM_COMMIT | MEM_RESERVE,
+                                              PAGE_READWRITE);
+    if (!r->mshadow) goto fail;
     for (i = 0; i < REC_PLAYERS; i++)
         r->ctl[i] = (unsigned char)L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER];
     r->view[0] = (unsigned char)L->ta[OFF_CONTROLLED];
@@ -1130,11 +1153,15 @@ static void rec_end(Rec* r, unsigned reason)
                                             "with, or their calls nested deeper than it tracks" :
                reason == REC_END_PROJ     ? "INCOMPLETE, the projectile pool is not the one it "
                                             "began with, or its count is past its records" :
+               reason == REC_END_MAPPED   ? "INCOMPLETE, the explored map is not the one it began "
+                                            "with" :
                                             "INCOMPLETE, the game stopped being a skirmish", s_bad,
                off, r->uncredited, r->oodd);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
                "of its %u records", r->jimages, r->jhw, (unsigned)TAGPU_LIM_PROJ);
+    tagpu_logf("recorder: the explored map: %u bytes; %u iterations changed it, %llu bytes in "
+               "their runs", r->mbytes, r->mruns, r->mrun_bytes);
     rec_free(r);
 }
 
@@ -1801,6 +1828,90 @@ static int cap_proj(Rec* r, const Level* L)
     return 1;
 }
 
+/* THE EXPLORED MAP *(main+0x14273): a u16 for each 2 x 2 cells of the feature grid, a bit a
+   player (the setter 0x481930 sets 1 << [player+0x146]), REC_MAPPED_BYTES of the grid's columns
+   and rows, allocated by LoadMap (0x483CF6..0x483D25) and freed only with the level. It only grows
+   in play -- the setter stores 0 -> 1 after testing the bit (0x481A56, 0x481B64, 0x481CD1), and
+   only the sight rebuild 0x4816A0 with Mapping on clears one -- so no iteration's state derives
+   it, and the simulation reads it (the transport unload 0x47E37B, the AI's map, unit visibility
+   0x465AC0 while LosType bit 1 is clear). So the recording carries it every iteration: whole at
+   the first (RK_MAPPED), then the runs of bytes that changed (RK_MAPPED_RUNS), found by comparing
+   the whole map with the copy the ring last carried -- one memcmp an iteration, and runs only when
+   a bit was set. With Mapping off it is 0xFF everywhere from the load and never written. The map
+   is the one the recording began with, at the size it began with, or the recording ends
+   (REC_END_MAPPED). */
+static unsigned mapped_bytes(const char* ta)
+{
+    unsigned w = *(const unsigned*)(ta + OFF_GRID_W), h = *(const unsigned*)(ta + OFF_GRID_H);
+    return w && h && w <= 0xFFFF && h <= 0xFFFF ? REC_MAPPED_BYTES(w, h) : 0;
+}
+
+/* the map whole, as RK_MAPPED records from offset 0 (ring, or dump when `r` is NULL) */
+static int mapped_whole(Rec* r, const unsigned char* map, unsigned bytes)
+{
+    unsigned off;
+    for (off = 0; off < bytes; off += REC_MAPPED_CHUNK) {
+        unsigned n = bytes - off < REC_MAPPED_CHUNK ? bytes - off : REC_MAPPED_CHUNK;
+        if (r) {
+            if (!ring_put(r, RK_MAPPED, &off, 4, map + off, n)) return 0;
+        } else {
+            dump_rec(RK_MAPPED, &off, 4, map + off, n);
+        }
+    }
+    return 1;
+}
+
+#define MAPPED_GAP 8                /* unchanged bytes a run bridges rather than splitting       */
+
+/* 1 captured, 0 the ring is full, -1 the map is not the recording's */
+static int cap_mapped(Rec* r, const Level* L)
+{
+    unsigned char* runs = r->mrunbuf;
+    const unsigned char* map = *(const unsigned char* const*)(L->ta + OFF_MAPPED);
+    unsigned at = 0, n = 0, changed = 0;
+    if (map != r->mmap || mapped_bytes(L->ta) != r->mbytes) return -1;
+    if (r->first) {
+        if (!mapped_whole(r, map, r->mbytes)) return 0;
+        memcpy(r->mshadow, map, r->mbytes);
+        return 1;
+    }
+    if (!memcmp(map, r->mshadow, r->mbytes)) return 1;
+    while (at < r->mbytes) {
+        unsigned end, len, room;
+        if (map[at] == r->mshadow[at]) { at++; continue; }
+        /* a run from `at`: on while a changed byte is within MAPPED_GAP of the last */
+        for (end = at + 1; end < r->mbytes; end++) {
+            unsigned k, more = 0;
+            if (map[end] != r->mshadow[end]) continue;
+            for (k = end; k < r->mbytes && k < end + MAPPED_GAP; k++)
+                if (map[k] != r->mshadow[k]) { more = 1; break; }
+            if (!more) break;
+        }
+        while (at < end) {
+            room = REC_MAPPED_RUNS - n;
+            if (room < 8 + 4) {
+                if (!ring_put(r, RK_MAPPED_RUNS, runs, n, NULL, 0)) return 0;
+                n = 0;
+                continue;
+            }
+            len = end - at;
+            if (len > room - 8) len = (room - 8) & ~3u;
+            memcpy(runs + n, &at, 4);
+            memcpy(runs + n + 4, &len, 4);
+            memcpy(runs + n + 8, map + at, len);
+            n += 8 + len;
+            while (n & 3) runs[n++] = 0;
+            memcpy(r->mshadow + at, map + at, len);
+            changed += len;
+            at += len;
+        }
+    }
+    if (n && !ring_put(r, RK_MAPPED_RUNS, runs, n, NULL, 0)) return 0;
+    r->mruns++;
+    r->mrun_bytes += changed;
+    return 1;
+}
+
 /* ---- the harness's dump --------------------------------------------------------------------- */
 
 static FILE*         s_dump;
@@ -2012,6 +2123,12 @@ static void dump_write(const Level* L, int tick, const char* name)
     }
     dump_features(L, name);
     dump_globals_proj(L, name);
+    {
+        const unsigned char* map = *(const unsigned char* const*)(L->ta + OFF_MAPPED);
+        if (map && mapped_bytes(L->ta)) mapped_whole(NULL, map, mapped_bytes(L->ta));
+        else tagpu_logf("recorder: dump %s: the level has no explored map: the dump leaves it out",
+                        name);
+    }
     dump_images(L->ta);
     b.magic = REC_BLOCK_MAGIC;
     b.kind = RB_SNAPSHOT;
@@ -2508,8 +2625,6 @@ static int __cdecl ev_spray1(void* E) { ev_spray(E, 1); return 0; }
    unit dying (+0x110 bit 14, 0x489EE2) for the unit tick's reaper (0x48AFD1). */
 
 #define OFF_GRID       0x14287      /* the feature grid                                          */
-#define OFF_GRID_W     0x14233      /* its columns and rows, i32                                 */
-#define OFF_GRID_H     0x14237
 #define OFF_NFDEFS     0x14253      /* the feature defs' count, i32                              */
 #define OFF_FDEFS      0x1426F      /* FeatureDef[]                                              */
 #define OFF_WRECKS     0x1420B      /* the wreck pool                                            */
@@ -3530,6 +3645,8 @@ void __cdecl tagpu_rec_capture(void)
     t = t ? cap_globals(r, L.ta) : 0;
     t = t ? cap_proj(r, &L) : 0;
     if (t < 0) { r->w = w0; rec_stop(REC_END_PROJ); return; }
+    t = t ? cap_mapped(r, &L) : 0;
+    if (t < 0) { r->w = w0; rec_stop(REC_END_MAPPED); return; }
     if (!t) {
         /* the iteration does not fit: the recording ends after the last whole one, and what this
            one wrote is dropped unpublished */

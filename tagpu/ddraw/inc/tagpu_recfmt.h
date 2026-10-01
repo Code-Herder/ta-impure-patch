@@ -19,7 +19,8 @@
    its 0x30 bytes, laid out as its def makes it (the wreck3do or the wreckgaf record, REC_WRECK_*
    below). A record of the projectile pool images as its 0x6B bytes padded to a dword, its four
    pointers as IDs (the proj record). The globals image is the fields replay-globals.tsv lists, one
-   slot each (tagpu_replay_globals.h, which tools/replay-globals-gen.py generates from it). Everything
+   slot each (tagpu_replay_globals.h, which tools/replay-globals-gen.py generates from it). The
+   explored map *(main+0x14273) is its own bytes, REC_MAPPED_BYTES of the header's grid. Everything
    is little-endian.
 
    AN ID is one more than the target's row in its table, so NULL's is 0 and a record of zeros
@@ -91,6 +92,11 @@
 #define REC_MAIN_BYTES    0x3924D /* the main block: the allocation 0x41D941 makes, less its pad  */
 #define REC_DATA_BYTES    0x2A65C /* .data, from 0x501000: its section's VirtualSize             */
 #define REC_IMAGE_CHUNK   0x8000  /* the most bytes of an image one RK_IMAGE carries             */
+#define REC_MAPPED_CHUNK  0x8000  /* the most bytes of the explored map one RK_MAPPED carries    */
+#define REC_MAPPED_RUNS   0x7000  /* the most bytes of runs one RK_MAPPED_RUNS carries           */
+/* the explored map's bytes for a grid of w x h cells: a u16 a 2 x 2 cells, in LoadMap's 32-bit
+   arithmetic (DISASSEMBLED 0x483CF6..0x483D02: imul, shl 1, shr 2) */
+#define REC_MAPPED_BYTES(w, h) (((w) * (h) * 2u) >> 2)
 
 _Static_assert(REC_UNIT_IMAGE == ((REC_MOVER_AT + REC_MOVER_BYTES + 3) & ~3), "the unit image");
 _Static_assert(REC_PLAYER_IMAGE == REC_INFO_AT + ((REC_INFO_BYTES + 3) & ~3), "the player image");
@@ -102,6 +108,8 @@ _Static_assert(REC_PROJ_IMAGE == ((REC_PROJ_BYTES + 3) & ~3), "the projectile im
 _Static_assert(REC_PROJ_DWORDS == 27 && REC_PROJ_DELTA_HEAD == 8, "the projectile delta");
 _Static_assert(REC_GLOBALS_DWORDS * 4 <= 0xFFFF, "an RK_GLOBALS fits its length");
 _Static_assert(8 + REC_IMAGE_CHUNK <= 0xFFFF, "an RK_IMAGE fits its length");
+_Static_assert(4 + REC_MAPPED_CHUNK <= 0xFFFF, "an RK_MAPPED fits its length");
+_Static_assert(8 + REC_MAPPED_RUNS <= 0xFFFF, "an RK_MAPPED_RUNS fits its length");
 
 /* what an id row holds besides a row's ID */
 #define REC_ID_NULL       0u
@@ -229,6 +237,12 @@ enum RecKind {
     RK_IMAGE,          /* dump only: u8 which (0 the main block, 1 .data), u8 0, u16 0, u32 the
                           offset from main or from .data's start, then the bytes from there, at
                           most REC_IMAGE_CHUNK: the two images whole, for `tarec compare --images` */
+    RK_MAPPED,         /* u32 offset, then at most REC_MAPPED_CHUNK bytes of the explored map from
+                          there: the map whole is these from offset 0 to its end, in order, at the
+                          first iteration, in every snapshot and in every dump                    */
+    RK_MAPPED_RUNS,    /* runs, each u32 offset, u32 length, then that many bytes of the explored
+                          map, the next run at the next multiple of 4; at most REC_MAPPED_RUNS
+                          bytes in all: the bytes of the map that changed in an iteration         */
     RK_KINDS
 };
 
@@ -274,8 +288,9 @@ enum RecEnd {
     REC_END_FEATURES,       /* the feature grid, the wreck pool or the feature defs are not the
                                ones the recording began with, or the feature calls nested deeper
                                than the capture tracks                                          */
-    REC_END_PROJ            /* the projectile pool is not the one the recording began with, or
+    REC_END_PROJ,           /* the projectile pool is not the one the recording began with, or
                                its count is past its records                                    */
+    REC_END_MAPPED          /* the explored map is not the one the recording began with          */
 };
 
 /* A recording is REC_MAGIC, then blocks. A block is a RecBlock, then `packed` bytes: the zlib
@@ -308,8 +323,9 @@ enum RecBlockKind {
                           starts empty), the RK_CELLS of every cell that differs from the
                           recording's first iteration (the base: a reader takes it from the first
                           iteration it reads, which every playing reads first), an RK_WRECK per
-                          record that is not all zero, an RK_FEATURES, the RK_GLOBALS, and the
-                          RK_PROJ_HEAD with an RK_PROJ per record below its hw. A dump is one of
+                          record that is not all zero, an RK_FEATURES, the RK_GLOBALS, the
+                          RK_PROJ_HEAD with an RK_PROJ per record below its hw, and the explored
+                          map whole (RK_MAPPED). A dump is one of
                           these, stored, with every cell and no base, and the two images whole
                           (RK_IMAGE) after the rest. A snapshot follows the stream block that ends
                           with the events of the step after `last`, so a reader that starts from

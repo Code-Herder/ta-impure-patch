@@ -137,7 +137,7 @@ static struct {
              wstruct, wbad, heads, cursor;
 } s_fst;                            /* ... and its features' (THE FEATURES)                       */
 static struct {
-    unsigned puts, late, refused, reacts, dropped, unbounded;
+    unsigned puts, late, refused, reacts, dropped, unbounded, mputs, mentries, mrefused;
 } s_gst;                            /* ... and its globals' and projectiles'                      */
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
 static struct {
@@ -2430,7 +2430,8 @@ static void wind_seed(const RecWorld* W)
       engine's own reaction (los_react);
    2. the list's `write` rows, under their masks; `hold` rows are never written on a puppet host;
    3. the pool: the count and the records of the recording's written extent, their pointers back
-      from IDs, and zeros over what the host's extent has past the recording's.
+      from IDs, and zeros over what the host's extent has past the recording's;
+   4. the explored map *(main+0x14273), with V's bit kept set (mapped_put).
    It runs at two points, each from the world as it stands there:
    - THE CAPTURE POINT of T, first in B2's stub (tagpu_replay_capture). At the capture point of T
      the world holds iteration T -- the step before read it -- whose globals and pool are the
@@ -2442,7 +2443,7 @@ static void wind_seed(const RecWorld* W)
    - THE FRAME VISIT after a step (tagpu_replay_frame), once a GameTime, when the world holds the
      next iteration: the draw after step T then shows iteration T+1's globals and pool, what the
      recording machine drew after its step T, since nothing between its step's end and its capture
-     point of T+1 writes either in a skirmish but the pump [INFERRED: no skirmish message writes
+     point of T+1 writes them in a skirmish but the pump [INFERRED: no skirmish message writes
      them]. Without it the draw would show the host's own projectile tick for a frame: burst copies
      at the host's RNG's angles (0x49B8D1, 0x49B903) and no meteor projectiles (the shower is gated
      on a puppet host). With it, the capture point's write finds nothing to change whenever a frame
@@ -2451,7 +2452,8 @@ static void wind_seed(const RecWorld* W)
    puppet host computes (replay-globals.tsv says why, row by row) and makes the host's bytes the
    recording's. The image is DATA: a slot is written within its own size, the generator having
    checked each inside the main block or .data; the pool's count and extent against the pool's
-   records, and each pointer against its table (proj_put). */
+   records, and each pointer against its table (proj_put); the map within the host's own size of
+   it (mapped_put). */
 
 #define OFF_NPROJ      0x141F3      /* the projectile pool's count                               */
 #define OFF_PROJ       0x141F7      /* the pool: TAGPU_LIM_PROJ records of REC_PROJ_BYTES (0x499A30;
@@ -2661,13 +2663,52 @@ empty:
     }
 }
 
-/* the world's globals and pool into the host (the head of this section) */
+/* THE EXPLORED MAP: the host's made the recording's, each u16 entry `img | 1 << b` with b V's bit
+   [V+0x146], as sight_fill sets it, so that V's view stays whole. The host's own stamps set bits
+   between two writes; each write replaces them, as with the pool. When an entry changed, LosType
+   bit 3 is cleared so that the draw rebuilds the fog from it, on the game thread, as sight_fill
+   does. The bound: the map's bytes as LoadMap computes them from the host's grid
+   (0x483CF6..0x483D02), equal to the recording's -- data_match has found the two grids the same
+   size -- and the block lives as long as the level (allocated by LoadMap, freed at its end). */
+static void mapped_put(char* ta, const RecWorld* W)
+{
+    unsigned char* host;
+    uint32_t w, h, n, i;
+    unsigned b = (unsigned char)player_rec(ta, s_viewer)[PL_MAPBIT], changed = 0;
+    unsigned char keep[2] = { 0, 0 };
+    memcpy(&host, ta + OFF_MAPPED, 4);
+    memcpy(&w, ta + OFF_GRIDW, 4);
+    memcpy(&h, ta + OFF_GRIDH, 4);
+    n = (w * h * 2u) >> 2;
+    if (!host || !W->mapped_whole || n != W->mapped_bytes) {
+        if (!s_gst.mrefused++)
+            note("replay: the host's explored map (%u bytes) is not the recording's (%u): not "
+                 "written", n, W->mapped_bytes);
+        return;
+    }
+    if (b < 16) keep[b >> 3] = (unsigned char)(1u << (b & 7));
+    for (i = 0; i < n; i += 2) {
+        unsigned k, differ = 0;
+        for (k = 0; k < 2 && i + k < n; k++) {
+            unsigned char want = W->mapped[i + k] | keep[k];
+            if (host[i + k] != want) { host[i + k] = want; differ = 1; }
+        }
+        changed += differ;
+    }
+    if (!changed) return;
+    s_gst.mputs++;
+    s_gst.mentries += changed;
+    *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
+}
+
+/* the world's globals, pool and explored map into the host (the head of this section) */
 static void recorded_put(const Lv* L, const RecWorld* W)
 {
     masks_init();
     los_react(L->ta, W);
     globals_put(L->ta, W);
     proj_put(L, W);
+    mapped_put(L->ta, W);
     s_gst.puts++;
 }
 
@@ -2776,8 +2817,10 @@ static void counts_log(const char* when, unsigned now)
                s_fst.cursor);
     tagpu_logf("replay: %s: globals and projectiles: written %u times, %u capture points holding "
                "another iteration; the pool refused %u times; the sight mode changed %u times, "
-               "%u temporary sight records dropped, %u changes not made", s_name, s_gst.puts,
-               s_gst.late, s_gst.refused, s_gst.reacts, s_gst.dropped, s_gst.unbounded);
+               "%u temporary sight records dropped, %u changes not made; the explored map changed "
+               "by %u writes, %u entries in all, refused %u times", s_name, s_gst.puts,
+               s_gst.late, s_gst.refused, s_gst.reacts, s_gst.dropped, s_gst.unbounded,
+               s_gst.mputs, s_gst.mentries, s_gst.mrefused);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
