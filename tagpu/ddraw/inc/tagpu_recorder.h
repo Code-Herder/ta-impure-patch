@@ -12,6 +12,12 @@
    thread, between two iterations. */
 void __cdecl tagpu_rec_capture(void);
 
+/* Arms the harness's dump `name` -- 1 to 39 letters, digits, '-' and '_' -- which tagpu_rec_capture
+   takes at its next call, the capture point, on any level in play, recorded or playing: the
+   level's images as a stored snapshot and the main block and .data whole, in
+   replays\dump-<name>.bin. 0 when the name is refused, logged. Game thread. */
+int tagpu_rec_dump_arm(const char* name);
+
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
    cascade frees the unit array: the recording in progress ends, complete once its writer has
    closed the file. */

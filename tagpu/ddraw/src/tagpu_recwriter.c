@@ -20,7 +20,16 @@
    their own: each iteration the capture compares every cell a writer marked and every record of the
    wreck pool with its own copy and sends what changed (tagpu_recorder.c, *The features*). The
    grid's first image comes through the ring's `grid`, larger than the ring on the largest maps:
-   RK_GRID says it is there, and the copy is that buffer from then on. */
+   RK_GRID says it is there, and the copy is that buffer from then on.
+
+   THE GLOBALS AND THE PROJECTILES (S3b) are in the copy as well, and checked like the units: the
+   globals image whole once each rotation, a slice of the pool's records with its count and extent
+   each iteration.
+
+   A SNAPSHOT is smaller than the copy: its cells are the ones that differ from the first
+   iteration's grid, the base, which the writer keeps from RK_GRID on and a reader takes from the
+   first iteration it reads; and a table's spans that are all zero are left out, since a snapshot
+   builds from nothing and RK_TABLE_SIZE zeroes the table. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,6 +105,14 @@ typedef struct Writer {
     unsigned       fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
     unsigned       ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     unsigned       death[REC_DEATHS_MAX];   /* their units' IDs, innermost last          */
+
+    unsigned char* base;        /* the grid at the first iteration (a snapshot's cells differ) */
+    unsigned       globals[REC_GLOBALS_DWORDS];   /* the globals image, once sent        */
+    int            globals_in;
+    unsigned       ncap;        /* the projectile pool's records (RT_PROJECTILES)          */
+    unsigned char* proj;        /* their images                                           */
+    unsigned       pcount, phw; /* the count and the written extent, once sent:          */
+    int            phead_in;    /*   records [phw, ncap) are zero                         */
 
     unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited, unobserved;
     unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
@@ -280,6 +297,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             memcpy(&w->gh, b + at + 8, 4);
             memcpy(&w->npool, b + at + 12, 4);
         }
+        if (tag == RT_PROJECTILES && n == 4) memcpy(&w->ncap, b + at + 4, 4);
         if (tag == RT_TABLE && n >= 12) {
             WTable* t;
             unsigned short ix;
@@ -298,7 +316,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         at += (4 + n + 3) & ~3u;
     }
     if (w->nslots < 2 || w->nslots > 0xFFFF || !w->gw || w->gw > 0xFFFF || !w->gh ||
-        w->gh > 0xFFFF || !w->npool || w->npool > 0x8000)
+        w->gh > 0xFFFF || !w->npool || w->npool > 0x8000 || !w->ncap || w->ncap > 0xFFFF)
         return 0;
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -306,7 +324,8 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
     w->lists = (WList*)calloc((size_t)w->nslots * 2, sizeof *w->lists);
     w->vlist = (unsigned char*)malloc((size_t)REC_ORDERS_MAX * REC_ORDER_IMAGE);
     w->pool = (unsigned char*)calloc(w->npool, REC_WRECK_BYTES);
-    if (!w->units || !w->live || !w->lists || !w->vlist || !w->pool) {
+    w->proj = (unsigned char*)calloc(w->ncap, REC_PROJ_IMAGE);
+    if (!w->units || !w->live || !w->lists || !w->vlist || !w->pool || !w->proj) {
         fail(w, "no memory for the copy");
         return 1;
     }
@@ -480,6 +499,71 @@ static void verify_table(Writer* w, WTable* t, unsigned off, const unsigned char
     buf_rec(&w->stream, RK_TABLE_SPAN, pre, 8, img, n);
 }
 
+static void verify_globals(Writer* w, const unsigned char* img)
+{
+    unsigned corr0 = 0, i;
+    if (!memcmp(w->globals, img, sizeof w->globals)) return;
+    for (i = 0; i < REC_GLOBALS_DWORDS; i++) {
+        unsigned b;
+        memcpy(&b, img + 4 * i, 4);
+        if (w->globals[i] == b) continue;
+        corr_count(w, RK_GLOBALS, 0, 4 * i);
+        corr_log(w, "globals dword", i, 4 * i, w->globals[i], b);
+    }
+    memcpy(w->globals, img, sizeof w->globals);
+    buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
+    buf_rec(&w->stream, RK_GLOBALS, w->globals, sizeof w->globals, NULL, 0);
+}
+
+/* the pool's count and extent; the records an extent gives up are zero again */
+static void proj_head(Writer* w, unsigned count, unsigned hw)
+{
+    if (w->phead_in && hw < w->phw)
+        memset(w->proj + (size_t)hw * REC_PROJ_IMAGE, 0, (size_t)(w->phw - hw) * REC_PROJ_IMAGE);
+    w->pcount = count;
+    w->phw = hw;
+    w->phead_in = 1;
+}
+
+/* The count, the extent and the records [first, first + n) read afresh: the copy's must equal
+   them. A difference is corrected by the head, or by the whole record, as the capture sends one. */
+static void verify_proj(Writer* w, unsigned count, unsigned hw, unsigned first,
+                        const unsigned char* img, unsigned n)
+{
+    unsigned corr0 = 0, i, k;
+    if (!w->phead_in || count != w->pcount || hw != w->phw) {
+        unsigned head[2] = { count, hw };
+        if (count != w->pcount) {
+            corr_count(w, RK_PROJ_HEAD, 0, 0);
+            corr_log(w, "projectile count", 0, 0, w->pcount, count);
+        }
+        if (hw != w->phw) {
+            corr_count(w, RK_PROJ_HEAD, 0, 4);
+            corr_log(w, "projectile extent", 0, 4, w->phw, hw);
+        }
+        proj_head(w, count, hw);
+        buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
+        buf_rec(&w->stream, RK_PROJ_HEAD, head, sizeof head, NULL, 0);
+    }
+    for (k = 0; k < n; k++) {
+        unsigned char* have = w->proj + (size_t)(first + k) * REC_PROJ_IMAGE;
+        const unsigned char* live = img + (size_t)k * REC_PROJ_IMAGE;
+        unsigned short pre[2] = { (unsigned short)(first + k), 0 };
+        if (!memcmp(have, live, REC_PROJ_IMAGE)) continue;
+        for (i = 0; i < REC_PROJ_IMAGE; i += 4) {
+            unsigned a, b;
+            memcpy(&a, have + i, 4);
+            memcpy(&b, live + i, 4);
+            if (a == b) continue;
+            corr_count(w, RK_PROJ, 0, i);
+            corr_log(w, "projectile", first + k, i, a, b);
+        }
+        memcpy(have, live, REC_PROJ_IMAGE);
+        buf_rec(&w->stream, RK_CORRECT, &corr0, 4, NULL, 0);
+        buf_rec(&w->stream, RK_PROJ, pre, 4, live, REC_PROJ_IMAGE);
+    }
+}
+
 /* every cell of the grid as RK_CELLS, a row in runs of at most REC_CELLS_MAX */
 static void grid_put(Buf* b, const Writer* w)
 {
@@ -498,6 +582,40 @@ static void grid_put(Buf* b, const Writer* w)
         }
 }
 
+/* the cells that differ from the base as RK_CELLS, a run of them at most REC_CELLS_MAX */
+static void grid_diff_put(Buf* b, const Writer* w)
+{
+    size_t row = (size_t)w->gw * REC_CELL_BYTES;
+    unsigned x, z;
+    for (z = 0; z < w->gh; z++) {
+        const unsigned char* g = w->grid + z * row;
+        const unsigned char* o = w->base + z * row;
+        if (!memcmp(g, o, row)) continue;
+        for (x = 0; x < w->gw; ) {
+            unsigned n = 0;
+            unsigned short pre[4];
+            while (x + n < w->gw && n < REC_CELLS_MAX &&
+                   memcmp(g + (size_t)(x + n) * REC_CELL_BYTES, o + (size_t)(x + n) * REC_CELL_BYTES,
+                          REC_CELL_BYTES))
+                n++;
+            if (!n) { x++; continue; }
+            pre[0] = (unsigned short)x;
+            pre[1] = (unsigned short)z;
+            pre[2] = (unsigned short)n;
+            pre[3] = 0;
+            buf_rec(b, RK_CELLS, pre, 8, g + (size_t)x * REC_CELL_BYTES, n * REC_CELL_BYTES);
+            x += n;
+        }
+    }
+}
+
+/* 1 when the `n` bytes at `p` are all zero */
+static int all_zero(const unsigned char* p, unsigned n)
+{
+    while (n && !*p) { p++; n--; }
+    return !n;
+}
+
 /* ---- blocks of the stream ------------------------------------------------------------------- */
 
 static void stream_flush(Writer* w)
@@ -509,7 +627,8 @@ static void stream_flush(Writer* w)
     w->sticks = 0;
 }
 
-/* The copy as records that build it from nothing, at the iteration just completed. */
+/* The copy as records that build it, at the iteration just completed: from nothing but the base
+   grid, which every reader holds before it reads a snapshot (tagpu_recfmt.h, RB_SNAPSHOT). */
 static void snapshot(Writer* w)
 {
     Buf* b = &w->snap;
@@ -551,11 +670,12 @@ static void snapshot(Writer* w)
         buf_rec(b, RK_TABLE_SIZE, pre, 8, NULL, 0);
         for (off = 0; off < t->size; off += SPAN_CHUNK) {
             unsigned n = t->size - off < SPAN_CHUNK ? t->size - off : SPAN_CHUNK;
+            if (all_zero(t->img + off, n)) continue;     /* RK_TABLE_SIZE has zeroed it */
             memcpy(pre + 4, &off, 4);
             buf_rec(b, RK_TABLE_SPAN, pre, 8, t->img + off, n);
         }
     }
-    if (w->grid) grid_put(b, w);
+    if (w->grid) grid_diff_put(b, w);
     for (i = 0; i < w->npool; i++) {
         static const unsigned char zero[REC_WRECK_BYTES];
         unsigned short pre[2] = { (unsigned short)i, 0 };
@@ -563,6 +683,15 @@ static void snapshot(Writer* w)
         if (memcmp(rec, zero, REC_WRECK_BYTES)) buf_rec(b, RK_WRECK, pre, 4, rec, REC_WRECK_BYTES);
     }
     if (w->heads_in) buf_rec(b, RK_FEATURES, w->heads, sizeof w->heads, NULL, 0);
+    if (w->globals_in) buf_rec(b, RK_GLOBALS, w->globals, sizeof w->globals, NULL, 0);
+    if (w->phead_in) {
+        unsigned head[2] = { w->pcount, w->phw };
+        buf_rec(b, RK_PROJ_HEAD, head, sizeof head, NULL, 0);
+        for (i = 0; i < w->phw; i++) {
+            unsigned short pre[2] = { (unsigned short)i, 0 };
+            buf_rec(b, RK_PROJ, pre, 4, w->proj + (size_t)i * REC_PROJ_IMAGE, REC_PROJ_IMAGE);
+        }
+    }
     if (b->oom) { fail(w, "no memory for a snapshot"); return; }
     block(w, RB_SNAPSHOT, w->tick, w->tick, b->p, b->n, 1);
     w->snap_tick = w->tick;
@@ -669,6 +798,9 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         memcpy(h, b, 4);
         if (h[0] != w->gw || h[1] != w->gh || !w->ring->grid) return 0;
         w->grid = w->ring->grid;
+        w->base = (unsigned char*)malloc((size_t)w->gw * w->gh * REC_CELL_BYTES);
+        if (!w->base) { fail(w, "no memory for the snapshots' base grid"); return 1; }
+        memcpy(w->base, w->grid, (size_t)w->gw * w->gh * REC_CELL_BYTES);
         grid_put(&w->stream, w);
         return 1;
     case RK_CELLS:
@@ -717,6 +849,63 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
     case RK_EV_DRAW:
         if (!open || len != 12 || b[0] >= FS_SITES || b[1] || b[2] || b[3]) return 0;
         break;
+    default:
+        return 0;
+    }
+    buf_rec(&w->stream, kind, b, len, NULL, 0);
+    return 1;
+}
+
+/* The globals and the pool's records, all taken at a capture point: outside every bracket. 1
+   applied, 0 malformed. */
+static int globals_proj_record(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
+{
+    unsigned short ix = 0;
+    unsigned n = 0, v[3];
+    if (w->fbracket || w->ndeaths) return 0;
+    if (len >= 2) memcpy(&ix, b, 2);
+    switch (kind) {
+    case RK_GLOBALS:
+        if (len != sizeof w->globals) return 0;
+        memcpy(w->globals, b, len);
+        w->globals_in = 1;
+        break;
+    case RK_GLOBALS_DELTA:
+        if (len < REC_GLOBALS_DELTA_HEAD || !w->globals_in ||
+            !delta_count(b, REC_GLOBALS_BITS, REC_GLOBALS_DWORDS, &n) ||
+            len != REC_GLOBALS_DELTA_HEAD + 4 * n)
+            return 0;
+        delta_apply(w->globals, b, REC_GLOBALS_DWORDS, b + REC_GLOBALS_DELTA_HEAD);
+        break;
+    case RK_PROJ_HEAD:
+        if (len != 8) return 0;
+        memcpy(v, b, 8);
+        if (v[0] > v[1] || v[1] > w->ncap) return 0;
+        proj_head(w, v[0], v[1]);
+        break;
+    case RK_PROJ:
+        if (len != 4 + REC_PROJ_IMAGE || b[2] || b[3] || !w->phead_in || ix >= w->phw) return 0;
+        memcpy(w->proj + (size_t)ix * REC_PROJ_IMAGE, b + 4, REC_PROJ_IMAGE);
+        break;
+    case RK_PROJ_DELTA:
+        if (len < REC_PROJ_DELTA_HEAD || !w->phead_in || ix >= w->phw ||
+            !delta_count(b + 2, REC_PROJ_BITS, REC_PROJ_DWORDS, &n) ||
+            len != REC_PROJ_DELTA_HEAD + 4 * n)
+            return 0;
+        delta_apply((unsigned*)(w->proj + (size_t)ix * REC_PROJ_IMAGE), b + 2, REC_PROJ_DWORDS,
+                    b + REC_PROJ_DELTA_HEAD);
+        break;
+    case RK_VERIFY_GLOBALS:
+        if (len != sizeof w->globals || !w->globals_in) return 0;
+        verify_globals(w, b);
+        return 1;
+    case RK_VERIFY_PROJ:
+        if (len < 12 || (len - 12) % REC_PROJ_IMAGE) return 0;
+        memcpy(v, b, 12);
+        n = (len - 12) / REC_PROJ_IMAGE;
+        if (v[0] > v[1] || v[1] > w->ncap || v[2] > v[1] || n > v[1] - v[2]) return 0;
+        verify_proj(w, v[0], v[1], v[2], b + 12, n);
+        return 1;
     default:
         return 0;
     }
@@ -844,6 +1033,14 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_EV_DEATH:
     case RK_EV_DEATH_END:
         return feature_record(w, kind, b, len);
+    case RK_GLOBALS:
+    case RK_GLOBALS_DELTA:
+    case RK_PROJ_HEAD:
+    case RK_PROJ:
+    case RK_PROJ_DELTA:
+    case RK_VERIFY_GLOBALS:
+    case RK_VERIFY_PROJ:
+        return globals_proj_record(w, kind, b, len);
     default:
         /* the events: nothing of the copy; RK_CORRECT and RK_HEADER are never in the ring after
            the first record */
@@ -922,6 +1119,8 @@ static void finish(Writer* w)
     free(w->vlist);
     free(w->live);
     free(w->pool);
+    free(w->proj);
+    free(w->base);
 }
 
 /* ---- the thread ----------------------------------------------------------------------------- */

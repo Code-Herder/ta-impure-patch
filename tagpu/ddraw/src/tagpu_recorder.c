@@ -40,6 +40,9 @@
      prefix clamped to them, a heap table's counted rows. Their shadows are taken at the start,
      and grown once for a heap table that grows (table_grow).
    - The feature grid, the wreck pool and the feature defs: *The features* below.
+   - The fields of the main block and .data replay-globals.tsv lists, and the projectile pool and
+     its count: *The globals and the projectiles* below; for the harness's dump, the main block
+     and .data whole.
    - For the header, once: the unit-type definitions' names (UNITINFOCount of them), the weapons'
      names (the array's slots, tagpu_limits.h), the feature defs' names (their count), the
      skirmish settings and the game's options.
@@ -57,6 +60,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
+#include "tagpu_replay_globals.h"
 #include "tagpu_simreg.h"
 #include "tagpu_limits.h"
 #include "tagpu_log.h"
@@ -104,6 +108,9 @@
 #define OFF_CMDRDEATH  0x37EF6      /* u32: ActiveCommanderDeath                                  */
 #define OFF_DIFFICULTY 0x37EEE      /* u32 (0x401441)                                             */
 #define OFF_SETTINGS   0x29A0       /* the skirmish settings: +0x118 fixed starts, +0x11C the map  */
+#define OFF_NPROJ      0x141F3      /* u32: the projectile pool's count                           */
+#define OFF_PROJ       0x141F7      /* the projectile pool: TAGPU_LIM_PROJ records of 0x6B bytes   */
+#define DATA_BEGIN     0x00501000u  /* .data, REC_DATA_BYTES from here (the section header)        */
 #define MODE_SKIRMISH  2
 #define U_MOVER        0x00         /* the mover, a record of its own (the image's tail)           */
 #define U_ORDERS       0x5C         /* the order lists' heads: the main list and the sub list      */
@@ -134,9 +141,9 @@
 /* ---- the layout, as masks ------------------------------------------------------------------- */
 
 /* Per image dword, the bits that are values or id bytes; per id row, where it is in the image and
-   its table. Three images: a unit's (its record, then its mover's), a player's (its record, then
-   its PlayerInfo's) and an order node's. Built once from the generated table, which the build keeps
-   equal to replay-layout.tsv. */
+   its table. Four images: a unit's (its record, then its mover's), a player's (its record, then
+   its PlayerInfo's), an order node's and a projectile's. Built once from the generated table, which
+   the build keeps equal to replay-layout.tsv. */
 #define RL_ROWS (sizeof tagpu_replay_layout / sizeof tagpu_replay_layout[0])
 typedef struct { unsigned short off; unsigned char table; } IdRow;
 /* the feature images' value bits: a cell's, and a wreck record's as each kind of def lays it out
@@ -144,9 +151,9 @@ typedef struct { unsigned short off; unsigned char table; } IdRow;
 static unsigned char s_cmask[REC_CELL_BYTES];
 static unsigned char s_w3mask[REC_WRECK_BYTES], s_wgmask[REC_WRECK_BYTES];
 static void feat_masks_row(const ReplayLayoutRow* r);
-enum { IMG_UNIT, IMG_PLAYER, IMG_ORDER, IMG_KINDS };
+enum { IMG_UNIT, IMG_PLAYER, IMG_ORDER, IMG_PROJ, IMG_KINDS };
 static unsigned s_umask[REC_UNIT_DWORDS], s_pmask[REC_PLAYER_DWORDS];
-static unsigned s_omask[REC_ORDER_IMAGE / 4];
+static unsigned s_omask[REC_ORDER_IMAGE / 4], s_jmask[REC_PROJ_DWORDS];
 static IdRow    s_ids[IMG_KINDS][RL_ROWS];           /* an image's id rows are at most every row */
 static unsigned s_nids[IMG_KINDS], s_masked;
 
@@ -160,18 +167,19 @@ static void masks_init(void)
     memset(b[IMG_PLAYER], 0xFF, REC_PLAYER_BYTES);
     memset(b[IMG_PLAYER] + REC_INFO_AT, 0xFF, REC_INFO_BYTES);
     memset(b[IMG_ORDER], 0xFF, REC_ORDER_BYTES);
+    memset(b[IMG_PROJ], 0xFF, REC_PROJ_BYTES);
     memset(s_cmask, 0xFF, sizeof s_cmask);
     memset(s_w3mask, 0xFF, sizeof s_w3mask);
     memset(s_wgmask, 0xFF, sizeof s_wgmask);
     for (i = 0; i < RL_ROWS; i++) {
         const ReplayLayoutRow* r = &tagpu_replay_layout[i];
         unsigned img = r->record == RL_PLAYER || r->record == RL_INFO ? IMG_PLAYER :
-                       r->record == RL_ORDER ? IMG_ORDER : IMG_UNIT;
+                       r->record == RL_ORDER ? IMG_ORDER : r->record == RL_PROJ ? IMG_PROJ :
+                       IMG_UNIT;
         if (r->record == RL_CELL || r->record == RL_WRECK3DO || r->record == RL_WRECKGAF) {
             feat_masks_row(r);
             continue;
         }
-        if (r->record == RL_PROJ) continue;        /* the projectile pool is not recorded yet */
         unsigned at = r->offset + (r->record == RL_MOVER ? REC_MOVER_AT :
                                    r->record == RL_INFO ? REC_INFO_AT : 0);
         if (r->target != RL_T_NONE) {
@@ -187,6 +195,7 @@ static void masks_init(void)
     memcpy(s_umask, b[IMG_UNIT], sizeof s_umask);
     memcpy(s_pmask, b[IMG_PLAYER], sizeof s_pmask);
     memcpy(s_omask, b[IMG_ORDER], sizeof s_omask);
+    memcpy(s_jmask, b[IMG_PROJ], sizeof s_jmask);
     s_masked = 1;
 }
 
@@ -201,6 +210,7 @@ typedef struct Level {
     char*    buckets;       /* the sort buckets and how many                      */
     unsigned nbuckets;
     char*    offmap;
+    char*    proj;          /* the projectile pool, TAGPU_LIM_PROJ records        */
 } Level;
 
 static char* ta_main(void)
@@ -229,6 +239,7 @@ static int level_read(char* ta, Level* L)
     L->buckets = *(char**)(ta + OFF_BUCKETS);
     L->nbuckets = (cols && rows && cols < 0x10000 && rows < 0x10000) ? cols * rows : 0;
     L->offmap = *(char**)(ta + OFF_OFFMAP);
+    L->proj = *(char**)(ta + OFF_PROJ);
     return 1;
 }
 
@@ -264,6 +275,11 @@ static unsigned id_of(const Level* L, unsigned table, const char* p)
            edge (the engine map, *The sort bucket is taken from the position*) */
         if (p == L->offmap) return REC_ID_OFFMAP;
         id = id_in(p, L->buckets, BUCKET_STRIDE, L->nbuckets + 1);
+        break;
+    case RL_T_PROJ:
+        /* a record of the pool, which the allocation 0x499A30 sizes to TAGPU_LIM_PROJ records
+           (tagpu_limits.h: the raise is installed whole or the process ends) */
+        id = id_in(p, L->proj, REC_PROJ_BYTES, TAGPU_LIM_PROJ);
         break;
     case RL_T_OWNED:
         /* the one id row read through its pointer: an order node's own object, live while the
@@ -310,7 +326,8 @@ static void bad_log(const char* what, unsigned off, const void* p)
 static void image(const Level* L, const unsigned char* raw, unsigned dwords, const unsigned* mask,
                   unsigned kind, unsigned* img)
 {
-    static const char* const what[IMG_KINDS] = { "a unit's", "a player's", "an order node's" };
+    static const char* const what[IMG_KINDS] = { "a unit's", "a player's", "an order node's",
+                                                 "a projectile's" };
     unsigned i;
     const char* p;
     memcpy(img, raw, (size_t)dwords * 4);
@@ -538,6 +555,14 @@ typedef struct Rec {
                                                     counts them: after the first iteration,
                                                     in this one and in one at most         */
     Feat*          feat;        /* the grid's and the pool's copies (*The features*)      */
+    unsigned       gshadow[REC_GLOBALS_DWORDS];  /* the globals image as the ring last carried it */
+    const unsigned char* jpool; /* the projectile pool the recording began with (*The globals
+                                   and the projectiles*)                                   */
+    unsigned char* jraw;        /* its records' bytes as last imaged, TAGPU_LIM_PROJ of them */
+    unsigned char* jshadow;     /* their images as the ring last carried them             */
+    unsigned       jcount, jhw; /* the count and the written extent the ring last carried  */
+    unsigned       vproj;       /* the next record the rotating check images              */
+    unsigned       jimages;     /* records the stream carried, whole or as a delta        */
 } Rec;
 
 static void olist_drop(Rec* r, unsigned slot);
@@ -780,6 +805,8 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
         d[2] = TAGPU_LIM_WRECKS;
         tlv(t, RT_FEATURES, d, 20);
     }
+    tlv(t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
+    tlv_u32(t, RT_PROJECTILES, TAGPU_LIM_PROJ);
 }
 
 /* One RT_TABLE: the registry index the stream's table records carry, and what the declaration
@@ -882,6 +909,8 @@ static void rec_free(Rec* r)
     if (r->oscratch) VirtualFree(r->oscratch, 0, MEM_RELEASE);
     if (r->oheap) HeapDestroy(r->oheap);             /* every list's image with it */
     feat_free(r->feat);
+    if (r->jraw) VirtualFree(r->jraw, 0, MEM_RELEASE);
+    if (r->jshadow) VirtualFree(r->jshadow, 0, MEM_RELEASE);
     if (r->wake) CloseHandle(r->wake);
     if (r->done) CloseHandle(r->done);
     HeapFree(GetProcessHeap(), 0, r);
@@ -965,6 +994,16 @@ static Rec* rec_start(const Level* L, int tick)
         goto fail;
     r->feat = feat_start(L->ta, g);
     if (!r->feat) goto fail;
+    r->jpool = (const unsigned char*)L->proj;
+    if (!r->jpool) {
+        tagpu_logf("recorder: FAILED the level has no projectile pool: not recording");
+        goto fail;
+    }
+    r->jraw = (unsigned char*)VirtualAlloc(NULL, (size_t)TAGPU_LIM_PROJ * REC_PROJ_BYTES,
+                                           MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    r->jshadow = (unsigned char*)VirtualAlloc(NULL, (size_t)TAGPU_LIM_PROJ * REC_PROJ_IMAGE,
+                                              MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!r->jraw || !r->jshadow) goto fail;
     for (i = 0; i < REC_PLAYERS; i++)
         r->ctl[i] = (unsigned char)L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER];
     r->view[0] = (unsigned char)L->ta[OFF_CONTROLLED];
@@ -1087,9 +1126,13 @@ static void rec_end(Rec* r, unsigned reason)
                reason == REC_END_ORDERS   ? "INCOMPLETE, an order list could not be recorded" :
                reason == REC_END_FEATURES ? "INCOMPLETE, the features are not the ones it began "
                                             "with, or their calls nested deeper than it tracks" :
+               reason == REC_END_PROJ     ? "INCOMPLETE, the projectile pool is not the one it "
+                                            "began with, or its count is past its records" :
                                             "INCOMPLETE, the game stopped being a skirmish", s_bad,
                off, r->uncredited, r->oodd);
     feat_log(r);
+    tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
+               "of its %u records", r->jimages, r->jhw, (unsigned)TAGPU_LIM_PROJ);
     rec_free(r);
 }
 
@@ -1582,6 +1625,180 @@ static int cap_verify(Rec* r, const Level* L)
     return 1;
 }
 
+/* ---- the globals and the projectiles -------------------------------------------------------- */
+
+/* THE GLOBALS AND THE PROJECTILES (the slice note's S3b).
+
+   THE GLOBALS are the fields of the main block and .data that replay-globals.tsv lists, read into
+   one image (tagpu_replay_globals.h): each slot at its dword, its bits outside its rows' masks
+   zero. The generator checks every main slot inside the main block's REC_MAIN_BYTES and every data
+   slot inside .data, so no read leaves either: the main block lives for the process (0x41D920
+   allocates it, once, and nothing frees it) and .data is the image's own section. The image goes
+   whole at the first iteration and as a delta of the dwords that changed after it.
+
+   THE PROJECTILES are the pool *(main+0x141F7), TAGPU_LIM_PROJ records of 0x6B bytes (the
+   allocation 0x499A30, which the limits table sizes whole or the process ends: tagpu_limits.h),
+   and its count main+0x141F3. The count is DATA: one past the records ends the recording
+   (REC_END_PROJ), as does a pool that is not the one the recording began with, whose records
+   the shadows and the quarry IDs describe. A record is imaged through the layout's proj rows:
+   every byte a value but the four pointers, each its table's ID by arithmetic, never a
+   dereference.
+   WHICH RECORDS: the written extent [0, hw). The allocation zeroes the pool (0x499A55), a record
+   is written only at the count -- an append, then count++ -- or by the compaction 0x49AE20 below
+   the old count, and every record written holds a non-NULL weapon at +0x00 (the init 0x49C740
+   stores it at 0x49C752, and each append's only success path ends in the init: 0x49C9C0's at
+   0x49CA32, the six other live builders' likewise; a burst copy copies a whole template, the
+   compaction whole records). So the records ever written are [0, peak), peak the highest the count
+   has been this level, and every record past them is zero. The count can peak inside a step and
+   fall back before the next capture (the appends, then the compaction at the tick's end), so the
+   extent is found by scanning on from the last hw while +0x00 is non-NULL, bounded by the pool:
+   hw = max(count, that slot) -- exact, and usually one read. A record below hw goes out when its
+   bytes moved since it was last imaged: whole the first time it is in the extent, else as a delta
+   of its image unless that is no smaller; the count and hw (RK_PROJ_HEAD) when either changed. */
+static const unsigned char* global_at(const char* ta, const ReplayGlobalSlot* g)
+{
+    return g->where == RG_MAIN ? (const unsigned char*)ta + g->offset
+                               : (const unsigned char*)(size_t)DATA_BEGIN + g->offset;
+}
+
+static void globals_image(const char* ta, unsigned* img)
+{
+    unsigned i;
+    memset(img, 0, REC_GLOBALS_DWORDS * 4);
+    for (i = 0; i < REC_GLOBALS_SLOTS; i++) {
+        const ReplayGlobalSlot* g = &tagpu_replay_globals[i];
+        if (g->size <= 4) {
+            unsigned v = 0;
+            memcpy(&v, global_at(ta, g), g->size);
+            img[g->dword] = v & (g->write | g->hold | g->react);
+        } else {
+            memcpy(img + g->dword, global_at(ta, g), g->size);   /* one row: every byte */
+        }
+    }
+}
+
+/* 1 captured, 0 the ring is full */
+static int cap_globals(Rec* r, const char* ta)
+{
+    unsigned img[REC_GLOBALS_DWORDS], i;
+    globals_image(ta, img);
+    if (r->first) {
+        if (!ring_put(r, RK_GLOBALS, NULL, 0, img, sizeof img)) return 0;
+    } else {
+        unsigned char bits[REC_GLOBALS_DELTA_HEAD] = { 0 }, * at;
+        unsigned k = 0, n = 0;
+        for (i = 0; i < REC_GLOBALS_DWORDS; i++)
+            if (img[i] != r->gshadow[i]) { bits[i >> 3] |= (unsigned char)(1u << (i & 7)); n++; }
+        if (n) {
+            at = ring_take(r, REC_GLOBALS_DELTA_HEAD + 4 * n);
+            if (!at) return 0;
+            memcpy(at + 4, bits, sizeof bits);
+            for (i = 0; i < REC_GLOBALS_DWORDS; i++)
+                if (img[i] != r->gshadow[i])
+                    memcpy(at + 4 + REC_GLOBALS_DELTA_HEAD + 4 * k++, &img[i], 4);
+            ring_commit(r, at, RK_GLOBALS_DELTA, REC_GLOBALS_DELTA_HEAD + 4 * n);
+        }
+    }
+    memcpy(r->gshadow, img, sizeof img);
+    /* the rotating check's: once each VERIFY_ROUND iterations, the image read afresh */
+    if (r->iterations % VERIFY_ROUND == 0) {
+        globals_image(ta, img);
+        if (!ring_put(r, RK_VERIFY_GLOBALS, NULL, 0, img, sizeof img)) return 0;
+    }
+    return 1;
+}
+
+/* a record's image: its 0x6B bytes and a zero pad, the pointers as IDs */
+static void proj_image(const Level* L, const unsigned char* rec, unsigned* img)
+{
+    unsigned char raw[REC_PROJ_IMAGE];
+    memcpy(raw, rec, REC_PROJ_BYTES);
+    raw[REC_PROJ_BYTES] = 0;
+    image(L, raw, REC_PROJ_DWORDS, s_jmask, IMG_PROJ, img);
+}
+
+/* The written extent from `from`: the first record at or after it whose weapon is NULL, or the
+   pool's end, and never below the count (*The globals and the projectiles*). */
+static unsigned proj_extent(const unsigned char* pool, unsigned from, unsigned count)
+{
+    unsigned hw = from;
+    for (; hw < TAGPU_LIM_PROJ; hw++) {
+        unsigned weapon;
+        memcpy(&weapon, pool + (size_t)hw * REC_PROJ_BYTES, 4);
+        if (!weapon) break;
+    }
+    return hw < count ? count : hw;
+}
+
+/* 1 captured, 0 the ring is full, -1 the pool is not the recording's or its count is past it */
+static int cap_proj(Rec* r, const Level* L)
+{
+    const unsigned char* pool = (const unsigned char*)L->proj;
+    unsigned count, hw, i, img[REC_PROJ_DWORDS];
+    if (pool != r->jpool) return -1;
+    memcpy(&count, L->ta + OFF_NPROJ, 4);
+    if (count > TAGPU_LIM_PROJ) return -1;
+    hw = proj_extent(pool, r->jhw, count);
+    if (r->first || count != r->jcount || hw != r->jhw) {
+        unsigned head[2] = { count, hw };
+        if (!ring_put(r, RK_PROJ_HEAD, head, sizeof head, NULL, 0)) return 0;
+    }
+    for (i = 0; i < hw; i++) {
+        const unsigned char* rec = pool + (size_t)i * REC_PROJ_BYTES;
+        unsigned char* raw = r->jraw + (size_t)i * REC_PROJ_BYTES;
+        unsigned* sh = (unsigned*)(r->jshadow + (size_t)i * REC_PROJ_IMAGE);
+        int fresh = i >= r->jhw;
+        unsigned k, n = 0;
+        if (!fresh && !memcmp(rec, raw, REC_PROJ_BYTES)) continue;
+        memcpy(raw, rec, REC_PROJ_BYTES);
+        proj_image(L, raw, img);
+        for (k = 0; k < REC_PROJ_DWORDS; k++) n += img[k] != sh[k];
+        if (!fresh && !n) continue;
+        if (fresh || REC_PROJ_DELTA_HEAD + 4 * n >= 4 + REC_PROJ_IMAGE) {
+            unsigned short pre[2] = { (unsigned short)i, 0 };
+            if (!ring_put(r, RK_PROJ, pre, 4, img, REC_PROJ_IMAGE)) return 0;
+        } else {
+            unsigned char bits[REC_PROJ_DELTA_HEAD - 2] = { 0 }, * at;
+            unsigned short ix = (unsigned short)i;
+            unsigned j = 0;
+            for (k = 0; k < REC_PROJ_DWORDS; k++)
+                if (img[k] != sh[k]) bits[k >> 3] |= (unsigned char)(1u << (k & 7));
+            at = ring_take(r, REC_PROJ_DELTA_HEAD + 4 * n);
+            if (!at) return 0;
+            memcpy(at + 4, &ix, 2);
+            memcpy(at + 6, bits, sizeof bits);
+            for (k = 0; k < REC_PROJ_DWORDS; k++)
+                if (img[k] != sh[k]) memcpy(at + 4 + REC_PROJ_DELTA_HEAD + 4 * j++, &img[k], 4);
+            ring_commit(r, at, RK_PROJ_DELTA, REC_PROJ_DELTA_HEAD + 4 * n);
+        }
+        memcpy(sh, img, REC_PROJ_IMAGE);
+        r->jimages++;
+    }
+    r->jcount = count;
+    r->jhw = hw;
+    /* the rotating check's: the count, hw and the next records, read afresh, so that every record
+       of the extent is checked once each VERIFY_ROUND iterations */
+    {
+        unsigned per = (hw + VERIFY_ROUND - 1) / VERIFY_ROUND, k, pre[3];
+        unsigned char* at;
+        if (r->vproj >= hw) r->vproj = 0;
+        k = hw - r->vproj < per ? hw - r->vproj : per;
+        if (k > VERIFY_CHUNK / REC_PROJ_IMAGE) k = VERIFY_CHUNK / REC_PROJ_IMAGE;
+        at = ring_take(r, 12 + k * REC_PROJ_IMAGE);
+        if (!at) return 0;
+        pre[0] = count;
+        pre[1] = hw;
+        pre[2] = r->vproj;
+        memcpy(at + 4, pre, 12);
+        for (i = 0; i < k; i++)
+            proj_image(L, pool + (size_t)(r->vproj + i) * REC_PROJ_BYTES,
+                       (unsigned*)(at + 16 + (size_t)i * REC_PROJ_IMAGE));
+        ring_commit(r, at, RK_VERIFY_PROJ, 12 + k * REC_PROJ_IMAGE);
+        r->vproj += k;
+    }
+    return 1;
+}
+
 /* ---- the harness's dump --------------------------------------------------------------------- */
 
 #define DUMP_TRIGGER SIM_TOOL_FILE("tagpu_replay.trigger")
@@ -1589,6 +1806,7 @@ static int cap_verify(Rec* r, const Level* L)
 static FILE*         s_dump;
 static unsigned      s_dump_raw;
 static unsigned long s_dump_crc;
+static char          s_dump_name[40];       /* the dump the next capture point takes, or ""  */
 static void dump_features(const Level* L, const char* name);
 
 static void dump_bytes(const void* p, unsigned n)
@@ -1630,10 +1848,56 @@ static void dump_olist(unsigned slot, unsigned list, const unsigned char* img, u
     } while (first < n);
 }
 
+/* The globals and the pool as a dump's records, read as the capture reads them. A dump is taken on
+   a puppet host too, which records nothing, so the extent is scanned from the pool's first record:
+   the same hw the capture's scan reaches, since every record below the peak holds a weapon. */
+static void dump_globals_proj(const Level* L, const char* name)
+{
+    unsigned img[REC_GLOBALS_DWORDS > REC_PROJ_DWORDS ? REC_GLOBALS_DWORDS : REC_PROJ_DWORDS];
+    unsigned head[2], i;
+    const unsigned char* pool = (const unsigned char*)L->proj;
+    globals_image(L->ta, img);
+    dump_rec(RK_GLOBALS, NULL, 0, img, REC_GLOBALS_DWORDS * 4);
+    if (!pool) {
+        tagpu_logf("recorder: dump %s: the level has no projectile pool: the dump leaves it out",
+                   name);
+        return;
+    }
+    memcpy(&head[0], L->ta + OFF_NPROJ, 4);
+    head[1] = proj_extent(pool, 0, head[0] < TAGPU_LIM_PROJ ? head[0] : TAGPU_LIM_PROJ);
+    dump_rec(RK_PROJ_HEAD, head, sizeof head, NULL, 0);
+    for (i = 0; i < head[1]; i++) {
+        unsigned short pre[2] = { (unsigned short)i, 0 };
+        proj_image(L, pool + (size_t)i * REC_PROJ_BYTES, img);
+        dump_rec(RK_PROJ, pre, 4, img, REC_PROJ_IMAGE);
+    }
+}
+
+/* The main block and .data whole, as RK_IMAGE records, for `tarec compare --images`: both are
+   mapped for the process's life (the head of *The globals and the projectiles*). */
+static void dump_images(const char* ta)
+{
+    unsigned which, off;
+    for (which = 0; which < 2; which++) {
+        const unsigned char* base = which ? (const unsigned char*)(size_t)DATA_BEGIN
+                                          : (const unsigned char*)ta;
+        unsigned bytes = which ? REC_DATA_BYTES : REC_MAIN_BYTES;
+        for (off = 0; off < bytes; off += REC_IMAGE_CHUNK) {
+            unsigned char pre[8];
+            unsigned n = bytes - off < REC_IMAGE_CHUNK ? bytes - off : REC_IMAGE_CHUNK;
+            pre[0] = (unsigned char)which;
+            pre[1] = pre[2] = pre[3] = 0;
+            memcpy(pre + 4, &off, 4);
+            dump_rec(RK_IMAGE, pre, 8, base + off, n);
+        }
+    }
+}
+
 /* The live world's images as a stored RB_SNAPSHOT: what the recording must read back to at this
-   GameTime. Before it, a stored RB_HEADER with the format, the build and the tables, so that a
-   dump taken by another build than the recording's (a playing, D8) is read with its own table
-   names. Written on the game thread, which is tooling's price: a dump is the harness's. */
+   GameTime, and the two images whole after it. Before it, a stored RB_HEADER with the format, the
+   build, the globals list's hash and the tables, so that a dump taken by another build than the
+   recording's (a playing, D8) is read with its own table names. Written on the game thread, which
+   is tooling's price: a dump is the harness's. */
 static void dump_write(const Level* L, int tick, const char* name)
 {
     char path[MAX_PATH];
@@ -1656,6 +1920,7 @@ static void dump_write(const Level* L, int tick, const char* name)
     t.full = 0;
     tlv_u32(&t, RT_FORMAT, REC_FORMAT);
     tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
+    tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
     for (i = 0; i < n; i++) {
         const SimDesc* d = tagpu_simreg_at(i);
         if (d && table_recorded(d)) table_entry(&t, i, d);
@@ -1746,6 +2011,8 @@ static void dump_write(const Level* L, int tick, const char* name)
         }
     }
     dump_features(L, name);
+    dump_globals_proj(L, name);
+    dump_images(L->ta);
     b.magic = REC_BLOCK_MAGIC;
     b.kind = RB_SNAPSHOT;
     b.flags = RBF_STORED;
@@ -1762,12 +2029,30 @@ static void dump_write(const Level* L, int tick, const char* name)
                s_dump_raw);
 }
 
-/* `dump <name>`, a name of letters, digits, '-' and '_'; the trigger is consumed either way */
-static void dump_poll(const Level* L, int tick)
+int tagpu_rec_dump_arm(const char* name)
+{
+    size_t i, n = bounded_len(name, sizeof s_dump_name);
+    if (!n || n == sizeof s_dump_name) {
+        tagpu_logf("recorder: dump: a name of 1 to %u characters, please",
+                   (unsigned)sizeof s_dump_name - 1);
+        return 0;
+    }
+    for (i = 0; i < n; i++)
+        if (!((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= 'A' && name[i] <= 'Z') ||
+              (name[i] >= '0' && name[i] <= '9') || name[i] == '-' || name[i] == '_')) {
+            tagpu_logf("recorder: dump: the name %.*s is not letters, digits, - and _", (int)n, name);
+            return 0;
+        }
+    memcpy(s_dump_name, name, n);
+    s_dump_name[n] = 0;
+    return 1;
+}
+
+/* `dump <name>` armed for this capture point; the trigger is consumed either way */
+static void dump_poll(void)
 {
     char line[96], name[40];
     FILE* f;
-    unsigned i;
     if (GetFileAttributesA(DUMP_TRIGGER) == INVALID_FILE_ATTRIBUTES) return;
     f = fopen(DUMP_TRIGGER, "rb");
     line[0] = 0;
@@ -1781,13 +2066,7 @@ static void dump_poll(const Level* L, int tick)
         tagpu_logf("recorder: %s: not understood (only `dump <name>`)", DUMP_TRIGGER);
         return;
     }
-    for (i = 0; name[i]; i++)
-        if (!((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= 'A' && name[i] <= 'Z') ||
-              (name[i] >= '0' && name[i] <= '9') || name[i] == '-' || name[i] == '_')) {
-            tagpu_logf("recorder: dump: the name %s is not letters, digits, - and _", name);
-            return;
-        }
-    dump_write(L, tick, name);
+    tagpu_rec_dump_arm(name);
 }
 
 /* ---- the events ----------------------------------------------------------------------------- */
@@ -3241,7 +3520,11 @@ void __cdecl tagpu_rec_capture(void)
             }
         }
     }
-    if (++s_polls % DUMP_POLL == 0) dump_poll(&L, tick);
+    if (++s_polls % DUMP_POLL == 0) dump_poll();
+    if (s_dump_name[0]) {
+        dump_write(&L, tick, s_dump_name);
+        s_dump_name[0] = 0;
+    }
     if (s_state != ST_RECORDING) return;
 
     r = s_rec;
@@ -3266,6 +3549,9 @@ void __cdecl tagpu_rec_capture(void)
     if (t < 0) { r->w = w0; rec_stop(REC_END_ORDERS); return; }
     t = t ? cap_features(r, &L) : 0;
     if (t < 0) { r->w = w0; rec_stop(REC_END_FEATURES); return; }
+    t = t ? cap_globals(r, L.ta) : 0;
+    t = t ? cap_proj(r, &L) : 0;
+    if (t < 0) { r->w = w0; rec_stop(REC_END_PROJ); return; }
     if (!t) {
         /* the iteration does not fit: the recording ends after the last whole one, and what this
            one wrote is dropped unpublished */
