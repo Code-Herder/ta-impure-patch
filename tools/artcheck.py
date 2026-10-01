@@ -5,14 +5,17 @@
 
 Run it before committing new art (research/notes/tadr-port/demo-recorder-s5-ui.md,
 *Drawing it*). Each PNG under art/ui/ is mapped to palette indices the way the DLL's
-bake maps it (tools/artbake.py), and every horizontal run of RUN indices that holds at
-least DISTINCT different values is looked up among the runs of the game's own UI art:
+bake maps it (tools/artbake.py), and every BLOCKxBLOCK square of it that holds at least
+DISTINCT different values is looked up among the squares of the game's own UI art:
 every PCX under bitmaps/ and every frame of every GAF under anims/, of each game
 directory given (default: tagpu/gamedir in the main checkout, retail). A mod's own art
 is checked by giving its directory too, for example a compatibility setup's.
 
-Flat or two-tone runs are not counted: a bevel line of one colour is a coincidence any
-painter makes. A run of RUN pixels with DISTINCT or more colours in the same order is not.
+WHY A SQUARE AND NOT A ROW. Painted art reduced to TA's palette walks the palette's own
+ramps, so a 12-pixel ROW of a smooth gradient recurs by chance in the game's painted
+screens: a painted ground with no copied pixel matched 1,718 such rows (2026-10-01) and
+not one 8x8 square of six or more colours, while a 140x40 crop of the game's title
+matched both. A square repeats only when the pixels were copied.
 Exit 0 when nothing matches, 1 with each match listed.
 
 The game's files are read here and never written anywhere: this tool reports
@@ -30,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import artbake  # noqa: E402
 
-RUN, DISTINCT = 12, 3
+BLOCK, DISTINCT = 8, 6
 
 
 def load_ta3do():
@@ -38,16 +41,16 @@ def load_ta3do():
 
 
 def runs(pixels, w, h, key=None):
-    """Every qualifying run of a w*h index plane, as bytes -> (x, y)."""
+    """Every qualifying square of a w*h index plane, as bytes -> (x, y)."""
     out = {}
-    for y in range(h):
-        row = pixels[y * w:(y + 1) * w]
-        for x in range(0, w - RUN + 1):
-            r = row[x:x + RUN]
-            if key is not None and key in r:
+    for y in range(h - BLOCK + 1):
+        rows = [pixels[(y + r) * w:(y + r + 1) * w] for r in range(BLOCK)]
+        for x in range(w - BLOCK + 1):
+            sq = b"".join(bytes(row[x:x + BLOCK]) for row in rows)
+            if key is not None and key in sq:
                 continue
-            if len(set(r)) >= DISTINCT:
-                out.setdefault(bytes(r), (x, y))
+            if len(set(sq)) >= DISTINCT:
+                out.setdefault(sq, (x, y))
     return out
 
 
@@ -106,7 +109,7 @@ def main():
     ref = {}
     for g in games:
         found, n = game_runs(ta3do, g)
-        print(f"artcheck: {n} files of {g.name}, {len(found)} runs")
+        print(f"artcheck: {n} files of {g.name}, {len(found)} squares")
         for k, v in found.items():
             ref.setdefault(k, f"{g.name}:{v}")
     hits = 0
@@ -115,8 +118,8 @@ def main():
             if k in ref:
                 hits += 1
                 if hits <= 40:
-                    print(f"MATCH {png} at ({x},{y}): a {RUN}-pixel run of {ref[k]}")
-    print(f"artcheck: {'FAILED, ' + str(hits) + ' matching runs' if hits else 'clean'}")
+                    print(f"MATCH {png} at ({x},{y}): a {BLOCK}x{BLOCK} square of {ref[k]}")
+    print(f"artcheck: {'FAILED, ' + str(hits) + ' matching squares' if hits else 'clean'}")
     return 1 if hits else 0
 
 

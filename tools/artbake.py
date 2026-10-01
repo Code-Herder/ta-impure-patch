@@ -19,7 +19,8 @@ known palette must show them the same:
   - a colour whose palette entry a mod changes: Total Mayhem's palette differs from
     retail's at 11-15, 144-159 and 240-244, ProTA's at 11-15 and 240-244
     (research/notes/tadr-port/demo-recorder-s5-ui.md, *Drawing it*), and 10-15 are
-    black duplicates of 0;
+    black duplicates of 0; and 9 and 208, where the shell's own palette (FrontendX's)
+    differs from palettes/palette.pal -- 9 in every retail-based setup, 208 in Mayhem;
   - partial alpha: a pixel is drawn or it is not.
 A colour TA's palette holds twice maps to its first index outside that set.
 
@@ -27,8 +28,8 @@ WHAT IS WRITTEN: one zlib stream (the DLL inflates it with lodepng) of
     "TART" | u32 version | u32 entries
     per entry:  char style[16] | char name[32] | u16 frames | u16 0
     per frame:  u16 code | u16 w | u16 h | i16 hotx | i16 hoty | u8 key | u8 0 | w*h indices
-`key` is the frame's transparent index -- 9 unless the frame draws 9, else the
-first index it does not draw. A font frame's hotspot is its baseline, the bottom
+`key` is the frame's transparent index, 9: no frame can draw 9, which the shell's
+palette and the game's disagree on. A font frame's hotspot is its baseline, the bottom
 row, as in the engine's GAF fonts (tools/guifont.py). """
 import json
 import struct
@@ -37,7 +38,7 @@ import zlib
 from pathlib import Path
 
 VERSION = 1
-VARIES = set(range(10, 16)) | set(range(144, 160)) | set(range(240, 245))
+VARIES = {9, 208} | set(range(10, 16)) | set(range(144, 160)) | set(range(240, 245))
 STYLES = ("retail", "escalation", "twilight")
 
 
@@ -135,7 +136,7 @@ def bake_frame(path, code, cmap, first):
                 fail(f"{path}: colour {c} at ({x},{y}) is {why}")
             idx.append(cmap[c])
             used.add(cmap[c])
-    key = 9 if 9 not in used else next(i for i in range(256) if i not in used)
+    key = 9
     mask = [a == 0 for row in rows for (_, _, _, a) in row]
     for i, m in enumerate(mask):
         if m:
