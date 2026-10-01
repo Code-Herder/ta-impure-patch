@@ -129,7 +129,7 @@ static unsigned   s_notes;          /* the level's anomalies logged             
 #define EV_KINDS (RK_EV_SPRAY - RK_EV_CREATE + 1)
 static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
-    unsigned obuilt, ofreed, orefused, yards, yrefused;
+    unsigned obuilt, ofreed, orefused, yards, yrefused, grefused;
     unsigned played[EV_KINDS], skipped[EV_KINDS];   /* each event kind's, from RK_EV_CREATE    */
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
@@ -611,7 +611,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
       0x43DA70 and the water state 0x43DB50, which start the scripts a change starts;
    3. what the fix-up and the relink leave, raw (s_raw2): the altitude and turn words, +0x110 bit
       16, the mover's claim stamp +0x26 and moved-at +0x2A;
-   4. the ID rows that name a weapon or the last attacker, each turned back into its pointer.
+   4. the ID rows that name a weapon or the last attacker, each turned back into its pointer;
+   5. the control group +0xAC, through the engine's setter (group_put).
    Never written: the position, cell, layer, sight stamp, walk class and water state, which the
    engine functions above write; what the create and the level init wrote (the type and its index,
    the slot, the owner); the carry links and the attach piece (0x48AB70's); the state byte
@@ -650,6 +651,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define PL_BLOCKLAST   0x6B
 #define U_ALT          0x6E
 #define U_TYPEIX       0xA6         /* u16, the type's index; 0 for a free slot (0x486DC7)          */
+#define U_GROUP        0xAC         /* the control group, or -1: the setter 0x480250's alone        */
+#define GROUPS         10           /* the owner's group table: 10 entries of 0x20 (0x480190)     */
 #define U_ATTACKER     0xF0
 #define U_OWNERIX      0xFF
 #define U_BUILT        0x104        /* the build left, a float: 0.0 when finished                  */
@@ -737,6 +740,11 @@ typedef void (__stdcall* PFN_Reclaim)(char* unit);
 typedef void (__stdcall* PFN_Passable)(uint32_t xz, uint32_t wh);
 #define E_Reclaim  ((PFN_Reclaim)0x0047C790u)
 #define E_Passable ((PFN_Passable)0x00440A40u)
+/* 0x480250(unit, g): the control-group setter, stdcall `ret 8` (DISASSEMBLED 0x480250..0x480455):
+   it removes the unit from the vector its +0xAC names when it finds it there, appends it to
+   vector g, and stores +0xAC = g on every path (0x4803A9, 0x48044C); g = -1 only removes */
+typedef void (__stdcall* PFN_SetGroup)(char* unit, int g);
+#define E_SetGroup ((PFN_SetGroup)0x00480250u)
 /* 0x48A9F0(unit, x, altitude, z, layer): the set-position (stdcall, `ret 0x14`) */
 typedef void (__stdcall* PFN_SetPos)(char* unit, int32_t x, int32_t alt, int32_t z,
                                      unsigned layer);
@@ -857,6 +865,7 @@ static void masks_init(void)
     m_bytes(s_raw1, U_TYPEIX, 4, 0);        /* the type's index, the slot +0xA8                */
     m_bytes(s_raw1, 0xF8, 2, 0);            /* the sight stamp's +0xF8, the attach piece       */
     m_bytes(s_raw1, U_OWNERIX, 1, 0);
+    m_bytes(s_raw1, U_GROUP, 4, 0);         /* the control group, group_put's              */
     m_bytes(s_raw1, 0x10A, 1, 0);           /* the water state                                 */
     m_bytes(s_raw1, 0x10E, 1, 0);           /* the state byte                                  */
     m_field(s_raw1, U_YARD, 1, 0x04, 0);    /* the yard, YARD_OPEN's                           */
@@ -1002,6 +1011,30 @@ static void ids_put(const Lv* L, char* u, const uint32_t* img, unsigned slot)
     }
 }
 
+/* A UNIT'S CONTROL GROUP +0xAC goes in through the engine's own setter, never raw. Two
+   invariants rest on it:
+   - the bound: the owner's group table is 10 entries of 0x20 bytes (0x480190 allocates 0x140,
+     DISASSEMBLED 0x480197..0x4801DE), and the setter indexes it with g and with the unit's
+     current +0xAC unchecked (0x48026F, 0x4802D7), so it is called only when both are -1 or below
+     10; otherwise the host's group stays, counted;
+   - the pairing: a unit's +0xAC names the vector that holds it, which the destructor's removal
+     0x480250(unit, -1) relies on (0x4867AF). The create appends every unit to group 0 (0x485D29);
+     a raw +0xAC = g would leave it there, and at its death the removal would search vector g,
+     miss, and leave a pointer to the dead unit in vector 0. */
+static void group_put(const Lv* L, char* u, const uint32_t* img, unsigned slot)
+{
+    int32_t want = (int32_t)img[U_GROUP / 4], have;
+    memcpy(&have, u + U_GROUP, 4);
+    if (want == have) return;
+    if ((want != -1 && (uint32_t)want >= GROUPS) || (have != -1 && (uint32_t)have >= GROUPS)) {
+        s_st.grefused++;
+        note("replay: GameTime %u: unit %u's control group %d not set from %d", L->now, slot,
+             want, have);
+        return;
+    }
+    E_SetGroup(u, want);
+}
+
 /* one unit's image, by the recipe above; the slot holds() it */
 static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
 {
@@ -1033,6 +1066,7 @@ static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
         put_masked(mover, img, s_raw2, REC_MOVER_AT, REC_MOVER_BYTES);
     }
     ids_put(L, u, img, slot);
+    group_put(L, u, img, slot);
 }
 
 /* `slot` is in the unit block of `owner`, a seat other than V: the create scales the owner's
@@ -2802,10 +2836,10 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s at %s, GameTime %u: %u iterations applied (%u late); units made %u at "
                "the start; %u refused, %u missing here, %u here only, %u of another type; %u IDs "
                "past their array; %u carry links made, %u refused; order nodes %u built, %u torn "
-               "down, %u refused; %u yards changed, %u refused", s_name, when, now, s_st.steps,
-               s_st.late, s_st.made, s_st.refused, s_st.missing, s_st.lingering, s_st.other,
-               s_st.bad_ids, s_st.links, s_st.unlinked, s_st.obuilt, s_st.ofreed, s_st.orefused,
-               s_st.yards, s_st.yrefused);
+               "down, %u refused; %u yards changed, %u refused; %u control groups not set", s_name,
+               when, now, s_st.steps, s_st.late, s_st.made, s_st.refused, s_st.missing,
+               s_st.lingering, s_st.other, s_st.bad_ids, s_st.links, s_st.unlinked, s_st.obuilt,
+               s_st.ofreed, s_st.orefused, s_st.yards, s_st.yrefused, s_st.grefused);
     tagpu_logf("replay: %s: events played/not played: %s", s_name, ev);
     tagpu_logf("replay: %s: features: %u calls made, %u out of bounds, %u returned otherwise; "
                "%u deaths, %u whose explosion's calls were not made; %u draws not taken as "
