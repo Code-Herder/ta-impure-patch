@@ -34,6 +34,7 @@ typedef struct RecTableInfo {
     unsigned short index, flags;
     unsigned char  cls, key;
     unsigned       stride;
+    unsigned       lhash;       /* the layout hash (tagpu_simreg_layout_hash)          */
     char           name[128];
 } RecTableInfo;
 

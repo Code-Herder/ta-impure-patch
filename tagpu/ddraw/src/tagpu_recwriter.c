@@ -298,10 +298,10 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             memcpy(&w->npool, b + at + 12, 4);
         }
         if (tag == RT_PROJECTILES && n == 4) memcpy(&w->ncap, b + at + 4, 4);
-        if (tag == RT_TABLE && n >= 12) {
+        if (tag == RT_TABLE && n >= 16) {
             WTable* t;
             unsigned short ix;
-            unsigned stride, nn = n - 12;
+            unsigned stride, nn = n - 16;
             if (w->ntab >= REC_TABLE_MAX) return 0;
             memcpy(&ix, b + at + 4, 2);
             memcpy(&stride, b + at + 8, 4);
@@ -310,7 +310,7 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             t->index = ix;
             t->stride = stride;
             if (nn >= sizeof t->name) nn = sizeof t->name - 1;
-            memcpy(t->name, b + at + 16, nn);
+            memcpy(t->name, b + at + 20, nn);
             t->name[nn] = 0;
         }
         at += (4 + n + 3) & ~3u;

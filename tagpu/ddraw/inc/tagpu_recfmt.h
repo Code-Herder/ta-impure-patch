@@ -336,8 +336,12 @@ enum RecTag {
                           at +0x2B: a seat at the start                                           */
     RT_LEVER,          /* u8 present, u8 text read, u16 name bytes, the name, then its text       */
     RT_LAYOUT,         /* string: replay-layout.tsv's SHA-256, TAGPU_REPLAY_LAYOUT_SHA256        */
-    RT_TABLE,          /* u16 index, u8 class, u8 key, u32 row bytes, u16 flags, u16 0, string
-                          name: a declared table the records name by index                       */
+    RT_TABLE,          /* u16 index, u8 class, u8 key, u32 row bytes, u16 flags, u16 0, u32 the
+                          layout hash (tagpu_simreg_layout_hash: 0 for a table of plain values),
+                          string name: a declared table the records name by index. The header
+                          states the declaration but not its layout, so the hash is what tells a
+                          reader that a table of the same name and row size lays its fields out
+                          as its own declaration does                                           */
     RT_OPTIONS,        /* the game as the simulation ran it at the start: u32 LosType bits 0-2
                           (main+0x14281), u32 ActiveCommanderDeath (main+0x37EF6), u32 difficulty
                           (main+0x37EEE), u32 fixed start positions ([main+0x29A0]+0x118), u16 the

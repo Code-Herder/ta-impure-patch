@@ -5,6 +5,7 @@
 #include <string.h>
 #include "tagpu_simreg.h"
 #include "tagpu_log.h"
+#include "crc32.h"
 
 /* The list's ends. The linker sorts `.rdata$simreg$*` by name, so every declaration (`$m`, one
    4-byte pointer each, 4-byte aligned) lies between these two with nothing else in between. */
@@ -240,6 +241,28 @@ unsigned tagpu_simreg_count(void)
 const SimDesc* tagpu_simreg_at(unsigned i)
 {
     return i < tagpu_simreg_count() ? s_ok[i] : NULL;
+}
+
+unsigned tagpu_simreg_layout_hash(const SimDesc* d)
+{
+    const SimField* f;
+    unsigned char b[10];
+    unsigned long crc;
+    if (!d->layout) return 0;
+    b[0] = d->rows ? 2 : 1;
+    b[1] = 0;
+    memcpy(b + 2, &d->flags, 2);
+    crc = Crc32_ComputeBuf(0, b, 4);
+    for (f = d->layout; f->size; f++) {
+        memcpy(b, &f->off, 2);
+        memcpy(b + 2, &f->size, 2);
+        memcpy(b + 4, &f->repeat, 2);
+        memcpy(b + 6, &f->step, 2);
+        b[8] = f->kind;
+        b[9] = f->id;
+        crc = Crc32_ComputeBuf(crc, b, 10);
+    }
+    return (unsigned)crc;
 }
 
 /* NULL when the declaration's shape is one the recorder can walk, else what is wrong with it */

@@ -4,11 +4,11 @@
 #ifndef TAGPU_REPLAY_GLOBALS_H
 #define TAGPU_REPLAY_GLOBALS_H
 
-#define TAGPU_REPLAY_GLOBALS_SHA256 "07efd13967ae31d68559e8a3c6a2da73e5c985d21a2313f49bce8e7abe1c9c0f"
+#define TAGPU_REPLAY_GLOBALS_SHA256 "3963682f02fb1e2177bb06ce09977381ab61ed3515b6d733453f1bfeeb90602b"
 #define TAGPU_REPLAY_GLOBALS_GEN_SHA256 "bb9e21b395feac70b5b3bc21f12ce745b6093ce328e9efdaf2bd58a496e62989"
 
-#define REC_GLOBALS_DWORDS 45    /* the globals image */
-#define REC_GLOBALS_SLOTS  27
+#define REC_GLOBALS_DWORDS 77    /* the globals image */
+#define REC_GLOBALS_SLOTS  59
 
 enum { RG_MAIN, RG_DATA };   /* a slot's offset: from main, or from .data's start */
 
@@ -47,11 +47,43 @@ static const ReplayGlobalSlot tagpu_replay_globals[REC_GLOBALS_SLOTS] = {
     { RG_DATA, 37, 4, 0x1132c, 0xFFFFFFFFu, 0x0u, 0x0u, "meteoron" },
     { RG_DATA, 38, 4, 0x11330, 0xFFFFFFFFu, 0x0u, 0x0u, "meteorstrike" },
     { RG_DATA, 39, 4, 0x11334, 0xFFFFFFFFu, 0x0u, 0x0u, "meteorp1" },
-    { RG_DATA, 40, 4, 0x1d53c, 0xFFFFFFFFu, 0x0u, 0x0u, "resbroadcast" },
-    { RG_DATA, 41, 4, 0x1d684, 0xFFFFFFFFu, 0x0u, 0x0u, "sitebyte" },
-    { RG_DATA, 42, 4, 0x1d688, 0xFFFFFFFFu, 0x0u, 0x0u, "sitesum" },
-    { RG_DATA, 43, 4, 0x1d6c4, 0xFFFFFFFFu, 0x0u, 0x0u, "cdtimer" },
-    { RG_DATA, 44, 4, 0x1ec88, 0xFFFFFFFFu, 0x0u, 0x0u, "rngseed" },
+    { RG_DATA, 40, 4, 0x11374, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark00" },
+    { RG_DATA, 41, 4, 0x11394, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark01" },
+    { RG_DATA, 42, 4, 0x113b4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark02" },
+    { RG_DATA, 43, 4, 0x113d4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark03" },
+    { RG_DATA, 44, 4, 0x113f4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark04" },
+    { RG_DATA, 45, 4, 0x11414, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark05" },
+    { RG_DATA, 46, 4, 0x11434, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark06" },
+    { RG_DATA, 47, 4, 0x11454, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark07" },
+    { RG_DATA, 48, 4, 0x11474, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark08" },
+    { RG_DATA, 49, 4, 0x11494, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark09" },
+    { RG_DATA, 50, 4, 0x114b4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark10" },
+    { RG_DATA, 51, 4, 0x114d4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark11" },
+    { RG_DATA, 52, 4, 0x114f4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark12" },
+    { RG_DATA, 53, 4, 0x11514, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark13" },
+    { RG_DATA, 54, 4, 0x11534, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark14" },
+    { RG_DATA, 55, 4, 0x11554, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark15" },
+    { RG_DATA, 56, 4, 0x11574, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark16" },
+    { RG_DATA, 57, 4, 0x11594, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark17" },
+    { RG_DATA, 58, 4, 0x115b4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark18" },
+    { RG_DATA, 59, 4, 0x115d4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark19" },
+    { RG_DATA, 60, 4, 0x115f4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark20" },
+    { RG_DATA, 61, 4, 0x11614, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark21" },
+    { RG_DATA, 62, 4, 0x11634, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark22" },
+    { RG_DATA, 63, 4, 0x11654, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark23" },
+    { RG_DATA, 64, 4, 0x11674, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark24" },
+    { RG_DATA, 65, 4, 0x11694, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark25" },
+    { RG_DATA, 66, 4, 0x116b4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark26" },
+    { RG_DATA, 67, 4, 0x116d4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark27" },
+    { RG_DATA, 68, 4, 0x116f4, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark28" },
+    { RG_DATA, 69, 4, 0x11714, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark29" },
+    { RG_DATA, 70, 4, 0x11734, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark30" },
+    { RG_DATA, 71, 4, 0x11754, 0xFFFFFFFFu, 0x0u, 0x0u, "mcwatermark31" },
+    { RG_DATA, 72, 4, 0x1d53c, 0xFFFFFFFFu, 0x0u, 0x0u, "resbroadcast" },
+    { RG_DATA, 73, 4, 0x1d684, 0xFFFFFFFFu, 0x0u, 0x0u, "sitebyte" },
+    { RG_DATA, 74, 4, 0x1d688, 0xFFFFFFFFu, 0x0u, 0x0u, "sitesum" },
+    { RG_DATA, 75, 4, 0x1d6c4, 0xFFFFFFFFu, 0x0u, 0x0u, "cdtimer" },
+    { RG_DATA, 76, 4, 0x1ec88, 0xFFFFFFFFu, 0x0u, 0x0u, "rngseed" },
 };
 
 #endif

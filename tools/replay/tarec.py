@@ -34,8 +34,10 @@ every cell and, after the world, the main block and .data whole (RK_IMAGE). A re
 carries only the cells that differ from the first iteration's grid, the base, which a reader takes
 from the stream, and none of a table's spans that are all zero. A table is paired with the
 recording's by its name: each build numbers its tables in its own registry order, and a recording
-may be played by another build than the one that made it. The globals image is replay-globals.tsv's
-fields, read through tools/replay-globals-gen.py where a command needs their names or classes.
+may be played by another build than the one that made it. The header gives each table's layout
+hash as well (`info` shows it), which the replay's seek compares with its own declaration's. The
+globals image is replay-globals.tsv's fields, read through tools/replay-globals-gen.py where a
+command needs their names or classes.
 
 Standard library only.
 """
@@ -197,9 +199,9 @@ def header(payload):
                                 "text": b[4 + nf:].decode("latin-1")})
         elif tag == RT_LAYOUT: h["layout"] = b.decode("latin-1")
         elif tag == RT_TABLE:
-            ix, cls, key, stride, flags = struct.unpack_from("<HBBIH", b)
+            ix, cls, key, stride, flags, _, lhash = struct.unpack_from("<HBBIHHI", b)
             h["tables"][ix] = {"class": cls, "key": key, "stride": stride, "flags": flags,
-                               "name": b[12:].decode("latin-1")}
+                               "layout": lhash, "name": b[16:].decode("latin-1")}
         elif tag == RT_OPTIONS:
             los, cmdr, diff, fixed, np, ctl, view = struct.unpack_from("<IIIIHBB", b)
             h["options"] = {"lostype": los, "cmdrdeath": cmdr, "difficulty": diff,
@@ -733,7 +735,7 @@ def cmd_info(path):
         print(f"  lever {lv['file']}: {'set' if lv['set'] else 'absent'}"
               + (f", {lv['text'][:40]!r}" if lv["read"] else ""))
     for ix, t in sorted(h["tables"].items()):
-        print(f"  table {ix}: {t['name']}, {t['stride']} bytes a row")
+        print(f"  table {ix}: {t['name']}, {t['stride']} bytes a row, layout {t['layout']:08x}")
     counts, raw = {}, {}
     for kind, first, last, payload in bl:
         counts[kind] = counts.get(kind, 0) + 1

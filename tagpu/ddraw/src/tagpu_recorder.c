@@ -508,6 +508,7 @@ typedef struct Table {
     int            unwatched;   /* GetWriteWatch refused it: diffed whole each time     */
     int            overcount;   /* its count has said more than its allocation holds    */
     int            zero;        /* its layout zeroes every byte: its image is all zero  */
+    unsigned       lhash;       /* tagpu_simreg_layout_hash, for the header             */
 } Table;
 
 static int table_grow(Table* tb, unsigned bytes);
@@ -809,12 +810,12 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
     tlv_u32(t, RT_PROJECTILES, TAGPU_LIM_PROJ);
 }
 
-/* One RT_TABLE: the registry index the stream's table records carry, and what the declaration
-   is. The index is this build's registry order, which another build numbers otherwise, so a
-   reader pairs two builds' tables by name. */
-static void table_entry(Tlv* t, unsigned index, const SimDesc* d)
+/* One RT_TABLE: the registry index the stream's table records carry, what the declaration is,
+   and its layout's hash. The index is this build's registry order, which another build numbers
+   otherwise, so a reader pairs two builds' tables by name. */
+static void table_entry(Tlv* t, unsigned index, const SimDesc* d, unsigned lhash)
 {
-    unsigned char b[12 + 128];
+    unsigned char b[16 + 128];
     unsigned short ix = (unsigned short)index, fl = d->flags;
     unsigned n = (unsigned)bounded_len(d->name, 128);
     memcpy(b, &ix, 2);
@@ -823,14 +824,16 @@ static void table_entry(Tlv* t, unsigned index, const SimDesc* d)
     memcpy(b + 4, &d->stride, 4);
     memcpy(b + 8, &fl, 2);
     b[10] = b[11] = 0;
-    memcpy(b + 12, d->name, n);
-    tlv(t, RT_TABLE, b, 12 + n);
+    memcpy(b + 12, &lhash, 4);
+    memcpy(b + 16, d->name, n);
+    tlv(t, RT_TABLE, b, 16 + n);
 }
 
 static void header_tables(const Rec* r, Tlv* t)
 {
     unsigned i;
-    for (i = 0; i < r->ntab; i++) table_entry(t, r->tab[i].index, r->tab[i].d);
+    for (i = 0; i < r->ntab; i++)
+        table_entry(t, r->tab[i].index, r->tab[i].d, r->tab[i].lhash);
 }
 
 /* ---- the files still being finished --------------------------------------------------------- */
@@ -1022,6 +1025,7 @@ static Rec* rec_start(const Level* L, int tick)
         tb->d = d;
         tb->index = i;
         tb->zero = image_zero(d);
+        tb->lhash = tagpu_simreg_layout_hash(d);
         table_rows(d, &bytes);
         /* the rows a declaration states, or for a heap table that counts its own, what it holds
            now: cap_tables grows the room when that table grows */
@@ -1923,7 +1927,7 @@ static void dump_write(const Level* L, int tick, const char* name)
     tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
     for (i = 0; i < n; i++) {
         const SimDesc* d = tagpu_simreg_at(i);
-        if (d && table_recorded(d)) table_entry(&t, i, d);
+        if (d && table_recorded(d)) table_entry(&t, i, d, tagpu_simreg_layout_hash(d));
     }
     if (t.full) {
         tagpu_logf("recorder: dump %s refused: its header does not fit in %u bytes", name, t.cap);

@@ -308,7 +308,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         }
         case RT_TABLE: {
             RecTableInfo* t;
-            if (n < 12 || h->ntab >= REC_TABLE_MAX) {
+            if (n < 16 || h->ntab >= REC_TABLE_MAX) {
                 snprintf(why, cap, "a malformed table in the header");
                 return 0;
             }
@@ -318,7 +318,8 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             t->key = p[3];
             t->stride = u32(p + 4);
             memcpy(&t->flags, p + 8, 2);
-            text(t->name, sizeof t->name, p + 12, n - 12);
+            t->lhash = u32(p + 12);
+            text(t->name, sizeof t->name, p + 16, n - 16);
             for (i = 0; i < h->ntab; i++)
                 if (h->tab[i].index == t->index) {
                     snprintf(why, cap, "table %u twice in the header", t->index);

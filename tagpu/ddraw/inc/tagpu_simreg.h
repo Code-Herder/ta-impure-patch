@@ -243,4 +243,12 @@ const SimDesc* tagpu_simreg_at(unsigned i);
 unsigned       tagpu_simreg_levers(void);
 const char*    tagpu_simreg_lever_at(unsigned i, int* set, const char** text, int* len);
 
+/* A declaration's layout as one number, for a reader to tell whether a recorded table's fields
+   are the ones its own declaration of the same name describes (tagpu_recfmt.h, RT_TABLE): the
+   CRC-32 (crc32.c) of its form -- u8 2 when a count variable says how many rows are live
+   (SIM_ROWS_LIVE, SIM_HEAP), else 1; u8 0; u16 its flags -- then of each layout field to the end
+   marker, as u16 off, size, repeat, step, u8 kind, u8 id, little-endian. 0 for a declaration with
+   no layout, whose rows are plain values. */
+unsigned       tagpu_simreg_layout_hash(const SimDesc* d);
+
 #endif
