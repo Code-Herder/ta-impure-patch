@@ -137,8 +137,18 @@ static struct {
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
     unsigned roots, rrefused, rdiffer, deaths, dmissed, left, cells, cstruct, cbad, wrecks,
-             wstruct, wbad, heads, cursor;
+             wstruct, wbad, heads, cursor, tcells, tover;
 } s_fst;                            /* ... and its features' (THE FEATURES)                       */
+/* The runs the feature tick's input wrote since the last images (THE TICK'S INPUT). 4096 runs:
+   MEASURED in the six fixtures of 2026-10-01, the runs of one step's input were at most 432
+   (the battle; median 134, p99 270), at most 47 in every other. Past the cap the whole grid is
+   written back, so the cap costs time, never a cell. */
+#define TIN_RUNS 4096
+static struct {
+    unsigned n;
+    int      overflow;
+    uint16_t run[TIN_RUNS][3];      /* x, z, n: bounded by the reader (cells_ok)                  */
+} s_tin;
 static struct {
     unsigned puts, late, refused, reacts, dropped, unbounded, mputs, mentries, mrefused;
 } s_gst;                            /* ... and its globals' and projectiles'                      */
@@ -180,6 +190,8 @@ static void replay_close(void)
     s_notes = 0;
     memset(&s_st, 0, sizeof s_st);
     memset(&s_fst, 0, sizeof s_fst);
+    s_tin.n = 0;
+    s_tin.overflow = 0;
     memset(&s_gst, 0, sizeof s_gst);
     memset(&s_seek, 0, sizeof s_seek);
     s_frame_tick = ~0u;
@@ -2220,6 +2232,58 @@ static void heads_put(const Lv* L, const unsigned char* b)
     else s_fst.cursor++;
 }
 
+/* THE TICK'S INPUT. The runs inside the feature tick's bracket are the cells that changed since
+   the iteration's images, as the recording machine's tick read them (tagpu_recorder.c,
+   cells_tick), and root_play writes them before the tick. They are the replay's only write of its
+   own between two images, and no image need carry them: the reader keeps them as events, out of
+   its world's grid, so a cell the input changed and the rest of the step changed back is in
+   neither image (MEASURED on links, 2026-10-01: the commander's move north wrote (121, 491) n 2
+   as the tick's input, and the kill-all in the same step cleared its footprint; the image after
+   it carries rows 492 and 493 only, and the host kept the slot to the level's end). So each run is
+   noted here and written back from the world at the next images. With that, at every capture
+   point the host's grid is the world's: the images carry every cell that changed between two
+   images, the footprint writers' writes are undone at their return (tagpu_puppet.c), the feature
+   calls are the recording machine's own with its inputs, and this write-back undoes the input.
+   It takes the NEXT iteration's world: there the grid names only units live in its image, which
+   the step's creates and deaths have made the host's (the delta's own precondition), so
+   cell_put's slot rule refuses nothing it would not refuse in the delta. The step's own world
+   would name a unit that died in the step. play runs events_put, iteration_read and images_put
+   back to back, and nothing reads the grid between them. When the playing ends at the reader,
+   the last step's runs keep the input: there is no world after the last step, no dump sees them
+   (a dump is taken at a capture point, before that step's events), and a seek rewrites every
+   cell (R10). */
+static void tin_note(const unsigned char* b)
+{
+    if (s_tin.n == TIN_RUNS) {
+        s_tin.overflow = 1;
+        return;
+    }
+    memcpy(s_tin.run[s_tin.n++], b, 6);
+}
+
+static void tin_put(const Lv* L, const RecWorld* W)
+{
+    unsigned r, k, c, ncells = L->gw * L->gh;
+    if (s_tin.overflow) {
+        s_fst.tover++;
+        for (c = 0; c < ncells; c++)
+            if (cell_put(L, L->grid + (size_t)c * REC_CELL_BYTES, W->grid + (size_t)c * REC_CELL_BYTES,
+                         c % L->gw, c / L->gw))
+                s_fst.tcells++;
+    } else {
+        for (r = 0; r < s_tin.n; r++) {
+            const uint16_t* run = s_tin.run[r];
+            for (k = 0; k < run[2]; k++) {
+                char* cell = cell_at(L, (int32_t)run[0] + (int32_t)k, run[1]);
+                if (cell && cell_put(L, cell, W->grid + (cell - L->grid), run[0] + k, run[1]))
+                    s_fst.tcells++;
+            }
+        }
+    }
+    s_tin.n = 0;
+    s_tin.overflow = 0;
+}
+
 static void features_put(const Lv* L, const RecWorld* W)
 {
     unsigned i;
@@ -2239,6 +2303,7 @@ static void features_put(const Lv* L, const RecWorld* W)
             break;
         }
     }
+    tin_put(L, W);
 }
 
 /* the draws inside the root that opens at `i` into the queue; its RK_EV_FEATURE_END's index. A
@@ -2332,7 +2397,10 @@ static void root_play(const Lv* L, const RecWorld* W, unsigned i)
     memcpy(&want, W->ev[end].b + 4, 4);
     if (root == FR_TICK)
         for (j = i + 1; j < end; j++)
-            if (W->ev[j].kind == RK_CELLS) cells_put(L, W->ev[j].b);
+            if (W->ev[j].kind == RK_CELLS) {
+                cells_put(L, W->ev[j].b);
+                tin_note(W->ev[j].b);
+            }
     tagpu_puppet_draws(s_fq, n);
     was = tagpu_puppet_features(1);
     called = root_call(L, root, b + 8, &got);
@@ -3348,6 +3416,8 @@ static void sk_features(const Lv* L, const RecWorld* W)
         memcpy(cell, slot, 4);
         s_sk.fcells++;
     }
+    s_tin.n = 0;                    /* every cell is the world's: no input is left to write back */
+    s_tin.overflow = 0;
 }
 
 /* ---- R12: the declared tables ---- */
@@ -3749,10 +3819,10 @@ static void counts_log(const char* when, unsigned now)
                "%u deaths, %u whose explosion's calls were not made; %u draws not taken as "
                "recorded; %u cells and %u wreck records written, %u and %u left for their "
                "structure, %u and %u for a value out of bounds; the heads differed %u times, the "
-               "cursor out of bounds %u", s_name, s_fst.roots, s_fst.rrefused, s_fst.rdiffer,
-               s_fst.deaths, s_fst.dmissed, s_fst.left, s_fst.cells,
-               s_fst.wrecks, s_fst.cstruct, s_fst.wstruct, s_fst.cbad, s_fst.wbad, s_fst.heads,
-               s_fst.cursor);
+               "cursor out of bounds %u; the tick's input put back: %u cells, %u overflows",
+               s_name, s_fst.roots, s_fst.rrefused, s_fst.rdiffer, s_fst.deaths, s_fst.dmissed,
+               s_fst.left, s_fst.cells, s_fst.wrecks, s_fst.cstruct, s_fst.wstruct, s_fst.cbad,
+               s_fst.wbad, s_fst.heads, s_fst.cursor, s_fst.tcells, s_fst.tover);
     tagpu_logf("replay: %s: globals and projectiles: written %u times, %u capture points holding "
                "another iteration; the pool refused %u times; the sight mode changed %u times, "
                "%u temporary sight records dropped, %u changes not made; the explored map changed "
