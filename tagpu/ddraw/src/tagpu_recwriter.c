@@ -768,31 +768,6 @@ static int list_record(Writer* w, unsigned kind, const unsigned char* b, unsigne
     return 1;
 }
 
-/* an event's length: fixed, or a fixed part and at most `var` bytes more */
-static int event_len(unsigned kind, unsigned len)
-{
-    switch (kind) {
-    case RK_EV_CREATE:      return len == 24;
-    case RK_EV_DEATH:       return len == 12 + REC_UNIT_IMAGE;
-    case RK_EV_SHOT:        return len == 36;
-    case RK_EV_INTERCEPT:   return len == 16;
-    case RK_EV_START:       return len == 28;
-    case RK_EV_START_NAMED: return len >= 24 && len <= 24 + REC_NAME_MAX;
-    case RK_EV_BUILT:       return len == 8;
-    case RK_EV_STATE:       return len == 8;
-    case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
-    case RK_EV_SPRAY:       return len == 48;
-    case RK_EV_DRAW:        return len == 12;
-    default:                return 0;
-    }
-}
-
-/* an RK_EV_FEATURE's arguments after its site, by its root (tagpu_recfmt.h, RecRoot) */
-static int root_len(unsigned root, unsigned len)
-{
-    static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12 };
-    return root < FR_ROOTS && len == 8 + args[root];
-}
 
 /* The feature records and the brackets. 1 applied, 0 malformed. A bracket opens and closes inside
    one step's events: a feature call's, RK_EV_FEATURE to its END, holds no other bracket, and
@@ -839,7 +814,7 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         break;
     case RK_EV_FEATURE:
         if (!w->ticked || w->fbracket || (b[0] == FR_TICK && w->ndeaths) || b[1] || b[2] || b[3] ||
-            !root_len(b[0], len))
+            !rec_root_len(b[0], len))
             return 0;
         w->fbracket = b[0] + 1u;
         break;
@@ -848,7 +823,7 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         w->fbracket = 0;
         break;
     case RK_EV_DEATH:
-        if (!w->ticked || w->fbracket || w->ndeaths == REC_DEATHS_MAX || !event_len(kind, len))
+        if (!w->ticked || w->fbracket || w->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len))
             return 0;
         memcpy(&w->death[w->ndeaths++], b, 4);
         break;
@@ -1086,7 +1061,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     default:
         /* the events: nothing of the copy; RK_CORRECT and RK_HEADER are never in the ring after
            the first record */
-        if (!w->ticked || !event_len(kind, len)) return 0;
+        if (!w->ticked || !rec_event_len(kind, len)) return 0;
         break;
     }
     buf_rec(&w->stream, kind, b, len, NULL, 0);

@@ -269,6 +269,35 @@ enum RecRoot {
 #define REC_ROOT_ARGS_MAX 28   /* FR_SPAWN's                                                    */
 #define REC_DEATHS_MAX    32   /* the deaths a bracket may nest, and the capture's frames        */
 
+/* An event's length and a feature root's: the one rule the writer and the reader both apply
+   (tagpu_recwriter.c, tagpu_recreader.c), each length the event's comment above gives -- fixed,
+   or a fixed part and at most a bounded tail. A record that fails it is malformed: the writer
+   abandons the recording at it, and the reader refuses the step. */
+static __inline int rec_event_len(unsigned kind, unsigned len)
+{
+    switch (kind) {
+    case RK_EV_CREATE:      return len == 28;
+    case RK_EV_DEATH:       return len == 12 + REC_UNIT_IMAGE;
+    case RK_EV_SHOT:        return len == 36;
+    case RK_EV_INTERCEPT:   return len == 16;
+    case RK_EV_START:       return len == 28;
+    case RK_EV_START_NAMED: return len >= 24 && len <= 24 + REC_NAME_MAX;
+    case RK_EV_BUILT:       return len == 8;
+    case RK_EV_STATE:       return len == 8;
+    case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
+    case RK_EV_SPRAY:       return len == 48;
+    case RK_EV_DRAW:        return len == 12;
+    default:                return 0;
+    }
+}
+
+/* an RK_EV_FEATURE's arguments after its site, by its root */
+static __inline int rec_root_len(unsigned root, unsigned len)
+{
+    static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12 };
+    return root < FR_ROOTS && len == 8 + args[root];
+}
+
 /* The feature code's calls of the simulation RNG 0x4B6C30: every one from 0x4232F0 to 0x4250FF,
    which holds the feature functions, the spread 0x4239C0 and the tick 0x424050. */
 enum RecDrawSite {

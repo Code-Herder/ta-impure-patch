@@ -520,30 +520,6 @@ static void delta_apply(uint32_t* img, const unsigned char* bits, unsigned dword
         if (bits[i >> 3] >> (i & 7) & 1) memcpy(&img[i], vals + 4 * k++, 4);
 }
 
-static int event_len(unsigned kind, unsigned len)
-{
-    switch (kind) {
-    case RK_EV_CREATE:      return len == 28;
-    case RK_EV_DEATH:       return len == 12 + REC_UNIT_IMAGE;
-    case RK_EV_SHOT:        return len == 36;
-    case RK_EV_INTERCEPT:   return len == 16;
-    case RK_EV_START:       return len == 28;
-    case RK_EV_START_NAMED: return len >= 24 && len <= 24 + REC_NAME_MAX;
-    case RK_EV_BUILT:       return len == 8;
-    case RK_EV_STATE:       return len == 8;
-    case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
-    case RK_EV_SPRAY:       return len == 48;
-    case RK_EV_DRAW:        return len == 12;
-    default:                return 0;
-    }
-}
-
-/* an RK_EV_FEATURE's arguments after its site, by its root (tagpu_recfmt.h, RecRoot) */
-static int root_len(unsigned root, unsigned len)
-{
-    static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12 };
-    return root < FR_ROOTS && len == 8 + args[root];
-}
 
 /* An RK_CELLS, bounded by the grid: 1 well-formed. */
 static int cells_ok(const RecReader* r, const unsigned char* b, unsigned len)
@@ -583,7 +559,7 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     switch (kind) {
     case RK_EV_FEATURE:
         if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) || b[1] || b[2] || b[3] ||
-            !root_len(b[0], len))
+            !rec_root_len(b[0], len))
             return 0;
         r->fbracket = b[0] + 1u;
         break;
@@ -592,7 +568,7 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         r->fbracket = 0;
         break;
     case RK_EV_DEATH:
-        if (r->fbracket || r->ndeaths == REC_DEATHS_MAX || !event_len(kind, len)) return 0;
+        if (r->fbracket || r->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len)) return 0;
         memcpy(&r->death[r->ndeaths++], b, 4);
         break;
     case RK_EV_DEATH_END:
@@ -602,15 +578,15 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         r->ndeaths--;
         break;
     case RK_EV_DRAW:
-        if ((!r->fbracket && !r->ndeaths) || !event_len(kind, len) || b[0] >= FS_SITES || b[1] ||
-            b[2] || b[3])
+        if ((!r->fbracket && !r->ndeaths) || !rec_event_len(kind, len) || b[0] >= FS_SITES ||
+            b[1] || b[2] || b[3])
             return 0;
         break;
     case RK_CELLS:
         if (r->fbracket != FR_TICK + 1 || !cells_ok(r, b, len)) return 0;
         break;
     default:
-        if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !event_len(kind, len)) return 0;
+        if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !rec_event_len(kind, len)) return 0;
         break;
     }
     return list_add(&w->ev, &w->nev, &r->evcap, kind, len, b);
