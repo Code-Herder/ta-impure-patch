@@ -295,6 +295,45 @@ static void side_reset(const char* unit)
     }
 }
 
+/* A SEEK'S TABLE WRITE (tagpu_replay.c, seek_run) puts g_def's rows back from a recording's image by
+   their layout alone, on the game thread between two sim steps; this re-establishes what the
+   layout cannot say, on each row def_rec can return -- one whose def is its type's own:
+   - count in [3, WPN_CAP] with w[k] and mask[k] non-NULL for every k below count - 3: def_weapon
+     and def_mask index them below count, and cb_loader never stores NULL. Otherwise the type
+     keeps its three stock weapons (count 3);
+   - each cached piece -1 (unasked) or in [0, 127), the rule slot_piece applies to its own stores;
+     otherwise -1, and the module asks the script again at the next use, as after a load.
+   Returns the rows and pieces it repaired. */
+unsigned int tagpu_weapons_restored(void)
+{
+    char* ta = TA();
+    char* base;
+    unsigned int i, k, repaired = 0;
+    if (!g_def || (size_t)ta < 0x600000u || !(base = *(char**)(ta + OFF_DEFS))) return 0;
+    for (i = 0; i < WPN_MAXDEFS; i++) {
+        WDef* r = &g_def[i];
+        int ok;
+        if (r->def != base + (size_t)i * DEF_STRIDE) continue;
+        ok = r->count >= 3 && r->count <= WPN_CAP;
+        for (k = 0; ok && k + 3 < r->count; k++) ok = r->w[k] && r->mask[k];
+        if (!ok) {
+            r->count = 3;
+            repaired++;
+        }
+        for (k = 0; k < WPN_SIDE; k++) {
+            if (r->pc_aimfrom[k] != -1 && (r->pc_aimfrom[k] < 0 || r->pc_aimfrom[k] >= 127)) {
+                r->pc_aimfrom[k] = -1;
+                repaired++;
+            }
+            if (r->pc_query[k] != -1 && (r->pc_query[k] < 0 || r->pc_query[k] >= 127)) {
+                r->pc_query[k] = -1;
+                repaired++;
+            }
+        }
+    }
+    return repaired;
+}
+
 /* =========================================================================
    4. Slot addressing — the two helpers the whole design rests on
    ========================================================================= */

@@ -2827,7 +2827,7 @@ static void counts_log(const char* when, unsigned now)
         "create", "death", "shot", "intercept", "start", "named start", "built", "state", "reply",
         "spray"
     };
-    char ev[400], gates[300];
+    char ev[400], gates[400];
     unsigned k, n = 0;
     ev[0] = 0;
     for (k = 0; k < EV_KINDS && n < sizeof ev; k++)

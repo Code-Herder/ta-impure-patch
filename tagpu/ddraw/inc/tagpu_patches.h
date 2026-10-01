@@ -54,6 +54,18 @@ int tagpu_tx_replay_death(const unsigned char* rec, int carried);
    main+0x391F5). 1 when one detonated. */
 int tagpu_wpn_replay_intercept(const unsigned char* point, unsigned int weapon);
 
+/* A seek on a level that plays a recording (tagpu_replay.c, seek_run), on the game thread between
+   two sim steps, after its kills and creates:
+   - tagpu_effects_clear: every particle, explosion, debris record and flying piece gone, in
+     either build. 1 cleared, 0 when nothing could be (no main block, or the raise not in).
+   - tagpu_patches_restore_begin, then the rebuild writes this file's declared tables, then
+     tagpu_patches_restored re-establishes what their layouts cannot express: the air pool's
+     triple, the hit delay queue's bounds and the ghost sweep's count. Nothing but C code may run
+     between the two (the air pool's lock is held). It returns what it repaired. */
+int tagpu_effects_clear(void);
+void tagpu_patches_restore_begin(void);
+unsigned int tagpu_patches_restored(void);
+
 /* The wind's generator state, for a level that plays a recording (tagpu_replay.c): the name its
    declaration has in a recording's header, and the state to draw from. The replay's first step
    sets the state the recording's first image holds, on the game thread, before that tick's wind

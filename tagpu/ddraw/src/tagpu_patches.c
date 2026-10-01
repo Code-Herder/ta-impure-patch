@@ -10359,6 +10359,33 @@ void tagpu_apply_patches(void)
    disassembly). Every site goes into the fail-closed table (top of this file), with the
    simulation fixes' sites, and is compared and written with them. */
 
+/* One debris record initialised free, with the vertex and face blocks it owns, as the level
+   load's loop 0x4207FB..0x4208F9 initialises each of the engine's 300 (DISASSEMBLED: +0 = 0xFF,
+   +4 = 8, +8 = 6, +0xC = -1, +0x1C = 0x502C28, +0x20 = 0, +0x24 the record's 0x60-byte vertex
+   block, +0x28 its 0xC0-byte face block; each of its 6 faces of 0x20 gets +0x1C bit 0, +0 = 0xC8,
+   +4 = 4, +0xC = 0x502BF8 + 8 * the face). Both builds: the raised one over its own records
+   (lim_level_reset), the stock one over the engine's at a seek (tagpu_effects_clear). */
+static void debris_init(unsigned char* r, unsigned char* vertices, unsigned char* faces)
+{
+    unsigned int v, k;
+    r[0] = 0xFF;
+    v = 8;           memcpy(r + 0x04, &v, 4);
+    v = 6;           memcpy(r + 0x08, &v, 4);
+    v = 0xFFFFFFFFu; memcpy(r + 0x0C, &v, 4);
+    v = 0x00502C28u; memcpy(r + 0x1C, &v, 4);
+    v = 0;           memcpy(r + 0x20, &v, 4);
+    v = (unsigned int)(size_t)vertices; memcpy(r + 0x24, &v, 4);
+    v = (unsigned int)(size_t)faces;    memcpy(r + 0x28, &v, 4);
+    for (k = 0; k < 6; k++) {
+        unsigned char* f = faces + k * 0x20;
+        memcpy(&v, f + 0x1C, 4);
+        v |= 1u;                          memcpy(f + 0x1C, &v, 4);
+        v = 0xC8;                         memcpy(f + 0x00, &v, 4);
+        v = 4;                            memcpy(f + 0x04, &v, 4);
+        v = 0x00502BF8u + k * 8u;         memcpy(f + 0x0C, &v, 4);
+    }
+}
+
 
 #ifndef TAGPU_LIMITS_STOCK
 
@@ -10388,8 +10415,6 @@ SIM_ENGINE(s_auxVert, SIM_STATE);
 static unsigned char s_auxFace[TAGPU_LIM_AUX][AUX_FACES];
 SIM_ENGINE(s_auxFace, SIM_STATE);
 
-static void put32(unsigned char* p, unsigned int v) { memcpy(p, &v, 4); }
-static unsigned int get32(const unsigned char* p) { unsigned int v; memcpy(&v, p, 4); return v; }
 
 /* The debris-record allocator, in place of 0x420920 and of its inline copy at 0x4217DE.
    FIRST-FREE, AS STOCK'S IS: below stock's 300 the records are handed out exactly as stock
@@ -10410,26 +10435,9 @@ static unsigned char* __cdecl lim_aux_alloc(void)
    leaves eax = 0 on the way out of the function. */
 static int __cdecl lim_level_reset(void)
 {
-    int i, k;
+    int i;
     memset(s_psys, 0, sizeof s_psys);
-    for (i = 0; i < TAGPU_LIM_AUX; i++) {
-        unsigned char* r = s_aux[i];
-        r[0] = 0xFF;
-        put32(r + 0x04, 8);
-        put32(r + 0x08, 6);
-        put32(r + 0x0C, 0xFFFFFFFFu);
-        put32(r + 0x1C, 0x00502C28u);
-        put32(r + 0x20, 0);
-        put32(r + 0x24, (unsigned int)(size_t)s_auxVert[i]);
-        put32(r + 0x28, (unsigned int)(size_t)s_auxFace[i]);
-        for (k = 0; k < AUX_NFACE; k++) {
-            unsigned char* f = s_auxFace[i] + k * 0x20;
-            put32(f + 0x1C, get32(f + 0x1C) | 1u);
-            put32(f + 0x00, 0xC8);
-            put32(f + 0x04, 4);
-            put32(f + 0x0C, 0x00502BF8u + (unsigned int)k * 8u);
-        }
-    }
+    for (i = 0; i < TAGPU_LIM_AUX; i++) debris_init(s_aux[i], s_auxVert[i], s_auxFace[i]);
     return 0;
 }
 
@@ -11751,6 +11759,57 @@ static int wpn_slots(void) { return TAGPU_LIM_WEAPONS; }
 
 #endif /* TAGPU_LIMITS_STOCK */
 
+/* THE EFFECTS CLEARED at a seek (tagpu_replay.c, seek_run), on the game thread between two sim
+   steps, after the rebuild's kills and creates: what was in flight before the seek and what the
+   creates' Create scripts made both go, and nothing that names a unit outlives the kills.
+   - The particles: each of the 10 layers of *(main+0x38D77), 16 bytes each, its vector from +4
+     to +8: every object destroyed by its own [vtable+0](1) and removed from the front, as the
+     teardown 0x471DE0's first loop does (DISASSEMBLED 0x471E0B..0x471E5A); the layer's storage
+     is kept (its second loop, which frees it, is not run).
+   - The explosions, then the debris records and the flying-piece slots, in that order: debris
+     re-initialised while live explosions still name a record at +0 would leave those explosions
+     drawing a free record. The raised build's are its own pools (lim_level_reset); the stock
+     build's are the engine's: the explosion count main+0x1491B, the 300 debris records at
+     main+0x1AB9F with their blocks at main+0x1E88F and main+0x2590F (the strides the load's loop
+     uses), and the 100 slots 0x511DF0..0x511F80, zeroed as the load's `rep stosd` at 0x42090A
+     does.
+   Not the rest of the load 0x420620: it allocates the explosions' sequence tables and the
+   pieces' ring, which mid-level would leak. The ring that owns the pieces' blocks (0x511F80)
+   stays consistent: an eviction nulls an owner slot only while it still points at that block
+   (0x437A96..0x437A9D, 0x437AC8..0x437ACF), so a block orphaned here is reclaimed later without
+   touching a reused slot. 1 cleared, 0 when there is no main block or the raise is not in. */
+int tagpu_effects_clear(void)
+{
+    typedef void (__thiscall* PFN_FxDestroy)(void* object, int flags);
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* layers;
+    int i;
+    if (!ta) return 0;
+    layers = *(unsigned char* const*)(ta + 0x38D77);
+    for (i = 0; layers && i < 10; i++) {
+        char** first = (char**)(layers + i * 16 + 4);      /* the layer's vector */
+        char** last = (char**)(layers + i * 16 + 8);
+        while (*last != *first) {
+            void* object = *(void**)*first;
+            if (object) ((PFN_FxDestroy)**(void***)object)(object, 1);
+            memmove(*first, *first + 4, (size_t)(*last - (*first + 4)));
+            *last -= 4;
+        }
+    }
+#ifndef TAGPU_LIMITS_STOCK
+    if (s_limState <= 0) return 0;
+    s_expl.count = 0;
+    lim_level_reset();
+#else
+    *(int*)(ta + 0x1491B) = 0;
+    for (i = 0; i < 300; i++)
+        debris_init((unsigned char*)ta + 0x1AB9F + i * 0x34, (unsigned char*)ta + 0x1E88F + i * 0x60,
+                    (unsigned char*)ta + 0x2590F + i * 0xC0);
+    memset((void*)(size_t)0x00511DF0u, 0, 100 * 4);
+#endif
+    return 1;
+}
+
 /* Two sites of the table that cover one byte: two fixes, or a fix and a raised limit, would
    each have been checked against stock bytes the other rewrites. Our bug, found before
    anything is compared. */
@@ -12129,4 +12188,49 @@ void tagpu_limits_report(void)
         }
     }
     tagpu_refuse(text);
+}
+
+/* THE INVARIANTS A SEEK'S TABLE WRITE CANNOT EXPRESS (tagpu_replay.c, seek_run). The rebuild writes
+   this file's declared tables back from a recording's image, by their layouts alone, on the game
+   thread between two sim steps; these re-establish what the layouts cannot say before anything
+   reads the tables again. The air pool's lock is held from tagpu_patches_restore_begin, before the
+   first table is written, to the end of tagpu_patches_restored: the write is C code alone, so the
+   lock covers every read and write of the pool and of s_airIn, as *The pool* requires, and is
+   still held across no engine code. Returns what it repaired. */
+void tagpu_patches_restore_begin(void)
+{
+    EnterCriticalSection(&s_airLock);
+}
+
+unsigned int tagpu_patches_restored(void)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int slots = ta ? *(const unsigned short*)(ta + 0x14351) : 0, n, i, k = 0;
+    unsigned int repaired = 0;
+    /* The air triple: s_airIn exactly the indicator of s_airPool[0, s_airN), so a slot enters the
+       pool at most once (air_note's test) and the pool cannot outgrow its rows; every entry a
+       slot of the array, which air_unit indexes it with */
+    n = s_airN < AIR_SLOTS ? s_airN : AIR_SLOTS;
+    if (n > slots) n = slots;
+    memset(s_airIn, 0, sizeof s_airIn);
+    for (i = 0; i < n; i++) {
+        unsigned int slot = s_airPool[i];
+        if (slot >= slots || s_airIn[slot]) continue;
+        s_airIn[slot] = 1;
+        s_airPool[k++] = (unsigned short)slot;
+    }
+    repaired += s_airN - k;
+    s_airN = k;
+    LeaveCriticalSection(&s_airLock);
+    /* the delay queue's head and count index s_hitDelay raw (hit_delay_flush, the enqueue) */
+    if (s_hitDelayHead >= HIT_DELAY_MAX || s_hitDelayCount > HIT_DELAY_MAX) {
+        s_hitDelayHead = s_hitDelayCount = 0;
+        repaired++;
+    }
+    /* ghost_sweep reads down from s_ghostDone[s_ghostDoneN - 1] unguarded */
+    if (s_ghostDoneN > GHOST_DONE) {
+        s_ghostDoneN = 0;
+        repaired++;
+    }
+    return repaired;
 }

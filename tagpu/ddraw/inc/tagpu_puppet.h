@@ -46,6 +46,9 @@ int tagpu_puppet_gates_in(void);
 /* The replay's own create and reply, bracketed on the game thread: the unit gates let through
    what they nest (tagpu_puppet.c, *The replay's own calls*). */
 void tagpu_puppet_open(int open);
+/* A seek's rebuild, bracketed on the game thread (tagpu_replay.c, seek_run): while it runs the
+   skirmish elimination 0x47BD70 is refused, since the rebuild's kills are not the recording's */
+void tagpu_puppet_rebuild(int on);
 /* the calls each gate refused this level, as one line for the replay's log */
 void tagpu_puppet_refusals(char* out, size_t cap);
 

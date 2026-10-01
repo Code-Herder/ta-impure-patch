@@ -91,6 +91,10 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
      deaths' explosions damage no feature (the owner gate, 0x49A01B..0x49A047), typed commands are
      refused -- and each gate names the first call it refuses, so a path the analysis missed shows
      in the log instead of in the world.
+   - The skirmish elimination 0x47BD70(player), `ret 4`, while a seek rebuilds the level
+     (tagpu_puppet_rebuild): the destructor calls it when an owner's live count +0x144 reaches 0
+     (0x486E54), and the rebuild kills every unit; it writes the message ring, draws the C
+     runtime's rand and plays "MessageArrived". A recorded elimination is the recording's own.
 
    THE REPLAY'S OWN CALLS open the COB and reply gates while they run (tagpu_puppet_open), on
    the game thread. A recorded event nested in a root is recorded after the root's record when the
@@ -119,7 +123,7 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
 
 enum { G_HIT, G_DEATH, G_SET, G_ATTACH, G_DROP, G_REPLY0, G_REPLY1, G_METEOR, G_COMMAND,
        G_DEBUGKEY, G_TRANSFER, G_SAVE, G_FTICK, G_FSPAWN, G_FDESTROY, G_FDIE, G_FBURN, G_FDAMAGE,
-       G_FSWAP, G_COUNT };
+       G_FSWAP, G_ELIM, G_COUNT };
 
 static struct { unsigned refused[G_COUNT]; } s_gateDiag;
 SIM_VAR(s_gateDiag, SIM_PRIVATE);
@@ -138,6 +142,11 @@ SIM_VAR(s_gatesIn, SIM_INSTALL);
    at every tick boundary it is 0, its value from load. */
 static unsigned char s_open;
 SIM_VAR(s_open, SIM_TRANSIENT);
+/* A seek's rebuild is running: set and cleared around it (tagpu_replay.c, seek_run) on the game
+   thread in one frame visit, between two sim steps, so at every tick boundary it is 0, its value
+   from load. */
+static unsigned char s_rebuild;
+SIM_VAR(s_rebuild, SIM_TRANSIENT);
 
 #define E_ARG(E, n)  (((const unsigned*)(E))[n])
 #define E_ECX(E)     (*(const unsigned*)((const unsigned char*)(E) - 0x0C))
@@ -227,6 +236,7 @@ static int __cdecl gate_fdie(void* E) { return feature_refused(E, G_FDIE); }
 static int __cdecl gate_fburn(void* E) { return feature_refused(E, G_FBURN); }
 static int __cdecl gate_fdamage(void* E) { return feature_refused(E, G_FDAMAGE); }
 static int __cdecl gate_fswap(void* E) { return feature_refused(E, G_FSWAP); }
+static int __cdecl gate_elim(void* E) { (void)E; return s_pup.on && s_rebuild && refuse(G_ELIM); }
 
 typedef struct Gate {
     unsigned va;
@@ -253,6 +263,7 @@ static const Gate GATES[G_COUNT] = {
     { 0x004233A0u, 8, 0x0C, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, gate_fburn },
     { 0x004244B0u, 6, 0x10, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, gate_fdamage },
     { 0x00423710u, 8, 0x0C, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, gate_fswap },
+    { 0x0047BD70u, 6, 0x04, { 0x81, 0xEC, 0xC8, 0x00, 0x00, 0x00 }, gate_elim },
 };
 
 void tagpu_puppet_init(void)
@@ -279,6 +290,8 @@ void tagpu_puppet_init(void)
 int tagpu_puppet_gates_in(void) { return s_gatesIn; }
 
 void tagpu_puppet_open(int open) { s_open = open ? 1 : 0; }
+
+void tagpu_puppet_rebuild(int on) { s_rebuild = on ? 1 : 0; }
 
 /* ---- THE FOOTPRINT WRITERS ------------------------------------------------------------------
 
@@ -416,10 +429,11 @@ void tagpu_puppet_refusals(char* out, size_t cap)
     const unsigned* r = s_gateDiag.refused;
     snprintf(out, cap, "hits %u, deaths %u, COB sets %u, attaches %u, drops %u, replies %u, "
              "meteor showers %u, typed commands %u, debug keys %u, transfers %u, saves %u, "
-             "feature ticks %u, feature calls %u", r[G_HIT], r[G_DEATH], r[G_SET], r[G_ATTACH],
+             "feature ticks %u, feature calls %u, eliminations in a seek %u", r[G_HIT],
+             r[G_DEATH], r[G_SET], r[G_ATTACH],
              r[G_DROP], r[G_REPLY0] + r[G_REPLY1], r[G_METEOR], r[G_COMMAND], r[G_DEBUGKEY],
              r[G_TRANSFER], r[G_SAVE], r[G_FTICK], r[G_FSPAWN] + r[G_FDESTROY] + r[G_FDIE] +
-             r[G_FBURN] + r[G_FDAMAGE] + r[G_FSWAP]);
+             r[G_FBURN] + r[G_FDAMAGE] + r[G_FSWAP], r[G_ELIM]);
 }
 
 void tagpu_puppet_footprints(char* out, size_t cap)
@@ -484,6 +498,7 @@ void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
     memset(&s_footDiag, 0, sizeof s_footDiag);
     s_open = 0;
     s_fopen = 0;
+    s_rebuild = 0;
     s_pup.playing = 0;
     s_pup.on = 1;
 }
@@ -494,6 +509,7 @@ void tagpu_puppet_end(void)
     s_pup.playing = 0;
     s_open = 0;
     s_fopen = 0;
+    s_rebuild = 0;
     memset(s_pup.seat, 0, sizeof s_pup.seat);
     memset(s_pup.local, 0, sizeof s_pup.local);
 }
