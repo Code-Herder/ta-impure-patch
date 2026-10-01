@@ -22,8 +22,9 @@ void __cdecl tagpu_rec_capture(void);
    logged. Game thread. */
 int tagpu_rec_dump_arm(const char* name, unsigned at);
 /* A frame dump: taken at once, between two steps on the game thread (the replay's frame visit),
-   with RT_FRAME = GameTime. Two frame dumps of one RT_FRAME saw no step between them: GameTime rises
-   once a step (0x4954C0). 1 written; 0 with a line when no level is in play or the name is bad. */
+   with RT_FRAME = GameTime. Two frame dumps of one RT_FRAME saw no step between them unless a seek
+   moved GameTime back between them: a step raises it once (0x4954C0). 1 written; 0 with a line
+   when no level is in play, the name is bad or the dump could not be written. */
 int tagpu_rec_dump_now(const char* name);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the

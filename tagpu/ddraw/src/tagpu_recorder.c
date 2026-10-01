@@ -2065,7 +2065,7 @@ static void dump_images(const char* ta)
    build, the globals list's hash and the tables, so that a dump taken by another build than the
    recording's (a playing, D8) is read with its own table names. Written on the game thread, which
    is tooling's price: a dump is the harness's. */
-static void dump_write(const Level* L, int tick, const char* name, int frame)
+static int dump_write(const Level* L, int tick, const char* name, int frame)
 {
     char path[MAX_PATH];
     RecBlock b;
@@ -2079,7 +2079,7 @@ static void dump_write(const Level* L, int tick, const char* name, int frame)
     if (wide) {
         tagpu_logf("recorder: dump %s refused: %s has rows past %u bytes", name, wide->name,
                    SPAN_MAX);
-        return;
+        return 0;
     }
     t.b = hb;
     t.n = 0;
@@ -2095,18 +2095,18 @@ static void dump_write(const Level* L, int tick, const char* name, int frame)
     }
     if (t.full) {
         tagpu_logf("recorder: dump %s refused: its header does not fit in %u bytes", name, t.cap);
-        return;
+        return 0;
     }
     lists = (unsigned char*)VirtualAlloc(NULL, ORD_SCRATCH, MEM_COMMIT | MEM_RESERVE,
                                          PAGE_READWRITE);
-    if (!lists) { tagpu_logf("recorder: dump %s: no memory for the order lists", name); return; }
+    if (!lists) { tagpu_logf("recorder: dump %s: no memory for the order lists", name); return 0; }
     CreateDirectoryA("replays", NULL);
     snprintf(path, sizeof path, "replays\\dump-%s.bin", name);
     s_dump = fopen(path, "wb");
     if (!s_dump) {
         tagpu_logf("recorder: dump %s: cannot write %s", name, path);
         VirtualFree(lists, 0, MEM_RELEASE);
-        return;
+        return 0;
     }
     fwrite(REC_MAGIC, 1, 8, s_dump);
     memset(&b, 0, sizeof b);
@@ -2209,6 +2209,7 @@ static void dump_write(const Level* L, int tick, const char* name, int frame)
         tagpu_logf("recorder: dump %s at GameTime %d -> %s (%u bytes of records); %u records with "
                    "a body past 0xFFFF bytes not written", name, tick, path, s_dump_raw,
                    s_dump_long);
+    return 1;
 }
 
 /* a dump's name: 1 to DUMP_NAME-1 letters, digits, - and _ (its file is replays\dump-<name>.bin);
@@ -2241,8 +2242,7 @@ int tagpu_rec_dump_now(const char* name)
     }
     masks_init();
     now = *(const int*)(ta + OFF_GAMETIME);
-    dump_write(&L, now + 1, name, now);
-    return 1;
+    return dump_write(&L, now + 1, name, now);
 }
 
 int tagpu_rec_dump_arm(const char* name, unsigned at)

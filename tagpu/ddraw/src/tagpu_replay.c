@@ -3965,20 +3965,33 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
    to back inside R12, under the air pool's lock, on the game thread, with no engine or simulation
    code between them, and every residue byte is put back before the lock is left, so no 0xA5
    outlives R12. Poisoning before R1 would let the kills' and creates' hooks read 0xA5 from their
-   own tables. */
+   own tables. A count that sizes a heap table is never poisoned: table_put bounds that table's
+   rows by it, and the write keeps it whole (count_kept), so a poisoned one would only make the
+   bound a lie. Every allocation is made before the first byte is poisoned, so no failure path
+   leaves one. */
 typedef struct {
     const SimDesc*        d;
     unsigned char*        base;
     size_t                bytes;    /* the host's rows when filled                                */
     size_t                at;       /* its copy in s_pz.saved                                     */
     const RecTable*       t;        /* the recording's image, NULL when it carries none          */
+    unsigned char*        keep;     /* its row's table_keep, in s_pz.keeps                        */
 } Poisoned;
 static struct {
     Poisoned*      p;
     unsigned       n;
     unsigned char* saved;
+    unsigned char* keeps;
     unsigned       lines;
 } s_pz;
+
+/* a count variable that sizes a heap table's block */
+static int heap_count(const SimDesc* d)
+{
+    const SimDesc* owner = (!(d->flags & SIMD_HEAP) && d->nrows == 1 && !d->rows)
+                               ? count_owner(d) : NULL;
+    return owner && (owner->flags & SIMD_HEAP);
+}
 
 static unsigned char* tab_base(const SimDesc* d, size_t* bytes)
 {
@@ -3988,34 +4001,43 @@ static unsigned char* tab_base(const SimDesc* d, size_t* bytes)
     return base;
 }
 
-/* the declarations and a copy of their host rows; 0 with a line when there is no memory */
+/* the declarations, a copy of their host rows and their keeps; 0 with a line when there is no
+   memory */
 static int poison_begin(void)
 {
     unsigned i, n = tagpu_simreg_count();
-    size_t total = 0, at = 0;
+    size_t total = 0, at = 0, strides = 0;
     memset(&s_pz, 0, sizeof s_pz);
     s_pz.p = (Poisoned*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n ? n : 1) * sizeof *s_pz.p);
     if (!s_pz.p) goto none;
     for (i = 0; i < n; i++) {
         const SimDesc* d = tagpu_simreg_at(i);
         Poisoned* q = &s_pz.p[s_pz.n];
-        if (!d || !tagpu_simreg_recorded(d)) continue;
+        if (!d || !tagpu_simreg_recorded(d) || heap_count(d)) continue;
         q->d = d;
         q->base = tab_base(d, &q->bytes);
         if (!q->base || !q->bytes) continue;
         q->at = total;
         total += q->bytes;
+        strides += d->stride;
         s_pz.n++;
     }
     s_pz.saved = (unsigned char*)HeapAlloc(GetProcessHeap(), 0, total ? total : 1);
-    if (!s_pz.saved) goto none;
-    for (i = 0; i < s_pz.n; i++) {
-        memcpy(s_pz.saved + at, s_pz.p[i].base, s_pz.p[i].bytes);
-        at += s_pz.p[i].bytes;
+    s_pz.keeps = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, strides ? strides : 1);
+    if (!s_pz.saved || !s_pz.keeps) goto none;
+    for (i = 0, strides = 0; i < s_pz.n; i++) {
+        Poisoned* q = &s_pz.p[i];
+        memcpy(s_pz.saved + at, q->base, q->bytes);
+        at += q->bytes;
+        q->keep = s_pz.keeps + strides;
+        strides += q->d->stride;
+        table_keep(q->d, q->keep);
     }
     return 1;
 none:
     tagpu_logf("replay: %s: the round trip's poison check skipped: no memory", s_name);
+    if (s_pz.saved) HeapFree(GetProcessHeap(), 0, s_pz.saved);
+    if (s_pz.keeps) HeapFree(GetProcessHeap(), 0, s_pz.keeps);
     if (s_pz.p) HeapFree(GetProcessHeap(), 0, s_pz.p);
     memset(&s_pz, 0, sizeof s_pz);
     return 0;
@@ -4027,14 +4049,9 @@ static void poison_fill(void)
     size_t r, b;
     for (i = 0; i < s_pz.n; i++) {
         Poisoned* q = &s_pz.p[i];
-        unsigned char* keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                                                        q->d->stride);
-        if (!keep) continue;
-        table_keep(q->d, keep);
         for (r = 0; r + q->d->stride <= q->bytes; r += q->d->stride)
             for (b = 0; b < q->d->stride; b++)
-                if (!keep[b]) q->base[r + b] = 0xA5;
-        HeapFree(GetProcessHeap(), 0, keep);
+                if (!q->keep[b]) q->base[r + b] = 0xA5;
     }
     s_sk.poisoned = s_pz.n;
 }
@@ -4058,15 +4075,9 @@ static void poison_check(void)
     for (i = 0; i < s_pz.n; i++) {
         Poisoned* q = &s_pz.p[i];
         const unsigned char* was = s_pz.saved + q->at;
-        unsigned char* keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                                                        q->d->stride);
+        const unsigned char* keep = q->keep;
         size_t b, run = 0, rows = q->bytes / q->d->stride;
         unsigned found = 0;
-        if (!keep) {
-            memcpy(q->base, was, q->bytes);
-            continue;
-        }
-        table_keep(q->d, keep);
         if (q->d->nrows && q->d->rows && *q->d->rows < rows) rows = *q->d->rows;
         if (q->t && q->t->size / q->d->stride < rows) rows = q->t->size / q->d->stride;
         if (q->t && count_kept(q->d, q->t)) rows = 0;
@@ -4095,7 +4106,6 @@ static void poison_check(void)
             }
             run = 0;
         }
-        HeapFree(GetProcessHeap(), 0, keep);
         if (found) {
             TabCounts n;
             memcpy(n.names, s_sk.rnames, sizeof n.names);
@@ -4107,6 +4117,7 @@ static void poison_check(void)
 
 static void poison_end(void)
 {
+    HeapFree(GetProcessHeap(), 0, s_pz.keeps);
     HeapFree(GetProcessHeap(), 0, s_pz.saved);
     HeapFree(GetProcessHeap(), 0, s_pz.p);
     memset(&s_pz, 0, sizeof s_pz);

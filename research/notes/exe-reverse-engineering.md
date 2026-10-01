@@ -2749,8 +2749,13 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
 - **The two tick boundaries.** The *capture point* is B2's stub, inside step k after GameTime became
   k and before the unit tick: the world holds iteration k. The *frame visit* is Impure's hook before
   the in-play draw call `0x4969CD`, after `0x495490` returns (and on paused frames, which skip it):
-  GameTime is k and the simulation holds step k's result. A frame dump there is not iteration k+1:
-  between it and the next capture point the rest of `0x496790` runs — the draw `0x468CF0`, input on
+  GameTime is k and the simulation holds step k's result. Between the step and the hook run the
+  step's once-a-call tail — after a call's *last* iteration only, so when one call runs several
+  steps the earlier ones' frame visits never happen and their tail work lands after step k — and,
+  in the frame callback, `0x495E90` and `0x41CE90` (`0x496971`, `0x496976`, skipped by the jump at
+  `0x49696F`), `0x48BAE0` (`0x49697B`) and, on one branch, `0x41B2E0` (`0x4969B4`) [names not read].
+  A frame dump there is not iteration k+1: between it and the next capture point the rest of
+  `0x496790` runs — the draw `0x468CF0`, input on
   a live host, the next frame's scheduler `0x495230`, which stores `main+0x38A37`, `+0x38A3B`,
   `+0x38A3F`, `+0x38A4D`, `+0x38A4F` and the pause word `+0x38A51` — then the next step's GameTime
   increment (its pump never runs in a skirmish). A dump carries both images whole, so those bytes
