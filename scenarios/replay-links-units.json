@@ -1,0 +1,16 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `carry-links` fixture: two Atlas transports each ordered to load a Peewee (COB ATTACH); the fixture unloads them (DROP) and loads again by tacli order.",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {"id": "pw1", "type": "ARMPW", "owner": 0, "pos": [4200, 1900], "facing": 180},
+  {"id": "pw2", "type": "ARMPW", "owner": 0, "pos": [4440, 1900], "facing": 180},
+  {"id": "pw3", "type": "ARMPW", "owner": 0, "pos": [4320, 2100], "facing": 180},
+  {"id": "atlas1", "type": "ARMATLAS", "owner": 0, "pos": [4200, 1700], "facing": 180,
+   "orders": [{"cmd": "load", "target": "pw1"}]},
+  {"id": "atlas2", "type": "ARMATLAS", "owner": 0, "pos": [4440, 1700], "facing": 180,
+   "orders": [{"cmd": "load", "target": "pw2"}]}
+ ]
+}
