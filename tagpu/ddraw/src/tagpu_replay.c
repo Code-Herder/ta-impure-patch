@@ -246,6 +246,17 @@ static int validate(const char* ta, const RecHeader* h, char* why, unsigned cap,
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
         return 0;
     }
+    if (strcmp(h->globals, TAGPU_REPLAY_GLOBALS_SHA256)) {
+        snprintf(why, cap, "it was recorded with another positive list (replay-globals.tsv)");
+        return 0;
+    }
+    /* a recorded projectile ID is a record of a pool this size: the pool the limits patch
+       allocates, as the wreck pool's size is checked (data_match) */
+    if (h->proj_cap != TAGPU_LIM_PROJ) {
+        snprintf(why, cap, "it was recorded with a projectile pool of %u records, this build's "
+                 "holds %u", h->proj_cap, (unsigned)TAGPU_LIM_PROJ);
+        return 0;
+    }
     if (h->mode != MODE_SKIRMISH) {
         snprintf(why, cap, "it is not a skirmish (mode %u)", h->mode);
         return 0;

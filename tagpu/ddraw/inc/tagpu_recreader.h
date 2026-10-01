@@ -1,11 +1,12 @@
 #ifndef TAGPU_RECREADER_H
 #define TAGPU_RECREADER_H
 /* tagpu_recreader -- reads a demo recording back (tagpu_recfmt.h): its blocks, each checked and
-   inflated, the header's entries, and the world the stream builds, one iteration at a time
-   (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b and S3a). tagpu_replay.c applies what
-   this reads; this file reads no engine memory, and since it is not on thread-split.allow the
-   build refuses an engine address in it. tools/replay/tarec.py reads the same records and
-   accepts the same shapes: a change to one is a change to the other.
+   inflated, the header's entries, and the world the stream builds, one iteration at a time or
+   from a snapshot at a seek (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b, S3a
+   and S3b). tagpu_replay.c applies what this reads; this file reads no engine memory, and since
+   it is not on thread-split.allow the build refuses an engine address in it.
+   tools/replay/tarec.py reads the same records and accepts the same shapes: a change to one is a
+   change to the other.
 
    Every value read here is data. A record whose length, slot, index or offset falls outside what
    its kind allows makes the recording unreadable from there, as the writer refuses the same
@@ -43,7 +44,9 @@ typedef struct RecHeader {
     unsigned     grid_w, grid_h, wrecks, nfdefs, fdefs_hash;     /* RT_FEATURES             */
     unsigned     has_options, lostype, cmdrdeath, difficulty, fixed_starts;
     unsigned     nplayers, controlled, viewed;
+    unsigned     proj_cap;                  /* RT_PROJECTILES: the projectile pool's records  */
     char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT], layout[RECR_TEXT + 8];
+    char         globals[RECR_TEXT + 8];    /* RT_GLOBALS: replay-globals.tsv's SHA-256       */
     unsigned     has_settings_map;
     unsigned     nseats;
     RecSeat      seats[REC_PLAYERS];            /* in the header's order               */
@@ -69,7 +72,8 @@ typedef struct RecEvent { unsigned kind, len; const unsigned char* b; } RecEvent
 #define RECW_GONE   0x10    /* an RK_UNIT_GONE: its unit died, and its lists with it           */
 
 /* The recorded world at the end of one iteration's images: every live slot's image and lists,
-   the ten players, the controllers and the viewer, the declared tables, and the features. */
+   the ten players, the controllers and the viewer, the declared tables, the features, the
+   globals and the projectile pool. */
 typedef struct RecWorld {
     unsigned       slots;       /* slots 1 .. slots - 1 hold units, as the engine's array     */
     unsigned       tick;        /* the GameTime of the images it holds                        */
@@ -93,6 +97,11 @@ typedef struct RecWorld {
     unsigned       nfeat;       /* the iteration's RK_CELLS, RK_WRECK and RK_FEATURES, in the
                                    order they came: what changed in the grid and the pool     */
     RecEvent*      feat;
+    uint32_t       globals[REC_GLOBALS_DWORDS];   /* the globals image (tagpu_replay_globals.h) */
+    unsigned char* proj;        /* [proj_cap] projectile record images, REC_PROJ_IMAGE each:
+                                   [proj_hw, proj_cap) are zero, as on the recording machine   */
+    unsigned       nproj;       /* the pool's count, main+0x141F3                             */
+    unsigned       proj_hw;     /* its written extent                                         */
     unsigned       corrections; /* RK_CORRECTs read: the recording machine's own repairs      */
 } RecWorld;
 
@@ -106,8 +115,20 @@ RecWorld* recr_world(RecReader* r);
 
 /* Reads the next iteration into the world: its images, and its events into `ev`.
    1 read; 0 the recording has no more iterations (`why` says how it ended); -1 unreadable from
-   here (`why` says where), and the world is as the last iteration left it. */
+   here (`why` says where), and the world is as the last iteration left it. A snapshot block met
+   on the way is skipped unread: only a seek reads one. */
 int recr_tick(RecReader* r, char* why, unsigned cap);
+
+/* Puts the world at iteration T, as a recr_tick that read T leaves it: T's images, and the events
+   of the step after them in `ev`; recr_tick then goes on from T + 1. It builds from the last
+   snapshot before T over the base grid (the first iteration's, which the first recr_tick takes;
+   a seek before any takes it itself), or from the recording's first iteration when no snapshot
+   precedes T, then reads the stream up to T.
+   1 the world holds T; 0 T is outside the recording -- before its first iteration or after the
+   last complete block's -- checked before anything changes, so the reader is as it was (`why`
+   names the recording's first and last GameTime); -1 unreadable (`why` says where), and the
+   world is undefined until a seek that returns 1. */
+int recr_seek(RecReader* r, unsigned T, char* why, unsigned cap);
 
 void recr_close(RecReader* r);
 

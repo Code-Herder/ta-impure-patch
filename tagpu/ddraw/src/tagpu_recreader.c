@@ -5,7 +5,14 @@
    RECR_BLOCK_MAX, its payload's CRC, and the inflated size against the header's. A block that
    fails ends the reading there, as it ends tarec.py's. The inflate itself (lodepng) grows its
    output as it goes and fails cleanly when it cannot allocate; a recording is the local game's
-   own file, so a stream crafted to inflate without end is not guarded beyond that. */
+   own file, so a stream crafted to inflate without end is not guarded beyond that.
+
+   SEQUENTIAL READING skips snapshot blocks unread -- not inflated, their CRC not checked -- since
+   a playing from the start never needs one. A SEEK reads them: the index (every block's header,
+   built at the first seek) finds the last snapshot before the target, whose payload is then
+   checked like any block's, and the stream is read on from the iteration after it. A snapshot
+   carries only the cells that differ from the recording's first iteration (tagpu_recfmt.h,
+   RB_SNAPSHOT), so the reader keeps that grid, the base, from the first iteration it reads. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +20,12 @@
 #include "tagpu_recreader.h"
 #include "lodepng.h"
 #include "crc32.h"
+
+/* one block of the file, by its header alone */
+typedef struct RecIndexEntry {
+    unsigned           kind, first, last, raw, packed;
+    unsigned long long off;         /* its header's offset in the file                        */
+} RecIndexEntry;
 
 struct RecReader {
     HANDLE             f;
@@ -33,6 +46,15 @@ struct RecReader {
     unsigned           ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     unsigned           death[REC_DEATHS_MAX];
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
+    unsigned long long first_off;   /* the file offset of the first block after the header    */
+    unsigned char*     base;        /* the grid at the end of the first iteration              */
+    int                has_base;
+    int                globals_in;  /* an RK_GLOBALS has come, so a delta has an image to change */
+    int                proj_in;     /* an RK_PROJ_HEAD has come, so records below hw may come  */
+    RecIndexEntry*     idx;         /* every block after the header, to the first torn one or
+                                       the end block; built at the first seek                  */
+    unsigned           nidx;
+    int                indexed;
 };
 
 static const char* const END_REASONS[] = {
@@ -63,11 +85,21 @@ static int read_all(HANDLE f, void* p, DWORD n)
     return ReadFile(f, p, n, &got, NULL) && got == n;
 }
 
-/* 1 a block, its payload in raw; 0 the file's end; -1 a block that cannot be read (why) */
-static int block_read(RecReader* r, RecBlock* b, char* why, unsigned cap)
+/* the file's next read at `off`, the offset of a block's header */
+static int file_at(RecReader* r, unsigned long long off)
+{
+    LARGE_INTEGER at;
+    at.QuadPart = (LONGLONG)off;
+    if (!SetFilePointerEx(r->f, at, NULL, FILE_BEGIN)) return 0;
+    r->off = off;
+    return 1;
+}
+
+/* The header of the block at r->off, checked. 1 read; 0 the file's end; -1 a header that cannot
+   be read (why). */
+static int block_head(RecReader* r, RecBlock* b, char* why, unsigned cap)
 {
     DWORD got = 0;
-    unsigned lz;
     payload_free(r);
     if (!ReadFile(r->f, b, sizeof *b, &got, NULL)) {
         snprintf(why, cap, "cannot read at byte %llu (%lu)", r->off, GetLastError());
@@ -88,6 +120,14 @@ static int block_read(RecReader* r, RecBlock* b, char* why, unsigned cap)
                  r->off, b->packed, b->raw);
         return -1;
     }
+    return 1;
+}
+
+/* The payload of the block whose header block_head has just read: checked and inflated into raw.
+   1, or -1 (why). */
+static int block_body(RecReader* r, const RecBlock* b, char* why, unsigned cap)
+{
+    unsigned lz;
     if (b->packed > r->pkcap) {
         unsigned char* n = (unsigned char*)realloc(r->pk, b->packed);
         if (!n) {
@@ -124,6 +164,34 @@ static int block_read(RecReader* r, RecBlock* b, char* why, unsigned cap)
         r->rawn = outn;
     }
     r->off += sizeof *b + b->packed;
+    return 1;
+}
+
+/* 1 a block, its payload in raw; 0 the file's end; -1 a block that cannot be read (why) */
+static int block_read(RecReader* r, RecBlock* b, char* why, unsigned cap)
+{
+    int k = block_head(r, b, why, cap);
+    return k > 0 ? block_body(r, b, why, cap) : k;
+}
+
+/* Past the payload of the block whose header block_head has just read, unread. 1, or -1
+   (why). */
+static int block_skip(RecReader* r, const RecBlock* b, char* why, unsigned cap)
+{
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(r->f, &size)) {
+        snprintf(why, cap, "cannot size the file (%lu)", GetLastError());
+        return -1;
+    }
+    if (r->off + sizeof *b + b->packed > (unsigned long long)size.QuadPart) {
+        snprintf(why, cap, "a block cut short at byte %llu", r->off);
+        return -1;
+    }
+    if (!file_at(r, r->off + sizeof *b + b->packed)) {
+        snprintf(why, cap, "cannot move past the block at byte %llu (%lu)", r->off,
+                 GetLastError());
+        return -1;
+    }
     return 1;
 }
 
@@ -194,6 +262,8 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             }
             break;
         case RT_LAYOUT:        text(h->layout, sizeof h->layout, p, n); break;
+        case RT_GLOBALS:       text(h->globals, sizeof h->globals, p, n); break;
+        case RT_PROJECTILES:   if (n == 4) { h->proj_cap = u32(p); seen |= 16; } break;
         case RT_SETTINGS_MAP:
             text(h->settings_map, sizeof h->settings_map, p, n);
             h->has_settings_map = 1;
@@ -270,8 +340,14 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         snprintf(why, cap, "format %u, this build reads %u", h->format, REC_FORMAT);
         return 0;
     }
-    if (seen != 15) {
-        snprintf(why, cap, "a header without its format, mode, slots or features");
+    if (seen != 31) {
+        snprintf(why, cap, "a header without its format, mode, slots, features or projectile "
+                 "pool");
+        return 0;
+    }
+    /* a projectile record's index is a u16 (RK_PROJ) */
+    if (!h->proj_cap || h->proj_cap > 0xFFFF) {
+        snprintf(why, cap, "a projectile pool of %u records", h->proj_cap);
         return 0;
     }
     if (h->slots < 2 || h->slots > 0xFFFF) {
@@ -309,6 +385,54 @@ static void end_parse(RecReader* r, const unsigned char* b, size_t len)
 
 /* ---- the world ------------------------------------------------------------------------------ */
 
+static size_t grid_bytes(const RecReader* r)
+{
+    return (size_t)r->h.grid_w * r->h.grid_h * REC_CELL_BYTES;
+}
+
+/* The world as the recording's first record finds it, the grid the base's when `from_base` (a
+   snapshot's cells are the ones that differ from it) and else zero (the first iteration carries
+   every cell); and the reader at no iteration. What a seek starts from. */
+static void world_reset(RecReader* r, int from_base)
+{
+    RecWorld* w = &r->w;
+    unsigned i;
+    payload_free(r);
+    memset(w->live, 0, w->slots);
+    memset(w->changed, 0, w->slots);
+    for (i = 0; i < w->slots * 2; i++) w->list[i].n = 0;
+    memset(w->unit, 0, (size_t)w->slots * REC_UNIT_IMAGE);
+    memset(w->player, 0, sizeof w->player);
+    memset(w->pchanged, 0, sizeof w->pchanged);
+    memset(w->ctl, 0, sizeof w->ctl);
+    for (i = 0; i < r->h.nseats; i++) w->ctl[r->h.seats[i].index] = r->h.seats[i].controller;
+    w->view[0] = w->view[1] = 0;
+    if (r->h.has_options) {
+        w->view[0] = (unsigned char)r->h.controlled;
+        w->view[1] = (unsigned char)r->h.viewed;
+    }
+    for (i = 0; i < w->ntab; i++) w->tab[i].size = 0;
+    w->nev = 0;
+    w->nfeat = 0;
+    if (from_base) memcpy(w->grid, r->base, grid_bytes(r));
+    else memset(w->grid, 0, grid_bytes(r));
+    memset(w->pool, 0, (size_t)r->h.wrecks * REC_WRECK_BYTES);
+    memset(w->heads, 0, sizeof w->heads);
+    memset(w->globals, 0, sizeof w->globals);
+    memset(w->proj, 0, (size_t)r->h.proj_cap * REC_PROJ_IMAGE);
+    w->nproj = 0;
+    w->proj_hw = 0;
+    w->tick = 0;
+    w->corrections = 0;
+    r->ntouched = 0;
+    r->fbracket = 0;
+    r->ndeaths = 0;
+    memset(&r->pend, 0, sizeof r->pend);
+    r->globals_in = 0;
+    r->proj_in = 0;
+    r->ended = 0;
+}
+
 static int world_init(RecReader* r, char* why, unsigned cap)
 {
     RecWorld* w = &r->w;
@@ -322,11 +446,14 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     r->touched = (unsigned*)malloc((size_t)w->slots * sizeof *r->touched);
     w->ntab = r->h.ntab;
     w->tab = (RecTable*)calloc(w->ntab ? w->ntab : 1, sizeof *w->tab);
-    w->grid = (unsigned char*)VirtualAlloc(NULL, (size_t)r->h.grid_w * r->h.grid_h * REC_CELL_BYTES,
-                                           MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    w->grid = (unsigned char*)VirtualAlloc(NULL, grid_bytes(r), MEM_COMMIT | MEM_RESERVE,
+                                           PAGE_READWRITE);
+    r->base = (unsigned char*)VirtualAlloc(NULL, grid_bytes(r), MEM_COMMIT | MEM_RESERVE,
+                                           PAGE_READWRITE);
     w->pool = (unsigned char*)calloc(r->h.wrecks, REC_WRECK_BYTES);
+    w->proj = (unsigned char*)calloc(r->h.proj_cap, REC_PROJ_IMAGE);
     if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
-        !w->pool) {
+        !r->base || !w->pool || !w->proj) {
         snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
                  r->h.grid_w, r->h.grid_h);
         return 0;
@@ -335,11 +462,7 @@ static int world_init(RecReader* r, char* why, unsigned cap)
         w->tab[i].index = r->h.tab[i].index;
         w->tab[i].stride = r->h.tab[i].stride;
     }
-    for (i = 0; i < r->h.nseats; i++) w->ctl[r->h.seats[i].index] = r->h.seats[i].controller;
-    if (r->h.has_options) {
-        w->view[0] = (unsigned char)r->h.controlled;
-        w->view[1] = (unsigned char)r->h.viewed;
-    }
+    world_reset(r, 0);
     return 1;
 }
 
@@ -614,12 +737,54 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
         w->view[0] = b[0];
         w->view[1] = b[1];
         return 1;
+    case RK_GLOBALS:
+        if (len != sizeof w->globals) return 0;
+        memcpy(w->globals, b, len);
+        r->globals_in = 1;
+        return 1;
+    case RK_GLOBALS_DELTA:
+        if (len < REC_GLOBALS_DELTA_HEAD || !r->globals_in ||
+            !delta_count(b, REC_GLOBALS_BITS, REC_GLOBALS_DWORDS, &n) ||
+            len != REC_GLOBALS_DELTA_HEAD + 4 * n)
+            return 0;
+        delta_apply(w->globals, b, REC_GLOBALS_DWORDS, b + REC_GLOBALS_DELTA_HEAD);
+        return 1;
+    case RK_PROJ_HEAD: {
+        unsigned v[2];
+        if (len != 8) return 0;
+        memcpy(v, b, 8);
+        if (v[0] > v[1] || v[1] > r->h.proj_cap) return 0;
+        /* Records past the extent are zero in every copy -- the recording machine's pool, the
+           writer's (proj_head) and tarec's -- so an extent that shrinks zeroes the records it
+           gives up here too. A recording machine's extent only grows within a level; a head
+           correction is what can lower it. */
+        if (v[1] < w->proj_hw)
+            memset(w->proj + (size_t)v[1] * REC_PROJ_IMAGE, 0,
+                   (size_t)(w->proj_hw - v[1]) * REC_PROJ_IMAGE);
+        w->nproj = v[0];
+        w->proj_hw = v[1];
+        r->proj_in = 1;
+        return 1;
+    }
+    case RK_PROJ:
+        if (len != 4 + REC_PROJ_IMAGE || b[2] || b[3] || !r->proj_in || id >= w->proj_hw)
+            return 0;
+        memcpy(w->proj + (size_t)id * REC_PROJ_IMAGE, b + 4, REC_PROJ_IMAGE);
+        return 1;
+    case RK_PROJ_DELTA:
+        if (len < REC_PROJ_DELTA_HEAD || !r->proj_in || id >= w->proj_hw ||
+            !delta_count(b + 2, REC_PROJ_BITS, REC_PROJ_DWORDS, &n) ||
+            len != REC_PROJ_DELTA_HEAD + 4 * n)
+            return 0;
+        delta_apply((uint32_t*)(w->proj + (size_t)id * REC_PROJ_IMAGE), b + 2, REC_PROJ_DWORDS,
+                    b + REC_PROJ_DELTA_HEAD);
+        return 1;
     case RK_CORRECT:
         if (len != 4) return 0;
         w->corrections++;
         return 1;
     default:
-        return 0;   /* the ring's own kinds are never in a block */
+        return 0;   /* the ring's own kinds are never in a block, nor a dump's RK_IMAGE */
     }
 }
 
@@ -640,7 +805,7 @@ static int iteration_done(const RecReader* r, char* why, unsigned cap)
     return 1;
 }
 
-int recr_tick(RecReader* r, char* why, unsigned cap)
+static int tick_read(RecReader* r, char* why, unsigned cap)
 {
     RecWorld* w = &r->w;
     unsigned i;
@@ -662,7 +827,7 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
                 snprintf(why, cap, "%s", r->end);
                 return 0;
             }
-            k = block_read(r, &blk, why, cap);
+            k = block_head(r, &blk, why, cap);
             if (k < 0) return -1;
             if (!k) {
                 r->ended = 1;
@@ -670,6 +835,11 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
                 snprintf(why, cap, "%s", r->end);
                 return 0;
             }
+            if (blk.kind != RB_STREAM && blk.kind != RB_END) {
+                if (block_skip(r, &blk, why, cap) < 0) return -1;   /* a snapshot: recr_seek's */
+                continue;
+            }
+            if (block_body(r, &blk, why, cap) < 0) return -1;
             if (blk.kind == RB_END) {
                 r->ended = 1;
                 end_parse(r, r->raw, r->rawn);
@@ -677,7 +847,6 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
                 snprintf(why, cap, "%s", r->end);
                 return 0;
             }
-            if (blk.kind != RB_STREAM) payload_free(r);   /* a snapshot: S3's seek reads them */
             continue;
         }
         if (r->at + 4 > r->rawn) {
@@ -705,6 +874,212 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
             return -1;
         }
         r->at += (4 + (size_t)hd.len + 3) & ~(size_t)3;
+    }
+}
+
+int recr_tick(RecReader* r, char* why, unsigned cap)
+{
+    int k = tick_read(r, why, cap);
+    /* The first iteration read is the recording's first: recr_open starts there, and a seek
+       starts from a snapshot only once the base is taken. Its grid images are every cell (the
+       feature tick's cells inside its events are not applied to the grid), as the writer's base
+       is (tagpu_recwriter.c, RK_GRID). */
+    if (k > 0 && !r->has_base) {
+        memcpy(r->base, r->w.grid, grid_bytes(r));
+        r->has_base = 1;
+    }
+    return k;
+}
+
+/* ---- seeking -------------------------------------------------------------------------------- */
+
+/* Every block's header after the recording's header, without its payload: to the end block, or
+   to the first block whose header is torn or whose payload the file cuts short. Bounded by the
+   file's size. The file's next read is put back where it was. 1, or -1 (why). */
+static int index_build(RecReader* r, char* why, unsigned cap)
+{
+    unsigned long long keep = r->off, off = r->first_off, size;
+    unsigned room = 0;
+    LARGE_INTEGER fs;
+    int ok = 1;
+    if (!GetFileSizeEx(r->f, &fs)) {
+        snprintf(why, cap, "cannot size the file (%lu)", GetLastError());
+        return -1;
+    }
+    size = (unsigned long long)fs.QuadPart;
+    r->nidx = 0;
+    while (off + sizeof(RecBlock) <= size) {
+        RecBlock b;
+        RecIndexEntry* e;
+        if (!file_at(r, off) || !read_all(r->f, &b, sizeof b) || b.magic != REC_BLOCK_MAGIC ||
+            (uint32_t)Crc32_ComputeBuf(0, &b, 28) != b.crc_head || b.packed > RECR_BLOCK_MAX ||
+            b.raw > RECR_BLOCK_MAX || off + sizeof b + b.packed > size)
+            break;
+        if (r->nidx == room) {
+            unsigned c = room ? room * 2 : 256;
+            RecIndexEntry* n = (RecIndexEntry*)realloc(r->idx, c * sizeof *n);
+            if (!n) {
+                snprintf(why, cap, "no memory for the index of the recording's blocks");
+                ok = 0;
+                break;
+            }
+            r->idx = n;
+            room = c;
+        }
+        e = &r->idx[r->nidx++];
+        e->kind = b.kind;
+        e->first = b.first;
+        e->last = b.last;
+        e->raw = b.raw;
+        e->packed = b.packed;
+        e->off = off;
+        if (b.kind == RB_END) break;
+        off += sizeof b + b.packed;
+    }
+    if (!file_at(r, keep)) {
+        snprintf(why, cap, "cannot return to byte %llu (%lu)", keep, GetLastError());
+        ok = 0;
+    }
+    if (!ok) {
+        r->nidx = 0;
+        return -1;
+    }
+    r->indexed = 1;
+    return 1;
+}
+
+/* The snapshot block whose header block_head has just read, applied over the reset world: a TICK
+   at the block's GameTime, then images only (tagpu_recfmt.h, RB_SNAPSHOT). 1, or -1 (why). */
+static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned cap)
+{
+    RecWorld* w = &r->w;
+    int events = 0;
+    if (block_body(r, blk, why, cap) < 0) return -1;
+    while (r->at < r->rawn) {
+        RecHdr hd;
+        const unsigned char* b;
+        if (r->at + 4 > r->rawn) {
+            snprintf(why, cap, "a record header cut short in the snapshot of GameTime %u",
+                     blk->last);
+            return -1;
+        }
+        memcpy(&hd, r->raw + r->at, 4);
+        if (r->at + 4 + hd.len > r->rawn) {
+            snprintf(why, cap, "a record cut short in the snapshot of GameTime %u", blk->last);
+            return -1;
+        }
+        b = r->raw + r->at + 4;
+        if (!r->at) {
+            if (hd.kind != RK_TICK || hd.len != 4 || u32(b) != blk->last) {
+                snprintf(why, cap, "the snapshot of GameTime %u does not begin with its tick",
+                         blk->last);
+                return -1;
+            }
+            w->tick = blk->last;
+        } else if (hd.kind == RK_TICK || !apply(r, hd.kind, b, hd.len, &events) || events) {
+            snprintf(why, cap, "a malformed record of kind %u in the snapshot of GameTime %u",
+                     hd.kind, blk->last);
+            return -1;
+        }
+        r->at += (4 + (size_t)hd.len + 3) & ~(size_t)3;
+    }
+    if (!r->rawn) {
+        snprintf(why, cap, "the snapshot of GameTime %u is empty", blk->last);
+        return -1;
+    }
+    if (iteration_done(r, why, cap) < 0) return -1;
+    /* its records point into the payload: the stream's next iteration replaces them */
+    w->nfeat = 0;
+    payload_free(r);
+    return 1;
+}
+
+int recr_seek(RecReader* r, unsigned T, char* why, unsigned cap)
+{
+    RecWorld* w = &r->w;
+    const RecIndexEntry* snap = NULL;
+    unsigned i, tfirst = 0, tlast = 0, prev;
+    int streams = 0, read, k;
+    if (!r->indexed && index_build(r, why, cap) < 0) return -1;
+    for (i = 0; i < r->nidx; i++) {
+        if (r->idx[i].kind != RB_STREAM) continue;
+        if (!streams) tfirst = r->idx[i].first;
+        tlast = r->idx[i].last;
+        streams = 1;
+    }
+    if (!streams) {
+        snprintf(why, cap, "the recording holds no complete stream block");
+        return 0;
+    }
+    if (T < tfirst || T > tlast) {
+        snprintf(why, cap, "GameTime %u is outside the recording, which holds GameTime %u to %u",
+                 T, tfirst, tlast);
+        return 0;
+    }
+    /* The base is the first iteration's grid: read it before any snapshot is built over it. */
+    if (!r->has_base) {
+        world_reset(r, 0);
+        if (!file_at(r, r->first_off)) {
+            snprintf(why, cap, "cannot move to byte %llu (%lu)", r->first_off, GetLastError());
+            return -1;
+        }
+        k = recr_tick(r, why, cap);
+        if (k <= 0) {
+            if (!k) snprintf(why, cap, "the recording's first iteration cannot be read");
+            return -1;
+        }
+    }
+    /* The last snapshot strictly before T: a snapshot at S holds S's images, and the events of
+       the step after them are in the stream block before it (tagpu_recfmt.h, RB_SNAPSHOT). */
+    for (i = 0; i < r->nidx; i++)
+        if (r->idx[i].kind == RB_SNAPSHOT && r->idx[i].last < T) snap = &r->idx[i];
+    if (snap) {
+        RecBlock blk;
+        const RecIndexEntry* next = snap + 1;
+        /* tlast >= T > S, so a stream block follows; the writer starts it at S + 1
+           (tagpu_recwriter.c, iteration_done) */
+        if (next >= r->idx + r->nidx || next->kind != RB_STREAM || next->first != snap->last + 1) {
+            snprintf(why, cap, "the snapshot of GameTime %u is not followed by the stream from "
+                     "GameTime %u", snap->last, snap->last + 1);
+            return -1;
+        }
+        world_reset(r, 1);
+        if (!file_at(r, snap->off)) {
+            snprintf(why, cap, "cannot move to byte %llu (%lu)", snap->off, GetLastError());
+            return -1;
+        }
+        k = block_head(r, &blk, why, cap);
+        if (k <= 0 || blk.kind != RB_SNAPSHOT || blk.last != snap->last) {
+            if (k >= 0) snprintf(why, cap, "the snapshot at byte %llu is not the one indexed",
+                                 snap->off);
+            return -1;
+        }
+        if (snapshot_apply(r, &blk, why, cap) < 0) return -1;
+    } else {
+        world_reset(r, 0);
+        if (!file_at(r, r->first_off)) {
+            snprintf(why, cap, "cannot move to byte %llu (%lu)", r->first_off, GetLastError());
+            return -1;
+        }
+    }
+    /* each iteration's events replace the last's, so T's are the ones left pending */
+    for (read = snap != NULL, prev = w->tick; ; read = 1, prev = w->tick) {
+        k = recr_tick(r, why, cap);
+        if (k <= 0) {
+            if (!k) snprintf(why, cap, "the recording ends at GameTime %u, before GameTime %u",
+                             w->tick, T);
+            return -1;
+        }
+        if (read && w->tick <= prev) {
+            snprintf(why, cap, "the stream goes from GameTime %u back to %u", prev, w->tick);
+            return -1;
+        }
+        if (w->tick == T) return 1;
+        if (w->tick > T) {
+            snprintf(why, cap, "the stream has no iteration at GameTime %u: it goes from %u to %u",
+                     T, prev, w->tick);
+            return -1;
+        }
     }
 }
 
@@ -739,6 +1114,7 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
     }
     if (!header_parse(&r->h, r->raw, r->rawn, why, cap) || !world_init(r, why, cap)) goto fail;
     payload_free(r);
+    r->first_off = r->off;
     return r;
 fail:
     recr_close(r);
@@ -765,8 +1141,11 @@ void recr_close(RecReader* r)
     free(r->w.ev);
     free(r->w.feat);
     free(r->w.pool);
+    free(r->w.proj);
     free(r->touched);
+    free(r->idx);
     if (r->w.unit) VirtualFree(r->w.unit, 0, MEM_RELEASE);
     if (r->w.grid) VirtualFree(r->w.grid, 0, MEM_RELEASE);
+    if (r->base) VirtualFree(r->base, 0, MEM_RELEASE);
     free(r);
 }
