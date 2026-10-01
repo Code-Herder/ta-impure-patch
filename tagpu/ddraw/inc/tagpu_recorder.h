@@ -13,6 +13,12 @@
    dump on a level that plays a recording holds what the replay wrote there. */
 void __cdecl tagpu_rec_capture(void);
 
+/* The step's phase, on the game thread: the stubs on the step's calls of the projectile tick
+   (0x495513) and of the falling records (0x495539) call this with 1 and 2 before each call, and
+   tagpu_rec_capture sets it back to 0. A feature root records the phase it was made in, so that a
+   replay makes it at the same point of its own step (tagpu_replay_phase). */
+void __cdecl tagpu_rec_phase(unsigned phase);
+
 /* Arms the harness's dump `name` -- 1 to 39 letters, digits, '-' and '_' -- which tagpu_rec_capture
    takes at the capture point of GameTime `at`, or at its next call when `at` is 0, on any level in
    play, recorded or playing (the replay's frame visit arms it from the trigger's `dump <name>

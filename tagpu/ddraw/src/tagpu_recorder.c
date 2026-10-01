@@ -3320,6 +3320,9 @@ static Feat* feat_start(const char* ta, RecRing* g)
 typedef struct FFrame { unsigned ret, id; unsigned char root, recorded; } FFrame;
 static FFrame   s_fstack[FDEPTH_MAX];
 static unsigned s_fdepth;           /* moved only on the recording's game thread (feat_enter) */
+static unsigned char s_fphase;      /* the step's phase (tagpu_rec_phase), on the game thread    */
+
+void __cdecl tagpu_rec_phase(unsigned phase) { s_fphase = (unsigned char)phase; }
 
 /* The root's arguments after its site, into `b`, and the cells it may write marked; the bytes
    written. A pointer argument is read no further than the function reads it. */
@@ -3407,7 +3410,8 @@ static int feat_enter(void* E, unsigned root)
     if (fr->recorded) {
         unsigned site = ARG(E, 0) - 5;
         b[0] = (unsigned char)root;
-        b[1] = b[2] = b[3] = 0;
+        b[1] = s_fphase;
+        b[2] = b[3] = 0;
         memcpy(b + 4, &site, 4);
         ev_put(r, RK_EV_FEATURE, b, 8 + n);
         f->roots++;
@@ -3703,8 +3707,11 @@ static int __cdecl sink_cob(void* E)
 }
 
 static int __cdecl sink_420A30(void* E) { return sink_count(E, 0x00420A30u, 0); }
-static int __cdecl sink_470EB0(void* E) { return sink_count(E, 0x00470EB0u, REG_ECX(E)); }
-static int __cdecl sink_47F0C0(void* E) { return sink_count(E, 0x0047F0C0u, 0); }
+/* 0x47F1A0 calls 0x47F0C0 at 0x47F1FA on every call, so that call is the same sound counted once */
+static int __cdecl sink_47F0C0(void* E)
+{
+    return ARG(E, 0) == 0x0047F1FFu ? 0 : sink_count(E, 0x0047F0C0u, 0);
+}
 static int __cdecl sink_47F1A0(void* E) { return sink_count(E, 0x0047F1A0u, 0); }
 static int __cdecl sink_47F210(void* E) { return sink_count(E, 0x0047F210u, 0); }
 static int __cdecl sink_47F300(void* E) { return sink_count(E, 0x0047F300u, 0); }
@@ -3712,14 +3719,27 @@ static int __cdecl sink_49C740(void* E) { return sink_count(E, 0x0049C740u, 0); 
 static int __cdecl sink_49CDE0(void* E) { return sink_count(E, 0x0049CDE0u, 0); }
 static int __cdecl sink_49CC20(void* E) { return sink_count(E, 0x0049CC20u, 0); }
 static int __cdecl sink_49C9C0(void* E) { return sink_count(E, 0x0049C9C0u, 0); }
+static int __cdecl sink_499EB0(void* E) { return sink_count(E, 0x00499EB0u, 0); }
+static int __cdecl sink_471FD0(void* E) { return sink_count(E, 0x00471FD0u, 0); }
+static int __cdecl sink_472330(void* E) { return sink_count(E, 0x00472330u, 0); }
+static int __cdecl sink_472430(void* E) { return sink_count(E, 0x00472430u, 0); }
+static int __cdecl sink_472530(void* E) { return sink_count(E, 0x00472530u, 0); }
+static int __cdecl sink_472630(void* E) { return sink_count(E, 0x00472630u, 0); }
+static int __cdecl sink_472810(void* E) { return sink_count(E, 0x00472810u, 0); }
+static int __cdecl sink_4728F0(void* E) { return sink_count(E, 0x004728F0u, 0); }
+static int __cdecl sink_4729D0(void* E) { return sink_count(E, 0x004729D0u, 0); }
+static int __cdecl sink_472AB0(void* E) { return sink_count(E, 0x00472AB0u, 0); }
+static int __cdecl sink_472C50(void* E) { return sink_count(E, 0x00472C50u, 0); }
 
-/* the sinks' entries [DISASSEMBLED]: the particle spawn 0x420A30; the pool slot 0x470EB0, ecx the
-   pool; the COB thread 0x4B08C0; the sound entries 0x47F0C0, 0x47F1A0, 0x47F210 (an entry: 0x47F200's
-   `ret 8` at 0x47F202, then padding to 0x47F20F) and 0x47F300; the projectile init 0x49C740 and
-   the three shot paths 0x49CDE0, 0x49CC20, 0x49C9C0 */
+/* the sinks' entries [DISASSEMBLED]: the particle spawn 0x420A30; the COB thread 0x4B08C0; the
+   sound entries 0x47F0C0, 0x47F1A0, 0x47F210 (an entry: 0x47F200's `ret 8` at 0x47F202, then
+   padding to 0x47F20F) and 0x47F300; the projectile init 0x49C740 and the three shot paths
+   0x49CDE0, 0x49CC20, 0x49C9C0; the impact 0x499EB0; and the ten particle emitters with a caller
+   besides the two nano emitters (roots above), keyed by their callers: each makes exactly one pool
+   allocation 0x470EB0 a call while the console's SFX byte 0x51E608 is clear (the only branch
+   before it), so the emitters account for the pool's allocations call for call */
 static const ObserveSite CNT_SINKS[] = {
     { 0x00420A30u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_420A30, NULL },
-    { 0x00470EB0u, 7, { 0x8B, 0x51, 0x20, 0x56, 0x8B, 0x71, 0x1C }, sink_470EB0, NULL },
     { 0x004B08C0u, 5, { 0x56, 0x8B, 0x74, 0x24, 0x08 }, sink_cob, NULL },
     { 0x0047F0C0u, 7, { 0x8B, 0x4C, 0x24, 0x04, 0x83, 0xEC, 0x14 }, sink_47F0C0, NULL },
     { 0x0047F1A0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_47F1A0, NULL },
@@ -3729,6 +3749,17 @@ static const ObserveSite CNT_SINKS[] = {
     { 0x0049CDE0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_49CDE0, NULL },
     { 0x0049CC20u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_49CC20, NULL },
     { 0x0049C9C0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, sink_49C9C0, NULL },
+    { 0x00499EB0u, 7, { 0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10 }, sink_499EB0, NULL },
+    { 0x00471FD0u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_471FD0, NULL },
+    { 0x00472330u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_472330, NULL },
+    { 0x00472430u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_472430, NULL },
+    { 0x00472530u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_472530, NULL },
+    { 0x00472630u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_472630, NULL },
+    { 0x00472810u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_472810, NULL },
+    { 0x004728F0u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_4728F0, NULL },
+    { 0x004729D0u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_4729D0, NULL },
+    { 0x00472AB0u, 7, { 0x83, 0xEC, 0x0C, 0x8B, 0x44, 0x24, 0x10 }, sink_472AB0, NULL },
+    { 0x00472C50u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_472C50, NULL },
 };
 #define CNT_SINK_COUNT (sizeof CNT_SINKS / sizeof CNT_SINKS[0])
 
@@ -3988,6 +4019,7 @@ void __cdecl tagpu_rec_capture(void)
     LARGE_INTEGER t0, t1;
     Rec* r;
 
+    s_fphase = 0;
     if (!ta || !level_read(ta, &L)) return;
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);

@@ -304,6 +304,15 @@ class Log:
 
 # ---- the fixtures and the GameTimes ---------------------------------------------------------
 
+def sources_mtime():
+    """The newest modification time of what a build of the DLL reads: its sources, headers and
+    the generators' lists. A run on an older DLL would grade another build."""
+    d = TREE / "tagpu" / "ddraw"
+    files = [f for sub in ("src", "inc") for f in (d / sub).rglob("*") if f.is_file()]
+    files += [d / "replay-globals.tsv", d / "replay-layout.tsv"] + list(d.glob("*.allow"))
+    return max(f.stat().st_mtime for f in files)
+
+
 def fixtures():
     return json.loads((HERE / "fixtures.json").read_text())["fixtures"]
 
@@ -633,9 +642,11 @@ class Run:
         for name in names:
             fix = fixes[name]
             dll = Path(args.stock_dll if fix.get("dll") == "stock" else args.dll).resolve()
+            make = f"make -C tagpu/ddraw{' LIMITS=stock' if fix.get('dll') == 'stock' else ''}"
             if not dll.exists():
-                raise CouldNotRun(f"{name}: no DLL at {dll} (make -C tagpu/ddraw"
-                                  f"{' LIMITS=stock' if fix.get('dll') == 'stock' else ''})")
+                raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
+            if dll.stat().st_mtime < sources_mtime():
+                raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
             Ts = gametimes(name, fix["end"], h)
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
                              "problems": [], "rt": {}, "passed": [], "held": [],

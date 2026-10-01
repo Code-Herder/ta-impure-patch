@@ -24,6 +24,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_puppet.h"
 #include "tagpu_replay.h"
+#include "tagpu_recfmt.h"   /* REC_PHASE_*: the step's phases */
 #include "git.h"
 
 static void plog(const char* s)
@@ -4576,6 +4577,53 @@ static int fix_stacked_air(void)
     return FIX_TABLE;
 }
 
+/* THE STEP'S PHASES. The step 0x4954C0 calls the projectile tick 0x49B720 at 0x495513 and the
+   falling records 0x420F30 at 0x495539, each with no argument, each returning with a plain `ret`
+   (0x49BE5C, 0x421147) [DISASSEMBLED]. Each call goes through a stub: pushfd; pushad; push phase;
+   call tagpu_rec_phase; add esp,4; popad; popfd; call the function; pushfd; pushad; push phase;
+   call tagpu_replay_phase; add esp,4; popad; popfd; ret. The recorder notes the phase a feature
+   root is made in, and on a level that plays a recording the replay makes the recording's roots
+   of that phase once the host's own call has returned (tagpu_replay.c, THE PHASES); elsewhere
+   both return at once. The site pushes nothing before either call and reloads what it uses after
+   it (0x495518, 0x49553E), and the stub keeps every register and the flags. */
+static int fix_step_phases(void)
+{
+    static const unsigned char proj[5] = { 0xE8, 0x08, 0x62, 0x00, 0x00 };   /* call 0x49B720 */
+    static const unsigned char fall[5] = { 0xE8, 0xF2, 0xB9, 0xF8, 0xFF };   /* call 0x420F30 */
+    static const struct { unsigned site, callee, phase; } call[2] = {
+        { 0x00495513, 0x0049B720, REC_PHASE_PROJ },
+        { 0x00495539, 0x00420F30, REC_PHASE_LATE },
+    };
+    unsigned char *k[2], *p;
+    int i;
+    k[0] = fix_code(48); k[1] = fix_code(48);
+    if (!k[0] || !k[1]) { lim_no_stub(); return FIX_TABLE; }
+    for (i = 0; i < 2; i++) {
+        p = k[i];
+        *p++ = 0x9C;
+        *p++ = 0x60;
+        *p++ = 0x6A; *p++ = (unsigned char)call[i].phase;
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_rec_phase); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+        *p++ = 0x61;
+        *p++ = 0x9D;
+        *p++ = 0xE8; tagpu_detour_rel(p, call[i].callee); p += 4;
+        *p++ = 0x9C;
+        *p++ = 0x60;
+        *p++ = 0x6A; *p++ = (unsigned char)call[i].phase;
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_replay_phase); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+        *p++ = 0x61;
+        *p++ = 0x9D;
+        *p++ = 0xC3;
+    }
+    lim_branch(0x00495513, sizeof proj, proj, 0xE8, (unsigned int)(size_t)k[0],
+               "the step's phases: the projectile tick's call");
+    lim_branch(0x00495539, sizeof fall, fall, 0xE8, (unsigned int)(size_t)k[1],
+               "the step's phases: the falling records' call");
+    return FIX_TABLE;
+}
+
 /* FLAK'S DIVIDES [DISASSEMBLED]. The ballistic fire 0x49CDE0 (callers 0x49D0F8 in the fire
    dispatch, 0x49D44E in the 0x0D receiver, 0x49D76E; all three only for a weapon with
    w+0x111 bit 1, ballistic) divides twice.
@@ -9081,6 +9129,7 @@ static void patch_engine_defects(void)
     int wpn  = fix_weapon_ids();
     int caps = fix_victim_caps();
     int air  = fix_stacked_air();
+    int phase = fix_step_phases();
     int flak = fix_flak_divides();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
@@ -9156,6 +9205,11 @@ static void patch_engine_defects(void)
               "0x49A415; the pool: the stamp 0x47CF98, the unit tick's call 0x4954ED) %s. "
               "Aircraft served, counted at 0x%08X",
               fix_state(air), (unsigned int)(size_t)&s_airDiag.served);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b, "enginefix: the step's phases for the demo recorder and its replay "
+              "(0x495513 0x495539) %s", fix_state(phase));
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -9385,7 +9439,9 @@ static void patch_engine_defects(void)
        it has seen that bit (0x498342): the handshake every value of the load rests on.
    CLASS: simulation, fail closed. A peer without it draws another wind. */
 static unsigned long long s_windState;          /* loader thread writes, then GAME THREAD   */
-SIM_VAR(s_windState, SIM_STATE);
+static const SimField wind_state_layout[] = { SIM_FIELD_AT(0, 8, SIMF_OPAQUE, SIM_ID_NONE),
+                                              SIM_FIELD_END };
+SIM_VAR_L(s_windState, SIM_STATE, wind_state_layout);
 /* the wind's diagnostics, peekable */
 static struct {
     volatile LONG levels;                       /* level loads seeded                        */

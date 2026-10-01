@@ -25,6 +25,13 @@ void __cdecl tagpu_replay_capture(void);
    the rest of the iteration, on the game thread. */
 void __cdecl tagpu_replay_step(void);
 
+/* The stubs on the step's calls of the projectile tick (0x495513) and of the falling records
+   (0x495539), each once its call has returned, on the game thread, with REC_PHASE_PROJ and
+   REC_PHASE_LATE: the feature roots the recording machine made in that phase of its step are
+   made here, and after the late phase's the step's feature images go in (tagpu_replay.c, THE
+   PHASES). */
+void __cdecl tagpu_replay_phase(unsigned phase);
+
 /* The destructor's explosion has returned (tagpu_recorder.c, rec_blast, at 0x486D50), on the game
    thread. While a death is replayed, the feature calls the recording's explosion made are made
    here: the host's explosion makes none, its owner being a puppet seat (the owner gate,

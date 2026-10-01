@@ -67,8 +67,11 @@ typedef enum SimFieldKind {
                        COUNT of them: a struct-of-arrays table                                */
     SIMF_TARGET,    /* the engine's weapon target, a u16 and the u16 after it: a unit slot when
                        the second is 0x8000, else a ground X and Z                            */
-    SIMF_PINNED     /* the engine holds this field's ADDRESS (a running script's record points
+    SIMF_PINNED,    /* the engine holds this field's ADDRESS (a running script's record points
                        at it), so the row is written in place and never moved while it may   */
+    SIMF_OPAQUE     /* a plain value whose bits are arbitrary (a random generator's state, a
+                       hash): recorded and compared as any plain value, and passed over by
+                       the address scan, which cannot tell such a word from an address       */
 } SimFieldKind;
 
 typedef struct SimField {

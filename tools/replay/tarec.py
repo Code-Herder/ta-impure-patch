@@ -1300,8 +1300,9 @@ COUNT_ROOTS = {
     0x4233A0: "the feature burn 0x4233A0", 0x4244B0: "the feature damage 0x4244B0",
     0x423710: "the feature swap 0x423710"}
 # in the recorder's CNT_SINKS order: bit k of the sinks counted
-COUNT_SINKS = [0x420A30, 0x470EB0, 0x4B08C0, 0x47F0C0, 0x47F1A0, 0x47F210, 0x47F300, 0x49C740,
-               0x49CDE0, 0x49CC20, 0x49C9C0]
+COUNT_SINKS = [0x420A30, 0x4B08C0, 0x47F0C0, 0x47F1A0, 0x47F210, 0x47F300, 0x49C740, 0x49CDE0,
+               0x49CC20, 0x49C9C0, 0x499EB0, 0x471FD0, 0x472330, 0x472430, 0x472530, 0x472630,
+               0x472810, 0x4728F0, 0x4729D0, 0x472AB0, 0x472C50]
 COB_WRITES = {0x480B57: "SET ACTIVATION", 0x480BF1: "SET ARMORED", 0x480BB3: "SET YARD_OPEN",
               0x4813AB: "ATTACH", 0x481427: "DROP"}
 
@@ -1319,38 +1320,72 @@ def caller_text(c):
 
 
 def absent_rows(path):
-    """replay-absent.tsv: the band and the rows, each (site, caller, aux, side)."""
-    band, rows = 0, []
+    """replay-absent.tsv: the band ((percent, floor)) and the rows, each (site, callers, aux, side)
+    with callers a tuple of the caller column's comma-separated entries."""
+    band, rows = (0, 0), []
     for line in open(path, encoding="utf-8"):
         line = line.rstrip("\n")
-        m = re.match(r"#\s*band\t(\d+)\s*$", line)
+        m = re.match(r"#\s*band\t(\d+)%\t(\d+)\s*$", line)
         if m:
-            band = int(m.group(1))
+            band = (int(m.group(1)), int(m.group(2)))
         if not line or line.startswith("#"):
             continue
         f = line.split("\t")
-        if len(f) < 6 or f[3] not in ("absent", "extra"):
+        if len(f) < 6 or f[3] not in ("absent", "extra", "same"):
             raise Unreadable(f"{path}: a row without six fields or with side {f[3:4]}: {line}")
-        rows.append((int(f[0], 16), f[1], f[2], f[3]))
+        rows.append((int(f[0], 16), tuple(c.strip() for c in f[1].split(",")), f[2], f[3]))
     return band, rows
 
 
+def caller_matches(entry, caller):
+    if entry == "*":
+        return True
+    if entry == "dll":
+        return bool(caller & REC_COUNT_DLL)
+    return entry == caller_text(caller) or entry.lower() == f"0x{caller:x}"
+
+
+def aux_matches(entry, aux, name):
+    return entry == "*" or entry == f'"{name}"' or entry.lower() == f"0x{aux:x}"
+
+
 def absent_covers(rows, site, caller, aux, name, side):
+    """Whether an absent or extra row covers the key; caller is a VA, or a `same` row's label."""
     for rs, rc, ra, rside in rows:
         if rs != site or rside != side:
             continue
-        if rc != "*" and rc != caller_text(caller) and rc.lower() != f"0x{caller:x}":
+        if isinstance(caller, str):
+            if rc != ("*",) and ",".join(rc) != caller:
+                continue
+        elif not any(caller_matches(e, caller) for e in rc):
             continue
-        if ra != "*" and ra != f'"{name}"' and ra.lower() != f"0x{aux:x}":
-            continue
-        return True
+        if aux_matches(ra, aux, name):
+            return True
     return False
+
+
+def same_class(rows, site, caller, aux, name):
+    """The `same` row's callers that the key belongs to, joined, or None: one effect the engine
+    reaches through another path on a puppet host, so its callers' counts are compared summed."""
+    for rs, rc, ra, rside in rows:
+        if rside == "same" and rs == site and aux_matches(ra, aux, name) \
+                and any(caller_matches(e, caller) for e in rc):
+            return ",".join(rc)
+    return None
+
+
+def within_band(band, a, b):
+    """A sink's counts agree when they differ by at most the band's percent of the larger, or by
+    its floor, whichever is more."""
+    pct, floor = band
+    return abs(a - b) <= max(floor, pct * max(a, b) // 100)
 
 
 def cmd_compare_counts(path, la, lb, pa, pb, absent):
     """The counts of a live game (L, dumps la and lb) against a playing's (P, pa and pb), each as
     the change between its two dumps: every root per site exactly; every sink per (site, caller,
-    aux) within replay-absent.tsv's band, less its rows; and no COB engine write on the puppet.
+    aux), a `same` row's callers summed, within replay-absent.tsv's band, less its absent and
+    extra rows; and no COB engine write on the puppet.
     Both dumps of a pair are taken at a capture point before that step's replay step, so both
     windows hold the steps [first GameTime, second GameTime)."""
     h = header_only(path)
@@ -1380,26 +1415,37 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent):
         b = sum(n for (s, _, _), n in pup.items() if s == va)
         if a != b:
             lines.append(f"root {what}: live {a}, puppet {b}")
+    def grouped(counts):
+        out = {}
+        for (site, caller, aux), n in counts.items():
+            if site in COUNT_SINKS:
+                cls = same_class(rows, site, caller, aux, names.get(aux, ""))
+                key = (site, cls if cls else caller, aux)
+                out[key] = out.get(key, 0) + n
+        return out
+    glive, gpup = grouped(live), grouped(pup)
     nsink = 0
-    for key in sorted(k for k in set(live) | set(pup) if k[0] in COUNT_SINKS):
+    for key in sorted(set(glive) | set(gpup), key=lambda k: (k[0], str(k[1]), k[2])):
         site, caller, aux = key
         if not sinks >> COUNT_SINKS.index(site) & 1:
             continue
-        a, b = live.get(key, 0), pup.get(key, 0)
+        a, b = glive.get(key, 0), gpup.get(key, 0)
         nsink += 1
-        if abs(a - b) <= band:
+        if within_band(band, a, b):
             continue
         name = names.get(aux, "")
         if absent_covers(rows, site, caller, aux, name, "absent" if b < a else "extra"):
             continue
         label = f' "{name}"' if name else (f" aux 0x{aux:X}" if aux else "")
-        lines.append(f"sink 0x{site:06X} from {caller_text(caller)}{label}: live {a}, puppet {b}")
+        who = caller if isinstance(caller, str) else caller_text(caller)
+        lines.append(f"sink 0x{site:06X} from {who}{label}: live {a}, puppet {b}")
     for va, what in COB_WRITES.items():
         n = sum(c for (s, _, _), c in cpb.items() if s == va)
         if n:
             lines.append(f"COB engine write on a puppet, {what}: {n} since the level began")
     print(f"counts, live {la}..{lb} against puppet {pa}..{pb}, GameTime [{ta}, {tb}): "
-          f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band}, {len(rows)} rows: "
+          f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band[0]}% or {band[1]}, "
+          f"{len(rows)} rows: "
           + ("EQUAL" if not lines else f"{len(lines)} DIFFERENCES"))
     for line in lines + unrun:
         print("  " + line)
@@ -1561,16 +1607,17 @@ def cmd_images_gate(path, live, twin, playing, second, seek):
 
 
 # SIMF kinds whose bytes a recorded table's image does not hold as a plain value
-SIMF_ID, SIMF_ADDR, SIMF_OWNED, SIMF_LOCAL, SIMF_COUNT, SIMF_COLUMN, SIMF_TARGET, SIMF_PINNED = \
-    range(8)
-SCAN_NOT_PLAIN = (SIMF_ID, SIMF_ADDR, SIMF_OWNED, SIMF_LOCAL, SIMF_COLUMN)
+(SIMF_ID, SIMF_ADDR, SIMF_OWNED, SIMF_LOCAL, SIMF_COUNT, SIMF_COLUMN, SIMF_TARGET, SIMF_PINNED,
+ SIMF_OPAQUE) = range(9)
+SCAN_NOT_PLAIN = (SIMF_ID, SIMF_ADDR, SIMF_OWNED, SIMF_LOCAL, SIMF_COLUMN, SIMF_OPAQUE)
 # the image records' places in their image (tagpu_recfmt.h)
 SCAN_AT = {"unit": ("unit", 0), "mover": ("unit", 0x118), "player": ("player", 0),
            "info": ("player", 0x14C), "proj": ("proj", 0)}
 
 
-def scan_ranges(h, img):
-    """The address ranges a plain value must not fall in, from a dump's own images: (lo, hi, what)."""
+def scan_ranges(h, img, dll=True):
+    """The address ranges a plain value must not fall in, from a dump's own images: (lo, hi, what).
+    Without `dll`, the engine's own ranges only."""
     main_img, data = img[0], img[1]
     d32 = lambda at: struct.unpack_from("<I", data, at - REC_DATA_BEGIN)[0]
     m32 = lambda off: struct.unpack_from("<I", main_img, off)[0]
@@ -1596,7 +1643,7 @@ def scan_ranges(h, img):
     mapped = m32(0x14273)
     if mapped and gw < 0x10000 and gh < 0x10000:
         r.append((mapped, mapped + mapped_bytes(gw, gh), "the explored map", 2))
-    if "dll" in h:
+    if dll and "dll" in h:
         r.append((h["dll"][0], h["dll"][0] + h["dll"][1], "Impure's DLL", 1))
     return [x for x in r if x[0] < x[1]]
 
@@ -1622,13 +1669,15 @@ def cmd_scan(path, dump):
     """THE ADDRESS-SHAPED-VALUE SCAN: a plain value in a dump that lies inside the main block, the
     unit array, the unit defs, the projectile pool, the feature grid, the wreck pool, the explored
     map or Impure's DLL is an address recorded as a value -- a recorded table's fields but its ID,
-    ADDR, OWNED, LOCAL and COLUMN ones (each aligned dword of a table without a layout), the
-    unit, player and projectile images' bytes no replay-layout.tsv row names, and the globals
-    image. A value that merely looks like one fails too: the line says where it points."""
+    ADDR, OWNED, LOCAL, COLUMN and OPAQUE ones (each aligned dword of a table without a layout),
+    and the globals image against the engine's ranges only. A value that merely looks like one
+    fails too: the line says where it points. The unit, player and projectile images' bytes no
+    replay-layout.tsv row names are tested against the engine's ranges and reported."""
     h = header_only(path)
     dh, w = dump_world(dump, h)
     tick, _, img = dump_images(dump)
     ranges = scan_ranges(dh, img)
+    engine = scan_ranges(dh, img, dll=False)
     lines = []
     for ix, t in sorted(w.tables.items()):
         info = dh["tables"].get(ix, {})
@@ -1667,14 +1716,14 @@ def cmd_scan(path, dump):
                 if at + 4 > len(b):
                     continue
                 v = struct.unpack_from("<I", b, at)[0]
-                hit = v and scan_hit(ranges, v)
+                hit = v and scan_hit(engine, v)
                 if hit:
                     report.append(f"{what} {k} +0x{at:03X} holds 0x{v:08X}, {hit}")
     if w.globals is not None:
         gnames = known_names(h) or {}
         for i in range(0, len(w.globals) - 3, 4):
             v = struct.unpack_from("<I", w.globals, i)[0]
-            hit = v and scan_hit(ranges, v)
+            hit = v and scan_hit(engine, v)
             if hit:
                 lines.append(f"globals {gnames.get(i // 4, f'dword {i // 4}')} holds 0x{v:08X}, {hit}")
     print(f"{dump}: GameTime {tick}: {len(ranges)} address ranges: "
@@ -1685,9 +1734,10 @@ def cmd_scan(path, dump):
         print("  " + line + ": an address recorded as a value")
     if len(lines) > 100:
         print(f"  ... and {len(lines) - 100} more")
-    # The engine's records are reported, not failed: their plain rows hold 16.16 world positions,
-    # which land on a record's start in the heap's ranges by chance (MEASURED: 1 to 6 a dump of the
-    # battle), and replay-layout.tsv's rows are their audited pointers.
+    # The engine's records and the globals image are tested against the engine's own ranges: stock
+    # code stores no address of Impure's DLL there, and their aligned dwords straddle pairs of u16
+    # (angles, a position's halves) whose value lands in the DLL's 77 MB about 1.8 % of the time.
+    # The records are reported, not failed: replay-layout.tsv's rows are their audited pointers.
     for line in report[:20]:
         print("  (report) " + line)
     return 1 if lines else 0

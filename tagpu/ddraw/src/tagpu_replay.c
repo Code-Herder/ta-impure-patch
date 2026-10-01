@@ -2308,8 +2308,10 @@ static void heads_put(const Lv* L, const unsigned char* b)
    It takes the NEXT iteration's world: there the grid names only units live in its image, which
    the step's creates and deaths have made the host's (the delta's own precondition), so
    cell_put's slot rule refuses nothing it would not refuse in the delta. The step's own world
-   would name a unit that died in the step. play runs events_put, iteration_read and images_put
-   back to back, and nothing reads the grid between them. When the playing ends at the reader,
+   would name a unit that died in the step. Nothing reads the grid between the tick and the
+   write-back: the tick is a root of the step's late phase, and the late phase's roots are made
+   at tagpu_replay_phase immediately before features_put (THE PHASES), or, for an iteration played
+   late, by events_put and images_put back to back. When the playing ends at the reader,
    the last step's runs keep the input: there is no world after the last step, no dump sees them
    (a dump is taken at a capture point, before that step's events), and a seek rewrites every
    cell (R10). */
@@ -2551,9 +2553,99 @@ void tagpu_replay_blast(const char* unit)
     }
 }
 
-static void events_put(const Lv* L, const RecWorld* W)
+/* THE PHASES. The recording machine made each feature root at some point of its step 0x4954C0
+   (REC_PHASE_*, recorded with the root): in the unit tick, in the projectile tick 0x49B720 -- an
+   impact's damage burning or felling a tree -- or from the falling records 0x420F30 on, the
+   feature tick 0x424050 among them. The host's projectile tick tests each projectile against the
+   cell it is in, the feature there and its height (0x49B090 -> 0x49B2DC..0x49B3CD), so a root
+   made before it takes away a tree the recording machine's projectiles still met: MEASURED in
+   forest-circle 2026-10-01, every impact the host missed (23 of 134) had the tree in the
+   recording machine's cell and its successor in the host's. So a root goes in at its own phase:
+   the unit tick's at the replay step, in recorded order with the step's other events; the
+   projectile tick's once the host's projectile tick has returned; the rest once its falling
+   records have returned, and the step's feature images after them, since they are the world
+   after every root of the step (THE TICK'S INPUT). Roots inside a death's bracket go with the
+   death, at the replay step. The deferred brackets are copied, since the iteration is read on
+   before the projectile tick runs; past the store's room the step's remaining roots go in at
+   the replay step, in order, as before. */
+#define PEND_EVENTS 8192
+#define PEND_BYTES  (2u << 20)
+static struct {
+    Lv            L;                /* the level of the step the store holds                     */
+    unsigned      n, used;          /* events and bytes held                                      */
+    unsigned      next;             /* the first event not yet played                             */
+    int           images;           /* the step's feature images wait for the late phase          */
+    int           full;             /* the store refused a bracket: none deferred until the step  */
+    unsigned      deferred, over;   /* brackets deferred, steps whose store was full              */
+    RecEvent      ev[PEND_EVENTS];
+    unsigned char b[PEND_BYTES];
+} s_pend;
+static RecWorld s_pendW;            /* only ev and nev: what root_play reads of a world           */
+
+/* the bracket opening at `i` into the store; 0 when it does not fit */
+static int pend_add(const RecWorld* W, unsigned i)
+{
+    unsigned end, j, bytes = 0, n;
+    for (end = i + 1; end < W->nev && W->ev[end].kind != RK_EV_FEATURE_END; end++) {}
+    if (end >= W->nev) return 0;
+    n = end - i + 1;
+    for (j = i; j <= end; j++) bytes += W->ev[j].len;
+    if (s_pend.n + n > PEND_EVENTS || s_pend.used + bytes > PEND_BYTES) return 0;
+    for (j = i; j <= end; j++) {
+        RecEvent* e = &s_pend.ev[s_pend.n++];
+        e->kind = W->ev[j].kind;
+        e->len = W->ev[j].len;
+        e->b = s_pend.b + s_pend.used;
+        memcpy(s_pend.b + s_pend.used, W->ev[j].b, W->ev[j].len);
+        s_pend.used += W->ev[j].len;
+    }
+    s_pend.deferred++;
+    return 1;
+}
+
+/* the held roots of phases up to `phase`, in recorded order */
+static void pend_play(unsigned phase)
+{
+    s_pendW.ev = s_pend.ev;
+    s_pendW.nev = s_pend.n;
+    while (s_pend.next < s_pend.n) {
+        const RecEvent* e = &s_pend.ev[s_pend.next];
+        if (e->kind == RK_EV_FEATURE) {
+            if (e->b[1] > phase) return;
+            root_play(&s_pend.L, &s_pendW, s_pend.next);
+        }
+        s_pend.next++;
+    }
+}
+
+static void pend_clear(void)
+{
+    s_pend.n = s_pend.used = s_pend.next = 0;
+    s_pend.images = s_pend.full = 0;
+}
+
+/* Whatever a step left held, in order, its images after: a step whose phases did not run */
+static void pend_finish(void)
+{
+    if (s_pend.next < s_pend.n || s_pend.images) {
+        pend_play(REC_PHASE_LATE);
+        if (s_pend.images && s_rd) features_put(&s_pend.L, recr_world(s_rd));
+    }
+    pend_clear();
+}
+
+void __cdecl tagpu_replay_phase(unsigned phase)
+{
+    if (!tagpu_puppet_on() || !s_rd || s_dead) return;
+    pend_play(phase);
+    if (phase >= REC_PHASE_LATE) pend_finish();
+}
+
+/* The step's events in recorded order; with `defer`, the roots of a later phase into the store */
+static void events_put(const Lv* L, const RecWorld* W, int defer)
 {
     unsigned i, deaths = 0;
+    if (defer) s_pend.L = *L;
     for (i = 0; i < W->nev; i++) {
         const unsigned char* b = W->ev[i].b;
         unsigned n = W->ev[i].len, k = W->ev[i].kind;
@@ -2562,7 +2654,16 @@ static void events_put(const Lv* L, const RecWorld* W)
         case RK_EV_CREATE:      done = ev_create(L, b, n); break;
         case RK_EV_DEATH:       done = death_play(L, W, i); deaths++; break;
         case RK_EV_DEATH_END:   deaths--; continue;
-        case RK_EV_FEATURE:     if (!deaths) root_play(L, W, i); continue;
+        case RK_EV_FEATURE:
+            if (deaths) continue;
+            if (defer && !s_pend.full && b[1] > REC_PHASE_UNITS) {
+                if (pend_add(W, i)) continue;
+                s_pend.full = 1;
+                s_pend.over++;
+                pend_play(REC_PHASE_LATE);  /* the held ones first: the order stays recorded */
+            }
+            root_play(L, W, i);
+            continue;
         case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
         case RK_EV_INTERCEPT:   done = ev_intercept(L, b, n); break;
         case RK_EV_START:       done = ev_start(L, b, n); break;
@@ -2587,7 +2688,8 @@ static void pace(char* ta, unsigned now)
         if (p != s_viewer && tagpu_puppet_seat(p)) memcpy(player_rec(ta, p) + PL_PACE, &now, 4);
 }
 
-static void images_put(const Lv* L, const RecWorld* W)
+/* the next image; with `defer`, its features wait for the step's late phase (THE PHASES) */
+static void images_put(const Lv* L, const RecWorld* W, int defer)
 {
     links_put(L, W);
     units_put(L, W);
@@ -2595,7 +2697,8 @@ static void images_put(const Lv* L, const RecWorld* W)
     states_put(L, W);
     players_put(L, W);
     orders_put(L, W);
-    features_put(L, W);
+    if (defer) s_pend.images = 1;
+    else features_put(L, W);
 }
 
 /* 0x466C20(): the minimap's fog composite, no argument, plain `ret` (0x466DB1; DISASSEMBLED
@@ -4248,6 +4351,7 @@ static int seek_run(char* ta)
     int k;
     s_seek.pending = 0;
     snprintf(dump, sizeof dump, "%s", s_seek.dump);
+    pend_finish();                          /* the step before it, whole (THE PHASES) */
     /* R0: position and validate; nothing of the host is touched yet */
     if (!level_of(ta, &L)) {
         tagpu_logf("replay: %s: seek to %u refused: the level's unit array or features are not "
@@ -4599,6 +4703,8 @@ static void counts_log(const char* when, unsigned now)
                s_name, s_fst.roots, s_fst.rrefused, s_fst.rdiffer, s_fst.deaths, s_fst.dmissed,
                s_fst.left, s_fst.cells, s_fst.wrecks, s_fst.cstruct, s_fst.wstruct, s_fst.cbad,
                s_fst.wbad, s_fst.heads, s_fst.cursor, s_fst.tcells, s_fst.tover);
+    tagpu_logf("replay: %s: feature calls made at their phase of the step: %u deferred past the "
+               "unit tick, %u steps whose store was full", s_name, s_pend.deferred, s_pend.over);
     tagpu_logf("replay: %s: globals and projectiles: written %u times, %u capture points holding "
                "another iteration; the pool refused %u times; the sight mode changed %u times, "
                "%u temporary sight records dropped, %u changes not made; the explored map changed "
@@ -4660,7 +4766,7 @@ static void play(const Lv* L, int first)
     masks_init();
     if (first) {
         s_st.made += level_units(L, W);
-        images_put(L, W);
+        images_put(L, W, 0);
         wind_seed(W);
         sight_fill(L->ta, s_viewer);
         /* V owns nothing, so its energy and metal are 0. The level start 0x465E30 reads them from
@@ -4676,14 +4782,15 @@ static void play(const Lv* L, int first)
        step k's. An iteration of an earlier GameTime is played late rather than dropped, since its
        events are the only record of what they made and destroyed. */
     while (W->tick <= L->now) {
-        if (W->tick < L->now) {
+        int now = W->tick == L->now;        /* an iteration played late goes in whole */
+        if (!now) {
             s_st.late++;
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
-        events_put(L, W);
+        events_put(L, W, now);
         s_st.steps++;
         if (!iteration_read(L)) break;
-        images_put(L, W);
+        images_put(L, W, now);
     }
 }
 
@@ -4696,6 +4803,7 @@ void __cdecl tagpu_replay_step(void)
     if (!tagpu_puppet_on() || !s_rd || s_dead) return;
     ta = ta_main();
     if (!ta) return;
+    pend_finish();
     if (s_first) {
         s_first = 0;
         s_opt.played = 1;                   /* THE PLAYER'S SETTINGS: the loader is done */
@@ -4735,6 +4843,7 @@ void tagpu_replay_level_end(void)
     else if (s_rd && !s_dead)
         tagpu_logf("replay: %s at its level's end, GameTime %u: the recording had ended before it",
                    s_name, ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
+    pend_clear();
     replay_close();
     tagpu_puppet_end();
 }

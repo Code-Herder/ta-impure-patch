@@ -115,6 +115,12 @@ _Static_assert(8 + REC_MAPPED_RUNS <= 0xFFFF, "an RK_MAPPED_RUNS fits its length
 #define REC_COUNTS_CHUNK  1024          /* RK_COUNTS: rows a record                               */
 #define REC_COUNT_NAME    32            /* RK_COUNT_NAME: a script's name, NUL-padded              */
 #define REC_COUNT_DLL     0x80000000u   /* RK_COUNTS: a caller inside Impure's DLL, as its offset  */
+/* RK_EV_FEATURE's phase: where in the step 0x4954C0 the root was made -- in the unit tick or
+   before it, in the projectile tick 0x49B720 (called at 0x495513), or from the falling records
+   0x420F30 (0x495539) to the step's end, the feature tick 0x424050 included */
+#define REC_PHASE_UNITS   0
+#define REC_PHASE_PROJ    1
+#define REC_PHASE_LATE    2
 #define REC_ID_NULL       0u
 #define REC_ID_BAD        0xFFFFFFFEu   /* a pointer outside its table: counted and logged        */
 #define REC_ID_OFFMAP     0xFFFFFFFDu   /* the sort's off-map bucket, *(main+0x142B7)              */
@@ -190,7 +196,8 @@ enum RecKind {
     RK_EV_SPRAY,       /* u32 unit ID, u32 reverse (0 0x4720D0, 1 0x472200), i32 point x, y, z,
                           i32 box x6, u32 layer: a nano spray, credited to the unit whose
                           QueryNanoPiece gave its point                                           */
-    RK_EV_FEATURE,     /* u8 root (RecRoot), u8 0, u16 0, u32 the call's site (its return address
+    RK_EV_FEATURE,     /* u8 root (RecRoot), u8 the step's phase it was made in (REC_PHASE_*),
+                          u16 0, u32 the call's site (its return address
                           less 5), then the root's arguments (RecRoot): a feature function called
                           outside every other one -- outside a unit's death, or inside its
                           explosion -- or the feature tick. The records up to its

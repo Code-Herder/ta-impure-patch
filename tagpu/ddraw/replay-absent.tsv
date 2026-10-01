@@ -4,13 +4,51 @@
 # decision (CLAUDE.md, *Loosening is the owner's decision*); a difference compare-counts names is
 # a bug in the change, never grounds for a row.
 #
-# band	0
-#   a sink's count may differ by this much, live against puppet, in every (site, caller, aux) key
+# band	5%	2
+#   a sink's counts agree, live against puppet, when they differ by at most this percent of the
+#   larger or by the floor, whichever is more. The owner's standard (2026-10-01): a replay is a
+#   good approximation of what the game showed, not a tick-exact copy; the roots stay exact.
 #
 # Columns, tab-separated: site caller aux side reason decided
 #   site    the sink's VA, 0x hex
-#   caller  the return address, 0x hex, dll+0x<offset> inside Impure's DLL, or * for any
+#   caller  the return address, 0x hex, dll+0x<offset> inside Impure's DLL, dll for any caller
+#           inside it, or * for any; a same row lists several, comma-separated
 #   aux     the key's aux, 0x hex, a script's name in quotes, or * for any
-#   side    absent (the puppet counts fewer) or extra (more)
+#   side    absent (the puppet counts fewer) or extra (more), outside the band; or same: one
+#           effect the engine reaches through another path on a puppet host, so the listed
+#           callers' counts are compared summed, within the band
 #   reason  why, with its evidence
 #   decided the date the owner decided it
+
+0x49C9C0	0x49D783,0x49DA84,0x49D55D	*	same	a shot: built live by the fire function 0x49D580 (0x49D783) or the aim callback 0x49D9C0 (0x49DA84), on a puppet host by the shot receiver 0x49D270 (0x49D55D) from the recorded shot	2026-10-01
+0x49CDE0	0x49D773,0x49D453	*	same	a shot of the second kind: live from 0x49D580 (0x49D773), on a puppet host from the receiver 0x49D270 (0x49D453)	2026-10-01
+0x49CC20	0x49DC57,0x49D47E	*	same	an interceptor's shot: live from 0x49DC57, on a puppet host from the receiver 0x49D270 (0x49D47E)	2026-10-01
+0x49C740	dll	*	same	a meteor's stone: live from Impure's meteor_spawned, on a puppet host from meteor_received, both inside the DLL	2026-10-01
+0x4B08C0	0x4B0C4D,0x4B0B0D	"Killed"	same	Killed: live started by Send_UnitDeath's query (0x4865C3 -> 0x4B0C4D), on a puppet host by the destructor's StartScript (0x486877 -> 0x4B0B0D); the destructor deletes the COB object, so no later slice runs on either (0x486DBF)	2026-10-01
+0x4B08C0	0x4B0C4D	"AimFromPrimary"	absent	owner-only aim query: AutoAim 0x49E1A0 runs for owner types 1 and 2 only (the unit tick, 0x48ADDA); what it decides (the AimPrimary starts, the shots, the sprays) is recorded and compared. Residual: a mod's query script that animates	2026-10-01
+0x4B08C0	0x4B0C4D	"AimFromSecondary"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
+0x4B08C0	0x4B0C4D	"AimFromTertiary"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
+0x4B08C0	0x4B0C4D	"SweetSpot"	absent	owner-only aim query, as AimFromPrimary	2026-10-01
+0x4B08C0	0x4B0C4D	"QueryNanoPiece"	absent	owner-only: the nano spray's piece query; the sprays (the root 0x4720D0) are recorded and compared	2026-10-01
+0x4B08C0	0x4B0C4D	"QueryPrimary"	absent	the aim path's queries (0x43E240 from 0x49D6AF, 0x49D9E0) are owner-only; the shot-time query (0x49C82E -> 0x43E1E0) is made once per shot on both sides and is checked through 0x49C740's count	2026-10-01
+0x4B08C0	0x4B0C4D	"QuerySecondary"	absent	as QueryPrimary	2026-10-01
+0x4B08C0	0x4B0C4D	"QueryTertiary"	absent	as QueryPrimary	2026-10-01
+0x4B08C0	*	0x0	absent	a script index the engine refused: 0x4B08C5..0x4B08D0 returns -1 and the three wrappers start nothing (0x4B0B0F..0x4B0B22, 0x4B09A6..0x4B09AF, 0x4B0C4F..0x4B0C54)	2026-10-01
+0x4B08C0	*	0x0	extra	as the absent row: nothing runs on either side	2026-10-01
+0x47F1A0	0x496508	*	absent	the in-game console key's click (0x4964FD plays SmallButton, then opens the console 0x494050): the recording machine's own keyboard	2026-10-01
+0x420A30	0x421445,0x4214D9,0x4210A1	*	absent	a flying piece's or a falling record's explosion: pieces are spawned from the simulation RNG at EXPLODE 0x481140, which a puppet host draws in another order; the owner accepts debris that flies differently (2026-10-01)	2026-10-01
+0x420A30	0x421445,0x4214D9,0x4210A1	*	extra	as the absent row	2026-10-01
+0x472810	0x421588	*	absent	a flying piece's smoke, as 0x420A30's piece rows	2026-10-01
+0x472810	0x421588	*	extra	as the absent row	2026-10-01
+0x472AB0	0x4215AF	*	absent	a flying piece's fire (0x472AB0's only caller), as 0x420A30's piece rows	2026-10-01
+0x472AB0	0x4215AF	*	extra	as the absent row	2026-10-01
+0x472330	0x481015,0x481034	*	absent	COB EMIT_SFX 0x480EB0's fire (types 0 and 1): a puppet host starts the recorded script one tick later than the live game started it (the accepted COB lag, 2026-10-01), so a window's ends cut a few emissions differently; EMIT_SFX also emits only in the viewed player's line of sight (0x480EC5..0x480EEC)	2026-10-01
+0x472330	0x481015,0x481034	*	extra	as the absent row	2026-10-01
+0x472430	0x481051,0x48106E,0x48108B,0x4810A8	*	absent	COB EMIT_SFX's wake (types 2 to 5), as 0x472330's EMIT_SFX rows	2026-10-01
+0x472430	0x481051,0x48106E,0x48108B,0x4810A8	*	extra	as the absent row	2026-10-01
+0x472810	0x4810BE	*	absent	COB EMIT_SFX's grey smoke (type 0x101), as 0x472330's EMIT_SFX rows	2026-10-01
+0x472810	0x4810BE	*	extra	as the absent row	2026-10-01
+0x4728F0	0x48111D	*	absent	COB EMIT_SFX's black smoke (type 0x102), as 0x472330's EMIT_SFX rows	2026-10-01
+0x4728F0	0x48111D	*	extra	as the absent row	2026-10-01
+0x472530	0x481107	*	absent	COB EMIT_SFX's bubbles (type 0x103), as 0x472330's EMIT_SFX rows	2026-10-01
+0x472530	0x481107	*	extra	as the absent row	2026-10-01

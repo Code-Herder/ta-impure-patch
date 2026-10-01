@@ -345,7 +345,7 @@ static const char* sim_shape(const SimDesc* d)
     for (f = d->layout; f->size; f++) {
         unsigned span = f->off + f->size + (f->repeat > 1 ? (unsigned)(f->repeat - 1) * f->step : 0);
         if (span > d->stride)                     return "has a layout field past the end of its row";
-        if (f->kind > SIMF_PINNED || f->id > SIM_ID_DPLAY)
+        if (f->kind > SIMF_OPAQUE || f->id > SIM_ID_DPLAY)
                                                   return "has a layout field of an unknown kind";
         if (f->kind == SIMF_COUNT) count++;
         if (f->kind == SIMF_COLUMN) {
