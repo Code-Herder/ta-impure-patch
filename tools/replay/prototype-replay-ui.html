@@ -7,12 +7,16 @@
                           the replay panel · TA's own -10..+10 speed steps · REWIND in the Tab menu
        B  Video player    an icon beside the sprocket · an expandable table · a bottom dock ·
                           speed presets · a top-bar rewind button and a hotkey
+       D  The pick        A's menu and browser · B's dock without its view/follow dropdowns ·
+                          C's player cards on the right, each with stats, jump, sight and follow
        C  Spectator desk  REPLAYS in INTRO's slot · the fork graph · a timeline on top and
                           player cards · one cycling speed button · a top-bar rewind button
-     Switch with the bottom bar or the arrow keys; #A, #B, #C in the URL picks one.
+     Switch with the bottom bar or the arrow keys; #A..#D in the URL picks one; D is the default.
      Everything is in memory: the recordings, the forks and the world are fake.
 
-     Verdict: (to fill in — which direction, and which pieces were stolen from the others) -->
+     Verdict so far (owner, 2026-10-01): main menu A (centre REPLAYS button), browser A (list +
+     detail), in game B's bottom dock with C's player cards on the right — names, stats, a button to
+     jump to each player. That is D. Still to settle: D's in-game details, then delete this file. -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 /* Layout: one 1280x720 game frame scaled to the window, a state readout under it, the switcher floating. */
@@ -80,9 +84,10 @@ svg text { font-family: var(--mono); fill: var(--ink); dominant-baseline: centra
 <script>
 /* ======================= model ======================= */
 const VARIANTS = [
-  { key: "A", name: "Native TA" },
-  { key: "B", name: "Video player" },
-  { key: "C", name: "Spectator desk" },
+  { key: "A", name: "Native TA", menu: "A", browser: "A", hud: "A", speed: "A" },
+  { key: "B", name: "Video player", menu: "B", browser: "B", hud: "B", speed: "B" },
+  { key: "C", name: "Spectator desk", menu: "C", browser: "C", hud: "C", speed: "C" },
+  { key: "D", name: "The pick: A's menus, B's dock, player cards", menu: "A", browser: "A", hud: "D", speed: "B" },
 ];
 const MAP = { w: 2600, h: 1600 }, CENTER = [1300, 800];
 const BASES = [[260, 260], [2340, 1340], [2340, 260], [260, 1340], [1300, 180], [1300, 1420]];
@@ -192,7 +197,7 @@ const shell = inner => `<rect width="1280" height="720" class="scr"/><svg x="160
 
 /* ======================= main menu ======================= */
 function mainMenu() {
-  const v = VARIANTS[S.v].key;
+  const v = VARIANTS[S.v].menu;
   let s = B(120, 40, 400, 300, "art", "background art", 11, "t-m");
   s += B(596, 2, 28, 28, "imp", "⚙", 14, "t-i", "toast", "The sprocket opens Impure's settings");
   s += B(139, 393, 96, 20, "stk", "SINGLE PLAYER", 9, "", "skirmish");
@@ -372,7 +377,7 @@ function topBar(extra = "") {
   return s + extra;
 }
 function speedCtl(x, y, small) {
-  const v = VARIANTS[S.v].key;
+  const v = VARIANTS[S.v].speed;
   if (v === "A") return B(x, y, 24, 26, "new", "−", 14, "t-a", "step", -1) + B(x + 26, y, 60, 26, "new", (S.step > 0 ? "+" : "") + S.step, 11, "t-a") + B(x + 88, y, 24, 26, "new", "+", 14, "t-a", "step", 1);
   if (v === "B") return [0.5, 1, 2, 4, 8].map((n, i) => B(x + i * 34, y, 30, 26, S.speed === n ? "on" : "new", n === 0.5 ? "½×" : n + "×", 12, "t-a", "speed", n)).join("");
   return B(x, y, 92, 26, "new", `▶▶ ${S.speed === 0.5 ? "½" : S.speed}× ↻`, 12, "t-a", "cycle");
@@ -411,7 +416,7 @@ function hudA() {
   s += T(140, 50, fmt(S.drag ? S.drag.target : S.t), 13, "t-a") + bar(200, 50, 1000) + T(1270, 50, fmt(S.mode === "live" ? S.now : S.tl.end), 12, "t-m", "end");
   s += B(0, 128, 128, 560, "new");
   s += T(8, 144, S.mode === "live" ? "REWIND" : "REPLAY", 13, "t-a");
-  s += B(8, 158, 34, 26, "new", "⏪", 12, "t-a", "jump", -30) + B(46, 158, 36, 26, "new", S.playing ? "⏸" : "▶", 13, "t-a", "play") + B(86, 158, 34, 26, "new", "⏩", 12, "t-a", "jump", 30);
+  s += B(8, 158, 34, 26, "new", "⏪", 12, "t-a", "jump30", -30) + B(46, 158, 36, 26, "new", S.playing ? "⏸" : "▶", 13, "t-a", "play") + B(86, 158, 34, 26, "new", "⏩", 12, "t-a", "jump30", 30);
   s += T(8, 198, "SPEED", 10, "t-m") + speedCtl(8, 208);
   s += T(8, 250, "PLAYERS   ◉   ⌖", 10, "t-m");
   S.rec.players.forEach((p, i) => {
@@ -455,7 +460,7 @@ function hudB() {
   s += T(156, 596, fmt(S.drag ? S.drag.target : S.t), 14, "t-a") + T(1252, 596, fmt(S.mode === "live" ? S.now : S.tl.end), 13, "t-m", "end");
   s += bar(212, 596, 970);
   let x = 156; const y = 638;
-  s += B(x, y, 30, 26, "new", "⏪", 13, "t-a", "jump", -30) + B(x + 34, y, 34, 26, "new", S.playing ? "⏸" : "▶", 14, "t-a", "play") + B(x + 72, y, 30, 26, "new", "⏩", 13, "t-a", "jump", 30);
+  s += B(x, y, 30, 26, "new", "⏪", 13, "t-a", "jump30", -30) + B(x + 34, y, 34, 26, "new", S.playing ? "⏸" : "▶", 14, "t-a", "play") + B(x + 72, y, 30, 26, "new", "⏩", 13, "t-a", "jump30", 30);
   s += speedCtl(x + 114, y);
   x = 460;
   const vl = S.persp < 0 ? "Full map" : S.rec.players[S.persp].name, fl = S.follow < 0 ? "none" : S.rec.players[S.follow].name;
@@ -486,13 +491,52 @@ function hudC() {
   const yb = 80 + n * (ch + 6);
   s += B(1052, yb, 105, 26, S.persp < 0 ? "on" : "new", "Full map", 11, "t-a", "persp", -1) + B(1163, yb, 105, 26, S.follow < 0 ? "on" : "new", "Free cam", 11, "t-a", "follow", -1);
   s += B(380, 618, 660, 52, "new");
-  s += B(392, 630, 30, 28, "new", "⏪", 12, "t-a", "jump", -30) + B(426, 630, 34, 28, S.playing ? "on" : "new", S.playing ? "⏸" : "▶", 13, "t-a", "play") + B(464, 630, 30, 28, "new", "⏩", 12, "t-a", "jump", 30);
+  s += B(392, 630, 30, 28, "new", "⏪", 12, "t-a", "jump30", -30) + B(426, 630, 34, 28, S.playing ? "on" : "new", S.playing ? "⏸" : "▶", 13, "t-a", "play") + B(464, 630, 30, 28, "new", "⏩", 12, "t-a", "jump30", 30);
   s += speedCtl(504, 631);
   s += B(606, 631, 110, 26, "new", "Overlays ▾", 12, "t-a", "pop", "ov") + B(722, 631, 34, 26, "new", "⚑+", 12, "t-a", "mark");
   if (S.mode === "live") s += liveButtons(380, 570, false, 150);
   else s += B(762, 631, 130, 26, "new", tlSelectorLabel() + " ▾", 12, "t-a", "pop", "tl") + B(898, 631, 134, 26, "new", "PLAY FROM HERE", 11, "t-a", "takeoverNow") + B(1150, 2, 84, 28, "stk", "LEAVE", 11, "", "browser");
   if (S.pop === "ov") s += popList(606, 631 - 8 - 28 * 4 - 8, 180, [["cursors", "cursors"], ["clicks", "clicks"], ["sel", "selections"], ["orders", "orders"]].map(([k, nn]) => [(S.ov[k] ? "☑ " : "☐ ") + nn, S.ov[k], "ov", k]));
   if (S.pop === "tl") s += popTl(762, 631 - 8 - 34 * shown(S.rec).length - 4, 330);
+  return s;
+}
+
+// D: B's bottom dock, with the players on the right as cards: stats, sight, follow, jump.
+function playerCards(x, y0, w, maxH) {
+  const r = S.rec, n = r.players.length, ch = Math.min(78, Math.floor((maxH - 94) / n) - 6);
+  let s = B(x, y0, w, 28, "stk") + T(x + 10, y0 + 14, "PLAYERS", 11, "t-m") + T(x + w - 10, y0 + 14, fmt(S.drag ? S.drag.target : S.t), 11, "t-m", "end");
+  r.players.forEach((p, i) => {
+    const y = y0 + 34 + i * (ch + 6), e = econ(r, S.tl, i, S.t), dead = !alive(r, S.tl, i, S.t), big = ch >= 66;
+    s += B(x, y, w, ch, S.persp === i || S.follow === i ? "on" : "new", "", 12, "", "jump", i);
+    s += `<rect x="${x + 10}" y="${y + 9}" width="12" height="12" class="p${i}"/>` + T(x + 30, y + 15, p.name + (p.ai ? " · AI" : ""), 13, dead ? "t-m" : "");
+    if (dead) s += T(x + 10, y + ch - 14, `defeated at ${fmt(defeatAt(r, S.tl, i))}`, 11, "t-w");
+    else if (big) s += T(x + 10, y + 37, `metal ${e.m}   energy ${e.e}`, 11, "t-m") + T(x + 10, y + 55, `${e.n} units`, 11, "t-m") + `<rect x="${x + 90}" y="${y + 51}" width="${(w - 110) * e.n / 24}" height="8" class="p${i}" opacity=".6"/>`;
+    else s += T(x + 10, y + ch - 13, `${e.m} m · ${e.e} e · ${e.n} u`, 11, "t-m");
+    const bx = x + w - 92;
+    s += B(bx, y + 4, 28, 24, "new", "➜", 13, "t-a", "jump", i) + B(bx + 31, y + 4, 28, 24, S.persp === i ? "on" : "new", "◉", 12, "t-a", "persp", i) + B(bx + 62, y + 4, 28, 24, S.follow === i ? "on" : "new", "⌖", 12, "t-a", "follow", i);
+  });
+  const yb = y0 + 34 + n * (ch + 6);
+  s += B(x, yb, w / 2 - 3, 26, S.persp < 0 ? "on" : "new", "◉ Full map", 11, "t-a", "persp", -1) + B(x + w / 2 + 3, yb, w / 2 - 3, 26, S.follow < 0 ? "on" : "new", "⌖ Free camera", 11, "t-a", "follow", -1);
+  s += T(x, yb + 42, "➜ jump · ◉ their sight · ⌖ follow their camera", 10, "t-m");
+  return s;
+}
+function hudD() {
+  let s = drawWorld() + topBar() + B(0, 688, 1280, 32, "stk", "bottom bar (unit info)", 13, "t-m");
+  if (!replayActive()) return liveEntryTop(s + B(0, 128, 128, 560, "stk", "build menu", 13, "t-m"));
+  s += B(0, 128, 128, 560, "stk", S.mode === "live" ? "build menu" : "build menu (empty)", 12, "t-m");
+  s += playerCards(1018, 40, 250, 520);
+  s += B(140, 572, 1128, 110, "new");
+  s += T(156, 596, fmt(S.drag ? S.drag.target : S.t), 14, "t-a") + T(1252, 596, fmt(S.mode === "live" ? S.now : S.tl.end), 13, "t-m", "end");
+  s += bar(212, 596, 970);
+  let x = 156; const y = 638;
+  s += B(x, y, 30, 26, "new", "⏪", 13, "t-a", "jump30", -30) + B(x + 34, y, 34, 26, "new", S.playing ? "⏸" : "▶", 14, "t-a", "play") + B(x + 72, y, 30, 26, "new", "⏩", 13, "t-a", "jump30", 30);
+  s += speedCtl(x + 114, y);
+  x = 460;
+  s += B(x, y, 110, 26, "new", "Overlays ▾", 12, "t-a", "pop", "ov") + B(x + 116, y, 34, 26, "new", "⚑+", 12, "t-a", "mark");
+  if (S.mode === "live") s += liveButtons(x + 160, y - 2, false, 150);
+  else s += B(x + 160, y, 136, 26, "new", tlSelectorLabel() + " ▾", 12, "t-a", "pop", "tl") + B(x + 302, y, 130, 26, "new", "PLAY FROM HERE", 11, "t-a", "takeoverNow") + B(1150, 2, 84, 28, "stk", "LEAVE", 11, "", "browser");
+  if (S.pop === "ov") s += popList(x, y - 8 - 28 * 4 - 8, 180, [["cursors", "cursors"], ["clicks", "clicks"], ["sel", "selections"], ["orders", "orders"]].map(([k, n]) => [(S.ov[k] ? "☑ " : "☐ ") + n, S.ov[k], "ov", k]));
+  if (S.pop === "tl") s += popTl(x + 160, y - 8 - 34 * shown(S.rec).length - 4, 330);
   return s;
 }
 
@@ -605,7 +649,14 @@ const ACTIONS = {
   delFork: id => { const r = RECS.find(x => findTl(x, id)); S.dialog = { kind: "delFork", rec: r, tl: findTl(r, id) }; },
   confirmDel: () => { const r = S.dialog.rec, id = S.dialog.tl.id; findTl(r, id).deleted = true; S.selTl = null; S.dialog = null; toast("Fork deleted"); },
   play: () => { if (S.mode === "watch" && S.t >= S.tl.end) S.t = 0; S.playing = !S.playing; },
-  jump: d => seekTo(S.t + +d),
+  jump30: d => seekTo(S.t + +d),
+  // Camera to the player's units once (their commander if it lives, else their base); free camera after.
+  jump: i => {
+    const us = units(S.rec, S.tl, S.t).filter(u => u.pid === +i), c = us.find(u => u.i === 0) || us[0];
+    const [px, py] = c ? [c.x, c.y] : BASES[+i];
+    S.follow = -1; S.cam = [px - 576, py - 328];
+    toast(`Camera on ${S.rec.players[+i].name}`);
+  },
   step: d => { S.step = Math.max(-10, Math.min(10, S.step + +d)); S.speed = S.step >= 0 ? 1 + S.step * 0.7 : 1 / (1 - S.step * 0.3); },
   speed: n => S.speed = +n,
   cycle: () => { const c = [1, 2, 4, 8, 0.5]; S.speed = c[(c.indexOf(S.speed) + 1) % c.length]; },
@@ -672,7 +723,7 @@ document.addEventListener("keydown", ev => {
   if (ev.target.closest && ev.target.closest("input,textarea,[contenteditable]")) return;
   if (ev.key === "ArrowLeft") { setVariant(S.v - 1); ev.preventDefault(); }
   else if (ev.key === "ArrowRight") { setVariant(S.v + 1); ev.preventDefault(); }
-  else if ((ev.key === "r" || ev.key === "R") && S.screen === "game" && VARIANTS[S.v].key !== "A") { S.rewind ? ACTIONS.backNow() : ACTIONS.rewind(); render(); }
+  else if ((ev.key === "r" || ev.key === "R") && S.screen === "game" && VARIANTS[S.v].hud !== "A") { S.rewind ? ACTIONS.backNow() : ACTIONS.rewind(); render(); }
   else if (ev.key === "Tab" && S.screen === "game" && S.mode === "live" && !S.rewind) { ACTIONS.tabmenu(); ev.preventDefault(); render(); }
   else if (ev.key === " " && S.screen === "game" && replayActive()) { ACTIONS.play(); ev.preventDefault(); render(); }
 });
@@ -684,7 +735,7 @@ function setVariant(i) {
 document.getElementById("prev").onclick = () => setVariant(S.v - 1);
 document.getElementById("next").onclick = () => setVariant(S.v + 1);
 window.addEventListener("hashchange", () => { const i = VARIANTS.findIndex(v => "#" + v.key === location.hash); if (i >= 0 && i !== S.v) { S.v = i; render(); } });
-{ const i = VARIANTS.findIndex(v => "#" + v.key === location.hash); if (i >= 0) S.v = i; }
+{ const i = VARIANTS.findIndex(v => "#" + v.key === location.hash); S.v = i >= 0 ? i : 3; }
 
 /* ======================= loop ======================= */
 function render() {
@@ -692,8 +743,8 @@ function render() {
   document.getElementById("vlabel").textContent = `${v.key} — ${v.name}`;
   let s = "";
   if (S.screen === "menu") s = mainMenu();
-  else if (S.screen === "browser") s = [browserA, browserB, browserC][S.v]();
-  else s = [hudA, hudB, hudC][S.v]();
+  else if (S.screen === "browser") s = { A: browserA, B: browserB, C: browserC }[v.browser]();
+  else s = { A: hudA, B: hudB, C: hudC, D: hudD }[v.hud]();
   stage.innerHTML = s + dialog() + pills();
   const r = S.screen === "game" ? S.rec : curRec();
   document.getElementById("state").textContent =
