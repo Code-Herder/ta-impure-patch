@@ -3894,13 +3894,17 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
                                                  : (unsigned char*)d->addr;
     unsigned host = !base ? 0 : !d->nrows ? *d->rows * d->stride : d->nrows * d->stride;
     unsigned rows = (t->size < host ? t->size : host) / d->stride, r, b, nkeep = 0, changed = 0;
+    unsigned nspan, *span;
     unsigned char* keep;
     const SimField* f;
     if (count_kept(d, t)) {
         c->kept++;
         return;
     }
-    keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, d->stride);
+    /* the keep, then at most stride/2 + 1 runs of two bounds each */
+    span = (unsigned*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                ((size_t)d->stride + 2) * sizeof(unsigned) + d->stride);
+    keep = span ? (unsigned char*)(span + d->stride + 2) : NULL;
     if (!keep) {
         c->skipped++;
         tagpu_logf("replay: %s: the tables skipped %s: no memory", s_name, d->name);
@@ -3910,22 +3914,29 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
     /* a heap table sized otherwise than the recording's: rows past the shorter one keep the host's
        bytes or are not written, so the difference is counted with the values left */
     if ((d->flags & SIMD_HEAP) && t->size != host) c->kept++;
+    /* the row's written bytes as runs, [span[2k], span[2k+1]), so a row costs a memcmp a run */
+    nspan = 0;
+    for (b = 0; b < d->stride; b++)
+        if (!keep[b] && (b == 0 || keep[b - 1])) {
+            span[nspan] = b;
+            while (b < d->stride && !keep[b]) b++;
+            span[nspan + 1] = b;
+            nspan += 2;
+        }
     for (r = 0; r < rows; r++) {
         unsigned char* row = base + (size_t)r * d->stride;
         const unsigned char* img = t->img + (size_t)r * d->stride;
         int differ = 0;
-        if (!nkeep) {
-            if (memcmp(row, img, d->stride)) {
-                memcpy(row, img, d->stride);
-                changed++;
-            }
-            continue;
-        }
-        for (b = 0; b < d->stride; b++)
-            if (!keep[b] && row[b] != img[b]) {
-                row[b] = img[b];
+        unsigned k;
+        for (k = 0; k < nspan; k += 2)
+            if (memcmp(row + span[k], img + span[k], span[k + 1] - span[k])) {
+                memcpy(row + span[k], img + span[k], span[k + 1] - span[k]);
                 differ = 1;
             }
+        if (!nkeep) {
+            changed += differ;
+            continue;
+        }
         for (f = d->layout; f->size; f++) {
             unsigned k, n = f->repeat ? f->repeat : 1;
             if (f->kind != SIMF_ADDR || f->id == SIM_ID_NONE || f->size != sizeof(char*)) continue;
@@ -3946,7 +3957,7 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
         }
         changed += differ;
     }
-    HeapFree(GetProcessHeap(), 0, keep);
+    HeapFree(GetProcessHeap(), 0, span);
     c->written++;
     if (changed) {
         c->changed += changed;
