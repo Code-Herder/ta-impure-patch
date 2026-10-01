@@ -3033,7 +3033,12 @@ static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t lo
    fields +0x7A, +0x7C and +0xF8 to the host's engine, which derives them from the same history as
    the recording machine, except in the step that makes the unit. The recording machine makes a
    unit where its own code does: in the unit tick, or after the players phase, as the scenario
-   applier does at 0x4969D2, after the in-play draw. The replay makes every unit of step k in the
+   applier does at 0x4969D2, after the in-play draw, and as the SHARE dialog's give does in a stock
+   skirmish (its handler 0x4934B0 -> 0x4933E0 -> GiveUnit 0x488570, whose local create is the
+   call of 0x485F50 at 0x488700, from the GUI dispatch 0x4A9FD0 in IdleTick, between two steps;
+   DISASSEMBLED). The
+   recorder takes every create at the create's own exit, whoever called it, so each such unit is
+   made here through make and counted as made. The replay makes every unit of step k in the
    unit tick's stub, after the host's unit tick and before the players phase of step k (0x49555F
    follows 0x4954ED), and unit_put runs E_Water on it at the next images. So a unit the recording
    machine made after its players phase meets two writers here one step early: the players phase
@@ -3161,8 +3166,9 @@ void __cdecl tagpu_replay_capture(void)
    Host-own state that survives, none of it read on a puppet host: B4's per-slot columns (births
    stay strictly increasing per slot), the passability cache, the order inside the seats'
    control-group vectors. The bytes a slot dead at T holds also survive, and a later create starts
-   from them where it writes nothing: the water state comes from the create's event instead,
-   contact bit 12 lasts until the next pass, and the control group is harmless.
+   from them where it writes nothing: the water state comes from the create's event instead, and
+   contact bit 12 lasts until the next pass. The control group is not among them: the unit init
+   calls the setter 0x480250(unit, 0) (0x485D20..0x485D29), so every create starts in group 0.
    THE ORDER is the argument: R0 touches nothing; R3-R4 run on the clock the host holds; R5 needs
    no unit alive and no temporary sight record; R6 comes before everything that stamps GameTime for
    the target; R11-R13 follow everything that writes effects, tables and the simulation RNG (the
@@ -4013,10 +4019,13 @@ static void seek_run(char* ta)
        on, at GameTime P+30, which R15 schedules on both, and at T itself when T-1 is a multiple
        of 30; until the next pass the seek shows T's contacts, and in a seat's view T's minimap
        fog, where a playing shows those of P+1 (O14). The pass's other call, the minimap fog
-       0x466C20, ran in R14 (sight_fill), and the radar pass asks for no other: of main+0x142F1
-       it sets bit 1 alone (0x46742F). It runs after the last write it reads -- R7's units, R8's
-       positions and alliances, R13's LosType and explored map -- and before R15, which it does
-       not read. */
+       0x466C20, ran in R14 (sight_fill), and the radar pass asks for no other: neither it
+       (0x467440..0x467836) nor its callees -- the unit walk 0x47E890 with its visitors 0x467840,
+       0x467960 and 0x467980, 0x40B0D0, the math helpers 0x4E4400 and 0x4E43D0 -- write
+       main+0x142F1 (DISASSEMBLED; the `or` of bit 1 at 0x46742F, just before, is the radar
+       rebuild 0x466DC0's last store, whose ret is at 0x46743D). It runs after the last write it
+       reads -- R7's units, R8's positions and alliances, R13's LosType and explored map -- and
+       before R15, which it does not read. */
     E_RadarPass();
     /* R15 */
     sk_deadlines(ta, W, T - 1);
