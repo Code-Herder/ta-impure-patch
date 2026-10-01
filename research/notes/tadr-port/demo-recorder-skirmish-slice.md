@@ -1483,7 +1483,9 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   then the R process stopped at about GameTime 1550 on Impure's COB guard (`CORMSHIP.COB`, word
   724, `CALL cannot obtain a child thread`) — **O15**, the stop S3b already met after seeks near
   848 in the same recording, which the owner gave a landing of its own. V1's naval-unmapped, round
-  trips at 841, 1411 and 1741, passed it. FINAL2.
+  trips at 841, 1411 and 1741, passed it. Then, on the block-wise write (f5fdda42), `tareplay run battle-los carry-links
+  stock-limits nomapalert -j 4`: exit 0, 68 of 68 checks, residue 0 in all 12 round trips, seeks
+  7–260 ms.
 - **The round trip on two S3b recordings**, the naval push (601, 1201, 1801, 2401) and the battle
   (601, 1501, 2401, 3301): **8 of 8 `compare-dumps` EQUAL** and residue 0, seeks 26–412 ms (the
   naval push 26–152, the battle 296–412). The only TRANSIENT bytes reset were `s_foot`'s, 109–308.
