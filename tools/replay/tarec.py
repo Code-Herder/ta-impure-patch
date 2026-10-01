@@ -1179,7 +1179,7 @@ IMAGE_MAP = {
         (0x3923D, 0x3924D, "a .data string's address")],
     1: [(0x0, 0x10A00, "file-backed constants and tables"),
         (0x109B8, 0x10A3C, "an object, the pathfinder's budget"),
-        (0x10A58, 0x10DC8, "the GAF and animation state"),
+        (0x10A40, 0x10DE0, "the network statistics and their sampler"),
         (0x10A60, 0x10C65, "a table"),
         (0x10DE8, 0x10DEC, "the main pointer"),
         (0x10DF0, 0x10F80, "stock's flying-piece slots"),
@@ -1198,7 +1198,9 @@ IMAGE_MAP = {
         (0x1EB50, 0x1EBD4, "a registry value, checksums, the graphics globals' pointer"),
         (0x1EBE0, 0x1EC88, "timers"),
         (0x1EC88, 0x1EC8C, "the simulation RNG"),
-        (0x279A4, 0x2A65C, "the C runtime"),
+        (0x27994, 0x28EC4, "the Cavedog library: the engine allocator's statistics, the debug and "
+                           "performance objects"),
+        (0x28EC4, 0x2A65C, "the C runtime"),
         (0x294E8, 0x294F4, "a tagged lock, its owner's tag and its event: the game thread and the "
                            "mouse thread 0x4C2990 take it"),
         (0x294F4, 0x29500, "a second tagged lock: tag, event, word (0x4D0F60, 0x4D1480)")],
@@ -1650,8 +1652,9 @@ def scan_ranges(h, img, dll=True):
 
 def scan_hit(ranges, v):
     """Where `v` points, or None. Into a pool of records only at a record's start, which is where
-    the engine's pointers to its records point: a 16.16 world position lies inside the heap's
-    ranges far more often than at a record's first byte."""
+    the engine's pointers to its records point: an aligned dword that straddles two u16 fields
+    (an angle and a position's half) lands inside a pool's range far more often than at a
+    record's first byte."""
     for lo, hi, what, stride in ranges:
         if lo <= v < hi:
             if stride > 1:

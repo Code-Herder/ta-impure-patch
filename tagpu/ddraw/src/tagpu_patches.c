@@ -4577,7 +4577,7 @@ static int fix_stacked_air(void)
     return FIX_TABLE;
 }
 
-/* THE STEP'S PHASES. The step 0x4954C0 calls the projectile tick 0x49B720 at 0x495513 and the
+/* THE STEP'S PHASES. The step 0x495490 calls the projectile tick 0x49B720 at 0x495513 and the
    falling records 0x420F30 at 0x495539, each with no argument, each returning with a plain `ret`
    (0x49BE5C, 0x421147) [DISASSEMBLED]. Each call goes through a stub: pushfd; pushad; push phase;
    call tagpu_rec_phase; add esp,4; popad; popfd; call the function; pushfd; pushad; push phase;

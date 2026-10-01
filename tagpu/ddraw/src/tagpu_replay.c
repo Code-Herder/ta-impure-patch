@@ -2553,7 +2553,7 @@ void tagpu_replay_blast(const char* unit)
     }
 }
 
-/* THE PHASES. The recording machine made each feature root at some point of its step 0x4954C0
+/* THE PHASES. The recording machine made each feature root at some point of its step 0x495490
    (REC_PHASE_*, recorded with the root): in the unit tick, in the projectile tick 0x49B720 -- an
    impact's damage burning or felling a tree -- or from the falling records 0x420F30 on, the
    feature tick 0x424050 among them. The host's projectile tick tests each projectile against the
