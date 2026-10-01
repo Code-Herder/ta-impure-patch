@@ -5254,8 +5254,25 @@ def cmd_scenario_load(args):
 # and reports the DLL's verdict. Local instances only.
 
 REPLAY_REQUEST = "tagpu_replay.play"
+REPLAY_TRIGGER = "tagpu_replay.trigger"
 REPLAY_RX = re.compile(r"replay: (playing|not playing)\b(.*)")
+REPLAY_PLAYING_RX = re.compile(r"replay: playing ([A-Za-z0-9_-]+):")
 REPLAY_SEATS_MAX = 9    # the viewer needs a record of its own (decision D2)
+REPLAY_SEEK_TIMEOUT = 120.0
+REPLAY_NAME_RX = re.compile(r"[A-Za-z0-9_-]{1,39}")    # the DLL's name rule for a dump
+
+
+class _LogLines:
+    """The complete lines a log cursor has passed, oldest first: a line the sink has not finished
+    writing waits for the next call."""
+
+    def __init__(self, cursor):
+        self.cursor, self.part = cursor, ""
+
+    def __call__(self):
+        lines = (self.part + self.cursor.text(advance=True)).split("\n")
+        self.part = lines.pop()
+        return lines
 
 
 def _tarec():
@@ -5264,14 +5281,19 @@ def _tarec():
     return tarec
 
 
-def cmd_replay_play(args):
-    """A recording -> a level of puppets that plays it, in one command."""
+def _replay_start(args, verb, tail=""):
+    """Launches instance args.name on the recording's map and seats, puts the recording in
+    replays\\ and the request `play <name>[ <seat>]<tail>` in place, clicks Start and waits for
+    the DLL's verdict. Only the recording's header is read (tarec.header_only). Returns the
+    instance, the name the DLL plays it as, the steps, the verdict, the launch, and the log's
+    lines after the verdict's with the reader that goes on from them, so a caller can wait for
+    what follows."""
     inst = Instance(args.name)
     if inst.remote:
-        die(f"{args.name} is remote: `replay play` plays on a local instance")
+        die(f"{args.name} is remote: `replay {verb}` plays on a local instance")
     tarec = _tarec()
     try:
-        h, _blocks, _stop_why = tarec.load(args.recording)
+        h = tarec.header_only(args.recording)
     except (OSError, tarec.Unreadable) as e:
         die(f"{args.recording}: {e}")
     seats = sorted(h["players"], key=lambda p: p["index"])
@@ -5318,10 +5340,10 @@ def cmd_replay_play(args):
     verdict = None
     try:
         _scn_wait_shell(inst, args.launch_timeout)
-        cursor = _log_cursor(inst)
+        lines = _LogLines(_log_cursor(inst))
         request.write_text(f"play {name}"
                            + (f" {args.perspective}" if args.perspective is not None else "")
-                           + "\n")
+                           + tail + "\n")
         for i, selector in enumerate(SCN_MENU_PATH):
             last = i == len(SCN_MENU_PATH) - 1
             before, g = _ui_resolve(inst, selector, SCN_MENU_TIMEOUT, wait=True)
@@ -5332,10 +5354,12 @@ def cmd_replay_play(args):
         while verdict is None:
             if not inst.running():
                 die(f"{args.name} exited while the replay loaded (tacli log {args.name} -n 40)")
-            for line in cursor.text(advance=True).splitlines():
+            got = lines()
+            for i, line in enumerate(got):
                 m = REPLAY_RX.search(line)
                 if m:
                     verdict = (m.group(1), line[m.start():].strip())
+                    rest = got[i + 1:]
                     break
             if verdict is None:
                 if time.time() >= deadline:
@@ -5346,12 +5370,151 @@ def cmd_replay_play(args):
         # a request the Start never read would make the next skirmish a replay
         request.unlink(missing_ok=True)
     steps.append(verdict[1])
+    return inst, name, steps, verdict, launched, rest, lines
+
+
+def cmd_replay_play(args):
+    """A recording -> a level of puppets that plays it, in one command."""
+    _inst, name, steps, verdict, launched, _rest, _lines = _replay_start(args, "play")
     res = {"name": args.name, "recording": str(args.recording), "as": name,
            "playing": verdict[0] == "playing", "steps": steps, "pid": launched.get("pid"),
            "window": launched.get("window")}
     out(res, args.json, human="\n".join([f"{name}: on {args.name}"] +
                                         [f"  {s}" for s in steps]))
     if not res["playing"]:
+        sys.exit(1)
+
+
+def _replay_playing(inst: Instance):
+    """The name the instance's current level plays, or None and why not. The log of this run
+    decides: the last verdict is a `replay: playing` and none of the lines that end its playing
+    follows it -- the reader's end or failure, a level that left the unit array it began with, or
+    the level's teardown."""
+    if not inst.running():
+        return None, f"{inst.name} is not running"
+    lines = talog.run_text(inst.gamedir).splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        m = REPLAY_RX.search(lines[i])
+        if not m:
+            continue
+        p = REPLAY_PLAYING_RX.search(lines[i])
+        if not p:
+            return None, f"its last replay did not play: {lines[i][m.start():].strip()}"
+        name = re.escape(p.group(1))
+        ended = re.compile(rf"replay: {name} (played to its end at|cannot be read on from|"
+                           rf"stops at|at its level's end,) GameTime")
+        for line in lines[i + 1:]:
+            e = ended.search(line)
+            if e:
+                return None, line[e.start():].strip()
+        return p.group(1), None
+    return None, "no level of this run has played a recording"
+
+
+def _replay_seek_wait(inst, name, T, dump, lines, first, timeout):
+    """Waits for the seek's arrival or refusal and, with a dump, for the dump's line; returns
+    what they say. The arrival comes at the frame visit that runs the seek, paused or not; the
+    dump comes at the capture point of T, which a paused playback reaches at its first step after
+    the pause."""
+    n, d = re.escape(name), re.escape(dump or "")
+    arrive_rx = re.compile(rf"replay: {n}: at GameTime {T}, sought from GameTime (\d+) in (\d+) ms "
+                           rf"\(read (\d+), rebuild (\d+)\); units (\d+) killed, (\d+) made, "
+                           rf"(\d+) refused")
+    wrote_rx = re.compile(rf"replay: {n}: the seek to {T} wrote: .*")
+    refuse_rx = re.compile(rf"replay: (?:{n}: )?seek to {T} refused: (.*)"
+                           rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: (.*)")
+    dump_rx = re.compile(rf"recorder: dump {d} at GameTime (-?\d+) -> (.*) \(\d+ bytes of records\)")
+    dump_bad_rx = re.compile(rf"recorder: dump {d}( refused: |: no memory |: cannot write ).*")
+    res = {"arrived": False}
+    deadline = time.time() + timeout
+    pending = first
+    while True:
+        for line in pending:
+            m = refuse_rx.search(line)
+            if m:
+                res["refused"] = m.group(1) or m.group(2)
+                res["line"] = line[m.start():].strip()
+                return res
+            m = arrive_rx.search(line)
+            if m:
+                res.update(arrived=True, line=line[m.start():].strip(),
+                           **dict(zip(("from", "ms", "read_ms", "rebuild_ms", "killed", "made",
+                                       "units_refused"), map(int, m.groups()))))
+                continue
+            m = wrote_rx.search(line)
+            if m:
+                res["wrote"] = m.group(0)
+                continue
+            if not dump:
+                continue
+            m = dump_rx.search(line)
+            if m:
+                res["dump_at"], res["dump"] = int(m.group(1)), m.group(2)
+                continue
+            m = dump_bad_rx.search(line)
+            if m:
+                res["dump_failed"] = line[m.start():].strip()
+        if res["arrived"] and "wrote" in res and (
+                not dump or "dump" in res or "dump_failed" in res):
+            return res
+        if not inst.running():
+            die(f"{inst.name} exited during the seek (tacli log {inst.name} -n 40)")
+        if time.time() >= deadline:
+            missing = ("the seek's arrival or refusal" if not res["arrived"] else
+                       "the seek's second line" if "wrote" not in res else
+                       f"the dump {dump} (a paused playback takes it at its first step)")
+            res["timeout"] = f"no {missing} in {timeout:g}s"
+            return res
+        time.sleep(0.25)
+        pending = lines()
+
+
+def cmd_replay_seek(args):
+    """A playback at GameTime T: a fresh process that plays the recording from T (--recording), or
+    the instance's running playback moved to T, forward or backward."""
+    tail = f" dump {args.dump}" if args.dump else ""
+    steps = []
+    res = {"name": args.name, "T": args.T, "dump_name": args.dump}
+    if args.recording:
+        inst, name, steps, verdict, launched, rest, lines = _replay_start(
+            args, "seek", f" at {args.T}{tail}")
+        res.update(recording=str(args.recording), pid=launched.get("pid"),
+                   window=launched.get("window"))
+        if verdict[0] != "playing":
+            res.update(**{"as": name, "steps": steps, "arrived": False})
+            out(res, args.json, human="\n".join([f"{name}: on {args.name}, not sought"] +
+                                                [f"  {s}" for s in steps]))
+            sys.exit(1)
+    else:
+        if any((args.res, args.vsync, args.display, args.defaults is not None, args.keep_dll,
+                args.restart, args.perspective is not None)):
+            print("tacli: replay seek: the launch options go with --recording; without it the "
+                  "seek moves the running playback", file=sys.stderr)
+            sys.exit(2)
+        inst = Instance(args.name)
+        if inst.remote:
+            die(f"{args.name} is remote: `replay seek` plays on a local instance")
+        name, why = _replay_playing(inst)
+        if name is None:
+            die(f"{args.name}: not playing: {why}")
+        lines = _LogLines(_log_cursor(inst))
+        # the frame visit reads the trigger at most every 100 ms and deletes it, read or not
+        (inst.gamedir / REPLAY_TRIGGER).write_text(f"seek {args.T}{tail}\n")
+        rest = []
+    res["as"] = name
+    got = _replay_seek_wait(inst, name, args.T, args.dump, lines, rest, args.timeout)
+    res.update(got, steps=steps)
+    human = [f"{name}: on {args.name}"] + [f"  {s}" for s in steps]
+    human += [f"  {got[k]}" for k in ("line", "wrote", "dump_failed") if k in got]
+    if "dump" in got:
+        human.append(f"  dump {args.dump} at GameTime {got['dump_at']}: {got['dump']}")
+    if "timeout" in got:
+        human.append(f"  {got['timeout']} (tacli log {args.name} -g 'replay|recorder')")
+    if "dump" in got and got["dump_at"] != args.T:
+        human.append(f"  the dump was taken at GameTime {got['dump_at']}, not {args.T}")
+    out(res, args.json, human="\n".join(human))
+    if (not got["arrived"] or "timeout" in got or "dump_failed" in got
+            or ("dump" in got and got["dump_at"] != args.T)):
         sys.exit(1)
 
 
@@ -5521,8 +5684,8 @@ REMOTE_LOCAL_ONLY = (("--window", "window", None), ("--display", "display", None
 STALE_TRIGGERS = ("tagpu_scenario.trigger", "tagpu_scenario.json",
                   "tagpu_switches.trigger", "tagpu_switches.json",
                   "tagpu_units.trigger", "tagpu_features.trigger",
-                  "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt",
-                  "tagpu_keys.txt")
+                  "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_replay.trigger",
+                  "tagpu_eye.txt", "tagpu_keys.txt")
 
 TA_ARG_RX = re.compile(r"[-/][A-Za-z0-9._=:]{1,40}|[A-Za-z0-9._=:]{1,40}")
 
@@ -5951,6 +6114,18 @@ def res_type(text: str):
     return (int(m.group(1)), int(m.group(2)))
 
 
+def gametime_type(text: str):
+    if not text.isdigit() or int(text) > 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("a GameTime is a whole number of ticks, 0 or more")
+    return int(text)
+
+
+def dump_name_type(text: str):
+    if not REPLAY_NAME_RX.fullmatch(text):
+        raise argparse.ArgumentTypeError("a dump's name is 1 to 39 letters, digits, - or _")
+    return text
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="tacli", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -6359,31 +6534,52 @@ def build_parser():
     rp = sub.add_parser("replay", help="play a demo recording back on puppets")
     add_common(rp)
     rpv = rp.add_subparsers(dest="verb", required=True)
+
+    def add_replay_launch(sp):
+        sp.add_argument("--res", type=res_type, help="the window's size")
+        sp.add_argument("--vsync", choices=("on", "off"), default=None,
+                        help="vsync for the launch (impure.cfg); sticky per instance")
+        sp.add_argument("--display", default=None, help="X display")
+        sp.add_argument("--defaults", dest="defaults", action="store_true", default=None,
+                        help="the shipped configuration (as `scenario load --defaults`)")
+        sp.add_argument("--no-defaults", dest="defaults", action="store_false",
+                        help="back to arm files only (sticky too)")
+        sp.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
+        sp.add_argument("--restart", action="store_true",
+                        help="stop the instance first if it is already running")
+        sp.add_argument("--perspective", type=int, default=None, metavar="RECORD",
+                        help="show that recorded player's view rather than the whole "
+                             "battlefield (`tarec info` names the recording's own viewed player)")
+        sp.add_argument("--launch-timeout", type=float, default=SCN_LAUNCH_TIMEOUT,
+                        help=f"seconds to wait for the window and the shell "
+                             f"(default {SCN_LAUNCH_TIMEOUT:g})")
+        sp.add_argument("--load-timeout", type=float, default=SCN_LOAD_TIMEOUT,
+                        help=f"seconds to wait for the DLL's verdict after Start "
+                             f"(default {SCN_LOAD_TIMEOUT:g})")
+
     rpp = rpv.add_parser("play", help="launch a skirmish that plays the recording")
     add_common(rpp)
     rpp.add_argument("name", help="the instance to launch")
     rpp.add_argument("recording", help="an .imprec file")
-    rpp.add_argument("--res", type=res_type, help="the window's size")
-    rpp.add_argument("--vsync", choices=("on", "off"), default=None,
-                     help="vsync for the launch (impure.cfg); sticky per instance")
-    rpp.add_argument("--display", default=None, help="X display")
-    rpp.add_argument("--defaults", dest="defaults", action="store_true", default=None,
-                     help="the shipped configuration (as `scenario load --defaults`)")
-    rpp.add_argument("--no-defaults", dest="defaults", action="store_false",
-                     help="back to arm files only (sticky too)")
-    rpp.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
-    rpp.add_argument("--restart", action="store_true",
-                     help="stop the instance first if it is already running")
-    rpp.add_argument("--perspective", type=int, default=None, metavar="RECORD",
-                     help="show that recorded player's view rather than the whole battlefield "
-                          "(`tarec info` names the recording's own viewed player)")
-    rpp.add_argument("--launch-timeout", type=float, default=SCN_LAUNCH_TIMEOUT,
-                     help=f"seconds to wait for the window and the shell "
-                          f"(default {SCN_LAUNCH_TIMEOUT:g})")
-    rpp.add_argument("--load-timeout", type=float, default=SCN_LOAD_TIMEOUT,
-                     help=f"seconds to wait for the DLL's verdict after Start "
-                          f"(default {SCN_LOAD_TIMEOUT:g})")
+    add_replay_launch(rpp)
     rpp.set_defaults(func=cmd_replay_play)
+
+    rps = rpv.add_parser("seek", help="move a playback to a GameTime, forward or backward")
+    add_common(rps)
+    rps.add_argument("name", help="the instance: the one to launch with --recording, else the "
+                                  "one whose running playback moves")
+    rps.add_argument("T", type=gametime_type, help="the GameTime to arrive at")
+    rps.add_argument("--recording", metavar="FILE",
+                     help="an .imprec file: launch a skirmish that plays it from T "
+                          "(the launch options below apply only with it)")
+    rps.add_argument("--dump", type=dump_name_type, metavar="DUMPNAME",
+                     help="also take a dump, replays\\dump-DUMPNAME.bin, at the capture point "
+                          "of T, and print its path")
+    rps.add_argument("--timeout", type=float, default=REPLAY_SEEK_TIMEOUT,
+                     help=f"seconds to wait for the seek's lines, the dump's included "
+                          f"(default {REPLAY_SEEK_TIMEOUT:g})")
+    add_replay_launch(rps)
+    rps.set_defaults(func=cmd_replay_seek)
 
     rm = sub.add_parser("rm", help="delete an instance")
     add_common(rm)
