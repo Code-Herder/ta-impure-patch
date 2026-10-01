@@ -2910,7 +2910,7 @@ the target, and every Patch Loader's `dplayx.dll` forwards all nine of its expor
 
 ### 2.6e The demo recorder (`tagpu_recorder.c`, `tagpu_recwriter.c`, a skirmish on request)
 
-S1, S2a, S3a and S3b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
+S1, S2a, S3a, S3b and S3c-2 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
 is recorded to `replays\<date> <time> <map>.imprec` when `tagpu_recorder.on` is in the game's folder
 at the level's first iteration, and `tools/replay/tarec.py` reads a recording back. Its capture has no site of
 its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls the replay's
@@ -2948,6 +2948,28 @@ does. The shots and the interceptions come through the extra weapons' callouts, 
 weapons' own TargetCleared through `tagpu_rec_start_named`. Addresses, registers and what each
 hook reads: [the engine map](exe-reverse-engineering.md#the-demo-recorders-event-sites-disassembled-measured-2026-09-30).
 
+**The counts (S3c-2): 21 count-only sinks**, `tagpu_detour_observe` with no `after`, byte-matched
+each on its own at `tagpu_rec_init` (`cnt_sinks_init`; one whose bytes differ is left out, named in
+the log, and its bit in the dump stays clear, which `tarec` reads as a site it cannot compare; the
+log reads `recorder: 21 of 21 sinks counted`): the explosion add `0x420A30`, the COB thread
+allocation `0x4B08C0`, the sound entries `0x47F0C0`, `0x47F1A0`, `0x47F210` and `0x47F300`, the
+projectile init `0x49C740`, the shot paths `0x49CDE0`, `0x49CC20` and `0x49C9C0`, the impact
+`0x499EB0`, and the particle emitters `0x471FD0`, `0x472330`, `0x472430`, `0x472530`, `0x472630`,
+`0x472810`, `0x4728F0`, `0x4729D0`, `0x472AB0` and `0x472C50`. Each reads its return address and,
+for `0x4B08C0`, the script's name through the engine's own bound; none writes anything. The
+existing observers count too (the roots: the create's exit, the destructor, the build done, the
+state setter, the replies, the nano emitters and the seven feature functions). Prologues and why
+each is a sink:
+[the engine map](exe-reverse-engineering.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01).
+
+**The step's phases**, two call-site redirects in the fail-closed table (`fix_step_phases`,
+`tagpu_patches.c`; the log line `enginefix: the step's phases for the demo recorder and its replay
+(0x495513 0x495539)`): the step's calls of the projectile tick `0x49B720` at `0x495513` and of the
+falling records `0x420F30` at `0x495539` call stubs that call `tagpu_rec_phase` (1, then 2), the
+engine's function, then `tagpu_replay_phase`, keeping every register and the flags. The recorder
+stamps each feature root with the phase it was made in; `tagpu_rec_capture` sets the phase back to 0.
+Off a puppet level `tagpu_replay_phase` returns at once.
+
 **Fields we write: none.** It reads the unit array with each unit's mover and order lists, the ten
 player records with their PlayerInfo, the controlled and viewed players, the unit types, the
 sort buckets, GameTime, the game mode and the map's path, the feature grid, the wreck pool, its
@@ -2961,7 +2983,8 @@ records up to their written extent, bounded by the pool's size, and the explored
 `*(main+0x14273)`, sized from the grid
 ([the engine map](exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)).
 A dump also reads every player's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes) and the main
-block and `.data` whole. It no longer reads `tagpu_replay.trigger` itself: the replay's frame visit
+block and `.data` whole, and carries the counts (`RK_COUNTS`, `RK_COUNT_NAME`), Impure's DLL's
+base and `SizeOfImage` (`RT_DLL`) and each recorded table's layout (`RT_FIELDS`). It no longer reads `tagpu_replay.trigger` itself: the replay's frame visit
 does, and arms the dump (§2.6f). The writer thread reads no engine memory, and since
 `tagpu_recwriter.c` is not on `thread-split.allow` the build refuses an engine address in it.
 
@@ -3019,7 +3042,14 @@ recorder's hooks serve a puppet level too (§2.6e): the six draws answer from th
 explosion stub makes a replayed death's feature calls, and the footprint writers' `after` undoes
 their grid writes. A recording plays only when all twenty gates and the recorder's hooks are in,
 and the teardown wrap too (§2.7), which ends the puppet level before the cascade destroys its
-units.
+units. **Three count-only observers** (`tagpu_puppet.c`, *THE COB WRITES ON A PUPPET*, installed
+after the gates; without them the dumps carry no COB-write counts) on the state setter `0x48B090`
+(stolen `51 8B 44 24 0C`), the yard `0x47DAC0` (`53 8B 5C 24 0C`) and the carry link `0x48AAC0`
+(`8B 4C 24 04 83 EC 08`) count, on a puppet level outside the replay's own calls, each call
+returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, `0x4813AB`,
+`0x481427`) on a puppet's unit, the unit bounded as a slot of the array first; the first 16 are
+logged. The gates make them zero; the observers prove it. **The step's phases** (§2.6e) call
+`tagpu_replay_phase` after the host's projectile tick and after its falling records.
 
 **Fields we write**, on the game thread, on a puppet level only:
 
@@ -3043,10 +3073,17 @@ units.
 - the events, through `0x485F50`, C4's death wrap, `0x49D270`, `0x4B0B00`, `0x4B0A70`,
   `0x4B0940`, `0x41B8D0`, `0x48B090`, `0x47F780`, `0x47F850`, `0x4720D0` and `0x472200`;
 - the features' changes, through the feature tick and the six feature functions with the
-  recorded arguments, bounded by the level's grid, defs and weapons; the draws those calls make
+  recorded arguments, bounded by the level's grid, defs and weapons, each at the phase of the step
+  the recording machine made it in: a unit-tick root at the replay step, a projectile-tick root
+  once the host's projectile tick has returned, a later one once its falling records have
+  returned (`tagpu_replay_phase`, held in a store of 8,192 events and 2 MB; past it the step's
+  remaining roots go in at the replay step); the draws those calls make
   at the six RNG calls answered from the recording instead of `0x4B6C30`; and a replayed death's
   explosion's calls made inside the host's destructor, from the recorder's stub at `0x486D50`;
-- each step: every cell of the feature grid and every record of the wreck pool the recording
+- each step, before the host's projectile tick: the next image's cells' unit slots, each only
+  when it names a unit alive on the host, since the projectile's collision test reads them;
+- each step, after its late phase's roots (at the replay step for an iteration played late):
+  every cell of the feature grid and every record of the wreck pool the recording
   changed, values only under `replay-layout.tsv`'s classes (a cell's def, record and anchor links,
   and a record's links, anchor, def, flags and sequences are compared, never written; a cell's
   unit slots go in only when each names a unit alive on the host), and the reproduction cursor `main+0x14257` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30));

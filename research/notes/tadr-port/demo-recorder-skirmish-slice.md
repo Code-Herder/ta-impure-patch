@@ -22,7 +22,10 @@ to any GameTime of its recording, forward or backward, from a fresh process or i
 **S3c, the round trip and the harness, is three landings** (*S3c*). S3c-1 (2026-10-01) makes the
 recording the only writer of every declared table on a puppet host, adds frame dumps and the
 puppet round trip, and brings `tools/replay/tareplay.py` with nine fixtures in the tree
-(*S3c-1, verified and measured*); S3c-2 and S3c-3 are next.
+(*S3c-1, verified and measured*). S3c-2 (2026-10-01) counts the engine's roots and sinks on the
+recording machine and on puppets and compares them, gates the two images on a null twin, scans
+dumps for addresses recorded as values, and makes each feature root at its own phase of the step
+(*S3c-2, verified and measured*); S3c-3 is next.
 
 ## How the slice is cut
 
@@ -1525,6 +1528,175 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   or the level's end; tareplay stops its games before either, so a run's logs do not carry it.
 - **A seek writes the declared tables twice** (R12, then R13's `recorded_put`, which writes only the
   bytes that differ from the recording's after R12's repairs).
+
+### S3c-2 — counted on puppets, and the images gate
+
+What the harness compares beyond the recorded state: what the engine *did* on each machine,
+counted where effects leave the simulation, and every byte of the two images the positive list
+leaves out. The engine facts are the engine map's
+[*counts and the step's phases*](../exe-reverse-engineering.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01);
+the checks as asserted, the completeness note's
+[*replay test harness*](demo-recorder-completeness.md#the-replay-test-harness).
+
+**The counts** (`tagpu_recorder.c`, *THE COUNTS*). One open-addressed table of 4,096 keys
+(site, caller, aux) → count, with an overflow counter; script names in a second table of 512. It
+counts on a level that records or plays a recording, on that level's game thread only (its thread
+ID taken at the first capture point, where the table is reset), never while a seek rebuilds
+(`tagpu_puppet_rebuilding`). A caller inside Impure's DLL is its offset with the top bit set, so it
+does not depend on where the DLL loaded. Every dump carries the table (`RK_COUNTS`, at most 1,024
+rows a record, with the overflow, a bit per sink whose observer is in, and whether the level
+counted) and the names (`RK_COUNT_NAME`).
+
+- **Roots**: an increment at the top of the existing observers, before the recording test — the
+  create's exit, the destructor (only for a slot the destructor's own alive test passes, the slot
+  bounded first), the build done, the state setter (only a call that changes the byte, by the
+  setter's own test, since a replayed root's nested call and its replayed event both reach it and
+  the second returns early), the two replies, the two nano emitters and the seven feature
+  functions. They chain after the puppet gates, so on a puppet they count only what the gates let
+  through. The broadcast starts, the start sites, `QueryNanoPiece`, the order dispatch and the
+  footprint writers count too, for S3c-3's UNCOVERED; nothing compares them.
+- **Sinks**: 21 count-only observers (the [hook map](../gpu-status.md#26e-the-demo-recorder-tagpu_recorderc-tagpu_recwriterc-a-skirmish-on-request)):
+  the explosion add, the COB thread allocation keyed by the script's name (read only through the
+  engine's own bound on the index), the four sound entries, the projectile init, the three shot
+  paths, the impact `0x499EB0` and ten particle emitters. The plan's sink on the particle pool's
+  allocation `0x470EB0` became the emitters themselves: its caller is the emitter, not the effect,
+  and each emitter makes exactly one allocation a call while the console's SFX byte is clear, so
+  the emitters keyed by *their* callers account for the pool call for call. A sound entry reached
+  through `0x47F1A0`'s unconditional call of `0x47F0C0` is counted once.
+- **COB's engine writes on a puppet** (`tagpu_puppet.c`, *THE COB WRITES ON A PUPPET*): three
+  observers count each call from one of COB's five write sites (SET's ACTIVATION, ARMORED and
+  YARD_OPEN, ATTACH, DROP) on a puppet's unit outside the replay's own calls, the first 16 logged
+  (`puppet: COB engine write on a puppet: <site> on unit <slot> (owner <p>) at GameTime <t>`). The
+  gates make them zero by construction; the observers prove it. Their counts go into the dumps'
+  `RK_COUNTS`.
+
+**`tarec.py`** gains `counts FILE DUMP` (a dump's counts by site), `compare-counts FILE L_A L_B P_A
+P_B [--absent TSV]`, `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1` and `scan
+FILE DUMP`. `compare-counts` refuses unequal windows (both dumps of a pair are capture-point dumps,
+so both windows hold the steps [T1, Tlast)), compares roots per site exactly and sinks per key
+within `tagpu/ddraw/replay-absent.tsv`'s band (5 % of the larger or 2 calls) less its rows, and
+fails on any COB write in the playing's last dump; a difference reads `sink 0x4B08C0 from
+0x4B0C4D "QueryNanoPiece": live 273, puppet 0`. The file holds 32 rows, each decided by the owner
+on 2026-10-01: five `same` classes (the three shot builders, the meteor stone's init, Killed),
+eight owner-only queries `absent`, the refused script index both ways, the console key's click,
+the flying pieces' explosions, smoke and fire both ways, and COB `EMIT_SFX`'s five emitters both
+ways.
+
+**The step's phases** (the lost impacts, A7). The playing made every recorded feature root at the
+replay step, after the host's unit tick and before its projectile tick; a tree the recording
+machine's impact felled or its feature tick burned later in the same step was gone before the
+host's projectiles reached it, and those projectiles flew on (MEASURED below). Now the recorder
+stamps each root with its phase (`RK_EV_FEATURE`'s second byte, `REC_PHASE_UNITS`, `_PROJ`,
+`_LATE`; the writer and the reader refuse a value above `_LATE`), set by stubs on the step's calls
+of the projectile tick (`0x495513`) and of the falling records (`0x495539`) and reset at each
+capture. A playing defers a later phase's roots into a store (8,192 events, 2 MB; the bracket
+copied, since the reader moves on) and makes them in recorded order once the host's own call of
+that phase has returned (`tagpu_replay_phase`, *THE PHASES*); the step's feature images follow the
+late phase, since they are the world after every root of the step. Roots inside a death's bracket
+go with the death. A step whose phases did not run is finished, in order, at the next replay step
+or seek; past the store's room the step's remaining roots go in at the replay step, as before; an
+iteration played late goes in whole. **The cells' unit slots** of the next image go in at the
+replay step, ahead of the deferred features: the host's projectile tick tests the units a cell
+names, which the recording machine's unit tick had just moved. A slot goes in only when it names a
+unit alive on the host, as the feature write takes it; the feature write later puts the same
+values.
+
+**The images gate and the null twin.** `replay-globals.tsv`'s header prose becomes `leave` rows
+(carried `leave`, puppet `-`; `replay-globals-gen.py` accepts them and generates nothing), with
+two labels corrected — `0x511A40..` is the network statistics, `0x51E710` the music's combat ring —
+and new rows from the first run and the scouts: process state (the C runtime's small-block heap
+and count, the engine allocator's statistics, the flying pieces' arena, the particle pool, the
+shadow encoder's scratch, the libraries' and the C runtime's regions to the end of `.data`), every
+wall clock the engine stores, the viewer's own and the draw's (the music, the hot units, the
+resource and unit-info memos, the remembered camera position, the desktop GUI's window state, the
+cursor state) and the message log `main+0x12EF` with its head and tail. One `write` row is new:
+`main+0x14353`, the unit tick's count of the units it ticked. The twin and the gate are tareplay's
+(below); a fresh process's seek is the gate's "seek" side, and the round-trip process's first dump
+its second playing.
+
+**The scan.** A dump carries `RT_DLL` and `RT_FIELDS`. Impure's tables are tested against every
+range, the DLL's included, less the fields their layout says are not plain values; the engine's
+records and the globals image against the engine's own ranges only (the owner's OQ10). The first
+run's two failures were random words — `s_windState`, the wind's splitmix state, in battle-los, and
+the simulation RNG `rngseed` in forest-circle — and its 261 record hits were u16 pairs, none an
+address (the engine map). `s_windState` is declared `SIMF_OPAQUE`, a new kind: a plain value whose
+bits are arbitrary, recorded and compared as any other and passed over by the scan.
+
+**tareplay** (`tools/replay/tareplay.py`). The live process takes the **null twin** once GameTime
+passes Tlast + 5: the pause key, frame dump `ln1`, the arrow keys a second each way, a wheel notch
+in and out at (512, 384), the cursor at (700, 500) and (60, 300), the in-game menu by Tab
+(`ARMOPT.GUI`), frame dump `ln2` with the menu open, then its OK; the twin cannot run when the game
+does not pause, GameTime moves between the dumps, or the menu does not open. The checks added: the
+counts, L against P over [T1, Tlast); the images gate at T1 (with P, R and Q all run); the scan of
+L's and P's last dumps; and no COB write in R's last continuation dump and Q's dump. A dump any
+check did not pass on is kept, whatever else passed on it. **A run refuses a DLL older than its
+sources** (`src` and `inc` `.c`/`.h` but the generated `git.h`, the two layout lists and the
+`.allow` files): `<fixture>: <dll> is older than its sources (make -C tagpu/ddraw)`, and the run
+exits 2 before any game starts.
+
+#### S3c-2, verified and measured
+
+MEASURED 2026-10-01 under Wine, scripted `tareplay run all -j 4` on private X servers; each game
+ten minutes or less.
+
+- **The final run, on the landing's code** (about 16 minutes): **207 checks, every one passes**,
+  exit 0 — the nine fixtures' end blocks, `tarec check`, every dump's compare, every round trip's
+  poison check (residue 0, 23 tables poisoned, 20 on the stock-limits build) and A-against-B, the counts (15 roots, 24 to 74 sink
+  keys a fixture, the band and 32 rows: EQUAL in all nine), the images gate in all nine, the scan
+  of 18 dumps, and no COB write on a puppet in 18 dumps. `recorder: 21 of 21 sinks counted` in every
+  process.
+- **The impacts the phases restored.** Before them, forest-circle over [661, 2941): the impact
+  `0x499EB0` from the feature path (returning to `0x49B3D2`) 134 live, 111 on the playing, and the
+  explosion, the sound and the flare inside it short by the same 23; every impact the playing
+  missed had the tree in the recording machine's cell and its successor in the host's, at a
+  projectile record equal on both but for its two unit pointers. With them, over the final run's
+  windows, live/playing: **121/121** forest-fire, **68/68** forest-circle, **2491/2491** battle,
+  **510/511** battle-los. Before the cells' unit slots went in ahead of the projectile tick,
+  battle-los's slot-B impacts (`0x49B27A`) were 16 live against 19 on the playing; the final run's
+  counts compare equal.
+- **The first run** (before the owner's batch): 186 of 207 checks passed. The counts differed in
+  eight fixtures, every difference traced to one of seven causes (the researcher's triage: the same
+  shot reached through another engine path, owner-only queries, refused script indexes, debris and
+  particles, the COB lag, the walk class after an unload, the lost impacts); the images gate failed
+  in all nine (18 to 1,570 bytes, every run classified); the scan failed four dumps on two random
+  words. The second run's two live forest games ended before Tlast (2550 against 3211, 1950 against
+  2941); the third run's naval-push R process met O15's COB guard stop, the final run's did not.
+- **The CRT's `rand` carries nothing a puppet host recomputes** (scout, DISASSEMBLED): of its 61
+  call sites, every simulation consumer is carried, refused on a puppet level or never reached; the
+  rest is presentation, the viewer's camera shake or the front end (the engine map).
+
+#### What S3c-2 leaves
+
+- **S3c-3**: `SIM_FEATURE` regions and their fixtures, the coverage build, `tareplay.py landing`
+  and `broad`, the `replay-roundtrip:` note, CLAUDE.md's replay gate and Step 4b. Until then nothing
+  runs the harness at a landing.
+- **The COB one-tick lag (A5), accepted.** The live game's AutoAim starts AimPrimary inside the
+  unit's turn and that turn's script slice runs it at T; the playing applies the recorded start at
+  the replay step, after the whole unit tick, so its first slice runs at T+1, and the scripts it
+  starts (RestoreAfterDelay, walk, `EMIT_SFX`) a tick later. Counts near a window's ends move by a
+  few; the sinks' band and `EMIT_SFX`'s rows absorb it.
+- **The walk class after an unload (A6), accepted.** The live game evaluates `0x43DA70` in a
+  cargo's mover tick before its transport's later turn drops it; the playing's image-time walk
+  sees the carrier already cleared and makes a StartMoving and a StopMoving the live game did not
+  (MEASURED in carry-links' earlier runs: one each).
+- **Debris and `EMIT_SFX` are rows, not replicas.** Flying pieces are spawned from the simulation
+  RNG at EXPLODE, which a puppet host draws in another order, and the piece's smoke and fire are
+  emitted by the explosion draw once a drawn frame; `EMIT_SFX` emits only in the viewed player's
+  line of sight. Both sides' counts there are accepted as they come.
+- **The forest fixtures' live games can end early.** The skirmish wind and the simulation RNG are
+  seeded from the performance counter in every run, so a forest fire burns differently each time
+  [INFERRED] and the level can end before Tlast, which leaves the fixture's later checks unrun.
+- **O15** — the COB guard's stop (`CORMSHIP.COB`) — still reaches naval fixtures' round-trip
+  processes on some runs; it has a landing of its own.
+- **The scan's residual**: a random word of the globals image can still land in the main block
+  and fail a dump [INFERRED: about one in 9,000].
+- **The images gate's own limits**: a bit equal at both ends of [T1, Tlast] on each machine counts
+  as unwritten in play; the twin covers the camera, the zoom, the cursor and the in-game menu, not
+  every screen a viewer can open.
+- **`tarec.py`'s `IMAGE_MAP` still labels `0x511A58..0x511DC8` "the GAF and animation state"** (the
+  network statistics) and files the engine allocator's statistics under the C runtime; the rows in
+  `replay-globals.tsv` are right, the gate's group labels are not.
+- **Sink counts are in one perspective only**, the recording viewer's.
 
 ## S4 and S5
 

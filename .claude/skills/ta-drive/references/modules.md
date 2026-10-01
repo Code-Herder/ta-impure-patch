@@ -613,7 +613,23 @@ block that reads to its last complete block.
   one fails, 2 when a file cannot be read. `compare --images DUMP OTHERDUMP` is a report, exit 0:
   the bytes of the main block and `.data` that differ and that no row of
   `tagpu/ddraw/replay-globals.tsv` covers. `compare-dumps FILE DUMP OTHERDUMP` compares two
-  playings' dumps at one GameTime, the sight counters included.
+  playings' dumps at one GameTime, the sight counters included. Every dump also carries the
+  counts of the engine's roots and sinks: `counts FILE DUMP` lists them, and `compare-counts FILE
+  L_A L_B P_A P_B` compares a live game's (two of its dumps) with a playing's over the same
+  window — roots exactly, sinks within `tagpu/ddraw/replay-absent.tsv`'s band less its rows, and no
+  COB engine write on the puppet. `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1`
+  classifies every uncovered byte where the live game and a playing or a fresh seek differ, and
+  `scan FILE DUMP` fails a plain value that is an address.
+- **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
+  [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
+  recorded live, played on puppets, played again with three round trips and sought from a fresh
+  process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
+  wheel, the cursor and the in-game menu moved, two frame dumps). It runs every check above and
+  reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. It
+  refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
+  tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
+  repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump
+  any check failed on stays.
 - **A dump**: write `dump <name>` (letters, digits, `-`, `_`) to `gamedir/tagpu_replay.trigger`.
   The game reads the file at most every 100 ms on a level in play, recording or playing, deletes
   it, and takes the dump at the next tick: `replays/dump-<name>.bin`, the live world at that
