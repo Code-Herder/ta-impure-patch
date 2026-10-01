@@ -609,12 +609,27 @@ block that reads to its last complete block.
 
 - **Read one** with `tools/replay/tarec.py`: `info` (the header, the blocks, how it ended),
   `check` (the stream rebuilt and compared with every snapshot in the file) and
-  `compare FILE DUMP…`. Exit 0 when every check holds, 1 when one fails, 2 when a file cannot
-  be read.
+  `compare FILE DUMP…` (`--puppet` for a playing's dumps). Exit 0 when every check holds, 1 when
+  one fails, 2 when a file cannot be read. `compare --images DUMP OTHERDUMP` is a report, exit 0:
+  the bytes of the main block and `.data` that differ and that no row of
+  `tagpu/ddraw/replay-globals.tsv` covers. `compare-dumps FILE DUMP OTHERDUMP` compares two
+  playings' dumps at one GameTime, the sight counters included.
 - **A dump**: write `dump <name>` (letters, digits, `-`, `_`) to `gamedir/tagpu_replay.trigger`.
-  The capture looks for the file every 32 iterations and writes `replays/dump-<name>.bin`, the
-  live world at that GameTime; `tarec compare` rebuilds the recording to the same GameTime and
-  requires it byte for byte. A paused game runs no iterations, so it takes no dump.
+  The game reads the file at most every 100 ms on a level in play, recording or playing, deletes
+  it, and takes the dump at the next tick: `replays/dump-<name>.bin`, the live world at that
+  GameTime, logged as `recorder: dump <name> at GameTime <t> -> <path>`; `tarec compare` rebuilds
+  the recording to the same GameTime and requires it byte for byte. A paused game takes it at the
+  first tick after the pause.
+- **Play one**: `tacli replay play <i> FILE [--perspective RECORD]` launches the instance on the
+  recording's map and seats and starts the skirmish; it exits 0 on `replay: playing <name>`.
+- **Seek**: `tacli replay seek <i> T` moves the instance's running playback to GameTime T, forward
+  or backward; `tacli replay seek <i> T --recording FILE` launches one that plays FILE from T.
+  `--dump D` also takes a dump at T and prints its path. It waits for
+  `replay: <name>: at GameTime <T>, sought from GameTime <h> in <ms> ms (read <ms>, rebuild <ms>)`
+  or `replay: <name>: seek to <T> refused: <why>`, and exits 0 when it arrived, 1 when it was
+  refused, timed out or nothing was playing, 2 on a usage error. A playback that has played to its
+  end counts as not playing. By hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the
+  same on a playing level.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.

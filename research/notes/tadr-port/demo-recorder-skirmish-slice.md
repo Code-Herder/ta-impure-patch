@@ -15,7 +15,11 @@ back on puppets, showing everything or one recorded player's view, and every rec
 equal to the recording at every checkpoint (*S2b, verified and measured*). **S3, seeking, is
 three landings** (*S3 — seeking*). S3a landed on 2026-09-30: a recording carries the feature grid
 and the wreck pool, and every change to them is replayed through the function that made it
-(*S3a, verified and measured*). S3b, the globals and seeking, is next.
+(*S3a, verified and measured*). S3b (2026-10-01) records the main block's and
+`.data`'s simulation fields, the projectiles in flight and the explored map, and moves a playback
+to any GameTime of its recording, forward or backward, from a fresh process or in the running one
+(`tacli replay seek`; *S3b, verified and measured*, whose seek results are still to be entered).
+S3c, the round trip and the harness, is next.
 
 ## How the slice is cut
 
@@ -127,8 +131,10 @@ CRC-32 of the stored bytes and one of the header — and the payload, deflated w
   (index, class, key, row size, flags and name), so a reader can walk their images;
 - **stream blocks** of whole iterations, each ending at the first iteration past 256 KB or at 300
   iterations;
-- **a snapshot block** every 900 iterations (30 seconds at normal speed), the writer's whole copy.
-  The interval is a placeholder: S3 chooses it by measurement against the seek target;
+- **a snapshot block** every 900 iterations (30 seconds at normal speed), built from the writer's
+  copy: since format 4 (S3b) with only the cells that differ from the first iteration's grid and
+  no table span that is all zero. The interval stays 900 unless the seek-time series's worst seek
+  exceeds one second, when it becomes 450 (*Decided 2026-10-01*);
 - **the end block**: why the recording ended, the last GameTime, the iterations, the corrections,
   the id rows found outside their tables, and the most the ring held.
 
@@ -449,11 +455,11 @@ none changed in play. **The ring** held at most 1,059 KB of its 16 MB in the bat
 - **The size**, 30 MB a minute in the battle: the representation (the product page's open
   decision 2).
 - **The game options change in play** through the typed commands `LOSType` (`0x416690`), `LOS`
-  (`0x416D50`) and `Mapping` (`0x416D80`): the header records them at the start, and the LosType
-  word lives in the main block, which is S3's.
+  (`0x416D50`) and `Mapping` (`0x416D80`): the header records them at the start, and S3b records
+  LosType bits 0–2 at every iteration and plays a change with the engine's own reaction.
 - **A seek from a snapshot** takes the events of the step after it from the stream block before
   it: the writer writes the snapshot at T after the block that ends with step T's events
-  (`tagpu_recfmt.h`, `RB_SNAPSHOT`). S3 builds the seek.
+  (`tagpu_recfmt.h`, `RB_SNAPSHOT`); S3b's `recr_seek` reads it so.
 - **An order node's owned object outlives the node's hold only for a type-3 owner**: that owner's
   air proxy (vtable `0x4FD9E0`) deletes the object an install hands it (`0x490A10`). A skirmish has
   no type-3 owner, and a puppet holds `+0x52` at 0 (`puppet0`), so it matters to the takeover (S4)
@@ -678,7 +684,7 @@ Three landings, as S2 was two, each a finished unit verified by running it:
 | Landing | Delivers | Verified by |
 |---|---|---|
 | **S3a — features and wrecks** | the map grid's cells and the wreck pool recorded every iteration, with the events at their roots; their changes replayed on puppets through the functions that made them | S1's and S2b's checks with the features in them: every dump equal to the recording, live and on puppets; the capture's cost and size |
-| **S3b — the globals, and seeking** | the main block's and `.data`'s simulation fields (a positive list) and the projectiles recorded, and both whole in every snapshot; the rebuild in place from a snapshot on a puppet host; `tacli replay seek` | a fresh process seeking to a dump's GameTime is equal to that dump; forward and backward seeks; seek times against the target |
+| **S3b — the globals, and seeking** | the main block's and `.data`'s simulation fields (a positive list), the projectiles and the explored map recorded, and both images whole in every dump; the rebuild in place from a snapshot on a puppet host; `tacli replay seek` | a fresh process seeking to a dump's GameTime is equal to that dump; forward and backward seeks; seek times against the target |
 | **S3c — the round trip and the harness** | the restore on a live skirmish, the rules against a vacuous pass and the null twin, `tools/replay/tareplay.py` with its fixtures and tiers, the CLAUDE.md replay gate, the landing command's Step 4b, the nightly tier | the round trip over the fixtures, none passing vacuously |
 
 ### S3a — features and wrecks
@@ -852,9 +858,9 @@ MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
   average and 1 ms at worst: 569 µs and 2.21 ms (S2a: 475 µs and 1.15 ms). The pool's comparison
   is 26 µs of it; the rest of the features' share is not broken down.
 
-- **Every snapshot carries every cell**, 7 MB raw on Two Continents and 21 MB on Seven Islands;
-  deflated, the fixture's five snapshots came to about 2.8 MB of its 4.1. S3b's seeking decides
-  whether a snapshot needs them all.
+- **Every snapshot carried every cell**, 7 MB raw on Two Continents and 21 MB on Seven Islands;
+  deflated, the fixture's five snapshots came to about 2.8 MB of its 4.1. Since S3b a snapshot
+  carries only the cells that differ from the first iteration (*S3b, verified and measured*).
 - **Passability** is not refreshed for the cells an image writes (above).
 - **A reproducing feature** would replay as recorded, reproduction's row bug included (the engine
   map); stock has none.
@@ -863,24 +869,240 @@ MEASURED 2026-09-30 under Wine, format 3, scripted runs on a private X server:
 
 ### S3b — the globals, and seeking
 
-Planned in detail when S3a is in. From the research:
+A recording carries the main block's and `.data`'s simulation fields, the projectiles in flight
+and the explored map at every iteration, and a puppet level can be moved to any GameTime of the
+recording, forward or backward, in the running playback or from a fresh process
+(`tacli replay seek`). The engine facts are
+[the engine map](../exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
+The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
 
-- **The positive list**, each field read by the simulation in a later iteration: GameTime
-  `main+0x38A47`; the wind `main+0x37EC4..+0x37EE5` less `+0x37EC8`, with Impure's generator; the
-  game end's countdown `main+0x39239` and flags `+0x3923B`; LosType bits 0–2 `main+0x14281`; the
-  simulation RNG's seed `0x51FC88`; the meteor state (`0x5122E8`, `0x512318`, `0x51231C`,
-  `0x512320`, `0x51232C`, `0x512330`, `0x512334`); the pathfinder's budget `0x5119E8..0x511A3B`;
-  `0x51E6C4`; and `0x51E684`/`0x51E688`.
-- **The projectiles**: the count `main+0x141F3` and the pool `*(main+0x141F7)`, `0x6B` bytes a record.
-- **Both images whole in every snapshot**, for S3c's null twin: the main block (`0x3924D` bytes,
-  allocated once by `0x41D920`) and `.data` (`0x501000..0x52B65C`).
-- **The rebuild** on a puppet host, at the step: experiment 2's order, with S2b's appliers for every
-  value, S3a's features, the positive list and the declared tables, and the projectiles,
-  explosions and particles of the moment before cleared.
-- **What a rebuild cannot restore**: the AI, pathfinder and objective objects, which live on the
-  heap outside both images; and where the CRT's `rand` stands, which depends on how many frames were
-  drawn, so the meteor shower (six draws in `0x437DE0`) and `0x490360`'s timer are not reproducible
-  even between two stock peers.
+**What it records.**
+
+- **The positive list**, `tagpu/ddraw/replay-globals.tsv`: every byte of the main block and `.data`
+  a recording carries, and how — one row a field, with its writers and how they were found.
+  `tools/replay-globals-gen.py` generates `inc/tagpu_replay_globals.h` from it (the main block's
+  rows as offsets from `main`, `.data`'s as offsets from `0x501000`, so the header names no engine
+  address), and `tools/replay-layout-check.sh` refuses a link where the two disagree. A row is
+  `globals` (in the globals image) or names the record that already carries the field (`player`,
+  `viewer`, `tick`, `features`, `proj`), and a `globals` row says what a puppet host does with it:
+  `write` (written at every capture point, at the frame visit and at a seek), `hold` (never written
+  on a puppet host, masked in the puppet comparison; recorded for the live restore and the
+  takeover), or `react` (LosType bits 0–2, written with the engine's own reaction). The rows: the
+  wind `main+0x37EC4..+0x37EE5`, LosType, the game end's countdown `main+0x39239` and flags
+  `+0x3923B` (bits 2 and 4 `hold`, the rest `write`), the simulation RNG `0x51FC88`, the meteors,
+  the pathfinder's budget table `0x5119E8..0x511A3B`, the 32 movement classes' watermarks
+  `0x512374 + 0x20k`, `0x51E53C`, `0x51E684`, `0x51E688` and `0x51E6C4`: a 77-dword image, recorded
+  whole at the first iteration (`RK_GLOBALS`) and then as the dwords that changed
+  (`RK_GLOBALS_DELTA`), and re-read whole into the rotating check every 30 iterations. The header
+  carries the file's SHA-256 (`RT_GLOBALS`), and a recording made with another list does not play.
+  **A field the simulation's steps write goes on the list** unless it is the viewer's own or a cache
+  of the draw; the TSV's header names what it leaves out and why. Adding a row is ordinary work;
+  removing one, or making one `hold`, is a loosening and the owner's.
+- **The projectile pool**: the count `main+0x141F3` and the records `*(main+0x141F7)`, `0x6B` bytes
+  each, as a fourth record class `proj` in `replay-layout.tsv` whose pointers are IDs — the weapon,
+  the target and the attacker units, and the quarry, a record of the same pool. The capture records
+  the pool's written extent, which it finds by scanning forward from the last one while a record's
+  weapon is not NULL (the slots ever written are exactly those below the count's peak), as
+  `RK_PROJ_HEAD` (count and extent), `RK_PROJ` and `RK_PROJ_DELTA`, with a slice in each rotating
+  check. A stale pointer keeps its ID, so the recording carries stock's own staleness — the
+  compaction's missed re-aims included. The header carries the pool's size (`RT_PROJECTILES`), and
+  the replay refuses a recording made with another; a count past it, or a pool that moved, ends the
+  recording (`REC_END_PROJ`).
+- **The explored map**, `*(main+0x14273)`: whole at the first iteration, in every snapshot and every
+  dump (`RK_MAPPED`), and the byte runs that changed in an iteration where it changed
+  (`RK_MAPPED_RUNS`), from a comparison of the whole map each iteration. With Mapping off it is
+  0xFF from the load and never changes. A map that moves or changes size ends the recording
+  (`REC_END_MAPPED`).
+- **Format 4.** A snapshot carries only the cells that differ from the first iteration's grid,
+  which every reader holds before it reads one, and no table span that is all zero; the globals,
+  the pool and the explored map go into every snapshot whole. Sequential reading skips a
+  snapshot's payload without inflating it. Each `RT_TABLE` carries a CRC-32 of its declaration's
+  layout, so the seek writes a table back only into a host declaration of the same name, stride,
+  class, key, flags and layout. Format-3 recordings no longer play.
+- **A dump** carries the globals, the pool, the explored map, every player's sight counters
+  (`RK_SIGHT`) and the main block and `.data` whole (`RK_IMAGE`). The trigger
+  `tagpu_replay.trigger` is now read by the replay's frame visit (below) at most every 100 ms, on
+  any level in play: `dump <name>` arms a dump the recorder takes at its next capture point —
+  while paused, at the first tick after the pause.
+
+**Playback.**
+
+- **The globals, the pool and the explored map have one writer on a puppet host**: the replay
+  writes them (`recorded_put`) at each capture point, first in B2's stub (`tagpu_replay_capture`,
+  before the recorder's capture and the unit tick), when the world holds the iteration the host is
+  at, and again at the frame visit after a step, once a GameTime, so the draw after step T shows
+  what the recording machine drew after its own. In that order: LosType bits 0–2, only when they
+  differ, with the engine's own reaction (the temporary sight records dropped through the engine's
+  expiry, the bits written, `0x4816A0(1)` when Mapping changed and `0x4816A0(0)` otherwise, then
+  V's sight filled again); the `write` rows; the pool, each ID bounded by its table and a record
+  below the count with no weapon refusing the whole write (the host's pool is then emptied and the
+  refusal counted); the explored map, V's bit kept set. The replay's end-of-level line counts each.
+- **A unit's control group** is written through the engine's setter `0x480250`, only for −1 or a
+  group below 10, at every step: a raw write of `+0xAC` left the unit in vector 0, where the create
+  put it, and its death then left a pointer to the dead unit there.
+- **V's sight** sets V's bit of the explored map from `[V+0x146]`, the field the engine's setter
+  uses.
+
+**Seeking.**
+
+- **The reader seeks.** `recr_seek(T)` builds an index of the file's blocks at its first call, from
+  their headers alone; it refuses a T outside the recording before the world is touched, then
+  starts from the last snapshot before T (or the file's start) and reads the stream to T, leaving
+  the world holding iteration T with step T's events pending, as a sequential read would.
+- **The frame visit**, before the in-play draw call `0x4969CD`, on the game thread between two sim
+  steps and on paused frames too: the trigger, then on a level that plays a recording and has played
+  its first step a pending seek, or else the frame visit's write. `seek <T>` and `seek <T> dump
+  <name>` in the trigger ask for a seek; the play request takes `play <name> [<seat>] [at <T>
+  [dump <name>]]`, so a seek in a fresh process is a playing followed by a seek at the first frame
+  visit after the first step.
+- **The rebuild, `seek_run`**, R0–R17 in `tagpu_replay.c`, whose comment states the invariant: after
+  a seek to T the host holds what it would hold at the frame visit after step T−1 of a playing from
+  the start, in everything the recording carries, and everything else it keeps is made by the
+  creates, reset to what a level start gives, or set from T. R0 positions the reader and bounds the
+  world at T — the features' lists and anchors, the buckets the units go into, the pool, the
+  tables, LosType — and refuses the seek on the first failure, touching nothing. Then the
+  rebuild's kills are kept from being the recording's eliminations (a twentieth puppet gate, on
+  the skirmish elimination `0x47BD70`, while the rebuild runs); the pool is emptied; every unit is
+  killed on the clock the host holds, through C4's destructor wrap with severity and corpse 0; every
+  temporary sight record is dropped through the engine's expiry; the sight is reset with no unit
+  alive (`0x4816A0`); GameTime is set to T−1; every unit of iteration T is made in its slot and
+  S2b's appliers write it; the sort buckets are made the recorded ones through the engine's own
+  unlink `0x47CB00` and move `0x47CB60`; the features and wrecks are written whole, the host's 3DO
+  model instances freed through `tagpu_reclaim` and made again through `0x45A8D0`; the particles,
+  explosions, debris and flying pieces are cleared (`tagpu_effects_clear`); the declared tables are
+  written back, then each sim file restores what its layouts cannot express
+  (`tagpu_patches_restored`, `tagpu_weapons_restored`); the globals, the pool and the explored map
+  are written; V's sight is filled; the deadlines the recording does not carry are reset (V's
+  players-phase deadline to the next multiple of 30, every DisplayTimer to GameTime, the notices
+  `0x47EE30` and the chat lines `0x463C80`, the level init's own resets) and every seat's pacing
+  stamp is set.
+- **The lines**: `replay: <name>: at GameTime <T>, sought from GameTime <h> in <ms> ms (read <ms>,
+  rebuild <ms>); units <k> killed, <m> made, <r> refused`, then `replay: <name>: the seek to <T>
+  wrote: ...` with the rebuild's counts; a refusal is `replay: <name>: seek to <T> refused: <why>`.
+- **`tacli replay seek NAME T [--recording FILE] [--dump DUMPNAME]`**: with `--recording`, a fresh
+  process launched as `replay play` launches one, playing from T; without it, the instance's running
+  playback moves to T. It waits for the arrival or the refusal line, and with `--dump` for the
+  dump's path.
+- **`tools/replay/tarec.py`** reads format 4: `check` builds each snapshot from the first
+  iteration's grid and its differences, `compare` covers the globals, the pool and the explored map
+  (`--puppet` masks the `hold` rows and V's bit of the map), `compare --images DUMP OTHERDUMP`
+  reports every differing byte of the two images that no row of the list covers (a report, exit 0),
+  and `compare-dumps FILE DUMP OTHERDUMP` compares two puppet hosts' dumps at one GameTime, the
+  sight counters included.
+
+#### Decided 2026-10-01
+
+The owner's answers to the plan's questions, as recommended unless said otherwise:
+
+- **The main block and `.data` go whole into every dump, not every snapshot**: nothing reads them
+  from a snapshot, since a seek applies only the list, which the stream carries every iteration.
+- **The projectile pool is recorded state**, written every step on a puppet host. This supersedes
+  S2's decision that the pool is presentation rebuilt from the shots: a seek must show the shots in
+  flight at its target, the host's own evolution of the pool is not the recording's (a burst's
+  copies draw the simulation RNG), and a takeover can then keep the shots in flight.
+- **The game end's countdown and flags bits 2 and 4 are held on puppets** and masked in the puppet
+  comparison: either ends the level from the in-play handler.
+- **COB script state is not restored at a seek**, accepted for S3b; recording it can be a landing of
+  its own.
+- **Format 4**; format-3 recordings no longer play.
+- **The capture's cost and the files' size grow past the budgets**, accepted, with the numbers
+  (V7, V8) put to the owner before the landing.
+- **The snapshot interval stays 900 iterations**, and becomes 450 if the worst seek of the
+  seek-time series exceeds one second.
+- **The explored map is recorded every iteration**, the first of three options: exact at every step
+  and every seek, at the cost of one comparison of the map a capture.
+- **The temporary sight records are dropped** through the engine's expiry at a seek and at a recorded
+  LosType change.
+- **CLAUDE.md's recorder sentence is to name the globals and the pool.**
+- **What the positive list leaves out is confirmed**; S3c's null twin classifies it.
+- **The rebuild's flag is `SIM_TRANSIENT`**, as S2b's `s_open`.
+- **The declared tables are not written between seeks** (deferred to S3c); the gap is stated in
+  *What S3b leaves*.
+
+#### S3b, verified and measured
+
+MEASURED 2026-10-01 under Wine, scripted runs on a private X server, through the runner's parallel
+jobs; each game ten minutes or less.
+
+- **Recorded (V2)**, on the build `fc5978d2`, six fixtures: S3a's five — the forest fire, the naval
+  push, the 1,432-unit battle, the carry links and the stock-limits four-AI game — and the naval
+  push with Mapping on (LosType 5: the map starts unexplored). Each recording complete, with 0
+  corrections, 0 ID rows outside their tables and 0 cells changed that no writer marked; `tarec.py
+  check` found every snapshot equal to the stream (2 to 5 a recording); and all 21 live dumps,
+  three or four a game, are EQUAL to their recording, globals, pool and explored map included. With
+  Mapping on the explored map changed in 226 of 3,810 iterations (5,669 bytes in their runs); with
+  it off, in none.
+- **Played on puppets (V3)**, the six recordings, on `fc5978d2` and again on `a8d17df2`: **32 of 33
+  puppet dumps EQUAL** (`tarec.py compare --puppet`) on each build. In every playing the pool's
+  write was refused 0 times, every footprint write undone (325,154 in the battle), no create
+  refused, no unit missing or present on the host alone, and no cell or record left for its
+  structure or a value out of bounds; on `a8d17df2`, which writes the control groups through the
+  setter, no group was left unset. **Open, under investigation:** the carry
+  links' sixth dump (GameTime 2,967), taken after the fixture's closing scenario has killed every
+  unit but one, differs in two cells, (121, 491) and (122, 491): the host's slot A names unit 1501
+  where the recording's names none. It differs the same way on both builds.
+- **[PLACEHOLDER — V4 and V5: the seeks, filled in by the coordinator.]** The fresh-process seeks
+  (V4) and the seeks in one process, backward, forward and repeated (V5): their dumps against the
+  recording, the arrival lines' counts, and each seek's read, rebuild and total time. Also V6 (the
+  seek-time series), V9 (the images report) and V10 (sight under true LOS with a mid-game LOS
+  change), if they have run.
+- **The capture's cost (V7)**, the battle recorded alone on `73a8050f`, which records the globals
+  and the pool but not yet the explored map or the watermark rows: **566 µs an iteration on average
+  and 3.63 ms at worst** (GameTime 980), against S3a's 564 µs and 1.64 ms. The stream was 195.9 MB
+  raw and 76.5 MB deflated, the file 77.2 MB; the pool's records were 18.8 MB of the stream raw and
+  the globals' 135 KB. In V2's battle on `fc5978d2`, with four dumps taken during the run, the capture
+  took 698 µs on average and 6.16 ms at worst.
+- **The sizes (V8)**, V2's recordings on `fc5978d2` against S3a's of the same fixtures (a MB is
+  10⁶ bytes; the carry links ran 3,090 iterations in S3a and 3,120 here):
+
+  | Fixture | Iterations | File, S3a → S3b | Stream raw → deflated, S3b | The pool in the stream, raw | One snapshot raw → deflated, S3a → S3b |
+  |---|---|---|---|---|---|
+  | forest fire | 4,710 | 4.1 → 1.85 MB | 11.4 → 1.56 MB | 0.13 MB | 11.3 MB → 560 KB, 0.80 MB → 57 KB |
+  | naval push | 3,810 | 6.6 → 11.2 MB | 26.7 → 10.9 MB | 8.2 MB | 8.7–8.8 MB → 382–386 KB, 0.75–0.79 MB → 76–81 KB |
+  | battle | 3,810 | 74.0 → 87.9 MB | 216 → 87.3 MB | 27.8 MB | 8.6–8.7 MB → 446–462 KB, 1.27–1.42 MB → 157–169 KB |
+  | carry links | 3,120 | 1.8 → 0.92 MB | 5.7 → 0.75 MB | 0 | 8.1 MB → 364 KB, 0.70 MB → 55 KB |
+  | stock limits | 2,010 | 0.9 → 0.45 MB | 6.7 → 0.41 MB | 0 | 6.3 MB → 265 KB, 0.39 MB → 17 KB |
+  | naval push, Mapping on | 3,810 | — → 11.2 MB | 26.8 → 10.9 MB | 8.5 MB | —, 0.74–0.78 MB → 73–79 KB |
+
+  Snapshots are 6 to 16 times smaller raw, and the files of the quiet fixtures halve. Where shots
+  fly the files grow, the naval push by 4.6 MB and the battle by 14 MB, and the pool's deltas are
+  the largest addition to their streams. The explored map costs one whole copy at the start
+  (146–269 KB raw) and in each snapshot, and nothing more while Mapping is off.
+
+#### What S3b leaves
+
+- **COB script state is not restored at a seek**: every unit is made again, so every script
+  restarts (the owner accepted it for S3b; recording it can be a landing of its own).
+- **The temporary sight records are dropped** at a seek and at a recorded LosType change: up to
+  2 s of the viewed seat's death vision, under true LOS and a seat's view only. An exact restore
+  needs each death's position in the recording, a recorder change.
+- **The declared tables are written only at a seek**, and the wind's at the first step; between
+  seeks each holds what the host's own code writes. For a table whose writer is gated on a puppet
+  host that differs from the recording: `s_quiet`, written under the gated damage apply, so the
+  minimap's blink after harmless weather differs during playback, seek or no seek. S3c sorts each
+  table's writers.
+- **The AI, the pathfinder and the objective objects** (heap, outside both images) and the CRT's
+  `rand` (per thread) are not recorded; a puppet host runs no AI and asks its pathfinder for
+  nothing.
+- **Passability is not rebuilt at a seek**, as it is not refreshed for the cells an image writes;
+  a takeover must rebuild it.
+- **Host-own state survives a seek**, none of it read on a puppet host: B4's per-slot columns (births
+  stay strictly increasing per slot, so after a backward seek one can exceed GameTime), the
+  passability cache and the order of the units inside each seat's control-group vectors (their
+  membership is the recording's). The takeover (S4) must answer for each.
+- **The rebuild runs on a puppet host only**; the live restore is S3c's and the takeover S4's.
+- **The images report is informational.** `tarec compare --images` names the bytes outside the
+  list, but nothing yet sorts them into simulation and presentation; S3c's null twin does, and
+  makes it a gate.
+- **The ray-fan edge**: a unit whose sight height is 5 or less is not re-stamped after its height
+  byte is zeroed but is still unstamped at its death (the engine map); whether any unit type
+  reaches it is not established.
+- **The capture's cost and the files' size grew further past the product page's budgets** (0.5 ms
+  on average and 1 ms at worst): 566 µs and 3.63 ms in the battle, the pool's deltas the largest
+  addition to the stream.
+- **`tacli replay seek` refuses a playback that has played to its end**, though the replay itself
+  would seek back from there.
+- **Not measured**: the playback's own cost per step, and the cost of `0x4816A0` over a whole map.
 
 ### S3c — the round trip and the harness
 

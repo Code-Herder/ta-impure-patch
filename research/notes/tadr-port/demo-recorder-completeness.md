@@ -7,8 +7,10 @@ their build check, and the exclusion file with its check, are built** (the
 [build order](#build-order)'s first step, two landings, 2026-09-29): every writable static of the
 simulation files is declared, and the link refuses one that is not; the bytes of the engine's
 unit and player records that are not recorded as values are listed in one file, and the build
-refuses a header that does not match it. The replay harness and self-verification are designed,
-not built. The owner
+refuses a header that does not match it. Self-verification is built with the recorder
+([S1](demo-recorder-skirmish-slice.md#self-verification)), and the main block and `.data` are
+recorded through a positive list ([S3b](demo-recorder-skirmish-slice.md#s3b-the-globals-and-seeking));
+the replay harness is designed, not built. The owner
 chose **option B, declare and measure**, on 2026-09-29, after a design panel (four designs, two
 judges) over the code as it stood; the product decisions it serves are on the
 [product page](demo-recorder.md#completeness-and-verification), and the engine facts it rests on
@@ -118,9 +120,19 @@ stock nondeterminism, and is a simulation change of its own, a TODO in
 [section B's items](sim-fixes.md#the-items). No network game was measured for the
 file: the player rows' network fields rest on the disassembly alone.
 
-The main block and the executable's `.data` (which holds the simulation RNG's seed, `0x51FC88`) are
-captured, applied only through a positive list, and classified by the harness's null twin (below),
-so presentation bytes such as the option word never trip anything.
+**The main block and the executable's `.data`** (which holds the simulation RNG's seed,
+`0x51FC88`) cannot be recorded or applied whole: `main` sits a GetTickCount pad into its
+allocation, the block holds heap pointers, and `.data` holds the main pointer itself. So one
+positive list, `tagpu/ddraw/replay-globals.tsv`, names every byte of the two a recording carries
+and how a puppet host treats it — written every step, held (`hold`, for the live restore and the
+takeover) or written with the engine's own reaction (LosType) — and the build checks the header
+generated from it. **A field the simulation's steps write goes on the list** unless it is the
+viewer's own or a cache of the draw; removing a row or making one `hold` is a loosening. What keeps
+the list honest is that **a dump carries both images whole**: `tools/replay/tarec.py compare
+--images` names every differing byte of two dumps that no row covers, so a simulation global the
+list misses shows up by name, as a missing unit field does. It is a report until the harness's null
+twin (below) sorts those bytes into presentation and the rest, and makes it a gate. The projectile
+pool is a record class of the exclusion file, `proj`, whose pointers are IDs.
 
 ### Impure's own state: declared where it is defined
 
@@ -253,6 +265,20 @@ The stock-limits build reads 154 (22 state, 3 content, 37 transient, 19 private,
 locks, 5 TLS indices, 5 code or guard pointers, 12 layouts), with no engine pools, since it raises no
 limit (MEASURED 2026-09-29, on Wine).
 
+**Restored at a seek.** A seek writes every recorded table back into the host's declaration of
+the same name, stride, class, key, flags and layout — the recording carries a CRC-32 of each
+declaration's layout (`tagpu_simreg_layout_hash`) — and skips any other. The write is the inverse
+of the capture's image, by the layout alone: plain bytes and `SIMF_ID`, `SIMF_TARGET` and
+`SIMF_PINNED` fields from the image, a `SIMF_ADDR` with an ID kind translated back and bounded,
+and `SIMF_LOCAL`, `SIMF_OWNED`, `SIMF_COLUMN`, an `SIMF_ADDR` of no ID kind and a heap table's row
+count left as the host holds them. **A sim file whose tables carry an invariant their layout
+cannot express provides its `_restored()`**, which re-establishes it on the game thread before
+anything runs: `tagpu_patches_restored()` (the air pool's triple under its lock, the hit delay
+queue's head and count, the ghost sweep's count) and `tagpu_weapons_restored()` (each weapon
+definition row's count and pointers, each cached piece). Each names the reader its bound protects.
+Between two seeks the tables hold what the host's own code writes, which differs from the
+recording where that writer is gated on a puppet host (`s_quiet`); S3c sorts each table's writers.
+
 **What the check does not prove**, by construction of its rules, and so what the review and later
 the harness have to:
 
@@ -335,8 +361,9 @@ thread. S1's capture, which includes this slice, costs about 80 µs a tick in a 
 ## The replay test harness
 
 `tools/replay/tareplay.py` reuses the compatibility suite's instance preparation, job pools, one
-DirectPlay port per game and 0/1/2 exit codes; a `tagpu_replay.trigger` with the verbs `dump`,
-`restore`, `seek` and `play` runs on the game thread.
+DirectPlay port per game and 0/1/2 exit codes. The trigger `tagpu_replay.trigger` is read on the
+game thread by the replay's frame visit, before the in-play draw and on paused frames too; it knows
+`dump` and `seek` (S3b), and the harness adds `restore` and `play`.
 
 **The restore round trip**, at seeded random ticks of a scripted game: pause and take dump A;
 rebuild in place from the recording; let one paused frame recompute; take dump B and compare. The
@@ -399,7 +426,9 @@ rests on.
 2. **With the skirmish slice** ([its plan](demo-recorder-skirmish-slice.md) cuts it into five landings): capture at `0x4954ED` and the recording header's lever list (the
    registry's list), with the recorder that uses them, and self-verification over units, players and
    declared tables — **S1, landed 2026-09-29**; the mover, the order lists, PlayerInfo and the
-   events at their roots — **S2a, landed 2026-09-30**; root and sink counting; the main block and `.data` with the null twin; puppet
+   events at their roots — **S2a, landed 2026-09-30**; the feature grid and the wreck pool —
+   **S3a, 2026-09-30**; the main block and `.data` through the positive list, both whole in every
+   dump, and the projectiles — **S3b, 2026-10-01**; root and sink counting; the null twin; puppet
    dispositions and fixtures; the one-writer rule and getter 75 per seat; the nano spray's recording
    and playback; the landing run and the nightly tier with its timer, and with the harness the
    CLAUDE.md replay gate and the landing command's Step 4b.

@@ -2478,7 +2478,7 @@ engine defects we patch".
 | `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | area damage `0x49A120`, whose two stack lists hold 20 units and 64 feature anchors and whose damage runs for a victim past them once per cell of it in the blast | both calls of `0x49A120` retargeted to `dmg_area`, which holds a frame of two hash sets (unit slots, anchor ordinals; 32 keys each before they grow) as a local on the calling thread's stack, makes it the thread's innermost frame through a TLS slot for the call, and puts the previous one back; the 72-byte unit block and the 71-byte feature block replaced by calls of `dmg_unit_seen` / `dmg_feature_seen` that answer skip (`0x49A415`, `0x49A62B`) or damage (`0x49A2AA`, `0x49A615`) from the innermost frame's sets, each index bounded by the unit array's count or `W·H` first |
 | `0x49CF18`, `0x42F314`, `0x42F32E` | the ballistic fire `0x49CDE0`'s burnblow flight time, `idiv` by `v·cos(pitch)`, 0 within 0.35° of vertical; and its `div` by `w+0x68`, 0 for a ballistic weapon with `weaponvelocity` 0 | a `jmp` over the 9-byte `cdq; idiv ebp; mov edx,[main]` to a stub that divides as stock unless `ebp` is 0 and then takes `weapontimer` through `0x49CF29`, counted and logged; the loader's two calls of `0x49E010` routed through a stub that first gives such a weapon a `w+0x68` of 1, logged. Local |
 | `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | the grid stamp `0x47CC30`'s `X + fw ≥ W` and `Z + fh ≥ H`, which park a unit whose footprint ends on the last column or row | the two `jge` become `jg`; the 50-byte bucket block becomes a `jmp` to a stub that keeps stock's bucket index whenever its linear index is inside the `rows·cols` grid — stock's column −1 at the west edge is the previous row's last bucket, which simulation code reads — and clamps the column and row into the grid only for an index outside it; it rejoins at `0x47CCDB` |
-| `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` | area damage `0x49A120` reads victims only from each cell's two unit slots, and the stamp `0x47CC30` gives a contested slot B to one aircraft, so an aircraft no in-rect slot names is never found | the walk's end (11 bytes) and the selector step (18) become `jmp`s to stubs that, after stock's walk, hand the aircraft stock missed to its own per-victim code at `0x49A24E` one at a time with the selector at 2, then run the displaced tail; candidates come from a pool of airborne slots rebuilt by a stub on the step's call of the unit tick (`0x4954ED`, which first runs the demo recorder's capture, §2.6e) and added to from the stamp's airborne path (`0x47CF98`), under a lock, each re-tested at hand-over (alive and airborne by slot B's rule, bit 29 in the mask so a bit-29 unit is excluded; in the grid, a real bucket; not dying, bit 14; uncarried; model present; in the blast's rect; not yet seen) with every index bounded; a failed grow of the list is the engine's out-of-memory exit (`eng_alloc_or_exit`) |
+| `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` | area damage `0x49A120` reads victims only from each cell's two unit slots, and the stamp `0x47CC30` gives a contested slot B to one aircraft, so an aircraft no in-rect slot names is never found | the walk's end (11 bytes) and the selector step (18) become `jmp`s to stubs that, after stock's walk, hand the aircraft stock missed to its own per-victim code at `0x49A24E` one at a time with the selector at 2, then run the displaced tail; candidates come from a pool of airborne slots rebuilt by a stub on the step's call of the unit tick (`0x4954ED`, which first runs the replay's capture-point write and the demo recorder's capture, §2.6e) and added to from the stamp's airborne path (`0x47CF98`), under a lock, each re-tested at hand-over (alive and airborne by slot B's rule, bit 29 in the mask so a bit-29 unit is excluded; in the grid, a real bucket; not dying, bit 14; uncarried; model present; in the blast's rect; not yet seen) with every index bounded; a failed grow of the list is the engine's out-of-memory exit (`eng_alloc_or_exit`) |
 | `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`; `0x465DA9`, `0x408095`; `0x407F74`; `0x43F5D1`, `0x43F631`, `0x43FC05`, `0x43FD1A`, `0x43FF85`, `0x4400AA`; `0x46778A`, `0x4677D0`; `0x482615` | the altitude-sheared row `(z − y/2) >> 5` under an unsigned bound, off the grid for a point high up near the north edge: `UnitInPlayerLOS 0x465AC0`'s four points under True line of sight, and under Permanent or Circular `PositionInPlayerMapped 0x408090` (the first three) and its inline copy (the fourth); the copy inlined in the AI caller `0x407E90`, whose probe it decides; the order resolver `0x43F0E0`'s six; the view player's map build `0x467440`'s two, which mark the units that player sees for the acquisition; and the sight emitter `0x4825B0`, the observer's side: a unit whose sheared row is off the grid stamps no sight at all. The census — by the data, every compare that reads a grid's height in memory: 57, 46 of them this read; what it does not enumerate, and the sight grid's builder found apart, are stated there — is the engine map's *Line of sight at the map's edge* | table rows. The first eight blocks (43, 43, 49, 34, 34, 44, 40 bytes, and the order resolver's 36 at `0x43F631`, whose point register stock overwrites before its row test) become a `jmp` to a hand stub; the other seven lone row tests (`cmp r,[g+0x84]` and its `jae`/`jb`, 8 or 12 bytes) to a generic stub built from the site's stock bytes, with a compare-only row over the span from its z load to its test, which the stub relies on; the emitter's row computation `0x482615..0x48261E` to a hand stub that fixes the row before stock compares it with the stored one and stores it — so the stamp and its later removal use one row by construction — with compare-only rows over the point `0x4825D4..0x482614` and from the landing point through the bound, `0x48261F..0x48266A`. Each uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, otherwise keeps stock's answer, and counts the own row per function |
 | `0x43E69D`, `0x43E904`, `0x43EBC6`, `0x43ECDB`, `0x43EE94`, `0x43EFA9`; `0x47D3B8`; `0x465942`, `0x46598A`, `0x465A17`, `0x465A63`; `0x46725F`, `0x467294`, `0x467340`, `0x467375`; `0x47360C`, `0x473657`, `0x473A94`, `0x473AD3`, `0x4741EC`, `0x474237`, `0x474674`, `0x4746BB`, `0x47551E`, `0x47556C`; `0x47F431`, `0x47F476` | the same read in local code: the cursor picker `0x43E490`, the build cursor's site test `0x47D2E0`, the feature helper `0x4658E0` (both corners), the radar rebuild `0x466DC0`'s projectile dots, the particle leaves `0x473590`, `0x473A00`, `0x474170`, `0x4745E0`, `0x475470`, positional sound `0x47F300` | each lone row test becomes a `jmp` to a generic stub with the same rule and count; the 27 are compared together, each from its z load through its test (the radar's whole loop `0x4671C0..0x46742E` for its dots), and written together or not at all (`fix_los_local`) |
 | `0x49BEE8` | the projectile draw pass `0x49BE60`'s inline copy of the same read, the local player's view of a projectile | the 40-byte block becomes a `jmp` to a stub with the same own-row rule and count, compared and written alone. Local: a draw of the engine's frame, which still runs as the golden source (`fxown` is not a play default) |
@@ -2910,11 +2910,12 @@ the target, and every Patch Loader's `dplayx.dll` forwards all nine of its expor
 
 ### 2.6e The demo recorder (`tagpu_recorder.c`, `tagpu_recwriter.c`, a skirmish on request)
 
-S1, S2a and S3a of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
+S1, S2a, S3a and S3b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
 is recorded to `replays\<date> <time> <map>.imprec` when `tagpu_recorder.on` is in the game's folder
 at the level's first iteration, and `tools/replay/tarec.py` reads a recording back. Its capture has no site of
-its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls
-`tagpu_rec_capture` before the air pool's rebuild, on the game thread, and `tagpu_reclaim`'s
+its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls the replay's
+`tagpu_replay_capture` (inert unless the level plays a recording, §2.6f) and then
+`tagpu_rec_capture`, both before the air pool's rebuild, on the game thread, and `tagpu_reclaim`'s
 teardown wrap (§2.7) calls `tagpu_rec_level_end` first, before the cascade frees the unit array.
 A recording does not start without that wrap, since nothing else would end it. **One Win32 hook**:
 `ExitProcess` in the fork's kernel32 list (`hook.c`, the exe and the DLLs of its folder only), whose
@@ -2952,7 +2953,15 @@ player records with their PlayerInfo, the controlled and viewed players, the uni
 sort buckets, GameTime, the game mode and the map's path, the feature grid, the wreck pool, its
 heads and the reproduction cursor, and the feature defs, each bounded by the engine's own count
 ([the engine map](exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
-and every `SIM_STATE` table Impure declares. The writer thread reads no engine memory, and since
+and every `SIM_STATE` table Impure declares; and, for S3b, every field of the positive list
+`replay-globals.tsv` (main-block offsets checked against the block's `0x3924D` bytes and `.data`
+addresses against `0x501000..0x52B65C` by its generator), the projectile pool's count and its
+records up to their written extent, bounded by the pool's size, and the explored map
+`*(main+0x14273)`, sized from the grid
+([the engine map](exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)).
+A dump also reads every player's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes) and the main
+block and `.data` whole. It no longer reads `tagpu_replay.trigger` itself: the replay's frame visit
+does, and arms the dump (§2.6f). The writer thread reads no engine memory, and since
 `tagpu_recwriter.c` is not on `thread-split.allow` the build refuses an engine address in it.
 
 **Three simulation tables moved to the heap for it**, so their pages are write-watched: the build
@@ -2966,15 +2975,20 @@ marks being there — the ghost mask, B4's refused-kill receiver, the level's re
 
 ### 2.6f Watching a recording (`tagpu_replay.c`, `tagpu_puppet.c`, `tagpu_recreader.c`, on request)
 
-S2b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watching).
+S2b and S3b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watching).
 `tacli replay play <instance> <recording> [--perspective RECORD]` asks the next SKIRMISH Start,
 through the request file `tagpu_replay.play`, for the recording's map with every recorded player
 seated as a type-3 record the recording drives, a puppet, and the viewer in a seat V of their own.
 The level then plays the recording: each step, after the host's own unit tick, the replay plays
 that step's recorded events through the engine functions that made them and writes the recorded
 world of the next. Without `--perspective` it shows everything (V's full visibility); with it, that
-recorded player's view, radar picture included. The engine facts are
-[the engine map](exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-pass-4-disassembled-measured-2026-09-30)'s.
+recorded player's view, radar picture included. `tacli replay seek <instance> <T>` moves the
+running playback to GameTime T, forward or backward, and with `--recording` launches one that
+plays from T ([S3b](tadr-port/demo-recorder-skirmish-slice.md#s3b-the-globals-and-seeking)). The
+engine facts are
+[the engine map](exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-pass-4-disassembled-measured-2026-09-30)'s
+and, for the seek,
+[its S3b section](exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
 
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
@@ -2982,7 +2996,14 @@ without an accepted request: the seat fill's call `0x47B092`, the settings persi
 settings save `0x430F00`** (`tagpu_detour_observe`, stolen `A1 E8 1D 51 00`, a `before` and an
 `after`), inert unless a recording's options are in. The teardown wrap's post hook (§2.7) calls
 `tagpu_replay_level_after` once `0x491B60` has returned. The step runs from B2's stub at
-`0x4954ED` (§2.6c), after the unit tick. **Nineteen prologue gates** (`tagpu_puppet.c`,
+`0x4954ED` (§2.6c), after the unit tick, and the capture-point write (`tagpu_replay_capture`) first
+in that stub, before the recorder's capture and the unit tick. **The frame visit, `0x4969CD`**, the
+in-play frame callback's `call 0x468CF0`: checked by `call_is` and rewritten to call a stub
+`pushfd; pushad; call tagpu_replay_frame; popad; popfd; jmp 0x468CF0`, so DrawGameScreen runs with
+the site's own return address `0x4969D2` and the observers on `0x468CF0` see the frames they saw.
+It is installed first and on its own, since a dump of a live recording needs it too, and runs on
+paused frames as well, between two sim steps, before the draw; the scenario applier's hook at
+`0x4969D2` takes the next instruction's bytes. **Twenty prologue gates** (`tagpu_puppet.c`,
 `tagpu_detour_gate`), landed at `DllMain` before the recorder's observers, refuse on a puppet level:
 the apply `0x489CE0` and `Send_UnitDeath 0x4864B0` for a puppet's unit; COB's SET (at `0x480B26`,
 its second instruction), ATTACH `0x481340`, DROP `0x4813B0` and the two replies `0x47F780` and
@@ -2990,10 +3011,12 @@ its second instruction), ATTACH `0x481340`, DROP `0x4813B0` and the two replies 
 shower `0x437DE0`, typed commands `0x417B50`, the debug keys `0x4956C0`, the resource transfer
 `0x464C60` and the save `0x4326B0`; and from the level's first step, outside the replay's own calls,
 the feature tick `0x424050` and the six feature functions (`0x423C50`, `0x4246B0`, `0x423550`,
-`0x4233A0`, `0x4244B0`, `0x423710`). On any other level a gate reads only the mode byte. The
+`0x4233A0`, `0x4244B0`, `0x423710`); and while a seek rebuilds the level, the skirmish
+elimination `0x47BD70` (stolen `81 EC C8 00 00 00`, `ret 4`), so the rebuild's kills announce no
+defeat. On any other level a gate reads only the mode byte. The
 recorder's hooks serve a puppet level too (§2.6e): the six draws answer from the recording, the
 explosion stub makes a replayed death's feature calls, and the footprint writers' `after` undoes
-their grid writes. A recording plays only when all nineteen gates and the recorder's hooks are in,
+their grid writes. A recording plays only when all twenty gates and the recorder's hooks are in,
 and the teardown wrap too (§2.7), which ends the puppet level before the cascade destroys its
 units.
 
@@ -3030,9 +3053,35 @@ units.
   unit slots `+0x00`, `+0x02` and the yard bit `+0x0C` bit 1 of the unit's footprint cells, a cell
   wider each way, put back as they were at the call's entry (`tagpu_puppet.c`, *The footprint
   writers*);
-- at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit in every
-  cell of the explored map `[main+0x14273]`, `main+0x14281` bit 3 cleared, and `s_windState`
-  seeded from the recording's first image;
+- each step, a unit's control group `+0xAC` through the engine's setter `0x480250(unit, g)`, only
+  for −1 or a group below 10;
+- at every capture point and at the frame visit after a step, from the recorded iteration the
+  host is at: LosType bits 0–2 of `main+0x14281`, only when they differ, with every temporary
+  sight record's `+0x1C` zeroed and the expiry `0x482130` first and `0x4816A0` after, as the
+  engine's commands pair them; every `write` row of `replay-globals.tsv` (the wind, the game end's
+  flags but bits 2 and 4, the simulation RNG `0x51FC88`, the meteors, the pathfinder's table, the
+  movement classes' watermarks, `0x51E53C`, `0x51E684`, `0x51E688`, `0x51E6C4`), never the `hold`
+  rows (the countdown `main+0x39239`, flags bits 2 and 4); the projectile count `main+0x141F3` and
+  the records up to the recording's written extent, their IDs resolved and bounded, and zeros up to
+  the host's own extent (a refused write empties the pool and clears `main+0x142F7` when it points
+  into it); and the explored map with V's bit kept set, LosType bit 3 cleared when it changed;
+- at the first step: V's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes of 1), V's bit
+  (`[V+0x146]`) in every entry of the explored map `[main+0x14273]`, `main+0x14281` bit 3 cleared,
+  and `s_windState` seeded from the recording's first image;
+- at a seek, on the frame visit, in this order: the projectile count 0 (and `main+0x142F7` when it
+  points into the pool); every unit killed through C4's wrap of the destructor `0x4866D0` with
+  severity and corpse 0; every temporary sight record's `+0x1C` zeroed, then `0x482130`; LosType
+  bits 0–2 and `0x4816A0`; GameTime `main+0x38A47` = T − 1; every unit of iteration T made through
+  `0x485F50` and written by the appliers above; each unit's bucket through the unlink `0x47CB00`
+  (`+0x82` then NULL) and the move `0x47CB60`, and a carried unit's `+0x82`; every cell of the
+  feature grid and every wreck record whole, the three heads and the cursor, the host's 3DO model
+  instances freed through `0x45AAA0` and made through `0x45A8D0` into `+0x04`; the particles
+  destroyed through their own `[vt+0](1)` and removed from the ten layers, the explosion count
+  zeroed, the debris records re-initialised and the flying-piece slots zeroed
+  (`tagpu_effects_clear`, both builds); the declared tables and the sim files' restores; the
+  globals, the pool and the explored map as above; V's sight; every seat's `+0xF0` from the image
+  and V's to the next multiple of 30, every record's `+0xF8` = GameTime, the notices `0x47EE30` and
+  the chat lines `0x463C80`; and every seat's `+0x18`;
 - after the teardown: V's PlayerInfo, all `0xB9` bytes, as the Start's fill left them.
 
 The recorder refuses a puppet level. `tagpu_recreader.c` reads the file and names no engine memory.

@@ -955,8 +955,11 @@ Taken 2026-09-30 (the slice note's *Decided 2026-09-30* and *S2a*): D1 as recomm
   corpse is exact only when the last step crossed no cell.
 - **D6 — Projectiles and features on the host.** The replayed roots make projectiles and
   corpses on the host, as a live remote's do.
-  - Recommend that the projectile pool is **not** recorded state. It is presentation, rebuilt
-    from shots, bursts and interceptions.
+  - The recommendation here was that the projectile pool is **not** recorded state but
+    presentation, rebuilt from shots, bursts and interceptions. **S3b superseded it** (the owner,
+    2026-10-01): the pool is recorded and a puppet host writes it at every step, since a seek must
+    show the shots in flight and a burst's copies draw the simulation RNG (the
+    [slice note](demo-recorder-skirmish-slice.md)'s *Decided 2026-10-01*).
   - The corpse is S3's call. If S3 records the feature map, the destructor's corpse is a
     replayed root's write to be checked by §1.10. The alternative is to make it inert and
     replay feature events.

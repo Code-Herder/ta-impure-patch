@@ -17,7 +17,7 @@ techniques from accepted requirements.
 The shared engineering rules are in [the TADR port overview](overview.md). Recording is a new
 feature of Impure; it does not require running the original recorder alongside Impure.
 
-**A skirmish can be recorded and watched; seeking, rewind and the in-game controls are next.** The three feasibility experiments
+**A skirmish can be recorded, watched and sought; rewind, takeover and the in-game controls are next.** The three feasibility experiments
 under [Milestones](#milestones-and-delivery-order) are done (2026-09-29), and so is the completeness
 mechanism's first step: every writable static of the simulation files is declared, and the
 build refuses one that is not; the bytes of the engine's unit and player records that are not
@@ -29,6 +29,10 @@ recording also carries every mover, order list and PlayerInfo and the engine's e
 [S2b](demo-recorder-skirmish-slice.md#s2b-watching) (2026-09-30) `tacli replay play` plays a
 recording back on puppets, showing everything or one recorded player's view, and every recorded
 value is equal to the recording at every checkpoint; the Replays browser and the timeline are S5's.
+Since [S3a](demo-recorder-skirmish-slice.md#s3a-features-and-wrecks) a recording carries the
+features and wrecks, and since [S3b](demo-recorder-skirmish-slice.md#s3b-the-globals-and-seeking)
+(2026-10-01) the simulation's globals, the shots in flight and the explored map, and
+`tacli replay seek` moves a playback to any GameTime of its recording, forward or backward.
 Recording
 every game waits for the reduced stream, since the exact stream the recorder writes is too large
 for that. Every decision of the
@@ -65,10 +69,11 @@ milestone.
 - **Sight is recomputed, not recorded.** In puppet mode the engine rebuilds each player's line of
   sight from the recorded unit positions, as it does for another player's units in a network
   game, and computes radar and sonar for the player whose perspective is selected. The explored
-  map is history rather than current state, so it is stored in snapshots and restored at every
-  seek and takeover, **only while the mapping option is on**: a game played with the map
-  explored, which the owner reports is how multiplayer is usually played, stores no exploration
-  at all. The sight mode is
+  map is history rather than current state, and the simulation reads it (a transport's unload,
+  the AI's map, a unit's visibility outside true line of sight), so it is recorded at every
+  iteration and written at every step and every seek. A game played with the map explored, which
+  the owner reports is how multiplayer is usually played, has it fully explored from the load and
+  costs one copy of it at the start and in each snapshot. The sight mode is
   recorded as it changes, since chat commands can switch it during a match, and separately from
   the whole-map reveal a defeated player's own machine switches to.
 - **Puppet mode for watching.** A real engine level is loaded and every recorded player is
@@ -98,8 +103,9 @@ milestone.
   takeover performs the same rebuild under local ownership: **the seats become local first, and
   the units are then re-created**, because only a create gives a unit fresh scripts and a mod's
   scripts test ownership as they start. The rebuild carries units with their state, order
-  queues and factory queues, player resources and sight. **Dropped at a takeover:** shots in
-  flight, unit script state (so what a mod keeps in its scripts, such as an upgraded look,
+  queues and factory queues, player resources and sight, and the shots in flight, which the
+  recording carries since S3b, so a takeover can keep them. **Dropped at a takeover:** unit
+  script state (so what a mod keeps in its scripts, such as an upgraded look,
   resets [INFERRED from the scripts]) and AI internal state; weapon reload and targets, each unit's current
   movement path (units re-path from their orders) and the AI's squad state beyond each unit's
   membership (which an engine call can set) are also lost unless each is given its own writer. The [scenario applier](../scenario-format.md) is the existing rebuild
@@ -235,8 +241,8 @@ other players; a multiplayer game is rewound from its finished recording.
 | Automation | Expose replay launch, seeking, takeover and forks through `tacli` for automated verification. |
 
 The seek and takeover times are targets. A rebuild of 1,227–1,432 units in play measured
-11–47 ms, and a seat's takeover about 1 ms ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)); reading and decoding a snapshot,
-which a real seek adds, is not measured yet. If a rebuild at 1,500 units cannot meet
+11–47 ms, and a seat's takeover about 1 ms ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)); a real seek also reads the
+recording to its target, and reports both times (the [slice note](demo-recorder-skirmish-slice.md#s3b-verified-and-measured)). If a rebuild at 1,500 units cannot meet
 them, the measurements come back for a decision; the targets are never relaxed silently. The
 snapshot interval is chosen by measurement to meet them.
 
@@ -389,7 +395,7 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 |---|---|---|
 | Product contract | Scope, architecture, viewer features, storage policy and open decisions recorded here | **Decisions recorded, 2026-09-28** |
 | Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Done, 2026-09-29.** **(1)** A skirmish level holds ten puppet players, 4–9 included, with the viewer on a puppet seat; the units stay inert, and the level ends only by the recording once its victory and defeat tests are switched off ([evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). **(2)** A rebuild of 1,227–1,432 units in play takes 11–47 ms, paused or not; a puppet seat becomes a working AI in about 1 ms without a reload, the seat made local before its units are re-created; order and factory queues and builds in progress continue ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)). **(3)** A recorded 1,432-unit battle replays with every recorded unit value identical at every checkpoint, walking included; the recorder costs about 0.1 ms per tick; a battle of that size sustained for an hour would exceed the 100 MB budget ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)). Not yet shown: features, wrecks and projectiles in a rebuild; footprints, sight, sounds and the nano spray in playback; a real hour. Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
-| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **Five landings, the first landed 2026-09-29** ([the plan](demo-recorder-skirmish-slice.md)): the recorder with its self-verification: a skirmish recorded on request, with no correction, reads back equal to the game at every dump; watching is next |
+| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **S1 to S3b landed, 2026-09-29 to 10-01** ([the plan](demo-recorder-skirmish-slice.md)): a skirmish recorded on request with its self-verification, watched on puppets equal to the recording at every checkpoint, and sought to any GameTime; the round trip and the harness (S3c) are next |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
 | Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check, and the exclusion file with its check, are built (2026-09-29, [completeness design](demo-recorder-completeness.md#option-b-declare-and-measure)), and every recording verifies itself as it is made ([S1](demo-recorder-skirmish-slice.md#self-verification)); the harness is not built |
