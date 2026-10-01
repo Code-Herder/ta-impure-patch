@@ -4478,7 +4478,7 @@ static int fix_stacked_air(void)
     unsigned char *t, *s, *m, *k, *p;
 
     InitializeCriticalSection(&s_airLock);
-    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(32);
+    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(48);
     if (!t || !s || !m || !k) { lim_no_stub(); return FIX_TABLE; }
 
     /* the walk's end: push [ebp+0xC]; push [ebp+8]; call air_first; test eax,eax; jz tail;
@@ -4528,21 +4528,26 @@ static int fix_stacked_air(void)
     *p++ = 0x61;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x0047CFA1); p += 4;
 
-    /* the unit tick's call: pushfd; pushad; call tagpu_rec_capture; call air_rebuild; popad;
-       popfd; call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret -- the
-       unit tick takes no argument and returns with a plain `ret` (0x48B080), and the site pushes
-       nothing before its call, so calling it from here is the site's own call; every register the
-       step after it uses (ebx, the loop's count) is kept. The demo recorder's capture comes
-       first: it records the world between two iterations (tagpu_recorder.c), and the pool it
-       records is the one the last iteration left, which air_rebuild then derives again from the
-       units it records. On a level that plays a recording the capture records nothing, and the
-       replay's step runs after the unit tick: it writes the world the recording machine's unit
-       tick left, so the rest of the iteration -- the players phase's sight stamps above all --
-       reads what it read there (tagpu_replay.c), and air_rebuild derives the next pool from the
-       units it wrote. */
+    /* the unit tick's call: pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture;
+       call air_rebuild; popad; popfd; call 0x48AD30; pushfd; pushad; call tagpu_replay_step;
+       popad; popfd; ret -- the unit tick takes no argument and returns with a plain `ret`
+       (0x48B080), and the site pushes nothing before its call, so calling it from here is the
+       site's own call; every register the step after it uses (ebx, the loop's count) is kept.
+       The replay's capture-point write comes first: on a level that plays a recording it writes
+       the recording's globals and projectile pool for the iteration the host holds, so that it is
+       their last writer before anything in the step reads them, the recorder's dump included
+       (tagpu_replay.c, THE GLOBALS AND THE PROJECTILES); elsewhere it returns at once. Then the
+       demo recorder's capture: it records the world between two iterations (tagpu_recorder.c),
+       and the pool it records is the one the last iteration left, which air_rebuild then derives
+       again from the units it records. On a level that plays a recording the capture records
+       nothing, and the replay's step runs after the unit tick: it writes the world the recording
+       machine's unit tick left, so the rest of the iteration -- the players phase's sight stamps
+       above all -- reads what it read there (tagpu_replay.c), and air_rebuild derives the next
+       pool from the units it wrote. */
     p = k;
     *p++ = 0x9C;
     *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_replay_capture); p += 4;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)tagpu_rec_capture); p += 4;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_rebuild); p += 4;
     *p++ = 0x61;
@@ -4562,8 +4567,8 @@ static int fix_stacked_air(void)
     lim_branch(0x0047CF98, sizeof stamp, stamp, 0xE9, (unsigned int)(size_t)m,
                "stacked aircraft: the stamp's airborne path joins the pool");
     lim_branch(0x004954ED, sizeof tick, tick, 0xE8, (unsigned int)(size_t)k,
-               "stacked aircraft: the pool rebuilt before the unit tick, after the recorder's capture; "
-               "the replay's step after it");
+               "stacked aircraft: the pool rebuilt before the unit tick, after the replay's write "
+               "and the recorder's capture; the replay's step after it");
     return FIX_TABLE;
 }
 

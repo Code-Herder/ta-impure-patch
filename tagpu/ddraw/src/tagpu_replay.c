@@ -25,14 +25,18 @@
      and weapon data, its first GameTime. On a mismatch nothing is ever applied and the level
      stays empty, which the viewer sees and the log explains. Otherwise the start units are made,
      the first image goes in, the wind is seeded and V's sight is filled (THE APPLY).
+   Two more sites serve a level that plays: B2's stub calls tagpu_replay_capture first at each
+   capture point, and the frame visit before the in-play draw call 0x4969CD reads the trigger and
+   writes what the draw after a step shows (THE GLOBALS AND THE PROJECTILES).
    The teardown (S-e) ends the replay and gives V's PlayerInfo back once it has returned (THE
    VIEWER'S SEAT), and the recorder refuses a puppet level (S-f).
 
-   WHAT IT READS AND WRITES. Everything here runs on the game thread: the Start handler and the
-   sim step are the engine's own game-thread code, and the teardown is entered only from the
-   engine's state handlers there. The player records and their PlayerInfo blocks live in the main
-   block for the process (tagpu_recorder.c says why); a seat index is below 10 before it
-   addresses one (the reader refuses anything else, and V is chosen below 10). The skirmish
+   WHAT IT READS AND WRITES. Everything here runs on the game thread: the Start handler, the
+   sim step and the frame callback 0x496790 are the engine's own game-thread code, and the
+   teardown is entered only from the engine's state handlers there. The player records and their
+   PlayerInfo blocks live in the main block for the process (tagpu_recorder.c says why); a seat
+   index is below 10 before it addresses one (the reader refuses anything else, and V is chosen
+   below 10). The skirmish
    settings [main+0x29A0], GameingState [main+0x391E9] and the objective [main+0x391ED] are the
    ones the Start has just used: the settings for its fill, GameingState for its mode, and the
    objective armed by the .ota read at 0x47AF77. */
@@ -70,6 +74,7 @@
                                        (0x46569D)                                                */
 #define PL_SIGHT       0x7C         /* u8* the sight counters, one a cell ...                     */
 #define PL_SIGHTLEN    0x88         /* ... and their bytes (0x4816A0's fill, 0x481734..0x481767)  */
+#define PL_MAPBIT      0x146        /* u8: the record's bit in an explored-map entry (0x48194B)   */
 #define OFF_NPLAYERS   0x2A3C       /* u16: the player count                                      */
 #define OFF_CONTROLLED 0x2A42       /* u8: the player the local game commands                     */
 #define OFF_VIEWED     0x2A43       /* u8: the player whose view it draws                        */
@@ -132,6 +137,10 @@ static struct {
              wstruct, wbad, heads, cursor;
 } s_fst;                            /* ... and its features' (THE FEATURES)                       */
 static struct {
+    unsigned puts, late, refused, reacts, dropped, unbounded;
+} s_gst;                            /* ... and its globals' and projectiles'                      */
+static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
+static struct {
     int            saved;
     int            played;          /* the level's first step has run (THE PLAYER'S SETTINGS)     */
     int            stale;           /* a save ran before it, with the recording's options in      */
@@ -163,6 +172,8 @@ static void replay_close(void)
     s_notes = 0;
     memset(&s_st, 0, sizeof s_st);
     memset(&s_fst, 0, sizeof s_fst);
+    memset(&s_gst, 0, sizeof s_gst);
+    s_frame_tick = ~0u;
 }
 
 /* ---- S-a: the request and the seat fill ----------------------------------------------------- */
@@ -783,6 +794,7 @@ static uint32_t s_raw1[REC_UNIT_DWORDS], s_raw2[REC_UNIT_DWORDS], s_praw[REC_PLA
 static uint32_t s_state[REC_UNIT_DWORDS];         /* +0x110 as the last write takes it        */
 static uint32_t s_oraw[REC_ORDER_IMAGE / 4];      /* an order node's values                   */
 static uint32_t s_oclr[REC_ORDER_IMAGE / 4], s_oset[REC_ORDER_IMAGE / 4];   /* its puppet rows */
+static uint32_t s_jval[REC_PROJ_DWORDS];          /* a projectile record's value bytes         */
 static int      s_masks;
 static void feat_masks_init(void);
 static unsigned short s_chain[0x10000];   /* a recorded chain, head first: the slots' count is a
@@ -818,6 +830,7 @@ static void masks_init(void)
     m_bytes(s_praw, 0, REC_PLAYER_BYTES, 1);
     m_bytes(s_praw, REC_INFO_AT, REC_INFO_BYTES, 1);
     m_bytes(s_oraw, 0, REC_ORDER_BYTES, 1);
+    m_bytes(s_jval, 0, REC_PROJ_BYTES, 1);
     /* the state write takes +0x110 less the engine's bits and every row of the exclusion file:
        the selection, marks and build page are the viewer's own (drop) */
     m_field(s_state, U_STATE, 4, ~U_ENGINE_BITS, 1);
@@ -830,6 +843,7 @@ static void masks_init(void)
         if (r->record == RL_MOVER) m_field(s_raw1, REC_MOVER_AT + r->offset, r->size, r->mask, 0);
         if (r->record == RL_PLAYER) m_field(s_praw, r->offset, r->size, r->mask, 0);
         if (r->record == RL_INFO) m_field(s_praw, REC_INFO_AT + r->offset, r->size, r->mask, 0);
+        if (r->record == RL_PROJ) m_field(s_jval, r->offset, r->size, r->mask, 0);
         if (r->record == RL_ORDER) {
             m_field(s_oraw, r->offset, r->size, r->mask, 0);
             if (r->target == RL_T_NONE && r->cls == RL_PUPPET0)
@@ -2365,13 +2379,17 @@ static void images_put(const Lv* L, const RecWorld* W)
    0x483CF6 allocates them and 0x4816A0 fills them. V owns no unit, so no stamp ever takes a
    count or a bit away, and the level shows everything while V is viewed: a perspective is only
    the viewed player (s_view). Then the draw rebuilds its fog grid from the viewed player's sight
-   (LosType bit 3 clear, on the game thread, as the camera's own clears are). */
+   (LosType bit 3 clear, on the game thread, as the camera's own clears are).
+   V's bit in the map is the one the engine's own setter 0x481930 sets for V, 1 << [V+0x146]
+   (DISASSEMBLED 0x48194B..0x481951: `mov cl,[eax+0x146]; shl ebx,cl`), each entry a u16, so a
+   value of 16 or more names no bit of it and nothing is set. */
 static void sight_fill(char* ta, unsigned v)
 {
     char* rec = player_rec(ta, v);
     unsigned char* cnt;
     unsigned char* mapped;
-    uint32_t len, w, h, n, b;
+    uint32_t len, w, h, n, i;
+    unsigned b = (unsigned char)rec[PL_MAPBIT];
     memcpy(&cnt, rec + PL_SIGHT, 4);
     memcpy(&len, rec + PL_SIGHTLEN, 4);
     if (cnt) memset(cnt, 1, len);
@@ -2379,8 +2397,8 @@ static void sight_fill(char* ta, unsigned v)
     memcpy(&w, ta + OFF_GRIDW, 4);
     memcpy(&h, ta + OFF_GRIDH, 4);
     n = (w * h * 2u) >> 2;
-    if (mapped)
-        for (b = v >= 8; b < n; b += 2) mapped[b] |= (unsigned char)(1u << (v & 7));
+    if (mapped && b < 16)
+        for (i = b >= 8; i < n; i += 2) mapped[i] |= (unsigned char)(1u << (b & 7));
     *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
 }
 
@@ -2400,6 +2418,331 @@ static void wind_seed(const RecWorld* W)
         return;
     }
     tagpu_logf("replay: %s carries no wind state: the level draws a wind of its own", s_name);
+}
+
+/* ---- the globals and the projectiles -------------------------------------------------------- */
+
+/* THE GLOBALS AND THE PROJECTILES (the slice note's S3b). The recording carries the fields of the
+   main block and .data that replay-globals.tsv lists, as one image, and the projectile pool
+   *(main+0x141F7) with its count main+0x141F3, every iteration. recorded_put writes the world's
+   into the host, in this order:
+   1. LosType bits 0-2, the list's `react` row, only when they differ from the host's, with the
+      engine's own reaction (los_react);
+   2. the list's `write` rows, under their masks; `hold` rows are never written on a puppet host;
+   3. the pool: the count and the records of the recording's written extent, their pointers back
+      from IDs, and zeros over what the host's extent has past the recording's.
+   It runs at two points, each from the world as it stands there:
+   - THE CAPTURE POINT of T, first in B2's stub (tagpu_replay_capture). At the capture point of T
+     the world holds iteration T -- the step before read it -- whose globals and pool are the
+     recording machine's at its own capture point of T, the same point of the step. Written here,
+     before the recorder's capture and dump and before the unit tick, the replay is the last
+     writer of each before anything in step T reads it. After the step's unit tick the host's
+     projectile tick moves the pool for the picture and the sounds; the frame visit's write and
+     the next capture point's replace what it computed.
+   - THE FRAME VISIT after a step (tagpu_replay_frame), once a GameTime, when the world holds the
+     next iteration: the draw after step T then shows iteration T+1's globals and pool, what the
+     recording machine drew after its step T, since nothing between its step's end and its capture
+     point of T+1 writes either in a skirmish but the pump [INFERRED: no skirmish message writes
+     them]. Without it the draw would show the host's own projectile tick for a frame: burst copies
+     at the host's RNG's angles (0x49B8D1, 0x49B903) and no meteor projectiles (the shower is gated
+     on a puppet host). With it, the capture point's write finds nothing to change whenever a frame
+     visit ran between two steps.
+   Every `write` row is safe to write on a puppet host at each of them: each changes nothing a
+   puppet host computes (replay-globals.tsv says why, row by row) and makes the host's bytes the
+   recording's. The image is DATA: a slot is written within its own size, the generator having
+   checked each inside the main block or .data; the pool's count and extent against the pool's
+   records, and each pointer against its table (proj_put). */
+
+#define OFF_NPROJ      0x141F3      /* the projectile pool's count                               */
+#define OFF_PROJ       0x141F7      /* the pool: TAGPU_LIM_PROJ records of REC_PROJ_BYTES (0x499A30;
+                                       tagpu_limits.h: the raise goes in whole or not at all)  */
+#define OFF_FOLLOW     0x142F7      /* the camera's followed projectile, or NULL: a pool record's
+                                       position (+4) is all the camera reads (0x41CA3F..0x41CA49) */
+#define OFF_SIGHTRECS  0x1427B      /* the temporary sight records, SR_STRIDE bytes each          */
+#define OFF_NSIGHTRECS 0x14277      /* their count: the add refuses a 21st (0x48292C)             */
+#define SR_STRIDE      0x24
+#define SR_EXPIRY      0x1C         /* the expiry removes it below this GameTime (0x482153..)     */
+#define SR_MAX         20
+#define DATA_BEGIN     0x00501000u  /* .data: the list's data rows are offsets from here          */
+#define LOS_REACT      0x7u         /* LosType bits 0-2: Mapping, true LOS, the ray fan           */
+#define LOS_MAPPING    0x1u
+/* 0x4816A0(arg): the sight rebuild every command that changes LosType bits 0-2 calls (stdcall,
+   `ret 4` at 0x48192B; DISASSEMBLED, its calls: LOSType 0x4166B1, LOS 0x416D76 with 0, Mapping
+   0x416DA6 with 1, NowISee 0x41755E): every record that passes its seat test filled with the
+   mode's base, its in-line re-stamp of every live unit, LosType bit 3 cleared; with arg 1 the
+   explored map filled too */
+typedef void (__stdcall* PFN_SightRebuild)(unsigned arg);
+#define E_SightRebuild ((PFN_SightRebuild)0x004816A0u)
+/* 0x482130(): the temporary sight records' expiry, plain `ret` (DISASSEMBLED 0x482130..0x48226D):
+   each record whose +0x1C is below GameTime has its stamp removed by 0x481D50 from the counters it
+   stamped, in the mode it was made in, and the block is compacted */
+typedef void (__cdecl* PFN_SightExpire)(void);
+#define E_SightExpire ((PFN_SightExpire)0x00482130u)
+
+/* the slot's bytes in the host: the main block's, or .data's */
+static unsigned char* global_at(char* ta, const ReplayGlobalSlot* g)
+{
+    return g->where == RG_MAIN ? (unsigned char*)ta + g->offset
+                               : (unsigned char*)(size_t)DATA_BEGIN + g->offset;
+}
+
+static void globals_put(char* ta, const RecWorld* W)
+{
+    unsigned i;
+    for (i = 0; i < REC_GLOBALS_SLOTS; i++) {
+        const ReplayGlobalSlot* g = &tagpu_replay_globals[i];
+        unsigned char* at = global_at(ta, g);
+        if (!g->write) continue;
+        if (g->size <= 4) {
+            uint32_t v = 0;
+            memcpy(&v, at, g->size);
+            v = (v & ~g->write) | (W->globals[g->dword] & g->write);
+            memcpy(at, &v, g->size);
+        } else {
+            memcpy(at, W->globals + g->dword, g->size);   /* one row's: every byte (the header) */
+        }
+    }
+}
+
+/* Every temporary sight record dropped through the engine's own expiry: each one's +0x1C set to 0,
+   then 0x482130, which removes every record whose expiry is below GameTime -- every one, GameTime
+   being 1 or more wherever this runs, after a level's first step. The records are the viewed
+   player's death vision, made by the destructor under true LOS only; a record kept past a refill
+   of the counters would later decrement counters the refill reset (an undercount, or 0 -> 255, a
+   cell seen for good), and the engine has no other way to drop one mid-level. The count is the
+   engine's, which its add keeps at SR_MAX or below; -1 when it is not, and nothing is touched. */
+static int sight_records_drop(char* ta)
+{
+    int n;
+    char* recs;
+    int i;
+    memcpy(&n, ta + OFF_NSIGHTRECS, 4);
+    memcpy(&recs, ta + OFF_SIGHTRECS, 4);
+    if (n < 0 || n > SR_MAX || (n && !recs)) return -1;
+    for (i = 0; i < n; i++) memset(recs + (size_t)i * SR_STRIDE + SR_EXPIRY, 0, 4);
+    if (n) E_SightExpire();
+    return n;
+}
+
+/* LosType bits 0-2 made the recording's, with the engine's own reaction: every command that
+   changes them calls 0x4816A0 (the list's lostype row), and the bits written without it would
+   leave the counters stamped in another mode than the one the stamps are later removed in. So,
+   as the command does: the bits written (3-15 kept), 0x4816A0(1) when Mapping changed and
+   0x4816A0(0) otherwise. Under true LOS 0x4816A0 re-stamps the live units in-line, at the
+   positions the host holds, iteration T's: where the recording machine's command found them,
+   between the same two steps [INFERRED: a typed command runs between two ticks' unit passes].
+   One departure from the command: the temporary sight records are dropped first
+   (sight_records_drop), at the cost of at most 2 s of the viewed seat's death vision, under a
+   seat's view only. V's counters and map bit then go back (sight_fill), as at the first step. */
+static void los_react(char* ta, const RecWorld* W)
+{
+    const ReplayGlobalSlot* g = &tagpu_replay_globals[0];
+    uint16_t host, was, want;
+    int n;
+    /* the list's react row is LosType's, the image's first slot (replay-globals.tsv) */
+    if (g->where != RG_MAIN || g->offset != OFF_LOSTYPE || g->react != LOS_REACT) return;
+    want = (uint16_t)(W->globals[g->dword] & LOS_REACT);
+    memcpy(&host, ta + OFF_LOSTYPE, 2);
+    was = host;
+    if ((host & LOS_REACT) == want) return;
+    n = sight_records_drop(ta);
+    if (n < 0) {
+        s_gst.unbounded++;
+        note("replay: the sight mode not changed to %u at GameTime %u: the engine counts %d "
+             "temporary sight records", want, *(const unsigned*)(ta + OFF_GAMETIME),
+             *(const int*)(ta + OFF_NSIGHTRECS));
+        return;
+    }
+    s_gst.dropped += (unsigned)n;
+    s_gst.reacts++;
+    host = (uint16_t)((host & ~LOS_REACT) | want);
+    memcpy(ta + OFF_LOSTYPE, &host, 2);
+    E_SightRebuild(((host ^ was) & LOS_MAPPING) ? 1u : 0u);
+    sight_fill(ta, s_viewer);
+}
+
+/* an ID of a projectile record's id row as its pointer; 0 when it is past its table */
+static int proj_ptr(const Lv* L, char* pool, unsigned table, uint32_t id, char** p)
+{
+    switch (table) {
+    case RL_T_WEAPON: return weapon_ptr(L, id, p);
+    case RL_T_UNIT:   return unit_ptr(L, id, p);
+    case RL_T_PROJ:
+        if (!id) { *p = NULL; return 1; }
+        if (id - 1 >= TAGPU_LIM_PROJ) return 0;
+        *p = pool + (size_t)(id - 1) * REC_PROJ_BYTES;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* the first record at or after `from` whose weapon is NULL, or the pool's end: the written extent
+   (tagpu_recorder.c, *The globals and the projectiles*) */
+static unsigned proj_extent(const char* pool, unsigned from)
+{
+    unsigned hw = from;
+    for (; hw < TAGPU_LIM_PROJ; hw++) {
+        uint32_t weapon;
+        memcpy(&weapon, pool + (size_t)hw * REC_PROJ_BYTES, 4);
+        if (!weapon) break;
+    }
+    return hw;
+}
+
+/* The pool made the recording's. Every ID is DATA: a record below the count is the projectile
+   tick's to walk, and it dereferences +0x00, the weapon, of every one; so a record there whose
+   weapon (the id row at +0x00) is NULL, or with any ID past its table (REC_ID_BAD included),
+   refuses the whole write -- the host's pool is emptied instead (count 0, and the camera's follow
+   cleared when it points into it), counted, and noted the first time in a level. A recorded NULL
+   target, attacker or quarry below the count is stock's own value and goes in: the recording
+   machine's tick walked the same record. Above the count no reader walks, and an append's init
+   writes the four id rows before anything reads them, so an ID there that does not resolve goes
+   in as NULL. The host's records past the recording's extent are zeroed, so the host's written
+   extent is the recording's afterwards, by the scan's own rule. The camera's follow is the
+   viewer's own and is left: it points into the pool, which never moves, and the camera reads
+   only a record's position. */
+static void proj_put(const Lv* L, const RecWorld* W)
+{
+    char* pool = *(char**)(L->ta + OFF_PROJ);
+    unsigned count = W->nproj, hw = W->proj_hw, i, k, hwh, ch;
+    if (!pool) return;
+    if (count > hw || hw > TAGPU_LIM_PROJ) {
+        if (!s_gst.refused++)
+            note("replay: the projectile pool not written at GameTime %u: a count of %u and an "
+                 "extent of %u past its %u records", L->now, count, hw, (unsigned)TAGPU_LIM_PROJ);
+        goto empty;
+    }
+    for (i = 0; i < count; i++) {
+        const unsigned char* img = W->proj + (size_t)i * REC_PROJ_IMAGE;
+        for (k = 0; k < sizeof tagpu_replay_layout / sizeof tagpu_replay_layout[0]; k++) {
+            const ReplayLayoutRow* r = &tagpu_replay_layout[k];
+            uint32_t id;
+            char* p;
+            if (r->record != RL_PROJ || r->cls != RL_ID) continue;
+            memcpy(&id, img + r->offset, 4);
+            if (!proj_ptr(L, pool, r->target, id, &p) || (!r->offset && !id)) {
+                if (!s_gst.refused++)
+                    note("replay: the projectile pool not written at GameTime %u: record %u's %s "
+                         "is ID %u", L->now, i, r->name, id);
+                goto empty;
+            }
+        }
+    }
+    memcpy(&ch, L->ta + OFF_NPROJ, 4);
+    hwh = proj_extent(pool, hw);
+    if (hwh < ch && ch <= TAGPU_LIM_PROJ) hwh = ch;
+    for (i = 0; i < hw; i++) {
+        const unsigned char* img = W->proj + (size_t)i * REC_PROJ_IMAGE;
+        char* rec = pool + (size_t)i * REC_PROJ_BYTES;
+        put_masked(rec, (const uint32_t*)img, s_jval, 0, REC_PROJ_BYTES);
+        for (k = 0; k < sizeof tagpu_replay_layout / sizeof tagpu_replay_layout[0]; k++) {
+            const ReplayLayoutRow* r = &tagpu_replay_layout[k];
+            uint32_t id;
+            char* p;
+            if (r->record != RL_PROJ || r->cls != RL_ID) continue;
+            memcpy(&id, img + r->offset, 4);
+            if (!proj_ptr(L, pool, r->target, id, &p)) p = NULL;
+            memcpy(rec + r->offset, &p, 4);
+        }
+    }
+    if (hwh > hw)
+        memset(pool + (size_t)hw * REC_PROJ_BYTES, 0, (size_t)(hwh - hw) * REC_PROJ_BYTES);
+    memcpy(L->ta + OFF_NPROJ, &count, 4);
+    return;
+empty:
+    {
+        char* follow;
+        unsigned zero = 0;
+        memcpy(L->ta + OFF_NPROJ, &zero, 4);
+        memcpy(&follow, L->ta + OFF_FOLLOW, 4);
+        if (follow >= pool && follow < pool + (size_t)TAGPU_LIM_PROJ * REC_PROJ_BYTES)
+            memcpy(L->ta + OFF_FOLLOW, &zero, 4);
+    }
+}
+
+/* the world's globals and pool into the host (the head of this section) */
+static void recorded_put(const Lv* L, const RecWorld* W)
+{
+    masks_init();
+    los_react(L->ta, W);
+    globals_put(L->ta, W);
+    proj_put(L, W);
+    s_gst.puts++;
+}
+
+void __cdecl tagpu_replay_capture(void)
+{
+    char* ta;
+    Lv L;
+    const RecWorld* W;
+    if (!tagpu_puppet_on() || !s_rd || s_dead || s_first || s_over) return;
+    ta = ta_main();
+    if (!ta || !level_of(ta, &L)) return;
+    W = recr_world(s_rd);
+    if (W->tick != L.now) {
+        s_gst.late++;
+        note("replay: the capture point of GameTime %u holds iteration %u: its globals and "
+             "projectiles not written", L.now, W->tick);
+        return;
+    }
+    recorded_put(&L, W);
+}
+
+/* ---- the frame visit ------------------------------------------------------------------------ */
+
+#define TRIGGER    SIM_TOOL_FILE("tagpu_replay.trigger")
+#define TRIGGER_MS 100              /* the most often the trigger is looked for: the engine draws
+                                       330 to 4900 times a second (tagpu_packet_pub.c)          */
+
+/* The trigger, `dump <name>`: one line, the file deleted whatever it held. A dump is armed for
+   the recorder's next capture point (tagpu_rec_dump_arm), on any level in play, live or playing;
+   while paused that is the first tick after the pause. */
+static void trigger_read(void)
+{
+    static DWORD s_looked;
+    char line[96], name[40];
+    DWORD now = GetTickCount();
+    FILE* f;
+    int end = 0;
+    size_t n = 0;
+    if (now - s_looked < TRIGGER_MS) return;
+    s_looked = now;
+    if (GetFileAttributesA(TRIGGER) == INVALID_FILE_ATTRIBUTES) return;
+    f = fopen(TRIGGER, "rb");
+    if (f) {
+        n = fread(line, 1, sizeof line - 1, f);
+        fclose(f);
+    }
+    line[n] = 0;
+    DeleteFileA(TRIGGER);
+    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
+        line[--n] = 0;
+    if (sscanf(line, "dump %39s%n", name, &end) == 1 && !line[end]) {
+        tagpu_rec_dump_arm(name);
+        return;
+    }
+    tagpu_logf("replay: %s: not understood: %s", TRIGGER, line);
+}
+
+/* THE FRAME VISIT, before the in-play draw call 0x4969CD, on the game thread, between two sim
+   steps and on paused frames too: the trigger, then on a level that plays a recording, once a
+   GameTime, what the draw after a step shows (THE GLOBALS AND THE PROJECTILES). */
+static void __cdecl tagpu_replay_frame(void)
+{
+    char* ta;
+    unsigned now;
+    Lv L;
+    const RecWorld* W;
+    trigger_read();
+    if (!tagpu_puppet_on() || !s_rd || s_dead || s_first || s_over) return;
+    ta = ta_main();
+    if (!ta) return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    W = recr_world(s_rd);
+    if (now == s_frame_tick || W->tick != now + 1 || !level_of(ta, &L)) return;
+    s_frame_tick = now;
+    recorded_put(&L, W);
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -2431,6 +2774,10 @@ static void counts_log(const char* when, unsigned now)
                s_fst.deaths, s_fst.dmissed, s_fst.left, s_fst.cells,
                s_fst.wrecks, s_fst.cstruct, s_fst.wstruct, s_fst.cbad, s_fst.wbad, s_fst.heads,
                s_fst.cursor);
+    tagpu_logf("replay: %s: globals and projectiles: written %u times, %u capture points holding "
+               "another iteration; the pool refused %u times; the sight mode changed %u times, "
+               "%u temporary sight records dropped, %u changes not made", s_name, s_gst.puts,
+               s_gst.late, s_gst.refused, s_gst.reacts, s_gst.dropped, s_gst.unbounded);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
@@ -2607,12 +2954,61 @@ static unsigned char* after_call(unsigned engine, void (__cdecl* fn)(void))
     return s;
 }
 
+/* `fn` with every register and the flags kept, then a jump to `engine`: entered by the site's
+   call, so `engine` runs with the site's own return address on top */
+static unsigned char* before_call(unsigned engine, void (__cdecl* fn)(void))
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char* p = s;
+    if (!s) return NULL;
+    *p++ = 0x9C;                                        /* pushfd */
+    *p++ = 0x60;                                        /* pushad */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)fn); p += 4;
+    *p++ = 0x61;                                        /* popad  */
+    *p++ = 0x9D;                                        /* popfd  */
+    *p++ = 0xE9; tagpu_detour_rel(p, engine); p += 4;  /* jmp    */
+    return s;
+}
+
+/* The frame visit's site: the in-play draw call `call 0x468CF0` at 0x4969CD (`push ebx; push ebx`
+   before it, DISASSEMBLED). Two facts it rests on:
+   - the stub is entered by the site's call and leaves by a jump, so DrawGameScreen runs with the
+     site's own return address 0x4969D2 on top: the in-play gate of the observers on 0x468CF0
+     (tagpu_packet_pub.c, before_draw; tagpu_menu.c) sees exactly the frames it saw;
+   - it is reached on paused frames: the pause test (0x496920..0x496926) jumps over only the
+     scheduler 0x495230 and the tick 0x495490, and every path through the frame callback 0x496790
+     falls through to 0x4969CD (DISASSEMBLED; tagpu_scenario.c rests on the same reading).
+   The scenario applier's tick hook lands at the next instruction, 0x4969D2..0x4969D6: disjoint
+   bytes. Installed on its own, before the play sites, since the trigger's `dump` serves live
+   recordings too. */
+static void frame_site_init(void)
+{
+    enum { DRAW_SITE = 0x004969CDu, DRAW = 0x00468CF0u };
+    unsigned char* stub;
+    int ok = 1;
+    if (!call_is(DRAW_SITE, DRAW)) {
+        tagpu_logf("replay: the frame visit at 0x4969CD holds other bytes: no trigger, so no dumps "
+                   "and no seeks");
+        return;
+    }
+    stub = before_call(DRAW, tagpu_replay_frame);
+    if (stub) call_write(DRAW_SITE, stub, &ok);
+    if (!stub || !ok) {
+        tagpu_detour_stub_free(stub);
+        tagpu_logf("replay: FAILED the frame visit at 0x4969CD could not be written: no "
+                   "trigger, so no dumps and no seeks");
+        return;
+    }
+    tagpu_logf("replay: the frame visit at 0x4969CD in");
+}
+
 void tagpu_replay_init(void)
 {
     enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu };
     static const unsigned char SAVE[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };   /* mov eax,[main] */
     unsigned char *fill, *persist, *skip, *p;
     int ok = 1;
+    frame_site_init();
     if (!call_is(FILL, 0x0047A760u) || !call_is(PERSIST, 0x00430F00u) ||
         !call_is(START1, 0x00496EE0u) || !call_is(START2, 0x00496EE0u)) {
         tagpu_logf("replay: the Start's or the loader's calls hold other bytes: no replays");

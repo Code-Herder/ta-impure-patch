@@ -7,11 +7,19 @@
    Start then loads a level whose recorded players are puppet seats (tagpu_puppet.h), and this
    module applies the recording to them, iteration by iteration. */
 
-/* DllMain's attach: the Start's calls of the seat fill (0x47B092) and of the settings persist
-   (0x47B09C), the loader's two start-unit calls (0x497963, 0x497ACD) and an observer on the
-   settings save (0x430F00), byte-matched and installed all or none. Without them a request is
-   never read. */
+/* DllMain's attach: first the frame visit, the in-play draw call 0x4969CD, on its own -- it reads
+   the trigger tagpu_replay.trigger, whose `dump` serves live recordings too, and writes what the
+   draw shows on a level that plays a recording; then the Start's calls of the seat fill
+   (0x47B092) and of the settings persist (0x47B09C), the loader's two start-unit calls (0x497963,
+   0x497ACD) and an observer on the settings save (0x430F00), byte-matched and installed all or
+   none. Without those a request is never read. */
 void tagpu_replay_init(void);
+
+/* B2's stub at the sim step's unit-tick call (0x4954ED) calls this first, before the recorder's
+   capture and the unit tick, on the game thread: on a level that plays a recording, the
+   recording's globals and projectile pool at the capture point (tagpu_replay.c, THE GLOBALS AND
+   THE PROJECTILES). */
+void __cdecl tagpu_replay_capture(void);
 
 /* B2's stub at the sim step's unit-tick call (0x4954ED), after the unit tick returns and before
    the rest of the iteration, on the game thread. */

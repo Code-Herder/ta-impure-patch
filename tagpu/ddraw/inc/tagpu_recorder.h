@@ -8,12 +8,14 @@
 
 #include <windows.h>
 
-/* B2's stub at the sim step's call of the unit tick (0x4954ED) calls this first, on the game
-   thread, between two iterations. */
+/* B2's stub at the sim step's call of the unit tick (0x4954ED) calls this on the game thread,
+   between two iterations, after the replay's capture-point write (tagpu_replay_capture), so that a
+   dump on a level that plays a recording holds what the replay wrote there. */
 void __cdecl tagpu_rec_capture(void);
 
 /* Arms the harness's dump `name` -- 1 to 39 letters, digits, '-' and '_' -- which tagpu_rec_capture
-   takes at its next call, the capture point, on any level in play, recorded or playing: the
+   takes at its next call, the capture point, on any level in play, recorded or playing (the
+   replay's frame visit arms it from the trigger's `dump <name>`, tagpu_replay.c): the
    level's images as a stored snapshot and the main block and .data whole, in
    replays\dump-<name>.bin. 0 when the name is refused, logged. Game thread. */
 int tagpu_rec_dump_arm(const char* name);

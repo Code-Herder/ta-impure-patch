@@ -133,7 +133,6 @@
 #define SPAN_MAX       0x7000       /* the most image bytes one RK_TABLE_SPAN carries; a declared
                                        row wider than this is refused, since a row goes whole  */
 #define SPAN_GAP       8            /* unchanged bytes a span bridges rather than splitting        */
-#define DUMP_POLL      32           /* captures between two looks for the trigger                 */
 #define HEADER_MAX     0xFF00       /* an RK_HEADER's body; its length is a u16                    */
 #define IMG_DWORDS     (REC_PLAYER_DWORDS > REC_UNIT_DWORDS ? REC_PLAYER_DWORDS : REC_UNIT_DWORDS)
 #define ORD_SCRATCH    (REC_ORDERS_MAX * REC_ORDER_IMAGE)
@@ -577,7 +576,6 @@ static void feat_log(const Rec* r);
 enum { ST_IDLE, ST_RECORDING, ST_DONE };        /* DONE: the rest of this level is not recorded */
 static Rec*     s_rec;
 static int      s_state = ST_IDLE;
-static unsigned s_polls;
 
 /* THE GAME THREAD'S RECORDING. s_tid is the recording's game thread while s_rec is set, and 0
    otherwise; only that thread writes either. An event hook compares s_tid with its own thread
@@ -1805,8 +1803,6 @@ static int cap_proj(Rec* r, const Level* L)
 
 /* ---- the harness's dump --------------------------------------------------------------------- */
 
-#define DUMP_TRIGGER SIM_TOOL_FILE("tagpu_replay.trigger")
-
 static FILE*         s_dump;
 static unsigned      s_dump_raw;
 static unsigned long s_dump_crc;
@@ -2050,27 +2046,6 @@ int tagpu_rec_dump_arm(const char* name)
     memcpy(s_dump_name, name, n);
     s_dump_name[n] = 0;
     return 1;
-}
-
-/* `dump <name>` armed for this capture point; the trigger is consumed either way */
-static void dump_poll(void)
-{
-    char line[96], name[40];
-    FILE* f;
-    if (GetFileAttributesA(DUMP_TRIGGER) == INVALID_FILE_ATTRIBUTES) return;
-    f = fopen(DUMP_TRIGGER, "rb");
-    line[0] = 0;
-    if (f) {
-        size_t n = fread(line, 1, sizeof line - 1, f);
-        line[n] = 0;
-        fclose(f);
-    }
-    DeleteFileA(DUMP_TRIGGER);
-    if (sscanf(line, "dump %39s", name) != 1) {
-        tagpu_logf("recorder: %s: not understood (only `dump <name>`)", DUMP_TRIGGER);
-        return;
-    }
-    tagpu_rec_dump_arm(name);
 }
 
 /* ---- the events ----------------------------------------------------------------------------- */
@@ -3524,7 +3499,6 @@ void __cdecl tagpu_rec_capture(void)
             }
         }
     }
-    if (++s_polls % DUMP_POLL == 0) dump_poll();
     if (s_dump_name[0]) {
         dump_write(&L, tick, s_dump_name);
         s_dump_name[0] = 0;
