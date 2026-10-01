@@ -1014,7 +1014,15 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   the start, in everything the recording carries, and everything else it keeps is made by the
   creates, reset to what a level start gives, or set from T. R0 positions the reader and bounds the
   world at T — the features' lists and anchors, the buckets the units go into, the pool, the
-  tables, LosType — and refuses the seek on the first failure, touching nothing. Then the
+  tables, LosType — and the host's clock, and refuses the seek on the first failure, touching
+  nothing. A host at GameTime 0 (before the level's first step, or after a seek to the recording's
+  first iteration that no step has followed) is refused: the expiry `0x482130` removes a temporary
+  sight record only while its expiry is below GameTime (an unsigned compare, `0x48215C`), so the
+  drop below could remove none of the death vision the kills add. A recorded table is paired only
+  with a declaration the recorder records (`tagpu_simreg_recorded`, the one test both sides read:
+  `SIM_STATE`, never a lock, code, a guard, a TLS slot or a DLL-held engine pool), so no header can
+  name another into the rebuild's writes; a heap table sized otherwise than the recording's is
+  counted with the values left. Then the
   rebuild's kills are kept from being the recording's eliminations (a twentieth puppet gate, on
   the skirmish elimination `0x47BD70`, while the rebuild runs); the pool is emptied; every unit is
   killed on the clock the host holds, through C4's destructor wrap with severity and corpse 0; every
@@ -1039,7 +1047,8 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   rebuild <ms>); units <k> killed, <m> made, <r> refused`, then `replay: <name>: the seek to <T>
   wrote: ...` with the rebuild's counts (`units' bookkeeping from T: <w> water states, <s> state
   bytes, <k> sight stamps, <r> refused` among them); a refusal is `replay: <name>: seek to <T>
-  refused: <why>`. A playback that has played to its end, or cannot be read on, still seeks: the
+  refused: <why>`. A seek's dump is armed for T itself, so a second seek before a step drops it
+  with its own line rather than taking it at another GameTime under the first seek's name. A playback that has played to its end, or cannot be read on, still seeks: the
   reader positions itself from its index whatever the play state. Only the level's end refuses, and
   the replay logs that itself (`replay: <name> at its level's end, GameTime <t>: the recording had
   ended before it` when it had).

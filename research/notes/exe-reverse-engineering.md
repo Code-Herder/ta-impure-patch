@@ -2401,11 +2401,13 @@ removal still decrements [DISASSEMBLED; whether any unit type reaches it is not 
 under true LOS (`0x482920`), only when the dying unit's owner is the **viewed** player, expiring 60
 ticks later (`+0x1C`, `0x4829C4`); while it lives it holds a stamp in that player's counters. They
 leave only through the expiry `0x482130` (no argument, plain `ret`), which removes each record with
-`+0x1C` below GameTime through `0x481D50` (`0x482161`), compacts the rest and writes the count
+`+0x1C` below GameTime through `0x481D50` (`0x482161`; the compare is unsigned, `cmp ecx,edx; jae` at
+`0x48215C..0x48215E`, so at GameTime 0 it removes none), compacts the rest and writes the count
 (`0x482260`). **The engine has no mid-level way to drop them all**: the count is zeroed only by
 LoadMap (`0x483D92`) and by `0x481500`, which, like the block's free `0x481530` and the predicate
 `0x482110`, has no caller. Setting the count to 0 would leave each record's stamp in the counters
-for good. The seek drops them by setting every `+0x1C` to 0 and calling `0x482130`.
+for good. The seek drops them by setting every `+0x1C` to 0 and calling `0x482130`, and refuses to
+run at GameTime 0, where that removes nothing [DISASSEMBLED].
 
 **GameTime deadlines the recording does not carry, and how the engine resets them.**
 
