@@ -1647,17 +1647,26 @@ static void ord_patch(const Lv* L, char* n, const unsigned char* img, unsigned s
     }
 }
 
-/* a node built from its image and linked at the tail of `list`; 0 when no block */
+/* A node built from its image and linked at the tail of `list`; 0 when no block. Its target ends
+   as ord_patch sets one: the constructor 0x43A0C0 sets the reference through 0x4895C0 (0x43A0E3)
+   and, when the action's descriptor flags lack bit 9 (+0x42 & 0x200, copied at
+   0x43A18F..0x43A196), clears it again with 0x489690(NULL) (0x43A1B6..0x43A1C1); the recording
+   machine's handlers set such a node's target afterwards through 0x489690 (DISASSEMBLED; MEASURED
+   2026-10-01, action 0x19's node in the stock fixture names the nanoframe 502 with bit 9 clear).
+   So the target goes through the same setter, bounded by ord_target as every later step's is. */
 static int ord_build(const Lv* L, unsigned slot, unsigned list, const unsigned char* img)
 {
     char* unit = unit_at(L, slot);
     char* n = (char*)E_MemAlloc(REC_ORDER_BYTES);
+    char* target;
+    const char* ht;
     uint32_t rid, flags, want;
     int32_t pos[3];
     if (!n) return 0;
     memcpy(&rid, img + ORD_TARGET, 4);
     memcpy(pos, img + 0x22, 12);
-    E_OrdMake(n, img[ORD_ACTION], ord_target(L, rid), pos, 0, 0, 0);
+    target = ord_target(L, rid);
+    E_OrdMake(n, img[ORD_ACTION], target, pos, 0, 0, 0);
     ord_values(L, n, img, slot);
     /* the linker picks the list by the node's flag: the recorded flag when it agrees with the
        list the recording holds the node on, which the engine's linkers keep; else it is set for
@@ -1667,6 +1676,8 @@ static int ord_build(const Lv* L, unsigned slot, unsigned list, const unsigned c
     memcpy(n + ORD_FLAGS, &want, 4);
     E_OrdLink(unit, n);
     memcpy(n + ORD_FLAGS, &flags, 4);
+    memcpy(&ht, n + ORD_TARGET, 4);
+    if (ht != target) E_RefSet(n + ORD_REF, target);
     s_st.obuilt++;
     return 1;
 }
