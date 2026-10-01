@@ -4425,7 +4425,8 @@ static void trigger_read(void)
    poison check's comparison exact: a frame dump <name>-a; the TRANSIENT declarations put back to
    the values saved at the playing's first frame visit (tagpu_simreg.h); the seek to T with the
    poison check; a frame dump <name>-b; one line. tarec compare-dumps A B must be EQUAL. One the
-   host passes is dropped with a line: a frame can run several steps, and the harness re-arms. */
+   host passes is dropped with a line (a frame can run several steps), which tareplay reports as
+   could not run. */
 static void rt_arm(const char* name, unsigned T)
 {
     size_t i, n = strlen(name);

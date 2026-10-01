@@ -24,13 +24,18 @@ residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL. Passing dumps are 
 --keep.
 
 Each worker owns one tacli instance, tareplay-<k>, pinned to an Xvfb it reserves by -displayfd,
-for the whole run; nothing is ever stopped by name or pattern, only by tacli or by the PID this
-tool started. Exit 0: every check passed; 1: a named failure; 2: something could not run.
+for the whole run, and holds an exclusive lock on INSTANCES/tareplay-<k>.lock for as long: a k
+another run holds is skipped, so two runs never touch each other's games. Nothing is ever stopped
+by name or pattern, only by tacli on an instance this run holds, or by the PID it started.
+SIGTERM or Ctrl-C stops the run: no new game starts, each game in progress is stopped at its next
+wait, and every worker stops its instance and its Xvfb. Exit 0: every check passed; 1: a named
+failure; 2: something could not run (and nothing failed by name).
 
 The output folder (default ~/.local/share/ta-replay/runs/<time>, or $TAREPLAY_OUT) is outside the
 repository: its logs carry absolute paths.
 """
 import argparse
+import fcntl
 import datetime
 import hashlib
 import json
@@ -83,6 +88,7 @@ def main_checkout() -> Path:
 
 INSTANCES = main_checkout() / "tagpu" / "instances"
 PRINT = threading.Lock()
+STOP = threading.Event()        # set by SIGTERM / Ctrl-C: every wait gives up, no job starts
 
 
 def say(*a):
@@ -96,6 +102,17 @@ class CouldNotRun(Exception):
 
 class Failed(Exception):
     """A named failure of the change (exit 1)."""
+
+
+def stopping():
+    if STOP.is_set():
+        raise CouldNotRun("the run was stopped")
+
+
+def nap(s):
+    """A sleep that a stopped run cuts short."""
+    if STOP.wait(s):
+        raise CouldNotRun("the run was stopped")
 
 
 # ---- Xvfb and the instance ------------------------------------------------------------------
@@ -166,10 +183,26 @@ def last(text):
 class Worker:
     """One tacli instance on one Xvfb, for the whole run."""
 
-    def __init__(self, k, out):
-        self.name = f"{PREFIX}{k}"
+    def __init__(self, out):
+        self.lock = None
+        for k in range(1, 100):
+            INSTANCES.mkdir(parents=True, exist_ok=True)
+            f = open(INSTANCES / f"{PREFIX}{k}.lock", "w")
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                f.close()
+                continue
+            self.lock, self.name = f, f"{PREFIX}{k}"
+            break
+        if not self.lock:
+            raise CouldNotRun("every tareplay-<k> instance is held by another run")
         self.out = out
-        self.xvfb = start_xvfb()
+        try:
+            self.xvfb = start_xvfb()
+        except BaseException:
+            self.lock.close()
+            raise
         self.gamedir = INSTANCES / self.name / "gamedir"
         try:
             if (INSTANCES / self.name).is_dir():
@@ -183,12 +216,14 @@ class Worker:
             tacli("arm", self.name, "recorder.on")
         except BaseException:
             stop_xvfb(self.xvfb)
+            self.lock.close()
             raise
         say(f"{self.name} on Xvfb {self.xvfb.display} (pid {self.xvfb.pid})")
 
     def close(self):
         tacli("stop", self.name, "--hard", timeout=120)
         stop_xvfb(self.xvfb)
+        self.lock.close()
 
     def stop(self):
         tacli("stop", self.name, timeout=120)
@@ -263,7 +298,7 @@ class Log:
             start = len(self.lines)
             if time.time() >= end:
                 return None
-            time.sleep(0.4)
+            nap(0.4)
             self.read()
 
 
@@ -370,7 +405,12 @@ def live(w, fx, Ts, out):
     for name, T in zip(names, (Ts[0], Ts[-1])):
         arm_dump(w, log, name, T)
     steps = sorted(fix.get("steps", []), key=lambda s: s[0])
+    # a frozen game or a level that ends early stops here: four times the end's real time
+    deadline = time.time() + 120 + 4 * fix["end"] / 30
     while True:
+        if time.time() > deadline:
+            raise CouldNotRun(f"the live game did not reach GameTime {fix['end']} in "
+                              f"{120 + 4 * fix['end'] / 30:.0f} s (at {w.gametime()})")
         g = w.gametime()
         while steps and steps[0][0] <= g:
             _, kind, arg = steps.pop(0)
@@ -378,7 +418,7 @@ def live(w, fx, Ts, out):
         if g >= fix["end"] and not steps:
             break
         log.read()
-        time.sleep(0.5)
+        nap(0.5)
     n = len(log.lines)
     rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
     if rc:
@@ -442,46 +482,58 @@ def tarec_run(*args):
     return r.returncode, r.stdout + r.stderr
 
 
+PASS, FAIL, UNRUN = "pass", "FAIL", "could not run"
+
+
 def checks(fx):
-    """Every check of a fixture whose processes ran: (name, ok, detail) each."""
-    rec, Ts, out = fx["rec"], fx["Ts"], fx["out"]
+    """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
+    read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
+    rec, Ts, out, ran = fx["rec"], fx["Ts"], fx["out"], fx["procs"]
     res = []
     rc, o = tarec_run("info", rec)
     m = re.search(r"ended: (.*)", o)
     end = m.group(1) if m else "no end block"
     clean = (m and "complete" in end and " 0 id rows outside" in end and
              " 0 nano sprays uncredited" in end)
-    res.append(("the end block", bool(clean), end))
+    res.append(("the end block", PASS if clean else FAIL if m else UNRUN, end))
     rc, o = tarec_run("check", rec)
-    res.append(("tarec check", rc == 0, last(o) if rc == 0 else o.strip()))
+    res.append(("tarec check", PASS if rc == 0 else FAIL if rc == 1 else UNRUN,
+                last(o) if rc == 0 else o.strip()))
 
     def compare(label, *args, files=()):
         missing = [f for f in files if not Path(f).exists()]
         if missing:
-            res.append((label, False, f"no {', '.join(Path(f).name for f in missing)}"))
+            res.append((label, UNRUN, f"no {', '.join(Path(f).name for f in missing)}"))
             return
         rc, o = tarec_run(*args)
-        res.append((label, rc == 0, last(o) if rc == 0 else o.strip()))
+        res.append((label, PASS if rc == 0 else FAIL if rc == 1 else UNRUN,
+                    last(o) if rc == 0 else o.strip()))
         if rc == 0:
             fx["passed"] += list(files)
 
-    for proc, names in (("L", [f"l{Ts[0]}", f"l{Ts[-1]}"]),):
-        for n in names:
-            d = out / "L" / f"dump-{n}.bin"
-            compare(f"{proc} {n}", "compare", rec, d, files=[d])
-    for proc, names in (("P", [f"p{Ts[0]}", f"p{Ts[-1]}"]),
-                        ("R", [f"r{Ts[0]}"] + [f"rt{T}c" for T in Ts[1:]]),
-                        ("Q", [f"q{Ts[0]}"])):
-        for n in names:
+    for n in (f"l{Ts[0]}", f"l{Ts[-1]}"):
+        d = out / "L" / f"dump-{n}.bin"
+        compare(f"L {n}", "compare", rec, d, files=[d])
+    later = {T: [U for U in Ts[1:] if U > T and U <= T + CONTINUE] for T in Ts[1:]}
+    for proc, names in (("P", [(f"p{Ts[0]}", ""), (f"p{Ts[-1]}", "")]),
+                        ("R", [(f"r{Ts[0]}", "")] +
+                              [(f"rt{T}c", f" (after the round trips at {' and '.join(map(str, [T] + later[T]))})")
+                               for T in Ts[1:]]),
+                        ("Q", [(f"q{Ts[0]}", "")])):
+        if ran.get(proc) != "ran":
+            continue
+        for n, note in names:
             d = out / proc / f"dump-{n}.bin"
-            compare(f"{proc} {n}", "compare", "--puppet", rec, d, files=[d])
-    for T in Ts[1:]:
-        line = fx["rt"].get(f"rt{T}", "")
-        m = re.search(r"residue (\d+)", line)
-        res.append((f"round trip {T}: the poison check", bool(m) and m.group(1) == "0",
-                    line or "no line"))
-        a, b = out / "R" / f"dump-rt{T}-a.bin", out / "R" / f"dump-rt{T}-b.bin"
-        compare(f"round trip {T}: A against B", "compare-dumps", rec, a, b, files=[a, b])
+            compare(f"{proc} {n}{note}", "compare", "--puppet", rec, d, files=[d])
+    if ran.get("R") == "ran":
+        for T in Ts[1:]:
+            line = fx["rt"].get(f"rt{T}", "")
+            m = re.search(r"(\d+) tables poisoned, residue (\d+)", line)
+            ok = bool(m) and int(m.group(1)) > 0 and m.group(2) == "0"
+            res.append((f"round trip {T}: the poison check", PASS if ok else FAIL if m else UNRUN,
+                        line or "no line"))
+            a, b = out / "R" / f"dump-rt{T}-a.bin", out / "R" / f"dump-rt{T}-b.bin"
+            compare(f"round trip {T}: A against B", "compare-dumps", rec, a, b, files=[a, b])
     return res
 
 
@@ -518,11 +570,14 @@ class Run:
             self.pending -= 1
 
     def job(self, w, name, proc):
+        """One process. Anything that stops it short of its claim -- a tool's timeout, an
+        unexpected answer, a stopped run -- is recorded as could not run, never lost."""
         fx = self.fx[name]
         Ts, out = fx["Ts"], fx["out"] / proc
         t0 = time.time()
         say(f"{name} {proc}: start on {w.name}")
         try:
+            stopping()
             if proc == "L":
                 fx["rec"] = live(w, fx, Ts, out)
                 h = tarec.header_only(str(fx["rec"]))
@@ -539,11 +594,12 @@ class Run:
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
             fx["procs"][proc] = "ran"
-        except (CouldNotRun, Failed) as e:
+        except Exception as e:
             kind = "FAILED" if isinstance(e, Failed) else "could not run"
+            why = str(e) if isinstance(e, (CouldNotRun, Failed)) else f"{type(e).__name__}: {e}"
             fx["procs"][proc] = kind
-            fx["problems"].append((proc, kind, str(e)))
-            say(f"{name} {proc}: {kind}: {e}")
+            fx["problems"].append((proc, kind, why))
+            say(f"{name} {proc}: {kind}: {why}")
             try:
                 w.collect(out)
                 w.stop()
@@ -551,14 +607,14 @@ class Run:
                 pass
         say(f"{name} {proc}: {time.time() - t0:.0f} s")
 
-    def worker(self, k):
+    def worker(self):
         try:
-            w = Worker(k, self.out)
-        except CouldNotRun as e:
-            say(f"worker {k}: {e}")
+            w = Worker(self.out)
+        except Exception as e:
+            say(f"a worker did not start: {e}")
             return
         try:
-            while True:
+            while not STOP.is_set():
                 try:
                     name, proc = self.q.get(timeout=2)
                 except queue.Empty:
@@ -583,12 +639,18 @@ def report(run, keep):
             lines.append(f"   {proc} {kind.upper()}: {why}")
             failed |= kind == "FAILED"
             unrun |= kind != "FAILED"
+        for proc in ("L", "P", "R", "Q"):
+            if proc not in fx["procs"]:
+                lines.append(f"   {proc} NEVER RAN")
+                unrun = True
         if fx["procs"].get("L") != "ran":
             continue
-        for label, ok, detail in checks(fx):
-            lines.append(f"   {'pass' if ok else 'FAIL'}  {label}: "
-                         + (detail.splitlines()[0] if ok else detail.replace("\n", "\n         ")))
-            failed |= not ok
+        for label, verdict, detail in checks(fx):
+            lines.append(f"   {verdict:4}  {label}: "
+                         + (detail.splitlines()[0] if verdict == PASS
+                            else detail.replace("\n", "\n         ")))
+            failed |= verdict == FAIL
+            unrun |= verdict == UNRUN
         for T in fx["Ts"][1:]:
             if f"rt{T}" in fx["rt"]:
                 lines.append(f"         {fx['rt'][f'rt{T}']}")
@@ -618,25 +680,22 @@ def cmd_run(args):
     except CouldNotRun as e:
         print(f"tareplay: {e}", file=sys.stderr)
         return 2
-    threads = [threading.Thread(target=run.worker, args=(k,), daemon=True)
-               for k in range(1, args.j + 1)]
+    threads = [threading.Thread(target=run.worker) for _ in range(args.j)]
 
     def interrupted(signum, frame):
-        raise KeyboardInterrupt
+        if not STOP.is_set():
+            say("stopping: no new game starts; each worker stops its game and its Xvfb")
+        STOP.set()
     signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     for t in threads:
         t.start()
-    try:
-        while any(t.is_alive() for t in threads):
-            time.sleep(1)
-    except KeyboardInterrupt:
-        say("interrupted: the workers stop their games and their Xvfbs")
-        for t in threads:
-            t.join()
-        return 2
-    if run.pending:
-        say(f"{run.pending} jobs never ran: no worker could start")
-    return report(run, args.keep) or (2 if run.pending else 0)
+    while any(t.is_alive() for t in threads):
+        time.sleep(1)
+    status = report(run, args.keep)
+    if STOP.is_set():
+        return status or 2
+    return status
 
 
 def cmd_list(args):

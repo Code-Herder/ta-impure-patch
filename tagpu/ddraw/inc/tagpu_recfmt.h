@@ -407,9 +407,11 @@ enum RecTag {
                           every def's name (0x20 bytes at +0), in index order                     */
     RT_GLOBALS,        /* string: replay-globals.tsv's SHA-256, TAGPU_REPLAY_GLOBALS_SHA256       */
     RT_PROJECTILES,    /* u32: the projectile pool's records, TAGPU_LIM_PROJ                      */
-    RT_FRAME,          /* u32, a dump's only: taken at a frame visit, not a capture point, at this
-                          GameTime -- the world holds iteration GameTime+1 less GameTime itself and
-                          what the next step's pump does before its capture point (tagpu_rec_dump_now) */
+    RT_FRAME,          /* u32, a dump's only: taken at a frame visit between two steps, at this
+                          GameTime (tagpu_rec_dump_now). The records hold step GameTime's result,
+                          labelled iteration GameTime+1; the main block and .data images also hold
+                          what the rest of the frame wrote (the draw, the scheduler 0x495230's
+                          pacing words), so a frame dump compares only with another one */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */

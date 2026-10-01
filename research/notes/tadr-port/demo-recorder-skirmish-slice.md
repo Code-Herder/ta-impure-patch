@@ -1346,9 +1346,11 @@ in B2's stub before the unit tick and in the frame visit before the draw.
 **Frame dumps.** `dump <name> now` in the trigger takes a dump at once, at the frame visit that
 reads it, on any level in play (`tagpu_rec_dump_now`; refused with a line when no level is in play,
 the name 1 to 39 letters, digits, `-` and `_`). Its header carries `RT_FRAME`, the GameTime at the
-dump, and its world is read as iteration GameTime+1: between two steps the world holds iteration
-GameTime+1 less GameTime itself and what the next step's pump does before its capture point (the
-engine map's *tick boundaries*). Two frame dumps with one `RT_FRAME` saw no step between them:
+dump, and its records are read as iteration GameTime+1: between two steps they hold step GameTime's
+result. It is not that iteration's capture point: its main block and .data images also hold what the
+rest of the frame wrote — the draw, the next frame's scheduler `0x495230` and its pacing words — and
+GameTime is one lower (the engine map's *tick boundaries*), so a frame dump compares only with
+another frame dump; the round trip's A and B are taken at one frame visit. Two frame dumps with one `RT_FRAME` saw no step between them:
 GameTime rises once a step, at `0x4954C0`. The log line is `recorder: frame dump <name> at GameTime
 <g> (iteration <g+1>) -> <path> ...`. `tools/replay/tarec.py` reads `RT_FRAME`: `compare-dumps`
 labels the pair `frame dump at GameTime <g> (iteration <g+1>)` and refuses a frame dump against a

@@ -2724,7 +2724,10 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   `0x415B30` (`0x49558A`), `0x490C40` (`0x49558F`), `0x437DE0` (`0x495594`), `0x41CA10` (`0x495599`),
   `0x471EB0` (`0x4955BF`), `0x466580` (`0x4955E5`), each timed through `0x4B6560`
   ([*The demo recorder's globals, projectiles and seek*](#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)
-  names them). Once a call, loop or no loop: `0x428BD0`, `0x428BE0`, `0x428BF0` (`0x495674`..`0x49567E`,
+  names them). Last, the argument gates two calls again: `test edi,edi` at `0x49560B` (`je 0x49566C`)
+  and a nonzero `[0x506DBC]` (`0x49560F`) before `0x457D30` (`0x49563A`, its argument the controlled
+  player's block, `main+0x2A42` × 0x14A `+0x1B63` + the index) and `0x4618A0` (`0x495646`, `this` =
+  `0x513000`, argument 0) [names not read], so a skirmish skips those too. Once a call, loop or no loop: `0x428BD0`, `0x428BE0`, `0x428BF0` (`0x495674`..`0x49567E`,
   not read), the chat expiry `0x463EF0` (`0x495683`) and the temporary sight records' expiry
   `0x482130` (`0x495688`).
 - **B2's stub at `0x4954ED`** (`tagpu_patches.c`, the stacked-aircraft installer's `tick` block):
@@ -2746,9 +2749,13 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
 - **The two tick boundaries.** The *capture point* is B2's stub, inside step k after GameTime became
   k and before the unit tick: the world holds iteration k. The *frame visit* is Impure's hook before
   the in-play draw call `0x4969CD`, after `0x495490` returns (and on paused frames, which skip it):
-  GameTime is k and the world holds step k's result, which is iteration k+1 less GameTime's own
-  increment and whatever the next step's pump does before its capture point — nothing, in a
-  skirmish. A frame dump's `RT_FRAME` is that GameTime, and two frame dumps of one `RT_FRAME` saw no
+  GameTime is k and the simulation holds step k's result. A frame dump there is not iteration k+1:
+  between it and the next capture point the rest of `0x496790` runs — the draw `0x468CF0`, input on
+  a live host, the next frame's scheduler `0x495230`, which stores `main+0x38A37`, `+0x38A3B`,
+  `+0x38A3F`, `+0x38A4D`, `+0x38A4F` and the pause word `+0x38A51` — then the next step's GameTime
+  increment (its pump never runs in a skirmish). A dump carries both images whole, so those bytes
+  differ from the capture point's; two dumps taken at one frame visit (the round trip's A and B)
+  share all of it. A frame dump's `RT_FRAME` is that GameTime, and two frame dumps of one `RT_FRAME` saw no
   step between them, since a step raises GameTime exactly once (`0x4954C0`); its other writers are
   the shell's network clock `0x44A696`, the level init, the loader and the load wait (the S3b table),
   outside play [INFERRED from where that table places them], and Impure's seek, which sets it to T−1

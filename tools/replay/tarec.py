@@ -1061,7 +1061,7 @@ def cmd_compare(path, dumps, puppet=False):
     for d in dumps:
         dh, dw = dump_world(d, h)
         if "frame" in dh:
-            # a frame dump holds iteration g+1 less GameTime itself: no capture point's image
+            # a frame dump's images hold what the rest of a frame writes: no capture point's
             print(f"{d}: a frame dump at GameTime {dh['frame']}: compare it with compare-dumps")
             status = 2
             continue
