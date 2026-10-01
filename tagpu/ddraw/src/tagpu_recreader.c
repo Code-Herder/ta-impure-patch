@@ -42,7 +42,9 @@ static const char* const END_REASONS[] = {
     "INCOMPLETE: the level changed without a teardown",
     "INCOMPLETE: the game stopped being a skirmish",
     "INCOMPLETE: an order list could not be recorded",
-    "INCOMPLETE: the features were not the ones it began with"
+    "INCOMPLETE: the features were not the ones it began with",
+    "INCOMPLETE: the projectile pool was not the one it began with, or its count was past its "
+    "records"
 };
 
 /* ---- blocks --------------------------------------------------------------------------------- */

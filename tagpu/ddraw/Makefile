@@ -111,11 +111,12 @@ spirv:
 log-check:
 	../../tools/log-check.sh .
 
-# THE REPLAY LAYOUT (tools/replay-layout-gen.py): replay-layout.tsv lists the bytes of the
-# engine's unit and player records the demo recorder does not record as values, and
-# inc/tagpu_replay_layout.h is generated from it and committed. The build re-derives the header
-# and fails when the two disagree, so an exclusion is always a visible diff of the file. Same
-# placement as the rules above.
+# THE REPLAY LAYOUT AND GLOBALS (tools/replay-layout-gen.py, tools/replay-globals-gen.py):
+# replay-layout.tsv lists the bytes of the engine records the demo recorder does not record as
+# values, replay-globals.tsv the fields of the main block and .data it records, and
+# inc/tagpu_replay_layout.h and inc/tagpu_replay_globals.h are generated from them and committed.
+# The build re-derives each header and fails when it and its file disagree, so a loosening is
+# always a visible diff of a file. Same placement as the rules above.
 replay-layout:
 	../../tools/replay-layout-check.sh .
 

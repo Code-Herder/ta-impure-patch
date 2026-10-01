@@ -1,8 +1,8 @@
 #ifndef TAGPU_RECFMT_H
 #define TAGPU_RECFMT_H
 /* tagpu_recfmt.h -- the demo recorder's records: what the capture puts into the ring, and what a
-   recording's blocks hold (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S1, S2a and
-   S3a).
+   recording's blocks hold (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S1, S2a,
+   S3a and S3b).
    tagpu_recorder.c writes them on the game thread, tagpu_recwriter.c reads them on the writer
    thread, and tools/replay/tarec.py mirrors this file to read a recording back: a change here is
    a change there, and REC_FORMAT says which.
@@ -17,7 +17,10 @@
    are whole dwords, padded with zero; a delta names the dwords that changed. Two images are not:
    a cell of the feature grid, its 13 bytes (the cell record), and a record of the wreck pool,
    its 0x30 bytes, laid out as its def makes it (the wreck3do or the wreckgaf record, REC_WRECK_*
-   below). Everything is little-endian.
+   below). A record of the projectile pool images as its 0x6B bytes padded to a dword, its four
+   pointers as IDs (the proj record). The globals image is the fields replay-globals.tsv lists, one
+   slot each (tagpu_replay_globals.h, which tools/replay-globals-gen.py generates from it). Everything
+   is little-endian.
 
    AN ID is one more than the target's row in its table, so NULL's is 0 and a record of zeros
    images to zeros: the rows a table gains are zero on both sides (RK_TABLE_SIZE), and a row of
@@ -29,8 +32,9 @@
    (tagpu_simreg.h). An event names a unit by its ID, the slot's ID. */
 
 #include <stdint.h>
+#include "tagpu_replay_globals.h"
 
-#define REC_FORMAT        3
+#define REC_FORMAT        4
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */
 #define REC_MOVER_BYTES   0x2F    /* its mover: the creates' allocation (`push 0x2F`, 0x4860C4)  */
@@ -76,6 +80,17 @@
                                      sequence's ID is its field's (offset - 0xAC) / 4 + 1     */
 #define REC_SEQ_FIELDS    8
 #define REC_TEXT_MAX      128   /* the bytes of a reply's text an event carries                */
+#define REC_PROJ_BYTES    0x6B    /* a projectile record (*(main+0x141F7)); the allocation 0x499A30
+                                     holds the pool's records with no slack                     */
+#define REC_PROJ_IMAGE    0x6C
+#define REC_PROJ_DWORDS   (REC_PROJ_IMAGE / 4)                        /* 27                     */
+#define REC_PROJ_BITS     ((REC_PROJ_DWORDS + 7) / 8)                 /* 4 bytes of a delta's bitmap */
+#define REC_PROJ_DELTA_HEAD ((2 + REC_PROJ_BITS + 3) & ~3)            /* 8: the index and the bitmap */
+#define REC_GLOBALS_BITS  ((REC_GLOBALS_DWORDS + 7) / 8)
+#define REC_GLOBALS_DELTA_HEAD ((REC_GLOBALS_BITS + 3) & ~3)          /* the bitmap, to a dword  */
+#define REC_MAIN_BYTES    0x3924D /* the main block: the allocation 0x41D941 makes, less its pad  */
+#define REC_DATA_BYTES    0x2A65C /* .data, from 0x501000: its section's VirtualSize             */
+#define REC_IMAGE_CHUNK   0x8000  /* the most bytes of an image one RK_IMAGE carries             */
 
 _Static_assert(REC_UNIT_IMAGE == ((REC_MOVER_AT + REC_MOVER_BYTES + 3) & ~3), "the unit image");
 _Static_assert(REC_PLAYER_IMAGE == REC_INFO_AT + ((REC_INFO_BYTES + 3) & ~3), "the player image");
@@ -83,6 +98,10 @@ _Static_assert(REC_INFO_AT == ((REC_PLAYER_BYTES + 3) & ~3), "PlayerInfo at a dw
 _Static_assert(REC_ORDER_IMAGE == ((REC_ORDER_BYTES + 3) & ~3), "the order image");
 _Static_assert(8 + REC_ORDERS_CHUNK * REC_ORDER_IMAGE <= 0xFFFF, "an RK_ORDERS fits its length");
 _Static_assert(8 + REC_CELLS_MAX * REC_CELL_BYTES <= 0xFFFF, "an RK_CELLS fits its length");
+_Static_assert(REC_PROJ_IMAGE == ((REC_PROJ_BYTES + 3) & ~3), "the projectile image");
+_Static_assert(REC_PROJ_DWORDS == 27 && REC_PROJ_DELTA_HEAD == 8, "the projectile delta");
+_Static_assert(REC_GLOBALS_DWORDS * 4 <= 0xFFFF, "an RK_GLOBALS fits its length");
+_Static_assert(8 + REC_IMAGE_CHUNK <= 0xFFFF, "an RK_IMAGE fits its length");
 
 /* what an id row holds besides a row's ID */
 #define REC_ID_NULL       0u
@@ -181,7 +200,8 @@ enum RecKind {
     /* THE FEATURES, images like the ones above (the slice note's S3a) */
     RK_CELLS,          /* u16 x, u16 z, u16 cells, u16 0, then `cells` cell images: a run of the
                           grid's row z from column x. The first iteration carries every cell,
-                          the rest the cells that changed. Inside the feature tick's
+                          the rest the cells that changed, a snapshot the cells that differ from
+                          the first iteration's and a dump every cell. Inside the feature tick's
                           RK_EV_FEATURE: the cells that changed since the iteration's images      */
     RK_WRECK,          /* u16 index, u16 0, then the record's image: a record that changed        */
     RK_FEATURES,       /* i32 the active list's head (main+0x14213), i32 the settled list's
@@ -190,6 +210,25 @@ enum RecKind {
     RK_GRID,           /* ring only: u16 columns, u16 rows: every cell's image, the grid's first,
                           is in the ring's `grid` (tagpu_recorder.h), which the writer takes and
                           writes as RK_CELLS where this record stands                             */
+
+    /* THE GLOBALS AND THE PROJECTILES (the slice note's S3b) */
+    RK_GLOBALS,        /* the globals image, REC_GLOBALS_DWORDS dwords: at the first iteration, in
+                          every snapshot and dump, and as a correction                            */
+    RK_GLOBALS_DELTA,  /* u8 bits[REC_GLOBALS_BITS], zero to REC_GLOBALS_DELTA_HEAD, then one u32
+                          for each bit set, lowest first: the dwords of the image that changed    */
+    RK_PROJ_HEAD,      /* u32 the pool's count (main+0x141F3), u32 hw, its written extent: at the
+                          first iteration and when either changed. The records [hw, the pool's
+                          end) are zero: the allocation zeroes them and only an append past the
+                          extent writes one                                                       */
+    RK_PROJ,           /* u16 index, u16 0, the image: record `index`, below hw, whole            */
+    RK_PROJ_DELTA,     /* u16 index, u8 bits[REC_PROJ_BITS], u8 0 x2, then one u32 for each bit
+                          set, lowest first: the dwords of a record's image that changed          */
+    RK_VERIFY_GLOBALS, /* ring only: the globals image read afresh, for the rotating check        */
+    RK_VERIFY_PROJ,    /* ring only: u32 count, u32 hw, u32 first, then the images of the records
+                          [first, first + (len - 12) / REC_PROJ_IMAGE) read afresh                */
+    RK_IMAGE,          /* dump only: u8 which (0 the main block, 1 .data), u8 0, u16 0, u32 the
+                          offset from main or from .data's start, then the bytes from there, at
+                          most REC_IMAGE_CHUNK: the two images whole, for `tarec compare --images` */
     RK_KINDS
 };
 
@@ -232,9 +271,11 @@ enum RecEnd {
     REC_END_MODE,           /* the game stopped being a skirmish                                 */
     REC_END_ORDERS,         /* an order list broke what the capture rests on: longer than
                                REC_ORDERS_MAX, a node that is not one, or no memory for its image */
-    REC_END_FEATURES        /* the feature grid, the wreck pool or the feature defs are not the
+    REC_END_FEATURES,       /* the feature grid, the wreck pool or the feature defs are not the
                                ones the recording began with, or the feature calls nested deeper
                                than the capture tracks                                          */
+    REC_END_PROJ            /* the projectile pool is not the one the recording began with, or
+                               its count is past its records                                    */
 };
 
 /* A recording is REC_MAGIC, then blocks. A block is a RecBlock, then `packed` bytes: the zlib
@@ -259,14 +300,20 @@ _Static_assert(sizeof(RecBlock) == 32, "a block header is 32 bytes");
 enum RecBlockKind {
     RB_HEADER = 1,     /* entries (RecTag): which game this is                                  */
     RB_STREAM,         /* records: iterations, in order, from where the last block ended         */
-    RB_SNAPSHOT,       /* records that build the whole world at `last` from nothing: a TICK, an
-                          RK_UNIT per live unit with the RK_ORDERS of its lists that are not
-                          empty, an RK_PLAYER and an RK_CONTROLLER per player, an RK_VIEWER, an
-                          RK_TABLE_SIZE and its spans per declared table, every cell of the grid,
-                          an RK_WRECK per record that is not all zero, and an RK_FEATURES. A dump is one of
-                          these, stored. It follows the stream block that ends with the events
-                          of the step after `last`, so a reader that starts from it takes those
-                          from the block before                                                 */
+    RB_SNAPSHOT,       /* records that build the whole world at `last`: a TICK, an RK_UNIT per
+                          live unit with the RK_ORDERS of its lists that are not empty, an
+                          RK_PLAYER and an RK_CONTROLLER per player, an RK_VIEWER, an
+                          RK_TABLE_SIZE per declared table and an RK_TABLE_SPAN for each of its
+                          spans that is not all zero (RK_TABLE_SIZE zeroes the table, which
+                          starts empty), the RK_CELLS of every cell that differs from the
+                          recording's first iteration (the base: a reader takes it from the first
+                          iteration it reads, which every playing reads first), an RK_WRECK per
+                          record that is not all zero, an RK_FEATURES, the RK_GLOBALS, and the
+                          RK_PROJ_HEAD with an RK_PROJ per record below its hw. A dump is one of
+                          these, stored, with every cell and no base, and the two images whole
+                          (RK_IMAGE) after the rest. A snapshot follows the stream block that ends
+                          with the events of the step after `last`, so a reader that starts from
+                          it takes those from the block before                                  */
     RB_END             /* entries (RecTag): how the recording ended                              */
 };
 #define RBF_STORED 1u
@@ -302,15 +349,18 @@ enum RecTag {
     RT_FEATURES,       /* u32 the grid's columns (main+0x14233), u32 its rows (+0x14237), u32 the
                           wreck pool's records, u32 the feature defs (+0x14253), u32 FNV-1a of
                           every def's name (0x20 bytes at +0), in index order                     */
+    RT_GLOBALS,        /* string: replay-globals.tsv's SHA-256, TAGPU_REPLAY_GLOBALS_SHA256       */
+    RT_PROJECTILES,    /* u32: the projectile pool's records, TAGPU_LIM_PROJ                      */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */
-    RT_CORRECTIONS,    /* u8 record kind (RK_UNIT, RK_PLAYER, RK_TABLE_SPAN or RK_ORDERS), u8 0,
-                          u16 the table's index or the list (0 for the others), u32 the dword's
-                          offset in the image (REC_UNIT_IMAGE for a unit's liveness,
-                          REC_ORDERS_LENGTH for a list's length), u32 count: one entry for each
-                          dword that differed. Past 256 of them, one entry of kind 0 and offset
-                          0xFFFFFFFF counts the rest                                              */
+    RT_CORRECTIONS,    /* u8 record kind (RK_UNIT, RK_PLAYER, RK_TABLE_SPAN, RK_ORDERS, RK_GLOBALS,
+                          RK_PROJ or RK_PROJ_HEAD), u8 0, u16 the table's index or the list (0 for
+                          the others), u32 the dword's offset in the image (REC_UNIT_IMAGE for a
+                          unit's liveness, REC_ORDERS_LENGTH for a list's length, 0 the count and
+                          4 hw for RK_PROJ_HEAD), u32 count: one entry for each dword that
+                          differed. Past 256 of them, one entry of kind 0 and offset 0xFFFFFFFF
+                          counts the rest                                                         */
     RT_BAD_IDS,        /* u32: id rows found outside their tables, counted each time an image
                           is taken                                                               */
     RT_RING_HIGH,      /* u32: the most bytes the ring held                                     */

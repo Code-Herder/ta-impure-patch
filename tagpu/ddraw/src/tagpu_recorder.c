@@ -171,6 +171,7 @@ static void masks_init(void)
             feat_masks_row(r);
             continue;
         }
+        if (r->record == RL_PROJ) continue;        /* the projectile pool is not recorded yet */
         unsigned at = r->offset + (r->record == RL_MOVER ? REC_MOVER_AT :
                                    r->record == RL_INFO ? REC_INFO_AT : 0);
         if (r->target != RL_T_NONE) {

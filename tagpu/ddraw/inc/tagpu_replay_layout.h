@@ -4,10 +4,10 @@
 #ifndef TAGPU_REPLAY_LAYOUT_H
 #define TAGPU_REPLAY_LAYOUT_H
 
-#define TAGPU_REPLAY_LAYOUT_SHA256 "be09bde1e3f4f5b637ae7f0dac3c82e698e0446584c5d9b687e2b87e5d754214"
-#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "81711d489987a52220b7db86b2b87a33726f37f2f275f95c944697ef54cff538"
+#define TAGPU_REPLAY_LAYOUT_SHA256 "3bceae24f03e6a1e7828774971a5bd20c4604f074682c675fbdd77fc3487e751"
+#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "07ccfc19139e2f78284bde2d9754207f27487f3bbf7109c270103a600e0af070"
 
-enum { RL_UNIT, RL_PLAYER, RL_MOVER, RL_ORDER, RL_INFO, RL_CELL, RL_WRECK3DO, RL_WRECKGAF };
+enum { RL_UNIT, RL_PLAYER, RL_MOVER, RL_ORDER, RL_INFO, RL_CELL, RL_WRECK3DO, RL_WRECKGAF, RL_PROJ };
 enum { RL_ID, RL_OBJECT, RL_CACHE, RL_TIMER, RL_DROP, RL_PUPPET0, RL_PUPPET1 };
 enum {              /* an id row's table and what its pointer names; a row's ID is one more than the row */
     RL_T_NONE,
@@ -18,6 +18,7 @@ enum {              /* an id row's table and what its pointer names; a row's ID 
     RL_T_BUCKET,   /* (pointer - *(main+0x1429F)) / 10; NULL, off-map *(main+0x142B7): own IDs */
     RL_T_OWNED,    /* not a row: the class code of an order node's own object, by its vtable (the restore's table 0x43A918): 0x4FD3B8 2, 0x4FD3F8 3, 0x4FD328 4, 0x4FD358 5, 0x4FD388 6 */
     RL_T_GAFSEQ,   /* not a row: the record's own def's field that holds the pointer, (field - 0xAC) / 4 over FeatureDef +0xAC..+0xC8, the first that does */
+    RL_T_PROJ,     /* (pointer - *(main+0x141F7)) / 0x6B, a record of the projectile pool; a pointer that is not a record's start inside the allocation is REC_ID_BAD */
 };
 
 typedef struct ReplayLayoutRow {
@@ -86,6 +87,10 @@ static const ReplayLayoutRow tagpu_replay_layout[] = {
     { RL_WRECK3DO, RL_OBJECT, RL_T_NONE, 0x004, 4, 0x0u, "model" },
     { RL_WRECKGAF, RL_ID, RL_T_GAFSEQ, 0x00c, 4, 0x0u, "seq" },
     { RL_WRECKGAF, RL_ID, RL_T_GAFSEQ, 0x018, 4, 0x0u, "shadow" },
+    { RL_PROJ, RL_ID, RL_T_WEAPON, 0x000, 4, 0x0u, "weapon" },
+    { RL_PROJ, RL_ID, RL_T_UNIT, 0x04e, 4, 0x0u, "target" },
+    { RL_PROJ, RL_ID, RL_T_UNIT, 0x052, 4, 0x0u, "attacker" },
+    { RL_PROJ, RL_ID, RL_T_PROJ, 0x056, 4, 0x0u, "quarry" },
 };
 
 #endif

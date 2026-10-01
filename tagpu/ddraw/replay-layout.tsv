@@ -5,7 +5,8 @@
 # the owner's decision (CLAUDE.md, *Simulation changes stay replayable*). The feature grid's cells and
 # the wreck pool's records are carried too (demo-recorder-skirmish-slice.md, S3a): a record of the
 # pool is laid out by its def, a 3DO feature's (wreck3do) or a GAF feature's (wreckgaf), and one
-# whose def is outside the defs is imaged as a 3DO one.
+# whose def is outside the defs is imaged as a 3DO one. So are the projectile pool's records (proj,
+# S3b): every byte a value but the four pointers, each its target's ID.
 # tools/replay-layout-gen.py says what the columns and classes mean and generates
 # inc/tagpu_replay_layout.h from this file; the build fails when the two disagree.
 #
@@ -75,3 +76,7 @@ cell	0x00C	1	0x04	drop	drawdefer	0x4698B0,0x469936	DISASSEMBLED 2026-09-30: Draw
 wreck3do	0x004	4	-	object	model	0x423ECB	DISASSEMBLED 2026-09-30: the spawn's instance of the def's model, 0x45A8D0(FeatureDef+0x98) stored at 0x423ECB; the destroy frees it (0x42474F) and zeroes the field (0x424754). The replayed spawn makes its own
 wreckgaf	0x00C	4	-	id:gafseq	seq	0x4B8B30	DISASSEMBLED 2026-09-30: the GAF sequence of the first sequence state, stored by 0x4B8B30 at the state's +8: the burn's FeatureDef+0xB4 (0x423473), FeatureDie's death +0xBC or reclaim +0xC4 (0x42369C)
 wreckgaf	0x018	4	-	id:gafseq	shadow	0x4B8B30	DISASSEMBLED 2026-09-30: the second state's sequence, the shadow: the burn's FeatureDef+0xB8 (0x423489), FeatureDie's +0xC0 or +0xC8 (0x4236B0). It is in use only while record +0x2F bit 2 is set (the tick 0x4243E1, 0x424473 and the draw 0x46A6E8 read it behind that bit) and images as no sequence otherwise: until then it holds what the record's last tenant left
+proj	0x000	4	-	id:weapon	weapon	0x49C740	DISASSEMBLED 2026-09-30: the projectile's WeaponStruct, stored by the init 0x49C740 (0x49C752) at every creation; the burst copy and the compaction copy whole records. Read by the tick, the collision, the draw and the radar; the tick dereferences it in every record below the count
+proj	0x04E	4	-	id:unit	target	0x49B6E0,0x49B720,0x49C740,0x49C9C0,0x49CC20,0x49CDE0,0x49D000,0x49D270,0x49DD60,0x49DF10	DISASSEMBLED 2026-09-30: the target unit, zeroed by every append and by the init (0x49C7CC), set by the builders 0x49C9C0, 0x49CC20 and 0x49CDE0 to their target (0x49CB68, 0x49CD22, 0x49CF55) and zeroed by the tick at a bit-24 weapon's second stage (0x49BB37). Nothing clears it when its unit dies, so it may name a dead or recycled slot (Mode B); its reader, the guidance 0x49B48E, tests the alive bit first
+proj	0x052	4	-	id:unit	attacker	0x49C740	DISASSEMBLED 2026-09-30: the firing unit, 0 for a meteor, stored by the init alone (0x49C7DB, 0x49C857) and never cleared, so a shot in flight keeps a dead or recycled slot; read with no NULL test by the interceptor sends 0x49A792, 0x49A7D3 and the receiver's retarget 0x49D3FA
+proj	0x056	4	-	id:proj	quarry	0x49AE20,0x49B720,0x49C740,0x49CC20	DISASSEMBLED 2026-09-30: an interceptor's quarry, a record of the same pool: zeroed by the init (0x49C7C6), set by the interceptor builder 0x49CC20 (0x49CD25), zeroed at a bit-24 weapon's second stage (0x49BB34) and re-aimed by the compaction 0x49AE20 (0x49AF4B) only for links held by records that moved and only when the quarry survived, so a stale one still names a record inside the allocation

@@ -1,0 +1,81 @@
+# replay-globals.tsv -- the positive list of the main block and .data: every byte of the two images
+# a demo recording carries, and how (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S3b).
+# Neither image can be recorded or applied whole: `main` sits a GetTickCount pad of 0..6993 bytes
+# into its allocation (0x41D924..0x41D9D5), the main block holds heap pointers, and .data holds the
+# main pointer 0x511DE8 itself. So the recording carries the fields this file lists and no other
+# byte of either; a dump carries both images whole, and `tools/replay/tarec.py compare --images`
+# names every differing byte that no row covers. A simulation global this list misses shows up
+# there, by name, as a missing unit field shows up in a dump's compare.
+# tools/replay-globals-gen.py says what the columns mean and generates inc/tagpu_replay_globals.h
+# from this file; the build fails when the two disagree.
+#
+# A FIELD THE SIMULATION STEPS WRITE GOES ON THE LIST unless it is the viewer's own or a cache of
+# the draw: a constant or a scratch value the steps write is a `write` row too, a no-op on a puppet
+# host or overwritten there before it is read. Adding a row is ordinary work. REMOVING A ROW, OR
+# MAKING ONE `hold`, IS A LOOSENING, and the owner's decision (CLAUDE.md, *Simulation changes stay
+# replayable*).
+#
+# LEFT OUT, each for the reason given (the slice note's S3b):
+# - LosType bit 3 (main+0x14281): the fog grid is current, set by the fog rebuild 0x484904 and
+#   cleared to ask for one: the draw's cache.
+# - written in the tick but not simulation, the viewer's own: the camera and the eye (+0x142F3,
+#   +0x142F7, +0x1434B, +0x1434E, +0x1431F..+0x1433B, +0x14371), the radar blink +0x142EF, the
+#   redraw flags +0x142F1, the minimap +0x1436B, OFFSCREEN +0x37E1B, the tracked unit and the GUI
+#   (+0x37E9C, +0x37EBE, +0x2AA7..+0x2CC6), pacing and the game speeds (+0x38A43, +0x38A4B,
+#   +0x38A4D), the profiler (+0x38D85..); in .data the GAF and animation state
+#   (0x511A58..0x511DC8), chat (0x511FB8), the network object (0x513000..), the DLL entry points
+#   (0x51E548..0x51E594), the profile (0x51E710), the scoreboard (0x51E810, 0x51F2C8), the timers
+#   (0x51FBE0..0x51FC84), file, sound and C runtime state (0x51FE00.., 0x526FF0.., 0x52A4EC..)
+#   and per-call scratch (0x501774, 0x51E6A0..0x51E6AC, 0x50A400..0x50A420).
+# - the level's constants, which a fresh process loading the same map and options reproduces: the
+#   wind's minimum and maximum (+0x1425B, +0x1425F), gravity +0x14263, the sea level +0x1427F, the
+#   map's size (+0x14233, +0x14237), the unit limit +0x37EE6, the difficulty +0x37EEE,
+#   ActiveCommanderDeath +0x37EF6, and the meteor config (0x5122F0..0x512317, 0x512324..0x51232B,
+#   0x512338).
+# - the explored map and the temporary sight records: not decided yet (the slice note's S3b,
+#   question batch A).
+#
+# How the writers were found: every instruction whose operand carries the field's displacement or
+# address, each read in context, and the stores through a pointer formed earlier found by reading
+# (the wind's 0x490C8E). A "none found" is a none for those; block copies and indirect calls are not
+# covered by that search.
+#
+# where	offset	size	mask	carried	puppet	name	writers	evidence
+main	0x1B63	3310	-	player	-	players	-	the ten seats' player records, 0x14B each, recorded as RK_PLAYER images under replay-layout.tsv; the eleventh, index 10, only ever means no player and is not carried
+main	0x2A42	1	-	viewer	-	controlled	0x416B25,0x46451B,0x466084,0x47A7DE	DISASSEMBLED 2026-10-01: the player the local game commands, u8; the direct stores by displacement. Recorded by RK_VIEWER when it changes
+main	0x2A43	1	-	viewer	-	viewed	0x416B38,0x416BC1,0x46452D,0x466097,0x47A7D2	DISASSEMBLED 2026-10-01: the player whose view the local game draws, u8; the direct stores by displacement. Recorded by RK_VIEWER when it changes
+main	0x141F3	4	-	proj	-	projcount	0x499A6A,0x49AF76,0x49B70B,0x49B824,0x49C9ED,0x49CC4F,0x49CE0D,0x49D02B,0x49D2D8,0x49D4CF,0x49DDB0,0x49DF3F	DISASSEMBLED 2026-10-01: the projectile pool's count: zeroed by the allocation 0x499A30, rewritten by the compaction 0x49AE20 and incremented by the ten appends, each behind its cap test. Recorded by RK_PROJ_HEAD
+main	0x14213	4	-	features	-	activehead	0x4232F0,0x421F20	DISASSEMBLED 2026-09-30: the wreck pool's active list's head, i32; written through pointers the feature functions (0x4232F0..0x4250FF) form and by the pool's allocation 0x421F20 (function entries). Recorded by RK_FEATURES
+main	0x14217	4	-	features	-	settledhead	0x4232F0,0x421F20	DISASSEMBLED 2026-09-30: the settled list's head, as activehead. Recorded by RK_FEATURES
+main	0x1421B	4	-	features	-	freehead	0x4232F0,0x421F20	DISASSEMBLED 2026-09-30: the free list's head, as activehead. Recorded by RK_FEATURES
+main	0x14257	4	-	features	-	fcursor	0x4240AA,0x4240CC	DISASSEMBLED 2026-09-30: the feature tick's reproduction cursor, a cell index it walks down and wraps to W*H-1. Recorded by RK_FEATURES
+main	0x14281	2	0x0007	globals	react	lostype	0x4166AA,0x416D68,0x416D98,0x417547,0x417555,0x4656B5,0x4656C5,0x495B36,0x495B58,0x495E30,0x495E51,0x497355,0x49737C,0x4973A1,0x497410,0x49742D,0x497450,0x497497,0x4974B4,0x4974D7,0x497633,0x497659,0x49767D,0x497868,0x497876	DISASSEMBLED 2026-09-30: LosType bits 0-2, Mapping, true LOS and the ray fan: the typed commands LOSType 0x416690, LOS 0x416D50, Mapping 0x416D80 and NowISee 0x417540 (each then rebuilds the sight through 0x4816A0), the network watcher switch in the players phase, MakePoster's clear and restore, and the loader's three branches. Read every tick by the sight stamp 0x4827B0 and by the destructor 0x486838
+main	0x14281	2	0xFFF0	globals	write	losrest	-	DISASSEMBLED 2026-09-30: the word's bits 4-15; none of LosType's writers stores them but as part of the word, and no reader tests them
+main	0x37EC4	4	-	globals	write	windnext	0x490C8E,0x4918FD	DISASSEMBLED 2026-09-30: the wind's next draw, a GameTime; stock's store 0x490C8E is through a pointer formed at 0x490C5A, and Impure's wind_draw (tagpu_patches.c, THE WIND) stores in its place through the jump at 0x490C5A; the level load zeroes it (0x4918FD). Read only by the wind 0x490C45
+main	0x37EC8	4	-	globals	write	winddivisor	0x4918ED	DISASSEMBLED 2026-09-30: 5000, stored by the level load alone; read by the wind 0x490D46 and the AI 0x409B90
+main	0x37ECC	4	-	globals	write	windx	0x490D09	DISASSEMBLED 2026-09-30: the wind's x component; read by the fire spread 0x423AA1, the projectile pass 0x49BC5D and 0x49BD0A, and the particles
+main	0x37ED0	4	-	globals	write	windy	-	DISASSEMBLED 2026-09-30: the wind's altitude component; no store found, so it stays as the main block's zeroing left it [INFERRED]; read by the projectile pass 0x49BD20
+main	0x37ED4	4	-	globals	write	windz	0x490D35	DISASSEMBLED 2026-09-30: the wind's z component; read by the fire spread 0x423AC1, the projectile pass 0x49BD28 and the particles
+main	0x37ED8	2	-	globals	write	windheading	0x490CDC	DISASSEMBLED 2026-09-30: the wind's heading, u16, stored by stock's draw and Impure's wind_draw; read by the wind and by the unit tick's COB call 0x437941
+main	0x37EDA	4	-	globals	write	windspeed	0x490CB7	DISASSEMBLED 2026-09-30: the wind's speed, stored by stock's draw and Impure's wind_draw; read by the wind and by 0x437973
+main	0x37EDE	4	-	globals	write	windratio	0x490D4C,0x490D6B	DISASSEMBLED 2026-09-30: speed / 5000 capped at 1.0, f32; read by the economy 0x40156F (the wind generators) and 0x488F68
+main	0x37EE2	4	-	globals	write	windchanged	0x490D7B,0x490D87	DISASSEMBLED 2026-09-30: 1 when the wind was drawn this iteration, else 0; read by 0x437933, which the unit tick calls per unit to start COB SetDirection and SetSpeed
+main	0x38A47	4	-	tick	-	gametime	0x4954C0,0x44A696,0x491979,0x4971BB,0x498180	DISASSEMBLED 2026-09-30: GameTime, incremented by the sim step (0x4954C0) and the shell's network clock (0x44A696), zeroed by the level init, the loader and the load state. Recorded by RK_TICK
+main	0x39239	2	-	globals	hold	endcountdown	0x498199,0x4650FF,0x46510C,0x46518B,0x465198,0x4655F4,0x465604,0x46588D,0x46589A	DISASSEMBLED 2026-09-30: the game end's countdown, i16, -1 idle (0x498199); loaded and counted down by the players phase 0x464F80, whose end action runs when it goes below 0 (0x46517F..0x4651A4), and while it is 0 or more the economy is skipped (0x46554F). Held on a puppet host, where nothing sets it: the objective is disarmed and the typed commands gated
+main	0x3923B	2	0x0014	globals	hold	endflags	0x416A22,0x416A7C,0x450EA6,0x455148,0x457961,0x46061F,0x464E55,0x465126,0x46561A,0x465833,0x4658B4,0x491A06,0x496AD5,0x496B59,0x416A0A,0x4658C0,0x41F00B,0x41F019,0x455154,0x464E1F,0x464E61,0x465132,0x465626,0x46583F,0x465820,0x416A62,0x491A14,0x496AC7,0x496B4B	DISASSEMBLED 2026-09-30: bit 2 game over and bit 4 win (the sets and the clears listed); either makes the in-play handler end the level (0x4995FC `test al,0x14` -> the teardown 0x491B60), and bit 2 skips the economy (0x465546). Held on a puppet host, where nothing sets them
+main	0x3923B	2	0xFFEB	globals	write	endbits	0x4956F8,0x496351,0x491280,0x49631B,0x49128E,0x492636,0x416A16,0x4658CC,0x491A22,0x416A70,0x465140,0x465634,0x465858,0x491A30	DISASSEMBLED 2026-09-30: bit 0 the debug display and bit 1 debug mode (read by the draw and the debug keys, gated on a puppet host), bit 3 set by a save's load (no test found), bit 5 won and bit 6 lost (read only by the status icon 0x46A174, 0x46A1A2); the other bits are stored only as part of the word
+data	0x5119E8	40	-	globals	write	pfbudget	0x40EAFD,0x40EBDE,0x40EBFB,0x40EC06	DISASSEMBLED 2026-09-30: the pathfinder's search budget per player, set by its init 0x40E9E0 and rewritten every 150 calls of its tick 0x40EB70 (the players phase, for types 1, 2 and 3); read when a search starts (0x40ED76)
+data	0x511A10	40	-	globals	write	pfsearches	0x40ECF9,0x40EC0C	DISASSEMBLED 2026-09-30: the searches each player started since the budget's last rewrite; no load path writes it, so it carries from the process's last game
+data	0x511A38	4	-	globals	write	pfcalls	0x40EBB0,0x40EBB7	DISASSEMBLED 2026-09-30: the pathfinder tick's calls modulo 150; no load path writes it
+data	0x5122E8	4	-	globals	write	meteornext	0x437CE4,0x437E26,0x43809C,0x43829E	DISASSEMBLED 2026-09-30: the next meteor shower's GameTime; written by the init 0x437CD0, the shower 0x437DE0, the forced shower 0x438070 and the save's load 0x438250
+data	0x512318	4	-	globals	write	meteoractive	0x437CDA,0x437E07,0x437EFE,0x43805F,0x43807C,0x43828B	DISASSEMBLED 2026-09-30: a shower is active
+data	0x51231C	4	-	globals	write	meteorend	0x437E21,0x438097,0x4382B1	DISASSEMBLED 2026-09-30: the shower's end GameTime
+data	0x512320	4	-	globals	write	meteorp2	0x437EF0,0x43816C,0x4382D7,0x4382EB	DISASSEMBLED 2026-09-30: the shower's second point, i16 x and z
+data	0x51232C	4	-	globals	write	meteoron	0x437D40,0x437D50,0x438278	DISASSEMBLED 2026-09-30: meteors are enabled, set and cleared by the .ota reader and the Meteor command
+data	0x512330	4	-	globals	write	meteorstrike	0x437E32,0x437F4F,0x4380A8,0x4382C4	DISASSEMBLED 2026-09-30: the next strike's GameTime
+data	0x512334	4	-	globals	write	meteorp1	0x437E83,0x4380FB,0x4382FF,0x43830A	DISASSEMBLED 2026-09-30: the shower's first point, i16 x and z, drawn over the map
+data	0x51E53C	4	-	globals	write	resbroadcast	0x465595	DISASSEMBLED 2026-09-30: the players phase's counter of the resource broadcast 0x28, every fourth pass; network games only (0x465588)
+data	0x51E684	4	-	globals	write	sitebyte	0x47D2EE,0x47D7FB	DISASSEMBLED 2026-09-30: a byte the build-site test 0x47D2E0 leaves on one success path; read by its getter 0x47C780 right after a test
+data	0x51E688	4	-	globals	write	sitesum	0x47D2F4,0x47D4E7	DISASSEMBLED 2026-09-30: the build-site test's accumulator; read through the getter 0x47C770 by AI code (types 1 and 2), once (0x40A76A) whatever the last test anywhere left
+data	0x51E6C4	4	-	globals	write	cdtimer	0x4903AC,0x4903BF	DISASSEMBLED 2026-09-30: the objective's defeat deadline in 0x490360, reached only while 0x511DE4 is set, which nothing in this executable sets [INFERRED: a copy-protection timer]; read only behind the objective
+data	0x51FC88	4	-	globals	write	rngseed	0x4B6C87,0x4B6CAB	DISASSEMBLED 2026-09-30: the simulation RNG's state (Park-Miller), stepped by every draw 0x4B6C30 and seeded once by the loader through 0x4B6CA0

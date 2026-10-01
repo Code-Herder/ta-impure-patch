@@ -34,7 +34,7 @@ import struct
 import sys
 import zlib
 
-REC_FORMAT = 3
+REC_FORMAT = 4
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -54,13 +54,22 @@ REC_UNIT_DELTA_HEAD = (2 + REC_UNIT_BITS + 3) & ~3
 REC_PLAYER_DELTA_HEAD = (2 + REC_PLAYER_BITS + 3) & ~3
 U_TYPE, U_BUILT, U_STATEBYTE = 0x92, 0x104, 0x10E   # the image's type ID, build fraction, state
 U_STATE = 0x110
+REC_PROJ_IMAGE = 0x6C                     # a projectile record's 0x6B bytes, to a dword
+REC_PROJ_DWORDS = REC_PROJ_IMAGE // 4
+REC_PROJ_BITS = (REC_PROJ_DWORDS + 7) // 8
+REC_PROJ_DELTA_HEAD = (2 + REC_PROJ_BITS + 3) & ~3
+REC_MAIN_BYTES = 0x3924D                  # the main block, from main
+REC_DATA_BEGIN, REC_DATA_BYTES = 0x501000, 0x2A65C   # .data
+REC_IMAGE_CHUNK = 0x8000
 
 (RK_PAD, RK_TICK, RK_UNIT, RK_UNIT_DELTA, RK_UNIT_GONE, RK_PLAYER, RK_PLAYER_DELTA, RK_TABLE_SIZE,
  RK_TABLE_SPAN, RK_CORRECT, RK_VERIFY_UNIT, RK_VERIFY_PLAYER, RK_VERIFY_TABLE, RK_HEADER,
  RK_END, RK_ORDERS, RK_VERIFY_ORDERS, RK_CONTROLLER, RK_VIEWER,
  RK_EV_CREATE, RK_EV_DEATH, RK_EV_SHOT, RK_EV_INTERCEPT, RK_EV_START, RK_EV_START_NAMED,
  RK_EV_BUILT, RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY, RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DRAW,
- RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID) = range(37)
+ RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
+ RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
+ RK_VERIFY_PROJ, RK_IMAGE) = range(45)
 RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list"}
 EVENTS = {RK_EV_CREATE: "create", RK_EV_DEATH: "death", RK_EV_SHOT: "shot",
           RK_EV_INTERCEPT: "interception", RK_EV_START: "broadcast start",
@@ -78,7 +87,7 @@ RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
- RT_WEAPONS, RT_FEATURES) = range(1, 18)
+ RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES) = range(1, 20)
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED) = range(32, 41)
 
@@ -89,7 +98,9 @@ END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full
                6: "INCOMPLETE: the game stopped being a skirmish",
                7: "INCOMPLETE: an order list could not be recorded",
                8: "INCOMPLETE: the features were not the ones it began with, or their calls "
-                  "nested deeper than the capture tracks"}
+                  "nested deeper than the capture tracks",
+               9: "INCOMPLETE: the projectile pool was not the one it began with, or its count "
+                  "was past its records"}
 
 
 class Unreadable(Exception):
