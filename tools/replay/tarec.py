@@ -13,8 +13,14 @@
                                              the same for dumps a playing of FILE took, less what
                                              a puppet host keeps as its own (puppet_view), with
                                              the order nodes' puppet rows as it holds them
-                                             (puppet_hold); the radar picture is compared too
-                                             where the dump's viewed player is the recording's
+                                             (puppet_hold) and the globals' `hold` rows masked;
+                                             the radar picture is compared too where the dump's
+                                             viewed player is the recording's
+  tools/replay/tarec.py compare --images DUMP OTHERDUMP
+                                             a report, not a check: the bytes of the main block
+                                             and .data that differ between two dumps and that no
+                                             row of replay-globals.tsv covers, in runs, grouped by
+                                             what the notes map there (exit 0 whatever it finds)
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -23,9 +29,13 @@ here, and REC_FORMAT says which. A recording is REC_MAGIC, then blocks; a block 
 and its payload, zlib-deflated unless the block is stored, each checked by a CRC-32. A file ends at
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
-format, the build and the tables, and one stored snapshot. A table is paired with the recording's
-by its name: each build numbers its tables in its own registry order, and a recording may be played
-by another build than the one that made it.
+format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
+every cell and, after the world, the main block and .data whole (RK_IMAGE). A recording's snapshot
+carries only the cells that differ from the first iteration's grid, the base, which a reader takes
+from the stream, and none of a table's spans that are all zero. A table is paired with the
+recording's by its name: each build numbers its tables in its own registry order, and a recording
+may be played by another build than the one that made it. The globals image is replay-globals.tsv's
+fields, read through tools/replay-globals-gen.py where a command needs their names or classes.
 
 Standard library only.
 """
@@ -70,7 +80,9 @@ REC_IMAGE_CHUNK = 0x8000
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE) = range(45)
-RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list"}
+RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list",
+            RK_GLOBALS: "globals image", RK_PROJ: "projectile record",
+            RK_PROJ_HEAD: "projectile count (+0x0) and extent (+0x4)"}
 EVENTS = {RK_EV_CREATE: "create", RK_EV_DEATH: "death", RK_EV_SHOT: "shot",
           RK_EV_INTERCEPT: "interception", RK_EV_START: "broadcast start",
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
@@ -109,9 +121,10 @@ class Unreadable(Exception):
 
 # ---- blocks ----------------------------------------------------------------------------------
 
-def blocks(path):
+def blocks(path, sizes=None):
     """(kind, first, last, raw payload) for each complete block, and why the reading stopped
-    (None at a clean end of the file)."""
+    (None at a clean end of the file); with `sizes`, (kind, first, last, raw, packed) of each
+    block appended to it."""
     with open(path, "rb") as f:
         data = f.read()
     if data[:8] != REC_MAGIC:
@@ -134,6 +147,8 @@ def blocks(path):
         if len(payload) != raw:
             return out, f"a block at byte {at} that inflates to {len(payload)} bytes, not {raw}"
         out.append((kind, first, last, payload))
+        if sizes is not None:
+            sizes.append((kind, first, last, raw, packed))
         at += 32 + packed
     return out, None
 
@@ -193,17 +208,22 @@ def header(payload):
         elif tag == RT_SETTINGS_MAP: h["settings_map"] = b.decode("latin-1")
         elif tag == RT_WEAPONS: h["weapons"] = struct.unpack_from("<II", b)
         elif tag == RT_FEATURES: h["features"] = struct.unpack_from("<IIIII", b)
+        elif tag == RT_GLOBALS: h["globals"] = b.decode("latin-1")
+        elif tag == RT_PROJECTILES: h["projectiles"] = u32
     if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     return h
 
 
 def feature_dims(h):
-    """The grid's columns and rows and the pool's records a recording's header states."""
+    """The grid's columns and rows, the wreck pool's records and the projectile pool's records a
+    recording's header states."""
     if "features" not in h:
         raise Unreadable("a header without its features (RT_FEATURES)")
+    if "projectiles" not in h:
+        raise Unreadable("a header without its projectile pool (RT_PROJECTILES)")
     w, rows, wrecks = h["features"][:3]
-    return w, rows, wrecks
+    return w, rows, wrecks, h["projectiles"]
 
 
 def end(payload):
@@ -224,10 +244,15 @@ class World:
         self.slots = slots
         if dims is None:
             dims = feature_dims(header)
-        self.gw, self.gh, self.nrec = dims
+        self.gw, self.gh, self.nrec, self.ncap = dims
         self.grid = bytearray(self.gw * self.gh * REC_CELL_BYTES)     # every cell's image
         self.pool = bytearray(self.nrec * REC_WRECK_BYTES)             # every record's image
         self.heads = None               # the pool's three heads and the cursor, once sent
+        self.base = None                # the grid at the end of the first iteration (stream_to)
+        self.globals = None             # the globals image, once sent
+        self.proj = bytearray(self.ncap * REC_PROJ_IMAGE)              # the projectile pool's
+        self.phead = None               # (count, hw), once sent: records [hw, ncap) are zero
+        self.images = {}                # a dump's main block (0) and .data (1)
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
         self.units = {}                                  # slot -> bytearray image, live only
@@ -364,6 +389,46 @@ class World:
             self.pool[i * REC_WRECK_BYTES:(i + 1) * REC_WRECK_BYTES] = b[4:]
         elif kind == RK_FEATURES:
             self.heads = struct.unpack_from("<iiiI", b)
+        elif kind == RK_GLOBALS:
+            if not b or len(b) % 4:
+                raise Unreadable(f"a globals image of {len(b)} bytes")
+            self.globals = bytearray(b)
+        elif kind == RK_GLOBALS_DELTA:
+            if self.globals is None:
+                raise Unreadable("a globals delta before the globals image")
+            n = len(self.globals) // 4
+            nbits = (n + 7) // 8
+            self._delta(self.globals, b[:nbits], n, b[(nbits + 3) & ~3:])
+        elif kind == RK_PROJ_HEAD:
+            if len(b) != 8:
+                raise Unreadable(f"a projectile head of {len(b)} bytes")
+            count, hw = struct.unpack_from("<II", b)
+            if count > hw or hw > self.ncap:
+                raise Unreadable(f"a projectile count {count} and extent {hw} past the pool's "
+                                 f"{self.ncap} records")
+            if self.phead and hw < self.phead[1]:
+                self.proj[hw * REC_PROJ_IMAGE:self.phead[1] * REC_PROJ_IMAGE] = \
+                    bytes((self.phead[1] - hw) * REC_PROJ_IMAGE)
+            self.phead = (count, hw)
+        elif kind in (RK_PROJ, RK_PROJ_DELTA):
+            i = struct.unpack_from("<H", b)[0]
+            if self.phead is None or i >= self.phead[1] or \
+                    (kind == RK_PROJ and len(b) != 4 + REC_PROJ_IMAGE):
+                raise Unreadable(f"projectile record {i} outside the pool's written extent")
+            img = memoryview(self.proj)[i * REC_PROJ_IMAGE:(i + 1) * REC_PROJ_IMAGE]
+            if kind == RK_PROJ:
+                img[:] = b[4:]
+            else:
+                rec = bytearray(img)
+                self._delta(rec, b[2:2 + REC_PROJ_BITS], REC_PROJ_DWORDS, b[REC_PROJ_DELTA_HEAD:])
+                img[:] = rec
+        elif kind == RK_IMAGE:
+            which, off = b[0], struct.unpack_from("<I", b, 4)[0]
+            size = (REC_MAIN_BYTES, REC_DATA_BYTES)[which] if which < 2 else 0
+            if not size or off + len(b) - 8 > size:
+                raise Unreadable(f"an image record past its image ({which}, +0x{off:X})")
+            img = self.images.setdefault(which, bytearray(size))
+            img[off:off + len(b) - 8] = b[8:]
         elif kind in EVENTS:
             return kind, b
         else:
@@ -388,9 +453,10 @@ class World:
                 img[4 * i:4 * i + 4] = vals[4 * k:4 * k + 4]
                 k += 1
 
-    def differences(self, other, names, other_names=None, limit=20):
+    def differences(self, other, names, other_names=None, limit=20, gnames=None):
         """Lines naming each difference, the first `limit` of them, and their count. `names` are
-        this world's tables and `other_names` the other's, when another build numbered them."""
+        this world's tables and `other_names` the other's, when another build numbered them;
+        `gnames` the globals image's dwords by name, when the list is known (globals_list)."""
         out, n = [], 0
 
         def note(line):
@@ -448,6 +514,31 @@ class World:
         if self.heads != other.heads:
             note(f"the wreck pool's heads and the cursor: recording {self.heads}, "
                  f"dump {other.heads}")
+        if self.globals is None or other.globals is None:
+            if self.globals != other.globals:
+                note(f"the globals image: in {'the dump' if self.globals is None else 'the recording'}"
+                     f" only")
+        elif len(self.globals) != len(other.globals):
+            note(f"the globals image: {len(self.globals)} bytes in the recording, "
+                 f"{len(other.globals)} in the dump")
+        else:
+            for i in range(0, len(self.globals), 4):
+                a, b = self.globals[i:i + 4], other.globals[i:i + 4]
+                if a != b:
+                    name = (gnames or {}).get(i // 4, f"dword {i // 4}")
+                    note(f"globals {name}: recording {a.hex()}, dump {b.hex()}")
+        if self.ncap != other.ncap:
+            note(f"the projectile pool: {self.ncap} records in the recording, {other.ncap} in "
+                 f"the dump")
+        else:
+            if self.phead != other.phead:
+                note(f"the projectile count and extent: recording {self.phead}, "
+                     f"dump {other.phead}")
+            hw = max(self.phead[1] if self.phead else 0, other.phead[1] if other.phead else 0)
+            for at in range(0, hw * REC_PROJ_IMAGE, REC_PROJ_IMAGE):
+                a, b = self.proj[at:at + REC_PROJ_IMAGE], other.proj[at:at + REC_PROJ_IMAGE]
+                if a != b:
+                    dwords(f"projectile {at // REC_PROJ_IMAGE}", a, b)
         mine = by_name(self, names)
         theirs = by_name(other, names if other_names is None else other_names)
         for name in sorted(set(mine) | set(theirs)):
@@ -469,17 +560,20 @@ class World:
         return out, n
 
 
-def snapshot_world(payload, slots, tables, dims):
-    """A snapshot or a dump builds the world from nothing, its seats and viewer included."""
+def snapshot_world(payload, slots, tables, dims, base=None):
+    """A snapshot or a dump builds the world from nothing, its seats and viewer included; a
+    snapshot's cells over the recording's base grid, a dump's over nothing (it carries them all)."""
     w = World(slots, tables, dims=dims)
+    if base is not None:
+        w.grid[:] = base
     for kind, b in records(payload):
         w.apply(kind, b)
     w.whole()
     return w
 
 
-def load(path):
-    bl, stop = blocks(path)
+def load(path, sizes=None):
+    bl, stop = blocks(path, sizes)
     if not bl or bl[0][0] != RB_HEADER:
         raise Unreadable(f"{path}: no header block" + (f" ({stop})" if stop else ""))
     return header(bl[0][3]), bl, stop
@@ -489,7 +583,8 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
     """The world the stream builds, to the end of iteration `want` (or of the file). Calls
     on_snapshot(world, snapshot payload) at each snapshot block on the way, and
     on_record(world, kind, body) after each record is applied -- and with kind None before a TICK
-    is, while the world is still the iteration's before it."""
+    is, while the world is still the iteration's before it. The world's `base` is its grid at the
+    end of the first iteration, which a snapshot's cells differ from."""
     w = World(h["slots"], h["tables"], h)
     for kind, first, last, payload in bl[1:]:
         if kind == RB_SNAPSHOT and on_snapshot:
@@ -497,6 +592,9 @@ def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
         if kind != RB_STREAM:
             continue
         for rk, b in records(payload):
+            if rk == RK_TICK and w.tick is not None and w.base is None:
+                w.whole()
+                w.base = bytes(w.grid)
             if rk == RK_TICK and want is not None and w.tick is not None and w.tick >= want:
                 w.whole()
                 return w
@@ -610,7 +708,8 @@ class EventCheck:
 # ---- the commands ----------------------------------------------------------------------------
 
 def cmd_info(path):
-    h, bl, stop = load(path)
+    sizes = []
+    h, bl, stop = load(path, sizes)
     print(f"{path}")
     print(f"  map {h.get('map')!r}, mode {h.get('mode')}, build {h.get('build')}, "
           f"from GameTime {h.get('start')}")
@@ -625,6 +724,8 @@ def cmd_info(path):
     if f:
         print(f"  features: a {f[0]} x {f[1]} grid, {f[2]} wreck records, {f[3]} feature defs "
               f"(names 0x{f[4]:08x})")
+    print(f"  globals list {h.get('globals', '')[:12]}, a projectile pool of "
+          f"{h.get('projectiles')} records")
     for p in h["players"]:
         print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, "
               f"side {p['side']}, logo {p['logo']}, alliances {p['alliances'].hex()}")
@@ -640,16 +741,26 @@ def cmd_info(path):
     size = os.path.getsize(path)
     print(f"  {size} bytes: " + ", ".join(f"{counts[k]} {RB_NAMES.get(k, k)} ({raw[k] >> 10} KB raw)"
                                           for k in sorted(counts)))
+    sraw = sum(r for k, a, b, r, pk in sizes if k == RB_STREAM)
+    spk = sum(pk for k, a, b, r, pk in sizes if k == RB_STREAM)
+    print(f"  the stream: {sraw} bytes raw, {spk} packed")
+    for k, first, last, r, pk in sizes:
+        if k == RB_SNAPSHOT:
+            print(f"  snapshot at GameTime {last}: {r} bytes raw, {pk} packed")
     ev, evb = {}, {}
     for kind, first, last, payload in bl:
         if kind != RB_STREAM:
             continue
         for rk, b in records(payload):
-            if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK):
+            if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK,
+                                      RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ,
+                                      RK_PROJ_DELTA):
                 ev[rk] = ev.get(rk, 0) + 1
                 evb[rk] = evb.get(rk, 0) + 4 + ((len(b) + 3) & ~3)
     names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer",
-             RK_CELLS: "run of cells", RK_WRECK: "wreck record"}
+             RK_CELLS: "run of cells", RK_WRECK: "wreck record", RK_GLOBALS: "globals image",
+             RK_GLOBALS_DELTA: "globals delta", RK_PROJ_HEAD: "projectile head",
+             RK_PROJ: "projectile record", RK_PROJ_DELTA: "projectile delta"}
     print("  records: " + (", ".join(f"{ev[k]} {names[k]} ({evb[k] >> 10} KB)" for k in sorted(ev))
                            or "no order lists, seats or events"))
     ends = [b for b in bl if b[0] == RB_END]
@@ -686,12 +797,13 @@ def cmd_info(path):
 def cmd_check(path):
     h, bl, stop = load(path)
     bad, seen = 0, 0
+    gnames = known_names(h)
 
     def at_snapshot(w, payload):
         nonlocal bad, seen
         seen += 1
-        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h))
-        lines, n = w.differences(s, h["tables"])
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h), w.base)
+        lines, n = w.differences(s, h["tables"], gnames=gnames)
         if s.tick != w.tick:
             lines.insert(0, f"the snapshot is at GameTime {s.tick}, the stream at {w.tick}")
             n += 1
@@ -740,17 +852,63 @@ def puppet_view(w, viewer, radar=False):
     w.view = [0, 0]
 
 
+def _generator(name):
+    """One of tools/'s generators, as a module, for its parser."""
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(name.replace("-", "_"),
+                                                  os.path.join(here, "..", name + ".py"))
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    return gen
+
+
+def globals_list(want=None):
+    """replay-globals.tsv through its own parser (tools/replay-globals-gen.py): (the generator, its
+    rows, the image's slots, the file's SHA-256). With `want`, a recording's or a dump's RT_GLOBALS,
+    the file must be the one it was made with: the classes and the coverage are this checkout's."""
+    import hashlib
+    gen = _generator("replay-globals-gen")
+    with open(gen.TSV, "rb") as f:
+        raw = f.read()
+    digest = hashlib.sha256(raw).hexdigest()
+    if want is not None and want != digest:
+        raise Unreadable(f"made with another replay-globals.tsv ({want[:12]}) than this checkout's "
+                         f"({digest[:12]}): its classes and coverage would be the wrong ones")
+    rows = gen.parse(raw.decode("utf-8"))
+    return gen, rows, gen.slots(rows)[0], digest
+
+
+def globals_names(slots):
+    """The globals image's dwords by name: a slot's, and `+n` for the dwords after its first."""
+    out = {}
+    for sl in slots:
+        for k in range((sl["size"] + 3) // 4):
+            out[sl["dword"] + k] = sl["names"] + (f"+{4 * k}" if k else "")
+    return out
+
+
+def globals_hold(w, slots):
+    """The globals image less its `hold` bits, which a puppet host never writes (the slice note's
+    S3b): masked on both sides of a puppet compare."""
+    if w.globals is None:
+        return
+    for sl in slots:
+        if not sl["hold"]:
+            continue
+        at = 4 * sl["dword"]
+        if sl["size"] > 4:
+            w.globals[at:at + ((sl["size"] + 3) & ~3)] = bytes((sl["size"] + 3) & ~3)
+        else:
+            v = struct.unpack_from("<I", w.globals, at)[0] & ~sl["hold"]
+            struct.pack_into("<I", w.globals, at, v & 0xFFFFFFFF)
+
+
 def puppet_rows():
     """The order node's puppet rows, from the exclusion file through its own parser
     (tools/replay-layout-gen.py): (offset, size, mask, held set) for each."""
-    import importlib.util
-    here = os.path.dirname(os.path.abspath(__file__))
-    spec = importlib.util.spec_from_file_location(
-        "replay_layout_gen", os.path.join(here, "..", "replay-layout-gen.py"))
-    gen = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gen)
-    with open(os.path.join(here, "..", "..", "tagpu", "ddraw", "replay-layout.tsv"),
-              encoding="utf-8") as f:
+    gen = _generator("replay-layout-gen")
+    with open(gen.TSV, encoding="utf-8") as f:
         rows = gen.parse(f.read())
     return [(r["offset"], r["size"], r["mask"], r["kind"] == "puppet1") for r in rows
             if r["record"] == "order" and r["kind"] in ("puppet0", "puppet1")]
@@ -768,10 +926,22 @@ def puppet_hold(w, rows):
                 img[at + off:at + off + size] = v.to_bytes(size, "little")
 
 
+def known_names(h):
+    """The globals' names when this checkout's list is the recording's, else None (dword numbers)."""
+    if not h.get("globals"):
+        return None
+    try:
+        return globals_names(globals_list(h["globals"])[2])
+    except Unreadable:
+        return None
+
+
 def cmd_compare(path, dumps, puppet=False):
     h, bl, stop = load(path)
     status = 0
     held = puppet_rows() if puppet else None
+    gslots = globals_list(h.get("globals"))[2] if puppet else None
+    gnames = globals_names(gslots) if puppet else known_names(h)
     for d in dumps:
         dbl, dstop = blocks(d)
         if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
@@ -789,7 +959,9 @@ def cmd_compare(path, dumps, puppet=False):
             puppet_view(w, viewer_of(h), radar)
             puppet_view(dw, viewer_of(h), radar)
             puppet_hold(w, held)
-        lines, n = w.differences(dw, h["tables"], dh["tables"])
+            globals_hold(w, gslots)
+            globals_hold(dw, gslots)
+        lines, n = w.differences(dw, h["tables"], dh["tables"], gnames=gnames)
         print(f"{d}: GameTime {dw.tick}, {len(dw.units)} live units"
               + (", the radar picture too" if radar else "") + ": "
               + ("EQUAL" if not n else f"{n} DIFFERENCES"))
@@ -800,12 +972,147 @@ def cmd_compare(path, dumps, puppet=False):
     return status
 
 
+# THE COARSE MAP of the two images, for `compare --images`: what the notes say lies in each range
+# (the engine map; tools/tamem_ghidra.h's TAdynmemStruct with this project's corrections). A run is
+# reported under the narrowest range that holds its first byte, or as not mapped. Offsets are from
+# main, and for .data from its start, 0x501000.
+IMAGE_MAP = {
+    0: [(0x0, 0xC, "two pointers into .data (+4, +8)"),
+        (0xC, 0x14, "the program and DirectSound pointers"),
+        (0x14, 0x4DE, "HAPINET: the network state"),
+        (0x511, 0x519, "the pacing gate's record and lag, rewritten every frame"),
+        (0x519, 0x1B63, "the desktop GUI"),
+        (0x1B63, 0x299C, "the eleven player records"),
+        (0x299C, 0x29A4, "the branch selector, the skirmish settings' pointer"),
+        (0x29D0, 0x2A25, "the start positions"),
+        (0x2A30, 0x2A3C, "the restrict list, the packet buffer"),
+        (0x2A3C, 0x2A45, "the player count, the controlled and viewed players, the network flags"),
+        (0x2A45, 0x2CF3, "UI and input: mouse, build placement, cursor, order mode"),
+        (0x2CF3, 0x141F3, "Weapons[256], the weapon defs"),
+        (0x141F3, 0x141FB, "the projectile count and the pool's pointer"),
+        (0x141FB, 0x1428F, "the map: the wreck pool and its heads, the feature grid, the map's "
+                           "size, the wind's limits, gravity, sea level, LosType"),
+        (0x1428F, 0x142BB, "the LOS grid and the sort buckets"),
+        (0x142CB, 0x1434F, "the minimap, the radar pictures, the camera, the eye, the scroll"),
+        (0x1434F, 0x1436F, "the unit counter, slots, the unit array's pointers, the hot units"),
+        (0x14377, 0x1439F, "the model pointers, UNITINFOCount, the unit defs"),
+        (0x147DF, 0x148DF, "GAF sequence pointers: render assets"),
+        (0x1491B, 0x1AB90, "the explosions (stock's pool)"),
+        (0x1AB9B, 0x1AB9F, "a 3D object built at level load"),
+        (0x1AB9F, 0x1E88F, "the debris pool"),
+        (0x33A0F, 0x37E13, "the sound table"),
+        (0x37E13, 0x37E1F, "a category table, the back buffer"),
+        (0x37E1F, 0x37EC4, "the screen, the game-screen rectangle, the GUI state"),
+        (0x37EC4, 0x37EE6, "the wind"),
+        (0x37EE6, 0x37EFE, "units each, the limits, difficulty, side, ActiveCommanderDeath"),
+        (0x37F06, 0x37F31, "options, sound flags, SoftwareDebugMode"),
+        (0x37F31, 0x38A37, "the network timeout, the race and side data"),
+        (0x38A37, 0x38A53, "the clock and pacing: DeltaTime, GameTime, the speeds, the pause"),
+        (0x38A53, 0x38C53, "the screenshot and movie folders"),
+        (0x38C53, 0x391C0, "mostly not mapped: the particle layers, the loader's flags, the "
+                           "profile counters, the end state"),
+        (0x391C3, 0x3922D, "show ranges, GameingState, the objective, the GUI callback, fonts, "
+                           "DirectPlay, game options"),
+        (0x39239, 0x3923D, "the game end's countdown and flags"),
+        (0x3923D, 0x3924D, "a .data string's address")],
+    1: [(0x0, 0x10A00, "file-backed constants and tables"),
+        (0x109B8, 0x10A3C, "an object, the pathfinder's budget"),
+        (0x10A58, 0x10DC8, "the GAF and animation state"),
+        (0x10A60, 0x10C65, "a table"),
+        (0x10DE8, 0x10DEC, "the main pointer"),
+        (0x10DF0, 0x10F80, "stock's flying-piece slots"),
+        (0x10F80, 0x10FB0, "a pool allocator, GAF frame counts"),
+        (0x112A0, 0x11339, "the weapon parse contexts, the meteor state"),
+        (0x11344, 0x1134C, "the order descriptors' vector"),
+        (0x11358, 0x11758, "the movement classes"),
+        (0x11AD8, 0x11DD4, "the network state"),
+        (0x11EF8, 0x12000, "the GUI panels and slides"),
+        (0x1D53C, 0x1D6CC, "the key poll and shell, a pool, the build-site test, sound flags, "
+                           "the objective's timer"),
+        (0x1D548, 0x1D598, "DLL entry points"),
+        (0x1D810, 0x1D814, "an object"),
+        (0x1EB50, 0x1EBD4, "a registry value, checksums, the graphics globals' pointer"),
+        (0x1EBE0, 0x1EC88, "timers"),
+        (0x1EC88, 0x1EC8C, "the simulation RNG"),
+        (0x279A4, 0x2A65C, "the C runtime")],
+}
+
+
+def dump_images(path):
+    """A dump's GameTime, its RT_GLOBALS and its two images."""
+    dbl, stop = blocks(path)
+    if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
+        raise Unreadable(f"{path}: not a dump (a header and one snapshot block)" +
+                         (f" ({stop})" if stop else ""))
+    dh = header(dbl[0][3])
+    images, tick = {}, None
+    for kind, b in records(dbl[1][3]):
+        if kind == RK_TICK:
+            tick = struct.unpack_from("<I", b)[0]
+        elif kind == RK_IMAGE:
+            which, off = b[0], struct.unpack_from("<I", b, 4)[0]
+            size = (REC_MAIN_BYTES, REC_DATA_BYTES)[which] if which < 2 else 0
+            if not size or off + len(b) - 8 > size:
+                raise Unreadable(f"{path}: an image record past its image ({which}, +0x{off:X})")
+            images.setdefault(which, bytearray(size))[off:off + len(b) - 8] = b[8:]
+    if set(images) != {0, 1}:
+        raise Unreadable(f"{path}: a dump without the main block and .data (RK_IMAGE)")
+    return tick, dh.get("globals"), images
+
+
+def cmd_images(a_path, b_path):
+    """The differing bytes no row of replay-globals.tsv covers, as runs, grouped by IMAGE_MAP. A
+    byte is reported when it differs in a bit no row names."""
+    ta, ga, ia = dump_images(a_path)
+    tb, gb, ib = dump_images(b_path)
+    if ga != gb:
+        raise Unreadable(f"the two dumps were made with different replay-globals.tsv "
+                         f"({(ga or '')[:12]}, {(gb or '')[:12]})")
+    gen, rows, slots, digest = globals_list(ga)
+    cov = gen.coverage(rows)
+    print(f"{a_path} (GameTime {ta}) against {b_path} (GameTime {tb})"
+          + ("" if ta == tb else ": NOT THE SAME GameTime"))
+    total = 0
+    for which, what in ((0, "main"), (1, ".data")):
+        a, b = ia[which], ib[which]
+        where = "main" if which == 0 else "data"
+        runs, start = [], None
+        for i in range(len(a) + 1):
+            hit = False
+            if i < len(a) and a[i] != b[i]:
+                hit = bool((a[i] ^ b[i]) & ~cov.get((where, i), 0) & 0xFF)
+            if hit and start is None:
+                start = i
+            elif not hit and start is not None:
+                runs.append((start, i - start))
+                start = None
+        groups = {}
+        for at, n in runs:
+            best = None
+            for lo, hi, label in IMAGE_MAP[which]:
+                if lo <= at < hi and (best is None or hi - lo < best[1] - best[0]):
+                    best = (lo, hi, label)
+            groups.setdefault(best[2] if best else "not mapped", []).append((at, n))
+        nbytes = sum(n for at, n in runs)
+        total += nbytes
+        print(f"  {what}: {len(runs)} runs, {nbytes} bytes outside the list")
+        for label in sorted(groups, key=lambda k: groups[k][0][0]):
+            print(f"    {label}:")
+            for at, n in groups[label]:
+                name = f"main+0x{at:X}" if which == 0 else f"0x{REC_DATA_BEGIN + at:06X}"
+                print(f"      {name}, {n} byte{'s' if n != 1 else ''}")
+    print(f"  {total} bytes differ outside replay-globals.tsv (a report: S3c's null twin "
+          f"classifies them)")
+    return 0
+
+
 def main(argv):
-    puppet = argv[2:3] == ["--puppet"] and argv[1] == "compare"
-    if puppet:
+    puppet = argv[2:3] == ["--puppet"] and argv[1:2] == ["compare"]
+    images = argv[2:3] == ["--images"] and argv[1:2] == ["compare"]
+    if puppet or images:
         argv = argv[:2] + argv[3:]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare") or \
-            (argv[1] == "compare" and len(argv) < 4):
+            (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
     try:
@@ -813,6 +1120,8 @@ def main(argv):
             return cmd_info(argv[2])
         if argv[1] == "check":
             return cmd_check(argv[2])
+        if images:
+            return cmd_images(argv[2], argv[3])
         return cmd_compare(argv[2], argv[3:], puppet)
     except (Unreadable, OSError, zlib.error, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)
