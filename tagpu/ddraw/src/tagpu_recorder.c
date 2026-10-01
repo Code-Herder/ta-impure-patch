@@ -1924,25 +1924,35 @@ static unsigned long s_dump_crc;
 static char          s_dump_name[40];       /* the dump the next capture point takes, or ""  */
 static void dump_features(const Level* L, const char* name);
 
-static void dump_bytes(const void* p, unsigned n)
-{
-    if (!n) return;
-    fwrite(p, 1, n, s_dump);
-    s_dump_crc = Crc32_ComputeBuf(s_dump_crc, p, n);
-    s_dump_raw += n;
-}
+#define DUMP_BODY_MAX 0xFFFFu       /* a record's body length is its header's u16                 */
+static unsigned      s_dump_long;           /* this dump's records refused for a longer body   */
+static unsigned char s_dump_stage[4 + DUMP_BODY_MAX + 3];
 
+/* One read. The main block, .data, the explored map and the sight counters are read in place, and
+   another thread can write some of their bytes while the dump runs (MEASURED 2026-10-01: 2 of 16
+   stock-fixture dumps summed bytes that differed from the file). So each record is copied once
+   into s_dump_stage, and the file and the sum both read that copy. The dump runs on the game
+   thread alone, which nothing else shares the buffer with. What the copy holds of a field another
+   thread is writing is whichever value it read. THE BOUND: the buffer holds the longest body the
+   header's u16 can name, and a longer one is refused and counted rather than truncated by the
+   cast; the longest written today is an RK_ORDERS, 8 + 512 * 0x58 = 0xB008 bytes. */
 static void dump_rec(unsigned kind, const void* pre, unsigned npre, const void* pay, unsigned npay)
 {
-    static const unsigned char zero[4];
     RecHdr h;
-    unsigned body = npre + npay;
+    unsigned body = npre + npay, n = (4 + body + 3) & ~3u;
+    if (body > DUMP_BODY_MAX) {
+        s_dump_long++;
+        return;
+    }
     h.kind = (uint16_t)kind;
     h.len = (uint16_t)body;
-    dump_bytes(&h, 4);
-    dump_bytes(pre, npre);
-    dump_bytes(pay, npay);
-    dump_bytes(zero, ((4 + body + 3) & ~3u) - 4 - body);
+    memcpy(s_dump_stage, &h, 4);
+    if (npre) memcpy(s_dump_stage + 4, pre, npre);
+    if (npay) memcpy(s_dump_stage + 4 + npre, pay, npay);
+    memset(s_dump_stage + 4 + body, 0, n - 4 - body);
+    fwrite(s_dump_stage, 1, n, s_dump);
+    s_dump_crc = Crc32_ComputeBuf(s_dump_crc, s_dump_stage, n);
+    s_dump_raw += n;
 }
 
 /* a list's records, as olist_put makes them */
@@ -2098,6 +2108,7 @@ static void dump_write(const Level* L, int tick, const char* name)
     fwrite(&b, sizeof b, 1, s_dump);                  /* rewritten once the body is known */
     s_dump_raw = 0;
     s_dump_crc = 0;
+    s_dump_long = 0;
     dump_rec(RK_TICK, &tick, 4, NULL, 0);
     for (slot = 1; slot < L->nslots; slot++) {
         unsigned short pre[2] = { (unsigned short)slot, 0 };
@@ -2174,8 +2185,8 @@ static void dump_write(const Level* L, int tick, const char* name)
     fclose(s_dump);
     s_dump = NULL;
     VirtualFree(lists, 0, MEM_RELEASE);
-    tagpu_logf("recorder: dump %s at GameTime %d -> %s (%u bytes of records)", name, tick, path,
-               s_dump_raw);
+    tagpu_logf("recorder: dump %s at GameTime %d -> %s (%u bytes of records); %u records with a "
+               "body past 0xFFFF bytes not written", name, tick, path, s_dump_raw, s_dump_long);
 }
 
 int tagpu_rec_dump_arm(const char* name)
