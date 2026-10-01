@@ -391,20 +391,19 @@ def step(w, kind, arg):
 def twin(w, log):
     """The null twin (tarec images-gate): the live game paused, frame dump ln1; then what the
     viewer does without changing the game -- the arrow keys a second each way, one wheel notch in
-    and out at the map's centre, the in-game menu (Tab) opened and closed, the cursor over the
-    map and over the panel -- and frame dump ln2. GameTime must not move between them; the
-    game is unpaused after."""
+    and out at the map's centre, the cursor over the map and over the panel, the in-game menu
+    (Tab) opened -- and frame dump ln2. GameTime must not move between them; the menu's OK then
+    closes it and the game runs on."""
     tacli("keys", w.name, "pause")
     nap(1.5)
     g1 = w.gametime()
     nap(1.0)
     if w.gametime() != g1:
         raise CouldNotRun("the twin: the game did not pause")
-    for name in ("ln1",):
-        n = len(log.lines)
-        w.trigger(f"dump {name} now")
-        if not log.wait(rf"recorder: frame dump {name} at GameTime", 30, n):
-            raise CouldNotRun(f"the twin: frame dump {name} not taken in 30 s")
+    n = len(log.lines)
+    w.trigger("dump ln1 now")
+    if not log.wait(r"recorder: frame dump ln1 at GameTime", 30, n):
+        raise CouldNotRun("the twin: frame dump ln1 not taken in 30 s")
     for key in ("up", "down", "left", "right"):
         tacli("keys", w.name, f"down:{key}")
         nap(1.0)
@@ -416,26 +415,31 @@ def twin(w, log):
     nap(0.8)
     tacli("keys", w.name, "wheel:-1")
     nap(0.8)
-    tacli("keys", w.name, "tab")
-    nap(1.0)
-    tacli("keys", w.name, "tab")
-    nap(1.0)
     tacli("keys", w.name, "pmove:700,500")
     nap(0.5)
     tacli("keys", w.name, "pmove:60,300")
     nap(0.5)
+    # the in-game menu is Tab (ARMOPT.GUI): ln2 is taken with it open, since its OK resumes the
+    # game (MEASURED: GameTime moved between the dumps when ln2 followed the OK); Esc does nothing
+    tacli("keys", w.name, "tab")
+    rc, o = tacli("ui", w.name, "wait", "--gui", "ARMOPT.GUI", "--timeout", "10", timeout=60)
+    if rc:
+        raise CouldNotRun(f"the twin: the in-game menu did not open: {last(o)}")
     n = len(log.lines)
     w.trigger("dump ln2 now")
     if not log.wait(r"recorder: frame dump ln2 at GameTime", 30, n):
         raise CouldNotRun("the twin: frame dump ln2 not taken in 30 s")
     if w.gametime() != g1:
         raise CouldNotRun("the twin: GameTime moved between its dumps")
-    tacli("keys", w.name, "pause")
+    rc, o = tacli("ui", w.name, "click", "OK", timeout=60)
+    if rc:
+        raise CouldNotRun(f"the twin: the in-game menu's OK: {last(o)}")
     nap(1.5)
     if w.gametime() == g1:
+        tacli("keys", w.name, "pause")
         nap(2.0)
         if w.gametime() == g1:
-            raise CouldNotRun("the twin: the game did not unpause")
+            raise CouldNotRun("the twin: the game did not resume")
 
 
 def live(w, fx, Ts, out):
