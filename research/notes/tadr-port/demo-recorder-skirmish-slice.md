@@ -19,7 +19,10 @@ and the wreck pool, and every change to them is replayed through the function th
 `.data`'s simulation fields, the projectiles in flight and the explored map, and moves a playback
 to any GameTime of its recording, forward or backward, from a fresh process or in the running one
 (`tacli replay seek`; *S3b, verified and measured*).
-S3c, the round trip and the harness, is next.
+**S3c, the round trip and the harness, is three landings** (*S3c*). S3c-1 (2026-10-01) makes the
+recording the only writer of every declared table on a puppet host, adds frame dumps and the
+puppet round trip, and brings `tools/replay/tareplay.py` with nine fixtures in the tree
+(*S3c-1, verified and measured*); S3c-2 and S3c-3 are next.
 
 ## How the slice is cut
 
@@ -30,7 +33,7 @@ Each landing adds one capability that can be verified by itself, and the ones af
 | **S1 — the recorder** | the capture at `0x4954ED`, the writer thread, the file, self-verification, and a tool that reads a recording back | self-verification over whole games; the file read back to the tick of a dump and compared with the dump byte for byte; the cost and the size measured |
 | **S2a — what watching needs, recorded** | the objects a unit record points at (the mover, the order lists) and PlayerInfo, events at their roots, the nano spray, the header's game options, seats and weapon fingerprint | S1's checks over the new records; the events checked against the images |
 | **S2b — watching** | the puppet host, playback, the one-writer rule, getter 75 per seat, `tacli replay play` | a recording played on puppets and compared with the recording at checkpoints, in full visibility and from the recording viewer's perspective with its radar picture; each event kind counted as played or not |
-| **S3 — seeking** | the rebuild in place from a snapshot, features and wrecks, the main block and `.data`, the replay harness and its restore round trip, the CLAUDE.md replay gate and the landing command's Step 4b, the nightly tier | the round trip, with its rules against a vacuous pass; seek times against the target |
+| **S3 — seeking** | the rebuild in place from a snapshot, features and wrecks, the main block and `.data`, the replay harness and its puppet round trip, the CLAUDE.md replay gate and the landing command's Step 4b, the landing and broad tiers | the round trip, with its rules against a vacuous pass; seek times against the target |
 | **S4 — rewind, takeover and forks** | the timeline in a live skirmish, Back to now, Play from here, forks in the file, the takeover from a recording | the harness's takeover run, judged like the compatibility suite's battle; the fork rules |
 | **S5 — the browser and the controls** | the Replays browser, the timeline bar, perspectives, camera follow, the overlays, the recording switch in the settings screen | the browser and the controls driven through `tacli ui`, with pictures |
 
@@ -686,7 +689,7 @@ Three landings, as S2 was two, each a finished unit verified by running it:
 |---|---|---|
 | **S3a — features and wrecks** | the map grid's cells and the wreck pool recorded every iteration, with the events at their roots; their changes replayed on puppets through the functions that made them | S1's and S2b's checks with the features in them: every dump equal to the recording, live and on puppets; the capture's cost and size |
 | **S3b — the globals, and seeking** | the main block's and `.data`'s simulation fields (a positive list), the projectiles and the explored map recorded, and both images whole in every dump; the rebuild in place from a snapshot on a puppet host; `tacli replay seek` | a fresh process seeking to a dump's GameTime is equal to that dump; forward and backward seeks; seek times against the target |
-| **S3c — the round trip and the harness** | the restore on a live skirmish, the rules against a vacuous pass and the null twin, `tools/replay/tareplay.py` with its fixtures and tiers, the CLAUDE.md replay gate, the landing command's Step 4b, the nightly tier | the round trip over the fixtures, none passing vacuously |
+| **S3c — the round trip and the harness** | one writer for the declared tables on a puppet host, the puppet round trip and the rules against a vacuous pass, root, sink and COB-write counts, the null twin and the images gate, `tools/replay/tareplay.py` with its fixtures and its landing and broad tiers, the CLAUDE.md replay gate, the landing command's Step 4b | the round trip over the fixtures, none passing vacuously |
 
 ### S3a — features and wrecks
 
@@ -948,7 +951,8 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   what the recording machine drew after its own. In that order: LosType bits 0–2, only when they
   differ, with the engine's own reaction (the temporary sight records dropped through the engine's
   expiry, the bits written, `0x4816A0(1)` when Mapping changed and `0x4816A0(0)` otherwise, then
-  V's sight filled again); the units' bookkeeping (below); the `write` rows; the pool, each ID
+  V's sight filled again); the units' bookkeeping (below); the declared tables (*S3c-1*); the
+  `write` rows; the pool, each ID
   bounded by its table and a record below the count with no weapon refusing the whole write (the
   host's pool is then emptied and the refusal counted); the explored map, V's bit kept set. The
   replay's end-of-level line counts each.
@@ -1089,8 +1093,8 @@ The owner's answers to the plan's questions, as recommended unless said otherwis
 - **CLAUDE.md's recorder sentence names the globals and the pool**, and with them the explored map.
 - **What the positive list leaves out is confirmed**; S3c's null twin classifies it.
 - **The rebuild's flag is `SIM_TRANSIENT`**, as S2b's `s_open`.
-- **The declared tables are not written between seeks** (deferred to S3c); the gap is stated in
-  *What S3b leaves*.
+- **The declared tables are not written between seeks** (deferred to S3c); S3c-1 closes it
+  (*S3c-1*).
 - **A seek lands on any GameTime it is asked for**, and for up to 29 ticks after it the contact bits
   — and in a seat's view the minimap's fog — are one radar pass fresher than a playing's (*What S3b
   leaves*). The alternative was to round every target down to the viewed record's last pass tick,
@@ -1255,11 +1259,11 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
 - **The temporary sight records are dropped** at a seek and at a recorded LosType change: up to
   2 s of the viewed seat's death vision, under true LOS and a seat's view only. An exact restore
   needs each death's position in the recording, a recorder change.
-- **The declared tables are written only at a seek**, and the wind's at the first step; between
-  seeks each holds what the host's own code writes. For a table whose writer is gated on a puppet
-  host that differs from the recording: `s_quiet`, written under the gated damage apply, so the
-  minimap's blink after harmless weather differs during playback, seek or no seek. S3c sorts each
-  table's writers.
+- **The declared tables between seeks — closed by S3c-1.** In S3b a puppet host wrote them only at
+  a seek, and the wind's at the first step, so between seeks each held what the host's own code
+  wrote; `s_quiet`, written under the gated damage apply, made the minimap's blink after harmless
+  weather differ during playback. S3c-1 writes every recorded table at every capture point and
+  frame visit (*S3c-1*).
 - **The AI, the pathfinder and the objective objects** (heap, outside both images) and the CRT's
   `rand` (per thread) are not recorded; a puppet host runs no AI and asks its pathfinder for
   nothing.
@@ -1269,10 +1273,11 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   stay strictly increasing per slot, so after a backward seek one can exceed GameTime), the
   passability cache and the order of the units inside each seat's control-group vectors (their
   membership is the recording's). The takeover (S4) must answer for each.
-- **The rebuild runs on a puppet host only**; the live restore is S3c's and the takeover S4's.
+- **The rebuild runs on a puppet host only**; the live in-place restore comes with S4's takeover
+  (the owner's answer to OQ1, *S3c*).
 - **The images report is informational.** `tarec compare --images` names the bytes outside the
   list (*S3b, verified and measured*, V9), but nothing yet sorts them into simulation and
-  presentation; S3c's null twin does, and makes it a gate.
+  presentation; S3c-2's null twin does, and makes it a gate.
 - **The ray-fan edge**: a unit whose sight height is 5 or less is not re-stamped after its height
   byte is zeroed but is still unstamped at its death (the engine map); whether any unit type
   reaches it is not established.
@@ -1283,8 +1288,243 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
 
 ### S3c — the round trip and the harness
 
-Planned in detail when S3b is in: the [completeness note](demo-recorder-completeness.md#the-replay-test-harness)'s
-harness, as decided on 2026-09-29.
+Planned 2026-10-01, once S3b was in, from the
+[completeness note](demo-recorder-completeness.md#the-replay-test-harness)'s harness and the owner's
+answers of that day (its *Decisions taken*). Three landings, each verified by running it:
+
+| Landing | Delivers |
+|---|---|
+| **S3c-1 — one writer for the tables, and the round trip** | on a puppet host the recording writes every declared table at every tick boundary; frame dumps; the puppet round trip with the TRANSIENT reset and the poison check; `tools/replay/tareplay.py run` and nine fixtures in the tree |
+| **S3c-2 — counted on puppets, and the images gate** | root, sink and COB-write counts in every dump and their comparison; the null twin and the images gate over the bytes `replay-globals.tsv` leaves out; the address-shaped-value scan |
+| **S3c-3 — fixtures beside the code, and the gate** | `SIM_FEATURE` regions naming their fixtures, the coverage build, `tareplay.py landing` and `broad`, the CLAUDE.md replay gate and the landing command's Step 4b |
+
+**Why the round trip runs on a puppet host, not on the live skirmish** (the owner's answer to OQ1).
+The recording machine cannot rebuild the state it is in. The recorder captures iteration k at the
+capture point inside step k, after GameTime's increment and before the unit tick (the engine map's
+[*tick boundaries*](../exe-reverse-engineering.md#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01)),
+so at the frame visit after step k it holds iteration k while the world holds step k's result: a
+rebuild there restores iteration k and step k runs a second time, live. That second run meets what
+no recording carries — each seat's AI object and acquisition record (a simulation-RNG draw at
+`0x40B301`), the per-thread CRT `rand`, and every live order node's handler object `+0x52`, which
+cannot be copied (MEASURED 2026-09-29: a fault at `0x43A2A2`; the engine map and the
+[state evidence](demo-recorder-state-evidence.md)). Made safe, a live
+rebuild needs the recording ended first, the elimination refused, the objective's end tests held,
+the order nodes' handler objects adopted and the `hold` rows written: that is S4's takeover, which
+brings the live in-place restore with it. A puppet host's frame visit after step k already holds
+iteration k+1 (`play` writes its images in step k), so its rebuild to k+1 is in place, and the
+whole-image comparison the live round trip was for comes from the fresh-process seek of S3c-2's
+images gate.
+
+### S3c-1 — one writer for the tables, and the round trip
+
+**The declared tables have one writer on a puppet host** (O13, closed by construction). The replay
+writes every table the recording carries into the declaration it pairs with (`tables_put`,
+`tagpu_replay.c`) from `recorded_put`, after the units' bookkeeping and before the globals: at each
+capture point (`tagpu_replay_capture`, first in B2's stub) and at each frame visit after a step. R12
+of a seek calls the same code, and R13's `recorded_put` writes the tables once more. The invariant,
+stated at `tables_put`: on a puppet host the recording is the only writer of every table it carries
+at every tick boundary — at each capture point and each frame visit after a step, every recorded
+table this build pairs holds the recording's values for the iteration the host holds, less the
+fields its layout keeps. Host writers in between (a replayed death's credit, a create's birth stamp)
+are overwritten at the next boundary. It is an ordering: `recorded_put` runs on the game thread,
+in B2's stub before the unit tick and in the frame visit before the draw.
+
+- **Only the bytes that differ are written.** A row's bytes outside its layout's keep (`table_keep`:
+  `SIMF_LOCAL`, `SIMF_OWNED`, `SIMF_COLUMN`, `SIMF_ADDR`, and a `SIMF_COUNT` in a row with column
+  fields) are compared and written where they differ; a `SIMF_ADDR` with an ID kind is written back
+  as the address its ID resolves to, and counted as kept when it does not. A count variable is
+  kept whole when the table it counts is a heap table, or a live prefix whose recorded count exceeds
+  the array (`count_kept`). The write holds the air pool's lock from `tagpu_patches_restore_begin`
+  to the end of `tagpu_patches_restored`, then `tagpu_weapons_restored` re-establishes what the
+  weapon defs' layout cannot say, every call. A table the recording carries but this build does not
+  pair is named once a playback (and at every seek).
+- **The globals line names the tables the host wrote.** Its tail is `the declared tables: <r> rows
+  written over the host's own values (in <names>), <k> values kept, <s> skipped, <p> repaired`,
+  the names as many as fit in 160 characters. A row counts when the write changed any of its bytes,
+  so `<r>` counts the host's own writes the recording overwrote.
+
+**Frame dumps.** `dump <name> now` in the trigger takes a dump at once, at the frame visit that
+reads it, on any level in play (`tagpu_rec_dump_now`; refused with a line when no level is in play,
+the name 1 to 39 letters, digits, `-` and `_`). Its header carries `RT_FRAME`, the GameTime at the
+dump, and its records are read as iteration GameTime+1: between two steps they hold step GameTime's
+result. It is not that iteration's capture point: its main block and .data images also hold what the
+rest of the frame wrote — the draw, the next frame's scheduler `0x495230` and its pacing words — and
+GameTime is one lower (the engine map's *tick boundaries*), so a frame dump compares only with
+another frame dump; the round trip's A and B are taken at one frame visit. Two frame dumps with one `RT_FRAME` saw no step between them:
+GameTime rises once a step, at `0x4954C0`. The log line is `recorder: frame dump <name> at GameTime
+<g> (iteration <g+1>) -> <path> ...`. `tools/replay/tarec.py` reads `RT_FRAME`: `compare-dumps`
+labels the pair `frame dump at GameTime <g> (iteration <g+1>)` and refuses a frame dump against a
+capture-point dump or one of another frame; `compare` refuses a frame dump (`compare it with
+compare-dumps`), since no capture point's image holds what it holds.
+
+**The round trip.** `roundtrip <name> at <T>` in the trigger, on a level that plays a recording
+(refused elsewhere), T ≥ 2 and the name 1 to 36 letters, digits, `-` and `_`, up to 4 armed. At the
+first frame visit of GameTime T−1, the reader at iteration T, right after that visit's
+`recorded_put` — so A's tables are the recording's, which the poison check needs — the replay takes
+the frame dump `<name>-a`, puts the TRANSIENT declarations back, seeks to T with the poison check,
+takes the frame dump `<name>-b` and logs one line: `replay: <rec>: round trip <name> at <T>:
+TRANSIENT <b> bytes reset (<names>); <n> tables poisoned, residue <r> (<names>); seek <ms> ms`.
+`tarec.py compare-dumps <rec> <name>-a <name>-b` must be EQUAL: A is a playing's state, B a rebuild
+to T in place with nothing between them, so a difference is the seek's by construction. A round
+trip the host passes (a frame can run several steps) is dropped with `... not run: the level is at
+GameTime <t>`, and one whose seek is refused logs the refusal and takes no B.
+
+- **The TRANSIENT reset** (`tagpu_simreg_transient_save`, `tagpu_simreg_transient_reset`,
+  `tagpu_simreg.c`): the static `SIM_TRANSIENT` declarations — not TLS, heap or engine ones —
+  `stride × nrows` bytes each, saved at the playing's first frame visit after its first step (a
+  tick boundary) and put back only at a round trip's start, which names up to 8 that differed
+  (`<name>: <k> bytes`). At a tick boundary every byte of one is at its value from load or written
+  before it is read (`tagpu_simreg.h`), so the reset changes nothing the simulation reads unless a
+  declaration is misclassified, which tareplay's continuation dump 300 ticks later names.
+- **The poison check, as built** (R12, when the round trip asks). Every declaration
+  `tagpu_simreg_recorded` accepts — not only those the recording pairs — is copied aside and every
+  byte its layout does not keep is set to `0xA5` in every host row; then the write; then the
+  residue test. The test covers only the bytes the write must cover: outside the layout's keep
+  (an address field is never poisoned, since a byte of a host address can be `0xA5`), in the rows
+  the write covers (a live prefix's rows below its count, no more rows than the recording carries),
+  of a declaration whose value the write does not keep whole (`count_kept`: a heap table's count).
+  A byte there still `0xA5` where the recording's own byte is not (for a table the recording does
+  not carry, where the host's was not) is residue: each run named (`round trip <T>: <table> row <r>
+  +0x<off>: <n> bytes not written by the seek`, the first 16), counted and put back from the copy.
+  Every other poisoned byte is put back silently. The invariant is an ordering: copy, fill, write
+  and check run back to back inside R12 under the air pool's lock, on the game thread, with no
+  engine or simulation code between them, so no `0xA5` outlives R12; poisoning before R1 would let
+  the kills' and creates' hooks read `0xA5` from their own tables. A byte the recording itself
+  holds as `0xA5` is never residue, so in a table the recording carries the test has no false hit.
+  A count that sizes a heap table (`g_side_rows`) is never poisoned: `table_put` bounds that
+  table's rows by it and keeps it whole, so a poisoned one would make the bound `0xA5A5A5A5` × the
+  stride and, with a recording image larger than the host's block, the write would run past it.
+  The copy and every declaration's keep are allocated before the first byte is poisoned, so no
+  failure path is left once it has begun.
+
+**`tools/replay/tareplay.py`.** `run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
+[--out DIR]` (`all` for every fixture) and `list`. For each fixture four GameTimes, each T ≡ 1 (mod
+30) so a seek's contact bits agree at once (O14), in [301, min(0.8·end, end−330)] — room for the
+continuation dump 300 ticks after the last round trip — drawn by a generator seeded with the
+fixture's name and HEAD and printed: T1 the smallest, T2..T4 the round trips, Tlast = T4. The lower
+bound is 301, not the plan's 90, and there are no dumps at GameTime 30: the dumps are armed through
+the trigger after the launch returns, so the first must fall past the launch [the margin of 300
+ticks is a choice, not a measurement]. Four processes, each
+a game of its own:
+
+| Process | What | Dumps |
+|---|---|---|
+| **L** live | the fixture recorded | `l<T1>`, `l<Tlast>` |
+| **P** playing | `replay play` from the start, in the recording's viewed player's perspective | `p<T1>`, `p<Tlast>` |
+| **R** round trips | the same, with `roundtrip rt<T> at <T>` for T2..T4 | `r<T1>`; `rt<T>-a`, `rt<T>-b`; `rt<T>c` at T+300 |
+| **Q** fresh seek | `replay seek <T1> --recording` in a fresh process | `q<T1>` |
+
+Every check fails by name: the recording's end block (complete, 0 ID rows outside their tables, 0
+nano sprays uncredited) and `tarec.py check` (which also fails on any correction in the stream); L's
+dumps `compare`; P's, R's and Q's capture-point dumps `compare --puppet`; each round trip's residue
+0 with at least one table poisoned, and `compare-dumps rt<T>-a rt<T>-b` EQUAL — less **O9**, which
+`compare-dumps` folds and names for two frame dumps when A holds temporary sight records and B
+none: B takes A's viewed record's sight counters where A is higher and the units' contact bits
+(`+0x110` bits 8–10 and 12, which the seek's radar pass computes from those counters); anything
+else still differs. A COB stop in a process's log fails that process. Exit 0 when every check
+passed, 1 on a named failure, 2 when something could not run and nothing failed: a process that did
+not run (any error, a tool's timeout, a round trip the host passed, a live game that misses its
+deadline of 120 s + 4 × its end's real time) is reported as could not run and its checks are not
+made, and a missing or unreadable dump is could not run, never a failure. Each worker owns one
+tacli instance, `tareplay-<k>`, on its own Xvfb in `:300..:399`, a number taken only once the
+server's `-displayfd` pipe confirms it and skipping any with a socket or a lock, and holds an
+exclusive lock on `tagpu/instances/tareplay-<k>.lock` for the run, so two runs take different k and
+never touch each other's games; nothing is stopped by name or pattern. SIGTERM or Ctrl-C stops the
+run: no new game starts, each wait gives up, and every worker stops its game and its Xvfb. Passing dumps are deleted unless `--keep`; the run's folder is outside
+the repository (`--out`, `$TAREPLAY_OUT`), since its logs carry absolute paths.
+
+**The fixtures**, `tools/replay/fixtures.json`, keyed by GameTime: `load`, a scenario under
+`scenarios/`; `steps`, each `[GameTime, kind, argument]` — `apply` a scenario, `type` a chat line,
+`order` one unit by roster type and rank; `end`, the GameTime at which `scenarios/replay-end.json`
+ends the level (every unit gone, one AI unit kept, so the recording closes complete); `los: "file"`
+to keep the scenario's own line of sight; `dll: "stock"` for the stock-limits build; and `content`,
+a command run before every launch of the fixture with the files it writes in the game folder,
+which every other fixture's launch removes first. Nine fixtures: `forest-fire`, `forest-circle`,
+`naval-push`, `naval-unmapped`, `battle`, `battle-los` (`+los` typed at 1900), `carry-links` (two
+transports unloaded at 1050 and one loaded again at 1950), `stock-limits` (a four-AI game on the
+stock-limits build) and `nomapalert` (its `content` writes `zzkeys.ufo` through
+`tools/datakeys_fixture.py`).
+
+#### S3c-1, verified and measured
+
+MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game ten minutes or less.
+
+- **The nine fixtures** (`tareplay run all -j 4 --keep`, at f463c10d, 1,200 s): 151 of 153 checks
+  pass. The two failures were battle-los's round trips at 1711 and 1891: A's viewed record's sight
+  counters one higher than B's in 362 and 213 cells, and at 1711 eight units' `+0x110` bit 8 set in
+  A (and in the recording at 1711) and clear in B. A held 2 and 1 temporary sight records, B none;
+  at 3031 both held none and the round trip was EQUAL. That is O9 exactly — the seek drops the
+  records and its radar pass computes the contacts from the counters without them — and
+  `compare-dumps` now folds and names it (above): the two pairs read `EQUAL; O9 (decided): A holds
+  2 temporary sight records … 362 cells … 8 units` and `… 1 … 213 cells, … 0 units`. Every other
+  round trip: residue 0, seeks 7–601 ms (the battle's 239–601), `s_foot` 9–291 bytes reset;
+  stock-limits poisons 21 tables (its build declares fewer), every other fixture 24.
+- **O13, shown and closed.** The nomapalert recording played on main's DLL (88996cf6, before
+  S3c-1): `compare --puppet` at 421 and 1771 differ in `src/tagpu_datakeys.c:s_quiet` alone, 7 and 8
+  dwords, every one 0 on the puppet where the recording holds `0xF0` bytes. On S3c-1 both are EQUAL,
+  and played to its end the playing's globals line reads `the declared tables: 20 rows written over
+  the host's own values (in src/tagpu_datakeys.c:s_quiet), 5154 values kept`.
+- **The poison check fires.** A scratch build whose seek skips `s_quiet` in `tables_put` (never
+  committed), `tareplay run nomapalert`: each round trip's line reads `24 tables poisoned, residue
+  15001 (src/tagpu_datakeys.c:s_quiet)` with `round trip 481: src/tagpu_datakeys.c:s_quiet row 0
+  +0x0: 15001 bytes not written by the seek`, and the run fails those three checks by name.
+- **The per-tick table write's cost**, the battle's recording played to its end alone on a timing
+  build, 7,974–7,976 calls (two a tick): **mean 2,320 µs, worst 7,231 µs** writing byte by byte;
+  1,407 and 4,889 µs by runs of the bytes a layout does not keep; **575 and 3,816 µs** with a table
+  that keeps nothing compared in blocks of about 512 bytes of whole rows, and a table's address
+  fields listed once rather than per row. Per table before the blocks: `g_def` 362 µs, `s_txKillMark`
+  265, `s_txMark` 260, `s_airIn` 210, `s_ghost` 147, `s_quiet` 52, `s_cobRejected` 30, the repair
+  hooks 24, every other table under 6. `g_def` and `s_ghost`, whose rows carry address fields, are
+  the bulk of what is left.
+- **The nine fixtures on the final code** (`tareplay run all -j 4`, at 63e1d501 with the run-wise
+  write): 8 of 9 pass every check, 23 tables poisoned (24 less `g_side_rows`), residue 0 in all 26
+  round trips that ran, seeks 8–460 ms. The ninth, naval-unmapped, round trips at 751 and 781:
+  both pairs EQUAL and both continuations `--puppet` EQUAL (checked by hand from the kept dumps),
+  then the R process stopped at about GameTime 1550 on Impure's COB guard (`CORMSHIP.COB`, word
+  724, `CALL cannot obtain a child thread`) — **O15**, the stop S3b already met after seeks near
+  848 in the same recording, which the owner gave a landing of its own. V1's naval-unmapped, round
+  trips at 841, 1411 and 1741, passed it. Then, on the block-wise write (f5fdda42), `tareplay run battle-los carry-links
+  stock-limits nomapalert -j 4`: exit 0, 68 of 68 checks, residue 0 in all 12 round trips, seeks
+  7–260 ms.
+- **The round trip on two S3b recordings**, the naval push (601, 1201, 1801, 2401) and the battle
+  (601, 1501, 2401, 3301): **8 of 8 `compare-dumps` EQUAL** and residue 0, seeks 26–412 ms (the
+  naval push 26–152, the battle 296–412). The only TRANSIENT bytes reset were `s_foot`'s, 109–308.
+- **The poison check's first cut** tested every poisoned byte, and named residue of 143,347 to
+  143,367 bytes in every round trip of both recordings: `s_airPool` (up to 131,072 bytes) and
+  `s_ghostDone` (12,288), rows past their live counts; `s_hit` row 0 `+0xE`, a byte of its `freed`
+  column's pointer; one byte of `g_def`'s type address in two rows (21 and 277 in the naval push,
+  19 and 221 in the battle); and `g_side_rows`, the heap table `g_side`'s count. Each was the check's flaw, not the seek's — bytes the write keeps by
+  design — and the check above tests only what the write must cover.
+- **`tareplay.py run naval-push carry-links nomapalert -j 3`**: exit 0, every check passes (51 of
+  51), about 7 min wall. Round trips at 751, 1381, 2311 (naval push), 1141, 1501, 1921 (carry links)
+  and 1171, 1651, 1771 (nomapalert): residue 0, seeks 20–163 ms, `s_foot` 25–218 bytes reset, and
+  every continuation dump 300 ticks later `--puppet` EQUAL.
+- **A fixture's content reaches every other fixture's game** unless removed: before `content`
+  named its files, nomapalert's `zzkeys.ufo` stayed in the game folder, and the next fixture's
+  playings refused (`the unit types differ from the recording's (325 here, 279 there)`).
+
+#### What S3c-1 leaves
+
+- **S3c-2**: root, sink and COB-write counts carried in dumps and compared (`compare-counts`), the
+  null twin and the images gate, the address-shaped-value scan; tareplay adds them to its run.
+- **S3c-3**: `SIM_FEATURE` regions and their fixtures, the coverage build, `tareplay.py landing`
+  and `broad`, the `replay-roundtrip:` note, CLAUDE.md's replay gate and Step 4b. Until then nothing
+  runs the harness at a landing.
+- **`s_foot` (`tagpu_puppet.c`) is reset by every round trip** (9–308 bytes). It is the footprint
+  writers' undo stack: depth 0 at every tick boundary, and each frame filled when it is pushed, so
+  `SIM_TRANSIENT` is right and the reset changes nothing the simulation reads.
+- **The round trip runs on a puppet host only**; the live in-place restore and the takeover run
+  are S4's.
+- **O15 fails a tareplay run** whose naval-unmapped round trips fall near GameTime 750–850 (the
+  GameTimes are seeded by HEAD): the R process meets the COB guard's stop about 750 ticks later.
+  Until O15's own landing the harness cannot be a landing gate on that fixture.
+- **O9's fold** accepts, in a round trip whose A holds temporary sight records, any cell of the
+  viewed record where A is higher and any contact bit; a seek's own sight error in those cells
+  would hide behind it there. The round trips whose A holds none (most) test them strictly.
+- **The playing's globals line** (and its declared-tables tail) is logged only at the recording's
+  or the level's end; tareplay stops its games before either, so a run's logs do not carry it.
+- **A seek writes the declared tables twice** (R12, then R13's `recorded_put`, which writes only the
+  bytes that differ from the recording's after R12's repairs).
 
 ## S4 and S5
 

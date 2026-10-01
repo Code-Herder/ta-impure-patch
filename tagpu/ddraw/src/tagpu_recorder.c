@@ -2065,7 +2065,7 @@ static void dump_images(const char* ta)
    build, the globals list's hash and the tables, so that a dump taken by another build than the
    recording's (a playing, D8) is read with its own table names. Written on the game thread, which
    is tooling's price: a dump is the harness's. */
-static void dump_write(const Level* L, int tick, const char* name)
+static int dump_write(const Level* L, int tick, const char* name, int frame)
 {
     char path[MAX_PATH];
     RecBlock b;
@@ -2079,7 +2079,7 @@ static void dump_write(const Level* L, int tick, const char* name)
     if (wide) {
         tagpu_logf("recorder: dump %s refused: %s has rows past %u bytes", name, wide->name,
                    SPAN_MAX);
-        return;
+        return 0;
     }
     t.b = hb;
     t.n = 0;
@@ -2088,24 +2088,25 @@ static void dump_write(const Level* L, int tick, const char* name)
     tlv_u32(&t, RT_FORMAT, REC_FORMAT);
     tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
     tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
+    if (frame >= 0) tlv_u32(&t, RT_FRAME, (unsigned)frame);
     for (i = 0; i < n; i++) {
         const SimDesc* d = tagpu_simreg_at(i);
         if (d && table_recorded(d)) table_entry(&t, i, d, tagpu_simreg_layout_hash(d));
     }
     if (t.full) {
         tagpu_logf("recorder: dump %s refused: its header does not fit in %u bytes", name, t.cap);
-        return;
+        return 0;
     }
     lists = (unsigned char*)VirtualAlloc(NULL, ORD_SCRATCH, MEM_COMMIT | MEM_RESERVE,
                                          PAGE_READWRITE);
-    if (!lists) { tagpu_logf("recorder: dump %s: no memory for the order lists", name); return; }
+    if (!lists) { tagpu_logf("recorder: dump %s: no memory for the order lists", name); return 0; }
     CreateDirectoryA("replays", NULL);
     snprintf(path, sizeof path, "replays\\dump-%s.bin", name);
     s_dump = fopen(path, "wb");
     if (!s_dump) {
         tagpu_logf("recorder: dump %s: cannot write %s", name, path);
         VirtualFree(lists, 0, MEM_RELEASE);
-        return;
+        return 0;
     }
     fwrite(REC_MAGIC, 1, 8, s_dump);
     memset(&b, 0, sizeof b);
@@ -2200,15 +2201,22 @@ static void dump_write(const Level* L, int tick, const char* name)
     fclose(s_dump);
     s_dump = NULL;
     VirtualFree(lists, 0, MEM_RELEASE);
-    tagpu_logf("recorder: dump %s at GameTime %d -> %s (%u bytes of records); %u records with a "
-               "body past 0xFFFF bytes not written", name, tick, path, s_dump_raw, s_dump_long);
+    if (frame >= 0)
+        tagpu_logf("recorder: frame dump %s at GameTime %d (iteration %d) -> %s (%u bytes of "
+                   "records); %u records with a body past 0xFFFF bytes not written", name, frame,
+                   tick, path, s_dump_raw, s_dump_long);
+    else
+        tagpu_logf("recorder: dump %s at GameTime %d -> %s (%u bytes of records); %u records with "
+                   "a body past 0xFFFF bytes not written", name, tick, path, s_dump_raw,
+                   s_dump_long);
+    return 1;
 }
 
-int tagpu_rec_dump_arm(const char* name, unsigned at)
+/* a dump's name: 1 to DUMP_NAME-1 letters, digits, - and _ (its file is replays\dump-<name>.bin);
+   its length, or 0 with a line */
+static size_t dump_name(const char* name)
 {
-    const char* ta = ta_main();
     size_t i, n = bounded_len(name, DUMP_NAME);
-    unsigned now;
     if (!n || n == DUMP_NAME) {
         tagpu_logf("recorder: dump: a name of 1 to %u characters, please", DUMP_NAME - 1);
         return 0;
@@ -2219,6 +2227,30 @@ int tagpu_rec_dump_arm(const char* name, unsigned at)
             tagpu_logf("recorder: dump: the name %.*s is not letters, digits, - and _", (int)n, name);
             return 0;
         }
+    return n;
+}
+
+int tagpu_rec_dump_now(const char* name)
+{
+    char* ta = ta_main();
+    Level L;
+    int now;
+    if (!dump_name(name)) return 0;
+    if (!ta || !level_read(ta, &L)) {
+        tagpu_logf("recorder: frame dump %s refused: no level is in play", name);
+        return 0;
+    }
+    masks_init();
+    now = *(const int*)(ta + OFF_GAMETIME);
+    return dump_write(&L, now + 1, name, now);
+}
+
+int tagpu_rec_dump_arm(const char* name, unsigned at)
+{
+    const char* ta = ta_main();
+    size_t i, n = dump_name(name);
+    unsigned now;
+    if (!n) return 0;
     if (s_narmed == DUMP_ARMED) {
         tagpu_logf("recorder: dump %s refused: %u dumps are armed already", name, DUMP_ARMED);
         return 0;
@@ -2253,7 +2285,7 @@ static void dumps_take(const Level* L, int tick)
     unsigned i, k = 0;
     for (i = 0; i < s_narmed; i++) {
         if (!s_armed[i].at || s_armed[i].at == (unsigned)tick) {
-            dump_write(L, tick, s_armed[i].name);
+            dump_write(L, tick, s_armed[i].name, -1);
         } else if (s_armed[i].at < (unsigned)tick) {
             tagpu_logf("recorder: dump %s for GameTime %u not taken: the level is at GameTime %d",
                        s_armed[i].name, s_armed[i].at, tick);

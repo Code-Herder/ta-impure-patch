@@ -1795,7 +1795,8 @@ S2b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watchi
 [the host note](tadr-port/demo-recorder-s2-host.md), which also says where the build departed from
 it. Everything here runs on the game thread.
 
-**The step.** B2's stub at `0x4954ED` calls the unit tick `0x48AD30` and then `tagpu_replay_step`:
+**The step.** B2's stub at `0x4954ED` calls the unit tick `0x48AD30` and then `tagpu_replay_step`
+(the stub's whole order is in [*tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01)):
 the events of step T in recorded order, then the image of T+1
 ([the events note](tadr-port/demo-recorder-s2-events.md) §1.0). The rest of the iteration then runs
 on the recording's world.
@@ -2701,6 +2702,72 @@ and measured*): the pool's written extent reached 242 of 3000 records in the 1,4
 in the naval fixture and 5 in the forest fire; with Mapping on (LosType 5) the explored map changed
 in 226 of 3,810 iterations, 5,669 bytes in their runs; with it off it never changed in any
 fixture.
+
+### The demo recorder's tick boundaries: the sim step `0x495490` and its callers [DISASSEMBLED 2026-10-01]
+
+S3c-1 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s3c-1-one-writer-for-the-tables-and-the-round-trip)
+writes a puppet host's declared tables at every tick boundary and takes frame dumps and round trips
+between two steps; this is the step those boundaries sit in. Read from `pristine/TotalA.exe.pristine`
+(`objdump -d`, the PE's own section map: `.text` at `0x401000`), the stub against
+`tagpu/ddraw/src/tagpu_patches.c`.
+
+- **`0x495490(int pump)`**, `stdcall`, one argument (`ret 4` at `0x4956B0`). It reads the iteration
+  count `main+0x38A3B` (`0x495497`) and, when it is 0, skips the loop (`je 0x495674` at `0x4954A2`) to
+  the once-a-call tail; the argument goes to `edi` (`0x4954A8`), the count to `ebx` (`0x4954AD`), and
+  the back edge is `dec ebx; jne 0x4954B2` (`0x49566C`, `0x49566D`).
+- **Each iteration, in order.** GameTime `main+0x38A47` is read (`0x4954B7`), incremented (`0x4954BD`)
+  and stored (`0x4954C0`) — its only write inside the step. `test edi,edi` (`0x4954BE`) and `je
+  0x4954ED` (`0x4954C6`) skip, for a zero argument, both the network pump `0x453D40` (`0x4954C8`) and
+  its timing accumulator (`0x4B6560` at `0x4954D8`, `main+0x38D85 +0x2C`). Then the unit tick's call
+  `0x4954ED` (`E8 3E 58 FF FF`, returning to `0x4954F2`), and the rest: `0x49B720` (`0x495513`),
+  `0x420F30` (`0x495539`), the players phase `0x464F80` (`0x49555F`), `0x424050` (`0x495585`),
+  `0x415B30` (`0x49558A`), `0x490C40` (`0x49558F`), `0x437DE0` (`0x495594`), `0x41CA10` (`0x495599`),
+  `0x471EB0` (`0x4955BF`), `0x466580` (`0x4955E5`), each timed through `0x4B6560`
+  ([*The demo recorder's globals, projectiles and seek*](#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)
+  names them). Last, the argument gates two calls again: `test edi,edi` at `0x49560B` (`je 0x49566C`)
+  and a nonzero `[0x506DBC]` (`0x49560F`) before `0x457D30` (`0x49563A`, its argument the controlled
+  player's block, `main+0x2A42` × 0x14A `+0x1B63` + the index) and `0x4618A0` (`0x495646`, `this` =
+  `0x513000`, argument 0) [names not read], so a skirmish skips those too. Once a call, loop or no loop: `0x428BD0`, `0x428BE0`, `0x428BF0` (`0x495674`..`0x49567E`,
+  not read), the chat expiry `0x463EF0` (`0x495683`) and the temporary sight records' expiry
+  `0x482130` (`0x495688`).
+- **B2's stub at `0x4954ED`** (`tagpu_patches.c`, the stacked-aircraft installer's `tick` block):
+  `pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture; call air_rebuild; popad; popfd;
+  call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`. The unit tick takes no
+  argument and returns with a plain `ret` (`0x48B080`), so the stub's call is the site's own call.
+  `tagpu_replay_capture` is the **capture point**'s write on a puppet host (the globals, the pool,
+  the explored map and the declared tables, through `recorded_put`), `tagpu_rec_capture` the
+  recorder's capture (and the armed dumps), `air_rebuild` the airborne pool, and `tagpu_replay_step`
+  the replay's step, which writes the next iteration's images after the unit tick.
+- **The callers: two**, both in the in-play frame callback `0x496790` (a scan of `.text` for `E8`/`E9`
+  rel32 to `0x495490` finds `0x49680C` and `0x49693E`; no jump, and the file holds the address as no
+  stored dword). `0x49680C` passes 1 (`push ebx` at `0x49680B`, `ebx` = 1 from `0x4967CF`) on the
+  network branch (`main+0x2A44` bit 0, `0x4967E7`), after the scheduler `0x495230` (`0x4967F3`) and a
+  nonzero count (`0x496803`). `0x49693E` passes 0 (`push 0` at `0x49693C`) otherwise: after the test
+  of `main+0x37EBE` bit 0 (`0x496918`, `jne 0x49697B`), the pause test `main+0x38A51` (`0x496920`,
+  `jne 0x496969`), the scheduler (`0x496928`) and a nonzero count (`0x49693A`). So **a skirmish never
+  runs the pump** inside the step.
+- **The two tick boundaries.** The *capture point* is B2's stub, inside step k after GameTime became
+  k and before the unit tick: the world holds iteration k. The *frame visit* is Impure's hook before
+  the in-play draw call `0x4969CD`, after `0x495490` returns (and on paused frames, which skip it):
+  GameTime is k and the simulation holds step k's result. Between the step and the hook run the
+  step's once-a-call tail — after a call's *last* iteration only, so when one call runs several
+  steps the earlier ones' frame visits never happen and their tail work lands after step k — and,
+  in the frame callback, `0x495E90` and `0x41CE90` (`0x496971`, `0x496976`, skipped by the jump at
+  `0x49696F`), `0x48BAE0` (`0x49697B`) and, on one branch, `0x41B2E0` (`0x4969B4`) [names not read].
+  A frame dump there is not iteration k+1: between it and the next capture point the rest of
+  `0x496790` runs — the draw `0x468CF0`, input on
+  a live host, the next frame's scheduler `0x495230`, which stores `main+0x38A37`, `+0x38A3B`,
+  `+0x38A3F`, `+0x38A4D`, `+0x38A4F` and the pause word `+0x38A51` — then the next step's GameTime
+  increment (its pump never runs in a skirmish). A dump carries both images whole, so those bytes
+  differ from the capture point's; two dumps taken at one frame visit (the round trip's A and B)
+  share all of it. A frame dump's `RT_FRAME` is that GameTime, and two frame dumps of one `RT_FRAME` saw no
+  step between them, since a step raises GameTime exactly once (`0x4954C0`); its other writers are
+  the shell's network clock `0x44A696`, the level init, the loader and the load wait (the S3b table),
+  outside play [INFERRED from where that table places them], and Impure's seek, which sets it to T−1
+  between two steps. On a puppet host `tagpu_replay_step` has already put iteration
+  k+1's images in step k, which is why a rebuild at the frame visit is in place there and would not
+  be on the recording machine.
+
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
@@ -5743,7 +5810,7 @@ records them), distance test, falloff and damage with no arithmetic of ours:
 | `0x49A664` | the 11 bytes above | `push [ebp+0xC]; push [ebp+8]; call air_first`; a unit → `esi`, `[esp+0x10] = 2`, `jmp 0x49A24E`; none → the 11 bytes and `jmp 0x49A66F` |
 | `0x49A415` | the 18 bytes above | a selector below 2 steps exactly as stock (the flags `jle` reads are stock's: `inc`, `cmp`, then a `mov`) and leaves for `0x49A214` or `0x49A427`; at 2, `call air_next` and `0x49A24E` again, or the 11 bytes and `0x49A66F` |
 | `0x47CF98` | `cmp eax,2; jne 0x47D0D5` | the same test, then `pushad; push esi; call air_note; add esp,4; popad; jmp 0x47CFA1` |
-| `0x4954ED` | `call 0x48AD30` | `call` to `pushfd; pushad; call tagpu_rec_capture; call air_rebuild; popad; popfd; jmp 0x48AD30`, which returns to `0x4954F2`: the demo recorder's capture first ([above](#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)) |
+| `0x4954ED` | `call 0x48AD30` | `call` to `pushfd; pushad; call tagpu_replay_capture; call tagpu_rec_capture; call air_rebuild; popad; popfd; call 0x48AD30; pushfd; pushad; call tagpu_replay_step; popad; popfd; ret`, which returns to `0x4954F2`: the replay's capture-point write and the demo recorder's capture first, the replay's step after the unit tick ([*tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01)) |
 
 `air_first` builds the call's candidate list, in the frame B1's wrapper `dmg_area` already holds
 (32 slots inline, then a block from `0x4D83B0` freed when the call returns), from a pool of airborne

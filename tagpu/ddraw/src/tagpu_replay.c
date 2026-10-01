@@ -153,6 +153,13 @@ static struct {
     int      overflow;
     uint16_t run[TIN_RUNS][3];      /* x, z, n: bounded by the reader (cells_ok)                  */
 } s_tin;
+/* A table's write counts: tables written and skipped, values left as the host holds them,
+   invariants repaired, rows the write changed, and the first tables it changed */
+typedef struct {
+    unsigned written, skipped, kept, repaired, changed;
+    char     names[160];
+} TabCounts;
+
 typedef struct {
     unsigned water, stamps, refused;
 } Books;                            /* the units' bookkeeping written (THE UNITS' BOOKKEEPING)     */
@@ -160,6 +167,8 @@ static struct {
     unsigned puts, late, refused, reacts, dropped, unbounded, mputs, mentries, mrefused;
     Books    books;
     unsigned bmade, bother;
+    TabCounts tab;
+    int      tnamed;                /* an unpaired table named once a playback                   */
 } s_gst;                            /* ... and its globals' and projectiles'                      */
 static uint32_t   s_made[0x10000];  /* a slot's GameTime after the step whose create made it: the
                                        slot count is a u16 (THE UNITS' BOOKKEEPING)              */
@@ -168,7 +177,14 @@ static struct {
     int      pending;               /* a seek waits for the next frame visit after the first step */
     unsigned T;
     char     dump[40];              /* a dump to take at its capture point, or ""                 */
+    int      poison;                /* R12 poisons the tables first (THE POISON CHECK)            */
 } s_seek;
+#define RT_ARMED 4
+static struct {
+    unsigned n;
+    struct { char name[37]; unsigned T; } a[RT_ARMED];
+    int      tsaved;                /* the TRANSIENT declarations saved for this playing          */
+} s_rt;                             /* the armed round trips (THE ROUND TRIP)                     */
 static struct {
     int            saved;
     int            played;          /* the level's first step has run (THE PLAYER'S SETTINGS)     */
@@ -204,6 +220,7 @@ static void replay_close(void)
     s_tin.n = 0;
     s_tin.overflow = 0;
     memset(&s_gst, 0, sizeof s_gst);
+    memset(&s_rt, 0, sizeof s_rt);
     memset(s_made, 0, sizeof s_made);
     memset(&s_seek, 0, sizeof s_seek);
     s_frame_tick = ~0u;
@@ -3106,13 +3123,17 @@ static void books_put(const Lv* L, const RecWorld* W)
     }
 }
 
-/* the world's globals, pool and explored map into the host (the head of this section), and the
-   units' bookkeeping after the LosType reaction, whose bits 1-2 the stamp's pair reads */
+static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek);
+
+/* the world's declared tables (THE TABLES, tables_put), globals, pool and explored map into the
+   host (the head of this section), and the units' bookkeeping after the LosType reaction, whose
+   bits 1-2 the stamp's pair reads */
 static void recorded_put(const Lv* L, const RecWorld* W)
 {
     masks_init();
     los_react(L->ta, W);
     books_put(L, W);
+    tables_put(L, W, &s_gst.tab, 0);
     globals_put(L->ta, W);
     proj_put(L, W);
     mapped_put(L->ta, W);
@@ -3234,7 +3255,9 @@ static struct {
     unsigned frecs, fcells, fdropped, models, freed;
     unsigned sdropped;
     unsigned water, states, stamps, brefused;
-    unsigned twritten, tskipped, tkept, trepaired;
+    TabCounts tab;
+    unsigned poisoned, residue;     /* tables poisoned, bytes the write left at the poison        */
+    char     rnames[160];           /* the first tables with residue                              */
     int      pool, effects;
 } s_sk;                             /* one seek's counts, for its second line                    */
 
@@ -3813,6 +3836,35 @@ static const SimDesc* count_owner(const SimDesc* d)
     return NULL;
 }
 
+/* the first tables a write changed, comma-separated, as long as they fit */
+static void tab_name(TabCounts* c, const char* name)
+{
+    size_t n = strlen(c->names), k = strlen(name);
+    if (strstr(c->names, name) || n + k + 3 >= sizeof c->names) return;
+    if (n) memcpy(c->names + n, ", ", 2), n += 2;
+    memcpy(c->names + n, name, k + 1);
+}
+
+/* the bytes of a row the write leaves as the host holds them (1 in keep): SIMF_LOCAL, SIMF_OWNED,
+   SIMF_COLUMN, SIMF_ADDR (written back as an address where its ID resolves), and a SIMF_COUNT in a
+   row with SIMF_COLUMN fields; the count of such bytes */
+static unsigned table_keep(const SimDesc* d, unsigned char* keep)
+{
+    const SimField* f;
+    unsigned b, n = 0;
+    int column = 0;
+    for (f = d->layout; f && f->size; f++) column |= f->kind == SIMF_COLUMN;
+    for (f = d->layout; f && f->size; f++) {
+        unsigned k, r = f->repeat ? f->repeat : 1;
+        int left = f->kind == SIMF_LOCAL || f->kind == SIMF_OWNED || f->kind == SIMF_COLUMN ||
+                   f->kind == SIMF_ADDR || (f->kind == SIMF_COUNT && column);
+        if (!left) continue;
+        for (k = 0; k < r; k++) memset(keep + f->off + (size_t)k * f->step, 1, f->size);
+    }
+    for (b = 0; b < d->stride; b++) n += keep[b];
+    return n;
+}
+
 /* One recorded table into its paired declaration, in place: the inverse of the recorder's
    row_image. Plain bytes, and SIMF_ID, SIMF_TARGET and SIMF_PINNED fields, from the image (a pinned
    field's object is written where it is, never moved); a SIMF_ADDR with an ID kind back to its
@@ -3824,89 +3876,321 @@ static const SimDesc* count_owner(const SimDesc* d)
    the host's memory and a heap table is never reallocated here. A count variable is written only
    as its table allows: never a heap table's (its block is sized by it), a live prefix's only within
    the array. */
-static void table_put(const Lv* L, const SimDesc* d, const RecTable* t)
+/* a count variable the write leaves as the host holds it: never a heap table's (its block is sized
+   by it), a live prefix's only within the array */
+static int count_kept(const SimDesc* d, const RecTable* t)
+{
+    const SimDesc* owner = (!(d->flags & SIMD_HEAP) && d->nrows == 1 && !d->rows)
+                               ? count_owner(d) : NULL;
+    uint32_t v;
+    if (!owner) return 0;
+    memcpy(&v, t->img, t->size < 4 ? 0 : 4);
+    return !owner->nrows || t->size < 4 || v > owner->nrows;
+}
+
+static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCounts* c)
 {
     unsigned char* base = (d->flags & SIMD_HEAP) ? *(unsigned char**)d->addr
                                                  : (unsigned char*)d->addr;
     unsigned host = !base ? 0 : !d->nrows ? *d->rows * d->stride : d->nrows * d->stride;
-    unsigned rows = (t->size < host ? t->size : host) / d->stride, r, b, nkeep = 0;
-    const SimDesc* owner = (!(d->flags & SIMD_HEAP) && d->nrows == 1 && !d->rows)
-                               ? count_owner(d) : NULL;
+    unsigned rows = (t->size < host ? t->size : host) / d->stride, r, b, nkeep = 0, changed = 0;
+    unsigned nspan = 0, naddr = 0, *span, *addr;
     unsigned char* keep;
     const SimField* f;
-    int column = 0;
-    if (owner) {
-        uint32_t v;
-        memcpy(&v, t->img, 4);
-        if (!owner->nrows || t->size < 4 || v > owner->nrows) {
-            s_sk.tkept++;
-            return;
-        }
-    }
-    keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, d->stride);
-    if (!keep) {
-        s_sk.tskipped++;
-        tagpu_logf("replay: %s: the seek skipped %s: no memory", s_name, d->name);
+    if (count_kept(d, t)) {
+        c->kept++;
         return;
     }
-    for (f = d->layout; f && f->size; f++) column |= f->kind == SIMF_COLUMN;
-    for (f = d->layout; f && f->size; f++) {
-        unsigned k, n = f->repeat ? f->repeat : 1;
-        int left = f->kind == SIMF_LOCAL || f->kind == SIMF_OWNED || f->kind == SIMF_COLUMN ||
-                   f->kind == SIMF_ADDR || (f->kind == SIMF_COUNT && column);
-        if (!left) continue;
-        for (k = 0; k < n; k++) memset(keep + f->off + (size_t)k * f->step, 1, f->size);
+    /* the row's written bytes as runs, [span[2k], span[2k+1]): at most stride/2 + 1 of them; the
+       ID-resolved address fields, 4 bytes each, so at most stride/4, as (offset, ID kind); the keep */
+    span = (unsigned*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                ((size_t)2 * d->stride + 4) * sizeof(unsigned) + d->stride);
+    addr = span ? span + d->stride + 2 : NULL;
+    keep = span ? (unsigned char*)(addr + d->stride + 2) : NULL;
+    if (!keep) {
+        c->skipped++;
+        tagpu_logf("replay: %s: the tables skipped %s: no memory", s_name, d->name);
+        return;
     }
-    for (b = 0; b < d->stride; b++) nkeep += keep[b];
+    nkeep = table_keep(d, keep);
     /* a heap table sized otherwise than the recording's: rows past the shorter one keep the host's
        bytes or are not written, so the difference is counted with the values left */
-    if ((d->flags & SIMD_HEAP) && t->size != host) s_sk.tkept++;
-    for (r = 0; r < rows; r++) {
-        unsigned char* row = base + (size_t)r * d->stride;
-        const unsigned char* img = t->img + (size_t)r * d->stride;
-        if (!nkeep) {
-            memcpy(row, img, d->stride);
-            continue;
+    if ((d->flags & SIMD_HEAP) && t->size != host) c->kept++;
+    for (b = 0; b < d->stride; b++)
+        if (!keep[b] && (b == 0 || keep[b - 1])) {
+            span[nspan] = b;
+            while (b < d->stride && !keep[b]) b++;
+            span[nspan + 1] = b;
+            nspan += 2;
         }
-        for (b = 0; b < d->stride; b++)
-            if (!keep[b]) row[b] = img[b];
-        for (f = d->layout; f->size; f++) {
-            unsigned k, n = f->repeat ? f->repeat : 1;
-            if (f->kind != SIMF_ADDR || f->id == SIM_ID_NONE || f->size != sizeof(char*)) continue;
-            for (k = 0; k < n; k++) {
-                unsigned at = f->off + k * f->step;
-                uint32_t id;
-                char* p;
-                memcpy(&id, img + at, 4);
-                if (addr_of(L, f->id, id, &p)) memcpy(row + at, &p, 4);
-                else s_sk.tkept++;
-            }
+    for (f = d->layout; f && f->size; f++) {
+        unsigned k, n = f->repeat ? f->repeat : 1;
+        if (f->kind != SIMF_ADDR || f->id == SIM_ID_NONE || f->size != sizeof(char*)) continue;
+        for (k = 0; k < n && naddr < d->stride / 4; k++, naddr++) {
+            addr[2 * naddr] = f->off + k * f->step;
+            addr[2 * naddr + 1] = f->id;
         }
     }
-    HeapFree(GetProcessHeap(), 0, keep);
-    s_sk.twritten++;
+    /* a table with nothing kept is compared in blocks of whole rows, about 512 bytes each, and row
+       by row only where a block differs: most of these are a byte or a dword a unit slot, and
+       unchanged from the last tick */
+    if (!nkeep) {
+        unsigned per = d->stride >= 512 ? 1 : 512 / d->stride;
+        for (r = 0; r < rows; r += per) {
+            unsigned n = rows - r < per ? rows - r : per, k;
+            unsigned char* row = base + (size_t)r * d->stride;
+            const unsigned char* img = t->img + (size_t)r * d->stride;
+            if (!memcmp(row, img, (size_t)n * d->stride)) continue;
+            for (k = 0; k < n; k++, row += d->stride, img += d->stride)
+                if (memcmp(row, img, d->stride)) {
+                    memcpy(row, img, d->stride);
+                    changed++;
+                }
+        }
+    }
+    else for (r = 0; r < rows; r++) {
+        unsigned char* row = base + (size_t)r * d->stride;
+        const unsigned char* img = t->img + (size_t)r * d->stride;
+        int differ = 0;
+        unsigned k;
+        for (k = 0; k < nspan; k += 2)
+            if (memcmp(row + span[k], img + span[k], span[k + 1] - span[k])) {
+                memcpy(row + span[k], img + span[k], span[k + 1] - span[k]);
+                differ = 1;
+            }
+        for (k = 0; k < naddr; k++) {
+            uint32_t id;
+            char* p;
+            memcpy(&id, img + addr[2 * k], 4);
+            if (!addr_of(L, addr[2 * k + 1], id, &p)) {
+                c->kept++;
+                continue;
+            }
+            if (memcmp(row + addr[2 * k], &p, 4)) {
+                memcpy(row + addr[2 * k], &p, 4);
+                differ = 1;
+            }
+        }
+        changed += differ;
+    }
+    HeapFree(GetProcessHeap(), 0, span);
+    c->written++;
+    if (changed) {
+        c->changed += changed;
+        tab_name(c, d->name);
+    }
 }
 
-/* R12: each table the recording carries into the declaration it pairs with, or skipped and named;
-   then each sim file that owns an invariant its layouts cannot express re-establishes it, before
-   anything runs. The air pool's lock is held over the writes (tagpu_patches.h). */
-static void sk_tables(const Lv* L, const RecWorld* W)
+/* THE POISON CHECK, for the replay's round trip (`roundtrip <name> at <T>`): does the seek write
+   every byte of every table this build records, or does one keep the host's value? R12 copies
+   every declaration tagpu_simreg_recorded accepts aside -- not only those the recording pairs --
+   and sets every byte its layout does not keep (table_keep), in every host row, to 0xA5; then the
+   write; then a byte still 0xA5 where the recording's own byte is not (or, in a table the
+   recording does not carry, where the host's was not) is residue: named, counted and put back from
+   the copy. A byte the recording itself holds as 0xA5 is never residue, so in a table the
+   recording carries the test has no false hit. An ordering: copy, fill, write and check run back
+   to back inside R12, under the air pool's lock, on the game thread, with no engine or simulation
+   code between them, and every residue byte is put back before the lock is left, so no 0xA5
+   outlives R12. Poisoning before R1 would let the kills' and creates' hooks read 0xA5 from their
+   own tables. A count that sizes a heap table is never poisoned: table_put bounds that table's
+   rows by it, and the write keeps it whole (count_kept), so a poisoned one would only make the
+   bound a lie. Every allocation is made before the first byte is poisoned, so no failure path
+   leaves one. */
+typedef struct {
+    const SimDesc*        d;
+    unsigned char*        base;
+    size_t                bytes;    /* the host's rows when filled                                */
+    size_t                at;       /* its copy in s_pz.saved                                     */
+    const RecTable*       t;        /* the recording's image, NULL when it carries none          */
+    unsigned char*        keep;     /* its row's table_keep, in s_pz.keeps                        */
+} Poisoned;
+static struct {
+    Poisoned*      p;
+    unsigned       n;
+    unsigned char* saved;
+    unsigned char* keeps;
+    unsigned       lines;
+} s_pz;
+
+/* a count variable that sizes a heap table's block */
+static int heap_count(const SimDesc* d)
+{
+    const SimDesc* owner = (!(d->flags & SIMD_HEAP) && d->nrows == 1 && !d->rows)
+                               ? count_owner(d) : NULL;
+    return owner && (owner->flags & SIMD_HEAP);
+}
+
+static unsigned char* tab_base(const SimDesc* d, size_t* bytes)
+{
+    unsigned char* base = (d->flags & SIMD_HEAP) ? *(unsigned char**)d->addr
+                                                 : (unsigned char*)d->addr;
+    *bytes = !base ? 0 : !d->nrows ? (size_t)*d->rows * d->stride : (size_t)d->nrows * d->stride;
+    return base;
+}
+
+/* the declarations, a copy of their host rows and their keeps; 0 with a line when there is no
+   memory */
+static int poison_begin(void)
+{
+    unsigned i, n = tagpu_simreg_count();
+    size_t total = 0, at = 0, strides = 0;
+    memset(&s_pz, 0, sizeof s_pz);
+    s_pz.p = (Poisoned*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n ? n : 1) * sizeof *s_pz.p);
+    if (!s_pz.p) goto none;
+    for (i = 0; i < n; i++) {
+        const SimDesc* d = tagpu_simreg_at(i);
+        Poisoned* q = &s_pz.p[s_pz.n];
+        if (!d || !tagpu_simreg_recorded(d) || heap_count(d)) continue;
+        q->d = d;
+        q->base = tab_base(d, &q->bytes);
+        if (!q->base || !q->bytes) continue;
+        q->at = total;
+        total += q->bytes;
+        strides += d->stride;
+        s_pz.n++;
+    }
+    s_pz.saved = (unsigned char*)HeapAlloc(GetProcessHeap(), 0, total ? total : 1);
+    s_pz.keeps = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, strides ? strides : 1);
+    if (!s_pz.saved || !s_pz.keeps) goto none;
+    for (i = 0, strides = 0; i < s_pz.n; i++) {
+        Poisoned* q = &s_pz.p[i];
+        memcpy(s_pz.saved + at, q->base, q->bytes);
+        at += q->bytes;
+        q->keep = s_pz.keeps + strides;
+        strides += q->d->stride;
+        table_keep(q->d, q->keep);
+    }
+    return 1;
+none:
+    tagpu_logf("replay: %s: the round trip's poison check skipped: no memory", s_name);
+    if (s_pz.saved) HeapFree(GetProcessHeap(), 0, s_pz.saved);
+    if (s_pz.keeps) HeapFree(GetProcessHeap(), 0, s_pz.keeps);
+    if (s_pz.p) HeapFree(GetProcessHeap(), 0, s_pz.p);
+    memset(&s_pz, 0, sizeof s_pz);
+    return 0;
+}
+
+static void poison_fill(void)
+{
+    unsigned i;
+    size_t r, b;
+    for (i = 0; i < s_pz.n; i++) {
+        Poisoned* q = &s_pz.p[i];
+        for (r = 0; r + q->d->stride <= q->bytes; r += q->d->stride)
+            for (b = 0; b < q->d->stride; b++)
+                if (!q->keep[b]) q->base[r + b] = 0xA5;
+    }
+    s_sk.poisoned = s_pz.n;
+}
+
+/* the recording's image of a declaration it pairs */
+static void poison_image(const SimDesc* d, const RecTable* t)
+{
+    unsigned i;
+    for (i = 0; i < s_pz.n; i++)
+        if (s_pz.p[i].d == d) s_pz.p[i].t = t;
+}
+
+/* The bytes the write must have covered: those its layout does not keep (table_keep: those were
+   never poisoned), in the rows it writes -- a live prefix's rows below its count after the write,
+   no more rows than the recording carries -- of a declaration whose value it does not keep whole
+   (count_kept). A poisoned byte outside them is put back silently: a dead row past a count, or a
+   row the recording does not carry, which the seek's line counts with the values kept. */
+static void poison_check(void)
+{
+    unsigned i;
+    for (i = 0; i < s_pz.n; i++) {
+        Poisoned* q = &s_pz.p[i];
+        const unsigned char* was = s_pz.saved + q->at;
+        const unsigned char* keep = q->keep;
+        size_t b, run = 0, rows = q->bytes / q->d->stride;
+        unsigned found = 0;
+        if (q->d->nrows && q->d->rows && *q->d->rows < rows) rows = *q->d->rows;
+        if (q->t && q->t->size / q->d->stride < rows) rows = q->t->size / q->d->stride;
+        if (q->t && count_kept(q->d, q->t)) rows = 0;
+        for (b = 0; b <= q->bytes; b++) {
+            int left = 0;
+            if (b < q->bytes && !keep[b % q->d->stride] && q->base[b] == 0xA5) {
+                if (b / q->d->stride >= rows) {
+                    q->base[b] = was[b];
+                } else {
+                    unsigned char want = q->t ? q->t->img[b] : was[b];
+                    left = want != 0xA5;
+                }
+            }
+            if (left) {
+                if (!run++) found++;
+                q->base[b] = was[b];
+                s_sk.residue++;
+                continue;
+            }
+            if (run && s_pz.lines < 16) {
+                size_t at = b - run;
+                s_pz.lines++;
+                tagpu_logf("replay: %s: round trip %u: %s row %u +0x%X: %u bytes not written by the "
+                           "seek", s_name, s_seek.T, q->d->name, (unsigned)(at / q->d->stride),
+                           (unsigned)(at % q->d->stride), (unsigned)run);
+            }
+            run = 0;
+        }
+        if (found) {
+            TabCounts n;
+            memcpy(n.names, s_sk.rnames, sizeof n.names);
+            tab_name(&n, q->d->name);
+            memcpy(s_sk.rnames, n.names, sizeof s_sk.rnames);
+        }
+    }
+}
+
+static void poison_end(void)
+{
+    HeapFree(GetProcessHeap(), 0, s_pz.keeps);
+    HeapFree(GetProcessHeap(), 0, s_pz.saved);
+    HeapFree(GetProcessHeap(), 0, s_pz.p);
+    memset(&s_pz, 0, sizeof s_pz);
+}
+
+/* Every table the recording carries into the declaration it pairs with, or skipped (named once a
+   playback, or by each seek); then each sim file that owns an invariant its layouts cannot express
+   re-establishes it, before anything runs. The air pool's lock is held over the writes
+   (tagpu_patches.h). THE TABLES: on a puppet host the recording is the only writer of every table
+   it carries at every tick boundary -- at each capture point and each frame visit after a step,
+   every recorded table this build pairs holds the recording's values for the iteration the host
+   holds, less the fields its layout keeps. Host writers in between (a replayed death's credit, a
+   create's birth stamp) are overwritten at the next boundary, and the globals line names the
+   tables they wrote. An ordering: inside recorded_put on the game thread, which B2's stub runs
+   before the unit tick and the frame visit before the draw. */
+static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek)
 {
     const RecHeader* h = recr_header(s_rd);
     unsigned i;
+    int poison;
     tagpu_patches_restore_begin();
+    poison = seek && s_seek.poison && poison_begin();
+    if (poison) poison_fill();
     for (i = 0; i < h->ntab && i < W->ntab; i++) {
         const char* why = NULL;
         const SimDesc* d = table_pair(&h->tab[i], &why);
         if (!d) {
-            s_sk.tskipped++;
-            tagpu_logf("replay: %s: the seek skipped %s: %s", s_name, h->tab[i].name, why);
+            c->skipped++;
+            if (seek || !s_gst.tnamed)
+                tagpu_logf("replay: %s: the tables skipped %s: %s", s_name, h->tab[i].name, why);
             continue;
         }
-        table_put(L, d, &W->tab[i]);
+        if (poison) poison_image(d, &W->tab[i]);
+        table_put(L, d, &W->tab[i], c);
     }
-    s_sk.trepaired = tagpu_patches_restored();
-    s_sk.trepaired += tagpu_weapons_restored();
+    s_gst.tnamed = 1;
+    if (poison) poison_check();
+    c->repaired += tagpu_patches_restored();
+    c->repaired += tagpu_weapons_restored();
+    if (poison) poison_end();
+}
+
+/* R12 */
+static void sk_tables(const Lv* L, const RecWorld* W)
+{
+    tables_put(L, W, &s_sk.tab, 1);
 }
 
 /* R15: the deadlines the recording does not carry (or that the step masks), each by the engine's
@@ -3954,7 +4238,7 @@ static unsigned sk_ms(LONGLONG ticks, LONGLONG hz)
 }
 
 /* THE SEEK's steps, R0-R17, in their order */
-static void seek_run(char* ta)
+static int seek_run(char* ta)
 {
     RecWorld* W = recr_world(s_rd);
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0;
@@ -3968,7 +4252,7 @@ static void seek_run(char* ta)
     if (!level_of(ta, &L)) {
         tagpu_logf("replay: %s: seek to %u refused: the level's unit array or features are not "
                    "the ones the counts describe", s_name, T);
-        return;
+        return 0;
     }
     h = L.now;
     QueryPerformanceFrequency(&hz);
@@ -3977,7 +4261,7 @@ static void seek_run(char* ta)
     if (k <= 0) {
         tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
         if (k < 0) sk_back(&L, prev);
-        return;
+        return 0;
     }
     QueryPerformanceCounter(&t1);
     memset(&s_sk, 0, sizeof s_sk);
@@ -3985,7 +4269,7 @@ static void seek_run(char* ta)
     if (!sk_bound(&L, W, &nheads, why, sizeof why)) {
         tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
         sk_back(&L, prev);
-        return;
+        return 0;
     }
     /* R1: the rebuild's kills are not the recording's eliminations */
     tagpu_puppet_rebuild(1);
@@ -4078,9 +4362,10 @@ static void seek_run(char* ta)
                "projectile pool %s, %u records; the effects %s", s_name, T, s_sk.left, s_sk.moved,
                s_sk.carried, s_sk.outside, s_sk.frecs, s_sk.fcells, s_sk.fdropped, s_sk.freed,
                s_sk.models, s_sk.sdropped, s_sk.water, s_sk.states, s_sk.stamps, s_sk.brefused,
-               s_sk.twritten, s_sk.tskipped, s_sk.tkept, s_sk.trepaired,
+               s_sk.tab.written, s_sk.tab.skipped, s_sk.tab.kept, s_sk.tab.repaired,
                s_sk.pool ? "written" : "REFUSED", W->proj_hw,
                s_sk.effects ? "cleared" : "NOT cleared");
+    return 1;
 }
 
 /* ---- the frame visit ------------------------------------------------------------------------ */
@@ -4096,6 +4381,10 @@ static void seek_run(char* ta)
      exactly, on any level in play, whatever the speed or pauses (the recorder's table of armed
      dumps). A playing host's speed keys change nothing, so stepping to T by keys is timing; the
      capture point is where every dump is taken, and the DLL takes it at T.
+   - `dump <name> now`: a frame dump (tagpu_rec_dump_now), taken at once, here, between two steps;
+     two of one GameTime saw no step between them.
+   - `roundtrip <name> at <T>`, T >= 2, the name 1 to 36 letters, digits, - and _: on a level
+     that plays a recording, the round trip at the frame visit after step T-1 (THE ROUND TRIP).
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
      point of T. */
@@ -4112,6 +4401,8 @@ static int u32_word(const char* p, unsigned* v)
     *v = (unsigned)x;
     return 1;
 }
+
+static void rt_arm(const char* name, unsigned T);
 
 static void trigger_read(void)
 {
@@ -4143,6 +4434,15 @@ static void trigger_read(void)
             tagpu_rec_dump_arm(name, T);
             return;
         }
+        if (!strcmp(line + end, " now")) {
+            tagpu_rec_dump_now(name);
+            return;
+        }
+    }
+    if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
+        u32_word(line + end + 4, &T)) {
+        rt_arm(name, T);
+        return;
     }
     if (!strncmp(line, "seek ", 5) && seek_words(line + 5, &T, dump, sizeof dump)) {
         if (!tagpu_puppet_on() || !s_rd || s_dead) {
@@ -4155,6 +4455,88 @@ static void trigger_read(void)
         return;
     }
     tagpu_logf("replay: %s: not understood: %s", TRIGGER, line);
+}
+
+/* THE ROUND TRIP: a playing's state at the frame visit after step T-1 against a rebuild to T in
+   place with nothing between them, so a difference is the seek's, by construction. Run right
+   after that visit's recorded_put, which made A's tables the recording's (THE TABLES) and so the
+   poison check's comparison exact: a frame dump <name>-a; the TRANSIENT declarations put back to
+   the values saved at the playing's first frame visit (tagpu_simreg.h); the seek to T with the
+   poison check; a frame dump <name>-b; one line. tarec compare-dumps A B must be EQUAL. One the
+   host passes is dropped with a line (a frame can run several steps), which tareplay reports as
+   could not run. */
+static void rt_arm(const char* name, unsigned T)
+{
+    size_t i, n = strlen(name);
+    if (!tagpu_puppet_on() || !s_rd || s_dead) {
+        tagpu_logf("replay: round trip %s refused: this level plays no recording", name);
+        return;
+    }
+    if (!n || n > 36 || T < 2) {
+        tagpu_logf("replay: round trip %s at %u refused: a name of 1 to 36 characters and a "
+                   "GameTime of 2 or more, please", name, T);
+        return;
+    }
+    for (i = 0; i < n; i++)
+        if (!((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= 'A' && name[i] <= 'Z') ||
+              (name[i] >= '0' && name[i] <= '9') || name[i] == '-' || name[i] == '_')) {
+            tagpu_logf("replay: round trip %s refused: the name is not letters, digits, - and _",
+                       name);
+            return;
+        }
+    if (s_rt.n == RT_ARMED) {
+        tagpu_logf("replay: round trip %s refused: %u are armed already", name, RT_ARMED);
+        return;
+    }
+    memcpy(s_rt.a[s_rt.n].name, name, n + 1);
+    s_rt.a[s_rt.n].T = T;
+    s_rt.n++;
+    tagpu_logf("replay: %s: round trip %s armed for GameTime %u", s_name, name, T);
+}
+
+/* the armed round trips at the frame visit whose next iteration is `next` */
+static void rt_due(char* ta, unsigned next)
+{
+    unsigned i, k = 0;
+    for (i = 0; i < s_rt.n; i++) {
+        char a[48], b[48], tnames[200];
+        unsigned T = s_rt.a[i].T, treset;
+        LARGE_INTEGER hz, t0, t1;
+        int ok;
+        if (T > next) {
+            s_rt.a[k++] = s_rt.a[i];
+            continue;
+        }
+        if (T < next) {
+            tagpu_logf("replay: %s: round trip %s at %u not run: the level is at GameTime %u",
+                       s_name, s_rt.a[i].name, T, next - 1);
+            continue;
+        }
+        snprintf(a, sizeof a, "%s-a", s_rt.a[i].name);
+        snprintf(b, sizeof b, "%s-b", s_rt.a[i].name);
+        tagpu_rec_dump_now(a);
+        treset = tagpu_simreg_transient_reset(tnames, sizeof tnames);
+        s_seek.T = T;
+        s_seek.dump[0] = 0;
+        s_seek.poison = 1;
+        QueryPerformanceFrequency(&hz);
+        QueryPerformanceCounter(&t0);
+        ok = seek_run(ta);
+        QueryPerformanceCounter(&t1);
+        s_seek.poison = 0;
+        if (!ok) {
+            tagpu_logf("replay: %s: round trip %s at %u: the seek refused (above); no dump B",
+                       s_name, s_rt.a[i].name, T);
+            continue;
+        }
+        tagpu_rec_dump_now(b);
+        tagpu_logf("replay: %s: round trip %s at %u: TRANSIENT %u bytes reset (%s); %u tables "
+                   "poisoned, residue %u (%s); seek %u ms", s_name, s_rt.a[i].name, T, treset,
+                   tnames[0] ? tnames : "none", s_sk.poisoned, s_sk.residue,
+                   s_sk.rnames[0] ? s_sk.rnames : "none", sk_ms(t1.QuadPart - t0.QuadPart,
+                   hz.QuadPart));
+    }
+    s_rt.n = k;
 }
 
 /* THE FRAME VISIT, before the in-play draw call 0x4969CD, on the game thread, between two sim
@@ -4181,6 +4563,11 @@ static void __cdecl tagpu_replay_frame(void)
     if (now == s_frame_tick || W->tick != now + 1 || !level_of(ta, &L)) return;
     s_frame_tick = now;
     recorded_put(&L, W);
+    if (!s_rt.tsaved) {
+        tagpu_simreg_transient_save();
+        s_rt.tsaved = 1;
+    }
+    if (s_rt.n) rt_due(ta, now + 1);
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -4217,10 +4604,13 @@ static void counts_log(const char* when, unsigned now)
                "%u temporary sight records dropped, %u changes not made; the explored map changed "
                "by %u writes, %u entries in all, refused %u times; the units' bookkeeping: %u water "
                "states and %u sight stamps written, %u refused; %u units made in the step before, "
-               "%u others", s_name, s_gst.puts, s_gst.late, s_gst.refused, s_gst.reacts,
-               s_gst.dropped, s_gst.unbounded, s_gst.mputs, s_gst.mentries, s_gst.mrefused,
-               s_gst.books.water, s_gst.books.stamps, s_gst.books.refused, s_gst.bmade,
-               s_gst.bother);
+               "%u others; the declared tables: %u rows written over the host's own values (in "
+               "%s), %u values kept, %u skipped, %u repaired", s_name, s_gst.puts, s_gst.late,
+               s_gst.refused, s_gst.reacts, s_gst.dropped, s_gst.unbounded, s_gst.mputs,
+               s_gst.mentries, s_gst.mrefused, s_gst.books.water, s_gst.books.stamps,
+               s_gst.books.refused, s_gst.bmade, s_gst.bother, s_gst.tab.changed,
+               s_gst.tab.names[0] ? s_gst.tab.names : "none", s_gst.tab.kept, s_gst.tab.skipped,
+               s_gst.tab.repaired);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);

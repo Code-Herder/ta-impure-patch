@@ -4298,8 +4298,9 @@ static int fix_victim_caps(void)
        code but one: the allocator 0x4D83B0 growing a call's list, which takes its own critical
        section and calls nothing that takes this one; the out-of-memory handler 0x49E700 runs
        inside the allocator's section, or after it from eng_alloc_or_exit, and ends the process.
-       A seek's table write (tagpu_replay.c, R12) holds it from tagpu_patches_restore_begin to
-       the end of tagpu_patches_restored, on the game thread: C code, HeapAlloc/HeapFree and
+       The replay's table write (tagpu_replay.c, tables_put: each capture point, frame visit and
+       seek) holds it from tagpu_patches_restore_begin to the end of tagpu_patches_restored, on
+       the game thread: C code, HeapAlloc/HeapFree and
        the log sink run inside it, and none of them takes s_airLock. The lock order is
        s_airLock first, then the allocator's, the heap's or the log's, never the reverse;
      - a lifetime: a call's list lives in its frame (the wrapper above), which exists exactly
@@ -12193,9 +12194,9 @@ void tagpu_limits_report(void)
     tagpu_refuse(text);
 }
 
-/* THE INVARIANTS A SEEK'S TABLE WRITE CANNOT EXPRESS (tagpu_replay.c, seek_run). The rebuild writes
-   this file's declared tables back from a recording's image, by their layouts alone, on the game
-   thread between two sim steps; these re-establish what the layouts cannot say before anything
+/* THE INVARIANTS THE REPLAY'S TABLE WRITE CANNOT EXPRESS (tagpu_replay.c, tables_put). A puppet
+   host writes this file's declared tables back from a recording's image, by their layouts alone,
+   at each capture point, frame visit and seek, on the game thread between two sim steps; these re-establish what the layouts cannot say before anything
    reads the tables again. The air pool's lock is held from tagpu_patches_restore_begin, before the
    first table is written, to the end of tagpu_patches_restored: the write runs C code, HeapAlloc,
    HeapFree and the log sink and no engine code, so the lock covers every read and write of the

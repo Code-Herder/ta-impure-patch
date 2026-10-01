@@ -1,0 +1,53 @@
+{
+ "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first.",
+ "fixtures": {
+  "forest-fire": {
+   "load": "s3a-forest-fire.json",
+   "end": 4500
+  },
+  "forest-circle": {
+   "load": "replay-forest-circle.json",
+   "los": "file",
+   "end": 4710
+  },
+  "naval-push": {
+   "load": "naval-push.json",
+   "end": 3600
+  },
+  "naval-unmapped": {
+   "load": "replay-naval-unmapped.json",
+   "end": 3600
+  },
+  "battle": {
+   "load": "replay-battle-load.json",
+   "steps": [[1, "apply", "replay-battle-units.json"]],
+   "end": 3810
+  },
+  "battle-los": {
+   "load": "replay-battle-truelos.json",
+   "los": "file",
+   "steps": [[1, "apply", "replay-battle-units.json"], [1900, "type", "+los"]],
+   "end": 3810
+  },
+  "carry-links": {
+   "load": "replay-battle-load.json",
+   "steps": [
+    [1, "apply", "replay-links-units.json"],
+    [1050, "order", {"unit": ["ARMATLAS", 0], "args": ["unload", "pos", "3900", "2400"]}],
+    [1050, "order", {"unit": ["ARMATLAS", 1], "args": ["unload", "pos", "4400", "2400"]}],
+    [1950, "order", {"unit": ["ARMATLAS", 0], "args": ["load", "unit", ["ARMPW", 2]]}]
+   ],
+   "end": 2850
+  },
+  "stock-limits": {
+   "load": "replay-four-ai.json",
+   "dll": "stock",
+   "end": 1800
+  },
+  "nomapalert": {
+   "load": "c2-nomapalert.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 2400
+  }
+ }
+}

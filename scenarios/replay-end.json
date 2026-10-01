@@ -1,0 +1,8 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's fixture end: every unit gone, the human seat left with none (a defeat), one unit kept for an AI, so the level ends and the recording closes complete.",
+ "setup": {"clear_existing": true},
+ "units": [
+  {"id": "keep_ai", "type": "CORFUS", "owner": 1, "pos": [1000, 1000]}
+ ]
+}

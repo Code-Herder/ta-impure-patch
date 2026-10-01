@@ -1,0 +1,600 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's battle armies: about 1,440 units in four armies converging on Town & Country's centre, with bases.",
+ "setup": {
+  "clear_existing": false
+ },
+ "groups": [
+  {
+   "id": "army0",
+   "owner": 0,
+   "at": [
+    4320,
+    2620
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 20,
+    "spacing": 42,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 150
+    },
+    {
+     "type": "ARMHAM",
+     "count": 100
+    },
+    {
+     "type": "ARMROCK",
+     "count": 60
+    },
+    {
+     "type": "ARMJETH",
+     "count": 30
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lab0",
+   "owner": 0,
+   "at": [
+    4120,
+    1420
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "ARMLAB",
+     "count": 1
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "vp0",
+   "owner": 0,
+   "at": [
+    4520,
+    1420
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "ARMVP",
+     "count": 1
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "ck0",
+   "owner": 0,
+   "at": [
+    4320,
+    1170
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "ARMCK",
+     "count": 3
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "sol0",
+   "owner": 0,
+   "at": [
+    4320,
+    1770
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 80
+   },
+   "composition": [
+    {
+     "type": "ARMSOLAR",
+     "count": 6
+    }
+   ],
+   "facing": 180
+  },
+  {
+   "id": "air0",
+   "owner": 0,
+   "at": [
+    4320,
+    3120
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "ARMFIG",
+     "count": 6
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "army1",
+   "owner": 1,
+   "at": [
+    4320,
+    6020
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 20,
+    "spacing": 42,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 150
+    },
+    {
+     "type": "CORTHUD",
+     "count": 100
+    },
+    {
+     "type": "CORSTORM",
+     "count": 60
+    },
+    {
+     "type": "CORCRASH",
+     "count": 30
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lab1",
+   "owner": 1,
+   "at": [
+    4120,
+    7220
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "CORLAB",
+     "count": 1
+    }
+   ],
+   "facing": 0
+  },
+  {
+   "id": "vp1",
+   "owner": 1,
+   "at": [
+    4520,
+    7220
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "CORVP",
+     "count": 1
+    }
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ck1",
+   "owner": 1,
+   "at": [
+    4320,
+    7470
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 3
+    }
+   ],
+   "facing": 0
+  },
+  {
+   "id": "sol1",
+   "owner": 1,
+   "at": [
+    4320,
+    6870
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 80
+   },
+   "composition": [
+    {
+     "type": "CORSOLAR",
+     "count": 6
+    }
+   ],
+   "facing": 0
+  },
+  {
+   "id": "air1",
+   "owner": 1,
+   "at": [
+    4320,
+    5520
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "CORVENG",
+     "count": 6
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "army2",
+   "owner": 2,
+   "at": [
+    2620,
+    4320
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 20,
+    "spacing": 42,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 150
+    },
+    {
+     "type": "ARMHAM",
+     "count": 100
+    },
+    {
+     "type": "ARMROCK",
+     "count": 60
+    },
+    {
+     "type": "ARMJETH",
+     "count": 30
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lab2",
+   "owner": 2,
+   "at": [
+    1420,
+    4120
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "ARMLAB",
+     "count": 1
+    }
+   ],
+   "facing": 90
+  },
+  {
+   "id": "vp2",
+   "owner": 2,
+   "at": [
+    1420,
+    4520
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "ARMVP",
+     "count": 1
+    }
+   ],
+   "facing": 90
+  },
+  {
+   "id": "ck2",
+   "owner": 2,
+   "at": [
+    1170,
+    4320
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "ARMCK",
+     "count": 3
+    }
+   ],
+   "facing": 90
+  },
+  {
+   "id": "sol2",
+   "owner": 2,
+   "at": [
+    1770,
+    4320
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 80
+   },
+   "composition": [
+    {
+     "type": "ARMSOLAR",
+     "count": 6
+    }
+   ],
+   "facing": 90
+  },
+  {
+   "id": "air2",
+   "owner": 2,
+   "at": [
+    3120,
+    4320
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "ARMFIG",
+     "count": 6
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "army3",
+   "owner": 3,
+   "at": [
+    6020,
+    4320
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 20,
+    "spacing": 42,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 150
+    },
+    {
+     "type": "CORTHUD",
+     "count": 100
+    },
+    {
+     "type": "CORSTORM",
+     "count": 60
+    },
+    {
+     "type": "CORCRASH",
+     "count": 30
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lab3",
+   "owner": 3,
+   "at": [
+    7220,
+    4120
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "CORLAB",
+     "count": 1
+    }
+   ],
+   "facing": 270
+  },
+  {
+   "id": "vp3",
+   "owner": 3,
+   "at": [
+    7220,
+    4520
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "CORVP",
+     "count": 1
+    }
+   ],
+   "facing": 270
+  },
+  {
+   "id": "ck3",
+   "owner": 3,
+   "at": [
+    7470,
+    4320
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 3
+    }
+   ],
+   "facing": 270
+  },
+  {
+   "id": "sol3",
+   "owner": 3,
+   "at": [
+    6870,
+    4320
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 80
+   },
+   "composition": [
+    {
+     "type": "CORSOLAR",
+     "count": 6
+    }
+   ],
+   "facing": 270
+  },
+  {
+   "id": "air3",
+   "owner": 3,
+   "at": [
+    5520,
+    4320
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 60
+   },
+   "composition": [
+    {
+     "type": "CORVENG",
+     "count": 6
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   4320,
+   4320
+  ],
+  "pin": true
+ }
+}

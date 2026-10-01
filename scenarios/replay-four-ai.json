@@ -1,0 +1,36 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `stock-limits` fixture: three stock AIs and an idle human seat on Core Prime Industrial Area, everything in sight, played on the stock-limits build.",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "clear_existing": false,
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3
+   }
+  ],
+  "los": "permanent"
+ }
+}

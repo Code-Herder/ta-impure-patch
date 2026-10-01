@@ -335,17 +335,18 @@ check that raises false alarms on ordinary changes.
   and one line is logged per field. In the test harness any mismatch fails the test.
 - **An automated replay test harness** runs many replay scenarios in parallel, the way the
   compatibility suite runs games, from small skirmishes to ten players with thousands of units,
-  with AI, mods and multiplayer. Its central test is the **restore round trip**: during a scripted
-  game, restore the world in place at the current moment from the recording and compare the whole
-  state after with the state just before — every unit, player and feature record and Impure's
-  own tables — against the explicit list of what a takeover deliberately drops. Anything else that
-  is missing or different is a named failure. It also compares puppet playback with the recording,
+  with AI, mods and multiplayer. Its central test is the **restore round trip**: while a recording
+  plays back, restore the world in place at the current moment from the recording and compare the
+  whole state after with the state just before — every unit, player and feature record and
+  Impure's own tables. Anything that is missing or different is a named failure. The same restore
+  in a live game, against the explicit list of what a takeover deliberately drops, comes with the
+  takeover. It also compares puppet playback with the recording,
   checks that seeking to one moment from different starting points gives the same world, and
   compares event counts taken where the engine creates effects, sounds and script starts, which
   catches events that leave no state behind. **A landing that changes simulation code runs the
   fixtures of the features it changes**, each recorded, restored in place and replayed; a change
-  whose feature names no fixture fails the landing by name. The broad tier runs nightly on
-  `main` and before every release tag.
+  whose feature names no fixture fails the landing by name. The broad tier is a command, run
+  before every release tag and on demand.
 - **Impure's own state is declared where it is defined** (option B of the
   [completeness design](demo-recorder-completeness.md), chosen 2026-09-29). Engine unit and player records are recorded whole by default, apart from
   one exclusion file the owner controls, which the build hash-checks. The rules are in the
@@ -398,10 +399,10 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 |---|---|---|
 | Product contract | Scope, architecture, viewer features, storage policy and open decisions recorded here | **Decisions recorded, 2026-09-28** |
 | Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Done, 2026-09-29.** **(1)** A skirmish level holds ten puppet players, 4–9 included, with the viewer on a puppet seat; the units stay inert, and the level ends only by the recording once its victory and defeat tests are switched off ([evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). **(2)** A rebuild of 1,227–1,432 units in play takes 11–47 ms, paused or not; a puppet seat becomes a working AI in about 1 ms without a reload, the seat made local before its units are re-created; order and factory queues and builds in progress continue ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)). **(3)** A recorded 1,432-unit battle replays with every recorded unit value identical at every checkpoint, walking included; the recorder costs about 0.1 ms per tick; a battle of that size sustained for an hour would exceed the 100 MB budget ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)). Not yet shown: features, wrecks and projectiles in a rebuild; footprints, sight, sounds and the nano spray in playback; a real hour. Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
-| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **S1 to S3b landed, 2026-09-29 to 10-01** ([the plan](demo-recorder-skirmish-slice.md)): a skirmish recorded on request with its self-verification, watched on puppets equal to the recording at every checkpoint, and sought to any GameTime; the round trip and the harness (S3c) are next |
+| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **S1 to S3c-1 landed, 2026-09-29 to 10-01** ([the plan](demo-recorder-skirmish-slice.md)): a skirmish recorded on request with its self-verification, watched on puppets equal to the recording at every checkpoint, sought to any GameTime, and checked by the harness's core with its puppet round trip; S3c-2 (counted effects and the images gate) and S3c-3 (coverage and the gate) are next |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Planned** |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
-| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check, and the exclusion file with its check, are built (2026-09-29, [completeness design](demo-recorder-completeness.md#option-b-declare-and-measure)), and every recording verifies itself as it is made ([S1](demo-recorder-skirmish-slice.md#self-verification)); the harness is not built |
+| Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check, and the exclusion file with its check, are built (2026-09-29, [completeness design](demo-recorder-completeness.md#option-b-declare-and-measure)), and every recording verifies itself as it is made ([S1](demo-recorder-skirmish-slice.md#self-verification)); the harness's core and its puppet round trip are built ([S3c-1](demo-recorder-skirmish-slice.md#s3c-1-one-writer-for-the-tables-and-the-round-trip)) |
 
 All three experiments passed: the watch path stands, and a takeover needs no loading screen. The
 disk budget for ten players with 1,500 units is at risk and comes back for a decision once a real

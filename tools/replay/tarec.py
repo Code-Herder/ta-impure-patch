@@ -118,7 +118,7 @@ RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
- RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES) = range(1, 20)
+ RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME) = range(1, 21)
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED) = range(32, 41)
 
@@ -252,6 +252,7 @@ def header(payload):
         elif tag == RT_FEATURES: h["features"] = struct.unpack_from("<IIIII", b)
         elif tag == RT_GLOBALS: h["globals"] = b.decode("latin-1")
         elif tag == RT_PROJECTILES: h["projectiles"] = u32
+        elif tag == RT_FRAME: h["frame"] = u32
     if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     return h
@@ -1059,6 +1060,11 @@ def cmd_compare(path, dumps, puppet=False):
     gnames = globals_names(gslots) if puppet else known_names(h)
     for d in dumps:
         dh, dw = dump_world(d, h)
+        if "frame" in dh:
+            # a frame dump's images hold what the rest of a frame writes: no capture point's
+            print(f"{d}: a frame dump at GameTime {dh['frame']}: compare it with compare-dumps")
+            status = 2
+            continue
         w = stream_to(h, bl, want=dw.tick)
         if w.tick != dw.tick:
             print(f"{d}: GameTime {dw.tick}, but the recording reads to {w.tick}")
@@ -1180,19 +1186,62 @@ def dump_images(path):
     return tick, dh.get("globals"), images
 
 
+OFF_TEMP_SIGHT = 0x14277              # main+: the temporary sight records' count, at most 20
+CONTACT_BITS = 0x1700                # unit +0x110 bits 8-10 and 12, the radar pass's contacts
+
+
+def o9_fold(a_path, b_path, a, b):
+    """O9, the owner's decision of 2026-10-01: a seek drops the temporary sight records (the
+    destructor's, under true LOS, for a death of the viewed player's, 60 ticks each), so a round
+    trip whose A holds some has B's viewed record's sight counters lower by their stamps and the
+    contact bits the seek's radar pass computes from those counters. When A holds records and B
+    none, B takes A's values for exactly that -- each of the viewed record's cells where A is
+    higher, and +0x110 bits 8-10 and 12 -- and the fold is described; anything else still
+    differs. None when it does not apply."""
+    na = struct.unpack_from("<I", dump_images(a_path)[2][0], OFF_TEMP_SIGHT)[0]
+    nb = struct.unpack_from("<I", dump_images(b_path)[2][0], OFF_TEMP_SIGHT)[0]
+    if not na or nb:
+        return None
+    v = a.view[1] if a.view else None
+    cells = units = 0
+    sa, sb = a.sight.get(v), b.sight.get(v)
+    if sa is not None and sb is not None and len(sa) == len(sb):
+        for i in range(len(sa)):
+            if sa[i] > sb[i]:
+                sb[i] = sa[i]
+                cells += 1
+    for slot in set(a.units) & set(b.units):
+        ua, ub = a.units[slot], b.units[slot]
+        ca = struct.unpack_from("<I", ua, 0x110)[0]
+        cb = struct.unpack_from("<I", ub, 0x110)[0]
+        if (ca ^ cb) & CONTACT_BITS:
+            struct.pack_into("<I", ub, 0x110, (cb & ~CONTACT_BITS) | (ca & CONTACT_BITS))
+            units += 1
+    return (f"O9 (decided): A holds {na} temporary sight records, which the seek drops; record "
+            f"{v}'s sight counters higher in A in {cells} cells, the contact bits differ on "
+            f"{units} units")
+
+
 def cmd_compare_dumps(path, a_path, b_path):
     """Two dumps of playings of FILE at the same GameTime, the same player viewed: every record
     they carry, the players' sight counters included, equal byte for byte. FILE gives the
-    dimensions and the globals' names; only its header is read."""
+    dimensions and the globals' names; only its header is read. Two frame dumps (a round trip's A
+    and B) are compared less O9 when it applies (o9_fold), which is named, not counted."""
     h = header_only(path)
     ah, a = dump_world(a_path, h)
     bh, b = dump_world(b_path, h)
-    if a.tick != b.tick:
-        print(f"{a_path} is at GameTime {a.tick}, {b_path} at {b.tick}")
+    if a.tick != b.tick or ah.get("frame") != bh.get("frame"):
+        print(f"{a_path} is at GameTime {a.tick}, {b_path} at {b.tick}"
+              + ("" if ah.get("frame") == bh.get("frame") else
+                 ": one is a frame dump and the other is not, or their frames differ"))
         return 1
+    o9 = o9_fold(a_path, b_path, a, b) if "frame" in ah else None
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
-    print(f"{a_path} against {b_path}: GameTime {a.tick}: "
-          + ("EQUAL" if not n else f"{n} DIFFERENCES") + " (A is the first, B the second)")
+    when = (f"frame dump at GameTime {ah['frame']} (iteration {a.tick})" if "frame" in ah
+            else f"GameTime {a.tick}")
+    print(f"{a_path} against {b_path}: {when}: "
+          + ("EQUAL" if not n else f"{n} DIFFERENCES") + " (A is the first, B the second)"
+          + (f"; {o9}" if o9 else ""))
     for line in lines:
         print("  " + line.replace("the recording", "A").replace("recording", "A")
               .replace("the dump", "B").replace("dump", "B"))
