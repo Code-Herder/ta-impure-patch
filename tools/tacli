@@ -5425,7 +5425,8 @@ def _replay_seek_wait(inst, name, T, dump, lines, first, timeout):
     refuse_rx = re.compile(rf"replay: (?:{n}: )?seek to {T} refused: (.*)"
                            rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: (.*)")
     dump_rx = re.compile(rf"recorder: dump {d} at GameTime (-?\d+) -> (.*) \(\d+ bytes of records\)")
-    dump_bad_rx = re.compile(rf"recorder: dump {d}( refused: |: no memory |: cannot write ).*")
+    dump_bad_rx = re.compile(rf"recorder: dump {d}( refused: |: no memory |: cannot write "
+                             rf"| at GameTime \d+ refused: | for GameTime \d+ not taken: ).*")
     res = {"arrived": False}
     deadline = time.time() + timeout
     pending = first
@@ -5500,7 +5501,11 @@ def cmd_replay_seek(args):
             die(f"{args.name}: not playing: {why}")
         lines = _LogLines(_log_cursor(inst))
         # the frame visit reads the trigger at most every 100 ms and deletes it, read or not
-        (inst.gamedir / REPLAY_TRIGGER).write_text(f"seek {args.T}{tail}\n")
+        # written whole and renamed into place: a poll never finds it empty or half written
+        trig = inst.gamedir / REPLAY_TRIGGER
+        tmp = trig.with_name(trig.name + ".tmp")
+        tmp.write_text(f"seek {args.T}{tail}\n")
+        os.replace(tmp, trig)
         rest = []
     res["as"] = name
     got = _replay_seek_wait(inst, name, args.T, args.dump, lines, rest, args.timeout)

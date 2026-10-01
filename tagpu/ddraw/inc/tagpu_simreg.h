@@ -251,4 +251,11 @@ const char*    tagpu_simreg_lever_at(unsigned i, int* set, const char** text, in
    no layout, whose rows are plain values. */
 unsigned       tagpu_simreg_layout_hash(const SimDesc* d);
 
+/* 1 for a declaration a recording carries and a seek writes back: SIM_STATE, less the engine pools
+   the raised limits moved into the DLL (their record layouts are not yet written anywhere), TLS
+   slots (per thread) and the INSTALL-only kinds (a lock, code, a guard). The recorder and the
+   replay read this one test, so a table the recorder never writes can never be paired, whatever a
+   recording's header names. */
+int            tagpu_simreg_recorded(const SimDesc* d);
+
 #endif

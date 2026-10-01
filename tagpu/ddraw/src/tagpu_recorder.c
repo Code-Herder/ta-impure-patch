@@ -460,11 +460,10 @@ static void row_image(const Level* L, const SimDesc* d, const unsigned char* row
     }
 }
 
-/* The tables a recording carries: SIM_STATE, less the engine pools the raised limits moved into
-   the DLL (their record layouts are not yet written anywhere) and TLS slots (per thread). */
+/* The tables a recording carries: tagpu_simreg_recorded, the test the replay pairs by too */
 static int table_recorded(const SimDesc* d)
 {
-    return d->cls == SIM_STATE && !(d->flags & (SIMD_ENGINE | SIMD_TLS));
+    return tagpu_simreg_recorded(d);
 }
 
 /* 1 when a declaration's layout zeroes every byte of its row, as row_image does, so its image is

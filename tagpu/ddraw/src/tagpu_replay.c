@@ -2738,7 +2738,7 @@ static void globals_put(char* ta, const RecWorld* W)
 
 /* Every temporary sight record dropped through the engine's own expiry: each one's +0x1C set to 0,
    then 0x482130, which removes every record whose expiry is below GameTime -- every one, GameTime
-   being 1 or more wherever this runs, after a level's first step. The records are the viewed
+   being 1 or more wherever this runs: R0 (sk_bound) refuses a seek at GameTime 0. The records are the viewed
    player's death vision, made by the destructor under true LOS only; a record kept past a refill
    of the counters would later decrement counters the refill reset (an undercount, or 0 -> 255, a
    cell seen for good), and the engine has no other way to drop one mid-level. The count is the
@@ -2992,15 +2992,19 @@ static void sight_rec(const char* ta, char* u, unsigned char* rec)
 }
 
 /* R8b's water half (seek_unit_books, THE UNITS' BOOKKEEPING): the image's water state where it
-   differs, bounded by the 0..4 enum 0x43DB50 stores; past it the host's stays, counted. 1 written */
+   differs, as the dword 0x43DB50 stores and reads (0x43DB6B, 0x43DBED), bounded by its 0..4 enum;
+   past it the host's stays, counted. 1 written */
 static int book_water(char* u, const unsigned char* ib, Books* b)
 {
-    if ((unsigned char)u[U_WATER] == ib[U_WATER]) return 0;
-    if (ib[U_WATER] > WATER_MAX) {
+    uint32_t host, img;
+    memcpy(&host, u + U_WATER, 4);
+    memcpy(&img, ib + U_WATER, 4);
+    if (host == img) return 0;
+    if (img > WATER_MAX) {
         b->refused++;
         return 0;
     }
-    u[U_WATER] = (char)ib[U_WATER];
+    memcpy(u + U_WATER, &img, 4);
     b->water++;
     return 1;
 }
@@ -3468,6 +3472,15 @@ static int sk_bound(const Lv* L, const RecWorld* W, unsigned* nheads, char* why,
                  *(const int*)(L->ta + OFF_NSIGHTRECS));
         return 0;
     }
+    /* R4's precondition: the expiry 0x482130 removes a record only while its expiry is below
+       GameTime (unsigned, cmp/jae at 0x48215C..0x48215E), so at GameTime 0 it removes none -- and
+       R3's kills can add the viewed seat's death vision. GameTime is 0 only before the level's
+       first step, or after a seek to the recording's first iteration that no step has followed. */
+    if (!L->now) {
+        snprintf(why, cap, "the level is at GameTime 0: no step has run since the level started "
+                           "or since the last seek");
+        return 0;
+    }
     return 1;
 }
 
@@ -3764,14 +3777,20 @@ static int addr_of(const Lv* L, unsigned simid, uint32_t id, char** p)
     }
 }
 
-/* the declaration of this build a recorded table pairs with: the same name, stride, class, key,
-   flags and layout hash (tagpu_recfmt.h, RT_TABLE); NULL with `why` otherwise */
+/* the declaration of this build a recorded table pairs with: one the recorder records
+   (tagpu_simreg_recorded -- so no header can name a lock, a trampoline or a TLS index into R12's
+   writes), with the same name, stride, class, key, flags and layout hash (tagpu_recfmt.h, RT_TABLE);
+   NULL with `why` otherwise */
 static const SimDesc* table_pair(const RecTableInfo* t, const char** why)
 {
     unsigned i;
     for (i = 0; i < tagpu_simreg_count(); i++) {
         const SimDesc* d = tagpu_simreg_at(i);
         if (!d || strcmp(d->name, t->name)) continue;
+        if (!tagpu_simreg_recorded(d)) {
+            *why = "this build never records that declaration";
+            return NULL;
+        }
         if (d->stride != t->stride || d->cls != t->cls || d->key != t->key ||
             d->flags != t->flags || tagpu_simreg_layout_hash(d) != t->lhash) {
             *why = "its stride, class, key, flags or layout differ";
@@ -3839,6 +3858,9 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t)
         for (k = 0; k < n; k++) memset(keep + f->off + (size_t)k * f->step, 1, f->size);
     }
     for (b = 0; b < d->stride; b++) nkeep += keep[b];
+    /* a heap table sized otherwise than the recording's: rows past the shorter one keep the host's
+       bytes or are not written, so the difference is counted with the values left */
+    if ((d->flags & SIMD_HEAP) && t->size != host) s_sk.tkept++;
     for (r = 0; r < rows; r++) {
         unsigned char* row = base + (size_t)r * d->stride;
         const unsigned char* img = t->img + (size_t)r * d->stride;
@@ -3971,7 +3993,7 @@ static void seek_run(char* ta)
        nothing, and its stock miss -- the record that slides into the slot it compacted keeps
        naming the dead unit -- cannot arise. R13 writes the pool whole. */
     proj_empty(&L, *(char**)(ta + OFF_PROJ));
-    /* R3, on the clock the host holds: GameTime h >= 1, a seek running only after the first step */
+    /* R3, on the clock the host holds: GameTime h >= 1, which R0 enforces (sk_bound) */
     refused0 = s_st.refused;
     sk_kills(&L);
     /* R4: every temporary sight record dropped through the engine's own removal (the drop's
@@ -4037,7 +4059,9 @@ static void seek_run(char* ta)
     tagpu_puppet_rebuild(0);
     s_over = 0;
     s_frame_tick = T - 1;
-    if (dump[0]) tagpu_rec_dump_arm(dump, 0);
+    /* armed for T, not for the next capture point: a second seek before a step drops it with its
+       own line instead of taking it at another GameTime under this seek's name */
+    if (dump[0]) tagpu_rec_dump_arm(dump, T);
     QueryPerformanceCounter(&t2);
     tagpu_logf("replay: %s: at GameTime %u, sought from GameTime %u in %u ms (read %u, rebuild "
                "%u); units %u killed, %u made, %u refused", s_name, T, h,

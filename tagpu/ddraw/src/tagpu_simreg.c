@@ -243,6 +243,12 @@ const SimDesc* tagpu_simreg_at(unsigned i)
     return i < tagpu_simreg_count() ? s_ok[i] : NULL;
 }
 
+int tagpu_simreg_recorded(const SimDesc* d)
+{
+    return d->cls == SIM_STATE &&
+           !(d->flags & (SIMD_ENGINE | SIMD_TLS | SIMD_LOCK | SIMD_CODE | SIMD_GUARD));
+}
+
 unsigned tagpu_simreg_layout_hash(const SimDesc* d)
 {
     const SimField* f;
