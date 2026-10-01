@@ -243,6 +243,10 @@ enum RecKind {
     RK_MAPPED_RUNS,    /* runs, each u32 offset, u32 length, then that many bytes of the explored
                           map, the next run at the next multiple of 4; at most REC_MAPPED_RUNS
                           bytes in all: the bytes of the map that changed in an iteration         */
+    RK_SIGHT,          /* dump only: u8 the player record, u8 0, u16 0, u32 the offset, then at
+                          most REC_IMAGE_CHUNK bytes of the record's sight counters from there:
+                          its counters whole are these from offset 0 to their end, in order, for
+                          each record 0..9 that has them, for `tarec compare-dumps`             */
     RK_KINDS
 };
 
@@ -326,8 +330,9 @@ enum RecBlockKind {
                           record that is not all zero, an RK_FEATURES, the RK_GLOBALS, the
                           RK_PROJ_HEAD with an RK_PROJ per record below its hw, and the explored
                           map whole (RK_MAPPED). A dump is one of
-                          these, stored, with every cell and no base, and the two images whole
-                          (RK_IMAGE) after the rest. A snapshot follows the stream block that ends
+                          these, stored, with every cell and no base, and the players' sight
+                          counters (RK_SIGHT) and the two images whole (RK_IMAGE) after the
+                          rest. A snapshot follows the stream block that ends
                           with the events of the step after `last`, so a reader that starts from
                           it takes those from the block before                                  */
     RB_END             /* entries (RecTag): how the recording ended                              */

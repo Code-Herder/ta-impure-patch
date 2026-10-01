@@ -22,6 +22,11 @@
                                              and .data that differ between two dumps and that no
                                              row of replay-globals.tsv covers, in runs, grouped by
                                              what the notes map there (exit 0 whatever it finds)
+  tools/replay/tarec.py compare-dumps FILE DUMP OTHERDUMP
+                                             two dumps of playings of FILE at one GameTime with
+                                             the same player viewed (a seek in a fresh process
+                                             and one in a running playback) equal in every
+                                             record, the players' sight counters included
 
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
@@ -31,7 +36,8 @@ and its payload, zlib-deflated unless the block is stored, each checked by a CRC
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
 format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
-every cell and, after the world, the main block and .data whole (RK_IMAGE). A recording's snapshot
+every cell and, after the world, the players' sight counters (RK_SIGHT) and the main block and
+.data whole (RK_IMAGE). A recording's snapshot
 carries only the cells that differ from the first iteration's grid, the base, which a reader takes
 from the stream, and none of a table's spans that are all zero. A table is paired with the
 recording's by its name: each build numbers its tables in its own registry order, and a recording
@@ -92,7 +98,7 @@ def mapped_bytes(w, h):
  RK_EV_BUILT, RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY, RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DRAW,
  RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID,
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
- RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS) = range(47)
+ RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT) = range(48)
 RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list",
             RK_GLOBALS: "globals image", RK_PROJ: "projectile record",
             RK_PROJ_HEAD: "projectile count (+0x0) and extent (+0x4)"}
@@ -165,6 +171,28 @@ def blocks(path, sizes=None):
             sizes.append((kind, first, last, raw, packed))
         at += 32 + packed
     return out, None
+
+
+def header_only(path):
+    """A recording's header, read from its first block alone: the rest of the file is neither
+    read nor inflated."""
+    with open(path, "rb") as f:
+        if f.read(8) != REC_MAGIC:
+            raise Unreadable(f"{path}: not a recording (no {REC_MAGIC!r})")
+        head = f.read(32)
+        if len(head) < 32:
+            raise Unreadable(f"{path}: its header block is cut short")
+        magic, kind, flags, first, last, raw, packed, crc_body, crc_head = \
+            struct.unpack("<IHHIIIIII", head)
+        if magic != REC_BLOCK_MAGIC or zlib.crc32(head[:28]) != crc_head or kind != RB_HEADER:
+            raise Unreadable(f"{path}: no header block")
+        body = f.read(packed)
+    if len(body) < packed or zlib.crc32(body) != crc_body:
+        raise Unreadable(f"{path}: its header block is cut short or fails its CRC")
+    payload = body if flags & RBF_STORED else zlib.decompress(body)
+    if len(payload) != raw:
+        raise Unreadable(f"{path}: its header block inflates to {len(payload)} bytes, not {raw}")
+    return header(payload)
 
 
 def records(payload):
@@ -269,6 +297,7 @@ class World:
         self.mapped = bytearray(mapped_bytes(self.gw, self.gh))    # the explored map
         self.mnext = 0                  # RK_MAPPED's next offset: len(mapped) once it is whole
         self.images = {}                # a dump's main block (0) and .data (1)
+        self.sight = {}                 # a dump's sight counters, by player record
         self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
         self.deaths = []                # the IDs of the deaths whose end is still to come
         self.units = {}                                  # slot -> bytearray image, live only
@@ -457,6 +486,12 @@ class World:
                     raise Unreadable(f"an explored map run at +0x{off:X} past the map")
                 self.mapped[off:off + n] = b[at + 8:at + 8 + n]
                 at += (8 + n + 3) & ~3
+        elif kind == RK_SIGHT:
+            p, off = b[0], struct.unpack_from("<I", b, 4)[0]
+            cnt = self.sight.setdefault(p, bytearray())
+            if p >= REC_PLAYERS or len(b) <= 8 or off != len(cnt):
+                raise Unreadable(f"record {p}'s sight counters out of order at +0x{off:X}")
+            cnt += b[8:]
         elif kind == RK_IMAGE:
             which, off = b[0], struct.unpack_from("<I", b, 4)[0]
             size = (REC_MAIN_BYTES, REC_DATA_BYTES)[which] if which < 2 else 0
@@ -491,10 +526,11 @@ class World:
                 img[4 * i:4 * i + 4] = vals[4 * k:4 * k + 4]
                 k += 1
 
-    def differences(self, other, names, other_names=None, limit=20, gnames=None):
+    def differences(self, other, names, other_names=None, limit=20, gnames=None, sight=False):
         """Lines naming each difference, the first `limit` of them, and their count. `names` are
         this world's tables and `other_names` the other's, when another build numbered them;
-        `gnames` the globals image's dwords by name, when the list is known (globals_list)."""
+        `gnames` the globals image's dwords by name, when the list is known (globals_list); with
+        `sight`, the players' sight counters too, which only dumps carry."""
         out, n = [], 0
 
         def note(line):
@@ -587,6 +623,16 @@ class World:
                 if a != b:
                     note(f"explored map entry {i // 2} (+0x{i:X}): recording {a.hex()}, "
                          f"dump {b.hex()}")
+        for p in sorted(set(self.sight) | set(other.sight)) if sight else ():
+            a, b = self.sight.get(p), other.sight.get(p)
+            if a is None or b is None or len(a) != len(b):
+                note(f"record {p}'s sight counters: {len(a) if a is not None else 'none'} in the "
+                     f"recording, {len(b) if b is not None else 'none'} in the dump")
+                continue
+            diff = [i for i in range(len(a)) if a[i] != b[i]]
+            if diff:
+                note(f"record {p}'s sight counters: {len(diff)} cells differ, the first +0x"
+                     f"{diff[0]:X}: recording {a[diff[0]]}, dump {b[diff[0]]}")
         mine = by_name(self, names)
         theirs = by_name(other, names if other_names is None else other_names)
         for name in sorted(set(mine) | set(theirs)):
@@ -886,6 +932,16 @@ def viewer_of(h):
     return free[0]
 
 
+def dump_world(path, h):
+    """A dump's world, read with its own header's tables and the recording's dimensions."""
+    dbl, dstop = blocks(path)
+    if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
+        raise Unreadable(f"{path}: not a dump (a header and one snapshot block)" +
+                         (f" ({dstop})" if dstop else ""))
+    dh = header(dbl[0][3])
+    return dh, snapshot_world(dbl[1][3], h["slots"], dh["tables"], feature_dims(h))
+
+
 def mapped_hold(w, bit):
     """The explored map less the viewer's bit, which a puppet host keeps set in every entry
     (tagpu_replay.c, recorded_put): masked on both sides of a puppet compare."""
@@ -1002,11 +1058,7 @@ def cmd_compare(path, dumps, puppet=False):
     gslots = globals_list(h.get("globals"))[2] if puppet else None
     gnames = globals_names(gslots) if puppet else known_names(h)
     for d in dumps:
-        dbl, dstop = blocks(d)
-        if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
-            raise Unreadable(f"{d}: not a dump (a header and one snapshot block)")
-        dh = header(dbl[0][3])
-        dw = snapshot_world(dbl[1][3], h["slots"], dh["tables"], feature_dims(h))
+        dh, dw = dump_world(d, h)
         w = stream_to(h, bl, want=dw.tick)
         if w.tick != dw.tick:
             print(f"{d}: GameTime {dw.tick}, but the recording reads to {w.tick}")
@@ -1123,6 +1175,25 @@ def dump_images(path):
     return tick, dh.get("globals"), images
 
 
+def cmd_compare_dumps(path, a_path, b_path):
+    """Two dumps of playings of FILE at the same GameTime, the same player viewed: every record
+    they carry, the players' sight counters included, equal byte for byte. FILE gives the
+    dimensions and the globals' names; only its header is read."""
+    h = header_only(path)
+    ah, a = dump_world(a_path, h)
+    bh, b = dump_world(b_path, h)
+    if a.tick != b.tick:
+        print(f"{a_path} is at GameTime {a.tick}, {b_path} at {b.tick}")
+        return 1
+    lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
+    print(f"{a_path} against {b_path}: GameTime {a.tick}: "
+          + ("EQUAL" if not n else f"{n} DIFFERENCES") + " (A is the first, B the second)")
+    for line in lines:
+        print("  " + line.replace("the recording", "A").replace("recording", "A")
+              .replace("the dump", "B").replace("dump", "B"))
+    return 1 if n else 0
+
+
 def cmd_images(a_path, b_path):
     """The differing bytes no row of replay-globals.tsv covers, as runs, grouped by IMAGE_MAP. A
     byte is reported when it differs in a bit no row names."""
@@ -1174,8 +1245,9 @@ def main(argv):
     images = argv[2:3] == ["--images"] and argv[1:2] == ["compare"]
     if puppet or images:
         argv = argv[:2] + argv[3:]
-    if len(argv) < 3 or argv[1] not in ("info", "check", "compare") or \
-            (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4):
+    if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps") or \
+            (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
+            (argv[1] == "compare-dumps" and len(argv) != 5):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
     try:
@@ -1185,6 +1257,8 @@ def main(argv):
             return cmd_check(argv[2])
         if images:
             return cmd_images(argv[2], argv[3])
+        if argv[1] == "compare-dumps":
+            return cmd_compare_dumps(argv[2], argv[3], argv[4])
         return cmd_compare(argv[2], argv[3:], puppet)
     except (Unreadable, OSError, zlib.error, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)

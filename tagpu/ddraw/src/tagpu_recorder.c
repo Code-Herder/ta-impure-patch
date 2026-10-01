@@ -77,6 +77,9 @@
 #define OFF_PLAYERS    0x1B63       /* the eleven player records, 0x14B apart                     */
 #define PL_STRIDE      0x14B
 #define PL_ALL         11
+#define PL_SIGHT       0x7C         /* u8* the sight counters, one a cell, and their bytes at      */
+#define PL_SIGHTLEN    0x88         /*   +0x88: the player init allocates +0x88 bytes there
+                                         (0x464866..0x46487B), freed only at the level's end    */
 #define PL_INFO        0x27         /* PlayerInfo*: +0x95 the side, +0x96 the logo (the saver's)  */
 #define PL_NAME        0x2B         /* the long name the join stores (0x450BA3), 0x1E bytes         */
 #define PL_NAMELEN     0x1E
@@ -1984,6 +1987,28 @@ static void dump_globals_proj(const Level* L, const char* name)
     }
 }
 
+/* Each player record's sight counters whole, as RK_SIGHT records, for `tarec compare-dumps`: what
+   a seek's sight reset and refill rest on, and no other record carries them. Read within the
+   block the player init allocated at the size it stored beside it. */
+static void dump_sight(const char* ta)
+{
+    unsigned p, off;
+    for (p = 0; p < REC_PLAYERS; p++) {
+        const char* rec = ta + OFF_PLAYERS + (size_t)p * PL_STRIDE;
+        const unsigned char* cnt = *(const unsigned char* const*)(rec + PL_SIGHT);
+        unsigned len = *(const unsigned*)(rec + PL_SIGHTLEN);
+        if (!cnt) continue;
+        for (off = 0; off < len; off += REC_IMAGE_CHUNK) {
+            unsigned char pre[8];
+            unsigned n = len - off < REC_IMAGE_CHUNK ? len - off : REC_IMAGE_CHUNK;
+            pre[0] = (unsigned char)p;
+            pre[1] = pre[2] = pre[3] = 0;
+            memcpy(pre + 4, &off, 4);
+            dump_rec(RK_SIGHT, pre, 8, cnt + off, n);
+        }
+    }
+}
+
 /* The main block and .data whole, as RK_IMAGE records, for `tarec compare --images`: both are
    mapped for the process's life (the head of *The globals and the projectiles*). */
 static void dump_images(const char* ta)
@@ -2129,6 +2154,7 @@ static void dump_write(const Level* L, int tick, const char* name)
         else tagpu_logf("recorder: dump %s: the level has no explored map: the dump leaves it out",
                         name);
     }
+    dump_sight(L->ta);
     dump_images(L->ta);
     b.magic = REC_BLOCK_MAGIC;
     b.kind = RB_SNAPSHOT;
