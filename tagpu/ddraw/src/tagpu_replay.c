@@ -3894,17 +3894,19 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
                                                  : (unsigned char*)d->addr;
     unsigned host = !base ? 0 : !d->nrows ? *d->rows * d->stride : d->nrows * d->stride;
     unsigned rows = (t->size < host ? t->size : host) / d->stride, r, b, nkeep = 0, changed = 0;
-    unsigned nspan, *span;
+    unsigned nspan = 0, naddr = 0, *span, *addr;
     unsigned char* keep;
     const SimField* f;
     if (count_kept(d, t)) {
         c->kept++;
         return;
     }
-    /* the keep, then at most stride/2 + 1 runs of two bounds each */
+    /* the row's written bytes as runs, [span[2k], span[2k+1]): at most stride/2 + 1 of them; the
+       ID-resolved address fields, 4 bytes each, so at most stride/4, as (offset, ID kind); the keep */
     span = (unsigned*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                                ((size_t)d->stride + 2) * sizeof(unsigned) + d->stride);
-    keep = span ? (unsigned char*)(span + d->stride + 2) : NULL;
+                                ((size_t)2 * d->stride + 4) * sizeof(unsigned) + d->stride);
+    addr = span ? span + d->stride + 2 : NULL;
+    keep = span ? (unsigned char*)(addr + d->stride + 2) : NULL;
     if (!keep) {
         c->skipped++;
         tagpu_logf("replay: %s: the tables skipped %s: no memory", s_name, d->name);
@@ -3914,8 +3916,6 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
     /* a heap table sized otherwise than the recording's: rows past the shorter one keep the host's
        bytes or are not written, so the difference is counted with the values left */
     if ((d->flags & SIMD_HEAP) && t->size != host) c->kept++;
-    /* the row's written bytes as runs, [span[2k], span[2k+1]), so a row costs a memcmp a run */
-    nspan = 0;
     for (b = 0; b < d->stride; b++)
         if (!keep[b] && (b == 0 || keep[b - 1])) {
             span[nspan] = b;
@@ -3923,7 +3923,32 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
             span[nspan + 1] = b;
             nspan += 2;
         }
-    for (r = 0; r < rows; r++) {
+    for (f = d->layout; f && f->size; f++) {
+        unsigned k, n = f->repeat ? f->repeat : 1;
+        if (f->kind != SIMF_ADDR || f->id == SIM_ID_NONE || f->size != sizeof(char*)) continue;
+        for (k = 0; k < n && naddr < d->stride / 4; k++, naddr++) {
+            addr[2 * naddr] = f->off + k * f->step;
+            addr[2 * naddr + 1] = f->id;
+        }
+    }
+    /* a table with nothing kept is compared in blocks of whole rows, about 512 bytes each, and row
+       by row only where a block differs: most of these are a byte or a dword a unit slot, and
+       unchanged from the last tick */
+    if (!nkeep) {
+        unsigned per = d->stride >= 512 ? 1 : 512 / d->stride;
+        for (r = 0; r < rows; r += per) {
+            unsigned n = rows - r < per ? rows - r : per, k;
+            unsigned char* row = base + (size_t)r * d->stride;
+            const unsigned char* img = t->img + (size_t)r * d->stride;
+            if (!memcmp(row, img, (size_t)n * d->stride)) continue;
+            for (k = 0; k < n; k++, row += d->stride, img += d->stride)
+                if (memcmp(row, img, d->stride)) {
+                    memcpy(row, img, d->stride);
+                    changed++;
+                }
+        }
+    }
+    else for (r = 0; r < rows; r++) {
         unsigned char* row = base + (size_t)r * d->stride;
         const unsigned char* img = t->img + (size_t)r * d->stride;
         int differ = 0;
@@ -3933,26 +3958,17 @@ static void table_put(const Lv* L, const SimDesc* d, const RecTable* t, TabCount
                 memcpy(row + span[k], img + span[k], span[k + 1] - span[k]);
                 differ = 1;
             }
-        if (!nkeep) {
-            changed += differ;
-            continue;
-        }
-        for (f = d->layout; f->size; f++) {
-            unsigned k, n = f->repeat ? f->repeat : 1;
-            if (f->kind != SIMF_ADDR || f->id == SIM_ID_NONE || f->size != sizeof(char*)) continue;
-            for (k = 0; k < n; k++) {
-                unsigned at = f->off + k * f->step;
-                uint32_t id;
-                char* p;
-                memcpy(&id, img + at, 4);
-                if (!addr_of(L, f->id, id, &p)) {
-                    c->kept++;
-                    continue;
-                }
-                if (memcmp(row + at, &p, 4)) {
-                    memcpy(row + at, &p, 4);
-                    differ = 1;
-                }
+        for (k = 0; k < naddr; k++) {
+            uint32_t id;
+            char* p;
+            memcpy(&id, img + addr[2 * k], 4);
+            if (!addr_of(L, addr[2 * k + 1], id, &p)) {
+                c->kept++;
+                continue;
+            }
+            if (memcmp(row + addr[2 * k], &p, 4)) {
+                memcpy(row + addr[2 * k], &p, 4);
+                differ = 1;
             }
         }
         changed += differ;
