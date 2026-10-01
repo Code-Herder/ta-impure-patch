@@ -70,6 +70,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_opt.h"
 #include "tagpu_art.h"
+#include "tagpu_replays.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -3177,7 +3178,7 @@ static int __cdecl gui_redirect(void* esp)
        `0x4AA9B0` addresses it as `esp+0x2C` after the `add esp,0xC`) --
        anything else means this is not that call */
     if (path != (char*)esp + 0x38 || !name) return 0;
-    if (!lstrcmpiA(name, SCREEN) ||
+    if (!lstrcmpiA(name, SCREEN) || tagpu_replays_redirects(name) ||
         (s_redirVis && (!lstrcmpiA(name, "VISUALS.GUI") || !lstrcmpiA(name, "VISUALRT.GUI"))))
         lstrcpynA(path, GUI_DIR "\\", 0x100);
     return 0;
@@ -3214,9 +3215,9 @@ void tagpu_menu_init(void)
     static const GafEnt RTENTS[1] = { { ART_VRTBG, VRT_W, VRT_H, draw_vrtbg } };
     static const GafEnt ENTS[1]  = { { ART_NAME,  PANEL_W, PANEL_H, draw_panel_frame } };
     static const GafEnt VENTS[1] = { { ART_VISBG, VP_W,    VP_H,    draw_visbg       } };
-    TAGPU_UFO_FILE f[6];
+    TAGPU_UFO_FILE f[10];
     char b[300];
-    int len, vlen, rtlen, wrote, armed, visOk, redirected;
+    int len, vlen, rtlen, wrote, armed, visOk, redirected, nf, nrep;
     unsigned glen, vglen, rtglen;
 
     read_tokens();
@@ -3277,8 +3278,14 @@ void tagpu_menu_init(void)
     visOk = !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
             tagpu_detour_bytes_ok(VA_VIS_BUILD, VIS_BUILD_STOLEN, sizeof VIS_BUILD_STOLEN);
-    wrote = tagpu_ufo_write(UFO_FILE, f, visOk ? 6 : 2);
+    /* The Replays screen and its grounds ride the same archive and the same redirect
+       (tagpu_replays.h); its hooks go in only once both are. */
+    nf = visOk ? 6 : 2;
+    nrep = exists(OFF_FILE) ? 0 : tagpu_replays_files(f + nf, (int)(sizeof f / sizeof f[0]) - nf);
+    wrote = tagpu_ufo_write(UFO_FILE, f, nf + nrep);
+    tagpu_replays_files_free();
     redirected = wrote && !exists(OFF_FILE) && gui_redirect_install();
+    tagpu_replays_install(redirected && nrep > 0);
 
     armed = redirected &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
