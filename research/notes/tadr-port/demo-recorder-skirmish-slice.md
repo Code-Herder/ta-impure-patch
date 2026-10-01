@@ -1693,9 +1693,6 @@ ten minutes or less.
 - **The images gate's own limits**: a bit equal at both ends of [T1, Tlast] on each machine counts
   as unwritten in play; the twin covers the camera, the zoom, the cursor and the in-game menu, not
   every screen a viewer can open.
-- **`tarec.py`'s `IMAGE_MAP` still labels `0x511A58..0x511DC8` "the GAF and animation state"** (the
-  network statistics) and files the engine allocator's statistics under the C runtime; the rows in
-  `replay-globals.tsv` are right, the gate's group labels are not.
 - **Sink counts are in one perspective only**, the recording viewer's.
 
 ## S4 and S5
