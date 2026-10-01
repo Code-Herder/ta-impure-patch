@@ -1699,6 +1699,11 @@ ten minutes or less.
 - **Within one phase the recording's roots go in after the host's whole call**, so a projectile
   later in the same projectile tick still meets a tree an earlier impact felled on the recording
   machine [INFERRED: battle-los's 510 against 511, inside the band].
+- **A fresh-process seek can miss radar contacts at a pass tick** (O14's class, found by this
+  landing's reruns): battle-los's seek to 1111 (1111 = 1 mod 30) left `+0x110` bit 8 clear on 2
+  aircraft (n7; 4 in the run before) that carry it in the recording and on the playing; the same
+  GameTime passed in two earlier runs. The cause is not yet established; it is S3b's seek, and is
+  to be fixed before the harness becomes a landing gate (S3c-3).
 - **O15** — the COB guard's stop (`CORMSHIP.COB`) — still reaches naval fixtures' round-trip
   processes on some runs; it has a landing of its own.
 - **The scan's residual**: a random word of the globals image can still land in the main block
