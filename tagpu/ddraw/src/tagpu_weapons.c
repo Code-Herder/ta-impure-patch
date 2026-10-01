@@ -295,8 +295,9 @@ static void side_reset(const char* unit)
     }
 }
 
-/* A SEEK'S TABLE WRITE (tagpu_replay.c, seek_run) puts g_def's rows back from a recording's image by
-   their layout alone, on the game thread between two sim steps; this re-establishes what the
+/* THE REPLAY'S TABLE WRITE (tagpu_replay.c, tables_put: each capture point, frame visit and seek of
+   a puppet host) puts g_def's rows back from a recording's image by their layout alone, on the
+   game thread between two sim steps; this re-establishes what the
    layout cannot say, on each row def_rec can return -- one whose def is its type's own:
    - count in [3, WPN_CAP] with w[k] and mask[k] non-NULL for every k below count - 3: def_weapon
      and def_mask index them below count, and cb_loader never stores NULL. Otherwise the type
