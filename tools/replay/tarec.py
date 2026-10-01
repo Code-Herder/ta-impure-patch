@@ -34,7 +34,7 @@ import struct
 import sys
 import zlib
 
-REC_FORMAT = 2
+REC_FORMAT = 3
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -42,6 +42,10 @@ REC_UNIT_DWORDS = REC_UNIT_IMAGE // 4
 REC_PLAYER_IMAGE = 0x208                  # a player's record, then its PlayerInfo's
 REC_PLAYER_DWORDS = REC_PLAYER_IMAGE // 4
 REC_ORDER_IMAGE = 0x58
+REC_CELL_BYTES = 0x0D                     # a feature-grid cell's image
+REC_CELLS_MAX = 4096
+REC_WRECK_BYTES = 0x30                    # a wreck-pool record's image
+REC_DEATHS_MAX = 32
 REC_ORDERS_LENGTH = 0xFFFFFFFE
 REC_PLAYERS = 10
 REC_UNIT_BITS = (REC_UNIT_DWORDS + 7) // 8
@@ -55,12 +59,18 @@ U_STATE = 0x110
  RK_TABLE_SPAN, RK_CORRECT, RK_VERIFY_UNIT, RK_VERIFY_PLAYER, RK_VERIFY_TABLE, RK_HEADER,
  RK_END, RK_ORDERS, RK_VERIFY_ORDERS, RK_CONTROLLER, RK_VIEWER,
  RK_EV_CREATE, RK_EV_DEATH, RK_EV_SHOT, RK_EV_INTERCEPT, RK_EV_START, RK_EV_START_NAMED,
- RK_EV_BUILT, RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY) = range(29)
+ RK_EV_BUILT, RK_EV_STATE, RK_EV_REPLY, RK_EV_SPRAY, RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DRAW,
+ RK_EV_DEATH_END, RK_CELLS, RK_WRECK, RK_FEATURES, RK_GRID) = range(37)
 RK_NAMES = {RK_UNIT: "unit", RK_PLAYER: "player", RK_TABLE_SPAN: "table", RK_ORDERS: "order list"}
 EVENTS = {RK_EV_CREATE: "create", RK_EV_DEATH: "death", RK_EV_SHOT: "shot",
           RK_EV_INTERCEPT: "interception", RK_EV_START: "broadcast start",
           RK_EV_START_NAMED: "owner's start", RK_EV_BUILT: "build done", RK_EV_STATE: "state byte",
-          RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray"}
+          RK_EV_REPLY: "reply", RK_EV_SPRAY: "nano spray", RK_EV_FEATURE: "feature call",
+          RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
+          RK_EV_DEATH_END: "death's end"}
+FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP = range(7)
+ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12)     # an RK_EV_FEATURE's arguments after its site
+FS_SITES = 6
 
 RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END = 1, 2, 3, 4
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end"}
@@ -68,16 +78,17 @@ RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
- RT_WEAPONS) = range(1, 17)
+ RT_WEAPONS, RT_FEATURES) = range(1, 18)
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
- RT_UNCREDITED) = range(32, 40)
+ RT_UNCREDITED, RT_UNOBSERVED) = range(32, 41)
 
 END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full",
                3: "INCOMPLETE: the file could not be written",
                4: "INCOMPLETE: no memory for a declared table's growth",
                5: "INCOMPLETE: the level changed without a teardown",
                6: "INCOMPLETE: the game stopped being a skirmish",
-               7: "INCOMPLETE: an order list could not be recorded"}
+               7: "INCOMPLETE: an order list could not be recorded",
+               8: "INCOMPLETE: the features were not the ones it began with"}
 
 
 class Unreadable(Exception):
@@ -169,9 +180,18 @@ def header(payload):
                             "viewed": view}
         elif tag == RT_SETTINGS_MAP: h["settings_map"] = b.decode("latin-1")
         elif tag == RT_WEAPONS: h["weapons"] = struct.unpack_from("<II", b)
+        elif tag == RT_FEATURES: h["features"] = struct.unpack_from("<IIIII", b)
     if h.get("format") != REC_FORMAT:
         raise Unreadable(f"format {h.get('format')}, this tool reads {REC_FORMAT}")
     return h
+
+
+def feature_dims(h):
+    """The grid's columns and rows and the pool's records a recording's header states."""
+    if "features" not in h:
+        raise Unreadable("a header without its features (RT_FEATURES)")
+    w, rows, wrecks = h["features"][:3]
+    return w, rows, wrecks
 
 
 def end(payload):
@@ -188,8 +208,16 @@ def end(payload):
 # ---- the world -------------------------------------------------------------------------------
 
 class World:
-    def __init__(self, slots, tables, header=None):
+    def __init__(self, slots, tables, header=None, dims=None):
         self.slots = slots
+        if dims is None:
+            dims = feature_dims(header)
+        self.gw, self.gh, self.nrec = dims
+        self.grid = bytearray(self.gw * self.gh * REC_CELL_BYTES)     # every cell's image
+        self.pool = bytearray(self.nrec * REC_WRECK_BYTES)             # every record's image
+        self.heads = None               # the pool's three heads and the cursor, once sent
+        self.fbracket = 0               # an RK_EV_FEATURE's root + 1, until its end
+        self.deaths = []                # the IDs of the deaths whose end is still to come
         self.units = {}                                  # slot -> bytearray image, live only
         self.lists = {}                                  # (slot, list) -> bytearray, not empty
         self.players = [bytearray(REC_PLAYER_IMAGE) for _ in range(REC_PLAYERS)]
@@ -206,12 +234,55 @@ class World:
         self.corrections = 0
         self.pend = None        # (slot, list, total, next) of an order list still owed records
 
+    def bracket(self, kind, b):
+        """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
+        feature call's holds no other and cells only when it is the tick's, which is inside none;
+        a death's holds its explosion's feature calls and may hold deaths; a draw is inside one."""
+        if kind == RK_EV_FEATURE:
+            if self.fbracket or (b[0] == FR_TICK and self.deaths) or b[0] >= len(ROOT_ARGS) or \
+                    len(b) != 8 + ROOT_ARGS[b[0]]:
+                raise Unreadable("a malformed feature call")
+            self.fbracket = b[0] + 1
+        elif kind == RK_EV_FEATURE_END:
+            if len(b) != 8 or self.fbracket != b[0] + 1:
+                raise Unreadable("a feature call's end with no call open")
+            self.fbracket = 0
+        elif kind == RK_EV_DEATH:
+            if self.fbracket or len(self.deaths) == REC_DEATHS_MAX:
+                raise Unreadable("a death inside a feature call, or nested too deep")
+            self.deaths.append(struct.unpack_from("<I", b)[0])
+        elif kind == RK_EV_DEATH_END:
+            if len(b) != 4 or not self.deaths or self.deaths[-1] != struct.unpack_from("<I", b)[0]:
+                raise Unreadable("a death's end that closes no death")
+            self.deaths.pop()
+        elif kind == RK_EV_DRAW:
+            if (not self.fbracket and not self.deaths) or len(b) != 12 or b[0] >= FS_SITES:
+                raise Unreadable("a draw outside a feature call or a death")
+
+    def cells(self, b):
+        x, z, n, zero = struct.unpack_from("<HHHH", b)
+        if not n or n > REC_CELLS_MAX or zero or len(b) != 8 + n * REC_CELL_BYTES or \
+                x + n > self.gw or z >= self.gh:
+            raise Unreadable(f"a run of cells past the {self.gw} x {self.gh} grid")
+        return (z * self.gw + x) * REC_CELL_BYTES
+
     def apply(self, kind, b):
-        """One record; an event changes nothing here and is returned as (kind, body). An order
-        list's records come together and in order, as the DLL's reader has them
-        (tagpu_recreader.c, list_record)."""
+        """One record; an event changes nothing here and is returned as (kind, body) -- the
+        cells inside the tick's feature call too, which are its input. An order list's records
+        come together and in order, as the DLL's reader has them (tagpu_recreader.c,
+        list_record)."""
         if self.pend is not None and kind != RK_ORDERS:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
+        if kind in (RK_EV_FEATURE, RK_EV_FEATURE_END, RK_EV_DEATH, RK_EV_DEATH_END, RK_EV_DRAW):
+            self.bracket(kind, b)
+            return kind, b
+        if kind == RK_CELLS and (self.fbracket or self.deaths):
+            if self.fbracket != FR_TICK + 1:
+                raise Unreadable("cells inside a feature call that is not the tick's")
+            self.cells(b)
+            return kind, b
+        if (self.fbracket or self.deaths) and kind not in EVENTS:
+            raise Unreadable(f"record kind {kind} inside a feature call or a death")
         if kind == RK_TICK:
             self.tick = struct.unpack_from("<I", b)[0]
         elif kind == RK_UNIT:
@@ -271,6 +342,16 @@ class World:
             self.view = [b[0], b[1]]
         elif kind == RK_CORRECT:
             self.corrections += 1
+        elif kind == RK_CELLS:
+            at = self.cells(b)
+            self.grid[at:at + len(b) - 8] = b[8:]
+        elif kind == RK_WRECK:
+            i = struct.unpack_from("<H", b)[0]
+            if len(b) != 4 + REC_WRECK_BYTES or i >= self.nrec:
+                raise Unreadable(f"wreck record {i} past the pool's {self.nrec}")
+            self.pool[i * REC_WRECK_BYTES:(i + 1) * REC_WRECK_BYTES] = b[4:]
+        elif kind == RK_FEATURES:
+            self.heads = struct.unpack_from("<iiiI", b)
         elif kind in EVENTS:
             return kind, b
         else:
@@ -278,10 +359,14 @@ class World:
         return None
 
     def whole(self):
-        """An iteration, a snapshot or a dump ends with no order list owed records."""
+        """An iteration, a snapshot or a dump ends with no order list owed records and no feature
+        call or death open."""
         if self.pend is not None:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short at the end of its "
                              f"iteration")
+        if self.fbracket or self.deaths:
+            raise Unreadable("a feature call's or a death's records cut short at the end of its "
+                             "iteration")
 
     @staticmethod
     def _delta(img, bits, dwords, vals):
@@ -334,6 +419,23 @@ class World:
             return {tabs.get(ix, {}).get("name", f"table {ix}"): (tabs.get(ix, {}).get("stride"), t)
                     for ix, t in w.tables.items()}
 
+        if (self.gw, self.gh, self.nrec) != (other.gw, other.gh, other.nrec):
+            note(f"the features: a {self.gw} x {self.gh} grid and {self.nrec} wreck records in "
+                 f"the recording, {other.gw} x {other.gh} and {other.nrec} in the dump")
+        else:
+            for at in range(0, len(self.grid), REC_CELL_BYTES):
+                a, b = self.grid[at:at + REC_CELL_BYTES], other.grid[at:at + REC_CELL_BYTES]
+                if a != b:
+                    c = at // REC_CELL_BYTES
+                    note(f"cell ({c % self.gw}, {c // self.gw}): recording {a.hex()}, "
+                         f"dump {b.hex()}")
+            for at in range(0, len(self.pool), REC_WRECK_BYTES):
+                a, b = self.pool[at:at + REC_WRECK_BYTES], other.pool[at:at + REC_WRECK_BYTES]
+                if a != b:
+                    dwords(f"wreck record {at // REC_WRECK_BYTES}", a, b)
+        if self.heads != other.heads:
+            note(f"the wreck pool's heads and the cursor: recording {self.heads}, "
+                 f"dump {other.heads}")
         mine = by_name(self, names)
         theirs = by_name(other, names if other_names is None else other_names)
         for name in sorted(set(mine) | set(theirs)):
@@ -355,9 +457,9 @@ class World:
         return out, n
 
 
-def snapshot_world(payload, slots, tables):
+def snapshot_world(payload, slots, tables, dims):
     """A snapshot or a dump builds the world from nothing, its seats and viewer included."""
-    w = World(slots, tables)
+    w = World(slots, tables, dims=dims)
     for kind, b in records(payload):
         w.apply(kind, b)
     w.whole()
@@ -507,6 +609,10 @@ def cmd_info(path):
           f"difficulty {o.get('difficulty')}, fixed starts {o.get('fixed_starts')}, "
           f"{o.get('players')} players, controlled {o.get('controlled')}, viewed {o.get('viewed')}")
     print(f"  settings map {h.get('settings_map')!r}, weapons {h.get('weapons')}")
+    f = h.get("features")
+    if f:
+        print(f"  features: a {f[0]} x {f[1]} grid, {f[2]} wreck records, {f[3]} feature defs "
+              f"(names 0x{f[4]:08x})")
     for p in h["players"]:
         print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, "
               f"side {p['side']}, logo {p['logo']}, alliances {p['alliances'].hex()}")
@@ -527,10 +633,11 @@ def cmd_info(path):
         if kind != RB_STREAM:
             continue
         for rk, b in records(payload):
-            if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER):
+            if rk in EVENTS or rk in (RK_ORDERS, RK_CONTROLLER, RK_VIEWER, RK_CELLS, RK_WRECK):
                 ev[rk] = ev.get(rk, 0) + 1
                 evb[rk] = evb.get(rk, 0) + 4 + ((len(b) + 3) & ~3)
-    names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer"}
+    names = {**EVENTS, RK_ORDERS: "order list", RK_CONTROLLER: "controller", RK_VIEWER: "viewer",
+             RK_CELLS: "run of cells", RK_WRECK: "wreck record"}
     print("  records: " + (", ".join(f"{ev[k]} {names[k]} ({evb[k] >> 10} KB)" for k in sorted(ev))
                            or "no order lists, seats or events"))
     ends = [b for b in bl if b[0] == RB_END]
@@ -541,7 +648,8 @@ def cmd_info(path):
               f"{e.get(RT_BAD_IDS)} id rows outside their tables, "
               f"the ring held {e.get(RT_RING_HIGH, 0) >> 10} KB at most, "
               f"{e.get(RT_OFF_THREAD)} events refused off the game thread, "
-              f"{e.get(RT_UNCREDITED)} nano sprays uncredited")
+              f"{e.get(RT_UNCREDITED)} nano sprays uncredited, "
+              f"{e.get(RT_UNOBSERVED)} grid cells changed by no observed writer")
         for kind, table, off, count in e["corrections"]:
             if kind == RK_TABLE_SPAN:
                 t = h["tables"].get(table, {"name": f"#{table}", "stride": 0})
@@ -570,7 +678,7 @@ def cmd_check(path):
     def at_snapshot(w, payload):
         nonlocal bad, seen
         seen += 1
-        s = snapshot_world(payload, h["slots"], h["tables"])
+        s = snapshot_world(payload, h["slots"], h["tables"], feature_dims(h))
         lines, n = w.differences(s, h["tables"])
         if s.tick != w.tick:
             lines.insert(0, f"the snapshot is at GameTime {s.tick}, the stream at {w.tick}")
@@ -657,7 +765,7 @@ def cmd_compare(path, dumps, puppet=False):
         if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
             raise Unreadable(f"{d}: not a dump (a header and one snapshot block)")
         dh = header(dbl[0][3])
-        dw = snapshot_world(dbl[1][3], h["slots"], dh["tables"])
+        dw = snapshot_world(dbl[1][3], h["slots"], dh["tables"], feature_dims(h))
         w = stream_to(h, bl, want=dw.tick)
         if w.tick != dw.tick:
             print(f"{d}: GameTime {dw.tick}, but the recording reads to {w.tick}")

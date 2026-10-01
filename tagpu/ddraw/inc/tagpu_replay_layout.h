@@ -4,10 +4,10 @@
 #ifndef TAGPU_REPLAY_LAYOUT_H
 #define TAGPU_REPLAY_LAYOUT_H
 
-#define TAGPU_REPLAY_LAYOUT_SHA256 "5459ccbb3054e90a78276d3efe8250592455d5c0e75bef1cd64cc9f488b9028b"
-#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "551ccecd0e6cd2b14d046d3ebeec3e5b874f3a991e3d8d5cfdd667e8e9b21440"
+#define TAGPU_REPLAY_LAYOUT_SHA256 "07842ab699f95d394afdce2fa5657f3287e4b46d6ba06d9b4a88d91bbae44caa"
+#define TAGPU_REPLAY_LAYOUT_GEN_SHA256 "81711d489987a52220b7db86b2b87a33726f37f2f275f95c944697ef54cff538"
 
-enum { RL_UNIT, RL_PLAYER, RL_MOVER, RL_ORDER, RL_INFO };
+enum { RL_UNIT, RL_PLAYER, RL_MOVER, RL_ORDER, RL_INFO, RL_CELL, RL_WRECK3DO, RL_WRECKGAF };
 enum { RL_ID, RL_OBJECT, RL_CACHE, RL_TIMER, RL_DROP, RL_PUPPET0, RL_PUPPET1 };
 enum {              /* an id row's table and what its pointer names; a row's ID is one more than the row */
     RL_T_NONE,
@@ -17,6 +17,7 @@ enum {              /* an id row's table and what its pointer names; a row's ID 
     RL_T_PLAYER,   /* (pointer - (main+0x1B63)) / 0x14B, eleven records */
     RL_T_BUCKET,   /* (pointer - *(main+0x1429F)) / 10; NULL, off-map *(main+0x142B7): own IDs */
     RL_T_OWNED,    /* not a row: the class code of an order node's own object, by its vtable (the restore's table 0x43A918): 0x4FD3B8 2, 0x4FD3F8 3, 0x4FD328 4, 0x4FD358 5, 0x4FD388 6 */
+    RL_T_GAFSEQ,   /* not a row: the record's own def's field that holds the pointer, (field - 0xAC) / 4 over FeatureDef +0xAC..+0xC8, the first that does */
 };
 
 typedef struct ReplayLayoutRow {
@@ -81,6 +82,10 @@ static const ReplayLayoutRow tagpu_replay_layout[] = {
     { RL_ORDER, RL_PUPPET0, RL_T_NONE, 0x042, 4, (0x1u << 22), "stopbuilding" },
     { RL_ORDER, RL_OBJECT, RL_T_NONE, 0x04a, 4, 0x0u, "next" },
     { RL_ORDER, RL_PUPPET0, RL_T_OWNED, 0x052, 4, 0x0u, "owned" },
+    { RL_CELL, RL_DROP, RL_T_NONE, 0x00c, 1, (0x1u << 2), "drawdefer" },
+    { RL_WRECK3DO, RL_OBJECT, RL_T_NONE, 0x004, 4, 0x0u, "model" },
+    { RL_WRECKGAF, RL_ID, RL_T_GAFSEQ, 0x00c, 4, 0x0u, "seq" },
+    { RL_WRECKGAF, RL_ID, RL_T_GAFSEQ, 0x018, 4, 0x0u, "shadow" },
 };
 
 #endif

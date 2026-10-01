@@ -253,12 +253,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            targeting keys' engine sites are in tagpu_patches.c. */
         tagpu_datakeys_init();
 
-        /* tagpu: the puppet host's gates (tagpu_puppet.c): twelve engine functions -- the damage
+        /* tagpu: the puppet host's gates (tagpu_puppet.c): nineteen engine functions -- the damage
            apply, Send_UnitDeath, COB's SET, ATTACH and DROP, the two replies, the meteor shower,
-           typed commands, the debug keys, the resource transfer and the save -- each refused on
-           a level that plays a recording, and inert on every other. Byte-matched, disjoint from
-           every detour above. MUST run before tagpu_rec_init(): the recorder's observers on the
-           two replies chain onto these gates. A recording plays only when all twelve are in. */
+           typed commands, the debug keys, the resource transfer, the save, and the feature tick
+           and the six feature functions -- each refused on a level that plays a recording, and
+           inert on every other. Byte-matched, disjoint from every detour above. MUST run before
+           tagpu_rec_init(): the recorder's observers on the two replies and on the seven feature
+           entries chain onto these gates. A recording plays only when all nineteen are in. */
         tagpu_puppet_init();
 
         /* tagpu: the COB script-call oracle. No-op unless
@@ -282,13 +283,17 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            returns to the heap; the sim reads nothing different. */
         tagpu_reclaim_init();
 
-        /* tagpu: the demo recorder's event hooks (tagpu_recorder.c, *The events*): fifteen
-           observers, the five fire functions' network tests and thirteen calls of the COB starts
-           by name, byte-matched, installed only whole, and disjoint from every detour above but
-           the puppet gates on the two replies, onto which those two observers chain. Each
-           records only while a skirmish is recorded (tagpu_recorder.on); the network tests then
-           let the fire functions build the 0x0D the recorder takes, and change no simulation
-           state (tagpu_recorder.c, *The events*). */
+        /* tagpu: the demo recorder's event hooks (tagpu_recorder.c, *The events* and *The
+           features*): twenty-five observers, the five fire functions' network tests, thirteen
+           calls of the COB starts by name, the feature code's six calls of the simulation RNG and
+           the destructor's explosion call, byte-matched, installed only whole, and disjoint from
+           every detour above but the puppet gates on the two replies and the seven feature
+           entries, onto which those observers chain. Each records only while a skirmish is
+           recorded (tagpu_recorder.on); the network tests then let the fire functions build the
+           0x0D the recorder takes, and change no simulation state. On a level that plays a
+           recording the draws answer from it, the explosion plays its feature calls, and the
+           three footprint writers' grid writes are undone (tagpu_puppet.c); a recording plays
+           only when every hook is in. */
         tagpu_rec_init();
 
         /* tagpu: playing a recording back (tagpu_replay.c): four call sites of the SKIRMISH

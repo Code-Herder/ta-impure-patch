@@ -1,7 +1,8 @@
 #ifndef TAGPU_RECFMT_H
 #define TAGPU_RECFMT_H
 /* tagpu_recfmt.h -- the demo recorder's records: what the capture puts into the ring, and what a
-   recording's blocks hold (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S1 and S2a).
+   recording's blocks hold (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S1, S2a and
+   S3a).
    tagpu_recorder.c writes them on the game thread, tagpu_recwriter.c reads them on the writer
    thread, and tools/replay/tarec.py mirrors this file to read a recording back: a change here is
    a change there, and REC_FORMAT says which.
@@ -13,8 +14,10 @@
    record), each tail at a dword boundary: the object row that points at a tail holds 1 in the
    image when the pointer is set, and the tail is zero when it is not. An order node's image is
    the node's (the order record). A declared table's image follows its layout the same way. Images
-   are whole dwords, padded with zero; a delta names the dwords that changed. Everything is
-   little-endian.
+   are whole dwords, padded with zero; a delta names the dwords that changed. Two images are not:
+   a cell of the feature grid, its 13 bytes (the cell record), and a record of the wreck pool,
+   its 0x30 bytes, laid out as its def makes it (the wreck3do or the wreckgaf record, REC_WRECK_*
+   below). Everything is little-endian.
 
    AN ID is one more than the target's row in its table, so NULL's is 0 and a record of zeros
    images to zeros: the rows a table gains are zero on both sides (RK_TABLE_SIZE), and a row of
@@ -27,7 +30,7 @@
 
 #include <stdint.h>
 
-#define REC_FORMAT        2
+#define REC_FORMAT        3
 
 #define REC_UNIT_BYTES    0x118   /* a unit record                                           */
 #define REC_MOVER_BYTES   0x2F    /* its mover: the creates' allocation (`push 0x2F`, 0x4860C4)  */
@@ -53,6 +56,18 @@
 #define REC_PLAYER_DELTA_HEAD ((2 + REC_PLAYER_BITS + 3) & ~3)   /* 20                          */
 #define REC_ORDERS_LENGTH 0xFFFFFFFEu   /* a correction's offset for a list's length          */
 #define REC_NAME_MAX      32    /* the bytes of a script's name an event carries               */
+#define REC_CELL_BYTES    0x0D    /* a feature-grid cell ([main+0x14287], row-major, 0x481550)  */
+#define REC_CELLS_MAX     4096    /* the most cells one RK_CELLS carries                          */
+#define REC_WRECK_BYTES   0x30    /* a wreck-pool record (*(main+0x1420B))                        */
+#define REC_WRECK_MODEL   0x04    /* a 3DO record's Object3do: 0 in its image (wreck3do, model)  */
+#define REC_WRECK_SEQ     0x0C    /* a GAF record's two sequence states' GAF pointers, each      */
+#define REC_WRECK_SEQ2    0x18    /* imaged as its def's field (wreckgaf, seq and shadow)        */
+#define REC_WRECK_ANCHOR  0x28    /* u16 x, u16 z: the cell the record belongs to                 */
+#define REC_WRECK_DEF     0x2C    /* u16: the def, whose FeatureDef +0xFE bit 0 says GAF          */
+#define REC_WRECK_FLAGS   0x2F
+#define REC_SEQ_FIRST     0xAC    /* the FeatureDef's GAF sequence pointers, a dword each: a
+                                     sequence's ID is its field's (offset - 0xAC) / 4 + 1     */
+#define REC_SEQ_FIELDS    8
 #define REC_TEXT_MAX      128   /* the bytes of a reply's text an event carries                */
 
 _Static_assert(REC_UNIT_IMAGE == ((REC_MOVER_AT + REC_MOVER_BYTES + 3) & ~3), "the unit image");
@@ -60,6 +75,7 @@ _Static_assert(REC_PLAYER_IMAGE == REC_INFO_AT + ((REC_INFO_BYTES + 3) & ~3), "t
 _Static_assert(REC_INFO_AT == ((REC_PLAYER_BYTES + 3) & ~3), "PlayerInfo at a dword");
 _Static_assert(REC_ORDER_IMAGE == ((REC_ORDER_BYTES + 3) & ~3), "the order image");
 _Static_assert(8 + REC_ORDERS_CHUNK * REC_ORDER_IMAGE <= 0xFFFF, "an RK_ORDERS fits its length");
+_Static_assert(8 + REC_CELLS_MAX * REC_CELL_BYTES <= 0xFFFF, "an RK_CELLS fits its length");
 
 /* what an id row holds besides a row's ID */
 #define REC_ID_NULL       0u
@@ -93,7 +109,8 @@ enum RecKind {
     RK_HEADER,         /* ring only: the header block's entries (RecTag below)                      */
     RK_END,            /* ring only: u16 RecEnd, u16 0, u32 bad IDs, u32 the ring's high water in
                           bytes, u32 events refused off the game thread, u32 sprays no query
-                          preceded. The capture's last record: after it, the ring is the writer's */
+                          preceded, u32 grid cells found unobserved. The capture's last record:
+                          after it, the ring is the writer's                                      */
     RK_ORDERS,         /* u16 slot, u8 list (0 the main list +0x5C, 1 the sub list +0x60), u8 0,
                           u16 the list's nodes, u16 the first node here, then the images of nodes
                           [first, first + (len - 8) / REC_ORDER_IMAGE): a live unit's list, whole,
@@ -113,7 +130,8 @@ enum RecKind {
                           makes -- its state byte, its scripts -- come before it                  */
     RK_EV_DEATH,       /* u32 unit ID, u32 killer's ID, u8 killer's player (10: none), i8 severity,
                           u8 the record's +0xA, u8 carried (C4's decision), then the unit's image as
-                          the destructor 0x4866D0 found it                                       */
+                          the destructor 0x4866D0 found it. It opens a bracket its RK_EV_DEATH_END
+                          closes                                                                  */
     RK_EV_SHOT,        /* the 36-byte 0x0D of a fire function, as it would be sent, but +0x1A
                           masked to bit 0 and the units at +0x1F and +0x21 as their IDs (u16;
                           0xFFFF for a slot past the array); a meteor's +0x1A..+0x22 and the low
@@ -133,7 +151,68 @@ enum RecKind {
     RK_EV_SPRAY,       /* u32 unit ID, u32 reverse (0 0x4720D0, 1 0x472200), i32 point x, y, z,
                           i32 box x6, u32 layer: a nano spray, credited to the unit whose
                           QueryNanoPiece gave its point                                           */
+    RK_EV_FEATURE,     /* u8 root (RecRoot), u8 0, u16 0, u32 the call's site (its return address
+                          less 5), then the root's arguments (RecRoot): a feature function called
+                          outside every other one -- outside a unit's death, or inside its
+                          explosion -- or the feature tick. The records up to its
+                          RK_EV_FEATURE_END are the call's: the draws it made, the tick's cells,
+                          and the events of what it nested. A bracket holds no other and no death,
+                          and the tick's is inside none                                           */
+    RK_EV_FEATURE_END, /* u8 root, u8 0, u16 0, u32 what it returned: a spawn's or a swap's record
+                          as its index + 1 (0: none, 0xFFFFFFFF: not a record of the pool), a
+                          destroy's 0 or 1, and 0 for the rest, whose EAX is no result          */
+    RK_EV_DRAW,        /* u8 site (RecDrawSite), u8 0, u16 0, u32 n, u32 the value: the simulation
+                          RNG 0x4B6C30(n) at one of the feature code's six calls of it, inside a
+                          bracket: a feature call's, or a death's when a call its destructor made
+                          itself drew                                                             */
+    RK_EV_DEATH_END,   /* u32 unit ID: the destructor RK_EV_DEATH opened has returned. The records
+                          between are the death's: the feature calls its explosion made, each a
+                          root, the events of what it nested, and the deaths nested in it, each a
+                          bracket of its own. What its destructor made itself -- its corpse -- is
+                          not recorded: a replay's destructor makes it                            */
+
+    /* THE FEATURES, images like the ones above (the slice note's S3a) */
+    RK_CELLS,          /* u16 x, u16 z, u16 cells, u16 0, then `cells` cell images: a run of the
+                          grid's row z from column x. The first iteration carries every cell,
+                          the rest the cells that changed. Inside the feature tick's
+                          RK_EV_FEATURE: the cells that changed since the iteration's images      */
+    RK_WRECK,          /* u16 index, u16 0, then the record's image: a record that changed        */
+    RK_FEATURES,       /* i32 the active list's head (main+0x14213), i32 the settled list's
+                          (+0x14217), i32 the free list's (+0x1421B), u32 the reproduction cursor
+                          (+0x14257): at the first iteration, and when any changed                */
+    RK_GRID,           /* ring only: u16 columns, u16 rows: every cell's image, the grid's first,
+                          is in the ring's `grid` (tagpu_recorder.h), which the writer takes and
+                          writes as RK_CELLS where this record stands                             */
     RK_KINDS
+};
+
+/* A feature root, and its arguments after the site. A cell the engine names by address is its
+   column and row (0xFFFF 0xFFFF: not a cell of the grid, and never replayed). */
+enum RecRoot {
+    FR_TICK = 0,       /* 0x424050(): the feature tick, the one call at 0x495585                   */
+    FR_SPAWN,          /* 0x423C50(cell, def, pos, turn, v): u16 x, u16 z, u16 def, u8 v & 0xF,
+                          u8 given (bit 0 pos, bit 1 turn), i32 pos[3], u16 turn[3], u16 0         */
+    FR_DESTROY,        /* 0x4246B0(cell, force): u16 x, u16 z, u32 force                           */
+    FR_DIE,            /* 0x423550(x, z, reclaimed): i32 x, i32 z, u32 reclaimed                   */
+    FR_BURN,           /* 0x4233A0(x, z, flag): i32 x, i32 z, u32 flag                             */
+    FR_DAMAGE,         /* 0x4244B0(cell, x, z, weapon): u16 x, u16 z (the cell), i32 x, i32 z, u32
+                          the weapon's ID                                                          */
+    FR_SWAP,           /* 0x423710(x, z, reclaimed): i32 x, i32 z, u32 reclaimed                   */
+    FR_ROOTS
+};
+#define REC_ROOT_ARGS_MAX 28   /* FR_SPAWN's                                                    */
+#define REC_DEATHS_MAX    32   /* the deaths a bracket may nest, and the capture's frames        */
+
+/* The feature code's calls of the simulation RNG 0x4B6C30: every one from 0x4232F0 to 0x4250FF,
+   which holds the feature functions, the spread 0x4239C0 and the tick 0x424050. */
+enum RecDrawSite {
+    FS_BURN = 0,       /* 0x4234C2, the burn's length                                             */
+    FS_SPREAD,         /* 0x423A38, the spread to a neighbour                                     */
+    FS_DOWNWIND,       /* 0x423B40, the spread downwind                                            */
+    FS_REPRODUCE,      /* 0x424113, reproduction's chance                                          */
+    FS_REPRODUCE_X,    /* 0x424159, and its column                                                  */
+    FS_REPRODUCE_Z,    /* 0x424167, and its row                                                     */
+    FS_SITES
 };
 
 /* why a recording ended */
@@ -144,8 +223,11 @@ enum RecEnd {
     REC_END_TABLE,          /* a declared table grew and its shadow could not                   */
     REC_END_LEVEL,          /* the unit array or the clock changed without a teardown            */
     REC_END_MODE,           /* the game stopped being a skirmish                                 */
-    REC_END_ORDERS          /* an order list broke what the capture rests on: longer than
+    REC_END_ORDERS,         /* an order list broke what the capture rests on: longer than
                                REC_ORDERS_MAX, a node that is not one, or no memory for its image */
+    REC_END_FEATURES        /* the feature grid, the wreck pool or the feature defs are not the
+                               ones the recording began with, or the feature calls nested deeper
+                               than the capture tracks                                          */
 };
 
 /* A recording is REC_MAGIC, then blocks. A block is a RecBlock, then `packed` bytes: the zlib
@@ -172,8 +254,9 @@ enum RecBlockKind {
     RB_STREAM,         /* records: iterations, in order, from where the last block ended         */
     RB_SNAPSHOT,       /* records that build the whole world at `last` from nothing: a TICK, an
                           RK_UNIT per live unit with the RK_ORDERS of its lists that are not
-                          empty, an RK_PLAYER and an RK_CONTROLLER per player, an RK_VIEWER, and
-                          an RK_TABLE_SIZE and its spans per declared table. A dump is one of
+                          empty, an RK_PLAYER and an RK_CONTROLLER per player, an RK_VIEWER, an
+                          RK_TABLE_SIZE and its spans per declared table, every cell of the grid,
+                          an RK_WRECK per record that is not all zero, and an RK_FEATURES. A dump is one of
                           these, stored. It follows the stream block that ends with the events
                           of the step after `last`, so a reader that starts from it takes those
                           from the block before                                                 */
@@ -209,6 +292,9 @@ enum RecTag {
     RT_SETTINGS_MAP,   /* string: the map as the skirmish settings name it, [main+0x29A0]+0x11C  */
     RT_WEAPONS,        /* u32 slots, u32 FNV-1a of every weapon's name (0x20 bytes at +0), in
                           slot order                                                             */
+    RT_FEATURES,       /* u32 the grid's columns (main+0x14233), u32 its rows (+0x14237), u32 the
+                          wreck pool's records, u32 the feature defs (+0x14253), u32 FNV-1a of
+                          every def's name (0x20 bytes at +0), in index order                     */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */
@@ -223,8 +309,10 @@ enum RecTag {
     RT_RING_HIGH,      /* u32: the most bytes the ring held                                     */
     RT_OFF_THREAD,     /* u32: engine calls an event hook refused because they ran off the game
                           thread, so the recording lacks their events                           */
-    RT_UNCREDITED      /* u32: nano sprays no QueryNanoPiece preceded in their handler's call,
+    RT_UNCREDITED,     /* u32: nano sprays no QueryNanoPiece preceded in their handler's call,
                           recorded with unit ID 0                                               */
+    RT_UNOBSERVED      /* u32: grid cells the rotating sweep found changed that no writer's
+                          observer had marked: recorded when found, late                         */
 };
 
 #endif

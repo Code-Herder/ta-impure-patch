@@ -14,7 +14,13 @@
    not in the game: it abandons the file (the ring's `failed`, which ends the recording at the next
    capture) and is logged. The writer then only waits for the hand-over, and parses nothing more.
    The events pass into the stream as they came: the copy is the images', and an event changes
-   none of it. */
+   none of it -- the cells inside the feature tick's event included, which are its input.
+
+   THE FEATURES (the slice note's S3a) are in the copy as the capture sends them, with no verify of
+   their own: each iteration the capture compares every cell a writer marked and every record of the
+   wreck pool with its own copy and sends what changed (tagpu_recorder.c, *The features*). The
+   grid's first image comes through the ring's `grid`, larger than the ring on the largest maps:
+   RK_GRID says it is there, and the copy is that buffer from then on. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,7 +88,16 @@ typedef struct Writer {
     Corr           corr[CORR_MAX];
     unsigned       ncorr, corr_more, logged;
 
-    unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited;
+    unsigned       gw, gh, npool;   /* the features' copy (RT_FEATURES)                 */
+    unsigned char* grid;        /* the ring's `grid`, once RK_GRID has come               */
+    unsigned char* pool;
+    int32_t        heads[4];    /* the pool's heads and the cursor                        */
+    int            heads_in;
+    unsigned       fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
+    unsigned       ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
+    unsigned       death[REC_DEATHS_MAX];   /* their units' IDs, innermost last          */
+
+    unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited, unobserved;
     unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
 } Writer;
 
@@ -260,6 +275,11 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
             w->view[0] = b[at + 4 + 18];
             w->view[1] = b[at + 4 + 19];
         }
+        if (tag == RT_FEATURES && n == 20) {
+            memcpy(&w->gw, b + at + 4, 4);
+            memcpy(&w->gh, b + at + 8, 4);
+            memcpy(&w->npool, b + at + 12, 4);
+        }
         if (tag == RT_TABLE && n >= 12) {
             WTable* t;
             unsigned short ix;
@@ -277,13 +297,16 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         }
         at += (4 + n + 3) & ~3u;
     }
-    if (w->nslots < 2 || w->nslots > 0xFFFF) return 0;
+    if (w->nslots < 2 || w->nslots > 0xFFFF || !w->gw || w->gw > 0xFFFF || !w->gh ||
+        w->gh > 0xFFFF || !w->npool || w->npool > 0x8000)
+        return 0;
     w->units = (unsigned char*)VirtualAlloc(NULL, (size_t)w->nslots * REC_UNIT_IMAGE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     w->live = (unsigned char*)calloc(w->nslots, 1);
     w->lists = (WList*)calloc((size_t)w->nslots * 2, sizeof *w->lists);
     w->vlist = (unsigned char*)malloc((size_t)REC_ORDERS_MAX * REC_ORDER_IMAGE);
-    if (!w->units || !w->live || !w->lists || !w->vlist) {
+    w->pool = (unsigned char*)calloc(w->npool, REC_WRECK_BYTES);
+    if (!w->units || !w->live || !w->lists || !w->vlist || !w->pool) {
         fail(w, "no memory for the copy");
         return 1;
     }
@@ -457,6 +480,24 @@ static void verify_table(Writer* w, WTable* t, unsigned off, const unsigned char
     buf_rec(&w->stream, RK_TABLE_SPAN, pre, 8, img, n);
 }
 
+/* every cell of the grid as RK_CELLS, a row in runs of at most REC_CELLS_MAX */
+static void grid_put(Buf* b, const Writer* w)
+{
+    unsigned x, z;
+    for (z = 0; z < w->gh; z++)
+        for (x = 0; x < w->gw; ) {
+            unsigned n = w->gw - x < REC_CELLS_MAX ? w->gw - x : REC_CELLS_MAX;
+            unsigned short pre[4];
+            pre[0] = (unsigned short)x;
+            pre[1] = (unsigned short)z;
+            pre[2] = (unsigned short)n;
+            pre[3] = 0;
+            buf_rec(b, RK_CELLS, pre, 8, w->grid + ((size_t)z * w->gw + x) * REC_CELL_BYTES,
+                    n * REC_CELL_BYTES);
+            x += n;
+        }
+}
+
 /* ---- blocks of the stream ------------------------------------------------------------------- */
 
 static void stream_flush(Writer* w)
@@ -514,6 +555,14 @@ static void snapshot(Writer* w)
             buf_rec(b, RK_TABLE_SPAN, pre, 8, t->img + off, n);
         }
     }
+    if (w->grid) grid_put(b, w);
+    for (i = 0; i < w->npool; i++) {
+        static const unsigned char zero[REC_WRECK_BYTES];
+        unsigned short pre[2] = { (unsigned short)i, 0 };
+        const unsigned char* rec = w->pool + (size_t)i * REC_WRECK_BYTES;
+        if (memcmp(rec, zero, REC_WRECK_BYTES)) buf_rec(b, RK_WRECK, pre, 4, rec, REC_WRECK_BYTES);
+    }
+    if (w->heads_in) buf_rec(b, RK_FEATURES, w->heads, sizeof w->heads, NULL, 0);
     if (b->oom) { fail(w, "no memory for a snapshot"); return; }
     block(w, RB_SNAPSHOT, w->tick, w->tick, b->p, b->n, 1);
     w->snap_tick = w->tick;
@@ -592,8 +641,87 @@ static int event_len(unsigned kind, unsigned len)
     case RK_EV_STATE:       return len == 8;
     case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
     case RK_EV_SPRAY:       return len == 48;
+    case RK_EV_DRAW:        return len == 12;
     default:                return 0;
     }
+}
+
+/* an RK_EV_FEATURE's arguments after its site, by its root (tagpu_recfmt.h, RecRoot) */
+static int root_len(unsigned root, unsigned len)
+{
+    static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12 };
+    return root < FR_ROOTS && len == 8 + args[root];
+}
+
+/* The feature records and the brackets. 1 applied, 0 malformed. A bracket opens and closes inside
+   one step's events: a feature call's, RK_EV_FEATURE to its END, holds no other bracket, and
+   cells only when it is the tick's, whose cells are its input and none of the copy, and which is
+   inside no bracket; a death's, RK_EV_DEATH to its END, holds the feature calls its explosion
+   made and may hold deaths. A draw is inside one. */
+static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
+{
+    unsigned short h[4];
+    unsigned id;
+    int open = w->fbracket || w->ndeaths;
+    switch (kind) {
+    case RK_GRID:
+        if (len != 4 || w->grid || !w->ticked || open) return 0;
+        memcpy(h, b, 4);
+        if (h[0] != w->gw || h[1] != w->gh || !w->ring->grid) return 0;
+        w->grid = w->ring->grid;
+        grid_put(&w->stream, w);
+        return 1;
+    case RK_CELLS:
+        if (len < 8 || !w->grid) return 0;
+        memcpy(h, b, 8);
+        if (!h[2] || h[2] > REC_CELLS_MAX || h[3] || len != 8 + h[2] * REC_CELL_BYTES ||
+            h[0] + h[2] > w->gw || h[1] >= w->gh)
+            return 0;
+        if (open && w->fbracket != FR_TICK + 1) return 0;
+        if (!open)
+            memcpy(w->grid + ((size_t)h[1] * w->gw + h[0]) * REC_CELL_BYTES, b + 8,
+                   (size_t)h[2] * REC_CELL_BYTES);
+        break;
+    case RK_WRECK:
+        if (len != 4 + REC_WRECK_BYTES || open) return 0;
+        memcpy(h, b, 4);
+        if (h[0] >= w->npool || h[1]) return 0;
+        memcpy(w->pool + (size_t)h[0] * REC_WRECK_BYTES, b + 4, REC_WRECK_BYTES);
+        break;
+    case RK_FEATURES:
+        if (len != 16 || open) return 0;
+        memcpy(w->heads, b, 16);
+        w->heads_in = 1;
+        break;
+    case RK_EV_FEATURE:
+        if (!w->ticked || w->fbracket || (b[0] == FR_TICK && w->ndeaths) || b[1] || b[2] || b[3] ||
+            !root_len(b[0], len))
+            return 0;
+        w->fbracket = b[0] + 1u;
+        break;
+    case RK_EV_FEATURE_END:
+        if (len != 8 || w->fbracket != b[0] + 1u || b[1] || b[2] || b[3]) return 0;
+        w->fbracket = 0;
+        break;
+    case RK_EV_DEATH:
+        if (!w->ticked || w->fbracket || w->ndeaths == REC_DEATHS_MAX || !event_len(kind, len))
+            return 0;
+        memcpy(&w->death[w->ndeaths++], b, 4);
+        break;
+    case RK_EV_DEATH_END:
+        if (len != 4 || !w->ndeaths) return 0;
+        memcpy(&id, b, 4);
+        if (id != w->death[w->ndeaths - 1]) return 0;
+        w->ndeaths--;
+        break;
+    case RK_EV_DRAW:
+        if (!open || len != 12 || b[0] >= FS_SITES || b[1] || b[2] || b[3]) return 0;
+        break;
+    default:
+        return 0;
+    }
+    buf_rec(&w->stream, kind, b, len, NULL, 0);
+    return 1;
 }
 
 /* 1 applied, 0 malformed */
@@ -612,7 +740,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     if (len >= 2) memcpy(&id, b, 2);
     switch (kind) {
     case RK_TICK:
-        if (len != 4) return 0;
+        if (len != 4 || w->fbracket || w->ndeaths) return 0;
         if (w->ticked) iteration_done(w);
         if (w->dead) return 1;
         memcpy(&w->tick, b, 4);
@@ -696,15 +824,26 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         verify_table(w, t, off, b + 8, n);
         return 1;
     case RK_END:
-        if (len != 20) return 0;
+        if (len != 24 || w->fbracket || w->ndeaths) return 0;
         memcpy(&id, b, 2);
         w->end_reason = id;
         memcpy(&w->bad_ids, b + 4, 4);
         memcpy(&w->ring_high, b + 8, 4);
         memcpy(&w->off_thread, b + 12, 4);
         memcpy(&w->uncredited, b + 16, 4);
+        memcpy(&w->unobserved, b + 20, 4);
         if (w->ticked) iteration_done(w);
         return 1;
+    case RK_GRID:
+    case RK_CELLS:
+    case RK_WRECK:
+    case RK_FEATURES:
+    case RK_EV_FEATURE:
+    case RK_EV_FEATURE_END:
+    case RK_EV_DRAW:
+    case RK_EV_DEATH:
+    case RK_EV_DEATH_END:
+        return feature_record(w, kind, b, len);
     default:
         /* the events: nothing of the copy; RK_CORRECT and RK_HEADER are never in the ring after
            the first record */
@@ -760,6 +899,7 @@ static void finish(Writer* w)
         tlv_u32(&e, RT_RING_HIGH, w->ring_high);
         tlv_u32(&e, RT_OFF_THREAD, w->off_thread);
         tlv_u32(&e, RT_UNCREDITED, w->uncredited);
+        tlv_u32(&e, RT_UNOBSERVED, w->unobserved);
         if (e.oom) fail(w, "no memory for the end block");
         else block(w, RB_END, w->tick, w->tick, e.p, e.n, 0);
     }
@@ -781,6 +921,7 @@ static void finish(Writer* w)
     free(w->lists);
     free(w->vlist);
     free(w->live);
+    free(w->pool);
 }
 
 /* ---- the thread ----------------------------------------------------------------------------- */
@@ -835,6 +976,7 @@ static DWORD WINAPI writer_main(void* arg)
         free(w);
     }
     VirtualFree(g->buf, 0, MEM_RELEASE);
+    if (g->grid) VirtualFree(g->grid, 0, MEM_RELEASE);     /* the copy's grid, when it took it */
     CloseHandle(g->wake);
     HeapFree(GetProcessHeap(), 0, g);
     SetEvent(done);        /* the file is closed: the exit may go on (tagpu_recorder.h, *The exit*) */

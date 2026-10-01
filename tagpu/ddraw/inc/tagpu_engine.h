@@ -218,8 +218,13 @@
 #define FT_STRIDE          0x0D
 #define FT_HEIGHT          0x04        /* u8 the cell's terrain height          */
 #define FT_DEFIDX          0x08        /* u16, < 0xFFFB = a live anchor         */
-#define FT_WIDX            0x0A        /* u16 wreck record index                */
-#define FT_FLAGS           0x0C        /* u8, bit0 wreckage, bits3.. seen-by    */
+#define FT_WIDX            0x0A        /* u16 wreck record index, when FT_FLAGS bit 0; a
+                                          footprint cell's rows and columns back to its anchor;
+                                          a GAF feature at rest's damage (exe-reverse-engineering.md,
+                                          the demo recorder's features)                          */
+#define FT_FLAGS           0x0C        /* u8: bit 0 the anchor holds a wreck record, bit 1 the
+                                          yard mark, bit 2 the draw's, bits 3-6 the owner the
+                                          spawn was given, 10 for none (0x423EFB..0x423F07)      */
 #define OFF_FEATDEF        0x1426F     /* FeatureDef[], stride 0x100            */
 #define FD_STRIDE          0x100
 #define FD_FOOTX           0x94        /* i16 footprint, 16-px cells            */

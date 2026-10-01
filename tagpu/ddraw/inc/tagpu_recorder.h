@@ -18,8 +18,10 @@ void __cdecl tagpu_rec_capture(void);
 void tagpu_rec_level_end(void);
 
 /* DllMain's attach: the event hooks (tagpu_recorder.c, *The events*), all or none. Without them
-   no skirmish is recorded. */
+   no skirmish is recorded, and none plays: a replay takes the feature code's draws, a death's
+   explosion and the footprint writers' undo at them. tagpu_rec_hooks_in: all of them are in. */
 void tagpu_rec_init(void);
+int tagpu_rec_hooks_in(void);
 
 /* The callouts of the events whose sites belong to other modules, on the game thread; each is
    inert unless a skirmish is being recorded.
@@ -42,6 +44,10 @@ void tagpu_rec_start_named(const char* unit, const char* name, int now, int argc
 void tagpu_rec_map_stem(const char* ta, char* out, size_t cap);
 void tagpu_rec_defs_print(const char* ta, unsigned* n, unsigned* hash);
 void tagpu_rec_weapons_print(unsigned* n, unsigned* hash);
+/* The feature grid's columns and rows, the feature defs and FNV-1a of their names, as RT_FEATURES
+   carries them: what a playing compares with the level it plays on. */
+void tagpu_rec_features_print(const char* ta, unsigned* w, unsigned* h, unsigned* ndefs,
+                              unsigned* hash);
 
 /* THE EXIT waits for the files of the recordings that have ended: a recording is complete once
    its writer has closed the file, and ExitProcess would kill a writer still writing its last
@@ -74,7 +80,7 @@ void tagpu_rec_exit(void);
    capture signals the writer through a duplicate of `wake` that it owns and closes itself, so its
    signal after that store never touches memory or a handle the writer frees. */
 #define REC_RING_BYTES    (16u << 20)
-#define REC_RING_RESERVE  48u          /* an RK_END (24 bytes) after an RK_PAD of up to 20 */
+#define REC_RING_RESERVE  52u          /* an RK_END (28 bytes) after an RK_PAD of up to 24 */
 
 /* WAKING THE WRITER. The capture signals `wake` at the start, once REC_WAKE_BYTES have been
    published since its last signal, and at the end; the writer also wakes every
@@ -98,6 +104,13 @@ typedef struct RecRing {
     HANDLE         done;               /* manual-reset; the writer's handle, set once the file
                                           is closed: *The exit* waits on the capture's own    */
     char           path[MAX_PATH];     /* the recording's file, named by the capture           */
+    unsigned char* grid;               /* the feature grid's first image, every cell's, from
+                                          VirtualAlloc: written by the capture before it
+                                          publishes the RK_GRID that names it, so the writer
+                                          reads it after that publish; the writer's from then,
+                                          freed at its end whether or not it took it. The grid
+                                          is larger than the ring on the largest maps (Seven
+                                          Islands, 21 MB)                                      */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer

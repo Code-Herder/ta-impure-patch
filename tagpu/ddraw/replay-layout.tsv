@@ -2,7 +2,10 @@
 # record as plain values (research/notes/tadr-port/demo-recorder-completeness.md): the unit and
 # player records, a unit's mover and order nodes, and a player's PlayerInfo. Every other byte of a
 # record is recorded whole and must replay exactly, so each row is a loosening, and adding one is
-# the owner's decision (CLAUDE.md, *Simulation changes stay replayable*).
+# the owner's decision (CLAUDE.md, *Simulation changes stay replayable*). The feature grid's cells and
+# the wreck pool's records are carried too (demo-recorder-skirmish-slice.md, S3a): a record of the
+# pool is laid out by its def, a 3DO feature's (wreck3do) or a GAF feature's (wreckgaf), and one
+# whose def is outside the defs is imaged as a 3DO one.
 # tools/replay-layout-gen.py says what the columns and classes mean and generates
 # inc/tagpu_replay_layout.h from this file; the build fails when the two disagree.
 #
@@ -68,3 +71,7 @@ order	0x042	4	0x200000	drop	seen	0x439740,0x43A0C0,0x43A420	DISASSEMBLED: seenx 
 order	0x042	4	0x400000	puppet0	stopbuilding	0x438590,0x4385F0,0x43A1F0,0x43A0C0,0x43A420	DISASSEMBLED: set by 0x438590 after it starts StartBuilding (0x4385E3); the node's destructor then starts and broadcasts StopBuilding (0x43A21E..0x43A25D), owner code
 order	0x04A	4	-	object	next	0x4384A0,0x439EB0,0x439F80,0x43AC60,0x43ACB0,0x43AD10,0x43ADC0,0x43AFC0,0x43B0B0,0x43B7C0,0x43BAD0	DISASSEMBLED: the next node of the list; the list's image records the nodes in order
 order	0x052	4	-	puppet0:owned	owned	0x4388D0,0x438930,0x438A00,0x438AD0,0x43A0C0,0x43A1F0,0x43A420	DISASSEMBLED: the handler's own object, installed by 0x4388D0, 0x438930, 0x438A00 or 0x438AD0 and deleted by the node's destructor (0x43A264..0x43A2A2) or the next install, so it lives while the node holds it for a unit of a type 1 or 2 owner; each install hands it to the unit's movement class (slot 1), and a type-3 owner's air proxy (vtable 0x4FD9E0, slot 1 0x44EF90) deletes it itself (0x490A10, and its destructor 0x4909A0); recorded as its class code, the saver's own record of it (0x43A970); MEASURED: a copied pointer faulted at 0x43A2A2
+cell	0x00C	1	0x04	drop	drawdefer	0x4698B0,0x469936	DISASSEMBLED 2026-09-30: DrawGameScreen's cell loop writes the flags byte of every cell it draws, clearing bit 2 (0x4698A4..0x4698B0), and sets it on a feature it draws later (0x469936); the draw alone reads it, and a capture between two frames finds it as the last draw left it
+wreck3do	0x004	4	-	object	model	0x423ECB	DISASSEMBLED 2026-09-30: the spawn's instance of the def's model, 0x45A8D0(FeatureDef+0x98) stored at 0x423ECB; the destroy frees it and the record keeps the stale pointer while free. The replayed spawn makes its own
+wreckgaf	0x00C	4	-	id:gafseq	seq	0x4B8B30	DISASSEMBLED 2026-09-30: the GAF sequence of the first sequence state, stored by 0x4B8B30 at the state's +8: the burn's FeatureDef+0xB4 (0x423473), FeatureDie's death +0xBC or reclaim +0xC4 (0x42369C)
+wreckgaf	0x018	4	-	id:gafseq	shadow	0x4B8B30	DISASSEMBLED 2026-09-30: the second state's sequence, the shadow: the burn's FeatureDef+0xB8 (0x423489), FeatureDie's +0xC0 or +0xC8 (0x4236B0); record +0x2F bit 2 says it is set

@@ -39,8 +39,10 @@
    - The declared tables, each bounded by its own declaration: a static array's rows, a live
      prefix clamped to them, a heap table's counted rows. Their shadows are taken at the start,
      and grown once for a heap table that grows (table_grow).
+   - The feature grid, the wreck pool and the feature defs: *The features* below.
    - For the header, once: the unit-type definitions' names (UNITINFOCount of them), the weapons'
-     names (the array's slots, tagpu_limits.h), the skirmish settings and the game's options.
+     names (the array's slots, tagpu_limits.h), the feature defs' names (their count), the
+     skirmish settings and the game's options.
    Every other id row's pointer is never dereferenced: its ID is one more than its row in its
    table, by arithmetic (tagpu_recfmt.h), and a pointer outside the table becomes REC_ID_BAD,
    counted and logged. Each event hook's reads are stated beside it.
@@ -63,6 +65,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_patches.h"
 #include "tagpu_puppet.h"
+#include "tagpu_replay.h"
 #include "crc32.h"
 #include "git.h"
 
@@ -136,6 +139,11 @@
    equal to replay-layout.tsv. */
 #define RL_ROWS (sizeof tagpu_replay_layout / sizeof tagpu_replay_layout[0])
 typedef struct { unsigned short off; unsigned char table; } IdRow;
+/* the feature images' value bits: a cell's, and a wreck record's as each kind of def lays it out
+   (*The features*) */
+static unsigned char s_cmask[REC_CELL_BYTES];
+static unsigned char s_w3mask[REC_WRECK_BYTES], s_wgmask[REC_WRECK_BYTES];
+static void feat_masks_row(const ReplayLayoutRow* r);
 enum { IMG_UNIT, IMG_PLAYER, IMG_ORDER, IMG_KINDS };
 static unsigned s_umask[REC_UNIT_DWORDS], s_pmask[REC_PLAYER_DWORDS];
 static unsigned s_omask[REC_ORDER_IMAGE / 4];
@@ -152,10 +160,17 @@ static void masks_init(void)
     memset(b[IMG_PLAYER], 0xFF, REC_PLAYER_BYTES);
     memset(b[IMG_PLAYER] + REC_INFO_AT, 0xFF, REC_INFO_BYTES);
     memset(b[IMG_ORDER], 0xFF, REC_ORDER_BYTES);
+    memset(s_cmask, 0xFF, sizeof s_cmask);
+    memset(s_w3mask, 0xFF, sizeof s_w3mask);
+    memset(s_wgmask, 0xFF, sizeof s_wgmask);
     for (i = 0; i < RL_ROWS; i++) {
         const ReplayLayoutRow* r = &tagpu_replay_layout[i];
         unsigned img = r->record == RL_PLAYER || r->record == RL_INFO ? IMG_PLAYER :
                        r->record == RL_ORDER ? IMG_ORDER : IMG_UNIT;
+        if (r->record == RL_CELL || r->record == RL_WRECK3DO || r->record == RL_WRECKGAF) {
+            feat_masks_row(r);
+            continue;
+        }
         unsigned at = r->offset + (r->record == RL_MOVER ? REC_MOVER_AT :
                                    r->record == RL_INFO ? REC_INFO_AT : 0);
         if (r->target != RL_T_NONE) {
@@ -479,6 +494,8 @@ typedef struct Table {
 
 static int table_grow(Table* tb, unsigned bytes);
 
+typedef struct Feat Feat;          /* *The features* */
+
 /* An order list's image as the ring last carried it: its nodes' images, in order. */
 typedef struct OList { unsigned n, cap; unsigned char img[]; } OList;
 
@@ -519,9 +536,16 @@ typedef struct Rec {
     unsigned       pages, pages_now, pages_max;  /* heap-table pages written, as GetWriteWatch
                                                     counts them: after the first iteration,
                                                     in this one and in one at most         */
+    Feat*          feat;        /* the grid's and the pool's copies (*The features*)      */
 } Rec;
 
 static void olist_drop(Rec* r, unsigned slot);
+static void feat_free(Feat* f);
+static Feat* feat_start(const char* ta, RecRing* g);
+static int cap_features(Rec* r, const Level* L);
+static unsigned fdefs_hash(const char* ta, unsigned n);
+static unsigned feat_unobserved(const Rec* r);
+static void feat_log(const Rec* r);
 
 enum { ST_IDLE, ST_RECORDING, ST_DONE };        /* DONE: the rest of this level is not recorded */
 static Rec*     s_rec;
@@ -667,6 +691,15 @@ void tagpu_rec_weapons_print(unsigned* n, unsigned* hash)
     *hash = w0 ? names_hash(w0, *n, WPN_STRIDE, WPN_NAMELEN) : 0;
 }
 
+void tagpu_rec_features_print(const char* ta, unsigned* w, unsigned* h, unsigned* ndefs,
+                              unsigned* hash)
+{
+    *w = *(const unsigned*)(ta + 0x14233);
+    *h = *(const unsigned*)(ta + 0x14237);
+    *ndefs = *(const unsigned*)(ta + 0x14253);
+    *hash = fdefs_hash(ta, *ndefs);
+}
+
 static void header_build(const Level* L, int tick, const char* map, const FILETIME* now, Tlv* t)
 {
     unsigned i, n;
@@ -739,6 +772,12 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
         unsigned d[2];
         tagpu_rec_weapons_print(&d[0], &d[1]);
         tlv(t, RT_WEAPONS, d, 8);
+    }
+    {
+        unsigned d[5];
+        tagpu_rec_features_print(ta, &d[0], &d[1], &d[3], &d[4]);
+        d[2] = TAGPU_LIM_WRECKS;
+        tlv(t, RT_FEATURES, d, 20);
     }
 }
 
@@ -841,6 +880,7 @@ static void rec_free(Rec* r)
     if (r->ulive) HeapFree(GetProcessHeap(), 0, r->ulive);
     if (r->oscratch) VirtualFree(r->oscratch, 0, MEM_RELEASE);
     if (r->oheap) HeapDestroy(r->oheap);             /* every list's image with it */
+    feat_free(r->feat);
     if (r->wake) CloseHandle(r->wake);
     if (r->done) CloseHandle(r->done);
     HeapFree(GetProcessHeap(), 0, r);
@@ -850,6 +890,7 @@ static void ring_free(RecRing* g)
 {
     if (!g) return;
     if (g->buf) VirtualFree(g->buf, 0, MEM_RELEASE);
+    if (g->grid) VirtualFree(g->grid, 0, MEM_RELEASE);
     if (g->wake) CloseHandle(g->wake);
     if (g->done) CloseHandle(g->done);
     HeapFree(GetProcessHeap(), 0, g);
@@ -921,6 +962,8 @@ static Rec* rec_start(const Level* L, int tick)
     if (!g->buf || !g->wake || !r->wake || !g->done || !r->done || !r->ushadow || !r->uraw ||
         !r->ulive || !r->tab || !r->olist || !r->oscratch)
         goto fail;
+    r->feat = feat_start(L->ta, g);
+    if (!r->feat) goto fail;
     for (i = 0; i < REC_PLAYERS; i++)
         r->ctl[i] = (unsigned char)L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER];
     r->view[0] = (unsigned char)L->ta[OFF_CONTROLLED];
@@ -987,9 +1030,10 @@ fail:
    whatever the published part left. The event hooks are off before this runs (s_tid). */
 static void rec_end(Rec* r, unsigned reason)
 {
-    unsigned char b[20], * at;
+    unsigned char b[24], * at;
     unsigned short why = (unsigned short)reason, z = 0;
     unsigned pos, off = (unsigned)InterlockedCompareExchange(&s_offthread, 0, 0);
+    unsigned unobserved = feat_unobserved(r);
     s_rec_fired = 0;
     r->w = (unsigned)InterlockedCompareExchange(&r->ring->wpub, 0, 0);
     memcpy(b, &why, 2);
@@ -998,6 +1042,7 @@ static void rec_end(Rec* r, unsigned reason)
     memcpy(b + 8, &r->high, 4);
     memcpy(b + 12, &off, 4);
     memcpy(b + 16, &r->uncredited, 4);
+    memcpy(b + 20, &unobserved, 4);
     pos = r->w & (REC_RING_BYTES - 1);
     at = r->ring->buf + pos;
     if (pos + 4 + sizeof b > REC_RING_BYTES) {
@@ -1039,8 +1084,11 @@ static void rec_end(Rec* r, unsigned reason)
                reason == REC_END_TABLE    ? "INCOMPLETE, no memory for a declared table's growth" :
                reason == REC_END_LEVEL    ? "INCOMPLETE, the level changed without a teardown" :
                reason == REC_END_ORDERS   ? "INCOMPLETE, an order list could not be recorded" :
+               reason == REC_END_FEATURES ? "INCOMPLETE, the features are not the ones it began "
+                                            "with" :
                                             "INCOMPLETE, the game stopped being a skirmish", s_bad,
                off, r->uncredited, r->oodd);
+    feat_log(r);
     rec_free(r);
 }
 
@@ -1540,6 +1588,7 @@ static int cap_verify(Rec* r, const Level* L)
 static FILE*         s_dump;
 static unsigned      s_dump_raw;
 static unsigned long s_dump_crc;
+static void dump_features(const Level* L, const char* name);
 
 static void dump_bytes(const void* p, unsigned n)
 {
@@ -1695,6 +1744,7 @@ static void dump_write(const Level* L, int tick, const char* name)
             dump_rec(RK_TABLE_SPAN, pre, 8, rb, d->stride);
         }
     }
+    dump_features(L, name);
     b.magic = REC_BLOCK_MAGIC;
     b.kind = RB_SNAPSHOT;
     b.flags = RBF_STORED;
@@ -1839,6 +1889,8 @@ static unsigned player_of_netid(const char* ta, unsigned netid)
    the array none too. The image is the victim's as the destructor finds it: the reaper runs after
    the unit's own movement step, so the iteration's image is a step early for the wreck and the
    blast. */
+static int death_enter(Rec* r, void* E, unsigned id);
+
 static int __cdecl ev_death(void* E)
 {
     Rec* r = ev_rec();
@@ -1861,7 +1913,7 @@ static int __cdecl ev_death(void* E)
     b[11] = (unsigned char)tagpu_tx_carried(r->L.begin + (size_t)slot * REC_UNIT_BYTES);
     unit_image(&r->L, slot, (unsigned*)(b + 12));
     ev_put(r, RK_EV_DEATH, b, sizeof b);
-    return 0;
+    return death_enter(r, E, id);
 }
 
 /* a unit slot of a packet as its ID, in a u16: 0 stays 0, and a slot past the array is 0xFFFF */
@@ -2133,31 +2185,818 @@ static void ev_spray(void* E, unsigned reverse)
 static int __cdecl ev_spray0(void* E) { ev_spray(E, 0); return 0; }
 static int __cdecl ev_spray1(void* E) { ev_spray(E, 1); return 0; }
 
+/* ---- the features --------------------------------------------------------------------------- */
+
+/* THE FEATURES: the feature grid, the wreck pool, the heads of the pool's three lists and the
+   reproduction cursor (demo-recorder-skirmish-slice.md, S3a).
+
+   WHAT IS READ, AND WHY IN BOUNDS. The grid [main+0x14287] is W x H cells of 13 bytes, row-major
+   (0x481550), W and H the level's (main+0x14233, +0x14237): LoadMap allocates it (0x48399D) and
+   the teardown frees it (0x483E7E, inside 0x491B60), whose entry ends the recording first. The
+   pool *(main+0x1420B) holds TAGPU_LIM_WRECKS records, allocated by 0x421F20 at the level load
+   and freed by the teardown (0x4221F8). The feature defs *(main+0x1426F), 0x100 bytes each, are
+   read below their count main+0x14253, which only a load grows (LoadFeature 0x4224B0's callers:
+   the unit defs' 0x42CCEB, the map's 0x422026 and 0x4918D9, the schema's 0x4231DE and a saved
+   game's 0x424DE1). Each capture checks that the grid, W, H, the pool and the def count are the
+   ones the recording began with, and ends it otherwise (REC_END_FEATURES). A cell an argument
+   names is bounded by W and H, and a record by the pool's count, before anything is read there;
+   a cell's back-offsets to its anchor are data, bounded again.
+
+   WHICH CELLS CHANGED. Comparing the whole grid every iteration costs more than the capture's
+   budget (7 MB on Two Continents, 21 MB on Seven Islands), and a write watch would see the draw
+   write the flags of every cell it draws, every frame (0x4698A4..0x4698B0). So each writer marks
+   the cells it may write, from its arguments, before it runs: the spawn 0x423C50, the destroy
+   0x4246B0, FeatureDie 0x423550, the burn 0x4233A0, the damage 0x4244B0 and the swap 0x423710
+   the footprint of the feature at the cell they name (and the spawn its new def's), the stamp
+   0x47CC30, the clear 0x47D0E0 and the re-claim 0x47C790 the unit's footprint (+0x76, +0x78,
+   +0x7E, +0x80, each an i16) -- all a cell wider each way. A search of .text for every operand
+   naming the grid, and of the callers of the cell getters and the feature functions, found no
+   other writer in play but the draw's bit 2 (the engine map, *The feature grid*). The capture
+   compares the marked cells with its copy. A rotating sweep compares 1/SWEEP_DIV of the grid each
+   iteration as well: a changed cell no writer marked is recorded when it finds it, late, and
+   counted (RT_UNOBSERVED), which names a writer the search missed.
+
+   THE POOL is compared whole each iteration: 0x18000 bytes in stock and 0x60000 raised, 7 and 26
+   us under Wine with both copies cold (MEASURED 2026-09-30, a scratch program on the reference
+   setup).
+
+   THE EVENTS. A feature function called outside every other one, and outside a unit's death or
+   inside its explosion (below), is a root: recorded at its entry with its arguments and the site
+   that called it, and at its return with its result. The feature tick 0x424050, whose one
+   caller is 0x495585, is a root at every call. Between the two
+   come the simulation RNG's draws at the feature code's six calls of it (feat_draw), what the
+   root nested (a COB start from a damage the tick's blast applies, 0x489CE0), and, for the tick,
+   the cells that changed since the iteration's images: the unit slots the unit tick moved, which
+   reproduction reads (0x424189). That is what a replay needs to run the same call to the same
+   end (tagpu_replay.c). The depth is a LIFO of the return addresses the observers' `after`
+   restores, pushed only while this thread records: a call that is not recorded pushes nothing
+   and has no `after`, and a recording neither starts nor ends inside a feature call -- it starts
+   and ends at a capture, at the unit tick's call, or on the teardown's entry, outside every one.
+
+   A UNIT'S DEATH is a frame too, from the destructor's entry, where its RK_EV_DEATH is taken, to
+   its return, RK_EV_DEATH_END (death_enter). A replay replays the death through the destructor,
+   which makes on the host what every machine makes: the feature calls the destructor makes
+   itself -- its corpse, 0x486360 at 0x486D6F -- are its own and not recorded. Its explosion,
+   0x49B000 at 0x486D50, is a frame of its own (rec_blast): the explosion's damage is computed
+   only on the owner's machine (the owner gate, 0x49A01B..0x49A047, passes a type-3 owner's
+   explosion by: a picture), so the feature calls its area damage makes are roots, recorded
+   inside the death, and a replay makes them where the host's destructor makes its explosion --
+   before the corpse, in the engine's order. No feature function calls the destructor, so a
+   death is never inside a feature call, and the writer refuses a recording that says otherwise.
+   Deaths do not nest in stock either: a lethal hit, the cargo loop's (0x48680B) too, marks its
+   unit dying (+0x110 bit 14, 0x489EE2) for the unit tick's reaper (0x48AFD1). */
+
+#define OFF_GRID       0x14287      /* the feature grid                                          */
+#define OFF_GRID_W     0x14233      /* its columns and rows, i32                                 */
+#define OFF_GRID_H     0x14237
+#define OFF_NFDEFS     0x14253      /* the feature defs' count, i32                              */
+#define OFF_FDEFS      0x1426F      /* FeatureDef[]                                              */
+#define OFF_WRECKS     0x1420B      /* the wreck pool                                            */
+#define OFF_WR_HEADS   0x14213      /* i32 the active, settled and free lists' heads, in a row   */
+#define OFF_CURSOR     0x14257      /* the reproduction cursor, a cell index the tick walks down  */
+#define FD_STRIDE      0x100
+#define FD_NAMELEN     0x20
+#define FD_FOOTX       0x94         /* i16 the footprint, in cells                               */
+#define FD_FOOTZ       0x96
+#define FD_MASK        0xFE         /* bit 0: a GAF feature                                      */
+#define CELL_DEF       0x08
+#define CELL_DZ        0x0A         /* a footprint cell's rows and columns back to its anchor     */
+#define CELL_DX        0x0B         /*   (0x4246C6..0x4246E6)                                     */
+#define DEF_FOOTPRINT  0xFFFE
+#define DEF_NONE       0xFFFB       /* a def at or above it is no feature: none, void, border     */
+#define U_FOOT_X       0x76         /* the footprint's origin and size, i16 each (0x47CC57..0x47CCA3) */
+#define U_FOOT_Z       0x78
+#define U_FOOT_W       0x7E
+#define U_FOOT_H       0x80
+#define FOOT_MAX       64           /* a footprint is data: a larger one marks this much          */
+#define SWEEP_DIV      64           /* the sweep covers the grid in this many iterations          */
+#define FDEPTH_MAX     REC_DEATHS_MAX   /* the frames the capture tracks: deaths, explosions and
+                                       feature calls. The deepest chain is seven: a death, its
+                                       explosion, the damage, FeatureDie, the swap, the spawn and
+                                       the destroy */
+#define WR_POOL_BYTES  ((size_t)TAGPU_LIM_WRECKS * REC_WRECK_BYTES)
+
+typedef unsigned (__stdcall* PFN_Rand)(unsigned n);
+#define E_Rand ((PFN_Rand)0x004B6C30u)
+
+struct Feat {
+    const unsigned char* grid;  /* the level's grid, its columns and rows                     */
+    unsigned       w, h;
+    const unsigned char* pool;  /* the wreck pool                                             */
+    unsigned       ndefs;       /* the feature defs at the start                              */
+    unsigned char* gshadow;     /* the grid's bytes as last compared                          */
+    unsigned char* pshadow;     /* the pool's                                                 */
+    unsigned short* lo;         /* per row, the columns marked since the last compare;        */
+    unsigned short* hi;         /*   lo > hi when none                                        */
+    unsigned       sweep;       /* the row the rotating sweep compares next                   */
+    int32_t        lists[4];    /* the heads and the cursor as the ring last carried them     */
+    unsigned       unobserved;  /* cells the sweep found changed that no writer had marked    */
+    unsigned       roots, draws, cells, wrecks;   /* this recording's, for its end's line     */
+    int            broken;      /* the calls nested past FDEPTH_MAX                           */
+};
+
+static unsigned short s_wgids[4];                                 /* a GAF record's id rows     */
+static unsigned s_nwgids;
+
+/* the cell and wreck masks from the exclusion file, as masks_init builds the others */
+static void feat_masks_row(const ReplayLayoutRow* r)
+{
+    unsigned char* m = r->record == RL_CELL ? s_cmask :
+                       r->record == RL_WRECK3DO ? s_w3mask : s_wgmask;
+    unsigned k;
+    if (r->record == RL_WRECKGAF && r->target == RL_T_GAFSEQ && s_nwgids < 4)
+        s_wgids[s_nwgids++] = r->offset;
+    for (k = 0; k < r->size; k++)
+        m[r->offset + k] &= (unsigned char)(r->mask ? ~(r->mask >> (8 * k)) : 0);
+}
+
+static const unsigned char* feat_defs(const char* ta)
+{
+    return *(const unsigned char* const*)(ta + OFF_FDEFS);
+}
+
+static void cell_image(const unsigned char* raw, unsigned char* img)
+{
+    unsigned k;
+    for (k = 0; k < REC_CELL_BYTES; k++) img[k] = raw[k] & s_cmask[k];
+}
+
+/* the def field that holds `v`, as its ID (tagpu_recfmt.h, REC_SEQ_FIRST) */
+static unsigned seq_id(const unsigned char* def, unsigned v)
+{
+    unsigned i;
+    if (!v) return REC_ID_NULL;
+    for (i = 0; i < REC_SEQ_FIELDS; i++)
+        if (*(const unsigned*)(def + REC_SEQ_FIRST + 4 * i) == v) return i + 1;
+    s_bad++;
+    return REC_ID_BAD;
+}
+
+/* A record's image: laid out by its def, a GAF feature's or a 3DO one's; a def outside the defs
+   is imaged as a 3DO one (replay-layout.tsv). */
+static void wreck_image(const Feat* f, const unsigned char* defs, const unsigned char* raw,
+                        unsigned char* img)
+{
+    unsigned short def;
+    const unsigned char* d;
+    unsigned k;
+    memcpy(&def, raw + REC_WRECK_DEF, 2);
+    d = defs && def < f->ndefs ? defs + (size_t)def * FD_STRIDE : NULL;
+    if (!d || !(d[FD_MASK] & 1)) {
+        for (k = 0; k < REC_WRECK_BYTES; k++) img[k] = raw[k] & s_w3mask[k];
+        return;
+    }
+    for (k = 0; k < REC_WRECK_BYTES; k++) img[k] = raw[k] & s_wgmask[k];
+    for (k = 0; k < s_nwgids; k++) {
+        unsigned id = seq_id(d, *(const unsigned*)(raw + s_wgids[k]));
+        memcpy(img + s_wgids[k], &id, 4);
+    }
+}
+
+/* a record's ID from its address: one more than its index, 0 for NULL */
+static unsigned wreck_id(const Feat* f, unsigned p)
+{
+    size_t off;
+    if (!p) return REC_ID_NULL;
+    if ((const unsigned char*)(size_t)p < f->pool) return REC_ID_BAD;
+    off = (size_t)((const unsigned char*)(size_t)p - f->pool);
+    if (off % REC_WRECK_BYTES || off >= WR_POOL_BYTES) return REC_ID_BAD;
+    return (unsigned)(off / REC_WRECK_BYTES) + 1;
+}
+
+/* the rect [x0, x1) x [z0, z1), clamped to the grid, into the rows' marks */
+static void mark(Feat* f, int x0, int z0, int x1, int z1)
+{
+    int z;
+    if (x0 < 0) x0 = 0;
+    if (z0 < 0) z0 = 0;
+    if (x1 > (int)f->w) x1 = (int)f->w;
+    if (z1 > (int)f->h) z1 = (int)f->h;
+    for (z = z0; z < z1 && x0 < x1; z++) {
+        if (x0 < f->lo[z]) f->lo[z] = (unsigned short)x0;
+        if (x1 - 1 > f->hi[z]) f->hi[z] = (unsigned short)(x1 - 1);
+    }
+}
+
+static int clamp_foot(int v) { return v < 1 ? 1 : v > FOOT_MAX ? FOOT_MAX : v; }
+
+/* a def's footprint at (x, z), a cell wider each way */
+static void mark_def(Feat* f, const unsigned char* defs, int x, int z, unsigned def)
+{
+    int fw = 1, fh = 1;
+    if (defs && def < f->ndefs) {
+        fw = clamp_foot(*(const short*)(defs + (size_t)def * FD_STRIDE + FD_FOOTX));
+        fh = clamp_foot(*(const short*)(defs + (size_t)def * FD_STRIDE + FD_FOOTZ));
+    }
+    mark(f, x - 1, z - 1, x + fw + 1, z + fh + 1);
+}
+
+/* the feature at (x, z): its anchor, through a footprint cell's back-offsets, and its footprint */
+static void mark_feature(Feat* f, const unsigned char* defs, int x, int z)
+{
+    const unsigned char* c;
+    unsigned short def;
+    if (x < 0 || z < 0 || x >= (int)f->w || z >= (int)f->h) return;
+    c = f->grid + ((size_t)z * f->w + (unsigned)x) * REC_CELL_BYTES;
+    memcpy(&def, c + CELL_DEF, 2);
+    if (def == DEF_FOOTPRINT) {
+        x -= c[CELL_DX];
+        z -= c[CELL_DZ];
+        if (x < 0 || z < 0) return;
+        c = f->grid + ((size_t)z * f->w + (unsigned)x) * REC_CELL_BYTES;
+        memcpy(&def, c + CELL_DEF, 2);
+    }
+    mark_def(f, defs, x, z, def);
+}
+
+/* the column and row of a cell the engine names by address; 0 when it is not one */
+static int cell_xz(const Feat* f, unsigned p, int* x, int* z)
+{
+    size_t off;
+    if ((const unsigned char*)(size_t)p < f->grid) return 0;
+    off = (size_t)((const unsigned char*)(size_t)p - f->grid);
+    if (off % REC_CELL_BYTES || off / REC_CELL_BYTES >= (size_t)f->w * f->h) return 0;
+    *x = (int)(off / REC_CELL_BYTES % f->w);
+    *z = (int)(off / REC_CELL_BYTES / f->w);
+    return 1;
+}
+
+static void put_xz(unsigned char* b, int ok, int x, int z)
+{
+    unsigned short v[2];
+    v[0] = ok ? (unsigned short)x : 0xFFFF;
+    v[1] = ok ? (unsigned short)z : 0xFFFF;
+    memcpy(b, v, 4);
+}
+
+/* a run of `n` cells of row z from column x, images from `raw`; 0 when it does not fit */
+static int cells_put(Rec* r, unsigned x, unsigned z, const unsigned char* raw, unsigned n)
+{
+    unsigned char* at = ring_take(r, 8 + n * REC_CELL_BYTES);
+    unsigned short h[4];
+    unsigned k;
+    if (!at) return 0;
+    h[0] = (unsigned short)x;
+    h[1] = (unsigned short)z;
+    h[2] = (unsigned short)n;
+    h[3] = 0;
+    memcpy(at + 4, h, 8);
+    for (k = 0; k < n; k++)
+        cell_image(raw + (size_t)k * REC_CELL_BYTES, at + 12 + (size_t)k * REC_CELL_BYTES);
+    ring_commit(r, at, RK_CELLS, 8 + n * REC_CELL_BYTES);
+    r->feat->cells += n;
+    return 1;
+}
+
+static int cell_moved(const unsigned char* a, const unsigned char* b)
+{
+    unsigned k;
+    for (k = 0; k < REC_CELL_BYTES; k++)
+        if ((a[k] ^ b[k]) & s_cmask[k]) return 1;
+    return 0;
+}
+
+/* Row z's columns [x0, x1]: each run of cells whose image moved goes into the ring; with `update`
+   the copy takes the row's bytes. `found` counts the cells recorded. 0 when the ring is full. */
+static int row_compare(Rec* r, Feat* f, unsigned z, unsigned x0, unsigned x1, int update,
+                       unsigned* found)
+{
+    size_t at = ((size_t)z * f->w + x0) * REC_CELL_BYTES;
+    const unsigned char* live = f->grid + at;
+    unsigned char* sh = f->gshadow + at;
+    unsigned n = x1 - x0 + 1, i = 0;
+    if (!memcmp(live, sh, (size_t)n * REC_CELL_BYTES)) return 1;
+    while (i < n) {
+        unsigned j = i;
+        while (j < n && j - i < REC_CELLS_MAX &&
+               cell_moved(live + (size_t)j * REC_CELL_BYTES, sh + (size_t)j * REC_CELL_BYTES))
+            j++;
+        if (j > i) {
+            if (!cells_put(r, x0 + i, z, live + (size_t)i * REC_CELL_BYTES, j - i)) return 0;
+            if (found) *found += j - i;
+        } else {
+            j = i + 1;                          /* equal, or the draw's bit alone */
+        }
+        if (update)
+            memcpy(sh + (size_t)i * REC_CELL_BYTES, live + (size_t)i * REC_CELL_BYTES,
+                   (size_t)(j - i) * REC_CELL_BYTES);
+        i = j;
+    }
+    return 1;
+}
+
+/* every marked row's marked columns, at an iteration's images; the marks are cleared as they are
+   compared */
+static int cells_marked(Rec* r, Feat* f)
+{
+    unsigned z;
+    for (z = 0; z < f->h; z++) {
+        if (f->lo[z] > f->hi[z]) continue;
+        if (!row_compare(r, f, z, f->lo[z], f->hi[z], 1, NULL)) return 0;
+        f->lo[z] = 0xFFFF;
+        f->hi[z] = 0;
+    }
+    return 1;
+}
+
+/* The same cells at the feature tick's entry, for its event: what changed since the iteration's
+   images, which the tick reads. The copy and the marks stay as they were, so the next iteration's
+   images carry every cell that changed since this one's, and the images stay the world at their
+   iteration: a snapshot is one (tagpu_recwriter.c). */
+static int cells_tick(Rec* r, Feat* f)
+{
+    unsigned z;
+    for (z = 0; z < f->h; z++)
+        if (f->lo[z] <= f->hi[z] && !row_compare(r, f, z, f->lo[z], f->hi[z], 0, NULL)) return 0;
+    return 1;
+}
+
+static int cells_sweep(Rec* r, Feat* f)
+{
+    unsigned k, rows = (f->h + SWEEP_DIV - 1) / SWEEP_DIV, was = f->unobserved;
+    for (k = 0; k < rows; k++) {
+        if (!row_compare(r, f, f->sweep, 0, f->w - 1, 1, &f->unobserved)) return 0;
+        f->sweep = (f->sweep + 1) % f->h;
+    }
+    if (!was && f->unobserved)
+        tagpu_logf("recorder: the sweep found %u grid cells changed that no writer marked, first "
+                   "at GameTime %d: a writer the capture does not observe", f->unobserved,
+                   r->tick + 1);
+    return 1;
+}
+
+/* The grid's first image: every cell, into the ring's `grid`, which RK_GRID hands the writer. */
+static int grid_first(Rec* r, Feat* f)
+{
+    size_t n = (size_t)f->w * f->h, k;
+    unsigned char* img = r->ring->grid;
+    unsigned short wh[2];
+    memcpy(f->gshadow, f->grid, n * REC_CELL_BYTES);
+    for (k = 0; k < n; k++)
+        cell_image(f->gshadow + k * REC_CELL_BYTES, img + k * REC_CELL_BYTES);
+    for (k = 0; k < f->h; k++) {
+        f->lo[k] = 0xFFFF;
+        f->hi[k] = 0;
+    }
+    wh[0] = (unsigned short)f->w;
+    wh[1] = (unsigned short)f->h;
+    if (!ring_put(r, RK_GRID, wh, 4, NULL, 0)) return 0;
+    f->cells += (unsigned)n;
+    return 1;
+}
+
+/* every record whose bytes moved since the copy; the copy starts zero, so the first iteration
+   carries every record that is not */
+static int wrecks_cap(Rec* r, Feat* f, const char* ta)
+{
+    const unsigned char* defs = feat_defs(ta);
+    size_t i;
+    if (!memcmp(f->pool, f->pshadow, WR_POOL_BYTES)) return 1;
+    for (i = 0; i < TAGPU_LIM_WRECKS; i++) {
+        const unsigned char* raw = f->pool + i * REC_WRECK_BYTES;
+        unsigned char* sh = f->pshadow + i * REC_WRECK_BYTES;
+        unsigned char* at;
+        unsigned short ix[2];
+        if (!memcmp(raw, sh, REC_WRECK_BYTES)) continue;
+        at = ring_take(r, 4 + REC_WRECK_BYTES);
+        if (!at) return 0;
+        ix[0] = (unsigned short)i;
+        ix[1] = 0;
+        memcpy(at + 4, ix, 4);
+        wreck_image(f, defs, raw, at + 8);
+        ring_commit(r, at, RK_WRECK, 4 + REC_WRECK_BYTES);
+        memcpy(sh, raw, REC_WRECK_BYTES);
+        f->wrecks++;
+    }
+    return 1;
+}
+
+static int lists_cap(Rec* r, Feat* f, const char* ta)
+{
+    int32_t v[4];
+    memcpy(v, ta + OFF_WR_HEADS, 12);
+    memcpy(&v[3], ta + OFF_CURSOR, 4);
+    if (!memcmp(v, f->lists, sizeof v)) return 1;
+    if (!ring_put(r, RK_FEATURES, v, sizeof v, NULL, 0)) return 0;
+    memcpy(f->lists, v, sizeof v);
+    return 1;
+}
+
+/* the level's grid, pool and defs are still the ones the recording began with */
+static int feat_same(const Feat* f, const char* ta)
+{
+    return !f->broken && *(const unsigned char* const*)(ta + OFF_GRID) == f->grid &&
+           *(const unsigned*)(ta + OFF_GRID_W) == f->w &&
+           *(const unsigned*)(ta + OFF_GRID_H) == f->h &&
+           *(const unsigned char* const*)(ta + OFF_WRECKS) == f->pool &&
+           *(const unsigned*)(ta + OFF_NFDEFS) == f->ndefs;
+}
+
+/* 1 done, 0 the ring is full, -1 the features are not the recording's */
+static int cap_features(Rec* r, const Level* L)
+{
+    Feat* f = r->feat;
+    if (!feat_same(f, L->ta)) return -1;
+    if (r->first) {
+        if (!grid_first(r, f)) return 0;
+    } else if (!cells_marked(r, f) || !cells_sweep(r, f)) {
+        return 0;
+    }
+    return wrecks_cap(r, f, L->ta) && lists_cap(r, f, L->ta);
+}
+
+static unsigned feat_unobserved(const Rec* r) { return r->feat ? r->feat->unobserved : 0; }
+
+static void feat_log(const Rec* r)
+{
+    const Feat* f = r->feat;
+    if (!f) return;
+    tagpu_logf("recorder: the features: a %u x %u grid; %u cell images, %u wreck records, %u feature "
+               "roots, %u draws recorded; %u cells the sweep found unmarked", f->w, f->h, f->cells,
+               f->wrecks, f->roots, f->draws, f->unobserved);
+}
+
+/* FNV-1a over every def's name, as RT_FEATURES states it */
+static unsigned fdefs_hash(const char* ta, unsigned n)
+{
+    return names_hash((const char*)feat_defs(ta), n, FD_STRIDE, FD_NAMELEN);
+}
+
+static void feat_free(Feat* f)
+{
+    if (!f) return;
+    if (f->gshadow) VirtualFree(f->gshadow, 0, MEM_RELEASE);
+    if (f->pshadow) VirtualFree(f->pshadow, 0, MEM_RELEASE);
+    if (f->lo) HeapFree(GetProcessHeap(), 0, f->lo);
+    if (f->hi) HeapFree(GetProcessHeap(), 0, f->hi);
+    HeapFree(GetProcessHeap(), 0, f);
+}
+
+/* Everything the features' capture needs, taken with the rest at the start: the copies, the
+   marks and the ring's first-image buffer. NULL, logged, when the level has no grid or pool, or
+   no memory. */
+static Feat* feat_start(const char* ta, RecRing* g)
+{
+    Feat* f = (Feat*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *f);
+    size_t cells;
+    unsigned z;
+    if (!f) return NULL;
+    f->grid = *(const unsigned char* const*)(ta + OFF_GRID);
+    f->w = *(const unsigned*)(ta + OFF_GRID_W);
+    f->h = *(const unsigned*)(ta + OFF_GRID_H);
+    f->pool = *(const unsigned char* const*)(ta + OFF_WRECKS);
+    f->ndefs = *(const unsigned*)(ta + OFF_NFDEFS);
+    if (!f->grid || !f->pool || !feat_defs(ta) || !f->w || !f->h || f->w > 0xFFFF ||
+        f->h > 0xFFFF || f->ndefs > 0xFFFB) {
+        tagpu_logf("recorder: FAILED the feature grid (%u x %u), the wreck pool or the feature "
+                   "defs (%u) are not a level's: not recording", f->w, f->h, f->ndefs);
+        feat_free(f);
+        return NULL;
+    }
+    cells = (size_t)f->w * f->h;
+    f->gshadow = (unsigned char*)VirtualAlloc(NULL, cells * REC_CELL_BYTES,
+                                              MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    f->pshadow = (unsigned char*)VirtualAlloc(NULL, WR_POOL_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                              PAGE_READWRITE);
+    f->lo = (unsigned short*)HeapAlloc(GetProcessHeap(), 0, f->h * sizeof *f->lo);
+    f->hi = (unsigned short*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, f->h * sizeof *f->hi);
+    g->grid = (unsigned char*)VirtualAlloc(NULL, cells * REC_CELL_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                           PAGE_READWRITE);
+    if (!f->gshadow || !f->pshadow || !f->lo || !f->hi || !g->grid) {
+        tagpu_logf("recorder: FAILED no memory for the feature grid's copies (%u x %u cells): "
+                   "not recording", f->w, f->h);
+        feat_free(f);
+        return NULL;
+    }
+    for (z = 0; z < f->h; z++) f->lo[z] = 0xFFFF;
+    f->lists[0] = f->lists[1] = f->lists[2] = f->lists[3] = INT32_MIN;
+    return f;
+}
+
+/* ---- the features' hooks ---- */
+
+/* A feature call, a unit's death or its explosion in progress. A feature call made inside a
+   feature call is part of it, and inside a death the destructor's own; inside the death's
+   explosion it is a root (*The features*, A UNIT'S DEATH). `id` is a death's unit's ID. */
+#define FR_DEATH       FR_ROOTS
+#define FR_BLAST       (FR_ROOTS + 1)
+typedef struct FFrame { unsigned ret, id; unsigned char root, recorded; } FFrame;
+static FFrame   s_fstack[FDEPTH_MAX];
+static unsigned s_fdepth;           /* moved only on the recording's game thread (feat_enter) */
+
+/* The root's arguments after its site, into `b`, and the cells it may write marked; the bytes
+   written. A pointer argument is read no further than the function reads it. */
+static unsigned root_args(Rec* r, Feat* f, void* E, unsigned root, unsigned char* b)
+{
+    const unsigned char* defs = feat_defs(r->L.ta);
+    int x = 0, z = 0, ok;
+    unsigned v;
+    switch (root) {
+    case FR_SPAWN: {
+        unsigned short def = (unsigned short)ARG(E, 8), turn[3] = { 0, 0, 0 }, pad = 0;
+        const int* pos = (const int*)PTR(ARG(E, 12));
+        const unsigned short* tn = (const unsigned short*)PTR(ARG(E, 16));
+        int p3[3] = { 0, 0, 0 };
+        ok = cell_xz(f, ARG(E, 4), &x, &z);
+        put_xz(b, ok, x, z);
+        memcpy(b + 4, &def, 2);
+        b[6] = (unsigned char)(ARG(E, 20) & 0xF);
+        b[7] = (unsigned char)((pos ? 1 : 0) | (tn ? 2 : 0));
+        if (pos) memcpy(p3, pos, 12);                  /* 0x423E28..0x423E38 */
+        if (tn) memcpy(turn, tn, 6);                   /* 0x423E9B..0x423EA2 */
+        memcpy(b + 8, p3, 12);
+        memcpy(b + 20, turn, 6);
+        memcpy(b + 26, &pad, 2);
+        if (ok) {
+            mark_feature(f, defs, x, z);
+            mark_def(f, defs, x, z, def);
+        }
+        return 28;
+    }
+    case FR_DESTROY:
+        ok = cell_xz(f, ARG(E, 4), &x, &z);
+        put_xz(b, ok, x, z);
+        v = ARG(E, 8);
+        memcpy(b + 4, &v, 4);
+        if (ok) mark_feature(f, defs, x, z);
+        return 8;
+    case FR_DAMAGE:
+        ok = cell_xz(f, ARG(E, 4), &x, &z);
+        put_xz(b, ok, x, z);
+        v = ARG(E, 8);
+        memcpy(b + 4, &v, 4);
+        v = ARG(E, 12);
+        memcpy(b + 8, &v, 4);
+        v = id_of(&r->L, RL_T_WEAPON, PTR(ARG(E, 16)));
+        memcpy(b + 12, &v, 4);
+        if (ok) mark_feature(f, defs, x, z);
+        return 16;
+    case FR_DIE:
+    case FR_BURN:
+    case FR_SWAP:
+        v = ARG(E, 4);
+        memcpy(b, &v, 4);
+        x = (int)v;
+        v = ARG(E, 8);
+        memcpy(b + 4, &v, 4);
+        z = (int)v;
+        v = ARG(E, 12);
+        memcpy(b + 8, &v, 4);
+        mark_feature(f, defs, x, z);
+        return 12;
+    default:
+        return 0;
+    }
+}
+
+static int feat_enter(void* E, unsigned root)
+{
+    Rec* r = ev_rec();
+    Feat* f;
+    FFrame* fr;
+    unsigned char b[8 + REC_ROOT_ARGS_MAX];
+    unsigned n;
+    if (!r || !(f = r->feat)) return 0;
+    if (s_fdepth >= FDEPTH_MAX) {
+        f->broken = 1;                  /* the next capture ends the recording */
+        return 0;
+    }
+    n = root_args(r, f, E, root, b + 8);
+    fr = &s_fstack[s_fdepth];
+    fr->ret = ARG(E, 0);
+    fr->id = 0;
+    fr->root = (unsigned char)root;
+    fr->recorded = !s_fdepth || s_fstack[s_fdepth - 1].root == FR_BLAST;
+    if (fr->recorded) {
+        unsigned site = ARG(E, 0) - 5;
+        b[0] = (unsigned char)root;
+        b[1] = b[2] = b[3] = 0;
+        memcpy(b + 4, &site, 4);
+        ev_put(r, RK_EV_FEATURE, b, 8 + n);
+        f->roots++;
+        if (root == FR_TICK && !r->ev_full && !cells_tick(r, f)) {
+            r->ev_full = 1;
+            tagpu_logf("recorder: the feature tick's cells did not fit in the ring after GameTime "
+                       "%d: the recording ends at the next iteration", r->tick);
+        }
+    }
+    s_fdepth++;
+    return 1;
+}
+
+static void* __cdecl feat_leave(unsigned* regs)
+{
+    FFrame* fr = &s_fstack[--s_fdepth];
+    Rec* r;
+    if (fr->recorded && (r = ev_rec()) != NULL && r->feat) {
+        unsigned char b[8];
+        unsigned v = regs[7];
+        /* 0x423C50 and 0x423710 hand back the record they took, 0x4246B0 a 0 or 1 (0x4246F2,
+           0x42471E, 0x42482A); the others end on a network send's or a field's value */
+        if (fr->root == FR_SPAWN || fr->root == FR_SWAP) v = wreck_id(r->feat, v);
+        else if (fr->root != FR_DESTROY) v = 0;
+        b[0] = fr->root;
+        b[1] = b[2] = b[3] = 0;
+        memcpy(b + 4, &v, 4);
+        ev_put(r, RK_EV_FEATURE_END, b, 8);
+    }
+    return (void*)(size_t)fr->ret;
+}
+
+/* The destructor's entry, once its RK_EV_DEATH is in: the death is a frame, so the feature calls
+   it makes itself are its own (*The features*, A UNIT'S DEATH). Nothing about the grid is marked
+   here: each call it makes marks its own. */
+static int death_enter(Rec* r, void* E, unsigned id)
+{
+    FFrame* fr;
+    if (!r->feat) return 0;
+    if (s_fdepth >= FDEPTH_MAX) {
+        r->feat->broken = 1;
+        return 0;
+    }
+    fr = &s_fstack[s_fdepth++];
+    fr->ret = ARG(E, 0);
+    fr->id = id;
+    fr->root = FR_DEATH;
+    fr->recorded = 1;
+    return 1;
+}
+
+static void* __cdecl death_leave(unsigned* regs)
+{
+    FFrame* fr = &s_fstack[--s_fdepth];
+    Rec* r = ev_rec();
+    (void)regs;
+    if (r) ev_put(r, RK_EV_DEATH_END, &fr->id, 4);
+    return (void*)(size_t)fr->ret;
+}
+
+/* The destructor's explosion, 0x49B000(unit, selfd), `ret 8`, whose call at 0x486D50 comes here
+   (THE INSTALL): a frame while this thread records. Then, on a puppet host replaying the death,
+   the replay makes the feature calls the recording's explosion made (tagpu_replay_blast). */
+typedef void (__stdcall* PFN_Blast)(char* unit, unsigned selfd);
+#define E_Blast    ((PFN_Blast)0x0049B000u)
+#define BLAST_CALL 0x00486D50u
+
+static void __stdcall rec_blast(char* unit, unsigned selfd)
+{
+    Rec* r = ev_rec();
+    int framed = 0;
+    if (r && r->feat) {
+        if (s_fdepth < FDEPTH_MAX) {
+            FFrame* fr = &s_fstack[s_fdepth++];
+            fr->ret = fr->id = 0;
+            fr->root = FR_BLAST;
+            fr->recorded = 0;
+            framed = 1;
+        } else {
+            r->feat->broken = 1;
+        }
+    }
+    E_Blast(unit, selfd);
+    if (framed) s_fdepth--;
+    tagpu_replay_blast(unit);
+}
+
+static int __cdecl ob_tick(void* E) { return feat_enter(E, FR_TICK); }
+static int __cdecl ob_spawn(void* E) { return feat_enter(E, FR_SPAWN); }
+static int __cdecl ob_destroy(void* E) { return feat_enter(E, FR_DESTROY); }
+static int __cdecl ob_die(void* E) { return feat_enter(E, FR_DIE); }
+static int __cdecl ob_burn(void* E) { return feat_enter(E, FR_BURN); }
+static int __cdecl ob_damage(void* E) { return feat_enter(E, FR_DAMAGE); }
+static int __cdecl ob_swap(void* E) { return feat_enter(E, FR_SWAP); }
+
+/* the stamp, the clear and the re-claim, each (unit): the unit's footprint, a cell wider. On a
+   puppet level, where nothing records, the call's grid writes are undone at its return instead
+   (tagpu_puppet.c, THE FOOTPRINT WRITERS), and foot_leave is that return. */
+static int __cdecl ob_foot(void* E)
+{
+    Rec* r = ev_rec();
+    const char* u = PTR(ARG(E, 4));
+    if (r && r->feat && ev_unit(r, u)) {
+        int x = *(const short*)(u + U_FOOT_X), z = *(const short*)(u + U_FOOT_Z);
+        int fw = clamp_foot(*(const short*)(u + U_FOOT_W));
+        int fh = clamp_foot(*(const short*)(u + U_FOOT_H));
+        mark(r->feat, x - 1, z - 1, x + fw + 1, z + fh + 1);
+    }
+    return tagpu_puppet_foot_enter(u, ARG(E, 0));
+}
+
+static void* __cdecl foot_leave(unsigned* regs)
+{
+    (void)regs;
+    return (void*)(size_t)tagpu_puppet_foot_leave();
+}
+
+/* THE DRAWS. The feature code's six calls of the simulation RNG go through feat_draw
+   (tagpu_rec_init). On a puppet host that is playing a root, the recording's value
+   (tagpu_puppet_draw); otherwise the engine's own draw, recorded while this thread records. */
+static unsigned __stdcall feat_draw(unsigned site, unsigned n)
+{
+    Rec* r;
+    unsigned v;
+    if (tagpu_puppet_draw(site, n, &v)) return v;
+    v = E_Rand(n);
+    if (s_fdepth && (r = ev_rec()) != NULL && r->feat) {
+        unsigned char b[12];
+        b[0] = (unsigned char)site;
+        b[1] = b[2] = b[3] = 0;
+        memcpy(b + 4, &n, 4);
+        memcpy(b + 8, &v, 4);
+        ev_put(r, RK_EV_DRAW, b, 12);
+        r->feat->draws++;
+    }
+    return v;
+}
+
+static const unsigned DRAW_SITES[FS_SITES] = { 0x004234C2u, 0x00423A38u, 0x00423B40u,
+                                               0x00424113u, 0x00424159u, 0x00424167u };
+
+/* The features as a dump's records: every cell, every record whose image is not all zero, and
+   the lists' heads and the cursor, read as the capture reads them and within the same counts. A
+   dump is taken on a puppet host too, which records nothing, so this reads the level itself. */
+static void dump_features(const Level* L, const char* name)
+{
+    static unsigned char img[REC_CELLS_MAX * REC_CELL_BYTES];
+    static const unsigned char zero[REC_WRECK_BYTES];
+    Feat f;
+    unsigned x, z, i;
+    int32_t v[4];
+    memset(&f, 0, sizeof f);
+    f.grid = *(const unsigned char* const*)(L->ta + OFF_GRID);
+    f.w = *(const unsigned*)(L->ta + OFF_GRID_W);
+    f.h = *(const unsigned*)(L->ta + OFF_GRID_H);
+    f.pool = *(const unsigned char* const*)(L->ta + OFF_WRECKS);
+    f.ndefs = *(const unsigned*)(L->ta + OFF_NFDEFS);
+    if (!f.grid || !f.pool || !f.w || !f.h || f.w > 0xFFFF || f.h > 0xFFFF) {
+        tagpu_logf("recorder: dump %s: the level has no feature grid or wreck pool: the dump leaves "
+                   "them out", name);
+        return;
+    }
+    for (z = 0; z < f.h; z++)
+        for (x = 0; x < f.w; ) {
+            unsigned n = f.w - x < REC_CELLS_MAX ? f.w - x : REC_CELLS_MAX, k;
+            unsigned short pre[4];
+            const unsigned char* raw = f.grid + ((size_t)z * f.w + x) * REC_CELL_BYTES;
+            pre[0] = (unsigned short)x;
+            pre[1] = (unsigned short)z;
+            pre[2] = (unsigned short)n;
+            pre[3] = 0;
+            for (k = 0; k < n; k++)
+                cell_image(raw + (size_t)k * REC_CELL_BYTES, img + (size_t)k * REC_CELL_BYTES);
+            dump_rec(RK_CELLS, pre, 8, img, n * REC_CELL_BYTES);
+            x += n;
+        }
+    for (i = 0; i < TAGPU_LIM_WRECKS; i++) {
+        unsigned short pre[2] = { (unsigned short)i, 0 };
+        wreck_image(&f, feat_defs(L->ta), f.pool + (size_t)i * REC_WRECK_BYTES, img);
+        if (memcmp(img, zero, REC_WRECK_BYTES)) dump_rec(RK_WRECK, pre, 4, img, REC_WRECK_BYTES);
+    }
+    memcpy(v, L->ta + OFF_WR_HEADS, 12);
+    memcpy(&v[3], L->ta + OFF_CURSOR, 4);
+    dump_rec(RK_FEATURES, v, sizeof v, NULL, 0);
+}
+
 /* THE INSTALL, at DllMain's attach: every site byte-matched and every custom stub built before
    anything lands. A failure before that installs nothing; one while landing leaves what landed
    inert, since every hook records only during a recording and no recording starts without
    s_sites -- a released network test then reads a flag that stays 0. */
 typedef struct ObserveSite {
     unsigned va;
-    unsigned char n, stolen[9];
+    unsigned char n, stolen[10];
     tagpu_detour_before_fn fn;
+    tagpu_detour_after_fn after;        /* the feature roots' depth (*The features*), and the
+                                           footprint writers' undo on a puppet level             */
 } ObserveSite;
 static const ObserveSite OBSERVE_SITES[] = {
-    { 0x004861B3u, 5, { 0x8B, 0xC6, 0x5F, 0x5E, 0x5D }, ev_create },
-    { 0x004866D0u, 9, { 0x83, 0xEC, 0x68, 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, ev_death },
-    { 0x0041B8D0u, 6, { 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C }, ev_built },
-    { 0x0048B090u, 5, { 0x51, 0x8B, 0x44, 0x24, 0x0C }, ev_state },
-    { 0x00456190u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_idx },
-    { 0x00456290u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_args },
-    { 0x00456218u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_named_bc },
-    { 0x0047F780u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ev_reply0 },
-    { 0x0047F850u, 5, { 0x57, 0x8B, 0x7C, 0x24, 0x08 }, ev_reply1 },
-    { 0x0043E400u, 8, { 0x83, 0xEC, 0x10, 0x56, 0x8B, 0x74, 0x24, 0x18 }, ev_nano_query },
-    { 0x004720D0u, 7, { 0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x1C }, ev_spray0 },
-    { 0x00472200u, 7, { 0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x20 }, ev_spray1 },
-    { 0x0043A216u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_handler },
-    { 0x0043B878u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_handler },
-    { 0x0043BB1Du, 8, { 0x8B, 0x56, 0x0E, 0x52, 0xFF, 0x54, 0x08, 0x04 }, ev_nano_handler },
+    { 0x004861B3u, 5, { 0x8B, 0xC6, 0x5F, 0x5E, 0x5D }, ev_create, NULL },
+    { 0x004866D0u, 9, { 0x83, 0xEC, 0x68, 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, ev_death,
+      death_leave },
+    { 0x0041B8D0u, 6, { 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C }, ev_built, NULL },
+    { 0x0048B090u, 5, { 0x51, 0x8B, 0x44, 0x24, 0x0C }, ev_state, NULL },
+    { 0x00456190u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_idx, NULL },
+    { 0x00456290u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_args, NULL },
+    { 0x00456218u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ev_start_named_bc, NULL },
+    { 0x0047F780u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ev_reply0, NULL },
+    { 0x0047F850u, 5, { 0x57, 0x8B, 0x7C, 0x24, 0x08 }, ev_reply1, NULL },
+    { 0x0043E400u, 8, { 0x83, 0xEC, 0x10, 0x56, 0x8B, 0x74, 0x24, 0x18 }, ev_nano_query, NULL },
+    { 0x004720D0u, 7, { 0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x1C }, ev_spray0, NULL },
+    { 0x00472200u, 7, { 0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x20 }, ev_spray1, NULL },
+    { 0x0043A216u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_handler, NULL },
+    { 0x0043B878u, 8, { 0x8B, 0x4E, 0x0E, 0x51, 0xFF, 0x54, 0x10, 0x04 }, ev_nano_handler, NULL },
+    { 0x0043BB1Du, 8, { 0x8B, 0x56, 0x0E, 0x52, 0xFF, 0x54, 0x08, 0x04 }, ev_nano_handler, NULL },
+    /* the features: the seven onto the puppet gates (tagpu_puppet.c), whose bytes they match */
+    { 0x00424050u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, ob_tick, feat_leave },
+    { 0x00423C50u, 5, { 0x83, 0xEC, 0x28, 0x53, 0x55 }, ob_spawn, feat_leave },
+    { 0x004246B0u, 7, { 0x53, 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ob_destroy, feat_leave },
+    { 0x00423550u, 5, { 0x83, 0xEC, 0x08, 0x53, 0x55 }, ob_die, feat_leave },
+    { 0x004233A0u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_burn, feat_leave },
+    { 0x004244B0u, 6, { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }, ob_damage, feat_leave },
+    { 0x00423710u, 8, { 0x8B, 0x44, 0x24, 0x08, 0x8B, 0x4C, 0x24, 0x04 }, ob_swap, feat_leave },
+    { 0x0047CC30u, 5, { 0x83, 0xEC, 0x18, 0x53, 0x55 }, ob_foot, foot_leave },
+    { 0x0047D0E0u, 10, { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, ob_foot,
+      foot_leave },
+    { 0x0047C790u, 7, { 0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10 }, ob_foot, foot_leave },
 };
 #define OBSERVE_SITE_COUNT (sizeof OBSERVE_SITES / sizeof OBSERVE_SITES[0])
 
@@ -2170,10 +3009,14 @@ static int pristine(unsigned va, const unsigned char* bytes, unsigned n)
     return !tagpu_detour_landed(va, NULL, NULL) && memcmp(PTR(va), bytes, n) == 0;
 }
 
+int tagpu_rec_hooks_in(void) { return s_sites; }
+
 void tagpu_rec_init(void)
 {
     unsigned char* net[5] = { 0 };
     unsigned char* calls[START_SITE_COUNT] = { 0 };
+    unsigned char* draws[FS_SITES] = { 0 };
+    unsigned char* blast = NULL;
     unsigned i, k;
     static const unsigned char regs[8] = { 0x8F, 0x8E, 0x8D, 0, 0x8B, 0, 0, 0 };
 
@@ -2207,6 +3050,28 @@ void tagpu_rec_init(void)
             return;
         }
     }
+    for (i = 0; i < FS_SITES; i++) {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)E_Rand - (DRAW_SITES[i] + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!pristine(DRAW_SITES[i], c, 5)) {
+            tagpu_logf("recorder: the feature draw at 0x%06X holds other bytes: no event hooks, "
+                       "and nothing will be recorded", DRAW_SITES[i]);
+            return;
+        }
+    }
+    {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)E_Blast - (BLAST_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!pristine(BLAST_CALL, c, 5)) {
+            tagpu_logf("recorder: the destructor's explosion call 0x%06X holds other bytes: no "
+                       "event hooks, and nothing will be recorded", BLAST_CALL);
+            return;
+        }
+    }
 
     /* the stubs of the custom sites */
     for (i = 0; i < 5; i++) {
@@ -2233,11 +3098,28 @@ void tagpu_rec_init(void)
         *p++ = 0x9D;                                    /* popfd                                */
         *p++ = 0xE9; tagpu_detour_rel(p, START_SITES[i].target);
     }
+    for (i = 0; i < FS_SITES; i++) {
+        unsigned char* p = draws[i] = tagpu_detour_stub();
+        if (!p) goto fail;
+        *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x04;   /* push dword [esp+4]: the n      */
+        *p++ = 0x68; memcpy(p, &i, 4); p += 4;          /* push the site                        */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)feat_draw); p += 4;
+        *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;          /* ret 4, the RNG's own                 */
+    }
+    {
+        unsigned char* p = blast = tagpu_detour_stub();
+        if (!p) goto fail;
+        *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;   /* push dword [esp+8]: selfd      */
+        *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;   /* push dword [esp+8]: the unit   */
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)rec_blast); p += 4;
+        *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;          /* ret 8, the explosion's own           */
+    }
 
     /* then all of them */
     for (i = 0; i < OBSERVE_SITE_COUNT; i++)
         if (!tagpu_detour_observe(OBSERVE_SITES[i].va, OBSERVE_SITES[i].stolen,
-                                  OBSERVE_SITES[i].n, OBSERVE_SITES[i].fn, NULL)) {
+                                  OBSERVE_SITES[i].n, OBSERVE_SITES[i].fn,
+                                  OBSERVE_SITES[i].after)) {
             tagpu_logf("recorder: FAILED the event site 0x%06X after %u others were in: the hooks "
                        "that are in stay inert, and nothing will be recorded",
                        OBSERVE_SITES[i].va, i);
@@ -2255,8 +3137,25 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(START_SITES[k].call, c, 5)) goto landfail;
         calls[k] = NULL;
     }
+    for (k = 0; k < FS_SITES; k++) {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)draws[k] - (DRAW_SITES[k] + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!tagpu_detour_write(DRAW_SITES[k], c, 5)) goto landfail;
+        draws[k] = NULL;
+    }
+    {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)blast - (BLAST_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!tagpu_detour_write(BLAST_CALL, c, 5)) goto landfail;
+        blast = NULL;
+    }
     s_sites = 1;
-    tagpu_logf("recorder: %u event sites in", (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT));
+    tagpu_logf("recorder: %u event sites in",
+               (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_SITES + 1));
     return;
 
 landfail:
@@ -2265,6 +3164,8 @@ landfail:
 fail:
     for (i = 0; i < 5; i++) tagpu_detour_stub_free(net[i]);
     for (i = 0; i < START_SITE_COUNT; i++) tagpu_detour_stub_free(calls[i]);
+    for (i = 0; i < FS_SITES; i++) tagpu_detour_stub_free(draws[i]);
+    tagpu_detour_stub_free(blast);
 }
 
 /* ---- the entry points ----------------------------------------------------------------------- */
@@ -2351,6 +3252,8 @@ void __cdecl tagpu_rec_capture(void)
     if (t < 0) { r->w = w0; rec_stop(REC_END_TABLE); return; }
     t = t ? cap_verify(r, &L) : 0;
     if (t < 0) { r->w = w0; rec_stop(REC_END_ORDERS); return; }
+    t = t ? cap_features(r, &L) : 0;
+    if (t < 0) { r->w = w0; rec_stop(REC_END_FEATURES); return; }
     if (!t) {
         /* the iteration does not fit: the recording ends after the last whole one, and what this
            one wrote is dropped unpublished */

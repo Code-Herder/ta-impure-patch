@@ -15,7 +15,9 @@ cannot be edited around it.
 THE FILE, tab-separated, `#` comments and blank lines ignored, one row per field or bit range:
 
   record    unit (0x118 bytes), player (0x14B), mover (0x2F: a unit's movement state),
-            order (0x56: a node of a unit's order lists) or info (0xB9: a player's PlayerInfo)
+            order (0x56: a node of a unit's order lists), info (0xB9: a player's PlayerInfo),
+            cell (0x0D: a cell of the feature grid), wreck3do or wreckgaf (0x30: a record of the
+            wreck pool, as a 3DO or a GAF feature's def lays it out)
   offset    the field's first byte, hex
   size      its width in bytes, decimal
   mask      `-` for every bit, or a hex mask over the field read as a little-endian integer
@@ -55,7 +57,8 @@ TSV = os.path.join(DDRAW, "replay-layout.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_layout.h")
 
 # The records the retail executable fixes, and their strides.
-RECORDS = {"unit": 0x118, "player": 0x14B, "mover": 0x2F, "order": 0x56, "info": 0xB9}
+RECORDS = {"unit": 0x118, "player": 0x14B, "mover": 0x2F, "order": 0x56, "info": 0xB9,
+           "cell": 0x0D, "wreck3do": 0x30, "wreckgaf": 0x30}
 CLASSES = ("id", "object", "cache", "timer", "drop", "puppet0", "puppet1")
 # The tables an id row may name. Every ID is taken from the pointer by its offset in the table,
 # never from a field of the target, so a pointer to a dead unit or an empty slot keeps its ID.
@@ -66,6 +69,7 @@ ID_TABLES = {
     "player": "(pointer - (main+0x1B63)) / 0x14B, eleven records",
     "bucket": "(pointer - *(main+0x1429F)) / 10; NULL, off-map *(main+0x142B7): own IDs",
     "owned": "not a row: the class code of an order node's own object, by its vtable (the restore's table 0x43A918): 0x4FD3B8 2, 0x4FD3F8 3, 0x4FD328 4, 0x4FD358 5, 0x4FD388 6",
+    "gafseq": "not a row: the record's own def's field that holds the pointer, (field - 0xAC) / 4 over FeatureDef +0xAC..+0xC8, the first that does",
 }
 # The executable's .text: its virtual address and size in the pristine TotalA.exe's section table.
 TEXT_BEGIN, TEXT_END = 0x401000, 0x4FB92A

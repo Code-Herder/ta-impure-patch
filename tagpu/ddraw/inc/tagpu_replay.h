@@ -17,6 +17,12 @@ void tagpu_replay_init(void);
    the rest of the iteration, on the game thread. */
 void __cdecl tagpu_replay_step(void);
 
+/* The destructor's explosion has returned (tagpu_recorder.c, rec_blast, at 0x486D50), on the game
+   thread. While a death is replayed, the feature calls the recording's explosion made are made
+   here: the host's explosion makes none, its owner being a puppet seat (the owner gate,
+   0x49A01B..0x49A047). */
+void tagpu_replay_blast(const char* unit);
+
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the level's replay
    ends, the skirmish settings get back what the player had, and the puppet table is cleared. */
 void tagpu_replay_level_end(void);

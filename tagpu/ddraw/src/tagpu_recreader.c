@@ -28,7 +28,10 @@ struct RecReader {
     char               end[160];    /* how the recording ended, once `ended`                   */
     unsigned*          touched;     /* the slots whose `changed` is set                        */
     unsigned           ntouched;
-    unsigned           evcap;
+    unsigned           evcap, fcap;
+    unsigned           fbracket;    /* an RK_EV_FEATURE's root + 1, until its END             */
+    unsigned           ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
+    unsigned           death[REC_DEATHS_MAX];
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
 };
 
@@ -38,7 +41,8 @@ static const char* const END_REASONS[] = {
     "INCOMPLETE: no memory for a declared table's growth",
     "INCOMPLETE: the level changed without a teardown",
     "INCOMPLETE: the game stopped being a skirmish",
-    "INCOMPLETE: an order list could not be recorded"
+    "INCOMPLETE: an order list could not be recorded",
+    "INCOMPLETE: the features were not the ones it began with"
 };
 
 /* ---- blocks --------------------------------------------------------------------------------- */
@@ -177,6 +181,16 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
                 h->weapons_hash = u32(p + 4);
             }
             break;
+        case RT_FEATURES:
+            if (n == 20) {
+                h->grid_w = u32(p);
+                h->grid_h = u32(p + 4);
+                h->wrecks = u32(p + 8);
+                h->nfdefs = u32(p + 12);
+                h->fdefs_hash = u32(p + 16);
+                seen |= 8;
+            }
+            break;
         case RT_LAYOUT:        text(h->layout, sizeof h->layout, p, n); break;
         case RT_SETTINGS_MAP:
             text(h->settings_map, sizeof h->settings_map, p, n);
@@ -254,12 +268,18 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         snprintf(why, cap, "format %u, this build reads %u", h->format, REC_FORMAT);
         return 0;
     }
-    if (seen != 7) {
-        snprintf(why, cap, "a header without its format, mode or slots");
+    if (seen != 15) {
+        snprintf(why, cap, "a header without its format, mode, slots or features");
         return 0;
     }
     if (h->slots < 2 || h->slots > 0xFFFF) {
         snprintf(why, cap, "a unit array of %u slots", h->slots);
+        return 0;
+    }
+    if (!h->grid_w || h->grid_w > 0xFFFF || !h->grid_h || h->grid_h > 0xFFFF || !h->wrecks ||
+        h->wrecks > 0x8000) {
+        snprintf(why, cap, "a feature grid of %u x %u cells, or a wreck pool of %u records",
+                 h->grid_w, h->grid_h, h->wrecks);
         return 0;
     }
     return 1;
@@ -300,8 +320,13 @@ static int world_init(RecReader* r, char* why, unsigned cap)
     r->touched = (unsigned*)malloc((size_t)w->slots * sizeof *r->touched);
     w->ntab = r->h.ntab;
     w->tab = (RecTable*)calloc(w->ntab ? w->ntab : 1, sizeof *w->tab);
-    if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab) {
-        snprintf(why, cap, "no memory for the world of %u slots", w->slots);
+    w->grid = (unsigned char*)VirtualAlloc(NULL, (size_t)r->h.grid_w * r->h.grid_h * REC_CELL_BYTES,
+                                           MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    w->pool = (unsigned char*)calloc(r->h.wrecks, REC_WRECK_BYTES);
+    if (!w->live || !w->changed || !w->list || !w->unit || !r->touched || !w->tab || !w->grid ||
+        !w->pool) {
+        snprintf(why, cap, "no memory for the world of %u slots and %u x %u cells", w->slots,
+                 r->h.grid_w, r->h.grid_h);
         return 0;
     }
     for (i = 0; i < w->ntab; i++) {
@@ -375,8 +400,87 @@ static int event_len(unsigned kind, unsigned len)
     case RK_EV_STATE:       return len == 8;
     case RK_EV_REPLY:       return len >= 12 && len <= 12 + REC_TEXT_MAX;
     case RK_EV_SPRAY:       return len == 48;
+    case RK_EV_DRAW:        return len == 12;
     default:                return 0;
     }
+}
+
+/* an RK_EV_FEATURE's arguments after its site, by its root (tagpu_recfmt.h, RecRoot) */
+static int root_len(unsigned root, unsigned len)
+{
+    static const unsigned char args[FR_ROOTS] = { 0, 28, 8, 12, 12, 16, 12 };
+    return root < FR_ROOTS && len == 8 + args[root];
+}
+
+/* An RK_CELLS, bounded by the grid: 1 well-formed. */
+static int cells_ok(const RecReader* r, const unsigned char* b, unsigned len)
+{
+    unsigned short h[4];
+    if (len < 8) return 0;
+    memcpy(h, b, 8);
+    return h[2] && h[2] <= REC_CELLS_MAX && !h[3] && len == 8u + h[2] * REC_CELL_BYTES &&
+           (unsigned)h[0] + h[2] <= r->h.grid_w && h[1] < r->h.grid_h;
+}
+
+static int list_add(RecEvent** l, unsigned* n, unsigned* cap, unsigned kind, unsigned len,
+                    const unsigned char* b)
+{
+    if (*n == *cap) {
+        unsigned c = *cap ? *cap * 2 : 256;
+        RecEvent* e = (RecEvent*)realloc(*l, c * sizeof *e);
+        if (!e) return 0;
+        *l = e;
+        *cap = c;
+    }
+    (*l)[*n].kind = kind;
+    (*l)[*n].len = len;
+    (*l)[*n].b = b;
+    (*n)++;
+    return 1;
+}
+
+/* An event of the step, by the brackets' grammar (tagpu_recwriter.c, feature_record): a feature
+   call's holds no other and cells only when it is the tick's, which is inside none; a death's
+   holds its explosion's feature calls and may hold deaths; a draw is inside one. 1 taken, 0
+   malformed. */
+static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
+{
+    RecWorld* w = &r->w;
+    unsigned id;
+    switch (kind) {
+    case RK_EV_FEATURE:
+        if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) || b[1] || b[2] || b[3] ||
+            !root_len(b[0], len))
+            return 0;
+        r->fbracket = b[0] + 1u;
+        break;
+    case RK_EV_FEATURE_END:
+        if (len != 8 || r->fbracket != b[0] + 1u || b[1] || b[2] || b[3]) return 0;
+        r->fbracket = 0;
+        break;
+    case RK_EV_DEATH:
+        if (r->fbracket || r->ndeaths == REC_DEATHS_MAX || !event_len(kind, len)) return 0;
+        memcpy(&r->death[r->ndeaths++], b, 4);
+        break;
+    case RK_EV_DEATH_END:
+        if (len != 4 || !r->ndeaths) return 0;
+        memcpy(&id, b, 4);
+        if (id != r->death[r->ndeaths - 1]) return 0;
+        r->ndeaths--;
+        break;
+    case RK_EV_DRAW:
+        if ((!r->fbracket && !r->ndeaths) || !event_len(kind, len) || b[0] >= FS_SITES || b[1] ||
+            b[2] || b[3])
+            return 0;
+        break;
+    case RK_CELLS:
+        if (r->fbracket != FR_TICK + 1 || !cells_ok(r, b, len)) return 0;
+        break;
+    default:
+        if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !event_len(kind, len)) return 0;
+        break;
+    }
+    return list_add(&w->ev, &w->nev, &r->evcap, kind, len, b);
 }
 
 /* An RK_ORDERS: the first record of a list starts it, and the rest must be its own, in order,
@@ -424,25 +528,30 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     RecTable* t;
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
     if (len >= 2) memcpy(&id, b, 2);
-    if (kind >= RK_EV_CREATE && kind < RK_KINDS) {
-        if (!event_len(kind, len)) return 0;
-        if (w->nev == r->evcap) {
-            unsigned c = r->evcap ? r->evcap * 2 : 256;
-            RecEvent* e = (RecEvent*)realloc(w->ev, c * sizeof *e);
-            if (!e) return 0;
-            w->ev = e;
-            r->evcap = c;
-        }
-        w->ev[w->nev].kind = kind;
-        w->ev[w->nev].len = len;
-        w->ev[w->nev].b = b;
-        w->nev++;
+    if ((kind >= RK_EV_CREATE && kind <= RK_EV_DEATH_END) || (kind == RK_CELLS && *events)) {
+        if (!event_take(r, kind, b, len)) return 0;
         *events = 1;
         return 1;
     }
     /* the images come before the events of the step after them (tagpu_recfmt.h, RK_TICK) */
     if (*events) return 0;
     switch (kind) {
+    case RK_CELLS: {
+        unsigned short h[4];
+        if (!cells_ok(r, b, len)) return 0;
+        memcpy(h, b, 8);
+        memcpy(w->grid + ((size_t)h[1] * r->h.grid_w + h[0]) * REC_CELL_BYTES, b + 8,
+               (size_t)h[2] * REC_CELL_BYTES);
+        return list_add(&w->feat, &w->nfeat, &r->fcap, kind, len, b);
+    }
+    case RK_WRECK:
+        if (len != 4 + REC_WRECK_BYTES || id >= r->h.wrecks || b[2] || b[3]) return 0;
+        memcpy(w->pool + (size_t)id * REC_WRECK_BYTES, b + 4, REC_WRECK_BYTES);
+        return list_add(&w->feat, &w->nfeat, &r->fcap, kind, len, b);
+    case RK_FEATURES:
+        if (len != 16) return 0;
+        memcpy(w->heads, b, 16);
+        return list_add(&w->feat, &w->nfeat, &r->fcap, kind, len, b);
     case RK_UNIT:
         if (len != 4 + REC_UNIT_IMAGE || id < 1 || id >= w->slots) return 0;
         memcpy(w->unit + (size_t)id * REC_UNIT_DWORDS, b + 4, REC_UNIT_IMAGE);
@@ -512,13 +621,18 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     }
 }
 
-/* An iteration is whole only when no order list it began is still owed chunks: list_record
+/* An iteration is whole only when no order list it began is still owed chunks -- list_record
    sets the list's count from its first chunk, so a list cut short would leave the rest of its
-   nodes unwritten. 1, or -1 with `why`. */
+   nodes unwritten -- and no feature bracket is still open. 1, or -1 with `why`. */
 static int iteration_done(const RecReader* r, char* why, unsigned cap)
 {
     if (r->pend.next < r->pend.total) {
         snprintf(why, cap, "an order list cut short in the block before byte %llu", r->off);
+        return -1;
+    }
+    if (r->fbracket || r->ndeaths) {
+        snprintf(why, cap, "a feature call's or a death's events cut short in the block before "
+                 "byte %llu", r->off);
         return -1;
     }
     return 1;
@@ -533,6 +647,7 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
     r->ntouched = 0;
     memset(w->pchanged, 0, sizeof w->pchanged);
     w->nev = 0;
+    w->nfeat = 0;
     for (;;) {
         RecHdr hd;
         const unsigned char* b;
@@ -646,7 +761,10 @@ void recr_close(RecReader* r)
     free(r->w.live);
     free(r->w.changed);
     free(r->w.ev);
+    free(r->w.feat);
+    free(r->w.pool);
     free(r->touched);
     if (r->w.unit) VirtualFree(r->w.unit, 0, MEM_RELEASE);
+    if (r->w.grid) VirtualFree(r->w.grid, 0, MEM_RELEASE);
     free(r);
 }

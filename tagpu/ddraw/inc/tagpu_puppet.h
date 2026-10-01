@@ -8,7 +8,8 @@
    getter 75 answers for each, and the gates that keep the recording the only writer.
 
    THE TABLE is SIM_CONTENT (decision D3): derived from the recording's header at the seat fill,
-   constant for the level, and never recorded or restored. The seat fill writes it on the game
+   constant for the level but for the mark of its first step (tagpu_puppet_play), and never
+   recorded or restored. The seat fill writes it on the game
    thread in the SKIRMISH Start, before the loader thread exists: CreateThread orders every write
    before the new thread's first instruction. The level's teardown clears it on the game thread.
    Every reader runs between those two points, on the game thread or the loader thread. A Start
@@ -47,5 +48,36 @@ int tagpu_puppet_gates_in(void);
 void tagpu_puppet_open(int open);
 /* the calls each gate refused this level, as one line for the replay's log */
 void tagpu_puppet_refusals(char* out, size_t cap);
+
+/* THE FEATURES (the slice note's S3a). From the level's first step (tagpu_puppet_play) the feature
+   functions and the feature tick refuse every call on a puppet level but the replay's own, which
+   it opens them for on the game thread: a feature root it plays, the tick where the recording ran
+   it, and a death, whose corpse the destructor makes. tagpu_puppet_features sets whether they are
+   open and returns what it was, which the caller puts back: a death's explosion plays its roots
+   inside the death. Before the first step they are open: the loader places the map's features
+   through the spawn. */
+void tagpu_puppet_play(void);
+int tagpu_puppet_features(int open);
+
+/* THE DRAWS a replayed root makes at the feature code's six calls of the simulation RNG
+   (tagpu_recfmt.h, RecDrawSite): the recording's, in order, armed by the replay around the call.
+   tagpu_puppet_draw answers 1 with the next one while its site and argument are the call's;
+   otherwise 0, and the call draws for itself, as do the rest of the root's calls. */
+typedef struct PuppetDraw { unsigned site, n, v; } PuppetDraw;
+void tagpu_puppet_draws(const PuppetDraw* q, unsigned n);
+int tagpu_puppet_draw(unsigned site, unsigned n, unsigned* v);
+/* disarms; the draws the call did not take as recorded: left over, or after a disagreement */
+unsigned tagpu_puppet_draws_end(void);
+
+/* THE FOOTPRINT WRITERS (tagpu_puppet.c): on a puppet level each call of the stamp 0x47CC30, the
+   clear 0x47D0E0 or the re-claim 0x47C790 has its writes to the grid's unit slots and yard bit
+   undone at its return. The recorder's observer at each entry (tagpu_recorder.c, ob_foot) hands
+   over the unit and the call's return address: tagpu_puppet_foot_enter answers 1 when it saved the
+   cells, and then the observer's `after` calls tagpu_puppet_foot_leave, which puts them back and
+   gives the return address back. */
+int tagpu_puppet_foot_enter(const char* unit, unsigned ret);
+unsigned tagpu_puppet_foot_leave(void);
+/* the calls undone this level and the ones that could not be, as one line for the replay's log */
+void tagpu_puppet_footprints(char* out, size_t cap);
 
 #endif

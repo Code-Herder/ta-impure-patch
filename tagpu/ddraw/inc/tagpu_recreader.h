@@ -2,7 +2,7 @@
 #define TAGPU_RECREADER_H
 /* tagpu_recreader -- reads a demo recording back (tagpu_recfmt.h): its blocks, each checked and
    inflated, the header's entries, and the world the stream builds, one iteration at a time
-   (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b). tagpu_replay.c applies what
+   (research/notes/tadr-port/demo-recorder-skirmish-slice.md, S2b and S3a). tagpu_replay.c applies what
    this reads; this file reads no engine memory, and since it is not on thread-split.allow the
    build refuses an engine address in it. tools/replay/tarec.py reads the same records and
    accepts the same shapes: a change to one is a change to the other.
@@ -40,6 +40,7 @@ typedef struct RecHeader {
     unsigned     format, mode, start, slots, units_each;
     unsigned     has_unitdefs, ndefs, defs_hash;
     unsigned     has_weapons, nweapons, weapons_hash;
+    unsigned     grid_w, grid_h, wrecks, nfdefs, fdefs_hash;     /* RT_FEATURES             */
     unsigned     has_options, lostype, cmdrdeath, difficulty, fixed_starts;
     unsigned     nplayers, controlled, viewed;
     char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT], layout[RECR_TEXT + 8];
@@ -56,8 +57,8 @@ typedef struct RecList { unsigned n, cap; unsigned char* img; } RecList;
 /* a declared table's image */
 typedef struct RecTable { unsigned index, stride, size, cap; unsigned char* img; } RecTable;
 
-/* an event of the iteration read last, pointing into the reader's block: valid until the next
-   recr_tick */
+/* an event, or a feature image, of the iteration read last, pointing into the reader's block:
+   valid until the next recr_tick */
 typedef struct RecEvent { unsigned kind, len; const unsigned char* b; } RecEvent;
 
 /* What changed a slot in the iteration read last (RecWorld.changed). */
@@ -68,7 +69,7 @@ typedef struct RecEvent { unsigned kind, len; const unsigned char* b; } RecEvent
 #define RECW_GONE   0x10    /* an RK_UNIT_GONE: its unit died, and its lists with it           */
 
 /* The recorded world at the end of one iteration's images: every live slot's image and lists,
-   the ten players, the controllers and the viewer, and the declared tables. */
+   the ten players, the controllers and the viewer, the declared tables, and the features. */
 typedef struct RecWorld {
     unsigned       slots;       /* slots 1 .. slots - 1 hold units, as the engine's array     */
     unsigned       tick;        /* the GameTime of the images it holds                        */
@@ -82,8 +83,16 @@ typedef struct RecWorld {
     unsigned char  view[2];     /* main+0x2A42 and main+0x2A43 on the recording machine       */
     unsigned       ntab;
     RecTable*      tab;         /* [ntab], the header's tables in its order                    */
-    unsigned       nev;         /* the events of the step after the images, in engine order   */
+    unsigned       nev;         /* the events of the step after the images, in engine order: a
+                                   feature root's bracket, RK_EV_FEATURE to its END, holds the
+                                   draws it made, the tick's cells and what it nested         */
     RecEvent*      ev;
+    unsigned char* grid;        /* [grid_w * grid_h] cell images, row-major                   */
+    unsigned char* pool;        /* [wrecks] record images                                     */
+    int32_t        heads[4];    /* the pool's three heads and the reproduction cursor         */
+    unsigned       nfeat;       /* the iteration's RK_CELLS, RK_WRECK and RK_FEATURES, in the
+                                   order they came: what changed in the grid and the pool     */
+    RecEvent*      feat;
     unsigned       corrections; /* RK_CORRECTs read: the recording machine's own repairs      */
 } RecWorld;
 
