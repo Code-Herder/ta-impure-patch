@@ -108,6 +108,8 @@
                                        are ([+0x14233]·[+0x14237]·2) >> 2 (0x483CF6, 0x4816B5)   */
 #define OFF_LOSTYPE    0x14281      /* u16: bit 3 clear makes the draw rebuild the fog grid from
                                        the viewed player's sight (0x4848F2)                      */
+#define OFF_MMFLAGS    0x142F1      /* u8: bit 2 asks 0x466C20 for the minimap's fog; bit 1 is
+                                       DrawMinimap's redraw (0x466B11)                           */
 #define MODE_SKIRMISH  2
 
 /* 0x464290(seat, type): the seat activation (stdcall, `ret 8`; seat and type are read as bytes) */
@@ -2570,6 +2572,13 @@ static void images_put(const Lv* L, const RecWorld* W)
     features_put(L, W);
 }
 
+/* 0x466C20(): the minimap's fog composite, no argument, plain `ret` (0x466DB1; DISASSEMBLED
+   0x466C20..0x466DB1). Only when main+0x142F1 bit 2 asks for it (0x466C29..0x466C44), it clears
+   the bit and rebuilds the minimap's fog from the explored map and the viewed record's counters,
+   then sets bit 1, DrawMinimap's redraw flag (0x466DA4). */
+typedef void (__cdecl* PFN_MinimapFog)(void);
+#define E_MinimapFog  ((PFN_MinimapFog)0x00466C20u)
+
 /* FULL VISIBILITY (demo-recorder-s2-host.md §2.9), at the first step, once the loader's sight
    rebuild 0x4816A0(1) (0x497AE5) has filled every seat's: V's sight counters all 1, the value
    that rebuild writes when true LOS is off, and V's bit in every cell of the explored map, each
@@ -2578,6 +2587,18 @@ static void images_put(const Lv* L, const RecWorld* W)
    count or a bit away, and the level shows everything while V is viewed: a perspective is only
    the viewed player (s_view). Then the draw rebuilds its fog grid from the viewed player's sight
    (LosType bit 3 clear, on the game thread, as the camera's own clears are).
+   The minimap's fog follows V's counters here too. 0x466C20 composites it from the explored map
+   and the viewed record's counters, and only when main+0x142F1 bit 2 asks (0x466C29..0x466C44);
+   the engine asks for the viewed player's own units' stamps, explored-map sets and removals
+   (0x4822A1, 0x481D3B, 0x481D81) and in the sight rebuild, just before running it (0x481905,
+   0x48191A). V owns no unit, so while V is viewed nothing else would ask, and the minimap would
+   keep the rebuild's picture of V's base counters: all shaded under true LOS. So this asks and
+   runs it as 0x4816A0 does. It composites whoever is viewed; in a seat's view it redoes that
+   seat's picture from the same inputs. Its images exist from the level init (0x4919C3) to the
+   teardown (0x491BAE), and so do the viewed record's counters, V's or a seated record's (the
+   player init 0x464700 to 0x464A00); every caller runs between the first step and the teardown
+   wrap, on the game thread, the one thread that reads them (the frame packet copies the images
+   in the in-play draw).
    V's bit in the map is the one the engine's own setter 0x481930 sets for V, 1 << [V+0x146]
    (DISASSEMBLED 0x48194B..0x481951: `mov cl,[eax+0x146]; shl ebx,cl`), each entry a u16, so a
    value of 16 or more names no bit of it and nothing is set. */
@@ -2598,6 +2619,8 @@ static void sight_fill(char* ta, unsigned v)
     if (mapped && b < 16)
         for (i = b >= 8; i < n; i += 2) mapped[i] |= (unsigned char)(1u << (b & 7));
     *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
+    *(unsigned char*)(ta + OFF_MMFLAGS) |= 4u;
+    E_MinimapFog();
 }
 
 /* The wind's generator state from the recording's first image (tagpu_wind_state_set), for the
@@ -2962,11 +2985,14 @@ void __cdecl tagpu_replay_capture(void)
    - every deadline the recording does not carry is reset by the engine's own level-start reset or
      set from T (R15).
    So a seek in a fresh process, a seek forwards and a seek backwards to T agree.
-   The contact bits +0x110 8-10 and 12 and the minimap's fog are display state (D1): on a puppet
-   host only the viewed record's 30-tick pass writes them. R14b sets them from T with that pass;
-   a playing holds its last pass's values until its next, so the two hosts agree from the next
-   pass on, which R15 schedules at the same GameTime on both, and at T itself when T-1 is a
-   multiple of 30 (O14).
+   The contact bits +0x110 8-10 and 12 and the minimap's fog are display state (D1). On a puppet
+   host only the viewed record's 30-tick pass writes the contact bits, and R14b sets them from T
+   with that pass. The minimap's fog is composited by that pass when a sight change has asked for
+   it, by the sight rebuild 0x4816A0, and by sight_fill, so at a seek R14 composites it from T's
+   counters. A playing holds its last pass's values until its next, so the two hosts agree from
+   the next pass on, which R15 schedules at the same GameTime on both, and at T itself when T-1
+   is a multiple of 30 (O14). In V's view the minimap's fog is the same on both hosts at every T:
+   V's counters are all 1 and V's bit is in every cell.
    Host-own state that survives, none of it read on a puppet host: B4's per-slot columns (births
    stay strictly increasing per slot), the passability cache, the order inside the seats'
    control-group vectors. The bytes a slot dead at T holds also survive, and a later create starts
@@ -3019,12 +3045,6 @@ typedef void (__stdcall* PFN_ObjFree)(char* instance);
    owner, which a puppet host has none of. */
 typedef void (__cdecl* PFN_RadarPass)(void);
 #define E_RadarPass   ((PFN_RadarPass)0x00467440u)
-/* 0x466C20(): the minimap's fog composite, no argument, plain `ret` (0x466DB1; DISASSEMBLED
-   0x466C20..0x466DB1). Only when main+0x142F1 bit 2 asks for it (0x466C29..0x466C44), it clears
-   the bit and rebuilds the minimap's fog from the explored map and the viewed record's counters,
-   then sets bit 1, DrawMinimap's redraw flag (0x466DA4). */
-typedef void (__cdecl* PFN_MinimapFog)(void);
-#define E_MinimapFog  ((PFN_MinimapFog)0x00466C20u)
 /* the level init's resets, no argument, plain `ret`: the notices 0x47EE30 (DISASSEMBLED
    0x47EE30..0x47EEDA: the queue *(0x51E68C) emptied from its last entry, each queued text freed,
    the last sound's time +0x9D = 0, the 24 per-kind cooldowns at 0x5086EC + 0x18 k = 0) and the chat
@@ -3877,23 +3897,23 @@ static void seek_run(char* ta)
     refused0 = s_gst.refused;
     recorded_put(&L, W);
     s_sk.pool = s_gst.refused == refused0;
-    /* R14: V's sight, which R5 undid */
+    /* R14: V's sight, which R5 undid, and the minimap's fog from the counters at T (sight_fill) */
     sight_fill(ta, s_viewer);
-    /* R14b: the viewed record's 30-tick pass, once, in the players phase's own order (0x46556D,
-       0x465572). The contact bits are display state (D1). On a puppet host, after the creates,
-       only that pass writes them: R7's creates clear bits 8-10 and set bit 9 from the def
-       (0x485B4C, 0x485C3E..0x485C44), so until the next pass no unit has a contact. The minimap's
-       fog is rebuilt only by 0x466C20, which that pass and the sight rebuild 0x4816A0 call. One
-       pass at the end of the seek computes both from the world at T. A playing's last pass ran
-       in step P = 30*floor((T-1)/30), on iteration P+1, because the players phase 0x49555F
-       follows the replay step in the unit tick's stub 0x4954ED. So the two hosts agree from the
-       next pass on, at GameTime P+30, which R15 schedules on both, and at T itself when T-1 is a
-       multiple of 30; until the next pass the seek shows T's contacts where a playing shows
-       those of P+1 (O14). It runs after the last write either call reads -- R7's units, R8's
-       positions and alliances, R8b's stamps, R13's LosType and explored map, R14's counters of
-       V -- and before R15, which neither reads. */
+    /* R14b: the viewed record's radar pass, once, as its 30-tick pass runs it (0x46556D). The
+       contact bits are display state (D1). On a puppet host, after the creates, only that pass
+       writes them: R7's creates clear bits 8-10 and set bit 9 from the def (0x485B4C,
+       0x485C3E..0x485C44), so until the next pass no unit has a contact. One pass at the end of
+       the seek computes them from the world at T. A playing's last pass ran in step
+       P = 30*floor((T-1)/30), on iteration P+1, because the players phase 0x49555F follows the
+       replay step in the unit tick's stub 0x4954ED. So the two hosts agree from the next pass
+       on, at GameTime P+30, which R15 schedules on both, and at T itself when T-1 is a multiple
+       of 30; until the next pass the seek shows T's contacts, and in a seat's view T's minimap
+       fog, where a playing shows those of P+1 (O14). The pass's other call, the minimap fog
+       0x466C20, ran in R14 (sight_fill), and the radar pass asks for no other: of main+0x142F1
+       it sets bit 1 alone (0x46742F). It runs after the last write it reads -- R7's units, R8's
+       positions and alliances, R13's LosType and explored map -- and before R15, which it does
+       not read. */
     E_RadarPass();
-    E_MinimapFog();
     /* R15 */
     sk_deadlines(ta, W, T - 1);
     /* R16: inside the frame visit, before the next frame's scheduler 0x495230 sees the stamps: no
