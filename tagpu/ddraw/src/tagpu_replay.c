@@ -153,9 +153,16 @@ static struct {
     int      overflow;
     uint16_t run[TIN_RUNS][3];      /* x, z, n: bounded by the reader (cells_ok)                  */
 } s_tin;
+typedef struct {
+    unsigned water, stamps, refused;
+} Books;                            /* the units' bookkeeping written (THE UNITS' BOOKKEEPING)     */
 static struct {
     unsigned puts, late, refused, reacts, dropped, unbounded, mputs, mentries, mrefused;
+    Books    books;
+    unsigned bmade, bother;
 } s_gst;                            /* ... and its globals' and projectiles'                      */
+static uint32_t   s_made[0x10000];  /* a slot's GameTime after the step whose create made it: the
+                                       slot count is a u16 (THE UNITS' BOOKKEEPING)              */
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
 static struct {
     int      pending;               /* a seek waits for the next frame visit after the first step */
@@ -197,6 +204,7 @@ static void replay_close(void)
     s_tin.n = 0;
     s_tin.overflow = 0;
     memset(&s_gst, 0, sizeof s_gst);
+    memset(s_made, 0, sizeof s_made);
     memset(&s_seek, 0, sizeof s_seek);
     s_frame_tick = ~0u;
 }
@@ -941,12 +949,12 @@ static void masks_init(void)
         }
     }
     m_bytes(s_raw1, 0x6A, 12, 0);           /* x, altitude, z                                  */
-    m_bytes(s_raw1, 0x76, 8, 0);            /* the cell, the sight stamp's +0x7A/+0x7C         */
+    m_bytes(s_raw1, 0x76, 8, 0);            /* the cell; the sight stamp's +0x7A/+0x7C, books_put's */
     m_bytes(s_raw1, U_TYPEIX, 4, 0);        /* the type's index, the slot +0xA8                */
-    m_bytes(s_raw1, 0xF8, 2, 0);            /* the sight stamp's +0xF8, the attach piece       */
+    m_bytes(s_raw1, 0xF8, 2, 0);            /* the sight stamp's +0xF8, books_put's; the attach piece */
     m_bytes(s_raw1, U_OWNERIX, 1, 0);
     m_bytes(s_raw1, U_GROUP, 4, 0);         /* the control group, group_put's              */
-    m_bytes(s_raw1, 0x10A, 1, 0);           /* the water state                                 */
+    m_bytes(s_raw1, 0x10A, 1, 0);           /* the water state, books_put's                    */
     m_bytes(s_raw1, 0x10E, 1, 0);           /* the state byte                                  */
     m_field(s_raw1, U_YARD, 1, 0x04, 0);    /* the yard, YARD_OPEN's                           */
     m_field(s_raw1, U_STATE, 4, U_ENGINE_BITS, 0);
@@ -1189,6 +1197,7 @@ static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const
              u ? (unsigned)((u - L->begin) / REC_UNIT_BYTES) : 0);
         return 0;
     }
+    s_made[slot] = L->now + 1;
     return 1;
 }
 
@@ -2934,11 +2943,167 @@ static void mapped_put(char* ta, const RecWorld* W)
     *(uint16_t*)(ta + OFF_LOSTYPE) &= (uint16_t)~8u;
 }
 
-/* the world's globals, pool and explored map into the host (the head of this section) */
+#define U_POS          0x6A         /* x, altitude, z: i32 each                                    */
+#define U_LOSXZ        0x7A         /* the sight stamp: its cell or corner, i16 x and z ...        */
+#define U_LOSH         0xF8         /* ... and its height or circle radius index, u8              */
+#define U_OWNERREC     0x96         /* the owner's player record                                   */
+#define U_STATEBYTE    0x10E        /* the state byte: the setter 0x48B090's                       */
+#define FD_SIGHTDIST   0x202        /* a unit def's sight, u16 ...                                 */
+#define FD_SIGHTH      0x170        /* ... and its height, u8 (0x4820AE, 0x4820DB)                 */
+#define OFF_SEALEVEL   0x1427F      /* u8: a sight record's y is raised to (it + 1) << 16          */
+#define OFF_CIRCLES    0x1485B      /* the circle frames' table: its u16 count first, and 0x4B7F30
+                                       returns NULL for an index at or past it (0x4B7F44); it
+                                       reads the count at 0x4B7F41 before its NULL test at
+                                       0x4B7F48..0x4B7F4A, so a NULL table bounds nothing       */
+#define LOS_TRUE       0x2u         /* LosType bit 1: units stamp the counters                    */
+#define LOS_FAN        0x4u         /* LosType bit 2: the ray fan; clear, the circle              */
+#define SIGHT_REC      0x24
+/* 0x482090(unit): the destructor's sight removal, stdcall `ret 4` (DISASSEMBLED
+   0x482090..0x48210C): it builds the record sight_rec builds and calls the removal 0x481D50 */
+typedef void (__stdcall* PFN_SightRemove)(char* unit);
+#define E_SightRemove ((PFN_SightRemove)0x00482090u)
+/* 0x482270(rec): the stamp, stdcall `ret 4` (0x48259E): reads the record's +0, +4, +8 and +0xC
+   only, and writes only the owner's counters, with LosType bit 3 cleared and main+0x142F1 bit 2
+   set for the viewed player's stamps (0x482283..0x4822A1), as every emit in playback does */
+typedef void (__stdcall* PFN_SightStamp)(unsigned char* rec);
+#define E_SightStamp ((PFN_SightStamp)0x00482270u)
+
+/* The unit's sight record as 0x482090 builds it (DISASSEMBLED 0x482093..0x4820FB, the emit
+   wrapper's 0x4827B3..0x48281B the same): the owner, the address of the stamp's words, the def's
+   sight and height, the address of the stamp's byte, the position with y raised to the sea level's
+   floor by a signed compare. The def is the one the unit's create gave it, never a recorded
+   value. */
+static void sight_rec(const char* ta, char* u, unsigned char* rec)
+{
+    const char* def = *(char* const*)(u + U_DEF);
+    uint32_t at;
+    int32_t y, floor = ((int32_t)(unsigned char)ta[OFF_SEALEVEL] + 1) << 16;
+    memset(rec, 0, SIGHT_REC);
+    memcpy(rec, u + U_OWNERREC, 4);
+    at = (uint32_t)(size_t)(u + U_LOSXZ);
+    memcpy(rec + 4, &at, 4);
+    memcpy(rec + 8, def + FD_SIGHTDIST, 2);
+    rec[0xA] = (unsigned char)def[FD_SIGHTH];
+    at = (uint32_t)(size_t)(u + U_LOSH);
+    memcpy(rec + 0xC, &at, 4);
+    memcpy(rec + 0x10, u + U_POS, 12);
+    memcpy(&y, rec + 0x14, 4);
+    if (y < floor) memcpy(rec + 0x14, &floor, 4);
+}
+
+/* R8b's water half (seek_unit_books, THE UNITS' BOOKKEEPING): the image's water state where it
+   differs, bounded by the 0..4 enum 0x43DB50 stores; past it the host's stays, counted. 1 written */
+static int book_water(char* u, const unsigned char* ib, Books* b)
+{
+    if ((unsigned char)u[U_WATER] == ib[U_WATER]) return 0;
+    if (ib[U_WATER] > WATER_MAX) {
+        b->refused++;
+        return 0;
+    }
+    u[U_WATER] = (char)ib[U_WATER];
+    b->water++;
+    return 1;
+}
+
+/* R8b's stamp half (seek_unit_books has the engine's invariant and the bound): the circle's radius
+   index bounded first, then, where the fields differ, the host's stamp removed through 0x482090
+   when it made one, the image's three written, and stamped through 0x482270 when they describe
+   one, under LosType bit 1; without it the three alone. 1 written */
+static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t los,
+                      const uint16_t* circles, unsigned char* rec, Books* b)
+{
+    if (!(los & LOS_FAN) && (!circles || ib[U_LOSH] >= *circles)) {
+        b->refused++;
+        return 0;
+    }
+    if (!memcmp(u + U_LOSXZ, ib + U_LOSXZ, 4) && (unsigned char)u[U_LOSH] == ib[U_LOSH])
+        return 0;
+    if ((los & LOS_TRUE) && (!(los & LOS_FAN) || u[U_LOSH])) E_SightRemove(u);
+    memcpy(u + U_LOSXZ, ib + U_LOSXZ, 4);
+    u[U_LOSH] = (char)ib[U_LOSH];
+    if ((los & LOS_TRUE) && (!(los & LOS_FAN) || ib[U_LOSH])) {
+        sight_rec(L->ta, u, rec);
+        E_SightStamp(rec);
+    }
+    b->stamps++;
+    return 1;
+}
+
+/* THE UNITS' BOOKKEEPING. masks_init leaves a unit's water state +0x10A and its sight stamp's
+   fields +0x7A, +0x7C and +0xF8 to the host's engine, which derives them from the same history as
+   the recording machine, except in the step that makes the unit. The recording machine makes a
+   unit where its own code does: in the unit tick, or after the players phase, as the scenario
+   applier does at 0x4969D2, after the in-play draw. The replay makes every unit of step k in the
+   unit tick's stub, after the host's unit tick and before the players phase of step k (0x49555F
+   follows 0x4954ED), and unit_put runs E_Water on it at the next images. So a unit the recording
+   machine made after its players phase meets two writers here one step early: the players phase
+   emits every live unit's sight every step (0x46503C..0x465063, the call at 0x465053), which
+   stores the stamp's fields, and 0x43DB50 can change the water state. MEASURED 2026-10-01 in the
+   naval fixture (LosType 4): the end scenario's unit, made in step 3643, held the stamp
+   (31,29,136) at the capture point of 3644, where the recording holds the create's (0,0,0); from
+   3645 on the two agreed.
+   So both are written here as R8b writes them: the water state bounded by its enum, and the stamp
+   through the engine's removal 0x482090 and stamp 0x482270, so that the counters keep describing
+   the stamps the fields name. This runs after the step's last emit and before the recorder's
+   capture and dump and the next unit tick, so the replay is their last writer at every capture
+   point; the frame visit's call makes the draw after a step show them too. For any other unit the
+   host holds the recording's values and nothing is written. Each write is counted, and one to a
+   unit the replay did not make in the step before is noted (s_made): the host's derivation then
+   differed elsewhere.
+   THE INVARIANT is an ordering: at the capture point of k+1 the world holds iteration k+1, the
+   host's last emit and its last 0x43DB50 of step k have run (the players phase, the images), the
+   write puts the recording machine's values for that point, and nothing between the write and the
+   recorder's capture, or the next unit tick, emits or runs 0x43DB50. The counters stay exact by
+   R8b's own argument: the host's fields describe the host's stamps, so the removal takes back
+   exactly what was stamped. */
+static void books_put(const Lv* L, const RecWorld* W)
+{
+    unsigned slot;
+    uint16_t los;
+    const uint16_t* circles = *(const uint16_t* const*)(L->ta + OFF_CIRCLES);
+    unsigned char rec[SIGHT_REC];
+    memcpy(&los, L->ta + OFF_LOSTYPE, 2);
+    for (slot = 1; slot < L->nslots; slot++) {
+        const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
+        const unsigned char* ib = (const unsigned char*)img;
+        char* u;
+        unsigned char water;
+        int16_t was[2];
+        unsigned char wasb;
+        int made, wrote_w, wrote_s;
+        if (!W->live[slot] || !holds(L, slot, img)) continue;
+        u = unit_at(L, slot);
+        water = (unsigned char)u[U_WATER];
+        memcpy(was, u + U_LOSXZ, 4);
+        wasb = (unsigned char)u[U_LOSH];
+        wrote_w = book_water(u, ib, &s_gst.books);
+        wrote_s = book_stamp(L, u, ib, los, circles, rec, &s_gst.books);
+        if (!wrote_w && !wrote_s) continue;
+        made = s_made[slot] == W->tick;
+        if (made) {
+            s_gst.bmade++;
+            continue;
+        }
+        s_gst.bother++;
+        if (wrote_w)
+            note("replay: GameTime %u: unit %u's water state %u -> %u written from the recording; "
+                 "the replay did not make it in the step before", W->tick, slot, water,
+                 ib[U_WATER]);
+        if (wrote_s)
+            note("replay: GameTime %u: unit %u's sight stamp (%d, %d, %u) -> (%d, %d, %u) written "
+                 "from the recording; the replay did not make it in the step before", W->tick,
+                 slot, was[0], was[1], wasb, *(const int16_t*)(ib + U_LOSXZ),
+                 *(const int16_t*)(ib + U_LOSXZ + 2), ib[U_LOSH]);
+    }
+}
+
+/* the world's globals, pool and explored map into the host (the head of this section), and the
+   units' bookkeeping after the LosType reaction, whose bits 1-2 the stamp's pair reads */
 static void recorded_put(const Lv* L, const RecWorld* W)
 {
     masks_init();
     los_react(L->ta, W);
+    books_put(L, W);
     globals_put(L->ta, W);
     proj_put(L, W);
     mapped_put(L->ta, W);
@@ -3352,54 +3517,6 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
     E_SightRebuild(((host ^ was) & LOS_MAPPING) ? 1u : 0u);
 }
 
-#define U_POS          0x6A         /* x, altitude, z: i32 each                                    */
-#define U_LOSXZ        0x7A         /* the sight stamp: its cell or corner, i16 x and z ...        */
-#define U_LOSH         0xF8         /* ... and its height or circle radius index, u8              */
-#define U_OWNERREC     0x96         /* the owner's player record                                   */
-#define U_STATEBYTE    0x10E        /* the state byte: the setter 0x48B090's                       */
-#define FD_SIGHTDIST   0x202        /* a unit def's sight, u16 ...                                 */
-#define FD_SIGHTH      0x170        /* ... and its height, u8 (0x4820AE, 0x4820DB)                 */
-#define OFF_SEALEVEL   0x1427F      /* u8: a sight record's y is raised to (it + 1) << 16          */
-#define OFF_CIRCLES    0x1485B      /* the circle frames' table: its u16 count first, and 0x4B7F30
-                                       returns NULL for an index at or past it (0x4B7F44); it
-                                       reads the count at 0x4B7F41 before its NULL test at
-                                       0x4B7F48..0x4B7F4A, so a NULL table bounds nothing       */
-#define LOS_TRUE       0x2u         /* LosType bit 1: units stamp the counters                    */
-#define LOS_FAN        0x4u         /* LosType bit 2: the ray fan; clear, the circle              */
-#define SIGHT_REC      0x24
-/* 0x482090(unit): the destructor's sight removal, stdcall `ret 4` (DISASSEMBLED
-   0x482090..0x48210C): it builds the record sight_rec builds and calls the removal 0x481D50 */
-typedef void (__stdcall* PFN_SightRemove)(char* unit);
-#define E_SightRemove ((PFN_SightRemove)0x00482090u)
-/* 0x482270(rec): the stamp, stdcall `ret 4` (0x48259E): reads the record's +0, +4, +8 and +0xC
-   only, and writes only the owner's counters, with LosType bit 3 cleared and main+0x142F1 bit 2
-   set for the viewed player's stamps (0x482283..0x4822A1), as every emit in playback does */
-typedef void (__stdcall* PFN_SightStamp)(unsigned char* rec);
-#define E_SightStamp ((PFN_SightStamp)0x00482270u)
-
-/* The unit's sight record as 0x482090 builds it (DISASSEMBLED 0x482093..0x4820FB, the emit
-   wrapper's 0x4827B3..0x48281B the same): the owner, the address of the stamp's words, the def's
-   sight and height, the address of the stamp's byte, the position with y raised to the sea level's
-   floor by a signed compare. The def is the one R7's create gave the unit, never a recorded
-   value. */
-static void sight_rec(const char* ta, char* u, unsigned char* rec)
-{
-    const char* def = *(char* const*)(u + U_DEF);
-    uint32_t at;
-    int32_t y, floor = ((int32_t)(unsigned char)ta[OFF_SEALEVEL] + 1) << 16;
-    memset(rec, 0, SIGHT_REC);
-    memcpy(rec, u + U_OWNERREC, 4);
-    at = (uint32_t)(size_t)(u + U_LOSXZ);
-    memcpy(rec + 4, &at, 4);
-    memcpy(rec + 8, def + FD_SIGHTDIST, 2);
-    rec[0xA] = (unsigned char)def[FD_SIGHTH];
-    at = (uint32_t)(size_t)(u + U_LOSH);
-    memcpy(rec + 0xC, &at, 4);
-    memcpy(rec + 0x10, u + U_POS, 12);
-    memcpy(&y, rec + 0x14, 4);
-    if (y < floor) memcpy(rec + 0x14, &floor, 4);
-}
-
 /* R8b: the units' own bookkeeping from iteration T's image -- the water state, the state byte and
    the sight stamp's fields, which masks_init leaves to the host's engine because in a playing from
    the start it derives them from the same history as the recording machine. A seek cuts that
@@ -3434,13 +3551,17 @@ static void sight_rec(const char* ta, char* u, unsigned char* rec)
      the circle (OFF_CIRCLES). A refused unit keeps the three R8 left, which describe its own
      stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
      the circle's frame clipped at 0x4824F5..0x482547), and every byte is a height the emitter
-     can store (0x4825EA..0x4825F2). */
+     can store (0x4825EA..0x4825F2).
+   The water and stamp halves are book_water and book_stamp. In playback, books_put runs them at
+   every capture point (THE UNITS' BOOKKEEPING). Here they run for the seek's own reason, and
+   R13's books_put then finds them equal. */
 static void seek_unit_books(const Lv* L, const RecWorld* W)
 {
     unsigned slot;
     uint16_t los;
     const uint16_t* circles = *(const uint16_t* const*)(L->ta + OFF_CIRCLES);
     unsigned char rec[SIGHT_REC];
+    Books b = { 0, 0, 0 };
     memcpy(&los, L->ta + OFF_LOSTYPE, 2);
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
@@ -3448,34 +3569,17 @@ static void seek_unit_books(const Lv* L, const RecWorld* W)
         char* u;
         if (!W->live[slot] || !holds(L, slot, img)) continue;
         u = unit_at(L, slot);
-        if ((unsigned char)u[U_WATER] != ib[U_WATER]) {
-            if (ib[U_WATER] <= WATER_MAX) {
-                u[U_WATER] = (char)ib[U_WATER];
-                s_sk.water++;
-            } else {
-                s_sk.brefused++;
-            }
-        }
+        book_water(u, ib, &b);
         if ((unsigned char)u[U_STATEBYTE] != ib[U_STATEBYTE]) {
             E_SetState(u, ib[U_STATEBYTE], 1);
             E_SetState(u, (unsigned char)~ib[U_STATEBYTE], 0);
             s_sk.states++;
         }
-        if (!(los & LOS_FAN) && (!circles || ib[U_LOSH] >= *circles)) {
-            s_sk.brefused++;
-            continue;
-        }
-        if (!memcmp(u + U_LOSXZ, ib + U_LOSXZ, 4) && (unsigned char)u[U_LOSH] == ib[U_LOSH])
-            continue;
-        if ((los & LOS_TRUE) && (!(los & LOS_FAN) || u[U_LOSH])) E_SightRemove(u);
-        memcpy(u + U_LOSXZ, ib + U_LOSXZ, 4);
-        u[U_LOSH] = (char)ib[U_LOSH];
-        if ((los & LOS_TRUE) && (!(los & LOS_FAN) || ib[U_LOSH])) {
-            sight_rec(L->ta, u, rec);
-            E_SightStamp(rec);
-        }
-        s_sk.stamps++;
+        book_stamp(L, u, ib, los, circles, rec, &b);
     }
+    s_sk.water += b.water;
+    s_sk.stamps += b.stamps;
+    s_sk.brefused += b.refused;
 }
 
 /* R9: the buckets made the recorded ones (sk_units_bound made U). The move 0x47CB60 does nothing
@@ -4078,9 +4182,12 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s: globals and projectiles: written %u times, %u capture points holding "
                "another iteration; the pool refused %u times; the sight mode changed %u times, "
                "%u temporary sight records dropped, %u changes not made; the explored map changed "
-               "by %u writes, %u entries in all, refused %u times", s_name, s_gst.puts,
-               s_gst.late, s_gst.refused, s_gst.reacts, s_gst.dropped, s_gst.unbounded,
-               s_gst.mputs, s_gst.mentries, s_gst.mrefused);
+               "by %u writes, %u entries in all, refused %u times; the units' bookkeeping: %u water "
+               "states and %u sight stamps written, %u refused; %u units made in the step before, "
+               "%u others", s_name, s_gst.puts, s_gst.late, s_gst.refused, s_gst.reacts,
+               s_gst.dropped, s_gst.unbounded, s_gst.mputs, s_gst.mentries, s_gst.mrefused,
+               s_gst.books.water, s_gst.books.stamps, s_gst.books.refused, s_gst.bmade,
+               s_gst.bother);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
