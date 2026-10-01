@@ -394,7 +394,9 @@ declarations back to their values from the playing's first tick boundary, rebuil
 place to T with the poison check, and takes frame dump B; `tarec.py compare-dumps` compares A and B
 strictly — units and their order lists, players, declared tables, features and wrecks, the globals,
 the projectile pool, the explored map and every player's sight counters — and A against B must be
-EQUAL. With nothing between them, a difference is the rebuild's. The live in-place restore, which a
+EQUAL. With nothing between them, a difference is the rebuild's, with one named exception: O9 (the
+seek drops the temporary sight records), which `compare-dumps` folds and names when A holds some
+and B none — the viewed record's counters where A is higher and the units' contact bits. The live in-place restore, which a
 recording machine cannot do without the takeover's own steps, is built and verified with the
 takeover in S4. Inside the rebuild, just before its table write (R12), every declaration the
 recorder records is filled with `0xA5` outside the bytes its layout keeps, and a byte the write must

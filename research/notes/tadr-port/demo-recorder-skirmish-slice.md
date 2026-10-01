@@ -1389,8 +1389,13 @@ GameTime <t>`, and one whose seek is refused logs the refusal and takes no B.
   Every other poisoned byte is put back silently. The invariant is an ordering: copy, fill, write
   and check run back to back inside R12 under the air pool's lock, on the game thread, with no
   engine or simulation code between them, so no `0xA5` outlives R12; poisoning before R1 would let
-  the kills' and creates' hooks read `0xA5` from their own tables. It is exact because A holds the
-  recording's values: `tables_put` wrote them at this frame visit.
+  the kills' and creates' hooks read `0xA5` from their own tables. A byte the recording itself
+  holds as `0xA5` is never residue, so in a table the recording carries the test has no false hit.
+  A count that sizes a heap table (`g_side_rows`) is never poisoned: `table_put` bounds that
+  table's rows by it and keeps it whole, so a poisoned one would make the bound `0xA5A5A5A5` × the
+  stride and, with a recording image larger than the host's block, the write would run past it.
+  The copy and every declaration's keep are allocated before the first byte is poisoned, so no
+  failure path is left once it has begun.
 
 **`tools/replay/tareplay.py`.** `run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
 [--out DIR]` (`all` for every fixture) and `list`. For each fixture four GameTimes, each T ≡ 1 (mod
@@ -1412,11 +1417,20 @@ a game of its own:
 Every check fails by name: the recording's end block (complete, 0 ID rows outside their tables, 0
 nano sprays uncredited) and `tarec.py check` (which also fails on any correction in the stream); L's
 dumps `compare`; P's, R's and Q's capture-point dumps `compare --puppet`; each round trip's residue
-0 and `compare-dumps rt<T>-a rt<T>-b` EQUAL. A COB stop in a process's log fails that process.
-Exit 0 when every check passed, 1 on a named failure, 2 when something could not run. Each worker
-owns one tacli instance, `tareplay-<k>`, on its own Xvfb in `:300..:399`, a number taken only once
-the server's `-displayfd` pipe confirms it and skipping any with a socket or a lock; nothing is
-stopped by name or pattern. Passing dumps are deleted unless `--keep`; the run's folder is outside
+0 with at least one table poisoned, and `compare-dumps rt<T>-a rt<T>-b` EQUAL — less **O9**, which
+`compare-dumps` folds and names for two frame dumps when A holds temporary sight records and B
+none: B takes A's viewed record's sight counters where A is higher and the units' contact bits
+(`+0x110` bits 8–10 and 12, which the seek's radar pass computes from those counters); anything
+else still differs. A COB stop in a process's log fails that process. Exit 0 when every check
+passed, 1 on a named failure, 2 when something could not run and nothing failed: a process that did
+not run (any error, a tool's timeout, a round trip the host passed, a live game that misses its
+deadline of 120 s + 4 × its end's real time) is reported as could not run and its checks are not
+made, and a missing or unreadable dump is could not run, never a failure. Each worker owns one
+tacli instance, `tareplay-<k>`, on its own Xvfb in `:300..:399`, a number taken only once the
+server's `-displayfd` pipe confirms it and skipping any with a socket or a lock, and holds an
+exclusive lock on `tagpu/instances/tareplay-<k>.lock` for the run, so two runs take different k and
+never touch each other's games; nothing is stopped by name or pattern. SIGTERM or Ctrl-C stops the
+run: no new game starts, each wait gives up, and every worker stops its game and its Xvfb. Passing dumps are deleted unless `--keep`; the run's folder is outside
 the repository (`--out`, `$TAREPLAY_OUT`), since its logs carry absolute paths.
 
 **The fixtures**, `tools/replay/fixtures.json`, keyed by GameTime: `load`, a scenario under
@@ -1435,7 +1449,41 @@ stock-limits build) and `nomapalert` (its `content` writes `zzkeys.ufo` through
 
 MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game ten minutes or less.
 
-- **V1–V4: pending.**
+- **The nine fixtures** (`tareplay run all -j 4 --keep`, at f463c10d, 1,200 s): 151 of 153 checks
+  pass. The two failures were battle-los's round trips at 1711 and 1891: A's viewed record's sight
+  counters one higher than B's in 362 and 213 cells, and at 1711 eight units' `+0x110` bit 8 set in
+  A (and in the recording at 1711) and clear in B. A held 2 and 1 temporary sight records, B none;
+  at 3031 both held none and the round trip was EQUAL. That is O9 exactly — the seek drops the
+  records and its radar pass computes the contacts from the counters without them — and
+  `compare-dumps` now folds and names it (above): the two pairs read `EQUAL; O9 (decided): A holds
+  2 temporary sight records … 362 cells … 8 units` and `… 1 … 213 cells, … 0 units`. Every other
+  round trip: residue 0, seeks 7–601 ms (the battle's 239–601), `s_foot` 9–291 bytes reset;
+  stock-limits poisons 21 tables (its build declares fewer), every other fixture 24.
+- **O13, shown and closed.** The nomapalert recording played on main's DLL (88996cf6, before
+  S3c-1): `compare --puppet` at 421 and 1771 differ in `src/tagpu_datakeys.c:s_quiet` alone, 7 and 8
+  dwords, every one 0 on the puppet where the recording holds `0xF0` bytes. On S3c-1 both are EQUAL,
+  and played to its end the playing's globals line reads `the declared tables: 20 rows written over
+  the host's own values (in src/tagpu_datakeys.c:s_quiet), 5154 values kept`.
+- **The poison check fires.** A scratch build whose seek skips `s_quiet` in `tables_put` (never
+  committed), `tareplay run nomapalert`: each round trip's line reads `24 tables poisoned, residue
+  15001 (src/tagpu_datakeys.c:s_quiet)` with `round trip 481: src/tagpu_datakeys.c:s_quiet row 0
+  +0x0: 15001 bytes not written by the seek`, and the run fails those three checks by name.
+- **The per-tick table write's cost**, the battle's recording played to its end alone on a timing
+  build, 7,974–7,976 calls (two a tick): **mean 2,320 µs, worst 7,231 µs** writing byte by byte;
+  1,407 and 4,889 µs by runs of the bytes a layout does not keep; **575 and 3,816 µs** with a table
+  that keeps nothing compared in blocks of about 512 bytes of whole rows, and a table's address
+  fields listed once rather than per row. Per table before the blocks: `g_def` 362 µs, `s_txKillMark`
+  265, `s_txMark` 260, `s_airIn` 210, `s_ghost` 147, `s_quiet` 52, `s_cobRejected` 30, the repair
+  hooks 24, every other table under 6. `g_def` and `s_ghost`, whose rows carry address fields, are
+  the bulk of what is left.
+- **The nine fixtures on the final code** (`tareplay run all -j 4`, at 63e1d501 with the run-wise
+  write): 8 of 9 pass every check, 23 tables poisoned (24 less `g_side_rows`), residue 0 in all 26
+  round trips that ran, seeks 8–460 ms. The ninth, naval-unmapped, round trips at 751 and 781:
+  both pairs EQUAL and both continuations `--puppet` EQUAL (checked by hand from the kept dumps),
+  then the R process stopped at about GameTime 1550 on Impure's COB guard (`CORMSHIP.COB`, word
+  724, `CALL cannot obtain a child thread`) — **O15**, the stop S3b already met after seeks near
+  848 in the same recording, which the owner gave a landing of its own. V1's naval-unmapped, round
+  trips at 841, 1411 and 1741, passed it. FINAL2.
 - **The round trip on two S3b recordings**, the naval push (601, 1201, 1801, 2401) and the battle
   (601, 1501, 2401, 3301): **8 of 8 `compare-dumps` EQUAL** and residue 0, seeks 26–412 ms (the
   naval push 26–152, the battle 296–412). The only TRANSIENT bytes reset were `s_foot`'s, 109–308.
@@ -1460,11 +1508,21 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
 - **S3c-3**: `SIM_FEATURE` regions and their fixtures, the coverage build, `tareplay.py landing`
   and `broad`, the `replay-roundtrip:` note, CLAUDE.md's replay gate and Step 4b. Until then nothing
   runs the harness at a landing.
-- **`s_foot` (`tagpu_puppet.c`) is reset by every round trip** (25–308 bytes). It is the footprint
+- **`s_foot` (`tagpu_puppet.c`) is reset by every round trip** (9–308 bytes). It is the footprint
   writers' undo stack: depth 0 at every tick boundary, and each frame filled when it is pushed, so
   `SIM_TRANSIENT` is right and the reset changes nothing the simulation reads.
 - **The round trip runs on a puppet host only**; the live in-place restore and the takeover run
   are S4's.
+- **O15 fails a tareplay run** whose naval-unmapped round trips fall near GameTime 750–850 (the
+  GameTimes are seeded by HEAD): the R process meets the COB guard's stop about 750 ticks later.
+  Until O15's own landing the harness cannot be a landing gate on that fixture.
+- **O9's fold** accepts, in a round trip whose A holds temporary sight records, any cell of the
+  viewed record where A is higher and any contact bit; a seek's own sight error in those cells
+  would hide behind it there. The round trips whose A holds none (most) test them strictly.
+- **The playing's globals line** (and its declared-tables tail) is logged only at the recording's
+  or the level's end; tareplay stops its games before either, so a run's logs do not carry it.
+- **A seek writes the declared tables twice** (R12, then R13's `recorded_put`, which writes only the
+  bytes that differ from the recording's after R12's repairs).
 
 ## S4 and S5
 
