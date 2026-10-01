@@ -1528,9 +1528,21 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
 
 ## S4 and S5
 
-Each is planned in detail when the landing before it is in. The table above is their scope; the
+S4 is planned in detail when S3 is in. The table above is its scope; the
 [completeness note](demo-recorder-completeness.md)'s [open items](demo-recorder-completeness.md#open-items)
-are theirs.
+are S4's and S5's.
+
+**S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens
+drawn by the engine's GUI with our own art per style. It asks four things of the recorder, which
+stay the recorder's to build (that note's *What S5 asks of the recorder*):
+
+1. the level's minimap in the header;
+2. a summary in the end block — each player's result, each commander death and defeat with its
+   GameTime;
+3. the mod: its name, its version, and a fingerprint of the archives the engine mounted;
+4. a recording that starts mid-game from a snapshot, and an end reason for one the player stopped.
+
+S5's first landing needs 1 to 3, its fifth needs 4.
 
 ## Open
 
