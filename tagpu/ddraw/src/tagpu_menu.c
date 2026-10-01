@@ -69,6 +69,7 @@
 #include "tagpu_vk.h"
 #include "tagpu_settings.h"
 #include "tagpu_opt.h"
+#include "tagpu_art.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -3219,6 +3220,9 @@ void tagpu_menu_init(void)
     unsigned glen, vglen, rtglen;
 
     read_tokens();
+    /* Impure's own UI art, inflated once for the life of the process, before any
+       screen of ours is built or drawn (tagpu_art.h) */
+    tagpu_art_init();
     enum_monitors();        /* the Monitor row's captions go into the file */
     /* The GPU row's captions likewise, out of the cache the LAST launch's
        enumeration worker wrote -- this runs under the loader lock and a Vulkan
