@@ -523,7 +523,7 @@ static void delta_apply(uint32_t* img, const unsigned char* bits, unsigned dword
 static int event_len(unsigned kind, unsigned len)
 {
     switch (kind) {
-    case RK_EV_CREATE:      return len == 24;
+    case RK_EV_CREATE:      return len == 28;
     case RK_EV_DEATH:       return len == 12 + REC_UNIT_IMAGE;
     case RK_EV_SHOT:        return len == 36;
     case RK_EV_INTERCEPT:   return len == 16;

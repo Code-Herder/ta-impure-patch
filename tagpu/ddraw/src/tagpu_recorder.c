@@ -124,6 +124,7 @@
 #define U_SUBORDERS    0x60
 #define U_OWNER        0x96         /* the owning player's record                                 */
 #define U_COB          0x9A
+#define U_WATER        0x10A        /* the water state, a dword: 0x43DB50 alone writes it          */
 #define U_STATEBYTE    0x10E
 #define U_STATE        0x110
 #define U_ALIVE        0x10000000u
@@ -2252,13 +2253,15 @@ static unsigned ev_unit(const Rec* r, const char* p)
 /* The create 0x485F50's success exit 0x4861B3 (`mov eax,esi`): esi is the unit it made, in the
    slot it actually took -- B4's hit_take may move a first-free create past its first choice. The
    function has pushed five registers, so its arguments start at +0x18; the first, the owner, is
-   overwritten in the body (0x485F9C), so the owner is the unit's own +0x96. */
+   overwritten in the body (0x485F9C), so the owner is the unit's own +0x96. The water state +0x10A
+   is still the slot's here: nothing in 0x485A40..0x4861BA stores to it, and 0x43DB50 alone writes
+   it, from the unit tick (0x48AFAA) and the 0x2C receiver (0x48BA46) through 0x43DD20. */
 static int __cdecl ev_create(void* E)
 {
     Rec* r = ev_rec();
     const char* unit;
     unsigned id, owner, v;
-    unsigned char b[24];
+    unsigned char b[28];
     if (!r) return 0;
     unit = PTR(REG_ESI(E));
     if (!(id = ev_unit(r, unit))) return 0;
@@ -2271,6 +2274,8 @@ static int __cdecl ev_create(void* E)
     v = ARG(E, 0x2C);
     memcpy(b + 8, &v, 4);
     memcpy(b + 12, (const unsigned char*)E + 0x20, 12);   /* the position, three dwords by value */
+    b[24] = (unsigned char)unit[U_WATER];
+    b[25] = b[26] = b[27] = 0;
     ev_put(r, RK_EV_CREATE, b, sizeof b);
     return 0;
 }

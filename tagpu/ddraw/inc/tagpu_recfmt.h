@@ -159,9 +159,11 @@ enum RecKind {
     /* THE EVENTS: what the engine did in the step after the images before them, in the order it
        did it. Each is taken where the engine does it (tagpu_recorder.c, *The events*). */
     RK_EV_CREATE,      /* u32 unit ID, u16 type (the create's argument: the engine's index), u8
-                          owner (its player), u8 layer (& 3), u32 finished, i32 x, y, z: the create
-                          0x485F50 made a unit. Taken at its exit, so the events of the calls it
-                          makes -- its state byte, its scripts -- come before it                  */
+                          owner (its player), u8 layer (& 3), u32 finished, i32 x, y, z, u8 the
+                          water state +0x10A the unit took from its slot (the create writes none
+                          of it), u8 0, u16 0: the create 0x485F50 made a unit. Taken at its exit,
+                          so the events of the calls it makes -- its state byte, its scripts --
+                          come before it                                                         */
     RK_EV_DEATH,       /* u32 unit ID, u32 killer's ID, u8 killer's player (10: none), i8 severity,
                           u8 the record's +0xA, u8 carried (C4's decision), then the unit's image as
                           the destructor 0x4866D0 found it. It opens a bracket its RK_EV_DEATH_END

@@ -731,6 +731,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define U_BUILT        0x104        /* the build left, a float: 0.0 when finished                  */
 #define U_STATE        0x110
 #define U_ALIVE        0x10000000u
+#define U_WATER        0x10A        /* the water state, 0..4: 0x43DB50 its only writer and reader,
+                                       a dword, read and stored whole (0x43DB6B, 0x43DBED)        */
+#define WATER_MAX      4
 #define MV_VALT        0x0C         /* the mover's vertical velocity                              */
 #define WPN_STRIDE     0x115
 #define W_FLAGS        0x111        /* a weapon's flags (0x49D295)                                 */
@@ -1746,18 +1749,35 @@ static void orders_put(const Lv* L, const RecWorld* W)
     }
 }
 
-/* RK_EV_CREATE: the create with the recorded arguments, into the recorded slot */
+/* RK_EV_CREATE: the create with the recorded arguments, into the recorded slot, then the water
+   state the recording machine's unit took from its slot. A create leaves the water state as its
+   slot held it, and 0x43DB50 keeps a value while the unit stays in the band where no test fires
+   (0x43DB78..0x43DBCC). A unit's water states are therefore the recording machine's only if it
+   starts from the same value. Without this, a create played after a seek, in a slot dead at T,
+   starts from the seek host's history. The value is bounded by the 0..4 that 0x43DB50 stores
+   (0x43DB84..0x43DBC7). It is written whole, as 0x43DB50 reads and stores it, before the unit's
+   first E_Water at the next images, so that call starts setSFXoccupy exactly where the recording
+   machine's 0x43DB50 did. */
 static int ev_create(const Lv* L, const unsigned char* b, unsigned len)
 {
-    uint32_t id, finished;
+    uint32_t id, finished, water;
     unsigned short type;
     int32_t pos[3];
-    if (len != 24) return 0;
+    if (len != 28) return 0;
     memcpy(&id, b, 4);
     memcpy(&type, b + 4, 2);
     memcpy(&finished, b + 8, 4);
     memcpy(pos, b + 12, 12);
-    return make(L, id - 1, b[6], type, pos, finished, b[7] & 3u);
+    if (!make(L, id - 1, b[6], type, pos, finished, b[7] & 3u)) return 0;
+    water = b[24];
+    if (water <= WATER_MAX) {
+        memcpy(unit_at(L, id - 1) + U_WATER, &water, 4);
+    } else {
+        s_st.bad_ids++;
+        note("replay: GameTime %u: unit %u's create carries water state %u, past the 0..4 "
+             "0x43DB50 stores: the host's stays", L->now, id - 1, water);
+    }
+    return 1;
 }
 
 /* RK_EV_DEATH: the victim's fields as the destructor found them (s2-events §1.9), then the
@@ -2932,7 +2952,8 @@ void __cdecl tagpu_replay_capture(void)
      COB, its model's pose, its mover's course) survives from before, and the unit fields playback
      leaves to the host's engine because both machines derive them from the same history -- the
      sight stamp's fields, the water state, the state byte -- are set from T (R8b), since a seek
-     cuts that history;
+     cuts that history, and a create played after the seek takes its water state from its event
+     (ev_create), since a slot dead at T holds the host's history;
    - every player's sight counters are refilled with no unit alive and then hold exactly the
      stamps the units' fields describe (R5, R7, R8, R8b), so they owe nothing to the host's
      history;
@@ -2946,7 +2967,9 @@ void __cdecl tagpu_replay_capture(void)
    multiple of 30 (O14).
    Host-own state that survives, none of it read on a puppet host: B4's per-slot columns (births
    stay strictly increasing per slot), the passability cache, the order inside the seats'
-   control-group vectors.
+   control-group vectors. The bytes a slot dead at T holds also survive, and a later create starts
+   from them where it writes nothing: the water state comes from the create's event instead,
+   contact bit 12 lasts until the next pass, and the control group is harmless.
    THE ORDER is the argument: R0 touches nothing; R3-R4 run on the clock the host holds; R5 needs
    no unit alive and no temporary sight record; R6 comes before everything that stamps GameTime for
    the target; R11-R13 follow everything that writes effects, tables and the simulation RNG (the
@@ -3311,9 +3334,7 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
 #define U_LOSXZ        0x7A         /* the sight stamp: its cell or corner, i16 x and z ...        */
 #define U_LOSH         0xF8         /* ... and its height or circle radius index, u8              */
 #define U_OWNERREC     0x96         /* the owner's player record                                   */
-#define U_WATER        0x10A        /* the water state, 0..4: 0x43DB50 its only writer and reader  */
 #define U_STATEBYTE    0x10E        /* the state byte: the setter 0x48B090's                       */
-#define WATER_MAX      4
 #define FD_SIGHTDIST   0x202        /* a unit def's sight, u16 ...                                 */
 #define FD_SIGHTH      0x170        /* ... and its height, u8 (0x4820AE, 0x4820DB)                 */
 #define OFF_SEALEVEL   0x1427F      /* u8: a sight record's y is raised to (it + 1) << 16          */
