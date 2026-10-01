@@ -1988,8 +1988,13 @@ static void dump_globals_proj(const Level* L, const char* name)
 }
 
 /* Each player record's sight counters whole, as RK_SIGHT records, for `tarec compare-dumps`: what
-   a seek's sight reset and refill rest on, and no other record carries them. Read within the
-   block the player init allocated at the size it stored beside it. */
+   a seek's sight reset and refill rest on, and no other record carries them.
+   THE BOUND: read within the block the player init allocated at the size it stored beside it
+   (+0x88 at 0x464866, the block at 0x46487B, NULL when the allocation failed).
+   THE LIFETIME: the level's teardown 0x464A00 frees every record's block and stores NULL and 0
+   in the pointer and the size (0x464A24..0x464A38; DISASSEMBLED). The init, the teardown and the
+   dump all run on the game thread, so a record outside the level reads as NULL and 0, and nothing
+   is freed under the read. */
 static void dump_sight(const char* ta)
 {
     unsigned p, off;

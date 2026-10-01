@@ -4294,11 +4294,14 @@ static int fix_victim_caps(void)
      - a lock: the pool is written by the rebuild (the game thread) and by the stamp, which also
        runs from the network pump and from a saved game's restore on the loader thread, and is
        read by air_first on whatever thread runs area damage; s_airLock covers every read and
-       write of it and of s_airIn, and is held only inside this C code, never across engine
+       write of it and of s_airIn. It has two holders. This C code holds it across no engine
        code but one: the allocator 0x4D83B0 growing a call's list, which takes its own critical
-       section and calls nothing that takes this one. The lock order is s_airLock, then the
-       allocator's, and never the reverse; the out-of-memory handler 0x49E700 runs inside the
-       allocator's section, or after it from eng_alloc_or_exit, and ends the process;
+       section and calls nothing that takes this one; the out-of-memory handler 0x49E700 runs
+       inside the allocator's section, or after it from eng_alloc_or_exit, and ends the process.
+       A seek's table write (tagpu_replay.c, R12) holds it from tagpu_patches_restore_begin to
+       the end of tagpu_patches_restored, on the game thread: C code, HeapAlloc/HeapFree and
+       the log sink run inside it, and none of them takes s_airLock. The lock order is
+       s_airLock first, then the allocator's, the heap's or the log's, never the reverse;
      - a lifetime: a call's list lives in its frame (the wrapper above), which exists exactly
        while that call runs, so nesting (the interceptor tail at 0x49A764 re-enters area damage
        after the serving is done) gets a list of its own.
@@ -12194,9 +12197,10 @@ void tagpu_limits_report(void)
    this file's declared tables back from a recording's image, by their layouts alone, on the game
    thread between two sim steps; these re-establish what the layouts cannot say before anything
    reads the tables again. The air pool's lock is held from tagpu_patches_restore_begin, before the
-   first table is written, to the end of tagpu_patches_restored: the write is C code alone, so the
-   lock covers every read and write of the pool and of s_airIn, as *The pool* requires, and is
-   still held across no engine code. Returns what it repaired. */
+   first table is written, to the end of tagpu_patches_restored: the write runs C code, HeapAlloc,
+   HeapFree and the log sink and no engine code, so the lock covers every read and write of the
+   pool and of s_airIn, as *The pool* requires, in the lock order it states. Returns what it
+   repaired. */
 void tagpu_patches_restore_begin(void)
 {
     EnterCriticalSection(&s_airLock);
