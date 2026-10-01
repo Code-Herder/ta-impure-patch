@@ -558,7 +558,8 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     unsigned id;
     switch (kind) {
     case RK_EV_FEATURE:
-        if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) || b[1] || b[2] || b[3] ||
+        if (r->fbracket || (b[0] == FR_TICK && r->ndeaths) ||
+            b[1] > REC_PHASE_LATE || b[2] || b[3] ||
             !rec_root_len(b[0], len))
             return 0;
         r->fbracket = b[0] + 1u;

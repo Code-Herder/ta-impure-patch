@@ -813,7 +813,8 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         w->heads_in = 1;
         break;
     case RK_EV_FEATURE:
-        if (!w->ticked || w->fbracket || (b[0] == FR_TICK && w->ndeaths) || b[1] || b[2] || b[3] ||
+        if (!w->ticked || w->fbracket || (b[0] == FR_TICK && w->ndeaths) ||
+            b[1] > REC_PHASE_LATE || b[2] || b[3] ||
             !rec_root_len(b[0], len))
             return 0;
         w->fbracket = b[0] + 1u;

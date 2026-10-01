@@ -308,7 +308,8 @@ def sources_mtime():
     """The newest modification time of what a build of the DLL reads: its sources, headers and
     the generators' lists. A run on an older DLL would grade another build."""
     d = TREE / "tagpu" / "ddraw"
-    files = [f for sub in ("src", "inc") for f in (d / sub).rglob("*") if f.is_file()]
+    files = [f for sub in ("src", "inc") for f in (d / sub).rglob("*")
+             if f.suffix in (".c", ".h") and f.name != "git.h"]   # make writes git.h at every parse
     files += [d / "replay-globals.tsv", d / "replay-layout.tsv"] + list(d.glob("*.allow"))
     return max(f.stat().st_mtime for f in files)
 

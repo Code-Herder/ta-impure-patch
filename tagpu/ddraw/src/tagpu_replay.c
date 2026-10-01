@@ -2688,7 +2688,36 @@ static void pace(char* ta, unsigned now)
         if (p != s_viewer && tagpu_puppet_seat(p)) memcpy(player_rec(ta, p) + PL_PACE, &now, 4);
 }
 
-/* the next image; with `defer`, its features wait for the step's late phase (THE PHASES) */
+/* The cells' unit slots of the next image, ahead of its features (THE PHASES): the host's
+   projectile tick tests a projectile against the units the cell names (0x49B1C7..0x49B275), which
+   on the recording machine its unit tick had just moved. A slot is a value only the images
+   write (THE UNIT SLOTS AND THE YARD BIT), bounded and alive as cell_put takes it, and
+   independent of the cell's feature, so it goes in whatever the cell's structure; features_put
+   writes the same values again with the rest. */
+static void slots_put(const Lv* L, const RecWorld* W)
+{
+    unsigned i, k, j;
+    uint16_t h[4], slot[2];
+    for (i = 0; i < W->nfeat; i++) {
+        const unsigned char* b = W->feat[i].b;
+        if (W->feat[i].kind != RK_CELLS) continue;
+        memcpy(h, b, 8);    /* bounded by the reader (cells_ok) and again by cell_at */
+        for (k = 0; k < h[2]; k++) {
+            char* c = cell_at(L, (int32_t)h[0] + (int32_t)k, h[1]);
+            const unsigned char* img = b + 8 + (size_t)k * REC_CELL_BYTES;
+            if (!c) continue;
+            memcpy(slot, img, 4);
+            if (slot[0] >= L->nslots || slot[1] >= L->nslots ||
+                (slot[0] && !host_live(L, slot[0])) || (slot[1] && !host_live(L, slot[1])))
+                continue;
+            for (j = 0; j < 4; j++)
+                c[j] = (char)(((unsigned char)c[j] & ~s_cval[j]) | (img[j] & s_cval[j]));
+        }
+    }
+}
+
+/* the next image; with `defer`, its features wait for the step's late phase (THE PHASES), all but
+   the cells' unit slots */
 static void images_put(const Lv* L, const RecWorld* W, int defer)
 {
     links_put(L, W);
@@ -2697,8 +2726,12 @@ static void images_put(const Lv* L, const RecWorld* W, int defer)
     states_put(L, W);
     players_put(L, W);
     orders_put(L, W);
-    if (defer) s_pend.images = 1;
-    else features_put(L, W);
+    if (defer) {
+        slots_put(L, W);
+        s_pend.images = 1;
+    } else {
+        features_put(L, W);
+    }
 }
 
 /* 0x466C20(): the minimap's fog composite, no argument, plain `ret` (0x466DB1; DISASSEMBLED
