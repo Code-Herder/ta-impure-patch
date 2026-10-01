@@ -32,8 +32,12 @@
 #   map's size (+0x14233, +0x14237), the unit limit +0x37EE6, the difficulty +0x37EEE,
 #   ActiveCommanderDeath +0x37EF6, and the meteor config (0x5122F0..0x512317, 0x512324..0x51232B,
 #   0x512338).
-# - the explored map and the temporary sight records: not decided yet (the slice note's S3b,
-#   question batch A).
+# - the explored map, the u16 per cell that *(main+0x14273) names: carried whole by records of
+#   its own every iteration (RK_MAPPED, RK_MAPPED_RUNS), not by this list; its pointer is a heap
+#   address.
+# - the temporary sight records, the block *(main+0x1427B) and its count +0x14277: not carried. A
+#   seek and a LosType change drop every one through the engine's own expiry 0x482130 (the
+#   owner's decision), so none outlives a refill of the counters it stamped.
 #
 # How the writers were found: every instruction whose operand carries the field's displacement or
 # address, each read in context, and the stores through a pointer formed earlier found by reading
