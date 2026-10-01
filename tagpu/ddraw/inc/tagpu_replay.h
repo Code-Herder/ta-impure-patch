@@ -8,8 +8,8 @@
    module applies the recording to them, iteration by iteration. */
 
 /* DllMain's attach: first the frame visit, the in-play draw call 0x4969CD, on its own -- it reads
-   the trigger tagpu_replay.trigger, whose `dump` serves live recordings too, and writes what the
-   draw shows on a level that plays a recording; then the Start's calls of the seat fill
+   the trigger tagpu_replay.trigger, whose `dump` serves live recordings too, runs a `seek` on a
+   level that plays a recording and writes what the draw shows there; then the Start's calls of the seat fill
    (0x47B092) and of the settings persist (0x47B09C), the loader's two start-unit calls (0x497963,
    0x497ACD) and an observer on the settings save (0x430F00), byte-matched and installed all or
    none. Without those a request is never read. */

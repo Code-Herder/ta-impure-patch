@@ -1,9 +1,10 @@
 /* tagpu_replay.c -- playing a demo recording back on puppets (tagpu_replay.h;
    research/notes/tadr-port/demo-recorder-s2-host.md, which this file cites by section).
 
-   OPENING (§6). The request file, `play <name> [<record>]`, names a recording and optionally the
-   recorded player whose view the level shows; without one it shows everything, V's full
-   visibility (§2.9). The SKIRMISH Start reads it. Four call sites turn the level that Start loads
+   OPENING (§6). The request file, `play <name> [<record>] [at <T> [dump <name>]]`, names a
+   recording, optionally the recorded player whose view the level shows -- without one it shows
+   everything, V's full visibility (§2.9) -- and optionally a seek to run once the first step has
+   played (THE SEEK). The SKIRMISH Start reads it. Four call sites turn the level that Start loads
    into a puppet level, each inert unless the request was accepted:
    - S-a, the Start's call of the seat fill (0x47B092). The stock fill runs first. Then the
      request is validated before anything is written: every puppet gate in (tagpu_puppet.c) and
@@ -26,8 +27,9 @@
      stays empty, which the viewer sees and the log explains. Otherwise the start units are made,
      the first image goes in, the wind is seeded and V's sight is filled (THE APPLY).
    Two more sites serve a level that plays: B2's stub calls tagpu_replay_capture first at each
-   capture point, and the frame visit before the in-play draw call 0x4969CD reads the trigger and
-   writes what the draw after a step shows (THE GLOBALS AND THE PROJECTILES).
+   capture point, and the frame visit before the in-play draw call 0x4969CD reads the trigger,
+   runs a seek (THE SEEK) and writes what the draw after a step shows (THE GLOBALS AND THE
+   PROJECTILES).
    The teardown (S-e) ends the replay and gives V's PlayerInfo back once it has returned (THE
    VIEWER'S SEAT), and the recorder refuses a puppet level (S-f).
 
@@ -53,6 +55,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_limits.h"
 #include "tagpu_patches.h"
+#include "tagpu_weapons.h"
 #include "tagpu_simreg.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
@@ -141,6 +144,11 @@ static struct {
 } s_gst;                            /* ... and its globals' and projectiles'                      */
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
 static struct {
+    int      pending;               /* a seek waits for the next frame visit after the first step */
+    unsigned T;
+    char     dump[40];              /* a dump to take at its capture point, or ""                 */
+} s_seek;
+static struct {
     int            saved;
     int            played;          /* the level's first step has run (THE PLAYER'S SETTINGS)     */
     int            stale;           /* a save ran before it, with the recording's options in      */
@@ -173,21 +181,55 @@ static void replay_close(void)
     memset(&s_st, 0, sizeof s_st);
     memset(&s_fst, 0, sizeof s_fst);
     memset(&s_gst, 0, sizeof s_gst);
+    memset(&s_seek, 0, sizeof s_seek);
     s_frame_tick = ~0u;
 }
 
 /* ---- S-a: the request and the seat fill ----------------------------------------------------- */
 
-/* The request, `play <name>` or `play <name> <seat>`: the recording's name, and the seat whose
-   view to show, or -1 for full visibility. 1 read, 0 no request, -1 not understood (`why`). The
-   file is gone afterwards whatever it held: one reader, one time (§6.3). */
+/* the name rule of a recording's and a dump's name: letters, digits, - and _ */
+static int name_ok(const char* s)
+{
+    for (; *s; s++)
+        if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') ||
+              *s == '-' || *s == '_'))
+            return 0;
+    return 1;
+}
+
+/* `at <T> [dump <name>]` from `p`, the rest of a request's or a trigger's line, into s_seek's
+   form: 1 parsed (the whole rest), 0 not */
+static int seek_words(const char* p, unsigned* T, char* dump, unsigned cap)
+{
+    char d[40];
+    int end = 0;
+    dump[0] = 0;
+    if (sscanf(p, " %u%n", T, &end) != 1) return 0;
+    p += end;
+    while (*p == ' ') p++;
+    if (!*p) return 1;
+    end = 0;
+    if (sscanf(p, "dump %39s%n", d, &end) != 1) return 0;
+    p += end;
+    while (*p == ' ') p++;
+    if (*p || !name_ok(d)) return 0;
+    snprintf(dump, cap, "%s", d);
+    return 1;
+}
+
+/* The request, `play <name> [<seat>] [at <T> [dump <name>]]`: the recording's name, the seat
+   whose view to show, or -1 for full visibility, and a seek to run at the first frame visit after
+   the first step (THE SEEK), with the dump to take at its capture point. 1 read, 0 no request,
+   -1 not understood (`why`). The file is gone afterwards whatever it held: one reader, one time
+   (§6.3). */
 static int request_read(char* name, unsigned cap, int* view, char* why, unsigned whycap)
 {
-    char line[128], got[NAME_MAX_];
+    char line[160], got[NAME_MAX_];
+    const char* p;
     FILE* f;
     size_t n = 0;
-    unsigned i, seat;
-    int k;
+    unsigned seat;
+    int k, end = 0;
     if (GetFileAttributesA(REQUEST) == INVALID_FILE_ATTRIBUTES) return 0;
     f = fopen(REQUEST, "rb");
     if (f) {
@@ -196,18 +238,35 @@ static int request_read(char* name, unsigned cap, int* view, char* why, unsigned
     }
     line[n] = 0;
     DeleteFileA(REQUEST);
-    k = sscanf(line, "play %63s %u", got, &seat);
-    if (k < 1) {
-        snprintf(why, whycap, "%s is not `play <name> [<seat>]`", REQUEST);
+    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
+        line[--n] = 0;
+    memset(&s_seek, 0, sizeof s_seek);
+    if (sscanf(line, "play %63s%n", got, &end) != 1) {
+        snprintf(why, whycap, "%s is not `play <name> [<seat>] [at <T> [dump <name>]]`", REQUEST);
         return -1;
     }
-    *view = k == 2 ? (int)(seat < REC_PLAYERS ? seat : REC_PLAYERS) : -1;
-    for (i = 0; got[i]; i++)
-        if (!((got[i] >= 'a' && got[i] <= 'z') || (got[i] >= 'A' && got[i] <= 'Z') ||
-              (got[i] >= '0' && got[i] <= '9') || got[i] == '-' || got[i] == '_')) {
-            snprintf(why, whycap, "the name %s is not letters, digits, - and _", got);
+    p = line + end;
+    *view = -1;
+    k = 0;
+    if (sscanf(p, " %u%n", &seat, &k) == 1) {
+        *view = (int)(seat < REC_PLAYERS ? seat : REC_PLAYERS);
+        p += k;
+    }
+    while (*p == ' ') p++;
+    if (*p) {
+        k = 0;
+        if (strncmp(p, "at ", 3) || !seek_words(p + 3, &s_seek.T, s_seek.dump, sizeof s_seek.dump)) {
+            snprintf(why, whycap, "%s is not `play <name> [<seat>] [at <T> [dump <name>]]`",
+                     REQUEST);
             return -1;
         }
+        s_seek.pending = 1;
+    }
+    if (!name_ok(got)) {
+        memset(&s_seek, 0, sizeof s_seek);
+        snprintf(why, whycap, "the name %s is not letters, digits, - and _", got);
+        return -1;
+    }
     snprintf(name, cap, "%s", got);
     return 1;
 }
@@ -451,6 +510,8 @@ static void __cdecl replay_fill(void)
     s_first = 1;
     tagpu_logf("replay: %s seated: %u players on %s, the viewer at record %u", name,
                recr_header(s_rd)->nseats, recr_header(s_rd)->settings_map, v);
+    if (s_seek.pending)
+        tagpu_logf("replay: %s: a seek to GameTime %u waits for the first step", name, s_seek.T);
 }
 
 /* ---- S-b: the recording's options ----------------------------------------------------------- */
@@ -1112,10 +1173,11 @@ static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const
     return 1;
 }
 
-/* the first step: every unit of the recording's first image, made as the loader made it */
-static void level_units(const Lv* L, const RecWorld* W)
+/* every unit of the world's image, made as the loader made it, at the first step and at a seek;
+   how many were made */
+static unsigned level_units(const Lv* L, const RecWorld* W)
 {
-    unsigned slot;
+    unsigned slot, made = 0;
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
         const char* ib = (const char*)img;
@@ -1126,8 +1188,9 @@ static void level_units(const Lv* L, const RecWorld* W)
         memcpy(&built, ib + U_BUILT, 4);
         if (make(L, slot, (unsigned char)ib[U_OWNERIX], img_type(img), pos, built == 0.0f,
                  img[U_STATE / 4] & 3u))
-            s_st.made++;
+            made++;
     }
+    return made;
 }
 
 /* THE CARRY LINKS (demo-recorder-s2-movers.md §3.8), each step before the placement and after the
@@ -2638,16 +2701,14 @@ static unsigned proj_extent(const char* pool, unsigned from)
    extent is the recording's afterwards, by the scan's own rule. The camera's follow is the
    viewer's own and is left: it points into the pool, which never moves, and the camera reads
    only a record's position. */
-static void proj_put(const Lv* L, const RecWorld* W)
+/* 1 when the world's pool may go in (the bounds above), else 0 with `why` */
+static int proj_bounded(const Lv* L, const RecWorld* W, char* pool, char* why, unsigned cap)
 {
-    char* pool = *(char**)(L->ta + OFF_PROJ);
-    unsigned count = W->nproj, hw = W->proj_hw, i, k, hwh, ch;
-    if (!pool) return;
+    unsigned count = W->nproj, hw = W->proj_hw, i, k;
     if (count > hw || hw > TAGPU_LIM_PROJ) {
-        if (!s_gst.refused++)
-            note("replay: the projectile pool not written at GameTime %u: a count of %u and an "
-                 "extent of %u past its %u records", L->now, count, hw, (unsigned)TAGPU_LIM_PROJ);
-        goto empty;
+        snprintf(why, cap, "a projectile count of %u and an extent of %u past the pool's %u "
+                 "records", count, hw, (unsigned)TAGPU_LIM_PROJ);
+        return 0;
     }
     for (i = 0; i < count; i++) {
         const unsigned char* img = W->proj + (size_t)i * REC_PROJ_IMAGE;
@@ -2658,12 +2719,36 @@ static void proj_put(const Lv* L, const RecWorld* W)
             if (r->record != RL_PROJ || r->cls != RL_ID) continue;
             memcpy(&id, img + r->offset, 4);
             if (!proj_ptr(L, pool, r->target, id, &p) || (!r->offset && !id)) {
-                if (!s_gst.refused++)
-                    note("replay: the projectile pool not written at GameTime %u: record %u's %s "
-                         "is ID %u", L->now, i, r->name, id);
-                goto empty;
+                snprintf(why, cap, "projectile record %u's %s is ID %u", i, r->name, id);
+                return 0;
             }
         }
+    }
+    return 1;
+}
+
+/* the pool emptied: its count 0, and the camera's follow cleared when it points into it */
+static void proj_empty(const Lv* L, char* pool)
+{
+    char* follow;
+    unsigned zero = 0;
+    memcpy(L->ta + OFF_NPROJ, &zero, 4);
+    memcpy(&follow, L->ta + OFF_FOLLOW, 4);
+    if (follow >= pool && follow < pool + (size_t)TAGPU_LIM_PROJ * REC_PROJ_BYTES)
+        memcpy(L->ta + OFF_FOLLOW, &zero, 4);
+}
+
+static void proj_put(const Lv* L, const RecWorld* W)
+{
+    char* pool = *(char**)(L->ta + OFF_PROJ);
+    unsigned count = W->nproj, hw = W->proj_hw, i, k, hwh, ch;
+    char why[160];
+    if (!pool) return;
+    if (!proj_bounded(L, W, pool, why, sizeof why)) {
+        if (!s_gst.refused++)
+            note("replay: the projectile pool not written at GameTime %u: %s", L->now, why);
+        proj_empty(L, pool);
+        return;
     }
     memcpy(&ch, L->ta + OFF_NPROJ, 4);
     hwh = proj_extent(pool, hw);
@@ -2685,16 +2770,6 @@ static void proj_put(const Lv* L, const RecWorld* W)
     if (hwh > hw)
         memset(pool + (size_t)hw * REC_PROJ_BYTES, 0, (size_t)(hwh - hw) * REC_PROJ_BYTES);
     memcpy(L->ta + OFF_NPROJ, &count, 4);
-    return;
-empty:
-    {
-        char* follow;
-        unsigned zero = 0;
-        memcpy(L->ta + OFF_NPROJ, &zero, 4);
-        memcpy(&follow, L->ta + OFF_FOLLOW, 4);
-        if (follow >= pool && follow < pool + (size_t)TAGPU_LIM_PROJ * REC_PROJ_BYTES)
-            memcpy(L->ta + OFF_FOLLOW, &zero, 4);
-    }
 }
 
 /* THE EXPLORED MAP: the host's made the recording's, each u16 entry `img | 1 << b` with b V's bit
@@ -2764,19 +2839,832 @@ void __cdecl tagpu_replay_capture(void)
     recorded_put(&L, W);
 }
 
+/* ---- the seek ------------------------------------------------------------------------------- */
+
+/* THE SEEK (the slice note's S3b), run by the frame visit on a level that plays a recording, on the
+   game thread between two sim steps: `seek <T>` in the trigger, or `at <T>` in the play request.
+   THE INVARIANT: afterwards the host holds what it would hold at the frame visit after step T-1
+   of a playing from the start, in everything the recording carries; everything else it keeps is
+   made by the creates, reset to what a level start gives, or set from T. Four things make that
+   true by construction:
+   - the world is positioned and validated before the host is touched (R0), so a refused seek
+     changes nothing but the reader, which goes back to where the host is;
+   - every unit is killed and made again (R3, R7), never kept, so no unit's host-own state (its
+     COB, its model's pose, its mover's course, its sight bookkeeping) survives from before;
+   - every player's sight counters are refilled with no unit alive and then stamped only by the
+     creates and the appliers' moves (R5, R7, R8), so they owe nothing to the host's history;
+   - every deadline the recording does not carry is reset by the engine's own level-start reset or
+     set from T (R15).
+   So a seek in a fresh process, a seek forwards and a seek backwards to T agree. Host-own state
+   that survives, none of it read on a puppet host: B4's per-slot columns (births stay strictly
+   increasing per slot), the passability cache, the order inside the seats' control-group vectors.
+   THE ORDER is the argument: R0 touches nothing; R3-R4 run on the clock the host holds; R5 needs
+   no unit alive and no temporary sight record; R6 comes before everything that stamps GameTime for
+   the target; R11-R13 follow everything that writes effects, tables and the simulation RNG (the
+   kills, the creates, their first COB slices). Each step's comment names what it rests on. */
+
+#define OFF_BUCKETS    0x1429F      /* the sort buckets' allocation, 10 bytes each (LoadMap)       */
+#define OFF_BCOLS      0x142A3      /* its columns and rows, u32 each ...                          */
+#define OFF_BROWS      0x142A7
+#define OFF_BCOUNT     0x142AB      /* ... and its bucket count: cols * rows rounded up to 8, the
+                                       allocation count * 10 bytes (0x482CAE..0x482CC5)          */
+#define OFF_OFFMAP     0x142B7      /* the off-map bucket's address                               */
+#define BUCKET_STRIDE  10
+#define FD_MODEL       0x98         /* a 3DO def's model template: the spawn passes it to 0x45A8D0
+                                       untested (0x423EBB..0x423EC2)                              */
+#define CELL_DRAWDEFER 0x04         /* flags bit 2: the draw's own (replay-layout.tsv, drawdefer)   */
+#define DEF_BORDER     0xFFFB       /* a cell def at or above this is no feature (0x4246EC)       */
+#define WR_NEXT        0x00         /* a wreck record's list links, i16: the next, the previous   */
+#define WR_PREV        0x02         /*   (the list mover 0x4232F0)                                */
+#define PL_RECORDS     11           /* the player records a SIM_ID_PLAYER may name                */
+#define PL_DISPLAY     0xF8         /* DisplayTimer, a GameTime deadline (0x464765)               */
+#define PASS_TICKS     30           /* the players phase's period (0x46507D..0x465092)            */
+
+/* 0x47CB00(unit): a bucket's unlink, thiscall on the bucket, `ret 4` (DISASSEMBLED
+   0x47CB00..0x47CB30): it walks the bucket's chain from +6 to the unit with no NULL test, splices
+   it out and nulls its +0x8E */
+typedef void (__thiscall* PFN_Unlink)(char* bucket, char* unit);
+#define E_Unlink   ((PFN_Unlink)0x0047CB00u)
+/* 0x47CB60(unit, bucket): the move, stdcall `ret 8` (DISASSEMBLED 0x47CB60..0x47CBC0): nothing
+   when the unit's +0x82 is the bucket already; for a carried unit (+0x86 set) only +0x82 = bucket;
+   else the unlink from +0x82's chain when it is not NULL, a push at the front of the bucket's +6,
+   and +0x82 = bucket */
+typedef void (__stdcall* PFN_Move)(char* unit, char* bucket);
+#define E_Move     ((PFN_Move)0x0047CB60u)
+/* 0x45A8D0(template): a model instance, stdcall `ret 4` (0x45A941); 0x45AAA0(instance): its free,
+   stdcall `ret 4`, tagpu_reclaim's detour */
+typedef char* (__stdcall* PFN_ObjMake)(const char* model);
+typedef void (__stdcall* PFN_ObjFree)(char* instance);
+#define E_ObjMake  ((PFN_ObjMake)0x0045A8D0u)
+#define E_ObjFree  ((PFN_ObjFree)0x0045AAA0u)
+/* the level init's resets, no argument, plain `ret`: the notices 0x47EE30 (DISASSEMBLED
+   0x47EE30..0x47EEDA: the queue *(0x51E68C) emptied from its last entry, each queued text freed,
+   the last sound's time +0x9D = 0, the 24 per-kind cooldowns at 0x5086EC + 0x18 k = 0) and the chat
+   lines 0x463C80 (0x463C80..0x463C9C: the ring's head main+0x2A3E and tail +0x2A40 zeroed) */
+typedef void (__cdecl* PFN_Reset)(void);
+#define E_NoticeReset ((PFN_Reset)0x0047EE30u)
+#define E_ChatReset   ((PFN_Reset)0x00463C80u)
+
+static struct {
+    unsigned killed, left, made, refused;
+    unsigned outside, moved, carried;
+    unsigned frecs, fcells, fdropped, models, freed;
+    unsigned sdropped;
+    unsigned twritten, tskipped, tkept, trepaired;
+    int      pool, effects;
+} s_sk;                             /* one seek's counts, for its second line                    */
+
+static unsigned char  s_inU[0x10000];      /* a slot of U: R9 puts it in its recorded bucket     */
+static unsigned char  s_named[0x10000];    /* how many members of U name it as their next        */
+static unsigned char  s_taken[0x10000];    /* R9's first pass took it out of its bucket          */
+static char*          s_ubucket[0x10000];  /* its recorded bucket, resolved                      */
+static unsigned short s_uheads[0x10000];   /* the heads of U's chains                            */
+static unsigned char  s_fseen[TAGPU_LIM_WRECKS];   /* a wreck record on a list already          */
+
+static void counts_log(const char* when, unsigned now);
+
+/* A recorded bucket ID as the host's bucket: the off-map bucket, or a bucket below the
+   allocation's count -- taken no larger than the count LoadMap computes from the columns and
+   rows, so a corrupt count cannot widen it. NULL for none, and for one that does not resolve. */
+static char* bucket_at(const Lv* L, uint32_t id)
+{
+    char* base = *(char**)(L->ta + OFF_BUCKETS);
+    unsigned long long cap = ((unsigned long long)*(const uint32_t*)(L->ta + OFF_BCOLS) *
+                              *(const uint32_t*)(L->ta + OFF_BROWS) + 7) & ~7ull;
+    uint32_t n = *(const uint32_t*)(L->ta + OFF_BCOUNT);
+    if (id == REC_ID_OFFMAP) return *(char**)(L->ta + OFF_OFFMAP);
+    if (!id || !base) return NULL;
+    if (n > cap) n = (uint32_t)cap;
+    return id - 1 < n ? base + (size_t)(id - 1) * BUCKET_STRIDE : NULL;
+}
+
+static uint32_t img_u32(const RecWorld* W, unsigned slot, unsigned off)
+{
+    uint32_t v;
+    memcpy(&v, img_at(W, slot) + off, 4);
+    return v;
+}
+
+/* the slot an image's unit ID names, or 0 for none and for one past the array */
+static unsigned img_unit(const Lv* L, uint32_t id)
+{
+    return id && id - 1 < L->nslots ? id - 1 : 0;
+}
+
+static int sk_bucket_cmp(const void* a, const void* b)
+{
+    const char* x = s_ubucket[*(const unsigned short*)a];
+    const char* y = s_ubucket[*(const unsigned short*)b];
+    return x < y ? -1 : x > y;
+}
+
+/* R0's buckets: U, the units R9 moves -- live in the image, not carried there, with a recorded
+   bucket that resolves (a NULL or unresolved one puts the unit outside U, counted) -- and, for
+   each bucket, its members forming one chain through their recorded +0x8E: exactly one member no
+   member names, the walk from it visiting every member once and ending at NULL or outside U.
+   Leaves the heads in s_uheads[0, *nheads), sorted by bucket. */
+static int sk_units_bound(const Lv* L, const RecWorld* W, unsigned* nheads, char* why,
+                          unsigned cap)
+{
+    unsigned slot, n = 0, nu = 0, walked = 0, i;
+    memset(s_inU, 0, L->nslots);
+    memset(s_named, 0, L->nslots);
+    s_sk.outside = 0;
+    for (slot = 1; slot < L->nslots; slot++) {
+        s_ubucket[slot] = NULL;
+        if (!W->live[slot] || img_u32(W, slot, U_CARRIER)) continue;
+        s_ubucket[slot] = bucket_at(L, img_u32(W, slot, U_BUCKET));
+        if (!s_ubucket[slot]) { s_sk.outside++; continue; }
+        s_inU[slot] = 1;
+        nu++;
+    }
+    for (slot = 1; slot < L->nslots; slot++) {
+        unsigned nx;
+        if (!s_inU[slot]) continue;
+        nx = img_unit(L, img_u32(W, slot, U_NEXT));
+        if (!nx || !s_inU[nx]) continue;
+        if (s_ubucket[nx] != s_ubucket[slot] || s_named[nx]++) {
+            snprintf(why, cap, "unit %u's recorded bucket chain is not one chain at unit %u",
+                     slot, nx);
+            return 0;
+        }
+    }
+    for (slot = 1; slot < L->nslots; slot++)
+        if (s_inU[slot] && !s_named[slot]) s_uheads[n++] = (unsigned short)slot;
+    qsort(s_uheads, n, sizeof s_uheads[0], sk_bucket_cmp);
+    for (i = 0; i < n; i++) {
+        unsigned u = s_uheads[i], steps = 0;
+        if (i && s_ubucket[s_uheads[i - 1]] == s_ubucket[u]) {
+            snprintf(why, cap, "units %u and %u both head one recorded bucket", s_uheads[i - 1], u);
+            return 0;
+        }
+        while (u && s_inU[u] && steps < L->nslots) {
+            steps++;
+            u = img_unit(L, img_u32(W, u, U_NEXT));
+        }
+        walked += steps;
+    }
+    if (walked != nu) {
+        snprintf(why, cap, "the recorded buckets' chains reach %u of their %u units", walked, nu);
+        return 0;
+    }
+    *nheads = n;
+    return 1;
+}
+
+/* R0's features: the structure the engine walks without bounds -- the feature tick follows the
+   active list to -1, the destroy follows a footprint cell's way back -- each value DATA. */
+static int sk_features_bound(const Lv* L, const RecWorld* W, char* why, unsigned cap)
+{
+    unsigned list, c, ncells = L->gw * L->gh;
+    if (W->heads[3] < 0 || (uint32_t)W->heads[3] >= ncells) {
+        snprintf(why, cap, "the reproduction cursor %d is outside the grid", W->heads[3]);
+        return 0;
+    }
+    memset(s_fseen, 0, sizeof s_fseen);
+    for (list = 0; list < 3; list++) {
+        int32_t i = W->heads[list], prev = -1;
+        unsigned steps = 0;
+        if (i < -1 || i >= (int32_t)L->nrec) {
+            snprintf(why, cap, "wreck list %u's head %d is outside the pool", list, i);
+            return 0;
+        }
+        while (i != -1) {
+            const unsigned char* w = W->pool + (size_t)i * REC_WRECK_BYTES;
+            int16_t nx, pv;
+            memcpy(&nx, w + WR_NEXT, 2);
+            memcpy(&pv, w + WR_PREV, 2);
+            if (s_fseen[i] || pv != prev || ++steps > L->nrec || nx < -1 ||
+                nx >= (int32_t)L->nrec) {
+                snprintf(why, cap, "wreck list %u is not a list at record %d", list, i);
+                return 0;
+            }
+            s_fseen[i] = (unsigned char)(list + 1);
+            if (list < 2) {
+                uint16_t def, x, z;
+                const char* d;
+                memcpy(&def, w + REC_WRECK_DEF, 2);
+                memcpy(&x, w + REC_WRECK_ANCHOR, 2);
+                memcpy(&z, w + REC_WRECK_ANCHOR + 2, 2);
+                d = fdef_of(L, def);
+                if (!d || x >= L->gw || z >= L->gh) {
+                    snprintf(why, cap, "wreck record %d's def %u or anchor (%u, %u) is out of "
+                             "bounds", i, def, x, z);
+                    return 0;
+                }
+                if (!(d[FD_MASK] & 1)) {
+                    if (!*(char* const*)(d + FD_MODEL)) {
+                        snprintf(why, cap, "wreck record %d's def %u has no model", i, def);
+                        return 0;
+                    }
+                } else {
+                    static const unsigned char state[2] = { WR_STATE1, WR_STATE2 };
+                    static const unsigned char seq[2] = { REC_WRECK_SEQ, REC_WRECK_SEQ2 };
+                    unsigned k;
+                    for (k = 0; k < 2; k++) {
+                        const uint16_t* sq;
+                        uint32_t id;
+                        uint16_t frame;
+                        memcpy(&id, w + seq[k], 4);
+                        if (!id) continue;
+                        if (id > REC_SEQ_FIELDS ||
+                            !(sq = *(const uint16_t* const*)(d + REC_SEQ_FIRST + 4 * (id - 1)))) {
+                            snprintf(why, cap, "wreck record %d's sequence ID %u names no "
+                                     "sequence of def %u", i, id, def);
+                            return 0;
+                        }
+                        memcpy(&frame, w + state[k], 2);
+                        if (frame >= *sq) {
+                            snprintf(why, cap, "wreck record %d's frame %u is past its "
+                                     "sequence's %u", i, frame, *sq);
+                            return 0;
+                        }
+                    }
+                }
+            }
+            prev = i;
+            i = nx;
+        }
+    }
+    for (c = 0; c < ncells; c++) {
+        const unsigned char* g = W->grid + (size_t)c * REC_CELL_BYTES;
+        uint16_t def, rec;
+        memcpy(&def, g + CELL_DEF, 2);
+        if (def == DEF_FOOTPRINT) {
+            if (c % L->gw < g[CELL_BACK + 1] || c / L->gw < g[CELL_BACK]) {
+                snprintf(why, cap, "cell (%u, %u)'s way back leaves the grid", c % L->gw,
+                         c / L->gw);
+                return 0;
+            }
+            continue;
+        }
+        if (def >= DEF_BORDER) continue;
+        memcpy(&rec, g + CELL_BACK, 2);
+        if (def >= L->nfdefs || ((g[CELL_FLAGS] & 1) && rec >= L->nrec)) {
+            snprintf(why, cap, "cell (%u, %u)'s def %u or record %u is out of bounds",
+                     c % L->gw, c / L->gw, def, rec);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* the engine's temporary sight records' count within what its add allows */
+static int sight_records_bounded(const char* ta)
+{
+    int n;
+    const char* recs;
+    memcpy(&n, ta + OFF_NSIGHTRECS, 4);
+    memcpy(&recs, ta + OFF_SIGHTRECS, 4);
+    return n >= 0 && n <= SR_MAX && (!n || recs);
+}
+
+/* R0: every value of the world at T that the rebuild hands to the engine, bounded. */
+static int sk_bound(const Lv* L, const RecWorld* W, unsigned* nheads, char* why, unsigned cap)
+{
+    const ReplayGlobalSlot* g = &tagpu_replay_globals[0];
+    char* pool = *(char**)(L->ta + OFF_PROJ);
+    unsigned char* map;
+    uint32_t n;
+    if (!sk_features_bound(L, W, why, cap) || !sk_units_bound(L, W, nheads, why, cap)) return 0;
+    memcpy(&map, L->ta + OFF_MAPPED, 4);
+    n = (*(const uint32_t*)(L->ta + OFF_GRIDW) * *(const uint32_t*)(L->ta + OFF_GRIDH) * 2u) >> 2;
+    if (!map || !W->mapped_whole || n != W->mapped_bytes) {
+        snprintf(why, cap, "the host's explored map (%u bytes) is not the recording's (%u)", n,
+                 W->mapped_bytes);
+        return 0;
+    }
+    if (!pool) {
+        snprintf(why, cap, "the level has no projectile pool");
+        return 0;
+    }
+    if (!proj_bounded(L, W, pool, why, cap)) return 0;
+    if (g->where != RG_MAIN || g->offset != OFF_LOSTYPE || g->react != LOS_REACT) {
+        snprintf(why, cap, "replay-globals.tsv's first slot is not LosType's react row");
+        return 0;
+    }
+    if (!sight_records_bounded(L->ta)) {
+        snprintf(why, cap, "the engine counts %d temporary sight records",
+                 *(const int*)(L->ta + OFF_NSIGHTRECS));
+        return 0;
+    }
+    return 1;
+}
+
+/* R3: every unit killed through the destructor, as a replayed death goes (ev_death: C4's wrap,
+   mode 0), with severity 0 and corpse 0 -- no statistics, no Killed script, no explosion, no
+   corpse -- and the killer none: netid 0xFFFFFFFF, slot 0. Three passes, as the destructor's
+   own dependencies ask: the unfinished first (a factory's cleanup deals its frame 30 000 while
+   the frame still exists, 0x402701), then the carried, then the rest. +0x110 bit 28 is tested
+   again at each unit's turn, since a death can take others with it. Afterwards every slot's
+   +0xA6 is 0 (0x486DC7), which make requires; one still live is counted, and R7 refuses its
+   slot. */
+static void sk_kills(const Lv* L)
+{
+    unsigned pass, slot;
+    for (pass = 0; pass < 3; pass++)
+        for (slot = 1; slot < L->nslots; slot++) {
+            const char* u = unit_at(L, slot);
+            unsigned char rec[16];
+            uint32_t carrier;
+            float built;
+            unsigned kind;
+            if (!host_live(L, slot)) continue;
+            memcpy(&built, u + U_BUILT, 4);
+            memcpy(&carrier, u + U_CARRIER, 4);
+            kind = built != 0.0f ? 0 : carrier ? 1 : 2;
+            if (kind != pass) continue;
+            memset(rec, 0, sizeof rec);
+            rec[0] = 0x0C;
+            rec[1] = (unsigned char)slot;
+            rec[2] = (unsigned char)(slot >> 8);
+            memset(rec + 3, 0xFF, 4);
+            if (tagpu_tx_replay_death(rec, 0)) s_sk.killed++;
+        }
+    for (slot = 1; slot < L->nslots; slot++)
+        if (host_live(L, slot)) s_sk.left++;
+}
+
+/* R5: LosType bits 0-2 the recording's, then 0x4816A0 always, with 1 when Mapping changed (the
+   Mapping command's own call, 0x416DA6) and 0 otherwise. With no unit alive and no temporary
+   record left, its fill gives every record that passes its seat test the mode's base and its unit
+   loop finds nothing, so the counters after R8 are the base plus the stamps of the units made at
+   T at their image positions: a function of T alone. It undoes sight_fill(V), which R14 redoes. */
+static void sk_sight_reset(char* ta, const RecWorld* W)
+{
+    const ReplayGlobalSlot* g = &tagpu_replay_globals[0];
+    uint16_t host, was;
+    memcpy(&host, ta + OFF_LOSTYPE, 2);
+    was = host;
+    host = (uint16_t)((host & ~LOS_REACT) | (W->globals[g->dword] & LOS_REACT));
+    memcpy(ta + OFF_LOSTYPE, &host, 2);
+    E_SightRebuild(((host ^ was) & LOS_MAPPING) ? 1u : 0u);
+}
+
+/* R9: the buckets made the recorded ones (sk_units_bound made U). The move 0x47CB60 does nothing
+   for a unit already in the bucket, so it cannot reorder one; hence two passes.
+   (a) Out: each unit of U that R7 made and the host does not carry is unlinked by 0x47CB00 from
+       the bucket its +0x82 names, then +0x82 = NULL. Its walk has no NULL test, and is safe
+       because every link of the host's bucket chains is an engine function's -- the creates'
+       placement, the stamps, the attach and the detach, the destructor's unlink, and this --
+       while units_put never writes +0x82 or +0x8E (id rows, out of the raw mask): each such unit
+       is in the chain its +0x82 names, the invariant the engine's own stamp relies on.
+   (b) In: each recorded chain, restricted to the units (a) took out, from its tail to its head,
+       through 0x47CB60(unit, bucket): with +0x82 NULL and +0x86 NULL it pushes at the front of
+       the bucket's +6. Each bucket then starts with its recorded chain in order, its head the
+       recorded head, whatever order the buckets are visited in; a unit outside U can only trail.
+   A carried unit gets +0x82 from the image when it resolves (the move only sets +0x82 while a
+   unit is carried, 0x47CB79); otherwise the host's stays. AFTERWARDS every live unit's +0x82 is
+   non-NULL: the creates give every unit a bucket, the attach's unlink keeps +0x82 (0x48AC5E), and
+   this replaces a bucket only with a non-NULL one -- which a drop's re-link (0x48ACCC ->
+   0x47CB40) and the attach's unlink of a child in no chain dereference untested. */
+static void sk_buckets(const Lv* L, const RecWorld* W, unsigned nheads)
+{
+    unsigned slot, i;
+    memset(s_taken, 0, L->nslots);
+    for (slot = 1; slot < L->nslots; slot++) {
+        char* u = unit_at(L, slot);
+        char* b;
+        uint32_t carrier;
+        if (!host_live(L, slot)) continue;
+        memcpy(&carrier, u + U_CARRIER, 4);
+        if (W->live[slot] && img_u32(W, slot, U_CARRIER)) {
+            if (carrier && (b = bucket_at(L, img_u32(W, slot, U_BUCKET)))) {
+                memcpy(u + U_BUCKET, &b, 4);
+                s_sk.carried++;
+            }
+            continue;
+        }
+        if (!s_inU[slot] || carrier) continue;
+        memcpy(&b, u + U_BUCKET, 4);
+        if (b) E_Unlink(b, u);
+        memset(u + U_BUCKET, 0, 4);
+        s_taken[slot] = 1;
+    }
+    for (i = 0; i < nheads; i++) {
+        unsigned u = s_uheads[i], n = 0;
+        while (u && s_inU[u] && n < L->nslots) {
+            if (s_taken[u]) s_chain[n++] = (unsigned short)u;
+            u = img_unit(L, img_u32(W, u, U_NEXT));
+        }
+        while (n) {
+            E_Move(unit_at(L, s_chain[--n]), s_ubucket[s_uheads[i]]);
+            s_sk.moved++;
+        }
+    }
+}
+
+/* R10: the features whole, from the image, after R0 bounded it.
+   - The host's 3DO model instances freed, walking its active and settled lists as the teardown's
+     purge 0x422170 walks them (0x42219A..0x4221D5, a 3DO def's +0xFE bit 0 clear), each bounded:
+     0x45AAA0 is tagpu_reclaim's detour, so an instance is held until the render thread has
+     finished every pass that could hold it.
+   - Every pool record from its image, a GAF record's sequences back from their IDs (the def's
+     fields, REC_SEQ_FIRST), a 3DO record's model 0 until the next step; the three heads and the
+     cursor.
+   - Each active and settled 3DO record's model made by the spawn's own call and store
+     (0x423EC2, 0x423ECB).
+   - Every cell from its image less the draw's own bit, its unit slots only when 0 or naming a
+     live unit, else 0 and counted: the stamp's contest dereferences an incumbent's +0x96 with no
+     NULL test (0x47CDCA). */
+static void sk_features(const Lv* L, const RecWorld* W)
+{
+    unsigned list, i, c, ncells = L->gw * L->gh;
+    for (list = 0; list < 2; list++) {
+        int32_t k = *(const int32_t*)(L->ta + OFF_WR_HEADS + 4 * list);
+        unsigned steps = 0;
+        while (k >= 0 && (uint32_t)k < L->nrec && steps++ < L->nrec) {
+            char* w = L->pool + (size_t)k * REC_WRECK_BYTES;
+            uint16_t def;
+            const char* d;
+            char* inst;
+            memcpy(&def, w + REC_WRECK_DEF, 2);
+            d = fdef_of(L, def);
+            memcpy(&inst, w + REC_WRECK_MODEL, 4);
+            if (d && !(d[FD_MASK] & 1) && inst) {
+                E_ObjFree(inst);
+                memset(w + REC_WRECK_MODEL, 0, 4);
+                s_sk.freed++;
+            }
+            k = *(const int16_t*)(w + WR_NEXT);
+        }
+    }
+    for (i = 0; i < L->nrec; i++) {
+        const unsigned char* img = W->pool + (size_t)i * REC_WRECK_BYTES;
+        char* w = L->pool + (size_t)i * REC_WRECK_BYTES;
+        uint16_t def;
+        const char* d;
+        memcpy(&def, img + REC_WRECK_DEF, 2);
+        d = fdef_of(L, def);
+        memcpy(w, img, REC_WRECK_BYTES);
+        if (d && (d[FD_MASK] & 1)) {
+            static const unsigned char seq[2] = { REC_WRECK_SEQ, REC_WRECK_SEQ2 };
+            unsigned k;
+            for (k = 0; k < 2; k++) {
+                uint32_t id, v = 0;
+                memcpy(&id, img + seq[k], 4);
+                if (id >= 1 && id <= REC_SEQ_FIELDS)
+                    memcpy(&v, d + REC_SEQ_FIRST + 4 * (id - 1), 4);
+                memcpy(w + seq[k], &v, 4);
+            }
+        } else {
+            memset(w + REC_WRECK_MODEL, 0, 4);
+        }
+        s_sk.frecs++;
+    }
+    memcpy(L->ta + OFF_WR_HEADS, W->heads, 12);
+    memcpy(L->ta + OFF_FCURSOR, &W->heads[3], 4);
+    for (list = 0; list < 2; list++) {
+        int32_t k = W->heads[list];
+        unsigned steps = 0;
+        while (k >= 0 && (uint32_t)k < L->nrec && steps++ < L->nrec) {
+            char* w = L->pool + (size_t)k * REC_WRECK_BYTES;
+            uint16_t def;
+            const char* d;
+            memcpy(&def, w + REC_WRECK_DEF, 2);
+            d = fdef_of(L, def);
+            if (d && !(d[FD_MASK] & 1)) {
+                char* inst = E_ObjMake(*(char* const*)(d + FD_MODEL));
+                memcpy(w + REC_WRECK_MODEL, &inst, 4);
+                s_sk.models++;
+            }
+            k = *(const int16_t*)(w + WR_NEXT);
+        }
+    }
+    for (c = 0; c < ncells; c++) {
+        const unsigned char* img = W->grid + (size_t)c * REC_CELL_BYTES;
+        char* cell = L->grid + (size_t)c * REC_CELL_BYTES;
+        unsigned char keep = (unsigned char)cell[CELL_FLAGS] & CELL_DRAWDEFER;
+        uint16_t slot[2];
+        unsigned k;
+        memcpy(cell, img, REC_CELL_BYTES);
+        cell[CELL_FLAGS] = (char)(((unsigned char)cell[CELL_FLAGS] & ~CELL_DRAWDEFER) | keep);
+        memcpy(slot, img, 4);
+        for (k = 0; k < 2; k++)
+            if (slot[k] && (slot[k] >= L->nslots || !host_live(L, slot[k]))) {
+                slot[k] = 0;
+                s_sk.fdropped++;
+            }
+        memcpy(cell, slot, 4);
+        s_sk.fcells++;
+    }
+}
+
+/* ---- R12: the declared tables ---- */
+
+/* A recorded SIMF_ADDR's ID as the host's address: 0 is NULL, else a row of its table bounded by
+   the table's count. 1 resolved. */
+static int addr_of(const Lv* L, unsigned simid, uint32_t id, char** p)
+{
+    char* defs;
+    if (!id) { *p = NULL; return 1; }
+    switch (simid) {
+    case SIM_ID_UNIT_SLOT: return unit_ptr(L, id, p);
+    case SIM_ID_WEAPON:    return weapon_ptr(L, id, p);
+    case SIM_ID_UNIT_TYPE:
+        defs = *(char**)(L->ta + OFF_UDEFS);
+        if (!defs || id - 1 >= L->ndefs) return 0;
+        *p = defs + (size_t)(id - 1) * DEF_STRIDE;
+        return 1;
+    case SIM_ID_PLAYER:
+        if (id - 1 >= PL_RECORDS) return 0;
+        *p = player_rec(L->ta, id - 1);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* the declaration of this build a recorded table pairs with: the same name, stride, class, key,
+   flags and layout hash (tagpu_recfmt.h, RT_TABLE); NULL with `why` otherwise */
+static const SimDesc* table_pair(const RecTableInfo* t, const char** why)
+{
+    unsigned i;
+    for (i = 0; i < tagpu_simreg_count(); i++) {
+        const SimDesc* d = tagpu_simreg_at(i);
+        if (!d || strcmp(d->name, t->name)) continue;
+        if (d->stride != t->stride || d->cls != t->cls || d->key != t->key ||
+            d->flags != t->flags || tagpu_simreg_layout_hash(d) != t->lhash) {
+            *why = "its stride, class, key, flags or layout differ";
+            return NULL;
+        }
+        return d;
+    }
+    *why = "this build declares no table of that name";
+    return NULL;
+}
+
+/* the declaration whose live or heap row count is `d`'s variable, or NULL */
+static const SimDesc* count_owner(const SimDesc* d)
+{
+    unsigned i;
+    for (i = 0; i < tagpu_simreg_count(); i++) {
+        const SimDesc* e = tagpu_simreg_at(i);
+        if (e && e->rows && (const void*)e->rows == d->addr) return e;
+    }
+    return NULL;
+}
+
+/* One recorded table into its paired declaration, in place: the inverse of the recorder's
+   row_image. Plain bytes, and SIMF_ID, SIMF_TARGET and SIMF_PINNED fields, from the image (a pinned
+   field's object is written where it is, never moved); a SIMF_ADDR with an ID kind back to its
+   address, or left and counted when its ID does not resolve; left as the host holds them:
+   SIMF_LOCAL, SIMF_OWNED, SIMF_COLUMN, a SIMF_ADDR of SIM_ID_NONE or not a pointer's size, and a
+   SIMF_COUNT in a row with SIMF_COLUMN fields (the columns are not restored, so neither is their
+   count). Rows written: the recorded ones within what the host holds now -- a static table's rows,
+   a heap table's allocation as its count or its block size says -- so a write never reaches past
+   the host's memory and a heap table is never reallocated here. A count variable is written only
+   as its table allows: never a heap table's (its block is sized by it), a live prefix's only within
+   the array. */
+static void table_put(const Lv* L, const SimDesc* d, const RecTable* t)
+{
+    unsigned char* base = (d->flags & SIMD_HEAP) ? *(unsigned char**)d->addr
+                                                 : (unsigned char*)d->addr;
+    unsigned host = !base ? 0 : !d->nrows ? *d->rows * d->stride : d->nrows * d->stride;
+    unsigned rows = (t->size < host ? t->size : host) / d->stride, r, b, nkeep = 0;
+    const SimDesc* owner = (!(d->flags & SIMD_HEAP) && d->nrows == 1 && !d->rows)
+                               ? count_owner(d) : NULL;
+    unsigned char* keep;
+    const SimField* f;
+    int column = 0;
+    if (owner) {
+        uint32_t v;
+        memcpy(&v, t->img, 4);
+        if (!owner->nrows || t->size < 4 || v > owner->nrows) {
+            s_sk.tkept++;
+            return;
+        }
+    }
+    keep = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, d->stride);
+    if (!keep) {
+        s_sk.tskipped++;
+        tagpu_logf("replay: %s: the seek skipped %s: no memory", s_name, d->name);
+        return;
+    }
+    for (f = d->layout; f && f->size; f++) column |= f->kind == SIMF_COLUMN;
+    for (f = d->layout; f && f->size; f++) {
+        unsigned k, n = f->repeat ? f->repeat : 1;
+        int left = f->kind == SIMF_LOCAL || f->kind == SIMF_OWNED || f->kind == SIMF_COLUMN ||
+                   f->kind == SIMF_ADDR || (f->kind == SIMF_COUNT && column);
+        if (!left) continue;
+        for (k = 0; k < n; k++) memset(keep + f->off + (size_t)k * f->step, 1, f->size);
+    }
+    for (b = 0; b < d->stride; b++) nkeep += keep[b];
+    for (r = 0; r < rows; r++) {
+        unsigned char* row = base + (size_t)r * d->stride;
+        const unsigned char* img = t->img + (size_t)r * d->stride;
+        if (!nkeep) {
+            memcpy(row, img, d->stride);
+            continue;
+        }
+        for (b = 0; b < d->stride; b++)
+            if (!keep[b]) row[b] = img[b];
+        for (f = d->layout; f->size; f++) {
+            unsigned k, n = f->repeat ? f->repeat : 1;
+            if (f->kind != SIMF_ADDR || f->id == SIM_ID_NONE || f->size != sizeof(char*)) continue;
+            for (k = 0; k < n; k++) {
+                unsigned at = f->off + k * f->step;
+                uint32_t id;
+                char* p;
+                memcpy(&id, img + at, 4);
+                if (addr_of(L, f->id, id, &p)) memcpy(row + at, &p, 4);
+                else s_sk.tkept++;
+            }
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, keep);
+    s_sk.twritten++;
+}
+
+/* R12: each table the recording carries into the declaration it pairs with, or skipped and named;
+   then each sim file that owns an invariant its layouts cannot express re-establishes it, before
+   anything runs. The air pool's lock is held over the writes (tagpu_patches.h). */
+static void sk_tables(const Lv* L, const RecWorld* W)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    tagpu_patches_restore_begin();
+    for (i = 0; i < h->ntab && i < W->ntab; i++) {
+        const char* why = NULL;
+        const SimDesc* d = table_pair(&h->tab[i], &why);
+        if (!d) {
+            s_sk.tskipped++;
+            tagpu_logf("replay: %s: the seek skipped %s: %s", s_name, h->tab[i].name, why);
+            continue;
+        }
+        table_put(L, d, &W->tab[i]);
+    }
+    s_sk.trepaired = tagpu_patches_restored();
+    s_sk.trepaired += tagpu_weapons_restored();
+}
+
+/* R15: the deadlines the recording does not carry (or that the step masks), each by the engine's
+   own rule, after which the clock is the recording's:
+   - each seat's +0xF0, the players phase's 30-tick deadline, from image T: the step masks it
+     because image T+1 carries it advanced by step T's phase, but image T's is what the recording
+     machine's phase found at step T (0x46507D..0x465092: `if (+0xF0 <= GameTime) +0xF0 += 30`);
+   - V's +0xF0 the next multiple of 30 above GameTime, the engine's invariant (0x464990 zeroes it
+     at GameTime 0, the loader's players phase 0x497C10 sets 30, each step adds 30 once GameTime
+     reaches it): V's pass runs the radar pass and the minimap fog while V is viewed;
+   - every record's DisplayTimer +0xF8 = GameTime, as the player init sets it (0x464765);
+   - the notices and the chat lines through the level init's own resets 0x47EE30 and 0x463C80:
+     the creates' queued replies go, and a backward seek leaves no cooldown or line stamped in the
+     future.
+   The particles' and the temporary sight records' deadlines went with them (R11, R4); the pacing
+   stamp is R16's. */
+static void sk_deadlines(char* ta, const RecWorld* W, unsigned now)
+{
+    unsigned p, next = PASS_TICKS * (now / PASS_TICKS + 1);
+    for (p = 0; p < REC_PLAYERS; p++) {
+        char* rec = player_rec(ta, p);
+        if (p == s_viewer) memcpy(rec + PL_PASS, &next, 4);
+        else if (tagpu_puppet_seat(p)) memcpy(rec + PL_PASS, (const char*)W->player[p] + PL_PASS, 4);
+        memcpy(rec + PL_DISPLAY, &now, 4);
+    }
+    E_NoticeReset();
+    E_ChatReset();
+}
+
+/* The reader back where the host is after a refused seek; when it cannot be, the playing stops
+   there, as iteration_read's failure stops it. */
+static void sk_back(const Lv* L, unsigned prev)
+{
+    char why[200];
+    if (recr_seek(s_rd, prev, why, sizeof why) == 1) return;
+    s_over = 1;
+    tagpu_logf("replay: %s cannot be read back to GameTime %u: %s; the units stop here", s_name,
+               prev, why);
+    counts_log("a refused seek", L->now);
+}
+
+static unsigned sk_ms(LONGLONG ticks, LONGLONG hz)
+{
+    return hz ? (unsigned)(ticks * 1000 / hz) : 0;
+}
+
+/* THE SEEK's steps, R0-R17, in their order */
+static void seek_run(char* ta)
+{
+    RecWorld* W = recr_world(s_rd);
+    unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0;
+    LARGE_INTEGER hz, t0, t1, t2;
+    char why[200], dump[sizeof s_seek.dump];
+    Lv L;
+    int k;
+    s_seek.pending = 0;
+    snprintf(dump, sizeof dump, "%s", s_seek.dump);
+    /* R0: position and validate; nothing of the host is touched yet */
+    if (!level_of(ta, &L)) {
+        tagpu_logf("replay: %s: seek to %u refused: the level's unit array or features are not "
+                   "the ones the counts describe", s_name, T);
+        return;
+    }
+    h = L.now;
+    QueryPerformanceFrequency(&hz);
+    QueryPerformanceCounter(&t0);
+    k = recr_seek(s_rd, T, why, sizeof why);
+    if (k <= 0) {
+        tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
+        if (k < 0) sk_back(&L, prev);
+        return;
+    }
+    QueryPerformanceCounter(&t1);
+    memset(&s_sk, 0, sizeof s_sk);
+    masks_init();
+    if (!sk_bound(&L, W, &nheads, why, sizeof why)) {
+        tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
+        sk_back(&L, prev);
+        return;
+    }
+    /* R1: the rebuild's kills are not the recording's eliminations */
+    tagpu_puppet_rebuild(1);
+    /* R2: the projectile pool emptied before the kills: each kill's purge 0x49C880 then scans
+       nothing, and its stock miss -- the record that slides into the slot it compacted keeps
+       naming the dead unit -- cannot arise. R13 writes the pool whole. */
+    proj_empty(&L, *(char**)(ta + OFF_PROJ));
+    /* R3, on the clock the host holds: GameTime h >= 1, a seek running only after the first step */
+    refused0 = s_st.refused;
+    sk_kills(&L);
+    /* R4: every temporary sight record dropped through the engine's own removal (the drop's
+       comment): no temporary record outlives R5's refill, whose counters its later expiry would
+       otherwise decrement. R0 bounded the engine's count of them. */
+    s_sk.sdropped = (unsigned)sight_records_drop(ta);
+    /* R5 */
+    sk_sight_reset(ta, W);
+    /* R6: the target's clock, before everything that stamps GameTime for it: the creates' mover
+       claim stamps and B4 births, and R15's deadlines */
+    *(unsigned*)(ta + OFF_GAMETIME) = T - 1;
+    L.now = T - 1;
+    /* R7: every unit of iteration T, made as the first step makes them; a refused create is a
+       difference the comparison names, never a hazard (make bounds what it passes) */
+    s_sk.made = level_units(&L, W);
+    /* R8: S2b's appliers, the features left to R10 */
+    links_put(&L, W);
+    units_put(&L, W);
+    yards_put(&L, W);
+    states_put(&L, W);
+    players_put(&L, W);
+    orders_put(&L, W);
+    s_sk.refused = s_st.refused - refused0;
+    /* R9, R10, R11, R12 */
+    sk_buckets(&L, W, nheads);
+    sk_features(&L, W);
+    s_sk.effects = tagpu_effects_clear();
+    sk_tables(&L, W);
+    /* R13: the globals, the pool and the explored map, after R7's draws of the simulation RNG and
+       R11; the LosType step finds R5's bits and does nothing */
+    refused0 = s_gst.refused;
+    recorded_put(&L, W);
+    s_sk.pool = s_gst.refused == refused0;
+    /* R14: V's sight, which R5 undid */
+    sight_fill(ta, s_viewer);
+    /* R15 */
+    sk_deadlines(ta, W, T - 1);
+    /* R16: inside the frame visit, before the next frame's scheduler 0x495230 sees the stamps: no
+       lag, even after a forward seek of 900 ticks or more */
+    pace(ta, T - 1);
+    /* R17: the next tick makes GameTime T; at its capture point the world holds iteration T and
+       the step plays T's events and reads T+1, the play loop's own invariant */
+    tagpu_puppet_rebuild(0);
+    s_over = 0;
+    s_frame_tick = T - 1;
+    if (dump[0]) tagpu_rec_dump_arm(dump);
+    QueryPerformanceCounter(&t2);
+    tagpu_logf("replay: %s: at GameTime %u, sought from GameTime %u in %u ms (read %u, rebuild "
+               "%u); units %u killed, %u made, %u refused", s_name, T, h,
+               sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
+               sk_ms(t1.QuadPart - t0.QuadPart, hz.QuadPart),
+               sk_ms(t2.QuadPart - t1.QuadPart, hz.QuadPart), s_sk.killed, s_sk.made,
+               s_sk.refused);
+    tagpu_logf("replay: %s: the seek to %u wrote: %u units left alive by the kills; buckets: %u "
+               "units moved, %u carried units' buckets set, %u units outside the recorded "
+               "buckets; features: %u records and %u cells, %u cell slots dropped, %u models "
+               "freed and %u made; %u temporary sight records dropped; tables: %u written, %u "
+               "skipped, %u values left as the host holds them, %u repaired; the projectile pool "
+               "%s, %u records; the effects %s", s_name, T, s_sk.left, s_sk.moved, s_sk.carried,
+               s_sk.outside, s_sk.frecs, s_sk.fcells, s_sk.fdropped, s_sk.freed, s_sk.models,
+               s_sk.sdropped, s_sk.twritten, s_sk.tskipped, s_sk.tkept, s_sk.trepaired,
+               s_sk.pool ? "written" : "REFUSED", W->proj_hw,
+               s_sk.effects ? "cleared" : "NOT cleared");
+}
+
 /* ---- the frame visit ------------------------------------------------------------------------ */
 
 #define TRIGGER    SIM_TOOL_FILE("tagpu_replay.trigger")
 #define TRIGGER_MS 100              /* the most often the trigger is looked for: the engine draws
                                        330 to 4900 times a second (tagpu_packet_pub.c)          */
 
-/* The trigger, `dump <name>`: one line, the file deleted whatever it held. A dump is armed for
-   the recorder's next capture point (tagpu_rec_dump_arm), on any level in play, live or playing;
-   while paused that is the first tick after the pause. */
+/* The trigger: one line, the file deleted whatever it held.
+   - `dump <name>`: a dump armed for the recorder's next capture point (tagpu_rec_dump_arm), on any
+     level in play, live or playing; while paused that is the first tick after the pause.
+   - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
+     the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
+     point of T. */
 static void trigger_read(void)
 {
     static DWORD s_looked;
-    char line[96], name[40];
+    char line[96], name[40], dump[40];
+    unsigned T;
     DWORD now = GetTickCount();
     FILE* f;
     int end = 0;
@@ -2797,12 +3685,23 @@ static void trigger_read(void)
         tagpu_rec_dump_arm(name);
         return;
     }
+    if (!strncmp(line, "seek ", 5) && seek_words(line + 5, &T, dump, sizeof dump)) {
+        if (!tagpu_puppet_on() || !s_rd || s_dead) {
+            tagpu_logf("replay: seek to %u refused: this level plays no recording", T);
+            return;
+        }
+        s_seek.pending = 1;
+        s_seek.T = T;
+        snprintf(s_seek.dump, sizeof s_seek.dump, "%s", dump);
+        return;
+    }
     tagpu_logf("replay: %s: not understood: %s", TRIGGER, line);
 }
 
 /* THE FRAME VISIT, before the in-play draw call 0x4969CD, on the game thread, between two sim
-   steps and on paused frames too: the trigger, then on a level that plays a recording, once a
-   GameTime, what the draw after a step shows (THE GLOBALS AND THE PROJECTILES). */
+   steps and on paused frames too: the trigger; then, on a level that plays a recording and has
+   played its first step, a pending seek (THE SEEK), or else, once a GameTime, what the draw after
+   a step shows (THE GLOBALS AND THE PROJECTILES). */
 static void __cdecl tagpu_replay_frame(void)
 {
     char* ta;
@@ -2810,9 +3709,14 @@ static void __cdecl tagpu_replay_frame(void)
     Lv L;
     const RecWorld* W;
     trigger_read();
-    if (!tagpu_puppet_on() || !s_rd || s_dead || s_first || s_over) return;
+    if (!tagpu_puppet_on() || !s_rd || s_dead || s_first) return;
     ta = ta_main();
     if (!ta) return;
+    if (s_seek.pending) {
+        seek_run(ta);
+        return;
+    }
+    if (s_over) return;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
     W = recr_world(s_rd);
     if (now == s_frame_tick || W->tick != now + 1 || !level_of(ta, &L)) return;
@@ -2903,7 +3807,7 @@ static void play(const Lv* L, int first)
     RecWorld* W = recr_world(s_rd);
     masks_init();
     if (first) {
-        level_units(L, W);
+        s_st.made += level_units(L, W);
         images_put(L, W);
         wind_seed(W);
         sight_fill(L->ta, s_viewer);
