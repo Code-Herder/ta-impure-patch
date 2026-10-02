@@ -118,6 +118,7 @@ typedef struct Writer {
     unsigned       mnext;       /* RK_MAPPED's next offset: mbytes once the map is whole  */
 
     unsigned       end_reason, bad_ids, ring_high, off_thread, uncredited, unobserved;
+    unsigned char  seats[4 + 12 * REC_PLAYERS];   /* RK_END's game end and RT_SEAT_ENDs   */
     unsigned long long raw, packed;   /* the stream's bytes, before and after deflate */
 } Writer;
 
@@ -1028,8 +1029,18 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         if (off > t->size || n > t->size - off) return 0;
         verify_table(w, t, off, b + 8, n);
         return 1;
+    case RK_MINIMAP: {
+        unsigned short mw, mh;
+        if (w->ticked || len < REC_MINIMAP_HEAD) return 0;
+        memcpy(&mw, b, 2);
+        memcpy(&mh, b + 2, 2);
+        if (len != REC_MINIMAP_HEAD + (unsigned)mw * mh) return 0;
+        block(w, RB_MINIMAP, 0, 0, b, len, 1);
+        return 1;
+    }
     case RK_END:
-        if (len != 24 || w->fbracket || w->ndeaths) return 0;
+        if (len != REC_END_BYTES || w->fbracket || w->ndeaths) return 0;
+        memcpy(w->seats, b + 24, sizeof w->seats);
         memcpy(&id, b, 2);
         w->end_reason = id;
         memcpy(&w->bad_ids, b + 4, 4);
@@ -1115,6 +1126,10 @@ static void finish(Writer* w)
         tlv_u32(&e, RT_OFF_THREAD, w->off_thread);
         tlv_u32(&e, RT_UNCREDITED, w->uncredited);
         tlv_u32(&e, RT_UNOBSERVED, w->unobserved);
+        tlv(&e, RT_GAME_END, w->seats, 4);
+        for (i = 0; i < REC_PLAYERS; i++)
+            if (w->seats[4 + 12 * i + 1] != REC_RESULT_NONE)
+                tlv(&e, RT_SEAT_END, w->seats + 4 + 12 * i, 12);
         if (e.oom) fail(w, "no memory for the end block");
         else block(w, RB_END, w->tick, w->tick, e.p, e.n, 0);
     }

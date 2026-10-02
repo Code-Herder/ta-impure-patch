@@ -133,15 +133,18 @@ REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12)     # an RK_EV_FEATURE's arguments after its site
 FS_SITES = 6
 
-RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END = 1, 2, 3, 4
-RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end"}
+RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP = 1, 2, 3, 4, 5
+RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
+            RB_MINIMAP: "minimap"}
 RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
- RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME, RT_DLL, RT_FIELDS) = range(1, 23)
+ RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME, RT_DLL, RT_FIELDS,
+ RT_GAME_VERSION, RT_ARCHIVE, RT_MODPRINT) = range(1, 26)
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
- RT_UNCREDITED, RT_UNOBSERVED) = range(32, 41)
+ RT_UNCREDITED, RT_UNOBSERVED, RT_GAME_END, RT_SEAT_END) = range(32, 43)
+RESULTS = {0: "unknown", 1: "won", 2: "lost"}
 
 END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full",
                3: "INCOMPLETE: the file could not be written",
@@ -275,6 +278,11 @@ def header(payload):
         elif tag == RT_PROJECTILES: h["projectiles"] = u32
         elif tag == RT_FRAME: h["frame"] = u32
         elif tag == RT_DLL: h["dll"] = struct.unpack_from("<II", b)
+        elif tag == RT_GAME_VERSION: h["version"] = b.decode("latin-1")
+        elif tag == RT_ARCHIVE:
+            size, mtime = struct.unpack_from("<IQ", b)
+            h.setdefault("archives", []).append((b[12:].decode("latin-1"), size, mtime))
+        elif tag == RT_MODPRINT: h["modprint"] = u32
         elif tag == RT_FIELDS:
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
@@ -296,11 +304,13 @@ def feature_dims(h):
 
 
 def end(payload):
-    e = {"corrections": []}
+    e = {"corrections": [], "seats": []}
     for tag, b in entries(payload):
         if tag == RT_CORRECTIONS:
             kind, table, off, count = struct.unpack_from("<BxHII", b)
             e["corrections"].append((kind, table, off, count))
+        elif tag == RT_SEAT_END:
+            e["seats"].append(struct.unpack_from("<BBxxII", b))
         elif len(b) >= 4:
             e[tag] = struct.unpack_from("<I", b)[0]
     return e
@@ -857,6 +867,15 @@ def cmd_info(path):
           f"difficulty {o.get('difficulty')}, fixed starts {o.get('fixed_starts')}, "
           f"{o.get('players')} players, controlled {o.get('controlled')}, viewed {o.get('viewed')}")
     print(f"  settings map {h.get('settings_map')!r}, weapons {h.get('weapons')}")
+    print(f"  version {h.get('version')!r}, mod fingerprint "
+          f"{'0x%08x' % h['modprint'] if 'modprint' in h else None}, "
+          f"{len(h.get('archives', []))} archives: "
+          + ", ".join(f"{n} ({s} bytes)" for n, s, _ in h.get("archives", [])))
+    for kind, first, last, payload in bl:
+        if kind == RB_MINIMAP:
+            w, hh, bc, br = struct.unpack_from("<HHHH", payload)
+            print(f"  minimap {w} x {hh}, shown {2 * bc} x {2 * br}, "
+                  f"{len(payload) - 8} indices{'' if len(payload) - 8 == w * hh else ' (WRONG)'}")
     f = h.get("features")
     if f:
         print(f"  features: a {f[0]} x {f[1]} grid, {f[2]} wreck records, {f[3]} feature defs "
@@ -911,6 +930,11 @@ def cmd_info(path):
               f"{e.get(RT_OFF_THREAD)} events refused off the game thread, "
               f"{e.get(RT_UNCREDITED)} nano sprays uncredited, "
               f"{e.get(RT_UNOBSERVED)} grid cells changed by no observed writer")
+        if RT_GAME_END in e:
+            print(f"  the game's end flags 0x{e[RT_GAME_END]:02x}")
+        for seat, res, cmdr, defeat in e["seats"]:
+            print(f"  seat {seat}: {RESULTS.get(res, res)}, commander died at GameTime "
+                  f"{cmdr or '-'}, defeated at {defeat or '-'}")
         for kind, table, off, count in e["corrections"]:
             if kind == RK_TABLE_SPAN:
                 t = h["tables"].get(table, {"name": f"#{table}", "stride": 0})
