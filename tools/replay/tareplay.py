@@ -84,6 +84,8 @@ import sys
 import threading
 import time
 import zlib
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -98,6 +100,12 @@ import talog  # noqa: E402
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import tafeat  # noqa: E402
+
+# Load once before workers start; reuse tacli's own prefix-based process identity check.
+_CLI_SPEC = spec_from_loader("_tareplay_cli", SourceFileLoader("_tareplay_cli", str(TACLI)))
+_CLI_API = module_from_spec(_CLI_SPEC)
+sys.modules[_CLI_SPEC.name] = _CLI_API
+_CLI_SPEC.loader.exec_module(_CLI_API)
 
 PREFIX = "tareplay-"
 UNIT_LIMIT = 500
@@ -277,7 +285,10 @@ class Worker:
         self.lock.close()
 
     def stop(self):
-        tacli("stop", self.name, timeout=120)
+        if self.last_collection:
+            self.quit()
+        else:
+            tacli("stop", self.name, timeout=120)
         # Exit flushes coverage after its workers finish. Collect that final bitmap and log,
         # rather than the one taken while those workers were still running.
         if self.last_collection:
@@ -285,6 +296,45 @@ class Worker:
             for f in rd.glob("cover-*.bin") if rd.is_dir() else []:
                 shutil.copy2(f, self.last_collection / f.name)
             (self.last_collection / "tagpu.log").write_text(talog.run_text(self.gamedir))
+
+    def running(self):
+        return _CLI_API.Instance(self.name).running()
+
+    def quit(self):
+        """The game's exit hook joins its file workers; SIGTERM bypasses it."""
+        if not self.running():
+            return
+        gui = json.loads(ui(self, "--json"))["gui"].upper()
+        if gui == "ENDMSN.GUI":
+            ui(self, "click", "MainMenu")
+            ui_on(self, "MAINMENU.GUI", 30)
+            gui = "MAINMENU.GUI"
+        elif gui == "REPLAYS.GUI":
+            ui(self, "click", "BACK")
+            ui_on(self, "MAINMENU.GUI", 30)
+            gui = "MAINMENU.GUI"
+        if gui == "MAINMENU.GUI":
+            rc, text = tacli("ui", self.name, "click", "EXIT", "--timeout", 5, timeout=30)
+            if rc and self.running():
+                raise CouldNotRun(f"the main menu's exit: {last(text)}")
+        elif gui in ("ARMMAIN2.GUI", "CORMAIN2.GUI", "DOCK.GUI", "ARMOPT.GUI"):
+            if gui != "ARMOPT.GUI":
+                rc, text = tacli("keys", self.name, "tab", "tab", timeout=60)
+                if rc:
+                    raise CouldNotRun(f"the exit's options: {last(text)}")
+            ui(self, "click", "EXIT")
+            ui(self, "click", "EXITGAME")
+            ui_on(self, "YESORNO.GUI", 30)
+            rc, text = tacli("keys", self.name, "y", "y", timeout=60)
+            if rc:
+                raise CouldNotRun(f"the exit's Yes: {last(text)}")
+        else:
+            raise CouldNotRun(f"no graceful exit route from {gui}")
+        deadline = time.time() + 30
+        while self.running():
+            if time.time() >= deadline:
+                raise CouldNotRun("the game did not finish its exit in 30 s")
+            nap(0.2)
 
     def place(self, fix, dll):
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
@@ -1250,6 +1300,31 @@ def forks_lane(w, fx, out):
     fork(6, base + 600)
     results.append(("forks: two-boundary and exported puppet dumps", PASS,
                     "both EQUAL; highest deleted ID 5 followed by ID 6"))
+    # A read-only directory is a real writer refusal, without a DLL fault-injection lever.
+    w.place(fx["fix"], fx["dll"])
+    rd = w.gamedir / "replays"
+    rd.mkdir(exist_ok=True)
+    mode = rd.stat().st_mode & 0o7777
+    log = Log(w)
+    try:
+        rd.chmod(mode & ~0o222)
+        rc, text = tacli("scenario", "load", w.name, SCENARIOS / fx["fix"]["load"],
+                         "--defaults", "--restart", "--keep-dll", "--json", timeout=300)
+        if rc:
+            raise CouldNotRun(f"writer-refused load: {last(text)}")
+        failed = log.wait(r"recorder: writer: .* is abandoned at its last complete block", 30)
+        if not failed or any(rd.glob("*.imprec")):
+            raise Failed("writer-refused: the unwritable directory did not refuse recording")
+    finally:
+        rd.chmod(mode)
+    if fx["cover"]:
+        cover_ask(w, log, "writefail")
+    if w.gametime() <= 0:
+        raise Failed("writer-refused: the game did not continue")
+    w.collect(out / "writer-refused")
+    w.stop()
+    results.append(("forks: unwritable recording and graceful exit", PASS,
+                    "writer refused; game continued; exit completed before collection"))
     return results
 
 

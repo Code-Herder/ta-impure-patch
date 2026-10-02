@@ -604,7 +604,10 @@ Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. 
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
 Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,
 or closing the window after the level's end (`recorder: the exit waits for …`) — so that file is
-complete. A game killed mid-way, or whose window is closed mid-game, leaves a file without an end
+complete. For exit coverage, the replay harness uses the game's menus: `ENDMSN.GUI`'s active
+`MainMenu`, then the main menu's `EXIT`, or in play `EXIT` → `EXITGAME` → Yes. It waits for the
+instance's process to end and collects the final bitmap. `tacli stop` sends SIGTERM and bypasses
+that exit hook. A game killed mid-way, or whose window is closed mid-game, leaves a file without an end
 block that reads to its last complete block.
 
 - **Read one** with `tools/replay/tarec.py`: `info` (the header, the blocks, how it ended),

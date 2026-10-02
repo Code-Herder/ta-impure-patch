@@ -134,7 +134,9 @@ original's segment hash is checked throughout.
 **Verified on the reference Wine setup, 2026-10-02:** the dedicated coverage
 battle fork run passed all nine named checks. The first complete landing-tier run
 also passed all ten fork checks on each of the raised- and stock-limits builds,
-including deletion in a different recording while timeline 5 plays. Forks 1–3 remained live; touching
+including deletion in a different recording while timeline 5 plays. The fork lane
+also exercises a real writer refusal with its isolated `replays` directory made
+read-only, restores the permissions, and checks that the game continues and exits. Forks 1–3 remained live; touching
 2 made fork 4 evict 1. Fork 5 from 2 evicted 3. After explicit deletion of 2,
 physical IDs were `[0, 2, 4, 5]` with only `[0, 4, 5]` live; the export held
 `[0, 2, 5]`, with only 5 live. Both the two-boundary playing and exported playing
@@ -179,3 +181,16 @@ The fixture worker used `tacli stop`, which sends SIGTERM and bypasses the game'
 exit hook; copying files after that stop cannot collect the exit's coverage.
 This run is evidence for the fork rules, not a passing landing gate. The naval
 count difference remains visible; no exclusion or tolerance has been changed.
+
+
+The harness quits collected runs through the game's menus. A live or puppet
+level uses Options → Exit → Exit Game → Yes; an ended level uses ENDMSN's active
+MainMenu button, then the main menu's Exit. A returned browser uses Back first.
+It waits for that instance's process to disappear before collecting the final
+coverage files and log. SIGTERM remains cleanup for a run that was not collected,
+and `Worker.close` can hard-stop an owned instance after a failing run.
+
+Scratch probes on the stock coverage build reached `tagpu_rec_exit`, `recfile_exit`
+and `tagpu_replay_level_end` through the in-game exit, and reached writer `fail`
+with a read-only directory. The injected `alt+f4` combo did not close the Wine
+probe; that input is not the harness's exit route.
