@@ -112,6 +112,15 @@ _Static_assert(4 + REC_MAPPED_CHUNK <= 0xFFFF, "an RK_MAPPED fits its length");
 _Static_assert(8 + REC_MAPPED_RUNS <= 0xFFFF, "an RK_MAPPED_RUNS fits its length");
 
 /* what an id row holds besides a row's ID */
+#define REC_COUNTS_CHUNK  1024          /* RK_COUNTS: rows a record                               */
+#define REC_COUNT_NAME    32            /* RK_COUNT_NAME: a script's name, NUL-padded              */
+#define REC_COUNT_DLL     0x80000000u   /* RK_COUNTS: a caller inside Impure's DLL, as its offset  */
+/* RK_EV_FEATURE's phase: where in the step 0x495490 the root was made -- in the unit tick or
+   before it, in the projectile tick 0x49B720 (called at 0x495513), or from the explosion tick
+   0x420F30 (0x495539) to the step's end, the feature tick 0x424050 included */
+#define REC_PHASE_UNITS   0
+#define REC_PHASE_PROJ    1
+#define REC_PHASE_LATE    2
 #define REC_ID_NULL       0u
 #define REC_ID_BAD        0xFFFFFFFEu   /* a pointer outside its table: counted and logged        */
 #define REC_ID_OFFMAP     0xFFFFFFFDu   /* the sort's off-map bucket, *(main+0x142B7)              */
@@ -187,7 +196,8 @@ enum RecKind {
     RK_EV_SPRAY,       /* u32 unit ID, u32 reverse (0 0x4720D0, 1 0x472200), i32 point x, y, z,
                           i32 box x6, u32 layer: a nano spray, credited to the unit whose
                           QueryNanoPiece gave its point                                           */
-    RK_EV_FEATURE,     /* u8 root (RecRoot), u8 0, u16 0, u32 the call's site (its return address
+    RK_EV_FEATURE,     /* u8 root (RecRoot), u8 the step's phase it was made in (REC_PHASE_*),
+                          u16 0, u32 the call's site (its return address
                           less 5), then the root's arguments (RecRoot): a feature function called
                           outside every other one -- outside a unit's death, or inside its
                           explosion -- or the feature tick. The records up to its
@@ -249,6 +259,15 @@ enum RecKind {
                           most REC_IMAGE_CHUNK bytes of the record's sight counters from there:
                           its counters whole are these from offset 0 to their end, in order, for
                           each record 0..9 that has them, for `tarec compare-dumps`             */
+    RK_COUNTS,         /* dump only: u32 keys that found no row (the table full), u32 the sinks
+                          counted (bit k: the recorder's CNT_SINKS[k]), u32 1 when the level
+                          counted, u32 n, then n rows of u32 site (its VA), u32 caller (the
+                          return address, (offset | REC_COUNT_DLL) inside Impure's DLL, 0 where
+                          the site is no entry), u32 aux, u32 count: how often each counted site
+                          ran since the level's first capture point (tagpu_recorder.c, THE
+                          COUNTS), at most REC_COUNTS_CHUNK rows a record, the last holding fewer  */
+    RK_COUNT_NAME,     /* dump only: u32 aux, char[REC_COUNT_NAME] NUL-padded: the script name
+                          whose FNV-1a is the aux of the COB thread allocation 0x4B08C0's rows   */
     RK_KINDS
 };
 
@@ -412,6 +431,11 @@ enum RecTag {
                           labelled iteration GameTime+1; the main block and .data images also hold
                           what the rest of the frame wrote (the draw, the scheduler 0x495230's
                           pacing words), so a frame dump compares only with another one */
+    RT_DLL,            /* u32 base, u32 SizeOfImage, a dump's only: where Impure's DLL lies, for
+                          `tarec scan`'s address ranges                                         */
+    RT_FIELDS,         /* u16 table index, u16 n, then n fields of u16 off, size, repeat, step,
+                          u8 kind, u8 id, u16 0, a dump's only: a recorded table's layout as the
+                          simreg declares it (SimField), for `tarec scan`                         */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */

@@ -72,6 +72,15 @@ change unless `make` or the replay harness names one. The classes, the wrappers 
   wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
   see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
   named outside the wrappers — and names each; its header lists what it cannot see.
+- **A landing that changes simulation code runs its replay fixtures.** `tools/replay/tareplay.py
+  landing` runs the fixtures that the changed features name in their `SIM_FEATURE` declarations —
+  recorded, played on puppets, restored in place by the round trip and sought from a fresh process,
+  on the coverage build — checks that they reached every changed function, and records a
+  `replay-roundtrip:` note. A changed line no declaration covers, or a changed function no fixture
+  reached, fails by name; landing it anyway is the owner's decision. The broad tier,
+  `tareplay.py broad`, is a command, not a schedule: it runs before every `v*` tag beside the
+  compatibility suite (`--release` on the release DLL) and on demand after a run of simulation
+  landings.
 - **Store IDs, not addresses**, or declare the table's layout.
 - **Start effects through an engine root**, never a direct sink call. Each simulation
   feature states its puppet behaviour and names its fixture beside its code.

@@ -52,6 +52,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_replay.h"
+#include "tagpu_cover.h"
 #include "tagpu_recreader.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_recorder.h"
@@ -153,6 +154,8 @@ static unsigned   s_view;           /* the viewed player: V for full visibility,
 static int        s_first;          /* the first step's checks are still to come                  */
 static int        s_dead;           /* they failed: nothing is applied this level                 */
 static int        s_over;           /* the recording has nothing more to apply                    */
+static int        s_endlog;         /* its counts wait for the last step's phases (THE PHASES)    */
+static unsigned   s_endat;          /* ... and the GameTime it ended at                           */
 static unsigned   s_notes;          /* the level's anomalies logged                               */
 #define EV_KINDS (RK_EV_SPRAY - RK_EV_CREATE + 1)
 static struct {
@@ -200,7 +203,7 @@ static struct {
     char     dump[40];              /* a dump to take at its capture point, or ""                 */
     int      poison;                /* R12 poisons the tables first (THE POISON CHECK)            */
 } s_seek;
-#define RT_ARMED 4
+#define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -237,6 +240,9 @@ static unsigned colour_count(const char* ta)
     return seq ? *seq : 0;
 }
 
+static void pend_reset(void);
+static void counts_log(const char* when, unsigned now);
+
 static void replay_close(void)
 {
     recr_close(s_rd);
@@ -244,11 +250,13 @@ static void replay_close(void)
     s_path[0] = 0;
     memset(&s_span, 0, sizeof s_span);
     s_first = s_dead = s_over = 0;
+    s_endlog = 0;
     s_notes = 0;
     memset(&s_st, 0, sizeof s_st);
     memset(&s_fst, 0, sizeof s_fst);
     s_tin.n = 0;
     s_tin.overflow = 0;
+    pend_reset();
     memset(&s_gst, 0, sizeof s_gst);
     memset(&s_rt, 0, sizeof s_rt);
     memset(s_made, 0, sizeof s_made);
@@ -2427,8 +2435,10 @@ static void heads_put(const Lv* L, const unsigned char* b)
    It takes the NEXT iteration's world: there the grid names only units live in its image, which
    the step's creates and deaths have made the host's (the delta's own precondition), so
    cell_put's slot rule refuses nothing it would not refuse in the delta. The step's own world
-   would name a unit that died in the step. play runs events_put, iteration_read and images_put
-   back to back, and nothing reads the grid between them. When the playing ends at the reader,
+   would name a unit that died in the step. Nothing reads the grid between the tick and the
+   write-back: the tick is a root of the step's late phase, and the late phase's roots are made
+   at tagpu_replay_phase immediately before features_put (THE PHASES), or, for an iteration played
+   late, by events_put and images_put back to back. When the playing ends at the reader,
    the last step's runs keep the input: there is no world after the last step, no dump sees them
    (a dump is taken at a capture point, before that step's events), and a seek rewrites every
    cell (R10). */
@@ -2670,30 +2680,187 @@ void tagpu_replay_blast(const char* unit)
     }
 }
 
-static void events_put(const Lv* L, const RecWorld* W)
+/* THE PHASES. The recording machine made each feature root at some point of its step 0x495490
+   (REC_PHASE_*, recorded with the root): in the unit tick, in the projectile tick 0x49B720 -- an
+   impact's damage burning or felling a tree -- or from the explosion tick 0x420F30 on, the
+   feature tick 0x424050 among them. The host's projectile tick tests each projectile against the
+   cell it is in, the feature there and its height (0x49B090 -> 0x49B2DC..0x49B3CD), so a root
+   made before it takes away a tree the recording machine's projectiles still met: MEASURED in
+   forest-circle 2026-10-01, every impact the host missed (23 of 134) had the tree in the
+   recording machine's cell and its successor in the host's. So a root goes in at its own phase:
+   the unit tick's at the replay step, in recorded order with the step's other events; the
+   projectile tick's once the host's projectile tick has returned; the rest once its explosion
+   tick has returned, and the step's feature images after them, since they are the world
+   after every root of the step (THE TICK'S INPUT). Roots inside a death's bracket go with the
+   death, at the replay step. The deferred brackets are copied, since the iteration is read on
+   before the projectile tick runs; past the store's room the step's remaining roots go in at
+   the replay step, in recorded order, the ones already held first.
+   The cells' unit slots of the next image go in early (slots_put), for the host's projectile
+   tick; the feature tick, a root of the late phase, reads them too (its reproduction tests the
+   source cell's unit slot, 0x424189), and the recording machine's tick saw the iteration's slots
+   and its input, not the next image's. So each early slot's previous bytes are kept, and put back
+   just before the tick root, whose input then goes in over them (THE TICK'S INPUT); features_put
+   writes the next image's afterwards. A cell past the store's room is not written early. */
+#define PEND_EVENTS 8192
+#define PEND_BYTES  (2u << 20)
+#define PEND_SLOTS  16384
+static struct {
+    Lv            L;                /* the level of the step the store holds                     */
+    unsigned      n, used;          /* events and bytes held                                      */
+    unsigned      next;             /* the first event not yet played                             */
+    int           images;           /* the step's feature images wait for the late phase          */
+    int           full;             /* the store refused a bracket: none deferred until the step  */
+    unsigned      deferred, over;   /* brackets deferred, steps whose store was full              */
+    unsigned      nslots;           /* cells slots_put wrote early                                */
+    int           restored;         /* their previous slots are back for the tick                 */
+    RecEvent      ev[PEND_EVENTS];
+    unsigned char b[PEND_BYTES];
+    struct { char* cell; unsigned char was[4]; } slot[PEND_SLOTS];
+} s_pend;
+static RecWorld s_pendW;            /* only ev and nev: what root_play reads of a world           */
+
+/* one event that is neither a root nor a death's, as the step plays it */
+static void ev_play(const Lv* L, const RecEvent* e)
 {
-    unsigned i, deaths = 0;
-    for (i = 0; i < W->nev; i++) {
-        const unsigned char* b = W->ev[i].b;
-        unsigned n = W->ev[i].len, k = W->ev[i].kind;
-        int done;
-        switch (k) {
-        case RK_EV_CREATE:      done = ev_create(L, b, n); break;
-        case RK_EV_DEATH:       done = death_play(L, W, i); deaths++; break;
-        case RK_EV_DEATH_END:   deaths--; continue;
-        case RK_EV_FEATURE:     if (!deaths) root_play(L, W, i); continue;
-        case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
-        case RK_EV_INTERCEPT:   done = ev_intercept(L, b, n); break;
-        case RK_EV_START:       done = ev_start(L, b, n); break;
-        case RK_EV_START_NAMED: done = ev_start_named(L, b, n); break;
-        case RK_EV_BUILT:       done = ev_built(L, b, n); break;
-        case RK_EV_STATE:       done = ev_state(L, b, n); break;
-        case RK_EV_REPLY:       done = ev_reply(L, b, n); break;
-        case RK_EV_SPRAY:       done = ev_spray(L, b, n); break;
-        default:                continue;   /* a bracket's draws, the tick's cells, a root's end */
+    const unsigned char* b = e->b;
+    unsigned n = e->len, k = e->kind;
+    int done;
+    switch (k) {
+    case RK_EV_CREATE:      done = ev_create(L, b, n); break;
+    case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
+    case RK_EV_INTERCEPT:   done = ev_intercept(L, b, n); break;
+    case RK_EV_START:       done = ev_start(L, b, n); break;
+    case RK_EV_START_NAMED: done = ev_start_named(L, b, n); break;
+    case RK_EV_BUILT:       done = ev_built(L, b, n); break;
+    case RK_EV_STATE:       done = ev_state(L, b, n); break;
+    case RK_EV_REPLY:       done = ev_reply(L, b, n); break;
+    case RK_EV_SPRAY:       done = ev_spray(L, b, n); break;
+    default:                return;     /* a bracket's draws, the tick's cells, a root's end */
+    }
+    if (done) s_st.played[k - RK_EV_CREATE]++;
+    else s_st.skipped[k - RK_EV_CREATE]++;
+}
+
+/* the bracket opening at `i` into the store; its RK_EV_FEATURE_END's index, 0 when it does not
+   fit */
+static unsigned pend_add(const RecWorld* W, unsigned i)
+{
+    unsigned end, j, bytes = 0, n;
+    for (end = i + 1; end < W->nev && W->ev[end].kind != RK_EV_FEATURE_END; end++) {}
+    if (end >= W->nev) return 0;
+    n = end - i + 1;
+    for (j = i; j <= end; j++) bytes += W->ev[j].len;
+    if (s_pend.n + n > PEND_EVENTS || s_pend.used + bytes > PEND_BYTES) return 0;
+    for (j = i; j <= end; j++) {
+        RecEvent* e = &s_pend.ev[s_pend.n++];
+        e->kind = W->ev[j].kind;
+        e->len = W->ev[j].len;
+        e->b = s_pend.b + s_pend.used;
+        memcpy(s_pend.b + s_pend.used, W->ev[j].b, W->ev[j].len);
+        s_pend.used += W->ev[j].len;
+    }
+    s_pend.deferred++;
+    return end;
+}
+
+/* the early slots' previous bytes back, once a step, before the feature tick reads them */
+static void slots_restore(void)
+{
+    unsigned i;
+    if (s_pend.restored) return;
+    s_pend.restored = 1;
+    for (i = s_pend.nslots; i-- > 0;) memcpy(s_pend.slot[i].cell, s_pend.slot[i].was, 4);
+}
+
+/* the held brackets of phases up to `phase`, in recorded order: each root, then the events its
+   bracket holds, as the step plays them */
+static void pend_play(unsigned phase)
+{
+    s_pendW.ev = s_pend.ev;
+    s_pendW.nev = s_pend.n;
+    while (s_pend.next < s_pend.n) {
+        const RecEvent* e = &s_pend.ev[s_pend.next];
+        if (e->kind == RK_EV_FEATURE) {
+            if (e->b[1] > phase) return;
+            if (e->b[0] == FR_TICK) slots_restore();
+            root_play(&s_pend.L, &s_pendW, s_pend.next);
+        } else {
+            ev_play(&s_pend.L, e);
         }
-        if (done) s_st.played[k - RK_EV_CREATE]++;
-        else s_st.skipped[k - RK_EV_CREATE]++;
+        s_pend.next++;
+    }
+}
+
+static void pend_clear(void)
+{
+    s_pend.n = s_pend.used = s_pend.next = 0;
+    s_pend.images = s_pend.full = 0;
+    s_pend.nslots = 0;
+    s_pend.restored = 0;
+}
+
+/* the store empty and its counts zero, for the next playing */
+static void pend_reset(void)
+{
+    pend_clear();
+    s_pend.deferred = s_pend.over = 0;
+}
+
+/* Whatever a step left held, in order, its images after: a step whose phases did not run. A
+   recording that ended in that step logs its counts now, with every call it made. */
+static void pend_finish(void)
+{
+    if (s_pend.next < s_pend.n || s_pend.images) {
+        pend_play(REC_PHASE_LATE);
+        if (s_pend.images && s_rd) features_put(&s_pend.L, recr_world(s_rd));
+    }
+    pend_clear();
+    if (s_endlog) {
+        s_endlog = 0;
+        counts_log("the recording's end", s_endat);
+    }
+}
+
+void __cdecl tagpu_replay_phase(unsigned phase)
+{
+    if (!tagpu_puppet_on() || !s_rd || s_dead) return;
+    pend_play(phase);
+    if (phase >= REC_PHASE_LATE) pend_finish();
+}
+
+/* The step's events in recorded order; with `defer`, the roots of a later phase into the store */
+static void events_put(const Lv* L, const RecWorld* W, int defer)
+{
+    unsigned i, end, deaths = 0;
+    if (defer) s_pend.L = *L;
+    for (i = 0; i < W->nev; i++) {
+        unsigned k = W->ev[i].kind;
+        switch (k) {
+        case RK_EV_DEATH:
+            if (death_play(L, W, i)) s_st.played[k - RK_EV_CREATE]++;
+            else s_st.skipped[k - RK_EV_CREATE]++;
+            deaths++;
+            break;
+        case RK_EV_DEATH_END:
+            deaths--;
+            break;
+        case RK_EV_FEATURE:
+            if (deaths) break;
+            if (defer && !s_pend.full && W->ev[i].b[1] > REC_PHASE_UNITS) {
+                if ((end = pend_add(W, i)) != 0) {
+                    i = end;            /* the bracket's events go with its root */
+                    break;
+                }
+                s_pend.full = 1;
+                s_pend.over++;
+                pend_play(REC_PHASE_LATE);  /* the held ones first: the order stays recorded */
+            }
+            root_play(L, W, i);
+            break;
+        default:
+            ev_play(L, &W->ev[i]);
+            break;
+        }
     }
 }
 
@@ -2706,7 +2873,41 @@ static void pace(char* ta, unsigned now)
         if (p != s_viewer && tagpu_puppet_seat(p)) memcpy(player_rec(ta, p) + PL_PACE, &now, 4);
 }
 
-static void images_put(const Lv* L, const RecWorld* W)
+/* The cells' unit slots of the next image, ahead of its features (THE PHASES): the host's
+   projectile tick tests a projectile against the units the cell names (0x49B1C7..0x49B275), which
+   on the recording machine its unit tick had just moved. A slot is a value only the images
+   write (THE UNIT SLOTS AND THE YARD BIT), bounded and alive as cell_put takes it, and
+   independent of the cell's feature, so it goes in whatever the cell's structure, and stays in a
+   cell whose structure features_put then finds different and leaves alone. Each cell's previous
+   slots are kept for the feature tick (THE PHASES). */
+static void slots_put(const Lv* L, const RecWorld* W)
+{
+    unsigned i, k, j;
+    uint16_t h[4], slot[2];
+    for (i = 0; i < W->nfeat; i++) {
+        const unsigned char* b = W->feat[i].b;
+        if (W->feat[i].kind != RK_CELLS) continue;
+        memcpy(h, b, 8);    /* bounded by the reader (cells_ok) and again by cell_at */
+        for (k = 0; k < h[2]; k++) {
+            char* c = cell_at(L, (int32_t)h[0] + (int32_t)k, h[1]);
+            const unsigned char* img = b + 8 + (size_t)k * REC_CELL_BYTES;
+            if (!c) continue;
+            memcpy(slot, img, 4);
+            if (slot[0] >= L->nslots || slot[1] >= L->nslots ||
+                (slot[0] && !host_live(L, slot[0])) || (slot[1] && !host_live(L, slot[1])) ||
+                s_pend.nslots == PEND_SLOTS)
+                continue;
+            s_pend.slot[s_pend.nslots].cell = c;
+            memcpy(s_pend.slot[s_pend.nslots++].was, c, 4);
+            for (j = 0; j < 4; j++)
+                c[j] = (char)(((unsigned char)c[j] & ~s_cval[j]) | (img[j] & s_cval[j]));
+        }
+    }
+}
+
+/* the next image; with `defer`, its features wait for the step's late phase (THE PHASES), all but
+   the cells' unit slots */
+static void images_put(const Lv* L, const RecWorld* W, int defer)
 {
     links_put(L, W);
     units_put(L, W);
@@ -2714,7 +2915,12 @@ static void images_put(const Lv* L, const RecWorld* W)
     states_put(L, W);
     players_put(L, W);
     orders_put(L, W);
-    features_put(L, W);
+    if (defer) {
+        slots_put(L, W);
+        s_pend.images = 1;
+    } else {
+        features_put(L, W);
+    }
 }
 
 /* 0x466C20(): the minimap's fog composite, no argument, plain `ret` (0x466DB1; DISASSEMBLED
@@ -2846,6 +3052,14 @@ typedef void (__stdcall* PFN_SightRebuild)(unsigned arg);
    stamped, in the mode it was made in, and the block is compacted */
 typedef void (__cdecl* PFN_SightExpire)(void);
 #define E_SightExpire ((PFN_SightExpire)0x00482130u)
+/* 0x482910(point, sight, height, duration): the temporary sight record's add, stdcall, `ret 0x10`
+   (DISASSEMBLED 0x482910..0x482AAF). It refuses, touching nothing, when LosType bit 1 is clear
+   (0x482920) or the count is already SR_MAX (0x48292F); otherwise it makes the record for the
+   viewed record main+0x2A43 with its expiry GameTime + duration (0x4829C4), stamps it (0x4829F4,
+   the ray fan; the circle after it) and counts it (0x482AA9). The destructor calls it for a
+   viewed seat's live unit with the def's +0x202, +0x170 and 60 (0x48672C..0x486748). */
+typedef void (__stdcall* PFN_SightAdd)(const int32_t* point, int sight, int height, int duration);
+#define E_SightAdd    ((PFN_SightAdd)0x00482910u)
 
 /* the slot's bytes in the host: the main block's, or .data's */
 static unsigned char* global_at(char* ta, const ReplayGlobalSlot* g)
@@ -3386,8 +3600,6 @@ static unsigned char  s_taken[0x10000];    /* R9's first pass took it out of its
 static char*          s_ubucket[0x10000];  /* its recorded bucket, resolved                      */
 static unsigned short s_uheads[0x10000];   /* the heads of U's chains                            */
 static unsigned char  s_fseen[TAGPU_LIM_WRECKS];   /* a wreck record on a list already          */
-
-static void counts_log(const char* when, unsigned now);
 
 /* A recorded bucket ID as the host's bucket: the off-map bucket, or a bucket below the
    allocation's count -- taken no larger than the count LoadMap computes from the columns and
@@ -4324,8 +4536,8 @@ static void sk_tables(const Lv* L, const RecWorld* W)
    - the notices and the chat lines through the level init's own resets 0x47EE30 and 0x463C80:
      the creates' queued replies go, and a backward seek leaves no cooldown or line stamped in the
      future.
-   The particles' and the temporary sight records' deadlines went with them (R11, R4); the pacing
-   stamp is R16's. */
+   The particles' deadlines went with them (R11); the temporary sight records' are made with them
+   (R14a); the pacing stamp is R16's. */
 static void sk_deadlines(char* ta, const RecWorld* W, unsigned now)
 {
     unsigned p, next = PASS_TICKS * (now / PASS_TICKS + 1);
@@ -4339,12 +4551,112 @@ static void sk_deadlines(char* ta, const RecWorld* W, unsigned now)
     E_ChatReset();
 }
 
+/* THE SEEK'S SIGHT RECORDS (R14a, R14c). The viewed seat's death vision: the destructor makes a
+   temporary sight record for each live unit of the viewed record that dies under true LOS, for
+   EYE_LIFE ticks (0x486748), and its stamp is part of the viewed record's counters, which the
+   radar pass's sight loop reads (0x467710..0x46782F: a unit over a counter that is not 0 gets
+   contact bit 8). R4 drops every record and R5's refill leaves none, so the seek makes again the
+   ones a playing holds at T, from the deaths the recording carries, each with the victim's image
+   as the destructor found it (RK_EV_DEATH).
+   - THE WINDOW. The reader starts at least EYE_LEAD iterations back (recr_seek's lead): two
+     lifetimes and the window. eye_visit follows the engine's rules over every iteration it reads:
+     an entry for each death in step k of a live unit whose owner's +0x146 is the viewed record,
+     under the iteration's LosType bit 1; none past SR_MAX (counted in `capped`); all dropped at a
+     change of LosType bits 0-2, as the playing's LosType write drops them; after each step k
+     before T-1, those whose expiry is below k, as the expiry after the tick loop (0x495688)
+     removes them. A record from before the lead has expired before the window and can change a
+     later decision only through the cap, so the entries are a playing's unless the simulated cap
+     refused a death, which is counted and logged.
+   - THE BOUND. At most SR_MAX entries; the count is 0 after R4; every entry was made under T's
+     LosType (a change empties the list), so the add refuses none; the point is bounded by the
+     emitter's own grid test (0x48265B, 0x482663), and the circle's by its radius clamp
+     (0x482A16..0x482A25), 0x482270's clip and 0x481930's tests (0x4819AB, 0x4819B7); the def
+     by addr_of (UNITINFOCount).
+   - THE LIFETIME. The add makes each record with its stamp and only the expiry removes both, so
+     the counters stay the engine's own. Nothing after R14a rebuilds the viewed record's counters:
+     R14 writes V's alone, and V owns no unit.
+   - THE ORDER. R14a runs at GameTime T-1 (R6), after R13's LosType and before R14's fog
+     composite and R14b's radar pass, as the players phase 0x49555F of step T-1 sees them; R14c,
+     the expiry, after R14b, as 0x495688 follows the players phase. */
+#define EYE_LIFE 60
+#define EYE_LEAD 123
+static struct {
+    struct { unsigned made; uint32_t type; int32_t pos[3]; } e[SR_MAX];
+    unsigned n, T, capped, made, refused;
+    uint32_t los;
+    int have_los;
+    unsigned char viewed;
+} s_eye;
+
+static void eye_begin(const char* ta, unsigned T)
+{
+    memset(&s_eye, 0, sizeof s_eye);
+    s_eye.T = T;
+    s_eye.viewed = (unsigned char)ta[OFF_VIEWED];
+}
+
+static void eye_visit(void* ctx, const RecWorld* w)
+{
+    const Lv* L = (const Lv*)ctx;
+    uint32_t los = w->globals[tagpu_replay_globals[0].dword] & LOS_REACT;
+    unsigned i, j, k = w->tick;
+    if (s_eye.have_los && los != s_eye.los) s_eye.n = 0;
+    s_eye.los = los;
+    s_eye.have_los = 1;
+    if (k >= s_eye.T) return;
+    for (i = 0; i < w->nev; i++) {
+        const unsigned char* img = w->ev[i].b + 12;
+        uint32_t state, owner, type;
+        char* rec;
+        if (w->ev[i].kind != RK_EV_DEATH || w->ev[i].len != 12 + REC_UNIT_IMAGE) continue;
+        memcpy(&state, img + U_STATE, 4);
+        memcpy(&owner, img + U_OWNERREC, 4);
+        memcpy(&type, img + U_DEF, 4);
+        if (!(state & U_ALIVE) || !(los & LOS_TRUE) || !addr_of(L, SIM_ID_PLAYER, owner, &rec) ||
+            !rec || (unsigned char)rec[PL_MAPBIT] != s_eye.viewed)
+            continue;
+        if (s_eye.n == SR_MAX) {
+            s_eye.capped++;
+            continue;
+        }
+        s_eye.e[s_eye.n].made = k;
+        s_eye.e[s_eye.n].type = type;
+        memcpy(s_eye.e[s_eye.n].pos, img + U_POS, 12);
+        s_eye.n++;
+    }
+    if (k + 1 < s_eye.T) {
+        for (i = j = 0; i < s_eye.n; i++)
+            if (s_eye.e[i].made + EYE_LIFE >= k) s_eye.e[j++] = s_eye.e[i];
+        s_eye.n = j;
+    }
+}
+
+/* R14a: the window's records, through the engine's add, each with the time it has left */
+static void eye_put(const Lv* L, unsigned T)
+{
+    unsigned i;
+    for (i = 0; i < s_eye.n; i++) {
+        char* def;
+        int before, after;
+        memcpy(&before, L->ta + OFF_NSIGHTRECS, 4);
+        if (!addr_of(L, SIM_ID_UNIT_TYPE, s_eye.e[i].type, &def) || !def) {
+            s_eye.refused++;
+            continue;
+        }
+        E_SightAdd(s_eye.e[i].pos, *(const int16_t*)(def + 0x202), *(const int16_t*)(def + 0x170),
+                   (int)(s_eye.e[i].made + EYE_LIFE) - (int)(T - 1));
+        memcpy(&after, L->ta + OFF_NSIGHTRECS, 4);
+        if (after > before) s_eye.made++;
+        else s_eye.refused++;
+    }
+}
+
 /* The reader back where the host is after a refused seek; when it cannot be, the playing stops
    there, as iteration_read's failure stops it. */
 static void sk_back(const Lv* L, unsigned prev)
 {
     char why[200];
-    if (recr_seek(s_rd, prev, why, sizeof why) == 1) return;
+    if (recr_seek(s_rd, prev, 0, NULL, NULL, why, sizeof why) == 1) return;
     s_over = 1;
     tagpu_logf("replay: %s cannot be read back to GameTime %u: %s; the units stop here", s_name,
                prev, why);
@@ -4367,6 +4679,7 @@ static int seek_run(char* ta)
     int k;
     s_seek.pending = 0;
     snprintf(dump, sizeof dump, "%s", s_seek.dump);
+    pend_finish();                          /* the step before it, whole (THE PHASES) */
     /* R0: position and validate; nothing of the host is touched yet */
     if (!level_of(ta, &L)) {
         tagpu_logf("replay: %s: seek to %u refused: the level's unit array or features are not "
@@ -4376,7 +4689,8 @@ static int seek_run(char* ta)
     h = L.now;
     QueryPerformanceFrequency(&hz);
     QueryPerformanceCounter(&t0);
-    k = recr_seek(s_rd, T, why, sizeof why);
+    eye_begin(ta, T);
+    k = recr_seek(s_rd, T, EYE_LEAD, eye_visit, &L, why, sizeof why);
     if (k <= 0) {
         tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
         if (k < 0) sk_back(&L, prev);
@@ -4432,6 +4746,8 @@ static int seek_run(char* ta)
     refused0 = s_gst.refused;
     recorded_put(&L, W);
     s_sk.pool = s_gst.refused == refused0;
+    /* R14a: the viewed seat's temporary sight records (THE SEEK'S SIGHT RECORDS) */
+    eye_put(&L, T);
     /* R14: V's sight, which R5 undid, and the minimap's fog from the counters at T (sight_fill) */
     sight_fill(ta, s_viewer);
     /* R14b: the viewed record's radar pass, once, as its 30-tick pass runs it (0x46556D). The
@@ -4449,9 +4765,12 @@ static int seek_run(char* ta)
        0x467960 and 0x467980, 0x40B0D0, the math helpers 0x4E4400 and 0x4E43D0 -- write
        main+0x142F1 (DISASSEMBLED; the `or` of bit 1 at 0x46742F, just before, is the radar
        rebuild 0x466DC0's last store, whose ret is at 0x46743D). It runs after the last write it
-       reads -- R7's units, R8's positions and alliances, R13's LosType and explored map -- and
-       before R15, which it does not read. */
+       reads -- R7's units, R8's positions and alliances, R13's LosType and explored map, R14a's
+       records' stamps -- and before R15, which it does not read. */
     E_RadarPass();
+    /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
+       RECORDS) */
+    E_SightExpire();
     /* R15 */
     sk_deadlines(ta, W, T - 1);
     /* R16: inside the frame visit, before the next frame's scheduler 0x495230 sees the stamps: no
@@ -4478,12 +4797,15 @@ static int seek_run(char* ta)
                "freed and %u made; %u temporary sight records dropped; units' bookkeeping from "
                "T: %u water states, %u state bytes, %u sight stamps, %u refused; tables: %u "
                "written, %u skipped, %u values left as the host holds them, %u repaired; the "
-               "projectile pool %s, %u records; the effects %s", s_name, T, s_sk.left, s_sk.moved,
+               "projectile pool %s, %u records; the effects %s; temporary sight records: %u made "
+               "again, %u refused, %u deaths past the engine's %u (the records may differ from a "
+               "playing's)", s_name, T, s_sk.left, s_sk.moved,
                s_sk.carried, s_sk.outside, s_sk.frecs, s_sk.fcells, s_sk.fdropped, s_sk.freed,
                s_sk.models, s_sk.sdropped, s_sk.water, s_sk.states, s_sk.stamps, s_sk.brefused,
                s_sk.tab.written, s_sk.tab.skipped, s_sk.tab.kept, s_sk.tab.repaired,
                s_sk.pool ? "written" : "REFUSED", W->proj_hw,
-               s_sk.effects ? "cleared" : "NOT cleared");
+               s_sk.effects ? "cleared" : "NOT cleared", s_eye.made, s_eye.refused, s_eye.capped,
+               SR_MAX);
     return 1;
 }
 
@@ -4506,7 +4828,9 @@ static int seek_run(char* ta)
      that plays a recording, the round trip at the frame visit after step T-1 (THE ROUND TRIP).
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
-     point of T. */
+     point of T.
+   - `cover <name>`: the coverage build's functions that ran, at once (tagpu_cover_write); any
+     other build refuses it with a line. */
 /* `p` is a decimal u32 and nothing after it: 1 with its value */
 static int u32_word(const char* p, unsigned* v)
 {
@@ -4557,6 +4881,10 @@ static void trigger_read(void)
             tagpu_rec_dump_now(name);
             return;
         }
+    }
+    if (sscanf(line, "cover %39s%n", name, &end) == 1 && !line[end]) {
+        tagpu_cover_write(name);
+        return;
     }
     if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
         u32_word(line + end + 4, &T)) {
@@ -4718,6 +5046,8 @@ static void counts_log(const char* when, unsigned now)
                s_name, s_fst.roots, s_fst.rrefused, s_fst.rdiffer, s_fst.deaths, s_fst.dmissed,
                s_fst.left, s_fst.cells, s_fst.wrecks, s_fst.cstruct, s_fst.wstruct, s_fst.cbad,
                s_fst.wbad, s_fst.heads, s_fst.cursor, s_fst.tcells, s_fst.tover);
+    tagpu_logf("replay: %s: feature calls made at their phase of the step: %u deferred past the "
+               "unit tick, %u steps whose store was full", s_name, s_pend.deferred, s_pend.over);
     tagpu_logf("replay: %s: globals and projectiles: written %u times, %u capture points holding "
                "another iteration; the pool refused %u times; the sight mode changed %u times, "
                "%u temporary sight records dropped, %u changes not made; the explored map changed "
@@ -4746,7 +5076,8 @@ static int iteration_read(const Lv* L)
     if (k == 0) tagpu_logf("replay: %s played to its end at GameTime %u: %s", s_name, L->now, why);
     else tagpu_logf("replay: %s cannot be read on from GameTime %u: %s; the units stop here",
                     s_name, L->now, why);
-    counts_log("the recording's end", L->now);
+    s_endlog = 1;
+    s_endat = L->now;
     return 0;
 }
 
@@ -4779,7 +5110,7 @@ static void play(const Lv* L, int first)
     masks_init();
     if (first) {
         s_st.made += level_units(L, W);
-        images_put(L, W);
+        images_put(L, W, 0);
         wind_seed(W);
         sight_fill(L->ta, s_viewer);
         /* V owns nothing, so its energy and metal are 0. The level start 0x465E30 reads them from
@@ -4795,14 +5126,15 @@ static void play(const Lv* L, int first)
        step k's. An iteration of an earlier GameTime is played late rather than dropped, since its
        events are the only record of what they made and destroyed. */
     while (W->tick <= L->now) {
-        if (W->tick < L->now) {
+        int now = W->tick == L->now;        /* an iteration played late goes in whole */
+        if (!now) {
             s_st.late++;
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
-        events_put(L, W);
+        events_put(L, W, now);
         s_st.steps++;
         if (!iteration_read(L)) break;
-        images_put(L, W);
+        images_put(L, W, now && !s_pend.full);
     }
 }
 
@@ -4815,6 +5147,7 @@ void __cdecl tagpu_replay_step(void)
     if (!tagpu_puppet_on() || !s_rd || s_dead) return;
     ta = ta_main();
     if (!ta) return;
+    pend_finish();
     if (s_first) {
         s_first = 0;
         s_opt.played = 1;                   /* THE PLAYER'S SETTINGS: the loader is done */
@@ -4849,11 +5182,16 @@ void tagpu_replay_level_end(void)
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */
     /* both cases log `replay: <name> at its level's end, GameTime <t>`, the line tacli's
        `replay seek` takes as the end of the level a playback was on */
+    if (s_endlog) {                     /* the level ended inside the recording's last step */
+        s_endlog = 0;
+        counts_log("the recording's end", s_endat);
+    }
     if (s_rd && !s_dead && !s_over)
         counts_log("its level's end", ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
     else if (s_rd && !s_dead)
         tagpu_logf("replay: %s at its level's end, GameTime %u: the recording had ended before it",
                    s_name, ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
+    pend_clear();
     replay_close();
     tagpu_puppet_end();
 }

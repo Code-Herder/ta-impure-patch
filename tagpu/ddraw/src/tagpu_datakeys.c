@@ -17,6 +17,8 @@
 #include "tagpu_model3do.h"
 #include "tagpu_packet_pub.h"
 
+SIM_FEATURE(keys_records, SIM_PUPPET_RUNS, "battle");
+
 static void dlog(const char* fmt, ...)
 {
     char b[512];
@@ -185,6 +187,8 @@ static int def_slot(const char* def, unsigned* slot)
     *slot = (unsigned)d;
     return 1;
 }
+
+SIM_FEATURE(keys_observers, SIM_PUPPET_RUNS, "b7-radar-hail");
 
 /* =========================================================================
    2. The observers: the load's start, the FBI loader, the COB checksum and
@@ -529,6 +533,8 @@ void tagpu_datakeys_init(void)
     vet_panels_install();
     tagpu_datakeys_units_install();
 }
+
+SIM_FEATURE(keys_ghost_mask, SIM_PUPPET_RUNS, "battle");
 
 /* =========================================================================
    3. The build ghost's piece mask
@@ -899,6 +905,8 @@ int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out)
     return 1;
 }
 
+SIM_FEATURE(keys_weapon, SIM_PUPPET_RUNS, "battle c2-weapon-keys");
+
 /* =========================================================================
    4. The weapon keys (C2)
    ========================================================================= */
@@ -1134,6 +1142,8 @@ int tagpu_datakeys_fire_gate(char* u, int idx, const char* w, const void* slot)
     }
     return 0;
 }
+
+SIM_FEATURE(keys_nomapalert, SIM_PUPPET_RUNS, "battle");
 
 /* =========================================================================
    5. nomapweaponalert: the silence of harmless weather (C2)
@@ -1588,6 +1598,8 @@ static void alert_install(void)
              "the retail ones; a harmless meteor keeps its minimap dot");
 }
 
+SIM_FEATURE(keys_veterancy, SIM_PUPPET_RUNS, "c3-veterancy wpn-badtgt");
+
 /* =========================================================================
    6. Veterancy (C3)
    ========================================================================= */
@@ -1876,6 +1888,8 @@ static void vet_panels_install(void)
     }
     dlog("veterancy: both kill lines name the level, \"VetN\" (0x46B306, 0x467CCF)");
 }
+
+SIM_FEATURE(keys_transported, SIM_PUPPET_RUNS, "c4-kill-all");
 
 /* =========================================================================
    7. Transported explosions (C4)

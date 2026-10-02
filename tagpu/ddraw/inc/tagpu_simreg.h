@@ -67,8 +67,11 @@ typedef enum SimFieldKind {
                        COUNT of them: a struct-of-arrays table                                */
     SIMF_TARGET,    /* the engine's weapon target, a u16 and the u16 after it: a unit slot when
                        the second is 0x8000, else a ground X and Z                            */
-    SIMF_PINNED     /* the engine holds this field's ADDRESS (a running script's record points
+    SIMF_PINNED,    /* the engine holds this field's ADDRESS (a running script's record points
                        at it), so the row is written in place and never moved while it may   */
+    SIMF_OPAQUE     /* a plain value whose bits are arbitrary (a random generator's state, a
+                       hash): recorded and compared as any plain value, and passed over by
+                       the address scan, which cannot tell such a word from an address       */
 } SimFieldKind;
 
 typedef struct SimField {
@@ -228,6 +231,33 @@ int tagpu_sim_lever_read(const char* file, char* buf, int cap);
 /* A file that tooling reads or writes (a trigger, a dump), never a lever: the lever rule of
    tools/sim-state-check.sh accepts a `tagpu_` file name only inside one of these three. */
 #define SIM_TOOL_FILE(name) name
+
+/* A SIMULATION FEATURE: every line of a `sim` file from its SIM_FEATURE to the file's next one,
+   the file's first coming before any code or declaration. `fixtures_` names, space-separated,
+   the entries of tools/replay/fixtures.json that exercise it; the replay harness runs them when a
+   landing changes the region (`tareplay.py landing`) and checks that they reached each changed
+   function. `puppet_` is what the feature does on a puppet host:
+     SIM_PUPPET_RUNS         its code runs on a puppet and its effect must match the recording's;
+     SIM_PUPPET_OWNER        its own code refuses to act on a puppet, the owner's machine's effect
+                             reaching the puppet through the recording;
+     SIM_PUPPET_INDEPENDENT  it changes nothing a replay shows (the review checks the word; the
+                             harness does not grade it).
+   One line at the line's start, the fixtures a literal string: `tareplay.py features --check`,
+   in the link recipe, reads the source, and refuses a malformed line, a fixture fixtures.json
+   lacks, two features of one name and code above a sim file's first feature. The attach walk
+   counts them. */
+typedef enum SimPuppet { SIM_PUPPET_RUNS, SIM_PUPPET_OWNER, SIM_PUPPET_INDEPENDENT } SimPuppet;
+typedef struct SimFeature {
+    const char*   name;
+    const char*   file;
+    unsigned      line;
+    unsigned char puppet;               /* SimPuppet                                         */
+    const char*   fixtures;
+} SimFeature;
+#define SIM_FEATURE(id, puppet_, fixtures_)                                                    \
+    static const SimFeature simfeat_##id = { #id, __FILE__, __LINE__, (puppet_), fixtures_ };  \
+    static const SimFeature* const simfeatreg_##id                                            \
+        __attribute__((used, section(".rdata$simfeat$m"))) = &simfeat_##id
 
 /* Walks the registry once every simulation module has installed (DllMain): checks each
    declaration's shape, closes the lever list and logs one summary line. */

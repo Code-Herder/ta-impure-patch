@@ -16,6 +16,7 @@ plus the extra keys. Nothing here is hand-authored art; it is the smallest
 content that exercises every slot the engine module can drive.
 
     tools/extra_weapons_fixture.py            # writes scenarios/content/wpn-test.ufo
+    tools/extra_weapons_fixture.py DIR        # writes both archives into DIR (a game folder)
     TA_GAMEDIR=/path/to/steam/TA tools/extra_weapons_fixture.py
 
 Then copy the .ufo into the instance's gamedir (a symlink will do) and
@@ -43,8 +44,9 @@ if GAMEDIR is None:
 if GAMEDIR is None:
     sys.exit("extra_weapons_fixture: no totala1.hpi found; set TA_GAMEDIR")
 
-OUT = ROOT / "scenarios" / "content" / "wpn-test.ufo"
-OUT_BAD = ROOT / "scenarios" / "content" / "wpn-badtgt.ufo"
+OUTDIR = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "scenarios" / "content"
+OUT = OUTDIR / "wpn-test.ufo"
+OUT_BAD = OUTDIR / "wpn-badtgt.ufo"
 
 
 def main():

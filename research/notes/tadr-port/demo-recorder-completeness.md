@@ -10,17 +10,20 @@ unit and player records that are not recorded as values are listed in one file, 
 refuses a header that does not match it. Self-verification is built with the recorder
 ([S1](demo-recorder-skirmish-slice.md#self-verification)), and the main block and `.data` are
 recorded through a positive list ([S3b](demo-recorder-skirmish-slice.md#s3b-the-globals-and-seeking));
-the replay harness's core is built — the puppet round trip and `tools/replay/tareplay.py` with its
-fixtures ([S3c-1](demo-recorder-skirmish-slice.md#s3c-1-one-writer-for-the-tables-and-the-round-trip))
-— and its counts, images gate and landing gate are S3c-2's and S3c-3's. The owner
+the replay harness is built — the puppet round trip and `tools/replay/tareplay.py` with its
+fixtures ([S3c-1](demo-recorder-skirmish-slice.md#s3c-1-one-writer-for-the-tables-and-the-round-trip)),
+the counts, the null twin's images gate and the address scan
+([S3c-2](demo-recorder-skirmish-slice.md#s3c-2-counted-on-puppets-and-the-images-gate)), and the
+features beside the code, the coverage build and the landing and broad tiers
+([S3c-3](demo-recorder-skirmish-slice.md#s3c-3-fixtures-beside-the-code-and-the-gate)). The owner
 chose **option B, declare and measure**, on 2026-09-29, after a design panel (four designs, two
 judges) over the code as it stood; the product decisions it serves are on the
 [product page](demo-recorder.md#completeness-and-verification), and the engine facts it rests on
 are in the [state design evidence](demo-recorder-state-evidence.md). Addresses below come from that
 panel's readers and were checked against the pristine binary by its judges unless marked
 [INFERRED]. Every decision is taken ([below](#decisions-taken)). The rules are in CLAUDE.md
-(*Simulation changes stay replayable*), less the replay gate, which lands with the harness
-([below](#the-claudemd-section-and-landing-gate)).
+(*Simulation changes stay replayable*), the replay gate among them, and the landing command's
+Step 4b enforces it ([below](#the-claudemd-section-and-landing-gate)).
 
 ## The problem
 
@@ -394,32 +397,93 @@ declarations back to their values from the playing's first tick boundary, rebuil
 place to T with the poison check, and takes frame dump B; `tarec.py compare-dumps` compares A and B
 strictly — units and their order lists, players, declared tables, features and wrecks, the globals,
 the projectile pool, the explored map and every player's sight counters — and A against B must be
-EQUAL. With nothing between them, a difference is the rebuild's, with one named exception: O9 (the
-seek drops the temporary sight records), which `compare-dumps` folds and names when A holds some
-and B none — the viewed record's counters where A is higher and the units' contact bits. The live in-place restore, which a
+EQUAL, with no exception: with nothing between them, a difference is the rebuild's. The seek makes
+the viewed seat's temporary sight records again, so the viewed record's counters and the units'
+contact bits compare strictly too. The live in-place restore, which a
 recording machine cannot do without the takeover's own steps, is built and verified with the
 takeover in S4. Inside the rebuild, just before its table write (R12), every declaration the
 recorder records is filled with `0xA5` outside the bytes its layout keeps, and a byte the write must
 cover that still holds `0xA5` is named as residue and put back; no `0xA5` outlives R12.
 
 **No vacuous passes:** the poison check and the TRANSIENT reset above, inside the round trip; a
-fresh process seeking to the same tick must match, as must forward and backward seeks (S3b); and,
-with S3c-2, a **null twin** — the live game paused under scripted camera and menu input, two frame
-dumps of one GameTime — whose differing bytes are presentation and are masked in the **images
-gate**, which sorts every byte outside `replay-globals.tsv` that a fresh seek leaves otherwise than
-the live game. The slot-shuffled restore is dropped: slots are the recording's identity everywhere
-(an ID is a row plus one), no product path re-creates a unit in another slot, and a raw address
-restored raw compares equal, so a shuffle cannot see an address recorded as a value; S3c-2's scan
-fails every plain-value field whose value lies inside the engine's blocks or the DLL instead.
+fresh process seeking to the same tick must match, as must forward and backward seeks (S3b); the
+**null twin** and the **images gate**; and the **address scan**. The slot-shuffled restore is
+dropped: slots are the recording's identity everywhere (an ID is a row plus one), no product path
+re-creates a unit in another slot, and a raw address restored raw compares equal, so a shuffle
+cannot see an address recorded as a value; the scan looks for one instead.
 
-**Also asserted**, with S3c-2: puppet playback (equal root counts; sink counts by caller within a
-band, less an owner-approved list of events expected to be absent); no COB-originated engine write
-on a puppet (`0x48B090` from `0x480B52`/`0x480BEC`, `0x47DAC0` from `0x480BAE`, `0x48AAC0` from
-`0x4813A6`/`0x481422`), each named by unit and opcode; no emission without its `QueryNanoPiece`;
-zero self-verification corrections (`tarec.py check`, built); and with S3c-3 UNCOVERED, which fails
-a tier when a declared table, root, sink or feature is reached by no run. The cost and size budgets
+- **The null twin.** In the live process, past `l<Tlast>`, tareplay pauses the game, takes frame
+  dump `ln1`, then does what a viewer does without changing the game — the arrow keys a second
+  each way, one wheel notch in and out at the map's centre, the cursor over the map and over the
+  panel, the in-game menu (Tab, `ARMOPT.GUI`) opened — and takes `ln2` with the menu still open
+  (its OK resumes the game); the twin is refused unless GameTime did not move between them.
+- **The images gate** (`tarec.py images-gate`). Every bit of the main block and `.data` that no
+  row of `replay-globals.tsv` covers, where the live game at T1 differs from the playing at T1 or
+  from the fresh seek to T1, is in this order **presentation** (the twin's two dumps differ there),
+  **host-variant** (the playing and the round-trip process differ there at T1), **load-constant**
+  (unchanged across [T1, Tlast] on the recording machine and on the puppet host), or a **FAIL**,
+  named by address, `IMAGE_MAP` group and values and labelled *written during play on the
+  recording machine only*, *written on the puppet host only*, *the seek leaves it otherwise* or
+  *both write it, differently*. A bit equal at both ends of [T1, Tlast] on each machine counts as
+  unwritten in play: the window cannot see a write undone inside it. `replay-globals.tsv`'s
+  **`leave`** class (carried `leave`, puppet `-`) names every byte the recording deliberately does
+  not carry, with its reason: the viewer's own (the camera, the GUI, the message log, the music), a
+  wall clock, process state a fresh process differs in (the heaps, the allocators, the libraries'
+  and the C runtime's state), a cache of the draw, or a level constant. Each is a loosening and the
+  owner's decision; `replay-globals-gen.py` accepts the rows and generates nothing for them.
+- **The address scan** (`tarec.py scan`). A dump carries Impure's DLL's base and size (`RT_DLL`)
+  and each recorded table's layout (`RT_FIELDS`). Every recorded table's plain fields — all but
+  `SIMF_ID`, `SIMF_ADDR`, `SIMF_OWNED`, `SIMF_LOCAL`, `SIMF_COLUMN` and `SIMF_OPAQUE`, each aligned
+  dword of a table without a layout — fail when their value lies in the main block, the unit array,
+  the unit defs, the projectile pool, the feature grid, the wreck pool, the explored map or the
+  DLL; inside a pool of records only at a record's start. The globals image fails against the
+  engine's ranges only, and the unit, player and projectile images' bytes outside
+  `replay-layout.tsv`'s rows are tested against the engine's ranges and reported, not failed:
+  stock code stores no address of Impure's DLL there, and their aligned dwords straddle pairs of
+  16-bit fields whose value lands in the DLL's 77 MB about 1.8 % of the time (the
+  [engine map](../exe-reverse-engineering.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01)).
+  **`SIMF_OPAQUE`** declares a plain value whose bits are arbitrary — a random generator's state, a
+  hash — recorded and compared as any other and passed over by the scan, which cannot tell such a
+  word from an address (`s_windState`, `tagpu_patches.c`). The residual: a random word in the
+  globals image (the simulation RNG `0x51FC88`) can still land in the main block and fail a dump,
+  about one in 9,000 [INFERRED: the block's `0x3924D` bytes among the generator's 2^31 values].
+
+**Also asserted:**
+
+- **The counts** (`tarec.py compare-counts`, against `tagpu/ddraw/replay-absent.tsv`). Every dump
+  carries how often each root, sink and observed site ran since the level's first capture point,
+  keyed (site, caller, aux) — the caller the return address, `dll+offset` inside Impure's DLL, the
+  aux a sink's script name hashed — counted on the level's game thread only and never while a
+  seek rebuilds. A live game's counts are compared with its playing's, each as the change between
+  its two dumps over [T1, Tlast). **Roots** — the create's exit, the destructor (a live slot only),
+  the build done, the state setter (a call that changes the byte only), the two replies, the two
+  nano emitters and the seven feature functions — compare per site, **exactly**. **Sinks** — the
+  explosion add, the COB thread allocation, the four sound entries, the projectile init, the three
+  shot paths, the impact and ten particle emitters — compare per (site, caller, aux) within the
+  file's **band**, 5 % of the larger or 2 calls, whichever is more, less its rows: `absent` and
+  `extra` rows (an all-or-nothing difference the owner accepted, each with its reason) and `same`
+  rows (one effect the engine reaches through another path on a puppet host — a shot built by the
+  fire function live and by the shot receiver on a puppet — whose listed callers are compared
+  summed). The band is the owner's standard: a replay is a good approximation of what the game
+  showed, not a tick-exact copy; the roots stay exact. A key table that overflows fails by name.
+- **No COB engine write on a puppet**: SET's ACTIVATION and ARMORED (`0x48B090`, returning to
+  `0x480B57`, `0x480BF1`), SET's YARD_OPEN (`0x47DAC0`, `0x480BB3`), ATTACH and DROP (`0x48AAC0`,
+  `0x4813AB`, `0x481427`), counted on a puppet's unit outside the replay's own calls; the first 16
+  logged by unit, owner and GameTime. The playing's, the round trips' and the fresh seek's dumps
+  must hold 0.
+- No emission without its `QueryNanoPiece`; zero self-verification corrections (`tarec.py check`).
+- **UNCOVERED.** The landing tier fails `UNCOVERED <file>:<function>` for a changed function none
+  of the fixtures it ran reached, on the coverage build; the broad tier fails it for a feature none
+  of its fixtures reached, a root or sink site no run counted, and a recorded table no recording
+  changed between T1 and Tlast. The owner decides each landing that cannot reach a change (OQ7).
+- **A feature root is made at its phase of the step.** The recorder stamps each feature root with
+  where in the step it was made — the unit tick, the projectile tick, or from the explosion tick
+  on — and a puppet host makes it at the same point of its own step, so the host's projectiles meet
+  the features the recording machine's met. The cells' unit slots of the next image go in before
+  the host's projectile tick for the same reason. A simulation change that makes feature roots in a
+  new place of the step needs a phase there, or the impact counts name it. The cost and size budgets
 are reported, not failed, until the quantized stream lands, measured on a 10-minute four-AI game
-with MB/h extrapolated. A 60-second takeover judged like the compatibility suite's battle comes
+with MB/h extrapolated; no tier runs that game yet. A 60-second takeover judged like the compatibility suite's battle comes
 with S4.
 
 **Multiplayer:** never rebuild in place on a live peer, whose creates would broadcast. Every peer
@@ -429,9 +493,12 @@ peer's dump. Not in S3c.
 | Tier | Runs | When |
 |---|---|---|
 | Landing | the fixtures the changed features name in their `SIM_FEATURE` declarations, each recorded, played on puppets, restored in place by the round trip and sought from a fresh process, on the instrumented coverage build, with a check that they reached every changed function; a changed line no declaration covers or a changed function no fixture reached fails by name | every landing that changes a gated file (the landing command's Step 4b) |
-| Broad | every fixture with three round trips; `limits-tier1` (4 × 1,500 = 6,000 units) with 20; a 10-minute four-AI game for the cost and size; UNCOVERED over the tier | a command, not a schedule: on demand after a run of simulation landings, and with `--release` on the release DLL before every `v*` tag, beside the compatibility suite |
+| Broad | every fixture with three round trips, `limits-tier1` with 20, and a ten-minute four-AI game for the cost and size (reported), on the coverage build; UNCOVERED over the tier | a command, `tareplay.py broad`, not a schedule: on demand after a run of simulation landings, and as the release tier, `broad --release DLL` on the release DLL without reach, before every `v*` tag beside the compatibility suite |
 
-Both tiers are S3c-3's; S3c-1 has `tareplay.py run` on named fixtures. Not in S3c: network games and
+Both tiers are built ([S3c-3](demo-recorder-skirmish-slice.md#s3c-3-fixtures-beside-the-code-and-the-gate));
+`tareplay.py run` runs named fixtures. The broad tier's own entries, `fixtures.json`'s `broad`,
+are `limits-tier1` (4 × 1,500 = 6,000 units) with 20 round trips and `cost-four-ai`, a 10-minute
+four-AI game for the cost and size; no landing runs them. Not in S3c: network games and
 per-peer dumps, `limits-tier2` (10 peers, 15,000 units), the compatibility setups and a game loaded
 from a save. The landing run is scoped to the change because the broad tier holds about 28 of 32
 cores and 11 of 12 GB of VRAM on the reference setup while it runs, and 38 landings touched the simulation
@@ -466,32 +533,30 @@ rests on.
    **S3a, 2026-09-30**; the main block and `.data` through the positive list, both whole in every
    dump, and the projectiles — **S3b, 2026-10-01**; puppet dispositions and fixtures; the one-writer rule and getter 75 per seat; the nano spray's recording
    and playback; the harness's core, the puppet round trip and one writer for the declared tables —
-   **S3c-1, 2026-10-01**; root and sink counting and the null twin (S3c-2); the landing and broad
-   tiers, and with them the CLAUDE.md replay gate and the landing command's Step 4b (S3c-3).
+   **S3c-1, 2026-10-01**; root and sink counting, the null twin and its images gate, and the
+   address scan — **S3c-2, 2026-10-01**; the features beside the code, the coverage build, the
+   landing and broad tiers, and with them the CLAUDE.md replay gate and the landing command's
+   Step 4b — **S3c-3, 2026-10-01**.
 3. **Later:** multiplayer dumps, `limits-tier2`, and a check that every changed executable byte lies
    inside a range some installer published.
 
 ## The CLAUDE.md section and landing gate
 
-The section is in CLAUDE.md (*Simulation changes stay replayable*) since the declarations landed,
-and CLAUDE.md is its only copy. Two parts wait for the harness's landing tier (S3c-3), since
-until it exists they could not run and every simulation landing would stop at escalation reason 3.
-Their wording is the owner's question OQ9, asked with S3c-3:
-
-- the bullet **"A landing that changes simulation code** runs the replay fixtures of the features
-  it changes (recorded, played on puppets, restored in place by the round trip and sought from a
-  fresh process, on the coverage build), checks that they reached every changed function, and
-  records a `replay-roundtrip:` note. A changed line no declaration covers, or a changed function
-  no fixture reached, fails by name. The broad tier is a command, not a schedule: it runs before
-  every `v*` tag beside the compatibility suite and on demand.";
-- the landing command's **Step 4b**, requiring a current `replay-roundtrip:` note on `main..HEAD`,
-  from the fixtures of the changed features, whenever the diff changes simulation code, the
-  layout, the recorder or a fixture (three attempts, then escalation reason 3 if a game cannot
-  start).
-
-The landing command already carries the rest: its Step 3 build runs the check, and its Step 5
-brief asks for each new class checked against the code, new direct sink calls and new engine
-writes on puppets, and every loosening.
+The section is in CLAUDE.md (*Simulation changes stay replayable*), and CLAUDE.md is its only copy.
+Its replay gate is the bullet **"A landing that changes simulation code runs its replay
+fixtures"**: `tools/replay/tareplay.py landing` runs the fixtures the changed features name in their
+`SIM_FEATURE` declarations — recorded, played on puppets, restored in place by the round trip and
+sought from a fresh process, on the coverage build — checks that they reached every changed
+function, and records a `replay-roundtrip:` note; a changed line no declaration covers, or a
+changed function no fixture reached, fails by name, and landing it anyway is the owner's decision.
+The broad tier is a command, not a schedule. The landing command enforces it as **Step 4b**, the
+replay gate, between the documentation pass and the review: when the diff touches a gated file it
+passes on `tareplay.py landing --check` (a passing note on a commit R, nothing gated changed in
+`R..HEAD`), and otherwise runs `tareplay.py landing` on HEAD, three attempts at a failure, a game
+that cannot start at all being escalation reason 3. Its Step 3 build runs the state and feature
+checks, and its Step 5 brief asks for each new class checked against the code, new direct sink
+calls and new engine writes on puppets, every loosening, and each new or moved `SIM_FEATURE`
+region with whether its fixtures reach it.
 
 ## Decisions taken
 
@@ -514,7 +579,12 @@ writes on puppets, and every loosening.
 | 2026-10-01 | **The slot-shuffled restore is dropped** (OQ2) for an address-shaped-value scan of every plain-value field in a dump (S3c-2). Slots are the recording's identity everywhere, no product path re-creates a unit in another slot, and a raw address restored raw compares equal, so the shuffle could not see what it was for. |
 | 2026-10-01 | **The `0xA5` fill and the TRANSIENT reset run inside the puppet round trip**, checked in memory, and no `0xA5` outlives the rebuild. As built (S3c-1), the residue test covers only the bytes the write must cover: outside the layout's keep, in the rows it writes, of declarations whose value it does not keep whole. |
 | 2026-10-01 | **No scheduled nightly tier** (N1). The broad tier is a command, `tareplay.py broad`, required before every `v*` tag (with `--release` on the release DLL) and run on demand after a burst of simulation landings; no timer on the reference setup. This amends 2026-09-29's "the broad tier runs nightly". |
-| 2026-10-01 | **The cost and size budgets are reported, not failed**, until the quantized stream lands (OQ5); the four-AI hour becomes a 10-minute four-AI game with MB/h extrapolated. **The broad tier leaves out** network games, `limits-tier2`, the compatibility setups and the saved game for S3c; the takeover run comes with S4 (OQ6). **The landing tier runs on the instrumented coverage build, the release tier on the release DLL** (OQ8). Pending: the sink band and each expected-absent row (OQ3) and each new `leave`/`hold` row (OQ4) after S3c-2's first runs; network-only regions (OQ7) and the CLAUDE.md wording (OQ9) with S3c-3. |
+| 2026-10-01 | **The cost and size budgets are reported, not failed**, until the quantized stream lands (OQ5); the four-AI hour becomes a 10-minute four-AI game with MB/h extrapolated. **The broad tier leaves out** network games, `limits-tier2`, the compatibility setups and the saved game for S3c; the takeover run comes with S4 (OQ6). **The landing tier runs on the instrumented coverage build, the release tier on the release DLL** (OQ8). Network-only regions (OQ7) and the CLAUDE.md wording (OQ9): below. |
+| 2026-10-01 | **A replay is a good approximation of what the game showed, not a tick-exact copy** (after S3c-2's first runs): debris that flies differently and particles in the right place are accepted. So the sinks compare within a **band of 5 % or 2 calls** per key and the roots stay exact (OQ3a, revised from 0); the shot builders `0x49C9C0`, `0x49CDE0`, `0x49CC20`, the meteor stone's init `0x49C740` and Killed compare by **caller-equivalence classes**, each exact within the band (OQ3b); **rows** for the eight owner-only aim and piece queries, the console key's click and the refused script indexes (OQ3c–e), for the flying pieces' explosions, smoke and fire (OQ3f: rows, not the RNG-at-EXPLODE recording) and for COB `EMIT_SFX`'s emitters; **the COB one-tick lag (A5) and the walk class after an unload (A6) are accepted residuals**; the lost impacts (A7) are fixed by the step's phases. The LEFT OUT prose becomes `leave` rows with its labels corrected, new `leave` rows name process state, wall clocks and the viewer's and the draw's state, and the message log is `leave` (OQ4a–d). **The scan** tests the engine's records and the globals image against the engine's ranges only, and Impure's tables against every range less fields declared `SIMF_OPAQUE` (OQ10). This revises the batch's first answer, band 0. Rejected: recording the simulation RNG at each EXPLODE so that debris flies identically, a recording feature for a cosmetic difference. |
+| 2026-10-01 | **The declared tables have one writer on a puppet host** (O13, closed with S3c-1): the recording writes every table it carries at every capture point and every frame visit after a step, so a host's own write between two tick boundaries is overwritten at the next. |
+| 2026-10-01 | **A seek makes the viewed seat's temporary sight records again** (O9 reversed for the seek, before S3c-3 landed): from the recorded deaths before T through the engine's add `0x482910`, then the engine's expiry, so a round trip and a fresh seek compare the viewed record's sight counters and contact bits strictly and `compare-dumps` folds nothing. The cap of 20 (a refusal counted and logged) and the engine's once-a-frame expiry are accepted residuals. A recorded LosType change still drops them on a playing. Rejected: naming O9 in the fresh seek's check too, which would mask contact bits 8–10 whenever the viewed seat lost a unit under true LOS in the 62 steps before T. |
+| 2026-10-01 | **A landing no fixture can reach goes to the owner each time** (OQ7): a changed function in a region no skirmish fixture reaches — network-only code, error paths, the saved game — fails `UNCOVERED`, and landing it is the owner's call for that landing. Rejected: a standing exemption list. |
+| 2026-10-01 | **The replay gate's wording is adopted as written** (OQ9): the CLAUDE.md bullet and the landing command's Step 4b, as built with S3c-3. |
 
 ## Open items
 

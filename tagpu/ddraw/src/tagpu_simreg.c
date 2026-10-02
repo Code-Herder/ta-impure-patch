@@ -11,10 +11,19 @@
    4-byte pointer each, 4-byte aligned) lies between these two with nothing else in between. */
 static const SimDesc* const simreg_first __attribute__((used, section(".rdata$simreg$a"))) = NULL;
 static const SimDesc* const simreg_last  __attribute__((used, section(".rdata$simreg$z"))) = NULL;
+/* the features' list, the same way */
+static const SimFeature* const simfeat_first __attribute__((used, section(".rdata$simfeat$a"))) = NULL;
+static const SimFeature* const simfeat_last  __attribute__((used, section(".rdata$simfeat$z"))) = NULL;
 
 /* The walk leaves the object the marker is: an empty asm makes the pointer opaque, so the
    compiler cannot reason from "one pointer object" to "no second element". */
 static const SimDesc* const* sim_opaque(const SimDesc* const* p)
+{
+    __asm__("" : "+r"(p));
+    return p;
+}
+
+static const SimFeature* const* feat_opaque(const SimFeature* const* p)
 {
     __asm__("" : "+r"(p));
     return p;
@@ -345,7 +354,7 @@ static const char* sim_shape(const SimDesc* d)
     for (f = d->layout; f->size; f++) {
         unsigned span = f->off + f->size + (f->repeat > 1 ? (unsigned)(f->repeat - 1) * f->step : 0);
         if (span > d->stride)                     return "has a layout field past the end of its row";
-        if (f->kind > SIMF_PINNED || f->id > SIM_ID_DPLAY)
+        if (f->kind > SIMF_OPAQUE || f->id > SIM_ID_DPLAY)
                                                   return "has a layout field of an unknown kind";
         if (f->kind == SIMF_COUNT) count++;
         if (f->kind == SIMF_COLUMN) {
@@ -389,7 +398,7 @@ void tagpu_simreg_attach(void)
     const SimDesc* const* end   = sim_opaque(&simreg_last);
     const SimDesc* const* p;
     unsigned n = 0, bad = 0, locks = 0, tls = 0, heap = 0, code = 0, engine = 0, laid = 0, i;
-    unsigned cls[SIM_CLASSES] = { 0 };
+    unsigned cls[SIM_CLASSES] = { 0 }, feats[4] = { 0 };
     char classes[160], levers[1024], show[SIM_LEVER_SHOW + 4];
     int k = 0;
 
@@ -439,8 +448,15 @@ void tagpu_simreg_attach(void)
             k += snprintf(levers + k, sizeof levers - (size_t)k, ", %s set", s_lever[i].file);
         }
     }
+    {
+        const SimFeature* const* f;
+        for (f = feat_opaque(&simfeat_first) + 1; f < feat_opaque(&simfeat_last); f++)
+            if (*f) feats[(*f)->puppet < 3 ? (*f)->puppet : 3]++;
+    }
     InterlockedExchange(&s_closed, 1);
     tagpu_logf("simreg: %u declarations (%s; %u locks, %u TLS indices, %u heap tables, "
-               "%u code or guard pointers, %u engine pools, %u layouts), %u malformed; levers: %s",
-               n, classes, locks, tls, heap, code, engine, laid, bad, levers);
+               "%u code or guard pointers, %u engine pools, %u layouts), %u malformed; levers: %s; "
+               "features: %u run on a puppet, %u the owner's, %u independent, %u malformed",
+               n, classes, locks, tls, heap, code, engine, laid, bad, levers, feats[0], feats[1],
+               feats[2], feats[3]);
 }

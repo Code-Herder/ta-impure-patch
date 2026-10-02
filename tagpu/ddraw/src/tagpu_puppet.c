@@ -8,6 +8,8 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 
+SIM_FEATURE(puppet_host, SIM_PUPPET_RUNS, "battle-los");
+
 typedef struct PuppetTable {
     volatile unsigned char on;              /* this level plays a recording                 */
     unsigned char playing;                  /* ... and its first step has run: the feature
@@ -110,6 +112,7 @@ const volatile unsigned char* tagpu_puppet_flag(void) { return &s_pup.on; }
 #define TA_MAINPP     0x00511DE8u
 #define OFF_UFIRST    0x14357       /* the unit array's first slot ...        */
 #define OFF_ULAST     0x1435B       /* ... and its last, inclusive            */
+#define OFF_GAMETIME  0x38A47       /* int GameTime                           */
 #define UNIT_STRIDE   0x118
 #define U_OWNER       0xFF
 /* this+COB_MODEL: the block whose +0xC is the script's unit; the raised limits grow the COB
@@ -266,6 +269,76 @@ static const Gate GATES[G_COUNT] = {
     { 0x0047BD70u, 6, 0x04, { 0x81, 0xEC, 0xC8, 0x00, 0x00, 0x00 }, gate_elim },
 };
 
+/* THE COB WRITES ON A PUPPET. The gates at SET, ATTACH and DROP make these zero by construction;
+   these observers prove it. Each counts a call of the engine function that one of COB's five
+   write sites makes -- the return address names the site -- on a puppet unit, while the replay's
+   own calls are not open: SET's ACTIVATION 0x480B57 and ARMORED 0x480BF1 through the state setter
+   0x48B090 (ecx the unit), SET's YARD_OPEN 0x480BB3 through 0x47DAC0 ([esp+4] the unit), ATTACH
+   0x4813AB and DROP 0x481427 through 0x48AAC0 (the parent [esp+8], the cargo [esp+4]). The unit is
+   a slot of the array (puppet_unit) before any field of it is read. The first 16 are logged; the
+   counts reach the recorder's dumps (tagpu_puppet_cob_writes). */
+static const struct { unsigned ret; unsigned char arg; const char* what; } COB_WRITES[] = {
+    { 0x00480B57u, 0, "SET ACTIVATION (0x48B090)" },
+    { 0x00480BF1u, 0, "SET ARMORED (0x48B090)" },
+    { 0x00480BB3u, 1, "SET YARD_OPEN (0x47DAC0)" },
+    { 0x004813ABu, 2, "ATTACH (0x48AAC0)" },
+    { 0x00481427u, 1, "DROP (0x48AAC0)" },
+};
+static struct { unsigned n[TAGPU_PUPPET_COB_SITES], logged; } s_cobWrites;
+SIM_VAR(s_cobWrites, SIM_PRIVATE);
+static int s_cobIn;                 /* the three observers are in, at attach */
+SIM_VAR(s_cobIn, SIM_INSTALL);
+
+static int __cdecl cob_write(void* E)
+{
+    unsigned k;
+    const char* u;
+    const char* ta;
+    if (!s_pup.on || s_open) return 0;
+    for (k = 0; k < TAGPU_PUPPET_COB_SITES; k++)
+        if (E_ARG(E, 0) == COB_WRITES[k].ret) break;
+    if (k == TAGPU_PUPPET_COB_SITES) return 0;
+    u = (const char*)(size_t)(COB_WRITES[k].arg ? E_ARG(E, COB_WRITES[k].arg) : E_ECX(E));
+    if (!puppet_unit(u) || !(ta = *(const char* const*)(size_t)TA_MAINPP)) return 0;
+    s_cobWrites.n[k]++;
+    if (s_cobWrites.logged++ < 16)
+        tagpu_logf("puppet: COB engine write on a puppet: %s on unit %u (owner %u) at GameTime %d",
+                   COB_WRITES[k].what,
+                   (unsigned)((u - *(const char* const*)(ta + OFF_UFIRST)) / UNIT_STRIDE),
+                   (unsigned)(unsigned char)u[U_OWNER], *(const int*)(ta + OFF_GAMETIME));
+    return 0;
+}
+
+unsigned tagpu_puppet_cob_writes(unsigned va[TAGPU_PUPPET_COB_SITES],
+                                 unsigned n[TAGPU_PUPPET_COB_SITES])
+{
+    unsigned k;
+    if (!s_cobIn) return 0;
+    for (k = 0; k < TAGPU_PUPPET_COB_SITES; k++) {
+        va[k] = COB_WRITES[k].ret;
+        n[k] = s_cobWrites.n[k];
+    }
+    return TAGPU_PUPPET_COB_SITES;
+}
+
+static void cob_writes_init(void)
+{
+    static const struct { unsigned va; unsigned char n, b[7]; } SITES[] = {
+        { 0x0048B090u, 5, { 0x51, 0x8B, 0x44, 0x24, 0x0C } },
+        { 0x0047DAC0u, 5, { 0x53, 0x8B, 0x5C, 0x24, 0x0C } },
+        { 0x0048AAC0u, 7, { 0x8B, 0x4C, 0x24, 0x04, 0x83, 0xEC, 0x08 } },
+    };
+    unsigned i;
+    for (i = 0; i < 3; i++)
+        if (!tagpu_detour_bytes_ok(SITES[i].va, SITES[i].b, SITES[i].n) ||
+            !tagpu_detour_observe(SITES[i].va, SITES[i].b, SITES[i].n, cob_write, NULL)) {
+            tagpu_logf("puppet: the COB write observer at 0x%06X is not in: COB writes on a "
+                       "puppet are not counted", SITES[i].va);
+            return;
+        }
+    s_cobIn = 1;
+}
+
 void tagpu_puppet_init(void)
 {
     unsigned i;
@@ -285,6 +358,7 @@ void tagpu_puppet_init(void)
         }
     s_gatesIn = 1;
     tagpu_logf("puppet: %u gates in", (unsigned)G_COUNT);
+    cob_writes_init();
 }
 
 int tagpu_puppet_gates_in(void) { return s_gatesIn; }
@@ -292,6 +366,8 @@ int tagpu_puppet_gates_in(void) { return s_gatesIn; }
 void tagpu_puppet_open(int open) { s_open = open ? 1 : 0; }
 
 void tagpu_puppet_rebuild(int on) { s_rebuild = on ? 1 : 0; }
+
+int tagpu_puppet_rebuilding(void) { return s_rebuild; }
 
 /* ---- THE FOOTPRINT WRITERS ------------------------------------------------------------------
 
@@ -496,6 +572,7 @@ void tagpu_puppet_begin(const unsigned char seat[PUPPET_PLAYERS],
     }
     memset(&s_gateDiag, 0, sizeof s_gateDiag);
     memset(&s_footDiag, 0, sizeof s_footDiag);
+    memset(&s_cobWrites, 0, sizeof s_cobWrites);
     s_open = 0;
     s_fopen = 0;
     s_rebuild = 0;

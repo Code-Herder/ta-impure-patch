@@ -28,6 +28,9 @@ THE FILE, tab-separated, `#` comments and blank lines ignored, one row per field
             viewer      RK_VIEWER carries it (the controlled and the viewed player)
             features    RK_FEATURES carries it (the wreck pool's heads, the reproduction cursor)
             proj        RK_PROJ_HEAD carries it (the projectile count)
+            leave       nothing carries it, and the evidence says why: the viewer's own, a wall
+                        clock, process state a fresh process differs in, a cache of the draw, or
+                        a level constant. Each is a loosening and the owner's decision
             Only `globals` rows make up the image; the others are coverage for `--images`.
   puppet    globals rows only, `-` for the rest:
             write       the replay writes it on a puppet host at every capture point, at the frame
@@ -69,7 +72,7 @@ HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_globals.h")
 MAIN_BYTES = 0x3924D
 DATA_BEGIN, DATA_END = 0x501000, 0x52B65C
 WHERE = ("main", "data")
-CARRIED = ("globals", "tick", "player", "viewer", "features", "proj")
+CARRIED = ("globals", "tick", "player", "viewer", "features", "proj", "leave")
 PUPPET = ("write", "hold", "react")
 # The executable's .text: its virtual address and size in the pristine TotalA.exe's section table.
 TEXT_BEGIN, TEXT_END = 0x401000, 0x4FB92A

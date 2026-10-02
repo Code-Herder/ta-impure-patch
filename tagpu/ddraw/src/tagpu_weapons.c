@@ -19,6 +19,8 @@
 #include "tagpu_simreg.h"
 #include "tagpu_recorder.h"
 
+SIM_FEATURE(weapon_slots, SIM_PUPPET_RUNS, "battle wpn-badtgt");
+
 typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;

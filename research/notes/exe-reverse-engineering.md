@@ -344,7 +344,7 @@ the rest at the game's first call into a DirectPlay export.
 | `0x482283` (epilogues `0x4824CF`, `0x482597`) | the true-LOS stamp `0x482270` | repeat it for each ally |
 | `0x465AD4` | `UnitInPlayerLOS 0x465AC0`: its owner == player test | an allied owner answers "visible", before the cloak and submerged tests |
 | `0x48BC3D` | the HotUnits cull `0x48BAE0` | NOP 0x13 bytes: the own-player shortcut |
-| `0x4674AB`, `0x46750E`, `0x46782F` | the view player's radar scan `0x467440` | re-run passes 2–4 per ally, writing each into `main+0x2A43` |
+| `0x4674AB`, `0x46750E`, `0x46782F` | the view player's radar scan `0x467440` | re-run loops 2–5 (`0x46750E..0x46782F`) per ally, writing each into `main+0x2A43` |
 | `0x466E6F` | the minimap rebuild `0x466DC0` | draw allied units |
 | `0x46AC85`, `0x46B013`, `0x46B10E` | the unit panel's owner tests | show allied units' details |
 | `0x4D989B` | the crash writer: `push esi; call [0x4FC0EC]` (`CloseHandle`) | append a module list |
@@ -850,7 +850,7 @@ and [the size estimate](tadr-port/demo-recorder-state-evidence.md#4-size-estimat
 | `0x464C60(from, to, amount, send)` (`ret 0x10`) | the metal transfer | Returns at once when either index is 10 (`0x464C67..0x464C77`). With `send` ≠ 0 it caps the amount at the sender's current metal (`0x464C87..0x464CB6`); whatever `send` is, it returns when the amount is then 0 (`0x464CBA..0x464CC9`). With `send` ≠ 0 it takes the amount through `0x401260` (`0x464CF4`; current −= amount, the `+0xEC` record's `+0x1C` += amount). In every case it adds the amount to the recipient's `+0xEC` record `+0x18`, which the economy pass folds in; a type-2 recipient gets 50 % at difficulty 0 and 70 % at 1 (`0x464D3C`; −0.5 at `0x4FD548`, −0.7 at `0x4FD540`). With `send` ≠ 0 it then sends through `0x457050` (`0x464D85`). The network case `0x4558D6` passes 0 (`0x4558CA`), so a received transfer credits the recipient and debits nobody on the receiving peer: the debit happens on the sender's peer only. The auto-share `0x457E78` passes 1 (`0x457E73`). Callers `0x416C8D`, `0x4558D6`, `0x457E78`, `0x49362C`. DIS |
 | `0x457D30` | the auto-share, called from the tick loop for `main+0x2A42` (`0x49563A`, its one call) | Needs `main+0x2A44` bit 0 and runs every 60 ticks; with PlayerInfo `+0x97` bit `0x2` and current metal above `+0xE4` it gives metal through `0x464C60` (`0x457E78`), with bit `0x4` and energy above `+0xE8` energy through `0x464B30` (`0x457F96`). DIS |
 | `0x418CD0`, `0x418D90`, `0x418E50`, `0x418FD0`, `0x419090`, `0x419340`, `0x419400` | the share commands of the level-1 table `0x501D38` (entries `0x501EB8..0x501F0C`) | ShareMetal, ShareEnergy, ShareMapping and ShareRadar toggle bit `0x2`, `0x4`, `0x20` and `0x40` of the controlled player's PlayerInfo `+0x97` (`0x418D3E`, `0x418DFE`, `0x418EBE`, `0x41903E`), ShareAll all four, each then calling `0x450F90`; `0x418F10` toggles `0x08` (`0x418F7E`) and nothing references it. SetShareMetal and SetShareEnergy write `+0xE4` (`0x4193C5`) and `+0xE8` (`0x419485`). The auto-share reads `0x2` and `0x4`, the radar pass `0x40`; a reader of `0x20` or `0x08` is open. DIS |
-| `0x467440` | the radar pass, for the viewed player `main+0x2A43` | Pass 1 (`0x4674A7..0x4674F9`) sets `+0x110` bits 8–9 on the viewer's own units, on allied units whose owner shares radar (`AllyFlagAry[viewer]`, `0x4674C5`; PlayerInfo `+0x97 & 0x40`, `0x4674D2`) and on every unit when the viewer has the watcher bit (PlayerInfo `+0x9B & 0x40`, `0x4674E4`), and clears bits 8–10 of the rest. Its one call is `0x46556D`, on the viewed player's 30-tick pass. DIS |
+| `0x467440` | the radar pass, for the viewed player `main+0x2A43` | Five loops over the unit array, one back edge each (`0x46750C`, `0x4675CC`, `0x46766C`, `0x4676FD`, `0x467829`). **1** (`0x46749F..0x46750C`) clears bit 12 of every live unit (`0x4674AE`), sets `+0x110` bits 8–9 on the viewer's own units, on allied units whose owner shares radar (`AllyFlagAry[viewer]`, `0x4674C5`; PlayerInfo `+0x97 & 0x40`, `0x4674D2`) and on every unit when the viewer has the watcher bit (PlayerInfo `+0x9B & 0x40`, `0x4674E4`), and clears bits 8–10 of the rest. **2** (`0x46750E..0x4675CC`), radar and sonar: for each unit of the viewer's own block (`rec+0x67..+0x6B`) that is live, without `+0x110` bit 14, activated (`+0x10E` bit 0) and has a radar `def+0x204` or a sonar `def+0x206`, the bucket walk `0x47E890` (`0x4675B8`) with the visitor of vtable `0x4FD55C`. **3** (`0x4675EC..0x46766C`), jammers: each live, activated unit of another owner with `def+0x20A` or `def+0x20C`, the walk with the visitors of `0x4FD558` and `0x4FD554` (`0x46762C`, `0x467655`). **4** (`0x467690..0x4676FD`): for a unit whose owner record's `+0x73` is 1 or 2 and a def with `+0x245 & 0x2000`, `0x40B0D0` (`0x4676C8`); on true, `+0xB0` = GameTime + 90 and bit 12. **5** (`0x46770D..0x46782F`), the sight loop: bit 8 from the viewed record's sight counters or its explored-map bit (*The puppet host: … the sight loop*). Its one call is `0x46556D`, on the viewed player's 30-tick pass. DIS |
 | PlayerInfo, `[player+0x27]` | the `0xB9`-byte block the record's constructor `0x463BE0` allocates | `+0x94` (written by `0x463C60`, read by the `0x28` send), `+0x95` side (read at `0x48692A`), `+0x96` colour (an index into `[main+0x148DB] + i·8 + 0x28`, `0x467C0E..0x467C24`), `+0x97` the share bits, `+0x9B` bit `0x40` the watcher bit (set by the network defeat at `0x46569D`, at `0x427F40`, `0x42814A` and `0x443BF3` on the controlled player `main+0x2A42`, and at `0x447F0E` on an active type-1 record; cleared at `0x4439D3` and `0x443C41` on the controlled player and at `0x447E8E` [the callers of these not traced; the word's other stores not checked for this bit]; read at `0x465154`, `0x4674E4`, `0x41DD43` among others). The Players loader restores `+0x95` (`Side`) and `+0x96` (`Logo`). DIS |
 | `0x4816A0(arg)` `Game_SetLOSState` | the sight rebuild | Nine callers: `LOSType` `0x4166B1` (arg 0, after writing LosType bit 2), `LOS` `0x416D76` (0, bit 1), `Mapping` `0x416DA6` (1, bit 0), `NowISee` `0x41755E` (1, bits 0 and 1 cleared), the Deathmatch respawn `0x4654EF` (1), the network defeat `0x4656CE` (1), a screenshot routine (`0x495B61`, `0x495E58`) and the level load `0x497AE5` (1). With arg ≠ 0 it refills the whole explored map `*(main+0x14273)` (`0x4816A7..0x4816FB`); it refills the sight counters of each record 0..9 that is active, of type 1–3 and not numbered 10 at `+0x146` (`0x481707..0x48177A`; *The demo recorder's globals, projectiles and seek* has the rest), re-emits the units under LosType bit 1 (`0x48177C..0x481836`), clears LosType bit 3 (`0x481911`) and calls `0x466C20` and `0x466DC0`. DIS |
 | `0x484FA0` | the saved game's `Mapping` loader | Accepts the section only at the explored map's own size, `w·h/2` bytes of `main+0x14233`·`main+0x14237` (`0x484FCD..0x484FE6`), and reads it straight into `*(main+0x14273)` (`0x484FE8..0x484FF7`). DIS |
@@ -1794,7 +1794,7 @@ done):
 
 Neither game intercepted a projectile, so the interception event has not been seen in a recording.
 
-### The puppet host: its gates, the 30-tick deadline and pass 4 [DISASSEMBLED + MEASURED 2026-09-30]
+### The puppet host: its gates, the 30-tick deadline and the sight loop [DISASSEMBLED + MEASURED 2026-09-30]
 
 S2b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watching) (`tagpu_replay.c`,
 `tagpu_puppet.c`) plays a recording on a level whose recorded seats are type 3. The research is
@@ -1820,7 +1820,8 @@ loader `0x466050` (`0x46623F`; its one caller `0x43264E`). A puppet host keeps `
 applied image carries it already advanced, which kept the radar pass from ever running for a
 recorded perspective (the host note §2.3).
 
-**Pass 4 of the radar pass** (`0x46770D..0x46782F`). For each live unit (`+0x110` bit 28) without
+**The radar pass's sight loop**, the fifth of its five loops (`0x46770D..0x46782F`; back edge
+`0x467829`). For each live unit (`+0x110` bit 28) without
 bit 8 yet (`0x467722`) and without `+0x10E` bit 2 (`0x46772E`), the viewed record sees the unit's
 cell `(x >> 5, (z − altitude/2) >> 5)` of the integer position words, bounded by the record's
 `+0x80`/`+0x84` (`0x467786..0x467790`, `0x4677CC..0x4677D6`): under true LOS (LosType bit 1,
@@ -1830,7 +1831,14 @@ bit is set in the explored map's u16 there (`0x4677EF..0x467808`); a unit it see
 (`0x485C1E..0x485C48`): bits 8–9 cleared, bit 9 set when the owner is the viewed record. MEASURED
 2026-09-30: a host that never ran the pass for record 0 showed exactly that on all 1,413 units of the
 battle recording, whose own dumps had bit 8 on every unit under LosType 4 (the explored map filled
-by `0x4816A0` since bit 0 is clear).
+by `0x4816A0` since bit 0 is clear). Under true LOS the counters it reads hold every live
+[temporary sight record](#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s
+stamp too, so for 60 ticks after one of the viewed record's units dies the loop sets bit 8 on enemy
+units over the dead unit's sight circle. MEASURED 2026-10-01 (battle-los, a fresh seek to 1111 that
+left the viewed record without the one record a playing held, from a death at 1092): its counters
+were lower in exactly 213 cells, one radius-8 stamp, and bit 8 was clear on the aircraft over it
+that held it in the recording and on the playing; with the seek making the record again, both
+compare equal (the slice note's *S3c-3*).
 
 **`Send_UnitDeath 0x4864B0(unit, …)`**, `ret 8`: its callers are the reaper `0x48AFD1`, the
 console's kills of a type's units `0x486E80` (`0x486EB2`) and of every unit `0x486ED0` (`0x486EF8`),
@@ -2293,16 +2301,20 @@ the pathfinder's counters `0x511A10..0x511A3B` (only `0x40EB70` writes them), th
 are read, so only the save's writer reads them stale), and `main+0x38C5B`. A fresh process and the
 recording process hold different bytes there at the same GameTime, which is why they are recorded.
 
-**What the list leaves out**, each named in the TSV's header: LosType bit 3; what the tick writes for
-the viewer (the camera and eye `+0x142F3`, `+0x142F7`, `+0x1431F..+0x1434E`, `+0x14371`, the radar
-blink `+0x142EF`, the redraw flags `+0x142F1`, the minimap `+0x1436B`, OFFSCREEN `+0x37E1B`, the GUI
-`+0x37E9C`, `+0x37EBE`, `+0x2AA7..+0x2CC6`, the pacing accumulator and speeds `+0x38A43`,
-`+0x38A4B`, `+0x38A4D`, the profiler `+0x38D85..`; in `.data` the GAF animation state, chat, the
-network object `0x513000..`, the DLL entry points, the profile, scoreboard, timers, file, sound and
-C runtime state and per-call scratch); and the level's constants (the wind's minimum and maximum
-`+0x1425B`/`+0x1425F`, gravity `+0x14263`, the sea level `+0x1427F`, the map's size, the unit limit
-`+0x37EE6`, the difficulty `+0x37EEE`, ActiveCommanderDeath `+0x37EF6`, the meteor config
-`0x5122F0..0x512338` less the seven fields). The CRT's `rand` is per thread and in neither image.
+**What the list leaves out** is named byte for byte by the TSV's `leave` rows, each with its writers
+and evidence: LosType bit 3; what the tick writes for the viewer (the camera and eye `+0x142F3`,
+`+0x142F7`, `+0x1431F..+0x1434E`, `+0x14371`, the radar blink `+0x142EF`, the redraw flags
+`+0x142F1`, the minimap `+0x1436B`, OFFSCREEN `+0x37E1B`, the GUI `+0x37E9C`, `+0x37EBE`,
+`+0x2AA7..+0x2CC6`, the game speeds `+0x38A4B`, `+0x38A4D`); the wall clocks (the pacing gate, the
+profiler `+0x38D85..`, and the rest of
+[*every wall clock the engine stores*](#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01));
+caches of the draw; in `.data` the network statistics `0x511A40..`, chat, the network object
+`0x513000..0x51E53B`, the DLL entry points, the music's combat ring `0x51E710`, the scoreboard, the
+timers, the libraries' and the C runtime's state and per-call scratch; and the level's constants
+(the wind's minimum and maximum `+0x1425B`/`+0x1425F`, gravity `+0x14263`, the sea level
+`+0x1427F`, the map's size, the unit limit `+0x37EE6`, the difficulty `+0x37EEE`,
+ActiveCommanderDeath `+0x37EF6`, the meteor config `0x5122F0..0x512338` less the seven fields).
+The CRT's `rand` is per thread and in neither image.
 
 **The projectile pool** (base `*(main+0x141F7)`, count `main+0x141F3`, `0x6B` bytes a record).
 `0x499A30` allocates `0x7D64` bytes, "WEAPON ARRAY" (`0x499A3B`; 300 records exactly, 3000 under the
@@ -2413,8 +2425,16 @@ leave only through the expiry `0x482130` (no argument, plain `ret`), which remov
 (`0x482260`). **The engine has no mid-level way to drop them all**: the count is zeroed only by
 LoadMap (`0x483D92`) and by `0x481500`, which, like the block's free `0x481530` and the predicate
 `0x482110`, has no caller. Setting the count to 0 would leave each record's stamp in the counters
-for good. The seek drops them by setting every `+0x1C` to 0 and calling `0x482130`, and refuses to
-run at GameTime 0, where that removes nothing [DISASSEMBLED].
+for good. The seek drops them by setting every `+0x1C` to 0 and calling `0x482130` (R4, after its
+kills, whose destructor calls add up to 20), and refuses to run at GameTime 0, where that removes
+nothing [DISASSEMBLED]. It then makes the viewed record's again through the engine's own add
+`0x482910` (R14a, after R13's LosType and before the radar pass): one for each death of a live
+viewed-seat unit under true LOS that the recording carries and a playing still holds at step T−1
+(steps T−62..T−1, less those a LosType change dropped), from the victim's image as the destructor
+found it, with the ticks it has left as the duration, and runs the
+expiry once after the radar pass (R14c), as `0x495688` follows the players phase. The add's
+refusals are what keep that call safe: under LosType bit 1 clear or at a count of 20 it returns
+before writing anything (*The sight emitter*, below), and the seek counts a refusal.
 
 **GameTime deadlines the recording does not carry, and how the engine resets them.**
 
@@ -2647,7 +2667,8 @@ sees the replay's step k.
   unit walk `0x47E890` (a visitor's first virtual method per unit, the list through `+0x8E`), whose
   three visitors `0x467840`, `0x467960`, `0x467980` (vtable slots `0x4FD55C`, `0x4FD558`,
   `0x4FD554`) store `+0x110` alone; its fourth loop writes `+0xB0` and bit 12 only for a type-1 or
-  type-2 owner. **It writes nothing in `main+0x142F1`**: the `or byte [..+0x142F1],2` at `0x46742F`,
+  type-2 owner; its fifth, the sight loop, sets bit 8 (`0x46780E`) from the viewed record's sight
+  counters, which under true LOS hold the live temporary sight records' stamps as well. **It writes nothing in `main+0x142F1`**: the `or byte [..+0x142F1],2` at `0x46742F`,
   just before it, is the last instruction of the radar rebuild `0x466DC0` (`ret` at
   `0x46743D`), which the players phase calls for the viewed record every step (`0x465072`) and the
   sight rebuild after its composite (`0x48191F`).
@@ -2743,7 +2764,19 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   `tagpu_replay_capture` is the **capture point**'s write on a puppet host (the globals, the pool,
   the explored map and the declared tables, through `recorded_put`), `tagpu_rec_capture` the
   recorder's capture (and the armed dumps), `air_rebuild` the airborne pool, and `tagpu_replay_step`
-  the replay's step, which writes the next iteration's images after the unit tick.
+  the replay's step, which writes the next iteration's images after the unit tick — all but the
+  features, which wait for the step's late phase (next bullet).
+- **The step's phases, at `0x495513` and `0x495539`** (`tagpu_patches.c`, `fix_step_phases`, in the
+  fail-closed table): the step's calls of the projectile tick `0x49B720` (`E8 08 62 00 00`) and of
+  the explosion tick `0x420F30` (`E8 F2 B9 F8 FF`) each call a stub `pushfd; pushad; push phase;
+  call tagpu_rec_phase; add esp,4; popad; popfd; call <callee>; pushfd; pushad; push phase; call
+  tagpu_replay_phase; add esp,4; popad; popfd; ret`, phase 1 and 2. Both callees take no argument
+  and end in a plain `ret` (`0x49BE5C`, `0x421147`), and the site pushes nothing before either call
+  and reloads what it uses after it (`mov edx,[0x511DE8]` at `0x495518` and `0x49553E`), so the
+  stub's call is the site's own. The recorder notes the phase a feature root is made in (0 from
+  the capture to the projectile tick, 1 inside it, 2 from the explosion tick to the step's end,
+  the feature tick `0x424050` included); a puppet host makes each recorded root at its own phase
+  ([*the counts and the step's phases*](#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01)).
 - **The callers: two**, both in the in-play frame callback `0x496790` (a scan of `.text` for `E8`/`E9`
   rel32 to `0x495490` finds `0x49680C` and `0x49693E`; no jump, and the file holds the address as no
   stored dword). `0x49680C` passes 1 (`push ebx` at `0x49680B`, `ebx` = 1 from `0x4967CF`) on the
@@ -2773,6 +2806,209 @@ between two steps; this is the step those boundaries sit in. Read from `pristine
   between two steps. On a puppet host `tagpu_replay_step` has already put iteration
   k+1's images in step k, which is why a rebuild at the frame visit is in place there and would not
   be on the recording machine.
+
+### The demo recorder's counts and the step's phases: sinks, impacts, emitters and the images gate's map [DISASSEMBLED + MEASURED 2026-10-01]
+
+S3c-2 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s3c-2-counted-on-puppets-and-the-images-gate)
+counts the engine's roots and sinks in every dump, compares a live game's counts with a playing's,
+gates the two images on a null twin and scans dumps for addresses recorded as values. This is what
+that rests on and what the work read on the way. Read from `pristine/TotalA.exe.pristine`
+(`objdump -d -M intel`); callers are direct `E8`/`E9` rel32 plus a scan of the image for the
+address as a stored dword, so a "none" is a none for those two.
+
+**The projectile's collision test `0x49B090(weapon, proj)`**, `stdcall`, `ret 8`, one caller
+(`0x49BD88`, in the projectile tick `0x49B720`). It looks the projectile's position `proj+4` up as a
+plot cell through `0x4815A0` (`0x49B09F`); with no cell it sets the record's done bit `+0x69` bit 1
+and returns (`0x49B0F8`), first moving a camera that follows it to the remembered position
+`main+0x1433F`. Then, in order, each a `call 0x499EB0(proj, victim)`, every one but the first
+ending the test:
+
+| Return address | What it hits | Test |
+|---|---|---|
+| `0x49B1AE` | an interceptor's quarry `proj+0x56` (victim 0) | a distance test against the weapon's `+0xD6` (`0x49B106..0x49B1A4`); the tests below run after it whatever it answered |
+| `0x49B218` | the cell's unit slot A, `[cell+0]` (`0x49B1C7..0x49B213`) | a unit of another owner than `proj+0x66` whose `+0x6E` plus its def's `+0x16E` is above the projectile's altitude `proj+8` |
+| `0x49B27A` | slot B, `[cell+2]` (`0x49B222..0x49B275`) | the same owner test, the altitude between `+0x6E` + def `+0x162` and `+0x6E` + def `+0x16E` |
+| `0x49B3D2` | the cell's feature, the ground or the water (victim 0, `0x49B28A..0x49B3CD`) | skipped for a weapon with `+0x111` bit 14 (`0x49B294`). The feature: the cell's `+8` index below the def count `main+0x14253` (`0xFFFE` resolved to its anchor through `+0xA`/`+0xB`, the other values from `0xFFFB` none), its def `[main+0x1426F] + idx·0x100`, hit when the def's height `+0xFA` plus the cell's height byte `+6` is above the projectile's altitude word `+0xA`, once a cell (`+0x5A`/`+0x5C` hold the last one). Else the ground: the cell's `+6` above the altitude bounces a weapon with bit 15 (`+0x20 = −(v >> 2)`) and hits otherwise; else the water: no bit 16, the altitude below the sea level `main+0x1427F` and `[[main+0x391E9]+0xD48]` zero |
+
+`0x499EB0`'s other callers are the area damage `0x49A120` (`0x49A764`), the `0x0E` receiver
+`0x49AF90` (`0x49AFEB`), the destructor's explosion `0x49B000` (`0x49B074`, returning to
+`0x49B079`) and the projectile tick (`0x49BA6F`, `0x49BACC`, `0x49BC70`): ten in all. Inside the
+impact the sound `0x47F300` is called at `0x499FD8` and `0x499FF2` (returning to `0x499FDD` and
+`0x499FF7`), then a weapon with `+0x111` bit 10 makes grey smoke `0x472810(pos, 9)` at `0x49A007`
+instead of the explosion `0x420A30` at `0x49A016` (returning to `0x49A01B`).
+
+**Why the feature roots need the step's phases** (MEASURED 2026-10-01, forest-circle, live game
+against its playing, the window [661, 2941)). Before them, the playing made every recorded feature
+root at the replay step, after the unit tick and so before the host's projectile tick; a root the
+recording machine made later in its step — a tree an impact felled, the feature tick's burn — took
+the tree away before the host's projectiles met it. `0x499EB0` from `0x49B3D2` counted 134 on the
+live game and 111 on the playing, and the explosion `0x420A30` from `0x49A01B`, the sound `0x47F300`
+from `0x499FF7` and the flare `0x472630` from `0x420AE6` were short by the same 23; every impact the
+playing missed had the tree in the recording machine's cell and its successor in the host's, at a
+projectile record equal on both entering `0x49B090` but for its unit pointers `+0x4E` and `+0x52` (`tagpu_replay.c`, *THE PHASES*). With
+the phases (the stubs on `0x495513` and `0x495539`, [*tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01))
+and the cells' unit slots of the next image written before the host's projectile tick — slot A and
+B are what `0x49B1C7..0x49B275` test, and the recording machine's unit tick has just moved them —
+the same counts over the final nine-fixture run are live/playing 121/121 (forest-fire), 68/68
+(forest-circle), 2491/2491 (battle) and 510/511 (battle-los).
+
+**The sinks** (`tagpu_recorder.c`, `CNT_SINKS`): count-only observers, keyed by the return address
+`[esp]` at entry, each byte-matched at attach. Prologues as matched:
+
+| Entry | Stolen | What |
+|---|---|---|
+| `0x420A30` | `A1 E8 1D 51 00` | the explosion add (`ret 0x10`) |
+| `0x4B08C0` | `56 8B 74 24 08` | the COB thread allocation, `thiscall(cob, idx)`: an index refused when below 0 or at `[[cob+8]+4]` or above (`0x4B08C5..0x4B08D0`), and the three wrappers then start nothing (`0x4B0B0F..0x4B0B22`, `0x4B09A6..0x4B09AF`, `0x4B0C4F..0x4B0C54`); Name2Index `0x4B07C0` reads the names at `[[cob+8]+0x1C]` (`0x4B07C0..0x4B07D3`), which the sink hashes (FNV-1a, at most 31 bytes) as its key's aux |
+| `0x47F0C0` | `8B 4C 24 04 83 EC 14` | a sound entry; `0x47F1A0` calls it at `0x47F1FA` on every call, so the call returning to `0x47F1FF` is not counted again |
+| `0x47F1A0`, `0x47F210` | `8B 0D E8 1D 51 00` | sound entries; `0x47F210` is one: the function before it ends `ret 8` at `0x47F202` and `0x47F205..0x47F20F` is padding |
+| `0x47F300` | `A1 94 E6 51 00` | the sound the impact plays |
+| `0x49C740` | `53 8B 5C 24 10` | the projectile init |
+| `0x49CDE0`, `0x49CC20`, `0x49C9C0` | `8B 0D E8 1D 51 00` | the three shot paths |
+| `0x499EB0` | `53 55 56 8B 74 24 10` | the impact |
+| `0x471FD0`, `0x472330`, `0x472430`, `0x472530`, `0x472630`, `0x472810`, `0x4728F0`, `0x4729D0`, `0x472C50` | `A1 E8 1D 51 00` | particle emitters |
+| `0x472AB0` | `83 EC 0C 8B 44 24 10` | the fire emitter |
+
+**The particle emitters account for the pool's allocations call for call.** `0x470EB0` (the pool
+`0x51E610`'s allocation) has exactly 20 call sites, one in each emitter, live or dead
+([*The raised effect pools*](#the-raised-effect-pools-every-site-tagpu_limitsh-rewrites-disassembled-2026-09-23-objdump-of-the-pristine-build-measured-2026-09-23) lists the twelve live ones). In every emitter the only
+branch between its entry and that call is the test of the byte `0x51E608` (e.g. `0x47281E..0x472832`):
+one allocation a call while it is 0, none while it is set, an empty pool included (the call returns
+0). `0x51E608`'s one writer is `xor byte [0x51E608],1; ret 4` at `0x419550`, the console command
+"SFX" (its pointer at `0x501F34` in the command table): a toggle of one machine. `0x472AB0` draws the
+CRT `rand` four times (`0x472ACF..0x472B3A`) before that test. So the recorder counts the ten
+emitters with a caller besides the two nano emitters (which are roots), keyed by their callers, and
+not `0x470EB0`. Their callers, classified:
+
+- **COB `EMIT_SFX`, `0x480EB0`** (the COB object's vtable slot `+0x30`, at `0x4FD6C8`; EXPLODE
+  `0x481140` is beside it at `0x4FD6CC`) emits only when `UnitInPlayerLOS 0x465AC0` answers for the
+  **viewed** player's record (`main+0x2A43`, `0x480EC5..0x480EEC`), so its count follows the view as
+  well as the simulation. The type dispatches at `0x480FDE` (types 0–5 through the table at
+  `0x481128`): 0 and 1 fire `0x472330` (returning to `0x481015`, `0x481034`), 2–5 the wake `0x472430`
+  (`0x481051`, `0x48106E`, `0x48108B`, `0x4810A8`), `0x101` grey smoke `0x472810` (`0x4810BE`),
+  `0x102` black smoke `0x4728F0` (`0x48111D`), `0x103` bubbles `0x472530` at sea level (`0x481107`).
+- **The explosion draw.** `0x421550` is called from the explosion draw `0x420B00` (`0x420B18`; the
+  draw from DrawGameScreen at `0x469B2C`) and from `0x4211A0` (`0x4211B3`), which has no caller; it
+  emits a flying piece's smoke `0x472810` at `0x421583` and its fire `0x472AB0` at `0x4215AA`
+  (`0x472AB0`'s only call). So those two follow the frame rate, not the tick.
+- **The simulation.** `0x472630` (a flare) from the explosion add `0x420A30` (`0x420AE1`) and the
+  corpse `0x486360` (`0x48644B`). The add emits it when its 4th argument is 0 and the point's y
+  word `+6` is above the sea level byte `main+0x1427F` (`0x420ABE..0x420AD8`); the recorder keys it
+  by the add's caller, read at `[esp+0x20]` of the flare's entry, because the add's frame there is
+  fixed (push edi `0x420A35`, esi `0x420A55`, ebx `0x420A58`, the four arguments
+  `0x420ADA..0x420AE0`, and between them only `0x4B8B30`, `ret 0xC` on both exits `0x4B8B6B` and
+  `0x4B8B7E`) — DISASSEMBLED. Debris decides the argument: the flying-piece tick `0x4213B0`'s water
+  path passes 1 (`push 1` `0x421424`, returning to `0x421445`) and its ground hit 0 (`0x4214AD`,
+  returning to `0x4214D9`); the record tick `0x420F30` passes 1 in water (`0x421046`, `0x421053`)
+  and 0 on ground (`0x421090`), both returning to `0x4210A1`. EXPLODE `0x481140` draws the
+  simulation RNG six times a piece (`0x48116F..0x4811B9`: three spins, vx = (20 − rand(40)) << 14,
+  vy = rand(10) << 16, vz) and gives it 900 ticks (`0x4811C3`); the shatter `0x421700` draws six a
+  polygon (`0x421851..0x4218D2`) — DISASSEMBLED; `0x472810` from the feature tick's burning feature (`0x4243CF`),
+  the impact (`0x49A007`) and the projectile tick (`0x49BC80`, `0x49BDC1`); the trail `0x4729D0` from
+  the three shot paths (`0x49CC07`, `0x49CDC3`, `0x49CFE6`), so a received shot emits its trail too;
+  `0x471FD0` from the Teleport order handler `0x406AA0` (`0x406B9F`); and `0x472C50` from the
+  feature spawn `0x423C50` (`0x423FE3`), whose callers include the map and save loaders and the
+  console's feature command.
+
+**COB's engine writes, observed on a puppet** (`tagpu_puppet.c`, *THE COB WRITES ON A PUPPET*):
+count-only observers on the state setter `0x48B090` (`51 8B 44 24 0C`), the yard `0x47DAC0`
+(`53 8B 5C 24 0C`) and the carry link `0x48AAC0` (`8B 4C 24 04 83 EC 08`), counting a call whose
+return address is one of COB's five write sites: SET's `0x48B090` calls at `0x480B52` (mask 1,
+returning to `0x480B57`) and `0x480BEC` (mask 2, `0x480BF1`), its `0x47DAC0` call at `0x480BAE`
+(`0x480BB3`), ATTACH's `0x48AAC0` at `0x4813A6` (`0x4813AB`) and DROP's at `0x481422` (`0x481427`).
+`0x48B090` is `thiscall(unit; mask, on)`: it computes `on ? old|mask : old&~mask` of `+0x10E`
+(`0x48B09A..0x48B0D4`), stores it, and returns early when it is unchanged (`0x48B0D6..0x48B0DE`) —
+which is why the root count of `0x48B090` counts only a call that changes the byte.
+
+**The roots counted** are the recorder's existing observers: the create's exit `0x4861B3`, the
+destructor `0x4866D0` (only for a slot the destructor's own alive test, `+0x110` bit 28 at
+`0x486706`, passes), the build done `0x41B8D0`, the state setter `0x48B090`, the replies `0x47F780`
+and `0x47F850`, the nano emitters `0x4720D0` and `0x472200`, and the seven feature roots
+(`0x424050`, `0x423C50`, `0x4246B0`, `0x423550`, `0x4233A0`, `0x4244B0`, `0x423710`).
+
+**Two memos of the draw** the images gate met: the unit info panel's 60 bytes at `main+0x37E60`,
+compared with what the panel would draw (`repz cmpsb` of `0x3C` bytes at `0x46ACDB`) and copied in
+when they differ (`rep movs` at `0x46ACEE`), with `+0x37E90`/`+0x37E94` written by the reset
+`0x4679A0` (`0x4679C4`, `0x4679CA`, `0x4679F6`); and DrawGameScreen's 33-byte memo of the resource
+bar at `main+0x37E3F` (`0x468FC6..0x468FEC`). Neither is read by the simulation; both are `leave`
+rows.
+
+**The images gate's map** — what `replay-globals.tsv`'s `leave` rows name, each row with its writers
+and evidence; the corrections first:
+
+- **`0x511A40..0x511DCF` is the network statistics**, not GAF or animation state: zeroed by
+  `0x415E90`, counted per message type by `0x415EF0` from the transport (`0x451DBB`, `0x451F10`,
+  `0x453595`, `0x45361F`, `0x4615C8`), sampled by `0x415FA0`, whose last `GetTickCount` is
+  `0x511DD8`.
+- **`0x51E710` (120 bytes) is the music's combat ring**, not a profile: 30 slots cleared at level
+  load (`0x491A5C`), +5 when the controlled player's unit dies (`0x4869EB`) and +1 per hit by or on
+  it (`0x489DE6`) through `0x494FF0`, a slot a second of wall clock (`0x494E90`), which picks the
+  battle or the peace music; its index `0x51F2DC`, its sampler `0x51F2F8`.
+- **The network object `0x513000..0x51E53B`** (`0xB53C` bytes): static constructor `0x460E20` from
+  the initialiser table (`0x50101C`), vtable `0x4FD514`, 11 channels of `0x1044` from `0x513008`
+  (each a ring of `0x400` message pointers and a wall-clock resend deadline at `+0x24`, `0x4624ED`),
+  the sub-object `0x51E300`, ten `0x34`-byte records `0x51E320..0x51E527`, fields to `0x51E538`. The
+  size is proved by the dead `this`-relative constructor `0x4611E0`, whose last store is
+  `[ebp+0xB538]`; `0x51E53C` is the next global.
+- **`0x51FDB0..0x52B65B`**: the shadow encoder's output count `0x51FDB0`; the Translate table
+  pointer `0x51FDB8`; the DirectDraw surface-lock depth and its stack `0x51FE00..0x51FE3A`; the
+  polygon routines' scratch `0x51FE40..0x51FF03`; HAPINET `0x51FF04..0x51FF0F`; the CD player and the
+  delayed sound `0x51FF10..0x51FFCF`; the SQSH compressor `0x51FFD0..0x526FFF`; zlib `0x527000..0x528993`;
+  the Cavedog library `0x528994..0x529EC3` (its memory manager's statistics `0x5289D0..0x528A1F`);
+  the C runtime from `0x529EC4` (its small-block heap's first region `0x50E9C8..0x5109E7` lies
+  earlier, with its pointer `0x5109E8` and threshold `0x5109EC`). `0x52A4E8..0x52A4F3` is the lock
+  the draw code and the mouse thread take; `0x52A4F4..0x52A4FF` is the compressor's own
+  (`0x4D0F60..0x4D1655`). No engine code below the last static initialiser `0x4E4140` references
+  `0x52A500..0x52B65B`.
+- **The main block's GUI**: the desktop GUI is `main+0x519` (`0x4AA858`); its window state
+  `main+0x539..+0x558` (GUI `+0x20..+0x3F`: window pointers and a count) has no displacement writer,
+  since the GUI's code writes it through `this` (MEASURED forest-fire: the live game held another
+  panel at T1, a fresh process other heap addresses, and the paused twin changed `+0x3C`). The GUI
+  and input block `main+0x2AA7..+0x2CC6`: all 336 stores whose displacement falls there have the
+  main pointer as their base; `+0x2C82` (the mouse record's stamp, copied by `0x4999E7..0x499A04`)
+  and `+0x2CB6` (the click time, `0x4994C7`) are wall clock. The graphics object `0x51F320`'s
+  `+0x1AE..+0x1B5` (`0x51F4CE`) has no instruction naming it (MEASURED: the live game and the
+  playing differ there at T1) [INFERRED: cursor state].
+- **`main+0x14353`, the unit tick's count of the units it ticked** (zeroed `0x48AD4A`, incremented
+  `0x48ADC2`, read only by the debug line `0x46AAC6`), is a `write` row: the steps write it.
+
+**Every wall clock the engine stores.** The sources are `GetTickCount` (IAT `0x4FC0DC`; `0x4B6560`
+is `jmp` to it, and `0x4B6340` is `GetTickCount · rate / 1000`), `QueryPerformanceCounter` (IAT
+`0x4FC0BC`; `0x4E1730` in seconds), and the C runtime's `time` `0x4E6480`; there is no
+`timeGetTime`. Their stores into the two images: the GUI's clock `main+0x5AF..+0x5B6`, the ping
+deadline `main+0x1B5F`, the pacing gate's `main+0x38A37..+0x38A42`, `+0x38A43` and `+0x38A4F` (and
+`+0x38A4D`, which its trim steps), the profiler `main+0x38D85..+0x38DD4`, the palette fade and
+briefing flow `main+0x3905B..+0x3906E`, the local network name `main+0x14` (from `time()`); in
+`.data` `0x5129A4`, `0x5129A8`, `0x5129C8`, `0x512C78`, `0x512C7C`, the network channels' deadlines,
+`0x51E544`, `0x51E674..0x51E67B`, `0x51E680`, the loading fade `0x51E6C8` and `0x51F308`, the
+scoreboard `0x51F2F4`, the music `0x51F2F8`, `0x51F300`, `0x51F304`, the mouse record's stamp
+`0x51F4C2`, the FPS counter `0x51F4FA..0x51F509`, `0x51FB94`, `0x51FBAC..0x51FBB7`, the timers
+`0x51FBE0..0x51FC87`, the Cavedog library's `0x5292E0` and `0x529548`, and `time()`'s cache
+`0x529F10`. Each is a `leave` row. Outside the images: the player records' clocks (already
+`replay-layout.tsv`'s timer rows) and the hover wave in the unit records.
+
+**The two random streams and where they are seeded.** The simulation RNG `0x51FC88` is seeded once
+a level by the loader `0x497180` from `QueryPerformanceCounter` (`0x49718C`, the two dwords summed,
+then `0x4B6CA0` at `0x49719D`); the CRT's `rand` `0x4E4870` is seeded by `srand` `0x4E4860` at
+`0x4971AE` (the loader thread's stream) and `0x49E8BB` (WinMain, the game thread's), both from
+`time(0)`, and keeps its state per thread at `+0x14` of the block `0x4EB0F0` returns, in neither
+image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **None of the simulation's
+consumers is recomputed on a puppet host**: the wind's draw `0x490C60` never runs with Impure
+(`fix_wind` replaces it, and the wind's state and fields are recorded); the meteor shower
+`0x437DE0` and the forced shower `0x438070` are gated on a puppet level and their state is recorded;
+the objective's draw `0x490385` is never reached in this exe; the skirmish start positions
+(`0x4979E7`, `0x497A32`) feed the seat setup a puppet level skips; and the network start shuffle and
+the packet loss are network-only. Every site a puppet host does recompute is presentation (feature
+smoke, particles, lightning, replies, elimination texts, music), the viewer's camera shake
+`0x41C6F0`, or the front end. A new simulation use of `0x4E4870` would diverge silently: neither
+image holds its state.
+
+**Values in the records that look like addresses** (MEASURED on the first run's last live dumps of
+four fixtures; the DLL loaded at `0x76CF0000`, `SizeOfImage` `0x4949000`): 261 of 169,140 plain
+aligned unit dwords lay inside the DLL's range and none in a heap range — dwords straddling two
+16-bit fields (unit `+0x18`, `+0x64`, `+0x68`, `+0x70`, `+0xA8`, `+0x140`; projectile `+0x38`,
+`+0x64`). A u16 whose value lies in `0x76CF..0x7B63` makes one: 1.79 % of uniform values. The
+simulation RNG's state is below 2^31 and lands in the DLL's range 3.6 % of the time. So the scan
+tests the engine's records and the globals image against the engine's own ranges only.
 
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
@@ -6081,7 +6317,7 @@ the other eight reuse a `y >> 1` computed further up (`0x4658E0`'s second corner
 | `0x467294` | the radar rebuild | as above | mapped grid | sheared, patched: local |
 | `0x467340` | the radar rebuild; `ebx` overwritten at `0x467315`, `0x467322` | as above | LOS grid | sheared, patched: local (z through `[esp+0x18]`) |
 | `0x467375` | the radar rebuild; `ebx` overwritten at `0x467365` too | as above | mapped grid | sheared, patched: local (z through `[esp+0x18]`) |
-| `0x46778A` | the view player's map build `0x467440`, its fourth pass `0x46770D..0x46782F` | a unit the view player sees gets `+0x110` bit 8, which the acquisition `0x40AA40` puts on every player's radar list | LOS grid | sheared, patched: table |
+| `0x46778A` | the view player's map build `0x467440`, its fifth loop, the sight loop `0x46770D..0x46782F` | a unit the view player sees gets `+0x110` bit 8, which the acquisition `0x40AA40` puts on every player's radar list | LOS grid | sheared, patched: table |
 | `0x4677D0` | the view player's map build | as above | mapped grid | sheared, patched: table |
 | `0x47360C` | the particle leaf `0x473590` | whether a particle is drawn | LOS grid | sheared, patched: local |
 | `0x473657` | the particle leaf `0x473590` | as above | mapped grid | sheared, patched: local |
@@ -6188,11 +6424,29 @@ its corner, `(z >> 5) − (y >> 6)` less the circle's offset (`0x4826B7`), and t
 row (`0x4824F8..0x482547`), so every row of the circle inside the grid is stamped.
 
 **The temporary sight records** `main+0x1427B`, `main+0x14277` of them, at most 20 (`0x48292C`), 36
-bytes each: `0x482910(point, sight, height, duration)` (`ret 0x10`; called at `0x486748` with a unit's
-`+0x6A`, its def's `+0x202` and `+0x170`, and `0x3C`) fills the next record for the local player
-(`main+0x2A43`), its stored words at `+0x20` and its height byte at `+0x0B` inside the record
-itself, the expiry `GameTime + duration` at `+0x1C`, zeroes the byte and emits (`0x4829F4`). The
-expiry `0x482130` (called at `0x495688`) removes every record past its time through `0x481D50`
+bytes each: `0x482910(point, sight, height, duration)` (`__stdcall`, `ret 0x10` at `0x482AAF`;
+DISASSEMBLED `0x482910..0x482AAF`). It **refuses before writing anything** — no push, no store, the
+count unchanged — when LosType bit 1 is clear (`and al,2` at `0x48291C`, `jne` at `0x482920`) or the
+count is already 20 (`cmp eax,0x14` at `0x48292C`, `jge` at `0x48292F`); both jump to the `ret`.
+Otherwise it fills record `count` of the block (`0x482935..0x482940`, `0x24` bytes a record): `+0x00`
+the viewed player's record, `main+0x1B63 + 0x14B·[main+0x2A43]` (`0x482945..0x482972`), `+0x04` a
+pointer to its stored words at `+0x20`, `+0x08` the sight word, `+0x0A` the height byte, `+0x0C` a
+pointer to its height byte at `+0x0B`, `+0x10..+0x1B` the point copied (`0x48297E..0x48298D`) with y
+raised to at least (the sea level `main+0x1427F` + 1) << 16 (`0x48299F..0x4829B0`), and the expiry
+`GameTime + duration` at `+0x1C` (`0x4829C4`). It zeroes the height byte (`0x4829DE`) and stamps: under
+the ray fan (LosType bit 2) through the emitter `0x4825B0(record)` (`0x4829F4`), otherwise as the
+circle: the radius index sight/32 − 5 clamped to [0, the circle table `*(main+0x1485B)`'s count − 1]
+(`0x4829FE..0x482A25`), the corner the point less the circle's offset from `0x4B7F30`
+(`0x482A6A..0x482A85`), then `0x482270` and `0x481930` (`0x482A8E`, `0x482A94`). Both stamping paths
+reach the count's increment (`0x482AA1..0x482AA9`); the refusals do not. **Its one engine caller is
+the destructor** (`0x486748`, the only `E8` to it in `.text` and no absolute reference): only for
+a unit whose `+0x110` bit 28 is set (the test at `0x486706` jumps to the epilogue, `0x486E59`, for
+a dead slot) and whose owner record
+(`+0x96`) has `+0x146` equal to `main+0x2A43` (`0x486716..0x48672A`); it pushes `0x3C`
+(`0x486732`), the def's (`+0x92`) `+0x170` and `+0x202`, each sign-extended from a word
+(`0x486737`, `0x48673E`), and the unit's `+0x6A`. It does not test LosType itself: the add does.
+The expiry `0x482130` (its one call `0x495688`, once a call of the step `0x495490`, after its tick
+loop) removes every record past its time through `0x481D50`
 (`0x482161`), then compacts the table (`0x4821BF..0x48222D`): each kept record is copied down with
 its pointers re-aimed at its new place, the stored words (`0x482220`) and the byte (`0x48222D`)
 moved together.
