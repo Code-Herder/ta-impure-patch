@@ -38,6 +38,10 @@
 0x47F1A0	0x496508	*	absent	the in-game console key's click (0x4964FD plays SmallButton, then opens the console 0x494050): the recording machine's own keyboard	2026-10-01
 0x420A30	0x421445,0x4214D9,0x4210A1	*	absent	a flying piece's or a falling record's explosion: pieces are spawned from the simulation RNG at EXPLODE 0x481140, which a puppet host draws in another order; the owner accepts debris that flies differently (2026-10-01)	2026-10-01
 0x420A30	0x421445,0x4214D9,0x4210A1	*	extra	as the absent row	2026-10-01
+0x472630	0x420AE6	0x4210A1	absent	a falling record's explosion's flare: the add 0x420A30 emits it at 0x420AE1 (4th argument 0, the point above the sea level, 0x420ABE..0x420AD8), so it lands with the 0x420A30 row's explosion; the counts key it by the add's caller (tagpu_recorder.c, sink_472630)	2026-10-01
+0x472630	0x420AE6	0x4210A1	extra	as the absent row	2026-10-01
+0x472630	0x420AE6	0x4214D9	absent	a flying piece's ground explosion's flare, as the 0x4210A1 row; the piece's water explosion 0x421445 passes 4th argument 1 (0x421424) and never flares	2026-10-01
+0x472630	0x420AE6	0x4214D9	extra	as the absent row	2026-10-01
 0x472810	0x421588	*	absent	a flying piece's smoke, as 0x420A30's piece rows	2026-10-01
 0x472810	0x421588	*	extra	as the absent row	2026-10-01
 0x472AB0	0x4215AF	*	absent	a flying piece's fire (0x472AB0's only caller), as 0x420A30's piece rows	2026-10-01

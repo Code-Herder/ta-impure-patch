@@ -3725,7 +3725,38 @@ static int __cdecl sink_471FD0(void* E) { return sink_count(E, 0x00471FD0u, 0); 
 static int __cdecl sink_472330(void* E) { return sink_count(E, 0x00472330u, 0); }
 static int __cdecl sink_472430(void* E) { return sink_count(E, 0x00472430u, 0); }
 static int __cdecl sink_472530(void* E) { return sink_count(E, 0x00472530u, 0); }
-static int __cdecl sink_472630(void* E) { return sink_count(E, 0x00472630u, 0); }
+/* The flare, keyed by the caller of the explosion add 0x420A30 that emits it. The add emits it at
+   0x420AE1 when its 4th argument is 0 and the point's y word +6 is above the sea level byte
+   main+0x1427F (0x420ABE..0x420AD8), so each add's flares are compared beside the add itself and
+   replay-absent.tsv's rows for the flying pieces' adds reach their flares and no other add's.
+   THE BOUND on what the key means: a return to 0x420AE6 is the add's one call of the flare, and
+   the add's frame there is fixed by its code (DISASSEMBLED): push edi 0x420A35, push esi 0x420A55,
+   push ebx 0x420A58, the four arguments 0x420ADA..0x420AE0, and between them only 0x4B8B30, which
+   returns `ret 0xC` on both exits (0x4B8B6B, 0x4B8B7E), and the sequence stub at 0x420AA2
+   (tagpu_patches.c, which pushes and pops edx), so [esp+0x20] is the add's return address.
+   cnt_sinks_init matches those bytes (s_flareAux); on a mismatch the flare is counted with aux 0.
+   The word is a count key read from this thread's own stack, never dereferenced. */
+static const unsigned char ADD_EDI[1] = { 0x57 };                       /* 0x420A35 push edi */
+static const unsigned char ADD_A[77] = {                                /* 0x420A55..0x420AA1 */
+    0x56, 0x2B, 0xC1, 0x53, 0x8B, 0x5C, 0x24, 0x10, 0x41, 0x8D, 0x14, 0x40, 0x89, 0x0F, 0x8B, 0xCB,
+    0x8D, 0x74, 0x97, 0x04, 0x8B, 0x11, 0x8D, 0x46, 0x1C, 0x89, 0x56, 0x1C, 0x8B, 0x51, 0x04, 0x89,
+    0x50, 0x04, 0x8B, 0x49, 0x08, 0x89, 0x48, 0x08, 0x8B, 0x44, 0x24, 0x14, 0x85, 0xC0, 0x74, 0x0E,
+    0x6A, 0x00, 0x8D, 0x56, 0x04, 0x50, 0x52, 0xE8, 0x9F, 0x80, 0x09, 0x00, 0xEB, 0x07, 0xC7, 0x46,
+    0x0C, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x44, 0x24, 0x18, 0x85, 0xC0, 0x7C, 0x15 };
+static const unsigned char ADD_B[73] = {                                /* 0x420AA9..0x420AF1 */
+    0x6A, 0x00, 0x8D, 0x4E, 0x10, 0x50, 0x51, 0xE8, 0x7B, 0x80, 0x09, 0x00, 0xEB, 0x07, 0xC7, 0x46,
+    0x18, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x44, 0x24, 0x1C, 0x85, 0xC0, 0x75, 0x20, 0x8B, 0x15, 0xE8,
+    0x1D, 0x51, 0x00, 0x66, 0x0F, 0xB6, 0x82, 0x7F, 0x42, 0x01, 0x00, 0x66, 0x39, 0x43, 0x06, 0x7E,
+    0x0C, 0x6A, 0x09, 0x6A, 0x0F, 0x6A, 0x07, 0x53, 0xE8, 0x4A, 0x1B, 0x05, 0x00, 0xC7, 0x06, 0x00,
+    0x00, 0x00, 0x00, 0x5B, 0x5E, 0x5F, 0xC2, 0x10, 0x00 };
+static const unsigned char RET_0C[3] = { 0xC2, 0x0C, 0x00 };           /* 0x4B8B6B, 0x4B8B7E */
+static int s_flareAux;                  /* the add's frame matched at attach */
+
+static int __cdecl sink_472630(void* E)
+{
+    unsigned aux = s_flareAux && ARG(E, 0) == 0x00420AE6u ? cnt_caller(ARG(E, 0x20)) : 0;
+    return sink_count(E, 0x00472630u, aux);
+}
 static int __cdecl sink_472810(void* E) { return sink_count(E, 0x00472810u, 0); }
 static int __cdecl sink_4728F0(void* E) { return sink_count(E, 0x004728F0u, 0); }
 static int __cdecl sink_4729D0(void* E) { return sink_count(E, 0x004729D0u, 0); }
@@ -3737,7 +3768,8 @@ static int __cdecl sink_472C50(void* E) { return sink_count(E, 0x00472C50u, 0); 
    0x47F202, then padding to 0x47F20F) and 0x47F300; 0x47F210 and 0x47F300 call 0x47F0C0 too
    (returning to 0x47F279, 0x47F31F), so one sound is counted under both keys, on both machines; the projectile init 0x49C740 and the three shot paths
    0x49CDE0, 0x49CC20, 0x49C9C0; the impact 0x499EB0; and the ten particle emitters with a caller
-   besides the two nano emitters (roots above), keyed by their callers: each makes exactly one pool
+   besides the two nano emitters (roots above), keyed by their callers (the flare 0x472630 from the
+   add also by the add's caller, as aux): each makes exactly one pool
    allocation 0x470EB0 a call while the console's SFX byte 0x51E608 is clear (the only branch
    before it), so the emitters account for the pool's allocations call for call */
 static const ObserveSite CNT_SINKS[] = {
@@ -3789,6 +3821,14 @@ static void cnt_sinks_init(void)
         in++;
     }
     tagpu_logf("recorder: %u of %u sinks counted", in, (unsigned)CNT_SINK_COUNT);
+    s_flareAux = tagpu_detour_bytes_ok(0x00420A35u, ADD_EDI, sizeof ADD_EDI) &&
+                 tagpu_detour_bytes_ok(0x00420A55u, ADD_A, sizeof ADD_A) &&
+                 tagpu_detour_bytes_ok(0x00420AA9u, ADD_B, sizeof ADD_B) &&
+                 tagpu_detour_bytes_ok(0x004B8B6Bu, RET_0C, sizeof RET_0C) &&
+                 tagpu_detour_bytes_ok(0x004B8B7Eu, RET_0C, sizeof RET_0C);
+    tagpu_logf(s_flareAux ? "recorder: the flare 0x472630 is keyed by its explosion add's caller"
+                          : "recorder: the explosion add 0x420A30 holds other bytes: its flare is "
+                            "counted with aux 0");
 }
 
 /* the counts (THE COUNTS), the puppet's COB writes among them, and the names of the scripts */
