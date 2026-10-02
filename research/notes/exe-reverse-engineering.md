@@ -4973,8 +4973,10 @@ reading `UNITINFOCount` and every UnitName (`+0x20`) through `tacli peek`:
 - In a level, the same 279 names stood sorted, `None` first (`ARMAAP`, `ARMAAS`, `ARMACA`, …),
   hash `0x54F5FE19`, which is what the level's recording carried.
 So a type ID, and the defs fingerprint, mean what they mean in a level only once the level has
-loaded. Whether the level's loader sorts, or loads in an order that comes out sorted, is not
-traced [INFERRED: sorted by name]. That is why Watch compares the defs at the first step
+loaded. The level's unit-data load `0x42D2E0` makes that order and then re-reads every name from
+its file; the shell's order comes back because that load ends by setting the reload flag
+(`0x42DB2B`), so the next `0x42BD10` runs the loader again (*`0x42D2E0` — the level's unit-data
+load*, below, has the steps). That is why Watch compares the defs at the first step
 (`tagpu_replay.c`, `data_match`), and why the Replays browser cannot lock on them in the shell
 (the S5 note, *Open*).
 
@@ -6632,7 +6634,15 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   self-propelled flight a water weapon above the sea falls under gravity (`0x49B9C2..0x49BA11`,
   `main+0x14263`) and does not steer.
 - **The weapon load `0x42E310`**: entry `sub esp,0x120`; its one caller is `0x4918BB` in
-  `LoadGameData_Main 0x4917D0`; the ID site `0x42E468` is A′3's.
+  `LoadGameData_Main 0x4917D0`; the ID site `0x42E468` is A′3's. It empties the 256 slots
+  (`0x42E31C..0x42E343`: the name's first byte 0, `+0x10A` the slot's own index), lists
+  `Weapons\*.tdf` (`0x42E371`), and gives every section of every file to `0x42E440`, which takes
+  the slot from the section's `ID` (`0x42E463`, default −1), copies the section's name into the
+  slot's first bytes with no bound (`0x42E490..0x42E4A9`) and its `name` into `+0x20`
+  (`0x42E4B1`, 0x40 bytes). A later section with the same `ID` overwrites an earlier one. Nothing
+  else fills the table, so the shell holds none until a level has loaded: **MEASURED
+  2026-10-02** on retail, at the main menu of a fresh start, every one of the 256 names at
+  `main+0x2CF3` was empty.
 - `0x485070(pos)`, `ret 4`: the ground height under a position, −1 off the map.
 
 ### A hit's alerts, its blink and the stones' dots
@@ -14206,6 +14216,29 @@ FBI loader.
   native multiplayer sync never reach COB validation, and rejection indices recorded during
   COB loading are not subsequently moved by this compaction/sort. [DISASSEMBLED 2026-09-28;
   MEASURED: host-only and joiner-only malformed COB fixtures absent on both peers.]
+- **What a level's type list, and so `RT_UNITDEFS`, is a function of** [DISASSEMBLED
+  2026-10-02]. The filter keeps the order of what it keeps (a `remove_if`: `0x42D4AD..0x42D4D2`
+  finds the first type without bit 23, `0x42D4DC..0x42D50E` copies each later type that has it
+  down). Bit 23 is the loader's verdict (`0x42A8D0`: set when the FBI's `Version` is not above
+  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` and
+  `0x42B14B..0x42B162`; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
+  drops every type without it), and afterwards the battleroom's restriction store's (`0x46E203`,
+  `0x46E23B`, in `0x46E160`, *A type's own cap* above, which marks its running at game start
+  INFERRED). Nothing else writes it: the other writers of `+0x241` are the def copy `0x42B370`
+  and the FBI loader `0x42BF40`, whose bit-field writes never touch bit 23.
+  The sort covers `[1, count)` (`0x42D54F`, `0x42D557`), so `None`, type 0, stays first. Its
+  comparator `0x42DB60` is `_stricmp(a+0x20, b+0x20) < 0` through the CRT's `0x4F8A70`, which,
+  with `__lc_handle[LC_CTYPE]` (`0x52A018`) at 0, folds `A`..`Z` alone to lower case and compares
+  unsigned bytes; the CRT's locale setter `0x4ED9A0` has no reference in the exe (no call, no
+  pointer to it), so that is the branch taken. Types whose names are equal after that folding
+  tie, and the sort (the partition `0x432D40`, then insertion) is not stable: tied types keep no
+  defined order. Then the per-type loop reads each type's FBI again by its name,
+  `units\<UnitName>.FBI` (`0x42D709`), and `0x42BF40` reads `unitname` into `+0x20` once more
+  (`0x42BFA7`, 0x20 bytes, default empty): a type whose file is named otherwise than its
+  `UnitName` takes the name from whatever file bears its name. So a level's names are the
+  restriction store's verdict over the loader's types, sorted as above, each renamed by the file
+  its name points to; in retail the result was the shell's 279 names sorted (above, *The shell
+  and a level hold the unit types in different orders*).
 - **`0x42BF40(path, def)`** (`sub esp,0x518`) opens the file (`0x4C2F60`) and finds `[UNITINFO]`
   (`0x4C3410` with `0x503914`); at `0x42BF8C..0x42BF93` it takes **`ebp = def`**
   (`[esp+0x530]`) and **`ecx = the section`** (`[esp+0x14]`), and at `0x42BF97` begins its first

@@ -403,9 +403,27 @@ and leave, polling for error boxes, with a picture per screen.
   Escalation has none of its own: without a committed `font` entry no ground is composed and the
   browser does not arm. Landings 1 and 2 wait on the owner's letters for this and for the dock's art.
 - **The lock on another game's recordings** waits on a decision. The rule is `RT_UNITDEFS` and
-  `RT_WEAPONS` against the running game's, but the main menu does not hold the unit types in a
-  level's order. MEASURED 2026-10-02 on retail: the shell held 279 types in the order the start-up
-  loaded them, hash `0x93B2B33D`. Every level held the same 279 names sorted, `None` first, hash
-  `0x54F5FE19`, which is what its recording carries. The shell's hash came back after the level.
-  Compared in the shell, then, every recording would lock. The weapons in the shell were not
-  measured.
+  `RT_WEAPONS` against the running game's, and the main menu holds neither as a level makes it
+  (the engine map, *`0x42D2E0` — the level's unit-data load*, and its weapon load `0x42E310`):
+  - **The order is established.** MEASURED 2026-10-02 on retail: the shell held 279 types in the
+    order the start-up loaded them, hash `0x93B2B33D`; every level held the same 279 names
+    sorted, `None` first, hash `0x54F5FE19`, which is what its recording carries. DISASSEMBLED: the
+    level keeps the types with bit 23 of `+0x241`, in order, and sorts all but `None` with
+    `_stricmp` over the name, which folds `A`..`Z` alone and compares unsigned bytes. Tied
+    names (equal after that folding) end in no defined order.
+  - **The names are not the menu's.** After the sort the level reads each type's file again by
+    its name, `units\<UnitName>.FBI`, and takes `unitname` from it: a type whose file is named
+    otherwise than its `UnitName` is renamed by whatever file bears its name. The menu cannot
+    tell without reading every FBI.
+  - **The set is not the install's alone.** Bit 23 is the loader's verdict, then the battleroom's
+    restriction store's (its running at game start is INFERRED): a type the store clears is in
+    neither the level's list nor its recording.
+  - **The weapons are not in the menu at all.** The table is filled only by the level's weapon
+    load, from every section of `Weapons\*.tdf` by its `ID`, a later section overwriting an
+    earlier one. MEASURED 2026-10-02 on retail: at the main menu of a fresh start all 256 names
+    were empty.
+
+  A lock computed in the shell would then have to repeat the level's file reads (every FBI's
+  `unitname`, every weapon section and its `ID`), or take the values from a level (the recorder
+  computes both at every start), or follow Watch's own refusal. Until that is decided Watch's
+  check at the first step is the only one.
