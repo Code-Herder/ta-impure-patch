@@ -9183,6 +9183,8 @@ static int fix_map_terrain(void)
     return fix_write(site, 2);
 }
 
+SIM_FEATURE(load_unpaused, SIM_PUPPET_RUNS, "battle");
+
 /* A LEVEL STARTS PAUSED after the last one was left through the in-game menu. [DISASSEMBLED]
    The pause is main+0x38A51 bit 0. While it is set the frame function 0x496790 skips the
    scheduler 0x495230 and the tick 0x495490 (0x4968AA, 0x496920), which are called nowhere else;

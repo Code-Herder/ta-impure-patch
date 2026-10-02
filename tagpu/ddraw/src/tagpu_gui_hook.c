@@ -5196,21 +5196,23 @@ void tagpu_gui_flush(unsigned int frame_counter)
     /* mingw's `_snprintf` does not NUL-terminate on truncation, and `glog`
        hands the result to `fprintf("%s")`, so an undersized buffer is an
        out-of-bounds READ, not a tidy cut. */
-    char b[700];        /* 688 worst case, COUNTED OUT OF THE FORMAT STRING rather
-                           than adjusted by eye: 234 literal characters, 42 `%u` at
+    char b[720];        /* 715 worst case, COUNTED OUT OF THE FORMAT STRING rather
+                           than adjusted by eye: 241 literal characters, 44 `%u` at
                            ten digits, and THREE `%d` at eleven (`world=…/%d`,
                            `surfaces=%d`, `draw=%d`) plus the NUL. A conversion is
                            sized by its TYPE, not by the values you expect in it:
                            `s_phaseLive` only ever holds 0 or 1 and still counts
                            eleven. The `asset=` and `tint=` groups are FOUR fields
-                           each, `wheel=` four too, `box=` three, `winpeak=` two. */
+                           each, `wheel=` four too, `box=` three, `grey=` and
+                           `winpeak=` two. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Forty-two
-           `%u`s at ten digits and three `%d` at eleven, plus 234 literals, is
-           688 bytes with the terminator, under the 700 of `b`. The observed line is ~300; the gap is
+        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Forty-four
+           `%u`s at ten digits and three `%d` at eleven, plus 241 literals, is
+           715 bytes with the terminator, under the 720 of `b`; the explicit
+           terminator below holds even if a group is added without a recount. The observed line is ~300; the gap is
            entirely how long the session has run. COUNT IT AGAIN when you add a
            group. */
         _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u box=%u/%u/%u grey=%u/%u wheel=%u/%u/%u/%u winpeak=%u/%u",
@@ -5225,6 +5227,7 @@ void tagpu_gui_flush(unsigned int frame_counter)
                   s_greys, s_greyNoTable,
                   s_lwNotches, s_lwRows, s_lwMiss, (unsigned)s_lwFull,
                   s_winPeakBytes, s_winPeakOps);
+        b[sizeof b - 1] = 0;
         glog(b);
         s_censusSeq++;
         {

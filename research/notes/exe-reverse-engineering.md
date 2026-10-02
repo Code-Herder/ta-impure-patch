@@ -12197,10 +12197,11 @@ flag does three things:
 The other three greying painters make the same pair of calls: `0x4A1B1F`/`0x4A1B32`,
 `0x4A2BBD`/`0x4A2BD0` and `0x4A5B01`/`0x4A5B14`.
 
-The frame itself is not swapped for a grey one. A button with attribs `0x3400` draws frame
-`[+0x13B]` greyed or not (`0x4A60B8`, `0x4A614E`). A plain button (attribs 2) draws frame
-`min(stages + 2, count − 1) + [+0x13B]` greyed (`0x4A60D9`) and frame 0 otherwise. The record's
-greyed byte is `+0x13C` (`0x4A6071`).
+The frame itself is not swapped for a grey one. Greyed, a button whose attribs have a bit of
+`0x1800` set draws frame `[+0x13B]` (`0x4A60B8` tests `ch & 0x18`), and any other draws
+`min([+0x138] + 2, count − 1) + [+0x13B]`, where `+0x138` is the pressed word (`0x4A60D9`). Not
+greyed, the frame comes from the stage bytes `+0x136`/`+0x137`, or from `[+0x13B]` plus the
+pressed word (`0x4A611C`..`0x4A616B`). The record's greyed byte is `+0x13C` (`0x4A6071`).
 
 **The grey table.** `globals+0xCC` is 256 bytes:
 
