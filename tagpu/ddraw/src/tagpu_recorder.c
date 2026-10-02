@@ -86,6 +86,8 @@
 #define PL_NAMELEN     0x1E
 #define PL_CONTROLLER  0x73
 #define PL_ALLY        0x108        /* the alliance row, 11 bytes (the saver's `Alliances`)        */
+#define PL_LIVE        0x144        /* u16: the player's live units; the destructor's decrement
+                                       (0x486DFC) to 0 eliminates it (0x486E54)                  */
 #define OFF_BUCKETS    0x1429F      /* the sort buckets, 10 bytes each                            */
 #define OFF_BCOLS      0x142A3      /* u32 columns, and u32 rows at +0x142A7 (LoadMap, 0x482CA3)   */
 #define OFF_BROWS      0x142A7
@@ -578,6 +580,10 @@ typedef struct Rec {
     unsigned       mruns;       /* RK_MAPPED_RUNS the stream carried                       */
     unsigned long long mrun_bytes;   /* and the map's bytes in them                        */
     unsigned char  mrunbuf[REC_MAPPED_RUNS];    /* an RK_MAPPED_RUNS as it is built          */
+    unsigned short seated;              /* bit i: the header seats record i (RT_PLAYER)          */
+    unsigned       cmdr[REC_PLAYERS];   /* the GameTime each seat's last commander died, 0 none  */
+    unsigned       defeat[REC_PLAYERS]; /* the GameTime its live count last reached 0, 0 none:
+                                           a seat ends defeated only while it is still 0       */
 } Rec;
 
 static void olist_drop(Rec* r, unsigned slot);
@@ -742,6 +748,91 @@ void tagpu_rec_features_print(const char* ta, unsigned* w, unsigned* h, unsigned
     *hash = fdefs_hash(ta, *ndefs);
 }
 
+/* THE MOD. The engine's mounted archives are the list at [0x51FBD0]+0x618 (handles), +0x61C its
+   count, each handle's +0x14 the archive's full path in a buffer of 0x104 bytes (OpenHAPIFile
+   0x4BDD70). Only InitTAHPIAry 0x41D4C0 mounts, prunes or reallocates the list, from its eleven
+   callers on the game thread (the skirmish's Start last, 0x47AF2E); this reads it on the game
+   thread too, so the list cannot move under it. BOUND: the engine's count, which the allocation
+   always holds (the mount reallocates to count+1, 0x4BE140), capped at ARC_SANE to bound the time;
+   a path is read within its buffer. */
+#define VERSION_TEXT 0x005031B4u    /* the main menu's version (0x4263B0 puts it into DebugString):
+                                       "v3.1", or what a mod's patch wrote there; 7 characters fit */
+#define GFX_PP       0x0051FBD0u    /* the graphics globals (0x4B6220 returns it)           */
+#define ARC_LIST     0x618
+#define ARC_COUNT    0x61C
+#define ARC_PATH     0x14
+#define ARC_PATHMAX  0x104
+#define ARC_SANE     4096u
+#define IMPURE_UFO   "impure-patch.ufo"   /* Impure's own archive: not the mod (tagpu_menu.c) */
+
+typedef void (*ArcVisit)(void* ctx, const char* name, unsigned n, unsigned size, const FILETIME* t);
+
+static unsigned fnv(unsigned h, const void* p, unsigned n)
+{
+    const unsigned char* b = (const unsigned char*)p;
+    while (n--) h = (h ^ *b++) * 16777619u;
+    return h;
+}
+
+/* Each mounted archive in mount order, its name without its folder, size and mtime (0 when the
+   file cannot be asked), to `visit` for the first REC_ARCHIVES; the fingerprint of all but
+   Impure's own, over their names and sizes: two installs of one mod agree whatever their files'
+   times. `*n` the archives the engine holds. */
+static unsigned archives_each(ArcVisit visit, void* ctx, unsigned* total)
+{
+    const char* gfx = *(const char* const*)GFX_PP;
+    const char* const* list;
+    unsigned count, i, h = 2166136261u;
+    *total = 0;
+    if (!gfx) return h;
+    list = *(const char* const* const*)(gfx + ARC_LIST);
+    count = *(const unsigned*)(gfx + ARC_COUNT);
+    if (!list) return h;
+    *total = count;
+    if (count > ARC_SANE) count = ARC_SANE;
+    for (i = 0; i < count; i++) {
+        const char* path = list[i] ? list[i] + ARC_PATH : NULL;
+        const char* name;
+        char low[ARC_PATHMAX];
+        unsigned n, k, size = 0;
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        FILETIME mt = { 0, 0 };
+        if (!path) continue;
+        n = (unsigned)bounded_len(path, ARC_PATHMAX);
+        if (n == ARC_PATHMAX) continue;           /* a buffer the mount left unwritten */
+        name = path + n;
+        while (name > path && name[-1] != '\\' && name[-1] != '/') name--;
+        n = (unsigned)(path + n - name);
+        if (GetFileAttributesExA(path, GetFileExInfoStandard, &fa)) {
+            size = fa.nFileSizeLow;
+            mt = fa.ftLastWriteTime;
+        }
+        if (visit && i < REC_ARCHIVES) visit(ctx, name, n, size, &mt);
+        for (k = 0; k < n; k++)
+            low[k] = (char)(name[k] >= 'A' && name[k] <= 'Z' ? name[k] + 32 : name[k]);
+        if (n == sizeof IMPURE_UFO - 1 && !memcmp(low, IMPURE_UFO, n)) continue;
+        low[n] = 0;
+        h = fnv(h, low, n + 1);
+        h = fnv(h, &size, 4);
+    }
+    return h;
+}
+
+unsigned tagpu_rec_mod_print(void)
+{
+    unsigned n;
+    return archives_each(NULL, NULL, &n);
+}
+
+static void archive_entry(void* ctx, const char* name, unsigned n, unsigned size, const FILETIME* t)
+{
+    unsigned char b[12 + ARC_PATHMAX];
+    memcpy(b, &size, 4);
+    memcpy(b + 4, t, 8);
+    memcpy(b + 12, name, n);
+    tlv((Tlv*)ctx, RT_ARCHIVE, b, 12 + n);
+}
+
 static void header_build(const Level* L, int tick, const char* map, const FILETIME* now, Tlv* t)
 {
     unsigned i, n;
@@ -823,6 +914,42 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
     }
     tlv(t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
     tlv_u32(t, RT_PROJECTILES, TAGPU_LIM_PROJ);
+    {
+        const char* v = (const char*)VERSION_TEXT;
+        unsigned k = 0;
+        while (k < 8 && v[k] >= 0x20 && v[k] < 0x7F) k++;
+        if (k && k < 8 && !v[k]) tlv(t, RT_GAME_VERSION, v, k);
+    }
+    {
+        unsigned d[2];
+        d[0] = archives_each(archive_entry, t, &d[1]);
+        tlv(t, RT_MODPRINT, d, 8);
+    }
+}
+
+/* The TNT's minimap picture as an RB_MINIMAP's payload into `b`: its size, or 0 when the map has
+   none or it does not fit a ring record. The frame (main+0x1426B) lives for the whole level: LoadMap
+   stores it (0x483900) and only the teardown frees it (0x483DFE). Its plane is uncompressed, w*h
+   bytes at [frame+0x10] = frame+0x18, in a block the engine sized w*h+0x18 from the same w and h
+   (0x4B8DA0): a plane anywhere else is not that frame's, and is not read. */
+#define OFF_MINIMAP  0x1426B
+#define OFF_MM_BOX   0x142EB        /* i16 columns, i16 rows: the part [0, 2*c) x [0, 2*r) shown */
+static unsigned minimap_build(const char* ta, unsigned char* b)
+{
+    const unsigned char* g = *(const unsigned char* const*)(ta + OFF_MINIMAP);
+    unsigned short w, h, box[2];
+    const unsigned char* px;
+    if (!g) return 0;
+    memcpy(&w, g, 2);
+    memcpy(&h, g + 2, 2);
+    px = *(const unsigned char* const*)(g + 0x10);
+    if (!w || !h || px != g + 0x18 || (unsigned)w * h > REC_MINIMAP_MAX) return 0;
+    memcpy(box, ta + OFF_MM_BOX, 4);
+    memcpy(b, &w, 2);
+    memcpy(b + 2, &h, 2);
+    memcpy(b + 4, box, 4);
+    memcpy(b + REC_MINIMAP_HEAD, px, (size_t)w * h);
+    return REC_MINIMAP_HEAD + (unsigned)w * h;
 }
 
 /* One RT_TABLE: the registry index the stream's table records carry, what the declaration is,
@@ -1095,11 +1222,17 @@ static Rec* rec_start(const Level* L, int tick)
     t.full = 0;
     header_build(L, tick, map, &now, &t);
     header_tables(r, &t);
+    for (i = 0; i < REC_PLAYERS; i++)        /* the seats header_build names (RT_PLAYER) */
+        if (L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER]) r->seated |= (unsigned short)(1u << i);
     if (t.full) {
         tagpu_logf("recorder: FAILED the header does not fit in %u bytes: not recording", t.cap);
         goto fail;
     }
     if (!ring_put(r, RK_HEADER, NULL, 0, hb, t.n)) goto fail;
+    {
+        unsigned n = minimap_build(L->ta, hb);
+        if (n && !ring_put(r, RK_MINIMAP, NULL, 0, hb, n)) goto fail;
+    }
     ring_publish(r, 1);
     if (!tagpu_recwriter_start(g)) {
         tagpu_logf("recorder: FAILED no writer thread (%lu): not recording", GetLastError());
@@ -1115,6 +1248,40 @@ fail:
     return NULL;
 }
 
+/* The game's end (main+0x3923B, a u16 of flags: bit 4 won, bit 6 lost, bit 2 stop; the others
+   are the frame's own) and each seat's RT_SEAT_END, by tagpu_recfmt.h's RecResult rule, into `b`.
+   The flags still hold the result at the teardown's entry, where a level's recording ends (level
+   init clears bits 2, 4, 5 and 6, 0x491A06..0x491A30); a recording that ends otherwise has none. */
+#define OFF_GAME_END 0x3923B
+#define GAME_END_BITS 0x74u
+static void seats_end(const Rec* r, unsigned reason, unsigned char* b)
+{
+    const char* ta = r->L.ta;
+    unsigned flags = reason == REC_END_TEARDOWN || reason == REC_END_RING
+                         ? *(const unsigned short*)(ta + OFF_GAME_END) & GAME_END_BITS : 0, i;
+    unsigned c = (unsigned char)ta[OFF_CONTROLLED];
+    const char* crec = c < REC_PLAYERS ? ta + OFF_PLAYERS + (size_t)c * PL_STRIDE : NULL;
+    memcpy(b, &flags, 4);
+    for (i = 0; i < REC_PLAYERS; i++) {
+        unsigned char* e = b + 4 + 12 * i;
+        unsigned char res = REC_RESULT_UNKNOWN;
+        /* a seat that was given units again (a scenario's load, a Deathmatch respawn) was not
+           defeated: only a live count of 0 at the end is */
+        unsigned defeat = *(const unsigned short*)(ta + OFF_PLAYERS + (size_t)i * PL_STRIDE + PL_LIVE)
+                              ? 0 : r->defeat[i];
+        if (!(r->seated >> i & 1)) res = REC_RESULT_NONE;
+        else if (defeat) res = REC_RESULT_LOST;
+        else if ((flags & 0x10) && crec && (i == c || crec[PL_ALLY + i])) res = REC_RESULT_WON;
+        else if ((flags & 0x10) && crec) res = REC_RESULT_LOST;
+        else if ((flags & 0x40) && i == c) res = REC_RESULT_LOST;
+        e[0] = (unsigned char)i;
+        e[1] = res;
+        e[2] = e[3] = 0;
+        memcpy(e + 4, &r->cmdr[i], 4);
+        memcpy(e + 8, &defeat, 4);
+    }
+}
+
 /* The capture's last act on a recording: RK_END, published; the ring is the writer's from here
    (the hand-over, tagpu_recorder.h), and the writer's `done` goes to the exit's list. What was
    never published is dropped: an unfinished iteration's records, and a step's events when the
@@ -1123,7 +1290,7 @@ fail:
    whatever the published part left. The event hooks are off before this runs (s_tid). */
 static void rec_end(Rec* r, unsigned reason)
 {
-    unsigned char b[24], * at;
+    unsigned char b[REC_END_BYTES], * at;
     unsigned short why = (unsigned short)reason, z = 0;
     unsigned pos, off = (unsigned)InterlockedCompareExchange(&s_offthread, 0, 0);
     unsigned unobserved = feat_unobserved(r);
@@ -1136,6 +1303,7 @@ static void rec_end(Rec* r, unsigned reason)
     memcpy(b + 12, &off, 4);
     memcpy(b + 16, &r->uncredited, 4);
     memcpy(b + 20, &unobserved, 4);
+    seats_end(r, reason, b + 24);
     pos = r->w & (REC_RING_BYTES - 1);
     at = r->ring->buf + pos;
     if (pos + 4 + sizeof b > REC_RING_BYTES) {
@@ -1577,7 +1745,9 @@ static int cap_table(Rec* r, const Level* L, Table* tb)
         DWORD gran;
         unsigned next = 0;
         if (!bytes) return 1;
-        if (tb->unwatched ||
+        /* the watch reports whole pages, and a reset clears a page for every table on it, so only
+           rows that start on a page are watched: any other base is diffed whole */
+        if (tb->unwatched || ((size_t)base & 0xFFFu) ||
             GetWriteWatch(WRITE_WATCH_FLAG_RESET, (PVOID)base, bytes, tb->pages, &n, &gran)) {
             if (!tb->unwatched)
                 tagpu_logf("recorder: %s is not write-watched: it is diffed whole each time",
@@ -2510,7 +2680,43 @@ static unsigned player_of_netid(const char* ta, unsigned netid)
    the unit's own movement step, so the iteration's image is a step early for the wreck and the
    blast. */
 static int death_room(Rec* r);
-static int death_enter(Rec* r, void* E, unsigned id);
+static int death_enter(Rec* r, void* E, unsigned id, unsigned owner);
+
+#define OFF_SIDES      0x37F39      /* u32: the sides this game loaded; the lobby clamps a side at
+                                       or above it (0x447EC0..0x447ECE)                          */
+#define OFF_SIDE_TAB   0x37F5F      /* each side's commander name: +0x22 into its record, which the
+                                       loader 0x431A60 lays out from main+0x37F3D (0x431AA6)     */
+#define SIDE_STRIDE    0x232
+#define SIDE_ROOM      5u           /* the engine's own sides: its free loop stops at five records
+                                       (0x431A20, cmp edi,0xAFA), which end at main+0x38A37; the
+                                       loader has no cap of its own on SIDE%d                    */
+
+/* The index of the player record `owner` points at, or REC_PLAYERS when it is none of them. */
+static unsigned owner_index(const char* ta, const char* owner)
+{
+    const char* recs = ta + OFF_PLAYERS;
+    size_t d = (size_t)(owner - recs);
+    if (owner < recs || d % PL_STRIDE || d / PL_STRIDE >= REC_PLAYERS) return REC_PLAYERS;
+    return (unsigned)(d / PL_STRIDE);
+}
+
+/* Send_UnitDeath's commander test (0x4864CB..0x48650F): the unit's UnitName against its owner's
+   side's commander name, case-insensitively. The def is bounded by the engine's own count
+   (UNITINFOCount), the side by the count of sides loaded and by the table's room, so every byte
+   read lies in the defs or the main block. The engine's _stricmp (0x4F8A70) and this compare of
+   0x20 agree: the loader stores the name within 0x20 bytes, its NUL included (0x431B6D). */
+static int is_commander(const Level* L, const char* unit, unsigned owner)
+{
+    const char* def = *(const char* const*)(unit + U_TYPE);
+    const char* rec = L->ta + OFF_PLAYERS + (size_t)owner * PL_STRIDE;
+    const unsigned char* info = *(const unsigned char* const*)(rec + PL_INFO);
+    size_t d = (size_t)(def - L->defs);
+    unsigned side;
+    if (!info || def < L->defs || d % UD_STRIDE || d / UD_STRIDE >= L->ndefs) return 0;
+    side = info[0x95];
+    if (side >= *(const unsigned*)(L->ta + OFF_SIDES) || side >= SIDE_ROOM) return 0;
+    return !_strnicmp(def + UD_NAME, L->ta + OFF_SIDE_TAB + (size_t)side * SIDE_STRIDE, 0x20);
+}
 
 static int __cdecl ev_death(void* E)
 {
@@ -2537,7 +2743,13 @@ static int __cdecl ev_death(void* E)
     b[11] = (unsigned char)tagpu_tx_carried(r->L.begin + (size_t)slot * REC_UNIT_BYTES);
     unit_image(&r->L, slot, (unsigned*)(b + 12));
     ev_put(r, RK_EV_DEATH, b, sizeof b);
-    return death_enter(r, E, id);
+    {
+        const char* unit = r->L.begin + (size_t)slot * REC_UNIT_BYTES;
+        unsigned owner = owner_index(r->L.ta, *(const char* const*)(unit + U_OWNER));
+        if (owner < REC_PLAYERS && is_commander(&r->L, unit, owner))
+            r->cmdr[owner] = *(const unsigned*)(r->L.ta + OFF_GAMETIME);
+        return death_enter(r, E, id, owner);
+    }
 }
 
 /* a unit slot of a packet as its ID, in a u16: 0 stays 0, and a slot past the array is 0xFFFF */
@@ -3318,7 +3530,7 @@ static Feat* feat_start(const char* ta, RecRing* g)
    explosion it is a root (*The features*, A UNIT'S DEATH). `id` is a death's unit's ID. */
 #define FR_DEATH       FR_ROOTS
 #define FR_BLAST       (FR_ROOTS + 1)
-typedef struct FFrame { unsigned ret, id; unsigned char root, recorded; } FFrame;
+typedef struct FFrame { unsigned ret, id; unsigned char root, recorded, owner; } FFrame;
 static FFrame   s_fstack[FDEPTH_MAX];
 static unsigned s_fdepth;           /* moved only on the recording's game thread (feat_enter) */
 static unsigned char s_fphase;      /* the step's phase (tagpu_rec_phase), on the game thread    */
@@ -3461,7 +3673,7 @@ static int death_room(Rec* r)
 /* The destructor's entry, once its RK_EV_DEATH is in: the death is a frame, so the feature calls
    it makes itself are its own (*The features*, A UNIT'S DEATH). Nothing about the grid is marked
    here: each call it makes marks its own. */
-static int death_enter(Rec* r, void* E, unsigned id)
+static int death_enter(Rec* r, void* E, unsigned id, unsigned owner)
 {
     FFrame* fr = &s_fstack[s_fdepth++];
     (void)r;
@@ -3469,15 +3681,23 @@ static int death_enter(Rec* r, void* E, unsigned id)
     fr->id = id;
     fr->root = FR_DEATH;
     fr->recorded = 1;
+    fr->owner = (unsigned char)owner;
     return 1;
 }
 
+/* After the destructor: an owner whose live count it took to 0 was eliminated in this death
+   (0x486DFC, 0x486E54). */
 static void* __cdecl death_leave(unsigned* regs)
 {
     FFrame* fr = &s_fstack[--s_fdepth];
     Rec* r = ev_rec();
     (void)regs;
-    if (r) ev_put(r, RK_EV_DEATH_END, &fr->id, 4);
+    if (r) {
+        ev_put(r, RK_EV_DEATH_END, &fr->id, 4);
+        if (fr->owner < REC_PLAYERS &&
+            !*(const unsigned short*)(r->L.ta + OFF_PLAYERS + (size_t)fr->owner * PL_STRIDE + PL_LIVE))
+            r->defeat[fr->owner] = *(const unsigned*)(r->L.ta + OFF_GAMETIME);
+    }
     return (void*)(size_t)fr->ret;
 }
 
@@ -4159,10 +4379,24 @@ void __cdecl tagpu_rec_capture(void)
 }
 
 /* The level's last step has run, so its events end its iteration, unless one of them did not fit. */
+#ifdef TAGPU_COVER
+/* The coverage build only: the writer's end of the file (finish) is part of what a level's
+   coverage reports, so the level end waits for the file it has just ended, by the writer's own
+   `done` event. Only the game thread takes or closes a slot (fin_take), so the handle stays open
+   through the wait. */
+static void cover_wait(int fin)
+{
+    HANDLE h;
+    fin_lock();
+    h = fin >= 0 && fin < REC_FINISHING ? s_fin[fin] : NULL;
+    fin_unlock();
+    if (h) WaitForSingleObject(h, INFINITE);
+}
+#endif
+
 void tagpu_rec_level_end(void)
 {
     unsigned i, k = 0;
-    tagpu_cover_flush();
     /* a timed dump does not outlive its level, whose GameTime the next level starts again; an
        untimed one is taken at the next level's first capture point */
     for (i = 0; i < s_narmed; i++) {
@@ -4176,9 +4410,16 @@ void tagpu_rec_level_end(void)
     s_tid = 0;
     s_cnt.tid = 0;
     if (s_state == ST_RECORDING && s_rec) {
+        int fin = s_rec->fin;
         if (!s_rec->ev_full) ring_publish(s_rec, 0);
         rec_end(s_rec, s_rec->ev_full ? REC_END_RING : REC_END_TEARDOWN);
+#ifdef TAGPU_COVER
+        cover_wait(fin);
+#else
+        (void)fin;
+#endif
     }
     s_rec = NULL;
     s_state = ST_IDLE;
+    tagpu_cover_flush();    /* after the recording's end, so its end is in the level's coverage */
 }

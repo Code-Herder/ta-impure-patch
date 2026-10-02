@@ -1215,6 +1215,122 @@ done:
 }
 
 const RecHeader* recr_header(const RecReader* r) { return &r->h; }
+
+/* 1 the header is of this format */
+static int info_header(RecInfo* o, const unsigned char* b, size_t len)
+{
+    size_t at = 0;
+    unsigned format = 0;
+    while (at + 4 <= len) {
+        unsigned short tag, n;
+        const unsigned char* p = b + at + 4;
+        memcpy(&tag, b + at, 2);
+        memcpy(&n, b + at + 2, 2);
+        if (at + 4 + n > len) break;
+        if (tag == RT_FORMAT && n == 4) format = u32(p);
+        else if (tag == RT_GAME_VERSION) text(o->version, sizeof o->version, p, n);
+        else if (tag == RT_MODPRINT && n == 8) {
+            o->modprint = u32(p);
+            o->archives = u32(p + 4);
+            o->has_modprint = 1;
+        } else if (tag == RT_ARCHIVE && n >= 12 && o->narchives < REC_ARCHIVES) {
+            o->archive[o->narchives].size = u32(p);
+            memcpy(&o->archive[o->narchives].mtime, p + 4, 8);
+            text(o->archive[o->narchives].name, RECR_TEXT, p + 12, n - 12u);
+            o->narchives++;
+        } else if (tag == RT_PLAYER && n >= 1 && p[0] < REC_PLAYERS)
+            o->seat[p[0]].present = 1;
+        at += (4 + (size_t)n + 3) & ~(size_t)3;
+    }
+    return format == REC_FORMAT;
+}
+
+static void info_end(RecInfo* o, const unsigned char* b, size_t len)
+{
+    size_t at = 0;
+    o->ended = 1;
+    while (at + 4 <= len) {
+        unsigned short tag, n;
+        const unsigned char* p = b + at + 4;
+        memcpy(&tag, b + at, 2);
+        memcpy(&n, b + at + 2, 2);
+        if (at + 4 + n > len) break;
+        if (tag == RT_GAME_END && n == 4) o->game_end = u32(p);
+        else if (tag == RT_SEAT_END && n == 12 && p[0] < REC_PLAYERS) {
+            o->seat[p[0]].result = p[1];
+            o->seat[p[0]].commander = u32(p + 4);
+            o->seat[p[0]].defeat = u32(p + 8);
+        }
+        at += (4 + (size_t)n + 3) & ~(size_t)3;
+    }
+}
+
+static void info_minimap(RecInfo* o, const unsigned char* b, size_t len)
+{
+    unsigned short v[4];
+    if (len < REC_MINIMAP_HEAD) return;
+    memcpy(v, b, 8);
+    if ((size_t)v[0] * v[1] != len - REC_MINIMAP_HEAD || len - REC_MINIMAP_HEAD > REC_MINIMAP_MAX)
+        return;
+    o->mm_w = v[0];
+    o->mm_h = v[1];
+    o->mm_cols = v[2];
+    o->mm_rows = v[3];
+    memcpy(o->minimap, b + REC_MINIMAP_HEAD, len - REC_MINIMAP_HEAD);
+}
+
+int recr_info(const char* path, RecInfo* out, char* why, unsigned cap)
+{
+    RecReader* r = (RecReader*)calloc(1, sizeof *r);
+    char magic[8];
+    RecBlock b;
+    LARGE_INTEGER size;
+    int k, ok = 0;
+    memset(out, 0, sizeof *out);
+    if (!r) {
+        snprintf(why, cap, "no memory");
+        return 0;
+    }
+    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                       OPEN_EXISTING, 0, NULL);
+    if (r->f == INVALID_HANDLE_VALUE) {
+        snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
+        free(r);
+        return 0;
+    }
+    if (!read_all(r->f, magic, 8) || memcmp(magic, REC_MAGIC, 8)) {
+        snprintf(why, cap, "%s is not a recording", path);
+        goto done;
+    }
+    r->off = 8;
+    k = block_read(r, &b, why, cap);
+    if (k <= 0 || b.kind != RB_HEADER) {
+        if (k >= 0) snprintf(why, cap, "%s has no header block", path);
+        goto done;
+    }
+    if (!info_header(out, r->raw, r->rawn)) {
+        snprintf(why, cap, "%s is not a recording of format %u", path, REC_FORMAT);
+        goto done;
+    }
+    ok = 1;
+    if (!GetFileSizeEx(r->f, &size)) goto done;
+    /* the minimap follows the header; the end block is the last: what lies between is skipped */
+    while ((k = block_head(r, &b, why, cap)) > 0) {
+        if (b.kind == RB_MINIMAP || b.kind == RB_END) {
+            if (block_body(r, &b, why, cap) < 0) break;
+            if (b.kind == RB_MINIMAP) info_minimap(out, r->raw, r->rawn);
+            else {
+                info_end(out, r->raw, r->rawn);
+                break;
+            }
+        } else if (r->off + sizeof b + b.packed > (unsigned long long)size.QuadPart ||
+                   !file_at(r, r->off + sizeof b + b.packed))
+            break;
+    }
+done:
+    recr_close(r);
+    return ok;
+}
 RecWorld* recr_world(RecReader* r) { return &r->w; }
 
 void recr_close(RecReader* r)

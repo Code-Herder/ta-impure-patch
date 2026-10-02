@@ -153,4 +153,33 @@ typedef struct RecSummary {
 /* 1 read; 0 the file cannot be read or is not a recording of this format (why). */
 int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
 
+/* What the Replays browser shows of a recording, read from its header, its minimap block and its
+   end block alone (the stream's blocks are skipped unread). */
+typedef struct RecInfoSeat {
+    unsigned char present;      /* the header seats this record (RT_PLAYER)                   */
+    unsigned char result;       /* RecResult; REC_RESULT_UNKNOWN without an end block           */
+    unsigned      commander;    /* the GameTime its first commander died, 0 none                */
+    unsigned      defeat;       /* the GameTime its last unit died, 0 none                      */
+} RecInfoSeat;
+typedef struct RecInfo {
+    char          version[RECR_TEXT];       /* RT_GAME_VERSION, "" when absent                   */
+    unsigned      modprint;                 /* RT_MODPRINT: compare with tagpu_rec_mod_print()  */
+    int           has_modprint;
+    unsigned      archives;                 /* the archives mounted, RT_MODPRINT's count         */
+    unsigned      narchives;                /* RT_ARCHIVE entries (at most REC_ARCHIVES)          */
+    struct { char name[RECR_TEXT]; unsigned size; unsigned long long mtime; } archive[REC_ARCHIVES];
+    int           ended;                    /* an end block was read                             */
+    unsigned      game_end;                 /* RT_GAME_END                                       */
+    RecInfoSeat   seat[REC_PLAYERS];
+    /* the minimap: w x h palette indices, rows of w, of which [0, 2*cols) x [0, 2*rows) is
+       shown; w = 0 when the recording has none. The indices live in this struct. */
+    unsigned      mm_w, mm_h, mm_cols, mm_rows;
+    unsigned char minimap[REC_MINIMAP_MAX];
+} RecInfo;
+/* 1 read (a recording without an end block, cut short, still reads: `ended` 0); 0 the file
+   cannot be read or is not a recording of this format (why). Any thread; it opens the file
+   read-only, shared. It reads each block's 32-byte header to reach the end block, the stream's
+   bodies unread. RecInfo is about 71 KB: not for a small stack. */
+int recr_info(const char* path, RecInfo* out, char* why, unsigned cap);
+
 #endif

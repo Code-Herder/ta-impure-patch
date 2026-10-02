@@ -13335,6 +13335,39 @@ bytes must be `Copyright 1997 Cavedog Entertainment`, and anything else is skipp
 is documented with the rest of the container in [file formats](file-formats.html) §5
 (measured 2026-09-02). `tagpu_ufo.c` writes that trailer for exactly this reason.
 
+**The mount list** [DISASSEMBLED 2026-10-02, for the recorder's `RT_ARCHIVE`]:
+- **Where it is.** The graphics globals `*(0x51FBD0)` (`0x4B6220` returns it) hold the list at
+  `+0x618`, a `HANDLE**`, and its i32 count at `+0x61C`.
+- **The mounter `0x4BE0B0(name, flag)`** (stdcall, `ret 8`):
+  - It resolves the name with `GetFullPathNameA` (`0x4BE0D7`) and skips one already mounted,
+    compared case-insensitively (`0x4BE0FB`).
+  - Otherwise it opens the archive (`0x4BE11B`), reallocates the list to `count + 1` entries on
+    every mount (`0x4BE140..0x4BE159`) and appends it.
+- **The prune `0x4BE180`** re-opens each entry whose `FILE*` is NULL, and removes one that fails,
+  shifting the rest down without reallocating.
+- **Writers.** `0x4BE270`, an unmount by handle, has no caller and no stored pointer. The list is
+  zeroed at start-up (`0x4B5980`) and freed at exit (`0x4B6110`).
+- **Who mounts.** Only `InitTAHPIAry 0x41D4C0` calls the mounter and the prune. Its mounts:
+  - `rev31.GP3` with flag 1, `*.CCX` with flag 1, `*.UFO` and `*.HPI` with flag 0;
+  - `%c:\*.hpi` on each drive `0x4BB190` returns.
+- **Bounds.** `*.HPI` stops after ten successful mounts per call (`0x41D5C0`, `0x41D5D9`); nothing
+  bounds the count otherwise.
+- **The eleven callers** are all on the game thread:
+  - WinMain's start-up `0x49E996`;
+  - the shell menus `0x41EF71`, `0x425E0B`, `0x4775C9`, `0x47761B`, `0x47772D`, `0x477BC3` and
+    `0x478D12`;
+  - the skirmish menu's Start `0x47AF2E`, before its `.ota` read;
+  - in play, RESTART in the in-game options (`0x460428`) and the load-game dialog (`0x49257A`).
+  The loader thread reaches neither the mounter nor `0x41D4C0`. So the list is final by a
+  skirmish's first iteration, and a RESTART or a load can change it before the teardown.
+
+**The main menu's version text** is the string at `0x5031B4`, `"v3.1"`, which MAINMENU's
+enter function `0x4263B0` puts into its `DebugString` gadget. Seven characters and a NUL fit
+before the next string. Some mods patch it into the exe (Escalation `10.2`); others have the
+Patch Loader write it at run time (ProTA `4.8`, Mayhem `11.3.0`). Twilight leaves it and shows
+its own text in a gadget of its `mainmenu.gui`. [DISASSEMBLED, and read from the compatibility
+fixtures, 2026-10-02.]
+
 ### The palette the screen is presented with, the way out of a game, and the loading screen [VERIFIED 2026-09-07, Phase E G15d]
 
 Read for [the GL UI renderer](gui-renderer.html) §12. The twin resolves its indices through a

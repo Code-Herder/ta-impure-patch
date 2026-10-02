@@ -23,7 +23,7 @@ void __cdecl tagpu_rec_phase(unsigned phase);
    takes at the capture point of GameTime `at`, or at its next call when `at` is 0, on any level in
    play, recorded or playing (the replay's frame visit arms it from the trigger's `dump <name>
    [at <T>]`, tagpu_replay.c): the level's images as a stored snapshot and the main block and
-   .data whole, in replays\dump-<name>.bin. At most 8 are armed at once, each name once; a timed
+   .data whole, in replays\dump-<name>.bin. At most 32 are armed at once, each name once; a timed
    one must be for a GameTime after the level's now, and the level's end drops it. 0 when refused,
    logged. Game thread. */
 int tagpu_rec_dump_arm(const char* name, unsigned at);
@@ -43,6 +43,11 @@ void tagpu_rec_level_end(void);
    explosion and the footprint writers' undo at them. tagpu_rec_hooks_in: all of them are in. */
 void tagpu_rec_init(void);
 int tagpu_rec_hooks_in(void);
+
+/* The running game's mod fingerprint, as a recording's RT_MODPRINT states it: FNV-1a over each
+   archive the engine mounted, in mount order, its lowercased name without its folder, NUL, size
+   and mtime, Impure's own impure-patch.ufo left out. Game thread: the engine mounts there. */
+unsigned tagpu_rec_mod_print(void);
 
 /* The callouts of the events whose sites belong to other modules, on the game thread; each is
    inert unless a skirmish is being recorded.
@@ -101,7 +106,9 @@ void tagpu_rec_exit(void);
    capture signals the writer through a duplicate of `wake` that it owns and closes itself, so its
    signal after that store never touches memory or a handle the writer frees. */
 #define REC_RING_BYTES    (16u << 20)
-#define REC_RING_RESERVE  52u          /* an RK_END (28 bytes) after an RK_PAD of up to 24 */
+/* an RK_END, after the tail of the ring it skips when it does not fit there: records are 4-byte
+   aligned, so that tail is at most the record less 4 bytes */
+#define REC_RING_RESERVE  (2u * (4u + REC_END_BYTES) - 4u)
 
 /* WAKING THE WRITER. The capture signals `wake` at the start, once REC_WAKE_BYTES have been
    published since its last signal, and at the end; the writer also wakes every

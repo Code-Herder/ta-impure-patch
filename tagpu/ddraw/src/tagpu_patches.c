@@ -6492,6 +6492,25 @@ static const SimField hit_layout[] = {
 };
 static struct hit_tab* volatile s_hit;
 SIM_BLOCK(s_hit, SIM_STATE, SIM_ID_NONE, 1, hit_layout);
+/* The three columns again, each a recorded table of its own, one u32 a unit slot: the recorder
+   images hit_layout's column pointers as 0, and a fork reads them across its takeover point
+   (tx_mark_held compares the stamps, hit_held the frees). hit_layout keeps its SIMF_COLUMN fields,
+   so its n stays a kept count and no byte has two declarations; each column starts on a page of
+   its own and shares none (hit_tab_new), as the recorder's write watch needs.
+   LIFETIME: each points into the table s_hit was published with, which is never freed.
+   BOUND: s_hitRows is that table's n (n <= room), published with the pointers; it is a heap
+   table's count, so the seek never writes it (count_kept), and it writes at most that many rows.
+   ORDERING: hit_reset publishes them with s_hit during the level load; their only readers, the
+   recorder's capture and the seek, run in play, after it. `local` is the delay lever's oracle,
+   which the simulation never reads; it is recorded so that a fork keeps it. */
+static unsigned int* s_hitStamp;
+static unsigned int* s_hitFreed;
+static unsigned int* s_hitLocal;
+static unsigned s_hitRows;
+SIM_HEAP(s_hitStamp, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(unsigned int), s_hitRows, NULL);
+SIM_HEAP(s_hitFreed, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(unsigned int), s_hitRows, NULL);
+SIM_HEAP(s_hitLocal, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(unsigned int), s_hitRows, NULL);
+SIM_VAR(s_hitRows, SIM_STATE);
 /* counters for the heartbeat's hits: section; u32, one writer thread */
 static struct {
     unsigned int tables;
@@ -6610,15 +6629,21 @@ static void hit_no_memory(unsigned int room)
     ExitProcess(1);
 }
 
+#define HIT_PAGE 4096u                      /* the x86 page, GetWriteWatch's granularity */
+
 static struct hit_tab* hit_tab_new(unsigned int n)
 {
     unsigned int room = HIT_ROOM_MIN;
     struct hit_tab* t;
     while (room < n) room *= 2u;
-    t = (struct hit_tab*)SIM_ALLOC(s_hit, sizeof *t + 3u * room * sizeof(unsigned int));
+    /* the header on the block's first page and each column on pages of its own: the recorder
+       write-watches each column as a table, and a reset of a page two tables share hides one
+       table's writes from the other. room x 4 bytes is a whole number of 4 KB pages (room is a
+       power of two from 16384), and the block itself starts on a page (VirtualAlloc) */
+    t = (struct hit_tab*)SIM_ALLOC(s_hit, HIT_PAGE + 3u * room * sizeof(unsigned int));
     if (!t) hit_no_memory(room);
     t->room  = room;
-    t->stamp = (unsigned int*)(t + 1);
+    t->stamp = (unsigned int*)((char*)t + HIT_PAGE);
     t->freed = t->stamp + room;
     t->local = t->freed + room;
     s_hitDiag.tables++;
@@ -6643,6 +6668,10 @@ static void __cdecl hit_reset(unsigned int* regs)
     memset(t->local, 0, t->room * sizeof *t->local);
     t->n = n;
     s_hit = t;
+    s_hitStamp = t->stamp;
+    s_hitFreed = t->freed;
+    s_hitLocal = t->local;
+    s_hitRows = n;
     s_hitDelayHead = s_hitDelayCount = 0;
     tx_reset();
 }

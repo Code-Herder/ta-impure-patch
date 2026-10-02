@@ -138,7 +138,10 @@ CRC-32 of the stored bytes and one of the header — and the payload, deflated w
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
   types' count and a hash of their names, the players (index, controller, side, logo and name), the
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
-  (index, class, key, row size, flags and name), so a reader can walk their images;
+  (index, class, key, row size, flags and name), so a reader can walk their images; and the main
+  menu's version text, the mounted archives and the mod's fingerprint (*What the Replays browser
+  asks of a recording*);
+- **a minimap block** right after it, when the map has a picture;
 - **stream blocks** of whole iterations, each ending at the first iteration past 256 KB or at 300
   iterations;
 - **a snapshot block** every 900 iterations (30 seconds at normal speed), built from the writer's
@@ -146,7 +149,8 @@ CRC-32 of the stored bytes and one of the header — and the payload, deflated w
   no table span that is all zero. The interval stays 900 unless the seek-time series's worst seek
   exceeds one second, when it becomes 450 (*Decided 2026-10-01*);
 - **the end block**: why the recording ended, the last GameTime, the iterations, the corrections,
-  the id rows found outside their tables, and the most the ring held.
+  the id rows found outside their tables, the most the ring held, the game's end flags, and each
+  seat's result, first commander death and elimination.
 
 A block is written whole or not at all, so a file cut short reads up to its last complete block, and
 a file with no end block is incomplete.
@@ -325,7 +329,8 @@ stream was not decoded back, so this measures what the representation gains, not
 - **Memory a declaration reaches through a pointer** is not recorded: the engine pools the DLL holds
   (`SIM_ENGINE`: explosions, particle systems and their auxiliary geometry), the blocks a row owns
   (`SIMF_OWNED`), and the columns of a struct-of-arrays table (`SIMF_COLUMN`: `s_hit`'s `stamp`,
-  `freed` and `local`, one entry per unit slot, whose row alone is recorded).
+  `freed` and `local`, one entry per unit slot, whose row alone is recorded; S4a records the three
+  as tables of their own).
 - **The header** has no game options and no fingerprint of the weapon definitions: S2a. Alliances
   are values of the player records, so the stream carries them.
 - **The worst iteration** met the 1 ms budget in two battle runs of five, and its cause is not
@@ -1280,10 +1285,9 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   nothing.
 - **Passability is not rebuilt at a seek**, as it is not refreshed for the cells an image writes;
   a takeover must rebuild it.
-- **Host-own state survives a seek**, none of it read on a puppet host: B4's per-slot columns (births
-  stay strictly increasing per slot, so after a backward seek one can exceed GameTime), the
-  passability cache and the order of the units inside each seat's control-group vectors (their
-  membership is the recording's). The takeover (S4) must answer for each.
+- **Host-own state survives a seek**, none of it read on a puppet host: the passability cache and
+  the order of the units inside each seat's control-group vectors (their membership is the
+  recording's). The takeover (S4) must answer for each.
 - **The rebuild runs on a puppet host only**; the live in-place restore comes with S4's takeover
   (the owner's answer to OQ1, *S3c*).
 - **The images report is informational.** `tarec compare --images` names the bytes outside the
@@ -1935,11 +1939,140 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
 - **O15** still reaches naval fixtures' round-trip processes on some runs, and the forest fixtures'
   live games can end before Tlast (*What S3c-2 leaves*).
 
-## S4 and S5
+## S4 — rewind, takeover and forks
 
-S4 is planned in detail when S3 is in. The table above is its scope; the
-[completeness note](demo-recorder-completeness.md)'s [open items](demo-recorder-completeness.md#open-items)
-are S4's and S5's.
+S4 is four landings, in this order:
+- **S4a** records B4's per-slot columns.
+- **S4b** is the takeover from a recording, with its fork written into the file.
+- **S4c** adds the fork rules: three forks, the least recently used deleted, shared history kept.
+- **S4d** is the live rewind on the recording machine: Back to now and Play from here.
+
+A takeover is the seek with a takeover mode. The owner's decisions of 2026-10-02 are in the
+[completeness note](demo-recorder-completeness.md#decisions-taken).
+
+### S4a — B4's per-slot columns
+
+**Decided.** The stale-hit table's three columns are recorded as tables of their own: `stamp`,
+`freed` and `local`, one u32 a unit slot (`tagpu_patches.c`, beside `hit_layout`). A fork reads
+them across its takeover point:
+- C4's carried-blast pick `tx_mark_held` compares the recorded `s_txMark` with the slot's stamp;
+- B4's two-tick hold `hit_held` reads the slot's free.
+
+Without them, a keyed passenger whose transport died in the step before the takeover would
+explode uncarried. The table's own row keeps its `SIMF_COLUMN` fields, so its count stays a kept
+count and no byte has two declarations.
+
+The arguments:
+- **The lifetime:** the column pointers point into the table `s_hit` was published with, and that
+  table is never freed.
+- **The bound:** their count `s_hitRows` is that table's n (n ≤ room). It is a heap table's count,
+  which the seek never writes, so the seek writes at most n rows.
+- **The ordering:** `hit_reset` publishes the pointers right after `s_hit`, on the same thread.
+
+Each column starts on a page of its own and shares none: the recorder write-watches each as a
+table, and a reset of a shared page would hide one table's writes from the other. The recorder
+diffs whole any heap table whose rows do not start on a page.
+
+A puppet host reads and writes them as the engine runs: a replayed create reads its slot's stamp
+(`hit_take`), the destructor's cargo loop reads the stamps (`tx_cargo`), and a free writes
+`freed`. Replayed deaths never reach `tx_arm`, and everything a puppet derives from the columns is
+itself a recorded table, which the step writes again at the next boundary. `local` is the delay
+lever's oracle, which the simulation never reads; it is recorded so that a fork keeps it.
+
+**Verified and measured** (2026-10-02). The first landing run failed, and the failure was the
+landing's: the columns started 20 bytes into the table's first page. The write watch reports whole
+pages, so the recorder measured each column's first page from below its base and never emitted
+its rows. The stream carried 28 corrections, and a frame dump differed in 8 dwords, all in
+`s_hitFreed`'s first 1019 slots. With the columns on pages of their own, the landing tier ran all
+17 fixtures on the coverage builds:
+- 391 of 391 checks passed;
+- 51 round trips, each EQUAL with residue 0 and 26 tables poisoned, the three new ones among them;
+  seeks took 16 to 595 ms.
+
+The battle's recording grew 0.8 % (83.5 MB against S3c-3's 82.8 MB, games not identical).
+
+### What the Replays browser asks of a recording
+
+S5's browser shows a recording's map, mod and result without walking its stream (the S5 note's
+*What S5 asks of the recorder*, items 1 to 3, on the S5 branch until it lands). This landing
+comes between S4a and S4b, because S4b turns the file into segments. Every addition is a tag or a
+block an older reader skips, so `REC_FORMAT` stays 4.
+
+**Decided:**
+- **The minimap** is an `RB_MINIMAP` block right after the header, deflated. It holds the TNT's
+  picture, the GAF frame at `main+0x1426B`, as w×h palette indices, plus the box `main+0x142EB`,
+  `+0x142ED`; the engine shows the part [0, 2·columns) × [0, 2·rows).
+  - LoadMap stores the frame (`0x483900`), and only the teardown frees it (`0x483DFE`).
+  - The plane is uncompressed, in a block the engine sized w·h + 0x18 from the same w and h
+    (`0x4B8DA0`). The recorder reads it only at `frame + 0x18`.
+  - A map without a picture has no block, and neither does a picture of more than
+    `REC_MINIMAP_MAX` indices, which a ring record cannot hold.
+- **The mod** is three header entries:
+  - `RT_GAME_VERSION`: the main menu's version text at `0x5031B4`, which a mod's patch may
+    rewrite; printable ASCII, at most 7 characters, absent otherwise.
+  - `RT_ARCHIVE`: one per archive the engine mounted, in mount order, by file name (never the
+    path, which names the player's folders), size and mtime. No file's contents are read.
+  - `RT_MODPRINT`: the FNV-1a of every mounted archive's name and size, and the engine's count of
+    them. Two details:
+    - Impure's own `impure-patch.ufo` is left out, so an Impure update does not make old
+      recordings look like another mod's.
+    - The files' times are left out, so two installs of one mod agree.
+    `tagpu_rec_mod_print()` computes the running game's the same way. A map archive changes the
+    fingerprint, so it names an install, not whether a recording can be played: that is
+    `RT_UNITDEFS`'s and `RT_WEAPONS`'s to say. `RT_ARCHIVE` lists the first `REC_ARCHIVES` (64).
+  - **Departures from the ask:**
+    - Sizes, not CRC-32s: hashing an install's 900 MB of archives is not for the game thread. The
+      S5 session agreed, and will ask again if two builds collide.
+    - The last commander death a seat suffers, not each one.
+  - The list is `[0x51FBD0]+0x618`, count `+0x61C`. Only `InitTAHPIAry 0x41D4C0` mounts, prunes
+    or reallocates it, from its eleven callers on the game thread, the skirmish's Start last.
+    The recorder reads it on that thread at the level's first iteration, so the list cannot move
+    under it.
+- **The end** is two end-block entries:
+  - `RT_GAME_END`: bits 2, 4, 5 and 6 of `main+0x3923B`, a u16, which still hold the controlled
+    player's result at the teardown's entry: bit 4 won, bit 6 lost, bit 2 without them a quit. It
+    is 0 when the recording ended before the level did.
+  - `RT_SEAT_END`, one per seat: its result, the GameTime its last commander died, and, when it
+    ends the game with no unit, the GameTime its live count last reached 0. The last, not the
+    first: a scenario's load kills every commander and gives the seats new units (the fixtures'
+    recordings had every seat "defeated" at GameTime 34), and a Deathmatch respawns a commander
+    after an elimination.
+  - The commander test is `Send_UnitDeath`'s own (`0x4864CB..0x48650F`): the UnitName against the
+    side's commander name, made at the destructor's entry, with the def bounded by
+    UNITINFOCount and the side by the sides loaded. Elimination is read at the destructor's
+    exit: its decrement (`0x486DFC`) took the owner's `+0x144` to 0.
+  - The engine holds one result, the controlled player's, and no draw. The other seats follow
+    the rule in `tagpu_recfmt.h`: a seat that ends the game with no unit lost; in the controlled
+    player's victory it and its allies won and every other seat lost; anything else is unknown.
+- **`RK_END` carries the seats.** The ring's reserve is sized from it, including the tail of the
+  ring an `RK_END` skips when it does not fit there; that tail is at most the record less 4
+  bytes, as the old 52 bytes were for a 28-byte `RK_END`.
+- **`recr_info`** reads all of this from the header, the minimap block and the end block. It
+  refuses a recording of another format, and reads only each other block's 32-byte header to pass
+  it. `tarec info` prints it.
+- **A seat** is a record the header names (`RT_PLAYER`), so its entry survives a controller that
+  changes during the game.
+
+**Verified and measured** (2026-10-02). The landing tier ran all 17 fixtures on the coverage
+builds: 391 of 391 checks passed, with 51 round trips EQUAL (seeks 7 to 577 ms). The recordings
+carried the new fields:
+- the 252×252 minimap, with the shown part (252×248 on the battle's map);
+- the version `v3.1`, 31 or 32 archives mounted, and their fingerprint;
+- each seat's entry.
+
+`recr_info` was run in a scratch build under Wine on those recordings. It read the same values as
+`tarec info`, down to the sum of the minimap's 63,504 indices, and an older recording's empty
+fields.
+
+The first run named the end's own functions `UNCOVERED`, because the level end wrote coverage
+before the recording ended; it now writes it after. Five functions no fixture reaches, because
+only S5's browser calls them, landed `UNCOVERED` by the owner's decision of 2026-10-02:
+`recr_info` and its three helpers, and `tagpu_rec_mod_print`.
+
+**Left:** S5's fourth ask, a recording that starts mid-game, belongs with S4d's suspend and resume
+of the recorder.
+
+## S5
 
 **S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens
 drawn by the engine's GUI with our own art per style. It asks four things of the recorder, which
@@ -1951,7 +2084,7 @@ stay the recorder's to build (that note's *What S5 asks of the recorder*):
 3. the mod: its name, its version, and a fingerprint of the archives the engine mounted;
 4. a recording that starts mid-game from a snapshot, and an end reason for one the player stopped.
 
-S5's first landing needs 1 to 3, its fifth needs 4.
+Asks 1 to 3 are *What the Replays browser asks of a recording* above; the fourth goes with S4d.
 
 ## Open
 

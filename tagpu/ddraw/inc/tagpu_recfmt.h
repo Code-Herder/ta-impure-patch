@@ -152,8 +152,10 @@ enum RecKind {
     RK_HEADER,         /* ring only: the header block's entries (RecTag below)                      */
     RK_END,            /* ring only: u16 RecEnd, u16 0, u32 bad IDs, u32 the ring's high water in
                           bytes, u32 events refused off the game thread, u32 sprays no query
-                          preceded, u32 grid cells found unobserved. The capture's last record:
-                          after it, the ring is the writer's                                      */
+                          preceded, u32 grid cells found unobserved, u32 the game's end flags
+                          (RT_GAME_END), then REC_PLAYERS of RT_SEAT_END's 12 bytes, a seat's
+                          result REC_RESULT_NONE when the record is no seat; REC_END_BYTES in all.
+                          The capture's last record: after it, the ring is the writer's          */
     RK_ORDERS,         /* u16 slot, u8 list (0 the main list +0x5C, 1 the sub list +0x60), u8 0,
                           u16 the list's nodes, u16 the first node here, then the images of nodes
                           [first, first + (len - 8) / REC_ORDER_IMAGE): a live unit's list, whole,
@@ -268,6 +270,7 @@ enum RecKind {
                           COUNTS), at most REC_COUNTS_CHUNK rows a record, the last holding fewer  */
     RK_COUNT_NAME,     /* dump only: u32 aux, char[REC_COUNT_NAME] NUL-padded: the script name
                           whose FNV-1a is the aux of the COB thread allocation 0x4B08C0's rows   */
+    RK_MINIMAP,        /* ring only: an RB_MINIMAP's payload, right after the RK_HEADER          */
     RK_KINDS
 };
 
@@ -329,6 +332,16 @@ enum RecDrawSite {
     FS_SITES
 };
 
+/* A seat's result. The engine holds one result, the controlled player's (RT_GAME_END); the others
+   are this rule: a seat that ends the game with no unit lost; when the controlled player won,
+   every seat it is allied with (its +0x108 row) won, and itself, and every other seat lost; when
+   it lost, it lost; anything else is unknown -- a quit, or a seat still alive in a game that did not end in the controlled player's
+   victory. */
+enum RecResult { REC_RESULT_UNKNOWN = 0, REC_RESULT_WON, REC_RESULT_LOST, REC_RESULT_NONE = 0xFF };
+#define REC_END_BYTES (28u + 12u * REC_PLAYERS)
+_Static_assert(REC_END_BYTES % 4 == 0, "an RK_END fills whole dwords (REC_RING_RESERVE)");
+#define REC_ARCHIVES  64u        /* the archives a header names at most                        */
+
 /* why a recording ended */
 enum RecEnd {
     REC_END_TEARDOWN = 1,   /* the level ended (0x491B60): the recording is complete             */
@@ -385,8 +398,15 @@ enum RecBlockKind {
                           rest. A snapshot follows the stream block that ends
                           with the events of the step after `last`, so a reader that starts from
                           it takes those from the block before                                  */
-    RB_END             /* entries (RecTag): how the recording ended                              */
+    RB_END,            /* entries (RecTag): how the recording ended                              */
+    RB_MINIMAP         /* right after the header, when the map has a picture: u16 w, u16 h, u16
+                          the box's columns, u16 its rows (i16 main+0x142EB, +0x142ED), then w*h
+                          palette indices, rows of w: the TNT's minimap picture (the GAF frame at
+                          main+0x1426B, uncompressed), whose part [0, 2*columns) x [0, 2*rows)
+                          the engine shows. A reader that does not know it skips it            */
 };
+#define REC_MINIMAP_HEAD  8u
+#define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
 #define RBF_STORED 1u
 
 /* A header or end block's payload: entries of u16 tag, u16 length, then that many bytes, the next
@@ -436,6 +456,18 @@ enum RecTag {
     RT_FIELDS,         /* u16 table index, u16 n, then n fields of u16 off, size, repeat, step,
                           u8 kind, u8 id, u16 0, a dump's only: a recorded table's layout as the
                           simreg declares it (SimField), for `tarec scan`                         */
+    RT_GAME_VERSION,   /* string: the main menu's version text (0x5031B4, at most 7 characters:
+                          the stock "v3.1", or what a mod's patch wrote there), printable ASCII
+                          only; absent when it is not                                             */
+    RT_ARCHIVE,        /* u32 size, u32 mtime low, u32 mtime high (FILETIME, UTC), then the file
+                          name without its folder: an archive the engine mounted, in its mount
+                          order (the list at [0x51FBD0]+0x618), at most REC_ARCHIVES of them    */
+    RT_MODPRINT,       /* u32 the mod's fingerprint, tagpu_rec_mod_print: FNV-1a over each mounted
+                          archive's lowercased name, NUL and size, Impure's own impure-patch.ufo
+                          left out, so two installs of one mod agree whatever their files' times;
+                          u32 the archives the engine had mounted, which RT_ARCHIVE lists up to
+                          REC_ARCHIVES of. A map archive changes it: whether a recording can be
+                          played is RT_UNITDEFS's and RT_WEAPONS's to say                         */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */
@@ -453,8 +485,15 @@ enum RecTag {
                           thread, so the recording lacks their events                           */
     RT_UNCREDITED,     /* u32: nano sprays no QueryNanoPiece preceded in their handler's call,
                           recorded with unit ID 0                                               */
-    RT_UNOBSERVED      /* u32: grid cells the rotating sweep found changed that no writer's
+    RT_UNOBSERVED,     /* u32: grid cells the rotating sweep found changed that no writer's
                           observer had marked: recorded when found, late                         */
+    RT_GAME_END,       /* u32: main+0x3923B's bits 2, 4, 5 and 6 at the teardown, the result of
+                          the controlled player: bit 4 won, bit 6 lost, bit 2 without them a quit;
+                          0 when the recording ended before the level did                        */
+    RT_SEAT_END        /* u8 seat, u8 result (RecResult), u16 0, u32 the GameTime its last
+                          commander died, u32 the GameTime its last unit died when it ended the
+                          game with none (its live count +0x144 at 0), 0 for none: a seat of the
+                          recording                                                              */
 };
 
 #endif
