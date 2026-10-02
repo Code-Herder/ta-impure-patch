@@ -1281,10 +1281,9 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   nothing.
 - **Passability is not rebuilt at a seek**, as it is not refreshed for the cells an image writes;
   a takeover must rebuild it.
-- **Host-own state survives a seek**, none of it read on a puppet host: B4's per-slot columns until
-  S4a records them (births stay strictly increasing per slot, so after a backward seek one can
-  exceed GameTime), the passability cache and the order of the units inside each seat's control-group vectors (their
-  membership is the recording's). The takeover (S4) must answer for each.
+- **Host-own state survives a seek**, none of it read on a puppet host: the passability cache and
+  the order of the units inside each seat's control-group vectors (their membership is the
+  recording's). The takeover (S4) must answer for each.
 - **The rebuild runs on a puppet host only**; the live in-place restore comes with S4's takeover
   (the owner's answer to OQ1, *S3c*).
 - **The images report is informational.** `tarec compare --images` names the bytes outside the
@@ -1970,8 +1969,11 @@ Each column starts on a page of its own and shares none: the recorder write-watc
 table, and a reset of a shared page would hide one table's writes from the other. The recorder
 diffs whole any heap table whose rows do not start on a page.
 
-A puppet host still reads none of them: replayed deaths do not reach `tx_arm`, and replayed
-creates name their slot.
+A puppet host reads and writes them as the engine runs: a replayed create reads its slot's stamp
+(`hit_take`), the destructor's cargo loop reads the stamps (`tx_cargo`), and a free writes
+`freed`. Replayed deaths never reach `tx_arm`, and everything a puppet derives from the columns is
+itself a recorded table, which the step writes again at the next boundary. `local` is the delay
+lever's oracle, which the simulation never reads; it is recorded so that a fork keeps it.
 
 <!-- S4A RUN -->
 

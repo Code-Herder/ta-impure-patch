@@ -6500,7 +6500,9 @@ SIM_BLOCK(s_hit, SIM_STATE, SIM_ID_NONE, 1, hit_layout);
    LIFETIME: each points into the table s_hit was published with, which is never freed.
    BOUND: s_hitRows is that table's n (n <= room), published with the pointers; it is a heap
    table's count, so the seek never writes it (count_kept), and it writes at most that many rows.
-   ORDERING: hit_reset publishes them right after s_hit, on the same thread. */
+   ORDERING: hit_reset publishes them with s_hit during the level load; their only readers, the
+   recorder's capture and the seek, run in play, after it. `local` is the delay lever's oracle,
+   which the simulation never reads; it is recorded so that a fork keeps it. */
 static unsigned int* s_hitStamp;
 static unsigned int* s_hitFreed;
 static unsigned int* s_hitLocal;
