@@ -145,6 +145,10 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 #define LIST_H           326
 #define LIST_ASSOC       7              /* the list and its scroll bar, and nothing else         */
 #define TL_ASSOC         9
+#define PLAYER_X0        470            /* the players, two columns of five in the detail well  */
+#define PLAYER_COL       72
+#define PLAYER_W         68             /* a name is cut so that "name: ?" fits, in the list font */
+#define PLAYER_ROWS      5
 #define PLAYER_Y0        70
 #define PLAYER_PITCH     13
 #define STAR_GAP         4              /* between the star and the row's text                   */
@@ -352,7 +356,8 @@ static int build_gui(char* b, int cap)
     for (i = 0; i < REC_PLAYERS; i++) {
         _snprintf(nm, sizeof nm, "P%d", i);
         nm[sizeof nm - 1] = 0;
-        at = label(b, cap, at, g++, nm, 470, PLAYER_Y0 + PLAYER_PITCH * i, 142, 13, LBL_LEFT, "");
+        at = label(b, cap, at, g++, nm, PLAYER_X0 + PLAYER_COL * (i / PLAYER_ROWS),
+                   PLAYER_Y0 + PLAYER_PITCH * (i % PLAYER_ROWS), PLAYER_W, 13, LBL_LEFT, "");
     }
     at = label(b, cap, at, g++, "TLCAP", 370, 150, 242, 12, LBL_LEFT, "Timelines");
     at = list(b, cap, at, g++, "TIMELINES", TL_ASSOC, 370, 162, 242, 206, LIST_PLAIN);
@@ -1253,6 +1258,22 @@ static void set_label(char* gi, const char* name, const char* fmt, ...)
     ((set_label_fn)VA_SETLABEL)(gi, name, b);
 }
 
+/* "name: ?", the name cut until it fits a column; a cut name never ends on a space */
+static void player_text(char* t, unsigned cap, const char* name)
+{
+    char n[RECR_NAME];
+    int k, full;
+    lstrcpynA(n, name, sizeof n);
+    full = k = lstrlenA(n);
+    for (;;) {
+        while (k && k < full && n[k - 1] == ' ') n[--k] = 0;
+        _snprintf(t, cap, "%s: ?", n);
+        t[cap - 1] = 0;
+        if (!k || text_w(t) <= PLAYER_W) return;
+        n[--k] = 0;
+    }
+}
+
 /* The right-hand well for row `sel`, or empty. The result of each player and the minimap are
    not in the recording format yet: a player's result shows "?" and the minimap is left without
    a frame. */
@@ -1264,10 +1285,12 @@ static void detail(char* gi, int sel)
     if (e && !e->format) set_label(gi, "MAPNAME", "%s (unreadable)", e->map);
     else set_label(gi, "MAPNAME", "%s", e ? e->map : "");
     for (i = 0; i < REC_PLAYERS; i++) {
+        char t[RECR_NAME + 4];
         _snprintf(nm, sizeof nm, "P%d", i);
         nm[sizeof nm - 1] = 0;
-        if (e && i < (int)e->nseats) set_label(gi, nm, "%s: ?", e->name[i]);
-        else set_label(gi, nm, "");
+        if (e && i < (int)e->nseats) player_text(t, sizeof t, e->name[i]);
+        else t[0] = 0;
+        set_label(gi, nm, "%s", t);
     }
     lstrcpynA(s_tlBlob, "Main timeline", sizeof s_tlBlob);
     ((set_list_fn)VA_SETLIST)(gi, "TIMELINES", s_tlBlob, e && e->format ? 1 : 0, NULL);
