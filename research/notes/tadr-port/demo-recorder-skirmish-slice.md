@@ -1975,7 +1975,17 @@ A puppet host reads and writes them as the engine runs: a replayed create reads 
 itself a recorded table, which the step writes again at the next boundary. `local` is the delay
 lever's oracle, which the simulation never reads; it is recorded so that a fork keeps it.
 
-<!-- S4A RUN -->
+**Verified and measured** (2026-10-02). The first landing run failed, and the failure was the
+landing's: the columns started 20 bytes into the table's first page. The write watch reports whole
+pages, so the recorder measured each column's first page from below its base and never emitted
+its rows. The stream carried 28 corrections, and a frame dump differed in 8 dwords, all in
+`s_hitFreed`'s first 1019 slots. With the columns on pages of their own, the landing tier ran all
+17 fixtures on the coverage builds:
+- 391 of 391 checks passed;
+- 51 round trips, each EQUAL with residue 0 and 26 tables poisoned, the three new ones among them;
+  seeks took 16 to 595 ms.
+
+The battle's recording grew 0.8 % (83.5 MB against S3c-3's 82.8 MB, games not identical).
 
 ## S5
 
