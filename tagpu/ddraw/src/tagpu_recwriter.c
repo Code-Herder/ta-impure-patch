@@ -29,7 +29,10 @@
    A SNAPSHOT is smaller than the copy: its cells are the ones that differ from the first
    iteration's grid, the base, which the writer keeps from RK_GRID on and a reader takes from the
    first iteration it reads; and a table's spans that are all zero are left out, since a snapshot
-   builds from nothing and RK_TABLE_SIZE zeroes the table. */
+   builds from nothing and RK_TABLE_SIZE zeroes the table.
+
+   A FORK (tagpu_recorder.h, RecFork) is written as a segment of the file it was played from, at
+   the append point the takeover found, through the handle it opened (file_append). */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +73,7 @@ typedef struct Corr { unsigned kind, table, off, count; } Corr;
 typedef struct Writer {
     RecRing*       ring;
     HANDLE         file;
+    int            append;      /* a fork: `file` is the ring's, written from its append point */
     char           path[MAX_PATH];
     int            header;      /* RK_HEADER has been applied                       */
     int            dead;        /* nothing more is written or parsed                */
@@ -234,6 +238,50 @@ static int file_open(Writer* w)
     return 0;
 }
 
+static void tlv(Buf* b, unsigned tag, const void* p, unsigned n);
+static void tlv_u32(Buf* b, unsigned tag, unsigned v);
+
+/* A fork's segment, from the append point on: the file cut there -- which drops a torn last block
+   or an unfinished segment with no complete iteration, and no complete block -- and, when the
+   segment before it has no end block, one that ends it at its last complete iteration. Then the
+   header follows, as a new file's follows the magic.
+   THE ORDERING that makes the append point current: the takeover found it after opening this
+   handle (tagpu_replay.c, TK0), whose share mode (FILE_SHARE_READ) refuses every other open for
+   writing from then on, and an earlier writer still holding the file would have made that open
+   fail. So no byte past append_off has changed since the scan that found it. */
+static int file_append(Writer* w)
+{
+    const RecFork* f = &w->ring->fork;
+    LARGE_INTEGER at;
+    snprintf(w->path, sizeof w->path, "%s", f->path);
+    at.QuadPart = (LONGLONG)f->append_off;
+    if (!SetFilePointerEx(w->file, at, NULL, FILE_BEGIN) || !SetEndOfFile(w->file)) {
+        char why[64];
+        snprintf(why, sizeof why, "cannot append (%lu)", GetLastError());
+        fail(w, why);
+        return 0;
+    }
+    if (f->end_open) {
+        Buf e = { 0 };
+        tlv_u32(&e, RT_END_REASON, REC_END_UNFINISHED);
+        tlv_u32(&e, RT_LAST, f->open_last);
+        if (e.oom) {
+            free(e.p);
+            fail(w, "cannot append: no memory for the end block");
+            return 0;
+        }
+        block(w, RB_END, f->open_last, f->open_last, e.p, e.n, 0);
+        free(e.p);
+        if (w->dead) return 0;
+        tagpu_logf("recorder: writer: %s: timeline %u appended at byte %llu (timeline %u ended "
+                   "unfinished at GameTime %u)", w->path, f->id, f->append_off, f->open_id, f->open_last);
+    } else {
+        tagpu_logf("recorder: writer: %s: timeline %u appended at byte %llu", w->path, f->id,
+                   f->append_off);
+    }
+    return 1;
+}
+
 /* ---- the copy ------------------------------------------------------------------------------- */
 
 static WTable* table_of(Writer* w, unsigned index)
@@ -335,8 +383,12 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         fail(w, "no memory for the copy");
         return 1;
     }
-    if (!file_open(w)) return 1;
-    put(w, REC_MAGIC, 8);
+    if (w->append) {
+        if (!file_append(w)) return 1;
+    } else {
+        if (!file_open(w)) return 1;
+        put(w, REC_MAGIC, 8);
+    }
     block(w, RB_HEADER, 0, 0, b, len, 0);
     tagpu_logf("recorder: writer: %s: %u slots, %u tables", w->path, w->nslots, w->ntab);
     return 1;
@@ -1170,9 +1222,16 @@ static DWORD WINAPI writer_main(void* arg)
         w->ring = g;
         w->file = INVALID_HANDLE_VALUE;
         snprintf(w->path, sizeof w->path, "%s", g->path);
+        if (g->fork.file) {             /* THE FORK'S HANDLE moves to the writer */
+            w->file = g->fork.file;
+            g->fork.file = NULL;
+            w->append = 1;
+        }
     } else {
         InterlockedExchange(&g->failed, 1);
         tagpu_logf("recorder: writer: no memory: %s is not written", g->path);
+        if (g->fork.file) CloseHandle(g->fork.file);
+        g->fork.file = NULL;
     }
     while (!stop) {
         unsigned wp;

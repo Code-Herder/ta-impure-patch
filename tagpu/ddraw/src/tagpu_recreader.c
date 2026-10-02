@@ -8,11 +8,23 @@
    own file, so a stream crafted to inflate without end is not guarded beyond that.
 
    SEQUENTIAL READING skips snapshot blocks unread -- not inflated, their CRC not checked -- since
-   a playing from the start never needs one. A SEEK reads them: the index (every block's header,
-   built at the first seek) finds the last snapshot before the target, whose payload is then
-   checked like any block's, and the stream is read on from the iteration after it. A snapshot
-   carries only the cells that differ from the recording's first iteration (tagpu_recfmt.h,
-   RB_SNAPSHOT), so the reader keeps that grid, the base, from the first iteration it reads. */
+   a playing from the start never needs one. A SEEK reads them: the index (every block's header)
+   finds the last snapshot before the target, whose payload is then checked like any block's, and
+   the stream is read on from the iteration after it. A snapshot carries only the cells that
+   differ from its segment's first iteration (tagpu_recfmt.h, RB_SNAPSHOT), so the reader keeps
+   that grid, the base, from the segment's first iteration it reads.
+
+   THE SEGMENTS (tagpu_recfmt.h). The index is every block of every segment, each with its
+   segment, found by segs_scan at the open and again by every call that needs it, since a fork
+   may have been appended since. A playing reads one CHAIN of timelines, root first, chosen by
+   recr_timeline before its first iteration; every segment of it agrees with the first header in
+   shape, which is the bound that keeps the world's allocations, sized from the first header,
+   valid for every segment's records.
+   THE INVARIANT that makes a chain one world: a segment's records are applied only over a world
+   reset to that segment's first iteration, or built from that segment's own snapshot over that
+   segment's own base. No record of one segment is applied over another segment's world except
+   across fork_at, where the child's first iteration replaces the world whole -- RK_GRID whole,
+   every image, as any recording's first iteration -- after a reset. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,8 +36,18 @@
 /* one block of the file, by its header alone */
 typedef struct RecIndexEntry {
     unsigned           kind, first, last, raw, packed;
+    unsigned           seg;         /* its segment                                            */
     unsigned long long off;         /* its header's offset in the file                        */
 } RecIndexEntry;
+
+/* one segment of the file: a timeline (tagpu_recreader.h) */
+typedef struct RecSeg {
+    RecTimeline        t;
+    RecHeader*         h;           /* its header: the reader's own for the first, else the heap */
+    unsigned           i0, n;       /* its blocks in the index, its header not among them      */
+    unsigned           nstream;     /* its stream blocks                                       */
+    int                ended;       /* an RB_END closes it                                     */
+} RecSeg;
 
 struct RecReader {
     HANDLE             f;
@@ -47,15 +69,22 @@ struct RecReader {
     unsigned           death[REC_DEATHS_MAX];
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
     unsigned long long first_off;   /* the file offset of the first block after the header    */
-    unsigned char*     base;        /* the grid at the end of the first iteration              */
-    int                has_base;
+    unsigned char*     base;        /* the grid at the end of a segment's first iteration ...  */
+    int                base_seg;    /* ... the chain's segment base_seg, -1 for none           */
     int                globals_in;  /* an RK_GLOBALS has come, so a delta has an image to change */
     int                proj_in;     /* an RK_PROJ_HEAD has come, so records below hw may come  */
     unsigned           mnext;       /* the next RK_MAPPED's offset                            */
-    RecIndexEntry*     idx;         /* every block after the header, to the first torn one or
-                                       the end block; built at the first seek                  */
+    RecIndexEntry*     idx;         /* every block of every segment but their headers, to the
+                                       first torn one, or to an end block no header follows   */
     unsigned           nidx;
-    int                indexed;
+    RecSeg             seg[RECR_TIMELINES];
+    unsigned           nseg;
+    unsigned           chain_id[RECR_TIMELINES];   /* the chain played, root first, by id ...  */
+    unsigned           chain[RECR_TIMELINES];      /* ... and by segment, after every scan     */
+    unsigned           nchain;
+    unsigned           cur;         /* the chain's segment being read                          */
+    int                in_seg;      /* the world holds an iteration of segment chain[cur]      */
+    int                read_any;    /* an iteration has been read: the chain is fixed          */
 };
 
 static const char* const END_REASONS[] = {
@@ -68,7 +97,8 @@ static const char* const END_REASONS[] = {
     "INCOMPLETE: the features were not the ones it began with",
     "INCOMPLETE: the projectile pool was not the one it began with, or its count was past its "
     "records",
-    "INCOMPLETE: the explored map was not the one it began with"
+    "INCOMPLETE: the explored map was not the one it began with",
+    "INCOMPLETE: a later timeline ended it at its last complete block"
 };
 
 /* ---- blocks --------------------------------------------------------------------------------- */
@@ -87,12 +117,17 @@ static int read_all(HANDLE f, void* p, DWORD n)
     return ReadFile(f, p, n, &got, NULL) && got == n;
 }
 
-/* the file's next read at `off`, the offset of a block's header */
-static int file_at(RecReader* r, unsigned long long off)
+static int seek_to(HANDLE f, unsigned long long off)
 {
     LARGE_INTEGER at;
     at.QuadPart = (LONGLONG)off;
-    if (!SetFilePointerEx(r->f, at, NULL, FILE_BEGIN)) return 0;
+    return SetFilePointerEx(f, at, NULL, FILE_BEGIN) != 0;
+}
+
+/* the file's next read at `off`, the offset of a block's header */
+static int file_at(RecReader* r, unsigned long long off)
+{
+    if (!seek_to(r->f, off)) return 0;
     r->off = off;
     return 1;
 }
@@ -264,6 +299,14 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             }
             break;
         case RT_LAYOUT:        text(h->layout, sizeof h->layout, p, n); break;
+        case RT_TIMELINE:
+            if (n == 12) {
+                h->has_timeline = 1;
+                h->tl_id = u32(p);
+                h->tl_parent = u32(p + 4);
+                h->tl_fork_at = u32(p + 8);
+            }
+            break;
         case RT_GLOBALS:       text(h->globals, sizeof h->globals, p, n); break;
         case RT_PROJECTILES:   if (n == 4) { h->proj_cap = u32(p); seen |= 16; } break;
         case RT_SETTINGS_MAP:
@@ -366,6 +409,21 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
     return 1;
 }
 
+/* a u32 entry of a header or end block's payload, 0 when it has none */
+static unsigned entry_u32(const unsigned char* b, size_t len, unsigned want)
+{
+    size_t at = 0;
+    while (at + 4 <= len) {
+        unsigned short tag, n;
+        memcpy(&tag, b + at, 2);
+        memcpy(&n, b + at + 2, 2);
+        if (at + 4 + n > len) break;
+        if (n == 4 && tag == want) return u32(b + at + 4);
+        at += (4 + (size_t)n + 3) & ~(size_t)3;
+    }
+    return 0;
+}
+
 static void end_parse(RecReader* r, const unsigned char* b, size_t len)
 {
     size_t at = 0;
@@ -393,14 +451,23 @@ static size_t grid_bytes(const RecReader* r)
     return (size_t)r->h.grid_w * r->h.grid_h * REC_CELL_BYTES;
 }
 
-/* The world as the recording's first record finds it, the grid the base's when `from_base` (a
-   snapshot's cells are the ones that differ from it) and else zero (the first iteration carries
-   every cell); and the reader at no iteration. What a seek starts from. */
+/* the header of the chain's segment being read: the first header until the segments are found */
+static const RecHeader* seg_header(const RecReader* r)
+{
+    return r->nseg ? r->seg[r->chain[r->cur]].h : &r->h;
+}
+
+/* The world as a segment's first record finds it -- the controllers and the viewer its header's,
+   the grid the base's when `from_base` (a snapshot's cells are the ones that differ from it) and
+   else zero (a first iteration carries every cell) -- and the reader at no iteration of it. What a
+   seek starts from, and what a fork is crossed over. */
 static void world_reset(RecReader* r, int from_base)
 {
     RecWorld* w = &r->w;
+    const RecHeader* h = seg_header(r);
     unsigned i;
     payload_free(r);
+    r->in_seg = 0;
     memset(w->live, 0, w->slots);
     memset(w->changed, 0, w->slots);
     for (i = 0; i < w->slots * 2; i++) w->list[i].n = 0;
@@ -408,11 +475,11 @@ static void world_reset(RecReader* r, int from_base)
     memset(w->player, 0, sizeof w->player);
     memset(w->pchanged, 0, sizeof w->pchanged);
     memset(w->ctl, 0, sizeof w->ctl);
-    for (i = 0; i < r->h.nseats; i++) w->ctl[r->h.seats[i].index] = r->h.seats[i].controller;
+    for (i = 0; i < h->nseats; i++) w->ctl[h->seats[i].index] = h->seats[i].controller;
     w->view[0] = w->view[1] = 0;
-    if (r->h.has_options) {
-        w->view[0] = (unsigned char)r->h.controlled;
-        w->view[1] = (unsigned char)r->h.viewed;
+    if (h->has_options) {
+        w->view[0] = (unsigned char)h->controlled;
+        w->view[1] = (unsigned char)h->viewed;
     }
     for (i = 0; i < w->ntab; i++) w->tab[i].size = 0;
     w->nev = 0;
@@ -895,76 +962,442 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
     }
 }
 
-int recr_tick(RecReader* r, char* why, unsigned cap)
+/* An iteration read, and what reading it makes true: the world holds an iteration of the chain's
+   segment `cur`, and the base is that segment's. The base is taken at a segment's first iteration
+   read: recr_open and recr_timeline start at the root's, a seek starts at a segment's first
+   iteration or reads it before a snapshot of that segment, and a crossing starts at the child's.
+   Its grid images are every cell (the feature tick's cells inside its events are not applied to
+   the grid), as the writer's base is (tagpu_recwriter.c, RK_GRID). */
+static int tick_take(RecReader* r, char* why, unsigned cap)
 {
     int k = tick_read(r, why, cap);
-    /* The first iteration read is the recording's first: recr_open starts there, and a seek
-       starts from a snapshot only once the base is taken. Its grid images are every cell (the
-       feature tick's cells inside its events are not applied to the grid), as the writer's base
-       is (tagpu_recwriter.c, RK_GRID). */
-    if (k > 0 && !r->has_base) {
-        memcpy(r->base, r->w.grid, grid_bytes(r));
-        r->has_base = 1;
+    if (k > 0) {
+        r->in_seg = 1;
+        r->read_any = 1;
+        if (r->base_seg != (int)r->cur) {
+            memcpy(r->base, r->w.grid, grid_bytes(r));
+            r->base_seg = (int)r->cur;
+        }
     }
     return k;
 }
 
-/* ---- seeking -------------------------------------------------------------------------------- */
+/* the chain's segment i, and the last GameTime it covers: its child's fork_at - 1, or its own last
+   iteration when it is the chain's last */
+static const RecSeg* chain_seg(const RecReader* r, unsigned i) { return &r->seg[r->chain[i]]; }
 
-/* Every block's header after the recording's header, without its payload: to the end block, or
-   to the first block whose header is torn or whose payload the file cuts short. Bounded by the
-   file's size. The file's next read is put back where it was. 1, or -1 (why). */
-static int index_build(RecReader* r, char* why, unsigned cap)
+static unsigned cover_end(const RecReader* r, unsigned i)
 {
-    unsigned long long keep = r->off, off = r->first_off, size;
-    unsigned room = 0;
+    return i + 1 < r->nchain ? chain_seg(r, i + 1)->t.fork_at - 1 : chain_seg(r, i)->t.last;
+}
+
+int recr_tick(RecReader* r, char* why, unsigned cap)
+{
+    /* THE BOUNDARY: the next iteration is the child's, which only a seek applies (recr_seek) */
+    if (r->in_seg && r->cur + 1 < r->nchain) {
+        const RecTimeline* c = &chain_seg(r, r->cur + 1)->t;
+        if ((unsigned long long)r->w.tick + 1 >= c->fork_at) {
+            snprintf(why, cap, "timeline %u continues from GameTime %u", c->id, c->fork_at);
+            return RECR_BOUNDARY;
+        }
+    }
+    return tick_take(r, why, cap);
+}
+
+/* ---- the segments --------------------------------------------------------------------------- */
+
+/* The payload of the block whose header `b` is at `off`, checked and inflated into a buffer of its
+   own, so the reading's payload -- which the world's events point into -- is left alone; NULL when
+   it cannot be read, fails its CRC or does not inflate to its size. The file's position moves. */
+static unsigned char* body_read(RecReader* r, unsigned long long off, const RecBlock* b, size_t* n)
+{
+    unsigned char* pk = (unsigned char*)malloc(b->packed ? b->packed : 1);
+    unsigned char* out = NULL;
+    size_t outn = 0;
+    if (!pk) return NULL;
+    if (!seek_to(r->f, off + sizeof *b) || (b->packed && !read_all(r->f, pk, b->packed)) ||
+        (uint32_t)Crc32_ComputeBuf(0, pk, b->packed) != b->crc_body) {
+        free(pk);
+        return NULL;
+    }
+    if (b->flags & RBF_STORED) {
+        *n = b->packed;
+        return pk;
+    }
+    if (!b->packed || lodepng_zlib_decompress(&out, &outn, pk, b->packed,
+                                              &lodepng_default_decompress_settings) ||
+        outn != b->raw) {
+        free(out);
+        free(pk);
+        return NULL;
+    }
+    free(pk);
+    *n = outn;
+    return out;
+}
+
+/* a segment's first, last and end from its blocks in `ix`, after the last was dropped */
+static void seg_tally(RecSeg* s, const RecIndexEntry* ix)
+{
+    unsigned j;
+    s->nstream = 0;
+    s->t.first = s->t.last = 0;
+    s->t.end_off = s->t.first_off;
+    for (j = s->i0; j < s->i0 + s->n; j++) {
+        if (ix[j].kind == RB_STREAM) {
+            if (!s->nstream++) s->t.first = ix[j].first;
+            s->t.last = ix[j].last;
+        }
+        s->t.end_off = ix[j].off + sizeof(RecBlock) + ix[j].packed;
+    }
+}
+
+static void segs_free(RecSeg* sg, unsigned n)
+{
+    unsigned i;
+    for (i = 1; i < n; i++) free(sg[i].h);
+}
+
+/* the segment of timeline `id`, or RECR_TIMELINES */
+static unsigned seg_index(const RecReader* r, unsigned id)
+{
+    unsigned i;
+    for (i = 0; i < r->nseg; i++)
+        if (r->seg[i].t.id == id) return i;
+    return RECR_TIMELINES;
+}
+
+/* THE SCAN: every block header from byte 8, checked as a reading checks it -- the magic, the
+   header's CRC, the sizes against RECR_BLOCK_MAX, the payload inside the file -- to the first
+   torn block, or to an RB_END that no valid RB_HEADER follows. A header's and an end block's
+   payloads are read and checked too: a fork's header names its timeline, an end its reason. With
+   `tail`, the last block's payload is checked as well, and a torn one is not kept: blocks are
+   appended one after the other, so only the last can be torn. Bounded by the file's size and by
+   RECR_TIMELINES; the bounds of recr_timelines refuse the file by name. On success the index, the
+   segments and the chain's segments are the file's as it is now; on a failure they are as they
+   were. The file's next read is put back where it was. 1, or -1 (why). */
+static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
+{
+    RecSeg* sg = (RecSeg*)calloc(RECR_TIMELINES, sizeof *sg);
+    RecIndexEntry* ix = NULL;
+    unsigned nix = 0, room = 0, ns = 0, i, j;
+    unsigned long long off = 8, size;
     LARGE_INTEGER fs;
-    int ok = 1;
+    int ok = 0, after_end = 1;
+    char w2[160];
+    if (!sg) {
+        snprintf(why, cap, "no memory for the recording's segments");
+        return -1;
+    }
     if (!GetFileSizeEx(r->f, &fs)) {
         snprintf(why, cap, "cannot size the file (%lu)", GetLastError());
-        return -1;
+        goto done;
     }
     size = (unsigned long long)fs.QuadPart;
-    r->nidx = 0;
     while (off + sizeof(RecBlock) <= size) {
         RecBlock b;
-        RecIndexEntry* e;
-        if (!file_at(r, off) || !read_all(r->f, &b, sizeof b) || b.magic != REC_BLOCK_MAGIC ||
+        RecSeg* s;
+        unsigned char* p;
+        size_t n = 0;
+        if (!seek_to(r->f, off) || !read_all(r->f, &b, sizeof b) || b.magic != REC_BLOCK_MAGIC ||
             (uint32_t)Crc32_ComputeBuf(0, &b, 28) != b.crc_head || b.packed > RECR_BLOCK_MAX ||
-            b.raw > RECR_BLOCK_MAX || off + sizeof b + b.packed > size)
+            b.raw > RECR_BLOCK_MAX || ((b.flags & RBF_STORED) && b.packed != b.raw) ||
+            off + sizeof b + b.packed > size)
             break;
-        if (r->nidx == room) {
-            unsigned c = room ? room * 2 : 256;
-            RecIndexEntry* n = (RecIndexEntry*)realloc(r->idx, c * sizeof *n);
-            if (!n) {
-                snprintf(why, cap, "no memory for the index of the recording's blocks");
-                ok = 0;
-                break;
+        if (after_end) {
+            /* a segment begins: the file's first block, or a header right after an end */
+            if (b.kind != RB_HEADER) break;
+            if (ns == RECR_TIMELINES) {
+                snprintf(why, cap, "it holds more than %u timelines", RECR_TIMELINES);
+                goto done;
             }
-            r->idx = n;
+            s = &sg[ns];
+            if (!ns) {
+                s->h = &r->h;               /* recr_open has read and checked the first */
+            } else {
+                p = body_read(r, off, &b, &n);
+                if (!p) break;              /* a torn header: the file ends before it */
+                s->h = (RecHeader*)malloc(sizeof *s->h);
+                if (!s->h) {
+                    free(p);
+                    snprintf(why, cap, "no memory for a timeline's header");
+                    goto done;
+                }
+                if (!header_parse(s->h, p, n, w2, sizeof w2)) {
+                    free(p);
+                    ns++;
+                    snprintf(why, cap, "the segment at byte %llu: %s", off, w2);
+                    goto done;
+                }
+                free(p);
+                if (!s->h->has_timeline) {
+                    ns++;
+                    snprintf(why, cap, "the segment at byte %llu names no timeline", off);
+                    goto done;
+                }
+                s->t.id = s->h->tl_id;
+                s->t.parent = s->h->tl_parent;
+                s->t.fork_at = s->h->tl_fork_at;
+            }
+            ns++;
+            s->t.difficulty = s->h->difficulty;
+            for (i = 0; i < s->h->nseats; i++)
+                if (s->h->seats[i].controller == 2) s->t.has_ai = 1;
+            s->t.header_off = off;
+            s->t.first_off = s->t.end_off = off + sizeof b + b.packed;
+            s->i0 = nix;
+            after_end = 0;
+            off = s->t.first_off;
+            continue;
+        }
+        s = &sg[ns - 1];
+        if (b.kind == RB_HEADER) {
+            snprintf(why, cap, "a header block at byte %llu inside timeline %u", off, s->t.id);
+            goto done;
+        }
+        if (b.kind == RB_END) {
+            p = body_read(r, off, &b, &n);
+            if (!p) break;                  /* a torn end: the segment has none */
+            s->t.end_reason = entry_u32(p, n, RT_END_REASON);
+            s->ended = 1;
+            free(p);
+        }
+        if (nix == room) {
+            unsigned c = room ? room * 2 : 256;
+            RecIndexEntry* q = (RecIndexEntry*)realloc(ix, c * sizeof *q);
+            if (!q) {
+                snprintf(why, cap, "no memory for the index of the recording's blocks");
+                goto done;
+            }
+            ix = q;
             room = c;
         }
-        e = &r->idx[r->nidx++];
-        e->kind = b.kind;
-        e->first = b.first;
-        e->last = b.last;
-        e->raw = b.raw;
-        e->packed = b.packed;
-        e->off = off;
-        if (b.kind == RB_END) break;
+        ix[nix].kind = b.kind;
+        ix[nix].first = b.first;
+        ix[nix].last = b.last;
+        ix[nix].raw = b.raw;
+        ix[nix].packed = b.packed;
+        ix[nix].seg = ns - 1;
+        ix[nix].off = off;
+        nix++;
+        s->n++;
+        if (b.kind == RB_STREAM) {
+            if (!s->nstream++) s->t.first = b.first;
+            s->t.last = b.last;
+        }
         off += sizeof b + b.packed;
+        s->t.end_off = off;
+        if (b.kind == RB_END) after_end = 1;
     }
-    if (!file_at(r, keep)) {
-        snprintf(why, cap, "cannot return to byte %llu (%lu)", keep, GetLastError());
-        ok = 0;
+    if (tail && nix && ix[nix - 1].kind != RB_END) {
+        RecBlock b;
+        unsigned char* p;
+        size_t n = 0;
+        const RecIndexEntry* e = &ix[nix - 1];
+        memset(&b, 0, sizeof b);
+        if (!seek_to(r->f, e->off) || !read_all(r->f, &b, sizeof b) ||
+            !(p = body_read(r, e->off, &b, &n))) {
+            sg[e->seg].n--;
+            nix--;
+            seg_tally(&sg[e->seg], ix);
+        } else {
+            free(p);
+        }
     }
-    if (!ok) {
-        r->nidx = 0;
+    if (!ns) {
+        snprintf(why, cap, "it has no header block");
+        goto done;
+    }
+    /* THE BOUNDS: an id names one segment, and a parent an earlier one with a lower id, so a
+       chain followed by parents ends at the original within RECR_TIMELINES steps */
+    for (i = 1; i < ns; i++) {
+        int found = 0;
+        for (j = 0; j < i; j++) {
+            if (sg[j].t.id == sg[i].t.id) {
+                snprintf(why, cap, "timeline %u twice in the file", sg[i].t.id);
+                goto done;
+            }
+            if (sg[j].t.id == sg[i].t.parent) found = 1;
+        }
+        if (!found || sg[i].t.parent >= sg[i].t.id) {
+            snprintf(why, cap, "timeline %u names parent %u, which is not an earlier timeline",
+                     sg[i].t.id, sg[i].t.parent);
+            goto done;
+        }
+    }
+    ok = 1;
+done:
+    if (ok) {
+        unsigned old = r->nseg;
+        RecSeg keep[RECR_TIMELINES];
+        memcpy(keep, r->seg, sizeof keep);
+        memcpy(r->seg, sg, ns * sizeof *sg);
+        r->nseg = ns;
+        for (i = 0; ok && i < r->nchain; i++) {
+            r->chain[i] = seg_index(r, r->chain_id[i]);
+            if (r->chain[i] == RECR_TIMELINES) {
+                snprintf(why, cap, "timeline %u is no longer in the file", r->chain_id[i]);
+                ok = 0;
+            }
+        }
+        if (ok) {
+            segs_free(keep, old);
+            free(r->idx);
+            r->idx = ix;
+            r->nidx = nix;
+        } else {
+            memcpy(r->seg, keep, sizeof keep);
+            r->nseg = old;
+            for (i = 0; i < r->nchain; i++) r->chain[i] = seg_index(r, r->chain_id[i]);
+            segs_free(sg, ns);
+            free(ix);
+        }
+    } else {
+        segs_free(sg, ns);
+        free(ix);
+    }
+    free(sg);
+    if (!seek_to(r->f, r->off)) {
+        snprintf(why, cap, "cannot return to byte %llu (%lu)", r->off, GetLastError());
         return -1;
     }
-    r->indexed = 1;
+    return ok ? 1 : -1;
+}
+
+int recr_timelines(RecReader* r, RecTimeline* out, unsigned cap, char* why, unsigned wcap)
+{
+    unsigned i;
+    if (segs_scan(r, 0, why, wcap) < 0) return -1;
+    for (i = 0; i < r->nseg && i < cap; i++) out[i] = r->seg[i].t;
+    return (int)r->nseg;
+}
+
+const RecTimeline* recr_selected(const RecReader* r)
+{
+    return &chain_seg(r, r->nchain - 1)->t;
+}
+
+/* the first field in which a segment's header differs from the first header, or NULL */
+static const char* shape_differs(const RecHeader* a, const RecHeader* b)
+{
+    unsigned i;
+    if (a->slots != b->slots) return "unit slots";
+    if (a->units_each != b->units_each) return "units a player";
+    if (a->has_unitdefs != b->has_unitdefs || a->ndefs != b->ndefs || a->defs_hash != b->defs_hash)
+        return "unit types";
+    if (a->has_weapons != b->has_weapons || a->nweapons != b->nweapons ||
+        a->weapons_hash != b->weapons_hash)
+        return "weapons";
+    if (a->grid_w != b->grid_w || a->grid_h != b->grid_h) return "feature grid";
+    if (a->wrecks != b->wrecks) return "wreck pool";
+    if (a->nfdefs != b->nfdefs || a->fdefs_hash != b->fdefs_hash) return "feature defs";
+    if (a->proj_cap != b->proj_cap) return "projectile pool";
+    if (strcmp(a->layout, b->layout)) return "exclusion file (replay-layout.tsv)";
+    if (strcmp(a->globals, b->globals)) return "positive list (replay-globals.tsv)";
+    if (strcmp(a->settings_map, b->settings_map)) return "map";
+    if (a->nseats != b->nseats) return "seats";
+    for (i = 0; i < a->nseats; i++)
+        if (a->seats[i].index != b->seats[i].index) return "seats";
+    if (a->ntab != b->ntab) return "declared tables";
+    for (i = 0; i < a->ntab; i++) {
+        const RecTableInfo* x = &a->tab[i];
+        const RecTableInfo* y = &b->tab[i];
+        if (x->index != y->index || x->stride != y->stride || x->cls != y->cls ||
+            x->key != y->key || x->flags != y->flags || x->lhash != y->lhash ||
+            strcmp(x->name, y->name))
+            return "declared tables";
+    }
+    return NULL;
+}
+
+int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap)
+{
+    unsigned path[RECR_TIMELINES], n = 0, i, s;
+    if (r->read_any) {
+        snprintf(why, cap, "a timeline is chosen before the first iteration");
+        return -1;
+    }
+    if (segs_scan(r, 0, why, cap) < 0) return -1;
+    s = seg_index(r, id);
+    if (s == RECR_TIMELINES) {
+        snprintf(why, cap, "the recording has no timeline %u", id);
+        return 0;
+    }
+    /* by parents to the original: each parent is an earlier segment (segs_scan's bounds) */
+    for (;;) {
+        path[n++] = s;
+        if (!s) break;
+        s = seg_index(r, r->seg[s].t.parent);
+    }
+    for (i = 0; i + 1 < n; i++) {
+        const RecSeg* p = &r->seg[path[n - 1 - i]];
+        const RecSeg* c = &r->seg[path[n - 2 - i]];
+        const char* field;
+        if (!p->nstream || !c->nstream || p->t.first >= c->t.fork_at ||
+            c->t.fork_at - 1 > p->t.last || c->t.first != c->t.fork_at) {
+            snprintf(why, cap, "timeline %u, from GameTime %u, forks from timeline %u at GameTime "
+                     "%u, outside its GameTime %u to %u", c->t.id, c->t.first, p->t.id,
+                     c->t.fork_at, p->t.first, p->t.last);
+            return 0;
+        }
+        field = shape_differs(c->h, &r->h);
+        if (field) {
+            snprintf(why, cap, "timeline %u differs from the recording in its %s", c->t.id, field);
+            return 0;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        r->chain[i] = path[n - 1 - i];
+        r->chain_id[i] = r->seg[r->chain[i]].t.id;
+    }
+    r->nchain = n;
+    r->cur = 0;
+    r->base_seg = -1;
+    world_reset(r, 0);
+    if (!file_at(r, r->first_off)) {
+        snprintf(why, cap, "cannot move to byte %llu (%lu)", r->first_off, GetLastError());
+        return -1;
+    }
     return 1;
 }
+
+int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap)
+{
+    const RecSeg* last;
+    unsigned i, keep, hold;
+    int cut;
+    memset(a, 0, sizeof *a);
+    if (segs_scan(r, 1, why, cap) < 0) return 0;
+    last = &r->seg[r->nseg - 1];
+    /* an unfinished fork with no complete iteration: its id never named a complete segment */
+    cut = r->nseg > 1 && !last->ended && !last->nstream;
+    keep = r->nseg - (cut ? 1u : 0u);
+    for (hold = 0; hold < r->nchain; hold++) {
+        const RecSeg* s = chain_seg(r, hold);
+        if (r->chain[hold] < keep && s->nstream && at >= s->t.first && at <= cover_end(r, hold))
+            break;
+    }
+    if (hold == r->nchain) {
+        snprintf(why, cap, "GameTime %u is outside the timeline played", at);
+        return 0;
+    }
+    if (keep >= RECR_TIMELINES) {
+        snprintf(why, cap, "the recording holds %u timelines, the most a file may", keep);
+        return 0;
+    }
+    a->off = cut ? last->t.header_off : last->t.end_off;
+    for (i = 0; i < keep; i++)
+        if (r->seg[i].t.id >= a->next_id) a->next_id = r->seg[i].t.id + 1;
+    a->parent = chain_seg(r, hold)->t.id;
+    a->end_open = !cut && !last->ended;
+    if (a->end_open) {
+        a->open_id = last->t.id;
+        a->open_last = last->t.last;
+    }
+    return 1;
+}
+
+/* ---- seeking -------------------------------------------------------------------------------- */
 
 /* The snapshot block whose header block_head has just read, applied over the reset world: a TICK
    at the block's GameTime, then images only (tagpu_recfmt.h, RB_SNAPSHOT). 1, or -1 (why). */
@@ -1017,53 +1450,65 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
 {
     RecWorld* w = &r->w;
     const RecIndexEntry* snap = NULL;
-    unsigned i, tfirst = 0, tlast = 0, prev;
-    int streams = 0, read, k;
-    if (!r->indexed && index_build(r, why, cap) < 0) return -1;
-    for (i = 0; i < r->nidx; i++) {
-        if (r->idx[i].kind != RB_STREAM) continue;
-        if (!streams) tfirst = r->idx[i].first;
-        tlast = r->idx[i].last;
-        streams = 1;
-    }
-    if (!streams) {
+    unsigned i, j, hold, from = 0, prev;
+    int read, k;
+    if (segs_scan(r, 0, why, cap) < 0) return -1;      /* a fork may have been appended since */
+    if (!chain_seg(r, 0)->nstream) {
         snprintf(why, cap, "the recording holds no complete stream block");
         return 0;
     }
-    if (T < tfirst || T > tlast) {
+    for (hold = 0; hold < r->nchain; hold++) {
+        const RecSeg* s = chain_seg(r, hold);
+        if (s->nstream && T >= s->t.first && T <= cover_end(r, hold)) break;
+    }
+    if (hold == r->nchain) {
         snprintf(why, cap, "GameTime %u is outside the recording, which holds GameTime %u to %u",
-                 T, tfirst, tlast);
+                 T, chain_seg(r, 0)->t.first, cover_end(r, r->nchain - 1));
         return 0;
     }
-    /* The base is the first iteration's grid: read it before any snapshot is built over it. */
-    if (!r->has_base) {
-        world_reset(r, 0);
-        if (!file_at(r, r->first_off)) {
-            snprintf(why, cap, "cannot move to byte %llu (%lu)", r->first_off, GetLastError());
-            return -1;
-        }
-        k = recr_tick(r, why, cap);
-        if (k <= 0) {
-            if (!k) snprintf(why, cap, "the recording's first iteration cannot be read");
-            return -1;
-        }
+    /* The last snapshot of the chain more than `lead` iterations before T (strictly before it with
+       no lead), inside its segment's part of the chain: a snapshot at S holds S's images, and the
+       events of the step after them are in the stream block before it (tagpu_recfmt.h,
+       RB_SNAPSHOT). */
+    for (i = 0; i <= hold; i++) {
+        const RecSeg* s = chain_seg(r, i);
+        for (j = s->i0; j < s->i0 + s->n; j++)
+            if (r->idx[j].kind == RB_SNAPSHOT && r->idx[j].last <= cover_end(r, i) &&
+                (unsigned long long)r->idx[j].last + lead < T) {
+                snap = &r->idx[j];
+                from = i;
+            }
     }
-    /* The last snapshot more than `lead` iterations before T (strictly before it with no lead):
-       a snapshot at S holds S's images, and the events of the step after them are in the stream
-       block before it (tagpu_recfmt.h, RB_SNAPSHOT). */
-    for (i = 0; i < r->nidx; i++)
-        if (r->idx[i].kind == RB_SNAPSHOT && (unsigned long long)r->idx[i].last + lead < T)
-            snap = &r->idx[i];
     if (snap) {
         RecBlock blk;
+        const RecSeg* s = chain_seg(r, from);
         const RecIndexEntry* next = snap + 1;
-        /* tlast >= T > S, so a stream block follows; the writer starts it at S + 1
-           (tagpu_recwriter.c, iteration_done) */
-        if (next >= r->idx + r->nidx || next->kind != RB_STREAM || next->first != snap->last + 1) {
+        /* the stream goes on from S + 1 within the segment, unless the chain leaves it at S; the
+           writer starts it there (tagpu_recwriter.c, iteration_done) */
+        if (snap->last < cover_end(r, from) &&
+            (next >= r->idx + s->i0 + s->n || next->kind != RB_STREAM ||
+             next->first != snap->last + 1)) {
             snprintf(why, cap, "the snapshot of GameTime %u is not followed by the stream from "
                      "GameTime %u", snap->last, snap->last + 1);
             return -1;
         }
+        /* the snapshot's base is its own segment's first iteration: read it first */
+        if (r->base_seg != (int)from) {
+            r->cur = from;
+            world_reset(r, 0);
+            if (!file_at(r, s->t.first_off)) {
+                snprintf(why, cap, "cannot move to byte %llu (%lu)", s->t.first_off,
+                         GetLastError());
+                return -1;
+            }
+            k = tick_take(r, why, cap);
+            if (k <= 0) {
+                if (!k) snprintf(why, cap, "timeline %u's first iteration cannot be read",
+                                 s->t.id);
+                return -1;
+            }
+        }
+        r->cur = from;
         world_reset(r, 1);
         if (!file_at(r, snap->off)) {
             snprintf(why, cap, "cannot move to byte %llu (%lu)", snap->off, GetLastError());
@@ -1076,16 +1521,35 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
             return -1;
         }
         if (snapshot_apply(r, &blk, why, cap) < 0) return -1;
+        r->in_seg = 1;
     } else {
+        /* the first segment of the chain whose part reaches T - lead, from its first iteration */
+        unsigned lo = T > lead ? T - lead : 0;
+        for (from = 0; from < hold && cover_end(r, from) < lo; from++) {}
+        r->cur = from;
         world_reset(r, 0);
-        if (!file_at(r, r->first_off)) {
-            snprintf(why, cap, "cannot move to byte %llu (%lu)", r->first_off, GetLastError());
+        if (!file_at(r, chain_seg(r, from)->t.first_off)) {
+            snprintf(why, cap, "cannot move to byte %llu (%lu)", chain_seg(r, from)->t.first_off,
+                     GetLastError());
             return -1;
         }
     }
     /* each iteration's events replace the last's, so T's are the ones left pending */
-    for (read = snap != NULL, prev = w->tick; ; read = 1, prev = w->tick) {
-        k = recr_tick(r, why, cap);
+    for (read = snap != NULL, prev = w->tick;; read = 1, prev = w->tick) {
+        if (r->in_seg && r->cur < hold && w->tick >= cover_end(r, r->cur)) {
+            /* THE CROSSING: the world holds the segment's last iteration before its child's
+               fork_at, and the child's first iteration replaces it whole, over a reset world
+               (the invariant at the head of this file); it is the child's base too */
+            r->cur++;
+            world_reset(r, 0);
+            if (!file_at(r, chain_seg(r, r->cur)->t.first_off)) {
+                snprintf(why, cap, "cannot move to byte %llu (%lu)",
+                         chain_seg(r, r->cur)->t.first_off, GetLastError());
+                return -1;
+            }
+            read = 0;
+        }
+        k = tick_take(r, why, cap);
         if (k <= 0) {
             if (!k) snprintf(why, cap, "the recording ends at GameTime %u, before GameTime %u",
                              w->tick, T);
@@ -1093,6 +1557,12 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
         }
         if (read && w->tick <= prev) {
             snprintf(why, cap, "the stream goes from GameTime %u back to %u", prev, w->tick);
+            return -1;
+        }
+        if (r->cur < hold && w->tick > cover_end(r, r->cur)) {
+            snprintf(why, cap, "timeline %u has no iteration at GameTime %u, where timeline %u "
+                     "forks from it", chain_seg(r, r->cur)->t.id, cover_end(r, r->cur),
+                     chain_seg(r, r->cur + 1)->t.id);
             return -1;
         }
         if (visit && w->tick <= T) visit(ctx, w);
@@ -1117,7 +1587,12 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
         snprintf(why, cap, "no memory");
         return NULL;
     }
-    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+    /* Shared for writing too: a takeover opens the file it plays for writing while this reader
+       holds it (tagpu_replay.c, TK0). A block is whole or not by its two CRCs and every walk here
+       stops at the first torn one, so a reader of a file being appended reads its complete blocks
+       only. One writer at a time is the writers' own share mode's doing (FILE_SHARE_READ only),
+       not this reader's. */
+    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                        FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (r->f == INVALID_HANDLE_VALUE) {
         snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
@@ -1137,6 +1612,9 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
     if (!header_parse(&r->h, r->raw, r->rawn, why, cap) || !world_init(r, why, cap)) goto fail;
     payload_free(r);
     r->first_off = r->off;
+    r->nchain = 1;                  /* the original, until recr_timeline chooses another */
+    r->base_seg = -1;
+    if (segs_scan(r, 0, why, cap) < 0) goto fail;
     return r;
 fail:
     recr_close(r);
@@ -1283,6 +1761,7 @@ void recr_close(RecReader* r)
     free(r->w.mapped);
     free(r->touched);
     free(r->idx);
+    segs_free(r->seg, r->nseg);
     if (r->w.unit) VirtualFree(r->w.unit, 0, MEM_RELEASE);
     if (r->w.grid) VirtualFree(r->w.grid, 0, MEM_RELEASE);
     if (r->base) VirtualFree(r->base, 0, MEM_RELEASE);

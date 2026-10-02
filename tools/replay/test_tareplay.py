@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier): the C parser
-against the coverage build's map, the features' regions, the comment filter and `landing --check`.
-Standard library only; no game runs.
+"""Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
+segments): the C parser against the coverage build's map, the features' regions, the comment
+filter, `landing --check`, a recording's segments and chains, read from files built from the
+format alone, and the fixtures' takeover entries. Standard library only; no game runs.
 
     python3 tools/replay/test_tareplay.py
 """
+import io
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
+from contextlib import redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import tafeat  # noqa: E402
+import tarec  # noqa: E402
 import tareplay  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
@@ -137,6 +143,145 @@ class Landing(unittest.TestCase):
         self.assertEqual(tareplay.landing_check("main"), 0)       # nothing gated since
         self.commit("tools/replay/x.c", "int f(void)\n{\n    return 3;\n}\n")
         self.assertEqual(tareplay.landing_check("main"), 1)       # gated since the note
+
+
+# ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
+
+def tlv(tag, data):
+    """A header or end entry, or a record: u16 tag or kind, u16 length, the bytes, to a dword."""
+    return struct.pack("<HH", tag, len(data)) + data + bytes(-len(data) % 4)
+
+
+def block(kind, first, last, payload):
+    """A stored block: its header with both CRCs, then the payload."""
+    head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, tarec.RBF_STORED, first, last,
+                       len(payload), len(payload), zlib.crc32(payload))
+    return head + struct.pack("<I", zlib.crc32(head)) + payload
+
+
+def header(timeline=None, slots=4, seats=((0, 1), (1, 2)), viewed=0):
+    """A header with what World and the chain's checks read: a 2 x 2 grid, so a 2-byte explored
+    map, the seats and the options, and RT_TIMELINE for a fork."""
+    p = tlv(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT))
+    p += tlv(tarec.RT_MODE, struct.pack("<I", 2))
+    p += tlv(tarec.RT_SLOTS, struct.pack("<I", slots))
+    p += tlv(tarec.RT_FEATURES, struct.pack("<IIIII", 2, 2, 8, 0, 0))
+    p += tlv(tarec.RT_PROJECTILES, struct.pack("<I", 4))
+    if timeline:
+        p += tlv(tarec.RT_TIMELINE, struct.pack("<III", *timeline))
+    for index, controller in seats:
+        p += tlv(tarec.RT_PLAYER, bytes([index, controller, 0, index]) + bytes(12) +
+                 bytes(0xB9) + b"seat")
+    p += tlv(tarec.RT_OPTIONS, struct.pack("<IIIIHBB", 0, 0, 1, 0, len(seats), viewed, viewed))
+    return block(tarec.RB_HEADER, 0, 0, p)
+
+
+def stream(first, last, unit=None, opens=True):
+    """Iterations first..last; when it `opens` a segment, the first carries the explored map
+    whole, as a segment's first iteration does, and with `unit` a unit image in that slot."""
+    p = b""
+    for t in range(first, last + 1):
+        p += tlv(tarec.RK_TICK, struct.pack("<I", t))
+        if t == first and opens:
+            if unit:
+                p += tlv(tarec.RK_UNIT, struct.pack("<HH", unit, 0) + bytes(tarec.REC_UNIT_IMAGE))
+            p += tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2))
+    return block(tarec.RB_STREAM, first, last, p)
+
+
+def end_block(last, reason=1):
+    return block(tarec.RB_END, last, last, tlv(tarec.RT_END_REASON, struct.pack("<I", reason)) +
+                 tlv(tarec.RT_LAST, struct.pack("<I", last)))
+
+
+class Segments(unittest.TestCase):
+    """tarec's segments, chains and loads, as the DLL's reader takes them (tagpu_recreader.c)."""
+
+    ORIGINAL = (header(), stream(1, 3, unit=1), stream(4, 6, opens=False), end_block(6))
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.n = 0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, *parts):
+        self.n += 1
+        p = Path(self.tmp.name) / f"r{self.n}.imprec"
+        p.write_bytes(tarec.REC_MAGIC + b"".join(parts))
+        return str(p)
+
+    def segs(self, path):
+        return tarec.file_segments(path)[0]
+
+    def test_one(self):
+        path = self.file(*self.ORIGINAL)
+        self.assertEqual([(s["id"], s["first"], s["last"], s["end_reason"])
+                          for s in self.segs(path)], [(0, 1, 6, 1)])
+        h, bl, stop = tarec.load(path)
+        self.assertEqual((len(bl), stop), (4, None))
+        self.assertEqual(tarec.stream_to(h, bl).tick, 6)
+
+    def test_two_and_three(self):
+        fork1 = (header((1, 0, 4), seats=((0, 2), (1, 1)), viewed=1), stream(4, 5, unit=2),
+                 end_block(5))
+        fork2 = (header((2, 1, 5)), stream(5, 7, unit=3), end_block(7))
+        path = self.file(*self.ORIGINAL, *fork1, *fork2)
+        segs = self.segs(path)
+        self.assertEqual([(s["id"], s["parent"], s["fork_at"], s["first"], s["last"])
+                          for s in segs], [(0, 0, 0, 1, 6), (1, 0, 4, 4, 5), (2, 1, 5, 5, 7)])
+        self.assertEqual(segs[1]["range"][0], segs[0]["range"][1])
+        h, bl, _ = tarec.load(path)
+        self.assertEqual(len(bl), 4)                    # timeline 0: the original alone
+        self.assertEqual(tarec.stream_to(h, bl).tick, 6)
+        self.assertEqual([s["id"] for s in tarec.chain(segs, 2)], [0, 1, 2])
+        h, bl, _ = tarec.load(path, timeline=1)
+        self.assertEqual([b[1] for b in bl if b[0] == tarec.RB_BOUNDARY], [4])
+        w = tarec.stream_to(h, bl, want=3)              # the parent's, before the fork
+        self.assertEqual((w.tick, sorted(w.units)), (3, [1]))
+        w = tarec.stream_to(h, bl)                      # the child replaces the world whole
+        self.assertEqual((w.tick, sorted(w.units), w.ctl[:2], w.view), (5, [2], [2, 1], [1, 1]))
+        h, bl, _ = tarec.load(path, timeline=2)
+        self.assertEqual([b[1] for b in bl if b[0] == tarec.RB_BOUNDARY], [4, 5])
+        self.assertEqual(tarec.stream_to(h, bl, want=4).tick, 4)
+        w = tarec.stream_to(h, bl)
+        self.assertEqual((w.tick, sorted(w.units)), (7, [3]))
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(tarec.main(["tarec", "check", path, "--timeline", "2"]), 0)
+            self.assertEqual(tarec.main(["tarec", "compare-fork", path, "1"]), 1)
+            self.assertEqual(tarec.main(["tarec", "segments", path]), 0)
+            self.assertEqual(tarec.main(["tarec", "info", path]), 0)
+
+    def test_torn_tail_and_open_segment(self):
+        torn = block(tarec.RB_STREAM, 6, 6, b"x" * 8)[:20]
+        path = self.file(*self.ORIGINAL, header((1, 0, 4)), stream(4, 5, unit=2), torn)
+        self.assertEqual([(s["id"], s["last"], s["end_reason"]) for s in self.segs(path)],
+                         [(0, 6, 1), (1, 5, None)])
+        self.assertIn("cut short", tarec.load(path, timeline=1)[2])
+        self.assertIsNone(tarec.load(path)[2])          # the original reads clean
+
+    def test_end_no_header_follows(self):
+        path = self.file(*self.ORIGINAL, stream(7, 8))
+        self.assertEqual([s["id"] for s in self.segs(path)], [0])
+
+    def test_refusals(self):
+        def refused(*fork, n=1):
+            path = self.file(*self.ORIGINAL, *fork)
+            with self.assertRaises(tarec.Unreadable):
+                tarec.chain(self.segs(path), n)
+        refused(header((1, 0, 9)), stream(9, 10), end_block(10))      # past the parent's last
+        refused(header((1, 0, 4)), stream(5, 6), end_block(6))        # first is not fork_at
+        refused(header((1, 0, 4), slots=8), stream(4, 5), end_block(5))   # another shape
+        refused(header((1, 0, 4)), stream(4, 5), end_block(5), n=3)   # no such timeline
+        for parts in ((*self.ORIGINAL, header((1, 0, 4)), stream(4, 5), end_block(5),
+                       header((1, 0, 4)), stream(4, 5), end_block(5)),     # an id twice
+                      (*self.ORIGINAL, header((1, 2, 4)), stream(4, 5)),   # a later parent
+                      (*self.ORIGINAL, header(), stream(4, 5)),        # a fork with no timeline
+                      (header(), stream(1, 3), header((1, 0, 2)))):    # a header inside one
+            path = self.file(*parts)
+            with self.assertRaises(tarec.Unreadable):
+                self.segs(path)
 
 
 if __name__ == "__main__":
