@@ -131,17 +131,27 @@ chain and compares both puppet dumps. It refuses overwrite of the export and
 checks that deleting highest ID 5 is followed by allocation of ID 6. The live
 original's segment hash is checked throughout.
 
-**Verified on the reference Wine setup, 2026-10-02:** the dedicated coverage
-battle fork run passed all nine named checks. The first complete landing-tier run
-also passed all ten fork checks on each of the raised- and stock-limits builds,
-including deletion in a different recording while timeline 5 plays. The fork lane
-also exercises a real writer refusal with its isolated `replays` directory made
-read-only, restores the permissions, and checks that the game continues and exits. Forks 1–3 remained live; touching
+**Verified on the reference Wine setup, 2026-10-02:** the latest complete
+landing-tier run passed all eleven fork checks on each of the raised- and
+stock-limits coverage builds, including deletion in a different recording while
+timeline 5 plays and a real writer refusal with the isolated `replays` directory
+made read-only. Permissions were restored, the game continued, and exit completed
+before final coverage collection. Forks 1–3 remained live; touching
 2 made fork 4 evict 1. Fork 5 from 2 evicted 3. After explicit deletion of 2,
 physical IDs were `[0, 2, 4, 5]` with only `[0, 4, 5]` live; the export held
 `[0, 2, 5]`, with only 5 live. Both the two-boundary playing and exported playing
 were puppet-dump EQUAL. Removing 5 was followed by allocation of 6, with physical
 and live IDs `[0, 4, 6]`.
+
+The complete run graded DLL source at `2563e375`: 443 checks passed, none differed;
+forest-circle ended early and could not run its later lanes. Its corrected fixture
+rerun passed all 23 checks at the same requested ticks. Together these runs cover
+all 18 fixtures: 466 passing checks and 54 round trips EQUAL, with zero residue
+after poisoning. The full coverage gate reached 48 of the 49 changed functions
+on every required build. Only `tagpu_recorder.c:ring_free`, the allocation-failure
+cleanup before the writer starts, remains UNCOVERED on both builds. S4b's waiver
+was for that landing; S4c still requires the owner's OQ7 decision. The automated
+landing command did not record a passing note.
 
 The review's file-invariant probes used the production reader and maintenance
 source in a scratch Wine executable. Replacing a file while retaining an old
@@ -181,6 +191,20 @@ The fixture worker used `tacli stop`, which sends SIGTERM and bypasses the game'
 exit hook; copying files after that stop cannot collect the exit's coverage.
 This run is evidence for the fork rules, not a passing landing gate. The naval
 count difference remains visible; no exclusion or tolerance has been changed.
+
+A separate coverage-build run of pre-S4c `main` (`84c0b957`) at the same
+[451, 2611) window also failed the sink-count comparison: `0x4B08C0` from
+`dll+0x1066A7`, `Stop` 12 live versus 17 puppet and `RequestState` 86 versus
+91. Both puppet state dumps were EQUAL. This reproduces a count difference
+before S4c; it does not establish its cause or close it.
+
+The next full tier's forest-circle live game ended at 4380, before its requested
+4710. Its last full roster held two ARM units and no CORE unit. Removing
+commanders does not prevent a seat's last unit from dying. The fixture keeps one
+stationary noncombat unit per seat away from the battle; `replay-end.json`
+clears those units with the others. The corrected fixture's same ticks
+2101/3361/3571/3601 passed all 23 checks, including the sink counts, three
+round trips and fresh seek. Its recording ended at 4890 with zero corrections.
 
 
 The harness quits collected runs through the game's menus. A live or puppet

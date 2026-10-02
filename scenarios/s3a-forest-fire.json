@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "S3a's feature fixture (demo-recorder-skirmish-slice.md): two groups of units with fire-starting weapons meet in the densest forest of Two Continents (about 77 trees in the 512-px block at x 2560, z 7168), so trees burn and spread, deaths spawn corpses among the trees, and the explosions of later deaths damage the trees and corpses around them. A construction kbot reclaims a laboratory wreck behind the ARM line, FeatureDie's reclaim root; (1820, 7116) is the only free and level ground near the fight big enough for it. No commanders, so no death ends the level early; scenarios/replay-end.json ends it.",
+  "description": "S3a's feature fixture (demo-recorder-skirmish-slice.md): two groups of units with fire-starting weapons meet in the densest forest of Two Continents (about 77 trees in the 512-px block at x 2560, z 7168), so trees burn and spread, deaths spawn corpses among the trees, and the explosions of later deaths damage the trees and corpses around them. A construction kbot reclaims a laboratory wreck behind the ARM line, FeatureDie's reclaim root; (1820, 7116) is the only free and level ground near the fight big enough for it. No commanders are spawned; a seat can still lose when its last unit dies. scenarios/replay-end.json ends a surviving battle.",
   "seed": 20260930,
   "on_error": "abort",
 
