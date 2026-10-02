@@ -46,4 +46,8 @@ void tagpu_replay_level_end(void);
    PlayerInfo gets back what the Start's fill left in it. */
 void tagpu_replay_level_after(void);
 
+/* 1 while a playing waits at a timeline boundary for its seek (tagpu_replay.c, THE BOUNDARY): the
+   recorder's armed dumps wait with it. Game thread. */
+int tagpu_replay_held(void);
+
 #endif

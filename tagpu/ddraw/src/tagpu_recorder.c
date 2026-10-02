@@ -2517,6 +2517,10 @@ int tagpu_rec_dump_arm(const char* name, unsigned at)
 static void dumps_take(const Level* L, int tick)
 {
     unsigned i, k = 0;
+    /* While a playing waits at a timeline boundary for its seek (tagpu_replay.c, THE BOUNDARY)
+       the world is the parent's last iteration, and the seek moves GameTime back to fork_at - 1,
+       so every armed GameTime comes again: the dumps stay armed until then. */
+    if (tagpu_replay_held()) return;
     for (i = 0; i < s_narmed; i++) {
         if (!s_armed[i].at || s_armed[i].at == (unsigned)tick) {
             dump_write(L, tick, s_armed[i].name, -1);
