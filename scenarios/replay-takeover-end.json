@@ -1,0 +1,71 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The takeover's end fixture (tools/replay/fixtures.json, `takeover-end`), on Show Down: the human ARM at slot 0 and the AI CORE at slot 1, each with its commander, which keeps its economy, and twelve light units on hold at its own end of the map, so the recording reaches GameTime 900 with both sides alive. Take over as 0 and type `+kill 1` -- kill-all 0x486F10 for the AI through the console's Kill -- and the level must end by the engine's victory for 0.",
+ "setup": {
+  "map": "Show Down",
+  "clear_existing": false,
+  "switches": {
+   "shootall": true,
+   "noshake": true,
+   "cheats": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "arm_guard",
+   "owner": 0,
+   "at": [
+    700,
+    1050
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 4,
+    "spacing": 48
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 12
+    }
+   ],
+   "facing": 90,
+   "stance": "hold"
+  },
+  {
+   "id": "core_guard",
+   "owner": 1,
+   "at": [
+    4300,
+    1050
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 4,
+    "spacing": 48
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 12
+    }
+   ],
+   "facing": 270,
+   "stance": "hold"
+  }
+ ]
+}

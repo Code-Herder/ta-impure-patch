@@ -7,6 +7,7 @@ format alone, and the fixtures' takeover entries. Standard library only; no game
     python3 tools/replay/test_tareplay.py
 """
 import io
+import json
 import struct
 import subprocess
 import sys
@@ -282,6 +283,34 @@ class Segments(unittest.TestCase):
             path = self.file(*parts)
             with self.assertRaises(tarec.Unreadable):
                 self.segs(path)
+
+
+
+class TakeoverFixtures(unittest.TestCase):
+    """fixtures.json's takeover entries, and the processes they make a fixture run."""
+
+    def test_entries(self):
+        fixes = tareplay.fixtures()
+        took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
+        self.assertIn("battle", took)
+        self.assertIn("takeover-end", took)
+        known = {"player", "order", "switches", "type", "dump", "ms", "checks"}
+        for name, t in took.items():
+            self.assertLessEqual(set(t), known, name)
+            self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
+            self.assertTrue(t["checks"], name)
+            self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)
+            self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
+            self.assertEqual(tareplay.procs(fixes[name]), ("L", "P", "R", "Q", "K", "F"))
+            if "order" in t:
+                self.assertEqual(len(t["order"]), 2, name)
+        self.assertEqual(tareplay.procs(fixes["forest-fire"]), ("L", "P", "R", "Q"))
+        end = json.loads((tareplay.SCENARIOS / fixes["takeover-end"]["load"]).read_text())
+        self.assertFalse(end["setup"]["clear_existing"])     # the commanders keep the economy
+        self.assertIn("victory", took["takeover-end"]["checks"])
+        # the GameTimes a takeover-end run draws leave T2 inside the recording
+        Ts = tareplay.gametimes("takeover-end", fixes["takeover-end"]["end"], "x")
+        self.assertLess(Ts[1], fixes["takeover-end"]["end"])
 
 
 if __name__ == "__main__":
