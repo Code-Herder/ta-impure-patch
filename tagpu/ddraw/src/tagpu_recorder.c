@@ -920,7 +920,6 @@ void tagpu_rec_exit(void)
     HANDLE h[REC_FINISHING];
     DWORD n = 0;
     int i;
-    tagpu_cover_flush();
     fin_lock();
     s_fin_exiting = 1;
     for (i = 0; i < REC_FINISHING; i++)

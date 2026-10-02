@@ -1063,6 +1063,9 @@ def cmd_landing(args):
               f"{' ...' if len(dirty) > 6 else ''}): the landing grades HEAD, so commit first",
               file=sys.stderr)
         return 2
+    # the commit graded, taken now: the note goes on it even if HEAD moves while the games run
+    graded = git("rev-parse", "HEAD").strip()
+    dll = git("describe", "--always", "--dirty").strip()
     fx, funcs, regions, problems, why = landing_plan(base)
     for w_ in why:
         say(w_)
@@ -1101,14 +1104,13 @@ def cmd_landing(args):
         1 for fns in regions.values() if any(x in got for x in fns))
     total = len(funcs) + len(regions)
     if status == 0 and not problems:
-        sha = git("rev-parse", "--short=8", "HEAD").strip()
-        dll = git("describe", "--always", "--dirty").strip()
+        sha = graded[:8]
         seeds = " ".join(f"{n}:{run.fx[n]['Ts'][0]}" for n in sorted(fx)) if run else ""
         feats = sorted(set(funcs.values()) | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
                 f"reached={k}/{total} result=pass date={datetime.date.today().isoformat()}")
-        git("notes", "append", "-m", note, "HEAD")
+        git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")
         return 0
     return status or 1
