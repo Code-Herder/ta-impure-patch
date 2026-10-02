@@ -218,7 +218,11 @@ read by `recr_info` (`tagpu_replays.c`):
 - **The result** follows each name: "Won", "Lost", or nothing when it is not known.
 - **The mod** is named from the recording's mounted archives (`RT_ARCHIVE`) by the per-mod table's
   own archive patterns. The first archive that matches an entry names it, and none means retail;
-  a mod the table does not know is grouped by its version text. The detail shows it with the
+  a mod the table does not know is grouped by its version text. The running game's mod is named
+  by the same rule over the live mount list, so the two always agree. The index keeps what it
+  read under a generation number (`INFO_GEN`), raised whenever the table or this rule changes, so
+  a line of another generation is read again; a recording the reader cannot open is asked again
+  at the next open. The detail shows it with the
   version under the timelines (`MODLINE`: "Total Annihilation v3.1"). When the recording's
   fingerprint is not this install's, the next line says "The installed archives differ." That is
   a hint only. The running game's fingerprint is taken once the browser has mounted every
@@ -254,6 +258,13 @@ read by `recr_info` (`tagpu_replays.c`):
     engine map, *`0x42D2E0`* and the weapon load `0x42E310`). The level renames each type from
     the file its name points to, and the battleroom's restriction store narrows the set. The
     weapon table is empty at the main menu (MEASURED 2026-10-02 on retail: all 256 names).
+  - **The restrictions.** A unit-types refusal marks only when the level kept every type its
+    load began with: the count at the unit-data load's entry `0x42D2E0` against the level's.
+    The level drops each type whose `+0x241` bit 23 is clear, and since the loader has already
+    dropped every such type, one the level drops had its bit cleared by the battleroom's
+    restriction store (the engine map, *`0x42D2E0`*). That is process state no key sees, so
+    such a refusal is logged and not marked. The weapons, the features and the build are not
+    touched by the store.
   - **What the rule cannot see.** The fingerprint is the mounted archives' names and sizes. A
     mark survives a change it does not cover: a loose unit file in the game's folder, or an
     archive replaced by another of the same size. Watch then stays grey until the fingerprint
@@ -381,8 +392,8 @@ stage for is put on the nearest preset (a tie goes to the slower).
 
 **Gaps.**
 
-- **The art is a stand-in.** `dock-tex`, `strip-track` and `strip-fill` are generated plain
-  stand-ins; the owner's art replaces them before the landing reaches `main`.
+- **The art is a stand-in.** `dock-tex`, `strip-track` and `strip-fill` are committed stand-ins
+  drawn by a script (`4ff17b52`); the owner's art replaces them in an ordinary art commit.
 - **GDI does not implement HUD scale**, for the dock as for the bars: the picture stays 1x while
   the pointer map is magnified (GUI renderer §22.7).
 - **Why bit 8 stops a live stage button's clicks** is not known: the pump's click arm reads no
@@ -431,8 +442,7 @@ and leave, polling for error boxes, with a picture per screen.
 
 ## Open
 
-- **The dock's art.** `dock-tex`, `strip-track` and `strip-fill` are plain generated stand-ins until
-  the owner's art replaces them, before the landing reaches `main`.
-- **The title letters.** The retail style's `font/` is a stand-in and is not committed, and
-  Escalation has none of its own: without a committed `font` entry no ground is composed and the
-  browser does not arm. Landings 1 and 2 wait on the owner's letters for this and for the dock's art.
+- **The owner's art.** The dock's `dock-tex`, `strip-track` and `strip-fill` and the retail
+  style's title letters `font/` are committed stand-ins (`4ff17b52`), so a clean checkout arms the
+  browser and the dock in both styles (Escalation uses retail's letters). The owner's art replaces
+  them in an ordinary art commit.

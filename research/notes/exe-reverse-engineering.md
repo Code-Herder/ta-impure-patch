@@ -1117,8 +1117,11 @@ the measured runs and what they mean for the design are in the
   refuses in this exe.** Its first test reads `0x50289C` and, when it is nonzero, returns `'.'`
   (`0x41D6A0..0x41D6BD`); the dword is 1 in `pristine/TotalA.exe.pristine` and no instruction
   writes it (its four references, `0x41D4C0`, `0x41D6A0`, `0x41D7B0` and `0x41D8A0`, all read).
-  Its callers are `0x41D7C4`, `0x41EF30`, `0x41F6A8`, `0x41FB7E`, `0x425F11`, `0x425F1C`,
-  `0x426108`, `0x426113`, `0x449C73` and `0x44AF65` [DISASSEMBLED 2026-10-02]. The replay's
+  Its twenty callers are `0x41D7C4`, `0x41EF30`, `0x41F6A8`, `0x41FB7E`, `0x425F11`,
+  `0x425F1C`, `0x426108`, `0x426113`, `0x449C73`, `0x44AF65`, `0x46038F`, `0x4603DB`,
+  `0x4775C0`, `0x477612`, `0x477724`, `0x477B7D`, `0x478D09`, `0x47AEF1` (the Start's),
+  `0x4924DB` and `0x49252E`; no pointer to it is stored [DISASSEMBLED 2026-10-02: every `call`
+  and `jmp` to it in the exe, and its address in no data]. The replay's
   Watch calls it as the Start does, so its refusal notice (`watch_refuse_engine`,
   `tagpu_replay.c`) is reached by no game on this exe.
 - **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
@@ -12228,8 +12231,10 @@ flag does three things:
 The other three greying painters make the same pair of calls: `0x4A1B1F`/`0x4A1B32`,
 `0x4A2BBD`/`0x4A2BD0` and `0x4A5B01`/`0x4A5B14`.
 
-The frame itself is not swapped for a grey one. Greyed, a button whose attribs have a bit of
-`0x1800` set draws frame `[+0x13B]` (`0x4A60B8` tests `ch & 0x18`), and any other draws
+The frame itself is not swapped for a grey one. Greyed, the painter takes the first of four arms
+that applies: attribs `0x100` draws the sequence's last frame, `count − 1` (`0x4A6081` tests
+`ch & 1`); a nonzero `+0x136` draws the stage frame `[+0x137]` (`0x4A6092`); attribs with a bit
+of `0x1800` set draw frame `[+0x13B]` (`0x4A60B8` tests `ch & 0x18`); and any other draws
 `min([+0x138] + 2, count − 1) + [+0x13B]`, where `+0x138` is the pressed word (`0x4A60D9`). Not
 greyed, the frame comes from the stage bytes `+0x136`/`+0x137`, or from `[+0x13B]` plus the
 pressed word (`0x4A611C`..`0x4A616B`). The record's greyed byte is `+0x13C` (`0x4A6071`).
@@ -13380,7 +13385,12 @@ is documented with the rest of the container in [file formats](file-formats.html
   `totala4.hpi` and `worlds.hpi`; a level held all 31, mounted by the Start's call. So the
   archive fingerprint taken at the first main menu is not the one a level records. The Replays
   browser calls `0x41D4C0` until a call mounts nothing before it takes the fingerprint
-  (`tagpu_replays.c`, `mount_all`), as MULTI's click calls it from the same dispatch (`0x425E0B`).
+  (`tagpu_replays.c`, `mount_all`): from the main menu's dispatch, as MULTI's click calls it
+  (`0x425E0B`), and after Leave from `menu_built`, once the main menu's builder `0x4263B0` has
+  returned at `0x4270A9`. The engine's own calls in play, at RESTART (`0x460428`) and in the
+  load-game dialog (`0x49257A`), show it is not tied to a shell menu. Its stop test is the count,
+  which a call can leave unchanged by pruning one archive (`0x4BE180`) and mounting another: it
+  may then stop early. `MOUNT_CALLS_MAX` (64) bounds it.
 - **The eleven callers** are all on the game thread:
   - WinMain's start-up `0x49E996`;
   - the shell menus `0x41EF71`, `0x425E0B`, `0x4775C9`, `0x47761B`, `0x47772D`, `0x477BC3` and

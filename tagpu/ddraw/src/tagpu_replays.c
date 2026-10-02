@@ -161,7 +161,10 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 #define VA_VERSION_TEXT  0x005031B4u    /* the main menu's version, RT_GAME_VERSION's source     */
 #define VA_INIT_HPI      0x0041D4C0u    /* InitTAHPIAry, cdecl, no argument: mounts what is new  */
 #define VA_GFX_PP        0x0051FBD0u    /* the graphics globals: +0x61C the archives mounted     */
+#define GFX_ARC_LIST     0x618
 #define GFX_ARC_COUNT    0x61C
+#define ARC_PATH         0x14           /* a mounted archive's handle: its full path ...        */
+#define ARC_PATHMAX      0x104          /* ... in a buffer this long (OpenHAPIFile 0x4BDD70)     */
 #define MOUNT_CALLS_MAX  64
 
 /* ---- the per-mod table (the plan's *The per-mod table*) ---------------------------------------
@@ -173,6 +176,11 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
    the table does not name, and an entry whose guard fails, take the retail placement: REPLAYS on
    our plate below the centre, and nothing of the mod's own moved. */
 enum { MOD_UNKNOWN, MOD_RETAIL, MOD_ESC, MOD_MAYHEM, MOD_PROTA, MOD_TAZERO, MOD_TWILIGHT, MOD_N };
+
+/* The generation of index.dat's `I` fields: bump it whenever this table's names or archive
+   patterns change, or the rule that derives the `I` fields from a recording does (mod_of,
+   info_read). A line of another generation is read again from its recording. */
+#define INFO_GEN 1
 
 typedef struct {
     const char* name;
@@ -981,15 +989,16 @@ static void __stdcall mm_oncommand(void* gi)
    favourite flag, the last time a recording was played, its bookmarks and Watch's refusal. One
    line per recording, keyed by its file name and size:
      name size format start last end fav played map nseats seat... marks
-       I version modprint has_modprint archives mod result,commander,defeat...
+       I<gen> version modprint has_modprint archives mod result,commander,defeat...
        L code modprint buildkey a b                                         (tab-separated)
    `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never. `marks` is the
    dock's bookmarks, comma-separated GameTimes inside [start, last], sorted; a line without the
    field, as this version's first lines were written, has none.
    From `I` on, what recr_info read: the version text, the archive fingerprint (hex) and whether
    the recording has one, the archives mounted, the mod named from them (mod_of), and each seat's
-   result (RecResult), last commander death and defeat GameTimes, in the seats' order. A line
-   without `I`, as the index was written before them, keeps its marks and has the rest read again.
+   result (RecResult), last commander death and defeat GameTimes, in the seats' order. `I` carries
+   its generation (INFO_GEN); a line without `I`, or with another generation, keeps its marks and
+   has the rest read again.
    From `L` on, the mark Watch's own check left (THE LOCK, below): the refusal's code
    (TAGPU_REPLAY_REFUSED_*), the running archive fingerprint and build key it was made under (hex),
    and the running values it compared (a decimal, b hex). A line without `L` has no mark.
@@ -1081,11 +1090,17 @@ static void marks_parse(char* text, Ent* e)
     if (e->nmarks > 1) qsort(e->marks, e->nmarks, sizeof e->marks[0], uint_cmp);
 }
 
-/* the `I` fields from f[0] (`I` itself) on, `n` of them */
-static void info_parse(char** f, int n, Ent* e)
+/* The `I` group's fields from f[0] (`I` and its generation) on, `n` of them: how many it takes,
+   0 when f[0] is not one. Read into `e` only when its generation is INFO_GEN. */
+static int info_parse(char** f, int n, Ent* e)
 {
     int i;
-    if (n < 6 + (int)e->nseats || strcmp(f[0], "I")) return;
+    char* end;
+    unsigned long gen;
+    if (n < 6 + (int)e->nseats || f[0][0] != 'I') return 0;
+    gen = strtoul(f[0] + 1, &end, 10);
+    if (*end) return 0;
+    if (gen != INFO_GEN) return 6 + (int)e->nseats;
     lstrcpynA(e->version, f[1], sizeof e->version);
     e->modprint = strtoul(f[2], NULL, 16);
     e->has_modprint = strtoul(f[3], NULL, 10) ? 1 : 0;
@@ -1099,6 +1114,7 @@ static void info_parse(char** f, int n, Ent* e)
         e->defeat[i] = d;
     }
     e->info = 1;
+    return 6 + (int)e->nseats;
 }
 
 /* the `L` fields from f[0] (`L` itself) on, `n` of them */
@@ -1140,8 +1156,7 @@ static int ent_parse(char* line, Ent* e)
     for (i = 0; i < (int)e->nseats; i++) lstrcpynA(e->name[i], f[10 + i], RECR_NAME);
     if (n > 10 + (int)e->nseats) marks_parse(f[10 + e->nseats], e);
     k = 11 + (int)e->nseats;
-    if (n > k) info_parse(f + k, n - k, e);
-    if (e->info) k += 6 + (int)e->nseats;
+    if (n > k) k += info_parse(f + k, n - k, e);
     if (n > k) lock_parse(f + k, n - k, e);
     return 1;
 }
@@ -1213,8 +1228,8 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
         char v[sizeof e->version];
         lstrcpynA(v, e->version, sizeof v);
         sanitize(v);
-        at = gput(b, cap, at, "\tI\t%s\t%08X\t%u\t%u\t%s", v, e->modprint, e->has_modprint,
-                  e->archives, e->mod);
+        at = gput(b, cap, at, "\tI%u\t%s\t%08X\t%u\t%u\t%s", INFO_GEN, v, e->modprint,
+                  e->has_modprint, e->archives, e->mod);
         for (i = 0; i < e->nseats; i++)
             at = gput(b, cap, at, "\t%u,%u,%u", e->result[i], e->cmdr[i], e->defeat[i]);
     }
@@ -1297,6 +1312,15 @@ static int pat_match(const char* pat, const char* name)
     return !*name;
 }
 
+/* The table's entry whose archive pattern `name` matches, or NULL */
+static const char* mod_by_archive(const char* name)
+{
+    int m;
+    for (m = MOD_RETAIL; m < MOD_N; m++)
+        if (s_mods[m].archive && pat_match(s_mods[m].archive, name)) return s_mods[m].name;
+    return NULL;
+}
+
 /* The mod a recording was made in, from the archives it mounted, by the per-mod table's own
    archive patterns: the first archive that matches an entry's names it; none, retail. A mod the
    table does not know is retail by name, and told apart by its version text (row_shown). "" for
@@ -1304,22 +1328,39 @@ static int pat_match(const char* pat, const char* name)
 static const char* mod_of(const RecInfo* in)
 {
     unsigned a;
-    int m;
+    const char* m;
     if (!in->narchives) return "";
     for (a = 0; a < in->narchives; a++)
-        for (m = MOD_RETAIL; m < MOD_N; m++)
-            if (s_mods[m].archive && pat_match(s_mods[m].archive, in->archive[a].name))
-                return s_mods[m].name;
+        if ((m = mod_by_archive(in->archive[a].name)) != NULL) return m;
     return s_mods[MOD_RETAIL].name;
 }
 
-/* The running game's mod as mod_of names a recording's: the table's entry when its archive
-   pattern is what identified it, else retail; Twilight and an unknown mod mount no archive of a
-   pattern of the table's. */
+/* The running game's mod by mod_of's rule over the live mount list, as the recorder lists it for
+   RT_ARCHIVE (tagpu_recorder.c, THE MOD): the first REC_ARCHIVES archives in mount order, each
+   named without its folder, so a recording made now names the mod this does. The list is the
+   graphics globals' [+0x618] with its count at +0x61C, which only InitTAHPIAry 0x41D4C0 changes,
+   on the game thread as this runs. BOUND: the count, which the list's allocation always holds,
+   capped at REC_ARCHIVES; a path read within its 0x104 bytes. */
 static const char* running_mod(void)
 {
-    const Mod* m = &s_mods[s_mod < 0 ? MOD_UNKNOWN : s_mod];
-    return m->archive ? m->name : s_mods[MOD_RETAIL].name;
+    const char* gfx = *(const char* const*)VA_GFX_PP;
+    const char* const* list;
+    int n, i;
+    if (!gfx || !(list = *(const char* const* const*)(gfx + GFX_ARC_LIST))) return s_mods[MOD_RETAIL].name;
+    n = *(const int*)(gfx + GFX_ARC_COUNT);
+    for (i = 0; i < n && i < (int)REC_ARCHIVES; i++) {
+        const char* path = list[i] ? list[i] + ARC_PATH : NULL;
+        char name[ARC_PATHMAX];
+        const char* m;
+        size_t k;
+        if (!path) continue;
+        k = strnlen(path, ARC_PATHMAX);
+        if (k == ARC_PATHMAX) continue;               /* a buffer the mount left unwritten */
+        while (k && path[k - 1] != '\\' && path[k - 1] != '/') k--;
+        lstrcpynA(name, path + k, sizeof name);
+        if ((m = mod_by_archive(name)) != NULL) return m;
+    }
+    return s_mods[MOD_RETAIL].name;
 }
 
 /* The main menu's version text as RT_GAME_VERSION takes it: printable, 1 to 7 characters, else
@@ -1339,9 +1380,14 @@ static void running_version(char* out, unsigned cap)
    main menu of a fresh start holds fewer archives than a level, whose Start calls it again
    (0x47AF2E): MEASURED 2026-10-02 on retail, 28 at the first main menu against the 31 a recording
    names (totala3.hpi, totala4.hpi and worlds.hpi come with the second call). It is called here
-   until a call mounts nothing, as the main menu's MULTI calls it from this same dispatch
-   (0x425E0B): from then on every call, the Start's included, mounts nothing, so the fingerprint
-   is the one a level records. BOUND: MOUNT_CALLS_MAX calls, 640 archives of the bounded kind. */
+   until a call mounts nothing: from then on every call, the Start's included, mounts nothing, so
+   the fingerprint is the one a level records. The browser opens from the main menu's dispatch,
+   from which MULTI calls it too (0x425E0B), and after Leave from menu_built, once the main menu's
+   builder 0x4263B0 has returned at 0x4270A9; the engine itself calls it outside its shell menus,
+   in play, at RESTART (0x460428) and in the load-game dialog (0x49257A). The stop test reads
+   the count, and a call can prune one archive (0x4BE180) and mount another, which leaves the
+   count unchanged: it may then stop early, with the fingerprint not yet a level's.
+   BOUND: MOUNT_CALLS_MAX calls, 640 archives of the bounded kind. */
 static void mount_all(void)
 {
     const char* gfx = *(const char* const*)VA_GFX_PP;
@@ -1358,8 +1404,9 @@ static void mount_all(void)
    on the game thread (the header of this file), none of them inside another. */
 static RecInfo s_info;
 
-/* What recr_info reads of `e`'s file into its `I` fields; a file it cannot read keeps them
-   empty, and is not asked again until its size changes. */
+/* What recr_info reads of `e`'s file into its `I` fields. A file whose summary could not be read
+   (format 0) keeps them empty until its size changes; one recr_info fails on is left without
+   them, so the next open asks again. */
 static void info_read(Ent* e)
 {
     char path[MAX_PATH], why[160];
@@ -1375,6 +1422,7 @@ static void info_read(Ent* e)
     path[sizeof path - 1] = 0;
     if (!recr_info(path, &s_info, why, sizeof why)) {
         rlog("replays: %s: %s", e->file, why);
+        e->info = 0;
         return;
     }
     lstrcpynA(e->version, s_info.version, sizeof e->version);
@@ -1555,6 +1603,33 @@ static void rows_pick(void)
    it does not see keeps the mark: a loose file in the game's folder, or an archive replaced by
    one of the same size. A refusal that is not a data refusal -- a missing map, a file being
    written, a file the reader cannot read, the engine's own notices -- never marks. */
+/* THE RESTRICTIONS. A unit-types refusal follows from the install only when the level kept
+   every type its load began with. The level's unit-data load 0x42D2E0 drops each type whose
+   def+0x241 bit 23 is clear (0x42D4AD..0x42D510) and stores the count it kept (0x42D542). The
+   loader that made the array dropped every type without the bit at its own end
+   (0x42B248..0x42B2E8, its count stored at 0x42B2F6), so a type the level drops is one whose bit
+   was cleared since: by the battleroom's restriction store (0x46E203, 0x46E23B, in 0x46E160),
+   which is process state neither the fingerprint nor the build key sees. Nothing else writes the
+   count between the two (its writers are 0x42AA77, 0x42B2F6, 0x42BD02 and 0x42D542; DISASSEMBLED).
+   So the count at 0x42D2E0's entry, taken here, against the level's count Watch compared, says
+   whether a restriction played a part. Weapons, features and the build are not touched by the
+   store: the weapon table is filled from Weapons\*.tdf by 0x42E310 alone, and 0x46E160 writes
+   only def +0x241 bit 23 and the cap +0x15A, neither of which a features or build check reads.
+   ORDERING: written on the LOADER thread inside the level's load; read on the game thread at the
+   level's first step, which follows the load's end. */
+#define VA_UNIT_LOAD     0x0042D2E0u
+#define OFF_UCOUNT       0x1438F        /* main: UNITINFOCount                                   */
+static const unsigned char UNIT_LOAD_STOLEN[6] = { 0x81, 0xEC, 0x10, 0x06, 0x00, 0x00 };
+static volatile LONG s_loadTypes = -1;  /* UNITINFOCount at the last load's entry, -1 unknown */
+
+static int __cdecl unit_load_begin(void* esp)
+{
+    const char* ta = *(const char* const*)TA_MAIN;
+    (void)esp;
+    InterlockedExchange(&s_loadTypes, ta ? *(const LONG*)(ta + OFF_UCOUNT) : -1);
+    return 0;
+}
+
 static int lock_holds(const Ent* e)
 {
     return e->lock && e->lock_print == s_runPrint && e->lock_build == s_runBuild;
@@ -1636,7 +1711,7 @@ static void scan(void)
             dirty = 1;
         } else if (!s_ent[k].info) {
             info_read(&s_ent[k]);
-            dirty = 1;
+            dirty |= s_ent[k].info;
         }
         if (s_ent[k].lock && !lock_holds(&s_ent[k])) {
             rlog("replays: %s: the mark of refusal %u goes - made under archives %08X and build "
@@ -2020,9 +2095,9 @@ static void replays_open(char* gi)
     }
 
     badges_build();
+    mount_all();
     lstrcpynA(s_runMod, running_mod(), sizeof s_runMod);
     running_version(s_runVersion, sizeof s_runVersion);
-    mount_all();
     s_runPrint = tagpu_rec_mod_print();
     s_runBuild = tagpu_replay_build_key();
     scan();
@@ -2138,6 +2213,14 @@ void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned
     Ent* e = NULL;
     int k;
     if (strlen(file) >= FILE_MAX) return;
+    if (code == TAGPU_REPLAY_REFUSED_UNITS) {
+        LONG began = InterlockedCompareExchange(&s_loadTypes, 0, 0);
+        if (began < 0 || (unsigned)began != a) {
+            rlog("replays: %s not marked for refusal %u: the level kept %u unit types of the %ld "
+                 "its load began with (THE RESTRICTIONS)", file, code, a, (long)began);
+            return;
+        }
+    }
     _snprintf(path, sizeof path, "replays\\%s", file);
     path[sizeof path - 1] = 0;
     if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fa)) return;
@@ -2297,6 +2380,11 @@ void tagpu_replays_install(int ready)
         s1 = tagpu_detour_bytes_ok(S1_VA, S1_STOLEN, sizeof S1_STOLEN) &&
              tagpu_detour_observe(S1_VA, S1_STOLEN, sizeof S1_STOLEN, s1_before, NULL);
     s_armed = s1;
+    if (s1 && !(tagpu_detour_bytes_ok(VA_UNIT_LOAD, UNIT_LOAD_STOLEN, sizeof UNIT_LOAD_STOLEN) &&
+                tagpu_detour_observe(VA_UNIT_LOAD, UNIT_LOAD_STOLEN, sizeof UNIT_LOAD_STOLEN,
+                                     unit_load_begin, NULL)))
+        rlog("replays: the unit-data load 0x42D2E0 is not observed: a unit-types refusal never "
+             "marks a recording");
     rlog("replays: %s (GUI_Load 0x4AACAE=%d, the builder 0x42644C=%d, the PCX loader 0x429290=%d, "
          "the list draw 0x4A1B40=%d; ground %s)", s1 ? "ARMED" : "NOT armed", s1, s2, s3, s4,
          s_groundName[0]);
