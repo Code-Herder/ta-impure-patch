@@ -2885,7 +2885,18 @@ not `0x470EB0`. Their callers, classified:
   emits a flying piece's smoke `0x472810` at `0x421583` and its fire `0x472AB0` at `0x4215AA`
   (`0x472AB0`'s only call). So those two follow the frame rate, not the tick.
 - **The simulation.** `0x472630` (a flare) from the explosion add `0x420A30` (`0x420AE1`) and the
-  corpse `0x486360` (`0x48644B`); `0x472810` from the feature tick's burning feature (`0x4243CF`),
+  corpse `0x486360` (`0x48644B`). The add emits it when its 4th argument is 0 and the point's y
+  word `+6` is above the sea level byte `main+0x1427F` (`0x420ABE..0x420AD8`); the recorder keys it
+  by the add's caller, read at `[esp+0x20]` of the flare's entry, because the add's frame there is
+  fixed (push edi `0x420A35`, esi `0x420A55`, ebx `0x420A58`, the four arguments
+  `0x420ADA..0x420AE0`, and between them only `0x4B8B30`, `ret 0xC` on both exits `0x4B8B6B` and
+  `0x4B8B7E`) — DISASSEMBLED. Debris decides the argument: the flying-piece tick `0x4213B0`'s water
+  path passes 1 (`push 1` `0x421424`, returning to `0x421445`) and its ground hit 0 (`0x4214AD`,
+  returning to `0x4214D9`); the record tick `0x420F30` passes 1 in water (`0x421046`, `0x421053`)
+  and 0 on ground (`0x421090`), both returning to `0x4210A1`. EXPLODE `0x481140` draws the
+  simulation RNG six times a piece (`0x48116F..0x4811B9`: three spins, vx = (20 − rand(40)) << 14,
+  vy = rand(10) << 16, vz) and gives it 900 ticks (`0x4811C3`); the shatter `0x421700` draws six a
+  polygon (`0x421851..0x4218D2`) — DISASSEMBLED; `0x472810` from the feature tick's burning feature (`0x4243CF`),
   the impact (`0x49A007`) and the projectile tick (`0x49BC80`, `0x49BDC1`); the trail `0x4729D0` from
   the three shot paths (`0x49CC07`, `0x49CDC3`, `0x49CFE6`), so a received shot emits its trail too;
   `0x471FD0` from the Teleport order handler `0x406AA0` (`0x406B9F`); and `0x472C50` from the

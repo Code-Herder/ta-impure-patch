@@ -1827,7 +1827,7 @@ each time (OQ7); there is no standing list.
 |---|---|
 | `landing [--base main] [-j N] [--keep] [--out DIR]` | the landing tier: from `git diff main...HEAD`, a changed line of a `sim` file selects its feature's fixtures (a change only in comments or whitespace selects nothing; a line no feature covers is `UNFEATURED`), a changed header a `sim` file includes every feature of that file, the recorder's own files and `tools/replay/` every fixture, a changed fixture entry or a scenario a fixture loads that fixture. It runs them on the coverage builds and fails `UNCOVERED <file>:<function>` for a changed function none of them reached (a changed file-scope line needs one function of its region). On a pass it writes a git note on the commit it graded, taken when the run starts: `replay-roundtrip: dll=<describe> range=main..<sha> features=… fixtures=… seeds=… reached=<k>/<n> result=pass date=…`. It refuses uncommitted changes under `tagpu/ddraw`, `tools` or `scenarios`. |
 | `landing --check` | exit 0 when nothing gated changed, or when a passing note sits on a commit R of `main..HEAD` and `R..HEAD` changes nothing gated; 1 otherwise, saying why |
-| `broad [-j N] [--release DLL]` | the broad tier: every fixture, three round trips each, then UNCOVERED over the tier — a feature none of its fixtures reached, a root or sink site no run counted, a recorded table no recording changed between T1 and Tlast. `--release DLL` runs that DLL instead of the coverage builds, without reach |
+| `broad [-j N] [--release DLL]` | the broad tier: every fixture, three round trips each, and `fixtures.json`'s `broad` entries, which no landing runs — `limits-tier1` (4 × 1,500 units, `unit_limit` 1500) with 20 round trips, and `cost-four-ai`, a ten-minute four-AI game recorded live and reported, never failed (OQ5), for the capture's cost an iteration and the file's size per hour of game time — then UNCOVERED over the tier — a feature none of its fixtures reached, a root or sink site no run counted, a recorded table no recording changed between T1 and Tlast. `--release DLL` runs that DLL instead of the coverage builds, without reach |
 | `measure SCENARIO… [--end T]` | L and P of each scenario on the coverage builds, to GameTime T (default 1800; a fixture to its own end), and the functions each reached (`reached.json`) |
 | `features [--check DIR]` | the regions; with `--check`, the link's check |
 | `run --cover` | `run` on the coverage builds, each process writing its `cover-<proc>.bin` |
@@ -1856,6 +1856,20 @@ fixtures reach it.
 - **OQ7, per landing**: a landing whose changed function no fixture reaches goes to the owner each
   time; there is no standing exemption list.
 - **OQ9, adopted as written**: the CLAUDE.md bullet and Step 4b.
+- **The debris flares accepted** (c4-survivor): wreck debris, whose velocities EXPLODE `0x481140`
+  draws from the simulation RNG, lands at other ticks on a puppet, on ground (the explosion add's
+  4th argument 0, so the flare `0x472630` fires at `0x420AE1`) or in water (1, no flare). Over the
+  debris period every simulation value compared EQUAL; the flares' totals matched over the whole
+  game, but a counting window that began inside the period differed by up to 4. The counts now key
+  the flare by the add's caller (`tagpu_recorder.c`, `sink_472630`), and four `replay-absent.tsv`
+  rows accept the falling records' (`0x4210A1`) and the flying pieces' ground explosions'
+  (`0x4214D9`) flares, the class OQ3f accepted for the explosions themselves; the band applies per
+  add caller.
+- **`sk_back` lands UNCOVERED** (this landing, per OQ7): the reader's way back after a refused seek
+  changed only in the arguments it passes (`lead` 0, no visitor); no fixture refuses a seek that
+  way.
+- **The fixtures' manual steps are a follow-up**: three of the promoted fixtures leave out steps
+  their scenarios describe (*What S3c-3 leaves*).
 
 #### S3c-3, verified and measured
 
@@ -1870,6 +1884,11 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   `+0x110` bit 16, is not a bit the radar pass or the records write [INFERRED to be O15's class, not
   re-measured here]. `tareplay run battle-los forest-circle` (forest-circle for the add's circle
   path): exit 0, 46 of 46 checks.
+- **The debris flares.** `tareplay run c4-survivor` after the flare's key and rows: exit 0, 23 of
+  23 checks, and the live log says the flare is keyed by its add's caller. Over the debris period, a
+  dump every 30 GameTimes live and on the puppet from 91 to 451 (13 pairs of dumps): `compare-counts`
+  EQUAL over all 78 windows; the flare's keys at 451, by caller, are the falling records' 17, the
+  pieces' 2, EXPLODE's five adds 1 each and the impact's 3, and no flare is counted without one.
 - **The measurements**: 41 of 62 candidates, then 18 of 18; 619 to 775 functions of the
   instrumented files reached per scenario.
 <!-- LANDING RUN -->
@@ -1889,8 +1908,16 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   is not proven taken, and a function is marked on its first entry only.
 - **What no fixture reaches** fails a landing that changes it, by name, until network games are
   recorded or a fixture reaches it (OQ7).
-- **The broad tier is every fixture with three round trips.** The plan's `limits-tier1` with 20
-  round trips and the 10-minute four-AI game for the cost and size are not built into it.
+- **Three fixtures leave out their scenarios' manual steps.** b7-word-outright's Ctrl+D
+  self-destruct, c4-kill-all's `+kill` chat commands (which need cheats on) and c4-survivor's ATLAS
+  flight to the AA gun with the TXLLT2 after it: the harness can type a chat line and give an
+  order, but cannot press a key or set a switch. So the downed transport and kill-all paths run in
+  no landing; the fixtures were chosen for what they reach without the steps.
+- **`limits-tier1` and `cost-four-ai` have not run in the broad tier yet**; the broad tier's first
+  run is their measurement.
+- **The debris pools' class is open**: `s_expl`, `s_psys` and `s_aux` are declared `SIM_STATE` and
+  are not carried; the debris they hold writes nothing the simulation reads, and their class is the
+  owner's decision.
 - **Only the `sim` files and the recorder's own are instrumented**; a change elsewhere runs no
   fixture unless it touches a gated file.
 - **O15** still reaches naval fixtures' round-trip processes on some runs, and the forest fixtures'

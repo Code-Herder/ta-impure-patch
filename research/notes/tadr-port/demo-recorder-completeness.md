@@ -493,12 +493,12 @@ peer's dump. Not in S3c.
 | Tier | Runs | When |
 |---|---|---|
 | Landing | the fixtures the changed features name in their `SIM_FEATURE` declarations, each recorded, played on puppets, restored in place by the round trip and sought from a fresh process, on the instrumented coverage build, with a check that they reached every changed function; a changed line no declaration covers or a changed function no fixture reached fails by name | every landing that changes a gated file (the landing command's Step 4b) |
-| Broad | every fixture with three round trips, on the coverage build; UNCOVERED over the tier | a command, `tareplay.py broad`, not a schedule: on demand after a run of simulation landings, and as the release tier, `broad --release DLL` on the release DLL without reach, before every `v*` tag beside the compatibility suite |
+| Broad | every fixture with three round trips, `limits-tier1` with 20, and a ten-minute four-AI game for the cost and size (reported), on the coverage build; UNCOVERED over the tier | a command, `tareplay.py broad`, not a schedule: on demand after a run of simulation landings, and as the release tier, `broad --release DLL` on the release DLL without reach, before every `v*` tag beside the compatibility suite |
 
 Both tiers are built ([S3c-3](demo-recorder-skirmish-slice.md#s3c-3-fixtures-beside-the-code-and-the-gate));
-`tareplay.py run` runs named fixtures. The broad tier as planned also held `limits-tier1` (4 × 1,500
-= 6,000 units) with 20 round trips and a 10-minute four-AI game for the cost and size; neither is
-in it yet. Not in S3c: network games and
+`tareplay.py run` runs named fixtures. The broad tier's own entries, `fixtures.json`'s `broad`,
+are `limits-tier1` (4 × 1,500 = 6,000 units) with 20 round trips and `cost-four-ai`, a 10-minute
+four-AI game for the cost and size; no landing runs them. Not in S3c: network games and
 per-peer dumps, `limits-tier2` (10 peers, 15,000 units), the compatibility setups and a game loaded
 from a save. The landing run is scoped to the change because the broad tier holds about 28 of 32
 cores and 11 of 12 GB of VRAM on the reference setup while it runs, and 38 landings touched the simulation
