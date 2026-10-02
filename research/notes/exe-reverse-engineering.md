@@ -1658,8 +1658,9 @@ recorded capture.
 | the sort buckets | `*(main+0x1429F)`, `main+0x142A3` columns × `main+0x142A7` rows (LoadMap, `0x482C84..0x482CA6`), and the off-map bucket `*(main+0x142B7)` | an id row's table; one past the last bucket is an index (stock forms it at the east edge), and the off-map bucket has an ID of its own. `0x412834` compares a unit's `+0x82` with it: `mov edx,[0x511DE8]` (`0x412828`), `mov ecx,[esi+0x82]` (`0x41282E`), `cmp ecx,[edx+0x142B7]`, `jne 0x412849` DISASSEMBLED |
 | the map's name | `GameingState +0x204`, the TNT path | the file's name, read to `MAX_PATH` bytes: inside the object, whose fields run past `+0xDBC` (the list `0x423160` walks) |
 
-**A load from the in-game menu runs the teardown before the saved level loads, and the loaded game
-starts paused** [MEASURED 2026-09-29]: at the load's click the recording in progress ended through
+**A load from the in-game menu runs the teardown before the saved level loads, and in stock the
+loaded game starts paused** [MEASURED 2026-09-29; our `fix_load_unpaused` clears the pause
+before the first tick, *Engine defects we patch*]: at the load's click the recording in progress ended through
 `tagpu_reclaim`'s wrap of `0x491B60`, at GameTime 1846; after the load `main+0x38A51` read 1 and
 GameTime stayed 1846 until a pause key, and no iteration ran, so a capture at `0x4954ED` sees
 nothing of a paused game.
@@ -2812,7 +2813,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the thirty, and why:
+made, or its page cannot be made writable. Each, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -2846,6 +2847,7 @@ made, or its page cannot be made writable. Each of the thirty, and why:
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
 | an order mode disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
 | maps with no terrain `0x434D87`, `0x430B87` | local | which maps are offered; whether a network peer has the host's map is decided from the terrain file itself, not from this list |
+| a level starts unpaused `0x49842A` | local | the pause bit is the local player's outside a network game, and a recording carries the ticks that ran; inside one the fix does nothing |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -4506,6 +4508,62 @@ meets the terrain's absence as stock does [INFERRED: the same box]. And a saved 
 is absent at launch (an archive installed only some of the time) is replaced in the registry at
 the options load, where stock kept it and fell back in memory when the SKIRMISH screen could not
 load its `.ota` (`0x47BCD7`).
+
+### A level starts paused after the last one was left through the in-game menu — the pause bit `main+0x38A51`, cleared at `0x49842A` [DISASSEMBLED + MEASURED 2026-10-01]
+
+**The bit.** `main+0x38A51` is a u16 of flags; bit 0 is the pause. While it is set the frame
+function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4968AA`,
+`0x496920`), and those two are called from nowhere else (`0x4967F3`, `0x49680C`, `0x496928`,
+`0x49693E`). The scheduler tests it as well (`0x4953D9`), the status icons show it (`0x46A107`,
+`0x46A2A8`), and the pause key flips it and puts the new bit into a message `0x19`
+(`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
+peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's (`0x49535C`, `0x495367`,
+`0x49527A`). Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
+outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
+(the LOADGAME screens); clear it at `0x44B6F0` (in the battle room's code [INFERRED from its
+neighbours]), `0x460A33` (the in-game menu's close, outside mode 3), `0x49720A` (the loader's
+network branch) and `0x49990E` (key `0xE3` in state 7's handler `0x499880`); `0x495B6D` clears it
+for a step and `0x495DC2` puts back the bit `0x495B85` saved.
+
+**The defect.** Leaving a level through the in-game menu (EXIT, MAINMENU, yes) opens the menu,
+which sets the bit, and never closes it, so the bit outlives the level. The loader `0x497180`
+clears it only in its network branch (`0x4971EC`, mode 3); the campaign branch `0x49745C` and the
+skirmish branch `0x4973C1` leave it. So the next skirmish, campaign mission or saved game starts
+paused until the pause key. MEASURED 2026-10-01 on retail with the stock build: a SINGLE →
+Skirmish → Start after a level left through the menu read GameTime 0 and the bit 1. The same
+holds for a load from the in-game menu (*The demo recorder's capture*, above: GameTime stayed
+1846 until a pause key, 2026-09-29).
+
+**Every level start passes `0x49842A`.** Every level is loaded by the load state `0x497F40`.
+Only three front-end states install it: `0x496BB0` at `0x496C3D` for mode 2 (a skirmish, our
+Watch, a `tacli` playback), `0x496DB0` at `0x496DFF` (mode 1, a campaign mission;
+`0x496BB0` sends mode 1 there at `0x496BF6`), and the battle room's `0x496CE0` at `0x496D75` and
+`0x496D9D` (a network game). A saved game, from the shell or the in-game menu, goes the same way:
+the LOADGAME screen's load branch sets the mode from the save's `Gametype` (`0x49267F`, the
+mode setter `0x434AB0`) and installs `0x496BB0` (`edi` from `0x49295B`, stored at `0x49297E` or
+`0x492A7F`). Those two are the only stores of the state handler `main+0x391F5` from a register;
+of the 22 with an immediate only those five and SetState `0x490B30`'s case 5 (`0x490BB3`; the jump
+table `0x490C14`) store `0x497F40`, and SetState's eleven callers hand it 1, 2 or 7. The load state
+moves on only once the loader thread `0x497C90` has set its done bit, `main+0x38D75` bit 1
+(tested at `0x498342`, set at `0x497C62`, `0x497180`'s last store before it returns and the thread
+ends). Both branches of `0x498353..0x498455` then meet at `0x49842A`, the call of the HUD chrome
+`0x467D70` (`0x498386` is the only jump in), before the frame function's first run at `0x49842F`
+and before the in-play state `0x499200` is installed at `0x498455` (SetState's case 6, never handed
+6).
+
+**Patched** (`tagpu_patches.c`, `fix_load_unpaused`, local). The call at `0x49842A` goes to a stub
+that clears bit 0 with an `and byte` unless the mode `[[main+0x391E9]]` is 3, then jumps to
+`0x467D70`, which returns to `0x49842F`. A network game keeps the loader's and the peers' bit. The
+demo recorder does not carry the word (`replay-globals.tsv` has no row for it), and a recording's
+iterations are the ticks that ran, so the fix changes no recording.
+MEASURED 2026-10-01 on retail, `tacli` on Two Continents at 1024×768, each start after leaving
+the previous level through the menu with the bit read 1 in the shell: a new skirmish ran (GameTime
+32 → 158 → 294 at 4 s intervals, bit 0); a Watch of a recording made before the fix ran (18 → 290)
+and played to its end, 551 iterations, 0 late, 0 refused; a saved game loaded from SINGLE →
+LoadGame ran (568 → 835), and so did the same save loaded from the in-game menu of a running
+skirmish (796 → 1053); campaign mission 1 (Arm) ran (35 → 294). The pause key inside a level
+still pauses (GameTime held at 293, bit 1) and resumes (328 → 431, bit 0). A network game was
+not run.
 
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
