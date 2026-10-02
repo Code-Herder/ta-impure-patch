@@ -325,7 +325,8 @@ stream was not decoded back, so this measures what the representation gains, not
 - **Memory a declaration reaches through a pointer** is not recorded: the engine pools the DLL holds
   (`SIM_ENGINE`: explosions, particle systems and their auxiliary geometry), the blocks a row owns
   (`SIMF_OWNED`), and the columns of a struct-of-arrays table (`SIMF_COLUMN`: `s_hit`'s `stamp`,
-  `freed` and `local`, one entry per unit slot, whose row alone is recorded).
+  `freed` and `local`, one entry per unit slot, whose row alone is recorded; S4a records the three
+  as tables of their own).
 - **The header** has no game options and no fingerprint of the weapon definitions: S2a. Alliances
   are values of the player records, so the stream carries them.
 - **The worst iteration** met the 1 ms budget in two battle runs of five, and its cause is not
@@ -1280,9 +1281,9 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   nothing.
 - **Passability is not rebuilt at a seek**, as it is not refreshed for the cells an image writes;
   a takeover must rebuild it.
-- **Host-own state survives a seek**, none of it read on a puppet host: B4's per-slot columns (births
-  stay strictly increasing per slot, so after a backward seek one can exceed GameTime), the
-  passability cache and the order of the units inside each seat's control-group vectors (their
+- **Host-own state survives a seek**, none of it read on a puppet host: B4's per-slot columns until
+  S4a records them (births stay strictly increasing per slot, so after a backward seek one can
+  exceed GameTime), the passability cache and the order of the units inside each seat's control-group vectors (their
   membership is the recording's). The takeover (S4) must answer for each.
 - **The rebuild runs on a puppet host only**; the live in-place restore comes with S4's takeover
   (the owner's answer to OQ1, *S3c*).
@@ -1935,11 +1936,44 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
 - **O15** still reaches naval fixtures' round-trip processes on some runs, and the forest fixtures'
   live games can end before Tlast (*What S3c-2 leaves*).
 
-## S4 and S5
+## S4 — rewind, takeover and forks
 
-Each is planned in detail when the landing before it is in. The table above is their scope; the
-[completeness note](demo-recorder-completeness.md)'s [open items](demo-recorder-completeness.md#open-items)
-are theirs.
+S4 is four landings, in this order:
+- **S4a** records B4's per-slot columns.
+- **S4b** is the takeover from a recording, with its fork written into the file.
+- **S4c** adds the fork rules: three forks, the least recently used deleted, shared history kept.
+- **S4d** is the live rewind on the recording machine: Back to now and Play from here.
+
+A takeover is the seek with a takeover mode. The owner's decisions of 2026-10-02 are in the
+[completeness note](demo-recorder-completeness.md#decisions-taken).
+
+### S4a — B4's per-slot columns
+
+**Decided.** The stale-hit table's three columns are recorded as tables of their own: `stamp`,
+`freed` and `local`, one u32 a unit slot (`tagpu_patches.c`, beside `hit_layout`). A fork reads
+them across its takeover point:
+- C4's carried-blast pick `tx_mark_held` compares the recorded `s_txMark` with the slot's stamp;
+- B4's two-tick hold `hit_held` reads the slot's free.
+
+Without them, a keyed passenger whose transport died in the step before the takeover would
+explode uncarried. The table's own row keeps its `SIMF_COLUMN` fields, so its count stays a kept
+count and no byte has two declarations.
+
+The arguments:
+- **The lifetime:** the column pointers point into the table `s_hit` was published with, and that
+  table is never freed.
+- **The bound:** their count `s_hitRows` is that table's n (n ≤ room). It is a heap table's count,
+  which the seek never writes, so the seek writes at most n rows.
+- **The ordering:** `hit_reset` publishes the pointers right after `s_hit`, on the same thread.
+
+A puppet host still reads none of them: replayed deaths do not reach `tx_arm`, and replayed
+creates name their slot.
+
+<!-- S4A RUN -->
+
+## S5
+
+Planned in detail when S4 is in. The table above is its scope.
 
 ## Open
 
