@@ -5,10 +5,10 @@
 
    `make COVER=1` builds ddraw-cover.dll: the simulation files of thread-split.allow and the demo
    recorder's own are compiled with -finstrument-functions-once, so each of their functions calls
-   __cyg_profile_func_enter the first time it runs, which marks the function's first byte in a bitmap over the
-   DLL's .text. The replay harness asks for the bitmap with the trigger's `cover <name>` and maps
-   each address to its function through the build's linker map (ddraw-cover.map). In any other
-   build nothing is instrumented and the bitmap does not exist. */
+   __cyg_profile_func_enter the first time it runs, which marks the function's first byte in a
+   bitmap over the DLL's .text. The replay harness asks for the bitmap with the trigger's
+   `cover <name>` and maps each address to its function through the build's linker map
+   (ddraw-cover.map). In any other build nothing is instrumented and the bitmap does not exist. */
 
 /* The functions that have run, as `replays\cover-<name>.bin`: "ICV1", the count, then each
    function's RVA, all u32 little-endian. The name is 1 to 39 letters, digits, '-' and '_'. 1
