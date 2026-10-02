@@ -241,8 +241,9 @@ static int file_open(Writer* w)
 static void tlv(Buf* b, unsigned tag, const void* p, unsigned n);
 static void tlv_u32(Buf* b, unsigned tag, unsigned v);
 
-/* A fork's segment, from the append point on: the file cut there -- which drops a torn last block
-   or an unfinished segment with no complete iteration, and no complete block -- and, when the
+/* A fork's segment, from the append point on: the file cut there -- which drops a torn last block,
+   or an unfinished segment with no complete iteration, its complete header block included, and no
+   iteration of any timeline (tagpu_recreader.c, THE SCAN'S THREE OUTCOMES) -- and, when the
    segment before it has no end block, one that ends it at its last complete iteration. Then the
    header follows, as a new file's follows the magic.
    THE ORDERING that makes the append point current: the takeover found it after opening this

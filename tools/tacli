@@ -5536,7 +5536,7 @@ def _replay_takeover_wait(inst, name, T, lines, first, timeout):
         rf"replay: {n}: taken over at GameTime {T} as player (\d+), difficulty (\d+), in (\d+) ms "
         rf"\(read (\d+), rebuild (\d+), AI (\d+), passability (\d+)\); units (\d+) killed, "
         rf"(\d+) made, (\d+) refused; orders (\d+) built, (\d+) adopted, (\d+) resumed, "
-        rf"(\d+) bounded; seats ([^;]*); timeline (\d+)")
+        rf"(\d+) bounded, (\d+) units' lists torn down; seats ([^;]*); timeline (\d+)")
     refuse_rx = re.compile(rf"replay: (?:{n}: )?takeover (?:at {T} )?refused: (.*)"
                            rf"|replay: {re.escape(REPLAY_TRIGGER)}: not understood: (.*)")
     rec_rx = re.compile(r"recorder: recording timeline (\d+) of (.*) from GameTime (\d+) "
@@ -5559,8 +5559,8 @@ def _replay_takeover_wait(inst, name, T, lines, first, timeout):
                            **dict(zip(("player", "difficulty", "ms", "read_ms", "rebuild_ms",
                                        "ai_ms", "passability_ms", "killed", "made",
                                        "units_refused", "orders_built", "adopted", "resumed",
-                                       "bounded"), map(int, m.groups()[:14]))),
-                           seats=m.group(15), timeline=int(m.group(16)))
+                                       "bounded", "orphans"), map(int, m.groups()[:15]))),
+                           seats=m.group(16), timeline=int(m.group(17)))
                 continue
             m = rec_rx.search(line)
             if m:
@@ -5587,6 +5587,11 @@ def cmd_replay_takeover(args):
     after T is recorded as a new timeline of the same file (tagpu_replay.c, THE TAKEOVER)."""
     steps = []
     res = {"name": args.name, "T": args.at, "player": args.player}
+    if (args.dump is None) != (args.dump_at is None) or \
+            (args.dump_at is not None and args.dump_at <= args.at):
+        print("tacli: replay takeover: --dump NAME goes with --dump-at G, a GameTime after --at",
+              file=sys.stderr)
+        sys.exit(2)
     if args.recording:
         tarec = _tarec()
         try:
@@ -5626,15 +5631,45 @@ def cmd_replay_takeover(args):
     # written whole and renamed into place, so a poll never finds it half written
     trig = inst.gamedir / REPLAY_TRIGGER
     tmp = trig.with_name(trig.name + ".tmp")
-    tmp.write_text(f"takeover {args.player} at {args.at}"
-                   + (f" difficulty {args.difficulty}" if args.difficulty is not None else "")
-                   + "\n")
-    os.replace(tmp, trig)
+
+    def trigger(line):
+        tmp.write_text(line + "\n")
+        os.replace(tmp, trig)
+
     res["as"] = name
+    if args.dump:
+        # armed on the playing before the takeover: the recorder keeps an armed dump across the
+        # takeover's seek, which sets GameTime to T - 1, and takes it at the fork's capture point
+        # of G (tagpu_recorder.c, tagpu_rec_dump_arm)
+        armed_rx = re.compile(rf"recorder: dump {re.escape(args.dump)} armed for GameTime "
+                              rf"{args.dump_at}|recorder: dump {re.escape(args.dump)}.* refused.*")
+        trigger(f"dump {args.dump} at {args.dump_at}")
+        deadline, got_line, pending = time.time() + 30, None, rest
+        while got_line is None and time.time() < deadline:
+            for line in pending:
+                m = armed_rx.search(line)
+                if m:
+                    got_line = m.group(0)
+            pending = lines()
+            time.sleep(0.1)
+        rest = []
+        if got_line is None or "refused" in got_line:
+            res.update(taken=False, dump_refused=got_line or "no answer in 30 s")
+            out(res, args.json, human=f"{name}: on {args.name}, not taken over: dump "
+                                      f"{args.dump}: {res['dump_refused']}")
+            sys.exit(1)
+        res["dump_armed"] = got_line
+    trigger(f"takeover {args.player} at {args.at}"
+            + (f" difficulty {args.difficulty}" if args.difficulty is not None else ""))
     got = _replay_takeover_wait(inst, name, args.at, lines, rest, args.timeout)
     res.update(got, steps=steps)
+    if "file" in got:
+        # the recorder names the fork's file relative to the game's folder
+        got["fork"] = res["fork"] = str(inst.gamedir / got["file"].replace("\\", "/"))
     human = [f"{name}: on {args.name}"] + [f"  {s}" for s in steps]
     human += [f"  {got[k]}" for k in ("line", "recording", "not_recorded", "timeout") if k in got]
+    if "fork" in got:
+        human.append(f"  the fork: {got['fork']}")
     out(res, args.json, human="\n".join(human))
     if not got["taken"] or "recording" not in got:
         sys.exit(1)
@@ -6712,10 +6747,12 @@ def build_parser():
         "takeover", help="take over a playback at a GameTime as one of its players",
         description="The level becomes a live skirmish at GameTime T: player P is yours, the "
                     "other recorded players are the computer's, and the game from T on is "
-                    "recorded as a new timeline of the same file. With a recording the level "
-                    "is launched with P viewed, so the interface it loads once, the side's "
-                    "chrome, is P's side; without one the instance's running playback is "
-                    "taken over, in the side it loaded with.")
+                    "recorded as a new timeline of the file the level plays. With a recording "
+                    "the level is launched with P viewed, so the interface it loads once, the "
+                    "side's chrome, is P's side; the level plays the instance's copy of the "
+                    "recording (its replays folder), so the fork goes into that copy, whose path "
+                    "is printed, and the file given is left as it was. Without one the "
+                    "instance's running playback is taken over, in the side it loaded with.")
     add_common(rpt)
     rpt.add_argument("name", help="the instance: the one to launch with a recording, else the "
                                   "one whose running playback is taken over")
@@ -6727,6 +6764,11 @@ def build_parser():
     rpt.add_argument("--difficulty", type=int, choices=(0, 1, 2), default=None,
                      help="the computer players' difficulty (default: the recording's when it "
                           "had a computer player, else 2)")
+    rpt.add_argument("--dump", default=None, metavar="NAME",
+                     help="also take a dump of the live game at --dump-at, armed before the "
+                          "takeover so that it cannot be late: replays/dump-NAME.bin")
+    rpt.add_argument("--dump-at", type=gametime_type, default=None, metavar="G",
+                     help="the GameTime of --dump, after T")
     rpt.add_argument("--timeout", type=float, default=REPLAY_TAKEOVER_TIMEOUT,
                      help=f"seconds to wait for the takeover's line and the recorder's start "
                           f"(default {REPLAY_TAKEOVER_TIMEOUT:g})")

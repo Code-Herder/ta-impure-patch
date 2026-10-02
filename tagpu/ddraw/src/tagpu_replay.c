@@ -199,6 +199,7 @@ static struct {
     RecFork  fork;                  /* TK0's handle and append point, until the arm moves them
                                        (tagpu_recorder.c, THE FORK'S HANDLE)                     */
     unsigned adopted, resumed, bounded;     /* R8's counts (tk_node)                             */
+    unsigned orphans;                       /* R8's units whose lists were torn down (tk_orphans) */
     LONGLONG t_ai, t_pass;                  /* TK1's and TK4a's ticks                            */
 } s_tk;
 #define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
@@ -920,8 +921,9 @@ typedef void (__thiscall* PFN_SetType)(char* rec, unsigned type);
 typedef void* (__thiscall* PFN_AiMake)(void* obj, char* rec);
 #define E_AiMake   ((PFN_AiMake)0x00408CB0u)
 /* 0x40B320(seat): the acquisition record's maker, stdcall `ret 4`: allocates 0x10D bytes,
-   constructs them -- its constructor 0x409730 draws the simulation RNG 8 times -- and stores
-   0x5119C0[seat] unconditionally (0x40B340). On an allocation failure it calls 0x409730 with
+   constructs them through 0x409160 -- which draws the simulation RNG 8 times in 0x40A150
+   (0x40A15F..0x40A23B, called at 0x4092E8) -- stores 0x5119C0[seat] unconditionally (0x40B340)
+   and then calls 0x409730 on it. On an allocation failure it stores 0 and calls 0x409730 with
    ecx 0 (0x40B350..0x40B35B): the engine's own crash, as at every level load. */
 typedef void (__stdcall* PFN_AcqMake)(unsigned seat);
 #define E_AcqMake  ((PFN_AcqMake)0x0040B320u)
@@ -1774,19 +1776,23 @@ static int tk_node_bounded(const Lv* L, unsigned slot, const unsigned char* img)
    engine makes it 54 times (s2-orders App. B).
    WHY IT IS SAFE. No value taken from the recording is a pointer: the target goes through the
    engine's setter, bounded by the host's live slot (ord_target); +0x52 is NULL; every index a
-   handler reads from p1 is bounded above (tk_node_bounded, and Attack_Chase's below). +0x06 bit 1
-   is clear, so the destructor's unbounded handler call (0x43A1F5..0x43A21A) cannot run a handler
-   before the handler arms it itself. Nine handler functions arm it: SelfDestruct, BuildingBuild,
-   MobileBuild, HelpBuild, AirStrike, AirToGround, VTOL_Pickup, VTOL_MobileBuild and
-   VTOL_HelpBuild (exe-reverse-engineering.md, the order node).
+   handler reads from p1 is bounded above, and a weapon slot it names holds a weapon
+   (tk_node_bounded, and Attack_Chase's below). +0x06 bit 1 is clear, so the destructor's
+   unbounded handler call (0x43A1F5..0x43A21A) cannot run a handler before the handler arms it
+   itself. Nine handler functions arm it: SelfDestruct, BuildingBuild, MobileBuild, HelpBuild,
+   AirStrike, AirToGround, VTOL_Pickup, VTOL_MobileBuild and VTOL_HelpBuild
+   (exe-reverse-engineering.md, the order node).
    THE ADOPTION: a builder whose node holds its nanoframe goes on building it instead of starting
-   over. BuildingBuild's state 3 NULL-tests the target (0x4029CA..0x4029CF), so state 3 with no
-   event armed is safe by the handler's own test (MEASURED 2026-09-29). MobileBuild's state 3 has
-   no NULL test (0x403E43, 0x403EEB), so it is adopted as the handler arms itself
-   (0x403F00..0x403F0C) less bit 1: +0x06 = 9, the timer and the target's death. A frame that dies
-   before the first call fires the node's event 8 through vtable slot 0 (0x489762) before it
-   clears the target (0x48978E), and MobileBuild tests event 8 before its table (0x403A27), so
-   state 3 never runs with a NULL target; the timer at T makes the first call the step at T.
+   over, at state 3, armed as each handler arms itself less bit 1: +0x06 = 9, the timer and the
+   target's death, with the deadline at T, so the first call is the step at T. A frame that dies
+   before that call fires the node's event 8 through vtable slot 0 (0x489762) before it clears the
+   target (0x48978E), and both handlers test event 8 before their states (BuildingBuild 0x402726,
+   MobileBuild 0x403A27), so state 3 never runs with a NULL target. That matters to both:
+   MobileBuild's state 3 has no NULL test (0x403E43, 0x403EEB), and BuildingBuild's returns 7 on
+   one (0x4029CA..0x4029CF, 0x402B4D), which the dispatcher's case 7 answers by destroying the
+   factory's whole main list (0x43BA3D..0x43BA6D). Each arms itself with the timer 0x439E80,
+   which sets bit 0, and then 0xA (BuildingBuild 0x402ADC..0x402AE6, MobileBuild
+   0x403F00..0x403F0C): 0xB, of which the adoption's 9 is all but bit 1.
    THE RESUMED HANDLERS: Paralyze and BuildWeapon keep their progress. Neither arms bit 1, so the
    destructor never calls them, and their state is values -- a count, progress and a deadline
    compared with GameTime only (0x43B7E2..0x43B7FB) -- each deadline clamped to the handler's own
@@ -1811,10 +1817,7 @@ static void tk_node(const Lv* L, char* n, const unsigned char* img, unsigned slo
     memcpy(&target, n + ORD_TARGET, 4);
     memcpy(&ev, img + ORD_EVMASK, 4);
     memcpy(&idl, img + ORD_DEADLINE, 4);
-    if (h == H_BUILDINGBUILD && target) {
-        n[ORD_STATE] = 3;
-        s_tk.adopted++;
-    } else if (h == H_MOBILEBUILD && target) {
+    if ((h == H_BUILDINGBUILD || h == H_MOBILEBUILD) && target) {
         n[ORD_STATE] = 3;
         v = 9;
         memcpy(n + ORD_EVMASK, &v, 4);
@@ -1822,11 +1825,14 @@ static void tk_node(const Lv* L, char* n, const unsigned char* img, unsigned slo
         memcpy(n + ORD_DEADLINE, &dl, 4);
         s_tk.adopted++;
     } else if (h == H_ATTACKCHASE) {
-        /* p1 0 is the handler's "unset": state 0 picks a slot then (0x4035A1). A p1 negative as an
-           int would reach the stock slot write through my_SetTarget's signed idx < 3
-           (tagpu_weapons.c), and one at or past the unit's count has no weapon. */
+        /* p1 0 is the handler's "unset": state 0 picks a slot then (0x4035A1). The slot's weapon
+           is read without a NULL test from p1's low byte (0x49ABCB in 0x49ABB0, 0x49AE04 in
+           0x49ADF0), so every other p1 names a slot that holds one: a stock slot 1 or 2 left
+           empty, a p1 negative as an int -- which would reach the stock slot write through
+           my_SetTarget's signed idx < 3 (tagpu_weapons.c) -- and one at or past the unit's
+           count all have none. */
         memcpy(&v, n + ORD_P1, 4);
-        if (v >= 3 && !tagpu_weapons_slot_weapon(unit_at(L, slot), v)) {
+        if (v && !tagpu_weapons_slot_weapon(unit_at(L, slot), v)) {
             v = 0;
             memcpy(n + ORD_P1, &v, 4);
             s_tk.bounded++;
@@ -1925,6 +1931,38 @@ static void ord_teardown(char* n)
     E_OrdFree(n);
     E_MemFree(n);
     s_st.ofreed++;
+}
+
+/* THE TAKEOVER'S OTHER UNITS (R8, after orders_put): a host unit the kills left alive and that
+   the image does not describe (not live in it, or of another type) keeps the order nodes its
+   puppet steps left, which tk_node never sees, and from T its owner's type makes the unit tick
+   run their handlers. Its lists are torn down instead, as orders_put tears down a puppet's extra
+   nodes and for the same reason: no handler has run on a puppet's node, since the unit tick calls
+   them only for an owner of type 1 or 2 (0x48AEB5..0x48AECD), so none has armed the destructor's
+   handler call (+0x06 bit 1, which only the handlers set) or its StopBuilding (+0x42 bit 22,
+   0x438590's). A block that is no order ends the walk, as in orders_put, and the list is cut
+   there. The units are counted on the takeover's line. */
+static unsigned tk_orphans(const Lv* L, const RecWorld* W)
+{
+    unsigned slot, list, n = 0;
+    for (slot = 1; slot < L->nslots; slot++) {
+        if (!host_live(L, slot) ||
+            (W->live[slot] && holds(L, slot, W->unit + (size_t)slot * REC_UNIT_DWORDS)))
+            continue;
+        for (list = 0; list < 2; list++) {
+            char** head = (char**)(unit_at(L, slot) + (list ? U_SUBORDERS : U_ORDERS));
+            char* o = *head;
+            if (o) n++;
+            while (o && *(const uint32_t*)o == ORD_VTABLE) {
+                char* next = *(char**)(o + ORD_NEXT);
+                *head = next;
+                ord_teardown(o);
+                o = next;
+            }
+            *head = NULL;
+        }
+    }
+    return n;
 }
 
 static void orders_put(const Lv* L, const RecWorld* W)
@@ -4798,6 +4836,40 @@ static unsigned sk_ms(LONGLONG ticks, LONGLONG hz)
      playing and arms the recorder (tk_end).
    The recorded deaths' eye is P's from R0 on (s_eye.viewed), since P is the record viewed. */
 
+/* The fork's header carries this build's recorded tables (rec_start: every declaration
+   tagpu_simreg_recorded keeps, in registry order), and a chain is played only when each
+   segment's tables are the first header's, on the fields recr_timeline compares
+   (tagpu_recreader.c, shape_differs). A recording made by a build that declares other tables
+   still plays, since the playing pairs tables by name and skips the rest (table_pair), but its
+   fork would be refused by every reader, so such a takeover is refused before the rebuild (S4's D3: a fork is always recorded).
+   1, or 0 (why). */
+static int tk_tables(const RecHeader* h, char* why, unsigned cap)
+{
+    unsigned i, k = 0;
+    for (i = 0; i < tagpu_simreg_count(); i++) {
+        const SimDesc* d = tagpu_simreg_at(i);
+        const RecTableInfo* t;
+        if (!d || !tagpu_simreg_recorded(d)) continue;
+        if (k == h->ntab) {
+            snprintf(why, cap, "this build records %s, which the recording does not", d->name);
+            return 0;
+        }
+        t = &h->tab[k++];
+        if (t->index != i || t->stride != d->stride || t->cls != d->cls || t->key != d->key ||
+            t->flags != (unsigned short)d->flags || t->lhash != tagpu_simreg_layout_hash(d) ||
+            strncmp(t->name, d->name, sizeof t->name)) {
+            snprintf(why, cap, "the recording's table %s is not this build's %s", t->name,
+                     d->name);
+            return 0;
+        }
+    }
+    if (k != h->ntab) {
+        snprintf(why, cap, "the recording records %s, which this build does not", h->tab[k].name);
+        return 0;
+    }
+    return 1;
+}
+
 /* R0's bounds on what the takeover reads and writes; `D` from -1 to its default. 1, or 0 (why). */
 static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, char* why, unsigned cap)
 {
@@ -4840,11 +4912,25 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, char* wh
             return 0;
         }
         /* 0x40B320 indexes the ten-entry table with the record's +0x146, and index 10 would alias
-           the pathfinder's budget at 0x5119E8 */
+           the pathfinder's budget at 0x5119E8. R8's players_put then writes the image's byte over
+           it (no row of replay-layout.tsv excludes it), and the teardown frees through
+           0x5119C0[+0x146] (0x40B390, called at 0x464A4F). The level's slot setup 0x4854A0 copies
+           it into each of the record's unit slots' +0xFF (0x485908..0x48590E), which the radar
+           pass's loop 4 indexes the table with (0x40B0E5). So the host's byte and the image's are
+           both bounded here. */
         if ((unsigned char)rec[PL_MAPBIT] != st) {
             snprintf(why, cap, "record %u's seat byte is %u", st, (unsigned char)rec[PL_MAPBIT]);
             return 0;
         }
+        if (((const unsigned char*)W->player[st])[PL_MAPBIT] != st) {
+            snprintf(why, cap, "record %u's seat byte at GameTime %u is %u", st, W->tick,
+                     ((const unsigned char*)W->player[st])[PL_MAPBIT]);
+            return 0;
+        }
+    }
+    if (!tk_tables(h, w2, sizeof w2)) {
+        snprintf(why, cap, "the fork could not be played: %s", w2);
+        return 0;
     }
     /* TK4a's 0x464290 zeroes V's +0x74 without freeing it (0x46434A) */
     rec = player_rec(L->ta, s_viewer);
@@ -4880,6 +4966,13 @@ static int tk_open(unsigned T, char* why, unsigned cap)
     if (f == INVALID_HANDLE_VALUE) {
         snprintf(why, cap, "the recording cannot be written (%lu): another program may have it "
                  "open, or it is read-only", GetLastError());
+        return 0;
+    }
+    /* the append point is found in the file the playing reads, so the handle must be that file,
+       not one put at its path since */
+    if (!recr_same_file(s_rd, f)) {
+        CloseHandle(f);
+        snprintf(why, cap, "%s is no longer the file this level plays", path);
         return 0;
     }
     if (!recr_append_point(s_rd, T - 1, &a, w2, sizeof w2)) {
@@ -5010,10 +5103,11 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
                                 h->seats[i].index, h->seats[i].index == P ? "human" : "ai");
     snprintf(line, sizeof line, "replay: %s: taken over at GameTime %u as player %u, difficulty "
              "%u, in %u ms (read %u, rebuild %u, AI %u, passability %u); units %u killed, %u "
-             "made, %u refused; orders %u built, %u adopted, %u resumed, %u bounded; seats %s",
+             "made, %u refused; orders %u built, %u adopted, %u resumed, %u bounded, %u units' "
+             "lists torn down; seats %s",
              s_name, T, P, D, ms, read, rebuild, sk_ms(s_tk.t_ai, hz), sk_ms(s_tk.t_pass, hz),
              s_sk.killed, s_sk.made, s_sk.refused, built, s_tk.adopted, s_tk.resumed,
-             s_tk.bounded, seats);
+             s_tk.bounded, s_tk.orphans, seats);
     tagpu_puppet_end();
     counts_log("the takeover", T - 1);
     pend_clear();
@@ -5125,6 +5219,7 @@ static int seek_run(char* ta)
     if (tk) tk_types(ta, P);
     built0 = s_st.obuilt;
     orders_put(&L, W);
+    if (tk) s_tk.orphans = tk_orphans(&L, W);
     s_sk.refused = s_st.refused - refused0;
     /* R8b, after R8's moves, which re-emit */
     seek_unit_books(&L, W);

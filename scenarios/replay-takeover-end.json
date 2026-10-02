@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The takeover's end fixture (tools/replay/fixtures.json, `takeover-end`), on Show Down: the human ARM at slot 0 and the AI CORE at slot 1, each with its commander, which keeps its economy, and twelve light units on hold at its own end of the map, so the recording reaches GameTime 900 with both sides alive. Take over as 0 and type `+kill 1` -- kill-all 0x486F10 for the AI through the console's Kill -- and the level must end by the engine's victory for 0.",
+ "description": "The takeover's end fixture (tools/replay/fixtures.json, `takeover-end`), on Show Down: the human ARM at slot 0 and the AI CORE at slot 1, each with its commander, which keeps its economy, and twelve light units on hold at its own end of the map, so the recording reaches GameTime 900 with both sides alive. Slots 2 and 3 are closed: a slot the scenario does not name keeps the instance's last skirmish setting, and a third seat left alive would stop the victory. Take over as 0 and type `+iwin` -- the console's IWin 0x4169D0: kill-all 0x486F10 for seat 1 and the game's won and stop flags (main+0x3923B bits 4 and 2) -- and the level must end with 0 won. Not `+kill 1`: the console's Kill disarms the objective after its kill-all (0x4164EF), so the level never ends by a victory after it.",
  "setup": {
   "map": "Show Down",
   "clear_existing": false,
@@ -21,6 +21,14 @@
     "controller": "ai",
     "side": "core",
     "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "off"
+   },
+   {
+    "slot": 3,
+    "controller": "off"
    }
   ]
  },

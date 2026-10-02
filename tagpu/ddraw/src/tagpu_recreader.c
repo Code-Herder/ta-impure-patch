@@ -1006,34 +1006,109 @@ int recr_tick(RecReader* r, char* why, unsigned cap)
 
 /* ---- the segments --------------------------------------------------------------------------- */
 
+/* THE SCAN'S THREE OUTCOMES for a block: WHOLE; TORN, what an interrupted append leaves -- the file
+   ends inside the block, or its bytes fail their magic or a CRC and nothing but zeros follows
+   them, as a write cut short by a crash leaves the file's tail; and anything else, which is not a
+   tear. That is DAMAGED -- the bytes fail and something follows them -- or UNREADABLE: a read, an
+   allocation or an inflate of bytes that passed their CRC failed. Only a torn block may be cut
+   (recr_append_point): the writer appends one block after another, so only the file's last
+   block can be torn, and a cut at any other block would delete the complete blocks after it. */
+enum { BLK_UNREADABLE = -1, BLK_TORN = 0, BLK_WHOLE = 1 };
+
+/* 1 when every byte of the file from `from` to `size` is zero (none included), 0 when one is not,
+   -1 when they cannot be read. The file's position moves. */
+static int zero_tail(RecReader* r, unsigned long long from, unsigned long long size)
+{
+    unsigned char buf[4096];
+    if (from >= size) return 1;
+    if (!seek_to(r->f, from)) return -1;
+    while (from < size) {
+        DWORD n = (DWORD)(size - from < sizeof buf ? size - from : sizeof buf), i;
+        if (!read_all(r->f, buf, n)) return -1;
+        for (i = 0; i < n; i++)
+            if (buf[i]) return 0;
+        from += n;
+    }
+    return 1;
+}
+
+/* The CRC of the payload of the block whose header `b` is at `off`, read in pieces and never
+   inflated: BLK_WHOLE when it matches, BLK_TORN when it does not, BLK_UNREADABLE when the bytes
+   cannot be read. The file's position moves. */
+static int crc_stream(RecReader* r, unsigned long long off, const RecBlock* b)
+{
+    unsigned char buf[16384];
+    unsigned left = b->packed;
+    uint32_t crc = 0;
+    if (!seek_to(r->f, off + sizeof *b)) return BLK_UNREADABLE;
+    while (left) {
+        DWORD n = left < sizeof buf ? left : (DWORD)sizeof buf;
+        if (!read_all(r->f, buf, n)) return BLK_UNREADABLE;
+        crc = (uint32_t)Crc32_ComputeBuf(crc, buf, n);
+        left -= n;
+    }
+    return crc == b->crc_body ? BLK_WHOLE : BLK_TORN;
+}
+
 /* The payload of the block whose header `b` is at `off`, checked and inflated into a buffer of its
-   own, so the reading's payload -- which the world's events point into -- is left alone; NULL when
-   it cannot be read, fails its CRC or does not inflate to its size. The file's position moves. */
-static unsigned char* body_read(RecReader* r, unsigned long long off, const RecBlock* b, size_t* n)
+   own (*out, *n), so the reading's payload -- which the world's events point into -- is left
+   alone. BLK_WHOLE; BLK_TORN when the bytes fail their CRC; BLK_UNREADABLE (why) when they cannot
+   be read, the buffer cannot be had, or bytes that passed their CRC do not inflate to the size
+   the header names. The file's position moves. */
+static int body_get(RecReader* r, unsigned long long off, const RecBlock* b, unsigned char** out,
+                    size_t* n, char* why, unsigned cap)
 {
     unsigned char* pk = (unsigned char*)malloc(b->packed ? b->packed : 1);
-    unsigned char* out = NULL;
-    size_t outn = 0;
-    if (!pk) return NULL;
-    if (!seek_to(r->f, off + sizeof *b) || (b->packed && !read_all(r->f, pk, b->packed)) ||
-        (uint32_t)Crc32_ComputeBuf(0, pk, b->packed) != b->crc_body) {
+    unsigned char* raw = NULL;
+    size_t rawn = 0;
+    *out = NULL;
+    if (!pk) {
+        snprintf(why, cap, "no memory for the block at byte %llu", off);
+        return BLK_UNREADABLE;
+    }
+    if (!seek_to(r->f, off + sizeof *b) || (b->packed && !read_all(r->f, pk, b->packed))) {
         free(pk);
-        return NULL;
+        snprintf(why, cap, "cannot read the block at byte %llu (%lu)", off, GetLastError());
+        return BLK_UNREADABLE;
+    }
+    if ((uint32_t)Crc32_ComputeBuf(0, pk, b->packed) != b->crc_body) {
+        free(pk);
+        return BLK_TORN;
     }
     if (b->flags & RBF_STORED) {
+        *out = pk;
         *n = b->packed;
-        return pk;
+        return BLK_WHOLE;
     }
-    if (!b->packed || lodepng_zlib_decompress(&out, &outn, pk, b->packed,
+    if (!b->packed || lodepng_zlib_decompress(&raw, &rawn, pk, b->packed,
                                               &lodepng_default_decompress_settings) ||
-        outn != b->raw) {
-        free(out);
+        rawn != b->raw) {
+        free(raw);
         free(pk);
-        return NULL;
+        snprintf(why, cap, "the block at byte %llu does not inflate to its %u bytes", off, b->raw);
+        return BLK_UNREADABLE;
     }
     free(pk);
-    *n = outn;
-    return out;
+    *out = raw;
+    *n = rawn;
+    return BLK_WHOLE;
+}
+
+/* The block at `at` failed its magic or a CRC, and its bytes end at `after` (`at` itself when its
+   header failed): torn when only zeros follow, else damaged. A reading stops at either; an append
+   (`tail`) stops at a torn one and refuses a damaged one. 0 stop here; -1 refuse (why). */
+static int failed_block(RecReader* r, unsigned long long at, unsigned long long after,
+                        unsigned long long size, int tail, char* why, unsigned cap)
+{
+    int k;
+    if (!tail) return 0;
+    k = zero_tail(r, after, size);
+    if (k > 0) return 0;
+    if (k < 0)
+        snprintf(why, cap, "cannot read the file after byte %llu (%lu)", after, GetLastError());
+    else
+        snprintf(why, cap, "the block at byte %llu is damaged and data follows it", at);
+    return -1;
 }
 
 /* a segment's first, last and end from its blocks in `ix`, after the last was dropped */
@@ -1069,13 +1144,17 @@ static unsigned seg_index(const RecReader* r, unsigned id)
 
 /* THE SCAN: every block header from byte 8, checked as a reading checks it -- the magic, the
    header's CRC, the sizes against RECR_BLOCK_MAX, the payload inside the file -- to the first
-   torn block, or to an RB_END that no valid RB_HEADER follows. A header's and an end block's
-   payloads are read and checked too: a fork's header names its timeline, an end its reason. With
-   `tail`, the last block's payload is checked as well, and a torn one is not kept: blocks are
-   appended one after the other, so only the last can be torn. Bounded by the file's size and by
-   RECR_TIMELINES; the bounds of recr_timelines refuse the file by name. On success the index, the
-   segments and the chain's segments are the file's as it is now; on a failure they are as they
-   were. The file's next read is put back where it was. 1, or -1 (why). */
+   block that fails, or to an RB_END that no valid RB_HEADER follows. A header's and an end block's
+   payloads are read and checked too: a fork's header names its timeline, an end its reason. A
+   stream or snapshot block's payload is not read here: a reading checks its CRC when it reads it
+   (block_body) and stops there. With `tail`, for an append (recr_append_point), the last block's
+   payload is checked as well and a torn one is not kept, and a block that fails is accepted only
+   as a tear (THE SCAN'S THREE OUTCOMES): a damaged block refuses the append. Without it, a
+   reading stops at a damaged block as at a torn one. A block that cannot be read refuses either.
+   Bounded by the file's size and by RECR_TIMELINES; the bounds of recr_timelines refuse the file
+   by name. On success the index, the segments and the chain's segments are the file's as it is
+   now; on a failure they are as they were. The file's next read is put back where it was. 1, or
+   -1 (why). */
 static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
 {
     RecSeg* sg = (RecSeg*)calloc(RECR_TIMELINES, sizeof *sg);
@@ -1094,19 +1173,42 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
         goto done;
     }
     size = (unsigned long long)fs.QuadPart;
-    while (off + sizeof(RecBlock) <= size) {
+    while (off + sizeof(RecBlock) <= size) {       /* a header the file ends inside is torn */
         RecBlock b;
         RecSeg* s;
         unsigned char* p;
         size_t n = 0;
-        if (!seek_to(r->f, off) || !read_all(r->f, &b, sizeof b) || b.magic != REC_BLOCK_MAGIC ||
-            (uint32_t)Crc32_ComputeBuf(0, &b, 28) != b.crc_head || b.packed > RECR_BLOCK_MAX ||
-            b.raw > RECR_BLOCK_MAX || ((b.flags & RBF_STORED) && b.packed != b.raw) ||
-            off + sizeof b + b.packed > size)
+        int k;
+        if (!seek_to(r->f, off) || !read_all(r->f, &b, sizeof b)) {
+            snprintf(why, cap, "cannot read at byte %llu (%lu)", off, GetLastError());
+            goto done;
+        }
+        if (b.magic != REC_BLOCK_MAGIC || (uint32_t)Crc32_ComputeBuf(0, &b, 28) != b.crc_head) {
+            if (failed_block(r, off, off, size, tail, why, cap) < 0) goto done;
             break;
+        }
+        if (b.packed > RECR_BLOCK_MAX || b.raw > RECR_BLOCK_MAX ||
+            ((b.flags & RBF_STORED) && b.packed != b.raw)) {
+            /* a header that passed its CRC: what the writer wrote, not a tear */
+            if (tail) {
+                snprintf(why, cap, "a block at byte %llu of %u bytes, %u inflated: past what it "
+                         "may hold", off, b.packed, b.raw);
+                goto done;
+            }
+            break;
+        }
+        if (off + sizeof b + b.packed > size) break;      /* torn: the file ends in its payload */
         if (after_end) {
             /* a segment begins: the file's first block, or a header right after an end */
-            if (b.kind != RB_HEADER) break;
+            if (b.kind != RB_HEADER) {
+                /* the writer begins every segment with its header: anything else is no tear */
+                if (tail && ns) {
+                    snprintf(why, cap, "a block of kind %u at byte %llu follows an end block",
+                             b.kind, off);
+                    goto done;
+                }
+                break;
+            }
             if (ns == RECR_TIMELINES) {
                 snprintf(why, cap, "it holds more than %u timelines", RECR_TIMELINES);
                 goto done;
@@ -1115,8 +1217,13 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             if (!ns) {
                 s->h = &r->h;               /* recr_open has read and checked the first */
             } else {
-                p = body_read(r, off, &b, &n);
-                if (!p) break;              /* a torn header: the file ends before it */
+                k = body_get(r, off, &b, &p, &n, why, cap);
+                if (k == BLK_UNREADABLE) goto done;
+                if (k == BLK_TORN) {
+                    if (failed_block(r, off, off + sizeof b + b.packed, size, tail, why, cap) < 0)
+                        goto done;
+                    break;
+                }
                 s->h = (RecHeader*)malloc(sizeof *s->h);
                 if (!s->h) {
                     free(p);
@@ -1156,8 +1263,13 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             goto done;
         }
         if (b.kind == RB_END) {
-            p = body_read(r, off, &b, &n);
-            if (!p) break;                  /* a torn end: the segment has none */
+            k = body_get(r, off, &b, &p, &n, why, cap);
+            if (k == BLK_UNREADABLE) goto done;
+            if (k == BLK_TORN) {                        /* the segment has no end */
+                if (failed_block(r, off, off + sizeof b + b.packed, size, tail, why, cap) < 0)
+                    goto done;
+                break;
+            }
             s->t.end_reason = entry_u32(p, n, RT_END_REASON);
             s->ended = 1;
             free(p);
@@ -1190,18 +1302,21 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
         if (b.kind == RB_END) after_end = 1;
     }
     if (tail && nix && ix[nix - 1].kind != RB_END) {
+        /* the last block's payload, which the walk did not read: torn, it is not kept, and what
+           follows it is nothing or a tear the walk stopped at */
         RecBlock b;
-        unsigned char* p;
-        size_t n = 0;
         const RecIndexEntry* e = &ix[nix - 1];
-        memset(&b, 0, sizeof b);
+        int k;
         if (!seek_to(r->f, e->off) || !read_all(r->f, &b, sizeof b) ||
-            !(p = body_read(r, e->off, &b, &n))) {
+            (k = crc_stream(r, e->off, &b)) == BLK_UNREADABLE) {
+            snprintf(why, cap, "cannot read the block at byte %llu (%lu)", e->off,
+                     GetLastError());
+            goto done;
+        }
+        if (k == BLK_TORN) {
             sg[e->seg].n--;
             nix--;
             seg_tally(&sg[e->seg], ix);
-        } else {
-            free(p);
         }
     }
     if (!ns) {
@@ -1381,6 +1496,14 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
         snprintf(why, cap, "GameTime %u is outside the timeline played", at);
         return 0;
     }
+    /* At a chain segment's first iteration the world played is that segment's, but `at` (the
+       iteration before) is its parent's: the fork would name the parent and replace the parent's
+       iteration there, which is not the world it was made from. */
+    if (hold + 1 < r->nchain && at + 1 == chain_seg(r, hold + 1)->t.fork_at) {
+        snprintf(why, cap, "GameTime %u is timeline %u's first iteration; take over after it",
+                 at + 1, chain_seg(r, hold + 1)->t.id);
+        return 0;
+    }
     if (keep >= RECR_TIMELINES) {
         snprintf(why, cap, "the recording holds %u timelines, the most a file may", keep);
         return 0;
@@ -1395,6 +1518,14 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
         a->open_last = last->t.last;
     }
     return 1;
+}
+
+int recr_same_file(const RecReader* r, void* f)
+{
+    BY_HANDLE_FILE_INFORMATION a, b;
+    return GetFileInformationByHandle(r->f, &a) && GetFileInformationByHandle(f, &b) &&
+           a.dwVolumeSerialNumber == b.dwVolumeSerialNumber &&
+           a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
 }
 
 /* ---- seeking -------------------------------------------------------------------------------- */

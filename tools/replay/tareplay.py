@@ -436,11 +436,15 @@ def step(w, kind, arg):
         if rc:
             raise CouldNotRun(f"apply {arg}: {last(o)}")
     elif kind == "type":
-        # the chat line: return opens it, the characters, return sends it
-        tacli("keys", w.name, "return", "return")
-        time.sleep(0.7)
-        tacli("keys", w.name, *[f"char:{c}" for c in arg])
-        time.sleep(0.7)
+        # the chat line: one return opens it, the characters, return sends it; a second return
+        # straight after the first closes the line again and the characters land as hotkeys. A
+        # second between the three, since back to back the opening return can be dropped. A
+        # space goes as the `space` key: `char: ` is no token the input layer types (tacli,
+        # _ui_text_tokens)
+        tacli("keys", w.name, "return")
+        time.sleep(1.0)
+        tacli("keys", w.name, *["space" if c == " " else f"char:{c}" for c in arg])
+        time.sleep(1.0)
         tacli("keys", w.name, "return")
         time.sleep(1.5)
     elif kind == "order":
@@ -645,7 +649,11 @@ def takeover_k(w, fx, out):
     w.place(fix, fx["dll"])
     (w.gamedir / "ErrorLog.txt").unlink(missing_ok=True)
     log = Log(w)
+    # the dump is armed on the playing before the takeover, so an entry whose level ends soon
+    # after T (`dump`) takes it before the end whatever tacli's latency
+    dump = f"k{T + span}"
     rc, o = tacli("replay", "takeover", w.name, fx["rec"], "--at", T, "--player", P,
+                  "--dump", dump, "--dump-at", T + span,
                   "--defaults", "--restart", "--keep-dll", "--timeout", 300, "--json",
                   timeout=LAUNCH_TIMEOUT + 300)
     try:
@@ -657,14 +665,15 @@ def takeover_k(w, fx, out):
         raise CouldNotRun(f"replay takeover: {why}")
     res.update(got)
     t_line = time.time()
-    # armed first: an entry whose level ends soon after T (`dump`) takes it before the end
-    dump = f"k{T + span}"
-    arm_dump(w, log, dump, T + span)
+    if fx["cover"]:
+        cover_ask(w, log, "K")
+    # the unit types that build, by def index, for the `ai` check (tagpu_cat.c, `builder`)
     rc, o = tacli("units", w.name, "--json", "--limit", "0", timeout=90)
     try:
-        res["commanders"] = sorted({c["owner"] for c in json.loads(o).get("commanders", [])})
+        res["builders"] = sorted(u["id"] for u in json.loads(o).get("units", [])
+                                 if u.get("builder"))
     except ValueError:
-        res["commanders"] = None
+        res["builders"] = None
     # what Impure draws 4 s after the line, against what the takeover made (judge)
     nap(max(0.0, t_line + 4 - time.time()))
     res["alive_seen"] = tc.alive_seen(w.gamedir)
@@ -676,7 +685,7 @@ def takeover_k(w, fx, out):
     if tk.get("type"):
         step(w, "type", tk["type"])
     if tk.get("order"):
-        res["moved"] = tk_order(w, P, tk["order"])
+        res["ordered"] = tk_order(w, P, tk["order"])
     display = int(w.xvfb.display.lstrip(":"))
     seen = set()
     t0 = time.time()
@@ -696,8 +705,8 @@ def takeover_k(w, fx, out):
             raise CouldNotRun(f"K: no dump {dump} and no end in {deadline - t0:.0f} s")
         nap(2.0)
     if not res["gone"]:
-        # a takeover that checks the victory ends by the engine's own; any other, by the end
-        # scenario, as L ends
+        # a takeover that checks the victory ends by its own chat line (the entry's `type`); any
+        # other, by the end scenario, as L ends
         victory = "victory" in tk.get("checks", [])
         n = 0 if victory else len(log.lines)
         if not victory:
@@ -716,30 +725,24 @@ def takeover_k(w, fx, out):
 
 
 def tk_order(w, P, order):
-    """The `order` unit of P's (type, rank) moved 300 wu east; its distance from where it was,
-    in wu, 12 s later, when the roster has been logged again."""
+    """The `order` unit of P's (type, rank) moved 300 wu east: its slot and the GameTime read
+    just before the order was given, from which the `orders` check reads the timeline, so the
+    order's own latency counts against its 10 s."""
     kind, rank = order
-
-    def mine(idx=None):
-        rc, o = tacli("roster", w.name, "--json", timeout=60)
-        roster = json.loads(o)["units"] if not rc else []
-        return [u for u in roster if u["owner"] == P and u["type"].upper() == kind and
-                u["engine_index"] and idx in (None, u["engine_index"])]
-
-    units = mine()
+    rc, o = tacli("roster", w.name, "--json", timeout=60)
+    roster = json.loads(o)["units"] if not rc else []
+    units = [u for u in roster if u["owner"] == P and u["type"].upper() == kind and
+             u["engine_index"]]
     if len(units) <= rank:
         raise CouldNotRun(f"order: no {kind} of rank {rank} among player {P}'s units")
     u = units[rank]
     x, z = u["world"]
+    g = w.gametime()
     rc, o = tacli("order", w.name, "move", "pos", x + 300, z, "--unit", u["engine_index"],
                   "--expect", kind, timeout=60)
     if rc:
         raise CouldNotRun(f"order move {kind}: {last(o)}")
-    time.sleep(12)
-    again = mine(u["engine_index"])
-    if not again:
-        return None
-    return ((again[0]["world"][0] - x) ** 2 + (again[0]["world"][1] - z) ** 2) ** 0.5
+    return {"slot": u["engine_index"], "at": g}
 
 
 def takeover_f(w, fx, out):
@@ -851,16 +854,29 @@ def checks(fx):
     return res
 
 
-def tk_ai(path, tl, T, commanders):
-    """In timeline `tl` over [T, T + TAKEOVER_SPAN]: the AI seats with a commander at T that made
-    no unit, and the fraction of the AI seats' mobile units alive at T that moved more than 8 wu."""
+U_TYPEIX = 0xA6                # a unit image's u16 type index, the catalogue's `id` (tagpu_replay.c)
+
+
+def mobile(img):
+    """the unit has a mover: its image's first dword is 1 then (replay-layout.tsv, `mover`)"""
+    return struct.unpack_from("<I", img, 0)[0] == 1
+
+
+def tk_ai(path, tl, T, builders):
+    """In timeline `tl` over [T, T + TAKEOVER_SPAN]: the AI seats that held a mobile builder at T
+    (a unit with a mover whose type, by index, is one of `builders`), those of them that made no
+    unit, and the fraction of the AI seats' mobile units alive at T that moved more than 8 wu
+    (None when there are none)."""
     h, bl, _ = tarec.load(path, timeline=tl)
     seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
     ai = {p["index"] for p in seg["header"]["players"] if p["controller"] == 2}
     w0 = tarec.stream_to(h, bl, want=T)
+    build = set(builders)
+    holders = {img[0xFF] for img in w0.units.values()
+               if img[0xFF] in ai and mobile(img) and
+               struct.unpack_from("<H", img, U_TYPEIX)[0] in build}
     start = {slot: struct.unpack_from("<iii", img, 0x6A)
-             for slot, img in w0.units.items()
-             if img[0xFF] in ai and not struct.unpack_from("<I", img, tarec.U_STATE)[0] & 0x20000000}
+             for slot, img in w0.units.items() if img[0xFF] in ai and mobile(img)}
     moved, made, fresh = set(), set(), set()
 
     def on_record(w, kind, b):
@@ -880,8 +896,29 @@ def tk_ai(path, tl, T, commanders):
             if ((x1 - x) ** 2 + (z1 - z) ** 2) ** 0.5 > 8 * 65536:
                 moved.add(slot)
     tarec.stream_to(h, bl, want=T + TAKEOVER_SPAN, on_record=on_record)
-    idle = sorted(s for s in ai if s in (commanders or ()) and s not in made)
-    return idle, (len(moved) / len(start) if start else None), len(start)
+    idle = sorted(s for s in holders if s not in made)
+    return sorted(holders), idle, (len(moved) / len(start) if start else None), len(start)
+
+
+def tk_moved(path, tl, ordered):
+    """How far the ordered unit is, in timeline `tl`, at the GameTime read before its order and
+    300 ticks (10 s) later, in wu: (distance, None), or (None, why)."""
+    slot, g = ordered["slot"], ordered["at"]
+    h, bl, _ = tarec.load(path, timeline=tl)
+    seen = {}
+
+    def on_record(w, kind, b):
+        # kind None comes before a TICK, with the world still the iteration before it
+        if kind is None and w.tick == g and slot in w.units:
+            seen[g] = struct.unpack_from("<iii", w.units[slot], 0x6A)
+
+    w = tarec.stream_to(h, bl, want=g + 300, on_record=on_record)
+    if w.tick == g + 300 and slot in w.units:
+        seen[g + 300] = struct.unpack_from("<iii", w.units[slot], 0x6A)
+    if len(seen) < 2:
+        return None, f"unit {slot} is not in timeline {tl} at GameTime {g} and {g + 300}"
+    (x0, _, z0), (x1, _, z1) = seen[g], seen[g + 300]
+    return ((x1 - x0) ** 2 + (z1 - z0) ** 2) ** 0.5 / 65536, None
 
 
 def tk_checks(fx):
@@ -929,19 +966,29 @@ def tk_checks(fx):
                     f"{first.group(1) + ' us' if first else 'not in the log'}, its segment "
                     f"{int(size.group(2)) - int(size.group(1)) if size else '?'} bytes; {k['line']}"))
     if "orders" in want:
-        d = k.get("moved")
+        try:
+            d, why = tk_moved(path, tl, k["ordered"]) if k.get("ordered") else (None, "no order")
+        except tarec.Unreadable as e:
+            d, why = None, str(e)
         res.append(("takeover orders", UNRUN if d is None else PASS if d > 64 else FAIL,
-                    "the unit was not in the roster again" if d is None else
-                    f"moved {d:.0f} wu"))
+                    why if d is None else
+                    f"unit {k['ordered']['slot']} moved {d:.0f} wu from GameTime "
+                    f"{k['ordered']['at']} to {k['ordered']['at'] + 300}"))
     if "ai" in want:
         try:
-            idle, frac, n = tk_ai(path, tl, T, k.get("commanders"))
+            if not k.get("builders"):
+                raise tarec.Unreadable("no unit type that builds in the game's catalogue")
+            holders, idle, frac, n = tk_ai(path, tl, T, k["builders"])
+            if not holders:
+                raise tarec.Unreadable(f"no AI seat holds a mobile builder at GameTime {T}")
+            if frac is None:
+                raise tarec.Unreadable(f"the AI seats hold no mobile unit at GameTime {T}")
             bad = [f"AI seat {s} made no unit" for s in idle]
-            if frac is not None and frac < 0.25:
+            if frac < 0.25:
                 bad.append(f"{frac:.0%} of {n} mobile units moved")
             res.append(("takeover ai", FAIL if bad else PASS, "; ".join(bad) or
-                        f"every AI seat with a commander made a unit; "
-                        f"{'no mobile unit' if frac is None else f'{frac:.0%} of {n} mobile units moved'}"))
+                        f"every AI seat with a mobile builder ({', '.join(map(str, holders))}) "
+                        f"made a unit; {frac:.0%} of {n} mobile units moved"))
         except tarec.Unreadable as e:
             res.append(("takeover ai", UNRUN, str(e)))
     if "fork" in want:
