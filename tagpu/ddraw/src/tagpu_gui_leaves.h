@@ -104,6 +104,7 @@ static void gaf_record(const int* ctx, SURF* s, const unsigned char* fr,
            THE RE-EMIT HAS ITS OWN ORDERING for this same read and it is not
            this one -- it is not inside any engine call. See `chrome_emit`. */
         s_lastOp->fcomp = fr[0x09]; s_lastOp->fsub = fr[0x0A]; s_lastOp->fsubn = fr[0x0B];
+        s_lastOp->exact = (unsigned char)TAGPU_GAF_IS_EXACT(fr);
         /* ONLY WHEN SOMETHING WILL CONSUME IT. `publish` returns at once when
            `!g_gui_draw`, and a census-less, draw-less window is thrown away
            unread (`s_nops = 0`) -- so without this test the decode would run
@@ -654,6 +655,7 @@ static int __cdecl before_scale(void* e)
         o->fw = (unsigned short)dw; o->fh = (unsigned short)dh;
         o->dx = (short)l; o->dy = (short)t;
         o->fcomp = fr[0x09]; o->fsub = fr[0x0A]; o->fsubn = fr[0x0B];
+        o->exact = (unsigned char)TAGPU_GAF_IS_EXACT(fr);
         o->su  = (unsigned short)winU;  o->sv  = (unsigned short)winV;
         o->sww = (unsigned short)winW; o->swh = (unsigned short)winH;
         /* the same gate `gaf_record` uses: never decode for a window nobody reads */

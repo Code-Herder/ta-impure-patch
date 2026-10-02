@@ -124,7 +124,7 @@ static void ops_forget_base(unsigned base, int retired);   /* below, with the ri
 typedef struct OVL {
     short l, t, r, b, dx, dy;
     unsigned short fw, fh;
-    unsigned char ck;
+    unsigned char ck, exact;
     const void* frame;                /* the atlas key, a VALUE (see OP::frame) */
     unsigned key;                     /* OP::fkey                                */
     unsigned char* plane;             /* glen bytes, ours                        */
@@ -622,6 +622,7 @@ typedef struct OP {
        path does not is exactly the sort of thing that survives until it
        crashes someone. */
     unsigned char fcomp, fsub, fsubn;
+    unsigned char exact;                        /* TAGPU_GAF_EXACT (tagpu_gaf.h)  */
     unsigned sgen;                              /* the seen table `glen` was decided against */
     short dx, dy;                               /* sprite: unclipped top-left */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
@@ -1746,7 +1747,7 @@ static int pub_seed_snap(SURF* s)
         o = pub_op(PK_SPRITE, s->base); if (!o) return 0;
         o->l = v->l; o->t = v->t; o->r = v->r; o->b = v->b;
         o->sl = v->dx; o->st = v->dy; o->fw = v->fw; o->fh = v->fh; o->ck = v->ck;
-        o->frame = v->frame; o->pix = (const void*)(size_t)v->key;
+        o->frame = v->frame; o->pix = (const void*)(size_t)v->key; o->exact = v->exact;
         dst = pub_bytes(o, v->glen);
         if (!dst) return 0;
         memcpy(dst, v->plane, v->glen);
@@ -1803,6 +1804,7 @@ static void ovl_add(SURF* s, const OP* op)
     memcpy(v->plane, op->glen ? s_gafBuf + op->goff : held->plane, v->glen);
     v->l = op->l; v->t = op->t; v->r = op->r; v->b = op->b;
     v->dx = op->dx; v->dy = op->dy; v->fw = op->fw; v->fh = op->fh; v->ck = op->ck;
+    v->exact = op->exact;
     v->frame = op->frame; v->key = op->fkey;
     s->novl++;
 }
@@ -2015,6 +2017,9 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
         }
     }
     hh ^= (unsigned)(size_t)pix * 2654435761u;
+    /* the tag word, so that whether the consumer restores a frame is part of
+       what names it (tagpu_gaf.h TAGPU_GAF_EXACT) */
+    hh = hash_run(hh, fr + TAGPU_GF_TAG, 4);
     hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x04) << 16;     /* the hotspot */
     hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x06);
     return (const void*)(size_t)(hh ? hh : 1u);
@@ -2985,7 +2990,7 @@ static void publish_window(unsigned flipSurf)
             o = pub_op(PK_SPRITE, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
-            o->frame = op->frame; o->pix = key;
+            o->frame = op->frame; o->pix = key; o->exact = op->exact;
             if (!have) {
                 unsigned n = op->glen ? op->glen : held->glen;
                 unsigned char* dst = pub_bytes(o, n);

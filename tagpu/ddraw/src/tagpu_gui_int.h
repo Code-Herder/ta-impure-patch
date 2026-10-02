@@ -165,6 +165,7 @@ typedef struct TAGPU_PUBOP {
        what it uses and storing an int here would only invite a wider compare
        than the engine's [BINARY-VERIFIED 2026-09-09] */
     unsigned char  fg, bg, tr;
+    unsigned char  exact;           /* sprite: TAGPU_GAF_EXACT, never restored  */
     unsigned short fw, fh;          /* sprite: frame size                      */
     unsigned       surf;            /* destination surface (its pixel base)    */
     unsigned       src;             /* copy: source surface                    */

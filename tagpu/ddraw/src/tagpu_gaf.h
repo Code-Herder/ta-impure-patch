@@ -28,7 +28,23 @@
 #define TAGPU_GF_COMP   0x09    /* u8 compressed (TA RLE rows)              */
 #define TAGPU_GF_SUBN   0x0A    /* u8 sub-frame count (pixels = frame*[])   */
 #define TAGPU_GF_SUBALP 0x0B    /* u8 sub-frame wants the alpha blit        */
+#define TAGPU_GF_TAG    0x0C    /* u32, the GAF file's own bytes: see below */
 #define TAGPU_GF_PIX    0x10    /* u8* colour plane                         */
+
+/* IMPURE'S OWN ART, DRAWN AS DRAWN. A frame whose `TAGPU_GF_TAG` word is
+   `TAGPU_GAF_EXACT` is never handed to the Classic++ restorer: its texels stay
+   the palette's, as the engine's own surface shows them. The art is made for
+   the palette, so there is no dither to undo, and the restorer would flatten
+   a texture it cannot tell from one (tagpu_dock.c's ground).
+   WHY THIS WORD: the loader `0x4B8C60` rewrites only `+0x10` and the sub-frame
+   pointers of a loaded frame (`0x4B8CBA`..`0x4B8CF5`), so a file's `+0x0C`
+   reaches memory as written; the two GUI blits `0x4B7F90` and `0x4B8310` read
+   `+0x00`..`+0x0A` and `+0x10` of a frame and nothing else (DISASSEMBLED); and
+   the word is 0 in all 14 589 frames of the vendored mod corpus (MEASURED
+   2026-10-01). A frame that carried the tag without being ours would only
+   lose its undithering. */
+#define TAGPU_GAF_EXACT 0x58504D49u     /* "IMPX" */
+#define TAGPU_GAF_IS_EXACT(fr) (*(const unsigned*)((const unsigned char*)(fr) + TAGPU_GF_TAG) == TAGPU_GAF_EXACT)
 
 /* sequence / anim entry */
 #define TAGPU_SQ_N      0x00    /* u16 frame count                          */
@@ -88,6 +104,10 @@ typedef struct TAGPU_GAFENT {
        repack rewrites in place when it moves the entry, so the list stays one
        generation and a consumer's cursor into it stays good. */
     int            rli;
+    /* TAGPU_GAF_EXACT: never in the published restore list, decided at the
+       insertion and part of the frame's identity (the UI's key hashes the
+       tag word, tagpu_gui_hook.c `frame_key`) */
+    char           exact;
 } TAGPU_GAFENT;
 
 #include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the shared frame */
@@ -478,7 +498,7 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
    draw's resample crosses as a box of its own (`PK_PLANE`), never as an entry. */
 const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
                                         int w, int h,
-                                        unsigned char ck, const unsigned char* pixels);
+                                        unsigned char ck, const unsigned char* pixels, int exact);
 const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
                                          int w, int h);
 /* Recycle a full atlas. With `repack` set this RE-LAYS the entries it holds

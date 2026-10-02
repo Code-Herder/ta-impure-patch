@@ -1722,7 +1722,7 @@ static void drain(void)
             t = twin_find(o->surf);
             if (!t) break;
             e = tagpu_gaf_atlas_find(&s_atlas, o->frame, o->pix, o->fw, o->fh);
-            if (!e && o->alen) e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->ck, g_guiq.arena + o->aoff);
+            if (!e && o->alen) e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->ck, g_guiq.arena + o->aoff, o->exact);
             if (!e) {
                 /* the atlas is full, or the frame's bytes never arrived (an
                    earlier reset lost them): a fresh start — the seeds carry
