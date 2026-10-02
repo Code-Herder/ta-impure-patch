@@ -2131,8 +2131,8 @@ Live rewind remains S4d; the browser controls remain S5.
 On the reference Wine setup (2026-10-02), the full coverage run plus the corrected
 forest-circle rerun passed 466 checks across all 18 fixtures, including eleven
 fork checks on each build and 54 round trips EQUAL. Coverage reached 48 of 49
-changed functions on every required build; `ring_free` remains UNCOVERED and
-requires S4c's own OQ7 decision. The earlier naval sink-count difference also
+changed functions on every required build; `ring_free` remains UNCOVERED, approved
+for this landing by the owner under OQ7 on 2026-10-02. The earlier naval sink-count difference also
 reproduced on pre-S4c main; its cause remains open and the tolerances are unchanged.
 
 ## S5

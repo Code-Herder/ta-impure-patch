@@ -149,9 +149,10 @@ rerun passed all 23 checks at the same requested ticks. Together these runs cove
 all 18 fixtures: 466 passing checks and 54 round trips EQUAL, with zero residue
 after poisoning. The full coverage gate reached 48 of the 49 changed functions
 on every required build. Only `tagpu_recorder.c:ring_free`, the allocation-failure
-cleanup before the writer starts, remains UNCOVERED on both builds. S4b's waiver
-was for that landing; S4c still requires the owner's OQ7 decision. The automated
-landing command did not record a passing note.
+cleanup before the writer starts, remains UNCOVERED on both builds. The owner
+approved that exception for S4c on 2026-10-02 under OQ7, with the gap documented
+and tolerances unchanged. The automated landing command did not record a passing
+note; the landing records the owner's decision.
 
 The review's file-invariant probes used the production reader and maintenance
 source in a scratch Wine executable. Replacing a file while retaining an old
