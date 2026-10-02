@@ -1,1 +1,3 @@
 replay-roundtrip-owner: range=main..d1bc65f9 result=uncovered uncovered=src/tagpu_replay.c:watch_refuse_engine checks=409/409 fail=0 decision=land owner=2026-10-02 (the same decision as on 87de7b83)
+
+landing-review: model=claude-opus-5-5 effort=high range=8cfc243c..d1bc65f9 (the branch's own commits; delta after the review on 8cfc243c) findings=6 acted=6 rejected=0 date=2026-10-02
