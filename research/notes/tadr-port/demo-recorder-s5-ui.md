@@ -89,6 +89,31 @@ re-laid main-menu backdrop, MEASURED); the target for ours is **under about 60 K
 ground**, which a design without dithering reaches. Three styles then add a few hundred KB to a DLL
 of about 2.1 MB.
 
+### Layouts: a style's rects travel with its ground
+
+Each ground paints its boxes where its artist put them, so the Replays screen has one layout per
+ground, and each layout is a screen of its own in `impure-patch.ufo`: retail's `REPLAYS.GUI` and
+Escalation's `REPLAYSE.GUI` (`tagpu_replays.c`, `L_RETAIL` and `L_ESCALATION`). The table holds the
+title bar, the list and its scroll bar, the minimap, the map's name and the players' two columns,
+the timelines, the count and footer bars and the four buttons; the GUI writer, the detail and the
+badges all read the one open. A style opens the screen of the ground it opens: Twilight's and an
+unknown mod's are retail's, and a style whose ground falls back to retail's takes retail's rects
+with it, never one without the other. The count and footer labels are centred in their bars when
+the screen opens, from the height of the font then in force (the label draw puts a line's top at
+the record's y, `0x4A5A7B`).
+
+Escalation's ground measures (640×480, edges inclusive..exclusive): title bar 21..348 × 11..41,
+count bar 444..618 × 20..39, list well 27..340 × 58..353, minimap box 370..448 × 59..143, map and
+players box 464..614 × 59..144, timelines box 370..614 × 163..353, footer bar 21..618 × 372..397,
+and button plates at y 431..456, x 21..113, 123..215, 225..318, 328..410 (unused) and 529..618.
+
+**A button is drawn at one of the engine's face sizes, not at its record's.** A plain button with
+no sequence of its own name takes commongui's `BUTTONS0` and the frame, of 0, 4, 8, …, nearest its
+record's width and height ([gui-gadgets](../gui-gadgets.md) §2.3). The sizes are 16×16, 321×20,
+120×20, 96×20, 112×20, 80×20 and 96×31, in retail's `commongui.gaf` and in Escalation's alike
+(MEASURED). Escalation's plates are 89 to 93 px wide and 25 high: 96×20 is the nearest face but
+overruns a 92-px plate by 2 px a side, so each holds an 80×20 face, centred.
+
 ### Drawing it
 
 - **Codex paints it**, given the mod's own art as a **style reference only** — its letter shapes,
@@ -196,8 +221,9 @@ Items 1 to 3 are needed by landing 1, item 4 by landing 5.
 | **4 — live rewind** | the rewind button, the timeline in a live skirmish, Back to now, Play from here | S4 |
 | **5 — the switches** | *Record games* and *Keep replays* | ask 4 |
 
-Escalation's and Twilight's styles are drawn alongside landings 1 to 3 and land as each is reviewed;
-until then those mods use the retail style, which is what an unknown mod gets anyway.
+Escalation has its own ground and plate, with retail's title font; Twilight's style is not drawn
+yet and uses the retail style, which is what an unknown mod gets anyway. Each lands as it is
+reviewed.
 
 ## Verification
 

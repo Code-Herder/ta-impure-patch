@@ -4,7 +4,7 @@
    recorder's front door. Design: research/notes/tadr-port/demo-recorder-s5-ui.md; the engine
    facts are in tagpu_replays.c, beside the code that rests on them.
 
-   THE SHAPE. REPLAYS.GUI is a real TA screen in impure-patch.ufo, pushed from the main menu the
+   THE SHAPE. REPLAYS.GUI (REPLAYSE.GUI over Escalation's ground) is a real TA screen in impure-patch.ufo, pushed from the main menu the
    way the engine pushes its own Load Game screen, over a 640x480 ground of our own art. The main
    menu gains one button, copied from its SINGLE button in the parsed screen before the engine
    builds it, and a plate pasted into its freshly decoded backdrop; what else moves is the
@@ -17,8 +17,9 @@
 
 #include "tagpu_ufo.h"
 
-/* The archive's entries for the screen: REPLAYS.GUI and one ground per style that has art of its
-   own. Writes at most `cap` entries into `f` and returns how many (0 when the art is missing, in
+/* The archive's entries for the screen: one ground per style that has art of its own, and one
+   screen per layout those grounds use (REPLAYS.GUI, retail's, and Escalation's REPLAYSE.GUI), five
+   at most. Writes at most `cap` entries into `f` and returns how many (0 when the art is missing, in
    which case nothing of the screen is armed). Their bytes live until tagpu_replays_files_free. */
 int  tagpu_replays_files(TAGPU_UFO_FILE* f, int cap);
 void tagpu_replays_files_free(void);

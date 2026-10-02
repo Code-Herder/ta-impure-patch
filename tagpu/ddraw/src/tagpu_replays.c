@@ -21,9 +21,10 @@
    The builder then runs stage 1 again (0x426523) and positions the version label (0x426615,
    xpos alone), so every record edit above is in place before the screen is first built.
 
-   THE BROWSER. Our MAINMENU OnCommand pushes REPLAYS.GUI the way the Load Game screen is pushed
-   (0x4931D0): GUI_Load with LOADGAME.GUI's flags 0x980, the screen's OnCommand and context, the
-   backdrop through 0x4288D0, the rows through SetListText. Back leaves the click unanswered, so
+   THE BROWSER. Our MAINMENU OnCommand pushes the style's screen (REPLAYS.GUI, or REPLAYSE.GUI
+   over Escalation's ground) the way the Load Game screen is pushed (0x4931D0): GUI_Load with
+   LOADGAME.GUI's flags 0x980, the screen's OnCommand and context, the backdrop through 0x4288D0,
+   the rows through SetListText. Back leaves the click unanswered, so
    the pump calls the screen with -1, pops it and repaints the main menu. S4, the list draw
    0x4A1B40, draws the rows' badges and lengths after every repaint of the recording list. */
 #include <windows.h>
@@ -129,28 +130,17 @@ typedef void  (__stdcall *oncmd_fn)(void* gi);
 typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 
 /* ---- the screen's layout: 640x480, the shell's own coordinates ------------------------------- */
-#define SCREEN           "REPLAYS.GUI"
-#define GUI_PATH         "impure/replays.gui"
 #define GUI_FLAGS        0x980          /* LOADGAME.GUI's (0x4931D7): 0x800 dims the screen below
                                            and repaints it at the pop, 0x80 marks the screen     */
 #define SCR_W            640
 #define SCR_H            480
 #define TITLE_TEXT       "REPLAYS"
-#define TITLE_X          24
-#define TITLE_BASE       36             /* the baseline row; a font frame's hoty is its own      */
 #define TITLE_GAP        3
-#define LIST_X           22
-#define LIST_Y           48
-#define LIST_W           310
-#define LIST_H           326
 #define LIST_ASSOC       7              /* the list and its scroll bar, and nothing else         */
 #define TL_ASSOC         9
-#define PLAYER_X0        470            /* the players, two columns of five in the detail well  */
-#define PLAYER_COL       72
-#define PLAYER_W         68             /* a name is cut so that "name: ?" fits, in the list font */
-#define PLAYER_ROWS      5
-#define PLAYER_Y0        70
+#define PLAYER_ROWS      5              /* the players, two columns of five                      */
 #define PLAYER_PITCH     13
+#define LABEL_H          13
 #define STAR_GAP         4              /* between the star and the row's text                   */
 #define BADGE_GAP        3              /* between the map name and a badge, and two badges      */
 
@@ -217,6 +207,70 @@ static const Mod s_mods[MOD_N] = {
 #define BADGE_SRC_FNV    0x559B02CDu
 #define BADGE_DST_FNV    0xCC236597u
 
+/* ---- the layouts: where each style's ground paints its boxes ----------------------------------
+   Each layout is a screen of its own in the archive, so a style's rects and its ground always
+   travel together: a style whose ground falls back to retail's opens retail's screen too
+   (tagpu_replays_files). The rects are the ground's painted interiors, MEASURED on the 640x480
+   art (2026-10-01), x..x+w and y..y+h exclusive.
+
+   A BUTTON'S SIZE IS ONE OF THE ENGINE'S FACES. At load (0x4A7FC5..0x4A8111) a plain button with no
+   sequence of its own name takes commongui's BUTTONS0 (0x5098EC) and, of its frames 0, 4, 8, ...,
+   the one nearest the record's width and height (|dw| + |dh|, 0x4A80C5..0x4A810F); the face is
+   drawn at the record's corner, its hotspot zeroed (0x4A80AC). BUTTONS0's sizes are 16x16,
+   321x20, 120x20, 96x20, 112x20, 80x20 and 96x31 in retail's commongui.gaf and in Escalation's
+   (TAESC.gp3) alike, so every button below is one of those exactly. Escalation's slots are 25 px
+   high and 89..93 wide: 96x20 is the nearest face but overruns the 92-px plates by 2 px a side,
+   so each holds an 80x20 face, centred. */
+typedef struct { short x, y, w, h; } Rect;
+enum { BT_WATCH, BT_PLAYON, BT_FAV, BT_BACK, BT_N };
+typedef struct {
+    const char* screen;         /* GUI_Load's name, and its panel's (ControlsAry[0])            */
+    const char* path;           /* the file in the archive                                     */
+    Rect  title;                /* x: where the title starts; y..y+h: the bar it is centred in */
+    Rect  list, bar;            /* the recordings and their scroll bar                         */
+    Rect  minimap;
+    Rect  mapname;
+    short px0, pcol, pw, py0;   /* the players: first column's x, column pitch, the width a
+                                   name is cut to ("name: ?", in the list font), first row's y  */
+    Rect  tlcap, timelines;
+    Rect  count, footer;        /* bars: replays_open centres the label's text in its bar      */
+    Rect  btn[BT_N];
+} Layout;
+
+static const Layout L_RETAIL = {
+    "REPLAYS.GUI", "impure/replays.gui",
+    { 24, 6, 326, 35 },
+    { 22, 48, 310, 326 }, { 334, 48, 14, 326 },
+    { 370, 54, 90, 90 },
+    { 470, 54, 142, LABEL_H },
+    470, 72, 68, 70,
+    { 370, 150, 242, 12 }, { 370, 162, 242, 206 },
+    { 440, 14, 180, 16 }, { 20, 386, 600, 22 },
+    { { 20, 440, 96, 20 }, { 124, 440, 120, 20 }, { 252, 440, 80, 20 }, { 540, 440, 80, 20 } },
+};
+
+/* Escalation's boxes: the list well 27..340 x 58..353 holds the list and its bar 2 px in; the
+   minimap box 370..448 x 59..143 (78x84) a 78-px square, centred; the map and players box
+   464..614 x 59..144 the map's name and two columns 2 px in; the timelines box 370..614 x
+   163..353 its caption and list 2 px in; the count bar 444..618 x 20..39 and the footer bar
+   21..618 x 372..397 their text 8 px in, clear of the rivets at their ends; the title bar
+   21..348 x 11..41, the title 4 px in; the plates y 431..456,
+   x 21..113, 123..215, 225..318 and 529..618 (328..410 is not used). */
+static const Layout L_ESCALATION = {
+    "REPLAYSE.GUI", "impure/replayse.gui",
+    { 25, 11, 323, 30 },
+    { 29, 60, 293, 291 }, { 324, 60, 14, 291 },
+    { 370, 62, 78, 78 },
+    { 466, 61, 146, LABEL_H },
+    466, 74, 70, 74,
+    { 372, 165, 240, 12 }, { 372, 179, 240, 172 },
+    { 448, 20, 162, 19 }, { 29, 372, 581, 25 },
+    { { 27, 433, 80, 20 }, { 129, 433, 80, 20 }, { 231, 433, 80, 20 }, { 533, 433, 80, 20 } },
+};
+
+/* by STYLES' order; Twilight's screen is retail's */
+static const Layout* const STYLE_LAYOUT[3] = { &L_RETAIL, &L_ESCALATION, &L_RETAIL };
+
 /* ---- state -------------------------------------------------------------------------------------- */
 static int   s_armed;
 static int   s_mod = -1;            /* s_mods index, set at the first main-menu visit          */
@@ -227,10 +281,12 @@ static int   s_logged;
 static void* s_gm;                  /* the REPLAYS GUIMEMSTRUCT while it is on the stack       */
 static int   s_recsIdx;             /* its recording list's record index                       */
 
-static char  s_gui[12288];
-static int   s_guiLen;
+static const Layout* const LAYOUTS[2] = { &L_RETAIL, &L_ESCALATION };
+static char  s_gui[2][12288];       /* LAYOUTS' screens, as written into the archive           */
 static const char* const STYLES[3] = { "retail", "escalation", "twilight" };
 static char  s_groundName[3][12];   /* the backdrop each style opens with                      */
+static const Layout* s_layout[3];   /* the screen each style opens: its ground's               */
+static const Layout* s_cur = &L_RETAIL; /* the screen open, or last opened                     */
 static char  s_groundPath[3][32];
 static unsigned char* s_groundPcx[3];
 static unsigned s_groundLen[3];
@@ -301,10 +357,10 @@ static int label(char* b, int cap, int at, int g, const char* name, int x, int y
     return gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", text);
 }
 
-static int button(char* b, int cap, int at, int g, const char* name, int x, int y, int w,
+static int button(char* b, int cap, int at, int g, const char* name, const Rect* r,
                   const char* text, int grayed)
 {
-    at = common(b, cap, at, g, 1, 0, name, x, y, w, 20, 2, 15, 0, 54);
+    at = common(b, cap, at, g, 1, 0, name, r->x, r->y, r->w, r->h, 2, 15, 0, 54);
     return gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=%d;\r\n"
                             "\tstages=0;\r\n\t}\r\n", text, grayed);
 }
@@ -323,7 +379,7 @@ static int list(char* b, int cap, int at, int g, const char* name, int assoc, in
     return gput(b, cap, at, "\t}\r\n");
 }
 
-static int build_gui(char* b, int cap)
+static int build_gui(char* b, int cap, const Layout* L)
 {
     int at = 0, g = 1, i;
     char nm[8];
@@ -337,61 +393,76 @@ static int build_gui(char* b, int cap)
         "\ttotalgadgets=22;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=WATCH;\r\n\tescdefault=BACK;\r\n\tdefaultfocus=RECS;\r\n\t}\r\n",
-        SCREEN, SCR_W, SCR_H);
+        L->screen, SCR_W, SCR_H);
 
     /* the recordings, and their scroll bar: one assoc binds the two (gui-gadgets 2.6.1); the
        slider's range, thick and knob are LOADGAME.GUI's SLIDER scaled to this height, and the
        engine rewrites them at load */
-    at = list(b, cap, at, g++, "RECS", LIST_ASSOC, LIST_X, LIST_Y, LIST_W, LIST_H, LIST_CLICKS);
-    at = common(b, cap, at, g++, 4, LIST_ASSOC, "RECSBAR", 334, 48, 14, 326, 2, 4, 102, 54);
+    at = list(b, cap, at, g++, "RECS", LIST_ASSOC, L->list.x, L->list.y, L->list.w, L->list.h,
+              LIST_CLICKS);
+    at = common(b, cap, at, g++, 4, LIST_ASSOC, "RECSBAR", L->bar.x, L->bar.y, L->bar.w, L->bar.h,
+                2, 4, 102, 54);
     at = gput(b, cap, at, "\trange=%d;\r\n\tthick=56;\r\n\tknobpos=0;\r\n\tknobsize=%d;\r\n\t}\r\n",
-              326 - 6, 326 - 9);
+              L->bar.h - 6, L->bar.h - 9);
 
     /* the minimap: an id-6 picture, which fills its rect with the panel colour while it has no
        frame (0x4A4B2A) */
-    at = common(b, cap, at, g++, 6, 0, "MINIMAP", 370, 54, 90, 90, 2, 15, 0, 0);
+    at = common(b, cap, at, g++, 6, 0, "MINIMAP", L->minimap.x, L->minimap.y, L->minimap.w,
+                L->minimap.h, 2, 15, 0, 0);
     at = gput(b, cap, at, "\thotornot=0;\r\n\t}\r\n");
 
-    at = label(b, cap, at, g++, "MAPNAME", 470, 54, 142, 13, LBL_LEFT, "");
+    at = label(b, cap, at, g++, "MAPNAME", L->mapname.x, L->mapname.y, L->mapname.w, L->mapname.h,
+               LBL_LEFT, "");
     for (i = 0; i < REC_PLAYERS; i++) {
         _snprintf(nm, sizeof nm, "P%d", i);
         nm[sizeof nm - 1] = 0;
-        at = label(b, cap, at, g++, nm, PLAYER_X0 + PLAYER_COL * (i / PLAYER_ROWS),
-                   PLAYER_Y0 + PLAYER_PITCH * (i % PLAYER_ROWS), PLAYER_W, 13, LBL_LEFT, "");
+        at = label(b, cap, at, g++, nm, L->px0 + L->pcol * (i / PLAYER_ROWS),
+                   L->py0 + PLAYER_PITCH * (i % PLAYER_ROWS), L->pw, LABEL_H, LBL_LEFT, "");
     }
-    at = label(b, cap, at, g++, "TLCAP", 370, 150, 242, 12, LBL_LEFT, "Timelines");
-    at = list(b, cap, at, g++, "TIMELINES", TL_ASSOC, 370, 162, 242, 206, LIST_PLAIN);
-    at = label(b, cap, at, g++, "COUNT", 440, 14, 180, 16, LBL_RIGHT, "");
-    at = label(b, cap, at, g++, "FOOTER", 20, 386, 600, 22, LBL_LEFT, "");
+    at = label(b, cap, at, g++, "TLCAP", L->tlcap.x, L->tlcap.y, L->tlcap.w, L->tlcap.h, LBL_LEFT,
+               "Timelines");
+    at = list(b, cap, at, g++, "TIMELINES", TL_ASSOC, L->timelines.x, L->timelines.y,
+              L->timelines.w, L->timelines.h, LIST_PLAIN);
+    at = label(b, cap, at, g++, "COUNT", L->count.x, L->count.y, L->count.w, L->count.h, LBL_RIGHT,
+               "");
+    at = label(b, cap, at, g++, "FOOTER", L->footer.x, L->footer.y, L->footer.w, L->footer.h,
+               LBL_LEFT, "");
 
-    at = button(b, cap, at, g++, "WATCH", 20, 440, 96, "Watch", 0);
-    at = button(b, cap, at, g++, "PLAYON", 124, 440, 120, "Play on", 1);
-    at = button(b, cap, at, g++, "FAV", 252, 440, 80, "Favourite", 0);
-    at = button(b, cap, at, g++, "BACK", 540, 440, 80, "Back", 0);
+    at = button(b, cap, at, g++, "WATCH", &L->btn[BT_WATCH], "Watch", 0);
+    at = button(b, cap, at, g++, "PLAYON", &L->btn[BT_PLAYON], "Play on", 1);
+    at = button(b, cap, at, g++, "FAV", &L->btn[BT_FAV], "Favourite", 0);
+    at = button(b, cap, at, g++, "BACK", &L->btn[BT_BACK], "Back", 0);
     return g - 1 == 22 ? at : -1;
 }
 
 /* The ground: the style's own 640x480 `ground`, with the title set into it from the style's
    `font` -- text is never painted into the art (the plan's *Text*). Returns 0 when the style has
    no such art. */
-static int compose_ground(const char* style, unsigned char* px)
+static int compose_ground(const char* style, const Layout* L, unsigned char* px)
 {
     const TAGPU_ART_ENTRY* g = tagpu_art_entry(style, "ground");
     const TAGPU_ART_ENTRY* f = tagpu_art_entry(style, "font");
     const TAGPU_ART_FRAME* gf;
     const char* t;
-    int x = TITLE_X, i, j;
+    int x = L->title.x, i, j, h = 0, hoty = 0, base;
 
     if (!g || g->nframes != 1 || !f) return 0;
     gf = &g->frames[0];
     if (gf->w != SCR_W || gf->h != SCR_H) return 0;
     for (i = 0; i < SCR_W * SCR_H; i++)
         px[i] = gf->pix[i] == gf->key ? 0 : gf->pix[i];
+    /* the glyphs stand on one baseline (their hotspot is it); the tallest is centred in the bar,
+       a spare row going below */
     for (t = TITLE_TEXT; *t; t++) {
         const TAGPU_ART_FRAME* c = tagpu_art_char(f, (unsigned char)*t);
-        int top;
         if (!c) return 0;
-        top = TITLE_BASE - c->hoty;
+        if (c->h > h) h = c->h;
+        if (c->hoty > hoty) hoty = c->hoty;
+    }
+    base = L->title.y + (L->title.h - h + 1) / 2 + hoty;
+    for (t = TITLE_TEXT; *t; t++) {
+        const TAGPU_ART_FRAME* c = tagpu_art_char(f, (unsigned char)*t);
+        int top = base - c->hoty;
         for (j = 0; j < c->h; j++)
             for (i = 0; i < c->w; i++) {
                 int dx = x + i, dy = top + j;
@@ -444,24 +515,17 @@ int tagpu_replays_files(TAGPU_UFO_FILE* f, int cap)
     unsigned char* px;
     int n = 0, s, k;
 
-    if (cap < 2) return 0;
-    s_guiLen = build_gui(s_gui, sizeof s_gui);
-    if (s_guiLen < 0) { rlog("replays: NOT armed - the generated " SCREEN " does not fit"); return 0; }
     px = (unsigned char*)malloc(SCR_W * SCR_H);
     if (!px) return 0;
-    f[n].path = GUI_PATH;
-    f[n].data = s_gui;
-    f[n].size = (unsigned)s_guiLen;
-    n++;
-    /* A style whose ground and font both fall back to retail's opens on retail's file. */
+    /* A style whose ground and font both fall back to retail's opens on retail's file; one whose
+       ground is its own opens on it, set into its own layout's title bar. */
     for (s = 0; s < 3 && n < cap; s++) {
         const TAGPU_ART_ENTRY* g = tagpu_art_entry(STYLES[s], "ground");
         const TAGPU_ART_ENTRY* t = tagpu_art_entry(STYLES[s], "font");
-        if (s > 0 && g && t && !strcmp(g->style, "retail") && !strcmp(t->style, "retail")) {
-            memcpy(s_groundName[s], s_groundName[0], sizeof s_groundName[s]);
+        s_layout[s] = NULL;
+        if (s > 0 && g && t && !strcmp(g->style, "retail") && !strcmp(t->style, "retail"))
             continue;
-        }
-        if (!compose_ground(STYLES[s], px)) {
+        if (!compose_ground(STYLES[s], STYLE_LAYOUT[s], px)) {
             rlog("replays: the %s style has no 640x480 ground or no title font", STYLES[s]);
             continue;
         }
@@ -470,19 +534,39 @@ int tagpu_replays_files(TAGPU_UFO_FILE* f, int cap)
         s_groundLen[s] = pcx_encode(px, SCR_W, SCR_H, s_groundPcx[s]);
         _snprintf(s_groundName[s], sizeof s_groundName[s], "IMPRPL%c", "RET"[s]);
         _snprintf(s_groundPath[s], sizeof s_groundPath[s], "bitmaps/%s.pcx", s_groundName[s]);
+        s_layout[s] = STYLE_LAYOUT[s];
         f[n].path = s_groundPath[s];
         f[n].data = s_groundPcx[s];
         f[n].size = s_groundLen[s];
         n++;
     }
     free(px);
-    if (!s_groundName[0][0]) {
+    if (!s_layout[0]) {
         rlog("replays: NOT armed - no retail ground");
         tagpu_replays_files_free();
         return 0;
     }
-    for (k = 1; k < 3; k++)
-        if (!s_groundName[k][0]) memcpy(s_groundName[k], s_groundName[0], sizeof s_groundName[k]);
+    for (s = 1; s < 3; s++)
+        if (!s_layout[s]) {
+            memcpy(s_groundName[s], s_groundName[0], sizeof s_groundName[s]);
+            s_layout[s] = s_layout[0];
+        }
+    /* the screens the styles open, each once */
+    for (k = 0; k < 2; k++) {
+        int len, used = 0;
+        for (s = 0; s < 3; s++) used |= s_layout[s] == LAYOUTS[k];
+        if (!used) continue;
+        len = n < cap ? build_gui(s_gui[k], sizeof s_gui[k], LAYOUTS[k]) : -1;
+        if (len < 0) {
+            rlog("replays: NOT armed - the generated %s does not fit", LAYOUTS[k]->screen);
+            tagpu_replays_files_free();
+            return 0;
+        }
+        f[n].path = LAYOUTS[k]->path;
+        f[n].data = s_gui[k];
+        f[n].size = (unsigned)len;
+        n++;
+    }
     return n;
 }
 
@@ -494,7 +578,11 @@ void tagpu_replays_files_free(void)
 
 int tagpu_replays_redirects(const char* name)
 {
-    return s_armed && name && !lstrcmpiA(name, SCREEN);
+    int s;
+    if (!s_armed || !name) return 0;
+    for (s = 0; s < 3; s++)
+        if (s_layout[s] && !lstrcmpiA(name, s_layout[s]->screen)) return 1;
+    return 0;
 }
 
 /* ================================================================================================
@@ -1156,6 +1244,17 @@ static int text_w(const char* t)
     return w;
 }
 
+/* one line of the font in force: the 'I' glyph's height, or the .FNT face's */
+static int line_h(void)
+{
+    const void* font = gaf_font();
+    const unsigned short* g;
+    if (!*(const void* const*)VA_FONTSTATE) return 0;
+    if (!font) return ((fnt_height_fn)VA_FNT_HEIGHT)();
+    g = ((glyph_fn)VA_GLYPH)(font, 'I');
+    return g ? g[1] : 0;
+}
+
 /* the 'I' height + 2 the row loop stops on (0x4A1C21, 0x4A1C1A) */
 static int row_floor(void)
 {
@@ -1235,7 +1334,7 @@ static void rows_build(void)
         }
         t[k] = 0;
         /* cut at the length's column, the length right-aligned 3 px in from the list's edge */
-        room = LIST_W - 4 - text_w(r->len) - 8;
+        room = s_cur->list.w - 4 - text_w(r->len) - 8;
         while (k > 0 && text_w(t) > room) t[--k] = 0;
         if (at + k + 1 > (int)sizeof s_blob) break;
         if (r->map_chars > k) r->map_chars = k;
@@ -1269,7 +1368,7 @@ static void player_text(char* t, unsigned cap, const char* name)
         while (k && k < full && n[k - 1] == ' ') n[--k] = 0;
         _snprintf(t, cap, "%s: ?", n);
         t[cap - 1] = 0;
-        if (!k || text_w(t) <= PLAYER_W) return;
+        if (!k || text_w(t) <= s_cur->pw) return;
         n[--k] = 0;
     }
 }
@@ -1298,6 +1397,20 @@ static void detail(char* gi, int sel)
 
 static void __stdcall rp_oncommand(void* gi);
 
+/* A bar's label, its text centred in the bar: the label draw puts a line's top at the record's y
+   (0x4A5A7B: 0x4A50E0 handed the record's top), so the record is moved to centre one line of the
+   font in force and made one line high, under the two lines past which it would wrap (0x4A5A36).
+   The draw reads the record at every repaint (0x4A5829), so the move holds from the first. */
+static void bar_label(char* ctrls, const char* name, const Rect* bar)
+{
+    int k = find_rec(ctrls, name), lh = line_h();
+    char* r;
+    if (!k || lh <= 0 || lh > bar->h) return;
+    r = ctrls + (size_t)k * STRIDE;
+    *(short*)(r + G_YPOS) = (short)(bar->y + (bar->h - lh) / 2);
+    *(short*)(r + G_H) = (short)lh;
+}
+
 /* The recording list's selection callback: the detail follows the selection however it moved. */
 static void __stdcall recs_selected(void* gi, void* rec)
 {
@@ -1309,11 +1422,15 @@ static void __stdcall recs_selected(void* gi, void* rec)
    palette (the main menu's stays in force, and the art is drawn in it), then the rows. */
 static void replays_open(char* gi)
 {
-    void* gm = ((gui_load_fn)VA_GUI_LOAD)(gi, SCREEN, GUI_FLAGS);
+    const Layout* L = s_layout[style_index(mod_style())];
+    void* gm;
     char* ctrls;
     double mb;
 
-    if (!gm) { rlog("replays: GUI_Load returned no " SCREEN); return; }
+    if (!L) return;
+    gm = ((gui_load_fn)VA_GUI_LOAD)(gi, L->screen, GUI_FLAGS);
+    if (!gm) { rlog("replays: GUI_Load returned no %s", L->screen); return; }
+    s_cur = L;
     *(void**)((char*)gm + GM_ONCMD) = (void*)rp_oncommand;
     *(void**)((char*)gm + GM_CTX) = NULL;
     ((gi_int_fn)VA_TAKESKEYS)(gi, 1);           /* as LOADGAME does, 0x4932E3 */
@@ -1326,6 +1443,8 @@ static void replays_open(char* gi)
     if (ctrls) {
         char why[200];
         int w = find_rec(ctrls, "WATCH");
+        bar_label(ctrls, "COUNT", &L->count);
+        bar_label(ctrls, "FOOTER", &L->footer);
         if (w && !tagpu_replay_watch_ready(why, sizeof why)) {
             *(unsigned short*)(ctrls + (size_t)w * STRIDE + G_GRAYED) |= 1;
             rlog("replays: Watch is grey: %s", why);
@@ -1351,7 +1470,7 @@ static char* recs_rec(char* gi, char** ctrls_out)
     char* top;
     char* ctrls = top_ctrls(gi, &top);
     char* r;
-    if (!ctrls || !s_gm || top != (char*)s_gm || !name_is(ctrls, SCREEN) || s_recsIdx < 1 ||
+    if (!ctrls || !s_gm || top != (char*)s_gm || !name_is(ctrls, s_cur->screen) || s_recsIdx < 1 ||
         s_recsIdx > rec_count(ctrls))
         return NULL;
     r = ctrls + (size_t)s_recsIdx * STRIDE;

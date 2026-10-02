@@ -3215,7 +3215,7 @@ void tagpu_menu_init(void)
     static const GafEnt RTENTS[1] = { { ART_VRTBG, VRT_W, VRT_H, draw_vrtbg } };
     static const GafEnt ENTS[1]  = { { ART_NAME,  PANEL_W, PANEL_H, draw_panel_frame } };
     static const GafEnt VENTS[1] = { { ART_VISBG, VP_W,    VP_H,    draw_visbg       } };
-    TAGPU_UFO_FILE f[10];
+    TAGPU_UFO_FILE f[11];             /* ours, six at most, and the Replays screen's five */
     char b[300];
     int len, vlen, rtlen, wrote, armed, visOk, redirected, nf, nrep;
     unsigned glen, vglen, rtglen;

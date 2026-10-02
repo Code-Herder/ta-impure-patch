@@ -171,6 +171,17 @@ exactly this against a 16-byte string. [BINARY-VERIFIED]
 | `+0x13A` | `quickkey` — **`u8`**, the ASCII accelerator (`'S'` for SINGLE, `'E'` for EXIT, matching the underlined letter on screen). The corpus calls it an `i16`; the high byte is a separate field. | [LIVE] |
 | `+0x13C` | `grayedout` — **`u16`, and only bit 0 is the flag**. The corpus calls it an `i32`; it is not. Both engine writers do a read-modify-write that preserves bits 1..15 — the `.GUI` parser at `0x4ADD3E` and `GUIGADGET_SetGrayed 0x4A1250` at `0x4A12D0`, each `xor/and 1/xor` then **`mov WORD`**. A 32-bit store clears those bits and `+0x13E`/`+0x13F` with them. | [BINARY-VERIFIED] `0x4ADD3E`, `0x4A12D0` |
 
+**The face a button draws** [DISASSEMBLED 2026-10-01]. At load (`0x4A7F70`, the stretch
+`0x4A7FC5..0x4A8111`) a button looks for a sequence of its own name in the screen's GAF, then in
+commongui; failing both, a `CHECKBOX`-flagged one takes `CHECKBOX` (`0x509908`), a staged one
+`stagebuttn%d` (`0x5098F8`, at most 4), and a plain one `BUTTONS0` (`0x5098EC`). Of a plain one's
+frames 0, 4, 8, … it keeps the one with the least `|w − frame w| + |h − frame h|` (`0x4A80C5..
+0x4A810F`) as its base frame (`+0x13B`) and zeroes every frame's hotspot (`0x4A80AC`), so the face
+is drawn at the record's corner at the face's own size whatever the record says (`0x4A6188`).
+Retail's `BUTTONS0` sizes, every fourth frame: 16×16, 321×20, 120×20, 96×20, 112×20, 80×20, 96×31
+(MEASURED in `commongui.gaf`; Escalation's `TAESC.gp3` has the same). A button whose rect is not
+one of these is drawn at the nearest one, over or short of its rect.
+
 ### 2.4 Listbox — `id 2`
 
 | Off | Field | Evidence |
