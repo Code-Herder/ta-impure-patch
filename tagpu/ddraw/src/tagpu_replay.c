@@ -4829,6 +4829,9 @@ static int seek_run(char* ta)
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
      point of T.
+   - `dock seek <T>`: the seek the dock's strip asks for, through its own entry point
+     (tagpu_replay_seek_request), which clamps T to the recording and takes no dump: a test drives
+     the dock's seek at a GameTime of its choosing, which a click on the strip cannot name exactly.
    - `cover <name>`: the coverage build's functions that ran, at once (tagpu_cover_write); any
      other build refuses it with a line. */
 /* `p` is a decimal u32 and nothing after it: 1 with its value */
@@ -4889,6 +4892,10 @@ static void trigger_read(void)
     if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
         u32_word(line + end + 4, &T)) {
         rt_arm(name, T);
+        return;
+    }
+    if (!strncmp(line, "dock seek ", 10) && u32_word(line + 10, &T)) {
+        tagpu_replay_seek_request(T);
         return;
     }
     if (!strncmp(line, "seek ", 5) && seek_words(line + 5, &T, dump, sizeof dump)) {

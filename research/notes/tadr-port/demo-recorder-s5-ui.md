@@ -292,6 +292,13 @@ stage for is put on the nearest preset (a tie goes to the slower).
 - Leave and No keep the dock; Leave and Yes reach the main menu, the browser reopens, the shell's
   stack is MAINMENU and REPLAYS, and the speed is the player's again;
 - the in-game menu over the dock: its buttons and the strip leave the click to the engine;
+- **the harness drives S5 on every landing** that touches the recorder: `tareplay.py`'s W process
+  on `stock-limits` and `wpn-badtgt` (the [completeness note](demo-recorder-completeness.md#the-replay-test-harness))
+  starts the playing through REPLAYS and Watch, has Watch refuse two edited copies, then uses
+  DKSPEED, the Options' OK (the store's `gamespeed` must stay the player's), DKPLAY, the dock's
+  seek (the trigger `dock seek <T>`, whose dump must compare EQUAL with the recording), DKPLAY
+  again, and Leave and Yes; `watch_refuse_engine` alone stays unreached, since the CD check it
+  reports never refuses in this exe;
 - RENDER's sprocket replaces the dock and gives it back; twenty such round trips cost 840 KB
   once, then nothing;
 - no hover state on a plain button; the engine's stage captions (`1x` .. `8x`) drawn at the

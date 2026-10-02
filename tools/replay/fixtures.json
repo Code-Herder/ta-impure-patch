@@ -42,7 +42,8 @@
   "stock-limits": {
    "load": "replay-four-ai.json",
    "dll": "stock",
-   "end": 1800
+   "end": 1800,
+   "watch": true
   },
   "nomapalert": {
    "load": "c2-nomapalert.json",
@@ -52,7 +53,8 @@
   "wpn-badtgt": {
    "load": "wpn-badtgt.json",
    "content": {"run": ["tools/extra_weapons_fixture.py", "{gamedir}"], "files": ["wpn-test.ufo", "wpn-badtgt.ufo"]},
-   "end": 1800
+   "end": 1800,
+   "watch": true
   },
   "b7-radar-hail": {
    "load": "b7-radar-hail.json",

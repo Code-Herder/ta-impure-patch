@@ -28,10 +28,19 @@ printed: T1 the first, T2..T4 the round trips, Tlast = T4. Four processes, each 
                  rt<T>-a and rt<T>-b around a rebuild in place) and a dump rt<T>c at T + 300
     Q  seek      `replay seek T1 --recording` in a fresh process, dump q<T1>
 
+and a fifth where fixtures.json gives the fixture `"watch": true`:
+
+    W  watch     the playing a player starts and drives (watch_lane): from the main menu's
+                 REPLAYS, Watch refuses two edited copies of the recording (another layout
+                 hash; a map no archive has, which the Start refuses), then plays it; the dock's
+                 DKSPEED, the in-game Options' OK with the store's gamespeed unchanged, DKPLAY to
+                 pause, the trigger `dock seek T1` (the dock's own seek entry), dump w<T1>,
+                 DKPLAY to resume, DKLEAVE and Yes back to the browser, and a second Watch
+
 and every check fails by name: the recording's end block and `tarec check`; L's dumps `tarec
-compare`; P's, R's and Q's capture dumps `tarec compare --puppet`; each round trip's line has
-residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL. Passing dumps are deleted unless
---keep.
+compare`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each round trip's line has
+residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
+claim. Passing dumps are deleted unless --keep.
 
 Each worker owns one tacli instance, tareplay-<k>, pinned to an Xvfb it reserves by -displayfd,
 for the whole run, and holds an exclusive lock on INSTANCES/tareplay-<k>.lock for as long: a k
@@ -56,10 +65,12 @@ import re
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import threading
 import time
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -583,6 +594,222 @@ def fresh(w, fx, rec, out, T):
         raise CouldNotRun(f"replay seek {T} --recording: {last(o)}")
 
 
+# ---- W: the browser's Watch and the dock --------------------------------------------------
+
+def header_copy(rec, dst, tag, edit):
+    """A copy of the recording `rec` at `dst` whose header entry `tag` holds edit(its bytes), of
+    the same length, the header block deflated again (or stored again) with both its CRCs: a
+    file the reader opens, which the replay's own checks then judge."""
+    data = Path(rec).read_bytes()
+    if data[:8] != tarec.REC_MAGIC:
+        raise CouldNotRun(f"{rec}: not a recording")
+    head = data[8:40]
+    magic, kind, flags, first, upto, _raw, packed, _crc_body, _crc_head = \
+        struct.unpack("<IHHIIIIII", head)
+    if magic != tarec.REC_BLOCK_MAGIC or kind != tarec.RB_HEADER:
+        raise CouldNotRun(f"{rec}: no header block")
+    body = data[40:40 + packed]
+    payload = bytearray(body if flags & tarec.RBF_STORED else zlib.decompress(body))
+    at, found = 0, False
+    while at + 4 <= len(payload):
+        t, n = struct.unpack_from("<HH", payload, at)
+        if t == tag:
+            new = edit(bytes(payload[at + 4:at + 4 + n]))
+            if len(new) != n:
+                raise CouldNotRun(f"{rec}: an edit of header entry {tag} changed its length")
+            payload[at + 4:at + 4 + n] = new
+            found = True
+        at += (4 + n + 3) & ~3
+    if not found:
+        raise CouldNotRun(f"{rec}: no header entry {tag}")
+    body = bytes(payload) if flags & tarec.RBF_STORED else zlib.compress(bytes(payload))
+    head = struct.pack("<IHHIIIII", magic, kind, flags, first, upto, len(payload), len(body),
+                       zlib.crc32(body))
+    head += struct.pack("<I", zlib.crc32(head))
+    Path(dst).write_bytes(data[:8] + head + body + data[40 + packed:])
+
+
+def other_layout(b):
+    """replay-layout.tsv's SHA-256 in hex, one digit changed: another exclusion file's."""
+    s = bytearray(b)
+    s[0] = ord("1") if s[0] != ord("1") else ord("2")
+    return bytes(s)
+
+
+def no_such_map(b):
+    """The skirmish settings' map, every character of its name replaced: a map no archive has."""
+    return bytes(ord("Q") if c else 0 for c in b)
+
+
+SPEED_CEIL = "*0x511DE8+0x38A4B:2"     # the game speed's ceiling, which the settings save stores
+SPEED_LIVE = "*0x511DE8+0x38A4D:2"
+PAUSE_WORD = "*0x511DE8+0x38A51:2"     # bit 0: paused
+TERRAIN = "The terrain for the selected map does not exist."    # the Start's own refusal
+
+
+def peek(w, spec):
+    rc, o = tacli("peek", w.name, spec, "--json", timeout=60)
+    if rc:
+        raise CouldNotRun(f"tacli peek {spec}: {last(o)}")
+    return int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
+
+
+def store_speed(w):
+    """The game speed the player's settings hold in the instance's registry store, which the
+    store rewrites on every change (tagpu_regstore.h)."""
+    f = w.gamedir / "tacli-state" / "registry.txt"
+    for ln in f.read_text(errors="replace").splitlines() if f.exists() else []:
+        parts = ln.split("\t")
+        if len(parts) == 4 and parts[1] == "gamespeed":
+            return int(parts[3])
+    raise CouldNotRun(f"no gamespeed in {f}")
+
+
+def ui(w, *args, timeout=60):
+    rc, o = tacli("ui", w.name, *args, timeout=timeout + 30)
+    if rc:
+        raise CouldNotRun(f"tacli ui {' '.join(map(str, args))}: {last(o)}")
+    return o
+
+
+def ui_on(w, gui, timeout):
+    ui(w, "wait", "--gui", gui, "--timeout", timeout, timeout=timeout)
+
+
+def browser_watch(w, log, row, name):
+    """Row `row` of the Replays browser selected and Watch pressed; the line that judged it:
+    `replay: playing <name>` or `replay: not playing <name>: <why>`. The browser names the file
+    it took, which must be `name`'s: the rows are newest first, as `watch_lane` dated them."""
+    n = len(log.lines)
+    ui(w, "select", "RECS", f"#{row}")
+    ui(w, "click", "WATCH")
+    took = log.wait(r"replays: Watch \S+", 30, n)
+    if not took or not took.rstrip().endswith(f" {name}.imprec"):
+        raise CouldNotRun(f"the browser's row {row} is not {name}.imprec: "
+                          f"{took.strip() if took else 'no Watch line in 30 s'}")
+    got = log.wait(rf"replay: (playing|not playing) {re.escape(name)}:", 240, n)
+    if not got:
+        raise CouldNotRun(f"Watch {name}: no verdict in 240 s")
+    return got[got.index("replay:"):].strip()
+
+
+def watch_lane(w, fx, rec, out, T):
+    """W: the playback started as a player starts it, through the Replays browser's Watch, and
+    driven through the dock: two copies of the recording refused, then the recording watched, its
+    speed changed on the dock, the in-game Options' OK (the settings save), a pause, the dock's
+    seek to T with dump w<T>, the resume, Leave, and a second Watch from the browser it returns to.
+    Returns its own checks, (name, verdict, detail) each; a claim that does not hold is Failed."""
+    fix, stem, res = fx["fix"], fx["name"], []
+    w.stop()
+    w.place(fix, fx["dll"])
+    rd = w.gamedir / "replays"
+    rd.mkdir(exist_ok=True)
+    copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_layout,
+               "it was recorded with another exclusion file (replay-layout.tsv)"),
+              (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
+    now = time.time()
+    for k, (name, tag, edit, _) in enumerate(copies):
+        header_copy(rec, rd / f"{name}.imprec", tag, edit)
+        os.utime(rd / f"{name}.imprec", (now - 60 * k, now - 60 * k))
+    shutil.copyfile(rec, rd / f"{stem}.imprec")
+    os.utime(rd / f"{stem}.imprec", (now - 60 * len(copies),) * 2)
+    log = Log(w)
+    rc, o = tacli("launch", w.name, "--defaults", "--keep-dll", timeout=LAUNCH_TIMEOUT)
+    if rc:
+        raise CouldNotRun(f"tacli launch: {last(o)}")
+    ui_on(w, "MAINMENU.GUI", 120)
+    ui(w, "click", "REPLAYS")
+    ui_on(w, "REPLAYS.GUI", 30)
+
+    # the refusals: the header's check (watch_refuse), then the Start's own, past the undoable
+    # steps (watch_undo); each notice answered, back to the browser
+    for row, (name, _, _, why) in enumerate(copies):
+        got = browser_watch(w, log, row, name)
+        if got != f"replay: not playing {name}: {why}":
+            raise Failed(f"Watch {name}: {got} (expected the refusal: {why})")
+        ui_on(w, "MSGBOX.GUI", 30)
+        ui(w, "click", "OK")
+        ui_on(w, "REPLAYS.GUI", 30)
+        res.append((f"W: Watch refuses {name}", PASS, got))
+
+    stored, ceil0 = store_speed(w), peek(w, SPEED_CEIL)
+    got = browser_watch(w, log, len(copies), stem)
+    if not got.startswith(f"replay: playing {stem}:"):
+        raise Failed(f"Watch {stem}: {got}")
+    ui_on(w, "DOCK.GUI", 60)
+    res.append((f"W: Watch plays {stem}", PASS, got))
+
+    # the dock's speed, then the settings save with it changed: the store keeps the player's
+    ui(w, "click", "DKSPEED")
+    nap(1.0)
+    ceil1, live1 = peek(w, SPEED_CEIL), peek(w, SPEED_LIVE)
+    if ceil1 == ceil0 or ceil1 not in (5, 10, 20, 40, 80) or live1 != ceil1:
+        raise Failed(f"the dock's speed: {ceil0} became ceiling {ceil1}, live {live1}")
+    rc, o = tacli("keys", w.name, "tab", timeout=60)
+    if rc:
+        raise CouldNotRun(f"tacli keys tab: {last(o)}")
+    ui_on(w, "ARMOPT.GUI", 20)
+    ui(w, "click", "PREFS")
+    ui_on(w, "PREFS.GUI", 20)
+    ui(w, "click", "PREV")
+    ui_on(w, "ARMOPT.GUI", 20)
+    after, ceil2 = store_speed(w), peek(w, SPEED_CEIL)
+    if after != stored or ceil2 != ceil1:
+        raise Failed(f"the settings save during the playing: the store's gamespeed {stored} -> "
+                     f"{after}, the ceiling {ceil1} -> {ceil2}")
+    ui(w, "click", "OK")
+    ui_on(w, "DOCK.GUI", 20)
+    res.append(("W: the dock's speed and the settings save", PASS,
+                f"speed {ceil0} -> {ceil1} on the dock; the save stored gamespeed {after}, the "
+                f"player's, and left the playing at {ceil2}"))
+
+    # pause, the dock's seek to T with its dump, resume
+    ui(w, "click", "DKPLAY")
+    nap(1.0)
+    g1 = w.gametime()
+    nap(1.5)
+    if not peek(w, PAUSE_WORD) & 1 or w.gametime() != g1:
+        raise Failed(f"the dock's pause: the pause word or GameTime moved (at {g1})")
+    n = len(log.lines)
+    w.trigger(f"dock seek {T}")
+    got = log.wait(rf"replay: {re.escape(stem)}: (at GameTime {T}, sought from|seek to {T} "
+                   rf"refused)|a seek to {T} from the dock refused", 60, n)
+    if not got or "sought from" not in got:
+        raise Failed(f"the dock's seek to {T}: {got.strip() if got else 'no line in 60 s'}")
+    arm_dump(w, log, f"w{T}", T)
+    ui(w, "click", "DKPLAY")
+    wait_dumps(log, [f"w{T}"], 120)
+    if peek(w, PAUSE_WORD) & 1:
+        raise Failed("the dock's resume: the pause word still set")
+    res.append(("W: the dock's pause, seek and resume", PASS, got[got.index("replay:"):].strip()))
+
+    # Leave: the teardown puts the player's speed back, and the browser returns
+    n = len(log.lines)
+    ui(w, "click", "DKLEAVE")
+    ui_on(w, "YESORNO.GUI", 20)
+    ui(w, "click", "CHOICE1")
+    if not log.wait(rf"replay: {re.escape(stem)} at its level's end", 120, n):
+        raise CouldNotRun("Leave: no level's end line in 120 s")
+    ui_on(w, "REPLAYS.GUI", 120)
+    back, ceil3 = store_speed(w), peek(w, SPEED_CEIL)
+    if back != stored or ceil3 != ceil0:
+        raise Failed(f"after Leave: the store's gamespeed {back}, the ceiling {ceil3}; the "
+                     f"player's were {stored} and {ceil0}")
+    res.append(("W: Leave", PASS, f"the browser back; gamespeed {back} stored, the ceiling "
+                                  f"{ceil3}, the player's"))
+
+    # a second Watch from the browser Leave returned to; its level writes the coverage, which
+    # holds the first level's teardown too (the bitmap is the process's)
+    got = browser_watch(w, log, len(copies), stem)
+    if not got.startswith(f"replay: playing {stem}:"):
+        raise Failed(f"the second Watch: {got}")
+    if fx["cover"]:
+        cover_ask(w, log, "W")
+    w.collect(out)
+    w.stop()
+    return res
+
+
 # ---- the checks -----------------------------------------------------------------------------
 
 def tarec_run(*args):
@@ -666,10 +893,20 @@ def checks(fx):
                         line or "no line"))
             a, b = out / "R" / f"dump-rt{T}-a.bin", out / "R" / f"dump-rt{T}-b.bin"
             compare(f"round trip {T}: A against B", "compare-dumps", rec, a, b, files=[a, b])
+    if ran.get("W") == "ran":
+        res += fx["wres"]
+        d = out / "W" / f"dump-w{Ts[0]}.bin"
+        compare(f"W w{Ts[0]} (the dock's seek, in a playing Watch started)", "compare",
+                "--puppet", rec, d, files=[d])
     return res
 
 
 # ---- the run --------------------------------------------------------------------------------
+
+def procs(fix):
+    """The processes a fixture runs: L, P, R and Q, and W where fixtures.json asks for it."""
+    return ("L", "P", "R", "Q") + (("W",) if fix.get("watch") else ())
+
 
 def build_dll(stock, cover):
     """The DLL a run uses and the make line that builds it."""
@@ -744,7 +981,7 @@ class Run:
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
                 h = tarec.header_only(str(fx["rec"]))
                 fx["viewed"] = h["options"]["viewed"]
-                for p in () if cost else ("P",) if fx["measure"] else ("P", "R", "Q"):
+                for p in () if cost else ("P",) if fx["measure"] else procs(fx["fix"])[1:]:
                     self.put((name, p))
             elif proc == "P" and fx["measure"]:
                 play(w, fx, fx["rec"], out, "P", [], [])
@@ -755,6 +992,8 @@ class Run:
                 arms = [(f"r{Ts[0]}", Ts[0])] + [(f"rt{T}c", T + CONTINUE) for T in Ts[1:]]
                 fx["rt"] = play(w, fx, fx["rec"], out, "R", arms, [n for n, _ in arms],
                                 [(f"rt{T}", T) for T in Ts[1:]])
+            elif proc == "W":
+                fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
             fx["procs"][proc] = "ran"
@@ -831,7 +1070,7 @@ def report(run, keep):
                 lines.append("   L NEVER RAN")
                 unrun = True
             continue
-        for proc in ("L", "P", "R", "Q"):
+        for proc in procs(fx["fix"]):
             if proc not in fx["procs"]:
                 lines.append(f"   {proc} NEVER RAN")
                 unrun = True

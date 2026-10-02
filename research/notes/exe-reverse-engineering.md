@@ -1113,6 +1113,14 @@ the measured runs and what they mean for the design are in the
   (`0x47B04C..0x47B08B`); then calls the seat fill `0x47A760` (`0x47B092`), `0x41DA30`, `0x430F00`,
   stores 2 at `main+0x2BC0` and changes state through `0x491C80(0x14)` (`0x47B097..0x47B0B0`). The
   loader thread comes after it.
+- **The CD check `0x41D6A0(disc)`** (stdcall, `ret 4`; AL nonzero when the disc is found) **never
+  refuses in this exe.** Its first test reads `0x50289C` and, when it is nonzero, returns `'.'`
+  (`0x41D6A0..0x41D6BD`); the dword is 1 in `pristine/TotalA.exe.pristine` and no instruction
+  writes it (its four references, `0x41D4C0`, `0x41D6A0`, `0x41D7B0` and `0x41D8A0`, all read).
+  Its callers are `0x41D7C4`, `0x41EF30`, `0x41F6A8`, `0x41FB7E`, `0x425F11`, `0x425F1C`,
+  `0x426108`, `0x426113`, `0x449C73` and `0x44AF65` [DISASSEMBLED 2026-10-02]. The replay's
+  Watch calls it as the Start does, so its refusal notice (`watch_refuse_engine`,
+  `tagpu_replay.c`) is reached by no game on this exe.
 - **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
   (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group, `+0xC` metal, `+0x10` energy,
   `+0x14` the colour (read by the fill and the seat setup below). Past them, the loader's type-2
