@@ -151,6 +151,8 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 #define INDEX_TMP        "replays\\index.tmp"
 #define INDEX_MAGIC      "IMPURE-REPLAYS-INDEX\t1"
 #define INDEX_CAP        (4u << 20)
+#define MARKS_MAX        64             /* a recording's bookmarks                               */
+#define MARK_GAP         30             /* the closest two bookmarks may be, in GameTime: 1 s    */
 
 /* ---- the per-mod table (the plan's *The per-mod table*) ---------------------------------------
    A mod is named by the engine's own strings: the config file and the main archive's format at
@@ -912,11 +914,13 @@ static void __stdcall mm_oncommand(void* gi)
 /* ================================================================================================
    The recordings and replays\index.dat
    ================================================================================================
-   The index is a cache that can always be rebuilt, but for two marks it alone holds: the
-   favourite flag and the last time a recording was played. One line per recording, keyed by its
-   file name and size:
-     name size format start last end fav played map nseats seat...    (tab-separated)
-   `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never.
+   The index is a cache that can always be rebuilt, but for three marks it alone holds: the
+   favourite flag, the last time a recording was played and its bookmarks. One line per recording,
+   keyed by its file name and size:
+     name size format start last end fav played map nseats seat... marks    (tab-separated)
+   `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never. `marks` is the
+   dock's bookmarks, comma-separated GameTimes inside [start, last], sorted; a line without the
+   field, as this version's first lines were written, has none.
    format 0 is a recording this build could not read. A recording whose line does not match is
    read again through recr_summary. The file is replaced whole, through a temporary file and a
    rename, so a crash leaves the old index or the new one. Lines for recordings the list does not
@@ -929,6 +933,7 @@ typedef struct {
     unsigned format, start, last, end, fav, played, nseats;
     char     map[RECR_TEXT];
     char     name[REC_PLAYERS][RECR_NAME];
+    unsigned nmarks, marks[MARKS_MAX];
 } Ent;
 
 typedef struct {
@@ -961,10 +966,34 @@ static int ent_find(const char* file)
     return -1;
 }
 
+static int uint_cmp(const void* a, const void* b)
+{
+    unsigned x = *(const unsigned*)a, y = *(const unsigned*)b;
+    return x < y ? -1 : x > y;
+}
+
+/* `text`'s comma-separated GameTimes into e->marks: at most MARKS_MAX, each inside the line's
+   [start, last], sorted; anything else is dropped. `text` is cut up. */
+static void marks_parse(char* text, Ent* e)
+{
+    char* p = text;
+    e->nmarks = 0;
+    while (*p && e->nmarks < MARKS_MAX) {
+        char* end;
+        unsigned long v = strtoul(p, &end, 10);
+        if (end != p && (*end == ',' || !*end) && v >= e->start && v <= e->last && e->last)
+            e->marks[e->nmarks++] = (unsigned)v;
+        p = strchr(p, ',');
+        if (!p) break;
+        p++;
+    }
+    if (e->nmarks > 1) qsort(e->marks, e->nmarks, sizeof e->marks[0], uint_cmp);
+}
+
 /* One index line into `e`; 0 when it is not one. `line` is NUL-terminated and is cut up. */
 static int ent_parse(char* line, Ent* e)
 {
-    char* f[10 + REC_PLAYERS];
+    char* f[11 + REC_PLAYERS];
     int n = 0, i;
     char* p = line;
     memset(e, 0, sizeof *e);
@@ -987,6 +1016,7 @@ static int ent_parse(char* line, Ent* e)
     e->nseats = strtoul(f[9], NULL, 10);
     if (e->nseats > REC_PLAYERS || (int)e->nseats > n - 10) e->nseats = 0;
     for (i = 0; i < (int)e->nseats; i++) lstrcpynA(e->name[i], f[10 + i], RECR_NAME);
+    if (n > 10 + (int)e->nseats) marks_parse(f[10 + e->nseats], e);
     return 1;
 }
 
@@ -1051,11 +1081,16 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
         sanitize(nm);
         at = gput(b, cap, at, "\t%s", nm);
     }
+    at = gput(b, cap, at, "\t");
+    for (i = 0; i < e->nmarks; i++) at = gput(b, cap, at, i ? ",%u" : "%u", e->marks[i]);
     return gput(b, cap, at, "\n");
 }
 
 /* The whole index, written beside the old one and renamed over it. On the game thread, in the
-   shell, where no simulation is waiting on it. */
+   shell, where no simulation is waiting on it, or on a level that plays a recording (the dock's
+   bookmarks): a playback is a skirmish, mode 2, with no peer, so the write can stall only the
+   playback's own frame. The rule against a file write inside an OnCommand (tagpu_menu.c) is for a
+   network game, which a playback never is. */
 static void index_save(void)
 {
     int cap = (int)INDEX_CAP, at, i;
@@ -1114,7 +1149,7 @@ static void summarize(Ent* e)
     unsigned i;
     _snprintf(path, sizeof path, "replays\\%s", e->file);
     path[sizeof path - 1] = 0;
-    e->format = e->start = e->last = e->end = e->nseats = 0;
+    e->format = e->start = e->last = e->end = e->nseats = e->nmarks = 0;
     e->map[0] = 0;
     if (recr_summary(path, &s, why, sizeof why)) {
         e->format = s.format;
@@ -1137,6 +1172,98 @@ static void summarize(Ent* e)
             if (dot) *dot = 0;
         }
     }
+}
+
+/* ---- the dock's bookmarks ---------------------------------------------------------------------
+   On the game thread, on a level that plays a recording, where the browser is closed: its rows are
+   rebuilt by scan() whenever it opens, so reading the index into s_ent here takes nothing from it. */
+
+/* `file`'s line of `size` in the index as it is on disk, made from the recording when the index
+   has none or has it for another size (its bookmarks then go: they were another file's); NULL
+   when the index is full */
+static Ent* mark_ent(const char* file, unsigned long long size)
+{
+    int k;
+    index_load();
+    k = ent_find(file);
+    if (k < 0) {
+        if (s_nent >= ENT_MAX) return NULL;
+        k = s_nent++;
+        memset(&s_ent[k], 0, sizeof s_ent[k]);
+        lstrcpynA(s_ent[k].file, file, FILE_MAX);
+        s_ent[k].size = ~0ull;
+    }
+    if (s_ent[k].size != size) {
+        s_ent[k].size = size;
+        summarize(&s_ent[k]);
+    }
+    return &s_ent[k];
+}
+
+static void mark_done(void)
+{
+    free(s_idxRaw);
+    s_idxRaw = NULL;
+}
+
+int tagpu_replays_marks_get(const char* file, unsigned long long size, unsigned* out, int cap)
+{
+    int k, n = 0;
+    index_load();
+    k = ent_find(file);
+    if (k >= 0 && s_ent[k].size == size)
+        for (; n < cap && n < (int)s_ent[k].nmarks; n++) out[n] = s_ent[k].marks[n];
+    mark_done();
+    return n;
+}
+
+int tagpu_replays_mark_add(const char* file, unsigned long long size, unsigned T)
+{
+    Ent* e = strlen(file) < FILE_MAX ? mark_ent(file, size) : NULL;
+    unsigned i, j;
+    if (!e) {
+        rlog("replays: bookmark at %u in %s refused: the index has no room for it", T, file);
+        mark_done();
+        return 0;
+    }
+    if (!e->format || T < e->start || T > e->last || e->nmarks >= MARKS_MAX) {
+        rlog("replays: bookmark at %u in %s refused: %s", T, file,
+             e->nmarks >= MARKS_MAX ? "it has 64 already" : "outside the recording");
+        mark_done();
+        return 0;
+    }
+    for (i = 0; i < e->nmarks; i++)
+        if ((T > e->marks[i] ? T - e->marks[i] : e->marks[i] - T) < MARK_GAP) {
+            rlog("replays: bookmark at %u in %s refused: one is at %u", T, file, e->marks[i]);
+            mark_done();
+            return 0;
+        }
+    for (i = 0; i < e->nmarks && e->marks[i] < T; i++) {}
+    for (j = e->nmarks; j > i; j--) e->marks[j] = e->marks[j - 1];
+    e->marks[i] = T;
+    e->nmarks++;
+    index_save();
+    mark_done();
+    rlog("replays: bookmark at %u in %s (%u now)", T, file, e->nmarks);
+    return 1;
+}
+
+int tagpu_replays_mark_remove(const char* file, unsigned long long size, unsigned T)
+{
+    Ent* e = strlen(file) < FILE_MAX ? mark_ent(file, size) : NULL;
+    unsigned i;
+    if (e)
+        for (i = 0; i < e->nmarks; i++)
+            if (e->marks[i] == T) {
+                memmove(&e->marks[i], &e->marks[i + 1], (e->nmarks - i - 1) * sizeof e->marks[0]);
+                e->nmarks--;
+                index_save();
+                mark_done();
+                rlog("replays: bookmark at %u in %s removed (%u left)", T, file, e->nmarks);
+                return 1;
+            }
+    mark_done();
+    return 0;
 }
 
 typedef struct { char file[FILE_MAX]; unsigned long long size; FILETIME mtime; } Found;

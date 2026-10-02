@@ -118,6 +118,11 @@
                                        its frames at +0x28, 8 bytes each                         */
 #define OFF_NSLOTS     0x14351      /* u16: the unit array's slots                                */
 #define OFF_GAMETIME   0x38A47
+#define OFF_SPEED_CEIL 0x38A4B      /* u16: the game speed the player chose, 10 = 1x                 */
+#define OFF_SPEED_LIVE 0x38A4D      /* u16: the speed the scheduler runs at, raised toward the
+                                       ceiling by its throttle (0x495465..0x49547B)               */
+#define OFF_PAUSE      0x38A51      /* u16: bit 0 the pause, the bit the Pause key flips
+                                       (0x4960AA..0x4960BC)                                       */
 #define OFF_MAPPED     0x14273      /* u16* the explored map, a bit a player (0x4845A9); its bytes
                                        are ([+0x14233]·[+0x14237]·2) >> 2 (0x483CF6, 0x4816B5)   */
 #define OFF_LOSTYPE    0x14281      /* u16: bit 3 clear makes the draw rebuild the fog grid from
@@ -141,6 +146,8 @@ typedef void (__cdecl* PFN_SaveSettings)(void);
 
 static RecReader* s_rd;             /* the recording this level plays                             */
 static char       s_name[MAX_PATH];  /* the request's name, or the browser's file stem          */
+static char       s_path[MAX_PATH];  /* its path, "replays\\<file>"                            */
+static struct { unsigned first, last; int ok; } s_span;   /* its summary's first and last GameTime */
 static unsigned   s_viewer;         /* V                                                          */
 static unsigned   s_view;           /* the viewed player: V for full visibility, or a seat         */
 static int        s_first;          /* the first step's checks are still to come                  */
@@ -206,6 +213,7 @@ static struct {
     unsigned char  set[20];         /* the settings' +0x108..+0x11B, as the player had them       */
     unsigned       difficulty;
     unsigned short each;
+    unsigned short speed;           /* the game speed's ceiling main+0x38A4B, as the player had it */
     /* The browser's Start writes the recording's seats and map where the stock Start finds the
        player's (THE BROWSER'S START); a tacli playback finds them already in the registry. */
     int            seats_saved;
@@ -233,6 +241,8 @@ static void replay_close(void)
 {
     recr_close(s_rd);
     s_rd = NULL;
+    s_path[0] = 0;
+    memset(&s_span, 0, sizeof s_span);
     s_first = s_dead = s_over = 0;
     s_notes = 0;
     memset(&s_st, 0, sizeof s_st);
@@ -555,6 +565,23 @@ static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
     tagpu_puppet_begin(seatv, localv);
 }
 
+/* The open recording's path and its first and last GameTime, for the dock (tagpu_dock.h): the
+   summary walks the block headers only. */
+static void span_read(const char* path)
+{
+    RecSummary sm;
+    char why[200];
+    snprintf(s_path, sizeof s_path, "%s", path);
+    memset(&s_span, 0, sizeof s_span);
+    if (recr_summary(path, &sm, why, sizeof why) && sm.last > sm.start) {
+        s_span.first = sm.start;
+        s_span.last = sm.last;
+        s_span.ok = 1;
+    } else {
+        tagpu_logf("replay: %s: no span for the dock: %s", path, why);
+    }
+}
+
 /* The seating, once everything it rests on has been checked: S-a's, for both routes. */
 static void seat(char* ta, const char* name, unsigned v, int view)
 {
@@ -596,6 +623,7 @@ static void __cdecl replay_fill(void)
         replay_close();
         return;
     }
+    span_read(path);
     seat(ta, name, v, view);
 }
 
@@ -614,6 +642,7 @@ static void __cdecl replay_options(void)
     memcpy(s_opt.set, set + SET_OPTIONS, sizeof s_opt.set);
     s_opt.difficulty = *(unsigned*)(ta + OFF_DIFFICULTY);
     s_opt.each = *(unsigned short*)(ta + OFF_EACH_MENU);
+    s_opt.speed = *(unsigned short*)(ta + OFF_SPEED_CEIL);
     s_opt.saved = 1;
     s_opt.played = s_opt.stale = 0;
     memcpy(set + SET_OPTIONS, &h->cmdrdeath, 4);
@@ -666,6 +695,11 @@ static int options_restore(char* ta)
     if (set) memcpy(set + SET_OPTIONS, s_opt.set, sizeof s_opt.set);
     *(unsigned*)(ta + OFF_DIFFICULTY) = s_opt.difficulty;
     *(unsigned short*)(ta + OFF_EACH_MENU) = s_opt.each;
+    /* both fields: the throttle only raises the live speed toward the ceiling
+       (0x495465..0x49547B), so a live 80 under a ceiling of 10 would stay 80, and a skirmish
+       keeps its speed into the next level (only mode 3 resets it, 0x4912C9, 0x49199F) */
+    *(unsigned short*)(ta + OFF_SPEED_CEIL) = s_opt.speed;
+    *(unsigned short*)(ta + OFF_SPEED_LIVE) = s_opt.speed;
     return 1;
 }
 
@@ -692,7 +726,11 @@ static int options_restore(char* ta)
    When the browser's Start put the recording's seat entries, map and seat count (main+0x38D81)
    in, they travel with the options: exchanged around each save, put back by the teardown. The
    save writes SkirmishMap from +0x11C and Player%dController..Energy from the entries below the
-   count (0x4314F0..0x43171D), so with those three exchanged it writes the player's own. */
+   count (0x4314F0..0x43171D), so with those three exchanged it writes the player's own.
+   The game speed's ceiling main+0x38A4B travels the same way: the save writes it to the registry's
+   `gamespeed` (0x43136B), and the dock changes it during a playback (tagpu_replay_speed_set), so
+   the save writes the player's speed and the teardown puts it back. A change the Options screen's
+   GAME speed slider makes during a playback is put back with the rest. */
 static void* s_saveRet;
 
 /* the live options and s_opt's, each put in the other's place */
@@ -701,7 +739,7 @@ static void options_exchange(char* ta)
     char* set = *(char**)(ta + OFF_SETTINGS);
     unsigned char t[sizeof s_opt.set];
     unsigned d = *(unsigned*)(ta + OFF_DIFFICULTY);
-    unsigned short e = *(unsigned short*)(ta + OFF_EACH_MENU);
+    unsigned short e = *(unsigned short*)(ta + OFF_EACH_MENU), sp;
     if (set) {
         memcpy(t, set + SET_OPTIONS, sizeof t);
         memcpy(set + SET_OPTIONS, s_opt.set, sizeof t);
@@ -712,6 +750,9 @@ static void options_exchange(char* ta)
     s_opt.difficulty = d;
     *(unsigned short*)(ta + OFF_EACH_MENU) = s_opt.each;
     s_opt.each = e;
+    sp = *(unsigned short*)(ta + OFF_SPEED_CEIL);
+    *(unsigned short*)(ta + OFF_SPEED_CEIL) = s_opt.speed;
+    s_opt.speed = sp;
 }
 
 static int __cdecl save_before(void* entry_esp)
@@ -4817,6 +4858,89 @@ void tagpu_replay_level_end(void)
     tagpu_puppet_end();
 }
 
+/* ---- THE DOCK'S REQUESTS (tagpu_dock.h) -----------------------------------------------------
+   Every caller is on the game thread: the dock's OnCommand from the pump's dispatch, its strip
+   click from the wndproc TA pumps on that thread, and its tick from the DrawGameScreen observer.
+   The fields written here are the player's own, which a playback level does not record
+   (replay-globals.tsv lists neither the speeds nor the pause word). */
+
+int tagpu_replay_live(void)
+{
+    return tagpu_puppet_on() && s_rd && !s_dead && !s_first;
+}
+
+int tagpu_replay_span(unsigned* first, unsigned* last)
+{
+    if (!tagpu_puppet_on() || !s_rd || !s_span.ok) return 0;
+    if (first) *first = s_span.first;
+    if (last) *last = s_span.last;
+    return 1;
+}
+
+const char* tagpu_replay_path(void)
+{
+    return tagpu_puppet_on() && s_rd && s_path[0] ? s_path : NULL;
+}
+
+/* THE SEEK, as tacli's `seek` asks for it: the frame visit before 0x4969CD consumes it, paused
+   frames included, on the game thread as this is, so a second request before the visit replaces
+   the first. T is clamped to [first + 1, last]: the seek writes GameTime T - 1 (seek_run), and the
+   reader refuses a T outside the recording before anything changes (recr_seek). */
+int tagpu_replay_seek_request(unsigned T)
+{
+    if (!tagpu_replay_live() || !s_span.ok) {
+        tagpu_logf("replay: a seek to %u from the dock refused: the level plays no recording", T);
+        return 0;
+    }
+    if (T < s_span.first + 1) T = s_span.first + 1;
+    if (T > s_span.last) T = s_span.last;
+    s_seek.T = T;
+    s_seek.dump[0] = 0;
+    s_seek.poison = 0;
+    s_seek.pending = 1;
+    tagpu_logf("replay: %s: seek to %u asked by the dock", s_name, T);
+    return 1;
+}
+
+int tagpu_replay_paused(void)
+{
+    const char* ta = ta_main();
+    return ta ? (*(const unsigned short*)(ta + OFF_PAUSE) & 1) : 0;
+}
+
+/* the Pause key's own read-modify-write of the word (0x4960AA..0x4960BC), without its packet 0x19:
+   a playback is a skirmish, mode 2, and has no peer */
+void tagpu_replay_pause(int on)
+{
+    char* ta = ta_main();
+    unsigned short w;
+    if (!ta || !tagpu_puppet_on() || !s_rd) return;
+    w = *(unsigned short*)(ta + OFF_PAUSE);
+    *(unsigned short*)(ta + OFF_PAUSE) = (unsigned short)((w & ~1u) | (on ? 1u : 0u));
+}
+
+int tagpu_replay_speed(void)
+{
+    const char* ta = ta_main();
+    return ta ? *(const unsigned short*)(ta + OFF_SPEED_CEIL) : 0;
+}
+
+/* THE SPEED, written into both the ceiling and the live speed. Only the presets 5, 10, 20, 40 and
+   80 (BOUND), and only while the player's speed is saved for the teardown to put back (s_opt.saved,
+   THE PLAYER'S SETTINGS): every speed written here has its restore. 40 and 80 are past
+   SetGameSpeed's clamp of 20 (0x490DF0), which this does not call; the scheduler has no clamp from
+   above, and the engine bounds what a frame can step itself: at most 5 ticks a frame, and the
+   live speed drops by 1 after 10 clamped frames in a row (0x4953EF..0x49547B). */
+int tagpu_replay_speed_set(unsigned gs)
+{
+    char* ta = ta_main();
+    if (!ta || !tagpu_puppet_on() || !s_rd || !s_opt.saved) return 0;
+    if (gs != 5 && gs != 10 && gs != 20 && gs != 40 && gs != 80) return 0;
+    *(unsigned short*)(ta + OFF_SPEED_CEIL) = (unsigned short)gs;
+    *(unsigned short*)(ta + OFF_SPEED_LIVE) = (unsigned short)gs;
+    return 1;
+}
+
 /* THE VIEWER'S SEAT. V is a record the playback seats for itself, and the only one whose PlayerInfo
    the recording does not describe: seat_level sets its watcher bit (+0x9B bit 6) and its side. The
    seat activation clears only bit 5 (0x464378); the front end's reset 0x4644D0 zeroes every
@@ -5084,6 +5208,7 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
     snprintf(path, sizeof path, "replays\\%s", file);
     s_rd = recr_open(path, why, sizeof why);
     if (!s_rd) return watch_refuse(gi, name, why);
+    span_read(path);
     h = recr_header(s_rd);
     if (!validate_header(h, why, sizeof why, &v) || !view_ok(h, view, why, sizeof why)) {
         replay_close();

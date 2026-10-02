@@ -15,6 +15,7 @@
 #include "hook.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
+#include "tagpu_dock.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
@@ -318,9 +319,10 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
        consumes is dropped whole -- no message and no virtual key state, which
        the engine polls -- and its release is dropped too, but always clears
        the key so the engine is never left holding a button. */
-    if (vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down))
+    if ((vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down)) ||
+        (vk == VK_RBUTTON && tagpu_menu_rclick(gx, gy, down)))
     {
-        if (!down) set_key(VK_LBUTTON, FALSE);
+        if (!down) set_key(vk, FALSE);
         return;
     }
 
@@ -379,17 +381,25 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
        message into game space; the preceding WM_MOUSEMOVE has already put the
        game-space point there, and it is the same value the injected path
        hands the same function. */
-    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP)
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP)
     {
         int cx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
         int cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+        int took = msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP
+                 ? tagpu_menu_click(cx, cy, msg == WM_LBUTTONDOWN)
+                 : tagpu_menu_rclick(cx, cy, msg == WM_RBUTTONDOWN);
 
-        if (tagpu_menu_click(cx, cy, msg == WM_LBUTTONDOWN))
+        if (took)
         {
             *result = 0;
             return TRUE;
         }
     }
+
+    /* The window lost the mouse: a release may never come, so the dock's drag ends here rather
+       than leaving its ghost playhead up until the next press. The messages go on as before. */
+    if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam))
+        tagpu_dock_cancel_press();
 
     if (!tagpu_shield_on())
         return FALSE;

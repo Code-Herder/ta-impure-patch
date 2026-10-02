@@ -48,6 +48,23 @@ void tagpu_replay_blast(const char* unit);
    ends, the skirmish settings get back what the player had, and the puppet table is cleared. */
 void tagpu_replay_level_end(void);
 
+/* The watching dock's requests (tagpu_dock.h), on the game thread.
+   live: the level plays a recording and its first step has played, which was not refused.
+   span: the recording's first and last GameTime, from its summary at the open; 0 when none.
+   path: "replays\\<file>" while a recording is open, else NULL.
+   seek_request: a seek to T, clamped to [first + 1, last], for the next frame visit; 0 refused.
+   paused / pause: bit 0 of main+0x38A51, the Pause key's bit.
+   speed / speed_set: the game speed's ceiling main+0x38A4B, 10 = 1x; speed_set takes 5, 10, 20, 40
+   or 80 and writes the live speed too, and the teardown puts the player's back. */
+int  tagpu_replay_live(void);
+int  tagpu_replay_span(unsigned* first, unsigned* last);
+const char* tagpu_replay_path(void);
+int  tagpu_replay_seek_request(unsigned T);
+int  tagpu_replay_paused(void);
+void tagpu_replay_pause(int on);
+int  tagpu_replay_speed(void);
+int  tagpu_replay_speed_set(unsigned gs);
+
 /* tagpu_reclaim's teardown wrap, once 0x491B60 has returned, on the thread that entered it: V's
    PlayerInfo gets back what the Start's fill left in it. */
 void tagpu_replay_level_after(void);
