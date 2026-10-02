@@ -2,13 +2,18 @@
 """tarec -- reads an Impure demo recording (research/notes/tadr-port/demo-recorder-skirmish-slice.md).
 
   tools/replay/tarec.py info  FILE           the header, the blocks, the events and how the
-                                             recording ended
+                                             recording ended; its timelines and how each ended
   tools/replay/tarec.py check FILE           rebuild the world from the stream and require it to
                                              equal every snapshot the file carries, and every
                                              change of the world between two iterations to have
                                              the events that explain it
   tools/replay/tarec.py compare FILE DUMP... rebuild the world to each dump's GameTime and require
                                              it to equal the dump, byte for byte
+  tools/replay/tarec.py segments FILE        each timeline's segment of the file and its bytes,
+                                             then the SHA-256 of the original's
+  tools/replay/tarec.py compare-fork FILE N  timeline N's first iteration against its parent's
+                                             chain at fork_at, less what the takeover's rebuild
+                                             makes its own (fork_view)
   tools/replay/tarec.py compare --puppet FILE DUMP...
                                              the same for dumps a playing of FILE took, less what
                                              a puppet host keeps as its own (puppet_view), with
@@ -44,6 +49,9 @@
                                              that lies inside the main block, an engine pool or
                                              Impure's DLL: an address recorded as a value
 
+  check, compare and compare --puppet take --timeline N: the chain of timeline N, read across
+  each fork it descends from.
+
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
@@ -62,6 +70,12 @@ hash as well (`info` shows it), which the replay's seek compares with its own de
 globals image is replay-globals.tsv's fields, read through tools/replay-globals-gen.py where a
 command needs their names or classes. The explored map is carried whole at the first iteration,
 in every snapshot and in every dump, and as runs of changed bytes between.
+
+THE SEGMENTS: a file is the magic and one or more segments, each an RB_HEADER and its blocks, every
+one after the first right after an RB_END and naming its timeline (RT_TIMELINE): a takeover's fork,
+appended to the file it was played from. A chain of timelines is read as the DLL's reader reads it
+(tagpu_recreader.c): each segment to the GameTime before its child's fork_at, where the child's
+first iteration replaces the world whole.
 
 Standard library only.
 """
@@ -102,6 +116,8 @@ REC_IMAGE_CHUNK = 0x8000
 REC_MAPPED_CHUNK = 0x8000
 REC_MAPPED_RUNS = 0x7000
 PL_MAPBIT = 0x146                         # a player record's bit in the explored map (0x48194B)
+REC_INFO_AT = 0x14C                       # PlayerInfo's bytes in a player image
+INFO_TYPE = 0x94                          # PlayerInfo's copy of the record's type (0x463C6F)
 
 
 def mapped_bytes(w, h):
@@ -134,6 +150,8 @@ ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12)     # an RK_EV_FEATURE's arguments after 
 FS_SITES = 6
 
 RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP = 1, 2, 3, 4, 5
+RB_BOUNDARY = -1            # load()'s marker of a fork in a chain's blocks: no block of the file
+RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
             RB_MINIMAP: "minimap"}
 RBF_STORED = 1
@@ -141,7 +159,7 @@ RBF_STORED = 1
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
  RT_UNITDEFS, RT_PLAYER, RT_LEVER, RT_LAYOUT, RT_TABLE, RT_OPTIONS, RT_SETTINGS_MAP,
  RT_WEAPONS, RT_FEATURES, RT_GLOBALS, RT_PROJECTILES, RT_FRAME, RT_DLL, RT_FIELDS,
- RT_GAME_VERSION, RT_ARCHIVE, RT_MODPRINT) = range(1, 26)
+ RT_GAME_VERSION, RT_ARCHIVE, RT_MODPRINT, RT_TIMELINE) = range(1, 27)
 (RT_END_REASON, RT_LAST, RT_ITERATIONS, RT_CORRECTIONS, RT_BAD_IDS, RT_RING_HIGH, RT_OFF_THREAD,
  RT_UNCREDITED, RT_UNOBSERVED, RT_GAME_END, RT_SEAT_END) = range(32, 43)
 RESULTS = {0: "unknown", 1: "won", 2: "lost"}
@@ -156,7 +174,8 @@ END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full
                   "nested deeper than the capture tracks",
                9: "INCOMPLETE: the projectile pool was not the one it began with, or its count "
                   "was past its records",
-               10: "INCOMPLETE: the explored map was not the one it began with"}
+               10: "INCOMPLETE: the explored map was not the one it began with",
+               11: "INCOMPLETE: a later timeline ended it at its last complete block"}
 
 
 class Unreadable(Exception):
@@ -165,10 +184,10 @@ class Unreadable(Exception):
 
 # ---- blocks ----------------------------------------------------------------------------------
 
-def blocks(path, sizes=None):
+def blocks(path, sizes=None, offsets=None):
     """(kind, first, last, raw payload) for each complete block, and why the reading stopped
     (None at a clean end of the file); with `sizes`, (kind, first, last, raw, packed) of each
-    block appended to it."""
+    block appended to it, and with `offsets` its bytes [start, end) in the file."""
     with open(path, "rb") as f:
         data = f.read()
     if data[:8] != REC_MAGIC:
@@ -193,6 +212,8 @@ def blocks(path, sizes=None):
         out.append((kind, first, last, payload))
         if sizes is not None:
             sizes.append((kind, first, last, raw, packed))
+        if offsets is not None:
+            offsets.append((at, at + 32 + packed))
         at += 32 + packed
     return out, None
 
@@ -286,6 +307,8 @@ def header(payload):
             h["modprint"] = u32
             if len(b) >= 8:
                 h["archives_mounted"] = struct.unpack_from("<I", b, 4)[0]
+        elif tag == RT_TIMELINE and len(b) == 12:
+            h["timeline"] = struct.unpack_from("<III", b)
         elif tag == RT_FIELDS:
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
@@ -722,26 +745,154 @@ def snapshot_world(payload, slots, tables, dims, base=None):
     return w
 
 
-def load(path, sizes=None):
-    bl, stop = blocks(path, sizes)
+def segments(bl, offsets=None):
+    """The file's segments, as the DLL's scan finds them (tagpu_recreader.c, segs_scan): a new one
+    at each RB_HEADER that follows an RB_END, to the first block that is neither -- an end that no
+    header follows ends the file there. Each a dict: id, parent and fork_at (RT_TIMELINE; 0 for the
+    first), its header, its blocks (its header block first), first and last (its stream's, None
+    for none), end_reason (None without an end block) and, with `offsets`, its bytes [start, end).
+    Refused by name: more than RECR_TIMELINES segments, a fork that names no timeline, an id used
+    twice, or a parent that is not an earlier segment with a lower id."""
+    segs, after_end = [], True
+    for i, blk in enumerate(bl):
+        kind, first, last, payload = blk
+        if after_end:
+            if kind != RB_HEADER:
+                break
+            h = header(payload)
+            if segs and "timeline" not in h:
+                raise Unreadable(f"the segment at block {i} names no timeline")
+            tid, parent, fork_at = h["timeline"] if segs else (0, 0, 0)
+            if len(segs) == RECR_TIMELINES:
+                raise Unreadable(f"the file holds more than {RECR_TIMELINES} timelines")
+            seg = {"id": tid, "parent": parent, "fork_at": fork_at, "header": h, "blocks": [],
+                   "first": None, "last": None, "end_reason": None,
+                   "range": list(offsets[i]) if offsets else None}
+            segs.append(seg)
+            after_end = False
+        elif kind == RB_HEADER:
+            raise Unreadable(f"a header block (block {i}) inside timeline {seg['id']}")
+        seg["blocks"].append(blk)
+        if offsets:
+            seg["range"][1] = offsets[i][1]
+        if kind == RB_STREAM:
+            if seg["first"] is None:
+                seg["first"] = first
+            seg["last"] = last
+        elif kind == RB_END:
+            seg["end_reason"] = end(payload).get(RT_END_REASON)
+            after_end = True
+    seen = set()
+    for k, seg in enumerate(segs):
+        if seg["id"] in seen:
+            raise Unreadable(f"timeline {seg['id']} twice in the file")
+        if k and (seg["parent"] not in seen or seg["parent"] >= seg["id"]):
+            raise Unreadable(f"timeline {seg['id']} names parent {seg['parent']}, which is not an "
+                             f"earlier timeline")
+        seen.add(seg["id"])
+    return segs
+
+
+def shape_differs(a, b):
+    """The first field in which a segment's header differs from the first header, or None: the
+    reader's bound that keeps the world sized from the first header for every segment."""
+    for key in ("slots", "units_each", "unitdefs", "weapons", "features", "projectiles", "layout",
+                "globals", "settings_map"):
+        if a.get(key) != b.get(key):
+            return key
+    if [p["index"] for p in a["players"]] != [p["index"] for p in b["players"]]:
+        return "seats"
+    if a["tables"] != b["tables"]:
+        return "declared tables"
+    return None
+
+
+def chain(segs, n):
+    """Timeline n and its ancestors, root first, each fork inside its parent's iterations and
+    every segment's header the first's in shape; Unreadable naming the pair or the field."""
+    by = {s["id"]: s for s in segs}
+    if n not in by:
+        raise Unreadable(f"the recording has no timeline {n}")
+    out = [by[n]]
+    while out[-1]["id"]:
+        out.append(by[out[-1]["parent"]])
+    out.reverse()
+    for p, c in zip(out, out[1:]):
+        if (p["first"] is None or c["first"] is None or not p["first"] < c["fork_at"]
+                or c["fork_at"] - 1 > p["last"] or c["first"] != c["fork_at"]):
+            raise Unreadable(f"timeline {c['id']}, from GameTime {c['first']}, forks from "
+                             f"timeline {p['id']} at GameTime {c['fork_at']}, outside its GameTime "
+                             f"{p['first']} to {p['last']}")
+        f = shape_differs(c["header"], out[0]["header"])
+        if f:
+            raise Unreadable(f"timeline {c['id']} differs from the recording in its {f}")
+    return out
+
+
+def load(path, sizes=None, timeline=0):
+    """(the first header, the chain's blocks, why the reading stopped). The blocks of timeline 0
+    are the first segment's alone, as they were written, whatever follows; timeline N's are each
+    chain segment's to the GameTime before its child's fork_at, the child's header replaced by a
+    marker (RB_BOUNDARY, fork_at, fork_at, the child's header), then the next. `stop` is the
+    file's when the chain's last segment is the file's last, else None."""
+    offsets = []
+    bl, stop = blocks(path, sizes, offsets)
     if not bl or bl[0][0] != RB_HEADER:
         raise Unreadable(f"{path}: no header block" + (f" ({stop})" if stop else ""))
-    return header(bl[0][3]), bl, stop
+    segs = segments(bl, offsets)
+    ch = chain(segs, timeline)
+    if ch[-1] is not segs[-1]:
+        stop = None
+    if len(ch) == 1:
+        if sizes is not None:
+            del sizes[len(ch[0]["blocks"]):]
+        return segs[0]["header"], ch[0]["blocks"], stop
+    out = []
+    for i, seg in enumerate(ch):
+        cut = ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else None
+        if i:
+            out.append((RB_BOUNDARY, seg["fork_at"], seg["fork_at"], seg["header"]))
+        for blk in seg["blocks"][1 if i else 0:]:
+            if cut is None or blk[0] == RB_HEADER or blk[1] <= cut:
+                out.append(blk)
+    return segs[0]["header"], out, stop
 
 
 def stream_to(h, bl, want=None, on_snapshot=None, on_record=None):
-    """The world the stream builds, to the end of iteration `want` (or of the file). Calls
+    """The world the stream builds, to the end of iteration `want` (or of the blocks). Calls
     on_snapshot(world, snapshot payload) at each snapshot block on the way, and
     on_record(world, kind, body) after each record is applied -- and with kind None before a TICK
     is, while the world is still the iteration's before it. The world's `base` is its grid at the
-    end of the first iteration, which a snapshot's cells differ from."""
+    end of its segment's first iteration, which a snapshot's cells differ from.
+    Across a chain (load's RB_BOUNDARY markers) each segment is read to the GameTime before the
+    next fork_at, its snapshots past that unread, and at the marker a fresh world, the child's
+    header's seats and viewer, takes the child's first iteration whole (the reader's invariant,
+    tagpu_recreader.c); on_record(world, RB_BOUNDARY, None) says so first, with the parent's."""
     w = World(h["slots"], h["tables"], h)
+    marks = [blk[1] for blk in bl if blk[0] == RB_BOUNDARY]
+    cut = marks.pop(0) - 1 if marks else None
+    skip = False
     for kind, first, last, payload in bl[1:]:
-        if kind == RB_SNAPSHOT and on_snapshot:
+        if kind == RB_BOUNDARY:
+            w.whole(True)
+            if want is not None and w.tick is not None and w.tick >= want:
+                return w
+            if on_record:
+                on_record(w, RB_BOUNDARY, None)
+            w = World(h["slots"], h["tables"], payload)
+            cut = marks.pop(0) - 1 if marks else None
+            skip = False
+            continue
+        if skip:
+            continue
+        if kind == RB_SNAPSHOT and on_snapshot and (cut is None or last <= cut):
             on_snapshot(w, payload)
         if kind != RB_STREAM:
             continue
         for rk, b in records(payload):
+            if rk == RK_TICK and cut is not None and struct.unpack_from("<I", b)[0] > cut:
+                skip = True
+                break
             if rk == RK_TICK and w.tick is not None and w.base is None:
                 w.whole(True)
                 w.base = bytes(w.grid)
@@ -797,6 +948,11 @@ class EventCheck:
     def on_record(self, w, kind, b):
         if kind is None:
             self.before_tick(w)
+            return
+        if kind == RB_BOUNDARY:
+            # the child's first iteration replaces the world: no step leads from the parent's
+            self.finish(w)
+            self.open, self.in_events, self.events, self.pending = False, False, [], None
             return
         if kind == RK_TICK:
             # apply() has already moved w.tick on; the iteration before ended with the last record
@@ -956,11 +1112,50 @@ def cmd_info(path):
         print("  INCOMPLETE: no end block" + (f" ({stop})" if stop else ""))
     if stop:
         print(f"  read to its last complete block: {stop}")
+    segs, _ = file_segments(path)
+    print(f"  timelines: {len(segs)}")
+    for seg in segs:
+        ends = [b for b in seg["blocks"] if b[0] == RB_END]
+        how = (END_REASONS.get(seg["end_reason"], seg["end_reason"]) if ends
+               else "INCOMPLETE: no end block")
+        print(f"  timeline {seg['id']}" + (f", parent {seg['parent']}, fork_at {seg['fork_at']}"
+                                           if seg["id"] else ", the original")
+              + f": GameTime {seg['first']} to {seg['last']}, bytes {seg['range'][0]} to "
+                f"{seg['range'][1]}; {how}")
+        if ends:
+            e = end(ends[0][3])
+            if RT_GAME_END in e:
+                print(f"    the game's end flags 0x{e[RT_GAME_END]:02x}")
+            for seat, res, cmdr, defeat in e["seats"]:
+                print(f"    seat {seat}: {RESULTS.get(res, res)}, commander died at GameTime "
+                      f"{cmdr or '-'}, defeated at {defeat or '-'}")
     return 0
 
 
-def cmd_check(path):
-    h, bl, stop = load(path)
+def file_segments(path):
+    """The file's segments with their byte ranges, and why the reading stopped."""
+    offsets = []
+    bl, stop = blocks(path, None, offsets)
+    return segments(bl, offsets), stop
+
+
+def cmd_segments(path):
+    """One line per segment, then the SHA-256 of the original's bytes: what a fork's writer must
+    leave as it was."""
+    import hashlib
+    segs, stop = file_segments(path)
+    for seg in segs:
+        print(f"timeline {seg['id']}: bytes {seg['range'][0]} to {seg['range'][1]}")
+    if stop:
+        print(f"read to its last complete block: {stop}")
+    with open(path, "rb") as f:
+        data = f.read(segs[0]["range"][1])
+    print(f"original sha256 {hashlib.sha256(data).hexdigest()}")
+    return 0
+
+
+def cmd_check(path, timeline=0):
+    h, bl, stop = load(path, timeline=timeline)
     bad, seen = 0, 0
     gnames = known_names(h)
 
@@ -1035,6 +1230,69 @@ def puppet_view(w, viewer, radar=False):
     w.players[viewer] = bytearray(REC_PLAYER_IMAGE)
     w.ctl = [0] * REC_PLAYERS
     w.view = [0, 0]
+
+
+FORK_NODE = ((0x05, 1), (0x06, 4), (0x0A, 4), (0x4E, 4), (0x52, 4), (0x32, 4))
+FORK_NODE_FLAGS = 0x600000          # +0x42 bits 21 (seen) and 22 (stopbuilding)
+
+
+def fork_view(a, b, ha, hb):
+    """A parent's world at fork_at and its fork's first iteration less what the takeover's rebuild
+    makes its own, decision D2's list and nothing else: (a) every order node's handler
+    state, which the rebuild restarts -- +0x05, +0x06, +0x0A, +0x4E, +0x52, +0x32 and +0x42's bits
+    21 and 22; (b) the player images of every record that is not a seat of the fork's header, the
+    viewer's and the deactivated records alike; (c) the controllers and the controlled and viewed
+    players, and PlayerInfo +0x94 of each seat whose controller the two headers give differently;
+    (d) the contact bits by puppet_view's rule, bit 12 always and bits 8-10 too unless the two
+    worlds view the same player."""
+    seats = {p["index"] for p in hb["players"]}
+    ctl_a = {p["index"]: p["controller"] for p in ha["players"]}
+    ctl_b = {p["index"]: p["controller"] for p in hb["players"]}
+    mask = 0x1000 if a.view[1] == b.view[1] else 0x1700
+    for w in (a, b):
+        for img in w.lists.values():
+            for at in range(0, len(img), REC_ORDER_IMAGE):
+                for off, size in FORK_NODE:
+                    img[at + off:at + off + size] = bytes(size)
+                v = struct.unpack_from("<I", img, at + 0x42)[0] & ~FORK_NODE_FLAGS
+                struct.pack_into("<I", img, at + 0x42, v)
+        for i in range(REC_PLAYERS):
+            if i not in seats:
+                w.players[i] = bytearray(REC_PLAYER_IMAGE)
+            elif ctl_a.get(i) != ctl_b.get(i):
+                w.players[i][REC_INFO_AT + INFO_TYPE] = 0
+        w.ctl = [0] * REC_PLAYERS
+        w.view = [0, 0]
+        for img in w.units.values():
+            struct.pack_into("<I", img, U_STATE,
+                             struct.unpack_from("<I", img, U_STATE)[0] & ~mask)
+
+
+def cmd_compare_fork(path, n):
+    """Timeline n's first iteration, the world the takeover's rebuild made, against its parent's
+    chain at fork_at, through fork_view."""
+    segs, _ = file_segments(path)
+    c = chain(segs, n)[-1]
+    if not c["id"]:
+        raise Unreadable("timeline 0 is the original: it forks from nothing")
+    T = c["fork_at"]
+    hp, blp, _ = load(path, timeline=c["parent"])
+    a = stream_to(hp, blp, want=T)
+    if a.tick != T:
+        print(f"{path}: timeline {c['parent']}'s chain reads to GameTime {a.tick}, not to "
+              f"timeline {n}'s fork_at {T}")
+        return 2
+    b = stream_to(c["header"], c["blocks"], want=T)
+    if b.tick != T:
+        print(f"{path}: timeline {n}'s first iteration is GameTime {b.tick}, not {T}")
+        return 2
+    fork_view(a, b, hp, c["header"])
+    lines, k = a.differences(b, hp["tables"], c["header"]["tables"], gnames=known_names(hp))
+    print(f"{path}: timeline {n} at GameTime {T} against timeline {c['parent']}'s chain, "
+          f"{len(b.units)} live units: " + ("EQUAL" if not k else f"{k} DIFFERENCES"))
+    for line in lines:
+        print("  " + line.replace("dump", f"timeline {n}"))
+    return 1 if k else 0
 
 
 def _generator(name):
@@ -1121,8 +1379,8 @@ def known_names(h):
         return None
 
 
-def cmd_compare(path, dumps, puppet=False):
-    h, bl, stop = load(path)
+def cmd_compare(path, dumps, puppet=False, timeline=0):
+    h, bl, stop = load(path, timeline=timeline)
     status = 0
     held = puppet_rows() if puppet else None
     gslots = globals_list(h.get("globals"))[2] if puppet else None
@@ -1736,6 +1994,15 @@ def cmd_scan(path, dump):
 
 
 def main(argv):
+    timeline = 0
+    if "--timeline" in argv:
+        k = argv.index("--timeline")
+        if argv[1:2] not in (["check"], ["compare"]) or k + 1 >= len(argv) or \
+                not argv[k + 1].isdigit():
+            print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+            return 2
+        timeline = int(argv[k + 1])
+        argv = argv[:k] + argv[k + 2:]
     puppet = argv[2:3] == ["--puppet"] and argv[1:2] == ["compare"]
     images = argv[2:3] == ["--images"] and argv[1:2] == ["compare"]
     if puppet or images:
@@ -1744,7 +2011,10 @@ def main(argv):
     if argv[1:2] == ["compare-counts"] and len(argv) == 9 and argv[7] == "--absent":
         absent, argv = argv[8], argv[:7]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
-                                        "compare-counts", "images-gate", "scan") or \
+                                        "compare-counts", "images-gate", "scan", "segments",
+                                        "compare-fork") or \
+            (argv[1] == "segments" and len(argv) != 3) or \
+            (argv[1] == "compare-fork" and (len(argv) != 4 or not argv[3].isdigit())) or \
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
             (argv[1] == "compare-dumps" and len(argv) != 5) or \
             (argv[1] in ("counts", "scan") and len(argv) != 4) or \
@@ -1756,7 +2026,11 @@ def main(argv):
         if argv[1] == "info":
             return cmd_info(argv[2])
         if argv[1] == "check":
-            return cmd_check(argv[2])
+            return cmd_check(argv[2], timeline)
+        if argv[1] == "segments":
+            return cmd_segments(argv[2])
+        if argv[1] == "compare-fork":
+            return cmd_compare_fork(argv[2], int(argv[3]))
         if images:
             return cmd_images(argv[2], argv[3])
         if argv[1] == "compare-dumps":
@@ -1771,7 +2045,7 @@ def main(argv):
         if argv[1] == "compare-counts":
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
                 Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"))
-        return cmd_compare(argv[2], argv[3:], puppet)
+        return cmd_compare(argv[2], argv[3:], puppet, timeline)
     except (Unreadable, OSError, zlib.error, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)
         return 2

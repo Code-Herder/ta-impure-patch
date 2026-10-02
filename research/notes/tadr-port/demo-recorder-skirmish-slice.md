@@ -2072,6 +2072,38 @@ only S5's browser calls them, landed `UNCOVERED` by the owner's decision of 2026
 **Left:** S5's fourth ask, a recording that starts mid-game, belongs with S4d's suspend and resume
 of the recorder.
 
+### S4b — the takeover and its fork
+
+**Built.** A level that plays a recording becomes a live skirmish at GameTime T, with player P human,
+every other recorded seat an AI and the viewer's seat dropped, and the game after T is recorded as a
+new timeline appended to the same file. The takeover is the seek in its TAKEOVER mode; the steps, the
+invariants, the file's segments, the fork's handle and the residuals are in
+[the takeover note](demo-recorder-s4-takeover.md).
+
+**Decided** (2026-10-02, with the owner):
+- **D1**: the order nodes restart in the constructor's state, the builders adopt their frames, and
+  Paralyze and BuildWeapon resume (OQ-A). VTOL_MobileBuild's orphaned frame and the adopted builders'
+  COB pose are accepted residuals.
+- **D2**: `tarec compare-fork` excludes the node state D1 restarts, the records outside the fork's
+  seats, the roles that changed and the contact bits by the puppet view's rule, and nothing else.
+- **D3**: a fork is always recorded; a takeover whose file cannot be appended is refused before the
+  rebuild.
+- **OQ-B**: the mixed-side interface after a takeover of the other side from a running playback is
+  fixed by a mid-level re-skin, its own landing after S4b; `tacli replay takeover` launches with the
+  side viewed being P's.
+- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them.
+
+**The fixtures.** `battle` is also taken over at T2 as its controlled player, an ARMPW ordered, the
+line within 2000 ms; `takeover-end` (Show Down) is taken over as 0 and ends by the engine's victory
+after `+kill 1`. Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
+300 across the fork) after the usual L, P, R and Q.
+
+**The layout's hash.** The `order 0x006 ondestroy` row now names all nine handler functions that arm
+the destructor's call, which changes `TAGPU_REPLAY_LAYOUT_SHA256`: recordings made before S4b refuse
+to play. The recorder is unpublished.
+
+<!-- S4B RUN -->
+
 ## S5
 
 Planned in detail when S4 is in. The table above is its scope.

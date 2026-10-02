@@ -936,9 +936,17 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
 - **The destructor cannot emit.** `0x43A1F0` has twelve callers (`0x4384E4`, `0x439EF3`,
   `0x439F5F`, `0x439FC9`, `0x43AE47`, `0x43AEB8`, `0x43B075`, `0x43B1C9`, `0x43B93B`, `0x43BA5B`,
   `0x43BBE6`, `0x43BC49`) and no vtable entry; it calls the handler only when `order+6` has bit
-  `0x02` (`0x43A1F5..0x43A200`). BuildingBuild, MobileBuild, HelpBuild, VTOL_MobileBuild and
-  VTOL_HelpBuild return on event 2 before their emitter, and they are the only handlers that set
-  that bit; the other ten would reach their emitter on event 2, and never set it.
+  `0x02` (`0x43A1F5..0x43A200`). Nine handler functions set it, and these are all their stores of
+  `+0x06`: SelfDestruct/SelfDestructFG `0x402010` (`0x402104`, `0x40212B`), BuildingBuild
+  (`0x4028B5`, `0x402922`, `0x402AE6`, and `0x438700(…, 2)` at `0x4027CA`), MobileBuild (`0x403F0C`,
+  and `0x438700(…, 0xA)` at `0x403DFD`), HelpBuild (`0x404202`, `0x404239`, and `0x438700(…, 0xA)`
+  at `0x4040F6`), AirStrike `0x411F50` (`0x412293`, `0x412526`, `0x4125BB`), AirToGround `0x412710`
+  (`0x412CE3`), VTOL_Pickup `0x4111B0` (`0x411464`), VTOL_MobileBuild (`0x4142DF`, and
+  `0x438700(…, 0xA)` at `0x41413E`) and VTOL_HelpBuild (`0x414700`). `0x438700` stores its mask
+  `| 4` when the unit's `+0x10F` bit 0 is clear (`0x438711..0x43871C`), `0x438730` when bit 1 is
+  set (`0x438741..0x43874C`). Of the fifteen, then, the five build handlers set the bit, and each
+  returns on event 2 before its emitter; the other ten would reach their emitter on event 2, and
+  never set it.
 - **What the destructor does instead.** BuildingBuild's event-2 cleanup (`0x402653..0x402723`)
   credits `unit+0xD4`, calls `0x41B8D0(builder, nanoframe)` and deals the unfinished nanoframe
   `0x489BB0(builder, nanoframe, 30000, 9, 0)` (`0x402701`), then `0x48B090` and `0x41C150`; the
@@ -3004,6 +3012,78 @@ aligned unit dwords lay inside the DLL's range and none in a heap range — dwor
 simulation RNG's state is below 2^31 and lands in the DLL's range 3.6 % of the time. So the scan
 tests the engine's records and the globals image against the engine's own ranges only.
 
+
+### The takeover from a recording: seat types, the AI's objects, passability and the order nodes [DISASSEMBLED 2026-10-02]
+
+S4b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s4b-the-takeover-and-its-fork)
+turns a puppet level into a live skirmish at GameTime T inside the seek
+([the takeover note](tadr-port/demo-recorder-s4-takeover.md)). These are the engine functions it calls
+and the ones it read to decide what a rebuilt order node may hold. Read from
+`pristine/TotalA.exe.pristine` (`objdump -d -M intel`).
+
+**What the takeover calls**, on the game thread, between two steps:
+
+| Function | Convention | What it does |
+|---|---|---|
+| `0x463C60` the seat-type setter | `thiscall (rec, type)`, `ret 4` | `rec+0x73 = type` (`0x463C67`), and PlayerInfo `[rec+0x27]+0x94 = type` unless the type is 3 (`0x463C64`, `0x463C6A..0x463C6F`) |
+| `0x4B4F10` the allocator | `cdecl (size)` | the player init allocates the AI object with it, `0x3D` bytes (`0x4648A7..0x4648AE`) |
+| `0x408CB0` the AI object's constructor | `thiscall (obj, rec)`, `ret 4`, returns `obj` | the player init stores its result to `rec+0x74` (`0x4648B5..0x4648C1`); it reads `[rec+0x78]` and points sub-objects 0x20 apart into it (`0x408CF0..0x408D0C`), so the group table `+0x78` must exist first |
+| `0x40B320` the acquisition record | `stdcall (seat)`, `ret 4` | allocates `0x10D` bytes, constructs them through `0x409160` and stores the result to `0x5119C0[seat]` (`0x40B340`), then calls `0x409730` on it; on an allocation failure it stores 0 and calls `0x409730` with `ecx` = 0 (`0x40B350..0x40B35B`), the engine's own crash, as at every load. The player init passes `rec+0x146`, the record's map bit (`0x4648C4..0x4648CD`), and the table has ten entries, so a bit of 10 would write the dword at `0x5119E8` |
+| `0x4648E0` the AI profiles | `cdecl (void)`, plain `ret` (`0x46498D`) | ends by calling `0x409F80(i)` and `0x40A040(i)` for each record that is active and of type 2 (`0x46494E..0x464982`) |
+| `0x440A40` the passability refresh | `stdcall (xz, wh)`, `ret 8` | calls `0x440830(ctx, xz, wh)` for each of the 32 contexts `0x512358..0x512758` whose first dword is set (`0x440A4B..0x440A67`). `0x440830` sign-extends x, z, w and h from words, computes x+w+1 and z+h+1 in 32 bits, clamps x and z at 0 (signed) and the ends to `ctx+0x10` and `+0x14` (unsigned) (`0x440833..0x440897`), so `(0, 0x7FFF7FFF)` is every context whole |
+| `0x48BD00` deselect all | `cdecl (void)`, plain `ret` | `+0x110 &= 0xFFFFFF2F` on every slot from `[main+0x14357]` to `[main+0x1435B]`, then `0x491D70(0)` (`0x48BD00..0x48BD42`) |
+| `0x464290` the seat activation | `stdcall (seat, type)` | with type 0 it zeroes `rec+0x74` without freeing it (`0x46434A`) |
+| `0x4904B0` the objective's disarm | `thiscall` | writes only `obj+0x88 = 0` (`0x4904B0..0x4904BA`); the takeover writes 1 back |
+
+**The player init's tail, `0x46489D..0x4648CD`.** A record that is active and of type 3 skips the AI
+object and the acquisition record (`0x46489D..0x4648A5`), so a puppet seat holds neither and the
+takeover makes both, in the init's order. **The teardown `0x464A00` frees both**: `0x40B390` with the
+record's map bit, then `0x408F10` and `0x4B4F20` on `+0x74`, which it zeroes
+(`0x464A41..0x464A6B`).
+
+**A create picks the proxy movement class only for a remote owner**: `[owner+0] != 0 && owner+0x73 ==
+3` (`0x43DC4A..0x43DC57`). So the seats' types must be set after the last kill and before the first
+create.
+
+**The radar pass's loop 4, `0x467680..0x4676FD`** (unit at `esi − 0x92`): for a unit with `+0x110`
+bit 28 whose owner is active and of type 1 or 2 (`0x4676A1..0x4676AA`) and whose def has `+0x245`
+bit 13, it calls `0x40B0D0(unit+0xFF, unit+0x6A, def+0x208)` and on a nonzero answer stores
+GameTime + 90 to `+0xB0` and sets `+0x110` bit 12 (`0x4676C8..0x4676E8`). **`0x40B0D0` reads
+`0x5119C0[seat]` untested** (`0x40B0E5..0x40B0EC`), so the acquisition records must exist before the
+first radar pass after the flip. It walks the record's list from `+0x09` to `+0x0D` and leaves at
+once when they are equal (`0x40B0EC..0x40B100`); a fresh record's list is empty [INFERRED: the
+constructor `0x409160` was not read], so the pass at T sets neither field.
+
+**The order dispatchers clear `+0x06` before each handler call**: `0x43B7C0` stores 0 at `0x43B83D`
+and `0x43BAD0` at `0x43BB09`, after reading `+0x0A`, the deadline, against GameTime
+(`0x43B7E2..0x43B7FB`, `0x43BAF8..0x43BAFD`). A handler arms its events afresh on every call, which
+is why a node rebuilt with `+0x06` = 0 waits for nothing but its next call.
+
+**Handler entry facts the rebuilt nodes rest on:**
+- MobileBuild `0x403A20` tests event 8 before its state table (`0x403A27`), and its state 3 has no NULL
+  test of the target (`0x403E43`, `0x403EEB`). The target's death fires event 8 through the node's
+  vtable slot 0 (`0x489762`) before clearing the reference (`0x48978E`), in `0x489740`'s walk of
+  the target's `+0xA2` chain. Its heading before `0x438590` is `0x48A980(builder+0x6A,
+  target+0x6A) − builder+0x66` (`0x403DCA..0x403DE1`).
+- BuildingBuild `0x402640`'s state 3 tests the nanoframe `+0x16` for NULL (`0x4029CA..0x4029CF`).
+- BuildWeapon `0x402B70` reads the slot `p1` (`node+0x36`) at entry, `[unit + p1·0x1C + 0x10]`
+  (`0x402B7F..0x402B89`), and in state 2 increments the byte `[unit + p1·0x1C + 0x1E]` (`0x402BB3..0x402BB9`).
+- Paralyze `0x402D10` clamps its p1 to `0x708` ticks (`0x402D33..0x402D3B`).
+- Attack_Chase `0x4034A0` picks a slot when p1 is 0 and stores it to `+0x36` (`0x4035A1`).
+- `0x439E80` is the node's timer, `thiscall (node, ticks)`, `ret 4`: `+0x06 |= 1` and `+0x0A =
+  GameTime + ticks` (`0x439E80..0x439E9A`). Four of the arming stores above follow a call of it
+  (`0x4020FA`, `0x402121`, `0x4041F8`, `0x4142D5`).
+
+**The sim step's head, `0x4954A0..0x4954ED`**, is read in
+[*the tick boundaries*](#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01):
+the GameTime store at `0x4954C0` comes before the unit tick's call, which is why the recorder arms a
+fork between two steps and its first capture is iteration T.
+
+**Negative result: the takeover writes no skirmish settings.** A scan of the callee closure of the
+nine functions above, to depth 4 (288 functions, each body cut at the next call target of the
+image), finds no operand `0x29A0` (the settings block `[main+0x29A0]`) or `0x38D81` (its entry
+count). Impure's own code writes the difficulty `main+0x37EEE`, which the replay's options restore at
+the level's end.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
@@ -12137,7 +12217,8 @@ cannot be prologue-detoured without relocating the call.
 - **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
   `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
   side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from
-  `[[main+0x1B8A+player·0x1A2]+0x95]`) via `0x4B7F30(seq, 0)` → **`0x4B7F90(esi, f, HotX+0x81,
+  `[[main+0x1B8A + 0x14B·[main+0x2A43]]+0x95]`, the **viewed** record's PlayerInfo
+  (`0x467D98..0x467DB3`: the byte at `+0x2A43`, scaled by 330 and added once more)) via `0x4B7F30(seq, 0)` → **`0x4B7F90(esi, f, HotX+0x81,
   HotY)`** (top bar), `(HotX+0x81, HotY+screenH−0x20)` (bottom bar), `(HotX, HotY)` (side
   panel); then `0x4C63A0()`.
 - The `LIGHTBAR` slide `0x45FFB0`: `0x4B8D40`, `0x4B7F30`, `0x4B7F90`, `0x47F1A0`.

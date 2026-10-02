@@ -599,6 +599,7 @@ static unsigned mapped_bytes(const char* ta);
 enum { ST_IDLE, ST_RECORDING, ST_DONE };        /* DONE: the rest of this level is not recorded */
 static Rec*     s_rec;
 static int      s_state = ST_IDLE;
+static RecFork  s_fork;         /* a fork armed for the next capture point; file NULL for none */
 
 /* THE GAME THREAD'S RECORDING. s_tid is the recording's game thread while s_rec is set, and 0
    otherwise; only that thread writes either. An event hook compares s_tid with its own thread
@@ -833,7 +834,9 @@ static void archive_entry(void* ctx, const char* name, unsigned n, unsigned size
     tlv((Tlv*)ctx, RT_ARCHIVE, b, 12 + n);
 }
 
-static void header_build(const Level* L, int tick, const char* map, const FILETIME* now, Tlv* t)
+/* the header's entries; `fork`, for a fork's, adds RT_TIMELINE after RT_START */
+static void header_build(const Level* L, int tick, const char* map, const FILETIME* now,
+                         const RecFork* fork, Tlv* t)
 {
     unsigned i, n;
     unsigned char pl[16 + REC_INFO_BYTES + PL_NAMELEN];
@@ -845,6 +848,13 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
     tlv_u32(t, RT_MODE, MODE_SKIRMISH);
     tlv(t, RT_MAP, map, (unsigned)strlen(map));
     tlv_u32(t, RT_START, (unsigned)tick);
+    if (fork) {
+        unsigned d[3];
+        d[0] = fork->id;
+        d[1] = fork->parent;
+        d[2] = fork->fork_at;
+        tlv(t, RT_TIMELINE, d, 12);
+    }
     tlv(t, RT_WALLCLOCK, now, 8);
     tlv_u32(t, RT_SLOTS, L->nslots);
     tlv_u32(t, RT_UNITS_EACH, *(const unsigned short*)(ta + OFF_EACH));
@@ -1026,7 +1036,8 @@ static void fin_unlock(void)
 }
 
 /* A free slot, after closing the events of the files already finished: -1 while the exit runs, or
-   while REC_FINISHING files are still being written. */
+   while REC_FINISHING files are still being written. It marks nothing: the slot is filled by the
+   recording's end (rec_end). */
 static int fin_take(void)
 {
     int i, slot = -1;
@@ -1040,6 +1051,12 @@ static int fin_take(void)
     }
     fin_unlock();
     return slot;
+}
+
+/* 1 when a recording could take a slot now (fin_take): what a fork's readiness asks */
+static int fin_free(void)
+{
+    return fin_take() >= 0;
 }
 
 void tagpu_rec_exit(void)
@@ -1089,6 +1106,7 @@ static void rec_free(Rec* r)
 static void ring_free(RecRing* g)
 {
     if (!g) return;
+    if (g->fork.file) CloseHandle(g->fork.file);    /* THE FORK'S HANDLE: the ring owned it */
     if (g->buf) VirtualFree(g->buf, 0, MEM_RELEASE);
     if (g->grid) VirtualFree(g->grid, 0, MEM_RELEASE);
     if (g->wake) CloseHandle(g->wake);
@@ -1122,6 +1140,10 @@ static Rec* rec_start(const Level* L, int tick)
     static unsigned char hb[HEADER_MAX];
 
     if (!r || !g) goto fail;
+    if (s_fork.file) {                  /* THE FORK'S HANDLE moves to the ring */
+        g->fork = s_fork;
+        s_fork.file = NULL;
+    }
     if (wide) {
         tagpu_logf("recorder: FAILED %s has rows of %u bytes, past the %u a record carries: not "
                    "recording", wide->name, wide->stride, SPAN_MAX);
@@ -1214,13 +1236,16 @@ static Rec* rec_start(const Level* L, int tick)
     map_stem(L->ta, map, sizeof map);
     GetLocalTime(&lt);
     GetSystemTimeAsFileTime(&now);
-    snprintf(g->path, sizeof g->path, "replays\\%04u-%02u-%02u %02u%02u%02u %s.imprec", lt.wYear,
-             lt.wMonth, lt.wDay, lt.wHour, lt.wMinute, lt.wSecond, map);
+    if (g->fork.file)
+        snprintf(g->path, sizeof g->path, "%s", g->fork.path);
+    else
+        snprintf(g->path, sizeof g->path, "replays\\%04u-%02u-%02u %02u%02u%02u %s.imprec",
+                 lt.wYear, lt.wMonth, lt.wDay, lt.wHour, lt.wMinute, lt.wSecond, map);
     t.b = hb;
     t.n = 0;
     t.cap = sizeof hb;
     t.full = 0;
-    header_build(L, tick, map, &now, &t);
+    header_build(L, tick, map, &now, g->fork.file ? &g->fork : NULL, &t);
     header_tables(r, &t);
     for (i = 0; i < REC_PLAYERS; i++)        /* the seats header_build names (RT_PLAYER) */
         if (L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER]) r->seated |= (unsigned short)(1u << i);
@@ -1238,8 +1263,12 @@ static Rec* rec_start(const Level* L, int tick)
         tagpu_logf("recorder: FAILED no writer thread (%lu): not recording", GetLastError());
         goto fail;
     }
-    tagpu_logf("recorder: recording %s from GameTime %d: %u slots, %u tables", g->path, tick,
-               L->nslots, r->ntab);
+    if (g->fork.id)
+        tagpu_logf("recorder: recording timeline %u of %s from GameTime %d (parent %u): %u slots, "
+                   "%u tables", g->fork.id, g->path, tick, g->fork.parent, L->nslots, r->ntab);
+    else
+        tagpu_logf("recorder: recording %s from GameTime %d: %u slots, %u tables", g->path, tick,
+                   L->nslots, r->ntab);
     return r;
 
 fail:
@@ -2488,6 +2517,10 @@ int tagpu_rec_dump_arm(const char* name, unsigned at)
 static void dumps_take(const Level* L, int tick)
 {
     unsigned i, k = 0;
+    /* While a playing waits at a timeline boundary for its seek (tagpu_replay.c, THE BOUNDARY)
+       the world is the parent's last iteration, and the seek moves GameTime back to fork_at - 1,
+       so every armed GameTime comes again: the dumps stay armed until then. */
+    if (tagpu_replay_held()) return;
     for (i = 0; i < s_narmed; i++) {
         if (!s_armed[i].at || s_armed[i].at == (unsigned)tick) {
             dump_write(L, tick, s_armed[i].name, -1);
@@ -4266,6 +4299,84 @@ fail:
    the simulation runs, so it is not a simulation lever and not in the header's lever list. */
 #define REC_ON "tagpu_recorder.on"
 
+/* THE FORK'S HANDLE (a lifetime). A takeover's fork is written into the file it was played from,
+   through a handle the takeover opened (tagpu_replay.c, TK0). Its owners, in order:
+   1. the takeover, from TK0 to the arm (TK4b);
+   2. s_fork, from tagpu_rec_fork_arm to the next capture point;
+   3. the ring, from rec_start;
+   4. the writer, from writer_main's start (tagpu_recwriter.c).
+   Each move is a store on one thread and then a NULL where it came from; the one that crosses to
+   the writer's thread is ordered by CreateThread, which the capture calls after the ring holds
+   it. Each owner closes it on its own failure: the takeover when the arm refuses, the level's end
+   for an arm no capture point took, ring_free before the writer starts, and the writer's fail and
+   finish after. */
+
+/* what a fork needs to be recorded at the next capture point, but the absence of a recording */
+static int fork_ok(char* why, unsigned cap)
+{
+    if (!tagpu_reclaim_level_tracked())
+        snprintf(why, cap, "the teardown wrap is not in (tagpu_reclaim.c), so nothing would end "
+                 "it");
+    else if (!tagpu_simreg_count())
+        snprintf(why, cap, "the sim-state registry accepted nothing");
+    else if (!s_sites)
+        snprintf(why, cap, "the event hooks are not in (tagpu_rec_init)");
+    else if (table_too_wide())
+        snprintf(why, cap, "%s has rows wider than a record carries", table_too_wide()->name);
+    else if (!fin_free())
+        snprintf(why, cap, "the process is exiting, or %u earlier recordings' files are still "
+                 "being written", REC_FINISHING);
+    else
+        return 1;
+    return 0;
+}
+
+/* THE ORDERING that keeps a 1 true until the next capture point: only rec_start takes a finishing
+   slot, on this thread, and a writer finishing on another thread only frees one; the other checks
+   are fixed once DllMain's attach has run. The process's exit is the exception, and a fork then
+   fails at rec_start, its handle closed there. */
+int tagpu_rec_fork_ready(char* why, unsigned cap)
+{
+    if (s_state == ST_RECORDING) {
+        snprintf(why, cap, "a recording is in progress");
+        return 0;
+    }
+    return fork_ok(why, cap);
+}
+
+/* THE ORDERING of the arm (tagpu_replay.c, TK4b): it is the takeover's last act, after the puppet
+   table is off and the replay has stepped down, and the capture that consumes it is the next
+   capture point, GameTime T's. In a skirmish nothing runs between the GameTime store 0x4954C0 and
+   the capture point 0x4954ED: 0x4954C6 skips the pump block when the step's argument is 0, and the
+   skirmish loop passes 0 (0x49693C; DISASSEMBLED). So the timeline's first iteration is the world
+   the takeover's rebuild made, complete as every recording's first is. */
+int tagpu_rec_fork_arm(RecFork* f)
+{
+    if (s_state == ST_RECORDING || s_fork.file) return 0;
+    s_fork = *f;
+    f->file = NULL;
+    s_state = ST_IDLE;
+    tagpu_logf("recorder: timeline %u of %s armed for GameTime %u (parent %u)", s_fork.id,
+               s_fork.path, s_fork.fork_at, s_fork.parent);
+    return 1;
+}
+
+/* the recording's start at this capture point: the counts kept since the level's last start are
+   this recording's from here */
+static void rec_begin(const Level* L, int tick)
+{
+    s_bad = s_badlog = 0;
+    InterlockedExchange(&s_offthread, 0);
+    s_nano_unit = NULL;
+    s_nano_out = NULL;
+    s_rec = rec_start(L, tick);
+    if (s_rec) {
+        s_state = ST_RECORDING;
+        s_rec_fired = 1;
+        s_tid = s_rec->tid;
+    }
+}
+
 static void rec_stop(unsigned reason)
 {
     s_tid = 0;
@@ -4289,10 +4400,30 @@ void __cdecl tagpu_rec_capture(void)
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
 
-    if (s_state == ST_IDLE) {
-        /* A recording starts at a level's first iteration or not at all, and only when its end is
-           certain: the teardown wrap ends it (tagpu_rec_level_end), before the unit array is
-           freed, and without the wrap nothing would. It starts only when REC_ON asks. */
+    if (s_state == ST_IDLE && s_fork.file) {
+        /* a fork's first iteration (tagpu_rec_fork_arm): checked once more by value, since the
+           arm, and recorded whatever REC_ON says */
+        char why[160];
+        s_state = ST_DONE;
+        cnt_start(&L, mode == MODE_SKIRMISH && s_sites);
+        if (mode != MODE_SKIRMISH) snprintf(why, sizeof why, "the game is not a skirmish");
+        if (mode != MODE_SKIRMISH || !fork_ok(why, sizeof why)) {
+            tagpu_logf("recorder: FAILED timeline %u of %s is not recorded: %s", s_fork.id,
+                       s_fork.path, why);
+            CloseHandle(s_fork.file);
+            s_fork.file = NULL;
+        } else {
+            rec_begin(&L, tick);
+            if (s_fork.file) {          /* rec_start failed before the ring took it */
+                CloseHandle(s_fork.file);
+                s_fork.file = NULL;
+            }
+        }
+    } else if (s_state == ST_IDLE) {
+        /* A recording starts at a level's first iteration, or at a fork's (tagpu_rec_fork_arm),
+           or not at all, and only when its end is certain: the teardown wrap ends it
+           (tagpu_rec_level_end), before the unit array is freed, and without the wrap nothing
+           would. A level's starts only when REC_ON asks. */
         s_state = ST_DONE;
         cnt_start(&L, mode == MODE_SKIRMISH && s_sites &&
                       (tagpu_puppet_on() || tagpu_opt_on(REC_ON)));
@@ -4308,18 +4439,8 @@ void __cdecl tagpu_rec_capture(void)
                 tagpu_logf("recorder: not recording: the sim-state registry accepted nothing");
             else if (!s_sites)
                 tagpu_logf("recorder: not recording: the event hooks are not in (tagpu_rec_init)");
-            else {
-                s_bad = s_badlog = 0;
-                InterlockedExchange(&s_offthread, 0);
-                s_nano_unit = NULL;
-                s_nano_out = NULL;
-                s_rec = rec_start(&L, tick);
-                if (s_rec) {
-                    s_state = ST_RECORDING;
-                    s_rec_fired = 1;
-                    s_tid = s_rec->tid;
-                }
-            }
+            else
+                rec_begin(&L, tick);
         }
     }
     dumps_take(&L, tick);
@@ -4407,6 +4528,12 @@ void tagpu_rec_level_end(void)
             s_armed[k++] = s_armed[i];
     }
     s_narmed = k;
+    if (s_fork.file) {
+        tagpu_logf("recorder: timeline %u of %s is not recorded: the level ended before its first "
+                   "iteration", s_fork.id, s_fork.path);
+        CloseHandle(s_fork.file);
+        s_fork.file = NULL;
+    }
     s_tid = 0;
     s_cnt.tid = 0;
     if (s_state == ST_RECORDING && s_rec) {
