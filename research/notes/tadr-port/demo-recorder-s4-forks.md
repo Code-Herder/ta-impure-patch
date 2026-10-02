@@ -132,7 +132,9 @@ checks that deleting highest ID 5 is followed by allocation of ID 6. The live
 original's segment hash is checked throughout.
 
 **Verified on the reference Wine setup, 2026-10-02:** the dedicated coverage
-battle fork run passed all nine named checks. Forks 1–3 remained live; touching
+battle fork run passed all nine named checks. The first complete landing-tier run
+also passed all ten fork checks on each of the raised- and stock-limits builds,
+including deletion in a different recording while timeline 5 plays. Forks 1–3 remained live; touching
 2 made fork 4 evict 1. Fork 5 from 2 evicted 3. After explicit deletion of 2,
 physical IDs were `[0, 2, 4, 5]` with only `[0, 4, 5]` live; the export held
 `[0, 2, 5]`, with only 5 live. Both the two-boundary playing and exported playing
@@ -151,3 +153,29 @@ child-boundary, 64-segment and ID-exhaustion dry-run refusals.
 Live rewind remains S4d. The browser's eviction confirmation and fork controls
 are S5 work. S4b's mixed-side MAIN2 panel and the naval COB guard after seeks
 remain separate work; these file rules do not close them.
+
+
+### Harness ordering found by the landing tier
+
+The takeover's four-second judge observation does not establish that the roster
+belongs to the takeover. `tagpu_packet_pub.c:roster_log` emits full dumps every
+five seconds; the first battle attempt read the loader's four commanders before
+the next dump. The collected later dump still contained all three ARMCK builders
+at slots 344–346. The order check therefore waits for a dump after the takeover
+acknowledgement and its following `units:` header, and uses that complete dump.
+The order driver still checks the recycled slot's expected type on the game thread.
+
+A playing-end touch changes the recording's modification time. The browser's
+`scan` sorts newest first and moves its existing index entries into list order;
+`index_save` preserves that order. The W fixture owns exactly three files, all
+passing the mod filter. Its second Watch resolves the filename in the returned
+browser's saved index order instead of reusing the row number from before playback.
+
+The first complete tier run had 440 passing checks, one naval-push sink-count
+difference (`Stop`, 17 live versus 23 puppet over [451, 2611)), the stale battle
+roster and two stale W rows. Its six `UNCOVERED` names were `recfile_exit`,
+`tagpu_rec_exit`, `tagpu_replay_level_end`, `maintenance_end`, `fail` and `ring_free`.
+The fixture worker used `tacli stop`, which sends SIGTERM and bypasses the game's
+exit hook; copying files after that stop cannot collect the exit's coverage.
+This run is evidence for the fork rules, not a passing landing gate. The naval
+count difference remains visible; no exclusion or tolerance has been changed.

@@ -9,6 +9,7 @@ library only; no game runs.
 """
 import io
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -125,6 +126,38 @@ class HeaderCopy(unittest.TestCase):
             tareplay.header_copy(src, dst, tarec.RT_LAYOUT, tareplay.other_layout)
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual(ents[tarec.RT_LAYOUT], b"1" + layout[1:])
+
+
+class TakeoverRoster(unittest.TestCase):
+    """A cached loader roster and a partial new dump cannot supply the takeover's order."""
+
+    class Log:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def wait(self, rx, timeout, start=0):
+            return next((line for line in self.lines[start:] if re.search(rx, line)), None)
+
+    old = "  u001 armck own=0 idx=99 world=(1,2,3) screen=(4,5) nano=0.00\r"
+    mark = "replay: battle: taken over at GameTime 1441 as player 0, difficulty 0\r"
+    new = "  u001 armck own=0 idx=344 world=(4260,1170,85) screen=(4388,1159) nano=0.00\r"
+    head = "units: alive=1 onscreen=0 eye=(0,0) me=0\r"
+
+    def test_only_the_roster_after_the_acknowledgement_is_used(self):
+        log = self.Log([self.old, self.head, self.mark, self.head, self.new, self.head])
+        self.assertEqual(tareplay.takeover_roster(log, 1441, 0),
+                         [{"type": "armck", "owner": 0, "engine_index": 344,
+                           "world": [4260, 1170]}])
+
+    def test_the_old_roster_does_not_complete_the_wait(self):
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "no roster after takeover"):
+            tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.head]),
+                                     1441, 0)
+
+    def test_a_partial_dump_does_not_complete_the_wait(self):
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "roster is incomplete"):
+            tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.new]),
+                                     1441, 0)
 
 
 class Landing(unittest.TestCase):

@@ -700,7 +700,7 @@ def takeover_k(w, fx, out):
     if tk.get("type"):
         step(w, "type", tk["type"])
     if tk.get("order"):
-        res["ordered"] = tk_order(w, P, tk["order"])
+        res["ordered"] = tk_order(w, P, tk["order"], takeover_roster(log, T, P))
     display = int(w.xvfb.display.lstrip(":"))
     seen = set()
     t0 = time.time()
@@ -739,13 +739,36 @@ def takeover_k(w, fx, out):
     return res
 
 
-def tk_order(w, P, order):
+def takeover_roster(log, T, P):
+    """A complete roster emitted after the takeover acknowledgement, never the loader's."""
+    mark = log.wait(rf"replay: .*: taken over at GameTime {T} as player {P},", 30)
+    if not mark:
+        raise CouldNotRun("order: no takeover acknowledgement in the log")
+    start = log.lines.index(mark) + 1
+    row = log.wait(r"^\s+u\d+\s+", 30, start)
+    if not row:
+        raise CouldNotRun("order: no roster after takeover")
+    start = log.lines.index(row, start)
+    # roster_log writes the dump as one block before its following units header.
+    end = log.wait(r"^units: alive=", 30, start + 1)
+    if not end:
+        raise CouldNotRun("order: the post-takeover roster is incomplete")
+    rx = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
+                    r"world=\((-?\d+),(-?\d+),-?\d+\)")
+    roster = []
+    for line in log.lines[start:log.lines.index(end, start + 1)]:
+        m = rx.match(line)
+        if m:
+            roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
+                           "world": [int(m[4]), int(m[5])]})
+    return roster
+
+
+def tk_order(w, P, order, roster):
     """The `order` unit of P's (type, rank) moved 300 wu east: its slot and the GameTime read
     just before the order was given, from which the `orders` check reads the timeline, so the
     order's own latency counts against its 10 s."""
     kind, rank = order
-    rc, o = tacli("roster", w.name, "--json", timeout=60)
-    roster = json.loads(o)["units"] if not rc else []
     units = [u for u in roster if u["owner"] == P and u["type"].upper() == kind and
              u["engine_index"]]
     if len(units) <= rank:
@@ -1024,7 +1047,12 @@ def watch_lane(w, fx, rec, out, T):
 
     # a second Watch from the browser Leave returned to; its level writes the coverage, which
     # holds the first level's teardown too (the bitmap is the process's)
-    got = browser_watch(w, log, len(copies), stem)
+    # All three files pass the mod filter. scan moves their existing index entries into list
+    # order and index_save preserves it. A playing-end touch can move the watched file's row.
+    listed = list(index_lines(rd))
+    if set(listed) != {f"{stem}.imprec", *(f"{c[0]}.imprec" for c in copies)}:
+        raise CouldNotRun("the returned browser's index does not contain its three recordings")
+    got = browser_watch(w, log, listed.index(f"{stem}.imprec"), stem)
     if not got.startswith(f"replay: playing {stem}:"):
         raise Failed(f"the second Watch: {got}")
     if fx["cover"]:
