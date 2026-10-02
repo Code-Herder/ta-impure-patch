@@ -48,6 +48,46 @@
    "load": "c2-nomapalert.json",
    "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
    "end": 2400
+  },
+  "wpn-badtgt": {
+   "load": "wpn-badtgt.json",
+   "content": {"run": ["tools/extra_weapons_fixture.py", "{gamedir}"], "files": ["wpn-test.ufo", "wpn-badtgt.ufo"]},
+   "end": 1800
+  },
+  "b7-radar-hail": {
+   "load": "b7-radar-hail.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 1800
+  },
+  "b7-word-outright": {
+   "load": "b7-word-outright.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 1800
+  },
+  "c2-weapon-keys": {
+   "load": "c2-weapon-keys.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 1800
+  },
+  "c3-reclaim-bound": {
+   "load": "c3-reclaim-bound.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 1800
+  },
+  "c3-veterancy": {
+   "load": "c3-veterancy.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 1800
+  },
+  "c4-kill-all": {
+   "load": "c4-kill-all.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 1800
+  },
+  "c4-survivor": {
+   "load": "c4-survivor.json",
+   "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
+   "end": 1800
   }
  }
 }

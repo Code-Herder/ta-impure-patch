@@ -59,6 +59,8 @@
 #include "tagpu_simreg.h"
 #include "tagpu_cob_safe.h"
 
+SIM_FEATURE(cob_trace, SIM_PUPPET_INDEPENDENT, "battle");
+
 #define TA_MAINPP   0x00511DE8u
 #define OFF_TICK    0x38A47
 #define TA()        (*(char**)TA_MAINPP)

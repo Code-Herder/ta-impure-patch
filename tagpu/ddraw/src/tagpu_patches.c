@@ -27,6 +27,8 @@
 #include "tagpu_recfmt.h"   /* REC_PHASE_*: the step's phases */
 #include "git.h"
 
+SIM_FEATURE(patch_helpers, SIM_PUPPET_RUNS, "battle");
+
 static void plog(const char* s)
 {
     tagpu_log(s);
@@ -272,6 +274,8 @@ static const char* fix_state(int r)
     }
 }
 
+SIM_FEATURE(sort_buffer_end, SIM_PUPPET_RUNS, "battle");
+
 /* THE SORT BUFFER'S END, in DrawGameScreen's unit binning (0x4697CF..0x469840).
    [DISASSEMBLED] With edi = main+0x141FB, every hot unit (main+0x1435F, NumHotUnits
    main+0x14367) is binned by the 16-px row of its feet, row = (unit+0x74 - eyeY)/16
@@ -388,6 +392,8 @@ static int fix_sort_buffer_end(void)
     return FIX_ARMED;
 }
 
+SIM_FEATURE(feature_null_plot, SIM_PUPPET_RUNS, "battle");
+
 /* A NULL PLOT, handed to GetGridPosFeature 0x421E60 (stdcall(plot), ret 4).
    [DISASSEMBLED] Its first two instructions are `mov ecx,[esp+4]` and
    `mov ax,[ecx+8]`: the plot's feature index is read with no test, and "no
@@ -447,6 +453,8 @@ static int fix_feature_null_plot(void)
     }
     return FIX_ARMED;
 }
+
+SIM_FEATURE(terrain_window, SIM_PUPPET_RUNS, "battle");
 
 /* THE TERRAIN PASS'S WINDOW, in 0x483FA0 (stdcall(ctx), ret 4; one caller, 0x468DB0
    in DrawGameScreen). [DISASSEMBLED] From the eye main+0x1431F/0x14323 it takes
@@ -688,6 +696,8 @@ static int fix_terrain_window(void)
     return FIX_ARMED;
 }
 
+SIM_FEATURE(feature_die_pool_full, SIM_PUPPET_RUNS, "battle");
+
 /* A FEATURE THAT IS PAID FOR AND NOT REMOVED. [DISASSEMBLED] FeatureDie 0x423550,
    stdcall(x, y, reclaimed), ret 0xC, turns a feature into its successor: FeatureDef +0xF8
    (featurereclamate) when reclaimed, +0xF4 (featuredead) when not. It resolves a multi-cell
@@ -739,6 +749,8 @@ static int fix_feature_die_pool_full(void)
     lim_add(0x00423651, sizeof now, jge, now, "full wreck pool: the feature swap");
     return FIX_TABLE;
 }
+
+SIM_FEATURE(reclaim_mark_anchor, SIM_PUPPET_RUNS, "battle");
 
 /* A FEATURE THAT IS PAID FOR TWICE. [DISASSEMBLED] The reclaim completion 0x4237D0(who, pos),
    stdcall, ret 8, refuses a GAF feature that is already playing its sequence: 0x423892 tests
@@ -799,6 +811,8 @@ static int fix_reclaim_mark_anchor(void)
                "reclaim: the anchor's mark");
     return FIX_TABLE;
 }
+
+SIM_FEATURE(saved_features_border, SIM_PUPPET_RUNS, "battle");
 
 /* A SAVED FEATURE ON THE MAP'S BORDER. [DISASSEMBLED] LoadMap 0x483610 ends by calling
    0x4833B0 (at 0x483CF1), which masks the border of the feature grid: over a fixed set of
@@ -981,6 +995,8 @@ static int fix_saved_features_border(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(restore_record_owner, SIM_PUPPET_RUNS, "battle");
+
 /* A SAVED FEATURE'S STATE WRITTEN INTO A WRECK RECORD IT DOES NOT OWN. [DISASSEMBLED] The
    restore 0x424C00 spawns each "Animating Features" record (0x425050) and starts its sequence --
    FeatureDie(x, y, 1) at 0x42507E, FeatureDie(x, y, 0) at 0x42509D or the burn 0x4233A0 at
@@ -1119,6 +1135,8 @@ static int fix_restore_record_owner(void)
     }
     return FIX_TABLE;
 }
+
+SIM_FEATURE(composite_scratch, SIM_PUPPET_RUNS, "c4-survivor");
 
 /* THE COMPOSITE SCRATCH FRAME. [DISASSEMBLED] The composite draw context ctx = *(main+0x1437B)
    keeps one frame at ctx+0x10, made at the level load by 0x458180 through 0x4B8E00(name, w, h)
@@ -1609,6 +1627,8 @@ static int fix_composite_scratch(void)
     return FIX_ARMED;
 }
 
+SIM_FEATURE(build_list, SIM_PUPPET_RUNS, "battle");
+
 /* ===== THE BUILD LIST, THE DOWNLOAD-MENU RECORDS, THE OUT-OF-MEMORY TEXT ==================
    Three stock defects a large mod reaches, fixed in both builds (research/notes/tadr-port/
    content-ids.md, "What rides in the same landing"). Their sites are written all together or
@@ -1845,6 +1865,8 @@ static int fix_build_list(void)
     return fix_table(site, 4, "whole build lists");
 }
 
+SIM_FEATURE(download_records, SIM_PUPPET_RUNS, "battle");
+
 /* THE DOWNLOAD MENUS' RECORDS [DISASSEMBLED]. 0x42DCF0 (loader thread) makes one 0xBD-byte
    record per download\*.tdf file: a dword entry count and five 0x25-byte entries ({u16 builder
    type, u8 MENU, u8 BUTTON, char unit[32]}, entry k at +4 + k*0x25). The block, files * 0xBD
@@ -1956,6 +1978,8 @@ static int fix_download_records(void)
     return fix_table(site, 6, "download menus past five entries");
 }
 
+SIM_FEATURE(oom_message, SIM_PUPPET_RUNS, "battle");
+
 /* THE OUT-OF-MEMORY TEXT [DISASSEMBLED]. WinMain installs 0x49E700 as the allocator's new
    handler for the whole process (0x49E849). On any failed allocation it appends its text to
    ErrorLog.txt, dumps the registers and stack through a deliberate fault (0x49E7E4 -> 0x49E680),
@@ -2008,6 +2032,8 @@ static int fix_oom_message(void)
     for (i = 1; i < 4; i++) memcpy(site[i].now, &text, 4);
     return fix_write(site, 4);
 }
+
+SIM_FEATURE(sync_keys, SIM_PUPPET_RUNS, "battle");
 
 /* THE UNIT SYNC'S KEYS [DISASSEMBLED]. A network game matches each unit type between the peers by
    a key, def+0x13E: 0x4B6BA0's checksum of the type's FBI file (0x42ABB3), or a units\*.OVR
@@ -2160,6 +2186,8 @@ static int fix_sync_keys(void)
     fix_branch(&site[0], 0xE8, a);
     return fix_table(site, 1, "unique unit sync keys");
 }
+
+SIM_FEATURE(weapon_ids, SIM_PUPPET_RUNS, "battle");
 
 /* ===== WEAPON IDS (TAGPU_LIM_WEAPONS) =======================================================
    The plan is research/notes/tadr-port/content-ids.md, "Weapons"; the disassembly is
@@ -2835,6 +2863,8 @@ static int fix_weapon_ids(void)
     return FIX_LIMITS;
 #endif
 }
+
+SIM_FEATURE(wire_bounds, SIM_PUPPET_RUNS, "battle");
 
 /* ===== WIRE ROBUSTNESS: THE RECEIVERS' UNBOUNDED INDICES ==================================
    Landing B3 of research/notes/tadr-port/sim-fixes.md; the disassembly is in
@@ -3936,6 +3966,8 @@ static void wire_selfcheck(void)
     tagpu_logf("enginefix: wirecheck %d predicate cases, %d failed", n, bad);
 }
 
+SIM_FEATURE(victim_caps, SIM_PUPPET_RUNS, "battle-los");
+
 /* ===== DAMAGE: THE VICTIM CAPS, FLAK'S DIVIDES, THE MAP'S EDGES ============================
    Landing B1 of research/notes/tadr-port/sim-fixes.md; the disassembly is in
    sim-fixes-evidence.md, Part 2 §1, §4 and §11, and exe-reverse-engineering.md, "Engine
@@ -4214,6 +4246,8 @@ static int fix_victim_caps(void)
     lim_add(0x0049A5CE, sizeof feats, feats, fe, "area damage, the feature victims' list");
     return FIX_TABLE;
 }
+
+SIM_FEATURE(stacked_air, SIM_PUPPET_RUNS, "battle");
 
 /* STACKED AIRCRAFT [DISASSEMBLED + MEASURED]. Landing B2 of research/notes/tadr-port/
    sim-fixes.md (evidence Part 2 §2; TADR's AreaDamageOverflow is the prior art, the design is
@@ -4577,6 +4611,8 @@ static int fix_stacked_air(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(step_phases, SIM_PUPPET_RUNS, "battle");
+
 /* THE STEP'S PHASES. The step 0x495490 calls the projectile tick 0x49B720 at 0x495513 and the
    explosion tick 0x420F30 at 0x495539, each with no argument, each returning with a plain `ret`
    (0x49BE5C, 0x421147) [DISASSEMBLED]. Each call goes through a stub: pushfd; pushad; push phase;
@@ -4626,6 +4662,8 @@ static int fix_step_phases(void)
                "the step's phases: the explosion tick's call");
     return FIX_TABLE;
 }
+
+SIM_FEATURE(flak_divides, SIM_PUPPET_RUNS, "battle");
 
 /* FLAK'S DIVIDES [DISASSEMBLED]. The ballistic fire 0x49CDE0 (callers 0x49D0F8 in the fire
    dispatch, 0x49D44E in the 0x0D receiver, 0x49D76E; all three only for a weapon with
@@ -4706,6 +4744,8 @@ static int fix_flak_divides(void)
     for (k = 1; k < 3; k++) fix_branch(&site[k], 0xE8, b);
     return fix_write(site, 3);
 }
+
+SIM_FEATURE(last_cell, SIM_PUPPET_RUNS, "battle");
 
 /* THE LAST ROW AND COLUMN [DISASSEMBLED]. The grid stamp 0x47CC30 (the motion relink's call
    0x43DA41 after its clear 0x47D0E0, and 0x48610F, 0x48630C, 0x48AA9A, 0x48B6B9) parks a unit
@@ -4802,6 +4842,8 @@ static int fix_last_cell(void)
                "the grid stamp: the sort bucket, bounded");
     return FIX_TABLE;
 }
+
+SIM_FEATURE(los_shear, SIM_PUPPET_RUNS, "battle");
 
 /* THE LINE-OF-SIGHT SHEAR [DISASSEMBLED]. UnitInPlayerLOS 0x465AC0(player, unit) (callers
    0x40AB11 in the periodic acquisition 0x40AA40, 0x439761, 0x46AF3D, 0x46B5B4, 0x480EE5,
@@ -5359,6 +5401,8 @@ static int fix_los_shear(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(projectile_view, SIM_PUPPET_RUNS, "battle");
+
 /* THE PROJECTILE PASS'S VIEW [DISASSEMBLED]. The projectile draw pass 0x49BE60 (called at
    0x469B22 in DrawGameScreen) asks, for each projectile, whether the local player (main+0x2A43)
    sees it, with the same altitude-sheared row as UnitInPlayerLOS: inline under True line of
@@ -5416,6 +5460,8 @@ static int fix_projectile_view(void)
     memcpy(now + 1, &rel, 4);
     return tagpu_detour_write(0x0049BEE8, now, sizeof now) ? FIX_ARMED : FIX_PROTECT;
 }
+
+SIM_FEATURE(los_local, SIM_PUPPET_RUNS, "battle");
 
 /* THE SAME READ IN LOCAL CODE [DISASSEMBLED]: the 27 copies that decide only what this player
    is shown or hears -- the cursor picker 0x43E490 (the pointer over a point, and with it what
@@ -5630,6 +5676,8 @@ static int fix_los_local(void)
     return fix_write(s, 27);
 }
 
+SIM_FEATURE(weapon_keys, SIM_PUPPET_RUNS, "battle");
+
 /* ===== THE WEAPON KEYS (C2) ===============================================================
    Landing C2 of research/notes/tadr-port/data-keys.md; the disassembly is in
    data-keys-evidence.md, Part 1, and exe-reverse-engineering.md. TADR's WeaponTags,
@@ -5785,6 +5833,8 @@ static int fix_weapon_keys(void)
 #undef WK_SITE
     return FIX_TABLE;
 }
+
+SIM_FEATURE(veterancy, SIM_PUPPET_RUNS, "battle");
 
 /* ===== VETERANCY (C3) ======================================================================
    Landing C3 of research/notes/tadr-port/data-keys.md; the disassembly is in
@@ -5959,6 +6009,8 @@ static int fix_veterancy(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(extra_weapons, SIM_PUPPET_RUNS, "battle");
+
 /* ===== THE EXTRA WEAPONS ==================================================================
    The 1..N weapons module (tagpu_weapons.c; research/notes/extra-weapons.md), always on.
    CLASS: simulation, both builds -- a build without it plays three weapons a unit where this
@@ -5985,6 +6037,8 @@ static int fix_extra_weapons(void)
     for (k = 0; k < n; k++) lim_add(s[k].va, s[k].n, s[k].stock, s[k].ours, s[k].name);
     return FIX_TABLE;
 }
+
+SIM_FEATURE(reclaim_wrap, SIM_PUPPET_RUNS, "c3-reclaim-bound");
 
 /* ===== B10: A UNIT RECLAIM'S STEP, ITS PRODUCT IN 64 BITS ====================================
    Section B's tenth item (research/notes/tadr-port/sim-fixes.md, B10).
@@ -6102,6 +6156,8 @@ static int fix_reclaim_wrap(void)
     lim_add(0x004386D8u, 7, quot, now, "B10: a unit reclaim's step, its quotient clamped");
     return FIX_TABLE;
 }
+
+SIM_FEATURE(b7_hits, SIM_PUPPET_RUNS, "b7-radar-hail b7-word-outright");
 
 /* ===== B7: A HIT'S WORD, KILL-OUTRIGHT, THE RADAR'S OWNER TEST, ONE METEOR ONE HIT ==========
    Section B's seventh item (research/notes/tadr-port/sim-fixes.md, B7), four stock defects.
@@ -6332,6 +6388,8 @@ static int fix_radar_owner(void)
     }
     return FIX_ARMED;
 }
+
+SIM_FEATURE(stale_hits, SIM_PUPPET_RUNS, "battle");
 
 /* ===== STALE HITS: THE INCARNATION ON THE WIRE, AND THE TWO-TICK HOLD ======================
    Landing B4 of research/notes/tadr-port/sim-fixes.md ("B4 DESIGN" has the argument in full;
@@ -7128,6 +7186,8 @@ int tagpu_hits_format(char* buf, unsigned int cap)
                      s_hitDiag.fallback, s_hitDiag.holdFail, s_hitDiag.retry, s_hitDelayK, s_hitDiag.delayed);
 }
 
+SIM_FEATURE(ghost_commander, SIM_PUPPET_RUNS, "battle");
+
 /* ===== GHOST COMMANDER: THE CREATES REFUSED DURING THE LOAD, AND THE DIRTY CREATE'S POSITION ===
    Landing B5 of research/notes/tadr-port/sim-fixes.md ("B5 DESIGN" has the argument in full;
    the addresses are in exe-reverse-engineering.md, "A create refused during the load").
@@ -7880,6 +7940,8 @@ static int fix_ghost_commander(int wire)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(transported, SIM_PUPPET_RUNS, "c4-kill-all");
+
 /* ===== C4: TRANSPORTED EXPLOSIONS ===========================================================
    Section C's fourth landing (research/notes/tadr-port/data-keys.md, C4): TransportedExplodeAs=
    and TransportedSelfDestructAs=, TADR's keys, read and resolved by tagpu_datakeys.c.
@@ -8382,6 +8444,8 @@ int tagpu_ghost_format(char* buf, unsigned int cap)
                      s_ghostDiag.cleared, s_ghostDiag.levels, s_ghostDiag.posGround, s_ghostDiag.posAir,
                      s_ghostDiag.posNone, s_ghostDiag.posOff);
 }
+
+SIM_FEATURE(kill_counts, SIM_PUPPET_RUNS, "c3-veterancy");
 
 /* ===== KILL COUNTS ACROSS PEERS: THE OWNER'S BUILD STATE AT THE CREATE AND AT THE DEATH ======
    Landing B8 of research/notes/tadr-port/sim-fixes.md ("B8" has the argument and the
@@ -8915,6 +8979,8 @@ static int fix_kill_counts(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(built_bounds, SIM_PUPPET_RUNS, "battle");
+
 /* 0x12, the builder's finish (the case 0x4555BA, entry 0x455FC4 of the jump table 0x455F84):
    stock scales both indices into the unit array with no bound (the built unit at rec+1,
    0x4555C4..0x4555E2; the builder at rec+3, 0x4555FB..0x45560C), and 0x41B8D0 reads +0x110
@@ -8979,6 +9045,8 @@ int tagpu_kills_format(char* buf, unsigned int cap)
                      s_killDiag.turnedBack, s_killDiag.deadCopy, s_killDiag.createDone, s_killDiag.createNano,
                      s_killDiag.createAbsent, s_killDiag.createBad, (unsigned int)s_killDiag.held);
 }
+
+SIM_FEATURE(map_terrain, SIM_PUPPET_RUNS, "battle");
 
 /* MAPS WITH NO TERRAIN [DISASSEMBLED 2026-09-28]. A map is an .ota (its settings) and a .tnt (its
    terrain), and a mod can ship the one without the other: Total Mayhem's mayhem.gp3 carries 105
@@ -9114,6 +9182,8 @@ static int fix_map_terrain(void)
     fix_branch(&site[1], 0xE9, b);
     return fix_write(site, 2);
 }
+
+SIM_FEATURE(engine_defects, SIM_PUPPET_RUNS, "battle");
 
 static void patch_engine_defects(void)
 {
@@ -9327,6 +9397,8 @@ static void patch_engine_defects(void)
     b[sizeof b - 1] = 0;
     plog(b);
 }
+
+SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
 
 /* ===== THE LOADERS AND TWO HUD DIVIDES =====================================================
    Five stock defects outside the battle itself: the wind every peer draws for itself, a
@@ -9748,6 +9820,8 @@ static int fix_wind(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(yardmap, SIM_PUPPET_RUNS, "battle");
+
 /* A YARDMAP PARSED PAST ITS STRING [DISASSEMBLED]. For a def whose BMcode is 0 ([def+0x22F],
    0x42CF30..0x42CF38) the unit-def loader reads the FBI's YardMap key with
    GetString 0x4C48C0(buf, "YardMap", 0x400, "") into a 0x400-byte stack buffer at the call
@@ -9852,6 +9926,8 @@ static int fix_yardmap(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(save_order_fallback, SIM_PUPPET_RUNS, "battle");
+
 /* THE SAVED-GAME LOADER'S ORDER FALLBACK [DISASSEMBLED]. The order loader 0x43A420 takes an
    order's type from its `<key>_name` (0x43C6B0, then a strcmp against the table; not found ->
    0x43A552, "Ready", dl = 0). A record without the name falls back to its stored index and
@@ -9874,6 +9950,8 @@ static int fix_save_order_fallback(void)
     if (!fix_match(&site, 1)) return FIX_BYTES;
     return fix_write(&site, 1);
 }
+
+SIM_FEATURE(stockpile_bar, SIM_PUPPET_RUNS, "battle");
 
 /* THE STOCKPILE BAR'S DIVIDE [DISASSEMBLED]. 0x439D20(unit), called once at 0x46B446 for the
    bottom panel, finds the unit's first order with +0x42 bit 19 (0x80000, the weapon build),
@@ -9918,6 +9996,8 @@ static int fix_stockpile_bar(void)
     return fix_write(&site, 1);
 }
 
+SIM_FEATURE(range_circle, SIM_PUPPET_RUNS, "battle");
+
 /* A RANGE CIRCLE OF RADIUS 1 [DISASSEMBLED]. DrawRangeCircle 0x438EA0 returns at once for
    radius 0 (0x438EAF), takes N = (int)(r * 2pi * 0.125) segments (the doubles 0x4FD2B0 and
    0x4FD2B8, ftol 0x4E43A0), and divides 0x10000 by N at 0x438EEE. Its guard at 0x438EDE, `jl
@@ -9941,6 +10021,8 @@ static int fix_range_circle(void)
     fix_branch(&site, 0xE9, a);
     return fix_write(&site, 1);
 }
+
+SIM_FEATURE(order_anyone, SIM_PUPPET_RUNS, "battle");
 
 /* AN ORDER MODE WITH NOBODY TO ORDER [DISASSEMBLED; MEASURED]. The order byte main+0x2CC3 is 1
    when no order is armed. A build button arms a placement, 0x0E, with BuildUnitID main+0x2CC4
@@ -10105,6 +10187,8 @@ static int fix_order_anyone(void)
     return fix_write(site, 2);
 }
 
+SIM_FEATURE(queued_site, SIM_PUPPET_RUNS, "battle");
+
 /* A QUEUED SITE IS TAKEN GROUND. [DISASSEMBLED] The build cursor 0x4197D0 asks the site test
    0x47D2E0 (stdcall (def, cell, 0, player), ret 0x10; the call is 0x4198C6) whether the
    footprint fits, and shows the answer as main+0x2CC6 bit 6: green, or red -- and a click on red
@@ -10249,6 +10333,8 @@ static int fix_queued_site(void)
     return fix_write(&site, 1);
 }
 
+SIM_FEATURE(loader_defects, SIM_PUPPET_RUNS, "battle");
+
 static void patch_loader_defects(void)
 {
     int wind = fix_wind();
@@ -10272,6 +10358,8 @@ static void patch_loader_defects(void)
                (unsigned int)(size_t)&s_windDiag.setDiffered, (unsigned int)(size_t)&s_windDiag.setWithheld,
                (unsigned int)(size_t)&s_windDiag.mapOnly, (unsigned int)(size_t)&s_yardDiag.filled);
 }
+
+SIM_FEATURE(apply_patches, SIM_PUPPET_RUNS, "battle");
 
 void tagpu_apply_patches(void)
 {
@@ -10414,6 +10502,8 @@ void tagpu_apply_patches(void)
     patch_engine_defects();
     patch_loader_defects();
 }
+
+SIM_FEATURE(limits_pools, SIM_PUPPET_RUNS, "battle");
 
 /* ===== THE RAISED LIMITS (tagpu_limits.h) ===================================================
    The engine limits TADR raises -- the effect pools as its EngineLimits.cpp does, the unit
@@ -10611,6 +10701,8 @@ static unsigned char* lim_emit(unsigned char* p, const unsigned char* op, int n,
     memcpy(p + n, &v, 4);
     return p + n + 4;
 }
+
+SIM_FEATURE(cob_guard, SIM_PUPPET_RUNS, "battle");
 
 typedef int (__attribute__((thiscall)) *CobNativeGet)(char*, int, int, int, int, int);
 static CobNativeGet s_cobNativeGet;
@@ -11380,6 +11472,8 @@ static void cob_get_sites(void)
     lim_branch(0x00480770u, sizeof entry, entry, 0xE9,
                (unsigned int)(size_t)&cob_get, "COB bounded unit getters");
 }
+
+SIM_FEATURE(limits_sites, SIM_PUPPET_RUNS, "battle");
 
 /* A MOD WITH MORE UNIT TYPES THAN THE MASKS HOLD. Called from the menu-time count (0x42AA65),
    on the main thread, before the def array is allocated: nothing has been loaded that a
@@ -12252,6 +12346,8 @@ void tagpu_limits_report(void)
     }
     tagpu_refuse(text);
 }
+
+SIM_FEATURE(restore_invariants, SIM_PUPPET_RUNS, "battle");
 
 /* THE INVARIANTS THE REPLAY'S TABLE WRITE CANNOT EXPRESS (tagpu_replay.c, tables_put). A puppet
    host writes this file's declared tables back from a recording's image, by their layouts alone,

@@ -165,6 +165,7 @@ replay-layout:
 # fixture list and the parser are prerequisites so that a change to either runs it again.
 $(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py | thread-split spirv log-check replay-layout
 	../../tools/sim-state-check.sh . $(OBJEXT)
+	python3 ../../tools/replay/tareplay.py features --check .
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
 # THE SINK'S STRESS TEST (tests/logtest.c, driven by tests/logtest.py under Wine): the

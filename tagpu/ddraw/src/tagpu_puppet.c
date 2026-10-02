@@ -8,6 +8,8 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 
+SIM_FEATURE(puppet_host, SIM_PUPPET_RUNS, "battle-los");
+
 typedef struct PuppetTable {
     volatile unsigned char on;              /* this level plays a recording                 */
     unsigned char playing;                  /* ... and its first step has run: the feature
