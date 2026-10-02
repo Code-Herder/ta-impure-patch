@@ -102,8 +102,9 @@ TAKEOVER_CHECKS = {
              "the takeover made seen",
     "line": "the takeover's line, no create refused, and in less than the entry's `ms`",
     "orders": "the entry's `order` unit of P's moves more than 64 wu when ordered",
-    "ai": "every AI seat with a commander at T makes a unit, and at least 25 % of the AI "
-          "seats' mobile units move more than 8 wu, in timeline 1",
+    "ai": "every AI seat that made a unit in the original's [T, T + TAKEOVER_SPAN] makes one "
+          "in timeline 1's (a seat that made none in the original is skipped and named), and at "
+          "least 25 % of the AI seats' mobile units move more than 8 wu in timeline 1",
     "fork": "compare-fork EQUAL, the original's bytes untouched, both timelines check, "
             "timeline 1 complete, and K's and F's dumps EQUAL",
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
@@ -667,13 +668,6 @@ def takeover_k(w, fx, out):
     t_line = time.time()
     if fx["cover"]:
         cover_ask(w, log, "K")
-    # the unit types that build, by def index, for the `ai` check (tagpu_cat.c, `builder`)
-    rc, o = tacli("units", w.name, "--json", "--limit", "0", timeout=90)
-    try:
-        res["builders"] = sorted(u["id"] for u in json.loads(o).get("units", [])
-                                 if u.get("builder"))
-    except ValueError:
-        res["builders"] = None
     # what Impure draws 4 s after the line, against what the takeover made (judge)
     nap(max(0.0, t_line + 4 - time.time()))
     res["alive_seen"] = tc.alive_seen(w.gamedir)
@@ -854,27 +848,19 @@ def checks(fx):
     return res
 
 
-U_TYPEIX = 0xA6                # a unit image's u16 type index, the catalogue's `id` (tagpu_replay.c)
-
-
 def mobile(img):
     """the unit has a mover: its image's first dword is 1 then (replay-layout.tsv, `mover`)"""
     return struct.unpack_from("<I", img, 0)[0] == 1
 
 
-def tk_ai(path, tl, T, builders):
-    """In timeline `tl` over [T, T + TAKEOVER_SPAN]: the AI seats that held a mobile builder at T
-    (a unit with a mover whose type, by index, is one of `builders`), those of them that made no
-    unit, and the fraction of the AI seats' mobile units alive at T that moved more than 8 wu
-    (None when there are none)."""
+def tk_ai(path, tl, T, stop):
+    """In timeline `tl` over [T, stop]: its AI seats, those of them that made a unit, and the
+    fraction of the AI seats' mobile units alive at T that moved more than 8 wu (None when there
+    are none) with their count."""
     h, bl, _ = tarec.load(path, timeline=tl)
     seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
     ai = {p["index"] for p in seg["header"]["players"] if p["controller"] == 2}
     w0 = tarec.stream_to(h, bl, want=T)
-    build = set(builders)
-    holders = {img[0xFF] for img in w0.units.values()
-               if img[0xFF] in ai and mobile(img) and
-               struct.unpack_from("<H", img, U_TYPEIX)[0] in build}
     start = {slot: struct.unpack_from("<iii", img, 0x6A)
              for slot, img in w0.units.items() if img[0xFF] in ai and mobile(img)}
     moved, made, fresh = set(), set(), set()
@@ -895,9 +881,18 @@ def tk_ai(path, tl, T, builders):
             x1, _, z1 = struct.unpack_from("<iii", img, 0x6A)
             if ((x1 - x) ** 2 + (z1 - z) ** 2) ** 0.5 > 8 * 65536:
                 moved.add(slot)
-    tarec.stream_to(h, bl, want=T + TAKEOVER_SPAN, on_record=on_record)
-    idle = sorted(s for s in holders if s not in made)
-    return sorted(holders), idle, (len(moved) / len(start) if start else None), len(start)
+    tarec.stream_to(h, bl, want=stop, on_record=on_record)
+    return ai, made & ai, (len(moved) / len(start) if start else None), len(start)
+
+
+def ai_compare(ai, original, fork):
+    """The `ai` check's comparison, over the AI seats `ai` of timeline 1: the seats that made a
+    unit in the original's window (`original`) are compared, each must have made one in timeline
+    1's (`fork`); a seat that made none in the original is skipped. (compared, missing, skipped),
+    each sorted: compared empty is no comparison, missing non-empty a failure."""
+    compared = sorted(s for s in ai if s in original)
+    return compared, [s for s in compared if s not in fork], sorted(s for s in ai
+                                                                   if s not in original)
 
 
 def tk_moved(path, tl, ordered):
@@ -976,19 +971,33 @@ def tk_checks(fx):
                     f"{k['ordered']['at']} to {k['ordered']['at'] + 300}"))
     if "ai" in want:
         try:
-            if not k.get("builders"):
-                raise tarec.Unreadable("no unit type that builds in the game's catalogue")
-            holders, idle, frac, n = tk_ai(path, tl, T, k["builders"])
-            if not holders:
-                raise tarec.Unreadable(f"no AI seat holds a mobile builder at GameTime {T}")
+            # one window for both timelines, ending where the shorter one does, so neither's
+            # seats are given more ticks to make a unit than the other's
+            segs = {s["id"]: s for s in tarec.file_segments(path)[0]}
+            parent = segs[tl]["parent"]
+            stop = min([T + TAKEOVER_SPAN] + [segs[i]["last"] for i in (parent, tl)
+                                              if segs[i]["last"] is not None])
+            ai, fork, frac, n = tk_ai(path, tl, T, stop)
+            _, original, _, _ = tk_ai(path, parent, T, stop)
+            compared, missing, skipped = ai_compare(ai, original, fork)
+            if not compared:
+                raise tarec.Unreadable(
+                    f"no AI seat made a unit in timeline {parent}'s [{T}, {stop}]"
+                    + (f" (seats {', '.join(map(str, skipped))}: none in the original)"
+                       if skipped else ""))
             if frac is None:
                 raise tarec.Unreadable(f"the AI seats hold no mobile unit at GameTime {T}")
-            bad = [f"AI seat {s} made no unit" for s in idle]
+            moved = f"{frac:.0%} of {n} mobile units moved"
+            bad = [f"AI seat {s} made no unit, where the original made one" for s in missing]
             if frac < 0.25:
-                bad.append(f"{frac:.0%} of {n} mobile units moved")
-            res.append(("takeover ai", FAIL if bad else PASS, "; ".join(bad) or
-                        f"every AI seat with a mobile builder ({', '.join(map(str, holders))}) "
-                        f"made a unit; {frac:.0%} of {n} mobile units moved"))
+                bad.append(moved)
+            parts = (bad or [f"every AI seat that made a unit in the original "
+                             f"({', '.join(map(str, compared))}) made one"])
+            parts += [f"seat {s}: none in the original either" for s in skipped]
+            if frac >= 0.25:
+                parts.append(moved)
+            res.append(("takeover ai", FAIL if bad else PASS,
+                        f"GameTime [{T}, {stop}]: " + "; ".join(parts)))
         except tarec.Unreadable as e:
             res.append(("takeover ai", UNRUN, str(e)))
     if "fork" in want:

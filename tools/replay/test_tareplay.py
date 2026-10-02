@@ -313,5 +313,25 @@ class TakeoverFixtures(unittest.TestCase):
         self.assertLess(Ts[1], fixes["takeover-end"]["end"])
 
 
+class AiCompare(unittest.TestCase):
+    """The takeover's `ai` check against the original timeline (tareplay.ai_compare)."""
+
+    def test_every_maker_made_again(self):
+        self.assertEqual(tareplay.ai_compare({1, 2, 3}, {1, 3}, {1, 3}), ([1, 3], [], [2]))
+
+    def test_a_maker_that_made_nothing_fails(self):
+        self.assertEqual(tareplay.ai_compare({1, 2, 3}, {1, 2}, {2}), ([1, 2], [1], [3]))
+
+    def test_a_fork_only_maker_is_skipped(self):
+        self.assertEqual(tareplay.ai_compare({1, 2}, {1}, {1, 2}), ([1], [], [2]))
+
+    def test_no_maker_in_the_original_is_no_comparison(self):
+        self.assertEqual(tareplay.ai_compare({1, 2}, set(), {1}), ([], [], [1, 2]))
+        self.assertEqual(tareplay.ai_compare(set(), {1}, {1}), ([], [], []))
+
+    def test_a_seat_not_ai_in_the_fork_is_not_compared(self):
+        self.assertEqual(tareplay.ai_compare({2}, {0, 2}, {2}), ([2], [], []))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
