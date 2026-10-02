@@ -151,15 +151,20 @@ button texts: the engine sets them in the mod's own `hattfont11`/`hattfont12`.
 The engine's largest face is 17 px (`armfont`, `hatt14`, `gaf12`; `tools/guifont.py --list`),
 against about 30 px for a painted TA title, so the **title** uses the style's own font. The DLL
 sets the string into the ground when it writes `impure-patch.ufo`. A label's font is chosen through
-the screen's `id 7` resources ([gui-gadgets](../gui-gadgets.md) §3); whether one can name a GAF font
-rather than a `fonts/*.fnt` face is not known, and if it can, the title becomes an ordinary label.
+the screen's `id 7` resources ([gui-gadgets](../gui-gadgets.md) §3), and one cannot name a GAF font
+[DISASSEMBLED]: stage 1's id-7 branch (`0x4A8EF3`) builds `fonts\` + the record's text + `.FNT` and
+reads that file raw into `+0xD6`, which the label draw `0x4A56B0` selects through `0x4C1420`.
+Without an id-7 font a label uses the GAF `hattfont11`; only two GAF fonts are registered
+(`0x4AEDD0` at `0x491564` and `0x49157D`). A generated one-colour `.FNT` cannot carry a painted
+ramp, so the title stays set into the ground.
 
 ## The per-mod table
 
 **Identification.** An entry is matched on the mod's own name — its config file or main archive
 (`prota.ini`/`prota.gp3`, `mayhem.ini`/`mayhem.gp3`, `taesc.ini` with the `guiE` folder,
 `tazero.ini` with `ZGui` and `FrontendZ`) — never on a file's size or hash, which change with every
-build. Twilight has no file of its own name (*Open*).
+build. Twilight has no file of its own name; it is recognised by its main menu's own label,
+which begins "Total Annihilation: Twilight" (`TWILIGHT_PREFIX` in `tagpu_replays.c`).
 
 **The guard.** An entry's moves apply only when the thing they move is where the entry expects it:
 a checksum of the source pixels, recorded in the table beside the rectangles. A mismatch — a new
@@ -177,10 +182,10 @@ main menu):
 | TA Zero | none: its `ZGui/mainmenu.gui` comments the Credits gadget out with `/* */` and the engine honours the comment, so the slot is empty |
 | TA Twilight | its buttons have no plates: REPLAYS at x 317 with no plate, INTRO and EXIT 24 px to the right |
 
-How the main menu gains its gadget and the backdrop its plate is landing 1's first research
-question: the mod's own `MAINMENU.GUI` and `FrontendX.PCX` are what the engine loads, so either the
-DLL serves a generated copy of the screen through `gui_redirect`, or it adds the gadget and pastes
-the plate after the engine has loaded them.
+The DLL adds the gadget and pastes the plate after the engine has loaded the mod's own
+`MAINMENU.GUI` and `FrontendX.PCX`: the REPLAYS record is appended to the screen's records at
+`GUI_Load 0x4AACAE` (copied from SINGLE), and the plate is pasted into the decoded backdrop on the
+return of the PCX loader `0x429290` (the header of `tagpu_replays.c` lists the four sites).
 
 ## The screens
 
@@ -348,9 +353,10 @@ and leave, polling for error boxes, with a picture per screen.
 
 ## Open
 
-- **How Twilight is recognised.** It ships no config file of its own name; a stable file or string
-  of its own is still to be found.
-- **Whether an `id 7` resource can name a GAF font** (*Text*).
-- **How the main menu gains its gadget and its plate** (*The per-mod table*).
 - **The dock's art.** `dock-tex`, `strip-track` and `strip-fill` are plain generated stand-ins until
   the owner's art replaces them, before the landing reaches `main`.
+- **The title letters.** The retail style's `font/` is a stand-in and is not committed, and
+  Escalation has none of its own: without a committed `font` entry no ground is composed and the
+  browser does not arm. Landings 1 and 2 wait on the owner's letters for this and for the dock's art.
+- **Asks 1–3.** Until the recorder carries them, the browser shows a grey minimap and "?" for the
+  result, and the mod filter has nothing to compare.
