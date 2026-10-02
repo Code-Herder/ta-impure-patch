@@ -22,6 +22,7 @@
 #include "tagpu_settings.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_dock.h"   /* tagpu_dock_rect: the dock's rect, a pure function */
 
 /* The panel's logical width and the bars' logical height: the two immediates
    at 0x4981C9 / 0x4981D9, and the 128x480 block §3.4a measured. PANEL_ROWS is
@@ -80,8 +81,58 @@ void tagpu_hud_geom(int screenW, int screenH, int pct, int* q8, int* panelW, int
         if (q > cap) q = cap;                      /* a stage past it is clamped */
     }
     if (q8)     *q8     = q;
-    if (panelW) *panelW = (HUD_PANEL_W * q) >> 8;
-    if (barH)   *barH   = (HUD_BAR_H  * q) >> 8;
+    tagpu_hud_bands(q, panelW, barH);
+}
+
+void tagpu_hud_bands(int q8, int* panelW, int* barH)
+{
+    if (panelW) *panelW = (HUD_PANEL_W * q8) >> 8;
+    if (barH)   *barH   = (HUD_BAR_H  * q8) >> 8;
+}
+
+/* ---- the dock region (tagpu_hud.h) ---------------------------------------- */
+
+/* The open dock's scale, 0 = none: THE POINTER'S WORD. Written only on the game
+   thread; a whole LONG, so a reader sees one value or the other, and each is a
+   value tagpu_hud_dock_map validates against the surface it is used on. */
+static volatile LONG s_dockQ8;
+
+void tagpu_hud_dock_set(int q8)
+{
+    InterlockedExchange(&s_dockQ8, q8 > 256 ? q8 : 0);
+}
+
+int tagpu_hud_dock_q8(void)
+{
+    return (int)InterlockedCompareExchange(&s_dockQ8, 0, 0);
+}
+
+/* About the dock's BOTTOM-LEFT corner: the world's translation takes engine
+   (l, t + h) to screen (x0, y1), and the magnified rect grows up and right
+   from there, so the 1x dock the engine drew lies inside it. VALIDATED, not
+   assumed: the rect has to sit inside the world region at its own scale, so
+   that no value of either word can make the dock take a band's pixels or a
+   point off the surface. */
+int tagpu_hud_dock_map(int screenW, int screenH, int q8, TAGPU_HUD_DOCKMAP* m)
+{
+    int pw, bh;
+    if (!m || q8 <= 256 || !dims_ok(screenW, screenH)) return 0;
+    if (!tagpu_dock_rect(screenW, screenH, q8, &m->l, &m->t, &m->w, &m->h)) return 0;
+    tagpu_hud_bands(q8, &pw, &bh);
+    m->q8 = q8;
+    m->x0 = m->l + (pw - HUD_PANEL_W);
+    m->y1 = m->t + m->h + (bh - HUD_BAR_H);
+    m->x1 = m->x0 + ((m->w * q8) >> 8);
+    m->y0 = m->y1 - ((m->h * q8) >> 8);
+    return m->x0 >= pw && m->y0 >= bh && m->x1 <= screenW && m->y1 <= screenH - bh &&
+           m->x1 > m->x0 && m->y1 > m->y0;
+}
+
+/* the live dock's map, when there is one and (x, y) is inside it on screen */
+static int dock_hit(int x, int y, TAGPU_HUD_DOCKMAP* m)
+{
+    return tagpu_hud_dock_map((int)g_ddraw.width, (int)g_ddraw.height, tagpu_hud_dock_q8(), m) &&
+           x >= m->x0 && x < m->x1 && y >= m->y0 && y < m->y1;
 }
 
 /* ---- the store ------------------------------------------------------------
@@ -213,11 +264,13 @@ static void border_to_border(int dx, int dy, int* x, int* y)
 void tagpu_hud_to_engine(int* x, int* y)
 {
     int pw, bh, q, H, dx, dy;
+    TAGPU_HUD_DOCKMAP dk;
     if (!x || !y || !tagpu_hud_live(&pw, &bh, &q)) return;
     H = (int)g_ddraw.height;
     dx = *x; dy = *y;                        /* the DEVICE point, for the border */
-    /* the same three regions, in the same order, as LAY_FS's map — and the
-       same order again in tagpu_hud_to_screen. The panel owns its full column
+    /* the same regions, in the same order, as LAY_FS's map -- the panel and
+       top bar, the bottom bar, the dock, the world -- and the same order again
+       in tagpu_hud_to_screen. The panel owns its full column
        height, so the bottom-left corner is the panel's and not the bar's. */
     if (*x < pw || *y < bh) {
         *x = *x * 256 / q;
@@ -225,6 +278,16 @@ void tagpu_hud_to_engine(int* x, int* y)
     } else if (*y >= H - bh) {
         *x = *x * 256 / q;
         *y = H - (H - *y) * 256 / q;
+    } else if (dock_hit(*x, *y, &dk)) {
+        /* THE DOCK: the engine texel the composite samples at this device
+           pixel's centre -- l + (x + 0.5 - x0) / s and t + h - (y1 - y - 0.5) / s
+           -- in integers, then held inside the dock's rect, so every point the
+           magnified dock covers reaches the engine as a point on the dock. */
+        *x = dk.l + ((2 * (*x - dk.x0) + 1) * 128) / dk.q8;
+        *y = dk.t + dk.h - ((2 * (dk.y1 - *y) - 1) * 128 + dk.q8 - 1) / dk.q8;
+        if (*x > dk.l + dk.w - 1) *x = dk.l + dk.w - 1;
+        if (*y < dk.t) *y = dk.t;
+        if (*y > dk.t + dk.h - 1) *y = dk.t + dk.h - 1;
     } else {
         /* THE WORLD, which is not the identity (22.6). The engine draws
            the world into [128, R] x [32, B] of its own surface and we put that
@@ -241,6 +304,7 @@ void tagpu_hud_to_engine(int* x, int* y)
 void tagpu_hud_to_screen(int* x, int* y)
 {
     int q, pw, bh, H;
+    TAGPU_HUD_DOCKMAP dk;
     /* ONE sample of the live scale, as to_engine takes: asking tagpu_hud_live
        for q and then resolving pw/bh again would read the word twice, and a
        scale that changed between the two would map one point with two of them */
@@ -252,6 +316,12 @@ void tagpu_hud_to_screen(int* x, int* y)
     } else if (*y >= H - HUD_BAR_H) {
         *x = *x * q / 256;
         *y = H - (H - *y) * q / 256;
+    } else if (tagpu_hud_dock_map((int)g_ddraw.width, H, tagpu_hud_dock_q8(), &dk) &&
+               *x >= dk.l && *x < dk.l + dk.w && *y >= dk.t && *y < dk.t + dk.h) {
+        /* the device pixel holding the centre of this texel's image, which
+           to_engine's dock branch sends back to this texel */
+        *x = dk.x0 + ((2 * (*x - dk.l) + 1) * dk.q8) / 512;
+        *y = dk.y1 - 1 - ((2 * (dk.t + dk.h - 1 - *y) + 1) * dk.q8) / 512;
     } else {
         *x += pw - HUD_PANEL_W;          /* the inverse of to_engine's world  */
         *y += bh - HUD_BAR_H;

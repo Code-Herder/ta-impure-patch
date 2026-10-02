@@ -139,8 +139,9 @@ milestone.
 
 ## Live rewind (skirmish)
 
-1. **Open the timeline** with a hotkey, an in-game menu button, or from the victory/defeat
-   screen. The game pauses.
+1. **Open the timeline** with the rewind button beside the in-game menu's, or from the
+   victory/defeat screen. The game pauses. There is no hotkey: `R` is TA's Repair order, and a free
+   key is free only until a mod claims it (*decided 2026-10-01*).
 2. **Scrub.** The world switches to puppet mode and shows the past, with the normal replay
    controls, overlays and perspectives.
 3. **Leave** by **Play from here**, which takes over at the playhead and creates a fork, or by

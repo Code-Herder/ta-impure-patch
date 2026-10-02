@@ -34,7 +34,7 @@
 /* the std140 blocks, at the sizes the generated SPIR-V header prints */
 #define QVS_SZ  16                  /* QVS    binding 0  : vec2 uSize        */
 #define TWF_SZ  16                  /* CPY/SPR binding 32: 16 bytes          */
-#define LAY_SZ  80                  /* LAY_FS binding 32 : 80 bytes          */
+#define LAY_SZ  128                 /* LAY_FS binding 32 : 128 bytes         */
 
 /* MAX_TWINS in tagpu_gui_surf.c. A bound here rather than a number taken from
    the hand-over: the scaffold's rule -- a handed-over count never sizes an
@@ -155,6 +155,10 @@ typedef struct {
     int             pic;
     int             picDrawn;
     unsigned        picGen;
+    /* the seed's box of Impure's own art (tagpu_gui_asset_exact), which the
+       fills from the picture leave out, so it keeps the palette's colour;
+       exW 0 = none. Set by the SEED that binds the picture, with it. */
+    int             exX, exY, exW, exH;
 } TWIN;
 
 typedef struct {
@@ -769,6 +773,7 @@ static void pic_unbind(TWIN* t)
     if (t->pic >= 1 && t->pic <= PS_MAX && s_ps[t->pic - 1].pins > 0) s_ps[t->pic - 1].pins--;
     if (!t->picDrawn && s_psBound > 0) s_psBound--;
     t->pic = 0; t->picDrawn = 0; t->picGen = 0;
+    t->exW = 0;
 }
 
 /* ---- the twin store ----------------------------------------------------- */
@@ -2156,35 +2161,58 @@ static PSENT* pic_get(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
 }
 
 /* THE RESTORED PICTURE INTO A TWIN'S COLOUR PLANE, its top-left at (bx, by):
-   one copy region per tile core. Only for a DONE entry, which a job has
+   one copy region per tile core, less the twin's own-art box when `exact` --
+   the seed's fill; a stamp's fill has its own box and no own art. Up to four
+   pieces of a core survive the box: the rows above and below it, and the
+   columns left and right of it across its rows. Only for a DONE entry, which a job has
    painted -- so `s_psDst` is in the SHADER_READ_ONLY layout the restorer
    leaves it in, and it is handed back in that layout for the restorer's next
    draw. The barrier into the copy names the OUT pass's writes itself rather
    than leaning on its render pass's outgoing dependency (the half of a
    dependency a driver can drop, tagpu_vk_restore.c `end_pass`). */
-static void pic_fill(VkCommandBuffer cb, TWIN* t, const PSENT* e, int bx, int by)
+static int pic_region(VkImageCopy* rg, int sx, int sy, int px, int py, int w, int h)
 {
-    VkImageCopy rg[PS_TMAX];
+    if (w <= 0 || h <= 0) return 0;
+    memset(rg, 0, sizeof *rg);
+    rg->srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg->srcSubresource.layerCount = 1;
+    rg->dstSubresource = rg->srcSubresource;
+    rg->srcOffset.x = sx; rg->srcOffset.y = sy;
+    rg->dstOffset.x = px; rg->dstOffset.y = py;
+    rg->extent.width = (uint32_t)w; rg->extent.height = (uint32_t)h;
+    rg->extent.depth = 1;
+    return 1;
+}
+
+static void pic_fill(VkCommandBuffer cb, TWIN* t, const PSENT* e, int bx, int by, int exact)
+{
+    VkImageCopy rg[4 * PS_TMAX];
     int k, n = 0;
     if (!t->colImg || e->state != PSE_DONE) return;
     for (k = 0; k < e->nt; k++) {
         int sx = e->core[k][0], sy = e->core[k][1];
         int px = bx + e->core[k][2], py = by + e->core[k][3];
         int w = e->core[k][4], h = e->core[k][5];
+        int x0, y0, x1, y1;
         if (px < 0) { sx -= px; w += px; px = 0; }
         if (py < 0) { sy -= py; h += py; py = 0; }
         if (px + w > t->w) w = t->w - px;
         if (py + h > t->h) h = t->h - py;
         if (w <= 0 || h <= 0) continue;
-        memset(&rg[n], 0, sizeof rg[n]);
-        rg[n].srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        rg[n].srcSubresource.layerCount = 1;
-        rg[n].dstSubresource = rg[n].srcSubresource;
-        rg[n].srcOffset.x = sx; rg[n].srcOffset.y = sy;
-        rg[n].dstOffset.x = px; rg[n].dstOffset.y = py;
-        rg[n].extent.width = (uint32_t)w; rg[n].extent.height = (uint32_t)h;
-        rg[n].extent.depth = 1;
-        n++;
+        /* the box clipped to this core, in the twin's coordinates */
+        x0 = exact && t->exW > 0 ? (t->exX > px ? t->exX : px) : 0;
+        y0 = exact && t->exW > 0 ? (t->exY > py ? t->exY : py) : 0;
+        x1 = exact && t->exW > 0 ? (t->exX + t->exW < px + w ? t->exX + t->exW : px + w) : 0;
+        y1 = exact && t->exW > 0 ? (t->exY + t->exH < py + h ? t->exY + t->exH : py + h) : 0;
+        if (x1 <= x0 || y1 <= y0) {
+            n += pic_region(&rg[n], sx, sy, px, py, w, h);
+            continue;
+        }
+        n += pic_region(&rg[n], sx, sy, px, py, w, y0 - py);                        /* above */
+        n += pic_region(&rg[n], sx, sy + (y1 - py), px, y1, w, py + h - y1);        /* below */
+        n += pic_region(&rg[n], sx, sy + (y0 - py), px, y0, x0 - px, y1 - y0);      /* left  */
+        n += pic_region(&rg[n], sx + (x1 - px), sy + (y0 - py), x1, y0,
+                        px + w - x1, y1 - y0);                                      /* right */
     }
     if (!n) return;
     tw_to(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -3070,7 +3098,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             TWIN* bt = &s_tw[k];
             if (!bt->pic || bt->picDrawn || bt->picGen == s_psGen || bt->pic > PS_MAX) continue;
             if (s_ps[bt->pic - 1].state != PSE_DONE) continue;
-            pic_fill(cb, bt, &s_ps[bt->pic - 1], 0, 0);
+            pic_fill(cb, bt, &s_ps[bt->pic - 1], 0, 0, 1);
             bt->picGen = s_psGen;
         }
     }
@@ -3444,6 +3472,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 t = tw_make(d, o->surf, o->w, o->h);
                 if (!t) goto refuse;
                 pic_unbind(t);               /* new contents, whatever they are */
+                if (o->fw > 0 && o->fh > 0) {
+                    t->exX = o->sl; t->exY = o->st; t->exW = o->fw; t->exH = o->fh;
+                }
             } else {
                 t = tw_find(o->surf);
                 if (!t) { sdWhy = "a pixel op names a surface this store never seeded";
@@ -3483,7 +3514,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     t->pic = (int)(e - s_ps) + 1; e->pins++; s_psBound++;
                 }
                 if (e && e->state == PSE_DONE && pic_current(&h)) {
-                    pic_fill(cb, t, e, ux, uy);
+                    pic_fill(cb, t, e, ux, uy, o->kind == TAGPU_GUIOP_SEED);
                     if (o->kind == TAGPU_GUIOP_SEED) t->picGen = s_psGen;
                 }
             }
@@ -3824,7 +3855,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            no colour image would sample the dummy image through a live branch.
            The stand-down check above has already refused that frame; this
            keeps the block honest on its own. */
-        /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 80 bytes.
+        /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 128 bytes.
            `inc/spirv/tagpu_gui_surf.spv.h` prints the table this must match --
            read it there, never from here. */
         ip = (int*)(b + 0);   *ip = (colOn && pres->colImg) ? 1 : 0;
@@ -3838,6 +3869,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         ip = (int*)(b + 48);  *ip = h.vpKey;                 /* uVpKey        */
         fp = (float*)(b + 64); fp[0] = h.hud[0]; fp[1] = h.hud[1];
                                fp[2] = h.hud[2]; fp[3] = h.hud[3];   /* uHud   */
+        fp = (float*)(b + 80); memcpy(fp, h.dock, sizeof h.dock);    /* uDock  */
+        fp = (float*)(b + 96); memcpy(fp, h.dockMap, sizeof h.dockMap); /* uDockMap */
+        fp = (float*)(b + 112); memcpy(fp, h.dockS, sizeof h.dockS); /* uDockS */
     }
     {
         VkDescriptorBufferInfo bi;

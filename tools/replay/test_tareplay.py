@@ -2,7 +2,8 @@
 """Tests of the replay harness's own logic (tafeat.py, tareplay.py's landing tier, tarec.py's
 segments): the C parser against the coverage build's map, the features' regions, the comment
 filter, `landing --check`, a recording's segments and chains, read from files built from the
-format alone, and the fixtures' takeover entries. Standard library only; no game runs.
+format alone, the fixtures' takeover entries and the W lane's edited header copies. Standard
+library only; no game runs.
 
     python3 tools/replay/test_tareplay.py
 """
@@ -92,6 +93,38 @@ class Features(unittest.TestCase):
 
 def sh(cwd, *a):
     subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True)
+
+
+class HeaderCopy(unittest.TestCase):
+    """W's refused copies: one header entry edited, every block still read whole."""
+
+    @staticmethod
+    def block(kind, payload, stored):
+        body = payload if stored else zlib.compress(payload)
+        head = struct.pack("<IHHIIIII", tarec.REC_BLOCK_MAGIC, kind, tarec.RBF_STORED if stored
+                           else 0, 1, 9, len(payload), len(body), zlib.crc32(body))
+        return head + struct.pack("<I", zlib.crc32(head)) + body
+
+    def test_edit(self):
+        def entry(tag, data):
+            raw = struct.pack("<HH", tag, len(data)) + data
+            return raw + b"\0" * (-len(raw) % 4)
+        layout, smap = b"ab" * 32 + b"\0", b"Coast To Coast\0"
+        head = entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap)
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
+            src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head, False)
+                            + self.block(tarec.RB_STREAM, b"\1\2\3\4", True))
+            tareplay.header_copy(src, dst, tarec.RT_SETTINGS_MAP, tareplay.no_such_map)
+            got, why = tarec.blocks(dst)
+            self.assertIsNone(why)
+            self.assertEqual(got[1], (tarec.RB_STREAM, 1, 9, b"\1\2\3\4"))
+            ents = dict(tarec.entries(got[0][3]))
+            self.assertEqual(ents[tarec.RT_SETTINGS_MAP], b"Q" * 14 + b"\0")
+            self.assertEqual(ents[tarec.RT_LAYOUT], layout)
+            tareplay.header_copy(src, dst, tarec.RT_LAYOUT, tareplay.other_layout)
+            ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
+            self.assertEqual(ents[tarec.RT_LAYOUT], b"1" + layout[1:])
 
 
 class Landing(unittest.TestCase):
@@ -301,7 +334,8 @@ class TakeoverFixtures(unittest.TestCase):
             self.assertTrue(t["checks"], name)
             self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)
             self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
-            self.assertEqual(tareplay.procs(fixes[name]), ("L", "P", "R", "Q", "K", "F"))
+            self.assertEqual(tareplay.procs(fixes[name]), ("L", "P", "R", "Q", "K", "F") +
+                             (("W",) if fixes[name].get("watch") else ()))
             if "order" in t:
                 self.assertEqual(len(t["order"]), 2, name)
         self.assertEqual(tareplay.procs(fixes["forest-fire"]), ("L", "P", "R", "Q"))

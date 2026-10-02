@@ -374,7 +374,13 @@
 #define VT_BASE            0x004FD5A8u /* destroyed: draws nothing             */
 /* TAProgram (the graphics globals' owner, TA_GFX_PP) */
 #define PROG_LHT           0x0C8       /* u8[32][256] lighten table            */
-#define PROG_CAPS          0x0F0       /* u16: bit5 ALP, bit6 SHD, bit7 LHT     */
+#define PROG_GREY          0x0CC       /* u8[256] the grey remap: 0x4BFE10      */
+                                       /* writes dst = T[dst] through it; built */
+                                       /* once from the palette (0x4BAD30, from */
+                                       /* UIPipelinesInit at 0x4913C3), behind  */
+                                       /* caps bit 8                            */
+#define PROG_CAPS          0x0F0       /* u16: bit5 ALP, bit6 SHD, bit7 LHT,    */
+                                       /* bit8 the grey remap (0x4B5B24)        */
                                        /* ENABLED: written at 0x4B5AC4 before   */
                                        /* the allocations, which it gates, and  */
                                        /* tested by the in-place setters        */

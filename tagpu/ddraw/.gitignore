@@ -1,5 +1,6 @@
 
 inc/git.h
+inc/tagpu_art_gen.h
 
 # C++ Builder
 

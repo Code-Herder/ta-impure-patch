@@ -41,6 +41,14 @@ int  tagpu_menu_owns_point(int gx, int gy);
    hit-test on either alone works for exactly half its users. */
 int  tagpu_menu_click(int gx, int gy, int down);
 
+/* The right button, for the watching dock's strip (tagpu_dock.h): the same contract. */
+int  tagpu_menu_rclick(int gx, int gy, int down);
+
+/* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the screen slot lets
+   its screen go without a pop, so the engine's own pops after the teardown find the stack and
+   main+0x37EA0 as stock has them, and the dock's worker is joined (tagpu_menu.c). */
+void tagpu_menu_level_end(void);
+
 /* The render thread's frame. Does the DEFERRED WRITE: a row click records its
    value in the settings store on the game thread (tagpu_settings.h) and the
    store's file is written here, off it. TA is lockstep and a synchronous write

@@ -627,7 +627,10 @@ block that reads to its last complete block.
   [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
-  wheel, the cursor and the in-game menu moved, two frame dumps). It runs every check above and
+  wheel, the cursor and the in-game menu moved, two frame dumps). A fixture with `"watch": true`
+  runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
+  edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek (its dump
+  `w<T1>` compared like the others), resume and Leave. It runs every check above and
   reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. It
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
@@ -678,7 +681,10 @@ block that reads to its last complete block.
   or `replay: <name>: seek to <T> refused: <why>`, and exits 0 when it arrived, 1 when it was
   refused, timed out or nothing was playing, 2 on a usage error. A playback that has played to its
   end still seeks; a level that has ended does not (`replay: <name> at its level's end, …`). By
-  hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the same on a playing level.
+  hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the same on a playing level;
+  `dock seek <T>` asks it through the dock's own entry, as a click on its strip does (clamped to
+  the recording, no dump: on a paused playback, arm `dump <name> at <T>` after the `sought from`
+  line, which leaves it at T − 1).
   `replay play` and `replay seek --recording` take `--timeline N` to play a forked timeline; the
   playing crosses each fork with a seek (`replay: <name>: timeline <N> continues from GameTime <T>`).
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P

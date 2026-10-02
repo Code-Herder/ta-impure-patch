@@ -54,6 +54,7 @@
 #include "../inc/tagpu.h"
 #include "tagpu_trigger.h"
 #include "tagpu_log.h"
+#include "tagpu_hud.h"    /* the dock region's scale, carried on the flip marker */
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
@@ -124,7 +125,7 @@ static void ops_forget_base(unsigned base, int retired);   /* below, with the ri
 typedef struct OVL {
     short l, t, r, b, dx, dy;
     unsigned short fw, fh;
-    unsigned char ck;
+    unsigned char ck, exact;
     const void* frame;                /* the atlas key, a VALUE (see OP::frame) */
     unsigned key;                     /* OP::fkey                                */
     unsigned char* plane;             /* glen bytes, ours                        */
@@ -155,6 +156,11 @@ typedef struct SURF {
     int isAsset;                      /* created with a "bitmaps\\....PCX" tag AND never yet
                                          named as an op's destination: a decoded asset, not
                                          a composition. `op_add` clears it; see PK_ASSET  */
+    short exactL, exactT, exactW, exactH; /* Impure's own pixels in the asset, drawn as
+                                         drawn under Classic++ (tagpu_gui_asset_exact);
+                                         exactW 0 = none. A property of THIS
+                                         allocation's bytes: the allocation observer
+                                         clears it with `isAsset`                  */
     int assetSent;                    /* the consumer ACKED this surface's current token */
     unsigned assetTok;                /* the token of the offer in flight, 0 = none    */
     unsigned assetTokPrev;            /* the offer before it, whose echo may still come */
@@ -599,9 +605,11 @@ static SURF* surf_of_ctx(const int* ctx)
    flip, whose box holds a Smacker frame -- see `movie_frame`. `OP_FREE` is not
    a leaf's either: `surf_retire` records it where the engine freed a surface,
    and its box is empty. */
+/* `OP_GREY` is `0x4BFE10`, the grey remap a greyed gadget is put through
+   before the box shader darkens it: a box, and no argument beyond it. */
 enum { OP_GAF = 1, OP_GAFA, OP_GAFB, OP_GAFD, OP_SCALE, OP_TEXT, OP_LINE, OP_BAR, OP_RECT, OP_FRAME, OP_FILL, OP_COPY,
-       OP_FLIP, OP_FOCUS, OP_DIAG, OP_MOVIE, OP_FREE, OP_NKIND };
-static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag", "movie", "free" };
+       OP_FLIP, OP_FOCUS, OP_DIAG, OP_MOVIE, OP_FREE, OP_GREY, OP_NKIND };
+static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag", "movie", "free", "grey" };
 typedef struct OP {
     unsigned base; short l, t, r, b; unsigned char kind;
     /* what the publisher needs beyond the box (gui-renderer.md 3.6) */
@@ -622,8 +630,11 @@ typedef struct OP {
        path does not is exactly the sort of thing that survives until it
        crashes someone. */
     unsigned char fcomp, fsub, fsubn;
+    unsigned char exact;                        /* TAGPU_GAF_EXACT (tagpu_gaf.h)  */
     unsigned sgen;                              /* the seen table `glen` was decided against */
-    short dx, dy;                               /* sprite: unclipped top-left */
+    short dx, dy;                               /* sprite: unclipped top-left;
+                                                   flip: dx the dock region's
+                                                   scale (tagpu_hud.h), 0 none */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
     /* WHICH PHASE OF THE ENGINE'S DRAW THIS OP WAS OBSERVED IN, and it is the
        only field here that is about PROVENANCE rather than about the draw. 1
@@ -1186,6 +1197,12 @@ static unsigned s_tintNoTable = 0;
 static unsigned s_boxes = 0;
 static unsigned s_boxRow0 = 0;
 static unsigned s_boxNoTable = 0;
+/* ---- THE GREY REMAP'S TWO (`0x4BFE10`, `grey=` on the heartbeat) ----------
+   `s_greys` crossed as `PK_TINT`; `s_greyNoTable` one observed while caps
+   bit 8 was clear, the state in which `0x4BFE10` returns without drawing
+   (`0x4BFE3A`), so it is a match and not a loss, and expected to read 0. */
+static unsigned s_greys = 0;
+static unsigned s_greyNoTable = 0;
 
 /* NEVER REISSUED, which is what makes the echo an identity. Skips 0 on wrap so
    that 0 always means "no offer in flight"; a wrap needs 2^32 offers. */
@@ -1480,7 +1497,7 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
     o->base = s->base; o->l = (short)l; o->t = (short)t; o->r = (short)r; o->b = (short)b;
     o->kind = (unsigned char)kind;
     /* THE PROVENANCE, TAKEN HERE BECAUSE THIS IS THE ONLY PLACE AN OP IS BORN.
-       Stamping at the observer would mean seventeen places to keep in step, and
+       Stamping at the observer would mean one place per leaf to keep in step, and
        `chrome_emit` — which is not inside any engine call — would need its own
        rule. It does not: it runs at the flip, past `0x469F36`, so the flag it
        reads is 0 by the same ordering that gives every other op its answer. */
@@ -1527,7 +1544,7 @@ static unsigned char* s_arena;
    through the census's half of their `(s_census || g_gui_draw)` gate. The
    writer is `tagpu_gui_surf.c` (`g_gui_draw = on`).
 
-   WHAT THE LEVER BUYS WITHOUT A CONSUMER: the 17 leaves record ops into
+   WHAT THE LEVER BUYS WITHOUT A CONSUMER: the leaves record ops into
    `s_ops`, and the census diffs each surface against its own copy and reports
    what no op explains. That is the harness mode, which is
    why `census` is a token of its own.
@@ -1721,6 +1738,23 @@ static int pub_surface_bytes(SURF* s, int l, int t, int r, int b, TAGPU_PUBOP* o
     return 1;
 }
 
+/* An asset's own-art box rides every `PK_ASSET` of it, the offer and the
+   snapshot's seed alike, so whichever one seeds the twin carries it. */
+static void asset_exact_box(const SURF* s, TAGPU_PUBOP* o)
+{
+    o->sl = s->exactL; o->st = s->exactT;
+    o->fw = (unsigned short)s->exactW; o->fh = (unsigned short)s->exactH;
+}
+
+void tagpu_gui_asset_exact(const void* pixels, int l, int t, int w, int h)
+{
+    SURF* s = surf_by_base((unsigned)(size_t)pixels);
+    if (!s || !s->isAsset || l < 0 || t < 0 || w <= 0 || h <= 0 || l + w > s->w || t + h > s->h)
+        return;
+    s->exactL = (short)l; s->exactT = (short)t;
+    s->exactW = (short)w; s->exactH = (short)h;
+}
+
 /* THE SNAPSHOT AS THE SEED: the loader's bytes as a `PK_ASSET` -- the one kind
    whose payload crosses, and these bytes meet its guarantee because they were
    taken before any draw (see `snap_take`) -- then every sprite drawn onto them
@@ -1737,6 +1771,7 @@ static int pub_seed_snap(SURF* s)
     if (!o) return 0;
     o->w = s->w; o->h = s->h; o->pitch = s->w;
     o->l = 0; o->t = 0; o->r = (short)(s->w - 1); o->b = (short)(s->h - 1);
+    asset_exact_box(s, o);
     dst = pub_bytes(o, (unsigned)s->w * (unsigned)s->h);
     if (!dst) return 0;
     memcpy(dst, s->snap, (size_t)s->w * s->h);
@@ -1746,7 +1781,7 @@ static int pub_seed_snap(SURF* s)
         o = pub_op(PK_SPRITE, s->base); if (!o) return 0;
         o->l = v->l; o->t = v->t; o->r = v->r; o->b = v->b;
         o->sl = v->dx; o->st = v->dy; o->fw = v->fw; o->fh = v->fh; o->ck = v->ck;
-        o->frame = v->frame; o->pix = (const void*)(size_t)v->key;
+        o->frame = v->frame; o->pix = (const void*)(size_t)v->key; o->exact = v->exact;
         dst = pub_bytes(o, v->glen);
         if (!dst) return 0;
         memcpy(dst, v->plane, v->glen);
@@ -1803,6 +1838,7 @@ static void ovl_add(SURF* s, const OP* op)
     memcpy(v->plane, op->glen ? s_gafBuf + op->goff : held->plane, v->glen);
     v->l = op->l; v->t = op->t; v->r = op->r; v->b = op->b;
     v->dx = op->dx; v->dy = op->dy; v->fw = op->fw; v->fh = op->fh; v->ck = op->ck;
+    v->exact = op->exact;
     v->frame = op->frame; v->key = op->fkey;
     s->novl++;
 }
@@ -1829,9 +1865,9 @@ static int pub_seed(SURF* s)
 
 /* ---- THE REMAP TABLE A TINT INDEXES ------------------------------------
    `PK_SHADE` carries `TAGPU_GUI_SHADE_ROWS` rows (layout in inc/tagpu_gui.h):
-   the lighten table `globals+0xC8` whole, for the focus edges, and then one
+   the lighten table `globals+0xC8` whole, for the focus edges, then one
    row per box-shader level, derived here from that table and from PALETTE.SHD
-   `globals+0xC4`. `tagpu_packet_pub.c` latches the same two tables for the
+   `globals+0xC4`, and last the grey remap `globals+0xCC` whole. `tagpu_packet_pub.c` latches the same two tables for the
    world (`lht_snapshot`, `shd_snapshot`); this is the GUI queue's own copy,
    because the op stream is a different channel from the frame packet and a
    pointer between them would be a lifetime nobody has established.
@@ -1840,7 +1876,9 @@ static int pub_seed(SURF* s)
    `0x4BAB00` (SHD, from `0x42E21B`) and `0x4BAB30` (LHT, from `0x42E2AB`) --
    reached only through `0x42E1D0` / `0x42E260`, whose one caller is
    `UIPipelinesInit 0x491200` at `0x49139F` / `0x4913B1`, itself called once
-   (`0x49EA62`). So a table read here at the flip is the table the engine drew
+   (`0x49EA62`). The grey remap is built by `0x4BAD30` from `0x42E2F0`, whose
+   one caller is the same init at `0x4913C3`; its setter `0x4BAB60` has no
+   caller at all. So a table read here at the flip is the table the engine drew
    with, whenever the draw was, once its caps bit is set.
 
    KEYED ON THE CONTENT anyway, and on which tables were built: the setters
@@ -1849,10 +1887,10 @@ static int pub_seed(SURF* s)
    way. The read is on the game thread, where both setters run.
 
    THE READABILITY TEST IS THE ENGINE'S OWN, and it is a BOUND, not a probe.
-   `PROG_CAPS` bit 7 is "the lighten table is enabled" and bit 6 "PALETTE.SHD
-   is enabled": the init writes the word at `0x4B5AC4` and allocates each
-   buffer only when its bit is set (`0x4BA610` at `0x4B5ADF`, `0x4BA660` at
-   `0x4B5B0F`), and `0x4BAB30` / `0x4BAB00` refuse to fill one whose bit is
+   `PROG_CAPS` bit 7 is "the lighten table is enabled", bit 6 "PALETTE.SHD
+   is enabled" and bit 8 "the grey remap is enabled": the init writes the word
+   at `0x4B5AC4` and allocates each buffer only when its bit is set (`0x4BA610`
+   at `0x4B5ADF`, `0x4BA660` at `0x4B5B0F`, `0x4BA6B0` at `0x4B5B29`), and `0x4BAB30` / `0x4BAB00` refuse to fill one whose bit is
    clear. The bit is set BEFORE the allocation and the fill, so a set bit
    with a pointer means the buffer exists, not that it has been filled; the
    fills follow once, at init (above), and the content key below re-sends the
@@ -1867,9 +1905,10 @@ static int pub_seed(SURF* s)
    `publisher` in `thread-split.allow`, so it may include that header, and a
    second spelling of `0x51FBD0` in a file that already reaches it twice is how
    two copies of one fact drift apart. */
-enum { SHADE_LHT = 1, SHADE_SHD = 2 };
+enum { SHADE_LHT = 1, SHADE_SHD = 2, SHADE_GREY = 4 };
 static unsigned char s_lht[TAGPU_GUI_TABLE_ROWS * 256u];    /* globals+0xC8 */
 static unsigned char s_shd[TAGPU_GUI_TABLE_ROWS * 256u];    /* globals+0xC4 */
+static unsigned char s_grey[256];                           /* globals+0xCC */
 static unsigned char s_shadeTab[TAGPU_GUI_SHADE_BYTES];     /* what PK_SHADE carries */
 static unsigned s_shadeBuilt = 0;     /* SHADE_*: the tables s_shadeTab came from */
 static int      s_lhtSent = 0;        /* crossed since the last reset          */
@@ -1896,6 +1935,8 @@ static void shade_build(void)
         for (i = 0; i < 128; i++) row[i] = T[r * 256u + i];
         if (r) for (i = 128; i < 256; i++) row[i] = T[(r - 1) * 256u + i];
     }
+    if (s_shadeBuilt & SHADE_GREY)
+        memcpy(s_shadeTab + TAGPU_GUI_SHADE_GREY * 256u, s_grey, sizeof s_grey);
 }
 
 /* `need` is the SHADE_* tables the op about to be published indexes.
@@ -1927,6 +1968,13 @@ static int pub_shade(unsigned need)
         if (ptr_ok(t)) {
             have |= SHADE_SHD;
             if (memcmp(s_shd, t, sizeof s_shd) != 0) { memcpy(s_shd, t, sizeof s_shd); s_shadeBuilt = 0; }
+        }
+    }
+    if (caps & 0x100u) {
+        t = *(const unsigned char* const*)(g + PROG_GREY);
+        if (ptr_ok(t)) {
+            have |= SHADE_GREY;
+            if (memcmp(s_grey, t, sizeof s_grey) != 0) { memcpy(s_grey, t, sizeof s_grey); s_shadeBuilt = 0; }
         }
     }
     if ((have & need) != need) return 0;
@@ -2015,6 +2063,9 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
         }
     }
     hh ^= (unsigned)(size_t)pix * 2654435761u;
+    /* the tag word, so that whether the consumer restores a frame is part of
+       what names it (tagpu_gaf.h TAGPU_GAF_EXACT) */
+    hh = hash_run(hh, fr + TAGPU_GF_TAG, 4);
     hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x04) << 16;     /* the hotspot */
     hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x06);
     return (const void*)(size_t)(hh ? hh : 1u);
@@ -2842,7 +2893,9 @@ static void publish_window(unsigned flipSurf)
         if (op->kind == OP_FLIP) {
             s = pub_surf(op->base);
             if (s && seed_due(s) && !pub_seed(s)) return;
-            o = pub_op(PK_FRAME, op->base); if (!o) return; pub_commit();
+            o = pub_op(PK_FRAME, op->base); if (!o) return;
+            o->w = op->dx;
+            pub_commit();
             continue;
         }
         if (op->dup) continue;
@@ -2985,7 +3038,7 @@ static void publish_window(unsigned flipSurf)
             o = pub_op(PK_SPRITE, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
-            o->frame = op->frame; o->pix = key;
+            o->frame = op->frame; o->pix = key; o->exact = op->exact;
             if (!have) {
                 unsigned n = op->glen ? op->glen : held->glen;
                 unsigned char* dst = pub_bytes(o, n);
@@ -3212,6 +3265,25 @@ static void publish_window(unsigned flipSurf)
             s_boxes++;
             continue;
         }
+        /* THE GREY REMAP IS THE SAME OPERATION THROUGH ONE MORE ROW: every
+           pixel of the box `dst = T[dst]` through `globals+0xCC`, one clip
+           (`0x4BF620`), no colour. It is the first half of how the gadget
+           painters grey a gadget -- `0x4A69AD` for a button, `0x4A1B1F`,
+           `0x4A2BBD`, `0x4A5B01` for the others -- each followed at once by
+           the box shader at level -20 over the same rect, which the branch
+           above carries. With caps bit 8 clear the engine draws nothing, and
+           neither does this. */
+        if (op->kind == OP_GREY) {
+            int st = pub_shade(SHADE_GREY);
+            if (st < 0) return;
+            if (st == 0) { s_greyNoTable++; continue; }
+            o = pub_op(PK_TINT, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->fg = (unsigned char)TAGPU_GUI_SHADE_GREY;
+            pub_commit();
+            s_greys++;
+            continue;
+        }
         /* THE TRANSFORMED FRAME, already resampled to its stamp by
            `scale_capture`, crossing as the box of indices it leaves (`PK_PLANE`;
            see there for why a box and not a sprite). It carries its plane every
@@ -3344,6 +3416,7 @@ static void publish_window(unsigned flipSurf)
                 a->w = src->w; a->h = src->h; a->pitch = src->pitch;
                 a->l = 0; a->t = 0;
                 a->r = (short)(src->w - 1); a->b = (short)(src->h - 1);
+                asset_exact_box(src, a);
                 if (!pub_surface_bytes(src, 0, 0, src->w - 1, src->h - 1, a)) return;
                 pub_commit();
                 src->assetTokPrev = src->assetTok;
@@ -3821,6 +3894,11 @@ static int __cdecl before_flip(void* entry_esp)
         OP* o = &s_ops[s_nops++];
         memset(o, 0, sizeof *o);
         o->kind = OP_FLIP; o->base = s->base;
+        /* THE DOCK'S REGION AS THIS FRAME DREW IT: read here, on the thread
+           that writes it, at the flip of the frame it describes, so the
+           marker the composite takes it from follows exactly the ops that
+           drew (or stopped drawing) the dock. */
+        o->dx = (short)tagpu_hud_dock_q8();
     }
     /* the cursor is drawn into the back buffer INSIDE the flip and its
        background restored before it returns: nothing in between is UI */
@@ -3894,7 +3972,7 @@ static int __cdecl before_flip(void* entry_esp)
             /* DID THE ASSET CLAIM ACTUALLY HOLD? The claim `PK_ASSET` rests on
                is that nothing writes an asset surface after the loader filled
                it, and `op_add` can only enforce the half that comes through the
-               17 leaves -- an engine path that re-filled one without passing a
+               leaves -- an engine path that re-filled one without passing a
                leaf would leave the twin holding older bytes and nothing would
                re-offer. This MEASURES that residual, for free, because the
                census already diffs every tracked surface against its own
@@ -5050,7 +5128,7 @@ void tagpu_gui_init(void)
     if (!want) {
         glog("gui: trigger host only (tagpu_gui.on is not on) — the flip 0x4C63A0 "
              "is observed, so tacli's triggers and input injection work; the op "
-             "capture, the census and the 17 leaves are OFF");
+             "capture, the census and the leaves are OFF");
         return;
     }
 
@@ -5083,7 +5161,7 @@ void tagpu_gui_init(void)
     glog(b);
 }
 
-/* "Did the 17 leaves install": `tagpu_gui_surf.c` asks this before drawing its
+/* "Did the leaves install": `tagpu_gui_surf.c` asks this before drawing its
    layer. */
 int tagpu_gui_installed(void) { return s_installed; }
 
@@ -5118,24 +5196,26 @@ void tagpu_gui_flush(unsigned int frame_counter)
     /* mingw's `_snprintf` does not NUL-terminate on truncation, and `glog`
        hands the result to `fprintf("%s")`, so an undersized buffer is an
        out-of-bounds READ, not a tidy cut. */
-    char b[700];        /* 688 worst case, COUNTED OUT OF THE FORMAT STRING rather
-                           than adjusted by eye: 234 literal characters, 42 `%u` at
+    char b[720];        /* 715 worst case, COUNTED OUT OF THE FORMAT STRING rather
+                           than adjusted by eye: 241 literal characters, 44 `%u` at
                            ten digits, and THREE `%d` at eleven (`world=…/%d`,
                            `surfaces=%d`, `draw=%d`) plus the NUL. A conversion is
                            sized by its TYPE, not by the values you expect in it:
                            `s_phaseLive` only ever holds 0 or 1 and still counts
                            eleven. The `asset=` and `tint=` groups are FOUR fields
-                           each, `wheel=` four too, `box=` three, `winpeak=` two. */
+                           each, `wheel=` four too, `box=` three, `grey=` and
+                           `winpeak=` two. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Forty-two
-           `%u`s at ten digits and three `%d` at eleven, plus 234 literals, is
-           688 bytes with the terminator, under the 700 of `b`. The observed line is ~300; the gap is
+        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Forty-four
+           `%u`s at ten digits and three `%d` at eleven, plus 241 literals, is
+           715 bytes with the terminator, under the 720 of `b`; the explicit
+           terminator below holds even if a group is added without a recount. The observed line is ~300; the gap is
            entirely how long the session has run. COUNT IT AGAIN when you add a
            group. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u box=%u/%u/%u wheel=%u/%u/%u/%u winpeak=%u/%u",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u box=%u/%u/%u grey=%u/%u wheel=%u/%u/%u/%u winpeak=%u/%u",
                   s_flips, s_opsTotal, s_opsDropped,
                   s_worldOps, s_worldDropped, s_phaseLive, s_fillClipped, s_vpClears,
                   s_changedTotal, s_unexplTotal, s_nsurf,
@@ -5144,8 +5224,10 @@ void tagpu_gui_flush(unsigned int frame_counter)
                   s_assetSends, s_assetAcked, s_assetRevoked, s_assetDrift,
                   s_tints, s_lhtCopies, s_focusRowBad, s_tintNoTable,
                   s_boxes, s_boxRow0, s_boxNoTable,
+                  s_greys, s_greyNoTable,
                   s_lwNotches, s_lwRows, s_lwMiss, (unsigned)s_lwFull,
                   s_winPeakBytes, s_winPeakOps);
+        b[sizeof b - 1] = 0;
         glog(b);
         s_censusSeq++;
         {

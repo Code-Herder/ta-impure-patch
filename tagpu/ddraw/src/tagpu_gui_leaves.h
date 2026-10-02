@@ -104,6 +104,7 @@ static void gaf_record(const int* ctx, SURF* s, const unsigned char* fr,
            THE RE-EMIT HAS ITS OWN ORDERING for this same read and it is not
            this one -- it is not inside any engine call. See `chrome_emit`. */
         s_lastOp->fcomp = fr[0x09]; s_lastOp->fsub = fr[0x0A]; s_lastOp->fsubn = fr[0x0B];
+        s_lastOp->exact = (unsigned char)TAGPU_GAF_IS_EXACT(fr);
         /* ONLY WHEN SOMETHING WILL CONSUME IT. `publish` returns at once when
            `!g_gui_draw`, and a census-less, draw-less window is thrown away
            unread (`s_nops = 0`) -- so without this test the decode would run
@@ -373,6 +374,22 @@ static int __cdecl before_frame(void* e)
     if (lvl < -0x20) lvl = -0x20;
     if (lvl > 0x1F) lvl = 0x1F;
     if (s_lastOp) s_lastOp->col = (unsigned char)(signed char)lvl;
+    return 0;
+}
+/* 0x4BFE10: the GREY REMAP, (ctx, RECT*) ret 8: one clip through 0x4BF620, then
+   every pixel `dst = T[dst]` through the 256 bytes at globals+0xCC (`0x4CCED5`,
+   the destination read unsigned), and nothing at all while caps bit 8 is clear
+   (`0x4BFE3A`). A NULL ctx is the back surface (`0x4BFE55`), as for every leaf
+   here; the RECT is never NULL (`0x4BFE18` reads it unconditionally).
+
+   AN INVERTED BOX GREYS NOTHING, for the clipper's reason `before_frame`
+   gives, so it records nothing rather than `rect_box_rc`'s swapped box. */
+static int __cdecl before_grey(void* e)
+{
+    const int* rc = (const int*)(size_t)ARG(e, 2);
+    if (!on_game_thread()) return 0;
+    if (ptr_ok(rc) && (rc[0] > rc[2] || rc[1] > rc[3])) { s_lastOp = NULL; return 0; }
+    rect_box_rc(e, OP_GREY, rc);
     return 0;
 }
 static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
@@ -654,6 +671,7 @@ static int __cdecl before_scale(void* e)
         o->fw = (unsigned short)dw; o->fh = (unsigned short)dh;
         o->dx = (short)l; o->dy = (short)t;
         o->fcomp = fr[0x09]; o->fsub = fr[0x0A]; o->fsubn = fr[0x0B];
+        o->exact = (unsigned char)TAGPU_GAF_IS_EXACT(fr);
         o->su  = (unsigned short)winU;  o->sv  = (unsigned short)winV;
         o->sww = (unsigned short)winW; o->swh = (unsigned short)winH;
         /* the same gate `gaf_record` uses: never decode for a window nobody reads */
@@ -854,7 +872,7 @@ static void* __cdecl after_alloc(unsigned int* regs)
        `op_add` clearing this the first time an op names it. The bytes are NOT
        read now -- the surface is blank at this point (see the seed below) and
        the loader has not run -- they cross at the first copy that reads it. */
-    if (s) { s->isAsset = tag_is_shell_bg(tag); s->assetSent = 0;
+    if (s) { s->isAsset = tag_is_shell_bg(tag); s->assetSent = 0; s->exactW = 0;
              s->assetTries = 0; s->assetTok = 0; s->assetTokPrev = 0;  /* all five, as everywhere else */
              snap_free(s); }   /* a new allocation: the old bytes are not this one's */
     if (s && s_trace) {
@@ -928,6 +946,7 @@ static const LEAF LEAVES[] = {
     { 0x004D85A0u, "memfree", { 0x8B, 0x44, 0x24, 0x04, 0x50 }, 5, before_memfree, NULL },
     { 0x004A81E0u, "build", { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0xC0, 0x03, 0x00, 0x00 }, 10, before_build, NULL },
     { 0x004BF4D0u, "frame", { 0x83, 0xEC, 0x40, 0x53, 0x55, 0x56, 0x57 }, 7, before_frame, NULL },
+    { 0x004BFE10u, "grey",  { 0x83, 0xEC, 0x40, 0x8B, 0x44, 0x24, 0x48 }, 7, before_grey, NULL },
 };
 #define LEAF_COUNT ((int)(sizeof LEAVES / sizeof LEAVES[0]))
 

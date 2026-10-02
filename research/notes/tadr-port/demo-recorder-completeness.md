@@ -396,7 +396,29 @@ or with its pair. The trigger `tagpu_replay.trigger` is read on the game thread 
 frame visit, before the in-play draw and on paused frames too; it knows `dump <name>` (the next
 capture point), `dump <name> at <T>` (the capture point of GameTime T exactly, whatever the speed or
 pauses, since a puppet host's speed keys change nothing), `dump <name> now` (a frame dump, at
-once), `seek <T> [dump <name>]` and `roundtrip <name> at <T>`.
+once), `seek <T> [dump <name>]`, `dock seek <T>` (the dock's own seek entry,
+`tagpu_replay_seek_request`, which takes no dump) and `roundtrip <name> at <T>`.
+
+**The player's way in (W).** A fixture with `"watch": true` in `fixtures.json` — `stock-limits` on
+the stock-limits build and `wpn-badtgt` on the raised one, so the landing tier's coverage holds
+both builds — runs a fifth process on its recording, `watch_lane` in `tareplay.py`, which starts
+the playing as a player does and drives it through the S5 dock
+([S5](demo-recorder-s5-ui.md)). From the main menu's REPLAYS it puts three files in the browser,
+dated so their rows are known and each Watch checked against the file the browser logs it took:
+a copy whose header names another `replay-layout.tsv` hash, which Watch's own checks refuse
+(`watch_refuse`); a copy whose skirmish settings name a map no archive has, which the Start's
+terrain check refuses after the seats are exchanged (`watch_undo` puts them back); each refusal's
+notice is answered OK. Then the recording itself is watched; DKSPEED changes the speed; the
+in-game Options' OK (Tab, PREFS, PREV — the settings save `0x430F00`) must leave the instance's
+registry store at the player's `gamespeed` while the playing keeps the dock's; DKPLAY pauses
+(GameTime and the pause word are read to hold still); the trigger `dock seek <T1>` seeks; dump
+`w<T1>` is armed at T1 and DKPLAY resumes; DKLEAVE and Yes return to the browser with the player's
+speed back in the game and in the store; a second Watch plays it again, and its coverage file
+carries the first level's teardown. `w<T1>` is compared with the recording by `tarec compare
+--puppet`, as P's, R's and Q's dumps are, and must be EQUAL. The one S5 function no fixture reaches
+is `watch_refuse_engine`, the notice for the engine's CD check `0x41D6A0`, which cannot refuse in
+this exe: its first test reads `0x50289C`, 1 in the file and written by no instruction
+(DISASSEMBLED), and returns `'.'`.
 
 **The round trip runs on a puppet host** (decided 2026-10-01, [below](#decisions-taken)). At the
 frame visit after step T−1 of a playing it takes frame dump A, puts the static `SIM_TRANSIENT`

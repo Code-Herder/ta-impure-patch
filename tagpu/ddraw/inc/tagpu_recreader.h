@@ -155,6 +155,18 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
 
 void recr_close(RecReader* r);
 
+/* What a list of recordings shows of one, without building its world: the header's map and seats,
+   the first recorded GameTime, the last (the end block's, else the last whole stream block's), and
+   why it ended (RecEnd; 0 when the file has no end block, as one cut short has none). */
+typedef struct RecSummary {
+    unsigned format, start, last, end_reason, nseats;
+    char     map[RECR_TEXT];
+    char     name[REC_PLAYERS][RECR_NAME];      /* the seats' names, in the header's order    */
+} RecSummary;
+
+/* 1 read; 0 the file cannot be read or is not a recording of this format (why). */
+int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
+
 /* A TIMELINE is a segment of the file (tagpu_recfmt.h): the original, id 0, or a fork recorded
    from a takeover. A CHAIN is a timeline and its ancestors, root first: segment s covers
    [s.first, c.fork_at - 1] for its child c on the chain, and the chosen timeline [first, last]. */

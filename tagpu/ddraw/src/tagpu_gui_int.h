@@ -13,7 +13,9 @@
    flip publishes fresh seeds (gui-renderer.md 3.5, "the overflow policy"). */
 
 enum {
-    PK_FRAME = 1,   /* a flip: `surf` is the presented surface                */
+    PK_FRAME = 1,   /* a flip: `surf` is the presented surface; `w` the HUD
+                       scale of the dock region it was drawn with, 0 = none
+                       (tagpu_hud.h)                                          */
     PK_RESET,       /* forget every twin (TAGPU_GUI_WHY_*: re-arm, overflow)  */
     PK_SEED,        /* `surf` w x h: the twin, made empty; nothing follows     */
     PK_FREE,        /* `surf` is gone                                          */
@@ -37,7 +39,9 @@ enum {
                        wrote, from a moment after it ran. `0x4BF7B0` does NOT
                        produce this -- it tints, and produces `PK_TINT` below. */,
     PK_ASSET        /* a DECODED ASSET SURFACE, whole: `w`/`h`/`pitch` as a seed,
-                       and its bytes follow in the arena. It is NOT `PK_SEED`,
+                       and its bytes follow in the arena; `sl`/`st`/`fw`/`fh`
+                       the box of Impure's own art in it, `fw` 0 = none
+                       (tagpu_gui_asset_exact). It is NOT `PK_SEED`,
                        and the difference is the whole reason it may cross where
                        a seed's bytes may not: those would be what the 1997
                        rasteriser COMPOSED, and this is a surface the engine's LOADER
@@ -165,6 +169,7 @@ typedef struct TAGPU_PUBOP {
        what it uses and storing an int here would only invite a wider compare
        than the engine's [BINARY-VERIFIED 2026-09-09] */
     unsigned char  fg, bg, tr;
+    unsigned char  exact;           /* sprite: TAGPU_GAF_EXACT, never restored  */
     unsigned short fw, fh;          /* sprite: frame size                      */
     unsigned       surf;            /* destination surface (its pixel base)    */
     unsigned       src;             /* copy: source surface                    */

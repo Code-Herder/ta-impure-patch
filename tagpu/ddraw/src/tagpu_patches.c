@@ -9212,6 +9212,74 @@ static int fix_map_terrain(void)
     return fix_write(site, 2);
 }
 
+SIM_FEATURE(load_unpaused, SIM_PUPPET_RUNS, "battle");
+
+/* A LEVEL STARTS PAUSED after the last one was left through the in-game menu. [DISASSEMBLED]
+   The pause is main+0x38A51 bit 0. While it is set the frame function 0x496790 skips the
+   scheduler 0x495230 and the tick 0x495490 (0x4968AA, 0x496920), which are called nowhere else;
+   the scheduler tests it too (0x4953D9) and the status icons show it (0x46A107, 0x46A2A8). The
+   pause key flips it and puts the new bit in a message 0x19 (0x4960AA..0x4960E0) [INFERRED:
+   0x451DF0 sends it to the peers]. Opening the in-game menu sets it outside a network game
+   (0x460E00) and only the menu's close clears it (0x460A33); leaving the level from the menu
+   (EXIT, MAINMENU, yes) closes nothing, so the bit outlives the level. The LOADGAME screens set
+   it as well (0x49306D, 0x493330). The loader 0x497180 clears it only in its network branch
+   (0x49720A, mode 3). Of the word's other writers, 0x44B6F0 is in the battle room's code
+   [INFERRED from its neighbours] and 0x49990E is key 0xE3's in state 7's handler 0x499880;
+   0x495B6D clears the bit for a step and 0x495DC2 puts back what 0x495B85 saved;
+   0x455967 stores a peer's message 0x19. So the next skirmish, campaign mission or saved game
+   starts paused: MEASURED 2026-10-01, a stock SKIRMISH Start after a level left from the menu held
+   GameTime 0 with the bit set.
+
+   THE FIX, at 0x49842A, the load state's call of the HUD chrome 0x467D70: outside a network
+   game the bit is cleared, then the call runs. THE INVARIANT: every level reaches its first tick
+   with the bit clear, except a network game's, whose bit is the loader's and the peers'.
+   - Every level is loaded by the load state 0x497F40. Only three front-end states install it:
+     0x496BB0 at 0x496C3D for mode 2 (a skirmish, a Watch, a tacli playback), 0x496DB0 at
+     0x496DFF (mode 1, a campaign mission; 0x496BB0 sends mode 1 there at 0x496BF6), and the
+     battle room's 0x496CE0 at 0x496D75 and 0x496D9D (a network game). A saved game, loaded from
+     the shell or from the in-game menu, goes the same way: the LOADGAME screen's load branch sets
+     the mode from the save's Gametype (0x49267F, 0x434AB0) and installs 0x496BB0 (edi from
+     0x49295B, stored at 0x49297E or 0x492A7F). Those two are the only stores of the state
+     handler main+0x391F5 from a register; of the 22 with an immediate, only the five named and
+     SetState 0x490B30's case 5 (0x490BB3) store 0x497F40, and SetState's eleven callers hand it
+     1, 2 or 7.
+   - The load state goes on only once the loader thread 0x497C90 has set its done bit,
+     main+0x38D75 bit 1 (tested at 0x498342; set at 0x497C62, 0x497180's last store before it
+     returns and the thread ends), so this write races nothing on that thread. Both branches of
+     0x498353..0x498455 meet at 0x49842A (0x498386 is the only jump in), before the frame
+     function's first run at 0x49842F and before the in-play state 0x499200 is installed at
+     0x498455 (SetState's case 6, never handed 6).
+   The `and byte` writes bit 0 alone; bits 1 and 2 are the scheduler's (0x49535C, 0x495367,
+   0x49527A). The recorder does not carry the word: replay-globals.tsv has no row for it, and a
+   recording's iterations are the ticks that ran, so a pause delays a recording without changing
+   it. GameingState main+0x391E9 is tested for NULL only as a value filter: the loader has just
+   read the mode through it (0x4971C7). */
+/* CLASS: local. Without it a level starts paused, which the pause key ends. */
+static int fix_load_unpaused(void)
+{
+    FIXSITE site[1] = {
+        { 0x0049842Au, 5, { 0xE8, 0x41, 0xF9, 0xFC, 0xFF }, { 0 } },    /* call 0x467D70 */
+    };
+    unsigned char *c, *p;
+    if (!fix_match(site, 1)) return FIX_BYTES;
+    if (!(c = fix_code(40))) return FIX_STUB;
+    p = c;
+    *p++ = 0x50; *p++ = 0x51;                                           /* push eax; push ecx */
+    *p++ = 0xA1; *p++ = 0xE8; *p++ = 0x1D; *p++ = 0x51; *p++ = 0x00;    /* mov eax,[main]     */
+    *p++ = 0x8B; *p++ = 0x88; *p++ = 0xE9; *p++ = 0x91; *p++ = 0x03; *p++ = 0x00;
+                                                                        /* mov ecx,[eax+0x391E9] */
+    *p++ = 0x85; *p++ = 0xC9;                                           /* test ecx,ecx       */
+    *p++ = 0x74; *p++ = 0x0C;                                           /* jz done            */
+    *p++ = 0x83; *p++ = 0x39; *p++ = 0x03;                              /* cmp dword [ecx],3  */
+    *p++ = 0x74; *p++ = 0x07;                                           /* je done            */
+    *p++ = 0x80; *p++ = 0xA0; *p++ = 0x51; *p++ = 0x8A; *p++ = 0x03; *p++ = 0x00; *p++ = 0xFE;
+                                                                        /* and byte [eax+0x38A51],0xFE */
+    *p++ = 0x59; *p++ = 0x58;                                           /* done: pop ecx; pop eax */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00467D70u); p += 4;              /* jmp 0x467D70       */
+    fix_branch(&site[0], 0xE8, c);
+    return fix_write(site, 1);
+}
+
 SIM_FEATURE(engine_defects, SIM_PUPPET_RUNS, "battle");
 
 static void patch_engine_defects(void)
@@ -9252,6 +9320,7 @@ static void patch_engine_defects(void)
     int built = fix_built_bounds();
     int tx   = fix_transported();
     int maps = fix_map_terrain();
+    int unp  = fix_load_unpaused();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -9363,6 +9432,13 @@ static void patch_engine_defects(void)
               "0x%08X, saved maps set aside at 0x%08X",
               fix_state(maps), (unsigned int)(size_t)&s_mapsDiag.noTerrain,
               (unsigned int)(size_t)&s_mapsDiag.savedNoTerrain);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: a level starts unpaused outside a network game, the pause bit "
+              "main+0x38A51 cleared before its first tick (0x49842A) %s",
+              fix_state(unp));
     b[sizeof b - 1] = 0;
     plog(b);
 

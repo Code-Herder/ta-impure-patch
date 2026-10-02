@@ -2197,6 +2197,20 @@ G15b already built.
   model's receptive field — G15-0's verdict, "nothing under 12×12". `norestore` in
   `tagpu_gui.on` is the A/B: the layer without Classic++ art, so the UI half can be toggled live
   without touching the world's restorer.
+- **Impure's own art is never restored.** A frame whose header dword `+0x0C` is
+  `TAGPU_GAF_EXACT` (`tagpu_gaf.h`) is drawn in the palette, as GDI draws it: the engine neither
+  rewrites nor reads that word ([exe map](exe-reverse-engineering.html), *Loaded GAF layout*), the
+  capture carries it with the frame's header (`TAGPU_PUBOP.exact`), the UI key hashes it, and
+  `restore_frame_of` leaves an entry so marked out of the restore list. Art drawn for the palette
+  has no dither to undo, and a fine texture is flattened as though it were dither: the watching
+  dock's stand-in ground was. The dock tags every frame it makes; MEASURED 2026-10-01 at 1280×720
+  with the UI restorer active, its rect differs in 0 px between Vulkan and `tagpu_gdi.on`
+  ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*). A frame wider or
+  taller than `TAGPU_GAF_DECMAX` (640) is not carried as a sprite at all, and the drain drops the
+  `PK_PIXELS` it falls to, which is why the dock's ground is eight 512-px tiles.
+- **A greyed gadget is grey on Vulkan as on GDI**: the grey remap `0x4BFE10` crosses as a tint
+  through its own row (§26.1). The dock still keeps its buttons off the greyed arm with attribs
+  bit 8, which draws the sequence's last frame, its own greyed art.
 - **The UI steps the restorer when nothing else does** [the landing review found this; the GL
   half of it was deleted in 11-5e-2 — see below]. The only other caller of `tagpu_rglsl_step` was
   the native pass, and it returns early when there is no unit array — **in the shell, and in game with the world passes disarmed**. The UI atlas is the
@@ -3990,6 +4004,84 @@ and a second correction would be a double one.
 overdraw of 22.5 is gone (the engine draws only the visible window) but that has not been
 measured as a frame-time change.
 
+### 22.7 The dock, a fourth region  [MEASURED 2026-10-01]
+
+The watching dock ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*)
+is an engine screen in the world region, so 22.2's *Extent* left it at 1x with RENDER's
+drop-down and the engine's dialogs. The owner chose to magnify it like the bars. It is a fourth
+region of the same map, in the composite (`uDock`, `uDockMap`, `uDockS` in `LAY_FS`) and in the
+pointer (`tagpu_hud_to_engine` / `_to_screen`), tested after the bars and before the world.
+
+**About its bottom-left corner.** The world's translation takes the dock's engine corner
+`(l, t + h)` to the screen point `(x0, y1)`, and the magnified rect grows up and right from
+there, so the 1x dock the engine drew always lies inside the magnified one and never shows.
+Its gap to the panel, its lift above the bar and its height scale with it. The engine width
+is the screen's width over `s`.
+
+**A pure function of the surface and the scale.** `tagpu_dock_rect(W, H, q8)` is the dock's
+placement and the region's source rect alike, and `tagpu_hud_dock_map` validates the result
+against the world region at that scale. The pointer map, the composite and the dock's own
+placement call the same function. So the only things that cross threads are whether a dock is
+drawn and the scale it was placed at.
+
+**The ordering.**
+
+- **The pointer's word** (`tagpu_hud_dock_set`, one `LONG`, written only on the game thread).
+  It is set when stage 1 has built the dock (`tagpu_dock_built`) and re-checked every frame
+  against the engine's GUI chain, read down the `+0` links from the top screen and bounded at
+  32. It is cleared in `tagpu_dock_closed` before the slot pops the dock, which covers RENDER
+  taking the slot and the level's teardown (`slot_forget` at `0x491B60`'s entry), and again at
+  `tagpu_dock_level_end`. TA pumps the wndproc on the game thread, between the engine's own
+  calls, so a click is mapped into the dock exactly while the engine holds the dock to take it.
+- **The picture's copy** rides the flip marker. `before_flip` reads the word into `OP_FLIP` on
+  the game thread, the publisher puts it on `PK_FRAME`, and the drain keeps it beside
+  `s_presented`. So the region and the pixels it samples come through one FIFO queue, and the
+  composite magnifies exactly the frames whose ops drew the dock. A window whose marker did not
+  fit keeps the previous region, as it keeps the previous surface.
+- **What a stale value can do.** Every reader validates the rect against the surface it maps
+  on, so any whole value of either word names a rect inside the world region, and the reads are
+  arithmetic only. On the render thread the word is read only by the sharp cursor's injected
+  fallback, where a stale value moves a cursor for one frame.
+
+**No point the dock covers reaches the world.** The pointer branch sends each device pixel to
+the engine texel the composite samples at its centre: `l + (x + 0.5 − x0)/s` and
+`t + h − (y1 − y − 0.5)/s`, in integers, then clamped into the dock's rect. Checked
+exhaustively for seven scales between 1.17 and 4.52 on a 700×86 dock: every pixel matches the
+shader's centre texel, and `to_screen` then `to_engine` returns every texel. The zoom's
+ownership gate (`tagpu_menu_owns_point`, in engine coordinates) therefore sees the dock too.
+
+**Measured** on Vulkan at 1920×1080, the playback paused, all clicks in device space (`dclick:`,
+`dmove:`, `down:`/`up:`, `drclick:`):
+
+| | HUD 150 % | Auto (225 %) |
+|---|---|---|
+| engine rect | (140, 924, 1136, 86) | (146, 873, 709, 86) |
+| screen rect | [204, 1908) × [897, 1026) | [306, 1901) × [806, 999) |
+| 25 % of the track on screen | x 678 → engine 456, asks **735** (predicted 735) | x 777 → engine 355, asks **734** (predicted 734) |
+| 75 % | x 1428 → 956, asks **2205** (2205) | x 1422 → 642, asks **2206** (2206) |
+| a drag from 30 % to 60 % | no seek while dragging, one at the release: 1764 (predicted 1764) | 1765 (1765) |
+| the buttons | Play/Pause, the speed cycle, Rewind (−300), Forward (+300), the bookmark (added to `index.dat`), Leave and No | the same |
+| right-click on the bookmark | removed from `index.dat` | removed |
+
+The recording runs GameTime 1..2940, so 25 % and 75 % are 735.75 and 2205.25 exactly. At Auto
+one engine pixel is 2.25 device pixels, about 5 ticks of this recording. **At HUD 100 nothing
+changes**: the dock rect is 0 px from the picture taken before the region existed (1280×720,
+same recording and seek). Leave's question stays 1x in the world above the magnified dock, as
+the engine's dialogs do.
+
+**GDI does not implement HUD scale.** Under `tagpu_gdi.on` the screen is the engine's own
+surface: the panel, the bars and the dock all at 1x, the world rect pulled in by `apply_rect`,
+and nothing translated. The pointer map still applies, so the picture and the pointer disagree
+under GDI with HUD scale on, for the bars as for the dock. MEASURED at 150 %: a device click on
+the pictured DKPLAY (246, 979) did nothing, and one at the magnified DKPLAY's place on Vulkan
+(363, 980) toggled the pause.
+
+**Not covered.** An engine dialog that reaches into the dock's magnified rect is covered there:
+the region is a remap of the picture and the pointer alike, so the two stay one relation, and
+the dialog loses that strip. Leave's question, centred, stays clear of it at both scales
+measured; the other engine dialogs were not checked. A drag that leaves the dock's screen rect hands the strip the world's x for
+as long as it is outside, and `target` clamps it to the track.
+
 ## 23. The render half reads the packet — the frame packet exchange's landing 4c  [2026-09-12]
 
 The plan's row 4c ([frame packet exchange](frame-packet-exchange.html) §9, §11). Everything about
@@ -4408,14 +4500,44 @@ map preview*).
 
 1. **The selected row is the box shader.** `0x4BF4D0` at level +30 (`0x4A1FC4`/`0x4A1FD7`), a
    remap of what is already under the row. It crossed as its box, `PK_PIXELS`, and was dropped.
-   It now crosses as **`PK_TINT`**, whose row is precomputed for its level: `PK_SHADE` carries 96
+   It now crosses as **`PK_TINT`**, whose row is precomputed for its level: `PK_SHADE` carries 97
    rows (`TAGPU_GUI_SHADE_ROWS`, layout in `inc/tagpu_gui.h`) — the lighten table whole for the
-   focus edges, then one row per box-shader level −32..31. The box shader reads its destination
+   focus edges, then one row per box-shader level −32..31, then the grey remap (below). The box shader reads its destination
    SIGNED (`0x4BF5E8`), so its effect for one level is `T[r][i]` below 128 and `T[r−1][i]` above;
    carrying that row keeps the consumer a plain lookup. A level whose row is 0 would read the heap
    in front of the table: it publishes its box instead, and no stock caller reaches one (engine
    map, *Who calls the box shader*). The disabled rows (−19..−22), the popup frames and the modal
    dim ride the same path.
+
+   **A greyed gadget is a second remap in front of it** [MEASURED 2026-10-02]. The gadget
+   painters grey a gadget with `0x4BFE10(ctx, &rect)`, every pixel `T[dst]` through the
+   256-byte grey table `globals+0xCC`. The box shader at −20 over the same rect follows at once
+   (the button painter's pair is `0x4A69AD`/`0x4A69BA`; engine map, *A greyed gadget is the grey
+   remap, then the box shader at -20*). Nothing observed `0x4BFE10`, so Vulkan drew the gadget's
+   colours through the −20 row alone: green arrows and lights where GDI shows grey. The census
+   could not see it either, because the box shader's op covers the same box. It is now a leaf,
+   `OP_GREY`, published as `PK_TINT` through row 96, `TAGPU_GUI_SHADE_GREY`: the table whole,
+   since its writer `0x4CCED5` reads the destination unsigned. The table is gated and built once
+   at init as the other two are (caps bit 8; `0x4BAD30` from `UIPipelinesInit` at `0x4913C3`),
+   so `PK_SHADE` now carries 97 rows. With the bit clear the engine draws nothing and neither
+   does the leaf (`grey=` on the producer's heartbeat: crossed / refused for no table).
+
+   Measured on MUSICRT, a stock screen that greys its CD buttons, the two track cycles and
+   the volume slider's arrows by itself, in a paused game at 640×480, the original game, Vulkan
+   against `tagpu_gdi.on`:
+
+   | | before | after |
+   |---|---|---|
+   | the four CD buttons, Classic | 3–7 px each | **0** |
+   | the slider's arrows, Classic | 72 and 85 of 144 | **0** |
+   | TRACKTYPE, TRACKMODE, Classic | 923, 2 262 of 2 400 | **0** |
+   | the whole MUSICRT panel, Classic | 5 834 differing | **0 of 98 412** |
+   | the left arrow's mean chroma, Classic++ (GDI 1.0) | 23.3 | 1.2 |
+
+   Under Classic++ the residual is the restorer's detail, scaled through the tint's colour rule
+   (§27.3), and not a missing grey. The engine's own surface was identical under both renderers;
+   the arrow's frame through the −20 row alone matched 53 of its 88 opaque pixels, and the
+   other 35 were its greens, which the grey remap turns grey first.
 2. **The tint was refused, because the list's background restore crossed as a box.** Before the
    listbox repaints its rows it restores its rect with `0x4C6D20`, a rect copy from the screen's
    background surface. Recorded as a box, it crossed as `PK_PIXELS`; the drop marked the rows
@@ -4790,6 +4912,43 @@ with a scratch build forcing it every 600 frames, over the shell tour and 35 s o
   under 12 px, more than 16 tiles, larger than the store, or a store full of bound pictures.
 
 ---
+
+### 27.5 Impure's own pictures are left as drawn  [MEASURED 2026-10-02]
+
+The picture store restores every decoded PCX, so the Replays screen's ground, a whole PCX of
+our own, and the main menu's REPLAYS plate, drawn into the mod's FrontendX after its decode,
+were undithered like the mod's art. They are drawn for the palette, as the dock is (§14,
+`TAGPU_GAF_EXACT`), and Classic++ now leaves them as drawn:
+
+- **`tagpu_gui_asset_exact(pixels, l, t, w, h)`**, on the game thread after the decode and
+  before the first copy, records on the surface's `SURF` the box that holds our own art. It
+  is a property of that allocation's bytes, so the allocation observer clears it with
+  `isAsset`. Every `PK_ASSET` of the surface, the offer and the snapshot's seed alike, carries
+  the box (`sl`, `st`, `fw`, `fh`).
+- **A box that is the whole surface keeps the picture out of the store.** The drain gives the
+  seed no colour, so a copy out of it carries none, and its texels are the palette's.
+- **A smaller box rides the mirror's SEED to the consumer.** The fills from the restored
+  picture (`pic_fill`, the seed's two) copy each tile core less the box, so the box keeps the
+  palette's colour, and the mod's backdrop around it is restored as before. A stamp's fill
+  has no such box.
+- **Who calls it.** `tagpu_replays.c`'s observer on the PCX loader's return (`0x4289E3`,
+  inside `0x4288D0`) passes the plate's box after `frontend_edit` pastes it. For one of our
+  own grounds, recognised by the name pointer `0x4288D0` hands the loader (its own argument,
+  `[esp+0x4C]` at `0x4289D3`), it passes the whole surface. The list's badges are GAF frames
+  of ours and carry `TAGPU_GAF_EXACT`.
+
+**Measured** at 640×480, retail, Classic++ with the picture store active, Vulkan against
+`tagpu_gdi.on`:
+
+- **The main menu.** The plate's 115×35 box less the REPLAYS button: **0 px of 2105**. The
+  backdrop in a 10-px band round the plate: 3373 of 3400, restored as before.
+- **The REPLAYS button's face.** It differs in 1369 of 1920 px. It is the mod's button art,
+  drawn over the plate's interior by the button the REPLAYS record copies from SINGLE, and
+  SINGLE's own face differs in 1430.
+- **The Replays browser.** The ground outside every gadget: **0 px of 117 750**. The list with
+  its rows, the scroll bar, the minimap, the labels and the timelines box: 0 px each.
+- **The buttons there.** WATCH, PLAYON, FAV and BACK, the mod's button faces, are restored by
+  design.
 
 ## 28. A free is an op: the orders panel that stayed after a deselect  [MEASURED 2026-09-27]
 

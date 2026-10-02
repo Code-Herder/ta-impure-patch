@@ -565,6 +565,11 @@ count at `+0`, name at `+8`, and frame entries at `+0x28`, stride 8. Named looku
 for an empty bank or no match (`0x4B8D7A/0x4B8D8F`).
 Frame pointers are fixed at `0x4B8CBA`, pixel pointers at frame `+0x10` at `0x4B8CC7`,
 and subframe pointers/pixels at `0x4B8CD2..0x4B8CF5`, using the byte count at frame `+0x0A`.
+Nothing else in a frame header is rewritten, and the GUI blits `0x4B7F90` and `0x4B8310` read
+`+0x00..+0x0A` and `+0x10` only (DISASSEMBLED 2026-10-01), so the dword at `+0x0C` reaches memory
+as the file wrote it and no engine path reads it. It is 0 in all 14 589 frames of the vendored mod
+corpus (MEASURED 2026-10-01); Impure's own art marks itself there (`tagpu_gaf.h`,
+`TAGPU_GAF_EXACT`).
 These loops use file counts; this inspection does **not** establish bounds validation against
 file allocation size. The prototype indexes already-loaded matching content on its owning
 thread, caps traversals, and identifies frames by bank/sequence ordinal/name/frame index.
@@ -1116,6 +1121,17 @@ the measured runs and what they mean for the design are in the
   (`0x47B04C..0x47B08B`); then calls the seat fill `0x47A760` (`0x47B092`), `0x41DA30`, `0x430F00`,
   stores 2 at `main+0x2BC0` and changes state through `0x491C80(0x14)` (`0x47B097..0x47B0B0`). The
   loader thread comes after it.
+- **The CD check `0x41D6A0(disc)`** (stdcall, `ret 4`; AL nonzero when the disc is found) **never
+  refuses in this exe.** Its first test reads `0x50289C` and, when it is nonzero, returns `'.'`
+  (`0x41D6A0..0x41D6BD`); the dword is 1 in `pristine/TotalA.exe.pristine` and no instruction
+  writes it (its four references, `0x41D4C0`, `0x41D6A0`, `0x41D7B0` and `0x41D8A0`, all read).
+  Its twenty callers are `0x41D7C4`, `0x41EF30`, `0x41F6A8`, `0x41FB7E`, `0x425F11`,
+  `0x425F1C`, `0x426108`, `0x426113`, `0x449C73`, `0x44AF65`, `0x46038F`, `0x4603DB`,
+  `0x4775C0`, `0x477612`, `0x477724`, `0x477B7D`, `0x478D09`, `0x47AEF1` (the Start's),
+  `0x4924DB` and `0x49252E`; no pointer to it is stored [DISASSEMBLED 2026-10-02: every `call`
+  and `jmp` to it in the exe, and its address in no data]. The replay's
+  Watch calls it as the Start does, so its refusal notice (`watch_refuse_engine`,
+  `tagpu_replay.c`) is reached by no game on this exe.
 - **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
   (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group, `+0xC` metal, `+0x10` energy,
   `+0x14` the colour (read by the fill and the seat setup below). Past them, the loader's type-2
@@ -1666,8 +1682,9 @@ recorded capture.
 | the sort buckets | `*(main+0x1429F)`, `main+0x142A3` columns × `main+0x142A7` rows (LoadMap, `0x482C84..0x482CA6`), and the off-map bucket `*(main+0x142B7)` | an id row's table; one past the last bucket is an index (stock forms it at the east edge), and the off-map bucket has an ID of its own. `0x412834` compares a unit's `+0x82` with it: `mov edx,[0x511DE8]` (`0x412828`), `mov ecx,[esi+0x82]` (`0x41282E`), `cmp ecx,[edx+0x142B7]`, `jne 0x412849` DISASSEMBLED |
 | the map's name | `GameingState +0x204`, the TNT path | the file's name, read to `MAX_PATH` bytes: inside the object, whose fields run past `+0xDBC` (the list `0x423160` walks) |
 
-**A load from the in-game menu runs the teardown before the saved level loads, and the loaded game
-starts paused** [MEASURED 2026-09-29]: at the load's click the recording in progress ended through
+**A load from the in-game menu runs the teardown before the saved level loads, and in stock the
+loaded game starts paused** [MEASURED 2026-09-29; our `fix_load_unpaused` clears the pause
+before the first tick, *Engine defects we patch*]: at the load's click the recording in progress ended through
 `tagpu_reclaim`'s wrap of `0x491B60`, at GameTime 1846; after the load `main+0x38A51` read 1 and
 GameTime stayed 1846 until a pause key, and no iteration ran, so a capture at `0x4954ED` sees
 nothing of a paused game.
@@ -3137,7 +3154,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the thirty, and why:
+made, or its page cannot be made writable. Each, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -3171,6 +3188,7 @@ made, or its page cannot be made writable. Each of the thirty, and why:
 | a range circle of radius 1 `0x438EDE` | local | a HUD draw |
 | an order mode disarmed with nobody to order `0x49697B`, `0x499226` | local | the order byte `main+0x2CC3` and `BuildUnitID` are read only by the UI; no peer reads them |
 | maps with no terrain `0x434D87`, `0x430B87` | local | which maps are offered; whether a network peer has the host's map is decided from the terrain file itself, not from this list |
+| a level starts unpaused `0x49842A` | local | the pause bit is the local player's outside a network game, and a recording carries the ticks that ran; inside one the fix does nothing |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -4832,6 +4850,62 @@ is absent at launch (an archive installed only some of the time) is replaced in 
 the options load, where stock kept it and fell back in memory when the SKIRMISH screen could not
 load its `.ota` (`0x47BCD7`).
 
+### A level starts paused after the last one was left through the in-game menu — the pause bit `main+0x38A51`, cleared at `0x49842A` [DISASSEMBLED + MEASURED 2026-10-01]
+
+**The bit.** `main+0x38A51` is a u16 of flags; bit 0 is the pause. While it is set the frame
+function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4968AA`,
+`0x496920`), and those two are called from nowhere else (`0x4967F3`, `0x49680C`, `0x496928`,
+`0x49693E`). The scheduler tests it as well (`0x4953D9`), the status icons show it (`0x46A107`,
+`0x46A2A8`), and the pause key flips it and puts the new bit into a message `0x19`
+(`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
+peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's (`0x49535C`, `0x495367`,
+`0x49527A`). Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
+outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
+(the LOADGAME screens); clear it at `0x44B6F0` (in the battle room's code [INFERRED from its
+neighbours]), `0x460A33` (the in-game menu's close, outside mode 3), `0x49720A` (the loader's
+network branch) and `0x49990E` (key `0xE3` in state 7's handler `0x499880`); `0x495B6D` clears it
+for a step and `0x495DC2` puts back the bit `0x495B85` saved.
+
+**The defect.** Leaving a level through the in-game menu (EXIT, MAINMENU, yes) opens the menu,
+which sets the bit, and never closes it, so the bit outlives the level. The loader `0x497180`
+clears it only in its network branch (`0x4971EC`, mode 3); the campaign branch `0x49745C` and the
+skirmish branch `0x4973C1` leave it. So the next skirmish, campaign mission or saved game starts
+paused until the pause key. MEASURED 2026-10-01 on retail with the stock build: a SINGLE →
+Skirmish → Start after a level left through the menu read GameTime 0 and the bit 1. The same
+holds for a load from the in-game menu (*The demo recorder's capture*, above: GameTime stayed
+1846 until a pause key, 2026-09-29).
+
+**Every level start passes `0x49842A`.** Every level is loaded by the load state `0x497F40`.
+Only three front-end states install it: `0x496BB0` at `0x496C3D` for mode 2 (a skirmish, our
+Watch, a `tacli` playback), `0x496DB0` at `0x496DFF` (mode 1, a campaign mission;
+`0x496BB0` sends mode 1 there at `0x496BF6`), and the battle room's `0x496CE0` at `0x496D75` and
+`0x496D9D` (a network game). A saved game, from the shell or the in-game menu, goes the same way:
+the LOADGAME screen's load branch sets the mode from the save's `Gametype` (`0x49267F`, the
+mode setter `0x434AB0`) and installs `0x496BB0` (`edi` from `0x49295B`, stored at `0x49297E` or
+`0x492A7F`). Those two are the only stores of the state handler `main+0x391F5` from a register;
+of the 22 with an immediate only those five and SetState `0x490B30`'s case 5 (`0x490BB3`; the jump
+table `0x490C14`) store `0x497F40`, and SetState's eleven callers hand it 1, 2 or 7. The load state
+moves on only once the loader thread `0x497C90` has set its done bit, `main+0x38D75` bit 1
+(tested at `0x498342`, set at `0x497C62`, `0x497180`'s last store before it returns and the thread
+ends). Both branches of `0x498353..0x498455` then meet at `0x49842A`, the call of the HUD chrome
+`0x467D70` (`0x498386` is the only jump in), before the frame function's first run at `0x49842F`
+and before the in-play state `0x499200` is installed at `0x498455` (SetState's case 6, never handed
+6).
+
+**Patched** (`tagpu_patches.c`, `fix_load_unpaused`, local). The call at `0x49842A` goes to a stub
+that clears bit 0 with an `and byte` unless the mode `[[main+0x391E9]]` is 3, then jumps to
+`0x467D70`, which returns to `0x49842F`. A network game keeps the loader's and the peers' bit. The
+demo recorder does not carry the word (`replay-globals.tsv` has no row for it), and a recording's
+iterations are the ticks that ran, so the fix changes no recording.
+MEASURED 2026-10-01 on retail, `tacli` on Two Continents at 1024×768, each start after leaving
+the previous level through the menu with the bit read 1 in the shell: a new skirmish ran (GameTime
+32 → 158 → 294 at 4 s intervals, bit 0); a Watch of a recording made before the fix ran (18 → 290)
+and played to its end, 551 iterations, 0 late, 0 refused; a saved game loaded from SINGLE →
+LoadGame ran (568 → 835), and so did the same save loaded from the in-game menu of a running
+skirmish (796 → 1053); campaign mission 1 (Arm) ran (35 → 294). The pause key inside a level
+still pauses (GameTime held at 293, bit 1) and resumes (328 → 431, bit 0). A network game was
+not run.
+
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader thread) makes one 0xBD-byte record per
@@ -4982,6 +5056,21 @@ MEASURED: protection is on in a plain launch; a write into the array after the l
 `0x42BD10`'s one call is the state callback `0x496BB0`. The loader has two exits: `0x42B357` returns 1
 after the seal, and `0x42B200` returns 0 without it, when a unit file has no `[UNITINFO]` section
 (`0x42AC78`).
+
+**The shell and a level hold the unit types in different orders.** MEASURED 2026-10-02 on retail,
+reading `UNITINFOCount` and every UnitName (`+0x20`) through `tacli peek`:
+- At the main menu, before the first level and again after one, the count was 279 and the
+  names stood in the start-up load's order (`None`, `ARMSEER`, `ARMSILO`, …). Their FNV-1a, as
+  `RT_UNITDEFS` takes it, was `0x93B2B33D`.
+- In a level, the same 279 names stood sorted, `None` first (`ARMAAP`, `ARMAAS`, `ARMACA`, …),
+  hash `0x54F5FE19`, which is what the level's recording carried.
+So a type ID, and the defs fingerprint, mean what they mean in a level only once the level has
+loaded. The level's unit-data load `0x42D2E0` makes that order and then re-reads every name from
+its file; the shell's order comes back because that load ends by setting the reload flag
+(`0x42DB2B`), so the next `0x42BD10` runs the loader again (*`0x42D2E0` — the level's unit-data
+load*, below, has the steps). That is why Watch compares the defs at the first step
+(`tagpu_replay.c`, `data_match`), and why the Replays browser locks a recording only once Watch
+has refused it (the S5 note, *The lock*).
 
 **The sync.** The object is `[main+0x2A30]`: `+0x58` nonzero on the host, `+0x64` a disable flag, the
 per-peer records of 0x5C bytes at `[+0x14, +0x18)`, a tree of keys at `+4` (`0x46E9B0` finds,
@@ -6637,7 +6726,15 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   self-propelled flight a water weapon above the sea falls under gravity (`0x49B9C2..0x49BA11`,
   `main+0x14263`) and does not steer.
 - **The weapon load `0x42E310`**: entry `sub esp,0x120`; its one caller is `0x4918BB` in
-  `LoadGameData_Main 0x4917D0`; the ID site `0x42E468` is A′3's.
+  `LoadGameData_Main 0x4917D0`; the ID site `0x42E468` is A′3's. It empties the 256 slots
+  (`0x42E31C..0x42E343`: the name's first byte 0, `+0x10A` the slot's own index), lists
+  `Weapons\*.tdf` (`0x42E371`), and gives every section of every file to `0x42E440`, which takes
+  the slot from the section's `ID` (`0x42E463`, default −1), copies the section's name into the
+  slot's first bytes with no bound (`0x42E490..0x42E4A9`) and its `name` into `+0x20`
+  (`0x42E4B1`, 0x40 bytes). A later section with the same `ID` overwrites an earlier one. Nothing
+  else fills the table, so the shell holds none until a level has loaded: **MEASURED
+  2026-10-02** on retail, at the main menu of a fresh start, every one of the 256 names at
+  `main+0x2CF3` was empty.
 - `0x485070(pos)`, `ret 4`: the ground height under a position, −1 off the map.
 
 ### A hit's alerts, its blink and the stones' dots
@@ -12056,7 +12153,7 @@ See [the GUI renderer](gui-renderer.html), "the shell was 3.71 %".
 | 5 label | `0x4A56B0` | 8 | `81 EC AC 00 00 00` (6) | `0x4BF6F0`, `0x4C14F0` / DrawText, `0x4BE950` |
 | 6 surface | `0x4A4980` | 8 | `83 EC 50 53 55` (5) | **`0x4C7580`** (the textured-triangle stamp, below), `0x4B7F90`, `0x4BF6F0` |
 | 10 | `0x4A4C90` | **0xC** `(gi, idx, flags)` | `8B 54 24 04 83 EC 10` (7) | `0x4BE950` ×2 |
-| 11 picture / panel bg | `0x4B0230` | **0xC** `(gi, idx, GAFFrame*)` | `83 EC 24 8B 54 24 2C` (7) | NULL frame: the texture from `0x4A18C0` tiled with `0x4C6B70(panel+0xBC, tex, x, y)` + bevel `0x4B0160`; else `0x4B7F90` |
+| 11 picture / panel bg | `0x4B0230` | **0xC** `(gi, idx, GAFFrame*)` | `83 EC 24 8B 54 24 2C` (7) | NULL frame: a tiling branch through `0x4C6B70(panel+0xBC, tex, x, y)` that never runs, because its texture lookup `0x4A18C0` returns 0 on every path (the match it finds is discarded: `xor eax,eax` at `0x4A191A`) [DISASSEMBLED 2026-10-01], + bevel `0x4B0160`; else `0x4B7F90` |
 | **12** | **`0x4A5E50`** — not `0x4A5F40` as [GUI gadgets](gui-gadgets.html) §3 said; corrected there | | | |
 | 13 timer | `0x4A4660` | 8 | `83 EC 24 53 55` (5) | `0x4C5E70(ebx)` over `[panel+0xBC]` or `[gi+0xCD2]`, then `0x4BF6F0`, `0x4B7F90`, DrawText, `0x4C5FA0` — i.e. into the back buffer |
 
@@ -12105,6 +12202,7 @@ clip.
 | `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
 | `0x4BF7B0` | the focus rectangle — **a TINT, not a colour** | stdcall `0xC` | `(ctx, RECT*, level)` | **four** edges of one box — top `(l,t)-(r,t)`, right `(r,t)-(r,b)`, bottom `(l,b)-(r,b)`, left `(l,t)-(l,b)`, in that order — each through `0x4BEC70`, which READS THE DESTINATION; the two groups of four calls are **mutually exclusive arms** on `ctx == NULL` (below); its ONE caller `0x4A16F0` runs it **six times** over expanding rectangles at levels 31, 28, 24, 19, 13, 6, which is the glow (below) | `83 EC 30 53 55 56 57` (7) |
 | `0x4BF4D0` | **the box SHADER** — not a fill at all | stdcall `0xC` | `(ctx, RECT*, level)` — the third argument is a **signed shade level**, not a colour | one clip through `0x4BF620` (×**1**), **no `0x4CCDEA`**, then every pixel in the box remapped through a 256-byte LUT row; **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3 — three *calls*, not three fills) | `83 EC 40 53 55 56 57` (7) |
+| `0x4BFE10` | **the GREY REMAP** — a tint like the box shader, through a table of its own | stdcall `8` | `(ctx, RECT*)` — the rect is read unconditionally (`0x4BFE18`), never NULL | one clip through `0x4BF620`, then every pixel `dst = T[dst]` through the 256 bytes at `globals+0xCC` (`0x4CCED5`); draws nothing while caps bit 8 is clear (`0x4BFE3A`); a NULL ctx is the back surface (`0x4BFE55`). Five callers: four gadget painters greying a gadget (below) and the fog draw `0x4848E0` at `0x484ACD`, per cell | `83 EC 40 8B 44 24 48` (7) |
 | `0x4BF620` | the rect CLIPPER the four above share | stdcall `8` | `(clip RECT*, RECT*)` | clamps the second rect into the first and returns 0 when they do not overlap — four `cmp`/early-out pairs, then four clamps. **Carries no colour.** | `8B 4C 24 04 83 EC 10` (7) |
 | `0x4CCDEA` | the solid-fill WRITER the four above share | cdecl, 3 args | `(surface, RECT*, colour)` | **uses only the LOW BYTE of `colour`** — see below | `55 8B EC 56 57 53 51 52` (8) |
 | `0x4C6890` | `SurfaceFill` | stdcall `8` | `(surface, colour)` | the whole surface | `83 EC 64 53 55 56 57` (7) |
@@ -12218,6 +12316,48 @@ PALETTE.SHD) is k = 0.513 with b ≈ 0 at rms 8.8/255 — close to a plain darke
 row's (+30, the lighten table) misses by rms 36.3/255 with the scale pinned at 1, so it is not
 an affine map of colour at all. That is why the Vulkan lane's colour rule for a tint is per
 entry, not per row ([GUI renderer](gui-renderer.html) §27.3).
+
+#### A greyed gadget is the grey remap, then the box shader at -20 [DISASSEMBLED 2026-10-02]
+
+The button painter `0x4A5F40` keeps a greyed flag in `[esp+0x40]`. Three arms of its greyed
+branch set it (`0x4A60AB`, `0x4A60CC`, and `0x4A6106` unless attribs bit 7 is set, tested at
+`0x4A6100` on the low byte), and the attribs-bit-8 arm, which draws the sequence's last frame, does not. The
+flag does three things:
+
+* it is passed to `DrawText 0x4A50E0` as the label's shade (`0x4A643F`, `0x4A6531`);
+* when it is set, the painter calls `0x4BFE10(ctx, &rect)` (`0x4A69AD`) over the gadget's rect;
+* it then calls `0x4BF4D0(ctx, &rect, -20)` (`0x4A69BA`) over the same rect.
+
+The other three greying painters make the same pair of calls: `0x4A1B1F`/`0x4A1B32`,
+`0x4A2BBD`/`0x4A2BD0` and `0x4A5B01`/`0x4A5B14`.
+
+The frame itself is not swapped for a grey one. Greyed, the painter takes the first of four arms
+that applies: attribs `0x100` draws the sequence's last frame, `count − 1` (`0x4A6081` tests
+`ch & 1`); a nonzero `+0x136` draws the stage frame `[+0x137]` (`0x4A6092`); attribs with a bit
+of `0x1800` set draw frame `[+0x13B]` (`0x4A60B8` tests `ch & 0x18`); and any other draws
+`min([+0x138] + 2, count − 1) + [+0x13B]`, where `+0x138` is the pressed word (`0x4A60D9`). Not
+greyed, the frame comes from the stage bytes `+0x136`/`+0x137`, or from `[+0x13B]` plus the
+pressed word (`0x4A611C`..`0x4A616B`). The record's greyed byte is `+0x13C` (`0x4A6071`).
+
+**The grey table.** `globals+0xCC` is 256 bytes:
+
+* allocated by `0x4BA6B0` at `0x4B5B29`, only when caps bit 8 (`[globals+0xF1] & 1`, `0x4B5B24`)
+  is set;
+* freed by `0x4BA6E0`;
+* built from the palette by `0x4BAD30` (a nearest-colour search per entry through `0x4BA9D0`),
+  called from `0x42E2F0`, whose one caller is `UIPipelinesInit 0x491200` at `0x4913C3`, right
+  after the SHD and LHT builds;
+* its in-place setter `0x4BAB60` has no direct caller.
+
+So, like the other two tables, it is written once at init. Its writer `0x4CCED5` (cdecl
+`(dst, pitch, w, h, T)`) indexes the table unsigned in both its 4-aligned and its byte path, so
+the row the remap applies is the table itself, with no signed half to fold.
+
+**MEASURED 2026-10-02**, MUSICRT in a paused game, 640×480, the original game:
+
+* the engine surface under `tagpu_gdi.on` and under Vulkan was identical;
+* the left slider arrow's frame 16, through the `-20` row alone, matched 53 of its 88 opaque
+  pixels; the other 35 were its green pixels, which the grey remap had made grey first.
 
 [Established because the vulkan-only plan's landing 8 turns these ops from published SURFACE BYTES
 into drawn geometry, and needed to know what each one's third argument means before choosing a
@@ -12891,6 +13031,111 @@ caller outside the engine uses to make this screen re-enumerate:
 `0x45CAE0` belongs to UNDO alone (it XORs `main+0x37F06`'s bits back from the saved copy at
 `0x512F38`); the pop-and-rebuild pair is the general part.
 
+### The watching dock: the in-game quit, YESORNO, the speeds, a button's frame [DISASSEMBLED + MEASURED 2026-10-01]
+
+*Read for S5 landing 2 ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching
+dock*), with `objdump -d -M intel` on `pristine/TotalA.exe.pristine`. The runs were on a private
+Xvfb of the reference setup at 1280×720 and 1920×1080, Vulkan presenting.*
+
+**The engine's dialogs push themselves, and none writes the expected-screen buffer.** EXITMENU
+(`0x4608B0`, flags `0x1800`), ARMOPT (`0x460CC0`, `0x800`) and YESORNO (`0x460680`, `0x1000`) call
+`GUI_Load` directly; none of them writes `main+0x37EA0`, so with the buffer naming a screen of ours
+they sit above it and are popped by their own handlers, as they are over ARMMAIN2 in stock.
+MEASURED: a click outside ARMOPT closes it (the stock behaviour), and its close clears the pause it
+set.
+
+**The in-game quit is a tail, not a function.** `0x460630..0x46065C` sits inside YESORNO's
+`OnCommand` `0x4605C0`: the teardown `0x491B60`, `UpdateIngameGUI(1)` `0x460637`, `GUI_Pop` of
+`main+0x519` `0x460647`, `0x4257A0`, `SetInputMode(1)` `0x490B30` (which stores the mode and the
+state function and touches no screen), and `ret 4` at `0x46065A`, the handler's own. The teardown's
+call list (`0x491B76..0x491C4A`) never reads or writes `main+0x37EA0`. MEASURED (RENDER open, then
+Tab, Exit, Main Menu, Yes): the shell's stack is MAINMENU alone with or without the buffer restored
+before the teardown, so the stock pops after `0x491B60` do not leave ARMMAIN2 behind either way --
+`0x4257A0` and the main menu's build take what is left -- but without the restore the buffer
+reaches the shell naming `RENDER.GUI` (`tagpu_menu_level_end` restores it, and the shell then reads
+`ARMMAIN2.GUI`).
+
+**YESORNO's opener `0x460680`, void, `ret` at `0x4607F1`.** Two callers: `0x46083A` (EXITMENU's
+Main Menu, after `mov [0x512FF8],0` at `0x46082B` and `GUI_Pop` at `0x460835`) and `0x460862`.
+It loads `YESORNO.GUI` (`0x503168`) with `0x1000`, makes it take keys (`0x49FB10`, `0x4606B7`),
+labels `CHOICE1` and `CHOICE2` (`0x460742`, `0x460760`, through the setter `0x4A0BF0(gi, name,
+text, 0)`) and sets `TITLE` by the question, the dword `0x512FF8`: 0 is `0x506D20` "Surrender this
+battle and return to main menu?" (`0x46076A..0x460784`), 2 is `0x506D10` or `0x506CE4` by
+`main+0x2BEE` bit 4 (`0x460786..0x4607B8`), 1 leaves the file's. Its `OnCommand` `0x4605C0` (stored at `0x4607D2`): `-1` returns (`0x4605CF`);
+`CHOICE1` with `[0x512FF8] <= 1` jumps to the quit tail; `== 2` sets bit 2 of `main+0x3923B` and
+calls `0x491C60`. **`GUI_Load` does not answer a click**: it writes `gi+0x64 = -1` (`0x4AACAE`), not
+`gi+0x60`, so an `OnCommand` that pushes a screen and returns without `ActDone 0x4AB0A0` has the
+pump pop the NEW top (`0x4AA79A..0x4AA7FA`, below). EXITMENU's handler is answered by its own
+`GUI_Pop` (`0x4A9673` writes `-1`) before it calls the opener; the dock's Leave calls `ActDone`.
+
+**A button's frame, `0x4A6062..0x4A616D`.** Not greyed: a stage button (`+0x136` nonzero) draws its
+stage `+0x137`, or `count - 2` while pressed (`+0x138` nonzero, `0x4A6110..0x4A613B`); a plain one
+frame `+0x138` (0, or the pressed frame) plus `+0x13B`. Greyed (`+0x13C` bit 0): attribs bit 8
+(`+0x1C` bit 0) draws `count - 1` (`0x4A607E..0x4A608B`); else **a stage button draws its stage's
+frame again** (`0x4A6092..0x4A60B3`); else attribs bits 11-12 draw frame `+0x13B`; else
+`min(+0x138 + 2, count - 1) + +0x13B` (`0x4A60D9..0x4A610E`). So a stage button's own greyed frame
+is never drawn unless attribs bit 8 is set. The stage arm also sets the local `[esp+0x40] = 1` at
+`0x4A60AB`, which the caption's `DrawText 0x4A50E0` takes as its shade argument (`0x4A643F`); the
+bit-8 arm jumps past it, so **a greyed button under bit 8 draws its caption unshaded**. **No hover
+frame**: MEASURED, a plain button's pixels with the pointer over it differ from without only by the
+cursor's. MEASURED 2026-10-01 on the dock: the plain greyed arm comes out tinted under GDI and
+untinted under the Vulkan mirror (353 px over three 28×22 buttons), where the bit-8 arm is the same
+on both (0 px); the source of the GDI tint was not found.
+
+**Attribs bit 8 from a file does not survive on a stage button.** `GUI_Load` reads `[COMMON]`
+through `0x4AEAC0` (called at `0x4AAA9E`), whose reader `0x4AD350` stores `attribs` as the dword at
+`+0x1B` (`0x4AD407`; the TDF integer reader `0x4C46C0`, `atol 0x4E4ED0`). Stage 1, having split a
+stage button's caption at `|`, rewrites its attribs to `(attribs & 0x4000) | 1`
+(`0x4A8EE1..0x4A8EEC`); MEASURED, `attribs=257` in the file reads back as 1 once the screen is up.
+Stage 1 also zeroes `colorf` (`+0x1F`) at `0x4A8B56`. The other readers of bit 8 are the list box
+painters `0x4A1F79` and `0x4A221D` and the list box arm `0x4A13C8` of the by-index setter `0x4A12E0`
+(jump table `0x4A142C`, index table `0x4A1444`). MEASURED: with bit 8 set at run time on a stage
+button that is not greyed, its clicks stop answering (two buttons, both stages), while a plain
+button with it answers; the reader responsible was not found -- the pump's click arm
+`0x4AA35A..0x4AA39D` reads no attribs, and the press arm's attribs test (`0x4A9D80`) is bit 4.
+
+**The panel's ground and its surface.** Stage 1 makes the panel's surface record 0's `+0x17 x +0x19`
+(`0x4C69F0`, from `0x4A9071..0x4A907C`), stores it at `+0xBC`, and copies the screen under it from
+`(-x, -y)` (`0x4A9081..0x4A9098`, through `0x4C6B70`); the copy `0x4CBBE0` refuses an origin outside
+either surface and clamps the size to both (`0x4CBBE0..0x4CBC90`). An `id 12` picture resolves its
+frame by NAME in the panel's bank, then the shared one, into `+0xB8` (`0x4A8ACA`), and is drawn by
+`0x4A4660`; a panel's background is `0x4B0230` (one frame blitted at (0,0), several nine-sliced,
+`0x4B039C..0x4B0439`). The GAF blitter's single-frame path `0x4B7F90` intersects the frame's rect
+with the context's clip (`0x4C6AE0`, `0x4B7E60`) and returns on an empty one; an uncompressed frame
+(`+9 == 0`) goes to `0x4CBE70` with the key `+8` (`0x4B8021..0x4B8108`; the clip at
+`0x4B807B..0x4B80C6`). So a frame wider than its panel is drawn clipped to the panel's surface.
+
+**The speeds.** `main+0x38A4B` (u16) is the game speed the player chose, the ceiling, 10 = 1x;
+`main+0x38A4D` (u16) the live speed the scheduler `0x495230` runs at. A frame's ticks are the
+elapsed time × the live speed × 0.1 (`0x4FDA28`) plus the fraction kept at `+0x38A43`; `DeltaTime`
+`+0x38A3B` is 0 while bit 0 of `+0x38A51` is set (`0x4953D9..0x4953E2`) and at most 5
+(`0x4953EF..0x4953FE`). The throttle counter `+0x38A4F` (u16): each clamped frame adds 1 and past 10
+lowers the live speed by 1, floor 1 (`0x495409..0x495441`); each unclamped frame takes 1 and past
+-100 raises the live speed by 1 up to the ceiling (`0x495448..0x49547B`). **Nothing clamps a speed
+from above** there; `SetGameSpeed 0x490DF0` clamps to [1, 20], and every speed key is refused for a
+watcher (`0x496550`, `0x4965AA`). Writers of `+0x38A4B`/`+0x38A4D`: the Options screen and its undo
+(`0x45C143`, `0x45C6F3`, `0x45CA6D`, `0x45CD67`, `0x45EBE4`, `0x45ECA8`, `0x45FEA6`),
+`0x490DC0`, `0x490E9B`, the level setups `0x4912C9` and `0x49199F` (a reset to 10 in network mode
+3 only, so a skirmish keeps its speed into the next level), the start-up load `0x430509..0x43052B`
+(the registry's `gamespeed` into both) and the scheduler. The settings save `0x430F00` writes the
+ceiling to `gamespeed` (`0x43136B`); the Options screen's OK reaches it at `0x45FD5F`. MEASURED on a
+playback, GameTime a second over 5 s with the ceiling and the live speed written together: 5 ->
+15.1, 10 -> 30.5, 20 -> 59.1, 40 -> 118.9, 80 -> **150.5**, the live speed still 80 after the 5 s
+(the frame, not the speed, bounds 8x on the reference setup).
+
+**The pause** is bit 0 of the word `main+0x38A51`: the Pause key XORs it (`0x4960AA..0x4960BC`) and
+then sends packet `0x19` through `0x451DF0`, with no watcher test. The level setups do not clear it
+(`0x49842A`, above, is ours).
+
+**A commander death and a defeat in a player record.** The destructor increments the owner's
+`WORD +0x106` when the dying unit's def name equals its side's commander (`main+0x37F5F +
+0x232·side`, compared by `0x4F8A70`; `0x486990..0x486996`, and the self-destruct path
+`0x486A86..0x486A8C`), and decrements the owner's `WORD +0x144`, the units alive
+(`0x486DFC..0x486E09`), calling the skirmish elimination `0x47BD70` at 0 in mode 2. Both are in
+every recorded player image. MEASURED: a skirmish whose player's commander self-destructs with
+"commander dies: game ends" gives one `+0x106` rise and one `+0x144` fall to 0 for seat 0, both at
+GameTime 2779.
+
 ### The pump's entry, the pointer it reads, and what a list scroll is [DISASSEMBLED 2026-09-26]
 
 *Read for `tagpu_gui_hook.c`'s list wheel, which scrolls a list from an observer at the pump's
@@ -13235,7 +13480,18 @@ is documented with the rest of the container in [file formats](file-formats.html
   - `rev31.GP3` with flag 1, `*.CCX` with flag 1, `*.UFO` and `*.HPI` with flag 0;
   - `%c:\*.hpi` on each drive `0x4BB190` returns.
 - **Bounds.** `*.HPI` stops after ten successful mounts per call (`0x41D5C0`, `0x41D5D9`); nothing
-  bounds the count otherwise.
+  bounds the count otherwise. An archive already mounted does not count, so each call mounts the
+  next ten, and the list grows over the first calls of a process. **MEASURED 2026-10-02** on
+  retail (13 `.hpi`): the main menu of a fresh start held 28 archives, without `totala3.hpi`,
+  `totala4.hpi` and `worlds.hpi`; a level held all 31, mounted by the Start's call. So the
+  archive fingerprint taken at the first main menu is not the one a level records. The Replays
+  browser calls `0x41D4C0` until a call mounts nothing before it takes the fingerprint
+  (`tagpu_replays.c`, `mount_all`): from the main menu's dispatch, as MULTI's click calls it
+  (`0x425E0B`), and after Leave from `menu_built`, once the main menu's builder `0x4263B0` has
+  returned at `0x4270A9`. The engine's own calls in play, at RESTART (`0x460428`) and in the
+  load-game dialog (`0x49257A`), show it is not tied to a shell menu. Its stop test is the count,
+  which a call can leave unchanged by pruning one archive (`0x4BE180`) and mounting another: it
+  may then stop early. `MOUNT_CALLS_MAX` (64) bounds it.
 - **The eleven callers** are all on the game thread:
   - WinMain's start-up `0x49E996`;
   - the shell menus `0x41EF71`, `0x425E0B`, `0x4775C9`, `0x47761B`, `0x47772D`, `0x477BC3` and
@@ -13457,7 +13713,10 @@ tested at `0x4288DC`) gates a blank-and-present: non-zero makes `main+0x37E1B` t
 zero, as here, skips all three [DISASSEMBLED 2026-09-29; no flip returning to `0x428906` runs
 inside a load, MEASURED the same day]. It looks the name up in a ten-deep most-recent-first
 cache of decoded backgrounds (`0x428912..0x428954`; a hit moves the record to the front and
-skips the load, `0x428956..0x4289BC`) and on a miss loads the PCX (`0x429290`, `0x4289DE`) into
+skips the load, `0x428956..0x4289BC`) and on a miss loads the PCX (`0x429290`, `0x4289DE`, with
+its own first argument, the name pointer, re-read at `0x4289D3` from `[esp+0x4C]` and pushed
+as is, so an observer on the loader's return `0x4289E3` can tell a caller's name by its address
+[DISASSEMBLED 2026-10-02]) into
 it, unless `main+0x391F1` is 6 (`0x4289F1`, no insertion) (records of 0x28 bytes from `0x5120B8`,
 the surface at `+0`, the name at `+4`; the oldest is `SurfaceFree`d and its name `MEM_Free`d at
 `0x428A04`), and with no GUI screen on top (`main+0x531` zero, tested at `0x428A7F`) and its fourth
@@ -14074,6 +14333,29 @@ FBI loader.
   native multiplayer sync never reach COB validation, and rejection indices recorded during
   COB loading are not subsequently moved by this compaction/sort. [DISASSEMBLED 2026-09-28;
   MEASURED: host-only and joiner-only malformed COB fixtures absent on both peers.]
+- **What a level's type list, and so `RT_UNITDEFS`, is a function of** [DISASSEMBLED
+  2026-10-02]. The filter keeps the order of what it keeps (a `remove_if`: `0x42D4AD..0x42D4D2`
+  finds the first type without bit 23, `0x42D4DC..0x42D50E` copies each later type that has it
+  down). Bit 23 is the loader's verdict (`0x42A8D0`: set when the FBI's `Version` is not above
+  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` and
+  `0x42B14B..0x42B162`; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
+  drops every type without it), and afterwards the battleroom's restriction store's (`0x46E203`,
+  `0x46E23B`, in `0x46E160`, *A type's own cap* above, which marks its running at game start
+  INFERRED). Nothing else writes it: the other writers of `+0x241` are the def copy `0x42B370`
+  and the FBI loader `0x42BF40`, whose bit-field writes never touch bit 23.
+  The sort covers `[1, count)` (`0x42D54F`, `0x42D557`), so `None`, type 0, stays first. Its
+  comparator `0x42DB60` is `_stricmp(a+0x20, b+0x20) < 0` through the CRT's `0x4F8A70`, which,
+  with `__lc_handle[LC_CTYPE]` (`0x52A018`) at 0, folds `A`..`Z` alone to lower case and compares
+  unsigned bytes; the CRT's locale setter `0x4ED9A0` has no reference in the exe (no call, no
+  pointer to it), so that is the branch taken. Types whose names are equal after that folding
+  tie, and the sort (the partition `0x432D40`, then insertion) is not stable: tied types keep no
+  defined order. Then the per-type loop reads each type's FBI again by its name,
+  `units\<UnitName>.FBI` (`0x42D709`), and `0x42BF40` reads `unitname` into `+0x20` once more
+  (`0x42BFA7`, 0x20 bytes, default empty): a type whose file is named otherwise than its
+  `UnitName` takes the name from whatever file bears its name. So a level's names are the
+  restriction store's verdict over the loader's types, sorted as above, each renamed by the file
+  its name points to; in retail the result was the shell's 279 names sorted (above, *The shell
+  and a level hold the unit types in different orders*).
 - **`0x42BF40(path, def)`** (`sub esp,0x518`) opens the file (`0x4C2F60`) and finds `[UNITINFO]`
   (`0x4C3410` with `0x503914`); at `0x42BF8C..0x42BF93` it takes **`ebp = def`**
   (`[esp+0x530]`) and **`ecx = the section`** (`[esp+0x14]`), and at `0x42BF97` begins its first

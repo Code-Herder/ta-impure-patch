@@ -51,6 +51,12 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    engine's space. It only queues the notch; the game thread scrolls the list
    under its point at the next GUI pump (tagpu_gui_hook.c, "the list wheel"). */
 void tagpu_gui_wheel(UINT msg, WPARAM wparam, LPARAM lparam);
+/* GAME THREAD, after a backdrop's decode and before its first copy: the box
+   (l, t, w, h) of the decoded PCX surface whose pixels are at `pixels` holds
+   Impure's own art, drawn for the palette, which Classic++'s picture store
+   leaves as drawn -- the whole surface takes the picture out of the store. A
+   surface the UI layer does not track, or a box outside it, is ignored. */
+void tagpu_gui_asset_exact(const void* pixels, int l, int t, int w, int h);
 
 /* RENDER THREAD, PER PRESENT: poll the trigger, drain the queue into the twins
    and fill the Vulkan pass's hand-over. It APPLIES the op stream -- resolving
@@ -137,7 +143,7 @@ unsigned tagpu_gui_minimap_have(void);
    world's copies. */
 #define TAGPU_GUI_TABLE_ROWS  32u
 
-/* THE HAND-OVER'S REMAP TABLE: 96 rows of 256, which is what a
+/* THE HAND-OVER'S REMAP TABLE: 97 rows of 256, which is what a
    `TAGPU_GUIOP_TINT`'s `fg` indexes.
 
      rows  0..31  the lighten table as the engine holds it -- what a FOCUS
@@ -145,6 +151,11 @@ unsigned tagpu_gui_minimap_have(void);
      rows 32..95  one row per BOX-SHADER level L = -32..31 (`0x4BF4D0`), at
                   `TAGPU_GUI_SHADE_BOX + L + 32`, precomputed by the publisher
                   from the two engine tables.
+     row  96      the GREY REMAP `globals+0xCC` as the engine holds it, which
+                  `0x4BFE10` applies to a box -- the first half of a greyed
+                  gadget, before the box shader's level -20
+                  (`TAGPU_GUI_SHADE_GREY`). Its writer `0x4CCED5` reads the
+                  destination unsigned, so the row is the table itself.
 
    WHY THE BOX SHADER GETS ROWS OF ITS OWN rather than an index into the two
    raw tables: `0x4BF4D0` reads its destination SIGNED (`movsx ebx,BYTE PTR
@@ -156,7 +167,8 @@ unsigned tagpu_gui_minimap_have(void);
    table, which nothing can reproduce: those two levels (-32 and 0) are never
    published, and their rows' upper halves are zero and unaddressed. */
 #define TAGPU_GUI_SHADE_BOX   32u
-#define TAGPU_GUI_SHADE_ROWS  (TAGPU_GUI_TABLE_ROWS + 64u)
+#define TAGPU_GUI_SHADE_GREY  (TAGPU_GUI_TABLE_ROWS + 64u)
+#define TAGPU_GUI_SHADE_ROWS  (TAGPU_GUI_SHADE_GREY + 1u)
 #define TAGPU_GUI_SHADE_BYTES (TAGPU_GUI_SHADE_ROWS * 256u)
 
 enum { TAGPU_GUICOL_DST = 1, TAGPU_GUICOL_ON = 2 };   /* TAGPU_GUIOP::col */
@@ -207,7 +219,10 @@ typedef struct TAGPU_GUIOP {
     unsigned short fw, fh;          /* sprite: the frame's size               */
     unsigned       surf, src;       /* destination / copy source, by pixel base */
     short          l, t, r, b;      /* destination box, INCLUSIVE, surface px */
-    short          sl, st;          /* copy: source top-left; sprite: dst pos */
+    short          sl, st;          /* copy: source top-left; sprite: dst pos;
+                                       seed with bytes: with fw, fh, the box of
+                                       Impure's own art the store leaves as drawn
+                                       (tagpu_gui_asset_exact), fw 0 = none     */
     int            w, h;            /* seed: the surface's geometry           */
     unsigned       aoff, alen;      /* into TAGPU_GUIHAND::arena              */
     /* ---- STRING. The three colour arguments of 0x4CCF60 as BYTES, and
@@ -390,6 +405,8 @@ typedef struct TAGPU_GUIHAND {
     float vpL, vpT, vpW, vpH;       /* the TRUE viewport, from the packet     */
     float scaleX, scaleY;           /* k, and the ramp's width with it        */
     float hud[4];
+    float dock[4], dockMap[4], dockS[2];  /* the dock region: LAY_FS's uDock,
+                                             uDockMap and uDockS, 0 = none     */
     int   vpX, vpY, vpW_gl, vpH_gl; /* the viewport the composite draws into  */
 
     /* WHAT THIS RECORD DOES NOT CARRY, counted rather than dropped silently.

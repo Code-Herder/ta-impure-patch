@@ -2117,7 +2117,17 @@ reader's damaged-file paths; the numbers are in the takeover note's *Verified by
 
 ## S5
 
-Planned in detail when S4 is in. The table above is its scope.
+**S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens
+drawn by the engine's GUI with our own art per style. It asks four things of the recorder, which
+stay the recorder's to build (that note's *What S5 asks of the recorder*):
+
+1. the level's minimap in the header;
+2. a summary in the end block — each player's result, each commander death and defeat with its
+   GameTime;
+3. the mod: its name, its version, and a fingerprint of the archives the engine mounted;
+4. a recording that starts mid-game from a snapshot, and an end reason for one the player stopped.
+
+Asks 1 to 3 are *What the Replays browser asks of a recording* above; the fourth goes with S4d.
 
 ## Open
 

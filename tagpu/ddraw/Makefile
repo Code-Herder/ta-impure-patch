@@ -90,7 +90,7 @@ DEPS     := $(filter %.d, $(OBJS:.o=.d))
 # `clean` removes every build's objects, whichever LIMITS or COVER it is run with.
 ALLOBJS  := $(foreach e, .o .stock.o .cover.o .stock.cover.o, $(addsuffix $(e), $(basename $(SRCS))))
 
-.PHONY: clean all thread-split spirv log-check replay-layout logtest
+.PHONY: clean all thread-split spirv log-check replay-layout logtest arttest
 all: $(TARGET)
 
 %.o: %.rc
@@ -151,6 +151,18 @@ log-check:
 replay-layout:
 	../../tools/replay-layout-check.sh .
 
+# THE ART RULE (tools/artbake.py; src/tagpu_art.h): Impure's own UI art is committed as PNGs
+# under art/ui/ and baked into palette indices here, into inc/tagpu_art_gen.h, which is
+# generated and never committed -- so the art in the DLL cannot disagree with the art in
+# git. The bake needs only the bare python3 the build already names. The folders are
+# prerequisites as well as the files, because a deleted PNG changes only its folder's time.
+ART_DIR  := ../../art/ui
+ART_SRCS := $(shell find $(ART_DIR) -type d -o -name '*.png' 2>/dev/null)
+inc/tagpu_art_gen.h: ../../tools/artbake.py ../../unditherer/ta-palette.json $(ART_SRCS)
+	python3 ../../tools/artbake.py $(ART_DIR) ../../unditherer/ta-palette.json $@
+
+src/tagpu_art.o src/tagpu_art.stock.o tests/arttest.exe: inc/tagpu_art_gen.h
+
 # THE SIMULATION-STATE RULE (inc/tagpu_simreg.h): every writable static of a file marked `sim`
 # in thread-split.allow is declared, and no `sim` object allocates, takes a TLS index, changes a
 # page or names a lever itself. It reads the objects this link uses, so it runs in the link's own
@@ -177,7 +189,15 @@ tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
 	$(CC) -Iinc -O2 -Wall -std=c99 -DTLOG_FILE_CAP=65536 -DTLOG_TOTAL_CAP=524288 -DTLOG_KEEP=10 -DTLOG_SELFTEST \
 	    -static -o $@ tests/logtest.c src/tagpu_log.c
 
+# THE ART'S SELF-TEST (tests/arttest.c, driven by tests/arttest.py under Wine): the real
+# tagpu_art.c inflates the baked art and prints every frame, which arttest.py compares with
+# the PNGs in art/ui/. Not part of `all` or of CI -- it needs Wine to run.
+arttest: tests/arttest.exe
+
+tests/arttest.exe: tests/arttest.c src/tagpu_art.c src/lodepng.c src/tagpu_log.c src/tagpu_art.h
+	$(CC) -Iinc -Isrc -O2 -Wall -std=c99 -static -o $@ tests/arttest.c src/tagpu_art.c src/lodepng.c src/tagpu_log.c
+
 clean:
-	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe inc/tagpu_art_gen.h || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)

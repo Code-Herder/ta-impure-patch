@@ -58,6 +58,7 @@ static int cell_up(const TAGPU_GAFATLAS* a, int v)
 static int restore_frame_of(const TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e,
                             TAGPU_RGLSL_FRAME* f)
 {
+    if (e->exact) return 0;
     if (a->restoreMinEdge > 0 && (e->w < a->restoreMinEdge || e->h < a->restoreMinEdge))
         return 0;
     f->ax = f->dx = e->x; f->ay = f->dy = e->y;
@@ -1493,7 +1494,7 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
    atlas_put (which is handed the bytes): `pixels` holds w*h indices */
 static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const void* pix,
                                         int w, int h,
-                                        unsigned char ck, const unsigned char* pixels)
+                                        unsigned char ck, const unsigned char* pixels, int exact)
 {
     int slot;
     TAGPU_GAFENT* e;
@@ -1529,6 +1530,7 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
            a rect the next ask paints in place */
         e->resv = 1;
         e->pend = 0; e->deferEpoch = 0; e->askFrame = 0; e->rli = -1;
+        e->exact = (char)(exact != 0);
         e->hit = 1;                     /* asked for by definition: it is being inserted */
         e->x = (unsigned short)(a->shelfX + p);       /* inside the border */
         e->y = (unsigned short)(a->shelfY + p);
@@ -1561,16 +1563,16 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
        claiming the slot here would cache the failure for the atlas's whole
        life, and the feature atlas is meant to live as long as the map */
     if (!tagpu_gaf_decode(g, w, h, s_dec)) return NULL;
-    return atlas_insert(a, g, pix, w, h, g[TAGPU_GF_CK], s_dec);
+    return atlas_insert(a, g, pix, w, h, g[TAGPU_GF_CK], s_dec, TAGPU_GAF_IS_EXACT(g));
 }
 
 const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
                                         int w, int h,
-                                        unsigned char ck, const unsigned char* pixels)
+                                        unsigned char ck, const unsigned char* pixels, int exact)
 {
     if (!tagpu_gaf_atlas_create(a)) return NULL;
     if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX || !pixels) return NULL;
-    return atlas_insert(a, frame, pix, w, h, ck, pixels);
+    return atlas_insert(a, frame, pix, w, h, ck, pixels, exact);
 }
 
 const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,

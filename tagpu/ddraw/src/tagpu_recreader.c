@@ -61,6 +61,9 @@ struct RecReader {
     size_t             at;          /* the next record in the payload                         */
     int                ended;       /* the end block, or the file's end, has been read         */
     char               end[160];    /* how the recording ended, once `ended`                   */
+    unsigned           end_reason;  /* the end block's RT_END_REASON, RT_LAST and              */
+    unsigned           end_last;    /* RT_ITERATIONS, once it has been read; 0 for one it      */
+    unsigned           end_iters;   /* does not carry                                         */
     unsigned*          touched;     /* the slots whose `changed` is set                        */
     unsigned           ntouched;
     unsigned           evcap, fcap;
@@ -438,6 +441,9 @@ static void end_parse(RecReader* r, const unsigned char* b, size_t len)
         if (n == 4 && tag == RT_ITERATIONS) iters = u32(b + at + 4);
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
+    r->end_reason = reason;
+    r->end_last = last;
+    r->end_iters = iters;
     snprintf(r->end, sizeof r->end, "%s (%u iterations to GameTime %u)",
              reason && reason < sizeof END_REASONS / sizeof END_REASONS[0]
                  ? END_REASONS[reason] : "an end of an unknown reason",
@@ -1750,6 +1756,71 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
 fail:
     recr_close(r);
     return NULL;
+}
+
+/* The header block, then every block's header to the end block, whose payload alone is read: the
+   walk index_build makes, with the same checks, stopping at the first torn or cut block. */
+int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap)
+{
+    RecReader* r = (RecReader*)calloc(1, sizeof *r);
+    char magic[8];
+    RecBlock b;
+    LARGE_INTEGER fs;
+    unsigned long long off, size;
+    unsigned i;
+    int k, ok = 0;
+    memset(s, 0, sizeof *s);
+    if (!r) {
+        snprintf(why, cap, "no memory");
+        return 0;
+    }
+    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                       FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (r->f == INVALID_HANDLE_VALUE) {
+        snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
+        goto done;
+    }
+    if (!read_all(r->f, magic, 8) || memcmp(magic, REC_MAGIC, 8)) {
+        snprintf(why, cap, "%s is not a recording", path);
+        goto done;
+    }
+    r->off = 8;
+    k = block_read(r, &b, why, cap);
+    if (k <= 0 || b.kind != RB_HEADER) {
+        if (k >= 0) snprintf(why, cap, "%s has no header block", path);
+        goto done;
+    }
+    if (!header_parse(&r->h, r->raw, r->rawn, why, cap)) goto done;
+    payload_free(r);
+    s->format = r->h.format;
+    s->start = s->last = r->h.start;
+    lstrcpynA(s->map, r->h.map, sizeof s->map);
+    for (i = 0; i < r->h.nseats; i++) lstrcpynA(s->name[i], r->h.seats[i].name, RECR_NAME);
+    s->nseats = r->h.nseats;
+    if (!GetFileSizeEx(r->f, &fs)) {
+        snprintf(why, cap, "cannot size the file (%lu)", GetLastError());
+        goto done;
+    }
+    size = (unsigned long long)fs.QuadPart;
+    for (off = r->off; off + sizeof b <= size; off += sizeof b + b.packed) {
+        if (!file_at(r, off) || !read_all(r->f, &b, sizeof b) || b.magic != REC_BLOCK_MAGIC ||
+            (uint32_t)Crc32_ComputeBuf(0, &b, 28) != b.crc_head || b.packed > RECR_BLOCK_MAX ||
+            b.raw > RECR_BLOCK_MAX || off + sizeof b + b.packed > size)
+            break;
+        if (b.kind == RB_END) {
+            if (block_body(r, &b, why, cap) > 0) {
+                end_parse(r, r->raw, r->rawn);
+                s->end_reason = r->end_reason;
+                if (r->end_last) s->last = r->end_last;
+            }
+            break;
+        }
+        if (b.kind == RB_STREAM && b.last > s->last) s->last = b.last;
+    }
+    ok = 1;
+done:
+    recr_close(r);
+    return ok;
 }
 
 const RecHeader* recr_header(const RecReader* r) { return &r->h; }
