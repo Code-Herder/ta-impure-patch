@@ -693,9 +693,25 @@ def browser_watch(w, log, row, name):
     return got[got.index("replay:"):].strip()
 
 
+def index_lines(rd):
+    """replays\\index.dat's lines by file name (tagpu_replays.c, the index's format)."""
+    f = rd / "index.dat"
+    lines = f.read_text(errors="replace").splitlines()[1:] if f.exists() else []
+    return {ln.split("\t", 1)[0]: ln for ln in lines if "\t" in ln}
+
+
+def watch_button(w):
+    """The Replays browser's Watch button's state as `tacli ui` shows it: ok or grayed."""
+    m = re.search(r"\bbutton\s+WATCH\s+\S+\s+(\S+)", ui(w))
+    if not m:
+        raise CouldNotRun("no WATCH button on the screen")
+    return m.group(1)
+
+
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
-    driven through the dock: two copies of the recording refused, then the recording watched, its
+    driven through the dock: two copies of the recording refused, the data refusal's marked and the
+    missing map's not, then the recording watched, its
     speed changed on the dock, the in-game Options' OK (the settings save), a pause, the dock's
     seek to T with dump w<T>, the resume, Leave, and a second Watch from the browser it returns to.
     Returns its own checks, (name, verdict, detail) each; a claim that does not hold is Failed."""
@@ -704,6 +720,7 @@ def watch_lane(w, fx, rec, out, T):
     w.place(fix, fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
+    (rd / "index.dat").unlink(missing_ok=True)     # no mark of an earlier run's copies
     copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_layout,
                "it was recorded with another exclusion file (replay-layout.tsv)"),
               (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
@@ -731,6 +748,24 @@ def watch_lane(w, fx, rec, out, T):
         ui(w, "click", "OK")
         ui_on(w, "REPLAYS.GUI", 30)
         res.append((f"W: Watch refuses {name}", PASS, got))
+
+    # the marks the refusals left (tagpu_replays.c, THE LOCK): the other exclusion file is a data
+    # refusal, marked in the index and Watch grey on its row; a missing map never marks
+    idx = index_lines(rd)
+    for row, (name, tag, _, _) in enumerate(copies):
+        line = idx.get(f"{name}.imprec", "")
+        mark = re.search(r"\tL\t(\d+)\t", line)
+        ui(w, "select", "RECS", f"#{row}")
+        state = watch_button(w)
+        want = tag == tarec.RT_LAYOUT
+        if want and (not mark or mark.group(1) != "4" or state != "grayed"):
+            raise Failed(f"{name}: the refusal left mark {mark.group(1) if mark else 'none'} "
+                         f"and Watch {state}; expected mark 4 and Watch grayed")
+        if not want and (mark or state != "ok"):
+            raise Failed(f"{name}: a missing map left mark {mark.group(1) if mark else 'none'} "
+                         f"and Watch {state}; expected none and Watch ok")
+        res.append((f"W: {name} {'marked' if want else 'not marked'}", PASS,
+                    f"index mark {mark.group(1) if mark else 'none'}, Watch {state}"))
 
     stored, ceil0 = store_speed(w), peek(w, SPEED_CEIL)
     got = browser_watch(w, log, len(copies), stem)

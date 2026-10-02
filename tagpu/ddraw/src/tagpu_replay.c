@@ -65,6 +65,7 @@
 #include "tagpu_simreg.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_replays.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -350,22 +351,52 @@ static int request_read(char* name, unsigned cap, int* view, char* why, unsigned
     return 1;
 }
 
+/* A refusal the browser marks the recording for (WATCH'S DATA REFUSALS, tagpu_replay.h): the
+   code, and the running values it compared; code 0 for every other refusal. */
+typedef struct { unsigned code, a, b; } Refusal;
+
+/* The refusal to the browser, which marks the recording's row in replays\\index.dat
+   (tagpu_replays.h); on the game thread, at the three checks that make one */
+static void refused(const Refusal* r, const char* path)
+{
+    if (r->code && !_strnicmp(path, "replays\\", 8))
+        tagpu_replays_refused(path + 8, r->code, r->a, r->b);
+}
+
+unsigned tagpu_replay_build_key(void)
+{
+    unsigned h = 2166136261u, v[2], i;
+    const char* s;
+    for (s = TAGPU_REPLAY_LAYOUT_SHA256; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u;
+    for (s = TAGPU_REPLAY_GLOBALS_SHA256; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u;
+    v[0] = TAGPU_LIM_WRECKS;
+    v[1] = (unsigned)tagpu_limits_weapon_slots();
+    for (i = 0; i < sizeof v; i++) h = (h ^ ((const unsigned char*)v)[i]) * 16777619u;
+    return h;
+}
+
 /* The unit types, the weapons and the features against the header's (D8). Only at the first step: the level's
    loader reloads the unit data, so at the Start the types are the last level's, and a check there
    compared stale names (measured 2026-09-30: 279 types on both sides, the names' hashes apart). */
-static int data_match(const char* ta, const RecHeader* h, char* why, unsigned cap)
+static int data_match(const char* ta, const RecHeader* h, char* why, unsigned cap, Refusal* r)
 {
     unsigned n, hash;
     tagpu_rec_defs_print(ta, &n, &hash);
     if (!h->has_unitdefs || n != h->ndefs || hash != h->defs_hash) {
         snprintf(why, cap, "the unit types differ from the recording's (%u here, %u there)", n,
                  h->ndefs);
+        r->code = TAGPU_REPLAY_REFUSED_UNITS;
+        r->a = n;
+        r->b = hash;
         return 0;
     }
     tagpu_rec_weapons_print(&n, &hash);
     if (n && (!h->has_weapons || n != h->nweapons || hash != h->weapons_hash)) {
         snprintf(why, cap, "the weapons differ from the recording's (%u slots here, %u there)", n,
                  h->nweapons);
+        r->code = TAGPU_REPLAY_REFUSED_WEAPONS;
+        r->a = n;
+        r->b = hash;
         return 0;
     }
     {
@@ -376,6 +407,9 @@ static int data_match(const char* ta, const RecHeader* h, char* why, unsigned ca
             snprintf(why, cap, "the features differ from the recording's (a %u x %u grid, %u "
                      "wreck records and %u defs here; %u x %u, %u and %u there)", gw, gh,
                      (unsigned)TAGPU_LIM_WRECKS, n, h->grid_w, h->grid_h, h->wrecks, h->nfdefs);
+            r->code = TAGPU_REPLAY_REFUSED_FEATURES;
+            r->a = n;
+            r->b = hash;
             return 0;
         }
     }
@@ -384,16 +418,23 @@ static int data_match(const char* ta, const RecHeader* h, char* why, unsigned ca
 
 /* Everything the seating rests on that the recording alone decides, and the sites it needs in
    (§6.4). 1 with V in `viewer`. */
-static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned* viewer)
+static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned* viewer,
+                           Refusal* r)
 {
     unsigned char seated[REC_PLAYERS] = { 0 };
     unsigned i;
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
+        r->code = TAGPU_REPLAY_REFUSED_LAYOUT;
+        r->a = 0;
+        r->b = tagpu_replay_build_key();
         return 0;
     }
     if (strcmp(h->globals, TAGPU_REPLAY_GLOBALS_SHA256)) {
         snprintf(why, cap, "it was recorded with another positive list (replay-globals.tsv)");
+        r->code = TAGPU_REPLAY_REFUSED_GLOBALS;
+        r->a = 0;
+        r->b = tagpu_replay_build_key();
         return 0;
     }
     /* a recorded projectile ID is a record of a pool this size: the pool the limits patch
@@ -613,6 +654,7 @@ static void __cdecl replay_fill(void)
     char name[NAME_MAX_], path[MAX_PATH], why[200];
     unsigned v = 0;
     int k, view = -1;
+    Refusal r = { 0, 0, 0 };
     replay_close();
     tagpu_puppet_end();
     k = request_read(name, sizeof name, &view, why, sizeof why);
@@ -627,10 +669,11 @@ static void __cdecl replay_fill(void)
         tagpu_logf("replay: not playing %s: %s", name, why);
         return;
     }
-    if (!ta || !validate_header(recr_header(s_rd), why, sizeof why, &v) ||
+    if (!ta || !validate_header(recr_header(s_rd), why, sizeof why, &v, &r) ||
         !validate_engine(ta, recr_header(s_rd), why, sizeof why) ||
         !view_ok(recr_header(s_rd), view, why, sizeof why)) {
         tagpu_logf("replay: not playing %s: %s", name, ta ? why : "no main block");
+        refused(&r, path);
         replay_close();
         return;
     }
@@ -789,7 +832,7 @@ static void* __cdecl save_after(unsigned* regs)
 /* ---- S-d: the step -------------------------------------------------------------------------- */
 
 /* What the loaded level must agree on with the recording (§6.4, S-d). */
-static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned cap)
+static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned cap, Refusal* r)
 {
     char stem[RECR_TEXT];
     unsigned each = *(const unsigned short*)(ta + OFF_EACH);
@@ -805,7 +848,7 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
         snprintf(why, cap, "the level's map is %s, the recording's %s", stem, h->map);
         return 0;
     }
-    if (!data_match(ta, h, why, cap)) return 0;
+    if (!data_match(ta, h, why, cap, r)) return 0;
     if (now != h->start) {
         snprintf(why, cap, "the level's first step is GameTime %u, the recording's %u", now,
                  h->start);
@@ -5154,6 +5197,7 @@ void __cdecl tagpu_replay_step(void)
     char why[200], shown[32];
     Lv L;
     int first = 0;
+    Refusal r = { 0, 0, 0 };
     if (!tagpu_puppet_on() || !s_rd || s_dead) return;
     ta = ta_main();
     if (!ta) return;
@@ -5161,10 +5205,11 @@ void __cdecl tagpu_replay_step(void)
     if (s_first) {
         s_first = 0;
         s_opt.played = 1;                   /* THE PLAYER'S SETTINGS: the loader is done */
-        if (!first_checks(ta, recr_header(s_rd), why, sizeof why) ||
+        if (!first_checks(ta, recr_header(s_rd), why, sizeof why, &r) ||
             !first_iteration(ta, &L, why, sizeof why)) {
             s_dead = 1;
             tagpu_logf("replay: not playing %s: %s; the level stays empty", s_name, why);
+            refused(&r, s_path);
             return;
         }
         if (s_view == s_viewer) snprintf(shown, sizeof shown, "full visibility");
@@ -5558,6 +5603,7 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
     void* gs;
     unsigned v = 0, ais;
     size_t n;
+    Refusal r = { 0, 0, 0 };
 
     /* A: checks; nothing is written */
     snprintf(name, sizeof name, "%s", file);
@@ -5577,8 +5623,9 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
     if (!s_rd) return watch_refuse(gi, name, why);
     span_read(path);
     h = recr_header(s_rd);
-    if (!validate_header(h, why, sizeof why, &v) || !view_ok(h, view, why, sizeof why)) {
+    if (!validate_header(h, why, sizeof why, &v, &r) || !view_ok(h, view, why, sizeof why)) {
         replay_close();
+        refused(&r, path);              /* before the notice: the browser is still on top */
         return watch_refuse(gi, name, why);
     }
 

@@ -4977,8 +4977,8 @@ loaded. The level's unit-data load `0x42D2E0` makes that order and then re-reads
 its file; the shell's order comes back because that load ends by setting the reload flag
 (`0x42DB2B`), so the next `0x42BD10` runs the loader again (*`0x42D2E0` — the level's unit-data
 load*, below, has the steps). That is why Watch compares the defs at the first step
-(`tagpu_replay.c`, `data_match`), and why the Replays browser cannot lock on them in the shell
-(the S5 note, *Open*).
+(`tagpu_replay.c`, `data_match`), and why the Replays browser locks a recording only once Watch
+has refused it (the S5 note, *The lock*).
 
 **The sync.** The object is `[main+0x2A30]`: `+0x58` nonzero on the host, `+0x64` a disable flag, the
 per-peer records of 0x5C bytes at `[+0x14, +0x18)`, a tree of keys at `+4` (`0x46E9B0` finds,
@@ -13374,7 +13374,13 @@ is documented with the rest of the container in [file formats](file-formats.html
   - `rev31.GP3` with flag 1, `*.CCX` with flag 1, `*.UFO` and `*.HPI` with flag 0;
   - `%c:\*.hpi` on each drive `0x4BB190` returns.
 - **Bounds.** `*.HPI` stops after ten successful mounts per call (`0x41D5C0`, `0x41D5D9`); nothing
-  bounds the count otherwise.
+  bounds the count otherwise. An archive already mounted does not count, so each call mounts the
+  next ten, and the list grows over the first calls of a process. **MEASURED 2026-10-02** on
+  retail (13 `.hpi`): the main menu of a fresh start held 28 archives, without `totala3.hpi`,
+  `totala4.hpi` and `worlds.hpi`; a level held all 31, mounted by the Start's call. So the
+  archive fingerprint taken at the first main menu is not the one a level records. The Replays
+  browser calls `0x41D4C0` until a call mounts nothing before it takes the fingerprint
+  (`tagpu_replays.c`, `mount_all`), as MULTI's click calls it from the same dispatch (`0x425E0B`).
 - **The eleven callers** are all on the game thread:
   - WinMain's start-up `0x49E996`;
   - the shell menus `0x41EF71`, `0x425E0B`, `0x4775C9`, `0x47761B`, `0x47772D`, `0x477BC3` and

@@ -159,6 +159,10 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 #define VERSION_MAX      7              /* RT_GAME_VERSION's characters at most (tagpu_recorder.c) */
 #define MOD_NAME_MAX     16             /* an s_mods name, NUL included                          */
 #define VA_VERSION_TEXT  0x005031B4u    /* the main menu's version, RT_GAME_VERSION's source     */
+#define VA_INIT_HPI      0x0041D4C0u    /* InitTAHPIAry, cdecl, no argument: mounts what is new  */
+#define VA_GFX_PP        0x0051FBD0u    /* the graphics globals: +0x61C the archives mounted     */
+#define GFX_ARC_COUNT    0x61C
+#define MOUNT_CALLS_MAX  64
 
 /* ---- the per-mod table (the plan's *The per-mod table*) ---------------------------------------
    A mod is named by the engine's own strings: the config file and the main archive's format at
@@ -973,11 +977,12 @@ static void __stdcall mm_oncommand(void* gi)
 /* ================================================================================================
    The recordings and replays\index.dat
    ================================================================================================
-   The index is a cache that can always be rebuilt, but for three marks it alone holds: the
-   favourite flag, the last time a recording was played and its bookmarks. One line per recording,
-   keyed by its file name and size:
+   The index is a cache that can always be rebuilt, but for four marks it alone holds: the
+   favourite flag, the last time a recording was played, its bookmarks and Watch's refusal. One
+   line per recording, keyed by its file name and size:
      name size format start last end fav played map nseats seat... marks
-       I version modprint has_modprint archives mod result,commander,defeat...  (tab-separated)
+       I version modprint has_modprint archives mod result,commander,defeat...
+       L code modprint buildkey a b                                         (tab-separated)
    `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never. `marks` is the
    dock's bookmarks, comma-separated GameTimes inside [start, last], sorted; a line without the
    field, as this version's first lines were written, has none.
@@ -985,6 +990,9 @@ static void __stdcall mm_oncommand(void* gi)
    the recording has one, the archives mounted, the mod named from them (mod_of), and each seat's
    result (RecResult), last commander death and defeat GameTimes, in the seats' order. A line
    without `I`, as the index was written before them, keeps its marks and has the rest read again.
+   From `L` on, the mark Watch's own check left (THE LOCK, below): the refusal's code
+   (TAGPU_REPLAY_REFUSED_*), the running archive fingerprint and build key it was made under (hex),
+   and the running values it compared (a decimal, b hex). A line without `L` has no mark.
    format 0 is a recording this build could not read. A recording whose line does not match is
    read again through recr_summary. The file is replaced whole, through a temporary file and a
    rename, so a crash leaves the old index or the new one. Lines for recordings the list does not
@@ -1004,6 +1012,7 @@ typedef struct {
     char     mod[MOD_NAME_MAX];             /* an s_mods name                                 */
     unsigned char result[REC_PLAYERS];      /* RecResult, in the seats' order, as name[]      */
     unsigned cmdr[REC_PLAYERS], defeat[REC_PLAYERS];
+    unsigned lock, lock_print, lock_build, lock_a, lock_b;     /* THE LOCK; lock 0: none   */
 } Ent;
 
 typedef struct {
@@ -1027,6 +1036,8 @@ static int   s_all;
 static char  s_runMod[MOD_NAME_MAX];
 static char  s_runVersion[VERSION_MAX + 1];
 static unsigned s_runPrint;
+static unsigned s_runBuild;                 /* tagpu_replay_build_key, for THE LOCK            */
+static int   s_watchReady;                  /* tagpu_replay_watch_ready at the open            */
 static char  s_blob[ENT_MAX * ROW_TEXT];    /* LIFETIME: SetListText keeps this pointer and
                                                never frees it; static, it outlives every read */
 static char  s_tlBlob[32];
@@ -1090,11 +1101,22 @@ static void info_parse(char** f, int n, Ent* e)
     e->info = 1;
 }
 
+/* the `L` fields from f[0] (`L` itself) on, `n` of them */
+static void lock_parse(char** f, int n, Ent* e)
+{
+    if (n < 6 || strcmp(f[0], "L")) return;
+    e->lock = strtoul(f[1], NULL, 10);
+    e->lock_print = strtoul(f[2], NULL, 16);
+    e->lock_build = strtoul(f[3], NULL, 16);
+    e->lock_a = strtoul(f[4], NULL, 10);
+    e->lock_b = strtoul(f[5], NULL, 16);
+}
+
 /* One index line into `e`; 0 when it is not one. `line` is NUL-terminated and is cut up. */
 static int ent_parse(char* line, Ent* e)
 {
-    char* f[11 + REC_PLAYERS + 6 + REC_PLAYERS];
-    int n = 0, i;
+    char* f[11 + REC_PLAYERS + 6 + REC_PLAYERS + 6];
+    int n = 0, i, k;
     char* p = line;
     memset(e, 0, sizeof *e);
     while (n < (int)(sizeof f / sizeof f[0])) {
@@ -1117,7 +1139,10 @@ static int ent_parse(char* line, Ent* e)
     if (e->nseats > REC_PLAYERS || (int)e->nseats > n - 10) e->nseats = 0;
     for (i = 0; i < (int)e->nseats; i++) lstrcpynA(e->name[i], f[10 + i], RECR_NAME);
     if (n > 10 + (int)e->nseats) marks_parse(f[10 + e->nseats], e);
-    if (n > 11 + (int)e->nseats) info_parse(f + 11 + e->nseats, n - 11 - (int)e->nseats, e);
+    k = 11 + (int)e->nseats;
+    if (n > k) info_parse(f + k, n - k, e);
+    if (e->info) k += 6 + (int)e->nseats;
+    if (n > k) lock_parse(f + k, n - k, e);
     return 1;
 }
 
@@ -1193,6 +1218,9 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
         for (i = 0; i < e->nseats; i++)
             at = gput(b, cap, at, "\t%u,%u,%u", e->result[i], e->cmdr[i], e->defeat[i]);
     }
+    if (e->lock)
+        at = gput(b, cap, at, "\tL\t%u\t%08X\t%08X\t%u\t%08X", e->lock, e->lock_print,
+                  e->lock_build, e->lock_a, e->lock_b);
     return gput(b, cap, at, "\n");
 }
 
@@ -1306,6 +1334,26 @@ static void running_version(char* out, unsigned cap)
     out[k] = 0;
 }
 
+/* THE ARCHIVES A LEVEL MOUNTS, before the running fingerprint is taken. InitTAHPIAry 0x41D4C0
+   mounts at most ten new *.HPI per call (0x41D5C0, 0x41D5D9) and appends what it mounts, so the
+   main menu of a fresh start holds fewer archives than a level, whose Start calls it again
+   (0x47AF2E): MEASURED 2026-10-02 on retail, 28 at the first main menu against the 31 a recording
+   names (totala3.hpi, totala4.hpi and worlds.hpi come with the second call). It is called here
+   until a call mounts nothing, as the main menu's MULTI calls it from this same dispatch
+   (0x425E0B): from then on every call, the Start's included, mounts nothing, so the fingerprint
+   is the one a level records. BOUND: MOUNT_CALLS_MAX calls, 640 archives of the bounded kind. */
+static void mount_all(void)
+{
+    const char* gfx = *(const char* const*)VA_GFX_PP;
+    int i, before;
+    if (!gfx) return;
+    for (i = 0; i < MOUNT_CALLS_MAX; i++) {
+        before = *(const int*)(gfx + GFX_ARC_COUNT);
+        ((void (__cdecl*)(void))VA_INIT_HPI)();
+        if (*(const int*)(gfx + GFX_ARC_COUNT) == before) return;
+    }
+}
+
 /* RecInfo is about 71 KB, so one scratch serves every read: the index's and the detail's, all
    on the game thread (the header of this file), none of them inside another. */
 static RecInfo s_info;
@@ -1354,6 +1402,7 @@ static void summarize(Ent* e)
     _snprintf(path, sizeof path, "replays\\%s", e->file);
     path[sizeof path - 1] = 0;
     e->format = e->start = e->last = e->end = e->nseats = e->nmarks = 0;
+    e->lock = 0;                            /* the mark was the old content's */
     e->map[0] = 0;
     if (recr_summary(path, &s, why, sizeof why)) {
         e->format = s.format;
@@ -1493,6 +1542,31 @@ static void rows_pick(void)
         if (row_shown(&s_ent[s_listed[i]])) s_row[s_nrows++].ent = s_listed[i];
 }
 
+/* THE LOCK (the S5 note, "A recording from another mod"). A recording Watch's own check refused
+   for this game's data or this build (WATCH'S DATA REFUSALS, tagpu_replay.h) is marked in its
+   index line: the refusal's code, the archive fingerprint (tagpu_rec_mod_print) and the build key
+   (tagpu_replay_build_key) it was made under, and the running values it compared. While the mark
+   holds, the row carries b-locked, the detail says why and Watch is grey, so the refusal is not
+   asked for again.
+   THE RULE that removes a mark: whenever the browser opens, a mark whose fingerprint or build key
+   is not the running game's goes, since the data or the build it was refused under may have
+   changed; and a mark goes with its line's content when the file's size changes (summarize).
+   Nothing else removes one. The fingerprint is the mounted archives' names and sizes, so a change
+   it does not see keeps the mark: a loose file in the game's folder, or an archive replaced by
+   one of the same size. A refusal that is not a data refusal -- a missing map, a file being
+   written, a file the reader cannot read, the engine's own notices -- never marks. */
+static int lock_holds(const Ent* e)
+{
+    return e->lock && e->lock_print == s_runPrint && e->lock_build == s_runBuild;
+}
+
+static const char* lock_text(const Ent* e)
+{
+    if (!e || !e->lock) return NULL;
+    return e->lock >= TAGPU_REPLAY_REFUSED_LAYOUT ? "Made with another build of Impure."
+                                                  : "Made with other unit data.";
+}
+
 /* The recordings listed: every one in replays\, newest first, the first ENT_MAX of them. */
 static void scan(void)
 {
@@ -1564,6 +1638,13 @@ static void scan(void)
             info_read(&s_ent[k]);
             dirty = 1;
         }
+        if (s_ent[k].lock && !lock_holds(&s_ent[k])) {
+            rlog("replays: %s: the mark of refusal %u goes - made under archives %08X and build "
+                 "key %08X, running %08X and %08X", s_ent[k].file, s_ent[k].lock,
+                 s_ent[k].lock_print, s_ent[k].lock_build, s_runPrint, s_runBuild);
+            s_ent[k].lock = 0;
+            dirty = 1;
+        }
         s_listed[s_nlisted++] = k;
     }
     free(found);
@@ -1621,8 +1702,8 @@ static int row_floor(void)
 
 /* The badges, as engine GAF frame headers over our art's pixels (tagpu_art.h: never freed or
    written): +0 w, +2 h, +8 the key, +9 0 = raw, +0xC TAGPU_GAF_EXACT, +0x10 the pixels. */
-enum { B_FAV, B_FAV_OFF, B_INCOMPLETE, B_N };
-static const char* const BADGE_NAMES[B_N] = { "b-fav", "b-fav-off", "b-incomplete" };
+enum { B_FAV, B_FAV_OFF, B_INCOMPLETE, B_LOCKED, B_N };
+static const char* const BADGE_NAMES[B_N] = { "b-fav", "b-fav-off", "b-incomplete", "b-locked" };
 static unsigned char s_badge[B_N][0x18];
 static int s_badgeW[B_N], s_badgeH[B_N], s_badgeIn[B_N];
 
@@ -1682,6 +1763,7 @@ static void rows_build(void)
         for (j = 0; e->map[j] && k < ROW_TEXT - 1; j++) t[k++] = e->map[j];
         r->map_chars = k;
         if (incomplete(e) && s_badgeIn[B_INCOMPLETE]) bw += BADGE_GAP + s_badgeW[B_INCOMPLETE];
+        if (e->lock && s_badgeIn[B_LOCKED]) bw += BADGE_GAP + s_badgeW[B_LOCKED];
         for (j = 0; j < (bw + sp - 1) / sp && k < ROW_TEXT - 1; j++) t[k++] = ' ';
         for (p = 0; p < e->nseats && k < ROW_TEXT - 3; p++) {
             const char* n = e->name[p];
@@ -1808,22 +1890,40 @@ static void minimap_show(char* gi, const Ent* e)
     *(void**)(ctrls + (size_t)k * STRIDE + G_FRAME) = s_mmFrame;
 }
 
-/* The selected recording's mod and version, and whether the archives this game mounted are the
-   ones it was recorded with: a hint, since a map installed since changes them too. */
+/* The selected recording's mod and version, and under it THE LOCK's reason, or else whether the
+   archives this game mounted are the ones it was recorded with: a hint, since a map installed
+   since changes them too. */
 static void mod_lines(char* gi, const Ent* e)
 {
     int m;
     const char* title = "";
-    if (!e || !e->info || !e->mod[0]) {
+    const char* hint = lock_text(e);
+    int named = e && e->info && e->mod[0];
+    if (!hint)
+        hint = named && e->has_modprint && e->modprint != s_runPrint
+               ? "The installed archives differ." : "";
+    set_label(gi, "MODHINT", "%s", hint);
+    if (!named) {
         set_label(gi, "MODLINE", "");
-        set_label(gi, "MODHINT", "");
         return;
     }
     for (m = MOD_RETAIL; m < MOD_N; m++)
         if (!strcmp(e->mod, s_mods[m].name)) title = s_mods[m].title;
     set_label(gi, "MODLINE", "%s %s", title, e->version);
-    set_label(gi, "MODHINT", "%s", e->has_modprint && e->modprint != s_runPrint
-                                   ? "The installed archives differ." : "");
+}
+
+static char* recs_rec(char* gi, char** ctrls_out);
+
+/* Watch grey when it cannot start anything, or when the selected recording is marked */
+static void watch_grey(char* gi, const Ent* e)
+{
+    char* ctrls = NULL;
+    int w;
+    unsigned short* g;
+    if (!recs_rec(gi, &ctrls) || !(w = find_rec(ctrls, "WATCH"))) return;
+    g = (unsigned short*)(ctrls + (size_t)w * STRIDE + G_GRAYED);
+    if (!s_watchReady || (e && e->lock)) *g |= 1;
+    else *g &= (unsigned short)~1u;
 }
 
 /* The right-hand well for row `sel`, or empty. */
@@ -1846,6 +1946,7 @@ static void detail(char* gi, int sel)
     lstrcpynA(s_tlBlob, "Main timeline", sizeof s_tlBlob);
     ((set_list_fn)VA_SETLIST)(gi, "TIMELINES", s_tlBlob, e && e->format ? 1 : 0, NULL);
     mod_lines(gi, e);
+    watch_grey(gi, e);
     minimap_show(gi, e);
     ((gi_fn)VA_SETDIRTY)(gi);
 }
@@ -1908,21 +2009,22 @@ static void replays_open(char* gi)
     s_recsIdx = ctrls ? find_rec(ctrls, "RECS") : 0;
     if (s_recsIdx)
         *(list_cb_fn*)(ctrls + (size_t)s_recsIdx * STRIDE + L_CALLBACK) = recs_selected;
-    if (ctrls) {
+    {
         char why[200];
-        int w = find_rec(ctrls, "WATCH");
+        s_watchReady = tagpu_replay_watch_ready(why, sizeof why);
+        if (!s_watchReady) rlog("replays: Watch is grey: %s", why);
+    }
+    if (ctrls) {
         bar_label(ctrls, "COUNT", &L->count);
         bar_label(ctrls, "FOOTER", &L->footer);
-        if (w && !tagpu_replay_watch_ready(why, sizeof why)) {
-            *(unsigned short*)(ctrls + (size_t)w * STRIDE + G_GRAYED) |= 1;
-            rlog("replays: Watch is grey: %s", why);
-        }
     }
 
     badges_build();
     lstrcpynA(s_runMod, running_mod(), sizeof s_runMod);
     running_version(s_runVersion, sizeof s_runVersion);
+    mount_all();
     s_runPrint = tagpu_rec_mod_print();
+    s_runBuild = tagpu_replay_build_key();
     scan();
     rows_show(gi);
     mb = (double)s_disk / (1024.0 * 1024.0);
@@ -1991,6 +2093,10 @@ static int watch(char* gi)
     if (sel < 0 || sel >= s_nrows) return 0;
     e = &s_ent[s_row[sel].ent];
     lstrcpynA(file, e->file, sizeof file);
+    if (e->lock) {          /* Watch is grey on it: THE LOCK */
+        rlog("replays: Watch %s not asked: %s", file, lock_text(e));
+        return 0;
+    }
     was = e->played;
     e->played = (unsigned)time(NULL);
     index_save();
@@ -1999,6 +2105,63 @@ static int watch(char* gi)
     e->played = was;
     index_save();
     return 0;
+}
+
+/* The rows again with the selection and the top kept, for a mark made while the screen is on
+   top. BOUND: both are put back only inside the rows the list now holds. */
+static void rows_refresh(char* gi)
+{
+    char* l = recs_rec(gi, NULL);
+    short sel, top;
+    if (!l) return;
+    sel = *(const short*)(l + L_SELECTED);
+    top = *(const short*)(l + L_TOP);
+    rows_build();
+    ((set_list_fn)VA_SETLIST)(gi, "RECS", s_blob, s_nrows, NULL);
+    l = recs_rec(gi, NULL);
+    if (!l) return;
+    if (sel >= 0 && sel < s_nrows) *(short*)(l + L_SELECTED) = sel;
+    if (top >= 0 && top < s_nrows) *(short*)(l + L_TOP) = top;
+    detail(gi, *(const short*)(l + L_SELECTED));
+}
+
+/* THE LOCK's mark, from Watch's checks (tagpu_replays.h). The browser's own entries are marked
+   while its screen exists, the screen's rows redrawn when it is on top, as it is at Watch's
+   header check, before the notice; otherwise the line on disk, as the dock's bookmarks are
+   written. */
+void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned b)
+{
+    char path[MAX_PATH];
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    unsigned long long size;
+    char* gi = main_gi();
+    Ent* e = NULL;
+    int k;
+    if (strlen(file) >= FILE_MAX) return;
+    _snprintf(path, sizeof path, "replays\\%s", file);
+    path[sizeof path - 1] = 0;
+    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fa)) return;
+    size = ((unsigned long long)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+    if (s_gm) {
+        k = ent_find(file);
+        if (k >= 0 && s_ent[k].size == size) e = &s_ent[k];
+    } else {
+        e = mark_ent(file, size);
+    }
+    if (e) {
+        e->lock = code;
+        e->lock_print = tagpu_rec_mod_print();
+        e->lock_build = tagpu_replay_build_key();
+        e->lock_a = a;
+        e->lock_b = b;
+        index_save();
+        rlog("replays: %s marked: refusal %u (%u, %08X) under archives %08X, build key %08X",
+             file, code, a, b, e->lock_print, e->lock_build);
+    } else {
+        rlog("replays: %s not marked for refusal %u: the index has no line for it", file, code);
+    }
+    if (!s_gm) mark_done();
+    else if (e && gi && recs_rec(gi, NULL)) rows_refresh(gi);
 }
 
 /* REPLAYS' OnCommand. Back is the one click left unanswered: the pump then calls this with -1,
@@ -2071,12 +2234,20 @@ static void draw_badges(void)
         int b = e->fav ? B_FAV : B_FAV_OFF;
         if (s_badgeIn[b])
             ((gaf_blit_fn)VA_GAFBLIT)(ctx, s_badge[b], lx + 2, ry + (ih - s_badgeH[b]) / 2);
-        if (incomplete(e) && s_badgeIn[B_INCOMPLETE]) {
+        if ((incomplete(e) && s_badgeIn[B_INCOMPLETE]) || (e->lock && s_badgeIn[B_LOCKED])) {
             char t[ROW_TEXT];
+            int bx;
             memcpy(t, s_blob + row->at, (size_t)row->map_chars);
             t[row->map_chars] = 0;
-            ((gaf_blit_fn)VA_GAFBLIT)(ctx, s_badge[B_INCOMPLETE], lx + 2 + text_w(t) + BADGE_GAP,
-                                      ry + (ih - s_badgeH[B_INCOMPLETE]) / 2);
+            bx = lx + 2 + text_w(t) + BADGE_GAP;
+            if (incomplete(e) && s_badgeIn[B_INCOMPLETE]) {
+                ((gaf_blit_fn)VA_GAFBLIT)(ctx, s_badge[B_INCOMPLETE], bx,
+                                          ry + (ih - s_badgeH[B_INCOMPLETE]) / 2);
+                bx += s_badgeW[B_INCOMPLETE] + BADGE_GAP;
+            }
+            if (e->lock && s_badgeIn[B_LOCKED])
+                ((gaf_blit_fn)VA_GAFBLIT)(ctx, s_badge[B_LOCKED], bx,
+                                          ry + (ih - s_badgeH[B_LOCKED]) / 2);
         }
         ((text_draw_fn)VA_TEXTDRAW)(ctx, row->len, lx + lw - 3 - text_w(row->len), ry, -1, 0);
     }

@@ -41,4 +41,11 @@ int  tagpu_replays_marks_get(const char* file, unsigned long long size, unsigned
 int  tagpu_replays_mark_add(const char* file, unsigned long long size, unsigned T);
 int  tagpu_replays_mark_remove(const char* file, unsigned long long size, unsigned T);
 
+/* Watch's own check refused the recording `file` of replays\\ with one of WATCH'S DATA REFUSALS
+   (tagpu_replay.h), `code`, having compared the running values `a` and `b`: its index line is
+   marked under the running archive fingerprint and build key, and the browser shows it locked
+   until it opens under another of either (tagpu_replays.c, THE LOCK). On the game thread: at
+   Watch's header check with the browser on top, or on the level, at its first step. */
+void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned b);
+
 #endif

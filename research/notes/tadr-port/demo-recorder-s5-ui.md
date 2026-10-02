@@ -52,7 +52,7 @@ rows, *Record games* and *Keep replays*.
 | Text | **Never painted into art.** Labels are engine labels; the title is set from a string with the style's title font when the DLL writes `impure-patch.ufo` (*Text*) | Text in code can change without a new Codex round |
 | The minimap of a recording | **Stored in the recording** (*What S5 asks of the recorder*) | The browser needs nothing from the player's install, and a map the player no longer has still shows |
 | Mod information in a recording | **Name, version and a fingerprint** (*What S5 asks of the recorder*) | The browser can say "ProTA 4.8" and still tell two builds with one version string apart |
-| A recording from another mod | **The browser lists the running mod's recordings**, with a toggle that shows the others, locked. **Listing and grouping** go by the mod's name and version; **the lock** is the header's unit-type and weapon hashes (`RT_UNITDEFS`, `RT_WEAPONS`) against the running game's, the test Watch itself makes. The archive fingerprint `RT_MODPRINT` names an install and is never a lock: installing or removing a map changes it | Playback rebuilds unit records by type ID, so another unit set would show the wrong game; a lock on the install would lock every old recording after a map is added |
+| A recording from another mod | **The browser lists the running mod's recordings**, with a toggle that shows the others, locked. **Listing and grouping** go by the mod's name and version; **the lock** is **Watch's own refusal, remembered**: a recording Watch refused because this game's data or this build differ from it is marked, and the mark goes when the browser opens under another archive fingerprint or build (*What the browser shows of a recording*, decided 2026-10-02). The fingerprint `RT_MODPRINT` alone never locks: installing or removing a map changes it | Playback rebuilds unit records by type ID, so another unit set would show the wrong game. The shell cannot compute a level's unit and weapon hashes (the engine map, *`0x42D2E0`*): a level renames its types from their files and fills the weapon table only at its load, so the only true test is Watch's |
 | The recorder's side of S5 | **Asks to the recorder's owner**, not S5 edits | One writer of `inc/tagpu_recfmt.h` |
 | Landings | **Shell, then dock, then streams** (*Landings*) | Each is usable on its own |
 | Verification | **Retail every landing; the six setups in the release suite** (*Verification*) | — |
@@ -221,8 +221,12 @@ read by `recr_info` (`tagpu_replays.c`):
   a mod the table does not know is grouped by its version text. The detail shows it with the
   version under the timelines (`MODLINE`: "Total Annihilation v3.1"). When the recording's
   fingerprint is not this install's, the next line says "The installed archives differ." That is
-  a hint only. In the shell, the running game's fingerprint is the one its levels record: the
-  recordings made on the reference setup carried `4D781ECD`, which the browser computed too.
+  a hint only. The running game's fingerprint is taken once the browser has mounted every
+  archive a level mounts: the main menu of a fresh start holds fewer, since `InitTAHPIAry`
+  mounts at most ten new `.hpi` per call (the engine map, *The mount list*). MEASURED 2026-10-02
+  on retail: 28 archives and `CACE0F26` at the first main menu, so every recording read "The
+  installed archives differ."; 31 and `4D781ECD`, the recordings' own, once the browser has
+  called it until a call mounts nothing, as the main menu's MULTI calls it (`0x425E0B`).
 - **The filter.** The list holds the recordings of the running game's mod and version. The
   **All mods** button, in the reserved slot (retail's plate at 340, 440; Escalation's 82-px plate
   at 328..410), shows every recording and becomes **This mod**. The count reads "3 of 4
@@ -232,8 +236,38 @@ read by `recr_info` (`tagpu_replays.c`):
 - **A recording being written** is never offered. The writer holds its file open for writing
   until the end is written, and an open that denies writers fails exactly then
   (`tagpu_replay_being_written`). Watch makes the same test.
-- **Not built: the lock.** Locking another game's recordings needs the running game's unit-type
-  and weapon hashes, and the shell does not hold a level's (*Open*).
+- **The lock.** When Watch's own check refuses a recording for this game's data or this build,
+  the browser marks its index line (`L`: the refusal's code, the archive fingerprint and the
+  build key it was made under, and the values it compared). The marking refusals are the unit
+  types (`RT_UNITDEFS`), the weapons (`RT_WEAPONS`) and the features, compared at the first step
+  of the level; and another `replay-layout.tsv` or `replay-globals.tsv`, at the header check.
+  While a mark holds, the row carries `b-locked` after the map name, Watch is grey on it, and
+  the detail says "Made with other unit data." (or "Made with another build of Impure." for the
+  last two).
+  - **What removes a mark.** Whenever the browser opens, a mark made under another archive
+    fingerprint or another build key goes, since the data may now match; so does a mark whose
+    file has changed size. The build key is this build's exclusion file and positive list
+    hashes, its wreck pool size and its weapon slots (`tagpu_replay_build_key`).
+  - **Never marked:** a missing map, the recording being written, a file the reader cannot
+    read, and the engine's own notices.
+  - **Why only after Watch.** The shell cannot reproduce a level's unit and weapon lists (the
+    engine map, *`0x42D2E0`* and the weapon load `0x42E310`). The level renames each type from
+    the file its name points to, and the battleroom's restriction store narrows the set. The
+    weapon table is empty at the main menu (MEASURED 2026-10-02 on retail: all 256 names).
+  - **What the rule cannot see.** The fingerprint is the mounted archives' names and sizes. A
+    mark survives a change it does not cover: a loose unit file in the game's folder, or an
+    archive replaced by another of the same size. Watch then stays grey until the fingerprint
+    or the build changes.
+  - MEASURED 2026-10-02 on retail, a fresh recording and three copies:
+    - The copy with another exclusion file was marked at the header check. Its row turned
+      locked at once, under the notice.
+    - The copy with an edited `RT_UNITDEFS` passed the header check. It was refused at the
+      first step ("279 here, 279 there"), marked from the empty level, and locked when Leave
+      brought the browser back.
+    - The copy with a missing map was refused and never marked.
+    - Both marks held across a relaunch.
+    - Adding a one-file `.ufo` to the game folder changed the fingerprint (`83FEE162`); the next
+      open removed both marks. Removing it again left them gone, and a new refusal marked again.
 
 **Impure Config** gains *Record games* (On/Off) and *Keep replays* (a count), on the panel's 28 px
 row pitch, with the caption **Impure Config**.
@@ -402,28 +436,3 @@ and leave, polling for error boxes, with a picture per screen.
 - **The title letters.** The retail style's `font/` is a stand-in and is not committed, and
   Escalation has none of its own: without a committed `font` entry no ground is composed and the
   browser does not arm. Landings 1 and 2 wait on the owner's letters for this and for the dock's art.
-- **The lock on another game's recordings** waits on a decision. The rule is `RT_UNITDEFS` and
-  `RT_WEAPONS` against the running game's, and the main menu holds neither as a level makes it
-  (the engine map, *`0x42D2E0` — the level's unit-data load*, and its weapon load `0x42E310`):
-  - **The order is established.** MEASURED 2026-10-02 on retail: the shell held 279 types in the
-    order the start-up loaded them, hash `0x93B2B33D`; every level held the same 279 names
-    sorted, `None` first, hash `0x54F5FE19`, which is what its recording carries. DISASSEMBLED: the
-    level keeps the types with bit 23 of `+0x241`, in order, and sorts all but `None` with
-    `_stricmp` over the name, which folds `A`..`Z` alone and compares unsigned bytes. Tied
-    names (equal after that folding) end in no defined order.
-  - **The names are not the menu's.** After the sort the level reads each type's file again by
-    its name, `units\<UnitName>.FBI`, and takes `unitname` from it: a type whose file is named
-    otherwise than its `UnitName` is renamed by whatever file bears its name. The menu cannot
-    tell without reading every FBI.
-  - **The set is not the install's alone.** Bit 23 is the loader's verdict, then the battleroom's
-    restriction store's (its running at game start is INFERRED): a type the store clears is in
-    neither the level's list nor its recording.
-  - **The weapons are not in the menu at all.** The table is filled only by the level's weapon
-    load, from every section of `Weapons\*.tdf` by its `ID`, a later section overwriting an
-    earlier one. MEASURED 2026-10-02 on retail: at the main menu of a fresh start all 256 names
-    were empty.
-
-  A lock computed in the shell would then have to repeat the level's file reads (every FBI's
-  `unitname`, every weapon section and its `ID`), or take the values from a level (the recorder
-  computes both at every start), or follow Watch's own refusal. Until that is decided Watch's
-  check at the first step is the only one.

@@ -31,6 +31,23 @@ int tagpu_replay_watch_ready(char* why, unsigned cap);
    Watch nor the browser offers. Any thread; it opens the file for a moment. */
 int tagpu_replay_being_written(const char* path);
 
+/* WATCH'S DATA REFUSALS: the refusals whose verdict follows from this game's unit, weapon or
+   feature data, or from this build's replay identity, and not from the recording alone. Each is
+   handed to the browser as it is made (tagpu_replays_refused), with the running values it
+   compared: the level's count and hash for the first three, 0 and the build key for the last
+   two. */
+enum {
+    TAGPU_REPLAY_REFUSED_UNITS = 1,     /* RT_UNITDEFS against the level's unit types         */
+    TAGPU_REPLAY_REFUSED_WEAPONS,       /* RT_WEAPONS against the level's weapon table         */
+    TAGPU_REPLAY_REFUSED_FEATURES,      /* the feature grid, wreck pool and feature types      */
+    TAGPU_REPLAY_REFUSED_LAYOUT,        /* another replay-layout.tsv                           */
+    TAGPU_REPLAY_REFUSED_GLOBALS        /* another replay-globals.tsv                          */
+};
+/* What this build brings to those checks and the install does not: the exclusion file's and the
+   positive list's hashes, the wreck pool's size and the weapon table's slots. Constant for a
+   process once the limits are installed. */
+unsigned tagpu_replay_build_key(void);
+
 /* B2's stub at the sim step's unit-tick call (0x4954ED) calls this first, before the recorder's
    capture and the unit tick, on the game thread: on a level that plays a recording, the
    recording's globals and projectile pool at the capture point (tagpu_replay.c, THE GLOBALS AND
