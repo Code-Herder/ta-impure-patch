@@ -61,7 +61,7 @@ int  tagpu_dock_click(int gx, int gy, int down, int on_top);
 int  tagpu_dock_rclick(int gx, int gy, int down, int on_top);
 
 /* The window lost the mouse (focus, activation or capture): a drag in progress ends with no
-   seek. */
+   seek, and its release, should it come, is still consumed. */
 void tagpu_dock_cancel_press(void);
 
 /* the post-GUI observer 0x46A308: the strip's fill, markers and playhead over the dock's panel;

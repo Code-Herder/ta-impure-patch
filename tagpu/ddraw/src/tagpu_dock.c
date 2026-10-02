@@ -39,6 +39,7 @@
 #define G_YPOS           0x15
 #define G_W              0x17
 #define G_H              0x19
+#define G_ATTRIBS        0x1B           /* i32                                                  */
 #define G_STATUS         0x137          /* a stage button's stage, advanced before OnCommand    */
 #define VA_SETSTATUS     0x004A1080u    /* (gi, name, value) stdcall: the TOP screen, by name   */
 #define VA_SETGRAYED     0x004A1250u    /* (gi, name, grayed) stdcall: the same scan            */
@@ -62,7 +63,10 @@ typedef void  (__cdecl   *void_fn)(void);
 
 /* ---- the layout, dock-relative --------------------------------------------------------------- */
 #define DOCK_H       86
-#define DOCK_MAX_W   4096               /* the ground frame's width: every dock_w fits in it    */
+#define DOCK_MAX_W   4096               /* the ground's width: every dock_w fits in it          */
+#define TILE_W       512                /* one ground frame: under TAGPU_GAF_DECMAX, the widest
+                                           frame the GUI mirror carries as a sprite              */
+#define NTILE        (DOCK_MAX_W / TILE_W)
 #define DOCK_MIN_W   400                /* the row of buttons with Leave clear of the bookmark  */
 #define DOCK_GAP     8                  /* from the side panel and the screen's right edge      */
 #define DOCK_LIFT    4                  /* above the bottom bar                                 */
@@ -89,6 +93,11 @@ typedef void  (__cdecl   *void_fn)(void);
 #define MK_MAX       256
 
 static const unsigned PRESET[5] = { 5, 10, 20, 40, 80 };   /* 1/2x .. 8x; 10 = 1x              */
+/* DKSPEED's sixth stage, captioned "": the stage it shows while greyed. A greyed button under
+   GREYED_LAST draws its caption unshaded -- the bit's arm (0x4A6086) skips the shade flag the
+   stage arm sets for DrawText (0x4A60AB, read at 0x4A643F) -- so the greyed speed shows grey bars
+   and no caption rather than a lit one. */
+#define SPEED_BLANK  5
 
 /* the art the dock is made of: every entry must be there, or the dock does not arm */
 enum { A_TEX, A_TRACK, A_FILL, A_PLAY, A_PAUSE, A_REW, A_FWD, A_MARK, A_LEAVE,
@@ -99,16 +108,21 @@ static const char* const ART[A_N] = {
 static const TAGPU_ART_FRAME* s_art[A_N];
 
 static int    s_armed;
-static char   s_gui[4096];
+static char   s_gui[8192];
 static unsigned char* s_gaf;
 
 /* the open dock: its engine rect, set by place() before stage 1 */
 static int    s_open, s_ex, s_ey, s_w;
 static int    s_leaveOk;
+/* LEAVE'S QUESTION HOLDS THE PLAYBACK: the pause word from before the click, put back the first
+   time the dock is on top again -- the question answered No, or never opened. Yes tears the level
+   down instead, and the level's end forgets the question. */
+static int    s_leaveAsk, s_leaveWasPaused;
 static struct { int valid, play, speed, grey, leave; char now[16], end[16]; } s_push;
 
-/* the strip's two presses */
-static int    s_drag, s_rpress;
+/* the strip's presses: `s_held` and `s_rpress` a press consumed, whose release is consumed too;
+   `s_drag` the seek the left one asks for on its release, which a lost mouse cancels */
+static int    s_held, s_drag, s_rpress;
 
 /* the post-GUI frames: 0x18-byte engine headers over the art's own pixels, which tagpu_art keeps
    for the process and never writes; the fill also in every narrower width, for the tile the
@@ -180,6 +194,7 @@ static int label(char* b, int cap, int at, int g, const char* name, int x, int y
     return gput(b, cap, at, "\ttext=;\r\n\tlink=;\r\n\t}\r\n");
 }
 
+/* attribs 1 is RENDER.GUI's */
 static int button(char* b, int cap, int at, int g, const char* name, int x, int y, int w, int h,
                   int stages, const char* text)
 {
@@ -192,7 +207,7 @@ static int button(char* b, int cap, int at, int g, const char* name, int x, int 
    for the widest dock. Record 0's `panel=` is empty: the ground gadget covers the whole panel. */
 static int build_gui(char* b, int cap)
 {
-    int at = 0, g = 1;
+    int at = 0, g = 1, i;
     const int w = DOCK_MAX_W;
 
     at = gput(b, cap, at,
@@ -200,22 +215,29 @@ static int build_gui(char* b, int cap)
         "\t\txpos=0;\r\n\t\typos=0;\r\n\t\twidth=%d;\r\n\t\theight=%d;\r\n"
         "\t\tattribs=0;\r\n\t\tcolorf=0;\r\n\t\tcolorb=0;\r\n\t\ttexturenumber=0;\r\n"
         "\t\tfontnumber=0;\r\n\t\tactive=1;\r\n\t\tcommonattribs=0;\r\n\t\thelp=;\r\n\t\t}\r\n"
-        "\ttotalgadgets=9;\r\n"
+        "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
-        "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n", w, DOCK_H);
-    /* the ground: an id-12 picture whose NAME is the frame, resolved in the panel's own bank
-       (0x4A8ACA) */
-    at = common(b, cap, at, g++, 12, "DOCKBG", 0, 0, w, DOCK_H, 0);
-    at = gput(b, cap, at, "\t}\r\n");
+        "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
+        w, DOCK_H, NTILE + 8);
+    /* the ground: id-12 pictures whose NAME is the frame, resolved in the panel's own bank
+       (0x4A8ACA), side by side. The ones past the dock's width fall outside the panel's surface,
+       to which the blit clips them (0x4B807B..0x4B80C6). */
+    for (i = 0; i < NTILE; i++) {
+        char name[16];
+        _snprintf(name, sizeof name, "DOCKBG%d", i);
+        at = common(b, cap, at, g++, 12, name, i * TILE_W, 0, TILE_W, DOCK_H, 0);
+        at = gput(b, cap, at, "\t}\r\n");
+    }
     at = label(b, cap, at, g++, "TNOW", 4, 12, 52, 13, 37);
     at = label(b, cap, at, g++, "TEND", w - TEND_RX, 12, 56, 13, 33);
     at = button(b, cap, at, g++, "DKREW", 60, BTN_Y, BTN_W, BTN_H, 0, "");
     at = button(b, cap, at, g++, "DKPLAY", 92, BTN_Y, BTN_W, BTN_H, 2, "|");
     at = button(b, cap, at, g++, "DKFWD", 124, BTN_Y, BTN_W, BTN_H, 0, "");
-    at = button(b, cap, at, g++, "DKSPEED", 164, SPD_Y, SPD_W, SPD_H, 5, "1/2x|1x|2x|4x|8x");
+    at = button(b, cap, at, g++, "DKSPEED", 164, SPD_Y, SPD_W, SPD_H, SPEED_BLANK + 1,
+                "1/2x|1x|2x|4x|8x|");
     at = button(b, cap, at, g++, "DKMARK", 296, BTN_Y, BTN_W, BTN_H, 0, "");
     at = button(b, cap, at, g++, "DKLEAVE", w - LEAVE_RX, BTN_Y, BTN_W, BTN_H, 0, "");
-    return g - 1 == 9 ? at : -1;
+    return g - 1 == NTILE + 8 ? at : -1;
 }
 
 /* ---- composing frames from the art ------------------------------------------------------------ */
@@ -265,19 +287,19 @@ static void glyph(unsigned char* p, int w, int h, int a, int shift, int grey)
 }
 
 /* THE FRAME A BUTTON DRAWS (0x4A6062..0x4A616D). Not greyed: a stage button its stage (+0x137),
-   or count - 2 while pressed; a plain one 0, or +0x138 while pressed. Greyed: a plain button
-   min(+0x138 + 2, count - 1); a stage button its stage's frame again (0x4A6092..0x4A60B3), so a
-   stage button's own greyed frame is never drawn. A plain button's frames: normal, pressed,
-   greyed. `arg` is the glyph. */
+   or count - 2 while pressed; a plain one 0, or +0x138 while pressed. Greyed: count - 1 under
+   GREYED_LAST (greyed_last below); else a plain button min(+0x138 + 2, count - 1), a stage button
+   its stage's frame (0x4A6092..0x4A60B3). A plain button's frames: normal, pressed, greyed. `arg`
+   is the glyph. */
 static void draw_plain(unsigned char* p, int w, int h, int frame, int arg)
 {
     well(p, w, h);
     glyph(p, w, h, arg, frame == 1, frame == 2);
 }
 
-/* DKPLAY, a two-stage button: the stages, a spare, the pressed frame at count - 2, and a greyed
-   frame last, in stagebuttnN's layout, which the engine does not draw (above). Stage 0 shows play,
-   the playback being paused; stage 1 pause. */
+/* DKPLAY, a two-stage button: the stages, a spare, the pressed frame at count - 2, and the greyed
+   frame last, in stagebuttnN's layout, drawn under GREYED_LAST (above). Stage 0 shows play, the
+   playback being paused; stage 1 pause. */
 static void draw_play(unsigned char* p, int w, int h, int frame, int arg)
 {
     (void)arg;
@@ -287,9 +309,9 @@ static void draw_play(unsigned char* p, int w, int h, int frame, int arg)
     else if (frame == 4) glyph(p, w, h, A_PLAY, 0, 1);
 }
 
-/* DKSPEED: five stages, the bars lit up to the stage's; all dark; pressed at count - 2; greyed,
-   not drawn (above). The bars sit at the plate's right end, clear of the caption the engine
-   draws at its left. */
+/* DKSPEED: five stages, the bars lit up to the stage's; SPEED_BLANK, all dark; pressed at
+   count - 2; greyed last, drawn under GREYED_LAST (above). The bars sit at the plate's right end,
+   clear of the caption the engine draws at its left. */
 static void draw_speed(unsigned char* p, int w, int h, int frame, int arg)
 {
     const TAGPU_ART_FRAME* f = s_art[A_FILL];
@@ -312,16 +334,16 @@ static void draw_speed(unsigned char* p, int w, int h, int frame, int arg)
     }
 }
 
-/* DOCKBG at attach: the texture over the whole frame. At open it is repainted for the dock's own
-   width (repaint_ground). */
+/* A ground tile at attach: the texture, continuing across the tiles (`arg` is the tile). At open
+   the tiles are repainted for the dock's own width (repaint_ground). */
 static void draw_ground(unsigned char* p, int w, int h, int frame, int arg)
 {
     const TAGPU_ART_FRAME* t = s_art[A_TEX];
-    int x, y;
-    (void)frame; (void)arg;
+    int x, y, x0 = arg * TILE_W;
+    (void)frame;
     for (y = 0; y < h; y++)
         for (x = 0; x < w; x++) {
-            unsigned char v = t->pix[(y % t->h) * t->w + x % t->w];
+            unsigned char v = t->pix[(y % t->h) * t->w + (x0 + x) % t->w];
             p[y * w + x] = v == t->key ? 60 : v;
         }
 }
@@ -330,7 +352,14 @@ typedef void (*frame_fn)(unsigned char* p, int w, int h, int frame, int arg);
 typedef struct { const char* name; int w, h, n; frame_fn draw; int arg; } DockEnt;
 
 static const DockEnt ENTS[] = {
-    { "DOCKBG",  DOCK_MAX_W, DOCK_H, 1, draw_ground, 0       },
+    { "DOCKBG0", TILE_W, DOCK_H,     1, draw_ground, 0       },
+    { "DOCKBG1", TILE_W, DOCK_H,     1, draw_ground, 1       },
+    { "DOCKBG2", TILE_W, DOCK_H,     1, draw_ground, 2       },
+    { "DOCKBG3", TILE_W, DOCK_H,     1, draw_ground, 3       },
+    { "DOCKBG4", TILE_W, DOCK_H,     1, draw_ground, 4       },
+    { "DOCKBG5", TILE_W, DOCK_H,     1, draw_ground, 5       },
+    { "DOCKBG6", TILE_W, DOCK_H,     1, draw_ground, 6       },
+    { "DOCKBG7", TILE_W, DOCK_H,     1, draw_ground, 7       },
     { "DKREW",   BTN_W, BTN_H,       3, draw_plain,  A_REW   },
     { "DKPLAY",  BTN_W, BTN_H,       5, draw_play,   0       },
     { "DKFWD",   BTN_W, BTN_H,       3, draw_plain,  A_FWD   },
@@ -339,11 +368,13 @@ static const DockEnt ENTS[] = {
     { "DKLEAVE", BTN_W, BTN_H,       3, draw_plain,  A_LEAVE },
 };
 #define NENTS (int)(sizeof ENTS / sizeof ENTS[0])
+typedef char dock_tiles_listed[NTILE == 8 ? 1 : -1];
 
 /* The GAF, uncompressed, entries of several frames each (tagpu_menu.c's build_gaf, one frame
    each, is the same layout): the header, the entry offsets, then per entry its 0x28 bytes, its
    frame table (offset, flag 10 = a fixed frame) and its 0x18-byte frame headers; the pixels last.
-   Uncompressed so that the ground's plane can be repainted in place at open. */
+   Uncompressed so that the ground's planes can be repainted in place at open. Every frame carries
+   TAGPU_GAF_EXACT, so Classic++ draws it as GDI does (tagpu_gaf.h). */
 static unsigned build_gaf(unsigned char* out, unsigned cap)
 {
     unsigned at = 12 + 4u * NENTS, need = at, pix;
@@ -373,6 +404,7 @@ static unsigned build_gaf(unsigned char* out, unsigned cap)
             *(unsigned short*)(out + frm + 0x02) = (unsigned short)e->h;
             out[frm + 0x08] = KEY;
             out[frm + 0x09] = 0;                           /* raw 8bpp               */
+            v = TAGPU_GAF_EXACT; memcpy(out + frm + TAGPU_GF_TAG, &v, 4);
             memcpy(out + frm + 0x10, &pix, 4);
             e->draw(out + pix, e->w, e->h, k, e->arg);
             pix += (unsigned)(e->w * e->h);
@@ -389,6 +421,10 @@ static void set_frame(unsigned char* f, int w, int h, unsigned char key, const u
     *(unsigned short*)(f + 0x02) = (unsigned short)h;
     f[0x08] = key;
     f[0x09] = 0;
+    {
+        unsigned tag = TAGPU_GAF_EXACT;
+        memcpy(f + TAGPU_GF_TAG, &tag, 4);
+    }
     memcpy(f + 0x10, &pix, 4);
 }
 
@@ -493,6 +529,40 @@ static char* find_rec(char* ctrls, const char* name)
     return NULL;
 }
 
+/* GREYED_LAST, attribs bit 8: a greyed button with it draws its last frame (0x4A607E..0x4A608B)
+   and nothing else of the greyed arms. Every greyable button of the dock takes it while greyed,
+   for two reasons. A STAGE button has no greyed look of its own without it: it draws its stage's
+   frame (0x4A6092..0x4A60B3). And a plain button's own greyed arm (0x4A60D9..0x4A610E) comes out
+   tinted grey under GDI and untinted under Vulkan (MEASURED 2026-10-01, 353 px over DKREW, DKFWD
+   and DKMARK; the source of the GDI tint was not found), where the last frame is the same on both
+   (0 px).
+   ONLY WHILE GREYED, and that is measured rather than read: with the bit on a live stage button
+   its clicks stopped answering (DKPLAY and DKSPEED, 2026-10-01), and the reader responsible was not
+   found. A greyed button takes no click (0x4AA36A), so the bit follows the record's own greyed
+   flag (+0x13C bit 0), which the push sets first.
+   It cannot come from the file in any case: stage 1 sets a stage button's attribs to
+   (attribs & 0x4000) | 1 once it has split the captions (0x4A8EE1..0x4A8EEC). 1 when a record
+   changed. */
+#define GREYED_LAST 0x100
+#define G_GREYED    0x13C               /* bit 0: greyed, SetGrayed's (0x4A12B6..0x4A12D0)      */
+static int greyed_last(char* ctrls)
+{
+    static const char* const GREYABLE[6] = { "DKREW", "DKPLAY", "DKFWD", "DKSPEED", "DKMARK",
+                                              "DKLEAVE" };
+    int i, changed = 0;
+    for (i = 0; ctrls && i < 6; i++) {
+        char* r = find_rec(ctrls, GREYABLE[i]);
+        int a, want;
+        if (!r) continue;
+        memcpy(&a, r + G_ATTRIBS, 4);
+        want = (r[G_GREYED] & 1) ? a | GREYED_LAST : a & ~GREYED_LAST;
+        if (want == a) continue;
+        memcpy(r + G_ATTRIBS, &want, 4);
+        changed = 1;
+    }
+    return changed;
+}
+
 /* BEFORE STAGE 1: stage 1 makes the panel's surface record 0's w x h (0x4A9071..0x4A907C) and
    copies the screen under it from record 0's x, y (0x4A9081..0x4A9098), so the rect is written
    into the parsed records first. The right-anchored records move with the width. */
@@ -504,33 +574,27 @@ void tagpu_dock_place(char* ctrls)
     *(short*)(ctrls + G_YPOS) = (short)s_ey;
     *(short*)(ctrls + G_W) = (short)s_w;
     *(short*)(ctrls + G_H) = (short)DOCK_H;
-    if ((r = find_rec(ctrls, "DOCKBG")) != NULL) *(short*)(r + G_W) = (short)s_w;
     if ((r = find_rec(ctrls, "TEND")) != NULL) *(short*)(r + G_XPOS) = (short)(s_w - TEND_RX);
     if ((r = find_rec(ctrls, "DKLEAVE")) != NULL) *(short*)(r + G_XPOS) = (short)(s_w - LEAVE_RX);
 }
 
-/* THE GROUND, for this dock's width. BOUND: the frame is written only once it is checked to be
-   exactly DOCK_MAX_W x DOCK_H and uncompressed -- ours, as the archive made it -- so every write
-   below is inside its plane. The frame is wider than the panel's surface, and its draw is clipped
-   to that surface by the GAF blitter's single-frame path (0x4B807B..0x4B80C6), so the columns past
-   the dock's width never reach it. The plane is the bank's own, loaded fresh at each push through
+/* THE GROUND, for this dock's width: composed whole, then cut into the tiles. BOUND: a tile is
+   written only once it is checked to be exactly TILE_W x DOCK_H and uncompressed -- ours, as the
+   archive made it -- so every write below is inside its plane. A tile's draw is clipped to the
+   panel's surface by the GAF blitter's single-frame path (0x4B807B..0x4B80C6), so the columns past
+   the dock's width never reach it. The planes are the bank's own, loaded fresh at each push through
    the id-0 load (0x4A859A..0x4A85C3), hence a repaint at every open. */
+static unsigned char s_ground[DOCK_MAX_W * DOCK_H];
+
 static void repaint_ground(char* ctrls)
 {
     void* bank;
-    void* ent;
-    const unsigned char* fr;
-    unsigned char* p;
-    int x, y, w = s_w;
+    unsigned char* p = s_ground;
+    int x, y, i, w = s_w;
 
     if (!ctrls || w < DOCK_MIN_W || w > DOCK_MAX_W) return;
     bank = *(void**)(ctrls + P_GAFBANK);
-    ent = bank ? ((gaf_find_fn)VA_GAFFIND)(bank, "DOCKBG") : NULL;
-    fr = ent ? tagpu_gaf_seq_frame((const char*)ent, 0) : NULL;
-    if (!fr || *(const unsigned short*)(fr + TAGPU_GF_W) != DOCK_MAX_W ||
-        *(const unsigned short*)(fr + TAGPU_GF_H) != DOCK_H || fr[TAGPU_GF_COMP]) return;
-    p = *(unsigned char**)(fr + TAGPU_GF_PIX);
-    if (!p) return;
+    if (!bank) return;
     draw_ground(p, DOCK_MAX_W, DOCK_H, 0, 0);
     for (x = 0; x < w; x++) {
         p[x] = 63;
@@ -546,6 +610,21 @@ static void repaint_ground(char* ctrls)
     }
     nine(p, DOCK_MAX_W, STRIP_X, TRACK_Y, w - STRIP_X - STRIP_RM, TRACK_H, s_art[A_TRACK],
          TRACK_CAP);
+    for (i = 0; i < NTILE; i++) {
+        char name[16];
+        void* ent;
+        const unsigned char* fr;
+        unsigned char* tp;
+        _snprintf(name, sizeof name, "DOCKBG%d", i);
+        ent = ((gaf_find_fn)VA_GAFFIND)(bank, name);
+        fr = ent ? tagpu_gaf_seq_frame((const char*)ent, 0) : NULL;
+        if (!fr || *(const unsigned short*)(fr + TAGPU_GF_W) != TILE_W ||
+            *(const unsigned short*)(fr + TAGPU_GF_H) != DOCK_H || fr[TAGPU_GF_COMP]) continue;
+        tp = *(unsigned char**)(fr + TAGPU_GF_PIX);
+        if (!tp) continue;
+        for (y = 0; y < DOCK_H; y++)
+            memcpy(tp + y * TILE_W, p + y * DOCK_MAX_W + i * TILE_W, TILE_W);
+    }
 }
 
 /* THE LEAVE GUARD. Leave calls the engine's YESORNO opener and leaves the rest to its OnCommand
@@ -586,7 +665,6 @@ void tagpu_dock_closed(void)
 {
     s_open = 0;
     s_drag = 0;
-    s_rpress = 0;
     s_push.valid = 0;
 }
 
@@ -652,23 +730,24 @@ static int cursor_x(void)
 
 /* THE CONSUMED-PRESS RULE, the sprocket's (tagpu_menu.c): a release is consumed exactly when its
    press was, so the engine never sees half a click and is never left holding a button; a press
-   whose release was lost ends at the next press, with no seek. THE ON-TOP RULE is the pump's: it
-   serves the top screen only (0x4A9FD0), so under the engine's dialogs the strip leaves the click
-   to the engine as the dock's buttons do. */
+   whose release was lost ends at the next press, with no seek. A lost mouse cancels the seek and
+   nothing else (tagpu_dock_cancel_press). THE ON-TOP RULE is the pump's: it serves the top screen
+   only (0x4A9FD0), so under the engine's dialogs the strip leaves the click to the engine as the
+   dock's buttons do. */
 int tagpu_dock_click(int gx, int gy, int down, int on_top)
 {
     unsigned first, last;
     if (!down) {
-        int was = s_drag;
-        s_drag = 0;
-        if (was && tagpu_replay_span(&first, &last))
+        int was = s_held;
+        if (s_drag && tagpu_replay_span(&first, &last))
             tagpu_replay_seek_request(target(gx, first, last));
+        s_held = s_drag = 0;
         return was;
     }
-    s_drag = 0;
+    s_held = s_drag = 0;
     if (!on_top || !in_strip(gx, gy) || !tagpu_replay_live() || !tagpu_replay_span(NULL, NULL))
         return 0;
-    s_drag = 1;
+    s_held = s_drag = 1;
     return 1;
 }
 
@@ -700,7 +779,6 @@ int tagpu_dock_rclick(int gx, int gy, int down, int on_top)
 void tagpu_dock_cancel_press(void)
 {
     s_drag = 0;
-    s_rpress = 0;
 }
 
 /* ================================================================================================
@@ -754,7 +832,7 @@ static DWORD WINAPI walker(void* arg)
     unsigned cmdr[REC_PLAYERS], alive[REC_PLAYERS], deaths = 0, defeats = 0, lost = 0, iters = 0;
     unsigned s;
     int seeded = 0, k = 0;
-    char dl[200] = "", fl[200] = "";
+    char dl[200] = "", fl[200] = "", capn[64] = "";
     DWORD t0 = GetTickCount();
     const char* stop = "the recording's end";
     (void)arg;
@@ -791,9 +869,10 @@ static DWORD WINAPI walker(void* arg)
         seeded = 1;
     }
     recr_close(r);
+    if (lost) _snprintf(capn, sizeof capn, ", %u past the %d the strip holds", lost, MK_MAX);
     tagpu_logf("dock: markers: %u commander deaths%s, %u defeats%s, %u iterations walked in %lu ms "
                "(%s)%s", deaths, dl, defeats, fl, iters, (unsigned long)(GetTickCount() - t0), stop,
-               lost ? ", some past the 256 the strip holds" : "");
+               capn);
     return 0;
 }
 
@@ -833,7 +912,7 @@ void tagpu_dock_level_end(void)
     s_nbm = 0;
     s_keyOk = 0;
     s_drag = 0;
-    s_rpress = 0;
+    s_leaveAsk = 0;
 }
 
 /* ================================================================================================
@@ -876,6 +955,10 @@ void tagpu_dock_tick(void* gi, int on_top)
     if (live && gs != PRESET[sp]) tagpu_replay_speed_set(PRESET[sp]);
 
     if (!on_top) { s_push.valid = 0; return; }
+    if (s_leaveAsk) {
+        s_leaveAsk = 0;
+        tagpu_replay_pause(s_leaveWasPaused);
+    }
     if (span) {
         /* the time the playhead shows: GameTime runs on past the recording's end, the playhead
            stops there */
@@ -888,9 +971,9 @@ void tagpu_dock_tick(void* gi, int on_top)
         ((set_status_fn)VA_SETSTATUS)(gi, "DKPLAY", s_push.play);
         dirty = 1;
     }
-    if (!s_push.valid || s_push.speed != sp) {
-        s_push.speed = sp;
-        ((set_status_fn)VA_SETSTATUS)(gi, "DKSPEED", sp);
+    if (!s_push.valid || s_push.speed != (live ? sp : SPEED_BLANK)) {
+        s_push.speed = live ? sp : SPEED_BLANK;
+        ((set_status_fn)VA_SETSTATUS)(gi, "DKSPEED", s_push.speed);
         dirty = 1;
     }
     if (!s_push.valid || s_push.grey != !live) {
@@ -902,6 +985,10 @@ void tagpu_dock_tick(void* gi, int on_top)
         s_push.leave = !s_leaveOk;
         ((set_grayed_fn)VA_SETGRAYED)(gi, "DKLEAVE", s_push.leave);
         dirty = 1;
+    }
+    {
+        char* top = *(char**)((char*)gi + 0x18);
+        if (top && greyed_last(*(char**)(top + GM_CTRLS))) dirty = 1;
     }
     if (!s_push.valid || strcmp(s_push.now, tnow)) {
         memcpy(s_push.now, tnow, sizeof tnow);
@@ -956,8 +1043,10 @@ void __stdcall tagpu_dock_oncommand(void* gi)
     } else if (!strncmp(r + G_NAME, "DKPLAY", 16)) {
         tagpu_replay_pause(*(unsigned char*)(r + G_STATUS) == 0);   /* 0 shows play: paused */
     } else if (!strncmp(r + G_NAME, "DKSPEED", 16)) {
+        /* the engine advances the stage modulo the stage count (0x4AA377..0x4AA38F), so 8x's
+           click lands on SPEED_BLANK: it is the wrap to 1/2x */
         unsigned st = *(unsigned char*)(r + G_STATUS);
-        if (st < 5) tagpu_replay_speed_set(PRESET[st]);
+        tagpu_replay_speed_set(PRESET[st < SPEED_BLANK ? st : 0]);
     } else if (!strncmp(r + G_NAME, "DKMARK", 16)) {
         mark_here(now);
     } else if (!strncmp(r + G_NAME, "DKLEAVE", 16)) {
@@ -965,6 +1054,9 @@ void __stdcall tagpu_dock_oncommand(void* gi)
         /* the engine's own Exit -> Main Menu path, EXITMENU's handler at 0x46082B..0x46083A:
            question 0, "return to the main menu", then the opener; its OnCommand 0x4605C0 runs
            the quit tail on Yes and pops itself on No */
+        s_leaveWasPaused = tagpu_replay_paused();
+        s_leaveAsk = 1;
+        tagpu_replay_pause(1);
         *(int*)VA_YESORNO_KIND = 0;
         ((void_fn)VA_YESORNO)();
         ((set_label_fn)VA_SETLABEL)(gi, "TITLE", "Leave this replay?");
