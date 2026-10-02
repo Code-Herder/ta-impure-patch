@@ -31,11 +31,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "tagpu_log.h"
 #include "tagpu_detour.h"
 #include "tagpu_art.h"
 #include "tagpu_recreader.h"
 #include "tagpu_replays.h"
+#include "tagpu_replay.h"
 
 /* ---- engine addresses ------------------------------------------------------------------------ */
 #define TA_MAIN          0x00511DE8u    /* TAdynmemStruct**                                     */
@@ -821,6 +823,7 @@ static void __stdcall mm_oncommand(void* gi)
    favourite flag and the last time a recording was played. One line per recording, keyed by its
    file name and size:
      name size format start last end fav played map nseats seat...    (tab-separated)
+   `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never.
    format 0 is a recording this build could not read. A recording whose line does not match is
    read again through recr_summary. The file is replaced whole, through a temporary file and a
    rename, so a crash leaves the old index or the new one. Lines for recordings the list does not
@@ -1297,6 +1300,14 @@ static void replays_open(char* gi)
     s_recsIdx = ctrls ? find_rec(ctrls, "RECS") : 0;
     if (s_recsIdx)
         *(list_cb_fn*)(ctrls + (size_t)s_recsIdx * STRIDE + L_CALLBACK) = recs_selected;
+    if (ctrls) {
+        char why[200];
+        int w = find_rec(ctrls, "WATCH");
+        if (w && !tagpu_replay_watch_ready(why, sizeof why)) {
+            *(unsigned short*)(ctrls + (size_t)w * STRIDE + G_GRAYED) |= 1;
+            rlog("replays: Watch is grey: %s", why);
+        }
+    }
 
     badges_build();
     scan();
@@ -1348,6 +1359,38 @@ static int on_star(char* gi, const char* r, int sel)
            y >= ry && y < ry + ih;
 }
 
+/* The main menu is built again after a level the browser started (tagpu_replay_watch's `back`):
+   the browser opens over it as a click on REPLAYS opens it, when the menu on top is ours. */
+static void replays_back(void* gi)
+{
+    char* top;
+    if (top_ctrls((char*)gi, &top) && *(void**)(top + GM_ONCMD) == (void*)mm_oncommand)
+        replays_open((char*)gi);
+}
+
+/* Watch: the selected recording through the replay's own Start. Its time goes into the index
+   first: a Start that commits pops this screen, whose destructor frees the index's carried lines,
+   so nothing is saved after it; a refused one puts the old time back. 1 when it committed. */
+static int watch(char* gi)
+{
+    char* l = recs_rec(gi, NULL);
+    int sel = l ? *(const short*)(l + L_SELECTED) : -1;
+    char file[FILE_MAX];
+    Ent* e;
+    unsigned was;
+    if (sel < 0 || sel >= s_nrows) return 0;
+    e = &s_ent[s_row[sel].ent];
+    lstrcpynA(file, e->file, sizeof file);
+    was = e->played;
+    e->played = (unsigned)time(NULL);
+    index_save();
+    rlog("replays: Watch %s", file);
+    if (tagpu_replay_watch(gi, file, -1, replays_back)) return 1;
+    e->played = was;
+    index_save();
+    return 0;
+}
+
 /* REPLAYS' OnCommand. Back is the one click left unanswered: the pump then calls this with -1,
    pops the screen and repaints the main menu (0x4AA7BC..0x4AA7FA). */
 static void __stdcall rp_oncommand(void* gi)
@@ -1372,11 +1415,8 @@ static void __stdcall rp_oncommand(void* gi)
     } else if (name_is(r, "FAV")) {
         char* l = recs_rec(g, NULL);
         if (l) fav_toggle(g, *(const short*)(l + L_SELECTED));
-    } else if (name_is(r, "WATCH")) {
-        char* l = recs_rec(g, NULL);
-        int sel = l ? *(const short*)(l + L_SELECTED) : -1;
-        rlog("replays: Watch %s - starting playback from the shell is not wired yet",
-             sel >= 0 && sel < s_nrows ? s_ent[s_row[sel].ent].file : "(nothing selected)");
+    } else if (name_is(r, "WATCH") && watch(g)) {
+        return;             /* every screen is popped: nothing of ours is left to answer */
     }
     ((gi_fn)VA_ACTDONE)(gi);
 }

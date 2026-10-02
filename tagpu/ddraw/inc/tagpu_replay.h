@@ -12,8 +12,21 @@
    level that plays a recording and writes what the draw shows there; then the Start's calls of the seat fill
    (0x47B092) and of the settings persist (0x47B09C), the loader's two start-unit calls (0x497963,
    0x497ACD) and an observer on the settings save (0x430F00), byte-matched and installed all or
-   none. Without those a request is never read. */
+   none. Without those a request is never read. Then the browser's two sites: the main menu's
+   builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
+
+/* The Replays browser's Watch (tagpu_replays.c), the other way a playback starts
+   (tagpu_replay.c, THE BROWSER'S START). On the game thread, inside REPLAYS' OnCommand, `gi` the
+   GUI info: 1 when the recording `file` of replays\ is seated and its level is on its way --
+   every screen is popped then, so nothing of the browser may be touched after it -- or 0 when it
+   was refused, with the engine's notice shown, the click answered and the browser still on top.
+   `view` is a seat whose view to show, or -1 for full visibility. `back` is called once, with
+   `gi`, when the main menu is next built, unless it goes on to the lobby. */
+int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* gi));
+/* 1 when Watch can start a recording: the replay's sites are in and the engine code its route
+   rests on reads as it was made against; else 0, with the reason in `why`. */
+int tagpu_replay_watch_ready(char* why, unsigned cap);
 
 /* B2's stub at the sim step's unit-tick call (0x4954ED) calls this first, before the recorder's
    capture and the unit tick, on the game thread: on a level that plays a recording, the

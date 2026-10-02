@@ -32,6 +32,10 @@
    PROJECTILES).
    The teardown (S-e) ends the replay and gives V's PlayerInfo back once it has returned (THE
    VIEWER'S SEAT), and the recorder refuses a puppet level (S-f).
+   The Replays browser starts a playback without the request file or the SKIRMISH screen: its
+   Watch runs the Start's route itself, with the seating and the options where S-a and S-b run
+   them, and refuses rather than falling back to a skirmish (THE BROWSER'S START). A puppet level
+   refuses RESTART, which would refill the seats from the player's settings (THE RESTART GATE).
 
    WHAT IT READS AND WRITES. Everything here runs on the game thread: the Start handler, the
    sim step and the frame callback 0x496790 are the engine's own game-thread code, and the
@@ -41,7 +45,8 @@
    below 10). The skirmish
    settings [main+0x29A0], GameingState [main+0x391E9] and the objective [main+0x391ED] are the
    ones the Start has just used: the settings for its fill, GameingState for its mode, and the
-   objective armed by the .ota read at 0x47AF77. */
+   objective armed by the .ota read at 0x47AF77 (the browser's Start: its own call of the same
+   read). */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -90,6 +95,15 @@
                                        (bit 0 each: LosType bits 0, 1, 2, 0x4973E0..0x497450),
                                        then the fixed start positions (0x49790E), a dword each   */
 #define SET_MAP        0x11C
+#define SET_MAPLEN     0x100        /* the engine's own bound on the map's name (0x47AA12..0x47AA31) */
+#define SET_ENTRIES    10           /* the seat entries at +0, one a record ...                   */
+#define SET_ENTRY      0x18         /* ... +0 controller, +4 side, +8 ally group, +0xC metal, +0x10
+                                       energy, +0x14 colour (the save's fields, 0x4314F0..0x43171D) */
+#define ENT_SIDE       0x04
+#define ENT_ALLY       0x08
+#define ENT_COLOUR     0x14
+#define ALLY_NONE      5            /* no ally group: the fill marks no alliance for it
+                                       (0x47A83C..0x47A89E), and 0x479760 passes it             */
 #define OFF_NSEATS     0x38D81      /* u32: the settings entries the fill walks                   */
 #define OFF_GSTATE     0x391E9      /* GameingState*: +0 the mode (0x435100)                      */
 #define OFF_OBJECTIVE  0x391ED      /* the objective, armed by the .ota read (0x435DE9)           */
@@ -126,7 +140,7 @@ typedef void (__cdecl* PFN_SaveSettings)(void);
 #define NAME_MAX_ 64                /* a request's name, NUL included                            */
 
 static RecReader* s_rd;             /* the recording this level plays                             */
-static char       s_name[NAME_MAX_];
+static char       s_name[MAX_PATH];  /* the request's name, or the browser's file stem          */
 static unsigned   s_viewer;         /* V                                                          */
 static unsigned   s_view;           /* the viewed player: V for full visibility, or a seat         */
 static int        s_first;          /* the first step's checks are still to come                  */
@@ -192,6 +206,12 @@ static struct {
     unsigned char  set[20];         /* the settings' +0x108..+0x11B, as the player had them       */
     unsigned       difficulty;
     unsigned short each;
+    /* The browser's Start writes the recording's seats and map where the stock Start finds the
+       player's (THE BROWSER'S START); a tacli playback finds them already in the registry. */
+    int            seats_saved;
+    unsigned char  entries[SET_ENTRIES * SET_ENTRY];
+    char           map[SET_MAPLEN];
+    unsigned       nseats;
 } s_opt;
 static struct {
     unsigned char* at;              /* V's PlayerInfo, or NULL                                    */
@@ -344,14 +364,11 @@ static int data_match(const char* ta, const RecHeader* h, char* why, unsigned ca
     return 1;
 }
 
-/* Everything the seating rests on, before anything is written (§6.4). 1 with V in `viewer`. */
-static int validate(const char* ta, const RecHeader* h, char* why, unsigned cap,
-                    unsigned* viewer)
+/* Everything the seating rests on that the recording alone decides, and the sites it needs in
+   (§6.4). 1 with V in `viewer`. */
+static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned* viewer)
 {
-    const char* set = *(const char* const*)(ta + OFF_SETTINGS);
-    const char* gs = *(const char* const*)(ta + OFF_GSTATE);
     unsigned char seated[REC_PLAYERS] = { 0 };
-    char map[RECR_TEXT];
     unsigned i;
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
@@ -386,23 +403,8 @@ static int validate(const char* ta, const RecHeader* h, char* why, unsigned cap,
                  "replay takes the feature draws, a death's explosion and the footprint writes");
         return 0;
     }
-    if (ta[OFF_NETWORK] & 1) {
-        snprintf(why, cap, "this is a network game");
-        return 0;
-    }
-    if (!gs || *(const int*)gs != MODE_SKIRMISH) {
-        snprintf(why, cap, "this Start is not a skirmish's");
-        return 0;
-    }
-    if (!set || !h->has_settings_map || !h->has_options) {
-        snprintf(why, cap, "the recording or the settings lack the map or the options");
-        return 0;
-    }
-    for (i = 0; i + 1 < sizeof map && set[SET_MAP + i]; i++) map[i] = set[SET_MAP + i];
-    map[i] = 0;
-    if (_stricmp(map, h->settings_map)) {
-        snprintf(why, cap, "the Start read the map %s, the recording's is %s", map,
-                 h->settings_map);
+    if (!h->has_settings_map || !h->has_options) {
+        snprintf(why, cap, "the recording lacks the map or the options");
         return 0;
     }
     if (h->nseats < 2) {
@@ -427,7 +429,44 @@ static int validate(const char* ta, const RecHeader* h, char* why, unsigned cap,
         snprintf(why, cap, "it counts %u players and seats %u", h->nplayers, h->nseats);
         return 0;
     }
-    /* and indexes its side and colour tables with a seat's side and colour unbounded
+    if (h->units_each < 1 || h->units_each > TAGPU_LIM_UNITS) {
+        snprintf(why, cap, "it allowed %u units a player, this build at most %u", h->units_each,
+                 TAGPU_LIM_UNITS);
+        return 0;
+    }
+    for (i = 0; i < REC_PLAYERS && seated[i]; i++) {}
+    *viewer = i;    /* below 10: at most nine are seated */
+    return 1;
+}
+
+/* ... and what it rests on in the engine's state the Start has just made: not a network game, a
+   skirmish's GameingState, the map the Start read, and the tables the fill indexes. */
+static int validate_engine(const char* ta, const RecHeader* h, char* why, unsigned cap)
+{
+    const char* set = *(const char* const*)(ta + OFF_SETTINGS);
+    const char* gs = *(const char* const*)(ta + OFF_GSTATE);
+    char map[RECR_TEXT];
+    unsigned i;
+    if (ta[OFF_NETWORK] & 1) {
+        snprintf(why, cap, "this is a network game");
+        return 0;
+    }
+    if (!gs || *(const int*)gs != MODE_SKIRMISH) {
+        snprintf(why, cap, "this Start is not a skirmish's");
+        return 0;
+    }
+    if (!set) {
+        snprintf(why, cap, "the settings lack the map or the options");
+        return 0;
+    }
+    for (i = 0; i + 1 < sizeof map && set[SET_MAP + i]; i++) map[i] = set[SET_MAP + i];
+    map[i] = 0;
+    if (_stricmp(map, h->settings_map)) {
+        snprintf(why, cap, "the Start read the map %s, the recording's is %s", map,
+                 h->settings_map);
+        return 0;
+    }
+    /* the engine indexes its side and colour tables with a seat's side and colour unbounded
        (0x48692A..0x486943, 0x467C18..0x467C24) */
     for (i = 0; i < h->nseats; i++) {
         unsigned sides = *(const unsigned*)(ta + OFF_SIDES), colours = colour_count(ta);
@@ -442,17 +481,22 @@ static int validate(const char* ta, const RecHeader* h, char* why, unsigned cap,
         snprintf(why, cap, "the settings walk %u entries", *(const unsigned*)(ta + OFF_NSEATS));
         return 0;
     }
-    if (h->units_each < 1 || h->units_each > TAGPU_LIM_UNITS) {
-        snprintf(why, cap, "it allowed %u units a player, this build at most %u", h->units_each,
-                 TAGPU_LIM_UNITS);
-        return 0;
-    }
-    for (i = 0; i < REC_PLAYERS && seated[i]; i++) {}
-    *viewer = i;    /* below 10: at most nine are seated */
     if (strcmp(h->build, GIT_COMMIT))
         tagpu_logf("replay: recorded by the build %s, played by %s: a puppet computes nothing a "
                    "build changes (D8)", h->build, GIT_COMMIT);
     return 1;
+}
+
+/* the view a request names: -1 for full visibility, or a seat the recording seats */
+static int view_ok(const RecHeader* h, int view, char* why, unsigned cap)
+{
+    unsigned i;
+    if (view < 0) return 1;
+    for (i = 0; i < h->nseats; i++)
+        if (h->seats[i].index == (unsigned)view) return 1;
+    snprintf(why, cap, "the request's view names record %d, which the recording does not seat",
+             view);
+    return 0;
 }
 
 /* a recorded name into one of the record's 0x1E-byte name fields, NUL-ended */
@@ -511,11 +555,25 @@ static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
     tagpu_puppet_begin(seatv, localv);
 }
 
+/* The seating, once everything it rests on has been checked: S-a's, for both routes. */
+static void seat(char* ta, const char* name, unsigned v, int view)
+{
+    s_view = view >= 0 ? (unsigned)view : v;
+    seat_level(ta, recr_header(s_rd), v, s_view);
+    snprintf(s_name, sizeof s_name, "%s", name);
+    s_viewer = v;
+    s_first = 1;
+    tagpu_logf("replay: %s seated: %u players on %s, the viewer at record %u", name,
+               recr_header(s_rd)->nseats, recr_header(s_rd)->settings_map, v);
+    if (s_seek.pending)
+        tagpu_logf("replay: %s: a seek to GameTime %u waits for the first step", name, s_seek.T);
+}
+
 static void __cdecl replay_fill(void)
 {
     char* ta = ta_main();
     char name[NAME_MAX_], path[MAX_PATH], why[200];
-    unsigned v = 0, i;
+    unsigned v = 0;
     int k, view = -1;
     replay_close();
     tagpu_puppet_end();
@@ -531,28 +589,14 @@ static void __cdecl replay_fill(void)
         tagpu_logf("replay: not playing %s: %s", name, why);
         return;
     }
-    if (!ta || !validate(ta, recr_header(s_rd), why, sizeof why, &v)) {
+    if (!ta || !validate_header(recr_header(s_rd), why, sizeof why, &v) ||
+        !validate_engine(ta, recr_header(s_rd), why, sizeof why) ||
+        !view_ok(recr_header(s_rd), view, why, sizeof why)) {
         tagpu_logf("replay: not playing %s: %s", name, ta ? why : "no main block");
         replay_close();
         return;
     }
-    for (i = 0; view >= 0 && i < recr_header(s_rd)->nseats; i++)
-        if (recr_header(s_rd)->seats[i].index == (unsigned)view) break;
-    if (view >= 0 && i == recr_header(s_rd)->nseats) {
-        tagpu_logf("replay: not playing %s: the request's view names record %d, which the "
-                   "recording does not seat", name, view);
-        replay_close();
-        return;
-    }
-    s_view = view >= 0 ? (unsigned)view : v;
-    seat_level(ta, recr_header(s_rd), v, s_view);
-    snprintf(s_name, sizeof s_name, "%s", name);
-    s_viewer = v;
-    s_first = 1;
-    tagpu_logf("replay: %s seated: %u players on %s, the viewer at record %u", name,
-               recr_header(s_rd)->nseats, recr_header(s_rd)->settings_map, v);
-    if (s_seek.pending)
-        tagpu_logf("replay: %s: a seek to GameTime %u waits for the first step", name, s_seek.T);
+    seat(ta, name, v, view);
 }
 
 /* ---- S-b: the recording's options ----------------------------------------------------------- */
@@ -582,10 +626,39 @@ static void __cdecl replay_options(void)
     *(unsigned short*)(ta + OFF_EACH_MENU) = (unsigned short)h->units_each;
 }
 
+/* the live seats, map and count and s_opt's, each put in the other's place */
+static void seats_exchange(char* ta, char* set)
+{
+    unsigned char e[sizeof s_opt.entries];
+    char m[sizeof s_opt.map];
+    unsigned n = *(unsigned*)(ta + OFF_NSEATS);
+    memcpy(e, set, sizeof e);
+    memcpy(set, s_opt.entries, sizeof e);
+    memcpy(s_opt.entries, e, sizeof e);
+    memcpy(m, set + SET_MAP, sizeof m);
+    memcpy(set + SET_MAP, s_opt.map, sizeof m);
+    memcpy(s_opt.map, m, sizeof m);
+    *(unsigned*)(ta + OFF_NSEATS) = s_opt.nseats;
+    s_opt.nseats = n;
+}
+
+/* the player's seats, map and count back, when the browser's Start took them */
+static void seats_restore(char* ta)
+{
+    char* set = ta ? *(char**)(ta + OFF_SETTINGS) : NULL;
+    if (!s_opt.seats_saved) return;
+    s_opt.seats_saved = 0;
+    if (!set) return;
+    memcpy(set, s_opt.entries, sizeof s_opt.entries);
+    memcpy(set + SET_MAP, s_opt.map, sizeof s_opt.map);
+    *(unsigned*)(ta + OFF_NSEATS) = s_opt.nseats;
+}
+
 /* 1 when the recording's options were in and the player's are back */
 static int options_restore(char* ta)
 {
     char* set;
+    seats_restore(ta);
     if (!s_opt.saved) return 0;
     s_opt.saved = 0;
     if (!ta) return 0;
@@ -615,7 +688,11 @@ static int options_restore(char* ta)
    thread: the loader's own (0x497FF6) is in the game thread's load state 0x497F40, which starts
    the loader thread only after it (0x4982C5..0x4982CA). The save calls nothing that calls it
    again (0x4B6A20, 0x4B6A50, 0x4CF220, 0x4CFFF0, 0x4D0040 and imports), so one return address
-   is in flight at a time. */
+   is in flight at a time.
+   When the browser's Start put the recording's seat entries, map and seat count (main+0x38D81)
+   in, they travel with the options: exchanged around each save, put back by the teardown. The
+   save writes SkirmishMap from +0x11C and Player%dController..Energy from the entries below the
+   count (0x4314F0..0x43171D), so with those three exchanged it writes the player's own. */
 static void* s_saveRet;
 
 /* the live options and s_opt's, each put in the other's place */
@@ -629,6 +706,7 @@ static void options_exchange(char* ta)
         memcpy(t, set + SET_OPTIONS, sizeof t);
         memcpy(set + SET_OPTIONS, s_opt.set, sizeof t);
         memcpy(s_opt.set, t, sizeof t);
+        if (s_opt.seats_saved) seats_exchange(ta, set);
     }
     *(unsigned*)(ta + OFF_DIFFICULTY) = s_opt.difficulty;
     s_opt.difficulty = d;
@@ -4765,6 +4843,304 @@ void tagpu_replay_level_after(void)
     s_vinfo.at = NULL;
 }
 
+/* ---- THE BROWSER'S START -------------------------------------------------------------------- */
+
+/* THE BROWSER'S START (tagpu_replay_watch): the Replays browser's Watch, run inside REPLAYS'
+   OnCommand, where SKIRMISH's Start runs inside its own. It takes the engine's route from the main
+   menu to a skirmish load without building SINGLE or SKIRMISH: the side effects of the two shell
+   transitions it skips -- SINGLE's players reset 0x4644D0 (0x42734F) and the Skirmish request's
+   preferences load 0x42F9A0 and SetGameMode(2) 0x434AB0 (0x4273E8..0x4273EF) -- then the Start
+   branch 0x47AEDF..0x47B0BC call for call, with the seating and the options where its two sites
+   would run them, then the shell state that branch leaves, and an empty GUI stack. The
+   recording's seats and map go into the settings the branch reads, after the preferences load,
+   which reads the player's own into the same block from the registry (where the player's edits
+   on SKIRMISH would go in a stock Start); the branch's settings save is not made, and the player's seats, map and options come back at the teardown (THE PLAYER'S
+   SETTINGS). The file and the view are arguments: no request outlives the call, so no later
+   stock Start can become a playback.
+   ORDERING. Three phases. Checks, which write nothing. Then the undoable steps in the stock order;
+   a refusal undoes them before its notice, since the notice 0x4ABD90 can run a nested pump
+   (0x4AC035, reached from 0x4ABF81). Then the commit, which nothing refuses: the validation's
+   inputs (the settings, the mode, the network bit, the seat count, the sides and colours, the
+   header) are disjoint from what the fill writes (PlayerInfo +0x95/+0x96, the records, main
+   +0x2A42/+0x2A43, the alliances), so its verdict before the fill is its verdict at the fill. The
+   commit leaves what a stock Start leaves -- the seats filled, mode 2, shell group 9 with request
+   2 -- and pops every screen, as the load state does (0x497F6A..0x497F80) and LOADGAME does from
+   inside its own OnCommand (0x491D70(1) at 0x4929EB). The same IdleTick's shell tick 0x426E80
+   takes request 2 (0x426E8B..0x426EC4), group 9's sub-state 2 sets main+0x2A44 bit 2 (0x4281F6),
+   and the front end's state 0x496BB0 enters the load state 0x497F40 (0x496C05..0x496C47). No
+   screen exists between the commit and the load to take a second click or a key.
+   BOUNDS. At most ten seat entries, the settings' own count; the map copied within the engine's
+   0x100 (0x47AA12..0x47AA31); the pop loop ends with the stack.
+   THE START GUARD. Each range of engine code the route rests on, as this design was made against
+   it, is compared by FNV-1a against the retail exe's bytes whenever Watch is offered or pressed.
+   A mismatch greys Watch and names the range. The route's own two sites are masked, so the guard
+   does not depend on installation order. */
+
+/* the CD check 0x41D6A0(disc), stdcall `ret 4`: AL nonzero when the disc is found */
+typedef unsigned char (__stdcall* PFN_CdCheck)(unsigned disc);
+#define E_CdCheck      ((PFN_CdCheck)0x0041D6A0u)
+/* the string table lookup 0x4C5740(text), stdcall `ret 4`: `text` when the table has none */
+typedef const char* (__stdcall* PFN_Translate)(const char* text);
+#define E_Translate    ((PFN_Translate)0x004C5740u)
+/* the notice 0x4ABD90(gi, text, width, 1, 1), stdcall `ret 0x14`: copies `text` into its own
+   frame (0x4ABDD7..0x4ABDF3), 0x100 bytes */
+typedef void (__stdcall* PFN_Notice)(void* gi, const char* text, unsigned w, unsigned a, unsigned b);
+#define E_Notice       ((PFN_Notice)0x004ABD90u)
+typedef void (__stdcall* PFN_Gi)(void* gi);
+#define E_ActDone      ((PFN_Gi)0x004AB0A0u)    /* gi+0x60 = -1: the click is answered          */
+#define E_GuiPop       ((PFN_Gi)0x004A9660u)    /* the top screen, its -1 handler, then freed   */
+typedef void (__cdecl* PFN_Void)(void);
+#define E_PlayersReset ((PFN_Void)0x004644D0u)
+#define E_Preferences  ((PFN_Void)0x0042F9A0u)  /* the registry's preferences into main, the
+                                                   skirmish settings' map and seat entries among
+                                                   them (0x430B6B, from 0x430C06); to the registry
+                                                   it writes only a missing key's default
+                                                   (0x42F9E5..0x42FA07)                         */
+#define E_InitHpi      ((PFN_Void)0x0041D4C0u)  /* InitTAHPIAry                                  */
+#define E_SeatFill     ((PFN_Void)0x0047A760u)
+#define E_FillTail     ((PFN_Void)0x0041DA30u)  /* main+0x391CF = 0x55 x25, +0x391E8 = 0        */
+typedef void (__stdcall* PFN_SetMode)(unsigned mode);
+#define E_SetGameMode  ((PFN_SetMode)0x00434AB0u)   /* frees and makes GameingState anew        */
+#define E_Cursor       ((PFN_SetMode)0x00491C80u)   /* the cursor (0x14, as the Start leaves it) */
+typedef int (__thiscall* PFN_OtaRead)(void* gs, const char* map);
+#define E_OtaRead      ((PFN_OtaRead)0x00435A20u)   /* 0: the map's terrain is missing          */
+typedef int (__thiscall* PFN_MapSeats)(void* gs);
+#define E_MapSeats     ((PFN_MapSeats)0x00437300u)  /* the start positions the map offers       */
+typedef int (__cdecl* PFN_Int)(void);
+#define E_OneAlly      ((PFN_Int)0x00479760u)       /* 1: every active entry in one ally group  */
+#define STR_CD         ((const char*)0x005030C0u)   /* the Start's refusals, as it shows them   */
+#define STR_TERRAIN    ((const char*)0x0050842Cu)
+#define STR_PLAYERS    ((const char*)0x0050838Cu)
+#define STR_TOOMANY    ((const char*)0x005083FCu)
+#define STR_ALLIES     ((const char*)0x005083C8u)
+#define NOTICE_W       0x1E0
+#define NOTICE_MAX     0x100        /* the notice's copy of its text                              */
+#define OFF_GUI        0x519        /* the GUI info, `gi`                                        */
+#define GI_TOP         0x18         /* its top screen, NULL when the stack is empty               */
+#define OFF_SHELLGROUP 0x2BBE       /* the shell's screen family ...                              */
+#define OFF_SHELLREQ   0x2BC0       /* ... and the sub-state it is asked for (0x426E8B..0x426EC4)  */
+#define SHELL_SKIRMISH 9
+#define REQ_START      2            /* group 9's sub-state 2: 0x4281F6, `or [main+0x2A44], 4`     */
+#define NET_FRONTEND   0x08         /* main+0x2A44 bit 3, as SINGLE's request sets it (0x427164)   */
+#define CTRL_HUMAN     1
+#define CTRL_AI        2
+#define MENU_LOBBY     0x00512C80u  /* nonzero: the main menu goes on to the lobby (0x4270AE..0x4270BA) */
+
+typedef struct {
+    const char* name;
+    unsigned    a[3], b[3];         /* up to three ranges [a, b)                                   */
+    unsigned    ma, mb, na, nb;     /* up to two masked ranges                                     */
+    unsigned    fnv;                /* of the retail exe's bytes: pristine/TotalA.exe.pristine     */
+} Guard;
+static const Guard GUARDS[] = {
+    { "the SKIRMISH Start 0x47AEDF..0x47B0F7", { 0x47AEDF }, { 0x47B0F8 },
+      0x47B092, 0x47B097, 0x47B09C, 0x47B0A1, 0x297667D1u },
+    { "SINGLE's players reset call 0x42734F", { 0x42734F }, { 0x427354 }, 0, 0, 0, 0, 0xC8DF5CDBu },
+    { "the Skirmish request 0x4273E8..0x427414", { 0x4273E8 }, { 0x427415 }, 0, 0, 0, 0,
+      0xF93C7E6Eu },
+    { "group 9's dispatch 0x427594, its table 0x42866C and sub-state 2 0x4281F6",
+      { 0x427594, 0x42866C, 0x4281F6 }, { 0x4275B7, 0x42867C, 0x4281FD }, 0, 0, 0, 0, 0xB82BD2E5u },
+    { "the shell tick 0x426E80 and its group 9 entry 0x4285C0", { 0x426E80, 0x4285C0 },
+      { 0x426EE1, 0x4285C4 }, 0, 0, 0, 0, 0x81441611u },
+    { "the front end's state 0x496BB5..0x496C48", { 0x496BB5 }, { 0x496C49 }, 0, 0, 0, 0,
+      0x06E340BCu },
+    { "GUI_Pop 0x4A9660", { 0x4A9660 }, { 0x4A96CC }, 0, 0, 0, 0, 0x467555C9u },
+    { "the main menu's entry 0x427093..0x4270E5", { 0x427093 }, { 0x4270E6 },
+      0x4270A9, 0x4270AE, 0, 0, 0xC4FA39B6u },
+};
+
+static int s_sitesIn;               /* the four play sites and the save's observer              */
+static int s_watchIn;               /* the main menu's return site and the RESTART gate         */
+static void (*s_back)(void* gi);    /* the browser, to reopen once the main menu is next built  */
+
+static unsigned guard_fnv(const Guard* g)
+{
+    unsigned h = 0x811C9DC5u, r, va;
+    for (r = 0; r < 3 && g->a[r]; r++)
+        for (va = g->a[r]; va < g->b[r]; va++) {
+            if ((va >= g->ma && va < g->mb) || (va >= g->na && va < g->nb)) continue;
+            h = (h ^ *(const unsigned char*)(size_t)va) * 0x01000193u;
+        }
+    return h;
+}
+
+int tagpu_replay_watch_ready(char* why, unsigned cap)
+{
+    unsigned i;
+    if (!s_sitesIn || !s_watchIn) {
+        snprintf(why, cap, "the replay's sites are not in (the log's `replay:` lines say which)");
+        return 0;
+    }
+    for (i = 0; i < sizeof GUARDS / sizeof GUARDS[0]; i++)
+        if (guard_fnv(&GUARDS[i]) != GUARDS[i].fnv) {
+            snprintf(why, cap, "%s holds other bytes than the route was made against",
+                     GUARDS[i].name);
+            return 0;
+        }
+    return 1;
+}
+
+/* A file the browser listed in replays\: a name, never a path out of the folder. A sanity filter
+   on a value the browser's own enumeration produced, not a safety argument. */
+static int file_ok(const char* file)
+{
+    size_t n = strlen(file);
+    return n && n <= MAX_PATH - 9 && !strpbrk(file, "\\/:") && !strstr(file, "..");
+}
+
+/* The recording's seats and map into the settings, the player's kept in s_opt. The entries below
+   the count: a seat's controller, side and colour, no ally group (seat_level writes the recorded
+   rows); metal and energy stay the player's, which the first image overwrites. A gap's controller
+   is 0. Entries at or above the count are left: the fill walks below it (0x47A760). */
+static int settings_in(char* ta, const RecHeader* h)
+{
+    char* set = *(char**)(ta + OFF_SETTINGS);
+    unsigned count = 0, i;
+    if (!set) return 0;
+    memcpy(s_opt.entries, set, sizeof s_opt.entries);
+    memcpy(s_opt.map, set + SET_MAP, sizeof s_opt.map);
+    s_opt.nseats = *(unsigned*)(ta + OFF_NSEATS);
+    s_opt.seats_saved = 1;
+    for (i = 0; i < h->nseats; i++)
+        if (h->seats[i].index + 1 > count) count = h->seats[i].index + 1;  /* below 10: the reader */
+    for (i = 0; i < count; i++) *(unsigned*)(set + i * SET_ENTRY) = 0;
+    for (i = 0; i < h->nseats; i++) {
+        char* e = set + h->seats[i].index * SET_ENTRY;
+        *(unsigned*)e = h->seats[i].controller;
+        *(unsigned*)(e + ENT_SIDE) = h->seats[i].side;
+        *(unsigned*)(e + ENT_ALLY) = ALLY_NONE;
+        *(unsigned*)(e + ENT_COLOUR) = h->seats[i].logo;
+    }
+    memset(set + SET_MAP, 0, SET_MAPLEN);
+    memcpy(set + SET_MAP, h->settings_map, strnlen(h->settings_map, SET_MAPLEN - 1));
+    *(unsigned*)(ta + OFF_NSEATS) = count;
+    return 1;
+}
+
+/* entries below the seat count with controller `c`, as the Start counts them (0x47AF39..0x47AF56) */
+static unsigned controlled_by(const char* ta, unsigned c)
+{
+    const char* set = *(const char* const*)(ta + OFF_SETTINGS);
+    unsigned n = *(const unsigned*)(ta + OFF_NSEATS), i, k = 0;
+    for (i = 0; i < n && i < SET_ENTRIES; i++)
+        if (*(const unsigned*)(set + i * SET_ENTRY) == c) k++;
+    return k;
+}
+
+/* the Start's refusal idiom (0x47B0BF..0x47B0F7), after the log line. The notice looks its text
+   up itself (0x4ABDC7), so an engine string is passed as the Start passes it; a reason of ours
+   reads as one. */
+static int watch_notice(void* gi, const char* name, const char* text, int ours)
+{
+    char t[NOTICE_MAX];
+    snprintf(t, sizeof t, ours ? "This recording cannot be played: %s." : "%s", text);
+    tagpu_logf("replay: not playing %s: %s", name, text);
+    E_Notice(gi, t, NOTICE_W, 1, 1);
+    E_ActDone(gi);
+    return 0;
+}
+
+static int watch_refuse(void* gi, const char* name, const char* why)
+{
+    return watch_notice(gi, name, why, 1);
+}
+
+static int watch_refuse_engine(void* gi, const char* name, const char* text)
+{
+    return watch_notice(gi, name, text, 0);
+}
+
+/* Phase B's undo: the settings and the mode the main menu had (0x427093), the recording closed;
+   then the notice, `ours` as watch_notice takes it */
+static int watch_undo(char* ta, void* gi, const char* name, const char* text, int ours)
+{
+    seats_restore(ta);
+    E_SetGameMode(0);
+    replay_close();
+    return watch_notice(gi, name, text, ours);
+}
+
+int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* gi))
+{
+    char* ta = ta_main();
+    char name[MAX_PATH], path[MAX_PATH], why[200];
+    const RecHeader* h;
+    char* set;
+    void* gs;
+    unsigned v = 0, ais;
+    size_t n;
+
+    /* A: checks; nothing is written */
+    snprintf(name, sizeof name, "%s", file);
+    n = strlen(name);
+    if (n > 7 && !_stricmp(name + n - 7, ".imprec")) name[n - 7] = 0;
+    if (!ta) return 0;
+    if (!tagpu_replay_watch_ready(why, sizeof why)) return watch_refuse(gi, name, why);
+    if (!file_ok(file)) return watch_refuse(gi, name, "the file is not one of replays\\");
+    if (ta[OFF_NETWORK] & 1) return watch_refuse(gi, name, "this is a network game");
+    if (!E_CdCheck(1)) return watch_refuse_engine(gi, name, E_Translate(STR_CD));
+    replay_close();
+    tagpu_puppet_end();
+    snprintf(path, sizeof path, "replays\\%s", file);
+    s_rd = recr_open(path, why, sizeof why);
+    if (!s_rd) return watch_refuse(gi, name, why);
+    h = recr_header(s_rd);
+    if (!validate_header(h, why, sizeof why, &v) || !view_ok(h, view, why, sizeof why)) {
+        replay_close();
+        return watch_refuse(gi, name, why);
+    }
+
+    /* B: the stock order; each refusal undoes before its notice */
+    E_PlayersReset();
+    E_Preferences();
+    E_SetGameMode(MODE_SKIRMISH);
+    gs = *(void**)(ta + OFF_GSTATE);
+    if (!gs) return watch_undo(ta, gi, name, "the game state could not be made", 1);
+    if (!settings_in(ta, h)) return watch_undo(ta, gi, name, "there are no skirmish settings", 1);
+    E_InitHpi();
+    ais = controlled_by(ta, CTRL_AI);
+    *(unsigned short*)(ta + OFF_NPLAYERS) = (unsigned short)(ais + 1);
+    set = *(char**)(ta + OFF_SETTINGS);
+    if (!E_OtaRead(gs, set + SET_MAP))
+        return watch_undo(ta, gi, name, E_Translate(STR_TERRAIN), 0);
+    if (ais < 1 || controlled_by(ta, CTRL_HUMAN) < 1)
+        return watch_undo(ta, gi, name, E_Translate(STR_PLAYERS), 0);
+    if (*(unsigned short*)(ta + OFF_NPLAYERS) > (unsigned)E_MapSeats(gs))
+        return watch_undo(ta, gi, name, E_Translate(STR_TOOMANY), 0);
+    if (E_OneAlly()) return watch_undo(ta, gi, name, E_Translate(STR_ALLIES), 0);
+    if (!validate_engine(ta, h, why, sizeof why)) return watch_undo(ta, gi, name, why, 1);
+
+    /* C: the commit; nothing below refuses */
+    *(unsigned short*)(ta + OFF_NPLAYERS) = (unsigned short)(ais + controlled_by(ta, CTRL_HUMAN));
+    E_SeatFill();
+    seat(ta, name, v, view);
+    E_FillTail();
+    replay_options();
+    ta[OFF_NETWORK] |= NET_FRONTEND;
+    ta[OFF_SHELLGROUP] = SHELL_SKIRMISH;
+    ta[OFF_SHELLREQ] = REQ_START;
+    E_Cursor(0x14);
+    s_back = back;
+    while (*(void**)((char*)gi + GI_TOP)) E_GuiPop(gi);
+    return 1;
+}
+
+/* The main menu's builder 0x4263B0 has returned at its one call, 0x4270A9: every way out of a
+   skirmish level, the in-game quit (0x460630..0x460653 -> 0x425A90) and the results screen's
+   MainMenu (0x41EE2D..0x41EE6E), ends in group 2 sub-state 0 and this call. The browser comes
+   back once, the first time after a Start it made, unless the menu goes on to the lobby
+   (main 0x512C80, read at 0x4270AE): the flag is taken either way, so it cannot outlive the first
+   main menu. ORDERING: the builder has staged MAINMENU and flushed the event ring
+   (0x426523, 0x426636); this is the shell tick, no pump is in flight, and what follows the call
+   touches no screen (0x4270C6..0x4270E1). */
+static void __cdecl menu_built(void)
+{
+    void (*back)(void* gi) = s_back;
+    char* ta = ta_main();
+    s_back = NULL;
+    if (back && ta && !*(const unsigned*)(size_t)MENU_LOBBY) back(ta + OFF_GUI);
+}
+
 /* ---- the sites ------------------------------------------------------------------------------ */
 
 /* a call at `site` whose target is `target` (E8 rel32), not taken by another module */
@@ -4848,6 +5224,54 @@ static void frame_site_init(void)
     tagpu_logf("replay: the frame visit at 0x4969CD in");
 }
 
+/* THE RESTART GATE. A level's RESTART runs the seat fill itself (0x4997A0: the teardown at
+   0x4996AA, the .ota read 0x499820, the fill 0x499825), past both Start sites, from settings the
+   teardown has given back to the player: on a puppet level it would start an ordinary skirmish.
+   So a puppet level refuses RESTART where the in-game menu takes the button. The restart flag
+   main+0x39249 has one setter, 0x460449, in RESTART.GUI's OnCommand 0x460340, which only
+   0x4604A0 installs (0x4604CB); 0x4604A0 has one caller, 0x46088F, reached only when the menu's
+   name test `0x49FD60(gi, "RESTART")` at 0x460880 answers nonzero. On a puppet level the gate
+   answers 0 for that test alone, so the menu takes the click as no button's
+   (0x460898..0x46089F answers it) and stays open. The puppet flag is set at the seating and
+   cleared by the teardown (tagpu_puppet.h), so it holds for the whole level.
+   And the main menu's return site, 0x4270A9 (menu_built). Watch needs both; without them it is
+   grey, and a tacli playback goes on as before. */
+static void watch_sites_init(void)
+{
+    enum { MENU_SITE = 0x004270A9u, MENU_BUILD = 0x004263B0u, RESTART_SITE = 0x00460880u,
+           NAME_IS = 0x0049FD60u };
+    static const unsigned char RESTART_NAME[5] = { 0x68, 0xA8, 0x6C, 0x50, 0x00 };  /* push "RESTART" */
+    unsigned char *back, *gate, *p;
+    int ok = 1;
+    if (!call_is(MENU_SITE, MENU_BUILD) || !call_is(RESTART_SITE, NAME_IS) ||
+        memcmp((const void*)(size_t)(RESTART_SITE - 6), RESTART_NAME, sizeof RESTART_NAME)) {
+        tagpu_logf("replay: the main menu's builder call 0x4270A9 or the RESTART test 0x460880 "
+                   "holds other bytes: no Watch in the browser");
+        return;
+    }
+    back = after_call(MENU_BUILD, menu_built);
+    gate = p = tagpu_detour_stub();
+    if (!back || !gate) {
+        tagpu_detour_stub_free(back);
+        tagpu_detour_stub_free(gate);
+        tagpu_logf("replay: no memory for the browser's sites: no Watch in the browser");
+        return;
+    }
+    p = tagpu_detour_cmp_flag(p, (volatile unsigned char*)tagpu_puppet_flag());
+    *p++ = 0x75; *p++ = 0x05;                           /* jne over the jump   */
+    *p++ = 0xE9; tagpu_detour_rel(p, NAME_IS); p += 4;
+    *p++ = 0x33; *p++ = 0xC0;                           /* xor eax,eax         */
+    *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;              /* ret 8               */
+    call_write(RESTART_SITE, gate, &ok);
+    call_write(MENU_SITE, back, &ok);
+    if (!ok) {
+        tagpu_logf("replay: FAILED a browser site could not be written: no Watch in the browser");
+        return;
+    }
+    s_watchIn = 1;
+    tagpu_logf("replay: the main menu's return 0x4270A9 and the RESTART gate 0x460880 in");
+}
+
 void tagpu_replay_init(void)
 {
     enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu };
@@ -4895,4 +5319,6 @@ void tagpu_replay_init(void)
         return;
     }
     tagpu_logf("replay: 4 sites and the settings save's observer in");
+    s_sitesIn = 1;
+    watch_sites_init();
 }

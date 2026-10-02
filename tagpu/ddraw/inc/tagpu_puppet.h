@@ -9,13 +9,14 @@
 
    THE TABLE is SIM_CONTENT (decision D3): derived from the recording's header at the seat fill,
    constant for the level but for the mark of its first step (tagpu_puppet_play), and never
-   recorded or restored. The seat fill writes it on the game
-   thread in the SKIRMISH Start, before the loader thread exists: CreateThread orders every write
-   before the new thread's first instruction. The level's teardown clears it on the game thread.
+   recorded or restored. The seat fill writes it on the game thread in the SKIRMISH Start or the
+   browser's, before the loader thread exists: CreateThread orders every write before the new
+   thread's first instruction. The level's teardown clears it on the game thread.
    Every reader runs between those two points, on the game thread or the loader thread. A Start
    always reaches the teardown: after the seat fill, the Start branch runs straight to the loading
-   state (0x47B097..0x47B0B0), and the loader has one exit (0x497C6C), or the process ends at its
-   crash handler (0x497CAB). */
+   state (0x47B097..0x47B0B0) -- the Replays browser's Start too, whose commit refuses nothing
+   after the fill and leaves the same shell state (tagpu_replay.c, THE BROWSER'S START) -- and the
+   loader has one exit (0x497C6C), or the process ends at its crash handler (0x497CAB). */
 
 #include <stddef.h>
 
