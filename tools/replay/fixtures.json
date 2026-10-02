@@ -44,7 +44,8 @@
   "stock-limits": {
    "load": "replay-four-ai.json",
    "dll": "stock",
-   "end": 1800
+   "end": 1800,
+   "takeover": {"player": "controlled", "checks": ["judge", "line", "fork"]}
   },
   "nomapalert": {
    "load": "c2-nomapalert.json",

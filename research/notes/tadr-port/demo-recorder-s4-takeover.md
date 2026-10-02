@@ -25,7 +25,9 @@ it with a seek. The engine facts are in the engine map's
   `check --timeline N` and `compare --timeline N` read timeline N's chain, and `compare-fork FILE N` compares timeline N's
   first iteration with its parent's chain at its fork point (D2 below).
 - `tools/replay/tareplay.py takeover FIXTURE` runs a fixture's live game (L) and its takeover
-  processes K and F alone; every tier runs K and F for a fixture with a `takeover` entry.
+  processes K and F alone; every tier runs K and F for a fixture with a `takeover` entry:
+  `battle` and `takeover-end` on the default build, and `stock-limits` on the stock-limits build,
+  which compiles the takeover too, so the landing tier's coverage needs a takeover on each.
 
 ## The takeover's steps
 
