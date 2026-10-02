@@ -111,8 +111,10 @@ static int    s_armed;
 static char   s_gui[8192];
 static unsigned char* s_gaf;
 
-/* the open dock: its engine rect, set by place() before stage 1 */
-static int    s_open, s_ex, s_ey, s_w;
+/* the open dock: its engine rect and the HUD scale it was placed at, set by place() before
+   stage 1; its screen, set when stage 1 has built it */
+static int    s_open, s_ex, s_ey, s_w, s_q8;
+static void*  s_gm;
 static int    s_leaveOk;
 /* LEAVE'S QUESTION HOLDS THE PLAYBACK: the pause word from before the click, put back the first
    time the dock is on top again -- the question answered No, or never opened. Yes tears the level
@@ -493,28 +495,43 @@ int tagpu_dock_redirects(const char* name)
    Placing it
    ================================================================================================ */
 
-/* The screen rect: right of the side panel, above the bottom bar, DOCK_GAP from the screen's right
-   edge; then moved back along the HUD's shift to where the ENGINE draws for it to land there, as
-   tagpu_menu.c's panel_rect does -- the dock hangs in the world region, which the composite
-   translates. 1 when it fits. */
-static int geom(int* ex, int* ey, int* w)
+/* THE DOCK'S ENGINE RECT, a pure function of the surface and the HUD scale (q8, 256 = stock), so
+   that tagpu_hud.c's map and the composite, which know only those, find the rect the dock was
+   placed at. On screen the dock is magnified like the bars (tagpu_hud.h): right of the panel and
+   above the bottom bar by DOCK_GAP and DOCK_LIFT at the scale, as wide as the screen leaves it.
+   Its bottom-left corner is where the world's translation puts it, so the engine rect is that
+   corner moved back by the translation, and the width the screen width over the scale. At stock
+   it is the 1x layout: (136, H - 122, W - 144, 86). 1 when it fits. */
+int tagpu_dock_rect(int W, int H, int q8, int* ex, int* ey, int* w, int* h)
 {
-    int pw = 128, bh = 32, dx = 0, dy = 0, x0, x1, y0;
-    tagpu_hud_live(&pw, &bh, NULL);
-    tagpu_hud_shift(&dx, &dy);
-    x0 = pw + DOCK_GAP;
-    x1 = (int)g_ddraw.width - DOCK_GAP;
-    y0 = (int)g_ddraw.height - bh - DOCK_LIFT - DOCK_H;
-    *w = x1 - x0 > DOCK_MAX_W ? DOCK_MAX_W : x1 - x0;
-    *ex = x0 - dx;
-    *ey = y0 - dy;
-    return *w >= DOCK_MIN_W && *ey >= 0;
+    int pw, bh, gap, x0, x1, yb;
+    if (q8 < 256) return 0;
+    tagpu_hud_bands(q8, &pw, &bh);
+    gap = (DOCK_GAP * q8) >> 8;
+    x0 = pw + gap;
+    x1 = W - gap;
+    yb = H - bh - ((DOCK_LIFT * q8) >> 8);
+    *w = ((x1 - x0) << 8) / q8;
+    if (*w > DOCK_MAX_W) *w = DOCK_MAX_W;
+    *h = DOCK_H;
+    *ex = x0 - (pw - 128);
+    *ey = yb - (bh - 32) - DOCK_H;
+    return *w >= DOCK_MIN_W && *ey >= 32;
+}
+
+/* the dock's rect at the scale in force; `q8` the scale, 256 when HUD scale is not live */
+static int geom(int* ex, int* ey, int* w, int* q8)
+{
+    int h;
+    *q8 = 256;
+    tagpu_hud_live(NULL, NULL, q8);
+    return tagpu_dock_rect((int)g_ddraw.width, (int)g_ddraw.height, *q8, ex, ey, w, &h);
 }
 
 int tagpu_dock_wanted(void)
 {
-    int x, y, w;
-    return s_armed && tagpu_replay_path() && geom(&x, &y, &w);
+    int x, y, w, q;
+    return s_armed && tagpu_replay_path() && geom(&x, &y, &w, &q);
 }
 
 /* a record by name, bounded by the panel's own count and by the 200 records GUI_Load allocates
@@ -569,7 +586,7 @@ static int greyed_last(char* ctrls)
 void tagpu_dock_place(char* ctrls)
 {
     char* r;
-    if (!ctrls || !geom(&s_ex, &s_ey, &s_w)) return;
+    if (!ctrls || !geom(&s_ex, &s_ey, &s_w, &s_q8)) return;
     *(short*)(ctrls + G_XPOS) = (short)s_ex;
     *(short*)(ctrls + G_YPOS) = (short)s_ey;
     *(short*)(ctrls + G_W) = (short)s_w;
@@ -652,17 +669,34 @@ static int leave_guard(void)
     return 1;
 }
 
+/* THE MAGNIFIED REGION FOLLOWS THE ENGINE'S OWN CHAIN (tagpu_hud.h). It is set here, the moment
+   stage 1 has built the screen, so the first frame that draws the dock is magnified; cleared in
+   `tagpu_dock_closed`, before the slot pops it, and at the level's end; and re-checked every
+   frame against the chain, so a dock the engine let go of on its own account stops taking the
+   points under it at the next frame. All on the game thread, the one that pumps the wndproc,
+   between the engine's own calls: a click is mapped into the dock while the engine holds it. */
+static void region_publish(void* top)
+{
+    void* p = top;
+    int n;
+    for (n = 0; p && p != s_gm && n < 32; n++) p = *(void**)p;
+    tagpu_hud_dock_set(s_open && p && p == s_gm ? s_q8 : 0);
+}
+
 void tagpu_dock_built(void* gi, void* gm)
 {
-    (void)gi;
     repaint_ground(gm ? *(char**)((char*)gm + GM_CTRLS) : NULL);
     s_leaveOk = leave_guard();
     s_open = 1;
+    s_gm = gm;
     s_push.valid = 0;
+    region_publish(gi ? *(void**)((char*)gi + 0x18) : NULL);
 }
 
 void tagpu_dock_closed(void)
 {
+    tagpu_hud_dock_set(0);
+    s_gm = NULL;
     s_open = 0;
     s_drag = 0;
     s_push.valid = 0;
@@ -913,6 +947,7 @@ void tagpu_dock_level_end(void)
     s_keyOk = 0;
     s_drag = 0;
     s_leaveAsk = 0;
+    tagpu_hud_dock_set(0);
 }
 
 /* ================================================================================================
@@ -948,6 +983,7 @@ void tagpu_dock_tick(void* gi, int on_top)
     int live = tagpu_replay_live(), span = tagpu_replay_span(&first, &last), dirty = 0, i, sp;
     char tnow[16] = "", tend[16] = "";
 
+    region_publish(*(void**)((char*)gi + 0x18));
     if (!s_walkStarted && live) walk_start();
     /* A speed the dock has no stage for -- the player's own, or the Options slider's -- is put
        on the nearest preset, so the stage shown is always the speed in force. */

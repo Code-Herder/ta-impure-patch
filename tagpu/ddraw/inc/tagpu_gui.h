@@ -390,6 +390,8 @@ typedef struct TAGPU_GUIHAND {
     float vpL, vpT, vpW, vpH;       /* the TRUE viewport, from the packet     */
     float scaleX, scaleY;           /* k, and the ramp's width with it        */
     float hud[4];
+    float dock[4], dockMap[4], dockS[2];  /* the dock region: LAY_FS's uDock,
+                                             uDockMap and uDockS, 0 = none     */
     int   vpX, vpY, vpW_gl, vpH_gl; /* the viewport the composite draws into  */
 
     /* WHAT THIS RECORD DOES NOT CARRY, counted rather than dropped silently.

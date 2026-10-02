@@ -34,7 +34,7 @@
 /* the std140 blocks, at the sizes the generated SPIR-V header prints */
 #define QVS_SZ  16                  /* QVS    binding 0  : vec2 uSize        */
 #define TWF_SZ  16                  /* CPY/SPR binding 32: 16 bytes          */
-#define LAY_SZ  80                  /* LAY_FS binding 32 : 80 bytes          */
+#define LAY_SZ  128                 /* LAY_FS binding 32 : 128 bytes         */
 
 /* MAX_TWINS in tagpu_gui_surf.c. A bound here rather than a number taken from
    the hand-over: the scaffold's rule -- a handed-over count never sizes an
@@ -3824,7 +3824,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            no colour image would sample the dummy image through a live branch.
            The stand-down check above has already refused that frame; this
            keeps the block honest on its own. */
-        /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 80 bytes.
+        /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 128 bytes.
            `inc/spirv/tagpu_gui_surf.spv.h` prints the table this must match --
            read it there, never from here. */
         ip = (int*)(b + 0);   *ip = (colOn && pres->colImg) ? 1 : 0;
@@ -3838,6 +3838,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         ip = (int*)(b + 48);  *ip = h.vpKey;                 /* uVpKey        */
         fp = (float*)(b + 64); fp[0] = h.hud[0]; fp[1] = h.hud[1];
                                fp[2] = h.hud[2]; fp[3] = h.hud[3];   /* uHud   */
+        fp = (float*)(b + 80); memcpy(fp, h.dock, sizeof h.dock);    /* uDock  */
+        fp = (float*)(b + 96); memcpy(fp, h.dockMap, sizeof h.dockMap); /* uDockMap */
+        fp = (float*)(b + 112); memcpy(fp, h.dockS, sizeof h.dockS); /* uDockS */
     }
     {
         VkDescriptorBufferInfo bi;

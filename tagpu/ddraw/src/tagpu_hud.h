@@ -67,9 +67,10 @@
    `tagpu_hud.on` with a `scale=auto` / `scale=<percent>` token overrides the
    store and greys the row.
 
-   WHAT MAKES A STALE VALUE SAFE. Exactly one word crosses threads: the
-   percentage in force, written by the row (message thread) and read by the
-   composite (render thread) and the pointer chain (message thread). It is a
+   WHAT MAKES A STALE VALUE SAFE. Two words cross threads: the dock's, whose
+   argument is with it below, and the percentage in force, written by the row
+   (message thread) and read by the composite (render thread) and the pointer
+   chain (message thread). It is a
    naturally aligned int, so a racing read sees one whole value or the other —
    and BOTH are valid, because every consumer re-resolves it against the screen
    dimensions IT is looking at, and tagpu_hud_geom clamps to that screen's own
@@ -120,6 +121,53 @@ void tagpu_hud_true_inset(const char* ta, int* L, int* T, int* rInset, int* bIns
    at the world-target publish). The callers are that publish and tagpu_menu.c's
    panel_rect. */
 int  tagpu_hud_shift(int* dx, int* dy);
+
+/* The panel's width and the bars' height on screen at scale `q8`: the two
+   integers every region of the map is cut at. Pure. */
+void tagpu_hud_bands(int q8, int* panelW, int* barH);
+
+/* THE DOCK, A FOURTH MAGNIFIED REGION (gui-renderer.md 22.7). The watching
+   dock (tagpu_dock.c) hangs in the world region, and the engine draws it at
+   1x like any screen there; HUD scale magnifies it like the bars, about its
+   BOTTOM-LEFT corner, which is the corner the world's translation carries to
+   the screen (so the 1x copy the engine drew always lies inside the magnified
+   one and is never seen).
+
+   ITS RECT IS A PURE FUNCTION OF THE SURFACE AND THE SCALE
+   (`tagpu_dock_rect`), so all that has to cross threads is WHETHER a dock is
+   drawn, and at which scale it was placed:
+
+     THE POINTER'S WORD (`tagpu_hud_dock_set`), written on the game thread
+     where TA pumps the wndproc: the dock's scale from the moment its screen
+     is built until the slot lets it go, re-checked every frame against the
+     engine's GUI chain; 0 otherwise. The game thread reads it in the same
+     order it writes it, so a click is mapped into the dock exactly while the
+     engine has the dock to take it. The render thread reads it only for the
+     sharp cursor's injected-pointer fallback; whichever whole value it sees
+     names a rect inside the world region of the surface it maps on, so a
+     stale one moves a cursor for a frame and reaches no memory.
+
+     THE PICTURE'S COPY rides the flip marker (`PK_FRAME`), taken from the
+     same word at the flip on the game thread, so the composite magnifies
+     exactly the frames whose pixels hold the dock: the region and the pixels
+     it samples cross in one ordered queue.
+
+   Outside the dock's screen rect nothing changes; inside it the map sends
+   every point into the dock's engine rect, so the world under it never sees a
+   point the dock covers. */
+typedef struct TAGPU_HUD_DOCKMAP {
+    int l, t, w, h;         /* the dock's rect on the engine's surface        */
+    int x0, y0, x1, y1;     /* where it is on screen, [x0,x1) x [y0,y1)       */
+    int q8;                 /* the scale it was placed at                     */
+} TAGPU_HUD_DOCKMAP;
+
+/* The map of a dock placed at `q8` on a W x H surface. 0 when q8 is stock or
+   the rect does not lie inside that surface's world region. Pure. */
+int  tagpu_hud_dock_map(int screenW, int screenH, int q8, TAGPU_HUD_DOCKMAP* m);
+/* Game thread: the dock is drawn, placed at `q8`; 0 = no dock. */
+void tagpu_hud_dock_set(int q8);
+/* The word above: the scale of the dock in force for the pointer, 0 = none. */
+int  tagpu_hud_dock_q8(void);
 
 /* The point maps, between the engine's 1x HUD coordinates and the screen the
    player sees. Both are the identity outside a HUD region and at stock scale,

@@ -202,19 +202,14 @@ Built as landing 2 (`tagpu_dock.c`, with `tagpu_menu.c`'s slot, `tagpu_replay.c`
 **What it is.** On a level that plays a recording, Watch's or `tacli replay play`'s, `DOCK.GUI`
 sits right of the side panel and above the bottom bar: screen x from the panel's width + 8 to the
 screen's width - 8, its bottom 4 px above the bar, 86 px tall (136, 598, 1136, 86 at 1280×720). It
-does not open narrower than 400 px. Under HUD scale it hangs in the world region, as the Impure
-Config drop-down does: its screen rect follows the magnified panel and bar, is moved back by the
-world's shift to where the engine draws, and is drawn at 1x. MEASURED at 1920×1080 on Vulkan,
-device-space clicks (`dclick:`, the pointer path a player's click takes) on the track's left end,
-25 % and 75 %:
-
-| HUD scale | panel, bars | the dock on screen | track on screen | 25 % asks | 75 % asks |
-|---|---|---|---|---|---|
-| 150 % | 192, 48 | (200, 942, 1712, 86) | x 266, 1576 wide | 735 | 2205 |
-| Auto (225 %) | 288, 72 | (296, 918, 1616, 86) | x 362, 1480 wide | 735 | 2205 |
-
-The recording runs GameTime 1 to 2940, so the exact values are 735.75 and 2205.25, which the
-strip's integer division takes to 735 and 2205.
+does not open narrower than 400 px. **Under HUD scale it is magnified like the bars**, a fourth
+region of the composite and the pointer map ([GUI renderer](../gui-renderer.html) §22.7), about
+its bottom-left corner: its gap, lift and height scale with the HUD and its width is the
+screen's over the scale. MEASURED at 1920×1080 on Vulkan, device-space clicks at 25 % and 75 %
+of the track on screen asking exactly the GameTime the map predicts (735 and 2205 at 150 %, 734
+and 2206 at Auto, where an engine pixel is 2.25 device pixels); a drag, the right-click on a
+bookmark, every button and Leave's dialog through device-space clicks; and at HUD 100 the dock
+0 px from the picture taken before the region existed.
 
 | Row | Gadget | What it does |
 |---|---|---|
@@ -302,10 +297,8 @@ stage for is put on the nearest preset (a tie goes to the slower).
 
 - **The art is a stand-in.** `dock-tex`, `strip-track` and `strip-fill` are generated plain
   stand-ins; the owner's art replaces them before the landing reaches `main`.
-- **The dock is drawn at 1x under HUD scale**, as everything in the world region is. Magnifying
-  it is a design decision not taken: either a fourth magnified region in the composite (a
-  render-thread change, with the pointer map and the sharp cursor), or a layout generated at the
-  scale, which the engine's 1x captions would not follow.
+- **GDI does not implement HUD scale**, for the dock as for the bars: the picture stays 1x while
+  the pointer map is magnified (GUI renderer §22.7).
 - **Why bit 8 stops a live stage button's clicks** is not known: the pump's click arm reads no
   attribs (`0x4AA35A..0x4AA39D`) and the press arm's attribs test is bit 4 (`0x4A9D80`).
 

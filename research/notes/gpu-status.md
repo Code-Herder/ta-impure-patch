@@ -3772,7 +3772,7 @@ with RENDER.GUI ([renderers](renderers.html) §2.10).
 | site | what we do there | thread |
 |---|---|---|
 | `DLL_PROCESS_ATTACH` | `impure/dock.gui` and `anims/dock.gaf` into `impure-patch.ufo`: the ground as eight 512×86 uncompressed frames and the buttons' frames, composed from `art/ui/retail`, every frame tagged `TAGPU_GAF_EXACT` at `+0x0C` so the Classic++ UI restorer leaves it alone; nothing arms without the art | — |
-| `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters, attribs bit 8 on each greyed button and off each live one; put back the pause Leave's question took; start the walker once a level | game |
+| `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1 at the HUD scale in force (`tagpu_dock_rect`), and publish the magnified region's word while the engine's chain holds it; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters, attribs bit 8 on each greyed button and off each live one; put back the pause Leave's question took; start the walker once a level | game |
 | `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, Leave (the pause taken, `0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
 | `tagpu_shield.c`, both paths | the strip's left and right buttons through `tagpu_menu_click` / `tagpu_menu_rclick`; a drag's seek cancelled on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP`, its release still consumed | game |
 | `0x46A308` (post-GUI) | the strip's fill, markers and playhead into the back buffer through `0x4B7F90`, unless a screen above the dock overlaps it | game |
@@ -3911,8 +3911,9 @@ covers the outer world instead of asking for it.
 
 | site | what we do there | thread |
 |---|---|---|
-| the UI composite (`tagpu_gui_surf.c`'s shader, `tagpu_vk_gui.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them; the world region is sampled back by the shift. Inert at `s = 1` | render |
-| `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
+| the UI composite (`tagpu_gui_surf.c`'s shader, `tagpu_vk_gui.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them; the world region is sampled back by the shift. `uDock`, `uDockMap`, `uDockS`: the watching dock, a fourth region magnified about its bottom-left corner, from the presented frame's `PK_FRAME` ([GUI renderer](gui-renderer.html) §22.7). Inert at `s = 1` | render |
+| `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid, and inside the dock's magnified rect the point on the dock | message |
+| `tagpu_dock.c` (built, the tick, closed, the level's end); `before_flip` | the dock region's word, `tagpu_hud_dock_set`: the open dock's scale while the engine's GUI chain holds it, else 0; read into the flip marker for the composite | game |
 | `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
 | `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
 | `0x4288D0` (observer), gated on return address `0x498242` | write `R`, `B`, `viewW`, `viewH` so the engine's viewport IS the visible window — `L`/`T` untouched, because the projection bakes them. Writes nothing at stock | game |
@@ -3930,8 +3931,9 @@ that keeps at least 256 px of world width.
 never written** — that is the whole lesson of §22.5. Because viewW/viewH size the SORT buffers at
 LoadMap, the setting is game-entry-time: a scale chosen mid-game waits for the next game.
 
-**Why a stale scale is safe.** One word crosses threads — the percentage in force — and every
-consumer re-resolves it against the screen *it* sees, so either value a racing 32-bit read can
+**Why a stale scale is safe.** Two words cross threads: the dock's, whose ordering argument is
+in [GUI renderer](gui-renderer.html) §22.7, and the percentage in force, which every
+consumer re-resolves against the screen *it* sees, so either value a racing 32-bit read can
 return is one that fits that screen. The worst a mid-frame change can do is leave the pointer
 map and the picture one frame apart, and neither is engine state. The shell needs no signal of
 its own: its surface is atom-locked at 640×480 whatever Screen Size says, and 640×480's ceiling

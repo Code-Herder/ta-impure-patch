@@ -12,7 +12,8 @@
    strip, drawn at the post-GUI observer 0x46A308 and hit-tested on the shield's two input paths.
    The markers come from a worker thread that reads the recording through its own reader.
 
-   GAME THREAD, every entry point but the worker, which reads only the recording file. */
+   GAME THREAD, every entry point but the worker, which reads only the recording file, and
+   tagpu_dock_rect, which reads nothing. */
 
 #include "tagpu_ufo.h"
 
@@ -30,6 +31,11 @@ void tagpu_dock_install(int ready);
 
 /* Does GUI_Load read `name` out of our folder? Asked by tagpu_menu.c's redirect. */
 int  tagpu_dock_redirects(const char* name);
+
+/* The dock's rect on the engine's surface for a W x H surface at HUD scale `q8` (256 = stock):
+   a pure function, on any thread, which tagpu_hud.c's map and the composite share with the dock's
+   own placement. 1 when it fits. */
+int  tagpu_dock_rect(int W, int H, int q8, int* ex, int* ey, int* w, int* h);
 
 /* 1 when the level plays a recording and the dock fits between the side panel and the screen's
    right edge. */
