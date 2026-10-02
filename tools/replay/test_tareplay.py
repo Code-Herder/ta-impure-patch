@@ -329,6 +329,24 @@ class Segments(unittest.TestCase):
         self.assertEqual(tarec.fork_prediction(segs), 2)
         self.assertEqual(tarec.fork_prediction(segs, 2), 3)
 
+    def test_prediction_refuses_child_boundary_and_capacity(self):
+        segs = self.segs(self.file(*self.ORIGINAL, header((1, 0, 4)),
+                                   stream(4, 6), end_block(6)))
+        with self.assertRaisesRegex(tarec.Unreadable, "first iteration"):
+            tarec.fork_prediction(segs, 1, 4)
+        self.assertIsNone(tarec.fork_prediction(segs, 1, 5))
+        self.assertIsNone(tarec.fork_prediction(segs, 0, 4))
+        rows = struct.pack("<IB3xQ", 0, 1, 1) + struct.pack("<IB3xQ", 0xFFFFFFFE, 2, 0)
+        segs = self.segs(self.file(*self.ORIGINAL, block(tarec.RB_TIMELINES, 0, 0, rows)))
+        with self.assertRaisesRegex(tarec.Unreadable, "exhausted"):
+            tarec.fork_prediction(segs, 0, 4)
+        parts = list(self.ORIGINAL)
+        for tid in range(1, 64):
+            parts += [header((tid, 0, 4)), stream(4, 6), end_block(6)]
+        segs = self.segs(self.file(*parts))
+        with self.assertRaisesRegex(tarec.Unreadable, "64 timelines"):
+            tarec.fork_prediction(segs, 0, 4)
+
     def test_torn_tail_and_open_segment(self):
         torn = block(tarec.RB_STREAM, 6, 6, b"x" * 8)[:20]
         path = self.file(*self.ORIGINAL, header((1, 0, 4)), stream(4, 5, unit=2), torn)

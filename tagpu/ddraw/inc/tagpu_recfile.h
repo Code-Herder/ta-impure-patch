@@ -26,9 +26,11 @@ void recfile_unlock(HANDLE* lock);
 enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMPACT };
 /* The worker owns copies of the paths. A full queue or an exiting process refuses the request;
    it never runs file maintenance on the caller's thread. */
-int recfile_request(const char* path, unsigned op, unsigned id, const char* output);
+int recfile_request(const char* path, unsigned op, unsigned id, const char* output,
+                    const char* request);
 void recfile_exit(void);
-/* A playing and a queued deletion reserve a file identity and timeline under the same lock.
+/* A playing and a queued deletion reserve canonical path, file identity and timeline under
+   the same lock; replacement of the file cannot erase its path reservation.
    A playing cannot start while its deletion is pending, nor can its deletion be queued. */
 int recfile_play(const char* path, unsigned id);
 void recfile_leave(void);

@@ -759,10 +759,24 @@ def timeline_states(payload):
     return out
 
 
-def fork_prediction(segs, selected=0):
+def fork_prediction(segs, selected=0, at=None):
     """The LRU fork ID a new fork would delete, or None; tie broken by file order."""
-    chain(segs, selected)
-    live = [s for s in segs if s["id"] and s["state"] == 1]
+    ch = chain(segs, selected)
+    keep = segs
+    if len(segs) > 1 and not any(b[0] in (RB_STREAM, RB_END) for b in segs[-1]["blocks"]):
+        keep = segs[:-1]
+    if len(keep) >= 64:
+        raise Unreadable("the recording holds 64 timelines, the most a file may")
+    if segs[0]["max_id"] >= 0xFFFFFFFE:
+        raise Unreadable("timeline ID exhausted")
+    if at is not None:
+        if ch[0]["first"] is None or ch[-1]["last"] is None or not ch[0]["first"] < at <= ch[-1]["last"]:
+            raise Unreadable("takeover GameTime is outside the timeline")
+        for child in ch[1:]:
+            if at == child["fork_at"]:
+                raise Unreadable(f"GameTime {at} is timeline {child['id']}'s first iteration; "
+                                 "take over after it")
+    live = [s for s in keep if s["id"] and s["state"] == 1]
     if len(live) < 3:
         return None
     if len(live) > 3:

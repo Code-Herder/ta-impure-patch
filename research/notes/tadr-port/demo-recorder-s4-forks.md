@@ -29,7 +29,8 @@ its header's `RT_WALLCLOCK`. A header appended after the last table defaults the
 same way; a header preceding that table must have a row. An absent live ID is
 invalid. There are at most 64 physical segments and 65 rows: compaction keeps a
 highest-allocated-ID deleted row even if its segment is removed. A later fork
-therefore cannot reuse an ID. Absent lower tombstones need not survive compaction.
+therefore cannot reuse an ID. Damage in the final indexed stream or snapshot
+followed by a valid metadata block refuses mutation; it cannot be cut as a tear. Absent lower tombstones need not survive compaction.
 
 The append writer writes its new header and the updated table before its first
 stream block. Readers cannot select a deleted timeline, including ID 0, but can
@@ -82,8 +83,9 @@ is deferred. A later playing-end touch or append-writer close retries. A failed
 replacement leaves the old recording intact; a crash can leave a temporary file.
 A source that cannot be written skips the touch with a log line (D5).
 
-A playing and queued deletion reserve the kernel file identity and timeline ID
-under the worker publication lock. A deletion of that playing is refused, and a
+A playing and queued deletion reserve the canonical path, kernel file identity and timeline ID
+under the worker publication lock. A reservation matches the timeline and either
+the canonical path or file identity, so replacement cannot lose protection. A deletion of that playing is refused, and a
 playing cannot claim a pending deletion. The playing claims before its metadata
 scan and releases after its reader closes. A worker releases its reservation
 only after the operation ends. This protects the current playing within this
@@ -106,7 +108,9 @@ collects those final coverage files after stopping the process.
   instance's `replays` directory. They operate on that actual file, not an implicit
   copy returned to a caller's original path.
 - The trigger forms are `forks "NAME" delete ID` and
-  `forks "NAME" export ID "OUT"`. The common game-thread flip observer looks for
+  `forks "NAME" export ID "OUT"`. tacli prefixes the name with `@` and a
+  32-digit hexadecimal request token; the result carries that token, so an older
+  worker's result cannot complete a new command. The common game-thread flip observer looks for
   these on every fifth frame, including menus. Seeks and dumps retain their
   existing in-play frame-visit ordering. Each request reports done or refused.
 - `tacli replay takeover INSTANCE FILE --at T --player P --dry-run` predicts
@@ -124,6 +128,23 @@ prefix and the reclaimed bytes, plays 5 across both boundaries, exports that
 chain and compares both puppet dumps. It refuses overwrite of the export and
 checks that deleting highest ID 5 is followed by allocation of ID 6. The live
 original's segment hash is checked throughout.
+
+**Verified on the reference Wine setup, 2026-10-02:** the dedicated coverage
+battle fork run passed all nine named checks. Forks 1–3 remained live; touching
+2 made fork 4 evict 1. Fork 5 from 2 evicted 3. After explicit deletion of 2,
+physical IDs were `[0, 2, 4, 5]` with only `[0, 4, 5]` live; the export held
+`[0, 2, 5]`, with only 5 live. Both the two-boundary playing and exported playing
+were puppet-dump EQUAL. Removing 5 was followed by allocation of 6, with physical
+and live IDs `[0, 4, 6]`.
+
+The review's file-invariant probes used the production reader and maintenance
+source in a scratch Wine executable. Replacing a file while retaining an old
+reservation identity refused both pending-play admission and active-play deletion
+through the canonical path; the refusal preserved its request token. A corrupted
+last stream followed by a valid metadata block refused touch with "damaged and
+data follows it" and preserved the file's SHA-256. The same damaged payload at
+the actual tail was cut and touched successfully. The tooling tests also cover
+child-boundary, 64-segment and ID-exhaustion dry-run refusals.
 
 Live rewind remains S4d. The browser's eviction confirmation and fork controls
 are S5 work. S4b's mixed-side MAIN2 panel and the naval COB guard after seeks

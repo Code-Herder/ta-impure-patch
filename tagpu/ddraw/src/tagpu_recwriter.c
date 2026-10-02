@@ -1288,7 +1288,7 @@ static DWORD WINAPI writer_main(void* arg)
     /* the hand-over (tagpu_recorder.h): the capture's last access to the ring is behind us */
     if (w) {
         finish(w);
-        if (w->append && !recfile_request(w->path, REC_FILE_COMPACT, w->ring->fork.id, NULL))
+        if (w->append && !recfile_request(w->path, REC_FILE_COMPACT, g->fork.id, NULL, NULL))
             tagpu_logf("replay: forks %s: compaction skipped: worker unavailable", w->path);
         free(w);
     }

@@ -61,13 +61,14 @@ static HANDLE s_jobs[FILE_JOBS];
 static volatile LONG s_lock;
 static int s_exiting;
 typedef struct FileJob {
-    char path[MAX_PATH], output[MAX_PATH];
+    char path[MAX_PATH], output[MAX_PATH], key[MAX_PATH], request[33];
     unsigned op, id;
     BY_HANDLE_FILE_INFORMATION identity;
 } FileJob;
 static FileJob* s_pending[FILE_JOBS];
 static BY_HANDLE_FILE_INFORMATION s_play_identity;
 static unsigned s_play_id;
+static char s_play_key[MAX_PATH];
 static int s_playing;
 
 static void jobs_lock(void) { while (InterlockedExchange(&s_lock, 1)) Sleep(0); }
@@ -91,20 +92,36 @@ static int same_identity(const BY_HANDLE_FILE_INFORMATION* a,
            a->nFileIndexHigh == b->nFileIndexHigh && a->nFileIndexLow == b->nFileIndexLow;
 }
 
+static int path_key(const char* path, char* key)
+{
+    DWORD n = GetFullPathNameA(path, MAX_PATH, key, NULL);
+    return n && n < MAX_PATH;
+}
+
+/* Replacement changes an inode but not its canonical path. Identity also protects an alias
+   while it still names the same file. Both predicates must be kept across publication. */
+static int same_reservation(const char* akey, const BY_HANDLE_FILE_INFORMATION* a,
+                            const char* bkey, const BY_HANDLE_FILE_INFORMATION* b)
+{
+    return !_stricmp(akey, bkey) || same_identity(a, b);
+}
+
 int recfile_play(const char* path, unsigned id)
 {
     BY_HANDLE_FILE_INFORMATION identity;
     unsigned i;
-    int ok = file_identity(path, &identity);
+    char key[MAX_PATH];
+    int ok = path_key(path, key) && file_identity(path, &identity);
     if (!ok) return 0;
     jobs_lock();
     for (i = 0; i < FILE_JOBS; i++) {
         FileJob* j = s_pending[i];
         if (j && j->op == REC_FILE_DELETE && j->id == id &&
-            same_identity(&identity, &j->identity)) ok = 0;
+            same_reservation(key, &identity, j->key, &j->identity)) ok = 0;
     }
     if (ok) {
         s_play_identity = identity;
+        strcpy(s_play_key, key);
         s_play_id = id;
         s_playing = 1;
     }
@@ -124,7 +141,8 @@ static DWORD WINAPI file_worker(void* arg)
     FileJob* j = (FileJob*)arg;
     char why[256];
     int ok = recr_manage(j->path, j->op, j->id, j->output, why, sizeof why);
-    tagpu_logf("replay: forks %s: %s: %s", j->path, ok ? "done" : "refused", why);
+    tagpu_logf("replay: forks %s: %s: %s [request=%s]", j->path,
+               ok ? "done" : "refused", why, j->request[0] ? j->request : "-");
     jobs_lock();
     {
         unsigned i;
@@ -135,19 +153,23 @@ static DWORD WINAPI file_worker(void* arg)
     return 0;
 }
 
-int recfile_request(const char* path, unsigned op, unsigned id, const char* output)
+int recfile_request(const char* path, unsigned op, unsigned id, const char* output,
+                    const char* request)
 {
     FileJob* j;
     int i, slot = -1;
     HANDLE t;
-    if (strlen(path) >= MAX_PATH || (output && strlen(output) >= MAX_PATH)) return 0;
+    if (strlen(path) >= MAX_PATH || (output && strlen(output) >= MAX_PATH) ||
+        (request && strlen(request) > 32)) return 0;
     j = (FileJob*)calloc(1, sizeof *j);
     if (!j) return 0;
     strcpy(j->path, path);
     if (output) strcpy(j->output, output);
     j->op = op;
     j->id = id;
-    if (op == REC_FILE_DELETE && !file_identity(path, &j->identity)) {
+    if (request) strcpy(j->request, request);
+    if (op == REC_FILE_DELETE &&
+        (!path_key(path, j->key) || !file_identity(path, &j->identity))) {
         free(j);
         return 0;
     }
@@ -156,9 +178,10 @@ int recfile_request(const char* path, unsigned op, unsigned id, const char* outp
        waiting for a worker, which may log or acquire the recording's file. */
     jobs_lock();
     if (op == REC_FILE_DELETE && s_playing && s_play_id == id &&
-        same_identity(&s_play_identity, &j->identity)) {
+        same_reservation(s_play_key, &s_play_identity, j->key, &j->identity)) {
         jobs_unlock();
-        tagpu_logf("replay: forks %s: refused: timeline %u is in use", path, id);
+        tagpu_logf("replay: forks %s: refused: timeline %u is in use [request=%s]", path, id,
+                   j->request[0] ? j->request : "-");
         free(j);
         return 1;                   /* the refusal itself is the completed request */
     }

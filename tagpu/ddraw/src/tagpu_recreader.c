@@ -1345,6 +1345,10 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             goto done;
         }
         if (k == BLK_TORN) {
+            /* Metadata is not indexed. A valid table after this payload is data following
+               damage, not an interrupted append; never cut through it. */
+            if (failed_block(r, e->off, e->off + sizeof b + b.packed, size, tail, why, cap) < 0)
+                goto done;
             off = e->off;
             sg[e->seg].n--;
             nix--;

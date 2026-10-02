@@ -707,7 +707,8 @@ block that reads to its last complete block.
   screen; OUT is a new simple stem there. Deleting the current playing is refused. Deleted
   ancestors remain available to descendants, and exported chains keep their timeline IDs.
   Triggers: `forks "NAME" delete ID`, `forks "NAME" export ID "OUT"`; wait for
-  `replay: forks …: done|refused: …`. Every writer holds a persistent `.lock` file; never
+  `replay: forks …: done|refused: …`. tacli matches its request token in the result;
+  manual triggers need none. Every writer holds a persistent `.lock` file; never
   unlink one to bypass a busy file. Compaction is atomic on a worker and can be deferred
   while another reader holds the file; process exit waits for maintenance.
   `tareplay.py forks battle [--cover]` runs the dedicated checks. A fixture with `forks`

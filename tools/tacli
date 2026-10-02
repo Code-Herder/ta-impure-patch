@@ -5610,10 +5610,13 @@ def cmd_replay_forks(args):
     trig = inst.gamedir / REPLAY_TRIGGER
     tmp = trig.with_name(trig.name + ".tmp")
     lines = _LogLines(_log_cursor(inst))
-    tmp.write_text(f'forks "{path.stem}" {args.action} {args.id}'
+    import uuid
+    request = uuid.uuid4().hex
+    tmp.write_text(f'forks @{request} "{path.stem}" {args.action} {args.id}'
                    + (f' "{args.output}"' if args.action == "export" else "") + "\n")
     os.replace(tmp, trig)
-    rx = re.compile(rf"replay: forks replays\\{re.escape(path.name)}: (done|refused): (.*)")
+    rx = re.compile(rf"replay: forks replays\\{re.escape(path.name)}: (done|refused): "
+                    rf"(.*) \[request={request}\]$")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
         for line in lines():
@@ -5635,10 +5638,7 @@ def replay_prediction(args):
     tarec = _tarec()
     try:
         segs, _ = tarec.file_segments(args.recording)
-        ch = tarec.chain(segs, args.timeline)
-        if not args.at or not ch[0]["first"] < args.at <= ch[-1]["last"]:
-            raise tarec.Unreadable("takeover GameTime is outside the timeline")
-        evict = tarec.fork_prediction(segs, args.timeline)
+        evict = tarec.fork_prediction(segs, args.timeline, args.at)
     except (OSError, tarec.Unreadable) as e:
         die(str(e))
     out({"dry_run": True, "would_delete": evict}, args.json,

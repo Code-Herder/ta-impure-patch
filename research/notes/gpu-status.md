@@ -3040,7 +3040,7 @@ prefixes. `tagpu_recfile.c` runs maintenance on tracked workers without engine
 reads or engine-field writes. The common game-thread flip observer polls its
 `forks` requests at menus too; no new byte patch is installed. A persistent path
 lock stays held across closing the source and atomic replacement. The playing
-and a queued deletion reserve file identity and timeline under one publication
+and a queued deletion reserve canonical path, file identity and timeline under one publication
 lock; exit waits for recording writers, then seals and waits for maintenance.
 The existing **fields we write** below remain those of playback and takeover;
 file metadata changes add no engine writes.

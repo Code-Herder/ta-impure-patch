@@ -5571,21 +5571,31 @@ static int fork_stem(const char* s)
 
 static int forks_trigger(const char* line)
 {
-    char name[128], out[128], path[MAX_PATH], output[MAX_PATH];
-    unsigned id, op;
+    char name[128], out[128], path[MAX_PATH], output[MAX_PATH], request[33] = {0};
+    unsigned id, op, i;
     int end = 0;
-    if (sscanf(line, "forks \"%127[^\"]\" export %u \"%127[^\"]\"%n", name, &id,
+    if (strncmp(line, "forks ", 6)) return 0;
+    line += 6;
+    if (*line == '@') {
+        if (strlen(line) < 34) return 0;
+        for (i = 0; i < 32; i++) if (!strchr("0123456789abcdef", line[i + 1])) return 0;
+        memcpy(request, line + 1, 32);
+        line += 33;
+        if (*line++ != ' ') return 0;
+    }
+    if (sscanf(line, " \"%127[^\"]\" export %u \"%127[^\"]\"%n", name, &id,
                out, &end) == 3 && !line[end] && fork_stem(name) && fork_stem(out)) {
         snprintf(output, sizeof output, "replays\\%s.imprec", out);
         op = REC_FILE_EXPORT;
-    } else if (sscanf(line, "forks \"%127[^\"]\" delete %u%n", name, &id, &end) == 2 &&
+    } else if (sscanf(line, "\"%127[^\"]\" delete %u%n", name, &id, &end) == 2 &&
                !line[end] && fork_stem(name)) {
         output[0] = 0;
         op = REC_FILE_DELETE;
     } else return 0;
     snprintf(path, sizeof path, "replays\\%s.imprec", name);
-    if (!recfile_request(path, op, id, output))
-        tagpu_logf("replay: forks %s: refused: file worker unavailable", path);
+    if (!recfile_request(path, op, id, output, request))
+        tagpu_logf("replay: forks %s: refused: file worker unavailable [request=%s]", path,
+                   request[0] ? request : "-");
     return 1;
 }
 
@@ -6008,6 +6018,7 @@ void __cdecl tagpu_replay_step(void)
         if (!first_checks(ta, recr_header(s_rd), why, sizeof why, &r) ||
             !first_iteration(ta, &L, why, sizeof why)) {
             s_dead = 1;
+            recfile_leave();
             tagpu_logf("replay: not playing %s: %s; the level stays empty", s_name, why);
             refused(&r, s_path);
             return;
@@ -6052,7 +6063,7 @@ void tagpu_replay_level_end(void)
         char path[MAX_PATH];
         snprintf(path, sizeof path, "%s", s_path);
         replay_close();
-        if (!recfile_request(path, REC_FILE_TOUCH, id, NULL))
+        if (!recfile_request(path, REC_FILE_TOUCH, id, NULL, NULL))
             tagpu_logf("replay: forks %s: touch skipped: file worker unavailable", path);
     } else replay_close();
     tagpu_puppet_end();
