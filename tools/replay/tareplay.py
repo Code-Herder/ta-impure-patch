@@ -1154,6 +1154,18 @@ def forks_lane(w, fx, out):
     T5 = base + 451
     fork(5, T5, 2)
     log = start_play(5, T5 + 1)
+    # Timeline IDs are local to their file: a playing protects only that recording.
+    other = w.gamedir / "replays" / "other.imprec"
+    shutil.copy2(source, other)
+    rc, text = tacli("replay", "forks", w.name, other, "delete", 5, "--json", timeout=180)
+    if rc:
+        raise Failed(f"forks: deletion in a different recording: {last(text)}")
+    other_segs = check_file(other, "deleted ID 5 in a different recording")
+    if any(s["id"] == 5 and s["state"] == 1 for s in other_segs):
+        raise Failed("forks: other recording's timeline 5 stayed live")
+    playing = tarec.file_segments(w.gamedir / "replays" / "forks.imprec")[0]
+    if not any(s["id"] == 5 and s["state"] == 1 for s in playing):
+        raise Failed("forks: another recording's deletion changed the current playing")
     command("delete", 5, expect=False)                # the playing is protected
     finish_play(log, 5)
     oldsize = (w.gamedir / "replays" / "forks.imprec").stat().st_size

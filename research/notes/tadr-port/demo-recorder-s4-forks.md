@@ -124,7 +124,8 @@ collects those final coverage files after stopping the process.
 
 The fork lane checks the live count and every live chain after each fork, touches
 ID 2 to change eviction order, predicts and removes ID 1 on fork 4, forks ID 5
-from ID 2, refuses deletion while 5 plays, then deletes 2. It checks 2's retained
+from ID 2, deletes ID 5 in another recording while this file's 5 plays,
+refuses deletion of this playing, then deletes 2. It checks 2's retained
 prefix and the reclaimed bytes, plays 5 across both boundaries, exports that
 chain and compares both puppet dumps. It refuses overwrite of the export and
 checks that deleting highest ID 5 is followed by allocation of ID 6. The live
