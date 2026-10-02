@@ -68,6 +68,7 @@ TACLI = TREE / "tools" / "tacli"
 TAREC = HERE / "tarec.py"
 SCENARIOS = TREE / "scenarios"
 END_SCENARIO = SCENARIOS / "replay-end.json"
+STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limits build
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 sys.path.insert(0, str(HERE))
@@ -692,10 +693,11 @@ class Run:
         self.measure = measure
         h = head()
         fixes = fixes or fixtures()
-        cover = bool(getattr(args, "cover", False))
         for name in names:
             fix = fixes[name]
             stock = fix.get("dll") == "stock"
+            # a cost game measures the build a player runs, never the instrumented one
+            cover = bool(getattr(args, "cover", False)) and not fix.get("cost")
             dll, make = build_dll(stock, cover)
             given = args.stock_dll if stock else args.dll
             if given:
@@ -803,6 +805,8 @@ def cost_line(fx):
     if not cap or not size:
         return "COST: the recorder's capture or close line is missing from L's log"
     n, raw, kb = int(size.group(1)), int(size.group(2)), int(size.group(3))
+    if not n:
+        return "COST: the recording closed with no iteration"
     hour = 30 * 3600 / n
     return (f"COST: {cap.group(1)} iterations, {cap.group(2)} us an iteration on average, "
             f"{cap.group(3)} us at most; {kb / 1024:.1f} MB ({raw / 1024:.1f} MB before "
@@ -906,18 +910,21 @@ def covered_sources():
 
 
 def reached_of(run):
-    """{fixture: {(source, function)}} from every process's coverage files, each read against the
-    map of the build it ran."""
+    """({fixture: {(source, function)}}, problems) from every process's coverage files, each read
+    against the map of the build it ran; a file or map that cannot be read is a problem, by name."""
     srcs = covered_sources()
-    out = {}
+    out, problems = {}, []
     maps = {}
     for name, fx in run.fx.items():
         covers = sorted(fx["out"].glob("*/cover-*.bin"))
         if not covers:
             continue
-        m = maps.setdefault(str(fx["map"]), tafeat.read_map(fx["map"]))
-        out[name] = {k for k in tafeat.reached(m, covers) if k[0] in srcs}
-    return out
+        try:
+            m = maps.setdefault(str(fx["map"]), tafeat.read_map(fx["map"]))
+            out[name] = {k for k in tafeat.reached(m, covers) if k[0] in srcs}
+        except (OSError, ValueError) as e:
+            problems.append(f"UNREAD {name}: {e}")
+    return out, problems
 
 
 def cmd_measure(args):
@@ -945,7 +952,9 @@ def cmd_measure(args):
         return 2
     run.j = args.j
     run_threads(run)
-    got = reached_of(run)
+    got, unread = reached_of(run)
+    for u in unread:
+        say(u)
     (out / "reached.json").write_text(json.dumps(
         {k: sorted(f"{s}:{f}" for s, f in v) for k, v in got.items()}, indent=1) + "\n")
     lines = []
@@ -999,6 +1008,17 @@ def includes_of(sim):
     return set()
 
 
+def merge_base(base):
+    """The commit `git diff base...HEAD` takes its old side from."""
+    return git("merge-base", base, "HEAD").strip() or base
+
+
+def content_users(path):
+    """The fixtures whose content command runs the tool at `path`."""
+    return {n for n, f in fixtures().items()
+            if (f.get("content") or {}).get("run", [""])[0] == path}
+
+
 def fixture_users(scenario):
     """The fixtures whose load or applied steps name `scenario`."""
     out = set()
@@ -1010,23 +1030,25 @@ def fixture_users(scenario):
 
 
 def gated(paths, base):
-    """(fixtures, sim files to read by region, recorder files to read by function, why): what
-    the changed paths make the landing run."""
+    """(fixtures, sim files to read by region, recorder files to read by function, sim files a
+    changed header reaches (every feature of each), why): what the changed paths make the landing
+    run."""
     sims = sim_paths()
     every = set(fixtures())
-    fx, by_region, by_function, why = set(), set(), set(), []
+    fx, by_region, by_function, whole, why = set(), set(), set(), set(), []
     headers = {s: includes_of(s) for s in sims}
     for p in sorted(paths):
         if p in sims:
             by_region.add(p)
         elif p == FIXTURES_JSON:
-            old = json.loads(git("show", f"{base}:{p}", check=False) or '{"fixtures": {}}')
+            old = json.loads(git("show", f"{merge_base(base)}:{p}", check=False)
+                             or '{"fixtures": {}}')
             old = old.get("fixtures", {})
             new = fixtures()
             changed = {k for k in set(old) | set(new) if old.get(k) != new.get(k)} & set(new)
             fx |= changed
             why.append(f"{p}: the entries {' '.join(sorted(changed)) or 'none left'}")
-        elif p in RECORDER_OWN or p.startswith("tools/replay/"):
+        elif p in RECORDER_OWN or p.startswith("tools/replay/") or p == "scenarios/replay-end.json":
             fx |= every
             if p.endswith(".c"):
                 by_function.add(p)
@@ -1035,20 +1057,25 @@ def gated(paths, base):
             users = fixture_users(Path(p).name)
             fx |= users
             why.append(f"{p}: the scenario of {' '.join(sorted(users))}")
+        elif content_users(p):
+            fx |= content_users(p)
+            why.append(f"{p}: the content of {' '.join(sorted(content_users(p)))}")
         else:
             for sim, hs in headers.items():
                 if p in hs:
-                    by_region.add(sim)
+                    whole.add(sim)
                     why.append(f"{p}: included by {sim}, every feature of it")
-    return fx, by_region, by_function, why
+    return fx, by_region, by_function, whole, why
 
 
 def changed_lines(path, base):
-    """The new-side lines of `path` that changed in code, not only in comments or whitespace."""
-    old = git("show", f"{base}:{path}", check=False)
+    """The new-side lines of `path` that changed, not only in comments or whitespace: a changed
+    #define, string or character literal is a changed line. The old side is the merge-base, as
+    `git diff base...HEAD`'s is."""
+    old = git("show", f"{merge_base(base)}:{path}", check=False)
     new = (TREE / path).read_text()
-    ob = tafeat.blank(old).split("\n")
-    nb = tafeat.blank(new).split("\n")
+    ob = tafeat.blank_comments(old).split("\n")
+    nb = tafeat.blank_comments(new).split("\n")
     out = set()
     diff = git("diff", "-U0", f"{base}...HEAD", "--", path)
     for m in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff, re.M):
@@ -1063,26 +1090,30 @@ def changed_lines(path, base):
 
 
 def landing_plan(base):
-    """What the landing must reach: (fixtures, functions {(src, fn): feature}, regions
-    {feature: [(src, fn)...]} for file-scope lines, problems, why)."""
+    """What the landing must reach: (fixtures, functions {(src, fn): (feature, builds)}, regions
+    {feature: ([(src, fn)...], builds)} for file-scope lines, problems, why, gated) -- `builds`
+    the builds that compile the changed lines (tafeat.builds), each of which must reach them;
+    `gated` whether any changed path is gated at all."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
-    fx, by_region, by_function, why = gated(paths, base)
+    fx, by_region, by_function, whole, why = gated(paths, base)
     feats, problems = tafeat.all_features()
     funcs, regions = {}, {}
+    for path in sorted(whole):              # a header it includes changed: every feature of it
+        for f in feats:
+            if f["file"] == path[len(DD):]:
+                fx |= set(f["fixtures"])
     for path in sorted(by_region | by_function):
         if not (TREE / path).exists():
             continue
         rel = path[len(DD):]
         text = (TREE / path).read_text()
         fns = tafeat.functions(text)
-        lines = changed_lines(path, base) if path in paths else None
-        if lines is None:                   # a header it includes changed: every feature of it
-            for f in feats:
-                if f["file"] == rel:
-                    fx |= set(f["fixtures"])
-            continue
-        for ln in sorted(lines):
+        bl = tafeat.builds(text)
+        for ln in sorted(changed_lines(path, base)):
             fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
+            b = bl[ln] if ln < len(bl) else tafeat.BOTH
+            if "stock" in b:
+                fx.add(STOCK_FIXTURE)
             if path in by_region:
                 feat = tafeat.feature_at(feats, rel, ln)
                 if not feat:
@@ -1090,13 +1121,17 @@ def landing_plan(base):
                     continue
                 fx |= set(feat["fixtures"])
                 if fn:
-                    funcs[(rel, fn[0])] = feat["name"]
+                    old = funcs.get((rel, fn[0]), (feat["name"], frozenset()))
+                    funcs[(rel, fn[0])] = (feat["name"], old[1] | b)
                 else:
-                    regions.setdefault(feat["name"], [(rel, f[0]) for f in fns
-                                                      if feat["line"] <= f[1] <= feat["end"]])
+                    old = regions.get(feat["name"], ([(rel, f[0]) for f in fns
+                                                      if feat["line"] <= f[1] <= feat["end"]],
+                                                     frozenset()))
+                    regions[feat["name"]] = (old[0], old[1] | b)
             elif fn:
-                funcs[(rel, fn[0])] = "the recorder's own"
-    return fx, funcs, regions, problems, why
+                old = funcs.get((rel, fn[0]), ("the recorder's own", frozenset()))
+                funcs[(rel, fn[0])] = (old[0], old[1] | b)
+    return fx, funcs, regions, problems, why, bool(fx or by_region or by_function or whole)
 
 
 def cmd_landing(args):
@@ -1113,10 +1148,10 @@ def cmd_landing(args):
     # the commit graded, taken now: the note goes on it even if HEAD moves while the games run
     graded = git("rev-parse", "HEAD").strip()
     dll = git("describe", "--always", "--dirty").strip()
-    fx, funcs, regions, problems, why = landing_plan(base)
+    fx, funcs, regions, problems, why, gated_any = landing_plan(base)
     for w_ in why:
         say(w_)
-    if not fx and not funcs and not problems:
+    if not gated_any:
         print("tareplay landing: nothing gated changed")
         return 0
     say(f"tareplay landing: fixtures {' '.join(sorted(fx)) or 'none'}; {len(funcs)} changed "
@@ -1136,24 +1171,34 @@ def cmd_landing(args):
         status = report(run, args.keep)
         if STOP.is_set():
             return status or 2
-    got = set().union(*reached_of(run).values()) if run else set()
-    for (src, fn), feat in sorted(funcs.items()):
-        if (src, fn) not in got:
-            problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; fixtures "
-                            f"{' '.join(sorted(fx)) or 'none'})")
-    for feat, fns in sorted(regions.items()):
-        if not any(k in got for k in fns):
+    # reach per build: a line only the stock-limits build compiles is reached only by a fixture
+    # that ran that build, and a line only the default build compiles only by one that did not
+    per, unread = reached_of(run) if run else ({}, [])
+    problems += unread
+    got = {b: set().union(set(), *(v for n, v in per.items()
+                                   if (run.fx[n]["fix"].get("dll") == "stock") == (b == "stock")))
+           for b in ("raised", "stock")}
+
+    def reached(keys, bs):
+        return all(any(k in got[b] for k in keys) for b in bs)
+    for (src, fn), (feat, bs) in sorted(funcs.items()):
+        if not reached([(src, fn)], bs):
+            problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; builds {'+'.join(sorted(bs))}; "
+                            f"fixtures {' '.join(sorted(fx)) or 'none'})")
+    for feat, (fns, bs) in sorted(regions.items()):
+        if not reached(fns, bs):
             problems.append(f"UNCOVERED {feat}: a changed file-scope line, and no function of its "
-                            f"region ran")
+                            f"region ran in the build{'s' if len(bs) > 1 else ''} "
+                            f"{'+'.join(sorted(bs))}")
     for p in problems:
         print(f"tareplay landing: {p}")
-    k = sum(1 for key in funcs if key in got) + sum(
-        1 for fns in regions.values() if any(x in got for x in fns))
+    k = sum(1 for key, (_, bs) in funcs.items() if reached([key], bs)) + sum(
+        1 for fns, bs in regions.values() if reached(fns, bs))
     total = len(funcs) + len(regions)
     if status == 0 and not problems:
         sha = graded[:8]
         seeds = " ".join(f"{n}:{run.fx[n]['Ts'][0]}" for n in sorted(fx)) if run else ""
-        feats = sorted(set(funcs.values()) | set(regions))
+        feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
                 f"reached={k}/{total} result=pass date={datetime.date.today().isoformat()}")
@@ -1167,15 +1212,15 @@ def landing_check(base):
     """0 when a passing note sits on a commit R of base..HEAD and R..HEAD changes no gated
     file; 1 otherwise, saying why."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
-    fx, by_region, by_function, _ = gated(paths, base)
-    if not (fx or by_region or by_function):
+    fx, by_region, by_function, whole, _ = gated(paths, base)
+    if not (fx or by_region or by_function or whole):
         print("tareplay landing --check: nothing gated changed")
         return 0
     for c in git("rev-list", f"{base}..HEAD").split():
         note = git("notes", "show", c, check=False)
         if any(ln.startswith(NOTE) and " result=pass " in ln for ln in note.splitlines()):
             later = [p for p in git("diff", "--name-only", c, "HEAD").split() if p]
-            hit = [p for p in later if any(gated([p], c)[:3])]
+            hit = [p for p in later if any(gated([p], c)[:4])]
             if hit:
                 print(f"tareplay landing --check: the note on {c[:8]} predates gated changes: "
                       f"{' '.join(sorted(hit))}")
@@ -1211,7 +1256,8 @@ def cmd_broad(args):
         return status or 2
     lines = []
     if not args.release:
-        got = reached_of(run)
+        got, unread = reached_of(run)
+        lines += unread
         feats, _ = tafeat.all_features()
         for f in feats:
             reached_fns = set().union(*(got.get(x, set()) for x in f["fixtures"]))

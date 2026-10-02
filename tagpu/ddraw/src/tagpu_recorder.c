@@ -1949,8 +1949,8 @@ static unsigned long s_dump_crc;
    (on a puppet host, after the replay's capture-point write), so its GameTime is exact by
    construction, whatever the game's speed or pauses. The table is the game thread's alone: the
    frame visit arms (tagpu_replay.c, the trigger), the capture point takes, the teardown wrap
-   clears. It is bounded by its 8 entries, and each name by its 39 characters. */
-#define DUMP_ARMED 8                        /* dumps armed at once; the trigger arms one a line */
+   clears. It is bounded by its 32 entries, and each name by its 39 characters. */
+#define DUMP_ARMED 32                      /* dumps armed at once; the trigger arms one a line */
 #define DUMP_NAME  40
 static struct {
     char     name[DUMP_NAME];
@@ -3821,7 +3821,9 @@ static void cnt_sinks_init(void)
         in++;
     }
     tagpu_logf("recorder: %u of %u sinks counted", in, (unsigned)CNT_SINK_COUNT);
-    s_flareAux = tagpu_detour_bytes_ok(0x00420A35u, ADD_EDI, sizeof ADD_EDI) &&
+    /* bit 0: the add's own entry observer, which keeps esp, is the only hook on the add */
+    s_flareAux = (s_cntSinks & 1u) &&
+                 tagpu_detour_bytes_ok(0x00420A35u, ADD_EDI, sizeof ADD_EDI) &&
                  tagpu_detour_bytes_ok(0x00420A55u, ADD_A, sizeof ADD_A) &&
                  tagpu_detour_bytes_ok(0x00420AA9u, ADD_B, sizeof ADD_B) &&
                  tagpu_detour_bytes_ok(0x004B8B6Bu, RET_0C, sizeof RET_0C) &&

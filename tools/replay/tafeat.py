@@ -54,6 +54,62 @@ def blank(text):
     return TOKEN_RX.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
+def blank_comments(text):
+    """The text with its comments alone turned to spaces, newlines kept: what a landing compares,
+    so that a changed #define, string or character literal is a changed line."""
+    def gone(t):
+        return re.sub(r"[^\n]", " ", t)
+
+    def one(m):
+        t = m.group(0)
+        if t.startswith(("/*", "//")):
+            return gone(t)
+        if t.lstrip().startswith("#"):          # a preprocessor line keeps all but its comments
+            return re.sub(r"/\*.*?\*/|//[^\n]*", lambda c: gone(c.group(0)), t, flags=re.S)
+        return t
+    return TOKEN_RX.sub(one, text)
+
+
+STOCK = "TAGPU_LIMITS_STOCK"
+BOTH = frozenset(("raised", "stock"))
+
+
+def builds(text):
+    """For each line (1-based list, index 0 unused), the builds that compile it: `raised` (the
+    default build), `stock` (make LIMITS=stock) or both, from the #if/#ifdef/#ifndef/#else/#endif
+    lines that test TAGPU_LIMITS_STOCK; any other condition leaves both possible."""
+    out = [BOTH]
+    stack = []                          # (the branch's builds, the other branch's)
+    for line in text.split("\n"):
+        d = re.match(r"\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b(.*)", line)
+        if d:
+            kind, rest = d.group(1), d.group(2)
+            if kind in ("ifdef", "ifndef", "if"):
+                yes = None
+                if STOCK in rest and kind == "ifdef":
+                    yes = frozenset(("stock",))
+                elif STOCK in rest and kind == "ifndef":
+                    yes = frozenset(("raised",))
+                elif kind == "if" and re.fullmatch(rf"\s*defined\s*\(?\s*{STOCK}\s*\)?\s*(/\*.*)?",
+                                                   rest):
+                    yes = frozenset(("stock",))
+                elif kind == "if" and re.fullmatch(
+                        rf"\s*!\s*defined\s*\(?\s*{STOCK}\s*\)?\s*(/\*.*)?", rest):
+                    yes = frozenset(("raised",))
+                stack.append((yes or BOTH, (BOTH - yes) if yes else BOTH))
+            elif kind == "elif" and stack:
+                stack[-1] = (BOTH, BOTH)
+            elif kind == "else" and stack:
+                stack[-1] = (stack[-1][1], stack[-1][0])
+            elif kind == "endif" and stack:
+                stack.pop()
+        cur = BOTH
+        for b, _ in stack:
+            cur = cur & b
+        out.append(cur)
+    return out
+
+
 def functions(text):
     """[(name, first line, last line)], 1-based: the first line is the one that holds the name."""
     b = blank(text)

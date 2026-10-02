@@ -182,7 +182,7 @@ static struct {
     char     dump[40];              /* a dump to take at its capture point, or ""                 */
     int      poison;                /* R12 poisons the tables first (THE POISON CHECK)            */
 } s_seek;
-#define RT_ARMED 4
+#define RT_ARMED 24                 /* a broad entry's round trips, armed at once (fixtures.json) */
 static struct {
     unsigned n;
     struct { char name[37]; unsigned T; } a[RT_ARMED];
@@ -4450,7 +4450,9 @@ static void sk_deadlines(char* ta, const RecWorld* W, unsigned now)
      refused a death, which is counted and logged.
    - THE BOUND. At most SR_MAX entries; the count is 0 after R4; every entry was made under T's
      LosType (a change empties the list), so the add refuses none; the point is bounded by the
-     emitter's own grid test (0x48265B, 0x482663) and the def by addr_of (UNITINFOCount).
+     emitter's own grid test (0x48265B, 0x482663), and the circle's by its radius clamp
+     (0x482A16..0x482A25), 0x482270's clip and 0x481930's tests (0x4819AB, 0x4819B7); the def
+     by addr_of (UNITINFOCount).
    - THE LIFETIME. The add makes each record with its stamp and only the expiry removes both, so
      the counters stay the engine's own. Nothing after R14a rebuilds the viewed record's counters:
      R14 writes V's alone, and V owns no unit.

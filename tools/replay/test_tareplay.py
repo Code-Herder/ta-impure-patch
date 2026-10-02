@@ -34,6 +34,19 @@ class Parser(unittest.TestCase):
                 "int __cdecl b(void* E) { return 0; }\n")
         self.assertEqual(tafeat.functions(text), [("a", 3, 6), ("b", 7, 7)])
 
+    def test_blank_comments_keeps_code(self):
+        text = '#define A 1 /* x */\n"s/*t" // c\nint x; /* y */\n'
+        self.assertEqual(tafeat.blank_comments(text),
+                         '#define A 1        \n"s/*t"     \nint x;        \n')
+
+    def test_builds(self):
+        text = ("a\n#ifndef TAGPU_LIMITS_STOCK\nb\n#else\nc\n#endif\n"
+                "#if defined(TAGPU_LIMITS_STOCK)\nd\n#endif\n#ifdef OTHER\ne\n#endif\n")
+        b = tafeat.builds(text)
+        self.assertEqual([sorted(b[i]) for i in (1, 3, 5, 8, 11)],
+                         [["raised", "stock"], ["raised"], ["stock"], ["stock"],
+                          ["raised", "stock"]])
+
     @unittest.skipUnless(all(m.exists() for m in MAPS), "no coverage build (make COVER=1)")
     def test_every_parsed_function_is_in_a_map(self):
         mapped = set()
@@ -105,6 +118,9 @@ class Landing(unittest.TestCase):
     def test_comment_only_changes_nothing(self):
         self.commit("tools/replay/x.c", "int f(void)\n{\n    return 1; /* one */\n}\n")
         self.assertEqual(tareplay.changed_lines("tools/replay/x.c", "main"), set())
+        self.commit("tools/replay/x.c", "#define K 2\nint f(void)\n{\n    return 1; /* one */\n}\n")
+        self.assertEqual(tareplay.changed_lines("tools/replay/x.c", "main"), {1})
+        self.commit("tools/replay/x.c", "int f(void)\n{\n    return 1; /* one */\n}\n")
         self.commit("tools/replay/x.c", "int f(void)\n{\n    return 2; /* one */\n}\n")
         self.assertEqual(tareplay.changed_lines("tools/replay/x.c", "main"), {3})
 

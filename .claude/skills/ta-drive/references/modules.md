@@ -633,9 +633,11 @@ block that reads to its last complete block.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
-  changed function no fixture reached, and on a pass writes a `replay-roundtrip:` git note on the
-  commit it graded. Commit first: it refuses uncommitted changes under `tagpu/ddraw`, `tools` or
-  `scenarios`. `landing --check` says whether a passing note already covers HEAD.
+  changed function no fixture reached (in each build that compiles the changed line: the
+  stock-limits build's lines need `stock-limits`), and on a pass writes a `replay-roundtrip:` git
+  note on the commit it graded. Commit first: it refuses uncommitted changes under
+  `tagpu/ddraw`, `tools` or `scenarios`. `landing --check` says whether a passing note already
+  covers HEAD.
   `tareplay.py broad` runs every fixture and `fixtures.json`'s `broad` entries (`limits-tier1`
   with 20 round trips; `cost-four-ai`, ten minutes of four AIs reported for the recorder's cost
   and the file's size) and names what none exercised (a feature, a root or sink site, a recorded

@@ -1825,7 +1825,7 @@ each time (OQ7); there is no standing list.
 
 | Command | What it does |
 |---|---|
-| `landing [--base main] [-j N] [--keep] [--out DIR]` | the landing tier: from `git diff main...HEAD`, a changed line of a `sim` file selects its feature's fixtures (a change only in comments or whitespace selects nothing; a line no feature covers is `UNFEATURED`), a changed header a `sim` file includes every feature of that file, the recorder's own files and `tools/replay/` every fixture, a changed fixture entry or a scenario a fixture loads that fixture. It runs them on the coverage builds and fails `UNCOVERED <file>:<function>` for a changed function none of them reached (a changed file-scope line needs one function of its region). On a pass it writes a git note on the commit it graded, taken when the run starts: `replay-roundtrip: dll=<describe> range=main..<sha> features=… fixtures=… seeds=… reached=<k>/<n> result=pass date=…`. It refuses uncommitted changes under `tagpu/ddraw`, `tools` or `scenarios`. |
+| `landing [--base main] [-j N] [--keep] [--out DIR]` | the landing tier: from `git diff main...HEAD`, a changed line of a `sim` file selects its feature's fixtures (a change only in comments or whitespace selects nothing; a changed `#define`, string or character literal is a changed line; a line no feature covers is `UNFEATURED`), a changed header a `sim` file includes every feature of that file whether or not the file changed too, the recorder's own files, `tools/replay/` and `scenarios/replay-end.json` every fixture, a changed fixture entry, a scenario a fixture loads or the tool its content runs that fixture; the old side is the merge-base, as `git diff`'s is. It runs them on the coverage builds and fails `UNCOVERED <file>:<function>` for a changed function none of them reached (a changed file-scope line needs one function of its region), in every build that compiles the changed line: a line under `#ifdef TAGPU_LIMITS_STOCK` adds `stock-limits` and must be reached by a fixture of the stock-limits build, a line under `#ifndef` by one of the default build (`tafeat.builds`). A gated change that selects nothing to run (comments only) passes with a note of `fixtures=-`. On a pass it writes a git note on the commit it graded, taken when the run starts: `replay-roundtrip: dll=<describe> range=main..<sha> features=… fixtures=… seeds=… reached=<k>/<n> result=pass date=…`. It refuses uncommitted changes under `tagpu/ddraw`, `tools` or `scenarios`. |
 | `landing --check` | exit 0 when nothing gated changed, or when a passing note sits on a commit R of `main..HEAD` and `R..HEAD` changes nothing gated; 1 otherwise, saying why |
 | `broad [-j N] [--release DLL]` | the broad tier: every fixture, three round trips each, and `fixtures.json`'s `broad` entries, which no landing runs — `limits-tier1` (4 × 1,500 units, `unit_limit` 1500) with 20 round trips, and `cost-four-ai`, a ten-minute four-AI game recorded live and reported, never failed (OQ5), for the capture's cost an iteration and the file's size per hour of game time — then UNCOVERED over the tier — a feature none of its fixtures reached, a root or sink site no run counted, a recorded table no recording changed between T1 and Tlast. `--release DLL` runs that DLL instead of the coverage builds, without reach |
 | `measure SCENARIO… [--end T]` | L and P of each scenario on the coverage builds, to GameTime T (default 1800; a fixture to its own end), and the functions each reached (`reached.json`) |
@@ -1888,7 +1888,8 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   23 checks, and the live log says the flare is keyed by its add's caller. Over the debris period, a
   dump every 30 GameTimes live and on the puppet from 91 to 451 (13 pairs of dumps): `compare-counts`
   EQUAL over all 78 windows; the flare's keys at 451, by caller, are the falling records' 17, the
-  pieces' 2, EXPLODE's five adds 1 each and the impact's 3, and no flare is counted without one.
+  pieces' 2, five of EXPLODE's six adds 1 each and the impact's 3, and no flare is counted
+  without one.
 - **The measurements**: 41 of 62 candidates, then 18 of 18; 619 to 775 functions of the
   instrumented files reached per scenario.
 <!-- LANDING RUN -->
@@ -1899,10 +1900,13 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   units in any 62-step window outside its closing scenario), so the path where the simulated cap
   refuses a death is counted and logged but has not run; there the records may differ from a
   playing's.
-- **The engine's expiry runs once a frame**, after the frame's whole tick loop: a frame of several
-  steps before a pass tick keeps an expired record in the sight loop's view, on the recording
-  machine or on a playing, while the seek's window expires per step. Contact bits only, until the
-  next pass; the same difference exists between the recording and a playing.
+- **The engine's expiry runs once a frame**, after the frame's whole tick loop (its one call,
+  `0x495688`): inside a frame of several steps, a capture point still holds records whose expiry
+  has passed, and their stamps are in the viewed record's counters, on the recording machine or on
+  a playing, while the seek's window expires per step. So a capture-point dump taken inside such a
+  frame (L against P, or a fresh seek's) can differ in the viewed record's sight counters and in
+  the contact bits until the next pass; a round trip's frame dumps cannot, being taken after the
+  frame's expiry (`0x49693E`, before the draw `0x4969CD`).
 - **A recorded LosType change still drops the records** on a playing (*What S3b leaves*).
 - **Reach is per function, not per branch**: a changed branch inside a function its fixtures entered
   is not proven taken, and a function is marked on its first entry only.
