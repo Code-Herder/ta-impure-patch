@@ -3607,7 +3607,8 @@ one small archive.
 | `0x45CAE0` (observer, the stash restore) | after it: push the store again, so CANCEL's copy of the stash cannot bring back a value the store no longer holds. Optional: if it will not install, logged and the rest stands | game |
 | gadget `+0x144` of `GAMMA` and `VIDSLDR` | the slider callbacks `0x45BD20` / `0x45BBF0` are wrapped, per visit and only while the field still holds the engine's own: the wrapper calls it, then records the value it wrote into the store | game |
 | open | `GUI_Load 0x4AA8F0(gi, main+0x37EA0, flags)` with `0x20` + `0x400`, patch the panel rect, set `+0x08`/`+0x0C`, then `0x4C2470(); GUI_StageUpdateDraw(gi, 0x21); 0x4C2870()` — GUI_Load's own suppressed stage 1, reproduced; then repaint the ground and set `gi+0xCCA` | game |
-| close | restore `main+0x37EA0` and call `UpdateIngameGUI 0x491D70(1)`. **`GUI_Pop` is never called** | game |
+| close | restore `main+0x37EA0`, then `GUI_Pop 0x4A9660` when our screen is on top, else `UpdateIngameGUI 0x491D70(1)` | game |
+| teardown wrap's entry (`tagpu_reclaim.c`) | `tagpu_menu_level_end`: restore `main+0x37EA0` and forget the slot's screen without a pop, then join the dock's walker | game |
 
 **Answering the pump is not optional** [VERIFIED 2026-09-11]. `gi->UIChange_f` is
 bidirectional: the pump writes the actuated index into it before calling `OnCommand`
@@ -3759,6 +3760,30 @@ so the two right edges land on one line — measured at both 1024 (988, 704) and
 panel hangs over the world, so clicking a row costs one frame of the panel being re-pushed.
 The row's own state survives it (the model is ours; the levers are read only on the player's
 open), but the rebuild is visible if you look for it.
+
+### 2.12b The watching dock (`tagpu_dock.c`, armed with the menu) — S5 landing 2
+
+The bar a level that plays a recording shows along the bottom of the world. Design and runs:
+[demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*; the engine facts:
+[engine map](exe-reverse-engineering.html), *The watching dock*. It rides §2.12's machinery: the
+same archive, the same redirect, the same frame tick and post-GUI observer, and **one screen slot**
+with RENDER.GUI ([renderers](renderers.html) §2.10).
+
+| site | what we do there | thread |
+|---|---|---|
+| `DLL_PROCESS_ATTACH` | `impure/dock.gui` and `anims/dock.gaf` into `impure-patch.ufo`: the ground frame 4096×86 uncompressed and the buttons' frames, composed from `art/ui/retail`; nothing arms without the art | — |
+| `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters; start the walker once a level | game |
+| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, Leave (`0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
+| `tagpu_shield.c`, both paths | the strip's left and right buttons through `tagpu_menu_click` / `tagpu_menu_rclick`; a drag ended on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
+| `0x46A308` (post-GUI) | the strip's fill, markers and playhead into the back buffer through `0x4B7F90`, unless a screen above the dock overlaps it | game |
+| the walker | reads the recording file through its own `RecReader` and publishes markers; joined at the teardown wrap's entry | its own |
+
+**Fields we write**, on the game thread, on a playback level only: `main+0x38A51` bit 0 (the pause,
+the word read-modify-written); `main+0x38A4B` and `+0x38A4D` (the speed's ceiling and live value,
+the presets 5..80 only, the player's put back at the teardown and exchanged around every settings
+save); the dword `0x512FF8` (YESORNO's question, 0); the dock's parsed records' rects before stage 1
+and its own ground frame's plane; `main+0x37EA0` through the slot. `replays\index.dat`'s bookmarks
+field. Nothing the recording carries.
 
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 

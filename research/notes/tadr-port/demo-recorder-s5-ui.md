@@ -2,7 +2,9 @@
 
 ## Status
 
-**Planned 2026-10-01; nothing is built.** This is the plan for the
+**Planned 2026-10-01. Landings 0 to 2 are built on the S5 branch and not landed**: the art
+pipeline, the shell (REPLAYS and the browser) and the watching dock (*The watching dock*). This is
+the plan for the
 [skirmish slice](demo-recorder-skirmish-slice.md)'s S5: the Replays browser, the timeline bar,
 perspectives, camera follow, the overlays and the recording switch in the settings screen. It
 covers how the screens are drawn, where their art comes from, what each mod gets, what S5 needs
@@ -39,7 +41,7 @@ rows, *Record games* and *Keep replays*.
 
 | Question | Decision | Why |
 |---|---|---|
-| How the dock, cards and browser are built | **Engine GUI screens plus blits**, as the Impure Config panel is: `.gui` screens written into `impure-patch.ufo`, the engine doing buttons, hover, pressed states, hit-testing and quickkeys, the DLL blitting only what a `.gui` cannot express (markers, the playhead, a card's live numbers) | The panel already proves the pattern non-modal and live over the world ([renderers](../renderers.md) §2.10); its traps — the re-push on every world click, the zoom transform — are known and fixed |
+| How the dock, cards and browser are built | **Engine GUI screens plus blits**, as the Impure Config panel is: `.gui` screens written into `impure-patch.ufo`, the engine doing buttons, pressed states, hit-testing and quickkeys (it has no hover state: MEASURED 2026-10-01, landing 2), the DLL blitting only what a `.gui` cannot express (markers, the playhead, a card's live numbers) | The panel already proves the pattern non-modal and live over the world ([renderers](../renderers.md) §2.10); its traps — the re-push on every world click, the zoom transform — are known and fixed |
 | The timeline strip | **One rect the DLL owns**: the dock's screen draws nothing there; the DLL draws the strip and hit-tests press, drag, release and marker clicks, and `tagpu_zoom` passes its points through untouched the way it does for `tagpu_menu_owns_point` | An `id=4` slider would paint the SLIDERS kit, add its own one-pixel arrow buttons and cannot make markers clickable ([gui-gadgets](../gui-gadgets.md) §2.4.1, §2.6) |
 | The recording list | **A stock `id=2` listbox** for selection, scrolling, the scroll bar, the wheel and the keyboard; the DLL blits the badges and the right-aligned length over each visible row from the list's own `top` and row height; the favourite star is hit-tested in its column | Everything a list does is the engine's; only the decoration is ours |
 | Recordings' summaries and the player's marks | **`replays\index.dat`**, one rebuildable file: a summary per recording keyed by file name and size, the favourite flag and the last-played time; a recording that does not match is re-read from its own header and end block; written atomically (a temporary file, then a rename) | Opening the screen reads one small file, and every summary can be rebuilt; only the marks live in the index alone |
@@ -191,6 +193,84 @@ it, the minimap and the badges blitted.
 **Impure Config** gains *Record games* (On/Off) and *Keep replays* (a count), on the panel's 28 px
 row pitch, with the caption **Impure Config**.
 
+## The watching dock
+
+Built as landing 2 (`tagpu_dock.c`, with `tagpu_menu.c`'s slot, `tagpu_replay.c`'s requests and
+`tagpu_replays.c`'s bookmarks); the engine facts are in the [engine map](../exe-reverse-engineering.md),
+*The watching dock*.
+
+**What it is.** On a level that plays a recording, Watch's or `tacli replay play`'s, `DOCK.GUI`
+sits right of the side panel and above the bottom bar: screen x from the panel's width + 8 to the
+screen's width - 8, its bottom 4 px above the bar, 86 px tall (136, 598, 1136, 86 at 1280×720). It
+does not open narrower than 400 px. Under HUD scale its screen rect is moved back by the world's
+shift, as the Impure Config panel's is, and it is drawn at 1x: MEASURED at 1920×1080, HUD scale
+Auto (225 %) and zoom 2.13, record 0 at (136, 878, 1616, 86) and a strip click at 25 % seeking to
+25 % of the recording.
+
+| Row | Gadget | What it does |
+|---|---|---|
+| 1 | `TNOW`, the strip, `TEND` | the time now (the drag's target while dragging) and the length, `m:ss` or `h:mm:ss` of GameTime / 30 from the recording's first; the strip, which is the DLL's |
+| 2 | `DKREW`, `DKPLAY`, `DKFWD` | a seek 300 GameTime (10 s) back or forward; pause and play, the bit the Pause key flips |
+| 2 | `DKSPEED` | 1/2x, 1x, 2x, 4x, 8x: GameSpeed 5, 10, 20, 40, 80, written to the ceiling and the live speed |
+| 2 | `DKMARK`, `DKLEAVE` | a bookmark at now; Leave, through the engine's own YESORNO retitled "Leave this replay?" |
+
+**One screen slot.** `tagpu_menu.c` holds RENDER.GUI and the dock in one slot, the one owner of
+`main+0x37EA0`: RENDER wins while the player wants it, the dock comes back when it closes. The
+slot lets its screen go at the teardown wrap's entry, before the engine's own pops.
+
+**The strip.** The DLL draws it at the post-GUI observer `0x46A308` -- the fill to the playhead,
+the death and defeat markers, the bookmarks, a ghost playhead while dragging, the playhead -- and
+skips it while a screen above the dock overlaps it. It takes a press only while the dock is the top
+screen, as the pump does, and its release is consumed exactly when its press was: a drag seeks
+once, at the release, and TNOW shows the target meanwhile. A point within 4 px of a marker takes
+the marker's time: 5 s before a death or a defeat, a bookmark's own. A right click on a bookmark
+removes it. Losing focus or capture ends a drag with no seek.
+
+**The markers** come from a worker thread with its own reader of the recording, which walks it
+once a level: a commander death is a player's `+0x106` rising, a defeat its `+0x144` reaching 0.
+They work on every recording, old and cut short ones included; ask 2 is still the browser's.
+MEASURED: 2940 iterations of a 2-minute skirmish in 43-46 ms, 3990 of the 85 MB battle in 2033 ms
+(0.51 ms an iteration); a Leave 1 s after the dock opened stopped the walk at 1784 iterations, and
+the teardown, a second Watch and the process went on.
+
+**Bookmarks** are one field of `replays\index.dat`, after the seats: comma-separated GameTimes,
+at most 64, none within 30 of another, written through the index's temporary file and rename.
+
+**The speed and the pause are the player's.** Neither is recorded. The dock writes both only on a
+playback level; the player's speed is exchanged around every settings save and put back at the
+teardown, ceiling and live speed both, so the registry's `gamespeed` and the next game keep it --
+and a change the Options screen makes during a playback is put back too. A speed the dock has no
+stage for is put on the nearest preset (a tie goes to the slower).
+
+**Measured on retail** (1280×720, private Xvfb, Vulkan; the pictures also under `tagpu_gdi.on`):
+
+- the speeds, GameTime a second over 5 s: 1/2x 15.1, 1x 30.5, 2x 59.1, 4x 118.9, **8x 150.5**
+  -- 8x is as fast as the frame steps it, five ticks at most;
+- seeks from the dock 6-34 ms on the small recording; a `tacli replay seek` of the battle to 2701
+  in 446 ms, its dump EQUAL to the recording (`tarec compare --puppet`), and `tareplay run
+  forest-fire` passing with the dock up on its playings;
+- Leave and No keep the dock; Leave and Yes reach the main menu, the browser reopens, the shell's
+  stack is MAINMENU and REPLAYS, and the speed is the player's again;
+- the in-game menu over the dock: its buttons and the strip leave the click to the engine;
+- RENDER's sprocket replaces the dock and gives it back; twenty such round trips cost 840 KB
+  once, then nothing;
+- no hover state on a plain button; the engine's stage captions (`1x` .. `8x`) drawn at the
+  plate's left; `text=|` gives a stage button no caption.
+
+**Gaps.**
+
+- **The art is a stand-in.** `dock-tex`, `strip-track` and `strip-fill` are generated plain
+  stand-ins; the owner's art replaces them before the landing reaches `main`.
+- **Vulkan smooths the ground.** On Vulkan the stand-in `dock-tex` is drawn as an almost flat dark
+  plate with a light frame; under `tagpu_gdi.on` it shows its pattern. [INFERRED: the GUI twin's
+  undithering takes a fine texture for dither.] Whether the owner's texture survives it is to be
+  seen with that art.
+- **A greyed stage button does not look greyed.** The engine draws its stage's frame
+  (`0x4A6092..0x4A60B3`), so DKPLAY and DKSPEED keep their look while the playback is not live
+  (its first step, a refused playing); their clicks are refused all the same.
+- **The dock is drawn at 1x under HUD scale.**
+- **YESORNO does not pause**: the playback runs on behind Leave's question.
+
 ## What S5 asks of the recorder
 
 The recording format is the recorder's ([skirmish slice](demo-recorder-skirmish-slice.md#the-file));
@@ -216,7 +296,7 @@ Items 1 to 3 are needed by landing 1, item 4 by landing 5.
 |---|---|---|
 | **0 — the art pipeline** | `art/ui/`, the `.publish-allow` class, `tools/artbake.py` and its checks, the make rule, the retail style | — |
 | **1 — the shell** | the per-mod table, REPLAYS on the main menu, the Replays browser, `index.dat`, its dialogs | asks 1–3 |
-| **2 — watching** | the dock: the timeline strip, its markers, the transport, the speeds, bookmarks, the timeline selector | — |
+| **2 — watching** | the dock: the timeline strip, its markers, the transport, the speeds, bookmarks, Leave (built: *The watching dock*); the timeline selector waits for S4 | — |
 | **3 — the streams and the cards** | each player's camera, cursor, clicks and selection recorded; the player cards (Jump, Sight, Follow); the Overlays | a recorder change of its own, planned with it |
 | **4 — live rewind** | the rewind button, the timeline in a live skirmish, Back to now, Play from here | S4 |
 | **5 — the switches** | *Record games* and *Keep replays* | ask 4 |
@@ -238,4 +318,5 @@ and leave, polling for error boxes, with a picture per screen.
   of its own is still to be found.
 - **Whether an `id 7` resource can name a GAF font** (*Text*).
 - **How the main menu gains its gadget and its plate** (*The per-mod table*).
-- **The speeds offered** are the product page's open question.
+- **The dock's art.** `dock-tex`, `strip-track` and `strip-fill` are plain generated stand-ins until
+  the owner's art replaces them, before the landing reaches `main`.

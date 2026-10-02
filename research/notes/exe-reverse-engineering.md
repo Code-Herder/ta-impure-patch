@@ -11760,7 +11760,7 @@ See [the GUI renderer](gui-renderer.html), "the shell was 3.71 %".
 | 5 label | `0x4A56B0` | 8 | `81 EC AC 00 00 00` (6) | `0x4BF6F0`, `0x4C14F0` / DrawText, `0x4BE950` |
 | 6 surface | `0x4A4980` | 8 | `83 EC 50 53 55` (5) | **`0x4C7580`** (the textured-triangle stamp, below), `0x4B7F90`, `0x4BF6F0` |
 | 10 | `0x4A4C90` | **0xC** `(gi, idx, flags)` | `8B 54 24 04 83 EC 10` (7) | `0x4BE950` ×2 |
-| 11 picture / panel bg | `0x4B0230` | **0xC** `(gi, idx, GAFFrame*)` | `83 EC 24 8B 54 24 2C` (7) | NULL frame: the texture from `0x4A18C0` tiled with `0x4C6B70(panel+0xBC, tex, x, y)` + bevel `0x4B0160`; else `0x4B7F90` |
+| 11 picture / panel bg | `0x4B0230` | **0xC** `(gi, idx, GAFFrame*)` | `83 EC 24 8B 54 24 2C` (7) | NULL frame: a tiling branch through `0x4C6B70(panel+0xBC, tex, x, y)` that never runs, because its texture lookup `0x4A18C0` returns 0 on every path (the match it finds is discarded: `xor eax,eax` at `0x4A191A`) [DISASSEMBLED 2026-10-01], + bevel `0x4B0160`; else `0x4B7F90` |
 | **12** | **`0x4A5E50`** — not `0x4A5F40` as [GUI gadgets](gui-gadgets.html) §3 said; corrected there | | | |
 | 13 timer | `0x4A4660` | 8 | `83 EC 24 53 55` (5) | `0x4C5E70(ebx)` over `[panel+0xBC]` or `[gi+0xCD2]`, then `0x4BF6F0`, `0x4B7F90`, DrawText, `0x4C5FA0` — i.e. into the back buffer |
 
@@ -12593,6 +12593,94 @@ caller outside the engine uses to make this screen re-enumerate:
 
 `0x45CAE0` belongs to UNDO alone (it XORs `main+0x37F06`'s bits back from the saved copy at
 `0x512F38`); the pop-and-rebuild pair is the general part.
+
+### The watching dock: the in-game quit, YESORNO, the speeds, a button's frame [DISASSEMBLED + MEASURED 2026-10-01]
+
+*Read for S5 landing 2 ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching
+dock*), with `objdump -d -M intel` on `pristine/TotalA.exe.pristine`. The runs were on a private
+Xvfb of the reference setup at 1280×720 and 1920×1080, Vulkan presenting.*
+
+**The engine's dialogs push themselves, and none writes the expected-screen buffer.** EXITMENU
+(`0x4608B0`, flags `0x1800`), ARMOPT (`0x460CC0`, `0x800`) and YESORNO (`0x460680`, `0x1000`) call
+`GUI_Load` directly; none of them writes `main+0x37EA0`, so with the buffer naming a screen of ours
+they sit above it and are popped by their own handlers, as they are over ARMMAIN2 in stock.
+MEASURED: a click outside ARMOPT closes it (the stock behaviour), and its close clears the pause it
+set.
+
+**The in-game quit is a tail, not a function.** `0x460630..0x46065C` sits inside YESORNO's
+`OnCommand` `0x4605C0`: the teardown `0x491B60`, `UpdateIngameGUI(1)` `0x460637`, `GUI_Pop` of
+`main+0x519` `0x460647`, `0x4257A0`, `SetInputMode(1)` `0x490B30` (which stores the mode and the
+state function and touches no screen), and `ret 4` at `0x46065A`, the handler's own. The teardown's
+call list (`0x491B76..0x491C4A`) never reads or writes `main+0x37EA0`. MEASURED (RENDER open, then
+Tab, Exit, Main Menu, Yes): the shell's stack is MAINMENU alone with or without the buffer restored
+before the teardown, so the stock pops after `0x491B60` do not leave ARMMAIN2 behind either way --
+`0x4257A0` and the main menu's build take what is left -- but without the restore the buffer
+reaches the shell naming `RENDER.GUI` (`tagpu_menu_level_end` restores it, and the shell then reads
+`ARMMAIN2.GUI`).
+
+**YESORNO's opener `0x460680`, void, `ret` at `0x4607F1`.** Two callers: `0x46083A` (EXITMENU's
+Main Menu, after `mov [0x512FF8],0` at `0x46082B` and `GUI_Pop` at `0x460835`) and `0x460862`.
+It loads `YESORNO.GUI` (`0x503168`) with `0x1000`, makes it take keys (`0x49FB10`, `0x4606B7`),
+labels `CHOICE1` and `CHOICE2` (`0x460742`, `0x460760`, through the setter `0x4A0BF0(gi, name,
+text, 0)`) and sets `TITLE` by the question, the dword `0x512FF8`: 0 is `0x506D20` "Surrender this
+battle and return to main menu?" (`0x46076A..0x460784`), 2 is `0x506D10` or `0x506CE4` by
+`main+0x2BEE` bit 4 (`0x460786..0x4607B8`), 1 leaves the file's. Its `OnCommand` `0x4605C0` (stored at `0x4607D2`): `-1` returns (`0x4605CF`);
+`CHOICE1` with `[0x512FF8] <= 1` jumps to the quit tail; `== 2` sets bit 2 of `main+0x3923B` and
+calls `0x491C60`. **`GUI_Load` does not answer a click**: it writes `gi+0x64 = -1` (`0x4AACAE`), not
+`gi+0x60`, so an `OnCommand` that pushes a screen and returns without `ActDone 0x4AB0A0` has the
+pump pop the NEW top (`0x4AA79A..0x4AA7FA`, below). EXITMENU's handler is answered by its own
+`GUI_Pop` (`0x4A9673` writes `-1`) before it calls the opener; the dock's Leave calls `ActDone`.
+
+**A button's frame, `0x4A6062..0x4A616D`.** Not greyed: a stage button (`+0x136` nonzero) draws its
+stage `+0x137`, or `count - 2` while pressed (`+0x138` nonzero, `0x4A6110..0x4A613B`); a plain one
+frame `+0x138` (0, or the pressed frame) plus `+0x13B`. Greyed (`+0x13C` bit 0): attribs bit 8
+(`+0x1C` bit 0) draws `count - 1`; else **a stage button draws its stage's frame again**
+(`0x4A6092..0x4A60B3`, which also sets a local flag the draw reads); else attribs bits 11-12 draw
+frame `+0x13B`; else `min(+0x138 + 2, count - 1) + +0x13B`. So a stage button's own greyed frame
+is never drawn unless attribs bit 8 is set. **No hover frame**: MEASURED, a plain button's pixels
+with the pointer over it differ from without only by the cursor's.
+
+**The panel's ground and its surface.** Stage 1 makes the panel's surface record 0's `+0x17 x +0x19`
+(`0x4C69F0`, from `0x4A9071..0x4A907C`), stores it at `+0xBC`, and copies the screen under it from
+`(-x, -y)` (`0x4A9081..0x4A9098`, through `0x4C6B70`); the copy `0x4CBBE0` refuses an origin outside
+either surface and clamps the size to both (`0x4CBBE0..0x4CBC90`). An `id 12` picture resolves its
+frame by NAME in the panel's bank, then the shared one, into `+0xB8` (`0x4A8ACA`), and is drawn by
+`0x4A4660`; a panel's background is `0x4B0230` (one frame blitted at (0,0), several nine-sliced,
+`0x4B039C..0x4B0439`). The GAF blitter's single-frame path `0x4B7F90` intersects the frame's rect
+with the context's clip (`0x4C6AE0`, `0x4B7E60`) and returns on an empty one; an uncompressed frame
+(`+9 == 0`) goes to `0x4CBE70` with the key `+8` (`0x4B8021..0x4B8108`; the clip at
+`0x4B807B..0x4B80C6`). So a frame wider than its panel is drawn clipped to the panel's surface.
+
+**The speeds.** `main+0x38A4B` (u16) is the game speed the player chose, the ceiling, 10 = 1x;
+`main+0x38A4D` (u16) the live speed the scheduler `0x495230` runs at. A frame's ticks are the
+elapsed time × the live speed × 0.1 (`0x4FDA28`) plus the fraction kept at `+0x38A43`; `DeltaTime`
+`+0x38A3B` is 0 while bit 0 of `+0x38A51` is set (`0x4953D9..0x4953E2`) and at most 5
+(`0x4953EF..0x4953FE`). The throttle counter `+0x38A4F` (u16): each clamped frame adds 1 and past 10
+lowers the live speed by 1, floor 1 (`0x495409..0x495441`); each unclamped frame takes 1 and past
+-100 raises the live speed by 1 up to the ceiling (`0x495448..0x49547B`). **Nothing clamps a speed
+from above** there; `SetGameSpeed 0x490DF0` clamps to [1, 20], and every speed key is refused for a
+watcher (`0x496550`, `0x4965AA`). Writers of `+0x38A4B`/`+0x38A4D`: the Options screen and its undo
+(`0x45C143`, `0x45C6F3`, `0x45CA6D`, `0x45CD67`, `0x45EBE4`, `0x45ECA8`, `0x45FEA6`),
+`0x490DC0`, `0x490E9B`, the level setups `0x4912C9` and `0x49199F` (a reset to 10 in network mode
+3 only, so a skirmish keeps its speed into the next level), the start-up load `0x430509..0x43052B`
+(the registry's `gamespeed` into both) and the scheduler. The settings save `0x430F00` writes the
+ceiling to `gamespeed` (`0x43136B`); the Options screen's OK reaches it at `0x45FD5F`. MEASURED on a
+playback, GameTime a second over 5 s with the ceiling and the live speed written together: 5 ->
+15.1, 10 -> 30.5, 20 -> 59.1, 40 -> 118.9, 80 -> **150.5**, the live speed still 80 after the 5 s
+(the frame, not the speed, bounds 8x on the reference setup).
+
+**The pause** is bit 0 of the word `main+0x38A51`: the Pause key XORs it (`0x4960AA..0x4960BC`) and
+then sends packet `0x19` through `0x451DF0`, with no watcher test. The level setups do not clear it
+(`0x49842A`, above, is ours).
+
+**A commander death and a defeat in a player record.** The destructor increments the owner's
+`WORD +0x106` when the dying unit's def name equals its side's commander (`main+0x37F5F +
+0x232·side`, compared by `0x4F8A70`; `0x486990..0x486996`, and the self-destruct path
+`0x486A86..0x486A8C`), and decrements the owner's `WORD +0x144`, the units alive
+(`0x486DFC..0x486E09`), calling the skirmish elimination `0x47BD70` at 0 in mode 2. Both are in
+every recorded player image. MEASURED: a skirmish whose player's commander self-destructs with
+"commander dies: game ends" gives one `+0x106` rise and one `+0x144` fall to 0 for seat 0, both at
+GameTime 2779.
 
 ### The pump's entry, the pointer it reads, and what a list scroll is [DISASSEMBLED 2026-09-26]
 

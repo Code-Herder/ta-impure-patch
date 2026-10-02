@@ -1007,8 +1007,9 @@ is **use TA's gadget/UI mechanism as much as possible**, and every choice below 
    panel, not no panel.
 3. **The screen is pushed with `0x495207`'s idiom**, transcribed: save `main+0x37EA0`, write
    `"RENDER.GUI"`, `GUI_Load(gi, main+0x37EA0, flags)`, set `+0x08` to our `OnCommand` and
-   `+0x0C` to `main`. Closing restores the saved name and lets `UpdateIngameGUI` pop us — **we
-   never call `GUI_Pop`**. Without this the engine pops the screen at the next of 21 call sites.
+   `+0x0C` to `main`. Closing restores the saved name and pops our screen with `GUI_Pop` when it
+   is on top, else lets `UpdateIngameGUI(1)` collapse to the base screen (`tagpu_menu.c`,
+   `slot_close`). Without the name the engine pops the screen at the next of 21 call sites.
 4. **State is set through the engine and drawn by the engine.** `0x4A1080(gi, name, value)` is
    read and thin — name scan, `mov [rec+0x137],cl`, return 1, **no clamp, no callback, no
    redraw** — so it is the direct field write plus a lookup, which is also exactly what TA's own
@@ -1246,6 +1247,23 @@ non-empty pixels over the engine's frame outside the viewport, the top-right ~40
 already swallows the wheel, and our pixels cover the engine's cursor. That last set is
 exactly what a DLL overlay forwarding the trigger click would rest on, which is why the open
 question above has two answers and not one.
+
+**One screen slot, shared with the watching dock** [BUILT 2026-10-01, S5 landing 2]. The demo
+recorder's dock ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*) is the
+second screen of ours over the world, and `main+0x37EA0` can name one: two screens each
+re-asserting their own name would make every `UpdateIngameGUI` pop the other. So `tagpu_menu.c`
+holds **one slot** — `s_gm`, `s_saved` and which screen it is — and is the buffer's only writer:
+RENDER.GUI wins while the player wants it, and on a level that plays a recording the dock is pushed
+whenever RENDER is not. The open is the sequence above with the screen's own rect writer before
+stage 1 and its own work after it; the close pops whichever screen the slot holds.
+
+**The teardown lets the slot go.** The in-game quit runs the teardown `0x491B60` first and the
+engine's pops after it (`0x460630`), and the teardown never touches the buffer. So
+`tagpu_menu_level_end`, called from the teardown wrap's entry, writes the saved name back and
+forgets the screen without popping it; the engine's pops then take it with the rest. MEASURED
+2026-10-01 with RENDER open at Exit -> Main Menu -> Yes: the shell's stack is MAINMENU alone on
+both builds, and the buffer reads `ARMMAIN2.GUI` with the release where it read `RENDER.GUI`
+without it; the next skirmish reopens RENDER.
 
 ### 2.10b The settings store: every value on the Visual screens is ours  [DECIDED 2026-09-23]
 
