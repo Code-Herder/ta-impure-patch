@@ -2910,7 +2910,7 @@ the target, and every Patch Loader's `dplayx.dll` forwards all nine of its expor
 
 ### 2.6e The demo recorder (`tagpu_recorder.c`, `tagpu_recwriter.c`, a skirmish on request)
 
-S1, S2a, S3a, S3b and S3c-2 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
+S1, S2a, S3a, S3b, S3c-2 and S3c-3 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
 is recorded to `replays\<date> <time> <map>.imprec` when `tagpu_recorder.on` is in the game's folder
 at the level's first iteration, and `tools/replay/tarec.py` reads a recording back. Its capture has no site of
 its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls the replay's
@@ -2997,6 +2997,17 @@ does: the fail-closed table writes none of its rows, and the process ends with i
 at the first DirectDraw call (`limits: FAILED`). The paths that do not rest on the memo or the
 marks being there — the ghost mask, B4's refused-kill receiver, the level's reset — test for NULL.
 
+**The coverage build** (S3c-3; `make COVER=1`, `ddraw-cover.dll` with its linker map
+`ddraw-cover.map`, and `make LIMITS=stock COVER=1` for the stock-limits twin) installs no hook and
+writes no engine memory. The `sim` files of `thread-split.allow` and the recorder's own four are
+compiled with `-finstrument-functions-once -ffunction-sections`, so each of their functions calls
+`__cyg_profile_func_enter` the first time it runs; `tagpu_cover.c` marks that function's first
+byte in a bitmap over the DLL's `.text`, bounded by the section header (an address outside it
+marks nothing). `cover <name>` in `tagpu_replay.trigger` writes `replays\cover-<name>.bin` (`ICV1`,
+the count, each function's RVA) at once, and the first name armed is written again at the level's
+end (`tagpu_rec_level_end`). Any other build refuses the line (`cover: <name> refused: not a
+coverage build`).
+
 ### 2.6f Watching a recording (`tagpu_replay.c`, `tagpu_puppet.c`, `tagpu_recreader.c`, on request)
 
 S2b and S3b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watching).
@@ -3010,7 +3021,7 @@ recorded player's view, radar picture included. `tacli replay seek <instance> <T
 running playback to GameTime T, forward or backward, and with `--recording` launches one that
 plays from T ([S3b](tadr-port/demo-recorder-skirmish-slice.md#s3b-the-globals-and-seeking)). The
 engine facts are
-[the engine map](exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-pass-4-disassembled-measured-2026-09-30)'s
+[the engine map](exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)'s
 and, for the seek,
 [its S3b section](exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
 
@@ -3098,8 +3109,9 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
   for −1 or a group below 10;
 - at every capture point and at the frame visit after a step, from the recorded iteration the
   host is at: LosType bits 0–2 of `main+0x14281`, only when they differ, with every temporary
-  sight record's `+0x1C` zeroed and the expiry `0x482130` first and `0x4816A0` after, as the
-  engine's commands pair them; every `write` row of `replay-globals.tsv` (the wind, the game end's
+  sight record's `+0x1C` zeroed and the expiry `0x482130` first (the replay's own step: the
+  engine's LosType commands leave the records alone) and `0x4816A0` after, as the engine's commands
+  pair it with the bits; every `write` row of `replay-globals.tsv` (the wind, the game end's
   flags but bits 2 and 4, the simulation RNG `0x51FC88`, the meteors, the pathfinder's table, the
   movement classes' watermarks, `0x51E53C`, `0x51E684`, `0x51E688`, `0x51E6C4`), never the `hold`
   rows (the countdown `main+0x39239`, flags bits 2 and 4); the projectile count `main+0x141F3` and
@@ -3130,8 +3142,12 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
   destroyed through their own `[vt+0](1)` and removed from the ten layers, the explosion count
   zeroed, the debris records re-initialised and the flying-piece slots zeroed
   (`tagpu_effects_clear`, both builds); the declared tables and the sim files' restores; the
-  globals, the pool and the explored map as above; V's sight with the minimap's composite; the
-  viewed record's radar pass `0x467440` once (contact bits `+0x110` 8–10 and 12); every seat's `+0xF0` from the image
+  globals, the pool and the explored map as above; the viewed record's temporary sight records made
+  again through the engine's add `0x482910`, one for each recorded death of a live viewed-seat unit
+  under true LOS whose 60 ticks a playing still holds, the reader having started at least 123
+  iterations before T to find them; V's sight with the minimap's composite; the viewed record's
+  radar pass `0x467440` once (contact bits `+0x110` 8–10 and 12); the records' expiry `0x482130`
+  once; every seat's `+0xF0` from the image
   and V's to the next multiple of 30, every record's `+0xF8` = GameTime, the notices `0x47EE30` and
   the chat lines `0x463C80`; and every seat's `+0x18`;
 - after the teardown: V's PlayerInfo, all `0xB9` bytes, as the Start's fill left them.

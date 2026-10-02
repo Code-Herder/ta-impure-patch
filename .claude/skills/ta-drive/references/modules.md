@@ -629,7 +629,24 @@ block that reads to its last complete block.
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
   repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump
-  any check failed on stays.
+  any check failed on stays. `run --cover` runs the coverage builds instead.
+- **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
+  it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
+  `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
+  changed function no fixture reached, and on a pass writes a `replay-roundtrip:` git note on the
+  commit it graded. Commit first: it refuses uncommitted changes under `tagpu/ddraw`, `tools` or
+  `scenarios`. `landing --check` says whether a passing note already covers HEAD.
+  `tareplay.py broad` runs every fixture and names what none exercised (a feature, a root or sink
+  site, a recorded table); `broad --release DLL` runs a release DLL without reach, before a `v*`
+  tag. `measure SCENARIO… [--end T]` records and plays any scenario on the coverage builds and
+  lists the functions it reached, for choosing a feature's fixtures; `features` lists the regions
+  and `features --check tagpu/ddraw` is the link's check.
+- **The coverage builds** are `make -C tagpu/ddraw COVER=1` (`ddraw-cover.dll` and its map
+  `ddraw-cover.map`) and `make -C tagpu/ddraw LIMITS=stock COVER=1`; `landing`, `broad`, `measure`
+  and `run --cover` need both built and newer than the sources. In such a build, `cover <name>` in
+  `gamedir/tagpu_replay.trigger` writes `replays/cover-<name>.bin`, the functions of the
+  instrumented files that have run (`cover: … <n> functions that ran`), and writes it again at the
+  level's end; any other build answers `cover: <name> refused: not a coverage build`.
 - **A dump**: write `dump <name>` (letters, digits, `-`, `_`) to `gamedir/tagpu_replay.trigger`.
   The game reads the file at most every 100 ms on a level in play, recording or playing, deletes
   it, and takes the dump at the next tick: `replays/dump-<name>.bin`, the live world at that
