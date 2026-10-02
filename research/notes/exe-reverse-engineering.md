@@ -565,6 +565,11 @@ count at `+0`, name at `+8`, and frame entries at `+0x28`, stride 8. Named looku
 for an empty bank or no match (`0x4B8D7A/0x4B8D8F`).
 Frame pointers are fixed at `0x4B8CBA`, pixel pointers at frame `+0x10` at `0x4B8CC7`,
 and subframe pointers/pixels at `0x4B8CD2..0x4B8CF5`, using the byte count at frame `+0x0A`.
+Nothing else in a frame header is rewritten, and the GUI blits `0x4B7F90` and `0x4B8310` read
+`+0x00..+0x0A` and `+0x10` only (DISASSEMBLED 2026-10-01), so the dword at `+0x0C` reaches memory
+as the file wrote it and no engine path reads it. It is 0 in all 14 589 frames of the vendored mod
+corpus (MEASURED 2026-10-01); Impure's own art marks itself there (`tagpu_gaf.h`,
+`TAGPU_GAF_EXACT`).
 These loops use file counts; this inspection does **not** establish bounds validation against
 file allocation size. The prototype indexes already-loaded matching content on its owning
 thread, caps traversals, and identifies frames by bank/sequence ordinal/name/frame index.
@@ -12634,11 +12639,28 @@ pump pop the NEW top (`0x4AA79A..0x4AA7FA`, below). EXITMENU's handler is answer
 **A button's frame, `0x4A6062..0x4A616D`.** Not greyed: a stage button (`+0x136` nonzero) draws its
 stage `+0x137`, or `count - 2` while pressed (`+0x138` nonzero, `0x4A6110..0x4A613B`); a plain one
 frame `+0x138` (0, or the pressed frame) plus `+0x13B`. Greyed (`+0x13C` bit 0): attribs bit 8
-(`+0x1C` bit 0) draws `count - 1`; else **a stage button draws its stage's frame again**
-(`0x4A6092..0x4A60B3`, which also sets a local flag the draw reads); else attribs bits 11-12 draw
-frame `+0x13B`; else `min(+0x138 + 2, count - 1) + +0x13B`. So a stage button's own greyed frame
-is never drawn unless attribs bit 8 is set. **No hover frame**: MEASURED, a plain button's pixels
-with the pointer over it differ from without only by the cursor's.
+(`+0x1C` bit 0) draws `count - 1` (`0x4A607E..0x4A608B`); else **a stage button draws its stage's
+frame again** (`0x4A6092..0x4A60B3`); else attribs bits 11-12 draw frame `+0x13B`; else
+`min(+0x138 + 2, count - 1) + +0x13B` (`0x4A60D9..0x4A610E`). So a stage button's own greyed frame
+is never drawn unless attribs bit 8 is set. The stage arm also sets the local `[esp+0x40] = 1` at
+`0x4A60AB`, which the caption's `DrawText 0x4A50E0` takes as its shade argument (`0x4A643F`); the
+bit-8 arm jumps past it, so **a greyed button under bit 8 draws its caption unshaded**. **No hover
+frame**: MEASURED, a plain button's pixels with the pointer over it differ from without only by the
+cursor's. MEASURED 2026-10-01 on the dock: the plain greyed arm comes out tinted under GDI and
+untinted under the Vulkan mirror (353 px over three 28×22 buttons), where the bit-8 arm is the same
+on both (0 px); the source of the GDI tint was not found.
+
+**Attribs bit 8 from a file does not survive on a stage button.** `GUI_Load` reads `[COMMON]`
+through `0x4AEAC0` (called at `0x4AAA9E`), whose reader `0x4AD350` stores `attribs` as the dword at
+`+0x1B` (`0x4AD407`; the TDF integer reader `0x4C46C0`, `atol 0x4E4ED0`). Stage 1, having split a
+stage button's caption at `|`, rewrites its attribs to `(attribs & 0x4000) | 1`
+(`0x4A8EE1..0x4A8EEC`); MEASURED, `attribs=257` in the file reads back as 1 once the screen is up.
+Stage 1 also zeroes `colorf` (`+0x1F`) at `0x4A8B56`. The other readers of bit 8 are the list box
+painters `0x4A1F79` and `0x4A221D` and the list box arm `0x4A13C8` of the by-index setter `0x4A12E0`
+(jump table `0x4A142C`, index table `0x4A1444`). MEASURED: with bit 8 set at run time on a stage
+button that is not greyed, its clicks stop answering (two buttons, both stages), while a plain
+button with it answers; the reader responsible was not found -- the pump's click arm
+`0x4AA35A..0x4AA39D` reads no attribs, and the press arm's attribs test (`0x4A9D80`) is bit 4.
 
 **The panel's ground and its surface.** Stage 1 makes the panel's surface record 0's `+0x17 x +0x19`
 (`0x4C69F0`, from `0x4A9071..0x4A907C`), stores it at `+0xBC`, and copies the screen under it from

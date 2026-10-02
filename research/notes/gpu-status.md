@@ -3771,18 +3771,19 @@ with RENDER.GUI ([renderers](renderers.html) §2.10).
 
 | site | what we do there | thread |
 |---|---|---|
-| `DLL_PROCESS_ATTACH` | `impure/dock.gui` and `anims/dock.gaf` into `impure-patch.ufo`: the ground frame 4096×86 uncompressed and the buttons' frames, composed from `art/ui/retail`; nothing arms without the art | — |
-| `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters; start the walker once a level | game |
-| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, Leave (`0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
-| `tagpu_shield.c`, both paths | the strip's left and right buttons through `tagpu_menu_click` / `tagpu_menu_rclick`; a drag ended on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
+| `DLL_PROCESS_ATTACH` | `impure/dock.gui` and `anims/dock.gaf` into `impure-patch.ufo`: the ground as eight 512×86 uncompressed frames and the buttons' frames, composed from `art/ui/retail`, every frame tagged `TAGPU_GAF_EXACT` at `+0x0C` so the Classic++ UI restorer leaves it alone; nothing arms without the art | — |
+| `DrawGameScreen 0x468CF0` (the menu's tick) | push `DOCK.GUI` through the slot; place it before stage 1; repaint the ground and compare the Leave guard's bytes after it; then each frame, while it is the top screen, push the play stage, the speed stage, the greying and the two readouts through the engine's setters, attribs bit 8 on each greyed button and off each live one; put back the pause Leave's question took; start the walker once a level | game |
+| `GUIMEMSTRUCT+0x08` (its `OnCommand`) | seeks, pause, speed, a bookmark, Leave (the pause taken, `0x512FF8 = 0`, `0x460680`, the title set); every handled click answered with `0x4AB0A0` | game |
+| `tagpu_shield.c`, both paths | the strip's left and right buttons through `tagpu_menu_click` / `tagpu_menu_rclick`; a drag's seek cancelled on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP`, its release still consumed | game |
 | `0x46A308` (post-GUI) | the strip's fill, markers and playhead into the back buffer through `0x4B7F90`, unless a screen above the dock overlaps it | game |
 | the walker | reads the recording file through its own `RecReader` and publishes markers; joined at the teardown wrap's entry | its own |
 
 **Fields we write**, on the game thread, on a playback level only: `main+0x38A51` bit 0 (the pause,
 the word read-modify-written); `main+0x38A4B` and `+0x38A4D` (the speed's ceiling and live value,
 the presets 5..80 only, the player's put back at the teardown and exchanged around every settings
-save); the dword `0x512FF8` (YESORNO's question, 0); the dock's parsed records' rects before stage 1
-and its own ground frame's plane; `main+0x37EA0` through the slot. `replays\index.dat`'s bookmarks
+save); the dword `0x512FF8` (YESORNO's question, 0); the dock's parsed records' rects before stage 1,
+and after it the attribs dword (`+0x1B`, bit 8 only) of its six greyable buttons; its own ground
+tiles' planes; `main+0x37EA0` through the slot. `replays\index.dat`'s bookmarks
 field. Nothing the recording carries.
 
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09

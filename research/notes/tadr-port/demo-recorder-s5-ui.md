@@ -202,10 +202,19 @@ Built as landing 2 (`tagpu_dock.c`, with `tagpu_menu.c`'s slot, `tagpu_replay.c`
 **What it is.** On a level that plays a recording, Watch's or `tacli replay play`'s, `DOCK.GUI`
 sits right of the side panel and above the bottom bar: screen x from the panel's width + 8 to the
 screen's width - 8, its bottom 4 px above the bar, 86 px tall (136, 598, 1136, 86 at 1280×720). It
-does not open narrower than 400 px. Under HUD scale its screen rect is moved back by the world's
-shift, as the Impure Config panel's is, and it is drawn at 1x: MEASURED at 1920×1080, HUD scale
-Auto (225 %) and zoom 2.13, record 0 at (136, 878, 1616, 86) and a strip click at 25 % seeking to
-25 % of the recording.
+does not open narrower than 400 px. Under HUD scale it hangs in the world region, as the Impure
+Config drop-down does: its screen rect follows the magnified panel and bar, is moved back by the
+world's shift to where the engine draws, and is drawn at 1x. MEASURED at 1920×1080 on Vulkan,
+device-space clicks (`dclick:`, the pointer path a player's click takes) on the track's left end,
+25 % and 75 %:
+
+| HUD scale | panel, bars | the dock on screen | track on screen | 25 % asks | 75 % asks |
+|---|---|---|---|---|---|
+| 150 % | 192, 48 | (200, 942, 1712, 86) | x 266, 1576 wide | 735 | 2205 |
+| Auto (225 %) | 288, 72 | (296, 918, 1616, 86) | x 362, 1480 wide | 735 | 2205 |
+
+The recording runs GameTime 1 to 2940, so the exact values are 735.75 and 2205.25, which the
+strip's integer division takes to 735 and 2205.
 
 | Row | Gadget | What it does |
 |---|---|---|
@@ -224,7 +233,9 @@ skips it while a screen above the dock overlaps it. It takes a press only while 
 screen, as the pump does, and its release is consumed exactly when its press was: a drag seeks
 once, at the release, and TNOW shows the target meanwhile. A point within 4 px of a marker takes
 the marker's time: 5 s before a death or a defeat, a bookmark's own. A right click on a bookmark
-removes it. Losing focus or capture ends a drag with no seek.
+removes it. Losing focus, activation or capture (`WM_KILLFOCUS`, `WM_ACTIVATEAPP` 0,
+`WM_CAPTURECHANGED`) ends a drag with no seek, and its release, should it come, is still consumed:
+the press was taken from the engine, so its release is too.
 
 **The markers** come from a worker thread with its own reader of the recording, which walks it
 once a level: a commander death is a player's `+0x106` rising, a defeat its `+0x144` reaching 0.
@@ -232,6 +243,32 @@ They work on every recording, old and cut short ones included; ask 2 is still th
 MEASURED: 2940 iterations of a 2-minute skirmish in 43-46 ms, 3990 of the 85 MB battle in 2033 ms
 (0.51 ms an iteration); a Leave 1 s after the dock opened stopped the walk at 1784 iterations, and
 the teardown, a second Watch and the process went on.
+
+At most 256 markers reach the strip; the walk logs how many it found past that ("1 past the 2 the
+strip holds", MEASURED on the battle with the cap lowered to 2 in a scratch build).
+
+**The ground** is eight 512-px tiles, `DOCKBG0` to `DOCKBG7`, side by side; the dock's own width is
+composed once at open and cut into them. One 4096-px frame would be wider than the GUI mirror's
+largest sprite (`TAGPU_GAF_DECMAX`, 640), which the mirror does not carry, so Vulkan would not draw
+the ground at all. Every frame the dock makes carries `TAGPU_GAF_EXACT` at frame header `+0x0C`
+(`tagpu_gaf.h`), so Classic++'s UI restorer never takes it: the art is drawn in the palette, with no
+dither to undo, and a texture would be flattened as one. MEASURED 2026-10-01 at 1280×720, Classic++
+with the UI restorer active, a paused playback: the dock rect (1136×86) differs in **0 px** between
+Vulkan and `tagpu_gdi.on`.
+
+**Greyed.** While the playback is not live (its first step, or a recording that fails its first
+check), DKREW, DKPLAY, DKFWD, DKSPEED and DKMARK are greyed and refuse their clicks. A greyed button
+of the dock carries attribs bit 8, which draws its last frame: a stage button has no greyed look of
+its own without it, and a plain button's own greyed arm comes out tinted under GDI and untinted under
+Vulkan. The bit is set on the parsed records after stage 1, which discards a stage button's file
+attribs, and only while the button is greyed: on a live stage button it stopped the clicks. DKSPEED
+shows a sixth, blank stage while greyed, because its caption is drawn unshaded under the bit.
+MEASURED: on a recording whose unit-defs hash was altered, clicks on DKPLAY and DKSPEED changed
+neither the pause nor the speed, and the button row differs in 0 px between Vulkan and GDI.
+
+**Leave's question holds the playback.** Leave pauses it before the question opens; No puts the
+pause back as it was before the click, Yes leaves. MEASURED: from playing, GameTime held while
+asked and ran again after No; from paused, it stayed paused after No.
 
 **Bookmarks** are one field of `replays\index.dat`, after the seats: comma-separated GameTimes,
 at most 64, none within 30 of another, written through the index's temporary file and rename.
@@ -255,21 +292,22 @@ stage for is put on the nearest preset (a tie goes to the slower).
 - RENDER's sprocket replaces the dock and gives it back; twenty such round trips cost 840 KB
   once, then nothing;
 - no hover state on a plain button; the engine's stage captions (`1x` .. `8x`) drawn at the
-  plate's left; `text=|` gives a stage button no caption.
+  plate's left; `text=|` gives a stage button no caption;
+- a drag cut by a lost mouse, the window still holding the button: `WM_KILLFOCUS`,
+  `WM_ACTIVATEAPP` 0 and `WM_CAPTURECHANGED` posted mid-drag, and the X focus moved to another
+  client on the same display mid-drag -- no seek asked, GameTime unchanged, and the next press on
+  DKPLAY and on the strip each answered as usual.
 
 **Gaps.**
 
 - **The art is a stand-in.** `dock-tex`, `strip-track` and `strip-fill` are generated plain
   stand-ins; the owner's art replaces them before the landing reaches `main`.
-- **Vulkan smooths the ground.** On Vulkan the stand-in `dock-tex` is drawn as an almost flat dark
-  plate with a light frame; under `tagpu_gdi.on` it shows its pattern. [INFERRED: the GUI twin's
-  undithering takes a fine texture for dither.] Whether the owner's texture survives it is to be
-  seen with that art.
-- **A greyed stage button does not look greyed.** The engine draws its stage's frame
-  (`0x4A6092..0x4A60B3`), so DKPLAY and DKSPEED keep their look while the playback is not live
-  (its first step, a refused playing); their clicks are refused all the same.
-- **The dock is drawn at 1x under HUD scale.**
-- **YESORNO does not pause**: the playback runs on behind Leave's question.
+- **The dock is drawn at 1x under HUD scale**, as everything in the world region is. Magnifying
+  it is a design decision not taken: either a fourth magnified region in the composite (a
+  render-thread change, with the pointer map and the sharp cursor), or a layout generated at the
+  scale, which the engine's 1x captions would not follow.
+- **Why bit 8 stops a live stage button's clicks** is not known: the pump's click arm reads no
+  attribs (`0x4AA35A..0x4AA39D`) and the press arm's attribs test is bit 4 (`0x4A9D80`).
 
 ## What S5 asks of the recorder
 

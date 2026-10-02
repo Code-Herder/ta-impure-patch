@@ -2197,6 +2197,22 @@ G15b already built.
   model's receptive field — G15-0's verdict, "nothing under 12×12". `norestore` in
   `tagpu_gui.on` is the A/B: the layer without Classic++ art, so the UI half can be toggled live
   without touching the world's restorer.
+- **Impure's own art is never restored.** A frame whose header dword `+0x0C` is
+  `TAGPU_GAF_EXACT` (`tagpu_gaf.h`) is drawn in the palette, as GDI draws it: the engine neither
+  rewrites nor reads that word ([exe map](exe-reverse-engineering.html), *Loaded GAF layout*), the
+  capture carries it with the frame's header (`TAGPU_PUBOP.exact`), the UI key hashes it, and
+  `restore_frame_of` leaves an entry so marked out of the restore list. Art drawn for the palette
+  has no dither to undo, and a fine texture is flattened as though it were dither: the watching
+  dock's stand-in ground was. The dock tags every frame it makes; MEASURED 2026-10-01 at 1280×720
+  with the UI restorer active, its rect differs in 0 px between Vulkan and `tagpu_gdi.on`
+  ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*). A frame wider or
+  taller than `TAGPU_GAF_DECMAX` (640) is not carried as a sprite at all, and the drain drops the
+  `PK_PIXELS` it falls to, which is why the dock's ground is eight 512-px tiles.
+- **Gap: a plain button's own greyed frame differs.** Under GDI the greyed arm of the button
+  painter (`0x4A60D9..0x4A610E`) comes out tinted grey; under Vulkan it does not (MEASURED
+  2026-10-01, 353 px over three of the dock's buttons). The source of the GDI tint was not found;
+  the dock avoids the arm with attribs bit 8. [INFERRED: a stock screen's greyed plain button
+  shows the same difference; none was measured.]
 - **The UI steps the restorer when nothing else does** [the landing review found this; the GL
   half of it was deleted in 11-5e-2 — see below]. The only other caller of `tagpu_rglsl_step` was
   the native pass, and it returns early when there is no unit array — **in the shell, and in game with the world passes disarmed**. The UI atlas is the
