@@ -376,6 +376,22 @@ static int __cdecl before_frame(void* e)
     if (s_lastOp) s_lastOp->col = (unsigned char)(signed char)lvl;
     return 0;
 }
+/* 0x4BFE10: the GREY REMAP, (ctx, RECT*) ret 8: one clip through 0x4BF620, then
+   every pixel `dst = T[dst]` through the 256 bytes at globals+0xCC (`0x4CCED5`,
+   the destination read unsigned), and nothing at all while caps bit 8 is clear
+   (`0x4BFE3A`). A NULL ctx is the back surface (`0x4BFE55`), as for every leaf
+   here; the RECT is never NULL (`0x4BFE18` reads it unconditionally).
+
+   AN INVERTED BOX GREYS NOTHING, for the clipper's reason `before_frame`
+   gives, so it records nothing rather than `rect_box_rc`'s swapped box. */
+static int __cdecl before_grey(void* e)
+{
+    const int* rc = (const int*)(size_t)ARG(e, 2);
+    if (!on_game_thread()) return 0;
+    if (ptr_ok(rc) && (rc[0] > rc[2] || rc[1] > rc[3])) { s_lastOp = NULL; return 0; }
+    rect_box_rc(e, OP_GREY, rc);
+    return 0;
+}
 static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
 /* 0x4BF7B0: the focus rectangle GUI_StageUpdateDraw draws last, (ctx, RECT*, level).
    ITS OWN KIND, not OP_RECT: four edges of one box through 0x4BEC70, whose
@@ -930,6 +946,7 @@ static const LEAF LEAVES[] = {
     { 0x004D85A0u, "memfree", { 0x8B, 0x44, 0x24, 0x04, 0x50 }, 5, before_memfree, NULL },
     { 0x004A81E0u, "build", { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0xC0, 0x03, 0x00, 0x00 }, 10, before_build, NULL },
     { 0x004BF4D0u, "frame", { 0x83, 0xEC, 0x40, 0x53, 0x55, 0x56, 0x57 }, 7, before_frame, NULL },
+    { 0x004BFE10u, "grey",  { 0x83, 0xEC, 0x40, 0x8B, 0x44, 0x24, 0x48 }, 7, before_grey, NULL },
 };
 #define LEAF_COUNT ((int)(sizeof LEAVES / sizeof LEAVES[0]))
 

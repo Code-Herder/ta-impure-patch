@@ -127,7 +127,7 @@ static const Def s_defs[] = {
        play default rather than a requirement: `tagpu_gui_init` puts the flip
        hook in at DllMain whatever this file says, because that hook hosts
        `tagpu_triggers_frame` and every `tacli` verb is dispatched from inside
-       it. What the row turns on is the 17 leaves, the op queue and the layer.
+       it. What the row turns on is the leaves, the op queue and the layer.
        `gui.off` therefore still gives a fully drivable instance with no UI,
        which is the A/B. */
     { "tagpu_gui.on",       "", 0, 0 },                     /* the UI: panel, bars, minimap, cursor, shell */

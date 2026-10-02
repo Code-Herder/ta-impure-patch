@@ -143,7 +143,7 @@ unsigned tagpu_gui_minimap_have(void);
    world's copies. */
 #define TAGPU_GUI_TABLE_ROWS  32u
 
-/* THE HAND-OVER'S REMAP TABLE: 96 rows of 256, which is what a
+/* THE HAND-OVER'S REMAP TABLE: 97 rows of 256, which is what a
    `TAGPU_GUIOP_TINT`'s `fg` indexes.
 
      rows  0..31  the lighten table as the engine holds it -- what a FOCUS
@@ -151,6 +151,11 @@ unsigned tagpu_gui_minimap_have(void);
      rows 32..95  one row per BOX-SHADER level L = -32..31 (`0x4BF4D0`), at
                   `TAGPU_GUI_SHADE_BOX + L + 32`, precomputed by the publisher
                   from the two engine tables.
+     row  96      the GREY REMAP `globals+0xCC` as the engine holds it, which
+                  `0x4BFE10` applies to a box -- the first half of a greyed
+                  gadget, before the box shader's level -20
+                  (`TAGPU_GUI_SHADE_GREY`). Its writer `0x4CCED5` reads the
+                  destination unsigned, so the row is the table itself.
 
    WHY THE BOX SHADER GETS ROWS OF ITS OWN rather than an index into the two
    raw tables: `0x4BF4D0` reads its destination SIGNED (`movsx ebx,BYTE PTR
@@ -162,7 +167,8 @@ unsigned tagpu_gui_minimap_have(void);
    table, which nothing can reproduce: those two levels (-32 and 0) are never
    published, and their rows' upper halves are zero and unaddressed. */
 #define TAGPU_GUI_SHADE_BOX   32u
-#define TAGPU_GUI_SHADE_ROWS  (TAGPU_GUI_TABLE_ROWS + 64u)
+#define TAGPU_GUI_SHADE_GREY  (TAGPU_GUI_TABLE_ROWS + 64u)
+#define TAGPU_GUI_SHADE_ROWS  (TAGPU_GUI_SHADE_GREY + 1u)
 #define TAGPU_GUI_SHADE_BYTES (TAGPU_GUI_SHADE_ROWS * 256u)
 
 enum { TAGPU_GUICOL_DST = 1, TAGPU_GUICOL_ON = 2 };   /* TAGPU_GUIOP::col */

@@ -11814,6 +11814,7 @@ clip.
 | `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
 | `0x4BF7B0` | the focus rectangle — **a TINT, not a colour** | stdcall `0xC` | `(ctx, RECT*, level)` | **four** edges of one box — top `(l,t)-(r,t)`, right `(r,t)-(r,b)`, bottom `(l,b)-(r,b)`, left `(l,t)-(l,b)`, in that order — each through `0x4BEC70`, which READS THE DESTINATION; the two groups of four calls are **mutually exclusive arms** on `ctx == NULL` (below); its ONE caller `0x4A16F0` runs it **six times** over expanding rectangles at levels 31, 28, 24, 19, 13, 6, which is the glow (below) | `83 EC 30 53 55 56 57` (7) |
 | `0x4BF4D0` | **the box SHADER** — not a fill at all | stdcall `0xC` | `(ctx, RECT*, level)` — the third argument is a **signed shade level**, not a colour | one clip through `0x4BF620` (×**1**), **no `0x4CCDEA`**, then every pixel in the box remapped through a 256-byte LUT row; **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3 — three *calls*, not three fills) | `83 EC 40 53 55 56 57` (7) |
+| `0x4BFE10` | **the GREY REMAP** — a tint like the box shader, through a table of its own | stdcall `8` | `(ctx, RECT*)` — the rect is read unconditionally (`0x4BFE18`), never NULL | one clip through `0x4BF620`, then every pixel `dst = T[dst]` through the 256 bytes at `globals+0xCC` (`0x4CCED5`); draws nothing while caps bit 8 is clear (`0x4BFE3A`); a NULL ctx is the back surface (`0x4BFE55`). Five callers: four gadget painters greying a gadget (below) and the fog draw `0x4848E0` at `0x484ACD`, per cell | `83 EC 40 8B 44 24 48` (7) |
 | `0x4BF620` | the rect CLIPPER the four above share | stdcall `8` | `(clip RECT*, RECT*)` | clamps the second rect into the first and returns 0 when they do not overlap — four `cmp`/early-out pairs, then four clamps. **Carries no colour.** | `8B 4C 24 04 83 EC 10` (7) |
 | `0x4CCDEA` | the solid-fill WRITER the four above share | cdecl, 3 args | `(surface, RECT*, colour)` | **uses only the LOW BYTE of `colour`** — see below | `55 8B EC 56 57 53 51 52` (8) |
 | `0x4C6890` | `SurfaceFill` | stdcall `8` | `(surface, colour)` | the whole surface | `83 EC 64 53 55 56 57` (7) |
@@ -11927,6 +11928,45 @@ PALETTE.SHD) is k = 0.513 with b ≈ 0 at rms 8.8/255 — close to a plain darke
 row's (+30, the lighten table) misses by rms 36.3/255 with the scale pinned at 1, so it is not
 an affine map of colour at all. That is why the Vulkan lane's colour rule for a tint is per
 entry, not per row ([GUI renderer](gui-renderer.html) §27.3).
+
+#### A greyed gadget is the grey remap, then the box shader at -20 [DISASSEMBLED 2026-10-02]
+
+The button painter `0x4A5F40` keeps a greyed flag in `[esp+0x40]`. Three arms of its greyed
+branch set it (`0x4A60AB`, `0x4A60CC`, and `0x4A6106` unless attribs bit 7 is set, tested at
+`0x4A6100` on the low byte), and the attribs-bit-8 arm, which draws the sequence's last frame, does not. The
+flag does three things:
+
+* it is passed to `DrawText 0x4A50E0` as the label's shade (`0x4A643F`, `0x4A6531`);
+* when it is set, the painter calls `0x4BFE10(ctx, &rect)` (`0x4A69AD`) over the gadget's rect;
+* it then calls `0x4BF4D0(ctx, &rect, -20)` (`0x4A69BA`) over the same rect.
+
+The other three greying painters make the same pair of calls: `0x4A1B1F`/`0x4A1B32`,
+`0x4A2BBD`/`0x4A2BD0` and `0x4A5B01`/`0x4A5B14`.
+
+The frame itself is not swapped for a grey one. A button with attribs `0x3400` draws frame
+`[+0x13B]` greyed or not (`0x4A60B8`, `0x4A614E`). A plain button (attribs 2) draws frame
+`min(stages + 2, count − 1) + [+0x13B]` greyed (`0x4A60D9`) and frame 0 otherwise. The record's
+greyed byte is `+0x13C` (`0x4A6071`).
+
+**The grey table.** `globals+0xCC` is 256 bytes:
+
+* allocated by `0x4BA6B0` at `0x4B5B29`, only when caps bit 8 (`[globals+0xF1] & 1`, `0x4B5B24`)
+  is set;
+* freed by `0x4BA6E0`;
+* built from the palette by `0x4BAD30` (a nearest-colour search per entry through `0x4BA9D0`),
+  called from `0x42E2F0`, whose one caller is `UIPipelinesInit 0x491200` at `0x4913C3`, right
+  after the SHD and LHT builds;
+* its in-place setter `0x4BAB60` has no direct caller.
+
+So, like the other two tables, it is written once at init. Its writer `0x4CCED5` (cdecl
+`(dst, pitch, w, h, T)`) indexes the table unsigned in both its 4-aligned and its byte path, so
+the row the remap applies is the table itself, with no signed half to fold.
+
+**MEASURED 2026-10-02**, MUSICRT in a paused game, 640×480, the original game:
+
+* the engine surface under `tagpu_gdi.on` and under Vulkan was identical;
+* the left slider arrow's frame 16, through the `-20` row alone, matched 53 of its 88 opaque
+  pixels; the other 35 were its green pixels, which the grey remap had made grey first.
 
 [Established because the vulkan-only plan's landing 8 turns these ops from published SURFACE BYTES
 into drawn geometry, and needed to know what each one's third argument means before choosing a

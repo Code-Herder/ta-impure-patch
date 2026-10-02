@@ -2208,11 +2208,9 @@ G15b already built.
   ([demo recorder S5](tadr-port/demo-recorder-s5-ui.html), *The watching dock*). A frame wider or
   taller than `TAGPU_GAF_DECMAX` (640) is not carried as a sprite at all, and the drain drops the
   `PK_PIXELS` it falls to, which is why the dock's ground is eight 512-px tiles.
-- **Gap: a plain button's own greyed frame differs.** Under GDI the greyed arm of the button
-  painter (`0x4A60D9..0x4A610E`) comes out tinted grey; under Vulkan it does not (MEASURED
-  2026-10-01, 353 px over three of the dock's buttons). The source of the GDI tint was not found;
-  the dock avoids the arm with attribs bit 8. [INFERRED: a stock screen's greyed plain button
-  shows the same difference; none was measured.]
+- **A greyed gadget is grey on Vulkan as on GDI**: the grey remap `0x4BFE10` crosses as a tint
+  through its own row (§26.1). The dock still keeps its buttons off the greyed arm with attribs
+  bit 8, which draws the sequence's last frame, its own greyed art.
 - **The UI steps the restorer when nothing else does** [the landing review found this; the GL
   half of it was deleted in 11-5e-2 — see below]. The only other caller of `tagpu_rglsl_step` was
   the native pass, and it returns early when there is no unit array — **in the shell, and in game with the world passes disarmed**. The UI atlas is the
@@ -4502,14 +4500,44 @@ map preview*).
 
 1. **The selected row is the box shader.** `0x4BF4D0` at level +30 (`0x4A1FC4`/`0x4A1FD7`), a
    remap of what is already under the row. It crossed as its box, `PK_PIXELS`, and was dropped.
-   It now crosses as **`PK_TINT`**, whose row is precomputed for its level: `PK_SHADE` carries 96
+   It now crosses as **`PK_TINT`**, whose row is precomputed for its level: `PK_SHADE` carries 97
    rows (`TAGPU_GUI_SHADE_ROWS`, layout in `inc/tagpu_gui.h`) — the lighten table whole for the
-   focus edges, then one row per box-shader level −32..31. The box shader reads its destination
+   focus edges, then one row per box-shader level −32..31, then the grey remap (below). The box shader reads its destination
    SIGNED (`0x4BF5E8`), so its effect for one level is `T[r][i]` below 128 and `T[r−1][i]` above;
    carrying that row keeps the consumer a plain lookup. A level whose row is 0 would read the heap
    in front of the table: it publishes its box instead, and no stock caller reaches one (engine
    map, *Who calls the box shader*). The disabled rows (−19..−22), the popup frames and the modal
    dim ride the same path.
+
+   **A greyed gadget is a second remap in front of it** [MEASURED 2026-10-02]. The gadget
+   painters grey a gadget with `0x4BFE10(ctx, &rect)`, every pixel `T[dst]` through the
+   256-byte grey table `globals+0xCC`. The box shader at −20 over the same rect follows at once
+   (the button painter's pair is `0x4A69AD`/`0x4A69BA`; engine map, *A greyed gadget is the grey
+   remap, then the box shader at -20*). Nothing observed `0x4BFE10`, so Vulkan drew the gadget's
+   colours through the −20 row alone: green arrows and lights where GDI shows grey. The census
+   could not see it either, because the box shader's op covers the same box. It is now a leaf,
+   `OP_GREY`, published as `PK_TINT` through row 96, `TAGPU_GUI_SHADE_GREY`: the table whole,
+   since its writer `0x4CCED5` reads the destination unsigned. The table is gated and built once
+   at init as the other two are (caps bit 8; `0x4BAD30` from `UIPipelinesInit` at `0x4913C3`),
+   so `PK_SHADE` now carries 97 rows. With the bit clear the engine draws nothing and neither
+   does the leaf (`grey=` on the producer's heartbeat: crossed / refused for no table).
+
+   Measured on MUSICRT, a stock screen that greys its CD buttons, the two track cycles and
+   the volume slider's arrows by itself, in a paused game at 640×480, the original game, Vulkan
+   against `tagpu_gdi.on`:
+
+   | | before | after |
+   |---|---|---|
+   | the four CD buttons, Classic | 3–7 px each | **0** |
+   | the slider's arrows, Classic | 72 and 85 of 144 | **0** |
+   | TRACKTYPE, TRACKMODE, Classic | 923, 2 262 of 2 400 | **0** |
+   | the whole MUSICRT panel, Classic | 5 834 differing | **0 of 98 412** |
+   | the left arrow's mean chroma, Classic++ (GDI 1.0) | 23.3 | 1.2 |
+
+   Under Classic++ the residual is the restorer's detail, scaled through the tint's colour rule
+   (§27.3), and not a missing grey. The engine's own surface was identical under both renderers;
+   the arrow's frame through the −20 row alone matched 53 of its 88 opaque pixels, and the
+   other 35 were its greens, which the grey remap turns grey first.
 2. **The tint was refused, because the list's background restore crossed as a box.** Before the
    listbox repaints its rows it restores its rect with `0x4C6D20`, a rect copy from the screen's
    background surface. Recorded as a box, it crossed as `PK_PIXELS`; the drop marked the rows

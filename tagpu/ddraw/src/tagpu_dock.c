@@ -547,12 +547,11 @@ static char* find_rec(char* ctrls, const char* name)
 }
 
 /* GREYED_LAST, attribs bit 8: a greyed button with it draws its last frame (0x4A607E..0x4A608B)
-   and nothing else of the greyed arms. Every greyable button of the dock takes it while greyed,
-   for two reasons. A STAGE button has no greyed look of its own without it: it draws its stage's
-   frame (0x4A6092..0x4A60B3). And a plain button's own greyed arm (0x4A60D9..0x4A610E) comes out
-   tinted grey under GDI and untinted under Vulkan (MEASURED 2026-10-01, 353 px over DKREW, DKFWD
-   and DKMARK; the source of the GDI tint was not found), where the last frame is the same on both
-   (0 px).
+   and nothing else of the greyed arms. Every greyable button of the dock takes it while greyed.
+   A STAGE button has no greyed look of its own without it: it draws its stage's frame
+   (0x4A6092..0x4A60B3). A plain button takes it too, so the whole row has one greyed look, the
+   last frame of the dock's own art; the plain greyed arm (0x4A60D9..0x4A610E) is the engine's
+   grey remap and -20 shade over the button instead (0x4A69AD / 0x4A69BA, gui-renderer §26).
    ONLY WHILE GREYED, and that is measured rather than read: with the bit on a live stage button
    its clicks stopped answering (DKPLAY and DKSPEED, 2026-10-01), and the reader responsible was not
    found. A greyed button takes no click (0x4AA36A), so the bit follows the record's own greyed

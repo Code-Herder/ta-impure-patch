@@ -257,8 +257,8 @@ Vulkan and `tagpu_gdi.on`.
 **Greyed.** While the playback is not live (its first step, or a recording that fails its first
 check), DKREW, DKPLAY, DKFWD, DKSPEED and DKMARK are greyed and refuse their clicks. A greyed button
 of the dock carries attribs bit 8, which draws its last frame: a stage button has no greyed look of
-its own without it, and a plain button's own greyed arm comes out tinted under GDI and untinted under
-Vulkan. The bit is set on the parsed records after stage 1, which discards a stage button's file
+its own without it, and a plain button takes it too so the row has one greyed look, the dock's own
+art, rather than the engine's grey remap and shade over it (GUI renderer §26). The bit is set on the parsed records after stage 1, which discards a stage button's file
 attribs, and only while the button is greyed: on a live stage button it stopped the clicks. DKSPEED
 shows a sixth, blank stage while greyed, because its caption is drawn unshaded under the bit.
 MEASURED: on a recording whose unit-defs hash was altered, clicks on DKPLAY and DKSPEED changed
