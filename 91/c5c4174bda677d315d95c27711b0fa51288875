@@ -1,0 +1,1 @@
+replay-roundtrip: dll=91c5c417 range=main..91c5c417 features=every (all 58 new) fixtures=all 17 reached=all but 1 result=owner date=2026-10-01 -- 391/391 checks passed; UNCOVERED src/tagpu_replay.c:sk_back landed by the owner's decision (OQ7 per landing, 2026-10-01: its one changed line passes recr_seek's new arguments)
