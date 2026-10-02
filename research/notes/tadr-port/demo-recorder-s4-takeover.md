@@ -216,4 +216,45 @@ segment with no complete iteration with its header, and never a complete iterati
 
 ## Verified by
 
-<!-- S4B RUN -->
+**Verified and measured** (2026-10-02, the landing tier on the coverage builds; 18 fixtures, 78
+processes). 414 checks passed, none failed, and 51 round trips were EQUAL (seeks 8 to 515 ms).
+
+The takeovers:
+
+| fixture | build | T | the line | units live 4 s after / made | the fork's segment | checks |
+|---|---|---|---|---|---|---|
+| `battle` | default | 1741 | 581 ms (passability 122, AI 1) | 1349 / 1357 | 44.2 MB | judge, line, orders, ai, fork |
+| `takeover-end` | default | 331 | 24 ms (passability 13, AI 1) | 27 / 26 | 220 KB | judge, line, fork, victory |
+| `stock-limits` | stock limits | 721 | 201 ms (passability 178, AI 1) | 10 / 8 | 476 KB | judge, line, fork |
+
+- `judge` reads the engine's live count 4 s after the line, so it includes units the AIs made since;
+  it is a floor on what the rebuild kept, not an exact match.
+- `orders`: the ordered ARMCK moved 203 wu in the 300 ticks after its order.
+- `ai`: in [1741, 3541] seat 1 made a unit in both timelines; seats 2 and 3 made none in the
+  original either.
+- `fork`: every fork is `compare-fork` EQUAL against its parent's chain at T, with the original's
+  bytes unchanged; F, a fresh process, plays timeline 1 across its boundary EQUAL, the radar
+  picture too.
+- `victory`: timeline 1 of `takeover-end` ends complete at GameTime 537, player 0 won.
+
+The fork's first iteration costs 4.0 to 9.5 ms, against the original's 8.4 ms on the battle.
+
+The reader's damaged-file paths were run in a scratch Wine build of `tagpu_recreader.c` on copies of
+`takeover-end`'s forked file:
+- **cut 3000 bytes short:** the torn block is not kept, and the append point is after timeline 1's
+  first iteration (`end_open`, open 1/331);
+- **the same, then 8192 zero bytes:** the same point;
+- **one byte flipped in a block of timeline 0:** appended at the end, since the DLL does not check a
+  mid-file block's CRC;
+- **cut short, then 4096 bytes of data:** refused, "the block at byte 627949 is damaged and data
+  follows it".
+
+Seven functions no fixture reaches landed `UNCOVERED` by the owner's decision of 2026-10-02:
+- the reader's damage paths `crc_stream`, `failed_block`, `zero_tail` and `seg_tally`, run in the
+  scratch build above;
+- `recr_timelines`, S5's listing, run there too;
+- `ring_free`, after the arm when `rec_start` fails;
+- `sk_refused`, a seek refused during a takeover.
+
+One process of the run, `naval-push`'s round trips, stopped on O15, the COB guard's stop after seeks
+in the naval recordings (`CORMSHIP.COB`, word 724), which has a landing of its own.

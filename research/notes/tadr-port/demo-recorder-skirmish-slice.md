@@ -2111,7 +2111,9 @@ the objective's own victory test that the takeover re-arms. Each runs K (the tak
 the destructor's call, which changes `TAGPU_REPLAY_LAYOUT_SHA256`: recordings made before S4b refuse
 to play. The recorder is unpublished.
 
-<!-- S4B RUN -->
+**Verified** (2026-10-02): the landing tier, 414 checks passed, the three takeovers and the
+reader's damaged-file paths; the numbers are in the takeover note's *Verified by*
+(`demo-recorder-s4-takeover.md`). Seven error paths landed `UNCOVERED` by the owner's decision.
 
 ## S5
 
