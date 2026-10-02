@@ -1,5 +1,5 @@
 {
- "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), the takeover's line within `ms` when given, and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by the engine's own victory, any other by replay-end.json. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check.",
+ "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `takeover`: the fixture is also taken over (tareplay.py's K and F): at T2, as `player` (a record, or \"controlled\", the recording's controlled player), with the `switches` set and the chat line `type` typed after the takeover, `order` (a type and rank of the player's units) moved 300 wu, K's dump `dump` ticks after T (1800 unless given), the takeover's line within `ms` when given, and the `checks` it must pass (TAKEOVER_CHECKS); a takeover with `victory` ends by its own chat line (`+iwin`: the console's Kill disarms the objective, so `+kill` never ends a level), any other by replay-end.json. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check.",
  "fixtures": {
   "forest-fire": {
    "load": "s3a-forest-fire.json",
@@ -22,7 +22,7 @@
    "load": "replay-battle-load.json",
    "steps": [[1, "apply", "replay-battle-units.json"]],
    "end": 3810,
-   "takeover": {"player": "controlled", "order": ["ARMPW", 0], "ms": 2000,
+   "takeover": {"player": "controlled", "order": ["ARMCK", 0], "ms": 2000,
                 "checks": ["judge", "line", "orders", "ai", "fork"]}
   },
   "battle-los": {
@@ -94,7 +94,7 @@
   "takeover-end": {
    "load": "replay-takeover-end.json",
    "end": 900,
-   "takeover": {"player": 0, "switches": {"cheats": true}, "type": "+kill 1", "dump": 60,
+   "takeover": {"player": 0, "switches": {"cheats": true}, "type": "+iwin", "dump": 60,
                 "checks": ["judge", "line", "fork", "victory"]}
   }
  },

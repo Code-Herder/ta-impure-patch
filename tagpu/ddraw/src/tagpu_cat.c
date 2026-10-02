@@ -25,6 +25,8 @@
 #define UD_SIDE      0xA0         /* char Side[8]           "ARM"          */
 #define UD_FOOTX     0x14A        /* short, in map squares                 */
 #define UD_FOOTY     0x14C
+#define UD_CANBUILD  0x156        /* the build list, non-NULL for a type that builds
+                                     (tagpu_order.c, the claimed build sites) */
 #define UD_BITS2     0x245        /* u32 of FBI boolean bits                  */
 #define UD_COMMANDER 0x40000u     /* `commander`: 0x42CB7D reads it, shl 0x12, 0x42CBAB stores
                                      it (DISASSEMBLED 2026-09-28)                  */
@@ -321,8 +323,9 @@ static void write_units(const TAGPU_FRAME* f)
         jfield_str(out, "display", rec + UD_DISPLAY, 0x20);
         jfield_str(out, "desc", rec + UD_DESC, 0x40);
         jfield_str(out, "side", rec + UD_SIDE, 8);
-        fprintf(out, ",\"footprint\":[%d,%d]}",
-                *(short*)(rec + UD_FOOTX), *(short*)(rec + UD_FOOTY));
+        fprintf(out, ",\"footprint\":[%d,%d],\"builder\":%s}",
+                *(short*)(rec + UD_FOOTX), *(short*)(rec + UD_FOOTY),
+                *(void* const*)(rec + UD_CANBUILD) ? "true" : "false");
         emitted++;
     }
 

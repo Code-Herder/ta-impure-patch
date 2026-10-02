@@ -194,8 +194,11 @@ const RecTimeline* recr_selected(const RecReader* r);
    first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
    cut whole, and the parent is the chosen chain's segment that holds `at`. 1, or 0 (why): `at` is
-   outside the chain, the file holds RECR_TIMELINES segments, or it cannot be read. */
+   outside the chain, `at + 1` is a chain segment's first iteration, the file holds
+   RECR_TIMELINES segments, a block is damaged with data after it, or the file cannot be read. */
 int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap);
+/* 1 when the file HANDLE `f` is the file the reader holds open: one volume, one file index */
+int recr_same_file(const RecReader* r, void* f);
 
 /* What the Replays browser shows of a recording, read from its header, its minimap block and its
    end block alone (the stream's blocks are skipped unread). */

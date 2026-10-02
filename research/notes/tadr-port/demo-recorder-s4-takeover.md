@@ -3,17 +3,20 @@
 S4b of the [skirmish slice](demo-recorder-skirmish-slice.md#s4b-the-takeover-and-its-fork). A level
 that plays a recording becomes a live skirmish at GameTime T: player P is human, every other
 recorded seat is an AI, and the viewer's seat V is dropped. The game after T is recorded as a new
-**timeline** of the same file, and a playing of that timeline crosses from its parent to it with a
-seek. The engine facts are in the engine map's
+**timeline** of the file the level plays, and a playing of that timeline crosses from its parent to
+it with a seek. The engine facts are in the engine map's
 [*The takeover from a recording*](../exe-reverse-engineering.md#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02).
 
 ## Driving it
 
 - `tacli replay takeover <instance> [<recording>] --at T --player P [--difficulty D] [--timeline N]`.
   With a recording it launches the instance on it with P viewed, so the side's interface the level
-  loads once is P's, and writes the trigger once the level plays. Without one it takes over the
-  instance's running playback. It waits for the takeover's line and the recorder's start of the
-  new timeline, and exits 1 on a refusal.
+  loads once is P's, and writes the trigger once the level plays. The level plays the instance's
+  copy of the recording, in its `replays` folder, so the fork goes into that copy and the file given
+  is left as it was; tacli prints the copy's path. Without a recording it takes over the instance's
+  running playback. `--dump NAME --dump-at G` arms a dump of the live game at G before the
+  takeover, which the recorder keeps across the takeover's seek. It waits for the takeover's line
+  and the recorder's start of the new timeline, and exits 1 on a refusal.
 - By hand, `takeover <P> at <T>[ difficulty <D>]` in `tagpu_replay.trigger` on a playing level.
   D defaults to the timeline's own difficulty when it has an AI seat, else 2.
 - `tacli replay play` and `replay seek --recording` take `--timeline N`, which the request file
@@ -31,10 +34,10 @@ order, and the takeover's are inserted (`tagpu_replay.c`, *THE TAKEOVER*):
 
 | Step | Where | What, and the invariant it rests on |
 |---|---|---|
-| R0 bound | before any host write | `tk_bound`: P is a seat of the recording, and its live count `+0x144` at T is above 0 (the destructor's own elimination count); D is 0, 1 or 2; every recorded seat holds no AI object and no acquisition record (a puppet seat's player init skipped both), has its group table and sight counters, and has map bit = its index, below 10 (the acquisition table has ten entries); V holds no AI object; the level has an objective; and the recorder can record a fork (`tagpu_rec_fork_ready`). A refusal writes nothing and puts the reader back |
-| TK0 | the last act of R0 | `tk_open`: the file opened for writing with `FILE_SHARE_READ`, **then** the append point found. Nothing after TK0 refuses |
+| R0 bound | before any host write | `tk_bound`: P is a seat of the recording, and its live count `+0x144` at T is above 0 (the destructor's own elimination count); D is 0, 1 or 2; every recorded seat holds no AI object and no acquisition record (a puppet seat's player init skipped both), has its group table and sight counters, and has map bit `+0x146` = its index, below 10 (the acquisition table has ten entries), on the host and in the image at T, which R8 writes over the host's; V holds no AI object; the level has an objective; the recording's declared tables are the ones this build records, on the fields a reader compares across a chain, so the fork can be played (S4's D3: a fork is always recorded); and the recorder can record a fork (`tagpu_rec_fork_ready`). A refusal writes nothing and puts the reader back |
+| TK0 | the last act of R0 | `tk_open`: the file opened for writing with `FILE_SHARE_READ` and checked to be the file the reader holds (volume and file index), **then** the append point found. Nothing after TK0 refuses |
 | TK1 | after R6, before R7 | `tk_seats`: viewed = P, the difficulty, each seat's type through the engine's setter (P 1, the others 2), each seat's AI object and acquisition record in the player init's order, then the AI profiles |
-| R8 | the orders | every node restarts (D1), the builders adopt their frames, Paralyze and BuildWeapon resume, and p1 is bounded (`tk_node`, `tk_node_bounded`); the seat types again after `players_put`, which writes PlayerInfo `+0x94` from the image |
+| R8 | the orders | every node restarts (D1), the builders adopt their frames, Paralyze and BuildWeapon resume, and p1 is bounded (`tk_node`, `tk_node_bounded`); the lists of a host unit the kills left alive and the image does not describe are torn down (`tk_orphans`); the seat types again after `players_put`, which writes PlayerInfo `+0x94` from the image |
 | R13 | the globals | `holds_put` also writes the `hold` rows (the end countdown and the game end's flags bits 2 and 4), so a takeover inside a recorded countdown continues it; the explored map is written with no V bit |
 | R14 | sight | P's minimap fog only, from the counters R5 to R8b made |
 | TK4a | after R16 | `tk_live`: the passability refresh over every context whole, controlled = viewed = P, V deactivated, every unit deselected, the objective armed |
@@ -70,16 +73,25 @@ a pointer (the target goes through the engine's setter, bounded by the host's li
 NULL; every index a handler reads from p1 is bounded above), and with `+0x06` bit 1 clear the
 destructor's unbounded handler call cannot run a handler before that handler arms it itself.
 
-**The adoption.** A builder whose node holds its frame goes on building it: BuildingBuild at state 3
-(its state 3 tests the frame for NULL; MEASURED 2026-09-29), MobileBuild at state 3 with `+0x06 = 9`
-and its deadline at T, as the handler arms itself less bit 1. A frame that dies before the first
-call fires event 8, which MobileBuild tests before its states, so its state 3 never runs without
-its target.
+**The adoption.** A builder whose node holds its frame goes on building it (MEASURED 2026-09-29 in
+the feasibility experiment): BuildingBuild and MobileBuild at state 3 with `+0x06 = 9` and the
+deadline at T, as each handler arms itself (`0xB`) less bit 1. A frame that dies before the first
+call fires event 8, which both handlers test before their states, so state 3 never runs without its
+target: MobileBuild's state 3 has no NULL test, and BuildingBuild's answers one with 7, on which the
+dispatcher destroys the factory's whole main list.
 
 **The bounds.** The three build handlers index the unit types with the whole p1 dword, so p1 is
 below the type count; BuildWeapon's p1 is one of the three stock slots and the slot's weapon is set;
-a node that fails either ends its list there and is counted. Attack_Chase's p1 at or past the unit's
-weapon count becomes 0, the handler's "unset".
+a node that fails either ends its list there and is counted. Attack_Chase's p1 names a slot that
+holds a weapon, or becomes 0, the handler's "unset": the engine reads the slot's weapon from p1's
+low byte with no NULL test (`0x49ABCB`, `0x49AE04`), so an empty stock slot 1 or 2 counts as well
+as a p1 past the unit's weapons.
+
+**The units the kills left alive.** A host unit that survives R3 and that the image does not
+describe keeps the nodes its puppet steps left, which `tk_node` never sees, and from T its owner's
+type makes the unit tick run their handlers. Its lists are torn down instead, safe for the reason
+the seek's own teardown is: no handler has run on a puppet's node, so none has armed the
+destructor's handler call or its StopBuilding. The takeover's line counts these units.
 
 **D1's costs, and the owner's answers (OQ-A, 2026-10-02):**
 - **Paralyze and BuildWeapon resume.** Their state is values — a count, progress and a deadline
@@ -115,10 +127,21 @@ the next segment's `fork_at` − 1, and the selected one to its last. A segment 
 end block (the game was killed) is closed by the next timeline's writer with
 `REC_END_UNFINISHED` at its last complete block.
 
-**Both readers** (`tagpu_recreader.c` and `tarec.py`) walk the segments with the same bounds, each
-a refusal by name: at most 64, every later one with a unique `RT_TIMELINE`, each parent an earlier
+**Both readers** (`tagpu_recreader.c` and `tarec.py`) refuse by name a file that breaks the
+segments' bounds: at most 64, every later one with a unique `RT_TIMELINE`, each parent an earlier
 segment, no header block inside a segment, and every segment of a chain the shape of the file's
-first header.
+first header. They walk differently: `tarec` checks every block's payload CRC and stops at the first
+that fails, while the DLL's scan checks the payloads of the header and end blocks only, and a
+stream block's when a reading reads it, which stops the playing there.
+
+**The append point is safe by construction.** The scan tells three outcomes apart: a block is whole;
+torn, what an interrupted append leaves (the file ends inside it, or it fails its magic or a CRC
+and nothing but zeros follows); or neither, damaged (it fails and data follows) or unreadable (a
+read, an allocation or an inflate of bytes that passed their CRC failed). Only a torn block is cut;
+the others refuse the takeover in TK0, since a cut there would delete the complete blocks after it.
+The last block's payload is checked by a CRC streamed over its packed bytes, never inflated. A
+takeover at a chain segment's first iteration is refused too: the iteration before it is the
+parent's, so the fork would name the parent and stand for a world that was not the one played.
 
 **The boundary while playing** (*THE BOUNDARY*). When the chain goes on in its next segment, the
 playing holds: the step applies nothing, the recorder's armed dumps wait, and at the next frame
@@ -149,7 +172,8 @@ raises GameTime to T (`0x4954C0`) before its unit-tick call (`0x4954ED`), where 
 is, so the fork's first capture is iteration T.
 
 The writer seeks to the append point, cuts the file there, writes the parent's `RB_END` when its
-segment had none, and appends the new segment.
+segment had none, and appends the new segment. The cut drops a torn last block, or an unfinished
+segment with no complete iteration with its header, and never a complete iteration.
 
 ## Residuals
 
@@ -160,7 +184,14 @@ segment had none, and appends the new segment.
   ([the engine map](../exe-reverse-engineering.md)), so the fork's draws from it — the meteor
   shower's among them, which a puppet level gates — start from the host's state, not the recording
   machine's.
-- **The deactivated V's path budget** is spent once, at the deactivation, and is bounded.
+- **The deactivated V's path budget** keeps the value it had. The path tick's round robin gives
+  each of the ten budgets above 0 its turn (`0x40ECB1..0x40ECD8`, DISASSEMBLED), so V's is spent
+  after the takeover; nothing was found that refills an inactive record's [INFERRED], so it is spent
+  once and the rest of the game is unaffected.
+- **The recorder can still fail after the arm.** `rec_start` at the fork's first capture point can
+  refuse (no memory for the ring or the tables, the writer's thread not made); the game then goes on
+  live and unrecorded, with the recorder's `FAILED timeline … is not recorded` line, and the file
+  keeps what it had.
 - **An allocation failure inside `0x40B320`** is the engine's own crash, as at every level load;
   the takeover's own allocation of the AI object refuses the game by name instead.
 - **The mixed-side interface on the take-over-from-watch path.** MAIN2 keeps the side viewed at the
@@ -168,6 +199,14 @@ segment had none, and appends the new segment.
   panel in the old side's art while the bars follow P. `tacli replay takeover` with a recording
   launches with view = P and does not show it. The owner chose a mid-level re-skin (OQ-B), planned
   as its own landing after S4b.
+- **No fixture reaches the objective's own victory test after a takeover.** `takeover-end` ends by
+  `+iwin`, which sets the won and stop bits itself; `+kill 1` disarms the objective
+  (`0x4164EF`), and `battle`'s game ends by `replay-end.json`. So the re-armed `+0x88` and the
+  end tests in P's iteration rest on the disassembly above, not on a run. A fixture that does
+  reach it needs every unit of the other seats killed by damage after T; with
+  `ActiveCommanderDeath` 0, as the tests launch, a commander's death takes nothing else with it.
+- **A recording whose tables another build declared** plays, but cannot be taken over (R0's table
+  check): its fork would hold this build's tables, and no reader plays a chain whose tables differ.
 - **The layout's hash changed.** The `order 0x006 ondestroy` row of `replay-layout.tsv` names all nine
   handler functions that arm the destructor's call, so `TAGPU_REPLAY_LAYOUT_SHA256` changed and every
   recording made before S4b refuses to play. The recorder is unpublished, so this costs only local

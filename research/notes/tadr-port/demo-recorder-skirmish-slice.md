@@ -2091,11 +2091,20 @@ invariants, the file's segments, the fork's handle and the residuals are in
 - **OQ-B**: the mixed-side interface after a takeover of the other side from a running playback is
   fixed by a mid-level re-skin, its own landing after S4b; `tacli replay takeover` launches with the
   side viewed being P's.
-- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them.
+- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them. The
+  `ai` check compares with the original (decided 2026-10-02): each AI seat that made a unit in
+  the original timeline's [T, T + 1800] must make one in timeline 1's, and a seat that made none
+  there is skipped and named. On `battle` the stock AI's seats 2 and 3 make no unit in the whole
+  3990-tick game, so a rule that every AI seat builds failed on the AI, not on the takeover.
 
-**The fixtures.** `battle` is also taken over at T2 as its controlled player, an ARMPW ordered, the
-line within 2000 ms; `takeover-end` (Show Down) is taken over as 0 and ends by the engine's victory
-after `+kill 1`. Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
+**The fixtures.** `battle` is also taken over at T2 as its controlled player, the line within
+2000 ms, and its first ARMCK ordered 300 wu east from its base: the order's unit stands in open
+ground, since at T2 every ARMPW of the army is in the melee, where one ordered sideways moved 47 wu
+in 12 s. `takeover-end` (Show Down, slots 2 and 3 closed) is taken over as 0 and ends won after
+`+iwin`, the console's IWin: its kill-all for the AI and the game's won and stop bits. `+kill 1`
+cannot end it, since the console's Kill disarms the objective after its kill-all (`0x4164EF`; the
+[engine map](../exe-reverse-engineering.html)'s kill-all callers), so the fixture does not reach
+the objective's own victory test that the takeover re-arms. Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
 300 across the fork) after the usual L, P, R and Q.
 
 **The layout's hash.** The `order 0x006 ondestroy` row now names all nine handler functions that arm

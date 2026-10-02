@@ -682,13 +682,16 @@ block that reads to its last complete block.
   `replay play` and `replay seek --recording` take `--timeline N` to play a forked timeline; the
   playing crosses each fork with a seek (`replay: <name>: timeline <N> continues from GameTime <T>`).
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
-  [--difficulty D]` makes the playback a live skirmish at T as player P, every other recorded seat
-  an AI (D 0–2, by default the recording's difficulty, or 2 when it had no AI). With FILE it launches the instance on it, P
-  viewed, and takes over once it plays; without, it takes over the running playback. It waits for
-  `replay: <name>: taken over at GameTime <T> as player <P>, …` and the recorder's `recording
-  timeline <I> of …`, and exits 1 on `… takeover at <T> refused: <why>`. The game after T is
-  appended to FILE as timeline I. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger.
-  The file must be writable and open in no other program.
+  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
+  every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
+  no AI). With FILE it launches the instance on it, P viewed, and takes over once it plays;
+  without, it takes over the running playback. It waits for `replay: <name>: taken over at
+  GameTime <T> as player <P>, …` and the recorder's `recording timeline <I> of …`, and exits 1 on
+  `… takeover at <T> refused: <why>`. The game after T is appended as timeline I to the file the
+  level plays: the instance's copy, `gamedir/replays/<name>.imprec`, whose path tacli prints (`the
+  fork:`), never FILE itself. `--dump` arms a dump of the live game at G before the takeover, so it
+  is never late. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger. The file must be
+  writable and open in no other program.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.

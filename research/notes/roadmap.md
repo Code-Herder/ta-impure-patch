@@ -3862,12 +3862,11 @@ question rather than a takeover one. Impure's own replacement for the recorder �
 Forever's replays, its in-game commands — has its own plan, [the demo recorder](tadr-port/demo-recorder.html):
 a skirmish is recorded when `tagpu_recorder.on` asks for it, `tacli replay play` plays a
 recording back on puppets — units, features and wrecks, the simulation's globals, the shots in
-flight and the explored map — `tacli replay seek` moves a playback to any GameTime of it,
-forward or backward, and `tacli replay takeover` turns a playback into a live skirmish as one of
-its players, recorded as a new timeline of the same file (its skirmish slice, S1 to S4b,
-2026-09-29 to 10-02, with the replay harness every simulation landing runs). The fork rules, live
-rewind, the in-game controls and network games are its later landings; until then a network game
-played with Impure records no demo.
+flight and the explored map — and `tacli replay seek` moves a playback to any GameTime of it,
+forward or backward (its skirmish slice, S1 to S4a, 2026-09-29 to 10-02, with the replay harness
+every simulation landing runs). The takeover from a recording is built (S4b, not landed); the fork
+rules, live rewind, the in-game controls and network games are its later landings; until then a
+network game played with Impure records no demo.
 
 ## The restorer as compute (2026-09-27)
 

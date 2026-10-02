@@ -2910,7 +2910,7 @@ the target, and every Patch Loader's `dplayx.dll` forwards all nine of its expor
 
 ### 2.6e The demo recorder (`tagpu_recorder.c`, `tagpu_recwriter.c`, a skirmish on request)
 
-S1, S2a, S3a, S3b, S3c-2, S3c-3 and S4b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
+S1, S2a, S3a, S3b, S3c-2 and S3c-3 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
 is recorded to `replays\<date> <time> <map>.imprec` when `tagpu_recorder.on` is in the game's folder
 at the level's first iteration, and `tools/replay/tarec.py` reads a recording back. Its capture has no site of
 its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls the replay's
@@ -3165,7 +3165,8 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
   seat's AI object (`0x4B4F10(0x3D)`, `0x408CB0`, into `+0x74`) and acquisition record (`0x40B320`),
   then `0x4648E0`; every rebuilt order node's handler state (`+0x05`, `+0x06`, `+0x0A`, `+0x4E`,
   `+0x32`, `+0x42` bits 16, 21 and 22), a builder's adoption, Paralyze's and BuildWeapon's resumed
-  state, and Attack_Chase's p1 when it is past the unit's weapons; the end countdown and the game
+  state, and Attack_Chase's p1 when its slot holds no weapon; the order lists of a unit the kills
+  left alive and the image does not describe, torn down through `0x43A1F0`; the end countdown and the game
   end's flags bits 2 and 4 from the image; the explored map with no V bit; then `0x440A40(0,
   0x7FFF7FFF)`, controlled = viewed = P, `0x464290(V, 0)`, `0x48BD00`, and the objective's `+0x88 =
   1`;

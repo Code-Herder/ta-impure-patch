@@ -3028,7 +3028,7 @@ and the ones it read to decide what a rebuilt order node may hold. Read from
 | `0x463C60` the seat-type setter | `thiscall (rec, type)`, `ret 4` | `rec+0x73 = type` (`0x463C67`), and PlayerInfo `[rec+0x27]+0x94 = type` unless the type is 3 (`0x463C64`, `0x463C6A..0x463C6F`) |
 | `0x4B4F10` the allocator | `cdecl (size)` | the player init allocates the AI object with it, `0x3D` bytes (`0x4648A7..0x4648AE`) |
 | `0x408CB0` the AI object's constructor | `thiscall (obj, rec)`, `ret 4`, returns `obj` | the player init stores its result to `rec+0x74` (`0x4648B5..0x4648C1`); it reads `[rec+0x78]` and points sub-objects 0x20 apart into it (`0x408CF0..0x408D0C`), so the group table `+0x78` must exist first |
-| `0x40B320` the acquisition record | `stdcall (seat)`, `ret 4` | allocates `0x10D` bytes, constructs them through `0x409160` and stores the result to `0x5119C0[seat]` (`0x40B340`), then calls `0x409730` on it; on an allocation failure it stores 0 and calls `0x409730` with `ecx` = 0 (`0x40B350..0x40B35B`), the engine's own crash, as at every load. The player init passes `rec+0x146`, the record's map bit (`0x4648C4..0x4648CD`), and the table has ten entries, so a bit of 10 would write the dword at `0x5119E8` |
+| `0x40B320` the acquisition record | `stdcall (seat)`, `ret 4` | allocates `0x10D` bytes, constructs them through `0x409160` and stores the result to `0x5119C0[seat]` (`0x40B340`), then calls `0x409730` on it; on an allocation failure it stores 0 and calls `0x409730` with `ecx` = 0 (`0x40B350..0x40B35B`), the engine's own crash, as at every load. The constructor zeroes the list bounds `+0x09` and `+0x0D` (`0x4091A1`, `0x4091A4`) and calls `0x40A150` at `0x4092E8`, which draws the simulation RNG `0x4B6C30` eight times (`0x40A15F..0x40A23B`). The player init passes `rec+0x146`, the record's map bit (`0x4648C4..0x4648CD`), and the table has ten entries, so a bit of 10 would write the dword at `0x5119E8`. The teardown frees through the same byte (`0x40B390` at `0x464A4F`), and the level's slot setup `0x4854A0` copies it into each of the record's unit slots' `+0xFF` (`0x485908..0x48590E`), the owner byte the radar pass's loop 4 indexes the table with |
 | `0x4648E0` the AI profiles | `cdecl (void)`, plain `ret` (`0x46498D`) | ends by calling `0x409F80(i)` and `0x40A040(i)` for each record that is active and of type 2 (`0x46494E..0x464982`) |
 | `0x440A40` the passability refresh | `stdcall (xz, wh)`, `ret 8` | calls `0x440830(ctx, xz, wh)` for each of the 32 contexts `0x512358..0x512758` whose first dword is set (`0x440A4B..0x440A67`). `0x440830` sign-extends x, z, w and h from words, computes x+w+1 and z+h+1 in 32 bits, clamps x and z at 0 (signed) and the ends to `ctx+0x10` and `+0x14` (unsigned) (`0x440833..0x440897`), so `(0, 0x7FFF7FFF)` is every context whole |
 | `0x48BD00` deselect all | `cdecl (void)`, plain `ret` | `+0x110 &= 0xFFFFFF2F` on every slot from `[main+0x14357]` to `[main+0x1435B]`, then `0x491D70(0)` (`0x48BD00..0x48BD42`) |
@@ -3051,8 +3051,9 @@ bit 13, it calls `0x40B0D0(unit+0xFF, unit+0x6A, def+0x208)` and on a nonzero an
 GameTime + 90 to `+0xB0` and sets `+0x110` bit 12 (`0x4676C8..0x4676E8`). **`0x40B0D0` reads
 `0x5119C0[seat]` untested** (`0x40B0E5..0x40B0EC`), so the acquisition records must exist before the
 first radar pass after the flip. It walks the record's list from `+0x09` to `+0x0D` and leaves at
-once when they are equal (`0x40B0EC..0x40B100`); a fresh record's list is empty [INFERRED: the
-constructor `0x409160` was not read], so the pass at T sets neither field.
+once when they are equal (`0x40B0EC..0x40B100`); the constructor zeroes both (`0x4091A1`,
+`0x4091A4`), so the pass at T sets neither field for a record made at T, unless something between the
+construction and the pass appends to the list [not read].
 
 **The order dispatchers clear `+0x06` before each handler call**: `0x43B7C0` stores 0 at `0x43B83D`
 and `0x43BAD0` at `0x43BB09`, after reading `+0x0A`, the deadline, against GameTime
@@ -3065,7 +3066,15 @@ is why a node rebuilt with `+0x06` = 0 waits for nothing but its next call.
   vtable slot 0 (`0x489762`) before clearing the reference (`0x48978E`), in `0x489740`'s walk of
   the target's `+0xA2` chain. Its heading before `0x438590` is `0x48A980(builder+0x6A,
   target+0x6A) − builder+0x66` (`0x403DCA..0x403DE1`).
-- BuildingBuild `0x402640`'s state 3 tests the nanoframe `+0x16` for NULL (`0x4029CA..0x4029CF`).
+- BuildingBuild `0x402640` tests event 2 at its entry (`0x402647`) and event 8, the frame's death,
+  before its states (`0x402726..0x402751`: the reply `0x47F780(unit, 7, …)`, `0x41C150`, return 0).
+  Its state 3 tests the nanoframe `+0x16` for NULL (`0x4029CA..0x4029CF`) and returns 7 on one
+  (`0x402B4D..0x402B59`), and the dispatcher's case 7 (`0x43BA3D..0x43BA6D`) destroys the unit's
+  whole main list through `0x43A1F0`. It arms itself with the timer `0x439E80(node, 1)` and `| 0xA`
+  (`0x402ADC..0x402AE6`), as MobileBuild does (`0x403F00..0x403F0C`): `0xB` in all.
+- The slot-weapon readers `0x49ABB0` and `0x49ADF0` take a slot as the low byte of their argument
+  and read `[unit + slot·0x1C + 0x10]` with no NULL test before dereferencing it (`0x49ABCB` then
+  `+0x111` at `0x49ABCF`; `0x49AE04` then `+0xDC` at `0x49AE08`).
 - BuildWeapon `0x402B70` reads the slot `p1` (`node+0x36`) at entry, `[unit + p1·0x1C + 0x10]`
   (`0x402B7F..0x402B89`), and in state 2 increments the byte `[unit + p1·0x1C + 0x1E]` (`0x402BB3..0x402BB9`).
 - Paralyze `0x402D10` clamps its p1 to `0x708` ticks (`0x402D33..0x402D3B`).
@@ -6942,8 +6951,19 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
 - Callers: `0x4866B3` (a commander's death); `0x452E17` in the player removal `0x452CC0(dpid)`
   (nine callers, among them the network pump's leave case `0x4550D5`; *The session, not the host*),
   which kills the seat's army before it clears the seat's type (`0x452E62`), so every remaining peer
-  takes the non-local branch for a departed player's units; and `0x4164DF`, `0x416A00`, `0x416A58`
-  [role not traced].
+  takes the non-local branch for a departed player's units; and three console commands, each a row
+  `{name, handler, 4}` of the debug-level table (DISASSEMBLED):
+  - **`Kill`** (`0x501FE8`, `0x4164B0`): with a seat argument, kill-all for it (`0x4164DF`), then
+    the objective's disarm `0x4904B0` (`0x4164EF`). **After `+kill N` the level never ends by a
+    victory or a defeat**: both end tests answer 0 while `+0x88` is 0 (*The two end tests*);
+  - **`IWin`** (`0x501FF4`, `0x4169D0`): kill-all for seat 0 when the controlled player's
+    PlayerInfo `+0x95`, its side, is 1, else for seat 1 (`0x4169EA..0x416A00`), then
+    `main+0x3923B` |= `0x10`, `0x20`, `0x04` (`0x416A0A..0x416A22`): won and stop, without the
+    objective. MEASURED 2026-10-02 on a takeover as seat 0 (ARM) of a two-seat skirmish: seat 1's
+    army died, the level ended at ENDMSN reading VICTORY, and the recording's end block read
+    seat 0 won, seat 1 lost (flags `0x34`);
+  - **`ILose`** (`0x502000`, `0x416A30`): kill-all for the seat whose number is the controlled
+    player's side (`0x416A51..0x416A58`), then bit 4 cleared and bits 6 and 2 set (`0x416A62..0x416A7C`): lost and stop.
 
 ### The keys' weapons and their sync
 
