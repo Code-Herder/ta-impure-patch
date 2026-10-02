@@ -619,7 +619,10 @@ block that reads to its last complete block.
   window — roots exactly, sinks within `tagpu/ddraw/replay-absent.tsv`'s band less its rows, and no
   COB engine write on the puppet. `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1`
   classifies every uncovered byte where the live game and a playing or a fresh seek differ, and
-  `scan FILE DUMP` fails a plain value that is an address.
+  `scan FILE DUMP` fails a plain value that is an address. A file holds one or more timelines
+  (a takeover appends one): `segments FILE` lists them, `check` and `compare` take `--timeline N`
+  to read timeline N's chain, and `compare-fork FILE N` compares timeline N's first iteration with
+  its parent at the fork point, less the takeover's expected differences.
 - **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
   [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
@@ -629,7 +632,11 @@ block that reads to its last complete block.
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
   repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump
-  any check failed on stays. `run --cover` runs the coverage builds instead.
+  any check failed on stays. `run --cover` runs the coverage builds instead. A fixture with a
+  `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
+  (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
+  K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
+  names.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
@@ -672,6 +679,16 @@ block that reads to its last complete block.
   refused, timed out or nothing was playing, 2 on a usage error. A playback that has played to its
   end still seeks; a level that has ended does not (`replay: <name> at its level's end, …`). By
   hand, `seek <T>` or `seek <T> dump <name>` in the trigger does the same on a playing level.
+  `replay play` and `replay seek --recording` take `--timeline N` to play a forked timeline; the
+  playing crosses each fork with a seek (`replay: <name>: timeline <N> continues from GameTime <T>`).
+- **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
+  [--difficulty D]` makes the playback a live skirmish at T as player P, every other recorded seat
+  an AI (D 0–2, by default the recording's difficulty, or 2 when it had no AI). With FILE it launches the instance on it, P
+  viewed, and takes over once it plays; without, it takes over the running playback. It waits for
+  `replay: <name>: taken over at GameTime <T> as player <P>, …` and the recorder's `recording
+  timeline <I> of …`, and exits 1 on `… takeover at <T> refused: <why>`. The game after T is
+  appended to FILE as timeline I. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger.
+  The file must be writable and open in no other program.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.
