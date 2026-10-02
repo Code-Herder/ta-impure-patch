@@ -548,8 +548,11 @@ static void seat_level(char* ta, const RecHeader* h, unsigned v, unsigned view)
         seatv[s->index] = 1;
         localv[s->index] = 1;                   /* validate: every controller is 1 or 2 */
     }
-    /* V shows the recording viewer's side: the interface the game draws is the controlled
-       player's. What V's PlayerInfo held goes back after the teardown (THE VIEWER'S SEAT). */
+    /* V shows the recording's controlled player's side. With full visibility V is the viewed
+       record, and the interface takes the viewed record's side: MAIN2 is loaded once from it
+       (0x497B56..0x497BD8), and the chrome and both bars read it every frame
+       (0x467D98..0x467DB3); the side menus %sGEN and %sDL take the controlled record's, which is
+       V too (0x41B2E0). What V's PlayerInfo held goes back after the teardown (THE VIEWER'S SEAT). */
     info = *(unsigned char**)(player_rec(ta, v) + PL_INFO);
     s_vinfo.at = info;
     if (info) memcpy(s_vinfo.was, info, REC_INFO_BYTES);
@@ -5449,6 +5452,23 @@ int tagpu_replay_watch_ready(char* why, unsigned cap)
     return 1;
 }
 
+/* A WRITER'S FILE IS NEVER PLAYED. The recorder's writer creates each recording CREATE_NEW and
+   holds it open, for writing and sharing reads alone, until it has written the end
+   (tagpu_recwriter.c); an open that shares reads alone therefore fails with a sharing violation
+   exactly while a writer holds the file. The answer cannot go stale the wrong way: a closed
+   recording is never opened for writing again, since CREATE_NEW refuses a file that exists, so a
+   file found closed stays closed while it is read. The reader's own open does not decide this:
+   recr_info shares writing, and recr_open may come to. */
+int tagpu_replay_being_written(const char* path)
+{
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f != INVALID_HANDLE_VALUE) {
+        CloseHandle(f);
+        return 0;
+    }
+    return GetLastError() == ERROR_SHARING_VIOLATION;
+}
+
 /* A file the browser listed in replays\: a name, never a path out of the folder. A sanity filter
    on a value the browser's own enumeration produced, not a safety argument. */
 static int file_ok(const char* file)
@@ -5548,9 +5568,11 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
     if (!file_ok(file)) return watch_refuse(gi, name, "the file is not one of replays\\");
     if (ta[OFF_NETWORK] & 1) return watch_refuse(gi, name, "this is a network game");
     if (!E_CdCheck(1)) return watch_refuse_engine(gi, name, E_Translate(STR_CD));
+    snprintf(path, sizeof path, "replays\\%s", file);
+    if (tagpu_replay_being_written(path))
+        return watch_refuse(gi, name, "it is the recording the game is writing");
     replay_close();
     tagpu_puppet_end();
-    snprintf(path, sizeof path, "replays\\%s", file);
     s_rd = recr_open(path, why, sizeof why);
     if (!s_rd) return watch_refuse(gi, name, why);
     span_read(path);

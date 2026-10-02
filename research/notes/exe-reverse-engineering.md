@@ -4965,6 +4965,19 @@ MEASURED: protection is on in a plain launch; a write into the array after the l
 after the seal, and `0x42B200` returns 0 without it, when a unit file has no `[UNITINFO]` section
 (`0x42AC78`).
 
+**The shell and a level hold the unit types in different orders.** MEASURED 2026-10-02 on retail,
+reading `UNITINFOCount` and every UnitName (`+0x20`) through `tacli peek`:
+- At the main menu, before the first level and again after one, the count was 279 and the
+  names stood in the start-up load's order (`None`, `ARMSEER`, `ARMSILO`, …). Their FNV-1a, as
+  `RT_UNITDEFS` takes it, was `0x93B2B33D`.
+- In a level, the same 279 names stood sorted, `None` first (`ARMAAP`, `ARMAAS`, `ARMACA`, …),
+  hash `0x54F5FE19`, which is what the level's recording carried.
+So a type ID, and the defs fingerprint, mean what they mean in a level only once the level has
+loaded. Whether the level's loader sorts, or loads in an order that comes out sorted, is not
+traced [INFERRED: sorted by name]. That is why Watch compares the defs at the first step
+(`tagpu_replay.c`, `data_match`), and why the Replays browser cannot lock on them in the shell
+(the S5 note, *Open*).
+
 **The sync.** The object is `[main+0x2A30]`: `+0x58` nonzero on the host, `+0x64` a disable flag, the
 per-peer records of 0x5C bytes at `[+0x14, +0x18)`, a tree of keys at `+4` (`0x46E9B0` finds,
 `0x46EF50` inserts), a circular list of keys at `+0x24` with its size at `+0x28`, and the joiner's

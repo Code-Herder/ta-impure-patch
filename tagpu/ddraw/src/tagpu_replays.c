@@ -36,6 +36,7 @@
 #include "tagpu_log.h"
 #include "tagpu_detour.h"
 #include "tagpu_art.h"
+#include "tagpu_recorder.h"    /* tagpu_rec_mod_print: the running game's archives */
 #include "tagpu_recreader.h"
 #include "tagpu_replays.h"
 #include "tagpu_replay.h"
@@ -155,6 +156,9 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 #define INDEX_CAP        (4u << 20)
 #define MARKS_MAX        64             /* a recording's bookmarks                               */
 #define MARK_GAP         30             /* the closest two bookmarks may be, in GameTime: 1 s    */
+#define VERSION_MAX      7              /* RT_GAME_VERSION's characters at most (tagpu_recorder.c) */
+#define MOD_NAME_MAX     16             /* an s_mods name, NUL included                          */
+#define VA_VERSION_TEXT  0x005031B4u    /* the main menu's version, RT_GAME_VERSION's source     */
 
 /* ---- the per-mod table (the plan's *The per-mod table*) ---------------------------------------
    A mod is named by the engine's own strings: the config file and the main archive's format at
@@ -168,8 +172,10 @@ enum { MOD_UNKNOWN, MOD_RETAIL, MOD_ESC, MOD_MAYHEM, MOD_PROTA, MOD_TAZERO, MOD_
 
 typedef struct {
     const char* name;
+    const char* title;          /* what the browser calls it                                   */
     const char* cfg;            /* matched against VA_STR_CFG, or NULL                          */
-    const char* archive;        /* matched against VA_STR_ARCHIVE, or NULL                      */
+    const char* archive;        /* matched against VA_STR_ARCHIVE, or NULL; a recording's
+                                   mounted archives are matched against it too (mod_of)       */
     const char* style;
     short       rx;             /* REPLAYS' xpos; every entry's is at y 393, 96 x 20            */
     char        plate;          /* our plate under it                                          */
@@ -179,13 +185,20 @@ typedef struct {
 } Mod;
 
 static const Mod s_mods[MOD_N] = {
-    { "unknown",   NULL,         NULL,        "retail",     272, 1, 0,   0,   0,   0, 0 },
-    { "retail",    "totala.ini", NULL,        "retail",     272, 1, 0,   0,   0,   0, 0 },
-    { "escalation","taesc.ini",  "TAE%s.GP3", "escalation", 272, 1, 0,   0,   0,   0, 0 },
-    { "mayhem",    "mayhem.ini", "may%s.GP3", "retail",     272, 1, 327, 416, 369, 0, 0 },
-    { "prota",     "ProTA.ini",  "ProTA.gp3", "retail",     272, 1, 323, 416, 362, 1, 0 },
-    { "tazero",    "tazero.ini", "TAZ%s.GP3", "retail",     272, 1, 0,   0,   0,   0, 0 },
-    { "twilight",  NULL,         NULL,        "twilight",   317, 0, 0,   0,   0,   0, 1 },
+    { "unknown",    "Unknown",            NULL,         NULL,        "retail",
+      272, 1, 0,   0,   0,   0, 0 },
+    { "retail",     "Total Annihilation", "totala.ini", NULL,        "retail",
+      272, 1, 0,   0,   0,   0, 0 },
+    { "escalation", "Escalation",         "taesc.ini",  "TAE%s.GP3", "escalation",
+      272, 1, 0,   0,   0,   0, 0 },
+    { "mayhem",     "Total Mayhem",       "mayhem.ini", "may%s.GP3", "retail",
+      272, 1, 327, 416, 369, 0, 0 },
+    { "prota",      "ProTA",              "ProTA.ini",  "ProTA.gp3", "retail",
+      272, 1, 323, 416, 362, 1, 0 },
+    { "tazero",     "TA Zero",            "tazero.ini", "TAZ%s.GP3", "retail",
+      272, 1, 0,   0,   0,   0, 0 },
+    { "twilight",   "Twilight",           NULL,         NULL,        "twilight",
+      317, 0, 0,   0,   0,   0, 1 },
 };
 #define TWILIGHT_PREFIX  "Total Annihilation: Twilight"
 
@@ -226,7 +239,7 @@ static const Mod s_mods[MOD_N] = {
    high and 89..93 wide: 96x20 is the nearest face but overruns the 92-px plates by 2 px a side,
    so each holds an 80x20 face, centred. */
 typedef struct { short x, y, w, h; } Rect;
-enum { BT_WATCH, BT_PLAYON, BT_FAV, BT_BACK, BT_N };
+enum { BT_WATCH, BT_PLAYON, BT_FAV, BT_ALL, BT_BACK, BT_N };
 typedef struct {
     const char* screen;         /* GUI_Load's name, and its panel's (ControlsAry[0])            */
     const char* path;           /* the file in the archive                                     */
@@ -235,12 +248,16 @@ typedef struct {
     Rect  minimap;
     Rect  mapname;
     short px0, pcol, pw, py0;   /* the players: first column's x, column pitch, the width a
-                                   name is cut to ("name: ?", in the list font), first row's y  */
+                                   name and its result are cut to, in the list font, and the
+                                   first row's y                                               */
     Rect  tlcap, timelines;
+    Rect  modline, modhint;     /* the selected recording's mod and version, and a hint about
+                                   it, under the timelines in their box                         */
     Rect  count, footer;        /* bars: replays_open centres the label's text in its bar      */
     Rect  btn[BT_N];
 } Layout;
 
+/* Retail's: the plate between Favourite and the grille, 338..422 x 437..461, holds All mods. */
 static const Layout L_RETAIL = {
     "REPLAYS.GUI", "impure/replays.gui",
     { 24, 6, 326, 35 },
@@ -248,9 +265,11 @@ static const Layout L_RETAIL = {
     { 370, 54, 90, 90 },
     { 470, 54, 142, LABEL_H },
     470, 72, 68, 70,
-    { 370, 150, 242, 12 }, { 370, 162, 242, 206 },
+    { 370, 150, 242, 12 }, { 370, 162, 242, 176 },
+    { 372, 340, 240, LABEL_H }, { 372, 354, 240, LABEL_H },
     { 440, 14, 180, 16 }, { 20, 386, 600, 22 },
-    { { 20, 440, 96, 20 }, { 124, 440, 120, 20 }, { 252, 440, 80, 20 }, { 540, 440, 80, 20 } },
+    { { 20, 440, 96, 20 }, { 124, 440, 120, 20 }, { 252, 440, 80, 20 }, { 340, 440, 80, 20 },
+      { 540, 440, 80, 20 } },
 };
 
 /* Escalation's boxes: the list well 27..340 x 58..353 holds the list and its bar 2 px in; the
@@ -259,7 +278,8 @@ static const Layout L_RETAIL = {
    163..353 its caption and list 2 px in; the count bar 444..618 x 20..39 and the footer bar
    21..618 x 372..397 their text 8 px in, clear of the rivets at their ends; the title bar
    21..348 x 11..41, the title 4 px in; the plates y 431..456,
-   x 21..113, 123..215, 225..318 and 529..618 (328..410 is not used). */
+   x 21..113, 123..215, 225..318, 328..410 and 529..618. The mod line and its hint take the
+   timelines box's last two rows. */
 static const Layout L_ESCALATION = {
     "REPLAYSE.GUI", "impure/replayse.gui",
     { 25, 11, 323, 30 },
@@ -267,9 +287,11 @@ static const Layout L_ESCALATION = {
     { 370, 62, 78, 78 },
     { 466, 61, 146, LABEL_H },
     466, 74, 70, 74,
-    { 372, 165, 240, 12 }, { 372, 179, 240, 172 },
+    { 372, 165, 240, 12 }, { 372, 179, 240, 143 },
+    { 372, 324, 240, LABEL_H }, { 372, 338, 240, LABEL_H },
     { 448, 20, 162, 19 }, { 29, 372, 581, 25 },
-    { { 27, 433, 80, 20 }, { 129, 433, 80, 20 }, { 231, 433, 80, 20 }, { 533, 433, 80, 20 } },
+    { { 27, 433, 80, 20 }, { 129, 433, 80, 20 }, { 231, 433, 80, 20 }, { 329, 433, 80, 20 },
+      { 533, 433, 80, 20 } },
 };
 
 /* by STYLES' order; Twilight's screen is retail's */
@@ -383,6 +405,10 @@ static int list(char* b, int cap, int at, int g, const char* name, int assoc, in
     return gput(b, cap, at, "\t}\r\n");
 }
 
+#define GADGETS 25
+#define ALL_ON  "All mods"          /* ALLMODS while the list holds the running mod's alone   */
+#define ALL_OFF "This mod"          /* and while it holds every recording                     */
+
 static int build_gui(char* b, int cap, const Layout* L)
 {
     int at = 0, g = 1, i;
@@ -394,10 +420,10 @@ static int build_gui(char* b, int cap, const Layout* L)
         "\t\txpos=0;\r\n\t\typos=0;\r\n\t\twidth=%d;\r\n\t\theight=%d;\r\n"
         "\t\tattribs=0;\r\n\t\tcolorf=0;\r\n\t\tcolorb=0;\r\n\t\ttexturenumber=0;\r\n"
         "\t\tfontnumber=0;\r\n\t\tactive=1;\r\n\t\tcommonattribs=0;\r\n\t\thelp=;\r\n\t\t}\r\n"
-        "\ttotalgadgets=22;\r\n"
+        "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=WATCH;\r\n\tescdefault=BACK;\r\n\tdefaultfocus=RECS;\r\n\t}\r\n",
-        L->screen, SCR_W, SCR_H);
+        L->screen, SCR_W, SCR_H, GADGETS);
 
     /* the recordings, and their scroll bar: one assoc binds the two (gui-gadgets 2.6.1); the
        slider's range, thick and knob are LOADGAME.GUI's SLIDER scaled to this height, and the
@@ -409,10 +435,10 @@ static int build_gui(char* b, int cap, const Layout* L)
     at = gput(b, cap, at, "\trange=%d;\r\n\tthick=56;\r\n\tknobpos=0;\r\n\tknobsize=%d;\r\n\t}\r\n",
               L->bar.h - 6, L->bar.h - 9);
 
-    /* the minimap: an id-6 picture, which fills its rect with the panel colour while it has no
-       frame (0x4A4B2A) */
-    at = common(b, cap, at, g++, 6, 0, "MINIMAP", L->minimap.x, L->minimap.y, L->minimap.w,
-                L->minimap.h, 2, 15, 0, 0);
+    /* the minimap: an id-6 surface gadget one pixel wider and higher than its box, since the frame
+       it is given is stamped over the record's width and height less one (THE MINIMAP) */
+    at = common(b, cap, at, g++, 6, 0, "MINIMAP", L->minimap.x, L->minimap.y, L->minimap.w + 1,
+                L->minimap.h + 1, 2, 15, 0, 0);
     at = gput(b, cap, at, "\thotornot=0;\r\n\t}\r\n");
 
     at = label(b, cap, at, g++, "MAPNAME", L->mapname.x, L->mapname.y, L->mapname.w, L->mapname.h,
@@ -427,6 +453,10 @@ static int build_gui(char* b, int cap, const Layout* L)
                "Timelines");
     at = list(b, cap, at, g++, "TIMELINES", TL_ASSOC, L->timelines.x, L->timelines.y,
               L->timelines.w, L->timelines.h, LIST_PLAIN);
+    at = label(b, cap, at, g++, "MODLINE", L->modline.x, L->modline.y, L->modline.w,
+               L->modline.h, LBL_LEFT, "");
+    at = label(b, cap, at, g++, "MODHINT", L->modhint.x, L->modhint.y, L->modhint.w,
+               L->modhint.h, LBL_LEFT, "");
     at = label(b, cap, at, g++, "COUNT", L->count.x, L->count.y, L->count.w, L->count.h, LBL_RIGHT,
                "");
     at = label(b, cap, at, g++, "FOOTER", L->footer.x, L->footer.y, L->footer.w, L->footer.h,
@@ -435,8 +465,9 @@ static int build_gui(char* b, int cap, const Layout* L)
     at = button(b, cap, at, g++, "WATCH", &L->btn[BT_WATCH], "Watch", 0);
     at = button(b, cap, at, g++, "PLAYON", &L->btn[BT_PLAYON], "Play on", 1);
     at = button(b, cap, at, g++, "FAV", &L->btn[BT_FAV], "Favourite", 0);
+    at = button(b, cap, at, g++, "ALLMODS", &L->btn[BT_ALL], ALL_ON, 0);
     at = button(b, cap, at, g++, "BACK", &L->btn[BT_BACK], "Back", 0);
-    return g - 1 == 22 ? at : -1;
+    return g - 1 == GADGETS ? at : -1;
 }
 
 /* The ground: the style's own 640x480 `ground`, with the title set into it from the style's
@@ -945,10 +976,15 @@ static void __stdcall mm_oncommand(void* gi)
    The index is a cache that can always be rebuilt, but for three marks it alone holds: the
    favourite flag, the last time a recording was played and its bookmarks. One line per recording,
    keyed by its file name and size:
-     name size format start last end fav played map nseats seat... marks    (tab-separated)
+     name size format start last end fav played map nseats seat... marks
+       I version modprint has_modprint archives mod result,commander,defeat...  (tab-separated)
    `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never. `marks` is the
    dock's bookmarks, comma-separated GameTimes inside [start, last], sorted; a line without the
    field, as this version's first lines were written, has none.
+   From `I` on, what recr_info read: the version text, the archive fingerprint (hex) and whether
+   the recording has one, the archives mounted, the mod named from them (mod_of), and each seat's
+   result (RecResult), last commander death and defeat GameTimes, in the seats' order. A line
+   without `I`, as the index was written before them, keeps its marks and has the rest read again.
    format 0 is a recording this build could not read. A recording whose line does not match is
    read again through recr_summary. The file is replaced whole, through a temporary file and a
    rename, so a crash leaves the old index or the new one. Lines for recordings the list does not
@@ -962,6 +998,12 @@ typedef struct {
     char     map[RECR_TEXT];
     char     name[REC_PLAYERS][RECR_NAME];
     unsigned nmarks, marks[MARKS_MAX];
+    int      info;                          /* the fields below were read (`I`)               */
+    char     version[VERSION_MAX + 1];
+    unsigned modprint, has_modprint, archives;
+    char     mod[MOD_NAME_MAX];             /* an s_mods name                                 */
+    unsigned char result[REC_PLAYERS];      /* RecResult, in the seats' order, as name[]      */
+    unsigned cmdr[REC_PLAYERS], defeat[REC_PLAYERS];
 } Ent;
 
 typedef struct {
@@ -973,8 +1015,18 @@ typedef struct {
 
 static Ent   s_ent[ENT_MAX];
 static int   s_nent;
-static Row   s_row[ENT_MAX];
+static int   s_listed[ENT_MAX];             /* the recordings in replays\, newest first, by entry */
+static int   s_nlisted;
+static Row   s_row[ENT_MAX];                /* those the filter shows                          */
 static int   s_nrows;
+/* THE MOD FILTER (the S5 note, "A recording from another mod"): the list holds the recordings of
+   the running game's mod and version, mod_of's name and RT_GAME_VERSION's text, and All mods
+   shows the rest. The archive fingerprint names an install, not a mod: it is a hint in the
+   detail, never a filter. Taken when the browser opens. */
+static int   s_all;
+static char  s_runMod[MOD_NAME_MAX];
+static char  s_runVersion[VERSION_MAX + 1];
+static unsigned s_runPrint;
 static char  s_blob[ENT_MAX * ROW_TEXT];    /* LIFETIME: SetListText keeps this pointer and
                                                never frees it; static, it outlives every read */
 static char  s_tlBlob[32];
@@ -1018,10 +1070,30 @@ static void marks_parse(char* text, Ent* e)
     if (e->nmarks > 1) qsort(e->marks, e->nmarks, sizeof e->marks[0], uint_cmp);
 }
 
+/* the `I` fields from f[0] (`I` itself) on, `n` of them */
+static void info_parse(char** f, int n, Ent* e)
+{
+    int i;
+    if (n < 6 + (int)e->nseats || strcmp(f[0], "I")) return;
+    lstrcpynA(e->version, f[1], sizeof e->version);
+    e->modprint = strtoul(f[2], NULL, 16);
+    e->has_modprint = strtoul(f[3], NULL, 10) ? 1 : 0;
+    e->archives = strtoul(f[4], NULL, 10);
+    lstrcpynA(e->mod, f[5], sizeof e->mod);
+    for (i = 0; i < (int)e->nseats; i++) {
+        unsigned r = 0, c = 0, d = 0;
+        sscanf(f[6 + i], "%u,%u,%u", &r, &c, &d);
+        e->result[i] = (unsigned char)(r <= REC_RESULT_LOST ? r : REC_RESULT_UNKNOWN);
+        e->cmdr[i] = c;
+        e->defeat[i] = d;
+    }
+    e->info = 1;
+}
+
 /* One index line into `e`; 0 when it is not one. `line` is NUL-terminated and is cut up. */
 static int ent_parse(char* line, Ent* e)
 {
-    char* f[11 + REC_PLAYERS];
+    char* f[11 + REC_PLAYERS + 6 + REC_PLAYERS];
     int n = 0, i;
     char* p = line;
     memset(e, 0, sizeof *e);
@@ -1045,6 +1117,7 @@ static int ent_parse(char* line, Ent* e)
     if (e->nseats > REC_PLAYERS || (int)e->nseats > n - 10) e->nseats = 0;
     for (i = 0; i < (int)e->nseats; i++) lstrcpynA(e->name[i], f[10 + i], RECR_NAME);
     if (n > 10 + (int)e->nseats) marks_parse(f[10 + e->nseats], e);
+    if (n > 11 + (int)e->nseats) info_parse(f + 11 + e->nseats, n - 11 - (int)e->nseats, e);
     return 1;
 }
 
@@ -1111,6 +1184,15 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
     }
     at = gput(b, cap, at, "\t");
     for (i = 0; i < e->nmarks; i++) at = gput(b, cap, at, i ? ",%u" : "%u", e->marks[i]);
+    if (e->info) {
+        char v[sizeof e->version];
+        lstrcpynA(v, e->version, sizeof v);
+        sanitize(v);
+        at = gput(b, cap, at, "\tI\t%s\t%08X\t%u\t%u\t%s", v, e->modprint, e->has_modprint,
+                  e->archives, e->mod);
+        for (i = 0; i < e->nseats; i++)
+            at = gput(b, cap, at, "\t%u,%u,%u", e->result[i], e->cmdr[i], e->defeat[i]);
+    }
     return gput(b, cap, at, "\n");
 }
 
@@ -1170,6 +1252,100 @@ static void index_save(void)
     }
 }
 
+static int ascii_lower(char c) { return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : (unsigned char)c; }
+
+/* `name` against a per-mod table pattern, case aside: `%s` stands for any run of characters */
+static int pat_match(const char* pat, const char* name)
+{
+    for (; *pat; pat++, name++) {
+        if (pat[0] == '%' && pat[1] == 's') {
+            for (;; name++) {
+                if (pat_match(pat + 2, name)) return 1;
+                if (!*name) return 0;
+            }
+        }
+        if (!*name || ascii_lower(*pat) != ascii_lower(*name)) return 0;
+    }
+    return !*name;
+}
+
+/* The mod a recording was made in, from the archives it mounted, by the per-mod table's own
+   archive patterns: the first archive that matches an entry's names it; none, retail. A mod the
+   table does not know is retail by name, and told apart by its version text (row_shown). "" for
+   a recording that names no archive, as one made before RT_ARCHIVE does not. */
+static const char* mod_of(const RecInfo* in)
+{
+    unsigned a;
+    int m;
+    if (!in->narchives) return "";
+    for (a = 0; a < in->narchives; a++)
+        for (m = MOD_RETAIL; m < MOD_N; m++)
+            if (s_mods[m].archive && pat_match(s_mods[m].archive, in->archive[a].name))
+                return s_mods[m].name;
+    return s_mods[MOD_RETAIL].name;
+}
+
+/* The running game's mod as mod_of names a recording's: the table's entry when its archive
+   pattern is what identified it, else retail; Twilight and an unknown mod mount no archive of a
+   pattern of the table's. */
+static const char* running_mod(void)
+{
+    const Mod* m = &s_mods[s_mod < 0 ? MOD_UNKNOWN : s_mod];
+    return m->archive ? m->name : s_mods[MOD_RETAIL].name;
+}
+
+/* The main menu's version text as RT_GAME_VERSION takes it: printable, 1 to 7 characters, else
+   "" (tagpu_recorder.c, the header). */
+static void running_version(char* out, unsigned cap)
+{
+    const char* v = (const char*)VA_VERSION_TEXT;
+    unsigned k = 0;
+    while (k < 8 && v[k] >= 0x20 && v[k] < 0x7F) k++;
+    if (!k || k >= 8 || v[k] || k >= cap) k = 0;
+    memcpy(out, v, k);
+    out[k] = 0;
+}
+
+/* RecInfo is about 71 KB, so one scratch serves every read: the index's and the detail's, all
+   on the game thread (the header of this file), none of them inside another. */
+static RecInfo s_info;
+
+/* What recr_info reads of `e`'s file into its `I` fields; a file it cannot read keeps them
+   empty, and is not asked again until its size changes. */
+static void info_read(Ent* e)
+{
+    char path[MAX_PATH], why[160];
+    unsigned i, k = 0;
+    e->info = 1;
+    e->version[0] = e->mod[0] = 0;
+    e->modprint = e->has_modprint = e->archives = 0;
+    memset(e->result, REC_RESULT_UNKNOWN, sizeof e->result);
+    memset(e->cmdr, 0, sizeof e->cmdr);
+    memset(e->defeat, 0, sizeof e->defeat);
+    if (!e->format) return;
+    _snprintf(path, sizeof path, "replays\\%s", e->file);
+    path[sizeof path - 1] = 0;
+    if (!recr_info(path, &s_info, why, sizeof why)) {
+        rlog("replays: %s: %s", e->file, why);
+        return;
+    }
+    lstrcpynA(e->version, s_info.version, sizeof e->version);
+    e->modprint = s_info.modprint;
+    e->has_modprint = s_info.has_modprint ? 1 : 0;
+    e->archives = s_info.archives;
+    lstrcpynA(e->mod, mod_of(&s_info), sizeof e->mod);
+    /* the header names its seats in record order (RT_PLAYER), the order of name[]: the k-th
+       record present is the k-th seat. BOUND: k below the seats the summary read. */
+    for (i = 0; i < REC_PLAYERS && k < e->nseats; i++) {
+        if (!s_info.seat[i].present) continue;
+        e->result[k] = s_info.seat[i].result <= REC_RESULT_LOST ? s_info.seat[i].result
+                                                                 : REC_RESULT_UNKNOWN;
+        e->cmdr[k] = s_info.seat[i].commander;
+        e->defeat[k] = s_info.seat[i].defeat;
+        k++;
+    }
+}
+
 static void summarize(Ent* e)
 {
     char path[MAX_PATH], why[160];
@@ -1187,19 +1363,17 @@ static void summarize(Ent* e)
         lstrcpynA(e->map, s.map, sizeof e->map);
         e->nseats = s.nseats;
         for (i = 0; i < s.nseats; i++) lstrcpynA(e->name[i], s.name[i], RECR_NAME);
-        return;
-    }
-    rlog("replays: %s: %s", e->file, why);
-    /* the recorder names its files "YYYY-MM-DD HHMMSS <map>.imprec" (tagpu_recorder.c) */
-    {
+    } else {
+        /* the recorder names its files "YYYY-MM-DD HHMMSS <map>.imprec" (tagpu_recorder.c) */
         const char* p = strchr(e->file, ' ');
+        char* dot;
+        rlog("replays: %s: %s", e->file, why);
         p = p ? strchr(p + 1, ' ') : NULL;
         lstrcpynA(e->map, p ? p + 1 : e->file, sizeof e->map);
-        {
-            char* dot = strrchr(e->map, '.');
-            if (dot) *dot = 0;
-        }
+        dot = strrchr(e->map, '.');
+        if (dot) *dot = 0;
     }
+    info_read(e);
 }
 
 /* ---- the dock's bookmarks ---------------------------------------------------------------------
@@ -1304,7 +1478,22 @@ static int newest_first(const void* a, const void* b)
     return c ? c : lstrcmpiA(y->file, x->file);
 }
 
-/* The rows: every recording in replays\, newest first, the first ENT_MAX of them. */
+/* A row for each recording listed that the filter shows: with All mods every one, else those of
+   the running game's mod and version (THE MOD FILTER). */
+static int row_shown(const Ent* e)
+{
+    return s_all || (e->info && !strcmp(e->mod, s_runMod) && !strcmp(e->version, s_runVersion));
+}
+
+static void rows_pick(void)
+{
+    int i;
+    s_nrows = 0;
+    for (i = 0; i < s_nlisted; i++)
+        if (row_shown(&s_ent[s_listed[i]])) s_row[s_nrows++].ent = s_listed[i];
+}
+
+/* The recordings listed: every one in replays\, newest first, the first ENT_MAX of them. */
 static void scan(void)
 {
     WIN32_FIND_DATAA fd;
@@ -1313,16 +1502,21 @@ static void scan(void)
     int nf = 0, cap = 0, i, dirty = 0, kept = 0, gone;
 
     index_load();
-    s_nrows = 0;
+    s_nlisted = 0;
     s_disk = 0;
     h = FindFirstFileA("replays\\*.imprec", &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
             unsigned long long size;
+            char path[MAX_PATH];
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             size = ((unsigned long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
             s_disk += size;
             if (strlen(fd.cFileName) >= FILE_MAX) continue;
+            /* the recording the game is writing is not offered (tagpu_replay_being_written) */
+            _snprintf(path, sizeof path, "replays\\%s", fd.cFileName);
+            path[sizeof path - 1] = 0;
+            if (tagpu_replay_being_written(path)) continue;
             if (nf == cap) {
                 int c = cap ? cap * 2 : 256;
                 Found* n = (Found*)realloc(found, (size_t)c * sizeof *n);
@@ -1366,11 +1560,15 @@ static void scan(void)
             s_ent[k].size = found[i].size;
             summarize(&s_ent[k]);
             dirty = 1;
+        } else if (!s_ent[k].info) {
+            info_read(&s_ent[k]);
+            dirty = 1;
         }
-        s_row[s_nrows++].ent = k;
+        s_listed[s_nlisted++] = k;
     }
     free(found);
     if (dirty || gone) index_save();
+    rows_pick();
 }
 
 /* ================================================================================================
@@ -1516,25 +1714,119 @@ static void set_label(char* gi, const char* name, const char* fmt, ...)
     ((set_label_fn)VA_SETLABEL)(gi, name, b);
 }
 
-/* "name: ?", the name cut until it fits a column; a cut name never ends on a space */
-static void player_text(char* t, unsigned cap, const char* name)
+/* "name: Won", "name: Lost" or the name alone, the name cut until it fits a column; a cut name
+   never ends on a space */
+static void player_text(char* t, unsigned cap, const char* name, unsigned result)
 {
+    const char* r = result == REC_RESULT_WON ? ": Won" : result == REC_RESULT_LOST ? ": Lost" : "";
     char n[RECR_NAME];
     int k, full;
     lstrcpynA(n, name, sizeof n);
     full = k = lstrlenA(n);
     for (;;) {
         while (k && k < full && n[k - 1] == ' ') n[--k] = 0;
-        _snprintf(t, cap, "%s: ?", n);
+        _snprintf(t, cap, "%s%s", n, r);
         t[cap - 1] = 0;
         if (!k || text_w(t) <= s_cur->pw) return;
         n[--k] = 0;
     }
 }
 
-/* The right-hand well for row `sel`, or empty. The result of each player and the minimap are
-   not in the recording format yet: a player's result shows "?" and the minimap is left without
-   a frame. */
+/* THE MINIMAP. The id-6 surface gadget's draw 0x4A4980 stamps a frame at its +0xC2 with
+   GAF_DrawTransformed 0x4C7580 over the record's rect less its last column and row, from the
+   frame's texels [1, w - 1) x [1, h - 1) (0x4A4ABD..0x4A4B1B; measured on SKIRMISH's swatches,
+   tagpu_gui_leaves.h, before_scale), so a frame two texels wider and higher than the box, on a
+   record one pixel wider and higher, is stamped 1:1 over exactly the box. Without a frame the
+   gadget fills its rect with the colour at gi+0x8B9 (0x4A4B2A): the frame takes that colour
+   around the map, and everywhere when there is no map, as a recording without RB_MINIMAP has.
+   The map is the recorded picture's part [0, 2·cols) x [0, 2·rows), the part the engine shows,
+   fitted as the engine fits the level's minimap (0x466780, exe-reverse-engineering.md): the long
+   axis takes the box, the short one its share, truncated, and the result is centred; sampled
+   nearest, a texel per pixel by truncating division.
+   LIFETIME: the frame and its texels are this file's statics, and nothing frees them: the
+   teardown's stage 2 frees a gadget's +0x2B when its +0xB4 bit 0 is set, a panel's +0xC0 and the
+   +0xD6 of ids 7 and 8, and nothing else (0x4A9562..0x4A95C0); an id-6 frame is its screen's own
+   to free, as SKIRMISH frees its preview's itself (0x47A94A..0x47A95D). */
+#define G_FRAME   0xC2              /* id 6: the frame the surface gadget stamps              */
+#define GI_FILL   0x8B9             /* the colour it fills with when it has no frame          */
+#define MM_BOX    96                /* a layout's minimap box at most, each side              */
+static unsigned char s_mmFrame[0x18];
+static unsigned char s_mmPix[(MM_BOX + 2) * (MM_BOX + 2)];
+
+/* `in`'s minimap into the frame, or the box's colour alone; 1 when there was a map */
+static int minimap_build(const char* gi, const RecInfo* in)
+{
+    int W = s_cur->minimap.w, H = s_cur->minimap.h, fw = W + 2, fh = H + 2;
+    unsigned sw, sh;
+    int dw, dh, ox, oy, x, y;
+    const void* pix = s_mmPix;
+    memset(s_mmPix, (unsigned char)gi[GI_FILL], sizeof s_mmPix);
+    memset(s_mmFrame, 0, sizeof s_mmFrame);
+    *(unsigned short*)(s_mmFrame + 0x00) = (unsigned short)fw;
+    *(unsigned short*)(s_mmFrame + 0x02) = (unsigned short)fh;
+    memcpy(s_mmFrame + 0x10, &pix, sizeof pix);
+    if (!in || !in->mm_w || !in->mm_h) return 0;
+    /* BOUND: the shown part within the picture, and the picture within RecInfo's plane
+       (recr_info keeps only w x h <= REC_MINIMAP_MAX) */
+    sw = 2 * in->mm_cols < in->mm_w ? 2 * in->mm_cols : in->mm_w;
+    sh = 2 * in->mm_rows < in->mm_h ? 2 * in->mm_rows : in->mm_h;
+    if (!sw || !sh) return 0;
+    if (sw * (unsigned)H >= sh * (unsigned)W) {
+        dw = W;
+        dh = (int)(sh * (unsigned)W / sw);
+    } else {
+        dh = H;
+        dw = (int)(sw * (unsigned)H / sh);
+    }
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    ox = (W - dw) / 2;
+    oy = (H - dh) / 2;
+    for (y = 0; y < dh; y++)
+        for (x = 0; x < dw; x++)
+            s_mmPix[(1 + oy + y) * fw + 1 + ox + x] =
+                in->minimap[(y * sh / (unsigned)dh) * in->mm_w + x * sw / (unsigned)dw];
+    return 1;
+}
+
+static void minimap_show(char* gi, const Ent* e)
+{
+    char* ctrls = top_ctrls(gi, NULL);
+    int k = ctrls ? find_rec(ctrls, "MINIMAP") : 0;
+    const RecInfo* in = NULL;
+    char path[MAX_PATH], why[160];
+    if (!k || ctrls[(size_t)k * STRIDE + G_ID] != 6 || s_cur->minimap.w > MM_BOX ||
+        s_cur->minimap.h > MM_BOX)
+        return;
+    if (e && e->format) {
+        _snprintf(path, sizeof path, "replays\\%s", e->file);
+        path[sizeof path - 1] = 0;
+        if (recr_info(path, &s_info, why, sizeof why)) in = &s_info;
+        else rlog("replays: %s: %s", e->file, why);
+    }
+    minimap_build(gi, in);
+    *(void**)(ctrls + (size_t)k * STRIDE + G_FRAME) = s_mmFrame;
+}
+
+/* The selected recording's mod and version, and whether the archives this game mounted are the
+   ones it was recorded with: a hint, since a map installed since changes them too. */
+static void mod_lines(char* gi, const Ent* e)
+{
+    int m;
+    const char* title = "";
+    if (!e || !e->info || !e->mod[0]) {
+        set_label(gi, "MODLINE", "");
+        set_label(gi, "MODHINT", "");
+        return;
+    }
+    for (m = MOD_RETAIL; m < MOD_N; m++)
+        if (!strcmp(e->mod, s_mods[m].name)) title = s_mods[m].title;
+    set_label(gi, "MODLINE", "%s %s", title, e->version);
+    set_label(gi, "MODHINT", "%s", e->has_modprint && e->modprint != s_runPrint
+                                   ? "The installed archives differ." : "");
+}
+
+/* The right-hand well for row `sel`, or empty. */
 static void detail(char* gi, int sel)
 {
     const Ent* e = sel >= 0 && sel < s_nrows ? &s_ent[s_row[sel].ent] : NULL;
@@ -1543,15 +1835,19 @@ static void detail(char* gi, int sel)
     if (e && !e->format) set_label(gi, "MAPNAME", "%s (unreadable)", e->map);
     else set_label(gi, "MAPNAME", "%s", e ? e->map : "");
     for (i = 0; i < REC_PLAYERS; i++) {
-        char t[RECR_NAME + 4];
+        char t[RECR_NAME + 8];
         _snprintf(nm, sizeof nm, "P%d", i);
         nm[sizeof nm - 1] = 0;
-        if (e && i < (int)e->nseats) player_text(t, sizeof t, e->name[i]);
+        if (e && i < (int)e->nseats)
+            player_text(t, sizeof t, e->name[i], e->info ? e->result[i] : REC_RESULT_UNKNOWN);
         else t[0] = 0;
         set_label(gi, nm, "%s", t);
     }
     lstrcpynA(s_tlBlob, "Main timeline", sizeof s_tlBlob);
     ((set_list_fn)VA_SETLIST)(gi, "TIMELINES", s_tlBlob, e && e->format ? 1 : 0, NULL);
+    mod_lines(gi, e);
+    minimap_show(gi, e);
+    ((gi_fn)VA_SETDIRTY)(gi);
 }
 
 static void __stdcall rp_oncommand(void* gi);
@@ -1574,6 +1870,19 @@ static void bar_label(char* ctrls, const char* name, const Rect* bar)
 static void __stdcall recs_selected(void* gi, void* rec)
 {
     detail((char*)gi, *(const short*)((const char*)rec + L_SELECTED));
+}
+
+/* The rows the filter shows into the list, the count, the toggle's caption and the detail of the
+   first row; SetListText puts the selection and the top back to row 0 (0x4A33C7, 0x4A33CE). */
+static void rows_show(char* gi)
+{
+    rows_build();
+    ((set_list_fn)VA_SETLIST)(gi, "RECS", s_blob, s_nrows, NULL);
+    if (s_nrows == s_nfiles) set_label(gi, "COUNT", s_nfiles == 1 ? "1 recording" : "%d recordings",
+                                       s_nfiles);
+    else set_label(gi, "COUNT", "%d of %d recordings", s_nrows, s_nfiles);
+    set_label(gi, "ALLMODS", "%s", s_all ? ALL_OFF : ALL_ON);
+    detail(gi, s_nrows ? 0 : -1);
 }
 
 /* Pushed from inside the main menu's dispatch, exactly as the Load Game screen is pushed from
@@ -1611,16 +1920,16 @@ static void replays_open(char* gi)
     }
 
     badges_build();
+    lstrcpynA(s_runMod, running_mod(), sizeof s_runMod);
+    running_version(s_runVersion, sizeof s_runVersion);
+    s_runPrint = tagpu_rec_mod_print();
     scan();
-    rows_build();
-    ((set_list_fn)VA_SETLIST)(gi, "RECS", s_blob, s_nrows, NULL);
-    if (s_nfiles == 1) set_label(gi, "COUNT", "1 recording");
-    else set_label(gi, "COUNT", "%d recordings", s_nfiles);
+    rows_show(gi);
     mb = (double)s_disk / (1024.0 * 1024.0);
     set_label(gi, "FOOTER", mb < 10.0 ? "Replays use %.1f MB of disk." : "Replays use %.0f MB of disk.", mb);
-    detail(gi, s_nrows ? 0 : -1);
-    ((gi_fn)VA_SETDIRTY)(gi);
-    rlog("replays: opened - %d recordings listed, %I64u bytes", s_nrows, s_disk);
+    rlog("replays: opened - %d of %d recordings listed (%s), %I64u bytes; the running game %s %s, "
+         "archives %08X", s_nrows, s_nfiles, s_all ? "all mods" : "this mod", s_disk, s_runMod,
+         s_runVersion, s_runPrint);
 }
 
 /* The list record of ours on top, or NULL. */
@@ -1716,6 +2025,10 @@ static void __stdcall rp_oncommand(void* gi)
     } else if (name_is(r, "FAV")) {
         char* l = recs_rec(g, NULL);
         if (l) fav_toggle(g, *(const short*)(l + L_SELECTED));
+    } else if (name_is(r, "ALLMODS")) {
+        s_all ^= 1;
+        rows_pick();
+        rows_show(g);
     } else if (name_is(r, "WATCH") && watch(g)) {
         return;             /* every screen is popped: nothing of ours is left to answer */
     }

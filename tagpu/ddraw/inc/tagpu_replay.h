@@ -27,6 +27,9 @@ int tagpu_replay_watch(void* gi, const char* file, int view, void (*back)(void* 
 /* 1 when Watch can start a recording: the replay's sites are in and the engine code its route
    rests on reads as it was made against; else 0, with the reason in `why`. */
 int tagpu_replay_watch_ready(char* why, unsigned cap);
+/* 1 when a writer holds the recording at `path` open: the one the game is writing, which neither
+   Watch nor the browser offers. Any thread; it opens the file for a moment. */
+int tagpu_replay_being_written(const char* path);
 
 /* B2's stub at the sim step's unit-tick call (0x4954ED) calls this first, before the recorder's
    capture and the unit tick, on the game thread: on a level that plays a recording, the

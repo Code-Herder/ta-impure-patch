@@ -198,6 +198,43 @@ draw go through the engine's GAF blitter `0x4B7F90` after the GUI, as the sprock
 **The Replays browser** is a shell screen of its own: our ground, the engine's list and buttons over
 it, the minimap and the badges blitted.
 
+### What the browser shows of a recording
+
+Everything comes from the recording's own summary (*What S5 asks of the recorder*, items 1 to 3),
+read by `recr_info` (`tagpu_replays.c`):
+
+- **`index.dat` caches it**, so that opening the screen stays one small read. Each line gains,
+  after the bookmarks, an `I` field followed by the version text, the archive fingerprint, the
+  archives mounted, the mod named from them, and each seat's result, last commander death and
+  defeat. A line written before these fields keeps its favourite, last-played time and bookmarks,
+  and has the rest read again.
+- **The minimap** is read when a row is selected, never when the index is built. The browser
+  shows the recorded picture's part [0, 2·columns) × [0, 2·rows), fitted as the engine fits the
+  level's minimap (`0x466780`): the long axis takes the box, the short one its share, truncated,
+  and the result is centred. It is sampled nearest and drawn by the minimap gadget itself, a frame
+  at its `+0xC2` ([gui-gadgets](../gui-gadgets.md), id 6). A recording without a picture keeps
+  the box's grey. MEASURED 2026-10-02: Core Prime's 252×252 fills retail's 90×90 box exactly, and
+  Escalation's 78×78 square at (370, 62), inside its 78×84 box.
+- **The result** follows each name: "Won", "Lost", or nothing when it is not known.
+- **The mod** is named from the recording's mounted archives (`RT_ARCHIVE`) by the per-mod table's
+  own archive patterns. The first archive that matches an entry names it, and none means retail;
+  a mod the table does not know is grouped by its version text. The detail shows it with the
+  version under the timelines (`MODLINE`: "Total Annihilation v3.1"). When the recording's
+  fingerprint is not this install's, the next line says "The installed archives differ." That is
+  a hint only. In the shell, the running game's fingerprint is the one its levels record: the
+  recordings made on the reference setup carried `4D781ECD`, which the browser computed too.
+- **The filter.** The list holds the recordings of the running game's mod and version. The
+  **All mods** button, in the reserved slot (retail's plate at 340, 440; Escalation's 82-px plate
+  at 328..410), shows every recording and becomes **This mod**. The count reads "3 of 4
+  recordings" while some are hidden. A recording made before the mod was recorded names no
+  archive: it is listed only under All mods, with blanks for the mod and the results and a grey
+  minimap.
+- **A recording being written** is never offered. The writer holds its file open for writing
+  until the end is written, and an open that denies writers fails exactly then
+  (`tagpu_replay_being_written`). Watch makes the same test.
+- **Not built: the lock.** Locking another game's recordings needs the running game's unit-type
+  and weapon hashes, and the shell does not hold a level's (*Open*).
+
 **Impure Config** gains *Record games* (On/Off) and *Keep replays* (a count), on the panel's 28 px
 row pitch, with the caption **Impure Config**.
 
@@ -365,5 +402,10 @@ and leave, polling for error boxes, with a picture per screen.
 - **The title letters.** The retail style's `font/` is a stand-in and is not committed, and
   Escalation has none of its own: without a committed `font` entry no ground is composed and the
   browser does not arm. Landings 1 and 2 wait on the owner's letters for this and for the dock's art.
-- **Asks 1–3.** Until the recorder carries them, the browser shows a grey minimap and "?" for the
-  result, and the mod filter has nothing to compare.
+- **The lock on another game's recordings** waits on a decision. The rule is `RT_UNITDEFS` and
+  `RT_WEAPONS` against the running game's, but the main menu does not hold the unit types in a
+  level's order. MEASURED 2026-10-02 on retail: the shell held 279 types in the order the start-up
+  loaded them, hash `0x93B2B33D`. Every level held the same 279 names sorted, `None` first, hash
+  `0x54F5FE19`, which is what its recording carries. The shell's hash came back after the level.
+  Compared in the shell, then, every recording would lock. The weapons in the shell were not
+  measured.

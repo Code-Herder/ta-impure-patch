@@ -485,6 +485,17 @@ and is never drawn. The gadget is skipped outright if `active (+0x29)` is zero
 | 12 | `0x4A9199` | `0x4A5E50` — **corrected 2026-09-07**: this row said `0x4A5F40` (the button handler); the table at `0x4A962C` entry 11 holds `0x4A5E50` ([engine map](exe-reverse-engineering.html), "The UI surfaces and their writers") | button-like |
 | 13 | `0x4A93AB` | `GUI_TimerState 0x4A4660` | timer / animation |
 
+**`id 6`, the surface gadget, draws one of three things** (`0x4A4980`) [DISASSEMBLED 2026-10-02]:
+a frame of the GAF sequence at `+0xBE`, number `+0xC6` (`0x4A4A1A..0x4A4A31`); else the frame
+pointer at `+0xC2`, stamped by `GAF_DrawTransformed 0x4C7580` over the record's rect less its last
+column and row, from the frame's texels `[1, w − 1) × [1, h − 1)` (`0x4A4ABD..0x4A4B1B`) — so
+a frame two texels larger, on a record one pixel larger, lands 1:1 on a box; else a fill of the
+rect with the byte at `gi+0x8B9` (`0x4A4B2A..0x4A4B3F`). SKIRMISH's map preview is the `+0xC2`
+case, and the screen frees that frame itself (`0x47A94A..0x47A95D`): the teardown's stage 2 frees
+a gadget's `+0x2B` when its `+0xB4` bit 0 is set, a panel's `+0xC0` and the `+0xD6` of ids 7
+and 8, and nothing else (`0x4A9562..0x4A95C0`). The Replays browser's minimap is a frame of its
+own at `+0xC2` (`tagpu_replays.c`, THE MINIMAP).
+
 **`id 7` is how a screen declares its fonts and button art.** It is never drawn;
 instead twelve separate routines walk the gadget array counting `id == 7` records and
 stop when the running ordinal equals the *consuming* gadget's `+0x28`
@@ -571,7 +582,7 @@ a 640x480 surface in an instance launched at 1024x768, and `ARMCOM1.GUI` reports
 | `0x4A0BF0` | `GUIGADGET_SetText(GUIInfo*, const char* name, …)` | The direct-write `fill` we deliberately did **not** take |
 | `0x4A6A40` | `stdcall void(GUIInfo*, int idx)`; clears `status_init` on every `id==1` gadget sharing `assoc`, redrawing each | TA's radio-group reset — why clicking one button silently clears another |
 | `0x4B6AF0` | `stdcall char* NthEntry(char* buf, int n)`; `ret 8` | Walks a flat blob counting `\0`/`\n` — the whole of "listbox items" (§2.4) |
-| `0x4A32A0` | `stdcall void SetListText(GUIInfo*, const char* name, char* blob, int count)`; `ret 0x14` | Sets `+0xC2`/`+0xC0` and `attribs |= 0x10` |
+| `0x4A32A0` | `stdcall void SetListText(GUIInfo*, const char* name, char* blob, int count)`; `ret 0x14` | Sets `+0xC2`/`+0xC0` and `attribs |= 0x10`; puts the top `+0xBC` and the selection `+0xBA` back to 0 (`0x4A33C7`, `0x4A33CE`) and calls no selection callback [DISASSEMBLED 2026-10-02] |
 | `0x4A35A0` | `stdcall void SetListEntries(GUIInfo*, const char* name, void* recs, int count)`; `ret 0x10` | The picture flavour: `+0xC6`, `attribs |= 0x80` |
 | `0x4A3EF0` | `stdcall void GUI_SliderUpdate(GUIInfo*, int idx)` | Finds the listbox with the slider's `assoc` and writes `knobpos` |
 | `0x4B7F30` | `stdcall glyph* GetGlyph(font*, int ch)`; `ret 8` | Row pitch, via glyph `'I'` height at `+0x02` |
