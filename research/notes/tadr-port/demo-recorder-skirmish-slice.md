@@ -1892,7 +1892,15 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   without one.
 - **The measurements**: 41 of 62 candidates, then 18 of 18; 619 to 775 functions of the
   instrumented files reached per scenario.
-<!-- LANDING RUN -->
+- **The landing's own tier.** Every feature being new, `tareplay.py landing` ran all 17 fixtures
+  on the coverage builds, four games at once, at the landing's last code commit: 391 of 391 checks
+  passed — every end block and `tarec check`, every L dump against the recording, P, R and Q
+  against it as puppets, the counts and the images gate of all 17, the address scan, the COB
+  writes, and 51 round trips, each with residue 0 and A against B EQUAL, their seeks 7 to 514 ms.
+  One changed function no fixture reached, `tagpu_replay.c`'s `sk_back` (the reader's way back
+  after a refused seek, changed only in the arguments it passes): landed UNCOVERED by the owner's
+  decision, so no `replay-roundtrip:` pass note was written; the run is recorded in a note of its
+  own on the commit.
 
 #### What S3c-3 leaves
 
