@@ -6492,6 +6492,22 @@ static const SimField hit_layout[] = {
 };
 static struct hit_tab* volatile s_hit;
 SIM_BLOCK(s_hit, SIM_STATE, SIM_ID_NONE, 1, hit_layout);
+/* The three columns again, each a recorded table of its own, one u32 a unit slot: the recorder
+   images hit_layout's column pointers as 0, and a fork reads them across its takeover point
+   (tx_mark_held compares the stamps, hit_held the frees). hit_layout keeps its SIMF_COLUMN fields,
+   so its n stays a kept count and no byte has two declarations.
+   LIFETIME: each points into the table s_hit was published with, which is never freed.
+   BOUND: s_hitRows is that table's n (n <= room), published with the pointers; it is a heap
+   table's count, so the seek never writes it (count_kept), and it writes at most that many rows.
+   ORDERING: hit_reset publishes them right after s_hit, on the same thread. */
+static unsigned int* s_hitStamp;
+static unsigned int* s_hitFreed;
+static unsigned int* s_hitLocal;
+static unsigned s_hitRows;
+SIM_HEAP(s_hitStamp, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(unsigned int), s_hitRows, NULL);
+SIM_HEAP(s_hitFreed, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(unsigned int), s_hitRows, NULL);
+SIM_HEAP(s_hitLocal, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(unsigned int), s_hitRows, NULL);
+SIM_VAR(s_hitRows, SIM_STATE);
 /* counters for the heartbeat's hits: section; u32, one writer thread */
 static struct {
     unsigned int tables;
@@ -6643,6 +6659,10 @@ static void __cdecl hit_reset(unsigned int* regs)
     memset(t->local, 0, t->room * sizeof *t->local);
     t->n = n;
     s_hit = t;
+    s_hitStamp = t->stamp;
+    s_hitFreed = t->freed;
+    s_hitLocal = t->local;
+    s_hitRows = n;
     s_hitDelayHead = s_hitDelayCount = 0;
     tx_reset();
 }
