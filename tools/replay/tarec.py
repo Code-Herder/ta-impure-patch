@@ -282,7 +282,10 @@ def header(payload):
         elif tag == RT_ARCHIVE:
             size, mtime = struct.unpack_from("<IQ", b)
             h.setdefault("archives", []).append((b[12:].decode("latin-1"), size, mtime))
-        elif tag == RT_MODPRINT: h["modprint"] = u32
+        elif tag == RT_MODPRINT:
+            h["modprint"] = u32
+            if len(b) >= 8:
+                h["archives_mounted"] = struct.unpack_from("<I", b, 4)[0]
         elif tag == RT_FIELDS:
             ix, n = struct.unpack_from("<HH", b)
             h.setdefault("fields", {})[ix] = [struct.unpack_from("<HHHHBB", b, 4 + 12 * k)
@@ -869,7 +872,7 @@ def cmd_info(path):
     print(f"  settings map {h.get('settings_map')!r}, weapons {h.get('weapons')}")
     print(f"  version {h.get('version')!r}, mod fingerprint "
           f"{'0x%08x' % h['modprint'] if 'modprint' in h else None}, "
-          f"{len(h.get('archives', []))} archives: "
+          f"{h.get('archives_mounted', len(h.get('archives', [])))} archives mounted: "
           + ", ".join(f"{n} ({s} bytes)" for n, s, _ in h.get("archives", [])))
     for kind, first, last, payload in bl:
         if kind == RB_MINIMAP:

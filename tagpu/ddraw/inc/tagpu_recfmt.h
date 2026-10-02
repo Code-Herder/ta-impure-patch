@@ -333,12 +333,13 @@ enum RecDrawSite {
 };
 
 /* A seat's result. The engine holds one result, the controlled player's (RT_GAME_END); the others
-   are this rule: a seat whose last unit died lost; when the controlled player won, every seat it
-   is allied with (its +0x108 row) won, and itself; when it lost, it lost; anything else is
-   unknown -- a quit, or a seat still alive in a game that did not end in the controlled player's
+   are this rule: a seat that ends the game with no unit lost; when the controlled player won,
+   every seat it is allied with (its +0x108 row) won, and itself, and every other seat lost; when
+   it lost, it lost; anything else is unknown -- a quit, or a seat still alive in a game that did not end in the controlled player's
    victory. */
 enum RecResult { REC_RESULT_UNKNOWN = 0, REC_RESULT_WON, REC_RESULT_LOST, REC_RESULT_NONE = 0xFF };
 #define REC_END_BYTES (28u + 12u * REC_PLAYERS)
+_Static_assert(REC_END_BYTES % 4 == 0, "an RK_END fills whole dwords (REC_RING_RESERVE)");
 #define REC_ARCHIVES  64u        /* the archives a header names at most                        */
 
 /* why a recording ended */
@@ -461,9 +462,12 @@ enum RecTag {
     RT_ARCHIVE,        /* u32 size, u32 mtime low, u32 mtime high (FILETIME, UTC), then the file
                           name without its folder: an archive the engine mounted, in its mount
                           order (the list at [0x51FBD0]+0x618), at most REC_ARCHIVES of them    */
-    RT_MODPRINT,       /* u32: the mod's fingerprint, tagpu_rec_mod_print: FNV-1a over each
-                          RT_ARCHIVE's lowercased name, NUL, size and mtime, Impure's own
-                          impure-patch.ufo left out                                              */
+    RT_MODPRINT,       /* u32 the mod's fingerprint, tagpu_rec_mod_print: FNV-1a over each mounted
+                          archive's lowercased name, NUL and size, Impure's own impure-patch.ufo
+                          left out, so two installs of one mod agree whatever their files' times;
+                          u32 the archives the engine had mounted, which RT_ARCHIVE lists up to
+                          REC_ARCHIVES of. A map archive changes it: whether a recording can be
+                          played is RT_UNITDEFS's and RT_WEAPONS's to say                         */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */
@@ -483,13 +487,13 @@ enum RecTag {
                           recorded with unit ID 0                                               */
     RT_UNOBSERVED,     /* u32: grid cells the rotating sweep found changed that no writer's
                           observer had marked: recorded when found, late                         */
-    RT_GAME_END,       /* u32: main+0x3923B at the teardown, the result of the controlled player:
-                          bit 4 won, bit 6 lost, bit 2 alone a quit; 0 when the recording ended
-                          otherwise                                                              */
-    RT_SEAT_END        /* u8 seat, u8 result (RecResult), u16 0, u32 the GameTime its first
-                          commander died, u32 the GameTime its last unit died (its live count
-                          +0x144 reached 0; the first time, when a Deathmatch respawn follows),
-                          0 for none: a seat of the recording                                    */
+    RT_GAME_END,       /* u32: main+0x3923B's bits 2, 4, 5 and 6 at the teardown, the result of
+                          the controlled player: bit 4 won, bit 6 lost, bit 2 without them a quit;
+                          0 when the recording ended before the level did                        */
+    RT_SEAT_END        /* u8 seat, u8 result (RecResult), u16 0, u32 the GameTime its last
+                          commander died, u32 the GameTime its last unit died when it ended the
+                          game with none (its live count +0x144 at 0), 0 for none: a seat of the
+                          recording                                                              */
 };
 
 #endif

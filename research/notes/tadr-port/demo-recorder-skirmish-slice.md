@@ -138,7 +138,10 @@ CRC-32 of the stored bytes and one of the header — and the payload, deflated w
   GameTime, the wall clock, the unit array's slots and the units each player may have, the unit
   types' count and a hash of their names, the players (index, controller, side, logo and name), the
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
-  (index, class, key, row size, flags and name), so a reader can walk their images;
+  (index, class, key, row size, flags and name), so a reader can walk their images; and the main
+  menu's version text, the mounted archives and the mod's fingerprint (*What the Replays browser
+  asks of a recording*);
+- **a minimap block** right after it, when the map has a picture;
 - **stream blocks** of whole iterations, each ending at the first iteration past 256 KB or at 300
   iterations;
 - **a snapshot block** every 900 iterations (30 seconds at normal speed), built from the writer's
@@ -146,7 +149,8 @@ CRC-32 of the stored bytes and one of the header — and the payload, deflated w
   no table span that is all zero. The interval stays 900 unless the seek-time series's worst seek
   exceeds one second, when it becomes 450 (*Decided 2026-10-01*);
 - **the end block**: why the recording ended, the last GameTime, the iterations, the corrections,
-  the id rows found outside their tables, and the most the ring held.
+  the id rows found outside their tables, the most the ring held, the game's end flags, and each
+  seat's result, first commander death and elimination.
 
 A block is written whole or not at all, so a file cut short reads up to its last complete block, and
 a file with no end block is incomplete.
@@ -1989,8 +1993,8 @@ The battle's recording grew 0.8 % (83.5 MB against S3c-3's 82.8 MB, games not id
 
 ### What the Replays browser asks of a recording
 
-S5's browser shows a recording's map, mod and result without walking its stream
-([S5 note](demo-recorder-s5-ui.md), *What S5 asks of the recorder*, items 1 to 3). This landing
+S5's browser shows a recording's map, mod and result without walking its stream (the S5 note's
+*What S5 asks of the recorder*, items 1 to 3, on the S5 branch until it lands). This landing
 comes between S4a and S4b, because S4b turns the file into segments. Every addition is a tag or a
 block an older reader skips, so `REC_FORMAT` stays 4.
 
@@ -2007,37 +2011,52 @@ block an older reader skips, so `REC_FORMAT` stays 4.
   - `RT_GAME_VERSION`: the main menu's version text at `0x5031B4`, which a mod's patch may
     rewrite; printable ASCII, at most 7 characters, absent otherwise.
   - `RT_ARCHIVE`: one per archive the engine mounted, in mount order, by file name (never the
-    path, which names the player's folders), size and mtime. Nothing is hashed on the game thread.
-  - `RT_MODPRINT`: their FNV-1a, Impure's own `impure-patch.ufo` left out, so an Impure update
-    does not make old recordings look like another mod's. `tagpu_rec_mod_print()` computes the
-    running game's the same way.
+    path, which names the player's folders), size and mtime. No file's contents are read.
+  - `RT_MODPRINT`: the FNV-1a of every mounted archive's name and size, and the engine's count of
+    them. Two details:
+    - Impure's own `impure-patch.ufo` is left out, so an Impure update does not make old
+      recordings look like another mod's.
+    - The files' times are left out, so two installs of one mod agree.
+    `tagpu_rec_mod_print()` computes the running game's the same way. A map archive changes the
+    fingerprint, so it names an install, not whether a recording can be played: that is
+    `RT_UNITDEFS`'s and `RT_WEAPONS`'s to say. `RT_ARCHIVE` lists the first `REC_ARCHIVES` (64).
+  - **Departures from the ask:**
+    - Sizes, not CRC-32s: hashing an install's 900 MB of archives is not for the game thread. The
+      S5 session agreed, and will ask again if two builds collide.
+    - The last commander death a seat suffers, not each one.
   - The list is `[0x51FBD0]+0x618`, count `+0x61C`. Only `InitTAHPIAry 0x41D4C0` mounts, prunes
     or reallocates it, from its eleven callers on the game thread, the skirmish's Start last.
     The recorder reads it on that thread at the level's first iteration, so the list cannot move
     under it.
 - **The end** is two end-block entries:
-  - `RT_GAME_END`: `main+0x3923B`, which still holds the controlled player's result at the
-    teardown's entry (bit 4 won, bit 6 lost, bit 2 alone a quit).
-  - `RT_SEAT_END`, one per seat: its result, the GameTime its first commander died, and the
-    GameTime its live count first reached 0.
+  - `RT_GAME_END`: bits 2, 4, 5 and 6 of `main+0x3923B`, a u16, which still hold the controlled
+    player's result at the teardown's entry: bit 4 won, bit 6 lost, bit 2 without them a quit. It
+    is 0 when the recording ended before the level did.
+  - `RT_SEAT_END`, one per seat: its result, the GameTime its last commander died, and, when it
+    ends the game with no unit, the GameTime its live count last reached 0. The last, not the
+    first: a scenario's load kills every commander and gives the seats new units (the fixtures'
+    recordings had every seat "defeated" at GameTime 34), and a Deathmatch respawns a commander
+    after an elimination.
   - The commander test is `Send_UnitDeath`'s own (`0x4864CB..0x48650F`): the UnitName against the
     side's commander name, made at the destructor's entry, with the def bounded by
     UNITINFOCount and the side by the sides loaded. Elimination is read at the destructor's
     exit: its decrement (`0x486DFC`) took the owner's `+0x144` to 0.
   - The engine holds one result, the controlled player's, and no draw. The other seats follow
-    the rule in `tagpu_recfmt.h`: a seat whose last unit died lost; in the controlled player's
-    victory it and its allies won; anything else is unknown.
+    the rule in `tagpu_recfmt.h`: a seat that ends the game with no unit lost; in the controlled
+    player's victory it and its allies won and every other seat lost; anything else is unknown.
 - **`RK_END` carries the seats.** The ring's reserve is sized from it, including the tail of the
   ring an `RK_END` skips when it does not fit there; that tail is at most the record less 4
-  bytes, not the 24 the old reserve assumed.
-- **`recr_info`** reads all of this from the header, the minimap block and the end block, skipping
-  the stream's blocks unread. `tarec info` prints it.
+  bytes, as the old 52 bytes were for a 28-byte `RK_END`.
+- **`recr_info`** reads all of this from the header, the minimap block and the end block. It
+  refuses a recording of another format, and reads only each other block's 32-byte header to pass
+  it. `tarec info` prints it.
+- **A seat** is a record the header names (`RT_PLAYER`), so its entry survives a controller that
+  changes during the game.
 
 <!-- ASKS RUN -->
 
 **Left:** S5's fourth ask, a recording that starts mid-game, belongs with S4d's suspend and resume
-of the recorder. In a Deathmatch (ActiveCommanderDeath 2) the respawn can follow an elimination;
-the entry keeps the first.
+of the recorder.
 
 ## S5
 

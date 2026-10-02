@@ -17,8 +17,8 @@
 int tagpu_cover_write(const char* name);
 
 /* The first name tagpu_cover_write was given, written again with every function that has run
-   since, at the level's end (tagpu_rec_level_end), so a harness that collects the files after the
-   end also gets what ran up to it. tareplay does so for the live game alone: a playing is stopped
+   since, at the level's end (tagpu_rec_level_end), after the recording's end and its writer's, so
+   a harness that collects the files after the end also gets what ran up to it. tareplay does so for the live game alone: a playing is stopped
    before its level ends, so what runs only at a puppet's level end is never reached there. Nothing
    in another build. */
 void tagpu_cover_flush(void);

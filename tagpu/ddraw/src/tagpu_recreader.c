@@ -1145,18 +1145,22 @@ fail:
 
 const RecHeader* recr_header(const RecReader* r) { return &r->h; }
 
-static void info_header(RecInfo* o, const unsigned char* b, size_t len)
+/* 1 the header is of this format */
+static int info_header(RecInfo* o, const unsigned char* b, size_t len)
 {
     size_t at = 0;
+    unsigned format = 0;
     while (at + 4 <= len) {
         unsigned short tag, n;
         const unsigned char* p = b + at + 4;
         memcpy(&tag, b + at, 2);
         memcpy(&n, b + at + 2, 2);
         if (at + 4 + n > len) break;
-        if (tag == RT_GAME_VERSION) text(o->version, sizeof o->version, p, n);
-        else if (tag == RT_MODPRINT && n == 4) {
+        if (tag == RT_FORMAT && n == 4) format = u32(p);
+        else if (tag == RT_GAME_VERSION) text(o->version, sizeof o->version, p, n);
+        else if (tag == RT_MODPRINT && n == 8) {
             o->modprint = u32(p);
+            o->archives = u32(p + 4);
             o->has_modprint = 1;
         } else if (tag == RT_ARCHIVE && n >= 12 && o->narchives < REC_ARCHIVES) {
             o->archive[o->narchives].size = u32(p);
@@ -1167,6 +1171,7 @@ static void info_header(RecInfo* o, const unsigned char* b, size_t len)
             o->seat[p[0]].present = 1;
         at += (4 + (size_t)n + 3) & ~(size_t)3;
     }
+    return format == REC_FORMAT;
 }
 
 static void info_end(RecInfo* o, const unsigned char* b, size_t len)
@@ -1208,6 +1213,7 @@ int recr_info(const char* path, RecInfo* out, char* why, unsigned cap)
     RecReader* r = (RecReader*)calloc(1, sizeof *r);
     char magic[8];
     RecBlock b;
+    LARGE_INTEGER size;
     int k, ok = 0;
     memset(out, 0, sizeof *out);
     if (!r) {
@@ -1231,8 +1237,12 @@ int recr_info(const char* path, RecInfo* out, char* why, unsigned cap)
         if (k >= 0) snprintf(why, cap, "%s has no header block", path);
         goto done;
     }
-    info_header(out, r->raw, r->rawn);
+    if (!info_header(out, r->raw, r->rawn)) {
+        snprintf(why, cap, "%s is not a recording of format %u", path, REC_FORMAT);
+        goto done;
+    }
     ok = 1;
+    if (!GetFileSizeEx(r->f, &size)) goto done;
     /* the minimap follows the header; the end block is the last: what lies between is skipped */
     while ((k = block_head(r, &b, why, cap)) > 0) {
         if (b.kind == RB_MINIMAP || b.kind == RB_END) {
@@ -1242,7 +1252,9 @@ int recr_info(const char* path, RecInfo* out, char* why, unsigned cap)
                 info_end(out, r->raw, r->rawn);
                 break;
             }
-        } else if (block_skip(r, &b, why, cap) < 0) break;
+        } else if (r->off + sizeof b + b.packed > (unsigned long long)size.QuadPart ||
+                   !file_at(r, r->off + sizeof b + b.packed))
+            break;
     }
 done:
     recr_close(r);

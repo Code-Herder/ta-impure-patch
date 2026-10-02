@@ -153,6 +153,7 @@ typedef struct RecInfo {
     char          version[RECR_TEXT];       /* RT_GAME_VERSION, "" when absent                   */
     unsigned      modprint;                 /* RT_MODPRINT: compare with tagpu_rec_mod_print()  */
     int           has_modprint;
+    unsigned      archives;                 /* the archives mounted, RT_MODPRINT's count         */
     unsigned      narchives;                /* RT_ARCHIVE entries (at most REC_ARCHIVES)          */
     struct { char name[RECR_TEXT]; unsigned size; unsigned long long mtime; } archive[REC_ARCHIVES];
     int           ended;                    /* an end block was read                             */
@@ -164,7 +165,9 @@ typedef struct RecInfo {
     unsigned char minimap[REC_MINIMAP_MAX];
 } RecInfo;
 /* 1 read (a recording without an end block, cut short, still reads: `ended` 0); 0 the file
-   cannot be read or is not a recording (why). Any thread; it opens the file read-only, shared. */
+   cannot be read or is not a recording of this format (why). Any thread; it opens the file
+   read-only, shared. It reads each block's 32-byte header to reach the end block, the stream's
+   bodies unread. RecInfo is about 71 KB: not for a small stack. */
 int recr_info(const char* path, RecInfo* out, char* why, unsigned cap);
 
 #endif
