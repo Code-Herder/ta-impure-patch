@@ -110,11 +110,12 @@ collects those final coverage files after stopping the process.
 - The trigger forms are `forks "NAME" delete ID` and
   `forks "NAME" export ID "OUT"`. tacli prefixes the name with `@` and a
   32-digit hexadecimal request token; the result carries that token, so an older
-  worker's result cannot complete a new command. The common game-thread flip observer looks for
+  worker's result cannot complete a new command, including CRLF log lines. The common game-thread flip observer looks for
   these on every fifth frame, including menus. Seeks and dumps retain their
   existing in-play frame-visit ordering. Each request reports done or refused.
 - `tacli replay takeover INSTANCE FILE --at T --player P --dry-run` predicts
-  eviction offline. Without FILE it asks the running playing. No takeover occurs.
+  eviction offline. Without FILE it asks the running playing. Both refuse a child
+  boundary or a time past the selected timeline's end. No takeover occurs.
 - `tools/replay/tareplay.py forks battle [--cover]` exercises the rules. The
   landing tier also runs its X lane on `battle` and `stock-limits`, after the
   existing L, P, R, Q, K, F and W lanes when present.

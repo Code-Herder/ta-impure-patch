@@ -5616,7 +5616,7 @@ def cmd_replay_forks(args):
                    + (f' "{args.output}"' if args.action == "export" else "") + "\n")
     os.replace(tmp, trig)
     rx = re.compile(rf"replay: forks replays\\{re.escape(path.name)}: (done|refused): "
-                    rf"(.*) \[request={request}\]$")
+                    rf"(.*) \[request={request}\]\r?$")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
         for line in lines():

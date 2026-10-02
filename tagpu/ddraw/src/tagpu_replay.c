@@ -5672,9 +5672,11 @@ static void trigger_read(void)
             if (dry) {
                 RecAppend a;
                 char why[160];
-                if (!T || !recr_append_point(s_rd, T - 1, &a, why, sizeof why))
-                    tagpu_logf("replay: %s: fork prediction refused: %s", s_name,
-                               T ? why : "GameTime must be positive");
+                if (!T || T > recr_selected(s_rd)->last)
+                    tagpu_logf("replay: %s: fork prediction refused: GameTime is outside the "
+                               "timeline", s_name);
+                else if (!recr_append_point(s_rd, T - 1, &a, why, sizeof why))
+                    tagpu_logf("replay: %s: fork prediction refused: %s", s_name, why);
                 else if (a.evict == UINT32_MAX)
                     tagpu_logf("replay: %s: fork would delete no timeline", s_name);
                 else tagpu_logf("replay: %s: fork would delete timeline %u (least recently used)",
