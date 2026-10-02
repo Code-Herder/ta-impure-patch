@@ -15,6 +15,8 @@
    none. Without those a request is never read. Then the browser's two sites: the main menu's
    builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
+/* File-maintenance triggers, on the game-thread flip observer, at every screen. */
+void tagpu_replay_files_frame(unsigned frame);
 
 /* The Replays browser's Watch (tagpu_replays.c), the other way a playback starts
    (tagpu_replay.c, THE BROWSER'S START). On the game thread, inside REPLAYS' OnCommand, `gi` the

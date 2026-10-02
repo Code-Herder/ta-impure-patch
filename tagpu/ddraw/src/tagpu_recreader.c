@@ -82,6 +82,9 @@ struct RecReader {
     unsigned           nidx;
     RecSeg             seg[RECR_TIMELINES];
     unsigned           nseg;
+    unsigned           nstates, max_id;
+    RecTimelineState   states[REC_TIMELINE_ROWS];
+    unsigned long long file_end;
     unsigned           chain_id[RECR_TIMELINES];   /* the chain played, root first, by id ...  */
     unsigned           chain[RECR_TIMELINES];      /* ... and by segment, after every scan     */
     unsigned           nchain;
@@ -101,7 +104,8 @@ static const char* const END_REASONS[] = {
     "INCOMPLETE: the projectile pool was not the one it began with, or its count was past its "
     "records",
     "INCOMPLETE: the explored map was not the one it began with",
-    "INCOMPLETE: a later timeline ended it at its last complete block"
+    "INCOMPLETE: a later timeline ended it at its last complete block",
+    "pruned: a deleted ancestor's retained prefix"
 };
 
 /* ---- blocks --------------------------------------------------------------------------------- */
@@ -274,6 +278,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         case RT_BUILD:         text(h->build, sizeof h->build, p, n); break;
         case RT_MODE:          if (n == 4) { h->mode = u32(p); seen |= 2; } break;
         case RT_MAP:           text(h->map, sizeof h->map, p, n); break;
+        case RT_WALLCLOCK:     if (n == 8) memcpy(&h->wallclock, p, 8); break;
         case RT_START:         if (n == 4) h->start = u32(p); break;
         case RT_SLOTS:         if (n == 4) { h->slots = u32(p); seen |= 4; } break;
         case RT_UNITS_EACH:    if (n == 4) h->units_each = u32(p); break;
@@ -1166,9 +1171,11 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
     RecSeg* sg = (RecSeg*)calloc(RECR_TIMELINES, sizeof *sg);
     RecIndexEntry* ix = NULL;
     unsigned nix = 0, room = 0, ns = 0, i, j;
-    unsigned long long off = 8, size;
+    unsigned long long off = 8, size, metadata_off = 0;
     LARGE_INTEGER fs;
     int ok = 0, after_end = 1;
+    RecTimelineState states[REC_TIMELINE_ROWS];
+    unsigned nstates = 0, max_id = 0;
     char w2[160];
     if (!sg) {
         snprintf(why, cap, "no memory for the recording's segments");
@@ -1204,6 +1211,24 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             break;
         }
         if (off + sizeof b + b.packed > size) break;      /* torn: the file ends in its payload */
+        if (b.kind == RB_TIMELINES) {
+            k = body_get(r, off, &b, &p, &n, why, cap);
+            if (k == BLK_UNREADABLE) goto done;
+            if (k == BLK_TORN) {
+                if (failed_block(r, off, off + sizeof b + b.packed, size, tail, why, cap) < 0)
+                    goto done;
+                break;
+            }
+            if (!ns || !recmeta_parse(states, &nstates, p, (unsigned)n)) {
+                free(p);
+                snprintf(why, cap, "invalid timeline metadata at byte %llu", off);
+                goto done;
+            }
+            free(p);
+            metadata_off = off;
+            off += sizeof b + b.packed;
+            continue;
+        }
         if (after_end) {
             /* a segment begins: the file's first block, or a header right after an end */
             if (b.kind != RB_HEADER) {
@@ -1320,6 +1345,7 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             goto done;
         }
         if (k == BLK_TORN) {
+            off = e->off;
             sg[e->seg].n--;
             nix--;
             seg_tally(&sg[e->seg], ix);
@@ -1346,6 +1372,35 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             goto done;
         }
     }
+    for (i = 0; i < ns; i++) {
+        RecTimeline* t = &sg[i].t;
+        if (t->id == UINT32_MAX) {
+            snprintf(why, cap, "timeline ID exhausted");
+            goto done;
+        }
+        t->state = REC_TL_LIVE;
+        t->last_used = sg[i].h->wallclock;
+        if (t->id > max_id) max_id = t->id;
+        int named = 0;
+        for (j = 0; j < nstates; j++) if (states[j].id == t->id) {
+            named = 1;
+            t->state = states[j].state;
+            t->last_used = ((uint64_t)states[j].used_high << 32) | states[j].used_low;
+        }
+        if (metadata_off && t->header_off < metadata_off && !named) {
+            snprintf(why, cap, "timeline %u missing from its metadata table", t->id);
+            goto done;
+        }
+    }
+    for (i = 0; i < nstates; i++) {
+        int found = 0;
+        if (states[i].id > max_id) max_id = states[i].id;
+        for (j = 0; j < ns; j++) if (states[i].id == sg[j].t.id) found = 1;
+        if (!found && states[i].state == REC_TL_LIVE) {
+            snprintf(why, cap, "live timeline %u has no segment", states[i].id);
+            goto done;
+        }
+    }
     ok = 1;
 done:
     if (ok) {
@@ -1366,6 +1421,10 @@ done:
             free(r->idx);
             r->idx = ix;
             r->nidx = nix;
+            r->file_end = off;
+            r->max_id = max_id;
+            r->nstates = nstates;
+            memcpy(r->states, states, nstates * sizeof *states);
         } else {
             memcpy(r->seg, keep, sizeof keep);
             r->nseg = old;
@@ -1444,6 +1503,10 @@ int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap)
         snprintf(why, cap, "the recording has no timeline %u", id);
         return 0;
     }
+    if (r->seg[s].t.state == REC_TL_DELETED) {
+        snprintf(why, cap, "timeline %u is deleted", id);
+        return 0;
+    }
     /* by parents to the original: each parent is an earlier segment (segs_scan's bounds) */
     for (;;) {
         path[n++] = s;
@@ -1514,9 +1577,42 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
         snprintf(why, cap, "the recording holds %u timelines, the most a file may", keep);
         return 0;
     }
-    a->off = cut ? last->t.header_off : last->t.end_off;
-    for (i = 0; i < keep; i++)
-        if (r->seg[i].t.id >= a->next_id) a->next_id = r->seg[i].t.id + 1;
+    a->off = cut ? last->t.header_off : r->file_end;
+    if (r->max_id >= UINT32_MAX - 1) {
+        snprintf(why, cap, "timeline ID exhausted");
+        return 0;
+    }
+    a->next_id = r->max_id + 1;
+    a->evict = UINT32_MAX;
+    {
+        unsigned live = 0;
+        uint64_t oldest = UINT64_MAX, now = recfile_now();
+        unsigned selected = recr_selected(r)->id;
+        for (i = 0; i < keep; i++) {
+            const RecTimeline* t = &r->seg[i].t;
+            RecTimelineState* row = &a->states[a->nstates++];
+            *row = (RecTimelineState){t->id, (uint8_t)t->state, {0},
+                                     (uint32_t)t->last_used, (uint32_t)(t->last_used >> 32)};
+            if (t->id && t->state == REC_TL_LIVE) {
+                live++;
+                if (t->id != selected && (a->evict == UINT32_MAX || t->last_used < oldest)) {
+                    oldest = t->last_used;
+                    a->evict = t->id;
+                }
+            }
+        }
+        if (live < REC_FORK_LIMIT) a->evict = UINT32_MAX;
+        else if (a->evict == UINT32_MAX || live > REC_FORK_LIMIT) {
+            snprintf(why, cap, "the live fork set cannot be bounded to %u", REC_FORK_LIMIT);
+            return 0;
+        }
+        for (i = 0; i < a->nstates; i++)
+            if (a->states[i].id == a->evict) a->states[i].state = REC_TL_DELETED;
+        /* The new ID exceeds the previous high watermark, so its row carries that watermark
+           even when an unfinished tail is cut. No absent tombstone is needed in this table. */
+        a->states[a->nstates++] = (RecTimelineState){a->next_id, REC_TL_LIVE, {0},
+                                                   (uint32_t)now, (uint32_t)(now >> 32)};
+    }
     a->parent = chain_seg(r, hold)->t.id;
     a->end_open = !cut && !last->ended;
     if (a->end_open) {
@@ -1714,7 +1810,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
 
 /* ---- open and close ------------------------------------------------------------------------- */
 
-RecReader* recr_open(const char* path, char* why, unsigned cap)
+static RecReader* open_handle(HANDLE f, const char* path, char* why, unsigned cap)
 {
     RecReader* r = (RecReader*)calloc(1, sizeof *r);
     char magic[8];
@@ -1722,6 +1818,7 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
     int k;
     if (!r) {
         snprintf(why, cap, "no memory");
+        CloseHandle(f);
         return NULL;
     }
     /* Shared for writing too: a takeover opens the file it plays for writing while this reader
@@ -1729,13 +1826,7 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
        stops at the first torn one, so a reader of a file being appended reads its complete blocks
        only. One writer at a time is the writers' own share mode's doing (FILE_SHARE_READ only),
        not this reader's. */
-    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
-                       FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-    if (r->f == INVALID_HANDLE_VALUE) {
-        snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
-        free(r);
-        return NULL;
-    }
+    r->f = f;
     if (!read_all(r->f, magic, 8) || memcmp(magic, REC_MAGIC, 8)) {
         snprintf(why, cap, "%s is not a recording", path);
         goto fail;
@@ -1756,6 +1847,17 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
 fail:
     recr_close(r);
     return NULL;
+}
+
+RecReader* recr_open(const char* path, char* why, unsigned cap)
+{
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
+        return NULL;
+    }
+    return open_handle(f, path, why, cap);
 }
 
 /* The header block, then every block's header to the end block, whose payload alone is read: the
@@ -1968,4 +2070,211 @@ void recr_close(RecReader* r)
     if (r->w.grid) VirtualFree(r->w.grid, 0, MEM_RELEASE);
     if (r->base) VirtualFree(r->base, 0, MEM_RELEASE);
     free(r);
+}
+
+/* ---- timeline maintenance ------------------------------------------------------------------ */
+
+static int write_all(HANDLE f, const void* p, DWORD n)
+{
+    DWORD done;
+    return WriteFile(f, p, n, &done, NULL) && done == n;
+}
+
+static int stored_block(HANDLE f, unsigned kind, unsigned last, const void* p, unsigned n)
+{
+    RecBlock b = {0};
+    b.magic = REC_BLOCK_MAGIC;
+    b.kind = (uint16_t)kind;
+    b.flags = RBF_STORED;
+    b.first = b.last = last;
+    b.raw = b.packed = n;
+    b.crc_body = (uint32_t)Crc32_ComputeBuf(0, p, n);
+    b.crc_head = (uint32_t)Crc32_ComputeBuf(0, &b, 28);
+    return write_all(f, &b, sizeof b) && write_all(f, p, n);
+}
+
+static int maintenance_end(HANDLE f, unsigned reason, unsigned last)
+{
+    uint32_t e[4] = {(4u << 16) | RT_END_REASON, reason, (4u << 16) | RT_LAST, last};
+    return stored_block(f, RB_END, last, e, sizeof e);
+}
+
+static unsigned metadata_rows(const RecReader* r, RecTimelineState* rows)
+{
+    unsigned i, n = 0, high = 0;
+    for (i = 0; i < r->nseg; i++) {
+        const RecTimeline* t = &r->seg[i].t;
+        rows[n++] = (RecTimelineState){t->id, (uint8_t)t->state, {0},
+                                      (uint32_t)t->last_used, (uint32_t)(t->last_used >> 32)};
+        if (t->id > high) high = t->id;
+    }
+    if (high < r->max_id)
+        rows[n++] = (RecTimelineState){r->max_id, REC_TL_DELETED, {0}, 0, 0};
+    return n;
+}
+
+/* Copy the original block, after checking the payload CRC. Maintenance must never publish a
+   previously unchecked corrupt stream or snapshot as a clean compacted file. */
+static int copy_block(RecReader* r, HANDLE out, unsigned long long off, char* why, unsigned cap)
+{
+    RecBlock b;
+    unsigned char buf[32768];
+    unsigned left;
+    if (!seek_to(r->f, off) || !read_all(r->f, &b, sizeof b) ||
+        crc_stream(r, off, &b) != BLK_WHOLE || !seek_to(r->f, off) ||
+        !read_all(r->f, &b, sizeof b) || !write_all(out, &b, sizeof b)) goto fail;
+    left = b.packed;
+    while (left) {
+        unsigned n = left > sizeof buf ? sizeof buf : left;
+        if (!read_all(r->f, buf, n) || !write_all(out, buf, n)) goto fail;
+        left -= n;
+    }
+    return 1;
+fail:
+    snprintf(why, cap, "cannot copy the block at byte %llu (%lu)", off, GetLastError());
+    return 0;
+}
+
+static int file_compact(RecReader* r, const char* path, const char* output, unsigned chosen,
+                        char* why, unsigned cap)
+{
+    unsigned needed[RECR_TIMELINES] = {0}, cutoff[RECR_TIMELINES] = {0};
+    RecTimelineState rows[REC_TIMELINE_ROWS];
+    unsigned i, j, n = 0, high = 0, dead = 0;
+    char tmp[MAX_PATH];
+    HANDLE f = INVALID_HANDLE_VALUE;
+    int exporting = output && output[0], ok = 0;
+    const char* target = exporting ? output : path;
+    for (i = 0; i < r->nseg; i++) {
+        const RecTimeline* t = &r->seg[i].t;
+        if (t->state == REC_TL_DELETED) dead++;
+        if ((exporting && t->id == chosen) || (!exporting && t->state == REC_TL_LIVE)) {
+            unsigned s = i;
+            needed[s] = 1;
+            while (s) {
+                unsigned parent = seg_index(r, r->seg[s].t.parent);
+                if (cutoff[parent] < r->seg[s].t.fork_at)
+                    cutoff[parent] = r->seg[s].t.fork_at;
+                needed[parent] = 1;
+                s = parent;
+            }
+        }
+    }
+    if (!exporting && !dead) {
+        snprintf(why, cap, "no dead segments to compact");
+        return 1;
+    }
+    /* The root header is the format envelope even for a file whose last live timeline was
+       deleted. No deleted timeline is selectable, including this empty root. */
+    needed[0] = 1;
+    if (strlen(target) + 4 >= sizeof tmp) {
+        snprintf(why, cap, "the temporary path is too long");
+        return 0;
+    }
+    snprintf(tmp, sizeof tmp, "%s.tmp", target);
+    f = CreateFileA(tmp, GENERIC_WRITE | DELETE, FILE_SHARE_DELETE, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE || !write_all(f, REC_MAGIC, 8)) goto io_fail;
+    for (i = 0; i < r->nseg; i++) {
+        RecSeg* s = &r->seg[i];
+        const RecTimeline* t = &s->t;
+        unsigned last = 0;
+        int whole = exporting ? t->id == chosen : t->state == REC_TL_LIVE;
+        int ended = 0;
+        if (!needed[i]) continue;
+        if (!copy_block(r, f, t->header_off, why, cap)) goto done;
+        for (j = s->i0; j < s->i0 + s->n; j++) {
+            const RecIndexEntry* e = &r->idx[j];
+            /* A crossing stream block stays whole. Keeping it makes the prefix a valid
+               stream without recompressing records, and contains every child boundary. */
+            if (!whole && (!cutoff[i] || e->kind == RB_END || e->first >= cutoff[i])) continue;
+            if (!copy_block(r, f, e->off, why, cap)) goto done;
+            if (e->kind == RB_STREAM) last = e->last;
+            if (e->kind == RB_END) ended = 1;
+        }
+        if (!ended && !maintenance_end(f, whole ? REC_END_UNFINISHED : REC_END_PRUNED, last))
+            goto io_fail;
+        rows[n++] = (RecTimelineState){t->id, whole ? REC_TL_LIVE : REC_TL_DELETED, {0},
+                                      (uint32_t)t->last_used, (uint32_t)(t->last_used >> 32)};
+        if (t->id > high) high = t->id;
+    }
+    if (high < r->max_id) rows[n++] = (RecTimelineState){r->max_id, REC_TL_DELETED, {0}, 0, 0};
+    if (!stored_block(f, RB_TIMELINES, 0, rows, n * sizeof *rows) || !FlushFileBuffers(f))
+        goto io_fail;
+    /* Every Impure writer holds the same persistent path lock from before its scan through
+       its last mutation. That ordering remains held when the source closes: MoveFileEx cannot
+       replace an open destination on Windows/Wine, even one sharing DELETE. No cooperating
+       writer can append in the close-to-replace interval. Other readers retain their ordinary
+       handles and refuse replacement; a later close retries compaction. The temp is complete
+       and flushed before the atomic replacement, so a crash leaves the old or the new file. */
+    CloseHandle(r->f);
+    r->f = INVALID_HANDLE_VALUE;
+    if (!MoveFileExA(tmp, target, MOVEFILE_WRITE_THROUGH |
+                    (exporting ? 0 : MOVEFILE_REPLACE_EXISTING))) goto io_fail;
+    snprintf(why, cap, "%s %u; %u segments kept", exporting ? "exported timeline" :
+             "compacted after timeline", chosen, n);
+    ok = 1;
+    goto done;
+io_fail:
+    snprintf(why, cap, "cannot %s the recording (%lu)", exporting ? "export" : "compact",
+             GetLastError());
+done:
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+    return ok;
+}
+
+int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
+                char* why, unsigned cap)
+{
+    HANDLE f, lock;
+    RecReader* r;
+    RecTimelineState rows[REC_TIMELINE_ROWS];
+    unsigned n, s;
+    int ok = 0;
+    lock = recfile_lock(path, why, cap);
+    if (!lock) return 0;
+    f = CreateFileA(path, op == REC_FILE_EXPORT ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                    FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        snprintf(why, cap, "maintenance skipped: cannot write %s (%lu)", path, GetLastError());
+        recfile_unlock(&lock);
+        return 0;
+    }
+    r = open_handle(f, path, why, cap);       /* the reader owns the locked handle from here */
+    if (!r) { recfile_unlock(&lock); return 0; }
+    if (segs_scan(r, 1, why, cap) < 0) goto done;
+    s = seg_index(r, id);
+    if (op != REC_FILE_COMPACT && (s == RECR_TIMELINES || r->seg[s].t.state != REC_TL_LIVE)) {
+        snprintf(why, cap, "timeline %u is absent or deleted", id);
+        goto done;
+    }
+    if (op == REC_FILE_EXPORT) {
+        if (recr_timeline(r, id, why, cap) != 1) goto done;
+        ok = file_compact(r, path, output, id, why, cap);
+        goto done;
+    }
+    if (op == REC_FILE_TOUCH || op == REC_FILE_DELETE) {
+        uint64_t now = recfile_now();
+        if (op == REC_FILE_DELETE) r->seg[s].t.state = REC_TL_DELETED;
+        else r->seg[s].t.last_used = now;
+        n = metadata_rows(r, rows);
+        if (!seek_to(f, r->file_end) || !SetEndOfFile(f) ||
+            !stored_block(f, RB_TIMELINES, 0, rows, n * sizeof *rows) || !FlushFileBuffers(f)) {
+            snprintf(why, cap, "cannot write the timeline table (%lu)", GetLastError());
+            goto done;
+        }
+    }
+    ok = file_compact(r, path, NULL, id, why, cap);
+    if (op == REC_FILE_TOUCH || op == REC_FILE_DELETE) {
+        char detail[160];
+        snprintf(detail, sizeof detail, "%s", why);
+        snprintf(why, cap, "%s timeline %u%s%s", op == REC_FILE_TOUCH ? "touched" : "deleted",
+                 id, ok ? "; " : "; compaction deferred: ", detail);
+        ok = 1;              /* the complete metadata block is already committed */
+    }
+done:
+    recr_close(r);
+    recfile_unlock(&lock);
+    return ok;
 }

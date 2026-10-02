@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include "tagpu_recfmt.h"
+#include "tagpu_recfile.h"
 
 #define RECR_TEXT       64          /* a header string's bytes kept, NUL included            */
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
@@ -52,6 +53,7 @@ typedef struct RecHeader {
     char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT], layout[RECR_TEXT + 8];
     char         globals[RECR_TEXT + 8];    /* RT_GLOBALS: replay-globals.tsv's SHA-256       */
     unsigned     has_settings_map;
+    uint64_t     wallclock;
     unsigned     has_timeline, tl_id, tl_parent, tl_fork_at;   /* RT_TIMELINE, a fork's    */
     unsigned     nseats;
     RecSeat      seats[REC_PLAYERS];            /* in the header's order               */
@@ -171,6 +173,8 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
    from a takeover. A CHAIN is a timeline and its ancestors, root first: segment s covers
    [s.first, c.fork_at - 1] for its child c on the chain, and the chosen timeline [first, last]. */
 typedef struct RecTimeline {
+    unsigned state;
+    uint64_t last_used;
     unsigned id, parent, fork_at;      /* RT_TIMELINE; 0, 0, 0 for the original                     */
     unsigned first, last;              /* its first and last complete iteration; 0, 0 for none      */
     unsigned end_reason;               /* RT_END_REASON of its end block; 0 when it has none        */
@@ -187,6 +191,8 @@ typedef struct RecAppend {
     unsigned next_id;                  /* one more than every kept segment's id                     */
     unsigned parent;                   /* the chain's segment holding GameTime `at` (the argument)  */
     int      end_open;                 /* the last segment kept has no end block                    */
+    unsigned nstates, evict;           /* UINT32_MAX: no eviction */
+    RecTimelineState states[REC_TIMELINE_ROWS];
     unsigned open_id, open_last;       /* ... its id and its last complete iteration                */
 } RecAppend;
 

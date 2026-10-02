@@ -8,6 +8,7 @@
    tagpu_packet_pub.c.
    tagpu_overlay.off is the kill switch for everything we draw. */
 
+#include "tagpu_replay.h"
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -223,6 +224,7 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
     /* on-demand memory reads (tagpu_peek.trigger) — no-op unless triggered, and
        must run at the menus too: switch effects land before the first game */
     tagpu_peek_frame(f->frame_counter);
+    tagpu_replay_files_frame(f->frame_counter);
     /* on-demand weapon-slot dump (tagpu_weapons.trigger) — the oracle of the
        extra-weapons module; read-only. */
     tagpu_weapons_frame(f->frame_counter);

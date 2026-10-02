@@ -72,6 +72,7 @@ typedef struct Corr { unsigned kind, table, off, count; } Corr;
 
 typedef struct Writer {
     RecRing*       ring;
+    HANDLE         lock;
     HANDLE         file;
     int            append;      /* a fork: `file` is the ring's, written from its append point */
     char           path[MAX_PATH];
@@ -170,6 +171,7 @@ static void fail(Writer* w, const char* why)
     tagpu_logf("recorder: writer: %s: %s is abandoned at its last complete block", why, w->path);
     if (w->file != INVALID_HANDLE_VALUE) CloseHandle(w->file);
     w->file = INVALID_HANDLE_VALUE;
+    recfile_unlock(&w->lock);
 }
 
 static void put(Writer* w, const void* p, DWORD n)
@@ -228,10 +230,23 @@ static int file_open(Writer* w)
         if (k == 1) snprintf(w->path, sizeof w->path, "%s", w->ring->path);
         else snprintf(w->path, sizeof w->path, "%.*s (%d)%s", (int)(dot - w->ring->path),
                       w->ring->path, k, dot);
+        {
+            char why[128];
+            w->lock = recfile_lock(w->path, why, sizeof why);
+            if (!w->lock) {
+                if (GetFileAttributesA(w->path) != INVALID_FILE_ATTRIBUTES) continue;
+                fail(w, why);
+                return 0;
+            }
+        }
         w->file = CreateFileA(w->path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_NEW,
                               FILE_ATTRIBUTE_NORMAL, NULL);
         if (w->file != INVALID_HANDLE_VALUE) return 1;
-        if (GetLastError() != ERROR_FILE_EXISTS || !dot) break;
+        {
+            DWORD error = GetLastError();
+            recfile_unlock(&w->lock);
+            if (error != ERROR_FILE_EXISTS || !dot) break;
+        }
     }
     snprintf(w->path, sizeof w->path, "%s", w->ring->path);
     fail(w, "cannot create the file");
@@ -391,6 +406,9 @@ static int header_apply(Writer* w, const unsigned char* b, unsigned len)
         put(w, REC_MAGIC, 8);
     }
     block(w, RB_HEADER, 0, 0, b, len, 0);
+    if (w->append)
+        block(w, RB_TIMELINES, 0, 0, (const unsigned char*)w->ring->fork.states,
+              w->ring->fork.nstates * sizeof(RecTimelineState), 0);
     tagpu_logf("recorder: writer: %s: %u slots, %u tables", w->path, w->nslots, w->ntab);
     return 1;
 }
@@ -1195,6 +1213,7 @@ static void finish(Writer* w)
                    w->iterations, w->tick, corr, (unsigned)(w->raw >> 10),
                    (unsigned)(w->packed >> 10), w->ring_high >> 10);
     }
+    recfile_unlock(&w->lock);
     free(e.p);
     free(w->stream.p);
     free(w->snap.p);
@@ -1225,7 +1244,9 @@ static DWORD WINAPI writer_main(void* arg)
         snprintf(w->path, sizeof w->path, "%s", g->path);
         if (g->fork.file) {             /* THE FORK'S HANDLE moves to the writer */
             w->file = g->fork.file;
+            w->lock = g->fork.lock;
             g->fork.file = NULL;
+            g->fork.lock = NULL;
             w->append = 1;
         }
     } else {
@@ -1233,6 +1254,7 @@ static DWORD WINAPI writer_main(void* arg)
         tagpu_logf("recorder: writer: no memory: %s is not written", g->path);
         if (g->fork.file) CloseHandle(g->fork.file);
         g->fork.file = NULL;
+        recfile_unlock(&g->fork.lock);
     }
     while (!stop) {
         unsigned wp;
@@ -1266,6 +1288,8 @@ static DWORD WINAPI writer_main(void* arg)
     /* the hand-over (tagpu_recorder.h): the capture's last access to the ring is behind us */
     if (w) {
         finish(w);
+        if (w->append && !recfile_request(w->path, REC_FILE_COMPACT, w->ring->fork.id, NULL))
+            tagpu_logf("replay: forks %s: compaction skipped: worker unavailable", w->path);
         free(w);
     }
     VirtualFree(g->buf, 0, MEM_RELEASE);

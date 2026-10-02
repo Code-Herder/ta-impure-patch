@@ -3038,6 +3038,17 @@ turns a puppet level into a live skirmish at GameTime T inside the seek
 and the ones it read to decide what a rebuilt order node may hold. Read from
 `pristine/TotalA.exe.pristine` (`objdump -d -M intel`).
 
+**S4c's file lifetime** ([the fork rules](tadr-port/demo-recorder-s4-forks.md))
+adds no engine address or byte patch. The existing teardown entry `0x491B60`
+continues to end playback before the cascade; `tagpu_replay_level_end` closes the
+reader and queues a last-used touch. The common flip observer in
+`tagpu_overlay.c` also polls file requests at menus, whereas seek/takeover retain
+the frame visit at `0x4969CD`. The new maintenance worker reads no engine memory
+(source checked by `thread-split-check.sh`). These statements follow the existing
+hook plumbing in `tagpu_reclaim.c`, `tagpu_overlay.c` and `tagpu_replay.c`, not a
+new disassembly inference. Its Windows file-replacement probe and ordering
+argument are in the fork note.
+
 **What the takeover calls**, on the game thread, between two steps:
 
 | Function | Convention | What it does |

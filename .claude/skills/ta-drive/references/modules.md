@@ -660,7 +660,7 @@ block that reads to its last complete block.
   and `run --cover` need both built and newer than the sources. In such a build, `cover <name>` in
   `gamedir/tagpu_replay.trigger` writes `replays/cover-<name>.bin`, the functions of the
   instrumented files that have run (`cover: … <n> functions that ran`), and writes it again at the
-  level's end; any other build answers `cover: <name> refused: not a coverage build`.
+  level's end and after the exit has waited for file workers; any other build answers `cover: <name> refused: not a coverage build`.
 - **A dump**: write `dump <name>` (letters, digits, `-`, `_`) to `gamedir/tagpu_replay.trigger`.
   The game reads the file at most every 100 ms on a level in play, recording or playing, deletes
   it, and takes the dump at the next tick: `replays/dump-<name>.bin`, the live world at that
@@ -698,6 +698,20 @@ block that reads to its last complete block.
   fork:`), never FILE itself. `--dump` arms a dump of the live game at G before the takeover, so it
   is never late. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger. The file must be
   writable and open in no other program.
+- **Fork rules**: at most three live forks; a new one evicts the least recently used,
+  excluding the selected playing and the original. Leaving a playing updates its last-used
+  time when the file is writable. `tacli replay takeover <i> FILE --at T --player P --dry-run`
+  predicts eviction without launching; without FILE it asks the current playing.
+  `tacli replay forks <i> FILE` lists states and last-used times offline. Add `delete ID` or
+  `export ID OUT` to mutate the running instance's actual `gamedir/replays` file, at any
+  screen; OUT is a new simple stem there. Deleting the current playing is refused. Deleted
+  ancestors remain available to descendants, and exported chains keep their timeline IDs.
+  Triggers: `forks "NAME" delete ID`, `forks "NAME" export ID "OUT"`; wait for
+  `replay: forks …: done|refused: …`. Every writer holds a persistent `.lock` file; never
+  unlink one to bypass a busy file. Compaction is atomic on a worker and can be deferred
+  while another reader holds the file; process exit waits for maintenance.
+  `tareplay.py forks battle [--cover]` runs the dedicated checks. A fixture with `forks`
+  also runs X after its existing lanes; battle and stock-limits exercise this on both builds.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.

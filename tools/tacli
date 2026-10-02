@@ -5581,10 +5581,77 @@ def _replay_takeover_wait(inst, name, T, lines, first, timeout):
         pending = lines()
 
 
+def cmd_replay_forks(args):
+    tarec = _tarec()
+    path = Path(args.recording).resolve()
+    try:
+        segs, stop = tarec.file_segments(path)
+    except (OSError, tarec.Unreadable) as e:
+        die(str(e))
+    if args.action is None:
+        rows = [{k: v for k, v in seg.items() if k not in ("blocks", "header")}
+                for seg in segs]
+        out({"file": str(path), "timelines": rows, "stop": stop}, args.json,
+            human="\n".join(f"{r['id']}: {'live' if r['state'] == 1 else 'deleted'}, "
+                            f"parent {r['parent']}, fork at {r['fork_at']}, "
+                            f"last used {r['last_used']}" for r in rows))
+        return
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name}: launch the instance before a forks command (any screen)")
+    if path.parent != (inst.gamedir / "replays").resolve():
+        die("delete/export operates on the instance's copy in its replays folder; "
+            "pass that file's path")
+    if args.id is None or (args.action == "export" and not args.output):
+        die("forks delete needs ID; forks export needs ID OUT")
+    for stem in (path.stem, args.output or ""):
+        if stem and (len(stem) > 127 or any(ord(c) < 32 or c in '.\\/:"<>?*|' for c in stem)):
+            die("recording/output must be a simple filename stem of at most 127 characters")
+    trig = inst.gamedir / REPLAY_TRIGGER
+    tmp = trig.with_name(trig.name + ".tmp")
+    lines = _LogLines(_log_cursor(inst))
+    tmp.write_text(f'forks "{path.stem}" {args.action} {args.id}'
+                   + (f' "{args.output}"' if args.action == "export" else "") + "\n")
+    os.replace(tmp, trig)
+    rx = re.compile(rf"replay: forks replays\\{re.escape(path.name)}: (done|refused): (.*)")
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        for line in lines():
+            m = rx.search(line)
+            if m:
+                res = {"file": str(path), "action": args.action, "id": args.id,
+                       "done": m[1] == "done", "detail": m[2]}
+                if args.action == "export":
+                    res["output"] = str(inst.gamedir / "replays" / f"{args.output}.imprec")
+                out(res, args.json, human=m.group(0))
+                if not res["done"]:
+                    sys.exit(1)
+                return
+        time.sleep(0.1)
+    die(f"forks {args.action}: no result in {args.timeout:g} s")
+
+
+def replay_prediction(args):
+    tarec = _tarec()
+    try:
+        segs, _ = tarec.file_segments(args.recording)
+        ch = tarec.chain(segs, args.timeline)
+        if not args.at or not ch[0]["first"] < args.at <= ch[-1]["last"]:
+            raise tarec.Unreadable("takeover GameTime is outside the timeline")
+        evict = tarec.fork_prediction(segs, args.timeline)
+    except (OSError, tarec.Unreadable) as e:
+        die(str(e))
+    out({"dry_run": True, "would_delete": evict}, args.json,
+        human=f"fork would delete {'no timeline' if evict is None else f'timeline {evict}'}")
+
+
 def cmd_replay_takeover(args):
     """A recording's level taken over at GameTime T as player P: a fresh process that plays the
     recording, or the instance's running playback, becomes a live skirmish from T, and the game
     after T is recorded as a new timeline of the same file (tagpu_replay.c, THE TAKEOVER)."""
+    if args.dry_run and args.recording:
+        replay_prediction(args)
+        return
     steps = []
     res = {"name": args.name, "T": args.at, "player": args.player}
     if (args.dump is None) != (args.dump_at is None) or \
@@ -5637,6 +5704,21 @@ def cmd_replay_takeover(args):
         os.replace(tmp, trig)
 
     res["as"] = name
+    if args.dry_run:
+        trigger(f"takeover {args.player} at {args.at} dry-run")
+        rx = re.compile(r"replay: .*: (fork would delete (?:no timeline|timeline \d+).*|"
+                        r"fork prediction refused: .*|takeover refused: .*)")
+        deadline = time.time() + args.timeout
+        while time.time() < deadline:
+            for line in lines():
+                m = rx.search(line)
+                if m:
+                    out({"dry_run": True, "detail": m[1]}, args.json, human=m[1])
+                    if "refused" in m[1]:
+                        sys.exit(1)
+                    return
+            time.sleep(0.1)
+        die("fork prediction: no result")
     if args.dump:
         # armed on the playing before the takeover: the recorder keeps an armed dump across the
         # takeover's seek, which sets GameTime to T - 1, and takes it at the fork's capture point
@@ -6773,7 +6855,19 @@ def build_parser():
                      help=f"seconds to wait for the takeover's line and the recorder's start "
                           f"(default {REPLAY_TAKEOVER_TIMEOUT:g})")
     add_replay_launch(rpt, perspective=False)
+    rpt.add_argument("--dry-run", action="store_true",
+                     help="print which fork would be deleted; with FILE, inspect without launching")
     rpt.set_defaults(func=cmd_replay_takeover)
+
+    rpf = rpv.add_parser("forks", help="list a recording's timelines, or delete/export a fork")
+    add_common(rpf)
+    rpf.add_argument("name", help="instance (running at any screen for delete/export)")
+    rpf.add_argument("recording", help=".imprec file; delete/export uses the instance's copy")
+    rpf.add_argument("action", nargs="?", choices=("delete", "export"))
+    rpf.add_argument("id", nargs="?", type=gametime_type)
+    rpf.add_argument("output", nargs="?", help="exported file's new stem, in the instance's replays")
+    rpf.add_argument("--timeout", type=float, default=120)
+    rpf.set_defaults(func=cmd_replay_forks)
 
     rm = sub.add_parser("rm", help="delete an instance")
     add_common(rm)

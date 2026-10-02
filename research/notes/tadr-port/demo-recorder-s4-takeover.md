@@ -133,7 +133,7 @@ end block (the game was killed) is closed by the next timeline's writer with
 segments' bounds: at most 64, every later one with a unique `RT_TIMELINE`, each parent an earlier
 segment, no header block inside a segment, and every segment of a chain the shape of the file's
 first header. They walk differently: `tarec` checks every block's payload CRC and stops at the first
-that fails, while the DLL's scan checks the payloads of the header and end blocks only, and a
+that fails, while the DLL's scan checks the payloads of the header, timeline-metadata and end blocks only, and a
 stream block's when a reading reads it, which stops the playing there.
 
 **The append point is safe by construction.** The scan tells three outcomes apart: a block is whole;
@@ -155,7 +155,9 @@ the boundary's seek in place, since the reader still stands at the boundary.
 
 ## The fork's handle
 
-The fork is written into the file it was played from, through the handle TK0 opened. **TK0 opens the
+The fork is written into the file it was played from, through the handle TK0 opened.
+[S4c's persistent path lock](demo-recorder-s4-forks.md#file-ordering-and-lifetimes)
+travels with that handle and orders its mutation against compaction's replacement. **TK0 opens the
 handle first and finds the append point after**: while it is held no other writer can open the file
 (its share mode is `FILE_SHARE_READ`), and an earlier one would have made the open fail, so the point
 and the new id stay current until the writer uses them. The readers open with `FILE_SHARE_READ |

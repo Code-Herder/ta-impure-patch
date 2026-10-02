@@ -235,6 +235,7 @@ class Worker:
 
     def __init__(self, out):
         self.lock = None
+        self.last_collection = None
         for k in range(1, 100):
             INSTANCES.mkdir(parents=True, exist_ok=True)
             f = open(INSTANCES / f"{PREFIX}{k}.lock", "w")
@@ -277,10 +278,18 @@ class Worker:
 
     def stop(self):
         tacli("stop", self.name, timeout=120)
+        # Exit flushes coverage after its workers finish. Collect that final bitmap and log,
+        # rather than the one taken while those workers were still running.
+        if self.last_collection:
+            rd = self.gamedir / "replays"
+            for f in rd.glob("cover-*.bin") if rd.is_dir() else []:
+                shutil.copy2(f, self.last_collection / f.name)
+            (self.last_collection / "tagpu.log").write_text(talog.run_text(self.gamedir))
 
     def place(self, fix, dll):
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
+        self.last_collection = None
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
         for f in rd.glob("*") if rd.is_dir() else []:
@@ -313,6 +322,7 @@ class Worker:
     def collect(self, into: Path, recordings=False):
         """The dumps (and with `recordings` the recordings) and this run's log."""
         into.mkdir(parents=True, exist_ok=True)
+        self.last_collection = into
         rd = self.gamedir / "replays"
         if rd.is_dir():
             for f in (list(rd.glob("dump-*.bin")) + list(rd.glob("cover-*.bin")) +
@@ -379,7 +389,7 @@ def procs(fix):
     """The processes a fixture runs: L, P, R and Q; K and F where fixtures.json gives it a
     takeover; W where it asks for the browser's Watch."""
     return (("L", "P", "R", "Q") + (("K", "F") if fix.get("takeover") else ()) +
-            (("W",) if fix.get("watch") else ()))
+            (("W",) if fix.get("watch") else ()) + (("X",) if fix.get("forks") else ()))
 
 
 def head():
@@ -1024,6 +1034,185 @@ def watch_lane(w, fx, rec, out, T):
     return res
 
 
+def forks_lane(w, fx, out):
+    """L's recording, four root forks, an LRU touch, a fork of a fork, parent deletion,
+    chain playback/export, and deletion of the highest ID followed by another fork."""
+    import hashlib
+    out.mkdir(parents=True, exist_ok=True)
+    source = out / "forks.imprec"
+    shutil.copy2(fx["rec"], source)
+    original, _ = tarec.file_segments(source)
+    lo, hi = original[0]["range"]
+    original_hash = hashlib.sha256(source.read_bytes()[lo:hi]).hexdigest()
+    results = []
+    P = tarec.header_only(source)["options"]["controlled"]
+    base = max(601, fx["Ts"][0] + 120)
+    if base + 900 >= fx["fix"]["end"]:
+        base = 301
+
+    def check_file(path, label):
+        segs, stop = tarec.file_segments(path)
+        if stop:
+            raise Failed(f"{label}: {stop}")
+        live = [s for s in segs if s["state"] == 1]
+        if len([s for s in live if s["id"]]) > 3:
+            raise Failed(f"{label}: more than three live forks")
+        for s in live:
+            rc, detail = tarec_run("check", path, "--timeline", s["id"])
+            if rc:
+                raise Failed(f"{label}: timeline {s['id']}: {last(detail)}")
+        if path == source:
+            lo, hi = segs[0]["range"]
+            if hashlib.sha256(path.read_bytes()[lo:hi]).hexdigest() != original_hash:
+                raise Failed(f"{label}: original blocks changed")
+        results.append((f"forks: {label}", PASS,
+                        f"live {[s['id'] for s in live]}, physical {[s['id'] for s in segs]}"))
+        return segs
+
+    def finish_play(log, tl):
+        n = len(log.lines)
+        tacli("keys", w.name, "tab", "tab")
+        ui(w, "click", "EXIT")
+        ui(w, "click", "MAINMENU")
+        tacli("keys", w.name, "y", "y")
+        if not log.wait(r"replay: .* at its level's end", 120, n):
+            raise CouldNotRun("forks: playback did not leave")
+        if not log.wait(rf"replay: forks .*: done: touched timeline {tl}", 120, n):
+            raise Failed(f"forks: timeline {tl}'s playing did not touch its last-used time")
+
+    def fork(tid, T, parent=0):
+        say(f"forks: K{tid} from {parent} at {T}")
+        w.place(fx["fix"], fx["dll"])
+        log = Log(w)
+        rc, text = tacli("replay", "takeover", w.name, source, "--timeline", parent,
+                         "--at", T, "--player", P, "--dump", f"fork{tid}", "--dump-at", T + 450,
+                         "--defaults", "--restart", "--keep-dll", "--json", "--timeout", 300,
+                         timeout=LAUNCH_TIMEOUT + 300)
+        if rc:
+            raise Failed(f"forks: K{tid}: {last(text)}")
+        got = json.loads(text[text.index("{"):])
+        if got.get("timeline") != tid:
+            raise Failed(f"forks: K{tid} allocated {got.get('timeline')}")
+        if fx["cover"]:
+            cover_ask(w, log, f"K{tid}")
+        wait_dumps(log, [f"fork{tid}"], 180)
+        n = len(log.lines)
+        rc, text = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
+        if rc or not log.wait(r"recorder: writer: .* closed", 120, n):
+            raise CouldNotRun(f"forks: K{tid} did not end: {last(text)}")
+        if not log.wait(r"replay: forks .*: (done|refused):", 120, n):
+            raise CouldNotRun(f"forks: K{tid} did not complete maintenance")
+        w.collect(out / f"K{tid}", recordings=True)
+        w.stop()
+        shutil.copy2(Path(got["fork"]), source)
+        check_file(source, f"K{tid}")
+
+    def start_play(tl, T):
+        say(f"forks: playing {tl} from {T}")
+        w.place(fx["fix"], fx["dll"])
+        log = Log(w)
+        rc, text = tacli("replay", "seek", w.name, T, "--recording", source,
+                         "--timeline", tl, "--defaults", "--restart", "--keep-dll",
+                         "--perspective", P, "--timeout", 300, timeout=LAUNCH_TIMEOUT + 300)
+        if rc:
+            raise Failed(f"forks: play timeline {tl}: {last(text)}")
+        if fx["cover"]:
+            cover_ask(w, log, f"X{tl}")
+        return log
+
+    def command(action, tid, export=None, expect=True):
+        say(f"forks: {action} {tid}" + (f" to {export}" if export else ""))
+        rec = w.gamedir / "replays" / "forks.imprec"
+        argv = ["replay", "forks", w.name, rec, action, tid]
+        if export:
+            argv.append(export)
+        rc, text = tacli(*argv, "--json", timeout=180)
+        if (rc == 0) != expect:
+            raise Failed(f"forks {action} {tid}: {last(text)}")
+        if not expect and "refused" not in text and '"done": false' not in text:
+            raise Failed(f"forks {action} {tid}: refusal not named: {last(text)}")
+        return text
+
+    for tid in (1, 2, 3):
+        fork(tid, base + (tid - 1) * 300)
+    before = next(s["last_used"] for s in tarec.file_segments(source)[0] if s["id"] == 2)
+    log = start_play(2, base + 310)
+    finish_play(log, 2)
+    w.collect(out / "touch")
+    w.stop()
+    shutil.copy2(w.gamedir / "replays" / "forks.imprec", source)
+    used = next(s["last_used"] for s in tarec.file_segments(source)[0] if s["id"] == 2)
+    if used <= before:
+        raise Failed("forks: playing did not advance last-used time")
+    rc, text = tacli("replay", "takeover", w.name, source, "--at", base + 900,
+                     "--player", P, "--dry-run", "--json")
+    if rc or json.loads(text[text.index("{"):])["would_delete"] != 1:
+        raise Failed(f"forks: dry-run did not predict ID 1: {text}")
+    fork(4, base + 900)
+    if any(s["id"] == 1 for s in tarec.file_segments(source)[0]):
+        raise Failed("forks: LRU 1 was not removed by compaction")
+    T5 = base + 451
+    fork(5, T5, 2)
+    log = start_play(5, T5 + 1)
+    command("delete", 5, expect=False)                # the playing is protected
+    finish_play(log, 5)
+    oldsize = (w.gamedir / "replays" / "forks.imprec").stat().st_size
+    command("delete", 2)
+    shutil.copy2(w.gamedir / "replays" / "forks.imprec", source)
+    segs = check_file(source, "deleted parent")
+    ancestor = next(s for s in segs if s["id"] == 2)
+    if ancestor["state"] != 2 or ancestor["end_reason"] != 12 or ancestor["last"] < T5 - 1:
+        raise Failed("forks: parent prefix was not preserved and pruned")
+    if source.stat().st_size >= oldsize:
+        raise Failed("forks: parent deletion reclaimed no bytes")
+    w.collect(out / "delete")
+    w.stop()
+    log = start_play(5, base - 120)
+    arm_dump(w, log, "chain5", T5 + 300)
+    wait_dumps(log, ["chain5"], 180)
+    dump = w.gamedir / "replays" / "dump-chain5.bin"
+    rc, text = tarec_run("compare", "--puppet", source, dump, "--timeline", 5)
+    if rc:
+        raise Failed(f"forks: descendant across two boundaries: {last(text)}")
+    finish_play(log, 5)
+    command("export", 5, "export5")
+    command("export", 5, "export5", expect=False)     # an existing export is never overwritten
+    exported = out / "export5.imprec"
+    shutil.copy2(w.gamedir / "replays" / "export5.imprec", exported)
+    segs = check_file(exported, "exported chain")
+    if [s["id"] for s in segs] != [0, 2, 5]:
+        raise Failed("forks: export holds something besides the chosen chain")
+    w.collect(out / "chain")
+    w.stop()
+    saved = source
+    source = exported
+    log = start_play(5, base - 120)
+    arm_dump(w, log, "export5", T5 + 300)
+    wait_dumps(log, ["export5"], 180)
+    rc, text = tarec_run("compare", "--puppet", exported,
+                        w.gamedir / "replays" / "dump-export5.bin", "--timeline", 5)
+    if rc:
+        raise Failed(f"forks: exported chain playback: {last(text)}")
+    w.collect(out / "export-play")
+    w.stop()
+    source = saved
+    # Removing the highest allocated segment must not permit that ID to be allocated again.
+    w.place(fx["fix"], fx["dll"])
+    rc, text = tacli("launch", w.name, "--defaults", "--keep-dll", timeout=120)
+    if rc:
+        raise CouldNotRun(f"forks: shell: {last(text)}")
+    (w.gamedir / "replays").mkdir(exist_ok=True)
+    shutil.copy2(source, w.gamedir / "replays" / "forks.imprec")
+    command("delete", 5)
+    shutil.copy2(w.gamedir / "replays" / "forks.imprec", source)
+    w.collect(out / "highest")
+    w.stop()
+    fork(6, base + 600)
+    results.append(("forks: two-boundary and exported puppet dumps", PASS,
+                    "both EQUAL; highest deleted ID 5 followed by ID 6"))
+    return results
+
+
 # ---- the checks -----------------------------------------------------------------------------
 
 def tarec_run(*args):
@@ -1039,7 +1228,7 @@ def checks(fx):
     """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
     read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
     rec, Ts, out, ran = fx["rec"], fx["Ts"], fx["out"], fx["procs"]
-    res = []
+    res = list(fx.get("xres", []))
     rc, o = tarec_run("info", rec)
     m = re.search(r"ended: (.*)", o)
     end = m.group(1) if m else "no end block"
@@ -1420,6 +1609,8 @@ class Run:
                 self.put((name, "F"))
             elif proc == "F":
                 fx["tk_f"] = takeover_f(w, fx, out)
+            elif proc == "X":
+                fx["xres"] = forks_lane(w, fx, out)
             elif proc == "W":
                 fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
@@ -1573,7 +1764,7 @@ def covered_sources():
     """The instrumented sources (the Makefile's COVERED): the sim files and the recorder's own."""
     d = TREE / "tagpu" / "ddraw"
     return set(tafeat.sim_files(d)) | {"src/tagpu_recorder.c", "src/tagpu_recwriter.c",
-                                       "src/tagpu_recreader.c", "src/tagpu_replay.c"}
+                                       "src/tagpu_recreader.c", "src/tagpu_replay.c", "src/tagpu_recfile.c"}
 
 
 def reached_of(run):
@@ -1583,7 +1774,7 @@ def reached_of(run):
     out, problems = {}, []
     maps = {}
     for name, fx in run.fx.items():
-        covers = sorted(fx["out"].glob("*/cover-*.bin"))
+        covers = sorted(fx["out"].rglob("cover-*.bin"))
         if not covers:
             continue
         try:
@@ -1641,7 +1832,8 @@ def cmd_measure(args):
 
 DD = "tagpu/ddraw/"
 RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
-                DD + "src/tagpu_recreader.c", DD + "src/tagpu_replay.c",
+                DD + "src/tagpu_recreader.c", DD + "src/tagpu_replay.c", DD + "src/tagpu_recfile.c",
+                DD + "inc/tagpu_recfile.h",
                 DD + "inc/tagpu_recorder.h", DD + "inc/tagpu_recfmt.h", DD + "inc/tagpu_recreader.h",
                 DD + "inc/tagpu_replay.h", DD + "inc/tagpu_replay_globals.h",
                 DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
@@ -1995,6 +2187,30 @@ def cmd_takeover(args):
     return status
 
 
+def cmd_forks(args):
+    fix = fixtures().get(args.fixture)
+    if not fix or not fix.get("takeover"):
+        raise CouldNotRun("forks needs a takeover fixture")
+    out = out_dir(args)
+    w = Worker(out)
+    dll, make = build_dll(fix.get("dll") == "stock", args.cover)
+    try:
+        if not dll.exists() or dll.stat().st_mtime < sources_mtime():
+            raise CouldNotRun(f"build {make} first")
+        fx = {"name": args.fixture, "fix": fix, "dll": dll.resolve(), "cover": args.cover,
+              "Ts": gametimes(args.fixture, fix["end"], head(), 3)}
+        fx["rec"] = live(w, fx, None, out / "L")
+        res = forks_lane(w, fx, out / "X")
+        for name, status, detail in res:
+            say(name, status, detail)
+        return 0
+    except (CouldNotRun, Failed) as e:
+        say("forks:", str(e))
+        return 1 if isinstance(e, Failed) else 2
+    finally:
+        w.close()
+
+
 def cmd_list(args):
     for name, fix in fixtures().items():
         print(f"{name:16} {fix['load']}, end at GameTime {fix['end']}"
@@ -2052,6 +2268,11 @@ def main(argv=None):
     tk.add_argument("--keep", action="store_true", help="keep the passing dumps")
     tk.add_argument("--out", help="the run's folder")
     tk.set_defaults(func=cmd_takeover, dll=None, stock_dll=None)
+    fk = sub.add_parser("forks", help="fork limit, LRU, shared prefixes, compaction and export")
+    fk.add_argument("fixture")
+    fk.add_argument("--cover", action="store_true")
+    fk.add_argument("--out")
+    fk.set_defaults(func=cmd_forks, dll=None, stock_dll=None)
     fe = sub.add_parser("features", help="the SIM_FEATURE regions of the sim files")
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")

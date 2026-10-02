@@ -2115,6 +2115,19 @@ to play. The recorder is unpublished.
 reader's damaged-file paths; the numbers are in the takeover note's *Verified by*
 (`demo-recorder-s4-takeover.md`). Seven error paths landed `UNCOVERED` by the owner's decision.
 
+### S4c — the fork rules
+
+[The fork rules](demo-recorder-s4-forks.md) describe the complete metadata table
+(`RB_TIMELINES` = 6), three-live-fork LRU policy, playing-end touch, explicit
+delete/export, and worker compaction with shared ancestor prefixes. The original
+is excluded from automatic eviction but may be explicitly deleted. Deleted IDs
+cannot be selected and the highest allocated ID is never reused.
+
+`tacli replay forks` lists and manages the instance's file, and takeover
+`--dry-run` predicts eviction. `tareplay.py forks battle` tests the rules; the
+landing tier adds X after the existing lanes on both battle and stock-limits.
+Live rewind remains S4d; the browser controls remain S5.
+
 ## S5
 
 **S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens

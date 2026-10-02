@@ -19,6 +19,7 @@
    "end": 3600
   },
   "battle": {
+   "forks": true,
    "load": "replay-battle-load.json",
    "steps": [[1, "apply", "replay-battle-units.json"]],
    "end": 3810,
@@ -42,6 +43,7 @@
    "end": 2850
   },
   "stock-limits": {
+   "forks": true,
    "load": "replay-four-ai.json",
    "dll": "stock",
    "end": 1800,

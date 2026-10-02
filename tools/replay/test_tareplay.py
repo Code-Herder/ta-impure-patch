@@ -287,6 +287,48 @@ class Segments(unittest.TestCase):
             self.assertEqual(tarec.main(["tarec", "segments", path]), 0)
             self.assertEqual(tarec.main(["tarec", "info", path]), 0)
 
+    def test_timeline_metadata_and_deleted_ancestor(self):
+        fork1 = (header((1, 0, 4)), stream(4, 5, unit=2), end_block(5))
+        fork2 = (header((2, 1, 5)), stream(5, 7, unit=3), end_block(7))
+        rows = b"".join(struct.pack("<IB3xQ", tid, state, used)
+                        for tid, state, used in ((0, 1, 10), (1, 2, 20), (2, 1, 30), (9, 2, 0)))
+        path = self.file(*self.ORIGINAL, *fork1, *fork2,
+                         block(tarec.RB_TIMELINES, 0, 0, rows))
+        segs = self.segs(path)
+        self.assertEqual([(s["state"], s["last_used"]) for s in segs], [(1, 10), (2, 20), (1, 30)])
+        self.assertEqual(segs[0]["max_id"], 9)          # removed high ID is not reused
+        with self.assertRaisesRegex(tarec.Unreadable, "deleted"):
+            tarec.chain(segs, 1)
+        self.assertEqual([s["id"] for s in tarec.chain(segs, 2)], [0, 1, 2])
+        h, bl, _ = tarec.load(path, timeline=2)
+        self.assertEqual(tarec.stream_to(h, bl).tick, 7)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(tarec.cmd_info(path), 0)
+        newer = struct.pack("<IB3xQ", 0, 1, 10) + struct.pack("<IB3xQ", 1, 1, 40)
+        path = self.file(*self.ORIGINAL, *fork1, block(tarec.RB_TIMELINES, 0, 0, rows[:32]),
+                         block(tarec.RB_TIMELINES, 0, 0, newer))
+        self.assertEqual(self.segs(path)[1]["state"], 1)
+
+    def test_bad_timeline_metadata(self):
+        valid = struct.pack("<IB3xQ", 0, 1, 1)
+        for rows in (b"", valid + b"x", valid * 2, struct.pack("<IB3xQ", 0, 3, 1),
+                     struct.pack("<IB3xQ", 0xFFFFFFFF, 2, 0), valid[:5] + b"x" + valid[6:]):
+            with self.assertRaises(tarec.Unreadable):
+                self.segs(self.file(*self.ORIGINAL, block(tarec.RB_TIMELINES, 0, 0, rows)))
+        with self.assertRaisesRegex(tarec.Unreadable, "no segment"):
+            self.segs(self.file(*self.ORIGINAL, block(tarec.RB_TIMELINES, 0, 0,
+                                                     struct.pack("<IB3xQ", 8, 1, 0))))
+
+    def test_lru_protects_the_playing(self):
+        parts = list(self.ORIGINAL)
+        for tid in range(1, 4):
+            parts += [header((tid, 0, 4)), stream(4, 5), end_block(5)]
+        rows = b"".join(struct.pack("<IB3xQ", tid, 1, used)
+                        for tid, used in ((0, 0), (1, 30), (2, 10), (3, 20)))
+        segs = self.segs(self.file(*parts, block(tarec.RB_TIMELINES, 0, 0, rows)))
+        self.assertEqual(tarec.fork_prediction(segs), 2)
+        self.assertEqual(tarec.fork_prediction(segs, 2), 3)
+
     def test_torn_tail_and_open_segment(self):
         torn = block(tarec.RB_STREAM, 6, 6, b"x" * 8)[:20]
         path = self.file(*self.ORIGINAL, header((1, 0, 4)), stream(4, 5, unit=2), torn)
@@ -335,7 +377,8 @@ class TakeoverFixtures(unittest.TestCase):
             self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)
             self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
             self.assertEqual(tareplay.procs(fixes[name]), ("L", "P", "R", "Q", "K", "F") +
-                             (("W",) if fixes[name].get("watch") else ()))
+                             (("W",) if fixes[name].get("watch") else ()) +
+                             (("X",) if fixes[name].get("forks") else ()))
             if "order" in t:
                 self.assertEqual(len(t["order"]), 2, name)
         self.assertEqual(tareplay.procs(fixes["forest-fire"]), ("L", "P", "R", "Q"))

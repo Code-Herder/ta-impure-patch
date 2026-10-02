@@ -267,6 +267,7 @@ static void counts_log(const char* when, unsigned now);
 static void replay_close(void)
 {
     recr_close(s_rd);
+    recfile_leave();
     s_rd = NULL;
     s_path[0] = 0;
     memset(&s_span, 0, sizeof s_span);
@@ -5124,11 +5125,14 @@ static int tk_open(unsigned T, char* why, unsigned cap)
 {
     RecAppend a;
     char path[MAX_PATH], w2[160];
-    HANDLE f;
+    HANDLE f, lock;
     snprintf(path, sizeof path, "replays\\%s.imprec", s_name);
+    lock = recfile_lock(path, why, cap);
+    if (!lock) return 0;
     f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) {
+        recfile_unlock(&lock);
         snprintf(why, cap, "the recording cannot be written (%lu): another program may have it "
                  "open, or it is read-only", GetLastError());
         return 0;
@@ -5137,16 +5141,25 @@ static int tk_open(unsigned T, char* why, unsigned cap)
        not one put at its path since */
     if (!recr_same_file(s_rd, f)) {
         CloseHandle(f);
+        recfile_unlock(&lock);
         snprintf(why, cap, "%s is no longer the file this level plays", path);
         return 0;
     }
     if (!recr_append_point(s_rd, T - 1, &a, w2, sizeof w2)) {
         CloseHandle(f);
+        recfile_unlock(&lock);
         snprintf(why, cap, "%s", w2);
         return 0;
     }
     s_tk.fork.file = f;
+    s_tk.fork.lock = lock;
     s_tk.fork.append_off = a.off;
+    s_tk.fork.nstates = a.nstates;
+    memcpy(s_tk.fork.states, a.states, a.nstates * sizeof *a.states);
+    if (a.evict != UINT32_MAX)
+        tagpu_logf("replay: %s: fork would delete timeline %u (least recently used)", s_name,
+                   a.evict);
+    else tagpu_logf("replay: %s: fork would delete no timeline", s_name);
     s_tk.fork.id = a.next_id;
     s_tk.fork.parent = a.parent;
     s_tk.fork.fork_at = T;
@@ -5282,6 +5295,7 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
                  parent, T);
     } else {
         CloseHandle(s_tk.fork.file);
+        recfile_unlock(&s_tk.fork.lock);
         s_tk.fork.file = NULL;
         tagpu_logf("replay: %s: timeline %u is not recorded: the recorder refused the arm", s_name,
                    id);
@@ -5546,10 +5560,39 @@ static int takeover_words(const char* p, unsigned* P, unsigned* T, int* D)
 
 static void rt_arm(const char* name, unsigned T);
 
+static int fork_stem(const char* s)
+{
+    unsigned n = 0;
+    if (!*s) return 0;
+    for (; *s; s++, n++)
+        if ((unsigned char)*s < 32 || strchr(".\\/:\"<>?*|", *s) || n >= 127) return 0;
+    return 1;
+}
+
+static int forks_trigger(const char* line)
+{
+    char name[128], out[128], path[MAX_PATH], output[MAX_PATH];
+    unsigned id, op;
+    int end = 0;
+    if (sscanf(line, "forks \"%127[^\"]\" export %u \"%127[^\"]\"%n", name, &id,
+               out, &end) == 3 && !line[end] && fork_stem(name) && fork_stem(out)) {
+        snprintf(output, sizeof output, "replays\\%s.imprec", out);
+        op = REC_FILE_EXPORT;
+    } else if (sscanf(line, "forks \"%127[^\"]\" delete %u%n", name, &id, &end) == 2 &&
+               !line[end] && fork_stem(name)) {
+        output[0] = 0;
+        op = REC_FILE_DELETE;
+    } else return 0;
+    snprintf(path, sizeof path, "replays\\%s.imprec", name);
+    if (!recfile_request(path, op, id, output))
+        tagpu_logf("replay: forks %s: refused: file worker unavailable", path);
+    return 1;
+}
+
 static void trigger_read(void)
 {
     static DWORD s_looked;
-    char line[96], name[40], dump[40];
+    char line[384], name[40], dump[40];
     unsigned T, P;
     int D;
     DWORD now = GetTickCount();
@@ -5568,6 +5611,7 @@ static void trigger_read(void)
     DeleteFileA(TRIGGER);
     while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
         line[--n] = 0;
+    if (forks_trigger(line)) return;
     if (sscanf(line, "dump %39s%n", name, &end) == 1) {
         if (!line[end]) {
             tagpu_rec_dump_arm(name, 0);
@@ -5607,23 +5651,53 @@ static void trigger_read(void)
         snprintf(s_seek.dump, sizeof s_seek.dump, "%s", dump);
         return;
     }
-    if (!strncmp(line, "takeover ", 9) && takeover_words(line + 9, &P, &T, &D)) {
-        if (!tagpu_puppet_on() || !s_rd || s_dead) {
-            tagpu_logf("replay: takeover refused: this level plays no recording");
+    {
+        int dry = n >= 8 && !strcmp(line + n - 8, " dry-run");
+        if (dry) line[n - 8] = 0;
+        if (!strncmp(line, "takeover ", 9) && takeover_words(line + 9, &P, &T, &D)) {
+            if (!tagpu_puppet_on() || !s_rd || s_dead) {
+                tagpu_logf("replay: takeover refused: this level plays no recording");
+                return;
+            }
+            if (dry) {
+                RecAppend a;
+                char why[160];
+                if (!T || !recr_append_point(s_rd, T - 1, &a, why, sizeof why))
+                    tagpu_logf("replay: %s: fork prediction refused: %s", s_name,
+                               T ? why : "GameTime must be positive");
+                else if (a.evict == UINT32_MAX)
+                    tagpu_logf("replay: %s: fork would delete no timeline", s_name);
+                else tagpu_logf("replay: %s: fork would delete timeline %u (least recently used)",
+                                s_name, a.evict);
+                return;
+            }
+            s_seek.pending = 1;
+            s_seek.mode = SK_TAKEOVER;
+            s_seek.boundary = 0;
+            s_seek.T = T;
+            s_seek.P = P;
+            s_seek.D = D;
+            s_seek.dump[0] = 0;
+            tagpu_logf("replay: %s: a takeover as player %u at GameTime %u waits for the frame visit",
+                       s_name, P, T);
             return;
-        }
-        s_seek.pending = 1;
-        s_seek.mode = SK_TAKEOVER;
-        s_seek.boundary = 0;
-        s_seek.T = T;
-        s_seek.P = P;
-        s_seek.D = D;
-        s_seek.dump[0] = 0;
-        tagpu_logf("replay: %s: a takeover as player %u at GameTime %u waits for the frame visit",
-                   s_name, P, T);
-        return;
+    }
     }
     tagpu_logf("replay: %s: not understood: %s", TRIGGER, line);
+}
+
+/* The common game-thread flip observer runs at menus too. Only file-maintenance requests are
+   consumed here; seeks and dumps keep the in-play frame visit's ordering. */
+void tagpu_replay_files_frame(unsigned frame)
+{
+    char prefix[6] = {0};
+    FILE* f;
+    if (frame % 5 || GetFileAttributesA(TRIGGER) == INVALID_FILE_ATTRIBUTES) return;
+    f = fopen(TRIGGER, "rb");
+    if (!f) return;
+    fread(prefix, 1, 5, f);
+    fclose(f);
+    if (!strcmp(prefix, "forks")) trigger_read();
 }
 
 /* THE ROUND TRIP: a playing's state at the frame visit after step T-1 against a rebuild to T in
@@ -5857,7 +5931,11 @@ static int first_iteration(char* ta, Lv* L, char* why, unsigned cap)
                  "describe");
         return 0;
     }
-    if (s_tl && recr_timeline(s_rd, s_tl, r, sizeof r) != 1) {
+    if (!recfile_play(s_path, s_tl)) {
+        snprintf(why, cap, "timeline %u is reserved for deletion or its file cannot be opened", s_tl);
+        return 0;
+    }
+    if (recr_timeline(s_rd, s_tl, r, sizeof r) != 1) {
         snprintf(why, cap, "timeline %u: %s", s_tl, r);
         return 0;
     }
@@ -5969,7 +6047,14 @@ void tagpu_replay_level_end(void)
         tagpu_logf("replay: %s at its level's end, GameTime %u: the recording had ended before it",
                    s_name, ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
     pend_clear();
-    replay_close();
+    if (s_rd && !s_dead) {
+        unsigned id = recr_selected(s_rd)->id;
+        char path[MAX_PATH];
+        snprintf(path, sizeof path, "%s", s_path);
+        replay_close();
+        if (!recfile_request(path, REC_FILE_TOUCH, id, NULL))
+            tagpu_logf("replay: forks %s: touch skipped: file worker unavailable", path);
+    } else replay_close();
     tagpu_puppet_end();
 }
 

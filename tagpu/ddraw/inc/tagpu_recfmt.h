@@ -358,9 +358,10 @@ enum RecEnd {
     REC_END_PROJ,           /* the projectile pool is not the one the recording began with, or
                                its count is past its records                                    */
     REC_END_MAPPED,         /* the explored map is not the one the recording began with          */
-    REC_END_UNFINISHED      /* written by a later timeline's writer for the segment before it,
+    REC_END_UNFINISHED,     /* written by a later timeline's writer for the segment before it,
                                which had no end block: it ends at its last complete iteration
                                (RT_LAST)                                                        */
+    REC_END_PRUNED       /* a deleted ancestor ends at its last retained stream block */
 };
 
 /* A recording is REC_MAGIC, then one or more SEGMENTS. A segment is an RB_HEADER and the blocks
@@ -407,11 +408,12 @@ enum RecBlockKind {
                           with the events of the step after `last`, so a reader that starts from
                           it takes those from the block before                                  */
     RB_END,            /* entries (RecTag): how the recording ended                              */
-    RB_MINIMAP         /* right after the header, when the map has a picture: u16 w, u16 h, u16
+    RB_MINIMAP,        /* right after the header, when the map has a picture: u16 w, u16 h, u16
                           the box's columns, u16 its rows (i16 main+0x142EB, +0x142ED), then w*h
                           palette indices, rows of w: the TNT's minimap picture (the GAF frame at
                           main+0x1426B, uncompressed), whose part [0, 2*columns) x [0, 2*rows)
                           the engine shows. A reader that does not know it skips it            */
+    RB_TIMELINES       /* RecTimelineState rows (tagpu_recfile.h); the latest complete table wins */
 };
 #define REC_MINIMAP_HEAD  8u
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */

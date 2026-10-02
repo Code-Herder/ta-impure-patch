@@ -149,11 +149,11 @@ REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12)     # an RK_EV_FEATURE's arguments after its site
 FS_SITES = 6
 
-RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP = 1, 2, 3, 4, 5
+RB_HEADER, RB_STREAM, RB_SNAPSHOT, RB_END, RB_MINIMAP, RB_TIMELINES = 1, 2, 3, 4, 5, 6
 RB_BOUNDARY = -1            # load()'s marker of a fork in a chain's blocks: no block of the file
 RECR_TIMELINES = 64         # the segments a file may hold (tagpu_recreader.h)
 RB_NAMES = {RB_HEADER: "header", RB_STREAM: "stream", RB_SNAPSHOT: "snapshot", RB_END: "end",
-            RB_MINIMAP: "minimap"}
+            RB_MINIMAP: "minimap", RB_TIMELINES: "timelines"}
 RBF_STORED = 1
 
 (RT_FORMAT, RT_BUILD, RT_MODE, RT_MAP, RT_START, RT_WALLCLOCK, RT_SLOTS, RT_UNITS_EACH,
@@ -175,7 +175,8 @@ END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full
                9: "INCOMPLETE: the projectile pool was not the one it began with, or its count "
                   "was past its records",
                10: "INCOMPLETE: the explored map was not the one it began with",
-               11: "INCOMPLETE: a later timeline ended it at its last complete block"}
+               11: "INCOMPLETE: a later timeline ended it at its last complete block",
+               12: "pruned: a deleted ancestor's retained prefix"}
 
 
 class Unreadable(Exception):
@@ -745,6 +746,33 @@ def snapshot_world(payload, slots, tables, dims, base=None):
     return w
 
 
+def timeline_states(payload):
+    """The latest RB_TIMELINES table: validated 16-byte rows, matching recmeta_parse."""
+    if not payload or len(payload) % 16 or len(payload) > 65 * 16:
+        raise Unreadable("invalid timeline metadata length")
+    out = {}
+    for at in range(0, len(payload), 16):
+        tid, state, used = struct.unpack_from("<IB3xQ", payload, at)
+        if tid == 0xFFFFFFFF or state not in (1, 2) or any(payload[at + 5:at + 8]) or tid in out:
+            raise Unreadable("invalid timeline metadata row")
+        out[tid] = (state, used)
+    return out
+
+
+def fork_prediction(segs, selected=0):
+    """The LRU fork ID a new fork would delete, or None; tie broken by file order."""
+    chain(segs, selected)
+    live = [s for s in segs if s["id"] and s["state"] == 1]
+    if len(live) < 3:
+        return None
+    if len(live) > 3:
+        raise Unreadable("the live fork set cannot be bounded to 3")
+    candidates = [s for s in live if s["id"] != selected]
+    if not candidates:
+        raise Unreadable("no fork can be evicted")
+    return min(candidates, key=lambda s: s["last_used"])["id"]
+
+
 def segments(bl, offsets=None):
     """The file's segments, as the DLL's scan finds them (tagpu_recreader.c, segs_scan): a new one
     at each RB_HEADER that follows an RB_END, to the first block that is neither -- an end that no
@@ -753,9 +781,15 @@ def segments(bl, offsets=None):
     for none), end_reason (None without an end block) and, with `offsets`, its bytes [start, end).
     Refused by name: more than RECR_TIMELINES segments, a fork that names no timeline, an id used
     twice, or a parent that is not an earlier segment with a lower id."""
-    segs, after_end = [], True
+    segs, after_end, states, covered = [], True, {}, set()
     for i, blk in enumerate(bl):
         kind, first, last, payload = blk
+        if kind == RB_TIMELINES:
+            if not segs:
+                raise Unreadable("timeline metadata before any header")
+            states = timeline_states(payload)
+            covered = {s["id"] for s in segs}
+            continue
         if after_end:
             if kind != RB_HEADER:
                 break
@@ -789,7 +823,19 @@ def segments(bl, offsets=None):
         if k and (seg["parent"] not in seen or seg["parent"] >= seg["id"]):
             raise Unreadable(f"timeline {seg['id']} names parent {seg['parent']}, which is not an "
                              f"earlier timeline")
+        if seg["id"] == 0xFFFFFFFF:
+            raise Unreadable("timeline ID exhausted")
         seen.add(seg["id"])
+        seg["state"], seg["last_used"] = states.get(seg["id"],
+                                                   (1, seg["header"].get("wallclock", 0)))
+    for tid, (state, _) in states.items():
+        if state == 1 and tid not in seen:
+            raise Unreadable(f"live timeline {tid} has no segment")
+    if covered - set(states):
+        raise Unreadable("timeline missing from its metadata table")
+    maximum = max(seen | set(states), default=0)
+    for seg in segs:
+        seg["max_id"] = maximum
     return segs
 
 
@@ -813,6 +859,8 @@ def chain(segs, n):
     by = {s["id"]: s for s in segs}
     if n not in by:
         raise Unreadable(f"the recording has no timeline {n}")
+    if by[n].get("state", 1) == 2:
+        raise Unreadable(f"timeline {n} is deleted")
     out = [by[n]]
     while out[-1]["id"]:
         out.append(by[out[-1]["parent"]])
@@ -1015,7 +1063,11 @@ class EventCheck:
 
 def cmd_info(path):
     sizes = []
-    h, bl, stop = load(path, sizes)
+    all_blocks, stop = blocks(path, sizes)
+    segs = segments(all_blocks)
+    if not segs:
+        raise Unreadable("no header block")
+    h, bl = segs[0]["header"], segs[0]["blocks"]
     print(f"{path}")
     print(f"  map {h.get('map')!r}, mode {h.get('mode')}, build {h.get('build')}, "
           f"from GameTime {h.get('start')}")
@@ -1120,7 +1172,8 @@ def cmd_info(path):
                else "INCOMPLETE: no end block")
         print(f"  timeline {seg['id']}" + (f", parent {seg['parent']}, fork_at {seg['fork_at']}"
                                            if seg["id"] else ", the original")
-              + f": GameTime {seg['first']} to {seg['last']}, bytes {seg['range'][0]} to "
+              + f": {'live' if seg['state'] == 1 else 'deleted'}, last_used {seg['last_used']}; "
+                f"GameTime {seg['first']} to {seg['last']}, bytes {seg['range'][0]} to "
                 f"{seg['range'][1]}; {how}")
         if ends:
             e = end(ends[0][3])

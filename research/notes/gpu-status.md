@@ -3034,6 +3034,17 @@ file, through the handle the takeover opened. A playing of a forked timeline (`-
 at each boundary of its chain and crosses it with a seek to the child's first iteration
 ([engine map](exe-reverse-engineering.md#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02)).
 
+**Fork files** ([S4c](tadr-port/demo-recorder-s4-forks.md)): at most three live
+forks, eviction by last-used time, explicit delete/export and shared ancestor
+prefixes. `tagpu_recfile.c` runs maintenance on tracked workers without engine
+reads or engine-field writes. The common game-thread flip observer polls its
+`forks` requests at menus too; no new byte patch is installed. A persistent path
+lock stays held across closing the source and atomic replacement. The playing
+and a queued deletion reserve file identity and timeline under one publication
+lock; exit waits for recording writers, then seals and waits for maintenance.
+The existing **fields we write** below remain those of playback and takeover;
+file metadata changes add no engine writes.
+
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
 `0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the

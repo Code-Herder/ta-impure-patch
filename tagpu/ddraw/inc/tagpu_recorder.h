@@ -7,6 +7,7 @@
    only while tagpu_recorder.on is in the game's folder at the level's first iteration. */
 
 #include <windows.h>
+#include "tagpu_recfile.h"
 
 /* B2's stub at the sim step's call of the unit tick (0x4954ED) calls this on the game thread,
    between two iterations, after the replay's capture-point write (tagpu_replay_capture), so that a
@@ -127,9 +128,12 @@ void tagpu_rec_exit(void);
    writer_main: one owner at each step, and each closes it on its own failure (tagpu_recorder.c,
    THE FORK'S HANDLE). */
 typedef struct RecFork {
+    HANDLE             lock;          /* its persistent file lock, held through the writer */
     HANDLE             file;          /* NULL when none                                          */
     unsigned long long append_off;    /* where the fork's segment goes (recr_append_point)       */
     unsigned           id, parent, fork_at;
+    unsigned           nstates;
+    RecTimelineState   states[REC_TIMELINE_ROWS];
     int                end_open;      /* the segment before it has no end block ...               */
     unsigned           open_id, open_last;   /* ... is this timeline, and ends at this iteration  */
     char               path[MAX_PATH];

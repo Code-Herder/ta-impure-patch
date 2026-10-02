@@ -1069,11 +1069,16 @@ void tagpu_rec_exit(void)
     for (i = 0; i < REC_FINISHING; i++)
         if (s_fin[i] && WaitForSingleObject(s_fin[i], 0) != WAIT_OBJECT_0) h[n++] = s_fin[i];
     fin_unlock();
-    if (!n) return;
-    tagpu_logf("recorder: the exit waits for %lu recording file%s to be finished", n,
+    if (n) {
+        tagpu_logf("recorder: the exit waits for %lu recording file%s to be finished", n,
                n == 1 ? "" : "s");
-    WaitForMultipleObjects(n, h, TRUE, INFINITE);
-    tagpu_logf("recorder: the recording files are finished");
+        WaitForMultipleObjects(n, h, TRUE, INFINITE);
+        tagpu_logf("recorder: the recording files are finished");
+    }
+    /* A writer enqueues compaction before its done event, so the complete maintenance set is
+       published before this seal. Nothing can be lost between the two waits. */
+    recfile_exit();
+    tagpu_cover_flush();  /* the exit and the completed maintenance workers belong to the run */
 }
 
 /* ---- the start and the end ------------------------------------------------------------------ */
@@ -1107,6 +1112,7 @@ static void ring_free(RecRing* g)
 {
     if (!g) return;
     if (g->fork.file) CloseHandle(g->fork.file);    /* THE FORK'S HANDLE: the ring owned it */
+    recfile_unlock(&g->fork.lock);
     if (g->buf) VirtualFree(g->buf, 0, MEM_RELEASE);
     if (g->grid) VirtualFree(g->grid, 0, MEM_RELEASE);
     if (g->wake) CloseHandle(g->wake);
@@ -1143,6 +1149,7 @@ static Rec* rec_start(const Level* L, int tick)
     if (s_fork.file) {                  /* THE FORK'S HANDLE moves to the ring */
         g->fork = s_fork;
         s_fork.file = NULL;
+        s_fork.lock = NULL;
     }
     if (wide) {
         tagpu_logf("recorder: FAILED %s has rows of %u bytes, past the %u a record carries: not "
@@ -4355,6 +4362,7 @@ int tagpu_rec_fork_arm(RecFork* f)
     if (s_state == ST_RECORDING || s_fork.file) return 0;
     s_fork = *f;
     f->file = NULL;
+    f->lock = NULL;
     s_state = ST_IDLE;
     tagpu_logf("recorder: timeline %u of %s armed for GameTime %u (parent %u)", s_fork.id,
                s_fork.path, s_fork.fork_at, s_fork.parent);
@@ -4412,11 +4420,13 @@ void __cdecl tagpu_rec_capture(void)
                        s_fork.path, why);
             CloseHandle(s_fork.file);
             s_fork.file = NULL;
+            recfile_unlock(&s_fork.lock);
         } else {
             rec_begin(&L, tick);
             if (s_fork.file) {          /* rec_start failed before the ring took it */
                 CloseHandle(s_fork.file);
                 s_fork.file = NULL;
+                recfile_unlock(&s_fork.lock);
             }
         }
     } else if (s_state == ST_IDLE) {
@@ -4533,6 +4543,7 @@ void tagpu_rec_level_end(void)
                    "iteration", s_fork.id, s_fork.path);
         CloseHandle(s_fork.file);
         s_fork.file = NULL;
+        recfile_unlock(&s_fork.lock);
     }
     s_tid = 0;
     s_cnt.tid = 0;
