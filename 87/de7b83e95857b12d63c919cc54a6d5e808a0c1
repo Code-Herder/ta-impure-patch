@@ -1,0 +1,1 @@
+replay-roundtrip-owner: range=main..87de7b83 result=uncovered uncovered=src/tagpu_replay.c:watch_refuse_engine checks=405/405 fail=0 decision=land owner=2026-10-02 why=the engine's CD check 0x41D6A0 cannot refuse on retail (it returns on .data 0x50289C, 1 in the exe, written by nothing); kept as the engine's own Start step
