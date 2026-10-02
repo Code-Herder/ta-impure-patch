@@ -51,6 +51,12 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    engine's space. It only queues the notch; the game thread scrolls the list
    under its point at the next GUI pump (tagpu_gui_hook.c, "the list wheel"). */
 void tagpu_gui_wheel(UINT msg, WPARAM wparam, LPARAM lparam);
+/* GAME THREAD, after a backdrop's decode and before its first copy: the box
+   (l, t, w, h) of the decoded PCX surface whose pixels are at `pixels` holds
+   Impure's own art, drawn for the palette, which Classic++'s picture store
+   leaves as drawn -- the whole surface takes the picture out of the store. A
+   surface the UI layer does not track, or a box outside it, is ignored. */
+void tagpu_gui_asset_exact(const void* pixels, int l, int t, int w, int h);
 
 /* RENDER THREAD, PER PRESENT: poll the trigger, drain the queue into the twins
    and fill the Vulkan pass's hand-over. It APPLIES the op stream -- resolving
@@ -207,7 +213,10 @@ typedef struct TAGPU_GUIOP {
     unsigned short fw, fh;          /* sprite: the frame's size               */
     unsigned       surf, src;       /* destination / copy source, by pixel base */
     short          l, t, r, b;      /* destination box, INCLUSIVE, surface px */
-    short          sl, st;          /* copy: source top-left; sprite: dst pos */
+    short          sl, st;          /* copy: source top-left; sprite: dst pos;
+                                       seed with bytes: with fw, fh, the box of
+                                       Impure's own art the store leaves as drawn
+                                       (tagpu_gui_asset_exact), fw 0 = none     */
     int            w, h;            /* seed: the surface's geometry           */
     unsigned       aoff, alen;      /* into TAGPU_GUIHAND::arena              */
     /* ---- STRING. The three colour arguments of 0x4CCF60 as BYTES, and

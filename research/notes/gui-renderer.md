@@ -4885,6 +4885,43 @@ with a scratch build forcing it every 600 frames, over the shell tour and 35 s o
 
 ---
 
+### 27.5 Impure's own pictures are left as drawn  [MEASURED 2026-10-02]
+
+The picture store restores every decoded PCX, so the Replays screen's ground, a whole PCX of
+our own, and the main menu's REPLAYS plate, drawn into the mod's FrontendX after its decode,
+were undithered like the mod's art. They are drawn for the palette, as the dock is (§14,
+`TAGPU_GAF_EXACT`), and Classic++ now leaves them as drawn:
+
+- **`tagpu_gui_asset_exact(pixels, l, t, w, h)`**, on the game thread after the decode and
+  before the first copy, records on the surface's `SURF` the box that holds our own art. It
+  is a property of that allocation's bytes, so the allocation observer clears it with
+  `isAsset`. Every `PK_ASSET` of the surface, the offer and the snapshot's seed alike, carries
+  the box (`sl`, `st`, `fw`, `fh`).
+- **A box that is the whole surface keeps the picture out of the store.** The drain gives the
+  seed no colour, so a copy out of it carries none, and its texels are the palette's.
+- **A smaller box rides the mirror's SEED to the consumer.** The fills from the restored
+  picture (`pic_fill`, the seed's two) copy each tile core less the box, so the box keeps the
+  palette's colour, and the mod's backdrop around it is restored as before. A stamp's fill
+  has no such box.
+- **Who calls it.** `tagpu_replays.c`'s observer on the PCX loader's return (`0x4289E3`,
+  inside `0x4288D0`) passes the plate's box after `frontend_edit` pastes it. For one of our
+  own grounds, recognised by the name pointer `0x4288D0` hands the loader (its own argument,
+  `[esp+0x4C]` at `0x4289D3`), it passes the whole surface. The list's badges are GAF frames
+  of ours and carry `TAGPU_GAF_EXACT`.
+
+**Measured** at 640×480, retail, Classic++ with the picture store active, Vulkan against
+`tagpu_gdi.on`:
+
+- **The main menu.** The plate's 115×35 box less the REPLAYS button: **0 px of 2105**. The
+  backdrop in a 10-px band round the plate: 3373 of 3400, restored as before.
+- **The REPLAYS button's face.** It differs in 1369 of 1920 px. It is the mod's button art,
+  drawn over the plate's interior by the button the REPLAYS record copies from SINGLE, and
+  SINGLE's own face differs in 1430.
+- **The Replays browser.** The ground outside every gadget: **0 px of 117 750**. The list with
+  its rows, the scroll bar, the minimap, the labels and the timelines box: 0 px each.
+- **The buttons there.** WATCH, PLAYON, FAV and BACK, the mod's button faces, are restored by
+  design.
+
 ## 28. A free is an op: the orders panel that stayed after a deselect  [MEASURED 2026-09-27]
 
 **The symptom.** In Escalation, on the Vulkan lane, deselecting the commander left its orders

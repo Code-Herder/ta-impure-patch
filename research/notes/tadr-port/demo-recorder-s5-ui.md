@@ -120,7 +120,10 @@ overruns a 92-px plate by 2 px a side, so each holds an 80×20 face, centred.
 
 - **Codex paints it**, given the mod's own art as a **style reference only** — its letter shapes,
   bevels, colour ramp and heights. Sending a mod's art to Codex was approved by the owner for this.
-- **Without dithering**, so Classic++'s restorer has nothing to undo and both looks agree.
+- **Without dithering, and left as drawn.** Classic++'s restorers skip Impure's own art: a GAF
+  frame of ours carries `TAGPU_GAF_EXACT`, and our own PCX ground and the plate's box in the
+  mod's FrontendX are marked through `tagpu_gui_asset_exact` (GUI renderer §27.5). So both looks
+  agree, measured 0 px between Vulkan and GDI on the Replays ground and on the plate.
 - **Exact palette colours and binary alpha.** Only the palette entries that every known palette
   shares: Total Mayhem's `palettes/palette.pal` differs from retail's in 26 entries (11–15,
   144–159, 240–244) and ProTA's in 10 (11–15, 240–244) (MEASURED); the others match retail's.

@@ -13237,7 +13237,10 @@ tested at `0x4288DC`) gates a blank-and-present: non-zero makes `main+0x37E1B` t
 zero, as here, skips all three [DISASSEMBLED 2026-09-29; no flip returning to `0x428906` runs
 inside a load, MEASURED the same day]. It looks the name up in a ten-deep most-recent-first
 cache of decoded backgrounds (`0x428912..0x428954`; a hit moves the record to the front and
-skips the load, `0x428956..0x4289BC`) and on a miss loads the PCX (`0x429290`, `0x4289DE`) into
+skips the load, `0x428956..0x4289BC`) and on a miss loads the PCX (`0x429290`, `0x4289DE`, with
+its own first argument, the name pointer, re-read at `0x4289D3` from `[esp+0x4C]` and pushed
+as is, so an observer on the loader's return `0x4289E3` can tell a caller's name by its address
+[DISASSEMBLED 2026-10-02]) into
 it, unless `main+0x391F1` is 6 (`0x4289F1`, no insertion) (records of 0x28 bytes from `0x5120B8`,
 the surface at `+0`, the name at `+4`; the oldest is `SurfaceFree`d and its name `MEM_Free`d at
 `0x428A04`), and with no GUI screen on top (`main+0x531` zero, tested at `0x428A7F`) and its fourth

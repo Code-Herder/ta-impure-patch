@@ -39,6 +39,8 @@
 #include "tagpu_recreader.h"
 #include "tagpu_replays.h"
 #include "tagpu_replay.h"
+#include "tagpu_gaf.h"        /* TAGPU_GAF_EXACT: the badges are drawn as drawn */
+#include "tagpu_gui.h"        /* tagpu_gui_asset_exact: so are the ground and the plate */
 
 /* ---- engine addresses ------------------------------------------------------------------------ */
 #define TA_MAIN          0x00511DE8u    /* TAdynmemStruct**                                     */
@@ -842,24 +844,50 @@ static void frontend_edit(unsigned char* s)
                 unsigned char v = f->pix[j * f->w + i];
                 if (v != f->key && x < w && y < h) px[(size_t)y * pitch + x] = v;
             }
+        /* the plate is ours, drawn for the palette: Classic++ leaves its box as drawn, and
+           restores the mod's backdrop around it */
+        tagpu_gui_asset_exact(px, PLATE_X, PLATE_Y,
+                              PLATE_X + f->w <= w ? f->w : w - PLATE_X,
+                              PLATE_Y + f->h <= h ? f->h : h - PLATE_Y);
     }
+}
+
+/* One of our own grounds (tagpu_replays_files) has just been decoded: all of it is ours. */
+static void ground_exact(unsigned char* s)
+{
+    int w = *(int*)(s + 0), h = *(int*)(s + 4);
+    unsigned char* px = *(unsigned char**)(s + 0xC);
+    if (px && w > 0 && h > 0) tagpu_gui_asset_exact(px, 0, 0, w, h);
 }
 
 #define RET_BACKDROP_DECODE 0x004289E3u /* 0x4288D0's one call of 0x429290 returns here */
 static const unsigned char S3_STOLEN[10] = { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0x00, 0x01, 0x00, 0x00 };
 
+/* WHICH DECODE THIS IS, by the name 0x4288D0 was handed: it passes its own argument on to the
+   loader (0x4289D3, [esp+0x4C]), so FrontendX is the engine's literal and a ground of ours is our
+   own string's address. Set by the filter, read by the return it gates, one call apart on the
+   game thread. */
+enum { S3_NONE, S3_FRONTEND, S3_GROUND };
+static int s_s3Kind;
+
 static int __cdecl s3_before(void* esp)
 {
     void** e = (void**)esp;
-    return s_appended && (unsigned)(size_t)e[0] == RET_BACKDROP_DECODE &&
-           (unsigned)(size_t)e[1] == VA_STR_FRONTEND;
+    int k;
+    s_s3Kind = S3_NONE;
+    if ((unsigned)(size_t)e[0] != RET_BACKDROP_DECODE) return 0;
+    if (s_appended && (unsigned)(size_t)e[1] == VA_STR_FRONTEND) s_s3Kind = S3_FRONTEND;
+    for (k = 0; k < 3; k++)
+        if (e[1] == (void*)s_groundName[k]) s_s3Kind = S3_GROUND;
+    return s_s3Kind != S3_NONE;
 }
 
 /* The filter proved the return address, so it is handed back as the constant it is. */
 static void* __cdecl s3_after(unsigned int* regs)
 {
     unsigned char* s = (unsigned char*)(size_t)regs[7];
-    if (s) frontend_edit(s);
+    if (s && s_s3Kind == S3_FRONTEND) frontend_edit(s);
+    if (s && s_s3Kind == S3_GROUND) ground_exact(s);
     return (void*)(size_t)RET_BACKDROP_DECODE;
 }
 
@@ -1394,7 +1422,7 @@ static int row_floor(void)
 }
 
 /* The badges, as engine GAF frame headers over our art's pixels (tagpu_art.h: never freed or
-   written): +0 w, +2 h, +8 the key, +9 0 = raw, +0x10 the pixels. */
+   written): +0 w, +2 h, +8 the key, +9 0 = raw, +0xC TAGPU_GAF_EXACT, +0x10 the pixels. */
 enum { B_FAV, B_FAV_OFF, B_INCOMPLETE, B_N };
 static const char* const BADGE_NAMES[B_N] = { "b-fav", "b-fav-off", "b-incomplete" };
 static unsigned char s_badge[B_N][0x18];
@@ -1413,6 +1441,10 @@ static void badges_build(void)
         *(unsigned short*)(s_badge[i] + 0x00) = f->w;
         *(unsigned short*)(s_badge[i] + 0x02) = f->h;
         s_badge[i][0x08] = f->key;
+        {
+            unsigned tag = TAGPU_GAF_EXACT;
+            memcpy(s_badge[i] + TAGPU_GF_TAG, &tag, 4);
+        }
         memcpy(s_badge[i] + 0x10, &pix, 4);
         s_badgeW[i] = f->w;
         s_badgeH[i] = f->h;

@@ -1545,8 +1545,15 @@ static void drain(void)
                     /* A PICTURE FOR THE CONSUMER'S STORE: the loader's bytes,
                        which nothing has drawn over, restored and coloured
                        there. Its colour plane makes every copy out of it carry
-                       colour (`twin_copy`). */
-                    if (s_picArm) {
+                       colour (`twin_copy`).
+                       IMPURE'S OWN ART IS LEFT AS DRAWN (tagpu_gui_asset_exact):
+                       a box of it rides to the consumer, which keeps the box
+                       out of the fill; a picture that is ours whole never
+                       enters the store, so a copy out of it carries no colour
+                       and its texels are the palette's, as GDI shows them. */
+                    int ours = o->fw == o->w && o->fh == o->h && !o->sl && !o->st;
+                    m->sl = o->sl; m->st = o->st; m->fw = o->fw; m->fh = o->fh;
+                    if (s_picArm && !ours) {
                         if (!t->col) { t->col = 1; s_colTwins++; }
                         m->col = TAGPU_GUICOL_DST | TAGPU_GUICOL_ON;
                         s_colOps++;

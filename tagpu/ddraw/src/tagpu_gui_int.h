@@ -39,7 +39,9 @@ enum {
                        wrote, from a moment after it ran. `0x4BF7B0` does NOT
                        produce this -- it tints, and produces `PK_TINT` below. */,
     PK_ASSET        /* a DECODED ASSET SURFACE, whole: `w`/`h`/`pitch` as a seed,
-                       and its bytes follow in the arena. It is NOT `PK_SEED`,
+                       and its bytes follow in the arena; `sl`/`st`/`fw`/`fh`
+                       the box of Impure's own art in it, `fw` 0 = none
+                       (tagpu_gui_asset_exact). It is NOT `PK_SEED`,
                        and the difference is the whole reason it may cross where
                        a seed's bytes may not: those would be what the 1997
                        rasteriser COMPOSED, and this is a surface the engine's LOADER

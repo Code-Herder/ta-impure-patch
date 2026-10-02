@@ -156,6 +156,11 @@ typedef struct SURF {
     int isAsset;                      /* created with a "bitmaps\\....PCX" tag AND never yet
                                          named as an op's destination: a decoded asset, not
                                          a composition. `op_add` clears it; see PK_ASSET  */
+    short exactL, exactT, exactW, exactH; /* Impure's own pixels in the asset, drawn as
+                                         drawn under Classic++ (tagpu_gui_asset_exact);
+                                         exactW 0 = none. A property of THIS
+                                         allocation's bytes: the allocation observer
+                                         clears it with `isAsset`                  */
     int assetSent;                    /* the consumer ACKED this surface's current token */
     unsigned assetTok;                /* the token of the offer in flight, 0 = none    */
     unsigned assetTokPrev;            /* the offer before it, whose echo may still come */
@@ -1725,6 +1730,23 @@ static int pub_surface_bytes(SURF* s, int l, int t, int r, int b, TAGPU_PUBOP* o
     return 1;
 }
 
+/* An asset's own-art box rides every `PK_ASSET` of it, the offer and the
+   snapshot's seed alike, so whichever one seeds the twin carries it. */
+static void asset_exact_box(const SURF* s, TAGPU_PUBOP* o)
+{
+    o->sl = s->exactL; o->st = s->exactT;
+    o->fw = (unsigned short)s->exactW; o->fh = (unsigned short)s->exactH;
+}
+
+void tagpu_gui_asset_exact(const void* pixels, int l, int t, int w, int h)
+{
+    SURF* s = surf_by_base((unsigned)(size_t)pixels);
+    if (!s || !s->isAsset || l < 0 || t < 0 || w <= 0 || h <= 0 || l + w > s->w || t + h > s->h)
+        return;
+    s->exactL = (short)l; s->exactT = (short)t;
+    s->exactW = (short)w; s->exactH = (short)h;
+}
+
 /* THE SNAPSHOT AS THE SEED: the loader's bytes as a `PK_ASSET` -- the one kind
    whose payload crosses, and these bytes meet its guarantee because they were
    taken before any draw (see `snap_take`) -- then every sprite drawn onto them
@@ -1741,6 +1763,7 @@ static int pub_seed_snap(SURF* s)
     if (!o) return 0;
     o->w = s->w; o->h = s->h; o->pitch = s->w;
     o->l = 0; o->t = 0; o->r = (short)(s->w - 1); o->b = (short)(s->h - 1);
+    asset_exact_box(s, o);
     dst = pub_bytes(o, (unsigned)s->w * (unsigned)s->h);
     if (!dst) return 0;
     memcpy(dst, s->snap, (size_t)s->w * s->h);
@@ -3354,6 +3377,7 @@ static void publish_window(unsigned flipSurf)
                 a->w = src->w; a->h = src->h; a->pitch = src->pitch;
                 a->l = 0; a->t = 0;
                 a->r = (short)(src->w - 1); a->b = (short)(src->h - 1);
+                asset_exact_box(src, a);
                 if (!pub_surface_bytes(src, 0, 0, src->w - 1, src->h - 1, a)) return;
                 pub_commit();
                 src->assetTokPrev = src->assetTok;
