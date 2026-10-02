@@ -4417,8 +4417,8 @@ static void sk_tables(const Lv* L, const RecWorld* W)
    - the notices and the chat lines through the level init's own resets 0x47EE30 and 0x463C80:
      the creates' queued replies go, and a backward seek leaves no cooldown or line stamped in the
      future.
-   The particles' and the temporary sight records' deadlines went with them (R11, R4); the pacing
-   stamp is R16's. */
+   The particles' deadlines went with them (R11); the temporary sight records' are made with them
+   (R14a); the pacing stamp is R16's. */
 static void sk_deadlines(char* ta, const RecWorld* W, unsigned now)
 {
     unsigned p, next = PASS_TICKS * (now / PASS_TICKS + 1);

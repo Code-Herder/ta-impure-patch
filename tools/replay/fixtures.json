@@ -1,5 +1,5 @@
 {
- "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first.",
+ "about": "tareplay's fixtures (tools/replay/tareplay.py). Each is a scripted skirmish recorded live and then checked on puppets. `load` is a scenario under scenarios/; `steps` run at a GameTime of the live game: `apply` a scenario, `type` a chat line, `order` one unit by roster type and rank; `end` is the GameTime scenarios/replay-end.json ends the level at. `los`: \"file\" keeps the scenario's own line of sight, else the SkirmishLineOfSight value. `dll`: \"stock\" plays the stock-limits build. `content`: a command run before every launch of the fixture ({gamedir} the instance's game folder) and the files it writes there, which every other fixture's launch removes first. `unit_limit`: the game's unit limit, 500 unless given. `broad` holds what only the broad tier runs (tareplay.py broad): `trips`, round trips beyond the three; `cost`, a game recorded live and reported for the recorder's cost and the file's size, with no check.",
  "fixtures": {
   "forest-fire": {
    "load": "s3a-forest-fire.json",
@@ -88,6 +88,19 @@
    "load": "c4-survivor.json",
    "content": {"run": ["tools/datakeys_fixture.py", "{gamedir}/zzkeys.ufo"], "files": ["zzkeys.ufo"]},
    "end": 1800
+  }
+ },
+ "broad": {
+  "limits-tier1": {
+   "load": "limits-tier1.json",
+   "unit_limit": 1500,
+   "trips": 20,
+   "end": 1800
+  },
+  "cost-four-ai": {
+   "load": "replay-four-ai.json",
+   "cost": true,
+   "end": 18000
   }
  }
 }

@@ -81,8 +81,10 @@ class Landing(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         sh(self.root, "git", "init", "-q", "-b", "main")
-        sh(self.root, "git", "config", "user.name", "test")
-        sh(self.root, "git", "config", "user.email", "test@example.invalid")
+        for key in ("user.name", "user.email"):     # the enclosing repository's identity
+            value = subprocess.run(["git", "-C", str(HERE), "config", key], check=True,
+                                   capture_output=True, text=True).stdout.strip()
+            sh(self.root, "git", "config", key, value)
         (self.root / "tools" / "replay").mkdir(parents=True)
         (self.root / "tools" / "replay" / "x.c").write_text("int f(void)\n{\n    return 1;\n}\n")
         (self.root / "README").write_text("r\n")

@@ -3,11 +3,21 @@
 puppets (research/notes/tadr-port/demo-recorder-completeness.md, *The harness*).
 
     tools/replay/tareplay.py run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
-                                            [--out DIR]
+                                            [--cover] [--out DIR]
     tools/replay/tareplay.py list
+    tools/replay/tareplay.py landing [--base main] [--check] [-j N]   the landing tier
+    tools/replay/tareplay.py broad [--release DLL] [-j N]             the broad tier
+    tools/replay/tareplay.py features [--check DIR]                   the SIM_FEATURE regions
+    tools/replay/tareplay.py measure SCENARIO... [--end T] [-j N]     what each one reaches
+
+`landing` runs the fixtures the changed SIM_FEATURE regions name (every fixture when the
+recorder's own files change) on the coverage build, checks that they reached every changed
+function and records a `replay-roundtrip:` note on the commit it graded; `--check` exits 0 when
+such a note covers HEAD. `broad` runs every fixture and fixtures.json's `broad` entries and names
+what the tier never exercised.
 
 FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four GameTimes are
-drawn, each T = 1 (mod 30) -- the radar pass's step, so a seek's contact bits agree at once (O14)
+drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30) -- the radar pass's step, so a seek's contact bits agree at once (O14)
 -- between 301 and 0.8 x its end, from a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4. Four processes, each a game of its own:
 
@@ -320,21 +330,27 @@ def fixtures():
     return json.loads((HERE / "fixtures.json").read_text())["fixtures"]
 
 
+def broad_fixtures():
+    """The broad tier's own entries, which no landing runs: a fixture with `trips` round trips,
+    and `cost` games recorded live for the recorder's cost and the file's size alone."""
+    return json.loads((HERE / "fixtures.json").read_text())["broad"]
+
+
 def head():
     r = subprocess.run(["git", "-C", str(TREE), "rev-parse", "HEAD"], capture_output=True,
                        text=True)
     return r.stdout.strip() or "no-head"
 
 
-def gametimes(name, end, h):
-    """Four T = 1 (mod 30) between 301 and 0.8 x end, with room for the dump after a round trip,
-    sorted, from a generator seeded by the fixture and HEAD."""
+def gametimes(name, end, h, trips=3):
+    """T1 and `trips` round trips: T = 1 (mod 30) between 301 and 0.8 x end, with room for the
+    dump after a round trip, sorted, from a generator seeded by the fixture and HEAD."""
     hi = min(int(0.8 * end), end - CONTINUE - 30)
     pool = list(range(301, hi + 1, 30))
-    if len(pool) < 4:
-        raise CouldNotRun(f"{name}: end {end} leaves fewer than four GameTimes")
+    if len(pool) < trips + 1:
+        raise CouldNotRun(f"{name}: end {end} leaves fewer than {trips + 1} GameTimes")
     rng = random.Random(int(hashlib.sha1((name + h).encode()).hexdigest()[:8], 16))
-    return sorted(rng.sample(pool, 4))
+    return sorted(rng.sample(pool, trips + 1))
 
 
 # ---- the four processes ---------------------------------------------------------------------
@@ -468,7 +484,8 @@ def live(w, fx, Ts, out):
     los = [] if fix.get("los") == "file" else ["--los", str(fix.get("los", 0))]
     log = Log(w)
     rc, o = tacli("scenario", "load", w.name, SCENARIOS / fix["load"], "--defaults", *los,
-                  "--restart", "--keep-dll", "--unit-limit", UNIT_LIMIT, timeout=LAUNCH_TIMEOUT)
+                  "--restart", "--keep-dll", "--unit-limit", str(fix.get("unit_limit", UNIT_LIMIT)),
+                  timeout=LAUNCH_TIMEOUT)
     if rc:
         raise CouldNotRun(f"scenario load {fix['load']}: {last(o)}")
     got = log.wait(r"recorder: (recording|not recording|FAILED)", 120)
@@ -688,15 +705,18 @@ class Run:
                 raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
             if dll.stat().st_mtime < sources_mtime():
                 raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
-            Ts = gametimes(name, fix["end"], h)
+            Ts = gametimes(name, fix["end"], h, fix.get("trips", 3))
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
                              "problems": [], "rt": {}, "passed": [], "held": [],
                              "procs": {}, "cover": cover, "measure": measure,
                              "map": dll.with_suffix(".map")}
             if measure:
                 say(f"{name}: recorded to GameTime {fix['end']} and played")
+            elif fix.get("cost"):
+                say(f"{name}: recorded to GameTime {fix['end']} for its cost and size")
             else:
-                say(f"{name}: T1 {Ts[0]}, round trips {Ts[1]} {Ts[2]} {Ts[3]}, Tlast {Ts[3]}")
+                say(f"{name}: T1 {Ts[0]}, round trips {' '.join(map(str, Ts[1:]))}, "
+                    f"Tlast {Ts[-1]}")
             self.put((name, "L"))
 
     def put(self, job):
@@ -718,10 +738,11 @@ class Run:
         try:
             stopping()
             if proc == "L":
-                fx["rec"] = live(w, fx, None if fx["measure"] else Ts, out)
+                cost = bool(fx["fix"].get("cost"))
+                fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
                 h = tarec.header_only(str(fx["rec"]))
                 fx["viewed"] = h["options"]["viewed"]
-                for p in ("P",) if fx["measure"] else ("P", "R", "Q"):
+                for p in () if cost else ("P",) if fx["measure"] else ("P", "R", "Q"):
                     self.put((name, p))
             elif proc == "P" and fx["measure"]:
                 play(w, fx, fx["rec"], out, "P", [], [])
@@ -771,15 +792,41 @@ class Run:
             w.close()
 
 
+def cost_line(fx):
+    """The recorder's own account of a cost game, reported and never failed (OQ5): its capture
+    cost per iteration and the file's size, extrapolated to an hour of game time."""
+    log = (fx["out"] / "L" / "tagpu.log").read_text(errors="replace")
+    cap = re.search(r"recorder: (\d+) iterations captured: the first in \d+ us, the rest in "
+                    r"(\d+) us on average and (\d+) us at most", log)
+    size = re.search(r"recorder: writer: .* closed: (\d+) iterations .* stream (\d+) KB deflated "
+                     r"to (\d+) KB", log)
+    if not cap or not size:
+        return "COST: the recorder's capture or close line is missing from L's log"
+    n, raw, kb = int(size.group(1)), int(size.group(2)), int(size.group(3))
+    hour = 30 * 3600 / n
+    return (f"COST: {cap.group(1)} iterations, {cap.group(2)} us an iteration on average, "
+            f"{cap.group(3)} us at most; {kb / 1024:.1f} MB ({raw / 1024:.1f} MB before "
+            f"deflate), {kb / 1024 * hour:.0f} MB an hour of game time at that rate")
+
+
 def report(run, keep):
     failed = unrun = False
     lines = []
     for name, fx in run.fx.items():
-        lines.append(f"== {name}: T {' '.join(map(str, fx['Ts']))}; {fx['out']}")
+        cost = bool(fx["fix"].get("cost"))
+        lines.append(f"== {name}: " + ("the cost game" if cost else
+                                       f"T {' '.join(map(str, fx['Ts']))}") + f"; {fx['out']}")
         for proc, kind, why in fx["problems"]:
             lines.append(f"   {proc} {kind.upper()}: {why}")
             failed |= kind == "FAILED"
             unrun |= kind != "FAILED"
+        if cost:
+            if fx["procs"].get("L") == "ran":
+                lines.append("   " + cost_line(fx))
+            elif "L" not in fx["procs"]:
+                lines.append("   L NEVER RAN")
+                unrun = True
+            continue
         for proc in ("L", "P", "R", "Q"):
             if proc not in fx["procs"]:
                 lines.append(f"   {proc} NEVER RAN")
@@ -1141,17 +1188,19 @@ def landing_check(base):
 
 
 def cmd_broad(args):
-    """Every fixture, then what the tier never exercised: a feature none of its fixtures reached,
-    a root or sink site no run counted, a recorded table no recording changed between T1 and
-    Tlast."""
-    names = list(fixtures())
+    """Every fixture and the broad tier's own entries (fixtures.json's `broad`: limits-tier1 with
+    twenty round trips, a ten-minute four-AI game for the cost and the size), then what the tier
+    never exercised: a feature none of its fixtures reached, a root or sink site no run counted, a
+    recorded table no recording changed between T1 and Tlast."""
+    fixes = {**fixtures(), **broad_fixtures()}
+    names = list(fixes)
     args.cover = not args.release
     if args.release:
         args.dll = args.release
     out = out_dir(args)
     args.keep = True
     try:
-        run = Run(names, args, out)
+        run = Run(names, args, out, fixes=fixes)
     except CouldNotRun as e:
         print(f"tareplay: {e}", file=sys.stderr)
         return 2
@@ -1175,6 +1224,8 @@ def cmd_broad(args):
     sites, changed, tables = set(), set(), None
     for name, fx in run.fx.items():
         Ts = fx["Ts"]
+        if fx["fix"].get("cost"):
+            continue
         a, b = fx["out"] / "L" / f"dump-l{Ts[0]}.bin", fx["out"] / "L" / f"dump-l{Ts[-1]}.bin"
         if not (a.exists() and b.exists() and fx.get("rec")):
             continue
