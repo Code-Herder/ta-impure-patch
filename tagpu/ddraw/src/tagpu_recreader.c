@@ -1012,7 +1012,8 @@ static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned
     return 1;
 }
 
-int recr_seek(RecReader* r, unsigned T, char* why, unsigned cap)
+int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx, char* why,
+              unsigned cap)
 {
     RecWorld* w = &r->w;
     const RecIndexEntry* snap = NULL;
@@ -1047,10 +1048,12 @@ int recr_seek(RecReader* r, unsigned T, char* why, unsigned cap)
             return -1;
         }
     }
-    /* The last snapshot strictly before T: a snapshot at S holds S's images, and the events of
-       the step after them are in the stream block before it (tagpu_recfmt.h, RB_SNAPSHOT). */
+    /* The last snapshot more than `lead` iterations before T (strictly before it with no lead):
+       a snapshot at S holds S's images, and the events of the step after them are in the stream
+       block before it (tagpu_recfmt.h, RB_SNAPSHOT). */
     for (i = 0; i < r->nidx; i++)
-        if (r->idx[i].kind == RB_SNAPSHOT && r->idx[i].last < T) snap = &r->idx[i];
+        if (r->idx[i].kind == RB_SNAPSHOT && (unsigned long long)r->idx[i].last + lead < T)
+            snap = &r->idx[i];
     if (snap) {
         RecBlock blk;
         const RecIndexEntry* next = snap + 1;
@@ -1092,6 +1095,7 @@ int recr_seek(RecReader* r, unsigned T, char* why, unsigned cap)
             snprintf(why, cap, "the stream goes from GameTime %u back to %u", prev, w->tick);
             return -1;
         }
+        if (visit && w->tick <= T) visit(ctx, w);
         if (w->tick == T) return 1;
         if (w->tick > T) {
             snprintf(why, cap, "the stream has no iteration at GameTime %u: it goes from %u to %u",

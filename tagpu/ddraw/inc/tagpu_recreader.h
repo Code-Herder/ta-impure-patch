@@ -131,8 +131,13 @@ int recr_tick(RecReader* r, char* why, unsigned cap);
    1 the world holds T; 0 T is outside the recording -- before its first iteration or after the
    last complete block's -- checked before anything changes, so the reader is as it was (`why`
    names the recording's first and last GameTime); -1 unreadable (`why` says where), and the
-   world is undefined until a seek that returns 1. */
-int recr_seek(RecReader* r, unsigned T, char* why, unsigned cap);
+   world is undefined until a seek that returns 1.
+   With `visit`, the snapshot it builds from is the last one more than `lead` iterations before T
+   (S + lead < T), and `visit(ctx, world)` is called once each iteration of the stream after it
+   has been read, T's included, so a caller can follow what the iterations before T did. */
+typedef void (*RecVisit)(void* ctx, const RecWorld* w);
+int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx, char* why,
+              unsigned cap);
 
 void recr_close(RecReader* r);
 

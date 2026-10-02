@@ -62,6 +62,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
+import tafeat  # noqa: E402
 
 PREFIX = "tareplay-"
 UNIT_LIMIT = 500
@@ -265,7 +266,8 @@ class Worker:
         into.mkdir(parents=True, exist_ok=True)
         rd = self.gamedir / "replays"
         if rd.is_dir():
-            for f in list(rd.glob("dump-*.bin")) + (list(rd.glob("*.imprec")) if recordings else []):
+            for f in (list(rd.glob("dump-*.bin")) + list(rd.glob("cover-*.bin")) +
+                      (list(rd.glob("*.imprec")) if recordings else [])):
                 shutil.copy2(f, into / f.name)
         (into / "tagpu.log").write_text(talog.run_text(self.gamedir))
 
@@ -350,6 +352,13 @@ def arm(w, log, line, ok_rx, bad_rx, what):
 def arm_dump(w, log, name, T):
     arm(w, log, f"dump {name} at {T}", rf"recorder: dump {name} armed for GameTime {T}",
         rf"recorder: dump(:| {name}) .*(refused|please|not letters)", f"dump {name} at {T}")
+
+
+def cover_ask(w, log, name):
+    """The coverage build's functions that ran so far, as replays/cover-<name>.bin; the DLL writes
+    the file again at the level's end, with what ran after (tagpu_cover_flush)."""
+    arm(w, log, f"cover {name}", rf"cover: replays\\cover-{name}\.bin: \d+ functions",
+        rf"cover: .*{name}.*(refused|could not|NOT written)", f"cover {name}")
 
 
 def wait_dumps(log, names, timeout):
@@ -465,8 +474,8 @@ def live(w, fx, Ts, out):
     got = log.wait(r"recorder: (recording|not recording|FAILED)", 120)
     if not got or "recorder: recording" not in got:
         raise CouldNotRun(f"the recorder: {got.strip() if got else 'no line in 120 s'}")
-    names = [f"l{Ts[0]}", f"l{Ts[-1]}"]
-    for name, T in zip(names, (Ts[0], Ts[-1])):
+    names = [f"l{Ts[0]}", f"l{Ts[-1]}"] if Ts else []
+    for name, T in zip(names, (Ts[0], Ts[-1]) if Ts else ()):
         arm_dump(w, log, name, T)
     steps = sorted(fix.get("steps", []), key=lambda s: s[0])
     twinned = False
@@ -480,7 +489,7 @@ def live(w, fx, Ts, out):
         while steps and steps[0][0] <= g:
             _, kind, arg = steps.pop(0)
             step(w, kind, arg)
-        if not twinned and g > Ts[-1] + 5:
+        if Ts and not twinned and g > Ts[-1] + 5:
             wait_dumps(log, names[1:], 30)
             twin(w, log)
             twinned = True
@@ -488,6 +497,8 @@ def live(w, fx, Ts, out):
             break
         log.read()
         nap(0.5)
+    if fx["cover"]:
+        cover_ask(w, log, "L")
     n = len(log.lines)
     rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
     if rc:
@@ -506,8 +517,9 @@ def live(w, fx, Ts, out):
     return rec
 
 
-def play(w, fx, rec, out, arms, dumps, roundtrips=()):
-    """P or R: `replay play` from the start, the dumps and round trips armed, each waited for."""
+def play(w, fx, rec, out, proc, arms, dumps, roundtrips=()):
+    """P or R: `replay play` from the start, the dumps and round trips armed, each waited for;
+    with no dump at all (measure), the recording played to its end."""
     w.place(fx["fix"], fx["dll"])
     log = Log(w)
     rc, o = tacli("replay", "play", w.name, rec, "--defaults", "--restart", "--keep-dll",
@@ -526,6 +538,12 @@ def play(w, fx, rec, out, arms, dumps, roundtrips=()):
             raise CouldNotRun(f"round trip {name}: {got.strip() if got else 'no line in 900 s'}")
         lines[name] = got[got.index("replay:"):].strip()
     wait_dumps(log, dumps, 900)
+    if not dumps:
+        got = log.wait(r"replay: .* (played to its end|cannot be read on|not playing)", 900)
+        if not got or "played to its end" not in got:
+            raise CouldNotRun(f"the playing: {got.strip() if got else 'no end in 900 s'}")
+    if fx["cover"]:
+        cover_ask(w, log, proc)
     w.collect(out)
     w.stop()
     return lines
@@ -534,9 +552,13 @@ def play(w, fx, rec, out, arms, dumps, roundtrips=()):
 def fresh(w, fx, rec, out, T):
     """Q: a fresh process that plays the recording from T, dump q<T>."""
     w.place(fx["fix"], fx["dll"])
+    log = Log(w)
     rc, o = tacli("replay", "seek", w.name, T, "--recording", rec, "--dump", f"q{T}",
                   "--defaults", "--restart", "--keep-dll", "--perspective", fx["viewed"],
                   "--timeout", 300, timeout=LAUNCH_TIMEOUT + 300)
+    if not rc and fx["cover"]:
+        log.read()
+        cover_ask(w, log, "Q")
     w.collect(out)
     w.stop()
     if rc:
@@ -631,19 +653,37 @@ def checks(fx):
 
 # ---- the run --------------------------------------------------------------------------------
 
+def build_dll(stock, cover):
+    """The DLL a run uses and the make line that builds it."""
+    d = TREE / "tagpu" / "ddraw"
+    name = ("ddraw-stocklimits" if stock else "ddraw") + ("-cover" if cover else "") + ".dll"
+    make = ("make -C tagpu/ddraw" + (" LIMITS=stock" if stock else "") +
+            (" COVER=1" if cover else ""))
+    return d / name, make
+
+
 class Run:
-    def __init__(self, names, args, out):
+    """`fixes` the fixtures by name (fixtures.json's, or measure's scenarios); `measure` runs L
+    and P only, with no dump and no check, for the coverage files."""
+
+    def __init__(self, names, args, out, fixes=None, measure=False):
         self.q = queue.Queue()
         self.lock = threading.Lock()
         self.pending = 0
         self.fx = {}
         self.out = out
+        self.measure = measure
         h = head()
-        fixes = fixtures()
+        fixes = fixes or fixtures()
+        cover = bool(getattr(args, "cover", False))
         for name in names:
             fix = fixes[name]
-            dll = Path(args.stock_dll if fix.get("dll") == "stock" else args.dll).resolve()
-            make = f"make -C tagpu/ddraw{' LIMITS=stock' if fix.get('dll') == 'stock' else ''}"
+            stock = fix.get("dll") == "stock"
+            dll, make = build_dll(stock, cover)
+            given = args.stock_dll if stock else args.dll
+            if given:
+                dll = Path(given)
+            dll = dll.resolve()
             if not dll.exists():
                 raise CouldNotRun(f"{name}: no DLL at {dll} ({make})")
             if dll.stat().st_mtime < sources_mtime():
@@ -651,8 +691,12 @@ class Run:
             Ts = gametimes(name, fix["end"], h)
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
                              "problems": [], "rt": {}, "passed": [], "held": [],
-                             "procs": {}}
-            say(f"{name}: T1 {Ts[0]}, round trips {Ts[1]} {Ts[2]} {Ts[3]}, Tlast {Ts[3]}")
+                             "procs": {}, "cover": cover, "measure": measure,
+                             "map": dll.with_suffix(".map")}
+            if measure:
+                say(f"{name}: recorded to GameTime {fix['end']} and played")
+            else:
+                say(f"{name}: T1 {Ts[0]}, round trips {Ts[1]} {Ts[2]} {Ts[3]}, Tlast {Ts[3]}")
             self.put((name, "L"))
 
     def put(self, job):
@@ -674,17 +718,19 @@ class Run:
         try:
             stopping()
             if proc == "L":
-                fx["rec"] = live(w, fx, Ts, out)
+                fx["rec"] = live(w, fx, None if fx["measure"] else Ts, out)
                 h = tarec.header_only(str(fx["rec"]))
                 fx["viewed"] = h["options"]["viewed"]
-                for p in ("P", "R", "Q"):
+                for p in ("P",) if fx["measure"] else ("P", "R", "Q"):
                     self.put((name, p))
+            elif proc == "P" and fx["measure"]:
+                play(w, fx, fx["rec"], out, "P", [], [])
             elif proc == "P":
-                play(w, fx, fx["rec"], out, [(f"p{Ts[0]}", Ts[0]), (f"p{Ts[-1]}", Ts[-1])],
+                play(w, fx, fx["rec"], out, "P", [(f"p{Ts[0]}", Ts[0]), (f"p{Ts[-1]}", Ts[-1])],
                      [f"p{Ts[0]}", f"p{Ts[-1]}"])
             elif proc == "R":
                 arms = [(f"r{Ts[0]}", Ts[0])] + [(f"rt{T}c", T + CONTINUE) for T in Ts[1:]]
-                fx["rt"] = play(w, fx, fx["rec"], out, arms, [n for n, _ in arms],
+                fx["rt"] = play(w, fx, fx["rec"], out, "R", arms, [n for n, _ in arms],
                                 [(f"rt{T}", T) for T in Ts[1:]])
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
@@ -765,18 +811,24 @@ def cmd_run(args):
     if unknown:
         print(f"tareplay: no fixture {', '.join(unknown)} (tareplay.py list)", file=sys.stderr)
         return 2
-    base = Path(os.environ.get("TAREPLAY_OUT") or
-                Path.home() / ".local" / "share" / "ta-replay" / "runs")
-    out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = out.resolve()
-    out.mkdir(parents=True, exist_ok=True)
+    out = out_dir(args)
     say(f"tareplay: {len(names)} fixtures, {args.j} at once, into {out}")
     try:
         run = Run(names, args, out)
     except CouldNotRun as e:
         print(f"tareplay: {e}", file=sys.stderr)
         return 2
-    threads = [threading.Thread(target=run.worker) for _ in range(args.j)]
+    run.j = args.j
+    run_threads(run)
+    status = report(run, args.keep)
+    if STOP.is_set():
+        return status or 2
+    return status
+
+
+def run_threads(run):
+    """The run's workers to their end; a stop by SIGTERM or Ctrl-C lets each finish its game."""
+    threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
 
     def interrupted(signum, frame):
         if not STOP.is_set():
@@ -788,10 +840,371 @@ def cmd_run(args):
         t.start()
     while any(t.is_alive() for t in threads):
         time.sleep(1)
-    status = report(run, args.keep)
+
+
+def out_dir(args):
+    base = Path(os.environ.get("TAREPLAY_OUT") or
+                Path.home() / ".local" / "share" / "ta-replay" / "runs")
+    out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = out.resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def covered_sources():
+    """The instrumented sources (the Makefile's COVERED): the sim files and the recorder's own."""
+    d = TREE / "tagpu" / "ddraw"
+    return set(tafeat.sim_files(d)) | {"src/tagpu_recorder.c", "src/tagpu_recwriter.c",
+                                       "src/tagpu_recreader.c", "src/tagpu_replay.c"}
+
+
+def reached_of(run):
+    """{fixture: {(source, function)}} from every process's coverage files, each read against the
+    map of the build it ran."""
+    srcs = covered_sources()
+    out = {}
+    maps = {}
+    for name, fx in run.fx.items():
+        covers = sorted(fx["out"].glob("*/cover-*.bin"))
+        if not covers:
+            continue
+        m = maps.setdefault(str(fx["map"]), tafeat.read_map(fx["map"]))
+        out[name] = {k for k in tafeat.reached(m, covers) if k[0] in srcs}
+    return out
+
+
+def cmd_measure(args):
+    """Each scenario as a fixture, L and P only, on the coverage builds: which functions of the
+    instrumented files it reaches (reached.json), for declaring the features (S3c-3, step 3)."""
+    fixes = {}
+    known = fixtures()
+    for sc in args.scenarios:
+        stem = Path(sc).stem
+        if stem in known:                   # a fixture runs as itself, to its own end
+            fixes[stem] = known[stem]
+            continue
+        if not (SCENARIOS / f"{stem}.json").exists():
+            print(f"tareplay: no scenario {stem}.json", file=sys.stderr)
+            return 2
+        fixes[stem] = {"load": f"{stem}.json", "end": args.end}
+    out = out_dir(args)
+    args.cover = True
+    say(f"tareplay measure: {len(fixes)} scenarios to GameTime {args.end}, {args.j} at once, "
+        f"into {out}")
+    try:
+        run = Run(list(fixes), args, out, fixes=fixes, measure=True)
+    except CouldNotRun as e:
+        print(f"tareplay: {e}", file=sys.stderr)
+        return 2
+    run.j = args.j
+    run_threads(run)
+    got = reached_of(run)
+    (out / "reached.json").write_text(json.dumps(
+        {k: sorted(f"{s}:{f}" for s, f in v) for k, v in got.items()}, indent=1) + "\n")
+    lines = []
+    for name, fx in run.fx.items():
+        state = " ".join(f"{p} {fx['procs'].get(p, 'never ran')}" for p in ("L", "P"))
+        lines.append(f"{name}: {state}; {len(got.get(name, ()))} functions reached")
+        for proc, kind, why in fx["problems"]:
+            lines.append(f"   {proc} {kind}: {why}")
+    text = "\n".join(lines) + "\n"
+    print(text, end="")
+    (out / "summary.txt").write_text(text)
+    return 0 if all(len(fx["procs"]) == 2 and set(fx["procs"].values()) == {"ran"}
+                    for fx in run.fx.values()) else 2
+
+
+# ---- the landing tier and the broad tier ----------------------------------------------------
+
+DD = "tagpu/ddraw/"
+RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
+                DD + "src/tagpu_recreader.c", DD + "src/tagpu_replay.c",
+                DD + "inc/tagpu_recorder.h", DD + "inc/tagpu_recfmt.h", DD + "inc/tagpu_recreader.h",
+                DD + "inc/tagpu_replay.h", DD + "inc/tagpu_replay_globals.h",
+                DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
+                DD + "replay-layout.tsv", DD + "replay-absent.tsv",
+                "tools/replay-globals-gen.py", "tools/replay-layout-gen.py",
+                "tools/replay-layout-check.sh"}
+FIXTURES_JSON = "tools/replay/fixtures.json"
+NOTE = "replay-roundtrip:"
+
+
+def git(*a, check=True):
+    r = subprocess.run(["git", "-C", str(TREE), *a], capture_output=True, text=True)
+    if check and r.returncode:
+        raise CouldNotRun(f"git {' '.join(a)}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def sim_paths():
+    return {DD + f for f in tafeat.sim_files()}
+
+
+def includes_of(sim):
+    """The headers a sim file's object was built from, by its .d file (any build's)."""
+    d = TREE / "tagpu" / "ddraw"
+    stem = sim[len(DD):-2]
+    for suffix in (".d", ".cover.d", ".stock.d", ".stock.cover.d"):
+        f = d / (stem + suffix)
+        if f.exists():
+            words = f.read_text().replace("\\\n", " ").split()
+            return {DD + w for w in words if w.endswith(".h") and not w.endswith(":")}
+    return set()
+
+
+def fixture_users(scenario):
+    """The fixtures whose load or applied steps name `scenario`."""
+    out = set()
+    for name, fix in fixtures().items():
+        named = {fix["load"]} | {a for _, k, a in fix.get("steps", []) if k == "apply"}
+        if scenario in named:
+            out.add(name)
+    return out
+
+
+def gated(paths, base):
+    """(fixtures, sim files to read by region, recorder files to read by function, why): what
+    the changed paths make the landing run."""
+    sims = sim_paths()
+    every = set(fixtures())
+    fx, by_region, by_function, why = set(), set(), set(), []
+    headers = {s: includes_of(s) for s in sims}
+    for p in sorted(paths):
+        if p in sims:
+            by_region.add(p)
+        elif p == FIXTURES_JSON:
+            old = json.loads(git("show", f"{base}:{p}", check=False) or '{"fixtures": {}}')
+            old = old.get("fixtures", {})
+            new = fixtures()
+            changed = {k for k in set(old) | set(new) if old.get(k) != new.get(k)} & set(new)
+            fx |= changed
+            why.append(f"{p}: the entries {' '.join(sorted(changed)) or 'none left'}")
+        elif p in RECORDER_OWN or p.startswith("tools/replay/"):
+            fx |= every
+            if p.endswith(".c"):
+                by_function.add(p)
+            why.append(f"{p}: the recorder's own, every fixture")
+        elif p.startswith("scenarios/") and fixture_users(Path(p).name):
+            users = fixture_users(Path(p).name)
+            fx |= users
+            why.append(f"{p}: the scenario of {' '.join(sorted(users))}")
+        else:
+            for sim, hs in headers.items():
+                if p in hs:
+                    by_region.add(sim)
+                    why.append(f"{p}: included by {sim}, every feature of it")
+    return fx, by_region, by_function, why
+
+
+def changed_lines(path, base):
+    """The new-side lines of `path` that changed in code, not only in comments or whitespace."""
+    old = git("show", f"{base}:{path}", check=False)
+    new = (TREE / path).read_text()
+    ob = tafeat.blank(old).split("\n")
+    nb = tafeat.blank(new).split("\n")
+    out = set()
+    diff = git("diff", "-U0", f"{base}...HEAD", "--", path)
+    for m in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff, re.M):
+        a, b = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+        c, d = int(m.group(3)), int(m.group(4) if m.group(4) is not None else 1)
+        old_code = "".join("".join(ob[a - 1:a - 1 + b]).split())
+        new_code = "".join("".join(nb[c - 1:c - 1 + d]).split())
+        if old_code == new_code:
+            continue
+        out |= set(range(c, c + d)) if d else {max(c, 1)}
+    return out
+
+
+def landing_plan(base):
+    """What the landing must reach: (fixtures, functions {(src, fn): feature}, regions
+    {feature: [(src, fn)...]} for file-scope lines, problems, why)."""
+    paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
+    fx, by_region, by_function, why = gated(paths, base)
+    feats, problems = tafeat.all_features()
+    funcs, regions = {}, {}
+    for path in sorted(by_region | by_function):
+        if not (TREE / path).exists():
+            continue
+        rel = path[len(DD):]
+        text = (TREE / path).read_text()
+        fns = tafeat.functions(text)
+        lines = changed_lines(path, base) if path in paths else None
+        if lines is None:                   # a header it includes changed: every feature of it
+            for f in feats:
+                if f["file"] == rel:
+                    fx |= set(f["fixtures"])
+            continue
+        for ln in sorted(lines):
+            fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
+            if path in by_region:
+                feat = tafeat.feature_at(feats, rel, ln)
+                if not feat:
+                    problems.append(f"UNFEATURED {path}:{ln}")
+                    continue
+                fx |= set(feat["fixtures"])
+                if fn:
+                    funcs[(rel, fn[0])] = feat["name"]
+                else:
+                    regions.setdefault(feat["name"], [(rel, f[0]) for f in fns
+                                                      if feat["line"] <= f[1] <= feat["end"]])
+            elif fn:
+                funcs[(rel, fn[0])] = "the recorder's own"
+    return fx, funcs, regions, problems, why
+
+
+def cmd_landing(args):
+    base = args.base
+    if args.check:
+        return landing_check(base)
+    dirty = [ln[3:] for ln in git("status", "--porcelain", "--", "tagpu/ddraw", "tools",
+                                   "scenarios").splitlines() if ln[:2].strip()]
+    if dirty:
+        print(f"tareplay landing: uncommitted changes ({' '.join(dirty[:6])}"
+              f"{' ...' if len(dirty) > 6 else ''}): the landing grades HEAD, so commit first",
+              file=sys.stderr)
+        return 2
+    fx, funcs, regions, problems, why = landing_plan(base)
+    for w_ in why:
+        say(w_)
+    if not fx and not funcs and not problems:
+        print("tareplay landing: nothing gated changed")
+        return 0
+    say(f"tareplay landing: fixtures {' '.join(sorted(fx)) or 'none'}; {len(funcs)} changed "
+        f"functions; {len(regions)} file-scope regions")
+    status = 0
+    run = None
+    if fx:
+        args.cover = True
+        out = out_dir(args)
+        try:
+            run = Run(sorted(fx), args, out)
+        except CouldNotRun as e:
+            print(f"tareplay: {e}", file=sys.stderr)
+            return 2
+        run.j = args.j
+        run_threads(run)
+        status = report(run, args.keep)
+        if STOP.is_set():
+            return status or 2
+    got = set().union(*reached_of(run).values()) if run else set()
+    for (src, fn), feat in sorted(funcs.items()):
+        if (src, fn) not in got:
+            problems.append(f"UNCOVERED {src}:{fn} (feature {feat}; fixtures "
+                            f"{' '.join(sorted(fx)) or 'none'})")
+    for feat, fns in sorted(regions.items()):
+        if not any(k in got for k in fns):
+            problems.append(f"UNCOVERED {feat}: a changed file-scope line, and no function of its "
+                            f"region ran")
+    for p in problems:
+        print(f"tareplay landing: {p}")
+    k = sum(1 for key in funcs if key in got) + sum(
+        1 for fns in regions.values() if any(x in got for x in fns))
+    total = len(funcs) + len(regions)
+    if status == 0 and not problems:
+        sha = git("rev-parse", "--short=8", "HEAD").strip()
+        dll = git("describe", "--always", "--dirty").strip()
+        seeds = " ".join(f"{n}:{run.fx[n]['Ts'][0]}" for n in sorted(fx)) if run else ""
+        feats = sorted(set(funcs.values()) | set(regions))
+        note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
+                f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
+                f"reached={k}/{total} result=pass date={datetime.date.today().isoformat()}")
+        git("notes", "append", "-m", note, "HEAD")
+        print(f"tareplay landing: pass, noted on {sha}: {note}")
+        return 0
+    return status or 1
+
+
+def landing_check(base):
+    """0 when a passing note sits on a commit R of base..HEAD and R..HEAD changes no gated
+    file; 1 otherwise, saying why."""
+    paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
+    fx, by_region, by_function, _ = gated(paths, base)
+    if not (fx or by_region or by_function):
+        print("tareplay landing --check: nothing gated changed")
+        return 0
+    for c in git("rev-list", f"{base}..HEAD").split():
+        note = git("notes", "show", c, check=False)
+        if any(ln.startswith(NOTE) and " result=pass " in ln for ln in note.splitlines()):
+            later = [p for p in git("diff", "--name-only", c, "HEAD").split() if p]
+            hit = [p for p in later if any(gated([p], c)[:3])]
+            if hit:
+                print(f"tareplay landing --check: the note on {c[:8]} predates gated changes: "
+                      f"{' '.join(sorted(hit))}")
+                return 1
+            print(f"tareplay landing --check: pass ({c[:8]})")
+            return 0
+    print("tareplay landing --check: no passing replay-roundtrip note in "
+          f"{base}..HEAD; run tools/replay/tareplay.py landing")
+    return 1
+
+
+def cmd_broad(args):
+    """Every fixture, then what the tier never exercised: a feature none of its fixtures reached,
+    a root or sink site no run counted, a recorded table no recording changed between T1 and
+    Tlast."""
+    names = list(fixtures())
+    args.cover = not args.release
+    if args.release:
+        args.dll = args.release
+    out = out_dir(args)
+    args.keep = True
+    try:
+        run = Run(names, args, out)
+    except CouldNotRun as e:
+        print(f"tareplay: {e}", file=sys.stderr)
+        return 2
+    run.j = args.j
+    run_threads(run)
+    status = report(run, True)
     if STOP.is_set():
         return status or 2
-    return status
+    lines = []
+    if not args.release:
+        got = reached_of(run)
+        feats, _ = tafeat.all_features()
+        for f in feats:
+            reached_fns = set().union(*(got.get(x, set()) for x in f["fixtures"]))
+            fns = [(f["file"], fn[0]) for fn in
+                   tafeat.functions((TREE / DD / f["file"]).read_text())
+                   if f["line"] <= fn[1] <= f["end"]]
+            if fns and not any(k in reached_fns for k in fns):
+                lines.append(f"UNCOVERED feature {f['name']} ({f['file']}:{f['line']}): none of "
+                             f"{' '.join(f['fixtures'])} reached it")
+    sites, changed, tables = set(), set(), None
+    for name, fx in run.fx.items():
+        Ts = fx["Ts"]
+        a, b = fx["out"] / "L" / f"dump-l{Ts[0]}.bin", fx["out"] / "L" / f"dump-l{Ts[-1]}.bin"
+        if not (a.exists() and b.exists() and fx.get("rec")):
+            continue
+        h = tarec.header_only(str(fx["rec"]))
+        _, c, _, _ = tarec.counts_of(str(b), h)
+        sites |= {k[0] for k, n in c.items() if n}
+        _, wa = tarec.dump_world(str(a), h)
+        _, wb = tarec.dump_world(str(b), h)
+        tables = tables or {ix: t["name"] for ix, t in h["tables"].items()}
+        changed |= {ix for ix in wa.tables if wa.tables[ix] != wb.tables.get(ix)}
+    for site in sorted(set(tarec.COUNT_ROOTS) | set(tarec.COUNT_SINKS)):
+        if site not in sites:
+            lines.append(f"UNCOVERED site 0x{site:06X}: no fixture counted it")
+    for ix, nm in sorted((tables or {}).items()):
+        if ix not in changed:
+            lines.append(f"UNCOVERED table {nm}: no recording changed it between T1 and Tlast")
+    text = "\n".join(lines) + ("\n" if lines else "")
+    print(text or "tareplay broad: every feature, site and table exercised\n", end="")
+    (out / "broad.txt").write_text(text)
+    return status or (1 if lines else 0)
+
+
+def cmd_features(args):
+    if args.check:
+        return tafeat.check(Path(args.check))
+    feats, problems = tafeat.all_features()
+    for f in feats:
+        print(f"{f['file']}:{f['line']}-{f['end']}  {f['name']}  {f['puppet'][11:].lower()}  "
+              f"{' '.join(f['fixtures'])}")
+    for p in problems:
+        print(p)
+    return 1 if problems else 0
 
 
 def cmd_list(args):
@@ -809,17 +1222,43 @@ def main(argv=None):
     r = sub.add_parser("run", help="record each fixture and check it on puppets")
     r.add_argument("fixtures", nargs="+", help="fixture names, or `all`")
     r.add_argument("-j", type=int, default=4, help="games at once (default 4)")
-    r.add_argument("--dll", default=str(TREE / "tagpu" / "ddraw" / "ddraw.dll"),
-                   help="the build under test (default the tree's)")
-    r.add_argument("--stock-dll", default=str(TREE / "tagpu" / "ddraw" / "ddraw-stocklimits.dll"),
-                   help="the stock-limits build, for a fixture that names it")
+    r.add_argument("--dll", help="the build under test (default the tree's, its coverage twin "
+                                 "with --cover)")
+    r.add_argument("--stock-dll", help="the stock-limits build, for a fixture that names it")
+    r.add_argument("--cover", action="store_true",
+                   help="the coverage builds; each process writes its cover-<proc>.bin")
     r.add_argument("--keep", action="store_true", help="keep the passing dumps")
     r.add_argument("--out", help="the run's folder")
     r.set_defaults(func=cmd_run)
     ls = sub.add_parser("list", help="the fixtures")
     ls.set_defaults(func=cmd_list)
+    m = sub.add_parser("measure", help="scenarios recorded and played on the coverage builds: "
+                                       "the functions each reaches")
+    m.add_argument("scenarios", nargs="+", help="fixture names, or scenario names in scenarios/")
+    m.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    m.add_argument("--end", type=int, default=1800, help="GameTime each is recorded to")
+    m.add_argument("--out", help="the run's folder")
+    m.set_defaults(func=cmd_measure, dll=None, stock_dll=None, keep=True)
+    la = sub.add_parser("landing", help="the landing tier: the changed features' fixtures on the "
+                                        "coverage builds, and their reach")
+    la.add_argument("--base", default="main", help="the branch the landing goes to")
+    la.add_argument("--check", action="store_true",
+                    help="exit 0 when a passing replay-roundtrip note covers HEAD")
+    la.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    la.add_argument("--keep", action="store_true", help="keep the passing dumps")
+    la.add_argument("--out", help="the run's folder")
+    la.set_defaults(func=cmd_landing, dll=None, stock_dll=None)
+    br = sub.add_parser("broad", help="the broad tier: every fixture, and what none exercised")
+    br.add_argument("--release", metavar="DLL", help="this release DLL, without reach")
+    br.add_argument("-j", type=int, default=4, help="games at once (default 4)")
+    br.add_argument("--out", help="the run's folder")
+    br.set_defaults(func=cmd_broad, dll=None, stock_dll=None)
+    fe = sub.add_parser("features", help="the SIM_FEATURE regions of the sim files")
+    fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
+                                                   "clean, 1 a named problem, 2 could not run")
+    fe.set_defaults(func=cmd_features)
     a = ap.parse_args(argv)
-    if a.cmd == "run" and not 1 <= a.j <= 9:
+    if a.cmd in ("run", "measure", "landing", "broad") and not 1 <= a.j <= 9:
         ap.error("-j is 1..9")
     return a.func(a)
 

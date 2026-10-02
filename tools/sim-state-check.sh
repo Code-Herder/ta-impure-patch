@@ -68,12 +68,15 @@ done < "$ALLOW"
 
 status=0
 decls=0
+case "$EXT" in *.cover.o) cover=1 ;; *) cover= ;; esac
 for src in "${files[@]}"; do
     obj="$DIR/${src%.c}$EXT"
     [ -f "$obj" ] || { echo "sim-state: $obj is missing (build it first)" >&2; exit 2; }
     syms="$("$NM" "$obj")" || { echo "sim-state: $NM failed on $obj" >&2; exit 2; }
     # writable statics and their declarations, as "name count" lines
-    wr="$(echo "$syms" | awk 'NF == 3 && $2 ~ /^[bBdDC]$/ && $3 !~ /^\./ { n = $3; sub(/^_/, "", n); sub(/\.[0-9]+$/, "", n); print n }' | sort | uniq -c | awk '{ print $2, $1 }')"
+    # (a coverage object's `C.<n>` are -finstrument-functions-once's guards, one a function: the
+    # instrumentation's, not the source's, and in no other build)
+    wr="$(echo "$syms" | awk -v cover="$cover" 'NF == 3 && $2 ~ /^[bBdDC]$/ && $3 !~ /^\./ && !(cover && $3 ~ /^_?C\.[0-9]+$/) { n = $3; sub(/^_/, "", n); sub(/\.[0-9]+$/, "", n); print n }' | sort | uniq -c | awk '{ print $2, $1 }')"
     dc="$(echo "$syms" | awk 'NF == 3 && $2 ~ /^[rR]$/ && $3 ~ /^_?simreg_/ { n = $3; sub(/^_?simreg_/, "", n); sub(/\.[0-9]+$/, "", n); print n }' | sort | uniq -c | awk '{ print $2, $1 }')"
     decls=$((decls + $(echo "$dc" | awk 'NF { s += $2 } END { print s + 0 }')))
     out="$(join -a1 -a2 -e0 -o 0,1.2,2.2 <(echo "$wr") <(echo "$dc") | awk -v src="$src" '

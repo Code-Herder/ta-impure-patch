@@ -58,6 +58,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_recorder.h"
+#include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_replay_globals.h"
@@ -919,6 +920,7 @@ void tagpu_rec_exit(void)
     HANDLE h[REC_FINISHING];
     DWORD n = 0;
     int i;
+    tagpu_cover_flush();
     fin_lock();
     s_fin_exiting = 1;
     for (i = 0; i < REC_FINISHING; i++)
@@ -4119,6 +4121,7 @@ void __cdecl tagpu_rec_capture(void)
 void tagpu_rec_level_end(void)
 {
     unsigned i, k = 0;
+    tagpu_cover_flush();
     /* a timed dump does not outlive its level, whose GameTime the next level starts again; an
        untimed one is taken at the next level's first capture point */
     for (i = 0; i < s_narmed; i++) {

@@ -57,6 +57,16 @@ WINDRES  ?= i686-w64-mingw32-windres
 # both, which draw more than stock ever asks for. Its objects carry their own
 # suffix, so neither build can ever link the other's -- the two differ in a macro,
 # not in a file, and make would otherwise call a stale object up to date.
+#
+# THE COVERAGE BUILD (inc/tagpu_cover.h): `make COVER=1` builds ddraw-cover.dll for the replay
+# harness. The simulation files of thread-split.allow and the demo recorder's own are compiled
+# with -finstrument-functions-once, each function in a section of its own: a function calls the
+# hook the first time it runs and tests one byte after that, which keeps the games at speed
+# (with every call and return hooked, the forest fixtures' live games missed their deadlines).
+# The DLL is linked unstripped with a map, ddraw-cover.map, which turns an address that ran into
+# its function. No instrumented file holds a naked function or inline assembly, which the hook's
+# call on entry would break. Its objects carry their own suffix, as the stock-limits build's do, and
+# `make LIMITS=stock COVER=1` is the stock-limits build's coverage twin.
 ifeq ($(LIMITS),stock)
 TARGET   := ddraw-stocklimits.dll
 CPPFLAGS += -DTAGPU_LIMITS_STOCK
@@ -64,12 +74,21 @@ OBJEXT   := .stock.o
 else
 OBJEXT   := .o
 endif
+ifeq ($(COVER),1)
+TARGET   := $(basename $(TARGET))-cover.dll
+CPPFLAGS += -DTAGPU_COVER
+OBJEXT   := $(basename $(OBJEXT)).cover.o
+LDFLAGS  := -Wl,--enable-stdcall-fixup -static -shared -Wl,-Map=$(basename $(TARGET)).map
+COVERED  := $(shell awk '$$1 !~ /^\#/ && $$3 == "sim" {print $$1}' thread-split.allow) \
+            src/tagpu_recorder.c src/tagpu_recwriter.c src/tagpu_recreader.c src/tagpu_replay.c
+$(addsuffix $(OBJEXT), $(basename $(COVERED))): CFLAGS += -finstrument-functions -finstrument-functions-once -ffunction-sections
+endif
 
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix $(OBJEXT), $(basename $(SRCS)))
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
-# `clean` removes both builds' objects, whichever LIMITS it is run with.
-ALLOBJS  := $(foreach e, .o .stock.o, $(addsuffix $(e), $(basename $(SRCS))))
+# `clean` removes every build's objects, whichever LIMITS or COVER it is run with.
+ALLOBJS  := $(foreach e, .o .stock.o .cover.o .stock.cover.o, $(addsuffix $(e), $(basename $(SRCS))))
 
 .PHONY: clean all thread-split spirv log-check replay-layout logtest
 all: $(TARGET)
@@ -81,6 +100,18 @@ all: $(TARGET)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 %.stock.o: %.rc
+	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
+
+%.cover.o: %.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+%.cover.o: %.rc
+	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
+
+%.stock.cover.o: %.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+%.stock.cover.o: %.rc
 	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
 
 # THE THREAD-SPLIT RULE (frame-packet-exchange §10): a source file that is
@@ -127,7 +158,12 @@ replay-layout:
 # A failure stops the build before the link, so the DLL on disk is still the last one that
 # passed; the allow list and the script are prerequisites so that a change to either runs it
 # again.
-$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh | thread-split spirv log-check replay-layout
+#
+# THE SIMULATION FEATURES (inc/tagpu_simreg.h, SIM_FEATURE): every line of a `sim` file lies in a
+# feature that names its replay fixtures, so a landing knows which fixtures to run. The check
+# reads the sources, not the objects, and runs beside the state rule for the same reasons; the
+# fixture list and the parser are prerequisites so that a change to either runs it again.
+$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py | thread-split spirv log-check replay-layout
 	../../tools/sim-state-check.sh . $(OBJEXT)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
@@ -141,6 +177,6 @@ tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
 	    -static -o $@ tests/logtest.c src/tagpu_log.c
 
 clean:
-	$(RM) ddraw.dll ddraw-stocklimits.dll $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)

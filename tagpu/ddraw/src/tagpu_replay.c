@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_replay.h"
+#include "tagpu_cover.h"
 #include "tagpu_recreader.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_recorder.h"
@@ -2932,6 +2933,14 @@ typedef void (__stdcall* PFN_SightRebuild)(unsigned arg);
    stamped, in the mode it was made in, and the block is compacted */
 typedef void (__cdecl* PFN_SightExpire)(void);
 #define E_SightExpire ((PFN_SightExpire)0x00482130u)
+/* 0x482910(point, sight, height, duration): the temporary sight record's add, stdcall, `ret 0x10`
+   (DISASSEMBLED 0x482910..0x482AAF). It refuses, touching nothing, when LosType bit 1 is clear
+   (0x482920) or the count is already SR_MAX (0x48292F); otherwise it makes the record for the
+   viewed record main+0x2A43 with its expiry GameTime + duration (0x4829C4), stamps it (0x4829F4,
+   the ray fan; the circle after it) and counts it (0x482AA9). The destructor calls it for a
+   viewed seat's live unit with the def's +0x202, +0x170 and 60 (0x48672C..0x486748). */
+typedef void (__stdcall* PFN_SightAdd)(const int32_t* point, int sight, int height, int duration);
+#define E_SightAdd    ((PFN_SightAdd)0x00482910u)
 
 /* the slot's bytes in the host: the main block's, or .data's */
 static unsigned char* global_at(char* ta, const ReplayGlobalSlot* g)
@@ -4423,12 +4432,110 @@ static void sk_deadlines(char* ta, const RecWorld* W, unsigned now)
     E_ChatReset();
 }
 
+/* THE SEEK'S SIGHT RECORDS (R14a, R14c). The viewed seat's death vision: the destructor makes a
+   temporary sight record for each live unit of the viewed record that dies under true LOS, for
+   EYE_LIFE ticks (0x486748), and its stamp is part of the viewed record's counters, which the
+   radar pass's sight loop reads (0x467710..0x46782F: a unit over a counter that is not 0 gets
+   contact bit 8). R4 drops every record and R5's refill leaves none, so the seek makes again the
+   ones a playing holds at T, from the deaths the recording carries, each with the victim's image
+   as the destructor found it (RK_EV_DEATH).
+   - THE WINDOW. The reader starts at least EYE_LEAD iterations back (recr_seek's lead): two
+     lifetimes and the window. eye_visit follows the engine's rules over every iteration it reads:
+     an entry for each death in step k of a live unit whose owner's +0x146 is the viewed record,
+     under the iteration's LosType bit 1; none past SR_MAX (counted in `capped`); all dropped at a
+     change of LosType bits 0-2, as the playing's LosType write drops them; after each step k
+     before T-1, those whose expiry is below k, as the expiry after the tick loop (0x495688)
+     removes them. A record from before the lead has expired before the window and can change a
+     later decision only through the cap, so the entries are a playing's unless the simulated cap
+     refused a death, which is counted and logged.
+   - THE BOUND. At most SR_MAX entries; the count is 0 after R4; every entry was made under T's
+     LosType (a change empties the list), so the add refuses none; the point is bounded by the
+     emitter's own grid test (0x48265B, 0x482663) and the def by addr_of (UNITINFOCount).
+   - THE LIFETIME. The add makes each record with its stamp and only the expiry removes both, so
+     the counters stay the engine's own. Nothing after R14a rebuilds the viewed record's counters:
+     R14 writes V's alone, and V owns no unit.
+   - THE ORDER. R14a runs at GameTime T-1 (R6), after R13's LosType and before R14's fog
+     composite and R14b's radar pass, as the players phase 0x49555F of step T-1 sees them; R14c,
+     the expiry, after R14b, as 0x495688 follows the players phase. */
+#define EYE_LIFE 60
+#define EYE_LEAD 123
+static struct {
+    struct { unsigned made; uint32_t type; int32_t pos[3]; } e[SR_MAX];
+    unsigned n, T, capped, made, refused;
+    uint32_t los;
+    int have_los;
+    unsigned char viewed;
+} s_eye;
+
+static void eye_begin(const char* ta, unsigned T)
+{
+    memset(&s_eye, 0, sizeof s_eye);
+    s_eye.T = T;
+    s_eye.viewed = (unsigned char)ta[OFF_VIEWED];
+}
+
+static void eye_visit(void* ctx, const RecWorld* w)
+{
+    const Lv* L = (const Lv*)ctx;
+    uint32_t los = w->globals[tagpu_replay_globals[0].dword] & LOS_REACT;
+    unsigned i, j, k = w->tick;
+    if (s_eye.have_los && los != s_eye.los) s_eye.n = 0;
+    s_eye.los = los;
+    s_eye.have_los = 1;
+    if (k >= s_eye.T) return;
+    for (i = 0; i < w->nev; i++) {
+        const unsigned char* img = w->ev[i].b + 12;
+        uint32_t state, owner, type;
+        char* rec;
+        if (w->ev[i].kind != RK_EV_DEATH || w->ev[i].len != 12 + REC_UNIT_IMAGE) continue;
+        memcpy(&state, img + U_STATE, 4);
+        memcpy(&owner, img + U_OWNERREC, 4);
+        memcpy(&type, img + U_DEF, 4);
+        if (!(state & U_ALIVE) || !(los & LOS_TRUE) || !addr_of(L, SIM_ID_PLAYER, owner, &rec) ||
+            !rec || (unsigned char)rec[PL_MAPBIT] != s_eye.viewed)
+            continue;
+        if (s_eye.n == SR_MAX) {
+            s_eye.capped++;
+            continue;
+        }
+        s_eye.e[s_eye.n].made = k;
+        s_eye.e[s_eye.n].type = type;
+        memcpy(s_eye.e[s_eye.n].pos, img + U_POS, 12);
+        s_eye.n++;
+    }
+    if (k + 1 < s_eye.T) {
+        for (i = j = 0; i < s_eye.n; i++)
+            if (s_eye.e[i].made + EYE_LIFE >= k) s_eye.e[j++] = s_eye.e[i];
+        s_eye.n = j;
+    }
+}
+
+/* R14a: the window's records, through the engine's add, each with the time it has left */
+static void eye_put(const Lv* L, unsigned T)
+{
+    unsigned i;
+    for (i = 0; i < s_eye.n; i++) {
+        char* def;
+        int before, after;
+        memcpy(&before, L->ta + OFF_NSIGHTRECS, 4);
+        if (!addr_of(L, SIM_ID_UNIT_TYPE, s_eye.e[i].type, &def) || !def) {
+            s_eye.refused++;
+            continue;
+        }
+        E_SightAdd(s_eye.e[i].pos, *(const int16_t*)(def + 0x202), *(const int16_t*)(def + 0x170),
+                   (int)(s_eye.e[i].made + EYE_LIFE) - (int)(T - 1));
+        memcpy(&after, L->ta + OFF_NSIGHTRECS, 4);
+        if (after > before) s_eye.made++;
+        else s_eye.refused++;
+    }
+}
+
 /* The reader back where the host is after a refused seek; when it cannot be, the playing stops
    there, as iteration_read's failure stops it. */
 static void sk_back(const Lv* L, unsigned prev)
 {
     char why[200];
-    if (recr_seek(s_rd, prev, why, sizeof why) == 1) return;
+    if (recr_seek(s_rd, prev, 0, NULL, NULL, why, sizeof why) == 1) return;
     s_over = 1;
     tagpu_logf("replay: %s cannot be read back to GameTime %u: %s; the units stop here", s_name,
                prev, why);
@@ -4461,7 +4568,8 @@ static int seek_run(char* ta)
     h = L.now;
     QueryPerformanceFrequency(&hz);
     QueryPerformanceCounter(&t0);
-    k = recr_seek(s_rd, T, why, sizeof why);
+    eye_begin(ta, T);
+    k = recr_seek(s_rd, T, EYE_LEAD, eye_visit, &L, why, sizeof why);
     if (k <= 0) {
         tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
         if (k < 0) sk_back(&L, prev);
@@ -4517,6 +4625,8 @@ static int seek_run(char* ta)
     refused0 = s_gst.refused;
     recorded_put(&L, W);
     s_sk.pool = s_gst.refused == refused0;
+    /* R14a: the viewed seat's temporary sight records (THE SEEK'S SIGHT RECORDS) */
+    eye_put(&L, T);
     /* R14: V's sight, which R5 undid, and the minimap's fog from the counters at T (sight_fill) */
     sight_fill(ta, s_viewer);
     /* R14b: the viewed record's radar pass, once, as its 30-tick pass runs it (0x46556D). The
@@ -4534,9 +4644,12 @@ static int seek_run(char* ta)
        0x467960 and 0x467980, 0x40B0D0, the math helpers 0x4E4400 and 0x4E43D0 -- write
        main+0x142F1 (DISASSEMBLED; the `or` of bit 1 at 0x46742F, just before, is the radar
        rebuild 0x466DC0's last store, whose ret is at 0x46743D). It runs after the last write it
-       reads -- R7's units, R8's positions and alliances, R13's LosType and explored map -- and
-       before R15, which it does not read. */
+       reads -- R7's units, R8's positions and alliances, R13's LosType and explored map, R14a's
+       records' stamps -- and before R15, which it does not read. */
     E_RadarPass();
+    /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
+       RECORDS) */
+    E_SightExpire();
     /* R15 */
     sk_deadlines(ta, W, T - 1);
     /* R16: inside the frame visit, before the next frame's scheduler 0x495230 sees the stamps: no
@@ -4563,12 +4676,15 @@ static int seek_run(char* ta)
                "freed and %u made; %u temporary sight records dropped; units' bookkeeping from "
                "T: %u water states, %u state bytes, %u sight stamps, %u refused; tables: %u "
                "written, %u skipped, %u values left as the host holds them, %u repaired; the "
-               "projectile pool %s, %u records; the effects %s", s_name, T, s_sk.left, s_sk.moved,
+               "projectile pool %s, %u records; the effects %s; temporary sight records: %u made "
+               "again, %u refused, %u deaths past the engine's %u (the records may differ from a "
+               "playing's)", s_name, T, s_sk.left, s_sk.moved,
                s_sk.carried, s_sk.outside, s_sk.frecs, s_sk.fcells, s_sk.fdropped, s_sk.freed,
                s_sk.models, s_sk.sdropped, s_sk.water, s_sk.states, s_sk.stamps, s_sk.brefused,
                s_sk.tab.written, s_sk.tab.skipped, s_sk.tab.kept, s_sk.tab.repaired,
                s_sk.pool ? "written" : "REFUSED", W->proj_hw,
-               s_sk.effects ? "cleared" : "NOT cleared");
+               s_sk.effects ? "cleared" : "NOT cleared", s_eye.made, s_eye.refused, s_eye.capped,
+               SR_MAX);
     return 1;
 }
 
@@ -4591,7 +4707,9 @@ static int seek_run(char* ta)
      that plays a recording, the round trip at the frame visit after step T-1 (THE ROUND TRIP).
    - `seek <T>` or `seek <T> dump <name>`: on a level that plays a recording, the seek waits for
      the next frame visit after the first step (THE SEEK), and the dump is taken at the capture
-     point of T. */
+     point of T.
+   - `cover <name>`: the coverage build's functions that ran, at once (tagpu_cover_write); any
+     other build refuses it with a line. */
 /* `p` is a decimal u32 and nothing after it: 1 with its value */
 static int u32_word(const char* p, unsigned* v)
 {
@@ -4642,6 +4760,10 @@ static void trigger_read(void)
             tagpu_rec_dump_now(name);
             return;
         }
+    }
+    if (sscanf(line, "cover %39s%n", name, &end) == 1 && !line[end]) {
+        tagpu_cover_write(name);
+        return;
     }
     if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
         u32_word(line + end + 4, &T)) {
