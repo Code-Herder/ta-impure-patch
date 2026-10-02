@@ -158,7 +158,9 @@ extern const SimField tagpu_sim_owned[];
     SIM__ENTRY(var, .stride = sizeof((var)[0]), .nrows = sizeof(var) / sizeof((var)[0]),        \
                .rows = &(count), .cls = (cls_), .key = (key_), .layout = (layout_))
 
-/* A pointer to `count` rows of `stride_` bytes that SIM_ALLOC made. */
+/* A pointer to `count` rows of `stride_` bytes in a block SIM_ALLOC made. The recorder
+   write-watches the rows only when they start on a page and share no page with another table;
+   rows that start elsewhere are diffed whole at every capture. */
 #define SIM_HEAP(var, cls_, key_, stride_, count, layout_)                                     \
     _Static_assert(!SIM__IS_ARRAY(var), #var " is not a pointer");                             \
     _Static_assert(__builtin_types_compatible_p(__typeof__(count), unsigned),                  \

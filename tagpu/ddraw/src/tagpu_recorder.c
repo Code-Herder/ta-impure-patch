@@ -1577,7 +1577,9 @@ static int cap_table(Rec* r, const Level* L, Table* tb)
         DWORD gran;
         unsigned next = 0;
         if (!bytes) return 1;
-        if (tb->unwatched ||
+        /* the watch reports whole pages, and a reset clears a page for every table on it, so only
+           rows that start on a page are watched: any other base is diffed whole */
+        if (tb->unwatched || ((size_t)base & 0xFFFu) ||
             GetWriteWatch(WRITE_WATCH_FLAG_RESET, (PVOID)base, bytes, tb->pages, &n, &gran)) {
             if (!tb->unwatched)
                 tagpu_logf("recorder: %s is not write-watched: it is diffed whole each time",

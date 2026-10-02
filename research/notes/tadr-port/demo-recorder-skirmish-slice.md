@@ -1966,6 +1966,10 @@ The arguments:
   which the seek never writes, so the seek writes at most n rows.
 - **The ordering:** `hit_reset` publishes the pointers right after `s_hit`, on the same thread.
 
+Each column starts on a page of its own and shares none: the recorder write-watches each as a
+table, and a reset of a shared page would hide one table's writes from the other. The recorder
+diffs whole any heap table whose rows do not start on a page.
+
 A puppet host still reads none of them: replayed deaths do not reach `tx_arm`, and replayed
 creates name their slot.
 
