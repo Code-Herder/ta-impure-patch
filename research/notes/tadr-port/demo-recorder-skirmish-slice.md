@@ -2053,7 +2053,21 @@ block an older reader skips, so `REC_FORMAT` stays 4.
 - **A seat** is a record the header names (`RT_PLAYER`), so its entry survives a controller that
   changes during the game.
 
-<!-- ASKS RUN -->
+**Verified and measured** (2026-10-02). The landing tier ran all 17 fixtures on the coverage
+builds: 391 of 391 checks passed, with 51 round trips EQUAL (seeks 7 to 577 ms). The recordings
+carried the new fields:
+- the 252×252 minimap, with the shown part (252×248 on the battle's map);
+- the version `v3.1`, 31 or 32 archives mounted, and their fingerprint;
+- each seat's entry.
+
+`recr_info` was run in a scratch build under Wine on those recordings. It read the same values as
+`tarec info`, down to the sum of the minimap's 63,504 indices, and an older recording's empty
+fields.
+
+The first run named the end's own functions `UNCOVERED`, because the level end wrote coverage
+before the recording ended; it now writes it after. Five functions no fixture reaches, because
+only S5's browser calls them, landed `UNCOVERED` by the owner's decision of 2026-10-02:
+`recr_info` and its three helpers, and `tagpu_rec_mod_print`.
 
 **Left:** S5's fourth ask, a recording that starts mid-game, belongs with S4d's suspend and resume
 of the recorder.
