@@ -15855,3 +15855,14 @@ section", thread 39737 "hpi, ccx, gp3, ufo priorities", and `files.tauniverse.co
 `web.archive.org`; `totalannihilation.fandom.com` (HTTP 402);
 `units.tauniverse.com`. A researcher with browser access to TAUniverse should re-run
 this survey — it is the single biggest blind spot here.
+
+
+### COB child allocation caller keys
+
+DISASSEMBLED: opcode `0x10061000` branches at `0x4B1888` to START's
+`0x4B18B0`; `0x4B18BB` calls allocator `0x4B08C0`, returning at `0x4B18C0`.
+Opcode `0x10062000` is tested at `0x4B1911`; CALL's `0x4B1928` calls the
+same allocator, returning at `0x4B192D`. The raised-limits VM uses these two
+addresses as semantic diagnostic caller keys around its synchronous allocation.
+They identify child starts only; the rewind count exception does not apply to
+other allocator callers. See the S4 rewind note for the accepted scope.

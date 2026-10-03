@@ -653,3 +653,13 @@ machine's view, so other players' owner-only indicators, which that machine neve
 absent. And a takeover's fresh COB resets what a mod keeps in COB statics and piece visibility
 (for example Mayhem's upgraded metal extractor looks un-upgraded after a fork, while its attached
 module and `+0x10E` are restored) [INFERRED from the scripts].
+
+
+### Rewind comparison scope
+
+The owner approved two S4 amendments on 2026-10-03: D2 also excludes unseated
+records' sight counters; the U lane accepts VM START/CALL child-allocation count
+differences across return-to-now via `compare-counts --rewind`, reporting each
+pair. Seated sight counters, root counts and puppet-write checks remain intact.
+COB execution state is reconstructed, not preserved. Ordinary count comparisons
+retain their existing policy. See [S4 rewind](demo-recorder-s4-rewind.html).

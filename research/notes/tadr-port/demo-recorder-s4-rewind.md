@@ -205,3 +205,24 @@ The remaining failures are unchanged policy questions, not passing gates:
 
 These runs verify the U lane, not the complete landing tier. The owner must
 resolve the two comparison-policy questions before the landing can proceed.
+
+
+### Accepted scope, 2026-10-03
+
+The owner approved extending D2 to the sight counters of unseated player records.
+Seated players' counters remain exact. The spectator's allocation remains alive
+until normal level teardown.
+
+The owner also accepted reconstruction of COB threads on return-to-now. Full COB
+execution state is not preserved: program positions, stacks and waits may differ.
+The rewind-only `compare-counts --rewind` exception covers VM START/CALL child
+allocations at `0x4B08C0` with semantic caller keys `0x4B18C0` and `0x4B192D`.
+Every accepted pair is reported. Root calls, other allocator callers, other sinks
+and puppet engine writes retain their existing checks. Ordinary replay comparisons
+do not enable this exception. No claim of exact script continuation is made.
+
+The raised-limits VM calls `tagpu_rec_cob_child`, which brackets its synchronous
+allocator call with the corresponding diagnostic key. The stock VM already has
+those return addresses. This keeps the exception independent of DLL layout and
+avoids exempting unrelated calls originating in the DLL. The prior coverage runs
+remain recorded as failures under the previous policy; fresh runs are required.

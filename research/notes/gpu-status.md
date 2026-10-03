@@ -20408,3 +20408,11 @@ level 75): do not use it for shading. `tacli arm <i> 'classicpp.cfg=shadows=0'` 
 launch clears the engine's shadow bits in the settings store, and removing it later does not restore
 them. The store owns `Shading` under `--defaults`, so a registry value does not gate it there: arm the
 passes by hand (`tacli arm` the default set) to test the option.
+
+
+The S4 rewind verifier excludes unseated spectator sight counters under the
+owner-approved D2 amendment. Its return-to-now count comparison reports and
+accepts VM START/CALL child allocations only; `tagpu_rec_cob_child` gives the
+raised VM the stock VM's semantic caller keys around the synchronous allocator
+call. This diagnostic context changes no engine state. COB threads are rebuilt,
+so exact execution continuity remains outside S4. See the S4 rewind note.

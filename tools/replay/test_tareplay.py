@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 import zlib
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -26,6 +27,47 @@ import tarec  # noqa: E402
 import tareplay  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
+
+
+class RewindPolicy(unittest.TestCase):
+    def compare(self, key, rewind, puppet=False):
+        meta = (0, (1 << len(tarec.COUNT_SINKS)) - 1, 1)
+        samples = [(10, {}, meta, {}), (20, {} if puppet else {key: 100}, meta, {}),
+                   (10, {}, meta, {}), (20, {key: 100} if puppet else {}, meta, {})]
+        out = io.StringIO()
+        with patch.object(tarec, "header_only", return_value={}), \
+             patch.object(tarec, "counts_of", side_effect=samples), \
+             patch.object(tarec, "absent_rows", return_value=((5, 2), [])), \
+             redirect_stdout(out):
+            result = tarec.cmd_compare_counts("rec", "a", "b", "c", "d", "rows", rewind)
+        return result, out.getvalue()
+
+    def test_only_rewind_vm_children_are_accepted(self):
+        for caller in (0x4B18C0, 0x4B192D):
+            key = (0x4B08C0, caller, 123)
+            self.assertEqual(self.compare(key, False)[0], 1)
+            result, report = self.compare(key, True)
+            self.assertEqual(result, 0)
+            self.assertIn("accepted rewind COB child", report)
+        for key in ((0x4B08C0, 0x80001000, 123), (0x4B08C0, 0x123456, 123),
+                    (0x420A30, 0x4B18C0, 0), (0x4861B3, 0x4B18C0, 0)):
+            self.assertEqual(self.compare(key, True)[0], 1)
+        self.assertEqual(self.compare((0x480B57, 0, 0), True, puppet=True)[0], 1)
+
+    def test_seated_sight_remains_exact(self):
+        from types import SimpleNamespace
+        def world():
+            return SimpleNamespace(lists={}, players=[bytearray(tarec.REC_PLAYER_IMAGE)
+                for _ in range(tarec.REC_PLAYERS)], sight={0: bytearray(b"a"), 4: bytearray(b"b")},
+                ctl=[], view=[0, 0], units={})
+        a, b = world(), world()
+        b.sight[0] = bytearray(b"c")
+        b.sight.pop(4)
+        h = {"players": [{"index": 0, "controller": 1}]}
+        tarec.fork_view(a, b, h, h)
+        self.assertNotIn(4, a.sight)
+        self.assertNotIn(4, b.sight)
+        self.assertNotEqual(a.sight[0], b.sight[0])
 
 
 class Parser(unittest.TestCase):

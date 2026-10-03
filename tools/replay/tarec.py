@@ -34,7 +34,7 @@
                                              record, the players' sight counters included; --takeover
                                              applies the existing fork_view comparison policy
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
-  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
+  tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV] [--rewind]
                                              a live game's counts against a playing's, each the
                                              change between its two dumps: roots per site
                                              exactly, sinks per (site, caller, aux) within
@@ -1309,7 +1309,7 @@ def fork_view(a, b, ha, hb):
     """A parent's world at fork_at and its fork's first iteration less what the takeover's rebuild
     makes its own, decision D2's list and nothing else: (a) every order node's handler
     state, which the rebuild restarts -- +0x05, +0x06, +0x0A, +0x4E, +0x52, +0x32 and +0x42's bits
-    21 and 22; (b) the player images of every record that is not a seat of the fork's header, the
+    21 and 22; (b) the player images and sight counters of every record that is not a seat of the fork's header, the
     viewer's and the deactivated records alike; (c) the controllers and the controlled and viewed
     players, and PlayerInfo +0x94 of each seat whose controller the two headers give differently;
     (d) the contact bits by puppet_view's rule, bit 12 always and bits 8-10 too unless the two
@@ -1328,6 +1328,7 @@ def fork_view(a, b, ha, hb):
         for i in range(REC_PLAYERS):
             if i not in seats:
                 w.players[i] = bytearray(REC_PLAYER_IMAGE)
+                w.sight.pop(i, None)
             elif ctl_a.get(i) != ctl_b.get(i):
                 w.players[i][REC_INFO_AT + INFO_TYPE] = 0
         w.ctl = [0] * REC_PLAYERS
@@ -1701,11 +1702,12 @@ def within_band(band, a, b):
     return abs(a - b) <= max(floor, pct * max(a, b) // 100)
 
 
-def cmd_compare_counts(path, la, lb, pa, pb, absent):
+def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
     """The counts of a live game (L, dumps la and lb) against a playing's (P, pa and pb), each as
     the change between its two dumps: every root per site exactly; every sink per (site, caller,
     aux), a `same` row's callers summed, within replay-absent.tsv's band, less its absent and
     extra rows; and no COB engine write on the puppet.
+    Rewind permits only VM START/CALL child counts to differ and reports each pair.
     Both dumps of a pair are taken at a capture point before that step's replay step, so both
     windows hold the steps [first GameTime, second GameTime)."""
     h = header_only(path)
@@ -1719,7 +1721,7 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent):
     if bad:
         print("counted nothing (the level neither recorded nor played): " + ", ".join(bad))
         return 2
-    lines, unrun = [], []
+    lines, unrun, accepted = [], [], []
     for p, m in ((la, ma), (lb, mb), (pa, mpa), (pb, mpb)):
         if m[0]:
             lines.append(f"{p}: {m[0]} keys found no row (the table full)")
@@ -1751,6 +1753,10 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent):
             continue
         a, b = glive.get(key, 0), gpup.get(key, 0)
         nsink += 1
+        if rewind and site == 0x4B08C0 and caller in (0x4B18C0, 0x4B192D):
+            accepted.append(f'accepted rewind COB child {caller_text(caller)} '
+                            f'"{names.get(aux, "")}": live {a}, puppet {b}')
+            continue
         if within_band(band, a, b):
             continue
         name = names.get(aux, "")
@@ -1767,7 +1773,7 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent):
           f"{len(COUNT_ROOTS)} roots, {nsink} sink keys, band {band[0]}% or {band[1]}, "
           f"{len(rows)} rows: "
           + ("EQUAL" if not lines else f"{len(lines)} DIFFERENCES"))
-    for line in lines + unrun:
+    for line in lines + unrun + accepted:
         print("  " + line)
     return 1 if lines else 2 if unrun else 0
 
@@ -2066,6 +2072,9 @@ def cmd_scan(path, dump):
 
 def main(argv):
     timeline = 0
+    rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
+    if rewind:
+        argv = [a for a in argv if a != "--rewind"]
     takeover = argv[1:2] == ["compare-dumps"] and "--takeover" in argv
     if takeover:
         argv = [a for a in argv if a != "--takeover"]
@@ -2118,7 +2127,7 @@ def main(argv):
             return cmd_counts(argv[2], argv[3])
         if argv[1] == "compare-counts":
             return cmd_compare_counts(argv[2], *argv[3:7], absent or str(
-                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"))
+                Path(__file__).resolve().parents[2] / "tagpu" / "ddraw" / "replay-absent.tsv"), rewind)
         return cmd_compare(argv[2], argv[3:], puppet, timeline)
     except (Unreadable, OSError, zlib.error, struct.error, KeyError) as e:
         print(f"tarec: {e}", file=sys.stderr)

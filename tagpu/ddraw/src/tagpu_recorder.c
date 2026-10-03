@@ -2627,6 +2627,7 @@ static struct {
     Level    L;                         /* the level's unit array, for bounding a unit        */
     unsigned rows, overflow;            /* rows used; keys that found none                    */
     CntRow   row[CNT_ROWS];
+    unsigned child_caller;               /* game-thread START/CALL diagnostic context */
     unsigned nnames;
     struct { unsigned aux; char name[REC_COUNT_NAME]; } name[CNT_NAMES];
 } s_cnt;
@@ -2643,6 +2644,22 @@ static int cnt_on(void)
     return s_cnt.tid && s_cnt.tid == GetCurrentThreadId() && !s_suspended &&
            !tagpu_puppet_rebuilding();
 }
+
+#ifndef TAGPU_LIMITS_STOCK
+/* START/CALL allocations have the stock VM's semantic caller keys on both builds.
+   The synchronous game-thread call brackets the context; allocator code cannot
+   execute a simulation step or start another VM instruction before returning. */
+int tagpu_rec_cob_child(char* cob, unsigned script, int call)
+{
+    typedef int (__attribute__((thiscall)) *Allocate)(char*, unsigned);
+    unsigned saved = s_cnt.child_caller;
+    int slot;
+    s_cnt.child_caller = call ? 0x004B192Du : 0x004B18C0u;
+    slot = ((Allocate)0x004B08C0u)(cob, script);
+    s_cnt.child_caller = saved;
+    return slot;
+}
+#endif
 
 static void cnt_add(unsigned va, unsigned caller, unsigned aux)
 {
@@ -3976,7 +3993,7 @@ static int __cdecl sink_cob(void* E)
     } else {
         h = 0;
     }
-    cnt_add(0x004B08C0u, cnt_caller(ARG(E, 0)), h);
+    cnt_add(0x004B08C0u, s_cnt.child_caller ? s_cnt.child_caller : cnt_caller(ARG(E, 0)), h);
     return 0;
 }
 

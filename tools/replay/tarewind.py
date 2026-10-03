@@ -218,7 +218,7 @@ def run(t, w, fx, out):
         for name in ("b", "c"):
             compare(f"P {name}", "compare", "--puppet", rec, p / f"dump-{name}.bin")
         compare("counts across now", "compare-counts", rec, live / "dump-a.bin",
-                live / "dump-c.bin", p / "dump-a.bin", p / "dump-c.bin")
+                live / "dump-c.bin", p / "dump-a.bin", p / "dump-c.bin", "--rewind")
         return results
     finally:
         (out / "rewind.json").write_text(json.dumps({**metadata, "results": results}, indent=2))

@@ -3877,8 +3877,9 @@ were destroyed before their AI objects were released and 1416 puppets rebuilt.
 The full rewind fixture now passes 20 of 22 checks on both normal and stock
 coverage builds, including exact fresh-seek equality, contiguous recording, AI
 activity and fork playback. Return-to-now measured 504/409 ms and fork 679/493 ms
-on the reference setup. Two owner decisions remain: the unseated spectator sight
-buffer and COB child-script counts across return-to-now. The complete landing tier
+on the reference setup. The owner accepted excluding unseated spectator sight
+counters and rewind-only VM child counts; exact COB thread continuation is outside
+this landing. Fresh verification under that policy, the complete landing tier
 and dedicated review remain pending.
 
 ## The restorer as compute (2026-09-27)

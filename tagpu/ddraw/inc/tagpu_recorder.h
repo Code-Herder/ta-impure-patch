@@ -9,6 +9,9 @@
 #include <windows.h>
 #include "tagpu_recfile.h"
 
+/* Game-thread VM allocation with a stable START/CALL counter key. */
+int tagpu_rec_cob_child(char* cob, unsigned script, int call);
+
 /* B2's stub at the sim step's call of the unit tick (0x4954ED) calls this on the game thread,
    between two iterations, after the replay's capture-point write (tagpu_replay_capture), so that a
    dump on a level that plays a recording holds what the replay wrote there. */
