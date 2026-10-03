@@ -3099,7 +3099,9 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
   acquisition table through `0x40B390`, and AI `+0x74` cleared only after all their
   units have been destroyed. V gets the fresh loader's WinLoseTime `+0xF4 = 0`,
   PlayerInfo `+0x9B` count nibble and loaded bit, and `+0xA7/+0xA8` version bytes
-  from `main+1/+2`. Return-to-now restores the saved viewed player,
+  from `main+1/+2`. Return-to-now restores unit contact bits `+0x110 & 0x1700`
+  from each bounded, identity-matched saved unit instead of running an extra radar scan;
+  it restores the saved viewed player,
   the 2160-byte message area at `main+0x12EF` and its two indices at `+0x2A3E`,
   with the saved controllers supplied to the takeover. No difficulty change is
   applied on that return;

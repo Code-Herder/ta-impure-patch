@@ -139,6 +139,9 @@ def run(t, w, fx, out):
         t.tacli("keys", w.name, "pause")
         t.nap(1)
         G1 = w.gametime()
+        # The engine creates this unit after the last radar scan. Returning to now
+        # must retain that scan's contact bits, rather than reveal the new unit early.
+        t.step(w, "apply", fix["rewind_paused"])
         opened = command("open", dump="pre")
         check("pre frame", opened["dump_at"] == G1, f"GameTime {G1}")
         T1 = (G1 - 601) // 30 * 30 + 1

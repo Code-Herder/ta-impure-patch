@@ -1,6 +1,6 @@
 # Live rewind (S4d)
 
-The live rewind implementation remains on its worktree branch; the final landing gate is blocked. Its two prerequisite engine experiments passed
+The live rewind implementation remains on its worktree branch; landing verification continues. Its two prerequisite engine experiments passed
 on the reference setup, 2026-10-02, using a normal limits build based on
 `f0748b8c`, the battle fixture, and an isolated Wine/Xvfb instance. Temporary
 instrumentation ran in the existing game-thread frame visit before `0x4969CD`;
@@ -366,3 +366,38 @@ The START full-pool control also passes all 16 getter checks: refused arguments
 are consumed, SIGNAL frees the seven sleeping children, and getter CALLs resume.
 The portable COB suite passes 40 tests, and the replay harness suite passes 32,
 including collection-failure cleanup and retirement after failed termination.
+
+
+### Return-to-now preserves the previous radar scan
+
+The next complete tier cleared the naval COB stop and stock Watch failure, but
+found a new exact-frame difference: unit 1004 at GameTime 1679 gained contact
+bit 8 on return-to-now. The viewed player's radar pass runs every 30 ticks;
+rerunning it during restoration can reveal a newly created unit before the
+original scan would have done so. This is simulation state: acquisition reads
+these contact bits. No comparison mask is widened.
+
+A focused reproduction creates one human solar plant while paused, then opens
+rewind, seeks to the past and returns. The earlier implementation changes its
+state from `0x30280221` to `0x30280321` at GameTime 329. The correction restores
+the four saved contact bits for bounded, identity-matched live units and skips
+the extra scan only on return-to-now. Its same test at GameTime 318 compares
+EQUAL across the entire saved and restored frame. Both permanent rewind lanes
+now create that paused unit before their saved-present dump.
+
+That full-tier attempt also found AI construction comparison failures in both
+rewind lanes. The resumed AI remained active: in the normal run, seat 2's
+nanoframe reached completion, its builders continued moving and executing
+orders, and resources were ample. The missing event was a later creation in
+the comparison window. This is still a failing check; the contact correction
+is being tested with the same AI comparison and constructor fixture.
+
+
+The completed report for that tier contains 512 passing and four failing checks:
+the contact bit, the two AI construction comparisons, and `naval-unmapped`'s
+flare count from explosion-add caller `0x4812D3` (33 live, 30 puppet, outside
+the existing band). Replaying its retained recording reproduces the same flare
+count. No count tolerance or expected-absent row has been changed. The normal
+and stock rewind runs with the contact correction both compare the saved and
+restored frames EQUAL; the normal AI construction check still fails, while the
+stock check passes. These results do not constitute a passing landing tier.

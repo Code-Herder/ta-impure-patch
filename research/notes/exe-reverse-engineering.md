@@ -15914,3 +15914,24 @@ checks test that DWORD at `0x490239` and `0x490365`. Return-to-now preserves its
 pre-conversion value; a fork deliberately arms it under the takeover policy.
 The objective pointer is at main `+0x391ED`, and level setup/teardown owns its
 lifetime as documented above.
+
+
+### Saved radar contacts on return-to-now
+
+DISASSEMBLED: the players phase compares the seated record's `+0xF0` with
+GameTime at `0x46507D..0x465089`, advances it by 30 at `0x46508F..0x465092`,
+and calls `0x467440` only for the viewed record at `0x465565..0x46556D`.
+The radar pass writes unit `+0x110` bits 8–10 and 12 and may refresh `+0xB0`
+(the five loops are mapped above). These are scan history between deadlines;
+a scan over the same positions at a later tick need not reproduce them.
+
+MEASURED 2026-10-03 on the reference Wine setup: at paused GameTime 329, a
+new human solar plant held state `0x30280221`. Return-to-now's extra radar
+pass changed it to `0x30280321`, with no intervening simulation step. The
+full battle fixture exposed the same bit-8 error on an enemy nanoframe at
+GameTime 1679. The corrected return restores mask `0x1700` from the saved
+image for each bounded, identity-matched live slot and omits that extra scan;
+`+0xB0` is already restored by the ordinary unit image. A new run at GameTime
+318 retains `0x30280221` and its complete before/after frame compares EQUAL.
+The seated records' saved `+0xF0` deadlines still schedule the next engine scan.
+Historical seeks retain their existing scan and contact policy.

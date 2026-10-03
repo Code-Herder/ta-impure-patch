@@ -2018,6 +2018,8 @@ def fixture_users(scenario):
     for name, fix in fixtures().items():
         steps = fix.get("steps", []) + fix.get("rewind_steps", [])
         named = {fix["load"]} | {a for _, k, a in steps if k == "apply"}
+        if fix.get("rewind_paused"):
+            named.add(fix["rewind_paused"])
         if scenario in named:
             out.add(name)
     return out

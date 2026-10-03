@@ -731,7 +731,9 @@ block that reads to its last complete block.
   permits retrying `fork`, but cannot return to now.
   `tareplay.py rewind battle [--stock] [--cover]` runs the live rewind L/P/Q
   checks. Fixtures with `rewind` run the same checks in U; stock-limits uses
-  the battle with the stock DLL. Return-to-now reconstructs COB threads; the U
+  the battle with the stock DLL. The `rewind_paused` scenario creates a human
+  unit while paused before the saved-present dump, checking that return-to-now
+  preserves the previous radar scan. Return-to-now reconstructs COB threads; the U
   count check reports and accepts only VM START/CALL child-count differences via
   `compare-counts --rewind`. D2 excludes sight buffers only for unseated records.
   For the fresh comparison, the trigger

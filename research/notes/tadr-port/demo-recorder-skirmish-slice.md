@@ -2135,7 +2135,7 @@ changed functions on every required build; `ring_free` remains UNCOVERED, approv
 for this landing by the owner under OQ7 on 2026-10-02. The earlier naval sink-count difference also
 reproduced on pre-S4c main; its cause remains open and the tolerances are unchanged.
 
-### S4d — live rewind (landing gate blocked)
+### S4d — live rewind (landing verification continues)
 
 [Live rewind](demo-recorder-s4-rewind.md) provides `tacli rewind` open, seek,
 return-to-now, fork and close on a recorded skirmish. The pause guard precedes
@@ -2148,8 +2148,10 @@ Normal-limits smoke checks include exact fresh-seek equality, filename-collision
 handling, append refusal/retry and exit during rewind. Both coverage builds pass
 25 rewind checks, including preservation of a disabled objective switch on return.
 The module note records the approved unseated sight and rewind-only VM child-count
-exceptions. Exact COB execution continuity is outside S4. The third renewed full
-tier hit O15's naval COB stop and a stock Watch launch failure; S4d is not landed.
+exceptions. Exact COB execution continuity is outside S4. The naval COB stop and
+failed-worker cleanup are corrected. The next tier exposed an extra radar scan
+on return-to-now, now corrected, and AI construction checks that still require
+verification; S4d is not landed.
 
 ## S5
 

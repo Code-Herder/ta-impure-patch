@@ -946,7 +946,8 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    engine functions above write; what the create and the level init wrote (the type and its index,
    the slot, the owner); the carry links and the attach piece (0x48AB70's); the state byte
    (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); the create's +0x110 bits 28-31; and
-   the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1). The
+   the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1),
+   except that return-to-now restores their saved history through rw_contacts. The
    harness compares them all but the contact bits (tools/replay/tarec.py compare --puppet), and
    bits 8-10 too when the host shows the recording's own viewed player. +0x110 bit 14, dying, is
    a value like the rest: the reaper's Send_UnitDeath is refused for a puppet (tagpu_puppet.c),
@@ -1056,8 +1057,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define REPLY_KINDS    24           /* the notice table 0x5086D8                                   */
 #define OFF_FXLAYERS   0x38D77      /* the particle layer table, FX_LAYERS of 16 bytes (0x471D90)  */
 #define FX_LAYERS      10
-/* +0x110 bits no raw write touches: the layer and the walk class (0-3), the contact bits (8-10,
-   12), the fix-up's bit (16, step 3), carried (17), and the create's 28-31 */
+/* +0x110 bits excluded from the general image writes: layer and walk class (0-3), contact bits
+   (8-10, 12; rw_contacts restores them only on return-to-now), the fix-up's bit (16, step 3),
+   carried (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
 
@@ -3854,7 +3856,7 @@ void __cdecl tagpu_replay_capture(void)
    - every deadline the recording does not carry is reset by the engine's own level-start reset or
      set from T (R15).
    So a seek in a fresh process, a seek forwards and a seek backwards to T agree.
-   The contact bits +0x110 8-10 and 12 and the minimap's fog are display state (D1). On a puppet
+   The contact bits +0x110 8-10 and 12 hold the viewed seat's scan history (D1). On a puppet
    host only the viewed record's 30-tick pass writes the contact bits, and R14b sets them from T
    with that pass. The minimap's fog is composited by that pass when a sight change has asked for
    it, by the sight rebuild 0x4816A0, and by sight_fill, so at a seek R14 composites it from T's
@@ -5337,6 +5339,26 @@ static void sk_refused(int tk, unsigned T, const char* why)
     else tagpu_logf("replay: %s: seek to %u refused: %s", s_name, T, why);
 }
 
+/* Return-to-now keeps the viewed seat's scan history. The engine scans only on its 30-tick
+   deadline (DISASSEMBLED 0x46507D..0x465092, call 0x46556D); running 0x467440 between those
+   deadlines would reveal newly created units early and rewrite +0xB0. The saved image holds
+   both, and R15 restores the seated records' deadlines. Bound each slot and verify its identity
+   before copying only the four contact bits; the next scheduled engine scan owns them again. */
+static void rw_contacts(const Lv* L, const RecWorld* W)
+{
+    unsigned slot;
+    for (slot = 1; slot < L->nslots; slot++) {
+        const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
+        uint32_t state;
+        char* u;
+        if (!W->live[slot] || !holds(L, slot, img)) continue;
+        u = unit_at(L, slot);
+        memcpy(&state, u + U_STATE, 4);
+        state = (state & ~0x1700u) | (img[U_STATE / 4] & 0x1700u);
+        memcpy(u + U_STATE, &state, 4);
+    }
+}
+
 /* THE SEEK's steps, R0-R17, in their order, in one of two modes, read once at entry:
    - SEEK (THE SEEK): kills as puppets, makes as puppets, and the level plays on from T;
    - TAKEOVER (THE TAKEOVER): kills as puppets, then the seats turn local and get their AI, the
@@ -5452,8 +5474,9 @@ static int seek_run(char* ta)
        made */
     if (tk) minimap_fog(ta);
     else sight_fill(ta, s_viewer);
-    /* R14b: the viewed record's radar pass, once, as its 30-tick pass runs it (0x46556D). The
-       contact bits are display state (D1). On a puppet host, after the creates, only that pass
+    /* R14b: the viewed record's radar pass, once, as its 30-tick pass runs it (0x46556D).
+       Return-to-now instead restores the saved scan through rw_contacts. On a puppet host,
+       after the creates, only that pass
        writes them: R7's creates clear bits 8-10 and set bit 9 from the def (0x485B4C,
        0x485C3E..0x485C44), so until the next pass no unit has a contact. One pass at the end of
        the seek computes them from the world at T. A playing's last pass ran in step
@@ -5469,7 +5492,8 @@ static int seek_run(char* ta)
        rebuild 0x466DC0's last store, whose ret is at 0x46743D). It runs after the last write it
        reads -- R7's units, R8's positions and alliances, R13's LosType and explored map, R14a's
        records' stamps -- and before R15, which it does not read. */
-    E_RadarPass();
+    if (back) rw_contacts(&L, W);
+    else E_RadarPass();
     /* R14c: the records' expiry, as 0x495688 follows the players phase (THE SEEK'S SIGHT
        RECORDS) */
     E_SightExpire();
