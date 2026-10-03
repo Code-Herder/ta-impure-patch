@@ -1,0 +1,7 @@
+landing-review: model=Codex-native-read-only-agents effort=high range=main..7033bb6f findings=3 acted=3 rejected=0 date=2026-10-03
+
+Two independent ta-reviewer contexts reviewed the accumulated diff: cards_review_engine (engine/model/Sight/input/docs) and cards_review_sync (publication, lifetimes, frame metadata and uniforms). Native codex review CLI attempts were blocked before source inspection by their bubblewrap environment and are not counted as reviews.
+
+Confirmed findings: MEDIUM partial GUI drain could split pixels from PK_FRAME; MEDIUM saturated capture could omit its terminal OP_FLIP; LOW engine-map units-alive writer address named the comparison rather than decrement. Verified against source and pristine objdump, all corrected in 5e5fb6a6. Focused read-only synchronization re-review confirmed captured-head draining is bounded and missing-marker rejection preserves cleanup and next-window reseed; no remaining defect survived verification.
+
+Validation: both DLL variants build; full 18-fixture replay gate at 25fce201 reached 6/6 changed functions, landing --check still passes at 5e5fb6a6. Queue control-flow regression covers >20k, wrap and concurrent append (old cutoff fails); extracted capture-boundary checks pass. Corrected DLL ran four-seat replay under repeated UI reseeds at stock/150% HUD; presented image and device Sight/Fullmap plus Config close/reopen checked. Wiki built 96 pages plus index. No publication.
