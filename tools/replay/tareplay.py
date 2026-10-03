@@ -35,7 +35,8 @@ and a fifth where fixtures.json gives the fixture `"watch": true`:
                  REPLAYS, Watch refuses two edited copies of the recording (another layout
                  hash; a map no archive has, which the Start refuses), then plays it; the dock's
                  DKSPEED, the in-game Options' OK with the store's gamespeed unchanged, DKPLAY to
-                 pause, the trigger `dock seek T1` (the dock's own seek entry), dump w<T1>,
+                 pause, the trigger `dock seek T1` (the dock's own seek entry), the cards' Sight
+                 and Full map with clock and camera unchanged, dump w<T1>,
                  DKPLAY to resume, DKLEAVE and Yes back to the browser, and a second Watch
 
 and every check fails by name: the recording's end block and `tarec check`; L's dumps `tarec
@@ -970,6 +971,38 @@ def watch_button(w):
     return m.group(1)
 
 
+def watch_cards(w, log, rec):
+    """Exercise the visible card controls at the worker's unscaled HUD while paused."""
+    match = re.search(r"^gui DOCK.GUI\s+(\d+)x(\d+)", ui(w))
+    if not match:
+        raise CouldNotRun("the player cards: no dock dimensions")
+    width, height = map(int, match.groups())
+    seats = tarec.header_only(rec)["players"]
+    if not seats:
+        raise CouldNotRun("the player cards: no recorded seats")
+    row_height = 54 if len(seats) > 4 or len(seats) * 74 - 4 > height - 202 else 70
+    viewed = "*0x511DE8+0x2A43:1"
+    viewer, tick = peek(w, viewed), w.gametime()
+    eye_specs = ("*0x511DE8+0x1431F:4", "*0x511DE8+0x14323:4")
+    eye = tuple(peek(w, s) for s in eye_specs)
+    # The worker creates a fresh instance with no HUD-scale arm. These are device clicks,
+    # so a broken card input route cannot pass by calling the replay API directly.
+    for seat, x, y in ((seats[0]["index"], width - 112, 40 + row_height - 14),
+                       (viewer, width - 160, height - 148)):
+        n = len(log.lines)
+        rc, output = tacli("click", w.name, x, y, "--device", timeout=60)
+        if rc:
+            raise CouldNotRun(f"the player cards: {last(output)}")
+        got = log.wait(rf"replay: sight is seat {seat} at GameTime {tick};|"
+                       rf"replay: sight change to seat {seat} refused:", 30, n)
+        if not got or "refused:" in got or peek(w, viewed) != seat:
+            raise Failed(f"the player cards: {got.strip() if got else 'no Sight reply'}")
+        if w.gametime() != tick or tuple(peek(w, s) for s in eye_specs) != eye:
+            raise Failed("the player cards: Sight changed the paused clock or camera")
+    return ("W: player cards", PASS, f"Sight {seats[0]['index']} and Full map {viewer}; "
+            f"GameTime {tick} and camera {eye} unchanged")
+
+
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
     driven through the dock: two copies of the recording refused, the data refusal's marked and the
@@ -1073,6 +1106,7 @@ def watch_lane(w, fx, rec, out, T):
                    rf"refused)|a seek to {T} from the dock refused", 60, n)
     if not got or "sought from" not in got:
         raise Failed(f"the dock's seek to {T}: {got.strip() if got else 'no line in 60 s'}")
+    res.append(watch_cards(w, log, rec))
     arm_dump(w, log, f"w{T}", T)
     ui(w, "click", "DKPLAY")
     wait_dumps(log, [f"w{T}"], 120)

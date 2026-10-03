@@ -114,6 +114,16 @@ and every device pixel mapped inside the source. A further sweep of every Q8 sca
 these made 2,487,360 round-trip/containment checks. This verifies the coordinate arithmetic, not
 rendering at every size.
 
-Still required before landing: remaining runtime HUD sizes and lifecycle/input checks; the
-landing's required build/replay gates; documentation regeneration and independent reviews. The dock and cards currently select retail art even on Escalation; mod-specific dock
+The presented cards and device-space Sight/Full map controls were also checked at 1920×1080
+with Auto (225%) and 1024×768 at 125%. A wheel in the world gap still produced the zoom gesture;
+Config replaced the dock and cards. At 1024×768, Leave from a direct command-line playback
+returned to the main menu; opening REPLAYS and Watch again restored the cards. A Sight press
+released outside its card left the viewed seat unchanged. These checks supplement the confirmed
+modal-cancellation check above; they do not separately repeat the dock's OS focus-loss tests.
+
+The harness's W leg also clicks the first card's Sight and the Full map footer while paused,
+checking the viewed seat, clock and camera. It runs in the fresh worker's unscaled HUD, on both
+stock-limits and raised-limits Watch fixtures.
+
+Still required before landing: the landing's full replay gate and independent reviews. The dock and cards currently select retail art even on Escalation; mod-specific dock
 selection is a pre-existing open item in the S5 design.

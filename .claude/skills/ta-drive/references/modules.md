@@ -632,8 +632,9 @@ block that reads to its last complete block.
   process, each on its own Xvfb; the live game also takes the null twin (paused, the camera, the
   wheel, the cursor and the in-game menu moved, two frame dumps). A fixture with `"watch": true`
   runs a fifth process, W: the playing started from REPLAYS and Watch as a player starts it, two
-  edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek (its dump
-  `w<T1>` compared like the others), resume and Leave. It runs every check above and
+  edited copies refused, then the dock's speed, the Options' OK, pause, the dock's seek, the
+  player cards' Sight and Full map (clock and camera unchanged), its dump
+  (`w<T1>` compared like the others), resume and Leave. It runs every check above and
   reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. It
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
