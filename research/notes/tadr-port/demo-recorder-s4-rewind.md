@@ -105,7 +105,7 @@ state, and before its success acknowledgement. It captures the exact rebuilt
 frame regardless of CLI polling latency. `seek-frame T dump NAME` in the replay
 trigger provides the corresponding paused, atomic fresh-process comparison.
 
-### Verification in progress
+### Initial smoke verification
 
 On the reference setup, the normal-limits smoke test opened at GameTime 221,
 closed without moving, paused at 625, sought to iterations 301 and 331, and
@@ -125,8 +125,9 @@ The full `tareplay.py rewind battle` fixture runs a live battle through open/clo
 return-to-now, and fork; compares a fresh seek and original playback; checks
 contiguous iterations, event counts, AI activity and window health; and reports
 conversion, return and fork times. It is also the U lane of battle and stock-limits
-landing fixtures, using the battle on each limits build. The coverage results below still have two failing checks. The complete landing
-tier, documentation verification and dedicated review remain required before landing. This note does not claim those gates have passed.
+landing fixtures, using the battle on each limits build. The initial coverage
+results below failed two checks; the later accepted scope and fresh passing
+verification are recorded in their own sections.
 
 ### First full normal-limits run
 
@@ -250,3 +251,18 @@ pairs use the accepted exception. This does not establish exact COB execution
 continuity. The complete landing tier passes all 18 fixtures and reaches all 47 changed
 functions on their required builds. Its replay-roundtrip note is on `8cb3ed5e`.
 Dedicated reviews remain required before landing.
+
+
+### Landing review correction
+
+The dedicated review found that return-to-now used takeover's unconditional
+objective arming. Stock `+kill 9` with an unused seat still calls `0x4904B0` and
+disables objectives, so rewind must preserve that disabled state. The rewind
+saves the objective's DWORD at `+0x88` before conversion and restores it before
+returning to live steps; the same level owns the object throughout. A fork keeps
+the takeover policy of arming objectives. The U lane now checks disabled-before,
+disabled-after-return, and armed-after-fork through live reads. The first full
+gate above predates this correction; a new gate is required.
+
+The synchronization review found no surviving issue. The other confirmed finding
+was stale policy prose; the current descriptions now state the approved scope.

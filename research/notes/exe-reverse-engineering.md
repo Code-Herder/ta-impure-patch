@@ -15872,3 +15872,14 @@ script index, scans eight fixed records, initializes a free record, increments
 `cob+0x53C`, and returns the slot or −1 (`ret 4`). The raised-limits replacement
 uses the same synchronous allocation role. Neither executes the child's script
 inside the allocation, so the diagnostic context ends before VM execution resumes.
+
+
+### Objective arming across live rewind
+
+DISASSEMBLED: the argument form of `+kill` calls `0x486F10` at `0x4164DF`,
+then calls objective disarm `0x4904B0` at `0x4164EF` even when the selected seat
+has no units. `0x4904B0` stores zero at objective `+0x88` and returns. Objective
+checks test that DWORD at `0x490239` and `0x490365`. Return-to-now preserves its
+pre-conversion value; a fork deliberately arms it under the takeover policy.
+The objective pointer is at main `+0x391ED`, and level setup/teardown owns its
+lifetime as documented above.

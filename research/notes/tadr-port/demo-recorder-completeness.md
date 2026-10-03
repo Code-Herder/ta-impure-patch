@@ -407,9 +407,12 @@ those scenarios select these fixtures for the landing tier. The current extra
 step supplies AI builders before the comparison window, without giving them
 construction orders. `tareplay.py rewind battle [--stock] [--cover]` runs this
 lane independently. Its fresh seek uses `seek-frame T dump NAME`, which pauses
-and dumps in the seek's frame visit. Comparison policy remains the owner's:
-unseated sight allocation and restarted COB child threads are pending decisions
-in the rewind note, not additional exclusions in the harness.
+and dumps in the seek's frame visit. The approved scope excludes unseated sight
+counters under D2 and reports/accepts only VM START/CALL child counts across
+return-to-now. Seated sight, root counts and puppet-write checks remain intact;
+see *Rewind comparison scope* below. The U lane also uses the engine's `+kill 9`
+to disable objectives on an unused seat, verifies return-to-now preserves that
+switch, and verifies a fork arms objectives under the takeover policy.
 
 **The player's way in (W).** A fixture with `"watch": true` in `fixtures.json` — `stock-limits` on
 the stock-limits build and `wpn-badtgt` on the raised one, so the landing tier's coverage holds

@@ -20416,3 +20416,8 @@ accepts VM START/CALL child allocations only; `tagpu_rec_cob_child` gives the
 raised VM the stock VM's semantic caller keys around the synchronous allocator
 call. This diagnostic context changes no engine state. COB threads are rebuilt,
 so exact execution continuity remains outside S4. See the S4 rewind note.
+
+Return-to-now also restores the objective's saved `+0x88` switch before resuming
+steps. Conversion disarms it; takeover/fork arms it. The same level owns the
+objective across rewind. This preserves games whose console command disabled
+victory/defeat before the rewind.

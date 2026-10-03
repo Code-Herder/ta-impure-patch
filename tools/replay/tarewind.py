@@ -54,6 +54,12 @@ def run(t, w, fx, out):
         if judge:
             judge()
 
+    def objective_armed():
+        objective = t.peek(w, "*0x511DE8+0x391ED:4")
+        if not objective:
+            raise t.CouldNotRun("rewind: missing objective")
+        return t.peek(w, f"0x{objective + 0x88:X}:4")
+
     def pause_probe(label):
         g = w.gametime()
         rc, text = t.tacli("keys", w.name, "pause")
@@ -119,6 +125,9 @@ def run(t, w, fx, out):
         check("open-close", not any("sought from GameTime" in ln for ln in log.lines[start:]),
               "no rebuild between open and close")
         until(1500)
+        # Seat 9 is unused in this battle; the engine command still disarms objectives.
+        t.step(w, "type", "+kill 9")
+        check("objective disarmed", objective_armed() == 0, "engine +kill 9")
         t.tacli("keys", w.name, "pause")
         t.nap(1)
         G1 = w.gametime()
@@ -132,6 +141,7 @@ def run(t, w, fx, out):
         command("seek", T1 + 300)
         returned = command("now", dump="post")
         check("return clock", returned["dump_at"] == G1, f"GameTime {G1}")
+        check("return objective", objective_armed() == 0, "saved disabled switch retained")
         t.tacli("keys", w.name, "pause")
         judge_span("now judge", 1800, 60)
         until(max(3000, G1 + 1800))
@@ -140,6 +150,7 @@ def run(t, w, fx, out):
         T2 = (G2 - 601) // 30 * 30 + 1
         command("seek", T2)
         forked = command("fork", dump="fork")
+        check("fork objective", objective_armed() == 1, "takeover arms objectives")
         judge_span("fork judge", 900, 30)
         for label, data in (("conversion", converted), ("now", returned), ("fork", forked)):
             match = re.search(r"in (\d+) ms", data["detail"])

@@ -206,7 +206,7 @@ static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote a
 enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW };
 enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
 static struct {
-    unsigned state, G, P, viewed, viewer, timeline, T;
+    unsigned state, G, P, viewed, viewer, timeline, T, objective_armed;
     unsigned short pause, message_at[2];
     unsigned char types[REC_PLAYERS], messages[2160];
     char path[MAX_PATH], dump[40], result_dump[40];
@@ -5587,6 +5587,7 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
         snprintf(why, cap, "the live writer failed");
         return 0;
     }
+    s_rw.objective_armed = *(uint32_t*)(*(char**)(ta + OFF_OBJECTIVE) + OBJ_ARMED);
     memcpy(s_rw.messages, ta + 0x12EF, sizeof s_rw.messages);
     memcpy(s_rw.message_at, ta + 0x2A3E, sizeof s_rw.message_at);
     info = *(unsigned char**)(rec + PL_INFO);
@@ -5677,6 +5678,9 @@ static void rw_finish(char* ta, int back)
     int dumped;
     memcpy(dump, s_rw.result_dump, sizeof dump);
     if (back) {
+        /* The same level owns this objective until teardown. Restore its saved switch
+           before any step: +kill may have disabled victory/defeat before rewind. */
+        *(uint32_t*)(*(char**)(ta + OFF_OBJECTIVE) + OBJ_ARMED) = s_rw.objective_armed;
         ta[OFF_VIEWED] = (char)s_rw.viewed;
         memcpy(ta + 0x12EF, s_rw.messages, sizeof s_rw.messages);
         memcpy(ta + 0x2A3E, s_rw.message_at, sizeof s_rw.message_at);

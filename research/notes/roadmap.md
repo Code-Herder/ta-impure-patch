@@ -3874,14 +3874,12 @@ network game played with Impure records no demo.
 [S4d's prerequisite experiments](tadr-port/demo-recorder-s4-rewind.html) passed
 on 2026-10-02: a spectator was seated and reused mid-game, and 1370 live units
 were destroyed before their AI objects were released and 1416 puppets rebuilt.
-The full rewind fixture now passes 20 of 22 checks on both normal and stock
-coverage builds, including exact fresh-seek equality, contiguous recording, AI
-activity and fork playback. Return-to-now measured 504/409 ms and fork 679/493 ms
-on the reference setup. The owner accepted excluding unseated spectator sight
-counters and rewind-only VM child counts; exact COB thread continuation is outside
-this landing. Both coverage builds now pass all 22 rewind checks under that policy; the
-18-fixture landing tier passes with 47/47 changed functions reached. Dedicated
-review remains before landing.
+Both coverage builds pass the 22-check rewind fixture under the owner-approved
+unseated sight and VM child-count exceptions; exact COB thread continuation is
+outside this landing. The first 18-fixture landing tier passed with 47/47 changed
+functions reached. Dedicated review found an objective switch that return-to-now
+must preserve; its correction and regression checks await the renewed gate.
+
 
 ## The restorer as compute (2026-09-27)
 
