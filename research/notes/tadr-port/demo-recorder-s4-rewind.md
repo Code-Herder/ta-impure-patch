@@ -1,6 +1,6 @@
 # Live rewind (S4d)
 
-The live rewind implementation is under verification. Its two prerequisite engine experiments passed
+The live rewind implementation remains on its worktree branch; the final landing gate is blocked. Its two prerequisite engine experiments passed
 on the reference setup, 2026-10-02, using a normal limits build based on
 `f0748b8c`, the battle fixture, and an isolated Wine/Xvfb instance. Temporary
 instrumentation ran in the existing game-thread frame visit before `0x4969CD`;
@@ -322,3 +322,21 @@ units move. Takeover takes 571 ms; the controlled unit moves 205 wu. The 1377-un
 fork frame, both stream checks and playback across the fork all compare EQUAL.
 These targeted runs repair the two fixture failures; the complete landing tier
 must still be rerun on the committed fixture changes.
+
+
+### Landing gate stopped, 2026-10-03
+
+The third post-review full-tier attempt, on `9e1c88da`, reached the known O15
+naval puppet failure: `naval-unmapped` R stopped in `CORMSHIP.COB` at word 724,
+`CALL cannot obtain a child thread`. Its stock-limits W process also failed to
+obtain the initial UI snapshot. This is not a passing gate. The remaining runs
+were interrupted after those failures under the project's three-attempt limit;
+their incomplete results are not counted as passes. The earlier U-lane and
+fixture-repair results above remain evidence for those runs only.
+
+O15 is an actual VM refusal, distinct from the approved rewind comparison of
+START/CALL allocation counts. The exception does not permit the guard to stop,
+and full COB execution-state preservation remains outside this landing. S4d
+has not been fast-forwarded to main. The next work is to resolve the naval
+puppet guard failure and establish why the Watch launch had no UI snapshot
+before attempting another complete landing gate.

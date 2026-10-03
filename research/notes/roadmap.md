@@ -3878,7 +3878,9 @@ Both coverage builds pass the 22-check rewind fixture under the owner-approved
 unseated sight and VM child-count exceptions; exact COB thread continuation is
 outside this landing. The first 18-fixture landing tier passed with 47/47 changed
 functions reached. Dedicated review found an objective switch that return-to-now
-must preserve; its correction and regression checks await the renewed gate.
+must preserve; its correction passes all 25 rewind checks on both builds. The
+renewed complete tier remains blocked by O15's naval puppet COB stop and a stock
+Watch launch failure; S4d is not landed.
 
 
 ## The restorer as compute (2026-09-27)

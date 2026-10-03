@@ -2069,8 +2069,8 @@ before the recording ended; it now writes it after. Five functions no fixture re
 only S5's browser calls them, landed `UNCOVERED` by the owner's decision of 2026-10-02:
 `recr_info` and its three helpers, and `tagpu_rec_mod_print`.
 
-**Left:** S5's fourth ask, a recording that starts mid-game, belongs with S4d's suspend and resume
-of the recorder.
+**Left:** S5's fourth ask, starting a recording mid-game and stopping it on request,
+remains separate recorder work. S4d suspends and resumes an existing recording.
 
 ### S4b — the takeover and its fork
 
@@ -2135,7 +2135,7 @@ changed functions on every required build; `ring_free` remains UNCOVERED, approv
 for this landing by the owner under OQ7 on 2026-10-02. The earlier naval sink-count difference also
 reproduced on pre-S4c main; its cause remains open and the tolerances are unchanged.
 
-### S4d — live rewind (under verification)
+### S4d — live rewind (landing gate blocked)
 
 [Live rewind](demo-recorder-s4-rewind.md) provides `tacli rewind` open, seek,
 return-to-now, fork and close on a recorded skirmish. The pause guard precedes
@@ -2145,9 +2145,11 @@ with a fresh seek and the restored present with its saved frame. The original
 writer closes before a fork can acquire its file.
 
 Normal-limits smoke checks include exact fresh-seek equality, filename-collision
-handling, append refusal/retry and exit during rewind. The full verification and
-the module note records the approved unseated sight and rewind-only VM child-count
-exceptions. Exact COB execution continuity is outside S4. S4d is not landed.
+handling, append refusal/retry and exit during rewind. Both coverage builds pass
+25 rewind checks, including preservation of a disabled objective switch on return.
+The module note records the approved unseated sight and rewind-only VM child-count
+exceptions. Exact COB execution continuity is outside S4. The third renewed full
+tier hit O15's naval COB stop and a stock Watch launch failure; S4d is not landed.
 
 ## S5
 
@@ -2161,7 +2163,8 @@ stay the recorder's to build (that note's *What S5 asks of the recorder*):
 3. the mod: its name, its version, and a fingerprint of the archives the engine mounted;
 4. a recording that starts mid-game from a snapshot, and an end reason for one the player stopped.
 
-Asks 1 to 3 are *What the Replays browser asks of a recording* above; the fourth goes with S4d.
+Asks 1 to 3 are *What the Replays browser asks of a recording* above. The fourth
+remains to be built for S5's switches; live rewind operates on an existing recording.
 
 ## Open
 
