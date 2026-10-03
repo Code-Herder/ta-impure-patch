@@ -415,7 +415,22 @@ per-seat creation rule, movement fraction and 1800-tick length are unchanged.
 A targeted normal-limits run holds GameTime 638 throughout the setup commands,
 starts its comparison at GameTime 1520 and passes all 25 checks. Seat 2 creates
 in both timelines, and 93.235% of 1020 AI mobile units move. Return-to-now takes
-496 ms and the fork 704 ms. Stock-limits verification of this setup is pending.
+496 ms and the fork 704 ms.
+
+The stock-limits run holds GameTime 623 during setup and begins the comparison
+at 1519. It passes 24 of 25 checks, including exact return-to-now, fresh-process
+seek, fork images, both recording streams and effect counts. Return-to-now takes
+436 ms and the fork 512 ms. The remaining failure is the per-seat AI creation
+check: seats 2 and 3 have baseline creations, but seat 3 has no corresponding
+creation in the resumed window; 82.466% of 1038 AI mobile units move. Moving setup
+under pause corrects the comparison start but does not resolve this failure.
+
+Verification stopped at the three-attempt limit for this resumed investigation.
+S4d remains unlanded. The AI construction failure needs further diagnosis; the
+naval count proposal below separately requires an owner decision. The full-tier
+runtime results above remain evidence for that run, but its coverage report is
+invalid because the coverage maps were rebuilt before offline reporting ended.
+A future complete tier must retain its maps and binaries until reporting exits.
 
 #### The naval flare count
 
