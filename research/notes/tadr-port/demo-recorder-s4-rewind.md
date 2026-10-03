@@ -444,3 +444,29 @@ above water. The measurements do not identify the individual missing additions.
 The temporary trace has been removed and all four clean builds pass. A proposal
 to bound the child difference by an already-accepted parent difference awaits
 the owner's decision; the current comparison still rejects this recording.
+
+
+#### Control without rewind: independent games fail the AI comparison
+
+A resumed investigation ran the same stock-limits battle and scripted builder
+additions without any rewind operation. Against the retained baseline over
+GameTime [1519,3319], the control fails the same per-seat test: compared seats
+2 and 3, missing seat 3, seat 1 skipped; 77.401% of 1031 AI mobile units move.
+This demonstrates that the current comparison can fail without a rewind. It
+does not establish that every reconstructed AI task is correct.
+
+The retained failing rewind run already differs from its separate baseline at
+GameTime 1519, before reconstruction: seat 3's commander (slot 1501) has action
+26 in the live run and a MobileBuild order (action 25, type 268) in the baseline.
+The baseline creates that type at 2819. The live run's four constructors added
+at 1217 retain their MobileBuild orders after return and continue moving; the
+baseline's corresponding constructors are also still travelling at 3300. The
+recorded positions and orders are evidence of different pre-rewind tasks, not
+evidence of a task lost by reconstruction.
+
+The proposed correction is to compare AI construction on the live rewind's
+fork with the same recording's parent over the same 1800 ticks, retaining
+the per-seat creation rule and movement threshold. Return-to-now would keep
+its exact-frame, subsequent movement, health, continuity and playback checks.
+This verification-plan change awaits the owner's decision; no failing result
+is waived by this diagnosis.
