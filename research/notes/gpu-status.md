@@ -3025,6 +3025,26 @@ engine facts are
 and, for the seek,
 [its S3b section](exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
 
+**Taking over** ([S4b](tadr-port/demo-recorder-s4-takeover.md)): `tacli replay takeover <instance>
+[<recording>] --at T --player P [--difficulty D]`, or `takeover <P> at <T>[ difficulty <D>]` in the
+trigger, runs the seek in its TAKEOVER mode at the next frame visit: the world of T is made as a
+seek makes it, but with P human and the other recorded seats AI, and the level goes on as a live
+skirmish from T. The recorder then records the game after T as a new timeline appended to the same
+file, through the handle the takeover opened. A playing of a forked timeline (`--timeline N`) holds
+at each boundary of its chain and crosses it with a seek to the child's first iteration
+([engine map](exe-reverse-engineering.md#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02)).
+
+**Fork files** ([S4c](tadr-port/demo-recorder-s4-forks.md)): at most three live
+forks, eviction by last-used time, explicit delete/export and shared ancestor
+prefixes. `tagpu_recfile.c` runs maintenance on tracked workers without engine
+reads or engine-field writes. The common game-thread flip observer polls its
+`forks` requests at menus too; no new byte patch is installed. A persistent path
+lock stays held across closing the source and atomic replacement. The playing
+and a queued deletion reserve canonical path, file identity and timeline under one publication
+lock; exit waits for recording writers, then seals and waits for maintenance.
+The existing **fields we write** below remain those of playback and takeover;
+file metadata changes add no engine writes.
+
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
 `0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the
@@ -3150,9 +3170,22 @@ logged. The gates make them zero; the observers prove it. **The step's phases** 
   once; every seat's `+0xF0` from the image
   and V's to the next multiple of 30, every record's `+0xF8` = GameTime, the notices `0x47EE30` and
   the chat lines `0x463C80`; and every seat's `+0x18`;
+- at a takeover, inside the seek and in its order: viewed = P and the difficulty `main+0x37EEE`
+  (the options put the player's back at the level's end); each recorded seat's type through
+  `0x463C60` (P 1, the others 2), before R7's creates and again after the players' images; each
+  seat's AI object (`0x4B4F10(0x3D)`, `0x408CB0`, into `+0x74`) and acquisition record (`0x40B320`),
+  then `0x4648E0`; every rebuilt order node's handler state (`+0x05`, `+0x06`, `+0x0A`, `+0x4E`,
+  `+0x32`, `+0x42` bits 16, 21 and 22), a builder's adoption, Paralyze's and BuildWeapon's resumed
+  state, and Attack_Chase's p1 when its slot holds no weapon; the order lists of a unit the kills
+  left alive and the image does not describe, torn down through `0x43A1F0`; the end countdown and the game
+  end's flags bits 2 and 4 from the image; the explored map with no V bit; then `0x440A40(0,
+  0x7FFF7FFF)`, controlled = viewed = P, `0x464290(V, 0)`, `0x48BD00`, and the objective's `+0x88 =
+  1`;
 - after the teardown: V's PlayerInfo, all `0xB9` bytes, as the Start's fill left them.
 
-The recorder refuses a puppet level. `tagpu_recreader.c` reads the file and names no engine memory.
+The recorder refuses a puppet level; a takeover arms it for the live level that follows, with the
+fork's file handle (`tagpu_rec_fork_arm`), and it starts at the next capture point, iteration T.
+`tagpu_recreader.c` reads the file and names no engine memory.
 
 ### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
 

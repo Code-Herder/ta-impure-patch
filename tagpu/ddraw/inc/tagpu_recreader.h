@@ -15,10 +15,14 @@
 
 #include <stdint.h>
 #include "tagpu_recfmt.h"
+#include "tagpu_recfile.h"
 
 #define RECR_TEXT       64          /* a header string's bytes kept, NUL included            */
 #define RECR_NAME       (0x1E + 1)  /* a seat's name: the record's 0x1E bytes, NUL included  */
 #define RECR_BLOCK_MAX  (64u << 20) /* the most bytes a block may pack or inflate to         */
+#define RECR_TIMELINES  64          /* the segments a file may hold: a file with more is refused
+                                       by name                                                   */
+#define RECR_BOUNDARY   2           /* recr_tick: the chain goes on in its next segment         */
 
 /* a seat at the start: an RT_PLAYER entry */
 typedef struct RecSeat {
@@ -49,6 +53,8 @@ typedef struct RecHeader {
     char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT], layout[RECR_TEXT + 8];
     char         globals[RECR_TEXT + 8];    /* RT_GLOBALS: replay-globals.tsv's SHA-256       */
     unsigned     has_settings_map;
+    uint64_t     wallclock;
+    unsigned     has_timeline, tl_id, tl_parent, tl_fork_at;   /* RT_TIMELINE, a fork's    */
     unsigned     nseats;
     RecSeat      seats[REC_PLAYERS];            /* in the header's order               */
     unsigned     ntab;
@@ -111,30 +117,40 @@ typedef struct RecWorld {
 
 typedef struct RecReader RecReader;
 
-/* Opens a recording and reads its header block. NULL, with the reason in `why`, when the file
-   cannot be read or is not a recording of this format. */
+/* Opens a recording, reads its header block and finds its segments (tagpu_recfmt.h). NULL, with
+   the reason in `why`, when the file cannot be read, is not a recording of this format, or its
+   segments break the bounds recr_timelines states. It shares the file for reading and writing:
+   a block is whole or not by its two CRCs, and every walk stops at the first torn one, so a
+   reader of a file being appended reads its complete blocks only. The timeline played is the
+   original (0) until recr_timeline chooses another. */
 RecReader* recr_open(const char* path, char* why, unsigned cap);
+/* the file's first header: every segment of a chain agrees with it in shape (recr_timeline) */
 const RecHeader* recr_header(const RecReader* r);
 RecWorld* recr_world(RecReader* r);
 
 /* Reads the next iteration into the world: its images, and its events into `ev`.
    1 read; 0 the recording has no more iterations (`why` says how it ended); -1 unreadable from
-   here (`why` says where), and the world is as the last iteration left it. A snapshot block met
-   on the way is skipped unread: only a seek reads one. */
+   here (`why` says where), and the world is as the last iteration left it; RECR_BOUNDARY the
+   world holds the chosen chain's last iteration before a fork, and the chain goes on in the next
+   timeline (`why` names it and its fork_at): nothing is read and the world is unchanged, and a
+   seek to fork_at crosses there (recr_seek). A snapshot block met on the way is skipped unread:
+   only a seek reads one. */
 int recr_tick(RecReader* r, char* why, unsigned cap);
 
-/* Puts the world at iteration T, as a recr_tick that read T leaves it: T's images, and the events
-   of the step after them in `ev`; recr_tick then goes on from T + 1. It builds from the last
-   snapshot before T over the base grid (the first iteration's, which the first recr_tick takes;
-   a seek before any takes it itself), or from the recording's first iteration when no snapshot
-   precedes T, then reads the stream up to T.
-   1 the world holds T; 0 T is outside the recording -- before its first iteration or after the
+/* Puts the world at iteration T of the chosen chain, as a recr_tick that read T leaves it: T's
+   images, and the events of the step after them in `ev`; recr_tick then goes on from T + 1. It
+   builds from the last snapshot before T over its segment's base grid (that segment's first
+   iteration's, which it reads first when the reader does not hold it), or from a segment's first
+   iteration when no snapshot precedes T, then reads the stream up to T, crossing each fork on
+   the way: at a timeline's fork_at the child's first iteration replaces the world whole.
+   1 the world holds T; 0 T is outside the chain -- before its first iteration or after the
    last complete block's -- checked before anything changes, so the reader is as it was (`why`
-   names the recording's first and last GameTime); -1 unreadable (`why` says where), and the
+   names the chain's first and last GameTime); -1 unreadable (`why` says where), and the
    world is undefined until a seek that returns 1.
    With `visit`, the snapshot it builds from is the last one more than `lead` iterations before T
    (S + lead < T), and `visit(ctx, world)` is called once each iteration of the stream after it
-   has been read, T's included, so a caller can follow what the iterations before T did. */
+   has been read, T's included and both sides of a fork, so a caller can follow what the
+   iterations before T did. */
 typedef void (*RecVisit)(void* ctx, const RecWorld* w);
 int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx, char* why,
               unsigned cap);
@@ -152,6 +168,55 @@ typedef struct RecSummary {
 
 /* 1 read; 0 the file cannot be read or is not a recording of this format (why). */
 int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
+
+/* A TIMELINE is a segment of the file (tagpu_recfmt.h): the original, id 0, or a fork recorded
+   from a takeover. A CHAIN is a timeline and its ancestors, root first: segment s covers
+   [s.first, c.fork_at - 1] for its child c on the chain, and the chosen timeline [first, last]. */
+typedef struct RecTimeline {
+    unsigned state;
+    uint64_t last_used;
+    unsigned id, parent, fork_at;      /* RT_TIMELINE; 0, 0, 0 for the original                     */
+    unsigned first, last;              /* its first and last complete iteration; 0, 0 for none      */
+    unsigned end_reason;               /* RT_END_REASON of its end block; 0 when it has none        */
+    unsigned difficulty, has_ai;       /* its RT_OPTIONS difficulty; an RT_PLAYER of controller 2   */
+    unsigned long long header_off;     /* its RB_HEADER's byte                                      */
+    unsigned long long first_off;      /* the block after its header                                */
+    unsigned long long end_off;        /* the byte after its last complete block                    */
+} RecTimeline;
+
+/* Where a fork is appended (recr_append_point) */
+typedef struct RecAppend {
+    unsigned long long off;            /* the byte after the file's last complete block, or before
+                                          an unfinished segment with no complete iteration (cut)   */
+    unsigned next_id;                  /* one more than every kept segment's id                     */
+    unsigned parent;                   /* the chain's segment holding GameTime `at` (the argument)  */
+    int      end_open;                 /* the last segment kept has no end block                    */
+    unsigned nstates, evict;           /* UINT32_MAX: no eviction */
+    RecTimelineState states[REC_TIMELINE_ROWS];
+    unsigned open_id, open_last;       /* ... its id and its last complete iteration                */
+} RecAppend;
+
+/* The file's segments, found afresh (the file may have grown): at most `cap` into `out`. The
+   number of segments, or -1 (why) when the file cannot be read or breaks a bound: more than
+   RECR_TIMELINES segments, a segment after the first without RT_TIMELINE, an id used twice, or
+   a parent that is not an earlier segment with a lower id. */
+int recr_timelines(RecReader* r, RecTimeline* out, unsigned cap, char* why, unsigned wcap);
+/* Chooses timeline `id` to play, before the first iteration is read. 1 chosen, the reader at the
+   root's first iteration; 0 refused (why): no such timeline, a fork outside its parent's
+   iterations, or a segment whose header differs in shape from the first's; -1 an iteration has
+   been read already, or the file cannot be read. */
+int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap);
+/* the chosen timeline */
+const RecTimeline* recr_selected(const RecReader* r);
+/* Where a fork at `at` is appended, found afresh: the caller holds the file open for writing
+   first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
+   TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
+   cut whole, and the parent is the chosen chain's segment that holds `at`. 1, or 0 (why): `at` is
+   outside the chain, `at + 1` is a chain segment's first iteration, the file holds
+   RECR_TIMELINES segments, a block is damaged with data after it, or the file cannot be read. */
+int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap);
+/* 1 when the file HANDLE `f` is the file the reader holds open: one volume, one file index */
+int recr_same_file(const RecReader* r, void* f);
 
 /* What the Replays browser shows of a recording, read from its header, its minimap block and its
    end block alone (the stream's blocks are skipped unread). */

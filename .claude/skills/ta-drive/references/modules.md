@@ -604,7 +604,10 @@ Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. 
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
 Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,
 or closing the window after the level's end (`recorder: the exit waits for …`) — so that file is
-complete. A game killed mid-way, or whose window is closed mid-game, leaves a file without an end
+complete. For exit coverage, the replay harness uses the game's menus: `ENDMSN.GUI`'s active
+`MainMenu`, then the main menu's `EXIT`, or in play `EXIT` → `EXITGAME` → Yes. It waits for the
+instance's process to end and collects the final bitmap. `tacli stop` sends SIGTERM and bypasses
+that exit hook. A game killed mid-way, or whose window is closed mid-game, leaves a file without an end
 block that reads to its last complete block.
 
 - **Read one** with `tools/replay/tarec.py`: `info` (the header, the blocks, how it ended),
@@ -619,7 +622,10 @@ block that reads to its last complete block.
   window — roots exactly, sinks within `tagpu/ddraw/replay-absent.tsv`'s band less its rows, and no
   COB engine write on the puppet. `images-gate FILE L_T1 L_TLAST TWIN1 TWIN2 P_T1 P_TLAST R_T1 Q_T1`
   classifies every uncovered byte where the live game and a playing or a fresh seek differ, and
-  `scan FILE DUMP` fails a plain value that is an address.
+  `scan FILE DUMP` fails a plain value that is an address. A file holds one or more timelines
+  (a takeover appends one): `segments FILE` lists them, `check` and `compare` take `--timeline N`
+  to read timeline N's chain, and `compare-fork FILE N` compares timeline N's first iteration with
+  its parent at the fork point, less the takeover's expected differences.
 - **Check playback end to end** with `tools/replay/tareplay.py run FIXTURE… | all [-j N] [--keep]
   [--out DIR]` (`list` names the fixtures of `tools/replay/fixtures.json`): each fixture is
   recorded live, played on puppets, played again with three round trips and sought from a fresh
@@ -632,7 +638,11 @@ block that reads to its last complete block.
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C
   tagpu/ddraw` (`LIMITS=stock` for the stock one) first. The run's folder is outside the
   repository (`--out`, `$TAREPLAY_OUT`); passing dumps are deleted unless `--keep`, and a dump
-  any check failed on stays. `run --cover` runs the coverage builds instead.
+  any check failed on stays. `run --cover` runs the coverage builds instead. A fixture with a
+  `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
+  (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
+  K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
+  names.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
@@ -653,7 +663,7 @@ block that reads to its last complete block.
   and `run --cover` need both built and newer than the sources. In such a build, `cover <name>` in
   `gamedir/tagpu_replay.trigger` writes `replays/cover-<name>.bin`, the functions of the
   instrumented files that have run (`cover: … <n> functions that ran`), and writes it again at the
-  level's end; any other build answers `cover: <name> refused: not a coverage build`.
+  level's end and after the exit has waited for file workers; any other build answers `cover: <name> refused: not a coverage build`.
 - **A dump**: write `dump <name>` (letters, digits, `-`, `_`) to `gamedir/tagpu_replay.trigger`.
   The game reads the file at most every 100 ms on a level in play, recording or playing, deletes
   it, and takes the dump at the next tick: `replays/dump-<name>.bin`, the live world at that
@@ -678,6 +688,34 @@ block that reads to its last complete block.
   `dock seek <T>` asks it through the dock's own entry, as a click on its strip does (clamped to
   the recording, no dump: on a paused playback, arm `dump <name> at <T>` after the `sought from`
   line, which leaves it at T − 1).
+  `replay play` and `replay seek --recording` take `--timeline N` to play a forked timeline; the
+  playing crosses each fork with a seek (`replay: <name>: timeline <N> continues from GameTime <T>`).
+- **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
+  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish at T as player P,
+  every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
+  no AI). With FILE it launches the instance on it, P viewed, and takes over once it plays;
+  without, it takes over the running playback. It waits for `replay: <name>: taken over at
+  GameTime <T> as player <P>, …` and the recorder's `recording timeline <I> of …`, and exits 1 on
+  `… takeover at <T> refused: <why>`. The game after T is appended as timeline I to the file the
+  level plays: the instance's copy, `gamedir/replays/<name>.imprec`, whose path tacli prints (`the
+  fork:`), never FILE itself. `--dump` arms a dump of the live game at G before the takeover, so it
+  is never late. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger. The file must be
+  writable and open in no other program.
+- **Fork rules**: at most three live forks; a new one evicts the least recently used,
+  excluding the selected playing and the original. Leaving a playing updates its last-used
+  time when the file is writable. `tacli replay takeover <i> FILE --at T --player P --dry-run`
+  predicts eviction without launching; without FILE it asks the current playing.
+  `tacli replay forks <i> FILE` lists states and last-used times offline. Add `delete ID` or
+  `export ID OUT` to mutate the running instance's actual `gamedir/replays` file, at any
+  screen; OUT is a new simple stem there. Deleting the current playing is refused. Deleted
+  ancestors remain available to descendants, and exported chains keep their timeline IDs.
+  Triggers: `forks "NAME" delete ID`, `forks "NAME" export ID "OUT"`; wait for
+  `replay: forks …: done|refused: …`. tacli matches its request token in the result;
+  manual triggers need none. Every writer holds a persistent `.lock` file; never
+  unlink one to bypass a busy file. Compaction is atomic on a worker and can be deferred
+  while another reader holds the file; process exit waits for maintenance.
+  `tareplay.py forks battle [--cover]` runs the dedicated checks. A fixture with `forks`
+  also runs X after its existing lanes; battle and stock-limits exercise this on both builds.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.

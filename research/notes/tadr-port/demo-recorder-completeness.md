@@ -364,6 +364,13 @@ unit's weapon targets through `0x489800` (`0x43A2AB..0x43A2B9`): the `puppet0` a
 2026-09-30. Getter 75 answers the recording machine's bit for the queried unit's seat.
 The engine facts are in the engine map's *COB on a puppet*.
 
+**A takeover ends a puppet level by design.** It is the one writer of engine state on a puppet host
+besides the recorder, and it writes only inside the seek's TAKEOVER mode (`seek_run`): the seat
+types, the AI's objects, the difficulty, the controlled and viewed players, the viewer's
+deactivation, the deselection, the passability refresh and the objective. When it returns the
+puppet table is off and the playing is closed, so the level is a live skirmish from T, recorded as a
+new timeline ([the takeover note](demo-recorder-s4-takeover.md)).
+
 ### Always-on self-verification
 
 At each tick boundary the game thread copies a rotating slice of the real state — the next

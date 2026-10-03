@@ -9,6 +9,7 @@ puppets (research/notes/tadr-port/demo-recorder-completeness.md, *The harness*).
     tools/replay/tareplay.py broad [--release DLL] [-j N]             the broad tier
     tools/replay/tareplay.py features [--check DIR]                   the SIM_FEATURE regions
     tools/replay/tareplay.py measure SCENARIO... [--end T] [-j N]     what each one reaches
+    tools/replay/tareplay.py takeover FIXTURE [--player P] [--at T]   L, K and F alone
 
 `landing` runs the fixtures the changed SIM_FEATURE regions name (every fixture when the
 recorder's own files change) on the coverage build, checks that they reached every changed
@@ -42,6 +43,18 @@ compare`; P's, R's, Q's and W's capture dumps `tarec compare --puppet`; each rou
 residue 0 and `tarec compare-dumps rt<T>-a rt<T>-b` is EQUAL; W's steps each hold what they
 claim. Passing dumps are deleted unless --keep.
 
+A fixture fixtures.json gives a `takeover` runs two processes more, K after L and F after K:
+
+    K  takeover  `replay takeover` of L's recording at T = T2 as player P (the recording's
+                 controlled player unless the entry names one) in a fresh process, which records
+                 timeline 1 into the same file: the window, its boxes and ErrorLog.txt watched,
+                 the entry's `order` and `type` given, a dump k<T+dump>, the level ended
+    F  boundary  `replay seek T-300 --timeline 1` of K's file in a fresh process, which plays
+                 across the fork at T, dump f<T+300> (or at T+dump when that comes first)
+
+and the entry's `checks`, each failing by name: judge, line, orders, ai, fork and victory
+(TAKEOVER_CHECKS states each one's claim).
+
 Each worker owns one tacli instance, tareplay-<k>, pinned to an Xvfb it reserves by -displayfd,
 for the whole run, and holds an exclusive lock on INSTANCES/tareplay-<k>.lock for as long: a k
 another run holds is skipped, so two runs never touch each other's games. Nothing is ever stopped
@@ -71,6 +84,8 @@ import sys
 import threading
 import time
 import zlib
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -86,12 +101,32 @@ sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import tafeat  # noqa: E402
 
+# Load once before workers start; reuse tacli's own prefix-based process identity check.
+_CLI_SPEC = spec_from_loader("_tareplay_cli", SourceFileLoader("_tareplay_cli", str(TACLI)))
+_CLI_API = module_from_spec(_CLI_SPEC)
+sys.modules[_CLI_SPEC.name] = _CLI_API
+_CLI_SPEC.loader.exec_module(_CLI_API)
+
 PREFIX = "tareplay-"
 UNIT_LIMIT = 500
 GAMETIME = "*0x511DE8+0x38A47:4"
 COB_STOP = "A unit script cannot continue safely"
 TRIGGER = "tagpu_replay.trigger"
 ROUND_TRIPS = 3
+TAKEOVER_SPAN = 1800            # K's dump and the takeover's checks, this many ticks after T
+TAKEOVER_BACK = 300             # F's seek, this many ticks before T, and its dump after it
+TAKEOVER_CHECKS = {
+    "judge": "the window alive with no box and no ErrorLog.txt, and at least 90 % of the units "
+             "the takeover made seen",
+    "line": "the takeover's line, no create refused, and in less than the entry's `ms`",
+    "orders": "the entry's `order` unit of P's moves more than 64 wu when ordered",
+    "ai": "every AI seat that made a unit in the original's [T, T + TAKEOVER_SPAN] makes one "
+          "in timeline 1's (a seat that made none in the original is skipped and named), and at "
+          "least 25 % of the AI seats' mobile units move more than 8 wu in timeline 1",
+    "fork": "compare-fork EQUAL, the original's bytes untouched, both timelines check, "
+            "timeline 1 complete, and K's and F's dumps EQUAL",
+    "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
+}
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
 LAUNCH_TIMEOUT = 400
 
@@ -208,6 +243,7 @@ class Worker:
 
     def __init__(self, out):
         self.lock = None
+        self.last_collection = None
         for k in range(1, 100):
             INSTANCES.mkdir(parents=True, exist_ok=True)
             f = open(INSTANCES / f"{PREFIX}{k}.lock", "w")
@@ -249,11 +285,61 @@ class Worker:
         self.lock.close()
 
     def stop(self):
-        tacli("stop", self.name, timeout=120)
+        if self.last_collection:
+            self.quit()
+        else:
+            tacli("stop", self.name, timeout=120)
+        # Exit flushes coverage after its workers finish. Collect that final bitmap and log,
+        # rather than the one taken while those workers were still running.
+        if self.last_collection:
+            rd = self.gamedir / "replays"
+            for f in rd.glob("cover-*.bin") if rd.is_dir() else []:
+                shutil.copy2(f, self.last_collection / f.name)
+            (self.last_collection / "tagpu.log").write_text(talog.run_text(self.gamedir))
+
+    def running(self):
+        return _CLI_API.Instance(self.name).running()
+
+    def quit(self):
+        """The game's exit hook joins its file workers; SIGTERM bypasses it."""
+        if not self.running():
+            return
+        gui = json.loads(ui(self, "--json"))["gui"].upper()
+        if gui == "ENDMSN.GUI":
+            ui(self, "click", "MainMenu")
+            ui_on(self, "MAINMENU.GUI", 30)
+            gui = "MAINMENU.GUI"
+        elif gui == "REPLAYS.GUI":
+            ui(self, "click", "BACK")
+            ui_on(self, "MAINMENU.GUI", 30)
+            gui = "MAINMENU.GUI"
+        if gui == "MAINMENU.GUI":
+            rc, text = tacli("ui", self.name, "click", "EXIT", "--timeout", 5, timeout=30)
+            if rc and self.running():
+                raise CouldNotRun(f"the main menu's exit: {last(text)}")
+        elif gui in ("ARMMAIN2.GUI", "CORMAIN2.GUI", "DOCK.GUI", "ARMOPT.GUI"):
+            if gui != "ARMOPT.GUI":
+                rc, text = tacli("keys", self.name, "tab", "tab", timeout=60)
+                if rc:
+                    raise CouldNotRun(f"the exit's options: {last(text)}")
+            ui(self, "click", "EXIT")
+            ui(self, "click", "EXITGAME")
+            ui_on(self, "YESORNO.GUI", 30)
+            rc, text = tacli("keys", self.name, "y", "y", timeout=60)
+            if rc:
+                raise CouldNotRun(f"the exit's Yes: {last(text)}")
+        else:
+            raise CouldNotRun(f"no graceful exit route from {gui}")
+        deadline = time.time() + 30
+        while self.running():
+            if time.time() >= deadline:
+                raise CouldNotRun("the game did not finish its exit in 30 s")
+            nap(0.2)
 
     def place(self, fix, dll):
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
+        self.last_collection = None
         shutil.copy2(dll, self.gamedir / "ddraw.dll")
         rd = self.gamedir / "replays"
         for f in rd.glob("*") if rd.is_dir() else []:
@@ -286,6 +372,7 @@ class Worker:
     def collect(self, into: Path, recordings=False):
         """The dumps (and with `recordings` the recordings) and this run's log."""
         into.mkdir(parents=True, exist_ok=True)
+        self.last_collection = into
         rd = self.gamedir / "replays"
         if rd.is_dir():
             for f in (list(rd.glob("dump-*.bin")) + list(rd.glob("cover-*.bin")) +
@@ -346,6 +433,13 @@ def broad_fixtures():
     """The broad tier's own entries, which no landing runs: a fixture with `trips` round trips,
     and `cost` games recorded live for the recorder's cost and the file's size alone."""
     return json.loads((HERE / "fixtures.json").read_text())["broad"]
+
+
+def procs(fix):
+    """The processes a fixture runs: L, P, R and Q; K and F where fixtures.json gives it a
+    takeover; W where it asks for the browser's Watch."""
+    return (("L", "P", "R", "Q") + (("K", "F") if fix.get("takeover") else ()) +
+            (("W",) if fix.get("watch") else ()) + (("X",) if fix.get("forks") else ()))
 
 
 def head():
@@ -414,11 +508,15 @@ def step(w, kind, arg):
         if rc:
             raise CouldNotRun(f"apply {arg}: {last(o)}")
     elif kind == "type":
-        # the chat line: return opens it, the characters, return sends it
-        tacli("keys", w.name, "return", "return")
-        time.sleep(0.7)
-        tacli("keys", w.name, *[f"char:{c}" for c in arg])
-        time.sleep(0.7)
+        # the chat line: one return opens it, the characters, return sends it; a second return
+        # straight after the first closes the line again and the characters land as hotkeys. A
+        # second between the three, since back to back the opening return can be dropped. A
+        # space goes as the `space` key: `char: ` is no token the input layer types (tacli,
+        # _ui_text_tokens)
+        tacli("keys", w.name, "return")
+        time.sleep(1.0)
+        tacli("keys", w.name, *["space" if c == " " else f"char:{c}" for c in arg])
+        time.sleep(1.0)
         tacli("keys", w.name, "return")
         time.sleep(1.5)
     elif kind == "order":
@@ -592,6 +690,170 @@ def fresh(w, fx, rec, out, T):
     w.stop()
     if rc:
         raise CouldNotRun(f"replay seek {T} --recording: {last(o)}")
+
+
+def compat():
+    """tacompat's window helpers, the ones the compatibility suite judges a game by"""
+    sys.path.insert(0, str(TREE / "tools" / "compat"))
+    import tacompat  # noqa: E402
+    return tacompat
+
+
+def tk_point(fx, h, player=None, at=None):
+    """(T, P) of a fixture's takeover: T2, or `at`; the entry's player, the recording's
+    controlled player for "controlled", or `player`."""
+    tk = fx["fix"]["takeover"]
+    T = at if at is not None else fx["Ts"][1]
+    P = player if player is not None else tk["player"]
+    if P == "controlled":
+        P = h["options"]["controlled"]
+    return T, int(P)
+
+
+def takeover_k(w, fx, out):
+    """K: L's recording taken over at T as player P in a fresh process; the game after T is
+    timeline 1 of the same file. Returns what the takeover's checks read."""
+    tc = compat()
+    fix, tk = fx["fix"], fx["fix"]["takeover"]
+    T, P = fx["tk_T"], fx["tk_P"]
+    span = tk.get("dump", TAKEOVER_SPAN)
+    res = {"T": T, "P": P, "boxes": [], "errorlog": False, "gone": False}
+    w.place(fix, fx["dll"])
+    (w.gamedir / "ErrorLog.txt").unlink(missing_ok=True)
+    log = Log(w)
+    # the dump is armed on the playing before the takeover, so an entry whose level ends soon
+    # after T (`dump`) takes it before the end whatever tacli's latency
+    dump = f"k{T + span}"
+    rc, o = tacli("replay", "takeover", w.name, fx["rec"], "--at", T, "--player", P,
+                  "--dump", dump, "--dump-at", T + span,
+                  "--defaults", "--restart", "--keep-dll", "--timeout", 300, "--json",
+                  timeout=LAUNCH_TIMEOUT + 300)
+    try:
+        got = json.loads(o[o.index("{"):])
+    except ValueError:
+        raise CouldNotRun(f"replay takeover: {last(o)}")
+    if rc or not got.get("taken") or "recording" not in got:
+        why = got.get("line") or got.get("not_recorded") or got.get("timeout") or last(o)
+        raise CouldNotRun(f"replay takeover: {why}")
+    res.update(got)
+    t_line = time.time()
+    if fx["cover"]:
+        cover_ask(w, log, "K")
+    # what Impure draws 4 s after the line, against what the takeover made (judge)
+    nap(max(0.0, t_line + 4 - time.time()))
+    res["alive_seen"] = tc.alive_seen(w.gamedir)
+    if tk.get("switches"):
+        rc, o = tacli("switches", w.name, *[f"{k}={'on' if v else 'off'}"
+                                            for k, v in tk["switches"].items()], timeout=60)
+        if rc:
+            raise CouldNotRun(f"switches: {last(o)}")
+    if tk.get("type"):
+        step(w, "type", tk["type"])
+    if tk.get("order"):
+        res["ordered"] = tk_order(w, P, tk["order"], takeover_roster(log, T, P))
+    display = int(w.xvfb.display.lstrip(":"))
+    seen = set()
+    t0 = time.time()
+    deadline = t0 + 120 + 4 * span / 30
+    while True:
+        tc.new_boxes(display, seen, res["boxes"], t0)
+        if (w.gamedir / "ErrorLog.txt").exists():
+            res["errorlog"] = True
+        if not any(tc.main_window(*x) for x in tc.x_windows(display)):
+            res["gone"] = True
+            break
+        log.read()
+        if any(re.search(rf"recorder: dump {dump} (at GameTime|for GameTime \d+ not taken|refused)"
+                         rf"|recorder: writer: .* closed", ln) for ln in log.lines):
+            break
+        if time.time() > deadline:
+            raise CouldNotRun(f"K: no dump {dump} and no end in {deadline - t0:.0f} s")
+        nap(2.0)
+    if not res["gone"]:
+        # a takeover that checks the victory ends by its own chat line (the entry's `type`); any
+        # other, by the end scenario, as L ends
+        victory = "victory" in tk.get("checks", [])
+        n = 0 if victory else len(log.lines)
+        if not victory:
+            rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
+            if rc:
+                raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
+        if not log.wait(r"recorder: writer: .* closed", 120, n):
+            raise CouldNotRun("K: the fork's file did not close")
+    w.collect(out, recordings=True)
+    w.stop()
+    recs = sorted(out.glob("*.imprec"))
+    if not recs:
+        raise CouldNotRun("no .imprec in K's replays folder")
+    res["file"] = str(recs[-1])
+    return res
+
+
+def takeover_roster(log, T, P):
+    """A complete roster emitted after the takeover acknowledgement, never the loader's."""
+    mark = log.wait(rf"replay: .*: taken over at GameTime {T} as player {P},", 30)
+    if not mark:
+        raise CouldNotRun("order: no takeover acknowledgement in the log")
+    start = log.lines.index(mark) + 1
+    row = log.wait(r"^\s+u\d+\s+", 30, start)
+    if not row:
+        raise CouldNotRun("order: no roster after takeover")
+    start = log.lines.index(row, start)
+    # roster_log writes the dump as one block before its following units header.
+    end = log.wait(r"^units: alive=", 30, start + 1)
+    if not end:
+        raise CouldNotRun("order: the post-takeover roster is incomplete")
+    rx = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
+                    r"world=\((-?\d+),(-?\d+),-?\d+\)")
+    roster = []
+    for line in log.lines[start:log.lines.index(end, start + 1)]:
+        m = rx.match(line)
+        if m:
+            roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
+                           "world": [int(m[4]), int(m[5])]})
+    return roster
+
+
+def tk_order(w, P, order, roster):
+    """The `order` unit of P's (type, rank) moved 300 wu east: its slot and the GameTime read
+    just before the order was given, from which the `orders` check reads the timeline, so the
+    order's own latency counts against its 10 s."""
+    kind, rank = order
+    units = [u for u in roster if u["owner"] == P and u["type"].upper() == kind and
+             u["engine_index"]]
+    if len(units) <= rank:
+        raise CouldNotRun(f"order: no {kind} of rank {rank} among player {P}'s units")
+    u = units[rank]
+    x, z = u["world"]
+    g = w.gametime()
+    rc, o = tacli("order", w.name, "move", "pos", x + 300, z, "--unit", u["engine_index"],
+                  "--expect", kind, timeout=60)
+    if rc:
+        raise CouldNotRun(f"order move {kind}: {last(o)}")
+    return {"slot": u["engine_index"], "at": g}
+
+
+def takeover_f(w, fx, out):
+    """F: K's file played from T-300 in timeline 1 in a fresh process, across the fork at T, to
+    the dump f<T+300>."""
+    T, P, tl = fx["tk_T"], fx["tk_P"], fx["tk"]["timeline"]
+    at = T + min(TAKEOVER_BACK, fx["fix"]["takeover"].get("dump", TAKEOVER_SPAN))
+    w.place(fx["fix"], fx["dll"])
+    log = Log(w)
+    rc, o = tacli("replay", "seek", w.name, T - TAKEOVER_BACK, "--recording", fx["tk"]["file"],
+                  "--timeline", tl, "--defaults", "--restart", "--keep-dll", "--perspective", P,
+                  "--timeout", 300, timeout=LAUNCH_TIMEOUT + 300)
+    if rc:
+        w.collect(out)
+        w.stop()
+        raise CouldNotRun(f"replay seek {T - TAKEOVER_BACK} --timeline {tl}: {last(o)}")
+    arm_dump(w, log, f"f{at}", at)
+    wait_dumps(log, [f"f{at}"], 600)
+    if fx["cover"]:
+        cover_ask(w, log, "F")
+    w.collect(out)
+    w.stop()
+    return at
 
 
 # ---- W: the browser's Watch and the dock --------------------------------------------------
@@ -835,7 +1097,12 @@ def watch_lane(w, fx, rec, out, T):
 
     # a second Watch from the browser Leave returned to; its level writes the coverage, which
     # holds the first level's teardown too (the bitmap is the process's)
-    got = browser_watch(w, log, len(copies), stem)
+    # All three files pass the mod filter. scan moves their existing index entries into list
+    # order and index_save preserves it. A playing-end touch can move the watched file's row.
+    listed = list(index_lines(rd))
+    if set(listed) != {f"{stem}.imprec", *(f"{c[0]}.imprec" for c in copies)}:
+        raise CouldNotRun("the returned browser's index does not contain its three recordings")
+    got = browser_watch(w, log, listed.index(f"{stem}.imprec"), stem)
     if not got.startswith(f"replay: playing {stem}:"):
         raise Failed(f"the second Watch: {got}")
     if fx["cover"]:
@@ -843,6 +1110,222 @@ def watch_lane(w, fx, rec, out, T):
     w.collect(out)
     w.stop()
     return res
+
+
+def forks_lane(w, fx, out):
+    """L's recording, four root forks, an LRU touch, a fork of a fork, parent deletion,
+    chain playback/export, and deletion of the highest ID followed by another fork."""
+    import hashlib
+    out.mkdir(parents=True, exist_ok=True)
+    source = out / "forks.imprec"
+    shutil.copy2(fx["rec"], source)
+    original, _ = tarec.file_segments(source)
+    lo, hi = original[0]["range"]
+    original_hash = hashlib.sha256(source.read_bytes()[lo:hi]).hexdigest()
+    results = []
+    P = tarec.header_only(source)["options"]["controlled"]
+    base = max(601, fx["Ts"][0] + 120)
+    if base + 900 >= fx["fix"]["end"]:
+        base = 301
+
+    def check_file(path, label):
+        segs, stop = tarec.file_segments(path)
+        if stop:
+            raise Failed(f"{label}: {stop}")
+        live = [s for s in segs if s["state"] == 1]
+        if len([s for s in live if s["id"]]) > 3:
+            raise Failed(f"{label}: more than three live forks")
+        for s in live:
+            rc, detail = tarec_run("check", path, "--timeline", s["id"])
+            if rc:
+                raise Failed(f"{label}: timeline {s['id']}: {last(detail)}")
+        if path == source:
+            lo, hi = segs[0]["range"]
+            if hashlib.sha256(path.read_bytes()[lo:hi]).hexdigest() != original_hash:
+                raise Failed(f"{label}: original blocks changed")
+        results.append((f"forks: {label}", PASS,
+                        f"live {[s['id'] for s in live]}, physical {[s['id'] for s in segs]}"))
+        return segs
+
+    def finish_play(log, tl):
+        n = len(log.lines)
+        tacli("keys", w.name, "tab", "tab")
+        ui(w, "click", "EXIT")
+        ui(w, "click", "MAINMENU")
+        tacli("keys", w.name, "y", "y")
+        if not log.wait(r"replay: .* at its level's end", 120, n):
+            raise CouldNotRun("forks: playback did not leave")
+        if not log.wait(rf"replay: forks .*: done: touched timeline {tl}", 120, n):
+            raise Failed(f"forks: timeline {tl}'s playing did not touch its last-used time")
+
+    def fork(tid, T, parent=0):
+        say(f"forks: K{tid} from {parent} at {T}")
+        w.place(fx["fix"], fx["dll"])
+        log = Log(w)
+        rc, text = tacli("replay", "takeover", w.name, source, "--timeline", parent,
+                         "--at", T, "--player", P, "--dump", f"fork{tid}", "--dump-at", T + 450,
+                         "--defaults", "--restart", "--keep-dll", "--json", "--timeout", 300,
+                         timeout=LAUNCH_TIMEOUT + 300)
+        if rc:
+            raise Failed(f"forks: K{tid}: {last(text)}")
+        got = json.loads(text[text.index("{"):])
+        if got.get("timeline") != tid:
+            raise Failed(f"forks: K{tid} allocated {got.get('timeline')}")
+        if fx["cover"]:
+            cover_ask(w, log, f"K{tid}")
+        wait_dumps(log, [f"fork{tid}"], 180)
+        n = len(log.lines)
+        rc, text = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
+        if rc or not log.wait(r"recorder: writer: .* closed", 120, n):
+            raise CouldNotRun(f"forks: K{tid} did not end: {last(text)}")
+        if not log.wait(r"replay: forks .*: (done|refused):", 120, n):
+            raise CouldNotRun(f"forks: K{tid} did not complete maintenance")
+        w.collect(out / f"K{tid}", recordings=True)
+        w.stop()
+        shutil.copy2(Path(got["fork"]), source)
+        check_file(source, f"K{tid}")
+
+    def start_play(tl, T):
+        say(f"forks: playing {tl} from {T}")
+        w.place(fx["fix"], fx["dll"])
+        log = Log(w)
+        rc, text = tacli("replay", "seek", w.name, T, "--recording", source,
+                         "--timeline", tl, "--defaults", "--restart", "--keep-dll",
+                         "--perspective", P, "--timeout", 300, timeout=LAUNCH_TIMEOUT + 300)
+        if rc:
+            raise Failed(f"forks: play timeline {tl}: {last(text)}")
+        if fx["cover"]:
+            cover_ask(w, log, f"X{tl}")
+        return log
+
+    def command(action, tid, export=None, expect=True):
+        say(f"forks: {action} {tid}" + (f" to {export}" if export else ""))
+        rec = w.gamedir / "replays" / "forks.imprec"
+        argv = ["replay", "forks", w.name, rec, action, tid]
+        if export:
+            argv.append(export)
+        rc, text = tacli(*argv, "--json", timeout=180)
+        if (rc == 0) != expect:
+            raise Failed(f"forks {action} {tid}: {last(text)}")
+        if not expect and "refused" not in text and '"done": false' not in text:
+            raise Failed(f"forks {action} {tid}: refusal not named: {last(text)}")
+        return text
+
+    for tid in (1, 2, 3):
+        fork(tid, base + (tid - 1) * 300)
+    before = next(s["last_used"] for s in tarec.file_segments(source)[0] if s["id"] == 2)
+    log = start_play(2, base + 310)
+    finish_play(log, 2)
+    w.collect(out / "touch")
+    w.stop()
+    shutil.copy2(w.gamedir / "replays" / "forks.imprec", source)
+    used = next(s["last_used"] for s in tarec.file_segments(source)[0] if s["id"] == 2)
+    if used <= before:
+        raise Failed("forks: playing did not advance last-used time")
+    rc, text = tacli("replay", "takeover", w.name, source, "--at", base + 900,
+                     "--player", P, "--dry-run", "--json")
+    if rc or json.loads(text[text.index("{"):])["would_delete"] != 1:
+        raise Failed(f"forks: dry-run did not predict ID 1: {text}")
+    fork(4, base + 900)
+    if any(s["id"] == 1 for s in tarec.file_segments(source)[0]):
+        raise Failed("forks: LRU 1 was not removed by compaction")
+    T5 = base + 451
+    fork(5, T5, 2)
+    log = start_play(5, T5 + 1)
+    # Timeline IDs are local to their file: a playing protects only that recording.
+    other = w.gamedir / "replays" / "other.imprec"
+    shutil.copy2(source, other)
+    rc, text = tacli("replay", "forks", w.name, other, "delete", 5, "--json", timeout=180)
+    if rc:
+        raise Failed(f"forks: deletion in a different recording: {last(text)}")
+    other_segs = check_file(other, "deleted ID 5 in a different recording")
+    if any(s["id"] == 5 and s["state"] == 1 for s in other_segs):
+        raise Failed("forks: other recording's timeline 5 stayed live")
+    playing = tarec.file_segments(w.gamedir / "replays" / "forks.imprec")[0]
+    if not any(s["id"] == 5 and s["state"] == 1 for s in playing):
+        raise Failed("forks: another recording's deletion changed the current playing")
+    command("delete", 5, expect=False)                # the playing is protected
+    finish_play(log, 5)
+    oldsize = (w.gamedir / "replays" / "forks.imprec").stat().st_size
+    command("delete", 2)
+    shutil.copy2(w.gamedir / "replays" / "forks.imprec", source)
+    segs = check_file(source, "deleted parent")
+    ancestor = next(s for s in segs if s["id"] == 2)
+    if ancestor["state"] != 2 or ancestor["end_reason"] != 12 or ancestor["last"] < T5 - 1:
+        raise Failed("forks: parent prefix was not preserved and pruned")
+    if source.stat().st_size >= oldsize:
+        raise Failed("forks: parent deletion reclaimed no bytes")
+    w.collect(out / "delete")
+    w.stop()
+    log = start_play(5, base - 120)
+    arm_dump(w, log, "chain5", T5 + 300)
+    wait_dumps(log, ["chain5"], 180)
+    dump = w.gamedir / "replays" / "dump-chain5.bin"
+    rc, text = tarec_run("compare", "--puppet", source, dump, "--timeline", 5)
+    if rc:
+        raise Failed(f"forks: descendant across two boundaries: {last(text)}")
+    finish_play(log, 5)
+    command("export", 5, "export5")
+    command("export", 5, "export5", expect=False)     # an existing export is never overwritten
+    exported = out / "export5.imprec"
+    shutil.copy2(w.gamedir / "replays" / "export5.imprec", exported)
+    segs = check_file(exported, "exported chain")
+    if [s["id"] for s in segs] != [0, 2, 5]:
+        raise Failed("forks: export holds something besides the chosen chain")
+    w.collect(out / "chain")
+    w.stop()
+    saved = source
+    source = exported
+    log = start_play(5, base - 120)
+    arm_dump(w, log, "export5", T5 + 300)
+    wait_dumps(log, ["export5"], 180)
+    rc, text = tarec_run("compare", "--puppet", exported,
+                        w.gamedir / "replays" / "dump-export5.bin", "--timeline", 5)
+    if rc:
+        raise Failed(f"forks: exported chain playback: {last(text)}")
+    w.collect(out / "export-play")
+    w.stop()
+    source = saved
+    # Removing the highest allocated segment must not permit that ID to be allocated again.
+    w.place(fx["fix"], fx["dll"])
+    rc, text = tacli("launch", w.name, "--defaults", "--keep-dll", timeout=120)
+    if rc:
+        raise CouldNotRun(f"forks: shell: {last(text)}")
+    (w.gamedir / "replays").mkdir(exist_ok=True)
+    shutil.copy2(source, w.gamedir / "replays" / "forks.imprec")
+    command("delete", 5)
+    shutil.copy2(w.gamedir / "replays" / "forks.imprec", source)
+    w.collect(out / "highest")
+    w.stop()
+    fork(6, base + 600)
+    results.append(("forks: two-boundary and exported puppet dumps", PASS,
+                    "both EQUAL; highest deleted ID 5 followed by ID 6"))
+    # A read-only directory is a real writer refusal, without a DLL fault-injection lever.
+    w.place(fx["fix"], fx["dll"])
+    rd = w.gamedir / "replays"
+    rd.mkdir(exist_ok=True)
+    mode = rd.stat().st_mode & 0o7777
+    log = Log(w)
+    try:
+        rd.chmod(mode & ~0o222)
+        rc, text = tacli("scenario", "load", w.name, SCENARIOS / fx["fix"]["load"],
+                         "--defaults", "--restart", "--keep-dll", "--json", timeout=300)
+        if rc:
+            raise CouldNotRun(f"writer-refused load: {last(text)}")
+        failed = log.wait(r"recorder: writer: .* is abandoned at its last complete block", 30)
+        if not failed or any(rd.glob("*.imprec")):
+            raise Failed("writer-refused: the unwritable directory did not refuse recording")
+    finally:
+        rd.chmod(mode)
+    if fx["cover"]:
+        cover_ask(w, log, "writefail")
+    if w.gametime() <= 0:
+        raise Failed("writer-refused: the game did not continue")
+    w.collect(out / "writer-refused")
+    w.stop()
+    results.append(("forks: unwritable recording and graceful exit", PASS,
+                    "writer refused; game continued; exit completed before collection"))
+    return results
 
 
 # ---- the checks -----------------------------------------------------------------------------
@@ -860,7 +1343,7 @@ def checks(fx):
     """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
     read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
     rec, Ts, out, ran = fx["rec"], fx["Ts"], fx["out"], fx["procs"]
-    res = []
+    res = list(fx.get("xres", []))
     rc, o = tarec_run("info", rec)
     m = re.search(r"ended: (.*)", o)
     end = m.group(1) if m else "no end block"
@@ -936,12 +1419,214 @@ def checks(fx):
     return res
 
 
+def mobile(img):
+    """the unit has a mover: its image's first dword is 1 then (replay-layout.tsv, `mover`)"""
+    return struct.unpack_from("<I", img, 0)[0] == 1
+
+
+def tk_ai(path, tl, T, stop):
+    """In timeline `tl` over [T, stop]: its AI seats, those of them that made a unit, and the
+    fraction of the AI seats' mobile units alive at T that moved more than 8 wu (None when there
+    are none) with their count."""
+    h, bl, _ = tarec.load(path, timeline=tl)
+    seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
+    ai = {p["index"] for p in seg["header"]["players"] if p["controller"] == 2}
+    w0 = tarec.stream_to(h, bl, want=T)
+    start = {slot: struct.unpack_from("<iii", img, 0x6A)
+             for slot, img in w0.units.items() if img[0xFF] in ai and mobile(img)}
+    moved, made, fresh = set(), set(), set()
+
+    def on_record(w, kind, b):
+        if kind == tarec.RK_EV_CREATE and w.tick is not None and w.tick >= T:
+            fresh.add(struct.unpack_from("<I", b)[0] - 1)
+        if kind is not None or w.tick is None or w.tick < T:
+            return
+        for slot in list(fresh):
+            if slot in w.units:
+                made.add(w.units[slot][0xFF])
+                fresh.discard(slot)
+        for slot, (x, _, z) in start.items():
+            img = w.units.get(slot)
+            if slot in moved or img is None:
+                continue
+            x1, _, z1 = struct.unpack_from("<iii", img, 0x6A)
+            if ((x1 - x) ** 2 + (z1 - z) ** 2) ** 0.5 > 8 * 65536:
+                moved.add(slot)
+    tarec.stream_to(h, bl, want=stop, on_record=on_record)
+    return ai, made & ai, (len(moved) / len(start) if start else None), len(start)
+
+
+def ai_compare(ai, original, fork):
+    """The `ai` check's comparison, over the AI seats `ai` of timeline 1: the seats that made a
+    unit in the original's window (`original`) are compared, each must have made one in timeline
+    1's (`fork`); a seat that made none in the original is skipped. (compared, missing, skipped),
+    each sorted: compared empty is no comparison, missing non-empty a failure."""
+    compared = sorted(s for s in ai if s in original)
+    return compared, [s for s in compared if s not in fork], sorted(s for s in ai
+                                                                   if s not in original)
+
+
+def tk_moved(path, tl, ordered):
+    """How far the ordered unit is, in timeline `tl`, at the GameTime read before its order and
+    300 ticks (10 s) later, in wu: (distance, None), or (None, why)."""
+    slot, g = ordered["slot"], ordered["at"]
+    h, bl, _ = tarec.load(path, timeline=tl)
+    seen = {}
+
+    def on_record(w, kind, b):
+        # kind None comes before a TICK, with the world still the iteration before it
+        if kind is None and w.tick == g and slot in w.units:
+            seen[g] = struct.unpack_from("<iii", w.units[slot], 0x6A)
+
+    w = tarec.stream_to(h, bl, want=g + 300, on_record=on_record)
+    if w.tick == g + 300 and slot in w.units:
+        seen[g + 300] = struct.unpack_from("<iii", w.units[slot], 0x6A)
+    if len(seen) < 2:
+        return None, f"unit {slot} is not in timeline {tl} at GameTime {g} and {g + 300}"
+    (x0, _, z0), (x1, _, z1) = seen[g], seen[g + 300]
+    return ((x1 - x0) ** 2 + (z1 - z0) ** 2) ** 0.5 / 65536, None
+
+
+def tk_checks(fx):
+    """The takeover's checks, as the entry's `checks` lists them: (name, verdict, detail) each."""
+    tk, ran, out = fx["fix"]["takeover"], fx["procs"], fx["out"]
+    want = tk.get("checks", [])
+    k = fx.get("tk") or {}
+    res = []
+
+    def unrun(name, why):
+        res.append((f"takeover {name}", UNRUN, why))
+
+    if ran.get("K") != "ran":
+        for name in want:
+            unrun(name, "K did not run")
+        return res
+    T, P, path, tl = k["T"], k["P"], k["file"], k["timeline"]
+    if "judge" in want:
+        seen, made = k.get("alive_seen"), k.get("made", 0)
+        bad = ([f"{len(k['boxes'])} boxes: {', '.join(b['title'] for b in k['boxes'])}"]
+               if k["boxes"] else []) + (["ErrorLog.txt"] if k["errorlog"] else []) + \
+              (["the window went away"] if k["gone"] else [])
+        if seen is None:
+            res.append(("takeover judge", UNRUN if not bad else FAIL,
+                        "; ".join(bad + ["no `units: alive=` line"])))
+        else:
+            if seen < 0.9 * made:
+                bad.append(f"{seen} units seen of the {made} made")
+            res.append(("takeover judge", FAIL if bad else PASS,
+                        "; ".join(bad) or f"{seen} units seen of the {made} made"))
+    if "line" in want:
+        rc, o = tarec_run("segments", path)
+        size = re.search(rf"timeline {tl}: bytes (\d+) to (\d+)", o)
+        log = (out / "K" / "tagpu.log").read_text(errors="replace")
+        first = re.search(r"recorder: \d+ iterations captured: the first in (\d+) us", log)
+        bad = []
+        if k["units_refused"]:
+            bad.append(f"{k['units_refused']} creates refused")
+        if tk.get("ms") and k["ms"] >= tk["ms"]:
+            bad.append(f"{k['ms']} ms, the entry's bound {tk['ms']}")
+        res.append(("takeover line", FAIL if bad else PASS,
+                    "; ".join(bad) or
+                    f"{k['ms']} ms (passability {k['passability_ms']}, AI {k['ai_ms']}); the "
+                    f"fork's first iteration "
+                    f"{first.group(1) + ' us' if first else 'not in the log'}, its segment "
+                    f"{int(size.group(2)) - int(size.group(1)) if size else '?'} bytes; {k['line']}"))
+    if "orders" in want:
+        try:
+            d, why = tk_moved(path, tl, k["ordered"]) if k.get("ordered") else (None, "no order")
+        except tarec.Unreadable as e:
+            d, why = None, str(e)
+        res.append(("takeover orders", UNRUN if d is None else PASS if d > 64 else FAIL,
+                    why if d is None else
+                    f"unit {k['ordered']['slot']} moved {d:.0f} wu from GameTime "
+                    f"{k['ordered']['at']} to {k['ordered']['at'] + 300}"))
+    if "ai" in want:
+        try:
+            # one window for both timelines, ending where the shorter one does, so neither's
+            # seats are given more ticks to make a unit than the other's
+            segs = {s["id"]: s for s in tarec.file_segments(path)[0]}
+            parent = segs[tl]["parent"]
+            stop = min([T + TAKEOVER_SPAN] + [segs[i]["last"] for i in (parent, tl)
+                                              if segs[i]["last"] is not None])
+            ai, fork, frac, n = tk_ai(path, tl, T, stop)
+            _, original, _, _ = tk_ai(path, parent, T, stop)
+            compared, missing, skipped = ai_compare(ai, original, fork)
+            if not compared:
+                raise tarec.Unreadable(
+                    f"no AI seat made a unit in timeline {parent}'s [{T}, {stop}]"
+                    + (f" (seats {', '.join(map(str, skipped))}: none in the original)"
+                       if skipped else ""))
+            if frac is None:
+                raise tarec.Unreadable(f"the AI seats hold no mobile unit at GameTime {T}")
+            moved = f"{frac:.0%} of {n} mobile units moved"
+            bad = [f"AI seat {s} made no unit, where the original made one" for s in missing]
+            if frac < 0.25:
+                bad.append(moved)
+            parts = (bad or [f"every AI seat that made a unit in the original "
+                             f"({', '.join(map(str, compared))}) made one"])
+            parts += [f"seat {s}: none in the original either" for s in skipped]
+            if frac >= 0.25:
+                parts.append(moved)
+            res.append(("takeover ai", FAIL if bad else PASS,
+                        f"GameTime [{T}, {stop}]: " + "; ".join(parts)))
+        except tarec.Unreadable as e:
+            res.append(("takeover ai", UNRUN, str(e)))
+    if "fork" in want:
+        parts, bad, unread = [], [], []
+        rc, o = tarec_run("compare-fork", path, tl)
+        (parts if rc == 0 else bad if rc == 1 else unread).append(f"compare-fork: {o.strip()}")
+        rc, o = tarec_run("segments", path)
+        m = re.search(r"original sha256 ([0-9a-f]+)", o)
+        mine = hashlib.sha256(Path(fx["rec"]).read_bytes()).hexdigest()
+        if not m:
+            unread.append(f"segments: {o.strip()}")
+        elif m.group(1) != mine:
+            bad.append("the original's bytes changed")
+        else:
+            parts.append("the original untouched")
+        for t in (0, tl):
+            rc, o = tarec_run("check", path, "--timeline", t)
+            (parts if rc == 0 else bad if rc == 1 else unread).append(
+                f"check --timeline {t}: {last(o) if rc == 0 else o.strip()}")
+        try:
+            seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
+            ends = [b for b in seg["blocks"] if b[0] == tarec.RB_END]
+            e = tarec.end(ends[0][3]) if ends else None
+            if not e or e.get(tarec.RT_END_REASON) != 1 or e["corrections"]:
+                bad.append(f"timeline {tl} ends "
+                           + ("with no end block" if not e else
+                              f"{tarec.END_REASONS.get(e.get(tarec.RT_END_REASON))}, "
+                              f"{len(e['corrections'])} corrections"))
+        except tarec.Unreadable as ex:
+            unread.append(str(ex))
+        for proc, d, puppet in (("K", out / "K" / f"dump-k{T + tk.get('dump', TAKEOVER_SPAN)}.bin", ()),
+                                ("F", out / "F" / f"dump-f{fx.get('tk_f', 0)}.bin", ("--puppet",))):
+            if not d.exists():
+                unread.append(f"no {proc} dump {d.name}")
+                continue
+            rc, o = tarec_run("compare", *puppet, "--timeline", tl, path, d)
+            (parts if rc == 0 else bad if rc == 1 else unread).append(
+                f"{proc} {d.stem[5:]}: {last(o) if rc == 0 else o.strip()}")
+        res.append(("takeover fork", FAIL if bad else UNRUN if unread else PASS,
+                    "; ".join(bad + unread + parts)))
+    if "victory" in want:
+        try:
+            seg = [s for s in tarec.file_segments(path)[0] if s["id"] == tl][0]
+            ends = [b for b in seg["blocks"] if b[0] == tarec.RB_END]
+            e = tarec.end(ends[0][3]) if ends else {}
+            won = [r for st, r, _, _ in e.get("seats", []) if st == P]
+            ok = (e.get(tarec.RT_END_REASON) == 1 and won == [1] and
+                  seg["last"] is not None and seg["last"] <= T + TAKEOVER_SPAN)
+            res.append(("takeover victory", PASS if ok else FAIL,
+                        f"timeline {tl} to GameTime {seg['last']}: "
+                        f"{tarec.END_REASONS.get(e.get(tarec.RT_END_REASON), 'no end block')}; "
+                        f"player {P} {tarec.RESULTS.get(won[0], won[0]) if won else 'has no result'}"))
+        except tarec.Unreadable as ex:
+            res.append(("takeover victory", UNRUN, str(ex)))
+    return res
+
+
 # ---- the run --------------------------------------------------------------------------------
-
-def procs(fix):
-    """The processes a fixture runs: L, P, R and Q, and W where fixtures.json asks for it."""
-    return ("L", "P", "R", "Q") + (("W",) if fix.get("watch") else ())
-
 
 def build_dll(stock, cover):
     """The DLL a run uses and the make line that builds it."""
@@ -956,7 +1641,7 @@ class Run:
     """`fixes` the fixtures by name (fixtures.json's, or measure's scenarios); `measure` runs L
     and P only, with no dump and no check, for the coverage files."""
 
-    def __init__(self, names, args, out, fixes=None, measure=False):
+    def __init__(self, names, args, out, fixes=None, measure=False, takeover=None):
         self.q = queue.Queue()
         self.lock = threading.Lock()
         self.pending = 0
@@ -980,10 +1665,14 @@ class Run:
             if dll.stat().st_mtime < sources_mtime():
                 raise CouldNotRun(f"{name}: {dll} is older than its sources ({make})")
             Ts = gametimes(name, fix["end"], h, fix.get("trips", 3))
+            # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
+            want = (("L", "K", "F") if takeover else ("L", "P") if measure else
+                    ("L",) if fix.get("cost") else procs(fix))
             self.fx[name] = {"name": name, "fix": fix, "dll": dll, "Ts": Ts, "out": out / name,
                              "problems": [], "rt": {}, "passed": [], "held": [],
                              "procs": {}, "cover": cover, "measure": measure,
-                             "map": dll.with_suffix(".map")}
+                             "map": dll.with_suffix(".map"), "want": want,
+                             "tk_ask": takeover or (None, None)}
             if measure:
                 say(f"{name}: recorded to GameTime {fix['end']} and played")
             elif fix.get("cost"):
@@ -1016,8 +1705,11 @@ class Run:
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
                 h = tarec.header_only(str(fx["rec"]))
                 fx["viewed"] = h["options"]["viewed"]
-                for p in () if cost else ("P",) if fx["measure"] else procs(fx["fix"])[1:]:
-                    self.put((name, p))
+                if "K" in fx["want"]:
+                    fx["tk_T"], fx["tk_P"] = tk_point(fx, h, *fx["tk_ask"])
+                for p in fx["want"][1:]:
+                    if p != "F":                # F follows K, which it reads
+                        self.put((name, p))
             elif proc == "P" and fx["measure"]:
                 play(w, fx, fx["rec"], out, "P", [], [])
             elif proc == "P":
@@ -1027,6 +1719,13 @@ class Run:
                 arms = [(f"r{Ts[0]}", Ts[0])] + [(f"rt{T}c", T + CONTINUE) for T in Ts[1:]]
                 fx["rt"] = play(w, fx, fx["rec"], out, "R", arms, [n for n, _ in arms],
                                 [(f"rt{T}", T) for T in Ts[1:]])
+            elif proc == "K":
+                fx["tk"] = takeover_k(w, fx, out)
+                self.put((name, "F"))
+            elif proc == "F":
+                fx["tk_f"] = takeover_f(w, fx, out)
+            elif proc == "X":
+                fx["xres"] = forks_lane(w, fx, out)
             elif proc == "W":
                 fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
@@ -1105,13 +1804,13 @@ def report(run, keep):
                 lines.append("   L NEVER RAN")
                 unrun = True
             continue
-        for proc in procs(fx["fix"]):
+        for proc in fx["want"]:
             if proc not in fx["procs"]:
                 lines.append(f"   {proc} NEVER RAN")
                 unrun = True
         if fx["procs"].get("L") != "ran":
             continue
-        for label, verdict, detail in checks(fx):
+        for label, verdict, detail in checks(fx) + (tk_checks(fx) if "K" in fx["want"] else []):
             lines.append(f"   {verdict:4}  {label}: "
                          + (detail.splitlines()[0] if verdict == PASS
                             else detail.replace("\n", "\n         ")))
@@ -1180,7 +1879,7 @@ def covered_sources():
     """The instrumented sources (the Makefile's COVERED): the sim files and the recorder's own."""
     d = TREE / "tagpu" / "ddraw"
     return set(tafeat.sim_files(d)) | {"src/tagpu_recorder.c", "src/tagpu_recwriter.c",
-                                       "src/tagpu_recreader.c", "src/tagpu_replay.c"}
+                                       "src/tagpu_recreader.c", "src/tagpu_replay.c", "src/tagpu_recfile.c"}
 
 
 def reached_of(run):
@@ -1190,7 +1889,7 @@ def reached_of(run):
     out, problems = {}, []
     maps = {}
     for name, fx in run.fx.items():
-        covers = sorted(fx["out"].glob("*/cover-*.bin"))
+        covers = sorted(fx["out"].rglob("cover-*.bin"))
         if not covers:
             continue
         try:
@@ -1248,7 +1947,8 @@ def cmd_measure(args):
 
 DD = "tagpu/ddraw/"
 RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
-                DD + "src/tagpu_recreader.c", DD + "src/tagpu_replay.c",
+                DD + "src/tagpu_recreader.c", DD + "src/tagpu_replay.c", DD + "src/tagpu_recfile.c",
+                DD + "inc/tagpu_recfile.h",
                 DD + "inc/tagpu_recorder.h", DD + "inc/tagpu_recfmt.h", DD + "inc/tagpu_recreader.h",
                 DD + "inc/tagpu_replay.h", DD + "inc/tagpu_replay_globals.h",
                 DD + "inc/tagpu_replay_layout.h", DD + "replay-globals.tsv",
@@ -1580,10 +2280,57 @@ def cmd_features(args):
     return 1 if problems else 0
 
 
+def cmd_takeover(args):
+    """L, K and F alone, for one fixture with a takeover"""
+    fix = fixtures().get(args.fixture)
+    if not fix or not fix.get("takeover"):
+        print(f"tareplay: {args.fixture} is no fixture with a takeover (tareplay.py list)",
+              file=sys.stderr)
+        return 2
+    out = out_dir(args)
+    say(f"tareplay takeover: {args.fixture}, into {out}")
+    try:
+        run = Run([args.fixture], args, out, takeover=(args.player, args.at))
+    except CouldNotRun as e:
+        print(f"tareplay: {e}", file=sys.stderr)
+        return 2
+    run.j = args.j
+    run_threads(run)
+    status = report(run, args.keep)
+    if STOP.is_set():
+        return status or 2
+    return status
+
+
+def cmd_forks(args):
+    fix = fixtures().get(args.fixture)
+    if not fix or not fix.get("takeover"):
+        raise CouldNotRun("forks needs a takeover fixture")
+    out = out_dir(args)
+    w = Worker(out)
+    dll, make = build_dll(fix.get("dll") == "stock", args.cover)
+    try:
+        if not dll.exists() or dll.stat().st_mtime < sources_mtime():
+            raise CouldNotRun(f"build {make} first")
+        fx = {"name": args.fixture, "fix": fix, "dll": dll.resolve(), "cover": args.cover,
+              "Ts": gametimes(args.fixture, fix["end"], head(), 3)}
+        fx["rec"] = live(w, fx, None, out / "L")
+        res = forks_lane(w, fx, out / "X")
+        for name, status, detail in res:
+            say(name, status, detail)
+        return 0
+    except (CouldNotRun, Failed) as e:
+        say("forks:", str(e))
+        return 1 if isinstance(e, Failed) else 2
+    finally:
+        w.close()
+
+
 def cmd_list(args):
     for name, fix in fixtures().items():
         print(f"{name:16} {fix['load']}, end at GameTime {fix['end']}"
-              + (", the stock-limits build" if fix.get("dll") == "stock" else ""))
+              + (", the stock-limits build" if fix.get("dll") == "stock" else "")
+              + (", a takeover" if fix.get("takeover") else ""))
     return 0
 
 
@@ -1626,12 +2373,27 @@ def main(argv=None):
     br.add_argument("-j", type=int, default=4, help="games at once (default 4)")
     br.add_argument("--out", help="the run's folder")
     br.set_defaults(func=cmd_broad, dll=None, stock_dll=None)
+    tk = sub.add_parser("takeover", help="L, K and F alone: a fixture recorded, taken over, and "
+                                         "its fork played across the boundary")
+    tk.add_argument("fixture", help="a fixture with a `takeover` entry")
+    tk.add_argument("--player", type=int, help="the player to take over (default the entry's)")
+    tk.add_argument("--at", type=int, help="the GameTime to take over at (default T2)")
+    tk.add_argument("-j", type=int, default=2, help="games at once (default 2)")
+    tk.add_argument("--cover", action="store_true", help="the coverage builds")
+    tk.add_argument("--keep", action="store_true", help="keep the passing dumps")
+    tk.add_argument("--out", help="the run's folder")
+    tk.set_defaults(func=cmd_takeover, dll=None, stock_dll=None)
+    fk = sub.add_parser("forks", help="fork limit, LRU, shared prefixes, compaction and export")
+    fk.add_argument("fixture")
+    fk.add_argument("--cover", action="store_true")
+    fk.add_argument("--out")
+    fk.set_defaults(func=cmd_forks, dll=None, stock_dll=None)
     fe = sub.add_parser("features", help="the SIM_FEATURE regions of the sim files")
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")
     fe.set_defaults(func=cmd_features)
     a = ap.parse_args(argv)
-    if a.cmd in ("run", "measure", "landing", "broad") and not 1 <= a.j <= 9:
+    if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 9:
         ap.error("-j is 1..9")
     return a.func(a)
 

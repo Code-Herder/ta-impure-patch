@@ -3621,5 +3621,37 @@ class AbRefusals(unittest.TestCase):
         self.assertFalse(tacli.AB_REFUSED_RX.search("vk: shot: wrote tagpu_gui_vk.ppm, 1920x1080"))
 
 
+class ForkResults(unittest.TestCase):
+    def test_nonce_matches_its_own_split_crlf_result(self):
+        token = "0123456789abcdef0123456789abcdef"
+        with tempfile.TemporaryDirectory() as d:
+            gamedir = Path(d)
+            (gamedir / "replays").mkdir()
+            recording = gamedir / "replays" / "forks.imprec"
+            recording.touch()
+            inst = Mock(gamedir=gamedir)
+            inst.running.return_value = True
+            reply = f"replay: forks replays\\forks.imprec: done: exported timeline 3 [request={token}]\r\n"
+            unrelated = "replay: forks replays\\forks.imprec: done: touched timeline 0 [request=-]\r\n"
+            chunks = iter([unrelated, reply[:45], reply[45:]])
+            cursor = Mock()
+            cursor.text.side_effect = lambda **kw: next(chunks, "")
+            args = types.SimpleNamespace(recording=str(recording), action="export", id=3,
+                                         output="export3", name="test", timeout=2, json=True)
+            with patch.object(tacli, "_tarec") as reader, \
+                 patch.object(tacli, "Instance", return_value=inst), \
+                 patch.object(tacli, "_log_cursor", return_value=cursor), \
+                 patch.object(tacli, "out") as output, \
+                 patch("uuid.uuid4", return_value=types.SimpleNamespace(hex=token)), \
+                 patch.object(tacli.time, "sleep"):
+                reader.return_value.file_segments.return_value = ([], None)
+                tacli.cmd_replay_forks(args)
+                result = output.call_args.args[0]
+                self.assertTrue(result["done"])
+                self.assertEqual(result["detail"], "exported timeline 3")
+            self.assertIn(f'forks @{token} "forks" export 3 "export3"',
+                          (gamedir / tacli.REPLAY_TRIGGER).read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

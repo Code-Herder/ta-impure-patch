@@ -357,10 +357,19 @@ enum RecEnd {
                                than the capture tracks                                          */
     REC_END_PROJ,           /* the projectile pool is not the one the recording began with, or
                                its count is past its records                                    */
-    REC_END_MAPPED          /* the explored map is not the one the recording began with          */
+    REC_END_MAPPED,         /* the explored map is not the one the recording began with          */
+    REC_END_UNFINISHED,     /* written by a later timeline's writer for the segment before it,
+                               which had no end block: it ends at its last complete iteration
+                               (RT_LAST)                                                        */
+    REC_END_PRUNED       /* a deleted ancestor ends at its last retained stream block */
 };
 
-/* A recording is REC_MAGIC, then blocks. A block is a RecBlock, then `packed` bytes: the zlib
+/* A recording is REC_MAGIC, then one or more SEGMENTS. A segment is an RB_HEADER and the blocks
+   after it; every segment after the first begins right after an RB_END, and its header carries
+   RT_TIMELINE. So a reader that stops at the first RB_END reads the original, as it was written,
+   whatever follows: a takeover's fork is a segment appended to the file it was played from
+   (research/notes/tadr-port/demo-recorder-s4-takeover.md).
+   A block is a RecBlock, then `packed` bytes: the zlib
    stream (RFC 1950) of its `raw` bytes, or the raw bytes themselves when RBF_STORED is set.
    `crc_body` is the CRC-32 (zlib's crc32, crc32.c's Crc32_ComputeBuf) of those `packed` bytes and `crc_head` that of the block's
    first 28 bytes, so a block cut short, or a header torn, is known by one of them. A block is
@@ -399,11 +408,12 @@ enum RecBlockKind {
                           with the events of the step after `last`, so a reader that starts from
                           it takes those from the block before                                  */
     RB_END,            /* entries (RecTag): how the recording ended                              */
-    RB_MINIMAP         /* right after the header, when the map has a picture: u16 w, u16 h, u16
+    RB_MINIMAP,        /* right after the header, when the map has a picture: u16 w, u16 h, u16
                           the box's columns, u16 its rows (i16 main+0x142EB, +0x142ED), then w*h
                           palette indices, rows of w: the TNT's minimap picture (the GAF frame at
                           main+0x1426B, uncompressed), whose part [0, 2*columns) x [0, 2*rows)
                           the engine shows. A reader that does not know it skips it            */
+    RB_TIMELINES       /* RecTimelineState rows (tagpu_recfile.h); the latest complete table wins */
 };
 #define REC_MINIMAP_HEAD  8u
 #define REC_MINIMAP_MAX   (0xFF00u - REC_MINIMAP_HEAD)   /* the most indices: a ring record's */
@@ -468,6 +478,10 @@ enum RecTag {
                           u32 the archives the engine had mounted, which RT_ARCHIVE lists up to
                           REC_ARCHIVES of. A map archive changes it: whether a recording can be
                           played is RT_UNITDEFS's and RT_WEAPONS's to say                         */
+    RT_TIMELINE,       /* u32 the timeline's id (1, 2, ...; never reused within a file), u32 its
+                          parent's id (0 the original), u32 fork_at: a fork's header only. The
+                          segment's first iteration is fork_at, and along a chain of timelines
+                          it replaces the parent's iterations from fork_at on                   */
     RT_END_REASON = 32,/* u32 RecEnd                                                            */
     RT_LAST,           /* u32: the last recorded GameTime                                       */
     RT_ITERATIONS,     /* u32: iterations recorded                                              */
@@ -495,5 +509,6 @@ enum RecTag {
                           game with none (its live count +0x144 at 0), 0 for none: a seat of the
                           recording                                                              */
 };
+_Static_assert(RT_TIMELINE < RT_END_REASON, "a header's tags stay below the end block's");
 
 #endif

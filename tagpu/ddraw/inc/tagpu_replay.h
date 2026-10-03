@@ -15,6 +15,8 @@
    none. Without those a request is never read. Then the browser's two sites: the main menu's
    builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
+/* File-maintenance triggers, on the game-thread flip observer, at every screen. */
+void tagpu_replay_files_frame(unsigned frame);
 
 /* The Replays browser's Watch (tagpu_replays.c), the other way a playback starts
    (tagpu_replay.c, THE BROWSER'S START). On the game thread, inside REPLAYS' OnCommand, `gi` the
@@ -95,5 +97,9 @@ int  tagpu_replay_speed_set(unsigned gs);
 /* tagpu_reclaim's teardown wrap, once 0x491B60 has returned, on the thread that entered it: V's
    PlayerInfo gets back what the Start's fill left in it. */
 void tagpu_replay_level_after(void);
+
+/* 1 while a playing waits at a timeline boundary for its seek (tagpu_replay.c, THE BOUNDARY): the
+   recorder's armed dumps wait with it. Game thread. */
+int tagpu_replay_held(void);
 
 #endif

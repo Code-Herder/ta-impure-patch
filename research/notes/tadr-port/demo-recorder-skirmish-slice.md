@@ -2072,6 +2072,69 @@ only S5's browser calls them, landed `UNCOVERED` by the owner's decision of 2026
 **Left:** S5's fourth ask, a recording that starts mid-game, belongs with S4d's suspend and resume
 of the recorder.
 
+### S4b — the takeover and its fork
+
+**Built.** A level that plays a recording becomes a live skirmish at GameTime T, with player P human,
+every other recorded seat an AI and the viewer's seat dropped, and the game after T is recorded as a
+new timeline appended to the same file. The takeover is the seek in its TAKEOVER mode; the steps, the
+invariants, the file's segments, the fork's handle and the residuals are in
+[the takeover note](demo-recorder-s4-takeover.md).
+
+**Decided** (2026-10-02, with the owner):
+- **D1**: the order nodes restart in the constructor's state, the builders adopt their frames, and
+  Paralyze and BuildWeapon resume (OQ-A). VTOL_MobileBuild's orphaned frame and the adopted builders'
+  COB pose are accepted residuals.
+- **D2**: `tarec compare-fork` excludes the node state D1 restarts, the records outside the fork's
+  seats, the roles that changed and the contact bits by the puppet view's rule, and nothing else.
+- **D3**: a fork is always recorded; a takeover whose file cannot be appended is refused before the
+  rebuild.
+- **OQ-B**: the mixed-side interface after a takeover of the other side from a running playback is
+  fixed by a mid-level re-skin, its own landing after S4b; `tacli replay takeover` launches with the
+  side viewed being P's.
+- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them. The
+  `ai` check compares with the original (decided 2026-10-02): each AI seat that made a unit in
+  the original timeline's [T, T + 1800] must make one in timeline 1's, and a seat that made none
+  there is skipped and named. On `battle` the stock AI's seats 2 and 3 make no unit in the whole
+  3990-tick game, so a rule that every AI seat builds failed on the AI, not on the takeover.
+
+**The fixtures.** `battle` is also taken over at T2 as its controlled player, the line within
+2000 ms, and its first ARMCK ordered 300 wu east from its base: the order's unit stands in open
+ground, since at T2 every ARMPW of the army is in the melee, where one ordered sideways moved 47 wu
+in 12 s. `takeover-end` (Show Down, slots 2 and 3 closed) is taken over as 0 and ends won after
+`+iwin`, the console's IWin: its kill-all for the AI and the game's won and stop bits. `+kill 1`
+cannot end it, since the console's Kill disarms the objective after its kill-all (`0x4164EF`; the
+[engine map](../exe-reverse-engineering.html)'s kill-all callers), so the fixture does not reach
+the objective's own victory test that the takeover re-arms. Each runs K (the takeover, its checks and a dump) and F (K's file played from T −
+300 across the fork) after the usual L, P, R and Q.
+
+**The layout's hash.** The `order 0x006 ondestroy` row now names all nine handler functions that arm
+the destructor's call, which changes `TAGPU_REPLAY_LAYOUT_SHA256`: recordings made before S4b refuse
+to play. The recorder is unpublished.
+
+**Verified** (2026-10-02): the landing tier, 414 checks passed, the three takeovers and the
+reader's damaged-file paths; the numbers are in the takeover note's *Verified by*
+(`demo-recorder-s4-takeover.md`). Seven error paths landed `UNCOVERED` by the owner's decision.
+
+### S4c — the fork rules
+
+[The fork rules](demo-recorder-s4-forks.md) describe the complete metadata table
+(`RB_TIMELINES` = 6), three-live-fork LRU policy, playing-end touch, explicit
+delete/export, and worker compaction with shared ancestor prefixes. The original
+is excluded from automatic eviction but may be explicitly deleted. Deleted IDs
+cannot be selected and the highest allocated ID is never reused.
+
+`tacli replay forks` lists and manages the instance's file, and takeover
+`--dry-run` predicts eviction. `tareplay.py forks battle` tests the rules; the
+landing tier adds X after the existing lanes on both battle and stock-limits.
+Live rewind remains S4d; the browser controls remain S5.
+
+On the reference Wine setup (2026-10-02), the full coverage run plus the corrected
+forest-circle rerun passed 466 checks across all 18 fixtures, including eleven
+fork checks on each build and 54 round trips EQUAL. Coverage reached 48 of 49
+changed functions on every required build; `ring_free` remains UNCOVERED, approved
+for this landing by the owner under OQ7 on 2026-10-02. The earlier naval sink-count difference also
+reproduced on pre-S4c main; its cause remains open and the tolerances are unchanged.
+
 ## S5
 
 **S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens

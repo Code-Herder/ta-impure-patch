@@ -7,6 +7,7 @@
    only while tagpu_recorder.on is in the game's folder at the level's first iteration. */
 
 #include <windows.h>
+#include "tagpu_recfile.h"
 
 /* B2's stub at the sim step's call of the unit tick (0x4954ED) calls this on the game thread,
    between two iterations, after the replay's capture-point write (tagpu_replay_capture), so that a
@@ -35,8 +36,9 @@ int tagpu_rec_dump_now(const char* name);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
    cascade frees the unit array: the recording in progress ends, complete once its writer has
-   closed the file. */
+   closed the file. A fork armed and not yet started is dropped, its file closed. */
 void tagpu_rec_level_end(void);
+
 
 /* DllMain's attach: the event hooks (tagpu_recorder.c, *The events*), all or none. Without them
    no skirmish is recorded, and none plays: a replay takes the feature code's draws, a death's
@@ -120,6 +122,23 @@ void tagpu_rec_exit(void);
 #define REC_WAKE_BYTES     (1u << 20)
 #define REC_WRITER_POLL_MS 100
 
+/* A FORK, one per takeover: the recording a level played, opened for writing on the game thread at
+   the takeover's R0 (tagpu_replay.c, TK0), its append point found with the handle held, and the
+   handle moved here by tagpu_rec_fork_arm, into the ring by rec_start and into the writer by
+   writer_main: one owner at each step, and each closes it on its own failure (tagpu_recorder.c,
+   THE FORK'S HANDLE). */
+typedef struct RecFork {
+    HANDLE             lock;          /* its persistent file lock, held through the writer */
+    HANDLE             file;          /* NULL when none                                          */
+    unsigned long long append_off;    /* where the fork's segment goes (recr_append_point)       */
+    unsigned           id, parent, fork_at;
+    unsigned           nstates;
+    RecTimelineState   states[REC_TIMELINE_ROWS];
+    int                end_open;      /* the segment before it has no end block ...               */
+    unsigned           open_id, open_last;   /* ... is this timeline, and ends at this iteration  */
+    char               path[MAX_PATH];
+} RecFork;
+
 typedef struct RecRing {
     unsigned char* buf;                /* REC_RING_BYTES, from VirtualAlloc                    */
     volatile LONG  wpub;               /* bytes the capture has published                      */
@@ -139,6 +158,8 @@ typedef struct RecRing {
                                           freed at its end whether or not it took it. The grid
                                           is larger than the ring on the largest maps (Seven
                                           Islands, 21 MB)                                      */
+    RecFork        fork;               /* a fork's file and append point; fork.file NULL for an
+                                          ordinary recording, which creates its own file       */
 } RecRing;
 
 /* Starts the writer thread on a ring whose first record is RK_HEADER. From then on the writer
@@ -146,5 +167,13 @@ typedef struct RecRing {
    hand-over above, and sets `done` last. 0 when no thread could be started, and the ring is still
    the caller's. */
 int tagpu_recwriter_start(RecRing* ring);
+
+/* 1 when a fork armed now would be recorded at the next capture point: the teardown wrap, the
+   simreg, the event hooks, a free finishing slot, no recording in progress. Game thread. */
+int tagpu_rec_fork_ready(char* why, unsigned cap);
+/* Arms timeline f->id: the next capture point starts its recording, whatever REC_ON says (a
+   fork is always recorded, decision D3). On 1 the recorder owns f->file (f->file = NULL); on 0
+   the caller still does. Game thread. */
+int tagpu_rec_fork_arm(RecFork* f);
 
 #endif
