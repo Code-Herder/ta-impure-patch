@@ -454,5 +454,5 @@ and leave, polling for error boxes, with a picture per screen.
   Twilight still needs its font, dock pieces, 28 sprite frames and browser ground.
 - **Dock style selection.** The dock explicitly selects retail's kit (`tagpu_dock.c`,
   `tagpu_art_entry("retail", ART[i])`); Escalation's supplied dock sprites are baked but are
-  not selected by the current dock. Player cards are implemented on this branch, with verification
-  in progress ([card note](demo-recorder-player-cards.md)); Overlays and live rewind remain proposals.
+  not selected by the current dock. Player cards are implemented on this branch, with runtime checks complete and review
+  pending ([card note](demo-recorder-player-cards.md)); Overlays and live rewind remain proposals.

@@ -1,6 +1,7 @@
 # Replay player cards
 
-Implementation on the S5 branch; validation and landing are in progress. This is the card portion
+Implementation on the S5 branch; runtime validation is complete, with independent review and
+local landing pending. This is the card portion
 of [the S5 design](demo-recorder-s5-ui.md). Camera streams and the Overlays panel remain separate
 work. The existing recording format has no camera stream, so Jump, Follow and Free cam are
 visibly disabled. Hovering a camera control explains “Camera was not recorded.”
@@ -76,7 +77,7 @@ rectangle from this marker, not from a newer live input word. `uCards`, `uCardsM
 occupy std140 offsets 128, 144 and 160 in the 176-byte composite uniform block. At 1× the card
 pixels already lie at their device positions and the magnification branch is inert.
 
-## Verification so far
+## Verification
 
 On the reference setup, a four-seat recording showed compact cards and an accessible dock at
 640×480, normal cards with resource rates at 1280×720, and correctly placed compact cards at
@@ -125,5 +126,12 @@ The harness's W leg also clicks the first card's Sight and the Full map footer w
 checking the viewed seat, clock and camera. It runs in the fresh worker's unscaled HUD, on both
 stock-limits and raised-limits Watch fixtures.
 
-Still required before landing: the landing's full replay gate and independent reviews. The dock and cards currently select retail art even on Escalation; mod-specific dock
+The full landing replay gate passed on `25fce201`: 18 fixtures, with all six changed replay
+functions reached in the required builds. The stock-limits Watch leg switched Sight 0 → Full map
+4 at GameTime 450; the raised-limits Watch leg switched Sight 0 → Full map 2 at GameTime 600.
+Both kept the paused clock and camera unchanged. Every fixture's recorded/playback comparisons,
+round trips, fresh seeks and applicable takeover/fork checks passed. The gate attached a
+`replay-roundtrip:` note with `reached=6/6 result=pass` to that commit.
+
+Independent review and local landing remain pending. The dock and cards currently select retail art even on Escalation; mod-specific dock
 selection is a pre-existing open item in the S5 design.
