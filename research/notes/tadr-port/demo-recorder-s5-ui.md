@@ -189,11 +189,13 @@ return of the PCX loader `0x429290` (the header of `tagpu_replays.c` lists the f
 
 ## The screens
 
-**Over the world, the dock and the cards** are GUI screens pushed the way the Impure Config panel
-is (`tagpu_menu.c`): non-modal, re-pushed when a world click rebuilds the in-game stack, and owning
-their points against the zoom transform. A gadget draws only inside its own panel's surface, so the
-dock is its own panel along the bottom and the cards a panel on the right edge. The things only we
-draw go through the engine's GAF blitter `0x4B7F90` after the GUI, as the sprocket does.
+**Over the world, the dock** is a GUI screen pushed through the Impure Config panel's slot
+(`tagpu_menu.c`), non-modal and re-pushed when a world click rebuilds the in-game stack. **The
+cards** are its post-GUI companion: engine GAF blits and FNT text on the right, with their own
+bounded input rectangle, as the dock strip already has. Only the top engine GUI receives input;
+using a single rectangular GUI for both regions would also block the world between them. The
+cards hide under a modal and follow the dock's teardown. Their implementation and verification
+are in [Replay player cards](demo-recorder-player-cards.md).
 
 **The Replays browser** is a shell screen of its own: our ground, the engine's list and buttons over
 it, the minimap and the badges blitted.
@@ -451,4 +453,5 @@ and leave, polling for error boxes, with a picture per screen.
   Twilight still needs its font, dock pieces, 28 sprite frames and browser ground.
 - **Dock style selection.** The dock explicitly selects retail's kit (`tagpu_dock.c`,
   `tagpu_art_entry("retail", ART[i])`); Escalation's supplied dock sprites are baked but are
-  not selected by the current dock. Player cards, Overlays and live rewind remain proposals.
+  not selected by the current dock. Player cards are implemented on this branch, with verification
+  in progress ([card note](demo-recorder-player-cards.md)); Overlays and live rewind remain proposals.

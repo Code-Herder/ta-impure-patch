@@ -15802,3 +15802,27 @@ section", thread 39737 "hpi, ccx, gp3, ufo priorities", and `files.tauniverse.co
 `web.archive.org`; `totalannihilation.fandom.com` (HTTP 402);
 `units.tauniverse.com`. A researcher with browser access to TAUniverse should re-run
 this survey — it is the single biggest blind spot here.
+
+## Replay player cards and changing the viewed player
+
+Read while implementing `tagpu_cards.c` and `tagpu_replay.c`'s card model/Sight API. No new
+patched address; the existing dock observers at `0x468CF0` and `0x46A308` host model/draw, and
+replay's frame observer at `0x4969CD` applies the queued view change. Implementation and runtime
+scope: [Replay player cards](tadr-port/demo-recorder-player-cards.md).
+
+| address or field | fact and evidence |
+|---|---|
+| `main+0x531` | Current top `GUIMEMSTRUCT*`, the same top the menu slot uses. Cards compare identity here for hit testing; they never dereference an old stored GUI pointer. Existing GUI stack disassembly, `tagpu_menu.c`'s `OFF_TOPGUI`. |
+| `0x4C1400`, `0x4C1410` | No-argument getters of the text foreground/background, globals `+0x208/+0x20C`; plain `ret`. `0x4C13A0(fg,bg)`, stdcall `ret8`, changes each field unless its argument is -1. Cards save both, set their colours, draw, then restore. DISASSEMBLED `0x4C13A0..0x4C141B`. |
+| `0x4C1440`, `0x4C1450`, `0x4C1480` | The FNT face in force, its height, and a string's measured width. `0x4C14F0(ctx,text,x,y,maxWidth)` draws, stdcall `ret0x14`; `ctx=NULL` locks the back buffer. The card labels are measured and bounded before drawing. DISASSEMBLED getters/measure at `0x4C1440..0x4C14EF`; draw and font-table limits in *The in-game bitmap font* above. |
+| `main+0x148DB` | Player-colour GAF sequence, loaded at `0x431911`; u16 count at sequence+0, frame pointers at +0x28 with stride8. `0x467C1E..0x467C24` reads a frame using PlayerInfo+0x96 without a bound. Cards bound the index by the sequence count and decode only a nonempty frame at most64×64 before sampling its centre for an8×8 chip. The sequence lives with the game's loaded resources. DISASSEMBLED caller and existing replay seat validation. |
+| player `+0x8C/+0x90/+0x94`, `+0x98/+0x9C/+0xA0` | Energy and metal current/production/expense floats. Card values come from the reader's recorded player image, not a new economy calculation. Existing `0x401360`/`0x466050` evidence in *The unit and player records*; no exclusion of these fields in `replay-layout.tsv`. |
+| player `+0x144`, `+0x106` | Units alive and commander losses are words, written at `0x486E09` and `0x486996`. These recorded fields feed the cards. A loss count alone does not establish whether a commander currently exists. |
+| `0x4864CB..0x48650F`, `0x48691B..0x486958` | Commander tests compare the unit definition's UnitName at +0x20 with the owner's side's commander name, case-insensitively. The latter indexes `main+0x37F5F` by side×0x232. Cards apply the test to recorded live units, bounding owner and definition IDs and using the recorded seat's side. DISASSEMBLED; also `tagpu_recorder.c:is_commander`. |
+| `0x431A20`, `0x431A60`, `0x431B6D` | Side-table free loop advances0x232 until0xAFA (`0x431A4A..0x431A56`): five records. The loader starts at `main+0x37F3D` and requests a32-byte commander name (`0x431B6D`), matching the bounded compare. The card model requires side below both five and the loaded count at `main+0x37F39`. DISASSEMBLED. |
+| `main+0x2A43`, `0x482130`, `0x482910`, `0x466C20`, `0x467440` | Viewed seat, temporary sight expiry/add, minimap fog and radar pass. Sight drops the old view's temporary records before writing the new viewed byte, recreates unexpired death vision from a separate recording reader, then runs the fog/contact passes. The existing seek's sight notes establish the pool bound, ownership of stamps and engine root contracts; cards add no direct counter writes. The current frame's recorded display state is applied before the view request. |
+
+Measured on the reference setup: a paused switch through two seats and back to the spare viewer
+kept GameTime476; a Full map switch kept a separately checked eye at(1800,1900). These are input
+and camera-isolation checks, not yet a proof of death-vision equivalence; that comparison remains
+part of the player-card landing gate.

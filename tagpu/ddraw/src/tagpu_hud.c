@@ -110,10 +110,14 @@ int tagpu_hud_cards_map(int W, int H, int q8, TAGPU_HUD_DOCKMAP* m)
     m->q8 = q8;
     m->w = 206;
     m->x1 = W - 8 * q8 / 256;
-    m->x0 = m->x1 - m->w * q8 / 256;
+    /* Include the device pixels whose centres sample the source rectangle.
+       Truncating its scaled extent can omit the first source texel at a
+       fractional scale; nearest-integer extents preserve it without sampling
+       outside the rectangle (q8 >= 256). */
+    m->x0 = m->x1 - (m->w * q8 + 128) / 256;
     m->y1 = dt + dh + bh - 32 - (dh + 8) * q8 / 256;
     m->h = (m->y1 - 40 * q8 / 256) * 256 / q8;
-    m->y0 = m->y1 - m->h * q8 / 256;
+    m->y0 = m->y1 - (m->h * q8 + 128) / 256;
     m->l = m->x1 - (pw - 128) - m->w;
     m->t = m->y1 - (bh - 32) - m->h;
     return m->x0 >= pw && m->y0 >= bh && m->h >= 90 && m->l >= 128 && m->t >= 32 &&

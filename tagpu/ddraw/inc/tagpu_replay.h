@@ -101,6 +101,7 @@ int  tagpu_replay_speed_set(unsigned gs);
    selected seat. There is no camera stream in this recording format. */
 typedef struct TAGPU_REPLAY_PLAYER {
     unsigned seat, colour, units, commander_losses;
+    int commander_alive; /* 1 present, 0 absent, -1 unavailable */
     char name[32];
     float metal, energy, metal_in, metal_out, energy_in, energy_out;
 } TAGPU_REPLAY_PLAYER;

@@ -688,7 +688,7 @@ void tagpu_dock_built(void* gi, void* gm)
     repaint_ground(gm ? *(char**)((char*)gm + GM_CTRLS) : NULL);
     s_leaveOk = leave_guard();
     s_open = 1;
-    tagpu_cards_open(s_q8);
+    tagpu_cards_open(s_q8, gm);
     s_gm = gm;
     s_push.valid = 0;
     region_publish(gi ? *(void**)((char*)gi + 0x18) : NULL);

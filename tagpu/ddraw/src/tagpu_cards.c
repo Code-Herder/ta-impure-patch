@@ -46,6 +46,7 @@ static Plane s_bg, s_row[2], s_button[2][4], s_line[2];
 static struct { unsigned char hdr[24], pix[64]; } s_chip[256];
 static unsigned char s_bgFrame[64][24];
 static unsigned char s_glyph[3][2][24], s_greyGlyph[3][32 * 32];
+static void* s_gm;
 static int s_ready, s_open, s_visible, s_q8, s_first, s_count, s_pitch, s_slots;
 static int s_held[2], s_action = -1;
 static TAGPU_HUD_DOCKMAP s_rect;
@@ -141,18 +142,23 @@ static unsigned colour(unsigned logo)
 
 static int inside(int x, int y)
 {
-    return s_visible && x >= s_rect.l && x < s_rect.l + WIDTH &&
+    const char* ta = *(const char* const*)0x00511DE8u;
+    /* Comparing the slot identity requires no dereference of the stored GUI pointer. The main
+       block owns its current top at +0x531; a modal takes input as soon as it is pushed. */
+    return s_visible && ta && *(void* const*)(ta + 0x531) == s_gm && x >= s_rect.l && x < s_rect.l + WIDTH &&
            y >= s_rect.t && y < s_rect.t + s_rect.h;
 }
 
-void tagpu_cards_open(int q8)
+void tagpu_cards_open(int q8, void* gm)
 {
+    s_gm = gm;
     s_open = prepare(); s_q8 = q8; s_first = 0;
 }
 
 void tagpu_cards_close(void)
 {
     s_open = s_visible = 0;
+    s_gm = NULL;
     s_action = -1;
     tagpu_hud_cards_set(0);
 }
@@ -259,6 +265,13 @@ static void number(char* b, size_t n, float v)
     else snprintf(b, n, "%.0f", v);
 }
 
+static void rate(char* b, size_t n, float v)
+{
+    char value[24];
+    number(value, sizeof value, v);
+    snprintf(b, n, "%s%s", isfinite(v) && !signbit(v) ? "+" : "", value);
+}
+
 static void button(int x, int y, int w, const char* caption, int a, int enabled, int active)
 {
     int mx = g_ddraw.cursor.x, my = g_ddraw.cursor.y;
@@ -294,14 +307,15 @@ void tagpu_cards_draw(void)
         snprintf(line, sizeof line, "U:%u", p->units);
         text_at(x + 153, cy + (h == NORMAL ? 16 : 4), 46, line, !p->units);
         if (h == NORMAL) text_at(x + 133, cy + 4, 66,
-            !p->units ? "Defeated" : p->commander_losses ? "Cmdr lost" : "0 cmdr lost", !p->units);
+            !p->units ? "Defeated" : p->commander_alive < 0 ? "Cmdr: ?" :
+            p->commander_alive ? "Cmdr alive" : "No cmdr", !p->units);
         number(m, sizeof m, p->metal); number(e, sizeof e, p->energy);
         snprintf(line, sizeof line, "M %s   E %s", m, e);
         text_at(x + 8, cy + 16, h == NORMAL ? 139 : 188, line, 0);
         if (h == NORMAL) {
-            number(mi, sizeof mi, p->metal_in); number(mo, sizeof mo, p->metal_out);
-            number(ei, sizeof ei, p->energy_in); number(eo, sizeof eo, p->energy_out);
-            snprintf(line, sizeof line, "M +%s/-%s  E +%s/-%s", mi, mo, ei, eo);
+            rate(mi, sizeof mi, p->metal_in); rate(mo, sizeof mo, -p->metal_out);
+            rate(ei, sizeof ei, p->energy_in); rate(eo, sizeof eo, -p->energy_out);
+            snprintf(line, sizeof line, "M %s/%s  E %s/%s", mi, mo, ei, eo);
             text_at(x + 8, cy + 27, 188, line, 0);
         } else if (!p->units) {
             text_at(x + 150, cy + 16, 48, "Defeated", 1);

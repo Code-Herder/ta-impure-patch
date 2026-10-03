@@ -4989,7 +4989,13 @@ static void sight_change(char* ta)
     char why[200] = "the selected timeline is unavailable";
     const RecTimeline* timeline;
     s_viewPending = 0;
-    if (seat >= REC_PLAYERS || !level_of(ta, &L) || !L.now || L.now == UINT32_MAX) return;
+    if (seat >= REC_PLAYERS || !level_of(ta, &L) || L.now == UINT32_MAX) return;
+    /* Expiry removes stamps with an expiry strictly below GameTime. At zero it can remove
+       none; a seek to the first image has no stamps, so that case still permits Sight. */
+    if (!L.now && *(const int*)(ta + OFF_NSIGHTRECS) != 0) {
+        snprintf(why, sizeof why, "temporary sight records cannot expire at GameTime zero");
+        goto refused;
+    }
     if ((unsigned char)ta[OFF_VIEWED] == seat) return;
     T = recr_world(s_rd)->tick;
     timeline = recr_selected(s_rd);
@@ -6176,11 +6182,16 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
 {
     const RecHeader* h;
     const RecWorld* W;
-    unsigned i;
+    char* ta = ta_main();
+    Lv L;
+    unsigned i, slot;
+    int rows[REC_PLAYERS], sides[REC_PLAYERS], valid;
     int n = 0;
     if (!out || cap <= 0 || !tagpu_replay_live()) return 0;
     h = recr_header(s_rd);
     W = recr_world(s_rd);
+    valid = ta && level_of(ta, &L);
+    for (i = 0; i < REC_PLAYERS; i++) rows[i] = sides[i] = -1;
     for (i = 0; i < h->nseats && i < REC_PLAYERS && n < cap; i++) {
         unsigned seat = h->seats[i].index;
         const char* p;
@@ -6189,6 +6200,9 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         p = (const char*)W->player[seat];
         dst = &out[n++];
         memset(dst, 0, sizeof *dst);
+        rows[seat] = n - 1;
+        sides[seat] = h->seats[i].side;
+        dst->commander_alive = valid && h->seats[i].side < L.sides && h->seats[i].side < 5 ? 0 : -1;
         dst->seat = seat;
         dst->colour = h->seats[i].logo;
         lstrcpynA(dst->name, h->seats[i].name, sizeof dst->name);
@@ -6203,6 +6217,25 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
         memcpy(&dst->metal, p + PL_METAL, 4);
         memcpy(&dst->metal_in, p + 0x9C, 4);
         memcpy(&dst->metal_out, p + 0xA0, 4);
+    }
+    /* The engine's commander test compares UnitName with the owning side's commander name
+       (0x4864CB..0x48650F). The loader stores a 32-byte name (0x431B6D); the table has five
+       0x232-byte records, bounded by its free loop (0x431A20). Recorded slot, owner and def IDs
+       are data: every array index is bounded before use, and addr_of bounds the def ID by
+       UNITINFOCount. The same recorded unit image drives the puppet world and this status. */
+    for (slot = 1; valid && slot < W->slots; slot++) {
+        unsigned owner;
+        int row;
+        char* def;
+        if (!W->live[slot] || !(img_u32(W, slot, U_STATE) & U_ALIVE)) continue;
+        owner = img_u32(W, slot, U_OWNERREC) - 1;
+        if (owner >= REC_PLAYERS || (row = rows[owner]) < 0 || out[row].commander_alive < 0) continue;
+        if (!addr_of(&L, SIM_ID_UNIT_TYPE, img_u32(W, slot, U_DEF), &def) || !def) {
+            out[row].commander_alive = -1;
+            continue;
+        }
+        if (!_strnicmp(def + 0x20, ta + 0x37F5F + (size_t)sides[owner] * 0x232, 0x20))
+            out[row].commander_alive = 1;
     }
     return n;
 }

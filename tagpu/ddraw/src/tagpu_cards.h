@@ -3,7 +3,7 @@
 #include <windows.h>
 /* Game-thread companion to DOCK.GUI. The post-GUI layer shares the dock's paired-click rule;
    an engine modal hides it. No pointers to its mutable model cross into a frame packet. */
-void tagpu_cards_open(int q8);
+void tagpu_cards_open(int q8, void* gm);
 void tagpu_cards_close(void);
 void tagpu_cards_tick(int on_top);
 void tagpu_cards_draw(void);

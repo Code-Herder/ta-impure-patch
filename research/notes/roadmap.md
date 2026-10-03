@@ -3757,6 +3757,18 @@ shipped-mod saved fixtures, and the Windows smoke checks. The effective loaded c
 piece guard exposes malformed bundled ZZZ content in four setups while admitting unused
 extra declarations in normal units. Generic compatibility battles do not establish feature parity.
 
+### Replay player cards — S5 branch, validation in progress
+
+| gate | state | scope |
+|---|---|---|
+| Player cards and independent Sight | implemented on the S5 worktree, not landed | recorded stats and commander presence; compact/normal rows and scrolling; Full map/Sight without camera movement; disabled camera controls for recordings without streams |
+| Runtime and landing verification | in progress | four-seat layouts at 640×480 and HUD150%; synthetic nine-row scroll/input check; death-vision comparisons, final layouts, both builds and independent reviews still required |
+
+The [player-card note](tadr-port/demo-recorder-player-cards.html) records the implementation,
+bounds, frame ordering, measured checks and remaining gates. The cards share the dock's post-GUI
+path so the world between the two panels remains interactive. Camera streams and Overlays are
+separate recorder/UI work.
+
 ## Hardware portability: depth, lines, and a remote Windows test (G21)  [LANDED 2026-09-25]
 
 The plan is [Hardware portability](hardware-portability.html). On an AMD GCN card on its Windows
