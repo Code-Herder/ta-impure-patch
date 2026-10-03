@@ -182,7 +182,9 @@ int tagpu_cob_check_record(const TagpuCobProgram* p, const TagpuCobRecord* r,
             return fault(reason, capacity, "animation wait exceeds piece allocation");
         break;
     case 0x02800000:
-        if ((uint32_t)r->child >= TAGPU_COB_THREADS)
+        /* -1 is the native allocator's refusal sentinel, compared by RETURN
+           against a bounded slot, never used as an array index (0x4B1A12). */
+        if (r->child != -1 && (uint32_t)r->child >= TAGPU_COB_THREADS)
             return fault(reason, capacity, "CALL waits on an invalid child slot");
         break;
     default: return fault(reason, capacity, "invalid thread status");

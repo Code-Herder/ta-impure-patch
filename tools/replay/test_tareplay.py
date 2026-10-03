@@ -16,7 +16,7 @@ import sys
 import tempfile
 import unittest
 import zlib
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -27,6 +27,33 @@ import tarec  # noqa: E402
 import tareplay  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
+
+
+class FailedWorkerCleanup(unittest.TestCase):
+    def test_failed_game_is_stopped_even_if_artifact_collection_fails(self):
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+                            "procs": {}, "problems": []}}
+        worker = Mock(name="worker")
+        worker.name = "owned"
+        worker.collect.side_effect = OSError("artifact write failed")
+        with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
+             patch.object(tareplay, "say"):
+            self.assertIsNot(run.job(worker, "naval", "W"), False)
+        worker.stop.assert_called_once_with(hard=True)
+        self.assertEqual(run.fx["naval"]["problems"][0], ("W", "FAILED", "COB STOP"))
+
+    def test_worker_is_retired_if_failed_game_cannot_be_stopped(self):
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+                            "procs": {}, "problems": []}}
+        worker = Mock(name="worker")
+        worker.name = "owned"
+        worker.stop.side_effect = tareplay.CouldNotRun("still running")
+        with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
+             patch.object(tareplay, "say"):
+            self.assertIs(run.job(worker, "naval", "W"), False)
+        self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
 
 
 class RewindPolicy(unittest.TestCase):

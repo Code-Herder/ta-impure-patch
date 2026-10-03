@@ -284,7 +284,13 @@ class Worker:
         stop_xvfb(self.xvfb)
         self.lock.close()
 
-    def stop(self):
+    def stop(self, hard=False):
+        if hard:
+            rc, detail = tacli("stop", self.name, "--hard", timeout=120)
+            if rc or self.running():
+                raise CouldNotRun(f"failed game cleanup: {last(detail)}; instance still held")
+            self.last_collection = None
+            return
         if self.last_collection:
             self.quit()
         else:
@@ -1742,9 +1748,18 @@ class Run:
             say(f"{name} {proc}: {kind}: {why}")
             try:
                 w.collect(out)
-                w.stop()
             except Exception:
                 pass
+            # A guard stop blocks the game thread, so its GUI cannot perform a
+            # graceful exit. The next job may reuse this worker only after the
+            # owned process has ended, even when collecting artifacts failed.
+            try:
+                w.stop(hard=True)
+            except Exception as cleanup:
+                why = f"failed game cleanup: {cleanup}"
+                fx["problems"].append((proc, "could not run", why))
+                say(f"{name} {proc}: {why}; retiring {w.name}")
+                return False
         say(f"{name} {proc}: {time.time() - t0:.0f} s")
 
     def worker(self):
@@ -1763,7 +1778,8 @@ class Run:
                             return
                     continue
                 try:
-                    self.job(w, name, proc)
+                    if self.job(w, name, proc) is False:
+                        return
                 finally:
                     self.done()
         finally:

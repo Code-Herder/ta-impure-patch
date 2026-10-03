@@ -340,3 +340,29 @@ and full COB execution-state preservation remains outside this landing. S4d
 has not been fast-forwarded to main. The next work is to resolve the naval
 puppet guard failure and establish why the Watch launch had no UI snapshot
 before attempting another complete landing gate.
+
+
+### O15 and worker cleanup correction
+
+The resumed investigation reproduced both symptoms from the retained recording.
+The naval stop came from treating stock's exhausted-CALL child `-1` as fatal;
+its exact native behavior is now preserved with a sentinel-or-slot bound. The
+subsequent Watch failure came from reusing that still-stopped game process after
+graceful cleanup failed. Failed jobs now terminate their owned process before
+worker reuse and retire the worker if termination cannot be confirmed. See
+[the COB note](cob.md#o15-exhausted-call-and-failed-worker-cleanup).
+
+On the reference Wine setup, the same recording now passes round trips at 1681,
+2071 and 2761 (63, 25 and 32 ms), each with 26 tables poisoned and zero residue.
+The dumps 300 ticks after each round trip compare EQUAL, including radar, with
+37, 34 and 33 live units respectively. A control using the earlier DLL still
+stops at the guard; the fixed harness confirms its process has ended before
+starting stock Watch on that same worker; all eight Watch checks pass, including
+Leave and a second Watch. The full-pool CALL probe separately
+checks both human and local-AI records and a continuing match. Full-tier and
+review verification of these corrections remain required before landing.
+
+The START full-pool control also passes all 16 getter checks: refused arguments
+are consumed, SIGNAL frees the seven sleeping children, and getter CALLs resume.
+The portable COB suite passes 40 tests, and the replay harness suite passes 32,
+including collection-failure cleanup and retirement after failed termination.

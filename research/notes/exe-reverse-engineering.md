@@ -14767,7 +14767,7 @@ value; the handler follows each compare):
 | GET_UNIT_VALUE `…42000` / GET `…43000` / `…44000` / `…45000` | `0x4B15B3` `0x4B1630` `0x4B1622` `0x4B16B8` | `vt+0x44(id, 0, 0, 0, 0)` for the first |
 | SET_LESS … LOGICAL_NOT | `0x4B16AE` `0x4B1707` `0x4B16FD` `0x4B1761` `0x4B1757` `0x4B17BB` `0x4B17B1` `0x4B181D` `0x4B1813` `0x4B188A` | |
 | START `0x10061000` | `0x4B1880` (body `0x4B18B0`) | inline `[pc+1]` script index, `[pc+2]` argc; alloc; **refused (`0x4B18C2`) → the argc words stay on the parent's stack** and pc += 3; else pops them into `child.stack[0..argc−1]` in push order **without setting the child's sp** (it stays `−1`; the child's `CREATE_LOCAL_VAR`s climb over them), `child.mask = parent.mask`; pc += 3 |
-| CALL `0x10062000` | `0x4B1911` (body `0x4B191D`) | as START, then `parent+0x18 = child slot`, parent status `0x2800000`, stop — **the child slot is written even when it is `−1`, and nothing ever wakes a thread waiting on `−1`: a `call-script` on a full pool blocks the caller for ever** (not yet seen live) |
+| CALL `0x10062000` | `0x4B1911` (body `0x4B191D`) | as START, then `parent+0x18 = child slot`, parent status `0x2800000`, stop — **the child slot is written even when it is `−1`, and nothing ever wakes a thread waiting on `−1`: a `call-script` on a full pool leaves the caller dormant until it is killed** |
 | `0x10063000` | `0x4B1903` (body `0x4B1984`) | pops `[pc+2]` words into the runner's own frame `[esp+0x20..]`, pc += 3 `[unknown use]` |
 | JUMP `0x10064000` | `0x4B19BB` | pc = inline |
 | RETURN `0x10065000` | `0x4B19B1` (body `0x4B19D0`) | if `+0x20`: pop → `cb->slot0(value)`; else the value stays on the stack; status `0`, `+0x53C--`; every record with status `0x2800000` and `+0x18 == this slot` → running; stop |
@@ -14780,6 +14780,37 @@ value; the handler follows each compare):
 
 The tail: `0x4B1BD5` pc++, `0x4B1BD9` writes pc back, `0x4B1BDC` loops while the flag is set,
 `0x4B1BE8` unwinds.
+
+### Exhausted CALL is a dormant thread, not an invalid address (O15)
+
+[DISASSEMBLED 2026-10-03] `0x4B08C0` returns `-1` for an invalid script index
+(`0x4B08C5..0x4B08D0`, `0x4B092C`) or eight occupied records
+(`0x4B08D7..0x4B08ED`). The guarded opcode validates its script index first,
+so a refused VM CALL is the latter. `0x4B192F` skips argument copying on refusal:
+the parent's stack and SP stay intact. `0x4B1965..0x4B197F` writes child `-1`,
+advances PC by three, sets status `0x02800000` and stops this thread's execution.
+
+The status dispatch `0x4B0DBF..0x4B0E49` leaves a CALL wait dormant. RETURN's
+wake loop `0x4B19F4..0x4B1A23` visits exactly eight records and compares each
+waiting record's child value with the returning slot at `0x4B1A12`; it never
+uses the child as an address or index. SIGNAL can kill the waiting record by
+its signal mask. No returning slot equals `-1`, so the refused call cannot
+resume by accidentally borrowing another child's completion. The native
+per-unit runner `0x4B0D60` continues visiting the other seven records.
+
+Impure preserves that state. `tagpu_cob_check_record` accepts child `-1` or
+`0..7` only; the expanded and native save readers apply the same validation.
+Other negative values and out-of-range slots remain faults. A refused START
+still consumes arguments in the guarded adapter to bound repeated failed starts.
+This is a sentinel-and-bounds argument; no retry or enlarged thread pool is used.
+
+[MEASURED 2026-10-03] The full-pool fixture held eight busy records on each of
+human unit 2 and local-AI unit 1002. Their refused CALLs retained 128 arguments
+(all 123), SP 127, PC 286, status `0x02800000`, child `-1`; the game advanced
+48 more ticks. The synthetic portable check accepts this sentinel through
+expanded save/load and native 32-word import, and rejects child `-2`, `8` and
+`2147483647`. This does not make a refused child execute or preserve COB history
+across a replay seek. See [COB compatibility](tadr-port/cob.html#o15-exhausted-call-and-failed-worker-cleanup).
 
 ### The piece animation array `cob+0x14` and the stepper `0x4B1C00` (tacob landing 3)
 

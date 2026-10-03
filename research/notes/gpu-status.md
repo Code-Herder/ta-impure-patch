@@ -2038,7 +2038,8 @@ Before allocating a saved level, the saved `Summary/maxunits` is validated and w
 to `main+0x37EE6/+0x37EEC` so the restored IDs keep their original player partition. On the engine's
 script-executing thread, the guarded adapter owns eight 128-word records (`cob+0x1C`, stride
 `0x224`), busy count `+0x113C`, and relocated model pointer `+0x1140`; it initializes stacks,
-transfers bounded child arguments, and restores validated records/statics/animation and piece
+transfers bounded child arguments, retains a refused CALL's arguments and dormant
+child `-1` sentinel, and restores validated records/statics/animation and piece
 state on load. These are simulation writes, not renderer-owned state. Local entry chat uses
 the engine's reminder API. The detailed lifetime, ordering and patch inventory are in §2.105
 and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integration-disassembled-measured-2026-09-28).

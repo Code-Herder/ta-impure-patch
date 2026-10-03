@@ -158,6 +158,38 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(self.validate(self.blob([opcode, 1, 0x10065000], ["base"]))[0])
             self.assertFalse(self.validate(self.blob([opcode, 0, 0x10005000, 2], ["base"]))[0])
 
+    def test_failed_call_sentinel_is_bounded_and_survives_save_load(self):
+        data = C.create_string_buffer(self.blob([0x10065000]))
+        reason = C.create_string_buffer(256)
+        program = self.lib.tagpu_cob_program(data, len(data) - 1, reason, len(reason))
+        self.assertTrue(program, reason.value)
+        try:
+            records = (Record * 8)()
+            saved = C.create_string_buffer(24 + 8 * C.sizeof(Record))
+            result, busy = (Record * 8)(), C.c_uint()
+            for child in (-1, 0, 7):
+                records[0] = Record(status=0x02800000, sp=127, child=child)
+                records[0].stack[127] = 123
+                self.assertTrue(self.lib.tagpu_cob_save_records(
+                    program, 99, records, saved, len(saved), reason, len(reason)), reason.value)
+                self.assertTrue(self.lib.tagpu_cob_load_records(
+                    program, 99, saved, len(saved), result, C.byref(busy), reason, len(reason)), reason.value)
+                self.assertEqual((busy.value, result[0].child, result[0].sp, result[0].stack[127]),
+                                 (1, child, 127, 123))
+            import struct
+            old = bytearray(struct.pack('<I', 99) + bytes(8 * 164) + struct.pack('<I', 1))
+            struct.pack_into('<IIi', old, 4, 0x02800000, 0, 7)
+            struct.pack_into('<i', old, 4 + 0x18, -1)
+            self.assertTrue(self.lib.tagpu_cob_load_records(
+                program, 99, bytes(old), len(old), result, C.byref(busy), reason, len(reason)), reason.value)
+            self.assertEqual((busy.value, result[0].child, result[0].sp), (1, -1, 7))
+            for child in (-2, 8, 2147483647):
+                records[0].child = child
+                self.assertFalse(self.lib.tagpu_cob_save_records(
+                    program, 99, records, saved, len(saved), reason, len(reason)))
+        finally:
+            self.lib.tagpu_cob_program_free(program)
+
     def test_expanded_save_round_trip_and_old_save_import_are_transactional(self):
         import struct
         op = cob_audit.tacob.OP

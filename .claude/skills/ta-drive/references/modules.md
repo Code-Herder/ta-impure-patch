@@ -90,7 +90,10 @@ local 100 and every argument of a 100-argument CALL. `--roundtrip` saves and res
 expanded records; `--quarantine` checks type exclusion, native chat and a presented-window
 capture; `--reject-required` expects a required-unit refusal. Separate
 `--thread-exhaustion start|call` fixtures fill all eight records and exercise refused calls
-with a full 128-word argument stack. `--expect stock-zero` is the negative API control.
+with a full 128-word argument stack. START consumes refused arguments and resumes
+after SIGNAL frees slots; CALL retains the arguments, leaves its parent dormant
+on child `-1`, and checks that the match keeps advancing.
+`--expect stock-zero` is the negative API control.
 `--skirmish-ceiling` fills player three's native block and asserts live ID 6000 in a
 15001-slot pool. It configures ESC's own `TAESC.ini` and `Software\TA Esc` registry root,
 not retail's settings. Skirmish activates only four players; this is not evidence for
