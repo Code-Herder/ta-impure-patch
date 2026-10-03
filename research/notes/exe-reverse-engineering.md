@@ -3060,7 +3060,7 @@ argument are in the fork note.
 | `0x4648E0` the AI profiles | `cdecl (void)`, plain `ret` (`0x46498D`) | ends by calling `0x409F80(i)` and `0x40A040(i)` for each record that is active and of type 2 (`0x46494E..0x464982`) |
 | `0x440A40` the passability refresh | `stdcall (xz, wh)`, `ret 8` | calls `0x440830(ctx, xz, wh)` for each of the 32 contexts `0x512358..0x512758` whose first dword is set (`0x440A4B..0x440A67`). `0x440830` sign-extends x, z, w and h from words, computes x+w+1 and z+h+1 in 32 bits, clamps x and z at 0 (signed) and the ends to `ctx+0x10` and `+0x14` (unsigned) (`0x440833..0x440897`), so `(0, 0x7FFF7FFF)` is every context whole |
 | `0x48BD00` deselect all | `cdecl (void)`, plain `ret` | `+0x110 &= 0xFFFFFF2F` on every slot from `[main+0x14357]` to `[main+0x1435B]`, then `0x491D70(0)` (`0x48BD00..0x48BD42`) |
-| `0x464290` the seat activation | `stdcall (seat, type)` | with type 0 it zeroes `rec+0x74` without freeing it (`0x46434A`) |
+| `0x464290` the seat activation | `stdcall (seat, type)` | zeroes `rec+0x74` without freeing it (`0x46434A`), including types 0 and 3; sets the active DWORD to 1 (`0x464364`), so type 0 is not an active-DWORD clear |
 | `0x4904B0` the objective's disarm | `thiscall` | writes only `obj+0x88 = 0` (`0x4904B0..0x4904BA`); the takeover writes 1 back |
 
 **The player init's tail, `0x46489D..0x4648CD`.** A record that is active and of type 3 skips the AI
@@ -3068,6 +3068,31 @@ object and the acquisition record (`0x46489D..0x4648A5`), so a puppet seat holds
 takeover makes both, in the init's order. **The teardown `0x464A00` frees both**: `0x40B390` with the
 record's map bit, then `0x408F10` and `0x4B4F20` on `+0x74`, which it zeroes
 (`0x464A41..0x464A6B`).
+
+**Live rewind prerequisites [DISASSEMBLED and MEASURED 2026-10-02].**
+[The S4d experiments](tadr-port/demo-recorder-s4-rewind.md) call the same routines
+from the game-thread frame visit before `0x4969CD`. For a newly seated spectator,
+`0x464700(rec)` supplies sight `+0x7C`, groups `+0x78` and statistics `+0xEC`,
+while its active-type-3 branch skips the AI objects. Repeated seating must reuse
+these buffers: its call `0x480190(rec)` at `0x464898` allocates `0x140` bytes
+through `0x4D83B0` and overwrites `+0x78` at `0x4801B1` without freeing the old
+pointer; the remainder initializes ten `0x20`-byte groups and returns `ret 4`
+at `0x4801E3`. P1 reused all three buffers across two activations at GameTime
+1522 and then completed teardown and a second skirmish load.
+
+The scheduler's player scan tests active/type 3 at `0x4952CF..0x4952D6`, then
+skips a zero live count `+0x144` at `0x4952D8..0x4952DF`, before reading the
+pacing stamp `+0x18` at `0x4952E1`. An empty spectator therefore needs no stamp
+write. P1 measured 318 ticks in 10.454 seconds with that seat controlled.
+
+For the reverse conversion, P2 killed 1370 live units while all four seats still
+held their local types and AI objects. After zero units remained, the type
+setter and the teardown sequence above cleared both objects; rebuilding made
+1416 puppets with zero refusals. `0x40B390(seat)` clears `0x5119C0[seat]` at
+`0x40B514` and returns `ret 4` at `0x40B51E`; `0x408F10` receives the AI object
+in ECX and `0x4B4F20` receives it as a caller-popped argument, as shown at
+`0x464A5B..0x464A68`. The experiment covers the battle fixture, not every order
+handler, and does not test return-to-now or the live writer handshake.
 
 **A create picks the proxy movement class only for a remote owner**: `[owner+0] != 0 && owner+0x73 ==
 3` (`0x43DC4A..0x43DC57`). So the seats' types must be set after the last kill and before the first

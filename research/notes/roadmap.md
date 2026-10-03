@@ -3871,6 +3871,11 @@ evict the least recently used, preserve shared history and provide delete/export
 through tacli (S4c); live rewind, the in-game controls and network games are its later landings; until then a
 network game played with Impure records no demo.
 
+[S4d's prerequisite experiments](tadr-port/demo-recorder-s4-rewind.html) passed
+on 2026-10-02: a spectator was seated and reused mid-game, and 1370 live units
+were destroyed before their AI objects were released and 1416 puppets rebuilt.
+The live rewind implementation and its full replay gates remain pending.
+
 ## The restorer as compute (2026-09-27)
 
 The Classic++ restorer's backend moves from fragment passes to Vulkan compute, and the speed goes
