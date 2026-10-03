@@ -1,7 +1,7 @@
 # Replay player cards
 
-Implementation on the S5 branch; runtime validation is complete, with independent review and
-local landing pending. This is the card portion
+Implemented and runtime-validated, including two independent high-effort reviews and their
+frame-boundary corrections. This is the card portion
 of [the S5 design](demo-recorder-s5-ui.md). Camera streams and the Overlays panel remain separate
 work. The existing recording format has no camera stream, so Jump, Follow and Free cam are
 visibly disabled. Hovering a camera control explains “Camera was not recorded.”
@@ -73,7 +73,10 @@ Pixel centres within the rounded bounds still sample inside the source rectangle
 The enabled scale is published separately from the dock's, because a modal hides the cards while
 the dock may remain drawn underneath it. At the game-thread flip, `OP_FLIP.dy` captures the card
 scale; `PK_FRAME.h` carries it with that frame's drawing operations. The consumer resolves the
-rectangle from this marker, not from a newer live input word. `uCards`, `uCardsMap` and `uCardsS`
+rectangle from this marker, not from a newer live input word. A drain consumes through its
+initially captured queue head, bounded by the 65,535 published slots, so it cannot stop between
+a window's drawing and its marker. If capture cannot append the terminating flip marker, it
+discards that window before publication and requests a reseed for the next complete window. `uCards`, `uCardsMap` and `uCardsS`
 occupy std140 offsets 128, 144 and 160 in the 176-byte composite uniform block. At 1× the card
 pixels already lie at their device positions and the magnification branch is inert.
 
@@ -135,3 +138,26 @@ round trips, fresh seeks and applicable takeover/fork checks passed. The gate at
 
 Independent review and local landing remain pending. The dock and cards currently select retail art even on Escalation; mod-specific dock
 selection is a pre-existing open item in the S5 design.
+
+
+### Review corrections and final UI check
+
+The synchronization review found two ways a draw could lose its matching scale marker:
+the consumer's 20,000-operation cutoff and a full capture array omitting the final flip.
+The consumer now drains through the captured publication boundary, and the producer rejects
+captures without their terminating marker before publication. The next complete window reseeds
+producer caches and consumer surfaces. A focused independent review verified cleanup, retirement
+and the pending reset across disabled or stalled publication.
+
+Native control-flow tests extracted the queue traversal and marker assignment from the source,
+with raster branches stubbed: six cases covered batches of 20,010 and 65,534 operations, ring
+and unsigned-counter wrap, and a concurrently published batch left for the next drain. The old
+cutoff failed the same fixture. Extracted capture branches accepted the final available slot and
+rejected a full array or missing surface before publication. These tests do not execute the full
+raster or snapshot implementation; the latter's cleanup was verified in the focused review.
+
+The rebuilt DLL then ran a four-seat replay at 1280×720 with repeated `reseedstress=120` resets,
+first at stock HUD and then at 150%. Presented pixels at 150% were inspected; device clicks
+selected seat 0 and full-map viewer 4. Config replaced the cards, closing it restored the dock
+and cards, and another Sight click selected seat 0. Both standard and stock-limit builds passed.
+The replay gate remains valid because these corrections change presentation files only.

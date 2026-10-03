@@ -1471,10 +1471,12 @@ static int tint_pieces(const TWIN* t, const TAGPU_PUBOP* o, int out[TINT_PIECES]
 static void drain(void)
 {
     unsigned tail = g_guiq.qTail, head = g_guiq.qHead;
-    int budget = 20000;                    /* ops per present: a burst is many flips */
+    /* qHead exposes whole windows. Drain this captured boundary completely so
+       their pixels and PK_FRAME metadata stay together; QCAP - 1 bounds the
+       work even if the producer publishes more while we consume. */
     int ti;
     for (ti = 0; ti < s_ntwins; ti++) s_twins[ti].nLost = 0;
-    while (tail != head && budget-- > 0) {
+    while (tail != head) {
         const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
         TWIN* t;
         unsigned char col = 0;          /* TAGPU_GUIOP::col                   */

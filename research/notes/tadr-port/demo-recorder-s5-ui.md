@@ -2,7 +2,7 @@
 
 ## Status
 
-**Planned 2026-10-01. Landings 0 to 2 are built on the S5 branch and not landed**: the art
+**Planned 2026-10-01. Landings 0 to 2 are implemented**: the art
 pipeline, the shell (REPLAYS and the browser) and the watching dock (*The watching dock*). This is
 the plan for the
 [skirmish slice](demo-recorder-skirmish-slice.md)'s S5: the Replays browser, the timeline bar,
@@ -397,8 +397,8 @@ stage for is put on the nearest preset (a tie goes to the slower).
 - **The retail art is supplied.** The owner's 2026-10-02 kit replaces the title font,
   `dock-tex`, `strip-track`, `strip-fill` and all 28 sprite frames. The title, transport icons,
   strip, playhead and bookmark were checked in the running retail browser (640×480) and
-  watching dock (1280×720) on the reference setup. Player cards are implemented on the S5 branch
-  and covered by [their module note](demo-recorder-player-cards.md). Overlays and live rewind
+  watching dock (1280×720) on the reference setup. Player cards are implemented, runtime-tested
+  and independently reviewed; they are covered by [their module note](demo-recorder-player-cards.md). Overlays and live rewind
   remain proposals.
 - **GDI does not implement HUD scale**, for the dock as for the bars: the picture stays 1x while
   the pointer map is magnified (GUI renderer §22.7).
