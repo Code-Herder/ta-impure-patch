@@ -15935,3 +15935,29 @@ image for each bounded, identity-matched live slot and omits that extra scan;
 318 retains `0x30280221` and its complete before/after frame compares EQUAL.
 The seated records' saved `+0xF0` deadlines still schedule the next engine scan.
 Historical seeks retain their existing scan and contact policy.
+
+
+### COB explosion additions and their child flares
+
+DISASSEMBLED: EXPLODE `0x481140` gets the piece's world position through
+`0x43E060` at `0x48125A`. Flag `0x400` selects the call at `0x4812CE`, returning
+to `0x4812D3`: explosion add `0x420A30(point, sequence, 2, 0)`. The sequence
+comes from `main+0x147FF`. The add checks its pool capacity at `0x420A42`, then
+its fourth argument at `0x420ABE..0x420AC4`; for zero, it compares the point's
+signed y word with the sea-level byte `main+0x1427F` at `0x420ACC..0x420AD8`.
+Only a point above water reaches its single flare call at `0x420AE1`, returning
+to `0x420AE6`. Thus each admitted add can emit at most one such flare. The
+raised-limits build relocates the explosion count and records to `s_expl`;
+`main+0x1491B` is not that build's active pool count.
+
+MEASURED 2026-10-03, retained naval recording, GameTime [661,2701): the
+`0x4812D3` parent additions number 201 live and 197 in playback; their child
+flares number 33 and 30. A repeated playback produces the same counts. A
+probe at the parent call sees 197 points, 30 above sea level 75, matching the
+30 child flares. A fresh live/playback pair instead has 198 additions and
+41 qualifying points on each side, with 41 flares each. Its point triples
+match except for one small above-water difference. The retained run therefore
+has upstream addition-count variance as well as a child-count difference;
+the measurements do not identify which missing additions supplied the three
+missing flares. The existing parent count band accepts four, while the child
+count band rejects three. No tolerance is changed by these measurements.

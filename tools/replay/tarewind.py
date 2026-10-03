@@ -120,13 +120,9 @@ def run(t, w, fx, out):
         G0 = opened["dump_at"]
         t.arm_dump(w, log, "a", G0 + 30)
         pause_probe("open pause guard")
-        command("close")
-        log.read()
-        check("open-close", not any("sought from GameTime" in ln for ln in log.lines[start:]),
-              "no rebuild between open and close")
-        until(1500)
-        # Kill is a level-4 developer command. Seat 9 is unused, but it still disarms
-        # objectives; restore the original debug switch before comparing the worlds.
+        # Do the objective setup under the existing pause: command latency must not
+        # push the later AI comparison past its initial construction work. Kill is
+        # level 4; seat 9 is empty but still disarms objectives. Restore the debug switch.
         cheats = t.peek(w, "*0x511DE8+0x37F2F:2") & 2
         rc, text = t.tacli("switches", w.name, "cheats=on")
         if rc:
@@ -136,6 +132,11 @@ def run(t, w, fx, out):
         if rc:
             raise t.CouldNotRun(text)
         check("objective disarmed", objective_armed() == 0, "engine +kill 9")
+        command("close")
+        log.read()
+        check("open-close", not any("sought from GameTime" in ln for ln in log.lines[start:]),
+              "no rebuild between open and close")
+        until(1500)
         t.tacli("keys", w.name, "pause")
         t.nap(1)
         G1 = w.gametime()

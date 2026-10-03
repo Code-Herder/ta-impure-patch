@@ -401,3 +401,31 @@ count. No count tolerance or expected-absent row has been changed. The normal
 and stock rewind runs with the contact correction both compare the saved and
 restored frames EQUAL; the normal AI construction check still fails, while the
 stock check passes. These results do not constitute a passing landing tier.
+
+
+#### Separating setup time from the AI window
+
+The objective regression's command setup originally ran after the wait for
+GameTime 1500. It advanced the game to 1670–1692 before pausing. The earlier
+passing runs began their AI comparison near 1530; an initial construction at
+1668 lay inside that window, but before the later window. The fixture now
+performs its debug-switch and empty-seat `+kill` setup during the first rewind's
+existing pause, before closing it and waiting for 1500. The comparison's
+per-seat creation rule, movement fraction and 1800-tick length are unchanged.
+A targeted normal-limits run holds GameTime 638 throughout the setup commands,
+starts its comparison at GameTime 1520 and passes all 25 checks. Seat 2 creates
+in both timelines, and 93.235% of 1020 AI mobile units move. Return-to-now takes
+496 ms and the fork 704 ms. Stock-limits verification of this setup is pending.
+
+#### The naval flare count
+
+The retained failing window has 201 COB explosion additions versus 197 in
+playback at caller `0x4812D3`. That parent difference already passes the existing
+5% band; its child flares, 33 versus 30, fail their separate floor of two.
+Repeated playback reproduces both figures. A fresh instrumented live/playback
+pair produces 198 additions and 41 flares on each side. Disassembly establishes
+at most one child flare per addition, conditional on the piece point being
+above water. The measurements do not identify the individual missing additions.
+The temporary trace has been removed and all four clean builds pass. A proposal
+to bound the child difference by an already-accepted parent difference awaits
+the owner's decision; the current comparison still rejects this recording.
