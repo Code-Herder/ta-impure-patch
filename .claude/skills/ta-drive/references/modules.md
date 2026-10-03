@@ -578,7 +578,7 @@ tools/tacli rm w1                                 # deletes the test folder and 
 
 ## A mod that loads Impure from its own proxy
 
-TA Zero and TA Twilight ship an exe that imports the mod's own ddraw proxy, which loads Impure
+Escalation, TA Zero and TA Twilight ship an exe that imports the mod's own proxy, which loads Impure
 from inside its start-up. **`tacli launch` cannot start them**: it adds `-xtacli-test` and creates
 `tacli-state/`, and the DLL then refuses the launch because `win32.dll`, a static import of the
 exe, is not loaded at attach. Drive them the way the compat suite does:

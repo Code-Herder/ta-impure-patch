@@ -432,7 +432,7 @@ Items 1 to 3 are needed by landing 1, item 4 by landing 5.
 | **4 — live rewind** | the rewind button, the timeline in a live skirmish, Back to now, Play from here | S4 |
 | **5 — the switches** | *Record games* and *Keep replays* | ask 4 |
 
-Escalation has its own ground and plate, with retail's title font; Twilight's style is not drawn
+Escalation has its own ground, plate and title font; Twilight's style is not drawn
 yet and uses the retail style, which is what an unknown mod gets anyway. Each lands as it is
 reviewed.
 
@@ -445,8 +445,10 @@ and leave, polling for error boxes, with a picture per screen.
 
 ## Open
 
-- **The remaining styles.** Retail's 67 replacement PNGs are supplied. Escalation still
-  needs its own font, dock pieces and 28 sprite frames; Twilight needs those plus its browser
-  ground. Escalation uses retail's title font, and the dock explicitly selects retail's kit
-  (`tagpu_dock.c`, `tagpu_art_entry("retail", ART[i])`); supplying another style's sprites alone
-  does not change that selection.
+- **The remaining style.** Retail and Escalation each have their 67 supplied replacement
+  PNGs. Escalation's own title font and favourite badge were checked in its running
+  `REPLAYSE.GUI` at 640×480 on the reference setup, with the mod's executable and archives.
+  Twilight still needs its font, dock pieces, 28 sprite frames and browser ground.
+- **Dock style selection.** The dock explicitly selects retail's kit (`tagpu_dock.c`,
+  `tagpu_art_entry("retail", ART[i])`); Escalation's supplied dock sprites are baked but are
+  not selected by the current dock. Player cards, Overlays and live rewind remain proposals.
