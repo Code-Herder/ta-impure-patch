@@ -3879,8 +3879,9 @@ coverage builds, including exact fresh-seek equality, contiguous recording, AI
 activity and fork playback. Return-to-now measured 504/409 ms and fork 679/493 ms
 on the reference setup. The owner accepted excluding unseated spectator sight
 counters and rewind-only VM child counts; exact COB thread continuation is outside
-this landing. Fresh verification under that policy, the complete landing tier
-and dedicated review remain pending.
+this landing. Both coverage builds now pass all 22 rewind checks under that policy; the
+18-fixture landing tier passes with 47/47 changed functions reached. Dedicated
+review remains before landing.
 
 ## The restorer as compute (2026-09-27)
 

@@ -226,3 +226,27 @@ allocator call with the corresponding diagnostic key. The stock VM already has
 those return addresses. This keeps the exception independent of DLL layout and
 avoids exempting unrelated calls originating in the DLL. The prior coverage runs
 remain recorded as failures under the previous policy; fresh runs are required.
+
+
+### Fresh verification under the accepted scope
+
+Both coverage builds pass all 22 live-rewind checks in the landing run begun on
+2026-10-03. The normal build returns to frame 1531 in 552 ms and forks from 3378
+to iteration 2761 in 699 ms; conversion takes 725 ms. Stock returns to 1530 in
+454 ms and forks from 3389 to iteration 2761 in 513 ms; conversion takes 523 ms.
+These include the requested atomic dumps on the reference setup.
+
+On each build, return-frame equality passes under amended D2; fresh-seek equality
+passes without that mask; both timeline stream checks have zero corrections;
+original iterations are contiguous with the return boundary present once; fork
+frames and subsequent playback dumps compare EQUAL. Both health windows pass.
+AI seat 2 creates in both the baseline and resumed run; seats 1 and 3 have no
+baseline create and are reported as skipped. Movement is 90.945% of 1016 mobiles
+on normal limits and 80.686% of 1020 on stock limits.
+
+Across return-to-now, all 15 root counts match on each build. The normal comparison
+covers 80 sink keys and stock covers 78; only the explicitly reported VM child
+pairs use the accepted exception. This does not establish exact COB execution
+continuity. The complete landing tier passes all 18 fixtures and reaches all 47 changed
+functions on their required builds. Its replay-roundtrip note is on `8cb3ed5e`.
+Dedicated reviews remain required before landing.
