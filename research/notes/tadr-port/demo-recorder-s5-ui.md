@@ -392,8 +392,11 @@ stage for is put on the nearest preset (a tie goes to the slower).
 
 **Gaps.**
 
-- **The art is a stand-in.** `dock-tex`, `strip-track` and `strip-fill` are committed stand-ins
-  drawn by a script (`4ff17b52`); the owner's art replaces them in an ordinary art commit.
+- **The retail art is supplied.** The owner's 2026-10-02 kit replaces the title font,
+  `dock-tex`, `strip-track`, `strip-fill` and all 28 sprite frames. The title, transport icons,
+  strip, playhead and bookmark were checked in the running retail browser (640×480) and
+  watching dock (1280×720) on the reference setup. Player-card, Overlays and live-rewind layouts remain
+  proposals: supplying their sprites does not implement those panels.
 - **GDI does not implement HUD scale**, for the dock as for the bars: the picture stays 1x while
   the pointer map is magnified (GUI renderer §22.7).
 - **Why bit 8 stops a live stage button's clicks** is not known: the pump's click arm reads no
@@ -442,7 +445,8 @@ and leave, polling for error boxes, with a picture per screen.
 
 ## Open
 
-- **The owner's art.** The dock's `dock-tex`, `strip-track` and `strip-fill` and the retail
-  style's title letters `font/` are committed stand-ins (`4ff17b52`), so a clean checkout arms the
-  browser and the dock in both styles (Escalation uses retail's letters). The owner's art replaces
-  them in an ordinary art commit.
+- **The remaining styles.** Retail's 67 replacement PNGs are supplied. Escalation still
+  needs its own font, dock pieces and 28 sprite frames; Twilight needs those plus its browser
+  ground. Escalation uses retail's title font, and the dock explicitly selects retail's kit
+  (`tagpu_dock.c`, `tagpu_art_entry("retail", ART[i])`); supplying another style's sprites alone
+  does not change that selection.
