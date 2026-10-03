@@ -176,7 +176,8 @@ END_REASONS = {1: "complete: the level ended", 2: "INCOMPLETE: the ring was full
                   "was past its records",
                10: "INCOMPLETE: the explored map was not the one it began with",
                11: "INCOMPLETE: a later timeline ended it at its last complete block",
-               12: "pruned: a deleted ancestor's retained prefix"}
+               12: "pruned: a deleted ancestor's retained prefix",
+               13: "complete: continued from a live rewind"}
 
 
 class Unreadable(Exception):

@@ -361,7 +361,8 @@ enum RecEnd {
     REC_END_UNFINISHED,     /* written by a later timeline's writer for the segment before it,
                                which had no end block: it ends at its last complete iteration
                                (RT_LAST)                                                        */
-    REC_END_PRUNED       /* a deleted ancestor ends at its last retained stream block */
+    REC_END_PRUNED,      /* a deleted ancestor ends at its last retained stream block */
+    REC_END_FORKED       /* a live rewind continued from an earlier point */
 };
 
 /* A recording is REC_MAGIC, then one or more SEGMENTS. A segment is an RB_HEADER and the blocks

@@ -1,6 +1,6 @@
 # Live rewind (S4d): prerequisite experiments
 
-Live rewind is not implemented. Its two prerequisite engine experiments passed
+Live rewind is not ready to land. Its two prerequisite engine experiments passed
 on the reference setup, 2026-10-02, using a normal limits build based on
 `f0748b8c`, the battle fixture, and an isolated Wine/Xvfb instance. Temporary
 instrumentation ran in the existing game-thread frame visit before `0x4969CD`;
@@ -61,11 +61,34 @@ or replace the complete replay comparison gates.
 
 ## Remaining implementation
 
-The next work is the writer flush acknowledgement and capture suspension,
-followed by the live rewind state machine. Return-to-now must preserve the
+The branch contains an unfinished implementation of writer flush acknowledgement,
+capture suspension, frame-dump loading and the live rewind state machine.
+Return-to-now must preserve the
 unpublished live iteration and pending effects; a fork must transfer writer
 ownership under [S4c's file locks](demo-recorder-s4-forks.md). These experiments
 used a completed recording as the rebuild source and do not test concurrent
 writer/reader opening, return-to-now equality, or fork handoff. Stock limits,
 the full rewind fixture, documentation and dedicated review remain required
 before the S4d landing.
+
+## Integration checkpoint (2026-10-02)
+
+The normal DLL builds. Live open/close passed, including reporting a complete
+file interval ending one tick before the paused GameTime. The first backward
+seek remains refused before the live-to-puppet conversion: the saved-present
+reader reports `not a complete frame dump`.
+
+The initial smoke run and three fix-and-rerun attempts established:
+
+1. The first-step clock check must be conditional when validating an already
+   running level; map, data and allocation checks still apply.
+2. The summary reader opens without write sharing. A live rewind uses its
+   already-open, validated recording reader's index for the seek interval.
+3. Comparison dumps had only a partial header. Frame dumps now carry the
+   normal recording header metadata, but loading their snapshot still fails.
+
+Work stopped at the project's retry limit. The checkpoint is not a landing or
+proof of return-to-now, fork continuity, or state equality. The CLI's optional
+dump argument still needs integration, as do the permanent rewind fixture and
+comparison checks. Pause-key handling during an open rewind and fork-failure
+recovery need validation before the implementation can be reviewed for landing.

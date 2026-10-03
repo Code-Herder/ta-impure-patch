@@ -582,6 +582,7 @@ typedef struct Rec {
     unsigned char  mrunbuf[REC_MAPPED_RUNS];    /* an RK_MAPPED_RUNS as it is built          */
     unsigned short seated;              /* bit i: the header seats record i (RT_PLAYER)          */
     unsigned       cmdr[REC_PLAYERS];   /* the GameTime each seat's last commander died, 0 none  */
+    unsigned char  rewind_end[4 + 12 * REC_PLAYERS];
     unsigned       defeat[REC_PLAYERS]; /* the GameTime its live count last reached 0, 0 none:
                                            a seat ends defeated only while it is still 0       */
 } Rec;
@@ -599,6 +600,7 @@ static unsigned mapped_bytes(const char* ta);
 enum { ST_IDLE, ST_RECORDING, ST_DONE };        /* DONE: the rest of this level is not recorded */
 static Rec*     s_rec;
 static int      s_state = ST_IDLE;
+static int      s_suspended;
 static RecFork  s_fork;         /* a fork armed for the next capture point; file NULL for none */
 
 /* THE GAME THREAD'S RECORDING. s_tid is the recording's game thread while s_rec is set, and 0
@@ -1339,7 +1341,8 @@ static void rec_end(Rec* r, unsigned reason)
     memcpy(b + 12, &off, 4);
     memcpy(b + 16, &r->uncredited, 4);
     memcpy(b + 20, &unobserved, 4);
-    seats_end(r, reason, b + 24);
+    if (s_suspended) memcpy(b + 24, r->rewind_end, sizeof r->rewind_end);
+    else seats_end(r, reason, b + 24);
     pos = r->w & (REC_RING_BYTES - 1);
     at = r->ring->buf + pos;
     if (pos + 4 + sizeof b > REC_RING_BYTES) {
@@ -1376,6 +1379,7 @@ static void rec_end(Rec* r, unsigned reason)
                "refused off the game thread, %u nano sprays uncredited, %u order nodes whose owner "
                "or list flag disagreed with the list holding them", r->tick,
                reason == REC_END_TEARDOWN ? "the level ended" :
+               reason == REC_END_FORKED   ? "continued from a live rewind" :
                reason == REC_END_RING     ? "INCOMPLETE, the ring was full" :
                reason == REC_END_WRITE    ? "INCOMPLETE, the file could not be written" :
                reason == REC_END_TABLE    ? "INCOMPLETE, no memory for a declared table's growth" :
@@ -2318,10 +2322,18 @@ static int dump_write(const Level* L, int tick, const char* name, int frame)
     t.n = 0;
     t.cap = sizeof hb;
     t.full = 0;
-    tlv_u32(&t, RT_FORMAT, REC_FORMAT);
-    tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
-    tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
-    if (frame >= 0) tlv_u32(&t, RT_FRAME, (unsigned)frame);
+    if (frame >= 0) {
+        char map[64];
+        FILETIME now;
+        map_stem(L->ta, map, sizeof map);
+        GetSystemTimeAsFileTime(&now);
+        header_build(L, tick, map, &now, NULL, &t);
+        tlv_u32(&t, RT_FRAME, (unsigned)frame);
+    } else {
+        tlv_u32(&t, RT_FORMAT, REC_FORMAT);
+        tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
+        tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
+    }
     {
         unsigned v[2] = { s_dllBase, s_dllSize };
         tlv(&t, RT_DLL, v, 8);
@@ -2628,7 +2640,8 @@ static unsigned cnt_caller(unsigned ret)
 /* 1 when this call is counted: the level's game thread, no seek rebuilding */
 static int cnt_on(void)
 {
-    return s_cnt.tid && s_cnt.tid == GetCurrentThreadId() && !tagpu_puppet_rebuilding();
+    return s_cnt.tid && s_cnt.tid == GetCurrentThreadId() && !s_suspended &&
+           !tagpu_puppet_rebuilding();
 }
 
 static void cnt_add(unsigned va, unsigned caller, unsigned aux)
@@ -4393,6 +4406,87 @@ static void rec_stop(unsigned reason)
     s_state = ST_DONE;
 }
 
+int tagpu_rec_rewind_open(char* path, unsigned cap, unsigned* timeline, char* why, unsigned whycap)
+{
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r || s_suspended || r->ev_full ||
+        InterlockedCompareExchange(&r->ring->failed, 0, 0)) {
+        snprintf(why, whycap, "no healthy live recording");
+        return 0;
+    }
+    snprintf(path, cap, "%s", r->ring->path);
+    *timeline = r->ring->fork.id;
+    /* Published capture bytes precede this request. The writer reads the request before wpub,
+       drains that prefix, then acknowledges only after writing its complete iterations. */
+    InterlockedIncrement(&r->ring->flush_req);
+    SetEvent(r->wake);
+    return 1;
+}
+
+int tagpu_rec_rewind_flush(void)
+{
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r || r->ev_full ||
+        InterlockedCompareExchange(&r->ring->failed, 0, 0)) return -1;
+    return InterlockedCompareExchange(&r->ring->flush_done, 0, 0) ==
+           InterlockedCompareExchange(&r->ring->flush_req, 0, 0);
+}
+
+int tagpu_rec_suspend(int on)
+{
+    unsigned z;
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r) return 0;
+    if (on) {
+        if (tagpu_rec_rewind_flush() != 1) return 0;
+        seats_end(r, REC_END_FORKED, r->rewind_end);
+        s_suspended = 1;
+        s_tid = 0;
+        s_rec_fired = 0;
+    } else {
+        /* Observers were inert during the rebuild. Compare every grid row against the original
+           baseline; the pool, map, globals, units and tables already compare their whole image.
+           The ring still holds step G's events; capture G+1 publishes them before its images. */
+        for (z = 0; z < r->feat->h; z++) {
+            r->feat->lo[z] = 0;
+            r->feat->hi[z] = (unsigned short)(r->feat->w - 1);
+        }
+        s_suspended = 0;
+        s_tid = r->tid;
+        s_rec_fired = 1;
+    }
+    return 1;
+}
+
+void tagpu_rec_pending_events(RecPendingVisit visit, void* ctx)
+{
+    Rec* r = s_rec;
+    unsigned at;
+    if (!s_suspended || !r) return;
+    /* [wpub,w) belongs only to the game thread: the writer cannot read or reclaim it. */
+    at = (unsigned)InterlockedCompareExchange(&r->ring->wpub, 0, 0);
+    while (at != r->w) {
+        unsigned pos = at & (REC_RING_BYTES - 1);
+        RecHdr h;
+        memcpy(&h, r->ring->buf + pos, sizeof h);
+        if (h.kind == RK_PAD) { at += REC_RING_BYTES - pos; continue; }
+        visit(ctx, h.kind, r->ring->buf + pos + sizeof h, h.len);
+        at += (sizeof h + h.len + 3) & ~3u;
+    }
+}
+
+HANDLE tagpu_rec_rewind_end(void)
+{
+    HANDLE done;
+    Rec* r = s_rec;
+    if (!s_suspended || !r || !DuplicateHandle(GetCurrentProcess(), r->done,
+        GetCurrentProcess(), &done, 0, FALSE, DUPLICATE_SAME_ACCESS)) return NULL;
+    ring_publish(r, 0);
+    rec_stop(REC_END_FORKED);
+    s_suspended = 0;
+    return done;
+}
+
 void __cdecl tagpu_rec_capture(void)
 {
     char* ta = ta_main();
@@ -4402,6 +4496,7 @@ void __cdecl tagpu_rec_capture(void)
     LARGE_INTEGER t0, t1;
     Rec* r;
 
+    if (s_suspended) return;
     s_fphase = 0;
     if (!ta || !level_read(ta, &L)) return;
     masks_init();
@@ -4558,6 +4653,7 @@ void tagpu_rec_level_end(void)
 #endif
     }
     s_rec = NULL;
+    s_suspended = 0;
     s_state = ST_IDLE;
     tagpu_cover_flush();    /* after the recording's end, so its end is in the level's coverage */
 }

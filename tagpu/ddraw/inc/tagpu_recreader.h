@@ -44,6 +44,7 @@ typedef struct RecTableInfo {
 
 typedef struct RecHeader {
     unsigned     format, mode, start, slots, units_each;
+    unsigned     has_frame, frame;
     unsigned     has_unitdefs, ndefs, defs_hash;
     unsigned     has_weapons, nweapons, weapons_hash;
     unsigned     grid_w, grid_h, wrecks, nfdefs, fdefs_hash;     /* RT_FEATURES             */
@@ -124,6 +125,10 @@ typedef struct RecReader RecReader;
    reader of a file being appended reads its complete blocks only. The timeline played is the
    original (0) until recr_timeline chooses another. */
 RecReader* recr_open(const char* path, char* why, unsigned cap);
+/* A frame dump's single complete snapshot, already applied; never a sequential recording.
+   Its comparison-only sight, count and raw-memory records are skipped, never copied to engine
+   memory. The returned world is labelled frame+1. Caller closes it with recr_close. */
+RecReader* recr_dump_world(const char* path, char* why, unsigned cap);
 /* the file's first header: every segment of a chain agrees with it in shape (recr_timeline) */
 const RecHeader* recr_header(const RecReader* r);
 RecWorld* recr_world(RecReader* r);

@@ -93,6 +93,8 @@ typedef struct Writer {
     Buf            stream;      /* the stream block being built, whole iterations   */
     unsigned       sfirst;      /* its first GameTime                               */
     unsigned       sticks;      /* its iterations                                   */
+    size_t         complete_bytes; /* prefix ending before the current open iteration */
+    unsigned       complete_tick;
     Buf            snap;        /* reused for each snapshot                         */
     unsigned       tick;        /* the iteration being applied                      */
     int            ticked;      /* an iteration has begun                           */
@@ -702,6 +704,23 @@ static void stream_flush(Writer* w)
     block(w, RB_STREAM, w->sfirst, w->tick, w->stream.p, w->stream.n, 1);
     w->stream.n = 0;
     w->sticks = 0;
+    w->complete_bytes = 0;
+}
+
+/* The capture has paused, but its current iteration's events remain unpublished. Only the
+   prefix closed by a later RK_TICK can reach the file. Keep that open iteration in memory;
+   the acknowledgement follows WriteFile, so a reader cannot index a half-written block. */
+static void stream_flush_complete(Writer* w)
+{
+    size_t n = w->complete_bytes;
+    if (!n) return;
+    if (w->stream.oom) { fail(w, "no memory for a stream block"); return; }
+    block(w, RB_STREAM, w->sfirst, w->complete_tick, w->stream.p, n, 1);
+    memmove(w->stream.p, w->stream.p + n, w->stream.n - n);
+    w->stream.n -= n;
+    w->sfirst = w->tick;
+    w->sticks = 0;
+    w->complete_bytes = 0;
 }
 
 /* The copy as records that build it, at the iteration just completed: from nothing but the base
@@ -1020,6 +1039,8 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         if (len != 4 || w->fbracket || w->ndeaths) return 0;
         if (w->ticked) iteration_done(w);
         if (w->dead) return 1;
+        w->complete_bytes = w->stream.n;
+        w->complete_tick = w->tick;
         memcpy(&w->tick, b, 4);
         if (!w->ticked) w->snap_tick = w->tick;
         if (!w->stream.n) w->sfirst = w->tick;
@@ -1258,7 +1279,9 @@ static DWORD WINAPI writer_main(void* arg)
     }
     while (!stop) {
         unsigned wp;
+        LONG req;
         WaitForSingleObject(g->wake, REC_WRITER_POLL_MS);   /* tagpu_recorder.h, *Waking* */
+        req = InterlockedCompareExchange(&g->flush_req, 0, 0);
         wp = (unsigned)InterlockedCompareExchange(&g->wpub, 0, 0);
         while (w && !w->dead && r != wp) {
             unsigned pos = r & (REC_RING_BYTES - 1), avail = wp - r, size;
@@ -1281,6 +1304,12 @@ static DWORD WINAPI writer_main(void* arg)
             r += size;
         }
         if (!w || w->dead) r = wp;        /* parse nothing more: only the hand-over matters */
+        if (w && !w->dead) {
+            if (req != InterlockedCompareExchange(&g->flush_done, 0, 0)) {
+                stream_flush_complete(w);
+                if (!w->dead) InterlockedExchange(&g->flush_done, req);
+            }
+        }
         InterlockedExchange(&g->rpub, (LONG)r);
         stop = InterlockedCompareExchange(&g->ended, 0, 0) &&
                wp == (unsigned)InterlockedCompareExchange(&g->wend, 0, 0);

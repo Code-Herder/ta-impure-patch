@@ -203,7 +203,24 @@ static struct {
 static uint32_t   s_made[0x10000];  /* a slot's GameTime after the step whose create made it: the
                                        slot count is a u16 (THE UNITS' BOOKKEEPING)              */
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
-enum { SK_SEEK, SK_TAKEOVER };
+enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW };
+enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
+static struct {
+    unsigned state, G, P, viewed, viewer, timeline, T;
+    unsigned short pause, message_at[2];
+    unsigned char types[REC_PLAYERS], messages[2160];
+    char path[MAX_PATH], dump[40];
+    RecReader* now;
+    RecReader* live;
+    HANDLE done;
+} s_rw;
+static int rw_prepare(char* ta, char* why, unsigned cap);
+static void rw_seats(char* ta);
+static void rw_finish(char* ta, int back);
+static void rw_poll(void);
+static int rw_trigger(const char* line);
+static void rw_dispose(void);
+static int u32_word(const char* s, unsigned* v);
 static struct {
     int      pending;               /* a seek waits for the next frame visit after the first step */
     unsigned T;
@@ -866,7 +883,8 @@ static void* __cdecl save_after(unsigned* regs)
 /* ---- S-d: the step -------------------------------------------------------------------------- */
 
 /* What the loaded level must agree on with the recording (§6.4, S-d). */
-static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned cap, Refusal* r)
+static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned cap, Refusal* r,
+                        int at_start)
 {
     char stem[RECR_TEXT];
     unsigned each = *(const unsigned short*)(ta + OFF_EACH);
@@ -883,7 +901,7 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
         return 0;
     }
     if (!data_match(ta, h, why, cap, r)) return 0;
-    if (now != h->start) {
+    if (at_start && now != h->start) {
         snprintf(why, cap, "the level's first step is GameTime %u, the recording's %u", now,
                  h->start);
         return 0;
@@ -5037,6 +5055,8 @@ static int tk_tables(const RecHeader* h, char* why, unsigned cap)
 }
 
 /* R0's bounds on what the takeover reads and writes; `D` from -1 to its default. 1, or 0 (why). */
+static int rw_eye(const Lv* L, unsigned T, char* why, unsigned cap);
+
 static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, char* why, unsigned cap)
 {
     const RecHeader* h = recr_header(s_rd);
@@ -5108,7 +5128,8 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, char* wh
         snprintf(why, cap, "the level has no objective");
         return 0;
     }
-    if (!tagpu_rec_fork_ready(w2, sizeof w2)) {
+    if (!(s_rw.state == RW_PAST && s_rd == s_rw.now) &&
+        !tagpu_rec_fork_ready(w2, sizeof w2)) {
         snprintf(why, cap, "the recorder cannot record the fork: %s", w2);
         return 0;
     }
@@ -5195,7 +5216,8 @@ static void tk_types(char* ta, unsigned P)
     const RecHeader* h = recr_header(s_rd);
     unsigned i;
     for (i = 0; i < h->nseats; i++)
-        E_SetType(player_rec(ta, h->seats[i].index), h->seats[i].index == P ? 1u : 2u);
+        E_SetType(player_rec(ta, h->seats[i].index), s_rw.state ?
+                  s_rw.types[h->seats[i].index] : h->seats[i].index == P ? 1u : 2u);
 }
 
 static void tk_seats(char* ta, unsigned P, unsigned D)
@@ -5205,7 +5227,7 @@ static void tk_seats(char* ta, unsigned P, unsigned D)
     LARGE_INTEGER a, b;
     unsigned i;
     ta[OFF_VIEWED] = (char)P;               /* R14a's add, R14's fog and R14b's pass are P's */
-    memcpy(ta + OFF_DIFFICULTY, &D, 4);
+    if (!s_rw.state) memcpy(ta + OFF_DIFFICULTY, &D, 4);
     QueryPerformanceCounter(&a);
     tk_types(ta, P);
     for (i = 0; i < h->nseats; i++) {
@@ -5320,7 +5342,8 @@ static void sk_refused(int tk, unsigned T, const char* why)
 static int seek_run(char* ta)
 {
     RecWorld* W = recr_world(s_rd);
-    const int tk = s_seek.mode == SK_TAKEOVER;
+    const int back = s_seek.mode == SK_NOW, convert = s_seek.mode == SK_REWIND;
+    const int tk = s_seek.mode == SK_TAKEOVER || back;
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0, built0, P = s_seek.P;
     int D = s_seek.D;
     LARGE_INTEGER hz, t0, t1, t2;
@@ -5343,10 +5366,11 @@ static int seek_run(char* ta)
     QueryPerformanceCounter(&t0);
     eye_begin(ta, T);
     if (tk) s_eye.viewed = (unsigned char)P;
-    k = recr_seek(s_rd, T, EYE_LEAD, eye_visit, &L, why, sizeof why);
+    k = back ? rw_eye(&L, T, why, sizeof why) :
+        recr_seek(s_rd, T, EYE_LEAD, eye_visit, &L, why, sizeof why);
     if (k <= 0) {
         sk_refused(tk, T, why);
-        if (k < 0) sk_back(&L, prev);
+        if (k < 0 && !back) sk_back(&L, prev);
         return 0;
     }
     QueryPerformanceCounter(&t1);
@@ -5354,16 +5378,22 @@ static int seek_run(char* ta)
     masks_init();
     if (!sk_bound(&L, W, &nheads, why, sizeof why)) {
         sk_refused(tk, T, why);
-        sk_back(&L, prev);
+        if (!back) sk_back(&L, prev);
+        return 0;
+    }
+    if (convert && !rw_prepare(ta, why, sizeof why)) {
+        sk_refused(0, T, why);
         return 0;
     }
     if (tk) {
         memset(&s_tk, 0, sizeof s_tk);
-        if (!tk_bound(&L, W, P, &D, why, sizeof why) || !tk_open(T, why, sizeof why)) {
+        if (!tk_bound(&L, W, P, &D, why, sizeof why) ||
+            (!back && !tk_open(T, why, sizeof why))) {
             tagpu_logf("replay: %s: takeover at %u refused: %s", s_name, T, why);
-            sk_back(&L, prev);
+            if (!back) sk_back(&L, prev);
             return 0;
         }
+        if (back) { s_tk.on = 1; }
     }
     /* R1: the rebuild's kills are not the recording's eliminations */
     tagpu_puppet_rebuild(1);
@@ -5374,6 +5404,7 @@ static int seek_run(char* ta)
     /* R3, on the clock the host holds: GameTime h >= 1, which R0 enforces (sk_bound) */
     refused0 = s_st.refused;
     sk_kills(&L);
+    if (convert) rw_seats(ta);
     /* R4: every temporary sight record dropped through the engine's own removal (the drop's
        comment): no temporary record outlives R5's refill, whose counters its later expiry would
        otherwise decrement. R0 bounded the engine's count of them. */
@@ -5478,14 +5509,305 @@ static int seek_run(char* ta)
                s_sk.effects ? "cleared" : "NOT cleared", s_eye.made, s_eye.refused, s_eye.capped,
                SR_MAX);
     /* TK4b (THE TAKEOVER, tk_end): s_rd is gone afterwards */
-    if (tk)
+    if (back) rw_finish(ta, 1);
+    else if (tk)
         tk_end(T, P, (unsigned)D, sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t1.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t2.QuadPart - t1.QuadPart, hz.QuadPart), s_st.obuilt - built0, hz.QuadPart);
+    if (tk && !back && s_rw.state) rw_finish(ta, 0);
     return 1;
 }
 
 /* ---- the frame visit ------------------------------------------------------------------------ */
+
+/* Live rewind owns a paused recording until it is closed, restored, or forked. All state
+   transitions run at the game-thread frame visit; file completion is polled, never waited on. */
+static void rw_dispose(void)
+{
+    char path[MAX_PATH];
+    if (s_rw.now && s_rw.now != s_rd) recr_close(s_rw.now);
+    if (s_rw.live && s_rw.live != s_rd) recr_close(s_rw.live);
+    if (s_rw.done) CloseHandle(s_rw.done);
+    if (s_rw.dump[0]) {
+        snprintf(path, sizeof path, "replays\\dump-%s.bin", s_rw.dump);
+        DeleteFileA(path);
+    }
+    memset(&s_rw, 0, sizeof s_rw);
+}
+
+static int rw_prepare(char* ta, char* why, unsigned cap)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i, v = s_rw.viewer;
+    unsigned char seats[REC_PLAYERS] = {0}, locals[REC_PLAYERS] = {0};
+    char path[MAX_PATH], *rec;
+    unsigned char* info;
+    static unsigned serial;
+    s_rw.P = (unsigned char)ta[OFF_CONTROLLED];
+    s_rw.viewed = (unsigned char)ta[OFF_VIEWED];
+    s_rw.G = *(unsigned*)(ta + OFF_GAMETIME);
+    if (s_rw.P >= REC_PLAYERS || s_rw.viewed >= REC_PLAYERS ||
+        !*(void**)(ta + OFF_OBJECTIVE)) {
+        snprintf(why, cap, "the live level has no controlled/viewed seat or objective");
+        return 0;
+    }
+    rec = player_rec(ta, v);
+    if (rec[PL_CONTROLLER] || *(void**)(rec + PL_AI) ||
+        ((void**)ACQ_TABLE)[v] || *(unsigned short*)(rec + PL_LIVE)) {
+        snprintf(why, cap, "the spectator seat is occupied");
+        return 0;
+    }
+    for (i = 0; i < h->nseats; i++) {
+        unsigned st = h->seats[i].index;
+        char* p = player_rec(ta, st);
+        s_rw.types[st] = (unsigned char)p[PL_CONTROLLER];
+        if ((p[PL_CONTROLLER] != 1 && p[PL_CONTROLLER] != 2) ||
+            (unsigned char)p[PL_MAPBIT] != st) {
+            snprintf(why, cap, "seat %u has changed controller or identity", st);
+            return 0;
+        }
+        seats[st] = locals[st] = 1;
+    }
+    if (!seats[s_rw.P] || s_rw.types[s_rw.P] != 1) {
+        snprintf(why, cap, "the controlled seat is not a recorded local player");
+        return 0;
+    }
+    snprintf(s_rw.dump, sizeof s_rw.dump, "rewind-%lu-%u", GetCurrentProcessId(), ++serial);
+    if (!tagpu_rec_dump_now(s_rw.dump)) {
+        snprintf(why, cap, "the present could not be saved");
+        return 0;
+    }
+    snprintf(path, sizeof path, "replays\\dump-%s.bin", s_rw.dump);
+    s_rw.now = recr_dump_world(path, why, cap);
+    if (!s_rw.now) return 0;
+    if (!tagpu_rec_suspend(1)) {
+        recr_close(s_rw.now); s_rw.now = NULL;
+        snprintf(why, cap, "the live writer failed");
+        return 0;
+    }
+    memcpy(s_rw.messages, ta + 0x12EF, sizeof s_rw.messages);
+    memcpy(s_rw.message_at, ta + 0x2A3E, sizeof s_rw.message_at);
+    info = *(unsigned char**)(rec + PL_INFO);
+    if (!s_vinfo.at) {
+        s_vinfo.at = info;
+        memcpy(s_vinfo.was, info, REC_INFO_BYTES);
+    }
+    E_ActivateSeat(v, 3);
+    if (!*(void**)(rec + PL_SIGHT)) ((void (__stdcall*)(void*))0x464700u)(rec);
+    if (!*(void**)(rec + PL_SIGHT) || !*(void**)(rec + PL_GROUPS) || !*(void**)(rec + 0xEC)) {
+        tagpu_refuse("Rewinding failed: the spectator's player buffers could not be allocated.");
+        return 0;
+    }
+    info[INFO_FLAGS] |= INFO_WATCHER;
+    info[INFO_SIDE] = (*(unsigned char**)(player_rec(ta, s_rw.P) + PL_INFO))[INFO_SIDE];
+    ta[OFF_CONTROLLED] = (char)v;
+    ta[OFF_VIEWED] = (char)s_rw.P;
+    s_viewer = v;
+    s_view = s_rw.P;
+    E_Disarm(*(void**)(ta + OFF_OBJECTIVE));
+    seats[v] = 1;
+    tagpu_puppet_begin(seats, locals);
+    tagpu_puppet_play();
+    s_first = s_dead = s_over = 0;
+    s_rw.state = RW_PAST;
+    return 1;
+}
+
+static void rw_seats(char* ta)
+{
+    const RecHeader* h = recr_header(s_rd);
+    unsigned i;
+    if (s_sk.left) {
+        tagpu_refuse("Rewinding failed: live units remain after destruction; their AI objects must stay alive.");
+        return;
+    }
+    /* Local destructors need their owner's AI objects. R3 has destroyed every unit before
+       any object is freed; no type-3 seat retains an AI pointer for the players phase to run.
+       This is the engine teardown's sequence at 0x464A41..0x464A6B, on the same thread. */
+    for (i = 0; i < h->nseats; i++) {
+        unsigned st = h->seats[i].index;
+        char* rec = player_rec(ta, st);
+        void* ai = *(void**)(rec + PL_AI);
+        E_SetType(rec, 3);
+        ((void (__stdcall*)(unsigned))0x40B390u)(st);
+        if (ai) {
+            ((void (__thiscall*)(void*))0x408F10u)(ai);
+            E_MemFree(ai);
+            *(void**)(rec + PL_AI) = NULL;
+        }
+    }
+}
+
+static void rw_pending_eye(void* ctx, unsigned kind, const unsigned char* body, unsigned len)
+{
+    RecEvent ev = {kind, len, body};
+    RecWorld w = *recr_world(s_rw.now);
+    w.tick = s_rw.G;
+    w.ev = &ev;
+    w.nev = 1;
+    eye_visit(ctx, &w);
+}
+
+static int rw_eye(const Lv* L, unsigned T, char* why, unsigned cap)
+{
+    int k = recr_seek(s_rw.live, s_rw.G - 1, EYE_LEAD, eye_visit, (void*)L, why, cap);
+    if (k != 1) return k;
+    /* The lead is complete through G-1. Step G belongs to the recorder's unpublished tail,
+       whose lifetime suspension retains, and is visited before the saved G+1 image is applied. */
+    tagpu_rec_pending_events(rw_pending_eye, (void*)L);
+    (void)T;
+    return 1;
+}
+
+static void rw_finish(char* ta, int back)
+{
+    unsigned short pause = s_rw.pause;
+    unsigned G = s_rw.G;
+    if (back) {
+        ta[OFF_VIEWED] = (char)s_rw.viewed;
+        memcpy(ta + 0x12EF, s_rw.messages, sizeof s_rw.messages);
+        memcpy(ta + 0x2A3E, s_rw.message_at, sizeof s_rw.message_at);
+        tagpu_puppet_end();
+        pend_clear();
+        /* s_rd owns the saved image here; dispose closes the distinct live-file reader. */
+        s_rw.now = NULL;
+        replay_close();
+        rw_dispose();
+        tagpu_rec_suspend(0);
+        s_tk.on = 0;
+    } else {
+        s_rw.live = NULL;             /* tk_end has closed it */
+        rw_dispose();
+    }
+    *(unsigned short*)(ta + OFF_PAUSE) =
+        (unsigned short)((*(unsigned short*)(ta + OFF_PAUSE) & ~1u) | pause);
+    tagpu_logf("rewind: %s at GameTime %u", back ? "returned to now" : "forked", back ? G :
+               *(unsigned*)(ta + OFF_GAMETIME));
+}
+
+static void rw_close_unmoved(char* ta)
+{
+    unsigned pause = s_rw.pause;
+    rw_dispose();
+    replay_close();
+    *(unsigned short*)(ta + OFF_PAUSE) =
+        (unsigned short)((*(unsigned short*)(ta + OFF_PAUSE) & ~1u) | pause);
+    tagpu_logf("rewind: closed, nothing moved");
+}
+
+static void rw_poll(void)
+{
+    char* ta = ta_main();
+    char why[200];
+    int k;
+    Refusal refusal = {0, 0, 0};
+    if (!s_rw.state || !ta) return;
+    *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+    if (s_rw.state == RW_FLUSH) {
+        k = tagpu_rec_rewind_flush();
+        if (!k) return;
+        if (k < 0) { tagpu_logf("rewind: open refused: writer failed"); rw_close_unmoved(ta); return; }
+        if (!recfile_play(s_rw.path, s_rw.timeline)) {
+            tagpu_logf("rewind: open refused: recording reserved"); rw_close_unmoved(ta); return;
+        }
+        s_rd = recr_open(s_rw.path, why, sizeof why);
+        if (!s_rd || recr_timeline(s_rd, s_rw.timeline, why, sizeof why) != 1 ||
+            !validate_header(recr_header(s_rd), why, sizeof why, &s_rw.viewer, &refusal) ||
+            !validate_engine(ta, recr_header(s_rd), why, sizeof why) ||
+            !first_checks(ta, recr_header(s_rd), why, sizeof why, &refusal, 0)) {
+            tagpu_logf("rewind: open refused: %s", why); rw_close_unmoved(ta); return;
+        }
+        s_rw.live = s_rd;
+        s_tl = s_rw.timeline;
+        snprintf(s_path, sizeof s_path, "%s", s_rw.path);
+        s_span.first = recr_header(s_rd)->start;
+        s_span.last = recr_selected(s_rd)->last;
+        s_span.ok = s_span.last > s_span.first;
+        if (!s_span.ok) {
+            tagpu_logf("rewind: open refused: no complete seek interval yet");
+            rw_close_unmoved(ta); return;
+        }
+        {
+            const char* base = strrchr(s_rw.path, '\\');
+            size_t n;
+            snprintf(s_name, sizeof s_name, "%s", base ? base + 1 : s_rw.path);
+            n = strlen(s_name);
+            if (n > 7 && !strcmp(s_name + n - 7, ".imprec")) s_name[n - 7] = 0;
+        }
+        s_rw.state = RW_OPEN;
+        tagpu_logf("rewind: opened at GameTime %u; the file holds %u to %u", s_rw.G,
+                   s_span.first, s_span.last);
+    } else if (s_rw.state == RW_ENDING && WaitForSingleObject(s_rw.done, 0) == WAIT_OBJECT_0) {
+        s_seek.mode = SK_TAKEOVER;
+        s_seek.T = s_rw.T;
+        s_seek.P = s_rw.P;
+        s_seek.D = *(unsigned*)(ta + OFF_DIFFICULTY);
+        if (!seek_run(ta)) {
+            tagpu_logf("rewind: fork failed after the original writer closed; playback remains paused");
+            s_rw.state = RW_PAST;
+        }
+    }
+}
+
+static int rw_trigger(const char* line)
+{
+    char* ta = ta_main();
+    char why[200];
+    unsigned T;
+    int k;
+    if (strncmp(line, "rewind ", 7)) return 0;
+    line += 7;
+    if (!ta) return 1;
+    if (!strcmp(line, "open")) {
+        if (s_rw.state || s_rd || tagpu_puppet_on() || (ta[OFF_NETWORK] & 1)) {
+            tagpu_logf("rewind: open refused: not a live recorded skirmish"); return 1;
+        }
+        s_rw.pause = *(unsigned short*)(ta + OFF_PAUSE) & 1;
+        *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+        if (!tagpu_rec_rewind_open(s_rw.path, sizeof s_rw.path, &s_rw.timeline, why, sizeof why)) {
+            tagpu_logf("rewind: open refused: %s", why); rw_close_unmoved(ta); return 1;
+        }
+        s_rw.G = *(unsigned*)(ta + OFF_GAMETIME);
+        s_rw.state = RW_FLUSH;
+        return 1;
+    }
+    if (!s_rw.state) { tagpu_logf("rewind: refused: no rewind is open"); return 1; }
+    if (!strcmp(line, "close") || !strcmp(line, "now")) {
+        if (s_rw.state == RW_OPEN || s_rw.state == RW_FLUSH) rw_close_unmoved(ta);
+        else if (s_rw.state == RW_PAST && !s_rw.done) {
+            s_rd = s_rw.now;
+            s_seek.mode = SK_NOW;
+            s_seek.T = s_rw.G + 1;
+            s_seek.P = s_rw.P;
+            s_seek.D = *(unsigned*)(ta + OFF_DIFFICULTY);
+            if (!seek_run(ta)) { s_rd = s_rw.live; tagpu_logf("rewind: return to now refused"); }
+        } else tagpu_logf("rewind: refused: the original ended for a fork; retry fork or leave the level");
+        return 1;
+    }
+    if (s_rw.state != RW_OPEN && s_rw.state != RW_PAST) {
+        tagpu_logf("rewind: refused: waiting for the writer"); return 1;
+    }
+    if (!strncmp(line, "seek ", 5) && u32_word(line + 5, &T)) {
+        if (T <= s_span.first || T > s_span.last) {
+            tagpu_logf("rewind: seek refused: iteration %u is outside %u to %u", T,
+                       s_span.first + 1, s_span.last); return 1;
+        }
+        s_seek.mode = s_rw.state == RW_OPEN ? SK_REWIND : SK_SEEK;
+        s_seek.T = T;
+        s_seek.dump[0] = 0;
+        k = seek_run(ta);
+        if (k) s_rw.T = T;
+        tagpu_logf("rewind: seek %u %s", T, k ? "complete" : "refused");
+    } else if (!strcmp(line, "fork") && s_rw.state == RW_PAST) {
+        /* Ending publishes G's pending events. The done event transfers file access only after
+           the old writer has closed both its file and S4c lock. Polling keeps the game thread
+           responsive while the entire world remains paused. */
+        if (!s_rw.done) s_rw.done = tagpu_rec_rewind_end();
+        if (s_rw.done) s_rw.state = RW_ENDING;
+        else tagpu_logf("rewind: fork refused: the original recording cannot be ended");
+    } else tagpu_logf("rewind: refused: expected open, seek T, now, fork or close");
+    return 1;
+}
 
 #define TRIGGER    SIM_TOOL_FILE("tagpu_replay.trigger")
 #define TRIGGER_MS 100              /* the most often the trigger is looked for: the engine draws
@@ -5621,7 +5943,7 @@ static void trigger_read(void)
     DeleteFileA(TRIGGER);
     while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
         line[--n] = 0;
-    if (forks_trigger(line)) return;
+    if (rw_trigger(line) || forks_trigger(line)) return;
     if (sscanf(line, "dump %39s%n", name, &end) == 1) {
         if (!line[end]) {
             tagpu_rec_dump_arm(name, 0);
@@ -5829,6 +6151,8 @@ static void __cdecl tagpu_replay_frame(void)
     Lv L;
     const RecWorld* W;
     trigger_read();
+    rw_poll();
+    if (s_rw.state) return;
     if (!tagpu_puppet_on() || !s_rd || s_dead || s_first) return;
     ta = ta_main();
     if (!ta) return;
@@ -6017,7 +6341,7 @@ void __cdecl tagpu_replay_step(void)
     if (s_first) {
         s_first = 0;
         s_opt.played = 1;                   /* THE PLAYER'S SETTINGS: the loader is done */
-        if (!first_checks(ta, recr_header(s_rd), why, sizeof why, &r) ||
+        if (!first_checks(ta, recr_header(s_rd), why, sizeof why, &r, 1) ||
             !first_iteration(ta, &L, why, sizeof why)) {
             s_dead = 1;
             recfile_leave();
@@ -6047,6 +6371,7 @@ void tagpu_replay_level_end(void)
 {
     char* ta = ta_main();
     int stale = s_opt.stale;
+    rw_dispose();
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */
     /* both cases log `replay: <name> at its level's end, GameTime <t>`, the line tacli's
        `replay seek` takes as the end of the level a playback was on */
