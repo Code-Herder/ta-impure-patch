@@ -2146,7 +2146,8 @@ writer closes before a fork can acquire its file.
 
 Normal-limits smoke checks include exact fresh-seek equality, filename-collision
 handling, append refusal/retry and exit during rewind. The full verification and
-two comparison-policy decisions remain open in the module note. S4d is not landed.
+the module note records the approved unseated sight and rewind-only VM child-count
+exceptions. Exact COB execution continuity is outside S4. S4d is not landed.
 
 ## S5
 

@@ -728,7 +728,10 @@ block that reads to its last complete block.
   permits retrying `fork`, but cannot return to now.
   `tareplay.py rewind battle [--stock] [--cover]` runs the live rewind L/P/Q
   checks. Fixtures with `rewind` run the same checks in U; stock-limits uses
-  the battle with the stock DLL. For the fresh comparison, the trigger
+  the battle with the stock DLL. Return-to-now reconstructs COB threads; the U
+  count check reports and accepts only VM START/CALL child-count differences via
+  `compare-counts --rewind`. D2 excludes sight buffers only for unseated records.
+  For the fresh comparison, the trigger
   `seek-frame T dump NAME` takes a paused frame dump in the seek's own visit.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the

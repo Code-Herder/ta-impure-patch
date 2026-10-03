@@ -117,8 +117,8 @@ A subsequent open at 918 forked at iteration 601 and played on.
 The preceding smoke recording passed `tarec check`: 927 explained steps, zero
 corrections. Its fork's first iteration compared EQUAL with its parent. The
 pre/post comparison under D2 matched except for the newly allocated unseated
-spectator's sight buffer (72,904 counters). D2 currently excludes unseated player
-images only; extending it to their sight counters requires the owner's decision.
+spectator's sight buffer (72,904 counters). At this run, D2 excluded unseated player
+images only. The later approved amendment is recorded below.
 Seated players' sight counters matched exactly.
 
 The full `tareplay.py rewind battle` fixture runs a live battle through open/close,
@@ -155,8 +155,8 @@ The gates still name these gaps:
   Disassembly of the tested normal DLL identifies the counted return offset
   `0x7EB87` as that branch's allocation call. Return-to-now reconstructs COB
   objects but the plan excludes preserving their thread state. Any scoped
-  count exception or expansion to preserve COB state needs an owner decision;
-  no exclusion or tolerance has been changed.
+  count exception or expansion to preserve COB state needed an owner decision;
+  no exclusion or tolerance had been changed for this run.
 
 ### Filename and recovery checks
 
@@ -203,8 +203,8 @@ The remaining failures are unchanged policy questions, not passing gates:
   reports allocator return offset `0x1066C7`; stock reports `0x4B18C0` and
   `0x4B192D`. The raw differences remain failures; no new exception is applied.
 
-These runs verify the U lane, not the complete landing tier. The owner must
-resolve the two comparison-policy questions before the landing can proceed.
+These runs exercised the U lane, not the complete landing tier. The decisions
+below settle their two policy questions; fresh verification remains required.
 
 
 ### Accepted scope, 2026-10-03

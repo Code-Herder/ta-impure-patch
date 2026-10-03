@@ -15866,3 +15866,9 @@ same allocator, returning at `0x4B192D`. The raised-limits VM uses these two
 addresses as semantic diagnostic caller keys around its synchronous allocation.
 They identify child starts only; the rewind count exception does not apply to
 other allocator callers. See the S4 rewind note for the accepted scope.
+
+The pristine allocator body `0x4B08C0..0x4B0933` has no calls: it bounds the
+script index, scans eight fixed records, initializes a free record, increments
+`cob+0x53C`, and returns the slot or −1 (`ret 4`). The raised-limits replacement
+uses the same synchronous allocation role. Neither executes the child's script
+inside the allocation, so the diagnostic context ends before VM execution resumes.
