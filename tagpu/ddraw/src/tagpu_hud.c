@@ -96,6 +96,36 @@ void tagpu_hud_bands(int q8, int* panelW, int* barH)
    thread; a whole LONG, so a reader sees one value or the other, and each is a
    value tagpu_hud_dock_map validates against the surface it is used on. */
 static volatile LONG s_dockQ8;
+static volatile LONG s_cardsQ8;
+
+void tagpu_hud_cards_set(int q8) { InterlockedExchange(&s_cardsQ8, q8); }
+int tagpu_hud_cards_q8(void) { return (int)InterlockedCompareExchange(&s_cardsQ8, 0, 0); }
+
+int tagpu_hud_cards_map(int W, int H, int q8, TAGPU_HUD_DOCKMAP* m)
+{
+    int pw, bh, dl, dt, dw, dh;
+    if (!m || q8 < 256 || q8 > 2048 || !dims_ok(W, H) ||
+        !tagpu_dock_rect(W, H, q8, &dl, &dt, &dw, &dh)) return 0;
+    tagpu_hud_bands(q8, &pw, &bh);
+    m->q8 = q8;
+    m->w = 206;
+    m->x1 = W - 8 * q8 / 256;
+    m->x0 = m->x1 - m->w * q8 / 256;
+    m->y1 = dt + dh + bh - 32 - (dh + 8) * q8 / 256;
+    m->h = (m->y1 - 40 * q8 / 256) * 256 / q8;
+    m->y0 = m->y1 - m->h * q8 / 256;
+    m->l = m->x1 - (pw - 128) - m->w;
+    m->t = m->y1 - (bh - 32) - m->h;
+    return m->x0 >= pw && m->y0 >= bh && m->h >= 90 && m->l >= 128 && m->t >= 32 &&
+           m->l + m->w <= W && m->t + m->h <= H - 32;
+}
+
+static int cards_hit(int x, int y, TAGPU_HUD_DOCKMAP* m)
+{
+    return tagpu_hud_cards_map((int)g_ddraw.width, (int)g_ddraw.height,
+                              tagpu_hud_cards_q8(), m) &&
+           x >= m->x0 && x < m->x1 && y >= m->y0 && y < m->y1;
+}
 
 void tagpu_hud_dock_set(int q8)
 {
@@ -278,6 +308,13 @@ void tagpu_hud_to_engine(int* x, int* y)
     } else if (*y >= H - bh) {
         *x = *x * 256 / q;
         *y = H - (H - *y) * 256 / q;
+    } else if (cards_hit(*x, *y, &dk)) {
+        *x = dk.l + dk.w - ((2 * (dk.x1 - *x) - 1) * 128 + dk.q8 - 1) / dk.q8;
+        *y = dk.t + dk.h - ((2 * (dk.y1 - *y) - 1) * 128 + dk.q8 - 1) / dk.q8;
+        if (*x < dk.l) *x = dk.l;
+        if (*y < dk.t) *y = dk.t;
+        if (*x >= dk.l + dk.w) *x = dk.l + dk.w - 1;
+        if (*y >= dk.t + dk.h) *y = dk.t + dk.h - 1;
     } else if (dock_hit(*x, *y, &dk)) {
         /* THE DOCK: the engine texel the composite samples at this device
            pixel's centre -- l + (x + 0.5 - x0) / s and t + h - (y1 - y - 0.5) / s
@@ -316,6 +353,10 @@ void tagpu_hud_to_screen(int* x, int* y)
     } else if (*y >= H - HUD_BAR_H) {
         *x = *x * q / 256;
         *y = H - (H - *y) * q / 256;
+    } else if (tagpu_hud_cards_map((int)g_ddraw.width, H, tagpu_hud_cards_q8(), &dk) &&
+               *x >= dk.l && *x < dk.l + dk.w && *y >= dk.t && *y < dk.t + dk.h) {
+        *x = dk.x1 - 1 - ((2 * (dk.l + dk.w - 1 - *x) + 1) * dk.q8) / 512;
+        *y = dk.y1 - 1 - ((2 * (dk.t + dk.h - 1 - *y) + 1) * dk.q8) / 512;
     } else if (tagpu_hud_dock_map((int)g_ddraw.width, H, tagpu_hud_dock_q8(), &dk) &&
                *x >= dk.l && *x < dk.l + dk.w && *y >= dk.t && *y < dk.t + dk.h) {
         /* the device pixel holding the centre of this texel's image, which

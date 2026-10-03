@@ -157,6 +157,7 @@ static char       s_path[MAX_PATH];  /* its path, "replays\\<file>"             
 static struct { unsigned first, last; int ok; } s_span;   /* its summary's first and last GameTime */
 static unsigned   s_viewer;         /* V                                                          */
 static unsigned   s_view;           /* the viewed player: V for full visibility, or a seat         */
+static unsigned   s_viewPending;    /* seat + 1, or 0: consumed by the game-thread frame visit     */
 static int        s_first;          /* the first step's checks are still to come                  */
 static int        s_dead;           /* they failed: nothing is applied this level                 */
 static int        s_over;           /* the recording has nothing more to apply                    */
@@ -266,6 +267,7 @@ static void counts_log(const char* when, unsigned now);
 
 static void replay_close(void)
 {
+    s_viewPending = 0;
     recr_close(s_rd);
     recfile_leave();
     s_rd = NULL;
@@ -4972,6 +4974,58 @@ static void eye_put(const Lv* L, unsigned T)
     }
 }
 
+/* Changing the viewed record leaves the units, their per-seat sight counters, the clock and
+   the camera intact. Only death vision depends on which record was viewed during playback.
+   Read that history with a separate reader, so a refused read cannot displace the next step's
+   images or events. No host state changes until the history is whole and the temporary-record
+   count is bounded by sight_records_drop. Its expiry removes each old stamp before the new
+   viewed record is selected. All of this runs between steps on the game thread, before draw.
+   At EOF the host clock can outlive the file: expired deaths are omitted, never restamped. */
+static void sight_change(char* ta)
+{
+    unsigned seat = s_viewPending - 1, i, j, T;
+    Lv L;
+    RecReader* r;
+    char why[200] = "the selected timeline is unavailable";
+    const RecTimeline* timeline;
+    s_viewPending = 0;
+    if (seat >= REC_PLAYERS || !level_of(ta, &L) || !L.now || L.now == UINT32_MAX) return;
+    if ((unsigned char)ta[OFF_VIEWED] == seat) return;
+    T = recr_world(s_rd)->tick;
+    timeline = recr_selected(s_rd);
+    r = recr_open(s_path, why, sizeof why);
+    if (!r) goto refused;
+    if (!timeline || !recr_timeline(r, timeline->id, why, sizeof why)) {
+        recr_close(r);
+        goto refused;
+    }
+    eye_begin(ta, L.now + 1);
+    s_eye.viewed = (unsigned char)seat;
+    if (recr_seek(r, T, EYE_LEAD, eye_visit, &L, why, sizeof why) != 1) {
+        recr_close(r);
+        goto refused;
+    }
+    recr_close(r);
+    for (i = j = 0; i < s_eye.n; i++)
+        if (s_eye.e[i].made + EYE_LIFE >= L.now) s_eye.e[j++] = s_eye.e[i];
+    s_eye.n = j;
+    if (sight_records_drop(ta) < 0) {
+        snprintf(why, sizeof why, "the temporary sight record count is outside its pool");
+        goto refused;
+    }
+    ta[OFF_VIEWED] = (char)seat;
+    eye_put(&L, L.now + 1);
+    minimap_fog(ta);
+    E_RadarPass();
+    E_SightExpire();
+    s_view = seat;
+    tagpu_logf("replay: sight is seat %u at GameTime %u; death vision %u made, %u refused",
+               seat, L.now, s_eye.made, s_eye.refused);
+    return;
+refused:
+    tagpu_logf("replay: sight change to seat %u refused: %s", seat, why);
+}
+
 /* The reader back where the host is after a refused seek; when it cannot be, the playing stops
    there, as iteration_read's failure stops it. */
 static void sk_back(const Lv* L, unsigned prev)
@@ -5847,17 +5901,20 @@ static void __cdecl tagpu_replay_frame(void)
         }
         return;
     }
-    if (s_over) return;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
     W = recr_world(s_rd);
-    if (now == s_frame_tick || W->tick != now + 1 || !level_of(ta, &L)) return;
-    s_frame_tick = now;
-    recorded_put(&L, W);
-    if (!s_rt.tsaved) {
-        tagpu_simreg_transient_save();
-        s_rt.tsaved = 1;
+    if (!s_over && now != s_frame_tick && W->tick == now + 1 && level_of(ta, &L)) {
+        s_frame_tick = now;
+        recorded_put(&L, W);
+        if (!s_rt.tsaved) {
+            tagpu_simreg_transient_save();
+            s_rt.tsaved = 1;
+        }
+        if (s_rt.n) rt_due(ta, now + 1);
     }
-    if (s_rt.n) rt_due(ta, now + 1);
+    /* Sight sees the same LosType and explored map as the draw, including a paused frame or
+       the frozen state after EOF. A timeline boundary or takeover still has priority. */
+    if (s_rd && s_viewPending && !s_seek.pending && !s_hold) sight_change(ta);
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -6113,6 +6170,68 @@ int tagpu_replay_seek_request(unsigned T)
     s_seek.pending = 1;
     tagpu_logf("replay: %s: seek to %u asked by the dock", s_name, T);
     return 1;
+}
+
+int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
+{
+    const RecHeader* h;
+    const RecWorld* W;
+    unsigned i;
+    int n = 0;
+    if (!out || cap <= 0 || !tagpu_replay_live()) return 0;
+    h = recr_header(s_rd);
+    W = recr_world(s_rd);
+    for (i = 0; i < h->nseats && i < REC_PLAYERS && n < cap; i++) {
+        unsigned seat = h->seats[i].index;
+        const char* p;
+        TAGPU_REPLAY_PLAYER* dst;
+        if (seat >= REC_PLAYERS || seat == s_viewer) continue;
+        p = (const char*)W->player[seat];
+        dst = &out[n++];
+        memset(dst, 0, sizeof *dst);
+        dst->seat = seat;
+        dst->colour = h->seats[i].logo;
+        lstrcpynA(dst->name, h->seats[i].name, sizeof dst->name);
+        /* The same image the puppet applier uses, held at the final image after EOF. The reader
+           owns REC_PLAYERS fixed records and only this thread advances it. None of these fields
+           is excluded by replay-layout.tsv. The counters are words (0x486996, 0x486E09). */
+        dst->units = *(const uint16_t*)(p + 0x144);
+        dst->commander_losses = *(const uint16_t*)(p + 0x106);
+        memcpy(&dst->energy, p + PL_ENERGY, 4);
+        memcpy(&dst->energy_in, p + 0x90, 4);
+        memcpy(&dst->energy_out, p + 0x94, 4);
+        memcpy(&dst->metal, p + PL_METAL, 4);
+        memcpy(&dst->metal_in, p + 0x9C, 4);
+        memcpy(&dst->metal_out, p + 0xA0, 4);
+    }
+    return n;
+}
+
+int tagpu_replay_sight(void)
+{
+    const char* ta = ta_main();
+    unsigned p;
+    if (!ta || !tagpu_replay_live()) return -1;
+    p = (unsigned char)ta[OFF_VIEWED];
+    return p == s_viewer ? -1 : (int)p;
+}
+
+int tagpu_replay_sight_request(int seat)
+{
+    const RecHeader* h;
+    unsigned i;
+    if (!tagpu_replay_live() || s_seek.pending || s_hold) return 0;
+    h = recr_header(s_rd);
+    if (seat == -1) {
+        s_viewPending = s_viewer + 1;
+        return 1;
+    }
+    for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
+        if (seat >= 0 && seat < REC_PLAYERS && h->seats[i].index == (unsigned)seat) {
+            s_viewPending = (unsigned)seat + 1;
+            return 1;
+        }
+    return 0;
 }
 
 int tagpu_replay_paused(void)

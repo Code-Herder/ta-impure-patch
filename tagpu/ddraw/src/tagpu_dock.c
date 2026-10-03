@@ -16,6 +16,7 @@
 #include <string.h>
 #include "dd.h"
 #include "tagpu_dock.h"
+#include "tagpu_cards.h"
 #include "tagpu_replay.h"
 #include "tagpu_replays.h"
 #include "tagpu_recreader.h"
@@ -687,6 +688,7 @@ void tagpu_dock_built(void* gi, void* gm)
     repaint_ground(gm ? *(char**)((char*)gm + GM_CTRLS) : NULL);
     s_leaveOk = leave_guard();
     s_open = 1;
+    tagpu_cards_open(s_q8);
     s_gm = gm;
     s_push.valid = 0;
     region_publish(gi ? *(void**)((char*)gi + 0x18) : NULL);
@@ -694,6 +696,7 @@ void tagpu_dock_built(void* gi, void* gm)
 
 void tagpu_dock_closed(void)
 {
+    tagpu_cards_close();
     tagpu_hud_dock_set(0);
     s_gm = NULL;
     s_open = 0;
@@ -703,7 +706,8 @@ void tagpu_dock_closed(void)
 
 int tagpu_dock_owns(int gx, int gy)
 {
-    return s_open && gx >= s_ex && gx < s_ex + s_w && gy >= s_ey && gy < s_ey + DOCK_H;
+    return tagpu_cards_owns(gx, gy) ||
+           (s_open && gx >= s_ex && gx < s_ex + s_w && gy >= s_ey && gy < s_ey + DOCK_H);
 }
 
 /* ================================================================================================
@@ -770,6 +774,7 @@ static int cursor_x(void)
 int tagpu_dock_click(int gx, int gy, int down, int on_top)
 {
     unsigned first, last;
+    if (tagpu_cards_click(gx, gy, down, 0, on_top)) return 1;
     if (!down) {
         int was = s_held;
         if (s_drag && tagpu_replay_span(&first, &last))
@@ -789,6 +794,7 @@ int tagpu_dock_rclick(int gx, int gy, int down, int on_top)
 {
     unsigned first, last;
     int i, best = SNAP_PX + 1, k = -1;
+    if (tagpu_cards_click(gx, gy, down, 1, on_top)) return 1;
     if (!down) {
         int was = s_rpress;
         s_rpress = 0;
@@ -811,6 +817,7 @@ int tagpu_dock_rclick(int gx, int gy, int down, int on_top)
 
 void tagpu_dock_cancel_press(void)
 {
+    tagpu_cards_cancel();
     s_drag = 0;
 }
 
@@ -934,6 +941,7 @@ static void walk_start(void)
 
 void tagpu_dock_level_end(void)
 {
+    tagpu_cards_close();
     if (s_walkH) {
         InterlockedExchange(&s_walkStop, 1);
         WaitForSingleObject(s_walkH, INFINITE);
@@ -983,6 +991,7 @@ void tagpu_dock_tick(void* gi, int on_top)
     char tnow[16] = "", tend[16] = "";
 
     region_publish(*(void**)((char*)gi + 0x18));
+    tagpu_cards_tick(on_top);
     if (!s_walkStarted && live) walk_start();
     /* A speed the dock has no stage for -- the player's own, or the Options slider's -- is put
        on the nearest preset, so the stage shown is always the speed in force. */
@@ -1146,6 +1155,7 @@ void tagpu_dock_draw(void* top, void* gm)
     int l, w, cy, px, x, i, n;
     const TAGPU_ART_FRAME* f = s_art[A_FILL];
 
+    if (top == gm) tagpu_cards_draw();
     if (!s_armed || !s_open || !tagpu_replay_span(&first, &last) || covered(top, gm)) return;
     track(&l, &w);
     cy = s_ey + TRACK_Y + TRACK_H / 2;

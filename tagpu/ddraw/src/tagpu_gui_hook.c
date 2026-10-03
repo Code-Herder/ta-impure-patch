@@ -2895,6 +2895,7 @@ static void publish_window(unsigned flipSurf)
             if (s && seed_due(s) && !pub_seed(s)) return;
             o = pub_op(PK_FRAME, op->base); if (!o) return;
             o->w = op->dx;
+            o->h = op->dy;
             pub_commit();
             continue;
         }
@@ -3899,6 +3900,7 @@ static int __cdecl before_flip(void* entry_esp)
            marker the composite takes it from follows exactly the ops that
            drew (or stopped drawing) the dock. */
         o->dx = (short)tagpu_hud_dock_q8();
+        o->dy = (short)tagpu_hud_cards_q8();
     }
     /* the cursor is drawn into the back buffer INSIDE the flip and its
        background restored before it returns: nothing in between is UI */

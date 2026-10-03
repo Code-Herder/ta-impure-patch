@@ -1507,7 +1507,7 @@ int tagpu_menu_click(int gx, int gy, int down)
 
     if (!down) {                        /* a release we own, and nothing else */
         int was = s_pressed;
-        int dock = tagpu_dock_click(gx, gy, 0, 0);
+        int dock = tagpu_dock_click(gx, gy, 0, dock_on_top(main_p));
         s_pressed = 0;
         return was || dock;
     }

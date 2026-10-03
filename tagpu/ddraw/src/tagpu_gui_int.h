@@ -14,8 +14,8 @@
 
 enum {
     PK_FRAME = 1,   /* a flip: `surf` is the presented surface; `w` the HUD
-                       scale of the dock region it was drawn with, 0 = none
-                       (tagpu_hud.h)                                          */
+                       scale of the dock region, `h` the player-card region,
+                       each 0 when absent (tagpu_hud.h)                                          */
     PK_RESET,       /* forget every twin (TAGPU_GUI_WHY_*: re-arm, overflow)  */
     PK_SEED,        /* `surf` w x h: the twin, made empty; nothing follows     */
     PK_FREE,        /* `surf` is gone                                          */

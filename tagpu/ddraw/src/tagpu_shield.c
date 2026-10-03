@@ -1,3 +1,4 @@
+#include "tagpu_cards.h"
 /* tagpu_shield.c — the input firewall.
 
    Rationale and message contract: inc/tagpu_shield.h.
@@ -201,6 +202,7 @@ static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
            click` and the human's mouse would disagree about the world — and
            the same is true of the wheel, which is why an injected notch is
            offered to the zoom here rather than short-circuited at the token */
+        if (tagpu_cards_wheel(msg, wparam, lparam)) return 0;
         if (tagpu_zoom_wheel(msg, wparam, lparam))
             return 0;
         tagpu_gui_wheel(msg, wparam, lparam);

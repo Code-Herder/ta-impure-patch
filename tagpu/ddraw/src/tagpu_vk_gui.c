@@ -34,7 +34,7 @@
 /* the std140 blocks, at the sizes the generated SPIR-V header prints */
 #define QVS_SZ  16                  /* QVS    binding 0  : vec2 uSize        */
 #define TWF_SZ  16                  /* CPY/SPR binding 32: 16 bytes          */
-#define LAY_SZ  128                 /* LAY_FS binding 32 : 128 bytes         */
+#define LAY_SZ  176                 /* LAY_FS binding 32, std140 */
 
 /* MAX_TWINS in tagpu_gui_surf.c. A bound here rather than a number taken from
    the hand-over: the scaffold's rule -- a handed-over count never sizes an
@@ -3872,6 +3872,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         fp = (float*)(b + 80); memcpy(fp, h.dock, sizeof h.dock);    /* uDock  */
         fp = (float*)(b + 96); memcpy(fp, h.dockMap, sizeof h.dockMap); /* uDockMap */
         fp = (float*)(b + 112); memcpy(fp, h.dockS, sizeof h.dockS); /* uDockS */
+        fp = (float*)(b + 128); memcpy(fp, h.cards, sizeof h.cards);
+        fp = (float*)(b + 144); memcpy(fp, h.cardsMap, sizeof h.cardsMap);
+        fp = (float*)(b + 160); memcpy(fp, h.cardsS, sizeof h.cardsS);
     }
     {
         VkDescriptorBufferInfo bi;

@@ -169,6 +169,13 @@ void tagpu_hud_dock_set(int q8);
 /* The word above: the scale of the dock in force for the pointer, 0 = none. */
 int  tagpu_hud_dock_q8(void);
 
+/* Player cards above the dock, magnified about their bottom-right corner. Same ordered frame
+   marker as the dock, separately enabled because an engine modal hides the cards. Pure map;
+   unlike dock_map, cards_map also returns the layout at 1x. */
+int tagpu_hud_cards_map(int W, int H, int q8, TAGPU_HUD_DOCKMAP* m);
+void tagpu_hud_cards_set(int q8);
+int tagpu_hud_cards_q8(void);
+
 /* The point maps, between the engine's 1x HUD coordinates and the screen the
    player sees. Both are the identity outside a HUD region and at stock scale,
    so an unconditional call costs a compare. */
