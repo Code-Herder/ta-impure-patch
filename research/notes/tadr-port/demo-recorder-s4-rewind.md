@@ -194,7 +194,7 @@ match their parents. Historical frame 900 (iteration 901) matches a fresh-proces
 seek exactly. Subsequent playback dumps, including radar, compare EQUAL. Both
 60-second return and 30-second fork health checks pass.
 
-The remaining failures are unchanged policy questions, not passing gates:
+Those runs failed on two policy questions:
 
 - Return-frame equality differs only in the unseated spectator's 72,904 newly
   allocated sight counters. Seated records' counters remain exact.
@@ -205,7 +205,7 @@ The remaining failures are unchanged policy questions, not passing gates:
   `0x4B192D`. The raw differences remain failures; no new exception is applied.
 
 These runs exercised the U lane, not the complete landing tier. The decisions
-below settle their two policy questions; fresh verification remains required.
+below settle their two policy questions; the later verification runs apply that scope.
 
 
 ### Accepted scope, 2026-10-03
@@ -226,7 +226,7 @@ The raised-limits VM calls `tagpu_rec_cob_child`, which brackets its synchronous
 allocator call with the corresponding diagnostic key. The stock VM already has
 those return addresses. This keeps the exception independent of DLL layout and
 avoids exempting unrelated calls originating in the DLL. The prior coverage runs
-remain recorded as failures under the previous policy; fresh runs are required.
+remain recorded as failures under the previous policy. The fresh runs below apply the accepted scope.
 
 
 ### Fresh verification under the accepted scope
@@ -250,7 +250,7 @@ covers 80 sink keys and stock covers 78; only the explicitly reported VM child
 pairs use the accepted exception. This does not establish exact COB execution
 continuity. The complete landing tier passes all 18 fixtures and reaches all 47 changed
 functions on their required builds. Its replay-roundtrip note is on `8cb3ed5e`.
-Dedicated reviews remain required before landing.
+The dedicated reviews and their correction are recorded below.
 
 
 ### Landing review correction
@@ -262,7 +262,7 @@ saves the objective's DWORD at `+0x88` before conversion and restores it before
 returning to live steps; the same level owns the object throughout. A fork keeps
 the takeover policy of arming objectives. The U lane now checks disabled-before,
 disabled-after-return, and armed-after-fork through live reads. The first full
-gate above predates this correction; a new gate is required.
+gate above predates this correction; the verification below includes it.
 
 The synchronization review found no surviving issue. The other confirmed finding
 was stale policy prose; the current descriptions now state the approved scope.
@@ -274,4 +274,51 @@ not a passing gate. The fixture now enables that switch for the command and
 restores its original value before rewind. An isolated four-seat run verified
 objective values 0 before rewind, 0 after return at frame 387 (137 ms), and 1
 after fork at frame 60 (142 ms), through live reads. The full tier is rerun with
-this verified setup.
+this verified setup; its U-lane results follow.
+
+
+### Verification of the review correction
+
+On the reference Wine setup, 2026-10-03, both coverage builds pass all 25 U-lane
+checks, including objective values 0 before rewind, 0 after return, and 1 after
+fork. Normal limits returns to frame 1697 and forks from 3543 to iteration 2941;
+stock returns to frame 1684 and forks from 3529 to iteration 2911.
+
+| Build | Conversion | Return to now | Fork |
+|---|---:|---:|---:|
+| Normal limits | 343 ms | 662 ms | 398 ms |
+| Stock limits | 258 ms | 550 ms | 266 ms |
+
+Return dumps compare EQUAL under amended D2. Historical frame 1080 compares EQUAL
+with a fresh-process seek without that mask. Both timelines have zero corrections;
+the original iterations are contiguous through the saved return boundary. Fork
+frames and subsequent playback dumps, including radar, compare EQUAL, and both
+health windows pass. AI creation is compared for seat 2 on normal limits and
+seats 2 and 3 on stock; the other seats have no baseline create and are reported
+as skipped. Movement is 92.2% of 1000 mobile units on normal limits and 80.924%
+of 1017 on stock. All 15 root counts match on each build; only the reported
+START/CALL child pairs use the approved rewind exception.
+
+The renewed complete tier did not pass: the ordinary takeover's AI check found
+seat 3 creating in the parent and only seat 1 in the fork, while `forest-fire`
+ended naturally at GameTime 4320 before its required 4500. Both rewind lanes
+passed all 25 checks. Replaying the same takeover recording at 1651 on both this
+branch and pre-S4d `f0748b8c` reproduced the same single fork creation at tick
+3347, slot 502, seat 1; the parent's creation was tick 2446, seat 3. This failure
+predates live rewind and is not waived. The battle fixture now adds unordered
+construction units at tick 120 so the AI check has more builders; its per-seat
+creation and movement requirements are unchanged. The forest fixture keeps the
+same two remote stationary units as `forest-circle`, so losing the battle's last
+combatant does not end the fixture before its scripted endpoint.
+
+
+The repaired forest fixture passes all 23 checks at the same seeded sample ticks:
+1291, 2431, 3091 and 3391. It reaches its scripted end, playback and fresh seek
+compare EQUAL, and all three round trips have zero poison residue.
+
+The strengthened takeover fixture passes at the failing tick 1651: seats 1, 2
+and 3 all create in both timelines over [1651, 3451], and 92% of 1007 mobile
+units move. Takeover takes 571 ms; the controlled unit moves 205 wu. The 1377-unit
+fork frame, both stream checks and playback across the fork all compare EQUAL.
+These targeted runs repair the two fixture failures; the complete landing tier
+must still be rerun on the committed fixture changes.

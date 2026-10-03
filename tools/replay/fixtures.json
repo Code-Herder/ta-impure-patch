@@ -23,7 +23,8 @@
    "rewind_steps": [[1200, "apply", "replay-rewind-builders.json"]],
    "forks": true,
    "load": "replay-battle-load.json",
-   "steps": [[1, "apply", "replay-battle-units.json"]],
+   "steps": [[1, "apply", "replay-battle-units.json"],
+             [120, "apply", "replay-rewind-builders.json"]],
    "end": 3810,
    "takeover": {"player": "controlled", "order": ["ARMCK", 0], "ms": 2000,
                 "checks": ["judge", "line", "orders", "ai", "fork"]}

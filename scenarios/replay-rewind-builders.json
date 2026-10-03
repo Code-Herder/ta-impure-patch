@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "Additional AI construction units for the live rewind comparison window. Added before the rewind in both the baseline and the rewound battle; the engine AI chooses their work.",
+ "description": "Additional unordered AI construction units for the takeover and live rewind comparisons. The battle receives them before takeover; the rewind baseline and live run receive another group before rewinding. The engine AI chooses their work.",
  "setup": {
   "clear_existing": false
  },
