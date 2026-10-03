@@ -2135,6 +2135,19 @@ changed functions on every required build; `ring_free` remains UNCOVERED, approv
 for this landing by the owner under OQ7 on 2026-10-02. The earlier naval sink-count difference also
 reproduced on pre-S4c main; its cause remains open and the tolerances are unchanged.
 
+### S4d — live rewind (under verification)
+
+[Live rewind](demo-recorder-s4-rewind.md) provides `tacli rewind` open, seek,
+return-to-now, fork and close on a recorded skirmish. The pause guard precedes
+the engine's scheduler test; the recorder suspends capture and events while
+retaining its pending iteration. Atomic frame dumps compare a historical frame
+with a fresh seek and the restored present with its saved frame. The original
+writer closes before a fork can acquire its file.
+
+Normal-limits smoke checks include exact fresh-seek equality, filename-collision
+handling, append refusal/retry and exit during rewind. The full verification and
+two comparison-policy decisions remain open in the module note. S4d is not landed.
+
 ## S5
 
 **S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens

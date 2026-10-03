@@ -1,6 +1,6 @@
-# Live rewind (S4d): prerequisite experiments
+# Live rewind (S4d)
 
-Live rewind is not ready to land. Its two prerequisite engine experiments passed
+The live rewind implementation is under verification. Its two prerequisite engine experiments passed
 on the reference setup, 2026-10-02, using a normal limits build based on
 `f0748b8c`, the battle fixture, and an isolated Wine/Xvfb instance. Temporary
 instrumentation ran in the existing game-thread frame visit before `0x4969CD`;
@@ -59,36 +59,149 @@ create follows the type flip and object release. The experiment exercises that
 ordering with the battle fixture's units. It does not prove every engine handler
 or replace the complete replay comparison gates.
 
-## Remaining implementation
+## Live rewind protocol
 
-The branch contains an unfinished implementation of writer flush acknowledgement,
-capture suspension, frame-dump loading and the live rewind state machine.
-Return-to-now must preserve the
-unpublished live iteration and pending effects; a fork must transfer writer
-ownership under [S4c's file locks](demo-recorder-s4-forks.md). These experiments
-used a completed recording as the rebuild source and do not test concurrent
-writer/reader opening, return-to-now equality, or fork handoff. Stock limits,
-the full rewind fixture, documentation and dedicated review remain required
-before the S4d landing.
+`tacli rewind INSTANCE open|seek T|now|fork|close [--dump NAME]` operates on
+an already running recorded skirmish. Opening pauses at frame GameTime G and
+asks the existing writer to flush its complete prefix. The writer observes the
+request before acquiring the published ring cursor, writes only closed iterations,
+retains the open iteration in its stream buffer, and acknowledges after the write.
+The acknowledgement also publishes the actual filename the writer opened, including
+a collision suffix when needed; rewind never assumes its first-choice name won.
+The complete seek interval ends at G−1. Opening and closing without a seek never
+rebuilds the world and restores the prior pause bit.
 
-## Integration checkpoint (2026-10-02)
+The first seek saves a standalone frame snapshot at iteration G+1, the original
+controllers, view, message log and pause state. Its snapshot reader ignores dump-only
+images, sight counters and count/name evidence; those records are not simulation
+operations. The recorder suspends event hooks, capture and diagnostic counters,
+retaining its comparison baselines and unpublished step-G events. The live-to-puppet
+conversion uses the P1/P2 ordering above, then the ordinary bounded seek.
 
-The normal DLL builds. Live open/close passed, including reporting a complete
-file interval ending one tick before the paused GameTime. The first backward
-seek remains refused before the live-to-puppet conversion: the saved-present
-reader reports `not a complete frame dump`.
+`now` rebuilds the saved frame through takeover using the saved controller types.
+It restores messages and view, resumes the existing recorder and restores pause.
+Its temporary sight effects use the recording's lead through G−1 plus the retained
+step-G events. The next capture compares the complete pools, map and globals;
+all feature-grid rows are marked for comparison. The original iteration G is
+published once with the events it already held.
 
-The initial smoke run and three fix-and-rerun attempts established:
+`fork` ends the original with `REC_END_FORKED` (13), including those pending events.
+A duplicated writer-completion event transfers ownership only after the writer
+closes its file and S4c lock. The frame visit polls that event, then the ordinary
+file-locking takeover appends the new timeline. A failed append leaves playback
+paused and permits retrying `fork`; `now` cannot resume an ended recording.
 
-1. The first-step clock check must be conditional when validating an already
-   running level; map, data and allocation checks still apply.
-2. The summary reader opens without write sharing. A live rewind uses its
-   already-open, validated recording reader's index for the seek interval.
-3. Comparison dumps had only a partial header. Frame dumps now carry the
-   normal recording header metadata, but loading their snapshot still fails.
+### Pause ordering and atomic dumps
 
-Work stopped at the project's retry limit. The checkpoint is not a landing or
-proof of return-to-now, fork continuity, or state equality. The CLI's optional
-dump argument still needs integration, as do the permanent rewind fixture and
-comparison checks. Pause-key handling during an open rewind and fork-failure
-recovery need validation before the implementation can be reviewed for landing.
+A before-observer steals the six-byte `test byte [eax+0x38A51],bl` at `0x496920`.
+On the game thread, while rewind owns the level, it sets pause before the original
+test executes. The following `jne 0x496969` skips scheduler `0x495230` and step
+`0x495490`. A physical Pause key therefore cannot advance the suspended world.
+If the site cannot be installed, live rewind refuses to open. Ordinary playback
+commands cannot move a level owned by rewind.
+
+`--dump` is taken at the operation's frame visit, before restoring an unpaused
+state, and before its success acknowledgement. It captures the exact rebuilt
+frame regardless of CLI polling latency. `seek-frame T dump NAME` in the replay
+trigger provides the corresponding paused, atomic fresh-process comparison.
+
+### Verification in progress
+
+On the reference setup, the normal-limits smoke test opened at GameTime 221,
+closed without moving, paused at 625, sought to iterations 301 and 331, and
+returned to exactly frame 625. The Pause key advanced neither an open rewind
+nor its historical frame. Atomic seek/now/fork dumps succeeded. Conversion took
+323 ms, return-to-now 556 ms and fork 558 ms, including the requested dumps.
+A subsequent open at 918 forked at iteration 601 and played on.
+
+The preceding smoke recording passed `tarec check`: 927 explained steps, zero
+corrections. Its fork's first iteration compared EQUAL with its parent. The
+pre/post comparison under D2 matched except for the newly allocated unseated
+spectator's sight buffer (72,904 counters). D2 currently excludes unseated player
+images only; extending it to their sight counters requires the owner's decision.
+Seated players' sight counters matched exactly.
+
+The full `tareplay.py rewind battle` fixture runs a live battle through open/close,
+return-to-now, and fork; compares a fresh seek and original playback; checks
+contiguous iterations, event counts, AI activity and window health; and reports
+conversion, return and fork times. It is also the U lane of battle and stock-limits
+landing fixtures, using the battle on each limits build. The coverage results below still have two failing checks. The complete landing
+tier, documentation verification and dedicated review remain required before landing. This note does not claim those gates have passed.
+
+### First full normal-limits run
+
+The live run returned from iterations 901 and 1201 to frame 1519, then forked
+from live frame 3346 to iteration 2731. Both timelines pass `tarec check` with
+zero corrections; the original contains exactly iterations 1..3346, including
+1519 and 1520 once each, and ends `REC_END_FORKED`. The fork's first frame
+matches its parent. Playback dumps at 1549 and 2119 compare EQUAL, including
+the radar picture. The 60-second now judge and 31-second fork judge passed.
+Conversion was 658 ms, return 575 ms, fork 715 ms.
+
+The gates still name these gaps:
+
+- Pre/post: only the unseated spectator's sight allocation differs, as above.
+- Fresh seek: V's WinLoseTime, loaded/count flags and version bytes differed.
+  The implementation now initializes those fields through the loader's documented
+  scalar values. The subsequent normal-limits smoke test compares the historical
+  frame at iteration 301 with a fresh seek EQUAL, with no comparison masks.
+- AI activity: 96.3% of 1019 AI mobile units moved over the window, but the
+  baseline made no unit in that window. Under the approved OQ-C amendment this
+  is UNRUN, not a pass. Its first later AI create was at 3835, outside the window.
+- Counts spanning return: all 15 root sites match. Six COB child-script keys at
+  `0x4B08C0`, called by `cob_run_step`'s START/CALL branch, differ beyond the
+  existing 5%/2 band: SmokeUnit 32/0, Go 13/1, MotionControl 3/0,
+  RequestState 30/7, open 123/94 and activatescr 13/2 (live/playback).
+  Disassembly of the tested normal DLL identifies the counted return offset
+  `0x7EB87` as that branch's allocation call. Return-to-now reconstructs COB
+  objects but the plan excludes preserving their thread state. Any scoped
+  count exception or expansion to preserve COB state needs an owner decision;
+  no exclusion or tolerance has been changed.
+
+### Filename and recovery checks
+
+A normal-limits run pre-created the recorder's candidate filenames in its owned
+instance. The writer selected the `(2)` suffix; open, both seeks, return-to-now
+and fork succeeded on that actual file. Return took 553 ms and fork 542 ms.
+
+A separate four-seat run made its recording read-only after seeking to iteration
+61. Fork refused after the original writer closed, retained frame GameTime 60,
+and refused return-to-now because the original was ended. Restoring write access
+and retrying fork succeeded in 140 ms. Opening the new timeline at 155 and asking
+`now --dump` without seeking closed without movement and dumped frame 155.
+Another open/seek followed by menu exit completed through the normal shutdown.
+
+
+### Normal and stock coverage results
+
+Both full rewind fixtures finished with 20 passing checks and two failures, with
+no UNRUN checks. The extra builders introduced at tick 1200 in both the baseline
+and live run let the AI choose construction work within the comparison window.
+Seat 2 created a unit in both runs; seats 1 and 3 had no baseline create and were
+reported as skipped under OQ-C. Mobile movement was 92.512% of 1015 units on the
+normal build and 80.273% of 1024 on stock limits.
+
+| Coverage build | Return frame | Fork source / target iteration | Conversion / now / fork |
+|---|---|---|---|
+| Normal limits | 1515 | 3362 / 2761 | 671 / 504 / 679 ms |
+| Stock limits | 1516 | 3379 / 2761 | 512 / 409 / 493 ms |
+
+Both original timelines are contiguous from iteration 1 through their fork source,
+with each return boundary present exactly once. Both timelines on both builds
+pass the stream check with zero corrections and matching snapshots. Fork frames
+match their parents. Historical frame 900 (iteration 901) matches a fresh-process
+seek exactly. Subsequent playback dumps, including radar, compare EQUAL. Both
+60-second return and 30-second fork health checks pass.
+
+The remaining failures are unchanged policy questions, not passing gates:
+
+- Return-frame equality differs only in the unseated spectator's 72,904 newly
+  allocated sight counters. Seated records' counters remain exact.
+- Counts across return match all 15 root sites, but seven COB child-script keys
+  exceed the existing band on each build. The keys are SmokeUnit, close, Go,
+  MotionControl, RequestState, open and activatescr. The normal coverage DLL
+  reports allocator return offset `0x1066C7`; stock reports `0x4B18C0` and
+  `0x4B192D`. The raw differences remain failures; no new exception is applied.
+
+These runs verify the U lane, not the complete landing tier. The owner must
+resolve the two comparison-policy questions before the landing can proceed.

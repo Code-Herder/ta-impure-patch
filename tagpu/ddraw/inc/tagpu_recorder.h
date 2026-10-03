@@ -152,6 +152,7 @@ typedef struct RecRing {
     HANDLE         done;               /* manual-reset; the writer's handle, set once the file
                                           is closed: *The exit* waits on the capture's own    */
     char           path[MAX_PATH];     /* the recording's file, named by the capture           */
+    char           opened_path[MAX_PATH]; /* writer's actual name; published by flush_done */
     unsigned char* grid;               /* the feature grid's first image, every cell's, from
                                           VirtualAlloc: written by the capture before it
                                           publishes the RK_GRID that names it, so the writer
@@ -180,8 +181,8 @@ int tagpu_rec_fork_arm(RecFork* f);
 /* Live rewind, game thread only, between simulation steps. Flush asks asynchronously; poll is
    0 pending, 1 complete, -1 failed. Suspension retains the unpublished step's events and all
    capture baselines. Resume compares every feature row before the next iteration is published. */
-int tagpu_rec_rewind_open(char* path, unsigned cap, unsigned* timeline, char* why, unsigned whycap);
-int tagpu_rec_rewind_flush(void);
+int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap);
+int tagpu_rec_rewind_flush(char* path, unsigned cap);
 int tagpu_rec_suspend(int on);
 typedef void (*RecPendingVisit)(void* ctx, unsigned kind, const unsigned char* body, unsigned len);
 void tagpu_rec_pending_events(RecPendingVisit visit, void* ctx);

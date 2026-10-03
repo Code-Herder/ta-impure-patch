@@ -399,6 +399,18 @@ pauses, since a puppet host's speed keys change nothing), `dump <name> now` (a f
 once), `seek <T> [dump <name>]`, `dock seek <T>` (the dock's own seek entry,
 `tagpu_replay_seek_request`, which takes no dump) and `roundtrip <name> at <T>`.
 
+**Live rewind (U).** A fixture with `"rewind": true` also runs the
+[rewind L/P/Q checks](demo-recorder-s4-rewind.md) in `tarewind.py`. Battle and
+stock-limits use the battle on their respective DLLs. `rewind_steps` declares
+additional scenario steps for both the baseline and rewound game, so edits to
+those scenarios select these fixtures for the landing tier. The current extra
+step supplies AI builders before the comparison window, without giving them
+construction orders. `tareplay.py rewind battle [--stock] [--cover]` runs this
+lane independently. Its fresh seek uses `seek-frame T dump NAME`, which pauses
+and dumps in the seek's frame visit. Comparison policy remains the owner's:
+unseated sight allocation and restarted COB child threads are pending decisions
+in the rewind note, not additional exclusions in the harness.
+
 **The player's way in (W).** A fixture with `"watch": true` in `fixtures.json` — `stock-limits` on
 the stock-limits build and `wpn-badtgt` on the raised one, so the landing tier's coverage holds
 both builds — runs a fifth process on its recording, `watch_lane` in `tareplay.py`, which starts

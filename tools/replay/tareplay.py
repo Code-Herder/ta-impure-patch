@@ -439,7 +439,8 @@ def procs(fix):
     """The processes a fixture runs: L, P, R and Q; K and F where fixtures.json gives it a
     takeover; W where it asks for the browser's Watch."""
     return (("L", "P", "R", "Q") + (("K", "F") if fix.get("takeover") else ()) +
-            (("W",) if fix.get("watch") else ()) + (("X",) if fix.get("forks") else ()))
+            (("W",) if fix.get("watch") else ()) + (("X",) if fix.get("forks") else ()) +
+            (("U",) if fix.get("rewind") else ()))
 
 
 def head():
@@ -1343,7 +1344,7 @@ def checks(fx):
     """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
     read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
     rec, Ts, out, ran = fx["rec"], fx["Ts"], fx["out"], fx["procs"]
-    res = list(fx.get("xres", []))
+    res = list(fx.get("xres", [])) + list(fx.get("ures", []))
     rc, o = tarec_run("info", rec)
     m = re.search(r"ended: (.*)", o)
     end = m.group(1) if m else "no end block"
@@ -1726,6 +1727,8 @@ class Run:
                 fx["tk_f"] = takeover_f(w, fx, out)
             elif proc == "X":
                 fx["xres"] = forks_lane(w, fx, out)
+            elif proc == "U":
+                fx["ures"] = rewind_lane(w, fx, out)
             elif proc == "W":
                 fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
@@ -1997,7 +2000,8 @@ def fixture_users(scenario):
     """The fixtures whose load or applied steps name `scenario`."""
     out = set()
     for name, fix in fixtures().items():
-        named = {fix["load"]} | {a for _, k, a in fix.get("steps", []) if k == "apply"}
+        steps = fix.get("steps", []) + fix.get("rewind_steps", [])
+        named = {fix["load"]} | {a for _, k, a in steps if k == "apply"}
         if scenario in named:
             out.add(name)
     return out
@@ -2326,6 +2330,41 @@ def cmd_forks(args):
         w.close()
 
 
+def rewind_lane(w, fx, out):
+    import tarewind
+    battle = fixtures()["battle"]
+    # Both runs give the AI fresh builders before the comparison window. Their commands
+    # come from the AI; the fixture supplies no construction orders.
+    fix = {**battle, "steps": battle["steps"] + fx["fix"].get("rewind_steps", [])}
+    lane = {**fx, "fix": fix}
+    lane["rec"] = live(w, lane, None, out / "baseline")
+    return tarewind.run(sys.modules[__name__], w, lane, out)
+
+
+def cmd_rewind(args):
+    if args.fixture != "battle":
+        raise CouldNotRun("rewind's L/P/Q fixture is battle")
+    out = out_dir(args)
+    dll, make = build_dll(args.stock, args.cover)
+    if not dll.exists() or dll.stat().st_mtime < sources_mtime():
+        raise CouldNotRun(f"build {make} first")
+    w = Worker(out)
+    try:
+        fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
+              "cover": args.cover}
+        res = rewind_lane(w, fx, out)
+        text = "\n".join(f"{status} {name}: {detail}" for name, status, detail in res)
+        (out / "summary.txt").write_text(text + "\n")
+        return 1 if any(s == FAIL for _, s, _ in res) else 2 if any(s == UNRUN for _, s, _ in res) else 0
+    except (CouldNotRun, Failed) as e:
+        say("rewind:", str(e))
+        w.collect(out / "failure", recordings=True)
+        w.stop()
+        return 1 if isinstance(e, Failed) else 2
+    finally:
+        w.close()
+
+
 def cmd_list(args):
     for name, fix in fixtures().items():
         print(f"{name:16} {fix['load']}, end at GameTime {fix['end']}"
@@ -2388,6 +2427,12 @@ def main(argv=None):
     fk.add_argument("--cover", action="store_true")
     fk.add_argument("--out")
     fk.set_defaults(func=cmd_forks, dll=None, stock_dll=None)
+    rw = sub.add_parser("rewind", help="live battle rewound, restored, forked and played on P/Q")
+    rw.add_argument("fixture", choices=["battle"])
+    rw.add_argument("--stock", action="store_true", help="the same battle on stock limits")
+    rw.add_argument("--cover", action="store_true")
+    rw.add_argument("--out")
+    rw.set_defaults(func=cmd_rewind)
     fe = sub.add_parser("features", help="the SIM_FEATURE regions of the sim files")
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")

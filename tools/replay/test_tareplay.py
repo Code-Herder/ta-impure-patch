@@ -429,7 +429,8 @@ class TakeoverFixtures(unittest.TestCase):
             self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
             self.assertEqual(tareplay.procs(fixes[name]), ("L", "P", "R", "Q", "K", "F") +
                              (("W",) if fixes[name].get("watch") else ()) +
-                             (("X",) if fixes[name].get("forks") else ()))
+                             (("X",) if fixes[name].get("forks") else ()) +
+                             (("U",) if fixes[name].get("rewind") else ()))
             if "order" in t:
                 self.assertEqual(len(t["order"]), 2, name)
         self.assertEqual(tareplay.procs(fixes["forest-fire"]), ("L", "P", "R", "Q"))

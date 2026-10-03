@@ -3045,6 +3045,15 @@ lock; exit waits for recording writers, then seals and waits for maintenance.
 The existing **fields we write** below remain those of playback and takeover;
 file metadata changes add no engine writes.
 
+**Live rewind** ([S4d](tadr-port/demo-recorder-s4-rewind.md)): `tacli rewind INSTANCE
+open|seek T|now|fork|close [--dump NAME]` pauses a recorded skirmish, preserves its
+present while inspecting earlier frames, and either restores that present or ends
+the original and appends a fork. The writer acknowledges a complete-prefix flush;
+recording remains suspended during reconstruction, preserving pending live events.
+The **pause guard at `0x496920`**, stolen `84 98 51 8A 03 00`, observes before the
+engine's pause test and reasserts pause while rewind owns the level. Failure to
+install it disables live rewind.
+
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
 `0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the
@@ -3082,7 +3091,17 @@ returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, 
 logged. The gates make them zero; the observers prove it. **The step's phases** (§2.6e) call
 `tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
-**Fields we write**, on the game thread, on a puppet level only:
+**Fields we write**, on the game thread, during playback, takeover or live rewind:
+
+- live rewind: pause bit 0 at `main+0x38A51`; the spectator's seat and buffers
+  through `0x464290` and `0x464700`; recorded seats' type through `0x463C60`,
+  acquisition table through `0x40B390`, and AI `+0x74` cleared only after all their
+  units have been destroyed. V gets the fresh loader's WinLoseTime `+0xF4 = 0`,
+  PlayerInfo `+0x9B` count nibble and loaded bit, and `+0xA7/+0xA8` version bytes
+  from `main+1/+2`. Return-to-now restores the saved viewed player,
+  the 2160-byte message area at `main+0x12EF` and its two indices at `+0x2A3E`,
+  with the saved controllers supplied to the takeover. No difficulty change is
+  applied on that return;
 
 - at the seat fill: each seat's record through `0x464290(seat, 3)`, then PlayerInfo `+0x95` and
   `+0x96`, the name at `+0x2B` and `+0x49`, and the alliance row `+0x108..+0x112`; V's through

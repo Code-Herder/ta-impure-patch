@@ -209,11 +209,13 @@ static struct {
     unsigned state, G, P, viewed, viewer, timeline, T;
     unsigned short pause, message_at[2];
     unsigned char types[REC_PLAYERS], messages[2160];
-    char path[MAX_PATH], dump[40];
+    char path[MAX_PATH], dump[40], result_dump[40];
+    DWORD started;
     RecReader* now;
     RecReader* live;
     HANDLE done;
 } s_rw;
+static int s_rw_pause_in;
 static int rw_prepare(char* ta, char* why, unsigned cap);
 static void rw_seats(char* ta);
 static void rw_finish(char* ta, int back);
@@ -5598,7 +5600,14 @@ static int rw_prepare(char* ta, char* why, unsigned cap)
         tagpu_refuse("Rewinding failed: the spectator's player buffers could not be allocated.");
         return 0;
     }
-    info[INFO_FLAGS] |= INFO_WATCHER;
+    /* V represents a freshly loaded playback seat. Its WinLoseTime was zero at that
+       load (0x464727); the loader sets bit 4 (0x497BFF), and 0x451090 copies the
+       player count into bits 0..3 and main's version bytes into PlayerInfo+A7/A8. */
+    *(unsigned*)(rec + 0xF4) = 0;
+    info[INFO_FLAGS] = (unsigned char)((info[INFO_FLAGS] & ~0x0Fu) |
+        INFO_WATCHER | 0x10u | (*(unsigned short*)(ta + OFF_NPLAYERS) & 0x0Fu));
+    info[0xA7] = (unsigned char)ta[1];
+    info[0xA8] = (unsigned char)ta[2];
     info[INFO_SIDE] = (*(unsigned char**)(player_rec(ta, s_rw.P) + PL_INFO))[INFO_SIDE];
     ta[OFF_CONTROLLED] = (char)v;
     ta[OFF_VIEWED] = (char)s_rw.P;
@@ -5663,6 +5672,10 @@ static void rw_finish(char* ta, int back)
 {
     unsigned short pause = s_rw.pause;
     unsigned G = s_rw.G;
+    DWORD started = s_rw.started;
+    char dump[40];
+    int dumped;
+    memcpy(dump, s_rw.result_dump, sizeof dump);
     if (back) {
         ta[OFF_VIEWED] = (char)s_rw.viewed;
         memcpy(ta + 0x12EF, s_rw.messages, sizeof s_rw.messages);
@@ -5679,20 +5692,24 @@ static void rw_finish(char* ta, int back)
         s_rw.live = NULL;             /* tk_end has closed it */
         rw_dispose();
     }
+    dumped = !dump[0] || tagpu_rec_dump_now(dump);
     *(unsigned short*)(ta + OFF_PAUSE) =
         (unsigned short)((*(unsigned short*)(ta + OFF_PAUSE) & ~1u) | pause);
-    tagpu_logf("rewind: %s at GameTime %u", back ? "returned to now" : "forked", back ? G :
-               *(unsigned*)(ta + OFF_GAMETIME));
+    if (!dumped) tagpu_logf("rewind: refused: operation finished but its frame dump failed");
+    else tagpu_logf("rewind: %s at GameTime %u in %lu ms", back ? "returned to now" : "forked",
+                   back ? G : *(unsigned*)(ta + OFF_GAMETIME), GetTickCount() - started);
 }
 
 static void rw_close_unmoved(char* ta)
 {
     unsigned pause = s_rw.pause;
+    int dumped = !s_rw.result_dump[0] || tagpu_rec_dump_now(s_rw.result_dump);
     rw_dispose();
     replay_close();
     *(unsigned short*)(ta + OFF_PAUSE) =
         (unsigned short)((*(unsigned short*)(ta + OFF_PAUSE) & ~1u) | pause);
-    tagpu_logf("rewind: closed, nothing moved");
+    if (dumped) tagpu_logf("rewind: closed, nothing moved");
+    else tagpu_logf("rewind: refused: closed but its frame dump failed");
 }
 
 static void rw_poll(void)
@@ -5704,7 +5721,7 @@ static void rw_poll(void)
     if (!s_rw.state || !ta) return;
     *(unsigned short*)(ta + OFF_PAUSE) |= 1;
     if (s_rw.state == RW_FLUSH) {
-        k = tagpu_rec_rewind_flush();
+        k = tagpu_rec_rewind_flush(s_rw.path, sizeof s_rw.path);
         if (!k) return;
         if (k < 0) { tagpu_logf("rewind: open refused: writer failed"); rw_close_unmoved(ta); return; }
         if (!recfile_play(s_rw.path, s_rw.timeline)) {
@@ -5735,6 +5752,10 @@ static void rw_poll(void)
             if (n > 7 && !strcmp(s_name + n - 7, ".imprec")) s_name[n - 7] = 0;
         }
         s_rw.state = RW_OPEN;
+        if (s_rw.result_dump[0] && !tagpu_rec_dump_now(s_rw.result_dump)) {
+            tagpu_logf("rewind: open refused: opened but its frame dump failed");
+            return;
+        }
         tagpu_logf("rewind: opened at GameTime %u; the file holds %u to %u", s_rw.G,
                    s_span.first, s_span.last);
     } else if (s_rw.state == RW_ENDING && WaitForSingleObject(s_rw.done, 0) == WAIT_OBJECT_0) {
@@ -5752,19 +5773,40 @@ static void rw_poll(void)
 static int rw_trigger(const char* line)
 {
     char* ta = ta_main();
-    char why[200];
+    char why[200], command[80], dump[40] = "";
+    char* suffix;
     unsigned T;
     int k;
     if (strncmp(line, "rewind ", 7)) return 0;
     line += 7;
     if (!ta) return 1;
+    if (strlen(line) >= sizeof command) {
+        tagpu_logf("rewind: refused: command too long"); return 1;
+    }
+    strcpy(command, line);
+    suffix = strstr(command, " dump ");
+    if (suffix) {
+        *suffix = 0;
+        suffix += 6;
+        if (!*suffix || strlen(suffix) >= sizeof dump || !name_ok(suffix)) {
+            tagpu_logf("rewind: refused: invalid frame dump name"); return 1;
+        }
+        strcpy(dump, suffix);
+    }
+    line = command;
+    /* An asynchronous operation owns its dump and start time until its acknowledgement. */
+    if (s_rw.state == RW_FLUSH || s_rw.state == RW_ENDING) {
+        tagpu_logf("rewind: refused: waiting for the writer"); return 1;
+    }
+    memcpy(s_rw.result_dump, dump, sizeof dump);
+    s_rw.started = GetTickCount();
     if (!strcmp(line, "open")) {
-        if (s_rw.state || s_rd || tagpu_puppet_on() || (ta[OFF_NETWORK] & 1)) {
+        if (!s_rw_pause_in || s_rw.state || s_rd || tagpu_puppet_on() || (ta[OFF_NETWORK] & 1)) {
             tagpu_logf("rewind: open refused: not a live recorded skirmish"); return 1;
         }
         s_rw.pause = *(unsigned short*)(ta + OFF_PAUSE) & 1;
         *(unsigned short*)(ta + OFF_PAUSE) |= 1;
-        if (!tagpu_rec_rewind_open(s_rw.path, sizeof s_rw.path, &s_rw.timeline, why, sizeof why)) {
+        if (!tagpu_rec_rewind_open(&s_rw.timeline, why, sizeof why)) {
             tagpu_logf("rewind: open refused: %s", why); rw_close_unmoved(ta); return 1;
         }
         s_rw.G = *(unsigned*)(ta + OFF_GAMETIME);
@@ -5797,7 +5839,9 @@ static int rw_trigger(const char* line)
         s_seek.dump[0] = 0;
         k = seek_run(ta);
         if (k) s_rw.T = T;
-        tagpu_logf("rewind: seek %u %s", T, k ? "complete" : "refused");
+        if (k && dump[0]) k = tagpu_rec_dump_now(dump);
+        tagpu_logf("rewind: seek %u %s in %lu ms", T, k ? "complete" : "refused",
+                   GetTickCount() - s_rw.started);
     } else if (!strcmp(line, "fork") && s_rw.state == RW_PAST) {
         /* Ending publishes G's pending events. The done event transfers file access only after
            the old writer has closed both its file and S4c lock. Polling keeps the game thread
@@ -5962,6 +6006,10 @@ static void trigger_read(void)
         tagpu_cover_write(name);
         return;
     }
+    if (s_rw.state) {
+        tagpu_logf("replay: refused: use rewind commands while live rewind owns the level");
+        return;
+    }
     if (sscanf(line, "roundtrip %39s%n", name, &end) == 1 && !strncmp(line + end, " at ", 4) &&
         u32_word(line + end + 4, &T)) {
         rt_arm(name, T);
@@ -5969,6 +6017,25 @@ static void trigger_read(void)
     }
     if (!strncmp(line, "dock seek ", 10) && u32_word(line + 10, &T)) {
         tagpu_replay_seek_request(T);
+        return;
+    }
+    /* The harness compares the rebuilt frame before a step can alter it. The dump and
+       pause belong to this frame visit, so the caller's polling latency cannot move it. */
+    if (!strncmp(line, "seek-frame ", 11) &&
+        seek_words(line + 11, &T, dump, sizeof dump) && dump[0]) {
+        char* ta = ta_main();
+        if (!ta || s_rw.state || !tagpu_puppet_on() || !s_rd || s_dead) {
+            tagpu_logf("replay: frame seek refused: this level is not ordinary playback");
+            return;
+        }
+        s_seek.pending = 0;
+        s_seek.mode = SK_SEEK;
+        s_seek.boundary = 0;
+        s_seek.T = T;
+        s_seek.dump[0] = 0;
+        *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+        if (!seek_run(ta) || !tagpu_rec_dump_now(dump))
+            tagpu_logf("replay: frame seek refused: seek or dump failed");
         return;
     }
     if (!strncmp(line, "seek ", 5) && seek_words(line + 5, &T, dump, sizeof dump)) {
@@ -6426,7 +6493,7 @@ const char* tagpu_replay_path(void)
    reader refuses a T outside the recording before anything changes (recr_seek). */
 int tagpu_replay_seek_request(unsigned T)
 {
-    if (!tagpu_replay_live() || !s_span.ok) {
+    if (s_rw.state || !tagpu_replay_live() || !s_span.ok) {
         tagpu_logf("replay: a seek to %u from the dock refused: the level plays no recording", T);
         return 0;
     }
@@ -6876,6 +6943,26 @@ static unsigned char* before_call(unsigned engine, void (__cdecl* fn)(void))
     return s;
 }
 
+/* DISASSEMBLED: 0x496920 tests main+0x38A51 bit 0 immediately before the branch
+   around scheduler 0x495230 and step 0x495490. Both the rewind state and this callback
+   belong to the game thread. Reasserting pause before that test prevents a physical
+   Pause key from advancing the suspended world; doing it at the later draw visit cannot. */
+static int __cdecl rw_pause_guard(void* entry_esp)
+{
+    char* ta = ta_main();
+    (void)entry_esp;
+    if (s_rw.state && ta) *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+    return 0;
+}
+
+static void rw_pause_init(void)
+{
+    static const unsigned char TEST[6] = { 0x84, 0x98, 0x51, 0x8A, 0x03, 0x00 };
+    s_rw_pause_in = tagpu_detour_bytes_ok(0x00496920u, TEST, sizeof TEST) &&
+        tagpu_detour_observe(0x00496920u, TEST, sizeof TEST, rw_pause_guard, NULL);
+    tagpu_logf("rewind: scheduler pause guard %s", s_rw_pause_in ? "in" : "unavailable");
+}
+
 /* The frame visit's site: the in-play draw call `call 0x468CF0` at 0x4969CD (`push ebx; push ebx`
    before it, DISASSEMBLED). Two facts it rests on:
    - the stub is entered by the site's call and leaves by a jump, so DrawGameScreen runs with the
@@ -6963,6 +7050,7 @@ void tagpu_replay_init(void)
     unsigned char *fill, *persist, *skip, *p;
     int ok = 1;
     frame_site_init();
+    rw_pause_init();
     if (!call_is(FILL, 0x0047A760u) || !call_is(PERSIST, 0x00430F00u) ||
         !call_is(START1, 0x00496EE0u) || !call_is(START2, 0x00496EE0u)) {
         tagpu_logf("replay: the Start's or the loader's calls hold other bytes: no replays");

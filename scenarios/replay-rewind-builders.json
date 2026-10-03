@@ -1,0 +1,66 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Additional AI construction units for the live rewind comparison window. Added before the rewind in both the baseline and the rewound battle; the engine AI chooses their work.",
+ "setup": {
+  "clear_existing": false
+ },
+ "groups": [
+  {
+   "id": "builders1",
+   "owner": 1,
+   "at": [
+    6900,
+    7100
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 2,
+    "spacing": 120
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 4
+    }
+   ]
+  },
+  {
+   "id": "builders2",
+   "owner": 2,
+   "at": [
+    1900,
+    1900
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 2,
+    "spacing": 120
+   },
+   "composition": [
+    {
+     "type": "ARMCK",
+     "count": 4
+    }
+   ]
+  },
+  {
+   "id": "builders3",
+   "owner": 3,
+   "at": [
+    7100,
+    1900
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 2,
+    "spacing": 120
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 4
+    }
+   ]
+  }
+ ]
+}

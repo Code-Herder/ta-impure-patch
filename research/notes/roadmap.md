@@ -3874,7 +3874,12 @@ network game played with Impure records no demo.
 [S4d's prerequisite experiments](tadr-port/demo-recorder-s4-rewind.html) passed
 on 2026-10-02: a spectator was seated and reused mid-game, and 1370 live units
 were destroyed before their AI objects were released and 1416 puppets rebuilt.
-The live rewind implementation and its full replay gates remain pending.
+The full rewind fixture now passes 20 of 22 checks on both normal and stock
+coverage builds, including exact fresh-seek equality, contiguous recording, AI
+activity and fork playback. Return-to-now measured 504/409 ms and fork 679/493 ms
+on the reference setup. Two owner decisions remain: the unseated spectator sight
+buffer and COB child-script counts across return-to-now. The complete landing tier
+and dedicated review remain pending.
 
 ## The restorer as compute (2026-09-27)
 

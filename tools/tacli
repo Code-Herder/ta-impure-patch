@@ -5667,7 +5667,7 @@ def cmd_rewind(args):
     tmp.write_text(cmd + "\n")
     os.replace(tmp, trig)
     expected = {"open": "opened at GameTime", "seek": f"seek {args.T} complete",
-                "now": "returned to now", "fork": "forked at GameTime",
+                "now": "(?:closed, nothing moved|returned to now)", "fork": "forked at GameTime",
                 "close": "(?:closed, nothing moved|returned to now)"}[args.action]
     done_rx = re.compile(r"rewind: " + expected)
     dump_rx = re.compile(rf"recorder: frame dump {re.escape(args.dump or '')} at GameTime (\d+)")

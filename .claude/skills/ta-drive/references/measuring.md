@@ -210,10 +210,11 @@ capture time out; it never returns a stale file.
   Take it with `aniso=1` in `classicpp.cfg` (anisotropic sample placement is implementation-
   defined; 4 is what ships) and `shadows=0`, or the soft-shadow PCF's 1 px is in the figure.
 - **Lines have their own oracle.** A claimed frame of `mark`, `fx` or `posedraw` also writes
-  `tagpu_<pass>_lines.txt`: a header `# <pass> <grid w> <grid h> <w>`, then every line with its
+  a file named from `tagpu_`, the pass name and the suffix `_lines` + `.txt`:
+  a header `# <pass> <grid w> <grid h> <w>`, then every line with its
   integer ends in LINE-GRID pixels (the world target's own, `w` = `ss` to a game pixel) — for
   `mark` and `fx` the ends BEFORE DrawLine's clip, with the clip rect (`<L> <T> <R> <B>`, line
-  grid) after `<w>`; `tools/line-oracle.py <capture.ppm> <lines.txt>` clips (`0x4BEA20`,
+  grid) after `<w>`; `tools/line-oracle.py <capture.ppm> <line-list>` clips (`0x4BEA20`,
   `0x4CC650`), walks them with its own reading of `DrawLine 0x4CC7AB`, thickens to `w` and
   compares lit pixels, 0 px or not. `tacli arm <name> ss.off` gives the game grid (`w = 1`),
   where the rule is the engine's line. To put

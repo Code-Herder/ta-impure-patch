@@ -2735,6 +2735,18 @@ in-play frame callback `0x496790`'s draw call. The pause test `0x496920..0x49692
 every path from there reaches `0x4969CD`, so the site runs on paused frames too. The scenario
 applier's tick hook takes the next instruction's bytes (`0x4969D2`), disjoint from these.
 
+**Live rewind's pause guard, `0x496920` [DISASSEMBLED].** The six stolen bytes
+`84 98 51 8A 03 00` are `test byte [eax+0x38A51],bl`; `jne 0x496969` at
+`0x496926` skips the scheduler call at `0x496928` and the step call at
+`0x49693E`. A before-observer sets pause while the game-thread rewind state is
+active, then executes that same test. This orders the pause before every simulation
+entry through this frame path, even when input has toggled it since the previous
+draw. The later draw observer alone cannot provide that ordering. The preceding
+`main+0x37EBE` test at `0x496918` may branch directly to `0x49697B`, bypassing
+both this test and simulation. [Live rewind](tadr-port/demo-recorder-s4-rewind.md)
+records the pause-key measurements.
+
+
 **Corrections to this map's earlier lines**, each re-read here: `0x416390` (`call 0x424840; ret 4`)
 is the console command **BurnAll** and `0x4163A0`, which destroys the feature under the cursor
 with `force` 1 (`0x4163C8`), is **BurnOne** — the command table's entries at `0x50203C` and
@@ -3079,6 +3091,22 @@ through `0x4D83B0` and overwrites `+0x78` at `0x4801B1` without freeing the old
 pointer; the remainder initializes ten `0x20`-byte groups and returns `ret 4`
 at `0x4801E3`. P1 reused all three buffers across two activations at GameTime
 1522 and then completed teardown and a second skirmish load.
+
+**The mid-game spectator must receive the loaded seat's metadata [DISASSEMBLED].**
+The ordinary player init writes GameTime into `+0xF4` (WinLoseTime) at `0x464727`;
+a fresh playback initializes it at zero, while a mid-game init would stamp the live
+GameTime. Its only recorded consumer is the saver. Rewind initializes the viewer's
+stamp to zero so its frame matches a fresh playback.
+
+`0x451090` has direct callers `0x45119D`, `0x451584` and `0x4540BB`. It selects
+the controlled record's PlayerInfo, copies `main+1` to `info+0xA7` at `0x4510C0`
+and `main+2` to `info+0xA8` at `0x4510D4`, and inserts `main+0x2A3C`'s low nibble
+into `info+0x9B` bits 0–3 (`0x4510E4..0x4510F4`). The two version bytes also
+have stores at `0x4513F1` and `0x451400`. The loader sets `info+0x9B` bit 4 at
+`0x497BFF`, then calls `0x450F90` and `0x451180` at `0x497C06` and `0x497C0B`.
+The former returns immediately without the network bit (`0x450F9B..0x450FA2`);
+the latter reaches the metadata fill described above. Rewind supplies these
+bounded scalar fields for V without rerunning the loader or its network paths.
 
 The scheduler's player scan tests active/type 3 at `0x4952CF..0x4952D6`, then
 skips a zero live count `+0x144` at `0x4952D8..0x4952DF`, before reading the

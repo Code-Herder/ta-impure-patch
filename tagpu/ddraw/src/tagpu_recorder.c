@@ -4406,7 +4406,7 @@ static void rec_stop(unsigned reason)
     s_state = ST_DONE;
 }
 
-int tagpu_rec_rewind_open(char* path, unsigned cap, unsigned* timeline, char* why, unsigned whycap)
+int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
 {
     Rec* r = s_rec;
     if (s_state != ST_RECORDING || !r || s_suspended || r->ev_full ||
@@ -4414,7 +4414,6 @@ int tagpu_rec_rewind_open(char* path, unsigned cap, unsigned* timeline, char* wh
         snprintf(why, whycap, "no healthy live recording");
         return 0;
     }
-    snprintf(path, cap, "%s", r->ring->path);
     *timeline = r->ring->fork.id;
     /* Published capture bytes precede this request. The writer reads the request before wpub,
        drains that prefix, then acknowledges only after writing its complete iterations. */
@@ -4423,13 +4422,17 @@ int tagpu_rec_rewind_open(char* path, unsigned cap, unsigned* timeline, char* wh
     return 1;
 }
 
-int tagpu_rec_rewind_flush(void)
+int tagpu_rec_rewind_flush(char* path, unsigned cap)
 {
     Rec* r = s_rec;
     if (s_state != ST_RECORDING || !r || r->ev_full ||
         InterlockedCompareExchange(&r->ring->failed, 0, 0)) return -1;
-    return InterlockedCompareExchange(&r->ring->flush_done, 0, 0) ==
-           InterlockedCompareExchange(&r->ring->flush_req, 0, 0);
+    if (InterlockedCompareExchange(&r->ring->flush_done, 0, 0) !=
+        InterlockedCompareExchange(&r->ring->flush_req, 0, 0)) return 0;
+    /* The writer chooses a suffix when the requested filename already exists. Its
+       immutable actual path is visible only after the acknowledged file writes. */
+    if (path && cap) snprintf(path, cap, "%s", r->ring->opened_path);
+    return 1;
 }
 
 int tagpu_rec_suspend(int on)
@@ -4438,7 +4441,7 @@ int tagpu_rec_suspend(int on)
     Rec* r = s_rec;
     if (s_state != ST_RECORDING || !r) return 0;
     if (on) {
-        if (tagpu_rec_rewind_flush() != 1) return 0;
+        if (tagpu_rec_rewind_flush(NULL, 0) != 1) return 0;
         seats_end(r, REC_END_FORKED, r->rewind_end);
         s_suspended = 1;
         s_tid = 0;

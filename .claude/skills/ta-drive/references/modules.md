@@ -716,6 +716,20 @@ block that reads to its last complete block.
   while another reader holds the file; process exit waits for maintenance.
   `tareplay.py forks battle [--cover]` runs the dedicated checks. A fixture with `forks`
   also runs X after its existing lanes; battle and stock-limits exercise this on both builds.
+- **Live rewind**: `tacli rewind <i> open|seek T|now|fork|close [--dump NAME]`
+  operates on a running recorded skirmish. `open` pauses and reports the complete
+  seek interval; `seek T` inspects iteration T at frame T−1; `now` restores the
+  saved present; `fork` resumes from the inspected frame as a new timeline.
+  `close` without a seek leaves the world intact, otherwise it returns to now.
+  Each exit restores the pause state held before opening. Pause input cannot
+  advance an open rewind. `--dump` writes a frame dump before the operation's
+  success line and before unpausing. Wait for the CLI acknowledgement before
+  sending another command. Once a fork ends the original, an append failure
+  permits retrying `fork`, but cannot return to now.
+  `tareplay.py rewind battle [--stock] [--cover]` runs the live rewind L/P/Q
+  checks. Fixtures with `rewind` run the same checks in U; stock-limits uses
+  the battle with the stock DLL. For the fresh comparison, the trigger
+  `seek-frame T dump NAME` takes a paused frame dump in the seek's own visit.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.

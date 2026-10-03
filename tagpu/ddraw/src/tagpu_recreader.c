@@ -1666,7 +1666,8 @@ static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned
             }
             w->tick = blk->last;
         } else if (r->h.has_frame &&
-                   (hd.kind == RK_IMAGE || hd.kind == RK_SIGHT || hd.kind == RK_COUNTS)) {
+                   (hd.kind == RK_IMAGE || hd.kind == RK_SIGHT || hd.kind == RK_COUNTS ||
+                    hd.kind == RK_COUNT_NAME)) {
             /* Comparison evidence in a dump, not restored simulation state. The record's
                length has been bounded by the checked block above. */
         } else if (hd.kind == RK_TICK || !apply(r, hd.kind, b, hd.len, &events) || events) {
@@ -1852,11 +1853,11 @@ static RecReader* open_handle(HANDLE f, const char* path, char* why, unsigned ca
     if (dump) {
         if (!r->h.has_frame || r->h.frame == UINT32_MAX || r->h.start != r->h.frame + 1 ||
             block_head(r, &b, why, cap) != 1 || b.kind != RB_SNAPSHOT ||
-            b.first != r->h.start || b.last != r->h.start ||
-            snapshot_apply(r, &b, why, cap) != 1) {
+            b.first != r->h.start || b.last != r->h.start) {
             snprintf(why, cap, "not a complete frame dump");
             goto fail;
         }
+        if (snapshot_apply(r, &b, why, cap) != 1) goto fail;
         return r;
     }
     if (r->h.has_frame) { snprintf(why, cap, "a frame dump is not a recording"); goto fail; }

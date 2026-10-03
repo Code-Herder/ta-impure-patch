@@ -243,7 +243,10 @@ static int file_open(Writer* w)
         }
         w->file = CreateFileA(w->path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_NEW,
                               FILE_ATTRIBUTE_NORMAL, NULL);
-        if (w->file != INVALID_HANDLE_VALUE) return 1;
+        if (w->file != INVALID_HANDLE_VALUE) {
+            snprintf(w->ring->opened_path, sizeof w->ring->opened_path, "%s", w->path);
+            return 1;
+        }
         {
             DWORD error = GetLastError();
             recfile_unlock(&w->lock);
@@ -272,6 +275,7 @@ static int file_append(Writer* w)
     const RecFork* f = &w->ring->fork;
     LARGE_INTEGER at;
     snprintf(w->path, sizeof w->path, "%s", f->path);
+    snprintf(w->ring->opened_path, sizeof w->ring->opened_path, "%s", w->path);
     at.QuadPart = (LONGLONG)f->append_off;
     if (!SetFilePointerEx(w->file, at, NULL, FILE_BEGIN) || !SetEndOfFile(w->file)) {
         char why[64];

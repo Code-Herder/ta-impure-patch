@@ -27,11 +27,12 @@
                                              and .data that differ between two dumps and that no
                                              row of replay-globals.tsv covers, in runs, grouped by
                                              what the notes map there (exit 0 whatever it finds)
-  tools/replay/tarec.py compare-dumps FILE DUMP OTHERDUMP
+  tools/replay/tarec.py compare-dumps FILE DUMP OTHERDUMP [--takeover]
                                              two dumps of playings of FILE at one GameTime with
                                              the same player viewed (a seek in a fresh process
                                              and one in a running playback) equal in every
-                                             record, the players' sight counters included
+                                             record, the players' sight counters included; --takeover
+                                             applies the existing fork_view comparison policy
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
   tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
                                              a live game's counts against a playing's, each the
@@ -1583,7 +1584,7 @@ def dump_images(path):
     return tick, dh.get("globals"), images
 
 
-def cmd_compare_dumps(path, a_path, b_path):
+def cmd_compare_dumps(path, a_path, b_path, takeover=False):
     """Two dumps of playings of FILE at the same GameTime, the same player viewed: every record
     they carry, the players' sight counters included, equal byte for byte. FILE gives the
     dimensions and the globals' names; only its header is read."""
@@ -1595,6 +1596,8 @@ def cmd_compare_dumps(path, a_path, b_path):
               + ("" if ah.get("frame") == bh.get("frame") else
                  ": one is a frame dump and the other is not, or their frames differ"))
         return 1
+    if takeover:
+        fork_view(a, b, h, h)
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
     when = (f"frame dump at GameTime {ah['frame']} (iteration {a.tick})" if "frame" in ah
             else f"GameTime {a.tick}")
@@ -2063,6 +2066,9 @@ def cmd_scan(path, dump):
 
 def main(argv):
     timeline = 0
+    takeover = argv[1:2] == ["compare-dumps"] and "--takeover" in argv
+    if takeover:
+        argv = [a for a in argv if a != "--takeover"]
     if "--timeline" in argv:
         k = argv.index("--timeline")
         if argv[1:2] not in (["check"], ["compare"]) or k + 1 >= len(argv) or \
@@ -2102,7 +2108,7 @@ def main(argv):
         if images:
             return cmd_images(argv[2], argv[3])
         if argv[1] == "compare-dumps":
-            return cmd_compare_dumps(argv[2], argv[3], argv[4])
+            return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
                                    (argv[7], argv[8]), argv[9], argv[10])
