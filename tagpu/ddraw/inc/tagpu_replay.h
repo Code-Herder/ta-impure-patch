@@ -94,6 +94,21 @@ void tagpu_replay_pause(int on);
 int  tagpu_replay_speed(void);
 int  tagpu_replay_speed_set(unsigned gs);
 
+/* Player cards, game thread only. Rows stay in the recording header's order, including defeated
+   seats. Values come from the player's current recorded image, held after EOF. Sight is independent of the
+   camera: -1 selects the full-map viewer, otherwise a recorded seat index. The request runs at
+   the frame boundary and rebuilds death vision, minimap fog and contacts before publishing the
+   selected seat. There is no camera stream in this recording format. */
+typedef struct TAGPU_REPLAY_PLAYER {
+    unsigned seat, colour, units, commander_losses;
+    int commander_alive; /* 1 present, 0 absent, -1 unavailable */
+    char name[32];
+    float metal, energy, metal_in, metal_out, energy_in, energy_out;
+} TAGPU_REPLAY_PLAYER;
+int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
+int tagpu_replay_sight(void);
+int tagpu_replay_sight_request(int seat);
+
 /* tagpu_reclaim's teardown wrap, once 0x491B60 has returned, on the thread that entered it: V's
    PlayerInfo gets back what the Start's fill left in it. */
 void tagpu_replay_level_after(void);

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Planned 2026-10-01. Landings 0 to 2 are built on the S5 branch and not landed**: the art
+**Planned 2026-10-01. Landings 0 to 2 are implemented**: the art
 pipeline, the shell (REPLAYS and the browser) and the watching dock (*The watching dock*). This is
 the plan for the
 [skirmish slice](demo-recorder-skirmish-slice.md)'s S5: the Replays browser, the timeline bar,
@@ -189,11 +189,13 @@ return of the PCX loader `0x429290` (the header of `tagpu_replays.c` lists the f
 
 ## The screens
 
-**Over the world, the dock and the cards** are GUI screens pushed the way the Impure Config panel
-is (`tagpu_menu.c`): non-modal, re-pushed when a world click rebuilds the in-game stack, and owning
-their points against the zoom transform. A gadget draws only inside its own panel's surface, so the
-dock is its own panel along the bottom and the cards a panel on the right edge. The things only we
-draw go through the engine's GAF blitter `0x4B7F90` after the GUI, as the sprocket does.
+**Over the world, the dock** is a GUI screen pushed through the Impure Config panel's slot
+(`tagpu_menu.c`), non-modal and re-pushed when a world click rebuilds the in-game stack. **The
+cards** are its post-GUI companion: engine GAF blits and FNT text on the right, with their own
+bounded input rectangle, as the dock strip already has. Only the top engine GUI receives input;
+using a single rectangular GUI for both regions would also block the world between them. The
+cards hide under a modal and follow the dock's teardown. Their implementation and verification
+are in [Replay player cards](demo-recorder-player-cards.md).
 
 **The Replays browser** is a shell screen of its own: our ground, the engine's list and buttons over
 it, the minimap and the badges blitted.
@@ -392,8 +394,12 @@ stage for is put on the nearest preset (a tie goes to the slower).
 
 **Gaps.**
 
-- **The art is a stand-in.** `dock-tex`, `strip-track` and `strip-fill` are committed stand-ins
-  drawn by a script (`4ff17b52`); the owner's art replaces them in an ordinary art commit.
+- **The retail art is supplied.** The owner's 2026-10-02 kit replaces the title font,
+  `dock-tex`, `strip-track`, `strip-fill` and all 28 sprite frames. The title, transport icons,
+  strip, playhead and bookmark were checked in the running retail browser (640×480) and
+  watching dock (1280×720) on the reference setup. Player cards are implemented, runtime-tested
+  and independently reviewed; they are covered by [their module note](demo-recorder-player-cards.md). Overlays and live rewind
+  remain proposals.
 - **GDI does not implement HUD scale**, for the dock as for the bars: the picture stays 1x while
   the pointer map is magnified (GUI renderer §22.7).
 - **Why bit 8 stops a live stage button's clicks** is not known: the pump's click arm reads no
@@ -429,7 +435,7 @@ Items 1 to 3 are needed by landing 1, item 4 by landing 5.
 | **4 — live rewind** | the rewind button, the timeline in a live skirmish, Back to now, Play from here | S4 |
 | **5 — the switches** | *Record games* and *Keep replays* | ask 4 |
 
-Escalation has its own ground and plate, with retail's title font; Twilight's style is not drawn
+Escalation has its own ground, plate and title font; Twilight's style is not drawn
 yet and uses the retail style, which is what an unknown mod gets anyway. Each lands as it is
 reviewed.
 
@@ -442,7 +448,11 @@ and leave, polling for error boxes, with a picture per screen.
 
 ## Open
 
-- **The owner's art.** The dock's `dock-tex`, `strip-track` and `strip-fill` and the retail
-  style's title letters `font/` are committed stand-ins (`4ff17b52`), so a clean checkout arms the
-  browser and the dock in both styles (Escalation uses retail's letters). The owner's art replaces
-  them in an ordinary art commit.
+- **The remaining style.** Retail and Escalation each have their 67 supplied replacement
+  PNGs. Escalation's own title font and favourite badge were checked in its running
+  `REPLAYSE.GUI` at 640×480 on the reference setup, with the mod's executable and archives.
+  Twilight still needs its font, dock pieces, 28 sprite frames and browser ground.
+- **Dock style selection.** The dock explicitly selects retail's kit (`tagpu_dock.c`,
+  `tagpu_art_entry("retail", ART[i])`); Escalation's supplied dock sprites are baked but are
+  not selected by the current dock. Player cards are implemented on this branch, with runtime checks complete and review
+  pending ([card note](demo-recorder-player-cards.md)); Overlays and live rewind remain proposals.

@@ -146,6 +146,7 @@ static unsigned s_presented = 0;        /* the last PK_FRAME's surface         *
    magnifies, taken from the marker of the flip whose ops it has drained, so
    the region and the pixels it samples are one frame's (tagpu_hud.h) */
 static int s_presDockQ8 = 0;
+static int s_presCardsQ8 = 0;
 
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
@@ -585,6 +586,7 @@ static const char* LAY_FS =
        magnified about, engine (l, t + h) and screen (x0, y1); uDockS 1/s and s
        at the scale it was placed at. All zero is no dock. */
     "uniform vec4 uDock; uniform vec4 uDockMap; uniform vec2 uDockS;\n"
+    "uniform vec4 uCards; uniform vec4 uCardsMap; uniform vec2 uCardsS;\n"
     /* ONE TAP OF THE MIRROR, premultiplied by its coverage. rgb is the
        restored colour where this texel has one and the live palette
        everywhere else (the per-texel rule of 3.4, unchanged); a is coverage,
@@ -641,6 +643,8 @@ static const char* LAY_FS =
     "    else if (d.x >= uDock.x && d.x < uDock.z && d.y >= uDock.y && d.y < uDock.w) {\n"
     "      sd = vec2(uDockMap.x + (d.x - uDockMap.z) * uDockS.x,\n"
     "                uDockMap.y - (uDockMap.w - d.y) * uDockS.x); ramp = uDockS.y; }\n"
+    "    else if (d.x >= uCards.x && d.x < uCards.z && d.y >= uCards.y && d.y < uCards.w) {\n"
+    "      sd = uCardsMap.xy - (uCardsMap.zw - d) * uCardsS.x; ramp = uCardsS.y; }\n"
     /* THE WORLD IS TRANSLATED, NOT MAGNIFIED (22.6). The engine's viewport is
        the visible window itself -- it draws the world into [128, R] x
        [32, B] of its own surface -- and this puts that block where the player
@@ -950,6 +954,7 @@ static void twins_reset(void)
     while (s_ntwins) twin_drop(&s_twins[0]);
     s_presented = 0;
     s_presDockQ8 = 0;
+    s_presCardsQ8 = 0;
     tagpu_gaf_atlas_reset(&s_atlas);
 }
 
@@ -1466,10 +1471,12 @@ static int tint_pieces(const TWIN* t, const TAGPU_PUBOP* o, int out[TINT_PIECES]
 static void drain(void)
 {
     unsigned tail = g_guiq.qTail, head = g_guiq.qHead;
-    int budget = 20000;                    /* ops per present: a burst is many flips */
+    /* qHead exposes whole windows. Drain this captured boundary completely so
+       their pixels and PK_FRAME metadata stay together; QCAP - 1 bounds the
+       work even if the producer publishes more while we consume. */
     int ti;
     for (ti = 0; ti < s_ntwins; ti++) s_twins[ti].nLost = 0;
-    while (tail != head && budget-- > 0) {
+    while (tail != head) {
         const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
         TWIN* t;
         unsigned char col = 0;          /* TAGPU_GUIOP::col                   */
@@ -1481,7 +1488,7 @@ static void drain(void)
             tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
                                   g_guiq.arena + o->aoff, o->gcount, o->alen);
         switch (o->kind) {
-        case PK_FRAME:  s_presented = o->surf; s_presDockQ8 = o->w; break;
+        case PK_FRAME:  s_presented = o->surf; s_presDockQ8 = o->w; s_presCardsQ8 = o->h; break;
         case PK_RESET:  twins_reset();
             tagpu_gui_reset_record(&s_mirReset);
             { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
@@ -2469,6 +2476,20 @@ static void draw_layer(const TAGPU_FRAME* f)
                 s_mHand.dockMap[2] = (float)dk.x0; s_mHand.dockMap[3] = (float)dk.y1;
                 s_mHand.dockS[0] = 256.0f / (float)dk.q8;
                 s_mHand.dockS[1] = (float)dk.q8 / 256.0f;
+            }
+        }
+        {
+            TAGPU_HUD_DOCKMAP c;
+            memset(s_mHand.cards, 0, sizeof s_mHand.cards);
+            memset(s_mHand.cardsMap, 0, sizeof s_mHand.cardsMap);
+            memset(s_mHand.cardsS, 0, sizeof s_mHand.cardsS);
+            if (hudQ8 > 256 && tagpu_hud_cards_map(t->w, t->h, s_presCardsQ8, &c)) {
+                s_mHand.cards[0] = (float)c.x0; s_mHand.cards[1] = (float)c.y0;
+                s_mHand.cards[2] = (float)c.x1; s_mHand.cards[3] = (float)c.y1;
+                s_mHand.cardsMap[0] = (float)(c.l + c.w);
+                s_mHand.cardsMap[1] = (float)(c.t + c.h);
+                s_mHand.cardsMap[2] = (float)c.x1; s_mHand.cardsMap[3] = (float)c.y1;
+                s_mHand.cardsS[0] = 256.0f / c.q8; s_mHand.cardsS[1] = c.q8 / 256.0f;
             }
         }
         s_mLayer = 1;

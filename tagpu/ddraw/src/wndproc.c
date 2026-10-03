@@ -1,3 +1,4 @@
+#include "tagpu_cards.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <math.h>
@@ -1094,6 +1095,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     /* tagpu: the wheel is the zoom control over the world and scrolls a list
        box everywhere else (tagpu_gui.h); the engine ignores it either way — its
        jump table stops at 0x206 (tagpu_zoom.h). */
+    if (tagpu_cards_wheel(uMsg, wParam, lParam)) return 0;
     if (tagpu_zoom_wheel(uMsg, wParam, lParam))
         return 0;
     tagpu_gui_wheel(uMsg, wParam, lParam);

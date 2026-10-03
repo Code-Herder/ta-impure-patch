@@ -1415,7 +1415,7 @@ Three things the run settled, none of them in the plan:
   idempotent, so the final state is unchanged. After it: resets 1 in the shell, overflows 0.
 
 On the render thread, inside `tagpu_overlay_draw` right after `tagpu_native_frame`: poll the
-trigger (500 ms), drain (up to 20 000 ops a present — a burst is many engine flips), draw.
+trigger (500 ms), drain (through the captured queue head, at most 65 535 ops), draw.
 Every seeded surface has a **twin**: an `RG8` texture its size (R = the palette index, G =
 coverage) behind an FBO, 1:1, `NEAREST`. Sprites are quads from a `TAGPU_GAFATLAS` of UI
 frames (2048², `pad 0 align 0 mip 0`, the key discarded per fragment), copies are quads
@@ -5081,9 +5081,7 @@ drain to the low-water marks, so the next stall needs the reseed plus whatever t
 meanwhile to fill the ring or the arena from there, more than ~14 MB or ~61 000 ops before the
 consumer drains again; the SKIRMISH burst is ~9 MB, and no window measured so far passes 1 MB
 (below). It is a bound and not a guarantee: a
-consumer presenting fewer times a second than the engine's op rate over the drain's 20 000-op
-budget (~7.5 a second at the box's ~150 000 ops a second) falls behind for good, which is the
-crawl the rule exists for, and the level boundary and the consumer's own requests reseed without
+consumer unable to keep up with the engine's op rate still needs the bounded wait and reseed, and the level boundary and the consumer's own requests reseed without
 a drain. A box outside its surface (`box-outside-surface`) is not a question of room and still
 resets at once.
 
@@ -5115,8 +5113,10 @@ skips, at most one write's length). MEASURED: **843 KB and 1 344 ops at most** o
 their two-player games (retail, TA Zero, Twilight, Mayhem under the loader), against a 16 MB arena
 and a 65 536-op ring; in game at 3840×2160 with hudscale off (Xvfb), `reseedstress=120`, 14
 forced reseeds gave `stalls=0 overflows=0`. MEASURED before, on Wine: 20 of 5 395 presents drained part of a
-window. The drain's own 20 000-op budget can still stop inside a window, when more than
-20 000 ops are queued at once.
+window. The drain now consumes through its initially captured queue head: publication exposes
+whole windows, and the ring bounds this work to 65 535 operations even while the producer
+continues. A flip that cannot append its marker discards the capture window before publication
+and requests a reseed. Together these boundaries keep HUD scale metadata with its pixels.
 
 **The same loop through the other door: an asset offered every window.** With the backlog rule
 gone, the suite's two-player games still looped, now through `no-room` — a host in the

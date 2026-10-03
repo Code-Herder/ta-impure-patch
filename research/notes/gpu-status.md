@@ -3897,6 +3897,27 @@ and after it the attribs dword (`+0x1B`, bit 8 only) of its six greyable buttons
 tiles' planes; `main+0x37EA0` through the slot. `replays\index.dat`'s bookmarks
 field. Nothing the recording carries.
 
+### 2.12c Replay player cards (`tagpu_cards.c`, with the watching dock)
+
+The implementation and its remaining validation are in [Replay player cards](tadr-port/demo-recorder-player-cards.html).
+No new byte patch: the cards reuse the dock's model tick, post-GUI observer and paired-click path.
+
+| entry | operation | thread |
+|---|---|---|
+| dock open/tick/close | model and layout, top-screen check, enabled card-scale word | game |
+| post-GUI `0x46A308` | immutable GAF frames through `0x4B7F90`; bounded ASCII labels through `0x4C14F0`, font measured with `0x4C1440`/`0x4C1480`/`0x4C1450` | game |
+| both shield button paths; wheel before zoom | card actions, paired release consumption, scroll; current `main+0x531` compared with the dock identity | game |
+| replay frame visit at `0x4969CD` | pending Sight after display-state application: independent death-history reader, expiry, view selection, temporary sight adds, minimap fog and radar passes | game |
+| flip marker and composite | `OP_FLIP.dy` → `PK_FRAME.h` → presented card scale; bottom-right region uniforms at 128/144/160, total block176 bytes | game → render |
+
+**Fields we write:** text-state foreground/background at globals `+0x208/+0x20C` through
+`0x4C13A0`, restored after each label; `main+0x2A43` for Sight. Temporary-record expiry fields
+are zeroed only after their count is bounded; the engine's expiry/add roots then maintain the
+records and their per-player counters. `minimap_fog` clears LosType bit3, sets minimap flag bit2
+and invokes `0x466C20`; `0x467440` derives unit contact flags from the selected view. The clock,
+controlled seat, camera and recording file are untouched. The card model itself reads recorded
+images and passes no mutable model pointer to the render thread.
+
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
 The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is

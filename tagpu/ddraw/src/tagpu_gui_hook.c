@@ -1631,7 +1631,8 @@ static int seen_frame(const void* f, const void* p, int add)
    so what they publish is exactly what they published before, only in one
    store. Every window ends at a flip (`before_flip` records the `OP_FLIP`
    marker and then publishes), so a drain stops at a frame boundary of the
-   engine's -- except where the drain's own 20 000-op budget runs out.
+   engine's. A flip that cannot record its marker discards the capture window
+   and requests a reseed before any of its drawing can be published.
 
    A WINDOW CUT SHORT IS NOT PUBLISHED AT ALL. `s_pubOverflow` set by the end
    of `publish_window` means the window was cut (no room, or a box outside its
@@ -2646,9 +2647,8 @@ static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
    next stall needs the reseed and whatever the engine draws meanwhile to fill
    the ring or the arena from there -- more than ~14 MB or ~61 000 ops before
    the consumer drains again, which the ~9 MB SKIRMISH burst is not. A consumer
-   that presents fewer times a second than the engine's op rate over the
-   drain's 20 000-op budget still falls behind for good; that is the crawl this
-   rule exists for. On the exit path the wait now starts at a full arena, so
+   that cannot keep up with the engine's op rate still needs this bounded
+   wait and reseed. On the exit path the wait now starts at a full arena, so
    the stale UI after the exit click lasts about twice as long (~0.5 s). */
 static unsigned arena_used(void)
 {
@@ -2856,12 +2856,9 @@ static void publish_window(unsigned flipSurf)
        AND `tagpu_packet_pub_level_open()`, both taken on the game thread at the
        flip and both static across the frame; it is raised by any flip in the
        window and cleared by `ops_window_reset`, so a window is a game window
-       when any flip in it said so. It is deliberately NOT carried on the
-       `OP_FLIP` record: that record is only pushed `if (s && s_nops < MAX_OPS)`,
-       so on a saturated window -- exactly the window whose frame drew the most
-       -- the erase would be the thing that went missing, and last frame's
-       viewport would survive under this frame's UI. The flag costs one byte and
-       has no such hole. It is deliberately NOT a value
+       when any flip in it said so. The window flag lets the erase precede
+       all drawing even when the window contains several flip markers. It is
+       deliberately NOT a value
        the world pass publishes — that is a render-thread counter read here a
        frame late, and on every 0->1 acquisition edge (level entry, recovery
        from a `terr_bail`) the gate would still be down and the frame wrong.
@@ -2895,6 +2892,7 @@ static void publish_window(unsigned flipSurf)
             if (s && seed_due(s) && !pub_seed(s)) return;
             o = pub_op(PK_FRAME, op->base); if (!o) return;
             o->w = op->dx;
+            o->h = op->dy;
             pub_commit();
             continue;
         }
@@ -3749,6 +3747,7 @@ static int __cdecl before_flip(void* entry_esp)
     int isGame = (ret == FLIP_RET_GAME);
     int isMovie = (ret == FLIP_RET_MOVIE);
     int movieRec = 0;                  /* this flip recorded a movie frame */
+    int frameRecorded = 0;
     unsigned changed = 0, unexpl = 0;
     char b[512];        /* holds the `gui area:` line: 288 of `ar` plus ~150 */
     static LARGE_INTEGER s_lastQpc, s_freq;
@@ -3899,6 +3898,8 @@ static int __cdecl before_flip(void* entry_esp)
            marker the composite takes it from follows exactly the ops that
            drew (or stopped drawing) the dock. */
         o->dx = (short)tagpu_hud_dock_q8();
+        o->dy = (short)tagpu_hud_cards_q8();
+        frameRecorded = 1;
     }
     /* the cursor is drawn into the back buffer INSIDE the flip and its
        background restored before it returns: nothing in between is UI */
@@ -3908,6 +3909,14 @@ static int __cdecl before_flip(void* entry_esp)
         hijack = 1;
     }
     if (!s_census && !g_gui_draw) { ops_window_reset(); return hijack; }
+    /* A window without this flip's marker cannot pair pixels with their HUD
+       scale. Discard it before publication; the next complete window reseeds
+       every producer cache before exposing any drawing. */
+    if (!frameRecorded) {
+        s_pubOverflow = 1;
+        ops_window_reset();
+        return hijack;
+    }
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&now);
     /* A FLIP THAT RECORDED A MOVIE FRAME PUBLISHES NOW, whatever the cadence:
