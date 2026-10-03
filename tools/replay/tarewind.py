@@ -125,8 +125,16 @@ def run(t, w, fx, out):
         check("open-close", not any("sought from GameTime" in ln for ln in log.lines[start:]),
               "no rebuild between open and close")
         until(1500)
-        # Seat 9 is unused in this battle; the engine command still disarms objectives.
+        # Kill is a level-4 developer command. Seat 9 is unused, but it still disarms
+        # objectives; restore the original debug switch before comparing the worlds.
+        cheats = t.peek(w, "*0x511DE8+0x37F2F:2") & 2
+        rc, text = t.tacli("switches", w.name, "cheats=on")
+        if rc:
+            raise t.CouldNotRun(text)
         t.step(w, "type", "+kill 9")
+        rc, text = t.tacli("switches", w.name, "cheats=on" if cheats else "cheats=off")
+        if rc:
+            raise t.CouldNotRun(text)
         check("objective disarmed", objective_armed() == 0, "engine +kill 9")
         t.tacli("keys", w.name, "pause")
         t.nap(1)

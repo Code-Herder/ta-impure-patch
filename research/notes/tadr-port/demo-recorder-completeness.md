@@ -411,7 +411,8 @@ and dumps in the seek's frame visit. The approved scope excludes unseated sight
 counters under D2 and reports/accepts only VM START/CALL child counts across
 return-to-now. Seated sight, root counts and puppet-write checks remain intact;
 see *Rewind comparison scope* below. The U lane also uses the engine's `+kill 9`
-to disable objectives on an unused seat, verifies return-to-now preserves that
+with developer cheats temporarily enabled to disable objectives on an unused
+seat, verifies return-to-now preserves that
 switch, and verifies a fork arms objectives under the takeover policy.
 
 **The player's way in (W).** A fixture with `"watch": true` in `fixtures.json` — `stock-limits` on

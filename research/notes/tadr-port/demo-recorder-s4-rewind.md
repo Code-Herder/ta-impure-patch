@@ -266,3 +266,12 @@ gate above predates this correction; a new gate is required.
 
 The synchronization review found no surviving issue. The other confirmed finding
 was stale policy prose; the current descriptions now state the approved scope.
+
+
+The first regression setup omitted `cheats=on`, required by the level-4 `Kill`
+command, and its disabled-before check correctly failed. The interrupted run is
+not a passing gate. The fixture now enables that switch for the command and
+restores its original value before rewind. An isolated four-seat run verified
+objective values 0 before rewind, 0 after return at frame 387 (137 ms), and 1
+after fork at frame 60 (142 ms), through live reads. The full tier is rerun with
+this verified setup.
