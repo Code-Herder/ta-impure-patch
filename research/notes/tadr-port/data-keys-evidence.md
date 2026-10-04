@@ -34,7 +34,7 @@ is the case rule 3 exists for.
 | `TransportedExplodeAs` / `TransportedSelfDestructAs` (TADR's passenger list is timing; no fold) | sim, keyed types | C4 · Part 3 §3 |
 | `PreviewPieces=`, over **our ghost showing pieces `Create()` hides, on 21 of 126 stock structures** | draw | C1 · Part 4 §2 |
 | `PreviewObject3D=` | draw | parked · Part 4 §3 |
-| `PreviewFaceOpponent=` (needs a COB getter no stack here has; leaks fogged positions) | draw | waits for rotation (D) · Part 4 §4 |
+| `PreviewFaceOpponent=` (required COB getters now implemented; preview reader missing; leaks fogged positions) | draw | waits for rotation (D) · Part 4 §4 |
 | `Rotations=` (the switch for building rotation: sim + wire, ~25–30 sites; TADR's fails by construction five ways) | a D feature | group D · Part 4 §1 |
 | `reloadbar` (TADR's full value ignores health and veterancy; our marker pass is its home) | display, a D feature | group D · Part 2 §2 |
 | weapon `ID=` 0–4095 | done | [A′3](content-ids.md) |
@@ -1709,6 +1709,13 @@ syncs clean; the new one drops the type.
 
 ## Part 4. Building placement and the build preview: `Rotations=` and the `Preview*` keys
 
+**Current coverage:** C1 implements the ordinary ghost's script hides and `PreviewPieces=`;
+this part retains the investigation that led to it. Per-facing pieces, alternate preview models,
+opponent-facing previews and building rotation remain separate gaps. The
+[native-mod audit](quality-of-life.md) checks release availability and content opt-ins; required
+COB getters now work, without resolving the opponent-facing preview's safety concerns.
+
+
 A read-only pass made 2026-09-25 over the section-C keys that belong to placing a structure and
 previewing it. Sources: `pristine/TotalA.exe.pristine` (main checkout), disassembled with
 `i686-w64-mingw32-objdump -d -M intel`; `vendor/TADR` at `dcff5dd` — `unitrotate.{h,cpp}`,
@@ -1726,7 +1733,7 @@ settle it. Every address below was re-read in the disassembly.
 | 1 | **`Rotations=`** (a string of `S`/`E`/`N`/`W`, default `S`) | The per-type opt-in for TADR's **building rotation**: the `/` key cycles the cursor's facing, and the order, the create, the footprint, the yardmap and the `0x09` heading follow it. The key does nothing without that feature (22 inline hooks in `unitrotate.cpp`, more in `tahook.cpp`, `MegamapTAStuff.cpp`, `dialog.cpp`, `ChallengeResponse.cpp`; 16 commits, four of them fixes to itself). | **sim + wire.** The footprint, the grid-origin cell and the occupancy stamp decide placement and pathing on every peer; the facing travels in `0x09`. A peer without it builds its copy south-facing and silently stamps different cells — fail closed by section B's test. | **No.** It rotates by **writing the shared, write-protected unit def** for the duration of engine calls, closed by return-address thunks with 8-deep stacks that skip silently on overflow; it **infers** a live unit's rotation by rounding its heading, which the engine jitters by up to ±90°; it keys orders by pointer with no lifetime; **remote peers bake the rotated building unrotated**, because the network create is not wrapped; and its rotated-yardmap cache outlives the yardmaps, which the engine frees at every level teardown. | **Do not port the key into C.** It is group D's building rotation, and that is a sim feature with a wire change, about 25–30 sites. Plan it as its own D landing, ours by design (below), or not at all. The owner decides. |
 | 2 | **`PreviewPieces=`**, **`PreviewPiecesS/E/N/W=`** | A per-type whitelist of piece names for the ghost. Without it, TADR hides pieces by a **name heuristic** (`flare`, `flash`, `muzzle`, `fire`, `flame`, `wake`). | **draw, local.** Nothing on the wire; nothing any peer computes. Skip and log. | Mostly. The name list is parsed into a set and matched with a 63-char cap. The heuristic is a guess, and it misses 3 of the 126 stock structures. | **Port as an override on top of a by-construction rule our ghost lacks today: the pieces the unit's own `Create()` hides.** 21 of 126 stock structures' ghosts currently show muzzle flares or hidden parts. The per-facing variants go with rotation (D). |
 | 3 | **`PreviewObject3D=`** | Loads `objects3d/<name>.3DO` through the engine's 3DO loader, from the ghost's draw path, on first use, and draws the ghost from it. | **draw, local.** | Partly. It is safe on TADR's single thread; in our stack the ghost draws on the render thread, which must not call engine loaders. It resolves a file path from FBI text with no check of the name. | **Park unless a mod the owner plays uses it.** If ported: the game thread loads it at level load and frees it at teardown, the name is bounded and has no path separators, and the render thread gets a template pointer under `model_root`'s contract. |
-| 4 | **`PreviewFaceOpponent=`** | Overrides the preview's facing to the cardinal toward the nearest enemy commander ("each enemy's first unit slot"), when the cursor is within a selected builder's `builddistance`. | **draw, local**, but it reads **enemy positions through fog**. | **No.** The builder-radius gate limits where you can scan *from*, not what you learn: the answer depends on the commander's true position anywhere on the map. "First slot = commander" is a heuristic: the slot is reused after the commander dies. | **Do not port.** Its premise is a `Create()` script that turns toward the nearest enemy commander, and that needs the recorder's COB getters: Escalation's scripts scan every unit id (`MIN_ID`..`MAX_ID`, `UNIT_ALLIED`, then stock `UNIT_XZ`; Part 5). Stock COB has none of them and our stack does not implement them. Revisit only with the COB extensions ([merge exploration §F](../tadr-merge-exploration.md#f-the-cob-getters)). |
+| 4 | **`PreviewFaceOpponent=`** | Overrides the preview's facing to the cardinal toward the nearest enemy commander ("each enemy's first unit slot"), when the cursor is within a selected builder's `builddistance`. | **draw, local**, but it reads **enemy positions through fog**. | **No.** The builder-radius gate limits where you can scan *from*, not what you learn: the answer depends on the commander's true position anywhere on the map. "First slot = commander" is a heuristic: the slot is reused after the commander dies. | **Do not port.** Its premise is a `Create()` script that turns toward the nearest enemy commander, and that needs the recorder's COB getters: Escalation's scripts scan every unit id (`MIN_ID`..`MAX_ID`, `UNIT_ALLIED`, then stock `UNIT_XZ`; Part 5). Stock COB lacks the extended enumeration/alliance getters; our [COB compatibility](cob.md) now implements them. The preview reader remains absent. Revisit the visibility rule before any port. |
 | 5 | TADR's ephemeral-piece filter vs **our ghost's "every piece visible"** | (the heuristic of item 2) | draw, local | n/a | Folded into item 2: read `Create()`'s hides at level load, per type, on the game thread. |
 
 **The findings that matter most:**
@@ -2077,7 +2084,8 @@ facing, bypassing `Rotations=`.
   the nearest enemy commander. Stock COB has no getter that can name another player's unit. The
   shipped recorder adds ids that can (`MIN_ID`..`MAX_ID` to walk every unit, `UNIT_ALLIED` to pick
   enemies), and Escalation's scripts use exactly those (Part 5). `UNIT_NEAREST` (177) is an id of
-  the recorder's unreleased 4.0 tree. Nothing in our stack implements COB extensions.
+  the recorder's unreleased 4.0 tree. Our [COB compatibility](cob.md) now implements the required
+  ids 32 and 69–75; the preview-key reader remains absent.
 - **The leak is not closed.** The builder-radius gate restricts where the cursor may be, not what
   is read. The answer depends on the true position of the nearest enemy commander, fogged or not,
   anywhere on the map. Hovering yields the commander's cardinal direction for free and repeatably.
@@ -2089,9 +2097,11 @@ facing, bypassing `Rotations=`.
   replicated unit positions), with only the chosen facing sent to the render thread, so the
   frame-packet rule is not the obstacle.
 
-**Recommendation: do not port.** Revisit only if the COB extensions are ever ported. At that
-point, choose between using only commanders the local player can see (no leak, and a preview
-that may disagree with the script) and TADR's rule (a documented leak).
+**Recommendation: do not port without settling the visibility rule.** The required COB
+extensions now work, but the fog leak and first-slot heuristic remain. Any D plan must choose
+between using only commanders the local player can see (a preview that may disagree with the
+script) and TADR's rule (a documented leak). The
+[coverage audit](quality-of-life.md) records Escalation's active use without changing that decision.
 
 ### Engine facts this part established (for `exe-reverse-engineering.md`)
 
@@ -2136,9 +2146,11 @@ its HPI archives read with `tools/hpipack.py`, a tolerant TDF parser, and `tools
 scripts. Counts and names only; nothing from it is in the repo, and nothing in it was run.
 
 **Escalation does not load stock data folders.** Its hex-edited `TotalA.exe` reads `weaponE\*.tdf`,
-`unitsE`, `gamedatE` and the other renamed folders, never `Weapons\`. So it does not run on our
-stack as shipped: our patches are checked against the stock 3.1 exe, which reads the stock folders.
-What the census gives is the shape of real content written for these keys.
+`unitsE`, `gamedatE` and the other renamed folders, never `Weapons\`. The
+[takeover](../compat/takeover.md) now supports that shipped exe and preserves its paths while
+suppressing TADR. [Current compatibility outcomes](../compat/setups.md) include the native mod;
+the census describes real content, while the [QoL audit](quality-of-life.md) distinguishes the
+remaining feature gaps from compatibility with its files.
 
 | key | uses | shape |
 |---|---|---|
@@ -2148,8 +2160,8 @@ What the census gives is the shape of real content written for these keys.
 | `VeterancyThresholds` | 197 FBIs | **every list has exactly 5 entries**, strictly increasing, one of four tier lists (`10…50`, `20…100`, `50…250`, `100…500`). None malformed. The other 352 FBIs take the default. |
 | `VeterancyAccuracyBuffRate` | the same 197 | 24 / 48 / 120 / 240, one per tier. None zero or negative. |
 | `PreviewPieces` | 15 FBIs | the whole-model list; no per-facing variant. |
-| `PreviewFaceOpponent` | 12 FBIs | long-range defences (Big Bertha, Intimidator, Guardian, Punisher …). Their scripts find the enemy through the recorder's extended COB getters (`GET` 69, 70, 73, 74, walking every unit ID; `tools/tacob` on `ARMBRTHA.cob` and `CORINT.cob`), which stock COB and our stack do not have. |
-| `Rotations` | 0 | only in comments, in two FBIs. |
+| `PreviewFaceOpponent` | 12 FBIs | long-range defences (Big Bertha, Intimidator, Guardian, Punisher …). Their scripts find the enemy through the recorder's extended COB getters (`GET` 69, 70, 73, 74, walking every unit ID; `tools/tacob` on `ARMBRTHA.cob` and `CORINT.cob`), which stock COB lacks and our [COB compatibility](cob.md) now implements. The ghost does not yet read this preview key. |
+| `Rotations` | 0 | only in comments, in two FBIs. The broader [native-mod audit](quality-of-life.md#rotation-and-preview-content-census) finds zero active definitions in every supported mod, despite Escalation/Twilight shipping stable rotation support. |
 | `notoverwater`, `notoverland`, `nomapweaponalert`, `reloadbar`, `TransportedExplodeAs`, `TransportedSelfDestructAs`, `PreviewPiecesS/E/N/W`, `PreviewObject3D` | 0 | — |
 | weapon `ID=` | 240 sections | 0..243; none above 255. |
 
@@ -2169,6 +2181,7 @@ What the census gives is the shape of real content written for these keys.
 - **`PreviewPieces=` is live content** (C1's override), and **`PreviewObject3D=` has none**: it stays
   parked.
 - **`PreviewFaceOpponent=` depends on the recorder's COB extensions**, not only on rotation: the
-  buildings it previews turn by getters our stack does not implement.
+  buildings it previews turn by getters our [COB compatibility](cob.md) now implements.
+  The preview-key reader remains missing, with the fog and commander-identity concerns above.
 - Side findings, not C's: 4 FBIs name weapons no file defines, and 17 `explodeas` or
   `selfdestructas` values name missing weapons.

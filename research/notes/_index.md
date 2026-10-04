@@ -48,6 +48,7 @@ the handler at `0x00406AA0` is complete working code. Reconnecting it took rough
 | Common claim | What the evidence shows |
 |---|---|
 | Mods add **shield projectors** as an engine feature | No shipped mod does. TA:ESC and TA Zero both implement shields in stock 1997 COB script — measuring damage by differencing `get HEALTH`, then toggling `set ARMORED`. A real engine shield (`ShieldRange`, network-synced) exists in TADR's source and is used by nobody. |
+| Shipped TADR rotation support means a mod has directional factory placement | Escalation and Twilight bundle released rotation support, but all checked mods have zero active `Rotations=` definitions. Escalation's opponent-facing preview key and scripted factory-exit directions are separate. See [QoL coverage](tadr-port/quality-of-life.md). |
 | Cavedog shipped a **`TotalAExt` plugin ABI** | It does not exist — zero hits across seven exe builds, every community DLL, and GitHub code search. The one real optional-DLL hook is `DebugHelper.dll`, gated behind `-debughelper`. |
 | TA:ESC is an **engine-patching project** | Its `TAESC.dll` is byte-identical to upstream TADR's `tdraw-escalation` build. Wotan specifies features; the TADR maintainers implement them. |
 | The **6-button build menu** was widened by patching | The build menu was always data-driven `.GUI` gadget lists. No patch touches a grid. |

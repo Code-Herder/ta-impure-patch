@@ -11,6 +11,16 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 
 ---
 
+## Native TADR convenience coverage
+
+The [28-row QoL audit](tadr-port/quality-of-life.md) compares current Impure functions with the
+actual DLLs and opt-ins shipped by supported mods. Our build ghosts/`PreviewPieces`, health/
+group/order/range markers, world zoom, HUD scaling and replay playback/seeking already cover
+part of the interface. Native snapping, queue editing, construction controls and allied panels
+remain missing. Escalation/Twilight ship rotation support but no checked content enables it; Escalation's
+opponent-facing preview key remains unsupported. Newer development modules are distinguished
+from native bundle features. This is a documentation audit, not a new hook or engine write.
+
 ## 1. Status — what is ours, what is still the engine's
 
 **THERE ARE TWO RENDERER BACKENDS SINCE 2026-09-18, AND THE PROCESS CREATES NO GL CONTEXT ON

@@ -59,9 +59,16 @@ stock key (`tagpu_regstore.c`), which is why the suite writes a mod's key with `
 replace it"): `tdraw.dll` and its renamed builds (`mdraw`, `zdraw`, `TAESC`), with everything
 they install — the limit crack, EngineLimits, the bug fixes, the megamap, the chat and income
 overlays, the anticheat hashing — and the recorder, `tplayx.dll` or the 2006 `dplayx.dll`, with
-its demos, TA Forever's replays, its commands and its code injections. Until Impure has its own,
-a game played with Impure records no demo. What a mod's content may still need from them is a
-per-mod check (below).
+its demos, TA Forever's replays, its commands and its code injections. Impure now has its own
+[recording and replay implementation](../tadr-port/demo-recorder.md); it does not run the native
+recorder or inherit its camera/whiteboard/income transport. What a mod's content may still need
+from TADR is a per-mod check (below).
+
+The [QoL audit](../tadr-port/quality-of-life.md) records which suppressed conveniences the native
+mods enable, which bundled options default off, and which features only newer development
+builds provide. Snapping, queue editing, construction controls and allied information remain
+missing. Retaining spare snap bytes or ProTA's map-owner markers preserves content values; it
+does not recreate the reader or draw hook that makes them useful.
 
 ## The three parts
 

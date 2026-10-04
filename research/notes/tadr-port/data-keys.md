@@ -545,6 +545,16 @@ commit can change.
   - A removal during a network load, where the loader thread runs the kill-all, was not run; the
     token makes that kill-all's state its thread's own by construction.
 
+## Shipped QoL keys and activation
+
+The [supported-mod coverage audit](quality-of-life.md) checks DLL versions separately from key
+usage. Escalation/Twilight ship rotation and preview-extension support (first stable v2026.5.9), but every checked
+mod has zero active `Rotations=` definitions. Escalation uses `PreviewFaceOpponent=1` in 12 units;
+the key remains unimplemented even though [the required COB getters](cob.md) now work. Ordinary
+build ghosts and `PreviewPieces=` already work. No native bundle contains reload-bar code, and
+no checked content has an active `reloadbar=` opt-in; public development builds do contain it.
+These findings describe coverage, not a decision to override the preview safety recommendations.
+
 ## Handed to other groups
 
 - **Group D:** building rotation with `Rotations=`, the per-facing `PreviewPiecesS/E/N/W=` and

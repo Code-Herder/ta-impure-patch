@@ -1,46 +1,63 @@
-# Release Timeline & Per-Mod Feature Matrix
+# TADR releases, native bundles and build configurations
 
-**Source:** [github.com/tanvanman/TADR/releases](https://github.com/tanvanman/TADR/releases), read directly 2026-08-31. [VERIFIED]
+**Sources:** pinned release assets and native compatibility fixtures audited 2026-10-04;
+[release history](https://github.com/tanvanman/TADR/releases);
+[development configuration snapshot](https://github.com/tanvanman/TADR/tree/dev-dcff5dd/src/DDraw).
 
-## Summary
+## Native bundles are older than development configurations
 
-The last unofficial Total Annihilation patch is **`v2026.8.6`**, released **6 August 2026**. Development
-builds continue past it — `dev-1615f13` (tdraw and recorder builds, 2026.8.29) and `dev-13d71dd`,
-dated **31 August 2026**, which installs "instrumentation and breadcrumb ring buffers to diagnose a
-stack-skewing orders bug". The patch line is actively maintained, not archival.
+The supported mods do not all ship the same TADR. Native **Mayhem 11.3.0 uses v2024.3.31**,
+**ProTA 4.8 v2025.8.29**, **Zero Alpha 5 + TAZ31 120526 the TAF 2025.4.24 Zero build**,
+**Escalation GOLD 10.2.0 v2026.8.6-esc**, and **Twilight Beta 98 v2026.6.8-full**.
+The [QoL coverage table](tadr-port/quality-of-life.md) records exact native DLL hashes, feature
+inclusion and mod activation. These versions include effective final drop-in layers.
 
-There has been no *official* patch since Cavedog's v3.1 in 1998. Everything since is community work.
+Rotation and directional build-menu choices are released features, present in native Escalation
+and Twilight, but no checked mod has active `Rotations=` definitions. Escalation uses the
+separate `PreviewFaceOpponent=1` key in 12 units. ProTA's 2025 DLL has neither rotation nor allied
+queue overlays. Later upstream configuration names do not establish native shipment.
 
-## Release cadence, 2026
+There has been no official Cavedog patch since v3.1 in 1998; the releases below are community
+work. The table describes fixed snapshots, not the mutable `latest` development download.
 
-| Release | Notable content |
+## Selected releases relevant to QoL coverage
+
+| Release / public publication | Relevant content |
 |---|---|
-| `dev-13d71dd` (2026-08-31) | Instrumentation / breadcrumb ring buffers for a stack-skewing orders bug |
-| `dev-1615f13` (2026-08-29) | Updated tdraw and recorder builds |
-| **`v2026.8.6`** (latest stable) | Dithering toggle in `totala.ini`; index-keyed repair-rate fix (Escalation only, by RdKL); full vs wireframe nanopreview option; demo-from-player-POV hides units outside that player's LOS/radar |
-| `v2026.8.1` | Escalation share guard; enhanced built-in minimap palette (TAG_Venom); BTA build config |
-| `v2026.7.27` | `nomapweaponalert` weapon tag (Scott Warley); TA:Zero build config; megamap dithering |
-| `v2026.7.17` | Fix player rejection when watching a replay |
-| `v2026.7.3` | Nano preview shimmer wire; antialiased/alpha-blended mexes and features on megamap; accessible chat option |
-| `v2026.6.23` | Metal patch + fixed feature rendering on megamap; **extended weapon ID support disabled pending further testing** |
-| `v2026.6.17` | Extended weapon ID patch introduced |
-| `v2026.6.13` | Linux (Twilight) crash fix; richer crash reports; ATL/MFC dependencies removed |
+| [dev-dcff5dd](https://github.com/tanvanman/TADR/releases/tag/dev-dcff5dd), 2026-09-20 | Pinned configuration source below; allied build queues compiled out of every configuration |
+| [dev-682ee2f](https://github.com/tanvanman/TADR/releases/tag/dev-682ee2f), 2026-09-13 | Verified Escalation download contains chat anchor/renderer, local mute and percentage sharing |
+| [dev-1615f13](https://github.com/tanvanman/TADR/releases/tag/dev-1615f13), 2026-08-30; build label 2026.8.29 | Verified Escalation download contains reload bars, status counters, team-coloured nanolathe and allied queue feature signatures |
+| [v2026.8.6](https://github.com/tanvanman/TADR/releases/tag/v2026.8.6) | Native Escalation bundle; dithering toggle, repair-rate fix, full/wireframe nanopreview option and replay POV visibility |
+| v2026.8.1 | Escalation share guard; enhanced built-in minimap palette; BTA build configuration |
+| v2026.7.27 | `nomapweaponalert`; dedicated Zero configuration; megamap dithering |
+| [v2026.7.3](https://github.com/tanvanman/TADR/releases/tag/v2026.7.3) | Accessible Chat option; improved megamap features and nano preview |
+| v2026.6.23 | Fixed feature rendering on megamap; extended weapon IDs disabled pending testing |
+| v2026.6.17 | Extended weapon ID support introduced |
+| [v2026.6.8](https://github.com/tanvanman/TADR/releases/tag/v2026.6.8) | Effective native Twilight full build; old clock/weather surface-pointer guard corrected |
+| [v2026.5.9](https://github.com/tanvanman/TADR/releases/tag/v2026.5.9) | First stable building rotation, directional build-menu choices and model placement previews |
+| [v2025.8.29](https://github.com/tanvanman/TADR/releases/tag/v2025.8.29) | Native ProTA bundle; predates rotation and newer display/chat modules |
+| [v2024.3.31](https://github.com/tanvanman/TADR/releases/tag/v2024.3.31) | Native Mayhem bundle |
 
-The 6.17 → 6.23 sequence is a useful data point on risk: extended weapon IDs shipped, then were
-switched off one release later pending testing. This corroborates the finding that
-`WeaponIdOverflow` defaults to off.
+The newer conveniences are **not all unreleased git work**: the fixed development assets above
+were downloaded and inspected. They are absent from all five native mod bundles, and a later
+compile gate can remove a feature that an earlier development download included. Development
+availability does not establish default activation or a tested gameplay result.
 
-## Per-mod feature matrix
+## Pinned development build configurations
 
-One DLL serves six games through build configurations. Columns are the shipped configs. [VERIFIED]
+These are **six selected build targets at `dev-dcff5dd`**, not the DLLs bundled with those mods.
+The snapshot also has a Twilight target. Every column selects a different build of shared
+upstream code. **✅ means the feature/hook is compiled or installed by that configuration**, not
+that the mod's content or fresh preferences activate every behavior. For the native installations
+and actual opt-ins, use [the coverage audit](tadr-port/quality-of-life.md).
 
 | Feature | ProTA | Escalation | Mayhem | TA:Zero | BTA | OTA |
 |---|---|---|---|---|---|---|
 | **Build / placement** ||||||
 | Mex snap (max radius) | 3 | — | 3 | 3 | 1 | — |
 | Wreck snap (max radius) | 1 | 1 | 1 | 1 | 1 | — |
-| Construction units stay put while guarding | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Con units reclaim-only / assist-only while patrolling | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Guarding constructors: stay/scatter options | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Constructor patrol mode options | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Auto-kickout of con units blocking a builder | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | **HUD / display** ||||||
 | TA hook UI enhancements | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -50,11 +67,11 @@ One DLL serves six games through build configurations. Columns are the shipped c
 | Weather report — game clock | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Weather report — wind row | ✅ | ✅ | ✅ | — | ✅ | — |
 | Weather report — tidal row | ✅ | ✅ | ✅ | — | ✅ | — |
-| Map DTs always visible | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Map-DT owner-11 draw hook included | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | **Sim / netcode** ||||||
 | Wind speed synced between players | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | `.take` claim arbitration (per-target claims + election) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Lag-switch mitigation (freeze sim when network goes dark) | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| Lag-switch mitigation (freeze sim when network goes dark) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Share-abuse guard (share rate limit, `.take` vs dead commander) | — | ✅ | — | — | — | — |
 | **Combat** ||||||
 | Off-map aircraft targetable, tiles past map edge | 1 | **32** | **32** | 1 | 1 | 1 |
@@ -64,20 +81,20 @@ One DLL serves six games through build configurations. Columns are the shipped c
 | Air wrecks over land fall to the ground | — | ✅ | — | — | — | — |
 | Extended weapon IDs (≥ 256) | — | ✅ | ✅ | — | — | — |
 
-## What the matrix tells us
+## Interpreting the configuration matrix
 
-**"Off-map AA" is real.** The Mayhem deep dive found no evidence for it in that mod's INI patch set
-and reported it as unsubstantiated. It exists — but as a `tdraw` build-config feature (32 tiles past
-the map edge for Escalation and Mayhem, versus 1 for everyone else), not as a Mayhem byte patch.
-The lesson generalises: a mod's INI is not the full inventory of what it ships, because the shared
-DLL carries per-mod behaviour too.
+The map-DT row describes a draw hook, not proven visibility. It needs owner-11 markers; upstream's
+marker writes are commented out and only native ProTA supplies them through its loader.
+Guarding options default to Cavedog behavior; available assist-only patrol choices do not imply
+that assist-only is the fresh default. The new Zero configuration disables wind/tidal readouts,
+whereas native Zero's older DLL includes that renderer.
 
-**Escalation is the most-served config, and still authors nothing.** Share guard, repair-rate fix,
-falling air wrecks and extended weapon IDs are all Escalation-only — implemented upstream by the
-TADR maintainers at Wotan's request. This is the clearest confirmation of the
-"specifies, does not implement" relationship. See [[deep-ta-esc]].
+The 32-tile off-map aircraft margin in the Mayhem development target is real source behavior;
+it is not evidence that Mayhem 11.3.0's v2024.3.31 DLL ships it. A mod INI is only one layer of
+feature evidence, and a newer `config_mayhem.h` is another version altogether.
 
-**Stock OTA is deliberately the most conservative column.** Competitive-neutral features (megamap,
-whiteboard, `.take` arbitration, lag-switch mitigation) are enabled everywhere; anything that
-changes the simulation is gated per-mod. That gating is how one DLL avoids splitting the multiplayer
-population — see [[deep-tadr]].
+Escalation's target includes share guard, repair-rate changes and falling aircraft wrecks;
+extended weapon IDs are enabled in **both Escalation and Mayhem** in this snapshot. Those are
+upstream implementations, rather than an Escalation engine fork ([the Escalation deep dive](deep-ta-esc.md)).
+The v2026.6.17 → v2026.6.23 weapon-ID sequence shows why version-specific gates matter.
+Defaults in `config.h` remain off unless a target explicitly enables them.

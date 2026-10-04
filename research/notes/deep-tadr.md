@@ -17,6 +17,25 @@ Neither DLL patches `TotalA.exe` on disk beyond one string. Everything else is d
 runtime, in-process, against a hard-coded TA 3.1c image base — ~809 distinct
 `0x004xxxxx`/`0x005xxxxx` addresses appear across `src/DDraw/`. [VERIFIED]
 
+## Source features versus native mod bundles
+
+The **[quality-of-life coverage audit](tadr-port/quality-of-life.md)** (2026-10-04) checks the
+actual supported installations separately from this source-tree survey. Native Mayhem uses
+v2024.3.31, ProTA v2025.8.29, Zero the TAF 2025.4.24 Zero build, Escalation v2026.8.6 and Twilight
+v2026.6.8-full. Later `config_*.h` flags do not describe those older installed binaries.
+
+Rotation and directional build-menu support are released features (stable v2026.5.9), present
+in Escalation/Twilight, with zero active `Rotations=` definitions across the checked mods.
+Escalation uses `PreviewFaceOpponent=1` in 12 units; that changes the placement ghost's facing.
+Reload bars, extra overhead counters, team-coloured nanolathe, allied queues and the newer chat,
+mute and percentage-sharing features are absent from all native bundles. Several exist in
+verified public development downloads; calling them all unreleased git work is incorrect.
+
+Impure suppresses both TADR DLLs. Its own ghosts, piece masks, health/group/order/range markers,
+world zoom and replay controls cover part of the interface, while the audit lists the remaining
+functions and native activation conditions. Whiteboard, camera and income features require the
+recorder transport as well as tdraw's presentation.
+
 ## Bootstrap: how the DLL takes control
 
 The load vector is an **import-name hex edit**, and `src/VisPatcher/main.pas:99-165` is
