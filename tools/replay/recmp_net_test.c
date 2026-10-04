@@ -90,6 +90,8 @@ static BOOL WINAPI found(LPCDPSESSIONDESC2 desc, LPDWORD timeout, DWORD flags, v
 }
 
 #ifdef RECMP_CHANNEL_TEST
+#include "tagpu_recmp_record.h"
+#include "tagpu_recmp_stream.h"
 static HANDLE s_finished;
 
 void tagpu_logf(const char* fmt, ...)
@@ -106,6 +108,7 @@ static void channel_run(Probe* p)
 {
     RecMpConfig config = {0};
     RecMpChannel* channel;
+    RecMpJournal* journal;
     RecMpPublic public;
     RecMpStats stats;
     RecMpPacket packet;
@@ -132,7 +135,10 @@ static void channel_run(Probe* p)
     }
     CHECK(atomic(&p->closed));
     s_finished = CreateEvent(NULL,TRUE,FALSE,NULL); CHECK(s_finished);
+    journal = tagpu_recmp_record_begin(&config); CHECK(journal);
     channel = tagpu_recmp_begin(&config); CHECK(channel);
+    CHECK(tagpu_recmp_record_attach(channel,journal));
+    CHECK(!tagpu_recmp_record_attach(channel,journal));
     memset(&config,0,sizeof config);
     CHECK(tagpu_recmp_advance(channel,1));
     CHECK(tagpu_recmp_advance(channel,1));
@@ -150,7 +156,7 @@ static void channel_run(Probe* p)
     printf("CHANNEL QUEUED: 16 data packets and human/AI prefix seals after primary Close\n");
     for (;;) {
         int got;
-        while ((got=tagpu_recmp_take(channel,&packet)) > 0) {
+        while ((got=tagpu_recmp_take_at(channel,&packet,2)) > 0) {
             unsigned actor;
             for (actor=0;actor<2;actor++) if (p->remote[actor].origin == packet.h.origin) break;
             CHECK(actor < 2 && packet.h.sequence == ++sequences[actor]);
@@ -191,6 +197,35 @@ static void channel_run(Probe* p)
         Sleep(1);
     }
     tagpu_recmp_end(channel);
+    tagpu_recmp_record_end(journal);
+    {
+        RecMpRecorded record;
+        RecMpStream ledger[4]={{0}};
+        const RecMpRecordHeader* rh=tagpu_recmp_record_header(journal);
+        char path[MAX_PATH];
+        FILE* file;
+        unsigned ordinal=0;
+        CHECK(strlen(p->release)+sizeof ".host.journal" <= sizeof path);
+        strcpy(path,p->release); strcat(path,p->config.host ? ".host.journal" : ".join.journal");
+        file=fopen(path,"wb"); CHECK(file);
+        CHECK(fwrite(rh,sizeof *rh,1,file)==1);
+        while (tagpu_recmp_record_take(journal,&record)>0) {
+            unsigned actor;
+            CHECK(record.where.ordinal==++ordinal);
+            for (actor=0;actor<rh->count;actor++) if (rh->actor[actor].origin==record.packet.h.origin) break;
+            CHECK(actor<rh->count && record.where.phase==
+                  (rh->actor[actor].local ? RECMP_RECORD_PRODUCED : RECMP_RECORD_CONSUMED));
+            CHECK(tagpu_recmp_stream_put(&ledger[actor],&record.packet.h,record.packet.body,
+                                         record.packet.h.bytes-sizeof record.packet.h));
+            CHECK(fwrite(&record.where,sizeof record.where,1,file)==1 &&
+                  fwrite(&record.packet,record.packet.h.bytes,1,file)==1);
+        }
+        CHECK(ordinal==40 && tagpu_recmp_record_done(journal));
+        for (i=0;i<4;i++) CHECK(ledger[i].ended && ledger[i].sequence==10);
+        CHECK(!fclose(file));
+        printf("PASS: persisted 40 ordered human/AI produced/consumed packets with independently validated source ledgers\n");
+    }
+    tagpu_recmp_record_free(journal);
     CHECK(WaitForSingleObject(s_finished,15000) == WAIT_OBJECT_0);
     CloseHandle(s_finished);
 }

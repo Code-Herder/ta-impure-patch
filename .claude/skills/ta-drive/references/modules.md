@@ -147,8 +147,10 @@ source sequences, source-prefix/final seals and packet delivery. The default exe
 including its sixteen completion-context bound and refusal of an early Close.
 Both modes run authentication, stream-ledger bounds/corruption/missing-tail tests,
 and controlled channel bounds/gap/wrong-source/missing-tail/abandoned-drain tests.
-The runner also checks frozen consumption cuts, final receipts and retained tail
-draining. Missing-receipt and missing-cut controls each take the production
+The runner also checks frozen consumption cuts, final receipts, retained tail
+draining and source/application journal wrap/overflow. The production-channel
+fixture keeps separate `release.host.journal` and `release.join.journal` packet
+histories; these are fixture journals, not playable `.imprec` recordings. Missing-receipt and missing-cut controls each take the production
 deadline and must fail incomplete, as does the abandoned-drain control; elapsed
 time cannot prove successful receipt.
 Run this standalone fixture separately from menu-driving tests: its instance removal can race the global `tacli ls` inventory used by `mp_lobby.sh`. Choose a free discovery port and a new output directory. The runner creates and

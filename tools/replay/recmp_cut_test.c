@@ -4,6 +4,7 @@
 #define COBJMACROS
 #include "tagpu_recmp_channel.h"
 #include "tagpu_recmp_stream.h"
+#include "tagpu_recmp_record.h"
 #include "tagpu_log.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +31,7 @@ static struct {
     RecMpStream source[2];
     RecMpPacket packet[32];
     unsigned count, read, tail, bindings, final_sent, receipts_sent, aborted;
-    int missing_receipt, missing_cut, bad_receipt;
+    int missing_receipt, missing_cut, bad_receipt, journal_full;
     DWORD game_thread;
     HANDLE opened, release, initial, tail_release;
 } f;
@@ -135,6 +136,7 @@ int main(int argc, char** argv)
 {
     RecMpConfig config;
     RecMpChannel* c;
+    RecMpJournal* journal;
     RecMpSignedIdentity binding;
     RecMpIdentity remote={RECMP_VERSION,sizeof remote,{.Data1=1},{.Data1=3},202};
     GUID stream={.Data1=2};
@@ -146,6 +148,7 @@ int main(int argc, char** argv)
     f.missing_receipt=argc>1 && !strcmp(argv[1],"missing_receipt");
     f.missing_cut=argc>1 && !strcmp(argv[1],"missing_cut");
     f.bad_receipt=argc>1 && !strcmp(argv[1],"bad_receipt");
+    f.journal_full=argc>1 && !strcmp(argv[1],"journal_full");
     f.game_thread=GetCurrentThreadId();
     f.net.identity=remote; f.net.identity.player=101;
     f.net.stats.peers=1; f.net.stats.membership=1;
@@ -169,15 +172,27 @@ int main(int argc, char** argv)
         p=packet(i ? 66 : 55,RECMP_RESOURCES,1,8,"first",5);
         CHECK(tagpu_recmp_stream_put(&f.source[i],&p->h,p->body,5));
     }
+    journal=tagpu_recmp_record_begin(&config); CHECK(journal);
     c=tagpu_recmp_begin(&config); CHECK(c);
+    CHECK(tagpu_recmp_record_attach(c,journal));
     CHECK(WaitForSingleObject(f.opened,15000)==WAIT_OBJECT_0);
     memset(&config,0,sizeof config); SetEvent(f.release);
     CHECK(WaitForSingleObject(f.initial,15000)==WAIT_OBJECT_0);
     CHECK(!tagpu_recmp_cut(c,55,&cut));
     CHECK(tagpu_recmp_take_at(c,&got,100)==1 && got.h.origin==55);
     CHECK(tagpu_recmp_take_at(c,&got,100)==1 && got.h.origin==66);
-    CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,9,"local",5));
+    if (f.journal_full) {
+        RecMpHeader h=got.h;
+        RecMpRecorded discarded;
+        unsigned char body[RECMP_BODY_MAX]={0};
+        h.origin=11; h.bytes=sizeof h+sizeof body;
+        while (tagpu_recmp_record_put(journal,&h,body,sizeof body,100,RECMP_RECORD_PRODUCED)) {}
+        CHECK(tagpu_recmp_record_take(journal,&discarded)==-1);
+    }
+    CHECK(tagpu_recmp_advance(c,100));
+    CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,100,"local",5));
     tagpu_recmp_retain(c); tagpu_recmp_end(c);
+    tagpu_recmp_record_end(journal);
     CHECK(tagpu_recmp_cut(c,66,&frozen) && frozen.origin==66 && frozen.sequence==1 &&
           frozen.source_tick==8 && frozen.application_tick==100 && frozen.application_order==2 &&
           frozen.stream.Data1==2);
@@ -202,6 +217,16 @@ int main(int argc, char** argv)
         puts("PASS: active peers need not end their match; exact consumption cuts, final receipts and retained post-teardown tail drain without changing the cut");
     }
     tagpu_recmp_release(c);
+    {
+        RecMpRecorded record;
+        unsigned records=0;
+        while (tagpu_recmp_record_take(journal,&record)>0) {
+            CHECK(record.where.ordinal==++records && record.where.tick==100);
+            CHECK(record.where.phase==(records<=2 ? RECMP_RECORD_CONSUMED : RECMP_RECORD_PRODUCED));
+        }
+        CHECK((f.journal_full ? !records : records==5) && tagpu_recmp_record_done(journal));
+    }
+    tagpu_recmp_record_free(journal);
     CloseHandle(f.opened); CloseHandle(f.release); CloseHandle(f.initial);
     CloseHandle(f.tail_release); CloseHandle(f.net.event);
     return 0;

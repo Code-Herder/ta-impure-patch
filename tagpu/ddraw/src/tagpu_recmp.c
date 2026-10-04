@@ -1,5 +1,6 @@
 #include "tagpu_recmp_channel.h"
 #include "tagpu_recmp_stream.h"
+#include "tagpu_recmp_record.h"
 #include "tagpu_log.h"
 #include <string.h>
 
@@ -25,6 +26,8 @@ struct RecMpChannel {
     unsigned local_mask, expected, received;
     unsigned capture_tick, capture_seen, producers_closed;
     uint64_t application_order;
+    RecMpJournal* journal;          /* game producer only; the worker never accesses this */
+    unsigned journal_tick;
     /* tx and consumed belong to the game thread. stop publishes their immutable
        final values. rx, receipts, bindings and last received images
        belong to the worker; the copied roster and stream never change. */
@@ -475,6 +478,12 @@ static int publish(RecMpChannel* c, unsigned at, unsigned kind, unsigned tick,
         return 0;
     }
     if (bytes) memcpy(p->body, body, bytes);
+    if (c->journal && !tagpu_recmp_record_put(c->journal, &p->h, p->body, bytes,
+        c->capture_seen ? c->journal_tick : tick, RECMP_RECORD_PRODUCED)) {
+        /* Saving a local file cannot stop mandatory contributions to
+           other recorders. The failed journal persists until its hand-over. */
+        c->journal = NULL;
+    }
     if (out) *out = p->h;
     InterlockedExchange(&c->tx.published, w + 1);
     SetEvent(c->wake);
@@ -503,6 +512,7 @@ int tagpu_recmp_advance(RecMpChannel* c, unsigned tick)
     unsigned i;
     if (!c || acquire(&c->stop) || acquire(&c->failed)) return 0;
     if (c->producers_closed || (c->capture_seen && tick < c->capture_tick)) goto invalid;
+    c->journal_tick = tick;
     if (c->capture_seen && tick != c->capture_tick) {
         for (i = 0; i < c->config.count; i++) {
             const RecMpStream* s = &c->actor[i].tx;
@@ -568,6 +578,10 @@ int tagpu_recmp_take_at(RecMpChannel* c, RecMpPacket* out, unsigned application_
         return -1;
     }
     memcpy(out, &c->rx.packet[r % MP_QUEUE_SLOTS], c->rx.packet[r % MP_QUEUE_SLOTS].h.bytes);
+    if (!stopped && c->journal && !tagpu_recmp_record_put(c->journal, &out->h, out->body,
+        out->h.bytes - sizeof out->h, application_tick, RECMP_RECORD_CONSUMED)) {
+        c->journal = NULL;
+    }
     if (!stopped) {
         RecMpCutPoint* cut = &c->actor[source_of(c, out->h.origin)].consumed;
         cut->origin = out->h.origin;
@@ -591,6 +605,26 @@ int tagpu_recmp_cut(RecMpChannel* c, DWORD origin, RecMpCutPoint* out)
     *out = c->actor[at].consumed;
     out->origin = origin;
     return 1;
+}
+
+int tagpu_recmp_record_attach(RecMpChannel* c, RecMpJournal* j)
+{
+    const RecMpRecordHeader* h = tagpu_recmp_record_header(j);
+    unsigned i;
+    if (!c || !h || c->journal || c->received || acquire(&c->tx.published) ||
+        acquire(&c->stop) || acquire(&c->failed) || h->count != c->config.count ||
+        h->recorder != c->config.origin || memcmp(&h->match, &c->config.net.match, sizeof h->match)) return 0;
+    for (i = 0; i < h->count; i++)
+        if (h->actor[i].origin != c->config.actor[i].origin ||
+            h->actor[i].local != c->config.actor[i].local) return 0;
+    if (!tagpu_recmp_record_claim(j)) return 0;
+    c->journal = j;
+    return 1;
+}
+
+void tagpu_recmp_record_detach(RecMpChannel* c, RecMpJournal* j)
+{
+    if (c && c->journal == j) c->journal = NULL;
 }
 
 void tagpu_recmp_stats(RecMpChannel* c, RecMpStats* out)
