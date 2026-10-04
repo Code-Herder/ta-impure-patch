@@ -109,6 +109,7 @@
 #define GS_TNT         0x204
 #define OFF_CONTROLLED 0x2A42       /* u8: the player the local game commands                      */
 #define OFF_VIEWED     0x2A43       /* u8: the player whose view it draws                         */
+#define OFF_NETWORK    0x2A44       /* bit 0: network game, tested by Send_UnitDeath 0x4864B0 */
 #define OFF_NPLAYERS   0x2A3C       /* u16: the player count the SKIRMISH screen set (0x47AF39)     */
 #define OFF_LOSTYPE    0x14281      /* u16: bits 0-2 the options; bit 3 is the fog grid's own      */
 #define OFF_CMDRDEATH  0x37EF6      /* u32: ActiveCommanderDeath                                  */
@@ -1508,7 +1509,7 @@ static int cap_players(Rec* r, const Level* L)
 
 /* ---- the order lists ------------------------------------------------------------------------ */
 
-enum { OL_OK, OL_TOO_LONG, OL_NOT_A_NODE };
+enum { OL_OK, OL_TOO_LONG, OL_NOT_A_NODE, OL_REMOTE_OWNER };
 
 /* One of a live unit's lists (0 the main list, 1 the sub list), its nodes' images into `out`, and
    how many. The head of this file says why each read is sound; a node that fails the vtable test,
@@ -1519,9 +1520,22 @@ static int olist_read(const Level* L, unsigned slot, unsigned list, unsigned cha
                       unsigned* count, unsigned* odd)
 {
     const char* unit = L->begin + (size_t)slot * REC_UNIT_BYTES;
-    const char* node = *(const char* const*)(unit + (list ? U_SUBORDERS : U_ORDERS));
+    const char* node;
     unsigned n = 0;
     unsigned char raw[REC_ORDER_IMAGE];
+    /* A remote air proxy can delete the node's +0x52 object without clearing that pointer.
+       Only the controlling peer has the node-owned lifetime stated above. Bound the owner
+       before reading its controller, and refuse before following either list head. Puppet
+       hosts have no network bit and restore +0x52 to zero (replay-layout.tsv). */
+    if ((unsigned char)L->ta[OFF_NETWORK] & 1) {
+        unsigned owner = id_in(*(const char* const*)(unit + U_OWNER),
+                               L->ta + OFF_PLAYERS, PL_STRIDE, REC_PLAYERS);
+        unsigned ctl;
+        if (owner == REC_ID_BAD) return OL_REMOTE_OWNER;
+        ctl = (unsigned char)L->ta[OFF_PLAYERS + (owner - 1) * PL_STRIDE + PL_CONTROLLER];
+        if (ctl != 1 && ctl != 2) return OL_REMOTE_OWNER;
+    }
+    node = *(const char* const*)(unit + (list ? U_SUBORDERS : U_ORDERS));
     for (; node; node = *(const char* const*)(node + ORD_NEXT)) {
         unsigned flags;
         if (n == REC_ORDERS_MAX) return OL_TOO_LONG;
@@ -1575,6 +1589,7 @@ static void olist_fail(unsigned slot, unsigned list, int why)
                list ? "sub" : "main",
                why == OL_TOO_LONG   ? "is too long to record" :
                why == OL_NOT_A_NODE ? "reaches a node whose vtable is not an order's" :
+               why == OL_REMOTE_OWNER ? "requires its controlling peer's contribution" :
                                       "has no memory for its image", REC_ORDERS_MAX);
 }
 
