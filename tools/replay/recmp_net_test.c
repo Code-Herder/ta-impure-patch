@@ -1,11 +1,11 @@
 /* Native TCP/IP fixture for the recorder's isolated transport. Run a host and
    joiner on the same private DirectPlay discovery port, passing a release-file
    path to each. It stands in for TA's primary session: identities travel from
-   real human/AI native senders, before both primary interfaces close. */
+   native player data for real human/AI IDs, before both primary interfaces close. */
 #define INITGUID
 #define COBJMACROS
 #define _WIN32_WINNT 0x0400
-#include "tagpu_recmp_net.h"
+#include "tagpu_recmp_auth.h"
 #include <dplobby.h>
 #include <objbase.h>
 #include <stdio.h>
@@ -19,7 +19,8 @@ static const GUID s_match = {0x4df148d3,0xe0c0,0x4a8e,{0x85,0x27,0x36,0x6b,0x9e,
 typedef struct {
     RecMpNetConfig config;
     DWORD local[2];
-    struct { DWORD origin; RecMpIdentity identity; } remote[2];
+    struct { DWORD origin; RecMpPublic public; } remote[2];
+    const RecMpKey* key;
     RecMpIdentity identity;
     volatile LONG ready, remote_count, closed;
     const char* release;
@@ -86,11 +87,38 @@ static BOOL WINAPI found(LPCDPSESSIONDESC2 desc, LPDWORD timeout, DWORD flags, v
     return FALSE;
 }
 
+static void header(Probe* p, RecMpHeader* h, unsigned actor, unsigned kind,
+                    unsigned sequence, unsigned bytes)
+{
+    memset(h,0,sizeof *h);
+    memcpy(h->magic,"IMPUREMP",8);
+    h->version = RECMP_VERSION;
+    h->header = sizeof *h;
+    h->bytes = bytes;
+    h->match = s_match;
+    h->stream.Data1 = p->local[0];
+    h->origin = p->local[actor];
+    h->tick = kind == 3 ? 0 : 1;
+    h->sequence = sequence;
+    h->kind = kind;
+}
+
+static void data_send(Probe* p, RecMpNet* net, unsigned sent)
+{
+    struct { RecMpHeader h; unsigned char payload[16]; } packet;
+    header(p,&packet.h,sent%2,RECMP_RESOURCES,sent/2+1,sizeof packet);
+    memset(packet.payload,(int)packet.h.sequence,sizeof packet.payload);
+    CHECK(tagpu_recmp_net_send(net,&packet,sizeof packet) == DP_OK);
+}
+
 static DWORD WINAPI worker(void* argument)
 {
     Probe* p = argument;
     RecMpNet* net = NULL;
     RecMpNetStats stats;
+    RecMpSignedIdentity binding[2] = {0};
+    GUID bound_stream[2] = {{0}};
+    unsigned valid[2] = {0};
     unsigned sent = 0, received = 0, sequences[2] = {0};
     char send_release[MAX_PATH];
     DWORD deadline = GetTickCount() + 45000;
@@ -111,69 +139,102 @@ static DWORD WINAPI worker(void* argument)
         CHECK((LONG)(deadline-GetTickCount()) > 0);
         Sleep(1);
     }
-    /* Hold Receive while filling the context array. The SDK can acknowledge
-       packets meanwhile; their contexts remain pending until we consume completions. */
-    for (sent = 0; sent < RECMP_NET_PENDING; sent++) {
-        struct { RecMpHeader h; unsigned char payload[16]; } packet = {0};
-        memcpy(packet.h.magic,"IMPUREMP",8);
-        packet.h.version = 1;
-        packet.h.header = sizeof packet.h;
-        packet.h.bytes = sizeof packet;
-        packet.h.match = s_match;
-        packet.h.stream.Data1 = p->local[0];
-        packet.h.origin = p->local[sent%2];
-        packet.h.tick = 1;
-        packet.h.sequence = sent/2+1;
-        packet.h.kind = RECMP_RESOURCES;
-        memset(packet.payload,(int)packet.h.sequence,sizeof packet.payload);
+    /* Each public key came from its native primary ID. The private binding is
+       signed once per origin; ordinary data uses the resulting SDK sender bound. */
+    for (sent=0;sent<2;sent++) {
+        struct { RecMpHeader h; RecMpSignedIdentity body; } packet;
+        header(p,&packet.h,sent,3,0,sizeof packet);
+        CHECK(tagpu_recmp_sign(p->key,packet.h.origin,&packet.h.stream,&p->identity,&packet.body));
         CHECK(tagpu_recmp_net_send(net,&packet,sizeof packet) == DP_OK);
     }
+    /* Hold Receive while filling the context array. SDK acknowledgments cannot
+       release a context until this worker consumes its SENDCOMPLETE. */
+    for (sent=0;sent<RECMP_NET_PENDING-2;sent++) data_send(p,net,sent);
     CHECK(tagpu_recmp_net_send(net,"overflow",sizeof "overflow") == DPERR_BUSY);
     CHECK(tagpu_recmp_net_close(net) == DPERR_BUSY);
     tagpu_recmp_net_stats(net,&stats);
     CHECK(stats.pending == RECMP_NET_PENDING && !stats.failed && !stats.completed);
     printf("PENDING 16: seventeenth send and early Close refused\n");
-    while (received < 16 || stats.pending) {
+    while (received < 16 || stats.pending || sent < 16) {
         unsigned char buffer[RECMP_PACKET_MAX];
         unsigned bytes = sizeof buffer;
         DWORD from = 0;
         hr = tagpu_recmp_net_receive(net,&from,buffer,&bytes);
         CHECK(hr == DP_OK || hr == DPERR_NOMESSAGES);
         if (hr == DP_OK && from != p->identity.player) {
-            RecMpHeader header;
-            RecMpIdentity wrong;
+            RecMpHeader h;
             unsigned actor, i;
-            CHECK(bytes == sizeof header+16);
-            memcpy(&header,buffer,sizeof header);
-            for (actor = 0; actor < 2; actor++) if (p->remote[actor].origin == header.origin) break;
-            CHECK(actor < 2 && tagpu_recmp_net_authorized(net,&p->remote[actor].identity,from));
-            CHECK(!tagpu_recmp_net_authorized(net,&p->remote[actor].identity,p->identity.player));
-            wrong = p->remote[actor].identity;
-            wrong.player ^= 1;
-            CHECK(!tagpu_recmp_net_authorized(net,&wrong,from));
-            wrong = p->remote[actor].identity;
-            wrong.session.Data1 ^= 1;
-            CHECK(!tagpu_recmp_net_authorized(net,&wrong,from));
-            wrong = p->remote[actor].identity;
-            wrong.match.Data1 ^= 1;
-            CHECK(!tagpu_recmp_net_authorized(net,&wrong,from));
-            CHECK(header.sequence == ++sequences[actor]);
-            for (i = sizeof header; i < bytes; i++) CHECK(buffer[i] == header.sequence);
-            received++;
+            CHECK(bytes >= sizeof h);
+            memcpy(&h,buffer,sizeof h);
+            CHECK(!memcmp(h.magic,"IMPUREMP",8) && h.version == RECMP_VERSION &&
+                  h.header == sizeof h && h.bytes == bytes && !memcmp(&h.match,&s_match,sizeof s_match));
+            for (actor=0;actor<2;actor++) if (p->remote[actor].origin == h.origin) break;
+            CHECK(actor < 2);
+            if (h.kind == 3) {
+                CHECK(bytes == sizeof h+sizeof(RecMpSignedIdentity) && !h.sequence && !valid[actor]);
+                CHECK(tagpu_recmp_verify(&p->remote[actor].public,h.origin,&h.stream,&p->identity,
+                                         from,buffer+sizeof h,bytes-sizeof h,&binding[actor]));
+                CHECK(tagpu_recmp_net_authorized(net,&binding[actor].identity,from));
+                bound_stream[actor] = h.stream;
+                valid[actor] = 1;
+                printf("PRIVATE SIGNED BIND actual_from=%lu primary=%u\n",(unsigned long)from,h.origin);
+            } else {
+                CHECK(h.kind == RECMP_RESOURCES && bytes == sizeof h+16 && valid[actor]);
+                CHECK(tagpu_recmp_net_authorized(net,&binding[actor].identity,from));
+                CHECK(!memcmp(&bound_stream[actor],&h.stream,sizeof h.stream));
+                CHECK(h.sequence == ++sequences[actor]);
+                for (i=sizeof h;i<bytes;i++) CHECK(buffer[i] == h.sequence);
+                received++;
+            }
         }
         tagpu_recmp_net_stats(net,&stats);
         CHECK(!stats.failed && (LONG)(deadline-GetTickCount()) > 0);
+        if (sent < 16 && stats.pending < RECMP_NET_PENDING) {
+            data_send(p,net,sent++);
+            tagpu_recmp_net_stats(net,&stats);
+        }
         if (hr == DPERR_NOMESSAGES) WaitForSingleObject(tagpu_recmp_net_event(net),1);
     }
-    CHECK(stats.completed == 16 && stats.completed_bytes == 16*(sizeof(RecMpHeader)+16));
-    CHECK(sequences[0] == 8 && sequences[1] == 8);
-    printf("PASS: two primary-native human/AI bindings, 16 private deliveries after primary Close, 16 completions\n");
+    CHECK(valid[0] && valid[1] && sequences[0] == 8 && sequences[1] == 8);
+    CHECK(stats.completed == 18 && stats.completed_bytes ==
+          16*(sizeof(RecMpHeader)+16)+2*(sizeof(RecMpHeader)+sizeof(RecMpSignedIdentity)));
+    printf("PASS: two primary-native human/AI keys, two signed bindings, 16 private deliveries after primary Close, 18 completions\n");
     while (GetFileAttributesA(p->release) == INVALID_FILE_ATTRIBUTES) {
         CHECK((LONG)(deadline-GetTickCount()) > 0);
         Sleep(10);
     }
     CHECK(tagpu_recmp_net_close(net) == DP_OK);
     return 0;
+}
+
+typedef struct { Probe* p; IDirectPlay4A* primary; const unsigned char* prefix; } ReadPublic;
+static BOOL WINAPI public_found(DPID id, DWORD type, LPCDPNAME name, DWORD flags, void* arg)
+{
+    ReadPublic* read = arg;
+    Probe* p = read->p;
+    unsigned char data[RECMP_PRIMARY_BYTES+sizeof(RecMpPublic)];
+    DWORD bytes = sizeof data;
+    DPCAPS caps = {0};
+    RecMpPublic public;
+    unsigned n = atomic(&p->remote_count), at;
+    (void)name; (void)flags;
+    CHECK(type == DPPLAYERTYPE_PLAYER);
+    if (id == p->local[0] || id == p->local[1]) return TRUE;
+    CHECK(IDirectPlayX_GetPlayerData(read->primary,id,data,&bytes,DPGET_REMOTE) == DP_OK);
+    CHECK(bytes == sizeof data && !memcmp(data,read->prefix,RECMP_PRIMARY_BYTES));
+    CHECK(tagpu_recmp_public_read(data+RECMP_PRIMARY_BYTES,sizeof public,&public));
+    caps.dwSize = sizeof caps;
+    CHECK(IDirectPlayX_GetPlayerCaps(read->primary,id,&caps,0) == DP_OK &&
+          !(caps.dwFlags & DPPLAYERCAPS_LOCAL));
+    for (at=0;at<n;at++) if (p->remote[at].origin == id) break;
+    if (at == n) {
+        CHECK(n < 2);
+        p->remote[n].origin = id;
+        p->remote[n].public = public;
+        InterlockedExchange(&p->remote_count,n+1);
+        printf("PRIMARY KEY actual_id=%lu data_bytes=%lu\n",(unsigned long)id,(unsigned long)bytes);
+    } else CHECK(!memcmp(&p->remote[at].public,&public,sizeof public));
+    return TRUE;
 }
 
 int main(int argc, char** argv)
@@ -189,7 +250,10 @@ int main(int argc, char** argv)
     unsigned char address[512], data[4096];
     DWORD bytes = sizeof address, deadline = GetTickCount()+45000, started;
     HANDLE thread;
-    unsigned i, advertised = 0, rejected_remote = 0;
+    unsigned i, rejected_remote = 0;
+    unsigned char userdata[RECMP_PRIMARY_BYTES+sizeof(RecMpPublic)] = {0};
+    RecMpPublic public;
+    ReadPublic read;
     char advertise_release[MAX_PATH], primary_release[MAX_PATH];
     HRESULT hr;
     CHECK(argc == 3);
@@ -229,11 +293,17 @@ int main(int argc, char** argv)
         desc.guidInstance = session.guid;
     }
     CHECK(IDirectPlayX_Open(primary,&desc,p.config.host ? DPOPEN_CREATE : DPOPEN_JOIN) == DP_OK);
+    p.key = tagpu_recmp_key();
+    CHECK(p.key);
+    tagpu_recmp_public(p.key,&public);
+    userdata[19] = 0x50;
+    memcpy(userdata+RECMP_PRIMARY_BYTES,&public,sizeof public);
+    read.p = &p; read.primary = primary; read.prefix = userdata;
     name.dwSize = sizeof name;
     name.lpszLongNameA = (char*)"Fixture player";
     for (i = 0; i < 2; i++) {
         name.lpszShortNameA = i ? (char*)"HostedAI" : (char*)"Human";
-        CHECK(IDirectPlayX_CreatePlayer(primary,&p.local[i],&name,NULL,NULL,0,0) == DP_OK);
+        CHECK(IDirectPlayX_CreatePlayer(primary,&p.local[i],&name,NULL,userdata,sizeof userdata,0) == DP_OK);
     }
     if (p.config.host) {
         bytes = sizeof data;
@@ -256,47 +326,26 @@ int main(int argc, char** argv)
         bytes = sizeof data;
         hr = IDirectPlayX_Receive(primary,&from,&to,DPRECEIVE_ALL,data,&bytes);
         CHECK(hr == DP_OK || hr == DPERR_NOMESSAGES);
-        if (hr == DP_OK && from && from != p.local[0] && from != p.local[1]) {
-            RecMpIdentity identity;
-            DPCAPS caps = {0};
-            unsigned n = atomic(&p.remote_count), at;
-            CHECK(bytes == 58+sizeof identity && data[0] == 0x28);
-            CHECK(tagpu_recmp_identity_read(data+58,sizeof identity,&s_match,&identity));
-            caps.dwSize = sizeof caps;
-            CHECK(IDirectPlayX_GetPlayerCaps(primary,from,&caps,0) == DP_OK);
-            CHECK(!(caps.dwFlags & DPPLAYERCAPS_LOCAL));
-            for (at = 0; at < n; at++) if (p.remote[at].origin == from) break;
-            if (at == n) {
-                CHECK(n < 2);
-                p.remote[n].origin = from;
-                p.remote[n].identity = identity;
-                InterlockedExchange(&p.remote_count,n+1);
-                printf("PRIMARY BIND actual_from=%lu private_id=%u\n",(unsigned long)from,identity.player);
-            }
-            if (!rejected_remote) {
-                hr = IDirectPlayX_Send(primary,from,p.local[0],0,(void*)"forged",sizeof "forged");
+        if (GetFileAttributesA(advertise_release) != INVALID_FILE_ATTRIBUTES) {
+            CHECK(IDirectPlayX_EnumPlayers(primary,NULL,public_found,&read,DPENUMPLAYERS_REMOTE) == DP_OK);
+            if (atomic(&p.remote_count) && !rejected_remote) {
+                hr = IDirectPlayX_SetPlayerData(primary,p.remote[0].origin,userdata,sizeof userdata,DPSET_REMOTE);
+                CHECK(hr == DPERR_ACCESSDENIED);
+                printf("PRIMARY refused remote-owned data change hr=%08lx\n",(unsigned long)hr);
+                hr = IDirectPlayX_Send(primary,p.remote[0].origin,p.local[0],0,(void*)"forged",sizeof "forged");
                 CHECK(hr == DPERR_ACCESSDENIED || hr == DPERR_INVALIDPLAYER);
                 rejected_remote = 1;
                 printf("PRIMARY refused remote-source Send hr=%08lx\n",(unsigned long)hr);
             }
         }
-        if (!advertised && atomic(&p.ready) &&
-            GetFileAttributesA(advertise_release) != INVALID_FILE_ATTRIBUTES) {
-            unsigned char message[58+sizeof(RecMpIdentity)] = {0};
-            message[0] = 0x28;
-            memcpy(message+58,&p.identity,sizeof p.identity);
-            for (i = 0; i < 2; i++)
-                CHECK(IDirectPlayX_Send(primary,p.local[i],DPID_ALLPLAYERS,DPSEND_GUARANTEED,message,sizeof message) == DP_OK);
-            advertised = 1;
-        }
         CHECK((LONG)(deadline-GetTickCount()) > 0);
         if (hr == DPERR_NOMESSAGES) Sleep(1);
     }
-    CHECK(advertised && rejected_remote);
+    CHECK(rejected_remote);
     /* The runner observes both ready publications before releasing either
        primary session. A guaranteed send acknowledges transport delivery, not
        the other application's consumption of its identity message. */
-    printf("PRIMARY BINDINGS READY\n");
+    printf("PRIMARY KEYS READY\n");
     while (GetFileAttributesA(primary_release) == INVALID_FILE_ATTRIBUTES) {
         CHECK((LONG)(deadline-GetTickCount()) > 0);
         Sleep(1);

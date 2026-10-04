@@ -143,8 +143,10 @@ The recorder's isolated native backend has a standalone transport fixture:
 `python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.
 Choose a free discovery port and a new output directory. It creates and removes
 two private-registry prefixes and an X display, retaining both peer logs and the
-test executable in the output. It verifies human/AI native source bindings,
-bounded async sends and delivery after primary Close. It uses primary-session
+test executables in the output. It checks public-key and signed-identity bounds
+and forgery refusals, verifies human/AI private bindings against keys in actual
+native primary player data, and checks bounded async sends and delivery after
+primary Close. It uses primary-session
 stand-ins; it does not launch TA or verify recording/playback.
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to

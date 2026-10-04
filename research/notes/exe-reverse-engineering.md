@@ -522,11 +522,13 @@ capture and therefore preserves the pending token. Every contribution is filtere
 by match GUID before binding its origin's stream or sequence.
 
 At attach, `mp_init` verifies the receive wrapper, the complete start argument/call
-span, the start dispatch slot/body and length store. It allocates both stubs and
-acquires all four instruction pages before writing any site; an allocation,
-byte-match or protection failure leaves all four sites stock. Its writes are the
-four code redirects, the startup table's `0x512AF8` value and the ordinary receive
-sender/destination outputs. It adds no engine resource or order write.
+span, the start dispatch slot/body and length store. It also verifies the native
+player creation and size branches described below. It allocates all four stubs
+and acquires every page for the six redirects before writing any site; an allocation,
+byte-match or protection failure leaves all six sites stock. Its writes are those
+redirects, the startup table's `0x512AF8` value, native CreatePlayer's initial data
+and the ordinary receive sender/destination outputs. It adds no engine resource
+or order write.
 
 Recheck with `objdump -d -M intel` against `pristine/TotalA.exe.pristine`, ranges
 `0x490B30..0x490BD0`, `0x496BB0..0x496DB0`, `0x451BC0..0x4520D4`,
@@ -538,9 +540,9 @@ complete network recording.
 
 ### Native player metadata and resource-message carriers [DISASSEMBLED 2026-10-04]
 
-These reads support the isolated-recorder transport's source-binding research.
-No player-data or resource-message patch is installed by this checkpoint. The
-production adapter and native fixture are described in the
+These reads support the isolated-recorder transport's source binding. The work
+branch extends native CreatePlayer's initial data and its accepted size; resource
+messages remain unchanged. The production adapter and native fixture are described in the
 [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html#isolated-native-adapter-and-source-binding-fixture).
 
 | Address | Established fact |
@@ -549,7 +551,8 @@ production adapter and native fixture are described in the
 | `0x4513A0..0x45143D`, `0x451421` | Read caller span: PlayerInfo receives values from main `+0x37F1B/+0x37F1F` into `+0x8B/+0x8D`, and main `+1/+2` into `+0xA7/+0xA8`; the call passes main `+0x14` as network context. This partial span does not establish every argument's semantic name. |
 | `0x4C9D30..0x4C9D73` | SetPlayerData wrapper, stdcall `ret 0x10`: context `+0x4C5`, vtable `+0x74` at `0x4C9D5F`, flags 2 (`DPSET_GUARANTEED`). A NULL interface or nonzero HRESULT returns 0; zero returns 1. A whole-`.text` E8/E9 scan found no direct callers; it proves no indirect-call absence. |
 | `0x4C9D80..0x4C9DC3` | GetPlayerData wrapper, stdcall `ret 0x10`: the same interface, vtable `+0x50` at `0x4C9DAF`, flags 0 (`DPGET_REMOTE`), and the same HRESULT-to-BOOL result. No direct E8/E9 caller in the sweep. Adjacent `0x4C9CE0..0x4C9D2D` and the start of `0x4C9DD0..0x4C9E40` were also read; the latter uses `0x4D83B0/0x4D85A0` for session-descriptor storage. Their complete indirect ownership paths were not established here. |
-| `0x453D90..0x453F50`, `0x45413F..0x454425` | Read system dispatch and native-create case. Source 0 selects system handling; source/destination IDs are mapped through ten-row scans. In the create case the native ID is message `+8`, initial-data pointer `+0x10`, and size `+0x14`. At `0x454315`, `cmp [ebp+0x14],0x15` requires **exactly 21 bytes** before branching to `0x45435B`; another size can reject the joined row through `0x453010` with reason 8. Appending forty bytes is not compatible with this unchanged handler. The accepted branch tests initial-data WORDs `+0x11 == 0` and `+0x13 == 0x50` at `0x45435B/0x454362`. When its password branch is armed, `0x454381` compares the initial data with main `+0x2BE3` through `0x4F8A70`. Calls `0x450A10`, `0x44FFD0`, `0x44FE40` and `0x456030` were read as part of this case; no new names or guarantees about their unread paths follow. |
+| `0x453D90..0x453F50`, `0x45413F..0x454425` | Read system dispatch and native-create case. Source 0 selects system handling; source/destination IDs are mapped through ten-row scans. In the create case the native ID is message `+8`, initial-data pointer `+0x10`, and size `+0x14`. Retail `0x454315` requires **exactly 21 bytes** before branching to `0x45435B`; another size can reject the joined row through `0x453010` with reason 8. The work branch redirects these six bytes to accept exactly 21 or 301; other sizes resume the original rejection at `0x45431B`. The accepted branch still tests initial-data WORDs `+0x11 == 0` and `+0x13 == 0x50` at `0x45435B/0x454362`. When its password branch is armed, `0x454381` compares the unchanged prefix with main `+0x2BE3` through `0x4F8A70`. Calls `0x450A10`, `0x44FFD0`, `0x44FE40` and `0x456030` were read as part of this case; no new names or guarantees about their unread paths follow. |
+| `0x4CA749..0x4CA767` | The 30-byte argument/call span is byte-matched before patching. The redirect at `0x4CA762` replaces `call [ecx+0x18]; xor ecx,ecx` with a stub calling `mp_create_player` on the seven already-pushed stdcall arguments. That helper preserves the original 21 bytes and appends a fixed 280-byte public-key record, or forwards the original arguments when key creation fails. The stub restores `xor ecx,ecx` before resuming at `0x4CA767`; the original `test eax,eax; sete cl; mov eax,ecx` still converts HRESULT zero to BOOL one. The stdcall helper consumes the same 28 argument bytes as the original COM method. |
 | `0x4573D0..0x457539` | Existing 58-byte `0x28` sender (the economy map below owns its fields). Both native-source-preserving targeted sends go through `0x451BC0`: the explicit-target call is `0x4574BC`, the bounded ten-row remote-destination loop calls at `0x457515`. The packet starts at stack `+0x0C`; each call pushes 58. Its direct E8 callers are exactly `0x420524`, `0x457380`, `0x4576E5` and `0x4655A1` in the retail sweep. |
 | `0x46555F..0x4655B5` | The row index BL must equal main `+0x2A43` before the minimap/radar work and network mode test. Counter `0x51E53C` increments at `0x46558D..0x465595`; every fourth increment reaches `0x4655A1`, with `(EDI,0,0)`. This is a **viewed-record** resource broadcast, not a periodic sender for every hosted AI. |
 | `0x4204E0..0x420555`, `0x457300..0x4573C4`, `0x457640..0x457702` | Read additional sender call sites. `0x420524` uses the controlled row (main `+0x2A42`) twice with target/flag zero. `0x457380` lies in resource-exchange row loops ending with delay root `0x4B6B50(250)`, with `+0x11E/+0x129/+0x134` condition tests; the earlier function entry was not read here. The receiver's flag branch iterates active local type-1/2 rows, emits `0x29` through `0x4576B5`, and conditionally sends `0x28` with flag 1 at `0x4576E5`. These branches do not establish a guaranteed post-start advertisement for idle hosted AI. |
@@ -561,8 +564,12 @@ Recheck these ranges with `objdump -d -M intel` against
 `pristine/TotalA.exe.pristine`; use `objdump -s` for `0x456018..0x456024`.
 The direct-call counts come from relative E8/E9 targets across the retail `.text`
 section, not from a claim about computed calls. SDK player-data ownership and
-native Send-from-remote refusal do not establish when TA will advertise an AI's
-private-session identity. That integration invariant remains open.
+native Send-from-remote refusal do not establish a periodic AI advertisement.
+The installed initial-data extension gives each native human/hosted-AI ID its
+owner's public key before play. The private worker's signature covers that origin,
+stream, match, private session and actual private sender. Keys come from native
+GetPlayerData for the primary ID, not from a private packet. The separate worker
+has not yet replaced the game's shared-session contribution path.
 
 ### Temporary transport observation and construction reads [MEASURED 2026-09-28]
 

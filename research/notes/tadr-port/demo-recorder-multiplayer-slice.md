@@ -110,9 +110,9 @@ The contribution envelope's first GUID is now this **match** ID, not the native
 session ID. Receive filters it before an origin can bind a stream or sequence.
 This separates matches even when a lobby retains its native session. A failed
 host GUID creation sends a same-size zero-ID start; the game action is retained
-and contributions refuse it. At attach every receive/start site is byte-matched,
-both stubs are allocated, and all four pages are acquired before any code is
-changed. Failure leaves the stock sites together.
+and contributions refuse it. At attach all six receive/start/player-data sites are byte-matched, all four
+stubs are allocated, and every page is acquired before any code is changed.
+Failure leaves the stock sites together.
 
 The transport test passes with a delayed prior-match sequence-32 packet preceding
 the current match's sequence 1. The old packet is discarded before binding and the
@@ -242,65 +242,106 @@ new session's discovery address. In the successful native fixture, the host's
 copied primary address was 507 bytes and the joiner's 130 bytes; both private
 opens returned zero. This is local discovery evidence, not a cross-address test.
 
-MEASURED 2026-10-04 on the reference setup, two standalone Wine processes using
-the production backend, one primary human and one primary hosted-AI ID on each.
-The primary stand-ins sent 98-byte messages: a 58-byte `0x28` prefix followed by
-a 40-byte identity containing version, length, match GUID, actual private-session
-GUID and actual private native ID. Both receivers bound each identity to the
-**actual primary native sender**, independently for the human and AI. Native Send
-from a remote-owned primary ID returned ACCESSDENIED (`0x8877000A`) on both peers.
-Private authorization rejected another private sender, our own sender, another
-session GUID and another match GUID.
+### Native player keys and signed private bindings
 
-After its own primary Close returned, each worker sent sixteen 80-byte private
-packets, eight per human/AI origin. Both received all sixteen in per-origin order
-with the expected payloads and observed all sixteen successful completions,
-1280 completed application bytes and zero remaining contexts. Reusing the
-caller's stack packet between sends preserved every received payload. Primary
-Close took 2505 and 2507 ms in this run; no TA or stock-only timing comparison ran.
-The identity parser also passed guard-page span and invalid-field checks.
+The primary session's native CreatePlayer initial data now preserves the
+engine's 21-byte prefix and appends a 280-byte public-key record, for exactly
+301 bytes. This reaches every native human and hosted-AI creation through the
+same wrapper. The branch redirects `0x4CA762` to a stdcall helper and `0x454315`
+to accept exactly 21 or 301 bytes. The original password/version tests and
+HRESULT-to-BOOL conversion remain. Key creation failure forwards the original
+21 bytes and refuses faithful contributions; it does not prevent ordinary play.
+All six receive/start/player-data redirects share one preflight and installation.
 
-The runner observes both private-ready publications before allowing identity
-advertisements, then both applications' binding-ready publications before
-allowing primary Close. Both Close/Release publications precede the release for
-private sends, and both private sessions remain alive until both delivery
-results arrive. These are **test barriers**, not a shipping handshake or terminal
-protocol. The first fixture advertised before its joiner existed; the barriers
-correct that fixture ordering. A test deadline reports failure and never proves
-delivery. Reproduce with a free discovery port:
+`tagpu_recmp_auth.c` creates one temporary RSA-2048 signing key per process at
+native player creation, before play. Concurrent creators build independent
+candidates and atomically publish one fully initialized object; losing creators
+release only their own candidate. The published key and provider remain alive
+for the process. Only the public key is exported; no private key is written to
+a recording or disk. The CryptoAPI context uses VERIFYCONTEXT and SILENT; the
+[context contract](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-cryptacquirecontexta)
+defines temporary key use without provider UI. This is network identity
+metadata, with no capability/version negotiation or new primary Send in play.
+
+The receiver obtains each public key through GetPlayerData for the **actual
+primary native ID** and confirms native local ownership agrees with the engine
+controller. The private worker signs the primary origin, stream GUID and its
+40-byte identity (match GUID, actual private session GUID and private native ID)
+with SHA-256/RSA. A receiver requires its copied primary key, the current match
+and session, and the actual private SDK sender to verify that 296-byte body.
+A private origin claim or a public key supplied by a private packet cannot
+establish authority. Freezing those verified bindings in the game channel is
+the next integration step; the game still calls the shared-session worker.
+
+This replaces the proposed resource-message carrier. TA's periodic `0x28` call
+at `0x4655A1` is inside the viewed-record branch, so it cannot advertise every
+idle hosted AI. The other `0x4573D0` callers are state dependent. Their resource
+message length and body remain unchanged.
+
+MEASURED 2026-10-04 on the reference setup, two standalone native-DirectPlay Wine
+processes using the production backend and authentication module, with one
+primary human and one primary AI each. All four actual primary IDs held
+301-byte initial data with the original prefix preserved. Native SetPlayerData
+for a remote-owned player and native Send from a remote-owned ID both returned
+ACCESSDENIED (`0x8877000A`) on both peers. Each receiver copied its two remote
+public keys before both primary interfaces were closed and released.
+
+Only after both Close/Release publications did each private worker send two
+signed bindings and sixteen 80-byte data packets, eight per primary origin.
+Both receivers verified the two signatures against native player keys, then
+received all sixteen data packets in per-origin order. Each sender observed
+18 successful completions, 2000 completed application bytes and zero remaining
+contexts. Filling all sixteen contexts made send seventeen and early Close
+return BUSY. Reusing the caller's packet between accepted sends preserved every
+payload. The final saved-runner run measured primary Close at 2502/2710 ms;
+these are standalone fixture times without a TA or stock-only comparison.
+
+The authentication controls also pass: simultaneous key creators publish the
+same immutable key; exact public and signed spans can end at a guard page;
+short/overlong spans leave outputs unchanged; altered origin, stream, match,
+session, private sender, signature and public key all reject. These tests run
+against the actual production module, not an imitation of its parser.
+
+The runner observes both private-ready publications before reading native
+player keys, both key-ready publications before primary Close, both
+Close/Release publications before private sends, and both PASS results before
+private Close. These are **test barriers**, not a shipping negotiation or
+terminal protocol. A deadline reports failure and never proves delivery.
+Reproduce with a free discovery port:
 
 ```
 python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run
 ```
 
-The runner compiles the actual backend, reserves two instance directories, gives
-them private registry hives and native DirectPlay, and owns a private X display.
-It removes its prefixes and display after the run and retains logs/executable in
-the new output directory. It never launches TA. The DLL's normal parallel build
-also passes. No multiplayer file, record/play/seek fixture or landing review has
-passed for this adapter.
+The runner compiles the backend, authentication module and controls, reserves
+two instance directories with private registry hives and native DirectPlay,
+and owns a private X display. It removes those prefixes and display after the
+run and retains logs/executables in the new output directory. It never launches
+TA. Earlier versions of the fixture used explicit primary `0x28` identity sends;
+those established native ownership but did not establish an idle-AI carrier.
+The current fixture uses native initial data instead.
 
-A fresh-prefix run of that runner repeats both PASS results: sixteen deliveries
-and sixteen completions per peer, both primary source bindings and both overflow
-refusals. Its primary Close times are 2517 and 2502 ms. All prefixes and its
-display are removed by the runner. This repeat verifies the saved procedure;
-it adds no TA integration claim.
+MEASURED 2026-10-04 on the reference setup, a real native-DirectPlay TA game on
+*Town & Country*, two humans and one hosted AI on each, recording off. Both
+copied DLLs matched the tested build's SHA-256. Both peers accepted match
+`5B843511-4C85-43A3-84B2-D24AA124FCE7`. Each copied all four 301-byte native
+player keys and confirmed native ownership against its controller: human IDs
+612385515/612385513 and AI IDs 612385518/612385519. Both reached play and
+received the other human/AI resource samples and nonempty commander queues.
+The source-tick-2 queues published at recipient ticks 2 and 6. At tick 151 the
+host reported 21 sent / 3040 bytes / 19 logical receives, the joiner
+19 / 2704 / 21; both reported queue/loss/failure zero. These are separate
+observations, not a bandwidth measurement.
 
-**The remaining primary identity route matters for hosted AI.** TA's periodic
-`0x28` call at `0x4655A1` is inside the viewed-record branch. It cannot be cited
-as a periodic advertisement for every local AI. The other `0x4573D0` callers are
-`0x420524`, `0x457380` and `0x4576E5`; the last two depend on the resource exchange's
-state. The native fixture explicitly sends from both IDs and therefore does not
-prove those TA messages occur after private-session startup. Appending identity
-to native player data also requires an engine-format change: CreatePlayer sends
-21 bytes and its system handler accepts exactly 21. Source binding must cover
-every human and hosted AI without weakening actual native ownership. This is
-ongoing integration work, not an owner decision or a completed binding patch.
+That game verifies the bootstrap patches and native human/AI key route. Its
+contributions still used the old shared-session channel; it does **not** verify
+the isolated adapter inside TA. No multiplayer file, record/play/seek fixture
+or landing review has passed. The test instances and private display were removed.
 
 ### Gaps before the first code landing
 
 - Prove the private signature is disjoint from every valid engine transport frame, including the raw mode, and bound the added pump cost without starving game traffic.
-- Replace the shared-session delivery path with the isolated adapter. Its native fixture proves bounded pending sends and delivery after primary Close in the measured configuration; TA integration, an identity route for every hosted AI, discovery lifecycle and production drain remain open. The shared-session held-send test proves our references and slots, not native concurrent Close or recording completeness.
+- Replace the shared-session delivery path with the isolated adapter. Its native fixture proves bounded pending sends and delivery after primary Close in the measured configuration; TA integration of the isolated worker, discovery lifecycle and production drain remain open. Native player keys now cover every human/hosted-AI creation in the measured four-actor game; the verified private bindings still need to replace shared-session sender checks. The shared-session held-send test proves our references and slots, not native concurrent Close or recording completeness.
 - Establish bounded reordering if the transport needs it and terminal completeness. The current sequence check cannot detect a last frame that never arrives; the present resource cache makes no completeness claim.
 - Carry the remaining player authority and materialize contributed resources/orders; retain source tick, sequence and recorder application order in the file and its seek snapshots.
 - Decide unit corrections from a bandwidth measurement, as the product plan requires; no measured budget is inferred from the two-commander run.

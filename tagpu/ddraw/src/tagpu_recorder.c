@@ -54,7 +54,10 @@
    receive wrapper's sender/destination outputs, as the engine wrapper writes them for a delivered
    game or system packet (mp_receive), and the startup packet-length entry 0x512AF8
    through its redirected initializer. The host's extended start retains the engine's
-   original start action (mp_start_send / mp_start_receive). The event
+   original start action (mp_start_send / mp_start_receive). Native CreatePlayer receives
+   the original 21-byte prefix plus a public key through the redirect at 0x4CA762;
+   the native-create size branch at 0x454315 accepts that fixed 301-byte span as well
+   as the original 21 bytes. The event
    hooks write nothing the simulation reads; the one site that changes a path, the network tests
    of the five fire functions, builds a packet on the fire function's own stack while a skirmish
    is recorded (*The events*). */
@@ -63,6 +66,7 @@
 #include <string.h>
 #include "tagpu_recorder.h"
 #include "tagpu_recmp.h"
+#include "tagpu_recmp_auth.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -368,6 +372,37 @@ static void __cdecl mp_start_receive(void* frame)
     mp_match_log("receive", from, &s_mp_match);
 }
 
+/* DISASSEMBLED: native CreatePlayer at 0x4CA762 receives the engine's 21-byte
+   initial data. Preserve that prefix (including its password/version) and add
+   only a public key. The primary SDK binds the data to the actual native owner;
+   a private peer cannot replace another owner's key. Private bindings are signed
+   off-thread and require no extra primary-session send during play. */
+static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* name,
+                                           HANDLE event, const void* data,
+                                           DWORD bytes, DWORD flags)
+{
+    const RecMpKey* key;
+    unsigned char extended[RECMP_PRIMARY_BYTES + sizeof(RecMpPublic)];
+    RecMpPublic public;
+    if (!data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
+        tagpu_logf("recmp: primary identity unavailable: no faithful contributions");
+        return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
+    }
+    memcpy(extended, data, RECMP_PRIMARY_BYTES);
+    tagpu_recmp_public(key, &public);
+    memcpy(extended + RECMP_PRIMARY_BYTES, &public, sizeof public);
+    return IDirectPlay2_CreatePlayer(dp, id, name, event, extended, sizeof extended, flags);
+}
+
+static int mp_public_key(IDirectPlay2A* dp, DWORD origin, RecMpPublic* public)
+{
+    unsigned char data[RECMP_PRIMARY_BYTES + sizeof(RecMpPublic)];
+    DWORD bytes = sizeof data;
+    return IDirectPlay2_GetPlayerData(dp, origin, data, &bytes, DPGET_REMOTE) == DP_OK &&
+           bytes == sizeof data &&
+           tagpu_recmp_public_read(data + RECMP_PRIMARY_BYTES, sizeof *public, public);
+}
+
 static void mp_init(void)
 {
     static const unsigned char was[] = {
@@ -383,20 +418,32 @@ static void mp_init(void)
     };
     static const unsigned char received[] = { 0xA1,0xE8,0x1D,0x51,0x00 };
     static const unsigned char length[] = { 0x89,0x35,0xF8,0x2A,0x51,0x00 };
-    struct { unsigned va, n; unsigned char now[6]; DWORD protection; } site[] = {
-        { 0x4C9840, 5 }, { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 }
+    static const unsigned char created[] = {
+        0x6A,0x00,0x66,0x89,0x44,0x24,0x2F,0x8B,0x0E,0x6A,0x15,0x52,
+        0x8B,0x54,0x24,0x44,0x8D,0x44,0x24,0x14,0x6A,0x00,0x50,0x52,
+        0x56,0xFF,0x51,0x18,0x33,0xC9
     };
-    unsigned char *observe = NULL, *sized = NULL, *p;
+    static const unsigned char data_size[] = { 0x83,0x7D,0x14,0x15,0x74,0x40 };
+    struct { unsigned va, n; unsigned char now[6]; DWORD protection; } site[] = {
+        { 0x4C9840, 5 }, { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 },
+        { 0x4CA762, 5 }, { 0x454315, 6 }
+    };
+    unsigned char *observe = NULL, *sized = NULL, *create = NULL, *accept = NULL, *p;
+    const unsigned sites = sizeof site / sizeof site[0];
     unsigned i, writable = 0, value;
     if (memcmp((const void*)(size_t)0x4C9840, was, sizeof was) ||
         *(const unsigned char*)(size_t)0x4C9740 != 0xC3 ||
         memcmp((const void*)(size_t)0x496D15, launch, sizeof launch) ||
         memcmp((const void*)(size_t)0x4553BE, received, sizeof received) ||
         *(const unsigned*)(size_t)0x455F9C != 0x4553BE ||
-        memcmp((const void*)(size_t)0x4520BE, length, sizeof length)) goto refused;
+        memcmp((const void*)(size_t)0x4520BE, length, sizeof length) ||
+        memcmp((const void*)(size_t)0x4CA749, created, sizeof created) ||
+        memcmp((const void*)(size_t)0x454315, data_size, sizeof data_size)) goto refused;
     observe = tagpu_detour_stub();
     sized = tagpu_detour_stub();
-    if (!observe || !sized) goto refused;
+    create = tagpu_detour_stub();
+    accept = tagpu_detour_stub();
+    if (!observe || !sized || !create || !accept) goto refused;
     p = observe;
     *p++ = 0x9C; *p++ = 0x60;                  /* flags and all registers */
     *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;
@@ -411,10 +458,23 @@ static void mp_init(void)
     value = 0x512AF8; memcpy(p, &value, 4); p += 4;
     value = sizeof(RecMpStart); memcpy(p, &value, 4); p += 4;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x4520C4);
-    for (i = 0; i < 4; i++) {
+    p = create;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)mp_create_player); p += 4;
+    *p++ = 0x33; *p++ = 0xC9;                 /* original HRESULT-to-BOOL scratch */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x4CA767);
+    p = accept;
+    memcpy(p, data_size, 4); p += 4;
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
+    *p++ = 0x81; *p++ = 0x7D; *p++ = 0x14;
+    value = RECMP_PRIMARY_BYTES + sizeof(RecMpPublic); memcpy(p, &value, 4); p += 4;
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
+    for (i = 0; i < sites; i++) {
         unsigned target = i == 0 ? (unsigned)(size_t)mp_receive :
                           i == 1 ? (unsigned)(size_t)mp_start_send :
-                          i == 2 ? (unsigned)(size_t)observe : (unsigned)(size_t)sized;
+                          i == 2 ? (unsigned)(size_t)observe :
+                          i == 3 ? (unsigned)(size_t)sized :
+                          i == 4 ? (unsigned)(size_t)create : (unsigned)(size_t)accept;
         site[i].now[0] = i == 1 ? 0xE8 : 0xE9;
         value = target - (site[i].va + 5);
         memcpy(site[i].now + 1, &value, 4);
@@ -422,21 +482,21 @@ static void mp_init(void)
     }
     /* Attach precedes engine startup. Acquire every page before changing any
        instruction, so a protection/allocation failure leaves the stock protocol. */
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < sites; i++) {
         if (!VirtualProtect((void*)(size_t)site[i].va, site[i].n, PAGE_EXECUTE_READWRITE,
                              &site[i].protection)) goto refused;
         writable++;
     }
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < sites; i++)
         memcpy((void*)(size_t)site[i].va, site[i].now, site[i].n);
     FlushInstructionCache(GetCurrentProcess(), NULL, 0);
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < sites; i++) {
         DWORD ignored;
         VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
     }
     s_mp_sites = 1;
-    tagpu_logf("recmp: ARMED private receive and %u-byte engine start with fresh match ID",
-               (unsigned)sizeof(RecMpStart));
+    tagpu_logf("recmp: ARMED receive, %u-byte fresh start and %u-byte native player identity",
+               (unsigned)sizeof(RecMpStart), RECMP_PRIMARY_BYTES + (unsigned)sizeof(RecMpPublic));
     return;
 refused:
     for (i = 0; i < writable; i++) {
@@ -445,7 +505,9 @@ refused:
     }
     tagpu_detour_stub_free(observe);
     tagpu_detour_stub_free(sized);
-    tagpu_logf("recmp: receive/start sites differ or cannot be patched: no contributions");
+    tagpu_detour_stub_free(create);
+    tagpu_detour_stub_free(accept);
+    tagpu_logf("recmp: receive/start/player-data sites differ or cannot be patched: no contributions");
 }
 
 static void mp_capture(const Level* L, unsigned tick)
@@ -478,6 +540,25 @@ static void mp_capture(const Level* L, unsigned tick)
             !memcmp(&session.desc.guidInstance, &zero, sizeof zero)) {
             tagpu_logf("recmp: no bounded session descriptor: no contributions");
             return;
+        }
+        for (i = 0; i < REC_PLAYERS; i++) {
+            const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
+            unsigned active, ctl = (unsigned char)player[PL_CONTROLLER];
+            DWORD native;
+            DPCAPS caps = {0};
+            RecMpPublic public;
+            memcpy(&active, player, sizeof active);
+            if (!active || ctl < 1 || ctl > 4) continue;
+            memcpy(&native, player + 4, sizeof native);
+            caps.dwSize = sizeof caps;
+            if (!mp_public_key(dp, native, &public) ||
+                IDirectPlay2_GetPlayerCaps(dp, native, &caps, 0) != DP_OK ||
+                !!(caps.dwFlags & DPPLAYERCAPS_LOCAL) != (ctl == 1 || ctl == 2)) {
+                tagpu_logf("recmp: primary-owned identity missing for native ID %u: no contributions", native);
+                return;
+            }
+            tagpu_logf("recmp: primary-owned key ID %u seat %u controller %u data bytes %u",
+                       native, i, ctl, RECMP_PRIMARY_BYTES + (unsigned)sizeof public);
         }
         s_mp_channel = tagpu_recmp_begin(dp, origin, &match, session.desc.dwFlags);
         if (!s_mp_channel) { tagpu_logf("recmp: contribution worker could not start"); return; }

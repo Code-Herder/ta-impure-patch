@@ -3892,8 +3892,9 @@ game played with Impure records no demo. The [multiplayer slice](tadr-port/demo-
 is active on a work branch: bounded contributions, authoritative human/hosted-AI
 queue caches with source/application ticks, and a fresh ID on each engine start.
 A separate native transport backend passes its standalone human/AI delivery
-fixture after the primary sessions close; TA integration and its hosted-AI
-identity route remain open. Native file recording, complete-stream proof,
+fixture after the primary sessions close. Signed private bindings verify against
+keys in actual native player data; a four-actor TA game verifies the human/AI
+bootstrap route. Integration of the isolated worker remains open. Native file recording, complete-stream proof,
 playback/seek, perspectives, communication and ten-seat takeover remain.
 No multiplayer code has landed.
 

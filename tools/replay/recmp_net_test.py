@@ -58,7 +58,13 @@ def run(args, output):
                 command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
                          "-O2", "-Wall", "-Wextra", "-Werror", "-std=c99", "-o", exe,
                          HERE / "recmp_net_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp_net.c",
+                         TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c",
                          "-lole32", "-luuid"], setup)
+                auth = output / "recmp-auth-test.exe"
+                command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
+                         "-O2", "-Wall", "-Wextra", "-Werror", "-std=c99", "-o", auth,
+                         HERE / "recmp_auth_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp_net.c",
+                         TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c", "-lole32", "-luuid"], setup)
                 for role in ("host", "join"):
                     # mkdtemp reserves the directory atomically; cleanup only
                     # reaches directories this invocation actually created.
@@ -72,6 +78,9 @@ def run(args, output):
                              "--res", "640x480"], setup)
                     command(["bash", root / "tools/dpinstall.sh", prefix], setup)
                     command([sys.executable, root / "tools/dpport.py", prefix, args.port], setup)
+            with (output / "auth.log").open("w") as log:
+                command(["wine", auth], log, env=owned[0][1])
+            print("authentication bounds and forgery controls: PASS", flush=True)
             for role, (directory, env) in zip(("host", "join"), owned):
                 log = output / f"{role}.log"
                 handle = log.open("w")
@@ -81,19 +90,19 @@ def run(args, output):
                 jobs.append((proc, handle, log))
                 wait_for(jobs, "PRIVATE READY")
                 print(f"{role}: private session ready", flush=True)
-            # Both primary players exist before either identity advertisement.
-            # Both applications consume the identities before either Close.
+            # Both primary players exist before native player-key reads.
+            # Both applications copy native player keys before either Close.
             advertise.touch()
-            wait_for(jobs, "PRIMARY BINDINGS READY")
+            wait_for(jobs, "PRIMARY KEYS READY")
             primary.touch()
             wait_for(jobs, "PRIMARY CLOSED")
             send.touch()
-            wait_for(jobs, "PASS: two primary-native human/AI bindings")
+            wait_for(jobs, "PASS: two primary-native human/AI keys")
             release.touch()
             for proc, handle, log in jobs:
                 if proc.wait(timeout=10):
                     raise RuntimeError(f"fixture failed: {log}")
-            print("PASS: both peers bound human/AI sources and delivered after primary Close",
+            print("PASS: both peers verified signed human/AI sources and delivered after primary Close",
                   flush=True)
         finally:
             for path in (advertise, primary, send, release):
