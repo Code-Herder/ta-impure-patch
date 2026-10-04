@@ -4235,6 +4235,13 @@ static void ai_hooks_init(void)
     unsigned i;
     for (i = 0; i < sizeof sites / sizeof sites[0]; i++) {
         const ObserveSite* o = &sites[i];
+        if (!tagpu_detour_bytes_ok(o->va, o->stolen, o->n)) {
+            tagpu_logf("recorder: AI activity observer 0x%06X holds other bytes", o->va);
+            return;
+        }
+    }
+    for (i = 0; i < sizeof sites / sizeof sites[0]; i++) {
+        const ObserveSite* o = &sites[i];
         if (!tagpu_detour_observe(o->va, o->stolen, o->n, o->fn, o->after)) {
             tagpu_logf("recorder: AI activity observer 0x%06X unavailable", o->va);
             return;

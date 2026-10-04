@@ -402,10 +402,11 @@ once), `seek <T> [dump <name>]`, `dock seek <T>` (the dock's own seek entry,
 **Live rewind (U).** A fixture with `"rewind": true` also runs the
 [rewind L/P/Q checks](demo-recorder-s4-rewind.md) in `tarewind.py`. Battle and
 stock-limits use the battle on their respective DLLs. `rewind_steps` declares
-additional scenario steps for both the baseline and rewound game, so edits to
+additional scenario steps for the U lane's live game, so edits to
 those scenarios select these fixtures for the landing tier. The current extra
 step supplies AI builders before the comparison window, without giving them
-construction orders. `tareplay.py rewind battle [--stock] [--cover]` runs this
+construction orders. Fresh planning and normal dispatch are required per AI seat
+after return-to-now and fork; construction is reported only. `tareplay.py rewind battle [--stock] [--cover]` runs this
 lane independently. Its fresh seek uses `seek-frame T dump NAME`, which pauses
 and dumps in the seek's frame visit. The approved scope excludes unseated sight
 counters under D2 and reports/accepts VM START/CALL child counts across

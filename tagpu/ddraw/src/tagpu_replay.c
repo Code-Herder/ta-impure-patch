@@ -5121,7 +5121,8 @@ static int tk_tables(const RecHeader* h, char* why, unsigned cap)
 /* R0's bounds on what the takeover reads and writes; `D` from -1 to its default. 1, or 0 (why). */
 static int rw_eye(const Lv* L, unsigned T, char* why, unsigned cap);
 
-static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, char* why, unsigned cap)
+static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back,
+                    char* why, unsigned cap)
 {
     const RecHeader* h = recr_header(s_rd);
     char* const* acq = (char* const*)(size_t)ACQ_TABLE;
@@ -5134,8 +5135,9 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, char* wh
         snprintf(why, cap, "player %u is not one of the recording's seats", P);
         return 0;
     }
-    /* the destructor's own elimination count (0x486DFC decrements it, 0x486E09 tests it) */
-    if (!*(const uint16_t*)((const char*)W->player[P] + PL_LIVE)) {
+    /* A takeover needs a playable seat. Returning to the saved present must also
+       restore an empty human seat, which remains local after native +kill. */
+    if (!back && !*(const uint16_t*)((const char*)W->player[P] + PL_LIVE)) {
         snprintf(why, cap, "player %u has no unit at GameTime %u", P, W->tick);
         return 0;
     }
@@ -5471,7 +5473,7 @@ static int seek_run(char* ta)
     }
     if (tk) {
         memset(&s_tk, 0, sizeof s_tk);
-        if (!tk_bound(&L, W, P, &D, why, sizeof why) ||
+        if (!tk_bound(&L, W, P, &D, back, why, sizeof why) ||
             (!back && !tk_open(T, why, sizeof why))) {
             tagpu_logf("replay: %s: takeover at %u refused: %s", s_name, T, why);
             if (!back) sk_back(&L, prev);

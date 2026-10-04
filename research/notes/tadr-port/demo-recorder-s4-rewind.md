@@ -592,3 +592,34 @@ naval flare allowance is bounded by its accepted parent-count difference. AI
 liveness establishes new planning and dispatch, not identical strategy or full
 COB execution continuity. In-game rewind controls and multiplayer recording are
 separate work.
+
+### Independent review corrections
+
+The two HIGH read-only reviews of `6191f265` verified the synchronization
+protocol and found three distinct issues: missing byte checks before the AI
+observers, takeover's nonempty-seat condition incorrectly applied to a saved
+present, and a stale reference to the removed independent AI baseline.
+
+All three observer prefixes are now checked before any is installed. A mismatch
+disables this observation rather than overwriting an unknown engine entry.
+Return-to-now permits a saved empty human seat while keeping all other takeover
+bounds; ordinary takeover still requires a playable seat. The U-lane description
+now names its live game and direct per-seat planning/dispatch checks.
+
+MEASURED on the reference setup: `replay-secondary-orders`, developer cheats
+enabled, then native `+kill 9` and `+kill 0`, leaves the human live count at zero.
+Before the correction, open and seek to 301 succeeded but return-to-now was
+refused at saved GameTime 563. After the correction, normal limits restored
+GameTime 568 in 243 ms and stock limits restored 566 in 238 ms. Both saved and
+restored frame pairs are EQUAL under the approved takeover comparison, and
+both processes reopened and closed rewind successfully.
+
+The byte-check control used an isolated executable copy with `0x43A0C0`'s
+first byte changed from `83` to `90`, and launched only to the main menu.
+Initialization reported that entry's mismatch. Live reads showed `53`, `90`
+and `53` at `0x408C40`, `0x43A0C0` and `0x43A1F0`: none of the three observers
+was installed. The original executable was unchanged and the instance's
+original executable link was restored after the control.
+
+The preceding full-tier result covers `384d55a3`. These review corrections
+require the replay gate again before landing.

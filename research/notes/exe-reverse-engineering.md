@@ -15916,6 +15916,17 @@ pre-conversion value; a fork deliberately arms it under the takeover policy.
 The objective pointer is at main `+0x391ED`, and level setup/teardown owns its
 lifetime as documented above.
 
+The controlled human seat can remain local with no units. The last-unit
+destructor decrements player `+0x144` at `0x486DFC`, then calls the skirmish
+notification `0x47BD70` at `0x486E54`. DISASSEMBLED: `0x47BD70..0x47BDE2`
+formats a player message and sends it through `0x463CA0` at `0x47BDD5`; it
+does not store a new controller type. With objectives disabled, native
+`+kill 0` leaves the recorded human seat empty in a continuing level.
+Return-to-now must restore that saved state. The nonempty-seat condition in
+`tk_bound` applies only to takeover; saved-present restoration retains the
+same memory, seat-identity, allocation and objective bounds without that
+eligibility test.
+
 
 ### Saved radar contacts on return-to-now
 
@@ -16061,3 +16072,8 @@ Observer stolen prefixes: `0x408C40` five bytes `53 56 57 8B F9`;
 `83 EC 0C 8A 44 24 10`; `0x43A1F0` five bytes `53 56 8B F1 57`.
 All are complete instructions without relative operands. The normal-dispatch
 observers already exist for the recorder's nano context.
+`ai_hooks_init` checks all three current prefixes with `tagpu_detour_bytes_ok`
+before installing any observer. `tagpu_detour_observe` alone compares an
+already registered Impure stub; its first-install path does not match the
+engine's bytes. A mismatch therefore leaves all three new observers uninstalled,
+and the harness refuses AI activity observation.
