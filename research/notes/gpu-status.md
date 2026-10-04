@@ -3019,6 +3019,17 @@ All four sites are checked and made writable before any is changed. B3's
 `tagpu_wire_received` supplies the receive's actual delivered span. Details and
 remaining verification: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md).
 
+The linked `tagpu_recmp_net.c` backend owns a distinct native TCP/IP session on
+one worker and retains sixteen async send contexts through SENDCOMPLETE. Its
+standalone two-peer fixture binds human/AI primary senders to actual private
+IDs and receives all sixteen packets on each peer after both primary interfaces
+close. It is not called by TA yet and writes no engine fields. The game-side
+identity route must cover hosted AI: the periodic `0x4655A1` resource send is
+inside the viewed-record branch, and the native CreatePlayer handler requires
+exactly 21 bytes of player data. These reads are in the engine map; no patch to
+either carrier has been installed. The fixture and its session barriers prove
+native transport behavior in that configuration, not a complete network file.
+
 | Fields we write in the multiplayer checkpoint | Invariant |
 |---|---|
 | Network context `+0x4B5/+0x4B9` (main `+0x4C9/+0x4CD`) | Receive outputs copied only for a stock/system packet returned to the engine, as its wrapper does. Private packets stay in bounded recorder storage. |

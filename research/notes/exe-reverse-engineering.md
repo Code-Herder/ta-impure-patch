@@ -536,6 +536,34 @@ with `objdump -s`. The splitter and receive-wrapper map above remains applicable
 This does not establish terminal delivery, the shared Send/Close contract, or a
 complete network recording.
 
+### Native player metadata and resource-message carriers [DISASSEMBLED 2026-10-04]
+
+These reads support the isolated-recorder transport's source-binding research.
+No player-data or resource-message patch is installed by this checkpoint. The
+production adapter and native fixture are described in the
+[multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html#isolated-native-adapter-and-source-binding-fixture).
+
+| Address | Established fact |
+|---|---|
+| `0x4CA6A0..0x4CA77F` | Native player creation wrapper, stdcall `ret 0x1C`. It takes the interface from context `+0x4C5`, constructs a 16-byte DPNAME with flags zero, copies the two names into context `+0x11/+0x21` through `0x4E4760`, and supplies 21 bytes of initial player data. The first sixteen bytes are copied from its argument; byte `+0x10` is zero and WORDs `+0x11/+0x13` come from arguments. Native CreatePlayer, vtable `+0x18`, is called at `0x4CA762`, event NULL and flags zero. The sole direct E8 caller in retail `.text` is `0x451421`; a native ownership record is not unused recorder storage. |
+| `0x4513A0..0x45143D`, `0x451421` | Read caller span: PlayerInfo receives values from main `+0x37F1B/+0x37F1F` into `+0x8B/+0x8D`, and main `+1/+2` into `+0xA7/+0xA8`; the call passes main `+0x14` as network context. This partial span does not establish every argument's semantic name. |
+| `0x4C9D30..0x4C9D73` | SetPlayerData wrapper, stdcall `ret 0x10`: context `+0x4C5`, vtable `+0x74` at `0x4C9D5F`, flags 2 (`DPSET_GUARANTEED`). A NULL interface or nonzero HRESULT returns 0; zero returns 1. A whole-`.text` E8/E9 scan found no direct callers; it proves no indirect-call absence. |
+| `0x4C9D80..0x4C9DC3` | GetPlayerData wrapper, stdcall `ret 0x10`: the same interface, vtable `+0x50` at `0x4C9DAF`, flags 0 (`DPGET_REMOTE`), and the same HRESULT-to-BOOL result. No direct E8/E9 caller in the sweep. Adjacent `0x4C9CE0..0x4C9D2D` and the start of `0x4C9DD0..0x4C9E40` were also read; the latter uses `0x4D83B0/0x4D85A0` for session-descriptor storage. Their complete indirect ownership paths were not established here. |
+| `0x453D90..0x453F50`, `0x45413F..0x454425` | Read system dispatch and native-create case. Source 0 selects system handling; source/destination IDs are mapped through ten-row scans. In the create case the native ID is message `+8`, initial-data pointer `+0x10`, and size `+0x14`. At `0x454315`, `cmp [ebp+0x14],0x15` requires **exactly 21 bytes** before branching to `0x45435B`; another size can reject the joined row through `0x453010` with reason 8. Appending forty bytes is not compatible with this unchanged handler. The accepted branch tests initial-data WORDs `+0x11 == 0` and `+0x13 == 0x50` at `0x45435B/0x454362`. When its password branch is armed, `0x454381` compares the initial data with main `+0x2BE3` through `0x4F8A70`. Calls `0x450A10`, `0x44FFD0`, `0x44FE40` and `0x456030` were read as part of this case; no new names or guarantees about their unread paths follow. |
+| `0x4573D0..0x457539` | Existing 58-byte `0x28` sender (the economy map below owns its fields). Both native-source-preserving targeted sends go through `0x451BC0`: the explicit-target call is `0x4574BC`, the bounded ten-row remote-destination loop calls at `0x457515`. The packet starts at stack `+0x0C`; each call pushes 58. Its direct E8 callers are exactly `0x420524`, `0x457380`, `0x4576E5` and `0x4655A1` in the retail sweep. |
+| `0x46555F..0x4655B5` | The row index BL must equal main `+0x2A43` before the minimap/radar work and network mode test. Counter `0x51E53C` increments at `0x46558D..0x465595`; every fourth increment reaches `0x4655A1`, with `(EDI,0,0)`. This is a **viewed-record** resource broadcast, not a periodic sender for every hosted AI. |
+| `0x4204E0..0x420555`, `0x457300..0x4573C4`, `0x457640..0x457702` | Read additional sender call sites. `0x420524` uses the controlled row (main `+0x2A42`) twice with target/flag zero. `0x457380` lies in resource-exchange row loops ending with delay root `0x4B6B50(250)`, with `+0x11E/+0x129/+0x134` condition tests; the earlier function entry was not read here. The receiver's flag branch iterates active local type-1/2 rows, emits `0x29` through `0x4576B5`, and conditionally sends `0x28` with flag 1 at `0x4576E5`. These branches do not establish a guaranteed post-start advertisement for idle hosted AI. |
+| `0x4558FE..0x455909`, `0x45601C` | Resource dispatch-table entry points to `0x4558FE`. It loads its message from stack `+0x10`, pushes source EDI and that message, calls `0x457540` at `0x455904`, then exits through `0x455F50`. Nearby entries `0x456018/0x456020` and cases `0x4558D0/0x45590E` were read only to locate it; no new patch follows. |
+| `0x4522DA..0x4522E4`, `0x512B78` | Packet initializer's complete ten-byte instruction is `C7 05 78 2B 51 00 3A 00 00 00`: fixed code-`0x28` length 58. Its immediate begins at `0x4522E0`. A longer sender must change the initializer as well as preserve the original resource prefix; neither change is installed. |
+| `0x457D30..0x457FC0`, `0x49563A` | Auto-share root, one direct caller `0x49563A`, not the resource-message constructor. Read prefix tests the network bit, GameTime `+0x38A47` modulo 60, PlayerInfo `+0x97` share bits and the player's resource/share thresholds, then uses `0x464C60/0x464B30`. A later modulo-450 branch begins in the read range; the full remainder and constant `0x4FD4B8` were not interpreted here. |
+
+Recheck these ranges with `objdump -d -M intel` against
+`pristine/TotalA.exe.pristine`; use `objdump -s` for `0x456018..0x456024`.
+The direct-call counts come from relative E8/E9 targets across the retail `.text`
+section, not from a claim about computed calls. SDK player-data ownership and
+native Send-from-remote refusal do not establish when TA will advertise an AI's
+private-session identity. That integration invariant remains open.
+
 ### Temporary transport observation and construction reads [MEASURED 2026-09-28]
 
 The three observed entry instructions are position-independent five-byte `push imm32`s:

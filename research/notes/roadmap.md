@@ -3891,8 +3891,11 @@ In-game rewind controls and network recording remain separate work; a network
 game played with Impure records no demo. The [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html)
 is active on a work branch: bounded contributions, authoritative human/hosted-AI
 queue caches with source/application ticks, and a fresh ID on each engine start.
-Native file recording, complete-stream proof, playback/seek, perspectives,
-communication and ten-seat takeover remain. No multiplayer code has landed.
+A separate native transport backend passes its standalone human/AI delivery
+fixture after the primary sessions close; TA integration and its hosted-AI
+identity route remain open. Native file recording, complete-stream proof,
+playback/seek, perspectives, communication and ten-seat takeover remain.
+No multiplayer code has landed.
 
 
 ## The restorer as compute (2026-09-27)

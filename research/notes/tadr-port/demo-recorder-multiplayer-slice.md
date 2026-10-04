@@ -213,10 +213,94 @@ terminal manifests must establish completion; a timeout can mark a recording
 incomplete, never prove it complete. No such adapter or marker has been installed
 by this probe. Multiplayer files remain disabled.
 
+#### Isolated native adapter and source-binding fixture
+
+The work branch now contains `tagpu_recmp_net.c`, an engine-free native TCP/IP
+adapter. It owns a separate DirectPlay4A session, player, receive event, module
+reference and COM apartment on one worker. The copied configuration contains
+only provider, match GUID, host role and a bounded primary-player address. No
+primary-session interface or engine pointer enters this adapter. It is linked
+into the DLL but **not yet called by the game**; `tagpu_recmp.c` still uses the
+checkpoint's shared-session path.
+
+Its application GUID differs from the fixture's primary GUID. Session discovery
+matches the fresh match GUID in the private session name; the session requires
+the native protocol, retained message IDs and ordering. SendEx uses guaranteed
+async sends, with sixteen fixed contexts. An accepted `DPERR_PENDING` transfers
+the copied packet to the SDK; only a validated SENDCOMPLETE releases that
+context, and only success counts delivery. A seventeenth pending send and an early Close
+return BUSY. An abort ends only the worker's private interface and makes no
+delivery claim. The current backend supports TCP/IP only; discovery retries,
+host migration and production terminal manifests remain unverified.
+
+The SDK's [GetPlayerAddress contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_7jqx.content.htm)
+allows several local network addresses and returns both text forms. The first
+adapter parser incorrectly treated another address as invalid. It now retains
+up to 32 distinct ANSI addresses of at most 256 bytes each and tries that bounded
+list for discovery. It omits the primary endpoint's port when constructing the
+new session's discovery address. In the successful native fixture, the host's
+copied primary address was 507 bytes and the joiner's 130 bytes; both private
+opens returned zero. This is local discovery evidence, not a cross-address test.
+
+MEASURED 2026-10-04 on the reference setup, two standalone Wine processes using
+the production backend, one primary human and one primary hosted-AI ID on each.
+The primary stand-ins sent 98-byte messages: a 58-byte `0x28` prefix followed by
+a 40-byte identity containing version, length, match GUID, actual private-session
+GUID and actual private native ID. Both receivers bound each identity to the
+**actual primary native sender**, independently for the human and AI. Native Send
+from a remote-owned primary ID returned ACCESSDENIED (`0x8877000A`) on both peers.
+Private authorization rejected another private sender, our own sender, another
+session GUID and another match GUID.
+
+After its own primary Close returned, each worker sent sixteen 80-byte private
+packets, eight per human/AI origin. Both received all sixteen in per-origin order
+with the expected payloads and observed all sixteen successful completions,
+1280 completed application bytes and zero remaining contexts. Reusing the
+caller's stack packet between sends preserved every received payload. Primary
+Close took 2505 and 2507 ms in this run; no TA or stock-only timing comparison ran.
+The identity parser also passed guard-page span and invalid-field checks.
+
+The runner observes both private-ready publications before allowing identity
+advertisements, then both applications' binding-ready publications before
+allowing primary Close. Both Close/Release publications precede the release for
+private sends, and both private sessions remain alive until both delivery
+results arrive. These are **test barriers**, not a shipping handshake or terminal
+protocol. The first fixture advertised before its joiner existed; the barriers
+correct that fixture ordering. A test deadline reports failure and never proves
+delivery. Reproduce with a free discovery port:
+
+```
+python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run
+```
+
+The runner compiles the actual backend, reserves two instance directories, gives
+them private registry hives and native DirectPlay, and owns a private X display.
+It removes its prefixes and display after the run and retains logs/executable in
+the new output directory. It never launches TA. The DLL's normal parallel build
+also passes. No multiplayer file, record/play/seek fixture or landing review has
+passed for this adapter.
+
+A fresh-prefix run of that runner repeats both PASS results: sixteen deliveries
+and sixteen completions per peer, both primary source bindings and both overflow
+refusals. Its primary Close times are 2517 and 2502 ms. All prefixes and its
+display are removed by the runner. This repeat verifies the saved procedure;
+it adds no TA integration claim.
+
+**The remaining primary identity route matters for hosted AI.** TA's periodic
+`0x28` call at `0x4655A1` is inside the viewed-record branch. It cannot be cited
+as a periodic advertisement for every local AI. The other `0x4573D0` callers are
+`0x420524`, `0x457380` and `0x4576E5`; the last two depend on the resource exchange's
+state. The native fixture explicitly sends from both IDs and therefore does not
+prove those TA messages occur after private-session startup. Appending identity
+to native player data also requires an engine-format change: CreatePlayer sends
+21 bytes and its system handler accepts exactly 21. Source binding must cover
+every human and hosted AI without weakening actual native ownership. This is
+ongoing integration work, not an owner decision or a completed binding patch.
+
 ### Gaps before the first code landing
 
 - Prove the private signature is disjoint from every valid engine transport frame, including the raw mode, and bound the added pump cost without starving game traffic.
-- Replace the shared-session delivery path with a transport whose queue and shutdown lifetime cannot delay TA's own sends. The separate-session probe above answers basic isolation; sender binding, discovery and the bounded worker adapter remain unproved. The held-send queue test proves our references and slots, not native concurrent Close or recording completeness.
+- Replace the shared-session delivery path with the isolated adapter. Its native fixture proves bounded pending sends and delivery after primary Close in the measured configuration; TA integration, an identity route for every hosted AI, discovery lifecycle and production drain remain open. The shared-session held-send test proves our references and slots, not native concurrent Close or recording completeness.
 - Establish bounded reordering if the transport needs it and terminal completeness. The current sequence check cannot detect a last frame that never arrives; the present resource cache makes no completeness claim.
 - Carry the remaining player authority and materialize contributed resources/orders; retain source tick, sequence and recorder application order in the file and its seek snapshots.
 - Decide unit corrections from a bandwidth measurement, as the product plan requires; no measured budget is inferred from the two-commander run.
