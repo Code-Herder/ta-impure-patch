@@ -49,6 +49,15 @@ void tagpu_recmp_orders_end(RecMpOrderCache* c)
     if (c) VirtualFree(c, 0, MEM_RELEASE);
 }
 
+int tagpu_recmp_orders_idle(const RecMpOrderCache* c, unsigned origin)
+{
+    unsigned i;
+    if (!c || !origin) return 0;
+    for (i = 0; i < ORDER_SOURCES; i++)
+        if (c->source[i].origin == origin && c->source[i].active) return 0;
+    return 1;
+}
+
 static OrderList* order_list(const RecMpOrderCache* c, unsigned slot, unsigned list)
 {
     if (!c || !slot || slot >= c->slots || list > 1) return NULL;

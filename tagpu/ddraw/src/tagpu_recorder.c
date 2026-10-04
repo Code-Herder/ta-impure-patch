@@ -564,6 +564,7 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_logtick = tick;
     }
     if (!s_mp_channel) return;
+    if (!tagpu_recmp_advance(s_mp_channel, tick)) goto incomplete;
     for (i = 0; i < REC_PLAYERS; i++) {
         const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
         RecMpResources sample;
@@ -573,24 +574,28 @@ static void mp_capture(const Level* L, unsigned tick)
         memcpy(sample.values, player + 0x8C, sizeof sample.values);
         if (!s_mp_local_valid[i] || memcmp(&sample, &s_mp_local[i], sizeof sample)) {
             if (!tagpu_recmp_send_from(s_mp_channel, sample.player, RECMP_RESOURCES, tick,
-                                      &sample, sizeof sample, NULL)) break;
+                                      &sample, sizeof sample, NULL)) goto incomplete;
             s_mp_local[i] = sample;
             s_mp_local_valid[i] = 1;
         }
     }
     while ((taken = tagpu_recmp_take(s_mp_channel, &packet)) > 0) {
         RecMpResources sample;
+        if (packet.h.kind == RECMP_SEAL) {
+            if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin)) goto incomplete;
+            continue;
+        }
         if (packet.h.kind == RECMP_ORDERS) {
             if (!mp_orders_receive(L, &packet, tick)) goto incomplete;
             continue;
         }
         if (packet.h.kind != RECMP_RESOURCES || packet.h.bytes != sizeof packet.h + sizeof sample)
-            continue;
+            goto incomplete;
         memcpy(&sample, packet.body, sizeof sample);
         /* Hosted AIs have their own primary native IDs. The private worker verifies
            that origin against its native-owned key, then freezes the actual private
            sender/session/stream binding before publishing data. */
-        if (sample.player != packet.h.origin) continue;
+        if (sample.player != packet.h.origin) goto incomplete;
         for (i = 0; i < REC_PLAYERS; i++) {
             const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
             unsigned id;
@@ -616,14 +621,16 @@ static void mp_capture(const Level* L, unsigned tick)
     if (tick - s_mp_logtick >= 150) {
         tagpu_recmp_stats(s_mp_channel, &stats);
         tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X "
-                   "bound=%u/%u private=%u pending=%u completed=%u/%uB", tick,
+                   "bound=%u/%u private=%u pending=%u completed=%u/%uB seals=%u final=%u", tick,
                    stats.sent, stats.bytes, stats.received, stats.queued, stats.lost, (unsigned)stats.failed,
-                   stats.bound, stats.expected, stats.player, stats.pending, stats.completed, stats.completed_bytes);
+                   stats.bound, stats.expected, stats.player, stats.pending, stats.completed, stats.completed_bytes,
+                   stats.seals, stats.ended);
         s_mp_logtick = tick;
     }
     return;
 incomplete:
-    tagpu_logf("recmp: order contribution refused: contributions end incomplete at tick %u", tick);
+    tagpu_logf("recmp: contribution refused: contributions end incomplete at tick %u", tick);
+    tagpu_recmp_abort(s_mp_channel, E_ABORT);
     tagpu_recmp_end(s_mp_channel);
     s_mp_channel = NULL;
 }

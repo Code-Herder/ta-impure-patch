@@ -136,16 +136,19 @@ tools/tacli launch h1 --dplay --dplay-port 47731 --free-dplay-port   # the host
 tools/tacli launch j1 --dplay --dplay-port 47731                     # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
-tools/mp_leave.sh h1                                 # surrender -> main menu; a host's ends it for all
+tools/mp_leave.sh h1                                 # surrender -> main menu
 ```
 
 The recorder's isolated native backend has a standalone transport fixture:
 `python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.
 Add `--channel` to exercise the production channel, initialized after both primary
 interfaces close, including roster/configuration copying, signed human/AI bindings,
-source sequences and packet delivery. The default exercises the backend directly,
+source sequences, source-prefix/final seals and packet delivery. The default exercises the backend directly,
 including its sixteen completion-context bound and refusal of an early Close.
-Both modes run authentication and controlled channel bounds/gap/wrong-source tests.
+Both modes run authentication, stream-ledger bounds/corruption/missing-tail tests,
+and controlled channel bounds/gap/wrong-source/missing-tail/abandoned-drain tests.
+The abandoned-drain control takes the production deadline and must report an
+incomplete timeout; it cannot prove successful receipt.
 Choose a free discovery port and a new output directory. The runner creates and
 removes two private-registry prefixes and an X display, retaining logs and test
 executables. It uses primary-session stand-ins; it does not launch TA or verify
@@ -172,6 +175,7 @@ terminal recording completeness, bandwidth, recording or playback.
   are left alone, and never `pkill -x dplaysvr.exe` by hand — that takes every game down.
 - After running `dptest` against a prefix, **let it settle** before launching TA there: a wineserver
   still shutting down produced a launch with no process and no `ErrorLog.txt`.
+- **Leaving a peer returns that peer to its main menu.** Inspect the other peer's screen: a four-seat game can remain in play after the host leaves. For a peer on `ENDMSN.GUI`, click `MainMenu`; for one still in play, run its own `tools/mp_leave.sh`.
 - **`START` ungreys only when every player is ready, the host included.** Each client lists
   *itself* as row 0, so the host's own toggle is `READY0` on its screen and the joiner's is `READY0`
   on theirs. `PLAYER0`/`READY0`/`PLAYER1`… are created at runtime and sit past the end of the

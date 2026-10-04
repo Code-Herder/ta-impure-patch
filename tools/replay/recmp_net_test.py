@@ -62,6 +62,7 @@ def run(args, output):
                          *(["-DRECMP_CHANNEL_TEST", TREE / "tagpu/ddraw/src/tagpu_recmp.c"] if args.channel else []),
                          HERE / "recmp_net_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp_net.c",
                          TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c",
+                         TREE / "tagpu/ddraw/src/tagpu_recmp_stream.c", TREE / "tagpu/ddraw/src/crc32.c",
                          "-lole32", "-luuid"], setup)
                 auth = output / "recmp-auth-test.exe"
                 command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
@@ -89,11 +90,20 @@ def run(args, output):
                 command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
                          "-O2", "-Wall", "-Wextra", "-Werror", "-std=c99", "-o", controls,
                          HERE / "recmp_transport_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp.c",
-                         TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c", "-lole32", "-luuid"], setup)
-            for mode in ("", "gap", "unauthorized"):
+                         TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c",
+                         TREE / "tagpu/ddraw/src/tagpu_recmp_stream.c", TREE / "tagpu/ddraw/src/crc32.c",
+                         "-lole32", "-luuid"], setup)
+                streams = output / "recmp-stream-test.exe"
+                command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
+                         "-O2", "-Wall", "-Wextra", "-Werror", "-std=c99", "-o", streams,
+                         HERE / "recmp_stream_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp_stream.c",
+                         TREE / "tagpu/ddraw/src/crc32.c"], setup)
+            with (output / "stream.log").open("w") as log:
+                command(["wine", streams], log, env=owned[0][1])
+            for mode in ("", "gap", "unauthorized", "tail", "missing_end"):
                 with (output / ("channel-" + (mode or "bounds") + ".log")).open("w") as log:
                     command(["wine", controls, *([mode] if mode else [])], log, env=owned[0][1])
-            print("private channel bounds, gap and wrong-source controls: PASS", flush=True)
+            print("source-prefix ledger, private channel bounds/gap/wrong-source/missing-tail and abandoned-drain controls: PASS", flush=True)
             for role, (directory, env) in zip(("host", "join"), owned):
                 log = output / f"{role}.log"
                 handle = log.open("w")

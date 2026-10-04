@@ -29,6 +29,8 @@ int main(void)
     unsigned char image[RECMP_ORDER_MAX * RECMP_ORDER_BYTES];
     unsigned i, first;
     CHECK(c && sizeof(RecMpOrders) == 16 && RECMP_ORDER_CHUNK == 45);
+    CHECK(!tagpu_recmp_orders_idle(NULL,11) && !tagpu_recmp_orders_idle(c,0));
+    CHECK(tagpu_recmp_orders_idle(c,11));
     CHECK(!tagpu_recmp_orders_begin(65537));
     applied_tick = 8;
     CHECK(put(c, &h, 1, 0, 3, 1, 0, 1, 0x11) == 1);
@@ -43,9 +45,11 @@ int main(void)
     h.sequence++; h.tick++;
     applied_tick = 11;
     CHECK(put(c, &h, 1, 0, 3, 46, 0, 45, 0x22) == 0);
+    CHECK(!tagpu_recmp_orders_idle(c,11) && tagpu_recmp_orders_idle(c,22));
     CHECK(tagpu_recmp_orders_get(c, 1, 0, &state, image, 1) && image[0] == 0x11);
     CHECK(state.source_tick == 9 && state.applied_tick == 8 && state.sequence == 1);
     CHECK(put(c, &ai, 2, 1, 4, 2, 0, 2, 0x33) == 1);
+    CHECK(!tagpu_recmp_orders_idle(c,11) && tagpu_recmp_orders_idle(c,22));
     CHECK(tagpu_recmp_orders_get(c, 2, 1, &state, image, 2));
     CHECK(state.source_tick == 10 && state.applied_tick == 11);
     CHECK(put(c, &h, 1, 0, 3, 46, 0, 45, 0x44) == -1); /* duplicate */
@@ -57,6 +61,7 @@ int main(void)
     CHECK(state.source_tick == 9 && state.applied_tick == 8 && state.sequence == 1);
     applied_tick = 15;
     CHECK(put(c, &h, 1, 0, 3, 46, 45, 1, 0x44) == 1);
+    CHECK(tagpu_recmp_orders_idle(c,11));
     CHECK(!tagpu_recmp_orders_get(c, 1, 0, &state, image, 45));
     CHECK(tagpu_recmp_orders_get(c, 1, 0, &state, image, 46) && state.count == 46);
     CHECK(state.source_tick == 10 && state.applied_tick == 15 && state.sequence == 3);
@@ -103,6 +108,6 @@ int main(void)
     tagpu_recmp_orders_drop(c, 3);
     CHECK(!tagpu_recmp_orders_get(c, 3, 0, &state, image, RECMP_ORDER_MAX));
     tagpu_recmp_orders_end(c);
-    puts("PASS: transactional queues, independent source/application clocks, interleaved AI source, missing/duplicate/stale chunks, incarnation and bounds, maximum list, fixed pool exhaustion");
+    puts("PASS: transactional queues, partial source cannot seal, independent source/application clocks, interleaved AI source, missing/duplicate/stale chunks, incarnation and bounds, maximum list, fixed pool exhaustion");
     return 0;
 }

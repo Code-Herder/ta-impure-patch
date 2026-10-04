@@ -9,7 +9,7 @@
    pointer or primary-session interface crosses into a contribution worker. */
 #define RECMP_PACKET_MAX 4096u
 #define RECMP_VERSION 1u
-enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3 };
+enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4 };
 
 #pragma pack(push, 1)
 typedef struct {
@@ -24,7 +24,13 @@ typedef struct {
     uint32_t bytes, origin, tick, sequence, kind;
     GUID match, stream;
 } RecMpHeader;
+typedef struct {
+    uint32_t previous, tick;
+    uint64_t data_bytes;
+    uint32_t crc, final;
+} RecMpSeal;
 #pragma pack(pop)
+_Static_assert(sizeof(RecMpSeal) == 24, "source seal wire span");
 
 /* The engine's 0x08 start action carries a fresh host-created match ID. Its
    delivered span, version and native sender must agree before that ID is used. */
@@ -71,24 +77,37 @@ int tagpu_recmp_orders_put(RecMpOrderCache* c, const RecMpHeader* h,
 int tagpu_recmp_orders_get(const RecMpOrderCache* c, unsigned slot, unsigned list,
                            RecMpOrderState* state, void* image, unsigned capacity);
 void tagpu_recmp_orders_drop(RecMpOrderCache* c, unsigned slot);
+/* A seal cannot close a source while its last order transaction is partial. */
+int tagpu_recmp_orders_idle(const RecMpOrderCache* c, unsigned origin);
 
 typedef struct RecMpChannel RecMpChannel;
 typedef struct RecMpConfig RecMpConfig;
 typedef struct {
     unsigned queued, sent, bytes, received, lost;
     unsigned bound, expected, player, pending, completed, completed_bytes;
+    unsigned seals, ended;
     HRESULT failed;
 } RecMpStats;
 
 /* Game-thread producer. begin copies a bounded native roster/address configuration;
    the worker owns its separate session. end releases the game reference without joining.
    A still-finishing worker makes the next begin fail, never wait or allocate another.
-   sent counts accepted data sends; completed includes identity announcements. */
+   sent counts accepted source packets (data and seals); completed includes
+   identity announcements. Capture and end share the game-thread producer. */
 RecMpChannel* tagpu_recmp_begin(const RecMpConfig* config);
 int tagpu_recmp_send(RecMpChannel* c, unsigned kind, unsigned tick,
                      const void* body, unsigned bytes);
 int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned tick,
                           const void* body, unsigned bytes, RecMpHeader* header);
+/* Call before capturing tick. Advancing the source clock closes the preceding
+   capture tick; repeated visits to one tick may still produce data for that tick.
+   Seals accompany changed prefixes and at least once per 30 advancing ticks. */
+int tagpu_recmp_advance(RecMpChannel* c, unsigned tick);
+/* Freeze all local producers with final prefix seals, while retaining the game
+   reference/receive consumer. No further local data can be published. */
+int tagpu_recmp_finish_sources(RecMpChannel* c);
+/* Production/capture failure forbids a successful terminal seal. */
+void tagpu_recmp_abort(RecMpChannel* c, HRESULT reason);
 void tagpu_recmp_stats(RecMpChannel* c, RecMpStats* out);
 void tagpu_recmp_end(RecMpChannel* c);
 

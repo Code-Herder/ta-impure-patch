@@ -3015,6 +3015,8 @@ The game thread copies the native host address and bounded actor roster/public k
 
 The native fixture delivers sixteen DATA packets per peer through the production channel initialized after both primary interfaces close. Actual TA also verifies the isolated channel with two humans and one hosted AI each: both bind their two remote actors and receive resources and nonempty queues without loss/failure. These tests do not establish terminal completeness, physical bandwidth bounds or a network file. The engine map records why the viewed-row `0x4655A1` resource send cannot advertise every idle AI; no resource-message patch is installed.
 
+Source-prefix seals (`tagpu_recmp_stream.c`) validate contiguous sequences, closed source ticks, cumulative DATA bytes and CRC before publication. B2 closes the previous capture tick only when its clock advances; a final seal freezes a local producer, while capture failure aborts without success. The game consumer refuses a seal with a partial order transaction. Native fixture peers receive exact final human/AI prefixes after primary Close; a withheld last DATA fails at its valid final seal. Both live TA workers also finish after ordinary peer exits. The departing host lacks the remaining source's final prefix, and two markers remain unread on the joiner after its game consumer stops. A vanished unsealed peer prevents transmission retirement; the drain deadline fails incomplete. These are prefix/lifecycle checks, not durable-file, application-cut or terminal receipt proofs.
+
 | Fields we write in the multiplayer checkpoint | Invariant |
 |---|---|
 | `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |

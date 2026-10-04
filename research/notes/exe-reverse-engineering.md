@@ -529,6 +529,8 @@ Recheck with `objdump -d -M intel` against `pristine/TotalA.exe.pristine`, range
 with `objdump -s`. The splitter and receive-wrapper map above remains applicable.
 This does not establish terminal delivery or a complete network recording.
 
+The source-prefix ledger adds no engine patch or field write. Its `advance` call runs at the existing recorder B2 boundary (`0x4954ED`) before capture; GameTime has advanced at `0x4954C0`, so the preceding capture tick can close after all its producer messages. Repeated visits to the same tick do not close it. The existing teardown pre-hook at `0x491B60` calls `tagpu_rec_level_end` before the unit-array cascade; the engine's game-thread state handlers serialize it with capture, as documented in the recorder and `tagpu_reclaim.c:reclaim_teardown_pre`. Final source seals use the copied producer ledger and last captured tick, with no post-teardown engine read. Refused capture aborts instead. These seals name a source prefix, not a peer-clock mapping, recorder application cut or complete file.
+
 ### Native player metadata and resource-message carriers [DISASSEMBLED 2026-10-04]
 
 These reads support the isolated-recorder transport's source binding. The work

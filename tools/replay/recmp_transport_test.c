@@ -3,6 +3,7 @@
 #define INITGUID
 #define COBJMACROS
 #include "tagpu_recmp_channel.h"
+#include "tagpu_recmp_stream.h"
 #include "tagpu_log.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,9 +27,9 @@
 static struct {
     RecMpNet net;
     RecMpConfig expected;
-    HANDLE opened, open_release, entered, send_release, closed;
-    RecMpPacket frame[8];
-    DWORD from[8];
+    HANDLE opened, open_release, entered, send_release, closed, drained;
+    RecMpPacket frame[16];
+    DWORD from[16];
     unsigned count, read, announcements, data_sends, aborted, image_ok;
     DWORD game_thread;
 } f;
@@ -85,7 +86,7 @@ HRESULT tagpu_recmp_net_receive(RecMpNet* net, DWORD* from, void* packet, unsign
 {
     unsigned at = f.read;
     CHECK(net == &f.net && GetCurrentThreadId() != f.game_thread);
-    if (at == f.count) return DPERR_NOMESSAGES;
+    if (at == f.count) { SetEvent(f.drained); return DPERR_NOMESSAGES; }
     CHECK(*bytes >= f.frame[at].h.bytes);
     memcpy(packet,&f.frame[at],f.frame[at].h.bytes);
     *bytes = f.frame[at].h.bytes;
@@ -139,7 +140,7 @@ static RecMpPacket* frame(unsigned origin, unsigned kind, unsigned sequence,
                             unsigned tick, const void* body, unsigned bytes)
 {
     RecMpPacket* p = &f.frame[f.count];
-    CHECK(f.count < 8);
+    CHECK(f.count < 16);
     f.from[f.count++] = 202;
     memset(p,0,sizeof *p);
     memcpy(p->h.magic,"IMPUREMP",8);
@@ -166,18 +167,21 @@ int main(int argc, char** argv)
     unsigned i, n;
     int gap = argc>1 && !strcmp(argv[1],"gap");
     int wrong = argc>1 && !strcmp(argv[1],"unauthorized");
+    int tail = argc>1 && !strcmp(argv[1],"tail");
+    int missing_end = argc>1 && !strcmp(argv[1],"missing_end");
     start_test();
     memset(&f,0,sizeof f);
     f.game_thread = GetCurrentThreadId();
     f.net.identity = remote; f.net.identity.player = 101;
-    f.net.stats.peers=1; f.net.stats.membership=1;
+    f.net.stats.peers=missing_end ? 0 : 1; f.net.stats.membership=1;
     f.opened=CreateEvent(NULL,TRUE,FALSE,NULL);
     f.open_release=CreateEvent(NULL,TRUE,FALSE,NULL);
     f.entered=CreateEvent(NULL,TRUE,FALSE,NULL);
     f.send_release=CreateEvent(NULL,TRUE,FALSE,NULL);
     f.closed=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.drained=CreateEvent(NULL,TRUE,FALSE,NULL);
     f.net.event=CreateEvent(NULL,FALSE,FALSE,NULL);
-    CHECK(f.opened && f.open_release && f.entered && f.send_release && f.closed && f.net.event);
+    CHECK(f.opened && f.open_release && f.entered && f.send_release && f.closed && f.drained && f.net.event);
     memset(&config,0,sizeof config);
     config.signer=tagpu_recmp_key(); CHECK(config.signer);
     tagpu_recmp_public(config.signer,&public);
@@ -199,6 +203,17 @@ int main(int argc, char** argv)
     frame(55,RECMP_RESOURCES,gap ? 3 : 1,8,"peer",4);
     frame(55,RECMP_RESOURCES,1,8,"peer",4);
     frame(66,RECMP_RESOURCES,1,8,"ai",2);
+    if (tail) {
+        RecMpStream source={0};
+        RecMpSeal seal;
+        RecMpPacket* p=&f.frame[3];
+        CHECK(tagpu_recmp_stream_put(&source,&p->h,p->body,p->h.bytes-sizeof p->h));
+        p=frame(55,RECMP_RESOURCES,2,8,"tail",4);
+        CHECK(tagpu_recmp_stream_put(&source,&p->h,p->body,p->h.bytes-sizeof p->h));
+        f.count--;                             /* withhold the last DATA, deliver its valid final seal */
+        CHECK(tagpu_recmp_stream_seal(&source,8,1,&seal));
+        frame(55,RECMP_SEAL,3,8,&seal,sizeof seal);
+    }
     bad=config; bad.count=11; CHECK(!tagpu_recmp_begin(&bad));
     bad=config; bad.net.match.Data1=0; CHECK(!tagpu_recmp_begin(&bad));
     bad=config; bad.actor[1].origin=11; CHECK(!tagpu_recmp_begin(&bad));
@@ -210,14 +225,23 @@ int main(int argc, char** argv)
     CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,9,"retained",8));
     memset(&config,0,sizeof config);           /* begin owns its copy */
     SetEvent(f.open_release);
-    if (gap || wrong) {
+    if (missing_end) {
+        CHECK(WaitForSingleObject(f.drained,15000) == WAIT_OBJECT_0);
+        tagpu_recmp_stats(c,&stats);
+        CHECK(stats.bound == 2 && !stats.ended && !stats.failed);
+        tagpu_recmp_end(c);
+        CHECK(WaitForSingleObject(f.closed,45000) == WAIT_OBJECT_0);
+        CHECK(f.aborted && !f.data_sends);
+        puts("PASS: absent unsealed source cannot retire queued data; deadline aborts incomplete without retaining the worker forever");
+    } else if (gap || wrong || tail) {
         CHECK(WaitForSingleObject(f.closed,15000) == WAIT_OBJECT_0);
         tagpu_recmp_stats(c,&stats);
         CHECK(stats.failed == (wrong ? E_ACCESSDENIED : E_INVALIDARG));
         CHECK(!stats.received && !stats.sent && tagpu_recmp_take(c,&got) == -1 && f.aborted);
         tagpu_recmp_end(c);
         printf("PASS: %s ends the isolated contribution channel incomplete\n",
-               wrong ? "wrong actual private sender" : "missing initial source sequence");
+               wrong ? "wrong actual private sender" : tail ? "missing last DATA before a final seal" :
+               "missing initial source sequence");
     } else {
         CHECK(WaitForSingleObject(f.entered,15000) == WAIT_OBJECT_0);
         CHECK(tagpu_recmp_take(c,&got) == 1 && got.h.origin == 55 && got.h.sequence == 1 &&
@@ -245,6 +269,6 @@ int main(int argc, char** argv)
     /* Backend closure ends every path to these fixture handles. The channel's
        own wake handle instead lives through its final game/worker reference. */
     CloseHandle(f.opened); CloseHandle(f.open_release); CloseHandle(f.entered);
-    CloseHandle(f.send_release); CloseHandle(f.closed); CloseHandle(f.net.event);
+    CloseHandle(f.send_release); CloseHandle(f.closed); CloseHandle(f.drained); CloseHandle(f.net.event);
     return 0;
 }

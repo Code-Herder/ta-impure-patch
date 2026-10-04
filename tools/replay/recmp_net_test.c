@@ -109,7 +109,7 @@ static void channel_run(Probe* p)
     RecMpPublic public;
     RecMpStats stats;
     RecMpPacket packet;
-    unsigned sequences[2] = {0}, received = 0, i, sent;
+    unsigned sequences[2] = {0}, received = 0, seals = 0, finals = 0, i, sent;
     char send_release[MAX_PATH];
     DWORD deadline = GetTickCount()+45000;
     config.net = p->config;
@@ -134,6 +134,8 @@ static void channel_run(Probe* p)
     s_finished = CreateEvent(NULL,TRUE,FALSE,NULL); CHECK(s_finished);
     channel = tagpu_recmp_begin(&config); CHECK(channel);
     memset(&config,0,sizeof config);
+    CHECK(tagpu_recmp_advance(channel,1));
+    CHECK(tagpu_recmp_advance(channel,1));
     for (sent=0;sent<16;sent++) {
         unsigned char body[16];
         memset(body,(int)(sent/2+1),sizeof body);
@@ -141,30 +143,46 @@ static void channel_run(Probe* p)
                                      body,sizeof body,NULL));
         memset(body,0xEE,sizeof body);
     }
-    printf("CHANNEL QUEUED: 16 data packets after primary Close\n");
+    CHECK(tagpu_recmp_advance(channel,2));
+    CHECK(tagpu_recmp_advance(channel,2));
+    CHECK(tagpu_recmp_finish_sources(channel));
+    CHECK(tagpu_recmp_finish_sources(channel));
+    printf("CHANNEL QUEUED: 16 data packets and human/AI prefix seals after primary Close\n");
     for (;;) {
         int got;
         while ((got=tagpu_recmp_take(channel,&packet)) > 0) {
             unsigned actor;
             for (actor=0;actor<2;actor++) if (p->remote[actor].origin == packet.h.origin) break;
-            CHECK(actor < 2 && packet.h.kind == RECMP_RESOURCES &&
-                  packet.h.bytes == sizeof packet.h+16 && packet.h.sequence == ++sequences[actor]);
-            for (i=0;i<16;i++) CHECK(packet.body[i] == packet.h.sequence);
-            received++;
+            CHECK(actor < 2 && packet.h.sequence == ++sequences[actor]);
+            if (packet.h.kind == RECMP_SEAL) {
+                RecMpSeal seal;
+                CHECK(packet.h.bytes == sizeof packet.h+sizeof seal);
+                memcpy(&seal,packet.body,sizeof seal);
+                CHECK(seal.previous == packet.h.sequence-1 && seal.tick == packet.h.tick &&
+                      seal.data_bytes == 8*(sizeof packet.h+16));
+                if (seal.final) { CHECK(packet.h.sequence == 10 && seal.tick == 2); finals++; }
+                else CHECK(packet.h.sequence == 9 && seal.tick == 1);
+                seals++;
+            } else {
+                CHECK(packet.h.kind == RECMP_RESOURCES && packet.h.bytes == sizeof packet.h+16);
+                for (i=0;i<16;i++) CHECK(packet.body[i] == packet.h.sequence);
+                received++;
+            }
         }
         CHECK(got == 0);
         tagpu_recmp_stats(channel,&stats);
         CHECK(!stats.failed && !stats.lost && (LONG)(deadline-GetTickCount()) > 0);
-        if (received == 16 && !stats.queued && !stats.pending && stats.completed >= 18) break;
+        if (received == 16 && finals == 2 && !stats.queued && !stats.pending && stats.completed >= 22) break;
         Sleep(1);
     }
     CHECK(stats.bound == 2 && stats.expected == 2 && stats.player &&
-          stats.sent == 16 && stats.bytes == 16*(sizeof(RecMpHeader)+16) &&
-          stats.received == 16 && sequences[0] == 8 && sequences[1] == 8);
-    CHECK(stats.completed_bytes == 16*(sizeof(RecMpHeader)+16) +
-          (stats.completed-16)*(sizeof(RecMpHeader)+sizeof(RecMpSignedIdentity)));
+          stats.sent == 20 && stats.bytes == 16*(sizeof(RecMpHeader)+16)+4*(sizeof(RecMpHeader)+sizeof(RecMpSeal)) &&
+          stats.received == 20 && sequences[0] == 10 && sequences[1] == 10 &&
+          seals == 4 && stats.seals == 4 && stats.ended == 2);
+    CHECK(stats.completed_bytes == stats.bytes +
+          (stats.completed-20)*(sizeof(RecMpHeader)+sizeof(RecMpSignedIdentity)));
     printf("PASS: production channel after primary Close, signed human/AI bindings, "
-           "16 data deliveries, %u successful completions / %u bytes, pending zero\n",
+           "16 data deliveries, exact human/AI final prefixes, %u successful completions / %u bytes, pending zero\n",
            stats.completed,stats.completed_bytes);
     while (GetFileAttributesA(p->release) == INVALID_FILE_ATTRIBUTES) {
         CHECK((LONG)(deadline-GetTickCount()) > 0);
