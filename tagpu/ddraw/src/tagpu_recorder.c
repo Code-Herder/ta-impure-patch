@@ -271,7 +271,7 @@ static RecMpOrderCache* s_mp_orders;
 static unsigned char s_mp_order_scratch[ORD_SCRATCH];
 static unsigned char s_mp_orders_seen[REC_PLAYERS];
 static int mp_orders_capture(const Level* L, unsigned tick);
-static int mp_orders_receive(const Level* L, const RecMpPacket* packet);
+static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned tick);
 static const unsigned* mp_births(const Level* L);
 
 /* DISASSEMBLED: HAPINET_receive(0x4C9840) is stdcall, ret 12. Its interface is
@@ -365,7 +365,7 @@ static void mp_capture(const Level* L, unsigned tick)
     while ((taken = tagpu_recmp_take(s_mp_channel, &packet)) > 0) {
         RecMpResources sample;
         if (packet.h.kind == RECMP_ORDERS) {
-            if (!mp_orders_receive(L, &packet)) goto incomplete;
+            if (!mp_orders_receive(L, &packet, tick)) goto incomplete;
             continue;
         }
         if (packet.h.kind != RECMP_RESOURCES || packet.h.bytes != sizeof packet.h + sizeof sample)
@@ -1788,7 +1788,7 @@ static int mp_orders_capture(const Level* L, unsigned tick)
                                (unsigned)stats.failed);
                     return 0;
                 }
-                if (tagpu_recmp_orders_put(s_mp_orders, &header, body, bytes) < 0) {
+                if (tagpu_recmp_orders_put(s_mp_orders, &header, body, bytes, tick) < 0) {
                     tagpu_logf("recmp: local queue transaction refused: ID %u slot %u list %u, "
                                "tick %u seq %u, %u/%u+%u", origin, slot, list, tick,
                                header.sequence, first, count, n);
@@ -1801,7 +1801,7 @@ static int mp_orders_capture(const Level* L, unsigned tick)
     return 1;
 }
 
-static int mp_orders_receive(const Level* L, const RecMpPacket* packet)
+static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned tick)
 {
     RecMpOrders chunk;
     unsigned i, bytes = packet->h.bytes - sizeof packet->h;
@@ -1828,7 +1828,7 @@ static int mp_orders_receive(const Level* L, const RecMpPacket* packet)
                        "block IDs %u..%u birth %08X", origin, chunk.slot, first, last, chunk.birth);
             return 0;
         }
-        result = tagpu_recmp_orders_put(s_mp_orders, &packet->h, packet->body, bytes);
+        result = tagpu_recmp_orders_put(s_mp_orders, &packet->h, packet->body, bytes, tick);
         if (result < 0) {
             RecMpOrderState state = { 0 };
             tagpu_recmp_orders_get(s_mp_orders, chunk.slot, chunk.list, &state,
@@ -1836,13 +1836,13 @@ static int mp_orders_receive(const Level* L, const RecMpPacket* packet)
             tagpu_logf("recmp: remote queue transaction refused: ID %u slot %u list %u, "
                        "tick %u seq %u, %u/%u+%u; committed tick %u seq %u", origin,
                        chunk.slot, chunk.list, packet->h.tick, packet->h.sequence,
-                       chunk.first, chunk.total, chunk.count, state.tick, state.sequence);
+                       chunk.first, chunk.total, chunk.count, state.source_tick, state.sequence);
             return 0;
         }
         if (result && chunk.total && !(s_mp_orders_seen[i] & (1u << chunk.list))) {
             tagpu_logf("recmp: remote orders ID %u -> seat %u, slot %u birth %u, "
-                       "source tick %u seq %u, list %u nodes %u", origin, i, chunk.slot,
-                       chunk.birth, packet->h.tick, packet->h.sequence, chunk.list, chunk.total);
+                       "source tick %u seq %u, applied tick %u, list %u nodes %u", origin, i, chunk.slot,
+                       chunk.birth, packet->h.tick, packet->h.sequence, tick, chunk.list, chunk.total);
             s_mp_orders_seen[i] |= 1u << chunk.list;
         }
         return 1;

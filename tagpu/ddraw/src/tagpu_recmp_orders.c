@@ -111,7 +111,7 @@ int tagpu_recmp_orders_get(const RecMpOrderCache* c, unsigned slot, unsigned lis
 }
 
 int tagpu_recmp_orders_put(RecMpOrderCache* c, const RecMpHeader* h,
-                           const void* body, unsigned bytes)
+                           const void* body, unsigned bytes, unsigned applied_tick)
 {
     RecMpOrders chunk;
     OrderStage* stage = NULL;
@@ -167,8 +167,12 @@ int tagpu_recmp_orders_put(RecMpOrderCache* c, const RecMpHeader* h,
     }
     l->state.origin = h->origin;
     l->state.birth = chunk.birth;
-    l->state.tick = h->tick;
+    /* Source clocks need not equal this recorder's clock. A complete transaction
+       becomes available at its final chunk's application tick; partial chunks leave
+       both the old image and its provenance intact. */
+    l->state.source_tick = h->tick;
     l->state.sequence = h->sequence;
+    l->state.applied_tick = applied_tick;
     l->state.count = chunk.total;
     l->valid = 1;
     stage->active = 0;

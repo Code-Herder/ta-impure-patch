@@ -45,18 +45,19 @@ typedef struct {
 
 typedef struct RecMpOrderCache RecMpOrderCache;
 typedef struct {
-    unsigned origin, birth, tick, sequence, count;
+    unsigned origin, birth, source_tick, sequence, applied_tick, count;
 } RecMpOrderState;
 
 /* Fixed room for 131072 nodes, two lists per slot, and at most ten assembling sources.
    All operations are owned by one game thread. A rejected chunk leaves committed lists
-   intact; only a complete, bounded transaction replaces one. */
+   intact; only a complete, bounded transaction replaces one. source_tick belongs to the
+   sender, applied_tick to this recorder at publication of the final chunk. */
 RecMpOrderCache* tagpu_recmp_orders_begin(unsigned slots);
 void tagpu_recmp_orders_end(RecMpOrderCache* c);
 int tagpu_recmp_orders_same(const RecMpOrderCache* c, unsigned slot, unsigned list,
                             unsigned origin, unsigned birth, const void* image, unsigned count);
 int tagpu_recmp_orders_put(RecMpOrderCache* c, const RecMpHeader* h,
-                           const void* body, unsigned bytes);
+                           const void* body, unsigned bytes, unsigned applied_tick);
 int tagpu_recmp_orders_get(const RecMpOrderCache* c, unsigned slot, unsigned list,
                            RecMpOrderState* state, void* image, unsigned capacity);
 void tagpu_recmp_orders_drop(RecMpOrderCache* c, unsigned slot);

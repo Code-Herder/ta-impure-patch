@@ -5,6 +5,8 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL line %u: %s\n", __LINE__, #x); exit(1); } } while (0)
 
+static unsigned applied_tick;
+
 static int put(RecMpOrderCache* c, RecMpHeader* h, unsigned slot, unsigned list,
                unsigned birth, unsigned total, unsigned first, unsigned count, unsigned char value)
 {
@@ -15,7 +17,7 @@ static int put(RecMpOrderCache* c, RecMpHeader* h, unsigned slot, unsigned list,
     CHECK(bytes <= sizeof body);
     memcpy(body, &chunk, sizeof chunk);
     memset(body + sizeof chunk, value, bytes - sizeof chunk);
-    return tagpu_recmp_orders_put(c, h, body, bytes);
+    return tagpu_recmp_orders_put(c, h, body, bytes, applied_tick);
 }
 
 int main(void)
@@ -28,26 +30,36 @@ int main(void)
     unsigned i, first;
     CHECK(c && sizeof(RecMpOrders) == 16 && RECMP_ORDER_CHUNK == 45);
     CHECK(!tagpu_recmp_orders_begin(65537));
+    applied_tick = 8;
     CHECK(put(c, &h, 1, 0, 3, 1, 0, 1, 0x11) == 1);
     CHECK(tagpu_recmp_orders_get(c, 1, 0, &state, image, 1));
-    CHECK(state.origin == 11 && state.birth == 3 && state.tick == 9 && state.sequence == 1);
+    CHECK(state.origin == 11 && state.birth == 3 && state.source_tick == 9 && state.sequence == 1);
+    CHECK(state.applied_tick == 8);
     for (i = 0; i < RECMP_ORDER_BYTES; i++) CHECK(image[i] == 0x11);
     CHECK(tagpu_recmp_orders_same(c, 1, 0, 11, 3, image, 1));
     CHECK(!tagpu_recmp_orders_same(c, 1, 0, 11, 4, image, 1));
     CHECK(!tagpu_recmp_orders_same(c, 1, 0, 22, 3, image, 1));
 
     h.sequence++; h.tick++;
+    applied_tick = 11;
     CHECK(put(c, &h, 1, 0, 3, 46, 0, 45, 0x22) == 0);
     CHECK(tagpu_recmp_orders_get(c, 1, 0, &state, image, 1) && image[0] == 0x11);
+    CHECK(state.source_tick == 9 && state.applied_tick == 8 && state.sequence == 1);
     CHECK(put(c, &ai, 2, 1, 4, 2, 0, 2, 0x33) == 1);
+    CHECK(tagpu_recmp_orders_get(c, 2, 1, &state, image, 2));
+    CHECK(state.source_tick == 10 && state.applied_tick == 11);
     CHECK(put(c, &h, 1, 0, 3, 46, 0, 45, 0x44) == -1); /* duplicate */
     h.sequence += 2;
     CHECK(put(c, &h, 1, 0, 3, 46, 45, 1, 0x44) == -1); /* missing sequence */
     h.sequence--;
     CHECK(put(c, &h, 1, 0, 4, 46, 45, 1, 0x44) == -1); /* another incarnation */
+    CHECK(tagpu_recmp_orders_get(c, 1, 0, &state, image, 1));
+    CHECK(state.source_tick == 9 && state.applied_tick == 8 && state.sequence == 1);
+    applied_tick = 15;
     CHECK(put(c, &h, 1, 0, 3, 46, 45, 1, 0x44) == 1);
     CHECK(!tagpu_recmp_orders_get(c, 1, 0, &state, image, 45));
     CHECK(tagpu_recmp_orders_get(c, 1, 0, &state, image, 46) && state.count == 46);
+    CHECK(state.source_tick == 10 && state.applied_tick == 15 && state.sequence == 3);
     for (i = 0; i < 45 * RECMP_ORDER_BYTES; i++) CHECK(image[i] == 0x22);
     for (; i < 46 * RECMP_ORDER_BYTES; i++) CHECK(image[i] == 0x44);
     h.sequence++;
@@ -91,6 +103,6 @@ int main(void)
     tagpu_recmp_orders_drop(c, 3);
     CHECK(!tagpu_recmp_orders_get(c, 3, 0, &state, image, RECMP_ORDER_MAX));
     tagpu_recmp_orders_end(c);
-    puts("PASS: transactional queues, interleaved AI source, missing/duplicate/stale chunks, incarnation and bounds, maximum list, fixed pool exhaustion");
+    puts("PASS: transactional queues, independent source/application clocks, interleaved AI source, missing/duplicate/stale chunks, incarnation and bounds, maximum list, fixed pool exhaustion");
     return 0;
 }

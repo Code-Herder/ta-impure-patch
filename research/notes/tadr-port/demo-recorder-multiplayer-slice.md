@@ -40,6 +40,8 @@ Memory is bounded at level start: 131072 cached nodes, two list headers per unit
 
 Local capture compares full normalized lists, including their origin and birth, and sends changed queues for type-1/type-2 owners only. The receiver authorizes a slot against its source player's inclusive `+0x67/+0x6B` block, with both ends normalized against the level allocation. A queue may arrive before its stock unit create, so authorization does not depend on the current contents of a recycled unit slot. The existing list reader can copy a remote queue only while its channel is live and the cache's origin and exact birth match the local unit's declared `s_hitStamp` column. A missing or lower-bound stamp still refuses the list; no remote node or owned object is followed.
 
+Each committed queue retains its source tick, final source sequence and recorder application tick. The source tick belongs to the sending peer; the application tick is this recorder's B2 tick when the final chunk publishes the complete list. Local capture supplies the same tick for both. Partial or refused transactions preserve the old queue's provenance together with its image. This cache metadata does not yet provide the file's global application order, a clock mapping, or a completeness claim.
+
 The logical receive stream discards our own stream and repeated physical deliveries. A new remote origin starts at sequence 1; every subsequent logical frame must advance by one without its source tick going backwards. A same-sequence frame must equal the last frame byte for byte. A source gap or changed stream fails the channel. This detects a missing frame followed by another frame; a final missing frame still requires a terminal manifest or watermark.
 
 ### Runtime evidence
@@ -78,6 +80,12 @@ A local ARMLAB was then created through the scenario applier and ARMPW/ARMROCK/A
 Through tick 21451, with the factory producing units, both peers reported loss/failure 0 and no queue refusals. The host reported 21699 sent / 4122240 application bytes, 12790 logical receives, two queued; the joiner reported 12790 sent / 2115912 bytes, 21701 receives, one queued. Reports are separate observations. Both returned through the ordinary network Options/Exit/Main Menu path. The probe instances and private display were then removed. No network `.imprec` was produced.
 
 `recmp_orders_test.c` passed under Wine against the actual bounded cache: complete publication after interleaved AI chunks, retention of the old queue during assembly and malformed input, missing/duplicate/stale chunks, another incarnation, capacity/slot/list bounds, a full 4096-node list, and pool exhaustion. The transport test also exercises duplicate delivery, independent AI sequences, refusal of unsupported guaranteed transport and missing native message IDs, and a missing initial source sequence (`recmp-transport-test.exe gap`). Its held-send lifetime case still passes.
+
+The application-tick extension passed the same cache test under Wine: source tick 9 can publish at recorder tick 8; a source-tick-10 transaction begins assembly at recorder tick 11 and publishes only with its final chunk at recorder tick 15. The old source/application ticks remain 9/8 throughout partial and rejected input, while the interleaved AI retains its own 10/11 pair. The normal parallel DLL build is clean. These controlled cache checks exercise different clocks; the updated adapter has not yet been rerun in a native network game.
+
+### Session lifetime audit
+
+DISASSEMBLED 2026-10-04: `0x46BF20` tests whether `0x51E58C` is nonzero. That global is the module handle returned by loading `reporter.dll` at `0x46C007..0x46C00F`, not a match counter or a lobby identifier. `0x46BF30` resolves the module's `_RIEnable@4`, `_RIGetVersion@4`, `_RIInitializeEx@8` and other report exports. The two network cleanup callers, `0x450DD0` and `0x452370`, skip `0x4C9B70` while that handle is nonzero; `0x46C190` calls the network cleanup before freeing the loaded reporter. The earlier address range starting at `0x450D80` contained a separate function ending at `0x450DC0`; it is not the cleanup function's entry. This identifies the exception but does not establish a unique session GUID for every level. Shared match identity remains open.
 
 ### Gaps before the first code landing
 
