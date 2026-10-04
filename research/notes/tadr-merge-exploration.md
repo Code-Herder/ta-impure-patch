@@ -135,6 +135,13 @@ behaviour (hold-position = reclaim-only; stay-put after build; auto-kickout), we
 map DTs, unit status counters, team-coloured nanolathe, reload bars, accessible chat, unicode, TA
 Hook + whiteboard, HUD polish.
 
+This is a source-feature grouping. The **[28-row coverage audit](tadr-port/quality-of-life.md)**
+(2026-10-04) distinguishes missing/partial Impure functions, supported native DLL inclusion and
+shipped activation. Rotation is bundled only by Escalation/Twilight and enabled by no checked
+unit content; newer reload/counter/chat features have development downloads but no native bundle.
+Basic ghosts/`PreviewPieces`, existing markers, world zoom and replay playback/seeking are
+already ours. The separate megamap remains deliberately excluded.
+
 ### E. Multiplayer / anti-abuse
 
 Start positions by team, `+autoteam`/`+randomteam`, vote-to-reject, share guard, `.take`
@@ -277,7 +284,12 @@ Several tdraw features have their network half in the recorder:
 - **The income panel** (`cinomce.cpp`) shows numbers the recorder parses out of `0x28` and `0x16`.
 - **Replay camera follow** (`.lockon`).
 
-Porting one of these tdraw features means porting its recorder half as well.
+Porting one of these tdraw features means porting its recorder half as well. The
+[native bundle audit](tadr-port/quality-of-life.md#activation-evidence-for-older-conveniences)
+confirms all five supported mod pairings contain these conveniences. `.lockon` is a local replay
+command, requires recorded camera data and is separate from Impure's working playback/seeking;
+Impure's camera Jump/Follow/Free controls remain disabled. Live allied income, whiteboard and
+camera transport remain missing.
 
 #### Recording and replay: tooling, not a port group
 

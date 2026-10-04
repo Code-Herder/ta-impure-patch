@@ -1,5 +1,17 @@
 # Total Mayhem
 
+## Native TADR quality-of-life coverage
+
+The supported **11.3.0** installation bundles **v2024.3.31** `tdraw.dll`, byte-identical to the
+upstream release. Its loader enables metal/geo snapping at radius 3 and wreck snapping at 1.
+Queue dragging, line/ring placement, Hold Position reclaim-only patrol, F11's sharing macro,
+whiteboard, camera sharing and allied income are native conveniences missing from Impure.
+Configurable assist-only patrol, factory-assisting constructors' stay/scatter options, blocker
+kickout and rotation are absent from that bundled version, even though newer Mayhem build
+configurations include more features. The map-DT draw hook is present but lacks the owner-11
+marker patches that make it effective in ProTA. See the
+[coverage table, versions and activation evidence](tadr-port/quality-of-life.md).
+
 ## Summary
 
 Total Mayhem (Mayhem Inc., lead: **gamma**) is a 200+ unit rebalance/expansion for OTA. Current release
@@ -19,7 +31,8 @@ Its engine work splits into two eras:
 
 The `res/mayhem.ini` in `github.com/FunkyFr3sh/Total-Annihilation-Patch-Loader` is the **10.9.2**
 snapshot: 951 lines, **158** patch sections (the extra lines are `;row` before/after hex dumps).
-Offsets in both are **file offsets**; VA = file + `0x400C00` for `.text`, + `0x401A00` for `.rdata`/`.data`.
+Offsets in both are **file offsets**; VA = file + `0x400C00` for `.text`,
++ `0x401200` for `.rdata`, + `0x401A00` for `.data` in the stock 3.1 image.
 
 ## The patch set (categorised, with notable addresses)
 
@@ -69,7 +82,7 @@ byte from `+0x245`/`ah&0x10` to `+0x246`/`ah&0x04`); resurrection units can recl
 permission levels of the console commands `+AI` and `+Control`, lowered from 4 (developer) to 2
 (cheat, beside `+ATM` and `+LOS`); the 3.9.02 exe carries the same two bytes
 ([the 3.9.02 exe](compat/setups.md#the-3902-exe)). 11.3.0 adds two identified ones: click-snap radii for metal patches
-(`0x00101F0A` = `03 03`) and reclaimable features (`0x00101F12` = `01 01`), poked into `.rdata` padding
+(`0x00101F0A` = `03 03`) and reclaimable features (`0x00101F12` = `01 01`), poked into `.data` padding
 and read by `tdraw.dll`.
 
 ## Case study: the teleport order button & dormant engine logic

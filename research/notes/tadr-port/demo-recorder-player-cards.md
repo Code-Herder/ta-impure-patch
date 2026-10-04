@@ -6,6 +6,10 @@ of [the S5 design](demo-recorder-s5-ui.md). Camera streams and the Overlays pane
 work. The existing recording format has no camera stream, so Jump, Follow and Free cam are
 visibly disabled. Hovering a camera control explains “Camera was not recorded.”
 
+The [native-mod QoL audit](quality-of-life.md) confirms `.lockon` camera follow is available in
+all five native recorder/TADR pairings when the replay contains camera data. This is a specific
+remaining Impure gap; its working replay playback/seeking and Sight controls are separate.
+
 ## Layout and input
 
 `tagpu_cards.c` is the dock's game-thread companion. At HUD 1× its panel is 206 pixels wide,

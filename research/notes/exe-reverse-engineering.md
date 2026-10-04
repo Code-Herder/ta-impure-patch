@@ -435,6 +435,38 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
   (`totala.ini` → `ta.ini`), and `0x40EAD6` (the path budget). The table is in
   [the setups page](compat/setups.md#the-3902-exe).
 
+### TADR QoL configuration bytes and map owner markers
+
+**SOURCE + DISASSEMBLED / MEASURED 2026-10-04.** Read for the
+[supported native QoL audit](tadr-port/quality-of-life.md). These are foreign-patcher inputs,
+not new Impure writes. Source claims are labelled separately from stock disassembly.
+
+| Address / raw file offset | Meaning and evidence |
+|---|---|
+| `0x50390A/B` / `0x101F0A/B` | Default/max metal/geo snap radii, spare `.data` bytes read by pre-split TADR `tahook.cpp` (`v2024.3.31`, snap getter functions). M/P embedded loader INIs write `03 03`; native Z leaves its availability gate zero. Later E/T use compile-time defaults/maxima, E 0/0 and T 3/3. SOURCE + native loader/data measurement. |
+| `0x503912/13` / `0x101F12/13` | Equivalent wreck snap radii. Native M/P loader writes `01 01`; Z's gate is zero. Later E/T configure 1/1. SOURCE + native loader/data measurement. |
+| `0x50391F` / `0x101F1F` | Pre-split guarding-constructor behavior gate. ProTA's loader writes `01`; `v2025.8.29` `TABugFix.cpp` reads it before installing the hooks. Its stay/scatter dialog choices still default to Cavedog behavior. SOURCE + native loader measurement. |
+| `0x483A75`, `0x483AD3`, `0x483B31` / `0x82E75`, `0x82ED3`, `0x82F31` | Immediate owner bytes of three stock `push 0x0A` instructions, whose boundaries are `0x483A74`, `0x483AD2`, `0x483B30`. The following calls at `0x483A7E`, `0x483ADE`, `0x483B38` all reach `0x423C50`. DISASSEMBLED in the pristine 3.1 image. ProTA's embedded loader changes all three immediates to `0B`; M lacks those writes and native E/Z/T retain `0A`. MEASURED in native fixtures. |
+| `0x469A7B` → `0x469AAF` | TADR's `DrawPlayer11DTProc` hook site and LOS-skip continuation. It tests `(ecx & 0x0F) == 11`. SOURCE (`TABugFix.cpp`, inspected native release tags); this row does not claim a fresh disassembly of that draw block. Its constructor's three marker writes above are commented out. Thus the hook alone does not establish native map-DT visibility. |
+
+Loader sections name **raw file offsets**. In these `.data` bytes VA = raw + `0x401A00`;
+in the `.text` marker bytes VA = raw + `0x400C00`. The snap cells are `.data`, not `.rdata`.
+Under takeover the mod's spare-byte values remain, but Impure does not yet consume these QoL
+gates or reproduce the owner-11 LOS bypass.
+
+The recorder's camera-sharing default was also checked in native DLL disassembly. The following
+are **preferred-image DLL VAs**, not addresses in `TotalA.exe`:
+
+| Native recorder | Instructions / data | Established fact |
+|---|---|---|
+| E/M/P/T 3.9.2.416 | `0x738334` pushes 1; `0x738336` loads string `0x7389FC` (`sharepos`); category string `0x7389DC`; `0x738343` calls options reader `0x71FD18`; `0x73834B` stores AL at object `+0x44` | Camera-sharing registry fallback is true. DISASSEMBLED + native strings. |
+| Z 3.9.2.0 | `0x734089` pushes 1; `0x73408B` loads `0x7344FC` (`sharepos`); category string `0x7344DC`; `0x734098` calls `0x71D770`; `0x7340A0` stores AL at object `+0x44` | Same true fallback in the older recorder. DISASSEMBLED + native strings. |
+
+Every native recorder contains `lockon`, `sharemappos` and replay-follow help. The old
+`self_commands.inc` handler and registration establish `.lockon` as a local replay action with
+no host-only gate; following requires camera data in the recording. These observations are
+availability/default evidence, not a newly run native replay.
+
 ## Demo recorder exploration: capture and save boundaries [DISASSEMBLED 2026-09-28]
 
 Boundary recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
