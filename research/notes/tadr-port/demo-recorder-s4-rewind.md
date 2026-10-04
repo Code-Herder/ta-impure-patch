@@ -1,6 +1,11 @@
 # Live rewind (S4d)
 
-The live rewind implementation remains on its worktree branch; landing verification continues. Its two prerequisite engine experiments passed
+Live rewind supports open, seek, return-to-now, fork and close through `tacli` on
+a recorded skirmish. The full landing tier passes under the approved limits
+below: 570 checks across 20 fixtures, with all 62 changed functions reached on
+every required build.
+
+Its two prerequisite engine experiments passed
 on the reference setup, 2026-10-02, using a normal limits build based on
 `f0748b8c`, the battle fixture, and an isolated Wine/Xvfb instance. Temporary
 instrumentation ran in the existing game-thread frame visit before `0x4969CD`;
@@ -540,7 +545,7 @@ command latency cannot consume the requested future starting tick.
 All four DLL variants build, the 39 portable harness tests pass, and the driving
 skill check is clean. These are targeted U results, not a completed landing tier.
 The naval flare-count allowance is approved and verified against the retained
-failure. The full tier and fresh reviews remain outstanding. S4d is not landed.
+failure. The completed full-tier result is recorded below.
 
 ### Secondary order coverage
 
@@ -560,3 +565,30 @@ The fixture runs the normal live/playback/round-trip/fresh-seek comparisons.
 Both coverage builds reach `ev_nano_h2`; all **46 checks** pass across the two
 fixtures, including exact playback, round trips, fresh seeks, event counts and
 zero COB engine writes on puppets.
+
+### Landing verification (2026-10-04)
+
+The complete tier on `384d55a3` passes **570/570 checks across 20 fixtures**,
+including **60 exact round trips**. Coverage reaches **62/62 changed functions**
+on every required build. The `replay-roundtrip:` note records the fixture seeds.
+Both U lanes pass all 28 checks, including exact return frames, fresh seeks,
+contiguous original recordings, both timelines and the effect-count comparison.
+The secondary-order dispatcher is reached on both builds.
+
+| build / operation | interval | seat 1 orders/dispatches | seat 2 | seat 3 | mobile movement |
+|---|---|---|---|---|---|
+| normal / now | [1530,3330) | 1890/198 | 2030/196 | 1758/192 | 92.47% of 1023 |
+| normal / fork | [2827,4627) | 1654/205 | 1927/195 | 1504/192 | 91.13% of 947 |
+| stock / now | [1521,3321) | 1982/209 | 2018/197 | 1930/195 | 96.28% of 1047 |
+| stock / fork | [2836,4636) | 1659/203 | 1944/198 | 1791/192 | 79.46% of 998 |
+
+Return-to-now takes 552 ms on normal limits and 466 ms on stock limits; fork
+conversion takes 691 ms and 648 ms respectively. All four DLL variants build,
+39 portable harness tests pass, and the wiki builds 97 pages plus its index.
+
+The accepted limits remain: unseated sight counters are outside D2; COB threads
+are reconstructed, with rewind-only VM child counts reported; the specific
+naval flare allowance is bounded by its accepted parent-count difference. AI
+liveness establishes new planning and dispatch, not identical strategy or full
+COB execution continuity. In-game rewind controls and multiplayer recording are
+separate work.

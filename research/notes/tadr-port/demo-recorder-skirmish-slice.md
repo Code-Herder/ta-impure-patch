@@ -29,7 +29,8 @@ dumps for addresses recorded as values, and makes each feature root at its own p
 fixtures that reach it, adds the coverage build, and makes the harness a landing gate —
 `tareplay.py landing`, CLAUDE.md's replay gate and the landing command's Step 4b — with `broad` as
 the command run before every release; and a seek makes the viewed seat's temporary sight
-records again (*S3c-3, verified and measured*). **With it S3 is complete**; S4 is next.
+records again (*S3c-3, verified and measured*). **S3 is complete. S4 provides
+takeover, fork management and live rewind through tacli** below.
 
 ## How the slice is cut
 
@@ -1927,8 +1928,9 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
 - **Three fixtures leave out their scenarios' manual steps.** b7-word-outright's Ctrl+D
   self-destruct, c4-kill-all's `+kill` chat commands (which need cheats on) and c4-survivor's ATLAS
   flight to the AA gun with the TXLLT2 after it: the harness can type a chat line and give an
-  order, but cannot press a key or set a switch. So the downed transport and kill-all paths run in
-  no landing; the fixtures were chosen for what they reach without the steps.
+  order, and its `keys` steps deliver native input. These three entries still omit
+  the manual steps; dedicated `secondary-orders` fixtures exercise native Ctrl+D
+  on both builds. The three entries were chosen for what they reach without the steps.
 - **`limits-tier1` and `cost-four-ai` have not run in the broad tier yet**; the broad tier's first
   run is their measurement.
 - **The debris pools' class is open**: `s_expl`, `s_psys` and `s_aux` are declared `SIM_STATE` and
@@ -2135,7 +2137,7 @@ changed functions on every required build; `ring_free` remains UNCOVERED, approv
 for this landing by the owner under OQ7 on 2026-10-02. The earlier naval sink-count difference also
 reproduced on pre-S4c main; its cause remains open and the tolerances are unchanged.
 
-### S4d — live rewind (landing verification continues)
+### S4d — live rewind
 
 [Live rewind](demo-recorder-s4-rewind.md) provides `tacli rewind` open, seek,
 return-to-now, fork and close on a recorded skirmish. The pause guard precedes
@@ -2146,12 +2148,15 @@ writer closes before a fork can acquire its file.
 
 Normal-limits smoke checks include exact fresh-seek equality, filename-collision
 handling, append refusal/retry and exit during rewind. Both coverage builds pass
-25 rewind checks, including preservation of a disabled objective switch on return.
-The module note records the approved unseated sight and rewind-only VM child-count
-exceptions. Exact COB execution continuity is outside S4. The naval COB stop and
-failed-worker cleanup are corrected. The next tier exposed an extra radar scan
-on return-to-now, now corrected, and AI construction checks that still require
-verification; S4d is not landed.
+28 rewind checks, including preservation of objective switches and radar contacts
+on return, and new planner orders reaching normal dispatch for every AI seat
+after both return and fork. The native disabled/re-enabled AI control verifies
+that the activity check rejects a missing planner. Construction is reported only.
+The module note records the approved unseated sight, rewind-only VM child-count
+and bounded naval flare-count exceptions. Exact COB execution continuity is
+outside S4. The naval COB stop and failed-worker cleanup are corrected. The
+full landing tier passes 570 checks across 20 fixtures, including 60 exact round
+trips, with all 62 changed functions reached on every required build.
 
 ## S5
 
