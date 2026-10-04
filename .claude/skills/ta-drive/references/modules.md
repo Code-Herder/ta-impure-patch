@@ -647,6 +647,11 @@ block that reads to its last complete block.
   (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
   K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
   names.
+- **Native fixture input** uses a `keys` step with a list of `tacli keys` tokens.
+  `secondary-orders` and `stock-secondary-orders` select the isolated solar with
+  `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
+  secondary order dispatcher. The camera is pinned by the scenario; the shield
+  stays on so the engine sees the polled Ctrl modifier.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a

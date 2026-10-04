@@ -1441,7 +1441,8 @@ index `+0xA6` holds.
 - **`+0x5C` and `+0x60`, the order lists** (nodes of 0x56 bytes). An order goes on `+0x60` when its
   descriptor's flags carry `0x40000` — BuildWeapon `0x0D` and SelfDestruct `0x26`, no other — and
   on `+0x5C` otherwise (`0x43AC6A`, `0x43ACBA`, `0x43AD19`). Every write goes through the head's
-  address; no create or destroy stores it directly. MEASURED: `+0x60` NULL in every record.
+  address; no create or destroy stores it directly. MEASURED: `+0x60` was NULL throughout the
+  original layout sample. The `secondary-orders` fixture exercises it with native self-destruct.
 - **`+0x82`, the sort bucket** (10-byte buckets from `*(main+0x1429F)`, the list head at `+6`,
   128-px cells, the off-map bucket `*(main+0x142B7)`). Only the restamp `0x47CC30` chooses it, from
   the position at that moment ((`+0x72` >> 23)·columns + (`+0x6A` >> 23), `0x47CCA9..0x47CCD8`),
@@ -16039,6 +16040,21 @@ and reaches any event-2 handler only after `0x43A1F5`. Forgetting a sample
 at entry establishes its lifetime before an allocation can reuse its address.
 The observer dereferences only the current dispatcher node, never a saved
 sample pointer, and bounds its owner against the level's unit allocation.
+
+DISASSEMBLED: the secondary controller `0x43BAD0`, called at `0x48AF9E`, reads
+the unit's `+0x60` list at `0x43BADA`. A node with nonzero `+6` waits until
+GameTime reaches its `+0x0A` deadline (`0x43BAE8..0x43BAFD`). Dispatch clears
+`+6` at `0x43BB09`, pushes event 0 and the current node at `0x43BB15..0x43BB16`,
+then reads its owner and calls the handler at `0x43BB1D..0x43BB21`. Removal
+calls the destructor at `0x43BBE6` or `0x43BC49` before `0x4B4F20` frees the
+node. The controller is inside the unit tick's owner-type-1/2 block, beside
+the primary controller at `0x48AF98`.
+
+MEASURED on the reference setup, 2026-10-04, normal coverage build: native
+selection of the isolated ARMSOLAR at screen `(512,384)`, then Ctrl+D, removed
+that unit while the two remote units stayed alive. The coverage bitmap reached
+`ev_nano_h2`. This covers the secondary dispatch callback; a human self-destruct
+does not count as a planner-originated AI order.
 
 Observer stolen prefixes: `0x408C40` five bytes `53 56 57 8B F9`;
 `0x43A0C0` seven bytes

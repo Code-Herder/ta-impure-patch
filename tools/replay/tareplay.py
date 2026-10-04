@@ -515,6 +515,10 @@ def step(w, kind, arg):
         rc, o = tacli("scenario", "apply", w.name, SCENARIOS / arg, timeout=300)
         if rc:
             raise CouldNotRun(f"apply {arg}: {last(o)}")
+    elif kind == "keys":
+        rc, o = tacli("keys", w.name, *arg)
+        if rc:
+            raise CouldNotRun(f"keys {arg}: {last(o)}")
     elif kind == "type":
         # the chat line: one return opens it, the characters, return sends it; a second return
         # straight after the first closes the line again and the characters land as hotkeys. A

@@ -537,7 +537,26 @@ construction during its window; both nevertheless prove fresh planner orders
 reached dispatch for every AI seat. Arming each window occurs while paused, so
 command latency cannot consume the requested future starting tick.
 
-All four DLL variants build, the 36 portable harness tests pass, and the driving
+All four DLL variants build, the 39 portable harness tests pass, and the driving
 skill check is clean. These are targeted U results, not a completed landing tier.
 The naval flare-count allowance is approved and verified against the retained
 failure. The full tier and fresh reviews remain outstanding. S4d is not landed.
+
+### Secondary order coverage
+
+The first full tier with both approved policies passed all **524 runtime
+checks**, including both 28-check U lanes. The coverage gate rejected the run:
+61 of 62 changed functions were reached; `ev_nano_h2` was absent on both builds.
+The existing fixtures issued no BuildWeapon or SelfDestruct order, the two
+actions whose descriptor flag `0x40000` selects the secondary list at unit+0x60.
+
+The added `secondary-orders` and `stock-secondary-orders` fixtures select an
+isolated solar at the pinned camera centre with native `pclick:512,384`, then
+send `ctrl+d` in a later step. Two remote unarmed units keep both seats alive.
+A one-batch drag and shortcut did not destroy the unit; the separate native
+click and shortcut did, and the normal coverage build reached `ev_nano_h2`.
+This is coverage of the dispatcher observation, not AI liveness evidence.
+The fixture runs the normal live/playback/round-trip/fresh-seek comparisons.
+Both coverage builds reach `ev_nano_h2`; all **46 checks** pass across the two
+fixtures, including exact playback, round trips, fresh seeks, event counts and
+zero COB engine writes on puppets.

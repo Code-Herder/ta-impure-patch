@@ -3898,7 +3898,9 @@ failed the AI construction comparison; the owner approved direct planner-issued
 order and dispatch checks after return and fork. The native disabled/re-enabled
 control and all 28 targeted rewind checks pass on both builds. The owner-approved
 bounded naval flare allowance passes the retained failure. The renewed full tier
-and fresh reviews remain open; S4d is not landed.
+passed all 524 runtime checks but found one coverage gap in the secondary order
+dispatcher. Dedicated native self-destruct fixtures reach it on both builds and
+pass all 46 checks. The full tier rerun and fresh reviews remain open; S4d is not landed.
 
 
 ## The restorer as compute (2026-09-27)
