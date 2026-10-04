@@ -151,6 +151,8 @@
 #define HEADER_MAX     0xFF00       /* an RK_HEADER's body; its length is a u16                    */
 #define IMG_DWORDS     (REC_PLAYER_DWORDS > REC_UNIT_DWORDS ? REC_PLAYER_DWORDS : REC_UNIT_DWORDS)
 #define ORD_SCRATCH    (REC_ORDERS_MAX * REC_ORDER_IMAGE)
+_Static_assert(RECMP_ORDER_BYTES == REC_ORDER_IMAGE && RECMP_ORDER_MAX == REC_ORDERS_MAX,
+               "contributions carry the recorder's bounded order images");
 
 /* ---- the layout, as masks ------------------------------------------------------------------- */
 
@@ -265,6 +267,12 @@ static RecMpChannel* s_mp_channel;
 static RecMpResources s_mp_local[REC_PLAYERS], s_mp_remote[REC_PLAYERS];
 static unsigned char s_mp_local_valid[REC_PLAYERS], s_mp_remote_valid[REC_PLAYERS];
 static unsigned s_mp_logtick;
+static RecMpOrderCache* s_mp_orders;
+static unsigned char s_mp_order_scratch[ORD_SCRATCH];
+static unsigned char s_mp_orders_seen[REC_PLAYERS];
+static int mp_orders_capture(const Level* L, unsigned tick);
+static int mp_orders_receive(const Level* L, const RecMpPacket* packet);
+static const unsigned* mp_births(const Level* L);
 
 /* DISASSEMBLED: HAPINET_receive(0x4C9840) is stdcall, ret 12. Its interface is
    object+0x4C5, from/to are +0x4B5/+0x4B9, and its trace helper 0x4C9740 is ret.
@@ -306,6 +314,7 @@ static void mp_init(void)
 static void mp_capture(const Level* L, unsigned tick)
 {
     unsigned i;
+    int taken;
     RecMpPacket packet;
     RecMpStats stats;
     if (!s_mp_tried) {
@@ -326,8 +335,15 @@ static void mp_capture(const Level* L, unsigned tick)
             tagpu_logf("recmp: no bounded session descriptor: no contributions");
             return;
         }
-        s_mp_channel = tagpu_recmp_begin(dp, origin, &session.desc.guidInstance);
+        s_mp_channel = tagpu_recmp_begin(dp, origin, &session.desc.guidInstance, session.desc.dwFlags);
         if (!s_mp_channel) { tagpu_logf("recmp: contribution worker could not start"); return; }
+        s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
+        if (!s_mp_orders) {
+            tagpu_recmp_end(s_mp_channel);
+            s_mp_channel = NULL;
+            tagpu_logf("recmp: no bounded order cache: contributions end incomplete");
+            return;
+        }
         tagpu_logf("recmp: contributions begin at tick %u, transport ID %u", tick, origin);
         s_mp_logtick = tick;
     }
@@ -340,18 +356,23 @@ static void mp_capture(const Level* L, unsigned tick)
         memcpy(&sample.player, player + 4, 4);
         memcpy(sample.values, player + 0x8C, sizeof sample.values);
         if (!s_mp_local_valid[i] || memcmp(&sample, &s_mp_local[i], sizeof sample)) {
-            if (!tagpu_recmp_send(s_mp_channel, RECMP_RESOURCES, tick, &sample, sizeof sample)) break;
+            if (!tagpu_recmp_send_from(s_mp_channel, sample.player, RECMP_RESOURCES, tick,
+                                      &sample, sizeof sample, NULL)) break;
             s_mp_local[i] = sample;
             s_mp_local_valid[i] = 1;
         }
     }
-    while (tagpu_recmp_take(s_mp_channel, &packet)) {
+    while ((taken = tagpu_recmp_take(s_mp_channel, &packet)) > 0) {
         RecMpResources sample;
+        if (packet.h.kind == RECMP_ORDERS) {
+            if (!mp_orders_receive(L, &packet)) goto incomplete;
+            continue;
+        }
         if (packet.h.kind != RECMP_RESOURCES || packet.h.bytes != sizeof packet.h + sizeof sample)
             continue;
         memcpy(&sample, packet.body, sizeof sample);
-        /* A human's own record is authoritative. AI-host authority needs an explicit
-           owner map before accepting a different player ID. */
+        /* Hosted AIs are local DirectPlay players with their own IDs. The receive
+           boundary has already required origin to equal DirectPlay's actual sender. */
         if (sample.player != packet.h.origin) continue;
         for (i = 0; i < REC_PLAYERS; i++) {
             const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
@@ -370,12 +391,22 @@ static void mp_capture(const Level* L, unsigned tick)
             break;
         }
     }
+    if (taken < 0) {
+        tagpu_logf("recmp: contribution source sequence or stream is incomplete");
+        goto incomplete;
+    }
+    if (!mp_orders_capture(L, tick)) goto incomplete;
     if (tick - s_mp_logtick >= 150) {
         tagpu_recmp_stats(s_mp_channel, &stats);
         tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X", tick,
                    stats.sent, stats.bytes, stats.received, stats.queued, stats.lost, (unsigned)stats.failed);
         s_mp_logtick = tick;
     }
+    return;
+incomplete:
+    tagpu_logf("recmp: order contribution refused: contributions end incomplete at tick %u", tick);
+    tagpu_recmp_end(s_mp_channel);
+    s_mp_channel = NULL;
 }
 
 /* a row's ID: one more than its index, so NULL's ID is 0 (tagpu_recfmt.h) */
@@ -1654,7 +1685,20 @@ static int olist_read(const Level* L, unsigned slot, unsigned list, unsigned cha
         unsigned ctl;
         if (owner == REC_ID_BAD) return OL_REMOTE_OWNER;
         ctl = (unsigned char)L->ta[OFF_PLAYERS + (owner - 1) * PL_STRIDE + PL_CONTROLLER];
-        if (ctl != 1 && ctl != 2) return OL_REMOTE_OWNER;
+        if (ctl != 1 && ctl != 2) {
+            RecMpOrderState state;
+            const unsigned* birth = mp_births(L);
+            unsigned origin;
+            memcpy(&origin, L->ta + OFF_PLAYERS + (owner - 1) * PL_STRIDE + 4, sizeof origin);
+            /* Copy only a complete queue for this exact incarnation. The owner's
+               contribution replaces following remote nodes; an unknown/lower-bound
+               stamp cannot authorize attaching an old queue to a recycled slot. */
+            if (ctl != 3 || !s_mp_channel || !birth || (birth[slot] & 0x80000000u) ||
+                !tagpu_recmp_orders_get(s_mp_orders, slot, list, &state, out, REC_ORDERS_MAX) ||
+                state.origin != origin || state.birth != birth[slot]) return OL_REMOTE_OWNER;
+            *count = state.count;
+            return OL_OK;
+        }
     }
     node = *(const char* const*)(unit + (list ? U_SUBORDERS : U_ORDERS));
     for (; node; node = *(const char* const*)(node + ORD_NEXT)) {
@@ -1672,6 +1716,139 @@ static int olist_read(const Level* L, unsigned slot, unsigned list, unsigned cha
     }
     *count = n;
     return OL_OK;
+}
+
+/* hit_reset publishes this declared column during loading. Its allocation is never
+   freed, its own count bounds every row, and capture runs after loading's last write.
+   See tagpu_patches.c's hit_layout lifetime and ordering argument. */
+static const unsigned* mp_births(const Level* L)
+{
+    unsigned i;
+    for (i = 0; i < tagpu_simreg_count(); i++) {
+        const SimDesc* d = tagpu_simreg_at(i);
+        if (strcmp(d->name, "src/tagpu_patches.c:s_hitStamp")) continue;
+        if (d->flags != SIMD_HEAP || d->stride != sizeof(unsigned) || !d->rows ||
+            *d->rows < L->nslots || *d->rows > 65536u) return NULL;
+        return *(const unsigned* const*)d->addr;
+    }
+    return NULL;
+}
+
+static int mp_orders_capture(const Level* L, unsigned tick)
+{
+    const unsigned* birth = mp_births(L);
+    unsigned slot, list;
+    if (!birth) { tagpu_logf("recmp: no declared incarnation column for %u slots", L->nslots); return 0; }
+    for (slot = 1; slot < L->nslots; slot++) {
+        const char* unit = L->begin + (size_t)slot * REC_UNIT_BYTES;
+        unsigned owner, origin, ctl;
+        const char* player;
+        if (!unit_live(L, slot)) continue;
+        owner = id_in(*(const char* const*)(unit + U_OWNER),
+                       L->ta + OFF_PLAYERS, PL_STRIDE, REC_PLAYERS);
+        if (owner == REC_ID_BAD || !owner) {
+            tagpu_logf("recmp: live slot %u has no bounded player owner", slot);
+            return 0;
+        }
+        player = L->ta + OFF_PLAYERS + (owner - 1) * PL_STRIDE;
+        ctl = (unsigned char)player[PL_CONTROLLER];
+        if (ctl != 1 && ctl != 2) continue;
+        memcpy(&origin, player + 4, sizeof origin);
+        if (!origin || (birth[slot] & 0x80000000u)) {
+            tagpu_logf("recmp: local slot %u has transport ID %u, nonexact birth %08X",
+                       slot, origin, birth[slot]);
+            return 0;
+        }
+        for (list = 0; list < 2; list++) {
+            unsigned count, first = 0;
+            int why = olist_read(L, slot, list, s_mp_order_scratch, &count, NULL);
+            if (why != OL_OK) {
+                tagpu_logf("recmp: local slot %u list %u refused (%d)", slot, list, why);
+                return 0;
+            }
+            if (tagpu_recmp_orders_same(s_mp_orders, slot, list, origin, birth[slot],
+                                        s_mp_order_scratch, count)) continue;
+            do {
+                unsigned char body[RECMP_BODY_MAX];
+                RecMpHeader header;
+                RecMpOrders chunk = { .slot = slot, .list = list, .birth = birth[slot],
+                                      .total = count, .first = first };
+                unsigned n = count - first < RECMP_ORDER_CHUNK ? count - first : RECMP_ORDER_CHUNK;
+                unsigned bytes = sizeof chunk + n * RECMP_ORDER_BYTES;
+                chunk.count = n;
+                memcpy(body, &chunk, sizeof chunk);
+                memcpy(body + sizeof chunk, s_mp_order_scratch + (size_t)first * RECMP_ORDER_BYTES,
+                       n * RECMP_ORDER_BYTES);
+                if (!tagpu_recmp_send_from(s_mp_channel, origin, RECMP_ORDERS, tick,
+                                          body, bytes, &header)) {
+                    RecMpStats stats;
+                    tagpu_recmp_stats(s_mp_channel, &stats);
+                    tagpu_logf("recmp: local order send refused: ID %u slot %u list %u, "
+                               "queued %u failed %08X", origin, slot, list, stats.queued,
+                               (unsigned)stats.failed);
+                    return 0;
+                }
+                if (tagpu_recmp_orders_put(s_mp_orders, &header, body, bytes) < 0) {
+                    tagpu_logf("recmp: local queue transaction refused: ID %u slot %u list %u, "
+                               "tick %u seq %u, %u/%u+%u", origin, slot, list, tick,
+                               header.sequence, first, count, n);
+                    return 0;
+                }
+                first += n;
+            } while (first < count);
+        }
+    }
+    return 1;
+}
+
+static int mp_orders_receive(const Level* L, const RecMpPacket* packet)
+{
+    RecMpOrders chunk;
+    unsigned i, bytes = packet->h.bytes - sizeof packet->h;
+    if (bytes < sizeof chunk) return 0;
+    memcpy(&chunk, packet->body, sizeof chunk);
+    for (i = 0; i < REC_PLAYERS; i++) {
+        const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
+        unsigned origin, first, last;
+        int result;
+        memcpy(&origin, player + 4, sizeof origin);
+        if (origin != packet->h.origin) continue;
+        if ((unsigned char)player[PL_CONTROLLER] == 1 ||
+            (unsigned char)player[PL_CONTROLLER] == 2) return 1;
+        if ((unsigned char)player[PL_CONTROLLER] != 3) continue;
+        /* DISASSEMBLED: each player owns its inclusive +0x67/+0x6B block. Normalize
+           both ends against the level allocation before authorizing even a dead slot;
+           its stock create and its private queue may arrive in either order. */
+        first = id_in(*(const char* const*)(player + 0x67), L->begin, REC_UNIT_BYTES, L->nslots);
+        last = id_in(*(const char* const*)(player + 0x6B), L->begin, REC_UNIT_BYTES, L->nslots);
+        if (!first || first == REC_ID_BAD || !last || last == REC_ID_BAD || first > last ||
+            chunk.slot + 1u < first || chunk.slot + 1u > last ||
+            (chunk.birth & 0x80000000u)) {
+            tagpu_logf("recmp: remote order authorization refused: ID %u slot %u, "
+                       "block IDs %u..%u birth %08X", origin, chunk.slot, first, last, chunk.birth);
+            return 0;
+        }
+        result = tagpu_recmp_orders_put(s_mp_orders, &packet->h, packet->body, bytes);
+        if (result < 0) {
+            RecMpOrderState state = { 0 };
+            tagpu_recmp_orders_get(s_mp_orders, chunk.slot, chunk.list, &state,
+                                    s_mp_order_scratch, REC_ORDERS_MAX);
+            tagpu_logf("recmp: remote queue transaction refused: ID %u slot %u list %u, "
+                       "tick %u seq %u, %u/%u+%u; committed tick %u seq %u", origin,
+                       chunk.slot, chunk.list, packet->h.tick, packet->h.sequence,
+                       chunk.first, chunk.total, chunk.count, state.tick, state.sequence);
+            return 0;
+        }
+        if (result && chunk.total && !(s_mp_orders_seen[i] & (1u << chunk.list))) {
+            tagpu_logf("recmp: remote orders ID %u -> seat %u, slot %u birth %u, "
+                       "source tick %u seq %u, list %u nodes %u", origin, i, chunk.slot,
+                       chunk.birth, packet->h.tick, packet->h.sequence, chunk.list, chunk.total);
+            s_mp_orders_seen[i] |= 1u << chunk.list;
+        }
+        return 1;
+    }
+    tagpu_logf("recmp: remote order source ID %u has no active player", packet->h.origin);
+    return 0;
 }
 
 /* a list's records: several when it is longer than one carries, one when it is empty */
@@ -4949,9 +5126,12 @@ void tagpu_rec_level_end(void)
     unsigned i, k = 0;
     tagpu_recmp_end(s_mp_channel);
     s_mp_channel = NULL;
+    tagpu_recmp_orders_end(s_mp_orders);
+    s_mp_orders = NULL;
     s_mp_tried = 0;
     memset(s_mp_local_valid, 0, sizeof s_mp_local_valid);
     memset(s_mp_remote_valid, 0, sizeof s_mp_remote_valid);
+    memset(s_mp_orders_seen, 0, sizeof s_mp_orders_seen);
     /* a timed dump does not outlive its level, whose GameTime the next level starts again; an
        untimed one is taken at the next level's first capture point */
     for (i = 0; i < s_narmed; i++) {

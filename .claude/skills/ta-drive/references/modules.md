@@ -166,6 +166,13 @@ tools/mp_leave.sh h1                                 # surrender -> main menu; a
   default `ui` snapshot; reach them with `ui <inst> show READY1`.
 - **Lobby state syncs**: set the map on the host and read it back on the joiner
   (`ui <join> show MAPNAME`) as a cheap proof the link is live.
+- **Hosted AIs occupy their own rows and native DirectPlay IDs.** Choose a map with enough
+  seats (*Town & Country* takes ten), stop the lobby helper with `MP_NO_START=1`, and read an
+  unused row with `ui <inst> show PLAYER2` before clicking it. On the host the row cycles
+  `UNUSED -> [BLOCKED] -> AI:<host>`; on a joiner `UNUSED -> AI:<joiner>`. For two humans and
+  one AI hosted by each, use host `PLAYER2` and joiner `PLAYER3`. Ready each human's `READY0`
+  and start on the host. A hosted AI is controller 2 on its hosting peer and controller 3 on
+  the other peer; match it across peers by `player+4`, independently of its host's human ID.
 - **Every peer creates its own units.** `scenario apply` on a peer replicates the units that peer
   owns to the others, through TA's own create packet. `owner` is the LOCAL player index — each
   peer is owner 0 on its own screen — so units a file gives owner 1 are created for the other

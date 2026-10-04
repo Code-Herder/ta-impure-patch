@@ -15,7 +15,9 @@ struct RecMpChannel {
     IDirectPlay2A* dp;
     DWORD origin;
     GUID session, stream;
-    unsigned sequence, received, lost_at_start;
+    struct { DWORD origin; unsigned sequence; } source[10];
+    RecMpPacket received_source[10];
+    unsigned received, lost_at_start;
     MpQueue tx;
 };
 
@@ -47,7 +49,7 @@ static DWORD WINAPI send_worker(void* arg)
         /* The slot and the interface are this worker's until Send returns. Even an
            engine Close or Release cannot free its AddRef; an ended session fails Send.
            No queue lock is held across a DirectPlay call. */
-        hr = IDirectPlay2_Send(c->dp, c->origin, DPID_ALLPLAYERS, DPSEND_GUARANTEED,
+        hr = IDirectPlay2_Send(c->dp, p->h.origin, DPID_ALLPLAYERS, DPSEND_GUARANTEED,
                               p, p->h.bytes);
         if (FAILED(hr)) { InterlockedExchange(&c->failed, hr); break; }
         InterlockedIncrement(&c->sent);
@@ -60,11 +62,25 @@ static DWORD WINAPI send_worker(void* arg)
     return 0;
 }
 
-RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* session)
+RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* session,
+                               DWORD session_flags)
 {
     RecMpChannel* c;
     HANDLE worker;
+    DPCAPS caps;
     if (!dp || !origin || !session || InterlockedCompareExchange(&s_workers, 1, 0)) return NULL;
+    memset(&caps, 0, sizeof caps);
+    caps.dwSize = sizeof caps;
+    /* The flag alone does not guarantee application delivery. The DirectX SDK's
+       Send contract requires provider support or DPSESSION_DIRECTPLAYPROTOCOL.
+       NOMESSAGEID also removes the native sender identity used for authorization. */
+    if ((session_flags & DPSESSION_NOMESSAGEID) ||
+        IDirectPlay2_GetCaps(dp, &caps, DPGETCAPS_GUARANTEED) != DP_OK ||
+        (!(session_flags & DPSESSION_DIRECTPLAYPROTOCOL) &&
+         !(caps.dwFlags & DPCAPS_GUARANTEEDSUPPORTED))) {
+        InterlockedExchange(&s_workers, 0);
+        return NULL;
+    }
     c = (RecMpChannel*)VirtualAlloc(NULL, sizeof *c, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!c) { InterlockedExchange(&s_workers, 0); return NULL; }
     if (FAILED(CoCreateGuid(&c->stream))) {
@@ -92,9 +108,21 @@ RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* ses
 int tagpu_recmp_send(RecMpChannel* c, unsigned kind, unsigned tick,
                      const void* body, unsigned bytes)
 {
-    unsigned w;
+    return tagpu_recmp_send_from(c, c ? c->origin : 0, kind, tick, body, bytes, NULL);
+}
+
+int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned tick,
+                          const void* body, unsigned bytes, RecMpHeader* header)
+{
+    unsigned w, source;
     RecMpPacket* p;
-    if (!c || bytes > RECMP_BODY_MAX || (bytes && !body) || acquire(&c->failed)) return 0;
+    if (!c || !origin || bytes > RECMP_BODY_MAX || (bytes && !body) || acquire(&c->failed)) return 0;
+    for (source = 0; source < 10; source++)
+        if (!c->source[source].origin || c->source[source].origin == origin) break;
+    if (source == 10 || c->source[source].sequence == ~0u) {
+        InterlockedExchange(&c->failed, E_INVALIDARG);
+        return 0;
+    }
     w = acquire(&c->tx.published);
     if (w - acquire(&c->tx.read) == MP_QUEUE_SLOTS) {
         InterlockedExchange(&c->failed, E_OUTOFMEMORY);
@@ -105,13 +133,15 @@ int tagpu_recmp_send(RecMpChannel* c, unsigned kind, unsigned tick,
     p->h.version = RECMP_VERSION;
     p->h.header = sizeof p->h;
     p->h.bytes = sizeof p->h + bytes;
-    p->h.origin = c->origin;
+    c->source[source].origin = origin;
+    p->h.origin = origin;
     p->h.tick = tick;
-    p->h.sequence = ++c->sequence;
+    p->h.sequence = ++c->source[source].sequence;
     p->h.kind = kind;
     p->h.session = c->session;
     p->h.stream = c->stream;
     if (bytes) memcpy(p->body, body, bytes);
+    if (header) *header = p->h;
     /* Publication transfers this slot to the worker. It becomes reusable only when
        the worker publishes read, after Send returns; elapsed time has no role. */
     InterlockedExchange(&c->tx.published, w + 1);
@@ -177,10 +207,41 @@ int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out)
     w = acquire(&s_rx.published);
     while (r != w) {
         const RecMpPacket* p = &s_rx.packet[r % MP_QUEUE_SLOTS];
-        int match = !memcmp(&p->h.session, &c->session, sizeof c->session);
-        if (match) memcpy(out, p, p->h.bytes);
+        unsigned source;
+        if (!memcmp(&p->h.session, &c->session, sizeof c->session)) {
+            RecMpPacket* last;
+            /* ALLPLAYERS can deliver to several players on one process. Locally
+               authored data is already captured; duplicate physical deliveries must
+               not become a second logical order/selection/chat event. */
+            if (!memcmp(&p->h.stream, &c->stream, sizeof c->stream)) goto consumed;
+            for (source = 0; source < 10; source++)
+                if (!c->received_source[source].h.origin ||
+                    c->received_source[source].h.origin == p->h.origin) break;
+            if (source == 10) goto sequence_failed;
+            last = &c->received_source[source];
+            if (last->h.origin) {
+                if (memcmp(&p->h.stream, &last->h.stream, sizeof p->h.stream)) goto sequence_failed;
+                if (p->h.sequence < last->h.sequence) goto consumed;
+                if (p->h.sequence == last->h.sequence) {
+                    if (p->h.bytes != last->h.bytes || memcmp(p, last, p->h.bytes)) goto sequence_failed;
+                    goto consumed;
+                }
+                if (p->h.tick < last->h.tick) goto sequence_failed;
+            }
+            if (p->h.sequence != last->h.sequence + 1u) goto sequence_failed;
+            memcpy(out, p, p->h.bytes);
+            memcpy(last, p, p->h.bytes);
+            InterlockedExchange(&s_rx.read, r + 1);
+            c->received++;
+            return 1;
+        }
+consumed:
         InterlockedExchange(&s_rx.read, ++r);
-        if (match) { c->received++; return 1; }
+        continue;
+sequence_failed:
+        InterlockedExchange(&s_rx.read, r + 1);
+        InterlockedExchange(&c->failed, E_FAIL);
+        return -1;
     }
     return 0;
 }
