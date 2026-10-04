@@ -643,4 +643,28 @@ MEASURED on the retained failing recording, takeover at 1981: the observer's
 new orders/dispatches, with no observer errors. 92% of 978 mobile units move.
 Only seats 1 and 3 construct a unit: seat 2 is planning and dispatching despite
 making none. The judge, conversion-time and human-order checks also pass.
-The full replay gate must pass with this correction before landing.
+### Final gate after the review corrections
+
+The complete landing tier on `26f1586b` passes **570/570 checks across 20
+fixtures**, with **60 exact round trips** and **62/62 changed functions reached
+on every required build**. The passing `replay-roundtrip:` note records its
+fixture seeds. Both U lanes pass all 28 checks; ordinary takeover's AI check
+passes with the shared direct-activity rule.
+
+Normal-limit return-to-now takes 629 ms and fork conversion 774 ms; stock
+limits takes 461 ms and 614 ms respectively. AI movement after now/fork is
+94.44%/90.01% on normal limits and 81.82%/74.11% on stock limits. Every AI seat
+issues fresh orders that reach normal dispatch in each window.
+
+The ordinary takeover observes [2083,3883): seats 1, 2 and 3 report
+1699/204, 1966/198 and 1683/190 new orders/dispatches, with no observer errors;
+92% of 972 mobile units move. Only seats 1 and 3 construct a unit. The check
+therefore proves the accepted planning-and-dispatch requirement without relying
+on identical building choices.
+
+All four DLL variants build without warnings, 39 portable harness tests pass,
+and the wiki builds 97 pages plus its index. Both full HIGH reviews verified the
+engine and synchronization changes; the three confirmed findings are corrected
+and rechecked. The targeted HIGH review of the ordinary takeover harness
+correction also reports no remaining finding. The accepted limits listed above
+remain unchanged.
