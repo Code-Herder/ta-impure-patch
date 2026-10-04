@@ -10,6 +10,9 @@ CNCDDRAW g_ddraw;
 static HWND owner;
 static WNDPROC saved;
 static int stopped, joined, destroyed, failed;
+static HANDLE stop_event;
+static volatile LONG renderer_finished;
+static LONG owner_generation;
 
 static void check(int yes, const char *what)
 {
@@ -23,14 +26,29 @@ int tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     (void)wp; (void)lp;
     check(msg == WM_DESTROY, "only destruction reaches the presentation observer");
     check(tagpu_window_generation(hwnd) != 0, "observer sees the departing lifetime");
-    return hwnd == owner;
+    if (hwnd != owner) return 0;
+    owner_generation = tagpu_window_generation(hwnd);
+    return 1;
 }
-HRESULT dd_RestoreDisplayMode(void) { ++joined; return DD_OK; }
+HRESULT dd_RestoreDisplayMode(void)
+{
+    SetEvent(stop_event);
+    WaitForSingleObject(g_ddraw.render.thread, INFINITE);
+    CloseHandle(g_ddraw.render.thread);
+    g_ddraw.render.thread = NULL;
+    ++joined;
+    return DD_OK;
+}
 void tagpu_vk_render_stop(void)
 {
     check(!tagpu_window_generation(owner), "lifetime is removed before teardown");
-    if (g_ddraw.ref) check(joined != 0, "active renderer is joined before teardown");
+    check(!g_ddraw.render.thread, "no renderer owns the lane during teardown");
     ++stopped;
+}
+
+void tagpu_vk_render_stop_window(LONG generation)
+{
+    if (generation == owner_generation) tagpu_vk_render_stop();
 }
 
 static LRESULT CALLBACK engine_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -59,6 +77,14 @@ static HWND make_window(void)
 static DWORD WINAPI attach_from_other_thread(void *arg)
 {
     check(!tagpu_window_attach((HWND)arg), "attachment rejects a foreign thread");
+    return 0;
+}
+
+static DWORD WINAPI renderer(void *arg)
+{
+    (void)arg;
+    WaitForSingleObject(stop_event, INFINITE);
+    InterlockedExchange(&renderer_finished, 1);
     return 0;
 }
 
@@ -99,13 +125,28 @@ int main(void)
     check(!tagpu_window_generation(owner), "destroyed window loses ownership");
 
     owner = make_window();
+    check(tagpu_window_attach(owner), "retained owner before replacement mode setup");
+    previous = tagpu_window_generation(owner);
+    g_ddraw.ref = 1;
+    g_ddraw.hwnd = NULL;
+    DestroyWindow(owner);
+    check(stopped == 2 && joined == 0,
+          "replacement DirectDraw object without a renderer cannot defer teardown");
+
+    owner = make_window();
     check(tagpu_window_attach(owner), "replacement window attachment");
     check(tagpu_window_generation(owner) > previous, "replacement cannot reuse a lifetime");
     previous = tagpu_window_generation(owner);
     g_ddraw.ref = 1;
     g_ddraw.hwnd = owner;
+    stop_event = CreateEvent(NULL, TRUE, FALSE, NULL);
+    check(stop_event != NULL, "renderer stop event");
+    g_ddraw.render.thread = CreateThread(NULL, 0, renderer, NULL, 0, NULL);
+    check(g_ddraw.render.thread != NULL, "renderer creation");
     DestroyWindow(owner);
-    check(stopped == 2 && joined == 1, "active DirectDraw joins then tears down");
+    check(stopped == 3 && joined == 1 && renderer_finished,
+          "active DirectDraw joins a real renderer before teardown");
+    CloseHandle(stop_event);
     g_ddraw.ref = 0;
     owner = NULL;
     for (i = 0; i < 256; ++i) {
@@ -115,8 +156,8 @@ int main(void)
         previous = tagpu_window_generation(other);
         DestroyWindow(other);
     }
-    check(destroyed == 259, "every destruction reaches the engine procedure once");
-    check(stopped == 2, "unrelated lifetimes leave the lane alone");
+    check(destroyed == 260, "every destruction reaches the engine procedure once");
+    check(stopped == 3, "unrelated lifetimes leave the lane alone");
     if (!failed) puts("ok: window ownership, restored subclass, scoped teardown, 256 new lifetimes");
     return failed;
 }

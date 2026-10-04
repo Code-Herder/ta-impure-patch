@@ -97,6 +97,10 @@ int tagpu_vk_ready(void);
    worker, which remains the sole owner until it releases its objects. */
 void tagpu_vk_render_stop(void);
 
+/* Window-owner teardown with no renderer handle remaining after its join.
+   Only tears down the lane still bound to the departing window lifetime. */
+void tagpu_vk_render_stop_window(LONG generation);
+
 /* Destruction observer, called by the fork and the persistent window subclass.
    Publishes the owner-gone latch before the subclass joins the renderer and
    tears down retained presentation. Returns nonzero only for destruction of

@@ -184,7 +184,7 @@ replacement thread takes ownership after the join. Actual window destruction tea
 The [fullscreen handoff note](fullscreen-handoff.html) records the original same-window
 shrink, desktop flash and 0.5–0.6 s presentation restart, and Wine verification of the fix.
 Recorded fixed transitions expose no desktop pixels and create no replacement Vulkan child.
-Brief engine-produced blank frames remain (0.117 s at end of loading in the final run).
+Brief blank frames remain (0.117 s at end of loading in the Greenhaven run).
 Live compositor timing and Windows presentation behaviour remain unmeasured.
 
 ## Movies in the DLL's window

@@ -20,18 +20,20 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
     (void)data;
     if (msg == WM_DESTROY) {
         int owns_presentation;
+        LONG generation = tagpu_window_generation(hwnd);
         /* Publish the destruction before joining: a render thread exiting in
            this interval must tear down rather than retain its last image.
            The subclass survives DirectDraw's own window-procedure restoration. */
         owns_presentation = tagpu_vk_wndproc(hwnd, msg, wp, lp);
         RemovePropA(hwnd, s_property);
-        if (g_ddraw.ref && g_ddraw.hwnd == hwnd) {
+        if (g_ddraw.hwnd == hwnd && g_ddraw.render.thread)
             dd_RestoreDisplayMode();
-            if (owns_presentation) tagpu_vk_render_stop();
-        } else if (!g_ddraw.ref && owns_presentation) {
-            /* Final Release already joined the renderer before clearing this
-               state. With no renderer, the window thread owns the retained lane. */
-            tagpu_vk_render_stop();
+
+        if (owns_presentation && !g_ddraw.render.thread) {
+            /* Existing stop paths clear the handle only after joining. A new
+               DirectDraw object may exist already, without a renderer: its COM
+               ref count does not establish ownership of the retained lane. */
+            tagpu_vk_render_stop_window(generation);
         }
     }
     if (msg == WM_NCDESTROY)

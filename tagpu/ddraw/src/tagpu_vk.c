@@ -61,9 +61,9 @@
                              full barrier, so a render thread that reads
                              ST_READY sees all of them.
      ST_STARTING -> ST_FAILED  the worker, the same way.
-     ST_READY -> ST_OFF      the render thread, and only it, and only from
-                             ST_READY -- the state in which the worker has
-                             stopped touching `s_vk` for good.
+     ST_READY -> ST_OFF      the render thread, or the window owner after its
+                             join. In ST_READY the worker has stopped touching
+                             `s_vk` for good; the join transfers CPU ownership.
      ST_STARTING -> ST_ZOMBIE  `tagpu_vk_render_stop`, abandoning a worker.
      ST_ZOMBIE -> ST_OFF     `lane_release`, and nothing else.
 
@@ -512,14 +512,20 @@ static volatile LONG s_ownerGeneration;
    early the write happens. */
 static volatile LONG s_ownWin;          /* this backend owns the present       */
 
-/* Published before the window owner joins the renderer. A destroyed HWND may
-   still equal s_owner, so equality alone cannot establish a live surface.
-   Cleared only when binding a new, nonrepeating window lifetime. */
+/* The destroyed lifetime, published before its owner joins the renderer. A
+   late publication about an old window cannot mark its replacement dead.
+   Never cleared on binding; nonrepeating IDs make the identity the invariant. */
 static volatile LONG s_ownGone;
 
+static int owner_gone(void)
+{
+    LONG generation = InterlockedCompareExchange(&s_ownerGeneration, 0, 0);
+    return generation && generation == InterlockedCompareExchange(&s_ownGone, 0, 0);
+}
 
 int tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
+    LONG generation;
     (void)wparam; (void)lparam;
     /* AND ONLY WHEN THERE IS A LANE TO BRING DOWN: without the `s_ownWin`
        test this would append a line naming a lane and a render thread that do
@@ -527,9 +533,10 @@ int tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
        lever present at all. It also keeps the symmetry the two readers of
        `s_ownGone` have. */
     if (msg != WM_DESTROY || !s_ownWin) return 0;
-    if (tagpu_window_generation(hwnd) !=
+    generation = tagpu_window_generation(hwnd);
+    if (!generation || generation !=
         InterlockedCompareExchange(&s_ownerGeneration, 0, 0)) return 0;
-    if (!InterlockedExchange(&s_ownGone, 1))
+    if (InterlockedExchange(&s_ownGone, generation) != generation)
         vklog("window: the presentation owner is being destroyed - joining and teardown");
     return 1;
 }
@@ -1844,9 +1851,9 @@ static void vk_perimage_free(void)
     s_vk.tsPeriod = 0.0;
 }
 
-/* Everything, in the reverse order it was built. Called with `s_vk` owned --
-   the render thread in ST_READY, or the bring-up worker unwinding its own
-   failure while still in ST_STARTING. */
+/* Called by the render thread in ST_READY, its window owner after joining it,
+   or the bring-up worker unwinding a failure or abandonment. Each has sole
+   CPU ownership of s_vk by the lane state and the renderer join. */
 static void vk_down(void)
 {
     if (s_vk.dev) {
@@ -3021,11 +3028,9 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
         if (!hwnd || w <= 0 || h <= 0) return 0;
         /* A removed lifetime cannot be revived by another logical mode set.
            A new lifetime may bind even if Windows recycles the HWND value. */
-        if (!generation || (s_ownGone && generation ==
-            InterlockedCompareExchange(&s_ownerGeneration, 0, 0))) return 0;
+        if (!generation || generation == InterlockedCompareExchange(&s_ownGone, 0, 0)) return 0;
         s_owner = hwnd;
         InterlockedExchange(&s_ownerGeneration, generation);
-        InterlockedExchange(&s_ownGone, 0);
         /* THE CALLER'S WINDOW, AND NOTHING ELSE: `hwnd` is already known
            non-NULL two lines above. */
         win = hwnd;
@@ -3066,10 +3071,10 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
 
     /* The actual window lifetime or GPU choice invalidates this device.
        A logical DirectDraw mode change on the same window does not. */
-    if (hwnd != s_owner || s_ownGone || tagpu_window_generation(hwnd) !=
+    if (hwnd != s_owner || owner_gone() || tagpu_window_generation(hwnd) !=
         InterlockedCompareExchange(&s_ownerGeneration, 0, 0) || lane_gen() != s_choiceSeen) {
         vklog(hwnd != s_owner ? "the game window changed - rebuilding" :
-              s_ownGone       ? "the game window was destroyed under us - down"
+              owner_gone()   ? "the game window was destroyed under us - down"
               : tagpu_window_generation(hwnd) != InterlockedCompareExchange(&s_ownerGeneration, 0, 0)
                               ? "the window lifetime changed - rebuilding"
                               : "the GPU row changed - rebuilding");
@@ -3173,10 +3178,18 @@ int tagpu_vk_ready(void)
     return lane_state() == ST_READY;
 }
 
+void tagpu_vk_render_stop_window(LONG generation)
+{
+    /* The caller owns the lane after joining, so no renderer can change its
+       bound generation between this identity test and teardown. */
+    if (generation && generation == InterlockedCompareExchange(&s_ownerGeneration, 0, 0))
+        tagpu_vk_render_stop();
+}
+
 void tagpu_vk_render_pause(HWND hwnd)
 {
     LONG generation = tagpu_window_generation(hwnd);
-    if (lane_state() != ST_READY || s_ownGone || hwnd != s_owner || !generation ||
+    if (lane_state() != ST_READY || owner_gone() || hwnd != s_owner || !generation ||
         generation != InterlockedCompareExchange(&s_ownerGeneration, 0, 0)) {
         tagpu_vk_render_stop();
         return;

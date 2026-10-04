@@ -420,7 +420,7 @@ BOOL WINAPI fake_SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
 
 BOOL WINAPI fake_MoveWindow(HWND hWnd, int X, int Y, int nWidth, int nHeight, BOOL bRepaint)
 {
-    if (tagpu_window_generation(hWnd) && !g_ddraw.ref)
+    if (tagpu_window_generation(hWnd) && (!g_ddraw.ref || hWnd != g_ddraw.hwnd))
         return TRUE;
     if (g_ddraw.ref && g_ddraw.hwnd)
     {

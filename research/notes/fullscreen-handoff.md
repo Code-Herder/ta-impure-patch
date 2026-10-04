@@ -38,7 +38,7 @@ sources are unchanged in local main at `faabb488`.
 
 **DISASSEMBLED**, pristine executable, and **MEASURED** with temporary boundary logs:
 
-1. Once loading is complete, `0x49836D`/`0x498380` compare current physical screen size with
+1. Once loading is complete, `0x49836D`/`0x498380` compare current logical mode size with
    `main+0x37F1B/+0x37F1F`, the desired logical game size. A differing size enters `0x49838C`.
 2. The outer `SetWindowPos` at `0x4983D1` requests 1024×768 with flags 4. It is swallowed:
    `fake_SetWindowPos` still sees the game HWND and a nonzero `g_ddraw.ref`.
@@ -108,9 +108,15 @@ surface, device, swapchain, pass resources and last presented image. After the j
 replacement renderer becomes the sole CPU owner; the existing per-image Vulkan fences
 order its GPU submissions. The retained objects hold no pointer into `g_ddraw`.
 
-WM_DESTROY publishes the owner-gone latch before removing the property and joining an
-active renderer. The owner thread then tears down its own retained presentation. Destruction
-of another tagged window cannot tear this lane down. A failed or unfinished lane is never
+WM_DESTROY publishes the departing lifetime ID before removing the property and joining an
+active renderer. A late destruction publication for window A cannot mark replacement B
+dead: ST_OFF tests its candidate ID, and ready/pause paths test the bound ID, against that
+marker. Binding never clears it. The owner thread then revalidates the bound lifetime and tears down its own retained
+presentation. Destruction
+of another tagged window cannot tear this lane down. Teardown requires a NULL renderer
+handle, which existing stop paths publish only after joining; a replacement DirectDraw
+object with a nonzero ref count but no renderer therefore cannot defer cleanup. If a
+different window already has an active renderer, that renderer keeps cleanup ownership. A failed or unfinished lane is never
 retained: unfinished bring-up keeps its existing ST_ZOMBIE worker-owned cleanup, without a
 worker wait on the game thread. GPU selection and actual window lifetime changes still
 invalidate the lane. A real client-size change still rebuilds the swapchain. The renderer's
@@ -126,27 +132,34 @@ Classic++ and play defaults, Vsync on:
   or Vulkan-child Create/Destroy/Unmap/Configure events during the recorded cycle. Vulkan
   logs ready presentation retained, without another device bring-up. The long baseline
   0.533–0.600 s blank is absent. Short blanks remain at screen changes, including seven
-  capture frames (0.117 s) at end of loading; retaining presentation does not suppress an
-  engine-produced blank replacement frame.
+  capture frames (0.117 s) at end of loading; retaining presentation does not suppress a
+  blank replacement frame.
 - A fresh final build entering **Greenhaven**: no desktop-background frames or window events
   during the handoff; one initial Vulkan device bring-up for the process. Seven essentially
   black frames at end of loading (0.117 s), and two before the loading artwork. The captured
   presented game shows its terrain, commander, features and HUD; the census reports six
   drawing passes, with no claims.
+- Audited final build, Two Continents: again no desktop frames or handoff window events;
+  six essentially black frames at end of loading (0.100 s), twelve before the loading artwork.
 - Fullscreen → windowed → game → menu → fullscreen: the client changes between 1280×1024
   and 1024×768 through the proxy's mode setup; swapchain rebuilding remains functional.
 - Normal main-menu Exit: WM_DESTROY is observed after final DirectDraw Release, and the
   retained lane logs its final teardown. Exit removes the game from the isolated display.
 - `make windowtest` and `wine tests/windowtest.exe`: the real Win32 subclass still forwards
   messages after proxy procedure restoration, removes ownership before engine destruction,
-  scopes retained teardown to its owner, joins before active teardown, rejects attachment
+  scopes retained teardown to its owner, tears down between replacement-object creation and
+  mode setup, joins a real test thread before active teardown, rejects attachment
   from a foreign thread, and assigns increasing IDs across 256 new window lifetimes.
+- `make vklifetime` and `wine tests/vklifetime.exe`: the production destruction observer and
+  owner predicate run with a deterministic B bind between A's identity check and publication.
+  The old boolean implementation fails; the generation marker passes, B's own destruction is
+  recognized, the next binding is live, and generation zero cannot claim presentation.
 - Normal and stock-limits DLL builds pass. No simulation code or replay layout changes.
 
 These tests do **not** measure the reported several-second duration or compositor behaviour
 on the live desktop, and do not establish Windows presentation behaviour. The isolated display
-reproduces the original resize and desktop flash and demonstrates their removal. Brief
-engine-produced blank frames at screen changes remain. A cold start, device failure or GPU
+reproduces the original resize and desktop flash and demonstrates their removal. Brief blank frames at screen changes remain; their source is not established by these
+display captures. A cold start, device failure or GPU
 selection still requires device initialization; only a ready lane on the same live window
 can be retained.
 
