@@ -122,7 +122,7 @@ TAKEOVER_CHECKS = {
     "line": "the takeover's line, no create refused, and in less than the entry's `ms`",
     "orders": "the entry's `order` unit of P's moves more than 64 wu when ordered",
     "ai": "every AI seat issues fresh planner orders that reach normal dispatch during an "
-          "armed TAKEOVER_SPAN window, and at least 25 % of its mobile units move more than "
+          "armed TAKEOVER_SPAN window, and at least 25 % of the AI seats' mobile units move more than "
           "8 wu; construction is reported only",
     "fork": "compare-fork EQUAL, the original's bytes untouched, both timelines check, "
             "timeline 1 complete, and K's and F's dumps EQUAL",
