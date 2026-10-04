@@ -741,8 +741,11 @@ block that reads to its last complete block.
   `ai-activity NAME from START until END` observes that future half-open tick
   interval and reports per-seat orders/dispatches followed by its completion line.
   The shared automatic-targeting phase and restored orders do not count. The U
-  count check reports and accepts only VM START/CALL child-count differences via
-  `compare-counts --rewind`. D2 excludes sight buffers only for unseated records.
+  rewind-specific count allowance reports VM START/CALL child-count differences
+  via `compare-counts --rewind`. All count comparisons can report
+  `accepted bounded COB flare` for the one COB explosion path whose accepted
+  parent difference bounds a same-direction child difference; the completeness
+  note specifies its limits. D2 excludes sight buffers only for unseated records.
   For the fresh comparison, the trigger
   `seek-frame T dump NAME` takes a paused frame dump in the seek's own visit.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the

@@ -98,6 +98,54 @@ class RewindPolicy(unittest.TestCase):
         self.assertNotEqual(a.sight[0], b.sight[0])
 
 
+class CobFlarePolicy(unittest.TestCase):
+    child = (0x472630, 0x420AE6, 0x4812D3)
+    parent = (0x420A30, 0x4812D3, 0)
+
+    def compare(self, values, child=None, parent_counted=True):
+        pl, pp, cl, cp = values
+        key = self.child if child is None else child
+        sinks = (1 << len(tarec.COUNT_SINKS)) - 1
+        if not parent_counted:
+            sinks &= ~(1 << tarec.COUNT_SINKS.index(self.parent[0]))
+        meta = (0, sinks, 1)
+        samples = [(10, {}, meta, {}), (20, {self.parent: pl, key: cl}, meta, {}),
+                   (10, {}, meta, {}), (20, {self.parent: pp, key: cp}, meta, {})]
+        out = io.StringIO()
+        with patch.object(tarec, "header_only", return_value={}), \
+             patch.object(tarec, "counts_of", side_effect=samples), \
+             patch.object(tarec, "absent_rows", return_value=((5, 2), [])), \
+             redirect_stdout(out):
+            result = tarec.cmd_compare_counts("rec", "a", "b", "c", "d", "rows")
+        return result, out.getvalue()
+
+    def test_accepted_parent_shortfall_bounds_child_and_reports_both(self):
+        for values in ((201, 197, 33, 30), (197, 201, 30, 33)):
+            result, report = self.compare(values)
+            self.assertEqual(result, 0)
+            self.assertIn("accepted bounded COB flare", report)
+            self.assertIn(f"parent live {values[0]}, puppet {values[1]}", report)
+            self.assertIn(f"flare live {values[2]}, puppet {values[3]}", report)
+
+    def test_rejects_unexplained_or_invalid_shortfalls(self):
+        for values in ((201, 197, 33, 28), (201, 201, 33, 30), (201, 197, 30, 33),
+                       (201, 180, 33, 30), (20, 17, 13, 10), (10, 9, 14, 11),
+                       (-1, 3, 0, 3), (201, 197, -1, -4)):
+            with self.subTest(values=values):
+                result, report = self.compare(values)
+                self.assertEqual(result, 1)
+                self.assertNotIn("accepted bounded COB flare", report)
+
+    def test_only_named_parent_child_path_with_observed_parent(self):
+        values = (201, 197, 33, 30)
+        for key in ((0x472630, 0x420AE6, 0x4812D4), (0x472630, 0x420AE7, 0x4812D3),
+                    (0x472530, 0x420AE6, 0x4812D3)):
+            self.assertEqual(self.compare(values, child=key)[0], 1)
+        result, report = self.compare(values, parent_counted=False)
+        self.assertNotEqual(result, 0)
+        self.assertNotIn("accepted bounded COB flare", report)
+
+
 class Parser(unittest.TestCase):
     def test_blank_keeps_lines(self):
         text = 'a /* { */ "}" \'{\' // }\n#define X {\\\n }\nint f(void) { return 0; }\n'

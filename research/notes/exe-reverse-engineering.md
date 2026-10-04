@@ -15960,7 +15960,10 @@ match except for one small above-water difference. The retained run therefore
 has upstream addition-count variance as well as a child-count difference;
 the measurements do not identify which missing additions supplied the three
 missing flares. The existing parent count band accepts four, while the child
-count band rejects three. No tolerance is changed by these measurements.
+count band rejects three. The owner-approved comparator allowance bounds only
+this child key by its already-accepted parent difference, with matching direction
+and at most one child per parent on each side; both count pairs are reported.
+This policy does not identify the individual missing parent calls.
 
 ## Replay player cards and changing the viewed player
 

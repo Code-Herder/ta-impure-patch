@@ -1702,11 +1702,28 @@ def within_band(band, a, b):
     return abs(a - b) <= max(floor, pct * max(a, b) // 100)
 
 
+def bounded_cob_flare(key, live, puppet, sinks, band):
+    """The named COB explosion can emit at most one flare (0x420AE1).
+    Its accepted parent difference bounds this allowance; it does not identify
+    which individual parent calls account for the child difference."""
+    if key != (0x472630, 0x420AE6, 0x4812D3) or not sinks & (1 << COUNT_SINKS.index(0x420A30)):
+        return None
+    parent = (0x420A30, 0x4812D3, 0)
+    a, b = live.get(key, 0), puppet.get(key, 0)
+    pa, pb = live.get(parent, 0), puppet.get(parent, 0)
+    if min(a, b, pa, pb) < 0 or a > pa or b > pb or not within_band(band, pa, pb):
+        return None
+    if (a - b) * (pa - pb) > 0 and abs(a - b) <= abs(pa - pb):
+        return pa, pb
+    return None
+
+
 def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
     """The counts of a live game (L, dumps la and lb) against a playing's (P, pa and pb), each as
     the change between its two dumps: every root per site exactly; every sink per (site, caller,
     aux), a `same` row's callers summed, within replay-absent.tsv's band, less its absent and
-    extra rows; and no COB engine write on the puppet.
+    extra rows; the named COB flare can inherit an accepted parent shortfall,
+    reported with both counts; and no COB engine write on the puppet.
     Rewind permits only VM START/CALL child counts to differ and reports each pair.
     Both dumps of a pair are taken at a capture point before that step's replay step, so both
     windows hold the steps [first GameTime, second GameTime)."""
@@ -1758,6 +1775,12 @@ def cmd_compare_counts(path, la, lb, pa, pb, absent, rewind=False):
                             f'"{names.get(aux, "")}": live {a}, puppet {b}')
             continue
         if within_band(band, a, b):
+            continue
+        parent = bounded_cob_flare(key, live, pup, sinks, band)
+        if parent is not None:
+            accepted.append(f"accepted bounded COB flare 0x4812D3: "
+                            f"parent live {parent[0]}, puppet {parent[1]}; "
+                            f"flare live {a}, puppet {b}")
             continue
         name = names.get(aux, "")
         if absent_covers(rows, site, caller, aux, name, "absent" if b < a else "extra"):

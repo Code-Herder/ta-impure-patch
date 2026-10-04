@@ -427,7 +427,7 @@ under pause corrects the comparison start but does not resolve this failure.
 
 Verification stopped at the three-attempt limit for this resumed investigation.
 S4d remains unlanded. The AI construction failure needs further diagnosis; the
-naval count proposal below separately requires an owner decision. The full-tier
+naval count proposal below was a separate owner decision. The full-tier
 runtime results above remain evidence for that run, but its coverage report is
 invalid because the coverage maps were rebuilt before offline reporting ended.
 A future complete tier must retain its maps and binaries until reporting exits.
@@ -441,9 +441,18 @@ Repeated playback reproduces both figures. A fresh instrumented live/playback
 pair produces 198 additions and 41 flares on each side. Disassembly establishes
 at most one child flare per addition, conditional on the piece point being
 above water. The measurements do not identify the individual missing additions.
-The temporary trace has been removed and all four clean builds pass. A proposal
-to bound the child difference by an already-accepted parent difference awaits
-the owner's decision; the current comparison still rejects this recording.
+The temporary trace has been removed and all four clean builds pass. The owner
+approved bounding this child difference by its already-accepted parent difference.
+The comparator restricts the allowance to child `(0x472630, 0x420AE6, 0x4812D3)`
+and parent `(0x420A30, 0x4812D3, 0)`. The parent must be counted in every dump and
+pass the ordinary band; differences must have the same direction and the child
+difference cannot exceed the parent difference. Counts must be nonnegative and
+child counts cannot exceed parent counts on either side. Every accepted case
+reports both pairs. The same retained failing dumps now pass with the explicit
+line `accepted bounded COB flare 0x4812D3: parent live 201, puppet 197; flare live 33, puppet 30`.
+This is an approved tolerance; it does not establish the identity of the missing
+parent calls. The 39 portable tests include wrong callers, larger/opposite child
+differences, unaccepted parents, invalid counts and an unobserved parent.
 
 
 #### Control without rewind: independent games fail the AI comparison
@@ -468,7 +477,7 @@ The initially proposed same-game construction comparison was rejected during
 owner discussion: a common prefix does not establish identical future choices
 when AI internal state is rebuilt. The owner approved direct AI activity checks
 instead. Construction counts remain diagnostic evidence, without a matching
-outcome requirement. The separate naval flare allowance remains unapproved.
+outcome requirement. The separate naval flare allowance was subsequently approved as described above.
 
 ### Direct AI activity after return and fork
 
@@ -530,5 +539,5 @@ command latency cannot consume the requested future starting tick.
 
 All four DLL variants build, the 36 portable harness tests pass, and the driving
 skill check is clean. These are targeted U results, not a completed landing tier.
-The full tier and fresh reviews remain outstanding, as does the owner's separate
-naval flare-count decision. S4d is not landed.
+The naval flare-count allowance is approved and verified against the retained
+failure. The full tier and fresh reviews remain outstanding. S4d is not landed.
