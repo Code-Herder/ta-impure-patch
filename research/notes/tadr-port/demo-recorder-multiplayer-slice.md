@@ -152,10 +152,71 @@ the final source's aligned GUID output before packing the wire image. Copied DLL
 again matched the built DLL. No network recording was produced, and ordinary exit
 does not prove the shared synchronous Send/Close contract.
 
+### Send queue and shutdown constraints
+
+The primary DirectX 7 SDK's [asynchronous messaging contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpover_38s9.content.htm)
+says a synchronous send waits behind earlier asynchronous sends in its queue. Its
+[protocol guidance](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpover_7k8p.content.htm)
+also says synchronous nonguaranteed sends can block under protocol throttling.
+Thus moving our own Send call off the game thread, or replacing it with an async
+SendEx on TA's session, does not establish that contributions cannot delay TA's
+sends. This is a gap in the checkpoint transport, not a completed fix.
+
+The SDK's [DestroyPlayer contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_58e1.content.htm)
+requires that player's pending async sends to complete or be canceled before the
+player can be destroyed. Disassembly also finds two engine Close calls in
+`0x4C9B70`: one for the DirectPlay2 interface and one for the original DirectPlay
+interface. Deferring only the first call cannot preserve the session. Neither an
+extra interface reference nor a successful ordinary exit establishes delivery at
+teardown.
+
+#### Separate-session isolation probe
+
+MEASURED 2026-10-04 on the reference setup, two standalone 32-bit probe processes
+under Wine with native DirectPlay TCP/IP over loopback. Each process had a
+primary DirectPlay4A session and a second DirectPlay4A session owned entirely by
+a recorder worker. The application GUIDs differed; each session allowed two
+players and used `DPSESSION_DIRECTPLAYPROTOCOL | DPSESSION_KEEPALIVE`. Both
+processes joined both sessions before the primary session was closed.
+
+Each main thread called Close and released its primary interface. Only **after
+that Close returned**, its worker sent a directed, guaranteed asynchronous
+`AFTER_PRIMARY_CLOSE` marker on the private session. Both sends returned
+`DPERR_PENDING` (`0x8000000A`); each worker observed a successful
+`DPSYS_SENDCOMPLETE` and received the other worker's marker after its own primary
+Close. Both processes exited successfully after an external release marker
+allowed their private sessions to close. Primary Close took 2502 and 2503 ms.
+Those times belong to this probe; there was no stock-only comparison and they
+are not evidence that TA's traffic is unaffected.
+
+Native `CoCreateInstance(DirectPlay4A)` returned `0x80040154` in the isolated
+prefixes, including after native DllRegisterServer returned success. The successful
+probe instead called the installed native module's `DllGetClassObject`, created
+the requested interfaces through its class factory, and retained the module
+until all interfaces and the worker were finished. It did not modify the shared
+prefix registry. This is a probe creation route, not an installed recorder path.
+
+The result establishes that a second native session can carry acknowledged
+messages after the primary session closes in this configuration. It does **not**
+establish TA integration, a bandwidth budget, cross-address discovery, host
+migration, loss recovery, or a production drain protocol. The external release
+marker held both private sessions alive until both results were observed;
+elapsed time was not used to decide that delivery had completed.
+
+Before using this direction, bind a private-session sender to its actual
+primary-session human and hosted-AI identities without adding a capability/version
+negotiation handshake or weakening source authority. Copy every needed identity
+and address while the game owns them; the worker must retain no engine pointer
+or primary-session interface. Bound pending async sends and interpret
+`DPERR_PENDING` as accepted work, not a transport failure. Source-frame seals and
+terminal manifests must establish completion; a timeout can mark a recording
+incomplete, never prove it complete. No such adapter or marker has been installed
+by this probe. Multiplayer files remain disabled.
+
 ### Gaps before the first code landing
 
 - Prove the private signature is disjoint from every valid engine transport frame, including the raw mode, and bound the added pump cost without starving game traffic.
-- Establish the shared interface's concurrency contract. Guaranteed-delivery capability and sender identity are checked at channel start. The primary DirectX 7 SDK describes synchronous Send as waiting for transmission/acknowledgment, and guarantee support as conditional on the provider or the DirectPlay protocol ([SendEx](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_1709.content.htm)). The queue test proves our references and slots survive a held call; it does not prove a native provider's concurrent Close cannot delay the game. Async sending, if chosen, also needs bounded pending storage and completion handling.
+- Replace the shared-session delivery path with a transport whose queue and shutdown lifetime cannot delay TA's own sends. The separate-session probe above answers basic isolation; sender binding, discovery and the bounded worker adapter remain unproved. The held-send queue test proves our references and slots, not native concurrent Close or recording completeness.
 - Establish bounded reordering if the transport needs it and terminal completeness. The current sequence check cannot detect a last frame that never arrives; the present resource cache makes no completeness claim.
 - Carry the remaining player authority and materialize contributed resources/orders; retain source tick, sequence and recorder application order in the file and its seek snapshots.
 - Decide unit corrections from a bandwidth measurement, as the product plan requires; no measured budget is inferred from the two-commander run.

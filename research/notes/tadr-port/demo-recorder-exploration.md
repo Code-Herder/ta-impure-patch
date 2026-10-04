@@ -1196,10 +1196,12 @@ Batching, quantization and deltas can improve this; sending a full 60 Hz stream 
 Measure actual framing, fan-out and bursts with the implemented contribution protocol. Do not
 advertise these calculated payload figures as measured wire traffic.
 
-The new contribution envelope must be explicitly versioned and length-bounded. Avoid treating
-its bytes as chat or allowing an unknown code to reach a stock splitter. Decide the negotiated
-message code/envelope when implementing the capture protocol; all-Impure participants allow a
-shared protocol but do not remove the need to check matching capabilities.
+The contribution envelope is explicitly versioned and length-bounded. The product contract
+requires every participant to run the same Impure build and has no capability/version
+negotiation handshake. Validate the envelope before using its payload. A contribution sharing
+the engine's receive path must also prove its signature cannot be a valid stock frame and keep
+unknown private bytes out of the stock splitter. A separate transport must establish its own
+sender binding and lifetime; the same-build requirement does not establish those facts.
 
 ### Visibility, communication, and analysis
 
