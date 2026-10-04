@@ -20,6 +20,46 @@ The first joiner prefix presented an empty provider list; the DirectPlay probe r
 
 The by-design boundary for the network path is to derive a unit's owner from its `+0x96` pointer **as an ID bounded to the engine's ten player records**, then read that record's controller. Locally controlled owners (types 1 and 2) may use the present list lifetime argument; remote owners (types 3 and 4) need their orders from their controlling peer. This must cover all three callers, including dumps, before any network capture or dump can walk a remote list. Skipping a remote list makes the read safe but leaves the recording incomplete until its authoritative contribution replaces it.
 
+## Contribution transport checkpoint
+
+The work branch has a checkpoint, not a multiplayer recorder landing. `olist_read` now refuses a network owner's lists before following either head unless the owner pointer names one of the ten records and its controller is 1 or 2. That one boundary covers normal capture, verification and dumps. A puppet host has no network bit; its restored owned-object pointers are zero, so its list dumps retain their existing path.
+
+`tagpu_recmp.c` carries bounded private messages through the existing DirectPlay session, with a separate send worker. The engine-side adapter is in `tagpu_recorder.c`, on the byte-matched receive wrapper `0x4C9840`, before the engine's reliable splitter and compression handling. Its 64-byte version-1 envelope carries byte count, source transport ID, source tick, sequence, kind, session GUID and stream GUID. Both queues have 256 slots of 4096 bytes. The transmit queue is game-thread to worker; the receive queue supports overlapping loader/game producers with a nonblocking producer claim and one game-thread consumer. A full queue or a contended receive claim reports loss. No queue lock surrounds a transport call.
+
+The worker holds its own interface reference and packet slot through `Send`. Teardown drops the game thread's channel reference and asks the worker to stop; it does not join the worker. There is at most one channel worker per process, including one still finishing. An engine `Close` ends the session even while the interface remains referenced: the reference protects memory, not delivery. The stock sender/destination output fields are updated only for packets returned to the engine. DirectPlay system messages stay on that path.
+
+The first payload is a player's transport ID and the 32 bytes at `player+0x8C`: a 100-byte application packet including its envelope. Locally controlled players contribute changed samples even with recording off. The current receiver accepts a human's own resource record and maps it to its local seat by transport ID. It keeps a cache only; it does **not** enable network recording, alter engine resources, materialize an `.imprec` file or support hosted-AI authority yet. `REC_FORMAT` remains 4.
+
+### Runtime evidence
+
+MEASURED 2026-10-04 on the reference setup, retail content, native DirectPlay over loopback, two peers on *Two Continents*, private display, work branch checkpoint `d74ffebe` plus the contribution prototype. Neither peer carried `tagpu_recorder.on`. Both received the other's source-tick-1 resource sample, with energy production 25 and metal production 1; their own remote engine records still reported production zero. The two origin IDs differed, but each mapped to seat 1 on the receiving peer, while its local human was seat 0.
+
+A real solar build on the host produced changing samples. At the tick-9151 health report the host had sent 118 packets / 11,800 application bytes with one queued, and the joiner had received 119; the reports are distinct observations, not a same-instant comparison. Both reported loss 0 and failure 0. The host's production then read 45 while the joiner's stock copy of that host still read zero. These are application payload counts for one receiver, not link bandwidth or a ten-player budget measurement. Network Pause brought both peers to tick 9193.
+
+An armed network dump at tick 5534 contained two valid CRC-checked blocks and the local commander's one-node main list (unit slot 1501). Both remote lists (slot 1) were refused; no remote list chunk was present. The local list was preserved. This is a test of the capture boundary, not a faithful multiplayer snapshot.
+
+`tools/replay/recmp_transport_test.c` exercises the actual queue module with a DirectPlay object whose Send is held by events. It checks valid private framing, rejection of a mismatched length and a returned length beyond the allocation, preservation of a game packet and its transport IDs, explicit failure at 256 queued packets, and refusal to allocate another worker while that send is held. The game releases its channel and interface references during the held send. On release, the worker verifies the retained packet and its own interface reference before finishing. PASS under Wine; the ordering is controlled by events, not sleeps. Build and run:
+
+```
+i686-w64-mingw32-gcc -I tagpu/ddraw/inc -O2 -Wall -std=c99 \
+  -o /tmp/recmp-transport-test.exe tools/replay/recmp_transport_test.c \
+  tagpu/ddraw/src/tagpu_recmp.c -lole32 -luuid
+WINEPREFIX="$PROBE_PREFIX" WINEDEBUG=-all wine /tmp/recmp-transport-test.exe
+```
+
+`PROBE_PREFIX` names an isolated Wine prefix. The normal parallel DLL build passes the thread-split and simulation-state checks; the send worker source names no engine memory.
+
+A second two-peer game, using the updated adapter that copies transport outputs through aligned locals, also received both tick-1 samples and reported loss/failure 0 through tick 2551. This rerun used the same isolated prefixes after both games were stopped and relaunched with the rebuilt DLL.
+
+### Gaps before the first code landing
+
+- Prove the private signature is disjoint from every valid engine transport frame, including the raw mode, and bound the added pump cost without starving game traffic.
+- Check transport capabilities and the shared interface's concurrency contract. The primary DirectX 7 SDK describes synchronous Send as waiting for transmission/acknowledgment, and guarantee support as conditional on the provider or the DirectPlay protocol ([SendEx](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_1709.content.htm)). The queue test proves our references and slots survive a held call; it does not prove a native provider's concurrent Close cannot delay the game. Async sending, if chosen, also needs bounded pending storage and completion handling.
+- Establish match identity for a session that can survive a level, reliable sequence/reordering and terminal completeness. A stream GUID and source tick alone do not establish which level a delayed message belongs to. The present resource cache makes no completeness claim.
+- Authorize hosted AI contributions, then carry orders/queues and the remaining player authority; retain source tick, sequence and recorder application order in the file and its seek snapshots.
+- Decide unit corrections from a bandwidth measurement, as the product plan requires; no measured budget is inferred from the two-commander run.
+- Run the network recorder/playback fixture and the skirmish replay gate on the finished accumulated diff. The transport test and network dump do not replace those gates.
+
 ## Work order
 
 1. **Network capture boundary.** Prove the lifetime and bounds of objects read from type-3 unit owners, especially the air order proxy whose owner can delete it independently (`tagpu_recorder.c`, *What it reads*; [order research](demo-recorder-s2-orders.md#2-orders-on-a-type-3-puppet)). Map the capture tick against the network pump and owner sends. A probe must distinguish a remote copy from an authoritative local record. The header currently writes `RT_MODE` as `MODE_SKIRMISH` (`tagpu_recorder.c:header_build`), so a network file also needs a deliberate format rule. A file with plausible but wrong remote state is not a completed landing.

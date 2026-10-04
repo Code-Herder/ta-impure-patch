@@ -50,7 +50,9 @@
    table, by arithmetic (tagpu_recfmt.h), and a pointer outside the table becomes REC_ID_BAD,
    counted and logged. Each event hook's reads are stated beside it.
 
-   WHAT IT WRITES: its own memory -- the shadow images, the ring and the dump file. The event
+   WHAT IT WRITES: its own memory -- the shadow images, the ring and the dump file -- and the
+   receive wrapper's sender/destination outputs, as the engine wrapper writes them for a delivered
+   game or system packet (mp_receive). The event
    hooks write nothing the simulation reads; the one site that changes a path, the network tests
    of the five fire functions, builds a packet on the fire function's own stack while a skirmish
    is recorded (*The events*). */
@@ -58,6 +60,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_recorder.h"
+#include "tagpu_recmp.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -256,6 +259,124 @@ static int level_read(char* ta, Level* L)
 
 static unsigned s_bad;                   /* pointers outside their tables, this recording      */
 static unsigned s_badlog;                /* of them, the ones logged                           */
+
+static unsigned char s_mp_sites, s_mp_tried;
+static RecMpChannel* s_mp_channel;
+static RecMpResources s_mp_local[REC_PLAYERS], s_mp_remote[REC_PLAYERS];
+static unsigned char s_mp_local_valid[REC_PLAYERS], s_mp_remote_valid[REC_PLAYERS];
+static unsigned s_mp_logtick;
+
+/* DISASSEMBLED: HAPINET_receive(0x4C9840) is stdcall, ret 12. Its interface is
+   object+0x4C5, from/to are +0x4B5/+0x4B9, and its trace helper 0x4C9740 is ret.
+   The callers own these arguments during Receive; no engine address reaches the worker. */
+static HRESULT __stdcall mp_receive(char* object, void* buffer, DWORD* bytes)
+{
+    IDirectPlay2A* dp;
+    DWORD from, to;
+    HRESULT hr;
+    memcpy(&dp, object + 0x4C5, sizeof dp);
+    if (!dp) return DPERR_UNINITIALIZED;
+    hr = tagpu_recmp_receive(dp, &from, &to, buffer, bytes);
+    if (hr == DP_OK) {
+        memcpy(object + 0x4B5, &from, sizeof from);
+        memcpy(object + 0x4B9, &to, sizeof to);
+    }
+    return hr;
+}
+
+static void mp_init(void)
+{
+    static const unsigned char was[] = {
+        0x68,0x1C,0xB1,0x50,0x00,0xE8,0xF6,0xFE,0xFF,0xFF,0x8B,0x54,0x24,0x08,0x83,0xC4,
+        0x04,0xB8,0xAA,0x00,0x77,0x88,0x8B,0x8A,0xC5,0x04,0x00,0x00,0x85,0xC9,0x74,0x22,
+        0x56,0x8B,0x74,0x24,0x10,0x8B,0x01,0x56,0x8B,0x74,0x24,0x10,0x56,0x8D,0xB2,0xB9,
+        0x04,0x00,0x00,0x6A,0x01,0x81,0xC2,0xB5,0x04,0x00,0x00,0x56,0x52,0x51,0xFF,0x50,
+        0x64,0x5E,0xC2,0x0C,0x00
+    };
+    if (memcmp((const void*)(size_t)0x4C9840, was, sizeof was) ||
+        *(const unsigned char*)(size_t)0x4C9740 != 0xC3 ||
+        !tagpu_detour_land(0x4C9840, (const unsigned char*)(size_t)mp_receive, 5)) {
+        tagpu_logf("recmp: receive wrapper differs or could not be patched: no contributions");
+        return;
+    }
+    s_mp_sites = 1;
+    tagpu_logf("recmp: ARMED private contribution receive before the engine's packet splitter");
+}
+
+static void mp_capture(const Level* L, unsigned tick)
+{
+    unsigned i;
+    RecMpPacket packet;
+    RecMpStats stats;
+    if (!s_mp_tried) {
+        union { DPSESSIONDESC2 desc; unsigned char bytes[4096]; } session;
+        IDirectPlay2A* dp;
+        DWORD bytes = sizeof session, origin;
+        unsigned seat = (unsigned char)L->ta[OFF_CONTROLLED];
+        GUID zero = { 0 };
+        s_mp_tried = 1;
+        memset(&session, 0, sizeof session);
+        memcpy(&dp, L->ta + 0x4D9, sizeof dp);
+        if (!s_mp_sites || seat >= REC_PLAYERS || !dp) return;
+        memcpy(&origin, L->ta + OFF_PLAYERS + seat * PL_STRIDE + 4, sizeof origin);
+        if (IDirectPlay2_GetSessionDesc(dp, session.bytes, &bytes) != DP_OK ||
+            bytes > sizeof session || bytes < sizeof session.desc ||
+            session.desc.dwSize != sizeof session.desc ||
+            !memcmp(&session.desc.guidInstance, &zero, sizeof zero)) {
+            tagpu_logf("recmp: no bounded session descriptor: no contributions");
+            return;
+        }
+        s_mp_channel = tagpu_recmp_begin(dp, origin, &session.desc.guidInstance);
+        if (!s_mp_channel) { tagpu_logf("recmp: contribution worker could not start"); return; }
+        tagpu_logf("recmp: contributions begin at tick %u, transport ID %u", tick, origin);
+        s_mp_logtick = tick;
+    }
+    if (!s_mp_channel) return;
+    for (i = 0; i < REC_PLAYERS; i++) {
+        const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
+        RecMpResources sample;
+        unsigned ctl = (unsigned char)player[PL_CONTROLLER];
+        if (ctl != 1 && ctl != 2) continue;
+        memcpy(&sample.player, player + 4, 4);
+        memcpy(sample.values, player + 0x8C, sizeof sample.values);
+        if (!s_mp_local_valid[i] || memcmp(&sample, &s_mp_local[i], sizeof sample)) {
+            if (!tagpu_recmp_send(s_mp_channel, RECMP_RESOURCES, tick, &sample, sizeof sample)) break;
+            s_mp_local[i] = sample;
+            s_mp_local_valid[i] = 1;
+        }
+    }
+    while (tagpu_recmp_take(s_mp_channel, &packet)) {
+        RecMpResources sample;
+        if (packet.h.kind != RECMP_RESOURCES || packet.h.bytes != sizeof packet.h + sizeof sample)
+            continue;
+        memcpy(&sample, packet.body, sizeof sample);
+        /* A human's own record is authoritative. AI-host authority needs an explicit
+           owner map before accepting a different player ID. */
+        if (sample.player != packet.h.origin) continue;
+        for (i = 0; i < REC_PLAYERS; i++) {
+            const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
+            unsigned id;
+            memcpy(&id, player + 4, 4);
+            if (id != sample.player || (unsigned char)player[PL_CONTROLLER] != 3) continue;
+            if (!s_mp_remote_valid[i]) {
+                float values[8];
+                memcpy(values, sample.values, sizeof values);
+                tagpu_logf("recmp: remote resources ID %u -> seat %u, source tick %u seq %u, "
+                           "energy=%g production=%g metal=%g production=%g", id, i,
+                           packet.h.tick, packet.h.sequence, values[0], values[1], values[3], values[4]);
+            }
+            s_mp_remote[i] = sample;
+            s_mp_remote_valid[i] = 1;
+            break;
+        }
+    }
+    if (tick - s_mp_logtick >= 150) {
+        tagpu_recmp_stats(s_mp_channel, &stats);
+        tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X", tick,
+                   stats.sent, stats.bytes, stats.received, stats.queued, stats.lost, (unsigned)stats.failed);
+        s_mp_logtick = tick;
+    }
+}
 
 /* a row's ID: one more than its index, so NULL's ID is 0 (tagpu_recfmt.h) */
 static unsigned id_in(const char* p, const char* base, unsigned stride, unsigned n)
@@ -4357,6 +4478,8 @@ void tagpu_rec_init(void)
     unsigned i, k;
     static const unsigned char regs[8] = { 0x8F, 0x8E, 0x8D, 0, 0x8B, 0, 0, 0 };
 
+    mp_init();
+
     /* every site first */
     for (i = 0; i < OBSERVE_SITE_COUNT; i++)
         if (!tagpu_detour_bytes_ok(OBSERVE_SITES[i].va, OBSERVE_SITES[i].stolen,
@@ -4701,6 +4824,7 @@ void __cdecl tagpu_rec_capture(void)
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
+    if (mode == 3 && ((unsigned char)ta[OFF_NETWORK] & 1)) mp_capture(&L, (unsigned)tick);
     ai_finish((unsigned)tick);
 
     if (s_state == ST_IDLE && s_fork.file) {
@@ -4823,6 +4947,11 @@ static void cover_wait(int fin)
 void tagpu_rec_level_end(void)
 {
     unsigned i, k = 0;
+    tagpu_recmp_end(s_mp_channel);
+    s_mp_channel = NULL;
+    s_mp_tried = 0;
+    memset(s_mp_local_valid, 0, sizeof s_mp_local_valid);
+    memset(s_mp_remote_valid, 0, sizeof s_mp_remote_valid);
     /* a timed dump does not outlive its level, whose GameTime the next level starts again; an
        untimed one is taken at the next level's first capture point */
     for (i = 0; i < s_narmed; i++) {

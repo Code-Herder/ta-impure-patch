@@ -439,7 +439,8 @@ the wiki's Compatibility section, from [its overview](compat/overview.md). The e
 
 Boundary recheck for [the recorder exploration](tadr-port/demo-recorder-exploration.md).
 Temporary observers measured the three DirectPlay wrappers below in a two-peer game; they
-were removed and the normal DLL rebuilt. No production recorder hook is installed. The
+were removed and the normal DLL rebuilt. The multiplayer contribution work branch replaces
+the receive wrapper as described below; that checkpoint has not landed. The
 existing send/receive and save investigations below remain the fuller maps.
 
 | Address | Fact checked and implication |
@@ -462,6 +463,30 @@ existing import routes documented above (`0x4CA435`, `0x4CA4D7`, `0x4CA667`, `0x
 do not themselves wrap the returned COM interfaces. The render exchange was read separately:
 its latest-frame contract and camera-limited contents are not an ordered event log or a
 complete replay checkpoint. See the exploration for the source references and remaining gaps.
+
+### Multiplayer contribution wrapper [DISASSEMBLED and MEASURED 2026-10-04]
+
+Work branch checkpoint; no enabled network recording. See the [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md#contribution-transport-checkpoint) for its runtime evidence and open protocol gates.
+
+- `0x4C9840..0x4C9885`: the complete 69-byte receive wrapper is compared before its entry is redirected to `tagpu_recorder.c:mp_receive`. The trace helper `0x4C9740` is a single `ret`, also checked, so omitting that call omits no engine work. The replacement keeps stdcall's three arguments and `ret 12`. It reads the interface at network-context `+0x4C5` into a local, receives through vtable `+0x64` with local source/destination outputs, and copies those outputs to context `+0x4B5/+0x4B9` only for a successful packet returned to the engine. A NULL interface returns stock's `0x887700AA`. The raw and reliable receive callers still reach this one boundary (`0x4534E0`, `0x462F30`); the stock outer receive retains its buffer-growth/retry path and B3's moved-buffer repair.
+- The context is `main+0x14`, so those fields are main `+0x4D9`, `+0x4C9` and `+0x4CD`. `HAPINET_uninitmultiplay 0x4C9B70` calls interface `Close` at `0x4C9B92`, then `Release` at `0x4C9B9E`, then zeroes its field at `0x4C9BA1`. A contribution worker's AddRef protects the interface's lifetime through these calls; it does not preserve the session. The worker holds no pointer to the context or main block. The teardown's four direct callers are `0x4446F4`, `0x450E06`, `0x4523C8` and `0x46C1B2`. The `0x450D80` path calls `0x46BF20` and bypasses uninitialization on a nonzero result (`0x450DF3..0x450DFA`), then clears network bit 0 at `main+0x2A44` (`0x450E10`). This pass did not prove that a session GUID uniquely identifies a level, so the contribution protocol cannot assume it does.
+- The contribution resource capture reads the fixed ten player records at `main+0x1B63`, stride `0x14B`, their controller at `+0x73`, transport ID at `+4` and the 32 resource bytes at `+0x8C`. The local row is bounded from main `+0x2A42`; a received human's resource sample is matched by transport ID to a type-3 row. The two peers' row 0 is local on each, not the same player. Measured tick-1 owner production was energy 25 / metal 1; remote stock production remained zero, and a real solar changed the host's energy production to 45.
+- The network list reader first maps a unit's owner `+0x96` to one of those ten records by arithmetic. With main `+0x2A44` bit 0 set, it refuses before following unit `+0x5C/+0x60` unless that bounded owner is type 1 or 2. This covers `cap_orders`, `cap_verify` and `dump_write`. It supplies the missing lifetime boundary for node `+0x52`; the type-3 air proxy can delete that object independently of the node (the order-object map below). A measured network dump retained the local slot 1501's one-node list and omitted both remote slot 1 lists.
+
+Recheck with `objdump -d -M intel --start-address=0x4C9720 --stop-address=0x4C9885 pristine/TotalA.exe.pristine`, `0x4C9B70..0x4C9BB0`, and the complete `0x450D80..0x450E1A` path. The caller sweep is over `.text`; runtime resource and dump conditions are in the slice note. Private packet signature separation, cross-level identity, ordering/completeness, AI-host authority and file materialization remain open; the resource cache establishes none of them.
+
+The signature audit also read these transport paths; it does not yet establish all raw-mode senders:
+
+| Address | Established fact |
+|---|---|
+| `0x4C9840` callers | Two direct calls in retail `.text`: `0x44FA63` from `0x44F9C0`, and `0x4535B1` from the raw receive branch. `0x462F30` reaches it through `0x44F9C0`, at `0x4630DE` and its grown-buffer retry `0x46314D`. |
+| `0x44F9C0` | Receive/decode wrapper, `ret 12`. Pending decoded bytes are copied from its own buffer before another Receive (`0x44F9D3..0x44FA4F`). Its DirectPlay call is `0x44FA63`. A non-system packet whose first byte is neither 3 nor 4 returns success **without decoding it** (`0x44FA91..0x44FAA8`); it is not rejected. A 3/4 packet is length-tested, its encrypted bytes summed and XORed with their byte offsets (`0x44FAC4..0x44FAF7`), then its checksum at `+1` is compared. A 4 calls `0x4D1480` between `0x4D1810` and `0x4D1800`; this audit did not read those bodies or establish their lifetime mechanism. A 3 copies the body from `+3` into the decoder's own buffer (`0x44FB30..0x44FB4C`). |
+| `0x44FC44..0x44FD14` | The encoded send branch selects header byte 4 at `0x44FC5E` when compression saves bytes and main `+0x4ED` is zero; otherwise it copies the original body and selects 3 at `0x44FC75`. It XORs/checksums bytes, writes that selected header at `0x44FCB0`, and sends through `0x4C97B0` at `0x44FD0D`. The surrounding compression call is `0x4D0F60` between `0x4D1810` and `0x4D1800`, whose bodies were not audited. The optional send-drop branch reads main `+0x37F35` and calls CRT rand `0x4E4870` with arithmetic helpers `0x4E4400` and `0x4E4440`; it may skip the send. These are reads, not recorder patches. |
+| `0x4C97B0`, `0x4C9800` callers | The general wrapper has three direct retail calls: `0x44FD0D`, `0x451DAC` and `0x451EFD`. The adjacent guarantee-forcing wrapper `0x4C9800` has no direct call in that sweep. No claim about indirect calls follows from it. |
+| `0x463173..0x4631CB` | After the receive, the reliable layer copies context source/destination into its own `+0xC/+0x10`. Non-system data is length-tested, then its first dword is tested against `0xFFFFFFFF` before source lookup `0x462D90`. This audit did not prove its sequence semantics. |
+| `0x453D40` / `0x45473F..0x4547AD` | The pump maps transport IDs to player rows and separates system source 0. The game-message branch reads main `+0x391F1` and admits byte codes through mask table `0x512BC0`: bit 1 in state 5, bit 2 in state 6, bit 0 otherwise. The established receive-mask initialization `0x451FD0` remains the fuller map above; a raw signature cannot be justified solely by the encoded send's 3/4 prefix. |
+
+Recheck `0x44F9C0..0x44FBFA`, `0x44FC44..0x44FD14`, `0x4630B9..0x4631CB`, and `0x453D85..0x4547AD` in the pristine executable. The private 0x49-leading magic differs from the encoded branch's 3/4 prefix; the two direct raw send sites remain the signature proof's open part.
 
 ### Temporary transport observation and construction reads [MEASURED 2026-09-28]
 
