@@ -13,12 +13,22 @@ enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2 };
 
 #pragma pack(push, 1)
 typedef struct {
+    uint8_t code;
+    uint16_t version, bytes;
+    uint32_t origin;
+    GUID match;
+} RecMpStart;
+typedef struct {
     unsigned char magic[8];
     uint16_t version, header;
     uint32_t bytes, origin, tick, sequence, kind;
-    GUID session, stream;
+    GUID match, stream;
 } RecMpHeader;
 #pragma pack(pop)
+
+/* The engine's 0x08 start action carries a fresh host-created match ID. Its
+   delivered span, version and native sender must agree before that ID is used. */
+int tagpu_recmp_start_read(const void* message, unsigned bytes, DWORD from, GUID* match);
 
 #define RECMP_BODY_MAX (RECMP_PACKET_MAX - sizeof(RecMpHeader))
 typedef struct {
@@ -71,7 +81,7 @@ typedef struct {
 /* Game-thread producer. begin owns an AddRef until the worker has finished; end hands
    the channel to that worker without joining it. At most one worker exists at a time:
    a still-finishing channel makes the next begin fail, never wait or allocate another. */
-RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* session,
+RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* match,
                                DWORD session_flags);
 int tagpu_recmp_send(RecMpChannel* c, unsigned kind, unsigned tick,
                      const void* body, unsigned bytes);

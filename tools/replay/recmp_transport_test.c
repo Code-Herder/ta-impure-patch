@@ -59,23 +59,29 @@ static HRESULT WINAPI fake_receive(IDirectPlay2* iface, DPID* from, DPID* to, DW
     CHECK(flags == DPRECEIVE_ALL);
     *from = 55;
     *to = 11;
-    if (at == 0 || at == 1) {
+    if (at <= 2) {
         CHECK(*bytes >= f->remote.h.bytes);
         memcpy(data, &f->remote, f->remote.h.bytes);
         *bytes = f->remote.h.bytes;
-    } else if (at == 2) {
+        if (at == 0) {
+            /* A queued packet from a previous match must not bind this origin's
+               stream or sequence before the current match's first delivery. */
+            ((RecMpPacket*)data)->h.match.Data1 = 3;
+            ((RecMpPacket*)data)->h.sequence = 32;
+        }
+    } else if (at == 3) {
         /* A private header whose declared size exceeds the returned packet. */
         CHECK(*bytes >= sizeof f->remote.h);
         memcpy(data, &f->remote.h, sizeof f->remote.h);
         *bytes = sizeof f->remote.h;
-    } else if (at == 3) {
+    } else if (at == 4) {
         CHECK(*bytes >= 3);
         memcpy(data, "TA!", 3);
         *bytes = 3;
-    } else if (at == 4) {
+    } else if (at == 5) {
         /* The provider claims more than the supplied allocation; no byte is read. */
         (*bytes)++;
-    } else if (at == 5) {
+    } else if (at == 6) {
         /* System payloads do not become recorder messages even with this prefix. */
         CHECK(*bytes >= f->remote.h.bytes);
         memcpy(data, &f->remote, f->remote.h.bytes);
@@ -83,6 +89,43 @@ static HRESULT WINAPI fake_receive(IDirectPlay2* iface, DPID* from, DPID* to, DW
         *from = DPID_SYSMSG;
     } else return DPERR_NOMESSAGES;
     return DP_OK;
+}
+
+static void start_test(void)
+{
+    RecMpStart start = { .code = 0x08, .version = RECMP_VERSION,
+                        .bytes = sizeof(RecMpStart), .origin = 55, .match = { .Data1 = 1 } };
+    GUID match = { .Data1 = 9 }, zero = { 0 };
+    unsigned char* allocation = VirtualAlloc(NULL, 8192, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    unsigned char* message;
+    DWORD protection;
+    CHECK(sizeof start == 25 && allocation);
+    CHECK(VirtualProtect(allocation + 4096, 4096, PAGE_NOACCESS, &protection));
+    message = allocation + 4096 - sizeof start;
+    memcpy(message, &start, sizeof start);
+    CHECK(tagpu_recmp_start_read(message, sizeof start, 55, &match) && match.Data1 == 1);
+    CHECK(!tagpu_recmp_start_read(allocation + 4096, sizeof start - 1, 55, &match));
+    CHECK(!tagpu_recmp_start_read(message, sizeof start + 1, 55, &match));
+    CHECK(!tagpu_recmp_start_read(message, sizeof start, 56, &match));
+    CHECK(!tagpu_recmp_start_read(message, sizeof start, 0, &match));
+    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, NULL));
+    start.version++;
+    memcpy(message, &start, sizeof start);
+    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
+    start.version = RECMP_VERSION;
+    start.bytes--;
+    memcpy(message, &start, sizeof start);
+    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
+    start.bytes = sizeof start;
+    start.code = 0x05;
+    memcpy(message, &start, sizeof start);
+    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
+    start.code = 0x08;
+    start.match = zero;
+    memcpy(message, &start, sizeof start);
+    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
+    CHECK(match.Data1 == 1);
+    CHECK(VirtualFree(allocation, 0, MEM_RELEASE));
 }
 
 int main(int argc, char** argv)
@@ -94,10 +137,11 @@ int main(int argc, char** argv)
     RecMpPacket got;
     RecMpStats stats;
     RecMpHeader ai_header;
-    GUID session = { 1 }, other = { 2 };
+    GUID match = { .Data1 = 1 }, other = { .Data1 = 2 }, zero = { 0 };
     unsigned char buffer[RECMP_PACKET_MAX];
     DWORD bytes = sizeof buffer, from = 0, to = 0;
     unsigned n;
+    start_test();
     memset(&f, 0, sizeof f);
     f.iface.lpVtbl = &vt;
     f.refs = 1;
@@ -115,14 +159,15 @@ int main(int argc, char** argv)
     f.remote.h.tick = 8;
     f.remote.h.sequence = argc > 1 ? 3 : 1;
     f.remote.h.kind = RECMP_RESOURCES;
-    f.remote.h.session = session;
+    f.remote.h.match = match;
     f.remote.h.stream = other;
     memcpy(f.remote.body, "peer", 4);
 
-    CHECK(!tagpu_recmp_begin(&f.iface, 11, &session, 0));
+    CHECK(!tagpu_recmp_begin(&f.iface, 11, &match, 0));
     f.guaranteed = 1;
-    CHECK(!tagpu_recmp_begin(&f.iface, 11, &session, DPSESSION_NOMESSAGEID));
-    c = tagpu_recmp_begin(&f.iface, 11, &session, 0);
+    CHECK(!tagpu_recmp_begin(&f.iface, 11, &zero, 0));
+    CHECK(!tagpu_recmp_begin(&f.iface, 11, &match, DPSESSION_NOMESSAGEID));
+    c = tagpu_recmp_begin(&f.iface, 11, &match, 0);
     CHECK(c && f.refs == 2);
     (void)argv;
     if (argc > 1) {
@@ -141,7 +186,8 @@ int main(int argc, char** argv)
     }
     CHECK(tagpu_recmp_receive(&f.iface, &from, &to, buffer, &bytes) == DP_OK);
     CHECK(from == 55 && to == 11 && bytes == 3 && !memcmp(buffer, "TA!", 3));
-    CHECK(tagpu_recmp_take(c, &got) && got.h.origin == 55 && !memcmp(got.body, "peer", 4));
+    CHECK(tagpu_recmp_take(c, &got) && got.h.origin == 55 && got.h.match.Data1 == 1 &&
+          got.h.sequence == 1 && !memcmp(got.body, "peer", 4));
     CHECK(!tagpu_recmp_take(c, &got));
     bytes = sizeof buffer;
     CHECK(tagpu_recmp_receive(&f.iface, &from, &to, buffer, &bytes) == DPERR_INVALIDPARAMS);
@@ -154,9 +200,10 @@ int main(int argc, char** argv)
 
     CHECK(tagpu_recmp_send(c, RECMP_RESOURCES, 9, "retained", 8));
     CHECK(WaitForSingleObject(f.entered, 5000) == WAIT_OBJECT_0);
-    CHECK(!tagpu_recmp_begin(&f.iface, 11, &session, 0));
+    CHECK(!tagpu_recmp_begin(&f.iface, 11, &match, 0));
     CHECK(tagpu_recmp_send_from(c, 22, RECMP_RESOURCES, 9, "retained", 8, &ai_header));
     CHECK(ai_header.origin == 22 && ai_header.sequence == 1);
+    CHECK(!memcmp(&ai_header.match, &match, sizeof match));
     CHECK(tagpu_recmp_send_from(c, 22, RECMP_RESOURCES, 9, "retained", 8, &ai_header));
     CHECK(ai_header.origin == 22 && ai_header.sequence == 2);
     for (n = 0; n < 256; n++)

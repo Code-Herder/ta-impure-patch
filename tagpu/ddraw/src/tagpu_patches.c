@@ -3027,6 +3027,13 @@ static DWORD s_wireTlsBuf = TLS_OUT_OF_INDEXES, s_wireTlsLen = TLS_OUT_OF_INDEXE
 SIM_TLS(s_wireTlsBuf, SIM_TRANSIENT);
 SIM_TLS(s_wireTlsLen, SIM_TRANSIENT);
 
+unsigned int tagpu_wire_received(const void* message)
+{
+    if (!message || s_wireTlsBuf == TLS_OUT_OF_INDEXES || s_wireTlsLen == TLS_OUT_OF_INDEXES ||
+        message != TlsGetValue(s_wireTlsBuf)) return 0;
+    return (unsigned int)(size_t)TlsGetValue(s_wireTlsLen);
+}
+
 static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigned int b)
 {
     (*c)++;

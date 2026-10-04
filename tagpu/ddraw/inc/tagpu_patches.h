@@ -11,6 +11,10 @@ void tagpu_apply_patches(void);
    DLL counters only; returns _snprintf's count. */
 int tagpu_wire_format(char* buf, unsigned int cap);
 
+/* Actual delivered span for this thread's current dispatcher message, or zero
+   when the pointer is not the receive's buffer. Allocation capacity is not a span. */
+unsigned int tagpu_wire_received(const void* message);
+
 /* The stale-hits landing's heartbeat section (sim-fixes.md B4): companions out and in, the
    owner's and the bystanders' verdicts, bare messages dropped, copies' stamps, the hold, and
    the tagpu_dmgdelay.on oracle. DLL counters only; returns _snprintf's count. */

@@ -475,7 +475,7 @@ Work branch checkpoint; no enabled network recording. See the [multiplayer slice
 - The network list reader first maps a unit's owner `+0x96` to one of those ten records by arithmetic. With main `+0x2A44` bit 0 set, it refuses to follow unit `+0x5C/+0x60` unless that bounded owner is type 1 or 2. For a type-3 owner it can instead copy a complete authoritative cache list, requiring its origin to match player `+4` and its exact birth to match the declared `s_hitStamp` row. The stamp column has the permanent allocation and load-before-capture ordering documented beside `hit_layout` in `tagpu_patches.c`; unknown/lower-bound stamps cannot authorize a queue for a recycled slot. This covers `cap_orders`, `cap_verify` and `dump_write`. It supplies the missing lifetime boundary for node `+0x52`; the type-3 air proxy can delete that object independently of the node (the order-object map below). A measured network dump retained the local slot 1501's one-node list and omitted both remote slot 1 lists.
 - The order-contribution receiver reads player `+0x67/+0x6B`, the inclusive first/last unit pointers assigned at `0x4858BD/0x4858E0` (the unit-block ordering section below). Both become IDs in `[main+0x14357, main+0x14357 + main+0x14351 * 0x118)` before the source's slot is authorized. No live unit pointer is needed for that authorization: a private queue may precede its stock create. The list reader separately requires an exact matching incarnation before using that queue.
 
-Recheck with `objdump -d -M intel --start-address=0x4C9720 --stop-address=0x4C9885 pristine/TotalA.exe.pristine`, `0x4C9B70..0x4C9BB0`, `0x450DD0..0x450E1A`, `0x452370..0x4523DF`, and `0x46BF20..0x46C1D5`; read the export strings with `objdump -s --start-address=0x507A58 --stop-address=0x507B08 pristine/TotalA.exe.pristine` and imports with `objdump -p`. The caller/writer sweep is over `.text`; runtime resource and dump conditions are in the slice note. Private packet signature separation, cross-level identity, terminal completeness and file materialization remain open. Native sender identity authorizes each locally hosted AI separately, and source sequences detect gaps and collapse duplicate physical deliveries; neither condition alone establishes a complete recording.
+Recheck with `objdump -d -M intel --start-address=0x4C9720 --stop-address=0x4C9885 pristine/TotalA.exe.pristine`, `0x4C9B70..0x4C9BB0`, `0x450DD0..0x450E1A`, `0x452370..0x4523DF`, and `0x46BF20..0x46C1D5`; read the export strings with `objdump -s --start-address=0x507A58 --stop-address=0x507B08 pristine/TotalA.exe.pristine` and imports with `objdump -p`. The caller/writer sweep is over `.text`; runtime resource and dump conditions are in the slice note. Private packet signature separation, terminal completeness and file materialization remain open; the engine-start match ID is described below. Native sender identity authorizes each locally hosted AI separately, and source sequences detect gaps and collapse duplicate physical deliveries; neither condition alone establishes a complete recording.
 
 The signature audit also read these transport paths; it does not yet establish all raw-mode senders:
 
@@ -489,6 +489,50 @@ The signature audit also read these transport paths; it does not yet establish a
 | `0x453D40` / `0x45473F..0x4547AD` | The pump maps transport IDs to player rows and separates system source 0. The game-message branch reads main `+0x391F1` and admits byte codes through mask table `0x512BC0`: bit 1 in state 5, bit 2 in state 6, bit 0 otherwise. The established receive-mask initialization `0x451FD0` remains the fuller map above; a raw signature cannot be justified solely by the encoded send's 3/4 prefix. |
 
 Recheck `0x44F9C0..0x44FBFA`, `0x44FC44..0x44FD14`, `0x4630B9..0x4631CB`, and `0x453D85..0x4547AD` in the pristine executable. The private 0x49-leading magic differs from the encoded branch's 3/4 prefix; the two direct raw send sites remain the signature proof's open part.
+
+### Multiplayer start action and match identity [DISASSEMBLED 2026-10-04]
+
+The contribution checkpoint carries a fresh match GUID in the engine's existing
+start action. A DirectPlay session GUID is still checked in the bounded descriptor,
+but does not identify a level. No capability or version negotiation is added.
+
+| Address | Established fact and use |
+|---|---|
+| `0x490B30`, `0x490B89..0x490B99` | The state setter writes main `+0x391F1`; its state-3 table case assigns handler `0x496CE0` to main `+0x391F5`. The state-2 case at `0x490B77` assigns `0x496BB0`. |
+| `0x496BB0`, `0x496C95`, `0x496CA4` | The lobby handler [INFERRED name] checks main `+0x2A44` bit 2 and lobby fields `+0x2BBE`, `+0x2BBF`, `+0x2B4C`, then writes state 3 and handler `0x496CE0`. Its earlier mode-1/mode-2 branches select the campaign/skirmish load handlers. |
+| `0x496CE0..0x496DA4` | The start handler [INFERRED name] selects the controlled row through main `+0x2A42`, takes PlayerInfo from player `+0x27`, and tests Info `+0x97` bit 0 at `0x496D0C`. Only that host branch builds byte `0x08` on its stack (`0x496D15`) and sends `(player+4, &byte, 1)` through call `0x496D25 → 0x451DF0`. A whole-`.text` sweep found no direct E8 call to the handler; its state-pointer assignments are the entries above. A 22-line disassembly lookback at every direct call to `0x451DF0`/`0x451BC0` found this one immediate byte-8 constructor; that is not a proof about computed constructors. Both branches select state 5 and handler `0x497F40`, at `0x496D65/0x496D75` or `0x496D87/0x496D9D`. |
+| `0x451DF0`, `0x451EE0`, `0x451EFD` | Generic sender, stdcall `ret 12`, validates an active local type-1/type-2 source and tests the network bit. Reliable mode calls `0x461990`; raw mode calls `0x4C97B0`. B8 owns its entry; the recorder redirects only the start call, preserving B8's path. The targeted sender `0x451BC0` is stdcall `ret 16`, validates a local source and remote destination, and uses its raw call at `0x451DAC`. |
+| `0x461990`, `0x462710`, `0x4628D0` | Reliable queue path: the wrapper forwards to `0x462710`, whose copy routine `0x4628D0` proves old payload plus incoming bytes fits `0x42A` (1066), copies the exact span into queue-owned memory at record `+0x14+offset`, and stores its length. The caller's 25-byte stack start is no longer needed after return. The queue has a `0x400` entry bound. |
+| `0x451FD0`, `0x452040`, `0x4520BE..0x4520D4` | Packet-table initializer. ESI is 1 at `0x452040`; `0x4520BE` writes that fixed length to `0x512AF8`, the `0x08` entry in length table `0x512AD8`. Mask `0x512BE0` is 7 (all three pump phases), set at `0x4520CE`. The recorder redirects the six-byte length store to write 25 and resumes at `0x4520C4`, so reinitialization retains the extended format. |
+| `0x453D40`, `0x453E14`, `0x453E84..0x453EA2` | The receive pump keeps the message at stack `+0x10`; B3's receive note repairs this pointer after realloc and retains the actual delivered length in TLS. Stack `+0x14` is the source row **index**, initially 10 for no match, not a player pointer. The pump derives source player EDI from it at `0x453E9B`. Recorder metadata bounds that saved EDI to the ten-row array before reading native ID `+4` and process-lifetime PlayerInfo `+0x27/+0x97`. |
+| `0x45473F..0x4547AD`, `0x4547AD..0x45483F` | Pump phase mask and player admission. States 5/6 test mask bits 1/2; other states test bit 0. The source row is EDI and destination row is EBX. The recorder accepts start metadata only on the GUI/game thread, in network mode 3 and states 2/3; a late loading/play delivery does not replace its token. |
+| `0x455F9C`, `0x4553BE..0x4553D5` | The dispatch-table slot for `0x08` points to `0x4553BE`. Its first instruction loads main from `0x511DE8`; the body clears stack `+0xF0`, sets main `+0x2A44` bit 2 and jumps to `0x455F50`. The observer preserves all registers/flags, validates actual length/version/native host identity, then executes this original action even when metadata is invalid. |
+| `0x45522E`, `0x45534E`, `0x4553B5` | Alternative carriers read and left alone: fixed-65-byte chat case, `0x06` reply construction and `0x07` readiness-bit store. A chat-plus-start batch depends on the reliable splitter; the raw mode has no splitter. Extending the existing start itself serves both paths without introducing chat metadata. |
+
+The start wire image is packed: code 8 (one byte), version/length (two bytes each),
+host native ID (four bytes), match GUID (16 bytes), total 25. The host creates its
+GUID at the existing start send. A failed GUID creation sends a same-size zero-ID
+start: the stock game action remains possible, contributions refuse it. The
+receiver checks native sender equals the declared origin and the bounded source
+row's native ID, and requires the source Info host bit. It consumes a pending token
+once at the first network B2 capture attempt; load teardown may precede that
+capture and therefore preserves the pending token. Every contribution is filtered
+by match GUID before binding its origin's stream or sequence.
+
+At attach, `mp_init` verifies the receive wrapper, the complete start argument/call
+span, the start dispatch slot/body and length store. It allocates both stubs and
+acquires all four instruction pages before writing any site; an allocation,
+byte-match or protection failure leaves all four sites stock. Its writes are the
+four code redirects, the startup table's `0x512AF8` value and the ordinary receive
+sender/destination outputs. It adds no engine resource or order write.
+
+Recheck with `objdump -d -M intel` against `pristine/TotalA.exe.pristine`, ranges
+`0x490B30..0x490BD0`, `0x496BB0..0x496DB0`, `0x451BC0..0x4520D4`,
+`0x461990..0x4619D0`, `0x462710..0x462960`, `0x453D40..0x453ED0`,
+`0x45473F..0x45483F` and `0x45522E..0x4553DA`; inspect table slot `0x455F9C`
+with `objdump -s`. The splitter and receive-wrapper map above remains applicable.
+This does not establish terminal delivery, the shared Send/Close contract, or a
+complete network recording.
 
 ### Temporary transport observation and construction reads [MEASURED 2026-09-28]
 

@@ -24,7 +24,7 @@ The by-design boundary for the network path is to derive a unit's owner from its
 
 The work branch has a checkpoint, not a multiplayer recorder landing. `olist_read` now refuses a network owner's lists before following either head unless the owner pointer names one of the ten records and its controller is 1 or 2. That one boundary covers normal capture, verification and dumps. A puppet host has no network bit; its restored owned-object pointers are zero, so its list dumps retain their existing path.
 
-`tagpu_recmp.c` carries bounded private messages through the existing DirectPlay session, with a separate send worker. The engine-side adapter is in `tagpu_recorder.c`, on the byte-matched receive wrapper `0x4C9840`, before the engine's reliable splitter and compression handling. Its 64-byte version-1 envelope carries byte count, source transport ID, source tick, sequence, kind, session GUID and stream GUID. Both queues have 256 slots of 4096 bytes. The transmit queue is game-thread to worker; the receive queue supports overlapping loader/game producers with a nonblocking producer claim and one game-thread consumer. A full queue or a contended receive claim reports loss. No queue lock surrounds a transport call.
+`tagpu_recmp.c` carries bounded private messages through the existing DirectPlay session, with a separate send worker. The engine-side adapter is in `tagpu_recorder.c`, on the byte-matched receive wrapper `0x4C9840`, before the engine's reliable splitter and compression handling. Its 64-byte version-1 envelope carries byte count, source transport ID, source tick, sequence, kind, a fresh engine-start match GUID and stream GUID. Both queues have 256 slots of 4096 bytes. The transmit queue is game-thread to worker; the receive queue supports overlapping loader/game producers with a nonblocking producer claim and one game-thread consumer. A full queue or a contended receive claim reports loss. No queue lock surrounds a transport call.
 
 The worker holds its own interface reference and packet slot through `Send`. Teardown drops the game thread's channel reference and asks the worker to stop; it does not join the worker. There is at most one channel worker per process, including one still finishing. An engine `Close` ends the session even while the interface remains referenced: the reference protects memory, not delivery. The stock sender/destination output fields are updated only for packets returned to the engine. DirectPlay system messages stay on that path.
 
@@ -87,11 +87,76 @@ The application-tick extension passed the same cache test under Wine: source tic
 
 DISASSEMBLED 2026-10-04: `0x46BF20` tests whether `0x51E58C` is nonzero. That global is the module handle returned by loading `reporter.dll` at `0x46C007..0x46C00F`, not a match counter or a lobby identifier. `0x46BF30` resolves the module's `_RIEnable@4`, `_RIGetVersion@4`, `_RIInitializeEx@8` and other report exports. The two network cleanup callers, `0x450DD0` and `0x452370`, skip `0x4C9B70` while that handle is nonzero; `0x46C190` calls the network cleanup before freeing the loaded reporter. The earlier address range starting at `0x450D80` contained a separate function ending at `0x450DC0`; it is not the cleanup function's entry. This identifies the exception but does not establish a unique session GUID for every level. Shared match identity remains open.
 
+### Match identity at the engine start
+
+The host's existing start send (`0x496D25 → 0x451DF0`) now carries a packed
+25-byte `0x08` message: version, byte count, host native ID and a freshly created
+match GUID. Its fixed-length table initializer writes 25 at `0x512AF8` on every
+initialization. This is metadata on the original start action, with no version or
+capability negotiation. Every peer must run the same build, as the product contract
+requires. A one-byte stock start is not the extended wire format.
+
+The receiver observes the original `0x4553BE` case and preserves its engine action.
+Before accepting a match it requires the actual delivered span, version, byte
+count, nonzero GUID, actual native sender, and the bounded source player row's ID
+and host bit. `tagpu_wire_received` exposes B3's existing TLS buffer identity and
+delivered length; allocation capacity cannot authorize a read. Acceptance is on
+the game thread in network lobby/start states 2/3, so loading/play deliveries do
+not overwrite the token. The first network B2 attempt consumes it once, including
+when channel setup fails. Load teardown preserves a pending token because it can
+occur after the start message and before B2.
+
+The contribution envelope's first GUID is now this **match** ID, not the native
+session ID. Receive filters it before an origin can bind a stream or sequence.
+This separates matches even when a lobby retains its native session. A failed
+host GUID creation sends a same-size zero-ID start; the game action is retained
+and contributions refuse it. At attach every receive/start site is byte-matched,
+both stubs are allocated, and all four pages are acquired before any code is
+changed. Failure leaves the stock sites together.
+
+The transport test passes with a delayed prior-match sequence-32 packet preceding
+the current match's sequence 1. The old packet is discarded before binding and the
+current stream remains valid. It also checks a valid start ending exactly at a
+guard page, truncated/oversize messages, wrong sender, wrong code/version/declared
+length, a zero match ID and preservation of the output on refusal. A zero-ID
+channel refuses setup. The held-send and source-gap tests still pass.
+
+MEASURED 2026-10-04 on the reference setup, native DirectPlay, recording off:
+two humans with one hosted AI each started *Town & Country* with match ID
+`F2611633-A502-406C-ADD8-1B902E1194E4` on both peers. Human native IDs were
+603832790/603832788; AI IDs were 603832787/603832786. Both received the other's
+human and AI resources and nonempty commander queues. On the joiner, source-tick-2
+queues published at recorder tick 1; on the host they published at tick 7. This
+reruns the source/application-tick adapter in a native game. At tick 1351 the host
+reported 130 sent / 21352 application bytes / 44 logical receives, the joiner
+44 / 6904 / 131; both had loss/failure zero. These are distinct observations, not
+a simultaneous accounting comparison or a bandwidth-budget measurement.
+
+Both returned through the normal network menus, then the **same two processes**
+started *Two Continents*. Both accepted a new match ID,
+`AA5002E8-FDD9-4CDB-BF38-BDCFFAD42B07`, and restarted contributions at tick 1.
+At tick 2251 both separately reported 55 sent / 8996 application bytes / 55 logical
+receives, queue/loss/failure zero. This proves the fresh ID path on consecutive
+starts, not native-session reuse: the native host ID changed to 604017354.
+The controlled prior-match test covers an old packet ahead of the new stream.
+Both copied DLLs matched the built DLL's SHA-256 throughout the runs. These games
+use the default reliable engine path.
+
+A third two-human *Two Continents* game used `-p -1` on both new launches.
+Live peeks before the lobby and in play found `0x506DBC = 0` on both, confirming
+the raw path. Both accepted match `5CF1B1B6-8184-428F-877E-B53166C27A10`, native
+host ID 604651503, and received tick-1 resources and nonempty commander queues.
+At tick 1351 the host reported 35 sent / 5636 application bytes / 34 logical
+receives, the joiner 34 / 5468 / 35; queue/loss/failure zero on both. This run uses
+the final source's aligned GUID output before packing the wire image. Copied DLLs
+again matched the built DLL. No network recording was produced, and ordinary exit
+does not prove the shared synchronous Send/Close contract.
+
 ### Gaps before the first code landing
 
 - Prove the private signature is disjoint from every valid engine transport frame, including the raw mode, and bound the added pump cost without starving game traffic.
 - Establish the shared interface's concurrency contract. Guaranteed-delivery capability and sender identity are checked at channel start. The primary DirectX 7 SDK describes synchronous Send as waiting for transmission/acknowledgment, and guarantee support as conditional on the provider or the DirectPlay protocol ([SendEx](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_1709.content.htm)). The queue test proves our references and slots survive a held call; it does not prove a native provider's concurrent Close cannot delay the game. Async sending, if chosen, also needs bounded pending storage and completion handling.
-- Establish match identity for a session that can survive a level, bounded reordering if the transport needs it, and terminal completeness. A stream GUID and source tick alone do not establish which level a delayed message belongs to. The present resource cache makes no completeness claim.
+- Establish bounded reordering if the transport needs it and terminal completeness. The current sequence check cannot detect a last frame that never arrives; the present resource cache makes no completeness claim.
 - Carry the remaining player authority and materialize contributed resources/orders; retain source tick, sequence and recorder application order in the file and its seek snapshots.
 - Decide unit corrections from a bandwidth measurement, as the product plan requires; no measured budget is inferred from the two-commander run.
 - Run the network recorder/playback fixture and the skirmish replay gate on the finished accumulated diff. The transport test and network dump do not replace those gates.

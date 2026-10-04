@@ -3888,7 +3888,11 @@ functions reached on every required build. AI activity after return and fork is
 checked by new planner orders reaching normal dispatch. The note records the
 approved sight, reconstructed COB-thread and bounded naval flare-count limits.
 In-game rewind controls and network recording remain separate work; a network
-game played with Impure records no demo.
+game played with Impure records no demo. The [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.html)
+is active on a work branch: bounded contributions, authoritative human/hosted-AI
+queue caches with source/application ticks, and a fresh ID on each engine start.
+Native file recording, complete-stream proof, playback/seek, perspectives,
+communication and ten-seat takeover remain. No multiplayer code has landed.
 
 
 ## The restorer as compute (2026-09-27)

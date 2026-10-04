@@ -14,7 +14,7 @@ struct RecMpChannel {
     volatile LONG refs, stop, failed, sent, sent_bytes;
     IDirectPlay2A* dp;
     DWORD origin;
-    GUID session, stream;
+    GUID match, stream;
     struct { DWORD origin; unsigned sequence; } source[10];
     RecMpPacket received_source[10];
     unsigned received, lost_at_start;
@@ -26,6 +26,19 @@ struct RecMpChannel {
    slot after copying it. Indices never reset, including at a level boundary. */
 static MpQueue s_rx;
 static volatile LONG s_rx_producer, s_lost, s_workers;
+
+int tagpu_recmp_start_read(const void* message, unsigned bytes, DWORD from, GUID* match)
+{
+    RecMpStart start;
+    GUID zero = { 0 };
+    if (!message || !match || !from || bytes != sizeof start) return 0;
+    memcpy(&start, message, sizeof start);
+    if (start.code != 0x08 || start.version != RECMP_VERSION ||
+        start.bytes != sizeof start || start.origin != from ||
+        !memcmp(&start.match, &zero, sizeof zero)) return 0;
+    *match = start.match;
+    return 1;
+}
 
 static unsigned acquire(volatile LONG* p)
 {
@@ -62,13 +75,15 @@ static DWORD WINAPI send_worker(void* arg)
     return 0;
 }
 
-RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* session,
+RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* match,
                                DWORD session_flags)
 {
     RecMpChannel* c;
     HANDLE worker;
     DPCAPS caps;
-    if (!dp || !origin || !session || InterlockedCompareExchange(&s_workers, 1, 0)) return NULL;
+    GUID zero = { 0 };
+    if (!dp || !origin || !match || !memcmp(match, &zero, sizeof zero) ||
+        InterlockedCompareExchange(&s_workers, 1, 0)) return NULL;
     memset(&caps, 0, sizeof caps);
     caps.dwSize = sizeof caps;
     /* The flag alone does not guarantee application delivery. The DirectX SDK's
@@ -91,7 +106,7 @@ RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* ses
     c->refs = 2;
     c->dp = dp;
     c->origin = origin;
-    c->session = *session;
+    c->match = *match;
     c->lost_at_start = acquire(&s_lost);
     IDirectPlay2_AddRef(dp);
     worker = CreateThread(NULL, 0, send_worker, c, 0, NULL);
@@ -138,7 +153,7 @@ int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned
     p->h.tick = tick;
     p->h.sequence = ++c->source[source].sequence;
     p->h.kind = kind;
-    p->h.session = c->session;
+    p->h.match = c->match;
     p->h.stream = c->stream;
     if (bytes) memcpy(p->body, body, bytes);
     if (header) *header = p->h;
@@ -208,7 +223,7 @@ int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out)
     while (r != w) {
         const RecMpPacket* p = &s_rx.packet[r % MP_QUEUE_SLOTS];
         unsigned source;
-        if (!memcmp(&p->h.session, &c->session, sizeof c->session)) {
+        if (!memcmp(&p->h.match, &c->match, sizeof c->match)) {
             RecMpPacket* last;
             /* ALLPLAYERS can deliver to several players on one process. Locally
                authored data is already captured; duplicate physical deliveries must

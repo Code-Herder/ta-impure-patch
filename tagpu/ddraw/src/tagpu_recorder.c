@@ -52,7 +52,9 @@
 
    WHAT IT WRITES: its own memory -- the shadow images, the ring and the dump file -- and the
    receive wrapper's sender/destination outputs, as the engine wrapper writes them for a delivered
-   game or system packet (mp_receive). The event
+   game or system packet (mp_receive), and the startup packet-length entry 0x512AF8
+   through its redirected initializer. The host's extended start retains the engine's
+   original start action (mp_start_send / mp_start_receive). The event
    hooks write nothing the simulation reads; the one site that changes a path, the network tests
    of the five fire functions, builds a packet on the fire function's own stack while a skirmish
    is recorded (*The events*). */
@@ -76,6 +78,7 @@
 #include "tagpu_replay.h"
 #include "crc32.h"
 #include "git.h"
+#include "dd.h"
 
 #define TA_MAINPP      0x00511DE8u
 #define OFF_PLAYERS    0x1B63       /* the eleven player records, 0x14B apart                     */
@@ -263,6 +266,8 @@ static unsigned s_bad;                   /* pointers outside their tables, this 
 static unsigned s_badlog;                /* of them, the ones logged                           */
 
 static unsigned char s_mp_sites, s_mp_tried;
+static GUID s_mp_match;
+static unsigned char s_mp_match_ready;
 static RecMpChannel* s_mp_channel;
 static RecMpResources s_mp_local[REC_PLAYERS], s_mp_remote[REC_PLAYERS];
 static unsigned char s_mp_local_valid[REC_PLAYERS], s_mp_remote_valid[REC_PLAYERS];
@@ -292,6 +297,77 @@ static HRESULT __stdcall mp_receive(char* object, void* buffer, DWORD* bytes)
     return hr;
 }
 
+static void mp_match_log(const char* action, DWORD origin, const GUID* match)
+{
+    tagpu_logf("recmp: %s match %08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X, host ID %u",
+               action, (unsigned)match->Data1, match->Data2, match->Data3,
+               match->Data4[0], match->Data4[1], match->Data4[2], match->Data4[3],
+               match->Data4[4], match->Data4[5], match->Data4[6], match->Data4[7], (unsigned)origin);
+}
+
+/* DISASSEMBLED: only the host branch of 0x496CE0 reaches call 0x496D25;
+   PlayerInfo+0x97 bit 0 selects it. 0x451DF0 copies this stack packet into
+   the engine queue (0x462710/0x4628D0), or sends it before returning in raw
+   mode. Keep its start action and stdcall ret 12, with a fresh ID per call. */
+static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned bytes)
+{
+    typedef int (__stdcall *SendFn)(DWORD, const void*, unsigned);
+    RecMpStart start;
+    GUID match;
+    (void)message;
+    (void)bytes;
+    memset(&start, 0, sizeof start);
+    start.code = 0x08;
+    start.version = RECMP_VERSION;
+    start.bytes = sizeof start;
+    start.origin = origin;
+    s_mp_match_ready = SUCCEEDED(CoCreateGuid(&match));
+    if (s_mp_match_ready) {
+        start.match = match;
+        s_mp_match = match;
+        mp_match_log("send", origin, &match);
+    } else {
+        /* The splitter always expects the extended size. A zero ID preserves
+           the engine start while every recorder refuses this match. */
+        memset(&start.match, 0, sizeof start.match);
+        tagpu_logf("recmp: no fresh match ID: no contributions");
+    }
+    return ((SendFn)(size_t)0x451DF0)(origin, &start, sizeof start);
+}
+
+/* DISASSEMBLED: the 0x08 case enters at 0x4553BE with its message at esp+0x10
+   and source player in EDI (esp+0x14 holds its row index). Only the game thread
+   in lobby/start states 2/3 accepts
+   metadata. B3's receive note supplies the actual span, not buffer capacity.
+   The ten-row bound precedes the process-lifetime PlayerInfo read. */
+static void __cdecl mp_start_receive(void* frame)
+{
+    const void* message = ((const void* const*)frame)[4];
+    const char* player = *(const char* const*)((const char*)frame - 0x24);
+    char* ta = ta_main();
+    const char* info;
+    size_t off;
+    unsigned state, id;
+    DWORD from;
+    if (!ta || GetCurrentThreadId() != g_ddraw.gui_thread_id || game_mode(ta) != 3 ||
+        !((unsigned char)ta[OFF_NETWORK] & 1)) return;
+    memcpy(&state, ta + 0x391F1, sizeof state);
+    if (state != 2 && state != 3) return;
+    s_mp_match_ready = 0;
+    off = (size_t)player - (size_t)(ta + OFF_PLAYERS);
+    if (off % PL_STRIDE || off / PL_STRIDE >= REC_PLAYERS) return;
+    memcpy(&from, ta + 0x4C9, sizeof from);
+    memcpy(&id, player + 4, sizeof id);
+    memcpy(&info, player + PL_INFO, sizeof info);
+    if (!info || !from || id != from || !((unsigned char)info[0x97] & 1) ||
+        !tagpu_recmp_start_read(message, tagpu_wire_received(message), from, &s_mp_match)) {
+        tagpu_logf("recmp: start metadata refused: no contributions");
+        return;
+    }
+    s_mp_match_ready = 1;
+    mp_match_log("receive", from, &s_mp_match);
+}
+
 static void mp_init(void)
 {
     static const unsigned char was[] = {
@@ -301,14 +377,75 @@ static void mp_init(void)
         0x04,0x00,0x00,0x6A,0x01,0x81,0xC2,0xB5,0x04,0x00,0x00,0x56,0x52,0x51,0xFF,0x50,
         0x64,0x5E,0xC2,0x0C,0x00
     };
+    static const unsigned char launch[] = {
+        0xC6,0x44,0x24,0x07,0x08,0x8B,0x40,0x04,0x8D,0x54,0x24,0x07,
+        0x6A,0x01,0x52,0x50,0xE8,0xC6,0xB0,0xFB,0xFF
+    };
+    static const unsigned char received[] = { 0xA1,0xE8,0x1D,0x51,0x00 };
+    static const unsigned char length[] = { 0x89,0x35,0xF8,0x2A,0x51,0x00 };
+    struct { unsigned va, n; unsigned char now[6]; DWORD protection; } site[] = {
+        { 0x4C9840, 5 }, { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 }
+    };
+    unsigned char *observe = NULL, *sized = NULL, *p;
+    unsigned i, writable = 0, value;
     if (memcmp((const void*)(size_t)0x4C9840, was, sizeof was) ||
         *(const unsigned char*)(size_t)0x4C9740 != 0xC3 ||
-        !tagpu_detour_land(0x4C9840, (const unsigned char*)(size_t)mp_receive, 5)) {
-        tagpu_logf("recmp: receive wrapper differs or could not be patched: no contributions");
-        return;
+        memcmp((const void*)(size_t)0x496D15, launch, sizeof launch) ||
+        memcmp((const void*)(size_t)0x4553BE, received, sizeof received) ||
+        *(const unsigned*)(size_t)0x455F9C != 0x4553BE ||
+        memcmp((const void*)(size_t)0x4520BE, length, sizeof length)) goto refused;
+    observe = tagpu_detour_stub();
+    sized = tagpu_detour_stub();
+    if (!observe || !sized) goto refused;
+    p = observe;
+    *p++ = 0x9C; *p++ = 0x60;                  /* flags and all registers */
+    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;
+    *p++ = 0x50; *p++ = 0xE8;
+    tagpu_detour_rel(p, (unsigned)(size_t)mp_start_receive); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x61; *p++ = 0x9D;
+    memcpy(p, received, sizeof received); p += sizeof received;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x4553C3);
+    p = sized;
+    *p++ = 0xC7; *p++ = 0x05;
+    value = 0x512AF8; memcpy(p, &value, 4); p += 4;
+    value = sizeof(RecMpStart); memcpy(p, &value, 4); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x4520C4);
+    for (i = 0; i < 4; i++) {
+        unsigned target = i == 0 ? (unsigned)(size_t)mp_receive :
+                          i == 1 ? (unsigned)(size_t)mp_start_send :
+                          i == 2 ? (unsigned)(size_t)observe : (unsigned)(size_t)sized;
+        site[i].now[0] = i == 1 ? 0xE8 : 0xE9;
+        value = target - (site[i].va + 5);
+        memcpy(site[i].now + 1, &value, 4);
+        site[i].now[5] = 0x90;
+    }
+    /* Attach precedes engine startup. Acquire every page before changing any
+       instruction, so a protection/allocation failure leaves the stock protocol. */
+    for (i = 0; i < 4; i++) {
+        if (!VirtualProtect((void*)(size_t)site[i].va, site[i].n, PAGE_EXECUTE_READWRITE,
+                             &site[i].protection)) goto refused;
+        writable++;
+    }
+    for (i = 0; i < 4; i++)
+        memcpy((void*)(size_t)site[i].va, site[i].now, site[i].n);
+    FlushInstructionCache(GetCurrentProcess(), NULL, 0);
+    for (i = 0; i < 4; i++) {
+        DWORD ignored;
+        VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
     }
     s_mp_sites = 1;
-    tagpu_logf("recmp: ARMED private contribution receive before the engine's packet splitter");
+    tagpu_logf("recmp: ARMED private receive and %u-byte engine start with fresh match ID",
+               (unsigned)sizeof(RecMpStart));
+    return;
+refused:
+    for (i = 0; i < writable; i++) {
+        DWORD ignored;
+        VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
+    }
+    tagpu_detour_stub_free(observe);
+    tagpu_detour_stub_free(sized);
+    tagpu_logf("recmp: receive/start sites differ or cannot be patched: no contributions");
 }
 
 static void mp_capture(const Level* L, unsigned tick)
@@ -323,10 +460,17 @@ static void mp_capture(const Level* L, unsigned tick)
         DWORD bytes = sizeof session, origin;
         unsigned seat = (unsigned char)L->ta[OFF_CONTROLLED];
         GUID zero = { 0 };
+        GUID match = s_mp_match;
+        unsigned ready = s_mp_match_ready;
         s_mp_tried = 1;
+        /* Consume once. Level-load teardown may lie between the start message
+           and B2, so level_end preserves the pending token; it cannot authorize
+           a second level after this attempt. */
+        s_mp_match_ready = 0;
         memset(&session, 0, sizeof session);
         memcpy(&dp, L->ta + 0x4D9, sizeof dp);
         if (!s_mp_sites || seat >= REC_PLAYERS || !dp) return;
+        if (!ready) { tagpu_logf("recmp: no current engine-start match ID: no contributions"); return; }
         memcpy(&origin, L->ta + OFF_PLAYERS + seat * PL_STRIDE + 4, sizeof origin);
         if (IDirectPlay2_GetSessionDesc(dp, session.bytes, &bytes) != DP_OK ||
             bytes > sizeof session || bytes < sizeof session.desc ||
@@ -335,7 +479,7 @@ static void mp_capture(const Level* L, unsigned tick)
             tagpu_logf("recmp: no bounded session descriptor: no contributions");
             return;
         }
-        s_mp_channel = tagpu_recmp_begin(dp, origin, &session.desc.guidInstance, session.desc.dwFlags);
+        s_mp_channel = tagpu_recmp_begin(dp, origin, &match, session.desc.dwFlags);
         if (!s_mp_channel) { tagpu_logf("recmp: contribution worker could not start"); return; }
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
         if (!s_mp_orders) {

@@ -3009,6 +3009,22 @@ the count, each function's RVA) at once, and the first name armed is written aga
 end (`tagpu_rec_level_end`). Any other build refuses the line (`cover: <name> refused: not a
 coverage build`).
 
+**Multiplayer work branch checkpoint:** `tagpu_recmp.c` sends bounded contributions
+off the game thread, and `tagpu_recmp_orders.c` caches authoritative human/hosted-AI
+queues without following remote list objects. Network files remain disabled. The
+private Receive replacement is at `0x4C9840`; the host's start call `0x496D25`
+carries a fresh match ID, the observer at `0x4553BE` retains the original start
+action, and length initializer `0x4520BE` writes the extended start's 25 bytes.
+All four sites are checked and made writable before any is changed. B3's
+`tagpu_wire_received` supplies the receive's actual delivered span. Details and
+remaining verification: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md).
+
+| Fields we write in the multiplayer checkpoint | Invariant |
+|---|---|
+| Network context `+0x4B5/+0x4B9` (main `+0x4C9/+0x4CD`) | Receive outputs copied only for a stock/system packet returned to the engine, as its wrapper does. Private packets stay in bounded recorder storage. |
+| `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |
+| Host start's message bytes | Fixed 25-byte stack value passed through the existing generic sender; its reliable queue copies before return. No remote engine resources or order fields are written. |
+
 ### 2.6f Watching a recording (`tagpu_replay.c`, `tagpu_puppet.c`, `tagpu_recreader.c`, on request)
 
 S2b and S3b of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2b-watching).
