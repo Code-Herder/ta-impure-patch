@@ -2093,11 +2093,13 @@ invariants, the file's segments, the fork's handle and the residuals are in
 - **OQ-B**: the mixed-side interface after a takeover of the other side from a running playback is
   fixed by a mid-level re-skin, its own landing after S4b; `tacli replay takeover` launches with the
   side viewed being P's.
-- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them. The
-  `ai` check compares with the original (decided 2026-10-02): each AI seat that made a unit in
-  the original timeline's [T, T + 1800] must make one in timeline 1's, and a seat that made none
-  there is skipped and named. On `battle` the stock AI's seats 2 and 3 make no unit in the whole
-  3990-tick game, so a rule that every AI seat builds failed on the AI, not on the takeover.
+- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them.
+  S4d applies the owner's direct AI activity rule to this fork check: every AI seat must issue
+  fresh planner orders that reach normal dispatch in an armed 1800-tick window, and at least
+  25% of the AI seats' mobile units must move more than 8 wu. Construction is reported only.
+  The window begins after takeover, armed while the engine acknowledges pause, and K waits
+  for its completion before ending the game. The original timeline's building choices are
+  not the liveness criterion.
 
 **The fixtures.** `battle` is also taken over at T2 as its controlled player, the line within
 2000 ms, and its first ARMCK ordered 300 wu east from its base: the order's unit stands in open

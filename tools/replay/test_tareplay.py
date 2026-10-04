@@ -588,24 +588,42 @@ class AiActivity(unittest.TestCase):
         self.assertFalse(tarewind.ai_activity(lines, "test", 101, 1901, {1, 2, 3})[0])
 
 
-class AiCompare(unittest.TestCase):
-    """The takeover's `ai` check against the original timeline (tareplay.ai_compare)."""
+class TakeoverAi(unittest.TestCase):
+    def check(self, inactive=None, window=True, fraction=.92):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder)
+            (out / "K").mkdir()
+            lines = AiActivity().lines(inactive=inactive)
+            (out / "K" / "tagpu.log").write_text(
+                "\n".join(line.replace("activity test", "activity takeover") for line in lines))
+            k = {"T": 90, "P": 0, "file": "unused", "timeline": 1}
+            if window:
+                k["ai_window"] = [100, 1900]
+            fx = {"fix": {"takeover": {"checks": ["ai"]}},
+                  "procs": {"K": "ran"}, "out": out, "tk": k}
+            segs = [{"id": 0, "last": 2000}, {"id": 1, "parent": 0, "last": 2000}]
+            with patch.object(tareplay, "tk_ai", return_value=({1, 2, 3}, set(), fraction, 978)), \
+                 patch.object(tarec, "file_segments", return_value=(segs, None)):
+                return tareplay.tk_checks(fx)[0]
 
-    def test_every_maker_made_again(self):
-        self.assertEqual(tareplay.ai_compare({1, 2, 3}, {1, 3}, {1, 3}), ([1, 3], [], [2]))
+    def test_active_seats_pass_without_construction(self):
+        _, verdict, detail = self.check()
+        self.assertEqual(verdict, tareplay.PASS, detail)
+        self.assertIn("construction observed for seats [] (reported only)", detail)
 
-    def test_a_maker_that_made_nothing_fails(self):
-        self.assertEqual(tareplay.ai_compare({1, 2, 3}, {1, 2}, {2}), ([1, 2], [1], [3]))
+    def test_inactive_seat_fails_despite_movement(self):
+        _, verdict, detail = self.check(inactive=2)
+        self.assertEqual(verdict, tareplay.FAIL, detail)
+        self.assertIn("missing [2]", detail)
 
-    def test_a_fork_only_maker_is_skipped(self):
-        self.assertEqual(tareplay.ai_compare({1, 2}, {1}, {1, 2}), ([1], [], [2]))
+    def test_missing_observation_is_unrun(self):
+        self.assertEqual(self.check(window=False)[1], tareplay.UNRUN)
 
-    def test_no_maker_in_the_original_is_no_comparison(self):
-        self.assertEqual(tareplay.ai_compare({1, 2}, set(), {1}), ([], [], [1, 2]))
-        self.assertEqual(tareplay.ai_compare(set(), {1}, {1}), ([], [], []))
+    def test_movement_threshold_stays_gated(self):
+        self.assertEqual(self.check(fraction=.24)[1], tareplay.FAIL)
 
-    def test_a_seat_not_ai_in_the_fork_is_not_compared(self):
-        self.assertEqual(tareplay.ai_compare({2}, {0, 2}, {2}), ([2], [], []))
+    def test_no_mobile_units_is_unrun(self):
+        self.assertEqual(self.check(fraction=None)[1], tareplay.UNRUN)
 
 
 if __name__ == "__main__":

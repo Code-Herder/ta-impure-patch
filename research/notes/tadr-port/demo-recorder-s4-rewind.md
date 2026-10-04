@@ -621,5 +621,26 @@ and `53` at `0x408C40`, `0x43A0C0` and `0x43A1F0`: none of the three observers
 was installed. The original executable was unchanged and the instance's
 original executable link was restored after the control.
 
-The preceding full-tier result covers `384d55a3`. These review corrections
-require the replay gate again before landing.
+The full tier on `ce7be889` passes 569 of 570 runtime checks. Both U lanes pass
+all 28 checks. Its one failure is the ordinary K takeover's older construction
+comparison: seat 2 creates no unit where its original timeline did, although
+92% of 978 AI mobile units move. This remaining strategy-equivalence assertion
+is inconsistent with the direct planning-and-dispatch rule adopted for forks.
+
+K now uses the same observer and parser as U. It waits for the engine's pause
+bit before arming a future 1800-tick window, resumes only after the armed
+acknowledgement, and waits for the completion report before ending the game.
+Every AI seat must supply newly planned orders that reach normal dispatch;
+movement remains gated at 25%, while construction is reported only. Missing or
+invalid observation data cannot pass. The frame dump remains at its original
+scheduled tick. This changes the harness, not the engine or recording format.
+
+Five takeover-check regression tests cover active seats without construction,
+an inactive seat despite movement elsewhere, missing observation, insufficient
+movement, and no mobile units. The complete portable suite passes 39 tests.
+MEASURED on the retained failing recording, takeover at 1981: the observer's
+[1990,3790) window reports seats 1, 2 and 3 at 1710/196, 1955/196 and 1670/190
+new orders/dispatches, with no observer errors. 92% of 978 mobile units move.
+Only seats 1 and 3 construct a unit: seat 2 is planning and dispatching despite
+making none. The judge, conversion-time and human-order checks also pass.
+The full replay gate must pass with this correction before landing.

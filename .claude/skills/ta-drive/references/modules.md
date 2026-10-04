@@ -646,7 +646,10 @@ block that reads to its last complete block.
   `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
   (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
   K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
-  names.
+  names. The `ai` check observes 1800 future ticks, armed under an acknowledged engine
+  pause after takeover. Every AI seat must issue fresh planner orders that reach normal
+  dispatch, and at least 25% of AI mobile units must move more than 8 wu. Construction
+  is reported only; K waits for the observation to complete before ending the game.
 - **Native fixture input** uses a `keys` step with a list of `tacli keys` tokens.
   `secondary-orders` and `stock-secondary-orders` select the isolated solar with
   `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
