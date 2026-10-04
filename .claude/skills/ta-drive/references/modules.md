@@ -147,9 +147,11 @@ source sequences, source-prefix/final seals and packet delivery. The default exe
 including its sixteen completion-context bound and refusal of an early Close.
 Both modes run authentication, stream-ledger bounds/corruption/missing-tail tests,
 and controlled channel bounds/gap/wrong-source/missing-tail/abandoned-drain tests.
-The abandoned-drain control takes the production deadline and must report an
-incomplete timeout; it cannot prove successful receipt.
-Choose a free discovery port and a new output directory. The runner creates and
+The runner also checks frozen consumption cuts, final receipts and retained tail
+draining. Missing-receipt and missing-cut controls each take the production
+deadline and must fail incomplete, as does the abandoned-drain control; elapsed
+time cannot prove successful receipt.
+Run this standalone fixture separately from menu-driving tests: its instance removal can race the global `tacli ls` inventory used by `mp_lobby.sh`. Choose a free discovery port and a new output directory. The runner creates and
 removes two private-registry prefixes and an X display, retaining logs and test
 executables. It uses primary-session stand-ins; it does not launch TA or verify
 terminal recording completeness, bandwidth, recording or playback.

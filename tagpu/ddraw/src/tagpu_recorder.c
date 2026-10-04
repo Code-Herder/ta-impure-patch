@@ -579,7 +579,7 @@ static void mp_capture(const Level* L, unsigned tick)
             s_mp_local_valid[i] = 1;
         }
     }
-    while ((taken = tagpu_recmp_take(s_mp_channel, &packet)) > 0) {
+    while ((taken = tagpu_recmp_take_at(s_mp_channel, &packet, tick)) > 0) {
         RecMpResources sample;
         if (packet.h.kind == RECMP_SEAL) {
             if (!tagpu_recmp_orders_idle(s_mp_orders, packet.h.origin)) goto incomplete;

@@ -12,21 +12,28 @@ typedef struct {
     RecMpPacket packet[MP_QUEUE_SLOTS];
 } MpQueue;
 typedef struct { RecMpHeader h; RecMpSignedIdentity body; } MpAnnouncement;
+typedef struct { RecMpHeader h; RecMpReceipt body; } MpReceipt;
 
 struct RecMpChannel {
     volatile LONG refs, stop, failed, sent, sent_bytes, lost;
     volatile LONG bound, player, pending, completed, completed_bytes;
     volatile LONG seals, ended;
+    volatile LONG cuts, receipts, receipts_sent, finished;
     HANDLE wake;
     RecMpConfig config;
     GUID stream;
     unsigned local_mask, expected, received;
     unsigned capture_tick, capture_seen, producers_closed;
-    /* tx belongs to the game thread. rx, bindings and last received images
+    uint64_t application_order;
+    /* tx and consumed belong to the game thread. stop publishes their immutable
+       final values. rx, receipts, bindings and last received images
        belong to the worker; the copied roster and stream never change. */
     struct {
         RecMpStream tx, rx;
         unsigned bound;
+        RecMpCutPoint consumed;
+        unsigned receipt_pending, receipt_mask, final_sent;
+        RecMpReceipt final;
         GUID stream;
         RecMpSignedIdentity binding;
         RecMpPacket last;
@@ -60,8 +67,14 @@ int tagpu_recmp_start_read(const void* message, unsigned bytes, DWORD from, GUID
     return 1;
 }
 
-static void channel_release(RecMpChannel* c)
+void tagpu_recmp_retain(RecMpChannel* c)
 {
+    if (c) InterlockedIncrement(&c->refs);
+}
+
+void tagpu_recmp_release(RecMpChannel* c)
+{
+    if (!c) return;
     if (!InterlockedDecrement(&c->refs)) {
         /* The game can signal wake after publishing stop. Its reference keeps
            this handle alive even if the worker has already observed that store. */
@@ -142,6 +155,24 @@ static int receive_packet(RecMpChannel* c, RecMpNet* net, DWORD from,
     if (!c->actor[at].bound ||
         memcmp(&p->h.stream, &c->actor[at].stream, sizeof p->h.stream) ||
         !tagpu_recmp_net_authorized(net, &c->actor[at].binding.identity, from)) goto unauthorized;
+    if (p->h.kind == RECMP_RECEIPT) {
+        RecMpReceipt receipt;
+        unsigned source;
+        if (p->h.sequence || p->h.tick || bytes != sizeof(MpReceipt)) goto invalid;
+        memcpy(&receipt, p->body, sizeof receipt);
+        source = source_of(c, receipt.origin);
+        if (source == c->config.count) goto invalid;
+        /* Broadcast receipts for another producer have no effect here. The
+           sender is still authenticated before this target is inspected. */
+        if (!c->config.actor[source].local) return 1;
+        if (!c->actor[source].final_sent ||
+            memcmp(&receipt, &c->actor[source].final, sizeof receipt)) goto invalid;
+        if (!(c->actor[source].receipt_mask & (1u << at))) {
+            c->actor[source].receipt_mask |= 1u << at;
+            InterlockedIncrement(&c->receipts);
+        }
+        return 1;
+    }
     if (!p->h.sequence || (p->h.kind != RECMP_RESOURCES && p->h.kind != RECMP_ORDERS &&
         p->h.kind != RECMP_SEAL)) goto invalid;
     last = &c->actor[at].last;
@@ -165,6 +196,7 @@ static int receive_packet(RecMpChannel* c, RecMpNet* net, DWORD from,
     if (p->h.kind == RECMP_SEAL) {
         InterlockedIncrement(&c->seals);
         if (next.ended) {
+            c->actor[at].receipt_pending = c->local_mask;
             InterlockedIncrement(&c->ended);
             tagpu_logf("recmp: source ID %u sealed its final prefix at tick %u seq %u, %llu data bytes",
                        p->h.origin, p->h.tick, p->h.sequence,
@@ -179,6 +211,63 @@ invalid:
     InterlockedIncrement(&c->lost);
     fail(c, E_INVALIDARG);
     return 0;
+}
+
+static void final_sent(RecMpChannel* c, unsigned at, const RecMpPacket* p)
+{
+    RecMpSeal seal;
+    if (p->h.kind != RECMP_SEAL) return;
+    memcpy(&seal, p->body, sizeof seal);
+    if (!seal.final) return;
+    c->actor[at].final.origin = p->h.origin;
+    c->actor[at].final.sequence = p->h.sequence;
+    c->actor[at].final.stream = p->h.stream;
+    c->actor[at].final.seal = seal;
+    c->actor[at].final_sent = 1;
+}
+
+static int send_receipts(RecMpChannel* c, RecMpNet* net, unsigned no_recipients)
+{
+    unsigned i, j;
+    for (i = 0; i < c->config.count; i++) {
+        if (no_recipients) { c->actor[i].receipt_pending = 0; continue; }
+        for (j = 0; j < c->config.count; j++) {
+            MpReceipt p;
+            HRESULT hr;
+            if (!(c->actor[i].receipt_pending & (1u << j))) continue;
+            header(c, &p.h, c->config.actor[j].origin, RECMP_RECEIPT, 0, 0, sizeof p.body);
+            p.body.origin = c->config.actor[i].origin;
+            p.body.sequence = c->actor[i].last.h.sequence;
+            p.body.stream = c->actor[i].stream;
+            memcpy(&p.body.seal, c->actor[i].last.body, sizeof p.body.seal);
+            hr = tagpu_recmp_net_send(net, &p, sizeof p);
+            if (hr == DPERR_BUSY) return 1;
+            if (hr != DP_OK) { fail(c, hr); return 0; }
+            c->actor[i].receipt_pending &= ~(1u << j);
+            InterlockedIncrement(&c->receipts_sent);
+        }
+    }
+    return 1;
+}
+
+/* Only the worker reads these ledgers. The consumed sequence is immutable once
+   it acquires stop; a retained file consumer cannot extend this recording cut. */
+static int terminal_ready(RecMpChannel* c)
+{
+    unsigned i, active = 0, cuts = 0, ready = 1;
+    for (i = 0; i < c->config.count; i++) {
+        if (c->config.actor[i].local) continue;
+        if (!c->actor[i].rx.ended) active |= 1u << i;
+        if (c->actor[i].rx.has_seal &&
+            c->actor[i].rx.sealed_sequence >= c->actor[i].consumed.sequence) cuts++;
+        if (c->actor[i].receipt_pending) ready = 0;
+    }
+    InterlockedExchange(&c->cuts, cuts);
+    for (i = 0; i < c->config.count; i++) {
+        if (!c->config.actor[i].local) continue;
+        if (!c->actor[i].final_sent || (c->actor[i].receipt_mask & active) != active) ready = 0;
+    }
+    return ready && cuts == c->expected;
 }
 
 static void progress(RecMpChannel* c, const RecMpNetStats* stats)
@@ -248,6 +337,7 @@ static DWORD WINAPI worker(void* arg)
            allowed only after every expected source supplied its final prefix;
            an absent unsealed source cannot make queued work disappear. */
         no_recipients = !stats.peers && acquire(&c->ended) == c->expected;
+        if (!announce || no_recipients) send_receipts(c, net, no_recipients);
         if ((!announce || no_recipients) && acquire(&c->bound) == c->expected) {
             for (budget = 0; budget < MP_WORK_BUDGET && r != w && !acquire(&c->failed); budget++) {
                 const RecMpPacket* p = &c->tx.packet[r % MP_QUEUE_SLOTS];
@@ -260,6 +350,7 @@ static DWORD WINAPI worker(void* arg)
                     InterlockedIncrement(&c->sent);
                     InterlockedExchangeAdd(&c->sent_bytes, p->h.bytes);
                 }
+                final_sent(c, source_of(c, p->h.origin), p);
                 /* SendEx copies accepted bytes; completion contexts live in net.
                    Only this publication allows the game producer to reuse the slot. */
                 InterlockedExchange(&c->tx.read, ++r);
@@ -271,7 +362,7 @@ static DWORD WINAPI worker(void* arg)
         if (acquire(&c->stop)) {
             if (!stopping) { stopping = 1; stopping_at = GetTickCount(); }
             if (acquire(&c->bound) != c->expected) { fail(c, E_ABORT); break; }
-            if (r == acquire(&c->tx.published) && !stats.pending) {
+            if (r == acquire(&c->tx.published) && !stats.pending && terminal_ready(c)) {
                 hr = tagpu_recmp_net_close(net);
                 net = NULL;
                 if (hr != DP_OK) fail(c, hr);
@@ -280,9 +371,10 @@ static DWORD WINAPI worker(void* arg)
             /* A deadline bounds abandoned drain work; it only declares failure.
                Receipt, prefix validity and delivery success never come from time. */
             if (GetTickCount() - stopping_at >= 15000u) {
-                tagpu_logf("recmp: source drain deadline: queued %u pending %u final sources %u/%u: incomplete",
+                tagpu_logf("recmp: source drain deadline: queued %u pending %u final sources %u/%u cuts %u/%u receipts %u: incomplete",
                            acquire(&c->tx.published) - r, stats.pending,
-                           acquire(&c->ended), c->expected);
+                           acquire(&c->ended), c->expected, acquire(&c->cuts), c->expected,
+                           acquire(&c->receipts));
                 fail(c, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
                 break;
             }
@@ -296,12 +388,14 @@ static DWORD WINAPI worker(void* arg)
 finish:
     if (net) tagpu_recmp_net_abort(net);
     tagpu_logf("recmp: isolated worker ended: accepted %u, completed %u, queued %u, "
-               "unread %u, failed %08X, final sources %u/%u; file completeness unproved",
+               "unread %u, failed %08X, final sources %u/%u, cuts %u/%u, receipts %u/%u; file completeness unproved",
                acquire(&c->sent), acquire(&c->completed),
                acquire(&c->tx.published) - acquire(&c->tx.read),
                acquire(&c->rx.published) - acquire(&c->rx.read), acquire(&c->failed),
-               acquire(&c->ended), c->expected);
-    channel_release(c);
+               acquire(&c->ended), c->expected, acquire(&c->cuts), c->expected,
+               acquire(&c->receipts), acquire(&c->receipts_sent));
+    InterlockedExchange(&c->finished, 1);
+    tagpu_recmp_release(c);
     InterlockedExchange(&s_workers, 0);
     return 0;
 }
@@ -458,14 +552,44 @@ void tagpu_recmp_abort(RecMpChannel* c, HRESULT reason)
 
 int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out)
 {
-    unsigned r;
+    return tagpu_recmp_take_at(c, out, 0);
+}
+
+int tagpu_recmp_take_at(RecMpChannel* c, RecMpPacket* out, unsigned application_tick)
+{
+    unsigned r, stopped;
     if (!c || !out) return 0;
     if (acquire(&c->failed)) return -1;
     r = acquire(&c->rx.read);
     if (r == acquire(&c->rx.published)) return 0;
+    stopped = acquire(&c->stop);
+    if (!stopped && c->application_order == UINT64_MAX) {
+        tagpu_recmp_abort(c, E_INVALIDARG);
+        return -1;
+    }
     memcpy(out, &c->rx.packet[r % MP_QUEUE_SLOTS], c->rx.packet[r % MP_QUEUE_SLOTS].h.bytes);
+    if (!stopped) {
+        RecMpCutPoint* cut = &c->actor[source_of(c, out->h.origin)].consumed;
+        cut->origin = out->h.origin;
+        cut->sequence = out->h.sequence;
+        cut->source_tick = out->h.tick;
+        cut->application_tick = application_tick;
+        cut->application_order = ++c->application_order;
+        cut->stream = out->h.stream;
+    }
     InterlockedExchange(&c->rx.read, r + 1);
     c->received++;
+    return 1;
+}
+
+int tagpu_recmp_cut(RecMpChannel* c, DWORD origin, RecMpCutPoint* out)
+{
+    unsigned at;
+    if (!c || !out || !acquire(&c->stop)) return 0;
+    at = source_of(c, origin);
+    if (at == c->config.count || c->config.actor[at].local) return 0;
+    *out = c->actor[at].consumed;
+    out->origin = origin;
     return 1;
 }
 
@@ -486,6 +610,10 @@ void tagpu_recmp_stats(RecMpChannel* c, RecMpStats* out)
     out->completed_bytes = acquire(&c->completed_bytes);
     out->seals = acquire(&c->seals);
     out->ended = acquire(&c->ended);
+    out->cuts = acquire(&c->cuts);
+    out->receipts = acquire(&c->receipts);
+    out->receipts_sent = acquire(&c->receipts_sent);
+    out->finished = acquire(&c->finished);
     out->failed = (HRESULT)acquire(&c->failed);
 }
 
@@ -498,5 +626,5 @@ void tagpu_recmp_end(RecMpChannel* c)
     if (!acquire(&c->failed)) tagpu_recmp_finish_sources(c);
     InterlockedExchange(&c->stop, 1);
     SetEvent(c->wake);
-    channel_release(c);
+    tagpu_recmp_release(c);
 }

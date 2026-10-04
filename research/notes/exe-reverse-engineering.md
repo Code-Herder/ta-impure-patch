@@ -531,6 +531,8 @@ This does not establish terminal delivery or a complete network recording.
 
 The source-prefix ledger adds no engine patch or field write. Its `advance` call runs at the existing recorder B2 boundary (`0x4954ED`) before capture; GameTime has advanced at `0x4954C0`, so the preceding capture tick can close after all its producer messages. Repeated visits to the same tick do not close it. The existing teardown pre-hook at `0x491B60` calls `tagpu_rec_level_end` before the unit-array cascade; the engine's game-thread state handlers serialize it with capture, as documented in the recorder and `tagpu_reclaim.c:reclaim_teardown_pre`. Final source seals use the copied producer ledger and last captured tick, with no post-teardown engine read. Refused capture aborts instead. These seals name a source prefix, not a peer-clock mapping, recorder application cut or complete file.
 
+The same B2 consumer now passes its actual GameTime to `tagpu_recmp_take_at`, which retains per-source packet consumption metadata in owned channel storage. Teardown's atomic stop publishes its immutable consumption cut; a covering verified source seal and authenticated final-marker receipt govern private-worker close. An explicitly retained consumer can drain proof tails after teardown without changing that cut. These changes add no patch or engine-state write, and provide no post-teardown engine lifetime. Semantic application history and the multiplayer file writer remain open.
+
 ### Native player metadata and resource-message carriers [DISASSEMBLED 2026-10-04]
 
 These reads support the isolated-recorder transport's source binding. The work

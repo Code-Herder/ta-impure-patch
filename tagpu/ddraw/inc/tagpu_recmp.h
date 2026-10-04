@@ -9,7 +9,8 @@
    pointer or primary-session interface crosses into a contribution worker. */
 #define RECMP_PACKET_MAX 4096u
 #define RECMP_VERSION 1u
-enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4 };
+enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4,
+       RECMP_RECEIPT = 5 };
 
 #pragma pack(push, 1)
 typedef struct {
@@ -29,8 +30,14 @@ typedef struct {
     uint64_t data_bytes;
     uint32_t crc, final;
 } RecMpSeal;
+typedef struct {
+    uint32_t origin, sequence;
+    GUID stream;
+    RecMpSeal seal;
+} RecMpReceipt;
 #pragma pack(pop)
 _Static_assert(sizeof(RecMpSeal) == 24, "source seal wire span");
+_Static_assert(sizeof(RecMpReceipt) == 48, "source receipt wire span");
 
 /* The engine's 0x08 start action carries a fresh host-created match ID. Its
    delivered span, version and native sender must agree before that ID is used. */
@@ -83,9 +90,15 @@ int tagpu_recmp_orders_idle(const RecMpOrderCache* c, unsigned origin);
 typedef struct RecMpChannel RecMpChannel;
 typedef struct RecMpConfig RecMpConfig;
 typedef struct {
+    uint32_t origin, sequence, source_tick, application_tick;
+    uint64_t application_order;
+    GUID stream;
+} RecMpCutPoint;
+typedef struct {
     unsigned queued, sent, bytes, received, lost;
     unsigned bound, expected, player, pending, completed, completed_bytes;
     unsigned seals, ended;
+    unsigned cuts, receipts, receipts_sent, finished;
     HRESULT failed;
 } RecMpStats;
 
@@ -109,11 +122,24 @@ int tagpu_recmp_finish_sources(RecMpChannel* c);
 /* Production/capture failure forbids a successful terminal seal. */
 void tagpu_recmp_abort(RecMpChannel* c, HRESULT reason);
 void tagpu_recmp_stats(RecMpChannel* c, RecMpStats* out);
+/* A retained reference owns the copied receive storage after end. Transfer the
+   sole consumer only after the game has called end; later takes drain proof
+   tails without extending the frozen consumption cut. Retain requires an
+   already owned reference. The final release frees storage and its wake handle. */
+void tagpu_recmp_retain(RecMpChannel* c);
+void tagpu_recmp_release(RecMpChannel* c);
 void tagpu_recmp_end(RecMpChannel* c);
 
-/* One game-thread consumer. Returns 1 for a logical packet, 0 when empty, -1 for
+/* One consumer, initially the game thread and later an explicitly handed-over
+   retained consumer. Returns 1 for a logical packet, 0 when empty, -1 for
    channel failure. The worker verifies native bindings, streams and sequences before
    publishing; its one receive queue has no primary-session or loader producer. */
 int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out);
+/* One consumer, as for take. The game supplies its actual B2 application tick;
+   each consumed source packet receives a distinct recording-local ordinal. */
+int tagpu_recmp_take_at(RecMpChannel* c, RecMpPacket* out, unsigned application_tick);
+/* An immutable consumption cut is available only after end. A source with no
+   consumed packet has sequence/order zero; it still needs a received seal. */
+int tagpu_recmp_cut(RecMpChannel* c, DWORD origin, RecMpCutPoint* out);
 
 #endif

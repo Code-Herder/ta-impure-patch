@@ -172,7 +172,8 @@ static void channel_run(Probe* p)
         CHECK(got == 0);
         tagpu_recmp_stats(channel,&stats);
         CHECK(!stats.failed && !stats.lost && (LONG)(deadline-GetTickCount()) > 0);
-        if (received == 16 && finals == 2 && !stats.queued && !stats.pending && stats.completed >= 22) break;
+        if (received == 16 && finals == 2 && !stats.queued && !stats.pending &&
+            stats.receipts == 4 && stats.receipts_sent == 4) break;
         Sleep(1);
     }
     CHECK(stats.bound == 2 && stats.expected == 2 && stats.player &&
@@ -180,7 +181,8 @@ static void channel_run(Probe* p)
           stats.received == 20 && sequences[0] == 10 && sequences[1] == 10 &&
           seals == 4 && stats.seals == 4 && stats.ended == 2);
     CHECK(stats.completed_bytes == stats.bytes +
-          (stats.completed-20)*(sizeof(RecMpHeader)+sizeof(RecMpSignedIdentity)));
+          stats.receipts_sent*(sizeof(RecMpHeader)+sizeof(RecMpReceipt)) +
+          (stats.completed-20-stats.receipts_sent)*(sizeof(RecMpHeader)+sizeof(RecMpSignedIdentity)));
     printf("PASS: production channel after primary Close, signed human/AI bindings, "
            "16 data deliveries, exact human/AI final prefixes, %u successful completions / %u bytes, pending zero\n",
            stats.completed,stats.completed_bytes);
