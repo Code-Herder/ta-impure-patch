@@ -24,13 +24,17 @@ The by-design boundary for the network path is to derive a unit's owner from its
 
 The work branch has a checkpoint, not a multiplayer recorder landing. `olist_read` now refuses a network owner's lists before following either head unless the owner pointer names one of the ten records and its controller is 1 or 2. That one boundary covers normal capture, verification and dumps. A puppet host has no network bit; its restored owned-object pointers are zero, so its list dumps retain their existing path.
 
-`tagpu_recmp.c` carries bounded private messages through the existing DirectPlay session, with a separate send worker. The engine-side adapter is in `tagpu_recorder.c`, on the byte-matched receive wrapper `0x4C9840`, before the engine's reliable splitter and compression handling. Its 64-byte version-1 envelope carries byte count, source transport ID, source tick, sequence, kind, a fresh engine-start match GUID and stream GUID. Both queues have 256 slots of 4096 bytes. The transmit queue is game-thread to worker; the receive queue supports overlapping loader/game producers with a nonblocking producer claim and one game-thread consumer. A full queue or a contended receive claim reports loss. No queue lock surrounds a transport call.
+`tagpu_recmp.c` carries bounded contributions through its own native DirectPlay application and session on one worker. The game thread copies the fresh engine-start match GUID, validated start host ID, native host address and every active human/hosted-AI primary ID, public key and ownership into `RecMpConfig`. Native ownership must agree with controllers 1/2 versus 3/4, and every local key must equal the process signer's public key. The copied configuration contains no engine pointer or primary-session interface. TA's `0x4C9840` receive wrapper and its source/destination writes remain stock; contribution packets never enter that pump.
 
-The worker holds its own interface reference and packet slot through `Send`. Teardown drops the game thread's channel reference and asks the worker to stop; it does not join the worker. There is at most one channel worker per process, including one still finishing. An engine `Close` ends the session even while the interface remains referenced: the reference protects memory, not delivery. The stock sender/destination output fields are updated only for packets returned to the engine. DirectPlay system messages stay on that path.
+The 64-byte version-1 envelope carries byte count, primary origin ID, source tick, sequence, kind, match GUID and stream GUID. The game-to-worker transmit queue and worker-to-game receive queue each have 256 slots of 4096 bytes with one producer and one consumer. Atomic publication orders copied packet bytes before slot reuse. The worker's sixteen native async completion contexts bound outstanding accepted sends. Full queues or a malformed/unauthorized logical stream end contributions incomplete. No transport call, worker join or queue lock runs on the game thread.
 
-The first payload is a player's transport ID and the 32 bytes at `player+0x8C`: a 100-byte application packet including its envelope. Locally controlled players contribute changed samples even with recording off. The receiver maps a human's or hosted AI's resource record to its local seat by transport ID. Each type-1/type-2 contributor sends from its own native DirectPlay ID, and the receive boundary requires the envelope origin to equal DirectPlay's actual sender. The channel maintains a separate sequence for each of at most ten origins. It keeps caches only; it does **not** enable network recording, alter engine resources or materialize an `.imprec` file. `REC_FORMAT` remains 4.
+Each local human and hosted AI signs its primary origin and private identity against the public key already copied from that actual primary native player. A remote binding freezes its private SDK ID, session and stream. Data remains queued until all expected remote actors bind and every pending local identity announcement has been accepted before subsequent data sends. Native private membership changes and newly verified actors request reannouncement; a broadcast to an empty session cannot substitute for a binding. A worker retries only `DPERR_NOSESSIONS` during discovery. Retry scheduling establishes no completion fact.
 
-The channel checks guaranteed-message capabilities at start. It requires `DPCAPS_GUARANTEEDSUPPORTED` or `DPSESSION_DIRECTPLAYPROTOCOL`, and refuses `DPSESSION_NOMESSAGEID`, which removes sender identity. These conditions come from the primary SDK's [Send](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_6dvd.content.htm) and [GetCaps](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_2rax.content.htm) contracts. They establish requested delivery support, not terminal recording completeness.
+Teardown releases the game reference and publishes stop without joining. A reference keeps the wake handle and copied channel storage alive through a concurrent worker finish. There is at most one channel worker per process, including one still finishing. The worker drains accepted local work and native completions before closing its own session on the normal path; abort never claims delivery. This is **not a terminal completeness protocol**: final remote frames and leaving streams are not yet sealed.
+
+The resource payload is a primary origin ID and the 32 bytes at `player+0x8C`: a 100-byte application packet including its envelope. Locally controlled players contribute changed samples with recording off. The recipient maps human/AI records by primary ID, independently of their private SDK sender. Source sequences are separate for up to ten origins. The game keeps authoritative caches only; it does **not** enable network recording, alter engine resources or materialize an `.imprec` file. `REC_FORMAT` remains 4.
+
+The primary descriptor refuses `DPSESSION_NOMESSAGEID`, which removes native source identity. The private backend requires the native protocol, ordered guaranteed async sends and completion notifications on its own session. Its [Send contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_6dvd.content.htm) and bounded contexts establish requested transport support, not terminal recording completeness or a measured bandwidth budget.
 
 ### Authoritative order cache
 
@@ -44,7 +48,9 @@ Each committed queue retains its source tick, final source sequence and recorder
 
 The logical receive stream discards our own stream and repeated physical deliveries. A new remote origin starts at sequence 1; every subsequent logical frame must advance by one without its source tick going backwards. A same-sequence frame must equal the last frame byte for byte. A source gap or changed stream fails the channel. This detects a missing frame followed by another frame; a final missing frame still requires a terminal manifest or watermark.
 
-### Runtime evidence
+### Earlier shared-session runtime evidence
+
+These measurements precede the isolated production channel below.
 
 MEASURED 2026-10-04 on the reference setup, retail content, native DirectPlay over loopback, two peers on *Two Continents*, private display, work branch checkpoint `d74ffebe` plus the contribution prototype. Neither peer carried `tagpu_recorder.on`. Both received the other's source-tick-1 resource sample, with energy production 25 and metal production 1; their own remote engine records still reported production zero. The two origin IDs differed, but each mapped to seat 1 on the receiving peer, while its local human was seat 0.
 
@@ -52,20 +58,11 @@ A real solar build on the host produced changing samples. At the tick-9151 healt
 
 An armed network dump at tick 5534 contained two valid CRC-checked blocks and the local commander's one-node main list (unit slot 1501). Both remote lists (slot 1) were refused; no remote list chunk was present. The local list was preserved. This is a test of the capture boundary, not a faithful multiplayer snapshot.
 
-`tools/replay/recmp_transport_test.c` exercises the actual queue module with a DirectPlay object whose Send is held by events. It checks valid private framing, rejection of a mismatched length and a returned length beyond the allocation, preservation of a game packet and its transport IDs, explicit failure at 256 queued packets, and refusal to allocate another worker while that send is held. The game releases its channel and interface references during the held send. On release, the worker verifies the retained packet and its own interface reference before finishing. PASS under Wine; the ordering is controlled by events, not sleeps. Build and run:
-
-```
-i686-w64-mingw32-gcc -I tagpu/ddraw/inc -O2 -Wall -std=c99 \
-  -o /tmp/recmp-transport-test.exe tools/replay/recmp_transport_test.c \
-  tagpu/ddraw/src/tagpu_recmp.c -lole32 -luuid
-WINEPREFIX="$PROBE_PREFIX" WINEDEBUG=-all wine /tmp/recmp-transport-test.exe
-```
-
-`PROBE_PREFIX` names an isolated Wine prefix. The normal parallel DLL build passes the thread-split and simulation-state checks; the send worker source names no engine memory.
+The current `tools/replay/recmp_transport_test.c` exercises the actual production channel and authentication module with controlled private backend calls. Event barriers prove configuration copying, two human/AI bindings before data, packet lifetime through a held send, failure at a full 256-slot queue and refusal of another worker during teardown. Duplicate data collapses, a delayed prior-match packet cannot bind, and independent AI sequences remain separate. Its `gap` and `unauthorized` cases reject a missing initial sequence and a wrong actual private sender. Start-message guard-page, span and identity controls remain. The reproducible native runner below compiles and runs all three cases; these controls do not imitate native SDK completion behavior.
 
 A second two-peer game, using the updated adapter that copies transport outputs through aligned locals, also received both tick-1 samples and reported loss/failure 0 through tick 2551. This rerun used the same isolated prefixes after both games were stopped and relaunched with the rebuilt DLL.
 
-### Hosted-AI and order runtime evidence
+### Earlier shared-session hosted-AI and order runtime evidence
 
 MEASURED 2026-10-04 on the reference setup, retail *Town & Country*, two native-DirectPlay peers, one locally hosted AI on each, recording off. An unused lobby row becomes a host AI after `UNUSED → BLOCKED → AI:<host>`; a joiner can claim an unused row directly as its AI. The first four-seat probe had native IDs 596808690/596808688 for the humans and 596808695/596808694 for the AIs. Each human was type 1 on its own peer and type 3 on the other; each AI was type 2 on its hosting peer and type 3 on the other. The AI IDs were distinct native senders, not the human's ID reused.
 
@@ -79,13 +76,13 @@ A local ARMLAB was then created through the scenario applier and ARMPW/ARMROCK/A
 
 Through tick 21451, with the factory producing units, both peers reported loss/failure 0 and no queue refusals. The host reported 21699 sent / 4122240 application bytes, 12790 logical receives, two queued; the joiner reported 12790 sent / 2115912 bytes, 21701 receives, one queued. Reports are separate observations. Both returned through the ordinary network Options/Exit/Main Menu path. The probe instances and private display were then removed. No network `.imprec` was produced.
 
-`recmp_orders_test.c` passed under Wine against the actual bounded cache: complete publication after interleaved AI chunks, retention of the old queue during assembly and malformed input, missing/duplicate/stale chunks, another incarnation, capacity/slot/list bounds, a full 4096-node list, and pool exhaustion. The transport test also exercises duplicate delivery, independent AI sequences, refusal of unsupported guaranteed transport and missing native message IDs, and a missing initial source sequence (`recmp-transport-test.exe gap`). Its held-send lifetime case still passes.
+`recmp_orders_test.c` passed under Wine against the actual bounded cache: complete publication after interleaved AI chunks, retention of the old queue during assembly and malformed input, missing/duplicate/stale chunks, another incarnation, capacity/slot/list bounds, a full 4096-node list, and pool exhaustion. The current transport controls exercise duplicate delivery, independent AI sequences, signed binding/source checks and a missing initial source sequence. Native transport capability and completion behavior are covered by the separate backend fixture below.
 
-The application-tick extension passed the same cache test under Wine: source tick 9 can publish at recorder tick 8; a source-tick-10 transaction begins assembly at recorder tick 11 and publishes only with its final chunk at recorder tick 15. The old source/application ticks remain 9/8 throughout partial and rejected input, while the interleaved AI retains its own 10/11 pair. The normal parallel DLL build is clean. These controlled cache checks exercise different clocks; the updated adapter has not yet been rerun in a native network game.
+The application-tick extension passed the same cache test under Wine: source tick 9 can publish at recorder tick 8; a source-tick-10 transaction begins assembly at recorder tick 11 and publishes only with its final chunk at recorder tick 15. The old source/application ticks remain 9/8 throughout partial and rejected input, while the interleaved AI retains its own 10/11 pair. The normal parallel DLL build is clean. These controlled cache checks exercise different clocks. At that checkpoint the updated adapter had not been rerun in a native network game; the later isolated-channel game below measures its source/application ticks.
 
 ### Session lifetime audit
 
-DISASSEMBLED 2026-10-04: `0x46BF20` tests whether `0x51E58C` is nonzero. That global is the module handle returned by loading `reporter.dll` at `0x46C007..0x46C00F`, not a match counter or a lobby identifier. `0x46BF30` resolves the module's `_RIEnable@4`, `_RIGetVersion@4`, `_RIInitializeEx@8` and other report exports. The two network cleanup callers, `0x450DD0` and `0x452370`, skip `0x4C9B70` while that handle is nonzero; `0x46C190` calls the network cleanup before freeing the loaded reporter. The earlier address range starting at `0x450D80` contained a separate function ending at `0x450DC0`; it is not the cleanup function's entry. This identifies the exception but does not establish a unique session GUID for every level. Shared match identity remains open.
+DISASSEMBLED 2026-10-04: `0x46BF20` tests whether `0x51E58C` is nonzero. That global is the module handle returned by loading `reporter.dll` at `0x46C007..0x46C00F`, not a match counter or a lobby identifier. `0x46BF30` resolves the module's `_RIEnable@4`, `_RIGetVersion@4`, `_RIInitializeEx@8` and other report exports. The two network cleanup callers, `0x450DD0` and `0x452370`, skip `0x4C9B70` while that handle is nonzero; `0x46C190` calls the network cleanup before freeing the loaded reporter. The earlier address range starting at `0x450D80` contained a separate function ending at `0x450DC0`; it is not the cleanup function's entry. This identifies the exception but does not establish a unique session GUID for every level. A fresh engine-start match ID supplies that identity, as described below.
 
 ### Match identity at the engine start
 
@@ -110,7 +107,7 @@ The contribution envelope's first GUID is now this **match** ID, not the native
 session ID. Receive filters it before an origin can bind a stream or sequence.
 This separates matches even when a lobby retains its native session. A failed
 host GUID creation sends a same-size zero-ID start; the game action is retained
-and contributions refuse it. At attach all six receive/start/player-data sites are byte-matched, all four
+and contributions refuse it. At attach all five start/player-data sites are byte-matched, all four
 stubs are allocated, and every page is acquired before any code is changed.
 Failure leaves the stock sites together.
 
@@ -219,9 +216,7 @@ The work branch now contains `tagpu_recmp_net.c`, an engine-free native TCP/IP
 adapter. It owns a separate DirectPlay4A session, player, receive event, module
 reference and COM apartment on one worker. The copied configuration contains
 only provider, match GUID, host role and a bounded primary-player address. No
-primary-session interface or engine pointer enters this adapter. It is linked
-into the DLL but **not yet called by the game**; `tagpu_recmp.c` still uses the
-checkpoint's shared-session path.
+primary-session interface or engine pointer enters this adapter. The game calls it through the copied production channel described above. Native primary interfaces are used only on the game thread to obtain the initial roster and address.
 
 Its application GUID differs from the fixture's primary GUID. Session discovery
 matches the fresh match GUID in the private session name; the session requires
@@ -230,14 +225,13 @@ async sends, with sixteen fixed contexts. An accepted `DPERR_PENDING` transfers
 the copied packet to the SDK; only a validated SENDCOMPLETE releases that
 context, and only success counts delivery. A seventeenth pending send and an early Close
 return BUSY. An abort ends only the worker's private interface and makes no
-delivery claim. The current backend supports TCP/IP only; discovery retries,
-host migration and production terminal manifests remain unverified.
+delivery claim. The current backend supports TCP/IP only. Worker discovery retries are installed; cross-address discovery, host migration and production terminal manifests remain unverified.
 
 The SDK's [GetPlayerAddress contract](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpref_7jqx.content.htm)
 allows several local network addresses and returns both text forms. The first
 adapter parser incorrectly treated another address as invalid. It now retains
 up to 32 distinct ANSI addresses of at most 256 bytes each and tries that bounded
-list for discovery. It omits the primary endpoint's port when constructing the
+list for discovery. It also requires a bounded `DPAID_ServiceProvider` GUID matching TCP/IP, and derives the provider from that SDK address when the copied provider field is zero. It omits the primary endpoint's port when constructing the
 new session's discovery address. In the successful native fixture, the host's
 copied primary address was 507 bytes and the joiner's 130 bytes; both private
 opens returned zero. This is local discovery evidence, not a cross-address test.
@@ -251,7 +245,7 @@ same wrapper. The branch redirects `0x4CA762` to a stdcall helper and `0x454315`
 to accept exactly 21 or 301 bytes. The original password/version tests and
 HRESULT-to-BOOL conversion remain. Key creation failure forwards the original
 21 bytes and refuses faithful contributions; it does not prevent ordinary play.
-All six receive/start/player-data redirects share one preflight and installation.
+All five start/player-data redirects share one preflight and installation.
 
 `tagpu_recmp_auth.c` creates one temporary RSA-2048 signing key per process at
 native player creation, before play. Concurrent creators build independent
@@ -270,8 +264,7 @@ controller. The private worker signs the primary origin, stream GUID and its
 with SHA-256/RSA. A receiver requires its copied primary key, the current match
 and session, and the actual private SDK sender to verify that 296-byte body.
 A private origin claim or a public key supplied by a private packet cannot
-establish authority. Freezing those verified bindings in the game channel is
-the next integration step; the game still calls the shared-session worker.
+establish authority. The production channel freezes those verified bindings before accepting data from each remote human or hosted AI.
 
 This replaces the proposed resource-message carrier. TA's periodic `0x28` call
 at `0x4655A1` is inside the viewed-record branch, so it cannot advertise every
@@ -313,7 +306,7 @@ Reproduce with a free discovery port:
 python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run
 ```
 
-The runner compiles the backend, authentication module and controls, reserves
+The runner compiles the backend, authentication module, channel controls and the production channel when requested, reserves
 two instance directories with private registry hives and native DirectPlay,
 and owns a private X display. It removes those prefixes and display after the
 run and retains logs/executables in the new output directory. It never launches
@@ -338,10 +331,23 @@ contributions still used the old shared-session channel; it does **not** verify
 the isolated adapter inside TA. No multiplayer file, record/play/seek fixture
 or landing review has passed. The test instances and private display were removed.
 
+### Isolated production channel verification
+
+MEASURED 2026-10-04 on the reference setup, two native-DirectPlay Wine processes, the production `tagpu_recmp.c`, backend and authentication module. Run with `--channel` to create and close both primary-session stand-ins **before the private channel is started**, with all primary keys and addresses already copied. The caller zeroes its configuration and payload after enqueue, proving their retained copies. Both peers receive sixteen 80-byte DATA packets, eight per actual remote primary human/AI origin, in source order. The host completes 22 sends / 3440 application bytes and the joiner 18 / 2000; the additional sends are signed identity reannouncements. Both finish with pending, queued, unread, lost and failure zero. The primary Close measurements, 2508/2516 ms, are standalone fixture values without a stock comparison.
+
+```
+python3 tools/replay/recmp_net_test.py --channel --port 47737 --out /tmp/recmp-channel-run
+```
+
+Both PASS observations precede a test release barrier that permits private Close. Those test barriers are not a production terminal protocol. The fixture proves the actual channel can initialize and deliver without a live primary interface; it does not run TA or create a recording.
+
+MEASURED 2026-10-04 on the reference setup, actual TA on *Town & Country*, two native-DirectPlay humans and one AI hosted by each, private display, recording off. Both copied DLLs match the tested build's SHA-256. Match `1BD93A08-04F8-4AC4-B605-DDB0B99E84C0` has primary human IDs 614038678/614038676 and AI IDs 614038675/614038674. The recorder's private IDs are 614058660/614058662. Both peers validate all four primary keys/ownership and bind both remote origins to the other actual private SDK ID. Both receive authoritative human/AI resources and nonempty commander queues; source-tick-2 queues publish at recipient ticks 11 and 54.
+
+At tick 151, host statistics show 23 accepted DATA / 3376 bytes / 17 logical receives and 29 native completions / 5536 bytes. The joiner shows 18 / 2536 / 30 and 20 completions / 3256 bytes. Both report bound 2/2, pending, queued, lost and failure zero. These are separate observations, not link bandwidth or a traffic-delay comparison. This verifies the isolated channel inside TA. It does not prove ordinary-exit terminal completeness, host migration, a file or playback. Owned instances, prefixes and the private display were removed.
+
 ### Gaps before the first code landing
 
-- Prove the private signature is disjoint from every valid engine transport frame, including the raw mode, and bound the added pump cost without starving game traffic.
-- Replace the shared-session delivery path with the isolated adapter. Its native fixture proves bounded pending sends and delivery after primary Close in the measured configuration; TA integration of the isolated worker, discovery lifecycle and production drain remain open. Native player keys now cover every human/hosted-AI creation in the measured four-actor game; the verified private bindings still need to replace shared-session sender checks. The shared-session held-send test proves our references and slots, not native concurrent Close or recording completeness.
+- Verify cross-address discovery, player leave and host migration. The separate application/session removes the shared receive-signature and shared send-queue obligations by construction, but does not prove physical network bandwidth cannot delay game traffic. Measure and enforce that budget.
 - Establish bounded reordering if the transport needs it and terminal completeness. The current sequence check cannot detect a last frame that never arrives; the present resource cache makes no completeness claim.
 - Carry the remaining player authority and materialize contributed resources/orders; retain source tick, sequence and recorder application order in the file and its seek snapshots.
 - Decide unit corrections from a bandwidth measurement, as the product plan requires; no measured budget is inferred from the two-commander run.

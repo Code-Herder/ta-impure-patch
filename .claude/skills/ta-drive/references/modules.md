@@ -141,13 +141,15 @@ tools/mp_leave.sh h1                                 # surrender -> main menu; a
 
 The recorder's isolated native backend has a standalone transport fixture:
 `python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.
-Choose a free discovery port and a new output directory. It creates and removes
-two private-registry prefixes and an X display, retaining both peer logs and the
-test executables in the output. It checks public-key and signed-identity bounds
-and forgery refusals, verifies human/AI private bindings against keys in actual
-native primary player data, and checks bounded async sends and delivery after
-primary Close. It uses primary-session
-stand-ins; it does not launch TA or verify recording/playback.
+Add `--channel` to exercise the production channel, initialized after both primary
+interfaces close, including roster/configuration copying, signed human/AI bindings,
+source sequences and packet delivery. The default exercises the backend directly,
+including its sixteen completion-context bound and refusal of an early Close.
+Both modes run authentication and controlled channel bounds/gap/wrong-source tests.
+Choose a free discovery port and a new output directory. The runner creates and
+removes two private-registry prefixes and an X display, retaining logs and test
+executables. It uses primary-session stand-ins; it does not launch TA or verify
+terminal recording completeness, bandwidth, recording or playback.
 
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT

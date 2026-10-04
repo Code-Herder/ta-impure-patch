@@ -1,225 +1,250 @@
-/* Exercise the real contribution queue with a DirectPlay object whose Send is held by an
-   event. The engine's reference is released during that call, without a timing assumption. */
-#include "tagpu_recmp.h"
+/* Exercise the private channel with controlled native-backend boundaries.
+   Include the real identity checks; replace only session open/send/receive/close. */
+#define INITGUID
+#define COBJMACROS
+#include "tagpu_recmp_channel.h"
+#include "tagpu_log.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 
-#define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL line %u: %s\n", __LINE__, #x); exit(1); } } while (0)
+#define tagpu_recmp_net_open native_open
+#define tagpu_recmp_net_send native_send
+#define tagpu_recmp_net_receive native_receive
+#define tagpu_recmp_net_close native_close
+#define tagpu_recmp_net_abort native_abort
+#include "../../tagpu/ddraw/src/tagpu_recmp_net.c"
+#undef tagpu_recmp_net_open
+#undef tagpu_recmp_net_send
+#undef tagpu_recmp_net_receive
+#undef tagpu_recmp_net_close
+#undef tagpu_recmp_net_abort
 
-typedef struct {
-    IDirectPlay2 iface;
-    volatile LONG refs;
-    HANDLE entered, resume, released;
+#define CHECK(x) do { if (!(x)) { printf("FAIL line %u: %s\n",__LINE__,#x); fflush(stdout); exit(1); } } while (0)
+
+static struct {
+    RecMpNet net;
+    RecMpConfig expected;
+    HANDLE opened, open_release, entered, send_release, closed;
+    RecMpPacket frame[8];
+    DWORD from[8];
+    unsigned count, read, announcements, data_sends, aborted, image_ok;
     DWORD game_thread;
-    int held_image_ok, off_thread, receive_at, guaranteed;
-    RecMpPacket remote;
-} Fake;
+} f;
 
-static ULONG WINAPI fake_addref(IDirectPlay2* iface)
+void tagpu_logf(const char* fmt, ...)
 {
-    return InterlockedIncrement(&((Fake*)iface)->refs);
+    va_list args;
+    va_start(args,fmt);
+    vprintf(fmt,args);
+    va_end(args);
+    putchar('\n');
 }
 
-static ULONG WINAPI fake_release(IDirectPlay2* iface)
+HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
 {
-    Fake* f = (Fake*)iface;
-    LONG refs = InterlockedDecrement(&f->refs);
-    if (!refs) SetEvent(f->released);
-    return refs;
-}
-
-static HRESULT WINAPI fake_caps(IDirectPlay2* iface, DPCAPS* caps, DWORD flags)
-{
-    Fake* f = (Fake*)iface;
-    CHECK(caps->dwSize == sizeof *caps && flags == DPGETCAPS_GUARANTEED);
-    caps->dwFlags = f->guaranteed ? DPCAPS_GUARANTEEDSUPPORTED : 0;
+    CHECK(GetCurrentThreadId() != f.game_thread);
+    SetEvent(f.opened);
+    CHECK(WaitForSingleObject(f.open_release,15000) == WAIT_OBJECT_0);
+    CHECK(!memcmp(config,&f.expected.net,sizeof *config));
+    *out = &f.net;
     return DP_OK;
 }
 
-static HRESULT WINAPI fake_send(IDirectPlay2* iface, DPID from, DPID to, DWORD flags,
-                                void* data, DWORD bytes)
+HRESULT tagpu_recmp_net_send(RecMpNet* net, const void* bytes, unsigned size)
 {
-    Fake* f = (Fake*)iface;
-    RecMpPacket* p = (RecMpPacket*)data;
-    f->off_thread = GetCurrentThreadId() != f->game_thread;
-    SetEvent(f->entered);
-    CHECK(WaitForSingleObject(f->resume, 5000) == WAIT_OBJECT_0);
-    f->held_image_ok = from == 11 && to == DPID_ALLPLAYERS && flags == DPSEND_GUARANTEED &&
-                       bytes == sizeof p->h + 8 && p->h.origin == 11 && p->h.tick == 9 &&
-                       !memcmp(p->body, "retained", 8) && f->refs == 1;
+    const RecMpPacket* p = bytes;
+    CHECK(net == &f.net && GetCurrentThreadId() != f.game_thread);
+    CHECK(size == p->h.bytes && !memcmp(&p->h.match,&f.expected.net.match,sizeof p->h.match));
+    if (p->h.kind == RECMP_BIND) {
+        RecMpSignedIdentity checked;
+        RecMpIdentity remote = net->identity;
+        remote.player = 202;
+        CHECK(!p->h.sequence && !p->h.tick && size == sizeof p->h + sizeof checked);
+        CHECK(tagpu_recmp_verify(&f.expected.actor[0].public,p->h.origin,&p->h.stream,
+                                  &remote,net->identity.player,p->body,sizeof checked,&checked));
+        CHECK(p->h.origin == 11 || p->h.origin == 22);
+        f.announcements |= p->h.origin == 11 ? 1 : 2;
+    } else {
+        CHECK(f.announcements == 3);
+        CHECK(!f.data_sends);
+        SetEvent(f.entered);
+        CHECK(WaitForSingleObject(f.send_release,15000) == WAIT_OBJECT_0);
+        f.image_ok = p->h.origin == 11 && p->h.tick == 9 && p->h.sequence == 1 &&
+                     size == sizeof p->h + 8 && !memcmp(p->body,"retained",8);
+        CHECK(f.image_ok);
+        f.data_sends++;
+    }
+    net->stats.completed++;
+    net->stats.completed_bytes += size;
     return DP_OK;
 }
 
-static HRESULT WINAPI fake_receive(IDirectPlay2* iface, DPID* from, DPID* to, DWORD flags,
-                                   void* data, DWORD* bytes)
+HRESULT tagpu_recmp_net_receive(RecMpNet* net, DWORD* from, void* packet, unsigned* bytes)
 {
-    Fake* f = (Fake*)iface;
-    unsigned at = f->receive_at++;
-    CHECK(flags == DPRECEIVE_ALL);
-    *from = 55;
-    *to = 11;
-    if (at <= 2) {
-        CHECK(*bytes >= f->remote.h.bytes);
-        memcpy(data, &f->remote, f->remote.h.bytes);
-        *bytes = f->remote.h.bytes;
-        if (at == 0) {
-            /* A queued packet from a previous match must not bind this origin's
-               stream or sequence before the current match's first delivery. */
-            ((RecMpPacket*)data)->h.match.Data1 = 3;
-            ((RecMpPacket*)data)->h.sequence = 32;
-        }
-    } else if (at == 3) {
-        /* A private header whose declared size exceeds the returned packet. */
-        CHECK(*bytes >= sizeof f->remote.h);
-        memcpy(data, &f->remote.h, sizeof f->remote.h);
-        *bytes = sizeof f->remote.h;
-    } else if (at == 4) {
-        CHECK(*bytes >= 3);
-        memcpy(data, "TA!", 3);
-        *bytes = 3;
-    } else if (at == 5) {
-        /* The provider claims more than the supplied allocation; no byte is read. */
-        (*bytes)++;
-    } else if (at == 6) {
-        /* System payloads do not become recorder messages even with this prefix. */
-        CHECK(*bytes >= f->remote.h.bytes);
-        memcpy(data, &f->remote, f->remote.h.bytes);
-        *bytes = f->remote.h.bytes;
-        *from = DPID_SYSMSG;
-    } else return DPERR_NOMESSAGES;
+    unsigned at = f.read;
+    CHECK(net == &f.net && GetCurrentThreadId() != f.game_thread);
+    if (at == f.count) return DPERR_NOMESSAGES;
+    CHECK(*bytes >= f.frame[at].h.bytes);
+    memcpy(packet,&f.frame[at],f.frame[at].h.bytes);
+    *bytes = f.frame[at].h.bytes;
+    *from = f.from[at];
+    f.read++;
     return DP_OK;
+}
+
+HRESULT tagpu_recmp_net_close(RecMpNet* net)
+{
+    CHECK(net == &f.net && !net->stats.pending);
+    SetEvent(f.closed);
+    return DP_OK;
+}
+
+void tagpu_recmp_net_abort(RecMpNet* net)
+{
+    CHECK(net == &f.net && GetCurrentThreadId() != f.game_thread);
+    f.aborted = 1;
+    SetEvent(f.closed);
 }
 
 static void start_test(void)
 {
-    RecMpStart start = { .code = 0x08, .version = RECMP_VERSION,
-                        .bytes = sizeof(RecMpStart), .origin = 55, .match = { .Data1 = 1 } };
-    GUID match = { .Data1 = 9 }, zero = { 0 };
-    unsigned char* allocation = VirtualAlloc(NULL, 8192, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    unsigned char* message;
-    DWORD protection;
-    CHECK(sizeof start == 25 && allocation);
-    CHECK(VirtualProtect(allocation + 4096, 4096, PAGE_NOACCESS, &protection));
-    message = allocation + 4096 - sizeof start;
-    memcpy(message, &start, sizeof start);
-    CHECK(tagpu_recmp_start_read(message, sizeof start, 55, &match) && match.Data1 == 1);
-    CHECK(!tagpu_recmp_start_read(allocation + 4096, sizeof start - 1, 55, &match));
-    CHECK(!tagpu_recmp_start_read(message, sizeof start + 1, 55, &match));
-    CHECK(!tagpu_recmp_start_read(message, sizeof start, 56, &match));
-    CHECK(!tagpu_recmp_start_read(message, sizeof start, 0, &match));
-    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, NULL));
-    start.version++;
-    memcpy(message, &start, sizeof start);
-    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
-    start.version = RECMP_VERSION;
-    start.bytes--;
-    memcpy(message, &start, sizeof start);
-    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
-    start.bytes = sizeof start;
-    start.code = 0x05;
-    memcpy(message, &start, sizeof start);
-    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
-    start.code = 0x08;
-    start.match = zero;
-    memcpy(message, &start, sizeof start);
-    CHECK(!tagpu_recmp_start_read(message, sizeof start, 55, &match));
-    CHECK(match.Data1 == 1);
-    CHECK(VirtualFree(allocation, 0, MEM_RELEASE));
+    RecMpStart start = { .code=8,.version=RECMP_VERSION,.bytes=sizeof start,.origin=55,
+                        .match={.Data1=1} };
+    GUID match = {.Data1=9};
+    unsigned char* pages = VirtualAlloc(NULL,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    void* at;
+    DWORD old;
+    CHECK(pages && VirtualProtect(pages+4096,4096,PAGE_NOACCESS,&old));
+    at = pages+4096-sizeof start;
+    memcpy(at,&start,sizeof start);
+    CHECK(tagpu_recmp_start_read(at,sizeof start,55,&match) && match.Data1 == 1);
+    CHECK(!tagpu_recmp_start_read(pages+4096,sizeof start-1,55,&match));
+    CHECK(!tagpu_recmp_start_read(at,sizeof start+1,55,&match));
+    CHECK(!tagpu_recmp_start_read(at,sizeof start,56,&match));
+    CHECK(!tagpu_recmp_start_read(at,sizeof start,0,&match));
+    start.code++; memcpy(at,&start,sizeof start);
+    CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
+    start.code=8; start.version++; memcpy(at,&start,sizeof start);
+    CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
+    start.version=RECMP_VERSION; start.bytes--; memcpy(at,&start,sizeof start);
+    CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match));
+    start.bytes=sizeof start; start.match.Data1=0; memcpy(at,&start,sizeof start);
+    CHECK(!tagpu_recmp_start_read(at,sizeof start,55,&match) && match.Data1 == 1);
+    CHECK(VirtualFree(pages,0,MEM_RELEASE));
+}
+
+static RecMpPacket* frame(unsigned origin, unsigned kind, unsigned sequence,
+                            unsigned tick, const void* body, unsigned bytes)
+{
+    RecMpPacket* p = &f.frame[f.count];
+    CHECK(f.count < 8);
+    f.from[f.count++] = 202;
+    memset(p,0,sizeof *p);
+    memcpy(p->h.magic,"IMPUREMP",8);
+    p->h.version = RECMP_VERSION; p->h.header = sizeof p->h;
+    p->h.bytes = sizeof p->h+bytes;
+    p->h.origin = origin; p->h.kind = kind;
+    p->h.sequence = sequence; p->h.tick = tick;
+    p->h.match = f.expected.net.match; p->h.stream.Data1 = 2;
+    if (bytes) memcpy(p->body,body,bytes);
+    return p;
 }
 
 int main(int argc, char** argv)
 {
-    IDirectPlay2Vtbl vt = { .AddRef = fake_addref, .Release = fake_release,
-                            .Send = fake_send, .Receive = fake_receive, .GetCaps = fake_caps };
-    Fake f;
+    RecMpConfig config, bad;
     RecMpChannel* c;
+    RecMpPublic public;
+    RecMpIdentity remote = {RECMP_VERSION,sizeof remote,{.Data1=1},{.Data1=3},202};
+    RecMpSignedIdentity binding;
     RecMpPacket got;
+    RecMpHeader ai;
     RecMpStats stats;
-    RecMpHeader ai_header;
-    GUID match = { .Data1 = 1 }, other = { .Data1 = 2 }, zero = { 0 };
-    unsigned char buffer[RECMP_PACKET_MAX];
-    DWORD bytes = sizeof buffer, from = 0, to = 0;
-    unsigned n;
+    GUID stream = {.Data1=2};
+    unsigned i, n;
+    int gap = argc>1 && !strcmp(argv[1],"gap");
+    int wrong = argc>1 && !strcmp(argv[1],"unauthorized");
     start_test();
-    memset(&f, 0, sizeof f);
-    f.iface.lpVtbl = &vt;
-    f.refs = 1;
+    memset(&f,0,sizeof f);
     f.game_thread = GetCurrentThreadId();
-    f.entered = CreateEvent(NULL, TRUE, FALSE, NULL);
-    f.resume = CreateEvent(NULL, TRUE, FALSE, NULL);
-    f.released = CreateEvent(NULL, TRUE, FALSE, NULL);
-    CHECK(sizeof(RecMpHeader) == 64 && sizeof(RecMpPacket) == RECMP_PACKET_MAX);
-    CHECK(f.entered && f.resume && f.released);
-    memcpy(f.remote.h.magic, "IMPUREMP", 8);
-    f.remote.h.version = RECMP_VERSION;
-    f.remote.h.header = sizeof f.remote.h;
-    f.remote.h.bytes = sizeof f.remote.h + 4;
-    f.remote.h.origin = 55;
-    f.remote.h.tick = 8;
-    f.remote.h.sequence = argc > 1 ? 3 : 1;
-    f.remote.h.kind = RECMP_RESOURCES;
-    f.remote.h.match = match;
-    f.remote.h.stream = other;
-    memcpy(f.remote.body, "peer", 4);
-
-    CHECK(!tagpu_recmp_begin(&f.iface, 11, &match, 0));
-    f.guaranteed = 1;
-    CHECK(!tagpu_recmp_begin(&f.iface, 11, &zero, 0));
-    CHECK(!tagpu_recmp_begin(&f.iface, 11, &match, DPSESSION_NOMESSAGEID));
-    c = tagpu_recmp_begin(&f.iface, 11, &match, 0);
-    CHECK(c && f.refs == 2);
-    (void)argv;
-    if (argc > 1) {
-        CHECK(tagpu_recmp_receive(&f.iface, &from, &to, buffer, &bytes) == DP_OK);
-        CHECK(tagpu_recmp_take(c, &got) == -1);
-        tagpu_recmp_stats(c, &stats);
-        CHECK(!stats.received && stats.failed == E_FAIL);
-        tagpu_recmp_end(c);
-        fake_release(&f.iface);
-        CHECK(WaitForSingleObject(f.released, 5000) == WAIT_OBJECT_0);
-        CloseHandle(f.entered);
-        CloseHandle(f.resume);
-        CloseHandle(f.released);
-        puts("PASS: a missing source sequence ends the contribution channel incomplete");
-        return 0;
+    f.net.identity = remote; f.net.identity.player = 101;
+    f.net.stats.peers=1; f.net.stats.membership=1;
+    f.opened=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.open_release=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.entered=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.send_release=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.closed=CreateEvent(NULL,TRUE,FALSE,NULL);
+    f.net.event=CreateEvent(NULL,FALSE,FALSE,NULL);
+    CHECK(f.opened && f.open_release && f.entered && f.send_release && f.closed && f.net.event);
+    memset(&config,0,sizeof config);
+    config.signer=tagpu_recmp_key(); CHECK(config.signer);
+    tagpu_recmp_public(config.signer,&public);
+    config.net.match.Data1=1; config.net.host=1;
+    config.net.address_bytes=3; memcpy(config.net.address,"ip!",3);
+    config.origin=11; config.count=4;
+    for (i=0;i<4;i++) {
+        config.actor[i].origin = i==0 ? 11 : i==1 ? 22 : i==2 ? 55 : 66;
+        config.actor[i].local = i<2;
+        config.actor[i].public=public;
     }
-    CHECK(tagpu_recmp_receive(&f.iface, &from, &to, buffer, &bytes) == DP_OK);
-    CHECK(from == 55 && to == 11 && bytes == 3 && !memcmp(buffer, "TA!", 3));
-    CHECK(tagpu_recmp_take(c, &got) && got.h.origin == 55 && got.h.match.Data1 == 1 &&
-          got.h.sequence == 1 && !memcmp(got.body, "peer", 4));
-    CHECK(!tagpu_recmp_take(c, &got));
-    bytes = sizeof buffer;
-    CHECK(tagpu_recmp_receive(&f.iface, &from, &to, buffer, &bytes) == DPERR_INVALIDPARAMS);
-    bytes = sizeof buffer;
-    CHECK(tagpu_recmp_receive(&f.iface, &from, &to, buffer, &bytes) == DP_OK);
-    CHECK(from == DPID_SYSMSG && bytes == f.remote.h.bytes && !memcmp(buffer, "IMPUREMP", 8));
-    CHECK(!tagpu_recmp_take(c, &got));
-    tagpu_recmp_stats(c, &stats);
-    CHECK(stats.received == 1 && stats.lost == 2);
-
-    CHECK(tagpu_recmp_send(c, RECMP_RESOURCES, 9, "retained", 8));
-    CHECK(WaitForSingleObject(f.entered, 5000) == WAIT_OBJECT_0);
-    CHECK(!tagpu_recmp_begin(&f.iface, 11, &match, 0));
-    CHECK(tagpu_recmp_send_from(c, 22, RECMP_RESOURCES, 9, "retained", 8, &ai_header));
-    CHECK(ai_header.origin == 22 && ai_header.sequence == 1);
-    CHECK(!memcmp(&ai_header.match, &match, sizeof match));
-    CHECK(tagpu_recmp_send_from(c, 22, RECMP_RESOURCES, 9, "retained", 8, &ai_header));
-    CHECK(ai_header.origin == 22 && ai_header.sequence == 2);
-    for (n = 0; n < 256; n++)
-        if (!tagpu_recmp_send(c, RECMP_RESOURCES, 10, "retained", 8)) break;
-    CHECK(n == 253);
-    tagpu_recmp_stats(c, &stats);
-    CHECK(stats.queued == 256 && stats.failed == E_OUTOFMEMORY);
-    tagpu_recmp_end(c);
-    CHECK(fake_release(&f.iface) == 1);
-    CHECK(WaitForSingleObject(f.released, 0) == WAIT_TIMEOUT);
-    SetEvent(f.resume);
-    CHECK(WaitForSingleObject(f.released, 5000) == WAIT_OBJECT_0);
-    CHECK(f.off_thread && f.held_image_ok && f.refs == 0);
-    puts("PASS: private framing and bounds, game packet preserved, fixed queue overflow, off-thread Send, retained buffer and interface through teardown");
-    CloseHandle(f.entered);
-    CloseHandle(f.resume);
-    CloseHandle(f.released);
+    f.expected=config;
+    frame(55,RECMP_RESOURCES,32,8,"old",3)->h.match.Data1++;
+    for (i=0;i<2;i++) {
+        CHECK(tagpu_recmp_sign(config.signer,i ? 66 : 55,&stream,&remote,&binding));
+        frame(i ? 66 : 55,RECMP_BIND,0,0,&binding,sizeof binding);
+    }
+    if (wrong) f.from[1]=203;
+    frame(55,RECMP_RESOURCES,gap ? 3 : 1,8,"peer",4);
+    frame(55,RECMP_RESOURCES,1,8,"peer",4);
+    frame(66,RECMP_RESOURCES,1,8,"ai",2);
+    bad=config; bad.count=11; CHECK(!tagpu_recmp_begin(&bad));
+    bad=config; bad.net.match.Data1=0; CHECK(!tagpu_recmp_begin(&bad));
+    bad=config; bad.actor[1].origin=11; CHECK(!tagpu_recmp_begin(&bad));
+    bad=config; bad.actor[0].local=0; CHECK(!tagpu_recmp_begin(&bad));
+    bad=config; bad.actor[0].public.key[64]^=1; CHECK(!tagpu_recmp_begin(&bad));
+    c=tagpu_recmp_begin(&config); CHECK(c);
+    CHECK(WaitForSingleObject(f.opened,15000) == WAIT_OBJECT_0);
+    CHECK(!tagpu_recmp_begin(&config));
+    CHECK(tagpu_recmp_send(c,RECMP_RESOURCES,9,"retained",8));
+    memset(&config,0,sizeof config);           /* begin owns its copy */
+    SetEvent(f.open_release);
+    if (gap || wrong) {
+        CHECK(WaitForSingleObject(f.closed,15000) == WAIT_OBJECT_0);
+        tagpu_recmp_stats(c,&stats);
+        CHECK(stats.failed == (wrong ? E_ACCESSDENIED : E_INVALIDARG));
+        CHECK(!stats.received && !stats.sent && tagpu_recmp_take(c,&got) == -1 && f.aborted);
+        tagpu_recmp_end(c);
+        printf("PASS: %s ends the isolated contribution channel incomplete\n",
+               wrong ? "wrong actual private sender" : "missing initial source sequence");
+    } else {
+        CHECK(WaitForSingleObject(f.entered,15000) == WAIT_OBJECT_0);
+        CHECK(tagpu_recmp_take(c,&got) == 1 && got.h.origin == 55 && got.h.sequence == 1 &&
+              !memcmp(got.body,"peer",4));
+        CHECK(tagpu_recmp_take(c,&got) == 1 && got.h.origin == 66 && got.h.sequence == 1 &&
+              !memcmp(got.body,"ai",2));
+        CHECK(!tagpu_recmp_take(c,&got));
+        CHECK(tagpu_recmp_send_from(c,22,RECMP_RESOURCES,9,"retained",8,&ai));
+        CHECK(ai.origin == 22 && ai.sequence == 1);
+        CHECK(tagpu_recmp_send_from(c,22,RECMP_RESOURCES,9,"retained",8,&ai));
+        CHECK(ai.origin == 22 && ai.sequence == 2);
+        for (n=0;n<256;n++) if (!tagpu_recmp_send(c,RECMP_RESOURCES,10,"retained",8)) break;
+        CHECK(n == 253);
+        tagpu_recmp_stats(c,&stats);
+        CHECK(stats.queued == 256 && stats.received == 2 && stats.bound == 2 &&
+              stats.expected == 2 && stats.failed == E_OUTOFMEMORY);
+        tagpu_recmp_end(c);
+        CHECK(!tagpu_recmp_begin(&f.expected));
+        CHECK(WaitForSingleObject(f.closed,0) == WAIT_TIMEOUT);
+        SetEvent(f.send_release);
+        CHECK(WaitForSingleObject(f.closed,15000) == WAIT_OBJECT_0);
+        CHECK(f.image_ok && f.data_sends == 1 && f.aborted);
+        puts("PASS: copied roster/address, signed human/AI bindings before data, old-match and duplicate collapse, independent source sequences, bounded queue failure, retained packet through detached end");
+    }
+    /* Backend closure ends every path to these fixture handles. The channel's
+       own wake handle instead lives through its final game/worker reference. */
+    CloseHandle(f.opened); CloseHandle(f.open_release); CloseHandle(f.entered);
+    CloseHandle(f.send_release); CloseHandle(f.closed); CloseHandle(f.net.event);
     return 0;
 }

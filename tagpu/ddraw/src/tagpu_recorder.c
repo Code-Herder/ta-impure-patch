@@ -66,7 +66,7 @@
 #include <string.h>
 #include "tagpu_recorder.h"
 #include "tagpu_recmp.h"
-#include "tagpu_recmp_auth.h"
+#include "tagpu_recmp_channel.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
 #include "tagpu_replay_layout.h"
@@ -271,6 +271,7 @@ static unsigned s_badlog;                /* of them, the ones logged            
 
 static unsigned char s_mp_sites, s_mp_tried;
 static GUID s_mp_match;
+static DWORD s_mp_host;
 static unsigned char s_mp_match_ready;
 static RecMpChannel* s_mp_channel;
 static RecMpResources s_mp_local[REC_PLAYERS], s_mp_remote[REC_PLAYERS];
@@ -282,24 +283,6 @@ static unsigned char s_mp_orders_seen[REC_PLAYERS];
 static int mp_orders_capture(const Level* L, unsigned tick);
 static int mp_orders_receive(const Level* L, const RecMpPacket* packet, unsigned tick);
 static const unsigned* mp_births(const Level* L);
-
-/* DISASSEMBLED: HAPINET_receive(0x4C9840) is stdcall, ret 12. Its interface is
-   object+0x4C5, from/to are +0x4B5/+0x4B9, and its trace helper 0x4C9740 is ret.
-   The callers own these arguments during Receive; no engine address reaches the worker. */
-static HRESULT __stdcall mp_receive(char* object, void* buffer, DWORD* bytes)
-{
-    IDirectPlay2A* dp;
-    DWORD from, to;
-    HRESULT hr;
-    memcpy(&dp, object + 0x4C5, sizeof dp);
-    if (!dp) return DPERR_UNINITIALIZED;
-    hr = tagpu_recmp_receive(dp, &from, &to, buffer, bytes);
-    if (hr == DP_OK) {
-        memcpy(object + 0x4B5, &from, sizeof from);
-        memcpy(object + 0x4B9, &to, sizeof to);
-    }
-    return hr;
-}
 
 static void mp_match_log(const char* action, DWORD origin, const GUID* match)
 {
@@ -329,6 +312,7 @@ static int __stdcall mp_start_send(DWORD origin, const void* message, unsigned b
     if (s_mp_match_ready) {
         start.match = match;
         s_mp_match = match;
+        s_mp_host = origin;
         mp_match_log("send", origin, &match);
     } else {
         /* The splitter always expects the extended size. A zero ID preserves
@@ -369,6 +353,7 @@ static void __cdecl mp_start_receive(void* frame)
         return;
     }
     s_mp_match_ready = 1;
+    s_mp_host = from;
     mp_match_log("receive", from, &s_mp_match);
 }
 
@@ -405,13 +390,6 @@ static int mp_public_key(IDirectPlay2A* dp, DWORD origin, RecMpPublic* public)
 
 static void mp_init(void)
 {
-    static const unsigned char was[] = {
-        0x68,0x1C,0xB1,0x50,0x00,0xE8,0xF6,0xFE,0xFF,0xFF,0x8B,0x54,0x24,0x08,0x83,0xC4,
-        0x04,0xB8,0xAA,0x00,0x77,0x88,0x8B,0x8A,0xC5,0x04,0x00,0x00,0x85,0xC9,0x74,0x22,
-        0x56,0x8B,0x74,0x24,0x10,0x8B,0x01,0x56,0x8B,0x74,0x24,0x10,0x56,0x8D,0xB2,0xB9,
-        0x04,0x00,0x00,0x6A,0x01,0x81,0xC2,0xB5,0x04,0x00,0x00,0x56,0x52,0x51,0xFF,0x50,
-        0x64,0x5E,0xC2,0x0C,0x00
-    };
     static const unsigned char launch[] = {
         0xC6,0x44,0x24,0x07,0x08,0x8B,0x40,0x04,0x8D,0x54,0x24,0x07,
         0x6A,0x01,0x52,0x50,0xE8,0xC6,0xB0,0xFB,0xFF
@@ -425,15 +403,13 @@ static void mp_init(void)
     };
     static const unsigned char data_size[] = { 0x83,0x7D,0x14,0x15,0x74,0x40 };
     struct { unsigned va, n; unsigned char now[6]; DWORD protection; } site[] = {
-        { 0x4C9840, 5 }, { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 },
+        { 0x496D25, 5 }, { 0x4553BE, 5 }, { 0x4520BE, 6 },
         { 0x4CA762, 5 }, { 0x454315, 6 }
     };
     unsigned char *observe = NULL, *sized = NULL, *create = NULL, *accept = NULL, *p;
     const unsigned sites = sizeof site / sizeof site[0];
     unsigned i, writable = 0, value;
-    if (memcmp((const void*)(size_t)0x4C9840, was, sizeof was) ||
-        *(const unsigned char*)(size_t)0x4C9740 != 0xC3 ||
-        memcmp((const void*)(size_t)0x496D15, launch, sizeof launch) ||
+    if (memcmp((const void*)(size_t)0x496D15, launch, sizeof launch) ||
         memcmp((const void*)(size_t)0x4553BE, received, sizeof received) ||
         *(const unsigned*)(size_t)0x455F9C != 0x4553BE ||
         memcmp((const void*)(size_t)0x4520BE, length, sizeof length) ||
@@ -470,12 +446,11 @@ static void mp_init(void)
     *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
     for (i = 0; i < sites; i++) {
-        unsigned target = i == 0 ? (unsigned)(size_t)mp_receive :
-                          i == 1 ? (unsigned)(size_t)mp_start_send :
-                          i == 2 ? (unsigned)(size_t)observe :
-                          i == 3 ? (unsigned)(size_t)sized :
-                          i == 4 ? (unsigned)(size_t)create : (unsigned)(size_t)accept;
-        site[i].now[0] = i == 1 ? 0xE8 : 0xE9;
+        unsigned target = i == 0 ? (unsigned)(size_t)mp_start_send :
+                          i == 1 ? (unsigned)(size_t)observe :
+                          i == 2 ? (unsigned)(size_t)sized :
+                          i == 3 ? (unsigned)(size_t)create : (unsigned)(size_t)accept;
+        site[i].now[0] = i == 0 ? 0xE8 : 0xE9;
         value = target - (site[i].va + 5);
         memcpy(site[i].now + 1, &value, 4);
         site[i].now[5] = 0x90;
@@ -495,7 +470,7 @@ static void mp_init(void)
         VirtualProtect((void*)(size_t)site[i].va, site[i].n, site[i].protection, &ignored);
     }
     s_mp_sites = 1;
-    tagpu_logf("recmp: ARMED receive, %u-byte fresh start and %u-byte native player identity",
+    tagpu_logf("recmp: ARMED %u-byte fresh start and %u-byte native player identity",
                (unsigned)sizeof(RecMpStart), RECMP_PRIMARY_BYTES + (unsigned)sizeof(RecMpPublic));
     return;
 refused:
@@ -507,7 +482,7 @@ refused:
     tagpu_detour_stub_free(sized);
     tagpu_detour_stub_free(create);
     tagpu_detour_stub_free(accept);
-    tagpu_logf("recmp: receive/start/player-data sites differ or cannot be patched: no contributions");
+    tagpu_logf("recmp: start/player-data sites differ or cannot be patched: no contributions");
 }
 
 static void mp_capture(const Level* L, unsigned tick)
@@ -519,7 +494,8 @@ static void mp_capture(const Level* L, unsigned tick)
     if (!s_mp_tried) {
         union { DPSESSIONDESC2 desc; unsigned char bytes[4096]; } session;
         IDirectPlay2A* dp;
-        DWORD bytes = sizeof session, origin;
+        RecMpConfig config = {0};
+        DWORD bytes = sizeof session, origin, host = s_mp_host;
         unsigned seat = (unsigned char)L->ta[OFF_CONTROLLED];
         GUID zero = { 0 };
         GUID match = s_mp_match;
@@ -537,10 +513,15 @@ static void mp_capture(const Level* L, unsigned tick)
         if (IDirectPlay2_GetSessionDesc(dp, session.bytes, &bytes) != DP_OK ||
             bytes > sizeof session || bytes < sizeof session.desc ||
             session.desc.dwSize != sizeof session.desc ||
-            !memcmp(&session.desc.guidInstance, &zero, sizeof zero)) {
+            !memcmp(&session.desc.guidInstance, &zero, sizeof zero) ||
+            (session.desc.dwFlags & DPSESSION_NOMESSAGEID)) {
             tagpu_logf("recmp: no bounded session descriptor: no contributions");
             return;
         }
+        config.net.match = match;
+        config.net.host = host == origin;
+        config.origin = origin;
+        config.signer = tagpu_recmp_key();
         for (i = 0; i < REC_PLAYERS; i++) {
             const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
             unsigned active, ctl = (unsigned char)player[PL_CONTROLLER];
@@ -557,10 +538,20 @@ static void mp_capture(const Level* L, unsigned tick)
                 tagpu_logf("recmp: primary-owned identity missing for native ID %u: no contributions", native);
                 return;
             }
+            config.actor[config.count].origin = native;
+            config.actor[config.count].local = ctl == 1 || ctl == 2;
+            config.actor[config.count++].public = public;
             tagpu_logf("recmp: primary-owned key ID %u seat %u controller %u data bytes %u",
                        native, i, ctl, RECMP_PRIMARY_BYTES + (unsigned)sizeof public);
         }
-        s_mp_channel = tagpu_recmp_begin(dp, origin, &match, session.desc.dwFlags);
+        bytes = sizeof config.net.address;
+        if (!host || IDirectPlay2_GetPlayerAddress(dp, host, config.net.address, &bytes) != DP_OK ||
+            !bytes || bytes > sizeof config.net.address) {
+            tagpu_logf("recmp: no bounded primary host address: no contributions");
+            return;
+        }
+        config.net.address_bytes = bytes;
+        s_mp_channel = tagpu_recmp_begin(&config);
         if (!s_mp_channel) { tagpu_logf("recmp: contribution worker could not start"); return; }
         s_mp_orders = tagpu_recmp_orders_begin(L->nslots);
         if (!s_mp_orders) {
@@ -596,8 +587,9 @@ static void mp_capture(const Level* L, unsigned tick)
         if (packet.h.kind != RECMP_RESOURCES || packet.h.bytes != sizeof packet.h + sizeof sample)
             continue;
         memcpy(&sample, packet.body, sizeof sample);
-        /* Hosted AIs are local DirectPlay players with their own IDs. The receive
-           boundary has already required origin to equal DirectPlay's actual sender. */
+        /* Hosted AIs have their own primary native IDs. The private worker verifies
+           that origin against its native-owned key, then freezes the actual private
+           sender/session/stream binding before publishing data. */
         if (sample.player != packet.h.origin) continue;
         for (i = 0; i < REC_PLAYERS; i++) {
             const char* player = L->ta + OFF_PLAYERS + i * PL_STRIDE;
@@ -623,8 +615,10 @@ static void mp_capture(const Level* L, unsigned tick)
     if (!mp_orders_capture(L, tick)) goto incomplete;
     if (tick - s_mp_logtick >= 150) {
         tagpu_recmp_stats(s_mp_channel, &stats);
-        tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X", tick,
-                   stats.sent, stats.bytes, stats.received, stats.queued, stats.lost, (unsigned)stats.failed);
+        tagpu_logf("recmp: tick=%u sent=%u bytes=%u received=%u queued=%u lost=%u failed=%08X "
+                   "bound=%u/%u private=%u pending=%u completed=%u/%uB", tick,
+                   stats.sent, stats.bytes, stats.received, stats.queued, stats.lost, (unsigned)stats.failed,
+                   stats.bound, stats.expected, stats.player, stats.pending, stats.completed, stats.completed_bytes);
         s_mp_logtick = tick;
     }
     return;

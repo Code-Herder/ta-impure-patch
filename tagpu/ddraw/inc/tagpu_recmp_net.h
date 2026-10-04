@@ -22,7 +22,10 @@ typedef struct {
 } RecMpNetConfig;
 
 typedef struct RecMpNet RecMpNet;
-typedef struct { unsigned pending, completed, completed_bytes; HRESULT failed; } RecMpNetStats;
+typedef struct {
+    unsigned pending, completed, completed_bytes, peers, membership;
+    HRESULT failed;
+} RecMpNetStats;
 
 /* One worker owns the module, both COM objects, session, player and receive event.
    config is a copied primary-session address and match ID; it contains no engine
@@ -38,8 +41,9 @@ void tagpu_recmp_net_stats(const RecMpNet* net, RecMpNetStats* out);
 HRESULT tagpu_recmp_net_close(RecMpNet* net);
 void tagpu_recmp_net_abort(RecMpNet* net);
 
-/* A binding is supplied by the primary session's actual sender, never learned from
-   a private packet's origin claim. Session and native private sender must both match. */
+/* A binding is verified against the actual primary native player's public key,
+   never learned from an unsigned private origin claim. Session and native private
+   sender must both match. */
 int tagpu_recmp_identity_read(const void* bytes, unsigned size, const GUID* match,
                               RecMpIdentity* out);
 int tagpu_recmp_net_authorized(const RecMpNet* net, const RecMpIdentity* binding, DWORD from);

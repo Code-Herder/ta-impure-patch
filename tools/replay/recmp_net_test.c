@@ -5,7 +5,9 @@
 #define INITGUID
 #define COBJMACROS
 #define _WIN32_WINNT 0x0400
-#include "tagpu_recmp_auth.h"
+#include "tagpu_recmp_channel.h"
+#include "tagpu_log.h"
+#include <stdarg.h>
 #include <dplobby.h>
 #include <objbase.h>
 #include <stdio.h>
@@ -87,6 +89,92 @@ static BOOL WINAPI found(LPCDPSESSIONDESC2 desc, LPDWORD timeout, DWORD flags, v
     return FALSE;
 }
 
+#ifdef RECMP_CHANNEL_TEST
+static HANDLE s_finished;
+
+void tagpu_logf(const char* fmt, ...)
+{
+    va_list args;
+    va_start(args,fmt);
+    vprintf(fmt,args);
+    va_end(args);
+    putchar('\n');
+    if (strstr(fmt,"isolated worker ended:")) SetEvent(s_finished);
+}
+
+static void channel_run(Probe* p)
+{
+    RecMpConfig config = {0};
+    RecMpChannel* channel;
+    RecMpPublic public;
+    RecMpStats stats;
+    RecMpPacket packet;
+    unsigned sequences[2] = {0}, received = 0, i, sent;
+    char send_release[MAX_PATH];
+    DWORD deadline = GetTickCount()+45000;
+    config.net = p->config;
+    memset(&config.net.provider,0,sizeof config.net.provider);
+    config.origin = p->local[0];
+    config.signer = p->key;
+    config.count = 4;
+    tagpu_recmp_public(p->key,&public);
+    for (i=0;i<2;i++) {
+        config.actor[i].origin = p->local[i];
+        config.actor[i].local = 1;
+        config.actor[i].public = public;
+        config.actor[i+2].origin = p->remote[i].origin;
+        config.actor[i+2].public = p->remote[i].public;
+    }
+    strcpy(send_release,p->release); strcat(send_release,".send");
+    while (GetFileAttributesA(send_release) == INVALID_FILE_ATTRIBUTES) {
+        CHECK((LONG)(deadline-GetTickCount()) > 0);
+        Sleep(1);
+    }
+    CHECK(atomic(&p->closed));
+    s_finished = CreateEvent(NULL,TRUE,FALSE,NULL); CHECK(s_finished);
+    channel = tagpu_recmp_begin(&config); CHECK(channel);
+    memset(&config,0,sizeof config);
+    for (sent=0;sent<16;sent++) {
+        unsigned char body[16];
+        memset(body,(int)(sent/2+1),sizeof body);
+        CHECK(tagpu_recmp_send_from(channel,p->local[sent%2],RECMP_RESOURCES,1,
+                                     body,sizeof body,NULL));
+        memset(body,0xEE,sizeof body);
+    }
+    printf("CHANNEL QUEUED: 16 data packets after primary Close\n");
+    for (;;) {
+        int got;
+        while ((got=tagpu_recmp_take(channel,&packet)) > 0) {
+            unsigned actor;
+            for (actor=0;actor<2;actor++) if (p->remote[actor].origin == packet.h.origin) break;
+            CHECK(actor < 2 && packet.h.kind == RECMP_RESOURCES &&
+                  packet.h.bytes == sizeof packet.h+16 && packet.h.sequence == ++sequences[actor]);
+            for (i=0;i<16;i++) CHECK(packet.body[i] == packet.h.sequence);
+            received++;
+        }
+        CHECK(got == 0);
+        tagpu_recmp_stats(channel,&stats);
+        CHECK(!stats.failed && !stats.lost && (LONG)(deadline-GetTickCount()) > 0);
+        if (received == 16 && !stats.queued && !stats.pending && stats.completed >= 18) break;
+        Sleep(1);
+    }
+    CHECK(stats.bound == 2 && stats.expected == 2 && stats.player &&
+          stats.sent == 16 && stats.bytes == 16*(sizeof(RecMpHeader)+16) &&
+          stats.received == 16 && sequences[0] == 8 && sequences[1] == 8);
+    CHECK(stats.completed_bytes == 16*(sizeof(RecMpHeader)+16) +
+          (stats.completed-16)*(sizeof(RecMpHeader)+sizeof(RecMpSignedIdentity)));
+    printf("PASS: production channel after primary Close, signed human/AI bindings, "
+           "16 data deliveries, %u successful completions / %u bytes, pending zero\n",
+           stats.completed,stats.completed_bytes);
+    while (GetFileAttributesA(p->release) == INVALID_FILE_ATTRIBUTES) {
+        CHECK((LONG)(deadline-GetTickCount()) > 0);
+        Sleep(1);
+    }
+    tagpu_recmp_end(channel);
+    CHECK(WaitForSingleObject(s_finished,15000) == WAIT_OBJECT_0);
+    CloseHandle(s_finished);
+}
+#else
 static void header(Probe* p, RecMpHeader* h, unsigned actor, unsigned kind,
                     unsigned sequence, unsigned bytes)
 {
@@ -207,6 +295,8 @@ static DWORD WINAPI worker(void* argument)
     return 0;
 }
 
+#endif
+
 typedef struct { Probe* p; IDirectPlay4A* primary; const unsigned char* prefix; } ReadPublic;
 static BOOL WINAPI public_found(DPID id, DWORD type, LPCDPNAME name, DWORD flags, void* arg)
 {
@@ -249,7 +339,9 @@ int main(int argc, char** argv)
     Session session = {{0},0};
     unsigned char address[512], data[4096];
     DWORD bytes = sizeof address, deadline = GetTickCount()+45000, started;
+#ifndef RECMP_CHANNEL_TEST
     HANDLE thread;
+#endif
     unsigned i, rejected_remote = 0;
     unsigned char userdata[RECMP_PRIMARY_BYTES+sizeof(RecMpPublic)] = {0};
     RecMpPublic public;
@@ -319,8 +411,10 @@ int main(int argc, char** argv)
     p.config.address_bytes = bytes;
     printf("PRIMARY READY human=%lu AI=%lu address_bytes=%lu\n",
         (unsigned long)p.local[0],(unsigned long)p.local[1],(unsigned long)bytes);
+#ifndef RECMP_CHANNEL_TEST
     thread = CreateThread(NULL,0,worker,&p,0,NULL);
     CHECK(thread);
+#endif
     while (atomic(&p.remote_count) < 2) {
         DPID from = 0, to = 0;
         bytes = sizeof data;
@@ -356,8 +450,12 @@ int main(int argc, char** argv)
     IDirectPlayX_Release(primary);
     InterlockedExchange(&p.closed,1);
     printf("PRIMARY CLOSED elapsed_ms=%lu\n",(unsigned long)started);
+#ifdef RECMP_CHANNEL_TEST
+    channel_run(&p);
+#else
     CHECK(WaitForSingleObject(thread,50000) == WAIT_OBJECT_0);
     CloseHandle(thread);
+#endif
     FreeLibrary(module);
     CoUninitialize();
     return 0;

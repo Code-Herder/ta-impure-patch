@@ -5,11 +5,11 @@
 #include <dplay.h>
 #include <stdint.h>
 
-/* Recorder contributions have their own framing, before the engine's compression and
-   reliable-packet splitter. No engine pointer crosses into a contribution or its worker. */
+/* Recorder contributions have their own application/session and framing. No engine
+   pointer or primary-session interface crosses into a contribution worker. */
 #define RECMP_PACKET_MAX 4096u
 #define RECMP_VERSION 1u
-enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2 };
+enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3 };
 
 #pragma pack(push, 1)
 typedef struct {
@@ -73,16 +73,18 @@ int tagpu_recmp_orders_get(const RecMpOrderCache* c, unsigned slot, unsigned lis
 void tagpu_recmp_orders_drop(RecMpOrderCache* c, unsigned slot);
 
 typedef struct RecMpChannel RecMpChannel;
+typedef struct RecMpConfig RecMpConfig;
 typedef struct {
     unsigned queued, sent, bytes, received, lost;
+    unsigned bound, expected, player, pending, completed, completed_bytes;
     HRESULT failed;
 } RecMpStats;
 
-/* Game-thread producer. begin owns an AddRef until the worker has finished; end hands
-   the channel to that worker without joining it. At most one worker exists at a time:
-   a still-finishing channel makes the next begin fail, never wait or allocate another. */
-RecMpChannel* tagpu_recmp_begin(IDirectPlay2A* dp, DWORD origin, const GUID* match,
-                               DWORD session_flags);
+/* Game-thread producer. begin copies a bounded native roster/address configuration;
+   the worker owns its separate session. end releases the game reference without joining.
+   A still-finishing worker makes the next begin fail, never wait or allocate another.
+   sent counts accepted data sends; completed includes identity announcements. */
+RecMpChannel* tagpu_recmp_begin(const RecMpConfig* config);
 int tagpu_recmp_send(RecMpChannel* c, unsigned kind, unsigned tick,
                      const void* body, unsigned bytes);
 int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned tick,
@@ -90,14 +92,9 @@ int tagpu_recmp_send_from(RecMpChannel* c, DWORD origin, unsigned kind, unsigned
 void tagpu_recmp_stats(RecMpChannel* c, RecMpStats* out);
 void tagpu_recmp_end(RecMpChannel* c);
 
-/* The receive wrapper's arguments, with its DirectPlay interface already obtained by
-   the caller. Its from/to outputs are changed only for a packet returned to the engine.
-   Private packets are copied to a fixed queue; a contended producer or a full queue
-   drops them and reports loss rather than waiting on the game/loader thread. */
-HRESULT tagpu_recmp_receive(IDirectPlay2A* dp, DWORD* from, DWORD* to,
-                            void* buffer, DWORD* bytes);
 /* One game-thread consumer. Returns 1 for a logical packet, 0 when empty, -1 for
-   a sequence/stream failure. Duplicate deliveries and our own stream are consumed. */
+   channel failure. The worker verifies native bindings, streams and sequences before
+   publishing; its one receive queue has no primary-session or loader producer. */
 int tagpu_recmp_take(RecMpChannel* c, RecMpPacket* out);
 
 #endif

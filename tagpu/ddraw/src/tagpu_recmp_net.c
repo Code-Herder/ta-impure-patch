@@ -14,6 +14,7 @@ struct RecMpNet {
     HANDLE event;
     RecMpIdentity identity;
     struct { unsigned used, bytes; DWORD id; } send[RECMP_NET_PENDING];
+    DWORD peer[9];
     RecMpNetStats stats;
     unsigned com, opened;
 };
@@ -52,12 +53,21 @@ static HRESULT object(HMODULE module, const CLSID* clsid, const IID* iid, void**
 }
 
 typedef struct { unsigned bytes; unsigned char value[256]; } InetAddress;
-typedef struct { unsigned count, invalid; InetAddress address[32]; } Inet;
+typedef struct { unsigned count, invalid, provider_seen; GUID provider; InetAddress address[32]; } Inet;
 
 static BOOL CALLBACK inet_address(REFGUID type, DWORD bytes, const void* data, void* arg)
 {
     Inet* inet = (Inet*)arg;
     unsigned i, at;
+    if (!memcmp(type, &DPAID_ServiceProvider, sizeof *type)) {
+        GUID provider;
+        if (!data || bytes != sizeof provider) goto invalid;
+        memcpy(&provider, data, sizeof provider);
+        if (inet->provider_seen && memcmp(&provider, &inet->provider, sizeof provider)) goto invalid;
+        inet->provider = provider;
+        inet->provider_seen = 1;
+        return TRUE;
+    }
     /* GetPlayerAddress supplies both ANSI and Unicode forms, including several
        addresses for a local player. Retain each distinct ANSI address, not a
        guessed primary adapter; discovery tries the bounded list. */
@@ -84,7 +94,10 @@ static HRESULT addresses(HMODULE module, const RecMpNetConfig* config, Inet* ine
     if (FAILED(hr)) return hr;
     hr = IDirectPlayLobby_EnumAddress(lobby, inet_address, config->address, config->address_bytes, inet);
     IDirectPlayLobby_Release(lobby);
-    if (hr == DP_OK && (inet->invalid || !inet->count)) hr = DPERR_INVALIDPARAMS;
+    if (hr == DP_OK && (inet->invalid || !inet->count || !inet->provider_seen)) hr = DPERR_INVALIDPARAMS;
+    if (hr == DP_OK && (memcmp(&inet->provider, &DPSPGUID_TCPIP, sizeof inet->provider) ||
+        (guid_present(&config->provider) && memcmp(&config->provider, &inet->provider, sizeof inet->provider))))
+        hr = DPERR_UNSUPPORTED;
     return hr;
 }
 
@@ -150,6 +163,38 @@ static void destroy(RecMpNet* net)
     VirtualFree(net, 0, MEM_RELEASE);
 }
 
+static int peer_change(RecMpNet* net, DWORD id, unsigned present)
+{
+    unsigned i, empty = 9;
+    if (!id || id == net->identity.player) return 1;
+    for (i = 0; i < 9; i++) {
+        if (!net->peer[i]) empty = i;
+        if (net->peer[i] == id) break;
+    }
+    if (i < 9) {
+        if (present) return 1;
+        net->peer[i] = 0;
+        net->stats.peers--;
+    } else {
+        if (!present) return 1;
+        if (empty == 9) return 0;
+        net->peer[empty] = id;
+        net->stats.peers++;
+    }
+    if (net->stats.membership == ~0u) return 0;
+    net->stats.membership++;
+    return 1;
+}
+
+static BOOL CALLBACK peer_found(DPID id, DWORD type, LPCDPNAME name, DWORD flags, void* arg)
+{
+    RecMpNet* net = arg;
+    (void)name; (void)flags;
+    if (type != DPPLAYERTYPE_PLAYER || peer_change(net, id, 1)) return TRUE;
+    net->stats.failed = E_INVALIDARG;
+    return FALSE;
+}
+
 HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
 {
     RecMpNet* net;
@@ -169,7 +214,8 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
         !config->address_bytes || config->address_bytes > sizeof config->address) return E_INVALIDARG;
     /* This adapter currently has a native TCP/IP address contract. Unsupported
        providers refuse recording; they must not be reinterpreted as an IP address. */
-    if (memcmp(&config->provider, &DPSPGUID_TCPIP, sizeof config->provider)) return DPERR_UNSUPPORTED;
+    if (guid_present(&config->provider) &&
+        memcmp(&config->provider, &DPSPGUID_TCPIP, sizeof config->provider)) return DPERR_UNSUPPORTED;
     net = (RecMpNet*)VirtualAlloc(NULL, sizeof *net, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!net) return E_OUTOFMEMORY;
     hr = CoInitialize(NULL);
@@ -189,7 +235,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     desc.dwSize = sizeof desc;
     desc.guidApplication = s_app;
     if (config->host) {
-        hr = connection(net, &config->provider, &inet.address[0]);
+        hr = connection(net, &inet.provider, &inet.address[0]);
         if (hr != DP_OK) goto fail;
         desc.dwMaxPlayers = 10;
         desc.dwFlags = DPSESSION_DIRECTPLAYPROTOCOL | DPSESSION_KEEPALIVE | DPSESSION_MIGRATEHOST;
@@ -202,7 +248,7 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
                 hr = object(net->module, &CLSID_DirectPlay, &IID_IDirectPlay4A, (void**)&net->dp);
                 if (hr != DP_OK) goto fail;
             }
-            hr = connection(net, &config->provider, &inet.address[attempt]);
+            hr = connection(net, &inet.provider, &inet.address[attempt]);
             if (hr != DP_OK) goto fail;
             hr = IDirectPlayX_EnumSessions(net->dp, &desc, 1500, session_found, &search,
                                            DPENUMSESSIONS_AVAILABLE);
@@ -247,6 +293,11 @@ HRESULT tagpu_recmp_net_open(const RecMpNetConfig* config, RecMpNet** out)
     net->identity.bytes = sizeof net->identity;
     net->identity.match = config->match;
     net->identity.session = desc.guidInstance;
+    hr = IDirectPlayX_EnumPlayers(net->dp, NULL, peer_found, net, DPENUMPLAYERS_REMOTE);
+    if (hr != DP_OK || net->stats.failed) {
+        if (hr == DP_OK) hr = net->stats.failed;
+        goto fail;
+    }
     *out = net;
     return DP_OK;
 fail:
@@ -301,7 +352,12 @@ HRESULT tagpu_recmp_net_receive(RecMpNet* net, DWORD* from, void* packet, unsign
         return hr;
     }
     if (size > *bytes) { net->stats.failed = E_INVALIDARG; return net->stats.failed; }
-    if (source) { *from = source; *bytes = size; return DP_OK; }
+    if (source) {
+        /* Receive's source is a native player, not a payload claim. Remembering
+           it also covers a CREATE notification still queued behind its first packet. */
+        if (!peer_change(net, source, 1)) goto invalid;
+        *from = source; *bytes = size; return DP_OK;
+    }
     if (size >= sizeof(DPMSG_GENERIC)) {
         DPMSG_GENERIC generic;
         memcpy(&generic, packet, sizeof generic);
@@ -321,6 +377,18 @@ HRESULT tagpu_recmp_net_receive(RecMpNet* net, DWORD* from, void* packet, unsign
             if (complete.hr != DP_OK) { net->stats.failed = complete.hr; return complete.hr; }
             net->stats.completed++;
             net->stats.completed_bytes += net->send[slot].bytes;
+        } else if (generic.dwType == DPSYS_CREATEPLAYERORGROUP) {
+            DPMSG_CREATEPLAYERORGROUP created;
+            if (size < sizeof created) goto invalid;
+            memcpy(&created, packet, sizeof created);
+            if (created.dwPlayerType == DPPLAYERTYPE_PLAYER &&
+                !peer_change(net, created.dpId, 1)) goto invalid;
+        } else if (generic.dwType == DPSYS_DESTROYPLAYERORGROUP) {
+            DPMSG_DESTROYPLAYERORGROUP removed;
+            if (size < sizeof removed) goto invalid;
+            memcpy(&removed, packet, sizeof removed);
+            if (removed.dwPlayerType == DPPLAYERTYPE_PLAYER &&
+                !peer_change(net, removed.dpId, 0)) goto invalid;
         } else if (generic.dwType == DPSYS_SESSIONLOST) {
             net->stats.failed = DPERR_CONNECTIONLOST;
             return net->stats.failed;

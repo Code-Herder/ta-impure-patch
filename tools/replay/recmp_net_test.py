@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Run the native isolated-transport fixture in two owned Wine prefixes.
 
-    tools/replay/recmp_net_test.py --port PORT [--out DIR]
+    tools/replay/recmp_net_test.py --port PORT [--out DIR] [--channel]
 
 PORT is a free DirectPlay discovery port. The output keeps the executable and both
 logs. The fixture uses primary-session stand-ins; it does not run TA or prove a
-complete recording. It holds session lifetimes by observed application barriers.
+complete recording. --channel starts the production channel after both primary
+interfaces close; the default tests the backend directly. Both run authentication
+and controlled channel tests. Session lifetimes use observed test barriers.
 """
 import argparse
 import fcntl
@@ -57,6 +59,7 @@ def run(args, output):
                 exe = output / "recmp-net-test.exe"
                 command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
                          "-O2", "-Wall", "-Wextra", "-Werror", "-std=c99", "-o", exe,
+                         *(["-DRECMP_CHANNEL_TEST", TREE / "tagpu/ddraw/src/tagpu_recmp.c"] if args.channel else []),
                          HERE / "recmp_net_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp_net.c",
                          TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c",
                          "-lole32", "-luuid"], setup)
@@ -81,6 +84,16 @@ def run(args, output):
             with (output / "auth.log").open("w") as log:
                 command(["wine", auth], log, env=owned[0][1])
             print("authentication bounds and forgery controls: PASS", flush=True)
+            with (output / "setup.log").open("a") as setup:
+                controls = output / "recmp-transport-test.exe"
+                command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc",
+                         "-O2", "-Wall", "-Wextra", "-Werror", "-std=c99", "-o", controls,
+                         HERE / "recmp_transport_test.c", TREE / "tagpu/ddraw/src/tagpu_recmp.c",
+                         TREE / "tagpu/ddraw/src/tagpu_recmp_auth.c", "-lole32", "-luuid"], setup)
+            for mode in ("", "gap", "unauthorized"):
+                with (output / ("channel-" + (mode or "bounds") + ".log")).open("w") as log:
+                    command(["wine", controls, *([mode] if mode else [])], log, env=owned[0][1])
+            print("private channel bounds, gap and wrong-source controls: PASS", flush=True)
             for role, (directory, env) in zip(("host", "join"), owned):
                 log = output / f"{role}.log"
                 handle = log.open("w")
@@ -88,8 +101,8 @@ def run(args, output):
                                          "Z:" + str(release).replace("/", "\\")],
                                         env=env, stdout=handle, stderr=subprocess.STDOUT)
                 jobs.append((proc, handle, log))
-                wait_for(jobs, "PRIVATE READY")
-                print(f"{role}: private session ready", flush=True)
+                wait_for(jobs, "PRIMARY READY" if args.channel else "PRIVATE READY")
+                print(f"{role}: primary players ready" if args.channel else f"{role}: private session ready", flush=True)
             # Both primary players exist before native player-key reads.
             # Both applications copy native player keys before either Close.
             advertise.touch()
@@ -97,12 +110,14 @@ def run(args, output):
             primary.touch()
             wait_for(jobs, "PRIMARY CLOSED")
             send.touch()
-            wait_for(jobs, "PASS: two primary-native human/AI keys")
+            wait_for(jobs, "PASS: production channel after primary Close" if args.channel else
+                     "PASS: two primary-native human/AI keys")
             release.touch()
             for proc, handle, log in jobs:
                 if proc.wait(timeout=10):
                     raise RuntimeError(f"fixture failed: {log}")
-            print("PASS: both peers verified signed human/AI sources and delivered after primary Close",
+            print("PASS: both peers verified signed human/AI sources and delivered after primary Close" +
+                  (" through the production channel" if args.channel else ""),
                   flush=True)
         finally:
             for path in (advertise, primary, send, release):
@@ -125,6 +140,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--channel", action="store_true",
+                        help="test the production channel with both primary interfaces already closed")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be in 1024..65535")

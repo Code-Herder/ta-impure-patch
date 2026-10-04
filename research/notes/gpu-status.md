@@ -3009,33 +3009,14 @@ the count, each function's RVA) at once, and the first name armed is written aga
 end (`tagpu_rec_level_end`). Any other build refuses the line (`cover: <name> refused: not a
 coverage build`).
 
-**Multiplayer work branch checkpoint:** `tagpu_recmp.c` sends bounded contributions
-off the game thread, and `tagpu_recmp_orders.c` caches authoritative human/hosted-AI
-queues without following remote list objects. Network files remain disabled. The
-private Receive replacement is at `0x4C9840`; the host's start call `0x496D25`
-carries a fresh match ID, the observer at `0x4553BE` retains the original start
-action, and length initializer `0x4520BE` writes the extended start's 25 bytes.
-Native CreatePlayer at `0x4CA762` appends a public key to the original 21-byte
-prefix; its system handler's size branch at `0x454315` accepts 21 or 301 bytes.
-All six sites are checked and made writable before any is changed. B3's
-`tagpu_wire_received` supplies the receive's actual delivered span. Details and
-remaining verification: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md).
+**Multiplayer work branch checkpoint:** `tagpu_recmp.c` carries contributions on one worker's distinct native TCP/IP application/session, and `tagpu_recmp_orders.c` caches authoritative human/hosted-AI queues without following remote list objects. Network files remain disabled. The host's start call `0x496D25` carries a fresh match ID; observer `0x4553BE` retains the original start action and initializer `0x4520BE` writes its 25-byte length. Native CreatePlayer at `0x4CA762` appends a public key to the original 21-byte prefix; system size branch `0x454315` accepts 21 or 301 bytes. All five sites are checked and made writable before any changes. B3's `tagpu_wire_received` supplies the start action's actual delivered span. The primary Receive wrapper is stock. Details: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md).
 
-The linked `tagpu_recmp_net.c` backend owns a distinct native TCP/IP session on
-one worker and retains sixteen async send contexts through SENDCOMPLETE. Its
-standalone two-peer fixture verifies signed human/AI bindings against public keys
-from actual primary native player data, then receives sixteen data packets per
-peer after both primary interfaces close. Each sender completes 18 sends,
-including its two signed bindings. It is not called by TA yet and writes no
-engine fields. A real four-actor TA game verifies the 301-byte bootstrap and
-native local/remote ownership checks for both humans and hosted AIs; contributions
-still use the shared-session channel. The engine map records why the viewed-row
-`0x4655A1` resource send cannot advertise every idle AI. No resource-message patch
-is installed. Neither test establishes terminal completeness or a network file.
+The game thread copies the native host address and bounded actor roster/public keys/ownership. The worker retains no primary interface or engine pointer. `tagpu_recmp_net.c` owns sixteen native async completion contexts, while signed bindings freeze each primary human/AI origin's private session, stream and actual SDK sender. Data waits in bounded storage until every expected actor binds and identity announcements precede data on the private sender. A full queue ends contributions incomplete; the game never joins the worker.
+
+The native fixture delivers sixteen DATA packets per peer through the production channel initialized after both primary interfaces close. Actual TA also verifies the isolated channel with two humans and one hosted AI each: both bind their two remote actors and receive resources and nonempty queues without loss/failure. These tests do not establish terminal completeness, physical bandwidth bounds or a network file. The engine map records why the viewed-row `0x4655A1` resource send cannot advertise every idle AI; no resource-message patch is installed.
 
 | Fields we write in the multiplayer checkpoint | Invariant |
 |---|---|
-| Network context `+0x4B5/+0x4B9` (main `+0x4C9/+0x4CD`) | Receive outputs copied only for a stock/system packet returned to the engine, as its wrapper does. Private packets stay in bounded recorder storage. |
 | `0x512AF8` startup packet-length entry | 25, written by the redirected initializer store; start sender, receive observer and initializer are installed together. |
 | Host start's message bytes | Fixed 25-byte stack value passed through the existing generic sender; its reliable queue copies before return. No remote engine resources or order fields are written. |
 | Native CreatePlayer initial data | The original 21-byte password/version prefix followed by a fixed 280-byte public-key record. Only public material is exported; key failure forwards the stock data and refuses faithful contributions. The size handler retains the original accepted-prefix tests. |
