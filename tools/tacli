@@ -5645,6 +5645,56 @@ def replay_prediction(args):
         human=f"fork would delete {'no timeline' if evict is None else f'timeline {evict}'}")
 
 
+def cmd_rewind(args):
+    """Operate live rewind in an already running, recorded skirmish."""
+    if (args.action == "seek") != (args.T is not None):
+        die("rewind seek needs T; the other actions take no tick")
+    if args.T is not None and not 1 < args.T <= 0xFFFFFFFF:
+        die("rewind seek T must be between 2 and 4294967295")
+    if args.dump and not re.fullmatch(r"[A-Za-z0-9_-]{1,39}", args.dump):
+        die("--dump needs 1 to 39 letters, digits, '-' or '_'")
+    inst = Instance(args.name)
+    if inst.remote or not inst.running():
+        die("rewind needs a running local instance")
+    lines = _LogLines(_log_cursor(inst))
+    trig = inst.gamedir / REPLAY_TRIGGER
+    tmp = trig.with_name(trig.name + ".tmp")
+    cmd = f"rewind {args.action}"
+    if args.T is not None:
+        cmd += f" {args.T}"
+    if args.dump:
+        cmd += f" dump {args.dump}"
+    tmp.write_text(cmd + "\n")
+    os.replace(tmp, trig)
+    expected = {"open": "opened at GameTime", "seek": f"seek {args.T} complete",
+                "now": "(?:closed, nothing moved|returned to now)", "fork": "forked at GameTime",
+                "close": "(?:closed, nothing moved|returned to now)"}[args.action]
+    done_rx = re.compile(r"rewind: " + expected)
+    dump_rx = re.compile(rf"recorder: frame dump {re.escape(args.dump or '')} at GameTime (\d+)")
+    result = {"name": args.name, "action": args.action, "done": False}
+    deadline = time.monotonic() + args.timeout
+    while time.monotonic() < deadline:
+        for line in lines():
+            if "rewind:" in line and ("refused" in line or "failed" in line):
+                result["detail"] = line.strip()
+                out(result, args.json, human=line.strip())
+                sys.exit(1)
+            if done_rx.search(line):
+                result.update(done=True, detail=line.strip())
+            match = dump_rx.search(line)
+            if match:
+                result.update(dump=str(inst.gamedir / "replays" / f"dump-{args.dump}.bin"),
+                              dump_at=int(match[1]))
+        if result["done"] and (not args.dump or "dump" in result):
+            out(result, args.json, human=result["detail"] +
+                (f"; dump at GameTime {result['dump_at']}: {result['dump']}" if args.dump else ""))
+            return
+        if not inst.running():
+            die(f"{args.name} exited during rewind {args.action}")
+        time.sleep(0.1)
+    die(f"rewind {args.action}: no complete result in {args.timeout:g} s")
+
+
 def cmd_replay_takeover(args):
     """A recording's level taken over at GameTime T as player P: a fresh process that plays the
     recording, or the instance's running playback, becomes a live skirmish from T, and the game
@@ -6769,6 +6819,15 @@ def build_parser():
     sp = add_scenario("dump", "(phase E — not built yet)")
     sp.add_argument("rest", nargs="*")
     sp.set_defaults(func=cmd_scenario_todo, cmd_todo="dump")
+
+    rw = sub.add_parser("rewind", help="rewind a live recorded skirmish")
+    add_common(rw)
+    rw.add_argument("name")
+    rw.add_argument("action", choices=["open", "seek", "now", "fork", "close"])
+    rw.add_argument("T", type=int, nargs="?")
+    rw.add_argument("--dump", metavar="NAME", help="save a frame dump before resuming")
+    rw.add_argument("--timeout", type=float, default=30)
+    rw.set_defaults(func=cmd_rewind)
 
     rp = sub.add_parser("replay", help="play a demo recording back on puppets")
     add_common(rp)

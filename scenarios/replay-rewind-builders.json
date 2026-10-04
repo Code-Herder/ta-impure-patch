@@ -1,0 +1,66 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Additional unordered AI construction units for the takeover and live rewind comparisons. The battle receives them before takeover; the rewind baseline and live run receive another group before rewinding. The engine AI chooses their work.",
+ "setup": {
+  "clear_existing": false
+ },
+ "groups": [
+  {
+   "id": "builders1",
+   "owner": 1,
+   "at": [
+    6900,
+    7100
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 2,
+    "spacing": 120
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 4
+    }
+   ]
+  },
+  {
+   "id": "builders2",
+   "owner": 2,
+   "at": [
+    1900,
+    1900
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 2,
+    "spacing": 120
+   },
+   "composition": [
+    {
+     "type": "ARMCK",
+     "count": 4
+    }
+   ]
+  },
+  {
+   "id": "builders3",
+   "owner": 3,
+   "at": [
+    7100,
+    1900
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 2,
+    "spacing": 120
+   },
+   "composition": [
+    {
+     "type": "CORCK",
+     "count": 4
+    }
+   ]
+  }
+ ]
+}

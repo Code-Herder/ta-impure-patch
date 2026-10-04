@@ -1,0 +1,14 @@
+{
+ "format": "ta-scenario/1",
+ "description": "One human solar plant created while the rewind fixture is paused. No radar scan has seen it yet, so the saved present's contact bits differ from an extra scan's result.",
+ "setup": {"clear_existing": false},
+ "groups": [
+  {
+   "id": "contact",
+   "owner": 0,
+   "at": [1000, 7000],
+   "pattern": {"kind": "line", "spacing": 80},
+   "composition": [{"type": "ARMSOLAR", "count": 1}]
+  }
+ ]
+}

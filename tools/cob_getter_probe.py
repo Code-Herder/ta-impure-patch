@@ -84,9 +84,7 @@ def probe_cob(pieces, extended=False, roundtrip=False, thread_exhaustion=None):
         prefix += [op['START_SCRIPT'], worker, 0] * 7
         prefix += [op['PUSH_CONSTANT'], 0, op['SET_SIGNAL_MASK']]
         prefix += [op['PUSH_CONSTANT'], 123] * 128
-        prefix += [op['START_SCRIPT'], worker, 128]
-        if thread_exhaustion == 'call':
-            prefix += [op['CALL_SCRIPT'], worker, 0]
+        prefix += [op['CALL_SCRIPT' if thread_exhaustion == 'call' else 'START_SCRIPT'], worker, 128]
         # With a leaked START argument the SIGNAL push exceeds the allocation.
         # With correct consumption it kills the workers and frees the slots for
         # the ordinary getter calls that follow.
@@ -489,7 +487,14 @@ def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, threa
         while time.monotonic() < deadline:
             rows = returns(talog.run_text(inst["gamedir"], "tagpu_cobtrace"))
             expected_count = len(units) * (len(GETTERS) + (34 if extended else 0))
-            if len(rows) >= expected_count:
+            if thread_exhaustion == 'call':
+                trace = talog.run_text(inst['gamedir'], 'tagpu_cobtrace')
+                refused = {int(parts[2]) for line in trace.splitlines()
+                           if (parts := line.split('\t'))[0] == 'X' and len(parts) == 5
+                           and parts[3:] == ['CapacityWorker', 'L']}
+                if set(units) <= refused:
+                    break
+            elif len(rows) >= expected_count:
                 break
             if game["proc"].poll() is not None:
                 raise RuntimeError("game exited before probe completion")
@@ -540,6 +545,17 @@ def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, threa
                                 nano=struct.unpack_from("<f", data, 0x104)[0],
                                 alive=bool(struct.unpack_from("<I", data, 0x110)[0] & 0x10000000))
                 report["native_units"].append(snapshot)
+                if thread_exhaustion == 'call':
+                    cob = struct.unpack_from('<I', data, 0x9A)[0]
+                    memory.seek(cob + 28)
+                    records = memory.read(8 * (36 + 4 * 128))
+                    status, pc, sp, sleep, piece, axis, child = struct.unpack_from('<IIiiiii', records)
+                    stack = struct.unpack_from('<128i', records, 36)
+                    busy = sum(struct.unpack_from('<I', records, i * 548)[0] != 0 for i in range(8))
+                    if (status, sp, child, busy) != (0x02800000, 127, -1, 8) or stack != (123,) * 128:
+                        raise RuntimeError(f'failed CALL state differs: {status:#x}, sp={sp}, child={child}, busy={busy}')
+                    report.setdefault('failed_calls', []).append(dict(unit=unit, pc=pc,
+                        sp=sp, child=child, busy=busy, arguments_retained=len(stack)))
                 if snapshot != dict(unit=unit, owner=owner, kills=7 + owner if extended else 0,
                                     nano=0.5 if extended else 0.0, alive=True):
                     raise RuntimeError(f"probe preconditions differ from the scenario: {snapshot}")
@@ -548,7 +564,25 @@ def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, threa
             report['skirmish_ceiling_id'] = applied['units']['ai']['engine_index']
             if slots != 15001 or report['skirmish_ceiling_id'] != 6000:
                 raise RuntimeError('the probe did not occupy the four-player skirmish ceiling')
-        report["checks"] = judge(rows, units, slots, mode, extended)
+        report["checks"] = ([] if thread_exhaustion == 'call' else
+                            judge(rows, units, slots, mode, extended))
+        if thread_exhaustion == 'call':
+            if len(report.get('failed_calls', [])) != len(units):
+                raise RuntimeError('failed CALL did not leave each parent dormant')
+            report['thread_exhaustion'] = 'CALL refused, arguments retained, parent dormant on child -1'
+            def game_tick():
+                reply = json.loads(command('peek', name, '*0x511DE8+0x38A47:4', '--json'))
+                return int(reply['peeks'][0]['value'].split()[0])
+            before = game_tick()
+            deadline = time.monotonic() + 15
+            while game_tick() < before + 30:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('game did not advance with dormant CALL parents')
+                time.sleep(.2)
+            report['continued_ticks'] = game_tick() - before
+            report['checks'] = [dict(unit=c['unit'], check='bounded dormant CALL', ok=True)
+                                for c in report['failed_calls']]
+            report['checks'].append(dict(check='simulation advances', ok=True))
         report["ok"] = all(row["ok"] for row in report["checks"])
         if thread_exhaustion == 'start':
             trace = talog.run_text(inst['gamedir'], 'tagpu_cobtrace')
@@ -580,11 +614,6 @@ def run(out, mode, dll, extended=False, roundtrip=False, quarantine=False, threa
             report["ok"] = False
     except Exception as exc:
         report.update(ok=False, error=str(exc))
-        if thread_exhaustion == 'call' and inst:
-            failure = inst['gamedir'] / 'log/startup-failure.txt'
-            if failure.exists() and 'CALL cannot obtain a child thread' in failure.read_text(errors='replace'):
-                report.update(ok=True, required_refusal=failure.read_text(errors='replace'))
-                report.pop('error', None)
     finally:
         if game:
             wine_log = compat.stop_wine(game, keep=True)

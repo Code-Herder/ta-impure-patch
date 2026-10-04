@@ -9,6 +9,9 @@
 #include <windows.h>
 #include "tagpu_recfile.h"
 
+/* Game-thread VM allocation with a stable START/CALL counter key. */
+int tagpu_rec_cob_child(char* cob, unsigned script, int call);
+
 /* B2's stub at the sim step's call of the unit tick (0x4954ED) calls this on the game thread,
    between two iterations, after the replay's capture-point write (tagpu_replay_capture), so that a
    dump on a level that plays a recording holds what the replay wrote there. */
@@ -33,6 +36,11 @@ int tagpu_rec_dump_arm(const char* name, unsigned at);
    moved GameTime back between them: a step raises it once (0x4954C0). 1 written; 0 with a line
    when no level is in play, the name is bad or the dump could not be written. */
 int tagpu_rec_dump_now(const char* name);
+/* Harness-only observation over [from, until): new AI-issued orders and their
+   normal handler dispatches, reported per seat in the log. Game thread. */
+int tagpu_rec_ai_arm(const char* name, unsigned from, unsigned until);
+/* Acquisition runs for human seats too; end planner attribution before it. */
+void tagpu_rec_ai_planning_end(void);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
    cascade frees the unit array: the recording in progress ends, complete once its writer has
@@ -145,12 +153,14 @@ typedef struct RecRing {
     volatile LONG  rpub;               /* bytes the writer has given back                      */
     volatile LONG  failed;             /* set by the writer when it cannot write: the capture
                                           then ends the recording                              */
+    volatile LONG  flush_req, flush_done; /* completed file writes precede the acknowledgement */
     volatile LONG  wend;               /* the `wpub` that publishes RK_END ...                 */
     volatile LONG  ended;              /* ... valid once this is 1                             */
     HANDLE         wake;               /* auto-reset; the writer's handle                      */
     HANDLE         done;               /* manual-reset; the writer's handle, set once the file
                                           is closed: *The exit* waits on the capture's own    */
     char           path[MAX_PATH];     /* the recording's file, named by the capture           */
+    char           opened_path[MAX_PATH]; /* writer's actual name; published by flush_done */
     unsigned char* grid;               /* the feature grid's first image, every cell's, from
                                           VirtualAlloc: written by the capture before it
                                           publishes the RK_GRID that names it, so the writer
@@ -175,5 +185,17 @@ int tagpu_rec_fork_ready(char* why, unsigned cap);
    fork is always recorded, decision D3). On 1 the recorder owns f->file (f->file = NULL); on 0
    the caller still does. Game thread. */
 int tagpu_rec_fork_arm(RecFork* f);
+
+/* Live rewind, game thread only, between simulation steps. Flush asks asynchronously; poll is
+   0 pending, 1 complete, -1 failed. Suspension retains the unpublished step's events and all
+   capture baselines. Resume compares every feature row before the next iteration is published. */
+int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap);
+int tagpu_rec_rewind_flush(char* path, unsigned cap);
+int tagpu_rec_suspend(int on);
+typedef void (*RecPendingVisit)(void* ctx, unsigned kind, const unsigned char* body, unsigned len);
+void tagpu_rec_pending_events(RecPendingVisit visit, void* ctx);
+/* Ends the original with its pending events. The caller owns the returned done-event duplicate
+   and must observe it signalled before opening an append writer. NULL leaves recording intact. */
+HANDLE tagpu_rec_rewind_end(void);
 
 #endif

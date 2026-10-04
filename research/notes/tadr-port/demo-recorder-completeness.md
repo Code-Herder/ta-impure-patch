@@ -399,6 +399,23 @@ pauses, since a puppet host's speed keys change nothing), `dump <name> now` (a f
 once), `seek <T> [dump <name>]`, `dock seek <T>` (the dock's own seek entry,
 `tagpu_replay_seek_request`, which takes no dump) and `roundtrip <name> at <T>`.
 
+**Live rewind (U).** A fixture with `"rewind": true` also runs the
+[rewind L/P/Q checks](demo-recorder-s4-rewind.md) in `tarewind.py`. Battle and
+stock-limits use the battle on their respective DLLs. `rewind_steps` declares
+additional scenario steps for the U lane's live game, so edits to
+those scenarios select these fixtures for the landing tier. The current extra
+step supplies AI builders before the comparison window, without giving them
+construction orders. Fresh planning and normal dispatch are required per AI seat
+after return-to-now and fork; construction is reported only. `tareplay.py rewind battle [--stock] [--cover]` runs this
+lane independently. Its fresh seek uses `seek-frame T dump NAME`, which pauses
+and dumps in the seek's frame visit. The approved scope excludes unseated sight
+counters under D2 and reports/accepts VM START/CALL child counts across
+return-to-now. Seated sight, root counts and puppet-write checks remain intact;
+see *Rewind comparison scope* below. The U lane also uses the engine's `+kill 9`
+with developer cheats temporarily enabled to disable objectives on an unused
+seat, verifies return-to-now preserves that
+switch, and verifies a fork arms objectives under the takeover policy.
+
 **The player's way in (W).** A fixture with `"watch": true` in `fixtures.json` — `stock-limits` on
 the stock-limits build and `wpn-badtgt` on the raised one, so the landing tier's coverage holds
 both builds — runs a fifth process on its recording, `watch_lane` in `tareplay.py`, which starts
@@ -495,6 +512,15 @@ cannot see an address recorded as a value; the scan looks for one instead.
   fire function live and by the shot receiver on a puppet — whose listed callers are compared
   summed). The band is the owner's standard: a replay is a good approximation of what the game
   showed, not a tick-exact copy; the roots stay exact. A key table that overflows fails by name.
+  The owner-approved bounded COB flare allowance applies only to
+  `(0x472630, 0x420AE6, 0x4812D3)`: after its own band fails, the corresponding
+  parent `(0x420A30, 0x4812D3, 0)` must be counted in all four dumps and pass its
+  ordinary band. Both differences must have the same direction, the flare
+  difference must not exceed the parent difference, all four counts must be
+  nonnegative, and each flare count must not exceed its parent count. Accepted
+  cases report both pairs. This is a count tolerance based on at most one flare
+  per parent, not proof identifying the individual missing calls; see
+  [the measured case](demo-recorder-s4-rewind.html#the-naval-flare-count).
 - **No COB engine write on a puppet**: SET's ACTIVATION and ARMORED (`0x48B090`, returning to
   `0x480B57`, `0x480BF1`), SET's YARD_OPEN (`0x47DAC0`, `0x480BB3`), ATTACH and DROP (`0x48AAC0`,
   `0x4813AB`, `0x481427`), counted on a puppet's unit outside the replay's own calls; the first 16
@@ -641,3 +667,13 @@ machine's view, so other players' owner-only indicators, which that machine neve
 absent. And a takeover's fresh COB resets what a mod keeps in COB statics and piece visibility
 (for example Mayhem's upgraded metal extractor looks un-upgraded after a fork, while its attached
 module and `+0x10E` are restored) [INFERRED from the scripts].
+
+
+### Rewind comparison scope
+
+The owner approved two S4 amendments on 2026-10-03: D2 also excludes unseated
+records' sight counters; the U lane accepts VM START/CALL child-allocation count
+differences across return-to-now via `compare-counts --rewind`, reporting each
+pair. Seated sight counters, root counts and puppet-write checks remain intact.
+COB execution state is reconstructed, not preserved. Ordinary count comparisons
+retain their existing policy. See [S4 rewind](demo-recorder-s4-rewind.html).

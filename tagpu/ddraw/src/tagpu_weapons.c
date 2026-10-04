@@ -1134,6 +1134,7 @@ static int __thiscall my_Acquire(char* self, int param)
 {
     int   n, k;
     char* ctx;
+    tagpu_rec_ai_planning_end();
     if (!batch_has_extended(self)) return o_Acquire(self, param);
     HIT(H_ACQUIRE);
     ctx = *(char**)self;

@@ -1441,7 +1441,8 @@ index `+0xA6` holds.
 - **`+0x5C` and `+0x60`, the order lists** (nodes of 0x56 bytes). An order goes on `+0x60` when its
   descriptor's flags carry `0x40000` — BuildWeapon `0x0D` and SelfDestruct `0x26`, no other — and
   on `+0x5C` otherwise (`0x43AC6A`, `0x43ACBA`, `0x43AD19`). Every write goes through the head's
-  address; no create or destroy stores it directly. MEASURED: `+0x60` NULL in every record.
+  address; no create or destroy stores it directly. MEASURED: `+0x60` was NULL throughout the
+  original layout sample. The `secondary-orders` fixture exercises it with native self-destruct.
 - **`+0x82`, the sort bucket** (10-byte buckets from `*(main+0x1429F)`, the list head at `+6`,
   128-px cells, the off-map bucket `*(main+0x142B7)`). Only the restamp `0x47CC30` chooses it, from
   the position at that moment ((`+0x72` >> 23)·columns + (`+0x6A` >> 23), `0x47CCA9..0x47CCD8`),
@@ -2735,6 +2736,18 @@ in-play frame callback `0x496790`'s draw call. The pause test `0x496920..0x49692
 every path from there reaches `0x4969CD`, so the site runs on paused frames too. The scenario
 applier's tick hook takes the next instruction's bytes (`0x4969D2`), disjoint from these.
 
+**Live rewind's pause guard, `0x496920` [DISASSEMBLED].** The six stolen bytes
+`84 98 51 8A 03 00` are `test byte [eax+0x38A51],bl`; `jne 0x496969` at
+`0x496926` skips the scheduler call at `0x496928` and the step call at
+`0x49693E`. A before-observer sets pause while the game-thread rewind state is
+active, then executes that same test. This orders the pause before every simulation
+entry through this frame path, even when input has toggled it since the previous
+draw. The later draw observer alone cannot provide that ordering. The preceding
+`main+0x37EBE` test at `0x496918` may branch directly to `0x49697B`, bypassing
+both this test and simulation. [Live rewind](tadr-port/demo-recorder-s4-rewind.md)
+records the pause-key measurements.
+
+
 **Corrections to this map's earlier lines**, each re-read here: `0x416390` (`call 0x424840; ret 4`)
 is the console command **BurnAll** and `0x4163A0`, which destroys the feature under the cursor
 with `force` 1 (`0x4163C8`), is **BurnOne** — the command table's entries at `0x50203C` and
@@ -3060,7 +3073,7 @@ argument are in the fork note.
 | `0x4648E0` the AI profiles | `cdecl (void)`, plain `ret` (`0x46498D`) | ends by calling `0x409F80(i)` and `0x40A040(i)` for each record that is active and of type 2 (`0x46494E..0x464982`) |
 | `0x440A40` the passability refresh | `stdcall (xz, wh)`, `ret 8` | calls `0x440830(ctx, xz, wh)` for each of the 32 contexts `0x512358..0x512758` whose first dword is set (`0x440A4B..0x440A67`). `0x440830` sign-extends x, z, w and h from words, computes x+w+1 and z+h+1 in 32 bits, clamps x and z at 0 (signed) and the ends to `ctx+0x10` and `+0x14` (unsigned) (`0x440833..0x440897`), so `(0, 0x7FFF7FFF)` is every context whole |
 | `0x48BD00` deselect all | `cdecl (void)`, plain `ret` | `+0x110 &= 0xFFFFFF2F` on every slot from `[main+0x14357]` to `[main+0x1435B]`, then `0x491D70(0)` (`0x48BD00..0x48BD42`) |
-| `0x464290` the seat activation | `stdcall (seat, type)` | with type 0 it zeroes `rec+0x74` without freeing it (`0x46434A`) |
+| `0x464290` the seat activation | `stdcall (seat, type)` | zeroes `rec+0x74` without freeing it (`0x46434A`), including types 0 and 3; sets the active DWORD to 1 (`0x464364`), so type 0 is not an active-DWORD clear |
 | `0x4904B0` the objective's disarm | `thiscall` | writes only `obj+0x88 = 0` (`0x4904B0..0x4904BA`); the takeover writes 1 back |
 
 **The player init's tail, `0x46489D..0x4648CD`.** A record that is active and of type 3 skips the AI
@@ -3068,6 +3081,47 @@ object and the acquisition record (`0x46489D..0x4648A5`), so a puppet seat holds
 takeover makes both, in the init's order. **The teardown `0x464A00` frees both**: `0x40B390` with the
 record's map bit, then `0x408F10` and `0x4B4F20` on `+0x74`, which it zeroes
 (`0x464A41..0x464A6B`).
+
+**Live rewind prerequisites [DISASSEMBLED and MEASURED 2026-10-02].**
+[The S4d experiments](tadr-port/demo-recorder-s4-rewind.md) call the same routines
+from the game-thread frame visit before `0x4969CD`. For a newly seated spectator,
+`0x464700(rec)` supplies sight `+0x7C`, groups `+0x78` and statistics `+0xEC`,
+while its active-type-3 branch skips the AI objects. Repeated seating must reuse
+these buffers: its call `0x480190(rec)` at `0x464898` allocates `0x140` bytes
+through `0x4D83B0` and overwrites `+0x78` at `0x4801B1` without freeing the old
+pointer; the remainder initializes ten `0x20`-byte groups and returns `ret 4`
+at `0x4801E3`. P1 reused all three buffers across two activations at GameTime
+1522 and then completed teardown and a second skirmish load.
+
+**The mid-game spectator must receive the loaded seat's metadata [DISASSEMBLED].**
+The ordinary player init writes GameTime into `+0xF4` (WinLoseTime) at `0x464727`;
+a fresh playback initializes it at zero, while a mid-game init would stamp the live
+GameTime. Its only recorded consumer is the saver. Rewind initializes the viewer's
+stamp to zero so its frame matches a fresh playback.
+
+`0x451090` has direct callers `0x45119D`, `0x451584` and `0x4540BB`. It selects
+the controlled record's PlayerInfo, copies `main+1` to `info+0xA7` at `0x4510C0`
+and `main+2` to `info+0xA8` at `0x4510D4`, and inserts `main+0x2A3C`'s low nibble
+into `info+0x9B` bits 0–3 (`0x4510E4..0x4510F4`). The two version bytes also
+have stores at `0x4513F1` and `0x451400`. The loader sets `info+0x9B` bit 4 at
+`0x497BFF`, then calls `0x450F90` and `0x451180` at `0x497C06` and `0x497C0B`.
+The former returns immediately without the network bit (`0x450F9B..0x450FA2`);
+the latter reaches the metadata fill described above. Rewind supplies these
+bounded scalar fields for V without rerunning the loader or its network paths.
+
+The scheduler's player scan tests active/type 3 at `0x4952CF..0x4952D6`, then
+skips a zero live count `+0x144` at `0x4952D8..0x4952DF`, before reading the
+pacing stamp `+0x18` at `0x4952E1`. An empty spectator therefore needs no stamp
+write. P1 measured 318 ticks in 10.454 seconds with that seat controlled.
+
+For the reverse conversion, P2 killed 1370 live units while all four seats still
+held their local types and AI objects. After zero units remained, the type
+setter and the teardown sequence above cleared both objects; rebuilding made
+1416 puppets with zero refusals. `0x40B390(seat)` clears `0x5119C0[seat]` at
+`0x40B514` and returns `ret 4` at `0x40B51E`; `0x408F10` receives the AI object
+in ECX and `0x4B4F20` receives it as a caller-popped argument, as shown at
+`0x464A5B..0x464A68`. The experiment covers the battle fixture, not every order
+handler, and does not test return-to-now or the live writer handshake.
 
 **A create picks the proxy movement class only for a remote owner**: `[owner+0] != 0 && owner+0x73 ==
 3` (`0x43DC4A..0x43DC57`). So the seats' types must be set after the last kill and before the first
@@ -14735,7 +14789,7 @@ value; the handler follows each compare):
 | GET_UNIT_VALUE `…42000` / GET `…43000` / `…44000` / `…45000` | `0x4B15B3` `0x4B1630` `0x4B1622` `0x4B16B8` | `vt+0x44(id, 0, 0, 0, 0)` for the first |
 | SET_LESS … LOGICAL_NOT | `0x4B16AE` `0x4B1707` `0x4B16FD` `0x4B1761` `0x4B1757` `0x4B17BB` `0x4B17B1` `0x4B181D` `0x4B1813` `0x4B188A` | |
 | START `0x10061000` | `0x4B1880` (body `0x4B18B0`) | inline `[pc+1]` script index, `[pc+2]` argc; alloc; **refused (`0x4B18C2`) → the argc words stay on the parent's stack** and pc += 3; else pops them into `child.stack[0..argc−1]` in push order **without setting the child's sp** (it stays `−1`; the child's `CREATE_LOCAL_VAR`s climb over them), `child.mask = parent.mask`; pc += 3 |
-| CALL `0x10062000` | `0x4B1911` (body `0x4B191D`) | as START, then `parent+0x18 = child slot`, parent status `0x2800000`, stop — **the child slot is written even when it is `−1`, and nothing ever wakes a thread waiting on `−1`: a `call-script` on a full pool blocks the caller for ever** (not yet seen live) |
+| CALL `0x10062000` | `0x4B1911` (body `0x4B191D`) | as START, then `parent+0x18 = child slot`, parent status `0x2800000`, stop — **the child slot is written even when it is `−1`, and nothing ever wakes a thread waiting on `−1`: a `call-script` on a full pool leaves the caller dormant until it is killed** |
 | `0x10063000` | `0x4B1903` (body `0x4B1984`) | pops `[pc+2]` words into the runner's own frame `[esp+0x20..]`, pc += 3 `[unknown use]` |
 | JUMP `0x10064000` | `0x4B19BB` | pc = inline |
 | RETURN `0x10065000` | `0x4B19B1` (body `0x4B19D0`) | if `+0x20`: pop → `cb->slot0(value)`; else the value stays on the stack; status `0`, `+0x53C--`; every record with status `0x2800000` and `+0x18 == this slot` → running; stop |
@@ -14748,6 +14802,37 @@ value; the handler follows each compare):
 
 The tail: `0x4B1BD5` pc++, `0x4B1BD9` writes pc back, `0x4B1BDC` loops while the flag is set,
 `0x4B1BE8` unwinds.
+
+### Exhausted CALL is a dormant thread, not an invalid address (O15)
+
+[DISASSEMBLED 2026-10-03] `0x4B08C0` returns `-1` for an invalid script index
+(`0x4B08C5..0x4B08D0`, `0x4B092C`) or eight occupied records
+(`0x4B08D7..0x4B08ED`). The guarded opcode validates its script index first,
+so a refused VM CALL is the latter. `0x4B192F` skips argument copying on refusal:
+the parent's stack and SP stay intact. `0x4B1965..0x4B197F` writes child `-1`,
+advances PC by three, sets status `0x02800000` and stops this thread's execution.
+
+The status dispatch `0x4B0DBF..0x4B0E49` leaves a CALL wait dormant. RETURN's
+wake loop `0x4B19F4..0x4B1A23` visits exactly eight records and compares each
+waiting record's child value with the returning slot at `0x4B1A12`; it never
+uses the child as an address or index. SIGNAL can kill the waiting record by
+its signal mask. No returning slot equals `-1`, so the refused call cannot
+resume by accidentally borrowing another child's completion. The native
+per-unit runner `0x4B0D60` continues visiting the other seven records.
+
+Impure preserves that state. `tagpu_cob_check_record` accepts child `-1` or
+`0..7` only; the expanded and native save readers apply the same validation.
+Other negative values and out-of-range slots remain faults. A refused START
+still consumes arguments in the guarded adapter to bound repeated failed starts.
+This is a sentinel-and-bounds argument; no retry or enlarged thread pool is used.
+
+[MEASURED 2026-10-03] The full-pool fixture held eight busy records on each of
+human unit 2 and local-AI unit 1002. Their refused CALLs retained 128 arguments
+(all 123), SP 127, PC 286, status `0x02800000`, child `-1`; the game advanced
+48 more ticks. The synthetic portable check accepts this sentinel through
+expanded save/load and native 32-word import, and rejects child `-2`, `8` and
+`2147483647`. This does not make a refused child execute or preserve COB history
+across a replay seek. See [COB compatibility](tadr-port/cob.html#o15-exhausted-call-and-failed-worker-cleanup).
 
 ### The piece animation array `cob+0x14` and the stepper `0x4B1C00` (tacob landing 3)
 
@@ -15824,6 +15909,95 @@ section", thread 39737 "hpi, ccx, gp3, ufo priorities", and `files.tauniverse.co
 `units.tauniverse.com`. A researcher with browser access to TAUniverse should re-run
 this survey — it is the single biggest blind spot here.
 
+
+### COB child allocation caller keys
+
+DISASSEMBLED: opcode `0x10061000` branches at `0x4B1888` to START's
+`0x4B18B0`; `0x4B18BB` calls allocator `0x4B08C0`, returning at `0x4B18C0`.
+Opcode `0x10062000` is tested at `0x4B1911`; CALL's `0x4B1928` calls the
+same allocator, returning at `0x4B192D`. The raised-limits VM uses these two
+addresses as semantic diagnostic caller keys around its synchronous allocation.
+They identify child starts only; the rewind count exception does not apply to
+other allocator callers. See the S4 rewind note for the accepted scope.
+
+The pristine allocator body `0x4B08C0..0x4B0933` has no calls: it bounds the
+script index, scans eight fixed records, initializes a free record, increments
+`cob+0x53C`, and returns the slot or −1 (`ret 4`). The raised-limits replacement
+uses the same synchronous allocation role. Neither executes the child's script
+inside the allocation, so the diagnostic context ends before VM execution resumes.
+
+
+### Objective arming across live rewind
+
+DISASSEMBLED: the argument form of `+kill` calls `0x486F10` at `0x4164DF`,
+then calls objective disarm `0x4904B0` at `0x4164EF` even when the selected seat
+has no units. `0x4904B0` stores zero at objective `+0x88` and returns. Objective
+checks test that DWORD at `0x490239` and `0x490365`. Return-to-now preserves its
+pre-conversion value; a fork deliberately arms it under the takeover policy.
+The objective pointer is at main `+0x391ED`, and level setup/teardown owns its
+lifetime as documented above.
+
+The controlled human seat can remain local with no units. The last-unit
+destructor decrements player `+0x144` at `0x486DFC`, then calls the skirmish
+notification `0x47BD70` at `0x486E54`. DISASSEMBLED: `0x47BD70..0x47BDE2`
+formats a player message and sends it through `0x463CA0` at `0x47BDD5`; it
+does not store a new controller type. With objectives disabled, native
+`+kill 0` leaves the recorded human seat empty in a continuing level.
+Return-to-now must restore that saved state. The nonempty-seat condition in
+`tk_bound` applies only to takeover; saved-present restoration retains the
+same memory, seat-identity, allocation and objective bounds without that
+eligibility test.
+
+
+### Saved radar contacts on return-to-now
+
+DISASSEMBLED: the players phase compares the seated record's `+0xF0` with
+GameTime at `0x46507D..0x465089`, advances it by 30 at `0x46508F..0x465092`,
+and calls `0x467440` only for the viewed record at `0x465565..0x46556D`.
+The radar pass writes unit `+0x110` bits 8–10 and 12 and may refresh `+0xB0`
+(the five loops are mapped above). These are scan history between deadlines;
+a scan over the same positions at a later tick need not reproduce them.
+
+MEASURED 2026-10-03 on the reference Wine setup: at paused GameTime 329, a
+new human solar plant held state `0x30280221`. Return-to-now's extra radar
+pass changed it to `0x30280321`, with no intervening simulation step. The
+full battle fixture exposed the same bit-8 error on an enemy nanoframe at
+GameTime 1679. The corrected return restores mask `0x1700` from the saved
+image for each bounded, identity-matched live slot and omits that extra scan;
+`+0xB0` is already restored by the ordinary unit image. A new run at GameTime
+318 retains `0x30280221` and its complete before/after frame compares EQUAL.
+The seated records' saved `+0xF0` deadlines still schedule the next engine scan.
+Historical seeks retain their existing scan and contact policy.
+
+
+### COB explosion additions and their child flares
+
+DISASSEMBLED: EXPLODE `0x481140` gets the piece's world position through
+`0x43E060` at `0x48125A`. Flag `0x400` selects the call at `0x4812CE`, returning
+to `0x4812D3`: explosion add `0x420A30(point, sequence, 2, 0)`. The sequence
+comes from `main+0x147FF`. The add checks its pool capacity at `0x420A42`, then
+its fourth argument at `0x420ABE..0x420AC4`; for zero, it compares the point's
+signed y word with the sea-level byte `main+0x1427F` at `0x420ACC..0x420AD8`.
+Only a point above water reaches its single flare call at `0x420AE1`, returning
+to `0x420AE6`. Thus each admitted add can emit at most one such flare. The
+raised-limits build relocates the explosion count and records to `s_expl`;
+`main+0x1491B` is not that build's active pool count.
+
+MEASURED 2026-10-03, retained naval recording, GameTime [661,2701): the
+`0x4812D3` parent additions number 201 live and 197 in playback; their child
+flares number 33 and 30. A repeated playback produces the same counts. A
+probe at the parent call sees 197 points, 30 above sea level 75, matching the
+30 child flares. A fresh live/playback pair instead has 198 additions and
+41 qualifying points on each side, with 41 flares each. Its point triples
+match except for one small above-water difference. The retained run therefore
+has upstream addition-count variance as well as a child-count difference;
+the measurements do not identify which missing additions supplied the three
+missing flares. The existing parent count band accepts four, while the child
+count band rejects three. The owner-approved comparator allowance bounds only
+this child key by its already-accepted parent difference, with matching direction
+and at most one child per parent on each side; both count pairs are reported.
+This policy does not identify the individual missing parent calls.
+
 ## Replay player cards and changing the viewed player
 
 Read while implementing `tagpu_cards.c` and `tagpu_replay.c`'s card model/Sight API. No new
@@ -15847,3 +16021,80 @@ Measured on the reference setup: a paused switch through two seats and back to t
 kept GameTime476; a Full map switch kept a separately checked eye at(1800,1900). These are input
 and camera-isolation checks, not yet a proof of death-vision equivalence; that comparison remains
 part of the player-card landing gate.
+
+
+## Direct AI order activity observer
+
+DISASSEMBLED against the pristine 3.1 executable: `0x408C40` has one direct
+caller, the players phase at `0x465031`. It receives its AI object in ECX,
+tests the object's owner record for active and controller 2 at
+`0x408C45..0x408C50`, runs the group assignment `0x408830` every 30 calls,
+and dispatches due planner objects from ten slots at AI+0x11 through their
+vtable at `0x408C8E`. Group assignment classifies live units and calls
+`0x480250` at `0x4088FA`; it does not directly construct orders in the
+disassembled body. `0x408BF0` contains a similar assignment/planner loop
+without the controller gate; the activity observer does not use it.
+
+`0x4089A0` is the final call on both branches of `0x408C40`: at `0x408C9A`
+with argument 1 for AI, and at `0x408CA7` with 0 otherwise. These are its only
+direct callers. It scans weapon targets and invokes target setters/resetters
+`0x48A0A0`, `0x48A060`, `0x48A0F0`, with queries `0x49D120`, `0x48A190` and
+`0x40B7B0`. Because human seats also run it, activity attribution ends on
+entry to this phase, through the existing `tagpu_weapons.c:my_Acquire` wrapper.
+A weapon reaction alone cannot prove planner liveness. Acquisition already owns
+a guarded detour; adding an observer over that detour makes the limits integrity
+check refuse startup. The recorder therefore calls no second patch installer there.
+
+`0x43A0C0` is the common order constructor: ECX is the new node, returned in
+EAX at `0x43A1C6`; `ret 0x18` at `0x43A1CF`. It sets action+4, state+5 and
+event fields, stamps GameTime at node+0x46 (`0x43A12E`), and leaves the
+owner+0x0E NULL (`0x43A193`). It runs no order handler. The high-level helper
+`0x43ADC0` calls it at `0x43ADEF`; callers can insert the result inline,
+so observing only list-insertion functions misses new AI orders.
+
+The four examined insertions are `0x43AC60` (insert before the supplied node,
+ret12), `0x43ACB0` (head, ret8), `0x43AD10` (tail, ret8), and `0x43AD50`
+(priority position, ret8). Each stores the owner at node+0x0E and links through
+node+0x4A. Their direct callers are listed below; no direct caller of
+`0x43AD50` was found in the disassembly.
+
+- `0x43AC60`: `0x43BA1E`, `0x43BA30`.
+- `0x43ACB0`: `0x401C99`, `0x401CAC`, `0x401F59`, `0x401F6E`, `0x4032F7`, `0x40330A`, `0x40529A`, `0x4052B2`, `0x405C06`, `0x405D18`, `0x405D33`, `0x406108`, `0x40611B`, `0x406532`, `0x40667A`, `0x406695`, `0x40F92B`, `0x40F943`, `0x40FEC3`, `0x410109`, `0x410124`, `0x4105D0`, `0x410A2A`, `0x410B0D`, `0x41101A`, `0x411EE1`, `0x411EF9`, `0x412692`, `0x412C14`, `0x413365`, `0x413380`, `0x413B5A`, `0x415453`, `0x4155EA`, `0x41578B`, `0x4157A6`, `0x489E97`, `0x489EA6`, `0x48A044`, `0x48A051`.
+- `0x43AD10`: `0x410384`, `0x411FBE`, `0x411FD6`, `0x41203E`, `0x412056`, `0x412786`, `0x4127E2`, `0x4127FA`, `0x412DAE`, `0x412DC6`, `0x412E28`, `0x412E40`, `0x4134D9`, `0x4134F1`, `0x413551`, `0x413569`.
+- `0x43AD50`: no direct caller.
+- `0x43A1F0`: `0x4384E4`, `0x439EF3`, `0x439F5F`, `0x439FC9`, `0x43AE47`, `0x43AEB8`, `0x43B075`, `0x43B1C9`, `0x43B93B`, `0x43BA5B`, `0x43BBE6`, `0x43BC49`.
+
+At the existing normal dispatcher observation sites `0x43B878` and
+`0x43BB1D`, ESI names the live order node; both read node+0x0E and call
+its handler. Destruction has a separate site, `0x43A216`, which is excluded
+from execution evidence. The destructor `0x43A1F0` receives the node in ECX
+and reaches any event-2 handler only after `0x43A1F5`. Forgetting a sample
+at entry establishes its lifetime before an allocation can reuse its address.
+The observer dereferences only the current dispatcher node, never a saved
+sample pointer, and bounds its owner against the level's unit allocation.
+
+DISASSEMBLED: the secondary controller `0x43BAD0`, called at `0x48AF9E`, reads
+the unit's `+0x60` list at `0x43BADA`. A node with nonzero `+6` waits until
+GameTime reaches its `+0x0A` deadline (`0x43BAE8..0x43BAFD`). Dispatch clears
+`+6` at `0x43BB09`, pushes event 0 and the current node at `0x43BB15..0x43BB16`,
+then reads its owner and calls the handler at `0x43BB1D..0x43BB21`. Removal
+calls the destructor at `0x43BBE6` or `0x43BC49` before `0x4B4F20` frees the
+node. The controller is inside the unit tick's owner-type-1/2 block, beside
+the primary controller at `0x48AF98`.
+
+MEASURED on the reference setup, 2026-10-04, normal coverage build: native
+selection of the isolated ARMSOLAR at screen `(512,384)`, then Ctrl+D, removed
+that unit while the two remote units stayed alive. The coverage bitmap reached
+`ev_nano_h2`. This covers the secondary dispatch callback; a human self-destruct
+does not count as a planner-originated AI order.
+
+Observer stolen prefixes: `0x408C40` five bytes `53 56 57 8B F9`;
+`0x43A0C0` seven bytes
+`83 EC 0C 8A 44 24 10`; `0x43A1F0` five bytes `53 56 8B F1 57`.
+All are complete instructions without relative operands. The normal-dispatch
+observers already exist for the recorder's nano context.
+`ai_hooks_init` checks all three current prefixes with `tagpu_detour_bytes_ok`
+before installing any observer. `tagpu_detour_observe` alone compares an
+already registered Impure stub; its first-install path does not match the
+engine's bytes. A mismatch therefore leaves all three new observers uninstalled,
+and the harness refuses AI activity observation.

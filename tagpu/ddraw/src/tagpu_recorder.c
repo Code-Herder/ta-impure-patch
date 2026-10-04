@@ -582,6 +582,7 @@ typedef struct Rec {
     unsigned char  mrunbuf[REC_MAPPED_RUNS];    /* an RK_MAPPED_RUNS as it is built          */
     unsigned short seated;              /* bit i: the header seats record i (RT_PLAYER)          */
     unsigned       cmdr[REC_PLAYERS];   /* the GameTime each seat's last commander died, 0 none  */
+    unsigned char  rewind_end[4 + 12 * REC_PLAYERS];
     unsigned       defeat[REC_PLAYERS]; /* the GameTime its live count last reached 0, 0 none:
                                            a seat ends defeated only while it is still 0       */
 } Rec;
@@ -599,6 +600,7 @@ static unsigned mapped_bytes(const char* ta);
 enum { ST_IDLE, ST_RECORDING, ST_DONE };        /* DONE: the rest of this level is not recorded */
 static Rec*     s_rec;
 static int      s_state = ST_IDLE;
+static int      s_suspended;
 static RecFork  s_fork;         /* a fork armed for the next capture point; file NULL for none */
 
 /* THE GAME THREAD'S RECORDING. s_tid is the recording's game thread while s_rec is set, and 0
@@ -1339,7 +1341,8 @@ static void rec_end(Rec* r, unsigned reason)
     memcpy(b + 12, &off, 4);
     memcpy(b + 16, &r->uncredited, 4);
     memcpy(b + 20, &unobserved, 4);
-    seats_end(r, reason, b + 24);
+    if (s_suspended) memcpy(b + 24, r->rewind_end, sizeof r->rewind_end);
+    else seats_end(r, reason, b + 24);
     pos = r->w & (REC_RING_BYTES - 1);
     at = r->ring->buf + pos;
     if (pos + 4 + sizeof b > REC_RING_BYTES) {
@@ -1376,6 +1379,7 @@ static void rec_end(Rec* r, unsigned reason)
                "refused off the game thread, %u nano sprays uncredited, %u order nodes whose owner "
                "or list flag disagreed with the list holding them", r->tick,
                reason == REC_END_TEARDOWN ? "the level ended" :
+               reason == REC_END_FORKED   ? "continued from a live rewind" :
                reason == REC_END_RING     ? "INCOMPLETE, the ring was full" :
                reason == REC_END_WRITE    ? "INCOMPLETE, the file could not be written" :
                reason == REC_END_TABLE    ? "INCOMPLETE, no memory for a declared table's growth" :
@@ -2318,10 +2322,18 @@ static int dump_write(const Level* L, int tick, const char* name, int frame)
     t.n = 0;
     t.cap = sizeof hb;
     t.full = 0;
-    tlv_u32(&t, RT_FORMAT, REC_FORMAT);
-    tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
-    tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
-    if (frame >= 0) tlv_u32(&t, RT_FRAME, (unsigned)frame);
+    if (frame >= 0) {
+        char map[64];
+        FILETIME now;
+        map_stem(L->ta, map, sizeof map);
+        GetSystemTimeAsFileTime(&now);
+        header_build(L, tick, map, &now, NULL, &t);
+        tlv_u32(&t, RT_FRAME, (unsigned)frame);
+    } else {
+        tlv_u32(&t, RT_FORMAT, REC_FORMAT);
+        tlv(&t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
+        tlv(&t, RT_GLOBALS, TAGPU_REPLAY_GLOBALS_SHA256, (unsigned)strlen(TAGPU_REPLAY_GLOBALS_SHA256));
+    }
     {
         unsigned v[2] = { s_dllBase, s_dllSize };
         tlv(&t, RT_DLL, v, 8);
@@ -2615,6 +2627,7 @@ static struct {
     Level    L;                         /* the level's unit array, for bounding a unit        */
     unsigned rows, overflow;            /* rows used; keys that found none                    */
     CntRow   row[CNT_ROWS];
+    unsigned child_caller;               /* game-thread START/CALL diagnostic context */
     unsigned nnames;
     struct { unsigned aux; char name[REC_COUNT_NAME]; } name[CNT_NAMES];
 } s_cnt;
@@ -2628,8 +2641,25 @@ static unsigned cnt_caller(unsigned ret)
 /* 1 when this call is counted: the level's game thread, no seek rebuilding */
 static int cnt_on(void)
 {
-    return s_cnt.tid && s_cnt.tid == GetCurrentThreadId() && !tagpu_puppet_rebuilding();
+    return s_cnt.tid && s_cnt.tid == GetCurrentThreadId() && !s_suspended &&
+           !tagpu_puppet_rebuilding();
 }
+
+#ifndef TAGPU_LIMITS_STOCK
+/* START/CALL allocations have the stock VM's semantic caller keys on both builds.
+   The synchronous game-thread call brackets the context; allocator code cannot
+   execute a simulation step or start another VM instruction before returning. */
+int tagpu_rec_cob_child(char* cob, unsigned script, int call)
+{
+    typedef int (__attribute__((thiscall)) *Allocate)(char*, unsigned);
+    unsigned saved = s_cnt.child_caller;
+    int slot;
+    s_cnt.child_caller = call ? 0x004B192Du : 0x004B18C0u;
+    slot = ((Allocate)0x004B08C0u)(cob, script);
+    s_cnt.child_caller = saved;
+    return slot;
+}
+#endif
 
 static void cnt_add(unsigned va, unsigned caller, unsigned aux)
 {
@@ -2666,6 +2696,142 @@ static void cnt_start(const Level* L, int counting)
     s_cnt.tid = GetCurrentThreadId();
 }
 
+
+/* AI activity is a harness observation, never simulation input. The context brackets
+   0x408C40 on the game thread; only a live type-2 record can supply a seat. Orders
+   constructed in that context are sampled until a normal dispatcher calls their handler.
+   The destructor forgets a sample before the node can be freed or its address reused.
+   Saved addresses are compared only with the engine's current live node; its owner
+   is read only at that node's ordinary handler dispatch. */
+#define AI_SAMPLES 32
+static struct {
+    DWORD tid;
+    unsigned from, until, depth, bad;
+    char name[40];
+    struct { unsigned ret, seat; } stack[8];
+    struct {
+        unsigned orders, executed;
+        const char* pending[AI_SAMPLES];
+    } seat[REC_PLAYERS];
+} s_ai;
+static unsigned s_ai_hooks;
+
+static int ai_window(void)
+{
+    unsigned now;
+    if (!s_ai.tid || s_ai.tid != GetCurrentThreadId() || !cnt_on() ||
+        tagpu_puppet_on() || s_ai.bad) return 0;
+    now = *(unsigned*)(s_cnt.L.ta + OFF_GAMETIME);
+    return now >= s_ai.from && now < s_ai.until;
+}
+
+static int __cdecl ai_enter(void* E)
+{
+    unsigned i, seat = REC_PLAYERS;
+    if (!ai_window()) return 0;
+    if (s_ai.depth == sizeof s_ai.stack / sizeof s_ai.stack[0]) {
+        s_ai.bad = 1;
+        return 0;
+    }
+    for (i = 0; i < REC_PLAYERS; i++) {
+        const char* p = s_cnt.L.ta + OFF_PLAYERS + i * PL_STRIDE;
+        if (*(const unsigned*)p && p[PL_CONTROLLER] == 2 &&
+            *(const unsigned*)(p + 0x74) == REG_ECX(E)) {
+            seat = i;
+            break;
+        }
+    }
+    s_ai.stack[s_ai.depth].ret = ARG(E, 0);
+    s_ai.stack[s_ai.depth++].seat = seat;
+    return 1;
+}
+
+static void* __cdecl ai_leave(unsigned* regs)
+{
+    (void)regs;
+    return (void*)(size_t)s_ai.stack[--s_ai.depth].ret;
+}
+
+/* The constructor returns the same ECX object in EAX (0x43A1C6). Its entry
+   samples that address without reading it. No order is dispatched inside the
+   constructor; a later dispatch therefore names a completed, linked node,
+   including nodes whose callers use an inline insertion. */
+static int __cdecl ai_order(void* E)
+{
+    unsigned seat, i;
+    const char* node = PTR(REG_ECX(E));
+    if (!ai_window() || !s_ai.depth) return 0;
+    seat = s_ai.stack[s_ai.depth - 1].seat;
+    if (seat >= REC_PLAYERS) return 0;
+    s_ai.seat[seat].orders++;
+    for (i = 0; i < AI_SAMPLES; i++)
+        if (s_ai.seat[seat].pending[i] == node) return 0;
+    for (i = 0; i < AI_SAMPLES; i++)
+        if (!s_ai.seat[seat].pending[i]) {
+            s_ai.seat[seat].pending[i] = node;
+            break;
+        }
+    return 0;
+}
+
+/* 0x4089A0 is the final call on both exits of 0x408C40. Human seats run it too:
+   automatic weapon retargeting is not evidence that the AI planner ran. */
+void tagpu_rec_ai_planning_end(void)
+{
+    if (s_ai.tid == GetCurrentThreadId() && s_ai.depth)
+        s_ai.stack[s_ai.depth - 1].seat = REC_PLAYERS;
+}
+
+static void ai_node(const char* node, int executed)
+{
+    unsigned i, k;
+    if (!node || !s_ai.tid || s_ai.tid != GetCurrentThreadId()) return;
+    for (i = 0; i < REC_PLAYERS; i++)
+        for (k = 0; k < AI_SAMPLES; k++)
+            if (s_ai.seat[i].pending[k] == node) {
+                s_ai.seat[i].pending[k] = NULL;
+                if (executed && ai_window()) {
+                    const char* unit = *(const char* const*)(node + 0x0E);
+                    unsigned id = id_in(unit, s_cnt.L.begin, REC_UNIT_BYTES, s_cnt.L.nslots);
+                    if (id && id != REC_ID_BAD && unit_live(&s_cnt.L, id - 1) &&
+                        (unsigned char)unit[0xFF] == i) s_ai.seat[i].executed++;
+                }
+            }
+}
+
+static int __cdecl ai_destroy(void* E)
+{
+    ai_node(PTR(REG_ECX(E)), 0);
+    return 0;
+}
+
+int tagpu_rec_ai_arm(const char* name, unsigned from, unsigned until)
+{
+    if (!dump_name(name) || !s_ai_hooks || !cnt_on() || tagpu_puppet_on() ||
+        s_ai.tid || from <= *(unsigned*)(s_cnt.L.ta + OFF_GAMETIME) || until <= from) {
+        tagpu_logf("recorder: AI activity %s refused", name);
+        return 0;
+    }
+    memset(&s_ai, 0, sizeof s_ai);
+    s_ai.tid = GetCurrentThreadId();
+    s_ai.from = from;
+    s_ai.until = until;
+    snprintf(s_ai.name, sizeof s_ai.name, "%s", name);
+    tagpu_logf("recorder: AI activity %s armed [%u,%u)", name, from, until);
+    return 1;
+}
+
+static void ai_finish(unsigned tick)
+{
+    unsigned i;
+    if (!s_ai.tid || tick < s_ai.until) return;
+    for (i = 0; i < REC_PLAYERS; i++)
+        tagpu_logf("recorder: AI activity %s seat %u orders %u executed %u",
+                   s_ai.name, i, s_ai.seat[i].orders, s_ai.seat[i].executed);
+    tagpu_logf("recorder: AI activity %s done [%u,%u) bad %u", s_ai.name,
+               s_ai.from, s_ai.until, s_ai.bad);
+    s_ai.tid = 0;
+}
 
 /* The create 0x485F50's success exit 0x4861B3 (`mov eax,esi`): esi is the unit it made, in the
    slot it actually took -- B4's hit_take may move a first-free create past its first choice. The
@@ -3052,8 +3218,8 @@ static int __cdecl ev_nano_handler(void* E)
     return 0;
 }
 static int __cdecl ev_nano_h0(void* E) { cnt(0x0043A216u, 0, 0); return ev_nano_handler(E); }
-static int __cdecl ev_nano_h1(void* E) { cnt(0x0043B878u, 0, 0); return ev_nano_handler(E); }
-static int __cdecl ev_nano_h2(void* E) { cnt(0x0043BB1Du, 0, 0); return ev_nano_handler(E); }
+static int __cdecl ev_nano_h1(void* E) { ai_node(PTR(REG_ESI(E)), 1); cnt(0x0043B878u, 0, 0); return ev_nano_handler(E); }
+static int __cdecl ev_nano_h2(void* E) { ai_node(PTR(REG_ESI(E)), 1); cnt(0x0043BB1Du, 0, 0); return ev_nano_handler(E); }
 
 static void ev_spray(void* E, unsigned reverse)
 {
@@ -3963,7 +4129,7 @@ static int __cdecl sink_cob(void* E)
     } else {
         h = 0;
     }
-    cnt_add(0x004B08C0u, cnt_caller(ARG(E, 0)), h);
+    cnt_add(0x004B08C0u, s_cnt.child_caller ? s_cnt.child_caller : cnt_caller(ARG(E, 0)), h);
     return 0;
 }
 
@@ -4056,6 +4222,33 @@ static const ObserveSite CNT_SINKS[] = {
     { 0x00472C50u, 5, { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }, sink_472C50, NULL },
 };
 #define CNT_SINK_COUNT (sizeof CNT_SINKS / sizeof CNT_SINKS[0])
+
+/* DISASSEMBLED entries, with no relative instruction in their stolen prefixes.
+   The ordinary dispatch sites are already observed by ev_nano_h1/ev_nano_h2. */
+static void ai_hooks_init(void)
+{
+    static const ObserveSite sites[] = {
+        { 0x00408C40u, 5, { 0x53, 0x56, 0x57, 0x8B, 0xF9 }, ai_enter, ai_leave },
+        { 0x0043A0C0u, 7, { 0x83, 0xEC, 0x0C, 0x8A, 0x44, 0x24, 0x10 }, ai_order, NULL },
+        { 0x0043A1F0u, 5, { 0x53, 0x56, 0x8B, 0xF1, 0x57 }, ai_destroy, NULL },
+    };
+    unsigned i;
+    for (i = 0; i < sizeof sites / sizeof sites[0]; i++) {
+        const ObserveSite* o = &sites[i];
+        if (!tagpu_detour_bytes_ok(o->va, o->stolen, o->n)) {
+            tagpu_logf("recorder: AI activity observer 0x%06X holds other bytes", o->va);
+            return;
+        }
+    }
+    for (i = 0; i < sizeof sites / sizeof sites[0]; i++) {
+        const ObserveSite* o = &sites[i];
+        if (!tagpu_detour_observe(o->va, o->stolen, o->n, o->fn, o->after)) {
+            tagpu_logf("recorder: AI activity observer 0x%06X unavailable", o->va);
+            return;
+        }
+    }
+    s_ai_hooks = 1;
+}
 
 /* each sink alone: one whose bytes are another's is left out, named, and its bit stays clear,
    which tarec reads as a site it cannot compare */
@@ -4286,6 +4479,7 @@ void tagpu_rec_init(void)
     tagpu_logf("recorder: %u event sites in",
                (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_SITES + 1));
     cnt_sinks_init();
+    ai_hooks_init();
     return;
 
 landfail:
@@ -4393,6 +4587,90 @@ static void rec_stop(unsigned reason)
     s_state = ST_DONE;
 }
 
+int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
+{
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r || s_suspended || r->ev_full ||
+        InterlockedCompareExchange(&r->ring->failed, 0, 0)) {
+        snprintf(why, whycap, "no healthy live recording");
+        return 0;
+    }
+    *timeline = r->ring->fork.id;
+    /* Published capture bytes precede this request. The writer reads the request before wpub,
+       drains that prefix, then acknowledges only after writing its complete iterations. */
+    InterlockedIncrement(&r->ring->flush_req);
+    SetEvent(r->wake);
+    return 1;
+}
+
+int tagpu_rec_rewind_flush(char* path, unsigned cap)
+{
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r || r->ev_full ||
+        InterlockedCompareExchange(&r->ring->failed, 0, 0)) return -1;
+    if (InterlockedCompareExchange(&r->ring->flush_done, 0, 0) !=
+        InterlockedCompareExchange(&r->ring->flush_req, 0, 0)) return 0;
+    /* The writer chooses a suffix when the requested filename already exists. Its
+       immutable actual path is visible only after the acknowledged file writes. */
+    if (path && cap) snprintf(path, cap, "%s", r->ring->opened_path);
+    return 1;
+}
+
+int tagpu_rec_suspend(int on)
+{
+    unsigned z;
+    Rec* r = s_rec;
+    if (s_state != ST_RECORDING || !r) return 0;
+    if (on) {
+        if (tagpu_rec_rewind_flush(NULL, 0) != 1) return 0;
+        seats_end(r, REC_END_FORKED, r->rewind_end);
+        s_suspended = 1;
+        s_tid = 0;
+        s_rec_fired = 0;
+    } else {
+        /* Observers were inert during the rebuild. Compare every grid row against the original
+           baseline; the pool, map, globals, units and tables already compare their whole image.
+           The ring still holds step G's events; capture G+1 publishes them before its images. */
+        for (z = 0; z < r->feat->h; z++) {
+            r->feat->lo[z] = 0;
+            r->feat->hi[z] = (unsigned short)(r->feat->w - 1);
+        }
+        s_suspended = 0;
+        s_tid = r->tid;
+        s_rec_fired = 1;
+    }
+    return 1;
+}
+
+void tagpu_rec_pending_events(RecPendingVisit visit, void* ctx)
+{
+    Rec* r = s_rec;
+    unsigned at;
+    if (!s_suspended || !r) return;
+    /* [wpub,w) belongs only to the game thread: the writer cannot read or reclaim it. */
+    at = (unsigned)InterlockedCompareExchange(&r->ring->wpub, 0, 0);
+    while (at != r->w) {
+        unsigned pos = at & (REC_RING_BYTES - 1);
+        RecHdr h;
+        memcpy(&h, r->ring->buf + pos, sizeof h);
+        if (h.kind == RK_PAD) { at += REC_RING_BYTES - pos; continue; }
+        visit(ctx, h.kind, r->ring->buf + pos + sizeof h, h.len);
+        at += (sizeof h + h.len + 3) & ~3u;
+    }
+}
+
+HANDLE tagpu_rec_rewind_end(void)
+{
+    HANDLE done;
+    Rec* r = s_rec;
+    if (!s_suspended || !r || !DuplicateHandle(GetCurrentProcess(), r->done,
+        GetCurrentProcess(), &done, 0, FALSE, DUPLICATE_SAME_ACCESS)) return NULL;
+    ring_publish(r, 0);
+    rec_stop(REC_END_FORKED);
+    s_suspended = 0;
+    return done;
+}
+
 void __cdecl tagpu_rec_capture(void)
 {
     char* ta = ta_main();
@@ -4402,11 +4680,13 @@ void __cdecl tagpu_rec_capture(void)
     LARGE_INTEGER t0, t1;
     Rec* r;
 
+    if (s_suspended) return;
     s_fphase = 0;
     if (!ta || !level_read(ta, &L)) return;
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
+    ai_finish((unsigned)tick);
 
     if (s_state == ST_IDLE && s_fork.file) {
         /* a fork's first iteration (tagpu_rec_fork_arm): checked once more by value, since the
@@ -4547,6 +4827,8 @@ void tagpu_rec_level_end(void)
     }
     s_tid = 0;
     s_cnt.tid = 0;
+    if (s_ai.tid) tagpu_logf("recorder: AI activity %s incomplete: level ended", s_ai.name);
+    s_ai.tid = 0;
     if (s_state == ST_RECORDING && s_rec) {
         int fin = s_rec->fin;
         if (!s_rec->ev_full) ring_publish(s_rec, 0);
@@ -4558,6 +4840,7 @@ void tagpu_rec_level_end(void)
 #endif
     }
     s_rec = NULL;
+    s_suspended = 0;
     s_state = ST_IDLE;
     tagpu_cover_flush();    /* after the recording's end, so its end is in the level's coverage */
 }

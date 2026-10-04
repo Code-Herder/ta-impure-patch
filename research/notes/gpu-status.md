@@ -2038,7 +2038,8 @@ Before allocating a saved level, the saved `Summary/maxunits` is validated and w
 to `main+0x37EE6/+0x37EEC` so the restored IDs keep their original player partition. On the engine's
 script-executing thread, the guarded adapter owns eight 128-word records (`cob+0x1C`, stride
 `0x224`), busy count `+0x113C`, and relocated model pointer `+0x1140`; it initializes stacks,
-transfers bounded child arguments, and restores validated records/statics/animation and piece
+transfers bounded child arguments, retains a refused CALL's arguments and dormant
+child `-1` sentinel, and restores validated records/statics/animation and piece
 state on load. These are simulation writes, not renderer-owned state. Local entry chat uses
 the engine's reminder API. The detailed lifetime, ordering and patch inventory are in §2.105
 and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integration-disassembled-measured-2026-09-28).
@@ -3045,6 +3046,23 @@ lock; exit waits for recording writers, then seals and waits for maintenance.
 The existing **fields we write** below remain those of playback and takeover;
 file metadata changes add no engine writes.
 
+**Live rewind** ([S4d](tadr-port/demo-recorder-s4-rewind.md)): `tacli rewind INSTANCE
+open|seek T|now|fork|close [--dump NAME]` pauses a recorded skirmish, preserves its
+present while inspecting earlier frames, and either restores that present or ends
+the original and appends a fork. The writer acknowledges a complete-prefix flush;
+recording remains suspended during reconstruction, preserving pending live events.
+The **pause guard at `0x496920`**, stolen `84 98 51 8A 03 00`, observes before the
+engine's pause test and reasserts pause while rewind owns the level. Failure to
+install it disables live rewind.
+
+The harness's AI activity observation brackets `0x408C40`, stops attribution
+at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,
+and forgets destroyed samples at `0x43A1F0`. Existing dispatch observers
+`0x43B878`/`0x43BB1D` count execution of those nodes. The three new sites are
+byte-matched observers; the existing weapons acquisition wrapper ends planner
+attribution without another patch at `0x4089A0`. **Fields we write:** diagnostic storage only; these
+observers write no engine field and no recording payload.
+
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
 `0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the
@@ -3082,7 +3100,19 @@ returning to one of COB's five write sites (`0x480B57`, `0x480BF1`, `0x480BB3`, 
 logged. The gates make them zero; the observers prove it. **The step's phases** (§2.6e) call
 `tagpu_replay_phase` after the host's projectile tick and after its explosion tick.
 
-**Fields we write**, on the game thread, on a puppet level only:
+**Fields we write**, on the game thread, during playback, takeover or live rewind:
+
+- live rewind: pause bit 0 at `main+0x38A51`; the spectator's seat and buffers
+  through `0x464290` and `0x464700`; recorded seats' type through `0x463C60`,
+  acquisition table through `0x40B390`, and AI `+0x74` cleared only after all their
+  units have been destroyed. V gets the fresh loader's WinLoseTime `+0xF4 = 0`,
+  PlayerInfo `+0x9B` count nibble and loaded bit, and `+0xA7/+0xA8` version bytes
+  from `main+1/+2`. Return-to-now restores unit contact bits `+0x110 & 0x1700`
+  from each bounded, identity-matched saved unit instead of running an extra radar scan;
+  it restores the saved viewed player,
+  the 2160-byte message area at `main+0x12EF` and its two indices at `+0x2A3E`,
+  with the saved controllers supplied to the takeover. No difficulty change is
+  applied on that return;
 
 - at the seat fill: each seat's record through `0x464290(seat, 3)`, then PlayerInfo `+0x95` and
   `+0x96`, the name at `+0x2B` and `+0x49`, and the alliance row `+0x108..+0x112`; V's through
@@ -20410,3 +20440,16 @@ level 75): do not use it for shading. `tacli arm <i> 'classicpp.cfg=shadows=0'` 
 launch clears the engine's shadow bits in the settings store, and removing it later does not restore
 them. The store owns `Shading` under `--defaults`, so a registry value does not gate it there: arm the
 passes by hand (`tacli arm` the default set) to test the option.
+
+
+The S4 rewind verifier excludes unseated spectator sight counters under the
+owner-approved D2 amendment. Its return-to-now count comparison reports and
+accepts VM START/CALL child allocations only; `tagpu_rec_cob_child` gives the
+raised VM the stock VM's semantic caller keys around the synchronous allocator
+call. This diagnostic context changes no engine state. COB threads are rebuilt,
+so exact execution continuity remains outside S4. See the S4 rewind note.
+
+Return-to-now also restores the objective's saved `+0x88` switch before resuming
+steps. Conversion disarms it; takeover/fork arms it. The same level owns the
+objective across rewind. This preserves games whose console command disabled
+victory/defeat before the rewind.

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 import zlib
+from unittest.mock import Mock, patch
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -24,8 +25,125 @@ sys.path.insert(0, str(HERE))
 import tafeat  # noqa: E402
 import tarec  # noqa: E402
 import tareplay  # noqa: E402
+import tarewind  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
+
+
+class FailedWorkerCleanup(unittest.TestCase):
+    def test_failed_game_is_stopped_even_if_artifact_collection_fails(self):
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+                            "procs": {}, "problems": []}}
+        worker = Mock(name="worker")
+        worker.name = "owned"
+        worker.collect.side_effect = OSError("artifact write failed")
+        with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
+             patch.object(tareplay, "say"):
+            self.assertIsNot(run.job(worker, "naval", "W"), False)
+        worker.stop.assert_called_once_with(hard=True)
+        self.assertEqual(run.fx["naval"]["problems"][0], ("W", "FAILED", "COB STOP"))
+
+    def test_worker_is_retired_if_failed_game_cannot_be_stopped(self):
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.fx = {"naval": {"Ts": [1], "out": Path("unused"), "rec": Path("rec"),
+                            "procs": {}, "problems": []}}
+        worker = Mock(name="worker")
+        worker.name = "owned"
+        worker.stop.side_effect = tareplay.CouldNotRun("still running")
+        with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
+             patch.object(tareplay, "say"):
+            self.assertIs(run.job(worker, "naval", "W"), False)
+        self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
+
+
+class RewindPolicy(unittest.TestCase):
+    def compare(self, key, rewind, puppet=False):
+        meta = (0, (1 << len(tarec.COUNT_SINKS)) - 1, 1)
+        samples = [(10, {}, meta, {}), (20, {} if puppet else {key: 100}, meta, {}),
+                   (10, {}, meta, {}), (20, {key: 100} if puppet else {}, meta, {})]
+        out = io.StringIO()
+        with patch.object(tarec, "header_only", return_value={}), \
+             patch.object(tarec, "counts_of", side_effect=samples), \
+             patch.object(tarec, "absent_rows", return_value=((5, 2), [])), \
+             redirect_stdout(out):
+            result = tarec.cmd_compare_counts("rec", "a", "b", "c", "d", "rows", rewind)
+        return result, out.getvalue()
+
+    def test_only_rewind_vm_children_are_accepted(self):
+        for caller in (0x4B18C0, 0x4B192D):
+            key = (0x4B08C0, caller, 123)
+            self.assertEqual(self.compare(key, False)[0], 1)
+            result, report = self.compare(key, True)
+            self.assertEqual(result, 0)
+            self.assertIn("accepted rewind COB child", report)
+        for key in ((0x4B08C0, 0x80001000, 123), (0x4B08C0, 0x123456, 123),
+                    (0x420A30, 0x4B18C0, 0), (0x4861B3, 0x4B18C0, 0)):
+            self.assertEqual(self.compare(key, True)[0], 1)
+        self.assertEqual(self.compare((0x480B57, 0, 0), True, puppet=True)[0], 1)
+
+    def test_seated_sight_remains_exact(self):
+        from types import SimpleNamespace
+        def world():
+            return SimpleNamespace(lists={}, players=[bytearray(tarec.REC_PLAYER_IMAGE)
+                for _ in range(tarec.REC_PLAYERS)], sight={0: bytearray(b"a"), 4: bytearray(b"b")},
+                ctl=[], view=[0, 0], units={})
+        a, b = world(), world()
+        b.sight[0] = bytearray(b"c")
+        b.sight.pop(4)
+        h = {"players": [{"index": 0, "controller": 1}]}
+        tarec.fork_view(a, b, h, h)
+        self.assertNotIn(4, a.sight)
+        self.assertNotIn(4, b.sight)
+        self.assertNotEqual(a.sight[0], b.sight[0])
+
+
+class CobFlarePolicy(unittest.TestCase):
+    child = (0x472630, 0x420AE6, 0x4812D3)
+    parent = (0x420A30, 0x4812D3, 0)
+
+    def compare(self, values, child=None, parent_counted=True):
+        pl, pp, cl, cp = values
+        key = self.child if child is None else child
+        sinks = (1 << len(tarec.COUNT_SINKS)) - 1
+        if not parent_counted:
+            sinks &= ~(1 << tarec.COUNT_SINKS.index(self.parent[0]))
+        meta = (0, sinks, 1)
+        samples = [(10, {}, meta, {}), (20, {self.parent: pl, key: cl}, meta, {}),
+                   (10, {}, meta, {}), (20, {self.parent: pp, key: cp}, meta, {})]
+        out = io.StringIO()
+        with patch.object(tarec, "header_only", return_value={}), \
+             patch.object(tarec, "counts_of", side_effect=samples), \
+             patch.object(tarec, "absent_rows", return_value=((5, 2), [])), \
+             redirect_stdout(out):
+            result = tarec.cmd_compare_counts("rec", "a", "b", "c", "d", "rows")
+        return result, out.getvalue()
+
+    def test_accepted_parent_shortfall_bounds_child_and_reports_both(self):
+        for values in ((201, 197, 33, 30), (197, 201, 30, 33)):
+            result, report = self.compare(values)
+            self.assertEqual(result, 0)
+            self.assertIn("accepted bounded COB flare", report)
+            self.assertIn(f"parent live {values[0]}, puppet {values[1]}", report)
+            self.assertIn(f"flare live {values[2]}, puppet {values[3]}", report)
+
+    def test_rejects_unexplained_or_invalid_shortfalls(self):
+        for values in ((201, 197, 33, 28), (201, 201, 33, 30), (201, 197, 30, 33),
+                       (201, 180, 33, 30), (20, 17, 13, 10), (10, 9, 14, 11),
+                       (-1, 3, 0, 3), (201, 197, -1, -4)):
+            with self.subTest(values=values):
+                result, report = self.compare(values)
+                self.assertEqual(result, 1)
+                self.assertNotIn("accepted bounded COB flare", report)
+
+    def test_only_named_parent_child_path_with_observed_parent(self):
+        values = (201, 197, 33, 30)
+        for key in ((0x472630, 0x420AE6, 0x4812D4), (0x472630, 0x420AE7, 0x4812D3),
+                    (0x472530, 0x420AE6, 0x4812D3)):
+            self.assertEqual(self.compare(values, child=key)[0], 1)
+        result, report = self.compare(values, parent_counted=False)
+        self.assertNotEqual(result, 0)
+        self.assertNotIn("accepted bounded COB flare", report)
 
 
 class Parser(unittest.TestCase):
@@ -429,7 +547,8 @@ class TakeoverFixtures(unittest.TestCase):
             self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
             self.assertEqual(tareplay.procs(fixes[name]), ("L", "P", "R", "Q", "K", "F") +
                              (("W",) if fixes[name].get("watch") else ()) +
-                             (("X",) if fixes[name].get("forks") else ()))
+                             (("X",) if fixes[name].get("forks") else ()) +
+                             (("U",) if fixes[name].get("rewind") else ()))
             if "order" in t:
                 self.assertEqual(len(t["order"]), 2, name)
         self.assertEqual(tareplay.procs(fixes["forest-fire"]), ("L", "P", "R", "Q"))
@@ -441,24 +560,70 @@ class TakeoverFixtures(unittest.TestCase):
         self.assertLess(Ts[1], fixes["takeover-end"]["end"])
 
 
-class AiCompare(unittest.TestCase):
-    """The takeover's `ai` check against the original timeline (tareplay.ai_compare)."""
+class AiActivity(unittest.TestCase):
+    def lines(self, inactive=None, dispatched=True):
+        return [f"recorder: AI activity test seat {s} orders "
+                f"{0 if s == inactive else 7} executed "
+                f"{0 if s == inactive or not dispatched else 3}"
+                for s in range(10)] + ["recorder: AI activity test done [100,1900) bad 0"]
 
-    def test_every_maker_made_again(self):
-        self.assertEqual(tareplay.ai_compare({1, 2, 3}, {1, 3}, {1, 3}), ([1, 3], [], [2]))
+    def test_each_ai_issues_and_executes(self):
+        self.assertTrue(tarewind.ai_activity(self.lines(), "test", 100, 1900, {1, 2, 3})[0])
 
-    def test_a_maker_that_made_nothing_fails(self):
-        self.assertEqual(tareplay.ai_compare({1, 2, 3}, {1, 2}, {2}), ([1, 2], [1], [3]))
+    def test_inactive_ai_cannot_be_hidden_by_other_seats(self):
+        ok, detail = tarewind.ai_activity(self.lines(inactive=2), "test", 100, 1900, {1, 2, 3})
+        self.assertFalse(ok)
+        self.assertIn("missing [2]", detail)
 
-    def test_a_fork_only_maker_is_skipped(self):
-        self.assertEqual(tareplay.ai_compare({1, 2}, {1}, {1, 2}), ([1], [], [2]))
+    def test_issued_but_never_dispatched_does_not_pass(self):
+        self.assertFalse(tarewind.ai_activity(self.lines(dispatched=False), "test",
+                                            100, 1900, {1, 2, 3})[0])
 
-    def test_no_maker_in_the_original_is_no_comparison(self):
-        self.assertEqual(tareplay.ai_compare({1, 2}, set(), {1}), ([], [], [1, 2]))
-        self.assertEqual(tareplay.ai_compare(set(), {1}, {1}), ([], [], []))
+    def test_incomplete_wrong_window_or_observer_error_fails(self):
+        lines = self.lines()
+        for bad in (lines[:-1], lines[1:], lines + [lines[0]],
+                    ["recorder: AI activity test done [100,1899) bad 0"] + lines,
+                    lines[:-1] + ["recorder: AI activity test done [100,1900) bad 1"]):
+            self.assertFalse(tarewind.ai_activity(bad, "test", 100, 1900, {1, 2, 3})[0])
+        self.assertFalse(tarewind.ai_activity(lines, "test", 101, 1901, {1, 2, 3})[0])
 
-    def test_a_seat_not_ai_in_the_fork_is_not_compared(self):
-        self.assertEqual(tareplay.ai_compare({2}, {0, 2}, {2}), ([2], [], []))
+
+class TakeoverAi(unittest.TestCase):
+    def check(self, inactive=None, window=True, fraction=.92):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder)
+            (out / "K").mkdir()
+            lines = AiActivity().lines(inactive=inactive)
+            (out / "K" / "tagpu.log").write_text(
+                "\n".join(line.replace("activity test", "activity takeover") for line in lines))
+            k = {"T": 90, "P": 0, "file": "unused", "timeline": 1}
+            if window:
+                k["ai_window"] = [100, 1900]
+            fx = {"fix": {"takeover": {"checks": ["ai"]}},
+                  "procs": {"K": "ran"}, "out": out, "tk": k}
+            segs = [{"id": 0, "last": 2000}, {"id": 1, "parent": 0, "last": 2000}]
+            with patch.object(tareplay, "tk_ai", return_value=({1, 2, 3}, set(), fraction, 978)), \
+                 patch.object(tarec, "file_segments", return_value=(segs, None)):
+                return tareplay.tk_checks(fx)[0]
+
+    def test_active_seats_pass_without_construction(self):
+        _, verdict, detail = self.check()
+        self.assertEqual(verdict, tareplay.PASS, detail)
+        self.assertIn("construction observed for seats [] (reported only)", detail)
+
+    def test_inactive_seat_fails_despite_movement(self):
+        _, verdict, detail = self.check(inactive=2)
+        self.assertEqual(verdict, tareplay.FAIL, detail)
+        self.assertIn("missing [2]", detail)
+
+    def test_missing_observation_is_unrun(self):
+        self.assertEqual(self.check(window=False)[1], tareplay.UNRUN)
+
+    def test_movement_threshold_stays_gated(self):
+        self.assertEqual(self.check(fraction=.24)[1], tareplay.FAIL)
+
+    def test_no_mobile_units_is_unrun(self):
+        self.assertEqual(self.check(fraction=None)[1], tareplay.UNRUN)
 
 
 if __name__ == "__main__":

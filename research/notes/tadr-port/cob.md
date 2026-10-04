@@ -633,3 +633,36 @@ a full Wine regression and approved Windows startup/in-game smoke session starte
 that exact DLL, then stopped at the owner's request. Wine completed 9/15 network matches;
 Windows completed 4/19 setup verdicts. Neither produced a final aggregate report.
 [The landing](#the-landing) records the complete run on the landing DLL that followed, and the open work.
+
+
+## O15: exhausted CALL and failed-worker cleanup
+
+The guard accepts the engine's exhausted-CALL state: child `-1`, status
+`0x02800000`, PC past the CALL, arguments retained. The thread remains dormant;
+other scripts and the match continue. RETURN compares the sentinel with a
+bounded slot and never indexes through it. The same check protects native and
+expanded saved records; every child other than `-1` or `0..7` is still rejected.
+The engine map's *Exhausted CALL* section records the disassembly and live bounds.
+This preserves stock behavior, including the dormant script; it does not promise
+that eight records suffice for every script or restore COB execution history.
+
+The S4d gate exposed this at `CORMSHIP.COB` word 724 after naval round trips at
+1681 and 2071. Replaying the retained recording reproduced the fatal guard stop.
+The subsequent stock Watch error was a second consequence: `Run.job` swallowed
+a failed graceful exit, and Watch's initial `w.stop()` asked the stopped game
+thread for a UI snapshot. The saved Watch log was still the naval game. A hard
+stop of that owned process let all eight Watch checks pass on the same worker.
+
+A failed replay job now collects what it can, forcibly terminates its own game,
+and verifies that it is no longer running before reusing the worker. Failed
+artifact collection cannot bypass termination. If termination cannot be
+confirmed, that worker retires and the cleanup failure remains in the report.
+Successful jobs retain their graceful exit, which flushes recorder and coverage
+workers. No failed fixture is changed into a passing result by cleanup.
+
+The portable regression rejects the old sentinel policy before the fix and
+passes after it. The full-pool live fixture checks both human and local-AI units:
+eight occupied records, all 128 CALL arguments retained, child `-1`, SP 127,
+and a continuing game. The retained failure is also the live regression for
+failed-game cleanup before Watch. Final replay verification is recorded in
+[the S4d note](demo-recorder-s4-rewind.md).

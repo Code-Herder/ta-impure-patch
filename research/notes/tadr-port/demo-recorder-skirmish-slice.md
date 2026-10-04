@@ -29,7 +29,8 @@ dumps for addresses recorded as values, and makes each feature root at its own p
 fixtures that reach it, adds the coverage build, and makes the harness a landing gate —
 `tareplay.py landing`, CLAUDE.md's replay gate and the landing command's Step 4b — with `broad` as
 the command run before every release; and a seek makes the viewed seat's temporary sight
-records again (*S3c-3, verified and measured*). **With it S3 is complete**; S4 is next.
+records again (*S3c-3, verified and measured*). **S3 is complete. S4 provides
+takeover, fork management and live rewind through tacli** below.
 
 ## How the slice is cut
 
@@ -1927,8 +1928,9 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
 - **Three fixtures leave out their scenarios' manual steps.** b7-word-outright's Ctrl+D
   self-destruct, c4-kill-all's `+kill` chat commands (which need cheats on) and c4-survivor's ATLAS
   flight to the AA gun with the TXLLT2 after it: the harness can type a chat line and give an
-  order, but cannot press a key or set a switch. So the downed transport and kill-all paths run in
-  no landing; the fixtures were chosen for what they reach without the steps.
+  order, and its `keys` steps deliver native input. These three entries still omit
+  the manual steps; dedicated `secondary-orders` fixtures exercise native Ctrl+D
+  on both builds. The three entries were chosen for what they reach without the steps.
 - **`limits-tier1` and `cost-four-ai` have not run in the broad tier yet**; the broad tier's first
   run is their measurement.
 - **The debris pools' class is open**: `s_expl`, `s_psys` and `s_aux` are declared `SIM_STATE` and
@@ -2069,8 +2071,8 @@ before the recording ended; it now writes it after. Five functions no fixture re
 only S5's browser calls them, landed `UNCOVERED` by the owner's decision of 2026-10-02:
 `recr_info` and its three helpers, and `tagpu_rec_mod_print`.
 
-**Left:** S5's fourth ask, a recording that starts mid-game, belongs with S4d's suspend and resume
-of the recorder.
+**Left:** S5's fourth ask, starting a recording mid-game and stopping it on request,
+remains separate recorder work. S4d suspends and resumes an existing recording.
 
 ### S4b — the takeover and its fork
 
@@ -2091,11 +2093,13 @@ invariants, the file's segments, the fork's handle and the residuals are in
 - **OQ-B**: the mixed-side interface after a takeover of the other side from a running playback is
   fixed by a mid-level re-skin, its own landing after S4b; `tacli replay takeover` launches with the
   side viewed being P's.
-- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them. The
-  `ai` check compares with the original (decided 2026-10-02): each AI seat that made a unit in
-  the original timeline's [T, T + 1800] must make one in timeline 1's, and a seat that made none
-  there is skipped and named. On `battle` the stock AI's seats 2 and 3 make no unit in the whole
-  3990-tick game, so a rule that every AI seat builds failed on the AI, not on the takeover.
+- **OQ-C**: the takeover run's thresholds as `tareplay.py`'s `TAKEOVER_CHECKS` list them.
+  S4d applies the owner's direct AI activity rule to this fork check: every AI seat must issue
+  fresh planner orders that reach normal dispatch in an armed 1800-tick window, and at least
+  25% of the AI seats' mobile units must move more than 8 wu. Construction is reported only.
+  The window begins after takeover, armed while the engine acknowledges pause, and K waits
+  for its completion before ending the game. The original timeline's building choices are
+  not the liveness criterion.
 
 **The fixtures.** `battle` is also taken over at T2 as its controlled player, the line within
 2000 ms, and its first ARMCK ordered 300 wu east from its base: the order's unit stands in open
@@ -2135,6 +2139,27 @@ changed functions on every required build; `ring_free` remains UNCOVERED, approv
 for this landing by the owner under OQ7 on 2026-10-02. The earlier naval sink-count difference also
 reproduced on pre-S4c main; its cause remains open and the tolerances are unchanged.
 
+### S4d — live rewind
+
+[Live rewind](demo-recorder-s4-rewind.md) provides `tacli rewind` open, seek,
+return-to-now, fork and close on a recorded skirmish. The pause guard precedes
+the engine's scheduler test; the recorder suspends capture and events while
+retaining its pending iteration. Atomic frame dumps compare a historical frame
+with a fresh seek and the restored present with its saved frame. The original
+writer closes before a fork can acquire its file.
+
+Normal-limits smoke checks include exact fresh-seek equality, filename-collision
+handling, append refusal/retry and exit during rewind. Both coverage builds pass
+28 rewind checks, including preservation of objective switches and radar contacts
+on return, and new planner orders reaching normal dispatch for every AI seat
+after both return and fork. The native disabled/re-enabled AI control verifies
+that the activity check rejects a missing planner. Construction is reported only.
+The module note records the approved unseated sight, rewind-only VM child-count
+and bounded naval flare-count exceptions. Exact COB execution continuity is
+outside S4. The naval COB stop and failed-worker cleanup are corrected. The
+full landing tier passes 570 checks across 20 fixtures, including 60 exact round
+trips, with all 62 changed functions reached on every required build.
+
 ## S5
 
 **S5 is planned in [its own note](demo-recorder-s5-ui.md)** (2026-10-01): six landings, the screens
@@ -2147,7 +2172,8 @@ stay the recorder's to build (that note's *What S5 asks of the recorder*):
 3. the mod: its name, its version, and a fingerprint of the archives the engine mounted;
 4. a recording that starts mid-game from a snapshot, and an end reason for one the player stopped.
 
-Asks 1 to 3 are *What the Replays browser asks of a recording* above; the fourth goes with S4d.
+Asks 1 to 3 are *What the Replays browser asks of a recording* above. The fourth
+remains to be built for S5's switches; live rewind operates on an existing recording.
 
 ## Open
 

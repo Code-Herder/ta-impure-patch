@@ -90,7 +90,10 @@ local 100 and every argument of a 100-argument CALL. `--roundtrip` saves and res
 expanded records; `--quarantine` checks type exclusion, native chat and a presented-window
 capture; `--reject-required` expects a required-unit refusal. Separate
 `--thread-exhaustion start|call` fixtures fill all eight records and exercise refused calls
-with a full 128-word argument stack. `--expect stock-zero` is the negative API control.
+with a full 128-word argument stack. START consumes refused arguments and resumes
+after SIGNAL frees slots; CALL retains the arguments, leaves its parent dormant
+on child `-1`, and checks that the match keeps advancing.
+`--expect stock-zero` is the negative API control.
 `--skirmish-ceiling` fills player three's native block and asserts live ID 6000 in a
 15001-slot pool. It configures ESC's own `TAESC.ini` and `Software\TA Esc` registry root,
 not retail's settings. Skirmish activates only four players; this is not evidence for
@@ -643,7 +646,15 @@ block that reads to its last complete block.
   `takeover` entry also runs K (its recording taken over at T2, ordered, dumped and ended) and F
   (K's file played from T−300 across the fork); `tareplay.py takeover FIXTURE` runs the live game,
   K and F alone, with the checks `judge`, `line`, `orders`, `ai`, `fork` and `victory` its entry
-  names.
+  names. The `ai` check observes 1800 future ticks, armed under an acknowledged engine
+  pause after takeover. Every AI seat must issue fresh planner orders that reach normal
+  dispatch, and at least 25% of AI mobile units must move more than 8 wu. Construction
+  is reported only; K waits for the observation to complete before ending the game.
+- **Native fixture input** uses a `keys` step with a list of `tacli keys` tokens.
+  `secondary-orders` and `stock-secondary-orders` select the isolated solar with
+  `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
+  secondary order dispatcher. The camera is pinned by the scenario; the shield
+  stays on so the engine sees the polled Ctrl modifier.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the fixtures that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
@@ -717,6 +728,34 @@ block that reads to its last complete block.
   while another reader holds the file; process exit waits for maintenance.
   `tareplay.py forks battle [--cover]` runs the dedicated checks. A fixture with `forks`
   also runs X after its existing lanes; battle and stock-limits exercise this on both builds.
+- **Live rewind**: `tacli rewind <i> open|seek T|now|fork|close [--dump NAME]`
+  operates on a running recorded skirmish. `open` pauses and reports the complete
+  seek interval; `seek T` inspects iteration T at frame T−1; `now` restores the
+  saved present; `fork` resumes from the inspected frame as a new timeline.
+  `close` without a seek leaves the world intact, otherwise it returns to now.
+  Each exit restores the pause state held before opening. Pause input cannot
+  advance an open rewind. `--dump` writes a frame dump before the operation's
+  success line and before unpausing. Wait for the CLI acknowledgement before
+  sending another command. Once a fork ends the original, an append failure
+  permits retrying `fork`, but cannot return to now.
+  `tareplay.py rewind battle [--stock] [--cover]` runs the live rewind L/P/Q
+  checks. Fixtures with `rewind` run the same checks in U; stock-limits uses
+  the battle with the stock DLL. The `rewind_paused` scenario creates a human
+  unit while paused before the saved-present dump, checking that return-to-now
+  preserves the previous radar scan. Return-to-now reconstructs COB threads; the U
+  AI check requires new planner-issued orders and a normal dispatch of sampled
+  orders for each AI seat, plus the mobile-unit movement threshold. Construction
+  is reported without requiring matching choices. The harness trigger
+  `ai-activity NAME from START until END` observes that future half-open tick
+  interval and reports per-seat orders/dispatches followed by its completion line.
+  The shared automatic-targeting phase and restored orders do not count. The U
+  rewind-specific count allowance reports VM START/CALL child-count differences
+  via `compare-counts --rewind`. All count comparisons can report
+  `accepted bounded COB flare` for the one COB explosion path whose accepted
+  parent difference bounds a same-direction child difference; the completeness
+  note specifies its limits. D2 excludes sight buffers only for unseated records.
+  For the fresh comparison, the trigger
+  `seek-frame T dump NAME` takes a paused frame dump in the seek's own visit.
 - **Ending a game on purpose**: a `scenario apply` with `clear_existing: true` that leaves the
   human seat no unit is a defeat, and the level's end ends the recording, complete once the
   writer's `closed` line is in the log.

@@ -121,9 +121,9 @@ TAKEOVER_CHECKS = {
              "the takeover made seen",
     "line": "the takeover's line, no create refused, and in less than the entry's `ms`",
     "orders": "the entry's `order` unit of P's moves more than 64 wu when ordered",
-    "ai": "every AI seat that made a unit in the original's [T, T + TAKEOVER_SPAN] makes one "
-          "in timeline 1's (a seat that made none in the original is skipped and named), and at "
-          "least 25 % of the AI seats' mobile units move more than 8 wu in timeline 1",
+    "ai": "every AI seat issues fresh planner orders that reach normal dispatch during an "
+          "armed TAKEOVER_SPAN window, and at least 25 % of the AI seats' mobile units move more than "
+          "8 wu; construction is reported only",
     "fork": "compare-fork EQUAL, the original's bytes untouched, both timelines check, "
             "timeline 1 complete, and K's and F's dumps EQUAL",
     "victory": "timeline 1 ends complete with P's seat won, within TAKEOVER_SPAN of T",
@@ -285,7 +285,13 @@ class Worker:
         stop_xvfb(self.xvfb)
         self.lock.close()
 
-    def stop(self):
+    def stop(self, hard=False):
+        if hard:
+            rc, detail = tacli("stop", self.name, "--hard", timeout=120)
+            if rc or self.running():
+                raise CouldNotRun(f"failed game cleanup: {last(detail)}; instance still held")
+            self.last_collection = None
+            return
         if self.last_collection:
             self.quit()
         else:
@@ -440,7 +446,8 @@ def procs(fix):
     """The processes a fixture runs: L, P, R and Q; K and F where fixtures.json gives it a
     takeover; W where it asks for the browser's Watch."""
     return (("L", "P", "R", "Q") + (("K", "F") if fix.get("takeover") else ()) +
-            (("W",) if fix.get("watch") else ()) + (("X",) if fix.get("forks") else ()))
+            (("W",) if fix.get("watch") else ()) + (("X",) if fix.get("forks") else ()) +
+            (("U",) if fix.get("rewind") else ()))
 
 
 def head():
@@ -508,6 +515,10 @@ def step(w, kind, arg):
         rc, o = tacli("scenario", "apply", w.name, SCENARIOS / arg, timeout=300)
         if rc:
             raise CouldNotRun(f"apply {arg}: {last(o)}")
+    elif kind == "keys":
+        rc, o = tacli("keys", w.name, *arg)
+        if rc:
+            raise CouldNotRun(f"keys {arg}: {last(o)}")
     elif kind == "type":
         # the chat line: one return opens it, the characters, return sends it; a second return
         # straight after the first closes the line again and the characters land as hotkeys. A
@@ -738,6 +749,25 @@ def takeover_k(w, fx, out):
         raise CouldNotRun(f"replay takeover: {why}")
     res.update(got)
     t_line = time.time()
+    if "ai" in tk.get("checks", []):
+        import tarewind
+        rc, o = tacli("keys", w.name, "pause")
+        if rc:
+            raise CouldNotRun(f"K pause: {last(o)}")
+        deadline = time.monotonic() + 30
+        # The engine's pause bit is the acknowledgement: the future window cannot
+        # begin until we resume after the observer's armed acknowledgement.
+        while not peek(w, "*0x511DE8+0x38A51:2") & 1:
+            if time.monotonic() > deadline:
+                raise CouldNotRun("K: the engine did not acknowledge pause")
+            nap(.1)
+        start = w.gametime() + 1
+        stop = start + TAKEOVER_SPAN
+        tarewind.arm_ai(sys.modules[__name__], w, log, "takeover", start, stop)
+        res["ai_window"] = [start, stop]
+        rc, o = tacli("keys", w.name, "pause")
+        if rc:
+            raise CouldNotRun(f"K resume: {last(o)}")
     if fx["cover"]:
         cover_ask(w, log, "K")
     # what Impure draws 4 s after the line, against what the takeover made (judge)
@@ -755,7 +785,7 @@ def takeover_k(w, fx, out):
     display = int(w.xvfb.display.lstrip(":"))
     seen = set()
     t0 = time.time()
-    deadline = t0 + 120 + 4 * span / 30
+    deadline = t0 + 120 + 4 * max(span, res.get("ai_window", [T, T])[1] - T) / 30
     while True:
         tc.new_boxes(display, seen, res["boxes"], t0)
         if (w.gamedir / "ErrorLog.txt").exists():
@@ -764,8 +794,13 @@ def takeover_k(w, fx, out):
             res["gone"] = True
             break
         log.read()
-        if any(re.search(rf"recorder: dump {dump} (at GameTime|for GameTime \d+ not taken|refused)"
-                         rf"|recorder: writer: .* closed", ln) for ln in log.lines):
+        ended = any(re.search(r"recorder: writer: .* closed", ln) for ln in log.lines)
+        dumped = any(re.search(
+            rf"recorder: dump {dump} (at GameTime|for GameTime \d+ not taken|refused)", ln)
+            for ln in log.lines)
+        observed = "ai_window" not in res or any(
+            "recorder: AI activity takeover done " in ln for ln in log.lines)
+        if ended or (dumped and observed):
             break
         if time.time() > deadline:
             raise CouldNotRun(f"K: no dump {dump} and no end in {deadline - t0:.0f} s")
@@ -1377,7 +1412,7 @@ def checks(fx):
     """Every check of the processes that ran: (name, verdict, detail) each. A dump tarec cannot
     read (its exit 2) could not run; only a comparison that ran and differed is a FAIL."""
     rec, Ts, out, ran = fx["rec"], fx["Ts"], fx["out"], fx["procs"]
-    res = list(fx.get("xres", []))
+    res = list(fx.get("xres", [])) + list(fx.get("ures", []))
     rc, o = tarec_run("info", rec)
     m = re.search(r"ended: (.*)", o)
     end = m.group(1) if m else "no end block"
@@ -1490,16 +1525,6 @@ def tk_ai(path, tl, T, stop):
     return ai, made & ai, (len(moved) / len(start) if start else None), len(start)
 
 
-def ai_compare(ai, original, fork):
-    """The `ai` check's comparison, over the AI seats `ai` of timeline 1: the seats that made a
-    unit in the original's window (`original`) are compared, each must have made one in timeline
-    1's (`fork`); a seat that made none in the original is skipped. (compared, missing, skipped),
-    each sorted: compared empty is no comparison, missing non-empty a failure."""
-    compared = sorted(s for s in ai if s in original)
-    return compared, [s for s in compared if s not in fork], sorted(s for s in ai
-                                                                   if s not in original)
-
-
 def tk_moved(path, tl, ordered):
     """How far the ordered unit is, in timeline `tl`, at the GameTime read before its order and
     300 ticks (10 s) later, in wu: (distance, None), or (None, why)."""
@@ -1575,34 +1600,19 @@ def tk_checks(fx):
                     f"unit {k['ordered']['slot']} moved {d:.0f} wu from GameTime "
                     f"{k['ordered']['at']} to {k['ordered']['at'] + 300}"))
     if "ai" in want:
+        import tarewind
         try:
-            # one window for both timelines, ending where the shorter one does, so neither's
-            # seats are given more ticks to make a unit than the other's
-            segs = {s["id"]: s for s in tarec.file_segments(path)[0]}
-            parent = segs[tl]["parent"]
-            stop = min([T + TAKEOVER_SPAN] + [segs[i]["last"] for i in (parent, tl)
-                                              if segs[i]["last"] is not None])
-            ai, fork, frac, n = tk_ai(path, tl, T, stop)
-            _, original, _, _ = tk_ai(path, parent, T, stop)
-            compared, missing, skipped = ai_compare(ai, original, fork)
-            if not compared:
-                raise tarec.Unreadable(
-                    f"no AI seat made a unit in timeline {parent}'s [{T}, {stop}]"
-                    + (f" (seats {', '.join(map(str, skipped))}: none in the original)"
-                       if skipped else ""))
+            if "ai_window" not in k:
+                raise tarec.Unreadable("no armed AI activity window")
+            start, stop = k["ai_window"]
+            ai, made, frac, n = tk_ai(path, tl, start, stop - 1)
+            lines = (out / "K" / "tagpu.log").read_text(errors="replace").splitlines()
+            active, detail = tarewind.ai_activity(lines, "takeover", start, stop, ai)
             if frac is None:
-                raise tarec.Unreadable(f"the AI seats hold no mobile unit at GameTime {T}")
-            moved = f"{frac:.0%} of {n} mobile units moved"
-            bad = [f"AI seat {s} made no unit, where the original made one" for s in missing]
-            if frac < 0.25:
-                bad.append(moved)
-            parts = (bad or [f"every AI seat that made a unit in the original "
-                             f"({', '.join(map(str, compared))}) made one"])
-            parts += [f"seat {s}: none in the original either" for s in skipped]
-            if frac >= 0.25:
-                parts.append(moved)
-            res.append(("takeover ai", FAIL if bad else PASS,
-                        f"GameTime [{T}, {stop}]: " + "; ".join(parts)))
+                raise tarec.Unreadable(f"the AI seats hold no mobile unit at GameTime {start}")
+            res.append(("takeover ai", PASS if active and frac >= .25 else FAIL,
+                        f"{detail}; {frac:.0%} of {n} mobile units moved; "
+                        f"construction observed for seats {sorted(made)} (reported only)"))
         except tarec.Unreadable as e:
             res.append(("takeover ai", UNRUN, str(e)))
     if "fork" in want:
@@ -1760,6 +1770,8 @@ class Run:
                 fx["tk_f"] = takeover_f(w, fx, out)
             elif proc == "X":
                 fx["xres"] = forks_lane(w, fx, out)
+            elif proc == "U":
+                fx["ures"] = rewind_lane(w, fx, out)
             elif proc == "W":
                 fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
@@ -1773,9 +1785,18 @@ class Run:
             say(f"{name} {proc}: {kind}: {why}")
             try:
                 w.collect(out)
-                w.stop()
             except Exception:
                 pass
+            # A guard stop blocks the game thread, so its GUI cannot perform a
+            # graceful exit. The next job may reuse this worker only after the
+            # owned process has ended, even when collecting artifacts failed.
+            try:
+                w.stop(hard=True)
+            except Exception as cleanup:
+                why = f"failed game cleanup: {cleanup}"
+                fx["problems"].append((proc, "could not run", why))
+                say(f"{name} {proc}: {why}; retiring {w.name}")
+                return False
         say(f"{name} {proc}: {time.time() - t0:.0f} s")
 
     def worker(self):
@@ -1794,7 +1815,8 @@ class Run:
                             return
                     continue
                 try:
-                    self.job(w, name, proc)
+                    if self.job(w, name, proc) is False:
+                        return
                 finally:
                     self.done()
         finally:
@@ -2031,7 +2053,10 @@ def fixture_users(scenario):
     """The fixtures whose load or applied steps name `scenario`."""
     out = set()
     for name, fix in fixtures().items():
-        named = {fix["load"]} | {a for _, k, a in fix.get("steps", []) if k == "apply"}
+        steps = fix.get("steps", []) + fix.get("rewind_steps", [])
+        named = {fix["load"]} | {a for _, k, a in steps if k == "apply"}
+        if fix.get("rewind_paused"):
+            named.add(fix["rewind_paused"])
         if scenario in named:
             out.add(name)
     return out
@@ -2360,6 +2385,40 @@ def cmd_forks(args):
         w.close()
 
 
+def rewind_lane(w, fx, out):
+    import tarewind
+    battle = fixtures()["battle"]
+    # Fresh builders give each AI units available for decisions. The fixture supplies
+    # no construction orders; the observer attributes new orders to the AI itself.
+    fix = {**battle, "steps": battle["steps"] + fx["fix"].get("rewind_steps", [])}
+    lane = {**fx, "fix": fix}
+    return tarewind.run(sys.modules[__name__], w, lane, out)
+
+
+def cmd_rewind(args):
+    if args.fixture != "battle":
+        raise CouldNotRun("rewind's L/P/Q fixture is battle")
+    out = out_dir(args)
+    dll, make = build_dll(args.stock, args.cover)
+    if not dll.exists() or dll.stat().st_mtime < sources_mtime():
+        raise CouldNotRun(f"build {make} first")
+    w = Worker(out)
+    try:
+        fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
+              "cover": args.cover}
+        res = rewind_lane(w, fx, out)
+        text = "\n".join(f"{status} {name}: {detail}" for name, status, detail in res)
+        (out / "summary.txt").write_text(text + "\n")
+        return 1 if any(s == FAIL for _, s, _ in res) else 2 if any(s == UNRUN for _, s, _ in res) else 0
+    except (CouldNotRun, Failed) as e:
+        say("rewind:", str(e))
+        w.collect(out / "failure", recordings=True)
+        w.stop()
+        return 1 if isinstance(e, Failed) else 2
+    finally:
+        w.close()
+
+
 def cmd_list(args):
     for name, fix in fixtures().items():
         print(f"{name:16} {fix['load']}, end at GameTime {fix['end']}"
@@ -2422,6 +2481,12 @@ def main(argv=None):
     fk.add_argument("--cover", action="store_true")
     fk.add_argument("--out")
     fk.set_defaults(func=cmd_forks, dll=None, stock_dll=None)
+    rw = sub.add_parser("rewind", help="live battle rewound, restored, forked and played on P/Q")
+    rw.add_argument("fixture", choices=["battle"])
+    rw.add_argument("--stock", action="store_true", help="the same battle on stock limits")
+    rw.add_argument("--cover", action="store_true")
+    rw.add_argument("--out")
+    rw.set_defaults(func=cmd_rewind)
     fe = sub.add_parser("features", help="the SIM_FEATURE regions of the sim files")
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")

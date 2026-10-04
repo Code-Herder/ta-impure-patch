@@ -11228,21 +11228,20 @@ static unsigned __cdecl cob_run_step(unsigned* regs)
         }
     }
     if (kind == 0x10061000u || kind == 0x10062000u) {
-        typedef int (__attribute__((thiscall)) *Allocate)(char*, unsigned);
         int slot;
         tagpu_cobtrace_vm_context(cob, (int)regs[PR_EBP], (int)argc, kind == 0x10062000u);
-        slot = ((Allocate)0x004B08C0u)(cob, script);
+        slot = tagpu_rec_cob_child(cob, script, kind == 0x10062000u);
         tagpu_cobtrace_vm_context(NULL, 0, 0, 0);
         if (slot >= 0) {
             TagpuCobRecord* child = cob_record(cob, (unsigned)slot);
             memcpy(child->stack, record->stack + record->sp + 1 - argc, argc * sizeof(int32_t));
             child->mask = record->mask;
-        } else if (kind == 0x10062000u) {
-            cob_fault(f->name, record->pc, "CALL cannot obtain a child thread");
         }
-        /* START consumes its arguments even if all records are occupied. CALL
-           never creates stock's unresolvable wait on child slot -1. */
-        record->sp -= (int32_t)argc;
+        /* DISASSEMBLED 0x4B192F..0x4B1974: a refused CALL retains its arguments
+           and waits on child -1. RETURN only compares that sentinel with the
+           returning slot (0x4B1A12); it never indexes through it. START drops
+           refused arguments so repeated starts cannot fill the parent's stack. */
+        if (slot >= 0 || kind == 0x10061000u) record->sp -= (int32_t)argc;
         record->pc += 3;
         if (kind == 0x10062000u) {
             record->child = slot;

@@ -1,0 +1,23 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A selected solar self-destructs through native Ctrl+D. Remote unarmed units keep both seats alive. The replay fixture selects the isolated solar at the pinned camera centre and exercises the secondary order dispatcher.",
+ "setup": {
+  "map": "Core Prime Industrial Area",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "los": "permanent",
+  "mapping": true,
+  "switches": {"noshake": true},
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1}
+  ]
+ },
+ "units": [
+  {"id": "selfd", "type": "ARMSOLAR", "owner": 0, "pos": [1600, 1600]},
+  {"id": "keep_human", "type": "ARMSOLAR", "owner": 0, "pos": [7200, 7000]},
+  {"id": "keep_ai", "type": "CORSOLAR", "owner": 1, "pos": [7500, 7000]}
+ ],
+ "camera": {"at": [1600, 1600]}
+}

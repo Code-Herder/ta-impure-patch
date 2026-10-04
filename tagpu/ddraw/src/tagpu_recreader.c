@@ -280,6 +280,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
         case RT_MAP:           text(h->map, sizeof h->map, p, n); break;
         case RT_WALLCLOCK:     if (n == 8) memcpy(&h->wallclock, p, 8); break;
         case RT_START:         if (n == 4) h->start = u32(p); break;
+        case RT_FRAME:         if (n == 4) { h->has_frame = 1; h->frame = u32(p); } break;
         case RT_SLOTS:         if (n == 4) { h->slots = u32(p); seen |= 4; } break;
         case RT_UNITS_EACH:    if (n == 4) h->units_each = u32(p); break;
         case RT_UNITDEFS:
@@ -1664,6 +1665,11 @@ static int snapshot_apply(RecReader* r, const RecBlock* blk, char* why, unsigned
                 return -1;
             }
             w->tick = blk->last;
+        } else if (r->h.has_frame &&
+                   (hd.kind == RK_IMAGE || hd.kind == RK_SIGHT || hd.kind == RK_COUNTS ||
+                    hd.kind == RK_COUNT_NAME)) {
+            /* Comparison evidence in a dump, not restored simulation state. The record's
+               length has been bounded by the checked block above. */
         } else if (hd.kind == RK_TICK || !apply(r, hd.kind, b, hd.len, &events) || events) {
             snprintf(why, cap, "a malformed record of kind %u in the snapshot of GameTime %u",
                      hd.kind, blk->last);
@@ -1814,7 +1820,7 @@ int recr_seek(RecReader* r, unsigned T, unsigned lead, RecVisit visit, void* ctx
 
 /* ---- open and close ------------------------------------------------------------------------- */
 
-static RecReader* open_handle(HANDLE f, const char* path, char* why, unsigned cap)
+static RecReader* open_handle(HANDLE f, const char* path, char* why, unsigned cap, int dump)
 {
     RecReader* r = (RecReader*)calloc(1, sizeof *r);
     char magic[8];
@@ -1844,6 +1850,17 @@ static RecReader* open_handle(HANDLE f, const char* path, char* why, unsigned ca
     if (!header_parse(&r->h, r->raw, r->rawn, why, cap) || !world_init(r, why, cap)) goto fail;
     payload_free(r);
     r->first_off = r->off;
+    if (dump) {
+        if (!r->h.has_frame || r->h.frame == UINT32_MAX || r->h.start != r->h.frame + 1 ||
+            block_head(r, &b, why, cap) != 1 || b.kind != RB_SNAPSHOT ||
+            b.first != r->h.start || b.last != r->h.start) {
+            snprintf(why, cap, "not a complete frame dump");
+            goto fail;
+        }
+        if (snapshot_apply(r, &b, why, cap) != 1) goto fail;
+        return r;
+    }
+    if (r->h.has_frame) { snprintf(why, cap, "a frame dump is not a recording"); goto fail; }
     r->nchain = 1;                  /* the original, until recr_timeline chooses another */
     r->base_seg = -1;
     if (segs_scan(r, 0, why, cap) < 0) goto fail;
@@ -1861,7 +1878,18 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
         snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
         return NULL;
     }
-    return open_handle(f, path, why, cap);
+    return open_handle(f, path, why, cap, 0);
+}
+
+RecReader* recr_dump_world(const char* path, char* why, unsigned cap)
+{
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                           FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        snprintf(why, cap, "cannot open frame dump (%lu)", GetLastError());
+        return NULL;
+    }
+    return open_handle(f, path, why, cap, 1);
 }
 
 /* The header block, then every block's header to the end block, whose payload alone is read: the
@@ -2245,7 +2273,7 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
         recfile_unlock(&lock);
         return 0;
     }
-    r = open_handle(f, path, why, cap);       /* the reader owns the locked handle from here */
+    r = open_handle(f, path, why, cap, 0);       /* the reader owns the locked handle from here */
     if (!r) { recfile_unlock(&lock); return 0; }
     if (segs_scan(r, 1, why, cap) < 0) goto done;
     s = seg_index(r, id);
