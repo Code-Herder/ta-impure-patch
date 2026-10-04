@@ -131,6 +131,15 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    the `tacli ls --json` rect, which is the frame — they differed by (14, 49) here.
    **`xwd -id <window>` returns full window content even while the session is locked**
    (3.1 MB for 1024×768, verified) — the escape hatch when the screen is unavailable.
+   **A desktop flash during a mode change needs an isolated-display grab.** A
+   `-window_id` capture cannot show the desktop uncovered by the window shrinking.
+   On an isolated display, give the root a known background colour and record the
+   whole display at 60 fps; keep the normal window-only rule on the human's desktop.
+   Pair the recording with timestamped window Create/Destroy, Map/Unmap and Configure
+   events. Keep ConfigureNotify's own width/height: querying the window after the
+   event can already see the next size and hide the intermediate one. See
+   `research/notes/fullscreen-handoff.md` for the reproduction and its compositor gap.
+
 6. **Marker-verified pairs** (engine vs ours): `echo "STRIP <phase> $(date +%s)"
    >> $OUT/markers.txt` before each capture, match PNG mtimes with
    `ls --time-style=+%s`. The marker goes in your own file, never into `log/tagpu.log`: the DLL

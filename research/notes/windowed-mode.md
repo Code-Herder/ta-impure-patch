@@ -173,6 +173,17 @@ file — a game launched outside tacli, an instance created before this, or `--n
 the title is untouched, which is why `Instance.window()` keeps the bare title in its
 search list alongside the exact one the launch recorded in `window_title`.
 
+## Borderless shell-to-game desktop flash — unresolved
+
+The [fullscreen handoff investigation](fullscreen-handoff.html) reproduces a different
+discontinuity after loading. TA releases and recreates DirectDraw on a logical mode change;
+the proxy zeros `g_ddraw` between objects, so its resize guard stops recognizing the surviving
+game window. An engine resize briefly shrinks the borderless window, exposing the desktop,
+before mode setup expands it again. The render thread and Vulkan presentation surface also
+restart on the same HWND. The isolated Wine run measures 0.5–0.6 s without a presented game
+frame; the several-second duration on a composited desktop remains unmeasured. No fix is
+included, and no second top-level game window is created in the trace.
+
 ## Movies in the DLL's window
 
 TA refuses to play Smacker movies when it believes it is windowed (string: *"You must be in
