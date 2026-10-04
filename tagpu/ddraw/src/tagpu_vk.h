@@ -86,25 +86,22 @@
    tagpu_vk_pass.h for why that refusal is a safety property and not tidiness. */
 int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter);
 
-/* Called from the render thread as it stops -- a mode change or a shutdown,
-   both of which invalidate the game window. Tears everything down. Safe to
-   call when nothing is up. */
+/* A ready lane may outlive a render thread when its actual window remains
+   live. Called on the exiting render thread; its caller must join that thread
+   before changing DirectDraw state or starting a replacement renderer. */
+void tagpu_vk_render_pause(HWND hwnd);
+int tagpu_vk_ready(void);
+
+/* Final teardown, on the render thread or on the window owner after joining
+   the renderer. An unfinished bring-up is abandoned without waiting for its
+   worker, which remains the sole owner until it releases its objects. */
 void tagpu_vk_render_stop(void);
 
-/* THE GAME WINDOW IS BEING DESTROYED, told to the lane by the thread that owns
-   windows. Called from the fork's wndproc; it watches `WM_DESTROY` and nothing
-   else. That one fact cannot be had on the render thread: `g_ddraw.hwnd` is
-   nulled only by the IAT-hooked `DestroyWindow`, and only after the real
-   destroy. (`dd_Release`'s `memset` of `g_ddraw` clears it too, but that path
-   stops and joins the render thread first, so it cannot beat a real destroy.)
-   A destroy by any other route would leave the lane presenting on a dead HWND
-   until the driver raised `VK_ERROR_SURFACE_LOST_KHR`. This bounds
-   that at one frame.
-
-   AN OBSERVER: it returns nothing and swallows nothing. Unlike
-   `tagpu_menu_wndproc` it cannot claim a message, so adding it to the chain
-   changes no other message's path. */
-void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
+/* Destruction observer, called by the fork and the persistent window subclass.
+   Publishes the owner-gone latch before the subclass joins the renderer and
+   tears down retained presentation. Returns nonzero only for destruction of
+   the lane's own window lifetime; the caller still forwards every message. */
+int tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
 /* Called once from the render thread's start-up, in `vk_render_main`. Kicks
    the enumeration worker that refreshes `tagpu_vk.gpus` for the next launch's

@@ -89,10 +89,11 @@ stdcall(int fullscreen), ret 4. Serialised by the `'NIAM'` interlock at
 Then frees the old GDI objects (`TAProgram+0x44/48/4C`), then
 `SetWindowPos(hwnd=TAProgram+0x40, 0,0, curW, curH, SWP_NOZORDER|SWP_NOMOVE=6)`
 (call at `0x4B55D7`) and branches. That resize precedes the new DirectDraw object:
-our `dd_Release` has zeroed `g_ddraw`, so `fake_SetWindowPos` cannot apply its usual
-game-window guard. **MEASURED 2026-10-04:** a borderless 1280×1024 window briefly
-shrinks to 1024×768 on game entry before the new mode setup restores it;
-[fullscreen-handoff](fullscreen-handoff.html) contains the trace and controls.
+our `dd_Release` has zeroed `g_ddraw`. The resize guard identifies the surviving
+window through `tagpu_window.c`'s lifetime property, including this interval with no
+DirectDraw object. **MEASURED 2026-10-04:** before that fix a borderless 1280×1024
+window shrank to 1024×768 and back; fixed runs retain its full size and ready Vulkan
+presentation. [fullscreen-handoff](fullscreen-handoff.html) contains the trace and controls.
 
 - **fullscreen (arg=1)**: sets `+0xF0 |= 2`; `DirectDrawCreate(0, &TAProgram+0x84, 0)`
   (import thunk `0x49F710`) → `SetCooperativeLevel(hwnd, 0x53)` (`call [vt+0x50]`

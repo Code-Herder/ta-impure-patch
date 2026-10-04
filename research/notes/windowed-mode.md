@@ -173,16 +173,19 @@ file — a game launched outside tacli, an instance created before this, or `--n
 the title is untouched, which is why `Instance.window()` keeps the bare title in its
 search list alongside the exact one the launch recorded in `window_title`.
 
-## Borderless shell-to-game desktop flash — unresolved
+## Borderless shell-to-game handoff
 
-The [fullscreen handoff investigation](fullscreen-handoff.html) reproduces a different
-discontinuity after loading. TA releases and recreates DirectDraw on a logical mode change;
-the proxy zeros `g_ddraw` between objects, so its resize guard stops recognizing the surviving
-game window. An engine resize briefly shrinks the borderless window, exposing the desktop,
-before mode setup expands it again. The render thread and Vulkan presentation surface also
-restart on the same HWND. The isolated Wine run measures 0.5–0.6 s without a presented game
-frame; the several-second duration on a composited desktop remains unmeasured. No fix is
-included, and no second top-level game window is created in the trace.
+TA releases and recreates DirectDraw on a logical shell/game mode change. The actual game
+window survives. `tagpu_window.c` keeps the window lifetime and resize policy attached
+through that interval, even while the proxy resets `g_ddraw`. A ready Vulkan lane keeps its
+presented image and GPU resources while the old render thread is stopped and joined; the
+replacement thread takes ownership after the join. Actual window destruction tears it down.
+
+The [fullscreen handoff note](fullscreen-handoff.html) records the original same-window
+shrink, desktop flash and 0.5–0.6 s presentation restart, and Wine verification of the fix.
+Recorded fixed transitions expose no desktop pixels and create no replacement Vulkan child.
+Brief engine-produced blank frames remain (0.117 s at end of loading in the final run).
+Live compositor timing and Windows presentation behaviour remain unmeasured.
 
 ## Movies in the DLL's window
 

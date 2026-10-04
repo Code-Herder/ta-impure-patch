@@ -27,6 +27,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Gate | Status | Result |
 |---|---|---|
 | G0 — Build & inert chain | ● done | Our forked `ddraw.dll` (`7.1.0.1 git~279a057`, mingw i686) loads native from the game dir (`WINEDLLOVERRIDES=ddraw=n,b`), attaches to TotalA.exe (crc32 `520700A8`, section `[TotalA]`), brings up **GL 4.6 on the RTX 4070 under wine**, and TA renders normally through it (Cavedog splash + intro cinematic captured). Stock renderer one env-var away. |
+| Borderless shell/game handoff | ● fixed 2026-10-04 | Window policy follows actual HWND lifetime; ready Vulkan presentation survives joined DirectDraw recreation. Recorded Wine transitions expose no desktop and create no replacement Vulkan child. Brief engine-produced blanks, live compositor timing and Windows verification remain open; [handoff note](fullscreen-handoff.html) and the gate entry below. |
 | G1 — Overlay proof | ● done | Our GL 3.3-core overlay draws over the live game in the fork's render context — translucent (game shows through), correctly placed in the letterboxed viewport, file-toggleable, no crash at 31 fps. Built into the fork (not a separate DLL). GL-framebuffer capture (`glReadPixels`) added as the review path for overlay content. |
 | G2 — State-read proof | ● done | Live skirmish, vs AI: we resolve the game struct, walk the unit array, project each unit through TA's own world→screen formula and draw a GPU marker on it. Confirmed visually — a green marker (own-unit colour) sits exactly on the ARM Commander. Same loop scales to every unit. Menu driven under the locked session by keyboard accelerators (`space`→Single, `s`→Skirmish, `Return`→Start) + mouse-edge scroll. |
 | G3 — Static frame map | ● done | One frame's composition fully mapped from the binary ([Frame composition](frame-composition.html)). Key insight: the Lock/Unlock heartbeat is the *present* (`FlipOffscreenToPrimary 0x4C63A0`, called last) — all drawing happens earlier into a software offscreen buffer. Chain: `GameFrame_InGame 0x496790` → `DrawGameScreen 0x468CF0` in painter order (terrain `0x418310` → interleaved feature/unit row sweep → fog `0x420B00` → UI → present). Per-unit path isolated: **`DrawUnit 0x45AC20`(offscreen, unit)** → COB pose-bake `0x45B0A0` → composite blit `0x459200` with per-pixel 8-bit z-merge `0x4B90A0`. Sprite-cache rasteriser found (`0x4586A0`): TA re-rasterises the whole 3DO on every move/animate — not a static per-orientation bake. Hook table frozen, 24 functions decompiled through the new Ghidra project. **Per-unit blits are isolatable** — no pivot needed; G5 stays a single detour at `DrawUnit`. |
@@ -3926,3 +3927,20 @@ than a desk.
   are Apache-2.0 (2026-09-15), which is fine inside an MIT project but is not relicensed by it,
   so those files are copied verbatim and never edited. `inc/vulkan/README.md` states the pin, the
   obligations and why each is already discharged.
+
+## Borderless shell/game handoff — 2026-10-04
+
+**Exit condition:** an engine DirectDraw recreation on the same borderless game window must
+not shrink the window or destroy a ready Vulkan presentation lane. The renderer must still be
+joined before Release resets the DirectDraw state, and actual window destruction must reclaim
+retained GPU objects.
+
+**Met on Wine's isolated display:** repeated shell/game transitions and a fresh different-map
+entry keep the window, surface child and ready device; normal exit tears it down. Windowed and
+fullscreen toggles still resize through the proxy and rebuild the swapchain. The lifetime
+subclass has a Win32/Wine integration test. The mechanism and evidence are in
+[gpu-status §2.107](gpu-status.html#2107-presentation-follows-the-window-lifetime-tagpu_windowc-render_vkc-tagpu_vkc-2026-10-04)
+and [fullscreen-handoff](fullscreen-handoff.html).
+
+**Not covered:** live compositor and Windows presentation behaviour. Short engine-produced
+blank frames remain; cold or invalidated devices still require initialization.

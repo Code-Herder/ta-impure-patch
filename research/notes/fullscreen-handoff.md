@@ -1,9 +1,11 @@
 # Borderless shell-to-game handoff — window shrink and presentation restart
 
-**Investigated 2026-10-04; unresolved.** The reported symptom is the desktop appearing after
-loading, as though a second fullscreen window opens. Wine reproduction confirms two
-discontinuities on the **same** game window: an engine resize escapes the proxy between
-DirectDraw objects, and presentation is destroyed and rebuilt. No fix is included.
+**Fixed 2026-10-04.** TA still calls the DirectDraw compatibility interface; the normal
+renderer presents through Vulkan. The reported desktop flash came from tying window policy
+and Vulkan teardown to an engine DirectDraw recreation on the **same** surviving game
+window. Window ownership now lasts until actual destruction, and a ready Vulkan lane
+survives the joined renderer replacement. The original reproduction and the fix evidence
+are recorded below.
 
 ## Reproduction and controls
 
@@ -32,7 +34,7 @@ The capture metric is the fraction of pixels with all channels below 8 after dow
 of physical display latency. The source tested was `5e5fb6a6`. Relevant window and backend
 sources are unchanged in local main at `faabb488`.
 
-## The desktop exposure: the resize guard loses its owner
+## Before the fix: the resize guard loses its owner
 
 **DISASSEMBLED**, pristine executable, and **MEASURED** with temporary boundary logs:
 
@@ -58,7 +60,7 @@ returning to 1280×1024 **13.37 ms** later. There is no top-level Unmap or Destr
 the transition. The Win32 HWND remains `00020058`. The geometric desktop exposure is
 independent of Vulkan; the GDI control reproduces it too.
 
-## The delay: a DirectDraw lifetime also ends presentation
+## Before the fix: a DirectDraw lifetime also ends presentation
 
 `dd_Release` reaching zero stops the render thread. `vk_render_main` exits through
 `tagpu_vk_render_stop → vk_down`, which drains the device and destroys the pass objects,
@@ -89,24 +91,66 @@ the exclusive-display branches are not taken. No game-window hide/minimize/destr
 occurs at the handoff. The first new successful Vulkan present ends the measured long gap;
 the evidence does not require a later world/GUI initialization stall to explain it.
 
-## Fix boundary and remaining verification
+## The lifetime and ordering that fix it
 
-Window ownership and the presented image need lifetimes that survive an engine DirectDraw
-recreation. Keep the resize policy tied to the real game-window lifetime, including the
-interval with no DirectDraw object. Preserve a full-size opaque presented frame until a
-replacement frame is ready. If presentation is kept alive, its ownership and the boundary
-with the reset DirectDraw state need an explicit ordering: merely skipping the join leaves a
-thread reading a critical section and state that `dd_Release` destroys. Reducing a sleep does
-not repair the window-ownership gap or preserve the last frame.
+`tagpu_window.c` attaches a comctl32 subclass and a positive, nonrepeating lifetime ID to
+TA's actual HWND on the window-owner thread, before the DirectDraw proxy installs its
+window procedure. Restoring that procedure at final Release restores the subclass
+dispatcher. The property therefore continues to identify the window while `g_ddraw` is
+zeroed. The engine's hooked SetWindowPos/MoveWindow cannot shrink that owned window in the
+interval between DirectDraw objects; the proxy's own real Win32 mode calls still position it.
+IDs stop at LONG_MAX rather than wrapping, so a recycled HWND cannot identify the old surface.
 
-This investigation does **not** establish the reported several-second duration on a live
-composited desktop. The isolated display reproduces the resize, desktop exposure and
-0.5–0.6 s presentation interruption; compositor amplification remains unmeasured. If logical
-Screen Size equals the borderless monitor size, the intermediate resize asks for the same
-dimensions, so desktop exposure by shrinkage is not established for that configuration.
-Presentation teardown still follows a shell-to-game logical mode change.
+The existing **stop, semaphore wake, join, then reset** ordering is retained. No render
+thread is left reading the DirectDraw critical section, DC or primary surface that Release
+disposes of. On exit, a ready Vulkan lane whose window lifetime is still current keeps its
+surface, device, swapchain, pass resources and last presented image. After the join, the
+replacement renderer becomes the sole CPU owner; the existing per-image Vulkan fences
+order its GPU submissions. The retained objects hold no pointer into `g_ddraw`.
 
-Captures, X events, complete run logs, disassembly and the removed instrumentation patch are
-retained under the main checkout's `_local/investigations/fullscreen-handoff-2026-10-04/`.
-Temporary instrumentation is removed, the normal DLL rebuilt, and the test instance and
-isolated display stopped. The fault remains present; this is a diagnosis, not a fix.
+WM_DESTROY publishes the owner-gone latch before removing the property and joining an
+active renderer. The owner thread then tears down its own retained presentation. Destruction
+of another tagged window cannot tear this lane down. A failed or unfinished lane is never
+retained: unfinished bring-up keeps its existing ST_ZOMBIE worker-owned cleanup, without a
+worker wait on the game thread. GPU selection and actual window lifetime changes still
+invalidate the lane. A real client-size change still rebuilds the swapchain. The renderer's
+unconditional startup Sleep(250) is removed; dd_SetDisplayMode positions the window before
+starting its thread, and the normal out-of-date/suboptimal path handles subsequent resizes.
+
+## Fix verification and remaining limits
+
+**MEASURED 2026-10-04**, Wine, isolated 1280×1024 Xvfb display, 1024×768 logical game,
+Classic++ and play defaults, Vsync on:
+
+- Two Continents game → menu → game: **no desktop-background capture frames**, no top-level
+  or Vulkan-child Create/Destroy/Unmap/Configure events during the recorded cycle. Vulkan
+  logs ready presentation retained, without another device bring-up. The long baseline
+  0.533–0.600 s blank is absent. Short blanks remain at screen changes, including seven
+  capture frames (0.117 s) at end of loading; retaining presentation does not suppress an
+  engine-produced blank replacement frame.
+- A fresh final build entering **Greenhaven**: no desktop-background frames or window events
+  during the handoff; one initial Vulkan device bring-up for the process. Seven essentially
+  black frames at end of loading (0.117 s), and two before the loading artwork. The captured
+  presented game shows its terrain, commander, features and HUD; the census reports six
+  drawing passes, with no claims.
+- Fullscreen → windowed → game → menu → fullscreen: the client changes between 1280×1024
+  and 1024×768 through the proxy's mode setup; swapchain rebuilding remains functional.
+- Normal main-menu Exit: WM_DESTROY is observed after final DirectDraw Release, and the
+  retained lane logs its final teardown. Exit removes the game from the isolated display.
+- `make windowtest` and `wine tests/windowtest.exe`: the real Win32 subclass still forwards
+  messages after proxy procedure restoration, removes ownership before engine destruction,
+  scopes retained teardown to its owner, joins before active teardown, rejects attachment
+  from a foreign thread, and assigns increasing IDs across 256 new window lifetimes.
+- Normal and stock-limits DLL builds pass. No simulation code or replay layout changes.
+
+These tests do **not** measure the reported several-second duration or compositor behaviour
+on the live desktop, and do not establish Windows presentation behaviour. The isolated display
+reproduces the original resize and desktop flash and demonstrates their removal. Brief
+engine-produced blank frames at screen changes remain. A cold start, device failure or GPU
+selection still requires device initialization; only a ready lane on the same live window
+can be retained.
+
+The original captures, X events, run logs, disassembly and removed instrumentation patch are
+under the main checkout's `_local/investigations/fullscreen-handoff-2026-10-04/`; fixed-build
+captures, metrics and logs are under `_local/investigations/fullscreen-handoff-fix-2026-10-04/`.
+No temporary boundary instrumentation remains in the DLL.
