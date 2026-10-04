@@ -735,6 +735,12 @@ block that reads to its last complete block.
   the battle with the stock DLL. The `rewind_paused` scenario creates a human
   unit while paused before the saved-present dump, checking that return-to-now
   preserves the previous radar scan. Return-to-now reconstructs COB threads; the U
+  AI check requires new planner-issued orders and a normal dispatch of sampled
+  orders for each AI seat, plus the mobile-unit movement threshold. Construction
+  is reported without requiring matching choices. The harness trigger
+  `ai-activity NAME from START until END` observes that future half-open tick
+  interval and reports per-seat orders/dispatches followed by its completion line.
+  The shared automatic-targeting phase and restored orders do not count. The U
   count check reports and accepts only VM START/CALL child-count differences via
   `compare-counts --rewind`. D2 excludes sight buffers only for unseated records.
   For the fresh comparison, the trigger

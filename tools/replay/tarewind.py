@@ -4,6 +4,36 @@ import re
 import time
 
 
+def ai_activity(lines, name, start, stop, seats):
+    """Require fresh AI orders that reached a normal handler in the armed window."""
+    prefix = rf"recorder: AI activity {re.escape(name)} "
+    rows, done, malformed, completions = {}, False, False, 0
+    for line in lines:
+        m = re.search(prefix + r"seat (\d+) orders (\d+) executed (\d+)", line)
+        if m:
+            seat, orders, executed = map(int, m.groups())
+            malformed |= seat in rows or seat >= 10 or executed > orders
+            rows[seat] = (orders, executed)
+        m = re.search(prefix + r"done \[(\d+),(\d+)\) bad (\d+)", line)
+        if m:
+            completions += 1
+            malformed |= completions > 1
+            done = tuple(map(int, m.groups())) == (start, stop, 0)
+    missing = sorted(s for s in seats if not rows.get(s, (0, 0))[1])
+    complete = done and not malformed and set(rows) == set(range(10)) and bool(seats)
+    detail = (f"[{start},{stop}) orders/executed " +
+              ", ".join(f"{s}={rows.get(s, (0, 0))[0]}/{rows.get(s, (0, 0))[1]}"
+                        for s in sorted(seats)) +
+              f"; missing {missing}; complete={complete}")
+    return complete and not missing, detail
+
+
+def arm_ai(t, w, log, name, start, stop):
+    t.arm(w, log, f"ai-activity {name} from {start} until {stop}",
+          rf"AI activity {name} armed \[{start},{stop}\)",
+          rf"AI activity {name} refused", "AI activity " + name)
+
+
 def run(t, w, fx, out):
     """Record a battle across two rewinds, compare its restored frame and a fresh seek,
     then play the original across the return-to-now boundary. Every dump is engine-timed."""
@@ -154,8 +184,10 @@ def run(t, w, fx, out):
         returned = command("now", dump="post")
         check("return clock", returned["dump_at"] == G1, f"GameTime {G1}")
         check("return objective", objective_armed() == 0, "saved disabled switch retained")
+        arm_ai(t, w, log, "now", G1 + 1, G1 + 1801)
         t.tacli("keys", w.name, "pause")
         judge_span("now judge", 1800, 60)
+        until(G1 + 1801)
         until(max(3000, G1 + 1800))
         opened = command("open", dump="fork-pre")
         G2 = opened["dump_at"]
@@ -163,13 +195,19 @@ def run(t, w, fx, out):
         command("seek", T2)
         forked = command("fork", dump="fork")
         check("fork objective", objective_armed() == 1, "takeover arms objectives")
-        judge_span("fork judge", 900, 30)
+        t.tacli("keys", w.name, "pause")
+        t.nap(1)
+        AF = w.gametime() + 1
+        arm_ai(t, w, log, "fork", AF, AF + 1800)
+        t.tacli("keys", w.name, "pause")
+        judge_span("fork judge", 1800, 60)
+        until(AF + 1800)
         for label, data in (("conversion", converted), ("now", returned), ("fork", forked)):
             match = re.search(r"in (\d+) ms", data["detail"])
             ms = int(match[1]) if match else None
             check(label + " time", ms is not None and (label == "conversion" or ms < 2000),
                   f"{ms} ms")
-        metadata.update(G0=G0, G1=G1, G2=G2, T1=T1, T2=T2)
+        metadata.update(G0=G0, G1=G1, G2=G2, T1=T1, T2=T2, ai_fork=AF)
         if fx["cover"]:
             t.cover_ask(w, log, "rewind-L")
         log.read()
@@ -205,16 +243,17 @@ def run(t, w, fx, out):
         check("contiguous original", ticks == list(range(ticks[0], G2 + 1)) and
               ticks.count(G1) == ticks.count(G1 + 1) == 1,
               f"{len(ticks)} iterations, {ticks[0]}..{ticks[-1]}; boundary {G1}/{G1 + 1}")
-        ai, made, fraction, count = t.tk_ai(rec, 0, G1, G1 + 1800)
-        _, baseline, _, _ = t.tk_ai(fx["rec"], 0, G1, G1 + 1800)
-        compared, missing, skipped = t.ai_compare(ai, baseline, made)
-        detail = (f"compared {compared}, missing {missing}, no baseline create {skipped}; "
-                  f"{fraction} of {count} mobile units moved")
-        if not compared or fraction is None:
-            results.append(("rewind AI acted", t.UNRUN, detail))
-            t.say(*results[-1])
-        else:
-            check("AI acted", not missing and fraction >= .25, detail)
+        for name, tl, start in (("now", 0, G1 + 1), ("fork", 1, AF)):
+            ai, made, fraction, count = t.tk_ai(rec, tl, start, start + 1799)
+            ok, detail = ai_activity(log.lines, name, start, start + 1800, ai)
+            check(name + " AI orders", ok, detail)
+            detail = (f"{fraction} of {count} mobile units moved; "
+                      f"construction observed for seats {sorted(made)} (reported only)")
+            if fraction is None:
+                results.append(("rewind " + name + " AI movement", t.UNRUN, detail))
+                t.say(*results[-1])
+            else:
+                check(name + " AI movement", fraction >= .25, detail)
 
         q = out / "Q"
         w.place(fix, fx["dll"])

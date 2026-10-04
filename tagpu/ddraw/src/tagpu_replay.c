@@ -6094,6 +6094,11 @@ static void trigger_read(void)
         tagpu_cover_write(name);
         return;
     }
+    if (sscanf(line, "ai-activity %39s from %u until %u%n", name, &T, &P, &end) == 3 &&
+        !line[end]) {
+        tagpu_rec_ai_arm(name, T, P);
+        return;
+    }
     if (s_rw.state) {
         tagpu_logf("replay: refused: use rewind commands while live rewind owns the level");
         return;

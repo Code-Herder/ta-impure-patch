@@ -3055,6 +3055,14 @@ The **pause guard at `0x496920`**, stolen `84 98 51 8A 03 00`, observes before t
 engine's pause test and reasserts pause while rewind owns the level. Failure to
 install it disables live rewind.
 
+The harness's AI activity observation brackets `0x408C40`, stops attribution
+at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,
+and forgets destroyed samples at `0x43A1F0`. Existing dispatch observers
+`0x43B878`/`0x43BB1D` count execution of those nodes. The three new sites are
+byte-matched observers; the existing weapons acquisition wrapper ends planner
+attribution without another patch at `0x4089A0`. **Fields we write:** diagnostic storage only; these
+observers write no engine field and no recording payload.
+
 **Sites.** Four call sites of the Start and the loader, installed by `tagpu_replay_init` and inert
 without an accepted request: the seat fill's call `0x47B092`, the settings persist's call
 `0x47B09C`, and the start units' calls `0x497963` and `0x497ACD`; with them an **observer on the

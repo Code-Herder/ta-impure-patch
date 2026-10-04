@@ -36,6 +36,11 @@ int tagpu_rec_dump_arm(const char* name, unsigned at);
    moved GameTime back between them: a step raises it once (0x4954C0). 1 written; 0 with a line
    when no level is in play, the name is bad or the dump could not be written. */
 int tagpu_rec_dump_now(const char* name);
+/* Harness-only observation over [from, until): new AI-issued orders and their
+   normal handler dispatches, reported per seat in the log. Game thread. */
+int tagpu_rec_ai_arm(const char* name, unsigned from, unsigned until);
+/* Acquisition runs for human seats too; end planner attribution before it. */
+void tagpu_rec_ai_planning_end(void);
 
 /* tagpu_reclaim's teardown wrap calls this on entry to 0x491B60, on the game thread, before the
    cascade frees the unit array: the recording in progress ends, complete once its writer has

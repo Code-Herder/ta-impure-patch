@@ -3893,8 +3893,11 @@ outside this landing. The first 18-fixture landing tier passed with 47/47 change
 functions reached. Dedicated review found an objective switch that return-to-now
 must preserve; its correction passes all 25 rewind checks on both builds. The
 naval COB stop and failed-worker cleanup are corrected. The renewed tier exposed
-an extra radar scan on return-to-now, now corrected, and AI construction checks
-that still require verification; S4d is not landed.
+an extra radar scan on return-to-now, now corrected. A no-rewind control also
+failed the AI construction comparison; the owner approved direct planner-issued
+order and dispatch checks after return and fork. The native disabled/re-enabled
+control and all 28 targeted rewind checks pass on both builds. The naval
+flare-count decision, renewed full tier and fresh reviews remain open; S4d is not landed.
 
 
 ## The restorer as compute (2026-09-27)

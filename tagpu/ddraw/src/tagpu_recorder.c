@@ -2697,6 +2697,142 @@ static void cnt_start(const Level* L, int counting)
 }
 
 
+/* AI activity is a harness observation, never simulation input. The context brackets
+   0x408C40 on the game thread; only a live type-2 record can supply a seat. Orders
+   constructed in that context are sampled until a normal dispatcher calls their handler.
+   The destructor forgets a sample before the node can be freed or its address reused.
+   Saved addresses are compared only with the engine's current live node; its owner
+   is read only at that node's ordinary handler dispatch. */
+#define AI_SAMPLES 32
+static struct {
+    DWORD tid;
+    unsigned from, until, depth, bad;
+    char name[40];
+    struct { unsigned ret, seat; } stack[8];
+    struct {
+        unsigned orders, executed;
+        const char* pending[AI_SAMPLES];
+    } seat[REC_PLAYERS];
+} s_ai;
+static unsigned s_ai_hooks;
+
+static int ai_window(void)
+{
+    unsigned now;
+    if (!s_ai.tid || s_ai.tid != GetCurrentThreadId() || !cnt_on() ||
+        tagpu_puppet_on() || s_ai.bad) return 0;
+    now = *(unsigned*)(s_cnt.L.ta + OFF_GAMETIME);
+    return now >= s_ai.from && now < s_ai.until;
+}
+
+static int __cdecl ai_enter(void* E)
+{
+    unsigned i, seat = REC_PLAYERS;
+    if (!ai_window()) return 0;
+    if (s_ai.depth == sizeof s_ai.stack / sizeof s_ai.stack[0]) {
+        s_ai.bad = 1;
+        return 0;
+    }
+    for (i = 0; i < REC_PLAYERS; i++) {
+        const char* p = s_cnt.L.ta + OFF_PLAYERS + i * PL_STRIDE;
+        if (*(const unsigned*)p && p[PL_CONTROLLER] == 2 &&
+            *(const unsigned*)(p + 0x74) == REG_ECX(E)) {
+            seat = i;
+            break;
+        }
+    }
+    s_ai.stack[s_ai.depth].ret = ARG(E, 0);
+    s_ai.stack[s_ai.depth++].seat = seat;
+    return 1;
+}
+
+static void* __cdecl ai_leave(unsigned* regs)
+{
+    (void)regs;
+    return (void*)(size_t)s_ai.stack[--s_ai.depth].ret;
+}
+
+/* The constructor returns the same ECX object in EAX (0x43A1C6). Its entry
+   samples that address without reading it. No order is dispatched inside the
+   constructor; a later dispatch therefore names a completed, linked node,
+   including nodes whose callers use an inline insertion. */
+static int __cdecl ai_order(void* E)
+{
+    unsigned seat, i;
+    const char* node = PTR(REG_ECX(E));
+    if (!ai_window() || !s_ai.depth) return 0;
+    seat = s_ai.stack[s_ai.depth - 1].seat;
+    if (seat >= REC_PLAYERS) return 0;
+    s_ai.seat[seat].orders++;
+    for (i = 0; i < AI_SAMPLES; i++)
+        if (s_ai.seat[seat].pending[i] == node) return 0;
+    for (i = 0; i < AI_SAMPLES; i++)
+        if (!s_ai.seat[seat].pending[i]) {
+            s_ai.seat[seat].pending[i] = node;
+            break;
+        }
+    return 0;
+}
+
+/* 0x4089A0 is the final call on both exits of 0x408C40. Human seats run it too:
+   automatic weapon retargeting is not evidence that the AI planner ran. */
+void tagpu_rec_ai_planning_end(void)
+{
+    if (s_ai.tid == GetCurrentThreadId() && s_ai.depth)
+        s_ai.stack[s_ai.depth - 1].seat = REC_PLAYERS;
+}
+
+static void ai_node(const char* node, int executed)
+{
+    unsigned i, k;
+    if (!node || !s_ai.tid || s_ai.tid != GetCurrentThreadId()) return;
+    for (i = 0; i < REC_PLAYERS; i++)
+        for (k = 0; k < AI_SAMPLES; k++)
+            if (s_ai.seat[i].pending[k] == node) {
+                s_ai.seat[i].pending[k] = NULL;
+                if (executed && ai_window()) {
+                    const char* unit = *(const char* const*)(node + 0x0E);
+                    unsigned id = id_in(unit, s_cnt.L.begin, REC_UNIT_BYTES, s_cnt.L.nslots);
+                    if (id && id != REC_ID_BAD && unit_live(&s_cnt.L, id - 1) &&
+                        (unsigned char)unit[0xFF] == i) s_ai.seat[i].executed++;
+                }
+            }
+}
+
+static int __cdecl ai_destroy(void* E)
+{
+    ai_node(PTR(REG_ECX(E)), 0);
+    return 0;
+}
+
+int tagpu_rec_ai_arm(const char* name, unsigned from, unsigned until)
+{
+    if (!dump_name(name) || !s_ai_hooks || !cnt_on() || tagpu_puppet_on() ||
+        s_ai.tid || from <= *(unsigned*)(s_cnt.L.ta + OFF_GAMETIME) || until <= from) {
+        tagpu_logf("recorder: AI activity %s refused", name);
+        return 0;
+    }
+    memset(&s_ai, 0, sizeof s_ai);
+    s_ai.tid = GetCurrentThreadId();
+    s_ai.from = from;
+    s_ai.until = until;
+    snprintf(s_ai.name, sizeof s_ai.name, "%s", name);
+    tagpu_logf("recorder: AI activity %s armed [%u,%u)", name, from, until);
+    return 1;
+}
+
+static void ai_finish(unsigned tick)
+{
+    unsigned i;
+    if (!s_ai.tid || tick < s_ai.until) return;
+    for (i = 0; i < REC_PLAYERS; i++)
+        tagpu_logf("recorder: AI activity %s seat %u orders %u executed %u",
+                   s_ai.name, i, s_ai.seat[i].orders, s_ai.seat[i].executed);
+    tagpu_logf("recorder: AI activity %s done [%u,%u) bad %u", s_ai.name,
+               s_ai.from, s_ai.until, s_ai.bad);
+    s_ai.tid = 0;
+}
+
 /* The create 0x485F50's success exit 0x4861B3 (`mov eax,esi`): esi is the unit it made, in the
    slot it actually took -- B4's hit_take may move a first-free create past its first choice. The
    function has pushed five registers, so its arguments start at +0x18; the first, the owner, is
@@ -3082,8 +3218,8 @@ static int __cdecl ev_nano_handler(void* E)
     return 0;
 }
 static int __cdecl ev_nano_h0(void* E) { cnt(0x0043A216u, 0, 0); return ev_nano_handler(E); }
-static int __cdecl ev_nano_h1(void* E) { cnt(0x0043B878u, 0, 0); return ev_nano_handler(E); }
-static int __cdecl ev_nano_h2(void* E) { cnt(0x0043BB1Du, 0, 0); return ev_nano_handler(E); }
+static int __cdecl ev_nano_h1(void* E) { ai_node(PTR(REG_ESI(E)), 1); cnt(0x0043B878u, 0, 0); return ev_nano_handler(E); }
+static int __cdecl ev_nano_h2(void* E) { ai_node(PTR(REG_ESI(E)), 1); cnt(0x0043BB1Du, 0, 0); return ev_nano_handler(E); }
 
 static void ev_spray(void* E, unsigned reverse)
 {
@@ -4087,6 +4223,26 @@ static const ObserveSite CNT_SINKS[] = {
 };
 #define CNT_SINK_COUNT (sizeof CNT_SINKS / sizeof CNT_SINKS[0])
 
+/* DISASSEMBLED entries, with no relative instruction in their stolen prefixes.
+   The ordinary dispatch sites are already observed by ev_nano_h1/ev_nano_h2. */
+static void ai_hooks_init(void)
+{
+    static const ObserveSite sites[] = {
+        { 0x00408C40u, 5, { 0x53, 0x56, 0x57, 0x8B, 0xF9 }, ai_enter, ai_leave },
+        { 0x0043A0C0u, 7, { 0x83, 0xEC, 0x0C, 0x8A, 0x44, 0x24, 0x10 }, ai_order, NULL },
+        { 0x0043A1F0u, 5, { 0x53, 0x56, 0x8B, 0xF1, 0x57 }, ai_destroy, NULL },
+    };
+    unsigned i;
+    for (i = 0; i < sizeof sites / sizeof sites[0]; i++) {
+        const ObserveSite* o = &sites[i];
+        if (!tagpu_detour_observe(o->va, o->stolen, o->n, o->fn, o->after)) {
+            tagpu_logf("recorder: AI activity observer 0x%06X unavailable", o->va);
+            return;
+        }
+    }
+    s_ai_hooks = 1;
+}
+
 /* each sink alone: one whose bytes are another's is left out, named, and its bit stays clear,
    which tarec reads as a site it cannot compare */
 static void cnt_sinks_init(void)
@@ -4316,6 +4472,7 @@ void tagpu_rec_init(void)
     tagpu_logf("recorder: %u event sites in",
                (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + FS_SITES + 1));
     cnt_sinks_init();
+    ai_hooks_init();
     return;
 
 landfail:
@@ -4522,6 +4679,7 @@ void __cdecl tagpu_rec_capture(void)
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
+    ai_finish((unsigned)tick);
 
     if (s_state == ST_IDLE && s_fork.file) {
         /* a fork's first iteration (tagpu_rec_fork_arm): checked once more by value, since the
@@ -4662,6 +4820,8 @@ void tagpu_rec_level_end(void)
     }
     s_tid = 0;
     s_cnt.tid = 0;
+    if (s_ai.tid) tagpu_logf("recorder: AI activity %s incomplete: level ended", s_ai.name);
+    s_ai.tid = 0;
     if (s_state == ST_RECORDING && s_rec) {
         int fin = s_rec->fin;
         if (!s_rec->ev_full) ring_publish(s_rec, 0);

@@ -15985,3 +15985,60 @@ Measured on the reference setup: a paused switch through two seats and back to t
 kept GameTime476; a Full map switch kept a separately checked eye at(1800,1900). These are input
 and camera-isolation checks, not yet a proof of death-vision equivalence; that comparison remains
 part of the player-card landing gate.
+
+
+## Direct AI order activity observer
+
+DISASSEMBLED against the pristine 3.1 executable: `0x408C40` has one direct
+caller, the players phase at `0x465031`. It receives its AI object in ECX,
+tests the object's owner record for active and controller 2 at
+`0x408C45..0x408C50`, runs the group assignment `0x408830` every 30 calls,
+and dispatches due planner objects from ten slots at AI+0x11 through their
+vtable at `0x408C8E`. Group assignment classifies live units and calls
+`0x480250` at `0x4088FA`; it does not directly construct orders in the
+disassembled body. `0x408BF0` contains a similar assignment/planner loop
+without the controller gate; the activity observer does not use it.
+
+`0x4089A0` is the final call on both branches of `0x408C40`: at `0x408C9A`
+with argument 1 for AI, and at `0x408CA7` with 0 otherwise. These are its only
+direct callers. It scans weapon targets and invokes target setters/resetters
+`0x48A0A0`, `0x48A060`, `0x48A0F0`, with queries `0x49D120`, `0x48A190` and
+`0x40B7B0`. Because human seats also run it, activity attribution ends on
+entry to this phase, through the existing `tagpu_weapons.c:my_Acquire` wrapper.
+A weapon reaction alone cannot prove planner liveness. Acquisition already owns
+a guarded detour; adding an observer over that detour makes the limits integrity
+check refuse startup. The recorder therefore calls no second patch installer there.
+
+`0x43A0C0` is the common order constructor: ECX is the new node, returned in
+EAX at `0x43A1C6`; `ret 0x18` at `0x43A1CF`. It sets action+4, state+5 and
+event fields, stamps GameTime at node+0x46 (`0x43A12E`), and leaves the
+owner+0x0E NULL (`0x43A193`). It runs no order handler. The high-level helper
+`0x43ADC0` calls it at `0x43ADEF`; callers can insert the result inline,
+so observing only list-insertion functions misses new AI orders.
+
+The four examined insertions are `0x43AC60` (insert before the supplied node,
+ret12), `0x43ACB0` (head, ret8), `0x43AD10` (tail, ret8), and `0x43AD50`
+(priority position, ret8). Each stores the owner at node+0x0E and links through
+node+0x4A. Their direct callers are listed below; no direct caller of
+`0x43AD50` was found in the disassembly.
+
+- `0x43AC60`: `0x43BA1E`, `0x43BA30`.
+- `0x43ACB0`: `0x401C99`, `0x401CAC`, `0x401F59`, `0x401F6E`, `0x4032F7`, `0x40330A`, `0x40529A`, `0x4052B2`, `0x405C06`, `0x405D18`, `0x405D33`, `0x406108`, `0x40611B`, `0x406532`, `0x40667A`, `0x406695`, `0x40F92B`, `0x40F943`, `0x40FEC3`, `0x410109`, `0x410124`, `0x4105D0`, `0x410A2A`, `0x410B0D`, `0x41101A`, `0x411EE1`, `0x411EF9`, `0x412692`, `0x412C14`, `0x413365`, `0x413380`, `0x413B5A`, `0x415453`, `0x4155EA`, `0x41578B`, `0x4157A6`, `0x489E97`, `0x489EA6`, `0x48A044`, `0x48A051`.
+- `0x43AD10`: `0x410384`, `0x411FBE`, `0x411FD6`, `0x41203E`, `0x412056`, `0x412786`, `0x4127E2`, `0x4127FA`, `0x412DAE`, `0x412DC6`, `0x412E28`, `0x412E40`, `0x4134D9`, `0x4134F1`, `0x413551`, `0x413569`.
+- `0x43AD50`: no direct caller.
+- `0x43A1F0`: `0x4384E4`, `0x439EF3`, `0x439F5F`, `0x439FC9`, `0x43AE47`, `0x43AEB8`, `0x43B075`, `0x43B1C9`, `0x43B93B`, `0x43BA5B`, `0x43BBE6`, `0x43BC49`.
+
+At the existing normal dispatcher observation sites `0x43B878` and
+`0x43BB1D`, ESI names the live order node; both read node+0x0E and call
+its handler. Destruction has a separate site, `0x43A216`, which is excluded
+from execution evidence. The destructor `0x43A1F0` receives the node in ECX
+and reaches any event-2 handler only after `0x43A1F5`. Forgetting a sample
+at entry establishes its lifetime before an allocation can reuse its address.
+The observer dereferences only the current dispatcher node, never a saved
+sample pointer, and bounds its owner against the level's unit allocation.
+
+Observer stolen prefixes: `0x408C40` five bytes `53 56 57 8B F9`;
+`0x43A0C0` seven bytes
+`83 EC 0C 8A 44 24 10`; `0x43A1F0` five bytes `53 56 8B F1 57`.
+All are complete instructions without relative operands. The normal-dispatch
+observers already exist for the recorder's nano context.

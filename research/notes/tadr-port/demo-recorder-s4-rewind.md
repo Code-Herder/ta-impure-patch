@@ -464,9 +464,71 @@ baseline's corresponding constructors are also still travelling at 3300. The
 recorded positions and orders are evidence of different pre-rewind tasks, not
 evidence of a task lost by reconstruction.
 
-The proposed correction is to compare AI construction on the live rewind's
-fork with the same recording's parent over the same 1800 ticks, retaining
-the per-seat creation rule and movement threshold. Return-to-now would keep
-its exact-frame, subsequent movement, health, continuity and playback checks.
-This verification-plan change awaits the owner's decision; no failing result
-is waived by this diagnosis.
+The initially proposed same-game construction comparison was rejected during
+owner discussion: a common prefix does not establish identical future choices
+when AI internal state is rebuilt. The owner approved direct AI activity checks
+instead. Construction counts remain diagnostic evidence, without a matching
+outcome requirement. The separate naval flare allowance remains unapproved.
+
+### Direct AI activity after return and fork
+
+The U lane observes a fresh 1800-tick window after each restoration. Every AI
+seat must construct new orders within its planning routine and at least one
+sampled order must reach normal handler dispatch. The existing requirement
+that 25% of AI mobile units move more than eight map units remains. Exact frame
+restoration, recording continuity, replay counts and runtime health checks remain.
+The separate unrewound baseline launch is removed. The fork's observation now
+also runs for 1800 ticks and at least 60 seconds.
+
+The recorder's harness trigger is `ai-activity NAME from START until END`,
+where START is later than the current GameTime and END is exclusive. It reports
+orders and first dispatches per seat, then a completion line for that exact
+interval. An unavailable observer, missing report or invalid context fails the
+check. Samples are a bounded set of 32 pending nodes per seat, recycled when
+dispatched or destroyed. This establishes execution of sampled new orders,
+not completion of every order the AI issued or equivalence of strategy.
+
+The context brackets `0x408C40`, but stops attributing at its final shared
+weapon-retargeting call, `0x4089A0`, through the existing weapons wrapper. The common constructor `0x43A0C0` supplies
+new nodes; the normal dispatch sites `0x43B878` and `0x43BB1D` prove a sampled
+node was linked and reached its handler. Destructor `0x43A1F0` forgets its
+sample before freeing can recycle the address. Player slots, unit slots and
+context depth are bounded. Only the game thread accesses active observations;
+presentation, player commands, scenario orders, restored nodes and the shared
+automatic targeting phase cannot supply an AI-planner sample. No observation
+changes engine state or a recording's format.
+
+The first attempted observer, on the list-insertion functions, missed the AI
+helpers' inline insertions and was replaced before acceptance. A second attempt
+overlaid the existing acquisition detour; the limits integrity check refused
+startup. The final implementation calls through the existing weapons wrapper.
+
+MEASURED on the reference setup, coverage stock-limits build: a native `+AI 2`
+control disabled seat 2 before arming [40,940). Seats 1 and 3 issued and dispatched
+1 and 2 sampled orders respectively; seat 2 reported 0/0, and the checker failed
+with exactly seat 2 missing. Re-enabling seat 2 and observing [948,2748) passed:
+seat 1 = 2/2, seat 2 = 3/3, seat 3 = 2/2 orders/dispatches. All other seats
+reported zero and both windows completed with context errors zero. This checks
+that active neighbours cannot hide a disabled planner and that revival is seen.
+The control used `replay-four-ai.json`, a paused native toggle before each future
+observation window, and the stock-limits coverage DLL. It supplied no unit orders.
+The dedicated U lanes pass **28/28 checks on each build**, including exact
+return-frame and fresh-seek comparisons, both timelines, contiguous recording,
+playback across return-to-now, and the existing count policy. Their AI results:
+
+| build / operation | interval | seat 1 orders/dispatches | seat 2 | seat 3 | mobile movement |
+|---|---|---|---|---|---|
+| normal / now | [1533,3333) | 1878/215 | 1888/197 | 1808/203 | 94.94% of 1047 |
+| normal / fork | [2825,4625) | 1514/197 | 1561/195 | 1509/204 | 89.97% of 907 |
+| stock / now | [1520,3320) | 1728/197 | 2028/214 | 1907/192 | 80.74% of 1023 |
+| stock / fork | [2805,4605) | 1433/194 | 1952/218 | 1773/192 | 87.01% of 947 |
+
+All four windows completed with context errors zero. Neither fork observed
+construction during its window; both nevertheless prove fresh planner orders
+reached dispatch for every AI seat. Arming each window occurs while paused, so
+command latency cannot consume the requested future starting tick.
+
+All four DLL variants build, the 36 portable harness tests pass, and the driving
+skill check is clean. These are targeted U results, not a completed landing tier.
+The full tier and fresh reviews remain outstanding, as does the owner's separate
+naval flare-count decision. S4d is not landed.

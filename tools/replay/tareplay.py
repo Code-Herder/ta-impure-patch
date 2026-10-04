@@ -2385,11 +2385,10 @@ def cmd_forks(args):
 def rewind_lane(w, fx, out):
     import tarewind
     battle = fixtures()["battle"]
-    # Both runs give the AI fresh builders before the comparison window. Their commands
-    # come from the AI; the fixture supplies no construction orders.
+    # Fresh builders give each AI units available for decisions. The fixture supplies
+    # no construction orders; the observer attributes new orders to the AI itself.
     fix = {**battle, "steps": battle["steps"] + fx["fix"].get("rewind_steps", [])}
     lane = {**fx, "fix": fix}
-    lane["rec"] = live(w, lane, None, out / "baseline")
     return tarewind.run(sys.modules[__name__], w, lane, out)
 
 

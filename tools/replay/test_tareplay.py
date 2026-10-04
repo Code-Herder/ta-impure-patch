@@ -25,6 +25,7 @@ sys.path.insert(0, str(HERE))
 import tafeat  # noqa: E402
 import tarec  # noqa: E402
 import tareplay  # noqa: E402
+import tarewind  # noqa: E402
 
 MAPS = [tafeat.DDRAW / "ddraw-cover.map", tafeat.DDRAW / "ddraw-stocklimits-cover.map"]
 
@@ -509,6 +510,34 @@ class TakeoverFixtures(unittest.TestCase):
         # the GameTimes a takeover-end run draws leave T2 inside the recording
         Ts = tareplay.gametimes("takeover-end", fixes["takeover-end"]["end"], "x")
         self.assertLess(Ts[1], fixes["takeover-end"]["end"])
+
+
+class AiActivity(unittest.TestCase):
+    def lines(self, inactive=None, dispatched=True):
+        return [f"recorder: AI activity test seat {s} orders "
+                f"{0 if s == inactive else 7} executed "
+                f"{0 if s == inactive or not dispatched else 3}"
+                for s in range(10)] + ["recorder: AI activity test done [100,1900) bad 0"]
+
+    def test_each_ai_issues_and_executes(self):
+        self.assertTrue(tarewind.ai_activity(self.lines(), "test", 100, 1900, {1, 2, 3})[0])
+
+    def test_inactive_ai_cannot_be_hidden_by_other_seats(self):
+        ok, detail = tarewind.ai_activity(self.lines(inactive=2), "test", 100, 1900, {1, 2, 3})
+        self.assertFalse(ok)
+        self.assertIn("missing [2]", detail)
+
+    def test_issued_but_never_dispatched_does_not_pass(self):
+        self.assertFalse(tarewind.ai_activity(self.lines(dispatched=False), "test",
+                                            100, 1900, {1, 2, 3})[0])
+
+    def test_incomplete_wrong_window_or_observer_error_fails(self):
+        lines = self.lines()
+        for bad in (lines[:-1], lines[1:], lines + [lines[0]],
+                    ["recorder: AI activity test done [100,1899) bad 0"] + lines,
+                    lines[:-1] + ["recorder: AI activity test done [100,1900) bad 1"]):
+            self.assertFalse(tarewind.ai_activity(bad, "test", 100, 1900, {1, 2, 3})[0])
+        self.assertFalse(tarewind.ai_activity(lines, "test", 101, 1901, {1, 2, 3})[0])
 
 
 class AiCompare(unittest.TestCase):
