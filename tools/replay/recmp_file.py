@@ -142,7 +142,7 @@ class Contributions:
                 if final > 1 or (previous, seal_tick, data_bytes, crc) != (source["sequence"], tick, source["bytes"], source["crc"]) or (sealed is not None and (tick < sealed or (not final and tick == sealed))):
                     raise ValueError("contribution prefix seal")
                 source.update(sealed_tick=tick, sealed_sequence=sequence, ended=bool(final))
-            elif kind in (1, 2, 6, 7, 8):
+            elif kind in (1, 2, 6, 7, 8, 9):
                 if source["sealed_tick"] is not None and tick <= source["sealed_tick"]:
                     raise ValueError("contribution data in closed tick")
                 source["bytes"] += span
@@ -178,6 +178,7 @@ class History:
         self.source_players, self.players = {}, {}
         self.source_maps, self.maps = {}, {}
         self.source_units, self.units = {}, {}
+        self.source_named, self.named = {}, {}
         self.source_orders, self.orders, self.stages = {}, {}, {}
         self.applications = []
         self.failed = False
@@ -274,6 +275,42 @@ class History:
             self.source_units.update(updates)
             if not proof:
                 self.units.update(mapped_updates)
+        elif kind == 9:
+            source_map = self.source_maps.get(origin)
+            if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:
+                raise ValueError("named roots precede their source roster")
+            if not 4 <= len(body) <= 4032:
+                raise ValueError("named root batch span")
+            count = struct.unpack_from("<I", body)[0]
+            if not 1 <= count <= 122:
+                raise ValueError("named root batch count")
+            previous = self.source_named.get(origin)
+            if previous and (sequence <= previous["sequence"] or tick < previous["source_tick"] or
+                             application_tick < previous["applied_tick"] or stream != previous["stream"]):
+                raise ValueError("named root provenance")
+            at, events = 4, []
+            for _ in range(count):
+                if at+8 > len(body):
+                    raise ValueError("named root prefix span")
+                span, before, reserved, birth = struct.unpack_from("<HBBI", body, at)
+                at += 8
+                if not 25 <= span <= 56 or at+span > len(body) or reserved or before > 1 or birth >> 31:
+                    raise ValueError("named root prefix fields")
+                unit, argc, now, reserved1, reserved2 = struct.unpack_from("<IBBBB", body, at)
+                name = body[at+24:at+span]
+                if (not actor[2]+1 <= unit <= actor[3]+1 or argc > 4 or now > 1 or
+                        reserved1 or reserved2 or b"\0" in name):
+                    raise ValueError("named root ownership/arguments/name")
+                events.append(dict(unit=unit, birth=birth, before_capture=before, argc=argc,
+                                   now=now, args=body[at+8:at+24], name=bytes(name)))
+                at += span
+            if at != len(body):
+                raise ValueError("named root trailing bytes")
+            state = dict(body=bytes(body), events=events, source_tick=tick, sequence=sequence,
+                         applied_tick=application_tick, stream=bytes(stream))
+            self.source_named[origin] = state
+            if not proof:
+                self.named[origin] = state.copy()
         elif kind == 2:
             source_map = self.source_maps.get(origin)
             if not source_map or source_map["stream"] != stream or not proof and origin not in self.maps:

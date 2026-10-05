@@ -195,6 +195,16 @@ fixture independently checks mapped unit authority and proof-tail isolation in
 C/Python through synthetic seek. These fixtures do not test engine application,
 owned COB/model/effect objects or native multiplayer recording/playback.
 
+Owner-only named-script contribution bounds use:
+`python3 tools/replay/recmp_named_test.py --out /tmp/recmp-named-run`.
+One owned prefix/private display runs copied-cache and 4,096-call queue controls:
+28 atomic refusals, all 94 guarded truncations, maximum batches, 8,392 ordered
+calls across packet splits/actor switches/queue wrap, and permanent refusal after
+overflow, backwards source time or failed emission. Calls preserve exact argument
+bytes, source clock, incarnation token and pre/post-capture phase. The file fixture
+also checks applied named batches through synthetic seek and proof-tail isolation.
+These tests do not launch TA or establish engine root application/native recording.
+
 - `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
   `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin. **The NAT
   helpers are refused** (`dpnhpast,dpnhupnp=d`): the transport skips a helper that does not load,

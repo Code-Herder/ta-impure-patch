@@ -59,7 +59,7 @@ def semantic_states(segment):
     for kind, _, _, payload in segment["blocks"]:
         if kind == tarec.RB_CONTRIBUTIONS:
             history.block(payload)
-    if history.at(99).players or history.at(99).orders or history.at(99).units:
+    if history.at(99).players or history.at(99).orders or history.at(99).units or history.at(99).named:
         raise RuntimeError("unknown authority was fabricated before first application")
     for tick in (100, 101):
         state = history.at(tick)
@@ -72,6 +72,16 @@ def semantic_states(segment):
             if p["image"][0x146] != i or any(p["image"][0x108+11*v+row] != 20*v+source+1
                                             for v in range(5) for row, source in enumerate(sender)):
                 raise RuntimeError("source-local player vectors/self row were not mapped")
+        for origin in (11, 22, 55):
+            n = state.named.get(origin)
+            if (not n or (n["source_tick"], n["sequence"], n["applied_tick"]) !=
+                    (100 if origin < 55 else 8, 4, 100) or
+                    [e["name"] for e in n["events"]] != [b"TakeDamage", b"TargetCleared"] or
+                    [(e["birth"], e["before_capture"], struct.unpack_from("<I", e["args"])[0])
+                     for e in n["events"]] != [(17, 0, origin), (17, 1, origin+1)]):
+                raise RuntimeError("named root bytes/phase/provenance changed across proof tail")
+        if 66 in state.named:
+            raise RuntimeError("unknown named roots fabricated")
         o = state.orders.get((7, 0))
         if not o or (o["count"], o["birth"], o["source_tick"], o["sequence"], o["applied_tick"]) != (0, 17, 8, 4, 100):
             raise RuntimeError("partial/proof order transaction replaced complete authority")
@@ -99,6 +109,10 @@ def semantic_states(segment):
             struct.unpack_from("<I", history.source_players[66]["image"])[0] != 67 or
             struct.unpack_from("<I", history.source_units[7]["image"], 0x68)[0] != 67):
         raise RuntimeError("proof tail was not semantically validated")
+    if (history.source_named[55]["sequence"] != 5 or
+            struct.unpack_from("<I", history.source_named[55]["events"][0]["args"])[0] != 56 or
+            history.named[55]["sequence"] != 4):
+        raise RuntimeError("named proof tail replaced application authority")
     proof = History(segment["header"])
     for block_kind, _, _, payload in segment["blocks"]:
         if block_kind != tarec.RB_CONTRIBUTIONS:
@@ -113,9 +127,23 @@ def semantic_states(segment):
     if (66 not in proof.source_maps or 66 not in proof.source_players or 7 not in proof.source_units or
             proof.maps or proof.players or proof.units or proof.orders or proof.at(1000).players or proof.at(1000).units):
         raise RuntimeError("proof-only roster fabricated application authority")
+    named_proof = History(segment["header"])
+    for block_kind, _, _, payload in segment["blocks"]:
+        if block_kind != tarec.RB_CONTRIBUTIONS:
+            continue
+        at = 0
+        while at < len(payload):
+            span, origin, _, _, _ = struct.unpack_from("<IIIII", payload, at+16+12)
+            phase = struct.unpack_from("<I", payload, at+12)[0]
+            if origin == 55 and phase != 3:
+                named_proof.block(struct.pack("<QII", 0, 0, 3) + payload[at+16:at+16+span])
+            at += 16+span
+    if (55 not in named_proof.source_named or named_proof.named or named_proof.maps or
+            named_proof.players or named_proof.orders or named_proof.at(1000).named):
+        raise RuntimeError("proof-only named roots fabricated application authority")
     if history.source_players[66]["image"][0x146] != 2 or history.at(101).players[66]["image"][0x146] != 3:
         raise RuntimeError("mapped application image replaced the raw source baseline")
-    print("typed history: C and Python mapped player/unit/order provenance, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
+    print("typed history: C and Python mapped player/unit/order/named provenance, absence versus unknown, partial-list retention and proof isolation PASS", flush=True)
 
 
 def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=False):
@@ -148,7 +176,7 @@ def run(output, read_file=None, skirmish_file=None):
         with (output / "setup.log").open("w") as log:
             exe = output / "recmp-file-test.exe"
             sources = ("tagpu_recmp", "tagpu_recmp_auth", "tagpu_recmp_record", "tagpu_recmp_stream", "tagpu_recmp_players",
-                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_orders", "tagpu_recwriter",
+                       "tagpu_recmp_file", "tagpu_recmp_file_state", "tagpu_recmp_history", "tagpu_recmp_units", "tagpu_recmp_named", "tagpu_recmp_orders", "tagpu_recwriter",
                        "tagpu_recreader", "tagpu_recfile", "lodepng", "crc32")
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_file_test.c",
@@ -319,6 +347,17 @@ def run(output, read_file=None, skirmish_file=None):
                 ("proof_unit_mask", 66, 8, 3, 22, "<B", 4, False),
                 ("order_owner_block", 66, 2, 2, 0, "<H", 5, False),
                 ("order_reserved", 66, 2, 2, 3, "<B", 1, False),
+                ("named_count", 55, 9, 2, 0, "<I", 0, False),
+                ("named_span", 55, 9, 2, 4, "<H", 24, False),
+                ("named_phase", 55, 9, 2, 6, "<B", 2, False),
+                ("named_reserved", 55, 9, 2, 7, "<B", 1, False),
+                ("named_birth", 55, 9, 2, 8, "<I", 0x80000000, False),
+                ("named_owner", 55, 9, 2, 12, "<I", 8, False),
+                ("named_argc", 55, 9, 2, 16, "<B", 5, False),
+                ("named_now", 55, 9, 2, 17, "<B", 2, False),
+                ("named_arg_reserved", 55, 9, 2, 18, "<B", 1, False),
+                ("named_name", 55, 9, 2, 36, "<B", 0, False),
+                ("proof_named_argc", 55, 9, 3, 16, "<B", 5, False),
                 ("order_total", 66, 2, 2, 8, "<H", 4097, False),
                 ("order_first_chunk", 66, 2, 2, 10, "<H", 1, False),
                 ("order_chunk_count", 66, 2, 2, 12, "<H", 46, False),

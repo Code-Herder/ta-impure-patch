@@ -3903,6 +3903,19 @@ The copied-image player-row mapper passes 640 roster permutations and 3,520 byte
 
 Owner unit/mover images now have a bounded copied-image mapper and kind-8 full/delta/absence carrier, preserving birth, source stream/tick/sequence and application tick. Its atomic cache fixture passes 464,640 exact inverse mappings, malformed-batch and guard controls, 201-entry batches and the 65,531-slot bound. A native four-actor game verifies all four first full unit-image checksums/provenance and human owner-row remapping, then ordinary-exit cuts/receipts. Synthetic C/Python file seeking retains mapped unit authority and known absence while proof-only changes stay in source validation. This covers the record/mover, not COB/model/order-owned objects, effects/projectiles, AI planner or complete declared Impure authority. Engine application, projectile/Impure mappings and native multiplayer record/play/seek remain open; no multiplayer landing is cleared by these tests.
 
+Owner-only named script starts now have a copied kind-9 carrier preserving exact
+arguments, incarnation token, source clock and pre/post-capture phase. A bounded
+queue retains contiguous actor call order and drains prior ticks before sealing.
+The codec and queue controls pass bounds, atomic refusal, 8,392 copied calls and
+permanent incomplete-state controls. Actual synthetic writer/C/Python reader tests
+retain three applied root batches through seek and isolate a later proof batch.
+The game adapter reuses existing observers. Native four-actor combat with recording
+off validates all four first named batches and ordinary-exit cuts/receipts; only
+post-capture calls are observed in that live sample. The current coverage build
+passes all 33 extra-weapons skirmish replay/round-trip/Watch checks. Mapping independent source
+clocks to the recorder remains part of engine application. Remaining owner-only roots, Impure authority and native file/engine replay
+integration still precede the wider multiplayer gates; this is a worktree checkpoint.
+
 The work branch's tick-based replay harness defaults to internal speed 20 (2x),
 with normal speed selectable and retained for cost and speed/settings UI checks.
 An armed round trip bounds the ordinary due-tick batch before the engine caches

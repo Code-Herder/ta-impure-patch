@@ -1918,6 +1918,31 @@ then jumps to the function as the call would:
 | TargetCleared, in `0x489800`, `0x4898B0`, `0x48A0F0` and `0x48A1E0` | `0x489898` (`0x489880`), `0x489948` (`0x489930`), `0x48A149` (`0x48A131`), `0x48A2E0` (`0x48A2C8`), all `edi` |
 | EndTransport, through `0x4B0940` | `0x40F433` (`0x40F424`) `ebp`; `0x41148D` (`0x411480`) `esi`; `0x411794` (`0x411785`) `ebx`; `0x411DA1` (`0x411D92`) `ebx`; `0x411E2B` (`0x411E1E`) `ebp` |
 
+DISASSEMBLED 2026-10-05 against `pristine/TotalA.exe.pristine`: the pickup argument at
+`0x406815` is the zero-extended `u16` unit slot at `[eax+0xA8]`, pushed at `0x406822`;
+`0x406823` loads the transport's COB from `[edi+0x9A]`, and `0x406829`/`0x40682B`
+push `argc=1`/`now=1` before the `0x406834` call. Drop likewise zero-extends
+`[edx+0xA8]` at `0x4069AC` and pushes it at `0x4069B3`, followed by `argc=1`
+and `now=1` at `0x4069B4`/`0x4069B6` before `0x4069BF`. Its caller also pushes
+a value formed at `0x406995..0x4069A3` into the unused second argument slot;
+that value's meaning is not established here. The existing named-event payload
+retains all four argument words, including unused ones. The named transport's
+first argument is a global unit slot, not a heap address.
+
+The multiplayer adapter reuses these thirteen call observers and the extra-weapons
+helper without adding a byte patch. On the game thread it bounds the observed unit
+against the level's fixed array before reading `+0x96` or `+0x9A`, confirms the
+COB equals the intercepted `ecx`, and contributes only frozen locally controlled
+human/hosted-AI blocks. It copies the existing named-event bytes plus the exact
+incarnation token and whether the call preceded B2. `0x4954C0` advances GameTime
+before pump `0x4954C8` and capture call `0x4954ED`: a pump root can therefore be at
+T while the channel still owns T−1. Copied post-capture T−1 roots drain before
+that tick is sealed; copied pre-capture T roots drain after channel advance to T.
+The queue's fixed bound and same-thread teardown ordering establish its lifetime;
+no engine object follows it onto the worker. `hit_next_birth` may advance a slot's
+token past GameTime after repeated same-tick creates, so the token's high bit and
+exact identity are checked without treating it as an upper-bounded timestamp.
+
 The extra weapons' TargetCleared, for the slots from 3 up, is started by `tagpu_weapons.c`, which
 records it itself (`tagpu_rec_start_named`). BeginTransport is broadcast (`0x411403` calls
 `0x456200`), so the broadcasters record it.

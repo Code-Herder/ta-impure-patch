@@ -38,7 +38,7 @@ int tagpu_recmp_stream_put(RecMpStream* s, const RecMpHeader* h,
         next.sealed_sequence = h->sequence;
         next.ended = seal.final;
     } else {
-        if ((h->kind != RECMP_RESOURCES && h->kind != RECMP_ORDERS && h->kind != RECMP_PLAYER && h->kind != RECMP_SEATS && h->kind != RECMP_UNITS) ||
+        if ((h->kind != RECMP_RESOURCES && h->kind != RECMP_ORDERS && h->kind != RECMP_PLAYER && h->kind != RECMP_SEATS && h->kind != RECMP_UNITS && h->kind != RECMP_NAMED) ||
             (s->has_seal && h->tick <= s->sealed_tick) ||
             UINT64_MAX - s->data_bytes < h->bytes) return 0;
         next.data_bytes += h->bytes;

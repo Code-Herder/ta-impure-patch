@@ -11,7 +11,8 @@
 #define RECMP_VERSION 2u
 #define RECMP_ACTORS 10u
 enum { RECMP_RESOURCES = 1, RECMP_ORDERS = 2, RECMP_BIND = 3, RECMP_SEAL = 4,
-       RECMP_RECEIPT = 5, RECMP_PLAYER = 6, RECMP_SEATS = 7, RECMP_UNITS = 8 };
+       RECMP_RECEIPT = 5, RECMP_PLAYER = 6, RECMP_SEATS = 7, RECMP_UNITS = 8,
+       RECMP_NAMED = 9 };
 
 #pragma pack(push, 1)
 typedef struct {

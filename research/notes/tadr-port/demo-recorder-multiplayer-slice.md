@@ -168,6 +168,84 @@ The same file retrieves all 88 bytes of a recorded nonempty local secondary list
 
 The earlier format-5 container checkpoint passed the actual TA `secondary-orders` regression through live recording, puppet playback, in-place restore and fresh-process seek: complete tick-1080 recording, image/event comparisons and three exact round trips at 481/511/541. The mapping checkpoint's later run ends complete at tick 1080 with 1080 iterations; world/radar/event/count comparisons and round trips at 361/421/451 pass, poisoning 26 tables with zero residue and equal before/after dumps. Its images inventory gate fails at two bytes of `main+0x531`, the active GUI heap pointer. Disassembly and full pointer measurements are in the [engine map](../exe-reverse-engineering.md#the-active-gui-pointer-and-the-images-inventory-disassembled-measured-2026-10-04). A proposed four-byte `leave` row awaits the owner's exclusion decision; the later regression is not clear and no exclusion or tolerance is applied. The semantic reader also opens, summarizes and inspects that real skirmish file. The harness's 39 logic tests pass after refreshing the coverage map for the new reader functions. These are skirmish reader/regression results, not native multiplayer replay coverage. Engine application, complete unit/effect/Impure authority and game-produced network record/play/seek remain open.
 
+### Owner-only named script starts
+
+The owner-only COB starts use the existing `RK_EV_START_NAMED` engine root and
+payload. Wire kind 9 carries a u32 count and variable entries: an eight-byte
+prefix (`bytes`, `before_capture`, reserved zero, exact incarnation token), then
+24 fixed payload bytes and a non-NUL name of 1..32 bytes. Unit IDs are normalized
+global slots plus one, authorized against the origin's frozen block. Arguments
+remain the existing four copied words; `argc` is 0..4 and run-now is boolean.
+The source roster/stream, source tick/sequence and application tick validate
+before an entire batch publishes. Up to 122 minimum-size calls or 62 maximum-name
+calls fit the 4,032-byte body. Incarnation tokens can exceed GameTime when a slot
+is created repeatedly within one tick; they are identities, not tick ceilings.
+
+Every locally controlled human and hosted AI contributes these calls independently
+of `tagpu_recorder.on`. A 4,096-slot copied queue preserves local engine call order,
+including A/B/A actor switches; packetization combines only contiguous same-origin,
+same-tick calls. Hooks record actual GameTime and whether B2 has captured it. Old
+post-B2 calls drain before channel advance seals their tick; pump calls at the new
+tick drain after advance, before its unit/player/order capture. Final copied roots
+drain before final source seals at teardown, and the game-thread context is cleared
+before the level's unit array can be freed. Queue overflow, backwards source time
+or failed emission permanently marks that queue incomplete. No callback blocks on
+the worker and no COB pointer or remote-owned heap is followed.
+
+`recmp_named_test.py` passes 28 unchanged-cache refusal controls, all 94 truncations
+of a two-call batch ending at a guard page, maximum batches and copied ownership.
+Its 8,392-call queue controls verify actor alternation, packet boundaries, source
+tick/phase, queue wrap, overflow and failed-emission refusal. The real file fixture
+now writes 3,274 bytes, with 21 applications (nine remote) and six proof records.
+C and independent Python preserve three origins' exact two-call batches through
+synthetic seeking; a late fourth batch validates only source proof, leaving
+applied call bytes and provenance unchanged. All five lifecycle controls, 23
+header refusals and 54 body refusals with valid raw seals/cuts pass. The reader's
+latest-batch query is for inspection; every batch remains in the ordered ledger.
+It is not a substitute for the complete root sequence.
+
+MEASURED 2026-10-05 on the reference setup: native *Two Continents*, two humans and
+one hosted AI each, `each=1500`, internal speed 20, private display, neither peer
+carrying `tagpu_recorder.on`. Each peer creates 20 locally owned human units and
+ten units for its locally controlled AI through the scenario applier; all 64
+initial/created full unit images match source/recipient raw checksums and provenance.
+First named batches match exact bytes, including their four argument words:
+
+| Origin / owner | Source tick / sequence | Calls / bytes | CRC | First unit ID / birth / name | Recipient tick |
+|---|---|---|---|---|---|
+| 640288370, host human | 128 / 179 | 2 / 89 | `59EEE76E` | 1521 / 69 / HitByWeapon | 87 |
+| 640288375, host AI | 119 / 136 | 1 / 49 | `190F3149` | 4509 / 69 / TargetCleared | 77 |
+| 640288368, join human | 97 / 163 | 2 / 89 | `90A8148C` | 21 / 49 / HitByWeapon | 142 |
+| 640288374, join AI | 92 / 116 | 1 / 49 | `69BC56E9` | 3011 / 49 / TargetCleared | 137 |
+
+These first batches have post-B2 phase zero. The independent codec/queue/file
+controls exercise both phases; this live observation does not establish pump-phase
+root coverage. Separate clocks are material here: receipt can precede the source's
+numerical tick. Numeric tick equality cannot materialize these roots on a recorder's
+clock. The later engine-application design still needs the source-to-recorder mapping.
+Ordinary exit ends the host at 889 accepted / 895 completed packets, queue/failure
+zero, cuts 2/2 and four receipts received; the joiner ends at 785 / 791, queue/failure
+zero, cuts 2/2 and four receipts sent. The joiner is on `ARMMAIN2.GUI` after host
+leave, then exits: continued migrated play is not tested. These application counters
+are not physical bandwidth measurements. Owned games/prefixes/display are removed.
+
+The current coverage build also passes all 33 `wpn-badtgt` skirmish checks at the
+standard internal speed 20 (Watch/settings starts at 10): live, puppet, restore,
+fresh-process seek, inventory, address scan, effect counts and UI. Its 2,041-step
+recording contains 331 owner-only named starts and refuses zero off-thread events.
+The three round trips at 421/1021/1051 poison 27 tables, leave zero residue and
+compare exactly before/after. Coverage reaches `ev_named` and `ev_start_site`;
+this fixture does not reach the extra-weapons `tagpu_rec_start_named` helper. This
+pass preserves the skirmish path; it does not resolve the intermittent `main+0x531`
+GUI-pointer inventory failure seen in the earlier normal-speed control, and its
+proposed exclusion remains unapplied.
+
+This carrier covers named starts and their arguments, not raw COB execution/model
+heaps. Existing skirmish replay reconstructs those through engine roots under its
+accepted policy. Nano sprays, replies and other owner-only events, complete Impure
+state, root materialization in the engine and native multiplayer file/play/seek
+remain open. No recorder exclusion, new byte patch or engine state write is added.
+
 ### Source-roster native verification
 
 The first wire-version-2 four-actor live run produced both local sequence-1 rosters and both sequence-2 full players on each peer, but delivered no contributions: the join worker returned SDK `DPERR_TIMEOUT` (`0x887700F0`) before opening its private session. Its contribution producer stopped at tick 15. The host had opened a private session but received no bindings and exhausted its bounded 256-packet transmit queue at tick 816. This failure does not establish live source-map exchange. The adapter now names the exact failed native open stage in its error log, without adding retries, changing deadlines or imitating success. The diagnostic rerun below passes. It does not establish the timeout's cause or a by-design fix; private-session startup reliability remains open. No deadline, retry or timing mitigation was added.
