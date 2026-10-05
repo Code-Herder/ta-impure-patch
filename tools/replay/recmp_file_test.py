@@ -212,7 +212,7 @@ def semantic_mutation(blocks, origin, kind, phase, offset, fmt, value, envelope=
     return resealed(result)
 
 
-def run(output, read_file=None, skirmish_file=None):
+def run(output, read_file=None, skirmish_file=None, native_file=None):
     root = tareplay.main_checkout()
     directory = None
     display = tareplay.start_xvfb()
@@ -231,6 +231,35 @@ def run(output, read_file=None, skirmish_file=None):
                        WINEDEBUG="-all")
             command([sys.executable, root / "tools/tacli", "create", directory.name,
                      "--private-registry", "--display", display.display, "--res", "640x480"], log)
+        if skirmish_file:
+            with (output / "skirmish-read.log").open("w") as log:
+                command(["wine", exe, "skirmish", "Z:" + str(skirmish_file).replace("/", "\\")], log, env=env)
+            print("actual skirmish file: C reader/summary/full-header info PASS", flush=True)
+        if native_file:
+            log_path = output / "native-read.log"
+            with log_path.open("w") as log:
+                command(["wine", exe, "native", "Z:" + str(native_file).replace("/", "\\")], log, env=env)
+            blocks, stopped = tarec.blocks(native_file)
+            if stopped:
+                raise RuntimeError(stopped)
+            segment = tarec.segments(blocks)[0]
+            history = History(segment["header"])
+            for kind, _, _, raw in blocks:
+                if kind == tarec.RB_CONTRIBUTIONS:
+                    history.block(raw)
+            crc, size, roots = 0, 0, 0
+            for _, raw in history.applications:
+                crc = zlib.crc32(raw, crc)
+                size += len(raw)
+                roots += struct.unpack_from("<I", raw, 44)[0] == 10
+            rows = [line.split()[1:] for line in log_path.read_text().splitlines()
+                    if line.startswith("NATIVE_APPLICATIONS ")]
+            expected = [str(history.ledger.records), str(size), str(roots), f"{crc:08X}",
+                        str(segment["first"]), str(segment["last"])]
+            if rows != [expected] or set(history.players) != {a[0] for a in history.ledger.actors}:
+                raise RuntimeError("native C/Python application bytes, clocks or applied players disagree")
+            print("native file: C/Python complete application bytes/order/provenance, all owner players/unit-block bounds and world seek PASS", flush=True)
+            return
         for mode in (() if read_file else ("normal", "missing_cut", "missing_receipt", "journal_full", "local_stop")):
             path = output / f"{mode}.imprec"
             winpath = "Z:" + str(path).replace("/", "\\")
@@ -251,10 +280,6 @@ def run(output, read_file=None, skirmish_file=None):
             with (output / "normal-read.log").open("w") as log:
                 command(["wine", exe, "read", "Z:" + str(original).replace("/", "\\")], log, env=env)
         application_trace(tarec.segments(blocks)[0], output / ("normal-read.log" if read_file else "normal.log"))
-        if skirmish_file:
-            with (output / "skirmish-read.log").open("w") as log:
-                command(["wine", exe, "skirmish", "Z:" + str(skirmish_file).replace("/", "\\")], log, env=env)
-            print("actual skirmish file: C reader/summary/full-header info PASS", flush=True)
         contribution = next(i for i, b in enumerate(blocks) if b[0] == tarec.RB_CONTRIBUTIONS)
         raw = blocks[contribution][3]
         # Mutate logical contents and rebuild outer block CRCs. These are semantic
@@ -463,7 +488,9 @@ def run(output, read_file=None, skirmish_file=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--read-file", type=Path, help="verify new reader controls against an existing fixture file")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--read-file", type=Path, help="verify new reader controls against an existing fixture file")
+    source.add_argument("--native-file", type=Path, help="verify a game-produced multiplayer file and its ordered authority through seek")
     parser.add_argument("--skirmish-file", type=Path, help="also validate a real skirmish recording's header/info")
     args = parser.parse_args()
     output = args.out.resolve()
@@ -471,7 +498,8 @@ def main():
     print(f"evidence: {output}", flush=True)
     try:
         run(output, args.read_file.resolve() if args.read_file else None,
-            args.skirmish_file.resolve() if args.skirmish_file else None)
+            args.skirmish_file.resolve() if args.skirmish_file else None,
+            args.native_file.resolve() if args.native_file else None)
     except (OSError, ValueError, RuntimeError, tarec.Unreadable, subprocess.SubprocessError,
             tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr)

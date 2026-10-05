@@ -461,6 +461,80 @@ static int read_file(const char* path, int expected)
     return 0;
 }
 
+typedef struct {
+    const RecHeader* header;
+    uint64_t records, bytes, roots;
+    unsigned crc;
+} NativeRead;
+
+static void native_application(void* ctx, const RecMpRecord* where, const RecMpHeader* packet,
+                                 const void* body, unsigned bytes)
+{
+    NativeRead* n=ctx;
+    unsigned i;
+    CHECK(where->ordinal==++n->records && where->phase!=RECMP_RECORD_PROOF &&
+          bytes<=RECMP_BODY_MAX && packet->bytes==sizeof *packet+bytes);
+    for (i=0;i<n->header->mp.count;i++) if (n->header->mp.actor[i].origin==packet->origin) break;
+    CHECK(i<n->header->mp.count &&
+          where->phase==(n->header->mp.actor[i].local ? RECMP_RECORD_PRODUCED : RECMP_RECORD_CONSUMED));
+    n->crc=(unsigned)Crc32_ComputeBuf(n->crc,where,sizeof *where);
+    n->crc=(unsigned)Crc32_ComputeBuf(n->crc,packet,sizeof *packet);
+    n->crc=(unsigned)Crc32_ComputeBuf(n->crc,body,bytes);
+    n->bytes+=sizeof *where+packet->bytes;
+    if (packet->kind==RECMP_ROOTS) n->roots++;
+}
+
+static int read_native(const char* path)
+{
+    char why[256];
+    RecReader* r=recr_open(path,why,sizeof why);
+    RecSummary summary;
+    RecInfo* info=calloc(1,sizeof *info);
+    NativeRead n={0}, replayed={0};
+    uint64_t ordinal=0;
+    unsigned first=0, last=0;
+    int k;
+    if (!r) printf("native reader: %s\n",why);
+    CHECK(r && info && recr_header(r)->mode==3 && recr_header(r)->has_mp &&
+          recr_summary(path,&summary,why,sizeof why) && summary.end_reason==REC_END_TEARDOWN &&
+          recr_info(path,info,why,sizeof why) && info->ended);
+    n.header=recr_header(r);
+    while ((k=recr_tick(r,why,sizeof why))>0) {
+        CHECK(k==1);
+        if (!first) first=recr_world(r)->tick;
+        last=recr_world(r)->tick;
+        CHECK(recr_mp_apply(r,&ordinal,native_application,&n,why,sizeof why)==1 && ordinal==n.records);
+        CHECK(recr_mp_apply(r,&ordinal,native_application,&n,why,sizeof why)==1 && ordinal==n.records);
+    }
+    CHECK(!k && first && last>=first && n.records && n.roots);
+    for (unsigned i=0;i<n.header->mp_seats.count;i++) {
+        const RecMpSeat* seat=&n.header->mp_seats.actor[i];
+        RecMpPlayerState player;
+        RecMpUnitState unit;
+        unsigned char* image;
+        CHECK(recr_mp_player(r,seat->origin,&player,why,sizeof why)==1);
+        image=(unsigned char*)player.image;
+        CHECK(image[0x146]==seat->seat &&
+              recr_mp_unit(r,seat->first,&unit,why,sizeof why)==1 && unit.origin==seat->origin &&
+              recr_mp_unit(r,seat->last,&unit,why,sizeof why)==1 && unit.origin==seat->origin);
+    }
+    /* A world seek and state queries cannot acknowledge any application batch.
+       Reconstructing from its prefix, then advancing, must deliver every byte. */
+    CHECK(recr_seek(r,first+(last-first)/2,0,NULL,NULL,why,sizeof why)==1);
+    replayed.header=recr_header(r); ordinal=0;
+    CHECK(recr_mp_apply(r,&ordinal,native_application,&replayed,why,sizeof why)==1);
+    while ((k=recr_tick(r,why,sizeof why))>0)
+        CHECK(k==1 && recr_mp_apply(r,&ordinal,native_application,&replayed,why,sizeof why)==1);
+    CHECK(!k && n.records==replayed.records && n.bytes==replayed.bytes &&
+          n.roots==replayed.roots && n.crc==replayed.crc);
+    printf("NATIVE_APPLICATIONS %llu %llu %llu %08X %u %u\n",
+           (unsigned long long)n.records,(unsigned long long)n.bytes,(unsigned long long)n.roots,
+           n.crc,first,last);
+    recr_close(r); free(info);
+    puts("PASS: native world/header/info and complete ordered authority through sequential reading and world seek");
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     RecMpConfig config={0};
@@ -478,6 +552,7 @@ int main(int argc, char** argv)
     int local_stop;
     CHECK(argc==3);
     proof_only_roster();
+    if (!strcmp(argv[1],"native")) return read_native(argv[2]);
     if (!strcmp(argv[1],"skirmish")) {
         char why[256];
         RecReader* r=recr_open(argv[2],why,sizeof why);

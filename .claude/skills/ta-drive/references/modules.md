@@ -164,7 +164,10 @@ It uses the actual world-file writer, compressor, lock and C/Python readers in o
 owned prefix/private display, without launching TA. It writes format-5 synthetic
 `.imprec` files, validates source/application/proof records and the frozen-cut
 footer, seeks the synthetic world, and refuses missing proofs, local-save failure
-and logically corrupted packets/footers. `--read-file <fixture.imprec>` runs the
+and logically corrupted packets/footers. `--native-file <recording>` checks an
+actual complete native file with C/Python application-byte/order/provenance
+agreement, all owner players/unit-block bounds and world seeking; this reads
+copied state without engine playback. `--read-file <fixture.imprec>` runs the
 reader controls against an existing fixture file; `--skirmish-file <recording>` also checks an actual skirmish header/summary/info. The mode-3 header carries copied origin/seat/unit-block mapping, with world allocation and seat ownership validation; malformed mapping controls rebuild outer CRCs before expecting refusal. The typed fixture verifies source-roster carriage, complete eleven-row remapping,
 proof-only roster isolation, and reader player/unit/order authority queries through playback/seek, mapped owner/attacker rows, known absence versus unknown slots, exact nonempty list bytes and provenance, partial-list retention and proof-tail isolation. Body controls rebuild source seals as well as outer checksums before semantic refusal. These files do not prove game
 capture, full owner authority, engine authority application or multiplayer playback.
@@ -682,12 +685,17 @@ exe, is not loaded at attach. Drive them the way the compat suite does:
 
 ## The demo recorder: recordings and dumps
 
-**A skirmish is recorded while `tagpu_recorder.on` is in the game folder** — `tacli arm <i>
+**A skirmish or native multiplayer game is recorded while `tagpu_recorder.on` is in the game folder** — `tacli arm <i>
 recorder.on` before the level starts, since the recorder looks for it at each level's first
 iteration — from that iteration to the level's end, to `gamedir/replays/<date> <time> <map>.imprec`.
 Without it the log says `recorder: not recording: tagpu_recorder.on is absent`. The log says
 `recorder: recording …` at the start and `recorder: writer: … closed: …` when the file is done, with
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
+A native file contains this peer's observed world plus the separate exact-owner
+contribution ledger. Its capture-start log explicitly states that multiplayer
+playback is unavailable; `tacli replay play` still accepts only skirmish files.
+Mandatory contributions run with the recording switch off and continue after a
+local save failure. Live rewind is available only for a recorded skirmish.
 Quitting waits for the file of a game that has ended — the in-game menu's `EXIT` then `EXITGAME`,
 or closing the window after the level's end (`recorder: the exit waits for …`) — so that file is
 complete. For exit coverage, the replay harness uses the game's menus: `ENDMSN.GUI`'s active

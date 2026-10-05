@@ -5,7 +5,7 @@
    WHERE IT RUNS. B2's stub at the sim step's call of the unit tick (0x4954ED, the only call of
    0x48AD30) calls tagpu_rec_capture before anything else: GameTime has just been incremented
    (0x4954C0) and every phase of the previous iteration has run, so a capture sees the world
-   between two iterations, on the thread that owns it. File capture is skirmish-only; multiplayer
+   between two iterations, on the thread that owns it. Multiplayer file capture and mandatory
    contributions follow the step's network pump (0x4954C8) at the same B2 boundary. During play the
    game thread is the only writer of the engine records and of every SIM_STATE table the capture
    reads: the loader thread's writes end before the in-play entry (0x497F40 reads the loader's
@@ -136,6 +136,7 @@
 #define OFF_GRID_W     0x14233      /* the feature grid's columns and rows, i32                   */
 #define OFF_GRID_H     0x14237
 #define MODE_SKIRMISH  2
+#define MODE_NETWORK   3
 #define U_MOVER        0x00         /* the mover, a record of its own (the image's tail)           */
 #define U_ORDERS       0x5C         /* the order lists' heads: the main list and the sub list      */
 #define U_SUBORDERS    0x60
@@ -277,6 +278,11 @@ static GUID s_mp_match;
 static DWORD s_mp_host;
 static unsigned char s_mp_match_ready;
 static RecMpChannel* s_mp_channel;
+/* Borrowed by the game producer until file_end. The ring's writer owns its
+   lifetime and cannot free it before that end publication. */
+static RecMpFile* s_mp_file;
+static void mp_record_begin(const Level* L, int tick, const RecMpConfig* config);
+static void mp_record_end(int channel_ended);
 static RecMpRoster s_mp_roster;
 static RecMpPlayers* s_mp_players;
 static RecMpSeatMaps* s_mp_seats;
@@ -628,6 +634,9 @@ static void mp_capture(const Level* L, unsigned tick)
         s_mp_tick = tick;
         s_mp_roots_failed = 0;
         s_mp_tid = GetCurrentThreadId();
+        /* Journal attachment precedes every publication and game consumption.
+           The worker never touches the journal or the file producer pointer. */
+        mp_record_begin(L,(int)tick,&config);
     }
     if (!s_mp_channel) return;
     /* The pump at 0x4954C8 can start roots at T before B2. Post-B2 roots
@@ -756,6 +765,7 @@ incomplete:
     mp_roots_end();
     tagpu_recmp_abort(s_mp_channel, E_ABORT);
     tagpu_recmp_end(s_mp_channel);
+    mp_record_end(1);
     s_mp_channel = NULL;
     tagpu_recmp_players_end(s_mp_players); s_mp_players = NULL;
     tagpu_recmp_seats_end(s_mp_seats); s_mp_seats = NULL;
@@ -1044,6 +1054,7 @@ typedef struct Rec {
     unsigned       high;        /* the most bytes the ring has held                     */
     char*          begin;       /* the level it records                                 */
     unsigned       nslots;
+    unsigned       mode;
     int            tick;        /* the last GameTime captured                           */
     int            first;       /* the first iteration is still to be captured          */
     Level          L;           /* the level as the last capture read it: the events'   */
@@ -1345,7 +1356,7 @@ static void archive_entry(void* ctx, const char* name, unsigned n, unsigned size
 
 /* the header's entries; `fork`, for a fork's, adds RT_TIMELINE after RT_START */
 static void header_build(const Level* L, int tick, const char* map, const FILETIME* now,
-                         const RecFork* fork, Tlv* t)
+                         const RecFork* fork, const RecMpFile* mp, Tlv* t)
 {
     unsigned i, n;
     unsigned char pl[16 + REC_INFO_BYTES + PL_NAMELEN];
@@ -1354,7 +1365,11 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
 
     tlv_u32(t, RT_FORMAT, REC_FORMAT);
     tlv(t, RT_BUILD, GIT_COMMIT, (unsigned)strlen(GIT_COMMIT));
-    tlv_u32(t, RT_MODE, MODE_SKIRMISH);
+    tlv_u32(t, RT_MODE, mp ? MODE_NETWORK : MODE_SKIRMISH);
+    if (mp) {
+        tlv(t, RT_MULTIPLAYER, tagpu_recmp_file_header(mp), sizeof(RecMpRecordHeader));
+        tlv(t, RT_MP_SEATS, tagpu_recmp_file_roster(mp), sizeof(RecMpRoster));
+    }
     tlv(t, RT_MAP, map, (unsigned)strlen(map));
     tlv_u32(t, RT_START, (unsigned)tick);
     if (fork) {
@@ -1620,6 +1635,11 @@ static void rec_free(Rec* r)
 static void ring_free(RecRing* g)
 {
     if (!g) return;
+    /* Only called before writer start: the game still owns the whole context. */
+    if (g->mp) {
+        tagpu_recmp_file_end(g->mp,0);
+        tagpu_recmp_file_free(g->mp);
+    }
     if (g->fork.file) CloseHandle(g->fork.file);    /* THE FORK'S HANDLE: the ring owned it */
     recfile_unlock(&g->fork.lock);
     if (g->buf) VirtualFree(g->buf, 0, MEM_RELEASE);
@@ -1641,7 +1661,7 @@ static HANDLE dup_event(HANDLE e)
 
 /* Everything a recording will need, taken now. After this the capture allocates only from its own
    heap, for the order lists' images, and for a heap table that grows (table_grow). */
-static Rec* rec_start(const Level* L, int tick)
+static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
 {
     HANDLE heap = GetProcessHeap();
     Rec* r = (Rec*)HeapAlloc(heap, HEAP_ZERO_MEMORY, sizeof *r);
@@ -1680,6 +1700,7 @@ static Rec* rec_start(const Level* L, int tick)
     r->ring = g;
     r->begin = L->begin;
     r->nslots = L->nslots;
+    r->mode = mp ? MODE_NETWORK : MODE_SKIRMISH;
     r->tick = tick - 1;
     r->first = 1;
     r->L = *L;
@@ -1748,6 +1769,13 @@ static Rec* rec_start(const Level* L, int tick)
     }
     r->rowbuf = (unsigned char*)HeapAlloc(heap, HEAP_ZERO_MEMORY, widest);
     if (!r->rowbuf) goto fail;
+    if (mp) {
+        g->mp=tagpu_recmp_file_begin(mp,s_mp_channel,&s_mp_roster);
+        if (!g->mp) {
+            tagpu_logf("recorder: FAILED contribution journal could not attach: not recording");
+            goto fail;
+        }
+    }
 
     map_stem(L->ta, map, sizeof map);
     GetLocalTime(&lt);
@@ -1761,7 +1789,7 @@ static Rec* rec_start(const Level* L, int tick)
     t.n = 0;
     t.cap = sizeof hb;
     t.full = 0;
-    header_build(L, tick, map, &now, g->fork.file ? &g->fork : NULL, &t);
+    header_build(L, tick, map, &now, g->fork.file ? &g->fork : NULL, g->mp, &t);
     header_tables(r, &t);
     for (i = 0; i < REC_PLAYERS; i++)        /* the seats header_build names (RT_PLAYER) */
         if (L->ta[OFF_PLAYERS + i * PL_STRIDE + PL_CONTROLLER]) r->seated |= (unsigned short)(1u << i);
@@ -1779,6 +1807,7 @@ static Rec* rec_start(const Level* L, int tick)
         tagpu_logf("recorder: FAILED no writer thread (%lu): not recording", GetLastError());
         goto fail;
     }
+    s_mp_file=g->mp;
     if (g->fork.id)
         tagpu_logf("recorder: recording timeline %u of %s from GameTime %d (parent %u): %u slots, "
                    "%u tables", g->fork.id, g->path, tick, g->fork.parent, L->nslots, r->ntab);
@@ -1839,6 +1868,9 @@ static void rec_end(Rec* r, unsigned reason)
     unsigned short why = (unsigned short)reason, z = 0;
     unsigned pos, off = (unsigned)InterlockedCompareExchange(&s_offthread, 0, 0);
     unsigned unobserved = feat_unobserved(r);
+    /* A local save failure detaches its journal while mandatory contributions
+       continue. At teardown the channel already handed its sole consumer over. */
+    mp_record_end(0);
     s_rec_fired = 0;
     r->w = (unsigned)InterlockedCompareExchange(&r->ring->wpub, 0, 0);
     memcpy(b, &why, 2);
@@ -1898,7 +1930,7 @@ static void rec_end(Rec* r, unsigned reason)
                                             "began with, or its count is past its records" :
                reason == REC_END_MAPPED   ? "INCOMPLETE, the explored map is not the one it began "
                                             "with" :
-                                            "INCOMPLETE, the game stopped being a skirmish", s_bad,
+                                            "INCOMPLETE, the recorded mode or contribution authority ended", s_bad,
                off, r->uncredited, r->oodd);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
@@ -2320,13 +2352,34 @@ static void olist_fail(unsigned slot, unsigned list, int why)
                                       "has no memory for its image", REC_ORDERS_MAX);
 }
 
+/* The native world's inline records are observed on this peer. Remote queues
+   belong to the separate contribution ledger, with their exact owner birth;
+   they cannot be attached to a replicated slot's unknown/lower-bound stamp.
+   Bound the owner before its controller and never follow a remote list head. */
+static int capture_lists(const Rec* r, const Level* L, unsigned slot)
+{
+    const char* unit;
+    unsigned owner, ctl;
+    if (r->mode!=MODE_NETWORK) return 1;
+    unit=L->begin+(size_t)slot*REC_UNIT_BYTES;
+    owner=id_in(*(const char* const*)(unit+U_OWNER),L->ta+OFF_PLAYERS,PL_STRIDE,REC_PLAYERS);
+    if (!owner || owner==REC_ID_BAD) return -1;
+    ctl=(unsigned char)L->ta[OFF_PLAYERS+(owner-1)*PL_STRIDE+PL_CONTROLLER];
+    if (ctl<1 || ctl>4) return -1;
+    return ctl==1 || ctl==2;
+}
+
 /* Every live unit's two lists: the whole list, when its image changed. 0 when the ring is full,
    -1 when a list cannot be recorded (REC_END_ORDERS). */
 static int cap_orders(Rec* r, const Level* L)
 {
     unsigned slot, list, n;
     for (slot = 1; slot < L->nslots; slot++) {
+        int owned;
         if (!r->ulive[slot]) continue;
+        owned=capture_lists(r,L,slot);
+        if (owned<0) { olist_fail(slot,0,OL_REMOTE_OWNER); return -1; }
+        if (!owned) continue;
         for (list = 0; list < 2; list++) {
             OList** at = &r->olist[slot * 2 + list];
             OList* ol = *at;
@@ -2578,14 +2631,16 @@ static int cap_verify(Rec* r, const Level* L)
     for (k = 0; k < per; k++) {
         unsigned short pre[2];
         unsigned list, n;
-        int live;
+        int live, owned;
         if (++r->vslot >= L->nslots) r->vslot = 1;
         live = unit_live(L, r->vslot);
         pre[0] = (unsigned short)r->vslot;
         pre[1] = (unsigned short)live;
         if (live) unit_image(L, r->vslot, img);
         if (!ring_put(r, RK_VERIFY_UNIT, pre, 4, img, live ? REC_UNIT_IMAGE : 0)) return 0;
-        for (list = 0; live && list < 2; list++) {
+        owned=live ? capture_lists(r,L,r->vslot) : 0;
+        if (owned<0) { olist_fail(r->vslot,0,OL_REMOTE_OWNER); return -1; }
+        for (list = 0; owned && list < 2; list++) {
             int why = olist_read(L, r->vslot, list, r->oscratch, &n, NULL);
             if (why != OL_OK) { olist_fail(r->vslot, list, why); return -1; }
             if (!olist_put(r, RK_VERIFY_ORDERS, r->vslot, list, r->oscratch, n)) return 0;
@@ -3069,7 +3124,7 @@ static int dump_write(const Level* L, int tick, const char* name, int frame)
         FILETIME now;
         map_stem(L->ta, map, sizeof map);
         GetSystemTimeAsFileTime(&now);
-        header_build(L, tick, map, &now, NULL, &t);
+        header_build(L, tick, map, &now, NULL, NULL, &t);
         tlv_u32(&t, RT_FRAME, (unsigned)frame);
     } else {
         tlv_u32(&t, RT_FORMAT, REC_FORMAT);
@@ -3327,6 +3382,10 @@ static Rec* ev_rec(void)
 
 static void ev_put(Rec* r, unsigned kind, const void* b, unsigned n)
 {
+    /* These owner-only roots have one ordered source in a native file: the
+       contribution ledger, including this peer's publications. */
+    if (r->mode==MODE_NETWORK &&
+        (kind==RK_EV_START_NAMED || kind==RK_EV_REPLY || kind==RK_EV_SPRAY)) return;
     if (r->ev_full || ring_put(r, kind, b, n, NULL, 0)) return;
     r->ev_full = 1;
     tagpu_logf("recorder: an event did not fit in the ring after GameTime %d: the recording ends "
@@ -5426,18 +5485,44 @@ int tagpu_rec_fork_arm(RecFork* f)
 
 /* the recording's start at this capture point: the counts kept since the level's last start are
    this recording's from here */
-static void rec_begin(const Level* L, int tick)
+static void rec_begin(const Level* L, int tick, const RecMpConfig* mp)
 {
     s_bad = s_badlog = 0;
     InterlockedExchange(&s_offthread, 0);
     s_nano_unit = NULL;
     s_nano_out = NULL;
-    s_rec = rec_start(L, tick);
+    s_rec = rec_start(L, tick, mp);
     if (s_rec) {
         s_state = ST_RECORDING;
-        s_rec_fired = 1;
+        s_rec_fired = s_rec->mode==MODE_SKIRMISH;
         s_tid = s_rec->tid;
     }
+}
+
+static void mp_record_begin(const Level* L, int tick, const RecMpConfig* config)
+{
+    if (s_state!=ST_IDLE) return;
+    s_state=ST_DONE;
+    if (!tagpu_opt_on(REC_ON)) return;
+    if (!tagpu_reclaim_level_tracked() || !tagpu_simreg_count() || !s_sites) {
+        tagpu_logf("recorder: native file prerequisites unavailable: contributions continue");
+        return;
+    }
+    cnt_start(L,1);
+    rec_begin(L,tick,config);
+    if (s_rec)
+        tagpu_logf("recorder: native file retains observed world and owner contributions; "
+                   "multiplayer playback is not available");
+}
+
+static void mp_record_end(int channel_ended)
+{
+    RecMpFile* f=s_mp_file;
+    if (!f) return;
+    /* Clear the producer's borrow before the writer can acquire ended and free.
+       The channel journal is game-thread-only, so detach closes every producer. */
+    s_mp_file=NULL;
+    tagpu_recmp_file_end(f,channel_ended);
 }
 
 static void rec_stop(unsigned reason)
@@ -5451,7 +5536,7 @@ static void rec_stop(unsigned reason)
 int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
 {
     Rec* r = s_rec;
-    if (s_state != ST_RECORDING || !r || s_suspended || r->ev_full ||
+    if (s_state != ST_RECORDING || !r || r->mode!=MODE_SKIRMISH || s_suspended || r->ev_full ||
         InterlockedCompareExchange(&r->ring->failed, 0, 0)) {
         snprintf(why, whycap, "no healthy live recording");
         return 0;
@@ -5467,7 +5552,7 @@ int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap)
 int tagpu_rec_rewind_flush(char* path, unsigned cap)
 {
     Rec* r = s_rec;
-    if (s_state != ST_RECORDING || !r || r->ev_full ||
+    if (s_state != ST_RECORDING || !r || r->mode!=MODE_SKIRMISH || r->ev_full ||
         InterlockedCompareExchange(&r->ring->failed, 0, 0)) return -1;
     if (InterlockedCompareExchange(&r->ring->flush_done, 0, 0) !=
         InterlockedCompareExchange(&r->ring->flush_req, 0, 0)) return 0;
@@ -5481,7 +5566,7 @@ int tagpu_rec_suspend(int on)
 {
     unsigned z;
     Rec* r = s_rec;
-    if (s_state != ST_RECORDING || !r) return 0;
+    if (s_state != ST_RECORDING || !r || r->mode!=MODE_SKIRMISH) return 0;
     if (on) {
         if (tagpu_rec_rewind_flush(NULL, 0) != 1) return 0;
         seats_end(r, REC_END_FORKED, r->rewind_end);
@@ -5547,7 +5632,7 @@ void __cdecl tagpu_rec_capture(void)
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);
     mode = game_mode(ta);
-    if (mode == 3 && ((unsigned char)ta[OFF_NETWORK] & 1)) mp_capture(&L, (unsigned)tick);
+    if (mode == MODE_NETWORK && ((unsigned char)ta[OFF_NETWORK] & 1)) mp_capture(&L, (unsigned)tick);
     ai_finish((unsigned)tick);
 
     if (s_state == ST_IDLE && s_fork.file) {
@@ -5564,7 +5649,7 @@ void __cdecl tagpu_rec_capture(void)
             s_fork.file = NULL;
             recfile_unlock(&s_fork.lock);
         } else {
-            rec_begin(&L, tick);
+            rec_begin(&L, tick, NULL);
             if (s_fork.file) {          /* rec_start failed before the ring took it */
                 CloseHandle(s_fork.file);
                 s_fork.file = NULL;
@@ -5592,7 +5677,7 @@ void __cdecl tagpu_rec_capture(void)
             else if (!s_sites)
                 tagpu_logf("recorder: not recording: the event hooks are not in (tagpu_rec_init)");
             else
-                rec_begin(&L, tick);
+                rec_begin(&L, tick, NULL);
         }
     }
     dumps_take(&L, tick);
@@ -5601,7 +5686,10 @@ void __cdecl tagpu_rec_capture(void)
     r = s_rec;
     if (r->ev_full) { rec_stop(REC_END_RING); return; }
     if (InterlockedCompareExchange(&r->ring->failed, 0, 0)) { rec_stop(REC_END_WRITE); return; }
-    if (mode != MODE_SKIRMISH) { rec_stop(REC_END_MODE); return; }
+    if ((unsigned)mode != r->mode ||
+        (r->mode==MODE_NETWORK && (!s_mp_channel || !((unsigned char)ta[OFF_NETWORK]&1)))) {
+        rec_stop(REC_END_MODE); return;
+    }
     if (L.begin != r->begin || L.nslots != r->nslots || tick <= r->tick) {
         rec_stop(REC_END_LEVEL);
         return;
@@ -5677,6 +5765,7 @@ void tagpu_rec_level_end(void)
         tagpu_recmp_abort(s_mp_channel,E_ABORT);
     mp_roots_end();
     tagpu_recmp_end(s_mp_channel);
+    mp_record_end(1);
     s_mp_channel = NULL;
     tagpu_recmp_orders_end(s_mp_orders);
     s_mp_orders = NULL;
